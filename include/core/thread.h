@@ -663,6 +663,19 @@ extern int64_t n00b_thread_unique_id(void);
 extern int32_t n00b_thread_id(void);
 
 /**
+ * @brief Get the OS-level thread id of the calling thread.
+ * @return A stable, OS-assigned thread identifier for the running thread.
+ *
+ * This does NOT resolve through n00b_thread_self() / the TCB: it asks the OS
+ * directly (Linux gettid, macOS pthread_threadid_np, Windows GetCurrentThreadId).
+ * That matters because a thread holds the critical_execution lock during its
+ * WHOLE init and WHOLE destroy, windows in which n00b_thread_self() is not
+ * resolvable.  The lock owner / reentrancy key is therefore keyed on this id,
+ * not on the runtime slot id (which only indexes rt->threads[]).
+ */
+extern int64_t n00b_os_thread_id(void);
+
+/**
  * @brief Get the current thread's generation counter.
  * @return The calling thread's generation, or 0 if unregistered.
  *

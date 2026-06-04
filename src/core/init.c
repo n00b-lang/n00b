@@ -302,6 +302,8 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
         .stw_nesting    = 0,
     };
 
+    n00b_atomic_store(&rt->stw_active, false);
+
     if (!n00b_option_is_set(n00b_default_runtime)) {
         n00b_default_runtime = n00b_option_set(n00b_runtime_t *, rt);
     }

@@ -112,6 +112,27 @@ n00b_thread_generation(void)
     return self == nullptr ? 0 : self->id_info.parts.generation;
 }
 
+// OS-level thread id, resolved WITHOUT n00b_thread_self() / the TCB.  The
+// critical_execution lock owner is keyed on this (a thread holds the lock
+// during its whole init/destroy, when self() is not resolvable), so it must
+// not depend on runtime state.  Framed is fine: not on the n00b_thread_self()
+// instrumentation path (D-019).
+int64_t
+n00b_os_thread_id(void)
+{
+#if defined(__linux__)
+    return (int64_t)syscall(SYS_gettid);
+#elif defined(__APPLE__)
+    uint64_t tid = 0;
+    pthread_threadid_np(nullptr, &tid);
+    return (int64_t)tid;
+#elif defined(_WIN32)
+    return (int64_t)GetCurrentThreadId();
+#else
+#error "n00b_os_thread_id: add an OS thread-id primitive for this platform"
+#endif
+}
+
 // Worker-side 64-bit exit-code stash (WP-3a, D-032 Q2 / D-033).  STASH-ONLY:
 // store the code into the calling worker's own struct and return — this does
 // NOT terminate the worker mid-fn (no setjmp/longjmp early-exit harness; the

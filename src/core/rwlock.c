@@ -99,13 +99,18 @@ _n00b_rw_init(n00b_rwlock_t *lock, char *loc)
 int
 _n00b_rw_write_lock(n00b_rwlock_t *lock, char *loc)
 {
+    // STW-active short-circuit (WP-001): no-op acquire while the world is
+    // stopped (the collector is the sole runner).
+    if (n00b_atomic_load(&n00b_get_runtime()->stw_active)) {
+        return 0;
+    }
+
     n00b_thread_t          *thread    = n00b_thread_self();
-    int32_t                 tid       = thread->id_info.parts.id;
+    int64_t                 tid       = n00b_os_thread_id();
     n00b_core_lock_info_t   info      = n00b_atomic_load(&lock->data);
     n00b_thread_read_log_t *record    = find_read_lock_record(lock, thread);
     bool                    upgrading = false;
     uint32_t                value;
-    n00b_stw_suspend_ctx    stw_ctx;
 
     if (info.owner == tid) {
         goto post_resume;
@@ -122,8 +127,6 @@ _n00b_rw_write_lock(n00b_rwlock_t *lock, char *loc)
             desired = value - 1;
         } while (!n00b_cas(&lock->futex, &value, desired));
     }
-
-    n00b_thread_suspend(stw_ctx);
 
     // Compete for the write bit.
     value = n00b_atomic_or(&lock->futex, N00B_RW_W_LOCK);
@@ -149,8 +152,6 @@ _n00b_rw_write_lock(n00b_rwlock_t *lock, char *loc)
         n00b_atomic_add(&lock->futex, 1);
     }
 
-    n00b_thread_resume(stw_ctx);
-
 post_resume:
 
 {
@@ -166,6 +167,12 @@ post_resume:
 void
 _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
 {
+    // STW-active short-circuit (WP-001): no-op acquire while the world is
+    // stopped (the collector is the sole runner).
+    if (n00b_atomic_load(&n00b_get_runtime()->stw_active)) {
+        return;
+    }
+
     n00b_thread_t          *thread  = n00b_thread_self();
     n00b_core_lock_info_t   info    = n00b_atomic_load(&lock->data);
     n00b_thread_read_log_t *record  = find_read_lock_record(lock, thread);
@@ -174,7 +181,7 @@ _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
 
     n00b_barrier();
 
-    if (info.owner == (int32_t)thread->id_info.parts.id) {
+    if (info.owner == n00b_os_thread_id()) {
         n00b_lock_acquire_accounting((void *)lock, thread, loc);
         return;
     }
@@ -192,9 +199,6 @@ _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
     }
 
     n00b_barrier();
-
-    n00b_stw_suspend_ctx stw_ctx;
-    n00b_thread_suspend(stw_ctx);
 
     value = n00b_atomic_load(&lock->futex);
     while (true) {
@@ -227,7 +231,6 @@ _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
         }
     }
 
-    n00b_thread_resume(stw_ctx);
     register_read(lock, thread, desired, nullptr, loc);
 
     n00b_barrier();
@@ -236,12 +239,18 @@ _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
 bool
 _n00b_rw_unlock(n00b_rwlock_t *lock, char *loc)
 {
+    // STW-active short-circuit (WP-001): no-op release while the world is
+    // stopped (mirrors the acquire short-circuit).
+    if (n00b_atomic_load(&n00b_get_runtime()->stw_active)) {
+        return true;
+    }
+
     n00b_thread_t        *thread = n00b_thread_self();
     n00b_thread_record_t *rec    = thread->record;
     n00b_core_lock_info_t info   = n00b_atomic_load(&lock->data);
 
     // If we're a writer, any nesting comes out of our write level.
-    if (info.owner == (int32_t)thread->id_info.parts.id) {
+    if (info.owner == n00b_os_thread_id()) {
         if (!n00b_lock_release_accounting((void *)lock, loc)) {
             return false;
         }
@@ -282,10 +291,7 @@ _n00b_rw_unlock(n00b_rwlock_t *lock, char *loc)
     log->next_entry = n00b_atomic_load(&rec->log_alloc_cache);
     n00b_atomic_store(&rec->log_alloc_cache, log);
 
-    n00b_stw_suspend_ctx stw_ctx;
-    uint32_t             value, desired;
-
-    n00b_thread_suspend(stw_ctx);
+    uint32_t value, desired;
 
     do {
         value   = n00b_atomic_load(&lock->futex);
@@ -293,8 +299,6 @@ _n00b_rw_unlock(n00b_rwlock_t *lock, char *loc)
     } while (!n00b_cas(&lock->futex, &value, desired));
 
     _n00b_runlock_accounting(lock, log, thread, desired, loc);
-
-    n00b_thread_resume(stw_ctx);
 
     return true;
 }

@@ -45,8 +45,14 @@ _n00b_spinlock_init(n00b_spin_lock_t *lock, char *loc)
 int
 _n00b_spinlock_lock(n00b_spin_lock_t *lock, char *loc)
 {
+    // STW-active short-circuit (WP-001): no-op acquire while the world is
+    // stopped (the collector is the sole runner).
+    if (n00b_atomic_load(&n00b_get_runtime()->stw_active)) {
+        return 0;
+    }
+
     n00b_thread_t        *thread = n00b_thread_self();
-    int32_t               tid    = thread->id_info.parts.id;
+    int64_t               tid    = n00b_os_thread_id();
     n00b_core_lock_info_t info   = n00b_atomic_load(&lock->data);
 
     // Recursive acquire: already the owner, just bump the nesting count.
@@ -70,6 +76,12 @@ _n00b_spinlock_lock(n00b_spin_lock_t *lock, char *loc)
 bool
 _n00b_spinlock_unlock(n00b_spin_lock_t *lock, char *loc)
 {
+    // STW-active short-circuit (WP-001): no-op release while the world is
+    // stopped (mirrors the acquire short-circuit).
+    if (n00b_atomic_load(&n00b_get_runtime()->stw_active)) {
+        return true;
+    }
+
     // Only the outermost release (nesting back to 0) clears the lock word; a
     // nested release just unwinds the count so the outer hold still owns it.
     if (!n00b_lock_release_accounting((void *)lock, loc)) {

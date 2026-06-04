@@ -37,7 +37,7 @@
  * @brief Packed owner/nesting/type stored atomically per lock.
  */
 typedef struct {
-    int32_t owner;
+    int64_t owner;
     int16_t nesting;
     uint8_t type;
     uint8_t reserved;
@@ -91,7 +91,7 @@ struct n00b_thread_read_log_t {
 static inline bool
 n00b_lock_already_owner(n00b_lock_base_t *lock)
 {
-    int32_t tid = n00b_thread_id();
+    int64_t tid = n00b_os_thread_id();
     assert(tid >= 0);
     n00b_core_lock_info_t info = n00b_atomic_load(&lock->data);
     return info.owner == tid;

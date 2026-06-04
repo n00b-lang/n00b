@@ -223,6 +223,15 @@ struct n00b_runtime_t {
      * self()) instead of taking the barrier/tree-mutex. */
     _Atomic uint32_t            stw_barrier_count;
     _Atomic bool                stw_exclusive;
+    /* Pure-preemptive stop-the-world (WP-001).  `stw_active` is set once the
+     * world is fully stopped (the single critical_execution gate held + every
+     * other thread suspended); while it is set every n00b lock acquire and
+     * release short-circuits to a no-op (the collector is the sole runner, so
+     * all locks are uncontended and must never block on a suspended holder).
+     * The `critical_execution` mutex itself is added with the STW-core rewrite
+     * (Phase 2), which also removes the cooperative stw/stw_generation/etc.
+     * fields above. */
+    _Atomic bool                stw_active;
     const char                 *theme_name;    // Active theme name (set during init).
     n00b_unicode_ctx_t         *unicode_ctx;   // Phase 4.5 unicode subsystem state.
     n00b_regex_ctx_t           *regex_ctx;     // Regex port-side caches.
