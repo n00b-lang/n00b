@@ -122,6 +122,27 @@ n00b_os_thread_id(void)
 {
 #if defined(__linux__)
     return (int64_t)syscall(SYS_gettid);
+#elif defined(__APPLE__) && defined(__aarch64__)
+    // n00b workers are RAW Mach threads (thread_create), NOT pthreads, so
+    // pthread_threadid_np(NULL, ...) reads a null pthread_t (TSD slot 0 is our
+    // minimal block, not a real pthread) and yields 0 — collapsing every raw
+    // worker's lock-owner id to 0 and destroying mutual exclusion.  Instead read
+    // the Mach thread port from TSD slot 3 (__TSD_MACH_THREAD_SELF) directly off
+    // the hardware thread pointer (TPIDRRO_EL0), exactly as os_unfair_lock does.
+    // The spawner seeds slot 3 with the thread's thread_create port (raw worker)
+    // and the kernel seeds it for the main pthread — a stable, per-thread,
+    // process-unique scalar, resolvable with NO TCB / n00b_thread_self() and no
+    // send-right minting.  Mask the low 3 reserved bits of the thread pointer.
+    uint64_t tpidrro;
+    __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tpidrro));
+    uint64_t *tsd = (uint64_t *)(uintptr_t)(tpidrro & ~(uint64_t)0x7);
+    if (tsd == nullptr) {
+        return 0;
+    }
+    // TSD slot 3 == __TSD_MACH_THREAD_SELF (see N00B_TSD_SLOT_MACH_THREAD_SELF
+    // below; the macro is defined later in this file so the literal is used
+    // here).
+    return (int64_t)(uint32_t)tsd[3];
 #elif defined(__APPLE__)
     uint64_t tid = 0;
     pthread_threadid_np(nullptr, &tid);

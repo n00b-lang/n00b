@@ -90,8 +90,10 @@ lock_worker_fn(void *raw)
     // --- mutex: take, inspect accounting via self()->record, release ---
     n00b_mutex_lock(&io->mutex);
     {
+        // WP-001: the lock owner is keyed on the OS thread id, not the runtime
+        // slot id.
         n00b_core_lock_info_t info = n00b_atomic_load(&mbase->data);
-        io->mutex_owner_ok         = (info.owner == self->id_info.parts.id);
+        io->mutex_owner_ok         = (info.owner == n00b_os_thread_id());
         io->mutex_linked_ok        = chain_contains(rec, mbase);
     }
 
@@ -99,7 +101,7 @@ lock_worker_fn(void *raw)
     n00b_rw_write_lock(&io->rwlock);
     {
         n00b_core_lock_info_t info = n00b_atomic_load(&rwbase->data);
-        io->rwlock_owner_ok        = (info.owner == self->id_info.parts.id);
+        io->rwlock_owner_ok        = (info.owner == n00b_os_thread_id());
     }
 
     n00b_rw_unlock(&io->rwlock);

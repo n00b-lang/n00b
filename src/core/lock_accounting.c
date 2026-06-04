@@ -534,6 +534,12 @@ n00b_debug_all_locks(char *fname)
 void
 n00b_register_lock_wait(n00b_thread_t *thread, void *lock, char *loc)
 {
+    // A thread can block acquiring critical_execution during its own init,
+    // before n00b_thread_self() resolves (thread == nullptr).  This is just
+    // debug wait-tracking, so skip it when there is no record yet.
+    if (thread == nullptr) {
+        return;
+    }
     n00b_thread_record_t *rec = thread->record;
 
     assert(lock);
@@ -544,6 +550,9 @@ n00b_register_lock_wait(n00b_thread_t *thread, void *lock, char *loc)
 void
 _n00b_wait_done(n00b_thread_t *thread, char *loc)
 {
+    if (thread == nullptr) {
+        return;
+    }
     n00b_thread_record_t *rec = thread->record;
 
     rec->lock_wait_target = nullptr;
