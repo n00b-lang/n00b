@@ -203,6 +203,18 @@ struct n00b_runtime_t {
     n00b_futex_t                stw;
     n00b_futex_t                stw_generation;
     uint32_t                    stw_nesting;
+    /* Can't-STW barrier (WP-001): a thread inside an STW-unsafe critical
+     * section (the mmap interval-tree mutation, whose collector side reads it
+     * lock-free under STW) increments stw_barrier_count.  _n00b_stop_the_world
+     * acquires the owner (rt->stw), then DRAINS the barrier (waits for
+     * stw_barrier_count == 0; new entries block while an owner is set) BEFORE it
+     * suspends any thread — so no thread is ever frozen mid-tree-op and the
+     * collector's lock-free walk sees a consistent tree.  stw_exclusive is set
+     * once drained + everyone is suspended (the collector is then the sole
+     * runner); the mmap fast paths short-circuit on it (one atomic load, no
+     * self()) instead of taking the barrier/tree-mutex. */
+    _Atomic uint32_t            stw_barrier_count;
+    _Atomic bool                stw_exclusive;
     const char                 *theme_name;    // Active theme name (set during init).
     n00b_unicode_ctx_t         *unicode_ctx;   // Phase 4.5 unicode subsystem state.
     n00b_regex_ctx_t           *regex_ctx;     // Regex port-side caches.

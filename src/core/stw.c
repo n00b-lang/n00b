@@ -359,6 +359,30 @@ _n00b_preempt_resume(n00b_thread_t *t)
 #endif
 }
 
+// Can't-STW barrier "reader" entry (WP-001; see stw.h).  Blocks while a
+// stop-the-world owner is set; the post-increment re-check closes the race with
+// an owner that appears between the wait and the increment.  Must NOT be called
+// by the STW owner — the mmap fast paths gate it behind n00b_stw_in_exclusive().
+void
+n00b_stw_barrier_enter(void)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+
+    while (true) {
+        while (n00b_atomic_load(&rt->stw) != (uint32_t)N00B_NO_OWNER) {
+            uint32_t generation = n00b_atomic_load(&rt->stw_generation);
+            n00b_futex_wait(&rt->stw_generation, generation, 1000 * 1000);
+        }
+        n00b_atomic_add(&rt->stw_barrier_count, 1);
+        if (n00b_atomic_load(&rt->stw) == (uint32_t)N00B_NO_OWNER) {
+            return;
+        }
+        // An owner appeared after our wait; back out and retry so the drain in
+        // _n00b_stop_the_world cannot deadlock waiting on us.
+        n00b_atomic_add(&rt->stw_barrier_count, -1);
+    }
+}
+
 void
 _n00b_stop_the_world(char *loc)
 {
@@ -391,6 +415,17 @@ _n00b_stop_the_world(char *loc)
     } while (!n00b_cas(&rt->stw, (uint32_t *)&expected, tid));
 
     assert(n00b_atomic_load(&rt->stw) == (uint32_t)tid);
+
+    // DRAIN the can't-STW barrier (WP-001).  The owner is set now, so new
+    // n00b_stw_barrier_enter() callers block; wait for in-flight critical
+    // sections (mmap interval-tree mutations) to leave.  This guarantees that
+    // when we suspend threads below, none is frozen mid-tree-op — so the
+    // collector's lock-free tree walk sees a consistent structure (without this,
+    // a preempted mid-mutation thread corrupts the tree: overlap-insert abort or
+    // a stranded tid_lock spin).  The holders are still running (not yet
+    // suspended) and their sections are short, so this is a brief spin.
+    while (n00b_atomic_load(&rt->stw_barrier_count) != 0) {
+    }
 
     // PURE PREEMPTIVE STOP (WP-001 Phase 3 — the cut).  Bring every OTHER live
     // thread to a GC-safe stop by suspending it and capturing its register file.
@@ -443,6 +478,12 @@ _n00b_stop_the_world(char *loc)
         }
     }
 
+    // Barrier drained + every other thread suspended: the collector is the sole
+    // runner.  Mark the exclusive phase so the mmap fast paths skip the barrier
+    // and the tree mutex (one atomic load, no n00b_thread_self()).  Cleared in
+    // _n00b_restart_the_world before anything is resumed.
+    n00b_atomic_store(&rt->stw_exclusive, true);
+
     rt->stw_nesting = 1;
 }
 
@@ -464,6 +505,12 @@ _n00b_restart_the_world(char *loc)
     }
 
     n00b_barrier();
+
+    // End the collector's exclusive phase BEFORE anything is resumed or the
+    // barrier reopens (the owner release below).  Safe: the collector is still
+    // the sole runner here and the restart path itself performs no mmap-tree
+    // ops, so no n00b_stw_barrier_enter() can race this clear.
+    n00b_atomic_store(&rt->stw_exclusive, false);
 
     n00b_thread_t *self = n00b_thread_self();
     n00b_thread_t *t;

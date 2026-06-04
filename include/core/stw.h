@@ -120,3 +120,45 @@ n00b_world_is_stopped(void)
 {
     return n00b_atomic_load(&n00b_get_runtime()->stw) != (uint32_t)N00B_NO_OWNER;
 }
+
+// ============================================================================
+// Can't-STW barrier (WP-001)
+//
+// A thread inside an STW-unsafe critical section — currently the mmap
+// interval-tree mutation, whose collector side reads it lock-free under STW —
+// brackets that section with n00b_stw_barrier_enter()/_leave().  The STW
+// initiator drains the barrier (waits for stw_barrier_count == 0, blocking new
+// entries) BEFORE suspending any thread, so no thread is ever frozen mid-tree-op
+// and the collector's lock-free walk sees a consistent tree.  Once drained and
+// every other thread is suspended, the initiator sets stw_exclusive; the mmap
+// fast paths short-circuit on it (one atomic load, no n00b_thread_self()) since
+// the collector is then the sole runner.
+// ============================================================================
+
+/**
+ * @brief True during the collector's sole-runner STW phase (barrier drained +
+ *        all other threads suspended).  @pre Runtime initialized.
+ */
+static inline bool
+n00b_stw_in_exclusive(void)
+{
+    return n00b_atomic_load(&n00b_get_runtime()->stw_exclusive);
+}
+
+/**
+ * @brief Enter a can't-STW critical section (the barrier "reader" side).
+ *        Blocks while a stop-the-world owner is set, then registers; the
+ *        post-increment re-check closes the race with an owner that appears
+ *        between the wait and the increment.  Must NOT be called by the STW
+ *        owner (it would self-deadlock) — the mmap fast paths gate it behind
+ *        n00b_stw_in_exclusive().  Defined in stw.c (uses the futex wait).
+ * @pre Runtime initialized; caller is not the STW owner.
+ */
+extern void n00b_stw_barrier_enter(void);
+
+/** @brief Leave a can't-STW critical section. @pre A matching enter. */
+static inline void
+n00b_stw_barrier_leave(void)
+{
+    n00b_atomic_add(&n00b_get_runtime()->stw_barrier_count, -1);
+}

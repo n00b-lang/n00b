@@ -43,16 +43,27 @@
 static inline void
 mmap_lock(n00b_mmap_ctx_t *ctx)
 {
-    /* STW short-circuit: when the world is stopped the mmap tree is immutable
-     * (every other thread is parked at a safepoint), so a lock is unnecessary
-     * — and crucially the GC's conservative mark must NOT pay
+    /* COLLECTOR short-circuit (WP-001): during the STW exclusive phase the
+     * collector is the SOLE runner (the can't-STW barrier was drained and every
+     * mutator suspended — see _n00b_stop_the_world), so the tree is immutable
+     * and no lock is needed.  Crucially the conservative mark must NOT pay
      * n00b_thread_unique_id() (-> n00b_thread_self()) + a CAS on EVERY scanned
-     * word.  That per-word cost is what regressed the mark under #104's
-     * off-libc threading (n00b_thread_self() got expensive); this restores the
-     * lock-free read path the collector relied on.  See n00b_world_is_stopped. */
-    if (n00b_world_is_stopped()) {
+     * word; n00b_stw_in_exclusive() is a single atomic load.
+     *
+     * This MUST gate on stw_exclusive, NOT n00b_world_is_stopped(): the latter
+     * is true from the moment the owner is acquired, including the drain/suspend
+     * window during which mutators are still RUNNING — and a mutator that
+     * short-circuited there would mutate the tree lock-free, invisible to the
+     * drain, then be frozen mid-op.  A mutator therefore always takes the
+     * barrier + mutex below; only the (sole-runner) collector skips them. */
+    if (n00b_stw_in_exclusive()) {
         return;
     }
+    /* MUTATOR: enter the can't-STW barrier FIRST so a stop-the-world cannot
+     * freeze us mid-tree-mutation (which would corrupt the collector's
+     * lock-free walk), then take the tree mutex. */
+    n00b_stw_barrier_enter();
+
     int64_t tid      = n00b_thread_unique_id();
     int64_t expected = -1;
 
@@ -67,32 +78,19 @@ mmap_lock(n00b_mmap_ctx_t *ctx)
 static inline void
 mmap_unlock(n00b_mmap_ctx_t *ctx)
 {
-    /* Release the lock IFF we actually hold it.  This is deliberately NOT
-     * gated on n00b_world_is_stopped() (WP-001 Phase 3): a world_is_stopped()
-     * gate is racy and leaks the lock — a thread can mmap_lock() while the
-     * world is running (acquiring tid_lock), the world can then stop before its
-     * mmap_unlock(), and the gated unlock would skip the release, stranding
-     * tid_lock forever (observed: a thread spinning in mmap_lock at shutdown
-     * while the holder had long exited).
-     *
-     * Checking ownership instead is both correct and as cheap as the old gate
-     * on the hot path:
-     *   - The collector under STW short-circuited mmap_lock (never acquired),
-     *     so tid_lock is either -1 (the common case during a collection: every
-     *     mutator is parked and not mid-tree-op) → one atomic load + return, no
-     *     n00b_thread_unique_id(); or it is held by a mutator that was frozen
-     *     mid-tree-op when STW began → not our id, so we leave it (exactly the
-     *     "don't stomp a held lock" property the old gate provided), and that
-     *     mutator releases it when it resumes.
-     *   - A thread that DID acquire releases here regardless of whether the
-     *     world has since stopped — closing the leak. */
-    int64_t held = n00b_atomic_load(&ctx->tid_lock);
-    if (held == -1) {
+    /* COLLECTOR short-circuit, symmetric with mmap_lock: it never acquired, so
+     * there is nothing to release and no barrier to leave. */
+    if (n00b_stw_in_exclusive()) {
         return;
     }
-    if (held == n00b_thread_unique_id()) {
-        n00b_atomic_store(&ctx->tid_lock, -1);
-    }
+    /* MUTATOR: release the tree mutex, then leave the can't-STW barrier.  The
+     * barrier guarantees no thread is ever frozen holding tid_lock (the STW
+     * drain waits for all holders to leave before suspending), so a plain
+     * release is safe and never stomps another thread's lock — and because the
+     * mutator's whole critical section stays OUT of the STW exclusive phase,
+     * this unlock always runs (no world_is_stopped() skip → no leak). */
+    n00b_atomic_store(&ctx->tid_lock, -1);
+    n00b_stw_barrier_leave();
 }
 
 #define mmap_write_lock(ctx)   mmap_lock(ctx)
