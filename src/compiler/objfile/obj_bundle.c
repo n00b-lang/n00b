@@ -8,6 +8,10 @@
 #include "compiler/objfile/writer.h"
 #include "core/sha256.h"
 #include "text/unicode/encoding.h"
+#include "util/path.h"
+
+#include <errno.h>
+#include <sys/stat.h>
 
 const uint8_t N00B_OBJ_BUNDLE_MANIFEST_MAGIC[N00B_OBJ_BUNDLE_MANIFEST_MAGIC_LEN] = {
     'N', '0', '0', 'B', 'N', 'D', 'L', '1',
@@ -106,6 +110,35 @@ struct n00b_obj_bundle_artifact {
     uint64_t                        flags;
 };
 
+struct n00b_obj_bundle_extract_result {
+    n00b_string_t                    *destination_root;
+    n00b_string_t                    *temp_root;
+    bool                              has_temp_root;
+    uint64_t                          files_planned;
+    uint64_t                          directories_planned;
+    uint64_t                          files_written;
+    uint64_t                          directories_written;
+    n00b_obj_bundle_policy_kind_t     policy_kind;
+    bool                              has_policy_kind;
+    n00b_obj_bundle_policy_scope_t    policy_scope;
+    bool                              has_policy_scope;
+    bool                              fallback_used;
+    bool                              overwrite;
+    bool                              atomic_requested;
+    bool                              atomic_used;
+    bool                              preserve_modes;
+    bool                              create_dirs;
+    bool                              allow_absolute_paths;
+    bool                              allow_parent_refs;
+    n00b_obj_bundle_policy_mode_t     policy_mode;
+    bool                              commit_attempted;
+    bool                              commit_completed;
+    bool                              rollback_attempted;
+    bool                              rollback_succeeded;
+    bool                              cleanup_attempted;
+    bool                              cleanup_succeeded;
+};
+
 struct n00b_obj_bundle_error {
     n00b_obj_bundle_error_code_t    code;
     n00b_string_t                  *message;
@@ -115,6 +148,8 @@ struct n00b_obj_bundle_error {
     bool                            has_carrier;
     n00b_string_t                  *logical_path;
     bool                            has_logical_path;
+    n00b_string_t                  *destination_path;
+    bool                            has_destination_path;
     uint64_t                        artifact_id;
     bool                            has_artifact_id;
     n00b_obj_bundle_policy_kind_t   policy_kind;
@@ -123,6 +158,8 @@ struct n00b_obj_bundle_error {
     bool                            has_policy_scope;
     int64_t                         detail;
     bool                            has_detail;
+    n00b_obj_bundle_extract_result_t *extract_result;
+    bool                            has_extract_result;
 };
 
 typedef struct n00b_obj_bundle_manifest_strtab {
@@ -206,6 +243,26 @@ typedef struct n00b_obj_bundle_decode_policy {
     const n00b_buffer_t          *payload;
 } n00b_obj_bundle_decode_policy_t;
 
+typedef struct n00b_obj_bundle_extract_policy {
+    n00b_obj_bundle_policy_kind_t  kind;
+    n00b_obj_bundle_policy_scope_t scope;
+    bool                           fallback_used;
+    uint64_t                       path_flags;
+    uint64_t                       artifact_kind_mask;
+    uint64_t                       execution_flags;
+} n00b_obj_bundle_extract_policy_t;
+
+typedef struct n00b_obj_bundle_extract_plan_entry {
+    n00b_obj_bundle_artifact_t *artifact;
+    n00b_string_t              *destination_path;
+    n00b_string_t              *parent_path;
+} n00b_obj_bundle_extract_plan_entry_t;
+
+typedef struct n00b_obj_bundle_extract_plan {
+    n00b_string_t *destination_root;
+    n00b_list_t(n00b_obj_bundle_extract_plan_entry_t *) entries;
+} n00b_obj_bundle_extract_plan_t;
+
 static n00b_obj_bundle_error_t *
 _n00b_obj_bundle_error_new(n00b_obj_bundle_error_code_t code,
                            n00b_string_t               *message,
@@ -223,6 +280,8 @@ _n00b_obj_bundle_error_new(n00b_obj_bundle_error_code_t code,
     error->has_carrier      = false;
     error->logical_path     = nullptr;
     error->has_logical_path = false;
+    error->destination_path = nullptr;
+    error->has_destination_path = false;
     error->artifact_id      = N00B_OBJ_BUNDLE_ARTIFACT_ID_NONE;
     error->has_artifact_id  = false;
     error->policy_kind      = N00B_OBJ_BUNDLE_POLICY_KIND_NONE;
@@ -231,6 +290,8 @@ _n00b_obj_bundle_error_new(n00b_obj_bundle_error_code_t code,
     error->has_policy_scope = false;
     error->detail           = 0;
     error->has_detail       = false;
+    error->extract_result   = nullptr;
+    error->has_extract_result = false;
 
     return error;
 }
@@ -261,6 +322,153 @@ _n00b_obj_bundle_error_with_path(n00b_obj_bundle_error_code_t code,
 
     error->logical_path     = path;
     error->has_logical_path = path != nullptr;
+
+    return error;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_with_destination(
+    n00b_obj_bundle_error_code_t code,
+    n00b_string_t               *message,
+    n00b_string_t               *destination_path,
+    n00b_allocator_t            *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_new(code, message, allocator);
+
+    error->destination_path =
+        destination_path != nullptr
+        && destination_path->data != nullptr
+        && destination_path->u8_bytes != 0
+            ? destination_path
+            : nullptr;
+    error->has_destination_path = error->destination_path != nullptr;
+
+    return error;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_with_extract_result(
+    n00b_obj_bundle_error_code_t       code,
+    n00b_string_t                     *message,
+    n00b_string_t                     *destination_path,
+    n00b_obj_bundle_extract_result_t  *extract_result,
+    n00b_allocator_t                  *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_with_destination(code,
+                                                message,
+                                                destination_path,
+                                                allocator);
+
+    error->policy_scope      = N00B_OBJ_BUNDLE_POLICY_SCOPE_EXTRACTION;
+    error->has_policy_scope  = true;
+    error->extract_result    = extract_result;
+    error->has_extract_result = extract_result != nullptr;
+
+    if (extract_result != nullptr && extract_result->has_policy_kind) {
+        error->policy_kind     = extract_result->policy_kind;
+        error->has_policy_kind = true;
+    }
+
+    if (extract_result != nullptr && extract_result->has_policy_scope) {
+        error->policy_scope = extract_result->policy_scope;
+    }
+
+    return error;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_attach_extract_result(
+    n00b_obj_bundle_error_t          *error,
+    n00b_string_t                    *destination_path,
+    n00b_obj_bundle_extract_result_t *extract_result)
+{
+    if (error == nullptr) {
+        return nullptr;
+    }
+
+    if (!error->has_destination_path
+        && destination_path != nullptr
+        && destination_path->data != nullptr
+        && destination_path->u8_bytes != 0) {
+        error->destination_path     = destination_path;
+        error->has_destination_path = true;
+    }
+
+    if (!error->has_policy_scope) {
+        error->policy_scope     = N00B_OBJ_BUNDLE_POLICY_SCOPE_EXTRACTION;
+        error->has_policy_scope = true;
+    }
+
+    if (extract_result != nullptr) {
+        error->extract_result     = extract_result;
+        error->has_extract_result = true;
+
+        if (!error->has_policy_kind && extract_result->has_policy_kind) {
+            error->policy_kind     = extract_result->policy_kind;
+            error->has_policy_kind = true;
+        }
+
+        if (extract_result->has_policy_scope) {
+            error->policy_scope     = extract_result->policy_scope;
+            error->has_policy_scope = true;
+        }
+    }
+
+    return error;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_clone_with_extract_result(
+    n00b_obj_bundle_error_t          *source,
+    n00b_string_t                    *destination_path,
+    n00b_obj_bundle_extract_result_t *extract_result,
+    n00b_allocator_t                 *allocator)
+{
+    if (source == nullptr) {
+        return _n00b_obj_bundle_error_with_extract_result(
+            N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+            r"object bundle: invalid extraction validation error",
+            destination_path,
+            extract_result,
+            allocator);
+    }
+
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_with_extract_result(source->code,
+                                                   source->message,
+                                                   destination_path,
+                                                   extract_result,
+                                                   allocator);
+
+    error->format      = source->format;
+    error->has_format  = source->has_format;
+    error->carrier     = source->carrier;
+    error->has_carrier = source->has_carrier;
+
+    error->logical_path     = source->logical_path;
+    error->has_logical_path = source->has_logical_path;
+
+    if (source->has_destination_path) {
+        error->destination_path     = source->destination_path;
+        error->has_destination_path = true;
+    }
+
+    error->artifact_id     = source->artifact_id;
+    error->has_artifact_id = source->has_artifact_id;
+    error->detail          = source->detail;
+    error->has_detail      = source->has_detail;
+
+    if (source->has_policy_kind) {
+        error->policy_kind     = source->policy_kind;
+        error->has_policy_kind = true;
+    }
+
+    if (source->has_policy_scope) {
+        error->policy_scope     = source->policy_scope;
+        error->has_policy_scope = true;
+    }
 
     return error;
 }
@@ -941,9 +1149,1892 @@ _n00b_obj_bundle_replace_policy_is_valid(
 }
 
 static bool
+_n00b_obj_bundle_policy_mode_is_valid(
+    n00b_obj_bundle_policy_mode_t policy_mode)
+{
+    switch (policy_mode) {
+    case N00B_OBJ_BUNDLE_POLICY_ENFORCE:
+    case N00B_OBJ_BUNDLE_POLICY_VALIDATE_ONLY:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
 _n00b_obj_bundle_object_bytes_arg_is_valid(n00b_buffer_t *object_bytes)
 {
     return object_bytes != nullptr && object_bytes->data != nullptr;
+}
+
+static bool
+_n00b_obj_bundle_extract_destination_arg_is_valid(
+    n00b_string_t *destination_root)
+{
+    return destination_root != nullptr
+           && destination_root->data != nullptr
+           && destination_root->u8_bytes != 0;
+}
+
+static n00b_obj_bundle_extract_result_t *
+_n00b_obj_bundle_extract_result_new(
+    n00b_string_t                    *destination_root,
+    bool                              overwrite,
+    bool                              atomic,
+    bool                              preserve_modes,
+    bool                              create_dirs,
+    bool                              allow_absolute_paths,
+    bool                              allow_parent_refs,
+    n00b_obj_bundle_policy_mode_t     policy_mode,
+    n00b_allocator_t                 *allocator)
+{
+    n00b_obj_bundle_extract_result_t *result =
+        n00b_alloc_with_opts(n00b_obj_bundle_extract_result_t,
+                             &(n00b_alloc_opts_t){.allocator = allocator});
+
+    result->destination_root      = destination_root;
+    result->temp_root             = nullptr;
+    result->has_temp_root         = false;
+    result->files_planned         = 0;
+    result->directories_planned   = 0;
+    result->files_written         = 0;
+    result->directories_written   = 0;
+    result->policy_kind           = N00B_OBJ_BUNDLE_POLICY_KIND_NONE;
+    result->has_policy_kind       = false;
+    result->policy_scope          = N00B_OBJ_BUNDLE_POLICY_SCOPE_NONE;
+    result->has_policy_scope      = false;
+    result->fallback_used         = false;
+    result->overwrite             = overwrite;
+    result->atomic_requested      = atomic;
+    result->atomic_used           = false;
+    result->preserve_modes        = preserve_modes;
+    result->create_dirs           = create_dirs;
+    result->allow_absolute_paths  = allow_absolute_paths;
+    result->allow_parent_refs     = allow_parent_refs;
+    result->policy_mode           = policy_mode;
+    result->commit_attempted      = false;
+    result->commit_completed      = false;
+    result->rollback_attempted    = false;
+    result->rollback_succeeded    = false;
+    result->cleanup_attempted     = false;
+    result->cleanup_succeeded     = false;
+
+    return result;
+}
+
+static void
+_n00b_obj_bundle_extract_result_set_policy(
+    n00b_obj_bundle_extract_result_t *result,
+    n00b_obj_bundle_extract_policy_t *policy)
+{
+    result->policy_kind      = policy->kind;
+    result->has_policy_kind  = true;
+    result->policy_scope     = policy->scope;
+    result->has_policy_scope = true;
+    result->fallback_used    = policy->fallback_used;
+}
+
+static void
+_n00b_obj_bundle_declarative_policy_fields(
+    n00b_obj_bundle_policy_t         *policy,
+    n00b_obj_bundle_extract_policy_t *extract_policy)
+{
+    const uint8_t *data = (const uint8_t *)policy->payload->data;
+
+    extract_policy->path_flags =
+        _n00b_obj_bundle_le64_at(
+            data,
+            N00B_OBJ_BUNDLE_DECL_POLICY_PATH_FLAGS_OFF);
+    extract_policy->artifact_kind_mask =
+        _n00b_obj_bundle_le64_at(
+            data,
+            N00B_OBJ_BUNDLE_DECL_POLICY_ARTIFACT_MASK_OFF);
+    extract_policy->execution_flags =
+        _n00b_obj_bundle_le64_at(
+            data,
+            N00B_OBJ_BUNDLE_DECL_POLICY_EXEC_FLAGS_OFF);
+}
+
+static bool
+_n00b_obj_bundle_policy_applies_to_extraction(
+    n00b_obj_bundle_policy_t *policy)
+{
+    return policy != nullptr
+           && (policy->scope & N00B_OBJ_BUNDLE_POLICY_SCOPE_EXTRACTION) != 0;
+}
+
+static bool
+_n00b_obj_bundle_policy_is_better_candidate(
+    n00b_obj_bundle_policy_t *candidate,
+    n00b_obj_bundle_policy_t *current)
+{
+    if (current == nullptr) {
+        return true;
+    }
+
+    if (candidate->priority != current->priority) {
+        return candidate->priority > current->priority;
+    }
+
+    return candidate->kind > current->kind;
+}
+
+static bool
+_n00b_obj_bundle_policy_payload_is_supported(
+    n00b_obj_bundle_policy_t *policy)
+{
+    return policy != nullptr
+           && _n00b_obj_bundle_policy_kind_is_supported(policy->kind)
+           && _n00b_obj_bundle_policy_payload_is_valid(
+               policy->kind,
+               policy->payload,
+               policy->fallback_policy_id);
+}
+
+static n00b_obj_bundle_policy_t *
+_n00b_obj_bundle_extraction_policy_fallback(
+    n00b_obj_bundle_t        *bundle,
+    n00b_obj_bundle_policy_t *policy)
+{
+    if (policy == nullptr
+        || policy->fallback_policy_id == N00B_OBJ_BUNDLE_POLICY_ID_NONE
+        || (policy->flags & N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED) == 0) {
+        return nullptr;
+    }
+
+    n00b_obj_bundle_policy_t *fallback =
+        _n00b_obj_bundle_find_policy_by_id(bundle, policy->fallback_policy_id);
+
+    if (fallback == nullptr
+        || fallback->kind != N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT
+        || !_n00b_obj_bundle_policy_scope_is_valid(fallback->scope)
+        || !_n00b_obj_bundle_policy_flags_are_valid(fallback->flags)
+        || !_n00b_obj_bundle_policy_payload_is_supported(fallback)
+        || fallback->priority >= policy->priority
+        || (fallback->scope & N00B_OBJ_BUNDLE_POLICY_SCOPE_EXTRACTION) == 0) {
+        return nullptr;
+    }
+
+    return fallback;
+}
+
+static n00b_result_t(n00b_obj_bundle_extract_policy_t *)
+_n00b_obj_bundle_select_extraction_policy(n00b_obj_bundle_t *bundle,
+                                          n00b_allocator_t  *allocator)
+{
+    n00b_obj_bundle_policy_t *selected = nullptr;
+    size_t                    n        = n00b_list_len(bundle->policies);
+
+    for (size_t i = 0; i < n; i++) {
+        n00b_obj_bundle_policy_t *policy = n00b_list_get(bundle->policies, i);
+
+        if (policy == nullptr
+            || !_n00b_obj_bundle_policy_scope_is_valid(policy->scope)
+            || !_n00b_obj_bundle_policy_flags_are_valid(policy->flags)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_policy_t *,
+                _n00b_obj_bundle_error_with_policy(
+                    N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                    r"object bundle: invalid extraction policy record",
+                    policy == nullptr
+                        ? N00B_OBJ_BUNDLE_POLICY_KIND_NONE
+                        : policy->kind,
+                    policy == nullptr
+                        ? N00B_OBJ_BUNDLE_POLICY_SCOPE_NONE
+                        : policy->scope,
+                    policy == nullptr
+                        ? N00B_OBJ_BUNDLE_POLICY_ID_NONE
+                        : policy->policy_id,
+                    allocator));
+        }
+
+        for (size_t j = i + 1; j < n; j++) {
+            n00b_obj_bundle_policy_t *other = n00b_list_get(bundle->policies,
+                                                            j);
+
+            if (other != nullptr && policy->policy_id == other->policy_id) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_extract_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_DUPLICATE_POLICY_ID,
+                        r"object bundle: duplicate extraction policy ID",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+        }
+
+        if (!_n00b_obj_bundle_policy_applies_to_extraction(policy)) {
+            if (_n00b_obj_bundle_policy_kind_is_supported(policy->kind)
+                && !_n00b_obj_bundle_policy_payload_is_supported(policy)) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_extract_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                        r"object bundle: invalid non-extraction policy",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+
+            continue;
+        }
+
+        n00b_obj_bundle_policy_t *fallback =
+            _n00b_obj_bundle_extraction_policy_fallback(bundle, policy);
+
+        if (!_n00b_obj_bundle_policy_kind_is_supported(policy->kind)) {
+            if ((policy->flags & N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL) == 0
+                || fallback == nullptr) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_extract_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE,
+                        r"object bundle: unsupported extraction policy",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+
+            if (_n00b_obj_bundle_policy_is_better_candidate(policy,
+                                                            selected)) {
+                selected = policy;
+            }
+
+            continue;
+        }
+
+        if (!_n00b_obj_bundle_policy_payload_is_supported(policy)) {
+            if (fallback == nullptr) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_extract_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                        r"object bundle: invalid declarative extraction policy",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+
+            if (_n00b_obj_bundle_policy_is_better_candidate(policy,
+                                                            selected)) {
+                selected = policy;
+            }
+
+            continue;
+        }
+
+        if (policy->fallback_policy_id != N00B_OBJ_BUNDLE_POLICY_ID_NONE
+            && fallback == nullptr) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_policy_t *,
+                _n00b_obj_bundle_error_with_policy(
+                    N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                    r"object bundle: invalid extraction policy fallback",
+                    policy->kind,
+                    policy->scope,
+                    policy->fallback_policy_id,
+                    allocator));
+        }
+
+        if (_n00b_obj_bundle_policy_is_better_candidate(policy, selected)) {
+            selected = policy;
+        }
+    }
+
+    n00b_obj_bundle_extract_policy_t *policy =
+        n00b_alloc_with_opts(n00b_obj_bundle_extract_policy_t,
+                             &(n00b_alloc_opts_t){.allocator = allocator});
+
+    policy->scope              = N00B_OBJ_BUNDLE_POLICY_SCOPE_EXTRACTION;
+    policy->fallback_used      = false;
+    policy->path_flags         = N00B_OBJ_BUNDLE_DECL_PATH_DEFAULT;
+    policy->artifact_kind_mask = N00B_OBJ_BUNDLE_DECL_ARTIFACT_KIND_DEFAULT;
+    policy->execution_flags    = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
+
+    if (selected == nullptr) {
+        policy->kind = N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT;
+        return n00b_result_ok(n00b_obj_bundle_extract_policy_t *, policy);
+    }
+
+    n00b_obj_bundle_policy_t *fallback =
+        _n00b_obj_bundle_extraction_policy_fallback(bundle, selected);
+
+    if (!_n00b_obj_bundle_policy_payload_is_supported(selected)
+        && fallback != nullptr) {
+        policy->kind               = fallback->kind;
+        policy->fallback_used      = true;
+        policy->path_flags         = N00B_OBJ_BUNDLE_DECL_PATH_DEFAULT;
+        policy->artifact_kind_mask = N00B_OBJ_BUNDLE_DECL_ARTIFACT_KIND_DEFAULT;
+        policy->execution_flags    = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
+        return n00b_result_ok(n00b_obj_bundle_extract_policy_t *, policy);
+    }
+
+    policy->kind = selected->kind;
+
+    if (selected->kind == N00B_OBJ_BUNDLE_POLICY_KIND_DECLARATIVE_V1) {
+        _n00b_obj_bundle_declarative_policy_fields(selected, policy);
+    }
+
+    return n00b_result_ok(n00b_obj_bundle_extract_policy_t *, policy);
+}
+
+static uint64_t
+_n00b_obj_bundle_extract_artifact_kind_bit(
+    n00b_obj_bundle_artifact_kind_t kind)
+{
+    return 1ull << kind;
+}
+
+static bool
+_n00b_obj_bundle_extract_artifact_kind_is_supported(
+    n00b_obj_bundle_artifact_kind_t kind)
+{
+    return kind == N00B_OBJ_BUNDLE_ARTIFACT_FILE
+           || kind == N00B_OBJ_BUNDLE_ARTIFACT_EXECUTABLE
+           || kind == N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY;
+}
+
+static bool
+_n00b_obj_bundle_logical_path_has_parent_dir(n00b_string_t *path)
+{
+    return path != nullptr
+           && path->data != nullptr
+           && path->u8_bytes != 0
+           && memchr(path->data, '/', path->u8_bytes) != nullptr;
+}
+
+static bool
+_n00b_obj_bundle_logical_path_has_prefix_component(n00b_string_t *prefix,
+                                                   n00b_string_t *path)
+{
+    if (prefix == nullptr
+        || path == nullptr
+        || prefix->data == nullptr
+        || path->data == nullptr
+        || prefix->u8_bytes >= path->u8_bytes) {
+        return false;
+    }
+
+    if (memcmp(prefix->data, path->data, prefix->u8_bytes) != 0) {
+        return false;
+    }
+
+    return ((const uint8_t *)path->data)[prefix->u8_bytes] == '/';
+}
+
+static bool
+_n00b_obj_bundle_extract_path_is_safe(
+    n00b_string_t                    *path,
+    n00b_obj_bundle_extract_policy_t *policy,
+    n00b_obj_bundle_extract_result_t *facts)
+{
+    if (path == nullptr
+        || path->data == nullptr
+        || path->u8_bytes == 0
+        || !_n00b_obj_bundle_string_len_is_supported(path)) {
+        return false;
+    }
+
+    if ((policy->path_flags & N00B_OBJ_BUNDLE_DECL_PATH_VALID_UTF8) != 0
+        && !n00b_unicode_str_validate(path)) {
+        return false;
+    }
+
+    const uint8_t *data = (const uint8_t *)path->data;
+    size_t         len  = path->u8_bytes;
+    bool no_absolute =
+        (policy->path_flags & N00B_OBJ_BUNDLE_DECL_PATH_RELATIVE) != 0
+        || (policy->path_flags
+            & N00B_OBJ_BUNDLE_DECL_PATH_NO_ABSOLUTE_PATHS) != 0
+        || !facts->allow_absolute_paths;
+    bool no_empty =
+        (policy->path_flags
+         & N00B_OBJ_BUNDLE_DECL_PATH_NO_EMPTY_COMPONENTS) != 0;
+    bool no_parent =
+        (policy->path_flags
+         & N00B_OBJ_BUNDLE_DECL_PATH_NO_PARENT_REFERENCES) != 0
+        || !facts->allow_parent_refs;
+
+    if (data[0] == '/' && no_absolute) {
+        return false;
+    }
+
+    size_t component_start = 0;
+
+    for (size_t i = 0; i <= len; i++) {
+        if (i != len && data[i] != '/') {
+            continue;
+        }
+
+        size_t component_len = i - component_start;
+
+        if (component_len == 0 && no_empty) {
+            return false;
+        }
+
+        if (component_len == 1 && data[component_start] == '.') {
+            return false;
+        }
+
+        if (component_len == 2
+            && data[component_start] == '.'
+            && data[component_start + 1] == '.'
+            && no_parent) {
+            return false;
+        }
+
+        component_start = i + 1;
+    }
+
+    return true;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_extract_planner_error(
+    n00b_obj_bundle_error_code_t       code,
+    n00b_string_t                     *message,
+    n00b_obj_bundle_artifact_t        *artifact,
+    n00b_string_t                     *destination_root,
+    n00b_obj_bundle_extract_result_t  *facts,
+    uint64_t                           detail,
+    bool                               has_detail,
+    n00b_allocator_t                  *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_with_extract_result(code,
+                                                   message,
+                                                   destination_root,
+                                                   facts,
+                                                   allocator);
+
+    if (artifact != nullptr) {
+        error->logical_path     = artifact->logical_path;
+        error->has_logical_path = artifact->logical_path != nullptr;
+        error->artifact_id      = artifact->id;
+        error->has_artifact_id  = true;
+    }
+
+    if (has_detail && detail <= (uint64_t)INT64_MAX) {
+        error->detail     = (int64_t)detail;
+        error->has_detail = true;
+    }
+
+    return error;
+}
+
+static n00b_string_t *
+_n00b_obj_bundle_resolve_path_copy(n00b_string_t    *path,
+                                   n00b_allocator_t *allocator)
+{
+    return n00b_resolve_path_alloc(path, .allocator = allocator);
+}
+
+static n00b_string_t *
+_n00b_obj_bundle_path_join_child(n00b_string_t    *dir,
+                                 n00b_string_t    *child,
+                                 n00b_allocator_t *allocator)
+{
+    if (child == nullptr || child->data == nullptr) {
+        return _n00b_obj_bundle_copy_string(dir, allocator);
+    }
+
+    if (child->u8_bytes != 0 && child->data[0] == '/') {
+        return _n00b_obj_bundle_copy_string(child, allocator);
+    }
+
+    if (dir == nullptr || dir->data == nullptr || dir->u8_bytes == 0) {
+        dir = n00b_string_from_raw("/", 1, .allocator = allocator);
+    }
+
+    if (dir->data[dir->u8_bytes - 1] == '/') {
+        return n00b_unicode_str_cat(dir, child, .allocator = allocator);
+    }
+
+    n00b_string_t *with_slash = n00b_unicode_str_cat(
+        dir,
+        n00b_string_from_raw("/", 1, .allocator = allocator),
+        .allocator = allocator);
+    return n00b_unicode_str_cat(with_slash, child, .allocator = allocator);
+}
+
+static n00b_obj_bundle_extract_plan_t *
+_n00b_obj_bundle_extract_plan_new(n00b_string_t    *destination_root,
+                                  n00b_allocator_t *allocator)
+{
+    n00b_obj_bundle_extract_plan_t *plan =
+        n00b_alloc_with_opts(n00b_obj_bundle_extract_plan_t,
+                             &(n00b_alloc_opts_t){.allocator = allocator});
+
+    plan->destination_root =
+        _n00b_obj_bundle_resolve_path_copy(destination_root, allocator);
+    plan->entries =
+        n00b_list_new(n00b_obj_bundle_extract_plan_entry_t *,
+                      .allocator = allocator);
+
+    return plan;
+}
+
+static n00b_string_t *
+_n00b_obj_bundle_extract_relative_path(n00b_string_t    *logical_path,
+                                       n00b_allocator_t *allocator)
+{
+    size_t start = 0;
+
+    while (start < logical_path->u8_bytes
+           && ((const uint8_t *)logical_path->data)[start] == '/') {
+        start++;
+    }
+
+    if (start == 0) {
+        return logical_path;
+    }
+
+    if (start == logical_path->u8_bytes) {
+        return n00b_string_empty(.allocator = allocator);
+    }
+
+    return n00b_string_from_raw(logical_path->data + start,
+                                (int64_t)(logical_path->u8_bytes - start),
+                                .allocator = allocator);
+}
+
+static bool
+_n00b_obj_bundle_extract_path_is_under_root(n00b_string_t *root,
+                                            n00b_string_t *path)
+{
+    if (root == nullptr
+        || path == nullptr
+        || root->data == nullptr
+        || path->data == nullptr
+        || root->u8_bytes == 0
+        || path->u8_bytes == 0) {
+        return false;
+    }
+
+    size_t root_len = root->u8_bytes;
+
+    while (root_len > 1
+           && ((const uint8_t *)root->data)[root_len - 1] == '/') {
+        root_len--;
+    }
+
+    if (root_len == 1 && ((const uint8_t *)root->data)[0] == '/') {
+        return path->data[0] == '/';
+    }
+
+    if (path->u8_bytes == root_len
+        && memcmp(path->data, root->data, root_len) == 0) {
+        return true;
+    }
+
+    return path->u8_bytes > root_len
+           && memcmp(path->data, root->data, root_len) == 0
+           && ((const uint8_t *)path->data)[root_len] == '/';
+}
+
+static n00b_string_t *
+_n00b_obj_bundle_extract_parent_path(n00b_string_t    *destination_path,
+                                     n00b_allocator_t *allocator)
+{
+    if (destination_path == nullptr
+        || destination_path->data == nullptr
+        || destination_path->u8_bytes == 0) {
+        return nullptr;
+    }
+
+    size_t end = destination_path->u8_bytes;
+
+    while (end > 1 && destination_path->data[end - 1] == '/') {
+        end--;
+    }
+
+    size_t last_slash = SIZE_MAX;
+
+    for (size_t i = 0; i < end; i++) {
+        if (destination_path->data[i] == '/') {
+            last_slash = i;
+        }
+    }
+
+    if (last_slash == SIZE_MAX) {
+        return nullptr;
+    }
+
+    if (last_slash == 0) {
+        return n00b_string_from_raw("/", 1, .allocator = allocator);
+    }
+
+    return n00b_string_from_raw(destination_path->data,
+                                (int64_t)last_slash,
+                                .allocator = allocator);
+}
+
+static n00b_result_t(n00b_obj_bundle_extract_plan_entry_t *)
+_n00b_obj_bundle_extract_plan_entry_new(
+    n00b_obj_bundle_artifact_t       *artifact,
+    n00b_obj_bundle_extract_plan_t   *plan,
+    n00b_string_t                    *destination_root,
+    n00b_obj_bundle_extract_result_t *facts,
+    n00b_allocator_t                 *allocator)
+{
+    n00b_string_t *relative =
+        _n00b_obj_bundle_extract_relative_path(artifact->logical_path,
+                                               allocator);
+
+    if (relative == nullptr || relative->u8_bytes == 0) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_plan_entry_t *,
+            _n00b_obj_bundle_extract_planner_error(
+                N00B_OBJ_BUNDLE_ERR_INVALID_LOGICAL_PATH,
+                r"object bundle: unsafe extraction logical path",
+                artifact,
+                destination_root,
+                facts,
+                0,
+                false,
+                allocator));
+    }
+
+    n00b_string_t *joined =
+        _n00b_obj_bundle_path_join_child(plan->destination_root,
+                                         relative,
+                                         allocator);
+    n00b_string_t *destination_path =
+        _n00b_obj_bundle_resolve_path_copy(joined, allocator);
+
+    if (!_n00b_obj_bundle_extract_path_is_under_root(
+            plan->destination_root,
+            destination_path)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_extract_planner_error(
+                N00B_OBJ_BUNDLE_ERR_INVALID_LOGICAL_PATH,
+                r"object bundle: mapped extraction destination escapes root",
+                artifact,
+                destination_path,
+                facts,
+                0,
+                false,
+                allocator);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_plan_entry_t *,
+            error);
+    }
+
+    n00b_obj_bundle_extract_plan_entry_t *entry =
+        n00b_alloc_with_opts(n00b_obj_bundle_extract_plan_entry_t,
+                             &(n00b_alloc_opts_t){.allocator = allocator});
+
+    entry->artifact         = artifact;
+    entry->destination_path = destination_path;
+    entry->parent_path      =
+        _n00b_obj_bundle_extract_parent_path(destination_path, allocator);
+
+    return n00b_result_ok(n00b_obj_bundle_extract_plan_entry_t *, entry);
+}
+
+static n00b_result_t(n00b_obj_bundle_extract_plan_t *)
+_n00b_obj_bundle_extract_plan_remap_root(
+    n00b_obj_bundle_extract_plan_t   *source_plan,
+    n00b_string_t                    *destination_root,
+    n00b_obj_bundle_extract_result_t *facts,
+    n00b_allocator_t                 *allocator)
+{
+    n00b_obj_bundle_extract_plan_t *plan =
+        _n00b_obj_bundle_extract_plan_new(destination_root, allocator);
+
+    if (plan->destination_root == nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_plan_t *,
+            _n00b_obj_bundle_extract_planner_error(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid extraction staging root",
+                nullptr,
+                destination_root,
+                facts,
+                EINVAL,
+                true,
+                allocator));
+    }
+
+    for (size_t i = 0; i < n00b_list_len(source_plan->entries); i++) {
+        n00b_obj_bundle_extract_plan_entry_t *source_entry =
+            n00b_list_get(source_plan->entries, i);
+        auto entry_r =
+            _n00b_obj_bundle_extract_plan_entry_new(source_entry->artifact,
+                                                    plan,
+                                                    destination_root,
+                                                    facts,
+                                                    allocator);
+
+        if (n00b_result_is_err(entry_r)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_plan_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            entry_r));
+        }
+
+        n00b_list_push(plan->entries, n00b_result_get(entry_r));
+    }
+
+    return n00b_result_ok(n00b_obj_bundle_extract_plan_t *, plan);
+}
+
+static bool
+_n00b_obj_bundle_plan_entries_collide(
+    n00b_obj_bundle_extract_plan_entry_t *left,
+    n00b_obj_bundle_extract_plan_entry_t *right,
+    n00b_obj_bundle_extract_plan_entry_t **colliding_parent)
+{
+    if (_n00b_obj_bundle_string_bytes_eq(left->destination_path,
+                                         right->destination_path)) {
+        *colliding_parent = left;
+        return true;
+    }
+
+    if (_n00b_obj_bundle_logical_path_has_prefix_component(
+            left->destination_path,
+            right->destination_path)
+        && left->artifact->kind != N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY) {
+        *colliding_parent = left;
+        return true;
+    }
+
+    if (_n00b_obj_bundle_logical_path_has_prefix_component(
+            right->destination_path,
+            left->destination_path)
+        && right->artifact->kind != N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY) {
+        *colliding_parent = right;
+        return true;
+    }
+
+    return false;
+}
+
+static n00b_result_t(n00b_obj_bundle_extract_plan_t *)
+_n00b_obj_bundle_plan_extraction(n00b_obj_bundle_t                  *bundle,
+                                 n00b_string_t                      *destination_root,
+                                 n00b_obj_bundle_extract_policy_t   *policy,
+                                 n00b_obj_bundle_extract_result_t   *facts,
+                                 n00b_allocator_t                   *allocator)
+{
+    size_t   n     = n00b_list_len(bundle->artifacts);
+    uint64_t files = 0;
+    uint64_t dirs  = 0;
+    n00b_obj_bundle_extract_plan_t *plan =
+        _n00b_obj_bundle_extract_plan_new(destination_root, allocator);
+
+    if (plan->destination_root == nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_plan_t *,
+            _n00b_obj_bundle_extract_planner_error(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid extraction destination root",
+                nullptr,
+                destination_root,
+                facts,
+                EINVAL,
+                true,
+                allocator));
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        n00b_obj_bundle_artifact_t *artifact =
+            n00b_list_get(bundle->artifacts, i);
+
+        if (artifact == nullptr) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_plan_t *,
+                _n00b_obj_bundle_extract_planner_error(
+                    N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                    r"object bundle: invalid extraction artifact",
+                    nullptr,
+                    destination_root,
+                    facts,
+                    0,
+                    false,
+                    allocator));
+        }
+
+        if (artifact->flags != 0) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_plan_t *,
+                _n00b_obj_bundle_extract_planner_error(
+                    N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE,
+                    r"object bundle: unsupported extraction artifact flags",
+                    artifact,
+                    destination_root,
+                    facts,
+                    artifact->flags,
+                    true,
+                    allocator));
+        }
+
+        if (!_n00b_obj_bundle_extract_path_is_safe(artifact->logical_path,
+                                                   policy,
+                                                   facts)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_plan_t *,
+                _n00b_obj_bundle_extract_planner_error(
+                    N00B_OBJ_BUNDLE_ERR_INVALID_LOGICAL_PATH,
+                    r"object bundle: unsafe extraction logical path",
+                    artifact,
+                    destination_root,
+                    facts,
+                    0,
+                    false,
+                    allocator));
+        }
+
+        if ((policy->artifact_kind_mask
+             & _n00b_obj_bundle_extract_artifact_kind_bit(artifact->kind))
+            == 0) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_plan_t *,
+                _n00b_obj_bundle_extract_planner_error(
+                    N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE,
+                    r"object bundle: extraction artifact denied by policy",
+                    artifact,
+                    destination_root,
+                    facts,
+                    artifact->kind,
+                    true,
+                    allocator));
+        }
+
+        if (!_n00b_obj_bundle_extract_artifact_kind_is_supported(
+                artifact->kind)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_plan_t *,
+                _n00b_obj_bundle_extract_planner_error(
+                    N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE,
+                    r"object bundle: unsupported extraction artifact kind",
+                    artifact,
+                    destination_root,
+                    facts,
+                    artifact->kind,
+                    true,
+                    allocator));
+        }
+
+        if (!facts->create_dirs
+            && (artifact->kind == N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY
+                || _n00b_obj_bundle_logical_path_has_parent_dir(
+                    artifact->logical_path))) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_plan_t *,
+                _n00b_obj_bundle_extract_planner_error(
+                    N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE,
+                    r"object bundle: extraction requires directory creation",
+                    artifact,
+                    destination_root,
+                    facts,
+                    artifact->kind,
+                    true,
+                    allocator));
+        }
+
+        if (artifact->kind == N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY) {
+            dirs++;
+        }
+        else {
+            files++;
+        }
+
+        auto entry_r =
+            _n00b_obj_bundle_extract_plan_entry_new(artifact,
+                                                    plan,
+                                                    destination_root,
+                                                    facts,
+                                                    allocator);
+
+        if (n00b_result_is_err(entry_r)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_plan_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            entry_r));
+        }
+
+        n00b_list_push(plan->entries, n00b_result_get(entry_r));
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        n00b_obj_bundle_extract_plan_entry_t *left =
+            n00b_list_get(plan->entries, i);
+
+        for (size_t j = i + 1; j < n; j++) {
+            n00b_obj_bundle_extract_plan_entry_t *right =
+                n00b_list_get(plan->entries, j);
+
+            if (_n00b_obj_bundle_logical_path_has_prefix_component(
+                    left->artifact->logical_path,
+                    right->artifact->logical_path)
+                && left->artifact->kind
+                       != N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_extract_plan_t *,
+                    _n00b_obj_bundle_extract_planner_error(
+                        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE,
+                        r"object bundle: extraction path collision",
+                        left->artifact,
+                        destination_root,
+                        facts,
+                        right->artifact->id,
+                        true,
+                        allocator));
+            }
+
+            if (_n00b_obj_bundle_logical_path_has_prefix_component(
+                    right->artifact->logical_path,
+                    left->artifact->logical_path)
+                && right->artifact->kind
+                       != N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_extract_plan_t *,
+                    _n00b_obj_bundle_extract_planner_error(
+                        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE,
+                        r"object bundle: extraction path collision",
+                        right->artifact,
+                        destination_root,
+                        facts,
+                        left->artifact->id,
+                        true,
+                        allocator));
+            }
+
+            n00b_obj_bundle_extract_plan_entry_t *colliding_parent = nullptr;
+            if (_n00b_obj_bundle_plan_entries_collide(left,
+                                                      right,
+                                                      &colliding_parent)) {
+                n00b_obj_bundle_extract_plan_entry_t *other =
+                    colliding_parent == left ? right : left;
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_extract_plan_t *,
+                    _n00b_obj_bundle_extract_planner_error(
+                        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE,
+                        r"object bundle: extraction destination collision",
+                        colliding_parent->artifact,
+                        destination_root,
+                        facts,
+                        other->artifact->id,
+                        true,
+                        allocator));
+            }
+        }
+    }
+
+    facts->files_planned       = files;
+    facts->directories_planned = dirs;
+
+    return n00b_result_ok(n00b_obj_bundle_extract_plan_t *, plan);
+}
+
+static bool
+_n00b_obj_bundle_extract_mode_is_valid(uint32_t mode)
+{
+    return (mode & ~07777u) == 0;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_extract_filesystem_error(
+    n00b_obj_bundle_error_code_t              code,
+    n00b_string_t                            *message,
+    n00b_obj_bundle_extract_plan_entry_t     *entry,
+    n00b_string_t                            *destination_path,
+    n00b_obj_bundle_extract_result_t         *facts,
+    int64_t                                   detail,
+    bool                                      has_detail,
+    n00b_allocator_t                         *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_with_extract_result(code,
+                                                   message,
+                                                   destination_path,
+                                                   facts,
+                                                   allocator);
+
+    if (entry != nullptr && entry->artifact != nullptr) {
+        error->logical_path     = entry->artifact->logical_path;
+        error->has_logical_path = entry->artifact->logical_path != nullptr;
+        error->artifact_id      = entry->artifact->id;
+        error->has_artifact_id  = true;
+    }
+
+    if (has_detail) {
+        error->detail     = detail;
+        error->has_detail = true;
+    }
+
+    return error;
+}
+
+static bool
+_n00b_obj_bundle_file_kind_is_directory(n00b_file_kind kind)
+{
+    return kind == N00B_FK_IS_DIR;
+}
+
+static bool
+_n00b_obj_bundle_file_kind_is_file(n00b_file_kind kind)
+{
+    return kind == N00B_FK_IS_REG_FILE;
+}
+
+static n00b_file_kind
+_n00b_obj_bundle_file_kind_no_follow(n00b_string_t *path)
+{
+    if (path == nullptr || path->data == nullptr || path->u8_bytes == 0) {
+        return N00B_FK_NOT_FOUND;
+    }
+
+    struct stat info;
+
+    if (lstat(path->data, &info) != 0) {
+        return N00B_FK_NOT_FOUND;
+    }
+
+    switch (info.st_mode & S_IFMT) {
+    case S_IFREG:
+        return N00B_FK_IS_REG_FILE;
+    case S_IFDIR:
+        return N00B_FK_IS_DIR;
+    case S_IFLNK:
+        return N00B_FK_IS_FLINK;
+    case S_IFSOCK:
+        return N00B_FK_IS_SOCK;
+    case S_IFCHR:
+        return N00B_FK_IS_CHR_DEVICE;
+    case S_IFBLK:
+        return N00B_FK_IS_BLOCK_DEVICE;
+    case S_IFIFO:
+        return N00B_FK_IS_FIFO;
+    default:
+        return N00B_FK_OTHER;
+    }
+}
+
+static n00b_string_t *
+_n00b_obj_bundle_extract_relative_component_path(
+    n00b_string_t    *root,
+    n00b_string_t    *path,
+    n00b_allocator_t *allocator)
+{
+    if (!_n00b_obj_bundle_extract_path_is_under_root(root, path)) {
+        return nullptr;
+    }
+
+    size_t root_len = root->u8_bytes;
+
+    while (root_len > 1 && root->data[root_len - 1] == '/') {
+        root_len--;
+    }
+
+    if (path->u8_bytes == root_len
+        && memcmp(path->data, root->data, root_len) == 0) {
+        return n00b_string_empty(.allocator = allocator);
+    }
+
+    size_t start = root_len == 1 && root->data[0] == '/'
+                       ? 1
+                       : root_len + 1;
+    if (start > path->u8_bytes) {
+        return nullptr;
+    }
+
+    return n00b_string_from_raw(path->data + start,
+                                (int64_t)(path->u8_bytes - start),
+                                .allocator = allocator);
+}
+
+static n00b_list_t(n00b_string_t *) *
+_n00b_obj_bundle_path_components(n00b_string_t    *path,
+                                 n00b_allocator_t *allocator)
+{
+    n00b_list_t(n00b_string_t *) parts =
+        n00b_list_new(n00b_string_t *, .allocator = allocator);
+    n00b_list_t(n00b_string_t *) *result =
+        n00b_alloc(n00b_list_t(n00b_string_t *), .allocator = allocator);
+    *result = parts;
+
+    if (path == nullptr || path->data == nullptr || path->u8_bytes == 0) {
+        return result;
+    }
+
+    size_t start = 0;
+
+    for (size_t i = 0; i <= path->u8_bytes; i++) {
+        if (i != path->u8_bytes && path->data[i] != '/') {
+            continue;
+        }
+
+        if (i > start) {
+            n00b_list_push(
+                *result,
+                n00b_string_from_raw(path->data + start,
+                                     (int64_t)(i - start),
+                                     .allocator = allocator));
+        }
+
+        start = i + 1;
+    }
+
+    return result;
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_extract_preflight_parent_components(
+    n00b_obj_bundle_extract_plan_t       *plan,
+    n00b_obj_bundle_extract_plan_entry_t *entry,
+    n00b_obj_bundle_extract_result_t     *facts,
+    n00b_allocator_t                     *allocator)
+{
+    n00b_string_t *relative =
+        _n00b_obj_bundle_extract_relative_component_path(
+            plan->destination_root,
+            entry->parent_path,
+            allocator);
+
+    if (relative == nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_extract_filesystem_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: extraction destination parent escapes root",
+                entry,
+                entry->parent_path,
+                facts,
+                EINVAL,
+                true,
+                allocator));
+    }
+
+    n00b_list_t(n00b_string_t *) *parts =
+        _n00b_obj_bundle_path_components(relative, allocator);
+    n00b_string_t *current = plan->destination_root;
+
+    for (size_t i = 0; i < n00b_list_len(*parts); i++) {
+        current = _n00b_obj_bundle_path_join_child(
+            current,
+            n00b_list_get(*parts, i),
+            allocator);
+
+        n00b_file_kind kind =
+            _n00b_obj_bundle_file_kind_no_follow(current);
+        if (kind == N00B_FK_NOT_FOUND) {
+            return n00b_result_ok(bool, true);
+        }
+        if (!_n00b_obj_bundle_file_kind_is_directory(kind)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_filesystem_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: extraction destination parent is not a directory",
+                    entry,
+                    current,
+                    facts,
+                    EEXIST,
+                    true,
+                    allocator));
+        }
+    }
+
+    return n00b_result_ok(bool, true);
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_extract_preflight_destination(
+    n00b_obj_bundle_extract_plan_t   *plan,
+    n00b_obj_bundle_extract_result_t *facts,
+    n00b_allocator_t                 *allocator)
+{
+    n00b_file_kind root_kind =
+        _n00b_obj_bundle_file_kind_no_follow(plan->destination_root);
+
+    if (root_kind != N00B_FK_NOT_FOUND
+        && !_n00b_obj_bundle_file_kind_is_directory(root_kind)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_extract_filesystem_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: extraction root is not a directory",
+                nullptr,
+                plan->destination_root,
+                facts,
+                EEXIST,
+                true,
+                allocator));
+    }
+
+    if (!facts->create_dirs
+        && !_n00b_obj_bundle_file_kind_is_directory(root_kind)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_extract_filesystem_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: extraction root directory is missing",
+                nullptr,
+                plan->destination_root,
+                facts,
+                ENOENT,
+                true,
+                allocator));
+    }
+
+    for (size_t i = 0; i < n00b_list_len(plan->entries); i++) {
+        n00b_obj_bundle_extract_plan_entry_t *entry =
+            n00b_list_get(plan->entries, i);
+        n00b_obj_bundle_artifact_t *artifact = entry->artifact;
+
+        if (entry->parent_path == nullptr) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_filesystem_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: extraction destination parent is invalid",
+                    entry,
+                    entry->destination_path,
+                    facts,
+                    EINVAL,
+                    true,
+                allocator));
+        }
+
+        auto components_r =
+            _n00b_obj_bundle_extract_preflight_parent_components(plan,
+                                                                 entry,
+                                                                 facts,
+                                                                 allocator);
+        if (n00b_result_is_err(components_r)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            components_r));
+        }
+
+        n00b_file_kind parent_kind =
+            _n00b_obj_bundle_file_kind_no_follow(entry->parent_path);
+        if (parent_kind != N00B_FK_NOT_FOUND
+            && !_n00b_obj_bundle_file_kind_is_directory(parent_kind)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_filesystem_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: extraction destination parent is not a directory",
+                    entry,
+                    entry->parent_path,
+                    facts,
+                    EEXIST,
+                    true,
+                    allocator));
+        }
+        if (!facts->create_dirs
+            && !_n00b_obj_bundle_file_kind_is_directory(parent_kind)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_filesystem_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: extraction destination parent is missing",
+                    entry,
+                    entry->parent_path,
+                    facts,
+                    ENOENT,
+                    true,
+                    allocator));
+        }
+
+        n00b_file_kind destination_kind =
+            _n00b_obj_bundle_file_kind_no_follow(entry->destination_path);
+
+        if (artifact->kind == N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY) {
+            if (destination_kind != N00B_FK_NOT_FOUND
+                && !_n00b_obj_bundle_file_kind_is_directory(
+                    destination_kind)) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    bool,
+                    _n00b_obj_bundle_extract_filesystem_error(
+                        N00B_OBJ_BUNDLE_ERR_BUILD,
+                        r"object bundle: extraction directory destination already exists",
+                        entry,
+                        entry->destination_path,
+                        facts,
+                        EEXIST,
+                        true,
+                        allocator));
+            }
+
+            continue;
+        }
+
+        if (_n00b_obj_bundle_file_kind_is_directory(destination_kind)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_filesystem_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: extraction file destination is a directory",
+                    entry,
+                    entry->destination_path,
+                    facts,
+                    EISDIR,
+                    true,
+                    allocator));
+        }
+
+        if (destination_kind != N00B_FK_NOT_FOUND
+            && !_n00b_obj_bundle_file_kind_is_file(destination_kind)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_filesystem_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: extraction file destination already exists",
+                    entry,
+                    entry->destination_path,
+                    facts,
+                    EEXIST,
+                    true,
+                    allocator));
+        }
+
+        if (!facts->overwrite && destination_kind != N00B_FK_NOT_FOUND) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_filesystem_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: extraction destination already exists",
+                    entry,
+                    entry->destination_path,
+                    facts,
+                    EEXIST,
+                    true,
+                    allocator));
+        }
+    }
+
+    return n00b_result_ok(bool, true);
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_extract_ensure_directory(
+    n00b_obj_bundle_extract_plan_entry_t *entry,
+    n00b_string_t                        *path,
+    n00b_obj_bundle_extract_result_t     *facts,
+    uint32_t                              mode,
+    n00b_allocator_t                     *allocator)
+{
+    n00b_list_t(n00b_string_t *) *parts =
+        _n00b_obj_bundle_path_components(path, allocator);
+    n00b_string_t *current =
+        n00b_string_from_raw("/", 1, .allocator = allocator);
+    bool created = false;
+
+    for (size_t i = 0; i < n00b_list_len(*parts); i++) {
+        n00b_string_t *part = n00b_list_get(*parts, i);
+
+        current = _n00b_obj_bundle_path_join_child(current,
+                                                   part,
+                                                   allocator);
+
+        uint32_t component_mode =
+            i + 1 == n00b_list_len(*parts) ? mode : 0775u;
+        auto mkdir_r = n00b_path_mkdir_p(current,
+                                         .mode = component_mode,
+                                         .allocator = allocator);
+
+        if (n00b_result_is_err(mkdir_r)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_filesystem_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: extraction directory could not be created",
+                    entry,
+                    current,
+                    facts,
+                    n00b_result_get_err(mkdir_r),
+                    true,
+                    allocator));
+        }
+
+        if (n00b_result_get(mkdir_r)) {
+            facts->directories_written++;
+            created = true;
+        }
+    }
+
+    return n00b_result_ok(bool, created);
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_extract_apply_directory_mode(
+    n00b_obj_bundle_extract_plan_entry_t *entry,
+    n00b_obj_bundle_extract_result_t     *facts,
+    n00b_allocator_t                     *allocator)
+{
+    uint32_t mode = entry->artifact->mode;
+
+    if (!facts->preserve_modes || mode == 0) {
+        return n00b_result_ok(bool, true);
+    }
+
+    if (!_n00b_obj_bundle_extract_mode_is_valid(mode)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_extract_filesystem_error(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid extraction directory mode",
+                entry,
+                entry->destination_path,
+                facts,
+                mode,
+                true,
+                allocator));
+    }
+
+    auto mode_r = n00b_path_set_mode(entry->destination_path, mode);
+    if (n00b_result_is_ok(mode_r)) {
+        return n00b_result_ok(bool, true);
+    }
+
+    int err = n00b_result_get_err(mode_r);
+    return OBJ_BUNDLE_ERR_PAYLOAD(
+        bool,
+        _n00b_obj_bundle_extract_filesystem_error(
+            err == ENOSYS ? N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE
+                          : N00B_OBJ_BUNDLE_ERR_BUILD,
+            err == ENOSYS
+                ? r"object bundle: extraction directory mode is unsupported"
+                : r"object bundle: extraction directory mode could not be applied",
+            entry,
+            entry->destination_path,
+            facts,
+            err,
+            true,
+            allocator));
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_extract_error_from_sink(
+    n00b_objfile_sink_error_t             *sink_error,
+    n00b_obj_bundle_extract_plan_entry_t  *entry,
+    n00b_obj_bundle_extract_result_t      *facts,
+    n00b_allocator_t                      *allocator)
+{
+    n00b_obj_bundle_error_code_t code = N00B_OBJ_BUNDLE_ERR_BUILD;
+
+    if (sink_error != nullptr) {
+        switch (n00b_objfile_sink_error_code(sink_error)) {
+        case N00B_OBJFILE_SINK_ERR_INVALID_ARGUMENT:
+            code = N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT;
+            break;
+        case N00B_OBJFILE_SINK_ERR_UNSUPPORTED:
+            code = N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE;
+            break;
+        default:
+            code = N00B_OBJ_BUNDLE_ERR_BUILD;
+            break;
+        }
+    }
+
+    n00b_string_t *message =
+        r"object bundle: extraction file write failed";
+    int64_t detail = 0;
+    bool    has_detail = false;
+
+    if (sink_error != nullptr) {
+        auto sink_message = n00b_objfile_sink_error_message(sink_error);
+        if (n00b_option_is_set(sink_message)) {
+            message = n00b_option_get(sink_message);
+        }
+
+        auto sink_detail = n00b_objfile_sink_error_detail(sink_error);
+        if (n00b_option_is_set(sink_detail)) {
+            detail     = n00b_option_get(sink_detail);
+            has_detail = true;
+        }
+    }
+
+    return _n00b_obj_bundle_extract_filesystem_error(
+        code,
+        message,
+        entry,
+        entry->destination_path,
+        facts,
+        detail,
+        has_detail,
+        allocator);
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_extract_write_file(
+    n00b_obj_bundle_extract_plan_entry_t *entry,
+    n00b_obj_bundle_extract_result_t     *facts,
+    n00b_allocator_t                     *allocator)
+{
+    n00b_option_t(uint32_t) file_mode = n00b_option_none(uint32_t);
+
+    if (facts->preserve_modes && entry->artifact->mode != 0) {
+        if (!_n00b_obj_bundle_extract_mode_is_valid(entry->artifact->mode)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_filesystem_error(
+                    N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                    r"object bundle: invalid extraction file mode",
+                    entry,
+                    entry->destination_path,
+                    facts,
+                    entry->artifact->mode,
+                    true,
+                    allocator));
+        }
+
+        file_mode = n00b_option_set(uint32_t, entry->artifact->mode);
+    }
+
+    auto sink_r = n00b_objfile_sink_write(
+        (n00b_buffer_t *)entry->artifact->payload,
+        entry->destination_path,
+        .sink_mode = N00B_OBJFILE_SINK_MODE_DIRECT,
+        .overwrite = facts->overwrite
+                         ? N00B_OBJFILE_SINK_REPLACE_EXISTING
+                         : N00B_OBJFILE_SINK_REJECT_EXISTING,
+        .file_mode = file_mode,
+        .preserve_existing_mode = false,
+        .allocator = allocator);
+
+    if (n00b_result_is_err(sink_r)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_extract_error_from_sink(
+                n00b_result_get_err_payload(n00b_objfile_sink_error_t *,
+                                            sink_r),
+                entry,
+                facts,
+                allocator));
+    }
+
+    n00b_objfile_sink_result_t *sink_facts = n00b_result_get(sink_r);
+
+    facts->files_written++;
+
+    if (n00b_option_is_set(file_mode)
+        && !n00b_objfile_sink_result_file_mode_supported(sink_facts)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_extract_filesystem_error(
+                N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE,
+                r"object bundle: extraction file mode is unsupported",
+                entry,
+                entry->destination_path,
+                facts,
+                ENOSYS,
+                true,
+                allocator));
+    }
+
+    return n00b_result_ok(bool, true);
+}
+
+static n00b_result_t(n00b_obj_bundle_extract_result_t *)
+_n00b_obj_bundle_materialize_direct(
+    n00b_obj_bundle_extract_plan_t   *plan,
+    n00b_obj_bundle_extract_result_t *facts,
+    n00b_allocator_t                 *allocator)
+{
+    auto preflight =
+        _n00b_obj_bundle_extract_preflight_destination(plan,
+                                                       facts,
+                                                       allocator);
+    if (n00b_result_is_err(preflight)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_result_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        preflight));
+    }
+
+    if (n00b_list_len(plan->entries) == 0) {
+        return n00b_result_ok(n00b_obj_bundle_extract_result_t *, facts);
+    }
+
+    if (facts->create_dirs) {
+        auto root_r = _n00b_obj_bundle_extract_ensure_directory(
+            nullptr,
+            plan->destination_root,
+            facts,
+            0775u,
+            allocator);
+        if (n00b_result_is_err(root_r)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_result_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            root_r));
+        }
+    }
+
+    for (size_t i = 0; i < n00b_list_len(plan->entries); i++) {
+        n00b_obj_bundle_extract_plan_entry_t *entry =
+            n00b_list_get(plan->entries, i);
+
+        if (entry->artifact->kind != N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY) {
+            continue;
+        }
+
+        uint32_t create_mode =
+            facts->preserve_modes && entry->artifact->mode != 0
+                ? entry->artifact->mode
+                : 0775u;
+        if (!_n00b_obj_bundle_extract_mode_is_valid(create_mode)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_result_t *,
+                _n00b_obj_bundle_extract_filesystem_error(
+                    N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                    r"object bundle: invalid extraction directory mode",
+                    entry,
+                    entry->destination_path,
+                    facts,
+                    create_mode,
+                    true,
+                    allocator));
+        }
+
+        auto mkdir_r =
+            _n00b_obj_bundle_extract_ensure_directory(entry,
+                                                       entry->destination_path,
+                                                       facts,
+                                                       create_mode,
+                                                       allocator);
+        if (n00b_result_is_err(mkdir_r)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_result_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            mkdir_r));
+        }
+
+        auto mode_r =
+            _n00b_obj_bundle_extract_apply_directory_mode(entry,
+                                                          facts,
+                                                          allocator);
+        if (n00b_result_is_err(mode_r)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_result_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            mode_r));
+        }
+    }
+
+    for (size_t i = 0; i < n00b_list_len(plan->entries); i++) {
+        n00b_obj_bundle_extract_plan_entry_t *entry =
+            n00b_list_get(plan->entries, i);
+
+        if (entry->artifact->kind == N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY) {
+            continue;
+        }
+
+        if (facts->create_dirs) {
+            auto parent_r = _n00b_obj_bundle_extract_ensure_directory(
+                entry,
+                entry->parent_path,
+                facts,
+                0775u,
+                allocator);
+            if (n00b_result_is_err(parent_r)) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_extract_result_t *,
+                    n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                                parent_r));
+            }
+        }
+
+        auto write_r =
+            _n00b_obj_bundle_extract_write_file(entry, facts, allocator);
+        if (n00b_result_is_err(write_r)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_result_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            write_r));
+        }
+    }
+
+    return n00b_result_ok(n00b_obj_bundle_extract_result_t *, facts);
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_extract_preflight_atomic_destination(
+    n00b_obj_bundle_extract_plan_t   *plan,
+    n00b_obj_bundle_extract_result_t *facts,
+    n00b_allocator_t                 *allocator)
+{
+    n00b_file_kind root_kind =
+        _n00b_obj_bundle_file_kind_no_follow(plan->destination_root);
+
+    if (root_kind != N00B_FK_NOT_FOUND) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_extract_filesystem_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: atomic extraction destination root already exists",
+                nullptr,
+                plan->destination_root,
+                facts,
+                EEXIST,
+                true,
+                allocator));
+    }
+
+    n00b_string_t *parent =
+        _n00b_obj_bundle_extract_parent_path(plan->destination_root,
+                                             allocator);
+    if (parent == nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_extract_filesystem_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: atomic extraction destination parent is invalid",
+                nullptr,
+                plan->destination_root,
+                facts,
+                EINVAL,
+                true,
+                allocator));
+    }
+
+    n00b_file_kind parent_kind =
+        _n00b_obj_bundle_file_kind_no_follow(parent);
+    if (!_n00b_obj_bundle_file_kind_is_directory(parent_kind)) {
+        int64_t detail = parent_kind == N00B_FK_NOT_FOUND ? ENOENT : EEXIST;
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_extract_filesystem_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                parent_kind == N00B_FK_NOT_FOUND
+                    ? r"object bundle: atomic extraction destination parent is missing"
+                    : r"object bundle: atomic extraction destination parent is not a directory",
+                nullptr,
+                parent,
+                facts,
+                detail,
+                true,
+                allocator));
+    }
+
+    return n00b_result_ok(bool, true);
+}
+
+static void
+_n00b_obj_bundle_extract_cleanup_temp(
+    n00b_obj_bundle_extract_result_t *facts,
+    n00b_allocator_t                 *allocator)
+{
+    if (facts->has_temp_root == false || facts->temp_root == nullptr) {
+        return;
+    }
+
+    facts->cleanup_attempted = true;
+
+    auto cleanup_r = n00b_path_remove_tree(facts->temp_root,
+                                           .ignore_missing = true,
+                                           .allocator = allocator);
+    facts->cleanup_succeeded = n00b_result_is_ok(cleanup_r);
+}
+
+static n00b_result_t(n00b_obj_bundle_extract_result_t *)
+_n00b_obj_bundle_materialize_atomic(
+    n00b_obj_bundle_extract_plan_t   *plan,
+    n00b_obj_bundle_extract_result_t *facts,
+    n00b_allocator_t                 *allocator)
+{
+    auto preflight =
+        _n00b_obj_bundle_extract_preflight_atomic_destination(plan,
+                                                              facts,
+                                                              allocator);
+    if (n00b_result_is_err(preflight)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_result_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        preflight));
+    }
+
+    if (n00b_list_len(plan->entries) == 0) {
+        return n00b_result_ok(n00b_obj_bundle_extract_result_t *, facts);
+    }
+
+    auto temp_r = n00b_new_sibling_temp_dir(plan->destination_root,
+                                            .allocator = allocator);
+    if (n00b_result_is_err(temp_r)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_result_t *,
+            _n00b_obj_bundle_extract_filesystem_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: atomic extraction temp root could not be created",
+                nullptr,
+                plan->destination_root,
+                facts,
+                n00b_result_get_err(temp_r),
+                true,
+                allocator));
+    }
+
+    n00b_string_t *temp_root = n00b_result_get(temp_r);
+    facts->temp_root         = temp_root;
+    facts->has_temp_root     = true;
+    facts->atomic_used       = true;
+    facts->directories_written++;
+
+    auto staged_plan_r =
+        _n00b_obj_bundle_extract_plan_remap_root(plan,
+                                                 temp_root,
+                                                 facts,
+                                                 allocator);
+    if (n00b_result_is_err(staged_plan_r)) {
+        _n00b_obj_bundle_extract_cleanup_temp(facts, allocator);
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_result_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        staged_plan_r));
+    }
+
+    n00b_obj_bundle_extract_plan_t *staged_plan =
+        n00b_result_get(staged_plan_r);
+    auto stage_r =
+        _n00b_obj_bundle_materialize_direct(staged_plan, facts, allocator);
+    if (n00b_result_is_err(stage_r)) {
+        _n00b_obj_bundle_extract_cleanup_temp(facts, allocator);
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_result_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        stage_r));
+    }
+
+    facts->commit_attempted = true;
+    auto commit_r = n00b_path_commit_exact(
+        temp_root,
+        plan->destination_root,
+        .policy = N00B_PATH_COMMIT_REJECT_EXISTING);
+
+    if (n00b_result_is_ok(commit_r)) {
+        facts->commit_completed = true;
+        return n00b_result_ok(n00b_obj_bundle_extract_result_t *, facts);
+    }
+
+    int err = n00b_result_get_err(commit_r);
+    _n00b_obj_bundle_extract_cleanup_temp(facts, allocator);
+
+    return OBJ_BUNDLE_ERR_PAYLOAD(
+        n00b_obj_bundle_extract_result_t *,
+        _n00b_obj_bundle_extract_filesystem_error(
+            err == ENOSYS ? N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE
+                          : N00B_OBJ_BUNDLE_ERR_BUILD,
+            err == ENOSYS
+                ? r"object bundle: atomic extraction exact commit is unsupported"
+                : r"object bundle: atomic extraction exact commit failed",
+            nullptr,
+            plan->destination_root,
+            facts,
+            err,
+            true,
+            allocator));
 }
 
 static bool
@@ -3787,6 +5878,378 @@ n00b_obj_bundle_write_file(n00b_buffer_t     *object_bytes,
                                    .allocator = allocator);
 }
 
+n00b_result_t(n00b_obj_bundle_extract_result_t *)
+n00b_obj_bundle_extract(n00b_obj_bundle_t *bundle,
+                        n00b_string_t     *destination_root) _kargs
+{
+    bool                          overwrite = false;
+    bool                          atomic = true;
+    bool                          preserve_modes = true;
+    bool                          create_dirs = true;
+    bool                          allow_absolute_paths = false;
+    bool                          allow_parent_refs = false;
+    n00b_obj_bundle_policy_mode_t policy_mode = N00B_OBJ_BUNDLE_POLICY_ENFORCE;
+    n00b_allocator_t             *allocator = nullptr;
+}
+{
+    if (bundle == nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_result_t *,
+            _n00b_obj_bundle_error_with_destination(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: null extraction bundle",
+                destination_root,
+                allocator));
+    }
+
+    if (!_n00b_obj_bundle_extract_destination_arg_is_valid(destination_root)) {
+        return OBJ_BUNDLE_ERR(n00b_obj_bundle_extract_result_t *,
+                              N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                              r"object bundle: invalid extraction destination root",
+                              allocator);
+    }
+
+    n00b_obj_bundle_extract_result_t *facts =
+        _n00b_obj_bundle_extract_result_new(destination_root,
+                                           overwrite,
+                                           atomic,
+                                           preserve_modes,
+                                           create_dirs,
+                                           allow_absolute_paths,
+                                           allow_parent_refs,
+                                           policy_mode,
+                                           allocator);
+
+    if (!_n00b_obj_bundle_policy_mode_is_valid(policy_mode)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_error_with_extract_result(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid extraction policy mode",
+                destination_root,
+                facts,
+                allocator);
+
+        error->detail     = (int64_t)policy_mode;
+        error->has_detail = true;
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(n00b_obj_bundle_extract_result_t *,
+                                      error);
+    }
+
+    auto valid_artifacts = _n00b_obj_bundle_validate_artifacts(bundle);
+
+    if (n00b_result_is_err(valid_artifacts)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_result_t *,
+            _n00b_obj_bundle_error_clone_with_extract_result(
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            valid_artifacts),
+                destination_root,
+                facts,
+                allocator));
+    }
+
+    auto valid_exec = _n00b_obj_bundle_validate_exec_map(bundle);
+
+    if (n00b_result_is_err(valid_exec)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_result_t *,
+            _n00b_obj_bundle_error_clone_with_extract_result(
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            valid_exec),
+                destination_root,
+                facts,
+                allocator));
+    }
+
+    auto policy_result =
+        _n00b_obj_bundle_select_extraction_policy(bundle, allocator);
+
+    if (n00b_result_is_err(policy_result)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_result_t *,
+            _n00b_obj_bundle_error_attach_extract_result(
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            policy_result),
+                destination_root,
+                facts));
+    }
+
+    n00b_obj_bundle_extract_policy_t *policy =
+        n00b_result_get(policy_result);
+
+    _n00b_obj_bundle_extract_result_set_policy(facts, policy);
+
+    auto plan_result = _n00b_obj_bundle_plan_extraction(bundle,
+                                                        destination_root,
+                                                        policy,
+                                                        facts,
+                                                        allocator);
+
+    if (n00b_result_is_err(plan_result)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_extract_result_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        plan_result));
+    }
+
+    n00b_obj_bundle_extract_plan_t *plan = n00b_result_get(plan_result);
+
+    if (policy_mode == N00B_OBJ_BUNDLE_POLICY_VALIDATE_ONLY) {
+        return n00b_result_ok(n00b_obj_bundle_extract_result_t *, facts);
+    }
+
+    if (!atomic) {
+        return _n00b_obj_bundle_materialize_direct(plan, facts, allocator);
+    }
+
+    return _n00b_obj_bundle_materialize_atomic(plan, facts, allocator);
+}
+
+n00b_string_t *
+n00b_obj_bundle_extract_result_destination_root(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->destination_root;
+}
+
+n00b_option_t(n00b_string_t *)
+n00b_obj_bundle_extract_result_temp_root(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    if (!result->has_temp_root) {
+        return n00b_option_none(n00b_string_t *);
+    }
+
+    return n00b_option_from_nullable(n00b_string_t *, result->temp_root);
+}
+
+uint64_t
+n00b_obj_bundle_extract_result_files_planned(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->files_planned;
+}
+
+uint64_t
+n00b_obj_bundle_extract_result_directories_planned(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->directories_planned;
+}
+
+uint64_t
+n00b_obj_bundle_extract_result_files_written(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->files_written;
+}
+
+uint64_t
+n00b_obj_bundle_extract_result_directories_written(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->directories_written;
+}
+
+n00b_option_t(n00b_obj_bundle_policy_kind_t)
+n00b_obj_bundle_extract_result_policy_kind(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    if (!result->has_policy_kind) {
+        return n00b_option_none(n00b_obj_bundle_policy_kind_t);
+    }
+
+    return n00b_option_set(n00b_obj_bundle_policy_kind_t,
+                           result->policy_kind);
+}
+
+n00b_option_t(n00b_obj_bundle_policy_scope_t)
+n00b_obj_bundle_extract_result_policy_scope(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    if (!result->has_policy_scope) {
+        return n00b_option_none(n00b_obj_bundle_policy_scope_t);
+    }
+
+    return n00b_option_set(n00b_obj_bundle_policy_scope_t,
+                           result->policy_scope);
+}
+
+bool
+n00b_obj_bundle_extract_result_fallback_used(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->fallback_used;
+}
+
+bool
+n00b_obj_bundle_extract_result_overwrite(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->overwrite;
+}
+
+bool
+n00b_obj_bundle_extract_result_atomic_requested(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->atomic_requested;
+}
+
+bool
+n00b_obj_bundle_extract_result_atomic_used(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->atomic_used;
+}
+
+bool
+n00b_obj_bundle_extract_result_preserve_modes(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->preserve_modes;
+}
+
+bool
+n00b_obj_bundle_extract_result_create_dirs(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->create_dirs;
+}
+
+bool
+n00b_obj_bundle_extract_result_allow_absolute_paths(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->allow_absolute_paths;
+}
+
+bool
+n00b_obj_bundle_extract_result_allow_parent_refs(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->allow_parent_refs;
+}
+
+n00b_obj_bundle_policy_mode_t
+n00b_obj_bundle_extract_result_policy_mode(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->policy_mode;
+}
+
+bool
+n00b_obj_bundle_extract_result_commit_attempted(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->commit_attempted;
+}
+
+bool
+n00b_obj_bundle_extract_result_commit_completed(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->commit_completed;
+}
+
+bool
+n00b_obj_bundle_extract_result_rollback_attempted(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->rollback_attempted;
+}
+
+bool
+n00b_obj_bundle_extract_result_rollback_succeeded(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->rollback_succeeded;
+}
+
+bool
+n00b_obj_bundle_extract_result_cleanup_attempted(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->cleanup_attempted;
+}
+
+bool
+n00b_obj_bundle_extract_result_cleanup_succeeded(
+    n00b_obj_bundle_extract_result_t *result)
+{
+    n00b_require(result != nullptr,
+                 "object bundle extraction result must not be null");
+
+    return result->cleanup_succeeded;
+}
+
 n00b_obj_bundle_error_code_t
 n00b_obj_bundle_error_code(n00b_obj_bundle_error_t *error)
 {
@@ -3849,6 +6312,8 @@ n00b_obj_bundle_err_str(n00b_err_t err)
         return r"object bundle: unsupported carrier";
     case N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE:
         return r"object bundle: rewrite failure";
+    case N00B_OBJ_BUNDLE_ERR_EXTRACT_UNSUPPORTED:
+        return r"object bundle: extraction unsupported";
     default:
         return r"object bundle: unknown error code";
     }
@@ -3898,6 +6363,18 @@ n00b_obj_bundle_error_logical_path(n00b_obj_bundle_error_t *error)
     return n00b_option_from_nullable(n00b_string_t *, error->logical_path);
 }
 
+n00b_option_t(n00b_string_t *)
+n00b_obj_bundle_error_destination_path(n00b_obj_bundle_error_t *error)
+{
+    n00b_require(error != nullptr, "object bundle error must not be null");
+
+    if (!error->has_destination_path) {
+        return n00b_option_none(n00b_string_t *);
+    }
+
+    return n00b_option_from_nullable(n00b_string_t *, error->destination_path);
+}
+
 n00b_option_t(uint64_t)
 n00b_obj_bundle_error_artifact_id(n00b_obj_bundle_error_t *error)
 {
@@ -3944,4 +6421,17 @@ n00b_obj_bundle_error_detail(n00b_obj_bundle_error_t *error)
     }
 
     return n00b_option_set(int64_t, error->detail);
+}
+
+n00b_option_t(n00b_obj_bundle_extract_result_t *)
+n00b_obj_bundle_error_extract_result_facts(n00b_obj_bundle_error_t *error)
+{
+    n00b_require(error != nullptr, "object bundle error must not be null");
+
+    if (!error->has_extract_result) {
+        return n00b_option_none(n00b_obj_bundle_extract_result_t *);
+    }
+
+    return n00b_option_from_nullable(n00b_obj_bundle_extract_result_t *,
+                                     error->extract_result);
 }

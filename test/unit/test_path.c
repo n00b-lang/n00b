@@ -11,13 +11,24 @@
 
 #include "n00b.h"
 #include "core/buffer.h"
+#include "core/arena.h"
 #include "core/file.h"
+#include "core/memory_info.h"
 #include "core/runtime.h"
 #include "text/strings/string_ops.h"
 #include "util/assert.h"
 #include "util/path.h"
 
 #define N00B_TEST_REQUIRE(expr) n00b_require((expr), #expr)
+
+static void
+assert_pointer_allocator(void *ptr, n00b_allocator_t *expected)
+{
+    auto owner = n00b_find_allocator(ptr);
+
+    N00B_TEST_REQUIRE(n00b_option_is_set(owner));
+    N00B_TEST_REQUIRE(n00b_option_get(owner) == expected);
+}
 
 static n00b_string_t *
 fixture_dir(n00b_string_t *prefix)
@@ -72,6 +83,26 @@ fixture_unlink(n00b_string_t *path)
 {
     auto unlink_r = n00b_file_unlink(path, .ignore_missing = true);
     N00B_TEST_REQUIRE(n00b_result_is_ok(unlink_r));
+}
+
+static bool
+symlink_setup_can_be_skipped(int err)
+{
+    if (err == ENOSYS || err == EPERM || err == EACCES) {
+        return true;
+    }
+#ifdef EOPNOTSUPP
+    if (err == EOPNOTSUPP) {
+        return true;
+    }
+#endif
+#ifdef ENOTSUP
+    if (err == ENOTSUP) {
+        return true;
+    }
+#endif
+
+    return false;
 }
 
 // ============================================================================
@@ -161,6 +192,21 @@ test_resolve_empty(void)
     assert(strcmp(p2->data, home->data) == 0);
 
     printf("  [PASS] resolve_empty\n");
+}
+
+static void
+test_resolve_path_alloc_allocator(void)
+{
+    n00b_arena_t *arena = n00b_new_arena(.size = 32768, .use_gc = true);
+    n00b_allocator_t *allocator = (n00b_allocator_t *)arena;
+    n00b_string_t *p = n00b_resolve_path_alloc(r"foo/./bar",
+                                               .allocator = allocator);
+
+    N00B_TEST_REQUIRE(p != nullptr);
+    assert_pointer_allocator(p, allocator);
+    N00B_TEST_REQUIRE(n00b_unicode_str_ends_with(p, r"/foo/bar"));
+
+    printf("  [PASS] resolve_path_alloc_allocator\n");
 }
 
 // ============================================================================
@@ -435,6 +481,40 @@ test_sibling_temp_file(void)
     rmdir(dir->data);
 }
 
+static void
+test_sibling_temp_dir(void)
+{
+    n00b_string_t *dir = fixture_dir(n00b_string_from_cstr("test_sibling_dir_"));
+    n00b_string_t *dst = fixture_child(dir, n00b_string_from_cstr("root"));
+    n00b_arena_t  *arena = n00b_new_arena(.size = 32768, .use_gc = true);
+
+    auto temp_r = n00b_new_sibling_temp_dir(
+        dst,
+        .directory_mode = 0700,
+        .allocator = (n00b_allocator_t *)arena);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(temp_r));
+    n00b_string_t *temp = n00b_result_get(temp_r);
+
+    assert_pointer_allocator(temp, (n00b_allocator_t *)arena);
+    N00B_TEST_REQUIRE(n00b_path_is_directory(temp));
+    N00B_TEST_REQUIRE(!n00b_path_exists(dst));
+
+    n00b_list_t(n00b_string_t *) *dst_parts = n00b_path_parts(dst);
+    n00b_list_t(n00b_string_t *) *tmp_parts = n00b_path_parts(temp);
+    n00b_string_t *dst_dir = n00b_list_get(*dst_parts, 0);
+    n00b_string_t *tmp_dir = n00b_list_get(*tmp_parts, 0);
+    N00B_TEST_REQUIRE(strcmp(dst_dir->data, tmp_dir->data) == 0);
+    N00B_TEST_REQUIRE(strcmp(dst->data, temp->data) != 0);
+
+    auto bad_attempts = n00b_new_sibling_temp_dir(dst, .max_attempts = 0);
+    N00B_TEST_REQUIRE(n00b_result_is_err(bad_attempts));
+    N00B_TEST_REQUIRE(n00b_result_get_err(bad_attempts) == EINVAL);
+
+    auto cleanup_r = n00b_path_remove_tree(temp);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(cleanup_r));
+    rmdir(dir->data);
+}
+
 // ============================================================================
 // 18. exact commit replace and reject-existing
 // ============================================================================
@@ -509,6 +589,72 @@ test_cleanup_visibility(void)
     rmdir(dir->data);
 }
 
+static void
+test_remove_tree(void)
+{
+    n00b_string_t *root = fixture_dir(n00b_string_from_cstr("test_tree_"));
+    n00b_string_t *a = fixture_child(root, n00b_string_from_cstr("a"));
+    n00b_string_t *b = fixture_child(a, n00b_string_from_cstr("b"));
+    n00b_string_t *file = fixture_child(b, n00b_string_from_cstr("file"));
+
+    auto mkdir_r = n00b_path_mkdir_p(b);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(mkdir_r));
+    fixture_write(file, n00b_string_from_cstr("tree data"));
+
+    auto remove_r = n00b_path_remove_tree(root);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(remove_r));
+    N00B_TEST_REQUIRE(n00b_result_get(remove_r));
+    N00B_TEST_REQUIRE(!n00b_path_exists(root));
+
+    n00b_string_t *missing =
+        n00b_new_temp_path(n00b_string_from_cstr("missing_tree_"),
+                           n00b_string_from_cstr("_root"));
+    auto missing_r = n00b_path_remove_tree(missing, .ignore_missing = true);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(missing_r));
+    N00B_TEST_REQUIRE(!n00b_result_get(missing_r));
+}
+
+static void
+test_remove_tree_rejects_root(void)
+{
+    auto remove_r = n00b_path_remove_tree(r"/", .ignore_missing = true);
+
+    N00B_TEST_REQUIRE(n00b_result_is_err(remove_r));
+    N00B_TEST_REQUIRE(n00b_result_get_err(remove_r) == EINVAL);
+}
+
+static void
+test_remove_tree_does_not_follow_symlinked_directory(void)
+{
+    n00b_string_t *root = fixture_dir(r"test_tree_symlink_root_");
+    n00b_string_t *outside = fixture_dir(r"test_tree_symlink_outside_");
+    n00b_string_t *outside_file = fixture_child(outside, r"kept");
+    n00b_string_t *link_path = fixture_child(root, r"linked-dir");
+
+    fixture_write(outside_file, r"outside data");
+
+    if (symlink(outside->data, link_path->data) != 0) {
+        int err = errno;
+        auto root_cleanup = n00b_path_remove_tree(root,
+                                                  .ignore_missing = true);
+        N00B_TEST_REQUIRE(n00b_result_is_ok(root_cleanup));
+        fixture_unlink(outside_file);
+        rmdir(outside->data);
+        N00B_TEST_REQUIRE(symlink_setup_can_be_skipped(err));
+        return;
+    }
+
+    auto remove_r = n00b_path_remove_tree(root);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(remove_r));
+    N00B_TEST_REQUIRE(n00b_result_get(remove_r));
+    N00B_TEST_REQUIRE(!n00b_path_exists(root));
+    N00B_TEST_REQUIRE(n00b_path_is_directory(outside));
+    fixture_assert_contents(outside_file, r"outside data");
+
+    fixture_unlink(outside_file);
+    rmdir(outside->data);
+}
+
 // ============================================================================
 // 19. path mode get/set
 // ============================================================================
@@ -542,6 +688,58 @@ test_path_mode_helpers(void)
 }
 
 // ============================================================================
+// 20. mkdir_p
+// ============================================================================
+
+static void
+test_mkdir_p(void)
+{
+    n00b_string_t *dir = fixture_dir(n00b_string_from_cstr("test_mkdir_p_"));
+    n00b_string_t *a = fixture_child(dir, n00b_string_from_cstr("a"));
+    n00b_string_t *b = fixture_child(a, n00b_string_from_cstr("b"));
+    n00b_string_t *c = fixture_child(b, n00b_string_from_cstr("c"));
+
+    auto create_r = n00b_path_mkdir_p(c, .mode = 0700);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(create_r));
+    N00B_TEST_REQUIRE(n00b_result_get(create_r));
+    N00B_TEST_REQUIRE(n00b_path_is_directory(c));
+
+    auto existing_r = n00b_path_mkdir_p(c);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(existing_r));
+    N00B_TEST_REQUIRE(!n00b_result_get(existing_r));
+
+    auto reject_existing_r = n00b_path_mkdir_p(c, .allow_existing = false);
+    N00B_TEST_REQUIRE(n00b_result_is_err(reject_existing_r));
+    N00B_TEST_REQUIRE(n00b_result_get_err(reject_existing_r) == EEXIST);
+
+    n00b_arena_t *arena = n00b_new_arena(.size = 32768, .use_gc = true);
+    n00b_string_t *arena_child =
+        fixture_child(dir, n00b_string_from_cstr("arena-child"));
+    auto arena_create_r =
+        n00b_path_mkdir_p(arena_child,
+                          .mode = 0700,
+                          .allocator = (n00b_allocator_t *)arena);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(arena_create_r));
+    N00B_TEST_REQUIRE(n00b_result_get(arena_create_r));
+    N00B_TEST_REQUIRE(n00b_path_is_directory(arena_child));
+
+    n00b_string_t *file = fixture_child(dir, n00b_string_from_cstr("file"));
+    fixture_write(file, n00b_string_from_cstr("not a directory"));
+    n00b_string_t *file_child =
+        fixture_child(file, n00b_string_from_cstr("child"));
+    auto collision_r = n00b_path_mkdir_p(file_child);
+    N00B_TEST_REQUIRE(n00b_result_is_err(collision_r));
+    N00B_TEST_REQUIRE(n00b_result_get_err(collision_r) == EEXIST);
+
+    rmdir(c->data);
+    rmdir(b->data);
+    rmdir(a->data);
+    rmdir(arena_child->data);
+    fixture_unlink(file);
+    rmdir(dir->data);
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -557,6 +755,7 @@ main(int argc, char **argv)
     test_resolve_relative();
     test_resolve_tilde();
     test_resolve_empty();
+    test_resolve_path_alloc_allocator();
     test_path_join();
     test_path_simple_join();
     test_get_file_kind();
@@ -569,9 +768,14 @@ main(int argc, char **argv)
     test_new_temp_dir();
     test_new_temp_path_prefix_suffix();
     test_sibling_temp_file();
+    test_sibling_temp_dir();
     test_exact_commit();
     test_cleanup_visibility();
+    test_remove_tree();
+    test_remove_tree_rejects_root();
+    test_remove_tree_does_not_follow_symlinked_directory();
     test_path_mode_helpers();
+    test_mkdir_p();
 
     printf("All path tests passed.\n");
     n00b_shutdown();

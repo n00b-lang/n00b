@@ -43,6 +43,8 @@ extern const uint8_t
 typedef struct n00b_obj_bundle n00b_obj_bundle_t;
 typedef struct n00b_obj_bundle_artifact n00b_obj_bundle_artifact_t;
 typedef struct n00b_obj_bundle_error n00b_obj_bundle_error_t;
+typedef struct n00b_obj_bundle_extract_result
+    n00b_obj_bundle_extract_result_t;
 
 typedef enum {
     N00B_OBJ_BUNDLE_ARTIFACT_FILE,
@@ -116,6 +118,7 @@ typedef enum {
     N00B_OBJ_BUNDLE_ERR_GUARD_SECTION_PRESENT  = -3722,
     N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER    = -3723,
     N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE        = -3724,
+    N00B_OBJ_BUNDLE_ERR_EXTRACT_UNSUPPORTED    = -3725,
 } n00b_obj_bundle_error_code_t;
 
 /**
@@ -321,6 +324,231 @@ n00b_obj_bundle_write_file(n00b_buffer_t     *object_bytes,
 };
 
 /**
+ * @pre @p bundle is non-null.
+ * @pre @p destination_root is non-null and non-empty.
+ * @post Validates the bundle and extraction plan before materialization.
+ * @post With @c policy_mode = N00B_OBJ_BUNDLE_POLICY_VALIDATE_ONLY, returns
+ *       success facts without filesystem writes.
+ * @post With @c atomic = false, materializes the validated direct extraction
+ *       plan for supported v1 artifacts.
+ * @post With @c atomic = true, stages the validated plan under a sibling temp
+ *       root and commits it to @p destination_root only when exact no-replace
+ *       root commit semantics are available.
+ * @kw overwrite Whether extraction may overwrite existing destinations;
+ *      default `false`.
+ * @kw atomic Request temp-tree extraction with commit/rollback semantics;
+ *      default `true`.
+ * @kw preserve_modes Preserve supported file mode metadata; default `true`.
+ * @kw create_dirs Create destination directories as needed; default `true`.
+ * @kw allow_absolute_paths Permit absolute bundle logical paths after policy
+ *      evaluation; default `false`.
+ * @kw allow_parent_refs Permit parent-directory references after policy
+ *      evaluation; default `false`.
+ * @kw policy_mode Enforce or validate extraction policy; default
+ *      `N00B_OBJ_BUNDLE_POLICY_ENFORCE`.
+ * @kw allocator Optional allocator for result/error payloads; default
+ *      `nullptr`.
+ */
+extern n00b_result_t(n00b_obj_bundle_extract_result_t *)
+n00b_obj_bundle_extract(n00b_obj_bundle_t *bundle,
+                        n00b_string_t     *destination_root) _kargs {
+    bool                          overwrite = false;
+    bool                          atomic = true;
+    bool                          preserve_modes = true;
+    bool                          create_dirs = true;
+    bool                          allow_absolute_paths = false;
+    bool                          allow_parent_refs = false;
+    n00b_obj_bundle_policy_mode_t policy_mode = N00B_OBJ_BUNDLE_POLICY_ENFORCE;
+    n00b_allocator_t             *allocator = nullptr;
+};
+
+/**
+ * @pre @p result is non-null.
+ * @return Caller-requested extraction destination root.
+ */
+extern n00b_string_t *
+n00b_obj_bundle_extract_result_destination_root(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Temporary extraction root when one was allocated, otherwise none.
+ */
+extern n00b_option_t(n00b_string_t *)
+n00b_obj_bundle_extract_result_temp_root(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Number of regular/executable files in the validated extraction plan.
+ */
+extern uint64_t
+n00b_obj_bundle_extract_result_files_planned(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Number of directories in the validated extraction plan.
+ */
+extern uint64_t
+n00b_obj_bundle_extract_result_directories_planned(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Number of files written before success or the reported failure.
+ */
+extern uint64_t
+n00b_obj_bundle_extract_result_files_written(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Number of directories materialized before success or failure.
+ */
+extern uint64_t
+n00b_obj_bundle_extract_result_directories_written(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Selected policy kind when policy evaluation completed, otherwise none.
+ */
+extern n00b_option_t(n00b_obj_bundle_policy_kind_t)
+n00b_obj_bundle_extract_result_policy_kind(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Selected policy scope when policy evaluation completed, otherwise
+ *         none.
+ */
+extern n00b_option_t(n00b_obj_bundle_policy_scope_t)
+n00b_obj_bundle_extract_result_policy_scope(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether policy fallback was used.
+ */
+extern bool
+n00b_obj_bundle_extract_result_fallback_used(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Filesystem overwrite policy requested by the caller.
+ */
+extern bool
+n00b_obj_bundle_extract_result_overwrite(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether atomic extraction was requested.
+ */
+extern bool
+n00b_obj_bundle_extract_result_atomic_requested(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether atomic extraction staging was actually used.
+ */
+extern bool
+n00b_obj_bundle_extract_result_atomic_used(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether supported file modes should be preserved.
+ */
+extern bool
+n00b_obj_bundle_extract_result_preserve_modes(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether destination directories should be created.
+ */
+extern bool
+n00b_obj_bundle_extract_result_create_dirs(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether absolute logical paths are allowed after policy evaluation.
+ */
+extern bool
+n00b_obj_bundle_extract_result_allow_absolute_paths(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether parent-directory references are allowed after policy
+ *         evaluation.
+ */
+extern bool
+n00b_obj_bundle_extract_result_allow_parent_refs(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Policy evaluation mode requested by the caller.
+ */
+extern n00b_obj_bundle_policy_mode_t
+n00b_obj_bundle_extract_result_policy_mode(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether final tree commit was attempted.
+ */
+extern bool
+n00b_obj_bundle_extract_result_commit_attempted(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether final tree commit completed.
+ */
+extern bool
+n00b_obj_bundle_extract_result_commit_completed(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether rollback was attempted after a visible side effect.
+ */
+extern bool
+n00b_obj_bundle_extract_result_rollback_attempted(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether attempted rollback succeeded.
+ */
+extern bool
+n00b_obj_bundle_extract_result_rollback_succeeded(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether temp-tree cleanup was attempted.
+ */
+extern bool
+n00b_obj_bundle_extract_result_cleanup_attempted(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
+ * @pre @p result is non-null.
+ * @return Whether attempted temp-tree cleanup succeeded.
+ */
+extern bool
+n00b_obj_bundle_extract_result_cleanup_succeeded(
+    n00b_obj_bundle_extract_result_t *result);
+
+/**
  * @pre @p error is non-null.
  * @return Stable object-bundle error code carried by @p error.
  */
@@ -364,6 +592,14 @@ n00b_obj_bundle_error_logical_path(n00b_obj_bundle_error_t *error);
 
 /**
  * @pre @p error is non-null.
+ * @return Extraction destination path/root associated with the error,
+ *         otherwise none.
+ */
+extern n00b_option_t(n00b_string_t *)
+n00b_obj_bundle_error_destination_path(n00b_obj_bundle_error_t *error);
+
+/**
+ * @pre @p error is non-null.
  * @return Artifact ID associated with the error, otherwise none.
  */
 extern n00b_option_t(uint64_t)
@@ -390,3 +626,11 @@ n00b_obj_bundle_error_policy_scope(n00b_obj_bundle_error_t *error);
  */
 extern n00b_option_t(int64_t)
 n00b_obj_bundle_error_detail(n00b_obj_bundle_error_t *error);
+
+/**
+ * @pre @p error is non-null.
+ * @return Structured extraction facts for a failed extraction attempt when
+ *         available, otherwise none.
+ */
+extern n00b_option_t(n00b_obj_bundle_extract_result_t *)
+n00b_obj_bundle_error_extract_result_facts(n00b_obj_bundle_error_t *error);

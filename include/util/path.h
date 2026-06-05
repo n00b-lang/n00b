@@ -52,6 +52,30 @@ typedef struct {
 } n00b_sibling_temp_file_t;
 
 extern n00b_string_t *n00b_resolve_path(n00b_string_t *s);
+/**
+ * @brief Resolve @p path using caller-owned scratch allocation.
+ *
+ * Equivalent to @ref n00b_resolve_path for supported filesystem paths, but all
+ * strings created during normalization are allocated with @p allocator. This is
+ * intended for allocator-threaded helpers that must not hide default-allocator
+ * path construction.
+ *
+ * @param path Path to resolve. `nullptr` or empty resolves to the current
+ *             user's home directory.
+ *
+ * @kw allocator Allocator for the returned string and scratch path pieces.
+ *
+ * @return Normalized absolute path, or `nullptr` when normalization would
+ *         escape above filesystem root or the current directory cannot be read.
+ */
+extern n00b_string_t *
+_n00b_resolve_path_alloc(n00b_string_t *path) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+#define n00b_resolve_path_alloc(p, ...) \
+    _n00b_resolve_path_alloc((p) __VA_OPT__(, ) __VA_ARGS__)
+
 extern n00b_string_t *n00b_path_tilde_expand(n00b_string_t *in);
 extern n00b_string_t *n00b_get_user_dir(n00b_string_t *user);
 extern n00b_string_t *n00b_get_current_directory(void);
@@ -332,6 +356,35 @@ _n00b_new_sibling_temp_file(n00b_string_t *destination_path) _kargs {
     _n00b_new_sibling_temp_file((p) __VA_OPT__(, ) __VA_ARGS__)
 
 /**
+ * @brief Create a collision-safe same-directory sibling temp directory.
+ *
+ * Tries random sibling temp names under the destination directory and creates
+ * the first available one with exclusive directory-create semantics. The
+ * destination path itself is never created or overwritten by this helper.
+ *
+ * @param destination_path Destination whose parent directory should hold the
+ *                         temp directory.
+ *
+ * @kw directory_mode Requested creation mode bits (default: `0775`; subject
+ *                    to host create-mode behavior such as umask).
+ * @kw max_attempts   Maximum random candidates to try before reporting
+ *                    `EEXIST` (default: 64).
+ * @kw allocator      Allocator for the returned temp path and scratch strings.
+ *
+ * @return `Ok(path)` with a newly-created temp directory path, or
+ *         `Err(errno)` on validation or create failure.
+ */
+extern n00b_result_t(n00b_string_t *)
+_n00b_new_sibling_temp_dir(n00b_string_t *destination_path) _kargs {
+    uint32_t          directory_mode = 0775;
+    uint32_t          max_attempts   = 64;
+    n00b_allocator_t *allocator      = nullptr;
+};
+
+#define n00b_new_sibling_temp_dir(p, ...) \
+    _n00b_new_sibling_temp_dir((p) __VA_OPT__(, ) __VA_ARGS__)
+
+/**
  * @brief Return the POSIX permission bits (mode & 07777) of @p path.
  *
  * Thin libn00b wrapper around `stat(2)` for the case where the caller
@@ -358,6 +411,36 @@ n00b_path_get_mode(n00b_string_t *path);
  */
 extern n00b_result_t(uint32_t)
 n00b_path_set_mode(n00b_string_t *path, uint32_t mode);
+
+/**
+ * @brief Create a directory and any missing parent directories.
+ *
+ * Existing parent directories are accepted. If @p path already exists as a
+ * directory, the result is controlled by @p allow_existing; any non-directory
+ * entry at @p path or an intermediate component is reported as `EEXIST`.
+ *
+ * @param path Directory path to materialize.
+ *
+ * @kw mode Directory creation mode bits; default `0775`.
+ * @kw allow_existing Treat an existing final directory as success; default
+ *      `true`.
+ * @kw allocator Optional allocator for scratch path strings; default
+ *      `nullptr`.
+ *
+ * @return `Ok(true)` when at least one directory was created, `Ok(false)` when
+ *         @p path already existed and @p allow_existing was true, or
+ *         `Err(errno)` on failure.
+ */
+extern n00b_result_t(bool)
+_n00b_path_mkdir_p(n00b_string_t *path) _kargs {
+    uint32_t          mode           = 0775;
+    bool              allow_existing = true;
+    n00b_allocator_t *allocator      = nullptr;
+};
+
+#define n00b_path_mkdir_p(p, ...) \
+    _n00b_path_mkdir_p((p) __VA_OPT__(, ) __VA_ARGS__)
+
 extern n00b_string_t *n00b_get_temp_root(void);
 extern n00b_string_t *n00b_filename_from_path(n00b_string_t *s);
 
@@ -431,6 +514,32 @@ _n00b_file_unlink(n00b_string_t *path) _kargs {
 
 #define n00b_file_unlink(p, ...) \
     _n00b_file_unlink(p __VA_OPT__(,) __VA_ARGS__)
+
+/**
+ * @brief Remove a filesystem tree without following directory symlinks.
+ *
+ * Deletes regular files and symlinks with unlink semantics, then recursively
+ * deletes directory contents before removing each directory. This helper is
+ * intended for cleanup of temporary trees created by higher-level atomic
+ * operations.
+ *
+ * @param path File or directory tree root to remove.
+ *
+ * @kw ignore_missing Report a missing @p path as `Ok(false)` rather than an
+ *                    error; default `false`.
+ * @kw allocator      Allocator for scratch path strings; default `nullptr`.
+ *
+ * @return `Ok(true)` when an entry was removed, `Ok(false)` when @p path was
+ *         missing and @p ignore_missing was true, or `Err(errno)` on failure.
+ */
+extern n00b_result_t(bool)
+_n00b_path_remove_tree(n00b_string_t *path) _kargs {
+    bool              ignore_missing = false;
+    n00b_allocator_t *allocator      = nullptr;
+};
+
+#define n00b_path_remove_tree(p, ...) \
+    _n00b_path_remove_tree((p) __VA_OPT__(, ) __VA_ARGS__)
 
 extern n00b_list_t(n00b_string_t *) *n00b_path_parts(n00b_string_t *p);
 

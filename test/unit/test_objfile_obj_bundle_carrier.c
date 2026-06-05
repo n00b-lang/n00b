@@ -248,6 +248,15 @@ require_write_file_ok(n00b_result_t(n00b_objfile_sink_result_t *) result)
     return facts;
 }
 
+static n00b_obj_bundle_extract_result_t *
+require_extract_ok(n00b_result_t(n00b_obj_bundle_extract_result_t *) result)
+{
+    N00B_TEST_REQUIRE(n00b_result_is_ok(result));
+    n00b_obj_bundle_extract_result_t *facts = n00b_result_get(result);
+    N00B_TEST_REQUIRE(facts != nullptr);
+    return facts;
+}
+
 static n00b_obj_bundle_error_t *
 require_write_file_bundle_error(
     n00b_result_t(n00b_objfile_sink_result_t *) result,
@@ -1327,6 +1336,64 @@ test_write_file_atomic_readback_and_byte_equality(void)
 }
 
 static void
+test_read_elf_metadata_carrier_then_extract(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_obj_bundle_t *bundle = make_bundle();
+    n00b_buffer_t     *payload =
+        n00b_buffer_from_cstr("carrier extraction payload");
+
+    auto add = n00b_obj_bundle_add_artifact(bundle,
+                                            r"share/data.txt",
+                                            payload);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add));
+
+    n00b_buffer_t *bundle_snapshot = encode_bundle_or_die(bundle);
+    auto           written = n00b_obj_bundle_write(object_bytes, bundle);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+    n00b_buffer_t *carrier_object = n00b_result_get(written);
+    n00b_obj_bundle_t *read_bundle = require_read_success(
+        n00b_obj_bundle_read(carrier_object),
+        bundle_snapshot);
+
+    n00b_string_t *root =
+        n00b_new_temp_path(r"n00b_carrier_extract_", r"_root");
+    n00b_obj_bundle_extract_result_t *facts = require_extract_ok(
+        n00b_obj_bundle_extract(read_bundle, root));
+
+    assert_string_eq(n00b_obj_bundle_extract_result_destination_root(facts),
+                     root);
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_atomic_requested(facts));
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_atomic_used(facts));
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_commit_attempted(facts));
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_commit_completed(facts));
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_files_planned(facts) == 1);
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_files_written(facts) == 1);
+    N00B_TEST_REQUIRE(
+        n00b_obj_bundle_extract_result_directories_planned(facts) == 0);
+    N00B_TEST_REQUIRE(
+        n00b_obj_bundle_extract_result_directories_written(facts) == 2);
+
+    auto policy_kind = n00b_obj_bundle_extract_result_policy_kind(facts);
+    N00B_TEST_REQUIRE(n00b_option_is_set(policy_kind));
+    N00B_TEST_REQUIRE(n00b_option_get(policy_kind)
+                      == N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT);
+
+    auto temp_root = n00b_obj_bundle_extract_result_temp_root(facts);
+    N00B_TEST_REQUIRE(n00b_option_is_set(temp_root));
+    N00B_TEST_REQUIRE(!n00b_path_exists(n00b_option_get(temp_root)));
+
+    n00b_string_t *share = fixture_child(root, r"share");
+    n00b_string_t *data = fixture_child(share, r"data.txt");
+
+    fixture_assert_file_bytes(data, payload);
+
+    auto cleanup_r = n00b_path_remove_tree(root, .ignore_missing = true);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(cleanup_r));
+}
+
+static void
 test_write_file_default_overwrite_rejects_existing_destination(void)
 {
     n00b_buffer_t     *object_bytes = make_rewrite_target();
@@ -1660,6 +1727,7 @@ main(int argc, char **argv)
     test_write_unsupported_carriers();
     test_write_insert_readback_and_immutability();
     test_write_file_atomic_readback_and_byte_equality();
+    test_read_elf_metadata_carrier_then_extract();
     test_write_file_default_overwrite_rejects_existing_destination();
     test_write_file_explicit_overwrite_replaces_destination();
     test_write_file_carrier_replace_rejects_before_sink_replace();
