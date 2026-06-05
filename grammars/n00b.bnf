@@ -642,7 +642,6 @@
 # ============================================================================
 
 <primary> ::= <simple-lit>
-            | <type-spec>
             | <callback-lit>
             | <list-lit>
             | <dict-or-set-lit>
