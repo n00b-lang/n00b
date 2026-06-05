@@ -197,6 +197,15 @@ endif
 # still fast.
 c_args += '-DXXH_NO_INTRINSICS=1'
 
+# The lock-free llstack (n00b_head_t) is a 16-byte {ptr,tag} DWCAS.  On x86-64
+# the 16-byte atomic CAS (cmpxchg16b) is only lock-free with -mcx16; without it
+# clang downgrades to a non-lock-free __atomic_* libcall, defeating the
+# lock-free stack.  arm64 gets the lock-free 128-bit path (casp/ldxp-stxp)
+# without an extra flag.
+if target_arch == 'x86_64'
+  c_args += '-mcx16'
+endif
+
 if using_glibc
   c_args = c_args + [
     '-D_GNU_SOURCE',
