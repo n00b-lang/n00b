@@ -18,6 +18,8 @@
 #include <stdint.h>
 
 #include "n00b.h"
+#include "adt/dict.h"
+#include "adt/list.h"
 #include "adt/option.h"
 #include "adt/result.h"
 #include "core/alloc.h"
@@ -45,6 +47,12 @@ typedef struct n00b_obj_bundle_artifact n00b_obj_bundle_artifact_t;
 typedef struct n00b_obj_bundle_error n00b_obj_bundle_error_t;
 typedef struct n00b_obj_bundle_extract_result
     n00b_obj_bundle_extract_result_t;
+typedef struct n00b_obj_bundle_exec_plan_record n00b_obj_bundle_exec_plan_t;
+/** @brief Planned argv list type recorded by execution plans. */
+typedef n00b_list_t(n00b_string_t *) n00b_obj_bundle_exec_argv_t;
+/** @brief Planned environment overlay type recorded by execution plans. */
+typedef n00b_dict_t(n00b_string_t *, n00b_string_t *)
+    n00b_obj_bundle_exec_env_t;
 
 typedef enum {
     N00B_OBJ_BUNDLE_ARTIFACT_FILE,
@@ -92,6 +100,28 @@ typedef enum {
     N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED = 1u << 2,
 } n00b_obj_bundle_policy_flags_t;
 
+/** @brief Requested execution mode for logical execution planning. */
+typedef enum {
+    N00B_OBJ_BUNDLE_EXEC_AUTO,
+    N00B_OBJ_BUNDLE_EXEC_EXTRACTED,
+    N00B_OBJ_BUNDLE_EXEC_MEMFD,
+    N00B_OBJ_BUNDLE_EXEC_HOST_ENTRYPOINT,
+} n00b_obj_bundle_exec_mode_t;
+
+/** @brief Source used for deterministic execution target selection. */
+typedef enum {
+    N00B_OBJ_BUNDLE_EXEC_SELECTION_NONE,
+    N00B_OBJ_BUNDLE_EXEC_SELECTION_DEFAULT,
+    N00B_OBJ_BUNDLE_EXEC_SELECTION_SELECTOR_MAPPING,
+} n00b_obj_bundle_exec_selection_source_t;
+
+/** @brief Platform support state for the resolved logical execution mode. */
+typedef enum {
+    N00B_OBJ_BUNDLE_EXEC_PLATFORM_SUPPORT_NONE,
+    N00B_OBJ_BUNDLE_EXEC_PLATFORM_SUPPORTED,
+    N00B_OBJ_BUNDLE_EXEC_PLATFORM_UNSUPPORTED,
+} n00b_obj_bundle_exec_platform_support_t;
+
 typedef enum {
     N00B_OBJ_BUNDLE_ERR_OK                     = 0,
     N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT       = -3701,
@@ -119,6 +149,8 @@ typedef enum {
     N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER    = -3723,
     N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE        = -3724,
     N00B_OBJ_BUNDLE_ERR_EXTRACT_UNSUPPORTED    = -3725,
+    N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_EXEC_MODE  = -3726,
+    N00B_OBJ_BUNDLE_ERR_POLICY_DENIED          = -3727,
 } n00b_obj_bundle_error_code_t;
 
 /**
@@ -361,6 +393,182 @@ n00b_obj_bundle_extract(n00b_obj_bundle_t *bundle,
     n00b_obj_bundle_policy_mode_t policy_mode = N00B_OBJ_BUNDLE_POLICY_ENFORCE;
     n00b_allocator_t             *allocator = nullptr;
 };
+
+/**
+ * @pre @p bundle is non-null.
+ * @post Planning has no filesystem, process, environment, object-file,
+ *       extraction, `memfd`, or host-entrypoint side effects.
+ * @post On success, returns an opaque execution plan allocated with
+ *       @c allocator. The plan records caller controls and the selected
+ *       executable-compatible target.
+ * @post Selector facts are borrowed caller-provided pointers. Planned argv and
+ *       env overlay facts are plan-owned shallow semantic copies: their list or
+ *       dict containers and string entries are allocated with @c allocator and
+ *       should be treated as read-only by callers. Selected logical-path facts
+ *       are borrowed from @p bundle.
+ * @post If @c argv is omitted, planned argv contains one entry: the selected
+ *       target logical path as `argv[0]`.
+ * @post Execution-scope bundle policy is selected and evaluated before target
+ *       selection succeeds. Validate-only mode still evaluates policy and
+ *       policy-denied execution still fails.
+ * @post `AUTO` and `EXTRACTED` resolve to a logical extracted-execution
+ *       dependency without calling extraction; future modes fail with
+ *       structured unsupported-mode errors.
+ * @post On error, returns a @c n00b_obj_bundle_error_t payload allocated with
+ *       @c allocator.
+ * @kw selector Optional logical execution selector; default `nullptr`.
+ * @kw argv Optional caller argv list to preserve in the plan; default
+ *      `nullptr`.
+ * @kw env Optional caller environment overlay to preserve in the plan; default
+ *      `nullptr`.
+ * @kw inherit_env Whether a later executor would inherit the process
+ *      environment; default `true`.
+ * @kw strict_selector Whether an unmatched selector should reject rather than
+ *      fall back to the default executable; default `false`.
+ * @kw mode Requested execution mode; default `N00B_OBJ_BUNDLE_EXEC_AUTO`.
+ * @kw policy_mode Execution-policy mode; default
+ *      `N00B_OBJ_BUNDLE_POLICY_ENFORCE`.
+ * @kw allocator Optional allocator for the plan and structured error payload;
+ *      default `nullptr`.
+ */
+extern n00b_result_t(n00b_obj_bundle_exec_plan_t *)
+n00b_obj_bundle_exec_plan(n00b_obj_bundle_t *bundle) _kargs {
+    n00b_string_t                             *selector = nullptr;
+    n00b_obj_bundle_exec_argv_t               *argv = nullptr;
+    n00b_obj_bundle_exec_env_t                *env = nullptr;
+    bool                                       inherit_env = true;
+    bool                                       strict_selector = false;
+    n00b_obj_bundle_exec_mode_t                mode = N00B_OBJ_BUNDLE_EXEC_AUTO;
+    n00b_obj_bundle_policy_mode_t              policy_mode =
+        N00B_OBJ_BUNDLE_POLICY_ENFORCE;
+    n00b_allocator_t                          *allocator = nullptr;
+};
+
+/**
+ * @pre @p plan is non-null.
+ * @return Borrowed caller selector when supplied, otherwise none.
+ */
+extern n00b_option_t(n00b_string_t *)
+n00b_obj_bundle_exec_plan_selector(n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Plan-owned argv list. Callers must treat the returned list and its
+ *         strings as read-only.
+ */
+extern n00b_option_t(n00b_obj_bundle_exec_argv_t *)
+n00b_obj_bundle_exec_plan_argv(n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Plan-owned environment overlay when supplied, otherwise none. Callers
+ *         must treat the returned dictionary and its strings as read-only.
+ */
+extern n00b_option_t(n00b_obj_bundle_exec_env_t *)
+n00b_obj_bundle_exec_plan_env(n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Whether environment inheritance was requested.
+ */
+extern bool
+n00b_obj_bundle_exec_plan_inherit_env(n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Whether strict selector matching was requested.
+ */
+extern bool
+n00b_obj_bundle_exec_plan_strict_selector(
+    n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Caller-requested execution mode.
+ */
+extern n00b_obj_bundle_exec_mode_t
+n00b_obj_bundle_exec_plan_requested_mode(
+    n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Resolved logical execution mode.
+ */
+extern n00b_obj_bundle_exec_mode_t
+n00b_obj_bundle_exec_plan_resolved_mode(
+    n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Platform support state for the resolved execution mode.
+ */
+extern n00b_obj_bundle_exec_platform_support_t
+n00b_obj_bundle_exec_plan_platform_support(
+    n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Whether a later executor depends on extraction before execution.
+ */
+extern bool
+n00b_obj_bundle_exec_plan_requires_extraction(
+    n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Caller-requested execution-policy mode.
+ */
+extern n00b_obj_bundle_policy_mode_t
+n00b_obj_bundle_exec_plan_policy_mode(n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Selected execution policy kind when policy selection completed,
+ *         otherwise none.
+ */
+extern n00b_option_t(n00b_obj_bundle_policy_kind_t)
+n00b_obj_bundle_exec_plan_policy_kind(n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Selected execution policy scope when policy selection completed,
+ *         otherwise none.
+ */
+extern n00b_option_t(n00b_obj_bundle_policy_scope_t)
+n00b_obj_bundle_exec_plan_policy_scope(n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Whether execution policy selection used a manifest-declared fallback.
+ */
+extern bool
+n00b_obj_bundle_exec_plan_fallback_used(n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Source used to choose the execution target.
+ */
+extern n00b_obj_bundle_exec_selection_source_t
+n00b_obj_bundle_exec_plan_selection_source(
+    n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Selected artifact ID when target selection has completed, otherwise
+ *         none.
+ */
+extern n00b_option_t(uint64_t)
+n00b_obj_bundle_exec_plan_selected_artifact_id(
+    n00b_obj_bundle_exec_plan_t *plan);
+
+/**
+ * @pre @p plan is non-null.
+ * @return Selected target logical path when target selection has completed,
+ *         otherwise none.
+ */
+extern n00b_option_t(n00b_string_t *)
+n00b_obj_bundle_exec_plan_selected_logical_path(
+    n00b_obj_bundle_exec_plan_t *plan);
 
 /**
  * @pre @p result is non-null.
@@ -626,6 +834,23 @@ n00b_obj_bundle_error_policy_scope(n00b_obj_bundle_error_t *error);
  */
 extern n00b_option_t(int64_t)
 n00b_obj_bundle_error_detail(n00b_obj_bundle_error_t *error);
+
+/**
+ * @pre @p error is non-null.
+ * @return Requested execution mode associated with an execution-planning
+ *         error, otherwise none.
+ */
+extern n00b_option_t(n00b_obj_bundle_exec_mode_t)
+n00b_obj_bundle_error_exec_requested_mode(n00b_obj_bundle_error_t *error);
+
+/**
+ * @pre @p error is non-null.
+ * @return Platform support state associated with an execution-planning error,
+ *         otherwise none.
+ */
+extern n00b_option_t(n00b_obj_bundle_exec_platform_support_t)
+n00b_obj_bundle_error_exec_platform_support(
+    n00b_obj_bundle_error_t *error);
 
 /**
  * @pre @p error is non-null.

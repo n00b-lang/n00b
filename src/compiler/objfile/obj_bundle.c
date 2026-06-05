@@ -1,5 +1,6 @@
 #include "compiler/objfile/obj_bundle.h"
 
+#include "adt/dict.h"
 #include "adt/list.h"
 #include "compiler/objfile/abstract.h"
 #include "compiler/objfile/bstream.h"
@@ -139,6 +140,29 @@ struct n00b_obj_bundle_extract_result {
     bool                              cleanup_succeeded;
 };
 
+struct n00b_obj_bundle_exec_plan_record {
+    n00b_string_t                             *selector;
+    n00b_obj_bundle_exec_argv_t               *argv;
+    n00b_obj_bundle_exec_env_t                *env;
+    bool                                       inherit_env;
+    bool                                       strict_selector;
+    n00b_obj_bundle_exec_mode_t                requested_mode;
+    n00b_obj_bundle_exec_mode_t                resolved_mode;
+    n00b_obj_bundle_exec_platform_support_t    platform_support;
+    bool                                       requires_extraction;
+    n00b_obj_bundle_policy_mode_t              policy_mode;
+    n00b_obj_bundle_policy_kind_t              policy_kind;
+    bool                                       has_policy_kind;
+    n00b_obj_bundle_policy_scope_t             policy_scope;
+    bool                                       has_policy_scope;
+    bool                                       fallback_used;
+    uint64_t                                   selected_artifact_id;
+    bool                                       has_selected_artifact_id;
+    n00b_string_t                             *selected_logical_path;
+    bool                                       has_selected_logical_path;
+    n00b_obj_bundle_exec_selection_source_t    selection_source;
+};
+
 struct n00b_obj_bundle_error {
     n00b_obj_bundle_error_code_t    code;
     n00b_string_t                  *message;
@@ -158,8 +182,12 @@ struct n00b_obj_bundle_error {
     bool                            has_policy_scope;
     int64_t                         detail;
     bool                            has_detail;
-    n00b_obj_bundle_extract_result_t *extract_result;
-    bool                            has_extract_result;
+    n00b_obj_bundle_exec_mode_t              exec_requested_mode;
+    bool                                     has_exec_requested_mode;
+    n00b_obj_bundle_exec_platform_support_t  exec_platform_support;
+    bool                                     has_exec_platform_support;
+    n00b_obj_bundle_extract_result_t        *extract_result;
+    bool                                     has_extract_result;
 };
 
 typedef struct n00b_obj_bundle_manifest_strtab {
@@ -252,6 +280,13 @@ typedef struct n00b_obj_bundle_extract_policy {
     uint64_t                       execution_flags;
 } n00b_obj_bundle_extract_policy_t;
 
+typedef struct n00b_obj_bundle_exec_policy {
+    n00b_obj_bundle_policy_kind_t  kind;
+    n00b_obj_bundle_policy_scope_t scope;
+    bool                           fallback_used;
+    uint64_t                       execution_flags;
+} n00b_obj_bundle_exec_policy_t;
+
 typedef struct n00b_obj_bundle_extract_plan_entry {
     n00b_obj_bundle_artifact_t *artifact;
     n00b_string_t              *destination_path;
@@ -290,8 +325,13 @@ _n00b_obj_bundle_error_new(n00b_obj_bundle_error_code_t code,
     error->has_policy_scope = false;
     error->detail           = 0;
     error->has_detail       = false;
-    error->extract_result   = nullptr;
-    error->has_extract_result = false;
+    error->exec_requested_mode       = N00B_OBJ_BUNDLE_EXEC_AUTO;
+    error->has_exec_requested_mode   = false;
+    error->exec_platform_support     =
+        N00B_OBJ_BUNDLE_EXEC_PLATFORM_SUPPORT_NONE;
+    error->has_exec_platform_support = false;
+    error->extract_result            = nullptr;
+    error->has_extract_result        = false;
 
     return error;
 }
@@ -486,6 +526,86 @@ _n00b_obj_bundle_error_with_artifact(n00b_obj_bundle_error_code_t code,
     error->has_artifact_id = true;
 
     return error;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_mark_execution(n00b_obj_bundle_error_t *error)
+{
+    if (error != nullptr) {
+        error->policy_scope     = N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION;
+        error->has_policy_scope = true;
+    }
+
+    return error;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_with_exec_mode(
+    n00b_obj_bundle_error_code_t             code,
+    n00b_string_t                           *message,
+    n00b_obj_bundle_exec_mode_t              mode,
+    n00b_obj_bundle_exec_platform_support_t  support,
+    n00b_allocator_t                        *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_new(code, message, allocator);
+
+    error->exec_requested_mode       = mode;
+    error->has_exec_requested_mode   = true;
+    error->exec_platform_support     = support;
+    error->has_exec_platform_support = true;
+    error->detail                    = (int64_t)mode;
+    error->has_detail                = true;
+
+    return _n00b_obj_bundle_error_mark_execution(error);
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_clone_for_execution(
+    n00b_obj_bundle_error_t *source,
+    n00b_allocator_t       *allocator)
+{
+    if (source == nullptr) {
+        return _n00b_obj_bundle_error_mark_execution(
+            _n00b_obj_bundle_error_new(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid execution validation error",
+                allocator));
+    }
+
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_new(source->code,
+                                   source->message,
+                                   allocator);
+
+    error->format      = source->format;
+    error->has_format  = source->has_format;
+    error->carrier     = source->carrier;
+    error->has_carrier = source->has_carrier;
+
+    error->logical_path     = source->logical_path;
+    error->has_logical_path = source->has_logical_path;
+
+    error->destination_path     = source->destination_path;
+    error->has_destination_path = source->has_destination_path;
+
+    error->artifact_id     = source->artifact_id;
+    error->has_artifact_id = source->has_artifact_id;
+
+    error->policy_kind     = source->policy_kind;
+    error->has_policy_kind = source->has_policy_kind;
+    error->detail          = source->detail;
+    error->has_detail      = source->has_detail;
+
+    error->exec_requested_mode     = source->exec_requested_mode;
+    error->has_exec_requested_mode = source->has_exec_requested_mode;
+    error->exec_platform_support     = source->exec_platform_support;
+    error->has_exec_platform_support = source->has_exec_platform_support;
+
+    error->extract_result     = source->extract_result;
+    error->has_extract_result = source->has_extract_result;
+
+    return _n00b_obj_bundle_error_mark_execution(error);
 }
 
 static n00b_obj_bundle_error_t *
@@ -1084,7 +1204,7 @@ _n00b_obj_bundle_declarative_policy_payload_is_valid(
            && path_flags == N00B_OBJ_BUNDLE_DECL_PATH_DEFAULT
            && artifact_kind_mask
                   == N00B_OBJ_BUNDLE_DECL_ARTIFACT_KIND_DEFAULT
-           && execution_flags == N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT
+           && (execution_flags & ~N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT) == 0
            && payload_fallback_id == fallback_policy_id
            && reserved1 == 0;
 }
@@ -1162,6 +1282,92 @@ _n00b_obj_bundle_policy_mode_is_valid(
 }
 
 static bool
+_n00b_obj_bundle_exec_mode_is_valid(n00b_obj_bundle_exec_mode_t mode)
+{
+    switch (mode) {
+    case N00B_OBJ_BUNDLE_EXEC_AUTO:
+    case N00B_OBJ_BUNDLE_EXEC_EXTRACTED:
+    case N00B_OBJ_BUNDLE_EXEC_MEMFD:
+    case N00B_OBJ_BUNDLE_EXEC_HOST_ENTRYPOINT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
+_n00b_obj_bundle_exec_mode_is_supported(n00b_obj_bundle_exec_mode_t mode)
+{
+    return mode == N00B_OBJ_BUNDLE_EXEC_AUTO
+           || mode == N00B_OBJ_BUNDLE_EXEC_EXTRACTED;
+}
+
+static n00b_obj_bundle_exec_mode_t
+_n00b_obj_bundle_exec_mode_resolve(n00b_obj_bundle_exec_mode_t mode)
+{
+    if (mode == N00B_OBJ_BUNDLE_EXEC_AUTO) {
+        return N00B_OBJ_BUNDLE_EXEC_EXTRACTED;
+    }
+
+    return mode;
+}
+
+static n00b_obj_bundle_exec_argv_t *
+_n00b_obj_bundle_exec_argv_plan(
+    n00b_obj_bundle_exec_argv_t *argv,
+    n00b_string_t               *default_argv0,
+    n00b_allocator_t            *allocator)
+{
+    n00b_obj_bundle_exec_argv_t *planned =
+        n00b_alloc_with_opts(n00b_obj_bundle_exec_argv_t,
+                             &(n00b_alloc_opts_t){.allocator = allocator});
+
+    *planned = n00b_list_new(n00b_string_t *, .allocator = allocator);
+
+    if (argv != nullptr) {
+        size_t n = n00b_list_len(*argv);
+
+        for (size_t i = 0; i < n; i++) {
+            n00b_string_t *arg = n00b_list_get(*argv, i);
+            n00b_list_push(*planned,
+                           _n00b_obj_bundle_copy_string(arg, allocator));
+        }
+
+        return planned;
+    }
+
+    n00b_list_push(*planned,
+                   _n00b_obj_bundle_copy_string(default_argv0, allocator));
+
+    return planned;
+}
+
+static n00b_obj_bundle_exec_env_t *
+_n00b_obj_bundle_exec_env_plan(n00b_obj_bundle_exec_env_t *env,
+                               n00b_allocator_t          *allocator)
+{
+    if (env == nullptr) {
+        return nullptr;
+    }
+
+    n00b_obj_bundle_exec_env_t *planned =
+        n00b_dict_new_private(n00b_string_t *,
+                              n00b_string_t *,
+                              .allocator = allocator);
+
+    n00b_dict_foreach(env, key, value, {
+        n00b_string_t *planned_key =
+            _n00b_obj_bundle_copy_string(key, allocator);
+        n00b_string_t *planned_value =
+            _n00b_obj_bundle_copy_string(value, allocator);
+
+        n00b_dict_put(planned, planned_key, planned_value);
+    });
+
+    return planned;
+}
+
+static bool
 _n00b_obj_bundle_object_bytes_arg_is_valid(n00b_buffer_t *object_bytes)
 {
     return object_bytes != nullptr && object_bytes->data != nullptr;
@@ -1174,6 +1380,46 @@ _n00b_obj_bundle_extract_destination_arg_is_valid(
     return destination_root != nullptr
            && destination_root->data != nullptr
            && destination_root->u8_bytes != 0;
+}
+
+static n00b_obj_bundle_exec_plan_t *
+_n00b_obj_bundle_exec_plan_new(
+    n00b_string_t                             *selector,
+    n00b_obj_bundle_exec_argv_t               *argv,
+    n00b_obj_bundle_exec_env_t                *env,
+    bool                                       inherit_env,
+    bool                                       strict_selector,
+    n00b_obj_bundle_exec_mode_t                mode,
+    n00b_obj_bundle_policy_mode_t              policy_mode,
+    n00b_allocator_t                          *allocator)
+{
+    n00b_obj_bundle_exec_plan_t *plan =
+        n00b_alloc_with_opts(n00b_obj_bundle_exec_plan_t,
+                             &(n00b_alloc_opts_t){.allocator = allocator});
+
+    plan->selector                 = selector;
+    plan->argv                     = argv;
+    plan->env                      = env;
+    plan->inherit_env              = inherit_env;
+    plan->strict_selector          = strict_selector;
+    plan->requested_mode           = mode;
+    plan->resolved_mode            = _n00b_obj_bundle_exec_mode_resolve(mode);
+    plan->platform_support         =
+        N00B_OBJ_BUNDLE_EXEC_PLATFORM_SUPPORTED;
+    plan->requires_extraction      = true;
+    plan->policy_mode              = policy_mode;
+    plan->policy_kind              = N00B_OBJ_BUNDLE_POLICY_KIND_NONE;
+    plan->has_policy_kind          = false;
+    plan->policy_scope             = N00B_OBJ_BUNDLE_POLICY_SCOPE_NONE;
+    plan->has_policy_scope         = false;
+    plan->fallback_used            = false;
+    plan->selected_artifact_id     = N00B_OBJ_BUNDLE_ARTIFACT_ID_NONE;
+    plan->has_selected_artifact_id = false;
+    plan->selected_logical_path    = nullptr;
+    plan->has_selected_logical_path = false;
+    plan->selection_source = N00B_OBJ_BUNDLE_EXEC_SELECTION_NONE;
+
+    return plan;
 }
 
 static n00b_obj_bundle_extract_result_t *
@@ -1481,6 +1727,244 @@ _n00b_obj_bundle_select_extraction_policy(n00b_obj_bundle_t *bundle,
     }
 
     return n00b_result_ok(n00b_obj_bundle_extract_policy_t *, policy);
+}
+
+static bool
+_n00b_obj_bundle_policy_applies_to_execution(
+    n00b_obj_bundle_policy_t *policy)
+{
+    return policy != nullptr
+           && (policy->scope & N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION) != 0;
+}
+
+static n00b_obj_bundle_policy_t *
+_n00b_obj_bundle_execution_policy_fallback(
+    n00b_obj_bundle_t        *bundle,
+    n00b_obj_bundle_policy_t *policy)
+{
+    if (policy == nullptr
+        || policy->fallback_policy_id == N00B_OBJ_BUNDLE_POLICY_ID_NONE
+        || (policy->flags & N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED) == 0) {
+        return nullptr;
+    }
+
+    n00b_obj_bundle_policy_t *fallback =
+        _n00b_obj_bundle_find_policy_by_id(bundle, policy->fallback_policy_id);
+
+    if (fallback == nullptr
+        || fallback->kind != N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT
+        || !_n00b_obj_bundle_policy_scope_is_valid(fallback->scope)
+        || !_n00b_obj_bundle_policy_flags_are_valid(fallback->flags)
+        || !_n00b_obj_bundle_policy_payload_is_supported(fallback)
+        || fallback->priority >= policy->priority
+        || (fallback->scope & N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION) == 0) {
+        return nullptr;
+    }
+
+    return fallback;
+}
+
+static n00b_result_t(n00b_obj_bundle_exec_policy_t *)
+_n00b_obj_bundle_select_execution_policy(n00b_obj_bundle_t *bundle,
+                                         n00b_allocator_t  *allocator)
+{
+    n00b_obj_bundle_policy_t *selected = nullptr;
+    size_t                    n        = n00b_list_len(bundle->policies);
+
+    for (size_t i = 0; i < n; i++) {
+        n00b_obj_bundle_policy_t *policy = n00b_list_get(bundle->policies, i);
+
+        if (policy == nullptr
+            || !_n00b_obj_bundle_policy_scope_is_valid(policy->scope)
+            || !_n00b_obj_bundle_policy_flags_are_valid(policy->flags)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_exec_policy_t *,
+                _n00b_obj_bundle_error_with_policy(
+                    N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                    r"object bundle: invalid execution policy record",
+                    policy == nullptr
+                        ? N00B_OBJ_BUNDLE_POLICY_KIND_NONE
+                        : policy->kind,
+                    policy == nullptr
+                        ? N00B_OBJ_BUNDLE_POLICY_SCOPE_NONE
+                        : policy->scope,
+                    policy == nullptr
+                        ? N00B_OBJ_BUNDLE_POLICY_ID_NONE
+                        : policy->policy_id,
+                    allocator));
+        }
+
+        for (size_t j = i + 1; j < n; j++) {
+            n00b_obj_bundle_policy_t *other = n00b_list_get(bundle->policies,
+                                                            j);
+
+            if (other != nullptr && policy->policy_id == other->policy_id) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_exec_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_DUPLICATE_POLICY_ID,
+                        r"object bundle: duplicate execution policy ID",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+        }
+
+        if (!_n00b_obj_bundle_policy_applies_to_execution(policy)) {
+            if (_n00b_obj_bundle_policy_kind_is_supported(policy->kind)
+                && !_n00b_obj_bundle_policy_payload_is_supported(policy)) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_exec_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                        r"object bundle: invalid non-execution policy",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+
+            continue;
+        }
+
+        n00b_obj_bundle_policy_t *fallback =
+            _n00b_obj_bundle_execution_policy_fallback(bundle, policy);
+
+        if (!_n00b_obj_bundle_policy_kind_is_supported(policy->kind)) {
+            if ((policy->flags & N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL) == 0
+                || fallback == nullptr) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_exec_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_FEATURE,
+                        r"object bundle: unsupported execution policy",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+
+            if (_n00b_obj_bundle_policy_is_better_candidate(policy,
+                                                            selected)) {
+                selected = policy;
+            }
+
+            continue;
+        }
+
+        if (!_n00b_obj_bundle_policy_payload_is_supported(policy)) {
+            if (fallback == nullptr) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_exec_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                        r"object bundle: invalid declarative execution policy",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+
+            if (_n00b_obj_bundle_policy_is_better_candidate(policy,
+                                                            selected)) {
+                selected = policy;
+            }
+
+            continue;
+        }
+
+        if (policy->fallback_policy_id != N00B_OBJ_BUNDLE_POLICY_ID_NONE
+            && fallback == nullptr) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_exec_policy_t *,
+                _n00b_obj_bundle_error_with_policy(
+                    N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                    r"object bundle: invalid execution policy fallback",
+                    policy->kind,
+                    policy->scope,
+                    policy->fallback_policy_id,
+                    allocator));
+        }
+
+        if (_n00b_obj_bundle_policy_is_better_candidate(policy, selected)) {
+            selected = policy;
+        }
+    }
+
+    n00b_obj_bundle_exec_policy_t *policy =
+        n00b_alloc_with_opts(n00b_obj_bundle_exec_policy_t,
+                             &(n00b_alloc_opts_t){.allocator = allocator});
+
+    policy->scope           = N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION;
+    policy->fallback_used   = false;
+    policy->execution_flags = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
+
+    if (selected == nullptr) {
+        policy->kind = N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT;
+        return n00b_result_ok(n00b_obj_bundle_exec_policy_t *, policy);
+    }
+
+    n00b_obj_bundle_policy_t *fallback =
+        _n00b_obj_bundle_execution_policy_fallback(bundle, selected);
+
+    if (!_n00b_obj_bundle_policy_payload_is_supported(selected)
+        && fallback != nullptr) {
+        policy->kind            = fallback->kind;
+        policy->fallback_used   = true;
+        policy->execution_flags = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
+        return n00b_result_ok(n00b_obj_bundle_exec_policy_t *, policy);
+    }
+
+    policy->kind = selected->kind;
+
+    if (selected->kind == N00B_OBJ_BUNDLE_POLICY_KIND_DECLARATIVE_V1) {
+        const uint8_t *data = (const uint8_t *)selected->payload->data;
+
+        policy->execution_flags =
+            _n00b_obj_bundle_le64_at(
+                data,
+                N00B_OBJ_BUNDLE_DECL_POLICY_EXEC_FLAGS_OFF);
+    }
+
+    return n00b_result_ok(n00b_obj_bundle_exec_policy_t *, policy);
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_exec_policy_denied(
+    n00b_obj_bundle_exec_policy_t *policy,
+    n00b_string_t                 *message,
+    n00b_string_t                 *logical_path,
+    n00b_obj_bundle_artifact_t    *artifact,
+    uint64_t                       detail,
+    n00b_allocator_t              *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_with_policy(
+            N00B_OBJ_BUNDLE_ERR_POLICY_DENIED,
+            message,
+            policy == nullptr ? N00B_OBJ_BUNDLE_POLICY_KIND_NONE
+                              : policy->kind,
+            N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+            detail,
+            allocator);
+
+    if (logical_path != nullptr) {
+        error->logical_path     = logical_path;
+        error->has_logical_path = true;
+    }
+
+    if (artifact != nullptr) {
+        if (!error->has_logical_path) {
+            error->logical_path     = artifact->logical_path;
+            error->has_logical_path = artifact->logical_path != nullptr;
+        }
+
+        error->artifact_id     = artifact->id;
+        error->has_artifact_id = true;
+    }
+
+    return error;
 }
 
 static uint64_t
@@ -6006,6 +6490,419 @@ n00b_obj_bundle_extract(n00b_obj_bundle_t *bundle,
     return _n00b_obj_bundle_materialize_atomic(plan, facts, allocator);
 }
 
+n00b_result_t(n00b_obj_bundle_exec_plan_t *)
+n00b_obj_bundle_exec_plan(n00b_obj_bundle_t *bundle) _kargs
+{
+    n00b_string_t                             *selector = nullptr;
+    n00b_obj_bundle_exec_argv_t               *argv = nullptr;
+    n00b_obj_bundle_exec_env_t                *env = nullptr;
+    bool                                       inherit_env = true;
+    bool                                       strict_selector = false;
+    n00b_obj_bundle_exec_mode_t                mode = N00B_OBJ_BUNDLE_EXEC_AUTO;
+    n00b_obj_bundle_policy_mode_t              policy_mode =
+        N00B_OBJ_BUNDLE_POLICY_ENFORCE;
+    n00b_allocator_t                          *allocator = nullptr;
+}
+{
+    if (bundle == nullptr) {
+        return OBJ_BUNDLE_ERR(n00b_obj_bundle_exec_plan_t *,
+                              N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                              r"object bundle: null execution bundle",
+                              allocator);
+    }
+
+    if (!_n00b_obj_bundle_policy_mode_is_valid(policy_mode)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_error_with_policy(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid execution policy mode",
+                N00B_OBJ_BUNDLE_POLICY_KIND_NONE,
+                N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+                (uint64_t)policy_mode,
+                allocator);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(n00b_obj_bundle_exec_plan_t *, error);
+    }
+
+    if (!_n00b_obj_bundle_exec_mode_is_valid(mode)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_error_with_policy(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid execution mode",
+                N00B_OBJ_BUNDLE_POLICY_KIND_NONE,
+                N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+                (uint64_t)mode,
+                allocator);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(n00b_obj_bundle_exec_plan_t *, error);
+    }
+
+    if (selector != nullptr && !_n00b_obj_bundle_selector_is_valid(selector)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_error_with_path(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid execution selector",
+                selector,
+                allocator);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_exec_plan_t *,
+            _n00b_obj_bundle_error_mark_execution(error));
+    }
+
+    auto valid_artifacts = _n00b_obj_bundle_validate_artifacts(bundle);
+
+    if (n00b_result_is_err(valid_artifacts)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_exec_plan_t *,
+            _n00b_obj_bundle_error_clone_for_execution(
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            valid_artifacts),
+                allocator));
+    }
+
+    auto valid_exec = _n00b_obj_bundle_validate_exec_map(bundle);
+
+    if (n00b_result_is_err(valid_exec)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_exec_plan_t *,
+            _n00b_obj_bundle_error_clone_for_execution(
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            valid_exec),
+                allocator));
+    }
+
+    auto policy_result =
+        _n00b_obj_bundle_select_execution_policy(bundle, allocator);
+
+    if (n00b_result_is_err(policy_result)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_exec_plan_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        policy_result));
+    }
+
+    n00b_obj_bundle_exec_policy_t *policy = n00b_result_get(policy_result);
+    n00b_obj_bundle_artifact_t *selected = nullptr;
+    n00b_obj_bundle_exec_selection_source_t selection_source =
+        N00B_OBJ_BUNDLE_EXEC_SELECTION_NONE;
+
+    if (selector != nullptr) {
+        n00b_obj_bundle_exec_mapping_t *mapping =
+            _n00b_obj_bundle_find_mapping_by_selector(bundle, selector);
+
+        if (mapping != nullptr) {
+            selected =
+                _n00b_obj_bundle_find_artifact_by_id(bundle,
+                                                    mapping->target_artifact_id);
+            selection_source =
+                N00B_OBJ_BUNDLE_EXEC_SELECTION_SELECTOR_MAPPING;
+
+            if (!_n00b_obj_bundle_artifact_is_executable(selected)) {
+                n00b_obj_bundle_error_t *error =
+                    _n00b_obj_bundle_error_with_artifact(
+                        N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                        r"object bundle: invalid execution mapping target",
+                        mapping->target_artifact_id,
+                        allocator);
+
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_exec_plan_t *,
+                    _n00b_obj_bundle_error_mark_execution(error));
+            }
+
+            if ((policy->execution_flags
+                 & N00B_OBJ_BUNDLE_DECL_EXEC_SELECTOR_MAPPING) == 0) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_exec_plan_t *,
+                    _n00b_obj_bundle_exec_policy_denied(
+                        policy,
+                        r"object bundle: execution selector mapping denied by policy",
+                        selector,
+                        selected,
+                        N00B_OBJ_BUNDLE_DECL_EXEC_SELECTOR_MAPPING,
+                        allocator));
+            }
+        }
+        else if (strict_selector) {
+            n00b_obj_bundle_error_t *error =
+                _n00b_obj_bundle_error_with_path(
+                    N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                    r"object bundle: execution selector has no mapping",
+                    selector,
+                    allocator);
+
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_exec_plan_t *,
+                _n00b_obj_bundle_error_mark_execution(error));
+        }
+    }
+
+    if (selected == nullptr && bundle->has_default_exec) {
+        selected = _n00b_obj_bundle_find_artifact_by_id(bundle,
+                                                       bundle->default_exec_id);
+        selection_source = N00B_OBJ_BUNDLE_EXEC_SELECTION_DEFAULT;
+
+        if (!_n00b_obj_bundle_artifact_is_executable(selected)) {
+            n00b_obj_bundle_error_t *error =
+                _n00b_obj_bundle_error_with_artifact(
+                    N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                    r"object bundle: invalid default executable target",
+                    bundle->default_exec_id,
+                    allocator);
+
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_exec_plan_t *,
+                _n00b_obj_bundle_error_mark_execution(error));
+        }
+
+        if ((policy->execution_flags
+             & N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT_EXEC) == 0) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_exec_plan_t *,
+                _n00b_obj_bundle_exec_policy_denied(
+                    policy,
+                    r"object bundle: default execution denied by policy",
+                    selected->logical_path,
+                    selected,
+                    N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT_EXEC,
+                    allocator));
+        }
+    }
+
+    if (selected == nullptr) {
+        n00b_obj_bundle_error_t *error =
+            selector == nullptr
+                ? _n00b_obj_bundle_error_new(
+                      N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                      r"object bundle: no execution target available",
+                      allocator)
+                : _n00b_obj_bundle_error_with_path(
+                      N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                      r"object bundle: execution selector has no fallback target",
+                      selector,
+                      allocator);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_exec_plan_t *,
+            _n00b_obj_bundle_error_mark_execution(error));
+    }
+
+    if (!_n00b_obj_bundle_exec_mode_is_supported(mode)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_exec_plan_t *,
+            _n00b_obj_bundle_error_with_exec_mode(
+                N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_EXEC_MODE,
+                r"object bundle: unsupported execution mode",
+                mode,
+                N00B_OBJ_BUNDLE_EXEC_PLATFORM_UNSUPPORTED,
+                allocator));
+    }
+
+    n00b_obj_bundle_exec_argv_t *planned_argv =
+        _n00b_obj_bundle_exec_argv_plan(argv,
+                                        selected->logical_path,
+                                        allocator);
+    n00b_obj_bundle_exec_env_t *planned_env =
+        _n00b_obj_bundle_exec_env_plan(env, allocator);
+
+    n00b_obj_bundle_exec_plan_t *plan =
+        _n00b_obj_bundle_exec_plan_new(selector,
+                                       planned_argv,
+                                       planned_env,
+                                       inherit_env,
+                                       strict_selector,
+                                       mode,
+                                       policy_mode,
+                                       allocator);
+
+    plan->policy_kind               = policy->kind;
+    plan->has_policy_kind           = true;
+    plan->policy_scope              = policy->scope;
+    plan->has_policy_scope          = true;
+    plan->fallback_used             = policy->fallback_used;
+    plan->selected_artifact_id      = selected->id;
+    plan->has_selected_artifact_id  = true;
+    plan->selected_logical_path     = selected->logical_path;
+    plan->has_selected_logical_path = selected->logical_path != nullptr;
+    plan->selection_source          = selection_source;
+
+    return n00b_result_ok(n00b_obj_bundle_exec_plan_t *, plan);
+}
+
+n00b_option_t(n00b_string_t *)
+n00b_obj_bundle_exec_plan_selector(n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return n00b_option_from_nullable(n00b_string_t *, plan->selector);
+}
+
+n00b_option_t(n00b_obj_bundle_exec_argv_t *)
+n00b_obj_bundle_exec_plan_argv(n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return n00b_option_from_nullable(n00b_obj_bundle_exec_argv_t *,
+                                     plan->argv);
+}
+
+n00b_option_t(n00b_obj_bundle_exec_env_t *)
+n00b_obj_bundle_exec_plan_env(n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return n00b_option_from_nullable(n00b_obj_bundle_exec_env_t *,
+                                     plan->env);
+}
+
+bool
+n00b_obj_bundle_exec_plan_inherit_env(n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return plan->inherit_env;
+}
+
+bool
+n00b_obj_bundle_exec_plan_strict_selector(
+    n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return plan->strict_selector;
+}
+
+n00b_obj_bundle_exec_mode_t
+n00b_obj_bundle_exec_plan_requested_mode(
+    n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return plan->requested_mode;
+}
+
+n00b_obj_bundle_exec_mode_t
+n00b_obj_bundle_exec_plan_resolved_mode(
+    n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return plan->resolved_mode;
+}
+
+n00b_obj_bundle_exec_platform_support_t
+n00b_obj_bundle_exec_plan_platform_support(
+    n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return plan->platform_support;
+}
+
+bool
+n00b_obj_bundle_exec_plan_requires_extraction(
+    n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return plan->requires_extraction;
+}
+
+n00b_obj_bundle_policy_mode_t
+n00b_obj_bundle_exec_plan_policy_mode(n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return plan->policy_mode;
+}
+
+n00b_option_t(n00b_obj_bundle_policy_kind_t)
+n00b_obj_bundle_exec_plan_policy_kind(n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    if (!plan->has_policy_kind) {
+        return n00b_option_none(n00b_obj_bundle_policy_kind_t);
+    }
+
+    return n00b_option_set(n00b_obj_bundle_policy_kind_t,
+                           plan->policy_kind);
+}
+
+n00b_option_t(n00b_obj_bundle_policy_scope_t)
+n00b_obj_bundle_exec_plan_policy_scope(n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    if (!plan->has_policy_scope) {
+        return n00b_option_none(n00b_obj_bundle_policy_scope_t);
+    }
+
+    return n00b_option_set(n00b_obj_bundle_policy_scope_t,
+                           plan->policy_scope);
+}
+
+bool
+n00b_obj_bundle_exec_plan_fallback_used(n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return plan->fallback_used;
+}
+
+n00b_obj_bundle_exec_selection_source_t
+n00b_obj_bundle_exec_plan_selection_source(
+    n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    return plan->selection_source;
+}
+
+n00b_option_t(uint64_t)
+n00b_obj_bundle_exec_plan_selected_artifact_id(
+    n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    if (!plan->has_selected_artifact_id) {
+        return n00b_option_none(uint64_t);
+    }
+
+    return n00b_option_set(uint64_t, plan->selected_artifact_id);
+}
+
+n00b_option_t(n00b_string_t *)
+n00b_obj_bundle_exec_plan_selected_logical_path(
+    n00b_obj_bundle_exec_plan_t *plan)
+{
+    n00b_require(plan != nullptr,
+                 "object bundle execution plan must not be null");
+
+    if (!plan->has_selected_logical_path) {
+        return n00b_option_none(n00b_string_t *);
+    }
+
+    return n00b_option_from_nullable(n00b_string_t *,
+                                     plan->selected_logical_path);
+}
+
 n00b_string_t *
 n00b_obj_bundle_extract_result_destination_root(
     n00b_obj_bundle_extract_result_t *result)
@@ -6314,6 +7211,10 @@ n00b_obj_bundle_err_str(n00b_err_t err)
         return r"object bundle: rewrite failure";
     case N00B_OBJ_BUNDLE_ERR_EXTRACT_UNSUPPORTED:
         return r"object bundle: extraction unsupported";
+    case N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_EXEC_MODE:
+        return r"object bundle: unsupported execution mode";
+    case N00B_OBJ_BUNDLE_ERR_POLICY_DENIED:
+        return r"object bundle: policy denied";
     default:
         return r"object bundle: unknown error code";
     }
@@ -6421,6 +7322,33 @@ n00b_obj_bundle_error_detail(n00b_obj_bundle_error_t *error)
     }
 
     return n00b_option_set(int64_t, error->detail);
+}
+
+n00b_option_t(n00b_obj_bundle_exec_mode_t)
+n00b_obj_bundle_error_exec_requested_mode(n00b_obj_bundle_error_t *error)
+{
+    n00b_require(error != nullptr, "object bundle error must not be null");
+
+    if (!error->has_exec_requested_mode) {
+        return n00b_option_none(n00b_obj_bundle_exec_mode_t);
+    }
+
+    return n00b_option_set(n00b_obj_bundle_exec_mode_t,
+                           error->exec_requested_mode);
+}
+
+n00b_option_t(n00b_obj_bundle_exec_platform_support_t)
+n00b_obj_bundle_error_exec_platform_support(
+    n00b_obj_bundle_error_t *error)
+{
+    n00b_require(error != nullptr, "object bundle error must not be null");
+
+    if (!error->has_exec_platform_support) {
+        return n00b_option_none(n00b_obj_bundle_exec_platform_support_t);
+    }
+
+    return n00b_option_set(n00b_obj_bundle_exec_platform_support_t,
+                           error->exec_platform_support);
 }
 
 n00b_option_t(n00b_obj_bundle_extract_result_t *)

@@ -1,4 +1,6 @@
 #include "n00b.h"
+#include "adt/list.h"
+#include "adt/option.h"
 #include "compiler/objfile/sink.h"
 #include "core/file.h"
 #include "core/runtime.h"
@@ -97,6 +99,44 @@ make_populated_bundle_b(void)
     return bundle;
 }
 
+static n00b_obj_bundle_t *
+make_execution_plan_bundle(void)
+{
+    n00b_obj_bundle_t *bundle = make_bundle();
+    n00b_buffer_t     *default_payload =
+        n00b_buffer_from_cstr("default-exec-payload");
+    n00b_buffer_t     *tool_payload =
+        n00b_buffer_from_cstr("selector-exec-payload");
+
+    auto add_default = n00b_obj_bundle_add_artifact(
+        bundle,
+        r"bin/default",
+        default_payload,
+        .kind = N00B_OBJ_BUNDLE_ARTIFACT_EXECUTABLE);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add_default));
+
+    auto add_tool = n00b_obj_bundle_add_artifact(
+        bundle,
+        r"bin/tool",
+        tool_payload,
+        .kind = N00B_OBJ_BUNDLE_ARTIFACT_EXECUTABLE);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add_tool));
+
+    auto set_exec = n00b_obj_bundle_set_default_exec(bundle,
+                                                     r"bin/default");
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(set_exec));
+
+    auto map = n00b_obj_bundle_add_exec_mapping(bundle,
+                                                r"tool",
+                                                r"bin/tool");
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(map));
+    return bundle;
+}
+
 static void
 assert_buffer_eq(n00b_buffer_t *actual, n00b_buffer_t *expected)
 {
@@ -158,6 +198,69 @@ assert_string_eq(n00b_string_t *actual, n00b_string_t *expected)
     N00B_TEST_REQUIRE(memcmp(actual->data,
                              expected->data,
                              actual->u8_bytes) == 0);
+}
+
+static n00b_obj_bundle_exec_plan_t *
+require_exec_plan_ok(n00b_result_t(n00b_obj_bundle_exec_plan_t *) result)
+{
+    N00B_TEST_REQUIRE(n00b_result_is_ok(result));
+
+    n00b_obj_bundle_exec_plan_t *plan = n00b_result_get(result);
+
+    N00B_TEST_REQUIRE(plan != nullptr);
+    return plan;
+}
+
+static n00b_obj_bundle_exec_argv_t *
+require_exec_plan_argv(n00b_obj_bundle_exec_plan_t *plan)
+{
+    auto argv = n00b_obj_bundle_exec_plan_argv(plan);
+
+    N00B_TEST_REQUIRE(n00b_option_is_set(argv));
+    return n00b_option_get(argv);
+}
+
+static void
+assert_exec_argv_entry(n00b_obj_bundle_exec_argv_t *argv,
+                       size_t                       index,
+                       n00b_string_t               *expected)
+{
+    N00B_TEST_REQUIRE(index < n00b_list_len(*argv));
+    assert_string_eq(n00b_list_get(*argv, index), expected);
+}
+
+static void
+assert_exec_plan_tool_selection(n00b_obj_bundle_exec_plan_t *plan)
+{
+    auto artifact_id = n00b_obj_bundle_exec_plan_selected_artifact_id(plan);
+    auto logical_path =
+        n00b_obj_bundle_exec_plan_selected_logical_path(plan);
+    auto policy_kind = n00b_obj_bundle_exec_plan_policy_kind(plan);
+    auto policy_scope = n00b_obj_bundle_exec_plan_policy_scope(plan);
+    n00b_obj_bundle_exec_argv_t *argv = require_exec_plan_argv(plan);
+
+    N00B_TEST_REQUIRE(n00b_obj_bundle_exec_plan_selection_source(plan)
+                      == N00B_OBJ_BUNDLE_EXEC_SELECTION_SELECTOR_MAPPING);
+    N00B_TEST_REQUIRE(n00b_option_is_set(artifact_id));
+    N00B_TEST_REQUIRE(n00b_option_get(artifact_id) == 1);
+    N00B_TEST_REQUIRE(n00b_option_is_set(logical_path));
+    assert_string_eq(n00b_option_get(logical_path), r"bin/tool");
+    N00B_TEST_REQUIRE(n00b_obj_bundle_exec_plan_requested_mode(plan)
+                      == N00B_OBJ_BUNDLE_EXEC_EXTRACTED);
+    N00B_TEST_REQUIRE(n00b_obj_bundle_exec_plan_resolved_mode(plan)
+                      == N00B_OBJ_BUNDLE_EXEC_EXTRACTED);
+    N00B_TEST_REQUIRE(n00b_obj_bundle_exec_plan_platform_support(plan)
+                      == N00B_OBJ_BUNDLE_EXEC_PLATFORM_SUPPORTED);
+    N00B_TEST_REQUIRE(n00b_obj_bundle_exec_plan_requires_extraction(plan));
+    N00B_TEST_REQUIRE(n00b_option_is_set(policy_kind));
+    N00B_TEST_REQUIRE(n00b_option_get(policy_kind)
+                      == N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT);
+    N00B_TEST_REQUIRE(n00b_option_is_set(policy_scope));
+    N00B_TEST_REQUIRE(n00b_option_get(policy_scope)
+                      == N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION);
+    N00B_TEST_REQUIRE(!n00b_obj_bundle_exec_plan_fallback_used(plan));
+    N00B_TEST_REQUIRE(n00b_list_len(*argv) == 1);
+    assert_exec_argv_entry(argv, 0, r"bin/tool");
 }
 
 static n00b_obj_bundle_error_t *
@@ -1394,6 +1497,40 @@ test_read_elf_metadata_carrier_then_extract(void)
 }
 
 static void
+test_read_elf_metadata_carrier_then_plan_execution(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_execution_plan_bundle();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_obj_bundle_exec_plan_t *original_plan = require_exec_plan_ok(
+        n00b_obj_bundle_exec_plan(bundle,
+                                  .selector = r"tool",
+                                  .mode = N00B_OBJ_BUNDLE_EXEC_EXTRACTED));
+
+    auto written = n00b_obj_bundle_write(object_bytes, bundle);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+
+    n00b_buffer_t *carrier_object = n00b_result_get(written);
+    n00b_buffer_t *carrier_snapshot = n00b_buffer_copy(carrier_object);
+    n00b_obj_bundle_t *read_bundle = require_read_success(
+        n00b_obj_bundle_read(carrier_object),
+        bundle_snapshot);
+    n00b_obj_bundle_exec_plan_t *read_plan = require_exec_plan_ok(
+        n00b_obj_bundle_exec_plan(read_bundle,
+                                  .selector = r"tool",
+                                  .mode = N00B_OBJ_BUNDLE_EXEC_EXTRACTED));
+
+    assert_exec_plan_tool_selection(original_plan);
+    assert_exec_plan_tool_selection(read_plan);
+    assert_buffer_unchanged(carrier_object, carrier_snapshot);
+    assert_bundle_unchanged(read_bundle, bundle_snapshot);
+}
+
+static void
 test_write_file_default_overwrite_rejects_existing_destination(void)
 {
     n00b_buffer_t     *object_bytes = make_rewrite_target();
@@ -1728,6 +1865,7 @@ main(int argc, char **argv)
     test_write_insert_readback_and_immutability();
     test_write_file_atomic_readback_and_byte_equality();
     test_read_elf_metadata_carrier_then_extract();
+    test_read_elf_metadata_carrier_then_plan_execution();
     test_write_file_default_overwrite_rejects_existing_destination();
     test_write_file_explicit_overwrite_replaces_destination();
     test_write_file_carrier_replace_rejects_before_sink_replace();

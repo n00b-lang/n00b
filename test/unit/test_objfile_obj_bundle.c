@@ -1201,7 +1201,7 @@ test_decode_policy_payload_schema_errors(void)
         n00b_buffer_t *encoded = make_canonical_encoded_bytes();
         uint8_t       *payload = policy_payload_at(encoded, 1);
 
-        write_le64(payload, TEST_DECL_POLICY_EXEC_FLAGS_OFF, 0);
+        write_le64(payload, TEST_DECL_POLICY_EXEC_FLAGS_OFF, 0x04);
         update_policy_payload_digest(encoded, 1);
         update_content_id(encoded);
         require_decode_error(n00b_obj_bundle_decode(encoded),
