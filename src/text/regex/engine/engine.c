@@ -1517,7 +1517,9 @@ engine_LDFA_get_or_create_skip_exact(LDFA *self, n00b_list_t(uint8_t) bytes)
     }
     // n00b_simd_RevSearchBytes_new copies the bytes into its own buffer (owned
     // by SIMD layer); the caller's `bytes` list is consumed after.
+    n00b_allocator_t *prev_alloc = n00b_set_current_allocator(self->allocator);
     RevSearchBytes *rsb = n00b_simd_RevSearchBytes_new(bytes);
+    n00b_restore_current_allocator(prev_alloc);
     n00b_list_push(self->skip_searchers, minterm_search_value_exact(rsb));
     return (uint8_t)self->skip_searchers.len;
 }
@@ -1550,7 +1552,9 @@ engine_LDFA_get_or_create_skip_range(LDFA *self, n00b_list_t(U8Pair) ranges)
             }
         }
     }
+    n00b_allocator_t *prev_alloc = n00b_set_current_allocator(self->allocator);
     RevSearchRanges *rsr = n00b_simd_RevSearchRanges_new(ranges);
+    n00b_restore_current_allocator(prev_alloc);
     n00b_list_push(self->skip_searchers, minterm_search_value_range(rsr));
     return (uint8_t)self->skip_searchers.len;
 }
