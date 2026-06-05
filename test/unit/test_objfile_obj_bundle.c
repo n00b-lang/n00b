@@ -34,6 +34,10 @@
 #define TEST_DECL_POLICY_EXEC_FLAGS_OFF       40u
 #define TEST_DECL_POLICY_FALLBACK_ID_OFF      48u
 #define TEST_DECL_POLICY_RESERVED1_OFF        56u
+#define TEST_EMBEDDED_POLICY_COMPAT_FLAGS_OFF 16u
+#define TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF  24u
+#define TEST_EMBEDDED_POLICY_SOURCE_LEN_OFF   32u
+#define TEST_EMBEDDED_POLICY_RESERVED1_OFF    40u
 
 static const n00b_buffer_t *payload_bytes = b"payload";
 static const n00b_buffer_t *tool_bytes    = b"tool";
@@ -41,6 +45,8 @@ static const n00b_buffer_t *x_bytes       = b"x";
 static const n00b_buffer_t *late_bytes    = b"late";
 static const n00b_buffer_t *script_bytes  = b"script";
 static const n00b_buffer_t *policy_bytes  = b"N00BPOL1\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f\x00\x00\x00\x00\x00\x00\x00\x1f\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00";
+static const n00b_buffer_t *embedded_source_bytes = b"bundle.allow";
+static const n00b_buffer_t *empty_source_bytes = b"";
 static const n00b_buffer_t *bad_bytes     = b"bad";
 
 static n00b_obj_bundle_t *
@@ -173,6 +179,35 @@ make_policy_payload(uint64_t fallback_policy_id)
     write_le64((uint8_t *)payload->data,
                TEST_DECL_POLICY_FALLBACK_ID_OFF,
                fallback_policy_id);
+
+    return payload;
+}
+
+static n00b_buffer_t *
+make_embedded_policy_payload(uint64_t             fallback_policy_id,
+                             const n00b_buffer_t *source)
+{
+    size_t len = N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF
+                 + source->byte_len;
+    n00b_buffer_t *payload = n00b_buffer_new((int64_t)len);
+    uint8_t       *data    = (uint8_t *)payload->data;
+
+    memset(data, 0, len);
+    memcpy(data,
+           N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC,
+           N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC_LEN);
+    write_le16(data, 8, N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAJOR);
+    write_le16(data, 10, N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MINOR);
+    write_le64(data,
+               TEST_EMBEDDED_POLICY_COMPAT_FLAGS_OFF,
+               N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SUPPORTED_COMPAT_FLAGS);
+    write_le64(data, TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF, fallback_policy_id);
+    write_le64(data,
+               TEST_EMBEDDED_POLICY_SOURCE_LEN_OFF,
+               (uint64_t)source->byte_len);
+    memcpy(data + N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF,
+           source->data,
+           source->byte_len);
 
     return payload;
 }
@@ -381,9 +416,19 @@ test_manifest_constants(void)
     const uint8_t policy_magic[N00B_OBJ_BUNDLE_POLICY_MAGIC_LEN] = {
         'N', '0', '0', 'B', 'P', 'O', 'L', '1',
     };
+    const uint8_t embedded_magic[
+        N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC_LEN] = {
+        'N', '0', '0', 'B', 'E', 'P', 'O', 'L',
+    };
 
     N00B_TEST_REQUIRE(N00B_OBJ_BUNDLE_MANIFEST_MAJOR == 1);
     N00B_TEST_REQUIRE(N00B_OBJ_BUNDLE_MANIFEST_MINOR == 0);
+    N00B_TEST_REQUIRE(N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAJOR == 1);
+    N00B_TEST_REQUIRE(N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MINOR == 0);
+    N00B_TEST_REQUIRE(N00B_OBJ_BUNDLE_EMBEDDED_POLICY_HEADER_SIZE == 48);
+    N00B_TEST_REQUIRE(N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF == 48);
+    N00B_TEST_REQUIRE(
+        N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SUPPORTED_COMPAT_FLAGS == 0);
     N00B_TEST_REQUIRE(N00B_OBJ_BUNDLE_CONTENT_ID_LEN == 32);
     N00B_TEST_REQUIRE(N00B_OBJ_BUNDLE_DIGEST_LEN == 32);
 
@@ -394,6 +439,11 @@ test_manifest_constants(void)
 
     for (size_t i = 0; i < N00B_OBJ_BUNDLE_POLICY_MAGIC_LEN; i++) {
         N00B_TEST_REQUIRE(N00B_OBJ_BUNDLE_POLICY_MAGIC[i] == policy_magic[i]);
+    }
+
+    for (size_t i = 0; i < N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC_LEN; i++) {
+        N00B_TEST_REQUIRE(N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC[i]
+                          == embedded_magic[i]);
     }
 
     const uint8_t *policy_data = (const uint8_t *)policy_bytes->data;
@@ -697,8 +747,330 @@ test_policy_records(void)
                            .fallback_policy_id = 2),
                        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT);
 
+    n00b_buffer_t *embedded_payload =
+        make_embedded_policy_payload(N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                                     embedded_source_bytes);
+    auto embedded_required = n00b_obj_bundle_add_policy(
+        bundle,
+        7,
+        N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B,
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXTRACTION,
+        .payload = embedded_payload);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(embedded_required));
+
+    n00b_buffer_t *embedded_fallback_payload =
+        make_embedded_policy_payload(1, embedded_source_bytes);
+    auto embedded_with_fallback = n00b_obj_bundle_add_policy(
+        bundle,
+        8,
+        N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B,
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_BOTH,
+        .flags = N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL
+                 | N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED,
+        .priority = 1,
+        .payload = embedded_fallback_payload,
+        .fallback_policy_id = 1);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(embedded_with_fallback));
+
     auto validate = n00b_obj_bundle_validate(bundle);
     N00B_TEST_REQUIRE(n00b_result_is_ok(validate));
+}
+
+static void
+require_embedded_policy_rejected(n00b_buffer_t *payload,
+                                 uint64_t       flags,
+                                 uint64_t       fallback_policy_id)
+{
+    n00b_obj_bundle_t *bundle = new_bundle();
+
+    auto builtin = n00b_obj_bundle_add_policy(
+        bundle,
+        1,
+        N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT,
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_BOTH);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(builtin));
+
+    require_bool_error(n00b_obj_bundle_add_policy(
+                           bundle,
+                           2,
+                           N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B,
+                           N00B_OBJ_BUNDLE_POLICY_SCOPE_BOTH,
+                           .flags = flags,
+                           .priority = 1,
+                           .payload = payload,
+                           .fallback_policy_id = fallback_policy_id),
+                       N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT);
+}
+
+static void
+test_embedded_policy_payload_validation(void)
+{
+    {
+        n00b_buffer_t *payload =
+            make_embedded_policy_payload(N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                                         embedded_source_bytes);
+
+        ((uint8_t *)payload->data)[0] ^= 0x01u;
+        require_embedded_policy_rejected(
+            payload,
+            N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+            N00B_OBJ_BUNDLE_POLICY_ID_NONE);
+    }
+
+    {
+        n00b_buffer_t *payload =
+            make_embedded_policy_payload(N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                                         embedded_source_bytes);
+
+        write_le16((uint8_t *)payload->data, 8, 2);
+        require_embedded_policy_rejected(
+            payload,
+            N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+            N00B_OBJ_BUNDLE_POLICY_ID_NONE);
+    }
+
+    {
+        n00b_buffer_t *payload =
+            make_embedded_policy_payload(N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                                         embedded_source_bytes);
+
+        write_le32((uint8_t *)payload->data, 12, 1);
+        require_embedded_policy_rejected(
+            payload,
+            N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+            N00B_OBJ_BUNDLE_POLICY_ID_NONE);
+    }
+
+    {
+        n00b_buffer_t *payload =
+            make_embedded_policy_payload(N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                                         embedded_source_bytes);
+
+        write_le64((uint8_t *)payload->data,
+                   TEST_EMBEDDED_POLICY_COMPAT_FLAGS_OFF,
+                   1);
+        require_embedded_policy_rejected(
+            payload,
+            N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+            N00B_OBJ_BUNDLE_POLICY_ID_NONE);
+    }
+
+    {
+        n00b_buffer_t *payload =
+            make_embedded_policy_payload(N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                                         embedded_source_bytes);
+
+        write_le64((uint8_t *)payload->data,
+                   TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF,
+                   99);
+        require_embedded_policy_rejected(
+            payload,
+            N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL
+                | N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED,
+            1);
+    }
+
+    {
+        n00b_buffer_t *payload =
+            make_embedded_policy_payload(N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                                         empty_source_bytes);
+
+        require_embedded_policy_rejected(
+            payload,
+            N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+            N00B_OBJ_BUNDLE_POLICY_ID_NONE);
+    }
+
+    {
+        n00b_buffer_t *payload =
+            make_embedded_policy_payload(N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                                         embedded_source_bytes);
+
+        uint8_t *data = (uint8_t *)payload->data;
+
+        data[N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF] = 0xffu;
+        require_embedded_policy_rejected(
+            payload,
+            N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+            N00B_OBJ_BUNDLE_POLICY_ID_NONE);
+    }
+
+    {
+        n00b_buffer_t *payload =
+            make_embedded_policy_payload(N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                                         embedded_source_bytes);
+
+        write_le64((uint8_t *)payload->data,
+                   TEST_EMBEDDED_POLICY_RESERVED1_OFF,
+                   1);
+        require_embedded_policy_rejected(
+            payload,
+            N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+            N00B_OBJ_BUNDLE_POLICY_ID_NONE);
+    }
+}
+
+static n00b_obj_bundle_t *
+make_embedded_policy_bundle(void)
+{
+    n00b_obj_bundle_t *bundle = new_bundle();
+
+    auto builtin = n00b_obj_bundle_add_policy(
+        bundle,
+        1,
+        N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT,
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_BOTH);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(builtin));
+
+    n00b_buffer_t *embedded_payload =
+        make_embedded_policy_payload(1, embedded_source_bytes);
+    auto embedded = n00b_obj_bundle_add_policy(
+        bundle,
+        2,
+        N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B,
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_BOTH,
+        .flags = N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL
+                 | N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED,
+        .priority = 2,
+        .payload = embedded_payload,
+        .fallback_policy_id = 1);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(embedded));
+
+    return bundle;
+}
+
+static n00b_buffer_t *
+make_embedded_canonical_encoded_bytes(void)
+{
+    return require_encode(make_embedded_policy_bundle());
+}
+
+static void
+test_embedded_policy_encode_decode_round_trip(void)
+{
+    n00b_buffer_t *expected_payload =
+        make_embedded_policy_payload(1, embedded_source_bytes);
+    n00b_buffer_t *encoded = make_embedded_canonical_encoded_bytes();
+    const uint8_t *data    = (const uint8_t *)encoded->data;
+    uint64_t       policy1 = policy_record_at(data, 1);
+    uint8_t       *payload = policy_payload_at(encoded, 1);
+
+    N00B_TEST_REQUIRE(read_le64(data, policy1) == 2);
+    N00B_TEST_REQUIRE(read_le32(data, policy1 + 8)
+                      == N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    N00B_TEST_REQUIRE(read_le32(data, policy1 + 12)
+                      == N00B_OBJ_BUNDLE_POLICY_SCOPE_BOTH);
+    N00B_TEST_REQUIRE(read_le64(data, policy1 + 16)
+                      == (N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL
+                          | N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED));
+    N00B_TEST_REQUIRE(read_le64(data, policy1 + 24) == 2);
+    N00B_TEST_REQUIRE(read_le64(data, policy1 + 48) == 1);
+    N00B_TEST_REQUIRE(read_le64(data, policy1 + 40)
+                      == expected_payload->byte_len);
+    assert_digest_at(data, policy1 + 56, expected_payload);
+    N00B_TEST_REQUIRE(memcmp(payload,
+                             expected_payload->data,
+                             expected_payload->byte_len) == 0);
+
+    n00b_obj_bundle_t *decoded   = require_decode(encoded);
+    n00b_buffer_t     *reencoded = require_encode(decoded);
+
+    N00B_TEST_REQUIRE(reencoded->byte_len == encoded->byte_len);
+    N00B_TEST_REQUIRE(memcmp(reencoded->data,
+                             encoded->data,
+                             encoded->byte_len) == 0);
+}
+
+static void
+test_decode_embedded_policy_payload_schema_errors(void)
+{
+    {
+        n00b_buffer_t *encoded = make_embedded_canonical_encoded_bytes();
+        uint8_t       *payload = policy_payload_at(encoded, 1);
+
+        payload[0] ^= 0x01u;
+        update_policy_payload_digest(encoded, 1);
+        update_content_id(encoded);
+        require_decode_error(n00b_obj_bundle_decode(encoded),
+                             N00B_OBJ_BUNDLE_ERR_MALFORMED_MANIFEST);
+    }
+
+    {
+        n00b_buffer_t *encoded = make_embedded_canonical_encoded_bytes();
+        uint8_t       *payload = policy_payload_at(encoded, 1);
+
+        write_le16(payload, 8, 2);
+        update_policy_payload_digest(encoded, 1);
+        update_content_id(encoded);
+        require_decode_error(n00b_obj_bundle_decode(encoded),
+                             N00B_OBJ_BUNDLE_ERR_MALFORMED_MANIFEST);
+    }
+
+    {
+        n00b_buffer_t *encoded = make_embedded_canonical_encoded_bytes();
+        uint8_t       *payload = policy_payload_at(encoded, 1);
+
+        write_le32(payload, 12, 1);
+        update_policy_payload_digest(encoded, 1);
+        update_content_id(encoded);
+        require_decode_error(n00b_obj_bundle_decode(encoded),
+                             N00B_OBJ_BUNDLE_ERR_MALFORMED_MANIFEST);
+    }
+
+    {
+        n00b_buffer_t *encoded = make_embedded_canonical_encoded_bytes();
+        uint8_t       *payload = policy_payload_at(encoded, 1);
+
+        write_le64(payload, TEST_EMBEDDED_POLICY_COMPAT_FLAGS_OFF, 1);
+        update_policy_payload_digest(encoded, 1);
+        update_content_id(encoded);
+        require_decode_error(n00b_obj_bundle_decode(encoded),
+                             N00B_OBJ_BUNDLE_ERR_MALFORMED_MANIFEST);
+    }
+
+    {
+        n00b_buffer_t *encoded = make_embedded_canonical_encoded_bytes();
+        uint8_t       *payload = policy_payload_at(encoded, 1);
+
+        write_le64(payload, TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF, 99);
+        update_policy_payload_digest(encoded, 1);
+        update_content_id(encoded);
+        require_decode_error(n00b_obj_bundle_decode(encoded),
+                             N00B_OBJ_BUNDLE_ERR_MALFORMED_MANIFEST);
+    }
+
+    {
+        n00b_buffer_t *encoded = make_embedded_canonical_encoded_bytes();
+        uint8_t       *payload = policy_payload_at(encoded, 1);
+
+        write_le64(payload, TEST_EMBEDDED_POLICY_SOURCE_LEN_OFF, 0);
+        update_policy_payload_digest(encoded, 1);
+        update_content_id(encoded);
+        require_decode_error(n00b_obj_bundle_decode(encoded),
+                             N00B_OBJ_BUNDLE_ERR_MALFORMED_MANIFEST);
+    }
+
+    {
+        n00b_buffer_t *encoded = make_embedded_canonical_encoded_bytes();
+        uint8_t       *payload = policy_payload_at(encoded, 1);
+
+        payload[N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF] = 0xffu;
+        update_policy_payload_digest(encoded, 1);
+        update_content_id(encoded);
+        require_decode_error(n00b_obj_bundle_decode(encoded),
+                             N00B_OBJ_BUNDLE_ERR_MALFORMED_MANIFEST);
+    }
+
+    {
+        n00b_buffer_t *encoded = make_embedded_canonical_encoded_bytes();
+        uint8_t       *payload = policy_payload_at(encoded, 1);
+
+        write_le64(payload, TEST_EMBEDDED_POLICY_RESERVED1_OFF, 1);
+        update_policy_payload_digest(encoded, 1);
+        update_content_id(encoded);
+        require_decode_error(n00b_obj_bundle_decode(encoded),
+                             N00B_OBJ_BUNDLE_ERR_MALFORMED_MANIFEST);
+    }
 }
 
 static void
@@ -1323,8 +1695,10 @@ main(int argc, char **argv)
     test_artifact_duplicates_and_payload_rules();
     test_exec_mapping_validation_and_atomicity();
     test_policy_records();
+    test_embedded_policy_payload_validation();
     test_encode_header_and_content_id();
     test_encode_records();
+    test_embedded_policy_encode_decode_round_trip();
     test_encode_is_canonical_and_deterministic();
     test_encode_errors();
     test_decode_round_trip();
@@ -1332,6 +1706,7 @@ main(int argc, char **argv)
     test_decode_artifact_payload_errors();
     test_decode_exec_policy_errors();
     test_decode_policy_payload_schema_errors();
+    test_decode_embedded_policy_payload_schema_errors();
     test_decode_string_errors();
     test_gc_visibility();
 

@@ -27,6 +27,9 @@
 #define TEST_DECL_PATH_DEFAULT                0x1full
 #define TEST_DECL_ARTIFACT_KIND_DEFAULT       0x1full
 #define TEST_DECL_EXEC_DEFAULT                0x03ull
+#define TEST_EMBEDDED_POLICY_COMPAT_FLAGS_OFF 16u
+#define TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF  24u
+#define TEST_EMBEDDED_POLICY_SOURCE_LEN_OFF   32u
 
 typedef struct test_obj_bundle_exec_mapping {
     n00b_string_t *selector;
@@ -133,6 +136,41 @@ make_policy_payload(uint64_t fallback_policy_id)
 
     return n00b_buffer_from_bytes((char *)bytes,
                                   (int64_t)TEST_DECL_POLICY_SIZE);
+}
+
+static n00b_buffer_t *
+make_embedded_policy_payload(uint64_t       fallback_policy_id,
+                             n00b_string_t *source)
+{
+    N00B_TEST_REQUIRE(source != nullptr);
+    N00B_TEST_REQUIRE(source->data != nullptr);
+
+    size_t len = N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF
+                 + source->u8_bytes;
+    n00b_buffer_t *payload = n00b_buffer_new((int64_t)len);
+    uint8_t       *data    = (uint8_t *)payload->data;
+
+    for (size_t i = 0; i < len; i++) {
+        data[i] = 0;
+    }
+
+    memcpy(data,
+           N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC,
+           N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC_LEN);
+    write_le16(data, 8, N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAJOR);
+    write_le16(data, 10, N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MINOR);
+    write_le64(data,
+               TEST_EMBEDDED_POLICY_COMPAT_FLAGS_OFF,
+               N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SUPPORTED_COMPAT_FLAGS);
+    write_le64(data, TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF, fallback_policy_id);
+    write_le64(data,
+               TEST_EMBEDDED_POLICY_SOURCE_LEN_OFF,
+               (uint64_t)source->u8_bytes);
+    memcpy(data + N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF,
+           source->data,
+           source->u8_bytes);
+
+    return payload;
 }
 
 static n00b_obj_bundle_error_t *
@@ -244,6 +282,9 @@ assert_policy_facts_with_fallback(
     n00b_obj_bundle_extract_result_t *facts,
     n00b_obj_bundle_policy_kind_t     expected_kind,
     bool                              expected_fallback);
+static void
+assert_artifact_context(n00b_obj_bundle_error_t *error,
+                        n00b_string_t          *path);
 
 static void
 assert_policy_facts(n00b_obj_bundle_extract_result_t *facts,
@@ -731,6 +772,193 @@ test_unknown_required_policy_rejects_before_writes(void)
     assert_error_policy(error, (n00b_obj_bundle_policy_kind_t)99);
     assert_no_side_effect_facts(facts);
     assert_no_plan_or_policy_facts(facts);
+}
+
+static n00b_obj_bundle_t *
+new_embedded_extraction_bundle(n00b_string_t *predicate,
+                               uint64_t       flags,
+                               bool           add_fallback)
+{
+    n00b_obj_bundle_t *bundle = new_bundle();
+    uint64_t fallback_id = N00B_OBJ_BUNDLE_POLICY_ID_NONE;
+
+    if (add_fallback) {
+        fallback_id = 1;
+        auto builtin = n00b_obj_bundle_add_policy(
+            bundle,
+            fallback_id,
+            N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT,
+            N00B_OBJ_BUNDLE_POLICY_SCOPE_BOTH);
+        N00B_TEST_REQUIRE(n00b_result_is_ok(builtin));
+    }
+
+    n00b_buffer_t *payload =
+        make_embedded_policy_payload(fallback_id, predicate);
+    auto embedded = n00b_obj_bundle_add_policy(
+        bundle,
+        add_fallback ? 2 : 1,
+        N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B,
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXTRACTION,
+        .flags = flags,
+        .priority = 1,
+        .payload = payload,
+        .fallback_policy_id = fallback_id);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(embedded));
+
+    auto add_file =
+        n00b_obj_bundle_add_artifact(bundle,
+                                     r"payload.bin",
+                                     payload_bytes());
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add_file));
+
+    return bundle;
+}
+
+static void
+test_embedded_extraction_validate_only_allows(void)
+{
+    n00b_obj_bundle_t *bundle = new_embedded_extraction_bundle(
+        r"true",
+        N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+        false);
+
+    n00b_string_t *root = n00b_new_temp_path(r"n00b_extract_embedded_allow_",
+                                             r"_root");
+    auto result = n00b_obj_bundle_extract(
+        bundle,
+        root,
+        .policy_mode = N00B_OBJ_BUNDLE_POLICY_VALIDATE_ONLY);
+    n00b_obj_bundle_extract_result_t *facts = require_extract_ok(result);
+
+    assert_no_side_effect_facts(facts);
+    assert_policy_facts(facts, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_files_planned(facts) == 1);
+    N00B_TEST_REQUIRE(
+        n00b_obj_bundle_extract_result_directories_planned(facts) == 0);
+    N00B_TEST_REQUIRE(!n00b_path_exists(root));
+}
+
+static void
+test_embedded_extraction_validate_only_denies(void)
+{
+    n00b_obj_bundle_t *bundle = new_embedded_extraction_bundle(
+        r"false",
+        N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL
+            | N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED,
+        true);
+
+    n00b_string_t *root = n00b_new_temp_path(r"n00b_extract_embedded_deny_",
+                                             r"_root");
+    auto result = n00b_obj_bundle_extract(
+        bundle,
+        root,
+        .policy_mode = N00B_OBJ_BUNDLE_POLICY_VALIDATE_ONLY);
+    n00b_obj_bundle_error_t *error =
+        require_extract_error(result, N00B_OBJ_BUNDLE_ERR_POLICY_DENIED);
+    n00b_obj_bundle_extract_result_t *facts = require_extract_facts(error);
+
+    assert_destination(error, root);
+    assert_artifact_context(error, r"payload.bin");
+    assert_error_policy(error, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_no_side_effect_facts(facts);
+    assert_policy_facts(facts, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    N00B_TEST_REQUIRE(!n00b_path_exists(root));
+}
+
+static void
+test_embedded_optional_compile_failure_uses_builtin_fallback(void)
+{
+    n00b_obj_bundle_t *bundle = new_embedded_extraction_bundle(
+        r";",
+        N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL
+            | N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED,
+        true);
+
+    n00b_string_t *root = n00b_new_temp_path(r"n00b_extract_embedded_fallback_",
+                                             r"_root");
+    auto result = n00b_obj_bundle_extract(
+        bundle,
+        root,
+        .policy_mode = N00B_OBJ_BUNDLE_POLICY_VALIDATE_ONLY);
+    n00b_obj_bundle_extract_result_t *facts = require_extract_ok(result);
+
+    assert_no_side_effect_facts(facts);
+    assert_policy_facts_with_fallback(
+        facts,
+        N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT,
+        true);
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_files_planned(facts) == 1);
+    N00B_TEST_REQUIRE(
+        n00b_obj_bundle_extract_result_directories_planned(facts) == 0);
+    N00B_TEST_REQUIRE(!n00b_path_exists(root));
+}
+
+static void
+test_embedded_required_compile_failure_rejects_before_writes(void)
+{
+    n00b_obj_bundle_t *bundle = new_embedded_extraction_bundle(
+        r";",
+        N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+        false);
+
+    n00b_string_t *root = n00b_new_temp_path(r"n00b_extract_embedded_build_",
+                                             r"_root");
+    auto result = n00b_obj_bundle_extract(bundle, root);
+    n00b_obj_bundle_error_t *error =
+        require_extract_error(result, N00B_OBJ_BUNDLE_ERR_BUILD);
+    n00b_obj_bundle_extract_result_t *facts = require_extract_facts(error);
+
+    assert_destination(error, root);
+    assert_artifact_context(error, r"payload.bin");
+    assert_error_policy(error, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_no_side_effect_facts(facts);
+    assert_policy_facts(facts, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    N00B_TEST_REQUIRE(!n00b_path_exists(root));
+}
+
+static void
+test_embedded_direct_failure_happens_before_writes(void)
+{
+    n00b_obj_bundle_t *bundle = new_embedded_extraction_bundle(
+        r";",
+        N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+        false);
+
+    n00b_string_t *root = fixture_dir(r"n00b_extract_embedded_direct_");
+    n00b_string_t *payload = fixture_child(root, r"payload.bin");
+    auto result = n00b_obj_bundle_extract(bundle, root, .atomic = false);
+    n00b_obj_bundle_error_t *error =
+        require_extract_error(result, N00B_OBJ_BUNDLE_ERR_BUILD);
+    n00b_obj_bundle_extract_result_t *facts = require_extract_facts(error);
+
+    assert_artifact_context(error, r"payload.bin");
+    assert_error_policy(error, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_no_side_effect_facts(facts);
+    N00B_TEST_REQUIRE(!n00b_path_exists(payload));
+
+    fixture_rmdir(root);
+}
+
+static void
+test_embedded_atomic_failure_happens_before_writes(void)
+{
+    n00b_obj_bundle_t *bundle = new_embedded_extraction_bundle(
+        r";",
+        N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+        false);
+
+    n00b_string_t *root = n00b_new_temp_path(r"n00b_extract_embedded_atomic_",
+                                             r"_root");
+    auto result = n00b_obj_bundle_extract(bundle, root);
+    n00b_obj_bundle_error_t *error =
+        require_extract_error(result, N00B_OBJ_BUNDLE_ERR_BUILD);
+    n00b_obj_bundle_extract_result_t *facts = require_extract_facts(error);
+
+    assert_destination(error, root);
+    assert_artifact_context(error, r"payload.bin");
+    assert_error_policy(error, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_no_side_effect_facts(facts);
+    N00B_TEST_REQUIRE(!n00b_path_exists(root));
 }
 
 static void
@@ -1577,6 +1805,13 @@ main(int argc, char **argv)
 {
     n00b_runtime_t runtime;
     n00b_init(&runtime, argc, argv);
+
+    test_embedded_extraction_validate_only_allows();
+    test_embedded_extraction_validate_only_denies();
+    test_embedded_optional_compile_failure_uses_builtin_fallback();
+    test_embedded_required_compile_failure_rejects_before_writes();
+    test_embedded_direct_failure_happens_before_writes();
+    test_embedded_atomic_failure_happens_before_writes();
 
     test_invalid_arguments();
     test_invalid_policy_mode_context();

@@ -8,6 +8,9 @@
 #include "compiler/objfile/elf_types.h"
 #include "compiler/objfile/writer.h"
 #include "core/sha256.h"
+#include "core/type_info.h"
+#include "internal/compiler/objfile/obj_bundle_policy.h"
+#include "n00b/eval.h"
 #include "text/unicode/encoding.h"
 #include "util/path.h"
 
@@ -20,6 +23,11 @@ const uint8_t N00B_OBJ_BUNDLE_MANIFEST_MAGIC[N00B_OBJ_BUNDLE_MANIFEST_MAGIC_LEN]
 
 const uint8_t N00B_OBJ_BUNDLE_POLICY_MAGIC[N00B_OBJ_BUNDLE_POLICY_MAGIC_LEN] = {
     'N', '0', '0', 'B', 'P', 'O', 'L', '1',
+};
+
+const uint8_t N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC[
+    N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC_LEN] = {
+    'N', '0', '0', 'B', 'E', 'P', 'O', 'L',
 };
 
 #define N00B_OBJ_BUNDLE_HEADER_SIZE        208u
@@ -41,6 +49,11 @@ const uint8_t N00B_OBJ_BUNDLE_POLICY_MAGIC[N00B_OBJ_BUNDLE_POLICY_MAGIC_LEN] = {
 #define N00B_OBJ_BUNDLE_DECL_POLICY_EXEC_FLAGS_OFF       40u
 #define N00B_OBJ_BUNDLE_DECL_POLICY_FALLBACK_ID_OFF      48u
 #define N00B_OBJ_BUNDLE_DECL_POLICY_RESERVED1_OFF        56u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_RESERVED0_OFF    12u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_COMPAT_FLAGS_OFF 16u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_FALLBACK_ID_OFF  24u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_LEN_OFF   32u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_RESERVED1_OFF    40u
 #define N00B_OBJ_BUNDLE_DECL_PATH_RELATIVE               (1ull << 0)
 #define N00B_OBJ_BUNDLE_DECL_PATH_NO_EMPTY_COMPONENTS    (1ull << 1)
 #define N00B_OBJ_BUNDLE_DECL_PATH_NO_PARENT_REFERENCES   (1ull << 2)
@@ -275,6 +288,12 @@ typedef struct n00b_obj_bundle_extract_policy {
     n00b_obj_bundle_policy_kind_t  kind;
     n00b_obj_bundle_policy_scope_t scope;
     bool                           fallback_used;
+    bool                           can_fallback_to_builtin;
+    uint64_t                       policy_id;
+    uint64_t                       flags;
+    uint64_t                       priority;
+    uint64_t                       fallback_policy_id;
+    const n00b_buffer_t           *payload;
     uint64_t                       path_flags;
     uint64_t                       artifact_kind_mask;
     uint64_t                       execution_flags;
@@ -284,6 +303,12 @@ typedef struct n00b_obj_bundle_exec_policy {
     n00b_obj_bundle_policy_kind_t  kind;
     n00b_obj_bundle_policy_scope_t scope;
     bool                           fallback_used;
+    bool                           can_fallback_to_builtin;
+    uint64_t                       policy_id;
+    uint64_t                       flags;
+    uint64_t                       priority;
+    uint64_t                       fallback_policy_id;
+    const n00b_buffer_t           *payload;
     uint64_t                       execution_flags;
 } n00b_obj_bundle_exec_policy_t;
 
@@ -297,6 +322,19 @@ typedef struct n00b_obj_bundle_extract_plan {
     n00b_string_t *destination_root;
     n00b_list_t(n00b_obj_bundle_extract_plan_entry_t *) entries;
 } n00b_obj_bundle_extract_plan_t;
+
+struct n00b_obj_bundle_policy_context {
+    n00b_obj_bundle_policy_scope_t          scope;
+    n00b_string_t                          *logical_path;
+    n00b_obj_bundle_artifact_kind_t         artifact_kind;
+    n00b_obj_bundle_exec_selection_source_t selection_source;
+    bool                                    overwrite;
+    bool                                    create_dirs;
+    bool                                    inherit_env;
+    bool                                    strict_selector;
+    n00b_obj_bundle_exec_mode_t             requested_mode;
+    n00b_obj_bundle_policy_mode_t           policy_mode;
+};
 
 static n00b_obj_bundle_error_t *
 _n00b_obj_bundle_error_new(n00b_obj_bundle_error_code_t code,
@@ -1091,10 +1129,27 @@ _n00b_obj_bundle_find_mapping_by_selector(n00b_obj_bundle_t *bundle,
 }
 
 static bool
+_n00b_obj_bundle_policy_kind_is_known(n00b_obj_bundle_policy_kind_t kind)
+{
+    return kind == N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT
+           || kind == N00B_OBJ_BUNDLE_POLICY_KIND_DECLARATIVE_V1
+           || kind == N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B;
+}
+
+static bool
 _n00b_obj_bundle_policy_kind_is_supported(n00b_obj_bundle_policy_kind_t kind)
 {
     return kind == N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT
            || kind == N00B_OBJ_BUNDLE_POLICY_KIND_DECLARATIVE_V1;
+}
+
+static bool
+_n00b_obj_bundle_extraction_policy_kind_is_supported(
+    n00b_obj_bundle_policy_kind_t kind)
+{
+    return kind == N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT
+           || kind == N00B_OBJ_BUNDLE_POLICY_KIND_DECLARATIVE_V1
+           || kind == N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B;
 }
 
 static bool
@@ -1210,6 +1265,83 @@ _n00b_obj_bundle_declarative_policy_payload_is_valid(
 }
 
 static bool
+_n00b_obj_bundle_utf8_bytes_are_valid(const uint8_t *data, uint64_t len)
+{
+    if (data == nullptr || len > UINT32_MAX) {
+        return false;
+    }
+
+    return n00b_unicode_utf8_validate((const char *)data, (uint32_t)len);
+}
+
+static bool
+_n00b_obj_bundle_embedded_policy_payload_is_valid(
+    const n00b_buffer_t *payload,
+    uint64_t             fallback_policy_id)
+{
+    if (payload == nullptr
+        || payload->byte_len < N00B_OBJ_BUNDLE_EMBEDDED_POLICY_HEADER_SIZE) {
+        return false;
+    }
+
+    const uint8_t *data = (const uint8_t *)payload->data;
+
+    if (memcmp(data,
+               N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC,
+               N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC_LEN) != 0) {
+        return false;
+    }
+
+    uint16_t major = _n00b_obj_bundle_le16_at(data, 8);
+    uint16_t minor = _n00b_obj_bundle_le16_at(data, 10);
+    uint32_t reserved0 =
+        _n00b_obj_bundle_le32_at(
+            data,
+            N00B_OBJ_BUNDLE_EMBEDDED_POLICY_RESERVED0_OFF);
+    uint64_t compat_flags =
+        _n00b_obj_bundle_le64_at(
+            data,
+            N00B_OBJ_BUNDLE_EMBEDDED_POLICY_COMPAT_FLAGS_OFF);
+    uint64_t payload_fallback_id =
+        _n00b_obj_bundle_le64_at(
+            data,
+            N00B_OBJ_BUNDLE_EMBEDDED_POLICY_FALLBACK_ID_OFF);
+    uint64_t source_len =
+        _n00b_obj_bundle_le64_at(
+            data,
+            N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_LEN_OFF);
+    uint64_t reserved1 =
+        _n00b_obj_bundle_le64_at(
+            data,
+            N00B_OBJ_BUNDLE_EMBEDDED_POLICY_RESERVED1_OFF);
+
+    if (source_len == 0
+        || source_len > UINT64_MAX
+                            - N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF) {
+        return false;
+    }
+
+    uint64_t expected_len =
+        N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF + source_len;
+
+    if (expected_len != (uint64_t)payload->byte_len) {
+        return false;
+    }
+
+    return major == N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAJOR
+           && minor == N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MINOR
+           && reserved0 == 0
+           && (compat_flags
+               & ~N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SUPPORTED_COMPAT_FLAGS)
+                  == 0
+           && payload_fallback_id == fallback_policy_id
+           && reserved1 == 0
+           && _n00b_obj_bundle_utf8_bytes_are_valid(
+               data + N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF,
+               source_len);
+}
+
+static bool
 _n00b_obj_bundle_policy_payload_is_valid(n00b_obj_bundle_policy_kind_t kind,
                                          const n00b_buffer_t          *payload,
                                          uint64_t fallback_policy_id)
@@ -1224,7 +1356,588 @@ _n00b_obj_bundle_policy_payload_is_valid(n00b_obj_bundle_policy_kind_t kind,
             fallback_policy_id);
     }
 
+    if (kind == N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B) {
+        return _n00b_obj_bundle_embedded_policy_payload_is_valid(
+            payload,
+            fallback_policy_id);
+    }
+
     return false;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_embedded_policy_error(
+    n00b_obj_bundle_error_code_t       code,
+    n00b_string_t                     *message,
+    n00b_obj_bundle_policy_scope_t     scope,
+    n00b_obj_bundle_policy_context_t  *context,
+    int64_t                            detail,
+    bool                               has_detail,
+    n00b_allocator_t                  *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_new(code, message, allocator);
+
+    error->policy_kind      = N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B;
+    error->has_policy_kind  = true;
+    error->policy_scope     = scope;
+    error->has_policy_scope = true;
+
+    if (has_detail) {
+        error->detail     = detail;
+        error->has_detail = true;
+    }
+
+    if (context != nullptr && context->logical_path != nullptr) {
+        error->logical_path     = context->logical_path;
+        error->has_logical_path = true;
+    }
+
+    return error;
+}
+
+static n00b_result_t(n00b_string_t *)
+_n00b_obj_bundle_embedded_policy_source(
+    const n00b_buffer_t               *payload,
+    uint64_t                           fallback_policy_id,
+    n00b_obj_bundle_policy_scope_t     scope,
+    n00b_obj_bundle_policy_context_t  *context,
+    n00b_allocator_t                  *allocator)
+{
+    if (!_n00b_obj_bundle_embedded_policy_payload_is_valid(
+            payload,
+            fallback_policy_id)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_string_t *,
+            _n00b_obj_bundle_embedded_policy_error(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid embedded policy payload",
+                scope,
+                context,
+                0,
+                false,
+                allocator));
+    }
+
+    const uint8_t *data = (const uint8_t *)payload->data;
+    uint64_t       source_len =
+        _n00b_obj_bundle_le64_at(
+            data,
+            N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_LEN_OFF);
+
+    return n00b_result_ok(
+        n00b_string_t *,
+        n00b_string_from_raw(
+            (const char *)data + N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF,
+            (int64_t)source_len,
+            .allocator = allocator));
+}
+
+static bool
+_n00b_obj_bundle_embedded_policy_source_has_expression_start(
+    n00b_string_t *source)
+{
+    if (source == nullptr || source->data == nullptr) {
+        return false;
+    }
+
+    for (size_t i = 0; i < source->u8_bytes; i++) {
+        char ch = source->data[i];
+
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
+            continue;
+        }
+
+        return ch != ';' && ch != '}' && ch != '@';
+    }
+
+    return false;
+}
+
+static n00b_obj_bundle_policy_context_t *
+_n00b_obj_bundle_policy_context_new(
+    n00b_obj_bundle_policy_scope_t          scope,
+    n00b_string_t                          *logical_path,
+    n00b_obj_bundle_artifact_kind_t         artifact_kind,
+    n00b_obj_bundle_exec_selection_source_t selection_source,
+    bool                                    overwrite,
+    bool                                    create_dirs,
+    bool                                    inherit_env,
+    bool                                    strict_selector,
+    n00b_obj_bundle_exec_mode_t             requested_mode,
+    n00b_obj_bundle_policy_mode_t           policy_mode,
+    n00b_allocator_t                       *allocator)
+{
+    n00b_obj_bundle_policy_context_t *context =
+        n00b_alloc_with_opts(
+            n00b_obj_bundle_policy_context_t,
+            &(n00b_alloc_opts_t){
+                .allocator = allocator,
+                .scan_kind = N00B_GC_SCAN_KIND_ALL,
+            });
+
+    context->scope            = scope;
+    context->logical_path     =
+        _n00b_obj_bundle_copy_string(logical_path, allocator);
+    context->artifact_kind    = artifact_kind;
+    context->selection_source = selection_source;
+    context->overwrite        = overwrite;
+    context->create_dirs      = create_dirs;
+    context->inherit_env      = inherit_env;
+    context->strict_selector  = strict_selector;
+    context->requested_mode   = requested_mode;
+    context->policy_mode      = policy_mode;
+
+    return context;
+}
+
+n00b_obj_bundle_policy_context_t *
+n00b_obj_bundle_policy_context_for_extraction(
+    n00b_string_t                    *logical_path,
+    n00b_obj_bundle_artifact_kind_t   artifact_kind) _kargs
+{
+    bool                         overwrite   = false;
+    bool                         create_dirs = true;
+    n00b_obj_bundle_policy_mode_t policy_mode =
+        N00B_OBJ_BUNDLE_POLICY_ENFORCE;
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return _n00b_obj_bundle_policy_context_new(
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXTRACTION,
+        logical_path,
+        artifact_kind,
+        N00B_OBJ_BUNDLE_EXEC_SELECTION_NONE,
+        overwrite,
+        create_dirs,
+        false,
+        false,
+        N00B_OBJ_BUNDLE_EXEC_AUTO,
+        policy_mode,
+        allocator);
+}
+
+n00b_obj_bundle_policy_context_t *
+n00b_obj_bundle_policy_context_for_execution(
+    n00b_string_t                           *logical_path,
+    n00b_obj_bundle_artifact_kind_t          artifact_kind) _kargs
+{
+    n00b_obj_bundle_exec_selection_source_t selection_source =
+        N00B_OBJ_BUNDLE_EXEC_SELECTION_DEFAULT;
+    bool                         inherit_env     = true;
+    bool                         strict_selector = false;
+    n00b_obj_bundle_exec_mode_t  requested_mode  = N00B_OBJ_BUNDLE_EXEC_AUTO;
+    n00b_obj_bundle_policy_mode_t policy_mode =
+        N00B_OBJ_BUNDLE_POLICY_ENFORCE;
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return _n00b_obj_bundle_policy_context_new(
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+        logical_path,
+        artifact_kind,
+        selection_source,
+        false,
+        false,
+        inherit_env,
+        strict_selector,
+        requested_mode,
+        policy_mode,
+        allocator);
+}
+
+int64_t
+n00b_obj_bundle_policy_context_scope(
+    n00b_obj_bundle_policy_context_t *context)
+{
+    if (context == nullptr) {
+        return 0;
+    }
+
+    return (int64_t)context->scope;
+}
+
+n00b_string_t *
+n00b_obj_bundle_policy_context_logical_path(
+    n00b_obj_bundle_policy_context_t *context)
+{
+    if (context == nullptr || context->logical_path == nullptr) {
+        return r"";
+    }
+
+    return context->logical_path;
+}
+
+int64_t
+n00b_obj_bundle_policy_context_artifact_kind(
+    n00b_obj_bundle_policy_context_t *context)
+{
+    if (context == nullptr) {
+        return 0;
+    }
+
+    return (int64_t)context->artifact_kind;
+}
+
+int64_t
+n00b_obj_bundle_policy_context_selection_source(
+    n00b_obj_bundle_policy_context_t *context)
+{
+    if (context == nullptr) {
+        return 0;
+    }
+
+    return (int64_t)context->selection_source;
+}
+
+bool
+n00b_obj_bundle_policy_context_overwrite(
+    n00b_obj_bundle_policy_context_t *context)
+{
+    return context != nullptr && context->overwrite;
+}
+
+bool
+n00b_obj_bundle_policy_context_create_dirs(
+    n00b_obj_bundle_policy_context_t *context)
+{
+    return context != nullptr && context->create_dirs;
+}
+
+bool
+n00b_obj_bundle_policy_context_inherit_env(
+    n00b_obj_bundle_policy_context_t *context)
+{
+    return context != nullptr && context->inherit_env;
+}
+
+bool
+n00b_obj_bundle_policy_context_strict_selector(
+    n00b_obj_bundle_policy_context_t *context)
+{
+    return context != nullptr && context->strict_selector;
+}
+
+int64_t
+n00b_obj_bundle_policy_context_requested_mode(
+    n00b_obj_bundle_policy_context_t *context)
+{
+    if (context == nullptr) {
+        return 0;
+    }
+
+    return (int64_t)context->requested_mode;
+}
+
+int64_t
+n00b_obj_bundle_policy_context_policy_mode(
+    n00b_obj_bundle_policy_context_t *context)
+{
+    if (context == nullptr) {
+        return 0;
+    }
+
+    return (int64_t)context->policy_mode;
+}
+
+static bool s_obj_bundle_policy_context_type_registered = false;
+
+void
+n00b_obj_bundle_policy_context_type_register(void)
+{
+    if (s_obj_bundle_policy_context_type_registered) {
+        return;
+    }
+
+    (void)N00B_TYPE_REGISTER(
+        n00b_obj_bundle_policy_context_t,
+        N00B_TYPE_STATIC_TRANSIENT(
+            r"object-bundle policy contexts are predicate-scoped"));
+
+    uint64_t th = typehash(n00b_obj_bundle_policy_context_t *);
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)n00b_obj_bundle_policy_context_scope,
+        .name        = "scope",
+        .return_type = {
+            .type_hash = typehash(int64_t),
+            .type_name = "i64",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)
+            n00b_obj_bundle_policy_context_logical_path,
+        .name        = "logical_path",
+        .return_type = {
+            .type_hash = typehash(n00b_string_t *),
+            .type_name = "string",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)
+            n00b_obj_bundle_policy_context_artifact_kind,
+        .name        = "artifact_kind",
+        .return_type = {
+            .type_hash = typehash(int64_t),
+            .type_name = "i64",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)
+            n00b_obj_bundle_policy_context_selection_source,
+        .name        = "selection_source",
+        .return_type = {
+            .type_hash = typehash(int64_t),
+            .type_name = "i64",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)
+            n00b_obj_bundle_policy_context_overwrite,
+        .name        = "overwrite",
+        .return_type = {
+            .type_hash = typehash(bool),
+            .type_name = "bool",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)
+            n00b_obj_bundle_policy_context_create_dirs,
+        .name        = "create_dirs",
+        .return_type = {
+            .type_hash = typehash(bool),
+            .type_name = "bool",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)
+            n00b_obj_bundle_policy_context_inherit_env,
+        .name        = "inherit_env",
+        .return_type = {
+            .type_hash = typehash(bool),
+            .type_name = "bool",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)
+            n00b_obj_bundle_policy_context_strict_selector,
+        .name        = "strict_selector",
+        .return_type = {
+            .type_hash = typehash(bool),
+            .type_name = "bool",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)
+            n00b_obj_bundle_policy_context_requested_mode,
+        .name        = "requested_mode",
+        .return_type = {
+            .type_hash = typehash(int64_t),
+            .type_name = "i64",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)
+            n00b_obj_bundle_policy_context_policy_mode,
+        .name        = "policy_mode",
+        .return_type = {
+            .type_hash = typehash(int64_t),
+            .type_name = "i64",
+        },
+    });
+
+    s_obj_bundle_policy_context_type_registered = true;
+}
+
+n00b_result_t(n00b_eval_session_t *)
+n00b_obj_bundle_policy_eval_session_new(
+    n00b_obj_bundle_policy_scope_t scope) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    auto session = n00b_eval_session_new(.allocator = allocator);
+
+    if (n00b_result_is_err(session)) {
+        n00b_eval_err_t eval_err =
+            (n00b_eval_err_t)n00b_result_get_err(session);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_eval_session_t *,
+            _n00b_obj_bundle_embedded_policy_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                n00b_eval_err_str(eval_err),
+                scope,
+                nullptr,
+                (int64_t)eval_err,
+                true,
+                allocator));
+    }
+
+    n00b_obj_bundle_policy_context_type_register();
+
+    return session;
+}
+
+n00b_result_t(bool)
+n00b_obj_bundle_policy_evaluate_embedded(
+    n00b_eval_session_t                  *session,
+    const n00b_buffer_t                  *payload,
+    uint64_t                              fallback_policy_id,
+    n00b_obj_bundle_policy_scope_t        scope,
+    n00b_obj_bundle_policy_context_t     *context) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (context == nullptr || !_n00b_obj_bundle_policy_scope_is_valid(scope)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_embedded_policy_error(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid embedded policy evaluation argument",
+                scope,
+                context,
+                0,
+                false,
+                allocator));
+    }
+
+    auto source = _n00b_obj_bundle_embedded_policy_source(
+        payload,
+        fallback_policy_id,
+        scope,
+        context,
+        allocator);
+
+    if (n00b_result_is_err(source)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *, source));
+    }
+
+    n00b_string_t *source_text = n00b_result_get(source);
+
+    if (!_n00b_obj_bundle_embedded_policy_source_has_expression_start(
+            source_text)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_embedded_policy_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                n00b_eval_err_str(N00B_EVAL_ERR_PARSE),
+                scope,
+                context,
+                (int64_t)N00B_EVAL_ERR_PARSE,
+                true,
+                allocator));
+    }
+
+    n00b_eval_session_t *eval_session = session;
+    bool                 owns_session = false;
+
+    if (eval_session == nullptr) {
+        auto create = n00b_obj_bundle_policy_eval_session_new(
+            scope,
+            .allocator = allocator);
+
+        if (n00b_result_is_err(create)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            create));
+        }
+
+        eval_session = n00b_result_get(create);
+        owns_session = true;
+    }
+    else {
+        n00b_obj_bundle_policy_context_type_register();
+    }
+
+    auto compiled = n00b_eval_compile_predicate(
+        eval_session,
+        source_text,
+        r"n00b_obj_bundle_policy_context_t",
+        .allocator = allocator);
+
+    if (n00b_result_is_err(compiled)) {
+        n00b_eval_err_t eval_err =
+            (n00b_eval_err_t)n00b_result_get_err(compiled);
+
+        n00b_result_t(bool) result = OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_embedded_policy_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                n00b_eval_err_str(eval_err),
+                scope,
+                context,
+                (int64_t)eval_err,
+                true,
+                allocator));
+
+        if (owns_session) {
+            n00b_eval_session_free(eval_session);
+        }
+
+        return result;
+    }
+
+    n00b_eval_predicate_fn_t fn = n00b_result_get(compiled);
+
+    if (fn == nullptr) {
+        n00b_result_t(bool) result = OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_embedded_policy_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: embedded policy predicate is null",
+                scope,
+                context,
+                (int64_t)N00B_EVAL_ERR_JIT,
+                true,
+                allocator));
+
+        if (owns_session) {
+            n00b_eval_session_free(eval_session);
+        }
+
+        return result;
+    }
+
+    bool allowed = fn((void *)context);
+
+    if (!allowed) {
+        n00b_result_t(bool) result = OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_embedded_policy_error(
+                N00B_OBJ_BUNDLE_ERR_POLICY_DENIED,
+                r"object bundle: embedded policy denied operation",
+                scope,
+                context,
+                0,
+                true,
+                allocator));
+
+        if (owns_session) {
+            n00b_eval_session_free(eval_session);
+        }
+
+        return result;
+    }
+
+    if (owns_session) {
+        n00b_eval_session_free(eval_session);
+    }
+
+    return n00b_result_ok(bool, true);
 }
 
 static bool
@@ -1537,6 +2250,76 @@ _n00b_obj_bundle_policy_payload_is_supported(
                policy->fallback_policy_id);
 }
 
+static bool
+_n00b_obj_bundle_extraction_policy_payload_is_supported(
+    n00b_obj_bundle_policy_t *policy)
+{
+    return policy != nullptr
+           && _n00b_obj_bundle_extraction_policy_kind_is_supported(
+               policy->kind)
+           && _n00b_obj_bundle_policy_payload_is_valid(
+               policy->kind,
+               policy->payload,
+               policy->fallback_policy_id);
+}
+
+static bool
+_n00b_obj_bundle_execution_policy_kind_is_supported(
+    n00b_obj_bundle_policy_kind_t kind)
+{
+    return kind == N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT
+           || kind == N00B_OBJ_BUNDLE_POLICY_KIND_DECLARATIVE_V1
+           || kind == N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B;
+}
+
+static bool
+_n00b_obj_bundle_execution_policy_payload_is_supported(
+    n00b_obj_bundle_policy_t *policy)
+{
+    return policy != nullptr
+           && _n00b_obj_bundle_execution_policy_kind_is_supported(
+               policy->kind)
+           && _n00b_obj_bundle_policy_payload_is_valid(
+               policy->kind,
+               policy->payload,
+               policy->fallback_policy_id);
+}
+
+static void
+_n00b_obj_bundle_extract_policy_set_builtin_fallback(
+    n00b_obj_bundle_extract_policy_t *policy)
+{
+    policy->kind = N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT;
+    policy->scope                   = N00B_OBJ_BUNDLE_POLICY_SCOPE_EXTRACTION;
+    policy->fallback_used           = true;
+    policy->can_fallback_to_builtin = false;
+    policy->policy_id               = N00B_OBJ_BUNDLE_POLICY_ID_NONE;
+    policy->flags                   = N00B_OBJ_BUNDLE_POLICY_F_REQUIRED;
+    policy->priority                = 0;
+    policy->fallback_policy_id      = N00B_OBJ_BUNDLE_POLICY_ID_NONE;
+    policy->payload                 = nullptr;
+    policy->path_flags              = N00B_OBJ_BUNDLE_DECL_PATH_DEFAULT;
+    policy->artifact_kind_mask      = N00B_OBJ_BUNDLE_DECL_ARTIFACT_KIND_DEFAULT;
+    policy->execution_flags         = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
+}
+
+static void
+_n00b_obj_bundle_exec_policy_set_builtin_fallback(
+    n00b_obj_bundle_exec_policy_t *policy)
+{
+    policy->kind =
+        N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT;
+    policy->scope                   = N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION;
+    policy->fallback_used           = true;
+    policy->can_fallback_to_builtin = false;
+    policy->policy_id               = N00B_OBJ_BUNDLE_POLICY_ID_NONE;
+    policy->flags                   = N00B_OBJ_BUNDLE_POLICY_F_REQUIRED;
+    policy->priority                = 0;
+    policy->fallback_policy_id      = N00B_OBJ_BUNDLE_POLICY_ID_NONE;
+    policy->payload                 = nullptr;
+    policy->execution_flags         = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
+}
+
 static n00b_obj_bundle_policy_t *
 _n00b_obj_bundle_extraction_policy_fallback(
     n00b_obj_bundle_t        *bundle,
@@ -1612,8 +2395,11 @@ _n00b_obj_bundle_select_extraction_policy(n00b_obj_bundle_t *bundle,
         }
 
         if (!_n00b_obj_bundle_policy_applies_to_extraction(policy)) {
-            if (_n00b_obj_bundle_policy_kind_is_supported(policy->kind)
-                && !_n00b_obj_bundle_policy_payload_is_supported(policy)) {
+            if (_n00b_obj_bundle_policy_kind_is_known(policy->kind)
+                && !_n00b_obj_bundle_policy_payload_is_valid(
+                    policy->kind,
+                    policy->payload,
+                    policy->fallback_policy_id)) {
                 return OBJ_BUNDLE_ERR_PAYLOAD(
                     n00b_obj_bundle_extract_policy_t *,
                     _n00b_obj_bundle_error_with_policy(
@@ -1631,7 +2417,24 @@ _n00b_obj_bundle_select_extraction_policy(n00b_obj_bundle_t *bundle,
         n00b_obj_bundle_policy_t *fallback =
             _n00b_obj_bundle_extraction_policy_fallback(bundle, policy);
 
-        if (!_n00b_obj_bundle_policy_kind_is_supported(policy->kind)) {
+        if (!_n00b_obj_bundle_extraction_policy_kind_is_supported(
+                policy->kind)) {
+            if (_n00b_obj_bundle_policy_kind_is_known(policy->kind)
+                && !_n00b_obj_bundle_policy_payload_is_valid(
+                    policy->kind,
+                    policy->payload,
+                    policy->fallback_policy_id)) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_extract_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                        r"object bundle: invalid extraction policy payload",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+
             if ((policy->flags & N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL) == 0
                 || fallback == nullptr) {
                 return OBJ_BUNDLE_ERR_PAYLOAD(
@@ -1653,7 +2456,19 @@ _n00b_obj_bundle_select_extraction_policy(n00b_obj_bundle_t *bundle,
             continue;
         }
 
-        if (!_n00b_obj_bundle_policy_payload_is_supported(policy)) {
+        if (!_n00b_obj_bundle_extraction_policy_payload_is_supported(policy)) {
+            if (policy->kind == N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_extract_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                        r"object bundle: invalid embedded extraction policy",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+
             if (fallback == nullptr) {
                 return OBJ_BUNDLE_ERR_PAYLOAD(
                     n00b_obj_bundle_extract_policy_t *,
@@ -1698,6 +2513,12 @@ _n00b_obj_bundle_select_extraction_policy(n00b_obj_bundle_t *bundle,
 
     policy->scope              = N00B_OBJ_BUNDLE_POLICY_SCOPE_EXTRACTION;
     policy->fallback_used      = false;
+    policy->can_fallback_to_builtin = false;
+    policy->policy_id          = N00B_OBJ_BUNDLE_POLICY_ID_NONE;
+    policy->flags              = N00B_OBJ_BUNDLE_POLICY_F_REQUIRED;
+    policy->priority           = 0;
+    policy->fallback_policy_id = N00B_OBJ_BUNDLE_POLICY_ID_NONE;
+    policy->payload            = nullptr;
     policy->path_flags         = N00B_OBJ_BUNDLE_DECL_PATH_DEFAULT;
     policy->artifact_kind_mask = N00B_OBJ_BUNDLE_DECL_ARTIFACT_KIND_DEFAULT;
     policy->execution_flags    = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
@@ -1710,17 +2531,22 @@ _n00b_obj_bundle_select_extraction_policy(n00b_obj_bundle_t *bundle,
     n00b_obj_bundle_policy_t *fallback =
         _n00b_obj_bundle_extraction_policy_fallback(bundle, selected);
 
-    if (!_n00b_obj_bundle_policy_payload_is_supported(selected)
+    if (!_n00b_obj_bundle_extraction_policy_payload_is_supported(selected)
         && fallback != nullptr) {
-        policy->kind               = fallback->kind;
-        policy->fallback_used      = true;
-        policy->path_flags         = N00B_OBJ_BUNDLE_DECL_PATH_DEFAULT;
-        policy->artifact_kind_mask = N00B_OBJ_BUNDLE_DECL_ARTIFACT_KIND_DEFAULT;
-        policy->execution_flags    = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
+        _n00b_obj_bundle_extract_policy_set_builtin_fallback(policy);
         return n00b_result_ok(n00b_obj_bundle_extract_policy_t *, policy);
     }
 
-    policy->kind = selected->kind;
+    policy->kind                    = selected->kind;
+    policy->policy_id               = selected->policy_id;
+    policy->flags                   = selected->flags;
+    policy->priority                = selected->priority;
+    policy->fallback_policy_id      = selected->fallback_policy_id;
+    policy->payload                 = selected->payload;
+    policy->can_fallback_to_builtin = fallback != nullptr
+                                      && (selected->flags
+                                          & N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL)
+                                             != 0;
 
     if (selected->kind == N00B_OBJ_BUNDLE_POLICY_KIND_DECLARATIVE_V1) {
         _n00b_obj_bundle_declarative_policy_fields(selected, policy);
@@ -1812,8 +2638,11 @@ _n00b_obj_bundle_select_execution_policy(n00b_obj_bundle_t *bundle,
         }
 
         if (!_n00b_obj_bundle_policy_applies_to_execution(policy)) {
-            if (_n00b_obj_bundle_policy_kind_is_supported(policy->kind)
-                && !_n00b_obj_bundle_policy_payload_is_supported(policy)) {
+            if (_n00b_obj_bundle_policy_kind_is_known(policy->kind)
+                && !_n00b_obj_bundle_policy_payload_is_valid(
+                    policy->kind,
+                    policy->payload,
+                    policy->fallback_policy_id)) {
                 return OBJ_BUNDLE_ERR_PAYLOAD(
                     n00b_obj_bundle_exec_policy_t *,
                     _n00b_obj_bundle_error_with_policy(
@@ -1831,7 +2660,24 @@ _n00b_obj_bundle_select_execution_policy(n00b_obj_bundle_t *bundle,
         n00b_obj_bundle_policy_t *fallback =
             _n00b_obj_bundle_execution_policy_fallback(bundle, policy);
 
-        if (!_n00b_obj_bundle_policy_kind_is_supported(policy->kind)) {
+        if (!_n00b_obj_bundle_execution_policy_kind_is_supported(
+                policy->kind)) {
+            if (_n00b_obj_bundle_policy_kind_is_known(policy->kind)
+                && !_n00b_obj_bundle_policy_payload_is_valid(
+                    policy->kind,
+                    policy->payload,
+                    policy->fallback_policy_id)) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_exec_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                        r"object bundle: invalid execution policy payload",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+
             if ((policy->flags & N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL) == 0
                 || fallback == nullptr) {
                 return OBJ_BUNDLE_ERR_PAYLOAD(
@@ -1853,7 +2699,19 @@ _n00b_obj_bundle_select_execution_policy(n00b_obj_bundle_t *bundle,
             continue;
         }
 
-        if (!_n00b_obj_bundle_policy_payload_is_supported(policy)) {
+        if (!_n00b_obj_bundle_execution_policy_payload_is_supported(policy)) {
+            if (policy->kind == N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_exec_policy_t *,
+                    _n00b_obj_bundle_error_with_policy(
+                        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                        r"object bundle: invalid embedded execution policy",
+                        policy->kind,
+                        policy->scope,
+                        policy->policy_id,
+                        allocator));
+            }
+
             if (fallback == nullptr) {
                 return OBJ_BUNDLE_ERR_PAYLOAD(
                     n00b_obj_bundle_exec_policy_t *,
@@ -1896,9 +2754,15 @@ _n00b_obj_bundle_select_execution_policy(n00b_obj_bundle_t *bundle,
         n00b_alloc_with_opts(n00b_obj_bundle_exec_policy_t,
                              &(n00b_alloc_opts_t){.allocator = allocator});
 
-    policy->scope           = N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION;
-    policy->fallback_used   = false;
-    policy->execution_flags = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
+    policy->scope                   = N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION;
+    policy->fallback_used           = false;
+    policy->can_fallback_to_builtin = false;
+    policy->policy_id               = N00B_OBJ_BUNDLE_POLICY_ID_NONE;
+    policy->flags                   = N00B_OBJ_BUNDLE_POLICY_F_REQUIRED;
+    policy->priority                = 0;
+    policy->fallback_policy_id      = N00B_OBJ_BUNDLE_POLICY_ID_NONE;
+    policy->payload                 = nullptr;
+    policy->execution_flags         = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
 
     if (selected == nullptr) {
         policy->kind = N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT;
@@ -1908,15 +2772,22 @@ _n00b_obj_bundle_select_execution_policy(n00b_obj_bundle_t *bundle,
     n00b_obj_bundle_policy_t *fallback =
         _n00b_obj_bundle_execution_policy_fallback(bundle, selected);
 
-    if (!_n00b_obj_bundle_policy_payload_is_supported(selected)
+    if (!_n00b_obj_bundle_execution_policy_payload_is_supported(selected)
         && fallback != nullptr) {
-        policy->kind            = fallback->kind;
-        policy->fallback_used   = true;
-        policy->execution_flags = N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT;
+        _n00b_obj_bundle_exec_policy_set_builtin_fallback(policy);
         return n00b_result_ok(n00b_obj_bundle_exec_policy_t *, policy);
     }
 
-    policy->kind = selected->kind;
+    policy->kind                    = selected->kind;
+    policy->policy_id               = selected->policy_id;
+    policy->flags                   = selected->flags;
+    policy->priority                = selected->priority;
+    policy->fallback_policy_id      = selected->fallback_policy_id;
+    policy->payload                 = selected->payload;
+    policy->can_fallback_to_builtin = fallback != nullptr
+                                      && (selected->flags
+                                          & N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL)
+                                             != 0;
 
     if (selected->kind == N00B_OBJ_BUNDLE_POLICY_KIND_DECLARATIVE_V1) {
         const uint8_t *data = (const uint8_t *)selected->payload->data;
@@ -1962,6 +2833,28 @@ _n00b_obj_bundle_exec_policy_denied(
 
         error->artifact_id     = artifact->id;
         error->has_artifact_id = true;
+    }
+
+    return error;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_exec_attach_selected_error(
+    n00b_obj_bundle_error_t       *error,
+    n00b_obj_bundle_artifact_t    *artifact)
+{
+    error = _n00b_obj_bundle_error_mark_execution(error);
+
+    if (error != nullptr && artifact != nullptr) {
+        if (!error->has_logical_path) {
+            error->logical_path     = artifact->logical_path;
+            error->has_logical_path = artifact->logical_path != nullptr;
+        }
+
+        if (!error->has_artifact_id) {
+            error->artifact_id     = artifact->id;
+            error->has_artifact_id = true;
+        }
     }
 
     return error;
@@ -2109,6 +3002,301 @@ _n00b_obj_bundle_extract_planner_error(
     }
 
     return error;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_extract_attach_artifact_error(
+    n00b_obj_bundle_error_t          *error,
+    n00b_obj_bundle_artifact_t       *artifact,
+    n00b_string_t                    *destination_root,
+    n00b_obj_bundle_extract_result_t *facts)
+{
+    error = _n00b_obj_bundle_error_attach_extract_result(error,
+                                                         destination_root,
+                                                         facts);
+
+    if (error != nullptr && artifact != nullptr) {
+        if (!error->has_logical_path) {
+            error->logical_path     = artifact->logical_path;
+            error->has_logical_path = artifact->logical_path != nullptr;
+        }
+
+        if (!error->has_artifact_id) {
+            error->artifact_id     = artifact->id;
+            error->has_artifact_id = true;
+        }
+    }
+
+    return error;
+}
+
+static bool
+_n00b_obj_bundle_embedded_failure_can_fallback(
+    n00b_obj_bundle_extract_policy_t *policy,
+    n00b_obj_bundle_error_t          *error)
+{
+    return policy != nullptr
+           && policy->kind == N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B
+           && policy->can_fallback_to_builtin
+           && error != nullptr
+           && error->code == N00B_OBJ_BUNDLE_ERR_BUILD;
+}
+
+static bool
+_n00b_obj_bundle_exec_embedded_failure_can_fallback(
+    n00b_obj_bundle_exec_policy_t *policy,
+    n00b_obj_bundle_error_t       *error)
+{
+    return policy != nullptr
+           && policy->kind == N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B
+           && policy->can_fallback_to_builtin
+           && error != nullptr
+           && error->code == N00B_OBJ_BUNDLE_ERR_BUILD;
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_exec_evaluate_embedded_policy(
+    n00b_obj_bundle_exec_policy_t             *policy,
+    n00b_obj_bundle_artifact_t                *artifact,
+    n00b_obj_bundle_exec_selection_source_t    selection_source,
+    bool                                       inherit_env,
+    bool                                       strict_selector,
+    n00b_obj_bundle_exec_mode_t                requested_mode,
+    n00b_obj_bundle_policy_mode_t              policy_mode,
+    n00b_allocator_t                          *allocator)
+{
+    if (policy->kind != N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B) {
+        return n00b_result_ok(bool, true);
+    }
+
+    n00b_obj_bundle_policy_context_t *context =
+        n00b_obj_bundle_policy_context_for_execution(
+            artifact->logical_path,
+            artifact->kind,
+            .selection_source = selection_source,
+            .inherit_env = inherit_env,
+            .strict_selector = strict_selector,
+            .requested_mode = requested_mode,
+            .policy_mode = policy_mode,
+            .allocator = allocator);
+
+    auto source = _n00b_obj_bundle_embedded_policy_source(
+        policy->payload,
+        policy->fallback_policy_id,
+        policy->scope,
+        context,
+        allocator);
+
+    if (n00b_result_is_err(source)) {
+        n00b_obj_bundle_error_t *error =
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        source);
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_exec_attach_selected_error(error, artifact));
+    }
+
+    n00b_string_t *source_text = n00b_result_get(source);
+
+    if (!_n00b_obj_bundle_embedded_policy_source_has_expression_start(
+            source_text)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_embedded_policy_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                n00b_eval_err_str(N00B_EVAL_ERR_PARSE),
+                policy->scope,
+                context,
+                (int64_t)N00B_EVAL_ERR_PARSE,
+                true,
+                allocator);
+
+        if (_n00b_obj_bundle_exec_embedded_failure_can_fallback(policy,
+                                                                error)) {
+            _n00b_obj_bundle_exec_policy_set_builtin_fallback(policy);
+            return n00b_result_ok(bool, true);
+        }
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_exec_attach_selected_error(error, artifact));
+    }
+
+    auto session_result =
+        n00b_obj_bundle_policy_eval_session_new(policy->scope,
+                                                .allocator = allocator);
+
+    if (n00b_result_is_err(session_result)) {
+        n00b_obj_bundle_error_t *error =
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        session_result);
+
+        if (_n00b_obj_bundle_exec_embedded_failure_can_fallback(policy,
+                                                                error)) {
+            _n00b_obj_bundle_exec_policy_set_builtin_fallback(policy);
+            return n00b_result_ok(bool, true);
+        }
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_exec_attach_selected_error(error, artifact));
+    }
+
+    n00b_eval_session_t *session = n00b_result_get(session_result);
+    auto eval_result =
+        n00b_obj_bundle_policy_evaluate_embedded(session,
+                                                 policy->payload,
+                                                 policy->fallback_policy_id,
+                                                 policy->scope,
+                                                 context,
+                                                 .allocator = allocator);
+    n00b_eval_session_free(session);
+
+    if (n00b_result_is_ok(eval_result)) {
+        return n00b_result_ok(bool, true);
+    }
+
+    n00b_obj_bundle_error_t *error =
+        n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                    eval_result);
+
+    if (_n00b_obj_bundle_exec_embedded_failure_can_fallback(policy, error)) {
+        _n00b_obj_bundle_exec_policy_set_builtin_fallback(policy);
+        return n00b_result_ok(bool, true);
+    }
+
+    return OBJ_BUNDLE_ERR_PAYLOAD(
+        bool,
+        _n00b_obj_bundle_exec_attach_selected_error(error, artifact));
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_extract_evaluate_embedded_policy(
+    n00b_obj_bundle_extract_policy_t   *policy,
+    n00b_obj_bundle_artifact_t         *artifact,
+    n00b_string_t                      *destination_root,
+    n00b_obj_bundle_extract_result_t   *facts,
+    n00b_eval_session_t               **session,
+    n00b_allocator_t                   *allocator)
+{
+    if (policy->kind != N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B) {
+        return n00b_result_ok(bool, true);
+    }
+
+    n00b_obj_bundle_policy_context_t *context =
+        n00b_obj_bundle_policy_context_for_extraction(
+            artifact->logical_path,
+            artifact->kind,
+            .overwrite = facts->overwrite,
+            .create_dirs = facts->create_dirs,
+            .policy_mode = facts->policy_mode,
+            .allocator = allocator);
+
+    if (*session == nullptr) {
+        auto source = _n00b_obj_bundle_embedded_policy_source(
+            policy->payload,
+            policy->fallback_policy_id,
+            policy->scope,
+            context,
+            allocator);
+
+        if (n00b_result_is_err(source)) {
+            n00b_obj_bundle_error_t *error =
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            source);
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_attach_artifact_error(
+                    error,
+                    artifact,
+                    destination_root,
+                    facts));
+        }
+
+        n00b_string_t *source_text = n00b_result_get(source);
+
+        if (!_n00b_obj_bundle_embedded_policy_source_has_expression_start(
+                source_text)) {
+            n00b_obj_bundle_error_t *error =
+                _n00b_obj_bundle_embedded_policy_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    n00b_eval_err_str(N00B_EVAL_ERR_PARSE),
+                    policy->scope,
+                    context,
+                    (int64_t)N00B_EVAL_ERR_PARSE,
+                    true,
+                    allocator);
+
+            if (_n00b_obj_bundle_embedded_failure_can_fallback(policy,
+                                                               error)) {
+                _n00b_obj_bundle_extract_policy_set_builtin_fallback(policy);
+                _n00b_obj_bundle_extract_result_set_policy(facts, policy);
+                return n00b_result_ok(bool, true);
+            }
+
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_attach_artifact_error(
+                    error,
+                    artifact,
+                    destination_root,
+                    facts));
+        }
+
+        auto session_result =
+            n00b_obj_bundle_policy_eval_session_new(policy->scope,
+                                                    .allocator = allocator);
+
+        if (n00b_result_is_err(session_result)) {
+            n00b_obj_bundle_error_t *error =
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            session_result);
+
+            if (_n00b_obj_bundle_embedded_failure_can_fallback(policy,
+                                                               error)) {
+                _n00b_obj_bundle_extract_policy_set_builtin_fallback(policy);
+                _n00b_obj_bundle_extract_result_set_policy(facts, policy);
+                return n00b_result_ok(bool, true);
+            }
+
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_extract_attach_artifact_error(
+                    error,
+                    artifact,
+                    destination_root,
+                    facts));
+        }
+
+        *session = n00b_result_get(session_result);
+    }
+
+    auto eval_result =
+        n00b_obj_bundle_policy_evaluate_embedded(*session,
+                                                 policy->payload,
+                                                 policy->fallback_policy_id,
+                                                 policy->scope,
+                                                 context,
+                                                 .allocator = allocator);
+
+    if (n00b_result_is_ok(eval_result)) {
+        return n00b_result_ok(bool, true);
+    }
+
+    n00b_obj_bundle_error_t *error =
+        n00b_result_get_err_payload(n00b_obj_bundle_error_t *, eval_result);
+
+    if (_n00b_obj_bundle_embedded_failure_can_fallback(policy, error)) {
+        _n00b_obj_bundle_extract_policy_set_builtin_fallback(policy);
+        _n00b_obj_bundle_extract_result_set_policy(facts, policy);
+        return n00b_result_ok(bool, true);
+    }
+
+    return OBJ_BUNDLE_ERR_PAYLOAD(
+        bool,
+        _n00b_obj_bundle_extract_attach_artifact_error(error,
+                                                       artifact,
+                                                       destination_root,
+                                                       facts));
 }
 
 static n00b_string_t *
@@ -2405,6 +3593,7 @@ _n00b_obj_bundle_plan_extraction(n00b_obj_bundle_t                  *bundle,
                                  n00b_string_t                      *destination_root,
                                  n00b_obj_bundle_extract_policy_t   *policy,
                                  n00b_obj_bundle_extract_result_t   *facts,
+                                 n00b_eval_session_t               **policy_session,
                                  n00b_allocator_t                   *allocator)
 {
     size_t   n     = n00b_list_len(bundle->artifacts);
@@ -2521,6 +3710,22 @@ _n00b_obj_bundle_plan_extraction(n00b_obj_bundle_t                  *bundle,
                     artifact->kind,
                     true,
                     allocator));
+        }
+
+        auto policy_eval =
+            _n00b_obj_bundle_extract_evaluate_embedded_policy(
+                policy,
+                artifact,
+                destination_root,
+                facts,
+                policy_session,
+                allocator);
+
+        if (n00b_result_is_err(policy_eval)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_extract_plan_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            policy_eval));
         }
 
         if (artifact->kind == N00B_OBJ_BUNDLE_ARTIFACT_DIRECTORY) {
@@ -4169,7 +5374,7 @@ n00b_obj_bundle_add_policy(n00b_obj_bundle_t             *bundle,
 {
     if (bundle == nullptr
         || policy_id == N00B_OBJ_BUNDLE_POLICY_ID_NONE
-        || !_n00b_obj_bundle_policy_kind_is_supported(kind)
+        || !_n00b_obj_bundle_policy_kind_is_known(kind)
         || !_n00b_obj_bundle_policy_scope_is_valid(scope)) {
         return OBJ_BUNDLE_ERR(bool,
                               N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
@@ -4368,7 +5573,7 @@ _n00b_obj_bundle_validate_policies(n00b_obj_bundle_t *bundle)
         n00b_obj_bundle_policy_t *policy = n00b_list_get(bundle->policies, i);
 
         if (policy == nullptr
-            || !_n00b_obj_bundle_policy_kind_is_supported(policy->kind)
+            || !_n00b_obj_bundle_policy_kind_is_known(policy->kind)
             || !_n00b_obj_bundle_policy_scope_is_valid(policy->scope)
             || !_n00b_obj_bundle_policy_flags_are_valid(policy->flags)
             || !_n00b_obj_bundle_policy_payload_is_valid(policy->kind,
@@ -5439,7 +6644,7 @@ n00b_obj_bundle_decode(n00b_buffer_t *bundle_bytes) _kargs
         policy->kind  = (n00b_obj_bundle_policy_kind_t)kind;
         policy->scope = (n00b_obj_bundle_policy_scope_t)scope;
 
-        if (!_n00b_obj_bundle_policy_kind_is_supported(policy->kind)
+        if (!_n00b_obj_bundle_policy_kind_is_known(policy->kind)
             || !_n00b_obj_bundle_policy_scope_is_valid(policy->scope)
             || !_n00b_obj_bundle_policy_flags_are_valid(policy->flags)) {
             return OBJ_BUNDLE_ERR(n00b_obj_bundle_t *,
@@ -6464,13 +7669,17 @@ n00b_obj_bundle_extract(n00b_obj_bundle_t *bundle,
 
     _n00b_obj_bundle_extract_result_set_policy(facts, policy);
 
+    n00b_eval_session_t *policy_session = nullptr;
+
     auto plan_result = _n00b_obj_bundle_plan_extraction(bundle,
                                                         destination_root,
                                                         policy,
                                                         facts,
+                                                        &policy_session,
                                                         allocator);
 
     if (n00b_result_is_err(plan_result)) {
+        n00b_eval_session_free(policy_session);
         return OBJ_BUNDLE_ERR_PAYLOAD(
             n00b_obj_bundle_extract_result_t *,
             n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
@@ -6480,14 +7689,25 @@ n00b_obj_bundle_extract(n00b_obj_bundle_t *bundle,
     n00b_obj_bundle_extract_plan_t *plan = n00b_result_get(plan_result);
 
     if (policy_mode == N00B_OBJ_BUNDLE_POLICY_VALIDATE_ONLY) {
+        n00b_eval_session_free(policy_session);
         return n00b_result_ok(n00b_obj_bundle_extract_result_t *, facts);
     }
 
+    n00b_result_t(n00b_obj_bundle_extract_result_t *) extracted;
+
     if (!atomic) {
-        return _n00b_obj_bundle_materialize_direct(plan, facts, allocator);
+        extracted = _n00b_obj_bundle_materialize_direct(plan,
+                                                        facts,
+                                                        allocator);
+    }
+    else {
+        extracted = _n00b_obj_bundle_materialize_atomic(plan,
+                                                        facts,
+                                                        allocator);
     }
 
-    return _n00b_obj_bundle_materialize_atomic(plan, facts, allocator);
+    n00b_eval_session_free(policy_session);
+    return extracted;
 }
 
 n00b_result_t(n00b_obj_bundle_exec_plan_t *)
@@ -6686,6 +7906,23 @@ n00b_obj_bundle_exec_plan(n00b_obj_bundle_t *bundle) _kargs
         return OBJ_BUNDLE_ERR_PAYLOAD(
             n00b_obj_bundle_exec_plan_t *,
             _n00b_obj_bundle_error_mark_execution(error));
+    }
+
+    auto embedded_policy =
+        _n00b_obj_bundle_exec_evaluate_embedded_policy(policy,
+                                                       selected,
+                                                       selection_source,
+                                                       inherit_env,
+                                                       strict_selector,
+                                                       mode,
+                                                       policy_mode,
+                                                       allocator);
+
+    if (n00b_result_is_err(embedded_policy)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_exec_plan_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        embedded_policy));
     }
 
     if (!_n00b_obj_bundle_exec_mode_is_supported(mode)) {

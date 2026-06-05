@@ -23,6 +23,11 @@
 #define TEST_ELF64_SHDR_SIZE 64u
 #define TEST_SH_NAME 0u
 #define TEST_ELF_GUARD_SECTION_TYPE 0xc001u
+#define TEST_EMBEDDED_POLICY_RESERVED0_OFF    12u
+#define TEST_EMBEDDED_POLICY_COMPAT_FLAGS_OFF 16u
+#define TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF  24u
+#define TEST_EMBEDDED_POLICY_SOURCE_LEN_OFF   32u
+#define TEST_EMBEDDED_POLICY_RESERVED1_OFF    40u
 
 typedef struct test_elf_section {
     n00b_string_t *name;
@@ -138,6 +143,78 @@ make_execution_plan_bundle(void)
 }
 
 static void
+write_le16(uint8_t *data, size_t off, uint16_t value)
+{
+    data[off]     = (uint8_t)value;
+    data[off + 1] = (uint8_t)(value >> 8);
+}
+
+static void
+write_le32(uint8_t *data, size_t off, uint32_t value)
+{
+    data[off]     = (uint8_t)value;
+    data[off + 1] = (uint8_t)(value >> 8);
+    data[off + 2] = (uint8_t)(value >> 16);
+    data[off + 3] = (uint8_t)(value >> 24);
+}
+
+static void
+write_le64(uint8_t *data, size_t off, uint64_t value)
+{
+    write_le32(data, off, (uint32_t)value);
+    write_le32(data, off + 4, (uint32_t)(value >> 32));
+}
+
+static n00b_buffer_t *
+make_embedded_policy_payload(uint64_t       fallback_policy_id,
+                             n00b_buffer_t *source)
+{
+    size_t len = N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF
+                 + source->byte_len;
+    n00b_buffer_t *payload = n00b_buffer_new((int64_t)len);
+    uint8_t       *data    = (uint8_t *)payload->data;
+
+    memcpy(data,
+           N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC,
+           N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC_LEN);
+    write_le16(data, 8, N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAJOR);
+    write_le16(data, 10, N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MINOR);
+    write_le32(data, TEST_EMBEDDED_POLICY_RESERVED0_OFF, 0);
+    write_le64(data,
+               TEST_EMBEDDED_POLICY_COMPAT_FLAGS_OFF,
+               N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SUPPORTED_COMPAT_FLAGS);
+    write_le64(data, TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF, fallback_policy_id);
+    write_le64(data,
+               TEST_EMBEDDED_POLICY_SOURCE_LEN_OFF,
+               (uint64_t)source->byte_len);
+    write_le64(data, TEST_EMBEDDED_POLICY_RESERVED1_OFF, 0);
+    memcpy(data + N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF,
+           source->data,
+           source->byte_len);
+
+    return payload;
+}
+
+static void
+add_embedded_execution_policy(n00b_obj_bundle_t *bundle,
+                              n00b_buffer_t     *source)
+{
+    n00b_buffer_t *payload = make_embedded_policy_payload(
+        N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+        source);
+    auto add = n00b_obj_bundle_add_policy(
+        bundle,
+        1,
+        N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B,
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+        .flags = N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+        .priority = 1,
+        .payload = payload);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add));
+}
+
+static void
 assert_buffer_eq(n00b_buffer_t *actual, n00b_buffer_t *expected)
 {
     N00B_TEST_REQUIRE(actual != nullptr);
@@ -230,7 +307,9 @@ assert_exec_argv_entry(n00b_obj_bundle_exec_argv_t *argv,
 }
 
 static void
-assert_exec_plan_tool_selection(n00b_obj_bundle_exec_plan_t *plan)
+assert_exec_plan_tool_selection_with_policy(
+    n00b_obj_bundle_exec_plan_t  *plan,
+    n00b_obj_bundle_policy_kind_t expected_kind)
 {
     auto artifact_id = n00b_obj_bundle_exec_plan_selected_artifact_id(plan);
     auto logical_path =
@@ -253,14 +332,21 @@ assert_exec_plan_tool_selection(n00b_obj_bundle_exec_plan_t *plan)
                       == N00B_OBJ_BUNDLE_EXEC_PLATFORM_SUPPORTED);
     N00B_TEST_REQUIRE(n00b_obj_bundle_exec_plan_requires_extraction(plan));
     N00B_TEST_REQUIRE(n00b_option_is_set(policy_kind));
-    N00B_TEST_REQUIRE(n00b_option_get(policy_kind)
-                      == N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT);
+    N00B_TEST_REQUIRE(n00b_option_get(policy_kind) == expected_kind);
     N00B_TEST_REQUIRE(n00b_option_is_set(policy_scope));
     N00B_TEST_REQUIRE(n00b_option_get(policy_scope)
                       == N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION);
     N00B_TEST_REQUIRE(!n00b_obj_bundle_exec_plan_fallback_used(plan));
     N00B_TEST_REQUIRE(n00b_list_len(*argv) == 1);
     assert_exec_argv_entry(argv, 0, r"bin/tool");
+}
+
+static void
+assert_exec_plan_tool_selection(n00b_obj_bundle_exec_plan_t *plan)
+{
+    assert_exec_plan_tool_selection_with_policy(
+        plan,
+        N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT);
 }
 
 static n00b_obj_bundle_error_t *
@@ -1531,6 +1617,49 @@ test_read_elf_metadata_carrier_then_plan_execution(void)
 }
 
 static void
+test_read_elf_metadata_carrier_preserves_embedded_execution_policy(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_execution_plan_bundle();
+
+    add_embedded_execution_policy(
+        bundle,
+        n00b_buffer_from_cstr("arg.logical_path == \"bin/tool\""));
+
+    n00b_buffer_t *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_obj_bundle_exec_plan_t *original_plan = require_exec_plan_ok(
+        n00b_obj_bundle_exec_plan(bundle,
+                                  .selector = r"tool",
+                                  .mode = N00B_OBJ_BUNDLE_EXEC_EXTRACTED));
+
+    auto written = n00b_obj_bundle_write(object_bytes, bundle);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+
+    n00b_buffer_t *carrier_object = n00b_result_get(written);
+    n00b_buffer_t *carrier_snapshot = n00b_buffer_copy(carrier_object);
+    n00b_obj_bundle_t *read_bundle = require_read_success(
+        n00b_obj_bundle_read(carrier_object),
+        bundle_snapshot);
+    n00b_obj_bundle_exec_plan_t *read_plan = require_exec_plan_ok(
+        n00b_obj_bundle_exec_plan(read_bundle,
+                                  .selector = r"tool",
+                                  .mode = N00B_OBJ_BUNDLE_EXEC_EXTRACTED));
+
+    assert_exec_plan_tool_selection_with_policy(
+        original_plan,
+        N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_exec_plan_tool_selection_with_policy(
+        read_plan,
+        N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_buffer_unchanged(carrier_object, carrier_snapshot);
+    assert_bundle_unchanged(read_bundle, bundle_snapshot);
+}
+
+static void
 test_write_file_default_overwrite_rejects_existing_destination(void)
 {
     n00b_buffer_t     *object_bytes = make_rewrite_target();
@@ -1866,6 +1995,7 @@ main(int argc, char **argv)
     test_write_file_atomic_readback_and_byte_equality();
     test_read_elf_metadata_carrier_then_extract();
     test_read_elf_metadata_carrier_then_plan_execution();
+    test_read_elf_metadata_carrier_preserves_embedded_execution_policy();
     test_write_file_default_overwrite_rejects_existing_destination();
     test_write_file_explicit_overwrite_replaces_destination();
     test_write_file_carrier_replace_rejects_before_sink_replace();

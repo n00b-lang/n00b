@@ -28,6 +28,12 @@
 #define TEST_DECL_EXEC_DEFAULT_EXEC           0x01ull
 #define TEST_DECL_EXEC_SELECTOR_MAPPING       0x02ull
 #define TEST_DECL_EXEC_DEFAULT                0x03ull
+#define TEST_N00B_EVAL_ERR_PARSE             -6
+#define TEST_EMBEDDED_POLICY_RESERVED0_OFF    12u
+#define TEST_EMBEDDED_POLICY_COMPAT_FLAGS_OFF 16u
+#define TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF  24u
+#define TEST_EMBEDDED_POLICY_SOURCE_LEN_OFF   32u
+#define TEST_EMBEDDED_POLICY_RESERVED1_OFF    40u
 
 typedef struct test_obj_bundle_exec_mapping {
     n00b_string_t *selector;
@@ -150,6 +156,36 @@ make_policy_payload(uint64_t fallback_policy_id, uint64_t exec_flags)
     return payload;
 }
 
+static n00b_buffer_t *
+make_embedded_policy_payload(uint64_t       fallback_policy_id,
+                             n00b_buffer_t *source)
+{
+    size_t len = N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF
+                 + source->byte_len;
+    n00b_buffer_t *payload = n00b_buffer_new((int64_t)len);
+    uint8_t       *data    = (uint8_t *)payload->data;
+
+    memcpy(data,
+           N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC,
+           N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC_LEN);
+    write_le16(data, 8, N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAJOR);
+    write_le16(data, 10, N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MINOR);
+    write_le32(data, TEST_EMBEDDED_POLICY_RESERVED0_OFF, 0);
+    write_le64(data,
+               TEST_EMBEDDED_POLICY_COMPAT_FLAGS_OFF,
+               N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SUPPORTED_COMPAT_FLAGS);
+    write_le64(data, TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF, fallback_policy_id);
+    write_le64(data,
+               TEST_EMBEDDED_POLICY_SOURCE_LEN_OFF,
+               (uint64_t)source->byte_len);
+    write_le64(data, TEST_EMBEDDED_POLICY_RESERVED1_OFF, 0);
+    memcpy(data + N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF,
+           source->data,
+           source->byte_len);
+
+    return payload;
+}
+
 static void
 add_executable(n00b_obj_bundle_t *bundle, n00b_string_t *logical_path)
 {
@@ -227,6 +263,31 @@ add_declarative_policy(n00b_obj_bundle_t           *bundle,
         bundle,
         policy_id,
         N00B_OBJ_BUNDLE_POLICY_KIND_DECLARATIVE_V1,
+        scope,
+        .flags = flags,
+        .priority = priority,
+        .payload = payload,
+        .fallback_policy_id = fallback_policy_id);
+
+    require_bool_ok(result);
+}
+
+static void
+add_embedded_policy(n00b_obj_bundle_t           *bundle,
+                    uint64_t                    policy_id,
+                    n00b_obj_bundle_policy_scope_t scope,
+                    uint64_t                    flags,
+                    uint64_t                    priority,
+                    uint64_t                    fallback_policy_id,
+                    n00b_buffer_t              *source)
+{
+    n00b_buffer_t *payload =
+        make_embedded_policy_payload(fallback_policy_id, source);
+
+    auto result = n00b_obj_bundle_add_policy(
+        bundle,
+        policy_id,
+        N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B,
         scope,
         .flags = flags,
         .priority = priority,
@@ -690,6 +751,157 @@ test_unknown_required_policy_rejects(void)
 }
 
 static void
+test_embedded_policy_allows_default_execution(void)
+{
+    n00b_obj_bundle_t *bundle = new_default_exec_bundle();
+
+    add_embedded_policy(bundle,
+                        1,
+                        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+                        N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+                        1,
+                        N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                        n00b_buffer_from_cstr(
+                            "arg.logical_path == \"bin/default\""));
+
+    n00b_obj_bundle_exec_plan_t *plan =
+        require_exec_ok(n00b_obj_bundle_exec_plan(bundle));
+
+    assert_exec_policy_facts(plan,
+                             N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_selected_target(plan,
+                           0,
+                           r"bin/default",
+                           N00B_OBJ_BUNDLE_EXEC_SELECTION_DEFAULT);
+}
+
+static void
+test_embedded_policy_denies_default_execution(void)
+{
+    n00b_obj_bundle_t *bundle = new_default_exec_bundle();
+
+    add_embedded_policy(bundle,
+                        1,
+                        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+                        N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+                        1,
+                        N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                        n00b_buffer_from_cstr("false"));
+
+    n00b_obj_bundle_error_t *error =
+        require_exec_error(n00b_obj_bundle_exec_plan(bundle),
+                           N00B_OBJ_BUNDLE_ERR_POLICY_DENIED);
+
+    assert_error_policy(error, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_error_logical_path(error, r"bin/default");
+    assert_error_artifact_id(error, 0);
+}
+
+static void
+test_embedded_optional_compile_failure_uses_allowed_fallback(void)
+{
+    n00b_obj_bundle_t *bundle = new_default_exec_bundle();
+
+    add_builtin_policy(bundle, 1, N00B_OBJ_BUNDLE_POLICY_SCOPE_BOTH);
+    add_embedded_policy(
+        bundle,
+        2,
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+        N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL
+            | N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED,
+        1,
+        1,
+        n00b_buffer_from_cstr(";"));
+
+    n00b_obj_bundle_exec_plan_t *plan =
+        require_exec_ok(n00b_obj_bundle_exec_plan(bundle));
+
+    assert_exec_policy_facts_with_fallback(
+        plan,
+        N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT,
+        true);
+    assert_selected_target(plan,
+                           0,
+                           r"bin/default",
+                           N00B_OBJ_BUNDLE_EXEC_SELECTION_DEFAULT);
+}
+
+static void
+test_embedded_required_compile_failure_rejects(void)
+{
+    n00b_obj_bundle_t *bundle = new_default_exec_bundle();
+
+    add_embedded_policy(bundle,
+                        1,
+                        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+                        N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+                        1,
+                        N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                        n00b_buffer_from_cstr(";"));
+
+    n00b_obj_bundle_error_t *error =
+        require_exec_error(n00b_obj_bundle_exec_plan(bundle),
+                           N00B_OBJ_BUNDLE_ERR_BUILD);
+
+    assert_error_policy(error, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_detail(error, TEST_N00B_EVAL_ERR_PARSE);
+    assert_error_logical_path(error, r"bin/default");
+    assert_error_artifact_id(error, 0);
+}
+
+static void
+test_embedded_policy_denies_selector_mapping(void)
+{
+    n00b_obj_bundle_t *bundle = new_selector_bundle();
+
+    add_embedded_policy(bundle,
+                        1,
+                        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+                        N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+                        1,
+                        N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                        n00b_buffer_from_cstr(
+                            "arg.selection_source == 1"));
+
+    n00b_obj_bundle_error_t *error =
+        require_exec_error(n00b_obj_bundle_exec_plan(bundle,
+                                                     .selector = r"tool"),
+                           N00B_OBJ_BUNDLE_ERR_POLICY_DENIED);
+
+    assert_error_policy(error, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_error_logical_path(error, r"bin/tool");
+    assert_error_artifact_id(error, 1);
+}
+
+static void
+test_embedded_optional_false_validate_only_denies_without_fallback(void)
+{
+    n00b_obj_bundle_t *bundle = new_default_exec_bundle();
+
+    add_builtin_policy(bundle, 1, N00B_OBJ_BUNDLE_POLICY_SCOPE_BOTH);
+    add_embedded_policy(
+        bundle,
+        2,
+        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+        N00B_OBJ_BUNDLE_POLICY_F_OPTIONAL
+            | N00B_OBJ_BUNDLE_POLICY_F_FALLBACK_ALLOWED,
+        1,
+        1,
+        n00b_buffer_from_cstr("false"));
+
+    n00b_obj_bundle_error_t *error =
+        require_exec_error(n00b_obj_bundle_exec_plan(
+                               bundle,
+                               .policy_mode =
+                                   N00B_OBJ_BUNDLE_POLICY_VALIDATE_ONLY),
+                           N00B_OBJ_BUNDLE_ERR_POLICY_DENIED);
+
+    assert_error_policy(error, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_error_logical_path(error, r"bin/default");
+    assert_error_artifact_id(error, 0);
+}
+
+static void
 test_disallowed_fallback_rejects(void)
 {
     n00b_obj_bundle_t *bundle = new_exec_fallback_bundle(nullptr);
@@ -1044,6 +1256,35 @@ test_manifest_roundtrip_planning_preserves_execution_facts(void)
 }
 
 static void
+test_embedded_manifest_roundtrip_preserves_execution_behavior(void)
+{
+    n00b_obj_bundle_t *bundle = new_selector_bundle();
+
+    add_embedded_policy(bundle,
+                        1,
+                        N00B_OBJ_BUNDLE_POLICY_SCOPE_EXECUTION,
+                        N00B_OBJ_BUNDLE_POLICY_F_REQUIRED,
+                        1,
+                        N00B_OBJ_BUNDLE_POLICY_ID_NONE,
+                        n00b_buffer_from_cstr(
+                            "arg.selection_source == 2"));
+
+    n00b_buffer_t *encoded = require_encode(bundle);
+    n00b_obj_bundle_t *decoded = require_decode(encoded);
+    n00b_obj_bundle_exec_plan_t *decoded_plan = require_exec_ok(
+        n00b_obj_bundle_exec_plan(decoded, .selector = r"tool"));
+
+    assert_selected_target(
+        decoded_plan,
+        1,
+        r"bin/tool",
+        N00B_OBJ_BUNDLE_EXEC_SELECTION_SELECTOR_MAPPING);
+    assert_exec_policy_facts(decoded_plan,
+                             N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_buffer_eq(require_encode(decoded), encoded);
+}
+
+static void
 test_valid_plan_does_not_mutate_bundle(void)
 {
     n00b_obj_bundle_t *bundle = new_default_exec_bundle();
@@ -1281,6 +1522,12 @@ main(int argc, char **argv)
     test_declarative_policy_selection_facts();
     test_unknown_optional_policy_uses_allowed_fallback();
     test_unknown_required_policy_rejects();
+    test_embedded_policy_allows_default_execution();
+    test_embedded_policy_denies_default_execution();
+    test_embedded_optional_compile_failure_uses_allowed_fallback();
+    test_embedded_required_compile_failure_rejects();
+    test_embedded_policy_denies_selector_mapping();
+    test_embedded_optional_false_validate_only_denies_without_fallback();
     test_disallowed_fallback_rejects();
     test_incompatible_fallback_rejects();
     test_default_exec_policy_denial();
@@ -1295,6 +1542,7 @@ main(int argc, char **argv)
     test_allocator_threaded_payloads();
     test_environment_overlay_does_not_mutate_process_environment();
     test_manifest_roundtrip_planning_preserves_execution_facts();
+    test_embedded_manifest_roundtrip_preserves_execution_behavior();
     test_valid_plan_does_not_mutate_bundle();
     test_missing_selector_falls_back_to_default();
     test_strict_missing_selector_rejects();

@@ -2808,7 +2808,9 @@ n00b_eval_test = executable('test_n00b_eval',
 test('n00b_eval',
     n00b_eval_test,
     suite: 'unit',
-    workdir: meson.project_source_root())
+    workdir: meson.project_source_root(),
+    is_parallel: false,
+    timeout: 180)
 
 # ============================================================================
 # ============================================================================
@@ -3664,12 +3666,14 @@ objfile_test_names = [
     'elf_rewrite_admit', 'elf_rewrite',
     'macho', 'macho_build', 'pe', 'pe_build', 'demangle',
     'abstract', 'dwarf', 'elf_known_answers', 'obj_bundle',
-    'obj_bundle_carrier', 'obj_bundle_extract', 'obj_bundle_exec', 'sink',
+    'obj_bundle_carrier', 'obj_bundle_extract', 'obj_bundle_exec',
+    'obj_bundle_policy', 'sink',
 ]
 
 foreach name : objfile_test_names
     test_sources = ['test/unit/test_objfile_' + name + '.c']
     test_kwargs = test_common_kwargs
+    test_is_parallel = true
 
     if name == 'obj_bundle'
         test_sources += [n00b_static_init_helper_ready]
@@ -3678,11 +3682,23 @@ foreach name : objfile_test_names
         }
     endif
 
+    if name in ['obj_bundle_carrier', 'obj_bundle_extract',
+                'obj_bundle_exec', 'obj_bundle_policy']
+        test_is_parallel = false
+    endif
+
     exe = executable('test_objfile_' + name,
         test_sources,
         kwargs: test_kwargs,
     )
-    test('objfile_' + name, exe, suite: 'unit')
+    if test_is_parallel
+        test('objfile_' + name, exe, suite: 'unit')
+    else
+        test('objfile_' + name, exe,
+             suite: 'unit',
+             is_parallel: false,
+             timeout: 180)
+    endif
 endforeach
 
 objfile_elf_oracle_test = executable('test_objfile_elf_oracle',

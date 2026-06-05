@@ -28,10 +28,22 @@
 #include "compiler/objfile/sink.h"
 #include "compiler/objfile/types.h"
 
+/**
+ * @brief Canonical manifest and policy payload constants.
+ * @details Embedded v1 policy payloads use a fixed envelope containing magic,
+ * version, reserved fields, compatibility flags, fallback mirror, and source
+ * length before the UTF-8 N00b predicate source bytes.
+ */
 #define N00B_OBJ_BUNDLE_MANIFEST_MAGIC_LEN 8u
 #define N00B_OBJ_BUNDLE_POLICY_MAGIC_LEN   8u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC_LEN 8u
 #define N00B_OBJ_BUNDLE_MANIFEST_MAJOR     1u
 #define N00B_OBJ_BUNDLE_MANIFEST_MINOR     0u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAJOR 1u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MINOR 0u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_HEADER_SIZE 48u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_OFF 48u
+#define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SUPPORTED_COMPAT_FLAGS 0ull
 #define N00B_OBJ_BUNDLE_CONTENT_ID_LEN     32u
 #define N00B_OBJ_BUNDLE_DIGEST_LEN         32u
 #define N00B_OBJ_BUNDLE_ARTIFACT_ID_NONE   UINT64_MAX
@@ -41,6 +53,10 @@ extern const uint8_t
     N00B_OBJ_BUNDLE_MANIFEST_MAGIC[N00B_OBJ_BUNDLE_MANIFEST_MAGIC_LEN];
 extern const uint8_t
     N00B_OBJ_BUNDLE_POLICY_MAGIC[N00B_OBJ_BUNDLE_POLICY_MAGIC_LEN];
+/** @brief Magic prefix for canonical v1 embedded N00b policy payloads. */
+extern const uint8_t
+    N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC[
+        N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC_LEN];
 
 typedef struct n00b_obj_bundle n00b_obj_bundle_t;
 typedef struct n00b_obj_bundle_artifact n00b_obj_bundle_artifact_t;
@@ -83,6 +99,8 @@ typedef enum {
     N00B_OBJ_BUNDLE_POLICY_KIND_NONE,
     N00B_OBJ_BUNDLE_POLICY_KIND_BUILTIN_DEFAULT,
     N00B_OBJ_BUNDLE_POLICY_KIND_DECLARATIVE_V1,
+    /** Embedded N00b predicate policy payload; codec-valid before runtime eval. */
+    N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B,
 } n00b_obj_bundle_policy_kind_t;
 
 typedef enum {
@@ -408,8 +426,10 @@ n00b_obj_bundle_extract(n00b_obj_bundle_t *bundle,
  *       are borrowed from @p bundle.
  * @post If @c argv is omitted, planned argv contains one entry: the selected
  *       target logical path as `argv[0]`.
- * @post Execution-scope bundle policy is selected and evaluated before target
- *       selection succeeds. Validate-only mode still evaluates policy and
+ * @post Execution target selection is deterministic. Execution-scope policy
+ *       evaluation runs after the selected target is known and before a
+ *       successful plan is returned, so embedded policy can inspect selected
+ *       target context. Validate-only mode still evaluates policy and
  *       policy-denied execution still fails.
  * @post `AUTO` and `EXTRACTED` resolve to a logical extracted-execution
  *       dependency without calling extraction; future modes fail with
