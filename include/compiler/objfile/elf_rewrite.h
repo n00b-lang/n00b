@@ -46,6 +46,7 @@ typedef enum {
     N00B_ELF_REWRITE_OPERATION_METADATA_INSERT,
     N00B_ELF_REWRITE_OPERATION_CHALK_MARK_DELETE,
     N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE,
+    N00B_ELF_REWRITE_OPERATION_OBJECT_BUNDLE_REPLACE,
     N00B_ELF_REWRITE_OPERATION_LOADABLE_INSERT,
 } n00b_elf_rewrite_operation_t;
 
@@ -59,6 +60,9 @@ typedef enum {
     N00B_ELF_REWRITE_REJECT_CHALK_MARK_NOT_FOUND,
     N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED,
     N00B_ELF_REWRITE_REJECT_TRUSTED_NAME,
+    N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_NOT_FOUND,
+    N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_DUPLICATE,
+    N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_UNSUPPORTED,
     N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT,
     N00B_ELF_REWRITE_REJECT_LOADABLE_ADDRESS,
 } n00b_elf_rewrite_rejection_reason_t;
@@ -322,6 +326,36 @@ n00b_elf_rewrite_plan_chalk_mark_insert(
 };
 
 /**
+ * @brief Plan trusted insertion of N00b's exact `.0c001.bundle` section.
+ *
+ * This is the narrow N00b binary-section affordance needed by the future
+ * object-bundle writer. It admits only an exact `.0c001.bundle` request as
+ * non-loadable `SHT_PROGBITS` with `section_flags == 0`; any other requested
+ * name or section shape is rejected. The ordinary
+ * @ref n00b_elf_rewrite_plan_metadata_insert path continues to reject
+ * `.0c001.bundle` and all other `.0c001.*` names. Existing non-conflicting
+ * `.chalk.mark` and `.chalk.free` sections are preserved by the trusted
+ * object-bundle path.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param request Metadata-section insertion request whose name is exactly
+ *                `.0c001.bundle`.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(plan) for accepted or rejected plans, or Err(N00B_ELF_REWRITE_ERR_*).
+ *
+ * @pre `bin`, `request`, `request->section_name`, and `request->payload` are non-null.
+ * @pre `request->payload->byte_len` is nonzero.
+ * @post `bin`, its stream, and its parsed section and segment arrays are not modified.
+ */
+extern n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_object_bundle_insert(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
  * @brief Plan surgical deletion of one live non-loadable `.chalk.mark`.
  *
  * Accepted plans append replacement section-name and section-header tables,
@@ -361,6 +395,33 @@ n00b_elf_rewrite_plan_chalk_mark_delete(
  */
 extern n00b_result_t(n00b_elf_rewrite_plan_t *)
 n00b_elf_rewrite_plan_chalk_mark_replace(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Plan surgical replacement of one live `.0c001.bundle` section.
+ *
+ * Replacement removes exactly one valid existing non-loadable `SHT_PROGBITS`
+ * `.0c001.bundle`, excludes its old payload bytes by zeroing their range at
+ * apply time, and emits exactly one replacement `.0c001.bundle` entry for the
+ * supplied payload. Missing, duplicate, malformed, or overlapping existing
+ * carriers are rejected.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param request Replacement request whose section name is exactly
+ *                `.0c001.bundle`.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(plan) for accepted or rejected plans, or Err(N00B_ELF_REWRITE_ERR_*).
+ *
+ * @pre `bin`, `request`, `request->section_name`, and `request->payload` are non-null.
+ * @pre `request->payload->byte_len` is nonzero.
+ * @post `bin`, its stream, and its parsed section and segment arrays are not modified.
+ */
+extern n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_object_bundle_replace(
     n00b_elf_binary_t                   *bin,
     n00b_elf_rewrite_metadata_request_t *request) _kargs {
     n00b_allocator_t *allocator = nullptr;
@@ -429,7 +490,8 @@ n00b_elf_rewrite_apply_loadable_insert_plan(
  * @brief Apply an accepted metadata-insert rewrite plan to bytes.
  *
  * The plan must come from @ref n00b_elf_rewrite_plan_metadata_insert or
- * @ref n00b_elf_rewrite_plan_chalk_mark_insert for the same parsed binary.
+ * @ref n00b_elf_rewrite_plan_chalk_mark_insert or
+ * @ref n00b_elf_rewrite_plan_object_bundle_insert for the same parsed binary.
  * Accepted plans borrow the metadata name, payload, type, flags, and alignment
  * from the original request so this plan-first API does not need the request
  * again.
@@ -476,6 +538,28 @@ n00b_elf_rewrite_apply_metadata_insert_plan(
  */
 extern n00b_result_t(n00b_buffer_t *)
 n00b_elf_rewrite_apply_chalk_mark_plan(
+    n00b_elf_binary_t       *bin,
+    n00b_elf_rewrite_plan_t *plan) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Apply an accepted `.0c001.bundle` insert or replace plan to bytes.
+ *
+ * @param bin Parsed ELF object whose stream supplies the original bytes.
+ * @param plan Accepted plan from @ref n00b_elf_rewrite_plan_object_bundle_insert
+ *             or @ref n00b_elf_rewrite_plan_object_bundle_replace.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(buffer) containing the rewritten ELF bytes, or
+ *         Err(N00B_ELF_REWRITE_ERR_*).
+ *
+ * @pre `bin`, `bin->stream`, `bin->stream->buf`, and `plan` are non-null.
+ * @pre `plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED`.
+ * @post The returned buffer reparses successfully with @ref n00b_elf_parse.
+ */
+extern n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_object_bundle_plan(
     n00b_elf_binary_t       *bin,
     n00b_elf_rewrite_plan_t *plan) _kargs {
     n00b_allocator_t *allocator = nullptr;
@@ -533,6 +617,41 @@ n00b_elf_rewrite_apply_chalk_mark_delete(
  */
 extern n00b_result_t(n00b_buffer_t *)
 n00b_elf_rewrite_apply_chalk_mark_replace(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Convenience wrapper that plans and applies `.0c001.bundle` insertion.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param request Insert request whose section name is exactly `.0c001.bundle`.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(buffer), Err(N00B_ELF_REWRITE_ERR_*), or
+ *         Err(N00B_ELF_REWRITE_ERR_PLAN_REJECTED) when planning rejects.
+ */
+extern n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_object_bundle_insert(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Convenience wrapper that plans and applies `.0c001.bundle` replacement.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param request Replacement request whose section name is exactly
+ *                `.0c001.bundle`.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(buffer), Err(N00B_ELF_REWRITE_ERR_*), or
+ *         Err(N00B_ELF_REWRITE_ERR_PLAN_REJECTED) when planning rejects.
+ */
+extern n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_object_bundle_replace(
     n00b_elf_binary_t                   *bin,
     n00b_elf_rewrite_metadata_request_t *request) _kargs {
     n00b_allocator_t *allocator = nullptr;

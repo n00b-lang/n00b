@@ -235,8 +235,9 @@ n00b_obj_bundle_decode(n00b_buffer_t *bundle_bytes) _kargs {
  *       input object file.
  * @post The input buffer is not modified.
  * @kw format Object format, or `N00B_FMT_UNKNOWN` for auto-detect.
- * @kw strict Reject malformed or reserved carrier environments when true;
- *      default `true`.
+ * @kw strict Forwarded to manifest decode/canonical validation; default `true`.
+ *      Neighbor foreign/reserved/Chalk/guard sections do not block reading a
+ *      unique valid bundle carrier.
  * @kw allocator Optional allocator for the returned bundle; default `nullptr`.
  */
 extern n00b_result_t(n00b_obj_bundle_t *)
@@ -258,8 +259,9 @@ n00b_obj_bundle_read(n00b_buffer_t *object_bytes) _kargs {
  *      `N00B_OBJ_BUNDLE_CARRIER_AUTO`.
  * @kw replace Whether an existing N00b-owned bundle carrier may be replaced;
  *      default `N00B_OBJ_BUNDLE_REJECT_EXISTING`.
- * @kw strict Reject reserved or foreign wrapped inputs when true; default
- *      `true`.
+ * @kw strict Forwarded to existing-carrier manifest validation; default
+ *      `true`. WP-010 write policy rejects reserved or foreign wrapped inputs
+ *      regardless of this caller control.
  * @kw allocator Optional allocator for the returned buffer; default `nullptr`.
  */
 extern n00b_result_t(n00b_buffer_t *)

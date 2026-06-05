@@ -1,7 +1,10 @@
 #include "compiler/objfile/obj_bundle.h"
 
 #include "adt/list.h"
+#include "compiler/objfile/abstract.h"
 #include "compiler/objfile/bstream.h"
+#include "compiler/objfile/elf_rewrite.h"
+#include "compiler/objfile/elf_types.h"
 #include "compiler/objfile/writer.h"
 #include "core/sha256.h"
 #include "text/unicode/encoding.h"
@@ -65,6 +68,7 @@ const uint8_t N00B_OBJ_BUNDLE_POLICY_MAGIC[N00B_OBJ_BUNDLE_POLICY_MAGIC_LEN] = {
 #define N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT                \
     (N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT_EXEC              \
      | N00B_OBJ_BUNDLE_DECL_EXEC_SELECTOR_MAPPING)
+#define N00B_OBJ_BUNDLE_ELF_GUARD_SECTION_TYPE 0xc001u
 
 typedef struct n00b_obj_bundle_exec_mapping {
     n00b_string_t *selector;
@@ -314,6 +318,33 @@ _n00b_obj_bundle_error_with_format_carrier(
     error->has_format  = has_format;
     error->carrier     = carrier;
     error->has_carrier = has_carrier;
+
+    return error;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_with_format_carrier_detail(
+    n00b_obj_bundle_error_code_t code,
+    n00b_string_t               *message,
+    n00b_format_t                format,
+    bool                         has_format,
+    n00b_obj_bundle_carrier_t    carrier,
+    bool                         has_carrier,
+    int64_t                      detail,
+    bool                         has_detail,
+    n00b_allocator_t            *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_with_format_carrier(code,
+                                                   message,
+                                                   format,
+                                                   has_format,
+                                                   carrier,
+                                                   has_carrier,
+                                                   allocator);
+
+    error->detail     = detail;
+    error->has_detail = has_detail;
 
     return error;
 }
@@ -2230,7 +2261,8 @@ n00b_obj_bundle_decode(n00b_buffer_t *bundle_bytes) _kargs
                               allocator);
     }
 
-    n00b_bstream_t *stream = n00b_bstream_new(bundle_bytes);
+    n00b_bstream_t *stream = n00b_bstream_new(bundle_bytes,
+                                              .allocator = allocator);
     n00b_bstream_set_endian(stream, N00B_ENDIAN_LITTLE);
 
     uint16_t major       = 0;
@@ -3053,6 +3085,513 @@ n00b_obj_bundle_decode(n00b_buffer_t *bundle_bytes) _kargs
     return n00b_result_ok(n00b_obj_bundle_t *, bundle);
 }
 
+static bool
+_n00b_obj_bundle_elf_section_is_metadata_carrier(
+    n00b_elf_section_t *section)
+{
+    return section != nullptr
+           && _n00b_obj_bundle_string_bytes_eq(section->name,
+                                               r".0c001.bundle");
+}
+
+static bool
+_n00b_obj_bundle_string_starts_with(n00b_string_t *s, n00b_string_t *prefix)
+{
+    return s != nullptr
+           && prefix != nullptr
+           && s->u8_bytes >= prefix->u8_bytes
+           && memcmp(s->data, prefix->data, prefix->u8_bytes) == 0;
+}
+
+static bool
+_n00b_obj_bundle_elf_section_is_foreign_legacy(n00b_elf_section_t *section)
+{
+    return section != nullptr
+           && _n00b_obj_bundle_string_bytes_eq(section->name,
+                                               r".0c001.file");
+}
+
+static bool
+_n00b_obj_bundle_elf_section_is_wrapped_or_reserved(
+    n00b_elf_section_t *section)
+{
+    return section != nullptr
+           && (_n00b_obj_bundle_string_bytes_eq(section->name,
+                                                r".0c001.wrap")
+               || _n00b_obj_bundle_string_bytes_eq(section->name,
+                                                   r".0c001.code"));
+}
+
+static bool
+_n00b_obj_bundle_elf_section_is_unknown_0c001(n00b_elf_section_t *section)
+{
+    return section != nullptr
+           && section->name != nullptr
+           && _n00b_obj_bundle_string_starts_with(section->name, r".0c001.")
+           && !_n00b_obj_bundle_elf_section_is_metadata_carrier(section)
+           && !_n00b_obj_bundle_elf_section_is_foreign_legacy(section)
+           && !_n00b_obj_bundle_elf_section_is_wrapped_or_reserved(section);
+}
+
+static int64_t
+_n00b_obj_bundle_elf_carrier_shape_detail(n00b_elf_section_t *section)
+{
+    if (section->type != SHT_PROGBITS) {
+        return (int64_t)section->type;
+    }
+
+    if ((section->flags & SHF_ALLOC) != 0) {
+        return section->flags > INT64_MAX ? INT64_MAX : (int64_t)section->flags;
+    }
+
+    if (section->size > INT64_MAX) {
+        return INT64_MAX;
+    }
+
+    return (int64_t)section->size;
+}
+
+static bool
+_n00b_obj_bundle_elf_carrier_shape_is_valid(n00b_elf_section_t *section)
+{
+    return section != nullptr
+           && section->type == SHT_PROGBITS
+           && (section->flags & SHF_ALLOC) == 0
+           && section->content != nullptr
+           && section->content->data != nullptr;
+}
+
+static int64_t
+_n00b_obj_bundle_decode_failure_detail(
+    n00b_result_t(n00b_obj_bundle_t *) decode)
+{
+    if (n00b_result_is_err_payload(n00b_obj_bundle_error_t *, decode)) {
+        n00b_obj_bundle_error_t *lower =
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *, decode);
+
+        return lower == nullptr ? 0 : lower->code;
+    }
+
+    return n00b_result_get_err(decode);
+}
+
+static n00b_result_t(n00b_obj_bundle_t *)
+_n00b_obj_bundle_read_elf_metadata_carrier(n00b_buffer_t     *object_bytes,
+                                           bool               strict,
+                                           n00b_allocator_t  *allocator)
+{
+    n00b_bstream_t *stream = n00b_bstream_new(object_bytes,
+                                              .allocator = allocator);
+    auto            parsed = n00b_elf_parse(stream, .allocator = allocator);
+
+    if (n00b_result_is_err(parsed)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_error_with_format_carrier_detail(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF object is malformed",
+                N00B_FMT_ELF,
+                true,
+                N00B_OBJ_BUNDLE_CARRIER_METADATA,
+                true,
+                n00b_result_get_err(parsed),
+                true,
+                allocator));
+    }
+
+    n00b_elf_binary_t  *elf     = n00b_result_get(parsed);
+    n00b_elf_section_t *carrier = nullptr;
+    size_t              count   = 0;
+
+    for (uint32_t i = 0; i < elf->num_sections; i++) {
+        n00b_elf_section_t *section = &elf->sections[i];
+
+        if (!_n00b_obj_bundle_elf_section_is_metadata_carrier(section)) {
+            continue;
+        }
+
+        count++;
+
+        if (carrier == nullptr) {
+            carrier = section;
+        }
+    }
+
+    if (count == 0) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_error_with_format_carrier(
+                N00B_OBJ_BUNDLE_ERR_BUNDLE_NOT_FOUND,
+                r"object bundle: ELF metadata carrier not found",
+                N00B_FMT_ELF,
+                true,
+                N00B_OBJ_BUNDLE_CARRIER_METADATA,
+                true,
+                allocator));
+    }
+
+    if (count > 1) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_error_with_format_carrier_detail(
+                N00B_OBJ_BUNDLE_ERR_DUPLICATE_BUNDLE_CARRIER,
+                r"object bundle: duplicate ELF metadata carriers",
+                N00B_FMT_ELF,
+                true,
+                N00B_OBJ_BUNDLE_CARRIER_METADATA,
+                true,
+                (int64_t)count,
+                true,
+                allocator));
+    }
+
+    if (!_n00b_obj_bundle_elf_carrier_shape_is_valid(carrier)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_error_with_format_carrier_detail(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF metadata carrier has invalid shape",
+                N00B_FMT_ELF,
+                true,
+                N00B_OBJ_BUNDLE_CARRIER_METADATA,
+                true,
+                _n00b_obj_bundle_elf_carrier_shape_detail(carrier),
+                true,
+                allocator));
+    }
+
+    auto decoded = n00b_obj_bundle_decode(carrier->content,
+                                          .strict = strict,
+                                          .allocator = allocator);
+
+    if (n00b_result_is_err(decoded)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_error_with_format_carrier_detail(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF metadata carrier payload is malformed",
+                N00B_FMT_ELF,
+                true,
+                N00B_OBJ_BUNDLE_CARRIER_METADATA,
+                true,
+                _n00b_obj_bundle_decode_failure_detail(decoded),
+                true,
+                allocator));
+    }
+
+    return n00b_result_ok(n00b_obj_bundle_t *, n00b_result_get(decoded));
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_elf_metadata_error(n00b_obj_bundle_error_code_t code,
+                                    n00b_string_t               *message,
+                                    int64_t                      detail,
+                                    bool                         has_detail,
+                                    n00b_allocator_t            *allocator)
+{
+    return _n00b_obj_bundle_error_with_format_carrier_detail(
+        code,
+        message,
+        N00B_FMT_ELF,
+        true,
+        N00B_OBJ_BUNDLE_CARRIER_METADATA,
+        true,
+        detail,
+        has_detail,
+        allocator);
+}
+
+static n00b_result_t(n00b_elf_binary_t *)
+_n00b_obj_bundle_parse_elf_for_write(n00b_buffer_t     *object_bytes,
+                                     n00b_allocator_t  *allocator)
+{
+    n00b_bstream_t *stream = n00b_bstream_new(object_bytes,
+                                              .allocator = allocator);
+    auto            parsed = n00b_elf_parse(stream, .allocator = allocator);
+
+    if (n00b_result_is_err(parsed)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_elf_binary_t *,
+            _n00b_obj_bundle_elf_metadata_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF object is malformed",
+                n00b_result_get_err(parsed),
+                true,
+                allocator));
+    }
+
+    return n00b_result_ok(n00b_elf_binary_t *, n00b_result_get(parsed));
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_validate_elf_write_environment(n00b_elf_binary_t *elf,
+                                                n00b_obj_bundle_replace_policy_t replace,
+                                                bool strict,
+                                                n00b_allocator_t *allocator)
+{
+    n00b_elf_section_t *bundle_carrier = nullptr;
+    size_t              bundle_count   = 0;
+    n00b_obj_bundle_error_t *foreign_error = nullptr;
+    n00b_obj_bundle_error_t *wrapped_error = nullptr;
+    n00b_obj_bundle_error_t *reserved_error = nullptr;
+    n00b_obj_bundle_error_t *guard_error = nullptr;
+
+    for (uint32_t i = 0; i < elf->num_sections; i++) {
+        n00b_elf_section_t *section = &elf->sections[i];
+        int64_t             detail  = (int64_t)i;
+
+        if (_n00b_obj_bundle_elf_section_is_metadata_carrier(section)) {
+            bundle_count++;
+
+            if (bundle_carrier == nullptr) {
+                bundle_carrier = section;
+            }
+
+            continue;
+        }
+
+        if (section->type == N00B_OBJ_BUNDLE_ELF_GUARD_SECTION_TYPE) {
+            if (guard_error == nullptr) {
+                guard_error = _n00b_obj_bundle_elf_metadata_error(
+                    N00B_OBJ_BUNDLE_ERR_GUARD_SECTION_PRESENT,
+                    r"object bundle: ELF guard section blocks carrier write",
+                    section->type,
+                    true,
+                    allocator);
+            }
+
+            continue;
+        }
+
+        if (_n00b_obj_bundle_elf_section_is_foreign_legacy(section)) {
+            if (foreign_error == nullptr) {
+                foreign_error = _n00b_obj_bundle_elf_metadata_error(
+                    N00B_OBJ_BUNDLE_ERR_FOREIGN_LEGACY_BUNDLE,
+                    r"object bundle: ELF foreign legacy carrier blocks write",
+                    detail,
+                    true,
+                    allocator);
+            }
+
+            continue;
+        }
+
+        if (_n00b_obj_bundle_elf_section_is_wrapped_or_reserved(section)) {
+            if (wrapped_error == nullptr) {
+                wrapped_error = _n00b_obj_bundle_elf_metadata_error(
+                    N00B_OBJ_BUNDLE_ERR_ALREADY_WRAPPED_OR_RESERVED,
+                    r"object bundle: ELF wrapped input blocks carrier write",
+                    detail,
+                    true,
+                    allocator);
+            }
+
+            continue;
+        }
+
+        if (_n00b_obj_bundle_elf_section_is_unknown_0c001(section)) {
+            if (reserved_error == nullptr) {
+                reserved_error = _n00b_obj_bundle_elf_metadata_error(
+                    N00B_OBJ_BUNDLE_ERR_RESERVED_NAMESPACE_OCCUPIED,
+                    r"object bundle: ELF reserved namespace blocks write",
+                    detail,
+                    true,
+                    allocator);
+            }
+        }
+    }
+
+    if (bundle_count > 1) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_elf_metadata_error(
+                N00B_OBJ_BUNDLE_ERR_DUPLICATE_BUNDLE_CARRIER,
+                r"object bundle: duplicate ELF metadata carriers",
+                (int64_t)bundle_count,
+                true,
+                allocator));
+    }
+
+    if (bundle_count == 1) {
+        if (!_n00b_obj_bundle_elf_carrier_shape_is_valid(bundle_carrier)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_elf_metadata_error(
+                    N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                    r"object bundle: ELF metadata carrier has invalid shape",
+                    _n00b_obj_bundle_elf_carrier_shape_detail(bundle_carrier),
+                    true,
+                    allocator));
+        }
+
+        auto decoded = n00b_obj_bundle_decode(bundle_carrier->content,
+                                              .strict = strict,
+                                              .allocator = allocator);
+
+        if (n00b_result_is_err(decoded)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_elf_metadata_error(
+                    N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                    r"object bundle: ELF metadata carrier payload is malformed",
+                    _n00b_obj_bundle_decode_failure_detail(decoded),
+                    true,
+                    allocator));
+        }
+    }
+
+    if (foreign_error != nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(bool, foreign_error);
+    }
+
+    if (wrapped_error != nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(bool, wrapped_error);
+    }
+
+    if (reserved_error != nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(bool, reserved_error);
+    }
+
+    if (guard_error != nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(bool, guard_error);
+    }
+
+    if (bundle_count == 1 && replace != N00B_OBJ_BUNDLE_REPLACE_EXISTING) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_elf_metadata_error(
+                N00B_OBJ_BUNDLE_ERR_REPLACE_REQUIRED,
+                r"object bundle: ELF metadata carrier replacement is explicit",
+                1,
+                true,
+                allocator));
+    }
+
+    return n00b_result_ok(bool, bundle_count == 1);
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_from_rewrite_plan(n00b_elf_rewrite_plan_t *plan,
+                                         n00b_allocator_t        *allocator)
+{
+    if (plan == nullptr) {
+        return _n00b_obj_bundle_elf_metadata_error(
+            N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+            r"object bundle: ELF rewrite planning failed",
+            0,
+            false,
+            allocator);
+    }
+
+    return _n00b_obj_bundle_elf_metadata_error(
+        N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+        r"object bundle: ELF rewrite plan was rejected",
+        plan->rejection_reason,
+        true,
+        allocator);
+}
+
+static n00b_result_t(n00b_buffer_t *)
+_n00b_obj_bundle_write_elf_metadata_carrier(
+    n00b_buffer_t                    *object_bytes,
+    n00b_obj_bundle_t                *bundle,
+    n00b_obj_bundle_replace_policy_t  replace,
+    bool                              strict,
+    n00b_allocator_t                 *allocator)
+{
+    auto encoded = n00b_obj_bundle_encode(bundle, .allocator = allocator);
+
+    if (n00b_result_is_err(encoded)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *, encoded));
+    }
+
+    auto parsed = _n00b_obj_bundle_parse_elf_for_write(object_bytes, allocator);
+
+    if (n00b_result_is_err(parsed)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *, parsed));
+    }
+
+    n00b_elf_binary_t *elf = n00b_result_get(parsed);
+    auto environment =
+        _n00b_obj_bundle_validate_elf_write_environment(elf,
+                                                        replace,
+                                                        strict,
+                                                        allocator);
+
+    if (n00b_result_is_err(environment)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        environment));
+    }
+
+    n00b_elf_rewrite_metadata_request_t request = {
+        .section_name          = r".0c001.bundle",
+        .payload               = n00b_result_get(encoded),
+        .file_alignment        = 8,
+        .section_type          = SHT_PROGBITS,
+        .section_flags         = 0,
+        .preferred_file_offset = n00b_option_none(uint64_t),
+        .policy                = {
+            .flags = N00B_ELF_REWRITE_ADMIT_POLICY_STRICT_LOADER_PRESERVATION
+                   | N00B_ELF_REWRITE_ADMIT_POLICY_PRESERVE_OVERLAY,
+        },
+    };
+
+    bool has_existing_bundle = n00b_result_get(environment);
+    auto plan_result =
+        has_existing_bundle && replace == N00B_OBJ_BUNDLE_REPLACE_EXISTING
+            ? n00b_elf_rewrite_plan_object_bundle_replace(
+                  elf,
+                  &request,
+                  .allocator = allocator)
+            : n00b_elf_rewrite_plan_object_bundle_insert(
+                  elf,
+                  &request,
+                  .allocator = allocator);
+
+    if (n00b_result_is_err(plan_result)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_metadata_error(
+                N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+                r"object bundle: ELF rewrite planning failed",
+                n00b_result_get_err(plan_result),
+                true,
+                allocator));
+    }
+
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+
+    if (plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_from_rewrite_plan(plan, allocator));
+    }
+
+    auto applied = n00b_elf_rewrite_apply_object_bundle_plan(
+        elf,
+        plan,
+        .allocator = allocator);
+
+    if (n00b_result_is_err(applied)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_metadata_error(
+                N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+                r"object bundle: ELF rewrite apply failed",
+                n00b_result_get_err(applied),
+                true,
+                allocator));
+    }
+
+    return n00b_result_ok(n00b_buffer_t *, n00b_result_get(applied));
+}
+
 n00b_result_t(n00b_obj_bundle_t *)
 n00b_obj_bundle_read(n00b_buffer_t *object_bytes) _kargs
 {
@@ -3081,13 +3620,28 @@ n00b_obj_bundle_read(n00b_buffer_t *object_bytes) _kargs
                 allocator));
     }
 
+    n00b_format_t effective_format = format;
+
+    if (format == N00B_FMT_UNKNOWN) {
+        n00b_bstream_t *stream = n00b_bstream_new(object_bytes,
+                                                  .allocator = allocator);
+
+        effective_format = n00b_detect_format(stream);
+    }
+
+    if (effective_format == N00B_FMT_ELF) {
+        return _n00b_obj_bundle_read_elf_metadata_carrier(object_bytes,
+                                                          strict,
+                                                          allocator);
+    }
+
     return OBJ_BUNDLE_ERR_PAYLOAD(
         n00b_obj_bundle_t *,
         _n00b_obj_bundle_error_with_format_carrier(
             N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER,
-            r"object bundle: carrier read is not implemented",
-            format,
-            format != N00B_FMT_UNKNOWN,
+            r"object bundle: carrier read is unsupported for object format",
+            effective_format,
+            effective_format != N00B_FMT_UNKNOWN,
             N00B_OBJ_BUNDLE_CARRIER_AUTO,
             false,
             allocator));
@@ -3151,13 +3705,44 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
                 allocator));
     }
 
+    n00b_format_t effective_format = format;
+
+    if (format == N00B_FMT_UNKNOWN) {
+        n00b_bstream_t *stream = n00b_bstream_new(object_bytes,
+                                                  .allocator = allocator);
+
+        effective_format = n00b_detect_format(stream);
+    }
+
+    if (carrier == N00B_OBJ_BUNDLE_CARRIER_LOADABLE
+        || carrier == N00B_OBJ_BUNDLE_CARRIER_SPLIT) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_with_format_carrier(
+                N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER,
+                r"object bundle: requested carrier is unsupported",
+                effective_format,
+                effective_format != N00B_FMT_UNKNOWN,
+                carrier,
+                true,
+                allocator));
+    }
+
+    if (effective_format == N00B_FMT_ELF) {
+        return _n00b_obj_bundle_write_elf_metadata_carrier(object_bytes,
+                                                           bundle,
+                                                           replace,
+                                                           strict,
+                                                           allocator);
+    }
+
     return OBJ_BUNDLE_ERR_PAYLOAD(
         n00b_buffer_t *,
         _n00b_obj_bundle_error_with_format_carrier(
             N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER,
-            r"object bundle: carrier write is not implemented",
-            format,
-            format != N00B_FMT_UNKNOWN,
+            r"object bundle: carrier write is unsupported for object format",
+            effective_format,
+            effective_format != N00B_FMT_UNKNOWN,
             carrier,
             true,
             allocator));

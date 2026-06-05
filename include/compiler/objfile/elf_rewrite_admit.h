@@ -307,6 +307,34 @@ n00b_elf_rewrite_admit_chalk_mark_insert(
 };
 
 /**
+ * @brief Admit trusted N00b-owned `.0c001.bundle` metadata insertion.
+ *
+ * This is the reserved-name exception used by the lower-level rewrite layer
+ * for object bundles. It accepts only an exact `.0c001.bundle` request, only
+ * as non-loadable `SHT_PROGBITS` with `section_flags == 0`, and only when the
+ * target has no live reserved N00b `.0c001.*` or guard section. Existing
+ * `.chalk.mark` and `.chalk.free` sections are non-conflicting Chalk metadata
+ * for this trusted path and are left to rewrite planning to preserve.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param request Metadata-section insertion request.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(result) or Err(N00B_ELF_REWRITE_ADMIT_ERR_*).
+ *
+ * @pre `bin`, `request`, and `request->section_name` are non-null.
+ * @pre `request->payload_size` is nonzero.
+ * @post `bin` and its parsed sections, segments, stream, and overlay pointers
+ *       are not modified.
+ */
+extern n00b_result_t(n00b_elf_rewrite_admit_result_t)
+n00b_elf_rewrite_admit_object_bundle_insert(
+    n00b_elf_binary_t                         *bin,
+    n00b_elf_rewrite_admit_metadata_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
  * @brief Admit a loadable-segment insertion request.
  *
  * Accepted results establish stable request and target facts for adding one

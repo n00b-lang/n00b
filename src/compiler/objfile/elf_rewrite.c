@@ -26,7 +26,20 @@ typedef struct raw_shdr {
     uint64_t entsize;
 } raw_shdr_t;
 
-typedef struct chalk_mark_shape {
+typedef enum {
+    TRUSTED_METADATA_TARGET_NONE,
+    TRUSTED_METADATA_TARGET_CHALK_MARK,
+    TRUSTED_METADATA_TARGET_OBJECT_BUNDLE,
+} trusted_metadata_target_t;
+
+typedef enum {
+    TRUSTED_METADATA_SHAPE_OK,
+    TRUSTED_METADATA_SHAPE_NOT_FOUND,
+    TRUSTED_METADATA_SHAPE_DUPLICATE,
+    TRUSTED_METADATA_SHAPE_UNSUPPORTED,
+} trusted_metadata_shape_status_t;
+
+typedef struct trusted_metadata_shape {
     uint64_t target_index;
     uint32_t target_name_index;
     uint64_t removed_name_start;
@@ -37,7 +50,7 @@ typedef struct chalk_mark_shape {
     uint64_t new_shtab_size;
     uint32_t replacement_name_index;
     uint16_t new_shstrndx;
-} chalk_mark_shape_t;
+} trusted_metadata_shape_t;
 
 typedef struct loadable_profile {
     uint32_t pt_phdr_index;
@@ -377,6 +390,43 @@ section_name_is_chalk_mark(n00b_string_t *name)
 }
 
 static bool
+section_name_is_object_bundle(n00b_string_t *name)
+{
+    return name != nullptr && n00b_unicode_str_eq(name, r".0c001.bundle");
+}
+
+static n00b_string_t *
+trusted_metadata_target_name(trusted_metadata_target_t target)
+{
+    switch (target) {
+    case TRUSTED_METADATA_TARGET_NONE:
+        return r"";
+    case TRUSTED_METADATA_TARGET_CHALK_MARK:
+        return r".chalk.mark";
+    case TRUSTED_METADATA_TARGET_OBJECT_BUNDLE:
+        return r".0c001.bundle";
+    }
+
+    return r"";
+}
+
+static bool
+section_name_is_trusted_metadata(n00b_string_t *name,
+                                 trusted_metadata_target_t target)
+{
+    switch (target) {
+    case TRUSTED_METADATA_TARGET_NONE:
+        return false;
+    case TRUSTED_METADATA_TARGET_CHALK_MARK:
+        return section_name_is_chalk_mark(name);
+    case TRUSTED_METADATA_TARGET_OBJECT_BUNDLE:
+        return section_name_is_object_bundle(name);
+    }
+
+    return false;
+}
+
+static bool
 section_is_metadata_chalk_mark(n00b_elf_section_t *sec)
 {
     if (sec == nullptr || !section_name_is_chalk_mark(sec->name)
@@ -388,18 +438,49 @@ section_is_metadata_chalk_mark(n00b_elf_section_t *sec)
 }
 
 static bool
-find_single_chalk_mark(n00b_elf_binary_t *bin, uint64_t *index_out)
+section_is_metadata_object_bundle(n00b_elf_section_t *sec)
+{
+    if (sec == nullptr || !section_name_is_object_bundle(sec->name)
+        || sec->flags != 0 || sec->type != SHT_PROGBITS || sec->size == 0
+        || sec->content == nullptr || sec->content->data == nullptr) {
+        return false;
+    }
+
+    return sec->content->byte_len == sec->size;
+}
+
+static bool
+section_is_metadata_trusted(n00b_elf_section_t *sec,
+                            trusted_metadata_target_t target)
+{
+    switch (target) {
+    case TRUSTED_METADATA_TARGET_NONE:
+        return false;
+    case TRUSTED_METADATA_TARGET_CHALK_MARK:
+        return section_is_metadata_chalk_mark(sec);
+    case TRUSTED_METADATA_TARGET_OBJECT_BUNDLE:
+        return section_is_metadata_object_bundle(sec);
+    }
+
+    return false;
+}
+
+static trusted_metadata_shape_status_t
+find_single_trusted_metadata(n00b_elf_binary_t        *bin,
+                             trusted_metadata_target_t target,
+                             uint64_t                 *index_out)
 {
     bool     found = false;
     uint64_t found_index = 0;
 
     for (uint32_t i = 0; i < bin->num_sections; i++) {
-        if (!section_name_is_chalk_mark(bin->sections[i].name)) {
+        if (!section_name_is_trusted_metadata(bin->sections[i].name,
+                                              target)) {
             continue;
         }
 
         if (found) {
-            return false;
+            return TRUSTED_METADATA_SHAPE_DUPLICATE;
         }
 
         found = true;
@@ -407,11 +488,11 @@ find_single_chalk_mark(n00b_elf_binary_t *bin, uint64_t *index_out)
     }
 
     if (!found) {
-        return false;
+        return TRUSTED_METADATA_SHAPE_NOT_FOUND;
     }
 
     *index_out = found_index;
-    return true;
+    return TRUSTED_METADATA_SHAPE_OK;
 }
 
 static bool
@@ -452,7 +533,8 @@ find_nul_in_strtab(n00b_elf_binary_t                 *bin,
 }
 
 static bool
-name_index_survives_removed_span(uint32_t index, chalk_mark_shape_t *shape)
+name_index_survives_removed_span(uint32_t index,
+                                 trusted_metadata_shape_t *shape)
 {
     if ((uint64_t)index < shape->removed_name_start) {
         return true;
@@ -462,11 +544,12 @@ name_index_survives_removed_span(uint32_t index, chalk_mark_shape_t *shape)
 }
 
 static n00b_result_t(bool)
-chalk_mark_payload_range_is_exclusive(n00b_elf_binary_t  *bin,
-                                      n00b_elf_section_t *old_mark,
-                                      chalk_mark_shape_t *shape,
-                                      uint64_t            old_payload_end,
-                                      n00b_allocator_t   *allocator)
+trusted_metadata_payload_range_is_exclusive(
+    n00b_elf_binary_t          *bin,
+    n00b_elf_section_t         *old_mark,
+    trusted_metadata_shape_t   *shape,
+    uint64_t                    old_payload_end,
+    n00b_allocator_t           *allocator)
 {
     auto layout_result = n00b_elf_layout_build(bin, .allocator = allocator);
     if (n00b_result_is_err(layout_result)) {
@@ -516,7 +599,7 @@ chalk_mark_payload_range_is_exclusive(n00b_elf_binary_t  *bin,
 }
 
 static uint32_t
-adjusted_name_index(uint32_t index, chalk_mark_shape_t *shape)
+adjusted_name_index(uint32_t index, trusted_metadata_shape_t *shape)
 {
     if ((uint64_t)index < shape->removed_name_end) {
         return index;
@@ -525,23 +608,32 @@ adjusted_name_index(uint32_t index, chalk_mark_shape_t *shape)
     return (uint32_t)((uint64_t)index - shape->removed_name_size);
 }
 
-static bool
-compute_chalk_mark_shape(n00b_elf_binary_t                 *bin,
-                         n00b_elf_rewrite_target_profile_t *profile,
-                         bool                               replacement,
-                         chalk_mark_shape_t                *shape)
+static trusted_metadata_shape_status_t
+compute_trusted_metadata_shape(n00b_elf_binary_t                 *bin,
+                               n00b_elf_rewrite_target_profile_t *profile,
+                               trusted_metadata_target_t          target,
+                               bool                               replacement,
+                               trusted_metadata_shape_t          *shape)
 {
     uint64_t target_index;
     uint64_t name_end;
     uint64_t name_bytes;
 
     if (bin == nullptr || profile == nullptr || shape == nullptr
-        || bin->stream == nullptr || bin->stream->buf == nullptr
-        || !find_single_chalk_mark(bin, &target_index)
-        || target_index == bin->header.shstrndx
+        || bin->stream == nullptr || bin->stream->buf == nullptr) {
+        return TRUSTED_METADATA_SHAPE_UNSUPPORTED;
+    }
+
+    trusted_metadata_shape_status_t find_status =
+        find_single_trusted_metadata(bin, target, &target_index);
+    if (find_status != TRUSTED_METADATA_SHAPE_OK) {
+        return find_status;
+    }
+
+    if (target_index == bin->header.shstrndx
         || target_index >= profile->section_count
-        || !section_is_metadata_chalk_mark(&bin->sections[target_index])) {
-        return false;
+        || !section_is_metadata_trusted(&bin->sections[target_index], target)) {
+        return TRUSTED_METADATA_SHAPE_UNSUPPORTED;
     }
 
     raw_shdr_t target_shdr;
@@ -549,14 +641,15 @@ compute_chalk_mark_shape(n00b_elf_binary_t                 *bin,
         || !find_nul_in_strtab(bin, profile, target_shdr.name, &name_end)
         || !checked_add_u64(name_end, 1, &name_end)
         || name_end <= target_shdr.name) {
-        return false;
+        return TRUSTED_METADATA_SHAPE_UNSUPPORTED;
     }
 
-    if (!section_name_write_size(r".chalk.mark", &name_bytes)) {
-        return false;
+    if (!section_name_write_size(trusted_metadata_target_name(target),
+                                 &name_bytes)) {
+        return TRUSTED_METADATA_SHAPE_UNSUPPORTED;
     }
 
-    *shape = (chalk_mark_shape_t){
+    *shape = (trusted_metadata_shape_t){
         .target_index       = target_index,
         .target_name_index  = target_shdr.name,
         .removed_name_start = target_shdr.name,
@@ -565,7 +658,7 @@ compute_chalk_mark_shape(n00b_elf_binary_t                 *bin,
     };
 
     if (profile->shstrtab_complete_size < shape->removed_name_size) {
-        return false;
+        return TRUSTED_METADATA_SHAPE_UNSUPPORTED;
     }
 
     shape->compact_strtab_size =
@@ -576,7 +669,7 @@ compute_chalk_mark_shape(n00b_elf_binary_t                 *bin,
                              name_bytes,
                              &shape->new_strtab_size)
             || shape->compact_strtab_size > UINT32_MAX) {
-            return false;
+            return TRUSTED_METADATA_SHAPE_UNSUPPORTED;
         }
         shape->replacement_name_index = (uint32_t)shape->compact_strtab_size;
     }
@@ -587,7 +680,7 @@ compute_chalk_mark_shape(n00b_elf_binary_t                 *bin,
         || !checked_mul_u64(new_section_count,
                             N00B_ELF64_SHDR_SIZE,
                             &shape->new_shtab_size)) {
-        return false;
+        return TRUSTED_METADATA_SHAPE_UNSUPPORTED;
     }
 
     uint64_t new_shstrndx = bin->header.shstrndx;
@@ -595,14 +688,14 @@ compute_chalk_mark_shape(n00b_elf_binary_t                 *bin,
         new_shstrndx--;
     }
     if (new_shstrndx > UINT16_MAX) {
-        return false;
+        return TRUSTED_METADATA_SHAPE_UNSUPPORTED;
     }
     shape->new_shstrndx = (uint16_t)new_shstrndx;
 
     for (uint64_t i = 0; i < profile->section_count; i++) {
         raw_shdr_t shdr;
         if (!read_raw_shdr(bin, i, &shdr)) {
-            return false;
+            return TRUSTED_METADATA_SHAPE_UNSUPPORTED;
         }
 
         if (i == target_index) {
@@ -610,11 +703,11 @@ compute_chalk_mark_shape(n00b_elf_binary_t                 *bin,
         }
 
         if (!name_index_survives_removed_span(shdr.name, shape)) {
-            return false;
+            return TRUSTED_METADATA_SHAPE_UNSUPPORTED;
         }
     }
 
-    return true;
+    return TRUSTED_METADATA_SHAPE_OK;
 }
 
 n00b_result_t(n00b_elf_rewrite_target_profile_t)
@@ -1511,7 +1604,7 @@ static n00b_result_t(n00b_elf_rewrite_plan_t *)
 plan_metadata_insert_impl(
     n00b_elf_binary_t                   *bin,
     n00b_elf_rewrite_metadata_request_t *request,
-    bool                                 trusted_chalk_mark,
+    trusted_metadata_target_t            trusted_target,
     n00b_allocator_t                    *allocator)
 {
     if (bin == nullptr) {
@@ -1571,13 +1664,21 @@ plan_metadata_insert_impl(
         .policy                = request->policy,
     };
 
-    auto admission_result = trusted_chalk_mark
-        ? n00b_elf_rewrite_admit_chalk_mark_insert(bin,
-                                                   &admission_request,
-                                                   .allocator = allocator)
-        : n00b_elf_rewrite_admit_metadata_insert(bin,
-                                                 &admission_request,
-                                                 .allocator = allocator);
+    auto admission_result =
+        trusted_target == TRUSTED_METADATA_TARGET_CHALK_MARK
+            ? n00b_elf_rewrite_admit_chalk_mark_insert(
+                  bin,
+                  &admission_request,
+                  .allocator = allocator)
+        : trusted_target == TRUSTED_METADATA_TARGET_OBJECT_BUNDLE
+            ? n00b_elf_rewrite_admit_object_bundle_insert(
+                  bin,
+                  &admission_request,
+                  .allocator = allocator)
+            : n00b_elf_rewrite_admit_metadata_insert(
+                  bin,
+                  &admission_request,
+                  .allocator = allocator);
     if (n00b_result_is_err(admission_result)) {
         return n00b_result_err(n00b_elf_rewrite_plan_t *,
                                N00B_ELF_REWRITE_ERR_ADMISSION);
@@ -1613,7 +1714,10 @@ n00b_elf_rewrite_plan_metadata_insert(
     n00b_allocator_t *allocator = nullptr;
 }
 {
-    return plan_metadata_insert_impl(bin, request, false, allocator);
+    return plan_metadata_insert_impl(bin,
+                                     request,
+                                     TRUSTED_METADATA_TARGET_NONE,
+                                     allocator);
 }
 
 n00b_result_t(n00b_elf_rewrite_plan_t *)
@@ -1624,7 +1728,24 @@ n00b_elf_rewrite_plan_chalk_mark_insert(
     n00b_allocator_t *allocator = nullptr;
 }
 {
-    return plan_metadata_insert_impl(bin, request, true, allocator);
+    return plan_metadata_insert_impl(bin,
+                                     request,
+                                     TRUSTED_METADATA_TARGET_CHALK_MARK,
+                                     allocator);
+}
+
+n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_object_bundle_insert(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return plan_metadata_insert_impl(bin,
+                                     request,
+                                     TRUSTED_METADATA_TARGET_OBJECT_BUNDLE,
+                                     allocator);
 }
 
 static bool
@@ -2511,8 +2632,115 @@ request_is_nonloadable_metadata(n00b_elf_rewrite_metadata_request_t *request)
         || request->section_type == SHT_NOTE;
 }
 
+static bool
+request_is_object_bundle_metadata(n00b_elf_rewrite_metadata_request_t *request)
+{
+    return request->section_flags == 0
+        && request->section_type == SHT_PROGBITS;
+}
+
+static bool
+request_matches_trusted_target(n00b_elf_rewrite_metadata_request_t *request,
+                               trusted_metadata_target_t target)
+{
+    if (!section_name_is_trusted_metadata(request->section_name, target)) {
+        return false;
+    }
+
+    switch (target) {
+    case TRUSTED_METADATA_TARGET_NONE:
+        return false;
+    case TRUSTED_METADATA_TARGET_CHALK_MARK:
+        return request_is_nonloadable_metadata(request);
+    case TRUSTED_METADATA_TARGET_OBJECT_BUNDLE:
+        return request_is_object_bundle_metadata(request);
+    }
+
+    return false;
+}
+
+static bool
+replacement_plan_shape_matches_trusted_target(
+    n00b_elf_rewrite_plan_t *plan,
+    trusted_metadata_target_t target)
+{
+    switch (target) {
+    case TRUSTED_METADATA_TARGET_NONE:
+        return false;
+    case TRUSTED_METADATA_TARGET_CHALK_MARK:
+        return plan->section_flags == 0
+            && (plan->section_type == SHT_PROGBITS
+                || plan->section_type == SHT_NOTE);
+    case TRUSTED_METADATA_TARGET_OBJECT_BUNDLE:
+        return plan->section_flags == 0
+            && plan->section_type == SHT_PROGBITS;
+    }
+
+    return false;
+}
+
+static n00b_elf_rewrite_operation_t
+trusted_metadata_replace_operation(trusted_metadata_target_t target)
+{
+    switch (target) {
+    case TRUSTED_METADATA_TARGET_NONE:
+        break;
+    case TRUSTED_METADATA_TARGET_CHALK_MARK:
+        return N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE;
+    case TRUSTED_METADATA_TARGET_OBJECT_BUNDLE:
+        return N00B_ELF_REWRITE_OPERATION_OBJECT_BUNDLE_REPLACE;
+    }
+
+    return N00B_ELF_REWRITE_OPERATION_METADATA_INSERT;
+}
+
+static n00b_elf_rewrite_rejection_reason_t
+trusted_metadata_shape_rejection(trusted_metadata_target_t target,
+                                 trusted_metadata_shape_status_t status)
+{
+    switch (target) {
+    case TRUSTED_METADATA_TARGET_NONE:
+        break;
+    case TRUSTED_METADATA_TARGET_CHALK_MARK:
+        if (status == TRUSTED_METADATA_SHAPE_UNSUPPORTED) {
+            return N00B_ELF_REWRITE_REJECT_CHALK_MARK_NOT_FOUND;
+        }
+        return N00B_ELF_REWRITE_REJECT_CHALK_MARK_NOT_FOUND;
+    case TRUSTED_METADATA_TARGET_OBJECT_BUNDLE:
+        switch (status) {
+        case TRUSTED_METADATA_SHAPE_NOT_FOUND:
+            return N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_NOT_FOUND;
+        case TRUSTED_METADATA_SHAPE_DUPLICATE:
+            return N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_DUPLICATE;
+        case TRUSTED_METADATA_SHAPE_UNSUPPORTED:
+            return N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_UNSUPPORTED;
+        case TRUSTED_METADATA_SHAPE_OK:
+            break;
+        }
+        return N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_UNSUPPORTED;
+    }
+
+    return N00B_ELF_REWRITE_REJECT_TRUSTED_NAME;
+}
+
+static n00b_elf_rewrite_rejection_reason_t
+trusted_metadata_overlap_rejection(trusted_metadata_target_t target)
+{
+    switch (target) {
+    case TRUSTED_METADATA_TARGET_NONE:
+        break;
+    case TRUSTED_METADATA_TARGET_CHALK_MARK:
+        return N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED;
+    case TRUSTED_METADATA_TARGET_OBJECT_BUNDLE:
+        return N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_UNSUPPORTED;
+    }
+
+    return N00B_ELF_REWRITE_REJECT_TRUSTED_NAME;
+}
+
 static n00b_result_t(n00b_elf_rewrite_plan_t *)
-plan_chalk_mark_delete_or_replace(
+plan_trusted_metadata_delete_or_replace(
+    trusted_metadata_target_t            target,
     n00b_elf_binary_t                   *bin,
     n00b_elf_rewrite_metadata_request_t *request,
     bool                                 replacement,
@@ -2561,18 +2789,24 @@ plan_chalk_mark_delete_or_replace(
     }
 
     if (replacement
-        && (!section_name_is_chalk_mark(request->section_name)
-            || !request_is_nonloadable_metadata(request))) {
+        && !request_matches_trusted_target(request, target)) {
         return rejected_plan(allocator,
                              N00B_ELF_REWRITE_REJECT_TRUSTED_NAME,
                              profile,
                              nullptr);
     }
 
-    chalk_mark_shape_t shape = {};
-    if (!compute_chalk_mark_shape(bin, &profile, replacement, &shape)) {
+    trusted_metadata_shape_t shape = {};
+    trusted_metadata_shape_status_t shape_status =
+        compute_trusted_metadata_shape(bin,
+                                       &profile,
+                                       target,
+                                       replacement,
+                                       &shape);
+    if (shape_status != TRUSTED_METADATA_SHAPE_OK) {
         return rejected_plan(allocator,
-                             N00B_ELF_REWRITE_REJECT_CHALK_MARK_NOT_FOUND,
+                             trusted_metadata_shape_rejection(target,
+                                                              shape_status),
                              profile,
                              nullptr);
     }
@@ -2583,24 +2817,24 @@ plan_chalk_mark_delete_or_replace(
         || old_payload_end > profile.file_size
         || old_mark->size > (uint64_t)SIZE_MAX) {
         return rejected_plan(allocator,
-                             N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED,
+                             trusted_metadata_overlap_rejection(target),
                              profile,
                              nullptr);
     }
 
     auto exclusive_result =
-        chalk_mark_payload_range_is_exclusive(bin,
-                                              old_mark,
-                                              &shape,
-                                              old_payload_end,
-                                              allocator);
+        trusted_metadata_payload_range_is_exclusive(bin,
+                                                    old_mark,
+                                                    &shape,
+                                                    old_payload_end,
+                                                    allocator);
     if (n00b_result_is_err(exclusive_result)) {
         return n00b_result_err(n00b_elf_rewrite_plan_t *,
                                n00b_result_get_err(exclusive_result));
     }
     if (!n00b_result_get(exclusive_result)) {
         return rejected_plan(allocator,
-                             N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED,
+                             trusted_metadata_overlap_rejection(target),
                              profile,
                              nullptr);
     }
@@ -2683,7 +2917,7 @@ plan_chalk_mark_delete_or_replace(
 
     if (!patch_ok) {
         return rejected_plan(allocator,
-                             N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED,
+                             trusted_metadata_overlap_rejection(target),
                              profile,
                              nullptr);
     }
@@ -2697,14 +2931,14 @@ plan_chalk_mark_delete_or_replace(
 
     n00b_elf_rewrite_plan_t *plan = new_plan(allocator);
     plan->operation = replacement
-        ? N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE
+        ? trusted_metadata_replace_operation(target)
         : N00B_ELF_REWRITE_OPERATION_CHALK_MARK_DELETE;
     plan->outcome                = N00B_ELF_REWRITE_PLAN_ACCEPTED;
     plan->rejection_reason       = N00B_ELF_REWRITE_REJECT_NONE;
     plan->target_profile         = profile;
     plan->table_strategy         = N00B_ELF_REWRITE_TABLE_STRATEGY_EOF_REPLACEMENT;
     plan->patches                = patches;
-    plan->section_name           = r".chalk.mark";
+    plan->section_name           = trusted_metadata_target_name(target);
     plan->payload                = replacement ? request->payload : nullptr;
     plan->section_alignment      =
         replacement ? effective_section_alignment(request->file_alignment) : 1;
@@ -2731,7 +2965,12 @@ n00b_elf_rewrite_plan_chalk_mark_delete(
     n00b_allocator_t *allocator = nullptr;
 }
 {
-    return plan_chalk_mark_delete_or_replace(bin, nullptr, false, allocator);
+    return plan_trusted_metadata_delete_or_replace(
+        TRUSTED_METADATA_TARGET_CHALK_MARK,
+        bin,
+        nullptr,
+        false,
+        allocator);
 }
 
 n00b_result_t(n00b_elf_rewrite_plan_t *)
@@ -2742,7 +2981,28 @@ n00b_elf_rewrite_plan_chalk_mark_replace(
     n00b_allocator_t *allocator = nullptr;
 }
 {
-    return plan_chalk_mark_delete_or_replace(bin, request, true, allocator);
+    return plan_trusted_metadata_delete_or_replace(
+        TRUSTED_METADATA_TARGET_CHALK_MARK,
+        bin,
+        request,
+        true,
+        allocator);
+}
+
+n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_object_bundle_replace(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return plan_trusted_metadata_delete_or_replace(
+        TRUSTED_METADATA_TARGET_OBJECT_BUNDLE,
+        bin,
+        request,
+        true,
+        allocator);
 }
 
 static n00b_elf_rewrite_patch_t *
@@ -2904,11 +3164,18 @@ write_raw_shdr(uint8_t *p, raw_shdr_t *shdr, bool big)
     write_u64(p + 56, shdr->entsize, big);
 }
 
+static bool
+trusted_metadata_plan_is_replacement(n00b_elf_rewrite_plan_t *plan)
+{
+    return plan->operation == N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE
+        || plan->operation == N00B_ELF_REWRITE_OPERATION_OBJECT_BUNDLE_REPLACE;
+}
+
 static n00b_buffer_t *
-build_chalk_mark_shstrtab(n00b_elf_binary_t       *bin,
-                          n00b_elf_rewrite_plan_t *plan,
-                          chalk_mark_shape_t      *shape,
-                          n00b_allocator_t        *allocator)
+build_trusted_metadata_shstrtab(n00b_elf_binary_t       *bin,
+                                n00b_elf_rewrite_plan_t *plan,
+                                trusted_metadata_shape_t *shape,
+                                n00b_allocator_t        *allocator)
 {
     n00b_buffer_t *old_strtab =
         new_zero_buffer(plan->target_profile.shstrtab_complete_size,
@@ -2944,7 +3211,7 @@ build_chalk_mark_shstrtab(n00b_elf_binary_t       *bin,
            (size_t)(plan->target_profile.shstrtab_complete_size
                     - shape->removed_name_end));
 
-    if (plan->operation == N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE) {
+    if (trusted_metadata_plan_is_replacement(plan)) {
         memcpy(new_strtab->data + shape->replacement_name_index,
                plan->section_name->data,
                plan->section_name->u8_bytes);
@@ -2956,12 +3223,12 @@ build_chalk_mark_shstrtab(n00b_elf_binary_t       *bin,
 }
 
 static n00b_buffer_t *
-build_chalk_mark_shtab(n00b_elf_binary_t       *bin,
-                       n00b_elf_rewrite_plan_t *plan,
-                       chalk_mark_shape_t      *shape,
-                       uint64_t                 shstrtab_offset,
-                       uint64_t                 shstrtab_size,
-                       n00b_allocator_t        *allocator)
+build_trusted_metadata_shtab(n00b_elf_binary_t       *bin,
+                             n00b_elf_rewrite_plan_t *plan,
+                             trusted_metadata_shape_t *shape,
+                             uint64_t                 shstrtab_offset,
+                             uint64_t                 shstrtab_size,
+                             n00b_allocator_t        *allocator)
 {
     n00b_buffer_t *shtab = new_zero_buffer(shape->new_shtab_size, allocator);
     if (shtab == nullptr) {
@@ -2993,7 +3260,7 @@ build_chalk_mark_shtab(n00b_elf_binary_t       *bin,
         out_index++;
     }
 
-    if (plan->operation == N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE) {
+    if (trusted_metadata_plan_is_replacement(plan)) {
         raw_shdr_t shdr = {
             .name      = shape->replacement_name_index,
             .type      = plan->section_type,
@@ -4110,8 +4377,8 @@ n00b_elf_rewrite_apply_loadable_insert_plan(
         return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
     }
 
-    n00b_bstream_t *stream = n00b_bstream_new(out);
-    auto            parsed = n00b_elf_parse(stream);
+    n00b_bstream_t *stream = n00b_bstream_new(out, .allocator = allocator);
+    auto            parsed = n00b_elf_parse(stream, .allocator = allocator);
     if (n00b_result_is_err(parsed)) {
         return n00b_result_err(n00b_buffer_t *,
                                N00B_ELF_REWRITE_ERR_PARSE_AFTER_APPLY);
@@ -4285,8 +4552,8 @@ n00b_elf_rewrite_apply_metadata_insert_plan(
         }
     }
 
-    n00b_bstream_t *stream = n00b_bstream_new(out);
-    auto            parsed = n00b_elf_parse(stream);
+    n00b_bstream_t *stream = n00b_bstream_new(out, .allocator = allocator);
+    auto            parsed = n00b_elf_parse(stream, .allocator = allocator);
     if (n00b_result_is_err(parsed)) {
         return n00b_result_err(n00b_buffer_t *,
                                N00B_ELF_REWRITE_ERR_PARSE_AFTER_APPLY);
@@ -4295,13 +4562,11 @@ n00b_elf_rewrite_apply_metadata_insert_plan(
     return n00b_result_ok(n00b_buffer_t *, out);
 }
 
-n00b_result_t(n00b_buffer_t *)
-n00b_elf_rewrite_apply_chalk_mark_plan(
-    n00b_elf_binary_t       *bin,
-    n00b_elf_rewrite_plan_t *plan) _kargs
-{
-    n00b_allocator_t *allocator = nullptr;
-}
+static n00b_result_t(n00b_buffer_t *)
+apply_trusted_metadata_plan(trusted_metadata_target_t target,
+                            n00b_elf_binary_t       *bin,
+                            n00b_elf_rewrite_plan_t *plan,
+                            n00b_allocator_t        *allocator)
 {
     if (bin == nullptr || bin->stream == nullptr || bin->stream->buf == nullptr) {
         return n00b_result_err(n00b_buffer_t *,
@@ -4319,25 +4584,32 @@ n00b_elf_rewrite_apply_chalk_mark_plan(
     }
 
     bool replacement =
-        plan->operation == N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE;
-    if (plan->operation != N00B_ELF_REWRITE_OPERATION_CHALK_MARK_DELETE
-        && !replacement) {
+        plan->operation == trusted_metadata_replace_operation(target);
+    bool deletion =
+        target == TRUSTED_METADATA_TARGET_CHALK_MARK
+        && plan->operation == N00B_ELF_REWRITE_OPERATION_CHALK_MARK_DELETE;
+    if (!deletion && !replacement) {
         return n00b_result_err(n00b_buffer_t *,
                                N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN);
     }
 
     if (plan->patches.data == nullptr || plan->patches.len == 0
         || plan->section_name == nullptr
-        || !section_name_is_chalk_mark(plan->section_name)
-        || (replacement && plan->payload == nullptr)) {
+        || !section_name_is_trusted_metadata(plan->section_name, target)
+        || (replacement
+            && (plan->payload == nullptr
+                || !replacement_plan_shape_matches_trusted_target(plan,
+                                                                  target)))) {
         return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
     }
 
-    chalk_mark_shape_t shape = {};
-    if (!compute_chalk_mark_shape(bin,
-                                  &plan->target_profile,
-                                  replacement,
-                                  &shape)
+    trusted_metadata_shape_t shape = {};
+    if (compute_trusted_metadata_shape(bin,
+                                       &plan->target_profile,
+                                       target,
+                                       replacement,
+                                       &shape)
+            != TRUSTED_METADATA_SHAPE_OK
         || shape.target_index != plan->removed_section_index
         || shape.new_shstrndx != plan->new_shstrndx
         || plan->new_section_count
@@ -4382,7 +4654,7 @@ n00b_elf_rewrite_apply_chalk_mark_plan(
     }
 
     n00b_buffer_t *strtab =
-        build_chalk_mark_shstrtab(bin, plan, &shape, allocator);
+        build_trusted_metadata_shstrtab(bin, plan, &shape, allocator);
     if (strtab == nullptr) {
         return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
     }
@@ -4393,12 +4665,12 @@ n00b_elf_rewrite_apply_chalk_mark_plan(
         return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_OVERFLOW);
     }
 
-    n00b_buffer_t *shtab = build_chalk_mark_shtab(bin,
-                                                  plan,
-                                                  &shape,
-                                                  shstrtab_offset,
-                                                  strtab->byte_len,
-                                                  allocator);
+    n00b_buffer_t *shtab = build_trusted_metadata_shtab(bin,
+                                                        plan,
+                                                        &shape,
+                                                        shstrtab_offset,
+                                                        strtab->byte_len,
+                                                        allocator);
     n00b_buffer_t *tables = nullptr;
     if (shtab != nullptr) {
         tables = combine_replacement_tables(strtab, shtab, allocator);
@@ -4433,14 +4705,58 @@ n00b_elf_rewrite_apply_chalk_mark_plan(
         return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
     }
 
-    n00b_bstream_t *stream = n00b_bstream_new(out);
-    auto            parsed = n00b_elf_parse(stream);
+    n00b_bstream_t *stream = n00b_bstream_new(out, .allocator = allocator);
+    auto            parsed = n00b_elf_parse(stream, .allocator = allocator);
     if (n00b_result_is_err(parsed)) {
         return n00b_result_err(n00b_buffer_t *,
                                N00B_ELF_REWRITE_ERR_PARSE_AFTER_APPLY);
     }
 
     return n00b_result_ok(n00b_buffer_t *, out);
+}
+
+n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_chalk_mark_plan(
+    n00b_elf_binary_t       *bin,
+    n00b_elf_rewrite_plan_t *plan) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return apply_trusted_metadata_plan(TRUSTED_METADATA_TARGET_CHALK_MARK,
+                                       bin,
+                                       plan,
+                                       allocator);
+}
+
+n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_object_bundle_plan(
+    n00b_elf_binary_t       *bin,
+    n00b_elf_rewrite_plan_t *plan) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (plan != nullptr
+        && plan->operation == N00B_ELF_REWRITE_OPERATION_METADATA_INSERT) {
+        if (plan->section_name == nullptr
+            || !section_name_is_object_bundle(plan->section_name)
+            || plan->section_type != SHT_PROGBITS
+            || plan->section_flags != 0) {
+            return n00b_result_err(n00b_buffer_t *,
+                                   N00B_ELF_REWRITE_ERR_APPLY);
+        }
+
+        return n00b_elf_rewrite_apply_metadata_insert_plan(
+            bin,
+            plan,
+            .allocator = allocator);
+    }
+
+    return apply_trusted_metadata_plan(TRUSTED_METADATA_TARGET_OBJECT_BUNDLE,
+                                       bin,
+                                       plan,
+                                       allocator);
 }
 
 n00b_result_t(n00b_buffer_t *)
@@ -4523,6 +4839,62 @@ n00b_elf_rewrite_apply_chalk_mark_replace(
                                                   .allocator = allocator);
 }
 
+n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_object_bundle_insert(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    auto plan_result = n00b_elf_rewrite_plan_object_bundle_insert(
+        bin,
+        request,
+        .allocator = allocator);
+    if (n00b_result_is_err(plan_result)) {
+        return n00b_result_err(n00b_buffer_t *,
+                               n00b_result_get_err(plan_result));
+    }
+
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    if (plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+    }
+
+    return n00b_elf_rewrite_apply_object_bundle_plan(bin,
+                                                     plan,
+                                                     .allocator = allocator);
+}
+
+n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_object_bundle_replace(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    auto plan_result = n00b_elf_rewrite_plan_object_bundle_replace(
+        bin,
+        request,
+        .allocator = allocator);
+    if (n00b_result_is_err(plan_result)) {
+        return n00b_result_err(n00b_buffer_t *,
+                               n00b_result_get_err(plan_result));
+    }
+
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    if (plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+    }
+
+    return n00b_elf_rewrite_apply_object_bundle_plan(bin,
+                                                     plan,
+                                                     .allocator = allocator);
+}
+
 n00b_string_t *
 n00b_elf_rewrite_err_str(n00b_err_t err)
 {
@@ -4572,6 +4944,10 @@ n00b_elf_rewrite_rejection_reason_str(
     case N00B_ELF_REWRITE_REJECT_CHALK_MARK_NOT_FOUND:    return r"chalk-mark-not-found";
     case N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED:  return r"chalk-mark-unsupported";
     case N00B_ELF_REWRITE_REJECT_TRUSTED_NAME:            return r"trusted-name";
+    case N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_NOT_FOUND: return r"object-bundle-not-found";
+    case N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_DUPLICATE: return r"object-bundle-duplicate";
+    case N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_UNSUPPORTED:
+        return r"object-bundle-unsupported";
     case N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT:      return r"loadable-placement";
     case N00B_ELF_REWRITE_REJECT_LOADABLE_ADDRESS:        return r"loadable-address";
     }

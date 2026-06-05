@@ -16,6 +16,12 @@ typedef struct phtab_range {
     uint64_t size;
 } phtab_range_t;
 
+typedef enum {
+    TRUSTED_METADATA_NONE,
+    TRUSTED_METADATA_CHALK_MARK,
+    TRUSTED_METADATA_OBJECT_BUNDLE,
+} trusted_metadata_kind_t;
+
 static bool
 checked_add_u64(uint64_t a, uint64_t b, uint64_t *out)
 {
@@ -161,7 +167,36 @@ section_name_is_chalk_mark(n00b_string_t *name)
 }
 
 static bool
-target_has_reserved_section(n00b_elf_binary_t *bin)
+section_name_is_chalk_free(n00b_string_t *name)
+{
+    return n00b_unicode_str_eq(name, r".chalk.free");
+}
+
+static bool
+section_name_is_object_bundle(n00b_string_t *name)
+{
+    return n00b_unicode_str_eq(name, r".0c001.bundle");
+}
+
+static bool
+section_name_matches_trusted_kind(n00b_string_t *name,
+                                  trusted_metadata_kind_t kind)
+{
+    switch (kind) {
+    case TRUSTED_METADATA_NONE:
+        return false;
+    case TRUSTED_METADATA_CHALK_MARK:
+        return section_name_is_chalk_mark(name);
+    case TRUSTED_METADATA_OBJECT_BUNDLE:
+        return section_name_is_object_bundle(name);
+    }
+
+    return false;
+}
+
+static bool
+target_has_reserved_section_for_trusted_kind(n00b_elf_binary_t       *bin,
+                                             trusted_metadata_kind_t  trusted_kind)
 {
     for (uint32_t i = 0; i < bin->num_sections; i++) {
         n00b_elf_section_t *sec = &bin->sections[i];
@@ -170,12 +205,27 @@ target_has_reserved_section(n00b_elf_binary_t *bin)
             return true;
         }
 
+        if (sec->name != nullptr
+            && trusted_kind == TRUSTED_METADATA_OBJECT_BUNDLE
+            && (section_name_is_chalk_mark(sec->name)
+                || section_name_is_chalk_free(sec->name))) {
+            continue;
+        }
+
         if (sec->name != nullptr && section_name_is_reserved(sec->name)) {
             return true;
         }
     }
 
     return false;
+}
+
+static bool
+target_has_reserved_section(n00b_elf_binary_t *bin)
+{
+    return target_has_reserved_section_for_trusted_kind(
+        bin,
+        TRUSTED_METADATA_NONE);
 }
 
 static bool
@@ -192,6 +242,19 @@ request_is_metadata_only(n00b_elf_rewrite_admit_metadata_request_t *request)
     default:
         return false;
     }
+}
+
+static bool
+request_is_metadata_for_trusted_kind(
+    n00b_elf_rewrite_admit_metadata_request_t *request,
+    trusted_metadata_kind_t                    kind)
+{
+    if (kind != TRUSTED_METADATA_OBJECT_BUNDLE) {
+        return request_is_metadata_only(request);
+    }
+
+    return request->section_flags == 0
+        && request->section_type == SHT_PROGBITS;
 }
 
 static n00b_result_t(phtab_range_t)
@@ -590,7 +653,7 @@ static n00b_result_t(n00b_elf_rewrite_admit_result_t)
 admit_metadata_insert_impl(
     n00b_elf_binary_t                         *bin,
     n00b_elf_rewrite_admit_metadata_request_t *request,
-    bool                                       trusted_chalk_mark,
+    trusted_metadata_kind_t                    trusted_kind,
     n00b_allocator_t                          *allocator)
 {
     if (bin == nullptr) {
@@ -625,19 +688,18 @@ admit_metadata_insert_impl(
     n00b_elf_layout_t *layout = n00b_result_get(layout_result);
 
     bool requested_reserved = section_name_is_reserved(request->section_name);
-    if ((requested_reserved
-         && (!trusted_chalk_mark
-             || !section_name_is_chalk_mark(request->section_name)))
-        || (trusted_chalk_mark
-            && !section_name_is_chalk_mark(request->section_name))
-        || target_has_reserved_section(bin)) {
+    if ((trusted_kind == TRUSTED_METADATA_NONE && requested_reserved)
+        || (trusted_kind != TRUSTED_METADATA_NONE
+            && !section_name_matches_trusted_kind(request->section_name,
+                                                 trusted_kind))
+        || target_has_reserved_section_for_trusted_kind(bin, trusted_kind)) {
         return rejected(layout,
                         request,
                         alignment,
                         N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
     }
 
-    if (!request_is_metadata_only(request)) {
+    if (!request_is_metadata_for_trusted_kind(request, trusted_kind)) {
         return rejected(layout,
                         request,
                         alignment,
@@ -1337,7 +1399,10 @@ n00b_elf_rewrite_admit_metadata_insert(
     n00b_allocator_t *allocator = nullptr;
 }
 {
-    return admit_metadata_insert_impl(bin, request, false, allocator);
+    return admit_metadata_insert_impl(bin,
+                                      request,
+                                      TRUSTED_METADATA_NONE,
+                                      allocator);
 }
 
 n00b_result_t(n00b_elf_rewrite_admit_result_t)
@@ -1348,7 +1413,24 @@ n00b_elf_rewrite_admit_chalk_mark_insert(
     n00b_allocator_t *allocator = nullptr;
 }
 {
-    return admit_metadata_insert_impl(bin, request, true, allocator);
+    return admit_metadata_insert_impl(bin,
+                                      request,
+                                      TRUSTED_METADATA_CHALK_MARK,
+                                      allocator);
+}
+
+n00b_result_t(n00b_elf_rewrite_admit_result_t)
+n00b_elf_rewrite_admit_object_bundle_insert(
+    n00b_elf_binary_t                         *bin,
+    n00b_elf_rewrite_admit_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return admit_metadata_insert_impl(bin,
+                                      request,
+                                      TRUSTED_METADATA_OBJECT_BUNDLE,
+                                      allocator);
 }
 
 n00b_string_t *

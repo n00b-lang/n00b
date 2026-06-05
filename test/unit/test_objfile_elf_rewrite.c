@@ -34,6 +34,7 @@
 #define SHSTRTAB_SH 320
 #define N00B_TEST_ELF64_EHDR_SIZE 64u
 #define N00B_TEST_ELF64_PHDR_SIZE 56u
+#define N00B_TEST_ELF64_SHDR_SIZE 64u
 #define N00B_TEST_SHN_LORESERVE 0xff00u
 
 typedef void (*mutator_fn)(n00b_buffer_t *);
@@ -158,6 +159,15 @@ get32_be(const uint8_t *p)
          | ((uint32_t)p[1] << 16)
          | ((uint32_t)p[2] << 8)
          | (uint32_t)p[3];
+}
+
+static uint32_t
+get32_le(const uint8_t *p)
+{
+    return (uint32_t)p[0]
+         | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16)
+         | ((uint32_t)p[3] << 24);
 }
 
 static uint64_t
@@ -335,6 +345,19 @@ chalk_mark_request(uint8_t fill, size_t len)
     n00b_elf_rewrite_metadata_request_t request = default_request();
 
     request.section_name = r".chalk.mark";
+    request.payload = payload_new(fill, len);
+    request.file_alignment = 8;
+    request.section_type = SHT_PROGBITS;
+    request.section_flags = 0;
+    return request;
+}
+
+static n00b_elf_rewrite_metadata_request_t
+object_bundle_request(uint8_t fill, size_t len)
+{
+    n00b_elf_rewrite_metadata_request_t request = default_request();
+
+    request.section_name = r".0c001.bundle";
     request.payload = payload_new(fill, len);
     request.file_alignment = 8;
     request.section_type = SHT_PROGBITS;
@@ -1002,6 +1025,55 @@ apply_chalk_plan_and_parse(n00b_buffer_t *input,
 }
 
 static n00b_buffer_t *
+apply_object_bundle_plan_and_parse(n00b_buffer_t *input,
+                                   n00b_elf_binary_t *bin,
+                                   n00b_elf_rewrite_plan_t *plan,
+                                   n00b_elf_binary_t **parsed_out)
+{
+    n00b_buffer_t *input_snapshot = n00b_buffer_new((int64_t)input->byte_len);
+    n00b_elf_header_t header_snapshot = bin->header;
+    uint32_t num_sections_snapshot = bin->num_sections;
+    uint32_t num_segments_snapshot = bin->num_segments;
+
+    memcpy(input_snapshot->data, input->data, input->byte_len);
+    input_snapshot->byte_len = input->byte_len;
+
+    auto applied = n00b_elf_rewrite_apply_object_bundle_plan(bin, plan);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(applied));
+
+    n00b_buffer_t *output = n00b_result_get(applied);
+    n00b_bstream_t *stream = n00b_bstream_new(output);
+    auto parsed = n00b_elf_parse(stream);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(parsed));
+    *parsed_out = n00b_result_get(parsed);
+    N00B_TEST_REQUIRE(input->byte_len == input_snapshot->byte_len);
+    N00B_TEST_REQUIRE(memcmp(input->data,
+                             input_snapshot->data,
+                             input_snapshot->byte_len) == 0);
+    N00B_TEST_REQUIRE(memcmp(bin->header.ident,
+                             header_snapshot.ident,
+                             sizeof(header_snapshot.ident)) == 0);
+    N00B_TEST_REQUIRE(bin->header.type == header_snapshot.type);
+    N00B_TEST_REQUIRE(bin->header.machine == header_snapshot.machine);
+    N00B_TEST_REQUIRE(bin->header.version == header_snapshot.version);
+    N00B_TEST_REQUIRE(bin->header.entry == header_snapshot.entry);
+    N00B_TEST_REQUIRE(bin->header.phoff == header_snapshot.phoff);
+    N00B_TEST_REQUIRE(bin->header.shoff == header_snapshot.shoff);
+    N00B_TEST_REQUIRE(bin->header.flags == header_snapshot.flags);
+    N00B_TEST_REQUIRE(bin->header.ehsize == header_snapshot.ehsize);
+    N00B_TEST_REQUIRE(bin->header.phentsize == header_snapshot.phentsize);
+    N00B_TEST_REQUIRE(bin->header.phnum == header_snapshot.phnum);
+    N00B_TEST_REQUIRE(bin->header.shentsize == header_snapshot.shentsize);
+    N00B_TEST_REQUIRE(bin->header.shnum == header_snapshot.shnum);
+    N00B_TEST_REQUIRE(bin->header.shstrndx == header_snapshot.shstrndx);
+    N00B_TEST_REQUIRE(bin->num_sections == num_sections_snapshot);
+    N00B_TEST_REQUIRE(bin->num_segments == num_segments_snapshot);
+    assert_unplanned_original_bytes_preserved(input_snapshot, output, plan);
+    return output;
+}
+
+static n00b_buffer_t *
 apply_loadable_plan_and_parse(n00b_buffer_t *input,
                               n00b_elf_binary_t *bin,
                               n00b_elf_rewrite_loadable_plan_t *plan,
@@ -1083,6 +1155,101 @@ assert_inserted_section(n00b_elf_binary_t *bin,
     N00B_TEST_REQUIRE(memcmp(sec->content->data,
                              request->payload->data,
                              request->payload->byte_len) == 0);
+}
+
+static void
+assert_object_bundle_section(n00b_elf_section_t *sec,
+                             n00b_elf_rewrite_metadata_request_t *request)
+{
+    N00B_TEST_REQUIRE(sec != nullptr);
+    N00B_TEST_REQUIRE(sec->type == SHT_PROGBITS);
+    N00B_TEST_REQUIRE(sec->flags == 0);
+    N00B_TEST_REQUIRE(sec->addr == 0);
+    N00B_TEST_REQUIRE(sec->size == request->payload->byte_len);
+    N00B_TEST_REQUIRE(sec->content != nullptr);
+    N00B_TEST_REQUIRE(sec->content->byte_len == request->payload->byte_len);
+    N00B_TEST_REQUIRE(memcmp(sec->content->data,
+                             request->payload->data,
+                             request->payload->byte_len) == 0);
+}
+
+static uint64_t
+section_header_offset(n00b_elf_binary_t *bin, uint32_t section_index)
+{
+    uint64_t offset = bin->header.shoff
+                    + (uint64_t)section_index * bin->header.shentsize;
+
+    N00B_TEST_REQUIRE(section_index < bin->num_sections);
+    N00B_TEST_REQUIRE(offset + N00B_TEST_ELF64_SHDR_SIZE
+                      <= bin->stream->buf->byte_len);
+    return offset;
+}
+
+static void
+duplicate_object_bundle_section_name(n00b_buffer_t *buf,
+                                      n00b_elf_binary_t *bin)
+{
+    uint32_t bundle_index =
+        require_section_index_named(bin, r".0c001.bundle");
+    uint64_t bundle_shdr = section_header_offset(bin, bundle_index);
+    uint64_t shstr_shdr = section_header_offset(bin, bin->header.shstrndx);
+    uint32_t bundle_name_index =
+        get32_le((const uint8_t *)buf->data + bundle_shdr + SH_NAME);
+
+    n00b_test_elf_put32((uint8_t *)buf->data + shstr_shdr + SH_NAME,
+                        bundle_name_index);
+}
+
+static void
+mutate_object_bundle_section_type(n00b_buffer_t *buf,
+                                  n00b_elf_binary_t *bin,
+                                  uint32_t type)
+{
+    uint32_t bundle_index =
+        require_section_index_named(bin, r".0c001.bundle");
+    uint64_t bundle_shdr = section_header_offset(bin, bundle_index);
+
+    n00b_test_elf_put32((uint8_t *)buf->data + bundle_shdr + SH_TYPE,
+                        type);
+}
+
+static void
+mutate_object_bundle_section_flags(n00b_buffer_t *buf,
+                                   n00b_elf_binary_t *bin,
+                                   uint64_t flags)
+{
+    uint32_t bundle_index =
+        require_section_index_named(bin, r".0c001.bundle");
+    uint64_t bundle_shdr = section_header_offset(bin, bundle_index);
+
+    n00b_test_elf_put64((uint8_t *)buf->data + bundle_shdr + 8,
+                        flags);
+}
+
+static void
+mutate_object_bundle_section_offset(n00b_buffer_t *buf,
+                                    n00b_elf_binary_t *bin,
+                                    uint64_t offset)
+{
+    uint32_t bundle_index =
+        require_section_index_named(bin, r".0c001.bundle");
+    uint64_t bundle_shdr = section_header_offset(bin, bundle_index);
+
+    n00b_test_elf_put64((uint8_t *)buf->data + bundle_shdr + SH_OFFSET,
+                        offset);
+}
+
+static void
+mutate_object_bundle_section_size(n00b_buffer_t *buf,
+                                  n00b_elf_binary_t *bin,
+                                  uint64_t size)
+{
+    uint32_t bundle_index =
+        require_section_index_named(bin, r".0c001.bundle");
+    uint64_t bundle_shdr = section_header_offset(bin, bundle_index);
+
+    n00b_test_elf_put64((uint8_t *)buf->data + bundle_shdr + SH_SIZE,
+                        size);
 }
 
 static void
@@ -1268,6 +1435,33 @@ test_invalid_inputs(void)
                       N00B_ELF_REWRITE_ERR_NULL_BINARY);
     assert_buffer_err(n00b_elf_rewrite_apply_metadata_insert_plan(bin,
                                                                   nullptr),
+                      N00B_ELF_REWRITE_ERR_NULL_PLAN);
+
+    request = object_bundle_request(0x90, 24);
+    assert_err(n00b_elf_rewrite_plan_object_bundle_insert(nullptr,
+                                                          &request),
+               N00B_ELF_REWRITE_ERR_NULL_BINARY);
+    assert_err(n00b_elf_rewrite_plan_object_bundle_insert(bin, nullptr),
+               N00B_ELF_REWRITE_ERR_NULL_REQUEST);
+    assert_err(n00b_elf_rewrite_plan_object_bundle_replace(bin, nullptr),
+               N00B_ELF_REWRITE_ERR_NULL_REQUEST);
+
+    request.section_name = nullptr;
+    assert_err(n00b_elf_rewrite_plan_object_bundle_insert(bin, &request),
+               N00B_ELF_REWRITE_ERR_NULL_SECTION_NAME);
+
+    request = object_bundle_request(0x91, 24);
+    request.payload = nullptr;
+    assert_err(n00b_elf_rewrite_plan_object_bundle_insert(bin, &request),
+               N00B_ELF_REWRITE_ERR_NULL_PAYLOAD);
+
+    request = object_bundle_request(0x92, 24);
+    request.payload->byte_len = 0;
+    assert_err(n00b_elf_rewrite_plan_object_bundle_insert(bin, &request),
+               N00B_ELF_REWRITE_ERR_ZERO_PAYLOAD_SIZE);
+
+    assert_buffer_err(n00b_elf_rewrite_apply_object_bundle_plan(bin,
+                                                                nullptr),
                       N00B_ELF_REWRITE_ERR_NULL_PLAN);
 }
 
@@ -2542,6 +2736,106 @@ test_admission_rejection_propagates(void)
                       == N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
 }
 
+static void
+test_object_bundle_ordinary_insert_rejects_reserved_name(void)
+{
+    n00b_elf_rewrite_metadata_request_t request =
+        object_bundle_request(0x50, 24);
+    n00b_elf_rewrite_plan_t *plan =
+        require_rejected_plan(valid_target_buffer(),
+                              &request,
+                              N00B_ELF_REWRITE_REJECT_ADMISSION);
+
+    N00B_TEST_REQUIRE(plan->admission.rejection_reason
+                      == N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+
+    n00b_buffer_t *buf = valid_target_buffer();
+    n00b_elf_binary_t *bin = parse_buffer(buf);
+    assert_buffer_err(n00b_elf_rewrite_apply_metadata_insert(bin,
+                                                             &request),
+                      N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+}
+
+static void
+test_trusted_object_bundle_insert_policy(void)
+{
+    n00b_buffer_t *buf = valid_target_buffer();
+    n00b_elf_binary_t *bin = parse_buffer(buf);
+    n00b_elf_rewrite_metadata_request_t request =
+        object_bundle_request(0x51, 24);
+
+    auto plan_result =
+        n00b_elf_rewrite_plan_object_bundle_insert(bin, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED);
+    N00B_TEST_REQUIRE(plan->operation
+                      == N00B_ELF_REWRITE_OPERATION_METADATA_INSERT);
+    N00B_TEST_REQUIRE(plan->admission.outcome
+                      == N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED);
+    assert_patches_ordered(plan);
+
+    n00b_elf_binary_t *rewritten = nullptr;
+    (void)apply_object_bundle_plan_and_parse(buf, bin, plan, &rewritten);
+    n00b_elf_section_t *bundle =
+        require_section_named(rewritten, r".0c001.bundle");
+    assert_object_bundle_section(bundle, &request);
+    N00B_TEST_REQUIRE(count_sections_named(rewritten, r".0c001.bundle") == 1);
+
+    n00b_string_t *bad_names[] = {
+        r".0c001.file",
+        r".0c001.wrap",
+        r".0c001.code",
+        r".0c001.extra",
+        r".chalk.mark",
+        r".chalk.free",
+        r".n00b.test",
+    };
+
+    for (size_t i = 0; i < sizeof(bad_names) / sizeof(bad_names[0]); i++) {
+        request = object_bundle_request(0x52, 16);
+        request.section_name = bad_names[i];
+
+        plan_result =
+            n00b_elf_rewrite_plan_object_bundle_insert(bin, &request);
+        N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+        plan = n00b_result_get(plan_result);
+        N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+        N00B_TEST_REQUIRE(plan->rejection_reason
+                          == N00B_ELF_REWRITE_REJECT_ADMISSION);
+        N00B_TEST_REQUIRE(plan->admission.rejection_reason
+                          == N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+    }
+
+    request = object_bundle_request(0x53, 16);
+    request.section_type = SHT_NOTE;
+    plan_result = n00b_elf_rewrite_plan_object_bundle_insert(bin, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->admission.rejection_reason
+                      == N00B_ELF_REWRITE_ADMIT_REJECT_SECTION_NOT_METADATA);
+
+    request = object_bundle_request(0x54, 16);
+    request.section_flags = SHF_ALLOC;
+    plan_result = n00b_elf_rewrite_plan_object_bundle_insert(bin, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->admission.rejection_reason
+                      == N00B_ELF_REWRITE_ADMIT_REJECT_SECTION_NOT_METADATA);
+
+    request = object_bundle_request(0x55, 16);
+    request.section_type = 0xc001u;
+    plan_result = n00b_elf_rewrite_plan_object_bundle_insert(bin, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->admission.rejection_reason
+                      == N00B_ELF_REWRITE_ADMIT_REJECT_SECTION_NOT_METADATA);
+}
+
 static n00b_buffer_t *
 trusted_marked_buffer(uint8_t fill,
                       size_t len,
@@ -2567,6 +2861,40 @@ trusted_marked_buffer(uint8_t fill,
 
     assert_inserted_section(marked, plan, &request);
     N00B_TEST_REQUIRE(count_sections_named(marked, r".chalk.mark") == 1);
+
+    if (plan_out != nullptr) {
+        *plan_out = plan;
+    }
+    return out;
+}
+
+static n00b_buffer_t *
+trusted_bundle_buffer(uint8_t fill,
+                      size_t len,
+                      n00b_elf_rewrite_plan_t **plan_out)
+{
+    n00b_buffer_t *buf = valid_target_buffer();
+    n00b_elf_binary_t *bin = parse_buffer(buf);
+    n00b_elf_rewrite_metadata_request_t request =
+        object_bundle_request(fill, len);
+
+    auto plan_result = n00b_elf_rewrite_plan_object_bundle_insert(bin,
+                                                                  &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED);
+    N00B_TEST_REQUIRE(plan->operation
+                      == N00B_ELF_REWRITE_OPERATION_METADATA_INSERT);
+    N00B_TEST_REQUIRE(plan->section_name == request.section_name);
+    assert_patches_ordered(plan);
+
+    n00b_elf_binary_t *bundled = nullptr;
+    n00b_buffer_t *out =
+        apply_object_bundle_plan_and_parse(buf, bin, plan, &bundled);
+
+    assert_inserted_section(bundled, plan, &request);
+    N00B_TEST_REQUIRE(count_sections_named(bundled, r".0c001.bundle") == 1);
 
     if (plan_out != nullptr) {
         *plan_out = plan;
@@ -2839,6 +3167,254 @@ test_chalk_mark_replace_produces_one_live_mark(void)
 }
 
 static void
+test_apply_object_bundle_insert_wrapper_public_api(void)
+{
+    n00b_buffer_t *buf = valid_target_buffer();
+    n00b_elf_binary_t *bin = parse_buffer(buf);
+    n00b_elf_rewrite_metadata_request_t request =
+        object_bundle_request(0x80, 24);
+
+    auto applied = n00b_elf_rewrite_apply_object_bundle_insert(bin,
+                                                               &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(applied));
+
+    n00b_buffer_t *out = n00b_result_get(applied);
+    n00b_elf_binary_t *bundled = parse_buffer(out);
+    n00b_elf_section_t *bundle =
+        require_section_named(bundled, r".0c001.bundle");
+
+    assert_object_bundle_section(bundle, &request);
+    N00B_TEST_REQUIRE(count_sections_named(bundled, r".0c001.bundle") == 1);
+}
+
+static void
+test_object_bundle_replace_produces_one_live_bundle(void)
+{
+    n00b_buffer_t *bundled_bytes = trusted_bundle_buffer(0x81, 20, nullptr);
+    n00b_elf_binary_t *bundled = parse_buffer(bundled_bytes);
+    n00b_elf_section_t *old_bundle =
+        require_section_named(bundled, r".0c001.bundle");
+    n00b_elf_rewrite_metadata_request_t request =
+        object_bundle_request(0x82, 28);
+
+    auto plan_result =
+        n00b_elf_rewrite_plan_object_bundle_replace(bundled, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED);
+    N00B_TEST_REQUIRE(plan->operation
+                      == N00B_ELF_REWRITE_OPERATION_OBJECT_BUNDLE_REPLACE);
+    N00B_TEST_REQUIRE(plan->new_section_count
+                      == plan->original_section_count);
+    N00B_TEST_REQUIRE(plan->removed_payload_offset == old_bundle->offset);
+    N00B_TEST_REQUIRE(plan->removed_payload_end
+                      == old_bundle->offset + old_bundle->size);
+    N00B_TEST_REQUIRE(find_patch(plan, N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD)
+                      != nullptr);
+    N00B_TEST_REQUIRE(find_patch(plan, N00B_ELF_REWRITE_PATCH_PAYLOAD)
+                      != nullptr);
+    assert_patches_ordered(plan);
+
+    n00b_elf_binary_t *replaced = nullptr;
+    n00b_buffer_t *out =
+        apply_object_bundle_plan_and_parse(bundled_bytes,
+                                           bundled,
+                                           plan,
+                                           &replaced);
+    n00b_elf_section_t *new_bundle =
+        require_section_named(replaced, r".0c001.bundle");
+
+    N00B_TEST_REQUIRE(count_sections_named(replaced, r".0c001.bundle") == 1);
+    N00B_TEST_REQUIRE(new_bundle->offset == plan->payload_offset);
+    assert_object_bundle_section(new_bundle, &request);
+    assert_range_zeroed(out,
+                        plan->removed_payload_offset,
+                        plan->removed_payload_end);
+    N00B_TEST_REQUIRE(memcmp(out->data + plan->payload_offset,
+                             request.payload->data,
+                             request.payload->byte_len) == 0);
+}
+
+static void
+test_apply_object_bundle_replace_wrapper_public_api(void)
+{
+    n00b_buffer_t *bundled_bytes = trusted_bundle_buffer(0x83, 20, nullptr);
+    n00b_elf_binary_t *bundled = parse_buffer(bundled_bytes);
+    n00b_elf_section_t *old_bundle =
+        require_section_named(bundled, r".0c001.bundle");
+    uint64_t old_payload_offset = old_bundle->offset;
+    uint64_t old_payload_end = old_bundle->offset + old_bundle->size;
+    n00b_elf_rewrite_metadata_request_t request =
+        object_bundle_request(0x84, 32);
+
+    auto applied = n00b_elf_rewrite_apply_object_bundle_replace(bundled,
+                                                                &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(applied));
+
+    n00b_buffer_t *out = n00b_result_get(applied);
+    n00b_elf_binary_t *replaced = parse_buffer(out);
+    n00b_elf_section_t *new_bundle =
+        require_section_named(replaced, r".0c001.bundle");
+
+    N00B_TEST_REQUIRE(count_sections_named(replaced, r".0c001.bundle") == 1);
+    assert_object_bundle_section(new_bundle, &request);
+    assert_range_zeroed(out, old_payload_offset, old_payload_end);
+}
+
+static void
+test_object_bundle_replace_rejects_absent_and_duplicate(void)
+{
+    n00b_elf_binary_t *bin = parse_buffer(valid_target_buffer());
+    n00b_elf_rewrite_metadata_request_t request =
+        object_bundle_request(0x85, 24);
+
+    auto plan_result =
+        n00b_elf_rewrite_plan_object_bundle_replace(bin, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->rejection_reason
+                      == N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_NOT_FOUND);
+
+    n00b_buffer_t *bundled_bytes = trusted_bundle_buffer(0x86, 20, nullptr);
+    n00b_elf_binary_t *bundled = parse_buffer(bundled_bytes);
+    duplicate_object_bundle_section_name(bundled_bytes, bundled);
+    bundled = parse_buffer(bundled_bytes);
+
+    plan_result =
+        n00b_elf_rewrite_plan_object_bundle_replace(bundled, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->rejection_reason
+                      == N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_DUPLICATE);
+}
+
+static void
+test_object_bundle_replace_rejects_malformed_existing_carrier(void)
+{
+    n00b_elf_rewrite_metadata_request_t request =
+        object_bundle_request(0x87, 24);
+
+    n00b_buffer_t *bundled_bytes = trusted_bundle_buffer(0x88, 20, nullptr);
+    n00b_elf_binary_t *bundled = parse_buffer(bundled_bytes);
+    mutate_object_bundle_section_type(bundled_bytes, bundled, SHT_NOTE);
+    bundled = parse_buffer(bundled_bytes);
+
+    auto plan_result =
+        n00b_elf_rewrite_plan_object_bundle_replace(bundled, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->rejection_reason
+                      == N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_UNSUPPORTED);
+
+    bundled_bytes = trusted_bundle_buffer(0x89, 20, nullptr);
+    bundled = parse_buffer(bundled_bytes);
+    mutate_object_bundle_section_flags(bundled_bytes, bundled, SHF_ALLOC);
+    bundled = parse_buffer(bundled_bytes);
+
+    plan_result =
+        n00b_elf_rewrite_plan_object_bundle_replace(bundled, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->rejection_reason
+                      == N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_UNSUPPORTED);
+
+    bundled_bytes = trusted_bundle_buffer(0x8a, 20, nullptr);
+    bundled = parse_buffer(bundled_bytes);
+    mutate_object_bundle_section_size(bundled_bytes, bundled, 0);
+    bundled = parse_buffer(bundled_bytes);
+
+    plan_result =
+        n00b_elf_rewrite_plan_object_bundle_replace(bundled, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->rejection_reason
+                      == N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_UNSUPPORTED);
+}
+
+static void
+test_object_bundle_replace_rejects_shared_payload_range(void)
+{
+    n00b_buffer_t *bundled_bytes = trusted_bundle_buffer(0x8b, 20, nullptr);
+    n00b_elf_binary_t *bundled = parse_buffer(bundled_bytes);
+    n00b_elf_rewrite_metadata_request_t request =
+        object_bundle_request(0x8c, 24);
+
+    mutate_object_bundle_section_offset(bundled_bytes, bundled, 0);
+    bundled = parse_buffer(bundled_bytes);
+    n00b_elf_section_t *old_bundle =
+        require_section_named(bundled, r".0c001.bundle");
+    N00B_TEST_REQUIRE(old_bundle->offset == 0);
+
+    auto plan_result =
+        n00b_elf_rewrite_plan_object_bundle_replace(bundled, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->rejection_reason
+                      == N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_UNSUPPORTED);
+    assert_buffer_err(n00b_elf_rewrite_apply_object_bundle_replace(bundled,
+                                                                   &request),
+                      N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+}
+
+static void
+test_object_bundle_replace_rejects_wrong_request_shape(void)
+{
+    n00b_buffer_t *bundled_bytes = trusted_bundle_buffer(0x8d, 20, nullptr);
+    n00b_elf_binary_t *bundled = parse_buffer(bundled_bytes);
+    n00b_elf_rewrite_metadata_request_t request =
+        object_bundle_request(0x8e, 24);
+    n00b_string_t *bad_names[] = {
+        r".0c001.file",
+        r".0c001.wrap",
+        r".0c001.code",
+        r".0c001.extra",
+        r".chalk.mark",
+        r".n00b.test",
+    };
+
+    for (size_t i = 0; i < sizeof(bad_names) / sizeof(bad_names[0]); i++) {
+        request = object_bundle_request(0x8f, 24);
+        request.section_name = bad_names[i];
+
+        auto plan_result =
+            n00b_elf_rewrite_plan_object_bundle_replace(bundled,
+                                                        &request);
+        N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+        n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+        N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+        N00B_TEST_REQUIRE(plan->rejection_reason
+                          == N00B_ELF_REWRITE_REJECT_TRUSTED_NAME);
+    }
+
+    request = object_bundle_request(0x90, 24);
+    request.section_type = SHT_NOTE;
+    auto plan_result =
+        n00b_elf_rewrite_plan_object_bundle_replace(bundled, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->rejection_reason
+                      == N00B_ELF_REWRITE_REJECT_TRUSTED_NAME);
+
+    request = object_bundle_request(0x91, 24);
+    request.section_flags = SHF_ALLOC;
+    plan_result =
+        n00b_elf_rewrite_plan_object_bundle_replace(bundled, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->rejection_reason
+                      == N00B_ELF_REWRITE_REJECT_TRUSTED_NAME);
+}
+
+static void
 test_packager_profile_matrix(void)
 {
     static const profile_case_t cases[] = {
@@ -3008,6 +3584,12 @@ test_stringifiers(void)
     N00B_TEST_REQUIRE(n00b_elf_rewrite_rejection_reason_str(
                           N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED)->u8_bytes != 0);
     N00B_TEST_REQUIRE(n00b_elf_rewrite_rejection_reason_str(
+                          N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_NOT_FOUND)->u8_bytes != 0);
+    N00B_TEST_REQUIRE(n00b_elf_rewrite_rejection_reason_str(
+                          N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_DUPLICATE)->u8_bytes != 0);
+    N00B_TEST_REQUIRE(n00b_elf_rewrite_rejection_reason_str(
+                          N00B_ELF_REWRITE_REJECT_OBJECT_BUNDLE_UNSUPPORTED)->u8_bytes != 0);
+    N00B_TEST_REQUIRE(n00b_elf_rewrite_rejection_reason_str(
                           N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT)->u8_bytes != 0);
     N00B_TEST_REQUIRE(n00b_elf_rewrite_rejection_reason_str(
                           N00B_ELF_REWRITE_REJECT_LOADABLE_ADDRESS)->u8_bytes != 0);
@@ -3091,6 +3673,8 @@ main(int argc, char **argv)
     test_apply_eof_replacement_fallback();
     test_preferred_gap_rejects_nonzero_unknown();
     test_admission_rejection_propagates();
+    test_object_bundle_ordinary_insert_rejects_reserved_name();
+    test_trusted_object_bundle_insert_policy();
     test_direct_trusted_chalk_mark_admit_public_api();
     test_trusted_chalk_mark_insert_policy();
     test_apply_chalk_mark_delete_wrapper_public_api();
@@ -3098,6 +3682,13 @@ main(int argc, char **argv)
     test_chalk_mark_delete_replace_reject_colliding_payload();
     test_apply_chalk_mark_replace_wrapper_public_api();
     test_chalk_mark_replace_produces_one_live_mark();
+    test_apply_object_bundle_insert_wrapper_public_api();
+    test_object_bundle_replace_produces_one_live_bundle();
+    test_apply_object_bundle_replace_wrapper_public_api();
+    test_object_bundle_replace_rejects_absent_and_duplicate();
+    test_object_bundle_replace_rejects_malformed_existing_carrier();
+    test_object_bundle_replace_rejects_shared_payload_range();
+    test_object_bundle_replace_rejects_wrong_request_shape();
     test_packager_profile_matrix();
     test_unterminated_shstrtab_is_profile_ok();
     test_section_count_promotion_rejects();

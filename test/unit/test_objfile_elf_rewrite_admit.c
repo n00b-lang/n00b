@@ -101,6 +101,17 @@ default_request(void)
     };
 }
 
+static n00b_elf_rewrite_admit_metadata_request_t
+object_bundle_request(void)
+{
+    n00b_elf_rewrite_admit_metadata_request_t request = default_request();
+
+    request.section_name = r".0c001.bundle";
+    request.section_type = SHT_PROGBITS;
+    request.section_flags = 0;
+    return request;
+}
+
 static n00b_elf_rewrite_admit_loadable_request_t
 default_loadable_request(void)
 {
@@ -994,11 +1005,84 @@ test_reserved_section_names(void)
         N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
 
     request = default_request();
+    request.section_name = r".0c001.bundle";
+    require_rejected_result(
+        n00b_elf_rewrite_admit_metadata_insert(parse_valid_minimal_exec(),
+                                                &request),
+        N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+
+    request = default_request();
     request.section_name = r".0c001.guard";
     require_rejected_result(
         n00b_elf_rewrite_admit_metadata_insert(parse_valid_minimal_exec(),
                                                 &request),
         N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+}
+
+static void
+test_trusted_object_bundle_admission(void)
+{
+    n00b_elf_binary_t *bin = parse_valid_minimal_exec();
+    n00b_elf_rewrite_admit_metadata_request_t request =
+        object_bundle_request();
+
+    n00b_elf_rewrite_admit_result_t admit =
+        require_accepted_result(
+            n00b_elf_rewrite_admit_object_bundle_insert(bin, &request));
+    N00B_TEST_REQUIRE(admit.effective_alignment == 8);
+
+    bin = parse_valid_minimal_exec();
+    bin->sections[1].name = r".chalk.mark";
+    require_accepted_result(
+        n00b_elf_rewrite_admit_object_bundle_insert(bin, &request));
+
+    bin = parse_valid_minimal_exec();
+    bin->sections[1].name = r".chalk.free";
+    require_accepted_result(
+        n00b_elf_rewrite_admit_object_bundle_insert(bin, &request));
+
+    bin = parse_valid_minimal_exec();
+    bin->sections[1].name = r".0c001.extra";
+    require_rejected_result(
+        n00b_elf_rewrite_admit_object_bundle_insert(bin, &request),
+        N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+
+    bin = parse_valid_minimal_exec();
+    n00b_string_t *bad_names[] = {
+        r".0c001.file",
+        r".0c001.wrap",
+        r".0c001.code",
+        r".0c001.extra",
+        r".chalk.mark",
+        r".n00b.test",
+    };
+
+    for (size_t i = 0; i < sizeof(bad_names) / sizeof(bad_names[0]); i++) {
+        request = object_bundle_request();
+        request.section_name = bad_names[i];
+
+        require_rejected_result(
+            n00b_elf_rewrite_admit_object_bundle_insert(bin, &request),
+            N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+    }
+
+    request = object_bundle_request();
+    request.section_type = SHT_NOTE;
+    require_rejected_result(
+        n00b_elf_rewrite_admit_object_bundle_insert(bin, &request),
+        N00B_ELF_REWRITE_ADMIT_REJECT_SECTION_NOT_METADATA);
+
+    request = object_bundle_request();
+    request.section_flags = SHF_ALLOC;
+    require_rejected_result(
+        n00b_elf_rewrite_admit_object_bundle_insert(bin, &request),
+        N00B_ELF_REWRITE_ADMIT_REJECT_SECTION_NOT_METADATA);
+
+    request = object_bundle_request();
+    request.section_type = 0xc001u;
+    require_rejected_result(
+        n00b_elf_rewrite_admit_object_bundle_insert(bin, &request),
+        N00B_ELF_REWRITE_ADMIT_REJECT_SECTION_NOT_METADATA);
 }
 
 static void
@@ -1073,6 +1157,7 @@ main(int argc, char **argv)
     test_overlay_policy();
     test_preferred_file_placement_classification();
     test_reserved_section_names();
+    test_trusted_object_bundle_admission();
     test_reserved_target_sections();
     test_non_metadata_requests();
     return 0;
