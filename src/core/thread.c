@@ -2348,6 +2348,82 @@ _n00b_linux_clone_entry(void *raw)
     __builtin_unreachable();
 }
 
+// Off-libc raw clone(2): NO glibc clone() wrapper, NO pthread.  The glibc
+// wrapper runs glibc child-side trampoline code that assumes a libpthread
+// thread; this lands the child directly in our entry with nothing between the
+// syscall and n00b code.  Written as a normal function with register-pinned
+// extended inline asm (the same pattern as _n00b_darwin_syscall, which ncc
+// lowers fine) — NOT a naked function (ncc instruments bodies, which clang then
+// rejects for naked) and NOT file-scope asm (ncc's parser does not accept it).
+//
+// The whole child path lives inside the asm and ends in a syscall, so the child
+// NEVER falls back into C: only the parent reaches the C return.  The parent's
+// ncc-inserted prologue/epilogue therefore run normally; the child runs none of
+// them.  Returns the child tid (>0) in the parent, or a negative -errno on
+// failure (raw-syscall convention: NOT -1/errno).
+//
+// Child register state after clone == the parent's at the syscall except the
+// return value is 0 and SP is child_stack; all other regs are preserved, so the
+// child reads fn/arg out of the registers we pinned them into.
+static long
+_n00b_os_raw_clone(unsigned long flags,
+                   void         *child_stack,
+                   int          *ptid,
+                   int          *ctid,
+                   void         *tls,
+                   int (*fn)(void *),
+                   void *arg)
+{
+#if defined(__aarch64__)
+    // The clone syscall wants flags/stack/ptid/ctid/tls in x0..x4 and the
+    // number in x8; we keep fn in x5 and arg in x6 (both survive into the
+    // child).
+    register long x0 __asm__("x0") = (long)(uintptr_t)flags;
+    register long x1 __asm__("x1") = (long)(uintptr_t)child_stack;
+    register long x2 __asm__("x2") = (long)(uintptr_t)ptid;
+    register long x3 __asm__("x3") = (long)(uintptr_t)ctid;
+    register long x4 __asm__("x4") = (long)(uintptr_t)tls;
+    register long x5 __asm__("x5") = (long)(uintptr_t)fn;
+    register long x6 __asm__("x6") = (long)(uintptr_t)arg;
+    register long x8 __asm__("x8") = (long)SYS_clone;
+    __asm__ volatile(
+        "svc #0\n"
+        "cbnz x0, 1f\n" // parent: x0 = child tid or -errno -> fall to C return
+        "mov x0, x6\n"  // child: arg
+        "blr x5\n"      // fn(arg) -> _n00b_linux_clone_entry, never returns
+        "1:\n"
+        : "+r"(x0)
+        : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x6), "r"(x8)
+        : "memory", "cc", "x30");
+    return x0;
+#elif defined(__x86_64__)
+    // Raw clone takes ctid in r10 (not rcx); the number goes in rax.  fn (r9)
+    // and arg (r12, callee-saved so it survives the syscall) are read by the
+    // child out of the registers — no child-stack stash needed.
+    register long rax __asm__("rax") = (long)SYS_clone;
+    register long rdi __asm__("rdi") = (long)(uintptr_t)flags;
+    register long rsi __asm__("rsi") = (long)(uintptr_t)child_stack;
+    register long rdx __asm__("rdx") = (long)(uintptr_t)ptid;
+    register long r10 __asm__("r10") = (long)(uintptr_t)ctid;
+    register long r8 __asm__("r8")   = (long)(uintptr_t)tls;
+    register long r9 __asm__("r9")   = (long)(uintptr_t)fn;
+    register long r12 __asm__("r12") = (long)(uintptr_t)arg;
+    __asm__ volatile(
+        "syscall\n"
+        "testq %%rax, %%rax\n"
+        "jnz 1f\n"            // parent -> fall to C return
+        "movq %%r12, %%rdi\n" // child: arg
+        "callq *%%r9\n"       // fn(arg) -> _n00b_linux_clone_entry, never returns
+        "1:\n"
+        : "+r"(rax)
+        : "r"(rdi), "r"(rsi), "r"(rdx), "r"(r10), "r"(r8), "r"(r9), "r"(r12)
+        : "memory", "cc", "rcx", "r11");
+    return rax;
+#else
+#error "raw clone trampoline: add this architecture"
+#endif
+}
+
 static int
 _n00b_os_thread_create(n00b_callstack_t *cs, n00b_tbundle_t *bundle)
 {
@@ -2377,25 +2453,26 @@ _n00b_os_thread_create(n00b_callstack_t *cs, n00b_tbundle_t *bundle)
                                - N00B_CALLSTACK_ID_WORD_SIZE)
                               & ~(uintptr_t)15);
 
-    // glibc's clone() wrapper takes (fn, child_stack, flags, arg, [ptid, tls,
-    // ctid]).  We call it directly rather than via SYS_clone so the child
-    // returns into _n00b_linux_clone_entry cleanly across architectures (the
-    // raw syscall returns 0 in the child IN the parent's frame, which is
-    // fragile).  CLONE_SETTLS makes the kernel set %fs.base to our TCB head
-    // (D-021); CLONE_CHILD_CLEARTID makes it clear &bundle->child_tid at exit
-    // (D-034) — the ctid argument is the variadic tail after the tls pointer.
-    long tid = clone(_n00b_linux_clone_entry,
-                     child_sp,
-                     (int)flags,
-                     bundle,
-                     (pid_t *)nullptr, // ptid (CLONE_PARENT_SETTID not set)
-                     bundle->tcb,      // tls
-                     &bundle->child_tid); // ctid (CLONE_CHILD_CLEARTID)
-    if (tid == -1) {
-        int e = errno;
+    // Raw clone(2) via our naked trampoline — NO glibc clone() wrapper, NO
+    // pthread.  The child enters _n00b_linux_clone_entry directly.  CLONE_SETTLS
+    // sets the kernel TLS register (arm64 TPIDR_EL0 / x86-64 %fs.base) to our
+    // minimal TCB block (D-021); CLONE_CHILD_CLEARTID clears &bundle->child_tid
+    // at exit (D-034).  Returns child tid (>0) or a negative -errno.
+    long tid = _n00b_os_raw_clone(flags,
+                               child_sp,
+                               (int *)nullptr, // ptid (CLONE_PARENT_SETTID unset)
+                               // ctid (CLONE_CHILD_CLEARTID): the kernel does a
+                               // plain 32-bit store + futex wake here; cast away
+                               // _Atomic for the pointer-type (our side reads it
+                               // atomically).
+                               (int *)&bundle->child_tid,
+                               bundle->tcb,        // tls
+                               _n00b_linux_clone_entry,
+                               bundle);
+    if (tid < 0) {
         _n00b_tcb_free(bundle->tcb);
         bundle->tcb = nullptr;
-        return e;
+        return (int)-tid; // raw syscall returns -errno
     }
     return 0;
 }

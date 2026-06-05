@@ -52,6 +52,7 @@
 #include <ucontext.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <time.h> // struct timespec + CLOCK_MONOTONIC for the raw clock_nanosleep park
 
 // Raw RT signal number (NOT the SIGRTMIN libc macro — __libc_current_sigrtmin()
 // is a glibc call).  40 sits above NPTL's reserved low RT range (32-34) and
@@ -118,19 +119,30 @@ _n00b_stw_suspend_handler(int sig, siginfo_t *si, void *uctx)
 #error "WP-4 Linux suspend handler: add ucontext register capture for this arch"
 #endif
 
+    n00b_barrier();
     n00b_atomic_store(&self->gc_preempt_suspended, true);
 
-    // Park until _n00b_restart_the_world clears rt->stw_active.  Poll the flag
-    // with a short async-signal-safe nanosleep (NOT a futex wait on the bool:
-    // stw_active is a 1-byte _Atomic bool, not a 32-bit futex word; and we must
-    // do no alloc / lock in signal context).  The regs are already captured, so
-    // this thread contributes nothing but its parked state.
-    while (n00b_atomic_load(&rt->stw_active)) {
+    // Park until the initiator clears OUR flag in _n00b_preempt_resume at
+    // restart.  We must NOT poll rt->stw_active: the initiator sets stw_active
+    // only AFTER the entire suspend pass completes (_n00b_stop_the_world), so it
+    // is still FALSE while we are being suspended here — polling it would make
+    // this handler fall straight through without ever parking (the thread would
+    // keep running and the initiator would spin forever / scan a live stack).
+    // gc_preempt_suspended is the real handshake: WE set it true (the initiator
+    // spins until it sees that), and the initiator sets it false to release us.
+    //
+    // Poll with a short sleep done as a RAW syscall (NOT libc nanosleep): n00b
+    // workers are raw clone() threads with no libpthread TSD, and libc nanosleep
+    // is a cancellation point that derefs that TSD (pthread_testcancel) ->
+    // SIGSEGV.  We are also in signal context, so no alloc / lock / futex wait.
+    // clock_nanosleep is the only sleep syscall present on every arch we target
+    // (aarch64 dropped the legacy SYS_nanosleep entirely).  The initiator zeroes
+    // gc_captured_regs only AFTER clearing the flag, so the captured top-frame
+    // stays valid for the whole scan window.
+    while (n00b_atomic_load(&self->gc_preempt_suspended)) {
         struct timespec tout = {.tv_sec = 0, .tv_nsec = 1000 * 1000};
-        (void)nanosleep(&tout, nullptr);
+        (void)syscall(SYS_clock_nanosleep, CLOCK_MONOTONIC, 0, &tout, nullptr);
     }
-
-    n00b_atomic_store(&self->gc_preempt_suspended, false);
 }
 #endif // __linux__
 
@@ -292,12 +304,19 @@ _n00b_preempt_resume(n00b_thread_t *t)
         (void)thread_resume((mach_port_t)t->os_thread_port);
     }
 #elif defined(__linux__)
-    // The target's signal handler self-resumes: it polls rt->stw_active, which
-    // _n00b_restart_the_world cleared BEFORE this resume loop runs.  The handler
-    // then clears its own gc_preempt_suspended (and the captured regs go stale
-    // but are re-stamped on the next suspend) and returns to the interrupted PC.
-    // Nothing to do here.
-    (void)t;
+    // The target is parked in its suspend-signal handler polling its OWN
+    // gc_preempt_suspended flag (it cannot poll stw_active — that is set only
+    // after the whole suspend pass).  Zero the captured register file FIRST (so
+    // a later collection's whole-struct conservative scan does not re-root stale
+    // values), then clear the flag: the handler's poll loop exits and it returns
+    // to the interrupted PC.  The barrier orders the zeroing before the release.
+    if (n00b_atomic_load(&t->gc_preempt_suspended)) {
+        for (int i = 0; i < 31; i++) {
+            t->gc_captured_regs[i] = 0;
+        }
+        n00b_barrier();
+        n00b_atomic_store(&t->gc_preempt_suspended, false);
+    }
 #elif defined(_WIN32)
     // Synchronous resume (like macOS): clear the flag + captured regs, then
     // ResumeThread via a freshly opened handle (suspend count is on the thread).

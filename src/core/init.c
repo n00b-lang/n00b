@@ -462,6 +462,18 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     n00b_renderer_registry_init();
     rt->theme_name = "n00b-classic";
 
+    // Install the crash (WP-3b/D-039) and preemptive-STW suspend (WP-4/D-040)
+    // signal handlers BEFORE starting the conduit service, because that service
+    // spawns the IO worker thread (n00b_conduit_service_start, below).  A thread
+    // must never exist before these are installed: otherwise a fault in the new
+    // worker dies silently with no handler, and (on Linux) the worker would be
+    // un-suspendable until the RT-signal handler appeared.  Both only need the
+    // allocator + mmap machinery, which are up by here.  (CLONE_SIGHAND means a
+    // later-installed disposition would eventually reach the worker, but the
+    // creation/early-run window must be covered up front.)
+    n00b_crash_init(); // WP-3b (D-039)
+    n00b_stw_init();   // WP-4 (D-040) — preemptive-STW suspend mechanism
+
     // Create default conduit + service for IO (stdout/stderr, signals).
     n00b_result_t(n00b_conduit_t *) cond_r = n00b_conduit_new();
     if (n00b_result_is_ok(cond_r)) {
@@ -530,9 +542,6 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
             }
         }
     }
-
-    n00b_crash_init(); // WP-3b (D-039)
-    n00b_stw_init();   // WP-4 (D-040) — preemptive-STW suspend mechanism
 
     rt->startup_complete = true;
 }
