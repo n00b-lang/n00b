@@ -129,6 +129,12 @@ n00b_rw_adopt_read_hold(n00b_rwlock_t *lock, n00b_thread_t *thread)
 
     n00b_thread_read_log_t *log = acquire_read_record(lock, thread);
     log->level                  = 1;
+    // No _n00b_rlock_accounting call here (unlike register_read): the adopted
+    // hold was taken on the null-self path, which never ran acquire-side
+    // accounting, so there is no matching prior entry to pair with.  The level-1
+    // record exists purely to make the outstanding futex unit visible to
+    // reentrancy (find_read_lock_record) and to the unlock path's count math.
+    // Read-lock accounting is a no-op in this build regardless (lock_accounting.c).
 }
 
 int

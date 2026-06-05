@@ -55,6 +55,14 @@
  * @pre @p arena has `collection_enabled` set.
  * @post All live allocations in @p arena have been relocated; old
  *       segments are unmapped and pointers are rewritten.
+ *
+ * @note Stops the world internally (acquires the critical_execution write lock,
+ *       drains readers, suspends the other threads, scans, then restarts).  The
+ *       caller need NOT — and normally should not — stop the world first.  A
+ *       caller that has already stopped the world nests correctly via
+ *       `rt->stw_nesting` (the inner stop/restart become no-ops), so the few
+ *       sites that bracket their own stop-the-world around a collect remain
+ *       safe.
  */
 extern void
 n00b_collect(n00b_arena_t *arena) _kargs
