@@ -297,6 +297,27 @@ _n00b_obj_bundle_error_with_policy(n00b_obj_bundle_error_code_t    code,
     return error;
 }
 
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_with_format_carrier(
+    n00b_obj_bundle_error_code_t code,
+    n00b_string_t               *message,
+    n00b_format_t                format,
+    bool                         has_format,
+    n00b_obj_bundle_carrier_t    carrier,
+    bool                         has_carrier,
+    n00b_allocator_t            *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_new(code, message, allocator);
+
+    error->format      = format;
+    error->has_format  = has_format;
+    error->carrier     = carrier;
+    error->has_carrier = has_carrier;
+
+    return error;
+}
+
 static bool
 _n00b_obj_bundle_string_len_is_supported(n00b_string_t *s)
 {
@@ -845,6 +866,53 @@ _n00b_obj_bundle_policy_payload_is_valid(n00b_obj_bundle_policy_kind_t kind,
     }
 
     return false;
+}
+
+static bool
+_n00b_obj_bundle_format_request_is_valid(n00b_format_t format)
+{
+    switch (format) {
+    case N00B_FMT_UNKNOWN:
+    case N00B_FMT_ELF:
+    case N00B_FMT_MACHO:
+    case N00B_FMT_PE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
+_n00b_obj_bundle_carrier_request_is_valid(n00b_obj_bundle_carrier_t carrier)
+{
+    switch (carrier) {
+    case N00B_OBJ_BUNDLE_CARRIER_AUTO:
+    case N00B_OBJ_BUNDLE_CARRIER_METADATA:
+    case N00B_OBJ_BUNDLE_CARRIER_LOADABLE:
+    case N00B_OBJ_BUNDLE_CARRIER_SPLIT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
+_n00b_obj_bundle_replace_policy_is_valid(
+    n00b_obj_bundle_replace_policy_t replace)
+{
+    switch (replace) {
+    case N00B_OBJ_BUNDLE_REJECT_EXISTING:
+    case N00B_OBJ_BUNDLE_REPLACE_EXISTING:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
+_n00b_obj_bundle_object_bytes_arg_is_valid(n00b_buffer_t *object_bytes)
+{
+    return object_bytes != nullptr && object_bytes->data != nullptr;
 }
 
 static bool
@@ -2985,6 +3053,116 @@ n00b_obj_bundle_decode(n00b_buffer_t *bundle_bytes) _kargs
     return n00b_result_ok(n00b_obj_bundle_t *, bundle);
 }
 
+n00b_result_t(n00b_obj_bundle_t *)
+n00b_obj_bundle_read(n00b_buffer_t *object_bytes) _kargs
+{
+    n00b_format_t    format    = N00B_FMT_UNKNOWN;
+    bool             strict    = true;
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (!_n00b_obj_bundle_object_bytes_arg_is_valid(object_bytes)) {
+        return OBJ_BUNDLE_ERR(n00b_obj_bundle_t *,
+                              N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                              r"object bundle: invalid object bytes",
+                              allocator);
+    }
+
+    if (!_n00b_obj_bundle_format_request_is_valid(format)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_error_with_format_carrier(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid object format request",
+                format,
+                true,
+                N00B_OBJ_BUNDLE_CARRIER_AUTO,
+                false,
+                allocator));
+    }
+
+    return OBJ_BUNDLE_ERR_PAYLOAD(
+        n00b_obj_bundle_t *,
+        _n00b_obj_bundle_error_with_format_carrier(
+            N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER,
+            r"object bundle: carrier read is not implemented",
+            format,
+            format != N00B_FMT_UNKNOWN,
+            N00B_OBJ_BUNDLE_CARRIER_AUTO,
+            false,
+            allocator));
+}
+
+n00b_result_t(n00b_buffer_t *)
+n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
+                      n00b_obj_bundle_t *bundle) _kargs
+{
+    n00b_format_t                    format    = N00B_FMT_UNKNOWN;
+    n00b_obj_bundle_carrier_t        carrier   = N00B_OBJ_BUNDLE_CARRIER_AUTO;
+    n00b_obj_bundle_replace_policy_t replace   = N00B_OBJ_BUNDLE_REJECT_EXISTING;
+    bool                             strict    = true;
+    n00b_allocator_t                *allocator = nullptr;
+}
+{
+    if (!_n00b_obj_bundle_object_bytes_arg_is_valid(object_bytes)
+        || bundle == nullptr) {
+        return OBJ_BUNDLE_ERR(n00b_buffer_t *,
+                              N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                              r"object bundle: invalid carrier write argument",
+                              allocator);
+    }
+
+    if (!_n00b_obj_bundle_format_request_is_valid(format)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_with_format_carrier(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid object format request",
+                format,
+                true,
+                carrier,
+                _n00b_obj_bundle_carrier_request_is_valid(carrier),
+                allocator));
+    }
+
+    if (!_n00b_obj_bundle_carrier_request_is_valid(carrier)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_with_format_carrier(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid carrier request",
+                format,
+                format != N00B_FMT_UNKNOWN,
+                carrier,
+                true,
+                allocator));
+    }
+
+    if (!_n00b_obj_bundle_replace_policy_is_valid(replace)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_with_format_carrier(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid replacement policy",
+                format,
+                format != N00B_FMT_UNKNOWN,
+                carrier,
+                true,
+                allocator));
+    }
+
+    return OBJ_BUNDLE_ERR_PAYLOAD(
+        n00b_buffer_t *,
+        _n00b_obj_bundle_error_with_format_carrier(
+            N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER,
+            r"object bundle: carrier write is not implemented",
+            format,
+            format != N00B_FMT_UNKNOWN,
+            carrier,
+            true,
+            allocator));
+}
+
 n00b_obj_bundle_error_code_t
 n00b_obj_bundle_error_code(n00b_obj_bundle_error_t *error)
 {
@@ -3027,6 +3205,26 @@ n00b_obj_bundle_err_str(n00b_err_t err)
         return r"object bundle: build failure";
     case N00B_OBJ_BUNDLE_ERR_DUPLICATE_POLICY_ID:
         return r"object bundle: duplicate policy ID";
+    case N00B_OBJ_BUNDLE_ERR_BUNDLE_NOT_FOUND:
+        return r"object bundle: bundle carrier not found";
+    case N00B_OBJ_BUNDLE_ERR_DUPLICATE_BUNDLE_CARRIER:
+        return r"object bundle: duplicate bundle carrier";
+    case N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER:
+        return r"object bundle: malformed bundle carrier";
+    case N00B_OBJ_BUNDLE_ERR_REPLACE_REQUIRED:
+        return r"object bundle: replacement required";
+    case N00B_OBJ_BUNDLE_ERR_RESERVED_NAMESPACE_OCCUPIED:
+        return r"object bundle: reserved namespace occupied";
+    case N00B_OBJ_BUNDLE_ERR_FOREIGN_LEGACY_BUNDLE:
+        return r"object bundle: foreign legacy bundle";
+    case N00B_OBJ_BUNDLE_ERR_ALREADY_WRAPPED_OR_RESERVED:
+        return r"object bundle: already wrapped or reserved";
+    case N00B_OBJ_BUNDLE_ERR_GUARD_SECTION_PRESENT:
+        return r"object bundle: guard section present";
+    case N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER:
+        return r"object bundle: unsupported carrier";
+    case N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE:
+        return r"object bundle: rewrite failure";
     default:
         return r"object bundle: unknown error code";
     }

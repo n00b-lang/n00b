@@ -104,6 +104,16 @@ typedef enum {
     N00B_OBJ_BUNDLE_ERR_DIGEST_MISMATCH        = -3712,
     N00B_OBJ_BUNDLE_ERR_BUILD                  = -3713,
     N00B_OBJ_BUNDLE_ERR_DUPLICATE_POLICY_ID    = -3714,
+    N00B_OBJ_BUNDLE_ERR_BUNDLE_NOT_FOUND       = -3715,
+    N00B_OBJ_BUNDLE_ERR_DUPLICATE_BUNDLE_CARRIER = -3716,
+    N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER = -3717,
+    N00B_OBJ_BUNDLE_ERR_REPLACE_REQUIRED       = -3718,
+    N00B_OBJ_BUNDLE_ERR_RESERVED_NAMESPACE_OCCUPIED = -3719,
+    N00B_OBJ_BUNDLE_ERR_FOREIGN_LEGACY_BUNDLE  = -3720,
+    N00B_OBJ_BUNDLE_ERR_ALREADY_WRAPPED_OR_RESERVED = -3721,
+    N00B_OBJ_BUNDLE_ERR_GUARD_SECTION_PRESENT  = -3722,
+    N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER    = -3723,
+    N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE        = -3724,
 } n00b_obj_bundle_error_code_t;
 
 /**
@@ -217,6 +227,49 @@ extern n00b_result_t(n00b_obj_bundle_t *)
 n00b_obj_bundle_decode(n00b_buffer_t *bundle_bytes) _kargs {
     bool              strict    = true;
     n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @pre @p object_bytes is non-null.
+ * @post On success, returns the unique valid object bundle carried by the
+ *       input object file.
+ * @post The input buffer is not modified.
+ * @kw format Object format, or `N00B_FMT_UNKNOWN` for auto-detect.
+ * @kw strict Reject malformed or reserved carrier environments when true;
+ *      default `true`.
+ * @kw allocator Optional allocator for the returned bundle; default `nullptr`.
+ */
+extern n00b_result_t(n00b_obj_bundle_t *)
+n00b_obj_bundle_read(n00b_buffer_t *object_bytes) _kargs {
+    n00b_format_t    format    = N00B_FMT_UNKNOWN;
+    bool             strict    = true;
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @pre @p object_bytes and @p bundle are non-null.
+ * @pre @p bundle is valid.
+ * @post On success, returns a new object-file byte buffer containing the
+ *       selected carrier.
+ * @post The input object buffer and @p bundle are not modified.
+ * @post All non-planned object-file byte ranges are preserved.
+ * @kw format Object format, or `N00B_FMT_UNKNOWN` for auto-detect.
+ * @kw carrier Carrier selection policy; default
+ *      `N00B_OBJ_BUNDLE_CARRIER_AUTO`.
+ * @kw replace Whether an existing N00b-owned bundle carrier may be replaced;
+ *      default `N00B_OBJ_BUNDLE_REJECT_EXISTING`.
+ * @kw strict Reject reserved or foreign wrapped inputs when true; default
+ *      `true`.
+ * @kw allocator Optional allocator for the returned buffer; default `nullptr`.
+ */
+extern n00b_result_t(n00b_buffer_t *)
+n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
+                      n00b_obj_bundle_t *bundle) _kargs {
+    n00b_format_t                    format    = N00B_FMT_UNKNOWN;
+    n00b_obj_bundle_carrier_t        carrier   = N00B_OBJ_BUNDLE_CARRIER_AUTO;
+    n00b_obj_bundle_replace_policy_t replace   = N00B_OBJ_BUNDLE_REJECT_EXISTING;
+    bool                             strict    = true;
+    n00b_allocator_t                *allocator = nullptr;
 };
 
 /**

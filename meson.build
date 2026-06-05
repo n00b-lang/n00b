@@ -3664,6 +3664,7 @@ objfile_test_names = [
     'elf_rewrite_admit', 'elf_rewrite',
     'macho', 'macho_build', 'pe', 'pe_build', 'demangle',
     'abstract', 'dwarf', 'elf_known_answers', 'obj_bundle',
+    'obj_bundle_carrier',
 ]
 
 foreach name : objfile_test_names
