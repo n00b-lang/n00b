@@ -6,6 +6,7 @@
 #include "text/strings/fmt_numbers.h"
 #include "core/random.h"
 #include "core/gc.h"
+#include "core/file.h"
 #include "adt/result.h"
 #include "util/path.h"
 
@@ -17,18 +18,30 @@
 #endif
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <pwd.h>
 #include <sys/types.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <limits.h>
 #include <string.h>
 #include <stdlib.h>
+#if defined(__MACH__)
+#include <sys/stdio.h>
+#endif
+#if defined(__linux__)
+#include <linux/fs.h>
+#endif
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
 static n00b_string_t *cached_slash;
+
+static n00b_string_t *
+join_child_path(n00b_string_t *dir, n00b_string_t *child,
+                n00b_allocator_t *allocator);
 static n00b_string_t *cached_period;
 
 static inline void
@@ -84,6 +97,12 @@ find_slash(n00b_string_t *s)
     ensure_cached();
     n00b_option_t(int32_t) r = n00b_unicode_str_find(s, cached_slash);
     return n00b_option_is_set(r) ? n00b_option_get(r) : -1;
+}
+
+static bool
+mode_bits_valid(uint32_t mode)
+{
+    return (mode & ~07777u) == 0;
 }
 
 // ============================================================================
@@ -144,18 +163,18 @@ _n00b_new_temp_path(n00b_string_t *prefix, n00b_string_t *suffix) _kargs
     n00b_string_t *random_string = n00b_fmt_hex(n00b_rand64(),
                                                  .allocator = allocator);
 
-    if (prefix || suffix) {
-        if (!prefix) prefix = n00b_string_empty(.allocator = allocator);
-        if (!suffix) suffix = n00b_string_empty(.allocator = allocator);
-        // n00b_cformat does not currently take .allocator; the cat
-        // result lands in the default allocator. This is an n00b-side
-        // gap, not introduced here — threading is best-effort for the
-        // leaf calls above.
-        random_string = n00b_cformat("«#»«#»«#»",
-                                      prefix, random_string, suffix);
+    if (prefix != nullptr) {
+        random_string = n00b_unicode_str_cat(prefix,
+                                             random_string,
+                                             .allocator = allocator);
+    }
+    if (suffix != nullptr) {
+        random_string = n00b_unicode_str_cat(random_string,
+                                             suffix,
+                                             .allocator = allocator);
     }
 
-    return n00b_path_simple_join(tmpdir, random_string);
+    return join_child_path(tmpdir, random_string, allocator);
 }
 
 n00b_result_t(n00b_string_t *)
@@ -173,6 +192,10 @@ n00b_new_temp_dir(n00b_string_t *prefix, n00b_string_t *suffix)
 n00b_result_t(uint32_t)
 n00b_path_get_mode(n00b_string_t *path)
 {
+    if (!path || !path->data) {
+        return n00b_result_err(uint32_t, EINVAL);
+    }
+
     struct stat st;
     if (stat(path->data, &st) != 0) {
         return n00b_result_err(uint32_t, errno);
@@ -180,10 +203,144 @@ n00b_path_get_mode(n00b_string_t *path)
     return n00b_result_ok(uint32_t, (uint32_t)(st.st_mode & 07777));
 }
 
+n00b_result_t(uint32_t)
+n00b_path_set_mode(n00b_string_t *path, uint32_t mode)
+{
+    if (!path || !path->data || !mode_bits_valid(mode)) {
+        return n00b_result_err(uint32_t, EINVAL);
+    }
+
+#ifdef _WIN32
+    (void)path;
+    (void)mode;
+    return n00b_result_err(uint32_t, ENOSYS);
+#else
+    if (chmod(path->data, (mode_t)mode) != 0) {
+        return n00b_result_err(uint32_t, errno);
+    }
+    return n00b_path_get_mode(path);
+#endif
+}
+
 n00b_string_t *
 n00b_get_temp_root(void)
 {
     return acquire_base_tmp_dir();
+}
+
+// ============================================================================
+// Sibling temp paths / files
+// ============================================================================
+
+static n00b_string_t *
+join_child_path(n00b_string_t *dir, n00b_string_t *child,
+                n00b_allocator_t *allocator)
+{
+    if (dir->u8_bytes && dir->data[dir->u8_bytes - 1] == '/') {
+        return n00b_unicode_str_cat(dir, child, .allocator = allocator);
+    }
+
+    n00b_string_t *with_slash = n00b_unicode_str_cat(
+        dir, n00b_string_from_raw("/", 1, .allocator = allocator),
+        .allocator = allocator);
+    return n00b_unicode_str_cat(with_slash, child, .allocator = allocator);
+}
+
+n00b_result_t(n00b_string_t *)
+_n00b_new_sibling_temp_path(n00b_string_t *destination_path) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (!destination_path || !destination_path->u8_bytes) {
+        return n00b_result_err(n00b_string_t *, EINVAL);
+    }
+
+    n00b_list_t(n00b_string_t *) *parts = n00b_path_parts(destination_path);
+    if ((int)n00b_list_len(*parts) < 3) {
+        return n00b_result_err(n00b_string_t *, EINVAL);
+    }
+
+    n00b_string_t *dir  = n00b_list_get(*parts, 0);
+    n00b_string_t *base = n00b_list_get(*parts, 1);
+    n00b_string_t *ext  = n00b_list_get(*parts, 2);
+    if (!base || base->u8_bytes == 0) {
+        if (!ext || ext->u8_bytes == 0) {
+            return n00b_result_err(n00b_string_t *, EINVAL);
+        }
+        base = n00b_unicode_str_cat(
+            n00b_string_from_raw(".", 1, .allocator = allocator),
+            ext, .allocator = allocator);
+        ext = nullptr;
+    }
+
+    n00b_string_t *name = base;
+    if (ext && ext->u8_bytes) {
+        n00b_string_t *dot = n00b_string_from_raw(".", 1,
+                                                  .allocator = allocator);
+        name = n00b_unicode_str_cat(
+            n00b_unicode_str_cat(base, dot, .allocator = allocator),
+            ext, .allocator = allocator);
+    }
+
+    n00b_string_t *hidden = n00b_unicode_str_cat(
+        n00b_string_from_raw(".", 1, .allocator = allocator),
+        name, .allocator = allocator);
+    n00b_string_t *tagged = n00b_unicode_str_cat(
+        hidden, n00b_string_from_raw(".n00b-", 6, .allocator = allocator),
+        .allocator = allocator);
+    n00b_string_t *random = n00b_fmt_hex(n00b_rand64(),
+                                         .allocator = allocator);
+    n00b_string_t *with_random = n00b_unicode_str_cat(tagged, random,
+                                                       .allocator = allocator);
+    n00b_string_t *temp_name = n00b_unicode_str_cat(
+        with_random, n00b_string_from_raw(".tmp", 4, .allocator = allocator),
+        .allocator = allocator);
+
+    return n00b_result_ok(n00b_string_t *,
+                          join_child_path(dir, temp_name, allocator));
+}
+
+n00b_result_t(n00b_sibling_temp_file_t *)
+_n00b_new_sibling_temp_file(n00b_string_t *destination_path) _kargs
+{
+    uint32_t          file_mode    = 0600;
+    uint32_t          max_attempts = 64;
+    n00b_allocator_t *allocator    = nullptr;
+}
+{
+    if (!mode_bits_valid(file_mode) || max_attempts == 0) {
+        return n00b_result_err(n00b_sibling_temp_file_t *, EINVAL);
+    }
+
+    int last_err = EEXIST;
+    for (uint32_t i = 0; i < max_attempts; i++) {
+        auto path_r = n00b_new_sibling_temp_path(destination_path,
+                                                 .allocator = allocator);
+        if (n00b_result_is_err(path_r)) {
+            return n00b_result_err(n00b_sibling_temp_file_t *,
+                                   n00b_result_get_error(path_r));
+        }
+        n00b_string_t *path = n00b_result_get(path_r);
+
+        auto open_r = n00b_file_open_exclusive(path,
+                                               .file_mode = file_mode,
+                                               .allocator = allocator);
+        if (n00b_result_is_ok(open_r)) {
+            n00b_sibling_temp_file_t *temp =
+                n00b_alloc(n00b_sibling_temp_file_t, .allocator = allocator);
+            temp->path = path;
+            temp->file = n00b_result_get(open_r);
+            return n00b_result_ok(n00b_sibling_temp_file_t *, temp);
+        }
+
+        last_err = n00b_result_get_err(open_r);
+        if (last_err != EEXIST) {
+            return n00b_result_err(n00b_sibling_temp_file_t *, last_err);
+        }
+    }
+
+    return n00b_result_err(n00b_sibling_temp_file_t *, last_err);
 }
 
 // ============================================================================
@@ -911,6 +1068,63 @@ n00b_rename(n00b_string_t *from, n00b_string_t *to)
     }
 
     return n00b_result_ok(n00b_string_t *, to);
+}
+
+static n00b_result_t(int)
+rename_no_replace(n00b_string_t *from, n00b_string_t *to)
+{
+#if defined(__MACH__) && defined(RENAME_EXCL)
+    if (renamex_np(from->data, to->data, RENAME_EXCL) != 0) {
+        return n00b_result_err(int, errno);
+    }
+    return n00b_result_ok(int, 0);
+#elif defined(__linux__) && defined(SYS_renameat2) && defined(RENAME_NOREPLACE)
+    long rc = syscall(SYS_renameat2,
+                      AT_FDCWD, from->data,
+                      AT_FDCWD, to->data,
+                      RENAME_NOREPLACE);
+    if (rc != 0) {
+        return n00b_result_err(int, errno);
+    }
+    return n00b_result_ok(int, 0);
+#else
+    (void)from;
+    (void)to;
+    return n00b_result_err(int, ENOSYS);
+#endif
+}
+
+n00b_result_t(n00b_string_t *)
+_n00b_path_commit_exact(n00b_string_t *source_path,
+                        n00b_string_t *destination_path) _kargs
+{
+    n00b_path_commit_policy_t policy = N00B_PATH_COMMIT_REJECT_EXISTING;
+}
+{
+    if (!source_path || !source_path->data
+        || !destination_path || !destination_path->data
+        || source_path->u8_bytes == 0 || destination_path->u8_bytes == 0) {
+        return n00b_result_err(n00b_string_t *, EINVAL);
+    }
+
+    switch (policy) {
+    case N00B_PATH_COMMIT_REPLACE_EXISTING:
+        if (rename(source_path->data, destination_path->data) != 0) {
+            return n00b_result_err(n00b_string_t *, errno);
+        }
+        return n00b_result_ok(n00b_string_t *, destination_path);
+
+    case N00B_PATH_COMMIT_REJECT_EXISTING: {
+        auto rr = rename_no_replace(source_path, destination_path);
+        if (n00b_result_is_err(rr)) {
+            return n00b_result_err(n00b_string_t *, n00b_result_get_error(rr));
+        }
+        return n00b_result_ok(n00b_string_t *, destination_path);
+    }
+
+    default:
+        return n00b_result_err(n00b_string_t *, EINVAL);
+    }
 }
 
 // ============================================================================

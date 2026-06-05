@@ -4,13 +4,75 @@
 
 #include <stdio.h>
 #include <assert.h>
+#include <errno.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
 
 #include "n00b.h"
+#include "core/buffer.h"
+#include "core/file.h"
 #include "core/runtime.h"
+#include "text/strings/string_ops.h"
+#include "util/assert.h"
 #include "util/path.h"
+
+#define N00B_TEST_REQUIRE(expr) n00b_require((expr), #expr)
+
+static n00b_string_t *
+fixture_dir(n00b_string_t *prefix)
+{
+    auto r = n00b_new_temp_dir(prefix, n00b_string_from_cstr("_dir"));
+    N00B_TEST_REQUIRE(n00b_result_is_ok(r));
+    return n00b_result_get(r);
+}
+
+static n00b_string_t *
+fixture_child(n00b_string_t *dir, n00b_string_t *name)
+{
+    return n00b_path_simple_join(dir, name);
+}
+
+static void
+fixture_write(n00b_string_t *path, n00b_string_t *contents)
+{
+    auto open_r = n00b_file_open(path, .mode = N00B_FILE_W);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(open_r));
+    n00b_file_t *file = n00b_result_get(open_r);
+
+    n00b_buffer_t *buffer = n00b_buffer_from_bytes(
+        contents->data, (int64_t)contents->u8_bytes);
+    auto write_r = n00b_file_write_all(file, buffer);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(write_r));
+    N00B_TEST_REQUIRE(n00b_result_get(write_r) == contents->u8_bytes);
+
+    auto close_r = n00b_file_close_result(file);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(close_r));
+}
+
+static void
+fixture_assert_contents(n00b_string_t *path, n00b_string_t *expected)
+{
+    auto open_r = n00b_file_open(path, .kind = N00B_FILE_KIND_MMAP);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(open_r));
+    n00b_file_t *file = n00b_result_get(open_r);
+
+    auto buffer_r = n00b_file_as_buffer(file);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(buffer_r));
+    n00b_buffer_t *buffer = n00b_result_get(buffer_r);
+    N00B_TEST_REQUIRE(buffer->byte_len == expected->u8_bytes);
+    N00B_TEST_REQUIRE(memcmp(buffer->data,
+                             expected->data,
+                             expected->u8_bytes) == 0);
+    n00b_file_close(file);
+}
+
+static void
+fixture_unlink(n00b_string_t *path)
+{
+    auto unlink_r = n00b_file_unlink(path, .ignore_missing = true);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(unlink_r));
+}
 
 // ============================================================================
 // 1. resolve_path: absolute passthrough
@@ -309,6 +371,177 @@ test_new_temp_dir(void)
 }
 
 // ============================================================================
+// 16. new_temp_path
+// ============================================================================
+
+static void
+test_new_temp_path_prefix_suffix(void)
+{
+    n00b_string_t *path = n00b_new_temp_path(r"wp011_", r"_suffix");
+
+    N00B_TEST_REQUIRE(path != nullptr);
+
+    n00b_list_t(n00b_string_t *) *parts = n00b_path_parts(path);
+    N00B_TEST_REQUIRE((int)n00b_list_len(*parts) >= 3);
+
+    n00b_string_t *name = n00b_list_get(*parts, 1);
+
+    N00B_TEST_REQUIRE(n00b_unicode_str_starts_with(name, r"wp011_"));
+    N00B_TEST_REQUIRE(n00b_unicode_str_ends_with(name, r"_suffix"));
+    N00B_TEST_REQUIRE(!n00b_path_exists(path));
+}
+
+// ============================================================================
+// 17. same-directory sibling temp file
+// ============================================================================
+
+static void
+test_sibling_temp_file(void)
+{
+    n00b_string_t *dir = fixture_dir(n00b_string_from_cstr("test_sibling_"));
+    n00b_string_t *dst = fixture_child(dir, n00b_string_from_cstr("artifact.o"));
+    fixture_write(dst, n00b_string_from_cstr("original"));
+
+    auto temp_r = n00b_new_sibling_temp_file(dst);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(temp_r));
+    n00b_sibling_temp_file_t *temp = n00b_result_get(temp_r);
+    N00B_TEST_REQUIRE(temp->path != nullptr);
+    N00B_TEST_REQUIRE(temp->file != nullptr);
+
+    n00b_list_t(n00b_string_t *) *dst_parts = n00b_path_parts(dst);
+    n00b_list_t(n00b_string_t *) *tmp_parts = n00b_path_parts(temp->path);
+    n00b_string_t *dst_dir = n00b_list_get(*dst_parts, 0);
+    n00b_string_t *tmp_dir = n00b_list_get(*tmp_parts, 0);
+    N00B_TEST_REQUIRE(strcmp(dst_dir->data, tmp_dir->data) == 0);
+    N00B_TEST_REQUIRE(strcmp(dst->data, temp->path->data) != 0);
+    N00B_TEST_REQUIRE(n00b_path_exists(temp->path));
+    fixture_assert_contents(dst, n00b_string_from_cstr("original"));
+
+    auto close_r = n00b_file_close_result(temp->file);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(close_r));
+    fixture_unlink(temp->path);
+
+    n00b_string_t *hidden_dst =
+        fixture_child(dir, n00b_string_from_cstr(".artifact"));
+    auto hidden_temp_r = n00b_new_sibling_temp_path(hidden_dst);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(hidden_temp_r));
+    n00b_string_t *hidden_temp = n00b_result_get(hidden_temp_r);
+    n00b_list_t(n00b_string_t *) *hidden_parts = n00b_path_parts(hidden_temp);
+    n00b_string_t *hidden_dir = n00b_list_get(*hidden_parts, 0);
+    N00B_TEST_REQUIRE(strcmp(dst_dir->data, hidden_dir->data) == 0);
+    N00B_TEST_REQUIRE(strcmp(hidden_dst->data, hidden_temp->data) != 0);
+
+    fixture_unlink(dst);
+    rmdir(dir->data);
+}
+
+// ============================================================================
+// 18. exact commit replace and reject-existing
+// ============================================================================
+
+static void
+test_exact_commit(void)
+{
+    n00b_string_t *dir = fixture_dir(n00b_string_from_cstr("test_commit_"));
+    n00b_string_t *dst = fixture_child(dir, n00b_string_from_cstr("artifact"));
+    n00b_string_t *src = fixture_child(dir, n00b_string_from_cstr("artifact.tmp"));
+    fixture_write(dst, n00b_string_from_cstr("old"));
+    fixture_write(src, n00b_string_from_cstr("new"));
+
+    auto reject_r = n00b_path_commit_exact(
+        src, dst, .policy = N00B_PATH_COMMIT_REJECT_EXISTING);
+    if (n00b_result_is_err(reject_r) && n00b_result_get_err(reject_r) == ENOSYS) {
+        fixture_unlink(src);
+        fixture_unlink(dst);
+        rmdir(dir->data);
+        return;
+    }
+    N00B_TEST_REQUIRE(n00b_result_is_err(reject_r));
+    N00B_TEST_REQUIRE(n00b_result_get_err(reject_r) == EEXIST);
+    N00B_TEST_REQUIRE(n00b_path_exists(src));
+    fixture_assert_contents(dst, n00b_string_from_cstr("old"));
+
+    auto replace_r = n00b_path_commit_exact(
+        src, dst, .policy = N00B_PATH_COMMIT_REPLACE_EXISTING);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(replace_r));
+    N00B_TEST_REQUIRE(!n00b_path_exists(src));
+    fixture_assert_contents(dst, n00b_string_from_cstr("new"));
+
+    n00b_string_t *src2 = fixture_child(dir, n00b_string_from_cstr("fresh.tmp"));
+    n00b_string_t *dst2 = fixture_child(dir, n00b_string_from_cstr("fresh"));
+    fixture_write(src2, n00b_string_from_cstr("fresh"));
+    auto create_r = n00b_path_commit_exact(
+        src2, dst2, .policy = N00B_PATH_COMMIT_REJECT_EXISTING);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(create_r));
+    N00B_TEST_REQUIRE(!n00b_path_exists(src2));
+    fixture_assert_contents(dst2, n00b_string_from_cstr("fresh"));
+
+    fixture_unlink(dst);
+    fixture_unlink(dst2);
+    rmdir(dir->data);
+}
+
+// ============================================================================
+// 18. cleanup visibility
+// ============================================================================
+
+static void
+test_cleanup_visibility(void)
+{
+    n00b_string_t *dir = fixture_dir(n00b_string_from_cstr("test_cleanup_"));
+    n00b_string_t *existing = fixture_child(dir, n00b_string_from_cstr("temp"));
+    n00b_string_t *missing = fixture_child(dir, n00b_string_from_cstr("missing"));
+    fixture_write(existing, n00b_string_from_cstr("data"));
+
+    auto remove_r = n00b_file_unlink(existing);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(remove_r));
+    N00B_TEST_REQUIRE(n00b_result_get(remove_r));
+    N00B_TEST_REQUIRE(!n00b_path_exists(existing));
+
+    auto missing_ok = n00b_file_unlink(missing, .ignore_missing = true);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(missing_ok));
+    N00B_TEST_REQUIRE(!n00b_result_get(missing_ok));
+
+    auto missing_err = n00b_file_unlink(missing);
+    N00B_TEST_REQUIRE(n00b_result_is_err(missing_err));
+    N00B_TEST_REQUIRE(n00b_result_get_err(missing_err) == ENOENT);
+
+    rmdir(dir->data);
+}
+
+// ============================================================================
+// 19. path mode get/set
+// ============================================================================
+
+static void
+test_path_mode_helpers(void)
+{
+    n00b_string_t *dir = fixture_dir(n00b_string_from_cstr("test_mode_"));
+    n00b_string_t *path = fixture_child(dir, n00b_string_from_cstr("mode-file"));
+    fixture_write(path, n00b_string_from_cstr("mode"));
+
+    auto set_r = n00b_path_set_mode(path, 0600);
+    if (n00b_result_is_err(set_r) && n00b_result_get_err(set_r) == ENOSYS) {
+        fixture_unlink(path);
+        rmdir(dir->data);
+        return;
+    }
+    N00B_TEST_REQUIRE(n00b_result_is_ok(set_r));
+    N00B_TEST_REQUIRE(n00b_result_get(set_r) == 0600);
+
+    auto get_r = n00b_path_get_mode(path);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(get_r));
+    N00B_TEST_REQUIRE(n00b_result_get(get_r) == 0600);
+
+    auto bad_r = n00b_path_set_mode(path, 010000);
+    N00B_TEST_REQUIRE(n00b_result_is_err(bad_r));
+    N00B_TEST_REQUIRE(n00b_result_get_err(bad_r) == EINVAL);
+
+    fixture_unlink(path);
+    rmdir(dir->data);
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -334,6 +567,11 @@ main(int argc, char **argv)
     test_trim_slashes();
     test_cwd();
     test_new_temp_dir();
+    test_new_temp_path_prefix_suffix();
+    test_sibling_temp_file();
+    test_exact_commit();
+    test_cleanup_visibility();
+    test_path_mode_helpers();
 
     printf("All path tests passed.\n");
     n00b_shutdown();

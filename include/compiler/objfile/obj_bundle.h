@@ -9,6 +9,7 @@
  * Related modules:
  * - @ref result.h for structured result payloads.
  * - @ref buffer.h for artifact and manifest byte payloads.
+ * - @ref sink.h for filesystem persistence of rewritten object bytes.
  * - @ref types.h for object-file format enums.
  */
 #pragma once
@@ -22,6 +23,7 @@
 #include "core/alloc.h"
 #include "core/buffer.h"
 #include "core/string.h"
+#include "compiler/objfile/sink.h"
 #include "compiler/objfile/types.h"
 
 #define N00B_OBJ_BUNDLE_MANIFEST_MAGIC_LEN 8u
@@ -271,6 +273,50 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
     n00b_obj_bundle_carrier_t        carrier   = N00B_OBJ_BUNDLE_CARRIER_AUTO;
     n00b_obj_bundle_replace_policy_t replace   = N00B_OBJ_BUNDLE_REJECT_EXISTING;
     bool                             strict    = true;
+    n00b_allocator_t                *allocator = nullptr;
+};
+
+/**
+ * @pre @p object_bytes, @p bundle, and @p destination_path are non-null.
+ * @pre @p bundle is valid.
+ * @post On success, rewrites @p object_bytes exactly as
+ *       @ref n00b_obj_bundle_write would for the same bundle/carrier inputs,
+ *       then persists those bytes through @ref n00b_objfile_sink_write.
+ * @post On success, returns sink facts for @p destination_path; callers can
+ *       inspect bytes-written, temp-path, commit, cleanup, and mode facts via
+ *       the object-file sink result accessors.
+ * @post The input object buffer and @p bundle are not modified.
+ * @post Rewrite failures carry a @c n00b_obj_bundle_error_t payload. Sink
+ *       failures carry a @c n00b_objfile_sink_error_t payload.
+ * @kw format Object format, or `N00B_FMT_UNKNOWN` for auto-detect.
+ * @kw carrier Carrier selection policy; default
+ *      `N00B_OBJ_BUNDLE_CARRIER_AUTO`.
+ * @kw replace Whether an existing N00b-owned bundle carrier may be replaced;
+ *      default `N00B_OBJ_BUNDLE_REJECT_EXISTING`.
+ * @kw strict Forwarded to existing-carrier manifest validation; default
+ *      `true`.
+ * @kw sink_mode Sink persistence mode; default
+ *      `N00B_OBJFILE_SINK_MODE_ATOMIC`.
+ * @kw overwrite Filesystem destination policy; default
+ *      `N00B_OBJFILE_SINK_REJECT_EXISTING`.
+ * @kw file_mode Optional requested output mode; default none.
+ * @kw preserve_existing_mode Preserve the existing destination mode when
+ *      replacing and no explicit @c file_mode is supplied; default `true`.
+ * @kw allocator Optional allocator for intermediate rewrite bytes, sink facts,
+ *      and structured error payloads; default `nullptr`.
+ */
+extern n00b_result_t(n00b_objfile_sink_result_t *)
+n00b_obj_bundle_write_file(n00b_buffer_t     *object_bytes,
+                           n00b_obj_bundle_t *bundle,
+                           n00b_string_t     *destination_path) _kargs {
+    n00b_format_t                    format    = N00B_FMT_UNKNOWN;
+    n00b_obj_bundle_carrier_t        carrier   = N00B_OBJ_BUNDLE_CARRIER_AUTO;
+    n00b_obj_bundle_replace_policy_t replace   = N00B_OBJ_BUNDLE_REJECT_EXISTING;
+    bool                             strict    = true;
+    n00b_objfile_sink_mode_t         sink_mode = N00B_OBJFILE_SINK_MODE_ATOMIC;
+    n00b_objfile_sink_overwrite_t    overwrite = N00B_OBJFILE_SINK_REJECT_EXISTING;
+    n00b_option_t(uint32_t)          file_mode = n00b_option_none(uint32_t);
+    bool                             preserve_existing_mode = true;
     n00b_allocator_t                *allocator = nullptr;
 };
 

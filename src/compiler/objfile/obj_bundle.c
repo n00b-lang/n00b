@@ -3748,6 +3748,45 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
             allocator));
 }
 
+n00b_result_t(n00b_objfile_sink_result_t *)
+n00b_obj_bundle_write_file(n00b_buffer_t     *object_bytes,
+                           n00b_obj_bundle_t *bundle,
+                           n00b_string_t     *destination_path) _kargs
+{
+    n00b_format_t                    format    = N00B_FMT_UNKNOWN;
+    n00b_obj_bundle_carrier_t        carrier   = N00B_OBJ_BUNDLE_CARRIER_AUTO;
+    n00b_obj_bundle_replace_policy_t replace   = N00B_OBJ_BUNDLE_REJECT_EXISTING;
+    bool                             strict    = true;
+    n00b_objfile_sink_mode_t         sink_mode = N00B_OBJFILE_SINK_MODE_ATOMIC;
+    n00b_objfile_sink_overwrite_t    overwrite = N00B_OBJFILE_SINK_REJECT_EXISTING;
+    n00b_option_t(uint32_t)          file_mode = n00b_option_none(uint32_t);
+    bool                             preserve_existing_mode = true;
+    n00b_allocator_t                *allocator = nullptr;
+}
+{
+    auto rewritten = n00b_obj_bundle_write(object_bytes,
+                                           bundle,
+                                           .format    = format,
+                                           .carrier   = carrier,
+                                           .replace   = replace,
+                                           .strict    = strict,
+                                           .allocator = allocator);
+
+    if (n00b_result_is_err(rewritten)) {
+        return n00b_result_err(n00b_objfile_sink_result_t *,
+                               n00b_result_get_error(rewritten));
+    }
+
+    return n00b_objfile_sink_write(n00b_result_get(rewritten),
+                                   destination_path,
+                                   .sink_mode = sink_mode,
+                                   .overwrite = overwrite,
+                                   .file_mode = file_mode,
+                                   .preserve_existing_mode =
+                                       preserve_existing_mode,
+                                   .allocator = allocator);
+}
+
 n00b_obj_bundle_error_code_t
 n00b_obj_bundle_error_code(n00b_obj_bundle_error_t *error)
 {

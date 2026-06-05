@@ -30,6 +30,27 @@ typedef enum {
     N00B_FK_OTHER           = ~0,
 } n00b_file_kind;
 
+#ifndef N00B_FILE_T_DECLARED
+#define N00B_FILE_T_DECLARED
+typedef struct n00b_file n00b_file_t;
+#endif
+
+/** @brief Exact destination commit policy. */
+typedef enum {
+    /** Fail with `EEXIST` if the destination already exists. */
+    N00B_PATH_COMMIT_REJECT_EXISTING,
+    /** Replace an existing destination with the source path. */
+    N00B_PATH_COMMIT_REPLACE_EXISTING,
+} n00b_path_commit_policy_t;
+
+/** @brief Open sibling temp file returned by @ref n00b_new_sibling_temp_file. */
+typedef struct {
+    /** Created temp path in the destination directory. */
+    n00b_string_t *path;
+    /** Open temp file handle; caller closes it. */
+    n00b_file_t   *file;
+} n00b_sibling_temp_file_t;
+
 extern n00b_string_t *n00b_resolve_path(n00b_string_t *s);
 extern n00b_string_t *n00b_path_tilde_expand(n00b_string_t *in);
 extern n00b_string_t *n00b_get_user_dir(n00b_string_t *user);
@@ -256,6 +277,61 @@ _n00b_new_temp_path(n00b_string_t *prefix, n00b_string_t *suffix) _kargs {
     _n00b_new_temp_path((p), (s) __VA_OPT__(, ) __VA_ARGS__)
 
 /**
+ * @brief Build an uncreated sibling temp path for a destination.
+ *
+ * The returned path is in the same directory as @p destination_path and has a
+ * hidden filename derived from the destination basename plus random suffix
+ * bytes. It is only a candidate path: callers that need collision safety must
+ * create it with an exclusive-create helper such as
+ * @ref n00b_file_open_exclusive or use @ref n00b_new_sibling_temp_file.
+ *
+ * @param destination_path Destination whose parent directory should hold the
+ *                         temp file.
+ *
+ * @kw allocator Allocator for strings directly created by this helper.
+ *
+ * @return `Ok(path)` on success, `Err(EINVAL)` for null, empty, or
+ *         directory-shaped destinations.
+ */
+extern n00b_result_t(n00b_string_t *)
+_n00b_new_sibling_temp_path(n00b_string_t *destination_path) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+#define n00b_new_sibling_temp_path(p, ...) \
+    _n00b_new_sibling_temp_path((p) __VA_OPT__(, ) __VA_ARGS__)
+
+/**
+ * @brief Create a collision-safe same-directory sibling temp file.
+ *
+ * Tries random sibling temp names under the destination directory and creates
+ * the first available one with exclusive-create semantics. The destination
+ * path itself is never opened or overwritten by this helper.
+ *
+ * @param destination_path Destination whose parent directory should hold the
+ *                         temp file.
+ *
+ * @kw file_mode    Requested creation mode bits (default: `0600`; subject to
+ *                  host create-mode behavior such as umask).
+ * @kw max_attempts Maximum random candidates to try before reporting
+ *                  `EEXIST` (default: 64).
+ * @kw allocator    Allocator for the returned record, temp path, and open
+ *                  file handle.
+ *
+ * @return `Ok(temp)` with an open file handle and path. Caller closes
+ *         `temp->file` and removes `temp->path` when appropriate.
+ */
+extern n00b_result_t(n00b_sibling_temp_file_t *)
+_n00b_new_sibling_temp_file(n00b_string_t *destination_path) _kargs {
+    uint32_t          file_mode    = 0600;
+    uint32_t          max_attempts = 64;
+    n00b_allocator_t *allocator    = nullptr;
+};
+
+#define n00b_new_sibling_temp_file(p, ...) \
+    _n00b_new_sibling_temp_file((p) __VA_OPT__(, ) __VA_ARGS__)
+
+/**
  * @brief Return the POSIX permission bits (mode & 07777) of @p path.
  *
  * Thin libn00b wrapper around `stat(2)` for the case where the caller
@@ -269,6 +345,19 @@ _n00b_new_temp_path(n00b_string_t *prefix, n00b_string_t *suffix) _kargs {
  */
 extern n00b_result_t(uint32_t)
 n00b_path_get_mode(n00b_string_t *path);
+
+/**
+ * @brief Apply POSIX permission bits to a path and report observed bits.
+ *
+ * @param path Path to update.
+ * @param mode Requested low twelve POSIX mode bits.
+ *
+ * @return `Ok(mode)` with the observed `stat(2)` low twelve mode bits after
+ *         application. `Err(ENOSYS)` on hosts without mode support, or
+ *         `Err(errno)` on failure.
+ */
+extern n00b_result_t(uint32_t)
+n00b_path_set_mode(n00b_string_t *path, uint32_t mode);
 extern n00b_string_t *n00b_get_temp_root(void);
 extern n00b_string_t *n00b_filename_from_path(n00b_string_t *s);
 
@@ -283,6 +372,36 @@ n00b_find_command_paths(n00b_string_t *cmd,
 
 extern n00b_result_t(n00b_string_t *) n00b_rename(n00b_string_t *from,
                                                    n00b_string_t *to);
+
+/**
+ * @brief Commit one path to an exact destination.
+ *
+ * Unlike @ref n00b_rename, this helper never chooses a different destination
+ * name. With `N00B_PATH_COMMIT_REPLACE_EXISTING`, the destination may be
+ * replaced atomically by the host rename primitive. With
+ * `N00B_PATH_COMMIT_REJECT_EXISTING`, an existing destination is rejected
+ * without replacing it.
+ *
+ * @param source_path      Existing source/temp path to commit.
+ * @param destination_path Exact destination path.
+ *
+ * @kw policy Existing-destination policy (default:
+ *            `N00B_PATH_COMMIT_REJECT_EXISTING`).
+ *
+ * @return `Ok(destination_path)` on commit success. `Err(EEXIST)` for a
+ *         no-replace collision, `Err(ENOSYS)` when the host lacks an exact
+ *         no-replace rename primitive, or `Err(errno)` for other failures.
+ *         On failure, @p source_path remains available for caller-observable
+ *         cleanup.
+ */
+extern n00b_result_t(n00b_string_t *)
+_n00b_path_commit_exact(n00b_string_t *source_path,
+                        n00b_string_t *destination_path) _kargs {
+    n00b_path_commit_policy_t policy = N00B_PATH_COMMIT_REJECT_EXISTING;
+};
+
+#define n00b_path_commit_exact(s, d, ...) \
+    _n00b_path_commit_exact((s), (d) __VA_OPT__(, ) __VA_ARGS__)
 
 /**
  * @brief Remove a filesystem entry (libc `unlink` wrapper).

@@ -1,6 +1,9 @@
 #include "n00b.h"
+#include "compiler/objfile/sink.h"
+#include "core/file.h"
 #include "core/runtime.h"
 #include "util/assert.h"
+#include "util/path.h"
 #include "compiler/objfile/bstream.h"
 #include "compiler/objfile/elf.h"
 #include "compiler/objfile/elf_rewrite.h"
@@ -10,6 +13,8 @@
 #include "text/strings/string_ops.h"
 
 #include "objfile_elf_casegen.h"
+
+#include <errno.h>
 
 #define N00B_TEST_REQUIRE(expr) n00b_require((expr), #expr)
 #define TEST_ELF64_EHDR_SIZE 64u
@@ -232,6 +237,208 @@ assert_detail(n00b_obj_bundle_error_t *error, int64_t expected)
 
     N00B_TEST_REQUIRE(n00b_option_is_set(detail));
     N00B_TEST_REQUIRE(n00b_option_get(detail) == expected);
+}
+
+static n00b_objfile_sink_result_t *
+require_write_file_ok(n00b_result_t(n00b_objfile_sink_result_t *) result)
+{
+    N00B_TEST_REQUIRE(n00b_result_is_ok(result));
+    n00b_objfile_sink_result_t *facts = n00b_result_get(result);
+    N00B_TEST_REQUIRE(facts != nullptr);
+    return facts;
+}
+
+static n00b_obj_bundle_error_t *
+require_write_file_bundle_error(
+    n00b_result_t(n00b_objfile_sink_result_t *) result,
+    n00b_obj_bundle_error_code_t                expected)
+{
+    N00B_TEST_REQUIRE(n00b_result_is_err(result));
+    N00B_TEST_REQUIRE(
+        n00b_result_is_err_payload(n00b_obj_bundle_error_t *, result));
+
+    n00b_obj_bundle_error_t *error =
+        n00b_result_get_err_payload(n00b_obj_bundle_error_t *, result);
+
+    N00B_TEST_REQUIRE(n00b_obj_bundle_error_code(error) == expected);
+    return error;
+}
+
+static n00b_objfile_sink_error_t *
+require_write_file_sink_collision(
+    n00b_result_t(n00b_objfile_sink_result_t *) result)
+{
+    N00B_TEST_REQUIRE(n00b_result_is_err(result));
+    N00B_TEST_REQUIRE(
+        n00b_result_is_err_payload(n00b_objfile_sink_error_t *, result));
+
+    n00b_objfile_sink_error_t *error =
+        n00b_result_get_err_payload(n00b_objfile_sink_error_t *, result);
+    n00b_objfile_sink_error_code_t code =
+        n00b_objfile_sink_error_code(error);
+
+    N00B_TEST_REQUIRE(code == N00B_OBJFILE_SINK_ERR_COMMIT_FAILED
+                      || code == N00B_OBJFILE_SINK_ERR_UNSUPPORTED);
+
+    auto detail = n00b_objfile_sink_error_detail(error);
+
+    N00B_TEST_REQUIRE(n00b_option_is_set(detail));
+    if (code == N00B_OBJFILE_SINK_ERR_COMMIT_FAILED) {
+        N00B_TEST_REQUIRE(n00b_option_get(detail) == EEXIST);
+    }
+    else {
+        N00B_TEST_REQUIRE(n00b_option_get(detail) == ENOSYS);
+    }
+
+    return error;
+}
+
+static void
+assert_sink_destination(n00b_objfile_sink_error_t *error,
+                        n00b_string_t             *expected)
+{
+    auto destination = n00b_objfile_sink_error_destination_path(error);
+
+    N00B_TEST_REQUIRE(n00b_option_is_set(destination));
+    assert_string_eq(n00b_option_get(destination), expected);
+}
+
+static n00b_objfile_sink_result_t *
+require_sink_error_facts(n00b_objfile_sink_error_t *error)
+{
+    auto facts = n00b_objfile_sink_error_result_facts(error);
+
+    N00B_TEST_REQUIRE(n00b_option_is_set(facts));
+    return n00b_option_get(facts);
+}
+
+static n00b_string_t *
+fixture_dir(void)
+{
+    auto dir_r = n00b_new_temp_dir(r"n00b_bundle_file_", r"_dir");
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(dir_r));
+    return n00b_result_get(dir_r);
+}
+
+static n00b_string_t *
+fixture_child(n00b_string_t *dir, n00b_string_t *name)
+{
+    return n00b_path_simple_join(dir, name);
+}
+
+static void
+fixture_write_buffer(n00b_string_t *path, n00b_buffer_t *buffer)
+{
+    auto open_r = n00b_file_open(path, .mode = N00B_FILE_W);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(open_r));
+    n00b_file_t *file = n00b_result_get(open_r);
+
+    auto write_r = n00b_file_write_all(file, buffer);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(write_r));
+    N00B_TEST_REQUIRE(n00b_result_get(write_r) == buffer->byte_len);
+
+    auto close_r = n00b_file_close_result(file);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(close_r));
+}
+
+static void
+fixture_write_string(n00b_string_t *path, n00b_string_t *contents)
+{
+    fixture_write_buffer(path,
+                         n00b_buffer_from_bytes(contents->data,
+                                                (int64_t)contents->u8_bytes));
+}
+
+static n00b_buffer_t *
+fixture_read_buffer(n00b_string_t *path)
+{
+    auto open_r = n00b_file_open(path, .kind = N00B_FILE_KIND_MMAP);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(open_r));
+    n00b_file_t *file = n00b_result_get(open_r);
+
+    auto buffer_r = n00b_file_as_buffer(file);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(buffer_r));
+    n00b_buffer_t *copy = n00b_buffer_copy(n00b_result_get(buffer_r));
+
+    auto close_r = n00b_file_close_result(file);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(close_r));
+    return copy;
+}
+
+static void
+fixture_assert_file_bytes(n00b_string_t *path, n00b_buffer_t *expected)
+{
+    assert_buffer_eq(fixture_read_buffer(path), expected);
+}
+
+static void
+fixture_assert_file_string(n00b_string_t *path, n00b_string_t *expected)
+{
+    fixture_assert_file_bytes(
+        path,
+        n00b_buffer_from_bytes(expected->data, (int64_t)expected->u8_bytes));
+}
+
+static void
+fixture_unlink(n00b_string_t *path)
+{
+    auto unlink_r = n00b_file_unlink(path, .ignore_missing = true);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(unlink_r));
+}
+
+static void
+assert_write_file_facts(n00b_objfile_sink_result_t *facts,
+                        n00b_string_t              *destination_path,
+                        n00b_buffer_t              *expected_bytes,
+                        n00b_objfile_sink_overwrite_t expected_overwrite)
+{
+    assert_string_eq(n00b_objfile_sink_result_destination_path(facts),
+                     destination_path);
+    N00B_TEST_REQUIRE(n00b_objfile_sink_result_bytes_requested(facts)
+                      == expected_bytes->byte_len);
+    N00B_TEST_REQUIRE(n00b_objfile_sink_result_bytes_written(facts)
+                      == expected_bytes->byte_len);
+    N00B_TEST_REQUIRE(n00b_objfile_sink_result_mode_requested(facts)
+                      == N00B_OBJFILE_SINK_MODE_ATOMIC);
+    N00B_TEST_REQUIRE(n00b_objfile_sink_result_mode_used(facts)
+                      == N00B_OBJFILE_SINK_MODE_ATOMIC);
+    N00B_TEST_REQUIRE(n00b_objfile_sink_result_overwrite(facts)
+                      == expected_overwrite);
+    N00B_TEST_REQUIRE(n00b_objfile_sink_result_commit_attempted(facts));
+    N00B_TEST_REQUIRE(n00b_objfile_sink_result_commit_completed(facts));
+}
+
+static void
+assert_sink_collision_facts(n00b_objfile_sink_error_t *error,
+                            n00b_string_t             *destination_path)
+{
+    assert_sink_destination(error, destination_path);
+
+    auto mode = n00b_objfile_sink_error_mode(error);
+
+    N00B_TEST_REQUIRE(n00b_option_is_set(mode));
+    N00B_TEST_REQUIRE(n00b_option_get(mode) == N00B_OBJFILE_SINK_MODE_ATOMIC);
+
+    auto overwrite = n00b_objfile_sink_error_overwrite(error);
+
+    N00B_TEST_REQUIRE(n00b_option_is_set(overwrite));
+    N00B_TEST_REQUIRE(n00b_option_get(overwrite)
+                      == N00B_OBJFILE_SINK_REJECT_EXISTING);
+
+    n00b_objfile_sink_result_t *facts = require_sink_error_facts(error);
+
+    N00B_TEST_REQUIRE(n00b_objfile_sink_result_commit_attempted(facts));
+    N00B_TEST_REQUIRE(!n00b_objfile_sink_result_commit_completed(facts));
+    N00B_TEST_REQUIRE(n00b_objfile_sink_result_cleanup_attempted(facts));
+    N00B_TEST_REQUIRE(n00b_objfile_sink_result_cleanup_succeeded(facts));
 }
 
 static uint32_t
@@ -1093,6 +1300,127 @@ write_bundle_or_die(n00b_buffer_t     *object_bytes,
 }
 
 static void
+test_write_file_atomic_readback_and_byte_equality(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_obj_bundle_t *bundle = make_populated_bundle_a();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    auto               expected_r = n00b_obj_bundle_write(object_bytes, bundle);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(expected_r));
+    n00b_buffer_t *expected = n00b_result_get(expected_r);
+    n00b_string_t *path = fixture_child(fixture_dir(), r"bundle-output.o");
+
+    n00b_objfile_sink_result_t *facts = require_write_file_ok(
+        n00b_obj_bundle_write_file(object_bytes, bundle, path));
+
+    assert_write_file_facts(facts,
+                            path,
+                            expected,
+                            N00B_OBJFILE_SINK_REJECT_EXISTING);
+    fixture_assert_file_bytes(path, expected);
+
+    n00b_buffer_t *file_bytes = fixture_read_buffer(path);
+
+    require_read_success(n00b_obj_bundle_read(file_bytes), bundle_snapshot);
+    fixture_unlink(path);
+}
+
+static void
+test_write_file_default_overwrite_rejects_existing_destination(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_obj_bundle_t *bundle = make_populated_bundle_a();
+    n00b_string_t     *path = fixture_child(fixture_dir(), r"reject-output.o");
+
+    fixture_write_string(path, r"original destination");
+
+    n00b_objfile_sink_error_t *error = require_write_file_sink_collision(
+        n00b_obj_bundle_write_file(object_bytes, bundle, path));
+
+    assert_sink_collision_facts(error, path);
+    fixture_assert_file_string(path, r"original destination");
+    fixture_unlink(path);
+}
+
+static void
+test_write_file_explicit_overwrite_replaces_destination(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_obj_bundle_t *bundle = make_populated_bundle_a();
+    auto               expected_r = n00b_obj_bundle_write(object_bytes, bundle);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(expected_r));
+    n00b_buffer_t *expected = n00b_result_get(expected_r);
+    n00b_string_t *path = fixture_child(fixture_dir(), r"replace-output.o");
+
+    fixture_write_string(path, r"old object bytes");
+
+    n00b_objfile_sink_result_t *facts = require_write_file_ok(
+        n00b_obj_bundle_write_file(
+            object_bytes,
+            bundle,
+            path,
+            .overwrite = N00B_OBJFILE_SINK_REPLACE_EXISTING));
+
+    assert_write_file_facts(facts,
+                            path,
+                            expected,
+                            N00B_OBJFILE_SINK_REPLACE_EXISTING);
+    fixture_assert_file_bytes(path, expected);
+    fixture_unlink(path);
+}
+
+static void
+test_write_file_carrier_replace_rejects_before_sink_replace(void)
+{
+    n00b_obj_bundle_t *original_bundle = make_populated_bundle_a();
+    n00b_buffer_t *bundled = write_bundle_or_die(make_rewrite_target(),
+                                                 original_bundle);
+    n00b_obj_bundle_t *new_bundle = make_populated_bundle_b();
+    n00b_string_t *path =
+        fixture_child(fixture_dir(), r"carrier-policy-output.o");
+
+    fixture_write_string(path, r"carrier failure sentinel");
+
+    n00b_obj_bundle_error_t *error = require_write_file_bundle_error(
+        n00b_obj_bundle_write_file(
+            bundled,
+            new_bundle,
+            path,
+            .overwrite = N00B_OBJFILE_SINK_REPLACE_EXISTING),
+        N00B_OBJ_BUNDLE_ERR_REPLACE_REQUIRED);
+
+    assert_elf_metadata_carrier_error(error);
+    fixture_assert_file_string(path, r"carrier failure sentinel");
+    fixture_unlink(path);
+}
+
+static void
+test_write_file_sink_rejects_after_carrier_replace_allowed(void)
+{
+    n00b_obj_bundle_t *original_bundle = make_populated_bundle_a();
+    n00b_buffer_t *bundled = write_bundle_or_die(make_rewrite_target(),
+                                                 original_bundle);
+    n00b_obj_bundle_t *new_bundle = make_populated_bundle_b();
+    n00b_string_t *path =
+        fixture_child(fixture_dir(), r"sink-policy-output.o");
+
+    fixture_write_string(path, r"sink failure sentinel");
+
+    n00b_objfile_sink_error_t *error = require_write_file_sink_collision(
+        n00b_obj_bundle_write_file(
+            bundled,
+            new_bundle,
+            path,
+            .replace = N00B_OBJ_BUNDLE_REPLACE_EXISTING));
+
+    assert_sink_collision_facts(error, path);
+    fixture_assert_file_string(path, r"sink failure sentinel");
+    fixture_unlink(path);
+}
+
+static void
 test_write_existing_valid_bundle_requires_replace(void)
 {
     n00b_obj_bundle_t *original_bundle = make_populated_bundle_a();
@@ -1331,6 +1659,11 @@ main(int argc, char **argv)
     test_write_invalid_arguments();
     test_write_unsupported_carriers();
     test_write_insert_readback_and_immutability();
+    test_write_file_atomic_readback_and_byte_equality();
+    test_write_file_default_overwrite_rejects_existing_destination();
+    test_write_file_explicit_overwrite_replaces_destination();
+    test_write_file_carrier_replace_rejects_before_sink_replace();
+    test_write_file_sink_rejects_after_carrier_replace_allowed();
     test_write_existing_valid_bundle_requires_replace();
     test_write_existing_valid_bundle_replaces_explicitly();
     test_write_malformed_existing_bundle_rejects_even_with_replace();
