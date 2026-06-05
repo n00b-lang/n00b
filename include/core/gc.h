@@ -46,12 +46,21 @@
  * fresh segment; stale memory is unmapped.
  *
  * @param arena  The arena to collect.
- * @pre The STW lock must be held by the caller.
+ * @kw out_of_memory  True only when this collection is triggered by @p arena
+ *                    actually running out of room (the n00b_arena_alloc
+ *                    pressure path).  Gates the to-space growth heuristic:
+ *                    only a genuine out-of-memory collect may pre-grow the
+ *                    to-space.  Defaults false, so manual / test / marshal
+ *                    collects never grow a low-traffic arena.
  * @pre @p arena has `collection_enabled` set.
  * @post All live allocations in @p arena have been relocated; old
  *       segments are unmapped and pointers are rewritten.
  */
-extern void n00b_collect(n00b_arena_t *arena);
+extern void
+n00b_collect(n00b_arena_t *arena) _kargs
+{
+    bool out_of_memory = false;
+};
 
 /**
  * @brief Stop-the-world GC pass with leak-detection diagnostics

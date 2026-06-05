@@ -25,6 +25,7 @@
 #include "core/pool.h"
 #include "core/spinlock.h"
 #include "core/mutex.h"
+#include "core/rwlock.h"
 #include "conduit/conduit_types.h"
 
 typedef struct n00b_runtime_t n00b_runtime_t;
@@ -210,18 +211,25 @@ struct n00b_runtime_t {
     _Atomic uint32_t            foreign_reap_lock;
     n00b_base_allocator_t       slab_allocator;
     /* Pure-preemptive stop-the-world (WP-001).  `critical_execution` is the
-     * single gate: a thread holds it during critical execution — mmap/munmap,
-     * mmap interval-tree mutation, and a thread's WHOLE init / WHOLE destroy.
-     * To stop the world the initiator ACQUIRES it (guaranteeing no other thread
-     * is mid-critical-section), then preemptively suspends every other
-     * registered thread.  It is a real, re-entrant n00b mutex (owner+nesting
-     * keyed on the OS thread id), so a thread in init (holding it) can nest an
-     * mmap mutation (re-acquire) without deadlock.  `stw_active` is set once the
-     * world is fully stopped (lock held + everyone suspended); while it is set
-     * every n00b lock acquire and release short-circuits to a no-op (the
-     * collector is the sole runner, so all locks are uncontended and must never
-     * block on a lock a suspended thread holds). */
-    n00b_mutex_t                critical_execution;
+     * single STW lock — a READER/WRITER lock.  "Stopping the world" does NOT
+     * mean actually stopping it: a thread doing critical execution takes a READ
+     * lock and runs concurrently with other readers.  Critical execution =
+     * mmap/munmap, mmap interval-tree mutation, a thread's WHOLE init / WHOLE
+     * destroy, and ALL access (read and write) to a MOVABLE (copying-GC) arena's
+     * OOB metadata.  The collector takes the WRITE lock: acquiring it DRAINS all
+     * readers, so by the time it runs nothing is mid-critical-section (the mmap
+     * tree and every movable-arena metadata dict are quiescent); it then
+     * preemptively suspends every other registered thread for the stack scan —
+     * safe now, because no frozen thread can hold a metadata/mmap lock.  The
+     * read side is reentrant (via the futex reader count) and, AS A SPECIAL CASE
+     * FOR THIS LOCK ONLY, may be acquired with n00b_thread_self() unresolvable
+     * (a thread holds it across its whole init/destroy); it is excluded from the
+     * per-thread lock-accounting chain.  `stw_active` is set once the world is
+     * fully stopped (write lock held + everyone suspended); while it is set every
+     * n00b lock acquire/release short-circuits to a no-op (the collector is the
+     * sole runner, so its own re-entrant reads of this lock during the scan must
+     * not block on the write lock it holds). */
+    n00b_rwlock_t               critical_execution;
     _Atomic bool                stw_active;
     /* Stop-the-world nesting depth, owned exclusively by the (single) STW
      * initiator.  The gate's own owner+nesting recursion cannot track this

@@ -43,6 +43,9 @@
 
 #include "n00b.h"
 #include "core/alloc.h"
+// Raw futex timed wait (__ulock_wait2 / FUTEX_WAIT) — a pthread-free sleep for
+// the n00b-managed (raw Mach) collect_worker; see collect_worker for why.
+#include "core/futex.h"
 #include "core/gc.h"
 #include "core/pool.h"
 #include "core/runtime.h"
@@ -148,11 +151,19 @@ static void *
 collect_worker(void *arg)
 {
     n00b_arena_t *arena = (n00b_arena_t *)arg;
-    struct timespec ts = {.tv_sec = 0, .tv_nsec = COLLECT_PERIOD_US * 1000};
+    /* collect_worker is an n00b-managed RAW Mach thread (n00b_thread_spawn,
+     * thread.c:125), NOT a pthread, so it has no pthread TSD.  It must not call
+     * libc cancellation-point wrappers (nanosleep / usleep / ...): those route
+     * through pthread_testcancel, which dereferences the pthread TSD a raw Mach
+     * thread does not have -> intermittent SIGSEGV (the soak crash).  Sleep via
+     * n00b's raw futex timed wait instead (__ulock_wait2 on macOS / FUTEX_WAIT
+     * on Linux — a bare syscall, no pthread).  The futex value never changes, so
+     * the wait always runs the full timeout and returns ETIMEDOUT. */
+    n00b_futex_t idle = 0;
     while (!atomic_load(&g_stop)) {
         n00b_collect(arena);
         atomic_fetch_add(&g_collect_count, 1);
-        nanosleep(&ts, nullptr);
+        n00b_futex_wait(&idle, 0, (uint64_t)COLLECT_PERIOD_US * 1000);
     }
     return nullptr;
 }

@@ -298,21 +298,26 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     assert(rt);
     *rt = (n00b_runtime_t){};
 
-    // Pure-preemptive STW gate (WP-001): a real, re-entrant n00b mutex.  Use the
-    // system-mutex initializer (no lock-op logging, no GC alloc-info probe) — it
-    // is runtime infrastructure embedded in the runtime struct, taken during
-    // thread init/destroy before the GC allocators it would probe are up.
-    // n00b_sys_mutex_init memsets the lock, leaving the accounting owner at 0;
-    // stamp it to N00B_NO_OWNER (-1) so the first real acquire is recognized as
-    // "unlocked" rather than "owned by tid 0" (which would abort the accounting).
-    n00b_sys_mutex_init(&rt->critical_execution, N00B_LOC_STRING());
+    // Pure-preemptive STW lock (WP-001): the single reader/writer gate.
+    // Critical execution takes a READ lock; the collector takes the WRITE lock.
+    // Initialize WITHOUT n00b_rw_init: its n00b_lock_init_accounting runs a
+    // trailing n00b_find_alloc_info probe that touches GC allocators not yet up
+    // here, and this gate is taken during thread init/destroy before they are.
+    // The runtime struct was just zeroed (*rt = {}) — futex unlocked, rwdebug
+    // list empty — so we only stamp owner=N00B_NO_OWNER (so the first real
+    // acquire is not mistaken for tid-0 ownership), the lock type, and the
+    // accounting opt-outs (no_log / inited).
+    n00b_futex_init(&rt->critical_execution.futex);
     n00b_core_lock_info_t ce_info = {
         .owner    = N00B_NO_OWNER,
-        .type     = N00B_NLT_MUTEX,
+        .type     = N00B_NLT_RW,
         .nesting  = 0,
         .reserved = 0,
     };
     n00b_atomic_store(&rt->critical_execution.data, ce_info);
+    rt->critical_execution.inited       = true;
+    rt->critical_execution.no_log       = true;
+    rt->critical_execution.creation_loc = N00B_LOC_STRING();
     n00b_atomic_store(&rt->stw_active, false);
 
     if (!n00b_option_is_set(n00b_default_runtime)) {

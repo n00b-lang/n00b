@@ -29,6 +29,7 @@
 #include "core/runtime.h"
 #include "core/stw.h"
 #include "core/thread.h"
+#include "core/rwlock.h"
 #include "core/futex.h"
 
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -329,7 +330,7 @@ _n00b_stop_the_world(char *loc)
     // still clear, so the lock short-circuit is off); a NESTED stop by the same
     // (sole-running) initiator short-circuits to a no-op — the gate is already
     // held, which is exactly what we want.
-    n00b_mutex_lock(&rt->critical_execution);
+    n00b_rw_write_lock(&rt->critical_execution);
 
     // Nesting: only the outermost stop suspends.  The gate's own nesting cannot
     // track this (a nested acquire short-circuits while stw_active is set), so a
@@ -397,7 +398,7 @@ _n00b_restart_the_world(char *loc)
     // unwinding a nested stop — the world stays stopped; just unwind the gate
     // (a no-op while stw_active is set) and return.
     if (n00b_atomic_add(&rt->stw_nesting, -1) != 1) {
-        n00b_mutex_unlock(&rt->critical_execution);
+        n00b_rw_unlock(&rt->critical_execution);
         return;
     }
 
@@ -425,6 +426,6 @@ _n00b_restart_the_world(char *loc)
         _n00b_preempt_resume(t);
     }
 
-    // Release the gate (a real release: stw_active is already clear).
-    n00b_mutex_unlock(&rt->critical_execution);
+    // Release the write lock (a real release: stw_active is already clear).
+    n00b_rw_unlock(&rt->critical_execution);
 }

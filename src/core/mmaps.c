@@ -87,12 +87,14 @@ mmap_lock(n00b_mmap_ctx_t *ctx)
     if (!n00b_atomic_load(&n00b_get_runtime()->startup_complete)) {
         return; // single-threaded init.
     }
-    /* MUTATOR.  Hold the critical_execution gate on the OUTERMOST acquire only,
-     * so a stop-the-world cannot freeze us mid-tree-mutation; a nested acquire
-     * is already covered by the outer gate hold (and re-acquiring it nests the
-     * mutex reentrantly, which the matching unlock would have to unwind). */
+    /* MUTATOR.  Take the STW lock as a READER on the OUTERMOST acquire only, so
+     * the collector (the WRITE lock holder) cannot freeze us mid-tree-mutation;
+     * concurrent mutators run as fellow readers and are serialized among
+     * themselves by the spinlock below.  A nested acquire is already covered by
+     * the outer reader hold (the read lock is reentrant, but we gate on the
+     * spinlock's own owner check so the matching unlock balances). */
     if (!n00b_lock_already_owner((n00b_lock_base_t *)&ctx->lock)) {
-        n00b_mutex_lock(&n00b_get_runtime()->critical_execution);
+        n00b_rw_read_lock(&n00b_get_runtime()->critical_execution);
     }
     n00b_spinlock_lock(&ctx->lock);
 }
@@ -109,7 +111,7 @@ mmap_unlock(n00b_mmap_ctx_t *ctx)
     /* Only the OUTERMOST unlock (spinlock fully released) releases the gate; a
      * nested unlock just unwinds the spinlock's nesting count. */
     if (n00b_spinlock_unlock(&ctx->lock)) {
-        n00b_mutex_unlock(&n00b_get_runtime()->critical_execution);
+        n00b_rw_unlock(&n00b_get_runtime()->critical_execution);
     }
 }
 

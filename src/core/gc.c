@@ -52,7 +52,7 @@ static n00b_arena_t            *g_site_census_arena = nullptr;
 // Forward declarations
 // ============================================================================
 
-static void n00b_collect_setup(n00b_collect_t *, n00b_arena_t *);
+static void n00b_collect_setup(n00b_collect_t *, n00b_arena_t *, bool);
 static void n00b_scan_memory_range(n00b_collect_t *, void *, size_t);
 static void n00b_process_worklist(n00b_collect_t *);
 static bool
@@ -239,12 +239,27 @@ alloc_info_raw_hdr(n00b_alloc_info_t info)
 // ============================================================================
 
 static n00b_arena_t *
-n00b_create_destination_arena(n00b_arena_t *src)
+n00b_create_destination_arena(n00b_arena_t *src, bool out_of_memory)
 {
     uint64_t sz = n00b_arena_size(src);
 
     // If we were really short on memory last time, go up a power of two.
-    if (src->current_segment->next_segment || src->alloc_count < N00B_TOO_FEW_ALLOCS) {
+    // This growth heuristic is ONLY valid when THIS collection was triggered
+    // by the arena actually running out of room (out_of_memory): then a
+    // multi-segment spill or a sparse-but-full arena is a genuine pressure
+    // signal and pre-growing the to-space avoids an immediate re-collect.  A
+    // manual / test / marshal collect is NOT memory pressure (the arena had
+    // room; the caller just wanted to compact), so growing on it is wrong: a
+    // low-traffic arena collected on a tight cadence (e.g. the default arena
+    // polled every ~1ms while the churn lands in a *different* pool) has
+    // alloc_count < N00B_TOO_FEW_ALLOCS every cycle and would double its
+    // capacity each time — 32M → 64M → … → multi-GB unbounded — which then
+    // makes the conservative backward sentinel scan over that segment stall
+    // the world.  Gate the doubling on out_of_memory so non-pressure collects
+    // keep the to-space the same size as the from-space.
+    if (out_of_memory
+        && (src->current_segment->next_segment
+            || src->alloc_count < N00B_TOO_FEW_ALLOCS)) {
         sz *= 2;
     }
 
@@ -1258,6 +1273,32 @@ scan_thread_state:
                                n00b_words_for_scan(sizeof(n00b_thread_record_t)));
         n00b_scan_thread_lock_chains(ctx, &rt->threads[i]);
     }
+
+    // Keep the reap-pending chain alive (WP-001).  A dead worker queued for
+    // reaping has had its rt->threads[] slot cleared, so the loop above never
+    // reaches it: the ONLY reference to its struct — and to the n00b_callstack_t
+    // descriptors it still owns via ->callstack / ->altstack, which the reaper
+    // returns to the pool — is this raw chain.  Both the struct and the
+    // descriptors live in the GC-visible runtime_obj_pool, so without marking
+    // them here a collection reclaims them out from under the reaper, which then
+    // reads freed memory at reap time (observed at shutdown:
+    // n00b_callstack_pool_return faulting on a freed descriptor).  The world is
+    // stopped (we hold critical_execution; every other thread is suspended), so
+    // the chain is stable.  Mark each entry's struct (which keeps it AND, via the
+    // worklist trace, its ->callstack/->altstack descriptors); we do NOT scan a
+    // dead worker's C stack — it is gone.
+    n00b_thread_t *reap_t = rt->reap_pending;
+    while (reap_t != nullptr) {
+        n00b_thread_t *reap_next = reap_t->reap_next;
+        // Mark the struct itself (conservatively, via the pointer slot), then
+        // scan its contents so the worklist trace reaches the ->callstack /
+        // ->altstack descriptors it still owns.
+        n00b_scan_memory_range(ctx, (void *)&reap_t, 1);
+        n00b_scan_memory_range(ctx,
+                               (void *)reap_t,
+                               n00b_words_for_scan(sizeof(n00b_thread_t)));
+        reap_t = reap_next;
+    }
 }
 
 // ============================================================================
@@ -1783,10 +1824,10 @@ n00b_process_finalizers(n00b_collect_t *ctx)
 // ============================================================================
 
 static void
-n00b_collect_setup(n00b_collect_t *ctx, n00b_arena_t *from_space)
+n00b_collect_setup(n00b_collect_t *ctx, n00b_arena_t *from_space, bool out_of_memory)
 {
     ctx->from_space = from_space;
-    ctx->to_space   = n00b_create_destination_arena(from_space);
+    ctx->to_space   = n00b_create_destination_arena(from_space, out_of_memory);
 
     /* Bump the runtime's GC epoch counter and snapshot it onto the
      * collection context. The mark phase stamps this value onto
@@ -1930,7 +1971,7 @@ n00b_collection_cleanup(n00b_collect_t *ctx)
 // likely blend the stack frame in a way we don't like w/
 // n00b_collect().
 static __attribute__((noinline)) void
-n00b_collect_internal(n00b_arena_t *arena)
+n00b_collect_internal(n00b_arena_t *arena, bool out_of_memory)
 {
     n00b_collect_t  ctx;
     n00b_segment_t *segment = arena->current_segment;
@@ -1939,7 +1980,7 @@ n00b_collect_internal(n00b_arena_t *arena)
 
     segment->last_addr = n00b_atomic_load(&arena->next_alloc);
 
-    n00b_collect_setup(&ctx, arena);
+    n00b_collect_setup(&ctx, arena, out_of_memory);
     arena->alloc_count = 0;
 
     /* Diagnostic site census: only during a debug_leak_detect collect.
@@ -2081,7 +2122,15 @@ n00b_collect_internal(n00b_arena_t *arena)
 }
 
 void
-n00b_collect(n00b_arena_t *arena)
+n00b_collect(n00b_arena_t *arena) _kargs
+{
+    // Set when this collection is triggered by the arena actually running out
+    // of room (the n00b_arena_alloc pressure path).  It gates the to-space
+    // growth heuristic in n00b_create_destination_arena: only a genuine
+    // out-of-memory collect may pre-grow the to-space.  A manual / test /
+    // marshal collect leaves it false so it never grows a low-traffic arena.
+    bool out_of_memory = false;
+}
 {
     n00b_jmp_buf_t                     register_spill = {};
     [[maybe_unused]] volatile uint64_t top            = 0;
@@ -2089,10 +2138,23 @@ n00b_collect(n00b_arena_t *arena)
 
     self->stack_top = (void *)&top;
 
+    // The collection MUST run with the world stopped.  n00b_scan_thread_stacks
+    // conservatively walks every other thread's C stack and reads its
+    // stack_map/stack_top; if a thread is concurrently in n00b_thread_destroy it
+    // nulls its stack_map and unregisters/unmaps its stack out from under the
+    // scan (observed: SIGSEGV in n00b_visit_possible_pointer mid-range, the page
+    // unmapped between the stack_map null-check and the range read).  Stopping
+    // the world here both freezes every other thread and — because STW first
+    // acquires `critical_execution` — guarantees no thread is mid-destroy
+    // (destroy holds that same gate across its WHOLE teardown).  STW is
+    // reentrant via the gate + stw_nesting, so callers that already stopped the
+    // world (arena auto-collect, n00b_debug_find_leaks, marshal) simply nest.
+    n00b_stop_the_world();
     if (!n00b_setjmp(&register_spill)) {
-        n00b_collect_internal(arena);
+        n00b_collect_internal(arena, out_of_memory);
         n00b_longjmp(&register_spill, 1);
     }
+    n00b_restart_the_world();
 }
 
 /* Diagnostic POOL census: enumerate every ALIVE allocation physically

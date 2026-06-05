@@ -256,7 +256,7 @@ n00b_thread_init() _kargs
     // cleanly suspend).  Keyed on the OS thread id, so it works even though
     // n00b_thread_self() is not yet resolvable here.  Released at the very end,
     // once the thread is fully registered + suspendable.
-    n00b_mutex_lock(&runtime->critical_execution);
+    n00b_rw_read_lock(&runtime->critical_execution);
 
     // n00b_thread_self() must be resolvable for the calling thread BEFORE the first
     // GC-pushing allocation below (the codegen wraps every alloc in a GC
@@ -389,6 +389,14 @@ n00b_thread_init() _kargs
     n00b_atomic_or(&runtime->live_slot_bits[acquired_slot >> 6],
                    (uint64_t)1 << (acquired_slot & 63u));
 
+    // WP-001: n00b_thread_self() now resolves (with a record); adopt the
+    // record-less gate read hold taken at the top of init into a read-log
+    // record.  Without this, the first GC-visible allocation below re-acquires
+    // the gate, fails to recognize its own outstanding hold (no record), and
+    // blocks behind a draining stop-the-world writer that is itself waiting for
+    // this very hold to drop — deadlock.  See n00b_rw_adopt_read_hold.
+    n00b_rw_adopt_read_hold(&runtime->critical_execution, n00b_thread_self());
+
     // Now n00b_thread_self() resolves to &init_self; allocate the permanent
     // struct from the GC-VISIBLE, non-moving runtime_obj_pool (WP-3a / D-034;
     // renamed from user_pool at the WP-close rebase to avoid colliding with
@@ -444,7 +452,7 @@ n00b_thread_init() _kargs
     n00b_futex_wake((n00b_futex_t *)&rec->thread, true);
 
     // Fully registered + suspendable: end the critical-execution window.
-    n00b_mutex_unlock(&runtime->critical_execution);
+    n00b_rw_unlock(&runtime->critical_execution);
 }
 
 #if defined(__APPLE__)
@@ -557,7 +565,14 @@ n00b_release_locks_on_thread_exit(n00b_thread_record_t *rec)
     }
     n00b_atomic_store(&rec->exclusive_locks, nullptr);
 
-    // Walk read locks and release each one.
+    // Walk read locks and force-release each one — INCLUDING the STW gate
+    // (critical_execution).  This is the catch-all that drops every read lock a
+    // thread still holds at teardown (reaper at thread.c:1932, and the destroy
+    // path which calls us mid-teardown).  The gate MUST be dropped here so a
+    // thread torn down while holding it does not leak a reader count that the
+    // collector's write lock then waits on forever.  n00b_thread_destroy relies
+    // on this to drop its own gate hold (it does NOT release the gate again
+    // afterwards).
     n00b_thread_read_log_t *rlog = n00b_atomic_load(&rec->read_locks);
 
     while (rlog) {
@@ -596,9 +611,16 @@ n00b_thread_destroy(void)
     // collector never scans a stack being dismantled.  The nested mmap
     // unregister below re-acquires the gate reentrantly — intended.
     n00b_runtime_t *destroy_gate_rt = n00b_get_runtime();
-    n00b_mutex_lock(&destroy_gate_rt->critical_execution);
+    n00b_rw_read_lock(&destroy_gate_rt->critical_execution);
 
     n00b_thread_record_t *rec = self->record;
+
+    // n00b_release_locks_on_thread_exit (below, in the rec branch) force-drops
+    // this thread's gate read lock (it is recorded in rec->read_locks via the
+    // record-path acquire above).  Track that so we do NOT release the gate a
+    // second time at the end; only the no-record case (rec == nullptr, the gate
+    // taken via the record-less path) needs the explicit release.
+    bool gate_dropped_by_release_locks = false;
 
     if (rec) {
         // If this thread is on a CV's waiters list, remove it.
@@ -638,6 +660,7 @@ n00b_thread_destroy(void)
         }
 
         n00b_release_locks_on_thread_exit(rec);
+        gate_dropped_by_release_locks = true; // it dropped our gate read hold
 
         // Retire this worker's stack-bounds advertisement BEFORE clearing
         // the slot.  n00b_thread_self()'s worker bounds-scan matches an SP
@@ -699,8 +722,12 @@ n00b_thread_destroy(void)
         n00b_futex_wake((n00b_futex_t *)&rt->live_threads, true);
     }
 
-    // End the critical-execution window: teardown is complete.
-    n00b_mutex_unlock(&destroy_gate_rt->critical_execution);
+    // End the critical-execution window.  If we had a record, the gate read was
+    // already force-dropped by n00b_release_locks_on_thread_exit above; release
+    // it explicitly only in the record-less case (where that path did not run).
+    if (!gate_dropped_by_release_locks) {
+        n00b_rw_unlock(&destroy_gate_rt->critical_execution);
+    }
 }
 
 bool
@@ -923,6 +950,19 @@ n00b_capture_stack_base(n00b_thread_t *thread,
         uint32_t slot = (uint32_t)thread->id_info.parts.id;
         n00b_atomic_or(&runtime->live_slot_bits[slot >> 6],
                        (uint64_t)1 << (slot & 63u));
+
+        // WP-001: n00b_thread_self() now resolves (with a record).  The stack
+        // registration just below re-acquires the STW gate (n00b_mmap_by_address
+        // / n00b_mmap_register -> mmap_lock).  The thread already holds that gate
+        // from the top of its init, but that outer hold was taken null-self
+        // (before the TCB existed) and so carries NO read-log record.  Without
+        // adopting it here, the nested mmap acquire fails to recognize its own
+        // hold and blocks behind a draining stop-the-world writer that is itself
+        // waiting for this very hold to drop — deadlock (observed for FOREIGN
+        // threads, whose stack registration runs THIS branch, before the
+        // adoption in n00b_thread_init proper).  Adopt now, before the nested
+        // acquire.  Idempotent with the later n00b_thread_init adoption.
+        n00b_rw_adopt_read_hold(&runtime->critical_execution, n00b_thread_self());
     }
 
     // Only register a real region.  Foreign-thread stack discovery can fail

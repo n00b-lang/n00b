@@ -7,6 +7,7 @@
 #include "core/mmaps.h"
 #include "core/memory_info.h"
 #include "core/stw.h"
+#include "core/rwlock.h"
 #include "core/pool.h"
 #include "core/runtime.h"
 #include "core/type_info.h"
@@ -21,6 +22,24 @@
 extern uint64_t         n00b_gc_guard;
 const n00b_alloc_opts_t _n00b_default_alloc_opts = {};
 static void             n00b_run_and_remove_finalizers(void *ptr);
+
+// WP-001: every access (read AND write) to a MOVABLE (copying-GC) arena's OOB
+// metadata dict must hold the STW read lock.  The collector takes the STW WRITE
+// lock before it scans; that drains all in-flight metadata ops, so it never
+// freezes a thread mid-dict-mutation and then spins forever on the per-bucket
+// lock that frozen thread holds.  GC arenas are the ONLY movable allocators.
+//
+// This is a CHEAP flag test on the allocator already in hand — NOT an mmap-tree
+// lookup.  A movable GC arena is exactly the non-hidden, non-__system,
+// metadata-bearing allocator: it registers its segments as `managed_segment`
+// (see n00b_get_arena_addr_type).  Pools register as `n00b_mmap_pool` and are
+// hidden; the metadata / system pools are `__system`; all are excluded.
+static inline bool
+n00b_alloc_is_movable(n00b_allocator_t *al)
+{
+    return al && al->metadata && !al->hidden && !al->__system;
+}
+
 
 // The scoped allocator override is now a per-thread field reached via
 // n00b_thread_self() (D-005), not a thread_local.  Before the runtime /
@@ -238,8 +257,15 @@ _n00b_alloc_raw(size_t             n,
             .alive           = 1,
         };
 
+        bool md_stw = n00b_alloc_is_movable(opts->allocator);
+        if (md_stw) {
+            n00b_rw_read_lock(&n00b_get_runtime()->critical_execution);
+        }
         n00b_dict_untyped_put(opts->allocator->metadata, r, map_item);
         assert(n00b_dict_untyped_get(opts->allocator->metadata, r, nullptr) == map_item);
+        if (md_stw) {
+            n00b_rw_unlock(&n00b_get_runtime()->critical_execution);
+        }
     }
 
     // If the allocator has no headers and no metadata but is visible to
@@ -462,6 +488,14 @@ n00b_free(void *ptr)
      *      which masks bona-fide leak fixes.
      */
     if (allocator->metadata_pool != nullptr) {
+        // Movable-arena metadata teardown runs under the STW read lock (WP-001)
+        // so the collector's write lock drains it; n00b_free(oob) below targets
+        // the md_pool (a __system allocator, not movable), so it does not nest
+        // the gate.
+        bool md_stw = n00b_alloc_is_movable(allocator);
+        if (md_stw) {
+            n00b_rw_read_lock(&n00b_get_runtime()->critical_execution);
+        }
         n00b_oob_hdr_t *oob = n00b_dict_untyped_get(allocator->metadata,
                                                    ptr,
                                                    nullptr);
@@ -471,6 +505,9 @@ n00b_free(void *ptr)
             oob->finalizer_user = nullptr;
             (void)n00b_dict_untyped_remove(allocator->metadata, ptr);
             n00b_free(oob);
+        }
+        if (md_stw) {
+            n00b_rw_unlock(&n00b_get_runtime()->critical_execution);
         }
     }
 
@@ -698,7 +735,19 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
         }
 
         if (al->metadata) {
+            // Movable-arena metadata reads take the STW read lock too (WP-001):
+            // this same GET is on the mutator's n00b_free path, and a thread
+            // frozen here mid-bucket-lock would strand the collector.  When the
+            // collector itself calls this during its scan, stw_active is set and
+            // the read lock short-circuits (the dict is already quiescent).
+            bool md_stw = (mmap->kind == n00b_mmap_managed_segment);
+            if (md_stw) {
+                n00b_rw_read_lock(&n00b_get_runtime()->critical_execution);
+            }
             n00b_oob_hdr_t *oob = n00b_dict_untyped_get(al->metadata, addr, nullptr);
+            if (md_stw) {
+                n00b_rw_unlock(&n00b_get_runtime()->critical_execution);
+            }
             if (!oob) {
                 *result = (n00b_alloc_info_t){.kind = n00b_alloc_err};
                 return;
