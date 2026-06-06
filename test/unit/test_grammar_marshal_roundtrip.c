@@ -69,9 +69,8 @@ load_n00b_grammar(void)
 {
     n00b_string_t  *path = n00b_string_from_cstr(N00B_N00B_GRAMMAR_PATH);
     n00b_string_t  *bnf  = slurp(path);
-    n00b_grammar_t *g    = n00b_grammar_new();
+    n00b_grammar_t *g = n00b_grammar_new(.error_recovery = false);
 
-    n00b_grammar_set_error_recovery(g, false);
     CHECK(n00b_bnf_load(bnf, r"module", g));
     CHECK(n00b_list_len(g->rules) > 0);
     CHECK(n00b_list_len(g->nt_list) > 0);
