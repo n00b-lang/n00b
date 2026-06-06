@@ -7030,6 +7030,17 @@ _n00b_obj_bundle_elf_section_is_unknown_0c001(n00b_elf_section_t *section)
            && !_n00b_obj_bundle_elf_section_is_wrapped_or_reserved(section);
 }
 
+static bool
+_n00b_obj_bundle_elf_section_is_nonconflicting_chalk(
+    n00b_elf_section_t *section)
+{
+    return section != nullptr
+           && (_n00b_obj_bundle_string_bytes_eq(section->name,
+                                               r".chalk.mark")
+               || _n00b_obj_bundle_string_bytes_eq(section->name,
+                                                   r".chalk.free"));
+}
+
 static int64_t
 _n00b_obj_bundle_elf_carrier_shape_detail(n00b_elf_section_t *section)
 {
@@ -8177,6 +8188,22 @@ _n00b_obj_bundle_mask_elf_carrier_for_loadable_rewrite(n00b_elf_binary_t *elf)
     return false;
 }
 
+static void
+_n00b_obj_bundle_mask_elf_chalk_for_loadable_rewrite(n00b_elf_binary_t *elf)
+{
+    if (elf == nullptr) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < elf->num_sections; i++) {
+        n00b_elf_section_t *section = &elf->sections[i];
+
+        if (_n00b_obj_bundle_elf_section_is_nonconflicting_chalk(section)) {
+            section->name = r".n00b.chalk-preserved";
+        }
+    }
+}
+
 static n00b_obj_bundle_error_t *
 _n00b_obj_bundle_error_from_rewrite_plan(n00b_elf_rewrite_plan_t *plan,
                                          n00b_allocator_t        *allocator)
@@ -9267,6 +9294,8 @@ _n00b_obj_bundle_write_elf_loadable_carrier(
         }
     }
 
+    _n00b_obj_bundle_mask_elf_chalk_for_loadable_rewrite(elf);
+
     n00b_elf_rewrite_loadable_request_t request = {
         .payload          = bundle_bytes,
         .segment_flags    = PF_R | PF_X,
@@ -9527,6 +9556,8 @@ _n00b_obj_bundle_write_elf_split_carrier(
                     allocator));
         }
     }
+
+    _n00b_obj_bundle_mask_elf_chalk_for_loadable_rewrite(elf);
 
     n00b_elf_rewrite_loadable_request_t loadable_request = {
         .payload          = loadable_payload,

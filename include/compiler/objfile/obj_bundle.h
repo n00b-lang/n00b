@@ -362,6 +362,11 @@ n00b_obj_bundle_read(n00b_buffer_t *object_bytes) _kargs {
  *       later reads.
  * @post Existing N00b-owned metadata, loadable, or split carriers require
  *       `replace = N00B_OBJ_BUNDLE_REPLACE_EXISTING` before replacement.
+ *       Replacement is scoped to a unique, valid N00b-owned `.0c001.bundle`
+ *       carrier. It does not authorize repairing malformed or duplicate
+ *       carriers, importing Brandon `.0c001.file`, rewrapping
+ *       `.0c001.wrap` / `.0c001.code`, overwriting unknown `.0c001.*`
+ *       occupants, or ignoring guard sections.
  * @post By default, and with
  *       `entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE`, the host object
  *       entrypoint is preserved. The write API does not launch a process,
@@ -384,8 +389,11 @@ n00b_obj_bundle_read(n00b_buffer_t *object_bytes) _kargs {
  * @kw replace Whether an existing N00b-owned bundle carrier may be replaced;
  *      default `N00B_OBJ_BUNDLE_REJECT_EXISTING`.
  * @kw strict Forwarded to existing-carrier manifest validation; default
- *      `true`. WP-010 write policy rejects reserved or foreign wrapped inputs
- *      regardless of this caller control.
+ *      `true`. Write policy validates the selected existing carrier before
+ *      considering reserved/wrapped environment blockers; malformed or
+ *      duplicate carriers reject regardless of replacement policy, and
+ *      reserved/foreign/wrapped inputs reject regardless of this caller
+ *      control.
  * @kw entrypoint Host-entrypoint mutation policy; default
  *      `N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE`.
  * @kw entrypoint_selector Optional execution selector used for opt-in
@@ -432,6 +440,11 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
  *       stale loadable-byte handling, host-entrypoint preservation or opt-in
  *       mutation/rejection behavior, and structured rewrite errors are the
  *       same as @ref n00b_obj_bundle_write.
+ * @post Filesystem persistence is attempted only after object-bundle carrier
+ *       policy accepts the input. Rejected reserved, foreign, wrapped,
+ *       malformed, duplicate, or guarded carrier environments return the same
+ *       structured object-bundle error payload as @ref n00b_obj_bundle_write
+ *       and do not authorize sink replacement.
  * @post Rewrite failures carry a @c n00b_obj_bundle_error_t payload. Sink
  *       failures carry a @c n00b_objfile_sink_error_t payload.
  * @kw format Object format, or `N00B_FMT_UNKNOWN` for auto-detect.
@@ -440,7 +453,9 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
  * @kw replace Whether an existing N00b-owned bundle carrier may be replaced;
  *      default `N00B_OBJ_BUNDLE_REJECT_EXISTING`.
  * @kw strict Forwarded to existing-carrier manifest validation; default
- *      `true`.
+ *      `true`. Replacement remains scoped to unique valid N00b-owned carriers
+ *      and does not authorize foreign, reserved, wrapped, malformed,
+ *      duplicate, or guarded inputs.
  * @kw entrypoint Host-entrypoint mutation policy; default
  *      `N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE`.
  * @kw entrypoint_selector Optional execution selector used for opt-in
