@@ -4,6 +4,7 @@
 #include "compiler/objfile/sink.h"
 #include "core/file.h"
 #include "core/runtime.h"
+#include "core/sha256.h"
 #include "util/assert.h"
 #include "util/path.h"
 #include "compiler/objfile/bstream.h"
@@ -28,6 +29,32 @@
 #define TEST_EMBEDDED_POLICY_FALLBACK_ID_OFF  24u
 #define TEST_EMBEDDED_POLICY_SOURCE_LEN_OFF   32u
 #define TEST_EMBEDDED_POLICY_RESERVED1_OFF    40u
+#define TEST_ELF_DESCRIPTOR_MAGIC_LEN         8u
+#define TEST_ELF_DESCRIPTOR_HEADER_SIZE       112u
+#define TEST_ELF_DESCRIPTOR_HEADER_SIZE_OFF   12u
+#define TEST_ELF_DESCRIPTOR_KIND_OFF          16u
+#define TEST_ELF_DESCRIPTOR_FLAGS_OFF         20u
+#define TEST_ELF_DESCRIPTOR_PAYLOAD_OFF_OFF   24u
+#define TEST_ELF_DESCRIPTOR_PAYLOAD_LEN_OFF   32u
+#define TEST_ELF_DESCRIPTOR_PAYLOAD_DIGEST_OFF 40u
+#define TEST_ELF_DESCRIPTOR_AUX_OFF_OFF       72u
+#define TEST_ELF_DESCRIPTOR_AUX_LEN_OFF       80u
+#define TEST_ELF_DESCRIPTOR_AUX_COUNT_OFF     88u
+#define TEST_ELF_DESCRIPTOR_RESERVED0_OFF     96u
+#define TEST_ELF_DESCRIPTOR_RESERVED1_OFF     104u
+#define TEST_ELF_SPLIT_REC_SIZE               64u
+#define TEST_ELF_SPLIT_REC_CANONICAL_OFF_OFF  0u
+#define TEST_ELF_SPLIT_REC_CANONICAL_LEN_OFF  8u
+#define TEST_ELF_SPLIT_REC_OBJECT_OFF_OFF     16u
+#define TEST_ELF_SPLIT_REC_OBJECT_LEN_OFF     24u
+#define TEST_ELF_SPLIT_REC_DIGEST_OFF         32u
+#define TEST_MANIFEST_PAYLOAD_AREA_OFF        176u
+#define TEST_MANIFEST_PAYLOAD_AREA_LEN        184u
+
+static const uint8_t TEST_ELF_DESCRIPTOR_MAGIC[
+    TEST_ELF_DESCRIPTOR_MAGIC_LEN] = {
+    'N', '0', '0', 'B', 'C', 'A', 'R', '1',
+};
 
 typedef struct test_elf_section {
     n00b_string_t *name;
@@ -143,6 +170,65 @@ make_execution_plan_bundle(void)
 }
 
 static void
+add_embedded_execution_policy(n00b_obj_bundle_t *bundle,
+                              n00b_buffer_t     *source);
+
+static n00b_obj_bundle_t *
+make_split_bundle(void)
+{
+    n00b_obj_bundle_t *bundle = make_bundle();
+    n00b_buffer_t     *role_payload =
+        n00b_buffer_from_cstr("role-only-payload");
+    n00b_buffer_t     *script_payload =
+        n00b_buffer_from_cstr("script-payload");
+    n00b_buffer_t     *tool_payload =
+        n00b_buffer_from_cstr("tool-executable-payload");
+    n00b_buffer_t     *data_payload =
+        n00b_buffer_from_cstr("data-payload");
+
+    auto add_role = n00b_obj_bundle_add_artifact(
+        bundle,
+        r"bin/role-only",
+        role_payload,
+        .role = r"exec",
+        .mode = 0644);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add_role));
+
+    auto add_script = n00b_obj_bundle_add_artifact(
+        bundle,
+        r"bin/script",
+        script_payload,
+        .mode = 0755);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add_script));
+
+    auto add_tool = n00b_obj_bundle_add_artifact(
+        bundle,
+        r"bin/tool",
+        tool_payload,
+        .kind = N00B_OBJ_BUNDLE_ARTIFACT_EXECUTABLE);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add_tool));
+
+    auto add_data = n00b_obj_bundle_add_artifact(
+        bundle,
+        r"share/data.txt",
+        data_payload,
+        .mode = 0644);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add_data));
+
+    auto set_exec = n00b_obj_bundle_set_default_exec(bundle, r"bin/tool");
+    N00B_TEST_REQUIRE(n00b_result_is_ok(set_exec));
+
+    auto map = n00b_obj_bundle_add_exec_mapping(bundle, r"tool", r"bin/tool");
+    N00B_TEST_REQUIRE(n00b_result_is_ok(map));
+
+    add_embedded_execution_policy(
+        bundle,
+        n00b_buffer_from_cstr("arg.logical_path == \"bin/tool\""));
+
+    return bundle;
+}
+
+static void
 write_le16(uint8_t *data, size_t off, uint16_t value)
 {
     data[off]     = (uint8_t)value;
@@ -163,6 +249,134 @@ write_le64(uint8_t *data, size_t off, uint64_t value)
 {
     write_le32(data, off, (uint32_t)value);
     write_le32(data, off + 4, (uint32_t)(value >> 32));
+}
+
+static void
+test_sha256_bytes(const void *data,
+                  size_t      len,
+                  uint8_t     out[N00B_OBJ_BUNDLE_DIGEST_LEN])
+{
+    n00b_sha256_digest_t digest;
+
+    n00b_sha256_hash(data, len, digest);
+
+    for (size_t i = 0; i < N00B_SHA256_DIGEST_WORDS; i++) {
+        uint32_t word = digest[i];
+
+        out[i * 4]     = (uint8_t)(word >> 24);
+        out[i * 4 + 1] = (uint8_t)(word >> 16);
+        out[i * 4 + 2] = (uint8_t)(word >> 8);
+        out[i * 4 + 3] = (uint8_t)word;
+    }
+}
+
+static n00b_buffer_t *
+make_elf_descriptor_payload(uint32_t      carrier_kind,
+                            uint16_t      major,
+                            uint16_t      minor,
+                            uint32_t      header_size,
+                            uint32_t      flags,
+                            uint64_t      payload_off,
+                            uint64_t      payload_len,
+                            const uint8_t digest[N00B_OBJ_BUNDLE_DIGEST_LEN],
+                            uint64_t      aux_off,
+                            uint64_t      aux_len,
+                            uint64_t      aux_count,
+                            uint64_t      reserved0,
+                            uint64_t      reserved1,
+                            size_t        byte_len)
+{
+    n00b_writer_t *writer = n00b_writer_new(byte_len);
+
+    n00b_writer_write_zeros(writer, byte_len);
+    N00B_TEST_REQUIRE(!n00b_writer_has_error(writer));
+
+    n00b_buffer_t *payload = n00b_writer_finalize(writer);
+    uint8_t       *data    = (uint8_t *)payload->data;
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_MAGIC_LEN) {
+        memcpy(data,
+               TEST_ELF_DESCRIPTOR_MAGIC,
+               TEST_ELF_DESCRIPTOR_MAGIC_LEN);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_HEADER_SIZE_OFF + 4) {
+        write_le16(data, 8, major);
+        write_le16(data, 10, minor);
+        write_le32(data, TEST_ELF_DESCRIPTOR_HEADER_SIZE_OFF, header_size);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_KIND_OFF + 4) {
+        write_le32(data, TEST_ELF_DESCRIPTOR_KIND_OFF, carrier_kind);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_FLAGS_OFF + 4) {
+        write_le32(data, TEST_ELF_DESCRIPTOR_FLAGS_OFF, flags);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_PAYLOAD_OFF_OFF + 8) {
+        write_le64(data, TEST_ELF_DESCRIPTOR_PAYLOAD_OFF_OFF, payload_off);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_PAYLOAD_LEN_OFF + 8) {
+        write_le64(data, TEST_ELF_DESCRIPTOR_PAYLOAD_LEN_OFF, payload_len);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_PAYLOAD_DIGEST_OFF
+                    + N00B_OBJ_BUNDLE_DIGEST_LEN) {
+        memcpy(data + TEST_ELF_DESCRIPTOR_PAYLOAD_DIGEST_OFF,
+               digest,
+               N00B_OBJ_BUNDLE_DIGEST_LEN);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_AUX_OFF_OFF + 8) {
+        write_le64(data, TEST_ELF_DESCRIPTOR_AUX_OFF_OFF, aux_off);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_AUX_LEN_OFF + 8) {
+        write_le64(data, TEST_ELF_DESCRIPTOR_AUX_LEN_OFF, aux_len);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_AUX_COUNT_OFF + 8) {
+        write_le64(data, TEST_ELF_DESCRIPTOR_AUX_COUNT_OFF, aux_count);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_RESERVED0_OFF + 8) {
+        write_le64(data, TEST_ELF_DESCRIPTOR_RESERVED0_OFF, reserved0);
+    }
+
+    if (byte_len >= TEST_ELF_DESCRIPTOR_RESERVED1_OFF + 8) {
+        write_le64(data, TEST_ELF_DESCRIPTOR_RESERVED1_OFF, reserved1);
+    }
+
+    return payload;
+}
+
+static n00b_buffer_t *
+make_elf_descriptor_payload_with_body(uint32_t       carrier_kind,
+                                      n00b_buffer_t *body)
+{
+    uint8_t zero_digest[N00B_OBJ_BUNDLE_DIGEST_LEN] = {};
+    n00b_buffer_t *payload = make_elf_descriptor_payload(
+        carrier_kind,
+        1,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE,
+        0,
+        0,
+        body->byte_len,
+        zero_digest,
+        0,
+        0,
+        0,
+        0,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE + body->byte_len);
+
+    memcpy((uint8_t *)payload->data + TEST_ELF_DESCRIPTOR_HEADER_SIZE,
+           body->data,
+           body->byte_len);
+    return payload;
 }
 
 static n00b_buffer_t *
@@ -420,6 +634,14 @@ assert_elf_metadata_carrier_error(n00b_obj_bundle_error_t *error)
 }
 
 static void
+assert_elf_descriptor_carrier_error(n00b_obj_bundle_error_t *error,
+                                    n00b_obj_bundle_carrier_t carrier)
+{
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, carrier);
+}
+
+static void
 assert_detail(n00b_obj_bundle_error_t *error, int64_t expected)
 {
     auto detail = n00b_obj_bundle_error_detail(error);
@@ -648,6 +870,133 @@ test_get32_le(const uint8_t *p)
          | ((uint32_t)p[3] << 24);
 }
 
+static uint64_t
+test_get64_le(const uint8_t *p)
+{
+    return (uint64_t)test_get32_le(p)
+         | ((uint64_t)test_get32_le(p + 4) << 32);
+}
+
+static bool
+test_elf_descriptor_magic_matches(n00b_buffer_t *bytes)
+{
+    return bytes != nullptr
+           && bytes->data != nullptr
+           && bytes->byte_len >= TEST_ELF_DESCRIPTOR_MAGIC_LEN
+           && memcmp(bytes->data,
+                     TEST_ELF_DESCRIPTOR_MAGIC,
+                     TEST_ELF_DESCRIPTOR_MAGIC_LEN) == 0;
+}
+
+static uint64_t
+test_manifest_payload_area_off(n00b_buffer_t *encoded)
+{
+    const uint8_t *data = (const uint8_t *)encoded->data;
+
+    N00B_TEST_REQUIRE(encoded->byte_len
+                      >= TEST_MANIFEST_PAYLOAD_AREA_LEN + 8);
+    return test_get64_le(data + TEST_MANIFEST_PAYLOAD_AREA_OFF);
+}
+
+static n00b_elf_binary_t *
+parse_elf_or_die(n00b_buffer_t *bytes);
+
+static n00b_elf_section_t *
+require_section_named(n00b_elf_binary_t *bin, n00b_string_t *name);
+
+static uint64_t
+count_sections_named(n00b_elf_binary_t *bin, n00b_string_t *name);
+
+static const uint8_t *
+require_descriptor_bytes(n00b_buffer_t              *object_bytes,
+                         n00b_obj_bundle_carrier_t  expected_carrier,
+                         n00b_elf_section_t       **carrier_out)
+{
+    n00b_elf_binary_t *elf = parse_elf_or_die(object_bytes);
+    n00b_elf_section_t *carrier =
+        require_section_named(elf, r".0c001.bundle");
+
+    N00B_TEST_REQUIRE(count_sections_named(elf, r".0c001.bundle") == 1);
+    N00B_TEST_REQUIRE(carrier->type == SHT_PROGBITS);
+    N00B_TEST_REQUIRE((carrier->flags & SHF_ALLOC) == 0);
+    N00B_TEST_REQUIRE(carrier->content != nullptr);
+    N00B_TEST_REQUIRE(carrier->content->byte_len
+                      >= TEST_ELF_DESCRIPTOR_HEADER_SIZE);
+
+    const uint8_t *descriptor = (const uint8_t *)carrier->content->data;
+
+    N00B_TEST_REQUIRE(memcmp(descriptor,
+                             TEST_ELF_DESCRIPTOR_MAGIC,
+                             TEST_ELF_DESCRIPTOR_MAGIC_LEN) == 0);
+    N00B_TEST_REQUIRE(test_get32_le(
+                          descriptor + TEST_ELF_DESCRIPTOR_KIND_OFF)
+                      == expected_carrier);
+    N00B_TEST_REQUIRE(test_get32_le(
+                          descriptor + TEST_ELF_DESCRIPTOR_FLAGS_OFF) == 0);
+
+    if (carrier_out != nullptr) {
+        *carrier_out = carrier;
+    }
+
+    return descriptor;
+}
+
+static void
+descriptor_payload_range(n00b_buffer_t             *object_bytes,
+                         n00b_obj_bundle_carrier_t  expected_carrier,
+                         uint64_t                  *payload_off,
+                         uint64_t                  *payload_len)
+{
+    const uint8_t *descriptor = require_descriptor_bytes(object_bytes,
+                                                         expected_carrier,
+                                                         nullptr);
+
+    *payload_off = test_get64_le(descriptor
+                                 + TEST_ELF_DESCRIPTOR_PAYLOAD_OFF_OFF);
+    *payload_len = test_get64_le(descriptor
+                                 + TEST_ELF_DESCRIPTOR_PAYLOAD_LEN_OFF);
+}
+
+static void
+read_split_record(const uint8_t *record,
+                  uint64_t      *canonical_off,
+                  uint64_t      *canonical_len,
+                  uint64_t      *object_off,
+                  uint64_t      *object_len)
+{
+    *canonical_off = test_get64_le(record
+                                   + TEST_ELF_SPLIT_REC_CANONICAL_OFF_OFF);
+    *canonical_len = test_get64_le(record
+                                   + TEST_ELF_SPLIT_REC_CANONICAL_LEN_OFF);
+    *object_off    = test_get64_le(record
+                                   + TEST_ELF_SPLIT_REC_OBJECT_OFF_OFF);
+    *object_len    = test_get64_le(record
+                                   + TEST_ELF_SPLIT_REC_OBJECT_LEN_OFF);
+}
+
+static bool
+range_is_in_rx_loadable(n00b_elf_binary_t *elf,
+                        uint64_t           off,
+                        uint64_t           len)
+{
+    uint64_t end = off + len;
+
+    for (uint32_t i = 0; i < elf->num_segments; i++) {
+        n00b_elf_segment_t *segment = &elf->segments[i];
+        uint64_t segment_end = segment->offset + segment->filesz;
+
+        if (segment->type == PT_LOAD
+            && segment->offset <= off
+            && end <= segment_end
+            && segment->filesz <= segment->memsz
+            && segment->flags == (PF_R | PF_X)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static n00b_buffer_t *
 make_rewrite_target(void)
 {
@@ -780,6 +1129,46 @@ test_rewrite_request(n00b_string_t *name, n00b_buffer_t *payload)
                    | N00B_ELF_REWRITE_ADMIT_POLICY_PRESERVE_OVERLAY,
         },
     };
+}
+
+static n00b_elf_rewrite_loadable_request_t
+test_loadable_request(n00b_buffer_t *payload)
+{
+    return (n00b_elf_rewrite_loadable_request_t){
+        .payload          = payload,
+        .segment_flags    = PF_R | PF_X,
+        .file_alignment   = 8,
+        .vaddr_alignment  = 0x1000,
+        .p_memsz          = payload->byte_len,
+        .phtab_strategy   =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST,
+        .policy           = {
+            .flags = N00B_ELF_REWRITE_ADMIT_POLICY_STRICT_LOADER_PRESERVATION
+                   | N00B_ELF_REWRITE_ADMIT_POLICY_PRESERVE_OVERLAY,
+        },
+    };
+}
+
+static n00b_buffer_t *
+insert_loadable_payload_or_die(n00b_buffer_t *object_bytes,
+                               n00b_buffer_t *payload)
+{
+    n00b_elf_binary_t *elf = parse_elf_or_die(object_bytes);
+    n00b_elf_rewrite_loadable_request_t request =
+        test_loadable_request(payload);
+    auto plan_result = n00b_elf_rewrite_plan_loadable_insert(elf,
+                                                             &request);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+
+    n00b_elf_rewrite_loadable_plan_t *plan = n00b_result_get(plan_result);
+
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED);
+
+    auto applied = n00b_elf_rewrite_apply_loadable_insert_plan(elf, plan);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(applied));
+    return n00b_result_get(applied);
 }
 
 static n00b_buffer_t *
@@ -1025,6 +1414,90 @@ make_elf_with_bundle_section(n00b_buffer_t *bundle_bytes)
     return make_elf_with_sections(sections, 1);
 }
 
+static void
+patch_descriptor_payload_range(n00b_buffer_t *object_bytes,
+                               uint64_t       payload_off,
+                               uint64_t       payload_len)
+{
+    n00b_elf_binary_t  *elf = parse_elf_or_die(object_bytes);
+    n00b_elf_section_t *carrier =
+        require_section_named(elf, r".0c001.bundle");
+
+    N00B_TEST_REQUIRE(carrier->offset + TEST_ELF_DESCRIPTOR_PAYLOAD_LEN_OFF
+                      + 8
+                      <= object_bytes->byte_len);
+
+    write_le64((uint8_t *)object_bytes->data
+                   + carrier->offset
+                   + TEST_ELF_DESCRIPTOR_PAYLOAD_OFF_OFF,
+               0,
+               payload_off);
+    write_le64((uint8_t *)object_bytes->data
+                   + carrier->offset
+                   + TEST_ELF_DESCRIPTOR_PAYLOAD_LEN_OFF,
+               0,
+               payload_len);
+}
+
+static void
+patch_descriptor_payload_digest(n00b_buffer_t *object_bytes,
+                                uint64_t       payload_off,
+                                uint64_t       payload_len)
+{
+    n00b_elf_binary_t  *elf = parse_elf_or_die(object_bytes);
+    n00b_elf_section_t *carrier =
+        require_section_named(elf, r".0c001.bundle");
+    uint8_t digest[N00B_OBJ_BUNDLE_DIGEST_LEN];
+
+    N00B_TEST_REQUIRE(payload_off + payload_len <= object_bytes->byte_len);
+    N00B_TEST_REQUIRE(carrier->offset + TEST_ELF_DESCRIPTOR_PAYLOAD_DIGEST_OFF
+                      + N00B_OBJ_BUNDLE_DIGEST_LEN
+                      <= object_bytes->byte_len);
+
+    test_sha256_bytes((const uint8_t *)object_bytes->data + payload_off,
+                      (size_t)payload_len,
+                      digest);
+    memcpy((uint8_t *)object_bytes->data
+               + carrier->offset
+               + TEST_ELF_DESCRIPTOR_PAYLOAD_DIGEST_OFF,
+           digest,
+           N00B_OBJ_BUNDLE_DIGEST_LEN);
+}
+
+static void
+patch_descriptor_payload_range_and_digest(n00b_buffer_t *object_bytes,
+                                          uint64_t       payload_off,
+                                          uint64_t       payload_len)
+{
+    patch_descriptor_payload_range(object_bytes, payload_off, payload_len);
+    patch_descriptor_payload_digest(object_bytes, payload_off, payload_len);
+}
+
+static n00b_buffer_t *
+make_elf_with_valid_descriptor(uint32_t carrier_kind)
+{
+    uint8_t zero_digest[N00B_OBJ_BUNDLE_DIGEST_LEN] = {};
+    n00b_buffer_t *descriptor = make_elf_descriptor_payload(
+        carrier_kind,
+        1,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE,
+        0,
+        0,
+        4,
+        zero_digest,
+        0,
+        0,
+        0,
+        0,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE);
+    n00b_buffer_t *object_bytes = make_elf_with_bundle_section(descriptor);
+
+    patch_descriptor_payload_digest(object_bytes, 0, 4);
+    return object_bytes;
+}
+
 static n00b_obj_bundle_t *
 require_read_success(n00b_result_t(n00b_obj_bundle_t *) result,
                      n00b_buffer_t                    *expected_encoded)
@@ -1222,6 +1695,183 @@ test_read_malformed_elf_carrier_payload(void)
 }
 
 static void
+test_read_elf_descriptor_loadable_malformed_payload_rejects(void)
+{
+    n00b_buffer_t *object_bytes = make_elf_with_valid_descriptor(
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    n00b_buffer_t *snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(object_bytes),
+        N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER);
+
+    assert_elf_descriptor_carrier_error(
+        error,
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    assert_buffer_unchanged(object_bytes, snapshot);
+}
+
+static void
+test_read_elf_descriptor_body_payload_decodes_loadable(void)
+{
+    n00b_buffer_t *body = make_bundle_bytes();
+    n00b_buffer_t *descriptor = make_elf_descriptor_payload_with_body(
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+        body);
+    n00b_buffer_t *object_bytes = make_elf_with_bundle_section(descriptor);
+    n00b_elf_binary_t *elf = parse_elf_or_die(object_bytes);
+    n00b_elf_section_t *carrier =
+        require_section_named(elf, r".0c001.bundle");
+    uint64_t payload_off = carrier->offset
+                         + TEST_ELF_DESCRIPTOR_HEADER_SIZE;
+
+    patch_descriptor_payload_range_and_digest(object_bytes,
+                                              payload_off,
+                                              body->byte_len);
+
+    n00b_buffer_t *snapshot = n00b_buffer_copy(object_bytes);
+
+    require_read_success(n00b_obj_bundle_read(object_bytes), body);
+    assert_buffer_unchanged(object_bytes, snapshot);
+}
+
+static void
+test_read_elf_descriptor_split_reports_unsupported(void)
+{
+    n00b_buffer_t *object_bytes = make_elf_with_valid_descriptor(
+        N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+    n00b_buffer_t *snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(object_bytes),
+        N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER);
+
+    assert_elf_descriptor_carrier_error(error, N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+    assert_buffer_unchanged(object_bytes, snapshot);
+}
+
+static void
+test_read_elf_descriptor_unsupported_version_does_not_fallthrough(void)
+{
+    uint8_t zero_digest[N00B_OBJ_BUNDLE_DIGEST_LEN] = {};
+    n00b_buffer_t *descriptor = make_elf_descriptor_payload(
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+        2,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE,
+        0,
+        0,
+        4,
+        zero_digest,
+        0,
+        0,
+        0,
+        0,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE);
+    n00b_buffer_t *object_bytes = make_elf_with_bundle_section(descriptor);
+    n00b_buffer_t *snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(object_bytes),
+        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_VERSION);
+
+    assert_elf_descriptor_carrier_error(
+        error,
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    assert_buffer_unchanged(object_bytes, snapshot);
+}
+
+static void
+test_read_elf_descriptor_truncated_length_rejects(void)
+{
+    uint8_t zero_digest[N00B_OBJ_BUNDLE_DIGEST_LEN] = {};
+    n00b_buffer_t *descriptor = make_elf_descriptor_payload(
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+        1,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE,
+        0,
+        0,
+        4,
+        zero_digest,
+        0,
+        0,
+        0,
+        0,
+        0,
+        16);
+    n00b_buffer_t *object_bytes = make_elf_with_bundle_section(descriptor);
+    n00b_buffer_t *snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(object_bytes),
+        N00B_OBJ_BUNDLE_ERR_OUT_OF_BOUNDS);
+
+    assert_elf_metadata_carrier_error(error);
+    assert_detail(error, 16);
+    assert_buffer_unchanged(object_bytes, snapshot);
+}
+
+static void
+test_read_elf_descriptor_out_of_bounds_rejects(void)
+{
+    uint8_t zero_digest[N00B_OBJ_BUNDLE_DIGEST_LEN] = {};
+    n00b_buffer_t *descriptor = make_elf_descriptor_payload(
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+        1,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE,
+        0,
+        UINT64_MAX - 1,
+        8,
+        zero_digest,
+        0,
+        0,
+        0,
+        0,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE);
+    n00b_buffer_t *object_bytes = make_elf_with_bundle_section(descriptor);
+    n00b_buffer_t *snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(object_bytes),
+        N00B_OBJ_BUNDLE_ERR_OUT_OF_BOUNDS);
+
+    assert_elf_descriptor_carrier_error(
+        error,
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    assert_buffer_unchanged(object_bytes, snapshot);
+}
+
+static void
+test_read_elf_descriptor_digest_mismatch_rejects(void)
+{
+    uint8_t zero_digest[N00B_OBJ_BUNDLE_DIGEST_LEN] = {};
+    n00b_buffer_t *descriptor = make_elf_descriptor_payload(
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+        1,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE,
+        0,
+        0,
+        4,
+        zero_digest,
+        0,
+        0,
+        0,
+        0,
+        0,
+        TEST_ELF_DESCRIPTOR_HEADER_SIZE);
+    n00b_buffer_t *object_bytes = make_elf_with_bundle_section(descriptor);
+    n00b_buffer_t *snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(object_bytes),
+        N00B_OBJ_BUNDLE_ERR_DIGEST_MISMATCH);
+
+    assert_elf_descriptor_carrier_error(
+        error,
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    assert_buffer_unchanged(object_bytes, snapshot);
+}
+
+static void
 test_read_malformed_elf_carrier_shape(void)
 {
     n00b_buffer_t *bundle_bytes = make_bundle_bytes();
@@ -1409,21 +2059,8 @@ test_write_unsupported_carriers(void)
 {
     n00b_obj_bundle_t *bundle = make_bundle();
 
-    n00b_buffer_t *loadable_bytes = make_object_bytes();
-    n00b_obj_bundle_error_t *error = require_write_error(
-        n00b_obj_bundle_write(loadable_bytes,
-                              bundle,
-                              .format = N00B_FMT_ELF,
-                              .carrier = N00B_OBJ_BUNDLE_CARRIER_LOADABLE),
-        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER);
-
-    assert_format(error, N00B_FMT_ELF);
-    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
-    assert_object_bytes_unchanged(loadable_bytes);
-
     n00b_buffer_t *split_bytes = make_object_bytes();
-
-    error = require_write_error(
+    n00b_obj_bundle_error_t *error = require_write_error(
         n00b_obj_bundle_write(split_bytes,
                               bundle,
                               .format = N00B_FMT_ELF,
@@ -1444,6 +2081,18 @@ test_write_unsupported_carriers(void)
     assert_format(error, N00B_FMT_MACHO);
     assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_METADATA);
     assert_object_bytes_unchanged(macho_bytes);
+
+    n00b_buffer_t *macho_loadable_bytes = make_object_bytes();
+
+    error = require_write_error(
+        n00b_obj_bundle_write(macho_loadable_bytes,
+                              bundle,
+                              .format = N00B_FMT_MACHO,
+                              .carrier = N00B_OBJ_BUNDLE_CARRIER_LOADABLE),
+        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER);
+    assert_format(error, N00B_FMT_MACHO);
+    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    assert_object_bytes_unchanged(macho_loadable_bytes);
 
     n00b_buffer_t *pe_bytes = make_object_bytes();
 
@@ -1471,6 +2120,439 @@ assert_written_bundle_reads_back(n00b_buffer_t *object_bytes,
 }
 
 static void
+assert_raw_metadata_carrier(n00b_buffer_t *object_bytes,
+                            n00b_buffer_t *expected_encoded)
+{
+    n00b_elf_binary_t *elf = parse_elf_or_die(object_bytes);
+    n00b_elf_section_t *carrier =
+        require_section_named(elf, r".0c001.bundle");
+
+    N00B_TEST_REQUIRE(count_sections_named(elf, r".0c001.bundle") == 1);
+    N00B_TEST_REQUIRE(carrier->content != nullptr);
+    assert_buffer_eq(carrier->content, expected_encoded);
+    N00B_TEST_REQUIRE(!test_elf_descriptor_magic_matches(carrier->content));
+}
+
+static void
+assert_written_loadable_bundle_reads_back(n00b_buffer_t *object_bytes,
+                                          n00b_buffer_t *expected_encoded)
+{
+    n00b_elf_binary_t *elf = parse_elf_or_die(object_bytes);
+    n00b_elf_section_t *carrier =
+        require_section_named(elf, r".0c001.bundle");
+
+    N00B_TEST_REQUIRE(count_sections_named(elf, r".0c001.bundle") == 1);
+    N00B_TEST_REQUIRE(carrier->type == SHT_PROGBITS);
+    N00B_TEST_REQUIRE((carrier->flags & SHF_ALLOC) == 0);
+    N00B_TEST_REQUIRE(carrier->content != nullptr);
+    N00B_TEST_REQUIRE(carrier->content->byte_len
+                      == TEST_ELF_DESCRIPTOR_HEADER_SIZE);
+
+    const uint8_t *descriptor = (const uint8_t *)carrier->content->data;
+
+    N00B_TEST_REQUIRE(memcmp(descriptor,
+                             TEST_ELF_DESCRIPTOR_MAGIC,
+                             TEST_ELF_DESCRIPTOR_MAGIC_LEN) == 0);
+    N00B_TEST_REQUIRE(test_get32_le(
+                          descriptor + TEST_ELF_DESCRIPTOR_KIND_OFF)
+                      == N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    N00B_TEST_REQUIRE(test_get32_le(
+                          descriptor + TEST_ELF_DESCRIPTOR_FLAGS_OFF) == 0);
+
+    uint64_t payload_off = test_get64_le(
+        descriptor + TEST_ELF_DESCRIPTOR_PAYLOAD_OFF_OFF);
+    uint64_t payload_len = test_get64_le(
+        descriptor + TEST_ELF_DESCRIPTOR_PAYLOAD_LEN_OFF);
+
+    N00B_TEST_REQUIRE(payload_len == expected_encoded->byte_len);
+    N00B_TEST_REQUIRE(payload_off <= object_bytes->byte_len);
+    N00B_TEST_REQUIRE(payload_len <= object_bytes->byte_len - payload_off);
+    N00B_TEST_REQUIRE(memcmp((const uint8_t *)object_bytes->data
+                                 + payload_off,
+                             expected_encoded->data,
+                             expected_encoded->byte_len) == 0);
+
+    bool found_loadable_payload = false;
+    uint64_t payload_end = payload_off + payload_len;
+
+    for (uint32_t i = 0; i < elf->num_segments; i++) {
+        n00b_elf_segment_t *segment = &elf->segments[i];
+        uint64_t segment_end = segment->offset + segment->filesz;
+
+        if (segment->type == PT_LOAD
+            && segment->offset <= payload_off
+            && payload_end <= segment_end
+            && segment->filesz <= segment->memsz
+            && segment->flags == (PF_R | PF_X)) {
+            found_loadable_payload = true;
+        }
+    }
+
+    N00B_TEST_REQUIRE(found_loadable_payload);
+
+    uint8_t digest[N00B_OBJ_BUNDLE_DIGEST_LEN] = {};
+
+    test_sha256_bytes((const uint8_t *)object_bytes->data + payload_off,
+                      (size_t)payload_len,
+                      digest);
+    N00B_TEST_REQUIRE(memcmp(
+                          digest,
+                          descriptor + TEST_ELF_DESCRIPTOR_PAYLOAD_DIGEST_OFF,
+                          N00B_OBJ_BUNDLE_DIGEST_LEN) == 0);
+    N00B_TEST_REQUIRE(test_get64_le(
+                          descriptor + TEST_ELF_DESCRIPTOR_AUX_OFF_OFF) == 0);
+    N00B_TEST_REQUIRE(test_get64_le(
+                          descriptor + TEST_ELF_DESCRIPTOR_AUX_LEN_OFF) == 0);
+    N00B_TEST_REQUIRE(test_get64_le(
+                          descriptor + TEST_ELF_DESCRIPTOR_AUX_COUNT_OFF)
+                      == 0);
+
+    require_read_success(n00b_obj_bundle_read(object_bytes),
+                         expected_encoded);
+}
+
+static void
+assert_split_exec_plan(n00b_obj_bundle_t *bundle)
+{
+    n00b_obj_bundle_exec_plan_t *plan = require_exec_plan_ok(
+        n00b_obj_bundle_exec_plan(bundle,
+                                  .selector = r"tool",
+                                  .mode = N00B_OBJ_BUNDLE_EXEC_EXTRACTED));
+    auto artifact_id = n00b_obj_bundle_exec_plan_selected_artifact_id(plan);
+    auto logical_path = n00b_obj_bundle_exec_plan_selected_logical_path(plan);
+    auto policy_kind = n00b_obj_bundle_exec_plan_policy_kind(plan);
+
+    N00B_TEST_REQUIRE(n00b_obj_bundle_exec_plan_selection_source(plan)
+                      == N00B_OBJ_BUNDLE_EXEC_SELECTION_SELECTOR_MAPPING);
+    N00B_TEST_REQUIRE(n00b_option_is_set(artifact_id));
+    N00B_TEST_REQUIRE(n00b_option_get(artifact_id) == 2);
+    N00B_TEST_REQUIRE(n00b_option_is_set(logical_path));
+    assert_string_eq(n00b_option_get(logical_path), r"bin/tool");
+    N00B_TEST_REQUIRE(n00b_option_is_set(policy_kind));
+    N00B_TEST_REQUIRE(n00b_option_get(policy_kind)
+                      == N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+}
+
+static void
+assert_written_split_bundle_reads_back(n00b_buffer_t *object_bytes,
+                                       n00b_buffer_t *expected_encoded)
+{
+    n00b_elf_binary_t *elf = parse_elf_or_die(object_bytes);
+    n00b_elf_section_t *carrier = nullptr;
+    const uint8_t *descriptor = require_descriptor_bytes(
+        object_bytes,
+        N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+        &carrier);
+
+    uint64_t payload_off = test_get64_le(
+        descriptor + TEST_ELF_DESCRIPTOR_PAYLOAD_OFF_OFF);
+    uint64_t payload_len = test_get64_le(
+        descriptor + TEST_ELF_DESCRIPTOR_PAYLOAD_LEN_OFF);
+    uint64_t aux_off = test_get64_le(
+        descriptor + TEST_ELF_DESCRIPTOR_AUX_OFF_OFF);
+    uint64_t aux_len = test_get64_le(
+        descriptor + TEST_ELF_DESCRIPTOR_AUX_LEN_OFF);
+    uint64_t aux_count = test_get64_le(
+        descriptor + TEST_ELF_DESCRIPTOR_AUX_COUNT_OFF);
+
+    n00b_buffer_t *role_payload = n00b_buffer_from_cstr("role-only-payload");
+    n00b_buffer_t *script_payload = n00b_buffer_from_cstr("script-payload");
+    n00b_buffer_t *tool_payload =
+        n00b_buffer_from_cstr("tool-executable-payload");
+    n00b_buffer_t *data_payload = n00b_buffer_from_cstr("data-payload");
+    uint64_t payload_area_off = test_manifest_payload_area_off(
+        expected_encoded);
+    uint64_t role_off   = payload_area_off;
+    uint64_t script_off = role_off + role_payload->byte_len;
+    uint64_t tool_off   = script_off + script_payload->byte_len;
+    uint64_t data_off   = tool_off + tool_payload->byte_len;
+    uint64_t moved_len  = script_payload->byte_len
+                        + tool_payload->byte_len;
+
+    N00B_TEST_REQUIRE(payload_len == expected_encoded->byte_len - moved_len);
+    N00B_TEST_REQUIRE(payload_len < expected_encoded->byte_len);
+    N00B_TEST_REQUIRE(aux_count == 2);
+    N00B_TEST_REQUIRE(aux_len == aux_count * TEST_ELF_SPLIT_REC_SIZE);
+    N00B_TEST_REQUIRE(carrier->content->byte_len
+                      == TEST_ELF_DESCRIPTOR_HEADER_SIZE
+                         + payload_len
+                         + aux_len);
+    N00B_TEST_REQUIRE(payload_off
+                      == carrier->offset + TEST_ELF_DESCRIPTOR_HEADER_SIZE);
+    N00B_TEST_REQUIRE(aux_off == payload_off + payload_len);
+    N00B_TEST_REQUIRE(aux_off + aux_len <= object_bytes->byte_len);
+
+    uint8_t digest[N00B_OBJ_BUNDLE_DIGEST_LEN] = {};
+
+    test_sha256_bytes((const uint8_t *)object_bytes->data + payload_off,
+                      (size_t)payload_len,
+                      digest);
+    N00B_TEST_REQUIRE(memcmp(
+                          digest,
+                          descriptor + TEST_ELF_DESCRIPTOR_PAYLOAD_DIGEST_OFF,
+                          N00B_OBJ_BUNDLE_DIGEST_LEN) == 0);
+
+    n00b_buffer_t *skeleton = n00b_buffer_get_slice(
+        object_bytes,
+        (int64_t)payload_off,
+        (int64_t)(payload_off + payload_len));
+    n00b_writer_t *reconstruct_writer =
+        n00b_writer_new((size_t)expected_encoded->byte_len);
+
+    N00B_TEST_REQUIRE(memcmp(skeleton->data + role_off,
+                             role_payload->data,
+                             role_payload->byte_len) == 0);
+    N00B_TEST_REQUIRE(memcmp(skeleton->data + data_off - moved_len,
+                             data_payload->data,
+                             data_payload->byte_len) == 0);
+
+    uint64_t canonical_cursor = 0;
+    uint64_t skeleton_cursor  = 0;
+
+    for (uint64_t i = 0; i < aux_count; i++) {
+        const uint8_t *record =
+            (const uint8_t *)object_bytes->data + aux_off
+            + i * TEST_ELF_SPLIT_REC_SIZE;
+        uint64_t canonical_off = 0;
+        uint64_t canonical_len = 0;
+        uint64_t object_off    = 0;
+        uint64_t object_len    = 0;
+
+        read_split_record(record,
+                          &canonical_off,
+                          &canonical_len,
+                          &object_off,
+                          &object_len);
+
+        if (i == 0) {
+            N00B_TEST_REQUIRE(canonical_off == script_off);
+            N00B_TEST_REQUIRE(canonical_len == script_payload->byte_len);
+        }
+        else {
+            N00B_TEST_REQUIRE(canonical_off == tool_off);
+            N00B_TEST_REQUIRE(canonical_len == tool_payload->byte_len);
+        }
+
+        N00B_TEST_REQUIRE(object_len == canonical_len);
+        N00B_TEST_REQUIRE(object_off + object_len <= object_bytes->byte_len);
+        N00B_TEST_REQUIRE(range_is_in_rx_loadable(elf,
+                                                  object_off,
+                                                  object_len));
+
+        test_sha256_bytes((const uint8_t *)object_bytes->data + object_off,
+                          (size_t)object_len,
+                          digest);
+        N00B_TEST_REQUIRE(memcmp(digest,
+                                 record + TEST_ELF_SPLIT_REC_DIGEST_OFF,
+                                 N00B_OBJ_BUNDLE_DIGEST_LEN) == 0);
+
+        uint64_t gap_len = canonical_off - canonical_cursor;
+
+        N00B_TEST_REQUIRE(skeleton_cursor + gap_len <= skeleton->byte_len);
+        n00b_writer_write_bytes(reconstruct_writer,
+                                skeleton->data + skeleton_cursor,
+                                (size_t)gap_len);
+        n00b_writer_write_bytes(reconstruct_writer,
+                                object_bytes->data + object_off,
+                                (size_t)object_len);
+
+        skeleton_cursor += gap_len;
+        canonical_cursor = canonical_off + canonical_len;
+    }
+
+    uint64_t trailing_len = expected_encoded->byte_len - canonical_cursor;
+
+    N00B_TEST_REQUIRE(skeleton_cursor + trailing_len == skeleton->byte_len);
+    n00b_writer_write_bytes(reconstruct_writer,
+                            skeleton->data + skeleton_cursor,
+                            (size_t)trailing_len);
+    n00b_writer_setpos(reconstruct_writer,
+                       (size_t)expected_encoded->byte_len);
+    N00B_TEST_REQUIRE(!n00b_writer_has_error(reconstruct_writer));
+
+    n00b_buffer_t *reconstructed = n00b_writer_finalize(reconstruct_writer);
+
+    assert_buffer_eq(reconstructed, expected_encoded);
+
+    n00b_obj_bundle_t *read_bundle = require_read_success(
+        n00b_obj_bundle_read(object_bytes),
+        expected_encoded);
+    assert_split_exec_plan(read_bundle);
+}
+
+static n00b_buffer_t *
+write_split_bundle_or_die(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_obj_bundle_t *bundle = make_split_bundle();
+    auto written = n00b_obj_bundle_write(
+        object_bytes,
+        bundle,
+        .carrier = N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+    return n00b_result_get(written);
+}
+
+static uint64_t
+split_descriptor_aux_off(n00b_buffer_t *object_bytes)
+{
+    const uint8_t *descriptor = require_descriptor_bytes(
+        object_bytes,
+        N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+        nullptr);
+
+    return test_get64_le(descriptor + TEST_ELF_DESCRIPTOR_AUX_OFF_OFF);
+}
+
+static void
+patch_descriptor_u64(n00b_buffer_t *object_bytes,
+                     size_t         field_off,
+                     uint64_t       value)
+{
+    n00b_elf_section_t *carrier = nullptr;
+
+    require_descriptor_bytes(object_bytes,
+                             N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                             &carrier);
+    write_le64((uint8_t *)object_bytes->data + carrier->offset + field_off,
+               0,
+               value);
+}
+
+static void
+patch_split_record_u64(n00b_buffer_t *object_bytes,
+                       size_t         record_index,
+                       size_t         field_off,
+                       uint64_t       value)
+{
+    uint64_t aux_off = split_descriptor_aux_off(object_bytes);
+
+    write_le64((uint8_t *)object_bytes->data
+                   + aux_off
+                   + record_index * TEST_ELF_SPLIT_REC_SIZE
+                   + field_off,
+               0,
+               value);
+}
+
+static void
+test_write_split_readback_descriptor_facts_and_immutability(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_split_bundle();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+
+    auto written = n00b_obj_bundle_write(
+        object_bytes,
+        bundle,
+        .carrier = N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+    assert_written_split_bundle_reads_back(n00b_result_get(written),
+                                           bundle_snapshot);
+}
+
+static void
+test_read_split_descriptor_malformed_records_reject(void)
+{
+    n00b_buffer_t *object_bytes = write_split_bundle_or_die();
+    n00b_buffer_t *bad = n00b_buffer_copy(object_bytes);
+
+    patch_descriptor_u64(bad, TEST_ELF_DESCRIPTOR_AUX_COUNT_OFF, 0);
+
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(bad),
+        N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER);
+
+    assert_elf_descriptor_carrier_error(error, N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+}
+
+static void
+test_read_split_descriptor_out_of_bounds_slice_rejects(void)
+{
+    n00b_buffer_t *object_bytes = write_split_bundle_or_die();
+    n00b_buffer_t *bad = n00b_buffer_copy(object_bytes);
+
+    patch_split_record_u64(bad,
+                           0,
+                           TEST_ELF_SPLIT_REC_OBJECT_OFF_OFF,
+                           bad->byte_len - 1);
+
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(bad),
+        N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER);
+
+    assert_elf_descriptor_carrier_error(error, N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+}
+
+static void
+test_read_split_descriptor_canonical_overlap_rejects(void)
+{
+    n00b_buffer_t *object_bytes = write_split_bundle_or_die();
+    n00b_buffer_t *bad = n00b_buffer_copy(object_bytes);
+    uint64_t aux_off = split_descriptor_aux_off(bad);
+    uint64_t first_canonical_off = test_get64_le(
+        (const uint8_t *)bad->data + aux_off
+        + TEST_ELF_SPLIT_REC_CANONICAL_OFF_OFF);
+
+    patch_split_record_u64(bad,
+                           1,
+                           TEST_ELF_SPLIT_REC_CANONICAL_OFF_OFF,
+                           first_canonical_off);
+
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(bad),
+        N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER);
+
+    assert_elf_descriptor_carrier_error(error, N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+}
+
+static void
+test_read_split_descriptor_object_overlap_rejects(void)
+{
+    n00b_buffer_t *object_bytes = write_split_bundle_or_die();
+    n00b_buffer_t *bad = n00b_buffer_copy(object_bytes);
+    uint64_t aux_off = split_descriptor_aux_off(bad);
+    uint64_t first_object_off = test_get64_le(
+        (const uint8_t *)bad->data + aux_off
+        + TEST_ELF_SPLIT_REC_OBJECT_OFF_OFF);
+
+    patch_split_record_u64(bad,
+                           1,
+                           TEST_ELF_SPLIT_REC_OBJECT_OFF_OFF,
+                           first_object_off);
+
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(bad),
+        N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER);
+
+    assert_elf_descriptor_carrier_error(error, N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+}
+
+static void
+test_read_split_descriptor_slice_digest_mismatch_rejects(void)
+{
+    n00b_buffer_t *object_bytes = write_split_bundle_or_die();
+    n00b_buffer_t *bad = n00b_buffer_copy(object_bytes);
+    uint64_t aux_off = split_descriptor_aux_off(bad);
+    uint64_t object_off = test_get64_le(
+        (const uint8_t *)bad->data + aux_off
+        + TEST_ELF_SPLIT_REC_OBJECT_OFF_OFF);
+
+    ((uint8_t *)bad->data)[object_off] ^= 0xffu;
+
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(bad),
+        N00B_OBJ_BUNDLE_ERR_DIGEST_MISMATCH);
+
+    assert_elf_descriptor_carrier_error(error, N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+}
+
+static void
 test_write_insert_readback_and_immutability(void)
 {
     n00b_buffer_t     *object_bytes = make_rewrite_target();
@@ -1487,6 +2569,42 @@ test_write_insert_readback_and_immutability(void)
                                      bundle_snapshot);
 }
 
+static void
+test_write_loadable_readback_descriptor_facts_and_immutability(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_populated_bundle_a();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+
+    auto written = n00b_obj_bundle_write(
+        object_bytes,
+        bundle,
+        .carrier = N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+    assert_written_loadable_bundle_reads_back(n00b_result_get(written),
+                                              bundle_snapshot);
+}
+
+static void
+test_read_stale_loadable_bytes_without_descriptor_not_imported(void)
+{
+    n00b_buffer_t *object_bytes = make_rewrite_target();
+    n00b_buffer_t *bundle_bytes = make_bundle_bytes();
+    n00b_buffer_t *loadable_only =
+        insert_loadable_payload_or_die(object_bytes, bundle_bytes);
+    n00b_buffer_t *snapshot = n00b_buffer_copy(loadable_only);
+    n00b_obj_bundle_error_t *error = require_read_error(
+        n00b_obj_bundle_read(loadable_only),
+        N00B_OBJ_BUNDLE_ERR_BUNDLE_NOT_FOUND);
+
+    assert_elf_metadata_carrier_error(error);
+    assert_buffer_unchanged(loadable_only, snapshot);
+}
+
 static n00b_buffer_t *
 write_bundle_or_die(n00b_buffer_t     *object_bytes,
                     n00b_obj_bundle_t *bundle)
@@ -1495,6 +2613,187 @@ write_bundle_or_die(n00b_buffer_t     *object_bytes,
 
     N00B_TEST_REQUIRE(n00b_result_is_ok(written));
     return n00b_result_get(written);
+}
+
+static n00b_buffer_t *
+write_carrier_or_die(n00b_buffer_t              *object_bytes,
+                     n00b_obj_bundle_t          *bundle,
+                     n00b_obj_bundle_carrier_t   carrier)
+{
+    auto written = n00b_obj_bundle_write(object_bytes,
+                                         bundle,
+                                         .carrier = carrier);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+    return n00b_result_get(written);
+}
+
+static void
+assert_existing_carrier_requires_replace(
+    n00b_buffer_t              *object_bytes,
+    n00b_obj_bundle_t          *new_bundle,
+    n00b_obj_bundle_carrier_t   requested_carrier,
+    n00b_obj_bundle_carrier_t   existing_carrier)
+{
+    n00b_buffer_t *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_buffer_t *bundle_snapshot = encode_bundle_or_die(new_bundle);
+    n00b_obj_bundle_error_t *error = require_write_error(
+        n00b_obj_bundle_write(object_bytes,
+                              new_bundle,
+                              .carrier = requested_carrier),
+        N00B_OBJ_BUNDLE_ERR_REPLACE_REQUIRED);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, existing_carrier);
+    assert_detail(error, 1);
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(new_bundle, bundle_snapshot);
+}
+
+static void
+test_write_existing_carriers_require_replace_across_modes(void)
+{
+    n00b_buffer_t *metadata_object = write_bundle_or_die(
+        make_rewrite_target(),
+        make_populated_bundle_a());
+
+    assert_existing_carrier_requires_replace(
+        metadata_object,
+        make_populated_bundle_b(),
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+        N00B_OBJ_BUNDLE_CARRIER_METADATA);
+
+    n00b_buffer_t *loadable_object = write_carrier_or_die(
+        make_rewrite_target(),
+        make_populated_bundle_a(),
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+
+    assert_existing_carrier_requires_replace(
+        loadable_object,
+        make_split_bundle(),
+        N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+
+    n00b_buffer_t *split_object = write_carrier_or_die(
+        make_rewrite_target(),
+        make_split_bundle(),
+        N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+
+    assert_existing_carrier_requires_replace(
+        split_object,
+        make_populated_bundle_b(),
+        N00B_OBJ_BUNDLE_CARRIER_METADATA,
+        N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+}
+
+static void
+test_write_metadata_to_loadable_replaces_explicitly(void)
+{
+    n00b_obj_bundle_t *original_bundle = make_populated_bundle_a();
+    n00b_buffer_t *metadata_object = write_bundle_or_die(
+        make_rewrite_target(),
+        original_bundle);
+    n00b_buffer_t *metadata_snapshot = n00b_buffer_copy(metadata_object);
+    n00b_obj_bundle_t *new_bundle = make_populated_bundle_b();
+    n00b_buffer_t *new_bundle_snapshot = encode_bundle_or_die(new_bundle);
+    auto replaced_r = n00b_obj_bundle_write(
+        metadata_object,
+        new_bundle,
+        .carrier = N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+        .replace = N00B_OBJ_BUNDLE_REPLACE_EXISTING);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(replaced_r));
+
+    assert_buffer_unchanged(metadata_object, metadata_snapshot);
+    assert_bundle_unchanged(new_bundle, new_bundle_snapshot);
+    assert_written_loadable_bundle_reads_back(n00b_result_get(replaced_r),
+                                              new_bundle_snapshot);
+}
+
+static void
+test_write_loadable_to_split_replaces_explicitly(void)
+{
+    n00b_buffer_t *loadable_object = write_carrier_or_die(
+        make_rewrite_target(),
+        make_populated_bundle_a(),
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    n00b_buffer_t *loadable_snapshot = n00b_buffer_copy(loadable_object);
+    n00b_obj_bundle_t *new_bundle = make_split_bundle();
+    n00b_buffer_t *new_bundle_snapshot = encode_bundle_or_die(new_bundle);
+    auto replaced_r = n00b_obj_bundle_write(
+        loadable_object,
+        new_bundle,
+        .carrier = N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+        .replace = N00B_OBJ_BUNDLE_REPLACE_EXISTING);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(replaced_r));
+
+    assert_buffer_unchanged(loadable_object, loadable_snapshot);
+    assert_bundle_unchanged(new_bundle, new_bundle_snapshot);
+    assert_written_split_bundle_reads_back(n00b_result_get(replaced_r),
+                                           new_bundle_snapshot);
+}
+
+static void
+test_write_loadable_to_metadata_ignores_stale_loadable_bytes(void)
+{
+    n00b_obj_bundle_t *old_bundle = make_populated_bundle_a();
+    n00b_buffer_t *old_encoded = encode_bundle_or_die(old_bundle);
+    n00b_buffer_t *loadable_object = write_carrier_or_die(
+        make_rewrite_target(),
+        old_bundle,
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    uint64_t stale_off = 0;
+    uint64_t stale_len = 0;
+
+    descriptor_payload_range(loadable_object,
+                             N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+                             &stale_off,
+                             &stale_len);
+    N00B_TEST_REQUIRE(stale_len == old_encoded->byte_len);
+
+    n00b_buffer_t *loadable_snapshot = n00b_buffer_copy(loadable_object);
+    n00b_obj_bundle_t *new_bundle = make_populated_bundle_b();
+    n00b_buffer_t *new_bundle_snapshot = encode_bundle_or_die(new_bundle);
+    auto replaced_r = n00b_obj_bundle_write(
+        loadable_object,
+        new_bundle,
+        .carrier = N00B_OBJ_BUNDLE_CARRIER_METADATA,
+        .replace = N00B_OBJ_BUNDLE_REPLACE_EXISTING);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(replaced_r));
+    n00b_buffer_t *replaced = n00b_result_get(replaced_r);
+
+    assert_buffer_unchanged(loadable_object, loadable_snapshot);
+    assert_bundle_unchanged(new_bundle, new_bundle_snapshot);
+    N00B_TEST_REQUIRE(stale_off <= replaced->byte_len);
+    N00B_TEST_REQUIRE(stale_len <= replaced->byte_len - stale_off);
+    N00B_TEST_REQUIRE(memcmp((const uint8_t *)replaced->data + stale_off,
+                             old_encoded->data,
+                             old_encoded->byte_len) == 0);
+    assert_written_bundle_reads_back(replaced, new_bundle_snapshot);
+}
+
+static void
+test_write_auto_and_explicit_metadata_are_raw(void)
+{
+    n00b_obj_bundle_t *auto_bundle = make_populated_bundle_a();
+    n00b_buffer_t *auto_snapshot = encode_bundle_or_die(auto_bundle);
+    n00b_buffer_t *auto_object = write_bundle_or_die(make_rewrite_target(),
+                                                     auto_bundle);
+
+    assert_written_bundle_reads_back(auto_object, auto_snapshot);
+    assert_raw_metadata_carrier(auto_object, auto_snapshot);
+
+    n00b_obj_bundle_t *metadata_bundle = make_populated_bundle_b();
+    n00b_buffer_t *metadata_snapshot = encode_bundle_or_die(metadata_bundle);
+    n00b_buffer_t *metadata_object = write_carrier_or_die(
+        make_rewrite_target(),
+        metadata_bundle,
+        N00B_OBJ_BUNDLE_CARRIER_METADATA);
+
+    assert_written_bundle_reads_back(metadata_object, metadata_snapshot);
+    assert_raw_metadata_carrier(metadata_object, metadata_snapshot);
 }
 
 static void
@@ -1986,12 +3285,32 @@ main(int argc, char **argv)
     test_read_missing_elf_carrier();
     test_read_duplicate_elf_carrier();
     test_read_malformed_elf_carrier_payload();
+    test_read_elf_descriptor_loadable_malformed_payload_rejects();
+    test_read_elf_descriptor_body_payload_decodes_loadable();
+    test_read_elf_descriptor_split_reports_unsupported();
+    test_read_elf_descriptor_unsupported_version_does_not_fallthrough();
+    test_read_elf_descriptor_truncated_length_rejects();
+    test_read_elf_descriptor_out_of_bounds_rejects();
+    test_read_elf_descriptor_digest_mismatch_rejects();
     test_read_malformed_elf_carrier_shape();
     test_read_elf_carrier_with_foreign_sections();
     test_read_file_carrier_alone_not_imported();
     test_write_invalid_arguments();
     test_write_unsupported_carriers();
     test_write_insert_readback_and_immutability();
+    test_write_loadable_readback_descriptor_facts_and_immutability();
+    test_read_stale_loadable_bytes_without_descriptor_not_imported();
+    test_write_split_readback_descriptor_facts_and_immutability();
+    test_read_split_descriptor_malformed_records_reject();
+    test_read_split_descriptor_out_of_bounds_slice_rejects();
+    test_read_split_descriptor_canonical_overlap_rejects();
+    test_read_split_descriptor_object_overlap_rejects();
+    test_read_split_descriptor_slice_digest_mismatch_rejects();
+    test_write_existing_carriers_require_replace_across_modes();
+    test_write_metadata_to_loadable_replaces_explicitly();
+    test_write_loadable_to_split_replaces_explicitly();
+    test_write_loadable_to_metadata_ignores_stale_loadable_bytes();
+    test_write_auto_and_explicit_metadata_are_raw();
     test_write_file_atomic_readback_and_byte_equality();
     test_read_elf_metadata_carrier_then_extract();
     test_read_elf_metadata_carrier_then_plan_execution();

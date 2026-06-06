@@ -32,6 +32,8 @@ const uint8_t N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC[
 
 #define N00B_OBJ_BUNDLE_HEADER_SIZE        208u
 #define N00B_OBJ_BUNDLE_CONTENT_ID_OFF     32u
+#define N00B_OBJ_BUNDLE_PAYLOAD_AREA_OFF_OFF 176u
+#define N00B_OBJ_BUNDLE_PAYLOAD_AREA_LEN_OFF 184u
 #define N00B_OBJ_BUNDLE_ARTIFACT_REC_SIZE  72u
 #define N00B_OBJ_BUNDLE_PAYLOAD_REC_SIZE   64u
 #define N00B_OBJ_BUNDLE_EXEC_REC_SIZE      24u
@@ -54,6 +56,23 @@ const uint8_t N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC[
 #define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_FALLBACK_ID_OFF  24u
 #define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_SOURCE_LEN_OFF   32u
 #define N00B_OBJ_BUNDLE_EMBEDDED_POLICY_RESERVED1_OFF    40u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAGIC_LEN         8u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAJOR             1u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MINOR             0u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE       112u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_VERSION_OFF       8u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE_OFF   12u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_KIND_OFF          16u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_FLAGS_OFF         20u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_PAYLOAD_OFF_OFF   24u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_PAYLOAD_LEN_OFF   32u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_PAYLOAD_DIGEST_OFF 40u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_AUX_OFF_OFF       72u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_AUX_LEN_OFF       80u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_AUX_COUNT_OFF     88u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_RESERVED0_OFF     96u
+#define N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_RESERVED1_OFF     104u
+#define N00B_OBJ_BUNDLE_ELF_SPLIT_REC_SIZE               64u
 #define N00B_OBJ_BUNDLE_DECL_PATH_RELATIVE               (1ull << 0)
 #define N00B_OBJ_BUNDLE_DECL_PATH_NO_EMPTY_COMPONENTS    (1ull << 1)
 #define N00B_OBJ_BUNDLE_DECL_PATH_NO_PARENT_REFERENCES   (1ull << 2)
@@ -87,6 +106,11 @@ const uint8_t N00B_OBJ_BUNDLE_EMBEDDED_POLICY_MAGIC[
     (N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT_EXEC              \
      | N00B_OBJ_BUNDLE_DECL_EXEC_SELECTOR_MAPPING)
 #define N00B_OBJ_BUNDLE_ELF_GUARD_SECTION_TYPE 0xc001u
+
+static const uint8_t N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAGIC[
+    N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAGIC_LEN] = {
+    'N', '0', '0', 'B', 'C', 'A', 'R', '1',
+};
 
 typedef struct n00b_obj_bundle_exec_mapping {
     n00b_string_t *selector;
@@ -238,6 +262,32 @@ typedef struct n00b_obj_bundle_manifest_range {
     uint64_t off;
     uint64_t len;
 } n00b_obj_bundle_manifest_range_t;
+
+typedef struct n00b_obj_bundle_elf_descriptor {
+    n00b_obj_bundle_carrier_t        carrier;
+    uint16_t                         major;
+    uint16_t                         minor;
+    uint32_t                         header_size;
+    uint32_t                         flags;
+    n00b_obj_bundle_manifest_range_t payload;
+    uint8_t                          payload_digest[N00B_OBJ_BUNDLE_DIGEST_LEN];
+    n00b_obj_bundle_manifest_range_t aux;
+    uint64_t                         aux_record_count;
+    uint64_t                         reserved0;
+    uint64_t                         reserved1;
+} n00b_obj_bundle_elf_descriptor_t;
+
+typedef struct n00b_obj_bundle_elf_split_record {
+    n00b_obj_bundle_manifest_range_t canonical;
+    n00b_obj_bundle_manifest_range_t object;
+    uint8_t                          digest[N00B_OBJ_BUNDLE_DIGEST_LEN];
+} n00b_obj_bundle_elf_split_record_t;
+
+typedef struct n00b_obj_bundle_elf_split_range {
+    n00b_obj_bundle_manifest_range_t canonical;
+    uint64_t                         loadable_payload_off;
+    uint8_t                          digest[N00B_OBJ_BUNDLE_DIGEST_LEN];
+} n00b_obj_bundle_elf_split_range_t;
 
 typedef struct n00b_obj_bundle_decode_artifact {
     uint64_t                         id;
@@ -4907,6 +4957,23 @@ _n00b_obj_bundle_range_within(uint64_t off, uint64_t len, uint64_t total)
 }
 
 static bool
+_n00b_obj_bundle_ranges_overlap(uint64_t a_off,
+                                uint64_t a_len,
+                                uint64_t b_off,
+                                uint64_t b_len)
+{
+    uint64_t a_end = 0;
+    uint64_t b_end = 0;
+
+    if (!_n00b_obj_bundle_range_end(a_off, a_len, &a_end)
+        || !_n00b_obj_bundle_range_end(b_off, b_len, &b_end)) {
+        return true;
+    }
+
+    return a_off < b_end && b_off < a_end;
+}
+
+static bool
 _n00b_obj_bundle_is_aligned(uint64_t value, uint64_t alignment)
 {
     return alignment != 0 && (value % alignment) == 0;
@@ -6955,6 +7022,696 @@ _n00b_obj_bundle_decode_failure_detail(
     return n00b_result_get_err(decode);
 }
 
+static int64_t
+_n00b_obj_bundle_i64_detail_from_u64(uint64_t value)
+{
+    return value > INT64_MAX ? INT64_MAX : (int64_t)value;
+}
+
+static bool
+_n00b_obj_bundle_elf_descriptor_magic_matches(n00b_buffer_t *bytes)
+{
+    return bytes != nullptr
+           && bytes->data != nullptr
+           && bytes->byte_len >= N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAGIC_LEN
+           && memcmp(bytes->data,
+                     N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAGIC,
+                     N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAGIC_LEN) == 0;
+}
+
+static bool
+_n00b_obj_bundle_elf_descriptor_carrier_from_kind(
+    uint32_t                    kind,
+    n00b_obj_bundle_carrier_t  *carrier)
+{
+    if (kind == N00B_OBJ_BUNDLE_CARRIER_LOADABLE
+        || kind == N00B_OBJ_BUNDLE_CARRIER_SPLIT) {
+        *carrier = (n00b_obj_bundle_carrier_t)kind;
+        return true;
+    }
+
+    return false;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_elf_descriptor_error(
+    n00b_obj_bundle_error_code_t code,
+    n00b_string_t               *message,
+    n00b_obj_bundle_carrier_t    carrier,
+    int64_t                      detail,
+    bool                         has_detail,
+    n00b_allocator_t            *allocator)
+{
+    return _n00b_obj_bundle_error_with_format_carrier_detail(
+        code,
+        message,
+        N00B_FMT_ELF,
+        true,
+        carrier,
+        true,
+        detail,
+        has_detail,
+        allocator);
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_elf_carrier_error(
+    n00b_obj_bundle_error_code_t code,
+    n00b_string_t               *message,
+    n00b_obj_bundle_carrier_t    carrier,
+    int64_t                      detail,
+    bool                         has_detail,
+    n00b_allocator_t            *allocator)
+{
+    return _n00b_obj_bundle_error_with_format_carrier_detail(
+        code,
+        message,
+        N00B_FMT_ELF,
+        true,
+        carrier,
+        true,
+        detail,
+        has_detail,
+        allocator);
+}
+
+static n00b_buffer_t *
+_n00b_obj_bundle_elf_descriptor_encode(
+    n00b_obj_bundle_elf_descriptor_t *descriptor,
+    n00b_allocator_t                 *allocator)
+{
+    n00b_writer_t *writer =
+        n00b_writer_new(N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE);
+
+    n00b_writer_set_endian(writer, N00B_ENDIAN_LITTLE);
+    n00b_writer_write_bytes(writer,
+                            N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAGIC,
+                            N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAGIC_LEN);
+    n00b_writer_write_u16(writer, descriptor->major);
+    n00b_writer_write_u16(writer, descriptor->minor);
+    n00b_writer_write_u32(writer, descriptor->header_size);
+    n00b_writer_write_u32(writer, (uint32_t)descriptor->carrier);
+    n00b_writer_write_u32(writer, descriptor->flags);
+    n00b_writer_write_u64(writer, descriptor->payload.off);
+    n00b_writer_write_u64(writer, descriptor->payload.len);
+    _n00b_obj_bundle_write_digest(writer, descriptor->payload_digest);
+    n00b_writer_write_u64(writer, descriptor->aux.off);
+    n00b_writer_write_u64(writer, descriptor->aux.len);
+    n00b_writer_write_u64(writer, descriptor->aux_record_count);
+    n00b_writer_write_u64(writer, descriptor->reserved0);
+    n00b_writer_write_u64(writer, descriptor->reserved1);
+
+    if (n00b_writer_has_error(writer)) {
+        return nullptr;
+    }
+
+    n00b_buffer_t *encoded = n00b_writer_finalize(writer);
+
+    if (allocator != nullptr) {
+        encoded = n00b_buffer_copy(encoded, .allocator = allocator);
+    }
+
+    return encoded;
+}
+
+static bool
+_n00b_obj_bundle_elf_descriptor_is_canonical(
+    n00b_obj_bundle_elf_descriptor_t *descriptor,
+    n00b_buffer_t                    *descriptor_bytes,
+    n00b_allocator_t                 *allocator)
+{
+    n00b_buffer_t *encoded =
+        _n00b_obj_bundle_elf_descriptor_encode(descriptor, allocator);
+
+    return encoded != nullptr
+           && descriptor_bytes->byte_len >= encoded->byte_len
+           && memcmp(encoded->data,
+                     descriptor_bytes->data,
+                     encoded->byte_len) == 0;
+}
+
+static void
+_n00b_obj_bundle_elf_split_record_write(
+    n00b_writer_t                       *writer,
+    n00b_obj_bundle_elf_split_record_t  *record)
+{
+    n00b_writer_write_u64(writer, record->canonical.off);
+    n00b_writer_write_u64(writer, record->canonical.len);
+    n00b_writer_write_u64(writer, record->object.off);
+    n00b_writer_write_u64(writer, record->object.len);
+    _n00b_obj_bundle_write_digest(writer, record->digest);
+}
+
+static bool
+_n00b_obj_bundle_elf_split_record_read(
+    n00b_bstream_t                      *stream,
+    n00b_obj_bundle_elf_split_record_t  *record)
+{
+    return _n00b_obj_bundle_read_u64(stream, &record->canonical.off)
+           && _n00b_obj_bundle_read_u64(stream, &record->canonical.len)
+           && _n00b_obj_bundle_read_u64(stream, &record->object.off)
+           && _n00b_obj_bundle_read_u64(stream, &record->object.len)
+           && _n00b_obj_bundle_read_digest(stream, record->digest);
+}
+
+static n00b_result_t(n00b_obj_bundle_elf_descriptor_t *)
+_n00b_obj_bundle_elf_descriptor_decode(n00b_buffer_t     *descriptor_bytes,
+                                       n00b_buffer_t     *object_bytes,
+                                       n00b_allocator_t  *allocator)
+{
+    if (!_n00b_obj_bundle_elf_descriptor_magic_matches(descriptor_bytes)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF descriptor carrier magic mismatch",
+                N00B_OBJ_BUNDLE_CARRIER_METADATA,
+                0,
+                false,
+                allocator));
+    }
+
+    if (descriptor_bytes->byte_len
+        < N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_OUT_OF_BOUNDS,
+                r"object bundle: ELF descriptor carrier is truncated",
+                N00B_OBJ_BUNDLE_CARRIER_METADATA,
+                _n00b_obj_bundle_i64_detail_from_u64(
+                    descriptor_bytes->byte_len),
+                true,
+                allocator));
+    }
+
+    n00b_bstream_t *stream = n00b_bstream_new(descriptor_bytes,
+                                              .allocator = allocator);
+    n00b_bstream_set_endian(stream, N00B_ENDIAN_LITTLE);
+
+    uint32_t kind = 0;
+    n00b_obj_bundle_elf_descriptor_t *descriptor =
+        n00b_alloc_with_opts(n00b_obj_bundle_elf_descriptor_t,
+                             &(n00b_alloc_opts_t){.allocator = allocator});
+
+    if (!_n00b_obj_bundle_setpos(stream,
+                                 N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_VERSION_OFF)
+        || !_n00b_obj_bundle_read_u16(stream, &descriptor->major)
+        || !_n00b_obj_bundle_read_u16(stream, &descriptor->minor)
+        || !_n00b_obj_bundle_read_u32(stream, &descriptor->header_size)
+        || !_n00b_obj_bundle_read_u32(stream, &kind)
+        || !_n00b_obj_bundle_read_u32(stream, &descriptor->flags)
+        || !_n00b_obj_bundle_read_u64(stream, &descriptor->payload.off)
+        || !_n00b_obj_bundle_read_u64(stream, &descriptor->payload.len)
+        || !_n00b_obj_bundle_read_digest(stream,
+                                         descriptor->payload_digest)
+        || !_n00b_obj_bundle_read_u64(stream, &descriptor->aux.off)
+        || !_n00b_obj_bundle_read_u64(stream, &descriptor->aux.len)
+        || !_n00b_obj_bundle_read_u64(stream,
+                                      &descriptor->aux_record_count)
+        || !_n00b_obj_bundle_read_u64(stream, &descriptor->reserved0)
+        || !_n00b_obj_bundle_read_u64(stream, &descriptor->reserved1)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_OUT_OF_BOUNDS,
+                r"object bundle: ELF descriptor carrier is truncated",
+                N00B_OBJ_BUNDLE_CARRIER_METADATA,
+                _n00b_obj_bundle_i64_detail_from_u64(
+                    descriptor_bytes->byte_len),
+                true,
+                allocator));
+    }
+
+    n00b_obj_bundle_carrier_t descriptor_carrier =
+        N00B_OBJ_BUNDLE_CARRIER_METADATA;
+    bool has_descriptor_carrier =
+        _n00b_obj_bundle_elf_descriptor_carrier_from_kind(
+            kind,
+            &descriptor_carrier);
+
+    descriptor->carrier = descriptor_carrier;
+
+    if (descriptor->major != N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAJOR
+        || descriptor->minor != N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MINOR) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_VERSION,
+                r"object bundle: unsupported ELF descriptor carrier version",
+                descriptor_carrier,
+                ((int64_t)descriptor->major << 16) | descriptor->minor,
+                true,
+                allocator));
+    }
+
+    if (!has_descriptor_carrier) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF descriptor carrier kind is invalid",
+                N00B_OBJ_BUNDLE_CARRIER_METADATA,
+                _n00b_obj_bundle_i64_detail_from_u64(kind),
+                true,
+                allocator));
+    }
+
+    if (descriptor->header_size != N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE
+        || descriptor_bytes->byte_len < descriptor->header_size) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_OUT_OF_BOUNDS,
+                r"object bundle: ELF descriptor carrier length mismatch",
+                descriptor_carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(
+                    descriptor->header_size),
+                true,
+                allocator));
+    }
+
+    if (descriptor->flags != 0
+        || descriptor->reserved0 != 0
+        || descriptor->reserved1 != 0) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF descriptor carrier reserved field is set",
+                descriptor_carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(descriptor->flags),
+                true,
+                allocator));
+    }
+
+    if (descriptor->payload.len == 0
+        || !_n00b_obj_bundle_range_within(descriptor->payload.off,
+                                          descriptor->payload.len,
+                                          object_bytes->byte_len)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_OUT_OF_BOUNDS,
+                r"object bundle: ELF descriptor payload range is invalid",
+                descriptor_carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(
+                    descriptor->payload.off),
+                true,
+                allocator));
+    }
+
+    if ((descriptor->aux.len == 0 && descriptor->aux.off != 0)
+        || (descriptor->aux.len != 0
+            && !_n00b_obj_bundle_range_within(descriptor->aux.off,
+                                              descriptor->aux.len,
+                                              object_bytes->byte_len))) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_OUT_OF_BOUNDS,
+                r"object bundle: ELF descriptor auxiliary range is invalid",
+                descriptor_carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(descriptor->aux.off),
+                true,
+                allocator));
+    }
+
+    if (descriptor->aux.len == 0 && descriptor->aux_record_count != 0) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF descriptor auxiliary records are invalid",
+                descriptor_carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(
+                    descriptor->aux_record_count),
+                true,
+                allocator));
+    }
+
+    if (!_n00b_obj_bundle_elf_descriptor_is_canonical(descriptor,
+                                                      descriptor_bytes,
+                                                      allocator)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF descriptor carrier is non-canonical",
+                descriptor_carrier,
+                0,
+                false,
+                allocator));
+    }
+
+    uint8_t digest[N00B_OBJ_BUNDLE_DIGEST_LEN];
+
+    const uint8_t *object_data = (const uint8_t *)object_bytes->data;
+
+    _n00b_obj_bundle_sha256_bytes(object_data + descriptor->payload.off,
+                                  (size_t)descriptor->payload.len,
+                                  digest);
+
+    if (memcmp(digest,
+               descriptor->payload_digest,
+               N00B_OBJ_BUNDLE_DIGEST_LEN) != 0) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_elf_descriptor_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_DIGEST_MISMATCH,
+                r"object bundle: ELF descriptor payload digest mismatch",
+                descriptor_carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(
+                    descriptor->payload.off),
+                true,
+                allocator));
+    }
+
+    return n00b_result_ok(n00b_obj_bundle_elf_descriptor_t *, descriptor);
+}
+
+static n00b_result_t(n00b_obj_bundle_t *)
+_n00b_obj_bundle_read_elf_loadable_descriptor(
+    n00b_buffer_t                    *object_bytes,
+    n00b_obj_bundle_elf_descriptor_t *descriptor,
+    bool                              strict,
+    n00b_allocator_t                 *allocator)
+{
+    uint64_t payload_end = 0;
+
+    if (!_n00b_obj_bundle_range_end(descriptor->payload.off,
+                                    descriptor->payload.len,
+                                    &payload_end)
+        || descriptor->payload.off > INT64_MAX
+        || payload_end > INT64_MAX) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_OUT_OF_BOUNDS,
+                r"object bundle: ELF descriptor payload range is invalid",
+                descriptor->carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(
+                    descriptor->payload.off),
+                true,
+                allocator));
+    }
+
+    n00b_buffer_t *payload = n00b_buffer_get_slice(
+        object_bytes,
+        (int64_t)descriptor->payload.off,
+        (int64_t)payload_end,
+        .allocator = allocator);
+
+    auto decoded = n00b_obj_bundle_decode(payload,
+                                          .strict = strict,
+                                          .allocator = allocator);
+
+    if (n00b_result_is_err(decoded)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF loadable descriptor payload is malformed",
+                descriptor->carrier,
+                _n00b_obj_bundle_decode_failure_detail(decoded),
+                true,
+                allocator));
+    }
+
+    return n00b_result_ok(n00b_obj_bundle_t *, n00b_result_get(decoded));
+}
+
+static n00b_result_t(n00b_obj_bundle_t *)
+_n00b_obj_bundle_read_elf_split_descriptor(
+    n00b_buffer_t                    *object_bytes,
+    n00b_obj_bundle_elf_descriptor_t *descriptor,
+    bool                              strict,
+    n00b_allocator_t                 *allocator)
+{
+    uint64_t skeleton_end = 0;
+    uint64_t aux_end      = 0;
+    uint64_t expected_aux_len = 0;
+
+    if (descriptor->aux_record_count == 0
+        || descriptor->aux_record_count > SIZE_MAX
+        || !_n00b_obj_bundle_u64_mul(descriptor->aux_record_count,
+                                     N00B_OBJ_BUNDLE_ELF_SPLIT_REC_SIZE,
+                                     &expected_aux_len)
+        || descriptor->aux.len != expected_aux_len
+        || descriptor->aux.off > INT64_MAX
+        || descriptor->payload.off > INT64_MAX
+        || !_n00b_obj_bundle_range_end(descriptor->payload.off,
+                                       descriptor->payload.len,
+                                       &skeleton_end)
+        || !_n00b_obj_bundle_range_end(descriptor->aux.off,
+                                       descriptor->aux.len,
+                                       &aux_end)
+        || skeleton_end > INT64_MAX
+        || aux_end > INT64_MAX) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF split descriptor records are invalid",
+                descriptor->carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(
+                    descriptor->aux_record_count),
+                true,
+                allocator));
+    }
+
+    n00b_buffer_t *skeleton = n00b_buffer_get_slice(
+        object_bytes,
+        (int64_t)descriptor->payload.off,
+        (int64_t)skeleton_end,
+        .allocator = allocator);
+    n00b_buffer_t *aux = n00b_buffer_get_slice(object_bytes,
+                                               (int64_t)descriptor->aux.off,
+                                               (int64_t)aux_end,
+                                               .allocator = allocator);
+    n00b_bstream_t *stream = n00b_bstream_new(aux, .allocator = allocator);
+
+    n00b_bstream_set_endian(stream, N00B_ENDIAN_LITTLE);
+
+    uint64_t previous_canonical_end = 0;
+    uint64_t total_moved            = 0;
+    n00b_obj_bundle_elf_split_record_t *records =
+        n00b_alloc_array(n00b_obj_bundle_elf_split_record_t,
+                         (size_t)descriptor->aux_record_count);
+
+    for (uint64_t i = 0; i < descriptor->aux_record_count; i++) {
+        n00b_obj_bundle_elf_split_record_t record = {};
+        uint64_t canonical_end = 0;
+
+        if (!_n00b_obj_bundle_elf_split_record_read(stream, &record)
+            || record.canonical.len == 0
+            || record.object.len != record.canonical.len
+            || !_n00b_obj_bundle_range_end(record.canonical.off,
+                                           record.canonical.len,
+                                           &canonical_end)
+            || !_n00b_obj_bundle_range_within(record.object.off,
+                                              record.object.len,
+                                              object_bytes->byte_len)
+            || (i != 0 && record.canonical.off < previous_canonical_end)
+            || !_n00b_obj_bundle_u64_add(total_moved,
+                                         record.canonical.len,
+                                         &total_moved)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_t *,
+                _n00b_obj_bundle_elf_descriptor_error(
+                    N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                    r"object bundle: ELF split reconstruction record is invalid",
+                    descriptor->carrier,
+                    _n00b_obj_bundle_i64_detail_from_u64(i),
+                    true,
+                    allocator));
+        }
+
+        for (uint64_t j = 0; j < i; j++) {
+            if (_n00b_obj_bundle_ranges_overlap(record.object.off,
+                                                record.object.len,
+                                                records[j].object.off,
+                                                records[j].object.len)) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_t *,
+                    _n00b_obj_bundle_elf_descriptor_error(
+                        N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                        r"object bundle: ELF split object slice overlaps",
+                        descriptor->carrier,
+                        _n00b_obj_bundle_i64_detail_from_u64(i),
+                        true,
+                        allocator));
+            }
+        }
+
+        uint8_t digest[N00B_OBJ_BUNDLE_DIGEST_LEN];
+
+        _n00b_obj_bundle_sha256_bytes(
+            (const uint8_t *)object_bytes->data + record.object.off,
+            (size_t)record.object.len,
+            digest);
+
+        if (memcmp(digest,
+                   record.digest,
+                   N00B_OBJ_BUNDLE_DIGEST_LEN) != 0) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_t *,
+                _n00b_obj_bundle_elf_descriptor_error(
+                    N00B_OBJ_BUNDLE_ERR_DIGEST_MISMATCH,
+                    r"object bundle: ELF split slice digest mismatch",
+                    descriptor->carrier,
+                    _n00b_obj_bundle_i64_detail_from_u64(record.object.off),
+                    true,
+                    allocator));
+        }
+
+        records[i] = record;
+        previous_canonical_end = canonical_end;
+    }
+
+    uint64_t reconstructed_len = 0;
+
+    if (!_n00b_obj_bundle_u64_add(descriptor->payload.len,
+                                  total_moved,
+                                  &reconstructed_len)
+        || reconstructed_len > SIZE_MAX) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_OUT_OF_BOUNDS,
+                r"object bundle: ELF split reconstruction size overflowed",
+                descriptor->carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(descriptor->payload.len),
+                true,
+                allocator));
+    }
+
+    n00b_writer_t *writer = n00b_writer_new((size_t)reconstructed_len);
+    uint64_t canonical_cursor = 0;
+    uint64_t skeleton_cursor  = 0;
+
+    for (uint64_t i = 0; i < descriptor->aux_record_count; i++) {
+        n00b_obj_bundle_elf_split_record_t *record = &records[i];
+        uint64_t canonical_end = 0;
+
+        if (!_n00b_obj_bundle_range_end(record->canonical.off,
+                                        record->canonical.len,
+                                        &canonical_end)
+            || record->canonical.off < canonical_cursor) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_t *,
+                _n00b_obj_bundle_elf_descriptor_error(
+                    N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                    r"object bundle: ELF split reconstruction range is invalid",
+                    descriptor->carrier,
+                    _n00b_obj_bundle_i64_detail_from_u64(record->canonical.off),
+                    true,
+                    allocator));
+        }
+
+        uint64_t gap_len = record->canonical.off - canonical_cursor;
+
+        if (!_n00b_obj_bundle_range_within(skeleton_cursor,
+                                           gap_len,
+                                           descriptor->payload.len)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_t *,
+                _n00b_obj_bundle_elf_descriptor_error(
+                    N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                    r"object bundle: ELF split skeleton range is invalid",
+                    descriptor->carrier,
+                    _n00b_obj_bundle_i64_detail_from_u64(skeleton_cursor),
+                    true,
+                    allocator));
+        }
+
+        n00b_writer_write_bytes(writer,
+                                skeleton->data + skeleton_cursor,
+                                (size_t)gap_len);
+        n00b_writer_write_bytes(writer,
+                                object_bytes->data + record->object.off,
+                                (size_t)record->object.len);
+
+        skeleton_cursor += gap_len;
+        canonical_cursor = canonical_end;
+    }
+
+    if (canonical_cursor > reconstructed_len) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF split reconstruction length is invalid",
+                descriptor->carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(canonical_cursor),
+                true,
+                allocator));
+    }
+
+    uint64_t trailing_len = reconstructed_len - canonical_cursor;
+    uint64_t skeleton_final = 0;
+
+    if (!_n00b_obj_bundle_range_within(skeleton_cursor,
+                                       trailing_len,
+                                       descriptor->payload.len)
+        || !_n00b_obj_bundle_u64_add(skeleton_cursor,
+                                     trailing_len,
+                                     &skeleton_final)
+        || skeleton_final != descriptor->payload.len) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF split skeleton length is invalid",
+                descriptor->carrier,
+                _n00b_obj_bundle_i64_detail_from_u64(skeleton_cursor),
+                true,
+                allocator));
+    }
+
+    n00b_writer_write_bytes(writer,
+                            skeleton->data + skeleton_cursor,
+                            (size_t)trailing_len);
+    n00b_writer_setpos(writer, (size_t)reconstructed_len);
+
+    if (n00b_writer_has_error(writer)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF split reconstruction failed",
+                descriptor->carrier,
+                0,
+                false,
+                allocator));
+    }
+
+    n00b_buffer_t *reconstructed = n00b_writer_finalize(writer);
+
+    if (allocator != nullptr) {
+        reconstructed = n00b_buffer_copy(reconstructed,
+                                         .allocator = allocator);
+    }
+
+    auto decoded = n00b_obj_bundle_decode(reconstructed,
+                                          .strict = strict,
+                                          .allocator = allocator);
+
+    if (n00b_result_is_err(decoded)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                r"object bundle: ELF split reconstruction is malformed",
+                descriptor->carrier,
+                _n00b_obj_bundle_decode_failure_detail(decoded),
+                true,
+                allocator));
+    }
+
+    return n00b_result_ok(n00b_obj_bundle_t *, n00b_result_get(decoded));
+}
+
 static n00b_result_t(n00b_obj_bundle_t *)
 _n00b_obj_bundle_read_elf_metadata_carrier(n00b_buffer_t     *object_bytes,
                                            bool               strict,
@@ -7040,6 +7797,49 @@ _n00b_obj_bundle_read_elf_metadata_carrier(n00b_buffer_t     *object_bytes,
                 allocator));
     }
 
+    if (_n00b_obj_bundle_elf_descriptor_magic_matches(carrier->content)) {
+        auto descriptor = _n00b_obj_bundle_elf_descriptor_decode(
+            carrier->content,
+            object_bytes,
+            allocator);
+
+        if (n00b_result_is_err(descriptor)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            descriptor));
+        }
+
+        n00b_obj_bundle_elf_descriptor_t *facts =
+            n00b_result_get(descriptor);
+
+        if (facts->carrier == N00B_OBJ_BUNDLE_CARRIER_LOADABLE) {
+            return _n00b_obj_bundle_read_elf_loadable_descriptor(
+                object_bytes,
+                facts,
+                strict,
+                allocator);
+        }
+
+        if (facts->carrier == N00B_OBJ_BUNDLE_CARRIER_SPLIT) {
+            return _n00b_obj_bundle_read_elf_split_descriptor(
+                object_bytes,
+                facts,
+                strict,
+                allocator);
+        }
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_t *,
+            _n00b_obj_bundle_elf_descriptor_error(
+                N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER,
+                r"object bundle: ELF descriptor carrier read is unsupported",
+                facts->carrier,
+                (int64_t)facts->carrier,
+                true,
+                allocator));
+    }
+
     auto decoded = n00b_obj_bundle_decode(carrier->content,
                                           .strict = strict,
                                           .allocator = allocator);
@@ -7111,6 +7911,8 @@ _n00b_obj_bundle_validate_elf_write_environment(n00b_elf_binary_t *elf,
 {
     n00b_elf_section_t *bundle_carrier = nullptr;
     size_t              bundle_count   = 0;
+    n00b_obj_bundle_carrier_t existing_carrier =
+        N00B_OBJ_BUNDLE_CARRIER_METADATA;
     n00b_obj_bundle_error_t *foreign_error = nullptr;
     n00b_obj_bundle_error_t *wrapped_error = nullptr;
     n00b_obj_bundle_error_t *reserved_error = nullptr;
@@ -7204,19 +8006,69 @@ _n00b_obj_bundle_validate_elf_write_environment(n00b_elf_binary_t *elf,
                     allocator));
         }
 
-        auto decoded = n00b_obj_bundle_decode(bundle_carrier->content,
-                                              .strict = strict,
-                                              .allocator = allocator);
+        if (_n00b_obj_bundle_elf_descriptor_magic_matches(
+                bundle_carrier->content)) {
+            auto descriptor = _n00b_obj_bundle_elf_descriptor_decode(
+                bundle_carrier->content,
+                elf->stream->buf,
+                allocator);
 
-        if (n00b_result_is_err(decoded)) {
-            return OBJ_BUNDLE_ERR_PAYLOAD(
-                bool,
-                _n00b_obj_bundle_elf_metadata_error(
-                    N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
-                    r"object bundle: ELF metadata carrier payload is malformed",
-                    _n00b_obj_bundle_decode_failure_detail(decoded),
-                    true,
-                    allocator));
+            if (n00b_result_is_err(descriptor)) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    bool,
+                    n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                                descriptor));
+            }
+
+            n00b_obj_bundle_elf_descriptor_t *facts =
+                n00b_result_get(descriptor);
+
+            existing_carrier = facts->carrier;
+
+            if (facts->carrier == N00B_OBJ_BUNDLE_CARRIER_LOADABLE) {
+                auto decoded = _n00b_obj_bundle_read_elf_loadable_descriptor(
+                    elf->stream->buf,
+                    facts,
+                    strict,
+                    allocator);
+
+                if (n00b_result_is_err(decoded)) {
+                    return OBJ_BUNDLE_ERR_PAYLOAD(
+                        bool,
+                        n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                                    decoded));
+                }
+            }
+            else if (facts->carrier == N00B_OBJ_BUNDLE_CARRIER_SPLIT) {
+                auto decoded = _n00b_obj_bundle_read_elf_split_descriptor(
+                    elf->stream->buf,
+                    facts,
+                    strict,
+                    allocator);
+
+                if (n00b_result_is_err(decoded)) {
+                    return OBJ_BUNDLE_ERR_PAYLOAD(
+                        bool,
+                        n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                                    decoded));
+                }
+            }
+        }
+        else {
+            auto decoded = n00b_obj_bundle_decode(bundle_carrier->content,
+                                                  .strict = strict,
+                                                  .allocator = allocator);
+
+            if (n00b_result_is_err(decoded)) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    bool,
+                    _n00b_obj_bundle_elf_metadata_error(
+                        N00B_OBJ_BUNDLE_ERR_MALFORMED_BUNDLE_CARRIER,
+                        r"object bundle: ELF metadata carrier payload is malformed",
+                        _n00b_obj_bundle_decode_failure_detail(decoded),
+                        true,
+                        allocator));
+            }
         }
     }
 
@@ -7239,15 +8091,40 @@ _n00b_obj_bundle_validate_elf_write_environment(n00b_elf_binary_t *elf,
     if (bundle_count == 1 && replace != N00B_OBJ_BUNDLE_REPLACE_EXISTING) {
         return OBJ_BUNDLE_ERR_PAYLOAD(
             bool,
-            _n00b_obj_bundle_elf_metadata_error(
+            _n00b_obj_bundle_elf_carrier_error(
                 N00B_OBJ_BUNDLE_ERR_REPLACE_REQUIRED,
-                r"object bundle: ELF metadata carrier replacement is explicit",
+                r"object bundle: ELF carrier replacement is explicit",
+                existing_carrier,
                 1,
                 true,
                 allocator));
     }
 
     return n00b_result_ok(bool, bundle_count == 1);
+}
+
+static bool
+_n00b_obj_bundle_mask_elf_carrier_for_loadable_rewrite(n00b_elf_binary_t *elf)
+{
+    if (elf == nullptr) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < elf->num_sections; i++) {
+        n00b_elf_section_t *section = &elf->sections[i];
+
+        if (_n00b_obj_bundle_elf_section_is_metadata_carrier(section)) {
+            /*
+             * The selected carrier was already validated. Mask it only in the
+             * transient parse tree so generic loadable admission can plan the
+             * replacement before the final descriptor rewrite.
+             */
+            section->name = r".n00b.object-bundle.replacing";
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static n00b_obj_bundle_error_t *
@@ -7271,22 +8148,421 @@ _n00b_obj_bundle_error_from_rewrite_plan(n00b_elf_rewrite_plan_t *plan,
         allocator);
 }
 
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_from_loadable_plan_for_carrier(
+    n00b_elf_rewrite_loadable_plan_t *plan,
+    n00b_obj_bundle_carrier_t         carrier,
+    n00b_allocator_t                 *allocator)
+{
+    if (plan == nullptr) {
+        return _n00b_obj_bundle_elf_carrier_error(
+            N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+            r"object bundle: ELF loadable rewrite planning failed",
+            carrier,
+            0,
+            false,
+            allocator);
+    }
+
+    return _n00b_obj_bundle_elf_carrier_error(
+        N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+        r"object bundle: ELF loadable rewrite plan was rejected",
+        carrier,
+        plan->rejection_reason,
+        true,
+        allocator);
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_error_from_loadable_plan(
+    n00b_elf_rewrite_loadable_plan_t *plan,
+    n00b_allocator_t                 *allocator)
+{
+    return _n00b_obj_bundle_error_from_loadable_plan_for_carrier(
+        plan,
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+        allocator);
+}
+
+static bool
+_n00b_obj_bundle_manifest_payload_area(n00b_buffer_t *bundle_bytes,
+                                       n00b_obj_bundle_manifest_range_t *range,
+                                       n00b_allocator_t *allocator)
+{
+    if (bundle_bytes == nullptr
+        || bundle_bytes->data == nullptr
+        || bundle_bytes->byte_len < N00B_OBJ_BUNDLE_HEADER_SIZE) {
+        return false;
+    }
+
+    n00b_bstream_t *stream = n00b_bstream_new(bundle_bytes,
+                                              .allocator = allocator);
+
+    n00b_bstream_set_endian(stream, N00B_ENDIAN_LITTLE);
+
+    return _n00b_obj_bundle_setpos(stream,
+                                   N00B_OBJ_BUNDLE_PAYLOAD_AREA_OFF_OFF)
+           && _n00b_obj_bundle_read_u64(stream, &range->off)
+           && _n00b_obj_bundle_read_u64(stream, &range->len)
+           && _n00b_obj_bundle_range_within(range->off,
+                                            range->len,
+                                            bundle_bytes->byte_len);
+}
+
 static n00b_result_t(n00b_buffer_t *)
-_n00b_obj_bundle_write_elf_metadata_carrier(
+_n00b_obj_bundle_build_elf_split_payloads(
+    n00b_obj_bundle_t                  *bundle,
+    n00b_buffer_t                      *bundle_bytes,
+    n00b_obj_bundle_elf_split_range_t **ranges_out,
+    size_t                             *range_count_out,
+    n00b_buffer_t                     **skeleton_out,
+    n00b_allocator_t                   *allocator)
+{
+    *ranges_out       = nullptr;
+    *range_count_out  = 0;
+    *skeleton_out     = nullptr;
+
+    n00b_obj_bundle_manifest_range_t payload_area = {};
+
+    if (!_n00b_obj_bundle_manifest_payload_area(bundle_bytes,
+                                                &payload_area,
+                                                allocator)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: split payload-area facts are unavailable",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                0,
+                false,
+                allocator));
+    }
+
+    size_t artifact_count = n00b_list_len(bundle->artifacts);
+
+    if (artifact_count == 0) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER,
+                r"object bundle: split carrier has no movable payloads",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                0,
+                false,
+                allocator));
+    }
+
+    n00b_obj_bundle_encode_artifact_t *artifacts =
+        n00b_alloc_array(n00b_obj_bundle_encode_artifact_t, artifact_count);
+    n00b_obj_bundle_elf_split_range_t *ranges =
+        n00b_alloc_array(n00b_obj_bundle_elf_split_range_t, artifact_count);
+
+    for (size_t i = 0; i < artifact_count; i++) {
+        artifacts[i].artifact = n00b_list_get(bundle->artifacts, i);
+    }
+
+    qsort(artifacts,
+          artifact_count,
+          sizeof(artifacts[0]),
+          _n00b_obj_bundle_encode_artifact_cmp);
+
+    uint64_t payload_cursor  = 0;
+    uint64_t loadable_cursor = 0;
+    size_t   selected_count  = 0;
+
+    for (size_t i = 0; i < artifact_count; i++) {
+        n00b_obj_bundle_artifact_t *artifact = artifacts[i].artifact;
+
+        if (artifact->payload == nullptr) {
+            continue;
+        }
+
+        uint64_t payload_len = artifact->payload->byte_len;
+        uint64_t canonical_off = 0;
+
+        if (!_n00b_obj_bundle_u64_add(payload_area.off,
+                                      payload_cursor,
+                                      &canonical_off)
+            || !_n00b_obj_bundle_range_within(canonical_off,
+                                              payload_len,
+                                              bundle_bytes->byte_len)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                _n00b_obj_bundle_elf_carrier_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: split payload range is invalid",
+                    N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                    _n00b_obj_bundle_i64_detail_from_u64(payload_cursor),
+                    true,
+                    allocator));
+        }
+
+        if (_n00b_obj_bundle_artifact_is_executable(artifact)
+            && payload_len != 0) {
+            n00b_obj_bundle_elf_split_range_t *range =
+                &ranges[selected_count++];
+
+            range->canonical = (n00b_obj_bundle_manifest_range_t){
+                .off = canonical_off,
+                .len = payload_len,
+            };
+            range->loadable_payload_off = loadable_cursor;
+            _n00b_obj_bundle_sha256_bytes(
+                (const uint8_t *)bundle_bytes->data + canonical_off,
+                (size_t)payload_len,
+                range->digest);
+
+            if (!_n00b_obj_bundle_u64_add(loadable_cursor,
+                                          payload_len,
+                                          &loadable_cursor)) {
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_buffer_t *,
+                    _n00b_obj_bundle_elf_carrier_error(
+                        N00B_OBJ_BUNDLE_ERR_BUILD,
+                        r"object bundle: split loadable payload is too large",
+                        N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                        _n00b_obj_bundle_i64_detail_from_u64(loadable_cursor),
+                        true,
+                        allocator));
+            }
+        }
+
+        if (!_n00b_obj_bundle_u64_add(payload_cursor,
+                                      payload_len,
+                                      &payload_cursor)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                _n00b_obj_bundle_elf_carrier_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: split payload cursor overflowed",
+                    N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                    _n00b_obj_bundle_i64_detail_from_u64(payload_cursor),
+                    true,
+                    allocator));
+        }
+    }
+
+    if (selected_count == 0 || loadable_cursor == 0
+        || loadable_cursor > bundle_bytes->byte_len
+        || loadable_cursor > INT64_MAX) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER,
+                r"object bundle: split carrier has no movable payloads",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                0,
+                false,
+                allocator));
+    }
+
+    uint64_t skeleton_len = bundle_bytes->byte_len - loadable_cursor;
+
+    if (skeleton_len > SIZE_MAX) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: split skeleton payload is too large",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                _n00b_obj_bundle_i64_detail_from_u64(skeleton_len),
+                true,
+                allocator));
+    }
+
+    n00b_writer_t *skeleton_writer =
+        n00b_writer_new((size_t)skeleton_len);
+    uint64_t canonical_cursor = 0;
+
+    for (size_t i = 0; i < selected_count; i++) {
+        n00b_obj_bundle_elf_split_range_t *range = &ranges[i];
+        uint64_t canonical_end = 0;
+
+        if (!_n00b_obj_bundle_range_end(range->canonical.off,
+                                        range->canonical.len,
+                                        &canonical_end)
+            || range->canonical.off < canonical_cursor) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                _n00b_obj_bundle_elf_carrier_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: split skeleton range is invalid",
+                    N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                    _n00b_obj_bundle_i64_detail_from_u64(
+                        range->canonical.off),
+                    true,
+                    allocator));
+        }
+
+        uint64_t gap_len = range->canonical.off - canonical_cursor;
+
+        n00b_writer_write_bytes(skeleton_writer,
+                                bundle_bytes->data + canonical_cursor,
+                                (size_t)gap_len);
+
+        canonical_cursor = canonical_end;
+    }
+
+    uint64_t trailing_len = bundle_bytes->byte_len - canonical_cursor;
+
+    n00b_writer_write_bytes(skeleton_writer,
+                            bundle_bytes->data + canonical_cursor,
+                            (size_t)trailing_len);
+    n00b_writer_setpos(skeleton_writer, (size_t)skeleton_len);
+
+    if (n00b_writer_has_error(skeleton_writer)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: split skeleton payload build failed",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                0,
+                false,
+                allocator));
+    }
+
+    n00b_buffer_t *skeleton = n00b_writer_finalize(skeleton_writer);
+
+    if (allocator != nullptr) {
+        skeleton = n00b_buffer_copy(skeleton, .allocator = allocator);
+    }
+
+    n00b_writer_t *writer = n00b_writer_new((size_t)loadable_cursor);
+
+    for (size_t i = 0; i < selected_count; i++) {
+        n00b_obj_bundle_elf_split_range_t *range = &ranges[i];
+
+        n00b_writer_write_bytes(writer,
+                                bundle_bytes->data + range->canonical.off,
+                                (size_t)range->canonical.len);
+    }
+
+    n00b_writer_setpos(writer, (size_t)loadable_cursor);
+
+    if (n00b_writer_has_error(writer)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: split loadable payload build failed",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                0,
+                false,
+                allocator));
+    }
+
+    *ranges_out      = ranges;
+    *range_count_out = selected_count;
+    *skeleton_out    = skeleton;
+    return n00b_result_ok(n00b_buffer_t *, n00b_writer_finalize(writer));
+}
+
+static n00b_buffer_t *
+_n00b_obj_bundle_build_elf_split_aux(
+    n00b_obj_bundle_elf_split_range_t *ranges,
+    size_t                             range_count,
+    uint64_t                           loadable_file_off,
+    n00b_allocator_t                  *allocator)
+{
+    uint64_t aux_len = 0;
+
+    if (!_n00b_obj_bundle_u64_mul((uint64_t)range_count,
+                                  N00B_OBJ_BUNDLE_ELF_SPLIT_REC_SIZE,
+                                  &aux_len)
+        || aux_len > SIZE_MAX) {
+        return nullptr;
+    }
+
+    n00b_writer_t *writer =
+        n00b_writer_new((size_t)aux_len);
+
+    n00b_writer_set_endian(writer, N00B_ENDIAN_LITTLE);
+
+    for (size_t i = 0; i < range_count; i++) {
+        n00b_obj_bundle_elf_split_range_t *range = &ranges[i];
+        uint64_t object_off = 0;
+
+        if (!_n00b_obj_bundle_u64_add(loadable_file_off,
+                                      range->loadable_payload_off,
+                                      &object_off)) {
+            return nullptr;
+        }
+
+        n00b_obj_bundle_elf_split_record_t record = {
+            .canonical = range->canonical,
+            .object = {
+                .off = object_off,
+                .len = range->canonical.len,
+            },
+        };
+
+        memcpy(record.digest, range->digest, N00B_OBJ_BUNDLE_DIGEST_LEN);
+        _n00b_obj_bundle_elf_split_record_write(writer, &record);
+    }
+
+    if (n00b_writer_has_error(writer)) {
+        return nullptr;
+    }
+
+    n00b_buffer_t *aux = n00b_writer_finalize(writer);
+
+    if (allocator != nullptr) {
+        aux = n00b_buffer_copy(aux, .allocator = allocator);
+    }
+
+    return aux;
+}
+
+static n00b_buffer_t *
+_n00b_obj_bundle_build_elf_split_descriptor_payload(
+    n00b_buffer_t     *skeleton,
+    n00b_buffer_t     *aux,
+    n00b_allocator_t  *allocator)
+{
+    uint64_t body_len = 0;
+    uint64_t total_len = 0;
+
+    if (!_n00b_obj_bundle_u64_add(skeleton->byte_len,
+                                  aux->byte_len,
+                                  &body_len)
+        || !_n00b_obj_bundle_u64_add(
+               N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE,
+               body_len,
+               &total_len)
+        || total_len > INT64_MAX) {
+        return nullptr;
+    }
+
+    n00b_writer_t *writer = n00b_writer_new((size_t)total_len);
+
+    n00b_writer_write_zeros(writer,
+                            N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE);
+    n00b_writer_write_bytes(writer, skeleton->data, skeleton->byte_len);
+    n00b_writer_write_bytes(writer, aux->data, aux->byte_len);
+    n00b_writer_setpos(writer, (size_t)total_len);
+
+    if (n00b_writer_has_error(writer)) {
+        return nullptr;
+    }
+
+    n00b_buffer_t *payload = n00b_writer_finalize(writer);
+
+    if (allocator != nullptr) {
+        payload = n00b_buffer_copy(payload, .allocator = allocator);
+    }
+
+    return payload;
+}
+
+static n00b_result_t(n00b_buffer_t *)
+_n00b_obj_bundle_write_elf_metadata_payload(
     n00b_buffer_t                    *object_bytes,
-    n00b_obj_bundle_t                *bundle,
+    n00b_buffer_t                    *payload,
     n00b_obj_bundle_replace_policy_t  replace,
     bool                              strict,
     n00b_allocator_t                 *allocator)
 {
-    auto encoded = n00b_obj_bundle_encode(bundle, .allocator = allocator);
-
-    if (n00b_result_is_err(encoded)) {
-        return OBJ_BUNDLE_ERR_PAYLOAD(
-            n00b_buffer_t *,
-            n00b_result_get_err_payload(n00b_obj_bundle_error_t *, encoded));
-    }
-
     auto parsed = _n00b_obj_bundle_parse_elf_for_write(object_bytes, allocator);
 
     if (n00b_result_is_err(parsed)) {
@@ -7311,7 +8587,7 @@ _n00b_obj_bundle_write_elf_metadata_carrier(
 
     n00b_elf_rewrite_metadata_request_t request = {
         .section_name          = r".0c001.bundle",
-        .payload               = n00b_result_get(encoded),
+        .payload               = payload,
         .file_alignment        = 8,
         .section_type          = SHT_PROGBITS,
         .section_flags         = 0,
@@ -7370,6 +8646,575 @@ _n00b_obj_bundle_write_elf_metadata_carrier(
     }
 
     return n00b_result_ok(n00b_buffer_t *, n00b_result_get(applied));
+}
+
+static n00b_result_t(n00b_buffer_t *)
+_n00b_obj_bundle_write_elf_metadata_carrier(
+    n00b_buffer_t                    *object_bytes,
+    n00b_obj_bundle_t                *bundle,
+    n00b_obj_bundle_replace_policy_t  replace,
+    bool                              strict,
+    n00b_allocator_t                 *allocator)
+{
+    auto encoded = n00b_obj_bundle_encode(bundle, .allocator = allocator);
+
+    if (n00b_result_is_err(encoded)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *, encoded));
+    }
+
+    return _n00b_obj_bundle_write_elf_metadata_payload(
+        object_bytes,
+        n00b_result_get(encoded),
+        replace,
+        strict,
+        allocator);
+}
+
+static n00b_result_t(n00b_buffer_t *)
+_n00b_obj_bundle_write_elf_loadable_carrier(
+    n00b_buffer_t                    *object_bytes,
+    n00b_obj_bundle_t                *bundle,
+    n00b_obj_bundle_replace_policy_t  replace,
+    bool                              strict,
+    n00b_allocator_t                 *allocator)
+{
+    auto encoded = n00b_obj_bundle_encode(bundle, .allocator = allocator);
+
+    if (n00b_result_is_err(encoded)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *, encoded));
+    }
+
+    n00b_buffer_t *bundle_bytes = n00b_result_get(encoded);
+    auto parsed = _n00b_obj_bundle_parse_elf_for_write(object_bytes,
+                                                       allocator);
+
+    if (n00b_result_is_err(parsed)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *, parsed));
+    }
+
+    n00b_elf_binary_t *elf = n00b_result_get(parsed);
+    auto environment = _n00b_obj_bundle_validate_elf_write_environment(
+        elf,
+        replace,
+        strict,
+        allocator);
+
+    if (n00b_result_is_err(environment)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        environment));
+    }
+
+    bool has_existing_bundle = n00b_result_get(environment);
+    uint64_t loadable_policy_flags =
+        N00B_ELF_REWRITE_ADMIT_POLICY_STRICT_LOADER_PRESERVATION
+      | N00B_ELF_REWRITE_ADMIT_POLICY_PRESERVE_OVERLAY;
+
+    if (has_existing_bundle) {
+        loadable_policy_flags |=
+            N00B_ELF_REWRITE_ADMIT_POLICY_APPEND_AFTER_OVERLAY;
+
+        if (!_n00b_obj_bundle_mask_elf_carrier_for_loadable_rewrite(elf)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                _n00b_obj_bundle_elf_carrier_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: ELF loadable replacement carrier was not found",
+                    N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+                    0,
+                    false,
+                    allocator));
+        }
+    }
+
+    n00b_elf_rewrite_loadable_request_t request = {
+        .payload          = bundle_bytes,
+        .segment_flags    = PF_R | PF_X,
+        .file_alignment   = 8,
+        .vaddr_alignment  = 0x1000,
+        .p_memsz          = bundle_bytes->byte_len,
+        .phtab_strategy   = has_existing_bundle
+            ? N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE
+            : N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST,
+        .policy           = {
+            .flags = loadable_policy_flags,
+        },
+    };
+
+    auto plan_result = n00b_elf_rewrite_plan_loadable_insert(
+        elf,
+        &request,
+        .allocator = allocator);
+
+    if (n00b_result_is_err(plan_result)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+                r"object bundle: ELF loadable rewrite planning failed",
+                N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+                n00b_result_get_err(plan_result),
+                true,
+                allocator));
+    }
+
+    n00b_elf_rewrite_loadable_plan_t *plan = n00b_result_get(plan_result);
+
+    if (plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_from_loadable_plan(plan, allocator));
+    }
+
+    auto loadable_applied = n00b_elf_rewrite_apply_loadable_insert_plan(
+        elf,
+        plan,
+        .allocator = allocator);
+
+    if (n00b_result_is_err(loadable_applied)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+                r"object bundle: ELF loadable rewrite apply failed",
+                N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+                n00b_result_get_err(loadable_applied),
+                true,
+                allocator));
+    }
+
+    uint8_t payload_digest[N00B_OBJ_BUNDLE_DIGEST_LEN] = {};
+
+    _n00b_obj_bundle_sha256_bytes(bundle_bytes->data,
+                                  bundle_bytes->byte_len,
+                                  payload_digest);
+
+    n00b_obj_bundle_elf_descriptor_t descriptor = {
+        .carrier    = N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+        .major      = N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAJOR,
+        .minor      = N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MINOR,
+        .header_size = N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE,
+        .flags      = 0,
+        .payload    = {
+            .off = plan->payload_placement.file_offset,
+            .len = bundle_bytes->byte_len,
+        },
+        .aux = {},
+        .aux_record_count = 0,
+        .reserved0 = 0,
+        .reserved1 = 0,
+    };
+
+    memcpy(descriptor.payload_digest,
+           payload_digest,
+           N00B_OBJ_BUNDLE_DIGEST_LEN);
+
+    n00b_buffer_t *descriptor_payload =
+        _n00b_obj_bundle_elf_descriptor_encode(&descriptor, allocator);
+
+    if (descriptor_payload == nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: ELF loadable descriptor build failed",
+                N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+                0,
+                false,
+                allocator));
+    }
+
+    auto descriptor_applied = _n00b_obj_bundle_write_elf_metadata_payload(
+        n00b_result_get(loadable_applied),
+        descriptor_payload,
+        replace,
+        strict,
+        allocator);
+
+    if (n00b_result_is_err(descriptor_applied)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        descriptor_applied));
+    }
+
+    n00b_buffer_t *final_bytes = n00b_result_get(descriptor_applied);
+    auto           readback =
+        _n00b_obj_bundle_read_elf_metadata_carrier(final_bytes,
+                                                   strict,
+                                                   allocator);
+
+    if (n00b_result_is_err(readback)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        readback));
+    }
+
+    return n00b_result_ok(n00b_buffer_t *, final_bytes);
+}
+
+static n00b_result_t(n00b_buffer_t *)
+_n00b_obj_bundle_write_elf_split_carrier(
+    n00b_buffer_t                    *object_bytes,
+    n00b_obj_bundle_t                *bundle,
+    n00b_obj_bundle_replace_policy_t  replace,
+    bool                              strict,
+    n00b_allocator_t                 *allocator)
+{
+    auto encoded = n00b_obj_bundle_encode(bundle, .allocator = allocator);
+
+    if (n00b_result_is_err(encoded)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *, encoded));
+    }
+
+    n00b_buffer_t *bundle_bytes = n00b_result_get(encoded);
+    n00b_obj_bundle_elf_split_range_t *ranges = nullptr;
+    size_t range_count = 0;
+    n00b_buffer_t *skeleton = nullptr;
+    auto split_payload = _n00b_obj_bundle_build_elf_split_payloads(
+        bundle,
+        bundle_bytes,
+        &ranges,
+        &range_count,
+        &skeleton,
+        allocator);
+
+    if (n00b_result_is_err(split_payload)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        split_payload));
+    }
+
+    n00b_buffer_t *loadable_payload = n00b_result_get(split_payload);
+    auto parsed = _n00b_obj_bundle_parse_elf_for_write(object_bytes,
+                                                       allocator);
+
+    if (n00b_result_is_err(parsed)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *, parsed));
+    }
+
+    n00b_elf_binary_t *elf = n00b_result_get(parsed);
+    auto environment = _n00b_obj_bundle_validate_elf_write_environment(
+        elf,
+        replace,
+        strict,
+        allocator);
+
+    if (n00b_result_is_err(environment)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        environment));
+    }
+
+    bool has_existing_bundle = n00b_result_get(environment);
+    uint64_t loadable_policy_flags =
+        N00B_ELF_REWRITE_ADMIT_POLICY_STRICT_LOADER_PRESERVATION
+      | N00B_ELF_REWRITE_ADMIT_POLICY_PRESERVE_OVERLAY;
+
+    if (has_existing_bundle) {
+        loadable_policy_flags |=
+            N00B_ELF_REWRITE_ADMIT_POLICY_APPEND_AFTER_OVERLAY;
+
+        if (!_n00b_obj_bundle_mask_elf_carrier_for_loadable_rewrite(elf)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                _n00b_obj_bundle_elf_carrier_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: ELF split replacement carrier was not found",
+                    N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                    0,
+                    false,
+                    allocator));
+        }
+    }
+
+    n00b_elf_rewrite_loadable_request_t loadable_request = {
+        .payload          = loadable_payload,
+        .segment_flags    = PF_R | PF_X,
+        .file_alignment   = 8,
+        .vaddr_alignment  = 0x1000,
+        .p_memsz          = loadable_payload->byte_len,
+        .phtab_strategy   = has_existing_bundle
+            ? N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE
+            : N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST,
+        .policy           = {
+            .flags = loadable_policy_flags,
+        },
+    };
+
+    auto loadable_plan_result = n00b_elf_rewrite_plan_loadable_insert(
+        elf,
+        &loadable_request,
+        .allocator = allocator);
+
+    if (n00b_result_is_err(loadable_plan_result)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+                r"object bundle: ELF split loadable rewrite planning failed",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                n00b_result_get_err(loadable_plan_result),
+                true,
+                allocator));
+    }
+
+    n00b_elf_rewrite_loadable_plan_t *loadable_plan =
+        n00b_result_get(loadable_plan_result);
+
+    if (loadable_plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_from_loadable_plan_for_carrier(
+                loadable_plan,
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                allocator));
+    }
+
+    auto loadable_applied = n00b_elf_rewrite_apply_loadable_insert_plan(
+        elf,
+        loadable_plan,
+        .allocator = allocator);
+
+    if (n00b_result_is_err(loadable_applied)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+                r"object bundle: ELF split loadable rewrite apply failed",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                n00b_result_get_err(loadable_applied),
+                true,
+                allocator));
+    }
+
+    n00b_buffer_t *aux = _n00b_obj_bundle_build_elf_split_aux(
+        ranges,
+        range_count,
+        loadable_plan->payload_placement.file_offset,
+        allocator);
+
+    if (aux == nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: ELF split reconstruction records failed",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                0,
+                false,
+                allocator));
+    }
+
+    n00b_buffer_t *descriptor_payload =
+        _n00b_obj_bundle_build_elf_split_descriptor_payload(skeleton,
+                                                           aux,
+                                                           allocator);
+
+    if (descriptor_payload == nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: ELF split descriptor build failed",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                0,
+                false,
+                allocator));
+    }
+
+    n00b_buffer_t *loadable_output = n00b_result_get(loadable_applied);
+    auto descriptor_parsed = _n00b_obj_bundle_parse_elf_for_write(
+        loadable_output,
+        allocator);
+
+    if (n00b_result_is_err(descriptor_parsed)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        descriptor_parsed));
+    }
+
+    n00b_elf_binary_t *descriptor_elf = n00b_result_get(descriptor_parsed);
+    auto descriptor_environment =
+        _n00b_obj_bundle_validate_elf_write_environment(
+            descriptor_elf,
+            replace,
+            strict,
+            allocator);
+
+    if (n00b_result_is_err(descriptor_environment)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        descriptor_environment));
+    }
+
+    n00b_elf_rewrite_metadata_request_t descriptor_request = {
+        .section_name          = r".0c001.bundle",
+        .payload               = descriptor_payload,
+        .file_alignment        = 8,
+        .section_type          = SHT_PROGBITS,
+        .section_flags         = 0,
+        .preferred_file_offset = n00b_option_none(uint64_t),
+        .policy                = {
+            .flags = N00B_ELF_REWRITE_ADMIT_POLICY_STRICT_LOADER_PRESERVATION
+                   | N00B_ELF_REWRITE_ADMIT_POLICY_PRESERVE_OVERLAY,
+        },
+    };
+    bool has_existing_descriptor = n00b_result_get(descriptor_environment);
+    auto descriptor_plan_result =
+        has_existing_descriptor && replace == N00B_OBJ_BUNDLE_REPLACE_EXISTING
+            ? n00b_elf_rewrite_plan_object_bundle_replace(
+                  descriptor_elf,
+                  &descriptor_request,
+                  .allocator = allocator)
+            : n00b_elf_rewrite_plan_object_bundle_insert(
+                  descriptor_elf,
+                  &descriptor_request,
+                  .allocator = allocator);
+
+    if (n00b_result_is_err(descriptor_plan_result)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+                r"object bundle: ELF split descriptor rewrite planning failed",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                n00b_result_get_err(descriptor_plan_result),
+                true,
+                allocator));
+    }
+
+    n00b_elf_rewrite_plan_t *descriptor_plan =
+        n00b_result_get(descriptor_plan_result);
+
+    if (descriptor_plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_from_rewrite_plan(descriptor_plan,
+                                                     allocator));
+    }
+
+    uint64_t skeleton_file_off = 0;
+    uint64_t aux_file_off      = 0;
+    uint64_t aux_file_end      = 0;
+
+    if (!_n00b_obj_bundle_u64_add(
+            descriptor_plan->payload_offset,
+            N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE,
+            &skeleton_file_off)
+        || !_n00b_obj_bundle_u64_add(skeleton_file_off,
+                                     skeleton->byte_len,
+                                     &aux_file_off)
+        || !_n00b_obj_bundle_u64_add(aux_file_off,
+                                     aux->byte_len,
+                                     &aux_file_end)
+        || aux_file_end != descriptor_plan->payload_end) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: ELF split descriptor placement is invalid",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                _n00b_obj_bundle_i64_detail_from_u64(
+                    descriptor_plan->payload_offset),
+                true,
+                allocator));
+    }
+
+    uint8_t skeleton_digest[N00B_OBJ_BUNDLE_DIGEST_LEN] = {};
+
+    _n00b_obj_bundle_sha256_bytes(skeleton->data,
+                                  skeleton->byte_len,
+                                  skeleton_digest);
+
+    n00b_obj_bundle_elf_descriptor_t descriptor = {
+        .carrier    = N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+        .major      = N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MAJOR,
+        .minor      = N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_MINOR,
+        .header_size = N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE,
+        .flags      = 0,
+        .payload    = {
+            .off = skeleton_file_off,
+            .len = skeleton->byte_len,
+        },
+        .aux = {
+            .off = aux_file_off,
+            .len = aux->byte_len,
+        },
+        .aux_record_count = range_count,
+        .reserved0 = 0,
+        .reserved1 = 0,
+    };
+
+    memcpy(descriptor.payload_digest,
+           skeleton_digest,
+           N00B_OBJ_BUNDLE_DIGEST_LEN);
+
+    n00b_buffer_t *descriptor_header =
+        _n00b_obj_bundle_elf_descriptor_encode(&descriptor, allocator);
+
+    if (descriptor_header == nullptr) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_BUILD,
+                r"object bundle: ELF split descriptor header build failed",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                0,
+                false,
+                allocator));
+    }
+
+    memcpy(descriptor_payload->data,
+           descriptor_header->data,
+           N00B_OBJ_BUNDLE_ELF_DESCRIPTOR_HEADER_SIZE);
+
+    auto descriptor_applied = n00b_elf_rewrite_apply_object_bundle_plan(
+        descriptor_elf,
+        descriptor_plan,
+        .allocator = allocator);
+
+    if (n00b_result_is_err(descriptor_applied)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_elf_carrier_error(
+                N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+                r"object bundle: ELF split descriptor rewrite apply failed",
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                n00b_result_get_err(descriptor_applied),
+                true,
+                allocator));
+    }
+
+    n00b_buffer_t *final_bytes = n00b_result_get(descriptor_applied);
+    auto readback = _n00b_obj_bundle_read_elf_metadata_carrier(final_bytes,
+                                                               strict,
+                                                               allocator);
+
+    if (n00b_result_is_err(readback)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                        readback));
+    }
+
+    return n00b_result_ok(n00b_buffer_t *, final_bytes);
 }
 
 n00b_result_t(n00b_obj_bundle_t *)
@@ -7494,21 +9339,23 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
         effective_format = n00b_detect_format(stream);
     }
 
-    if (carrier == N00B_OBJ_BUNDLE_CARRIER_LOADABLE
-        || carrier == N00B_OBJ_BUNDLE_CARRIER_SPLIT) {
-        return OBJ_BUNDLE_ERR_PAYLOAD(
-            n00b_buffer_t *,
-            _n00b_obj_bundle_error_with_format_carrier(
-                N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_CARRIER,
-                r"object bundle: requested carrier is unsupported",
-                effective_format,
-                effective_format != N00B_FMT_UNKNOWN,
-                carrier,
-                true,
-                allocator));
-    }
-
     if (effective_format == N00B_FMT_ELF) {
+        if (carrier == N00B_OBJ_BUNDLE_CARRIER_LOADABLE) {
+            return _n00b_obj_bundle_write_elf_loadable_carrier(object_bytes,
+                                                               bundle,
+                                                               replace,
+                                                               strict,
+                                                               allocator);
+        }
+
+        if (carrier == N00B_OBJ_BUNDLE_CARRIER_SPLIT) {
+            return _n00b_obj_bundle_write_elf_split_carrier(object_bytes,
+                                                            bundle,
+                                                            replace,
+                                                            strict,
+                                                            allocator);
+        }
+
         return _n00b_obj_bundle_write_elf_metadata_carrier(object_bytes,
                                                            bundle,
                                                            replace,

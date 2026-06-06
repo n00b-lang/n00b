@@ -78,10 +78,35 @@ typedef enum {
     N00B_OBJ_BUNDLE_ARTIFACT_OPAQUE,
 } n00b_obj_bundle_artifact_kind_t;
 
+/**
+ * @brief Carrier placement requested for object-bundle read/write APIs.
+ *
+ * The public API stays format-neutral. Backends map these policies onto their
+ * native carriers; for ELF, `.0c001.bundle` is the selected carrier state.
+ */
 typedef enum {
+    /**
+     * Backend default carrier. ELF writes raw canonical metadata bytes in
+     * `.0c001.bundle`; it does not silently choose loadable or split carriers.
+     */
     N00B_OBJ_BUNDLE_CARRIER_AUTO,
+    /**
+     * Raw canonical object-bundle bytes in the metadata carrier. ELF stores
+     * the canonical bundle directly in non-loadable `.0c001.bundle`.
+     */
     N00B_OBJ_BUNDLE_CARRIER_METADATA,
+    /**
+     * Descriptor-backed loadable carrier. ELF stores a descriptor in
+     * `.0c001.bundle` and the complete canonical bundle bytes in a new
+     * `PT_LOAD`; readers validate descriptor bounds and digest before decode.
+     */
     N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+    /**
+     * Descriptor-backed split carrier. ELF stores a descriptor/skeleton in
+     * `.0c001.bundle` and selected executable-compatible payload slices in a
+     * new `PT_LOAD`; readers validate reconstruction records and rebuild the
+     * canonical bundle bytes before decode.
+     */
     N00B_OBJ_BUNDLE_CARRIER_SPLIT,
 } n00b_obj_bundle_carrier_t;
 
@@ -289,6 +314,12 @@ n00b_obj_bundle_decode(n00b_buffer_t *bundle_bytes) _kargs {
  * @post On success, returns the unique valid object bundle carried by the
  *       input object file.
  * @post The input buffer is not modified.
+ * @post Descriptor-backed carriers are validated before canonical bundle
+ *       decoding. For ELF, raw canonical `.0c001.bundle` bytes remain the
+ *       metadata carrier; descriptor `.0c001.bundle` bytes select loadable or
+ *       split payload/reconstruction state.
+ * @post Readers follow only the selected carrier state. Stale loadable bytes
+ *       left behind by a later descriptor or metadata replacement are ignored.
  * @kw format Object format, or `N00B_FMT_UNKNOWN` for auto-detect.
  * @kw strict Forwarded to manifest decode/canonical validation; default `true`.
  *      Neighbor foreign/reserved/Chalk/guard sections do not block reading a
@@ -309,6 +340,20 @@ n00b_obj_bundle_read(n00b_buffer_t *object_bytes) _kargs {
  *       selected carrier.
  * @post The input object buffer and @p bundle are not modified.
  * @post All non-planned object-file byte ranges are preserved.
+ * @post `AUTO` writes the backend default carrier. ELF keeps `AUTO` as raw
+ *       metadata and explicit `METADATA` as raw canonical `.0c001.bundle`
+ *       bytes, not descriptor-wrapped bytes.
+ * @post Explicit `LOADABLE` and `SPLIT` writes use descriptor-backed carriers
+ *       when the backend supports them. ELF stores the authoritative descriptor
+ *       in `.0c001.bundle`; stale bytes from an earlier loadable or split
+ *       carrier may remain in non-selected object ranges and are ignored by
+ *       later reads.
+ * @post Existing N00b-owned metadata, loadable, or split carriers require
+ *       `replace = N00B_OBJ_BUNDLE_REPLACE_EXISTING` before replacement.
+ * @post Carrier, descriptor, rewrite, replacement, bounds, digest, and
+ *       canonical-decode failures return structured
+ *       @c n00b_obj_bundle_error_t payloads with format/carrier/detail context
+ *       when available.
  * @kw format Object format, or `N00B_FMT_UNKNOWN` for auto-detect.
  * @kw carrier Carrier selection policy; default
  *      `N00B_OBJ_BUNDLE_CARRIER_AUTO`.
@@ -339,6 +384,10 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
  *       inspect bytes-written, temp-path, commit, cleanup, and mode facts via
  *       the object-file sink result accessors.
  * @post The input object buffer and @p bundle are not modified.
+ * @post Carrier selection, descriptor validation, replacement policy, raw
+ *       metadata default behavior, descriptor-backed loadable/split writes,
+ *       stale loadable-byte handling, and structured rewrite errors are the
+ *       same as @ref n00b_obj_bundle_write.
  * @post Rewrite failures carry a @c n00b_obj_bundle_error_t payload. Sink
  *       failures carry a @c n00b_objfile_sink_error_t payload.
  * @kw format Object format, or `N00B_FMT_UNKNOWN` for auto-detect.
