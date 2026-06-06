@@ -115,6 +115,18 @@ typedef enum {
     N00B_OBJ_BUNDLE_REPLACE_EXISTING,
 } n00b_obj_bundle_replace_policy_t;
 
+/**
+ * @brief Host-entrypoint mutation requested by object-bundle writes.
+ *
+ * The default preserves the input object's entrypoint. Host-entrypoint
+ * mutation is an explicit opt-in path; unsupported backends or phases report
+ * structured errors before emitting rewritten object bytes.
+ */
+typedef enum {
+    N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE,
+    N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT,
+} n00b_obj_bundle_entrypoint_policy_t;
+
 typedef enum {
     N00B_OBJ_BUNDLE_POLICY_ENFORCE,
     N00B_OBJ_BUNDLE_POLICY_VALIDATE_ONLY,
@@ -350,6 +362,18 @@ n00b_obj_bundle_read(n00b_buffer_t *object_bytes) _kargs {
  *       later reads.
  * @post Existing N00b-owned metadata, loadable, or split carriers require
  *       `replace = N00B_OBJ_BUNDLE_REPLACE_EXISTING` before replacement.
+ * @post By default, and with
+ *       `entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE`, the host object
+ *       entrypoint is preserved. The write API does not launch a process,
+ *       evaluate runtime entrypoint behavior, or patch architecture-specific
+ *       trampoline bytes.
+ * @post Host-entrypoint mutation is caller opt-in. ELF64 little-endian
+ *       x86-64 `LOADABLE` and `SPLIT` writes can redirect `e_entry` to the
+ *       selected executable artifact after execution-policy evaluation. `AUTO`
+ *       and `METADATA` do not upgrade carriers for entrypoint mutation and
+ *       return structured unsupported-mode errors before emitting output.
+ *       Unsupported object formats, architectures, and unsafe targets also
+ *       reject before emission.
  * @post Carrier, descriptor, rewrite, replacement, bounds, digest, and
  *       canonical-decode failures return structured
  *       @c n00b_obj_bundle_error_t payloads with format/carrier/detail context
@@ -362,6 +386,19 @@ n00b_obj_bundle_read(n00b_buffer_t *object_bytes) _kargs {
  * @kw strict Forwarded to existing-carrier manifest validation; default
  *      `true`. WP-010 write policy rejects reserved or foreign wrapped inputs
  *      regardless of this caller control.
+ * @kw entrypoint Host-entrypoint mutation policy; default
+ *      `N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE`.
+ * @kw entrypoint_selector Optional execution selector used for opt-in
+ *      host-entrypoint target selection; only valid with host-entrypoint
+ *      mutation. Selector mapping wins over the default executable; default
+ *      `nullptr`.
+ * @kw entrypoint_strict_selector Whether an unmatched host-entrypoint selector
+ *      should reject rather than fall back to the default executable; only
+ *      valid with host-entrypoint mutation; default `false`.
+ * @kw entrypoint_policy_mode Policy mode used while evaluating execution
+ *      policy for opt-in host-entrypoint target planning; non-default values
+ *      are only valid with host-entrypoint mutation; default
+ *      `N00B_OBJ_BUNDLE_POLICY_ENFORCE`.
  * @kw allocator Optional allocator for the returned buffer; default `nullptr`.
  */
 extern n00b_result_t(n00b_buffer_t *)
@@ -371,6 +408,12 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
     n00b_obj_bundle_carrier_t        carrier   = N00B_OBJ_BUNDLE_CARRIER_AUTO;
     n00b_obj_bundle_replace_policy_t replace   = N00B_OBJ_BUNDLE_REJECT_EXISTING;
     bool                             strict    = true;
+    n00b_obj_bundle_entrypoint_policy_t entrypoint =
+        N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE;
+    n00b_string_t                   *entrypoint_selector = nullptr;
+    bool                             entrypoint_strict_selector = false;
+    n00b_obj_bundle_policy_mode_t    entrypoint_policy_mode =
+        N00B_OBJ_BUNDLE_POLICY_ENFORCE;
     n00b_allocator_t                *allocator = nullptr;
 };
 
@@ -386,7 +429,8 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
  * @post The input object buffer and @p bundle are not modified.
  * @post Carrier selection, descriptor validation, replacement policy, raw
  *       metadata default behavior, descriptor-backed loadable/split writes,
- *       stale loadable-byte handling, and structured rewrite errors are the
+ *       stale loadable-byte handling, host-entrypoint preservation or opt-in
+ *       mutation/rejection behavior, and structured rewrite errors are the
  *       same as @ref n00b_obj_bundle_write.
  * @post Rewrite failures carry a @c n00b_obj_bundle_error_t payload. Sink
  *       failures carry a @c n00b_objfile_sink_error_t payload.
@@ -397,6 +441,19 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
  *      default `N00B_OBJ_BUNDLE_REJECT_EXISTING`.
  * @kw strict Forwarded to existing-carrier manifest validation; default
  *      `true`.
+ * @kw entrypoint Host-entrypoint mutation policy; default
+ *      `N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE`.
+ * @kw entrypoint_selector Optional execution selector used for opt-in
+ *      host-entrypoint target selection; only valid with host-entrypoint
+ *      mutation. Selector mapping wins over the default executable; default
+ *      `nullptr`.
+ * @kw entrypoint_strict_selector Whether an unmatched host-entrypoint selector
+ *      should reject rather than fall back to the default executable; only
+ *      valid with host-entrypoint mutation; default `false`.
+ * @kw entrypoint_policy_mode Policy mode used while evaluating execution
+ *      policy for opt-in host-entrypoint target planning; non-default values
+ *      are only valid with host-entrypoint mutation; default
+ *      `N00B_OBJ_BUNDLE_POLICY_ENFORCE`.
  * @kw sink_mode Sink persistence mode; default
  *      `N00B_OBJFILE_SINK_MODE_ATOMIC`.
  * @kw overwrite Filesystem destination policy; default
@@ -415,6 +472,12 @@ n00b_obj_bundle_write_file(n00b_buffer_t     *object_bytes,
     n00b_obj_bundle_carrier_t        carrier   = N00B_OBJ_BUNDLE_CARRIER_AUTO;
     n00b_obj_bundle_replace_policy_t replace   = N00B_OBJ_BUNDLE_REJECT_EXISTING;
     bool                             strict    = true;
+    n00b_obj_bundle_entrypoint_policy_t entrypoint =
+        N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE;
+    n00b_string_t                   *entrypoint_selector = nullptr;
+    bool                             entrypoint_strict_selector = false;
+    n00b_obj_bundle_policy_mode_t    entrypoint_policy_mode =
+        N00B_OBJ_BUNDLE_POLICY_ENFORCE;
     n00b_objfile_sink_mode_t         sink_mode = N00B_OBJFILE_SINK_MODE_ATOMIC;
     n00b_objfile_sink_overwrite_t    overwrite = N00B_OBJFILE_SINK_REJECT_EXISTING;
     n00b_option_t(uint32_t)          file_mode = n00b_option_none(uint32_t);

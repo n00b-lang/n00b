@@ -10,6 +10,9 @@
 #define N00B_ELF64_EHDR_SIZE   64u
 #define N00B_ELF64_PHDR_SIZE   56u
 #define N00B_ELF64_SHDR_SIZE   64u
+#define N00B_ELF64_E_ENTRY_OFF 24u
+#define N00B_ELF64_E_PHOFF_OFF 32u
+#define N00B_ELF64_E_PHNUM_OFF 56u
 #define N00B_ELF_LOAD_PAGE_SIZE 0x1000u
 #define N00B_ELF_REWRITE_MAX_PATCHES 8u
 
@@ -910,6 +913,15 @@ new_loadable_plan(n00b_allocator_t *allocator)
     return n00b_alloc_with_opts(
         n00b_elf_rewrite_loadable_plan_t,
         &(n00b_alloc_opts_t){.allocator = allocator});
+}
+
+static void
+record_loadable_entrypoint_facts(n00b_elf_rewrite_loadable_plan_t *plan,
+                                 n00b_elf_binary_t                *bin)
+{
+    plan->original_entrypoint    = bin->header.entry;
+    plan->replacement_entrypoint = bin->header.entry;
+    plan->entrypoint_patch_enabled = false;
 }
 
 static n00b_elf_rewrite_loadable_relocation_t
@@ -2174,6 +2186,7 @@ plan_relocated_loadable(
     plan->phtab_relocation           = relocation;
     plan->source_binary              = bin;
     plan->payload                    = request->payload;
+    record_loadable_entrypoint_facts(plan, bin);
     plan->file_size                  = admission.file_size;
     plan->original_segment_count     = admission.original_segment_count;
     plan->new_segment_count          = admission.new_segment_count;
@@ -2459,6 +2472,7 @@ plan_in_place_loadable(
     plan->phtab_relocation           = no_loadable_relocation();
     plan->source_binary              = bin;
     plan->payload                    = request->payload;
+    record_loadable_entrypoint_facts(plan, bin);
     plan->file_size                  = admission.file_size;
     plan->original_segment_count     = admission.original_segment_count;
     plan->new_segment_count          = admission.new_segment_count;
@@ -2608,6 +2622,7 @@ n00b_elf_rewrite_plan_loadable_insert(
     plan->phtab_relocation           = no_loadable_relocation();
     plan->source_binary              = bin;
     plan->payload                    = request->payload;
+    record_loadable_entrypoint_facts(plan, bin);
     plan->file_size                  = admission.file_size;
     plan->original_segment_count     = admission.original_segment_count;
     plan->new_segment_count          = admission.new_segment_count;
@@ -2619,6 +2634,60 @@ n00b_elf_rewrite_plan_loadable_insert(
         admission.entrypoint_policy_deferred;
 
     return n00b_result_ok(n00b_elf_rewrite_loadable_plan_t *, plan);
+}
+
+n00b_result_t(bool)
+n00b_elf_rewrite_loadable_plan_enable_entrypoint(
+    n00b_elf_rewrite_loadable_plan_t *plan,
+    uint64_t                          replacement_entrypoint)
+{
+    if (plan == nullptr) {
+        return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_NULL_PLAN);
+    }
+
+    if (plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+    }
+
+    if (plan->phtab_strategy == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_NONE
+        || plan->phtab_strategy
+               == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_DEFERRED) {
+        return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN);
+    }
+
+    if (plan->source_binary == nullptr
+        || plan->source_binary->header.ehsize != N00B_ELF64_EHDR_SIZE
+        || plan->source_binary->header.entry != plan->original_entrypoint
+        || plan->payload_placement.kind
+               != N00B_ELF_REWRITE_LOADABLE_PLACEMENT_LOADABLE_PAYLOAD) {
+        return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    switch (plan->phtab_strategy) {
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST:
+        if (plan->phtab_adjustment.status
+                != N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_ACCEPTED
+            || plan->phtab_placement.kind
+                   != N00B_ELF_REWRITE_LOADABLE_PLACEMENT_IN_PLACE_PHTAB) {
+            return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_APPLY);
+        }
+        break;
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE:
+        if (plan->phtab_relocation.status
+                != N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED
+            || plan->phtab_placement.kind
+                   != N00B_ELF_REWRITE_LOADABLE_PLACEMENT_RELOCATED_PHTAB) {
+            return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_APPLY);
+        }
+        break;
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_NONE:
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_DEFERRED:
+        return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN);
+    }
+
+    plan->replacement_entrypoint = replacement_entrypoint;
+    plan->entrypoint_patch_enabled = true;
+    return n00b_result_ok(bool, true);
 }
 
 static bool
@@ -3815,18 +3884,26 @@ validate_loadable_patch_set(n00b_elf_rewrite_loadable_plan_t *plan,
 static bool
 patch_output_loadable_header(n00b_buffer_t     *out,
                              n00b_elf_binary_t *bin,
-                             uint64_t           phoff,
-                             uint64_t           phnum)
+                             n00b_elf_rewrite_loadable_plan_t *plan,
+                             uint64_t           phoff)
 {
-    if (out->byte_len < N00B_ELF64_EHDR_SIZE || phnum > UINT16_MAX) {
+    if (out->byte_len < N00B_ELF64_EHDR_SIZE
+        || plan->new_segment_count > UINT16_MAX) {
         return false;
     }
 
     bool     big = is_big_endian(bin);
     uint8_t *p   = (uint8_t *)out->data;
 
-    write_u64(p + 32, phoff, big);
-    write_u16(p + 56, (uint16_t)phnum, big);
+    if (plan->entrypoint_patch_enabled) {
+        write_u64(p + N00B_ELF64_E_ENTRY_OFF,
+                  plan->replacement_entrypoint,
+                  big);
+    }
+    write_u64(p + N00B_ELF64_E_PHOFF_OFF, phoff, big);
+    write_u16(p + N00B_ELF64_E_PHNUM_OFF,
+              (uint16_t)plan->new_segment_count,
+              big);
     return true;
 }
 
@@ -4059,6 +4136,7 @@ loadable_source_matches_in_place(n00b_elf_binary_t *bin,
                          &original_phtab_end)
         || adj->status != N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_ACCEPTED
         || !adj->pt_phdr_present
+        || bin->header.entry != plan->original_entrypoint
         || adj->original_phtab_offset != bin->header.phoff
         || adj->original_phtab_size != phtab_size
         || original_phtab_end != phtab_end
@@ -4105,6 +4183,7 @@ loadable_source_matches_relocated(n00b_elf_binary_t *bin,
         || rel->original_phtab_offset != bin->header.phoff
         || rel->original_phtab_size != phtab_size
         || rel->original_phtab_end != phtab_end
+        || bin->header.entry != plan->original_entrypoint
         || rel->elf_header_entry != bin->header.entry
         || rel->pt_phdr_index >= bin->num_segments) {
         return false;
@@ -4137,6 +4216,8 @@ loadable_source_binary_matches(n00b_elf_binary_t *bin,
         || plan->admission.original_segment_count
                != plan->original_segment_count
         || plan->admission.new_segment_count != plan->new_segment_count
+        || (!plan->entrypoint_patch_enabled
+            && plan->replacement_entrypoint != plan->original_entrypoint)
         || bin->num_segments != plan->original_segment_count
         || bin->header.phnum != plan->original_segment_count
         || bin->header.phentsize != N00B_ELF64_PHDR_SIZE
@@ -4165,6 +4246,222 @@ loadable_source_binary_matches(n00b_elf_binary_t *bin,
     }
 
     return false;
+}
+
+static n00b_elf_rewrite_host_entrypoint_target_t
+host_entrypoint_rejected(
+    n00b_elf_binary_t *bin,
+    n00b_elf_rewrite_loadable_plan_t *plan,
+    n00b_elf_rewrite_host_entrypoint_rejection_reason_t reason)
+{
+    n00b_elf_rewrite_host_entrypoint_target_t target = {
+        .outcome          = N00B_ELF_REWRITE_PLAN_REJECTED,
+        .rejection_reason = reason,
+    };
+
+    if (plan != nullptr) {
+        target.original_entrypoint    = plan->original_entrypoint;
+        target.replacement_entrypoint = plan->replacement_entrypoint;
+        target.payload_file_offset    = plan->payload_placement.file_offset;
+        target.payload_file_end       = plan->payload_placement.file_end;
+        target.payload_vaddr          = plan->payload_placement.vaddr;
+        target.payload_vaddr_end      = plan->payload_placement.vaddr_end;
+        target.payload_memory_size    = plan->p_memsz;
+        if (plan->payload != nullptr) {
+            target.payload_file_size = (uint64_t)plan->payload->byte_len;
+        }
+    } else if (bin != nullptr) {
+        target.original_entrypoint    = bin->header.entry;
+        target.replacement_entrypoint = bin->header.entry;
+    }
+
+    return target;
+}
+
+n00b_result_t(n00b_elf_rewrite_host_entrypoint_target_t)
+n00b_elf_rewrite_plan_host_entrypoint_target(
+    n00b_elf_binary_t                  *bin,
+    n00b_elf_rewrite_loadable_plan_t   *plan,
+    uint64_t                            target_payload_offset,
+    uint64_t                            target_size)
+{
+    if (bin == nullptr) {
+        return n00b_result_err(n00b_elf_rewrite_host_entrypoint_target_t,
+                               N00B_ELF_REWRITE_ERR_NULL_BINARY);
+    }
+
+    if (plan == nullptr) {
+        return n00b_result_err(n00b_elf_rewrite_host_entrypoint_target_t,
+                               N00B_ELF_REWRITE_ERR_NULL_PLAN);
+    }
+
+    if (plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_PLAN));
+    }
+
+    if (plan->phtab_strategy == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_NONE
+        || plan->phtab_strategy
+               == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_DEFERRED
+        || plan->payload == nullptr
+        || plan->payload->byte_len == 0
+        || plan->payload_placement.kind
+               != N00B_ELF_REWRITE_LOADABLE_PLACEMENT_LOADABLE_PAYLOAD) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_PLAN));
+    }
+
+    if (bin->header.ident[EI_CLASS] != ELFCLASS64) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_CLASS));
+    }
+
+    if (bin->header.ident[EI_DATA] != ELFDATA2LSB) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_ENDIAN));
+    }
+
+    if (bin->header.machine != EM_X86_64) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_MACHINE));
+    }
+
+    if ((plan->segment_flags & PF_X) == 0) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_NON_EXECUTABLE));
+    }
+
+    if (!loadable_source_binary_matches(bin, plan)) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_PLAN));
+    }
+
+    uint64_t target_payload_end;
+    if (target_size == 0) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_TARGET_OUT_OF_RANGE));
+    }
+
+    if (!checked_add_u64(target_payload_offset,
+                         target_size,
+                         &target_payload_end)) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_OVERFLOW));
+    }
+
+    if (target_payload_end > plan->p_memsz) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_TARGET_OUT_OF_RANGE));
+    }
+
+    if (target_payload_offset >= (uint64_t)plan->payload->byte_len
+        || target_payload_end > (uint64_t)plan->payload->byte_len) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_TARGET_MEMORY_ONLY));
+    }
+
+    uint64_t target_file_offset;
+    uint64_t target_file_end;
+    uint64_t target_vaddr;
+    uint64_t target_vaddr_end;
+    if (!checked_add_u64(plan->payload_placement.file_offset,
+                         target_payload_offset,
+                         &target_file_offset)
+        || !checked_add_u64(plan->payload_placement.file_offset,
+                            target_payload_end,
+                            &target_file_end)
+        || !checked_add_u64(plan->payload_placement.vaddr,
+                            target_payload_offset,
+                            &target_vaddr)
+        || !checked_add_u64(plan->payload_placement.vaddr,
+                            target_payload_end,
+                            &target_vaddr_end)) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_OVERFLOW));
+    }
+
+    if (target_file_offset < plan->payload_placement.file_offset
+        || target_file_end > plan->payload_placement.file_end
+        || target_vaddr < plan->payload_placement.vaddr
+        || target_vaddr_end > plan->payload_placement.vaddr_end) {
+        return n00b_result_ok(
+            n00b_elf_rewrite_host_entrypoint_target_t,
+            host_entrypoint_rejected(
+                bin,
+                plan,
+                N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_TARGET_OUT_OF_RANGE));
+    }
+
+    n00b_elf_rewrite_host_entrypoint_target_t target = {
+        .outcome               = N00B_ELF_REWRITE_PLAN_ACCEPTED,
+        .rejection_reason      = N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_NONE,
+        .original_entrypoint   = plan->original_entrypoint,
+        .replacement_entrypoint = target_vaddr,
+        .target_payload_offset = target_payload_offset,
+        .target_size           = target_size,
+        .target_file_offset    = target_file_offset,
+        .target_file_end       = target_file_end,
+        .target_vaddr          = target_vaddr,
+        .target_vaddr_end      = target_vaddr_end,
+        .payload_file_offset   = plan->payload_placement.file_offset,
+        .payload_file_end      = plan->payload_placement.file_end,
+        .payload_vaddr         = plan->payload_placement.vaddr,
+        .payload_vaddr_end     = plan->payload_placement.vaddr_end,
+        .payload_file_size     = (uint64_t)plan->payload->byte_len,
+        .payload_memory_size   = plan->p_memsz,
+        .trampoline_emitted    = false,
+        .trampoline_size       = 0,
+    };
+
+    return n00b_result_ok(n00b_elf_rewrite_host_entrypoint_target_t, target);
 }
 
 n00b_result_t(n00b_buffer_t *)
@@ -4372,14 +4669,23 @@ n00b_elf_rewrite_apply_loadable_insert_plan(
                                plan->payload->byte_len)
         || !patch_output_loadable_header(out,
                                          bin,
-                                         live_phtab_offset,
-                                         plan->new_segment_count)) {
+                                         plan,
+                                         live_phtab_offset)) {
         return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
     }
 
     n00b_bstream_t *stream = n00b_bstream_new(out, .allocator = allocator);
     auto            parsed = n00b_elf_parse(stream, .allocator = allocator);
     if (n00b_result_is_err(parsed)) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_PARSE_AFTER_APPLY);
+    }
+
+    n00b_elf_binary_t *rewritten = n00b_result_get(parsed);
+    uint64_t expected_entry = plan->entrypoint_patch_enabled
+                            ? plan->replacement_entrypoint
+                            : plan->original_entrypoint;
+    if (rewritten->header.entry != expected_entry) {
         return n00b_result_err(n00b_buffer_t *,
                                N00B_ELF_REWRITE_ERR_PARSE_AFTER_APPLY);
     }

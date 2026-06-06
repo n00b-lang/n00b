@@ -285,9 +285,22 @@ typedef struct n00b_obj_bundle_elf_split_record {
 
 typedef struct n00b_obj_bundle_elf_split_range {
     n00b_obj_bundle_manifest_range_t canonical;
+    uint64_t                         artifact_id;
     uint64_t                         loadable_payload_off;
     uint8_t                          digest[N00B_OBJ_BUNDLE_DIGEST_LEN];
 } n00b_obj_bundle_elf_split_range_t;
+
+typedef struct n00b_obj_bundle_host_entrypoint_request {
+    n00b_obj_bundle_entrypoint_policy_t entrypoint;
+    n00b_string_t                      *selector;
+    bool                                strict_selector;
+    n00b_obj_bundle_policy_mode_t       policy_mode;
+} n00b_obj_bundle_host_entrypoint_request_t;
+
+typedef struct n00b_obj_bundle_host_entrypoint_selection {
+    n00b_obj_bundle_artifact_t              *artifact;
+    n00b_obj_bundle_exec_selection_source_t  selection_source;
+} n00b_obj_bundle_host_entrypoint_selection_t;
 
 typedef struct n00b_obj_bundle_decode_artifact {
     uint64_t                         id;
@@ -646,6 +659,30 @@ _n00b_obj_bundle_error_with_exec_mode(
     error->has_detail                = true;
 
     return _n00b_obj_bundle_error_mark_execution(error);
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_host_entrypoint_unsupported_error(
+    n00b_format_t              format,
+    bool                       has_format,
+    n00b_obj_bundle_carrier_t  carrier,
+    bool                       has_carrier,
+    n00b_allocator_t          *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_with_exec_mode(
+            N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_EXEC_MODE,
+            r"object bundle: host-entrypoint mutation is unsupported for carrier",
+            N00B_OBJ_BUNDLE_EXEC_HOST_ENTRYPOINT,
+            N00B_OBJ_BUNDLE_EXEC_PLATFORM_UNSUPPORTED,
+            allocator);
+
+    error->format      = format;
+    error->has_format  = has_format;
+    error->carrier     = carrier;
+    error->has_carrier = has_carrier;
+
+    return error;
 }
 
 static n00b_obj_bundle_error_t *
@@ -2025,6 +2062,19 @@ _n00b_obj_bundle_replace_policy_is_valid(
     switch (replace) {
     case N00B_OBJ_BUNDLE_REJECT_EXISTING:
     case N00B_OBJ_BUNDLE_REPLACE_EXISTING:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
+_n00b_obj_bundle_entrypoint_policy_is_valid(
+    n00b_obj_bundle_entrypoint_policy_t entrypoint)
+{
+    switch (entrypoint) {
+    case N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE:
+    case N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT:
         return true;
     default:
         return false;
@@ -8209,6 +8259,487 @@ _n00b_obj_bundle_manifest_payload_area(n00b_buffer_t *bundle_bytes,
                                             bundle_bytes->byte_len);
 }
 
+static bool
+_n00b_obj_bundle_host_entrypoint_requested(
+    n00b_obj_bundle_host_entrypoint_request_t *entrypoint)
+{
+    return entrypoint != nullptr
+           && entrypoint->entrypoint
+                  == N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_host_entrypoint_attach_error(
+    n00b_obj_bundle_error_t       *error,
+    n00b_obj_bundle_carrier_t      carrier,
+    n00b_obj_bundle_artifact_t    *artifact)
+{
+    error = _n00b_obj_bundle_error_mark_execution(error);
+
+    if (error == nullptr) {
+        return nullptr;
+    }
+
+    if (!error->has_format) {
+        error->format     = N00B_FMT_ELF;
+        error->has_format = true;
+    }
+
+    error->carrier     = carrier;
+    error->has_carrier = true;
+
+    if (!error->has_exec_requested_mode) {
+        error->exec_requested_mode     = N00B_OBJ_BUNDLE_EXEC_HOST_ENTRYPOINT;
+        error->has_exec_requested_mode = true;
+    }
+
+    if (artifact != nullptr) {
+        if (!error->has_logical_path) {
+            error->logical_path     = artifact->logical_path;
+            error->has_logical_path = artifact->logical_path != nullptr;
+        }
+
+        if (!error->has_artifact_id) {
+            error->artifact_id     = artifact->id;
+            error->has_artifact_id = true;
+        }
+    }
+
+    return error;
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_host_entrypoint_rejected_error(
+    n00b_obj_bundle_carrier_t                            carrier,
+    n00b_obj_bundle_artifact_t                           *artifact,
+    n00b_elf_rewrite_host_entrypoint_rejection_reason_t   reason,
+    n00b_allocator_t                                     *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_new(
+            N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_EXEC_MODE,
+            r"object bundle: host-entrypoint target is unsupported",
+            allocator);
+
+    error->detail                    = (int64_t)reason;
+    error->has_detail                = true;
+    error->exec_platform_support     =
+        N00B_OBJ_BUNDLE_EXEC_PLATFORM_UNSUPPORTED;
+    error->has_exec_platform_support = true;
+
+    return _n00b_obj_bundle_host_entrypoint_attach_error(error,
+                                                         carrier,
+                                                         artifact);
+}
+
+static n00b_obj_bundle_error_t *
+_n00b_obj_bundle_host_entrypoint_split_target_error(
+    n00b_obj_bundle_artifact_t *artifact,
+    n00b_allocator_t          *allocator)
+{
+    n00b_obj_bundle_error_t *error =
+        _n00b_obj_bundle_error_new(
+            N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_EXEC_MODE,
+            r"object bundle: host-entrypoint target is not in split loadable payload",
+            allocator);
+
+    error->exec_platform_support     =
+        N00B_OBJ_BUNDLE_EXEC_PLATFORM_UNSUPPORTED;
+    error->has_exec_platform_support = true;
+
+    return _n00b_obj_bundle_host_entrypoint_attach_error(
+        error,
+        N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+        artifact);
+}
+
+static n00b_result_t(n00b_obj_bundle_host_entrypoint_selection_t *)
+_n00b_obj_bundle_select_host_entrypoint_target(
+    n00b_obj_bundle_t                         *bundle,
+    n00b_obj_bundle_host_entrypoint_request_t *entrypoint,
+    n00b_obj_bundle_carrier_t                  carrier,
+    n00b_allocator_t                          *allocator)
+{
+    auto valid_artifacts = _n00b_obj_bundle_validate_artifacts(bundle);
+
+    if (n00b_result_is_err(valid_artifacts)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_error_clone_for_execution(
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            valid_artifacts),
+                allocator);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_host_entrypoint_selection_t *,
+            _n00b_obj_bundle_host_entrypoint_attach_error(error,
+                                                          carrier,
+                                                          nullptr));
+    }
+
+    auto valid_exec = _n00b_obj_bundle_validate_exec_map(bundle);
+
+    if (n00b_result_is_err(valid_exec)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_error_clone_for_execution(
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            valid_exec),
+                allocator);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_host_entrypoint_selection_t *,
+            _n00b_obj_bundle_host_entrypoint_attach_error(error,
+                                                          carrier,
+                                                          nullptr));
+    }
+
+    auto policy_result =
+        _n00b_obj_bundle_select_execution_policy(bundle, allocator);
+
+    if (n00b_result_is_err(policy_result)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_host_entrypoint_selection_t *,
+            _n00b_obj_bundle_host_entrypoint_attach_error(
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            policy_result),
+                carrier,
+                nullptr));
+    }
+
+    n00b_obj_bundle_exec_policy_t *policy = n00b_result_get(policy_result);
+    n00b_obj_bundle_artifact_t *selected = nullptr;
+    n00b_obj_bundle_exec_selection_source_t selection_source =
+        N00B_OBJ_BUNDLE_EXEC_SELECTION_NONE;
+    n00b_string_t *selector = entrypoint->selector;
+
+    if (selector != nullptr) {
+        n00b_obj_bundle_exec_mapping_t *mapping =
+            _n00b_obj_bundle_find_mapping_by_selector(bundle, selector);
+
+        if (mapping != nullptr) {
+            selected = _n00b_obj_bundle_find_artifact_by_id(
+                bundle,
+                mapping->target_artifact_id);
+            selection_source =
+                N00B_OBJ_BUNDLE_EXEC_SELECTION_SELECTOR_MAPPING;
+
+            if (!_n00b_obj_bundle_artifact_is_executable(selected)) {
+                n00b_obj_bundle_error_t *error =
+                    _n00b_obj_bundle_error_with_artifact(
+                        N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                        r"object bundle: invalid execution mapping target",
+                        mapping->target_artifact_id,
+                        allocator);
+
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_host_entrypoint_selection_t *,
+                    _n00b_obj_bundle_host_entrypoint_attach_error(error,
+                                                                  carrier,
+                                                                  selected));
+            }
+
+            if ((policy->execution_flags
+                 & N00B_OBJ_BUNDLE_DECL_EXEC_SELECTOR_MAPPING) == 0) {
+                n00b_obj_bundle_error_t *error =
+                    _n00b_obj_bundle_exec_policy_denied(
+                        policy,
+                        r"object bundle: execution selector mapping denied by policy",
+                        selector,
+                        selected,
+                        N00B_OBJ_BUNDLE_DECL_EXEC_SELECTOR_MAPPING,
+                        allocator);
+
+                return OBJ_BUNDLE_ERR_PAYLOAD(
+                    n00b_obj_bundle_host_entrypoint_selection_t *,
+                    _n00b_obj_bundle_host_entrypoint_attach_error(error,
+                                                                  carrier,
+                                                                  selected));
+            }
+        }
+        else if (entrypoint->strict_selector) {
+            n00b_obj_bundle_error_t *error =
+                _n00b_obj_bundle_error_with_path(
+                    N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                    r"object bundle: execution selector has no mapping",
+                    selector,
+                    allocator);
+
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_host_entrypoint_selection_t *,
+                _n00b_obj_bundle_host_entrypoint_attach_error(error,
+                                                              carrier,
+                                                              nullptr));
+        }
+    }
+
+    if (selected == nullptr && bundle->has_default_exec) {
+        selected = _n00b_obj_bundle_find_artifact_by_id(bundle,
+                                                       bundle->default_exec_id);
+        selection_source = N00B_OBJ_BUNDLE_EXEC_SELECTION_DEFAULT;
+
+        if (!_n00b_obj_bundle_artifact_is_executable(selected)) {
+            n00b_obj_bundle_error_t *error =
+                _n00b_obj_bundle_error_with_artifact(
+                    N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                    r"object bundle: invalid default executable target",
+                    bundle->default_exec_id,
+                    allocator);
+
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_host_entrypoint_selection_t *,
+                _n00b_obj_bundle_host_entrypoint_attach_error(error,
+                                                              carrier,
+                                                              selected));
+        }
+
+        if ((policy->execution_flags
+             & N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT_EXEC) == 0) {
+            n00b_obj_bundle_error_t *error =
+                _n00b_obj_bundle_exec_policy_denied(
+                    policy,
+                    r"object bundle: default execution denied by policy",
+                    selected->logical_path,
+                    selected,
+                    N00B_OBJ_BUNDLE_DECL_EXEC_DEFAULT_EXEC,
+                    allocator);
+
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_obj_bundle_host_entrypoint_selection_t *,
+                _n00b_obj_bundle_host_entrypoint_attach_error(error,
+                                                              carrier,
+                                                              selected));
+        }
+    }
+
+    if (selected == nullptr) {
+        n00b_obj_bundle_error_t *error =
+            selector == nullptr
+                ? _n00b_obj_bundle_error_new(
+                      N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                      r"object bundle: no execution target available",
+                      allocator)
+                : _n00b_obj_bundle_error_with_path(
+                      N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                      r"object bundle: execution selector has no fallback target",
+                      selector,
+                      allocator);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_host_entrypoint_selection_t *,
+            _n00b_obj_bundle_host_entrypoint_attach_error(error,
+                                                          carrier,
+                                                          nullptr));
+    }
+
+    auto embedded_policy =
+        _n00b_obj_bundle_exec_evaluate_embedded_policy(
+            policy,
+            selected,
+            selection_source,
+            true,
+            entrypoint->strict_selector,
+            N00B_OBJ_BUNDLE_EXEC_HOST_ENTRYPOINT,
+            entrypoint->policy_mode,
+            allocator);
+
+    if (n00b_result_is_err(embedded_policy)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_obj_bundle_host_entrypoint_selection_t *,
+            _n00b_obj_bundle_host_entrypoint_attach_error(
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            embedded_policy),
+                carrier,
+                selected));
+    }
+
+    n00b_obj_bundle_host_entrypoint_selection_t *selection =
+        n00b_alloc_with_opts(
+            n00b_obj_bundle_host_entrypoint_selection_t,
+            &(n00b_alloc_opts_t){.allocator = allocator});
+
+    selection->artifact         = selected;
+    selection->selection_source = selection_source;
+
+    return n00b_result_ok(n00b_obj_bundle_host_entrypoint_selection_t *,
+                          selection);
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_encoded_artifact_payload_offset(
+    n00b_obj_bundle_t           *bundle,
+    n00b_buffer_t               *bundle_bytes,
+    n00b_obj_bundle_artifact_t  *selected,
+    n00b_obj_bundle_carrier_t    carrier,
+    uint64_t                    *offset_out,
+    n00b_allocator_t            *allocator)
+{
+    n00b_obj_bundle_manifest_range_t payload_area = {};
+
+    if (selected == nullptr
+        || selected->payload == nullptr
+        || !_n00b_obj_bundle_manifest_payload_area(bundle_bytes,
+                                                   &payload_area,
+                                                   allocator)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_host_entrypoint_attach_error(
+                _n00b_obj_bundle_elf_carrier_error(
+                    N00B_OBJ_BUNDLE_ERR_BUILD,
+                    r"object bundle: host-entrypoint payload facts are unavailable",
+                    carrier,
+                    0,
+                    false,
+                    allocator),
+                carrier,
+                selected));
+    }
+
+    size_t artifact_count = n00b_list_len(bundle->artifacts);
+    n00b_obj_bundle_encode_artifact_t *artifacts =
+        n00b_alloc_array(n00b_obj_bundle_encode_artifact_t, artifact_count);
+
+    for (size_t i = 0; i < artifact_count; i++) {
+        artifacts[i].artifact = n00b_list_get(bundle->artifacts, i);
+    }
+
+    qsort(artifacts,
+          artifact_count,
+          sizeof(artifacts[0]),
+          _n00b_obj_bundle_encode_artifact_cmp);
+
+    uint64_t payload_cursor = 0;
+
+    for (size_t i = 0; i < artifact_count; i++) {
+        n00b_obj_bundle_artifact_t *artifact = artifacts[i].artifact;
+
+        if (artifact->payload == nullptr) {
+            continue;
+        }
+
+        uint64_t canonical_off = 0;
+
+        if (!_n00b_obj_bundle_u64_add(payload_area.off,
+                                      payload_cursor,
+                                      &canonical_off)
+            || !_n00b_obj_bundle_range_within(
+                canonical_off,
+                artifact->payload->byte_len,
+                bundle_bytes->byte_len)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_host_entrypoint_attach_error(
+                    _n00b_obj_bundle_elf_carrier_error(
+                        N00B_OBJ_BUNDLE_ERR_BUILD,
+                        r"object bundle: host-entrypoint payload range is invalid",
+                        carrier,
+                        _n00b_obj_bundle_i64_detail_from_u64(payload_cursor),
+                        true,
+                        allocator),
+                    carrier,
+                    selected));
+        }
+
+        if (artifact == selected) {
+            *offset_out = canonical_off;
+            return n00b_result_ok(bool, true);
+        }
+
+        if (!_n00b_obj_bundle_u64_add(payload_cursor,
+                                      artifact->payload->byte_len,
+                                      &payload_cursor)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                bool,
+                _n00b_obj_bundle_host_entrypoint_attach_error(
+                    _n00b_obj_bundle_elf_carrier_error(
+                        N00B_OBJ_BUNDLE_ERR_BUILD,
+                        r"object bundle: host-entrypoint payload cursor overflowed",
+                        carrier,
+                        _n00b_obj_bundle_i64_detail_from_u64(payload_cursor),
+                        true,
+                        allocator),
+                    carrier,
+                    selected));
+        }
+    }
+
+    return OBJ_BUNDLE_ERR_PAYLOAD(
+        bool,
+        _n00b_obj_bundle_host_entrypoint_attach_error(
+            _n00b_obj_bundle_error_with_artifact(
+                N00B_OBJ_BUNDLE_ERR_MISSING_TARGET,
+                r"object bundle: selected entrypoint payload was not encoded",
+                selected->id,
+                allocator),
+            carrier,
+            selected));
+}
+
+static n00b_result_t(bool)
+_n00b_obj_bundle_enable_host_entrypoint(
+    n00b_elf_binary_t                         *elf,
+    n00b_elf_rewrite_loadable_plan_t          *plan,
+    n00b_obj_bundle_carrier_t                  carrier,
+    n00b_obj_bundle_artifact_t                *selected,
+    uint64_t                                   target_payload_offset,
+    uint64_t                                   target_size,
+    n00b_allocator_t                          *allocator)
+{
+    auto target_result =
+        n00b_elf_rewrite_plan_host_entrypoint_target(
+            elf,
+            plan,
+            target_payload_offset,
+            target_size);
+
+    if (n00b_result_is_err(target_result)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_host_entrypoint_attach_error(
+                _n00b_obj_bundle_elf_carrier_error(
+                    N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+                    r"object bundle: ELF host-entrypoint planning failed",
+                    carrier,
+                    n00b_result_get_err(target_result),
+                    true,
+                    allocator),
+                carrier,
+                selected));
+    }
+
+    n00b_elf_rewrite_host_entrypoint_target_t target =
+        n00b_result_get(target_result);
+
+    if (target.outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_host_entrypoint_rejected_error(
+                carrier,
+                selected,
+                target.rejection_reason,
+                allocator));
+    }
+
+    auto enabled = n00b_elf_rewrite_loadable_plan_enable_entrypoint(
+        plan,
+        target.replacement_entrypoint);
+
+    if (n00b_result_is_err(enabled)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            bool,
+            _n00b_obj_bundle_host_entrypoint_attach_error(
+                _n00b_obj_bundle_elf_carrier_error(
+                    N00B_OBJ_BUNDLE_ERR_REWRITE_FAILURE,
+                    r"object bundle: ELF entrypoint patch enable failed",
+                    carrier,
+                    n00b_result_get_err(enabled),
+                    true,
+                    allocator),
+                carrier,
+                selected));
+    }
+
+    return n00b_result_ok(bool, true);
+}
+
 static n00b_result_t(n00b_buffer_t *)
 _n00b_obj_bundle_build_elf_split_payloads(
     n00b_obj_bundle_t                  *bundle,
@@ -8306,6 +8837,7 @@ _n00b_obj_bundle_build_elf_split_payloads(
                 .off = canonical_off,
                 .len = payload_len,
             };
+            range->artifact_id = artifact->id;
             range->loadable_payload_off = loadable_cursor;
             _n00b_obj_bundle_sha256_bytes(
                 (const uint8_t *)bundle_bytes->data + canonical_off,
@@ -8674,11 +9206,12 @@ _n00b_obj_bundle_write_elf_metadata_carrier(
 
 static n00b_result_t(n00b_buffer_t *)
 _n00b_obj_bundle_write_elf_loadable_carrier(
-    n00b_buffer_t                    *object_bytes,
-    n00b_obj_bundle_t                *bundle,
-    n00b_obj_bundle_replace_policy_t  replace,
-    bool                              strict,
-    n00b_allocator_t                 *allocator)
+    n00b_buffer_t                              *object_bytes,
+    n00b_obj_bundle_t                          *bundle,
+    n00b_obj_bundle_replace_policy_t            replace,
+    bool                                        strict,
+    n00b_obj_bundle_host_entrypoint_request_t  *entrypoint,
+    n00b_allocator_t                           *allocator)
 {
     auto encoded = n00b_obj_bundle_encode(bundle, .allocator = allocator);
 
@@ -8773,6 +9306,58 @@ _n00b_obj_bundle_write_elf_loadable_carrier(
             _n00b_obj_bundle_error_from_loadable_plan(plan, allocator));
     }
 
+    if (_n00b_obj_bundle_host_entrypoint_requested(entrypoint)) {
+        auto selection_result =
+            _n00b_obj_bundle_select_host_entrypoint_target(
+                bundle,
+                entrypoint,
+                N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+                allocator);
+
+        if (n00b_result_is_err(selection_result)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            selection_result));
+        }
+
+        n00b_obj_bundle_host_entrypoint_selection_t *selection =
+            n00b_result_get(selection_result);
+        uint64_t target_payload_offset = 0;
+        auto     offset_result =
+            _n00b_obj_bundle_encoded_artifact_payload_offset(
+                bundle,
+                bundle_bytes,
+                selection->artifact,
+                N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+                &target_payload_offset,
+                allocator);
+
+        if (n00b_result_is_err(offset_result)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            offset_result));
+        }
+
+        auto entrypoint_result =
+            _n00b_obj_bundle_enable_host_entrypoint(
+                elf,
+                plan,
+                N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+                selection->artifact,
+                target_payload_offset,
+                selection->artifact->payload->byte_len,
+                allocator);
+
+        if (n00b_result_is_err(entrypoint_result)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            entrypoint_result));
+        }
+    }
+
     auto loadable_applied = n00b_elf_rewrite_apply_loadable_insert_plan(
         elf,
         plan,
@@ -8863,11 +9448,12 @@ _n00b_obj_bundle_write_elf_loadable_carrier(
 
 static n00b_result_t(n00b_buffer_t *)
 _n00b_obj_bundle_write_elf_split_carrier(
-    n00b_buffer_t                    *object_bytes,
-    n00b_obj_bundle_t                *bundle,
-    n00b_obj_bundle_replace_policy_t  replace,
-    bool                              strict,
-    n00b_allocator_t                 *allocator)
+    n00b_buffer_t                              *object_bytes,
+    n00b_obj_bundle_t                          *bundle,
+    n00b_obj_bundle_replace_policy_t            replace,
+    bool                                        strict,
+    n00b_obj_bundle_host_entrypoint_request_t  *entrypoint,
+    n00b_allocator_t                           *allocator)
 {
     auto encoded = n00b_obj_bundle_encode(bundle, .allocator = allocator);
 
@@ -8983,6 +9569,62 @@ _n00b_obj_bundle_write_elf_split_carrier(
                 loadable_plan,
                 N00B_OBJ_BUNDLE_CARRIER_SPLIT,
                 allocator));
+    }
+
+    if (_n00b_obj_bundle_host_entrypoint_requested(entrypoint)) {
+        auto selection_result =
+            _n00b_obj_bundle_select_host_entrypoint_target(
+                bundle,
+                entrypoint,
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                allocator);
+
+        if (n00b_result_is_err(selection_result)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            selection_result));
+        }
+
+        n00b_obj_bundle_host_entrypoint_selection_t *selection =
+            n00b_result_get(selection_result);
+        bool     found_target = false;
+        uint64_t target_payload_offset = 0;
+        uint64_t target_size = 0;
+
+        for (size_t i = 0; i < range_count; i++) {
+            if (ranges[i].artifact_id == selection->artifact->id) {
+                found_target          = true;
+                target_payload_offset = ranges[i].loadable_payload_off;
+                target_size           = ranges[i].canonical.len;
+                break;
+            }
+        }
+
+        if (!found_target) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                _n00b_obj_bundle_host_entrypoint_split_target_error(
+                    selection->artifact,
+                    allocator));
+        }
+
+        auto entrypoint_result =
+            _n00b_obj_bundle_enable_host_entrypoint(
+                elf,
+                loadable_plan,
+                N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+                selection->artifact,
+                target_payload_offset,
+                target_size,
+                allocator);
+
+        if (n00b_result_is_err(entrypoint_result)) {
+            return OBJ_BUNDLE_ERR_PAYLOAD(
+                n00b_buffer_t *,
+                n00b_result_get_err_payload(n00b_obj_bundle_error_t *,
+                                            entrypoint_result));
+        }
     }
 
     auto loadable_applied = n00b_elf_rewrite_apply_loadable_insert_plan(
@@ -9280,6 +9922,12 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
     n00b_obj_bundle_carrier_t        carrier   = N00B_OBJ_BUNDLE_CARRIER_AUTO;
     n00b_obj_bundle_replace_policy_t replace   = N00B_OBJ_BUNDLE_REJECT_EXISTING;
     bool                             strict    = true;
+    n00b_obj_bundle_entrypoint_policy_t entrypoint =
+        N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE;
+    n00b_string_t                   *entrypoint_selector = nullptr;
+    bool                             entrypoint_strict_selector = false;
+    n00b_obj_bundle_policy_mode_t    entrypoint_policy_mode =
+        N00B_OBJ_BUNDLE_POLICY_ENFORCE;
     n00b_allocator_t                *allocator = nullptr;
 }
 {
@@ -9330,6 +9978,80 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
                 allocator));
     }
 
+    if (!_n00b_obj_bundle_entrypoint_policy_is_valid(entrypoint)) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_with_format_carrier_detail(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid entrypoint policy",
+                format,
+                format != N00B_FMT_UNKNOWN,
+                carrier,
+                true,
+                (int64_t)entrypoint,
+                true,
+                allocator));
+    }
+
+    if (!_n00b_obj_bundle_policy_mode_is_valid(entrypoint_policy_mode)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_error_with_format_carrier_detail(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid entrypoint policy mode",
+                format,
+                format != N00B_FMT_UNKNOWN,
+                carrier,
+                true,
+                (int64_t)entrypoint_policy_mode,
+                true,
+                allocator);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_mark_execution(error));
+    }
+
+    if (entrypoint_selector != nullptr
+        && !_n00b_obj_bundle_selector_is_valid(entrypoint_selector)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_error_with_path(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: invalid entrypoint selector",
+                entrypoint_selector,
+                allocator);
+
+        error->format      = format;
+        error->has_format  = format != N00B_FMT_UNKNOWN;
+        error->carrier     = carrier;
+        error->has_carrier = true;
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_mark_execution(error));
+    }
+
+    if (entrypoint == N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE
+        && (entrypoint_selector != nullptr
+            || entrypoint_strict_selector
+            || entrypoint_policy_mode
+                   != N00B_OBJ_BUNDLE_POLICY_ENFORCE)) {
+        n00b_obj_bundle_error_t *error =
+            _n00b_obj_bundle_error_with_format_carrier_detail(
+                N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT,
+                r"object bundle: entrypoint target controls require host-entrypoint policy",
+                format,
+                format != N00B_FMT_UNKNOWN,
+                carrier,
+                true,
+                (int64_t)entrypoint,
+                true,
+                allocator);
+
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_error_mark_execution(error));
+    }
+
     n00b_format_t effective_format = format;
 
     if (format == N00B_FMT_UNKNOWN) {
@@ -9339,12 +10061,34 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
         effective_format = n00b_detect_format(stream);
     }
 
+    if (entrypoint == N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT
+        && (effective_format != N00B_FMT_ELF
+            || (carrier != N00B_OBJ_BUNDLE_CARRIER_LOADABLE
+                && carrier != N00B_OBJ_BUNDLE_CARRIER_SPLIT))) {
+        return OBJ_BUNDLE_ERR_PAYLOAD(
+            n00b_buffer_t *,
+            _n00b_obj_bundle_host_entrypoint_unsupported_error(
+                effective_format,
+                effective_format != N00B_FMT_UNKNOWN,
+                carrier,
+                true,
+                allocator));
+    }
+
+    n00b_obj_bundle_host_entrypoint_request_t entrypoint_request = {
+        .entrypoint       = entrypoint,
+        .selector         = entrypoint_selector,
+        .strict_selector  = entrypoint_strict_selector,
+        .policy_mode      = entrypoint_policy_mode,
+    };
+
     if (effective_format == N00B_FMT_ELF) {
         if (carrier == N00B_OBJ_BUNDLE_CARRIER_LOADABLE) {
             return _n00b_obj_bundle_write_elf_loadable_carrier(object_bytes,
                                                                bundle,
                                                                replace,
                                                                strict,
+                                                               &entrypoint_request,
                                                                allocator);
         }
 
@@ -9353,6 +10097,7 @@ n00b_obj_bundle_write(n00b_buffer_t     *object_bytes,
                                                             bundle,
                                                             replace,
                                                             strict,
+                                                            &entrypoint_request,
                                                             allocator);
         }
 
@@ -9384,6 +10129,12 @@ n00b_obj_bundle_write_file(n00b_buffer_t     *object_bytes,
     n00b_obj_bundle_carrier_t        carrier   = N00B_OBJ_BUNDLE_CARRIER_AUTO;
     n00b_obj_bundle_replace_policy_t replace   = N00B_OBJ_BUNDLE_REJECT_EXISTING;
     bool                             strict    = true;
+    n00b_obj_bundle_entrypoint_policy_t entrypoint =
+        N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE;
+    n00b_string_t                   *entrypoint_selector = nullptr;
+    bool                             entrypoint_strict_selector = false;
+    n00b_obj_bundle_policy_mode_t    entrypoint_policy_mode =
+        N00B_OBJ_BUNDLE_POLICY_ENFORCE;
     n00b_objfile_sink_mode_t         sink_mode = N00B_OBJFILE_SINK_MODE_ATOMIC;
     n00b_objfile_sink_overwrite_t    overwrite = N00B_OBJFILE_SINK_REJECT_EXISTING;
     n00b_option_t(uint32_t)          file_mode = n00b_option_none(uint32_t);
@@ -9397,6 +10148,13 @@ n00b_obj_bundle_write_file(n00b_buffer_t     *object_bytes,
                                            .carrier   = carrier,
                                            .replace   = replace,
                                            .strict    = strict,
+                                           .entrypoint = entrypoint,
+                                           .entrypoint_selector =
+                                               entrypoint_selector,
+                                           .entrypoint_strict_selector =
+                                               entrypoint_strict_selector,
+                                           .entrypoint_policy_mode =
+                                               entrypoint_policy_mode,
                                            .allocator = allocator);
 
     if (n00b_result_is_err(rewritten)) {

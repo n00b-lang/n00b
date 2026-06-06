@@ -228,6 +228,34 @@ make_split_bundle(void)
     return bundle;
 }
 
+static n00b_obj_bundle_t *
+make_split_bundle_with_unmoved_default(void)
+{
+    n00b_obj_bundle_t *bundle = make_bundle();
+    n00b_buffer_t     *empty_payload = n00b_buffer_new(0);
+    n00b_buffer_t     *moved_payload =
+        n00b_buffer_from_cstr("moved-executable-payload");
+
+    auto add_empty = n00b_obj_bundle_add_artifact(
+        bundle,
+        r"bin/empty",
+        empty_payload,
+        .kind = N00B_OBJ_BUNDLE_ARTIFACT_EXECUTABLE);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add_empty));
+
+    auto add_moved = n00b_obj_bundle_add_artifact(
+        bundle,
+        r"bin/moved",
+        moved_payload,
+        .kind = N00B_OBJ_BUNDLE_ARTIFACT_EXECUTABLE);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(add_moved));
+
+    auto set_exec = n00b_obj_bundle_set_default_exec(bundle, r"bin/empty");
+    N00B_TEST_REQUIRE(n00b_result_is_ok(set_exec));
+
+    return bundle;
+}
+
 static void
 write_le16(uint8_t *data, size_t off, uint16_t value)
 {
@@ -650,6 +678,54 @@ assert_detail(n00b_obj_bundle_error_t *error, int64_t expected)
     N00B_TEST_REQUIRE(n00b_option_get(detail) == expected);
 }
 
+static void
+assert_error_logical_path(n00b_obj_bundle_error_t *error,
+                          n00b_string_t          *expected)
+{
+    auto path = n00b_obj_bundle_error_logical_path(error);
+
+    N00B_TEST_REQUIRE(n00b_option_is_set(path));
+    assert_string_eq(n00b_option_get(path), expected);
+}
+
+static void
+assert_error_artifact_id(n00b_obj_bundle_error_t *error,
+                         uint64_t                 expected)
+{
+    auto artifact_id = n00b_obj_bundle_error_artifact_id(error);
+
+    N00B_TEST_REQUIRE(n00b_option_is_set(artifact_id));
+    N00B_TEST_REQUIRE(n00b_option_get(artifact_id) == expected);
+}
+
+static void
+assert_error_policy(n00b_obj_bundle_error_t      *error,
+                    n00b_obj_bundle_policy_kind_t expected)
+{
+    auto policy_kind = n00b_obj_bundle_error_policy_kind(error);
+
+    N00B_TEST_REQUIRE(n00b_option_is_set(policy_kind));
+    N00B_TEST_REQUIRE(n00b_option_get(policy_kind) == expected);
+}
+
+static void
+assert_host_entrypoint_unsupported_error(n00b_obj_bundle_error_t   *error,
+                                         n00b_obj_bundle_carrier_t  carrier)
+{
+    auto requested = n00b_obj_bundle_error_exec_requested_mode(error);
+    auto support = n00b_obj_bundle_error_exec_platform_support(error);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, carrier);
+    assert_detail(error, N00B_OBJ_BUNDLE_EXEC_HOST_ENTRYPOINT);
+    N00B_TEST_REQUIRE(n00b_option_is_set(requested));
+    N00B_TEST_REQUIRE(n00b_option_get(requested)
+                      == N00B_OBJ_BUNDLE_EXEC_HOST_ENTRYPOINT);
+    N00B_TEST_REQUIRE(n00b_option_is_set(support));
+    N00B_TEST_REQUIRE(n00b_option_get(support)
+                      == N00B_OBJ_BUNDLE_EXEC_PLATFORM_UNSUPPORTED);
+}
+
 static n00b_objfile_sink_result_t *
 require_write_file_ok(n00b_result_t(n00b_objfile_sink_result_t *) result)
 {
@@ -1021,6 +1097,59 @@ parse_elf_or_die(n00b_buffer_t *bytes)
 
     N00B_TEST_REQUIRE(n00b_result_is_ok(parsed));
     return n00b_result_get(parsed);
+}
+
+static uint64_t
+elf_entrypoint(n00b_buffer_t *bytes)
+{
+    n00b_elf_binary_t *elf = parse_elf_or_die(bytes);
+
+    return elf->header.entry;
+}
+
+static void
+assert_entrypoint_targets_payload(n00b_buffer_t *object_bytes,
+                                  n00b_buffer_t *payload)
+{
+    n00b_elf_binary_t *elf = parse_elf_or_die(object_bytes);
+    uint64_t           entry = elf->header.entry;
+    bool               found = false;
+
+    N00B_TEST_REQUIRE(payload != nullptr);
+    N00B_TEST_REQUIRE(payload->byte_len != 0);
+
+    for (uint32_t i = 0; i < elf->num_segments; i++) {
+        n00b_elf_segment_t *segment = &elf->segments[i];
+
+        if (segment->type != PT_LOAD
+            || (segment->flags & PF_X) == 0
+            || entry < segment->vaddr) {
+            continue;
+        }
+
+        uint64_t delta = entry - segment->vaddr;
+
+        if (delta > segment->filesz
+            || delta > segment->memsz
+            || payload->byte_len > segment->filesz - delta
+            || payload->byte_len > segment->memsz - delta) {
+            continue;
+        }
+
+        uint64_t file_off = segment->offset + delta;
+
+        N00B_TEST_REQUIRE(file_off <= object_bytes->byte_len);
+        N00B_TEST_REQUIRE(payload->byte_len
+                          <= object_bytes->byte_len - file_off);
+        if (memcmp((const uint8_t *)object_bytes->data + file_off,
+                   payload->data,
+                   payload->byte_len) == 0) {
+            found = true;
+            break;
+        }
+    }
+
+    N00B_TEST_REQUIRE(found);
 }
 
 static uint64_t
@@ -2457,6 +2586,361 @@ test_write_split_readback_descriptor_facts_and_immutability(void)
 }
 
 static void
+assert_explicit_preserve_keeps_entrypoint(
+    n00b_obj_bundle_t        *bundle,
+    n00b_obj_bundle_carrier_t carrier)
+{
+    n00b_buffer_t *object_bytes = make_rewrite_target();
+    n00b_buffer_t *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_buffer_t *bundle_snapshot = encode_bundle_or_die(bundle);
+    uint64_t       original_entry = elf_entrypoint(object_bytes);
+    auto           written = n00b_obj_bundle_write(
+        object_bytes,
+        bundle,
+        .carrier = carrier,
+        .entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_PRESERVE);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+
+    n00b_buffer_t *out = n00b_result_get(written);
+
+    N00B_TEST_REQUIRE(elf_entrypoint(out) == original_entry);
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
+test_write_default_and_explicit_preserve_keep_entrypoint(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_populated_bundle_a();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    uint64_t           original_entry = elf_entrypoint(object_bytes);
+    auto               written = n00b_obj_bundle_write(object_bytes, bundle);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+    N00B_TEST_REQUIRE(elf_entrypoint(n00b_result_get(written))
+                      == original_entry);
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+
+    assert_explicit_preserve_keeps_entrypoint(
+        make_populated_bundle_a(),
+        N00B_OBJ_BUNDLE_CARRIER_METADATA);
+    assert_explicit_preserve_keeps_entrypoint(
+        make_populated_bundle_b(),
+        N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    assert_explicit_preserve_keeps_entrypoint(
+        make_split_bundle(),
+        N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+}
+
+static void
+test_write_entrypoint_invalid_controls(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_populated_bundle_a();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_obj_bundle_error_t *error = require_write_error(
+        n00b_obj_bundle_write(
+            object_bytes,
+            bundle,
+            .format = N00B_FMT_ELF,
+            .entrypoint = (n00b_obj_bundle_entrypoint_policy_t)99),
+        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_AUTO);
+    assert_detail(error, 99);
+
+    error = require_write_error(
+        n00b_obj_bundle_write(
+            object_bytes,
+            bundle,
+            .format = N00B_FMT_ELF,
+            .entrypoint_policy_mode =
+                (n00b_obj_bundle_policy_mode_t)99),
+        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_AUTO);
+    assert_detail(error, 99);
+
+    error = require_write_error(
+        n00b_obj_bundle_write(object_bytes,
+                              bundle,
+                              .format = N00B_FMT_ELF,
+                              .entrypoint_selector = r""),
+        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_AUTO);
+
+    error = require_write_error(
+        n00b_obj_bundle_write(object_bytes,
+                              bundle,
+                              .format = N00B_FMT_ELF,
+                              .entrypoint_strict_selector = true),
+        N00B_OBJ_BUNDLE_ERR_INVALID_ARGUMENT);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_AUTO);
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
+assert_host_entrypoint_carrier_rejects(n00b_obj_bundle_carrier_t carrier)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_execution_plan_bundle();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_obj_bundle_error_t *error = require_write_error(
+        n00b_obj_bundle_write(
+            object_bytes,
+            bundle,
+            .format = N00B_FMT_ELF,
+            .carrier = carrier,
+            .entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT,
+            .entrypoint_selector = r"tool"),
+        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_EXEC_MODE);
+
+    assert_host_entrypoint_unsupported_error(error, carrier);
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
+test_write_host_entrypoint_auto_and_metadata_reject(void)
+{
+    assert_host_entrypoint_carrier_rejects(N00B_OBJ_BUNDLE_CARRIER_AUTO);
+    assert_host_entrypoint_carrier_rejects(N00B_OBJ_BUNDLE_CARRIER_METADATA);
+}
+
+static void
+test_write_loadable_host_entrypoint_patches_selected_target(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_execution_plan_bundle();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_buffer_t     *tool_payload =
+        n00b_buffer_from_cstr("selector-exec-payload");
+    uint64_t           original_entry = elf_entrypoint(object_bytes);
+    auto               written = n00b_obj_bundle_write(
+        object_bytes,
+        bundle,
+        .format = N00B_FMT_ELF,
+        .carrier = N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+        .entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT,
+        .entrypoint_selector = r"tool",
+        .entrypoint_strict_selector = true,
+        .entrypoint_policy_mode = N00B_OBJ_BUNDLE_POLICY_VALIDATE_ONLY);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+
+    n00b_buffer_t *out = n00b_result_get(written);
+
+    N00B_TEST_REQUIRE(elf_entrypoint(out) != original_entry);
+    assert_entrypoint_targets_payload(out, tool_payload);
+    assert_written_loadable_bundle_reads_back(out, bundle_snapshot);
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
+test_write_split_host_entrypoint_patches_selected_target(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_split_bundle();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_buffer_t     *tool_payload =
+        n00b_buffer_from_cstr("tool-executable-payload");
+    uint64_t           original_entry = elf_entrypoint(object_bytes);
+    auto               written = n00b_obj_bundle_write(
+        object_bytes,
+        bundle,
+        .format = N00B_FMT_ELF,
+        .carrier = N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+        .entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT,
+        .entrypoint_selector = r"tool",
+        .entrypoint_strict_selector = true);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(written));
+
+    n00b_buffer_t *out = n00b_result_get(written);
+
+    N00B_TEST_REQUIRE(elf_entrypoint(out) != original_entry);
+    assert_entrypoint_targets_payload(out, tool_payload);
+    assert_written_split_bundle_reads_back(out, bundle_snapshot);
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
+test_write_file_host_entrypoint_opt_in_forwards_error(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_execution_plan_bundle();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_string_t     *path =
+        fixture_child(fixture_dir(), r"entrypoint-output.o");
+    n00b_obj_bundle_error_t *error = require_write_file_bundle_error(
+        n00b_obj_bundle_write_file(
+            object_bytes,
+            bundle,
+            path,
+            .format = N00B_FMT_ELF,
+            .carrier = N00B_OBJ_BUNDLE_CARRIER_METADATA,
+            .entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT,
+            .entrypoint_selector = r"tool"),
+        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_EXEC_MODE);
+
+    assert_host_entrypoint_unsupported_error(error,
+                                            N00B_OBJ_BUNDLE_CARRIER_METADATA);
+    N00B_TEST_REQUIRE(!n00b_path_exists(path));
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
+test_write_host_entrypoint_strict_missing_selector_rejects(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_execution_plan_bundle();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_obj_bundle_error_t *error = require_write_error(
+        n00b_obj_bundle_write(
+            object_bytes,
+            bundle,
+            .format = N00B_FMT_ELF,
+            .carrier = N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+            .entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT,
+            .entrypoint_selector = r"missing",
+            .entrypoint_strict_selector = true),
+        N00B_OBJ_BUNDLE_ERR_MISSING_TARGET);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    assert_error_logical_path(error, r"missing");
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
+test_write_host_entrypoint_no_target_rejects(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_bundle();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_obj_bundle_error_t *error = require_write_error(
+        n00b_obj_bundle_write(
+            object_bytes,
+            bundle,
+            .format = N00B_FMT_ELF,
+            .carrier = N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+            .entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT),
+        N00B_OBJ_BUNDLE_ERR_MISSING_TARGET);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
+test_write_host_entrypoint_policy_denied_rejects(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_execution_plan_bundle();
+
+    add_embedded_execution_policy(bundle, n00b_buffer_from_cstr("false"));
+
+    n00b_buffer_t *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_obj_bundle_error_t *error = require_write_error(
+        n00b_obj_bundle_write(
+            object_bytes,
+            bundle,
+            .format = N00B_FMT_ELF,
+            .carrier = N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+            .entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT,
+            .entrypoint_selector = r"tool",
+            .entrypoint_strict_selector = true),
+        N00B_OBJ_BUNDLE_ERR_POLICY_DENIED);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    assert_error_policy(error, N00B_OBJ_BUNDLE_POLICY_KIND_EMBEDDED_N00B);
+    assert_error_logical_path(error, r"bin/tool");
+    assert_error_artifact_id(error, 1);
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
+test_write_host_entrypoint_unsupported_machine_rejects(void)
+{
+    n00b_buffer_t *object_bytes = make_rewrite_target();
+    uint8_t       *data = (uint8_t *)object_bytes->data;
+
+    write_le16(data, 18, 3);
+
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_execution_plan_bundle();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_obj_bundle_error_t *error = require_write_error(
+        n00b_obj_bundle_write(
+            object_bytes,
+            bundle,
+            .format = N00B_FMT_ELF,
+            .carrier = N00B_OBJ_BUNDLE_CARRIER_LOADABLE,
+            .entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT,
+            .entrypoint_selector = r"tool",
+            .entrypoint_strict_selector = true),
+        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_EXEC_MODE);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_LOADABLE);
+    assert_detail(error,
+                  N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_MACHINE);
+    assert_error_logical_path(error, r"bin/tool");
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
+test_write_split_host_entrypoint_unmoved_target_rejects(void)
+{
+    n00b_buffer_t     *object_bytes = make_rewrite_target();
+    n00b_buffer_t     *object_snapshot = n00b_buffer_copy(object_bytes);
+    n00b_obj_bundle_t *bundle = make_split_bundle_with_unmoved_default();
+    n00b_buffer_t     *bundle_snapshot = encode_bundle_or_die(bundle);
+    n00b_obj_bundle_error_t *error = require_write_error(
+        n00b_obj_bundle_write(
+            object_bytes,
+            bundle,
+            .format = N00B_FMT_ELF,
+            .carrier = N00B_OBJ_BUNDLE_CARRIER_SPLIT,
+            .entrypoint = N00B_OBJ_BUNDLE_ENTRYPOINT_HOST_ENTRYPOINT),
+        N00B_OBJ_BUNDLE_ERR_UNSUPPORTED_EXEC_MODE);
+
+    assert_format(error, N00B_FMT_ELF);
+    assert_carrier(error, N00B_OBJ_BUNDLE_CARRIER_SPLIT);
+    assert_error_logical_path(error, r"bin/empty");
+    assert_error_artifact_id(error, 0);
+    assert_buffer_unchanged(object_bytes, object_snapshot);
+    assert_bundle_unchanged(bundle, bundle_snapshot);
+}
+
+static void
 test_read_split_descriptor_malformed_records_reject(void)
 {
     n00b_buffer_t *object_bytes = write_split_bundle_or_die();
@@ -3297,6 +3781,17 @@ main(int argc, char **argv)
     test_read_file_carrier_alone_not_imported();
     test_write_invalid_arguments();
     test_write_unsupported_carriers();
+    test_write_default_and_explicit_preserve_keep_entrypoint();
+    test_write_entrypoint_invalid_controls();
+    test_write_host_entrypoint_auto_and_metadata_reject();
+    test_write_loadable_host_entrypoint_patches_selected_target();
+    test_write_split_host_entrypoint_patches_selected_target();
+    test_write_file_host_entrypoint_opt_in_forwards_error();
+    test_write_host_entrypoint_strict_missing_selector_rejects();
+    test_write_host_entrypoint_no_target_rejects();
+    test_write_host_entrypoint_policy_denied_rejects();
+    test_write_host_entrypoint_unsupported_machine_rejects();
+    test_write_split_host_entrypoint_unmoved_target_rejects();
     test_write_insert_readback_and_immutability();
     test_write_loadable_readback_descriptor_facts_and_immutability();
     test_read_stale_loadable_bytes_without_descriptor_not_imported();

@@ -504,6 +504,66 @@ assert_buffer_err(n00b_result_t(n00b_buffer_t *) result, n00b_err_t err)
 }
 
 static void
+assert_bool_err(n00b_result_t(bool) result, n00b_err_t err)
+{
+    N00B_TEST_REQUIRE(n00b_result_is_err(result));
+    N00B_TEST_REQUIRE(n00b_result_get_err(result) == err);
+}
+
+static void
+assert_entrypoint_target_err(
+    n00b_result_t(n00b_elf_rewrite_host_entrypoint_target_t) result,
+    n00b_err_t                                               err)
+{
+    N00B_TEST_REQUIRE(n00b_result_is_err(result));
+    N00B_TEST_REQUIRE(n00b_result_get_err(result) == err);
+}
+
+static n00b_elf_rewrite_host_entrypoint_target_t
+require_accepted_entrypoint_target(
+    n00b_elf_binary_t *bin,
+    n00b_elf_rewrite_loadable_plan_t *plan,
+    uint64_t target_payload_offset,
+    uint64_t target_size)
+{
+    auto result =
+        n00b_elf_rewrite_plan_host_entrypoint_target(bin,
+                                                     plan,
+                                                     target_payload_offset,
+                                                     target_size);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(result));
+    n00b_elf_rewrite_host_entrypoint_target_t target =
+        n00b_result_get(result);
+    N00B_TEST_REQUIRE(target.outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED);
+    N00B_TEST_REQUIRE(target.rejection_reason
+                      == N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_NONE);
+    return target;
+}
+
+static n00b_elf_rewrite_host_entrypoint_target_t
+require_rejected_entrypoint_target(
+    n00b_elf_binary_t *bin,
+    n00b_elf_rewrite_loadable_plan_t *plan,
+    uint64_t target_payload_offset,
+    uint64_t target_size,
+    n00b_elf_rewrite_host_entrypoint_rejection_reason_t reason)
+{
+    auto result =
+        n00b_elf_rewrite_plan_host_entrypoint_target(bin,
+                                                     plan,
+                                                     target_payload_offset,
+                                                     target_size);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(result));
+    n00b_elf_rewrite_host_entrypoint_target_t target =
+        n00b_result_get(result);
+    N00B_TEST_REQUIRE(target.outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(target.rejection_reason == reason);
+    return target;
+}
+
+static void
 assert_patches_ordered(n00b_elf_rewrite_plan_t *plan)
 {
     N00B_TEST_REQUIRE(plan->patches.len != 0);
@@ -611,6 +671,9 @@ assert_relocated_loadable_plan(
     N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED);
     N00B_TEST_REQUIRE(plan->phtab_strategy
                       == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE);
+    N00B_TEST_REQUIRE(!plan->entrypoint_patch_enabled);
+    N00B_TEST_REQUIRE(plan->original_entrypoint == bin->header.entry);
+    N00B_TEST_REQUIRE(plan->replacement_entrypoint == bin->header.entry);
     N00B_TEST_REQUIRE(plan->phtab_placement.kind
                       == N00B_ELF_REWRITE_LOADABLE_PLACEMENT_RELOCATED_PHTAB);
     N00B_TEST_REQUIRE(plan->payload_placement.kind
@@ -1509,6 +1572,9 @@ test_loadable_phase1_strategy_plans(void)
     N00B_TEST_REQUIRE(plan->vaddr_alignment == request.vaddr_alignment);
     N00B_TEST_REQUIRE(plan->segment_flags == request.segment_flags);
     N00B_TEST_REQUIRE(plan->entrypoint_policy_deferred);
+    N00B_TEST_REQUIRE(!plan->entrypoint_patch_enabled);
+    N00B_TEST_REQUIRE(plan->original_entrypoint == bin->header.entry);
+    N00B_TEST_REQUIRE(plan->replacement_entrypoint == bin->header.entry);
     N00B_TEST_REQUIRE(plan->patches.len == 0);
     N00B_TEST_REQUIRE(plan->phtab_placement.kind
                       == N00B_ELF_REWRITE_LOADABLE_PLACEMENT_DEFERRED);
@@ -1537,6 +1603,9 @@ test_loadable_in_place_phtab_plan_facts(void)
 
     N00B_TEST_REQUIRE(plan->phtab_placement.kind
                       == N00B_ELF_REWRITE_LOADABLE_PLACEMENT_IN_PLACE_PHTAB);
+    N00B_TEST_REQUIRE(!plan->entrypoint_patch_enabled);
+    N00B_TEST_REQUIRE(plan->original_entrypoint == bin->header.entry);
+    N00B_TEST_REQUIRE(plan->replacement_entrypoint == bin->header.entry);
     N00B_TEST_REQUIRE(
         plan->phtab_adjustment.status
         == N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_ACCEPTED);
@@ -1965,6 +2034,41 @@ test_apply_loadable_in_place_phtab_adjustment(void)
 }
 
 static void
+test_apply_loadable_in_place_entrypoint_patch(void)
+{
+    const n00b_test_elf_case_t *test_case =
+        n00b_test_elf_case_by_name("phtab_adjust_accepted");
+    n00b_buffer_t *buf = n00b_test_elf_case_generate(test_case);
+    n00b_elf_binary_t *bin = parse_buffer(buf);
+    n00b_elf_rewrite_loadable_request_t request =
+        default_loadable_request();
+
+    request.phtab_strategy =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST;
+
+    n00b_elf_rewrite_loadable_plan_t *plan =
+        require_accepted_loadable_plan(bin, &request);
+    uint64_t replacement = plan->payload_placement.vaddr;
+    auto     enabled =
+        n00b_elf_rewrite_loadable_plan_enable_entrypoint(plan, replacement);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(enabled));
+    N00B_TEST_REQUIRE(n00b_result_get(enabled));
+    N00B_TEST_REQUIRE(plan->entrypoint_patch_enabled);
+    N00B_TEST_REQUIRE(plan->original_entrypoint == bin->header.entry);
+    N00B_TEST_REQUIRE(plan->replacement_entrypoint == replacement);
+
+    n00b_elf_binary_t *rewritten = nullptr;
+    (void)apply_loadable_plan_and_parse(buf, bin, plan, &rewritten);
+
+    N00B_TEST_REQUIRE(rewritten->header.entry == replacement);
+    N00B_TEST_REQUIRE(rewritten->header.entry != bin->header.entry);
+    N00B_TEST_REQUIRE(rewritten->header.phoff
+                      == plan->phtab_adjustment.adjusted_phtab_offset);
+    N00B_TEST_REQUIRE(rewritten->header.phnum == bin->header.phnum + 1);
+}
+
+static void
 test_apply_loadable_relocated_phtab(void)
 {
     const n00b_test_elf_case_t *test_case =
@@ -2020,6 +2124,41 @@ test_apply_loadable_relocated_phtab(void)
                                     out,
                                     rel->original_phtab_offset,
                                     rel->original_phtab_end);
+}
+
+static void
+test_apply_loadable_relocated_entrypoint_patch(void)
+{
+    const n00b_test_elf_case_t *test_case =
+        n00b_test_elf_case_by_name("loadable_relocate_direct");
+    n00b_buffer_t *buf = n00b_test_elf_case_generate(test_case);
+    n00b_elf_binary_t *bin = parse_buffer(buf);
+    n00b_elf_rewrite_loadable_request_t request =
+        default_loadable_request();
+
+    request.phtab_strategy =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+
+    n00b_elf_rewrite_loadable_plan_t *plan =
+        require_accepted_loadable_plan(bin, &request);
+    uint64_t replacement = plan->phtab_relocation.payload_vaddr;
+    auto     enabled =
+        n00b_elf_rewrite_loadable_plan_enable_entrypoint(plan, replacement);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(enabled));
+    N00B_TEST_REQUIRE(n00b_result_get(enabled));
+    N00B_TEST_REQUIRE(plan->entrypoint_patch_enabled);
+    N00B_TEST_REQUIRE(plan->original_entrypoint == bin->header.entry);
+    N00B_TEST_REQUIRE(plan->replacement_entrypoint == replacement);
+
+    n00b_elf_binary_t *rewritten = nullptr;
+    (void)apply_loadable_plan_and_parse(buf, bin, plan, &rewritten);
+
+    N00B_TEST_REQUIRE(rewritten->header.entry == replacement);
+    N00B_TEST_REQUIRE(rewritten->header.entry != bin->header.entry);
+    N00B_TEST_REQUIRE(rewritten->header.phoff
+                      == plan->phtab_relocation.relocated_phtab_offset);
+    N00B_TEST_REQUIRE(rewritten->header.phnum == bin->header.phnum + 1);
 }
 
 static void
@@ -2102,6 +2241,29 @@ test_loadable_apply_rejects_bad_plans(void)
     assert_buffer_err(n00b_elf_rewrite_apply_loadable_insert_plan(bin,
                                                                   accepted),
                       N00B_ELF_REWRITE_ERR_APPLY);
+
+    assert_bool_err(n00b_elf_rewrite_loadable_plan_enable_entrypoint(nullptr,
+                                                                     0x401000),
+                    N00B_ELF_REWRITE_ERR_NULL_PLAN);
+
+    request = default_loadable_request();
+    n00b_elf_rewrite_loadable_plan_t *deferred_for_entry =
+        require_accepted_loadable_plan(bin, &request);
+    assert_bool_err(
+        n00b_elf_rewrite_loadable_plan_enable_entrypoint(deferred_for_entry,
+                                                         0x401000),
+        N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN);
+    N00B_TEST_REQUIRE(!deferred_for_entry->entrypoint_patch_enabled);
+
+    request.p_memsz = request.payload->byte_len - 1;
+    n00b_elf_rewrite_loadable_plan_t *rejected_for_entry =
+        require_rejected_loadable_plan(bin,
+                                       &request,
+                                       N00B_ELF_REWRITE_REJECT_ADMISSION);
+    assert_bool_err(
+        n00b_elf_rewrite_loadable_plan_enable_entrypoint(rejected_for_entry,
+                                                         0x401000),
+        N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
 }
 
 static void
@@ -2137,6 +2299,25 @@ test_loadable_apply_rejects_mismatched_source(void)
                           in_place_plan),
                       N00B_ELF_REWRITE_ERR_APPLY);
 
+    n00b_buffer_t *in_place_buf_c =
+        n00b_test_elf_case_generate(in_place_case);
+    n00b_elf_binary_t *in_place_bin_c = parse_buffer(in_place_buf_c);
+    request = default_loadable_request();
+    request.phtab_strategy =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST;
+    n00b_elf_rewrite_loadable_plan_t *in_place_entry_plan =
+        require_accepted_loadable_plan(in_place_bin_c, &request);
+    auto enabled =
+        n00b_elf_rewrite_loadable_plan_enable_entrypoint(
+            in_place_entry_plan,
+            in_place_entry_plan->payload_placement.vaddr);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(enabled));
+    in_place_bin_c->header.entry++;
+    assert_buffer_err(n00b_elf_rewrite_apply_loadable_insert_plan(
+                          in_place_bin_c,
+                          in_place_entry_plan),
+                      N00B_ELF_REWRITE_ERR_APPLY);
+
     const n00b_test_elf_case_t *relocated_case =
         n00b_test_elf_case_by_name("loadable_relocate_direct");
     n00b_buffer_t *relocated_buf_a =
@@ -2162,6 +2343,258 @@ test_loadable_apply_rejects_mismatched_source(void)
                           relocated_bin_a,
                           relocated_plan),
                       N00B_ELF_REWRITE_ERR_APPLY);
+}
+
+static void
+test_host_entrypoint_target_accepts_x86_64(void)
+{
+    const n00b_test_elf_case_t *test_case =
+        n00b_test_elf_case_by_name("loadable_relocate_direct");
+    n00b_buffer_t *buf = n00b_test_elf_case_generate(test_case);
+    n00b_elf_binary_t *bin = parse_buffer(buf);
+    n00b_elf_rewrite_loadable_request_t request =
+        default_loadable_request();
+
+    request.phtab_strategy =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+
+    n00b_elf_rewrite_loadable_plan_t *plan =
+        require_accepted_loadable_plan(bin, &request);
+    uint64_t target_offset = 4;
+    uint64_t target_size   = 8;
+    n00b_elf_rewrite_host_entrypoint_target_t target =
+        require_accepted_entrypoint_target(bin,
+                                           plan,
+                                           target_offset,
+                                           target_size);
+
+    N00B_TEST_REQUIRE(target.original_entrypoint == bin->header.entry);
+    N00B_TEST_REQUIRE(target.replacement_entrypoint
+                      == plan->payload_placement.vaddr + target_offset);
+    N00B_TEST_REQUIRE(target.target_payload_offset == target_offset);
+    N00B_TEST_REQUIRE(target.target_size == target_size);
+    N00B_TEST_REQUIRE(target.target_file_offset
+                      == plan->payload_placement.file_offset + target_offset);
+    N00B_TEST_REQUIRE(target.target_file_end
+                      == target.target_file_offset + target_size);
+    N00B_TEST_REQUIRE(target.target_vaddr
+                      == target.replacement_entrypoint);
+    N00B_TEST_REQUIRE(target.target_vaddr_end
+                      == target.target_vaddr + target_size);
+    N00B_TEST_REQUIRE(target.payload_file_offset
+                      == plan->payload_placement.file_offset);
+    N00B_TEST_REQUIRE(target.payload_file_end
+                      == plan->payload_placement.file_end);
+    N00B_TEST_REQUIRE(target.payload_vaddr == plan->payload_placement.vaddr);
+    N00B_TEST_REQUIRE(target.payload_vaddr_end
+                      == plan->payload_placement.vaddr_end);
+    N00B_TEST_REQUIRE(target.payload_file_size == plan->payload->byte_len);
+    N00B_TEST_REQUIRE(target.payload_memory_size == plan->p_memsz);
+    N00B_TEST_REQUIRE(!target.trampoline_emitted);
+    N00B_TEST_REQUIRE(target.trampoline_size == 0);
+
+    auto enabled =
+        n00b_elf_rewrite_loadable_plan_enable_entrypoint(
+            plan,
+            target.replacement_entrypoint);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(enabled));
+    N00B_TEST_REQUIRE(n00b_result_get(enabled));
+
+    n00b_elf_binary_t *rewritten = nullptr;
+    (void)apply_loadable_plan_and_parse(buf, bin, plan, &rewritten);
+    N00B_TEST_REQUIRE(rewritten->header.entry
+                      == target.replacement_entrypoint);
+}
+
+static void
+test_host_entrypoint_target_accepts_in_place_plan(void)
+{
+    const n00b_test_elf_case_t *test_case =
+        n00b_test_elf_case_by_name("phtab_adjust_accepted");
+    n00b_elf_binary_t *bin =
+        parse_buffer(n00b_test_elf_case_generate(test_case));
+    n00b_elf_rewrite_loadable_request_t request =
+        default_loadable_request();
+
+    request.phtab_strategy =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST;
+
+    n00b_elf_rewrite_loadable_plan_t *plan =
+        require_accepted_loadable_plan(bin, &request);
+    n00b_elf_rewrite_host_entrypoint_target_t target =
+        require_accepted_entrypoint_target(bin, plan, 0, 4);
+
+    N00B_TEST_REQUIRE(target.replacement_entrypoint
+                      == plan->payload_placement.vaddr);
+    N00B_TEST_REQUIRE(target.original_entrypoint == bin->header.entry);
+    N00B_TEST_REQUIRE(!target.trampoline_emitted);
+}
+
+static void
+test_host_entrypoint_target_rejects_architecture(void)
+{
+    const n00b_test_elf_case_t *test_case =
+        n00b_test_elf_case_by_name("loadable_relocate_direct");
+    n00b_elf_rewrite_loadable_request_t request =
+        default_loadable_request();
+
+    request.phtab_strategy =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+
+    n00b_elf_binary_t *bin =
+        parse_buffer(n00b_test_elf_case_generate(test_case));
+    n00b_elf_rewrite_loadable_plan_t *plan =
+        require_accepted_loadable_plan(bin, &request);
+    bin->header.ident[EI_CLASS] = ELFCLASS32;
+    (void)require_rejected_entrypoint_target(
+        bin,
+        plan,
+        0,
+        4,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_CLASS);
+
+    bin = parse_buffer(n00b_test_elf_case_generate(test_case));
+    plan = require_accepted_loadable_plan(bin, &request);
+    bin->header.ident[EI_DATA] = ELFDATA2MSB;
+    (void)require_rejected_entrypoint_target(
+        bin,
+        plan,
+        0,
+        4,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_ENDIAN);
+
+    bin = parse_buffer(n00b_test_elf_case_generate(test_case));
+    plan = require_accepted_loadable_plan(bin, &request);
+    bin->header.machine = EM_AARCH64;
+    (void)require_rejected_entrypoint_target(
+        bin,
+        plan,
+        0,
+        4,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_MACHINE);
+}
+
+static void
+test_host_entrypoint_target_rejects_bad_plan_shapes(void)
+{
+    n00b_elf_binary_t *bin = parse_buffer(valid_target_buffer());
+    n00b_elf_rewrite_loadable_request_t request =
+        default_loadable_request();
+
+    assert_entrypoint_target_err(
+        n00b_elf_rewrite_plan_host_entrypoint_target(nullptr,
+                                                     nullptr,
+                                                     0,
+                                                     4),
+        N00B_ELF_REWRITE_ERR_NULL_BINARY);
+    assert_entrypoint_target_err(
+        n00b_elf_rewrite_plan_host_entrypoint_target(bin,
+                                                     nullptr,
+                                                     0,
+                                                     4),
+        N00B_ELF_REWRITE_ERR_NULL_PLAN);
+
+    n00b_elf_rewrite_loadable_plan_t *deferred =
+        require_accepted_loadable_plan(bin, &request);
+    (void)require_rejected_entrypoint_target(
+        bin,
+        deferred,
+        0,
+        4,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_PLAN);
+
+    request.p_memsz = request.payload->byte_len - 1;
+    n00b_elf_rewrite_loadable_plan_t *rejected =
+        require_rejected_loadable_plan(bin,
+                                       &request,
+                                       N00B_ELF_REWRITE_REJECT_ADMISSION);
+    (void)require_rejected_entrypoint_target(
+        bin,
+        rejected,
+        0,
+        4,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_PLAN);
+}
+
+static void
+test_host_entrypoint_target_rejects_unsafe_targets(void)
+{
+    const n00b_test_elf_case_t *test_case =
+        n00b_test_elf_case_by_name("loadable_relocate_direct");
+    n00b_elf_rewrite_loadable_request_t request =
+        default_loadable_request();
+
+    request.phtab_strategy =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+    request.segment_flags = PF_R;
+    n00b_elf_binary_t *bin =
+        parse_buffer(n00b_test_elf_case_generate(test_case));
+    n00b_elf_rewrite_loadable_plan_t *plan =
+        require_accepted_loadable_plan(bin, &request);
+    (void)require_rejected_entrypoint_target(
+        bin,
+        plan,
+        0,
+        4,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_NON_EXECUTABLE);
+
+    request = default_loadable_request();
+    request.phtab_strategy =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+    bin = parse_buffer(n00b_test_elf_case_generate(test_case));
+    plan = require_accepted_loadable_plan(bin, &request);
+    (void)require_rejected_entrypoint_target(
+        bin,
+        plan,
+        plan->payload->byte_len,
+        1,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_TARGET_OUT_OF_RANGE);
+
+    request = default_loadable_request();
+    request.phtab_strategy =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+    request.p_memsz = request.payload->byte_len + 8;
+    bin = parse_buffer(n00b_test_elf_case_generate(test_case));
+    plan = require_accepted_loadable_plan(bin, &request);
+    (void)require_rejected_entrypoint_target(
+        bin,
+        plan,
+        plan->payload->byte_len - 4,
+        8,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_TARGET_MEMORY_ONLY);
+
+    request = default_loadable_request();
+    request.phtab_strategy =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+    bin = parse_buffer(n00b_test_elf_case_generate(test_case));
+    plan = require_accepted_loadable_plan(bin, &request);
+    plan->payload_placement.vaddr_end = plan->payload_placement.vaddr + 1;
+    (void)require_rejected_entrypoint_target(
+        bin,
+        plan,
+        0,
+        4,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_TARGET_OUT_OF_RANGE);
+
+    bin = parse_buffer(n00b_test_elf_case_generate(test_case));
+    plan = require_accepted_loadable_plan(bin, &request);
+    (void)require_rejected_entrypoint_target(
+        bin,
+        plan,
+        UINT64_MAX,
+        2,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_OVERFLOW);
+
+    bin = parse_buffer(n00b_test_elf_case_generate(test_case));
+    plan = require_accepted_loadable_plan(bin, &request);
+    plan->payload_placement.vaddr = UINT64_MAX - 1;
+    plan->payload_placement.vaddr_end = UINT64_MAX;
+    (void)require_rejected_entrypoint_target(
+        bin,
+        plan,
+        1,
+        1,
+        N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_OVERFLOW);
 }
 
 static void
@@ -3652,9 +4085,16 @@ main(int argc, char **argv)
     test_loadable_relocation_rejects_overlay_without_append();
     test_loadable_relocation_no_mutation();
     test_apply_loadable_in_place_phtab_adjustment();
+    test_apply_loadable_in_place_entrypoint_patch();
     test_apply_loadable_relocated_phtab();
+    test_apply_loadable_relocated_entrypoint_patch();
     test_loadable_apply_rejects_bad_plans();
     test_loadable_apply_rejects_mismatched_source();
+    test_host_entrypoint_target_accepts_x86_64();
+    test_host_entrypoint_target_accepts_in_place_plan();
+    test_host_entrypoint_target_rejects_architecture();
+    test_host_entrypoint_target_rejects_bad_plan_shapes();
+    test_host_entrypoint_target_rejects_unsafe_targets();
     test_table_strategy_in_place_growth();
     test_in_place_growth_rejects_modeled_zero_slack();
     test_in_place_growth_rejects_payload_slack_overlap();

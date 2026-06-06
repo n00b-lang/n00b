@@ -246,7 +246,9 @@ typedef struct n00b_elf_rewrite_plan {
  * adjustment and relocated-PHTAB plans carry concrete, non-overlapping patch
  * ranges and are consumable by @ref n00b_elf_rewrite_apply_loadable_insert_plan.
  * Plans borrow the parsed binary that produced them so apply can enforce the
- * same-binary precondition.
+ * same-binary precondition. They record the original `e_entry`; entrypoint
+ * patch facts are disabled by default and may be enabled on apply-able
+ * accepted plans once a caller has concrete target entrypoint facts.
  */
 typedef struct n00b_elf_rewrite_loadable_plan {
     n00b_elf_rewrite_plan_outcome_t              outcome;
@@ -261,6 +263,8 @@ typedef struct n00b_elf_rewrite_loadable_plan {
     n00b_elf_rewrite_loadable_relocation_t       phtab_relocation;
     n00b_elf_binary_t                            *source_binary;
     n00b_buffer_t                               *payload;
+    uint64_t                                     original_entrypoint;
+    uint64_t                                     replacement_entrypoint;
     uint64_t                                     file_size;
     uint64_t                                     original_segment_count;
     uint64_t                                     new_segment_count;
@@ -269,7 +273,50 @@ typedef struct n00b_elf_rewrite_loadable_plan {
     uint64_t                                     vaddr_alignment;
     uint32_t                                     segment_flags;
     bool                                         entrypoint_policy_deferred;
+    bool                                         entrypoint_patch_enabled;
 } n00b_elf_rewrite_loadable_plan_t;
+
+typedef enum {
+    N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_NONE,
+    N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_PLAN,
+    N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_PLAN,
+    N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_CLASS,
+    N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_ENDIAN,
+    N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_UNSUPPORTED_MACHINE,
+    N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_NON_EXECUTABLE,
+    N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_TARGET_OUT_OF_RANGE,
+    N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_TARGET_MEMORY_ONLY,
+    N00B_ELF_REWRITE_HOST_ENTRYPOINT_REJECT_OVERFLOW,
+} n00b_elf_rewrite_host_entrypoint_rejection_reason_t;
+
+/**
+ * @brief Static host-entrypoint target-policy facts for one loadable plan.
+ *
+ * Accepted facts describe direct `e_entry` redirection to a byte range within
+ * the newly inserted file-backed `PT_LOAD` payload. WP-016 currently emits no
+ * trampoline bytes, so accepted results set `trampoline_emitted == false` and
+ * `trampoline_size == 0`.
+ */
+typedef struct n00b_elf_rewrite_host_entrypoint_target {
+    n00b_elf_rewrite_plan_outcome_t                         outcome;
+    n00b_elf_rewrite_host_entrypoint_rejection_reason_t      rejection_reason;
+    uint64_t                                                 original_entrypoint;
+    uint64_t                                                 replacement_entrypoint;
+    uint64_t                                                 target_payload_offset;
+    uint64_t                                                 target_size;
+    uint64_t                                                 target_file_offset;
+    uint64_t                                                 target_file_end;
+    uint64_t                                                 target_vaddr;
+    uint64_t                                                 target_vaddr_end;
+    uint64_t                                                 payload_file_offset;
+    uint64_t                                                 payload_file_end;
+    uint64_t                                                 payload_vaddr;
+    uint64_t                                                 payload_vaddr_end;
+    uint64_t                                                 payload_file_size;
+    uint64_t                                                 payload_memory_size;
+    bool                                                     trampoline_emitted;
+    uint64_t                                                 trampoline_size;
+} n00b_elf_rewrite_host_entrypoint_target_t;
 
 /**
  * @brief Plan insertion of a non-loadable ELF metadata section.
@@ -455,6 +502,62 @@ n00b_elf_rewrite_plan_loadable_insert(
 };
 
 /**
+ * @brief Validate static ELF host-entrypoint redirection policy.
+ *
+ * The helper is manifest-agnostic and object-bundle-agnostic. It accepts only
+ * apply-able loadable insertion plans for ELF64 little-endian x86-64 and a
+ * caller-selected target range expressed as an offset within the planned
+ * loadable payload bytes. Accepted results derive the concrete replacement
+ * `e_entry` value from the plan's final `PT_LOAD` placement facts and can be
+ * passed to @ref n00b_elf_rewrite_loadable_plan_enable_entrypoint.
+ *
+ * @param bin Parsed ELF object used to produce `plan`.
+ * @param plan Accepted in-place or relocated loadable plan.
+ * @param target_payload_offset Start of the selected target within
+ *                              `plan->payload`.
+ * @param target_size Size in bytes of the selected target range.
+ *
+ * @return Ok(target facts) for accepted or rejected policy decisions, or
+ *         Err(N00B_ELF_REWRITE_ERR_*) for null inputs.
+ *
+ * @pre `bin` and `plan` are non-null.
+ * @post `bin`, `plan`, and their borrowed byte buffers are not modified.
+ */
+extern n00b_result_t(n00b_elf_rewrite_host_entrypoint_target_t)
+n00b_elf_rewrite_plan_host_entrypoint_target(
+    n00b_elf_binary_t                  *bin,
+    n00b_elf_rewrite_loadable_plan_t   *plan,
+    uint64_t                            target_payload_offset,
+    uint64_t                            target_size);
+
+/**
+ * @brief Enable a checked ELF header entrypoint patch on a loadable plan.
+ *
+ * The plan must be accepted, apply-able, and still tied to the parsed binary
+ * that produced it with the same original `e_entry`. This helper records
+ * `replacement_entrypoint` while preserving `original_entrypoint`; apply later
+ * writes the replacement into `e_entry`, reparses the output, and verifies the
+ * parsed entrypoint. It does not inspect architecture, object-bundle
+ * manifests, selectors, or policy.
+ *
+ * @param plan Accepted in-place or relocated loadable plan.
+ * @param replacement_entrypoint Concrete ELF64 `e_entry` value to write.
+ *
+ * @return Ok(true) when the plan is enabled, or Err(N00B_ELF_REWRITE_ERR_*).
+ *
+ * @pre `plan` is non-null.
+ * @pre `plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED`.
+ * @pre `plan` has concrete loadable/PHTAB placement facts accepted by apply.
+ * @post `plan->entrypoint_patch_enabled` is true on success.
+ * @post `plan->original_entrypoint` remains the source binary's original
+ *       `e_entry`, and `plan->replacement_entrypoint` is the supplied value.
+ */
+extern n00b_result_t(bool)
+n00b_elf_rewrite_loadable_plan_enable_entrypoint(
+    n00b_elf_rewrite_loadable_plan_t *plan,
+    uint64_t                          replacement_entrypoint);
+
+/**
  * @brief Apply an accepted loadable-segment rewrite plan to bytes.
  *
  * The plan must come from @ref n00b_elf_rewrite_plan_loadable_insert for the
@@ -464,7 +567,12 @@ n00b_elf_rewrite_plan_loadable_insert(
  * `PT_LOAD`, and write the payload bytes. Accepted relocated-PHTAB plans write
  * the relocated live PHTAB, leave the original PHTAB bytes as shadow bytes,
  * update `PT_PHDR`, append the new `PT_LOAD`, zero planned padding, and write
- * the payload bytes.
+ * the payload bytes. Without an enabled entrypoint patch, apply preserves the
+ * source header `e_entry`. When
+ * @ref n00b_elf_rewrite_loadable_plan_enable_entrypoint has enabled an
+ * entrypoint patch, apply also writes the planned replacement `e_entry` value
+ * and verifies it through the reparsed output. Applying a plan never executes
+ * the rewritten object.
  *
  * @param bin Parsed ELF object whose stream supplies the original bytes.
  * @param plan Accepted loadable plan.
@@ -476,6 +584,7 @@ n00b_elf_rewrite_plan_loadable_insert(
  *
  * @pre `bin`, `bin->stream`, `bin->stream->buf`, and `plan` are non-null.
  * @pre `plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED`.
+ * @pre `plan` still matches @p bin and its recorded original `e_entry`.
  * @post `bin`, its stream buffer, and parsed arrays are not modified.
  * @post The returned buffer reparses successfully with @ref n00b_elf_parse.
  */
