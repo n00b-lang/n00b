@@ -485,7 +485,12 @@ test_command_search_modes(void)
     tool_arg_set(ranked_table, 8, r"1");
     run = run_tool(ranked_table);
     CHECK_RUN_OK(run, r"ranked-table");
-    CHECK(n00b_unicode_str_contains(run.out, r"event_id"));
+    CHECK(n00b_unicode_str_contains(
+        run.out,
+        n00b_string_from_cstr("pos\tid\tkind\tjson")));
+    CHECK(!n00b_unicode_str_contains(
+        run.out,
+        n00b_string_from_cstr("pos\tscore\tevent_id")));
     CHECK(n00b_unicode_str_contains(run.out, r"wax:daemon:ai:1"));
 
     n00b_array_t(n00b_string_t *) *empty = tool_args(5);
@@ -497,6 +502,16 @@ test_command_search_modes(void)
     run = run_tool(empty);
     CHECK_RUN_OK(run, r"empty");
     CHECK(!n00b_unicode_str_contains(run.out, r"wax:daemon:"));
+
+    n00b_array_t(n00b_string_t *) *empty_table = tool_args(5);
+    tool_arg_set(empty_table, 0, r"--search");
+    tool_arg_set(empty_table, 1, r"--kind");
+    tool_arg_set(empty_table, 2, r"missing.kind");
+    tool_arg_set(empty_table, 3, r"--format");
+    tool_arg_set(empty_table, 4, r"table");
+    run = run_tool(empty_table);
+    CHECK_RUN_OK(run, r"empty-table");
+    CHECK(n00b_unicode_str_contains(run.out, r"(No records)"));
 
     n00b_array_t(n00b_string_t *) *bad = tool_args(3);
     tool_arg_set(bad, 0, r"--search");
@@ -596,7 +611,12 @@ test_server_backed_command_modes(void)
     tool_arg_set(field, 6, r"table");
     run = run_tool_server(field);
     CHECK_RUN_OK(run, r"server-search-table");
-    CHECK(n00b_unicode_str_contains(run.out, r"event_id"));
+    CHECK(n00b_unicode_str_contains(
+        run.out,
+        n00b_string_from_cstr("pos\tid\tkind\tjson")));
+    CHECK(!n00b_unicode_str_contains(
+        run.out,
+        n00b_string_from_cstr("pos\tscore\tevent_id")));
     CHECK(n00b_unicode_str_contains(run.out, r"wax:daemon:file:1"));
 
     auto stop_r = n00b_rocs_service_stop(service);

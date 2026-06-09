@@ -297,6 +297,44 @@ test_existing_shard_object_blocks_seal(void)
 }
 
 static void
+test_reopen_skips_orphaned_hot_shard_objects(void)
+{
+    n00b_vfs_t   *vfs   = new_memory_vfs(nullptr);
+    n00b_store_t *store = open_store(vfs);
+
+    n00b_store_catalog_entry_t *entry = seal_one(store, 30);
+    auto path_r = n00b_store_catalog_entry_get_object_path(entry);
+    CHECK(n00b_result_is_ok(path_r));
+    CHECK(n00b_unicode_str_eq(n00b_result_get(path_r),
+                              r"/rocs/shards/1.n00b"));
+
+    auto close_r = n00b_store_close(store);
+    CHECK(n00b_result_is_ok(close_r));
+
+    write_vfs_string(vfs, r"/rocs/shards/2.n00b", r"orphan-two");
+    write_vfs_string(vfs, r"/rocs/shards/3.n00b", r"orphan-three");
+
+    n00b_store_t *reopened = open_store(vfs);
+    auto count_r = n00b_store_catalog_get_entry_count(reopened);
+    CHECK(n00b_result_is_ok(count_r));
+    CHECK(n00b_result_get(count_r) == 1);
+
+    auto orphan_two_r = n00b_store_catalog_find_shard(reopened, 2);
+    CHECK(n00b_result_is_ok(orphan_two_r));
+    CHECK(!n00b_option_is_set(n00b_result_get(orphan_two_r)));
+
+    auto orphan_three_r = n00b_store_catalog_find_shard(reopened, 3);
+    CHECK(n00b_result_is_ok(orphan_three_r));
+    CHECK(!n00b_option_is_set(n00b_result_get(orphan_three_r)));
+
+    n00b_store_catalog_entry_t *next = seal_one(reopened, 31);
+    path_r = n00b_store_catalog_entry_get_object_path(next);
+    CHECK(n00b_result_is_ok(path_r));
+    CHECK(n00b_unicode_str_eq(n00b_result_get(path_r),
+                              r"/rocs/shards/4.n00b"));
+}
+
+static void
 test_catalog_failure_rolls_back_visibility(void)
 {
     n00b_vfs_mount_t *mount = nullptr;
@@ -394,6 +432,7 @@ main(int argc, char **argv)
     test_metadata_only_reopen();
     test_missing_shard_object_error();
     test_existing_shard_object_blocks_seal();
+    test_reopen_skips_orphaned_hot_shard_objects();
     test_catalog_failure_rolls_back_visibility();
     test_corrupt_shard_length_error();
     test_local_catalog_reopen_and_sync();

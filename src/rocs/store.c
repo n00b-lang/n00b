@@ -1694,6 +1694,41 @@ rocs_store_catalog_load(n00b_store_t *store)
     return rocs_store_catalog_parse(store, n00b_result_get(buf_r));
 }
 
+static n00b_result_t(uint64_t)
+rocs_store_first_free_hot_shard_id(n00b_store_t *store, uint64_t candidate)
+{
+    if (store == nullptr || candidate == 0) {
+        return n00b_result_err(uint64_t, N00B_STORE_ERR_ARG);
+    }
+
+    uint64_t shard_id = candidate;
+    for (;;) {
+        if (shard_id == UINT64_MAX) {
+            return n00b_result_err(uint64_t, N00B_STORE_ERR_STATE);
+        }
+
+        if (n00b_option_is_set(rocs_store_catalog_find_raw(store, shard_id))) {
+            shard_id++;
+            continue;
+        }
+
+        auto path_r = rocs_store_shard_object_path(store, shard_id);
+        if (n00b_result_is_err(path_r)) {
+            return n00b_result_err(uint64_t, n00b_result_get_err(path_r));
+        }
+
+        auto stat_r = n00b_vfs_stat(store->vfs, n00b_result_get(path_r));
+        if (n00b_result_is_err(stat_r)) {
+            if (n00b_result_get_err(stat_r) == N00B_VFS_ERR_NOT_FOUND) {
+                return n00b_result_ok(uint64_t, shard_id);
+            }
+            return n00b_result_err(uint64_t, N00B_STORE_ERR_VFS);
+        }
+
+        shard_id++;
+    }
+}
+
 static n00b_result_t(bool)
 rocs_store_catalog_write_staged(n00b_store_t               *store,
                                 n00b_store_catalog_entry_t *pending_entry,
@@ -4112,7 +4147,16 @@ n00b_store_open_vfs(n00b_vfs_t          *vfs,
         return n00b_result_err(n00b_store_t *, n00b_result_get_err(catalog_r));
     }
 
-    uint64_t hot_shard_id = store->next_shard_id - 1;
+    uint64_t requested_hot_shard_id = store->next_shard_id - 1;
+    auto     hot_shard_id_r =
+        rocs_store_first_free_hot_shard_id(store, requested_hot_shard_id);
+    if (n00b_result_is_err(hot_shard_id_r)) {
+        return n00b_result_err(n00b_store_t *,
+                               n00b_result_get_err(hot_shard_id_r));
+    }
+    uint64_t hot_shard_id = n00b_result_get(hot_shard_id_r);
+    store->next_shard_id  = hot_shard_id + 1;
+
     auto shard_r = n00b_store_shard_new(
         .shard_id   = hot_shard_id,
         .retain_raw = retain_policy->kind == N00B_STORE_RETAIN_INLINE,

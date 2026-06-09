@@ -1190,6 +1190,51 @@ rocs_wax_cache_json_string(n00b_json_node_t *json, n00b_string_t *field)
 }
 
 static n00b_string_t *
+rocs_wax_cache_event_tail(n00b_string_t *event_id)
+{
+    if (rocs_wax_cache_str_empty(event_id)) {
+        return r"";
+    }
+
+    size_t tail = 0;
+    for (size_t i = 0; i < event_id->u8_bytes; i++) {
+        if (event_id->data[i] == ':') {
+            tail = i + 1;
+        }
+    }
+
+    return n00b_string_from_raw(event_id->data + tail,
+                                (int64_t)(event_id->u8_bytes - tail));
+}
+
+static n00b_string_t *
+rocs_wax_cache_payload_json(n00b_json_node_t *record)
+{
+    n00b_string_t *raw = rocs_wax_cache_json_string(record, r"raw_json");
+    if (!rocs_wax_cache_str_empty(raw)) {
+        return raw;
+    }
+
+    char *encoded = n00b_json_encode(record);
+    return encoded == nullptr ? r"{}" : n00b_string_from_cstr(encoded);
+}
+
+static n00b_string_t *
+rocs_wax_cache_short_pos(n00b_store_pos_t pos)
+{
+    if (pos.generation == 0) {
+        return n00b_cformat("[|#|]:[|#|]",
+                            (int64_t)pos.shard_id,
+                            (int64_t)pos.ordinal);
+    }
+
+    return n00b_cformat("[|#|]:[|#|]:[|#|]",
+                        (int64_t)pos.generation,
+                        (int64_t)pos.shard_id,
+                        (int64_t)pos.ordinal);
+}
+
+static n00b_string_t *
 rocs_wax_cache_server_hit_pos(n00b_json_node_t *hit)
 {
     n00b_store_pos_t pos = {
@@ -1200,21 +1245,7 @@ rocs_wax_cache_server_hit_pos(n00b_json_node_t *hit)
         .ordinal    = (uint64_t)n00b_json_as_i64(n00b_json_object_get(hit,
                                                                       r"ordinal")),
     };
-    auto encoded_r = n00b_store_pos_encode(pos);
-    return n00b_result_is_ok(encoded_r) ? n00b_result_get(encoded_r) : r"";
-}
-
-static double
-rocs_wax_cache_server_hit_score(n00b_json_node_t *hit)
-{
-    n00b_json_node_t *score = n00b_json_object_get(hit, r"score");
-    if (n00b_json_is_double(score)) {
-        return n00b_json_as_f64(score);
-    }
-    if (n00b_json_is_int(score)) {
-        return (double)n00b_json_as_i64(score);
-    }
-    return 0.0;
+    return rocs_wax_cache_short_pos(pos);
 }
 
 static n00b_result_t(bool)
@@ -1226,35 +1257,27 @@ rocs_wax_cache_server_print_hit(n00b_json_node_t *hit, int32_t format)
     }
 
     if (format == ROCS_WAX_CACHE_FORMAT_JSONL) {
-        n00b_string_t *raw = rocs_wax_cache_json_string(record, r"raw_json");
-        if (rocs_wax_cache_str_empty(raw)) {
-            char *encoded = n00b_json_encode(record);
-            raw = encoded == nullptr ? r"{}" : n00b_string_from_cstr(encoded);
-        }
-        n00b_printf("«#»", raw);
+        n00b_printf("«#»", rocs_wax_cache_payload_json(record));
         return n00b_result_ok(bool, true);
     }
 
     n00b_string_t *pos = rocs_wax_cache_server_hit_pos(hit);
-    double         score = rocs_wax_cache_server_hit_score(hit);
     if (format == ROCS_WAX_CACHE_FORMAT_TABLE) {
-        n00b_printf("«#»\t«#»\t«#»\t«#»\t«#»\t«#»",
+        n00b_printf("«#»\t«#»\t«#»\t«#»",
                     pos,
-                    n00b_cformat("[|#:.6f|]", &score),
-                    rocs_wax_cache_json_string(record, r"event_id"),
+                    rocs_wax_cache_event_tail(
+                        rocs_wax_cache_json_string(record, r"event_id")),
                     rocs_wax_cache_json_string(record, r"kind"),
-                    rocs_wax_cache_json_string(record, r"class"),
-                    rocs_wax_cache_json_string(record, r"family"));
+                    rocs_wax_cache_payload_json(record));
         return n00b_result_ok(bool, true);
     }
 
-    n00b_printf("pos=«#» score=«#» event_id=«#» kind=«#» class=«#» family=«#»",
+    n00b_printf("pos=«#» id=«#» kind=«#» json=«#»",
                 pos,
-                n00b_cformat("[|#:.6f|]", &score),
-                rocs_wax_cache_json_string(record, r"event_id"),
+                rocs_wax_cache_event_tail(
+                    rocs_wax_cache_json_string(record, r"event_id")),
                 rocs_wax_cache_json_string(record, r"kind"),
-                rocs_wax_cache_json_string(record, r"class"),
-                rocs_wax_cache_json_string(record, r"family"));
+                rocs_wax_cache_payload_json(record));
     return n00b_result_ok(bool, true);
 }
 
@@ -1346,6 +1369,10 @@ rocs_wax_cache_tool_search(rocs_wax_cache_search_args_t *args)
             return 2;
         }
         n00b_json_array_t *items = n00b_json_as_array(hits);
+        if (n00b_list_len(*items) == 0
+            && args->format != ROCS_WAX_CACHE_FORMAT_JSONL) {
+            n00b_printf("(No records)");
+        }
         for (size_t i = 0; i < n00b_list_len(*items); i++) {
             auto print_r =
                 rocs_wax_cache_server_print_hit(n00b_list_get(*items, i),

@@ -62,8 +62,8 @@ wax_usage(void)
         "  --cache-bin PATH    n00b-rocs-wax-cache binary\n"
         "  --gateway-socket P  wax gateway AF_UNIX socket\n"
         "\n"
-        "wax starts the local rocs daemon and gateway subscriber on demand. "
-        "Config defaults to\n"
+        "wax search starts the local rocs daemon on demand; wax start also "
+        "starts the gateway subscriber. Config defaults to\n"
         "$XDG_CONFIG_HOME/n00b/wax.toml when that file exists.\n");
 }
 
@@ -1198,12 +1198,9 @@ wax_normalize_argv(int argc, char **argv, int *parse_argc)
     return normalized;
 }
 
-int
-main(int argc, char **argv)
+static int
+wax_main(int argc, char **argv)
 {
-    n00b_runtime_t rt;
-    n00b_init(&rt, argc, argv);
-
     int          parse_argc = 0;
     const char **parse_argv = wax_normalize_argv(argc, argv, &parse_argc);
 
@@ -1276,15 +1273,21 @@ main(int argc, char **argv)
             return rc;
         }
 
-        rc = wax_start_subscriber(&cfg, false);
-        if (rc != 0) {
-            return rc;
-        }
-
         return wax_run_search(&cfg, r);
     }
 
     wax_usage();
 
     return 2;
+}
+
+int
+main(int argc, char **argv)
+{
+    n00b_runtime_t rt;
+    n00b_init(&rt, argc, argv);
+
+    int rc = wax_main(argc, argv);
+    n00b_shutdown();
+    return rc;
 }
