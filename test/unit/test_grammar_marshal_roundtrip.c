@@ -3,11 +3,13 @@
 
 #include "n00b.h"
 #include "audit_paths.h"
+#include "conduit/print.h"
 #include "core/file.h"
 #include "core/runtime.h"
 #include "internal/slay/grammar_internal.h"
 #include "slay/bnf.h"
 #include "slay/grammar.h"
+#include "slay/grammar_image.h"
 #include "util/assert.h"
 #include "util/marshal.h"
 
@@ -42,7 +44,13 @@ marshal_checked(void *root, uint32_t base_address)
     n00b_marshal_ctx_t *ctx = n00b_marshal_ctx_new(.base_address = base_address);
     n00b_buffer_t      *buf = n00b_marshal_incremental(ctx, root);
 
-    CHECK(n00b_marshal_ctx_status(ctx) == N00B_MARSHAL_OK);
+    n00b_marshal_status_t status = n00b_marshal_ctx_status(ctx);
+    if (status != N00B_MARSHAL_OK) {
+        n00b_eprintf("marshal failed: «#»: «#»",
+                     n00b_marshal_status_name(status),
+                     n00b_marshal_ctx_error(ctx));
+    }
+    CHECK(status == N00B_MARSHAL_OK);
     CHECK(buf != nullptr);
     n00b_marshal_ctx_destroy(ctx);
 
@@ -55,7 +63,13 @@ unmarshal_grammar_checked(n00b_buffer_t *buf)
     n00b_unmarshal_ctx_t *ctx   = n00b_unmarshal_ctx_new();
     n00b_list_t(void *)   roots = n00b_unmarshal_incremental(ctx, buf);
 
-    CHECK(n00b_unmarshal_ctx_status(ctx) == N00B_MARSHAL_OK);
+    n00b_marshal_status_t status = n00b_unmarshal_ctx_status(ctx);
+    if (status != N00B_MARSHAL_OK) {
+        n00b_eprintf("unmarshal failed: «#»: «#»",
+                     n00b_marshal_status_name(status),
+                     n00b_unmarshal_ctx_error(ctx));
+    }
+    CHECK(status == N00B_MARSHAL_OK);
     CHECK(n00b_list_len(roots) == 1);
     n00b_grammar_t *copy = n00b_list_get(roots, 0);
     CHECK(copy != nullptr);
@@ -82,6 +96,7 @@ static void
 test_n00b_grammar_marshal_round_trip(void)
 {
     n00b_grammar_t *g = load_n00b_grammar();
+    n00b_grammar_image_repair(g);
 
     size_t rules = n00b_list_len(g->rules);
     size_t nts   = n00b_list_len(g->nt_list);
@@ -97,6 +112,7 @@ test_n00b_grammar_marshal_round_trip(void)
     n00b_buffer_t *buf  = marshal_checked(g, base);
 
     n00b_grammar_t *copy = unmarshal_grammar_checked(buf);
+    n00b_grammar_image_repair(copy);
     CHECK(copy != g);
     CHECK(n00b_list_len(copy->rules) == rules);
     CHECK(n00b_list_len(copy->nt_list) == nts);

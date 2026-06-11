@@ -15,6 +15,7 @@
 #include "core/runtime.h"
 #include "core/static_objects.h"
 #include "core/stw.h"
+#include "text/strings/format.h"
 
 #include <stdint.h>
 #ifndef _WIN32
@@ -1078,6 +1079,7 @@ emit_fnpatch(n00b_marshal_ctx_t *ctx, uint64_t vaddr, uint64_t value)
 
 static bool
 emit_static_patch(n00b_marshal_ctx_t *ctx,
+                  n00b_marshal_node_t *node,
                   uint64_t            vaddr,
                   uint64_t            value,
                   bool               *zero_slot)
@@ -1095,7 +1097,17 @@ emit_static_patch(n00b_marshal_ctx_t *ctx,
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
-                          r"static pointer is not a registered static object");
+                          n00b_cformat("static pointer is not a registered static object: "
+                                       "slot=0x«#:x» value=0x«#:x» "
+                                       "owner=0x«#:x» len=«#» tinfo=0x«#:x» "
+                                       "scan_kind=«#» no_scan=«#»",
+                                       vaddr,
+                                       value,
+                                       node ? node->vaddr : 0,
+                                       node ? node->rec.user_len : 0,
+                                       node ? node->rec.tinfo : 0,
+                                       (uint64_t)(node ? node->rec.scan_kind : 0),
+                                       (uint64_t)(node ? node->rec.no_scan : 0)));
         return false;
     }
 
@@ -1404,6 +1416,7 @@ scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
                 case n00b_mmap_static:
                     bool zero_static_slot = false;
                     if (!emit_static_patch(ctx,
+                                           node,
                                            node->vaddr + i * sizeof(uint64_t),
                                            word,
                                            &zero_static_slot)) {
@@ -2727,7 +2740,8 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
-                                  r"marshaled function symbol could not be resolved");
+                                  n00b_cformat("marshaled function symbol could not be resolved: «#»",
+                                               n00b_string_from_cstr(name)));
                 return false;
             }
 

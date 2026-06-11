@@ -2,9 +2,135 @@
 #include "slay/grammar.h"
 #include "internal/slay/grammar_internal.h"
 #include <assert.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define N00B_WORD_OFFSET(T, field) ((uint64_t)(offsetof(T, field) / sizeof(void *)))
+#define N00B_LIST_DATA_OFFSET(Owner, field, Elem)                              \
+    ((uint64_t)((offsetof(Owner, field)                                        \
+                 + offsetof(n00b_list_t(Elem), data))                         \
+                / sizeof(void *)))
+
+static const uint64_t n00b_grammar_gc_offsets[] = {
+    N00B_LIST_DATA_OFFSET(n00b_grammar_t, rules, n00b_parse_rule_t),
+    N00B_LIST_DATA_OFFSET(n00b_grammar_t, nt_list, n00b_nonterm_t),
+    N00B_WORD_OFFSET(n00b_grammar_t, nt_map),
+    N00B_WORD_OFFSET(n00b_grammar_t, terminal_map),
+    N00B_WORD_OFFSET(n00b_grammar_t, literal_type_map),
+    N00B_WORD_OFFSET(n00b_grammar_t, valid_tokens),
+    N00B_WORD_OFFSET(n00b_grammar_t, terminal_by_id),
+    N00B_WORD_OFFSET(n00b_grammar_t, tokenizer_name),
+    N00B_WORD_OFFSET(n00b_grammar_t, left_corner_sets),
+    N00B_WORD_OFFSET(n00b_grammar_t, lr0_items),
+    N00B_WORD_OFFSET(n00b_grammar_t, lr0_rule_item_base),
+    N00B_WORD_OFFSET(n00b_grammar_t, lr0_states),
+    N00B_WORD_OFFSET(n00b_grammar_t, lr0_state_items),
+    N00B_WORD_OFFSET(n00b_grammar_t, lr0_gotos),
+    N00B_WORD_OFFSET(n00b_grammar_t, lr0_predict_state),
+    N00B_WORD_OFFSET(n00b_grammar_t, terminal_categories),
+};
+
+static const n00b_gc_struct_layout_t n00b_grammar_gc_layout = {
+    .stride       = sizeof(n00b_grammar_t) / sizeof(void *),
+    .count        = 0,
+    .offset_count = sizeof(n00b_grammar_gc_offsets) / sizeof(n00b_grammar_gc_offsets[0]),
+    .offsets      = n00b_grammar_gc_offsets,
+};
+
+N00B_GC_TYPE_MAP_SECTION
+static const n00b_gc_type_map_entry_t n00b_grammar_gcmap = {
+    .type_hash = typehash(n00b_grammar_t *),
+    .layout    = &n00b_grammar_gc_layout,
+};
+
+N00B_GC_TYPE_MAP_INDEX_SECTION
+static const n00b_gc_type_map_index_entry_t n00b_grammar_gcidx = {
+    .type_hash   = typehash(n00b_grammar_t *),
+    .entry_index = 0,
+};
+
+static const uint64_t n00b_nonterm_gc_offsets[] = {
+    N00B_WORD_OFFSET(n00b_nonterm_t, name),
+    N00B_WORD_OFFSET(n00b_nonterm_t, rule_ids),
+    N00B_WORD_OFFSET(n00b_nonterm_t, pending_annotations),
+    N00B_WORD_OFFSET(n00b_nonterm_t, user_data),
+    N00B_WORD_OFFSET(n00b_nonterm_t, first_set),
+};
+
+static const n00b_gc_struct_layout_t n00b_nonterm_gc_layout = {
+    .stride       = sizeof(n00b_nonterm_t) / sizeof(void *),
+    .count        = 0,
+    .offset_count = sizeof(n00b_nonterm_gc_offsets) / sizeof(n00b_nonterm_gc_offsets[0]),
+    .offsets      = n00b_nonterm_gc_offsets,
+};
+
+N00B_GC_TYPE_MAP_SECTION
+static const n00b_gc_type_map_entry_t n00b_nonterm_gcmap = {
+    .type_hash = typehash(n00b_nonterm_t *),
+    .layout    = &n00b_nonterm_gc_layout,
+};
+
+N00B_GC_TYPE_MAP_INDEX_SECTION
+static const n00b_gc_type_map_index_entry_t n00b_nonterm_gcidx = {
+    .type_hash   = typehash(n00b_nonterm_t *),
+    .entry_index = 0,
+};
+
+static const uint64_t n00b_parse_rule_gc_offsets[] = {
+    N00B_WORD_OFFSET(n00b_parse_rule_t, contents),
+    N00B_WORD_OFFSET(n00b_parse_rule_t, annotations),
+    N00B_WORD_OFFSET(n00b_parse_rule_t, first_set),
+    N00B_WORD_OFFSET(n00b_parse_rule_t, doc),
+    N00B_WORD_OFFSET(n00b_parse_rule_t, rewrite),
+    N00B_WORD_OFFSET(n00b_parse_rule_t, captures),
+};
+
+static const n00b_gc_struct_layout_t n00b_parse_rule_gc_layout = {
+    .stride       = sizeof(n00b_parse_rule_t) / sizeof(void *),
+    .count        = 0,
+    .offset_count = sizeof(n00b_parse_rule_gc_offsets) / sizeof(n00b_parse_rule_gc_offsets[0]),
+    .offsets      = n00b_parse_rule_gc_offsets,
+};
+
+N00B_GC_TYPE_MAP_SECTION
+static const n00b_gc_type_map_entry_t n00b_parse_rule_gcmap = {
+    .type_hash = typehash(n00b_parse_rule_t *),
+    .layout    = &n00b_parse_rule_gc_layout,
+};
+
+N00B_GC_TYPE_MAP_INDEX_SECTION
+static const n00b_gc_type_map_index_entry_t n00b_parse_rule_gcidx = {
+    .type_hash   = typehash(n00b_parse_rule_t *),
+    .entry_index = 0,
+};
+
+static const uint64_t n00b_match_gc_offsets[] = {
+    0,
+};
+
+static const n00b_gc_struct_layout_t n00b_match_gc_layout = {
+    .stride       = sizeof(n00b_match_t) / sizeof(void *),
+    .count        = 0,
+    .offset_count = sizeof(n00b_match_gc_offsets) / sizeof(n00b_match_gc_offsets[0]),
+    .offsets      = n00b_match_gc_offsets,
+};
+
+N00B_GC_TYPE_MAP_SECTION
+static const n00b_gc_type_map_entry_t n00b_match_gcmap = {
+    .type_hash = typehash(n00b_match_t *),
+    .layout    = &n00b_match_gc_layout,
+};
+
+N00B_GC_TYPE_MAP_INDEX_SECTION
+static const n00b_gc_type_map_index_entry_t n00b_match_gcidx = {
+    .type_hash   = typehash(n00b_match_t *),
+    .entry_index = 0,
+};
+
+#undef N00B_WORD_OFFSET
+#undef N00B_LIST_DATA_OFFSET
 
 // ============================================================================
 // Nullability computation
@@ -587,7 +713,9 @@ static int32_t group_id_counter = 1;
 n00b_match_t
 n00b_group_match_v(n00b_grammar_t *g, int min, int max, int n, n00b_match_t *items)
 {
-    n00b_rule_group_t *group = n00b_alloc(n00b_rule_group_t);
+    n00b_rule_group_t *group = n00b_alloc_with_opts(
+        n00b_rule_group_t,
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_NONE});
 
     group->gid = group_id_counter++;
     group->min = min;
@@ -1020,6 +1148,11 @@ compute_left_corners(n00b_grammar_t *g)
 #define LR0_SYM_EMPTY  (INT64_MIN + 2)
 #define LR0_SYM_SET    (INT64_MIN + 3)
 
+#define LR0_ALLOC_SCALAR_ARRAY(T, N)                                                           \
+    n00b_alloc_array_with_opts(T,                                                              \
+                               N,                                                              \
+                               &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_NONE})
+
 static int64_t
 lr0_symbol_of_match(n00b_match_t *m)
 {
@@ -1057,7 +1190,7 @@ compute_lr0_items(n00b_grammar_t *g)
 {
     size_t n_rules = g->rules.len;
 
-    g->lr0_rule_item_base = n00b_alloc_array(int32_t, n_rules);
+    g->lr0_rule_item_base = LR0_ALLOC_SCALAR_ARRAY(int32_t, n_rules);
 
     // Count total items first.
     int32_t total = 0;
@@ -1070,7 +1203,7 @@ compute_lr0_items(n00b_grammar_t *g)
         total += len + 1; // dot positions 0..len
     }
 
-    g->lr0_items      = n00b_alloc_array(n00b_lr0_item_t, total);
+    g->lr0_items      = LR0_ALLOC_SCALAR_ARRAY(n00b_lr0_item_t, total);
     g->lr0_item_count = total;
 
     for (size_t i = 0; i < n_rules; i++) {
@@ -1232,22 +1365,22 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
         int32_t old_cap = b->states_cap;
         b->states_cap *= 2;
 
-        int32_t *new_state_starts = n00b_alloc_array(int32_t, b->states_cap);
+        int32_t *new_state_starts = LR0_ALLOC_SCALAR_ARRAY(int32_t, b->states_cap);
         memcpy(new_state_starts, b->state_starts, (size_t)old_cap * sizeof(int32_t));
         n00b_free(b->state_starts);
         b->state_starts = new_state_starts;
 
-        int32_t *new_state_counts = n00b_alloc_array(int32_t, b->states_cap);
+        int32_t *new_state_counts = LR0_ALLOC_SCALAR_ARRAY(int32_t, b->states_cap);
         memcpy(new_state_counts, b->state_counts, (size_t)old_cap * sizeof(int32_t));
         n00b_free(b->state_counts);
         b->state_counts = new_state_counts;
 
-        int32_t *new_goto_starts = n00b_alloc_array(int32_t, b->states_cap);
+        int32_t *new_goto_starts = LR0_ALLOC_SCALAR_ARRAY(int32_t, b->states_cap);
         memcpy(new_goto_starts, b->goto_starts, (size_t)old_cap * sizeof(int32_t));
         n00b_free(b->goto_starts);
         b->goto_starts = new_goto_starts;
 
-        int32_t *new_goto_counts = n00b_alloc_array(int32_t, b->states_cap);
+        int32_t *new_goto_counts = LR0_ALLOC_SCALAR_ARRAY(int32_t, b->states_cap);
         memcpy(new_goto_counts, b->goto_counts, (size_t)old_cap * sizeof(int32_t));
         n00b_free(b->goto_counts);
         b->goto_counts = new_goto_counts;
@@ -1257,7 +1390,7 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
         int32_t  old_si_cap = b->state_items_cap;
         b->state_items_cap *= 2;
 
-        int32_t *new_si = n00b_alloc_array(int32_t, b->state_items_cap);
+        int32_t *new_si = LR0_ALLOC_SCALAR_ARRAY(int32_t, b->state_items_cap);
         memcpy(new_si, b->state_items, (size_t)old_si_cap * sizeof(int32_t));
         n00b_free(b->state_items);
         b->state_items = new_si;
@@ -1280,8 +1413,8 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
         int32_t *old_dsid  = b->dedup_sid;
 
         b->dedup_cap *= 2;
-        b->dedup_hash = n00b_alloc_array(int64_t, b->dedup_cap);
-        b->dedup_sid  = n00b_alloc_array(int32_t, b->dedup_cap);
+        b->dedup_hash = LR0_ALLOC_SCALAR_ARRAY(int64_t, b->dedup_cap);
+        b->dedup_sid  = LR0_ALLOC_SCALAR_ARRAY(int32_t, b->dedup_cap);
 
         int32_t dmask = b->dedup_cap - 1;
 
@@ -1343,17 +1476,17 @@ build_lr0_states(n00b_grammar_t *g)
         .dedup_cap         = 1024,
     };
 
-    b.state_starts = n00b_alloc_array(int32_t, b.states_cap);
-    b.state_counts = n00b_alloc_array(int32_t, b.states_cap);
-    b.state_items  = n00b_alloc_array(int32_t, b.state_items_cap);
-    b.goto_starts  = n00b_alloc_array(int32_t, b.states_cap);
-    b.goto_counts  = n00b_alloc_array(int32_t, b.states_cap);
-    b.gotos        = n00b_alloc_array(n00b_lr0_goto_t, b.gotos_cap);
-    b.dedup_hash   = n00b_alloc_array(int64_t, b.dedup_cap);
-    b.dedup_sid    = n00b_alloc_array(int32_t, b.dedup_cap);
+    b.state_starts = LR0_ALLOC_SCALAR_ARRAY(int32_t, b.states_cap);
+    b.state_counts = LR0_ALLOC_SCALAR_ARRAY(int32_t, b.states_cap);
+    b.state_items  = LR0_ALLOC_SCALAR_ARRAY(int32_t, b.state_items_cap);
+    b.goto_starts  = LR0_ALLOC_SCALAR_ARRAY(int32_t, b.states_cap);
+    b.goto_counts  = LR0_ALLOC_SCALAR_ARRAY(int32_t, b.states_cap);
+    b.gotos        = LR0_ALLOC_SCALAR_ARRAY(n00b_lr0_goto_t, b.gotos_cap);
+    b.dedup_hash   = LR0_ALLOC_SCALAR_ARRAY(int64_t, b.dedup_cap);
+    b.dedup_sid    = LR0_ALLOC_SCALAR_ARRAY(int32_t, b.dedup_cap);
 
-    uint64_t *bits     = n00b_alloc_array(uint64_t, bitset_words);
-    int32_t  *itemlist = n00b_alloc_array(int32_t, g->lr0_item_count);
+    uint64_t *bits     = LR0_ALLOC_SCALAR_ARRAY(uint64_t, bitset_words);
+    int32_t  *itemlist = LR0_ALLOC_SCALAR_ARRAY(int32_t, g->lr0_item_count);
 
     // Create initial state: closure of start NT's rules at dot=0.
     {
@@ -1383,8 +1516,8 @@ build_lr0_states(n00b_grammar_t *g)
     }
 
     int32_t sym_buf_sz = g->lr0_item_count > 256 ? g->lr0_item_count : 256;
-    int64_t *sym_buf   = n00b_alloc_array(int64_t, sym_buf_sz);
-    int32_t *kernel    = n00b_alloc_array(int32_t, g->lr0_item_count);
+    int64_t *sym_buf   = LR0_ALLOC_SCALAR_ARRAY(int64_t, sym_buf_sz);
+    int32_t *kernel    = LR0_ALLOC_SCALAR_ARRAY(int32_t, g->lr0_item_count);
 
     for (int32_t si = 0; si < b.states_count; si++) {
         int32_t s_off = b.state_starts[si];
@@ -1466,7 +1599,7 @@ build_lr0_states(n00b_grammar_t *g)
             if (b.gotos_count >= b.gotos_cap) {
                 int32_t          old_gcap = b.gotos_cap;
                 b.gotos_cap *= 2;
-                n00b_lr0_goto_t *new_gotos = n00b_alloc_array(n00b_lr0_goto_t, b.gotos_cap);
+                n00b_lr0_goto_t *new_gotos = LR0_ALLOC_SCALAR_ARRAY(n00b_lr0_goto_t, b.gotos_cap);
                 memcpy(new_gotos, b.gotos, (size_t)old_gcap * sizeof(n00b_lr0_goto_t));
                 n00b_free(b.gotos);
                 b.gotos = new_gotos;
@@ -1483,7 +1616,7 @@ build_lr0_states(n00b_grammar_t *g)
 
     // Flatten into grammar struct.
     g->lr0_state_count = b.states_count;
-    g->lr0_states      = n00b_alloc_array(n00b_lr0_state_t, b.states_count);
+    g->lr0_states      = LR0_ALLOC_SCALAR_ARRAY(n00b_lr0_state_t, b.states_count);
 
     for (int32_t i = 0; i < b.states_count; i++) {
         g->lr0_states[i] = (n00b_lr0_state_t){
@@ -1519,11 +1652,11 @@ lr0_compute_predict_states(n00b_grammar_t *g)
 {
     size_t n_nts = g->nt_list.len;
 
-    g->lr0_predict_state = n00b_alloc_array(int32_t, n_nts);
+    g->lr0_predict_state = LR0_ALLOC_SCALAR_ARRAY(int32_t, n_nts);
 
     int32_t   bitset_words = (g->lr0_item_count + 63) / 64;
-    uint64_t *bits         = n00b_alloc_array(uint64_t, bitset_words);
-    int32_t  *itemlist     = n00b_alloc_array(int32_t, g->lr0_item_count);
+    uint64_t *bits         = LR0_ALLOC_SCALAR_ARRAY(uint64_t, bitset_words);
+    int32_t  *itemlist     = LR0_ALLOC_SCALAR_ARRAY(int32_t, g->lr0_item_count);
 
     for (size_t i = 0; i < n_nts; i++) {
         n00b_nonterm_t *nt = n00b_get_nonterm(g, (int64_t)i);

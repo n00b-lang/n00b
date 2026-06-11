@@ -12,6 +12,50 @@
 
 #include "slay/annotation.h"
 #include "internal/slay/grammar_internal.h"
+#include <stddef.h>
+
+#define N00B_WORD_OFFSET(T, field) ((uint64_t)(offsetof(T, field) / sizeof(void *)))
+#define N00B_CHILD_REF_NAME_OFFSET(field)                                      \
+    ((uint64_t)((offsetof(n00b_annotation_t, field)                            \
+                 + offsetof(n00b_child_ref_t, name))                           \
+                / sizeof(void *)))
+
+static const uint64_t n00b_annotation_gc_offsets[] = {
+    N00B_CHILD_REF_NAME_OFFSET(name_ref),
+    N00B_CHILD_REF_NAME_OFFSET(type_ref),
+    N00B_CHILD_REF_NAME_OFFSET(value_ref),
+    N00B_WORD_OFFSET(n00b_annotation_t, scope_tag),
+    N00B_WORD_OFFSET(n00b_annotation_t, type_spec),
+    N00B_WORD_OFFSET(n00b_annotation_t, infer_expr),
+    N00B_WORD_OFFSET(n00b_annotation_t, adt_kind),
+    N00B_WORD_OFFSET(n00b_annotation_t, visibility_spec),
+    N00B_WORD_OFFSET(n00b_annotation_t, op_kind),
+    N00B_CHILD_REF_NAME_OFFSET(notrivia_ref),
+    N00B_WORD_OFFSET(n00b_annotation_t, sym_kind),
+    N00B_CHILD_REF_NAME_OFFSET(adt_keyword_ref),
+};
+
+static const n00b_gc_struct_layout_t n00b_annotation_gc_layout = {
+    .stride       = sizeof(n00b_annotation_t) / sizeof(void *),
+    .count        = 0,
+    .offset_count = sizeof(n00b_annotation_gc_offsets) / sizeof(n00b_annotation_gc_offsets[0]),
+    .offsets      = n00b_annotation_gc_offsets,
+};
+
+N00B_GC_TYPE_MAP_SECTION
+static const n00b_gc_type_map_entry_t n00b_annotation_gcmap = {
+    .type_hash = typehash(n00b_annotation_t *),
+    .layout    = &n00b_annotation_gc_layout,
+};
+
+N00B_GC_TYPE_MAP_INDEX_SECTION
+static const n00b_gc_type_map_index_entry_t n00b_annotation_gcidx = {
+    .type_hash   = typehash(n00b_annotation_t *),
+    .entry_index = 0,
+};
+
+#undef N00B_CHILD_REF_NAME_OFFSET
+#undef N00B_WORD_OFFSET
 
 // ============================================================================
 // Core annotation attachment

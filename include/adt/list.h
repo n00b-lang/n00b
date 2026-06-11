@@ -86,6 +86,28 @@
 #define _n00b_list_unlock(xptr)     n00b_data_unlock((xptr)->lock)
 
 /**
+ * @internal Capture the allocation-time type-map upgrade before constructing
+ *           list backing storage. `_n00b_alloc_raw` also upgrades DEFAULT
+ *           typed allocations, but list growth uses `n00b_alloc_size*` with no
+ *           type hash, so the list has to retain the precise scan metadata
+ *           captured where the element type is statically named.
+ */
+#define _n00b_list_capture_scan_opts(T, optsp)                                                 \
+    do {                                                                                       \
+        n00b_alloc_opts_t *_bl_opts = (optsp);                                                  \
+        if (_bl_opts->scan_kind == N00B_GC_SCAN_KIND_DEFAULT                                    \
+            && _bl_opts->scan_cb == nullptr) {                                                  \
+            const n00b_gc_struct_layout_t *_bl_layout =                                         \
+                n00b_gc_type_map_lookup(typehash(T *));                                         \
+            if (_bl_layout != nullptr) {                                                        \
+                _bl_opts->scan_kind = N00B_GC_SCAN_KIND_CALLBACK;                               \
+                _bl_opts->scan_cb   = n00b_gc_scan_cb_type_layout;                              \
+                _bl_opts->scan_user = (void *)_bl_layout;                                       \
+            }                                                                                  \
+        }                                                                                      \
+    } while (0)
+
+/**
  * @internal Grow backing store to at least @p needed elements (power-of-2).
  *           MUST be called within a locked context.  Re-applies the
  *           list's stored scan_kind / scan_cb / scan_user to the new
@@ -143,8 +165,10 @@
 #define _n00b_list_new_sel(T, locked, ...)                                                     \
     ({                                                                                         \
         n00b_alloc_opts_t _bl_o = (n00b_alloc_opts_t){__VA_ARGS__};                            \
+        _n00b_list_capture_scan_opts(T, &_bl_o);                                                \
+        T *_bl_data = n00b_alloc_array_with_opts(T, N00B_DEFAULT_LIST_SZ, &_bl_o);              \
         (n00b_list_t(T)){                                                                      \
-            .data = n00b_alloc_array_with_opts(T, N00B_DEFAULT_LIST_SZ, &_bl_o),               \
+            .data      = _bl_data,                                                             \
             .len       = 0,                                                                    \
             .cap       = N00B_DEFAULT_LIST_SZ,                                                 \
             .lock      = (locked) ? n00b_data_lock_new(.allocator = _bl_o.allocator)           \
@@ -171,8 +195,10 @@
     ({                                                                                         \
         size_t _bl_rc = n00b_align_closest_pow2_ceil(n00b_max((size_t)(N), (size_t)1));        \
         n00b_alloc_opts_t _bl_o = (n00b_alloc_opts_t){__VA_ARGS__};                            \
+        _n00b_list_capture_scan_opts(T, &_bl_o);                                                \
+        T *_bl_data = n00b_alloc_array_with_opts(T, _bl_rc, &_bl_o);                            \
         (n00b_list_t(T)){                                                                      \
-            .data = n00b_alloc_array_with_opts(T, _bl_rc, &_bl_o),                             \
+            .data      = _bl_data,                                                             \
             .len       = 0,                                                                    \
             .cap       = _bl_rc,                                                               \
             .lock      = (locked) ? n00b_data_lock_new(.allocator = _bl_o.allocator)           \
