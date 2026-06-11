@@ -114,9 +114,12 @@ n00b_thread_generation(void)
 // OS-level thread id, resolved WITHOUT n00b_thread_self() / the TCB.  The
 // critical_execution lock owner is keyed on this (a thread holds the lock
 // during its whole init/destroy, when self() is not resolvable), so it must
-// not depend on runtime state.  Framed is fine: not on the n00b_thread_self()
-// instrumentation path (D-019).
-int64_t
+// not depend on runtime state.  It is [[n00b::nogc]] — it has no GC roots
+// (scalar locals only) and MUST stay un-instrumented: n00b_thread_self()'s
+// foreign slow path now calls it to resolve a bounds-less foreign thread by
+// identity, and a framed prologue here would itself call n00b_thread_self()
+// and recurse (D-019).
+[[n00b::nogc]] int64_t
 n00b_os_thread_id(void)
 {
 #if defined(__linux__)
@@ -384,6 +387,16 @@ n00b_thread_init() _kargs
         init_self.os_tid = (uint32_t)GetCurrentThreadId();
 #endif
     }
+
+    // Publish this thread's stable OS id onto its slot record BEFORE its
+    // live-slot bit is set (n00b_capture_stack_base sets that bit for a
+    // foreign thread, just below for others), so the n00b_thread_self()
+    // foreign slow path can resolve a BOUNDS-LESS foreign thread by identity
+    // the instant its bit becomes visible — including at the read-hold adopt
+    // inside capture_base.  init_self.os_tid was captured just above (foreign)
+    // / in the callstack block (worker); main leaves it 0 here and resolves by
+    // range.
+    n00b_atomic_store(&rec->os_tid, (uint32_t)init_self.os_tid);
 
     // Publish bounds + the init self pointer so n00b_thread_self() resolves for this
     // thread during the permanent-struct allocation below.  capture_base

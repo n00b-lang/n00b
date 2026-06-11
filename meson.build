@@ -1238,6 +1238,12 @@ thread_self_foreign_test = executable('test_thread_self_foreign',
 )
 test('thread_self_foreign', thread_self_foreign_test, suite: 'unit')
 
+thread_self_boundsless_foreign_test = executable('test_thread_self_boundsless_foreign',
+    ['test/unit/test_thread_self_boundsless_foreign.c'],
+    kwargs: test_common_kwargs,
+)
+test('thread_self_boundsless_foreign', thread_self_boundsless_foreign_test, suite: 'unit')
+
 thread_self_bench = executable('test_thread_self_bench',
     ['test/unit/test_thread_self_bench.c'],
     kwargs: test_common_kwargs,

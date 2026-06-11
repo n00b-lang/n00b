@@ -94,6 +94,14 @@ struct n00b_thread_record_t {
      * any thread. */
     _Atomic(void *) stack_lo;
     _Atomic(void *) stack_hi;
+    /* Stable OS thread id (macOS: Mach thread-port scalar; Linux: tid;
+     * Win32: GetCurrentThreadId), published before this slot's live bit.
+     * Lets n00b_thread_self()'s foreign slow path resolve a BOUNDS-LESS
+     * foreign thread (attached with no stack range, so absent from the
+     * SP-range scan and deliberately not GC-stack-scanned) by identity, so
+     * it is still resolvable for lock/gate reentrancy accounting.  Zero on
+     * records that never set it (they resolve by range / callstack). */
+    _Atomic(uint32_t) os_tid;
 };
 
 /**
@@ -392,9 +400,11 @@ struct n00b_thread_t {
  * As a macro it has no prologue to instrument, and its entire body is
  * instrumentation-free — it expands to pure atomic loads (compiler
  * intrinsics via the `n00b_atomic_load` macro), `__builtin_frame_address`
- * for the SP, and masking arithmetic, calling no framed function.  In
- * particular it reaches the runtime through the `n00b_default_runtime`
- * global with the `n00b_option_*` macros rather than any accessor.
+ * for the SP, and masking arithmetic.  The one helper its foreign
+ * slow path calls — `n00b_os_thread_id()` — is `[[n00b::nogc]]`, so it
+ * carries no framed prologue and cannot recurse back into this macro.  It
+ * reaches the runtime through the `n00b_default_runtime` global with the
+ * `n00b_option_*` macros rather than any accessor.
  *
  * Call sites are unchanged: `n00b_thread_self()` reads identically and
  * `&n00b_thread_self()->field` remains a valid address-of-a-field.
@@ -525,9 +535,18 @@ struct n00b_thread_t {
                                 uint32_t              _bl_idx = (_bl_w << 6) + _bl_bit;         \
                                 n00b_thread_record_t *_bl_r   = &_bl_rt->threads[_bl_idx];      \
                                 void *_bl_rlo = n00b_atomic_load(&_bl_r->stack_lo);             \
-                                if (_bl_rlo == nullptr) {                                       \
-                                    continue;                                                   \
-                                }                                                               \
+                                if (_bl_rlo == nullptr) { \
+                                    /* Bounds-less FOREIGN thread (attached with no stack range, so \
+                                     * absent from this SP-range scan and not GC-stack-scanned): \
+                                     * resolve it by its stable OS thread id (published before the \
+                                     * live bit) so it stays identifiable for lock/gate reentrancy. */ \
+                                    uint32_t _bl_rtid = n00b_atomic_load(&_bl_r->os_tid); \
+                                    if (_bl_rtid != 0 && _bl_rtid == (uint32_t)n00b_os_thread_id()) { \
+                                        _bl_result = n00b_atomic_load(&_bl_r->thread); \
+                                        break; \
+                                    } \
+                                    continue; \
+                                } \
                                 void *_bl_rhi = n00b_atomic_load(&_bl_r->stack_hi);             \
                                 if (_bl_sp >= _bl_rlo && _bl_sp < _bl_rhi) {                    \
                                     _bl_result = n00b_atomic_load(&_bl_r->thread);              \
@@ -613,7 +632,7 @@ extern int32_t n00b_thread_id(void);
  * resolvable.  The lock owner / reentrancy key is therefore keyed on this id,
  * not on the runtime slot id (which only indexes rt->threads[]).
  */
-extern int64_t n00b_os_thread_id(void);
+[[n00b::nogc]] extern int64_t n00b_os_thread_id(void);
 
 /**
  * @brief Get the current thread's generation counter.
