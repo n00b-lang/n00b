@@ -3,9 +3,16 @@
 
 #if defined(_WIN32)
 
+#include <direct.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <io.h>
+#include <process.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int
 n00b_test_asprintf(char **out, const char *fmt, ...)
@@ -46,6 +53,105 @@ n00b_test_asprintf(char **out, const char *fmt, ...)
 }
 
 #define asprintf n00b_test_asprintf
+
+static int
+n00b_test_setenv(const char *name, const char *value, int overwrite)
+{
+    if (!overwrite && getenv(name) != NULL) {
+        return 0;
+    }
+
+    return _putenv_s(name, value ? value : "");
+}
+
+static int
+n00b_test_unsetenv(const char *name)
+{
+    return _putenv_s(name, "");
+}
+
+static int
+n00b_test_mkdir(const char *path, int mode)
+{
+    (void)mode;
+    return _mkdir(path);
+}
+
+static int
+n00b_test_fcntl(int fd, int cmd, ...)
+{
+    (void)fd;
+    (void)cmd;
+    return 0;
+}
+
+static char
+n00b_test_mkdtemp_digit(unsigned value)
+{
+    static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    return digits[value % 36u];
+}
+
+static char *
+n00b_test_mkdtemp(char *tmpl)
+{
+    if (!tmpl) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    size_t len = strlen(tmpl);
+    if (len < 6u) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    char *x = tmpl + len - 6u;
+    for (size_t i = 0; i < 6u; i++) {
+        if (x[i] != 'X') {
+            errno = EINVAL;
+            return NULL;
+        }
+    }
+
+    unsigned seed = (unsigned)_getpid() ^ (unsigned)(uintptr_t)tmpl;
+    for (unsigned attempt = 0; attempt < 1000000u; attempt++) {
+        unsigned value = seed + attempt;
+        for (size_t i = 0; i < 6u; i++) {
+            x[i] = n00b_test_mkdtemp_digit(value);
+            value /= 36u;
+        }
+
+        if (_mkdir(tmpl) == 0) {
+            return tmpl;
+        }
+        if (errno != EEXIST) {
+            return NULL;
+        }
+    }
+
+    errno = EEXIST;
+    return NULL;
+}
+
+#ifndef F_GETFL
+#define F_GETFL 3
+#endif
+#ifndef F_SETFL
+#define F_SETFL 4
+#endif
+#ifndef O_NONBLOCK
+#define O_NONBLOCK 0
+#endif
+
+#define chdir _chdir
+#define fcntl n00b_test_fcntl
+#define getcwd _getcwd
+#define mkdir(path, mode) n00b_test_mkdir((path), (mode))
+#define mkdtemp n00b_test_mkdtemp
+#define pipe(fds) _pipe((fds), 65536, _O_BINARY)
+#define setenv n00b_test_setenv
+#define unsetenv n00b_test_unsetenv
 
 #endif
 
