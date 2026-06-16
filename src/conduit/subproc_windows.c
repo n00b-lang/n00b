@@ -109,7 +109,8 @@ win_quote_arg(const char *arg)
     }
 
     bool quote = *arg == '\0';
-    for (const char *p = arg; *p; p++) {
+    const char *p;
+    for (p = arg; *p; p++) {
         if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '"') {
             quote = true;
             break;

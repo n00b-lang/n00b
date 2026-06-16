@@ -360,12 +360,14 @@ wsa_signal_remove(void *vctx, n00b_conduit_signal_watch_t *watch)
 static void
 wsa_process_signals(wsa_ctx_t *ctx)
 {
+    wsa_signal_t *ws;
+
     if (!ctx) {
         return;
     }
 
     for (int signum = 1; signum < WSA_SIGNAL_MAX; signum++) {
-        for (wsa_signal_t *ws = ctx->signals; ws; ws = ws->next) {
+        for (ws = ctx->signals; ws; ws = ws->next) {
             if (ws->watch && ws->watch->signum == signum
                 && ws->seen_count != g_wsa_signal_counts[signum]) {
                 ws->seen_count = g_wsa_signal_counts[signum];
@@ -513,6 +515,7 @@ static void
 wsa_cleanup(void *vctx)
 {
     wsa_ctx_t *ctx = vctx;
+    wsa_user_event_t *ue;
     if (!ctx) return;
 
     if (ctx->wakeup_rd != INVALID_SOCKET) closesocket(ctx->wakeup_rd);
@@ -524,7 +527,8 @@ wsa_cleanup(void *vctx)
 
 #if N00B_WSA_ENABLE_PROC_WATCHES
     // Clean up process watches
-    for (wsa_proc_t *pp = ctx->procs; pp; pp = pp->next) {
+    wsa_proc_t *pp;
+    for (pp = ctx->procs; pp; pp = pp->next) {
         if (pp->wait_handle) {
             UnregisterWaitEx(pp->wait_handle, INVALID_HANDLE_VALUE);
         }
@@ -536,7 +540,8 @@ wsa_cleanup(void *vctx)
 
 #if N00B_WSA_ENABLE_VNODE_WATCHES
     // Clean up vnode watches
-    for (wsa_vnode_t *vn = ctx->vnodes; vn; vn = vn->next) {
+    wsa_vnode_t *vn;
+    for (vn = ctx->vnodes; vn; vn = vn->next) {
         if (vn->dir_handle != INVALID_HANDLE_VALUE) {
             CancelIo(vn->dir_handle);
             CloseHandle(vn->dir_handle);
@@ -545,7 +550,7 @@ wsa_cleanup(void *vctx)
 #endif
 
     // Clean up user events
-    for (wsa_user_event_t *ue = ctx->user_events; ue; ue = ue->next) {
+    for (ue = ctx->user_events; ue; ue = ue->next) {
         if (ue->win_event) CloseHandle(ue->win_event);
     }
 
@@ -775,7 +780,8 @@ wsa_proc_remove(void *vctx, n00b_conduit_proc_watch_t *watch)
 static void
 wsa_process_procs(wsa_ctx_t *ctx)
 {
-    for (wsa_proc_t *wp = ctx->procs; wp; wp = wp->next) {
+    wsa_proc_t *wp;
+    for (wp = ctx->procs; wp; wp = wp->next) {
         if (!wp->fired) {
             continue;
         }
@@ -925,7 +931,8 @@ wsa_vnode_remove(void *vctx, n00b_conduit_vnode_watch_t *watch)
 static void
 wsa_process_vnodes(wsa_ctx_t *ctx)
 {
-    for (wsa_vnode_t *vn = ctx->vnodes; vn; vn = vn->next) {
+    wsa_vnode_t *vn;
+    for (vn = ctx->vnodes; vn; vn = vn->next) {
         DWORD bytes = 0;
         if (!GetOverlappedResult(vn->dir_handle, &vn->overlapped, &bytes,
                                  FALSE)) {
@@ -1019,9 +1026,10 @@ static void
 wsa_user_event_trigger(void *vctx, n00b_conduit_user_event_t *event)
 {
     wsa_ctx_t *ctx = vctx;
+    wsa_user_event_t *we;
     if (!ctx || !event) return;
 
-    for (wsa_user_event_t *we = ctx->user_events; we; we = we->next) {
+    for (we = ctx->user_events; we; we = we->next) {
         if (we->event->event_id == event->event_id) {
             SetEvent(we->win_event);
             wsa_wakeup(ctx);
@@ -1033,7 +1041,8 @@ wsa_user_event_trigger(void *vctx, n00b_conduit_user_event_t *event)
 static void
 wsa_process_user_events(wsa_ctx_t *ctx)
 {
-    for (wsa_user_event_t *we = ctx->user_events; we; we = we->next) {
+    wsa_user_event_t *we;
+    for (we = ctx->user_events; we; we = we->next) {
         if (WaitForSingleObject(we->win_event, 0) == WAIT_OBJECT_0) {
             n00b_conduit_user_event_fire(we->event);
         }
