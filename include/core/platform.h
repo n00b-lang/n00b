@@ -49,13 +49,27 @@ typedef unsigned long DWORD;
 typedef unsigned long ULONG;
 typedef long          LONG;
 typedef unsigned short USHORT;
+typedef unsigned short WORD;
 typedef unsigned char  BOOLEAN;
 typedef int           BOOL;
+typedef unsigned int  UINT;
+typedef LONG          HRESULT;
 typedef void         *HANDLE;
+typedef HANDLE        HMODULE;
+typedef void         *LPVOID;
 typedef void         *PVOID;
+typedef void         *FARPROC;
 typedef uintptr_t     UINT_PTR;
 typedef uintptr_t     ULONG_PTR;
+typedef uintptr_t     DWORD_PTR;
+typedef uint64_t      DWORD64;
 typedef size_t        SIZE_T;
+
+#ifndef WINAPI
+#define WINAPI __stdcall
+#endif
+
+typedef DWORD(WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
 
 #ifndef TRUE
 #define TRUE 1
@@ -68,6 +82,42 @@ typedef size_t        SIZE_T;
 #endif
 #ifndef ERROR_TIMEOUT
 #define ERROR_TIMEOUT 1460L
+#endif
+#ifndef CP_UTF8
+#define CP_UTF8 65001u
+#endif
+#ifndef THREAD_PRIORITY_IDLE
+#define THREAD_PRIORITY_IDLE -15
+#endif
+#ifndef THREAD_PRIORITY_BELOW_NORMAL
+#define THREAD_PRIORITY_BELOW_NORMAL -1
+#endif
+#ifndef THREAD_PRIORITY_NORMAL
+#define THREAD_PRIORITY_NORMAL 0
+#endif
+#ifndef THREAD_PRIORITY_ABOVE_NORMAL
+#define THREAD_PRIORITY_ABOVE_NORMAL 1
+#endif
+#ifndef THREAD_PRIORITY_TIME_CRITICAL
+#define THREAD_PRIORITY_TIME_CRITICAL 15
+#endif
+#ifndef THREAD_GET_CONTEXT
+#define THREAD_GET_CONTEXT 0x0008UL
+#endif
+#ifndef THREAD_SUSPEND_RESUME
+#define THREAD_SUSPEND_RESUME 0x0002UL
+#endif
+
+#if defined(__x86_64__) || defined(_M_X64)
+#ifndef CONTEXT_AMD64
+#define CONTEXT_AMD64 0x00100000UL
+#endif
+#ifndef CONTEXT_CONTROL
+#define CONTEXT_CONTROL (CONTEXT_AMD64 | 0x00000001UL)
+#endif
+#ifndef CONTEXT_INTEGER
+#define CONTEXT_INTEGER (CONTEXT_AMD64 | 0x00000002UL)
+#endif
 #endif
 
 #define MEM_COMMIT              0x00001000UL
@@ -124,6 +174,49 @@ typedef struct _FILETIME {
     DWORD dwHighDateTime;
 } FILETIME;
 
+#if defined(__x86_64__) || defined(_M_X64)
+typedef struct _CONTEXT {
+    DWORD64 P1Home;
+    DWORD64 P2Home;
+    DWORD64 P3Home;
+    DWORD64 P4Home;
+    DWORD64 P5Home;
+    DWORD64 P6Home;
+    DWORD   ContextFlags;
+    DWORD   MxCsr;
+    WORD    SegCs;
+    WORD    SegDs;
+    WORD    SegEs;
+    WORD    SegFs;
+    WORD    SegGs;
+    WORD    SegSs;
+    DWORD   EFlags;
+    DWORD64 Dr0;
+    DWORD64 Dr1;
+    DWORD64 Dr2;
+    DWORD64 Dr3;
+    DWORD64 Dr6;
+    DWORD64 Dr7;
+    DWORD64 Rax;
+    DWORD64 Rcx;
+    DWORD64 Rdx;
+    DWORD64 Rbx;
+    DWORD64 Rsp;
+    DWORD64 Rbp;
+    DWORD64 Rsi;
+    DWORD64 Rdi;
+    DWORD64 R8;
+    DWORD64 R9;
+    DWORD64 R10;
+    DWORD64 R11;
+    DWORD64 R12;
+    DWORD64 R13;
+    DWORD64 R14;
+    DWORD64 R15;
+    DWORD64 Rip;
+} CONTEXT;
+#endif
+
 typedef struct _NT_TIB {
     void           *ExceptionList;
     void           *StackBase;
@@ -137,9 +230,22 @@ typedef struct _NT_TIB {
 void   *VirtualAlloc(void *addr, SIZE_T size, DWORD allocation_type, DWORD protect);
 BOOL    VirtualFree(void *addr, SIZE_T size, DWORD free_type);
 SIZE_T  VirtualQuery(const void *addr, MEMORY_BASIC_INFORMATION *buffer, SIZE_T len);
+BOOL    VirtualProtect(void *addr, SIZE_T size, DWORD new_protect, DWORD *old_protect);
 void    GetSystemInfo(SYSTEM_INFO *info);
+HANDLE  GetCurrentThread(void);
 DWORD   GetCurrentThreadId(void);
 DWORD   GetCurrentProcessId(void);
+HMODULE LoadLibraryA(const char *file_name);
+BOOL    FreeLibrary(HMODULE module);
+FARPROC GetProcAddress(HMODULE module, const char *proc_name);
+HANDLE  OpenThread(DWORD desired_access, BOOL inherit_handle, DWORD thread_id);
+DWORD   SuspendThread(HANDLE thread);
+DWORD   ResumeThread(HANDLE thread);
+BOOL    GetThreadContext(HANDLE thread, CONTEXT *context);
+HANDLE  CreateThread(void *attributes, SIZE_T stack_size, LPTHREAD_START_ROUTINE start,
+                     void *parameter, DWORD creation_flags, DWORD *thread_id);
+void    ExitThread(DWORD exit_code);
+BOOL    CloseHandle(HANDLE object);
 DWORD   FlsAlloc(void *callback);
 void   *FlsGetValue(DWORD key);
 BOOL    FlsSetValue(DWORD key, void *value);
@@ -152,6 +258,11 @@ BOOL    WaitOnAddress(volatile void *address, void *compare_address, SIZE_T addr
 void    WakeByAddressAll(void *address);
 void    WakeByAddressSingle(void *address);
 DWORD   GetLastError(void);
+int     MultiByteToWideChar(UINT code_page, DWORD flags, const char *mbstr, int cb_mb,
+                            wchar_t *wstr, int cch_wstr);
+HRESULT SetThreadDescription(HANDLE thread, const wchar_t *description);
+BOOL    SetThreadPriority(HANDLE thread, int priority);
+DWORD_PTR SetThreadAffinityMask(HANDLE thread, DWORD_PTR mask);
 BOOLEAN SystemFunction036(void *buffer, ULONG len);
 
 #define RtlGenRandom SystemFunction036
@@ -166,7 +277,10 @@ NtCurrentTeb(void)
 }
 #endif
 
+#ifndef N00B_SSIZE_T_DEFINED
 typedef intptr_t ssize_t;
+#define N00B_SSIZE_T_DEFINED 1
+#endif
 
 /** @brief Thread identifier type (Windows). */
 typedef DWORD  base_thread_id_t;

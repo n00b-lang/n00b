@@ -146,6 +146,9 @@ endif
 if host_machine.system() == 'linux'
   picoquic_c_args += ['-D_GNU_SOURCE']
 endif
+if host_machine.system() == 'windows'
+  picoquic_c_args += ['-D_WINDOWS', '-D_WINDOWS64']
+endif
 
 # Force-include n00b's libc-malloc interposition shim so picoquic's libc
 # malloc-family calls route into n00b's user pool — required because picoquic

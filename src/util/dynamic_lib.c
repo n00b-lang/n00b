@@ -16,7 +16,12 @@
 #include "core/thread.h"
 #include "core/runtime.h" // n00b_thread_self() macro dereferences rt->threads[]
 
+#include <stdio.h>
+#ifdef _WIN32
+#include "core/platform.h"
+#else
 #include <dlfcn.h>
+#endif
 
 struct n00b_dynamic_lib_t {
     void *handle;
@@ -42,8 +47,15 @@ set_last_error_cstr(const char *msg)
 static void
 record_dl_error(void)
 {
+#ifdef _WIN32
+    char buf[128];
+    snprintf(buf, sizeof(buf), "Win32 dynamic library error: %lu",
+             (unsigned long)GetLastError());
+    set_last_error_cstr(buf);
+#else
     const char *e = dlerror();
     set_last_error_cstr(e ? e : "");
+#endif
 }
 
 n00b_string_t *
@@ -71,7 +83,11 @@ finalize_dynamic_lib(void *p)
 {
     n00b_dynamic_lib_t *lib = p;
     if (lib && lib->handle) {
+#ifdef _WIN32
+        FreeLibrary((HMODULE)lib->handle);
+#else
         dlclose(lib->handle);
+#endif
         lib->handle = nullptr;
     }
 }
@@ -85,10 +101,14 @@ n00b_dynamic_lib_open(n00b_string_t *path)
                                N00B_DYNLIB_ERR_INVALID_ARG);
     }
 
-    /* dlopen wants a NUL-terminated string. n00b_string_t.data is
-     * always NUL-terminated per core/string.h, so passing it
-     * straight is safe. */
+    /* The platform loader wants a NUL-terminated string. n00b_string_t.data
+     * is always NUL-terminated per core/string.h, so passing it straight is
+     * safe. */
+#ifdef _WIN32
+    void *raw = LoadLibraryA(path->data);
+#else
     void *raw = dlopen(path->data, RTLD_NOW | RTLD_LOCAL);
+#endif
     if (!raw) {
         record_dl_error();
         return n00b_result_err(n00b_dynamic_lib_t *,
@@ -108,9 +128,16 @@ n00b_dynamic_lib_symbol(n00b_dynamic_lib_t *lib, n00b_string_t *name)
         set_last_error_cstr("n00b_dynamic_lib_symbol: invalid argument");
         return n00b_result_err(void *, N00B_DYNLIB_ERR_INVALID_ARG);
     }
-    /* Clear dlerror before lookup so a NULL return that *is* the
-     * symbol's real value (e.g., for data symbols) is distinguishable
-     * from "symbol not found". */
+#ifdef _WIN32
+    void *sym = (void *)GetProcAddress((HMODULE)lib->handle, name->data);
+    if (!sym) {
+        record_dl_error();
+        return n00b_result_err(void *, N00B_DYNLIB_ERR_NO_SYMBOL);
+    }
+#else
+    /* Clear dlerror before lookup so a NULL return that *is* the symbol's real
+     * value (e.g., for data symbols) is distinguishable from "symbol not
+     * found". */
     (void)dlerror();
     void *sym = dlsym(lib->handle, name->data);
     const char *err = dlerror();
@@ -118,6 +145,7 @@ n00b_dynamic_lib_symbol(n00b_dynamic_lib_t *lib, n00b_string_t *name)
         set_last_error_cstr(err);
         return n00b_result_err(void *, N00B_DYNLIB_ERR_NO_SYMBOL);
     }
+#endif
     return n00b_result_ok(void *, sym);
 }
 
@@ -125,7 +153,11 @@ void
 n00b_dynamic_lib_close(n00b_dynamic_lib_t *lib)
 {
     if (lib && lib->handle) {
+#ifdef _WIN32
+        FreeLibrary((HMODULE)lib->handle);
+#else
         dlclose(lib->handle);
+#endif
         lib->handle = nullptr;
     }
 }

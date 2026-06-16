@@ -66,8 +66,10 @@ ptls_c_args = [
   # vendored-as-is upstream sources building cleanly across platforms.
   '-Wno-error=implicit-function-declaration',
   '-Wno-error=int-conversion',
+  '-Wno-error=incompatible-pointer-types',
   '-Wno-implicit-function-declaration',
   '-Wno-int-conversion',
+  '-Wno-incompatible-pointer-types',
 ]
 
 # Vendored upstream code: opt out of ncc's traditional-union deprecation for
@@ -76,6 +78,11 @@ ptls_c_args = [
 # so a standalone clang build is unaffected (ncc's compiler id reads as "clang").
 if cc.has_argument('--ncc-allow-unions')
   ptls_c_args += '--ncc-allow-unions'
+endif
+
+if host_machine.system() == 'windows'
+  picotls_inc += include_directories('picotlsvs/picotls')
+  ptls_c_args += ['-D_WINDOWS', '-D_WINDOWS64']
 endif
 
 # Force-include n00b's libc-malloc interposition shim so picotls's libc
@@ -101,6 +108,10 @@ picotls_core_sources = [
   'lib/hpke.c',
   'lib/pembase64.c',
 ]
+
+if host_machine.system() == 'windows'
+  picotls_core_sources += 'picotlsvs/picotls/wintimeofday.c'
+endif
 
 picotls_core_lib = static_library('picotls-core',
   picotls_core_sources,

@@ -18,6 +18,77 @@
 #include <libproc.h>
 #endif
 
+#ifdef _WIN32
+#include <windows.h>
+#include <direct.h>
+#include <io.h>
+#include <limits.h>
+#include <process.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+#ifndef NGROUPS_MAX
+#define NGROUPS_MAX 1
+#endif
+
+#define getcwd _getcwd
+#define chdir _chdir
+#define mkdir(path, mode) _mkdir(path)
+#define rmdir _rmdir
+#define unlink _unlink
+#define lstat stat
+
+typedef struct {
+    int unused;
+} DIR;
+
+struct dirent {
+    char d_name[PATH_MAX + 1];
+};
+
+static DIR *
+opendir(const char *path)
+{
+    (void)path;
+    errno = ENOSYS;
+    return nullptr;
+}
+
+static struct dirent *
+readdir(DIR *dir)
+{
+    (void)dir;
+    errno = 0;
+    return nullptr;
+}
+
+static int
+closedir(DIR *dir)
+{
+    (void)dir;
+    return 0;
+}
+
+static ssize_t
+readlink(const char *path, char *buf, size_t len)
+{
+    (void)path;
+    (void)buf;
+    (void)len;
+    errno = ENOSYS;
+    return -1;
+}
+
+static char *
+realpath(const char *path, char *resolved)
+{
+    (void)path;
+    (void)resolved;
+    errno = ENOSYS;
+    return nullptr;
+}
+#else
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -31,7 +102,11 @@
 #include <sys/types.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <limits.h>
 #endif
+
+#include <string.h>
+#include <stdlib.h>
 #if defined(__MACH__)
 #include <sys/stdio.h>
 #endif
@@ -189,6 +264,21 @@ path_current_directory(n00b_allocator_t *allocator)
 static n00b_string_t *
 path_user_dir(n00b_string_t *user, n00b_allocator_t *allocator)
 {
+#ifdef _WIN32
+    if (user != nullptr) {
+        return remove_extra_slashes(
+            path_string_from_bytes(user->data, user->u8_bytes, allocator));
+    }
+
+    n00b_string_t *home = path_getenv_alloc(r"HOME", allocator);
+
+    if (home == nullptr) {
+        home = path_getenv_alloc(r"USERPROFILE", allocator);
+    }
+
+    return home == nullptr ? path_slash(allocator)
+                           : remove_extra_slashes(home);
+#else
     n00b_string_t *result;
     struct passwd *pw;
 
@@ -213,6 +303,7 @@ path_user_dir(n00b_string_t *user, n00b_allocator_t *allocator)
     }
 
     return remove_extra_slashes(result);
+#endif
 }
 
 static n00b_list_t(n00b_string_t *) *
@@ -1021,6 +1112,19 @@ remove_extra_slashes(n00b_string_t *result)
 n00b_string_t *
 n00b_get_user_dir(n00b_string_t *user)
 {
+#ifdef _WIN32
+    if (user != nullptr) {
+        return user;
+    }
+
+    const char *home = getenv("HOME");
+    if (home == nullptr || home[0] == '\0') {
+        home = getenv("USERPROFILE");
+    }
+
+    return remove_extra_slashes(
+        n00b_string_from_cstr(home == nullptr ? "/" : home));
+#else
     n00b_string_t *result;
     struct passwd *pw;
 
@@ -1046,6 +1150,7 @@ n00b_get_user_dir(n00b_string_t *user)
     }
 
     return remove_extra_slashes(result);
+#endif
 }
 
 static n00b_string_t *
@@ -1474,6 +1579,12 @@ n00b_app_path(void)
     proc_pidpath(getpid(), buf, PROC_PIDPATHINFO_MAXSIZE);
     return n00b_resolve_path(n00b_string_from_cstr(buf));
 }
+#elif defined(_WIN32)
+n00b_string_t *
+n00b_app_path(void)
+{
+    return n00b_string_from_cstr(".");
+}
 #else
 #error "Unsupported platform"
 #endif
@@ -1664,6 +1775,22 @@ n00b_find_command_paths(n00b_string_t *cmd,
 
     int            n          = (int)n00b_list_len(*result);
     n00b_string_t *my_path    = nullptr;
+
+#ifdef _WIN32
+    if (!self_ok) {
+        my_path = n00b_app_path();
+    }
+
+    while (n--) {
+        n00b_string_t *path = n00b_list_get(*result, n);
+
+        if (!self_ok && n00b_unicode_str_eq(path, my_path)) {
+            n00b_list_delete(*result, n);
+        }
+    }
+
+    return result;
+#else
     uid_t          my_euid    = geteuid();
     int            num_groups = -1;
     gid_t          groups[NGROUPS_MAX];
@@ -1713,6 +1840,7 @@ on_success:
     }
 
     return result;
+#endif
 }
 
 // ============================================================================

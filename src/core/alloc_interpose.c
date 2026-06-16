@@ -19,10 +19,11 @@
 //     free/realloc recover the real base from n00b metadata while the runtime
 //     is live.
 //   * Pre-init (before the runtime allocators exist) we delegate to the real
-//     libc symbols, resolved via dlsym(RTLD_NEXT). Those run on the main
-//     thread with a full TCB, so libc is safe there. A small static
-//     bootstrap arena satisfies any malloc that occurs *during* the dlsym
-//     resolution itself (the classic interposer reentrancy window).
+//     libc symbols (dlsym(RTLD_NEXT) on Unix; CRT functions on Windows).
+//     Those run on the main thread with a full TCB, so libc is safe there.
+//     A small static bootstrap arena satisfies any malloc that occurs
+//     *during* Unix dlsym resolution itself (the classic interposer
+//     reentrancy window).
 //   * free()/realloc() classify a pointer by address while the runtime is
 //     live: bootstrap arena → no-op/copy; n00b-owned interpose range → recover
 //     base + n00b_free; otherwise a pre-init libc pointer → real libc
@@ -34,11 +35,15 @@
 //     is the libc boundary, so using them here is intentional, not a stdlib
 //     substitution.
 
-#include <dlfcn.h>
 #include <string.h>
 #include <stdatomic.h>
 #include <errno.h>
 #include <stdlib.h>
+#if defined(_WIN32)
+#include <malloc.h>
+#else
+#include <dlfcn.h>
+#endif
 #if defined(__linux__)
 #include <malloc.h>
 #endif
@@ -149,6 +154,15 @@ ensure_reals(void)
         return;
     }
 
+#if defined(_WIN32)
+    real_malloc             = malloc;
+    real_free               = free;
+    real_calloc             = calloc;
+    real_realloc            = realloc;
+    real_posix_memalign     = nullptr;
+    real_aligned_alloc      = nullptr;
+    real_malloc_usable_size = _msize;
+#else
     real_malloc  = (void *(*)(size_t))dlsym(RTLD_NEXT, "malloc");
     real_free    = (void (*)(void *))dlsym(RTLD_NEXT, "free");
     real_calloc  = (void *(*)(size_t, size_t))dlsym(RTLD_NEXT, "calloc");
@@ -159,6 +173,7 @@ ensure_reals(void)
         (void *(*)(size_t, size_t))dlsym(RTLD_NEXT, "aligned_alloc");
     real_malloc_usable_size =
         (size_t (*)(void *))dlsym(RTLD_NEXT, "malloc_usable_size");
+#endif
 #if defined(__linux__)
     real_memalign = (void *(*)(size_t, size_t))dlsym(RTLD_NEXT, "memalign");
     real_valloc   = (void *(*)(size_t))dlsym(RTLD_NEXT, "valloc");

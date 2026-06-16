@@ -12,11 +12,19 @@ project(
 )
 
 if (get_option('using_build_script') != true)
-  error('Do not try to run meson directly. Run ./build.sh.\n' +
-        '\n' +
-        'WHY: build.sh resolves NCC_PATH to the freshly-built workspace ncc\n' +
+  _setup_entrypoint = 'Do not try to run meson directly. Run ./build.sh.'
+  _setup_why = 'WHY: build.sh resolves NCC_PATH to the freshly-built workspace ncc\n' +
         '     (see ensure_ncc), then invokes meson with CC=$NCC_PATH so the\n' +
-        '     n00b build uses the correct compiler. Bypassing build.sh and\n' +
+        '     n00b build uses the correct compiler.'
+  if host_machine.system() == 'windows'
+    _setup_entrypoint = 'Do not try to run meson directly. Run .\\build.ps1.'
+    _setup_why = 'WHY: build.ps1 resolves NCC_PATH, or the neighboring\n' +
+        '     ..\\ncc\\build-msvc\\ncc.exe, then invokes meson with CC set so\n' +
+        '     the native Windows n00b build uses the correct compiler.'
+  endif
+  error(_setup_entrypoint + '\n' +
+        '\n' +
+        _setup_why + ' Bypassing the build wrapper and\n' +
         '     setting -Dusing_build_script=true loses this resolution and\n' +
         '     leaves meson to pick whatever clang is on PATH — which then\n' +
         '     receives --ncc-* flags it does not understand and fails the\n' +
@@ -599,7 +607,36 @@ monocypher_dep  = monocypher_proj.get_variable('monocypher_dep')
 # packages). The include is added to `deps` so libn00b's link
 # line carries `-lgit2` and every consumer (libn00b proper, every
 # test, the `naudit` binary) sees the header path.
-libgit2_dep = dependency('libgit2', version: '>=1.7.0', required: true)
+libgit2_dep = dependency('libgit2', version: '>=1.7.0', required: false)
+if not libgit2_dep.found()
+  if target_os == 'windows'
+    fs = import('fs')
+    libgit2_inc_opt = get_option('libgit2_inc')
+    libgit2_lib_opt = get_option('libgit2_lib')
+
+    if libgit2_inc_opt == ''
+      libgit2_inc_opt = meson.project_source_root() / '..' / 'libgit2' / 'build-codex-win-clean' / 'include'
+    endif
+    if libgit2_lib_opt == ''
+      libgit2_lib_opt = meson.project_source_root() / '..' / 'libgit2' / 'build-codex-win-clean' / 'RelWithDebInfo' / 'git2.lib'
+    endif
+
+    if not fs.is_dir(libgit2_inc_opt)
+      error('libgit2 headers not found. Install libgit2 with pkg-config support, or pass -Dlibgit2_inc=<include-dir>.')
+    endif
+    if not fs.is_file(libgit2_lib_opt)
+      error('libgit2 library not found. Install libgit2 with pkg-config support, or pass -Dlibgit2_lib=<path-to-git2.lib>.')
+    endif
+
+    libgit2_dep = declare_dependency(
+      compile_args: ['-I' + libgit2_inc_opt],
+      link_args: [libgit2_lib_opt],
+    )
+    message('Using libgit2 fallback: ' + libgit2_lib_opt)
+  else
+    error('libgit2 >= 1.7.0 is required')
+  endif
+endif
 deps = deps + [libgit2_dep]
 
 # zlib for HTTP/1.1 + H3 Content-Encoding decompression (gzip/deflate).
@@ -607,7 +644,36 @@ deps = deps + [libgit2_dep]
 if target_os == 'darwin'
   zlib_dep = declare_dependency(link_args: [macos_sdk / 'usr/lib/libz.tbd'])
 else
-  zlib_dep = dependency('zlib', required: true)
+  zlib_dep = dependency('zlib', required: false)
+  if not zlib_dep.found()
+    if target_os == 'windows'
+      fs = import('fs')
+      zlib_inc_opt = get_option('zlib_inc')
+      zlib_lib_opt = get_option('zlib_lib')
+
+      if zlib_inc_opt == ''
+        zlib_inc_opt = meson.project_source_root() / '..' / 'libgit2' / 'deps' / 'zlib'
+      endif
+      if zlib_lib_opt == ''
+        zlib_lib_opt = meson.project_source_root() / '..' / 'libgit2' / 'build-codex-win-clean' / 'deps' / 'zlib' / 'zlib.dir' / 'RelWithDebInfo' / 'zlib.lib'
+      endif
+
+      if not fs.is_dir(zlib_inc_opt)
+        error('zlib headers not found. Install zlib with pkg-config support, or pass -Dzlib_inc=<include-dir>.')
+      endif
+      if not fs.is_file(zlib_lib_opt)
+        error('zlib library not found. Install zlib with pkg-config support, or pass -Dzlib_lib=<path-to-zlib.lib>.')
+      endif
+
+      zlib_dep = declare_dependency(
+        compile_args: ['-I' + zlib_inc_opt],
+        link_args: [zlib_lib_opt],
+      )
+      message('Using zlib fallback: ' + zlib_lib_opt)
+    else
+      error('zlib is required')
+    endif
+  endif
 endif
 deps = deps + [zlib_dep]
 
@@ -4380,7 +4446,7 @@ endif
 # ============================================================================
 
 # Interpreter integration tests (shell runner invokes the n00b binary).
-if not meson.is_cross_build()
+if target_os != 'windows' and not meson.is_cross_build()
   bash_prog = find_program('bash', required: true)
   test('interp',
       bash_prog,
@@ -4552,86 +4618,93 @@ display_baseline_flow_test = executable('test_display_baseline_flow',
 )
 test('display_baseline_flow', display_baseline_flow_test, suite: 'integration')
 
-sh_prog = find_program('sh')
-test('display_baseline_artifacts',
-    sh_prog,
-    args: [
-        files('test/integration/test_display_baseline_artifacts.sh'),
-        display_baseline_capture,
-        meson.project_source_root(),
-    ],
-    suite: 'integration',
-)
+if target_os != 'windows'
+  sh_prog = find_program('sh', required: false)
+  if not sh_prog.found()
+    sh_prog = find_program('bash', required: false)
+  endif
+  if sh_prog.found()
+    test('display_baseline_artifacts',
+        sh_prog,
+        args: [
+            files('test/integration/test_display_baseline_artifacts.sh'),
+            display_baseline_capture,
+            meson.project_source_root(),
+        ],
+        suite: 'integration',
+    )
 
-test('display_scene_inspect_artifacts',
-    sh_prog,
-    args: [
-        files('test/integration/test_display_scene_inspect_artifacts.sh'),
-        display_scene_inspect,
-        meson.project_source_root(),
-    ],
-    suite: 'integration',
-)
+    test('display_scene_inspect_artifacts',
+        sh_prog,
+        args: [
+            files('test/integration/test_display_scene_inspect_artifacts.sh'),
+            display_scene_inspect,
+            meson.project_source_root(),
+        ],
+        suite: 'integration',
+    )
 
-test('display_scene_inspect_errors',
-    sh_prog,
-    args: [
-        files('test/integration/test_display_scene_inspect_errors.sh'),
-        display_scene_inspect,
-    ],
-    suite: 'integration',
-)
+    test('display_scene_inspect_errors',
+        sh_prog,
+        args: [
+            files('test/integration/test_display_scene_inspect_errors.sh'),
+            display_scene_inspect,
+        ],
+        suite: 'integration',
+    )
 
-test('display_terminal_replay_artifacts',
-    sh_prog,
-    args: [
-        files('test/integration/test_display_terminal_replay_artifacts.sh'),
-        display_baseline_capture,
-        display_terminal_replay,
-        meson.project_source_root(),
-    ],
-    suite: 'integration',
-)
+    test('display_terminal_replay_artifacts',
+        sh_prog,
+        args: [
+            files('test/integration/test_display_terminal_replay_artifacts.sh'),
+            display_baseline_capture,
+            display_terminal_replay,
+            meson.project_source_root(),
+        ],
+        suite: 'integration',
+    )
 
-test('display_m4_artifacts',
-    sh_prog,
-    args: [
-        files('test/integration/test_display_m4_artifacts.sh'),
-        display_baseline_capture,
-        display_scene_inspect,
-        display_m4_showcase,
-        table_tool,
-        meson.project_source_root(),
-    ],
-    suite: 'integration',
-)
+    test('display_m4_artifacts',
+        sh_prog,
+        args: [
+            files('test/integration/test_display_m4_artifacts.sh'),
+            display_baseline_capture,
+            display_scene_inspect,
+            display_m4_showcase,
+            table_tool,
+            meson.project_source_root(),
+        ],
+        suite: 'integration',
+    )
 
-test('display_m5_artifacts',
-    sh_prog,
-    args: [
-        files('test/integration/test_display_m5_artifacts.sh'),
-        display_baseline_capture,
-        display_scene_inspect,
-        display_backend_selection_report,
-        widget_demo,
-        meson.project_source_root(),
-    ],
-    suite: 'integration',
-)
+    test('display_m5_artifacts',
+        sh_prog,
+        args: [
+            files('test/integration/test_display_m5_artifacts.sh'),
+            display_baseline_capture,
+            display_scene_inspect,
+            display_backend_selection_report,
+            widget_demo,
+            meson.project_source_root(),
+        ],
+        suite: 'integration',
+    )
 
-test('display_m6_artifacts',
-    sh_prog,
-    args: [
-        files('test/integration/test_display_m6_artifacts.sh'),
-        display_baseline_capture,
-        display_scene_inspect,
-        display_backend_selection_report,
-        display_gui_parity_report,
-        display_m6_cutover_report,
-        meson.project_source_root(),
-    ],
-    suite: 'integration',
-)
+    test('display_m6_artifacts',
+        sh_prog,
+        args: [
+            files('test/integration/test_display_m6_artifacts.sh'),
+            display_baseline_capture,
+            display_scene_inspect,
+            display_backend_selection_report,
+            display_gui_parity_report,
+            display_m6_cutover_report,
+            meson.project_source_root(),
+        ],
+        suite: 'integration',
+    )
+  endif
+endif
 
 display_m1_compat_test = executable('test_display_m1_compat',
     ['test/integration/test_display_m1_compat.c'],

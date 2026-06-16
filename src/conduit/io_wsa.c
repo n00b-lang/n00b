@@ -30,13 +30,7 @@
 #include "core/alloc.h"
 #include "core/stw.h"
 
-#if N00B_WSA_ENABLE_VNODE_WATCHES
-#include <io.h>
-#include <wchar.h>
-#include <wctype.h>
-#endif
 #include <signal.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -457,13 +451,13 @@ wsa_events_to_ops(short revents)
 bool
 n00b_wsa_ensure_init(void)
 {
-    static atomic_int done = 0;
-    if (atomic_load(&done)) {
+    static volatile LONG done = 0;
+    if (done) {
         return true;
     }
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0) {
-        atomic_store(&done, 1);
+        done = 1;
         return true;
     }
     return false;

@@ -20,8 +20,28 @@
 #include "conduit/rw.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef O_RDONLY
+#define O_RDONLY 0
+#endif
+#ifndef O_WRONLY
+#define O_WRONLY 1
+#endif
+#ifndef O_RDWR
+#define O_RDWR 2
+#endif
+#ifndef O_CREAT
+#define O_CREAT 0x0100
+#endif
+#ifndef O_TRUNC
+#define O_TRUNC 0x0200
+#endif
+#ifndef O_APPEND
+#define O_APPEND 0x0008
+#endif
+#else
 #include <fcntl.h>
 #include <sys/syscall.h>
 #include <sys/stat.h>
@@ -463,9 +483,13 @@ close_stream_result(n00b_file_t *f)
         }
     }
     else if (f->fd >= 0) {
+#ifdef _WIN32
+        err = ENOSYS;
+#else
         if (close(f->fd) != 0) {
             err = errno;
         }
+#endif
     }
 
     f->fd = -1;
@@ -621,6 +645,10 @@ n00b_file_read(n00b_file_t *f, size_t max_n)
         }
 
         n00b_buffer_t *buf = n00b_buffer_new((int64_t)want);
+#ifdef _WIN32
+        (void)buf;
+        return n00b_result_err(n00b_buffer_t *, ENOSYS);
+#else
         ssize_t n = read(f->fd, buf->data, want);
         if (n < 0) {
             return n00b_result_err(n00b_buffer_t *, errno);
@@ -631,6 +659,7 @@ n00b_file_read(n00b_file_t *f, size_t max_n)
             f->eof = true;
         }
         return n00b_result_ok(n00b_buffer_t *, buf);
+#endif
     }
 
     if (!f->read_inbox) return n00b_result_err(n00b_buffer_t *, EBADF);

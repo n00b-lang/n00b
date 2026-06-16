@@ -21,11 +21,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #ifdef _WIN32
-typedef int socklen_t;
-struct sockaddr_storage {
-    uint64_t __n00b_align;
-    char     __n00b_storage[120];
-};
+#include "internal/win32_sockets.h"
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
