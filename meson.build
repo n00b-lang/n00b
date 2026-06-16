@@ -265,7 +265,7 @@ if target_os == 'darwin'
     link_args = ['-target', target_arch + '-apple-' + target_os,
                  '-isysroot', macos_sdk]
 elif target_os == 'windows'
-    link_args = ['-static', '-Wl,--stack,16777216']
+    link_args = ['-static', '-Wl,/STACK:16777216']
 else
     link_args = []
 endif
