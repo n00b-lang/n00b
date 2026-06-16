@@ -50,8 +50,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include "internal/win32_sockets.h"
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>

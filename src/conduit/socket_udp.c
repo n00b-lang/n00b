@@ -16,11 +16,7 @@
 #include <string.h>
 
 #ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include "internal/win32_sockets.h"
 #define N00B_CLOSE_SOCKET(fd) closesocket((SOCKET)(fd))
 #define N00B_SOCK_ERRNO       WSAGetLastError()
 #define N00B_EWOULDBLOCK      WSAEWOULDBLOCK

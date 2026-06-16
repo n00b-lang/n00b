@@ -12,10 +12,40 @@
 #include "adt/result.h"
 #include "text/strings/string_ops.h"
 
-#include <unistd.h>
-#include <pwd.h>
 #include <sys/stat.h>
 #include <stdlib.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+#ifndef S_IFIFO
+#ifdef _S_IFIFO
+#define S_IFIFO _S_IFIFO
+#else
+#define S_IFIFO 0x1000
+#endif
+#endif
+
+#ifndef S_IFBLK
+#define S_IFBLK 0x6000
+#endif
+
+#ifndef S_IFLNK
+#define S_IFLNK 0xA000
+#endif
+
+#ifndef S_IFSOCK
+#define S_IFSOCK 0xC000
+#endif
+#else
+#include <unistd.h>
+#include <pwd.h>
+#endif
 
 typedef enum {
     N00B_FK_NOT_FOUND       = 0,
@@ -703,8 +733,16 @@ n00b_path_simple_join(n00b_string_t *p1, n00b_string_t *p2)
 static inline n00b_string_t *
 n00b_get_user_name(void)
 {
+#ifdef _WIN32
+    const char *name = getenv("USERNAME");
+    if (name == nullptr || name[0] == '\0') {
+        name = getenv("USER");
+    }
+    return n00b_string_from_cstr(name == nullptr ? "" : name);
+#else
     struct passwd *pw = getpwuid(getuid());
     return n00b_string_from_cstr(pw->pw_name);
+#endif
 }
 
 static inline n00b_list_t(n00b_string_t *) *
@@ -720,8 +758,14 @@ n00b_get_program_search_path(void)
 
     if (path) {
         n00b_string_t *ps = n00b_string_from_cstr(path);
-        n00b_array_t(n00b_string_t *) parts =
-            n00b_unicode_str_split(ps, r":");
+        n00b_array_t(n00b_string_t *) parts = n00b_unicode_str_split(
+            ps,
+#ifdef _WIN32
+            r";"
+#else
+            r":"
+#endif
+        );
 
         for (size_t i = 0; i < n00b_array_len(parts); i++) {
             n00b_list_push(lst, n00b_array_get(parts, i));

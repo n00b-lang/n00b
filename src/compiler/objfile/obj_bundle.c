@@ -24,6 +24,12 @@
 #include <errno.h>
 #include <sys/stat.h>
 
+#ifdef _WIN32
+#define N00B_OBJ_BUNDLE_LSTAT(path, st) stat((path), (st))
+#else
+#define N00B_OBJ_BUNDLE_LSTAT(path, st) lstat((path), (st))
+#endif
+
 const uint8_t N00B_OBJ_BUNDLE_MANIFEST_MAGIC[N00B_OBJ_BUNDLE_MANIFEST_MAGIC_LEN] = {
     'N', '0', '0', 'B', 'N', 'D', 'L', '1',
 };
@@ -4289,7 +4295,7 @@ _n00b_obj_bundle_file_kind_no_follow(n00b_string_t *path)
 
     struct stat info;
 
-    if (lstat(path->data, &info) != 0) {
+    if (N00B_OBJ_BUNDLE_LSTAT(path->data, &info) != 0) {
         return N00B_FK_NOT_FOUND;
     }
 
