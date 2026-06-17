@@ -200,6 +200,38 @@ n00b_test_mkdtemp(char *tmpl)
 #define unsetenv n00b_test_unsetenv
 #endif
 
+#else
+
+#include <stddef.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #endif
+
+static int
+n00b_test_run_bash_script(const char *script)
+{
+#if defined(_WIN32)
+    return _spawnlp(_P_WAIT, "bash", "bash", script, NULL);
+#else
+    pid_t pid = fork();
+    if (pid < 0) {
+        return -1;
+    }
+    if (pid == 0) {
+        execlp("bash", "bash", script, (char *)NULL);
+        _exit(127);
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        return -1;
+    }
+    if (!WIFEXITED(status)) {
+        return -1;
+    }
+    return WEXITSTATUS(status);
+#endif
+}
 
 #endif
