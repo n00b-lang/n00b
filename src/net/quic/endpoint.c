@@ -40,6 +40,12 @@
 #include "autoqlog.h" /* picoquic_set_qlog */
 #include <stdlib.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#define N00B_QLOG_MKDIR(path, mode) _mkdir(path)
+#else
+#define N00B_QLOG_MKDIR(path, mode) mkdir(path, mode)
+#endif
 
 #define N00B_PICO_ALLOC ((n00b_allocator_t *)&n00b_get_runtime()->user_pool)
 
@@ -443,7 +449,7 @@ n00b_quic_endpoint_new(n00b_conduit_t            *c,
     if (qlog_dir && qlog_dir->data && qlog_dir->u8_bytes > 0) {
         struct stat st;
         if (stat(qlog_dir->data, &st) != 0) {
-            (void)mkdir(qlog_dir->data, 0755);
+            (void)N00B_QLOG_MKDIR(qlog_dir->data, 0755);
         }
         pico_scope = n00b_allocator_scope_enter(N00B_PICO_ALLOC);
         (void)picoquic_set_qlog(quic, qlog_dir->data);

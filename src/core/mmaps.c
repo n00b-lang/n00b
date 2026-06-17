@@ -1030,24 +1030,34 @@ _n00b_static_object_register(void *startp,
     char *endp = (char *)startp + len;
     assert(endp > (char *)startp);
 
-    auto map_opt = n00b_mmap_by_address(startp);
-    assert(n00b_option_is_set(map_opt));
+    char *cursor = (char *)startp;
+    while (cursor < endp) {
+        auto map_opt = n00b_mmap_by_address(cursor);
+        if (!n00b_option_is_set(map_opt)) {
+            return nullptr;
+        }
 
-    n00b_mmap_info_t *map = n00b_option_get(map_opt);
-    assert(map->kind == n00b_mmap_static);
-    assert((uint64_t)endp <= map->end);
+        n00b_mmap_info_t *map = n00b_option_get(map_opt);
+        if (map->kind != n00b_mmap_static || map->end <= (uint64_t)cursor) {
+            return nullptr;
+        }
 
-    return n00b_mmap_register_range(startp,
-                                    endp,
-                                    n00b_mmap_static,
-                                    .file      = loc,
-                                    .tinfo     = tinfo,
-                                    .scan_kind = scan_kind,
-                                    .scan_cb   = scan_cb,
-                                    .scan_user = scan_user,
-                                    .object_id = object_id,
-                                    .identity  = identity,
-                                    .flags     = flags);
+        cursor = (char *)map->end;
+    }
+
+    n00b_alloc_range_t *range =
+        n00b_mmap_register_range(startp,
+                                 endp,
+                                 n00b_mmap_static,
+                                 .file      = loc,
+                                 .tinfo     = tinfo,
+                                 .scan_kind = scan_kind,
+                                 .scan_cb   = scan_cb,
+                                 .scan_user = scan_user,
+                                 .object_id = object_id,
+                                 .identity  = identity,
+                                 .flags     = flags);
+    return range;
 }
 
 // ============================================================================

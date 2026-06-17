@@ -50,6 +50,9 @@ typedef int pid_t;
 typedef intptr_t ssize_t;
 #define N00B_SSIZE_T_DEFINED 1
 #endif
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 #ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME 0
@@ -60,6 +63,7 @@ typedef intptr_t ssize_t;
 
 unsigned long long GetTickCount64(void);
 
+[[n00b::nogc]]
 static inline int
 n00b_win_clock_gettime(int clock_id, struct timespec *ts)
 {
@@ -87,53 +91,85 @@ n00b_win_clock_gettime(int clock_id, struct timespec *ts)
 #define clock_gettime(clock_id, ts) n00b_win_clock_gettime((clock_id), (ts))
 #endif
 
+[[n00b::nogc]]
+static inline int
+n00b_win_setenv(const char *name, const char *value, int overwrite)
+{
+    char  *existing     = nullptr;
+    size_t existing_len = 0;
+
+    if (!overwrite && _dupenv_s(&existing, &existing_len, name) == 0) {
+        if (existing != nullptr) {
+            free(existing);
+            return 0;
+        }
+    }
+
+    free(existing);
+    return _putenv_s(name, value ? value : "");
+}
+
+[[n00b::nogc]]
+static inline int
+n00b_win_unsetenv(const char *name)
+{
+    return _putenv_s(name, "");
+}
+
+#ifndef setenv
+#define setenv(name, value, overwrite) n00b_win_setenv((name), (value), (overwrite))
+#endif
+#ifndef unsetenv
+#define unsetenv(name) n00b_win_unsetenv((name))
+#endif
+
 /* MSVC's <stdint.h> spells several limits as e.g. 0xffffffffffffffffui64.
  * That is valid for cl.exe, but ncc's parser does not currently accept the
  * ui32/ui64 suffix form after clang preprocessing. Keep the values identical
  * while normalizing them to standard C syntax for ncc-compiled project code. */
 #ifdef UINT8_MAX
 #undef UINT8_MAX
-#define UINT8_MAX ((uint8_t)0xff)
+#define UINT8_MAX 0xffu
 #endif
 #ifdef UINT16_MAX
 #undef UINT16_MAX
-#define UINT16_MAX ((uint16_t)0xffff)
+#define UINT16_MAX 0xffffu
 #endif
 #ifdef UINT32_MAX
 #undef UINT32_MAX
-#define UINT32_MAX ((uint32_t)0xffffffff)
+#define UINT32_MAX 0xffffffffu
 #endif
 #ifdef UINT64_MAX
 #undef UINT64_MAX
-#define UINT64_MAX ((uint64_t)-1)
+#define UINT64_MAX 0xffffffffffffffffULL
 #endif
 #ifdef INT8_MAX
 #undef INT8_MAX
-#define INT8_MAX ((int8_t)0x7f)
+#define INT8_MAX 0x7f
 #endif
 #ifdef INT16_MAX
 #undef INT16_MAX
-#define INT16_MAX ((int16_t)0x7fff)
+#define INT16_MAX 0x7fff
 #endif
 #ifdef INT32_MAX
 #undef INT32_MAX
-#define INT32_MAX ((int32_t)0x7fffffff)
+#define INT32_MAX 0x7fffffff
 #endif
 #ifdef UINTPTR_MAX
 #undef UINTPTR_MAX
-#define UINTPTR_MAX ((uintptr_t)-1)
+#define UINTPTR_MAX 0xffffffffffffffffULL
 #endif
 #ifdef SIZE_MAX
 #undef SIZE_MAX
-#define SIZE_MAX ((size_t)-1)
+#define SIZE_MAX 0xffffffffffffffffULL
 #endif
 #ifdef INT64_MAX
 #undef INT64_MAX
-#define INT64_MAX ((int64_t)0x7fffffffffffffff)
+#define INT64_MAX 0x7fffffffffffffffLL
 #endif
 #ifdef INT64_MIN
 #undef INT64_MIN
-#define INT64_MIN (-INT64_MAX - 1)
+#define INT64_MIN (-INT64_MAX - 1LL)
 #endif
 #ifdef INT8_MIN
 #undef INT8_MIN
@@ -149,16 +185,17 @@ n00b_win_clock_gettime(int clock_id, struct timespec *ts)
 #endif
 #ifdef UINT8_C
 #undef UINT8_C
-#define UINT8_C(c) ((uint8_t)(c))
+#define UINT8_C(c) c
 #endif
 #ifdef UINT32_C
 #undef UINT32_C
-#define UINT32_C(c) ((uint32_t)(c))
+#define UINT32_C(c) c ## U
 #endif
 #ifdef UINT64_C
 #undef UINT64_C
-#define UINT64_C(c) ((uint64_t)(c))
+#define UINT64_C(c) c ## ULL
 #endif
+[[n00b::nogc]]
 static inline struct tm *
 n00b_win_gmtime_r(const time_t *timep, struct tm *result)
 {
@@ -166,6 +203,9 @@ n00b_win_gmtime_r(const time_t *timep, struct tm *result)
 }
 #ifndef gmtime_r
 #define gmtime_r(timep, result) n00b_win_gmtime_r((timep), (result))
+#endif
+#ifndef timegm
+#define timegm(tm) _mkgmtime(tm)
 #endif
 
 #ifndef strcasecmp

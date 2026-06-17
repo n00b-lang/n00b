@@ -10,6 +10,30 @@
 
 #if defined(_WIN32)
 
+#if defined(_WINDOWS)
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX 1
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <io.h>
+
+#ifndef N00B_SOCKLEN_T_DEFINED
+#define N00B_SOCKLEN_T_DEFINED
+typedef int socklen_t;
+#endif
+
+#ifndef gai_strerror
+#define gai_strerror gai_strerrorA
+#endif
+
+#else
+
 #include "core/platform.h"
 
 #include <stddef.h>
@@ -61,10 +85,13 @@ typedef int socklen_t;
 #define SO_TYPE      0x1008
 
 #define WSAEINVAL       10022
+#define WSAEINTR        10004
+#define WSAEACCES       10013
 #define WSAEWOULDBLOCK  10035
 #define WSAEINPROGRESS  10036
 #define WSAESOCKTNOSUPPORT 10044
 #define WSAEAFNOSUPPORT 10047
+#define WSAEADDRINUSE   10048
 #define WSAECONNRESET   10054
 #define WSAETIMEDOUT    10060
 #define WSAECONNREFUSED 10061
@@ -497,5 +524,7 @@ HRESULT __attribute__((__stdcall__)) CreatePseudoConsole(COORD size,
 HRESULT __attribute__((__stdcall__)) ResizePseudoConsole(HPCON pseudo_console,
                                                          COORD size);
 void __attribute__((__stdcall__)) ClosePseudoConsole(HPCON pseudo_console);
+
+#endif
 
 #endif
