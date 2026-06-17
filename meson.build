@@ -5282,9 +5282,12 @@ http_alt_svc_test = executable('test_http_alt_svc',
 test('http_alt_svc', http_alt_svc_test, suite: 'unit')
 
 # Phase 6 chunk 8 — compression.
+http_compression_test_kwargs = test_common_kwargs + {
+    'dependencies': test_common_kwargs['dependencies'] + [zlib_dep],
+}
 http_compression_test = executable('test_http_compression',
     ['test/unit/test_http_compression.c'],
-    kwargs: test_common_kwargs,
+    kwargs: http_compression_test_kwargs,
 )
 test('http_compression', http_compression_test, suite: 'unit')
 
