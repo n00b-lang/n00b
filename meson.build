@@ -1347,6 +1347,11 @@ n00b_app_kwargs = {
 # still builds tests on demand regardless of build_by_default.
 test_common_kwargs = n00b_app_kwargs + {'build_by_default': n00b_build_tests}
 
+gui_tui_unnecessary_on_windows = target_os == 'windows'
+if gui_tui_unnecessary_on_windows
+  message('Skipping GUI/TUI test and tool targets on Windows')
+endif
+
 # WP-018/WP-020: build-time grammar baking tool. This now links the full
 # libn00b, not the bootstrap library, because marshal-backed baking depends on
 # the same precise TYPE_LAYOUT path validated by the WP-020 feature tests.
@@ -3392,6 +3397,7 @@ xform_linebuf_test = executable('test_xform_linebuf',
 )
 test('xform_linebuf', xform_linebuf_test, suite: 'unit')
 
+if not gui_tui_unnecessary_on_windows
 xform_ansi_test = executable('test_xform_ansi',
     ['test/unit/test_xform_ansi.c'],
     kwargs: test_common_kwargs,
@@ -3415,6 +3421,7 @@ xform_hexdump_test = executable('test_xform_hexdump',
     kwargs: test_common_kwargs,
 )
 test('xform_hexdump', xform_hexdump_test, suite: 'unit')
+endif
 
 print_test = executable('test_print',
     ['test/unit/test_print.c'],
@@ -3761,6 +3768,7 @@ test('n00b_eval',
 # Render / layout tests
 # ============================================================================
 
+if not gui_tui_unnecessary_on_windows
 layout_test = executable('test_layout',
     ['test/unit/test_layout.c'],
     kwargs: test_common_kwargs,
@@ -3960,6 +3968,7 @@ event_normalize_test = executable('test_event_normalize',
     kwargs: test_common_kwargs,
 )
 test('event_normalize', event_normalize_test, suite: 'unit')
+endif
 
 # ============================================================================
 # Machine learning tests (heap + stats supporting primitives + ml)
@@ -3989,6 +3998,7 @@ ml_test = executable('test_ml',
 )
 test('ml', ml_test, suite: 'unit')
 
+if not gui_tui_unnecessary_on_windows
 widget_demo_tools_inc = include_directories('src/tools')
 
 display_diagnostics_test = executable('test_display_diagnostics',
@@ -4219,6 +4229,7 @@ table_tool = executable('n00b_table',
     kwargs: n00b_app_kwargs,
     install: true,
 )
+endif
 
 # n00b-attest CLI binary (sign verb; other verbs are forward-roadmap
 # stubs surfacing in --help and emitting "not yet implemented" + exit 1
@@ -4363,6 +4374,7 @@ naudit_tool = executable('naudit',
 )
 
 # Widget visual demo tool
+if not gui_tui_unnecessary_on_windows
 widget_demo = executable('widget_demo',
     ['src/tools/widget_demo.c'],
     include_directories: incdir + [widget_demo_tools_inc],
@@ -4416,6 +4428,7 @@ display_m6_cutover_report = executable('display_m6_cutover_report',
     kwargs: n00b_app_kwargs,
     install: false,
 )
+endif
 
 # N00b dev tool (parse + annotate n00b source files, REPL)
 n00b_dev = executable('n00b_dev',
@@ -4619,6 +4632,7 @@ alloc_metadata_test = executable('test_alloc_metadata',
 )
 test('alloc_metadata', alloc_metadata_test, suite: 'integration')
 
+if not gui_tui_unnecessary_on_windows
 display_baseline_flow_test = executable('test_display_baseline_flow',
     ['test/integration/test_display_baseline_flow.c'],
     kwargs: test_common_kwargs,
@@ -4758,6 +4772,7 @@ display_m6_cutover_matrix_test = executable('test_display_m6_cutover_matrix',
     kwargs: test_common_kwargs,
 )
 test('display_m6_cutover_matrix', display_m6_cutover_matrix_test, suite: 'integration')
+endif
 
 # ============================================================================
 # VFS tests
@@ -4857,15 +4872,24 @@ str_test_names = [
     'format', 'md_render', 'md_lines',
 ]
 
-style_registry_equiv_test = executable('test_style_registry_equiv',
-    'test/unit/test_style_registry_equiv.c',
-    kwargs: test_common_kwargs + {
-        'include_directories': incdir + [include_directories('test/unit')],
-    },
-)
-test('style_registry_equiv', style_registry_equiv_test, suite: 'unit')
+if host_machine.system() == 'windows'
+    # The display/style library is compiled on Windows, but its behavior and
+    # display-facing tests are intentionally outside the native Windows port.
+else
+    style_registry_equiv_test = executable('test_style_registry_equiv',
+        'test/unit/test_style_registry_equiv.c',
+        kwargs: test_common_kwargs + {
+            'include_directories': incdir + [include_directories('test/unit')],
+        },
+    )
+    test('style_registry_equiv', style_registry_equiv_test, suite: 'unit')
+endif
 
 foreach name : str_test_names
+    if host_machine.system() == 'windows' \
+            and ['string_style', 'style_registry', 'format'].contains(name)
+        continue
+    endif
     exe = executable('test_str_' + name,
         'test/unit/test_str_' + name + '.c',
         kwargs: str_test_kwargs,
