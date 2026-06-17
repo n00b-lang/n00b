@@ -15,6 +15,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "test_portability.h"
+
 #define N00B_TEST_REQUIRE(expr) n00b_require((expr), #expr)
 
 #define TEST_DECL_POLICY_SIZE                 64u
