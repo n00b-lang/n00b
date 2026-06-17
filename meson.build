@@ -654,22 +654,54 @@ else
       if zlib_inc_opt == ''
         zlib_inc_opt = meson.project_source_root() / '..' / 'libgit2' / 'deps' / 'zlib'
       endif
-      if zlib_lib_opt == ''
-        zlib_lib_opt = meson.project_source_root() / '..' / 'libgit2' / 'build-codex-win-clean' / 'deps' / 'zlib' / 'zlib.dir' / 'RelWithDebInfo' / 'zlib.lib'
-      endif
 
       if not fs.is_dir(zlib_inc_opt)
         error('zlib headers not found. Install zlib with pkg-config support, or pass -Dzlib_inc=<include-dir>.')
       endif
-      if not fs.is_file(zlib_lib_opt)
-        error('zlib library not found. Install zlib with pkg-config support, or pass -Dzlib_lib=<path-to-zlib.lib>.')
-      endif
 
-      zlib_dep = declare_dependency(
-        compile_args: ['-I' + zlib_inc_opt],
-        link_args: [zlib_lib_opt],
-      )
-      message('Using zlib fallback: ' + zlib_lib_opt)
+      if zlib_lib_opt == ''
+        zlib_fallback_sources = [
+          zlib_inc_opt / 'adler32.c',
+          zlib_inc_opt / 'crc32.c',
+          zlib_inc_opt / 'deflate.c',
+          zlib_inc_opt / 'infback.c',
+          zlib_inc_opt / 'inffast.c',
+          zlib_inc_opt / 'inflate.c',
+          zlib_inc_opt / 'inftrees.c',
+          zlib_inc_opt / 'trees.c',
+          zlib_inc_opt / 'zutil.c',
+        ]
+        zlib_fallback_c_args = [
+          '--no-ncc',
+          '-I' + zlib_inc_opt,
+          '-DNO_VIZ',
+          '-DSTDC',
+          '-DNO_GZIP',
+          '-DHAVE_SYS_TYPES_H',
+          '-DHAVE_STDINT_H',
+          '-DHAVE_STDDEF_H',
+        ]
+        zlib_fallback_lib = static_library(
+          'n00b_zlib_fallback',
+          zlib_fallback_sources,
+          c_args: zlib_fallback_c_args,
+        )
+        zlib_dep = declare_dependency(
+          compile_args: ['-I' + zlib_inc_opt],
+          link_with: zlib_fallback_lib,
+        )
+        message('Using zlib source fallback: ' + zlib_inc_opt)
+      else
+        if not fs.is_file(zlib_lib_opt)
+          error('zlib library not found. Install zlib with pkg-config support, or pass -Dzlib_lib=<path-to-zlib.lib>.')
+        endif
+
+        zlib_dep = declare_dependency(
+          compile_args: ['-I' + zlib_inc_opt],
+          link_args: [zlib_lib_opt],
+        )
+        message('Using zlib fallback: ' + zlib_lib_opt)
+      endif
     else
       error('zlib is required')
     endif
