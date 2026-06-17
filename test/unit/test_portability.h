@@ -14,6 +14,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+#define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
+#endif
 
 static int
 n00b_test_asprintf(char **out, const char *fmt, ...)
@@ -85,6 +96,57 @@ n00b_test_mkdir(const char *path, int mode)
 {
     (void)mode;
     return _mkdir(path);
+}
+
+static int
+n00b_test_windows_errno_from_last_error(DWORD err)
+{
+    switch (err) {
+    case ERROR_ALREADY_EXISTS:
+    case ERROR_FILE_EXISTS:
+        return EEXIST;
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+        return ENOENT;
+    case ERROR_ACCESS_DENIED:
+        return EACCES;
+    case ERROR_PRIVILEGE_NOT_HELD:
+        return EPERM;
+    case ERROR_NOT_SUPPORTED:
+    case ERROR_INVALID_FUNCTION:
+        return ENOSYS;
+    default:
+        return EINVAL;
+    }
+}
+
+static int
+n00b_test_symlink(const char *target, const char *linkpath)
+{
+    DWORD target_attrs = GetFileAttributesA(target);
+    DWORD flags        = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+
+    if (target_attrs != INVALID_FILE_ATTRIBUTES
+        && (target_attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+    }
+
+    if (CreateSymbolicLinkA(linkpath, target, flags) != 0) {
+        return 0;
+    }
+
+    DWORD err = GetLastError();
+    if ((flags & SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0
+        && err == ERROR_INVALID_PARAMETER) {
+        flags &= ~SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+        if (CreateSymbolicLinkA(linkpath, target, flags) != 0) {
+            return 0;
+        }
+        err = GetLastError();
+    }
+
+    errno = n00b_test_windows_errno_from_last_error(err);
+    return -1;
 }
 
 static int
@@ -193,6 +255,7 @@ n00b_test_mkdtemp(char *tmpl)
 #define pipe(fds) _pipe((fds), 65536, _O_BINARY)
 #define popen _popen
 #define rmdir _rmdir
+#define symlink n00b_test_symlink
 #ifndef setenv
 #define setenv n00b_test_setenv
 #endif
