@@ -85,6 +85,9 @@ if host_machine.system() == 'windows'
   picotls_inc += include_directories('picotlsvs/picotls')
   picotls_public_c_args += ['-D_WINDOWS', '-D_WINDOWS64']
   ptls_c_args += picotls_public_c_args
+  if cc.get_id() == 'clang'
+    ptls_c_args += ['-fgnuc-version=4.2.1']
+  endif
 endif
 
 # Force-include n00b's libc-malloc interposition shim so picotls's libc
