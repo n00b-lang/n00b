@@ -877,8 +877,8 @@ subdir('src/attest')
 # The audit-rule-file metagrammar is itself a BNF grammar shipped in
 # `grammars/audit-rule-file.bnf`. `embed_metagrammar.py` reads the BNF
 # at configure time, C-string-escapes the bytes, and emits a header
-# (`audit_rule_file_grammar.h`) that defines a `(const char *)` macro
-# holding the BNF verbatim. The audit-rule loader hands that string to
+# (`audit_rule_file_grammar.h`) that defines a static const char array
+# holding the normalized BNF text. The audit-rule loader hands that string to
 # slay's `n00b_bnf_load` at runtime to compose the metagrammar object.
 # Same shape as the unicode codegen above; the generated header is
 # listed as a libn00b source so meson produces it before any naudit TU
@@ -3095,27 +3095,29 @@ current_allocator_test = executable('test_current_allocator',
 )
 test('current_allocator', current_allocator_test, suite: 'unit')
 
-hidden_pool_stw_test = executable('test_hidden_pool_stw',
-    ['test/unit/test_hidden_pool_stw.c'],
-    kwargs: test_common_kwargs + {
-        # The test takes the address of the static `g_pool`'s
-        # `free_lists[N].head`, which is _Atomic. ncc's auto-gc-roots
-        # transform emits descriptors that take those addresses, and
-        # clang flags them under -Watomic-access. Same pattern as the
-        # wax build's `-Wno-atomic-access`; the address-of operation
-        # is safe (the descriptors never deref non-atomically), the
-        # warning is a false positive on this codegen.
-        'c_args': exe_c_args + ['-Wno-atomic-access'],
-    },
-)
-# Not in the default 'unit' suite — this is a stress / repro test
-# that intentionally drives high churn on the GC + pool paths and
-# can take several seconds to run. It's a self-contained, no-priv,
-# no-network repro for the foreign-thread vs GC mark race the
-# raw_gateway has been hitting on Darwin; run it manually via
-# `./scripts/build.sh build && ./build/test_hidden_pool_stw` or
-# `meson test -C build --suite stress`.
-test('hidden_pool_stw', hidden_pool_stw_test, suite: 'stress', timeout: 60)
+if target_os != 'windows'
+    hidden_pool_stw_test = executable('test_hidden_pool_stw',
+        ['test/unit/test_hidden_pool_stw.c'],
+        kwargs: test_common_kwargs + {
+            # The test takes the address of the static `g_pool`'s
+            # `free_lists[N].head`, which is _Atomic. ncc's auto-gc-roots
+            # transform emits descriptors that take those addresses, and
+            # clang flags them under -Watomic-access. Same pattern as the
+            # wax build's `-Wno-atomic-access`; the address-of operation
+            # is safe (the descriptors never deref non-atomically), the
+            # warning is a false positive on this codegen.
+            'c_args': exe_c_args + ['-Wno-atomic-access'],
+        },
+    )
+    # Not in the default 'unit' suite — this is a stress / repro test
+    # that intentionally drives high churn on the GC + pool paths and
+    # can take several seconds to run. It's a self-contained, no-priv,
+    # no-network repro for the foreign-thread vs GC mark race the
+    # raw_gateway has been hitting on Darwin; run it manually via
+    # `./scripts/build.sh build && ./build/test_hidden_pool_stw` or
+    # `meson test -C build --suite stress`.
+    test('hidden_pool_stw', hidden_pool_stw_test, suite: 'stress', timeout: 60)
+endif
 
 check_perms_dyld_gap_test = executable('test_check_perms_dyld_gap',
     ['test/unit/test_check_perms_dyld_gap.c'],

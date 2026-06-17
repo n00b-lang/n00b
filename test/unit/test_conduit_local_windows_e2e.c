@@ -11,11 +11,10 @@
 
 #include "n00b.h"
 #include "conduit/local.h"
+#include "conduit/rw.h"
 #include "core/gc.h"
 #include "core/platform.h"
 #include "core/runtime.h"
-
-typedef n00b_buffer_t *local_windows_buffer_payload_t;
 
 static n00b_conduit_t *
 make_conduit(void)
@@ -54,15 +53,15 @@ static n00b_conduit_message_t(n00b_buffer_t *) *
 wait_for_buffer_msg(n00b_conduit_inbox_t(n00b_buffer_t *) *inbox)
 {
     for (int i = 0; i < 400; i++) {
-        if (n00b_conduit_inbox_has_msg(local_windows_buffer_payload_t, inbox)) {
+        if (n00b_conduit_inbox_has_msg(n00b_buffer_t *, inbox)) {
             break;
         }
         base_nanosleep_ns(5000000ULL);
     }
 
-    assert(n00b_conduit_inbox_has_msg(local_windows_buffer_payload_t, inbox));
+    assert(n00b_conduit_inbox_has_msg(n00b_buffer_t *, inbox));
     n00b_conduit_message_t(n00b_buffer_t *) *msg =
-        n00b_conduit_inbox_pop_msg(local_windows_buffer_payload_t, inbox);
+        n00b_conduit_inbox_pop_msg(n00b_buffer_t *, inbox);
     assert(msg != nullptr);
     assert(msg->payload != nullptr);
     return msg;
@@ -183,11 +182,11 @@ write_and_expect(n00b_conduit_topic_t(n00b_buffer_t *) *write_topic,
                  size_t                                 len)
 {
     n00b_buffer_t *out = n00b_buffer_from_bytes((char *)bytes, (int64_t)len);
-    auto wr = n00b_conduit_write(local_windows_buffer_payload_t, write_topic, out,
+    auto wr = n00b_conduit_write(n00b_buffer_t *, write_topic, out,
                                  .sync = false);
     assert(n00b_result_is_ok(wr));
 
-    auto rr = n00b_conduit_read(local_windows_buffer_payload_t, read_topic,
+    auto rr = n00b_conduit_read(n00b_buffer_t *, read_topic,
                                 .timeout_ms = 2000);
     assert(n00b_result_is_ok(rr));
     n00b_conduit_message_t(n00b_buffer_t *) *read_msg = n00b_result_get(rr);
@@ -385,20 +384,20 @@ test_local_windows_ping_pong(void)
     assert(server_write != nullptr && server_read != nullptr);
 
     n00b_buffer_t *ping = n00b_buffer_from_bytes("win-ping", 8);
-    auto wr = n00b_conduit_write(local_windows_buffer_payload_t, client_write, ping,
+    auto wr = n00b_conduit_write(n00b_buffer_t *, client_write, ping,
                                  .sync = false);
     assert(n00b_result_is_ok(wr));
-    auto rr = n00b_conduit_read(local_windows_buffer_payload_t, server_read,
+    auto rr = n00b_conduit_read(n00b_buffer_t *, server_read,
                                 .timeout_ms = 2000);
     assert(n00b_result_is_ok(rr));
     n00b_conduit_message_t(n00b_buffer_t *) *read_msg = n00b_result_get(rr);
     assert_buffer_eq(read_msg->payload, "win-ping", 8);
 
     n00b_buffer_t *pong = n00b_buffer_from_bytes("win-pong", 8);
-    wr = n00b_conduit_write(local_windows_buffer_payload_t, server_write, pong,
+    wr = n00b_conduit_write(n00b_buffer_t *, server_write, pong,
                             .sync = false);
     assert(n00b_result_is_ok(wr));
-    rr = n00b_conduit_read(local_windows_buffer_payload_t, client_read,
+    rr = n00b_conduit_read(n00b_buffer_t *, client_read,
                            .timeout_ms = 2000);
     assert(n00b_result_is_ok(rr));
     read_msg = n00b_result_get(rr);
@@ -493,10 +492,10 @@ test_local_windows_large_message(void)
 
     n00b_buffer_t *out = n00b_buffer_from_bytes((char *)payload,
                                                 (int64_t)len);
-    auto wr = n00b_conduit_write(local_windows_buffer_payload_t, client_write, out,
+    auto wr = n00b_conduit_write(n00b_buffer_t *, client_write, out,
                                  .sync = false);
     assert(n00b_result_is_ok(wr));
-    auto rr = n00b_conduit_read(local_windows_buffer_payload_t, server_read,
+    auto rr = n00b_conduit_read(n00b_buffer_t *, server_read,
                                 .timeout_ms = 4000);
     assert(n00b_result_is_ok(rr));
     n00b_conduit_message_t(n00b_buffer_t *) *read_msg = n00b_result_get(rr);
@@ -543,10 +542,10 @@ test_local_windows_many_sequential_messages(void)
     n00b_conduit_inbox_t(n00b_buffer_t *) *read_inbox =
         n00b_alloc_with_opts(n00b_conduit_inbox_t(n00b_buffer_t *),
                              &(n00b_alloc_opts_t){.allocator = c->allocator});
-    n00b_conduit_inbox_init(local_windows_buffer_payload_t, read_inbox, c,
+    n00b_conduit_inbox_init(n00b_buffer_t *, read_inbox, c,
                             N00B_CONDUIT_BP_UNBOUNDED, 0);
     n00b_conduit_sub_handle_t read_sub = n00b_conduit_subscribe(
-        local_windows_buffer_payload_t, server_read, read_inbox,
+        n00b_buffer_t *, server_read, read_inbox,
         .operations = N00B_CONDUIT_OP_ALL);
     assert(read_sub != N00B_CONDUIT_INVALID_SUB_HANDLE);
 
@@ -555,7 +554,7 @@ test_local_windows_many_sequential_messages(void)
     for (int i = 0; i < 4; i++) {
         n00b_buffer_t *buf = n00b_buffer_from_bytes((char *)seq[i],
                                                     (int64_t)seq_len[i]);
-        auto wr = n00b_conduit_write(local_windows_buffer_payload_t, client_write, buf,
+        auto wr = n00b_conduit_write(n00b_buffer_t *, client_write, buf,
                                      .sync = false);
         assert(n00b_result_is_ok(wr));
     }
@@ -664,7 +663,7 @@ test_local_windows_pending_close_and_gc(n00b_arena_t *arena)
     for (int i = 0; i < 16; i++) {
         n00b_buffer_t *buf = n00b_buffer_from_bytes((char *)payload,
                                                     (int64_t)len);
-        auto wr = n00b_conduit_write(local_windows_buffer_payload_t, client_write, buf,
+        auto wr = n00b_conduit_write(n00b_buffer_t *, client_write, buf,
                                      .sync = false);
         assert(n00b_result_is_ok(wr));
     }

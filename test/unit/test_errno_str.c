@@ -125,10 +125,16 @@ static const int k_errno_codes[] = {
     ETIME,
     ENOSR,
     ENOLINK,
+#if defined(EMULTIHOP)
     EMULTIHOP,
+#endif
     // Filesystem-quota / NFS family.
+#if defined(ESTALE)
     ESTALE,
+#endif
+#if defined(EDQUOT)
     EDQUOT,
+#endif
     // Robust-mutex family.
     ECANCELED,
     EOWNERDEAD,

@@ -33,6 +33,7 @@
 #define LOCAL_WINDOWS_PIPE_BUFFER_SIZE 65536UL
 #define LOCAL_WINDOWS_CONNECT_WAIT_MS 5000UL
 
+#ifndef _WINDOWS
 #define GENERIC_WRITE 0x40000000UL
 
 #define PIPE_ACCESS_DUPLEX       0x00000003UL
@@ -104,6 +105,14 @@ typedef struct _TOKEN_USER {
     DWORD token_information_len,
     DWORD *return_len);
 [[gnu::stdcall]] BOOL EqualSid(void *sid1, void *sid2);
+#endif
+
+#ifndef LOCAL_WINDOWS_WRITE_WAIT_MS
+#define LOCAL_WINDOWS_WRITE_WAIT_MS 25UL
+#endif
+#ifndef LOCAL_WINDOWS_MAX_IO_BYTES
+#define LOCAL_WINDOWS_MAX_IO_BYTES 0xffffffffULL
+#endif
 
 typedef enum {
     LOCAL_WINDOWS_OP_CONNECT,

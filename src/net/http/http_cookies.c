@@ -15,7 +15,11 @@
 #include <strings.h>
 #include <ctype.h>
 #include <time.h>
+#ifdef _WIN32
+#include "core/platform.h"
+#else
 #include <dlfcn.h>
+#endif
 #include <stdatomic.h>
 
 #include "n00b.h"
@@ -53,6 +57,44 @@ typedef struct {
 static atomic_int g_psl_state = 0;     /* 0 = unprobed, 1 = ok, 2 = absent */
 static psl_api_t  g_psl;
 
+#ifdef _WIN32
+static void *
+n00b_http_dlopen(const char *path)
+{
+    return (void *)LoadLibraryA(path);
+}
+
+static void *
+n00b_http_dlsym(void *handle, const char *name)
+{
+    return (void *)GetProcAddress((HMODULE)handle, name);
+}
+
+static void
+n00b_http_dlclose(void *handle)
+{
+    (void)FreeLibrary((HMODULE)handle);
+}
+#else
+static void *
+n00b_http_dlopen(const char *path)
+{
+    return dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+}
+
+static void *
+n00b_http_dlsym(void *handle, const char *name)
+{
+    return dlsym(handle, name);
+}
+
+static void
+n00b_http_dlclose(void *handle)
+{
+    (void)dlclose(handle);
+}
+#endif
+
 static bool
 psl_probe(void)
 {
@@ -60,14 +102,19 @@ psl_probe(void)
     if (s != 0) return s == 1;
 
     static const char *candidates[] = {
+#ifdef _WIN32
+        "libpsl.dll",
+        "psl.dll",
+#else
         "libpsl.so.5",
         "libpsl.dylib",
         "libpsl.5.dylib",
         "libpsl.so",
+#endif
     };
     void *h = nullptr;
     for (size_t i = 0; i < sizeof(candidates) / sizeof(*candidates); i++) {
-        h = dlopen(candidates[i], RTLD_LAZY | RTLD_LOCAL);
+        h = n00b_http_dlopen(candidates[i]);
         if (h) break;
     }
     if (!h) {
@@ -76,17 +123,19 @@ psl_probe(void)
     }
     psl_api_t a = {
         .handle           = h,
-        .builtin          = (psl_builtin_fn)dlsym(h, "psl_builtin"),
-        .is_public_suffix = (psl_is_public_fn)dlsym(h, "psl_is_public_suffix"),
+        .builtin          = (psl_builtin_fn)n00b_http_dlsym(
+            h, "psl_builtin"),
+        .is_public_suffix = (psl_is_public_fn)n00b_http_dlsym(
+            h, "psl_is_public_suffix"),
     };
     if (!a.builtin || !a.is_public_suffix) {
-        dlclose(h);
+        n00b_http_dlclose(h);
         atomic_store(&g_psl_state, 2);
         return false;
     }
     a.ctx = a.builtin();
     if (!a.ctx) {
-        dlclose(h);
+        n00b_http_dlclose(h);
         atomic_store(&g_psl_state, 2);
         return false;
     }

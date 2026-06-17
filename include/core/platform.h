@@ -41,6 +41,24 @@
 // Windows
 // ============================================================================
 
+#if defined(_WINDOWS)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX 1
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+
+#ifndef RtlGenRandom
+BOOLEAN SystemFunction036(PVOID buffer, ULONG len);
+#define RtlGenRandom SystemFunction036
+#endif
+
+#else
+
 // Keep Windows SDK headers out of public n00b headers. The ncc parser sees
 // preprocessed headers, and windows.h pulls in compiler intrinsic headers that
 // are not part of n00b's supported source grammar. The declarations below cover
@@ -277,6 +295,8 @@ NtCurrentTeb(void)
 }
 #endif
 
+#endif
+
 #ifndef N00B_SSIZE_T_DEFINED
 typedef intptr_t ssize_t;
 #define N00B_SSIZE_T_DEFINED 1
@@ -375,7 +395,9 @@ typedef UINT_PTR base_socket_t;
  * @param s  Socket to close.
  * @return 0 on success, or a socket error code.
  */
+#if !defined(_WINDOWS)
 int __attribute__((__stdcall__)) closesocket(base_socket_t);
+#endif
 
 static inline int
 base_closesocket(base_socket_t s)

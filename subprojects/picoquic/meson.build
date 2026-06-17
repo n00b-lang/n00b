@@ -114,6 +114,7 @@ picoquic_backend_defs = [
   '-DPTLS_WITHOUT_OPENSSL',
   '-DPTLS_WITHOUT_FUSION',
 ]
+picoquic_public_c_args = []
 
 # Quiet picoquic-internal warnings.  Upstream is mature; we don't fix style.
 picoquic_c_args = picoquic_backend_defs + [
@@ -147,7 +148,8 @@ if host_machine.system() == 'linux'
   picoquic_c_args += ['-D_GNU_SOURCE']
 endif
 if host_machine.system() == 'windows'
-  picoquic_c_args += ['-D_WINDOWS', '-D_WINDOWS64']
+  picoquic_public_c_args += ['-D_WINDOWS', '-D_WINDOWS64']
+  picoquic_c_args += picoquic_public_c_args
 endif
 
 # Force-include n00b's libc-malloc interposition shim so picoquic's libc
@@ -176,5 +178,6 @@ picoquic_core_lib = static_library('picoquic-core',
 picoquic_core_dep = declare_dependency(
   link_with: picoquic_core_lib,
   include_directories: picoquic_inc,
+  compile_args: picoquic_public_c_args,
   dependencies: [picotls_minicrypto_dep, picotls_core_dep, threads_dep],
 )

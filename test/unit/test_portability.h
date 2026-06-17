@@ -57,8 +57,17 @@ n00b_test_asprintf(char **out, const char *fmt, ...)
 static int
 n00b_test_setenv(const char *name, const char *value, int overwrite)
 {
-    if (!overwrite && getenv(name) != NULL) {
-        return 0;
+    if (!overwrite) {
+        char  *existing     = NULL;
+        size_t existing_len = 0;
+
+        if (_dupenv_s(&existing, &existing_len, name) == 0) {
+            if (existing != NULL) {
+                free(existing);
+                return 0;
+            }
+        }
+        free(existing);
     }
 
     return _putenv_s(name, value ? value : "");
@@ -83,6 +92,32 @@ n00b_test_fcntl(int fd, int cmd, ...)
     (void)fd;
     (void)cmd;
     return 0;
+}
+
+static void *
+n00b_test_memmem(const void *haystack,
+                 size_t      haystack_len,
+                 const void *needle,
+                 size_t      needle_len)
+{
+    if (needle_len == 0) {
+        return (void *)haystack;
+    }
+    if (haystack_len < needle_len) {
+        return NULL;
+    }
+
+    const unsigned char *h = haystack;
+    const unsigned char *n = needle;
+    size_t              limit = haystack_len - needle_len;
+
+    for (size_t i = 0; i <= limit; i++) {
+        if (h[i] == n[0] && memcmp(h + i, n, needle_len) == 0) {
+            return (void *)(h + i);
+        }
+    }
+
+    return NULL;
 }
 
 static char
@@ -147,11 +182,19 @@ n00b_test_mkdtemp(char *tmpl)
 #define chdir _chdir
 #define fcntl n00b_test_fcntl
 #define getcwd _getcwd
+#define memmem n00b_test_memmem
 #define mkdir(path, mode) n00b_test_mkdir((path), (mode))
 #define mkdtemp n00b_test_mkdtemp
+#define pclose _pclose
 #define pipe(fds) _pipe((fds), 65536, _O_BINARY)
+#define popen _popen
+#define rmdir _rmdir
+#ifndef setenv
 #define setenv n00b_test_setenv
+#endif
+#ifndef unsetenv
 #define unsetenv n00b_test_unsetenv
+#endif
 
 #endif
 
