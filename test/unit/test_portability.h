@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static int
 n00b_test_asprintf(char **out, const char *fmt, ...)
@@ -177,6 +178,9 @@ n00b_test_mkdtemp(char *tmpl)
 #endif
 #ifndef O_NONBLOCK
 #define O_NONBLOCK 0
+#endif
+#ifndef S_ISDIR
+#define S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)
 #endif
 
 #define chdir _chdir
