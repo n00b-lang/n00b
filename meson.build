@@ -5787,9 +5787,15 @@ test('quic_qlog', quic_qlog_test, suite: 'unit', timeout: 30)
 # Perf harness — built but not registered as a CI test (it's
 # benchmarking, not assertion-based).  Run manually with
 # `./build_debug/perf_quic_stream_scaling`.
+perf_quic_stream_scaling_kwargs = n00b_app_kwargs
+if target_os == 'windows'
+  perf_quic_stream_scaling_kwargs = n00b_app_kwargs + {
+    'dependencies': n00b_app_kwargs['dependencies'] + [cc.find_library('psapi')],
+  }
+endif
 perf_quic_stream_scaling = executable('perf_quic_stream_scaling',
     ['test/perf/perf_quic_stream_scaling.c'],
-    kwargs: n00b_app_kwargs,
+    kwargs: perf_quic_stream_scaling_kwargs,
 )
 
 # ============================================================================
