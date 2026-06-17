@@ -400,11 +400,14 @@ wsa_grow(wsa_ctx_t *ctx)
         new_cap = WSA_INITIAL_CAPACITY;
     }
 
-    WSAPOLLFD *new_fds = n00b_alloc_array(WSAPOLLFD, new_cap);
+    n00b_allocator_t *sp = wsa_backend_allocator();
+    WSAPOLLFD *new_fds = n00b_alloc_array_with_opts(WSAPOLLFD, new_cap,
+                              &(n00b_alloc_opts_t){.allocator = sp});
     if (!new_fds) return false;
 
     n00b_conduit_io_target_t **new_tgt
-        = n00b_alloc_array(n00b_conduit_io_target_t *, new_cap);
+        = n00b_alloc_array_with_opts(n00b_conduit_io_target_t *, new_cap,
+            &(n00b_alloc_opts_t){.allocator = sp});
     if (!new_tgt) {
         n00b_free(new_fds);
         return false;
