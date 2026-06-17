@@ -72,6 +72,7 @@ ptls_c_args = [
   '-Wno-incompatible-pointer-types',
 ]
 picotls_public_c_args = []
+picotls_minicrypto_deps = []
 
 # Vendored upstream code: opt out of ncc's traditional-union deprecation for
 # picotls's own .c files (the is_system include path above already covers its
@@ -88,6 +89,7 @@ if host_machine.system() == 'windows'
   if cc.get_id() == 'clang'
     ptls_c_args += ['-fgnuc-version=4.2.1']
   endif
+  picotls_minicrypto_deps += cc.find_library('bcrypt')
 endif
 
 # Force-include n00b's libc-malloc interposition shim so picotls's libc
@@ -182,4 +184,5 @@ picotls_minicrypto_dep = declare_dependency(
   link_with: [picotls_minicrypto_lib, picotls_core_lib],
   include_directories: picotls_inc,
   compile_args: picotls_public_c_args,
+  dependencies: picotls_minicrypto_deps,
 )
