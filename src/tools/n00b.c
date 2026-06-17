@@ -17,12 +17,34 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
+#include <direct.h>
+#include <io.h>
 #include <process.h>
+#include <sys/stat.h>
 #else
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#endif
+
+#ifdef _WIN32
+#ifndef S_ISDIR
+#define S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)
+#endif
+#ifndef S_ISLNK
+#define S_ISLNK(mode) 0
+#endif
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0
+#endif
+#define close _close
+#define fdopen _fdopen
+#define getpid _getpid
+#define lstat stat
+#define mkdir(path, mode) _mkdir(path)
+#define open _open
+#define unlink _unlink
 #endif
 
 #include "n00b.h"
