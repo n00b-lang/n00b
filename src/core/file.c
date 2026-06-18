@@ -23,6 +23,11 @@
 #include <stdio.h>
 #include <string.h>
 #ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <limits.h>
+#include <sys/stat.h>
+
 #ifndef O_RDONLY
 #define O_RDONLY 0
 #endif
@@ -40,6 +45,12 @@
 #endif
 #ifndef O_APPEND
 #define O_APPEND 0x0008
+#endif
+#ifndef O_EXCL
+#define O_EXCL 0x0400
+#endif
+#ifndef O_BINARY
+#define O_BINARY _O_BINARY
 #endif
 #else
 #include <fcntl.h>
@@ -260,12 +271,34 @@ open_stream_with_flags(n00b_string_t *path, uint32_t mode,
                        n00b_allocator_t *allocator)
 {
 #ifdef _WIN32
-    (void)path;
-    (void)mode;
-    (void)oflags;
-    (void)file_mode;
-    (void)allocator;
-    return n00b_result_err(n00b_file_t *, ENOSYS);
+    int fd = _open((const char *)path->data,
+                   oflags | O_BINARY,
+                   (int)file_mode);
+    if (fd < 0) {
+        return n00b_result_err(n00b_file_t *, errno);
+    }
+
+    n00b_file_t *f = n00b_alloc(n00b_file_t, .allocator = allocator);
+    f->kind         = N00B_FILE_KIND_STREAM;
+    f->path         = path;
+    f->mode         = mode;
+    f->pos          = 0;
+    f->eof          = false;
+    f->conduit      = nullptr;
+    f->io           = nullptr;
+    f->fd           = fd;
+    f->owner        = nullptr;
+    f->read_topic   = nullptr;
+    f->read_inbox   = nullptr;
+    f->read_sub     = N00B_CONDUIT_INVALID_SUB_HANDLE;
+    f->status_inbox = nullptr;
+    f->status_sub   = N00B_CONDUIT_INVALID_SUB_HANDLE;
+
+    __int64 size = _filelengthi64(fd);
+    f->size      = size >= 0 ? (int64_t)size : -1;
+    f->eof       = f->size == 0;
+
+    return n00b_result_ok(n00b_file_t *, f);
 #else
     n00b_runtime_t *rt = n00b_get_runtime();
     n00b_conduit_t *c  = rt ? rt->default_conduit : nullptr;
@@ -484,7 +517,9 @@ close_stream_result(n00b_file_t *f)
     }
     else if (f->fd >= 0) {
 #ifdef _WIN32
-        err = ENOSYS;
+        if (_close(f->fd) != 0) {
+            err = errno;
+        }
 #else
         if (close(f->fd) != 0) {
             err = errno;
@@ -505,15 +540,19 @@ n00b_file_close_result(n00b_file_t *f)
 
     int flush_err = 0;
     if (f->kind == N00B_FILE_KIND_STREAM) {
-#ifndef _WIN32
         if (f->fd >= 0 && (f->mode & N00B_FILE_WRITE)) {
+#ifdef _WIN32
+            if (_commit(f->fd) != 0) {
+                flush_err = errno;
+            }
+#else
             struct stat st;
             if (fstat(f->fd, &st) == 0 && S_ISREG(st.st_mode)
                 && fsync(f->fd) != 0) {
                 flush_err = errno;
             }
-        }
 #endif
+        }
         int close_err = close_stream_result(f);
         f->buf = nullptr;
         if (flush_err) {
@@ -646,8 +685,17 @@ n00b_file_read(n00b_file_t *f, size_t max_n)
 
         n00b_buffer_t *buf = n00b_buffer_new((int64_t)want);
 #ifdef _WIN32
-        (void)buf;
-        return n00b_result_err(n00b_buffer_t *, ENOSYS);
+        size_t chunk = want > (size_t)INT_MAX ? (size_t)INT_MAX : want;
+        int n = _read(f->fd, buf->data, (unsigned int)chunk);
+        if (n < 0) {
+            return n00b_result_err(n00b_buffer_t *, errno);
+        }
+        buf->byte_len = (size_t)n;
+        f->pos += (int64_t)n;
+        if (n == 0 || (f->size >= 0 && f->pos >= f->size)) {
+            f->eof = true;
+        }
+        return n00b_result_ok(n00b_buffer_t *, buf);
 #else
         ssize_t n = read(f->fd, buf->data, want);
         if (n < 0) {
@@ -786,6 +834,28 @@ n00b_file_write_attempt(n00b_file_t *f, const void *p, size_t n)
 
     // STREAM path: blocking write via conduit fd_owner.
     if (!f->owner) {
+        if (f->fd >= 0 && (f->mode & N00B_FILE_WRITE)) {
+#ifdef _WIN32
+            size_t chunk = n > (size_t)INT_MAX ? (size_t)INT_MAX : n;
+            int k = _write(f->fd, p, (unsigned int)chunk);
+            if (k < 0) {
+                return n00b_result_ok(
+                    n00b_file_write_attempt_t,
+                    ((n00b_file_write_attempt_t){
+                        .bytes_written = 0,
+                        .error         = true,
+                        .error_code    = errno,
+                    }));
+            }
+            f->pos += (int64_t)k;
+            if (f->size >= 0 && f->pos > f->size) {
+                f->size = f->pos;
+            }
+            return n00b_result_ok(
+                n00b_file_write_attempt_t,
+                ((n00b_file_write_attempt_t){.bytes_written = (size_t)k}));
+#endif
+        }
         return n00b_result_ok(
             n00b_file_write_attempt_t,
             ((n00b_file_write_attempt_t){

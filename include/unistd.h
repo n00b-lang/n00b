@@ -10,15 +10,9 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#ifdef _WINDOWS
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN 1
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX 1
-#endif
-#include <windows.h>
-#else
+#include "internal/win32_sockets.h"
+
+#ifndef _WINDOWS
 void __attribute__((__stdcall__)) Sleep(unsigned long milliseconds);
 #endif
 
@@ -125,8 +119,34 @@ n00b_win_fchmod(int fd, int mode)
     return 0;
 }
 
+static inline int
+n00b_win_close(int fd)
+{
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+
+    int socket_type = 0;
+    int socket_type_len = (int)sizeof(socket_type);
+    if (getsockopt((SOCKET)fd,
+                   SOL_SOCKET,
+                   SO_TYPE,
+                   (char *)&socket_type,
+                   &socket_type_len)
+        == 0) {
+        if (closesocket((SOCKET)fd) == 0) {
+            return 0;
+        }
+        errno = WSAGetLastError();
+        return -1;
+    }
+
+    return _close(fd);
+}
+
 #define access _access
-#define close _close
+#define close n00b_win_close
 #define dup _dup
 #define dup2 _dup2
 #define fchmod n00b_win_fchmod
