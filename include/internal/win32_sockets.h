@@ -527,6 +527,9 @@ BOOL __attribute__((__stdcall__)) GetOverlappedResult(HANDLE file,
 BOOL __attribute__((__stdcall__)) CreateHardLinkA(const char *file_name,
                                                   const char *existing_file_name,
                                                   void *security_attributes);
+BOOL __attribute__((__stdcall__)) MoveFileExA(const char *existing_file_name,
+                                              const char *new_file_name,
+                                              DWORD flags);
 HMODULE __attribute__((__stdcall__)) GetModuleHandleA(const char *module_name);
 HMODULE __attribute__((__stdcall__)) LoadLibraryA(const char *file_name);
 BOOL __attribute__((__stdcall__)) FreeLibrary(HMODULE module);

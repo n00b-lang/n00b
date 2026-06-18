@@ -39,6 +39,13 @@
 #define unlink _unlink
 #define lstat stat
 
+#ifndef MOVEFILE_REPLACE_EXISTING
+#define MOVEFILE_REPLACE_EXISTING 0x00000001UL
+#endif
+#ifndef MOVEFILE_WRITE_THROUGH
+#define MOVEFILE_WRITE_THROUGH 0x00000008UL
+#endif
+
 typedef struct {
     int unused;
 } DIR;
@@ -870,6 +877,20 @@ win_path_mode_forget(n00b_string_t *path)
 
     free(key);
 }
+
+static void
+win_path_mode_after_move(n00b_string_t *source_path,
+                         n00b_string_t *destination_path)
+{
+    uint32_t mode = 0;
+    bool     have = win_path_mode_lookup(source_path, &mode);
+
+    win_path_mode_forget(destination_path);
+    if (have) {
+        (void)win_path_mode_remember(destination_path, mode);
+    }
+    win_path_mode_forget(source_path);
+}
 #endif
 
 static n00b_file_kind
@@ -1178,8 +1199,7 @@ n00b_path_get_mode(n00b_string_t *path)
     if (native == nullptr || stat(native, &st) != 0) {
         return n00b_result_err(uint32_t, errno);
     }
-    if (path_is_windows_af_unix_socket(native)
-        && win_path_mode_lookup(path, &remembered_mode)) {
+    if (win_path_mode_lookup(path, &remembered_mode)) {
         return n00b_result_ok(uint32_t, remembered_mode);
     }
 #else
@@ -1235,14 +1255,17 @@ n00b_path_set_mode(n00b_string_t *path, uint32_t mode)
     }
 
 #ifdef _WIN32
-    if (path_is_windows_af_unix_socket(path->data)) {
-        if (!win_path_mode_remember(path, mode)) {
-            return n00b_result_err(uint32_t, ENOMEM);
-        }
-        return n00b_result_ok(uint32_t, mode);
+    struct stat st;
+    char       *native = path_windows_existing_native_cstr(path);
+
+    if (native == nullptr || stat(native, &st) != 0) {
+        return n00b_result_err(uint32_t, errno);
     }
 
-    return n00b_result_err(uint32_t, ENOSYS);
+    if (!win_path_mode_remember(path, mode)) {
+        return n00b_result_err(uint32_t, ENOMEM);
+    }
+    return n00b_result_ok(uint32_t, mode);
 #else
     if (chmod(path->data, (mode_t)mode) != 0) {
         return n00b_result_err(uint32_t, errno);
@@ -1331,6 +1354,9 @@ _n00b_path_mkdir_p(n00b_string_t *path) _kargs
         }
 
         created = true;
+#ifdef _WIN32
+        (void)win_path_mode_remember(current, mode);
+#endif
     }
 
     return n00b_result_ok(bool, created);
@@ -1566,6 +1592,7 @@ _n00b_new_sibling_temp_dir(n00b_string_t *destination_path) _kargs
 #ifdef _WIN32
         char *native = path_windows_native_cstr(path);
         if (native != nullptr && mkdir(native, (mode_t)directory_mode) == 0) {
+            (void)win_path_mode_remember(path, directory_mode);
 #else
         if (mkdir(path->data, (mode_t)directory_mode) == 0) {
 #endif
@@ -2404,7 +2431,20 @@ n00b_rename(n00b_string_t *from, n00b_string_t *to)
 static n00b_result_t(int)
 rename_no_replace(n00b_string_t *from, n00b_string_t *to)
 {
-#if defined(__MACH__) && defined(RENAME_EXCL)
+#if defined(_WIN32)
+    char *native_from = path_windows_native_cstr(from);
+    char *native_to   = path_windows_native_cstr(to);
+
+    if (native_from == nullptr || native_to == nullptr) {
+        return n00b_result_err(int, EINVAL);
+    }
+
+    if (!MoveFileExA(native_from, native_to, MOVEFILE_WRITE_THROUGH)) {
+        return n00b_result_err(int, path_windows_errno(GetLastError()));
+    }
+    win_path_mode_after_move(from, to);
+    return n00b_result_ok(int, 0);
+#elif defined(__MACH__) && defined(RENAME_EXCL)
     if (renamex_np(from->data, to->data, RENAME_EXCL) != 0) {
         return n00b_result_err(int, errno);
     }
@@ -2440,10 +2480,31 @@ _n00b_path_commit_exact(n00b_string_t *source_path,
 
     switch (policy) {
     case N00B_PATH_COMMIT_REPLACE_EXISTING:
+#ifdef _WIN32
+    {
+        char *native_source = path_windows_native_cstr(source_path);
+        char *native_dest   = path_windows_native_cstr(destination_path);
+
+        if (native_source == nullptr || native_dest == nullptr) {
+            return n00b_result_err(n00b_string_t *, EINVAL);
+        }
+
+        if (!MoveFileExA(native_source,
+                         native_dest,
+                         MOVEFILE_REPLACE_EXISTING
+                             | MOVEFILE_WRITE_THROUGH)) {
+            return n00b_result_err(n00b_string_t *,
+                                   path_windows_errno(GetLastError()));
+        }
+        win_path_mode_after_move(source_path, destination_path);
+        return n00b_result_ok(n00b_string_t *, destination_path);
+    }
+#else
         if (rename(source_path->data, destination_path->data) != 0) {
             return n00b_result_err(n00b_string_t *, errno);
         }
         return n00b_result_ok(n00b_string_t *, destination_path);
+#endif
 
     case N00B_PATH_COMMIT_REJECT_EXISTING: {
         auto rr = rename_no_replace(source_path, destination_path);
@@ -2575,6 +2636,7 @@ path_remove_tree_inner(n00b_string_t    *path,
         return n00b_result_err(bool, errno);
     }
 
+    win_path_mode_forget(path);
     return n00b_result_ok(bool, true);
 #else
     if (lstat(path->data, &st) != 0) {

@@ -4293,6 +4293,9 @@ _n00b_obj_bundle_file_kind_no_follow(n00b_string_t *path)
         return N00B_FK_NOT_FOUND;
     }
 
+#ifdef _WIN32
+    return n00b_get_file_kind(path);
+#else
     struct stat info;
 
     if (N00B_OBJ_BUNDLE_LSTAT(path->data, &info) != 0) {
@@ -4317,6 +4320,7 @@ _n00b_obj_bundle_file_kind_no_follow(n00b_string_t *path)
     default:
         return N00B_FK_OTHER;
     }
+#endif
 }
 
 static n00b_string_t *
