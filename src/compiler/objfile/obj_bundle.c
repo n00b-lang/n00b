@@ -392,10 +392,13 @@ typedef struct n00b_obj_bundle_extract_plan_entry {
     n00b_obj_bundle_artifact_t *artifact;
     n00b_string_t              *destination_path;
     n00b_string_t              *parent_path;
+    n00b_string_t              *reported_destination_path;
+    n00b_string_t              *reported_parent_path;
 } n00b_obj_bundle_extract_plan_entry_t;
 
 typedef struct n00b_obj_bundle_extract_plan {
     n00b_string_t *destination_root;
+    n00b_string_t *reported_destination_root;
     n00b_list_t(n00b_obj_bundle_extract_plan_entry_t *) entries;
 } n00b_obj_bundle_extract_plan_t;
 
@@ -3756,6 +3759,8 @@ _n00b_obj_bundle_extract_plan_new(n00b_string_t    *destination_root,
 
     plan->destination_root =
         _n00b_obj_bundle_resolve_path_copy(destination_root, allocator);
+    plan->reported_destination_root =
+        _n00b_obj_bundle_copy_string(destination_root, allocator);
     plan->entries =
         n00b_list_new(n00b_obj_bundle_extract_plan_entry_t *,
                       .allocator = allocator);
@@ -3890,6 +3895,10 @@ _n00b_obj_bundle_extract_plan_entry_new(
                                          allocator);
     n00b_string_t *destination_path =
         _n00b_obj_bundle_resolve_path_copy(joined, allocator);
+    n00b_string_t *reported_destination_path =
+        _n00b_obj_bundle_path_join_child(plan->reported_destination_root,
+                                         relative,
+                                         allocator);
 
     if (!_n00b_obj_bundle_extract_path_is_under_root(
             plan->destination_root,
@@ -3918,6 +3927,10 @@ _n00b_obj_bundle_extract_plan_entry_new(
     entry->destination_path = destination_path;
     entry->parent_path      =
         _n00b_obj_bundle_extract_parent_path(destination_path, allocator);
+    entry->reported_destination_path = reported_destination_path;
+    entry->reported_parent_path =
+        _n00b_obj_bundle_extract_parent_path(reported_destination_path,
+                                             allocator);
 
     return n00b_result_ok(n00b_obj_bundle_extract_plan_entry_t *, entry);
 }
@@ -4241,6 +4254,42 @@ _n00b_obj_bundle_extract_mode_is_valid(uint32_t mode)
     return (mode & ~07777u) == 0;
 }
 
+static n00b_string_t *
+_n00b_obj_bundle_extract_reported_path(
+    n00b_obj_bundle_extract_plan_entry_t *entry,
+    n00b_obj_bundle_extract_result_t     *facts,
+    n00b_string_t                        *destination_path)
+{
+    if (destination_path == nullptr) {
+        return destination_path;
+    }
+
+    if (entry == nullptr) {
+        if (facts != nullptr && facts->destination_root != nullptr) {
+            n00b_string_t *resolved =
+                n00b_resolve_path(facts->destination_root);
+            if (resolved != nullptr
+                && _n00b_obj_bundle_string_bytes_eq(resolved,
+                                                    destination_path)) {
+                return facts->destination_root;
+            }
+        }
+        return destination_path;
+    }
+
+    if (destination_path == entry->destination_path
+        && entry->reported_destination_path != nullptr) {
+        return entry->reported_destination_path;
+    }
+
+    if (destination_path == entry->parent_path
+        && entry->reported_parent_path != nullptr) {
+        return entry->reported_parent_path;
+    }
+
+    return destination_path;
+}
+
 static n00b_obj_bundle_error_t *
 _n00b_obj_bundle_extract_filesystem_error(
     n00b_obj_bundle_error_code_t              code,
@@ -4252,10 +4301,12 @@ _n00b_obj_bundle_extract_filesystem_error(
     bool                                      has_detail,
     n00b_allocator_t                         *allocator)
 {
+    n00b_string_t *reported_path =
+        _n00b_obj_bundle_extract_reported_path(entry, facts, destination_path);
     n00b_obj_bundle_error_t *error =
         _n00b_obj_bundle_error_with_extract_result(code,
                                                    message,
-                                                   destination_path,
+                                                   reported_path,
                                                    facts,
                                                    allocator);
 

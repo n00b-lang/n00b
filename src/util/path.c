@@ -878,18 +878,87 @@ win_path_mode_forget(n00b_string_t *path)
     free(key);
 }
 
+static bool
+win_path_mode_key_is_self_or_child(const char *path, const char *root)
+{
+    size_t root_len = strlen(root);
+
+    if (strcmp(path, root) == 0) {
+        return true;
+    }
+
+    return strncmp(path, root, root_len) == 0 && path[root_len] == '/';
+}
+
+static void
+win_path_mode_forget_tree_key(const char *root)
+{
+    win_path_mode_rec_t **slot = &win_path_modes;
+
+    while (*slot != nullptr) {
+        win_path_mode_rec_t *cur = *slot;
+        if (win_path_mode_key_is_self_or_child(cur->path, root)) {
+            *slot = cur->next;
+            free(cur->path);
+            free(cur);
+            continue;
+        }
+        slot = &cur->next;
+    }
+}
+
+static char *
+win_path_mode_rewrite_key(const char *path,
+                          const char *source_root,
+                          const char *destination_root)
+{
+    size_t source_len      = strlen(source_root);
+    const char *suffix     = path + source_len;
+    size_t destination_len = strlen(destination_root);
+    size_t suffix_len      = strlen(suffix);
+    char  *rewritten       = malloc(destination_len + suffix_len + 1);
+
+    if (rewritten == nullptr) {
+        return nullptr;
+    }
+
+    memcpy(rewritten, destination_root, destination_len);
+    memcpy(rewritten + destination_len, suffix, suffix_len + 1);
+    return rewritten;
+}
+
 static void
 win_path_mode_after_move(n00b_string_t *source_path,
                          n00b_string_t *destination_path)
 {
-    uint32_t mode = 0;
-    bool     have = win_path_mode_lookup(source_path, &mode);
+    char *source_key      = win_path_mode_key(source_path);
+    char *destination_key = win_path_mode_key(destination_path);
 
-    win_path_mode_forget(destination_path);
-    if (have) {
-        (void)win_path_mode_remember(destination_path, mode);
+    if (source_key == nullptr || destination_key == nullptr) {
+        free(source_key);
+        free(destination_key);
+        return;
     }
-    win_path_mode_forget(source_path);
+
+    win_path_mode_forget_tree_key(destination_key);
+
+    win_path_mode_rec_t *cur = win_path_modes;
+    while (cur != nullptr) {
+        if (win_path_mode_key_is_self_or_child(cur->path, source_key)) {
+            char *rewritten =
+                win_path_mode_rewrite_key(cur->path,
+                                          source_key,
+                                          destination_key);
+            if (rewritten != nullptr) {
+                free(cur->path);
+                cur->path = rewritten;
+            }
+        }
+        cur = cur->next;
+    }
+
+    free(source_key);
+    free(destination_key);
 }
 #endif
 
