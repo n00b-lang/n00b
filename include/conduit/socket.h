@@ -303,8 +303,7 @@ n00b_conduit_listener_close(n00b_conduit_listener_t *listener);
  *
  * @return Ok(listener) on success, or Err(errno) on failure.
  *
- * @note POSIX only. On Windows this returns
- *       @c N00B_CONDUIT_ERR_NOT_SUPPORTED.
+ * @note On Windows this uses Winsock AF_UNIX support.
  */
 extern n00b_result_t(n00b_conduit_listener_t *)
 n00b_conduit_listen_unix(n00b_conduit_t            *c,
@@ -393,8 +392,7 @@ n00b_conduit_conn_close(n00b_conduit_conn_t *conn);
  * @return Ok(connected conn) on success, or Err(errno) on failure.
  *         ENOENT or ECONNREFUSED indicate no listener at the path.
  *
- * @note POSIX only. On Windows this returns
- *       @c N00B_CONDUIT_ERR_NOT_SUPPORTED.
+ * @note On Windows this uses Winsock AF_UNIX support.
  */
 extern n00b_result_t(n00b_conduit_conn_t *)
 n00b_conduit_conn_unix(n00b_conduit_t            *c,

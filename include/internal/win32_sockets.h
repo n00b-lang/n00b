@@ -20,6 +20,7 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <afunix.h>
 #include <windows.h>
 #include <io.h>
 
@@ -66,6 +67,7 @@ typedef int socklen_t;
 #define SOCKET_ERROR   (-1)
 
 #define AF_UNSPEC   0
+#define AF_UNIX     1
 #define AF_INET     2
 #define AF_INET6    23
 #define SOCK_STREAM 1
@@ -158,7 +160,9 @@ typedef int socklen_t;
 #define POLLHUP    0x0002
 #define POLLNVAL   0x0004
 
+#ifndef WAIT_OBJECT_0
 #define WAIT_OBJECT_0 0
+#endif
 
 #define INVALID_HANDLE_VALUE ((HANDLE)(intptr_t)-1)
 
@@ -179,6 +183,7 @@ typedef int socklen_t;
 #define INVALID_FILE_ATTRIBUTES       ((DWORD)0xffffffffUL)
 #define FILE_ATTRIBUTE_DIRECTORY      0x00000010UL
 #define FILE_ATTRIBUTE_NORMAL         0x00000080UL
+#define FILE_ATTRIBUTE_REPARSE_POINT  0x00000400UL
 #define FILE_LIST_DIRECTORY           0x00000001UL
 #define FILE_SHARE_READ               0x00000001UL
 #define FILE_SHARE_WRITE              0x00000002UL
@@ -197,6 +202,10 @@ typedef int socklen_t;
 #define FILE_ACTION_MODIFIED          0x00000003UL
 #define FILE_ACTION_RENAMED_OLD_NAME  0x00000004UL
 #define FILE_ACTION_RENAMED_NEW_NAME  0x00000005UL
+
+#ifndef IO_REPARSE_TAG_AF_UNIX
+#define IO_REPARSE_TAG_AF_UNIX 0x80000023UL
+#endif
 
 #define ERROR_INVALID_HANDLE     6UL
 #define ERROR_HANDLE_EOF         38UL
@@ -263,6 +272,11 @@ struct sockaddr_in {
     char           sin_zero[8];
 };
 
+struct sockaddr_un {
+    u_short sun_family;
+    char    sun_path[108];
+};
+
 struct addrinfo {
     int              ai_flags;
     int              ai_family;
@@ -320,6 +334,19 @@ typedef struct _PROCESS_INFORMATION {
     DWORD  dwProcessId;
     DWORD  dwThreadId;
 } PROCESS_INFORMATION;
+
+typedef struct _WIN32_FIND_DATAA {
+    DWORD    dwFileAttributes;
+    FILETIME ftCreationTime;
+    FILETIME ftLastAccessTime;
+    FILETIME ftLastWriteTime;
+    DWORD    nFileSizeHigh;
+    DWORD    nFileSizeLow;
+    DWORD    dwReserved0;
+    DWORD    dwReserved1;
+    char     cFileName[MAX_PATH];
+    char     cAlternateFileName[14];
+} WIN32_FIND_DATAA;
 
 typedef struct _STARTUPINFOEXA {
     STARTUPINFOA                  StartupInfo;
@@ -473,6 +500,9 @@ DWORD __attribute__((__stdcall__)) GetFinalPathNameByHandleW(HANDLE file,
                                                              DWORD path_len,
                                                              DWORD flags);
 DWORD __attribute__((__stdcall__)) GetFileAttributesW(const wchar_t *path);
+HANDLE __attribute__((__stdcall__)) FindFirstFileA(const char *file_name,
+                                                   WIN32_FIND_DATAA *find_file_data);
+BOOL __attribute__((__stdcall__)) FindClose(HANDLE find_file);
 HANDLE __attribute__((__stdcall__)) CreateFileW(const wchar_t *file_name,
                                                 DWORD desired_access,
                                                 DWORD share_mode,

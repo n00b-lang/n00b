@@ -19,7 +19,7 @@
 #endif
 
 #ifdef _WIN32
-#include <windows.h>
+#include "internal/win32_sockets.h"
 #include <direct.h>
 #include <io.h>
 #include <limits.h>
@@ -439,6 +439,130 @@ path_tilde_expand_alloc(n00b_string_t *path, n00b_allocator_t *allocator)
     return path_normalize_absolute(expanded, allocator);
 }
 
+#ifdef _WIN32
+typedef struct win_path_mode_rec {
+    char                     *path;
+    uint32_t                  mode;
+    struct win_path_mode_rec *next;
+} win_path_mode_rec_t;
+
+static win_path_mode_rec_t *win_path_modes;
+
+static bool
+path_is_windows_af_unix_socket(const char *path)
+{
+    WIN32_FIND_DATAA data = {};
+    HANDLE h = FindFirstFileA(path, &data);
+
+    if (h == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    (void)FindClose(h);
+
+    return (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+           && data.dwReserved0 == IO_REPARSE_TAG_AF_UNIX;
+}
+
+static char *
+win_path_mode_key(n00b_string_t *path)
+{
+    n00b_string_t *resolved = n00b_resolve_path(path);
+
+    if (resolved == nullptr || resolved->data == nullptr) {
+        return nullptr;
+    }
+
+    char *result = malloc((size_t)resolved->u8_bytes + 1);
+    if (result == nullptr) {
+        return nullptr;
+    }
+
+    memcpy(result, resolved->data, (size_t)resolved->u8_bytes);
+    result[resolved->u8_bytes] = '\0';
+    return result;
+}
+
+static bool
+win_path_mode_lookup(n00b_string_t *path, uint32_t *mode)
+{
+    char *key = win_path_mode_key(path);
+
+    if (key == nullptr) {
+        return false;
+    }
+
+    win_path_mode_rec_t *cur = win_path_modes;
+    while (cur != nullptr) {
+        if (strcmp(cur->path, key) == 0) {
+            *mode = cur->mode;
+            free(key);
+            return true;
+        }
+        cur = cur->next;
+    }
+
+    free(key);
+    return false;
+}
+
+static bool
+win_path_mode_remember(n00b_string_t *path, uint32_t mode)
+{
+    char *key = win_path_mode_key(path);
+
+    if (key == nullptr) {
+        return false;
+    }
+
+    win_path_mode_rec_t *cur = win_path_modes;
+    while (cur != nullptr) {
+        if (strcmp(cur->path, key) == 0) {
+            cur->mode = mode;
+            free(key);
+            return true;
+        }
+        cur = cur->next;
+    }
+
+    win_path_mode_rec_t *rec = malloc(sizeof(*rec));
+    if (rec == nullptr) {
+        free(key);
+        return false;
+    }
+
+    rec->path       = key;
+    rec->mode       = mode;
+    rec->next       = win_path_modes;
+    win_path_modes  = rec;
+    return true;
+}
+
+static void
+win_path_mode_forget(n00b_string_t *path)
+{
+    char *key = win_path_mode_key(path);
+
+    if (key == nullptr) {
+        return;
+    }
+
+    win_path_mode_rec_t **slot = &win_path_modes;
+    while (*slot != nullptr) {
+        win_path_mode_rec_t *cur = *slot;
+        if (strcmp(cur->path, key) == 0) {
+            *slot = cur->next;
+            free(cur->path);
+            free(cur);
+            break;
+        }
+        slot = &cur->next;
+    }
+
+    free(key);
+}
+#endif
+
 static n00b_file_kind
 path_file_kind_at(n00b_string_t *path)
 {
@@ -451,6 +575,12 @@ path_file_kind_at(n00b_string_t *path)
     if (lstat(path->data, &file_info) != 0) {
         return N00B_FK_NOT_FOUND;
     }
+
+#ifdef _WIN32
+    if (path_is_windows_af_unix_socket(path->data)) {
+        return N00B_FK_IS_SOCK;
+    }
+#endif
 
     switch (file_info.st_mode & S_IFMT) {
     case S_IFREG:  return N00B_FK_IS_REG_FILE;
@@ -721,6 +851,13 @@ n00b_path_get_mode(n00b_string_t *path)
     if (stat(path->data, &st) != 0) {
         return n00b_result_err(uint32_t, errno);
     }
+#ifdef _WIN32
+    uint32_t remembered_mode = 0;
+    if (path_is_windows_af_unix_socket(path->data)
+        && win_path_mode_lookup(path, &remembered_mode)) {
+        return n00b_result_ok(uint32_t, remembered_mode);
+    }
+#endif
     return n00b_result_ok(uint32_t, (uint32_t)(st.st_mode & 07777));
 }
 
@@ -769,8 +906,13 @@ n00b_path_set_mode(n00b_string_t *path, uint32_t mode)
     }
 
 #ifdef _WIN32
-    (void)path;
-    (void)mode;
+    if (path_is_windows_af_unix_socket(path->data)) {
+        if (!win_path_mode_remember(path, mode)) {
+            return n00b_result_err(uint32_t, ENOMEM);
+        }
+        return n00b_result_ok(uint32_t, mode);
+    }
+
     return n00b_result_err(uint32_t, ENOSYS);
 #else
     if (chmod(path->data, (mode_t)mode) != 0) {
@@ -1358,10 +1500,23 @@ n00b_get_file_kind(n00b_string_t *p)
 {
     struct stat file_info;
 
+#ifdef _WIN32
+    if (p != nullptr && p->data != nullptr
+        && path_is_windows_af_unix_socket(p->data)) {
+        return N00B_FK_IS_SOCK;
+    }
+#endif
+
     p = n00b_resolve_path(p);
 
     if (lstat(p->data, &file_info) != 0)
         return N00B_FK_NOT_FOUND;
+
+#ifdef _WIN32
+    if (path_is_windows_af_unix_socket(p->data)) {
+        return N00B_FK_IS_SOCK;
+    }
+#endif
 
     switch (file_info.st_mode & S_IFMT) {
     case S_IFREG:  return N00B_FK_IS_REG_FILE;
@@ -1960,10 +2115,16 @@ _n00b_file_unlink(n00b_string_t *path) _kargs
 }
 {
     if (unlink(path->data) == 0) {
+#ifdef _WIN32
+        win_path_mode_forget(path);
+#endif
         return n00b_result_ok(bool, true);
     }
     int err = errno;
     if (err == ENOENT && ignore_missing) {
+#ifdef _WIN32
+        win_path_mode_forget(path);
+#endif
         return n00b_result_ok(bool, false);
     }
     return n00b_result_err(bool, err);
