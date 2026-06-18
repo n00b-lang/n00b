@@ -445,6 +445,15 @@ struct n00b_thread_t {
      * nullptr on non-Linux and for the main thread.. */
     _Atomic(uint32_t)       *child_tid_word;
     /**
+     * @brief Windows: owning thread handle used as the worker death edge.
+     *
+     * The spawner keeps the handle returned by CreateThread and the worker
+     * copies it onto its permanent struct before publishing ready. The reaper
+     * waits until the handle is signaled before recycling the n00b callstack,
+     * then closes the handle. nullptr on non-Windows and for non-raw workers.
+     */
+    void                 *os_thread_handle;
+    /**
      * @brief Linux/Windows: the worker's OS thread id, for preemptive STW
      * suspension .  Linux: `gettid`, used as the `tgkill` target
      * for the suspend signal.  Windows: `GetCurrentThreadId`, used to

@@ -98,6 +98,9 @@ typedef DWORD(WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
 #ifndef INFINITE
 #define INFINITE 0xffffffffUL
 #endif
+#ifndef WAIT_OBJECT_0
+#define WAIT_OBJECT_0 0UL
+#endif
 #ifndef ERROR_TIMEOUT
 #define ERROR_TIMEOUT 1460L
 #endif
@@ -124,6 +127,9 @@ typedef DWORD(WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
 #endif
 #ifndef THREAD_SUSPEND_RESUME
 #define THREAD_SUSPEND_RESUME 0x0002UL
+#endif
+#ifndef CREATE_SUSPENDED
+#define CREATE_SUSPENDED 0x00000004UL
 #endif
 
 #if defined(__x86_64__) || defined(_M_X64)
@@ -263,6 +269,7 @@ BOOL    GetThreadContext(HANDLE thread, CONTEXT *context);
 HANDLE  CreateThread(void *attributes, SIZE_T stack_size, LPTHREAD_START_ROUTINE start,
                      void *parameter, DWORD creation_flags, DWORD *thread_id);
 void    ExitThread(DWORD exit_code);
+DWORD   WaitForSingleObject(HANDLE handle, DWORD milliseconds);
 BOOL    CloseHandle(HANDLE object);
 DWORD   FlsAlloc(void *callback);
 void   *FlsGetValue(DWORD key);
