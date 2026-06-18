@@ -18,6 +18,7 @@
 #include "conduit/fd_managed.h"
 #include "conduit/inbox.h"
 #include "conduit/rw.h"
+#include "util/path.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -992,9 +993,10 @@ n00b_file_apply_mode(n00b_file_t *f, uint32_t mode)
     }
 
 #ifdef _WIN32
-    (void)f;
-    (void)mode;
-    return n00b_result_err(uint32_t, ENOSYS);
+    if (!f->path || !f->path->data) {
+        return n00b_result_err(uint32_t, EBADF);
+    }
+    return n00b_path_set_mode(f->path, mode);
 #else
     struct stat st;
     if (f->kind == N00B_FILE_KIND_STREAM && f->fd >= 0) {
