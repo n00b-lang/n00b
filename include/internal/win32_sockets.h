@@ -434,6 +434,7 @@ HANDLE __attribute__((__stdcall__)) CreateEventW(void *event_attributes,
                                                  const wchar_t *name);
 BOOL __attribute__((__stdcall__)) CloseHandle(HANDLE object);
 BOOL __attribute__((__stdcall__)) SetEvent(HANDLE event);
+BOOL __attribute__((__stdcall__)) ResetEvent(HANDLE event);
 DWORD __attribute__((__stdcall__)) WaitForSingleObject(HANDLE handle, DWORD milliseconds);
 HANDLE __attribute__((__stdcall__)) OpenProcess(DWORD desired_access,
                                                 BOOL inherit_handle,
