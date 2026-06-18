@@ -14,6 +14,7 @@
 
 #include <sys/stat.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -757,15 +758,16 @@ n00b_get_program_search_path(void)
     n00b_list_t(n00b_string_t *) lst = n00b_list_new(n00b_string_t *);
 
     if (path) {
-        n00b_string_t *ps = n00b_string_from_cstr(path);
-        n00b_array_t(n00b_string_t *) parts = n00b_unicode_str_split(
-            ps,
+        const char *separator = ":";
 #ifdef _WIN32
-            r";"
-#else
-            r":"
+        separator = ";";
+        if (strchr(path, ';') == nullptr && path[0] == '/') {
+            separator = ":";
+        }
 #endif
-        );
+        n00b_string_t *ps = n00b_string_from_cstr(path);
+        n00b_array_t(n00b_string_t *) parts =
+            n00b_unicode_str_split(ps, n00b_string_from_cstr(separator));
 
         for (size_t i = 0; i < n00b_array_len(parts); i++) {
             n00b_list_push(lst, n00b_array_get(parts, i));
