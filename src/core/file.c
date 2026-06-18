@@ -52,6 +52,12 @@
 #ifndef O_BINARY
 #define O_BINARY _O_BINARY
 #endif
+#ifndef S_IFMT
+#define S_IFMT _S_IFMT
+#endif
+#ifndef S_IFREG
+#define S_IFREG _S_IFREG
+#endif
 #else
 #include <fcntl.h>
 #include <sys/syscall.h>
@@ -148,6 +154,45 @@ n00b_file_err_str(n00b_err_t err)
     return r"UNKNOWN";
 }
 
+#ifdef _WIN32
+static bool
+file_windows_has_drive_prefix(const char *path)
+{
+    if (path == nullptr || path[0] == '\0' || path[1] == '\0') {
+        return false;
+    }
+
+    char drive = path[0];
+    return ((drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z'))
+           && path[1] == ':';
+}
+
+static char *
+file_windows_native_cstr(n00b_string_t *path)
+{
+    if (path == nullptr || path->data == nullptr) {
+        return nullptr;
+    }
+
+    size_t start = 0;
+    if (path->u8_bytes >= 3 && path->data[0] == '/'
+        && file_windows_has_drive_prefix(path->data + 1)) {
+        start = 1;
+    }
+
+    size_t len = (size_t)path->u8_bytes - start;
+    char  *buf = n00b_alloc_array(char, len + 1);
+
+    for (size_t i = 0; i < len; i++) {
+        char c = path->data[start + i];
+        buf[i] = c == '/' ? '\\' : c;
+    }
+
+    buf[len] = '\0';
+    return buf;
+}
+#endif
+
 #ifndef _WIN32
 static int
 file_host_open_readonly(const char *path)
@@ -237,11 +282,10 @@ mode_bits_valid(uint32_t mode)
 // ============================================================================
 
 static n00b_file_kind_t
-resolve_kind(const char *cpath, uint32_t mode, n00b_file_kind_t hint)
+resolve_kind(n00b_string_t *path, uint32_t mode, n00b_file_kind_t hint)
 {
     if (hint != N00B_FILE_KIND_AUTO) return hint;
 
-#ifndef _WIN32
     // Writable opens always go through STREAM — mmap-write semantics
     // (knowing the final size, MAP_SHARED flushes) are different
     // enough that we don't pretend they're symmetric with read-only
@@ -249,14 +293,19 @@ resolve_kind(const char *cpath, uint32_t mode, n00b_file_kind_t hint)
     if (mode & N00B_FILE_WRITE) return N00B_FILE_KIND_STREAM;
 
     struct stat st;
+#ifdef _WIN32
+    char *native = file_windows_native_cstr(path);
+    if (native == nullptr || stat(native, &st) != 0) {
+        return N00B_FILE_KIND_STREAM;
+    }
+    if ((st.st_mode & S_IFMT) == S_IFREG) return N00B_FILE_KIND_MMAP;
+#else
+    const char *cpath = (const char *)path->data;
     if (stat(cpath, &st) != 0) {
         // Let the substrate-specific open report the real error.
         return N00B_FILE_KIND_STREAM;
     }
     if (S_ISREG(st.st_mode)) return N00B_FILE_KIND_MMAP;
-#else
-    (void)cpath;
-    (void)mode;
 #endif
     return N00B_FILE_KIND_STREAM;
 }
@@ -271,7 +320,12 @@ open_stream_with_flags(n00b_string_t *path, uint32_t mode,
                        n00b_allocator_t *allocator)
 {
 #ifdef _WIN32
-    int fd = _open((const char *)path->data,
+    char *native = file_windows_native_cstr(path);
+    if (native == nullptr) {
+        return n00b_result_err(n00b_file_t *, EINVAL);
+    }
+
+    int fd = _open(native,
                    oflags | O_BINARY,
                    (int)file_mode);
     if (fd < 0) {
@@ -456,8 +510,7 @@ n00b_file_open(n00b_string_t *path) _kargs
         return n00b_result_err(n00b_file_t *, EINVAL);
     }
 
-    n00b_file_kind_t resolved = resolve_kind((const char *)path->data,
-                                              mode, kind);
+    n00b_file_kind_t resolved = resolve_kind(path, mode, kind);
 
     if (resolved == N00B_FILE_KIND_MMAP) {
         return open_mmap(path, mode, populate);
@@ -476,18 +529,14 @@ n00b_file_open_exclusive(n00b_string_t *path) _kargs
         return n00b_result_err(n00b_file_t *, EINVAL);
     }
 
-#ifdef _WIN32
-    (void)path;
-    (void)allocator;
-    return n00b_result_err(n00b_file_t *, ENOSYS);
-#else
     int oflags = O_WRONLY | O_CREAT | O_EXCL | O_TRUNC;
+#ifndef _WIN32
 #ifdef O_NOFOLLOW
     oflags |= O_NOFOLLOW;
 #endif
+#endif
     uint32_t mode = N00B_FILE_WRITE | N00B_FILE_CREATE | N00B_FILE_TRUNCATE;
     return open_stream_with_flags(path, mode, oflags, file_mode, allocator);
-#endif
 }
 
 static int
