@@ -852,6 +852,10 @@ rocs_record_ordinal_map_new(n00b_store_map_list_t *records) _kargs
 
         uint64_t raw = n00b_result_get(raw_r);
         n00b_dict_put(map, raw, i);
+        // Free the transient per-record slot back to the (per-query) view pool;
+        // the pool free-list recycles it so this whole-shard scan's view-handle
+        // working set stays ~one slot instead of one-per-record.
+        n00b_free(n00b_option_get(slot_opt));
     }
 
     return n00b_result_ok(rocs_record_ordinal_map_t *, map);
@@ -1090,7 +1094,11 @@ rocs_postings_add_mapped(n00b_store_postings_t  *postings,
                     bool,
                     rocs_index_map_err(n00b_result_get_err(raw_r)));
             }
-            if (n00b_result_get(raw_r) == posting_value) {
+            uint64_t raw = n00b_result_get(raw_r);
+            // Recycle the transient per-record slot back to the per-query view
+            // pool so this scan stays ~one slot, not one-per-record.
+            n00b_free(n00b_option_get(slot_opt));
+            if (raw == posting_value) {
                 ordinal = i;
                 break;
             }
@@ -2472,6 +2480,12 @@ n00b_store_record_view_mapped_at(n00b_store_map_shard_t *shard,
                                N00B_STORE_INDEX_ERR_STATE);
     }
 
+    // Validation-only handles; the returned view holds pos+shard, not these.
+    // Recycle them into the per-query view pool so per-record reads don't
+    // accumulate a slot+ref per row.
+    n00b_free(n00b_option_get(slot_opt));
+    n00b_free(n00b_option_get(n00b_result_get(ref_r)));
+
     auto shard_id_r = n00b_store_map_shard_id(shard);
     if (n00b_result_is_err(shard_id_r)) {
         return n00b_result_err(n00b_store_record_t *,
@@ -2563,6 +2577,12 @@ n00b_store_record_view_mapped_pos(n00b_store_map_shard_t *shard,
         return n00b_result_err(n00b_store_record_t *,
                                N00B_STORE_INDEX_ERR_STATE);
     }
+
+    // These slot/ref handles were only used to validate the record exists; the
+    // returned view holds pos+shard, not them. Free them back to the per-query
+    // view pool so per-record delivery doesn't accumulate a slot+ref per row.
+    n00b_free(n00b_option_get(slot_opt));
+    n00b_free(n00b_option_get(n00b_result_get(ref_r)));
 
     n00b_store_record_t *view = _rocs_record_view_new(
         pos,

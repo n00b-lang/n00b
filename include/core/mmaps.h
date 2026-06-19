@@ -47,6 +47,15 @@ typedef struct {
     uint64_t managed_segment_bytes;
     uint64_t system_segment_count;
     uint64_t system_segment_bytes;
+    // "Phantom" memory: allocators that are deliberately OUT of the mmap registry
+    // (so the collector never walks its own bookkeeping) and would otherwise be
+    // unattributed. Tracked separately so every mapped byte in the process is
+    // accountable. all_arena_bytes = sum of ALL live arenas (the audit ring,
+    // includes the hidden md_pool metadata arenas + scratch + collection spaces);
+    // registry_pool_bytes = the mmap interval-tree's own backing pool (it cannot
+    // live in the registry it implements).
+    uint64_t all_arena_bytes;
+    uint64_t registry_pool_bytes;
     uint64_t zero_page_count;
     uint64_t zero_page_bytes;
     uint64_t unmanaged_count;
@@ -82,6 +91,58 @@ typedef struct {
 extern n00b_option_t(n00b_mmap_info_t *) n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr);
 
 extern n00b_mmap_registry_stats_t n00b_mmap_registry_stats(void);
+
+// Total mapped bytes across ALL live arenas (debug audit ring) — including the
+// hidden/no_map ones (GC md_pool metadata arenas, scratch arenas, collection
+// spaces) that are out of the mmap registry. Returns 0 unless the arena audit is
+// compiled in. See arena.c.
+extern uint64_t n00b_arena_audit_total_bytes(void);
+
+// Refresh the audit snapshot: stops the world, walks every live allocator
+// (arenas AND pools — pools are arenas too for census), and caches both the
+// total and a per-(debug_name) breakdown. Call from a periodic heartbeat (debug
+// only); no-op unless the audit is compiled in.
+extern void n00b_arena_audit_census(void);
+
+// Register/unregister an allocator (arena or pool) in the audit ring. Arenas are
+// wired automatically in n00b_initialize_arena/delete; pools call these from
+// n00b_pool_init_at / pool_destroy. No-ops unless the audit is compiled in.
+extern void n00b_allocator_audit_register(n00b_allocator_t *a);
+extern void n00b_allocator_audit_unregister(n00b_allocator_t *a);
+
+// One arena-census bucket: all live arenas sharing a debug_name (e.g. "md_pool"
+// = the GC's OOB metadata arenas, "to-space" = collection space, "arena" =
+// scratch), with their live count and summed segment bytes.
+typedef struct n00b_arena_census_bucket_t {
+    const char *name;
+    uint64_t    count;
+    uint64_t    bytes;
+} n00b_arena_census_bucket_t;
+
+// Fill out[] (capacity cap) from the last census snapshot, top buckets by bytes
+// descending; returns the number written. Reads the cache (no STW, no lock).
+extern uint32_t n00b_arena_audit_histogram(n00b_arena_census_bucket_t *out,
+                                           uint32_t                    cap);
+
+/**
+ * @brief One source-location bucket of the mmap-registry histogram:
+ *        how many live registered segments (and total bytes) were allocated
+ *        from a given (source_file:source_line).
+ */
+typedef struct n00b_mmap_site_t {
+    const char *source_file;
+    uint32_t    source_line;
+    uint64_t    count;
+    uint64_t    bytes;
+} n00b_mmap_site_t;
+
+/**
+ * @brief Histogram of currently-registered mmap segments grouped by the
+ *        (source_file:source_line) that allocated them. Fills `out` (capacity
+ *        `cap`) with the top buckets by segment count, descending, and returns
+ *        the number of buckets written. Read-only; takes the registry read lock.
+ */
+extern uint32_t n00b_mmap_source_histogram(n00b_mmap_site_t *out, uint32_t cap);
 
 /**
  * @brief Register an mmap'd region in the global registry.
