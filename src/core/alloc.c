@@ -12,6 +12,7 @@
 #include "core/runtime.h"
 #include "core/type_info.h"
 #include "core/data_lock.h"
+#include "core/gc_baked.h"
 #include "util/assert.h"
 #include "core/thread.h"
 
@@ -486,7 +487,7 @@ _n00b_alloc_raw(size_t             n,
     // the collector's fallback path can discover and scan it.
     if (!opts->allocator->hidden && !opts->allocator->add_inline_header
         && opts->allocator->metadata_pool == nullptr
-        && n00b_option_is_set(n00b_default_runtime)) {
+        && n00b_default_runtime_is_set()) {
         n00b_mmap_register_range(r,
                                  (char *)r + request,
                                  n00b_mmap_pool,
@@ -510,7 +511,7 @@ _n00b_alloc_raw(size_t             n,
     // by n00b_new_kargs / n00b_new_both.  If no vargs were provided,
     // kargs/vargs constructors are skipped (use n00b_new_kargs to
     // trigger construction, not bare n00b_alloc).
-    if (!is_array && type_hash && n00b_option_is_set(n00b_default_runtime)
+    if (!is_array && type_hash && n00b_default_runtime_is_set()
         && n00b_get_runtime()->startup_complete) {
         auto tinfo_opt = n00b_type_lookup(type_hash);
 
@@ -837,6 +838,10 @@ n00b_free_from_allocator(n00b_allocator_t *allocator, void *ptr)
 void
 n00b_free(void *ptr)
 {
+    if (n00b_gc_addr_in_baked_region(ptr)) {
+        return;
+    }
+
     /* No cooperative STW handshake here (WP-001).  The old concern was a
      * foreign thread walking into pool_free / delete_one_page_entry — mutating
      * the mmap tree or munmap'ing a page — while the GC mark phase read the tree
@@ -1018,7 +1023,7 @@ n00b_add_finalizer(void *obj, n00b_finalizer_t fn, void *user_data)
 static void
 n00b_run_and_remove_finalizers(void *ptr)
 {
-    if (!n00b_option_is_set(n00b_default_runtime)) {
+    if (!n00b_default_runtime_is_set()) {
         return;
     }
 
