@@ -800,8 +800,13 @@ main(int argc, char **argv)
        the demo's "Hello reply: ..." / "metrics surface OK" / etc.
        markers reliably reach the captured pod log.  Cheap; doesn't
        affect the macOS/TTY case. */
+#ifdef _WIN32
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+#else
     setvbuf(stdout, nullptr, _IOLBF, 0);
     setvbuf(stderr, nullptr, _IOLBF, 0);
+#endif
 
     n00b_runtime_t rt;
     n00b_init(&rt, argc, argv);
