@@ -43,6 +43,12 @@ struct n00b_base_allocator_t {
     // per-alloc state (e.g. .alloc_refcount reserves a uint32_t here). MUST
     // match the field in n00b_allocator_t (the two share a layout prefix).
     uint32_t                  oob_extra_size;
+    // "file:line" of the create-site that made this allocator, captured via
+    // N00B_LOC_STRING() by the n00b_new_arena / n00b_pool_init macros and stored
+    // by n00b_allocator_setup. Lets the mmap histogram attribute every segment to
+    // its owning create-site. MUST match the trailing field in n00b_allocator_t
+    // (the two share a layout prefix and are cast to each other).
+    const char               *creation_loc;
 };
 
 // ============================================================================

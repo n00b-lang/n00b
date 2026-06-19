@@ -592,7 +592,7 @@ n00b_pool_big_unmap_count(n00b_pool_t *pool)
 }
 
 n00b_allocator_t *
-n00b_pool_init(n00b_pool_t *pool) _kargs
+n00b_pool_init_at(n00b_pool_t *pool) _kargs
 {
     bool        __system          = false;
     bool        inline_headers    = false;
@@ -600,6 +600,8 @@ n00b_pool_init(n00b_pool_t *pool) _kargs
     bool        hidden            = false;
     bool        scrub_locks_on_destroy = true;
     const char *name              = "pool";
+    // "file:line" of the create-site, injected by the n00b_pool_init macro.
+    const char *creation_loc      = nullptr;
     // Ref-counting (both force external_metadata; inline headers stay
     // marshal-only). pool_refcount: per-pool count, reclaim whole pool at last
     // unref. alloc_refcount: per-allocation count in the OOB flex tail, return
@@ -632,7 +634,8 @@ n00b_pool_init(n00b_pool_t *pool) _kargs
                          .inline_headers    = inline_headers,
                          .external_metadata = external_metadata,
                          .hidden            = hidden,
-                         .__system          = __system);
+                         .__system          = __system,
+                         .creation_loc      = creation_loc);
 
     // Allocator-specific OOB flex-tail size. .alloc_refcount reserves a
     // uint32_t counter at the end of each OOB record (n00b_oob_hdr_t.alloc_extra).

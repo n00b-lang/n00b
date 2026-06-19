@@ -31,6 +31,9 @@ struct n00b_allocator_t {
     // Allocator-specific OOB flex-tail size; MUST mirror n00b_base_allocator_t
     // (these two structs share a layout prefix and are cast to each other).
     uint32_t                  oob_extra_size;
+    // "file:line" of the create-site. MUST mirror n00b_base_allocator_t (these
+    // two structs share a layout prefix and are cast to each other).
+    const char               *creation_loc;
     void                     *opaque[];
 };
 
@@ -367,6 +370,9 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
     // DO NOT USE for custom allocators. Skips STW check.
     bool                      __system          = false;
     bool                      __is_md_pool      = false;
+    // "file:line" of the create-site (via N00B_LOC_STRING()); stored in the
+    // vtable for the mmap histogram. Defaults to nullptr for ad-hoc allocators.
+    const char               *creation_loc      = nullptr;
 };
 
 /**

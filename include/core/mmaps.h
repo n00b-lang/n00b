@@ -84,6 +84,26 @@ extern n00b_option_t(n00b_mmap_info_t *) n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, 
 extern n00b_mmap_registry_stats_t n00b_mmap_registry_stats(void);
 
 /**
+ * @brief One source-location bucket of the mmap-registry histogram:
+ *        how many live registered segments (and total bytes) were allocated
+ *        from a given (source_file:source_line).
+ */
+typedef struct n00b_mmap_site_t {
+    const char *source_file;
+    uint32_t    source_line;
+    uint64_t    count;
+    uint64_t    bytes;
+} n00b_mmap_site_t;
+
+/**
+ * @brief Histogram of currently-registered mmap segments grouped by the
+ *        (source_file:source_line) that allocated them. Fills `out` (capacity
+ *        `cap`) with the top buckets by segment count, descending, and returns
+ *        the number of buckets written. Read-only; takes the registry read lock.
+ */
+extern uint32_t n00b_mmap_source_histogram(n00b_mmap_site_t *out, uint32_t cap);
+
+/**
  * @brief Register an mmap'd region in the global registry.
  * @param startp Start address of the mapping.
  * @param endp   End address (exclusive).

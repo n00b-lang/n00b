@@ -279,6 +279,8 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
     bool     __system       = false;
     bool     inline_headers = true;
     char    *name           = "arena";
+    // "file:line" of the create-site, injected by the n00b_new_arena macro.
+    const char *creation_loc = nullptr;
 }
 {
     n00b_atomic_store(&arena->next_alloc, nullptr);
@@ -305,7 +307,8 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
 	.inline_headers    = inline_headers,
 	.external_metadata = !no_map,
 	.hidden            = hidden,
-	.__system          = __system);
+	.__system          = __system,
+	.creation_loc      = creation_loc);
     // clang-format on
 
     n00b_add_arena_segment(arena, size);

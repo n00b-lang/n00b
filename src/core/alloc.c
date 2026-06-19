@@ -567,6 +567,9 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
     // DO NOT USE for custom allocators. Skips STW check.
     bool                      __system          = false;
     bool                      __is_md_pool      = false;
+    // "file:line" of the create-site (via N00B_LOC_STRING()); stored in the
+    // vtable for the mmap histogram. Defaults to nullptr for ad-hoc allocators.
+    const char               *creation_loc      = nullptr;
 }
 {
     (void)__nomap;
@@ -592,6 +595,7 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
         .hidden            = hidden,
         .metadata_pool     = md_pool,
         .metadata          = md,
+        .creation_loc      = creation_loc,
     };
 
     if (external_metadata) {

@@ -559,7 +559,15 @@ n00b_init_simple(int argc, char *argv[])
     static n00b_runtime_t *rt = nullptr;
 
     if (!rt) {
-        rt = calloc(1, sizeof(n00b_runtime_t));
+        /* The runtime struct itself, before any allocator exists. n00b_mmap is
+         * usable here: page_size is established by the early constructors and
+         * n00b_init_simple runs from main(), after them. skip_register keeps us
+         * off the not-yet-initialized runtime's mmap tree and preserves the
+         * struct's GC-visibility (the old libc calloc was untracked too; the
+         * runtime's live pointers are registered as GC roots by n00b_init).
+         * MAP_ANON zero-fills, so calloc semantics are preserved. */
+        rt = n00b_result_get(n00b_mmap(sizeof(n00b_runtime_t),
+                                       .skip_register = true));
     }
 
     n00b_init(rt, argc, argv);

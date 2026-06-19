@@ -128,7 +128,7 @@ typedef struct {
  * @post The returned allocator is ready for use.
  */
 extern n00b_allocator_t *
-n00b_pool_init(n00b_pool_t *pool) _kargs
+n00b_pool_init_at(n00b_pool_t *pool) _kargs
 {
     bool        __system          = false;
     bool        inline_headers    = false;
@@ -136,6 +136,8 @@ n00b_pool_init(n00b_pool_t *pool) _kargs
     bool        hidden            = false;
     bool        scrub_locks_on_destroy = true;
     const char *name              = "pool";
+    // "file:line" of the create-site, injected by the n00b_pool_init macro.
+    const char *creation_loc      = nullptr;
     // Ref-counting (both force external_metadata; inline headers stay
     // marshal-only). pool_refcount: per-pool count, reclaim whole pool at last
     // unref. alloc_refcount: per-allocation count in the OOB flex tail, return
@@ -145,6 +147,14 @@ n00b_pool_init(n00b_pool_t *pool) _kargs
     bool        pool_refcount     = false;
     bool        alloc_refcount    = false;
 };
+
+// Create-site proxy, mirroring n00b_new_arena. Callers keep writing
+// n00b_pool_init(&pool, .name = "x"); this injects the "file:line" string that
+// n00b_allocator_setup stores in the vtable and the mmap histogram attributes
+// segments by. (n00b_pool_init_at is the real _kargs entry point.)
+#define n00b_pool_init(p, ...)                                                  \
+    n00b_pool_init_at((p),                                                      \
+                      .creation_loc = N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
 
 /**
  * @brief Install a last-unref hook on a `.pool_refcount` pool. When set, the
