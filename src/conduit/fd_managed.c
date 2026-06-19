@@ -57,6 +57,14 @@ fd_chunk_len(size_t len)
 {
     return len > INT_MAX ? INT_MAX : (int)len;
 }
+
+static bool
+fd_win_pipe_error_is_eof(DWORD err)
+{
+    return err == ERROR_BROKEN_PIPE
+        || err == ERROR_NO_DATA
+        || err == ERROR_PIPE_NOT_CONNECTED;
+}
 #endif
 
 static ssize_t
@@ -66,6 +74,25 @@ fd_owner_read_raw(n00b_conduit_fd_owner_t *owner, void *buf, size_t len)
     if (owner->win_socket) {
         return (ssize_t)recv((SOCKET)owner->fd, (char *)buf, fd_chunk_len(len), 0);
     }
+
+    intptr_t raw_handle = _get_osfhandle(owner->fd);
+    if (raw_handle != -1) {
+        DWORD avail = 0;
+        if (PeekNamedPipe((HANDLE)raw_handle, nullptr, 0, nullptr, &avail,
+                          nullptr)) {
+            if (avail == 0) {
+                errno = EAGAIN;
+                return -1;
+            }
+            if (len > avail) {
+                len = avail;
+            }
+        }
+        else if (fd_win_pipe_error_is_eof(GetLastError())) {
+            return 0;
+        }
+    }
+
     return (ssize_t)_read(owner->fd, buf, (unsigned int)fd_chunk_len(len));
 #else
     return read(owner->fd, buf, len);
