@@ -3041,6 +3041,16 @@ _n00b_win_run_on_callstack(n00b_callstack_t *cs, n00b_tbundle_t *bundle)
     uintptr_t sp = ((uintptr_t)cs->stack_high - N00B_CALLSTACK_ID_WORD_SIZE)
                  & ~(uintptr_t)15;
 
+    // MSVCRT and Windows unwinding validate stack operations against the TEB
+    // bounds.  After the manual RSP switch, this thread runs entirely on the
+    // n00b callstack, so publish those bounds before entering code that can
+    // call setjmp/longjmp or unwind through runtime helpers.
+    NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+    if (tib != nullptr) {
+        tib->StackLimit = cs->stack_low;
+        tib->StackBase  = cs->stack_high;
+    }
+
     // CONTRACT (Win32, written-only — host-verify): n00b_thread_launcher MUST
     // return normally here.  The call/blr below puts its return address on the
     // n00b callstack (SP has already been switched), and that is only safe
