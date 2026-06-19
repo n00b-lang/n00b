@@ -676,7 +676,6 @@ else
           '-I' + zlib_inc_opt,
           '-DNO_VIZ',
           '-DSTDC',
-          '-DNO_GZIP',
           '-DHAVE_SYS_TYPES_H',
           '-DHAVE_STDINT_H',
           '-DHAVE_STDDEF_H',
