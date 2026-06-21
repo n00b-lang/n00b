@@ -17,6 +17,11 @@
 #include "adt/variant.h"
 #include "conduit/print.h"
 
+// Raw munmap/VirtualFree failures from n00b_safe_munmap (declared in mmaps.h).
+// Nonzero => pages not returned to the OS (silent leak); watched while chasing
+// the GC page-reclaim leak.
+_Atomic(uint64_t) n00b_munmap_fail_count = 0;
+
 // TODO: fix this
 // #include "conduit/print.h"
 #include <stdio.h>

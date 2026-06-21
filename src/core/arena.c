@@ -115,15 +115,20 @@ n00b_arena_audit_unregister(n00b_arena_t *arena)
 // we walk. Results are cached for the cheap readers below. Call from the
 // heartbeat (debug only) so the STW cost is paid at heartbeat cadence, never on
 // the hot status-write path.
+// Walk the audit ring + refresh the cached snapshot WITHOUT stopping the world.
+// The caller MUST already have all other threads frozen — call this from inside
+// n00b_collect (the GC has already stopped the world for the collection), so the
+// per-arena segment-chain walks can't tear / use-after-free. Riding the GC's
+// existing STW means the audit costs no additional pause. Non-GC callers must use
+// the n00b_arena_audit_census() STW wrapper below.
 void
-n00b_arena_audit_census(void)
+n00b_arena_audit_census_nolock(void)
 {
-    // Stack-local accumulator (no allocation under STW).
+    // Stack-local accumulator (no allocation).
     n00b_arena_census_bucket_t local[N00B_ARENA_AUDIT_NAMES] = {};
     uint32_t                   n     = 0;
     uint64_t                   total = 0;
 
-    n00b_stop_the_world();
     for (uint64_t i = 0; i < N00B_ARENA_AUDIT_MAX; i++) {
         n00b_allocator_t *al = n00b_atomic_load(&n00b_arena_audit_ring[i]);
         if (al == nullptr) {
@@ -167,13 +172,22 @@ n00b_arena_audit_census(void)
             local[j].bytes += bytes;
         }
     }
-    n00b_restart_the_world();
-
     for (uint32_t k = 0; k < n; k++) {
         n00b_arena_audit_cache[k] = local[k];
     }
     n00b_atomic_store(&n00b_arena_audit_cache_n, n);
     n00b_atomic_store(&n00b_arena_audit_cached_bytes, total);
+}
+
+// STW wrapper for callers that are NOT already inside a collection (an on-demand
+// diagnostic). Inside the GC, call n00b_arena_audit_census_nolock() directly so
+// the audit rides the collection's existing stop-the-world.
+void
+n00b_arena_audit_census(void)
+{
+    n00b_stop_the_world();
+    n00b_arena_audit_census_nolock();
+    n00b_restart_the_world();
 }
 
 // Cheap reader for the status path: returns the last census snapshot. No lock,
@@ -232,6 +246,10 @@ n00b_allocator_audit_unregister(n00b_allocator_t *a)
 }
 void
 n00b_arena_audit_census(void)
+{
+}
+void
+n00b_arena_audit_census_nolock(void)
 {
 }
 uint64_t

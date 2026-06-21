@@ -322,6 +322,18 @@ static void        n00b_pin_object_pages(n00b_collect_t *ctx, n00b_alloc_info_t 
 static bool        n00b_alloc_is_pinned(n00b_collect_t *ctx, n00b_alloc_info_t ainfo);
 static void        n00b_scan_pinned_in_place(n00b_collect_t *ctx, n00b_alloc_info_t ainfo);
 static void        n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain);
+
+// GC pin accounting (non-static so a debugger can read them). Per-collect: how
+// many from-space pages were RETAINED (pinned, linked back into the live arena)
+// vs FREED (unpinned, munmapped). If pinned dominates, the from-space is being
+// abandoned-in-place instead of returned.
+_Atomic uint64_t n00b_gc_last_pinned_pages   = 0;
+_Atomic uint64_t n00b_gc_last_freed_pages    = 0;
+_Atomic uint64_t n00b_gc_last_retained_runs  = 0;
+_Atomic uint64_t n00b_gc_last_nobitmap_segs  = 0;
+_Atomic uint64_t n00b_gc_total_pinned_pages  = 0;
+_Atomic uint64_t n00b_gc_total_freed_pages   = 0;
+_Atomic uint64_t n00b_gc_collect_count       = 0;
 // Collector-only, under-STW reclaim of dead foreign-thread records (thread.c).
 extern void        n00b_reap_dead_foreign_threads(void);
 // Diagnostic: foreign-self aliasing evidence pass (thread.c).
@@ -357,10 +369,10 @@ n00b_debug_census_finish_phase(uint64_t *slot, [[maybe_unused]] uint64_t *phase_
 }
 
 static void
-n00b_debug_census_record_pass_timing(uint64_t [[maybe_unused]] pause_start_ns,
-                                     uint64_t [[maybe_unused]] stop_done_ns,
-                                     uint64_t [[maybe_unused]] restart_start_ns,
-                                     uint64_t [[maybe_unused]] pause_done_ns)
+n00b_debug_census_record_pass_timing([[maybe_unused]] uint64_t pause_start_ns,
+                                     [[maybe_unused]] uint64_t stop_done_ns,
+                                     [[maybe_unused]] uint64_t restart_start_ns,
+                                     [[maybe_unused]] uint64_t pause_done_ns)
 {
     n00b_debug_census_t *census = g_debug_census;
     if (census == nullptr) {
@@ -3273,6 +3285,12 @@ n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain)
     uint64_t          pg         = (uint64_t)n00b_page_size;
     n00b_segment_t   *seg        = from_chain;
 
+    // Pin accounting for this collect: how much of the from-space we FREED
+    // (unpinned runs munmapped) vs RETAINED (pinned runs linked back into the
+    // live arena as `keep` descriptors). High retained == the from-space is
+    // effectively abandoned-in-place rather than freed.
+    uint64_t pinned_pages = 0, freed_pages = 0, retained_runs = 0, nobitmap_segs = 0;
+
     while (seg) {
         n00b_segment_t *next   = seg->next_segment;
         char           *data   = seg->data;
@@ -3290,6 +3308,8 @@ n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain)
             n00b_lock_chains_scrub_range((uintptr_t)data, (uintptr_t)data + size);
             n00b_safe_munmap(data, size);
             sp->free(sp, seg);
+            freed_pages += npages;
+            nobitmap_segs++;
             seg = next;
             continue;
         }
@@ -3317,6 +3337,7 @@ n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain)
             }
 
             if (!pinned) {
+                freed_pages += run_len / pg;
                 n00b_lock_chains_scrub_range((uintptr_t)run_addr,
                                              (uintptr_t)run_addr + run_len);
 #if defined(N00B_GC_POISON_RECLAIM)
@@ -3329,6 +3350,8 @@ n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain)
 #endif
             }
             else {
+                pinned_pages += run_len / pg;
+                retained_runs++;
                 if (unregister) {
                     n00b_register_arena_segment(run_addr, run_addr + run_len, live);
                 }
@@ -3350,6 +3373,14 @@ n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain)
         sp->free(sp, seg);
         seg = next;
     }
+
+    n00b_atomic_store(&n00b_gc_last_pinned_pages, pinned_pages);
+    n00b_atomic_store(&n00b_gc_last_freed_pages, freed_pages);
+    n00b_atomic_store(&n00b_gc_last_retained_runs, retained_runs);
+    n00b_atomic_store(&n00b_gc_last_nobitmap_segs, nobitmap_segs);
+    n00b_atomic_add(&n00b_gc_total_pinned_pages, pinned_pages);
+    n00b_atomic_add(&n00b_gc_total_freed_pages, freed_pages);
+    n00b_atomic_add(&n00b_gc_collect_count, 1);
 }
 
 // ============================================================================
@@ -3373,16 +3404,18 @@ n00b_collection_cleanup(n00b_collect_t *ctx)
     // n00b_create_destination_arena.  The arena now holds the compacted live
     // set, so measure how full it is: capacity across all (just-swapped-in)
     // segments minus the free tail of the current segment.  If the live set
-    // occupies more than 25% of capacity we have less than 4x headroom, so the
+    // occupies more than 50% of capacity we have less than 2x headroom, so the
     // next out-of-memory collect must double the to-space to avoid refilling
     // immediately and thrashing into a full-heap collect on every allocation.
-    // Recomputed every collect, so it never latches stale.
+    // Recomputed every collect, so it never latches stale.  (Was 25%/4x; at
+    // that threshold a small live set sitting in a transient-churn-bloated
+    // arena still armed the doubling, ratcheting capacity far above live.)
     uint64_t cap = n00b_arena_size(ctx->from_space);
     uint64_t free_bytes
         = (uint64_t)(ctx->from_space->segment_end - (char *)ctx->from_space->next_alloc);
     uint64_t live         = cap > free_bytes ? cap - free_bytes : 0;
-    // live > cap/4 is the overflow-safe form of (live * 4 > cap).
-    ctx->from_space->grow = (cap != 0) && (live > cap / 4);
+    // live > cap/2 is the overflow-safe form of (live * 2 > cap).
+    ctx->from_space->grow = (cap != 0) && (live > cap / 2);
 
     // Swap the metadata dict, then rebuild active OOB metadata into a fresh
     // attached metadata arena. The old metadata arena is arena-backed, so
@@ -3411,6 +3444,17 @@ n00b_collection_cleanup(n00b_collect_t *ctx)
 
     n00b_allocator_destroy((n00b_allocator_t *)&ctx->work_pool);
     n00b_allocator_destroy((n00b_allocator_t *)ctx->to_space);
+
+    // Refresh the arena/pool audit snapshot while the world is STILL stopped for
+    // this collection (we are between n00b_stop_the_world and restart). Walking
+    // the audit ring + segment chains is only safe with all other threads frozen,
+    // and the collection already froze them — so the audit costs no extra STW
+    // (this replaces the status-path STW census that livelocked). It runs after
+    // the to_space + work_pool destroys above, so the snapshot reflects the live
+    // post-collection arena set, including the out-of-registry "phantom" arenas
+    // (md_pool metadata, scratch, collection spaces) that otherwise read as
+    // unattributed. No-op unless the audit is compiled in.
+    n00b_arena_audit_census_nolock();
 
     n00b_atomic_fence();
 }

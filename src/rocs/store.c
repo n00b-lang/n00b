@@ -4607,12 +4607,27 @@ rocs_store_ingest_buf_decoded(n00b_store_t                 *store,
     // allocations for accounting, so it cannot wedge ingest.
     bool prev_ingest = n00b_gc_attrib_enter_ingest();
 
+    // REDIRECTION (the active fix for default-arena transient churn): route the
+    // CURRENT allocator to the per-record scratch pool so libn00b intermediates
+    // that take no explicit .allocator -- unicode casefold/normalize
+    // (casemap.c/normalization.c), JSON parse nodes (json.c), transient strings
+    // (string.c) -- land in the scratch pool (freed wholesale below) instead of
+    // the default GC arena, where a per-site census showed ~1.5GB of pure churn.
+    // SAFE because every PERSISTENT write overrides the current allocator with an
+    // explicit shard/store-derived one: shard_append (shard->records/retain_raw
+    // allocators), index columns (shard->columns->allocator) + postings
+    // (column->allocator), and the seal-triggered hot-shard rotation
+    // (standby_allocator / hot_allocator_new).  Restored before the scratch pool
+    // is destroyed on every return path below.
+    n00b_allocator_t *prev_alloc = n00b_set_current_allocator(scratch_allocator);
+
     n00b_buffer_t *raw = nullptr;
     n00b_err_t     err = rocs_store_copy_source_raw(source,
                                                 &raw,
                                                 scratch_allocator);
     if (err != N00B_STORE_OK) {
         n00b_gc_attrib_exit_ingest(prev_ingest);
+        n00b_restore_current_allocator(prev_alloc);
         n00b_allocator_destroy(scratch_allocator);
         return n00b_result_err(bool, err);
     }
@@ -4621,6 +4636,7 @@ rocs_store_ingest_buf_decoded(n00b_store_t                 *store,
     if (n00b_result_is_err(record_r)) {
         n00b_err_t decode_err = n00b_result_get_err(record_r);
         n00b_gc_attrib_exit_ingest(prev_ingest);
+        n00b_restore_current_allocator(prev_alloc);
         n00b_allocator_destroy(scratch_allocator);
         return n00b_result_err(bool, decode_err);
     }
@@ -4630,6 +4646,7 @@ rocs_store_ingest_buf_decoded(n00b_store_t                 *store,
                                              raw,
                                              scratch_allocator);
     n00b_gc_attrib_exit_ingest(prev_ingest);
+    n00b_restore_current_allocator(prev_alloc);
     n00b_allocator_destroy(scratch_allocator);
     return ingest_r;
 }

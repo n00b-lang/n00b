@@ -104,6 +104,12 @@ extern uint64_t n00b_arena_audit_total_bytes(void);
 // only); no-op unless the audit is compiled in.
 extern void n00b_arena_audit_census(void);
 
+// Same refresh, but WITHOUT stopping the world: the caller must already have all
+// other threads frozen. Called from inside n00b_collect so the audit rides the
+// collection's existing stop-the-world (no extra pause, no status-path STW
+// livelock). No-op unless the audit is compiled in.
+extern void n00b_arena_audit_census_nolock(void);
+
 // Register/unregister an allocator (arena or pool) in the audit ring. Arenas are
 // wired automatically in n00b_initialize_arena/delete; pools call these from
 // n00b_pool_init_at / pool_destroy. No-ops unless the audit is compiled in.
@@ -399,6 +405,11 @@ n00b_mmap_is_managed(n00b_mmap_info_t *map)
     }
 }
 
+// Count of raw munmap/VirtualFree failures from n00b_safe_munmap (e.g. a
+// partial-range unmap in the GC page reclaim that the kernel rejected). A
+// nonzero value means pages were not returned to the OS — a silent leak.
+extern _Atomic(uint64_t) n00b_munmap_fail_count;
+
 /**
  * @brief Unmap a region, handling both registered and hidden pages.
  *
@@ -433,9 +444,17 @@ n00b_safe_munmap(void *addr, size_t size)
         }
     }
 #ifdef _WIN32
-    VirtualFree(addr, 0, MEM_RELEASE);
+    if (!VirtualFree(addr, 0, MEM_RELEASE)) {
+        n00b_atomic_add(&n00b_munmap_fail_count, 1);
+    }
 #else
-    munmap(addr, size);
+    // Partial-range unmaps (GC page reclaim) take this raw path — the registry
+    // only matches whole segments.  A failure here means pages were NOT returned
+    // to the kernel (a silent leak), so surface it via a counter instead of
+    // dropping munmap's return on the floor.
+    if (munmap(addr, size) != 0) {
+        n00b_atomic_add(&n00b_munmap_fail_count, 1);
+    }
 #endif
 }
 

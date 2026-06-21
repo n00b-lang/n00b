@@ -236,6 +236,22 @@ if conf_debug
   c_args = c_args + ['-DN00B_DEBUG']
 endif
 
+# DIAGNOSTIC (leak hunt, 2026-06): enable just the arena/pool audit ring + the
+# GC-pass census (n00b_arena_audit_census_nolock in n00b_collection_cleanup) so
+# the status path reports all_arena_bytes + the per-arena histogram, attributing
+# the out-of-registry "phantom" arenas (md_pool metadata, scratch, collection
+# spaces) that otherwise read as unattributed. The census rides the GC's existing
+# stop-the-world, so there is NO extra STW (unlike the old status-path census
+# that livelocked). Gate behind a proper option before shipping.
+c_args = c_args + ['-DN00B_DEBUG_ARENA_AUDIT']
+
+# Per-site GC-heap census (-DN00B_DEBUG_LIVE_CENSUS) is OFF for production: the
+# gateway auto-arms census_on_collect at startup (ingest.c) whenever this flag is
+# compiled in, so every NATURAL collect does a full ~250k-record by-site walk
+# that pegs a core on a large arena. It was enabled transiently to capture the
+# per-site transient-churn profile that drove the ingest scratch-scope fix
+# (rocs_store_ingest_buf_decoded); re-enable the same way for the next census.
+
 if conf_rocs_trace
   c_args = c_args + [
     '-DN00B_ROCS_TRACE',
