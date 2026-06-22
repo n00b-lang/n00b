@@ -2476,21 +2476,26 @@ test('path_antipattern_sweep', path_antipattern_sweep_test, suite: 'unit')
 
 mingw_gcc      = find_program('x86_64-w64-mingw32-gcc', required: false)
 osslsigncode   = find_program('osslsigncode',           required: false)
+pe_fixture_py = meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'pe_fixture.py'
 pe_hello_exe = custom_target('pe_hello_exe',
     output: 'hello.exe',
     command: [
-        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'build_hello_exe.sh',
+        python3,
+        pe_fixture_py,
+        'build-hello',
         meson.project_source_root() / 'test' / 'unit' / 'data' / 'hello.c',
         '@OUTPUT@',
     ],
     depend_files: files('test/unit/data/hello.c',
-                        'test/fixtures/pe/build_hello_exe.sh'),
+                        'test/fixtures/pe/pe_fixture.py'),
 )
 pe_hello_exe_signed = custom_target('pe_hello_exe_signed',
     output: 'hello.exe.signed',
     input: pe_hello_exe,
     command: [
-        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'sign_hello_exe.sh',
+        python3,
+        pe_fixture_py,
+        'sign-hello',
         '@INPUT@',
         meson.project_source_root() / 'test' / 'unit' / 'data' / 'pkcs7_fixture_cert.pem',
         meson.project_source_root() / 'test' / 'unit' / 'data' / 'pkcs7_fixture_key.pem',
@@ -2498,15 +2503,17 @@ pe_hello_exe_signed = custom_target('pe_hello_exe_signed',
     ],
     depend_files: files('test/unit/data/pkcs7_fixture_cert.pem',
                         'test/unit/data/pkcs7_fixture_key.pem',
-                        'test/fixtures/pe/sign_hello_exe.sh'),
+                        'test/fixtures/pe/pe_fixture.py'),
 )
 pe_sigcheck = custom_target('pe_sigcheck',
     output: 'sigcheck64.exe',
     command: [
-        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'fetch_sigcheck.sh',
+        python3,
+        pe_fixture_py,
+        'fetch-sigcheck',
         '@OUTPUT@',
     ],
-    depend_files: files('test/fixtures/pe/fetch_sigcheck.sh'),
+    depend_files: files('test/fixtures/pe/pe_fixture.py'),
 )
 pe_cert_table_emit_test = executable('test_pe_cert_table_emit',
     ['test/unit/test_pe_cert_table_emit.c'],
