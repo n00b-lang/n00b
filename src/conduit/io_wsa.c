@@ -428,6 +428,17 @@ wsa_grow(wsa_ctx_t *ctx)
     return true;
 }
 
+static void
+wsa_remove_at(wsa_ctx_t *ctx, int idx)
+{
+    int last = ctx->nfds - 1;
+    if (idx != last) {
+        ctx->pollfds[idx]  = ctx->pollfds[last];
+        ctx->targets[idx] = ctx->targets[last];
+    }
+    ctx->nfds--;
+}
+
 static short
 ops_to_wsa_events(n00b_conduit_io_op_t ops)
 {
@@ -570,9 +581,16 @@ wsa_add(void *vctx, int fd, n00b_conduit_io_op_t ops,
     wsa_ctx_t *ctx = vctx;
     if (!ctx) return false;
 
+    short events = ops_to_wsa_events(ops);
     int idx = wsa_find_fd(ctx, fd);
+    if (events == 0) {
+        if (idx >= 0) wsa_remove_at(ctx, idx);
+        return true;
+    }
+
     if (idx >= 0) {
-        ctx->pollfds[idx].events = ops_to_wsa_events(ops);
+        ctx->pollfds[idx].events  = events;
+        ctx->pollfds[idx].revents = 0;
         ctx->targets[idx]        = target;
         return true;
     }
@@ -583,7 +601,7 @@ wsa_add(void *vctx, int fd, n00b_conduit_io_op_t ops,
 
     idx = ctx->nfds++;
     ctx->pollfds[idx].fd      = (SOCKET)fd;
-    ctx->pollfds[idx].events  = ops_to_wsa_events(ops);
+    ctx->pollfds[idx].events  = events;
     ctx->pollfds[idx].revents = 0;
     ctx->targets[idx]         = target;
     return true;
@@ -593,14 +611,22 @@ static bool
 wsa_modify(void *vctx, int fd, n00b_conduit_io_op_t ops,
            n00b_conduit_io_target_t *target)
 {
-    (void)target; // WSA preserves target via ctx->targets array
     wsa_ctx_t *ctx = vctx;
     if (!ctx) return false;
 
+    short events = ops_to_wsa_events(ops);
     int idx = wsa_find_fd(ctx, fd);
-    if (idx < 0) return false;
+    if (idx < 0) {
+        return events == 0 || wsa_add(vctx, fd, ops, target);
+    }
+    if (events == 0) {
+        wsa_remove_at(ctx, idx);
+        return true;
+    }
 
-    ctx->pollfds[idx].events = ops_to_wsa_events(ops);
+    ctx->pollfds[idx].events  = events;
+    ctx->pollfds[idx].revents = 0;
+    ctx->targets[idx]        = target;
     return true;
 }
 
@@ -613,12 +639,7 @@ wsa_remove(void *vctx, int fd)
     int idx = wsa_find_fd(ctx, fd);
     if (idx < 0) return true; // Idempotent removal (matches poll backend)
 
-    int last = ctx->nfds - 1;
-    if (idx != last) {
-        ctx->pollfds[idx]  = ctx->pollfds[last];
-        ctx->targets[idx] = ctx->targets[last];
-    }
-    ctx->nfds--;
+    wsa_remove_at(ctx, idx);
     return true;
 }
 
