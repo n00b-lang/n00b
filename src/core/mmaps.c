@@ -29,6 +29,51 @@ _Atomic(uint64_t) n00b_safe_munmap_registry_bytes = 0;
 _Atomic(uint64_t) n00b_safe_munmap_raw_count = 0;
 _Atomic(uint64_t) n00b_safe_munmap_raw_bytes = 0;
 
+#ifdef _WIN32
+bool
+n00b_win_free_range(void *addr, size_t size)
+{
+    uintptr_t start = (uintptr_t)addr;
+    uintptr_t end   = start + (uintptr_t)size;
+
+    if (addr == nullptr || size == 0 || end < start) {
+        return false;
+    }
+
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery(addr, &mbi, sizeof(mbi))) {
+        return false;
+    }
+
+    void *allocation_base = mbi.AllocationBase;
+    bool  whole           = allocation_base == addr;
+
+    if (whole) {
+        uintptr_t p = start;
+        while (p < end) {
+            if (!VirtualQuery((void *)p, &mbi, sizeof(mbi))
+                || mbi.AllocationBase != allocation_base) {
+                whole = false;
+                break;
+            }
+            uintptr_t next = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+            if (next <= p) {
+                whole = false;
+                break;
+            }
+            p = next;
+        }
+        if (whole && VirtualQuery((void *)end, &mbi, sizeof(mbi))
+            && mbi.AllocationBase == allocation_base) {
+            whole = false;
+        }
+    }
+
+    return whole ? VirtualFree(addr, 0, MEM_RELEASE)
+                 : VirtualFree(addr, size, MEM_DECOMMIT);
+}
+#endif
+
 // TODO: fix this
 // #include "conduit/print.h"
 #include <stdio.h>
@@ -1287,7 +1332,9 @@ n00b_munmap(void *addr) _kargs
     }
 
 #ifdef _WIN32
-    VirtualFree(start, 0, MEM_RELEASE);
+    if (!n00b_win_free_range(start, len)) {
+        n00b_atomic_add(&n00b_munmap_fail_count, 1);
+    }
 #else
     munmap(start, len);
 #endif
