@@ -22,10 +22,10 @@
 
 #include <errno.h>
 #include <unistd.h>
-#if !defined(_WIN32)
-#include <signal.h>
+#if defined(_WIN32)
+#include "internal/win32_sockets.h"
 #else
-#include <windows.h>
+#include <signal.h>
 #endif
 
 #if defined(__MACH__)
@@ -346,9 +346,21 @@ n00b_proc_is_alive(int64_t pid)
     }
 
 #if defined(_WIN32)
-    /* Windows process liveness (OpenProcess + GetExitCodeProcess) is
-     * anticipated but not built this round (POSIX is the tested target). */
-    return false;
+    if (pid > 0xffffffffLL) {
+        return false;
+    }
+
+    HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                              (DWORD)pid);
+    if (proc == nullptr || proc == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    DWORD exit_code = 0;
+    bool  alive = GetExitCodeProcess(proc, &exit_code)
+               && exit_code == STILL_ACTIVE;
+    CloseHandle(proc);
+    return alive;
 #else
     if (kill((pid_t)pid, 0) == 0) {
         return true;
