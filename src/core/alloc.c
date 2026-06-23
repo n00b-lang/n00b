@@ -77,11 +77,12 @@ n00b_oob_for_user_ptr_held(void *ptr, bool *unlock_gate)
 static n00b_allocator_t *
 n00b_new_metadata_pool(void)
 {
-    // Hidden, not-mapped, epoch-enabled pool. hidden + not mmap-registered keeps
+    // Hidden, not-mapped metadata pool. hidden + not mmap-registered keeps
     // it out of the GC scan and the mmap tree (so the GC can't trace into it and
     // pin every record's referenced allocation); the struct lives in the no_scan
-    // system pool for the same reason. use_epochs (pool default) lets the typed
-    // dict's n00b_retire defer store reclaim safely.
+    // system pool for the same reason. Metadata dict mutation is already
+    // serialized by the owning allocator's STW gate, and the pool is excluded
+    // from epoch lists so GC cannot invalidate retired metadata store nodes.
     n00b_runtime_t *rt   = n00b_get_runtime();
     n00b_pool_t    *pool = n00b_alloc_with_opts(
         n00b_pool_t,
@@ -90,7 +91,8 @@ n00b_new_metadata_pool(void)
     return n00b_pool_init(pool,
                           .__system = true,
                           .hidden   = true,
-                          .name     = "md_pool");
+                          .name     = "md_pool",
+                          .use_epochs = false);
 }
 
 static uint32_t
@@ -131,7 +133,7 @@ n00b_current_allocator(void)
     // this context can never trip a GC collect.  (Before the runtime exists,
     // n00b_thread_self() returns the bootstrap thread, not null, so this path is
     // only reached post-init, where n00b_get_runtime() is valid.)
-    n00b_runtime_t *rt = n00b_option_get_or_else(n00b_default_runtime, nullptr);
+    n00b_runtime_t *rt = n00b_default_runtime_or_null();
     return rt == nullptr ? nullptr : (n00b_allocator_t *)&rt->system_pool;
 }
 
@@ -591,6 +593,7 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
     bool                      __nomap           = false;
     // DO NOT USE for custom allocators. Skips STW check.
     bool                      __system          = false;
+    bool                      use_epochs        = false;
     bool                      __is_md_pool      = false;
     // "file:line" of the create-site (via N00B_LOC_STRING()); stored in the
     // vtable for the mmap histogram. Defaults to nullptr for ad-hoc allocators.
@@ -618,6 +621,7 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
         .add_inline_header = inline_headers,
         .__system          = __system,
         .hidden            = hidden,
+        .use_epochs        = use_epochs,
         .metadata_pool     = md_pool,
         .metadata          = md,
         .creation_loc      = creation_loc,

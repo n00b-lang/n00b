@@ -584,6 +584,7 @@ marshal_init_scratch(n00b_pool_t       *pool,
     *alloc = n00b_pool_init(pool,
                             .__system = true,
                             .hidden   = true,
+                            .use_epochs = false,
                             .scrub_locks_on_destroy = false,
                             .name     = name);
 }
