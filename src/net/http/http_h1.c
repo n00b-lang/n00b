@@ -1182,6 +1182,16 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
                                              .allocator = a);
     }
 
+    /* Common case (no mTLS client identity): ride the conduit-native TLS
+     * transport.  mTLS requests fall through to the acme_tls path below, which
+     * is the only remaining acme_tls user once Phase 3 lands. */
+    if (mtls_auth == nullptr) {
+        return h1_round_trip_conduit_tls(url, method, body, content_type, extra,
+                                         timeout_ms, pool, trust, max_body_size,
+                                         a, bucket_origin, keep_alive_intent,
+                                         was_head);
+    }
+
     /* Try the pool first (if enabled). */
     n00b_acme_tls_conn_t *conn = nullptr;
     if (pool) {
