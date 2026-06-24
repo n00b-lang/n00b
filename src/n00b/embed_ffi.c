@@ -20,6 +20,7 @@
 #include "conduit/print.h"
 #include "core/alloc.h"
 #include "core/atomic.h"
+#include "core/runtime.h"
 #include "core/string.h"
 #include "text/strings/format.h"         // n00b_cformat
 #include "text/strings/string_convert.h" // n00b_unicode_str_to_cstr (MIR edge)
@@ -293,11 +294,21 @@ static const ffi_registered_symbol_t ffi_builtin_symbols[] = {
     {.name = nullptr, .addr = nullptr},
 };
 
+static inline n00b_allocator_t *
+ffi_registry_allocator(void)
+{
+    return (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+}
+
 static char *
 ffi_strdup(const char *s)
 {
     size_t len = strlen(s) + 1;
-    char  *out = malloc(len);
+    char *out = n00b_alloc_array_with_opts(
+        char,
+        len,
+        &(n00b_alloc_opts_t){.allocator = ffi_registry_allocator(),
+                             .no_scan   = true});
 
     if (!out) {
         return nullptr;
@@ -371,13 +382,23 @@ n00b_ffi_register_symbol(const char *name, void *addr)
         int32_t new_cap = ffi_registered_symbol_cap
                               ? ffi_registered_symbol_cap * 2
                               : 16;
-        void *grown = realloc(ffi_registered_symbols,
-                              sizeof(ffi_registered_symbol_t)
-                                  * (size_t)new_cap);
+        ffi_registered_symbol_t *grown = n00b_alloc_array_with_opts(
+            ffi_registered_symbol_t,
+            new_cap,
+            &(n00b_alloc_opts_t){.allocator = ffi_registry_allocator(),
+                                 .no_scan   = true});
 
         if (!grown) {
             ffi_symbol_registry_unlock();
             return false;
+        }
+
+        if (ffi_registered_symbols) {
+            memcpy(grown,
+                   ffi_registered_symbols,
+                   sizeof(*grown) * (size_t)ffi_registered_symbol_count);
+            n00b_free_from_allocator(ffi_registry_allocator(),
+                                     ffi_registered_symbols);
         }
 
         ffi_registered_symbols    = grown;
