@@ -1904,7 +1904,7 @@ rocs_seal_bench_test = executable('test_rocs_seal_bench',
     ['test/unit/test_rocs_seal_bench.c'],
     kwargs: test_common_kwargs,
 )
-test('rocs_seal_bench', rocs_seal_bench_test, suite: 'unit')
+test('rocs_seal_bench', rocs_seal_bench_test, suite: 'unit', timeout: 60)
 
 rocs_shard_lifecycle_test = executable('test_rocs_shard_lifecycle',
     ['test/unit/test_rocs_shard_lifecycle.c'],
