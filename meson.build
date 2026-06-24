@@ -3003,6 +3003,12 @@ gc_type_map_register_test = executable('test_gc_type_map_register',
 )
 test('gc_type_map_register', gc_type_map_register_test, suite: 'unit')
 
+transient_zero_test = executable('test_transient_zero',
+    ['test/unit/test_transient_zero.c'],
+    kwargs: test_common_kwargs,
+)
+test('transient_zero', transient_zero_test, suite: 'unit')
+
 marshal_type_layout_test = executable('test_marshal_type_layout',
     ['test/unit/test_marshal_type_layout.c'],
     kwargs: test_common_kwargs,
