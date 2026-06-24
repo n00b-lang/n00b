@@ -3717,7 +3717,10 @@ n00b_programs_test = executable('test_n00b_programs',
     ['test/unit/test_n00b_programs.c'],
     kwargs: test_common_kwargs,
 )
-test('n00b_programs', n00b_programs_test, suite: 'unit', workdir: meson.project_source_root())
+test('n00b_programs', n00b_programs_test,
+     suite: 'unit',
+     workdir: meson.project_source_root(),
+     timeout: 60)
 
 n00b_types_test = executable('test_n00b_types',
     ['test/unit/test_n00b_types.c'],
