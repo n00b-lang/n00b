@@ -3015,6 +3015,12 @@ merkle_test = executable('test_merkle',
 )
 test('merkle', merkle_test, suite: 'unit')
 
+merkle_transient_test = executable('test_merkle_transient',
+    ['test/unit/test_merkle_transient.c'],
+    kwargs: test_common_kwargs,
+)
+test('merkle_transient', merkle_transient_test, suite: 'unit')
+
 marshal_type_layout_test = executable('test_marshal_type_layout',
     ['test/unit/test_marshal_type_layout.c'],
     kwargs: test_common_kwargs,
