@@ -762,6 +762,18 @@ typedef struct win_path_mode_rec {
 
 static win_path_mode_rec_t *win_path_modes;
 
+static inline n00b_allocator_t *
+win_path_mode_allocator(void)
+{
+    return (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+}
+
+static inline void
+win_path_mode_free(void *ptr)
+{
+    n00b_free_from_allocator(win_path_mode_allocator(), ptr);
+}
+
 static bool
 path_is_windows_af_unix_socket(const char *path)
 {
@@ -787,7 +799,11 @@ win_path_mode_key(n00b_string_t *path)
         return nullptr;
     }
 
-    char *result = malloc((size_t)resolved->u8_bytes + 1);
+    char *result = n00b_alloc_array_with_opts(
+        char,
+        (size_t)resolved->u8_bytes + 1,
+        &(n00b_alloc_opts_t){.allocator = win_path_mode_allocator(),
+                             .no_scan   = true});
     if (result == nullptr) {
         return nullptr;
     }
@@ -810,13 +826,13 @@ win_path_mode_lookup(n00b_string_t *path, uint32_t *mode)
     while (cur != nullptr) {
         if (strcmp(cur->path, key) == 0) {
             *mode = cur->mode;
-            free(key);
+            win_path_mode_free(key);
             return true;
         }
         cur = cur->next;
     }
 
-    free(key);
+    win_path_mode_free(key);
     return false;
 }
 
@@ -833,15 +849,18 @@ win_path_mode_remember(n00b_string_t *path, uint32_t mode)
     while (cur != nullptr) {
         if (strcmp(cur->path, key) == 0) {
             cur->mode = mode;
-            free(key);
+            win_path_mode_free(key);
             return true;
         }
         cur = cur->next;
     }
 
-    win_path_mode_rec_t *rec = malloc(sizeof(*rec));
+    win_path_mode_rec_t *rec = n00b_alloc_with_opts(
+        win_path_mode_rec_t,
+        &(n00b_alloc_opts_t){.allocator = win_path_mode_allocator(),
+                             .no_scan   = true});
     if (rec == nullptr) {
-        free(key);
+        win_path_mode_free(key);
         return false;
     }
 
@@ -866,14 +885,14 @@ win_path_mode_forget(n00b_string_t *path)
         win_path_mode_rec_t *cur = *slot;
         if (strcmp(cur->path, key) == 0) {
             *slot = cur->next;
-            free(cur->path);
-            free(cur);
+            win_path_mode_free(cur->path);
+            win_path_mode_free(cur);
             break;
         }
         slot = &cur->next;
     }
 
-    free(key);
+    win_path_mode_free(key);
 }
 
 static bool
@@ -897,8 +916,8 @@ win_path_mode_forget_tree_key(const char *root)
         win_path_mode_rec_t *cur = *slot;
         if (win_path_mode_key_is_self_or_child(cur->path, root)) {
             *slot = cur->next;
-            free(cur->path);
-            free(cur);
+            win_path_mode_free(cur->path);
+            win_path_mode_free(cur);
             continue;
         }
         slot = &cur->next;
@@ -914,7 +933,11 @@ win_path_mode_rewrite_key(const char *path,
     const char *suffix     = path + source_len;
     size_t destination_len = strlen(destination_root);
     size_t suffix_len      = strlen(suffix);
-    char  *rewritten       = malloc(destination_len + suffix_len + 1);
+    char  *rewritten       = n00b_alloc_array_with_opts(
+        char,
+        destination_len + suffix_len + 1,
+        &(n00b_alloc_opts_t){.allocator = win_path_mode_allocator(),
+                             .no_scan   = true});
 
     if (rewritten == nullptr) {
         return nullptr;
@@ -933,8 +956,8 @@ win_path_mode_after_move(n00b_string_t *source_path,
     char *destination_key = win_path_mode_key(destination_path);
 
     if (source_key == nullptr || destination_key == nullptr) {
-        free(source_key);
-        free(destination_key);
+        win_path_mode_free(source_key);
+        win_path_mode_free(destination_key);
         return;
     }
 
@@ -948,15 +971,15 @@ win_path_mode_after_move(n00b_string_t *source_path,
                                           source_key,
                                           destination_key);
             if (rewritten != nullptr) {
-                free(cur->path);
+                win_path_mode_free(cur->path);
                 cur->path = rewritten;
             }
         }
         cur = cur->next;
     }
 
-    free(source_key);
-    free(destination_key);
+    win_path_mode_free(source_key);
+    win_path_mode_free(destination_key);
 }
 #endif
 
