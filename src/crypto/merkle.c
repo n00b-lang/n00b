@@ -90,6 +90,10 @@ n00b_merkle_err_str(n00b_merkle_err_t e)
         return r"payload type mismatch";
     case N00B_MERKLE_ERR_BAD_RECORD:
         return r"corrupt node record";
+    case N00B_MERKLE_ERR_BAD_MANIFEST:
+        return r"bad save-blob manifest";
+    case N00B_MERKLE_ERR_VERIFY_FAIL:
+        return r"node hash verification failed";
     default:
         return r"unknown merkle error";
     }
@@ -121,6 +125,24 @@ put_hash(n00b_buffer_t *b, const n00b_merkle_hash_t *h)
     put_u8(b, (uint8_t)h->alg);
     put_u8(b, h->len);
     n00b_buffer_append_bytes(b, h->bytes, h->len);
+}
+
+// Canonical node-hash preimage: alg ++ count ++ content_hash ++ ordered child
+// node_hashes. The single source of truth shared by add and load-verify.
+static n00b_merkle_hash_t
+node_hash_of(n00b_merkle_alg_t         alg,
+             const n00b_merkle_hash_t *content,
+             const n00b_merkle_hash_t *links,
+             uint64_t                  count)
+{
+    n00b_buffer_t *pre = n00b_buffer_empty();
+    put_u8(pre, (uint8_t)alg);
+    put_u64(pre, count);
+    put_hash(pre, content);
+    for (uint64_t i = 0; i < count; i++) {
+        put_hash(pre, &links[i]);
+    }
+    return merkle_digest(alg, pre->data, pre->byte_len);
 }
 
 // ── record read cursor ──────────────────────────────────────────────────────
@@ -240,11 +262,12 @@ _n00b_merkle_add(n00b_merkle_t                     *dag,
 
     n00b_mutex_lock(&dag->lock);
 
-    // node_hash preimage: alg ++ count ++ content_hash ++ child node_hashes.
-    n00b_buffer_t *pre = n00b_buffer_empty();
-    put_u8(pre, (uint8_t)dag->alg);
-    put_u64(pre, count);
-    put_hash(pre, &content);
+    // Collect + validate the ordered link hashes; each must already be in the
+    // DAG, so a child's hash precedes its parent's and the graph stays acyclic.
+    n00b_merkle_hash_t *larr
+        = count ? n00b_alloc_array(n00b_merkle_hash_t, count,
+                                   .allocator = dag->allocator)
+                : nullptr;
     for (uint64_t i = 0; i < count; i++) {
         n00b_merkle_hash_t *lh = n00b_list_get(*links, i);
         if (lh == nullptr || !contains_locked(dag, lh)) {
@@ -252,10 +275,10 @@ _n00b_merkle_add(n00b_merkle_t                     *dag,
             return n00b_result_err(n00b_merkle_hash_t,
                                    N00B_MERKLE_ERR_LINK_MISSING);
         }
-        put_hash(pre, lh);
+        larr[i] = *lh;
     }
 
-    n00b_merkle_hash_t node = merkle_digest(dag->alg, pre->data, pre->byte_len);
+    n00b_merkle_hash_t node = node_hash_of(dag->alg, &content, larr, count);
     n00b_string_t     *key  = n00b_merkle_hash_hex(&node);
 
     // Dedup: identical (payload + links) -> identical node_hash -> no-op.
@@ -273,7 +296,7 @@ _n00b_merkle_add(n00b_merkle_t                     *dag,
     put_u64(rec, payload_tid);
     put_u64(rec, count);
     for (uint64_t i = 0; i < count; i++) {
-        put_hash(rec, n00b_list_get(*links, i));
+        put_hash(rec, &larr[i]);
     }
     put_u64(rec, (uint64_t)img->byte_len);
     n00b_buffer_append_bytes(rec, img->data, img->byte_len);
@@ -292,7 +315,7 @@ _n00b_merkle_add(n00b_merkle_t                     *dag,
 // ── parse a stored record into a node (caller holds dag->lock) ──────────────
 
 static n00b_merkle_node_t *
-parse_record_at(n00b_merkle_t *dag, uint64_t offset)
+parse_record_at(n00b_merkle_t *dag, uint64_t offset, uint64_t *out_rec_len)
 {
     rd_t r = {
         .p   = (const uint8_t *)dag->store->data,
@@ -301,8 +324,10 @@ parse_record_at(n00b_merkle_t *dag, uint64_t offset)
         .ok  = true,
     };
 
-    uint64_t rec_len = rd_u64(&r); // total record length (currently advisory)
-    (void)rec_len;
+    uint64_t rec_len = rd_u64(&r); // total record length, incl. this prefix
+    if (out_rec_len != nullptr) {
+        *out_rec_len = rec_len;
+    }
 
     n00b_merkle_node_t *node = n00b_alloc(n00b_merkle_node_t,
                                           .allocator = dag->allocator);
@@ -344,7 +369,8 @@ n00b_merkle_get(n00b_merkle_t *dag, n00b_merkle_hash_t *node_hash)
     n00b_mutex_lock(&dag->lock);
     bool     found  = false;
     uint64_t offset = n00b_dict_get(MERKLE_IDX(dag), key, &found);
-    n00b_merkle_node_t *node = found ? parse_record_at(dag, offset) : nullptr;
+    n00b_merkle_node_t *node = found ? parse_record_at(dag, offset, nullptr)
+                                     : nullptr;
     n00b_mutex_unlock(&dag->lock);
 
     if (node == nullptr) {
@@ -389,4 +415,123 @@ _n00b_merkle_payload(n00b_merkle_t      *dag,
         return n00b_result_err(void *, N00B_MERKLE_ERR_BAD_RECORD);
     }
     return n00b_result_ok(void *, obj);
+}
+
+// ── persistence (save / load) ───────────────────────────────────────────────
+//
+// Blob layout: magic(8) ++ version(u32) ++ alg(u8) ++ payload_tid(u64) ++
+// node_count(u64) ++ store_len(u64) ++ store bytes (the flat records verbatim).
+// The magic is a fixed byte string (endian-independent); integers are host
+// order (v1).
+
+static const char N00B_MERKLE_MAGIC[8] = {'n', '0', '0', 'b', 'M', 'K', 'D', 1};
+#define N00B_MERKLE_SAVE_VERSION 1u
+
+n00b_buffer_t *
+n00b_merkle_save(n00b_merkle_t *dag)
+{
+    n00b_mutex_lock(&dag->lock);
+
+    n00b_buffer_t *out = n00b_buffer_empty(.allocator = dag->allocator);
+    n00b_buffer_append_bytes(out, N00B_MERKLE_MAGIC, sizeof(N00B_MERKLE_MAGIC));
+    uint32_t version = N00B_MERKLE_SAVE_VERSION;
+    n00b_buffer_append_bytes(out, &version, sizeof(version));
+    put_u8(out, (uint8_t)dag->alg);
+    put_u64(out, dag->payload_tid);
+    put_u64(out, dag->node_count);
+    put_u64(out, (uint64_t)dag->store->byte_len);
+    n00b_buffer_append_bytes(out, dag->store->data, dag->store->byte_len);
+
+    n00b_mutex_unlock(&dag->lock);
+    return out;
+}
+
+n00b_result_t(n00b_merkle_t *)
+_n00b_merkle_load(n00b_buffer_t    *blob,
+                  uint64_t          expected_tid,
+                  n00b_allocator_t *allocator)
+{
+    rd_t r = {
+        .p   = (const uint8_t *)blob->data,
+        .len = (size_t)blob->byte_len,
+        .cur = 0,
+        .ok  = true,
+    };
+
+    if (r.len < sizeof(N00B_MERKLE_MAGIC)
+        || memcmp(r.p, N00B_MERKLE_MAGIC, sizeof(N00B_MERKLE_MAGIC)) != 0) {
+        return n00b_result_err(n00b_merkle_t *, N00B_MERKLE_ERR_BAD_MANIFEST);
+    }
+    r.cur += sizeof(N00B_MERKLE_MAGIC);
+
+    uint32_t version = 0;
+    if (r.cur + sizeof(version) > r.len) {
+        return n00b_result_err(n00b_merkle_t *, N00B_MERKLE_ERR_BAD_MANIFEST);
+    }
+    memcpy(&version, r.p + r.cur, sizeof(version));
+    r.cur += sizeof(version);
+    if (version != N00B_MERKLE_SAVE_VERSION) {
+        return n00b_result_err(n00b_merkle_t *, N00B_MERKLE_ERR_BAD_MANIFEST);
+    }
+
+    n00b_merkle_alg_t alg         = (n00b_merkle_alg_t)rd_u8(&r);
+    uint64_t          payload_tid = rd_u64(&r);
+    uint64_t          node_count  = rd_u64(&r);
+    uint64_t          store_len   = rd_u64(&r);
+    if (!r.ok || r.cur + store_len > r.len) {
+        return n00b_result_err(n00b_merkle_t *, N00B_MERKLE_ERR_BAD_MANIFEST);
+    }
+    if (expected_tid != 0 && expected_tid != payload_tid) {
+        return n00b_result_err(n00b_merkle_t *, N00B_MERKLE_ERR_TYPE_MISMATCH);
+    }
+
+    n00b_merkle_t *dag = n00b_alloc(n00b_merkle_t, .allocator = allocator);
+    dag->alg         = alg;
+    dag->payload_tid = payload_tid;
+    dag->allocator   = allocator;
+    dag->store       = n00b_buffer_from_bytes((char *)(r.p + r.cur),
+                                        (int64_t)store_len,
+                                        .allocator = allocator);
+    dag->index       = n00b_dict_new(n00b_string_t *, uint64_t,
+                                     .allocator = allocator);
+    dag->node_count  = 0;
+    n00b_sys_mutex_init(&dag->lock, N00B_LOC_STRING());
+
+    // Scan every record, recompute + verify both hashes, rebuild the index.
+    uint64_t offset = 0;
+    uint64_t seen   = 0;
+    while (offset < store_len) {
+        uint64_t            rec_len = 0;
+        n00b_merkle_node_t *node    = parse_record_at(dag, offset, &rec_len);
+        if (node == nullptr || rec_len == 0 || offset + rec_len > store_len) {
+            return n00b_result_err(n00b_merkle_t *, N00B_MERKLE_ERR_BAD_RECORD);
+        }
+
+        n00b_merkle_hash_t content2 = merkle_digest(
+            dag->alg,
+            node->payload_image->data,
+            node->payload_image->byte_len);
+        if (!n00b_merkle_hash_eq(&content2, &node->content_hash)) {
+            return n00b_result_err(n00b_merkle_t *, N00B_MERKLE_ERR_VERIFY_FAIL);
+        }
+        n00b_merkle_hash_t node2 = node_hash_of(dag->alg,
+                                                &node->content_hash,
+                                                node->links,
+                                                node->link_count);
+        if (!n00b_merkle_hash_eq(&node2, &node->node_hash)) {
+            return n00b_result_err(n00b_merkle_t *, N00B_MERKLE_ERR_VERIFY_FAIL);
+        }
+
+        n00b_string_t *key = n00b_merkle_hash_hex(&node->node_hash);
+        n00b_dict_put(MERKLE_IDX(dag), key, offset);
+        seen++;
+        offset += rec_len;
+    }
+
+    if (seen != node_count) {
+        return n00b_result_err(n00b_merkle_t *, N00B_MERKLE_ERR_BAD_MANIFEST);
+    }
+    dag->node_count = seen;
+
+    return n00b_result_ok(n00b_merkle_t *, dag);
 }

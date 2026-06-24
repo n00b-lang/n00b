@@ -23,6 +23,10 @@ typedef struct mk_point_t {
     int64_t y;
 } mk_point_t;
 
+typedef struct mk_other_t {
+    int64_t z;
+} mk_other_t;
+
 static mk_point_t *
 mk_pt(int64_t x, int64_t y)
 {
@@ -121,6 +125,62 @@ test_determinism(void)
     CHECK(n00b_merkle_hash_eq(&a, &b));
 }
 
+static void
+test_save_load(void)
+{
+    n00b_merkle_t *dag = n00b_merkle_new(mk_point_t);
+    n00b_merkle_hash_t ha
+        = n00b_result_get(n00b_merkle_add(dag, mk_point_t, mk_pt(1, 2), nullptr));
+    n00b_list_t(n00b_merkle_hash_t *) links
+        = n00b_list_new(n00b_merkle_hash_t *);
+    n00b_list_push(links, hash_box(ha));
+    n00b_merkle_hash_t hb
+        = n00b_result_get(n00b_merkle_add(dag, mk_point_t, mk_pt(3, 4), &links));
+
+    n00b_buffer_t *blob = n00b_merkle_save(dag);
+    CHECK(blob != nullptr && blob->byte_len > 0);
+
+    // Round-trip: structure, links, and payload survive.
+    auto rl = n00b_merkle_load(mk_point_t, blob);
+    CHECK(n00b_result_is_ok(rl));
+    n00b_merkle_t *dag2 = n00b_result_get(rl);
+    CHECK(n00b_merkle_count(dag2) == 2);
+    CHECK(n00b_merkle_contains(dag2, &ha));
+    CHECK(n00b_merkle_contains(dag2, &hb));
+    auto o = n00b_merkle_get(dag2, &hb);
+    CHECK(n00b_option_is_set(o));
+    n00b_merkle_node_t *node = n00b_option_get(o);
+    CHECK(node->link_count == 1 && n00b_merkle_hash_eq(&node->links[0], &ha));
+    mk_point_t *p = n00b_merkle_payload(mk_point_t, dag2, node);
+    CHECK(p != nullptr && p->x == 3 && p->y == 4);
+
+    // Bad magic -> BAD_MANIFEST.
+    n00b_buffer_t *m = n00b_buffer_from_bytes(blob->data, (int64_t)blob->byte_len);
+    m->data[0]       = 'X';
+    auto rm          = n00b_merkle_load(mk_point_t, m);
+    CHECK(n00b_result_is_err(rm)
+          && n00b_result_get_err(rm) == N00B_MERKLE_ERR_BAD_MANIFEST);
+
+    // Wrong payload type -> TYPE_MISMATCH.
+    auto rt = n00b_merkle_load(mk_other_t, blob);
+    CHECK(n00b_result_is_err(rt)
+          && n00b_result_get_err(rt) == N00B_MERKLE_ERR_TYPE_MISMATCH);
+
+    // Tampered store byte -> VERIFY_FAIL (recomputed hash != stored).
+    n00b_buffer_t *t = n00b_buffer_from_bytes(blob->data, (int64_t)blob->byte_len);
+    t->data[t->byte_len - 1] ^= 0xff;
+    auto rtam = n00b_merkle_load(mk_point_t, t);
+    CHECK(n00b_result_is_err(rtam)
+          && n00b_result_get_err(rtam) == N00B_MERKLE_ERR_VERIFY_FAIL);
+
+    // Truncated blob -> BAD_MANIFEST (declared store length overruns).
+    n00b_buffer_t *tr
+        = n00b_buffer_from_bytes(blob->data, (int64_t)(blob->byte_len - 5));
+    auto rtr = n00b_merkle_load(mk_point_t, tr);
+    CHECK(n00b_result_is_err(rtr)
+          && n00b_result_get_err(rtr) == N00B_MERKLE_ERR_BAD_MANIFEST);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -129,6 +189,7 @@ main(int argc, char **argv)
 
     test_merkle();
     test_determinism();
+    test_save_load();
 
     n00b_shutdown();
     return 0;

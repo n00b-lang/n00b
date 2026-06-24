@@ -26,10 +26,11 @@
 #pragma once
 
 #include "n00b.h"
-#include "adt/result.h" // n00b_result_t
-#include "adt/option.h" // n00b_option_t
-#include "adt/list.h"   // n00b_list_t
-#include "adt/dict.h"   // n00b_dict_t
+#include "core/buffer.h" // n00b_buffer_t (returned by save / taken by load)
+#include "adt/result.h"  // n00b_result_t
+#include "adt/option.h"  // n00b_option_t
+#include "adt/list.h"    // n00b_list_t
+#include "adt/dict.h"    // n00b_dict_t
 
 // ── Digest ──────────────────────────────────────────────────────────────
 
@@ -65,6 +66,8 @@ typedef enum {
     N00B_MERKLE_ERR_NOT_HASHABLE = -3, // payload could not be marshaled
     N00B_MERKLE_ERR_TYPE_MISMATCH= -4, // payload type != the DAG's payload type
     N00B_MERKLE_ERR_BAD_RECORD   = -5, // corrupt stored record
+    N00B_MERKLE_ERR_BAD_MANIFEST = -6, // bad magic/version/length on load
+    N00B_MERKLE_ERR_VERIFY_FAIL  = -7, // a node's recomputed hash != stored hash
 } n00b_merkle_err_t;
 
 extern n00b_string_t *n00b_merkle_err_str(n00b_merkle_err_t e);
@@ -166,3 +169,28 @@ _n00b_merkle_payload(n00b_merkle_t      *dag,
         n00b_result_is_ok(_bl_mr) ? (T *)n00b_result_get(_bl_mr)           \
                                   : (T *)nullptr;                          \
     })
+
+// ── Persistence (save / load) ───────────────────────────────────────────────
+
+// Serialize the whole DAG to a self-describing, versioned, magic-numbered blob
+// (manifest + the flat node store). NOTE (v1): host byte order — a blob is
+// portable across processes/builds on the same architecture; canonical
+// little-endian encoding is a future refinement.
+extern n00b_buffer_t *n00b_merkle_save(n00b_merkle_t *dag);
+
+// Load a blob into a fresh DAG. Validates the manifest, rebuilds the index, and
+// RECOMPUTES + checks every node's content_hash and node_hash (rejecting any
+// tampered record with N00B_MERKLE_ERR_VERIFY_FAIL); every (offset,length) is
+// bounds-checked. Errors if the payload type tag does not match @p expected_tid.
+extern n00b_result_t(n00b_merkle_t *)
+_n00b_merkle_load(n00b_buffer_t    *blob,
+                  uint64_t          expected_tid,
+                  n00b_allocator_t *allocator);
+
+/** @brief Load a blob whose payload type is @p T. */
+#define n00b_merkle_load(T, blob) \
+    _n00b_merkle_load((blob), typehash(T *), nullptr)
+
+/** @brief Like n00b_merkle_load but allocate the DAG from @p alloc. */
+#define n00b_merkle_load_in(T, blob, alloc) \
+    _n00b_merkle_load((blob), typehash(T *), (alloc))
