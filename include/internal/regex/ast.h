@@ -146,7 +146,7 @@ typedef enum : int {
 
 struct ErrorKind {
     ErrorKindTag tag;
-    union {
+    union [[n00b::raw_union]] {
         Span    *flag_duplicate_original;         // FlagDuplicate
         Span    *flag_repeated_negation_original; // FlagRepeatedNegation
         Span    *group_name_duplicate_original;   // GroupNameDuplicate
@@ -200,7 +200,7 @@ typedef enum : int {
 // file-by-file phase.
 struct Ast {
     AstTag tag;
-    union {
+    union [[n00b::raw_union]] {
         Span           *empty;           // AST_EMPTY
         SetFlags       *flags;           // AST_FLAGS
         Literal        *literal;         // AST_LITERAL

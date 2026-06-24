@@ -684,7 +684,7 @@ int flags_flag_state(const Flags *self, Flag flag, bool *out) {
 // ast_Ast — internal definition.  Opaque outside this TU.
 struct ast_Ast {
     ast_Ast_tag tag;
-    union {
+    union [[n00b::raw_union]] {
         rs_Span           empty;          // AST_TAG_EMPTY
         rs_Span           dot;            // AST_TAG_DOT
         rs_Span           top;            // AST_TAG_TOP
