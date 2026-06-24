@@ -259,6 +259,12 @@ test_listen_unix_mode_chmod(void)
     n00b_string_t             *path = build_tmp_path("mode");
 
     auto lr = n00b_conduit_listen_unix(c, io, path, 16, .mode = 0600);
+    if (n00b_result_is_err(lr) && n00b_result_get_err(lr) == ENOSYS) {
+        (void)n00b_file_unlink(path, .ignore_missing = true);
+        n00b_printf("  [SKIP] mode kwarg chmods the socket file");
+        teardown_conduit(c);
+        return;
+    }
     assert(n00b_result_is_ok(lr));
 
     assert(n00b_get_file_kind(path) == N00B_FK_IS_SOCK);

@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
+#include <limits.h>
 #include <process.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -21,6 +22,11 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+
+#ifndef N00B_SSIZE_T_DEFINED
+typedef intptr_t ssize_t;
+#define N00B_SSIZE_T_DEFINED 1
+#endif
 
 #ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
 #define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
@@ -149,12 +155,69 @@ n00b_test_symlink(const char *target, const char *linkpath)
     return -1;
 }
 
+#ifndef F_GETFL
+#define F_GETFL 3
+#endif
+#ifndef F_SETFL
+#define F_SETFL 4
+#endif
+#ifndef O_NONBLOCK
+#define O_NONBLOCK 0x4000
+#endif
+
+#define N00B_TEST_FD_TABLE_SIZE 64
+static int n00b_test_fd_flags[N00B_TEST_FD_TABLE_SIZE];
+static int n00b_test_fd_seen[N00B_TEST_FD_TABLE_SIZE];
+
 static int
 n00b_test_fcntl(int fd, int cmd, ...)
 {
-    (void)fd;
-    (void)cmd;
-    return 0;
+    if (fd < 0 || fd >= N00B_TEST_FD_TABLE_SIZE) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (cmd == F_GETFL) {
+        return n00b_test_fd_seen[fd] ? n00b_test_fd_flags[fd] : 0;
+    }
+
+    if (cmd == F_SETFL) {
+        va_list ap;
+        va_start(ap, cmd);
+        int flags = va_arg(ap, int);
+        va_end(ap);
+        n00b_test_fd_flags[fd] = flags;
+        n00b_test_fd_seen[fd]  = 1;
+        return 0;
+    }
+
+    errno = EINVAL;
+    return -1;
+}
+
+static ssize_t
+n00b_test_read(int fd, void *buf, size_t len)
+{
+    if (fd >= 0 && fd < N00B_TEST_FD_TABLE_SIZE
+        && n00b_test_fd_seen[fd]
+        && (n00b_test_fd_flags[fd] & O_NONBLOCK) != 0) {
+        intptr_t raw = _get_osfhandle(fd);
+        if (raw != -1) {
+            DWORD avail = 0;
+            if (PeekNamedPipe((HANDLE)raw, NULL, 0, NULL, &avail, NULL)) {
+                if (avail == 0) {
+                    errno = EAGAIN;
+                    return -1;
+                }
+                if (len > (size_t)avail) {
+                    len = (size_t)avail;
+                }
+            }
+        }
+    }
+
+    unsigned int chunk = len > (size_t)UINT_MAX ? UINT_MAX : (unsigned int)len;
+    return (ssize_t)_read(fd, buf, chunk);
 }
 
 static void *
@@ -232,15 +295,6 @@ n00b_test_mkdtemp(char *tmpl)
     return NULL;
 }
 
-#ifndef F_GETFL
-#define F_GETFL 3
-#endif
-#ifndef F_SETFL
-#define F_SETFL 4
-#endif
-#ifndef O_NONBLOCK
-#define O_NONBLOCK 0
-#endif
 #ifndef S_ISDIR
 #define S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)
 #endif
@@ -254,6 +308,7 @@ n00b_test_mkdtemp(char *tmpl)
 #define pclose _pclose
 #define pipe(fds) _pipe((fds), 65536, _O_BINARY)
 #define popen _popen
+#define read n00b_test_read
 #define rmdir _rmdir
 #define symlink n00b_test_symlink
 #ifndef setenv

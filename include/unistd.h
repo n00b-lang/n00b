@@ -116,7 +116,8 @@ n00b_win_fchmod(int fd, int mode)
 {
     (void)fd;
     (void)mode;
-    return 0;
+    errno = ENOSYS;
+    return -1;
 }
 
 static inline int

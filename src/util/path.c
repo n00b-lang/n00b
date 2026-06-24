@@ -754,26 +754,6 @@ path_tilde_expand_alloc(n00b_string_t *path, n00b_allocator_t *allocator)
 }
 
 #ifdef _WIN32
-typedef struct win_path_mode_rec {
-    char                     *path;
-    uint32_t                  mode;
-    struct win_path_mode_rec *next;
-} win_path_mode_rec_t;
-
-static win_path_mode_rec_t *win_path_modes;
-
-static inline n00b_allocator_t *
-win_path_mode_allocator(void)
-{
-    return (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
-}
-
-static inline void
-win_path_mode_free(void *ptr)
-{
-    n00b_free_from_allocator(win_path_mode_allocator(), ptr);
-}
-
 static bool
 path_is_windows_af_unix_socket(const char *path)
 {
@@ -788,198 +768,6 @@ path_is_windows_af_unix_socket(const char *path)
 
     return (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
            && data.dwReserved0 == IO_REPARSE_TAG_AF_UNIX;
-}
-
-static char *
-win_path_mode_key(n00b_string_t *path)
-{
-    n00b_string_t *resolved = n00b_resolve_path(path);
-
-    if (resolved == nullptr || resolved->data == nullptr) {
-        return nullptr;
-    }
-
-    char *result = n00b_alloc_array_with_opts(
-        char,
-        (size_t)resolved->u8_bytes + 1,
-        &(n00b_alloc_opts_t){.allocator = win_path_mode_allocator(),
-                             .no_scan   = true});
-    if (result == nullptr) {
-        return nullptr;
-    }
-
-    memcpy(result, resolved->data, (size_t)resolved->u8_bytes);
-    result[resolved->u8_bytes] = '\0';
-    return result;
-}
-
-static bool
-win_path_mode_lookup(n00b_string_t *path, uint32_t *mode)
-{
-    char *key = win_path_mode_key(path);
-
-    if (key == nullptr) {
-        return false;
-    }
-
-    win_path_mode_rec_t *cur = win_path_modes;
-    while (cur != nullptr) {
-        if (strcmp(cur->path, key) == 0) {
-            *mode = cur->mode;
-            win_path_mode_free(key);
-            return true;
-        }
-        cur = cur->next;
-    }
-
-    win_path_mode_free(key);
-    return false;
-}
-
-static bool
-win_path_mode_remember(n00b_string_t *path, uint32_t mode)
-{
-    char *key = win_path_mode_key(path);
-
-    if (key == nullptr) {
-        return false;
-    }
-
-    win_path_mode_rec_t *cur = win_path_modes;
-    while (cur != nullptr) {
-        if (strcmp(cur->path, key) == 0) {
-            cur->mode = mode;
-            win_path_mode_free(key);
-            return true;
-        }
-        cur = cur->next;
-    }
-
-    win_path_mode_rec_t *rec = n00b_alloc_with_opts(
-        win_path_mode_rec_t,
-        &(n00b_alloc_opts_t){.allocator = win_path_mode_allocator(),
-                             .no_scan   = true});
-    if (rec == nullptr) {
-        win_path_mode_free(key);
-        return false;
-    }
-
-    rec->path       = key;
-    rec->mode       = mode;
-    rec->next       = win_path_modes;
-    win_path_modes  = rec;
-    return true;
-}
-
-static void
-win_path_mode_forget(n00b_string_t *path)
-{
-    char *key = win_path_mode_key(path);
-
-    if (key == nullptr) {
-        return;
-    }
-
-    win_path_mode_rec_t **slot = &win_path_modes;
-    while (*slot != nullptr) {
-        win_path_mode_rec_t *cur = *slot;
-        if (strcmp(cur->path, key) == 0) {
-            *slot = cur->next;
-            win_path_mode_free(cur->path);
-            win_path_mode_free(cur);
-            break;
-        }
-        slot = &cur->next;
-    }
-
-    win_path_mode_free(key);
-}
-
-static bool
-win_path_mode_key_is_self_or_child(const char *path, const char *root)
-{
-    size_t root_len = strlen(root);
-
-    if (strcmp(path, root) == 0) {
-        return true;
-    }
-
-    return strncmp(path, root, root_len) == 0 && path[root_len] == '/';
-}
-
-static void
-win_path_mode_forget_tree_key(const char *root)
-{
-    win_path_mode_rec_t **slot = &win_path_modes;
-
-    while (*slot != nullptr) {
-        win_path_mode_rec_t *cur = *slot;
-        if (win_path_mode_key_is_self_or_child(cur->path, root)) {
-            *slot = cur->next;
-            win_path_mode_free(cur->path);
-            win_path_mode_free(cur);
-            continue;
-        }
-        slot = &cur->next;
-    }
-}
-
-static char *
-win_path_mode_rewrite_key(const char *path,
-                          const char *source_root,
-                          const char *destination_root)
-{
-    size_t source_len      = strlen(source_root);
-    const char *suffix     = path + source_len;
-    size_t destination_len = strlen(destination_root);
-    size_t suffix_len      = strlen(suffix);
-    char  *rewritten       = n00b_alloc_array_with_opts(
-        char,
-        destination_len + suffix_len + 1,
-        &(n00b_alloc_opts_t){.allocator = win_path_mode_allocator(),
-                             .no_scan   = true});
-
-    if (rewritten == nullptr) {
-        return nullptr;
-    }
-
-    memcpy(rewritten, destination_root, destination_len);
-    memcpy(rewritten + destination_len, suffix, suffix_len + 1);
-    return rewritten;
-}
-
-static void
-win_path_mode_after_move(n00b_string_t *source_path,
-                         n00b_string_t *destination_path)
-{
-    char *source_key      = win_path_mode_key(source_path);
-    char *destination_key = win_path_mode_key(destination_path);
-
-    if (source_key == nullptr || destination_key == nullptr) {
-        win_path_mode_free(source_key);
-        win_path_mode_free(destination_key);
-        return;
-    }
-
-    win_path_mode_forget_tree_key(destination_key);
-
-    win_path_mode_rec_t *cur = win_path_modes;
-    while (cur != nullptr) {
-        if (win_path_mode_key_is_self_or_child(cur->path, source_key)) {
-            char *rewritten =
-                win_path_mode_rewrite_key(cur->path,
-                                          source_key,
-                                          destination_key);
-            if (rewritten != nullptr) {
-                win_path_mode_free(cur->path);
-                cur->path = rewritten;
-            }
-        }
-        cur = cur->next;
-    }
-
-    win_path_mode_free(source_key);
-    win_path_mode_free(destination_key);
 }
 #endif
 
@@ -1284,13 +1072,9 @@ n00b_path_get_mode(n00b_string_t *path)
 
     struct stat st;
 #ifdef _WIN32
-    uint32_t remembered_mode = 0;
-    char    *native          = path_windows_existing_native_cstr(path);
+    char *native = path_windows_existing_native_cstr(path);
     if (native == nullptr || stat(native, &st) != 0) {
         return n00b_result_err(uint32_t, errno);
-    }
-    if (win_path_mode_lookup(path, &remembered_mode)) {
-        return n00b_result_ok(uint32_t, remembered_mode);
     }
 #else
     if (stat(path->data, &st) != 0) {
@@ -1352,10 +1136,7 @@ n00b_path_set_mode(n00b_string_t *path, uint32_t mode)
         return n00b_result_err(uint32_t, errno);
     }
 
-    if (!win_path_mode_remember(path, mode)) {
-        return n00b_result_err(uint32_t, ENOMEM);
-    }
-    return n00b_result_ok(uint32_t, mode);
+    return n00b_result_err(uint32_t, ENOSYS);
 #else
     if (chmod(path->data, (mode_t)mode) != 0) {
         return n00b_result_err(uint32_t, errno);
@@ -1444,9 +1225,6 @@ _n00b_path_mkdir_p(n00b_string_t *path) _kargs
         }
 
         created = true;
-#ifdef _WIN32
-        (void)win_path_mode_remember(current, mode);
-#endif
     }
 
     return n00b_result_ok(bool, created);
@@ -1682,7 +1460,6 @@ _n00b_new_sibling_temp_dir(n00b_string_t *destination_path) _kargs
 #ifdef _WIN32
         char *native = path_windows_native_cstr(path);
         if (native != nullptr && mkdir(native, (mode_t)directory_mode) == 0) {
-            (void)win_path_mode_remember(path, directory_mode);
 #else
         if (mkdir(path->data, (mode_t)directory_mode) == 0) {
 #endif
@@ -2532,7 +2309,6 @@ rename_no_replace(n00b_string_t *from, n00b_string_t *to)
     if (!MoveFileExA(native_from, native_to, MOVEFILE_WRITE_THROUGH)) {
         return n00b_result_err(int, path_windows_errno(GetLastError()));
     }
-    win_path_mode_after_move(from, to);
     return n00b_result_ok(int, 0);
 #elif defined(__MACH__) && defined(RENAME_EXCL)
     if (renamex_np(from->data, to->data, RENAME_EXCL) != 0) {
@@ -2586,7 +2362,6 @@ _n00b_path_commit_exact(n00b_string_t *source_path,
             return n00b_result_err(n00b_string_t *,
                                    path_windows_errno(GetLastError()));
         }
-        win_path_mode_after_move(source_path, destination_path);
         return n00b_result_ok(n00b_string_t *, destination_path);
     }
 #else
@@ -2635,16 +2410,10 @@ _n00b_file_unlink(n00b_string_t *path) _kargs
 #else
     if (unlink(path->data) == 0) {
 #endif
-#ifdef _WIN32
-        win_path_mode_forget(path);
-#endif
         return n00b_result_ok(bool, true);
     }
     int err = errno;
     if (err == ENOENT && ignore_missing) {
-#ifdef _WIN32
-        win_path_mode_forget(path);
-#endif
         return n00b_result_ok(bool, false);
     }
     return n00b_result_err(bool, err);
@@ -2672,7 +2441,6 @@ path_remove_tree_inner(n00b_string_t    *path,
             return n00b_result_err(bool, errno);
         }
 
-        win_path_mode_forget(path);
         return n00b_result_ok(bool, true);
     }
 
@@ -2726,7 +2494,6 @@ path_remove_tree_inner(n00b_string_t    *path,
         return n00b_result_err(bool, errno);
     }
 
-    win_path_mode_forget(path);
     return n00b_result_ok(bool, true);
 #else
     if (lstat(path->data, &st) != 0) {
