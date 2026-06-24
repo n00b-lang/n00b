@@ -3009,6 +3009,12 @@ transient_zero_test = executable('test_transient_zero',
 )
 test('transient_zero', transient_zero_test, suite: 'unit')
 
+merkle_test = executable('test_merkle',
+    ['test/unit/test_merkle.c'],
+    kwargs: test_common_kwargs,
+)
+test('merkle', merkle_test, suite: 'unit')
+
 marshal_type_layout_test = executable('test_marshal_type_layout',
     ['test/unit/test_marshal_type_layout.c'],
     kwargs: test_common_kwargs,
