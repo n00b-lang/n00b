@@ -201,6 +201,16 @@ require_extract_ok(n00b_result_t(n00b_obj_bundle_extract_result_t *) result)
     return facts;
 }
 
+static bool
+host_supports_posix_modes(void)
+{
+#if defined(_WIN32)
+    return false;
+#else
+    return true;
+#endif
+}
+
 static void
 assert_string_eq(n00b_string_t *actual, n00b_string_t *expected)
 {
@@ -1274,13 +1284,19 @@ test_direct_extraction_materializes_supported_artifacts(void)
 
     n00b_string_t *root = n00b_new_temp_path(r"n00b_extract_direct_",
                                              r"_root");
-    auto result = n00b_obj_bundle_extract(bundle, root, .atomic = false);
+    bool preserve_modes = host_supports_posix_modes();
+    auto result = n00b_obj_bundle_extract(bundle,
+                                          root,
+                                          .atomic = false,
+                                          .preserve_modes = preserve_modes);
     n00b_obj_bundle_extract_result_t *facts = require_extract_ok(result);
 
     assert_string_eq(n00b_obj_bundle_extract_result_destination_root(facts),
                      root);
     N00B_TEST_REQUIRE(!n00b_obj_bundle_extract_result_atomic_requested(facts));
     N00B_TEST_REQUIRE(!n00b_obj_bundle_extract_result_atomic_used(facts));
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_preserve_modes(facts)
+                      == preserve_modes);
     N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_files_planned(facts) == 3);
     N00B_TEST_REQUIRE(
         n00b_obj_bundle_extract_result_directories_planned(facts) == 2);
@@ -1305,12 +1321,14 @@ test_direct_extraction_materializes_supported_artifacts(void)
     fixture_assert_bytes(tool, r"#!/bin/tool\n");
     fixture_assert_bytes(empty_file, r"");
 
-    auto mode_r = n00b_path_get_mode(tool);
-    if (n00b_result_is_ok(mode_r)) {
-        N00B_TEST_REQUIRE((n00b_result_get(mode_r) & 0111u) != 0);
-    }
-    else {
-        N00B_TEST_REQUIRE(n00b_result_get_err(mode_r) == ENOSYS);
+    if (preserve_modes) {
+        auto mode_r = n00b_path_get_mode(tool);
+        if (n00b_result_is_ok(mode_r)) {
+            N00B_TEST_REQUIRE((n00b_result_get(mode_r) & 0111u) != 0);
+        }
+        else {
+            N00B_TEST_REQUIRE(n00b_result_get_err(mode_r) == ENOSYS);
+        }
     }
 
     fixture_unlink(data);
@@ -1440,13 +1458,18 @@ test_atomic_extraction_materializes_supported_artifacts(void)
 
     n00b_string_t *root = n00b_new_temp_path(r"n00b_extract_atomic_",
                                              r"_root");
-    auto result = n00b_obj_bundle_extract(bundle, root);
+    bool preserve_modes = host_supports_posix_modes();
+    auto result = n00b_obj_bundle_extract(bundle,
+                                          root,
+                                          .preserve_modes = preserve_modes);
     n00b_obj_bundle_extract_result_t *facts = require_extract_ok(result);
 
     assert_string_eq(n00b_obj_bundle_extract_result_destination_root(facts),
                      root);
     N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_atomic_requested(facts));
     N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_atomic_used(facts));
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_preserve_modes(facts)
+                      == preserve_modes);
     N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_files_planned(facts) == 3);
     N00B_TEST_REQUIRE(
         n00b_obj_bundle_extract_result_directories_planned(facts) == 2);
@@ -1477,12 +1500,14 @@ test_atomic_extraction_materializes_supported_artifacts(void)
     fixture_assert_bytes(tool, r"#!/bin/tool\n");
     fixture_assert_bytes(empty_file, r"");
 
-    auto mode_r = n00b_path_get_mode(tool);
-    if (n00b_result_is_ok(mode_r)) {
-        N00B_TEST_REQUIRE((n00b_result_get(mode_r) & 0111u) != 0);
-    }
-    else {
-        N00B_TEST_REQUIRE(n00b_result_get_err(mode_r) == ENOSYS);
+    if (preserve_modes) {
+        auto mode_r = n00b_path_get_mode(tool);
+        if (n00b_result_is_ok(mode_r)) {
+            N00B_TEST_REQUIRE((n00b_result_get(mode_r) & 0111u) != 0);
+        }
+        else {
+            N00B_TEST_REQUIRE(n00b_result_get_err(mode_r) == ENOSYS);
+        }
     }
 
     auto cleanup_r = n00b_path_remove_tree(root, .ignore_missing = true);
