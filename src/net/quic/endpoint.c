@@ -158,7 +158,15 @@ default_stream_cb(picoquic_cnx_t              *cnx,
                 n00b_conduit_publisher_t *pub = n00b_result_get(pub_res);
 
                 n00b_quic_accept_msg_t *msg =
-                    n00b_alloc(n00b_quic_accept_msg_t);
+                    n00b_alloc_with_opts(
+                        n00b_quic_accept_msg_t,
+                        &(n00b_alloc_opts_t){
+                            .allocator = ep->conduit
+                                             ? ep->conduit->allocator
+                                             : (n00b_allocator_t *)
+                                                   &n00b_get_runtime()
+                                                        ->conduit_pool,
+                        });
                 msg->header.type       = N00B_CONDUIT_MSG_USER;
                 msg->header.topic      = ep->accept_topic;
                 msg->header.generation =
