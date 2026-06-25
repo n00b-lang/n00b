@@ -701,7 +701,7 @@ n00b_pool_big_unmap_count(n00b_pool_t *pool)
     return pool == nullptr ? 0 : atomic_load(&pool->big_unmap_count);
 }
 
-static void
+[[n00b::nogc]] static void
 pool_pre_destroy(n00b_allocator_t *allocator)
 {
     n00b_runtime_t *rt = n00b_default_runtime_or_null();

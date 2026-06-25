@@ -53,9 +53,11 @@
 #include <ucontext.h> // ucontext_t register snapshot supplied by sigaction
 #endif
 #include "core/syscall.h" // n00b_raw_write — libc-free, AS-safe
+#include <stdlib.h>       // getenv during init only; never in the handler
 #endif
 
 static _Atomic int g_n00b_crash_log_fd = -1;
+static _Atomic bool g_n00b_crash_symbolicate = false;
 
 #if !defined(_WIN32)
 static _Atomic uintptr_t g_n00b_crash_image_vmaddr    = 0;
@@ -423,11 +425,10 @@ _n00b_crash_dump_context(int sig,
 // thread's alternate stack (SA_ONSTACK), which is an n00b callstack stamped
 // with this thread's slot id — so n00b_thread_self() (and the ncc-emitted
 // gc_stack_push in this function's own prologue) resolve correctly here.
-// Async-signal-safe: stable reads and raw writes only.  The handler is installed
-// with SA_RESETHAND; after the diagnostic write / optional callback it returns
-// to the faulting context, which immediately re-faults under the default
-// disposition.  That preserves n00b's one-line diagnosis while letting the OS
-// crash reporter produce a normal report for the real fault.
+// Async-signal-safe default path: stable reads and raw writes only, followed by
+// raw process exit.  The richer symbolication path can be enabled explicitly
+// for debugging, but it is not the production path because it walks ordinary
+// runtime data structures and can wedge before launchd gets a process exit.
 static void
 _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
 {
@@ -446,6 +447,7 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
     // default disposition handles the original fault.
     if (!n00b_default_runtime_is_set()) {
         _n00b_crash_write("n00b: fatal: fault before runtime init\n");
+        n00b_raw_exit(128 + sig);
         return;
     }
     n00b_runtime_t *rt       = n00b_default_runtime_or_null();
@@ -495,15 +497,11 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
     _n00b_crash_dump_context(sig, si, uctx, faulting, overflow);
 
     // SYMBOLICATED (DWARF) backtrace via the full capture -> resolve -> render
-    // path.  That path takes ordinary rwlocks (mmap registry / list / dict),
-    // which assert in this non-TCB signal context unless the world is stopped, so
-    // we STOP THE WORLD.  stop_the_world() first does a REAL
-    // n00b_rw_write_lock(&critical_execution), which would block or assert here;
-    // that write-lock is RE-ENTRANT, so we forge our ownership into the gate's
-    // packed owner field first -- then stop_the_world's acquire is a no-op while
-    // it still suspends every OTHER thread and sets the rwlock STW short-circuit,
-    // and the walk runs ALONE.  We are terminating; we never restart the world.
-    if (rt != nullptr) {
+    // path.  This is opt-in debug behavior only. It takes ordinary rwlocks and
+    // may allocate/retire runtime structures, so it must never be required for
+    // production crash exit and service restart.
+    bool do_symbolicate = n00b_atomic_load(&g_n00b_crash_symbolicate);
+    if (rt != nullptr && do_symbolicate) {
         if (!n00b_atomic_load(&rt->stw_active)) {
             n00b_core_lock_info_t cinfo = n00b_atomic_load(
                 &rt->critical_execution.data);
@@ -535,13 +533,15 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
         }
     }
 
-    // Deliver to the faulting thread's registered crash handler (WP-2 surface),
-    // if any; then return so the default disposition handles the original
-    // fault. The handler cannot resume the faulting operation.
-    if (faulting != nullptr && faulting->crash_handler != nullptr) {
+    // Deliver the legacy per-thread callback only in explicit crash-debug mode.
+    // Arbitrary callback code in a fatal signal path can wedge the process and
+    // prevent launchd restart.
+    if (do_symbolicate && faulting != nullptr
+        && faulting->crash_handler != nullptr) {
         faulting->crash_handler(faulting, faulting->crash_handler_data);
     }
 
+    n00b_raw_exit(128 + sig);
     return;
 }
 
@@ -598,11 +598,33 @@ _n00b_crash_init_image_info(void)
 }
 #endif
 
+#if !defined(_WIN32)
+static bool
+_n00b_crash_env_truthy(const char *v)
+{
+    if (v == nullptr || v[0] == '\0') {
+        return false;
+    }
+
+    if ((v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f'
+         || v[0] == 'F')
+        && v[1] == '\0') {
+        return false;
+    }
+
+    return true;
+}
+#endif
+
 void
 n00b_crash_init(void)
 {
 #if !defined(_WIN32)
     _n00b_crash_init_image_info();
+    n00b_atomic_store(&g_n00b_crash_symbolicate,
+                      _n00b_crash_env_truthy(getenv("N00B_CRASH_DEBUG"))
+                          || _n00b_crash_env_truthy(
+                              getenv("N00B_CRASH_SYMBOLICATE")));
 
     // Main-thread altstack (deferred from P2 to here, where the mmap machinery
     // and the default allocator are fully up).  Workers install theirs in the

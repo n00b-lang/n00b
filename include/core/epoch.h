@@ -376,8 +376,18 @@ n00b_retire(void *user_ptr)
         n00b_epoch_free(hdr);
         return;
     }
-    n00b_thread_t  *self = n00b_thread_self();
-    n00b_runtime_t *rt   = n00b_get_runtime();
+    n00b_runtime_t *rt = n00b_default_runtime_or_null();
+    if (rt == nullptr) {
+        n00b_epoch_free(hdr);
+        return;
+    }
+
+    n00b_thread_t *self = n00b_thread_self();
+    if (self == nullptr) {
+        hdr->retire_epoch = n00b_atomic_load(&rt->mm_epoch);
+        n00b_epoch_dead_letter_push_one(rt, hdr);
+        return;
+    }
 
     hdr->retire_epoch = n00b_atomic_load(&rt->mm_epoch);
 
