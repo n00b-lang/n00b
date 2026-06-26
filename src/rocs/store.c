@@ -2138,7 +2138,10 @@ rocs_store_resident_unload_entry(n00b_store_t              *store,
     if (entry->resident_map == nullptr) {
         return n00b_result_ok(bool, false);
     }
-    if (entry->resident_pins != 0) {
+    // Store pins protect query snapshots before the cursor has acquired a
+    // per-shard resident pin. Dropping any sealed shard while active_pins is
+    // nonzero can invalidate a cold boundary captured by an active view.
+    if (store->active_pins != 0) {
         return n00b_result_err(bool, N00B_STORE_ERR_PINNED);
     }
 
@@ -7799,7 +7802,10 @@ rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
     if (entry == nullptr || entry->object_path == nullptr) {
         return n00b_result_err(bool, N00B_STORE_ERR_CORRUPT);
     }
-    if (entry->resident_pins != 0) {
+    // Store pins protect query snapshots before the cursor has acquired a
+    // per-shard resident pin. Dropping any sealed shard while active_pins is
+    // nonzero can invalidate a cold boundary captured by an active view.
+    if (store->active_pins != 0) {
         return n00b_result_err(bool, N00B_STORE_ERR_PINNED);
     }
 
@@ -7846,7 +7852,6 @@ rocs_store_oldest_retention_candidate(n00b_store_t                        *store
     if (store == nullptr || policy == nullptr || store->catalog == nullptr) {
         return nullptr;
     }
-
     uint64_t count = (uint64_t)n00b_list_len(*store->catalog);
     bool over_count = policy->max_sealed_shards != 0
                    && count > policy->max_sealed_shards;

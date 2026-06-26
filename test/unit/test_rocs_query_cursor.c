@@ -440,7 +440,7 @@ expect_cursor_retention_payload(n00b_result_t(n00b_query_cursor_t *) r,
 }
 
 static void
-test_dropped_boundary_cursor_failure_releases_pins(void)
+test_open_view_blocks_boundary_drop_until_close(void)
 {
     sample_store_t sample = new_sample_store();
     n00b_query_view_t *view = view_ok(n00b_query_view(sample.store,
@@ -449,15 +449,19 @@ test_dropped_boundary_cursor_failure_releases_pins(void)
 
     auto drop_r = n00b_store_drop_sealed_shard(sample.store,
                                                entry_shard_id(sample.first));
-    CHECK(n00b_result_is_ok(drop_r));
+    CHECK(n00b_result_is_err(drop_r));
+    CHECK(n00b_result_get_err(drop_r) == N00B_STORE_ERR_PINNED);
 
-    expect_cursor_retention_payload(n00b_query_cursor(view),
-                                    entry_pos(sample.first, 0),
-                                    entry_shard_id(sample.second));
-    CHECK(active_pins(sample.store) == 1);
+    n00b_query_cursor_t *cursor = cursor_ok(n00b_query_cursor(view));
+    expect_hit(cursor, sample.first_match, 2, 501);
+    close_cursor_true(cursor);
 
     close_view_true(view);
     CHECK(active_pins(sample.store) == 0);
+
+    drop_r = n00b_store_drop_sealed_shard(sample.store,
+                                          entry_shard_id(sample.first));
+    CHECK(n00b_result_is_ok(drop_r));
 }
 
 int
@@ -469,7 +473,7 @@ main(int argc, char **argv)
     test_order_filter_later_commit_and_pin_lifetime();
     test_limit_resume_as_of_and_empty_window();
     test_cursor_and_view_close_invalidation();
-    test_dropped_boundary_cursor_failure_releases_pins();
+    test_open_view_blocks_boundary_drop_until_close();
 
     n00b_shutdown();
     return 0;

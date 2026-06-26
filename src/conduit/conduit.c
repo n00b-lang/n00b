@@ -77,6 +77,9 @@ close_topics_in_dict(n00b_dict_untyped_t *dict, bool free_topics)
     n00b_dict_untyped_store_t *store = n00b_atomic_load(&dict->store);
     if (!store) return;
 
+    /* Close every topic before freeing any topic structs. A close can deliver
+     * to topic->done_topic; freeing in the same pass can leave a later close
+     * publishing into an already-freed done topic. */
     for (uint32_t i = 0; i <= store->last_slot; i++) {
         n00b_dict_untyped_bucket_t *b = &store->buckets[i];
         uint32_t flags = n00b_atomic_load(&b->flags);
@@ -88,6 +91,15 @@ close_topics_in_dict(n00b_dict_untyped_t *dict, bool free_topics)
         if (state == N00B_CONDUIT_TOPIC_ACTIVE) {
             n00b_conduit_topic_close(topic);
         }
+    }
+
+    for (uint32_t i = 0; i <= store->last_slot; i++) {
+        n00b_dict_untyped_bucket_t *b = &store->buckets[i];
+        uint32_t flags = n00b_atomic_load(&b->flags);
+        if ((flags & N00B_HT_FLAG_DELETED) || !b->value) {
+            continue;
+        }
+        n00b_conduit_topic_base_t *topic = (n00b_conduit_topic_base_t *)b->value;
         // Teardown: free the topic struct allocated in n00b_conduit_topic_get.
         // n00b_free is allocator-agnostic — it no-ops on default GC-arena
         // pointers (so GC-backed conduits are unaffected) and reclaims the
