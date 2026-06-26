@@ -89,6 +89,35 @@ sub_map_remove(n00b_conduit_sub_handle_t handle)
     _n00b_dict_untyped_remove(sub_map(), (void *)(uintptr_t)handle);
 }
 
+static void
+sub_wait_for_publisher_quiescence(_n00b_conduit_sub_base_t *sub)
+{
+    if (sub == nullptr || sub->topic == nullptr) {
+        return;
+    }
+
+    n00b_conduit_topic_base_t *topic = sub->topic;
+
+    if (n00b_conduit_publish_is_owner(topic)) {
+        return;
+    }
+
+    n00b_atomic_add(&topic->pub_waiters, 1);
+    while (true) {
+        n00b_conduit_publisher_t *pub = n00b_atomic_load(&topic->publisher);
+        if (pub == nullptr) {
+            break;
+        }
+        if (n00b_conduit_publish_is_owner(topic)) {
+            break;
+        }
+
+        uint32_t cur = n00b_atomic_load(&topic->pub_futex);
+        n00b_futex_wait(&topic->pub_futex, cur, 1000000); // 1ms
+    }
+    n00b_atomic_add(&topic->pub_waiters, (uint32_t)-1);
+}
+
 // ============================================================================
 // System message delivery
 // ============================================================================
@@ -186,6 +215,7 @@ n00b_conduit_sub_cancel(n00b_conduit_sub_handle_t handle)
     if (!sub) return;
 
     if (n00b_atomic_load(&sub->state) == N00B_CONDUIT_SUB_REMOVED) {
+        sub_wait_for_publisher_quiescence(sub);
         sub_unlink_from_topic(sub);
         sub_map_remove(handle);
         return;
@@ -196,10 +226,12 @@ n00b_conduit_sub_cancel(n00b_conduit_sub_handle_t handle)
         expected = N00B_CONDUIT_SUB_SUSPENDED;
         if (!n00b_atomic_cas(&sub->state, &expected,
                              N00B_CONDUIT_SUB_CANCELING)) {
+            sub_wait_for_publisher_quiescence(sub);
             return;
         }
     }
 
+    sub_wait_for_publisher_quiescence(sub);
     sub_unlink_from_topic(sub);
     sub_map_remove(handle);
     n00b_atomic_store(&sub->state, N00B_CONDUIT_SUB_REMOVED);
