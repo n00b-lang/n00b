@@ -723,6 +723,12 @@ subdir('src/conduit')
 subdir('src/vfs')
 
 # ============================================================================
+# Virtual KV Store
+# ============================================================================
+
+subdir('src/vks')
+
+# ============================================================================
 # Parsers
 # ============================================================================
 
@@ -903,6 +909,7 @@ n00b_dll_src = (
     n00b_display_src +
     n00b_conduit_src +
     n00b_vfs_src +
+    n00b_vks_src +
     n00b_parsers_src +
     n00b_logic_src +
     n00b_slay_src +
@@ -4656,6 +4663,22 @@ vfs_journal_test = executable('test_vfs_journal',
     kwargs: test_common_kwargs,
 )
 test('vfs_journal', vfs_journal_test, suite: 'unit')
+
+# ============================================================================
+# VKS tests
+# ============================================================================
+
+vks_core_test = executable('test_vks_core',
+    ['test/unit/test_vks_core.c'],
+    kwargs: test_common_kwargs,
+)
+test('vks_core', vks_core_test, suite: 'unit')
+
+vks_backend_test = executable('test_vks_backend',
+    ['test/unit/test_vks_backend.c'],
+    kwargs: test_common_kwargs,
+)
+test('vks_backend', vks_backend_test, suite: 'unit')
 
 # ============================================================================
 # Unicode tests

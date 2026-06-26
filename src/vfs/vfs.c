@@ -952,6 +952,14 @@ n00b_vfs_close(n00b_vfs_t *vfs, n00b_vfs_fh_t fh)
     if (h->write_buf != nullptr && (h->flags & N00B_VFS_OPEN_WRITE)) {
         n00b_result_t(bool) pr = vfs_commit_handle(h);
         if (n00b_result_is_err(pr)) {
+            // POSIX close semantics: close invalidates the handle regardless of
+            // a commit error. Release the handle (free the write buffer and mark
+            // it CLOSED, freeing its handle-table slot) before returning so a
+            // failed commit cannot leak an OPEN handle for the vfs's lifetime;
+            // the commit error is still surfaced to the caller.
+            n00b_buffer_free(h->write_buf);
+            h->write_buf = nullptr;
+            h->state     = N00B_VFS_HANDLE_CLOSED;
             return n00b_result_err(bool, n00b_result_get_err(pr));
         }
         n00b_buffer_free(h->write_buf);
