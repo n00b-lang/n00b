@@ -25,7 +25,6 @@
  */
 #define N00B_USE_INTERNAL_API
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <inttypes.h>
@@ -46,6 +45,7 @@
 #include "net/quic/h3_types.h"
 #include "internal/net/quic/h3_internal.h"
 #include "internal/net/quic/chan_internal.h"
+#include "util/parse_num.h"
 
 /* ===========================================================================
  * Allocation helpers (conduit_pool throughout)
@@ -860,7 +860,8 @@ process_request_frame(n00b_h3_request_t      *req,
                                 ? fields[i].value_len : sizeof(nbuf) - 1;
                 memcpy(nbuf, fields[i].value, nl);
                 nbuf[nl] = '\0';
-                uint64_t declared = (uint64_t)strtoull(nbuf, nullptr, 10);
+                n00b_result_t(int64_t) dr = n00b_parse_i64_span(nbuf, nl);
+                uint64_t declared = n00b_result_is_ok(dr) ? (uint64_t)n00b_result_get(dr) : 0;
                 if (declared > req->max_body_size) {
                     req_trip_body_cap(req);
                     return n00b_result_ok(bool, true);

@@ -2,6 +2,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <stdio.h>
+#include "internal/text/unicode/raw.h"
 #include "compiler/objfile/pe.h"
 #include "compiler/objfile/demangle.h"
 #include "compiler/objfile/md5.h"
@@ -192,7 +193,7 @@ n00b_pe_import_by_name(n00b_pe_binary_t *bin, const char *dll)
 
     for (uint32_t i = 0; i < bin->num_imports; i++) {
         if (bin->imports[i].name
-            && strcasecmp(bin->imports[i].name->data, dll) == 0) {
+            && n00b_unicode_casecmp_raw(bin->imports[i].name->data, (int64_t)bin->imports[i].name->u8_bytes, dll, (int64_t)strlen(dll)) == 0) {
             return &bin->imports[i];
         }
     }
@@ -408,7 +409,7 @@ n00b_pe_delay_import_by_name(n00b_pe_binary_t *bin, const char *dll)
 
     for (uint32_t i = 0; i < bin->num_delay_imports; i++) {
         if (bin->delay_imports[i].name
-            && strcasecmp(bin->delay_imports[i].name->data, dll) == 0) {
+            && n00b_unicode_casecmp_raw(bin->delay_imports[i].name->data, (int64_t)bin->delay_imports[i].name->u8_bytes, dll, (int64_t)strlen(dll)) == 0) {
             return &bin->delay_imports[i];
         }
     }
@@ -635,7 +636,7 @@ n00b_pe_imphash(n00b_pe_binary_t *bin)
         if (dll_len > 4) {
             const char *suffix = imp->name->data + dll_len - 4;
 
-            if (strcasecmp(suffix, ".dll") == 0) {
+            if (n00b_unicode_casecmp_raw(suffix, (int64_t)strlen(suffix), ".dll", (int64_t)strlen(".dll")) == 0) {
                 dll_len -= 4;
             }
         }
@@ -674,7 +675,7 @@ n00b_pe_imphash(n00b_pe_binary_t *bin)
         size_t dll_len = strlen(imp->name->data);
         const char *dll_ext_check = imp->name->data + dll_len - 4;
 
-        if (dll_len > 4 && strcasecmp(dll_ext_check, ".dll") == 0) {
+        if (dll_len > 4 && n00b_unicode_casecmp_raw(dll_ext_check, (int64_t)strlen(dll_ext_check), ".dll", (int64_t)strlen(".dll")) == 0) {
             dll_len -= 4;
         }
 

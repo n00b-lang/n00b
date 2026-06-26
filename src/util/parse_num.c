@@ -90,6 +90,87 @@ n00b_parse_i64_string(n00b_string_t *s)
     return n00b_parse_i64_span(s->data, s->u8_bytes);
 }
 
+n00b_result_t(int64_t)
+n00b_parse_i64_base_span(const char *s, size_t len, int base)
+{
+    size_t i = 0;
+    while (i < len && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n'
+                       || s[i] == '\r' || s[i] == '\v' || s[i] == '\f')) {
+        i++;
+    }
+
+    bool neg = false;
+    if (i < len && (s[i] == '+' || s[i] == '-')) {
+        neg = (s[i] == '-');
+        i++;
+    }
+
+    // strtol base semantics: resolve base 0 from the prefix, and consume a
+    // "0x"/"0X" prefix when the (resolved) base is 16. A bare leading '0' under
+    // base 0 selects octal and is itself a valid octal digit (kept, not skipped).
+    if (base == 0) {
+        if (i + 1 < len && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X')) {
+            base = 16;
+            i += 2;
+        }
+        else if (i < len && s[i] == '0') {
+            base = 8;
+        }
+        else {
+            base = 10;
+        }
+    }
+    else if (base == 16 && i + 1 < len && s[i] == '0'
+             && (s[i + 1] == 'x' || s[i + 1] == 'X')) {
+        i += 2;
+    }
+
+    if (base < 2 || base > 36) {
+        return n00b_result_err(int64_t, N00B_PARSE_ERR_NO_DIGITS);
+    }
+
+    size_t         first    = i;
+    uint64_t       acc      = 0;
+    const uint64_t cap      = neg ? (uint64_t)INT64_MAX + 1u
+                                  : (uint64_t)INT64_MAX;
+    const uint64_t ubase    = (uint64_t)base;
+    bool           overflow = false;
+
+    for (; i < len; i++) {
+        char c = s[i];
+        int  d;
+        if (c >= '0' && c <= '9') {
+            d = c - '0';
+        }
+        else if (c >= 'a' && c <= 'z') {
+            d = c - 'a' + 10;
+        }
+        else if (c >= 'A' && c <= 'Z') {
+            d = c - 'A' + 10;
+        }
+        else {
+            break;
+        }
+        if (d >= base) {
+            break;
+        }
+        if (acc > (UINT64_MAX - (uint64_t)d) / ubase
+            || acc * ubase + (uint64_t)d > cap) {
+            overflow = true;
+            continue;
+        }
+        acc = acc * ubase + (uint64_t)d;
+    }
+
+    if (i == first) {
+        return n00b_result_err(int64_t, N00B_PARSE_ERR_NO_DIGITS);
+    }
+    if (overflow) {
+        return n00b_result_err(int64_t, N00B_PARSE_ERR_OVERFLOW);
+    }
+    return n00b_result_ok(int64_t, neg ? -(int64_t)acc : (int64_t)acc);
+}
+
 /* Powers of ten that are exactly representable as doubles. 10^k = 2^k * 5^k;
  * 5^22 < 2^52, so 10^0..10^22 each fit in the 53-bit significand exactly.
  * 10^23 is the first power that is not exact, so the table stops at 22. */

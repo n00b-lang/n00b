@@ -15,10 +15,9 @@
 #include "parsers/scanner.h"
 #include "parsers/scan_recipes.h"
 #include "parsers/token_stream.h"
+#include "util/parse_num.h"
 #include <assert.h>
-#include <ctype.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 // ============================================================================
@@ -1003,7 +1002,13 @@ parse_child_ref(void *result)
 
     if (tok->tid == BNF_TOK_DOLLAR) {
         n00b_string_t *val = tok_str(tok);
-        int32_t        ix  = val ? (int32_t)atoi(val->data) : -1;
+        int32_t        ix  = -1;
+        if (val) {
+            n00b_result_t(int64_t) pr_ix = n00b_parse_i64_span(val->data,
+                                                               val->u8_bytes);
+            ix = (int32_t)(n00b_result_is_ok(pr_ix) ? n00b_result_get(pr_ix)
+                                                     : 0);
+        }
         return (n00b_child_ref_t){.kind = N00B_ROLE_BY_INDEX, .index = ix};
     }
 
@@ -1444,7 +1449,12 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             n00b_string_t     *cost_val = tok_str(cost_tok);
 
             if (cost_val) {
-                info->penalty_cost = (int32_t)strtol(cost_val->data, NULL, 10);
+                n00b_result_t(int64_t) pr_cost
+                    = n00b_parse_i64_span(cost_val->data, cost_val->u8_bytes);
+                int64_t cost_v = n00b_result_is_ok(pr_cost)
+                                     ? n00b_result_get(pr_cost)
+                                     : 0;
+                info->penalty_cost = (int32_t)cost_v;
             }
         }
 

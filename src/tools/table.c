@@ -7,7 +7,6 @@
  */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
 #include <unistd.h>
@@ -19,6 +18,7 @@
 #include "core/runtime.h"
 #include "core/string.h"
 #include "text/strings/string_ops.h"
+#include "util/parse_num.h" // n00b_parse_i64[_base]_span (locale-free, not strtol/atoi)
 #include "text/strings/text_style.h"
 #include "text/strings/style_ops.h"
 #include "text/strings/theme.h"
@@ -116,10 +116,24 @@ parse_hex_color(const char *str, n00b_color_t *out)
         str++;
     }
 
-    char *end  = nullptr;
-    long  val  = strtol(str, &end, 16);
+    // libc-free hex parse (strtol is locale-aware → segfaults on off-libc worker
+    // threads). Scan an optional "0x" prefix + the hex-digit run to reproduce
+    // strtol's endptr-based full-consumption check, then parse the span base 16.
+    const char *end = str;
+    if (end[0] == '0' && (end[1] == 'x' || end[1] == 'X')) {
+        end += 2;
+    }
+    const char *digit_start = end;
+    while ((*end >= '0' && *end <= '9') || (*end >= 'a' && *end <= 'f')
+           || (*end >= 'A' && *end <= 'F')) {
+        end++;
+    }
+    n00b_result_t(int64_t) cr = n00b_parse_i64_base_span(str,
+                                                         (size_t)(end - str),
+                                                         16);
+    long val = n00b_result_is_ok(cr) ? (long)n00b_result_get(cr) : -1;
 
-    if (end == str || *end != '\0' || val < 0 || val > 0xffffff) {
+    if (end == digit_start || *end != '\0' || val < 0 || val > 0xffffff) {
         return false;
     }
 
@@ -271,7 +285,9 @@ main(int argc, char **argv)
                 fprintf(stderr, "Error: -w requires an argument\n");
                 return 1;
             }
-            width = atoi(argv[i]);
+            n00b_result_t(int64_t) wr = n00b_parse_i64_span(argv[i],
+                                                            strlen(argv[i]));
+            width = n00b_result_is_ok(wr) ? (int)n00b_result_get(wr) : 0;
 
             if (width <= 0) {
                 fprintf(stderr, "Error: invalid width '%s'\n", argv[i]);

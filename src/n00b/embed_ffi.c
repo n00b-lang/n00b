@@ -23,6 +23,7 @@
 #include "text/strings/string_convert.h" // n00b_unicode_str_to_cstr (MIR edge)
 #include "core/type_info.h"
 #include "parsers/scan_recipes.h"
+#include "util/parse_num.h" // n00b_parse_i64_base_span (locale-free, not strtol)
 
 #include <stdio.h>
 #include <string.h>
@@ -811,7 +812,8 @@ parse_default_int(n00b_string_t *val)
     memcpy(buf, s, copy);
     buf[copy] = '\0';
 
-    return strtol(buf, nullptr, 0);
+    n00b_result_t(int64_t) r = n00b_parse_i64_base_span(buf, copy, 0);
+    return n00b_result_is_ok(r) ? n00b_result_get(r) : 0;
 }
 
 // ============================================================================

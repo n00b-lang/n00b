@@ -19,7 +19,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <dlfcn.h>
 #include <stdatomic.h>
 
@@ -33,6 +32,7 @@
 #include "adt/result.h"
 #include "internal/net/http/http_compression.h"
 #include "internal/net/http/http_url.h"  /* for N00B_HTTP_ERR_* */
+#include "internal/text/unicode/raw.h" // n00b_unicode_casecmp_raw (locale-free)
 
 /* ----------------------------------------------------------------- */
 /* Helpers                                                           */
@@ -492,16 +492,16 @@ n00b_http_compress(n00b_buffer_t *src, const char *encoding)
     }
     n00b_allocator_t *a = allocator ? allocator : default_pool();
     if (!encoding || !*encoding
-        || strcasecmp(encoding, "identity") == 0) {
+        || n00b_unicode_casecmp_raw(encoding, (int64_t)strlen(encoding), "identity", (int64_t)strlen("identity")) == 0) {
         return n00b_result_ok(n00b_buffer_t *,
                               buffer_with_data(
                                   (const uint8_t *)src->data,
                                   (size_t)src->byte_len, a));
     }
-    if (strcasecmp(encoding, "gzip") == 0) {
+    if (n00b_unicode_casecmp_raw(encoding, (int64_t)strlen(encoding), "gzip", (int64_t)strlen("gzip")) == 0) {
         return deflate_buffer(src, MAX_WBITS + 16, level, a);
     }
-    if (strcasecmp(encoding, "deflate") == 0) {
+    if (n00b_unicode_casecmp_raw(encoding, (int64_t)strlen(encoding), "deflate", (int64_t)strlen("deflate")) == 0) {
         return deflate_buffer(src, MAX_WBITS, level, a);
     }
     return n00b_result_err(n00b_buffer_t *,
@@ -522,24 +522,24 @@ n00b_http_decompress(n00b_buffer_t *src, const char *encoding)
 
     /* Empty / nullptr / "identity" → pass-through copy. */
     if (!encoding || !*encoding
-        || strcasecmp(encoding, "identity") == 0) {
+        || n00b_unicode_casecmp_raw(encoding, (int64_t)strlen(encoding), "identity", (int64_t)strlen("identity")) == 0) {
         return n00b_result_ok(n00b_buffer_t *,
                               buffer_with_data(
                                   (const uint8_t *)src->data,
                                   (size_t)src->byte_len, a));
     }
 
-    if (strcasecmp(encoding, "gzip") == 0
-        || strcasecmp(encoding, "x-gzip") == 0) {
+    if (n00b_unicode_casecmp_raw(encoding, (int64_t)strlen(encoding), "gzip", (int64_t)strlen("gzip")) == 0
+        || n00b_unicode_casecmp_raw(encoding, (int64_t)strlen(encoding), "x-gzip", (int64_t)strlen("x-gzip")) == 0) {
         return decode_gzip(src, max_size, a);
     }
-    if (strcasecmp(encoding, "deflate") == 0) {
+    if (n00b_unicode_casecmp_raw(encoding, (int64_t)strlen(encoding), "deflate", (int64_t)strlen("deflate")) == 0) {
         return decode_deflate(src, max_size, a);
     }
-    if (strcasecmp(encoding, "br") == 0) {
+    if (n00b_unicode_casecmp_raw(encoding, (int64_t)strlen(encoding), "br", (int64_t)strlen("br")) == 0) {
         return decode_brotli(src, max_size, a);
     }
-    if (strcasecmp(encoding, "zstd") == 0) {
+    if (n00b_unicode_casecmp_raw(encoding, (int64_t)strlen(encoding), "zstd", (int64_t)strlen("zstd")) == 0) {
         return decode_zstd(src, max_size, a);
     }
     /* Unknown encoding. */

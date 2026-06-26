@@ -51,6 +51,23 @@ extern n00b_result_t(int64_t) n00b_parse_i64_buffer(n00b_buffer_t *b);
 extern n00b_result_t(int64_t) n00b_parse_i64_string(n00b_string_t *s);
 
 /**
+ * @brief Parse an optionally-signed integer in an explicit @p base from a span.
+ *
+ * The libc-free analogue of strtol/strtoll with a base. Skips leading ASCII
+ * whitespace + an optional sign, then (per strtol's base semantics):
+ *   - @p base == 0  : "0x"/"0X" prefix -> base 16, a leading '0' -> base 8,
+ *                     otherwise base 10.
+ *   - @p base == 16 : an optional "0x"/"0X" prefix is consumed.
+ *   - 2..36         : digits 0-9 then a-z/A-Z (value 10..35), each < base.
+ * Digits are consumed until the first character not valid for the resolved base.
+ *
+ * @return ok(value); err(N00B_PARSE_ERR_NO_DIGITS) when no valid digit follows;
+ *         err(N00B_PARSE_ERR_OVERFLOW) when the value exceeds the int64 range.
+ */
+extern n00b_result_t(int64_t)
+    n00b_parse_i64_base_span(const char *s, size_t len, int base);
+
+/**
  * @brief Parse a base-10 floating-point number from a byte span, libc-free.
  *
  * Accepts the JSON number grammar: optional leading ASCII whitespace, optional

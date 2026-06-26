@@ -12,6 +12,7 @@
 // For n00b_get_runtime()->system_pool — the non-moving, permanent pool
 // JIT string literals are allocated from (see default_literal_parser).
 #include "core/runtime.h"
+#include "util/parse_num.h" // n00b_parse_i64_span (locale-free, not strtoull)
 #include "internal/slay/codegen_internal.h"
 #include "n00b/n00b_compile_binary.h"
 #include "n00b/embed.h"
@@ -29,7 +30,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 
 static FILE *
 n00b_mir_open_code_len_trace(void)
@@ -90,8 +90,19 @@ n00b_mir_finish_code_len_trace(MIR_context_t ctx,
 
         p += 5;
 
-        char              *end    = nullptr;
-        unsigned long long parsed = strtoull(p, &end, 10);
+        // libc-free: scan the ASCII digit run (strtoull is locale-aware and
+        // segfaults on n00b worker threads with no glibc locale TLS), then parse
+        // the span. `end` lands just past the digits, preserving the *end check.
+        char *end = p;
+        while (*end >= '0' && *end <= '9') {
+            end++;
+        }
+        n00b_result_t(int64_t) pr     = n00b_parse_i64_span(p,
+                                                        (size_t)(end - p));
+        unsigned long long      parsed = n00b_result_is_ok(pr)
+                                             ? (unsigned long long)
+                                                   n00b_result_get(pr)
+                                             : 0;
 
         if (end != p && *end == ')') {
             if (found < func_count) {
@@ -2079,7 +2090,7 @@ codegen_call_args_have_kwargs(n00b_parse_tree_t *args_node, n00b_parse_tree_t **
 }
 
 // ============================================================================
-// Default literal parser (strtoll / strtod)
+// Default literal parser (n00b_parse_i64_base_span / n00b_parse_f64_span)
 // ============================================================================
 
 static n00b_cg_val_t
@@ -2141,14 +2152,23 @@ default_literal_parser(n00b_cg_session_t *s,
     }
 
     if (type_tag == N00B_CG_F64) {
-        return _n00b_cg_const_f64(s, strtod(buf, nullptr));
+        n00b_result_t(double) fr = n00b_parse_f64_span(buf, len);
+        return _n00b_cg_const_f64(s,
+                                  n00b_result_is_ok(fr) ? n00b_result_get(fr)
+                                                        : 0.0);
     }
 
     if (type_tag == N00B_CG_F32) {
-        return _n00b_cg_const_f32(s, strtof(buf, nullptr));
+        n00b_result_t(double) fr = n00b_parse_f64_span(buf, len);
+        return _n00b_cg_const_f32(s,
+                                  (float)(n00b_result_is_ok(fr)
+                                              ? n00b_result_get(fr)
+                                              : 0.0));
     }
 
-    return _n00b_cg_const_i64(s, strtoll(buf, nullptr, 0));
+    n00b_result_t(int64_t) ir = n00b_parse_i64_base_span(buf, len, 0);
+    return _n00b_cg_const_i64(s,
+                              n00b_result_is_ok(ir) ? n00b_result_get(ir) : 0);
 }
 
 // ============================================================================
@@ -7172,7 +7192,10 @@ codegen_enum_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node)
                             char vbuf[vtl + 1];
                             memcpy(vbuf, vt, vtl);
                             vbuf[vtl] = '\0';
-                            val       = strtoll(vbuf, nullptr, 0);
+                            n00b_result_t(int64_t) vr
+                                = n00b_parse_i64_base_span(vbuf, vtl, 0);
+                            val = n00b_result_is_ok(vr) ? n00b_result_get(vr)
+                                                        : 0;
                         }
                     }
 

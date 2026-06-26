@@ -6,8 +6,8 @@
 #include "core/string.h"
 #include "adt/option.h"
 #include "parsers/token_stream.h"
+#include "util/parse_num.h"
 
-#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -215,7 +215,8 @@ json_value_as_int(n00b_parse_tree_t *value)
         return 0;
     }
 
-    int v = atoi(s);
+    n00b_result_t(int64_t) pr_v = n00b_parse_i64_span(s, strlen(s));
+    int v = (int)(n00b_result_is_ok(pr_v) ? n00b_result_get(pr_v) : 0);
     n00b_free(s);
 
     return v;

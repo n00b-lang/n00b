@@ -19,7 +19,6 @@ _uctx(void)
     return n00b_get_runtime()->unicode_ctx;
 }
 
-#include <ctype.h>
 #include <string.h>
 
 // External tables from generated files
@@ -943,7 +942,7 @@ loose_eq_local(const char *a, const char *b)
             break;
         unsigned char ca = (unsigned char)*a++;
         unsigned char cb = (unsigned char)*b++;
-        if (tolower(ca) != tolower(cb))
+        if (((ca) >= 'A' && (ca) <= 'Z' ? (ca) + ('a' - 'A') : (ca)) != ((cb) >= 'A' && (cb) <= 'Z' ? (cb) + ('a' - 'A') : (cb)))
             return 0;
     }
     while (*a == ' ' || *a == '_' || *a == '-')

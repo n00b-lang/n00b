@@ -2,7 +2,6 @@
 #include "n00b.h"
 #include "core/alloc.h"
 
-#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -149,9 +148,9 @@ lex_tokenize(dsl_lexer_t *lex)
         char        c          = lex_peek(lex);
 
         // Integer literal (or negative).
-        if (isdigit((unsigned char)c)
+        if ((c >= '0' && c <= '9')
             || (c == '-' && lex->pos + 1 < lex->src_len
-                && isdigit((unsigned char)lex->src[lex->pos + 1]))) {
+                && (lex->src[lex->pos + 1] >= '0' && lex->src[lex->pos + 1] <= '9'))) {
             bool negative = false;
             if (c == '-') {
                 negative = true;
@@ -160,7 +159,7 @@ lex_tokenize(dsl_lexer_t *lex)
 
             int64_t val = 0;
             while (lex->pos < lex->src_len
-                   && isdigit((unsigned char)lex_peek(lex))) {
+                   && (lex_peek(lex) >= '0' && lex_peek(lex) <= '9')) {
                 val = val * 10 + (lex_peek(lex) - '0');
                 lex_advance(lex);
             }
@@ -182,10 +181,10 @@ lex_tokenize(dsl_lexer_t *lex)
         }
 
         // Identifiers and keywords.
-        if (isalpha((unsigned char)c) || c == '_') {
+        if ((((c) >= 'a' && (c) <= 'z') || ((c) >= 'A' && (c) <= 'Z')) || c == '_') {
             while (lex->pos < lex->src_len) {
                 char ch = lex_peek(lex);
-                if (isalnum((unsigned char)ch) || ch == '_') {
+                if ((((ch) >= '0' && (ch) <= '9') || ((ch) >= 'a' && (ch) <= 'z') || ((ch) >= 'A' && (ch) <= 'Z')) || ch == '_') {
                     lex_advance(lex);
                 }
                 else {
@@ -200,7 +199,7 @@ lex_tokenize(dsl_lexer_t *lex)
             if (len == 1 && start[0] == '_') {
                 kind = TOK_UNDERSCORE;
             }
-            else if (isupper((unsigned char)start[0]) || start[0] == '_') {
+            else if (((start[0]) >= 'A' && (start[0]) <= 'Z') || start[0] == '_') {
                 kind = TOK_VAR;
             }
             else {
@@ -1918,7 +1917,7 @@ dsl_solve_all_adapter(n00b_csp_store_t *s, void *raw_ctx)
 static bool
 is_var_name(n00b_string_t *name)
 {
-    return name && name->u8_bytes > 0 && isupper((unsigned char)name->data[0]);
+    return name && name->u8_bytes > 0 && ((name->data[0]) >= 'A' && (name->data[0]) <= 'Z');
 }
 
 static n00b_dl_sym_t

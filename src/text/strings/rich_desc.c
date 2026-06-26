@@ -5,7 +5,6 @@
 #include "core/hash.h"
 #include "core/runtime.h"
 #include <string.h>
-#include <ctype.h>
 #include <stddef.h>
 
 // ===================================================================
@@ -194,7 +193,9 @@ emit_tag(seg_list_t *sl, const char *tag_body, int tag_len)
             // Parse optional index
             int idx       = 0;
             int idx_chars = 0;
-            while (idx_chars < rem && isdigit((unsigned char)p[idx_chars])) {
+            // libc-free ASCII digit check (isdigit is locale-aware and segfaults
+            // on n00b worker threads with no glibc locale TLS — see the http purge).
+            while (idx_chars < rem && p[idx_chars] >= '0' && p[idx_chars] <= '9') {
                 idx = idx * 10 + (p[idx_chars] - '0');
                 idx_chars++;
             }

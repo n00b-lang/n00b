@@ -55,6 +55,7 @@
 #include "conduit/fd_managed.h"
 #include "core/runtime.h"
 #include "text/strings/format.h"
+#include "internal/text/unicode/raw.h" // n00b_unicode_casecmp_raw (locale-free)
 #include "net/dns.h"
 #include "net/quic/quic_types.h"
 #include "net/quic/h3.h"
@@ -375,7 +376,7 @@ n00b_http_response_header(n00b_http_response_t *resp, n00b_string_t *name)
     for (size_t i = 0; i < resp->n_headers; i++) {
         n00b_string_t *n = resp->headers[i].name;
         if (n->u8_bytes == name->u8_bytes
-            && strncasecmp(n->data, name->data, n->u8_bytes) == 0) {
+            && n00b_unicode_casecmp_raw(n->data, (int64_t)n->u8_bytes, name->data, (int64_t)name->u8_bytes) == 0) {
             return resp->headers[i].value;
         }
     }
@@ -390,7 +391,7 @@ n00b_http_response_header_cstr(n00b_http_response_t *resp, const char *name)
     for (size_t i = 0; i < resp->n_headers; i++) {
         n00b_string_t *hn = resp->headers[i].name;
         if (hn->u8_bytes != nlen) continue;
-        if (strncasecmp(hn->data, name, nlen) != 0) continue;
+        if (n00b_unicode_casecmp_raw(hn->data, (int64_t)nlen, name, (int64_t)nlen) != 0) continue;
         n00b_buffer_t *val = resp->headers[i].value;
         if (!val) return nullptr;
         size_t vlen = (size_t)val->byte_len;
@@ -1835,7 +1836,7 @@ n00b_http_request_sync(n00b_string_t *url)
                 n00b_buffer_t *value = resp->headers[i].value;
                 if (!name || !value) continue;
                 if (name->u8_bytes != 10) continue;
-                if (strncasecmp(name->data, "set-cookie", 10) != 0) {
+                if (n00b_unicode_casecmp_raw(name->data, 10, "set-cookie", 10) != 0) {
                     continue;
                 }
                 /* value is a buffer; copy to NUL-terminated for the

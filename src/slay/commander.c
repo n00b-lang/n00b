@@ -7,10 +7,10 @@
 #include "adt/option.h"
 #include "core/hash.h"
 #include "text/strings/string_ops.h"
+#include "util/parse_num.h"
 
 #include <assert.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 // ============================================================================
@@ -884,20 +884,31 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
                     i++;
                     n00b_string_t *val = n00b_list_get(texts, i);
 
-                    // Need a null-terminated copy for strtoll/strtod
+                    // Need a contiguous copy to parse (n00b number parsers)
                     char *cval = n00b_alloc_array(char, val->u8_bytes + 1);
                     memcpy(cval, val->data, val->u8_bytes);
+
+                    n00b_result_t(int64_t) pr_cval_i = n00b_parse_i64_span(cval,
+                                                                           strlen(cval));
+                    int64_t cval_i = n00b_result_is_ok(pr_cval_i)
+                                         ? n00b_result_get(pr_cval_i)
+                                         : 0;
+                    n00b_result_t(double) pr_cval_f = n00b_parse_f64_span(cval,
+                                                                          strlen(cval));
+                    double cval_f = n00b_result_is_ok(pr_cval_f)
+                                        ? n00b_result_get(pr_cval_f)
+                                        : 0.0;
 
                     switch (flag.value_type) {
                     case N00B_CMDR_TYPE_INT:
                         *v = n00b_variant_set(n00b_cmdr_val_t,
                                               int64_t,
-                                              strtoll(cval, NULL, 10));
+                                              cval_i);
                         break;
                     case N00B_CMDR_TYPE_FLOAT:
                         *v = n00b_variant_set(n00b_cmdr_val_t,
                                               double,
-                                              strtod(cval, NULL));
+                                              cval_f);
                         break;
                     case N00B_CMDR_TYPE_BOOL:
                         *v = n00b_variant_set(n00b_cmdr_val_t,
@@ -948,8 +959,16 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
         char *ctext = n00b_alloc_array(char, text->u8_bytes + 1);
         memcpy(ctext, text->data, text->u8_bytes);
 
-        arg.int_val   = strtoll(ctext, NULL, 10);
-        arg.float_val = strtod(ctext, NULL);
+        n00b_result_t(int64_t) pr_ctext_i = n00b_parse_i64_span(ctext,
+                                                                strlen(ctext));
+        n00b_result_t(double) pr_ctext_f = n00b_parse_f64_span(ctext,
+                                                               strlen(ctext));
+        arg.int_val   = n00b_result_is_ok(pr_ctext_i)
+                            ? n00b_result_get(pr_ctext_i)
+                            : 0;
+        arg.float_val = n00b_result_is_ok(pr_ctext_f)
+                            ? n00b_result_get(pr_ctext_f)
+                            : 0.0;
 
         n00b_free(ctext);
 

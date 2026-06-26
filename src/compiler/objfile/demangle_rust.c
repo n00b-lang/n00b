@@ -7,7 +7,6 @@
  * entry points consumed by n00b_demangle.c.
  */
 
-#include <ctype.h>
 #include <stdbool.h>
 #include <stdckdint.h>
 #include <stdint.h>
@@ -145,7 +144,7 @@ rmatch_str(rust_ctx_t *ctx, const char *s)
 static bool
 rparse_decimal(rust_ctx_t *ctx, uint64_t *out)
 {
-    if (rat_end(ctx) || !isdigit(*ctx->pos)) return false;
+    if (rat_end(ctx) || !(*ctx->pos >= '0' && *ctx->pos <= '9')) return false;
 
     // RFC 2603: decimal-number = "0" | non-zero-digit {digit}
     // Leading zero means value is exactly 0; don't consume further digits.
@@ -156,7 +155,7 @@ rparse_decimal(rust_ctx_t *ctx, uint64_t *out)
     }
 
     *out = 0;
-    while (!rat_end(ctx) && isdigit(*ctx->pos)) {
+    while (!rat_end(ctx) && (*ctx->pos >= '0' && *ctx->pos <= '9')) {
         uint64_t next;
         if (ckd_mul(&next, *out, (uint64_t)10) || ckd_add(&next, next, (uint64_t)(*ctx->pos - '0'))) {
             ctx->error = true;
@@ -588,7 +587,7 @@ rust_path(rust_ctx_t *ctx)
     // nested-path → "N" namespace path identifier
     if (tag == 'N') {
         ctx->pos++;
-        if (rat_end(ctx) || !isalpha(*ctx->pos)) { ctx->depth--; return false; }
+        if (rat_end(ctx) || !(((*ctx->pos) >= 'a' && (*ctx->pos) <= 'z') || ((*ctx->pos) >= 'A' && (*ctx->pos) <= 'Z'))) { ctx->depth--; return false; }
         char ns = *ctx->pos;
         ctx->pos++;
 
@@ -811,7 +810,7 @@ rust_symbol_name(rust_ctx_t *ctx)
     if (!rmatch_str(ctx, "_R")) return false;
 
     // Optional version
-    if (!rat_end(ctx) && isdigit(*ctx->pos) && *ctx->pos != '0') {
+    if (!rat_end(ctx) && (*ctx->pos >= '0' && *ctx->pos <= '9') && *ctx->pos != '0') {
         uint64_t ver;
         rparse_decimal(ctx, &ver);
         if (ver != 0) return false;

@@ -8,7 +8,6 @@
 
 #include "compiler/objfile/demangle.h"
 
-#include <ctype.h>
 #include <stdarg.h>
 #include <stdckdint.h>
 #include <stdio.h>
@@ -214,10 +213,10 @@ static bool
 dm_parse_number(dm_state_t *st, int64_t *out)
 {
     bool neg = consume(st, 'n');
-    if (!isdigit(peek(st))) return false;
+    if (!(peek(st) >= '0' && peek(st) <= '9')) return false;
 
     int64_t val = 0;
-    while (isdigit(peek(st))) {
+    while (peek(st) >= '0' && peek(st) <= '9') {
         int64_t next;
         if (ckd_mul(&next, val, 10) || ckd_add(&next, next, (int64_t)(peek(st) - '0'))) {
             st->error = true;
@@ -233,10 +232,10 @@ dm_parse_number(dm_state_t *st, int64_t *out)
 static bool
 parse_positive_int(dm_state_t *st, size_t *out)
 {
-    if (!isdigit(peek(st))) return false;
+    if (!(peek(st) >= '0' && peek(st) <= '9')) return false;
 
     size_t val = 0;
-    while (isdigit(peek(st))) {
+    while (peek(st) >= '0' && peek(st) <= '9') {
         size_t next;
         if (ckd_mul(&next, val, (size_t)10) || ckd_add(&next, next, (size_t)(peek(st) - '0'))) {
             st->error = true;
@@ -580,7 +579,7 @@ dm_parse_type(dm_state_t *st)
     if (c == 'A') {
         st->pos++;
         int64_t sz = -1;
-        if (isdigit(peek(st))) dm_parse_number(st, &sz);
+        if (peek(st) >= '0' && peek(st) <= '9') dm_parse_number(st, &sz);
         if (!consume(st, '_')) return false;
         if (!dm_parse_type(st)) return false;
         dm_append(st, "[");
@@ -643,7 +642,7 @@ dm_parse_type(dm_state_t *st)
         if (peek(st) == 'I') dm_parse_template_args(st);
         goto add_cv;
     }
-    if (isdigit(c)) {
+    if (c >= '0' && c <= '9') {
         if (!dm_parse_source_name(st)) return false;
         if (peek(st) == 'I') dm_parse_template_args(st);
         goto add_cv;
@@ -783,7 +782,7 @@ dm_parse_expression(dm_state_t *st)
         st->pos++;
         if (!dm_parse_type(st)) { --st->depth; return false; }
         while (!consume(st, 'E') && !at_end(st)) {
-            if (isdigit(peek(st)) || peek(st) == 'n') {
+            if ((peek(st) >= '0' && peek(st) <= '9') || peek(st) == 'n') {
                 int64_t val;
                 dm_parse_number(st, &val);
                 char buf[32];
@@ -856,7 +855,7 @@ dm_parse_nested_name(dm_state_t *st)
         }
         if (dm_parse_operator_name(st)) { first = false; continue; }
 
-        if (isdigit(peek(st))) {
+        if (peek(st) >= '0' && peek(st) <= '9') {
             if (!dm_parse_source_name(st)) return false;
 
             class_name_off = name_start;
@@ -933,7 +932,7 @@ static bool
 dm_parse_unscoped_name(dm_state_t *st)
 {
     if (consume_str(st, "St")) dm_append(st, "std::");
-    if (isdigit(peek(st))) return dm_parse_source_name(st);
+    if (peek(st) >= '0' && peek(st) <= '9') return dm_parse_source_name(st);
     return dm_parse_operator_name(st);
 }
 
@@ -961,7 +960,7 @@ dm_parse_name(dm_state_t *st)
         dm_append(st, "::");
         if (consume(st, 's')) {
             int64_t disc;
-            if (isdigit(peek(st))) dm_parse_number(st, &disc);
+            if (peek(st) >= '0' && peek(st) <= '9') dm_parse_number(st, &disc);
             return true;
         }
         return dm_parse_name(st);
@@ -988,7 +987,7 @@ dm_parse_encoding(dm_state_t *st)
         if (c2 == 'c') {
             st->pos += 2;
             dm_append(st, "construction vtable for ");
-            while (peek(st) != 'N' && !at_end(st) && !isdigit(peek(st)))
+            while (peek(st) != 'N' && !at_end(st) && !(peek(st) >= '0' && peek(st) <= '9'))
                 st->pos++;
             return dm_parse_encoding(st);
         }

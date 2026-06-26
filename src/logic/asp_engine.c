@@ -1,7 +1,7 @@
 #include "logic/asp_engine.h"
+#include "util/parse_num.h"
 
 #include <assert.h>
-#include <stdlib.h>
 #include <string.h>
 
 #define ENGINE_INIT_REL_CAP 16
@@ -164,7 +164,10 @@ n00b_dl_sym_to_int64(n00b_dl_engine_t *eng, n00b_dl_sym_t sym)
     if (!name || name->u8_bytes == 0 || name->data[0] != '#') {
         return n00b_result_err(int64_t, EINVAL);
     }
-    return n00b_result_ok(int64_t, strtoll(name->data + 1, nullptr, 10));
+    n00b_result_t(int64_t) pr_sym = n00b_parse_i64_span(name->data + 1,
+                                                        name->u8_bytes - 1);
+    int64_t sym_v = n00b_result_is_ok(pr_sym) ? n00b_result_get(pr_sym) : 0;
+    return n00b_result_ok(int64_t, sym_v);
 }
 
 // ---------------------------------------------------------------------------

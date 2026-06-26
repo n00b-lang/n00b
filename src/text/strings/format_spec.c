@@ -6,7 +6,6 @@
 #include "internal/text/unicode/raw.h"
 #include "core/alloc.h"
 #include <string.h>
-#include <ctype.h>
 #include <stdio.h>
 #include <math.h>
 #include <assert.h>
@@ -55,9 +54,9 @@ n00b_format_spec_parse(const char *spec, int spec_len)
     }
 
     // Parse width.
-    if (i < spec_len && isdigit((unsigned char)spec[i])) {
+    if (i < spec_len && (spec[i] >= '0' && spec[i] <= '9')) {
         int w = 0;
-        while (i < spec_len && isdigit((unsigned char)spec[i])) {
+        while (i < spec_len && (spec[i] >= '0' && spec[i] <= '9')) {
             w = w * 10 + (spec[i] - '0');
             i++;
         }
@@ -69,7 +68,7 @@ n00b_format_spec_parse(const char *spec, int spec_len)
     if (i < spec_len && spec[i] == '.') {
         i++;
         int p = 0;
-        while (i < spec_len && isdigit((unsigned char)spec[i])) {
+        while (i < spec_len && (spec[i] >= '0' && spec[i] <= '9')) {
             p = p * 10 + (spec[i] - '0');
             i++;
         }

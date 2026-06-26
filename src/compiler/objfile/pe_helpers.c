@@ -1,5 +1,5 @@
 #include <string.h>
-#include <strings.h>  // strcasecmp
+#include "internal/text/unicode/raw.h"
 #include "compiler/objfile/pe_build.h"
 
 // ============================================================================
@@ -198,7 +198,7 @@ n00b_pe_remove_import(n00b_pe_binary_t *bin, const char *dll_name)
 
     for (uint32_t i = 0; i < bin->num_imports; i++) {
         if (bin->imports[i].name
-            && strcasecmp(bin->imports[i].name->data, dll_name) == 0) {
+            && n00b_unicode_casecmp_raw(bin->imports[i].name->data, (int64_t)bin->imports[i].name->u8_bytes, dll_name, (int64_t)strlen(dll_name)) == 0) {
             for (uint32_t j = i; j + 1 < bin->num_imports; j++) {
                 bin->imports[j] = bin->imports[j + 1];
             }

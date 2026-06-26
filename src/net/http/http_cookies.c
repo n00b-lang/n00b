@@ -12,8 +12,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
-#include <ctype.h>
 #include <time.h>
 #include <dlfcn.h>
 #include <stdatomic.h>
@@ -26,6 +24,7 @@
 #include "core/time.h"
 #include "util/parse_num.h"
 #include "internal/net/http/http_cookies.h"
+#include "internal/text/unicode/raw.h" // n00b_unicode_casecmp_raw (locale-free)
 
 /* ----------------------------------------------------------------- */
 /* Public-Suffix-List (libpsl, dlopen'd opportunistically)           */
@@ -116,7 +115,7 @@ builtin_is_suffix(const char *domain)
         "ne.jp", "or.jp", "ac.uk", "gov.uk", "org.uk",
     };
     for (size_t i = 0; i < sizeof(common) / sizeof(*common); i++) {
-        if (strcasecmp(domain, common[i]) == 0) return true;
+        if (n00b_unicode_casecmp_raw(domain, (int64_t)strlen(domain), common[i], (int64_t)strlen(common[i])) == 0) return true;
     }
     return false;
 }
@@ -173,7 +172,7 @@ same_site(const char *request_host, n00b_string_t *cookie_domain)
     const char *r = registered_domain(request_host);
     const char *c = registered_domain(cookie_domain->data);
     if (!r || !c) return false;
-    return strcasecmp(r, c) == 0;
+    return n00b_unicode_casecmp_raw(r, (int64_t)strlen(r), c, (int64_t)strlen(c)) == 0;
 }
 
 /* ----------------------------------------------------------------- */
@@ -220,7 +219,7 @@ static bool
 str_eq_ci(const char *a, size_t alen, const char *b)
 {
     size_t blen = strlen(b);
-    return alen == blen && strncasecmp(a, b, alen) == 0;
+    return alen == blen && n00b_unicode_casecmp_raw(a, (int64_t)alen, b, (int64_t)alen) == 0;
 }
 
 static bool
@@ -228,7 +227,7 @@ nstr_eq_ci(n00b_string_t *a, n00b_string_t *b)
 {
     if (!a || !b) return a == b;
     return a->u8_bytes == b->u8_bytes
-        && strncasecmp(a->data, b->data, a->u8_bytes) == 0;
+        && n00b_unicode_casecmp_raw(a->data, (int64_t)a->u8_bytes, b->data, (int64_t)a->u8_bytes) == 0;
 }
 
 /* RFC 6265 § 5.1.3 — domain match.  @p host is the request's
@@ -239,15 +238,15 @@ domain_match(const char *host, size_t hlen, n00b_string_t *domain)
     if (!domain || domain->u8_bytes == 0) return false;
     /* Identical match. */
     if (hlen == domain->u8_bytes
-        && strncasecmp(host, domain->data, hlen) == 0) {
+        && n00b_unicode_casecmp_raw(host, (int64_t)hlen, domain->data, (int64_t)hlen) == 0) {
         return true;
     }
     /* Suffix match: host ends in `.domain` and host is not an IP. */
     if (hlen > domain->u8_bytes + 1) {
         const char *suffix = host + hlen - domain->u8_bytes;
         if (*(suffix - 1) == '.'
-            && strncasecmp(suffix, domain->data,
-                           domain->u8_bytes) == 0) {
+            && n00b_unicode_casecmp_raw(suffix, (int64_t)domain->u8_bytes,
+                                        domain->data, (int64_t)domain->u8_bytes) == 0) {
             /* Reject if host is dotted-quad IPv4 (a heuristic; full
              * IPv6 / IPv4 detection is the public-suffix-list's
              * domain).  The dispatcher always passes hostnames to
@@ -680,8 +679,8 @@ n00b_http_cookie_jar_header_for(n00b_http_cookie_jar_t *jar,
         /* Domain match. */
         if (c->host_only) {
             if (c->domain->u8_bytes != url->host->u8_bytes
-                || strncasecmp(c->domain->data, url->host->data,
-                                c->domain->u8_bytes) != 0) {
+                || n00b_unicode_casecmp_raw(c->domain->data, (int64_t)c->domain->u8_bytes,
+                                            url->host->data, (int64_t)c->domain->u8_bytes) != 0) {
                 continue;
             }
         } else {

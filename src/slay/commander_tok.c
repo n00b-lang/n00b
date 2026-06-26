@@ -5,8 +5,6 @@
 #include "adt/list.h"
 #include "adt/option.h"
 
-#include <ctype.h>
-#include <stdlib.h>
 #include <string.h>
 
 // ============================================================================
@@ -31,7 +29,7 @@ cmdr_is_int(const char *s)
     }
 
     while (*p) {
-        if (!isdigit((unsigned char)*p)) {
+        if (!(*p >= '0' && *p <= '9')) {
             return false;
         }
         p++;
@@ -47,11 +45,45 @@ cmdr_is_float(const char *s)
         return false;
     }
 
-    char *end = NULL;
-    strtod(s, &end);
+    // libc-free: scan a complete float literal (strtod is locale-aware and
+    // segfaults on off-libc worker threads). True only if the WHOLE string is a
+    // number AND carries a fractional '.' or an exponent (so ints aren't floats).
+    const char *p = s;
+    if (*p == '+' || *p == '-') {
+        p++;
+    }
+    bool saw_digit = false;
+    bool saw_dot   = false;
+    bool saw_exp   = false;
+    while (*p >= '0' && *p <= '9') {
+        p++;
+        saw_digit = true;
+    }
+    if (*p == '.') {
+        saw_dot = true;
+        p++;
+        while (*p >= '0' && *p <= '9') {
+            p++;
+            saw_digit = true;
+        }
+    }
+    if (*p == 'e' || *p == 'E') {
+        saw_exp = true;
+        p++;
+        if (*p == '+' || *p == '-') {
+            p++;
+        }
+        bool exp_digit = false;
+        while (*p >= '0' && *p <= '9') {
+            p++;
+            exp_digit = true;
+        }
+        if (!exp_digit) {
+            return false;
+        }
+    }
 
-    return end && *end == '\0' && end != s
-           && (strchr(s, '.') || strchr(s, 'e') || strchr(s, 'E'));
+    return *p == '\0' && saw_digit && (saw_dot || saw_exp);
 }
 
 static bool
@@ -286,7 +318,7 @@ n00b_cmdr_tokenize(const char **argv, int argc,
 
         // -x short flag or multi-char unknown flag
         if (arg[0] == '-' && arg[1] != '\0'
-            && !isdigit((unsigned char)arg[1])) {
+            && !(arg[1] >= '0' && arg[1] <= '9')) {
             // Check if the whole arg is a known flag
             int64_t ftid = cmdr_find_flag_tid(c, arg);
 
@@ -385,7 +417,9 @@ n00b_cmdr_tokenize_string(n00b_string_t *cmdline,
     const char *end = cmdline->data + cmdline->u8_bytes;
 
     while (p < end) {
-        while (p < end && isspace((unsigned char)*p)) {
+        while (p < end
+               && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'
+                   || *p == '\v' || *p == '\f')) {
             p++;
         }
 
@@ -409,7 +443,8 @@ n00b_cmdr_tokenize_string(n00b_string_t *cmdline,
                 quote_char = *p;
                 p++;
             }
-            else if (isspace((unsigned char)*p)) {
+            else if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'
+                     || *p == '\v' || *p == '\f') {
                 break;
             }
             else {

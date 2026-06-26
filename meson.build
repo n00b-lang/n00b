@@ -3476,6 +3476,12 @@ parse_api_test = executable('test_parse_api',
 )
 test('parse_api', parse_api_test, suite: 'unit')
 
+parse_num_test = executable('test_parse_num',
+    ['test/unit/test_parse_num.c'],
+    kwargs: test_common_kwargs,
+)
+test('parse_num', parse_num_test, suite: 'unit')
+
 commander_test = executable('test_commander',
     ['test/unit/test_commander.c'],
     kwargs: test_common_kwargs,

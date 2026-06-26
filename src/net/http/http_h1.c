@@ -23,8 +23,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
-#include <ctype.h>
 
 #include "n00b.h"
 #include "core/alloc.h"
@@ -33,6 +31,8 @@
 #include "core/string.h"
 #include "adt/list.h"
 #include "adt/result.h"
+#include "internal/text/unicode/raw.h" // n00b_unicode_casecmp_raw (locale-free)
+#include "util/parse_num.h"            // n00b_parse_i64_span (locale-free, not strtoul)
 #include "internal/net/http/http_url.h"
 #include "internal/net/http/http_h1.h"
 #include "internal/net/http/http_pool.h"
@@ -141,7 +141,7 @@ n00b_http_h1_headers_set(n00b_http_h1_headers_t *h,
     for (size_t i = 0; i < n_items; i++) {
         h1_header_node_t *cur = n00b_list_get(*h->items, i);
         if (strlen(cur->name) == name_len
-            && strncasecmp(cur->name, name, name_len) == 0) {
+            && n00b_unicode_casecmp_raw(cur->name, (int64_t)name_len, name, (int64_t)name_len) == 0) {
             n00b_free(cur->value);
             cur->value = h1_strdup(value, value_len, h->allocator);
             return;
@@ -169,7 +169,7 @@ n00b_http_h1_headers_get_cstr(n00b_http_h1_headers_t *h, const char *name)
     for (size_t i = 0; i < n_items; i++) {
         h1_header_node_t *cur = n00b_list_get(*h->items, i);
         if (strlen(cur->name) == name_len
-            && strncasecmp(cur->name, name, name_len) == 0) {
+            && n00b_unicode_casecmp_raw(cur->name, (int64_t)name_len, name, (int64_t)name_len) == 0) {
             return cur->value;
         }
     }
@@ -385,10 +385,11 @@ compute_keep_alive(uint8_t            http_minor,
             tok_end--;
         }
         size_t toklen = (size_t)(tok_end - tok_start);
-        if (toklen == 5 && strncasecmp(tok_start, "close", 5) == 0) {
+        if (toklen == 5
+            && n00b_unicode_casecmp_raw(tok_start, 5, "close", 5) == 0) {
             saw_close = true;
         } else if (toklen == 10
-                   && strncasecmp(tok_start, "keep-alive", 10) == 0) {
+                   && n00b_unicode_casecmp_raw(tok_start, 10, "keep-alive", 10) == 0) {
             saw_keep = true;
         }
     }
@@ -461,13 +462,14 @@ n00b_http_h1_response_parse(n00b_buffer_t *raw)
 
     resp->body = n00b_buffer_empty(.allocator = a);
 
-    if (te && strcasecmp(te, "chunked") == 0) {
+    if (te && n00b_unicode_casecmp_raw(te, (int64_t)strlen(te), "chunked", 7) == 0) {
         if (!decode_chunked(body_start, body_len, resp->body, a)) {
             return n00b_result_err(n00b_http_h1_response_t *,
                                    N00B_HTTP_ERR_BAD_RESPONSE);
         }
     } else if (cl) {
-        size_t n = (size_t)strtoull(cl, nullptr, 10);
+        n00b_result_t(int64_t) clr = n00b_parse_i64_span(cl, strlen(cl));
+        size_t n = n00b_result_is_ok(clr) ? (size_t)n00b_result_get(clr) : 0;
         if (n > body_len) n = body_len;
         if (n > 0) {
             n00b_buffer_t *bb = n00b_buffer_from_bytes(
@@ -644,7 +646,7 @@ find_header(const char *p, size_t len, const char *name, size_t *out_vlen)
         }
         if (line_end > i + nlen + 1
             && (size_t)(line_end - i) > nlen + 1
-            && strncasecmp(p + i, name, nlen) == 0
+            && n00b_unicode_casecmp_raw(p + i, (int64_t)nlen, name, (int64_t)nlen) == 0
             && p[i + nlen] == ':') {
             size_t v = i + nlen + 1;
             while (v < line_end && (p[v] == ' ' || p[v] == '\t')) v++;
@@ -742,7 +744,7 @@ h1_response_complete(const char *bytes, size_t len, bool was_head)
     const char *te = find_header(hp, hl, "Transfer-Encoding", &vlen);
 
     if (te && vlen >= 7
-        && strncasecmp(te, "chunked", 7) == 0) {
+        && n00b_unicode_casecmp_raw(te, 7, "chunked", 7) == 0) {
         /* Walk the chunked-body frames properly so a literal
          * "0\r\n\r\n" byte sequence inside a chunk's payload doesn't
          * spuriously look like the terminator.  Each frame is:
@@ -811,7 +813,8 @@ h1_response_complete(const char *bytes, size_t len, bool was_head)
         char    nbuf[24];
         size_t  nl = vlen < sizeof(nbuf) - 1 ? vlen : sizeof(nbuf) - 1;
         memcpy(nbuf, cl, nl); nbuf[nl] = '\0';
-        size_t  declared = (size_t)strtoul(nbuf, nullptr, 10);
+        n00b_result_t(int64_t) dr = n00b_parse_i64_span(nbuf, nl);
+        size_t  declared = n00b_result_is_ok(dr) ? (size_t)n00b_result_get(dr) : 0;
         size_t  body_have = len - header_len;
         return body_have >= declared ? 1 : 0;
     }
@@ -1099,8 +1102,11 @@ h1_round_trip_conduit_tls(n00b_http_url_t             *url,
                                         ? vlen : sizeof(nbuf) - 1;
                         memcpy(nbuf, cl, nl);
                         nbuf[nl] = '\0';
-                        uint64_t declared = (uint64_t)strtoull(nbuf, nullptr,
-                                                               10);
+                        n00b_result_t(int64_t) dr = n00b_parse_i64_span(nbuf,
+                                                                        nl);
+                        uint64_t declared = n00b_result_is_ok(dr)
+                                                ? (uint64_t)n00b_result_get(dr)
+                                                : 0;
                         if (declared > max_body_size) {
                             h1_tls_conn_close(tc);
                             return n00b_result_err(
@@ -1186,7 +1192,7 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
      * instead of hanging forever waiting for body bytes that the
      * server will never send. */
     bool was_head = (method != nullptr
-                     && strcasecmp(method, "HEAD") == 0);
+                     && n00b_unicode_casecmp_raw(method, (int64_t)strlen(method), "HEAD", 4) == 0);
 
     /* mTLS handshake material — extracted from the auth helper if
      * present.  Pool keying uses the auth pointer so identities don't
@@ -1356,8 +1362,11 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
                                         ? vlen : sizeof(nbuf) - 1;
                         memcpy(nbuf, cl, nl);
                         nbuf[nl] = '\0';
-                        uint64_t declared = (uint64_t)strtoull(
-                            nbuf, nullptr, 10);
+                        n00b_result_t(int64_t) dr = n00b_parse_i64_span(nbuf,
+                                                                        nl);
+                        uint64_t declared = n00b_result_is_ok(dr)
+                                                ? (uint64_t)n00b_result_get(dr)
+                                                : 0;
                         if (declared > max_body_size) {
                             n00b_acme_tls_close(conn);
                             return n00b_result_err(
