@@ -257,6 +257,35 @@ n00b_http_service_route(n00b_http_service_t *svc,
                         void                *user_data);
 
 /**
+ * @brief Register a fallback handler for requests that match no exact route.
+ *
+ * The default handler is invoked when an incoming request matches no
+ * registered exact (method, path) route at all — i.e. it replaces the
+ * automatic 404 the service would otherwise generate. It lets a consumer do
+ * its own dispatch for dynamic paths (e.g. `/api/v1/sessions/{id}/...`) or
+ * static assets. The handler owns the response and may emit any status
+ * (200/404/405/...); the service does not synthesize a status for it.
+ *
+ * Method semantics: the handler fires only when no exact (method, path) route
+ * matches the request. If the path matches an existing route but the method
+ * does not, the existing automatic 405 (Method Not Allowed) is preserved and
+ * the default handler is NOT called. When no default handler is registered,
+ * the existing automatic 404/405 behavior is preserved exactly.
+ *
+ * @pre Must be called before `n00b_http_service_start`.
+ * @post After a successful call, unmatched paths route to @p handler instead
+ *       of producing an automatic 404. A subsequent call replaces the
+ *       previously registered handler.
+ *
+ * @return Ok(true) on success; Err(EINVAL) if @p svc or @p handler is null,
+ *         or the service has already started.
+ */
+extern n00b_result_t(bool)
+n00b_http_service_set_default_handler(n00b_http_service_t *svc,
+                                      n00b_http_handler_fn handler,
+                                      void                *user_data);
+
+/**
  * @brief Low-level route descriptor API.
  *
  * n00b copies the route spec structure and array fields, but string values are

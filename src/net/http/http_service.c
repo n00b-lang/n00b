@@ -65,6 +65,8 @@ struct n00b_http_service {
     n00b_conduit_service_t        *worker_service;
     n00b_allocator_t              *allocator;
     n00b_list_t(n00b_http_route_t *) routes;
+    n00b_http_handler_fn           default_handler;
+    void                          *default_user_data;
     bool                           discovery_enabled;
     n00b_http_discovery_info_t     discovery;
     // Conduit runtime (borrowed from the runtime's default conduit/IO
@@ -1156,6 +1158,16 @@ handle_client(n00b_http_service_t *svc, int fd)
             if (path_found) {
                 simple_error(owner, 405, "method not allowed");
             }
+            else if (svc->default_handler != nullptr) {
+                // No exact (method, path) route matched the path at all; the
+                // default handler owns the response (it may 200/404/...).
+                n00b_http_response_writer_t *resp = response_new();
+                resp->owner                       = owner;
+                svc->default_handler(req, resp, svc->default_user_data);
+                if (!resp->streaming) {
+                    send_response(owner, resp);
+                }
+            }
             else {
                 simple_error(owner, 404, "not found");
             }
@@ -1415,6 +1427,21 @@ n00b_http_service_route(n00b_http_service_t *svc,
 {
     return register_route_internal(svc, method, path, handler, user_data,
                                    nullptr);
+}
+
+n00b_result_t(bool)
+n00b_http_service_set_default_handler(n00b_http_service_t *svc,
+                                      n00b_http_handler_fn handler,
+                                      void                *user_data)
+{
+    if (svc == nullptr || handler == nullptr
+        || n00b_atomic_load(&svc->started)) {
+        return n00b_result_err(bool, EINVAL);
+    }
+
+    svc->default_handler   = handler;
+    svc->default_user_data = user_data;
+    return n00b_result_ok(bool, true);
 }
 
 n00b_result_t(bool)

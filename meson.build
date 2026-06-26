@@ -1472,6 +1472,12 @@ http_service_unix_test = executable('test_http_service_unix',
 )
 test('http_service_unix', http_service_unix_test, suite: 'unit')
 
+http_default_handler_test = executable('test_http_default_handler',
+    ['test/unit/test_http_default_handler.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_default_handler', http_default_handler_test, suite: 'unit')
+
 chalk_module_test = executable('test_chalk_module',
     ['test/unit/test_chalk_module.c'],
     kwargs: test_common_kwargs,
