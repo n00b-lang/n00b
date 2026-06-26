@@ -89,6 +89,19 @@ sub_map_remove(n00b_conduit_sub_handle_t handle)
     _n00b_dict_untyped_remove(sub_map(), (void *)(uintptr_t)handle);
 }
 
+n00b_conduit_sub_handle_t
+n00b_conduit_sub_next_handle(void)
+{
+    static _Atomic(uint64_t) next_handle = 1;
+
+    n00b_conduit_sub_handle_t result = n00b_atomic_add(&next_handle, 1);
+    if (result == N00B_CONDUIT_INVALID_SUB_HANDLE) {
+        result = n00b_atomic_add(&next_handle, 1);
+    }
+
+    return result;
+}
+
 static void
 sub_wait_for_publisher_quiescence(_n00b_conduit_sub_base_t *sub)
 {
