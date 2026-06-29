@@ -1,15 +1,13 @@
 // WP-3b crash detection/delivery + guard-page stack-overflow handler.
 //
 // The fault handler runs on a per-thread alternate signal stack (SA_ONSTACK)
-// so it survives a stack overflow.  CRITICAL: ncc GC-instruments every function
-// it compiles — _n00b_crash_handler's own prologue emits an n00b_gc_stack_push
-// that calls n00b_thread_self(), which masks the SP to a callstack region and
-// reads the slot ID word at region_start + S - 8.  So the altstack cannot be a
-// plain mmap (self() would mask to a wrong/garbage base and fault BEFORE the
-// handler body).  Instead the altstack IS a full n00b callstack region (S-
-// aligned, with the SP-mask geometry), and we stamp the owning thread's slot id
-// into its ID word — so self() (and thus the prologue) resolves correctly when
-// the handler runs on it.
+// so it survives a stack overflow.  The production signal path is explicitly
+// [[n00b::nogc]]: it must be able to write the first crash line even when a
+// signal lands on a foreign/libdispatch stack that has not been registered with
+// n00b.  The alternate stack is still a full n00b callstack region, stamped with
+// the owning thread's slot id, because optional crash-debug symbolication may
+// call ordinary runtime code and because stack-overflow handling needs a known
+// safe stack.
 //
 // LIFETIME (D-039, superseding D-038's per-slot-forever model): the altstack is
 // drawn from the shared callstack pool by the SPAWNER (a worker cannot allocate
@@ -135,7 +133,7 @@ n00b_crash_install_altstack(n00b_callstack_t *as_cs)
 
 // Async-signal-safe writes to stderr and, when configured, the durable crash
 // fd. Raw syscalls only: no stdio, locks, allocation, errno TLS, or conduit.
-static void
+[[n00b::nogc]] static void
 _n00b_crash_write_bytes(const char *s, size_t n)
 {
     n00b_raw_write(2, s, n);
@@ -145,17 +143,18 @@ _n00b_crash_write_bytes(const char *s, size_t n)
     }
 }
 
-static void
+[[n00b::nogc]] static void
 _n00b_crash_write(const char *s)
 {
     size_t n = 0;
-    while (s[n] != '\0') {
+    volatile const char *p = (volatile const char *)s;
+    while (p[n] != '\0') {
         n++;
     }
     _n00b_crash_write_bytes(s, n);
 }
 
-static void
+[[n00b::nogc]] static void
 _n00b_crash_write_u64(uint64_t v)
 {
     char b[20];
@@ -176,7 +175,7 @@ _n00b_crash_write_u64(uint64_t v)
     _n00b_crash_write_bytes(b, (size_t)n);
 }
 
-static void
+[[n00b::nogc]] static void
 _n00b_crash_write_hex(uintptr_t v)
 {
     char b[18];
@@ -190,13 +189,13 @@ _n00b_crash_write_hex(uintptr_t v)
     _n00b_crash_write_bytes(b, sizeof(b));
 }
 
-static void
+[[n00b::nogc]] static void
 _n00b_crash_write_ptr(const void *p)
 {
     _n00b_crash_write_hex((uintptr_t)p);
 }
 
-static bool
+[[n00b::nogc]] static bool
 _n00b_crash_addr_offset(uintptr_t addr, uintptr_t *out)
 {
     uintptr_t base = n00b_atomic_load(&g_n00b_crash_image_load_base);
@@ -207,7 +206,7 @@ _n00b_crash_addr_offset(uintptr_t addr, uintptr_t *out)
     return true;
 }
 
-static void
+[[n00b::nogc]] static void
 _n00b_crash_write_addr_offset(const char *label, uintptr_t addr)
 {
     uintptr_t offset = 0;
@@ -219,7 +218,7 @@ _n00b_crash_write_addr_offset(const char *label, uintptr_t addr)
     _n00b_crash_write_hex(offset);
 }
 
-static void
+[[n00b::nogc]] static void
 _n00b_crash_dump_image_info(void)
 {
     uintptr_t vmaddr = n00b_atomic_load(&g_n00b_crash_image_vmaddr);
@@ -241,7 +240,7 @@ _n00b_crash_dump_image_info(void)
     _n00b_crash_write(")\n");
 }
 
-static void
+[[n00b::nogc]] static void
 _n00b_crash_dump_frame_chain(uintptr_t fp)
 {
     _n00b_crash_write("n00b: crash frames fp=");
@@ -278,7 +277,7 @@ _n00b_crash_dump_frame_chain(uintptr_t fp)
     }
 }
 
-static uintptr_t
+[[n00b::nogc]] static uintptr_t
 _n00b_crash_ucontext_pc(void *uctx)
 {
     if (uctx == nullptr) {
@@ -299,7 +298,7 @@ _n00b_crash_ucontext_pc(void *uctx)
 #endif
 }
 
-static uintptr_t
+[[n00b::nogc]] static uintptr_t
 _n00b_crash_ucontext_lr(void *uctx)
 {
     if (uctx == nullptr) {
@@ -316,7 +315,7 @@ _n00b_crash_ucontext_lr(void *uctx)
 #endif
 }
 
-static uintptr_t
+[[n00b::nogc]] static uintptr_t
 _n00b_crash_ucontext_sp(void *uctx)
 {
     if (uctx == nullptr) {
@@ -337,7 +336,7 @@ _n00b_crash_ucontext_sp(void *uctx)
 #endif
 }
 
-static uintptr_t
+[[n00b::nogc]] static uintptr_t
 _n00b_crash_ucontext_fp(void *uctx)
 {
     if (uctx == nullptr) {
@@ -358,7 +357,7 @@ _n00b_crash_ucontext_fp(void *uctx)
 #endif
 }
 
-static void
+[[n00b::nogc]] static void
 _n00b_crash_dump_context(int sig,
                          siginfo_t *si,
                          void *uctx,
@@ -422,22 +421,21 @@ _n00b_crash_dump_context(int sig,
 }
 
 // Fatal signal handler.  Runs in signal context on the faulting
-// thread's alternate stack (SA_ONSTACK), which is an n00b callstack stamped
-// with this thread's slot id — so n00b_thread_self() (and the ncc-emitted
-// gc_stack_push in this function's own prologue) resolve correctly here.
+// thread's alternate stack (SA_ONSTACK) when one is installed.  This function
+// and its raw dump helpers are [[n00b::nogc]] so the first-line crash dump does
+// not depend on n00b_thread_self() or a GC-stack-map prologue.
 // Async-signal-safe default path: stable reads and raw writes only, followed by
 // raw process exit.  The richer symbolication path can be enabled explicitly
 // for debugging, but it is not the production path because it walks ordinary
 // runtime data structures and can wedge before launchd gets a process exit.
-static void
+[[n00b::nogc]] static void
 _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
 {
     // Resolve the FAULTING thread by the altstack region we are running on (a
     // local's address lies in that slot's altstack-callstack region).  We do
-    // NOT trust n00b_thread_self() for this: self() resolves via the altstack's
-    // stamped ID word, which is enough to keep this function's gc_stack_push
-    // PROLOGUE from faulting, but the range scan is what reliably identifies
-    // which thread overflowed.  Async-signal-safe: stable per-slot reads.
+    // NOT trust n00b_thread_self() for this: the signal may have landed on a
+    // foreign stack, and the range scan is what reliably identifies which
+    // thread overflowed.  Async-signal-safe: stable per-slot reads.
     volatile int marker = 0;
     uintptr_t    hsp    = (uintptr_t)(void *)&marker;
 
