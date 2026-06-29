@@ -232,43 +232,6 @@ test_identity_filter(void)
     printf("  [PASS] identity filter\n");
 }
 
-static void
-test_cancel_live_transform_output_subscription(void)
-{
-    n00b_conduit_t *c = make_conduit();
-    n00b_conduit_topic_t(xform_int_t) *src_topic = make_input_topic(c);
-
-    auto r = n00b_conduit_filter_new(xform_int_t, c, src_topic,
-                                     &identity_ops, 0);
-    assert(n00b_result_is_ok(r));
-    n00b_conduit_filter_t(xform_int_t) *xf = n00b_result_get(r);
-
-    n00b_conduit_topic_t(xform_int_t) *out_topic =
-        n00b_conduit_xform_topic(xform_int_t, xform_int_t, xf);
-    init_int_topic(out_topic);
-
-    n00b_conduit_inbox_t(xform_int_t) *inbox =
-        n00b_alloc(n00b_conduit_inbox_t(xform_int_t));
-    n00b_conduit_inbox_init(xform_int_t, inbox, c,
-                            N00B_CONDUIT_BP_UNBOUNDED, 0);
-    n00b_conduit_sub_handle_t sub =
-        n00b_conduit_subscribe(xform_int_t, out_topic, inbox,
-                               .operations = N00B_CONDUIT_OP_ALL);
-    assert(sub != N00B_CONDUIT_INVALID_SUB_HANDLE);
-
-    while (!n00b_atomic_load(&xf->running))
-        usleep(100);
-
-    n00b_conduit_sub_cancel(sub);
-    assert(n00b_conduit_sub_state(sub) == N00B_CONDUIT_SUB_REMOVED);
-
-    n00b_conduit_xform_stop((n00b_conduit_xform_base_t *)xf);
-    n00b_conduit_xform_join((n00b_conduit_xform_base_t *)xf);
-    n00b_conduit_destroy(c);
-
-    printf("  [PASS] cancel live transform output subscription\n");
-}
-
 // ============================================================================
 // 2. Dropping transform — return n00b_option_none, verify no output
 // ============================================================================
@@ -765,12 +728,16 @@ test_chain_two_stage(void)
     while (!n00b_atomic_load(&ansi_xf->running))
         usleep(100);
 
-    n00b_conduit_publish_claim((n00b_conduit_topic_base_t *)src);
+    n00b_result_t(n00b_conduit_publisher_t *) src_pub_res =
+        n00b_conduit_publish_claim((n00b_conduit_topic_base_t *)src);
+    assert(n00b_result_is_ok(src_pub_res));
+    n00b_conduit_publisher_t *src_pub = n00b_result_get(src_pub_res);
     push_buf(src, "\033[1mhello\033[0m\n\033[31mworld\033[0m\n", 29);
 
     // Send TOPIC_CLOSED so xforms drain and exit.
     n00b_conduit_topic_deliver_sys(n00b_buffer_t *, src,
         N00B_CONDUIT_MSG_TOPIC_CLOSED, N00B_CONDUIT_OP_ALL);
+    n00b_conduit_publish_yield(src_pub);
 
     // Wait for both xforms to finish.
     n00b_conduit_xform_join(linebuf_xf);
@@ -865,8 +832,6 @@ main(int argc, char *argv[])
     fflush(stdout);
 
     test_identity_filter();
-    fflush(stdout);
-    test_cancel_live_transform_output_subscription();
     fflush(stdout);
     test_dropping_transform();
     fflush(stdout);

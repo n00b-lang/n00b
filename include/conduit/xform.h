@@ -184,6 +184,7 @@
             return;                                                            \
         }                                                                      \
         xf->thread = n00b_result_get(_spawn_r);                               \
+        n00b_gc_register_root(xf->thread);                                    \
     }                                                                          \
                                                                                \
     /* Thread loop */                                                          \

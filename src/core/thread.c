@@ -234,9 +234,10 @@ base_nanosleep_ns(uint64_t ns)
 //
 // The calling thread's n00b_thread_t no longer lives in thread_local
 // storage.  Its canonical home is the permanent n00b_thread_t allocated
-// from the hidden, non-moving system_pool, pointed at by
-// rt->threads[slot].thread.  The GC scans fields that can point into the heap,
-// but it does not own or relocate the thread record itself.
+// from the GC-visible, non-moving user_pool (WP-3a / D-034), pointed at
+// by rt->threads[slot].thread; being a pool it is non-moving, so the GC
+// never relocates it (it is GC-OWNED — reachable -> kept, unreferenced ->
+// reclaimed — but never moved, unlike a default-arena object).
 // n00b_thread_self() recovers the owning slot from the current stack
 // pointer with no TLS, no lock, and no interval-tree lookup:
 //
@@ -461,8 +462,8 @@ n00b_thread_init() _kargs
     //   1. acquire/confirm the slot and publish this thread's stack bounds
     //      and an init-time self pointer into its record FIRST, using an
     //      init-scoped n00b_thread_t that lives on the C stack;
-    //   2. allocate the permanent struct from system_pool
-    //      (now n00b_thread_self() resolves —
+    //   2. allocate the permanent struct from the GC-visible user_pool
+    //      (WP-3a / D-034; now n00b_thread_self() resolves —
     //      main -> bootstrap, worker -> &init_self via the bounds scan);
     //   3. copy the init-time state into the permanent struct and repoint
     //      the slot at it.
@@ -597,13 +598,14 @@ n00b_thread_init() _kargs
     n00b_rw_adopt_read_hold(&runtime->critical_execution, n00b_thread_self());
 
     // Now n00b_thread_self() resolves to &init_self; allocate the permanent
-    // struct from system_pool. Thread records have raw ownership edges outside
-    // the GC graph: callers hold join handles, conduit stores them in hidden
-    // pools, and the OS-death reaper keeps dead workers on rt->reap_pending
-    // after their slot has been cleared. The collector still scans the fields
-    // that can point into the GC heap, but it must not own the lifetime of the
-    // record itself.
-    n00b_allocator_t *up_alloc = (n00b_allocator_t *)&runtime->system_pool;
+    // struct from the GC-VISIBLE, non-moving runtime_obj_pool (WP-3a / D-034;
+    // renamed from user_pool at the WP-close rebase to avoid colliding with
+    // upstream's hidden leak-tracking user_pool — D-034/D-039) — NOT the hidden
+    // system_pool.  The GC owns the struct's lifetime: reachable -> kept,
+    // unreferenced -> reclaimed (once the assumed pool-collection capability
+    // lands).  Being a pool, runtime_obj_pool is non-moving, so this address
+    // stays valid for rt->threads[].thread and n00b_thread_self().
+    n00b_allocator_t *up_alloc = (n00b_allocator_t *)&runtime->runtime_obj_pool;
     n00b_thread_t    *self     = n00b_alloc_with_opts(
         n00b_thread_t,
         &(n00b_alloc_opts_t){.allocator = up_alloc});
@@ -2048,8 +2050,8 @@ _n00b_apply_affinity(n00b_thread_t *self, n00b_thread_cpuset_t set)
 // DF-5 (generation-bump placement) — init-time bump suffices because identity
 // is per-CALLSTACK-region (the SP-mask reads the id word the CURRENT region's
 // worker wrote), not per-slot, so a stale n00b_thread_t * cannot alias a reused
-// slot's new worker via self().  The struct itself lives in system_pool; the
-// reaper never frees it.
+// slot's new worker via self().  The struct itself is GC-owned (user_pool,
+// D-034); the reaper never frees it.
 //
 // Reaper placement (D-034): amortized on the callstack-pool slow path (a spawn
 // needing a callstack first sweeps the queue) + the conduit signal thread as a
@@ -2059,7 +2061,7 @@ _n00b_apply_affinity(n00b_thread_t *self, n00b_thread_cpuset_t set)
 // Enqueue a worker on the runtime reap-pending queue (called by the worker at
 // its launcher exit, just before self-terminate).  A tiny test-and-set spinlock
 // guards the singly-linked queue; the splice is O(1).
-[[n00b::nogc]] static void
+static void
 _n00b_reap_enqueue(n00b_runtime_t *rt, n00b_thread_t *self)
 {
     if (rt == nullptr || self == nullptr) {
@@ -2078,7 +2080,7 @@ _n00b_reap_enqueue(n00b_runtime_t *rt, n00b_thread_t *self)
 
 // Test whether a queued worker's OS death edge has fired (it is truly off its
 // stack).  Per-OS; see the block comment above.
-[[n00b::nogc]] static bool
+static bool
 _n00b_reap_worker_is_dead(n00b_thread_t *t)
 {
 #if defined(__APPLE__)
@@ -2237,7 +2239,7 @@ n00b_diag_foreign_self_check(void)
 // callstack region to the pool, frees the TCB, and (macOS) deallocates the now
 // dead port name.  Does NOT touch the slot/generation/struct (see the block
 // comment).
-[[n00b::nogc]] static void
+static void
 _n00b_reap_reclaim(n00b_thread_t *t)
 {
 #ifndef _WIN32
@@ -2283,42 +2285,60 @@ _n00b_reap_reclaim(n00b_thread_t *t)
 // fired and leaving the rest queued.  Bounded (it walks the queue once) so the
 // signal-thread backstop's poll loop is never starved.  Safe to call from any
 // thread (the spawn slow path + the conduit signal thread, D-034).
-[[n00b::nogc]] static void
+static void
 _n00b_reap_sweep(n00b_runtime_t *rt)
 {
     if (rt == nullptr) {
         return;
     }
 
-    n00b_rw_read_lock(&rt->critical_execution);
-
     uint32_t expected;
     do {
         expected = 0;
     } while (!n00b_cas(&rt->reap_lock, &expected, 1));
 
-    // Keep the queue anchored in rt->reap_pending while sweeping. The GC's
-    // runtime scan roots that chain explicitly; detaching it into locals makes
-    // dead-thread structs and callstack descriptors depend on exact local
-    // rooting during reclamation, which is not a safe ownership boundary for
-    // these raw reaper pointers.
-    n00b_thread_t **linkp = &rt->reap_pending;
-    while (*linkp != nullptr) {
-        n00b_thread_t *t    = *linkp;
-        n00b_thread_t *next = t->reap_next;
+    // Detach the whole queue under the lock, then process it unlocked so the
+    // O(1) splice stays the only work under the spinlock.  Workers that are not
+    // yet confirmed dead are re-queued at the end.
+    n00b_thread_t *list   = rt->reap_pending;
+    rt->reap_pending      = nullptr;
+    n00b_atomic_store(&rt->reap_lock, 0);
 
-        if (!_n00b_reap_worker_is_dead(t)) {
-            linkp = &t->reap_next;
-            continue;
+    n00b_thread_t *still_pending      = nullptr;
+    n00b_thread_t *still_pending_tail = nullptr;
+
+    while (list != nullptr) {
+        n00b_thread_t *t = list;
+        list             = t->reap_next;
+        t->reap_next     = nullptr;
+
+        if (_n00b_reap_worker_is_dead(t)) {
+            _n00b_reap_reclaim(t);
         }
-
-        _n00b_reap_reclaim(t);
-        *linkp       = next;
-        t->reap_next = nullptr;
+        else {
+            // Keep it queued (still on its stack); preserve order is irrelevant.
+            t->reap_next = still_pending;
+            still_pending = t;
+            if (still_pending_tail == nullptr) {
+                still_pending_tail = t;
+            }
+        }
     }
 
+    if (still_pending == nullptr) {
+        return;
+    }
+
+    // Splice the not-yet-dead workers back onto the (possibly newly grown)
+    // queue under the lock.
+    do {
+        expected = 0;
+    } while (!n00b_cas(&rt->reap_lock, &expected, 1));
+
+    still_pending_tail->reap_next = rt->reap_pending;
+    rt->reap_pending              = still_pending;
+
     n00b_atomic_store(&rt->reap_lock, 0);
-    n00b_rw_unlock(&rt->critical_execution);
 }
 
 // Public-to-the-module backstop entry: the conduit signal thread calls this
@@ -2480,7 +2500,7 @@ n00b_thread_quarantine_dead_foreign_for_stw(n00b_thread_record_t *rec,
 #endif
 }
 
-[[n00b::nogc]] void
+void
 n00b_thread_reap_pending(void)
 {
     n00b_runtime_t *rt = n00b_get_runtime();
@@ -2624,10 +2644,12 @@ n00b_thread_launcher(void *raw)
     // re-reading rt->threads[slot].thread: a short-lived worker can run fn()
     // and n00b_thread_destroy() (which clears rec->thread to nullptr) before
     // the spawner reads the slot, so the slot is not a stable source for the
-    // child handle.  The permanent struct lives in the hidden, non-moving
-    // system_pool. It is never freed by the joiner or owned by the GC, so it
-    // outlives the slot clear and the handle stays valid for the subsequent
-    // n00b_thread_join (and for as long as the caller holds it).
+    // child handle.  The permanent struct lives in the GC-visible, non-moving
+    // user_pool (WP-3a / D-034): it is GC-OWNED — reclaimed once unreferenced,
+    // never bulk-freed-at-teardown and never freed by the joiner — and being a
+    // pool it never moves, so it outlives the slot clear and the handle stays
+    // valid for the subsequent n00b_thread_join (and for as long as the caller
+    // holds it).
     n00b_atomic_store(&bundle->self, self);
 
     // Signal the spawner that init is complete and n00b_thread_self() now resolves.
@@ -2680,11 +2702,12 @@ n00b_thread_launcher(void *raw)
     }
 
     // Enqueue ourselves on the runtime reap-pending queue BEFORE
-    // n00b_thread_destroy clears rec->thread. The reaper gates actual
-    // reclamation on the OS death edge, so an early sweep will only keep us
-    // queued while this worker is still running. Waiting until after destroy
-    // leaves a window where the reaper has no path to the callstack/altstack it
-    // must return.
+    // n00b_thread_destroy clears rec->thread and removes the normal runtime
+    // root for this n00b_thread_t. The reaper gates actual reclamation on the
+    // OS death edge, so an early sweep will only keep us queued while this
+    // worker is still running. Waiting until after destroy leaves a window
+    // where the GC can no longer reach the thread struct, but the reaper will
+    // later dereference it to return the callstack/altstack.
     _n00b_reap_enqueue(rt, self);
 
     n00b_thread_destroy();
@@ -3240,7 +3263,7 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg) _kargs
 
     // Read the child handle the worker published into the bundle (the bundle
     // is the stable system_pool scratch struct; the handle it carries is the
-    // permanent system_pool n00b_thread_t), NOT rt->threads[slot].thread:
+    // permanent user_pool n00b_thread_t — D-034), NOT rt->threads[slot].thread:
     // a short-lived worker may have already cleared the slot in
     // n00b_thread_destroy by now.
     n00b_thread_t *child = n00b_atomic_load(&bundle->self);
@@ -3277,15 +3300,16 @@ n00b_thread_join(n00b_thread_t *thread)
     // enqueued itself on rt->reap_pending before terminating, and the reaper
     // (callstack-pool slow path + conduit signal thread) returns the callstack
     // to the pool, frees the TCB, and deallocates the port only after the OS
-    // says the worker is off its stack. The n00b_thread_t struct lives in
-    // system_pool because raw join/reap/conduit handles outlive the slot and are
-    // outside the GC graph. Join is RESULT-ONLY: it waits and returns the
-    // worker's `void *` fn-return; the 64-bit exit code stays readable via
-    // n00b_thread_exit_code (settled before the wake).
+    // says the worker is off its stack.  The n00b_thread_t struct is GC-owned
+    // (user_pool, D-034) and is never freed here.  Join is RESULT-ONLY: it waits
+    // and returns the worker's `void *` fn-return; the 64-bit exit code stays
+    // readable via n00b_thread_exit_code (settled before the wake).
     //
     // A successful join transfers ownership back to the caller, and callers may
     // immediately drop the last explicit handle/root.  Do not return until the
     // OS-death reaper is done with the thread struct's callstack/altstack fields.
+    // Otherwise the struct can become unreachable while rt->reap_pending (or a
+    // detached sweep local) is still the only raw reference to it.
     n00b_runtime_t *rt = n00b_get_runtime();
     while (n00b_atomic_load(&thread->reap_futex) == 0) {
         _n00b_reap_sweep(rt);
