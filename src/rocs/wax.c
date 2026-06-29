@@ -250,7 +250,11 @@ n00b_rocs_wax_schema_new() _kargs
         return n00b_result_err(n00b_store_schema_t *,
                                N00B_ROCS_WAX_ERR_INTERNAL);
     }
-    add_r = rocs_wax_add_unindexed(schema, r"ts_ns");
+    add_r = rocs_wax_add_field(schema,
+                               r"ts_ns",
+                               N00B_STORE_INDEX_NUMERIC,
+                               false,
+                               N00B_STORE_POSTINGS_SPARSE);
     if (n00b_result_is_err(add_r)) {
         return n00b_result_err(n00b_store_schema_t *,
                                N00B_ROCS_WAX_ERR_INTERNAL);
