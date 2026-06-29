@@ -225,9 +225,10 @@ struct n00b_runtime_t {
      * launcher exit (before self-terminate); the reaper drains it from the
      * callstack-pool slow path and the conduit signal thread, reclaiming
      * only the workers whose death edge has fired.  The queue links through
-     * `n00b_thread_t::reap_next`; `reap_lock` guards it.  This is NOT the
-     * GC-owned struct lifetime (D-034): the struct stays in `runtime_obj_pool`;
-     * only the callstack/TCB/slot are reclaimed here. */
+     * `n00b_thread_t::reap_next`; `reap_lock` guards it. The thread struct
+     * itself lives in system_pool because join handles and hidden-pool conduit
+     * state keep raw references outside the GC graph; only the callstack/TCB/slot
+     * are reclaimed here. */
     struct n00b_callstack_t   *callstack_pool;
     _Atomic uint32_t           callstack_pool_lock;
     uint32_t                   callstack_pool_count;

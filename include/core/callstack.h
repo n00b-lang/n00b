@@ -308,7 +308,7 @@ n00b_callstack_pool_get() _kargs
  * @post @p stack is either on the pool free-list (registrations live, ready for
  *       a later `n00b_callstack_pool_get`) or fully unmapped.
  */
-extern void n00b_callstack_pool_return(n00b_callstack_t *stack);
+[[n00b::nogc]] extern void n00b_callstack_pool_return(n00b_callstack_t *stack);
 
 /**
  * @brief A caller-supplied backing region for a `custom_stack` worker.

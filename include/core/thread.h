@@ -6,12 +6,12 @@
  * entry point, and helpers for capturing stack bounds (needed by the
  * GC).
  *
- * The calling thread's n00b_thread_t lives in the permanent
- * n00b_thread_t allocated from the GC-visible, non-moving `user_pool`
- * and pointed at by `rt->threads[slot].thread`.  Being a
- * pool it is non-moving (so `n00b_thread_self()` and the raw slot pointer
- * stay valid), but unlike the old `system_pool` home it is GC-OWNED —
- * reclaimed once unreferenced, not bulk-freed at teardown.
+ * The calling thread's permanent n00b_thread_t is allocated from system_pool
+ * and pointed at by `rt->threads[slot].thread`.  The record is intentionally
+ * not GC-owned: join handles, conduit hidden-pool state, and the OS-death
+ * reaper hold raw references outside the GC graph.  The collector explicitly
+ * scans the record's heap-pointer fields while the record is live or queued
+ * for reaping.
  * `n00b_thread_self()` recovers the slot from the current stack
  * pointer in O(1): a range check against the main thread's kernel-stack
  * bounds (stored in its `n00b_thread_record_t` at init), then the
@@ -376,8 +376,8 @@ struct n00b_thread_t {
     _Atomic(uint64_t)  exit_code;
     /* @brief Spawn attributes.  Set from the n00b_thread_spawn `_kargs`
      * carried spawner->launcher in the bundle, then copied onto this struct
-     * by the launcher on the worker (where n00b_thread_self() resolves).  All three live
-     * in the GC-visible, non-moving user_pool WITH the struct  */
+     * by the launcher on the worker (where n00b_thread_self() resolves). These
+     * fields live on the system_pool thread record and are scanned explicitly. */
     n00b_string_t     *name; ///< Caller-supplied OS thread name (nullptr = unnamed).
     // @brief Run once on worker exit, before the join wake (nullptr = none).
     n00b_finalizer_t   finalizer;
@@ -698,18 +698,12 @@ extern int32_t n00b_thread_generation(void);
  * at OS-CONFIRMED death (the worker enqueues itself as it exits; the
  * reaper returns the callstack to the callstack pool and frees the
  * TCB only once the OS confirms it is off that stack — macOS dead
- * Mach port / Linux CLONE_CHILD_CLEARTID), and the returned
- * n00b_thread_t struct is GC-owned (it lives in the runtime's
- * GC-visible, non-moving user_pool) and is collected once it becomes
- * unreferenced.  "Detached" is therefore the implicit model — there
- * is no `.detached`/`.attached` attribute: a thread is reaped
- * and collected regardless of whether anyone joins it.  "Joinable"
- * simply means the caller KEPT the returned handle: while that handle
- * is held in a GC-scanned location it keeps the struct alive, the
- * caller may n00b_thread_join() it for the result (see below), and
- * the caller may safely read the handle's fields after the worker has
- * died.  Dropping the last reference to a dead worker's handle lets
- * the GC collect the struct.
+ * Mach port / Linux CLONE_CHILD_CLEARTID). The returned n00b_thread_t struct
+ * lives in system_pool because raw join/reap/conduit handles outlive the slot
+ * and are outside the GC graph. "Detached" is therefore the implicit resource
+ * model: a thread's OS resources are reaped regardless of whether anyone joins
+ * it. "Joinable" simply means the caller kept the returned handle and may call
+ * n00b_thread_join() for the result (see below).
  *
  * The positional `(fn, arg)` call shape is the common case and stays
  * source-compatible.  Optional spawn attributes are supplied as keyword
@@ -731,9 +725,8 @@ extern int32_t n00b_thread_generation(void);
  *                    exits, BEFORE the join handshake wakes the joiner
  *                    (so a joiner never observes "done" before cleanup).
  *                    nullptr (default) means no finalizer.  This is NOT a GC
- *                    struct finalizer: the n00b_thread_t is GC-owned, so the
- *                    finalizer runs in the launcher exit path on the worker,
- *                    not via the GC.
+ *                    struct finalizer: the finalizer runs in the launcher exit
+ *                    path on the worker, not via the GC.
  * @kw finalizer_data Opaque argument passed to @p finalizer (default nullptr).
  * @kw custom_stack   Pointer to a caller-owned backing region (base + size)
  *                    for the worker's callstack.  When non-null, n00b
@@ -865,10 +858,11 @@ extern n00b_result_t(n00b_thread_t *) n00b_thread_spawn(void *(*fn)(void *), voi
  * is NEVER required to avoid a leak and is NEVER the cleanup path: the runtime
  * reaper reclaims the callstack/TCB at OS-CONFIRMED death (the worker is still
  * on its stack at the moment a joiner observes "done", so reclamation cannot
- * happen here), and the GC reclaims the struct once it becomes unreferenced
- * (the struct lives in the GC-visible user_pool).  Joining is therefore purely
- * a synchronization-plus-result operation; a worker that is never joined is
- * still reaped and collected (the default-detached model — see
+ * happen here), and the thread struct itself lives in system_pool because raw
+ * join/reap/conduit handles outlive the slot and are outside the GC graph.
+ * Joining is therefore purely a synchronization-plus-result operation; a worker
+ * that is never joined still has its callstack/TCB reaped (the default-detached
+ * model — see
  * @ref n00b_thread_spawn).
  *
  * The `void *` return is the worker's fn() return value and is INDEPENDENT
@@ -1015,7 +1009,7 @@ extern void n00b_capture_stack_base(n00b_thread_t  *thread,
  * callstack-pool slow path inside n00b_thread_spawn).  No dedicated reaper
  * thread.  A no-op when the runtime is not yet initialized.
  */
-extern void n00b_thread_reap_pending(void);
+[[n00b::nogc]] extern void n00b_thread_reap_pending(void);
 
 /**
  * @brief Reclaim dead unmanaged thread records (collector-only, internal).

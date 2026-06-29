@@ -17,6 +17,7 @@
 #include "core/mmaps.h"
 #include "core/align.h"
 #include "core/atomic.h"
+#include "core/rwlock.h"
 #include "adt/option.h"
 #include "adt/result.h"
 #include "util/errno_str.h"
@@ -129,22 +130,22 @@ _n00b_callstack_impose_geometry(char             *region,
                                N00B_ERR_CALLSTACK_REGISTER_FAILED);
     }
 
-    // Allocate the descriptor from the NON-MOVING runtime_obj_pool (the same
-    // pool the n00b_thread_t struct uses), NOT the default GC arena.  It is
-    // referenced by RAW pointers that outlive the owning thread and cross
-    // thread death — t->callstack (read by the reaper on the io/signal thread
-    // AFTER the worker is OS-dead and its slot is no longer GC-scanned) and the
-    // rt->callstack_pool free-list.  In the moving GC arena the struct would be
-    // relocated or its segment unmapped out from under those raw pointers
-    // (observed: the reaper faulting in n00b_callstack_pool_return reading a
-    // collected descriptor).  A non-moving pool keeps the pointer valid and the
-    // page mapped for the descriptor's whole life; pool reclamation only
-    // returns the slot to the free-list (page stays mapped).
+    // Allocate the descriptor from system_pool, not from any GC-owned pool.
+    // This bookkeeping is referenced through raw runtime/reaper pointers:
+    // t->callstack while a dead worker waits for OS-confirmed reaping, and
+    // rt->callstack_pool after the region is recycled.  The descriptor is not
+    // lifecycle data the collector should reclaim independently; a missed mark
+    // on runtime_obj_pool can munmap the descriptor page while the reaper still
+    // owns the pointer.  The backing 8 MiB stack region is still reclaimed by
+    // n00b_callstack_pool_return / n00b_callstack_free; only the tiny stable
+    // descriptor intentionally lives for the runtime.
     n00b_runtime_t   *geo_rt    = n00b_get_runtime();
     n00b_allocator_t *cs_alloc  = geo_rt != nullptr
-                                      ? (n00b_allocator_t *)&geo_rt->runtime_obj_pool
+                                      ? (n00b_allocator_t *)&geo_rt->system_pool
                                       : allocator;
-    n00b_callstack_t *cs = n00b_alloc(n00b_callstack_t, .allocator = cs_alloc);
+    n00b_callstack_t *cs = n00b_alloc_with_opts(
+        n00b_callstack_t,
+        &(n00b_alloc_opts_t){.allocator = cs_alloc});
 
     cs->region_start = region;
     cs->region_size  = S;
@@ -392,11 +393,18 @@ n00b_callstack_pool_get() _kargs
     return n00b_callstack_alloc(0, .allocator = allocator);
 }
 
-void
+[[n00b::nogc]] void
 n00b_callstack_pool_return(n00b_callstack_t *stack)
 {
     if (stack == nullptr) {
         return;
+    }
+
+    n00b_runtime_t *rt    = n00b_default_runtime_or_null();
+    bool            gated = rt != nullptr;
+
+    if (gated) {
+        n00b_rw_read_lock(&rt->critical_execution);
     }
 
     // Caller-owned (custom_stack) regions are never pooled — the backing
@@ -404,10 +412,12 @@ n00b_callstack_pool_return(n00b_callstack_t *stack)
     // registrations WITHOUT unmapping the caller's memory.
     if (stack->caller_owned) {
         n00b_callstack_free(stack);
+        if (gated) {
+            n00b_rw_unlock(&rt->critical_execution);
+        }
         return;
     }
 
-    n00b_runtime_t *rt = n00b_get_runtime();
     if (rt == nullptr) {
         // No runtime to pool onto: just reclaim the region.
         n00b_callstack_free(stack);
@@ -421,12 +431,18 @@ n00b_callstack_pool_return(n00b_callstack_t *stack)
         // pool spinlock.
         _n00b_callstack_pool_unlock(rt);
         n00b_callstack_free(stack);
+        if (gated) {
+            n00b_rw_unlock(&rt->critical_execution);
+        }
         return;
     }
     stack->pool_next   = rt->callstack_pool;
     rt->callstack_pool = stack;
     rt->callstack_pool_count++;
     _n00b_callstack_pool_unlock(rt);
+    if (gated) {
+        n00b_rw_unlock(&rt->critical_execution);
+    }
 }
 
 // ============================================================================

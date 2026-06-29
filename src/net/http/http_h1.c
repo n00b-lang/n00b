@@ -861,10 +861,13 @@ typedef struct {
     n00b_conduit_tls_t                    *tls;
     n00b_conduit_inbox_t(n00b_buffer_t *) *inbox;
     n00b_conduit_sub_handle_t              sub;
+    n00b_allocator_t                      *allocator;
 } h1_tls_conn_t;
 
-/* Pool close-fn shape: cancel the read subscription, then close the session.
- * Idempotent (n00b_conduit_tls_close is). */
+/* Pool close-fn shape: close the session, then drop the read subscription.
+ * TLS read topics are transform outputs, and transform publishers can be
+ * claimed for the transform lifetime, so subscription cancellation must not be
+ * the operation that tries to quiesce the pipeline. */
 static void
 h1_tls_conn_close(void *u)
 {
@@ -872,20 +875,21 @@ h1_tls_conn_close(void *u)
     if (!tc) {
         return;
     }
-    if (tc->sub != N00B_CONDUIT_INVALID_SUB_HANDLE) {
-        n00b_conduit_sub_cancel(tc->sub);
-        tc->sub = N00B_CONDUIT_INVALID_SUB_HANDLE;
-    }
+    n00b_allocator_t *a = tc->allocator;
     if (tc->tls) {
         n00b_conduit_tls_close(tc->tls);
         tc->tls = nullptr;
     }
+    if (tc->sub != N00B_CONDUIT_INVALID_SUB_HANDLE) {
+        n00b_conduit_sub_cancel(tc->sub);
+        tc->sub = N00B_CONDUIT_INVALID_SUB_HANDLE;
+    }
     if (tc->inbox) {
         n00b_conduit_inbox_destroy(n00b_buffer_t *, tc->inbox);
-        n00b_free_with_allocator_hint(default_pool(), tc->inbox);
+        n00b_free_with_allocator_hint(a ? a : default_pool(), tc->inbox);
         tc->inbox = nullptr;
     }
-    n00b_free_with_allocator_hint(default_pool(), tc);
+    n00b_free_with_allocator_hint(a ? a : default_pool(), tc);
 }
 
 /* Open a fresh conduit-TLS connection over the per-runtime conduit + IO thread,
@@ -944,9 +948,10 @@ h1_tls_connect(n00b_http_url_t *url, n00b_quic_trust_t *trust,
 
     h1_tls_conn_t *tc = n00b_alloc_with_opts(
         h1_tls_conn_t, &(n00b_alloc_opts_t){.allocator = c->allocator});
-    tc->tls   = tls;
-    tc->inbox = inbox;
-    tc->sub   = n00b_result_get(sr).handle;
+    tc->tls       = tls;
+    tc->inbox     = inbox;
+    tc->sub       = n00b_result_get(sr).handle;
+    tc->allocator = c->allocator;
     return n00b_result_ok(h1_tls_conn_t *, tc);
 }
 

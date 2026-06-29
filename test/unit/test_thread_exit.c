@@ -15,6 +15,43 @@
 #include "core/stw.h"
 #include "core/rwlock.h"
 
+static void
+assert_thread_handle_storage_system_owned(n00b_runtime_t *rt, n00b_thread_t *thread)
+{
+    assert(thread != nullptr);
+
+    n00b_allocator_opt_t a_opt = n00b_mem_get_allocator(thread);
+
+    if (!n00b_option_is_set(a_opt)) {
+        // rt->system_pool is hidden/system storage and is intentionally absent
+        // from the public mmap owner lookup on this branch.
+        return;
+    }
+
+    n00b_allocator_t *owner = n00b_option_get(a_opt);
+    assert(owner == (n00b_allocator_t *)&rt->system_pool);
+    assert(owner != (n00b_allocator_t *)&rt->runtime_obj_pool);
+    assert(owner != (n00b_allocator_t *)&rt->user_pool);
+}
+
+static void
+assert_callstack_descriptor_storage_system_owned(n00b_runtime_t   *rt,
+                                                 n00b_callstack_t *stack)
+{
+    assert(stack != nullptr);
+
+    n00b_allocator_opt_t a_opt = n00b_mem_get_allocator(stack);
+
+    if (!n00b_option_is_set(a_opt)) {
+        return;
+    }
+
+    n00b_allocator_t *owner = n00b_option_get(a_opt);
+    assert(owner == (n00b_allocator_t *)&rt->system_pool);
+    assert(owner != (n00b_allocator_t *)&rt->runtime_obj_pool);
+    assert(owner != (n00b_allocator_t *)&rt->user_pool);
+}
+
 // ============================================================================
 // WP-3a Phase 1 regression test: the 64-bit exit-code channel.
 //
@@ -167,15 +204,13 @@ test_void_return_unchanged(void)
 }
 
 // ----------------------------------------------------------------------------
-// WP-3a Phase 1 (D-034): the permanent n00b_thread_t is allocated from the
-// GC-VISIBLE, non-moving `user_pool` on n00b_runtime_t (NOT the hidden
-// system_pool).  These assertions confirm the foundation: spawn/join still
-// works end-to-end across the pool move (both the `void *` fn-return AND the
-// Phase-0 exit code remain correct); the struct's owning allocator is
-// `user_pool`; n00b_thread_self() resolves on the worker (non-moving pool
-// preserved identity); and a forced GC collection while the thread is live AND
-// after join leaves the thread/lock state intact (no corruption, lock chains
-// preserved).
+// WP-3a Phase 1 (D-034): the permanent n00b_thread_t is allocated from
+// system_pool, outside GC ownership.  These assertions confirm the foundation:
+// spawn/join still works end-to-end across the pool move (both the `void *`
+// fn-return AND the Phase-0 exit code remain correct); n00b_thread_self()
+// resolves on the worker (non-moving pool preserved identity); and a forced GC
+// collection while the thread is live AND after join leaves the thread/lock
+// state intact (no corruption, lock chains preserved).
 //
 // This phase does NOT change n00b_thread_join, reclamation timing, or
 // callstack handling (Phase 2/3).
@@ -195,9 +230,9 @@ user_pool_worker(void *raw)
 {
     user_pool_io_t *io = (user_pool_io_t *)raw;
 
-    // n00b_thread_self() must resolve to this worker's permanent struct (the
-    // one allocated from user_pool); the worker-masking branch back-verifies
-    // the callstack base, so a wrong/relocated struct would fault or mismatch.
+    // n00b_thread_self() must resolve to this worker's permanent system-pool
+    // struct; the worker-masking branch back-verifies the callstack base, so a
+    // wrong/relocated struct would fault or mismatch.
     n00b_thread_t *self = n00b_thread_self();
     n00b_atomic_store(&io->seen_self, self);
 
@@ -206,7 +241,7 @@ user_pool_worker(void *raw)
 }
 
 static void
-test_thread_struct_from_user_pool(n00b_runtime_t *rt)
+test_thread_struct_from_system_pool(n00b_runtime_t *rt)
 {
     user_pool_io_t io = {};
 
@@ -214,6 +249,7 @@ test_thread_struct_from_user_pool(n00b_runtime_t *rt)
     assert(n00b_result_is_ok(r));
     n00b_thread_t *child = n00b_result_get(r);
     assert(child != nullptr);
+    assert_callstack_descriptor_storage_system_owned(rt, child->callstack);
 
     void *ret = n00b_thread_join(child);
 
@@ -226,22 +262,18 @@ test_thread_struct_from_user_pool(n00b_runtime_t *rt)
     n00b_thread_t *seen = n00b_atomic_load(&io.seen_self);
     assert(seen == child);
 
-    // The struct's owning allocator is the runtime's user_pool, NOT
-    // system_pool — this is the D-034 foundation assertion.
-    n00b_allocator_opt_t a_opt = n00b_mem_get_allocator(child);
-    assert(n00b_option_is_set(a_opt));
-    n00b_allocator_t *owner = n00b_option_get(a_opt);
-    assert(owner == (n00b_allocator_t *)&rt->runtime_obj_pool);
-    assert(owner != (n00b_allocator_t *)&rt->system_pool);
+    // The struct is system-owned, not GC-owned: raw join/reap/conduit handles
+    // are outside the GC graph.
+    assert_thread_handle_storage_system_owned(rt, child);
 
-    printf("  [PASS] thread_struct_from_user_pool "
-           "(n00b_thread_t owned by user_pool; spawn/join + both channels "
+    printf("  [PASS] thread_struct_from_system_pool "
+           "(n00b_thread_t owned by system_pool; spawn/join + both channels "
            "intact; self() resolved on worker)\n");
 }
 
 // A worker that takes a write lock (linking it into rec->exclusive_locks) and
 // parks via the cooperative STW-suspend pattern, so a forced collection while
-// it is LIVE must scan its struct (in user_pool), its record, and its lock
+// it is LIVE must scan its system-pool struct, its record, and its lock
 // chains without corruption.  After release it unlocks (faulting if the chain
 // scan lost a relocated lock head), returns its sentinel, and stashes a code;
 // the joiner then drives a second forced collection AFTER join and confirms
@@ -273,13 +305,13 @@ user_pool_gc_worker(void *raw)
 }
 
 static void
-test_user_pool_struct_survives_gc(n00b_runtime_t *rt)
+test_system_pool_struct_survives_gc(n00b_runtime_t *rt)
 {
     n00b_arena_t *arena = rt->default_arena;
     if (arena == nullptr) {
         // Non-default (caller-supplied) allocator runtime: the forced-collect
         // probe targets the GC'd default arena, which is absent here.
-        printf("  [SKIP] user_pool_struct_survives_gc "
+        printf("  [SKIP] system_pool_struct_survives_gc "
                "(runtime has no GC'd default arena)\n");
         return;
     }
@@ -301,11 +333,11 @@ test_user_pool_struct_survives_gc(n00b_runtime_t *rt)
     assert(n00b_result_is_ok(r));
     n00b_thread_t *child = n00b_result_get(r);
     assert(child != nullptr);
+    assert_callstack_descriptor_storage_system_owned(rt, child->callstack);
 
     // (1) Generate GC pressure and force a collection while the worker is LIVE
-    //     and parked.  n00b_scan_thread_stacks scans the worker's struct (in
-    //     user_pool), its record, and its lock chains every collect; a
-    //     non-moving user_pool keeps those addresses stable.
+    //     and parked. n00b_scan_thread_stacks scans the worker's system-pool
+    //     struct fields, its record, and its lock chains every collect.
     for (int i = 0; i < 2048; i++) {
         (void)n00b_alloc_array_with_opts(
             uint64_t,
@@ -317,9 +349,8 @@ test_user_pool_struct_survives_gc(n00b_runtime_t *rt)
     n00b_restart_the_world();
 
     // The worker's struct survived the live collection and stayed put.
-    n00b_allocator_opt_t a_opt = n00b_mem_get_allocator(child);
-    assert(n00b_option_is_set(a_opt));
-    assert(n00b_option_get(a_opt) == (n00b_allocator_t *)&rt->runtime_obj_pool);
+    assert_thread_handle_storage_system_owned(rt, child);
+    assert_callstack_descriptor_storage_system_owned(rt, child->callstack);
 
     // (2) Release the worker and join.
     n00b_atomic_store(&io.park, 1);
@@ -337,11 +368,9 @@ test_user_pool_struct_survives_gc(n00b_runtime_t *rt)
     n00b_restart_the_world();
 
     assert(n00b_thread_exit_code(child) == EXIT_SENTINEL);
-    a_opt = n00b_mem_get_allocator(child);
-    assert(n00b_option_is_set(a_opt));
-    assert(n00b_option_get(a_opt) == (n00b_allocator_t *)&rt->runtime_obj_pool);
+    assert_thread_handle_storage_system_owned(rt, child);
 
-    printf("  [PASS] user_pool_struct_survives_gc "
+    printf("  [PASS] system_pool_struct_survives_gc "
            "(forced collect live + after join: struct non-moving, lock/exit "
            "state intact)\n");
 }
@@ -614,16 +643,16 @@ test_joinable_both_channels(void)
 }
 
 // (f) A held-DEAD handle is safe to read after join, including across a forced
-//     GC, because the held handle (a scanned local) keeps the GC-owned struct
-//     alive (D-034).
+//     GC, because join frees neither the system-pool thread record nor its
+//     published result fields.
 static void
 test_held_dead_handle_safe(n00b_runtime_t *rt)
 {
     n00b_result_t(n00b_thread_t *) r = n00b_thread_spawn(joinable_worker,
                                                          nullptr);
     assert(n00b_result_is_ok(r));
-    // `child` is held in this scanned stack frame for the whole test — the GC
-    // sees it conservatively, so the user_pool struct must stay alive.
+    // `child` is held in this stack frame for the whole test; the thread record
+    // is system-owned and remains readable after join.
     n00b_thread_t *child = n00b_result_get(r);
     assert(child != nullptr);
 
@@ -633,13 +662,11 @@ test_held_dead_handle_safe(n00b_runtime_t *rt)
     // The worker is now dead (join observed "done").  Read the handle's fields
     // while still holding it — this must not crash and must be consistent.
     assert(n00b_thread_exit_code(child) == JOINABLE_CODE);
-    n00b_allocator_opt_t a_opt = n00b_mem_get_allocator(child);
-    assert(n00b_option_is_set(a_opt));
-    assert(n00b_option_get(a_opt) == (n00b_allocator_t *)&rt->runtime_obj_pool);
+    assert_thread_handle_storage_system_owned(rt, child);
 
     // Force a collection with the dead worker's handle held in a scanned
-    // location: the struct must survive (GC keeps a referenced user_pool
-    // allocation alive) and remain readable + non-moving.
+    // location: the system-owned struct must survive and remain readable +
+    // non-moving.
     n00b_arena_t *arena = rt->default_arena;
     if (arena != nullptr) {
         for (int i = 0; i < 1024; i++) {
@@ -652,11 +679,9 @@ test_held_dead_handle_safe(n00b_runtime_t *rt)
         n00b_collect(arena);
         n00b_restart_the_world();
 
-        // Still readable + still owned by user_pool after the collection.
+        // Still readable + still system-owned after the collection.
         assert(n00b_thread_exit_code(child) == JOINABLE_CODE);
-        a_opt = n00b_mem_get_allocator(child);
-        assert(n00b_option_is_set(a_opt));
-        assert(n00b_option_get(a_opt) == (n00b_allocator_t *)&rt->runtime_obj_pool);
+        assert_thread_handle_storage_system_owned(rt, child);
 
         printf("  [PASS] held_dead_handle_safe "
                "(dead worker's handle held in a scanned local: fields readable "
@@ -736,12 +761,10 @@ test_join_frees_nothing(n00b_runtime_t *rt)
     // The struct is NOT freed by join: every field the joiner relied on is
     // still readable the instant join returns.
     assert(n00b_thread_exit_code(child) == JOINABLE_CODE);
-    n00b_allocator_opt_t a_opt = n00b_mem_get_allocator(child);
-    assert(n00b_option_is_set(a_opt));
-    assert(n00b_option_get(a_opt) == (n00b_allocator_t *)&rt->runtime_obj_pool);
+    assert_thread_handle_storage_system_owned(rt, child);
 
     // Hold the handle across a forced GC: still readable (join freed nothing,
-    // and the held reference keeps the GC-owned struct alive).
+    // and the struct is system-owned).
     n00b_arena_t *arena = rt->default_arena;
     if (arena != nullptr) {
         for (int i = 0; i < 1024; i++) {
@@ -767,46 +790,17 @@ test_join_frees_nothing(n00b_runtime_t *rt)
 // pressure, reusing the Phase-0 exit-code assertions and the Phase-2
 // region-reuse probe (spawn_join_get_base / reuse_worker).
 //
-// GC-COLLECT-CAPABILITY DETERMINATION (re-confirmed from the code, NOT taken
-// on faith — per the Phase-4 task): the "GC reclaims unreferenced user_pool
-// allocations" capability is CONFIRMED ABSENT in this branch.  Verified by
-// reading:
-//   - src/core/init.c: user_pool is hidden = false, no .__system, and is NOT
-//     appended to rt->scannable_pools; that list is created empty.
-//   - src/core/alloc.c (n00b_allocator_setup) + src/core/pool.c: nothing
-//     pushes a pool onto rt->scannable_pools (the pool.c comment that claims
-//     allocator_setup does so refers to the unmerged PR); n00b_scan_scannable_pools
-//     does not exist as a function (only a stale comment in regex.c names it).
-//   - src/core/gc.c / include/core/gc.h: n00b_collect() is a COPYING collector
-//     over an ARENA (from-space -> to-space).  Pools are non-moving free-list
-//     allocators with NO collect/reclaim/sweep API (include/core/pool.h has
-//     none); unreferenced pool allocations are freed only by explicit n00b_free
-//     or bulk teardown, never by a reachability sweep.
-// Consequence (D-034 / DF-1): the user_pool n00b_thread_t struct is no longer
-// bulk-freed (it left system_pool) but is not yet GC-reclaimed when
-// unreferenced — a known, tracked leak that closes when the upstream PR lands
-// (deconflicted at WP-close rebase).  The two assertions that depend on this
-// capability — "no unbounded user_pool growth at volume" and "drop the handle
-// => collected" — are therefore [SKIP]-gated (never a silent pass) on the
-// compile-time flag below; the reuse / held-safe / generation assertions do
-// NOT depend on it and run live.
-//
-// DF-7 (user_pool footprint observability) disposition: there is no public
-// user_pool / callstack-pool introspection API (no allocation-count or
-// high-water metric) for a deterministic growth/collect assertion.  Rather
-// than add a public symbol (forbidden without orchestrator signoff) or a
-// test-only hook, the capstone uses a PROXY: it drives the high-volume loop +
-// forced GC and asserts no corruption / no crash and (live, capability-
-// independent) that the callstack POOL bounds resident memory via region
-// reuse.  The leak/collect half stays [SKIP]-gated until the capability lands.
+// Thread records are stable system-pool handles on this branch.  The GC scans
+// their heap-pointer fields but does not own/reclaim the records, and the
+// joiner does not free them because callers may still read the published result
+// fields.  This capstone proves the live properties required here: callstack
+// regions are reaped/reused, post-join handles remain readable, and forced GC
+// does not corrupt scanned thread fields.
 // ============================================================================
 
-// Flip to 1 only when the upstream "GC collects unreferenced pool allocations"
-// PR has been merged into this branch and user_pool is registered as a
-// scannable/collectable pool (see the determination block above).  Until then
-// the no-leak / drop-collects assertions are [SKIP]-gated, never silently
-// passed.
-#define N00B_GC_COLLECTS_USER_POOL 0
+// Flip to 1 only if thread-record reclamation gets an explicit ownership model
+// that safely distinguishes held join handles from unheld detached records.
+#define N00B_RECLAIMS_THREAD_RECORDS 0
 
 #define CAPSTONE_RET  ((void *)(uintptr_t)0x5555)
 #define CAPSTONE_CODE ((uint64_t)0xC0FFEE5555ull)
@@ -828,8 +822,7 @@ capstone_detached_worker(void *raw)
 // Capstone (1): DETACHED AT VOLUME (>= 256 cycles).  Spawn short-lived detached
 // workers, never join.  Assert callstacks are REUSED from the pool (region
 // bases recur) and no corruption/crash, while driving forced GC throughout.
-// The no-unbounded-growth (GC reclaims user_pool) assertion is [SKIP]-gated on
-// the determined GC-collect capability.
+// Thread-record reclamation is a separate ownership problem and is [SKIP]-gated.
 static void
 test_capstone_detached_volume(n00b_runtime_t *rt)
 {
@@ -907,22 +900,18 @@ test_capstone_detached_volume(n00b_runtime_t *rt)
     assert(reuses > 0);
     assert(distinct < ITERS);
 
-#if N00B_GC_COLLECTS_USER_POOL
-    // The structs of the never-joined workers are unreferenced (handles
-    // dropped); once the capability lands, a forced collect reclaims them and
-    // user_pool's footprint does not grow without bound across the loop.  No
-    // public footprint metric exists (DF-7), so when this is enabled it should
-    // be asserted via the metric the capability adds.
-    (void)0; // placeholder for the footprint assertion the capability enables
+#if N00B_RECLAIMS_THREAD_RECORDS
+    // Placeholder for a future explicit thread-record ownership/reclamation
+    // assertion.
+    (void)0;
     printf("  [PASS] capstone_detached_volume "
-           "(%d detached cycles; callstacks reused from the pool; structs "
-           "GC-reclaimed; survived forced GC)\n",
+           "(%d detached cycles; callstacks reused from the pool; thread "
+           "records reclaimed; survived forced GC)\n",
            ITERS);
 #else
-    printf("  [SKIP] capstone_detached_volume:no-leak "
-           "(GC-collects-user_pool capability ABSENT in-branch — D-034/DF-1; "
-           "struct leaks until the upstream PR lands; reuse + no-corruption "
-           "half ran live over %d cycles)\n",
+    printf("  [SKIP] capstone_detached_volume:thread-record-reclaim "
+           "(thread records are stable system-pool handles in this branch; "
+           "reuse + no-corruption half ran live over %d cycles)\n",
            ITERS);
     printf("  [PASS] capstone_detached_volume:reuse "
            "(%d detached cycles; callstacks reused from the pool (%d distinct "
@@ -967,8 +956,8 @@ test_capstone_joinable_volume(n00b_runtime_t *rt)
         assert((uint64_t)(uintptr_t)ret != n00b_thread_exit_code(child));
 
         // Read fields after the worker is dead while the handle is held in this
-        // scanned frame -> safe (join freed nothing; the held ref keeps the
-        // GC-owned struct alive).  Across a periodic forced GC.
+        // frame -> safe (join freed nothing; the struct is system-owned).
+        // Across a periodic forced GC.
         if ((i % 100) == 0 && arena != nullptr) {
             for (int k = 0; k < 256; k++) {
                 (void)n00b_alloc_array_with_opts(
@@ -980,11 +969,9 @@ test_capstone_joinable_volume(n00b_runtime_t *rt)
             n00b_collect(arena);
             n00b_restart_the_world();
 
-            // Still readable + still owned by user_pool after the collection.
+            // Still readable + still system-owned after the collection.
             assert(n00b_thread_exit_code(child) == CAPSTONE_CODE);
-            n00b_allocator_opt_t a_opt = n00b_mem_get_allocator(child);
-            assert(n00b_option_is_set(a_opt));
-            assert(n00b_option_get(a_opt) == (n00b_allocator_t *)&rt->runtime_obj_pool);
+            assert_thread_handle_storage_system_owned(rt, child);
         }
         // Keep `child` observably live to end-of-iteration.
         assert(child != nullptr);
@@ -1016,14 +1003,11 @@ test_capstone_drop_collects(n00b_runtime_t *rt)
 
     // Held (scanned local): safe to read the dead worker's fields.
     assert(n00b_thread_exit_code(child) == CAPSTONE_CODE);
-    n00b_allocator_opt_t a_opt = n00b_mem_get_allocator(child);
-    assert(n00b_option_is_set(a_opt));
-    assert(n00b_option_get(a_opt) == (n00b_allocator_t *)&rt->runtime_obj_pool);
+    assert_thread_handle_storage_system_owned(rt, child);
 
-#if N00B_GC_COLLECTS_USER_POOL
-    // Drop the reference and force a collect: the struct must be reclaimed
-    // (observed via the user_pool footprint dropping, or a collect-detectable
-    // proxy the capability exposes — DF-7).
+#if N00B_RECLAIMS_THREAD_RECORDS
+    // Drop the reference and assert explicit thread-record reclamation once a
+    // safe ownership model exists.
     child = nullptr;
     if (arena != nullptr) {
         for (int k = 0; k < 1024; k++) {
@@ -1036,8 +1020,8 @@ test_capstone_drop_collects(n00b_runtime_t *rt)
         n00b_collect(arena);
         n00b_restart_the_world();
     }
-    // The reclamation assertion goes here once the capability + footprint
-    // metric (DF-7) are available.
+    // The reclamation assertion goes here once a thread-record ownership metric
+    // exists.
     printf("  [PASS] capstone_drop_collects "
            "(held handle safe; dropped reference reclaimed by the GC)\n");
 #else
@@ -1046,8 +1030,7 @@ test_capstone_drop_collects(n00b_runtime_t *rt)
     assert(child != nullptr);
     printf("  [SKIP] capstone_drop_collects "
            "(held-handle safe-read ran live; drop=>collected gated on the "
-           "GC-collects-user_pool capability — ABSENT in-branch, D-034/DF-1; "
-           "no public user_pool footprint metric exists — DF-7)\n");
+           "thread-record reclamation model, absent in this branch)\n");
 #endif
 }
 
@@ -1162,8 +1145,8 @@ main(int argc, char **argv)
     test_exit_code_published();
     test_default_exit_code_is_zero();
     test_void_return_unchanged();
-    test_thread_struct_from_user_pool(&runtime);
-    test_user_pool_struct_survives_gc(&runtime);
+    test_thread_struct_from_system_pool(&runtime);
+    test_system_pool_struct_survives_gc(&runtime);
     test_callstack_region_reused();
     test_spawn_exit_loop_pooled(&runtime);
     test_linux_cleartid_death_edge();

@@ -360,19 +360,12 @@ n00b_init_core(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     // Runtime GC-typemap registry lock (its entries come from system_pool).
     n00b_gc_type_map_init();
 
-    // GC-VISIBLE, non-moving `runtime_obj_pool` (WP-3a / D-034).  Holds
-    // GC-reclaimable runtime structs (currently `n00b_thread_t`).  Named
-    // distinctly from the upstream `user_pool` (initialized below — a HIDDEN
-    // leak-tracking pool; the two are NOT the same — WP-close deconfliction,
-    // D-034/D-039).  Initialized with `hidden = false` and WITHOUT `.__system`
-    // so the GC treats its allocations as ordinary objects: reachable -> kept,
-    // unreferenced -> collected.  Being a pool it is non-moving, so the raw
-    // `rt->threads[].thread` pointers and `n00b_thread_self()` stay valid
-    // across collections.
-    //
-    // runtime_obj_pool allocations (the thread structs) stay reachable via
-    // the explicit thread-struct / record / lock-chain scan in
-    // `n00b_scan_thread_stacks`.
+    // GC-VISIBLE, non-moving `runtime_obj_pool` (WP-3a / D-034).  This remains
+    // available for runtime-owned objects whose lifetime really is described by
+    // the GC graph.  Thread records are not allocated here: join handles,
+    // conduit state, and the OS-death reaper keep raw thread references outside
+    // the GC graph, so `n00b_thread_t` lives in system_pool and its heap-pointer
+    // fields are scanned explicitly by `n00b_scan_thread_stacks`.
     //
     // external_metadata=true is REQUIRED post-WP-032: pool.c registers a pool's
     // pages in the global mmap tree (so n00b_mem_get_allocator can attribute an

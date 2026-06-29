@@ -32,10 +32,7 @@ n00b_conduit_xform_destroy(n00b_conduit_xform_base_t *xf)
     // Always stop+join, even if running hasn't been set yet (race window).
     n00b_conduit_xform_stop(xf);
     n00b_conduit_xform_join(xf);
-    if (xf->thread != nullptr) {
-        n00b_gc_unregister_root(xf->thread);
-        xf->thread = nullptr;
-    }
+    xf->thread = nullptr;
 
     if (xf->upstream_sub) {
         n00b_conduit_sub_cancel(xf->upstream_sub);

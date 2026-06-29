@@ -2236,23 +2236,22 @@ n00b_scan_memory_range(n00b_collect_t *ctx, void *start, size_t nwords)
 // Thread lock-chain scanning
 // ============================================================================
 
-static inline size_t
-n00b_words_for_scan(size_t bytes)
-{
-    return (bytes + sizeof(void *) - 1) / sizeof(void *);
-}
-
 static void
 n00b_scan_thread_lock_chains(n00b_collect_t *ctx, n00b_thread_record_t *rec)
 {
-    /* Locks can live in hidden, non-moving pools.  Thread-record scanning
-     * updates the chain head, but hidden lock storage is not discoverable
-     * through the mmap registry, so scan only the active chains here instead
-     * of registering every initialized lock as a durable root. */
+    /* Locks can be embedded inside movable heap objects. Update only the
+     * active chain slots that can point at those locks; the record itself,
+     * read-log nodes, lock logs, source locations, and allocation metadata are
+     * raw/system state and must not be scanned wholesale. */
+    n00b_scan_memory_range(ctx, (void *)&rec->exclusive_locks, 1);
+    n00b_scan_memory_range(ctx, (void *)&rec->lock_wait_target, 1);
+    n00b_process_worklist(ctx);
+
     n00b_lock_base_t *lock = n00b_atomic_load(&rec->exclusive_locks);
 
     while (lock != nullptr) {
-        n00b_scan_memory_range(ctx, lock, n00b_words_for_scan(sizeof(n00b_lock_base_t)));
+        n00b_scan_memory_range(ctx, (void *)&lock->next_thread_lock, 1);
+        n00b_scan_memory_range(ctx, (void *)&lock->prev_thread_lock, 1);
         n00b_process_worklist(ctx);
         lock = n00b_atomic_load(&lock->next_thread_lock);
     }
@@ -2260,19 +2259,24 @@ n00b_scan_thread_lock_chains(n00b_collect_t *ctx, n00b_thread_record_t *rec)
     n00b_thread_read_log_t *rlog = n00b_atomic_load(&rec->read_locks);
 
     while (rlog != nullptr) {
-        n00b_scan_memory_range(ctx, rlog, n00b_words_for_scan(sizeof(n00b_thread_read_log_t)));
+        n00b_scan_memory_range(ctx, (void *)&rlog->obj, 1);
         n00b_process_worklist(ctx);
 
         n00b_lock_base_t *read_lock = (n00b_lock_base_t *)rlog->obj;
         if (read_lock != nullptr) {
-            n00b_scan_memory_range(ctx,
-                                   read_lock,
-                                   n00b_words_for_scan(sizeof(n00b_lock_base_t)));
+            n00b_scan_memory_range(ctx, (void *)&read_lock->next_thread_lock, 1);
+            n00b_scan_memory_range(ctx, (void *)&read_lock->prev_thread_lock, 1);
             n00b_process_worklist(ctx);
         }
 
         rlog = rlog->next_entry;
     }
+}
+
+static inline void
+n00b_scan_thread_record_heap_fields(n00b_collect_t *ctx, n00b_thread_record_t *rec)
+{
+    n00b_scan_memory_range(ctx, (void *)&rec->regex_last_detail, 1);
 }
 
 // ============================================================================
@@ -2291,19 +2295,20 @@ n00b_scan_thread_lock_chains(n00b_collect_t *ctx, n00b_thread_record_t *rec)
 //     point at non-GC allocators / the reserved in-flight region, never at
 //     relocatable heap objects.
 //   * stack pointers, OS handles, code pointers, and scalars.
-// Only these eight fields hold GC-heap objects the collector must keep alive
+// Only these fields hold GC-heap objects the collector must keep alive
 // (and relocate the slot for): everything else is skipped by construction.
+// n00b_thread_t itself lives in system_pool because join/reap/conduit keep raw
+// handles outside the GC graph; scanning here is field reachability only.
+// In particular, record/callstack/altstack/reap_next are runtime ownership
+// pointers, not heap roots. Scanning them can make the moving collector rewrite
+// raw thread/reaper state into unrelated heap-looking addresses.
 static inline void
 n00b_scan_thread_heap_fields(n00b_collect_t *ctx, n00b_thread_t *t)
 {
-    n00b_scan_memory_range(ctx, (void *)&t->record, 1);
     n00b_scan_memory_range(ctx, (void *)&t->dl_last_error, 1);
     n00b_scan_memory_range(ctx, (void *)&t->name, 1);
-    n00b_scan_memory_range(ctx, (void *)&t->callstack, 1);
-    n00b_scan_memory_range(ctx, (void *)&t->altstack, 1);
     n00b_scan_memory_range(ctx, (void *)&t->join_result, 1);
     n00b_scan_memory_range(ctx, (void *)&t->finalizer_data, 1);
-    n00b_scan_memory_range(ctx, (void *)&t->reap_next, 1);
 }
 
 // Resolve the conservative C-stack scan range for a suspended thread's captured
@@ -2472,13 +2477,10 @@ scan_thread_state:
         // struct -- see n00b_scan_thread_heap_fields: the captured register file
         // and the arena/pool/stack references must never be followed).
         n00b_scan_thread_heap_fields(ctx, (n00b_thread_t *)t);
-        // Scan the thread RECORD too — it lives in `rt->threads[i]` and
-        // holds pointers into the GC heap that nothing else scans:
-        // `exclusive_locks` / `read_locks` (heads of per-thread lock
-        // accounting chains, where each in-heap `n00b_mutex_t` /
-        // `n00b_rwlock_t` lives inside a relocatable allocation — e.g.
-        // an embedded field of a GC-allocated `Regex`), `lock_wait_target`,
-        // and `regex_last_detail` (per-thread error string).
+        // Scan only the thread RECORD fields that can point into the GC heap:
+        // lock-chain slots for movable embedded locks and regex_last_detail
+        // (per-thread error string). The record's thread back-pointer and stack
+        // bounds are raw runtime state and must never be treated as roots.
         //
         // Without this scan, after a collection that relocates a heap
         // lock, the chain head still points at the old (freed) address,
@@ -2487,52 +2489,27 @@ scan_thread_state:
         // in a tight loop over a multi-hundred-KB haystack — the SIMD
         // match path generates enough GC pressure to force a collection
         // mid-lock, after ~1000 iterations.
-        n00b_scan_memory_range(ctx,
-                               (void *)&rt->threads[i],
-                               n00b_words_for_scan(sizeof(n00b_thread_record_t)));
+        n00b_scan_thread_record_heap_fields(ctx, &rt->threads[i]);
         n00b_scan_thread_lock_chains(ctx, &rt->threads[i]);
     }
 
-    // Keep the reap-pending chain alive (WP-001).  A dead worker queued for
-    // reaping has had its rt->threads[] slot cleared, so the loop above never
-    // reaches it: the ONLY reference to its struct — and to the n00b_callstack_t
-    // descriptors it still owns via ->callstack / ->altstack, which the reaper
-    // returns to the pool — is this raw chain.  Both the struct and the
-    // descriptors live in the GC-visible runtime_obj_pool, so without marking
-    // them here a collection reclaims them out from under the reaper, which then
-    // reads freed memory at reap time (observed at shutdown:
-    // n00b_callstack_pool_return faulting on a freed descriptor).  The world is
-    // stopped (we hold critical_execution; every other thread is suspended), so
-    // the chain is stable.  Mark each entry's struct (which keeps it AND, via the
-    // worklist trace, its ->callstack/->altstack descriptors); we do NOT scan a
-    // dead worker's C stack — it is gone.
+    // Scan heap fields on the reap-pending chain (WP-001). A dead worker queued
+    // for reaping has had its rt->threads[] slot cleared, so the loop above
+    // never reaches it. The n00b_thread_t and n00b_callstack_t descriptors live
+    // in system_pool, but the thread fields can still hold GC heap objects
+    // (name, finalizer data, join result). The world is stopped, so the chain is
+    // stable. We do NOT scan a dead worker's C stack; it is gone.
     n00b_thread_t *reap_t = rt->reap_pending;
     while (reap_t != nullptr) {
         n00b_thread_t *reap_next = reap_t->reap_next;
-        // Mark the struct itself (conservatively, via the pointer slot), then
-        // scan its contents so the worklist trace reaches the ->callstack /
-        // ->altstack descriptors it still owns.
-        n00b_scan_memory_range(ctx, (void *)&reap_t, 1);
-        // Same deliberate field set as the live-thread scan (keeps the
-        // ->callstack/->altstack descriptors the reaper still owns); never scan
-        // the whole struct.
+        // Same deliberate field set as the live-thread scan; never scan the
+        // whole struct.
         n00b_scan_thread_heap_fields(ctx, reap_t);
         reap_t = reap_next;
     }
 
-    // Keep pooled callstack descriptors alive. Once a dead worker is reaped,
-    // its callstack and altstack descriptors move from reap_pending to
-    // rt->callstack_pool. The regions remain mapped for reuse, and spawn pulls
-    // descriptors from this free-list, so the free-list itself is a runtime
-    // root. Without this, GC can reclaim/recycle a descriptor while
-    // rt->callstack_pool still points at it; a later spawn reuses a stale
-    // descriptor and the next reaper faults in n00b_callstack_pool_return.
-    n00b_callstack_t *pooled = rt->callstack_pool;
-    while (pooled != nullptr) {
-        n00b_callstack_t *next = pooled->pool_next;
-        n00b_scan_memory_range(ctx, (void *)&pooled, 1);
-        pooled = next;
-    }
+    // Pooled callstack descriptors live in system_pool, not in a GC-owned pool;
+    // do not scan the free-list or descriptor fields as heap references.
 }
 
 // ============================================================================
