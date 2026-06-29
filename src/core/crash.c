@@ -421,7 +421,7 @@ _n00b_crash_dump_context(int sig,
     }
 }
 
-// SIGSEGV/SIGBUS fault handler.  Runs in signal context on the faulting
+// Fatal signal handler.  Runs in signal context on the faulting
 // thread's alternate stack (SA_ONSTACK), which is an n00b callstack stamped
 // with this thread's slot id — so n00b_thread_self() (and the ncc-emitted
 // gc_stack_push in this function's own prologue) resolve correctly here.
@@ -492,8 +492,10 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
     }
 
     _n00b_crash_write(sig == SIGABRT ? "n00b: fatal: aborted\n"
-                      : overflow     ? "n00b: fatal: stack overflow\n"
-                                     : "n00b: fatal: invalid memory access\n");
+                      : sig == SIGILL ? "n00b: fatal: illegal instruction\n"
+                      : sig == SIGTRAP ? "n00b: fatal: trap\n"
+                      : overflow      ? "n00b: fatal: stack overflow\n"
+                                      : "n00b: fatal: invalid memory access\n");
     _n00b_crash_dump_context(sig, si, uctx, faulting, overflow);
 
     // SYMBOLICATED (DWARF) backtrace via the full capture -> resolve -> render
@@ -651,12 +653,13 @@ n00b_crash_init(void)
     // this handler does not intercept GC traffic.
     (void)sigaction(SIGSEGV, &sa, nullptr);
     (void)sigaction(SIGBUS, &sa, nullptr);
-    // Also catch SIGABRT so a deliberate n00b_abort() (and any libc/3rd-party
-    // abort raised on a thread that can deliver it) produces an n00b context
-    // dump.  Delivered via kill()/raise(), not a synchronous fault: the handler
-    // dumps and returns; n00b_abort then exits explicitly (the resumed caller),
-    // and a default abort path proceeds to libc termination after the dump.
+    // Also catch deliberate process traps/aborts so raw-worker failures in
+    // libc/dispatch/TSD land produce the same frame dump as memory faults.
+    // SIGABRT is delivered via kill()/raise(), not a synchronous fault; SIGILL
+    // and SIGTRAP are synchronous, so the handler exits the process directly.
     (void)sigaction(SIGABRT, &sa, nullptr);
+    (void)sigaction(SIGILL, &sa, nullptr);
+    (void)sigaction(SIGTRAP, &sa, nullptr);
 #else
     // Windows: AddVectoredExceptionHandler equivalent — written-only,
     // host-verified later (D-026/D-028).
