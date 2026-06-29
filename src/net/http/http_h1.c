@@ -50,8 +50,11 @@
 #include "conduit/service.h"
 #include "conduit/rw.h"
 #include "conduit/inbox.h"
+#include "conduit/print.h"
 #include "conduit/xform_tls.h"
 #include "core/condition.h"
+#include "core/env.h"
+#include "core/time.h"
 
 /* ===========================================================================
  * §1   Header bag
@@ -66,6 +69,17 @@ struct n00b_http_h1_headers {
     n00b_list_t(h1_header_node_t *) *items;
     n00b_allocator_t                *allocator;
 };
+
+static int32_t
+h1_remaining_timeout_ms(uint64_t deadline_ns)
+{
+    uint64_t now = n00b_ns_timestamp();
+    if (now >= deadline_ns) {
+        return 0;
+    }
+    uint64_t rem_ms = (deadline_ns - now + 999999ULL) / 1000000ULL;
+    return rem_ms > 2147483647ULL ? 2147483647 : (int32_t)rem_ms;
+}
 
 static n00b_allocator_t *
 default_pool(void)
@@ -1028,14 +1042,15 @@ h1_round_trip_conduit_tls(n00b_http_url_t             *url,
     {
         static int _wire = -1;
         if (_wire < 0) {
-            _wire = getenv("CRAYON_EGRESS_WIRE_LOG") ? 1 : 0;
+            _wire = n00b_getenv(r"CRAYON_EGRESS_WIRE_LOG") ? 1 : 0;
         }
         if (_wire) {
-            long long body_len  = body ? (long long)n00b_buffer_len(body) : 0;
-            long long total_len = (long long)n00b_buffer_len(req);
-            fprintf(stderr,
-                    "[tls-req] header=%lld body=%lld total=%lld bytes\n",
-                    total_len - body_len, body_len, total_len);
+            int64_t body_len  = body ? (int64_t)n00b_buffer_len(body) : 0;
+            int64_t total_len = (int64_t)n00b_buffer_len(req);
+            n00b_eprintf("[tls-req] header=[|#|] body=[|#|] total=[|#|] bytes",
+                         total_len - body_len,
+                         body_len,
+                         total_len);
         }
     }
 
@@ -1055,9 +1070,18 @@ h1_round_trip_conduit_tls(n00b_http_url_t             *url,
     bool read_to_eof   = false;
     size_t header_len  = 0;     /* 0 = end-of-headers not yet seen */
     bool   cl_checked  = false; /* Content-Length already sniffed? */
+    int32_t effective_timeout_ms = timeout_ms > 0 ? timeout_ms : 30000;
+    uint64_t deadline_ns = n00b_ns_timestamp()
+                         + (uint64_t)effective_timeout_ms * 1000000ULL;
     while (!peer_closed && !boundary_seen) {
         n00b_buffer_t *chunk = nullptr;
-        int rc = h1_tls_recv(tc, &chunk, &peer_closed, timeout_ms);
+        int32_t remain_ms = h1_remaining_timeout_ms(deadline_ns);
+        if (remain_ms <= 0) {
+            h1_tls_conn_close(tc);
+            return n00b_result_err(n00b_http_h1_response_t *,
+                                   N00B_QUIC_ERR_TIMEOUT);
+        }
+        int rc = h1_tls_recv(tc, &chunk, &peer_closed, remain_ms);
         if (rc != N00B_QUIC_OK) {
             h1_tls_conn_close(tc);
             return n00b_result_err(n00b_http_h1_response_t *, rc);
@@ -1268,14 +1292,15 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
     {
         static int _wire = -1;
         if (_wire < 0) {
-            _wire = getenv("CRAYON_EGRESS_WIRE_LOG") ? 1 : 0;
+            _wire = n00b_getenv(r"CRAYON_EGRESS_WIRE_LOG") ? 1 : 0;
         }
         if (_wire) {
-            long long body_len  = body ? (long long)n00b_buffer_len(body) : 0;
-            long long total_len = (long long)n00b_buffer_len(req);
-            fprintf(stderr,
-                    "[tls-req] header=%lld body=%lld total=%lld bytes\n",
-                    total_len - body_len, body_len, total_len);
+            int64_t body_len  = body ? (int64_t)n00b_buffer_len(body) : 0;
+            int64_t total_len = (int64_t)n00b_buffer_len(req);
+            n00b_eprintf("[tls-req] header=[|#|] body=[|#|] total=[|#|] bytes",
+                         total_len - body_len,
+                         body_len,
+                         total_len);
         }
     }
 
@@ -1307,10 +1332,19 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
     bool read_to_eof   = false;
     size_t header_len  = 0;       /* 0 = end-of-headers not yet seen */
     bool   cl_checked  = false;   /* Content-Length already sniffed? */
+    int32_t effective_timeout_ms = timeout_ms > 0 ? timeout_ms : 30000;
+    uint64_t deadline_ns = n00b_ns_timestamp()
+                         + (uint64_t)effective_timeout_ms * 1000000ULL;
     while (!peer_closed && !boundary_seen) {
         n00b_buffer_t *chunk = nullptr;
+        int32_t remain_ms = h1_remaining_timeout_ms(deadline_ns);
+        if (remain_ms <= 0) {
+            n00b_acme_tls_close(conn);
+            return n00b_result_err(n00b_http_h1_response_t *,
+                                   N00B_QUIC_ERR_TIMEOUT);
+        }
         rc = n00b_acme_tls_recv(conn, 64 * 1024, &chunk,
-                                 &peer_closed, timeout_ms,
+                                 &peer_closed, remain_ms,
                                  .allocator = a);
         if (rc != N00B_QUIC_OK) {
             n00b_acme_tls_close(conn);
