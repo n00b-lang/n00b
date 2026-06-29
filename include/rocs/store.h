@@ -1371,6 +1371,10 @@ n00b_store_drop_sealed_shard(n00b_store_t *store,
 extern n00b_result_t(n00b_option_t(n00b_store_pos_t))
 n00b_store_oldest_available_pos(n00b_store_t *store);
 
+/** @brief Return the age-retention expiry for the oldest retained sealed shard. */
+extern n00b_result_t(n00b_option_t(uint64_t))
+n00b_store_oldest_available_expires_at_ns(n00b_store_t *store);
+
 /**
  * @brief Check whether a durable position is still retained.
  *

@@ -7970,6 +7970,47 @@ n00b_store_oldest_available_pos(n00b_store_t *store)
     return n00b_result_ok(n00b_option_t(n00b_store_pos_t), result);
 }
 
+n00b_result_t(n00b_option_t(uint64_t))
+n00b_store_oldest_available_expires_at_ns(n00b_store_t *store)
+{
+    if (store == nullptr) {
+        return n00b_result_err(n00b_option_t(uint64_t), N00B_STORE_ERR_ARG);
+    }
+
+    n00b_data_read_lock(store->commit_lock);
+    if (store->state != N00B_STORE_STATE_OPEN) {
+        n00b_data_unlock(store->commit_lock);
+        return n00b_result_err(n00b_option_t(uint64_t), N00B_STORE_ERR_STATE);
+    }
+    if (!store->has_oldest_available || store->retention_window_ns == 0) {
+        n00b_data_unlock(store->commit_lock);
+        return n00b_result_ok(n00b_option_t(uint64_t),
+                              n00b_option_none(uint64_t));
+    }
+
+    n00b_option_t(uint64_t) result = n00b_option_none(uint64_t);
+    size_t len = n00b_list_len(*store->catalog);
+    for (size_t i = 0; i < len; i++) {
+        n00b_store_catalog_entry_t *entry =
+            n00b_list_get(*store->catalog, i);
+        if (entry == nullptr) {
+            continue;
+        }
+        if (entry->generation == store->oldest_available.generation
+            && entry->shard_id == store->oldest_available.shard_id) {
+            uint64_t expires_at = entry->seal_ts + store->retention_window_ns;
+            if (expires_at < entry->seal_ts) {
+                expires_at = UINT64_MAX;
+            }
+            result = n00b_option_set(uint64_t, expires_at);
+            break;
+        }
+    }
+
+    n00b_data_unlock(store->commit_lock);
+    return n00b_result_ok(n00b_option_t(uint64_t), result);
+}
+
 n00b_result_t(n00b_store_resume_check_t)
 n00b_store_resume_check(n00b_store_t *store, n00b_store_pos_t pos)
 {
