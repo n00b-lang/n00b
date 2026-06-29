@@ -3419,7 +3419,8 @@ n00b_collect_setup(n00b_collect_t *ctx, n00b_arena_t *from_space, bool out_of_me
                            .start_capacity = N00B_GC_WL_START_SIZE,
                            .allocator      = wa,
                            .hash           = n00b_hash_word,
-                           .skip_obj_hash  = true);
+                           .skip_obj_hash  = true,
+                           .scan_kind      = N00B_GC_SCAN_KIND_NONE);
     // clang-format on
 
     // If from-space uses OOB metadata, create a forwarding dict. Cleanup
