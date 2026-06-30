@@ -861,10 +861,56 @@ typedef struct {
     n00b_conduit_tls_t                    *tls;
     n00b_conduit_inbox_t(n00b_buffer_t *) *inbox;
     n00b_conduit_sub_handle_t              sub;
+    uint32_t                               use_count;
 } h1_tls_conn_t;
 
-/* Pool close-fn shape: cancel the read subscription, then close the session.
- * Idempotent (n00b_conduit_tls_close is). */
+#define H1_TLS_CONN_MAX_KEEPALIVE_REQUESTS 64
+
+static void
+h1_tls_conn_drain_inbox(h1_tls_conn_t *tc)
+{
+    if (!tc || !tc->inbox) {
+        return;
+    }
+    n00b_conduit_message_t(n00b_buffer_t *) *msg;
+    while ((msg = n00b_conduit_inbox_pop_msg(n00b_buffer_t *, tc->inbox))
+           != nullptr) {
+        n00b_buffer_t *payload = msg->payload;
+        msg->payload = nullptr;
+        n00b_buffer_free_with_allocator_hint(payload, default_pool());
+        n00b_free_with_allocator_hint(default_pool(), msg);
+    }
+    n00b_conduit_sys_msg_t *sys;
+    while ((sys = n00b_conduit_inbox_pop_sys(tc->inbox)) != nullptr) {
+        n00b_free_with_allocator_hint(default_pool(), sys);
+    }
+}
+
+static bool
+h1_tls_conn_reusable(h1_tls_conn_t *tc)
+{
+    if (!tc || !tc->tls || !tc->inbox || !n00b_conduit_tls_is_ready(tc->tls)) {
+        return false;
+    }
+    if (tc->use_count >= H1_TLS_CONN_MAX_KEEPALIVE_REQUESTS) {
+        return false;
+    }
+    bool saw_sys = false;
+    bool saw_payload = n00b_conduit_inbox_has_msg(n00b_buffer_t *, tc->inbox);
+    while (n00b_conduit_inbox_has_sys(tc->inbox)) {
+        n00b_conduit_sys_msg_t *sys = n00b_conduit_inbox_pop_sys(tc->inbox);
+        saw_sys = true;
+        n00b_free_with_allocator_hint(default_pool(), sys);
+    }
+    if (saw_sys || saw_payload) {
+        h1_tls_conn_drain_inbox(tc);
+        return false;
+    }
+    return true;
+}
+
+/* Pool close-fn shape: close the TLS pipeline, then cancel the app read
+ * subscription. Idempotent (n00b_conduit_tls_close is). */
 static void
 h1_tls_conn_close(void *u)
 {
@@ -1015,7 +1061,7 @@ h1_round_trip_conduit_tls(n00b_http_url_t             *url,
             pool, bucket_origin, N00B_HTTP_CONNECTION_POOL_TRANSPORT_H1);
         if (u) {
             tc = (h1_tls_conn_t *)u;
-            if (!n00b_conduit_tls_is_ready(tc->tls)) {
+            if (!h1_tls_conn_reusable(tc)) {
                 h1_tls_conn_close(tc);
                 tc = nullptr;
             }
@@ -1169,6 +1215,7 @@ h1_round_trip_conduit_tls(n00b_http_url_t             *url,
 
     if (pool && keep_alive_intent && resp->keep_alive
         && boundary_seen && !peer_closed) {
+        tc->use_count++;
         n00b_http_connection_pool_release(
             pool, bucket_origin, N00B_HTTP_CONNECTION_POOL_TRANSPORT_H1,
             tc, h1_tls_conn_close);
