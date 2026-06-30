@@ -2006,6 +2006,20 @@ n00b_store_map_list_slot(n00b_store_map_list_t *list, uint64_t ordinal)
     }
     uint8_t *data = rocs_map_resolve_span(list->map, list->wire->data, span);
     if (data == nullptr) {
+        if (getenv("ROCS_QUERY_DEBUG") != NULL) {
+            fprintf(stderr,
+                    "rocs map: list slot data range failed "
+                    "ordinal=%llu len=%llu span=%zu data=0x%llx "
+                    "base=0x%x payload_len=%u byte_len=%zu root_offset=%u\n",
+                    (unsigned long long)ordinal,
+                    (unsigned long long)list->wire->len,
+                    span,
+                    (unsigned long long)list->wire->data,
+                    list->map->base_address,
+                    list->map->payload_len,
+                    list->map->byte_len,
+                    list->map->root_offset);
+        }
         return n00b_result_err(n00b_option_t(n00b_store_map_slot_t *),
                                N00B_STORE_MAP_ERR_RANGE);
     }

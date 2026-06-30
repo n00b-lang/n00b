@@ -830,6 +830,34 @@ write_done_error_code(n00b_conduit_fd_owner_t *owner, int error_code)
     return N00B_CONDUIT_ERR_IO;
 }
 
+static bool
+write_topic_has_observer(n00b_conduit_fd_owner_t *owner)
+{
+    n00b_conduit_topic_t(n00b_conduit_fd_write_payload_t) *topic =
+        (n00b_conduit_topic_t(n00b_conduit_fd_write_payload_t) *)owner->write_topic;
+    auto subs = &topic->subscriptions;
+    bool found = false;
+
+    _n00b_list_read_lock(subs);
+    for (size_t i = 0; i < subs->len; i++) {
+        n00b_conduit_subscription_t(n00b_conduit_fd_write_payload_t) *sub =
+            subs->data[i];
+        if (sub == nullptr) {
+            continue;
+        }
+        int state = n00b_atomic_load(&sub->state);
+        if (state == N00B_CONDUIT_SUB_ACTIVE
+            && (sub->operations == N00B_CONDUIT_OP_ALL
+                || (sub->operations & N00B_CONDUIT_FD_OP_WRITE_DATA))) {
+            found = true;
+            break;
+        }
+    }
+    _n00b_list_unlock(subs);
+
+    return found;
+}
+
 static void
 send_write_done(n00b_conduit_fd_owner_t *owner,
                 void *reply_inbox, bool (*reply_push)(void *, void *),
@@ -868,6 +896,10 @@ publish_write_done_event(n00b_conduit_fd_owner_t *owner,
                          uint64_t stream_pos, uint64_t request_id)
 {
     (void)pub;
+
+    if (!write_topic_has_observer(owner)) {
+        return;
+    }
 
     // Allocate immutable copy
     n00b_allocator_t *alloc = fd_owner_allocator(owner);

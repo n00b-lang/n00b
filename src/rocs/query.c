@@ -1,3 +1,6 @@
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "internal/rocs/query.h"
 
 #include "adt/heap.h"
@@ -383,6 +386,16 @@ n00b_query_err_str(n00b_err_t err)
     }
 
     return r"N00B_QUERY_ERR_UNKNOWN";
+}
+
+static bool
+rocs_query_debug_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        enabled = getenv("ROCS_QUERY_DEBUG") != nullptr ? 1 : 0;
+    }
+    return enabled != 0;
 }
 
 static n00b_query_err_t
@@ -2974,9 +2987,159 @@ rocs_query_boundary_from_snapshot(n00b_store_catalog_snapshot_entry_t entry)
     };
 }
 
+static n00b_result_t(n00b_query_boundary_entry_t)
+rocs_query_boundary_from_catalog_entry(n00b_store_catalog_entry_t *entry)
+{
+    auto shard_r = n00b_store_catalog_entry_get_shard_id(entry);
+    if (n00b_result_is_err(shard_r)) {
+        return n00b_result_err(
+            n00b_query_boundary_entry_t,
+            rocs_query_err_from_store(n00b_result_get_err(shard_r)));
+    }
+
+    auto generation_r = n00b_store_catalog_entry_get_generation(entry);
+    if (n00b_result_is_err(generation_r)) {
+        return n00b_result_err(
+            n00b_query_boundary_entry_t,
+            rocs_query_err_from_store(n00b_result_get_err(generation_r)));
+    }
+
+    auto schema_r = n00b_store_catalog_entry_get_schema_generation(entry);
+    if (n00b_result_is_err(schema_r)) {
+        return n00b_result_err(
+            n00b_query_boundary_entry_t,
+            rocs_query_err_from_store(n00b_result_get_err(schema_r)));
+    }
+
+    auto records_r = n00b_store_catalog_entry_get_record_count(entry);
+    if (n00b_result_is_err(records_r)) {
+        return n00b_result_err(
+            n00b_query_boundary_entry_t,
+            rocs_query_err_from_store(n00b_result_get_err(records_r)));
+    }
+
+    auto seal_r = n00b_store_catalog_entry_get_seal_ts(entry);
+    if (n00b_result_is_err(seal_r)) {
+        return n00b_result_err(
+            n00b_query_boundary_entry_t,
+            rocs_query_err_from_store(n00b_result_get_err(seal_r)));
+    }
+
+    auto partition_r = n00b_store_catalog_entry_get_partition_key(entry);
+    if (n00b_result_is_err(partition_r)) {
+        return n00b_result_err(
+            n00b_query_boundary_entry_t,
+            rocs_query_err_from_store(n00b_result_get_err(partition_r)));
+    }
+
+    auto path_r = n00b_store_catalog_entry_get_object_path(entry);
+    if (n00b_result_is_err(path_r)) {
+        return n00b_result_err(
+            n00b_query_boundary_entry_t,
+            rocs_query_err_from_store(n00b_result_get_err(path_r)));
+    }
+
+    auto bytes_r = n00b_store_catalog_entry_get_byte_len(entry);
+    if (n00b_result_is_err(bytes_r)) {
+        return n00b_result_err(
+            n00b_query_boundary_entry_t,
+            rocs_query_err_from_store(n00b_result_get_err(bytes_r)));
+    }
+
+    auto etag_r = n00b_store_catalog_entry_get_etag(entry);
+    if (n00b_result_is_err(etag_r)) {
+        return n00b_result_err(
+            n00b_query_boundary_entry_t,
+            rocs_query_err_from_store(n00b_result_get_err(etag_r)));
+    }
+
+    return n00b_result_ok(
+        n00b_query_boundary_entry_t,
+        ((n00b_query_boundary_entry_t){
+            .shard_id          = n00b_result_get(shard_r),
+            .generation        = n00b_result_get(generation_r),
+            .schema_generation = n00b_result_get(schema_r),
+            .record_count      = n00b_result_get(records_r),
+            .seal_ts           = n00b_result_get(seal_r),
+            .partition_key     = n00b_result_get(partition_r),
+            .object_path       = n00b_result_get(path_r),
+            .byte_len          = n00b_result_get(bytes_r),
+            .etag              = n00b_result_get(etag_r),
+        }));
+}
+
+static void
+rocs_query_boundary_push_in_order(n00b_query_view_t            *view,
+                                  n00b_query_boundary_entry_t  entry)
+{
+    size_t len = n00b_list_len(*view->boundary);
+    if (len == 0) {
+        n00b_list_push(*view->boundary, entry);
+        return;
+    }
+
+    n00b_query_boundary_entry_t last =
+        n00b_list_get(*view->boundary, len - 1);
+    if (rocs_query_entry_compare(last, entry) <= 0) {
+        n00b_list_push(*view->boundary, entry);
+    }
+    else {
+        rocs_query_boundary_insert_sorted(view->boundary, entry);
+    }
+}
+
+static n00b_result_t(bool)
+rocs_query_capture_borrowed_boundary(n00b_query_view_t *view)
+{
+    auto count_r = n00b_store_catalog_visible_entry_count(view->store);
+    if (n00b_result_is_err(count_r)) {
+        return n00b_result_err(
+            bool,
+            rocs_query_err_from_store(n00b_result_get_err(count_r)));
+    }
+
+    uint64_t count = n00b_result_get(count_r);
+    for (uint64_t i = 0; i < count; i++) {
+        auto entry_r = n00b_store_catalog_visible_entry_at(view->store, i);
+        if (n00b_result_is_err(entry_r)) {
+            return n00b_result_err(
+                bool,
+                rocs_query_err_from_store(n00b_result_get_err(entry_r)));
+        }
+
+        n00b_option_t(n00b_store_catalog_entry_t *) entry_opt =
+            n00b_result_get(entry_r);
+        if (!n00b_option_is_set(entry_opt)) {
+            break;
+        }
+
+        auto boundary_r = rocs_query_boundary_from_catalog_entry(
+            n00b_option_get(entry_opt));
+        if (n00b_result_is_err(boundary_r)) {
+            return n00b_result_err(bool, n00b_result_get_err(boundary_r));
+        }
+
+        n00b_query_boundary_entry_t boundary = n00b_result_get(boundary_r);
+        if (rocs_query_entry_in_requested_window(view, boundary)) {
+            rocs_query_boundary_push_in_order(view, boundary);
+        }
+    }
+
+    return n00b_result_ok(bool, true);
+}
+
 static n00b_result_t(bool)
 rocs_query_capture_boundary(n00b_query_view_t *view)
 {
+    auto borrowed_r = rocs_query_capture_borrowed_boundary(view);
+    if (n00b_result_is_ok(borrowed_r)) {
+        return borrowed_r;
+    }
+
+    if (n00b_result_get_err(borrowed_r) != N00B_QUERY_ERR_STATE) {
+        return borrowed_r;
+    }
+
     auto snapshot_r = n00b_store_catalog_visible_snapshot(
         view->store,
         .allocator = view->allocator);
@@ -2997,7 +3160,7 @@ rocs_query_capture_boundary(n00b_query_view_t *view)
             rocs_query_boundary_from_snapshot(
                 n00b_list_get(*snapshot, (size_t)i));
         if (rocs_query_entry_in_requested_window(view, copied)) {
-            rocs_query_boundary_insert_sorted(view->boundary, copied);
+            rocs_query_boundary_push_in_order(view, copied);
         }
     }
 
@@ -3466,24 +3629,57 @@ rocs_query_validate_mapped_boundary(n00b_store_map_shard_t      *root,
     auto seal_r    = n00b_store_map_shard_seal_ts(root);
 
     if (n00b_result_is_err(state_r)) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: mapped boundary state read failed err=%lld\n",
+                    (long long)n00b_result_get_err(state_r));
+        }
         return n00b_result_err(
             bool,
             rocs_query_err_from_map(n00b_result_get_err(state_r)));
     }
     if (n00b_result_get(state_r) != N00B_SHARD_STATE_SEALED) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: mapped boundary state mismatch "
+                    "shard=%llu state=%lld\n",
+                    (unsigned long long)boundary.shard_id,
+                    (long long)n00b_result_get(state_r));
+        }
         return n00b_result_err(bool, N00B_QUERY_ERR_EXECUTION);
     }
     if (n00b_result_is_err(id_r)) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: mapped boundary shard id read failed "
+                    "boundary=%llu err=%lld\n",
+                    (unsigned long long)boundary.shard_id,
+                    (long long)n00b_result_get_err(id_r));
+        }
         return n00b_result_err(
             bool,
             rocs_query_err_from_map(n00b_result_get_err(id_r)));
     }
     if (n00b_result_is_err(records_r)) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: mapped boundary record count read failed "
+                    "shard=%llu err=%lld\n",
+                    (unsigned long long)boundary.shard_id,
+                    (long long)n00b_result_get_err(records_r));
+        }
         return n00b_result_err(
             bool,
             rocs_query_err_from_map(n00b_result_get_err(records_r)));
     }
     if (n00b_result_is_err(seal_r)) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: mapped boundary seal_ts read failed "
+                    "shard=%llu err=%lld\n",
+                    (unsigned long long)boundary.shard_id,
+                    (long long)n00b_result_get_err(seal_r));
+        }
         return n00b_result_err(
             bool,
             rocs_query_err_from_map(n00b_result_get_err(seal_r)));
@@ -3492,6 +3688,18 @@ rocs_query_validate_mapped_boundary(n00b_store_map_shard_t      *root,
     if (n00b_result_get(id_r) != boundary.shard_id
         || n00b_result_get(records_r) != boundary.record_count
         || n00b_result_get(seal_r) != boundary.seal_ts) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: mapped boundary mismatch "
+                    "boundary=(shard=%llu records=%llu seal=%llu) "
+                    "mapped=(shard=%llu records=%llu seal=%llu)\n",
+                    (unsigned long long)boundary.shard_id,
+                    (unsigned long long)boundary.record_count,
+                    (unsigned long long)boundary.seal_ts,
+                    (unsigned long long)n00b_result_get(id_r),
+                    (unsigned long long)n00b_result_get(records_r),
+                    (unsigned long long)n00b_result_get(seal_r));
+        }
         return n00b_result_err(bool, N00B_QUERY_ERR_EXECUTION);
     }
 
@@ -4371,6 +4579,10 @@ rocs_query_cursor_plan_boundary(n00b_query_cursor_t        *cursor,
         cursor->snapshot_indexes,
         .allocator = cursor->allocator);
     if (n00b_result_is_err(result_r)) {
+        if (n00b_result_get_err(result_r) == N00B_PLAN_ERR_EMPTY) {
+            return n00b_plan_ordset_empty(boundary.record_count,
+                                          .allocator = cursor->allocator);
+        }
         return n00b_result_err(
             n00b_plan_ordset_t *,
             rocs_query_err_from_plan(n00b_result_get_err(result_r)));
@@ -8091,7 +8303,14 @@ rocs_query_linear_release_resident(n00b_query_linear_cursor_t *cursor)
     cursor->resident     = nullptr;
     cursor->root         = nullptr;
     cursor->has_resident = false;
-    return rocs_query_release_resident(resident);
+    auto release_r = rocs_query_release_resident(resident);
+    if (n00b_result_is_err(release_r)) {
+        return release_r;
+    }
+    if (cursor->view != nullptr && cursor->view->store != nullptr) {
+        (void)n00b_store_residency_trim(cursor->view->store);
+    }
+    return release_r;
 }
 
 // Acquire (or reuse) the resident pin + mapped root for boundary index `bidx`.
@@ -8128,6 +8347,14 @@ rocs_query_linear_ensure_resident(n00b_query_linear_cursor_t *cursor,
         n00b_result_get(entry_r),
         .allocator = cursor->allocator);
     if (n00b_result_is_err(resident_r)) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: resident acquire failed "
+                    "shard=%llu generation=%llu err=%lld\n",
+                    (unsigned long long)boundary.shard_id,
+                    (unsigned long long)boundary.generation,
+                    (long long)n00b_result_get_err(resident_r));
+        }
         return n00b_result_err(
             bool,
             rocs_query_err_from_store(n00b_result_get_err(resident_r)));
@@ -8136,6 +8363,14 @@ rocs_query_linear_ensure_resident(n00b_query_linear_cursor_t *cursor,
 
     auto map_r = n00b_store_resident_shard_map(resident);
     if (n00b_result_is_err(map_r)) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: resident map failed "
+                    "shard=%llu generation=%llu err=%lld\n",
+                    (unsigned long long)boundary.shard_id,
+                    (unsigned long long)boundary.generation,
+                    (long long)n00b_result_get_err(map_r));
+        }
         (void)rocs_query_release_resident(resident);
         return n00b_result_err(
             bool,
@@ -8145,6 +8380,14 @@ rocs_query_linear_ensure_resident(n00b_query_linear_cursor_t *cursor,
     auto root_r = n00b_store_map_root(n00b_result_get(map_r),
                                       .view_allocator = cursor->allocator);
     if (n00b_result_is_err(root_r)) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: mapped root decode failed "
+                    "shard=%llu generation=%llu err=%lld\n",
+                    (unsigned long long)boundary.shard_id,
+                    (unsigned long long)boundary.generation,
+                    (long long)n00b_result_get_err(root_r));
+        }
         (void)rocs_query_release_resident(resident);
         return n00b_result_err(
             bool,
@@ -8191,6 +8434,81 @@ rocs_query_linear_emit(n00b_query_linear_cursor_t *cursor,
         pos,
         .allocator = cursor->allocator);
     if (n00b_result_is_err(record_r)) {
+        if (rocs_query_debug_enabled()) {
+            auto state_r = n00b_store_map_shard_state(cursor->root);
+            auto id_r    = n00b_store_map_shard_id(cursor->root);
+            auto len_r   = n00b_store_map_shard_records_len(cursor->root);
+            int  records_ok = 0;
+            int  slot_ok    = 0;
+            int  slot_set   = 0;
+            int  ref_ok     = 0;
+            int  ref_set    = 0;
+            long long records_code = 0;
+            long long slot_code    = 0;
+            long long ref_code     = 0;
+            auto records_r = n00b_store_map_shard_records(cursor->root);
+            if (n00b_result_is_ok(records_r)) {
+                records_ok = 1;
+                auto slot_r = n00b_store_map_list_slot(n00b_result_get(records_r),
+                                                       pos.ordinal);
+                if (n00b_result_is_ok(slot_r)) {
+                    slot_ok = 1;
+                    n00b_option_t(n00b_store_map_slot_t *) slot_opt =
+                        n00b_result_get(slot_r);
+                    slot_set = n00b_option_is_set(slot_opt) ? 1 : 0;
+                    if (slot_set) {
+                        auto ref_r = n00b_store_map_slot_ref(
+                            n00b_option_get(slot_opt));
+                        if (n00b_result_is_ok(ref_r)) {
+                            ref_ok = 1;
+                            ref_set = n00b_option_is_set(n00b_result_get(ref_r))
+                                          ? 1
+                                          : 0;
+                        }
+                        else {
+                            ref_code = (long long)n00b_result_get_err(ref_r);
+                        }
+                    }
+                }
+                else {
+                    slot_code = (long long)n00b_result_get_err(slot_r);
+                }
+            }
+            else {
+                records_code = (long long)n00b_result_get_err(records_r);
+            }
+            fprintf(stderr,
+                    "rocs query: mapped record view failed "
+                    "shard=%llu generation=%llu ordinal=%llu err=%lld "
+                    "state_ok=%d state=%lld id_ok=%d id=%llu "
+                    "len_ok=%d len=%llu records_ok=%d records_code=%lld "
+                    "slot_ok=%d slot_code=%lld slot_set=%d "
+                    "ref_ok=%d ref_code=%lld ref_set=%d\n",
+                    (unsigned long long)pos.shard_id,
+                    (unsigned long long)pos.generation,
+                    (unsigned long long)pos.ordinal,
+                    (long long)n00b_result_get_err(record_r),
+                    n00b_result_is_ok(state_r) ? 1 : 0,
+                    n00b_result_is_ok(state_r)
+                        ? (long long)n00b_result_get(state_r)
+                        : (long long)n00b_result_get_err(state_r),
+                    n00b_result_is_ok(id_r) ? 1 : 0,
+                    n00b_result_is_ok(id_r)
+                        ? (unsigned long long)n00b_result_get(id_r)
+                        : (unsigned long long)n00b_result_get_err(id_r),
+                    n00b_result_is_ok(len_r) ? 1 : 0,
+                    n00b_result_is_ok(len_r)
+                        ? (unsigned long long)n00b_result_get(len_r)
+                        : (unsigned long long)n00b_result_get_err(len_r),
+                    records_ok,
+                    records_code,
+                    slot_ok,
+                    slot_code,
+                    slot_set,
+                    ref_ok,
+                    ref_code,
+                    ref_set);
+        }
         return n00b_result_err(
             n00b_option_t(n00b_query_hit_t *),
             rocs_query_err_from_index(n00b_result_get_err(record_r)));

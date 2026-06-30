@@ -2858,7 +2858,7 @@ n00b_addr_in_arena(void *addr, n00b_arena_t *arena)
 static void
 n00b_pin_bitmaps_alloc(n00b_collect_t *ctx)
 {
-    n00b_allocator_t *sp  = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    n00b_allocator_t *scratch = (n00b_allocator_t *)&ctx->work_pool;
     n00b_segment_t   *seg = ctx->from_space->current_segment;
 
     while (seg) {
@@ -2866,7 +2866,7 @@ n00b_pin_bitmaps_alloc(n00b_collect_t *ctx)
         uint64_t nbytes = (npages + 7) / 8;
         seg->pin_bitmap = n00b_alloc_array_with_opts(uint8_t,
                                                      nbytes,
-                                                     &(n00b_alloc_opts_t){.allocator = sp});
+                                                     &(n00b_alloc_opts_t){.allocator = scratch});
         seg             = seg->next_segment;
     }
 }
@@ -3473,6 +3473,7 @@ n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain)
 {
     extern void       n00b_lock_chains_scrub_range(uint64_t lo, uint64_t hi);
     n00b_allocator_t *sp         = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    n00b_allocator_t *scratch    = (n00b_allocator_t *)&ctx->work_pool;
     n00b_arena_t     *live       = ctx->from_space; // keeps identity post-swap
     bool              unregister = !live->vtable.hidden;
     uint64_t          pg         = (uint64_t)n00b_page_size;
@@ -3561,7 +3562,7 @@ n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain)
             }
         }
 
-        sp->free(sp, bm);
+        scratch->free(scratch, bm);
         seg->pin_bitmap = nullptr;
         sp->free(sp, seg);
         seg = next;

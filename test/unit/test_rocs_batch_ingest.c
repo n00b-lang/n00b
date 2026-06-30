@@ -480,7 +480,7 @@ test_batch_partition_grouping(void)
 }
 
 static void
-test_batch_pool_reuses_parked_workers(void)
+test_batch_ingest_does_not_spawn_worker_pool(void)
 {
     n00b_store_t *store =
         open_store(schema_with_level(false, N00B_STORE_INDEX_NONE));
@@ -496,7 +496,7 @@ test_batch_pool_reuses_parked_workers(void)
     CHECK(n00b_result_get(first_r) == 1);
 
     uint64_t after_first = live_thread_count();
-    CHECK(after_first >= before + 4);
+    CHECK(after_first == before);
 
     n00b_store_record_list_t *second = record_list_new();
     n00b_list_push(*second, record_with_level(r"second"));
@@ -509,7 +509,7 @@ test_batch_pool_reuses_parked_workers(void)
     CHECK(live_thread_count() == after_first);
 
     close_store_ok(store);
-    CHECK(live_thread_count() <= before);
+    CHECK(live_thread_count() == before);
 }
 
 // A durable seal failure mid-batch irreversibly drops the rotated shard (the
@@ -634,7 +634,7 @@ main(int argc, char *argv[])
     test_worker_parse_failure_rolls_back();
     test_batch_index_error_rolls_back();
     test_batch_partition_grouping();
-    test_batch_pool_reuses_parked_workers();
+    test_batch_ingest_does_not_spawn_worker_pool();
     test_batch_durable_failure_without_journal_errors();
     test_batch_durable_failure_recovered_via_journal();
 

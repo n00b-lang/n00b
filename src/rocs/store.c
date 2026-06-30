@@ -240,9 +240,6 @@ struct n00b_store_t {
     n00b_allocator_t              *allocator;
     n00b_rwlock_t                 *residency_lock;
     n00b_rwlock_t                 *commit_lock;
-    n00b_worker_pool_t            *batch_pool;
-    int32_t                        batch_pool_workers;
-    int32_t                        batch_pool_capacity;
     // Async-seal machinery (opt-in via keep_standby at open; off => seal_pool
     // is null and every seal runs inline exactly as before).  The single ingest
     // worker rotates the hot shard with a plain pointer swap and hands the
@@ -324,6 +321,7 @@ typedef struct {
     n00b_store_t                   *store;
     n00b_json_node_t               *input_record;
     n00b_buffer_t                  *source;
+    n00b_store_source_decoder_t     source_decoder;
     n00b_allocator_t               *allocator;
     n00b_json_node_t               *record;
     n00b_buffer_t                  *raw;
@@ -337,21 +335,16 @@ struct n00b_store_conduit_ingest_t {
     n00b_store_ingest_topic_t          *topic;
     n00b_store_ingest_inbox_t          *inbox;
     n00b_conduit_sub_handle_t           sub;
-    n00b_worker_pool_t                 *pool;
     n00b_thread_t                      *thread;
     n00b_rwlock_t                      *lock;
     n00b_allocator_t                   *allocator;
     n00b_store_source_decoder_t         source_decoder;
     n00b_store_conduit_ingest_stats_t   stats;
+    uint32_t                            batch_capacity;
     bool                                stop_requested;
     bool                                closed;
     bool                                joined;
 };
-
-typedef struct {
-    n00b_store_conduit_ingest_t *adapter;
-    n00b_store_ingest_payload_t  payload;
-} rocs_store_conduit_job_t;
 
 static rocs_store_field_list_t *
 rocs_store_field_list_new() _kargs
@@ -3089,6 +3082,8 @@ typedef struct {
     n00b_allocator_t   *old_allocator;
     n00b_string_t      *object_path;
     n00b_string_t      *entry_partition;
+    n00b_condition_t   *barrier_cv;
+    bool               *barrier_done;
     uint64_t            shard_id;
     uint64_t            generation;
     uint64_t            schema_generation;
@@ -3096,6 +3091,7 @@ typedef struct {
     uint64_t            seal_ts;
     uint64_t            byte_estimate;
     uint32_t            base_address;
+    bool                barrier;
 } rocs_store_seal_job_t;
 
 // Shared tail of every seal-worker failure path (commit_lock held): record the
@@ -3183,6 +3179,18 @@ rocs_store_seal_worker_fn(void *job_v, void *user_data)
     (void)user_data;
     rocs_store_seal_job_t *job   = job_v;
     n00b_store_t          *store = job->store;
+
+    if (job->barrier) {
+        if (job->barrier_cv != nullptr && job->barrier_done != nullptr) {
+            n00b_condition_lock(job->barrier_cv);
+            *job->barrier_done = true;
+            n00b_condition_notify(job->barrier_cv,
+                                  .all = true,
+                                  .auto_unlock = true);
+        }
+        n00b_free(job);
+        return;
+    }
 
     // ---- Phase 2: marshal the detached old shard (NO lock, exclusive) ------
     n00b_pool_t       seal_pool  = {};
@@ -3301,6 +3309,47 @@ rocs_store_seal_worker_fn(void *job_v, void *user_data)
     n00b_free(job);
 }
 
+static n00b_result_t(bool)
+rocs_store_seal_pool_barrier(n00b_store_t *store)
+{
+    if (store == nullptr) {
+        return n00b_result_err(bool, N00B_STORE_ERR_ARG);
+    }
+    if (store->seal_pool == nullptr) {
+        return n00b_result_ok(bool, true);
+    }
+
+    n00b_condition_t cv;
+    n00b_condition_init(&cv);
+    bool done = false;
+
+    rocs_store_seal_job_t *job = n00b_alloc(rocs_store_seal_job_t,
+                                            .allocator = store->allocator);
+    job->store             = store;
+    job->old_shard         = nullptr;
+    job->old_allocator     = nullptr;
+    job->object_path       = nullptr;
+    job->entry_partition   = nullptr;
+    job->barrier_cv        = &cv;
+    job->barrier_done      = &done;
+    job->shard_id          = 0;
+    job->generation        = 0;
+    job->schema_generation = 0;
+    job->record_count      = 0;
+    job->seal_ts           = 0;
+    job->byte_estimate     = 0;
+    job->base_address      = 0;
+    job->barrier           = true;
+
+    n00b_condition_lock(&cv);
+    n00b_worker_pool_submit(store->seal_pool, job);
+    while (!done) {
+        n00b_condition_wait(&cv);
+    }
+    n00b_condition_unlock(&cv);
+    return n00b_result_ok(bool, true);
+}
+
 static n00b_result_t(n00b_store_catalog_entry_t *)
 rocs_store_seal_hot_shard_unlocked(n00b_store_t  *store,
                                    uint64_t       seal_ts,
@@ -3382,6 +3431,13 @@ rocs_store_seal_hot_shard_unlocked(n00b_store_t  *store,
                                    n00b_result_get_err(take_r));
         }
 
+        n00b_string_t *entry_partition_copy =
+            rocs_store_string_copy(entry_partition, store->allocator);
+        if (entry_partition_copy == nullptr) {
+            return n00b_result_err(n00b_store_catalog_entry_t *,
+                                   N00B_STORE_ERR_INTERNAL);
+        }
+
         // Build the seal job from the soon-to-be-detached old shard before
         // the swap, so it captures the old shard's identity, not the new one.
         rocs_store_seal_job_t *job = n00b_alloc(rocs_store_seal_job_t,
@@ -3390,13 +3446,16 @@ rocs_store_seal_hot_shard_unlocked(n00b_store_t  *store,
         job->old_shard         = old_shard;
         job->old_allocator     = old_hot_allocator;
         job->object_path       = object_path;
-        job->entry_partition   = entry_partition;
+        job->entry_partition   = entry_partition_copy;
+        job->barrier_cv        = nullptr;
+        job->barrier_done      = nullptr;
         job->shard_id          = shard_id;
         job->generation        = store->generation;
         job->schema_generation = store->schema_generation;
         job->record_count      = old_record_count;
         job->seal_ts           = seal_ts;
         job->base_address      = base_address;
+        job->barrier           = false;
 #if defined(N00B_ROCS_TRACE)
         job->byte_estimate     = old_byte_estimate;
 #else
@@ -3434,9 +3493,8 @@ rocs_store_seal_hot_shard_unlocked(n00b_store_t  *store,
         // Fallible allocations first: a failure here leaves the old shard
         // installed (rollback-safe — nothing has rotated yet).
         // Take the next hot shard: consumes the pristine standby when one is
-        // present (keep_standby, after a sync caller has quiesced the seal pool)
-        // else allocates fresh.  Fallible only in the fallback branch; a failure
-        // leaves the old shard installed (rollback-safe).
+        // present, else allocates fresh.  Fallible only in the fallback branch;
+        // a failure leaves the old shard installed (rollback-safe).
         n00b_store_shard_t *rot_new_hot   = nullptr;
         n00b_allocator_t   *rot_next_alloc = nullptr;
         auto rot_take_r = rocs_store_take_next_hot_unlocked(store,
@@ -4669,18 +4727,30 @@ rocs_store_ingest_buf_decoded(n00b_store_t                 *store,
 }
 
 static void
-rocs_store_batch_worker(void *job_ptr, void *user_data)
+rocs_store_batch_prepare_job(rocs_store_batch_job_t *job)
 {
-    (void)user_data;
-
-    rocs_store_batch_job_t *job = job_ptr;
     if (job == nullptr || job->store == nullptr) {
         return;
     }
 
     job->err = N00B_STORE_OK;
 
-    if (job->source != nullptr) {
+    if (job->source != nullptr && job->source_decoder != nullptr) {
+        job->err = rocs_store_copy_source_raw(job->source,
+                                              &job->raw,
+                                              job->allocator);
+        if (job->err != N00B_STORE_OK) {
+            return;
+        }
+
+        auto record_r = job->source_decoder(job->raw, job->allocator);
+        if (n00b_result_is_err(record_r)) {
+            job->err = n00b_result_get_err(record_r);
+            return;
+        }
+        job->record = n00b_result_get(record_r);
+    }
+    else if (job->source != nullptr) {
         job->err = rocs_store_parse_source(job->source,
                                            &job->raw,
                                            &job->record,
@@ -5442,6 +5512,14 @@ n00b_store_set_commit_topic(n00b_store_t              *store,
 {
     if (store == nullptr) {
         return n00b_result_err(bool, N00B_STORE_ERR_ARG);
+    }
+    // Close is teardown, so joining the seal worker is appropriate.  Do it
+    // before taking commit_lock because an in-flight seal worker needs that
+    // lock for its catalog commit phase.
+    if (store->seal_pool != nullptr) {
+        n00b_worker_pool_shutdown(store->seal_pool);
+        store->seal_pool          = nullptr;
+        store->seal_pool_capacity = 0;
     }
     n00b_data_write_lock(store->commit_lock);
     if (store->state != N00B_STORE_STATE_OPEN) {
@@ -6886,9 +6964,6 @@ n00b_store_open_vfs(n00b_vfs_t          *vfs,
     store->allocator        = allocator;
     store->residency_lock   = n00b_data_lock_new(.allocator = allocator);
     store->commit_lock      = n00b_data_lock_new(.allocator = allocator);
-    store->batch_pool       = nullptr;
-    store->batch_pool_workers = 0;
-    store->batch_pool_capacity = 0;
     store->seal_pool          = nullptr;
     store->seal_pool_capacity = 0;
     store->keep_standby       = keep_standby;
@@ -7133,12 +7208,13 @@ n00b_store_flush(n00b_store_t *store)
     if (store == nullptr) {
         return n00b_result_err(bool, N00B_STORE_ERR_ARG);
     }
-    // Drain any in-flight async seals before flushing so the inline seal below
-    // sees stable catalog / standby / next_shard_id state.  Done before taking
-    // commit_lock because the seal workers need commit_lock for their commit
-    // phase.
-    if (store->seal_pool != nullptr) {
-        n00b_worker_pool_quiesce(store->seal_pool);
+    // Flush is a durability barrier: any detached shard handed to the async
+    // sealer before this call must have its catalog entry committed before
+    // flush returns. Use an ordered seal-queue marker rather than asking the
+    // worker pool for global quiescence.
+    auto barrier_r = rocs_store_seal_pool_barrier(store);
+    if (n00b_result_is_err(barrier_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(barrier_r));
     }
     n00b_data_write_lock(store->commit_lock);
     if (store->state != N00B_STORE_STATE_OPEN) {
@@ -7177,61 +7253,11 @@ n00b_store_flush(n00b_store_t *store)
     return write_r;
 }
 
-static void
-rocs_store_batch_pool_shutdown(n00b_store_t *store)
-{
-    if (store == nullptr || store->batch_pool == nullptr) {
-        return;
-    }
-
-    n00b_worker_pool_shutdown(store->batch_pool);
-    store->batch_pool          = nullptr;
-    store->batch_pool_workers  = 0;
-    store->batch_pool_capacity = 0;
-}
-
-static n00b_result_t(n00b_worker_pool_t *)
-rocs_store_batch_pool_get(n00b_store_t *store, int32_t workers, int32_t cap)
-{
-    if (store == nullptr || workers <= 0 || cap <= 0) {
-        return n00b_result_err(n00b_worker_pool_t *, N00B_STORE_ERR_ARG);
-    }
-
-    if (store->batch_pool != nullptr
-        && store->batch_pool_workers == workers
-        && store->batch_pool_capacity == cap) {
-        return n00b_result_ok(n00b_worker_pool_t *, store->batch_pool);
-    }
-
-    rocs_store_batch_pool_shutdown(store);
-
-    n00b_worker_pool_t *pool = n00b_worker_pool_new(workers,
-                                                    cap,
-                                                    rocs_store_batch_worker,
-                                                    nullptr,
-                                                    .allocator =
-                                                        store->allocator);
-    if (pool == nullptr) {
-        return n00b_result_err(n00b_worker_pool_t *, N00B_STORE_ERR_INTERNAL);
-    }
-
-    store->batch_pool          = pool;
-    store->batch_pool_workers  = workers;
-    store->batch_pool_capacity = cap;
-
-    return n00b_result_ok(n00b_worker_pool_t *, pool);
-}
-
 n00b_result_t(bool)
 n00b_store_close(n00b_store_t *store)
 {
     if (store == nullptr) {
         return n00b_result_err(bool, N00B_STORE_ERR_ARG);
-    }
-    // Drain in-flight async seals before taking the close locks (the seal
-    // workers need commit_lock for their commit phase).
-    if (store->seal_pool != nullptr) {
-        n00b_worker_pool_quiesce(store->seal_pool);
     }
     n00b_data_write_lock(store->commit_lock);
     n00b_data_write_lock(store->residency_lock);
@@ -7290,16 +7316,7 @@ n00b_store_close(n00b_store_t *store)
         }
     }
 
-    rocs_store_batch_pool_shutdown(store);
-
-    // Tear down the seal pool (already quiesced above; the single worker has no
-    // in-flight job and ingest cannot submit more while we hold commit_lock) and
-    // detach the unused standby spare for destruction after the locks drop.
-    if (store->seal_pool != nullptr) {
-        n00b_worker_pool_shutdown(store->seal_pool);
-        store->seal_pool          = nullptr;
-        store->seal_pool_capacity = 0;
-    }
+    // The seal pool was joined before taking commit_lock.
     n00b_allocator_t *standby_allocator = store->standby_allocator;
     store->standby_shard     = nullptr;
     store->standby_allocator = nullptr;
@@ -7390,11 +7407,6 @@ n00b_store_seal_hot_shard(n00b_store_t *store) _kargs
         seal_ts = rocs_store_epoch_ns();
     }
 
-    // Drain in-flight async seals so this explicit seal runs inline against
-    // stable state and returns the real catalog entry.
-    if (store->seal_pool != nullptr) {
-        n00b_worker_pool_quiesce(store->seal_pool);
-    }
     n00b_data_write_lock(store->commit_lock);
     auto seal_r = rocs_store_seal_hot_shard_unlocked(store,
                                                      seal_ts,
@@ -7418,10 +7430,6 @@ n00b_store_apply_event_time_watermark(n00b_store_t *store,
         return n00b_result_err(bool, N00B_STORE_ERR_ARG);
     }
 
-    // Drain in-flight async seals before this inline watermark seal.
-    if (store->seal_pool != nullptr) {
-        n00b_worker_pool_quiesce(store->seal_pool);
-    }
     n00b_data_write_lock(store->commit_lock);
     if (store->state != N00B_STORE_STATE_OPEN
         || store->hot_shard == nullptr
@@ -7479,14 +7487,11 @@ rocs_store_ingest_common(n00b_store_t     *store,
         return n00b_result_err(bool, N00B_STORE_ERR_ARG);
     }
 
-    n00b_data_write_lock(store->commit_lock);
-
     n00b_err_t preflight = rocs_store_preflight_ingest(store,
                                                        record,
                                                        raw,
                                                        allocator);
     if (preflight != N00B_STORE_OK) {
-        n00b_data_unlock(store->commit_lock);
         return n00b_result_err(bool, preflight);
     }
 
@@ -7494,7 +7499,6 @@ rocs_store_ingest_common(n00b_store_t     *store,
                                               record,
                                               .allocator = allocator);
     if (n00b_result_is_err(route_r)) {
-        n00b_data_unlock(store->commit_lock);
         return n00b_result_err(bool, n00b_result_get_err(route_r));
     }
     n00b_string_t *route = n00b_result_get(route_r);
@@ -7502,12 +7506,33 @@ rocs_store_ingest_common(n00b_store_t     *store,
         route = r"default";
     }
 
+    auto terms_r = rocs_store_build_batch_terms(store, record, allocator);
+    if (n00b_result_is_err(terms_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(terms_r));
+    }
+    rocs_store_batch_term_list_t *terms = n00b_result_get(terms_r);
+
+    n00b_data_write_lock(store->commit_lock);
+
+    // Recheck cheap state/required-field predicates after taking the commit
+    // lock.  Expensive index term construction above reads immutable schema and
+    // stays out of the lock so status/query readers are not blocked behind
+    // Unicode normalization.
+    preflight = rocs_store_preflight_ingest(store,
+                                           record,
+                                           raw,
+                                           allocator);
+    if (preflight != N00B_STORE_OK) {
+        n00b_data_unlock(store->commit_lock);
+        return n00b_result_err(bool, preflight);
+    }
+
     uint64_t drops_before = store->durable_drop_count;
     auto     ingest_r     = rocs_store_ingest_prepared_unlocked(store,
                                                         record,
                                                         raw,
                                                         route,
-                                                        nullptr,
+                                                        terms,
                                                         allocator);
     // A size-triggered auto-seal inside ingest can irreversibly drop the record
     // we just committed (no journal).  Surface that as a durable failure rather
@@ -7575,6 +7600,7 @@ static n00b_result_t(uint64_t)
 rocs_store_ingest_batch_common(n00b_store_t             *store,
                                n00b_store_record_list_t *records,
                                n00b_store_source_list_t *sources,
+                               n00b_store_source_decoder_t source_decoder,
                                int32_t                   worker_count,
                                int32_t                   queue_capacity)
 {
@@ -7585,60 +7611,51 @@ rocs_store_ingest_batch_common(n00b_store_t             *store,
     if (worker_count < 0 || queue_capacity < 0) {
         return n00b_result_err(uint64_t, N00B_STORE_ERR_ARG);
     }
+    (void)worker_count;
+    (void)queue_capacity;
 
     uint64_t count = records != nullptr ? (uint64_t)n00b_list_len(*records)
                                         : (uint64_t)n00b_list_len(*sources);
     if (count > (uint64_t)INT32_MAX) {
         return n00b_result_err(uint64_t, N00B_STORE_ERR_ARG);
     }
-
-    n00b_data_write_lock(store->commit_lock);
-    if (store->state != N00B_STORE_STATE_OPEN) {
-        n00b_data_unlock(store->commit_lock);
-        return n00b_result_err(uint64_t, N00B_STORE_ERR_STATE);
-    }
     if (count == 0) {
-        n00b_data_unlock(store->commit_lock);
         return n00b_result_ok(uint64_t, 0);
-    }
-
-    int32_t workers = worker_count == 0 ? 4 : worker_count;
-    if (workers <= 0) {
-        n00b_data_unlock(store->commit_lock);
-        return n00b_result_err(uint64_t, N00B_STORE_ERR_ARG);
-    }
-
-    int32_t cap = queue_capacity == 0 ? workers : queue_capacity;
-    if (cap <= 0) {
-        n00b_data_unlock(store->commit_lock);
-        return n00b_result_err(uint64_t, N00B_STORE_ERR_ARG);
     }
 
     n00b_pool_t      scratch_pool = {};
     n00b_allocator_t *scratch_allocator =
         n00b_pool_init(&scratch_pool,
                        .hidden            = true,
-                       .external_metadata = true,
+                       .external_metadata = false,
                        .use_epochs        = false,
                        .name              = "rocs_batch_ingest_scratch");
+
+#define ROCS_BATCH_RETURN(_expr)                                      \
+    do {                                                              \
+        n00b_result_t(uint64_t) _rocs_batch_ret = (_expr);            \
+        n00b_gc_attrib_exit_ingest(prev_ingest);                      \
+        if (alloc_redirected) {                                       \
+            n00b_restore_current_allocator(prev_alloc);               \
+            alloc_redirected = false;                                 \
+        }                                                             \
+        n00b_allocator_destroy(scratch_allocator);                    \
+        return _rocs_batch_ret;                                       \
+    } while (0)
+
+    bool prev_ingest = n00b_gc_attrib_enter_ingest();
+    n00b_allocator_t *prev_alloc = n00b_set_current_allocator(
+        scratch_allocator);
+    bool alloc_redirected = true;
 
     rocs_store_batch_job_t **jobs = n00b_alloc_array(
         rocs_store_batch_job_t *,
         (int64_t)count,
         .allocator = scratch_allocator);
     if (jobs == nullptr) {
-        n00b_data_unlock(store->commit_lock);
-        n00b_allocator_destroy(scratch_allocator);
-        return n00b_result_err(uint64_t, N00B_STORE_ERR_INTERNAL);
+        ROCS_BATCH_RETURN(
+            n00b_result_err(uint64_t, N00B_STORE_ERR_INTERNAL));
     }
-
-    auto pool_r = rocs_store_batch_pool_get(store, workers, cap);
-    if (n00b_result_is_err(pool_r)) {
-        n00b_data_unlock(store->commit_lock);
-        n00b_allocator_destroy(scratch_allocator);
-        return n00b_result_err(uint64_t, n00b_result_get_err(pool_r));
-    }
-    n00b_worker_pool_t *pool = n00b_result_get(pool_r);
 
     for (uint64_t i = 0; i < count; i++) {
         rocs_store_batch_job_t *job = n00b_alloc(
@@ -7647,6 +7664,7 @@ rocs_store_ingest_batch_common(n00b_store_t             *store,
         job->store        = store;
         job->input_record = nullptr;
         job->source       = nullptr;
+        job->source_decoder = source_decoder;
         job->allocator    = scratch_allocator;
         job->record       = nullptr;
         job->raw          = nullptr;
@@ -7660,18 +7678,30 @@ rocs_store_ingest_batch_common(n00b_store_t             *store,
             job->source = n00b_list_get(*sources, (size_t)i);
         }
         jobs[i] = job;
-        n00b_worker_pool_submit(pool, job);
+
+        rocs_store_batch_prepare_job(job);
+        if (job->err != N00B_STORE_OK) {
+            ROCS_BATCH_RETURN(n00b_result_err(uint64_t, job->err));
+        }
     }
 
-    n00b_worker_pool_quiesce(pool);
+    n00b_restore_current_allocator(prev_alloc);
+    alloc_redirected = false;
+
+    n00b_data_write_lock(store->commit_lock);
+    if (store->state != N00B_STORE_STATE_OPEN) {
+        n00b_data_unlock(store->commit_lock);
+        ROCS_BATCH_RETURN(n00b_result_err(uint64_t, N00B_STORE_ERR_STATE));
+    }
 
     for (uint64_t i = 0; i < count; i++) {
-        if (jobs[i] == nullptr || jobs[i]->err != N00B_STORE_OK) {
-            n00b_err_t err = jobs[i] == nullptr ? N00B_STORE_ERR_INTERNAL
-                                                : jobs[i]->err;
+        n00b_err_t preflight = rocs_store_preflight_ingest(store,
+                                                           jobs[i]->record,
+                                                           jobs[i]->raw,
+                                                           scratch_allocator);
+        if (preflight != N00B_STORE_OK) {
             n00b_data_unlock(store->commit_lock);
-            n00b_allocator_destroy(scratch_allocator);
-            return n00b_result_err(uint64_t, err);
+            ROCS_BATCH_RETURN(n00b_result_err(uint64_t, preflight));
         }
     }
 
@@ -7695,20 +7725,18 @@ rocs_store_ingest_batch_common(n00b_store_t             *store,
             if (store->durable_drop_count != drops_before) {
                 err = store->durable_drop_last_err;
                 n00b_data_unlock(store->commit_lock);
-                n00b_allocator_destroy(scratch_allocator);
-                return n00b_result_err(uint64_t, err);
+                ROCS_BATCH_RETURN(n00b_result_err(uint64_t, err));
             }
             n00b_data_unlock(store->commit_lock);
-            n00b_allocator_destroy(scratch_allocator);
             /*
              * result_t cannot carry both an error and a committed prefix.
              * Once any prefix is visible, the batch retry contract is
              * Ok(committed); callers resume from that index.
              */
             if (committed != 0) {
-                return n00b_result_ok(uint64_t, committed);
+                ROCS_BATCH_RETURN(n00b_result_ok(uint64_t, committed));
             }
-            return n00b_result_err(uint64_t, err);
+            ROCS_BATCH_RETURN(n00b_result_err(uint64_t, err));
         }
         committed++;
     }
@@ -7718,13 +7746,12 @@ rocs_store_ingest_batch_common(n00b_store_t             *store,
     if (store->durable_drop_count != drops_before) {
         n00b_err_t drop_err = store->durable_drop_last_err;
         n00b_data_unlock(store->commit_lock);
-        n00b_allocator_destroy(scratch_allocator);
-        return n00b_result_err(uint64_t, drop_err);
+        ROCS_BATCH_RETURN(n00b_result_err(uint64_t, drop_err));
     }
 
     n00b_data_unlock(store->commit_lock);
-    n00b_allocator_destroy(scratch_allocator);
-    return n00b_result_ok(uint64_t, committed);
+    ROCS_BATCH_RETURN(n00b_result_ok(uint64_t, committed));
+#undef ROCS_BATCH_RETURN
 }
 
 n00b_result_t(uint64_t)
@@ -7737,6 +7764,7 @@ n00b_store_ingest_batch(n00b_store_t             *store,
 {
     return rocs_store_ingest_batch_common(store,
                                           records,
+                                          nullptr,
                                           nullptr,
                                           worker_count,
                                           queue_capacity);
@@ -7753,6 +7781,7 @@ n00b_store_ingest_buf_batch(n00b_store_t             *store,
     return rocs_store_ingest_batch_common(store,
                                           nullptr,
                                           sources,
+                                          nullptr,
                                           worker_count,
                                           queue_capacity);
 }
@@ -8074,7 +8103,8 @@ n00b_store_resume_check(n00b_store_t *store, n00b_store_pos_t pos)
 
 static void
 rocs_store_conduit_stats_record(n00b_store_conduit_ingest_t *adapter,
-                                bool                         ok,
+                                uint64_t                     committed,
+                                uint64_t                     failed,
                                 n00b_err_t                   err)
 {
     if (adapter == nullptr || adapter->lock == nullptr) {
@@ -8082,13 +8112,24 @@ rocs_store_conduit_stats_record(n00b_store_conduit_ingest_t *adapter,
     }
 
     n00b_data_write_lock(adapter->lock);
-    if (ok) {
-        adapter->stats.committed++;
-    }
-    else {
-        adapter->stats.failed++;
+    adapter->stats.committed += committed;
+    adapter->stats.failed += failed;
+    if (failed != 0) {
         adapter->stats.last_error = err;
     }
+    n00b_data_unlock(adapter->lock);
+}
+
+static void
+rocs_store_conduit_stats_submitted(n00b_store_conduit_ingest_t *adapter,
+                                   uint64_t                     submitted)
+{
+    if (adapter == nullptr || adapter->lock == nullptr || submitted == 0) {
+        return;
+    }
+
+    n00b_data_write_lock(adapter->lock);
+    adapter->stats.submitted += submitted;
     n00b_data_unlock(adapter->lock);
 }
 
@@ -8104,75 +8145,184 @@ rocs_store_conduit_payload_cleanup(n00b_store_ingest_payload_t payload)
     }
 }
 
-static void
-rocs_store_conduit_worker(void *job_ptr, void *user_data)
+static n00b_store_record_list_t *
+rocs_store_conduit_record_list_new(uint64_t count, n00b_allocator_t *allocator)
 {
-    (void)user_data;
+    n00b_store_record_list_t *records =
+        n00b_alloc(n00b_store_record_list_t, .allocator = allocator);
+    *records = n00b_list_new_cap_private(n00b_json_node_t *,
+                                         count,
+                                         .allocator = allocator,
+                                         .scan_kind = N00B_GC_SCAN_KIND_ALL);
+    return records;
+}
 
-    rocs_store_conduit_job_t *job = job_ptr;
-    if (job == nullptr || job->adapter == nullptr
-        || job->adapter->store == nullptr) {
-        if (job != nullptr) {
-            rocs_store_conduit_payload_cleanup(job->payload);
-            n00b_free(job);
-        }
-        return;
-    }
-
-    n00b_result_t(bool) ingest_r;
-    if (n00b_variant_is_type(job->payload, n00b_json_node_t *)) {
-        ingest_r = n00b_store_ingest(
-            job->adapter->store,
-            n00b_variant_get(job->payload, n00b_json_node_t *));
-    }
-    else if (n00b_variant_is_type(job->payload, n00b_buffer_t *)) {
-        n00b_buffer_t *source = n00b_variant_get(job->payload, n00b_buffer_t *);
-        if (job->adapter->source_decoder != nullptr) {
-            ingest_r = rocs_store_ingest_buf_decoded(
-                job->adapter->store,
-                source,
-                job->adapter->source_decoder);
-        }
-        else {
-            ingest_r = n00b_store_ingest_buf(job->adapter->store, source);
-        }
-    }
-    else {
-        rocs_store_conduit_stats_record(job->adapter,
-                                        false,
-                                        N00B_STORE_ERR_ARG);
-        rocs_store_conduit_payload_cleanup(job->payload);
-        n00b_free(job);
-        return;
-    }
-
-    if (n00b_result_is_ok(ingest_r)) {
-        rocs_store_conduit_stats_record(job->adapter, true, N00B_STORE_OK);
-    }
-    else {
-        rocs_store_conduit_stats_record(job->adapter,
-                                        false,
-                                        n00b_result_get_err(ingest_r));
-    }
-    rocs_store_conduit_payload_cleanup(job->payload);
-    n00b_free(job);
+static n00b_store_source_list_t *
+rocs_store_conduit_source_list_new(uint64_t count, n00b_allocator_t *allocator)
+{
+    n00b_store_source_list_t *sources =
+        n00b_alloc(n00b_store_source_list_t, .allocator = allocator);
+    *sources = n00b_list_new_cap_private(n00b_buffer_t *,
+                                         count,
+                                         .allocator = allocator,
+                                         .scan_kind = N00B_GC_SCAN_KIND_ALL);
+    return sources;
 }
 
 static void
-rocs_store_conduit_submit(n00b_store_conduit_ingest_t *adapter,
-                          n00b_store_ingest_payload_t  payload)
+rocs_store_conduit_process_batch(n00b_store_conduit_ingest_t *adapter,
+                                 n00b_store_ingest_msg_t     *first)
 {
-    rocs_store_conduit_job_t *job = n00b_alloc(
-        rocs_store_conduit_job_t,
-        N00B_ALLOC_OPTS(adapter->allocator));
-    job->adapter = adapter;
-    job->payload = payload;
+    if (adapter == nullptr || adapter->store == nullptr || first == nullptr) {
+        if (first != nullptr) {
+            rocs_store_conduit_payload_cleanup(first->payload);
+            n00b_free(first);
+        }
+        return;
+    }
 
-    n00b_worker_pool_submit(adapter->pool, job);
+    uint32_t cap = adapter->batch_capacity == 0 ? 1 : adapter->batch_capacity;
+    if (cap == 0) {
+        cap = 1;
+    }
 
-    n00b_data_write_lock(adapter->lock);
-    adapter->stats.submitted++;
-    n00b_data_unlock(adapter->lock);
+    n00b_pool_t      scratch_pool = {};
+    n00b_allocator_t *scratch_allocator =
+        n00b_pool_init(&scratch_pool,
+                       .hidden            = true,
+                       .external_metadata = false,
+                       .use_epochs        = false,
+                       .name              = "rocs_conduit_batch_scratch");
+
+    n00b_store_ingest_payload_t *payloads = n00b_alloc_array(
+        n00b_store_ingest_payload_t,
+        cap,
+        .allocator = scratch_allocator,
+        .scan_kind = N00B_GC_SCAN_KIND_ALL);
+    if (payloads == nullptr) {
+        rocs_store_conduit_payload_cleanup(first->payload);
+        n00b_free(first);
+        n00b_allocator_destroy(scratch_allocator);
+        rocs_store_conduit_stats_record(adapter,
+                                        0,
+                                        1,
+                                        N00B_STORE_ERR_INTERNAL);
+        return;
+    }
+
+    uint32_t count = 0;
+    payloads[count++] = first->payload;
+    n00b_free(first);
+
+    while (count < cap) {
+        n00b_store_ingest_msg_t *msg =
+            n00b_store_ingest_inbox_pop(adapter->inbox);
+        if (msg == nullptr) {
+            break;
+        }
+        payloads[count++] = msg->payload;
+        n00b_free(msg);
+    }
+
+    bool all_records = true;
+    bool all_sources = true;
+    for (uint32_t i = 0; i < count; i++) {
+        all_records = all_records
+                   && n00b_variant_is_type(payloads[i], n00b_json_node_t *);
+        all_sources = all_sources
+                   && n00b_variant_is_type(payloads[i], n00b_buffer_t *);
+    }
+
+    n00b_result_t(uint64_t) batch_r;
+    if (all_records) {
+        n00b_store_record_list_t *records =
+            rocs_store_conduit_record_list_new(count, scratch_allocator);
+        for (uint32_t i = 0; i < count; i++) {
+            n00b_list_push(*records,
+                           n00b_variant_get(payloads[i], n00b_json_node_t *));
+        }
+        batch_r = rocs_store_ingest_batch_common(adapter->store,
+                                                 records,
+                                                 nullptr,
+                                                 nullptr,
+                                                 0,
+                                                 0);
+    }
+    else if (all_sources) {
+        n00b_store_source_list_t *sources =
+            rocs_store_conduit_source_list_new(count, scratch_allocator);
+        for (uint32_t i = 0; i < count; i++) {
+            n00b_list_push(*sources,
+                           n00b_variant_get(payloads[i], n00b_buffer_t *));
+        }
+        batch_r = rocs_store_ingest_batch_common(adapter->store,
+                                                 nullptr,
+                                                 sources,
+                                                 adapter->source_decoder,
+                                                 0,
+                                                 0);
+    }
+    else {
+        uint64_t committed = 0;
+        n00b_err_t last_err = N00B_STORE_OK;
+        for (uint32_t i = 0; i < count; i++) {
+            n00b_result_t(bool) ingest_r;
+            if (n00b_variant_is_type(payloads[i], n00b_json_node_t *)) {
+                ingest_r = n00b_store_ingest(
+                    adapter->store,
+                    n00b_variant_get(payloads[i], n00b_json_node_t *));
+            }
+            else if (n00b_variant_is_type(payloads[i], n00b_buffer_t *)) {
+                n00b_buffer_t *source =
+                    n00b_variant_get(payloads[i], n00b_buffer_t *);
+                ingest_r = adapter->source_decoder == nullptr
+                         ? n00b_store_ingest_buf(adapter->store, source)
+                         : rocs_store_ingest_buf_decoded(
+                               adapter->store,
+                               source,
+                               adapter->source_decoder);
+            }
+            else {
+                ingest_r = n00b_result_err(bool, N00B_STORE_ERR_ARG);
+            }
+            if (n00b_result_is_ok(ingest_r)) {
+                committed++;
+            }
+            else {
+                last_err = n00b_result_get_err(ingest_r);
+            }
+        }
+        batch_r = committed == count
+                ? n00b_result_ok(uint64_t, committed)
+                : n00b_result_err(uint64_t,
+                                  last_err == N00B_STORE_OK
+                                      ? N00B_STORE_ERR_ARG
+                                      : last_err);
+    }
+
+    uint64_t committed = 0;
+    uint64_t failed    = 0;
+    n00b_err_t err     = N00B_STORE_OK;
+    if (n00b_result_is_ok(batch_r)) {
+        committed = n00b_result_get(batch_r);
+        failed    = committed <= count ? (uint64_t)count - committed
+                                       : 0;
+        if (failed != 0) {
+            err = N00B_STORE_ERR_INTERNAL;
+        }
+    }
+    else {
+        failed = count;
+        err    = n00b_result_get_err(batch_r);
+    }
+
+    rocs_store_conduit_stats_submitted(adapter, count);
+    rocs_store_conduit_stats_record(adapter, committed, failed, err);
+
+    for (uint32_t i = 0; i < count; i++) {
+        rocs_store_conduit_payload_cleanup(payloads[i]);
+    }
+    n00b_allocator_destroy(scratch_allocator);
 }
 
 static void
@@ -8209,8 +8359,7 @@ rocs_store_conduit_loop(void *arg)
         n00b_store_ingest_msg_t *msg =
             n00b_store_ingest_inbox_pop(adapter->inbox);
         if (msg != nullptr) {
-            rocs_store_conduit_submit(adapter, msg->payload);
-            n00b_free(msg);
+            rocs_store_conduit_process_batch(adapter, msg);
             continue;
         }
 
@@ -8246,9 +8395,6 @@ rocs_store_conduit_loop(void *arg)
 
     rocs_store_conduit_cancel_subscription(adapter);
 
-    n00b_worker_pool_quiesce(adapter->pool);
-    n00b_worker_pool_shutdown(adapter->pool);
-
     n00b_data_write_lock(adapter->lock);
     adapter->closed = true;
     n00b_data_unlock(adapter->lock);
@@ -8277,7 +8423,7 @@ n00b_store_conduit_ingest_start(n00b_store_t               *store,
     }
 
     int32_t workers = worker_count == 0 ? 1 : worker_count;
-    int32_t cap     = queue_capacity == 0 ? workers : queue_capacity;
+    int32_t cap     = queue_capacity == 0 ? 128 : queue_capacity;
     if (workers <= 0 || cap <= 0) {
         return n00b_result_err(n00b_store_conduit_ingest_t *,
                                N00B_STORE_ERR_ARG);
@@ -8296,6 +8442,7 @@ n00b_store_conduit_ingest_start(n00b_store_t               *store,
     adapter->allocator      = allocator;
     adapter->source_decoder = source_decoder;
     adapter->stats          = (n00b_store_conduit_ingest_stats_t){};
+    adapter->batch_capacity = (uint32_t)cap;
     adapter->stop_requested = false;
     adapter->closed         = false;
     adapter->joined         = false;
@@ -8312,22 +8459,11 @@ n00b_store_conduit_ingest_start(n00b_store_t               *store,
                             0);
     n00b_conduit_inbox_set_no_notify(adapter->inbox, true);
 
-    adapter->pool = n00b_worker_pool_new(workers,
-                                         cap,
-                                         rocs_store_conduit_worker,
-                                         nullptr,
-                                         .allocator = allocator);
-    if (adapter->pool == nullptr) {
-        return n00b_result_err(n00b_store_conduit_ingest_t *,
-                               N00B_STORE_ERR_INTERNAL);
-    }
-
     adapter->sub = n00b_conduit_subscribe(n00b_store_ingest_payload_t,
                                           topic,
                                           adapter->inbox,
                                           .operations = N00B_CONDUIT_OP_ALL);
     if (adapter->sub == N00B_CONDUIT_INVALID_SUB_HANDLE) {
-        n00b_worker_pool_shutdown(adapter->pool);
         return n00b_result_err(n00b_store_conduit_ingest_t *,
                                N00B_STORE_ERR_INTERNAL);
     }
@@ -8335,7 +8471,6 @@ n00b_store_conduit_ingest_start(n00b_store_t               *store,
     auto thread_r = n00b_thread_spawn(rocs_store_conduit_loop, adapter);
     if (n00b_result_is_err(thread_r)) {
         n00b_conduit_sub_cancel(adapter->sub);
-        n00b_worker_pool_shutdown(adapter->pool);
         return n00b_result_err(n00b_store_conduit_ingest_t *,
                                N00B_STORE_ERR_INTERNAL);
     }
@@ -8394,14 +8529,8 @@ n00b_store_conduit_ingest_stats(n00b_store_conduit_ingest_t *ingest)
         ingest->inbox == nullptr
             ? 0
             : (uint64_t)n00b_store_ingest_inbox_msg_count(ingest->inbox);
-    stats.worker_queued =
-        ingest->pool == nullptr
-            ? 0
-            : (uint64_t)n00b_worker_pool_pending(ingest->pool);
-    stats.worker_in_flight =
-        ingest->pool == nullptr
-            ? 0
-            : (uint64_t)n00b_worker_pool_in_flight(ingest->pool);
+    stats.worker_queued    = 0;
+    stats.worker_in_flight = 0;
     return n00b_result_ok(n00b_store_conduit_ingest_stats_t, stats);
 }
 

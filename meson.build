@@ -4117,6 +4117,12 @@ test('rocs_service_tool_smoke',
     suite: 'unit',
 )
 
+n00b_rocs_shards_tool = executable('n00b-rocs-shards',
+    ['src/tools/n00b-rocs-shards.c'],
+    kwargs: n00b_app_kwargs,
+    install: true,
+)
+
 n00b_rocs_wax_cache_tool = executable('n00b-rocs-wax-cache',
     [
         'src/tools/n00b-rocs-wax-cache.c',

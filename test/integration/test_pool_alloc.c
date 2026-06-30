@@ -185,6 +185,7 @@ test_alignment(void)
 static void
 test_known_allocator_free_system_hidden(void)
 {
+    n00b_pool_global_stats_t before = n00b_pool_global_stats();
     n00b_pool_t      pool;
     n00b_allocator_t *alloc = n00b_pool_init(&pool,
                                              .__system = true,
@@ -199,6 +200,26 @@ test_known_allocator_free_system_hidden(void)
     assert(p1 != nullptr);
     assert(!n00b_option_is_set(n00b_mem_get_allocator(p1)));
 
+    n00b_pool_global_stats_t during = n00b_pool_global_stats();
+    assert(during.live_system_pool_count >= before.live_system_pool_count + 1);
+    assert(during.live_system_mapped_bytes >= before.live_system_mapped_bytes + n00b_page_size);
+    assert(during.diagnostic_page_count >= before.diagnostic_page_count + 1);
+
+    uint64_t    page_start = 0;
+    uint64_t    page_end = 0;
+    const char *page_name = nullptr;
+    bool        registered = true;
+    assert(n00b_pool_diagnostic_lookup_page((uintptr_t)((uintptr_t)p1 & ~(n00b_page_size - 1)),
+                                            &page_start,
+                                            &page_end,
+                                            &page_name,
+                                            nullptr,
+                                            &registered));
+    assert(page_start != 0);
+    assert(page_end > page_start);
+    assert(page_name != nullptr && strcmp(page_name, "test_gc_work_pool") == 0);
+    assert(!registered);
+
     n00b_free_from_allocator(alloc, p1);
 
     void *p2 = n00b_alloc_array_with_opts(uint8_t,
@@ -210,6 +231,10 @@ test_known_allocator_free_system_hidden(void)
 
     n00b_free_from_allocator(alloc, p2);
     n00b_allocator_destroy(alloc);
+
+    n00b_pool_global_stats_t after = n00b_pool_global_stats();
+    assert(after.live_system_pool_count <= during.live_system_pool_count - 1);
+    assert(after.diagnostic_page_count <= during.diagnostic_page_count - 1);
 
     printf("  [PASS] known_allocator_free_system_hidden\n");
 }

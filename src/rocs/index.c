@@ -2,6 +2,9 @@
 
 #include "adt/list.h"
 #include "core/hash.h"
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "internal/rocs/index.h"
 #include "internal/rocs/json_field.h"
 #include "internal/rocs/map.h"
@@ -2367,6 +2370,14 @@ n00b_store_record_view_mapped_at(n00b_store_map_shard_t *shard,
                                rocs_index_map_err(n00b_result_get_err(state_r)));
     }
     if (n00b_result_get(state_r) != N00B_SHARD_STATE_SEALED) {
+        if (getenv("ROCS_QUERY_DEBUG") != NULL) {
+            fprintf(stderr,
+                    "rocs index: mapped pos state mismatch "
+                    "shard=%llu ordinal=%llu state=%lld\n",
+                    (unsigned long long)pos.shard_id,
+                    (unsigned long long)pos.ordinal,
+                    (long long)n00b_result_get(state_r));
+        }
         return n00b_result_err(n00b_store_record_t *,
                                N00B_STORE_INDEX_ERR_STATE);
     }
@@ -2454,6 +2465,14 @@ n00b_store_record_view_mapped_pos(n00b_store_map_shard_t *shard,
                                rocs_index_map_err(n00b_result_get_err(state_r)));
     }
     if (n00b_result_get(state_r) != N00B_SHARD_STATE_SEALED) {
+        if (getenv("ROCS_QUERY_DEBUG") != NULL) {
+            fprintf(stderr,
+                    "rocs index: mapped pos state mismatch "
+                    "shard=%llu ordinal=%llu state=%lld\n",
+                    (unsigned long long)pos.shard_id,
+                    (unsigned long long)pos.ordinal,
+                    (long long)n00b_result_get(state_r));
+        }
         return n00b_result_err(n00b_store_record_t *,
                                N00B_STORE_INDEX_ERR_STATE);
     }
@@ -2464,6 +2483,14 @@ n00b_store_record_view_mapped_pos(n00b_store_map_shard_t *shard,
                                rocs_index_map_err(n00b_result_get_err(shard_id_r)));
     }
     if (n00b_result_get(shard_id_r) != pos.shard_id) {
+        if (getenv("ROCS_QUERY_DEBUG") != NULL) {
+            fprintf(stderr,
+                    "rocs index: mapped pos shard mismatch "
+                    "wanted=%llu mapped=%llu ordinal=%llu\n",
+                    (unsigned long long)pos.shard_id,
+                    (unsigned long long)n00b_result_get(shard_id_r),
+                    (unsigned long long)pos.ordinal);
+        }
         return n00b_result_err(n00b_store_record_t *,
                                N00B_STORE_INDEX_ERR_STATE);
     }
@@ -2500,6 +2527,13 @@ n00b_store_record_view_mapped_pos(n00b_store_map_shard_t *shard,
                                rocs_index_map_err(n00b_result_get_err(ref_r)));
     }
     if (!n00b_option_is_set(n00b_result_get(ref_r))) {
+        if (getenv("ROCS_QUERY_DEBUG") != NULL) {
+            fprintf(stderr,
+                    "rocs index: mapped pos empty record ref "
+                    "shard=%llu ordinal=%llu\n",
+                    (unsigned long long)pos.shard_id,
+                    (unsigned long long)pos.ordinal);
+        }
         return n00b_result_err(n00b_store_record_t *,
                                N00B_STORE_INDEX_ERR_STATE);
     }

@@ -262,12 +262,6 @@ rocs_norm_text_base_token_byte(uint8_t byte)
 }
 
 static bool
-rocs_norm_text_connector_byte(uint8_t byte)
-{
-    return byte == '-' || byte == ':';
-}
-
-static bool
 rocs_norm_ngram_n_valid(uint8_t ngram_n)
 {
     return ngram_n >= N00B_STORE_NGRAM_MIN_N
@@ -289,19 +283,6 @@ rocs_norm_text_token_end(n00b_string_t *folded, uint64_t start)
         if (rocs_norm_text_base_token_byte(byte)) {
             i++;
             continue;
-        }
-        if (rocs_norm_text_connector_byte(byte)) {
-            uint64_t connector_start = i;
-            while (i < folded_len
-                   && rocs_norm_text_connector_byte((uint8_t)folded->data[i])) {
-                i++;
-            }
-            if (i < folded_len
-                && rocs_norm_text_base_token_byte((uint8_t)folded->data[i])) {
-                i++;
-                continue;
-            }
-            i = connector_start;
         }
         break;
     }

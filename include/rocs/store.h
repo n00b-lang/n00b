@@ -1108,11 +1108,10 @@ n00b_store_ingest_buf(n00b_store_t *store, n00b_buffer_t *source);
  *
  * @param store   Open store returned by @ref n00b_store_open_vfs.
  * @param records List of parsed JSON object pointers.
- * @kw worker_count    Worker-pool size for parse/preflight/index-key build.
- *                     Zero chooses a small implementation default capped by
- *                     the batch length.
- * @kw queue_capacity  Pending worker-pool job bound. Zero chooses the worker
- *                     count.
+ * @kw worker_count    Accepted for source compatibility; batch preparation is
+ *                     currently single-threaded.
+ * @kw queue_capacity  Accepted for source compatibility; batch preparation is
+ *                     currently single-threaded.
  *
  * @return Ok(committed_count). On full success this equals the list length.
  *         Worker/preflight failures return typed store errors before any batch
@@ -1121,8 +1120,8 @@ n00b_store_ingest_buf(n00b_store_t *store, n00b_buffer_t *source);
  *         count rather than a retry-unsafe error; callers resume from that
  *         index.
  * @post Record order and per-shard ordinal order follow input order. Hot-shard
- *       mutation is single-writer; workers only build private per-record
- *       parse/preflight/index-key state.
+ *       mutation is single-writer; per-record parse/preflight/index-key state
+ *       is built before the commit lock is taken.
  */
 extern n00b_result_t(uint64_t)
 n00b_store_ingest_batch(n00b_store_t             *store,
@@ -1137,9 +1136,10 @@ n00b_store_ingest_batch(n00b_store_t             *store,
  *
  * @param store   Open store returned by @ref n00b_store_open_vfs.
  * @param sources List of byte-exact JSON source buffers.
- * @kw worker_count    Worker-pool size for parse/preflight/index-key build.
- * @kw queue_capacity  Pending worker-pool job bound. Zero chooses the worker
- *                     count.
+ * @kw worker_count    Accepted for source compatibility; batch preparation is
+ *                     currently single-threaded.
+ * @kw queue_capacity  Accepted for source compatibility; batch preparation is
+ *                     currently single-threaded.
  *
  * @return Ok(committed_count). Parse/preflight failures return typed store
  *         errors before any batch record is appended. Commit-stage failures
@@ -1160,14 +1160,13 @@ n00b_store_ingest_buf_batch(n00b_store_t             *store,
 /**
  * @brief Start asynchronously ingesting from a variant-backed conduit topic.
  *
- * The adapter subscribes with an internal unbounded inbox and uses a bounded
- * worker pool for ingest work. The adapter thread blocks in
- * @c n00b_worker_pool_submit when @p queue_capacity is full; it does not use a
- * drop-newest/drop-oldest conduit policy for accepted input.
+ * The adapter subscribes with an internal unbounded inbox. Its single adapter
+ * thread drains bounded batches from that inbox and ingests them directly; it
+ * does not spawn per-store ingest workers.
  *
- * @kw worker_count   Worker count for store ingest calls. Zero selects one.
- * @kw queue_capacity Pending worker-pool job bound. Zero selects the worker
- *                    count.
+ * @kw worker_count   Accepted for source compatibility; ignored.
+ * @kw queue_capacity Maximum records drained into one adapter batch. Zero
+ *                    selects the implementation default.
  * @kw source_decoder Optional raw-source decoder. Null parses source buffers
  *                    as ordinary JSON store records. Non-null decoders run in
  *                    worker scratch storage before the store copies accepted
@@ -1190,7 +1189,7 @@ n00b_store_conduit_ingest_start(n00b_store_t               *store,
 /**
  * @brief Stop a conduit ingest adapter, unsubscribe, and join workers.
  *
- * @post Queued accepted input is drained before the worker pool shuts down.
+ * @post Queued accepted input is drained before the adapter thread exits.
  */
 extern n00b_result_t(bool)
 n00b_store_conduit_ingest_close(n00b_store_conduit_ingest_t *ingest);
@@ -1310,6 +1309,25 @@ n00b_store_apply_event_time_watermark(n00b_store_t *store,
  */
 extern n00b_result_t(uint64_t)
 n00b_store_catalog_get_entry_count(n00b_store_t *store);
+
+/**
+ * @brief Return the number of currently visible sealed catalog entries.
+ *
+ * This borrowed enumeration path avoids copying catalog strings. Callers must
+ * not retain returned entries across catalog mutation.
+ */
+extern n00b_result_t(uint64_t)
+n00b_store_catalog_visible_entry_count(n00b_store_t *store);
+
+/**
+ * @brief Borrow one currently visible sealed catalog entry by index.
+ *
+ * @return Ok(some(entry)) when present, Ok(none) when @p index is out of
+ *         bounds, or a typed store error. The returned entry is borrowed from
+ *         @p store and must not be retained across catalog mutation.
+ */
+extern n00b_result_t(n00b_option_t(n00b_store_catalog_entry_t *))
+n00b_store_catalog_visible_entry_at(n00b_store_t *store, uint64_t index);
 
 /**
  * @brief Sealed-shard backlog ahead of a durable position.

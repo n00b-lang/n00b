@@ -37,6 +37,42 @@ N00B_STATIC_OBJECT_DESCRIPTOR_WITH_IDENTITY(
     UINT64_C(0x524f435300040001),
     &rocs_shard_pointer_prefix_identity);
 
+static const n00b_gc_struct_array_t rocs_list_data_pointer_shape = {
+    .stride = 1,
+    .offset = 0,
+    .count  = 1,
+};
+
+static const n00b_static_identity_t rocs_list_data_pointer_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "rocs",
+    .object_key   = "n00b_list_t.data-pointer.v1",
+};
+
+N00B_STATIC_OBJECT_DESCRIPTOR_WITH_IDENTITY(
+    rocs_list_data_pointer_desc,
+    &rocs_list_data_pointer_shape,
+    sizeof(rocs_list_data_pointer_shape),
+    typehash(n00b_gc_struct_array_t),
+    N00B_STATIC_OBJECT_F_READONLY,
+    N00B_GC_SCAN_KIND_NONE,
+    nullptr,
+    nullptr,
+    UINT64_C(0x524f435300010001),
+    &rocs_list_data_pointer_identity);
+
+static void
+rocs_apply_struct_field_scan(void *ptr, const n00b_gc_struct_array_t *shape)
+{
+    n00b_alloc_info_t ai = n00b_find_alloc_info(ptr, .scan_for_header = true);
+    if (ai.kind == n00b_alloc_inline && ai.hdr.in_line != nullptr) {
+        ai.hdr.in_line->scan_kind = N00B_GC_SCAN_KIND_CALLBACK;
+        ai.hdr.in_line->scan_cb   = n00b_gc_scan_cb_struct_field;
+        ai.hdr.in_line->scan_user = (void *)shape;
+    }
+}
+
 static n00b_store_record_payload_list_t *
 rocs_shard_record_list_new() _kargs
 {
@@ -47,7 +83,11 @@ rocs_shard_record_list_new() _kargs
         n00b_alloc_with_opts(n00b_store_record_payload_list_t,
                              &(n00b_alloc_opts_t){
                                  .allocator = allocator,
+                                 .scan_kind = N00B_GC_SCAN_KIND_CALLBACK,
+                                 .scan_cb   = n00b_gc_scan_cb_struct_field,
+                                 .scan_user = (void *)&rocs_list_data_pointer_shape,
                              });
+    rocs_apply_struct_field_scan(records, &rocs_list_data_pointer_shape);
 
     *records = n00b_list_new_private(n00b_string_t *,
                                      .allocator = allocator,
@@ -65,7 +105,11 @@ rocs_shard_raw_list_new() _kargs
         n00b_alloc_with_opts(n00b_store_raw_list_t,
                              &(n00b_alloc_opts_t){
                                  .allocator = allocator,
+                                 .scan_kind = N00B_GC_SCAN_KIND_CALLBACK,
+                                 .scan_cb   = n00b_gc_scan_cb_struct_field,
+                                 .scan_user = (void *)&rocs_list_data_pointer_shape,
                              });
+    rocs_apply_struct_field_scan(raw, &rocs_list_data_pointer_shape);
 
     *raw = n00b_list_new_private(n00b_store_raw_span_t *,
                                  .allocator = allocator,

@@ -423,8 +423,10 @@ test_nested_range_errors(void)
     n00b_buffer_t *bad    = copy_buffer(fixture.image);
     test_marshal_stream_header_t *hdr = (void *)bad->data;
     test_shard_wire_t            *root = buffer_root(bad);
+    uint32_t front_padding = (uint32_t)(test_payload_front_base(hdr)
+                                        - sizeof(test_marshal_stream_header_t));
     root->records = ((uint64_t)hdr->base_address << 32)
-                  | (uint64_t)(hdr->payload_front_len + 8u);
+                  | (uint64_t)(hdr->payload_front_len - front_padding + 8u);
 
     auto open = n00b_store_map_open_buffer(bad);
     CHECK(n00b_result_is_ok(open));

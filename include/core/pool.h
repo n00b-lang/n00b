@@ -15,6 +15,7 @@
 #define N00B_POST_ROUND_SHIFT 6
 #define N00B_NUM_FREE_LISTS   8
 #define N00B_POOL_STATS_TOP_N 16
+#define N00B_SYSTEM_POOL_AUDIT_TOP_N 16
 
 typedef struct n00b_pool_page_t {
     struct n00b_pool_page_t *prev;
@@ -88,8 +89,20 @@ typedef struct {
     uint64_t    live_registered_mapped_bytes;
     uint64_t    live_unregistered_pool_count;
     uint64_t    live_unregistered_mapped_bytes;
+    uint64_t    live_system_pool_count;
+    uint64_t    live_system_mapped_bytes;
+    uint64_t    destroy_unmap_count;
+    uint64_t    destroy_unmap_bytes;
+    uint64_t    destroy_unmap_fail_count;
+    uint64_t    destroy_unmap_fail_bytes;
+    uint64_t    big_unmap_fail_count;
+    uint64_t    big_unmap_fail_bytes;
+    uint64_t    diagnostic_page_count;
+    uint64_t    diagnostic_page_overflow_count;
+    uint64_t    diagnostic_page_lock_skip_count;
     uint64_t    top_count;
     const char *top_name[N00B_POOL_STATS_TOP_N];
+    const char *top_creation_loc[N00B_POOL_STATS_TOP_N];
     uint64_t    top_mapped_bytes[N00B_POOL_STATS_TOP_N];
     uint64_t    top_page_count[N00B_POOL_STATS_TOP_N];
     uint64_t    top_big_map_count[N00B_POOL_STATS_TOP_N];
@@ -99,6 +112,39 @@ typedef struct {
     uint64_t    top_mmap_registered[N00B_POOL_STATS_TOP_N];
     uint64_t    top_system[N00B_POOL_STATS_TOP_N];
 } n00b_pool_global_stats_t;
+
+typedef struct {
+    uint64_t    total_alloc_count;
+    uint64_t    total_free_count;
+    uint64_t    total_alloc_bytes;
+    uint64_t    total_free_bytes;
+    uint64_t    live_alloc_count;
+    uint64_t    live_bytes;
+    uint64_t    ptr_overflow_count;
+    uint64_t    site_overflow_count;
+    uint64_t    free_miss_count;
+    uint64_t    lock_skip_count;
+    uint64_t    top_count;
+    const char *top_site[N00B_SYSTEM_POOL_AUDIT_TOP_N];
+    uint64_t    top_alloc_count[N00B_SYSTEM_POOL_AUDIT_TOP_N];
+    uint64_t    top_free_count[N00B_SYSTEM_POOL_AUDIT_TOP_N];
+    uint64_t    top_alloc_bytes[N00B_SYSTEM_POOL_AUDIT_TOP_N];
+    uint64_t    top_free_bytes[N00B_SYSTEM_POOL_AUDIT_TOP_N];
+    uint64_t    top_live_count[N00B_SYSTEM_POOL_AUDIT_TOP_N];
+    uint64_t    top_live_bytes[N00B_SYSTEM_POOL_AUDIT_TOP_N];
+} n00b_system_pool_audit_stats_t;
+
+extern void
+n00b_system_pool_audit_alloc(n00b_allocator_t *allocator,
+                             void             *ptr,
+                             uint64_t          bytes,
+                             const char       *site);
+
+extern void
+n00b_system_pool_audit_free(n00b_allocator_t *allocator, void *ptr);
+
+extern n00b_system_pool_audit_stats_t
+n00b_system_pool_audit_stats(void);
 
 /**
  * @brief Initialize a pool allocator.
