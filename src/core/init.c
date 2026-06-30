@@ -422,15 +422,13 @@ n00b_init_core(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     // when a leak hunt requires it.
     n00b_pool_init(&rt->conduit_pool, .hidden = true, .name = "conduit_pool");
 
-    // Application-level "user_pool": hidden + non-GC like
-    // conduit_pool, but with external_metadata so each alloc gets
-    // an OOB record (alive bit + gc_epoch + callsite file_name).
-    // Application code that opts in by allocating here is then
-    // visible to n00b_debug_find_leaks — handy for leak hunts on
-    // long-running daemons.  Not for hot-path traffic; reach for
-    // conduit_pool or system_pool there.
+    // Application-level "user_pool": hidden + non-GC like conduit_pool.
+    // Keep OOB metadata even in release builds. alloc_interpose.c uses it to
+    // recover the allocation base for over-aligned libc allocations before
+    // routing free()/realloc() back through n00b_free().
     n00b_pool_init(&rt->user_pool,
                    .hidden            = true,
+                   .inline_headers    = false,
                    .external_metadata = true,
                    .name              = "user_pool");
 

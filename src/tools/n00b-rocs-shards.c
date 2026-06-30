@@ -2,6 +2,8 @@
 #include "rocs/map.h"
 #include "rocs/store.h"
 #include "rocs/wax.h"
+#include "text/strings/string_ops.h"
+#include "util/path.h"
 #include "vfs/backend_local.h"
 #include "vfs/vfs.h"
 
@@ -35,7 +37,9 @@ usage(void)
             "usage: n00b-rocs-shards --store-root PATH list\n"
             "       n00b-rocs-shards --store-root PATH verify --shard-id N\n"
             "       n00b-rocs-shards --store-root PATH scan\n"
-            "       n00b-rocs-shards --store-root PATH drop --shard-id N --yes\n");
+            "       n00b-rocs-shards --store-root PATH drop --shard-id N --yes\n"
+            "\n"
+            "PATH may be the Crayon support dir, rocs-cache dir, or rocs-cache/store.\n");
 }
 
 static void
@@ -62,6 +66,21 @@ parse_u64_arg(const char *s, uint64_t *out)
     }
     *out = (uint64_t)v;
     return true;
+}
+
+static n00b_string_t *
+strip_suffix_bytes(n00b_string_t *s, const char *suffix, size_t suffix_len)
+{
+    if (s == NULL || s->u8_bytes < suffix_len) {
+        return NULL;
+    }
+    if (memcmp(s->data + s->u8_bytes - suffix_len,
+               suffix,
+               suffix_len) != 0) {
+        return NULL;
+    }
+    return n00b_string_from_raw(s->data,
+                                (int64_t)(s->u8_bytes - suffix_len));
 }
 
 static bool
@@ -161,13 +180,15 @@ open_wax_store(n00b_string_t *local_store_root)
     }
     n00b_vfs_t *vfs = n00b_result_get(vfs_r);
 
-    n00b_string_t *backend_root = local_store_root;
-    if (local_store_root != NULL && local_store_root->u8_bytes > 6
-        && memcmp(local_store_root->data + local_store_root->u8_bytes - 6,
-                  "/store",
-                  6) == 0) {
-        backend_root = n00b_string_from_raw(local_store_root->data,
-                                            (int64_t)local_store_root->u8_bytes - 6);
+    n00b_string_t *backend_root = strip_suffix_bytes(local_store_root,
+                                                     "/store",
+                                                     6);
+    if (backend_root == NULL
+        && n00b_unicode_str_ends_with(local_store_root, r"/rocs-cache")) {
+        backend_root = local_store_root;
+    }
+    if (backend_root == NULL) {
+        backend_root = n00b_path_join_v(local_store_root, r"rocs-cache");
     }
 
     auto backend_r = n00b_vfs_backend_local_new(backend_root);

@@ -280,6 +280,40 @@ test_missing_shard_object_error(void)
 }
 
 static void
+test_drop_missing_shard_object_prunes_catalog(void)
+{
+    n00b_vfs_t   *vfs   = new_memory_vfs(nullptr);
+    n00b_store_t *store = open_store(vfs);
+
+    n00b_store_catalog_entry_t *entry = seal_one(store, 101);
+    auto path_r = n00b_store_catalog_entry_get_object_path(entry);
+    CHECK(n00b_result_is_ok(path_r));
+    n00b_string_t *path = n00b_result_get(path_r);
+
+    auto del_r = n00b_vfs_delete(vfs, path);
+    CHECK(n00b_result_is_ok(del_r));
+
+    auto drop_r = n00b_store_drop_sealed_shard(store,
+                                               1,
+                                               .drop_reason = r"repair");
+    CHECK(n00b_result_is_ok(drop_r));
+    CHECK(n00b_result_get(drop_r));
+
+    auto find_r = n00b_store_catalog_find_shard(store, 1);
+    CHECK(n00b_result_is_ok(find_r));
+    CHECK(!n00b_option_is_set(n00b_result_get(find_r)));
+
+    auto stat_r = n00b_vfs_stat(vfs, path);
+    CHECK(n00b_result_is_err(stat_r));
+    CHECK(n00b_result_get_err(stat_r) == N00B_VFS_ERR_NOT_FOUND);
+
+    n00b_store_t *reopened = open_store(vfs);
+    auto count_r = n00b_store_catalog_get_entry_count(reopened);
+    CHECK(n00b_result_is_ok(count_r));
+    CHECK(n00b_result_get(count_r) == 0);
+}
+
+static void
 test_existing_shard_object_blocks_seal(void)
 {
     n00b_vfs_t   *vfs   = new_memory_vfs(nullptr);
@@ -393,6 +427,7 @@ main(int argc, char **argv)
     test_memory_catalog_reopen();
     test_metadata_only_reopen();
     test_missing_shard_object_error();
+    test_drop_missing_shard_object_prunes_catalog();
     test_existing_shard_object_blocks_seal();
     test_catalog_failure_rolls_back_visibility();
     test_corrupt_shard_length_error();

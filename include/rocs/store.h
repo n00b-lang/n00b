@@ -63,6 +63,7 @@ typedef struct n00b_store_catalog_entry_t    n00b_store_catalog_entry_t;
 typedef struct n00b_store_resident_shard_t   n00b_store_resident_shard_t;
 typedef struct n00b_store_conduit_ingest_t    n00b_store_conduit_ingest_t;
 typedef struct n00b_store_config_t            n00b_store_config_t;
+typedef struct n00b_store_record_stream_t     n00b_store_record_stream_t;
 
 /** @brief List of source JSON buffers for batch ingest. */
 typedef n00b_list_t(n00b_buffer_t *) n00b_store_source_list_t;
@@ -71,6 +72,41 @@ typedef n00b_list_t(n00b_buffer_t *) n00b_store_source_list_t;
 typedef n00b_result_t(n00b_json_node_t *) (*n00b_store_source_decoder_t)(
     n00b_buffer_t    *source,
     n00b_allocator_t *allocator);
+
+/** @brief String terms returned by a schema search-text hook. */
+typedef n00b_list_t(n00b_string_t *) n00b_store_search_text_term_list_t;
+
+/**
+ * @brief Search-text hook disposition for one string value.
+ *
+ * DEFAULT appends hook-provided terms, then applies ROCS's default full-text
+ * tokenizer. REPLACE appends only hook-provided terms. SKIP appends neither.
+ */
+typedef enum : int32_t {
+    N00B_STORE_SEARCH_TEXT_DEFAULT = 0,
+    N00B_STORE_SEARCH_TEXT_REPLACE = 1,
+    N00B_STORE_SEARCH_TEXT_SKIP    = 2,
+} n00b_store_search_text_action_t;
+
+/**
+ * @brief Optional schema hook for adding/replacing catch-all terms per string.
+ *
+ * @param path      Dotted record path for the string when available. Array
+ *                  elements inherit their parent path.
+ * @param value     String value being considered for the reserved catch-all
+ *                  full-text column.
+ * @param out_terms Optional list of exact full-text terms to add. Terms are
+ *                  case-folded and hashed as single full-text terms by ROCS;
+ *                  they are not passed through the default tokenizer again.
+ * @param ctx       Caller-owned context pointer from schema construction.
+ * @param allocator Scratch allocator for any returned list/strings.
+ */
+typedef n00b_store_search_text_action_t (*n00b_store_search_text_hook_t)(
+    n00b_string_t                    *path,
+    n00b_string_t                    *value,
+    n00b_store_search_text_term_list_t **out_terms,
+    void                             *ctx,
+    n00b_allocator_t                 *allocator);
 
 /**
  * @brief Variant-backed conduit ingest payload.
@@ -419,6 +455,7 @@ n00b_store_config_default(n00b_store_profile_t profile) _kargs
  * Supported keys are @c ROCS_PROFILE, @c ROCS_NAME, @c ROCS_S3_BUCKET,
  * @c ROCS_S3_PREFIX, @c ROCS_SCHEMA, @c ROCS_AWS_REGION,
  * @c ROCS_S3_ENDPOINT, @c ROCS_S3_PATH_STYLE, @c ROCS_CACHE_DIR,
+ * @c ROCS_ROOT,
  * @c ROCS_CACHE_BYTES, @c ROCS_RESIDENT_BYTES, @c ROCS_RESIDENT_SHARDS,
  * @c ROCS_HTTP_ADDR, @c ROCS_READ_ONLY, and @c ROCS_WRITER_MODE.
  * Static AWS access key/secret variables are intentionally not rocs config
@@ -572,7 +609,9 @@ n00b_store_schema_new() _kargs
     // column (index-only — never stored in the record body), and an unqualified
     // query (n00b_filter_any) resolves to it. The reserved name is not a usable
     // user field. DB-level switch; default off.
-    bool              search_text = false;
+    bool                           search_text = false;
+    n00b_store_search_text_hook_t  search_text_hook = nullptr;
+    void                          *search_text_hook_ctx = nullptr;
 };
 
 /**
@@ -1328,6 +1367,84 @@ n00b_store_catalog_visible_entry_count(n00b_store_t *store);
  */
 extern n00b_result_t(n00b_option_t(n00b_store_catalog_entry_t *))
 n00b_store_catalog_visible_entry_at(n00b_store_t *store, uint64_t index);
+
+/**
+ * @brief Borrowed catalog entry selected for a strict-after resume position.
+ *
+ * `entry` is borrowed from the store catalog and must not be retained across
+ * catalog mutation. `start_ordinal` is the first not-yet-delivered record in
+ * that shard for the supplied resume position.
+ */
+typedef struct {
+    n00b_store_catalog_entry_t *entry;
+    uint64_t                    index;
+    uint64_t                    generation;
+    uint64_t                    shard_id;
+    uint64_t                    record_count;
+    uint64_t                    start_ordinal;
+} n00b_store_catalog_resume_entry_t;
+
+/**
+ * @brief Borrow the first visible sealed shard with records after @p after.
+ *
+ * This is the cursor form of visible catalog enumeration: it scans the catalog
+ * while holding the store commit lock once, then returns the first shard with
+ * remaining records. Passing NULL starts at the first non-empty sealed shard.
+ *
+ * @return Ok(some(entry)) when a shard has undelivered records, Ok(none) when
+ *         sealed state is drained, or a typed store error.
+ */
+extern n00b_result_t(n00b_option_t(n00b_store_catalog_resume_entry_t))
+n00b_store_catalog_visible_entry_after(n00b_store_t     *store,
+                                       n00b_store_pos_t *after);
+
+/**
+ * @brief Borrowed record payload returned by a store stream cursor.
+ *
+ * The byte span is valid until the next call to
+ * @ref n00b_store_record_stream_next on the same cursor or until
+ * @ref n00b_store_record_stream_close. Callers that need longer retention must
+ * copy the bytes.
+ */
+typedef struct {
+    n00b_store_pos_t       pos;
+    n00b_store_byte_span_t bytes;
+    bool                   hot;
+} n00b_store_record_stream_item_t;
+
+/**
+ * @brief Open a durable-position scan cursor across sealed shards and hot tail.
+ *
+ * The cursor snapshots visible sealed catalog entries and the current hot
+ * record pointers under the store commit lock, then pins backing lifetime until
+ * closed. It does not evaluate predicates or materialize records.
+ *
+ * @param store Store returned by @ref n00b_store_open_vfs.
+ * @param after Optional strict resume position; NULL starts at the first
+ *              visible record.
+ * @kw allocator Optional allocator for cursor metadata.
+ */
+extern n00b_result_t(n00b_store_record_stream_t *)
+n00b_store_record_stream_open(n00b_store_t     *store,
+                              n00b_store_pos_t *after) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Return the next record span from a stream cursor.
+ *
+ * @return Ok(some(item)) for a record, Ok(none) when drained, or a typed store
+ *         / mapped-image error.
+ */
+extern n00b_result_t(n00b_option_t(n00b_store_record_stream_item_t))
+n00b_store_record_stream_next(n00b_store_record_stream_t *stream);
+
+/**
+ * @brief Close a stream cursor and release its backing lifetime pin.
+ */
+extern n00b_result_t(bool)
+n00b_store_record_stream_close(n00b_store_record_stream_t *stream);
 
 /**
  * @brief Sealed-shard backlog ahead of a durable position.

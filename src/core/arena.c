@@ -554,6 +554,13 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
         .collect_count      = 0,
 #endif
     };
+    bool external_metadata =
+#if defined(N00B_RELEASE_BUILD) && !defined(N00B_DEBUG_LIVE_CENSUS)
+        false;
+#else
+        !no_map;
+#endif
+
     // clang-format off
     n00b_allocator_setup(
 	(n00b_allocator_t *)arena,
@@ -561,7 +568,7 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
 	.destroy           = (n00b_allocator_destroy_fn)n00b_arena_delete,
 	.name              = name,
 	.inline_headers    = inline_headers,
-	.external_metadata = !no_map,
+	.external_metadata = external_metadata,
 	.hidden            = hidden,
 	.__system          = __system,
 	.creation_loc      = creation_loc);

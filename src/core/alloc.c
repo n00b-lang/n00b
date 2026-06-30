@@ -313,11 +313,8 @@ _n00b_alloc_raw(size_t             n,
     /* D-049: upgrade a DEFAULT-scanned typed allocation to a precise
      * CALLBACK scan when a link-time GC-map descriptor is registered for
      * its type. Only when the caller specified no scan policy of its own
-     * (DEFAULT + no scan_cb) and the allocator carries OOB metadata —
-     * CALLBACK needs the metadata path to survive compaction (see the
-     * assert below); allocators without it keep the conservative DEFAULT
-     * scan, which is correct for the GC and only those metadata-backed
-     * objects are ever marshaled. The descriptor's element count is
+     * (DEFAULT + no scan_cb) and the allocator carries OOB metadata.
+     * The descriptor's element count is
      * derived from the allocation length by n00b_gc_scan_cb_type_layout,
      * so one shared per-type descriptor serves both n (=1) and arrays. */
     if (opts->scan_kind == N00B_GC_SCAN_KIND_DEFAULT

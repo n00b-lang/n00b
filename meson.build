@@ -266,6 +266,10 @@ if target_os == 'darwin'
   c_args = c_args + ['-Wno-atomic-alignment']
 endif
 
+if conf_release_build
+  c_args = c_args + ['-DN00B_RELEASE_BUILD=1']
+endif
+
 if conf_dev_mode
   c_args = c_args + ['-DN00B_DEV']
 endif

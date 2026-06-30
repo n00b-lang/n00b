@@ -638,6 +638,83 @@ n00b_http_h1_request_build(n00b_http_url_t *url)
     return req;
 }
 
+static n00b_buffer_t *
+h1_request_headers_build_chunked(n00b_http_url_t        *url,
+                                 const char             *method,
+                                 const char             *content_type,
+                                 n00b_http_h1_headers_t *extra,
+                                 bool                    keep_alive,
+                                 n00b_allocator_t       *a)
+{
+    n00b_buffer_t *req = n00b_buffer_empty(.allocator = a);
+
+    const char *path = url->path && url->path->u8_bytes
+                           ? url->path->data
+                           : "/";
+    if (url->query && url->query->u8_bytes > 0) {
+        append_fmt(req, a, "%s %s?%s HTTP/1.1\r\n",
+                   method, path, url->query->data);
+    }
+    else {
+        append_fmt(req, a, "%s %s HTTP/1.1\r\n", method, path);
+    }
+
+    if (!extra_has(extra, "Host")) {
+        bool needs_port = url->has_explicit_port && url->port != 443;
+        if (url->is_ipv6_literal) {
+            append_fmt(req,
+                       a,
+                       needs_port ? "Host: [%s]:%u\r\n" : "Host: [%s]\r\n",
+                       url->host->data,
+                       (unsigned)url->port);
+        }
+        else if (needs_port) {
+            append_fmt(req, a, "Host: %s:%u\r\n",
+                       url->host->data, (unsigned)url->port);
+        }
+        else {
+            append_fmt(req, a, "Host: %s\r\n", url->host->data);
+        }
+    }
+    if (!extra_has(extra, "User-Agent")) {
+        append_cstr(req, "User-Agent: n00b-http/0.1\r\n", a);
+    }
+    if (!extra_has(extra, "Accept")) {
+        append_cstr(req, "Accept: */*\r\n", a);
+    }
+    if (!extra_has(extra, "Connection")) {
+        append_cstr(req,
+                    keep_alive ? "Connection: keep-alive\r\n"
+                               : "Connection: close\r\n",
+                    a);
+    }
+    if (content_type && !extra_has(extra, "Content-Type")) {
+        append_fmt(req, a, "Content-Type: %s\r\n", content_type);
+    }
+    if (!extra_has(extra, "Transfer-Encoding")) {
+        append_cstr(req, "Transfer-Encoding: chunked\r\n", a);
+    }
+
+    if (extra) {
+        size_t n = n00b_http_h1_headers_len(extra);
+        for (size_t i = 0; i < n; i++) {
+            const char *name;
+            const char *value;
+            if (!n00b_http_h1_headers_at(extra, i, &name, &value)) {
+                continue;
+            }
+            if (strcasecmp(name, "Content-Length") == 0
+                || strcasecmp(name, "Transfer-Encoding") == 0) {
+                continue;
+            }
+            append_fmt(req, a, "%s: %s\r\n", name, value);
+        }
+    }
+
+    append_cstr(req, "\r\n", a);
+    return req;
+}
+
 /* ===========================================================================
  * §4   Round trip
  * =========================================================================== */
@@ -1220,6 +1297,236 @@ h1_round_trip_conduit_tls(n00b_http_url_t             *url,
             pool, bucket_origin, N00B_HTTP_CONNECTION_POOL_TRANSPORT_H1,
             tc, h1_tls_conn_close);
     } else {
+        h1_tls_conn_close(tc);
+    }
+    return n00b_result_ok(n00b_http_h1_response_t *, resp);
+}
+
+typedef struct {
+    h1_tls_conn_t *tc;
+} h1_chunked_write_ctx_t;
+
+static n00b_result_t(bool)
+h1_submit_raw(void *ctx, const void *data, size_t len)
+{
+    h1_chunked_write_ctx_t *w = (h1_chunked_write_ctx_t *)ctx;
+    return n00b_conduit_tls_submit_raw(w->tc->tls, data, len);
+}
+
+static n00b_result_t(bool)
+h1_submit_chunked(void *ctx, const void *data, size_t len)
+{
+    if (len == 0) {
+        return n00b_result_ok(bool, true);
+    }
+
+    char hdr[32];
+    int  n = snprintf(hdr, sizeof(hdr), "%zx\r\n", len);
+    if (n <= 0 || (size_t)n >= sizeof(hdr)) {
+        return n00b_result_err(bool, N00B_HTTP_ERR_BAD_RESPONSE);
+    }
+
+    auto hr = h1_submit_raw(ctx, hdr, (size_t)n);
+    if (n00b_result_is_err(hr)) {
+        return hr;
+    }
+    auto br = h1_submit_raw(ctx, data, len);
+    if (n00b_result_is_err(br)) {
+        return br;
+    }
+    return h1_submit_raw(ctx, "\r\n", 2);
+}
+
+n00b_result_t(n00b_http_h1_response_t *)
+n00b_http_h1_round_trip_stream(n00b_http_url_t *url,
+                               n00b_http_h1_body_stream_fn body_stream,
+                               void *body_ctx)
+    _kargs {
+        const char                  *method        = "POST";
+        const char                  *content_type  = nullptr;
+        n00b_http_h1_headers_t      *extra         = nullptr;
+        int32_t                      timeout_ms    = 30000;
+        n00b_http_connection_pool_t *pool          = nullptr;
+        n00b_quic_trust_t           *trust         = nullptr;
+        uint64_t                     max_body_size = 0;
+        n00b_allocator_t            *allocator     = nullptr;
+    }
+{
+    if (!url || !body_stream) {
+        return n00b_result_err(n00b_http_h1_response_t *,
+                               N00B_HTTP_ERR_NULL_ARG);
+    }
+
+    n00b_allocator_t *a = allocator ? allocator : default_pool();
+    bool keep_alive_intent = (pool != nullptr);
+    bool was_head = method != nullptr && strcasecmp(method, "HEAD") == 0;
+
+    n00b_string_t *bucket_origin = url->origin;
+    h1_tls_conn_t *tc = nullptr;
+    if (pool) {
+        void *u = n00b_http_connection_pool_acquire(
+            pool, bucket_origin, N00B_HTTP_CONNECTION_POOL_TRANSPORT_H1);
+        if (u) {
+            tc = (h1_tls_conn_t *)u;
+            if (!h1_tls_conn_reusable(tc)) {
+                h1_tls_conn_close(tc);
+                tc = nullptr;
+            }
+        }
+    }
+    if (!tc) {
+        auto cr = h1_tls_connect(url, trust, timeout_ms);
+        if (n00b_result_is_err(cr)) {
+            return n00b_result_err(n00b_http_h1_response_t *,
+                                   n00b_result_get_err(cr));
+        }
+        tc = n00b_result_get(cr);
+    }
+
+    n00b_buffer_t *headers = h1_request_headers_build_chunked(
+        url,
+        method,
+        content_type,
+        extra,
+        keep_alive_intent,
+        a);
+    h1_chunked_write_ctx_t write_ctx = {.tc = tc};
+
+    auto wr = h1_submit_raw(&write_ctx,
+                            headers->data,
+                            (size_t)headers->byte_len);
+    if (n00b_result_is_err(wr)) {
+        h1_tls_conn_close(tc);
+        return n00b_result_err(n00b_http_h1_response_t *,
+                               n00b_result_get_err(wr));
+    }
+
+    auto sr = body_stream(body_ctx, h1_submit_chunked, &write_ctx);
+    if (n00b_result_is_err(sr)) {
+        h1_tls_conn_close(tc);
+        return n00b_result_err(n00b_http_h1_response_t *,
+                               n00b_result_get_err(sr));
+    }
+
+    auto end_r = h1_submit_raw(&write_ctx, "0\r\n\r\n", 5);
+    if (n00b_result_is_err(end_r)) {
+        h1_tls_conn_close(tc);
+        return n00b_result_err(n00b_http_h1_response_t *,
+                               n00b_result_get_err(end_r));
+    }
+
+    n00b_buffer_t *raw = n00b_buffer_empty(.allocator = a);
+    bool peer_closed   = false;
+    bool boundary_seen = false;
+    bool read_to_eof   = false;
+    size_t header_len  = 0;
+    bool   cl_checked  = false;
+    int32_t effective_timeout_ms = timeout_ms > 0 ? timeout_ms : 30000;
+    uint64_t deadline_ns = n00b_ns_timestamp()
+                         + (uint64_t)effective_timeout_ms * 1000000ULL;
+    while (!peer_closed && !boundary_seen) {
+        n00b_buffer_t *chunk = nullptr;
+        int32_t remain_ms = h1_remaining_timeout_ms(deadline_ns);
+        if (remain_ms <= 0) {
+            h1_tls_conn_close(tc);
+            return n00b_result_err(n00b_http_h1_response_t *,
+                                   N00B_QUIC_ERR_TIMEOUT);
+        }
+        int rc = h1_tls_recv(tc, &chunk, &peer_closed, remain_ms);
+        if (rc != N00B_QUIC_OK) {
+            h1_tls_conn_close(tc);
+            return n00b_result_err(n00b_http_h1_response_t *, rc);
+        }
+        if (chunk) {
+            if (chunk->byte_len > 0) {
+                n00b_buffer_concat(raw, chunk);
+            }
+            n00b_buffer_free_with_allocator_hint(chunk, default_pool());
+
+            if (max_body_size > 0 && header_len == 0) {
+                const char *bytes = raw->data;
+                size_t      len   = (size_t)raw->byte_len;
+                for (size_t i = 0; i + 4 <= len; i++) {
+                    if (bytes[i] == '\r' && bytes[i + 1] == '\n'
+                        && bytes[i + 2] == '\r' && bytes[i + 3] == '\n') {
+                        header_len = i + 4;
+                        break;
+                    }
+                }
+                if (header_len > 0 && !cl_checked && !was_head) {
+                    cl_checked = true;
+                    const char *hp = bytes;
+                    size_t      hl = header_len;
+                    for (size_t i = 0; i + 1 < hl; i++) {
+                        if (hp[i] == '\r' && hp[i + 1] == '\n') {
+                            hp = bytes + i + 2;
+                            hl = header_len - (i + 2);
+                            break;
+                        }
+                    }
+                    size_t      vlen = 0;
+                    const char *cl   = find_header(hp, hl, "Content-Length",
+                                                   &vlen);
+                    if (cl) {
+                        char   nbuf[24];
+                        size_t nl = vlen < sizeof(nbuf) - 1
+                                        ? vlen
+                                        : sizeof(nbuf) - 1;
+                        memcpy(nbuf, cl, nl);
+                        nbuf[nl] = '\0';
+                        uint64_t declared =
+                            (uint64_t)strtoull(nbuf, nullptr, 10);
+                        if (declared > max_body_size) {
+                            h1_tls_conn_close(tc);
+                            return n00b_result_err(
+                                n00b_http_h1_response_t *,
+                                N00B_HTTP_ERR_RESPONSE_TOO_LARGE);
+                        }
+                    }
+                }
+            }
+
+            if (max_body_size > 0 && header_len > 0 && !was_head) {
+                uint64_t body_have = (uint64_t)raw->byte_len
+                                     - (uint64_t)header_len;
+                if (body_have > max_body_size) {
+                    h1_tls_conn_close(tc);
+                    return n00b_result_err(n00b_http_h1_response_t *,
+                                           N00B_HTTP_ERR_RESPONSE_TOO_LARGE);
+                }
+            }
+
+            int complete = h1_response_complete(raw->data,
+                                                (size_t)raw->byte_len,
+                                                was_head);
+            if (complete == 1) {
+                boundary_seen = true;
+            }
+            else if (complete == -1) {
+                read_to_eof = true;
+            }
+        }
+        if (read_to_eof && !peer_closed) {
+            keep_alive_intent = false;
+            continue;
+        }
+    }
+
+    auto pres = n00b_http_h1_response_parse(raw, .allocator = a);
+    if (n00b_result_is_err(pres)) {
+        h1_tls_conn_close(tc);
+        return pres;
+    }
+    n00b_http_h1_response_t *resp = n00b_result_get(pres);
+
+    if (pool && keep_alive_intent && resp->keep_alive
+        && boundary_seen && !peer_closed) {
+        tc->use_count++;
+        n00b_http_connection_pool_release(
+            pool, bucket_origin, N00B_HTTP_CONNECTION_POOL_TRANSPORT_H1,
+            tc, h1_tls_conn_close);
+    }
+    else {
         h1_tls_conn_close(tc);
     }
     return n00b_result_ok(n00b_http_h1_response_t *, resp);

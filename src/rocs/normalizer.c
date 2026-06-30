@@ -908,6 +908,23 @@ rocs_norm_hash_bytes(n00b_store_index_kind_t  kind,
     return n00b_result_ok(n00b_uint128_t, hv);
 }
 
+n00b_result_t(n00b_uint128_t)
+n00b_store_normalize_string_key(n00b_store_index_kind_t kind,
+                                const char             *payload,
+                                uint64_t                payload_len) _kargs
+{
+    n00b_string_t    *path      = nullptr;
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return rocs_norm_hash_bytes(kind,
+                                ROCS_NORM_TAG_STRING,
+                                rocs_norm_root_path(path),
+                                payload,
+                                payload_len,
+                                .allocator = allocator);
+}
+
 static n00b_result_t(bool)
 rocs_norm_visit_string_key(n00b_store_index_kind_t              kind,
                            n00b_string_t                      *path,

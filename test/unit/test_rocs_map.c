@@ -51,6 +51,14 @@ typedef struct {
     uint32_t end_of_stream;
 } test_marshal_stop_record_t;
 
+static uint32_t
+test_payload_front_padding(void)
+{
+    return (uint32_t)(((sizeof(test_marshal_stream_header_t) + 15u)
+                       & ~((size_t)15u))
+                      - sizeof(test_marshal_stream_header_t));
+}
+
 typedef struct {
     uint64_t records;
     uint64_t columns;

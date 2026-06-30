@@ -256,8 +256,10 @@ n00b_query_view(n00b_store_t  *store,
     n00b_store_pos_t  *resume    = nullptr;
     n00b_store_pos_t  *as_of     = nullptr;
     n00b_conduit_t    *out       = nullptr;
-    uint64_t           limit     = 0;
-    n00b_allocator_t  *allocator = nullptr;
+	uint64_t           limit     = 0;
+	bool               min_partition_bucket_enabled = false;
+	uint64_t           min_partition_bucket = 0;
+	n00b_allocator_t  *allocator = nullptr;
 };
 
 /**

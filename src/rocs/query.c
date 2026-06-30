@@ -50,6 +50,7 @@ typedef n00b_list_t(rocs_query_rank_shard_t *)
 typedef n00b_heap_t(n00b_query_hit_t *) rocs_query_rank_hit_heap_t;
 
 #define ROCS_QUERY_LIVE_COMMIT_INBOX_LIMIT 64u
+#define ROCS_QUERY_STREAM_BULK_PREFLIGHT_AFTER_EMPTY 8u
 
 typedef struct rocs_query_output_state_t rocs_query_output_state_t;
 
@@ -184,9 +185,11 @@ struct n00b_query_view_t {
     uint64_t                   limit;
     bool                       has_resume;
     n00b_store_pos_t           resume;
-    bool                       has_as_of;
-    n00b_store_pos_t           as_of;
-    _Atomic(bool)              closed;
+	bool                       has_as_of;
+	n00b_store_pos_t           as_of;
+	bool                       min_partition_bucket_enabled;
+	uint64_t                   min_partition_bucket;
+	_Atomic(bool)              closed;
 };
 
 struct n00b_query_cursor_t {
@@ -345,6 +348,14 @@ static void rocs_query_cursor_lazy_teardown(n00b_query_cursor_t *cursor);
 static n00b_query_cursor_t *
 rocs_query_cursor_new(n00b_query_view_t *view,
                       n00b_allocator_t  *allocator);
+static rocs_query_ordset_ref_list_t *
+rocs_query_ordset_ref_list_new() _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+static n00b_option_t(n00b_plan_shard_result_t *)
+rocs_query_find_plan_result(n00b_plan_shard_result_list_t *results,
+                            n00b_query_boundary_entry_t    boundary);
 static bool rocs_query_cursor_limit_reached(n00b_query_cursor_t *cursor);
 static n00b_result_t(bool)
 rocs_query_output_close(rocs_query_output_state_t *output);
@@ -396,6 +407,14 @@ rocs_query_debug_enabled(void)
         enabled = getenv("ROCS_QUERY_DEBUG") != nullptr ? 1 : 0;
     }
     return enabled != 0;
+}
+
+static void
+rocs_query_debug_exec(const char *where)
+{
+    if (rocs_query_debug_enabled()) {
+        fprintf(stderr, "rocs query: execution error at %s\n", where);
+    }
 }
 
 static n00b_query_err_t
@@ -466,6 +485,85 @@ rocs_query_err_from_plan(n00b_err_t err)
     }
 
     return N00B_QUERY_ERR_INTERNAL;
+}
+
+static n00b_result_t(bool)
+rocs_query_cursor_prepare_bulk_cached_ordsets(n00b_query_cursor_t *cursor)
+{
+    if (cursor == nullptr || cursor->view == nullptr ||
+        cursor->view->boundary == nullptr) {
+        return n00b_result_err(bool, N00B_QUERY_ERR_ARG);
+    }
+    if (cursor->snapshot_cached_refs != nullptr) {
+        return n00b_result_ok(bool, true);
+    }
+    if (!cursor->snapshot_cache_key.cacheable ||
+        cursor->snapshot_cache_key.bytes == nullptr) {
+        return n00b_result_ok(bool, false);
+    }
+
+    auto plan_r = n00b_plan_store_sealed(cursor->view->store,
+                                         cursor->snapshot_predicate,
+                                         cursor->snapshot_indexes,
+                                         .allocator = cursor->allocator);
+    if (n00b_result_is_err(plan_r)) {
+        return n00b_result_err(
+            bool,
+            rocs_query_err_from_plan(n00b_result_get_err(plan_r)));
+    }
+
+    rocs_query_ordset_ref_list_t *refs =
+        rocs_query_ordset_ref_list_new(.allocator = cursor->allocator);
+    n00b_plan_shard_result_list_t *results = n00b_result_get(plan_r);
+    uint64_t boundary_len = (uint64_t)n00b_list_len(*cursor->view->boundary);
+    bool any_hit = false;
+
+    for (uint64_t i = 0; i < boundary_len; i++) {
+        n00b_query_boundary_entry_t boundary =
+            n00b_list_get(*cursor->view->boundary, (size_t)i);
+        n00b_plan_ordset_t *ordinals = nullptr;
+        n00b_option_t(n00b_plan_shard_result_t *) result_opt =
+            rocs_query_find_plan_result(results, boundary);
+        if (n00b_option_is_set(result_opt)) {
+            auto ordinals_r =
+                n00b_plan_shard_result_ordinals(n00b_option_get(result_opt));
+            if (n00b_result_is_err(ordinals_r)) {
+                return n00b_result_err(
+                    bool,
+                    rocs_query_err_from_plan(n00b_result_get_err(ordinals_r)));
+            }
+            ordinals = n00b_result_get(ordinals_r);
+        }
+        else {
+            auto empty_r =
+                n00b_plan_ordset_empty(boundary.record_count,
+                                       .allocator = cursor->allocator);
+            if (n00b_result_is_err(empty_r)) {
+                return n00b_result_err(
+                    bool,
+                    rocs_query_err_from_plan(n00b_result_get_err(empty_r)));
+            }
+            ordinals = n00b_result_get(empty_r);
+        }
+
+        auto count_r = n00b_plan_ordset_count(ordinals);
+        if (n00b_result_is_err(count_r)) {
+            return n00b_result_err(
+                bool,
+                rocs_query_err_from_plan(n00b_result_get_err(count_r)));
+        }
+        if (n00b_result_get(count_r) != 0) {
+            any_hit = true;
+        }
+        n00b_list_push(*refs, ordinals);
+    }
+
+    cursor->snapshot_cached_refs = refs;
+    cursor->snapshot_use_cache   = true;
+    if (!any_hit) {
+        cursor->snapshot_exhausted = true;
+    }
+    return n00b_result_ok(bool, true);
 }
 
 static n00b_query_err_t
@@ -1256,6 +1354,7 @@ rocs_query_value_from_json(n00b_json_node_t *node,
     case N00B_JSON_STRING: {
         n00b_string_t *s = n00b_json_as_string(node);
         if (s == nullptr) {
+            rocs_query_debug_exec("json string field returned null");
             return n00b_result_err(rocs_query_field_value_t,
                                    N00B_QUERY_ERR_EXECUTION);
         }
@@ -1283,6 +1382,7 @@ rocs_query_value_from_json(n00b_json_node_t *node,
                               }));
     }
 
+    rocs_query_debug_exec("unknown json field kind");
     return n00b_result_err(rocs_query_field_value_t,
                            N00B_QUERY_ERR_EXECUTION);
 }
@@ -1518,6 +1618,7 @@ rocs_query_group_keys_for_record(n00b_query_t        *query,
         }
         rocs_query_field_value_t value = n00b_result_get(value_r);
         if (!value.has_value) {
+            rocs_query_debug_exec("group-key missing field value");
             return n00b_result_err(n00b_query_group_key_list_t *,
                                    N00B_QUERY_ERR_EXECUTION);
         }
@@ -2775,6 +2876,7 @@ rocs_query_ordset_copy(n00b_plan_ordset_t *src) _kargs
         }
         n00b_option_t(uint64_t) ordinal_opt = n00b_result_get(ordinal_r);
         if (!n00b_option_is_set(ordinal_opt)) {
+            rocs_query_debug_exec("ordset copy returned none");
             return n00b_result_err(n00b_plan_ordset_t *,
                                    N00B_QUERY_ERR_EXECUTION);
         }
@@ -3085,61 +3187,58 @@ rocs_query_boundary_push_in_order(n00b_query_view_t            *view,
     }
     else {
         rocs_query_boundary_insert_sorted(view->boundary, entry);
-    }
+	}
 }
 
-static n00b_result_t(bool)
-rocs_query_capture_borrowed_boundary(n00b_query_view_t *view)
+static bool
+rocs_query_time_bucket_from_route(n00b_string_t *route, uint64_t *out)
 {
-    auto count_r = n00b_store_catalog_visible_entry_count(view->store);
-    if (n00b_result_is_err(count_r)) {
-        return n00b_result_err(
-            bool,
-            rocs_query_err_from_store(n00b_result_get_err(count_r)));
-    }
+	if (route == nullptr || out == nullptr || route->u8_bytes <= 5) {
+		return false;
+	}
+	if (route->data[0] != 't' || route->data[1] != 'i'
+	    || route->data[2] != 'm' || route->data[3] != 'e'
+	    || route->data[4] != '/') {
+		return false;
+	}
 
-    uint64_t count = n00b_result_get(count_r);
-    for (uint64_t i = 0; i < count; i++) {
-        auto entry_r = n00b_store_catalog_visible_entry_at(view->store, i);
-        if (n00b_result_is_err(entry_r)) {
-            return n00b_result_err(
-                bool,
-                rocs_query_err_from_store(n00b_result_get_err(entry_r)));
-        }
+	uint64_t bucket = 0;
+	for (size_t i = 5; i < route->u8_bytes; i++) {
+		char c = route->data[i];
+		if (c < '0' || c > '9') {
+			return false;
+		}
+		uint64_t digit = (uint64_t)(c - '0');
+		if (bucket > (UINT64_MAX - digit) / UINT64_C(10)) {
+			return false;
+		}
+		bucket = bucket * UINT64_C(10) + digit;
+	}
 
-        n00b_option_t(n00b_store_catalog_entry_t *) entry_opt =
-            n00b_result_get(entry_r);
-        if (!n00b_option_is_set(entry_opt)) {
-            break;
-        }
+	*out = bucket;
+	return true;
+}
 
-        auto boundary_r = rocs_query_boundary_from_catalog_entry(
-            n00b_option_get(entry_opt));
-        if (n00b_result_is_err(boundary_r)) {
-            return n00b_result_err(bool, n00b_result_get_err(boundary_r));
-        }
+static bool
+rocs_query_entry_in_partition_window(n00b_query_view_t          *view,
+                                     n00b_query_boundary_entry_t entry)
+{
+	if (view == nullptr || !view->min_partition_bucket_enabled) {
+		return true;
+	}
 
-        n00b_query_boundary_entry_t boundary = n00b_result_get(boundary_r);
-        if (rocs_query_entry_in_requested_window(view, boundary)) {
-            rocs_query_boundary_push_in_order(view, boundary);
-        }
-    }
-
-    return n00b_result_ok(bool, true);
+	uint64_t bucket = 0;
+	if (!rocs_query_time_bucket_from_route(entry.partition_key, &bucket)) {
+		// Non-time/default partitions cannot be compared to an ingest-time bucket
+		// safely; leave them visible and let the predicate/row verifier decide.
+		return true;
+	}
+	return bucket >= view->min_partition_bucket;
 }
 
 static n00b_result_t(bool)
 rocs_query_capture_boundary(n00b_query_view_t *view)
 {
-    auto borrowed_r = rocs_query_capture_borrowed_boundary(view);
-    if (n00b_result_is_ok(borrowed_r)) {
-        return borrowed_r;
-    }
-
-    if (n00b_result_get_err(borrowed_r) != N00B_QUERY_ERR_STATE) {
-        return borrowed_r;
-    }
-
     auto snapshot_r = n00b_store_catalog_visible_snapshot(
         view->store,
         .allocator = view->allocator);
@@ -3155,14 +3254,15 @@ rocs_query_capture_boundary(n00b_query_view_t *view)
     }
 
     uint64_t count = (uint64_t)n00b_list_len(*snapshot);
-    for (uint64_t i = 0; i < count; i++) {
-        n00b_query_boundary_entry_t copied =
-            rocs_query_boundary_from_snapshot(
-                n00b_list_get(*snapshot, (size_t)i));
-        if (rocs_query_entry_in_requested_window(view, copied)) {
-            rocs_query_boundary_push_in_order(view, copied);
-        }
-    }
+	for (uint64_t i = 0; i < count; i++) {
+		n00b_query_boundary_entry_t copied =
+		    rocs_query_boundary_from_snapshot(
+		        n00b_list_get(*snapshot, (size_t)i));
+		if (rocs_query_entry_in_requested_window(view, copied)
+		    && rocs_query_entry_in_partition_window(view, copied)) {
+			rocs_query_boundary_push_in_order(view, copied);
+		}
+	}
 
     return n00b_result_ok(bool, true);
 }
@@ -3906,6 +4006,17 @@ rocs_query_cursor_add_boundary_ordset(n00b_query_cursor_t        *cursor,
         }
         n00b_option_t(uint64_t) ordinal_opt = n00b_result_get(ordinal_r);
         if (!n00b_option_is_set(ordinal_opt)) {
+            if (rocs_query_debug_enabled()) {
+                fprintf(stderr,
+                        "rocs query: execution error at boundary ordset none "
+                        "boundary=(gen=%llu shard=%llu records=%llu) "
+                        "index=%llu count=%llu\n",
+                        (unsigned long long)boundary.generation,
+                        (unsigned long long)boundary.shard_id,
+                        (unsigned long long)boundary.record_count,
+                        (unsigned long long)i,
+                        (unsigned long long)count);
+            }
             return n00b_result_err(bool, N00B_QUERY_ERR_EXECUTION);
         }
 
@@ -4222,6 +4333,17 @@ rocs_query_live_tail_scan_once_locked(n00b_query_view_t       *view,
                 n00b_option_t(uint64_t) ordinal_opt =
                     n00b_result_get(ordinal_r);
                 if (!n00b_option_is_set(ordinal_opt)) {
+                    if (rocs_query_debug_enabled()) {
+                        fprintf(stderr,
+                                "rocs query: execution error at rank count "
+                                "ordset none boundary=(gen=%llu shard=%llu "
+                                "records=%llu) index=%llu count=%llu\n",
+                                (unsigned long long)boundary.generation,
+                                (unsigned long long)boundary.shard_id,
+                                (unsigned long long)boundary.record_count,
+                                (unsigned long long)j,
+                                (unsigned long long)count);
+                    }
                     return n00b_result_err(uint64_t, N00B_QUERY_ERR_EXECUTION);
                 }
 
@@ -4583,6 +4705,15 @@ rocs_query_cursor_plan_boundary(n00b_query_cursor_t        *cursor,
             return n00b_plan_ordset_empty(boundary.record_count,
                                           .allocator = cursor->allocator);
         }
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: plan sealed failed boundary=(gen=%llu "
+                    "shard=%llu records=%llu) plan_err=%lld\n",
+                    (unsigned long long)boundary.generation,
+                    (unsigned long long)boundary.shard_id,
+                    (unsigned long long)boundary.record_count,
+                    (long long)n00b_result_get_err(result_r));
+        }
         return n00b_result_err(
             n00b_plan_ordset_t *,
             rocs_query_err_from_plan(n00b_result_get_err(result_r)));
@@ -4590,6 +4721,15 @@ rocs_query_cursor_plan_boundary(n00b_query_cursor_t        *cursor,
 
     auto ordinals_r = n00b_plan_shard_result_ordinals(n00b_result_get(result_r));
     if (n00b_result_is_err(ordinals_r)) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: plan result ordinals failed boundary=(gen=%llu "
+                    "shard=%llu records=%llu) plan_err=%lld\n",
+                    (unsigned long long)boundary.generation,
+                    (unsigned long long)boundary.shard_id,
+                    (unsigned long long)boundary.record_count,
+                    (long long)n00b_result_get_err(ordinals_r));
+        }
         return n00b_result_err(
             n00b_plan_ordset_t *,
             rocs_query_err_from_plan(n00b_result_get_err(ordinals_r)));
@@ -4678,12 +4818,32 @@ rocs_query_cursor_fill_next_snapshot_boundary(n00b_query_cursor_t *cursor)
     if (n00b_result_is_err(prepare_r)) {
         return prepare_r;
     }
+    if (cursor->snapshot_exhausted) {
+        return n00b_result_ok(bool, false);
+    }
 
     uint64_t boundary_len = (uint64_t)n00b_list_len(*cursor->view->boundary);
     while (cursor->snapshot_boundary_index < boundary_len) {
         if (rocs_query_cursor_limit_reached(cursor)) {
             cursor->snapshot_exhausted = true;
             return n00b_result_ok(bool, false);
+        }
+
+        if (cursor->stream_release
+            && cursor->snapshot_cached_refs == nullptr
+            && cursor->total_delivered == 0
+            && cursor->snapshot_boundary_index >=
+                   ROCS_QUERY_STREAM_BULK_PREFLIGHT_AFTER_EMPTY) {
+            auto bulk_r = rocs_query_cursor_prepare_bulk_cached_ordsets(cursor);
+            if (n00b_result_is_err(bulk_r)) {
+                return bulk_r;
+            }
+            if (n00b_result_get(bulk_r)) {
+                if (cursor->snapshot_exhausted) {
+                    return n00b_result_ok(bool, false);
+                }
+                continue;
+            }
         }
 
         // snapshot_boundary_index is a 0..len progress counter; the actual list
@@ -5481,12 +5641,32 @@ rocs_query_rank_ordset_from_postings(n00b_store_postings_t *postings,
         n00b_option_t(n00b_store_posting_t) posting_opt =
             n00b_result_get(posting_r);
         if (!n00b_option_is_set(posting_opt)) {
+            if (rocs_query_debug_enabled()) {
+                fprintf(stderr,
+                        "rocs query: execution error at posting none "
+                        "index=%llu len=%llu record_count=%llu\n",
+                        (unsigned long long)i,
+                        (unsigned long long)len,
+                        (unsigned long long)record_count);
+            }
             return n00b_result_err(n00b_plan_ordset_t *,
                                    N00B_QUERY_ERR_EXECUTION);
         }
 
         n00b_store_posting_t posting = n00b_option_get(posting_opt);
         if (posting.pos.ordinal >= record_count) {
+            if (rocs_query_debug_enabled()) {
+                fprintf(stderr,
+                        "rocs query: execution error at posting oob "
+                        "pos=(gen=%llu shard=%llu ordinal=%llu) "
+                        "record_count=%llu index=%llu len=%llu\n",
+                        (unsigned long long)posting.pos.generation,
+                        (unsigned long long)posting.pos.shard_id,
+                        (unsigned long long)posting.pos.ordinal,
+                        (unsigned long long)record_count,
+                        (unsigned long long)i,
+                        (unsigned long long)len);
+            }
             return n00b_result_err(n00b_plan_ordset_t *,
                                    N00B_QUERY_ERR_EXECUTION);
         }
@@ -5565,6 +5745,17 @@ rocs_query_rank_ordset_visible_count(n00b_query_view_t          *view,
         }
         n00b_option_t(uint64_t) ordinal_opt = n00b_result_get(ordinal_r);
         if (!n00b_option_is_set(ordinal_opt)) {
+            if (rocs_query_debug_enabled()) {
+                fprintf(stderr,
+                        "rocs query: execution error at visible ordset none "
+                        "boundary=(gen=%llu shard=%llu records=%llu) "
+                        "index=%llu count=%llu\n",
+                        (unsigned long long)boundary.generation,
+                        (unsigned long long)boundary.shard_id,
+                        (unsigned long long)boundary.record_count,
+                        (unsigned long long)i,
+                        (unsigned long long)count);
+            }
             return n00b_result_err(uint64_t, N00B_QUERY_ERR_EXECUTION);
         }
 
@@ -7038,6 +7229,11 @@ rocs_query_cursor_next_snapshot_lazy(n00b_query_cursor_t *cursor)
 
     auto prepare_r = rocs_query_cursor_prepare_snapshot(cursor);
     if (n00b_result_is_err(prepare_r)) {
+        if (rocs_query_debug_enabled()) {
+            fprintf(stderr,
+                    "rocs query: prepare snapshot failed err=%lld\n",
+                    (long long)n00b_result_get_err(prepare_r));
+        }
         return n00b_result_err(n00b_option_t(n00b_query_hit_t *),
                                n00b_result_get_err(prepare_r));
     }
@@ -7064,6 +7260,16 @@ rocs_query_cursor_next_snapshot_lazy(n00b_query_cursor_t *cursor)
 
             auto planned_r = rocs_query_cursor_plan_boundary(cursor, boundary);
             if (n00b_result_is_err(planned_r)) {
+                if (rocs_query_debug_enabled()) {
+                    fprintf(stderr,
+                            "rocs query: lazy plan boundary failed "
+                            "boundary=(gen=%llu shard=%llu records=%llu) "
+                            "err=%lld\n",
+                            (unsigned long long)boundary.generation,
+                            (unsigned long long)boundary.shard_id,
+                            (unsigned long long)boundary.record_count,
+                            (long long)n00b_result_get_err(planned_r));
+                }
                 return n00b_result_err(n00b_option_t(n00b_query_hit_t *),
                                        n00b_result_get_err(planned_r));
             }
@@ -7107,6 +7313,18 @@ rocs_query_cursor_next_snapshot_lazy(n00b_query_cursor_t *cursor)
             }
             n00b_option_t(uint64_t) ord_opt = n00b_result_get(ordinal_r);
             if (!n00b_option_is_set(ord_opt)) {
+                if (rocs_query_debug_enabled()) {
+                    fprintf(stderr,
+                            "rocs query: execution error at lazy ordset none "
+                            "boundary=(gen=%llu shard=%llu records=%llu) "
+                            "index=%llu count=%llu lazy_k=%llu\n",
+                            (unsigned long long)cursor->lazy_boundary.generation,
+                            (unsigned long long)cursor->lazy_boundary.shard_id,
+                            (unsigned long long)cursor->lazy_boundary.record_count,
+                            (unsigned long long)i,
+                            (unsigned long long)cursor->lazy_ord_count,
+                            (unsigned long long)cursor->lazy_k);
+                }
                 return n00b_result_err(n00b_option_t(n00b_query_hit_t *),
                                        N00B_QUERY_ERR_EXECUTION);
             }
@@ -7141,6 +7359,16 @@ rocs_query_cursor_next_snapshot_lazy(n00b_query_cursor_t *cursor)
                     n00b_result_get(entry_r),
                     .allocator = cursor->allocator);
                 if (n00b_result_is_err(resident_r)) {
+                    if (rocs_query_debug_enabled()) {
+                        fprintf(stderr,
+                                "rocs query: lazy resident acquire failed "
+                                "boundary=(gen=%llu shard=%llu records=%llu) "
+                                "store_err=%lld\n",
+                                (unsigned long long)cursor->lazy_boundary.generation,
+                                (unsigned long long)cursor->lazy_boundary.shard_id,
+                                (unsigned long long)cursor->lazy_boundary.record_count,
+                                (long long)n00b_result_get_err(resident_r));
+                    }
                     return n00b_result_err(n00b_option_t(n00b_query_hit_t *),
                                            rocs_query_err_from_store(
                                                n00b_result_get_err(resident_r)));
@@ -7150,6 +7378,16 @@ rocs_query_cursor_next_snapshot_lazy(n00b_query_cursor_t *cursor)
                 auto map_r = n00b_store_resident_shard_map(
                     cursor->lazy_resident);
                 if (n00b_result_is_err(map_r)) {
+                    if (rocs_query_debug_enabled()) {
+                        fprintf(stderr,
+                                "rocs query: lazy resident map failed "
+                                "boundary=(gen=%llu shard=%llu records=%llu) "
+                                "store_err=%lld\n",
+                                (unsigned long long)cursor->lazy_boundary.generation,
+                                (unsigned long long)cursor->lazy_boundary.shard_id,
+                                (unsigned long long)cursor->lazy_boundary.record_count,
+                                (long long)n00b_result_get_err(map_r));
+                    }
                     return n00b_result_err(n00b_option_t(n00b_query_hit_t *),
                                            rocs_query_err_from_store(
                                                n00b_result_get_err(map_r)));
@@ -7157,6 +7395,16 @@ rocs_query_cursor_next_snapshot_lazy(n00b_query_cursor_t *cursor)
                 auto root_r = n00b_store_map_root(n00b_result_get(map_r),
                                                   .view_allocator = cursor->allocator);
                 if (n00b_result_is_err(root_r)) {
+                    if (rocs_query_debug_enabled()) {
+                        fprintf(stderr,
+                                "rocs query: lazy map root failed "
+                                "boundary=(gen=%llu shard=%llu records=%llu) "
+                                "map_err=%lld\n",
+                                (unsigned long long)cursor->lazy_boundary.generation,
+                                (unsigned long long)cursor->lazy_boundary.shard_id,
+                                (unsigned long long)cursor->lazy_boundary.record_count,
+                                (long long)n00b_result_get_err(root_r));
+                    }
                     return n00b_result_err(n00b_option_t(n00b_query_hit_t *),
                                            rocs_query_err_from_map(
                                                n00b_result_get_err(root_r)));
@@ -7174,6 +7422,16 @@ rocs_query_cursor_next_snapshot_lazy(n00b_query_cursor_t *cursor)
             auto record_r = n00b_store_record_view_mapped_pos(
                 cursor->lazy_root, pos, .allocator = cursor->allocator);
             if (n00b_result_is_err(record_r)) {
+                if (rocs_query_debug_enabled()) {
+                    fprintf(stderr,
+                            "rocs query: lazy record view failed "
+                            "pos=(gen=%llu shard=%llu ordinal=%llu) "
+                            "index_err=%lld\n",
+                            (unsigned long long)pos.generation,
+                            (unsigned long long)pos.shard_id,
+                            (unsigned long long)pos.ordinal,
+                            (long long)n00b_result_get_err(record_r));
+                }
                 return n00b_result_err(n00b_option_t(n00b_query_hit_t *),
                                        rocs_query_err_from_index(
                                            n00b_result_get_err(record_r)));
@@ -7697,9 +7955,11 @@ n00b_query_view(n00b_store_t  *store,
     n00b_query_mode_t  mode      = N00B_QUERY_MODE_SNAPSHOT;
     n00b_store_pos_t  *resume    = nullptr;
     n00b_store_pos_t  *as_of     = nullptr;
-    n00b_conduit_t    *out       = nullptr;
-    uint64_t           limit     = 0;
-    n00b_allocator_t  *allocator = nullptr;
+	n00b_conduit_t    *out       = nullptr;
+	uint64_t           limit     = 0;
+	bool               min_partition_bucket_enabled = false;
+	uint64_t           min_partition_bucket = 0;
+	n00b_allocator_t  *allocator = nullptr;
 }
 {
     if (store == nullptr || filter == nullptr) {
@@ -7735,9 +7995,11 @@ n00b_query_view(n00b_store_t  *store,
     view->filter    = filter;
     view->pin       = pin;
     view->allocator = allocator;
-    view->mode      = mode;
-    view->limit     = limit;
-    n00b_atomic_store(&view->closed, false);
+	view->mode      = mode;
+	view->limit     = limit;
+	view->min_partition_bucket_enabled = min_partition_bucket_enabled;
+	view->min_partition_bucket = min_partition_bucket;
+	n00b_atomic_store(&view->closed, false);
     view->boundary  = rocs_query_boundary_list_new(.allocator = allocator);
     view->cursors   = rocs_query_cursor_list_new(.allocator = allocator);
     view->linear_cursors =

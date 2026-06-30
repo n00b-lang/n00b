@@ -232,6 +232,30 @@ n00b_store_normalize_text_ngrams(n00b_json_node_t *node) _kargs
 };
 
 /**
+ * @brief Compute one normalized string term key without materializing a term.
+ *
+ * @param kind Index kind whose key framing should be used.
+ * @param payload Already-normalized string payload bytes.
+ * @param payload_len Number of bytes in @p payload.
+ *
+ * @kw path      Optional path component for scalar normalization framing.
+ * @kw allocator Scratch allocator used only when the hash frame is larger than
+ *               the stack frame.
+ *
+ * This is the allocation-light equivalent of creating a string
+ * @ref n00b_store_normalized_t and passing it through
+ * @ref n00b_store_normalize_hash.
+ */
+extern n00b_result_t(n00b_uint128_t)
+n00b_store_normalize_string_key(n00b_store_index_kind_t kind,
+                                const char             *payload,
+                                uint64_t                payload_len) _kargs
+{
+    n00b_string_t    *path      = nullptr;
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
  * @brief Visit full-text token keys without materializing normalized terms.
  *
  * This uses the same case-folding, tokenization, scalar tag, path framing, and

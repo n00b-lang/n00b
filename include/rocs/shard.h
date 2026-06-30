@@ -100,6 +100,17 @@ typedef struct {
     uint64_t byte_len;
 } n00b_store_raw_span_t;
 
+/**
+ * @brief Borrowed byte span tied to an owning shard/map/stream lifetime.
+ *
+ * This is for scan paths that need to copy or write record bytes without
+ * materializing a hot n00b string/buffer wrapper per record.
+ */
+typedef struct {
+    uint8_t *data;
+    uint64_t byte_len;
+} n00b_store_byte_span_t;
+
 /** @brief Optional byte-exact raw JSON spans parallel to records. */
 typedef n00b_list_t(n00b_store_raw_span_t *) n00b_store_raw_list_t;
 
@@ -214,6 +225,9 @@ static_assert(offsetof(n00b_store_raw_blob_t, byte_len) == 8);
 static_assert(sizeof(n00b_store_raw_span_t) == 16);
 static_assert(offsetof(n00b_store_raw_span_t, offset) == 0);
 static_assert(offsetof(n00b_store_raw_span_t, byte_len) == 8);
+static_assert(sizeof(n00b_store_byte_span_t) == 16);
+static_assert(offsetof(n00b_store_byte_span_t, data) == 0);
+static_assert(offsetof(n00b_store_byte_span_t, byte_len) == 8);
 
 static_assert(sizeof(n00b_store_shard_t) == 80);
 static_assert(offsetof(n00b_store_shard_t, records) == 0);

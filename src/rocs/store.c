@@ -23,6 +23,7 @@
 #include "rocs/normalizer.h"
 #include "text/strings/string_convert.h"
 #include "text/strings/string_ops.h"
+#include "text/unicode/casemap.h"
 #include "util/parse_num.h"
 #include "util/worker_pool.h"
 #include "vfs/backend_local.h"
@@ -135,7 +136,9 @@ struct n00b_store_schema_t {
     // Reserved full-text catch-all column enabled (N00B_STORE_SEARCH_TEXT_COLUMN):
     // ingest tokenizes every string in the record into it (index-only); an
     // unqualified query resolves to it.
-    bool                     search_text;
+    bool                          search_text;
+    n00b_store_search_text_hook_t search_text_hook;
+    void                         *search_text_hook_ctx;
 };
 
 struct n00b_store_partition_policy_t {
@@ -309,6 +312,32 @@ struct n00b_store_resident_shard_t {
     n00b_store_t               *store;
     n00b_store_catalog_entry_t *entry;
     bool                        released;
+};
+
+typedef struct {
+    n00b_store_catalog_entry_t *entry;
+    uint64_t                    generation;
+    uint64_t                    shard_id;
+    uint64_t                    record_count;
+    uint64_t                    start_ordinal;
+} rocs_stream_catalog_snapshot_t;
+
+struct n00b_store_record_stream_t {
+    n00b_store_t                    *store;
+    n00b_allocator_t                *allocator;
+    bool                             closed;
+    bool                             pinned;
+    rocs_stream_catalog_snapshot_t  *sealed;
+    uint64_t                         sealed_count;
+    uint64_t                         sealed_index;
+    uint64_t                         sealed_ordinal;
+    n00b_store_resident_shard_t     *resident;
+    n00b_store_map_shard_t          *root;
+    uint64_t                         resident_index;
+    n00b_store_pos_t                 hot_base;
+    n00b_string_t                  **hot_records;
+    uint64_t                         hot_count;
+    uint64_t                         hot_ordinal;
 };
 
 struct rocs_store_batch_term {
@@ -817,6 +846,7 @@ static rocs_store_retired_hot_allocator_list_t *
 rocs_store_detach_retired_hot_allocators_locked(n00b_store_t *store)
 {
     if (store == nullptr || store->retired_hot_allocators == nullptr
+        || store->active_pins != 0
         || n00b_list_len(*store->retired_hot_allocators) == 0) {
         return nullptr;
     }
@@ -2113,12 +2143,11 @@ rocs_store_catalog_owns_entry(n00b_store_t              *store,
         return false;
     }
 
-    n00b_list_foreach(*store->catalog, p) {
-        if (*p == entry) {
-            return true;
-        }
-    }
-    return false;
+    return entry->owner == store
+        && entry->shard_id != 0
+        && entry->object_path != nullptr
+        && entry->partition_key != nullptr
+        && entry->record_count != 0;
 }
 
 static n00b_result_t(bool)
@@ -4289,29 +4318,146 @@ rocs_store_search_text_column(void)
 // full-text catch-all column (N00B_STORE_SEARCH_TEXT_COLUMN). This is what makes
 // arbitrary blob content searchable via an unqualified query, without indexing
 // each field. Index-only: the column is never materialized in the record body.
+static n00b_string_t *
+rocs_store_search_child_path(n00b_string_t    *parent,
+                             n00b_string_t    *key,
+                             n00b_allocator_t *allocator)
+{
+    if (key == nullptr) {
+        return parent;
+    }
+    if (parent == nullptr || parent->u8_bytes == 0) {
+        return key;
+    }
+
+    uint64_t plen = (uint64_t)parent->u8_bytes;
+    uint64_t klen = (uint64_t)key->u8_bytes;
+    if (plen > (uint64_t)INT64_MAX || klen > (uint64_t)INT64_MAX
+        || UINT64_MAX - plen < klen + 1
+        || plen + klen + 1 > (uint64_t)INT64_MAX) {
+        return nullptr;
+    }
+
+    char *data = n00b_alloc_array_with_opts(char,
+                                            plen + klen + 1,
+                                            &(n00b_alloc_opts_t){
+                                                .allocator = allocator,
+                                                .scan_kind = N00B_GC_SCAN_KIND_NONE,
+                                            });
+    memcpy(data, parent->data, (size_t)plen);
+    data[plen] = '.';
+    memcpy(data + plen + 1, key->data, (size_t)klen);
+    return n00b_string_from_raw(data,
+                                (int64_t)(plen + klen + 1),
+                                .allocator = allocator);
+}
+
+static n00b_result_t(bool)
+rocs_store_append_search_text_literal(rocs_store_batch_term_list_t *out,
+                                      n00b_string_t                *term,
+                                      n00b_allocator_t             *allocator)
+{
+    if (out == nullptr) {
+        return n00b_result_err(bool, N00B_STORE_ERR_INDEX);
+    }
+    if (term == nullptr || term->data == nullptr || term->u8_bytes == 0) {
+        return n00b_result_ok(bool, true);
+    }
+
+    n00b_string_t *folded = n00b_unicode_casefold(term, .allocator = allocator);
+    if (folded == nullptr || folded->data == nullptr || folded->u8_bytes == 0) {
+        return n00b_result_err(bool, N00B_STORE_ERR_INDEX);
+    }
+
+    auto key_r = n00b_store_normalize_string_key(N00B_STORE_INDEX_FULLTEXT,
+                                                 folded->data,
+                                                 (uint64_t)folded->u8_bytes,
+                                                 .allocator = allocator);
+    if (n00b_result_is_err(key_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(key_r));
+    }
+
+    return rocs_store_batch_term_append_unique(out,
+                                               rocs_store_search_text_column(),
+                                               n00b_result_get(key_r),
+                                               N00B_STORE_POSTINGS_SPARSE,
+                                               .allocator = allocator);
+}
+
+static n00b_result_t(bool)
+rocs_store_append_search_text_literals(rocs_store_batch_term_list_t       *out,
+                                       n00b_store_search_text_term_list_t *terms,
+                                       n00b_allocator_t                   *allocator)
+{
+    if (terms == nullptr) {
+        return n00b_result_ok(bool, true);
+    }
+
+    size_t n = n00b_list_len(*terms);
+    for (size_t i = 0; i < n; i++) {
+        auto append_r = rocs_store_append_search_text_literal(
+            out,
+            n00b_list_get(*terms, i),
+            allocator);
+        if (n00b_result_is_err(append_r)) {
+            return append_r;
+        }
+    }
+    return n00b_result_ok(bool, true);
+}
+
 static n00b_result_t(bool)
 rocs_store_collect_search_text(rocs_store_batch_term_list_t *out,
+                               n00b_store_schema_t          *schema,
                                n00b_json_node_t             *node,
+                               n00b_string_t                *path,
                                n00b_allocator_t             *allocator)
 {
     if (node == nullptr) {
         return n00b_result_ok(bool, true);
     }
     if (n00b_json_is_string(node)) {
-        return rocs_store_append_text_keys(out,
-                                           rocs_store_search_text_column(),
-                                           N00B_STORE_INDEX_FULLTEXT,
-                                           N00B_STORE_POSTINGS_SPARSE,
-                                           node,
-                                           N00B_STORE_NGRAM_DEFAULT_N,
-                                           allocator);
+        n00b_store_search_text_action_t action = N00B_STORE_SEARCH_TEXT_DEFAULT;
+        n00b_store_search_text_term_list_t *terms = nullptr;
+        if (schema != nullptr && schema->search_text_hook != nullptr) {
+            action = schema->search_text_hook(path,
+                                              n00b_json_as_string(node),
+                                              &terms,
+                                              schema->search_text_hook_ctx,
+                                              allocator);
+        }
+
+        switch (action) {
+        case N00B_STORE_SEARCH_TEXT_DEFAULT: {
+            auto custom_r = rocs_store_append_search_text_literals(out,
+                                                                   terms,
+                                                                   allocator);
+            if (n00b_result_is_err(custom_r)) {
+                return custom_r;
+            }
+            return rocs_store_append_text_keys(out,
+                                               rocs_store_search_text_column(),
+                                               N00B_STORE_INDEX_FULLTEXT,
+                                               N00B_STORE_POSTINGS_SPARSE,
+                                               node,
+                                               N00B_STORE_NGRAM_DEFAULT_N,
+                                               allocator);
+        }
+        case N00B_STORE_SEARCH_TEXT_REPLACE:
+            return rocs_store_append_search_text_literals(out, terms, allocator);
+        case N00B_STORE_SEARCH_TEXT_SKIP:
+            return n00b_result_ok(bool, true);
+        }
+        return n00b_result_err(bool, N00B_STORE_ERR_INDEX);
     }
     if (n00b_json_is_array(node)) {
         size_t n = n00b_json_array_len(node);
         for (size_t i = 0; i < n; i++) {
             auto r = rocs_store_collect_search_text(out,
+                                                    schema,
                                                     n00b_json_array_get(node,
                                                                         i),
+                                                    path,
                                                     allocator);
             if (n00b_result_is_err(r)) {
                 return r;
@@ -4332,7 +4478,20 @@ rocs_store_collect_search_text(rocs_store_batch_term_list_t *out,
                 if (e == nullptr) {
                     continue;
                 }
-                auto r = rocs_store_collect_search_text(out, e->value, allocator);
+                n00b_string_t *child_path = path;
+                if (schema != nullptr && schema->search_text_hook != nullptr) {
+                    child_path = rocs_store_search_child_path(path,
+                                                             e->key,
+                                                             allocator);
+                    if (child_path == nullptr) {
+                        return n00b_result_err(bool, N00B_STORE_ERR_INDEX);
+                    }
+                }
+                auto r = rocs_store_collect_search_text(out,
+                                                        schema,
+                                                        e->value,
+                                                        child_path,
+                                                        allocator);
                 if (n00b_result_is_err(r)) {
                     return r;
                 }
@@ -4435,7 +4594,11 @@ rocs_store_build_batch_terms(n00b_store_t     *store,
     // column. Replaces the old per-field include_in_all fan-out and the wax
     // adapter's injected "search_text" JSON field. Index-only.
     if (store->schema->search_text) {
-        auto catch_r = rocs_store_collect_search_text(out, record, allocator);
+        auto catch_r = rocs_store_collect_search_text(out,
+                                                      store->schema,
+                                                      record,
+                                                      r"",
+                                                      allocator);
         if (n00b_result_is_err(catch_r)) {
             return n00b_result_err(rocs_store_batch_term_list_t *,
                                    n00b_result_get_err(catch_r));
@@ -5094,6 +5257,11 @@ n00b_store_config_from_env() _kargs
         rocs_store_config_set_string(&config->cache_dir, value, allocator);
     }
 
+    value = rocs_store_env(prefix, r"ROCS_ROOT", allocator);
+    if (value != nullptr) {
+        rocs_store_config_set_string(&config->root, value, allocator);
+    }
+
     value = rocs_store_env(prefix, r"ROCS_CACHE_BYTES", allocator);
     if (value != nullptr) {
         auto num_r = rocs_store_parse_u64(value);
@@ -5512,14 +5680,6 @@ n00b_store_set_commit_topic(n00b_store_t              *store,
 {
     if (store == nullptr) {
         return n00b_result_err(bool, N00B_STORE_ERR_ARG);
-    }
-    // Close is teardown, so joining the seal worker is appropriate.  Do it
-    // before taking commit_lock because an in-flight seal worker needs that
-    // lock for its catalog commit phase.
-    if (store->seal_pool != nullptr) {
-        n00b_worker_pool_shutdown(store->seal_pool);
-        store->seal_pool          = nullptr;
-        store->seal_pool_capacity = 0;
     }
     n00b_data_write_lock(store->commit_lock);
     if (store->state != N00B_STORE_STATE_OPEN) {
@@ -6040,7 +6200,9 @@ n00b_result_t(n00b_store_schema_t *)
 n00b_store_schema_new() _kargs
 {
     n00b_allocator_t *allocator = nullptr;
-    bool              search_text = false;
+    bool                          search_text = false;
+    n00b_store_search_text_hook_t search_text_hook = nullptr;
+    void                         *search_text_hook_ctx = nullptr;
 }
 {
     n00b_store_schema_t *schema = n00b_alloc_with_opts(
@@ -6049,10 +6211,12 @@ n00b_store_schema_new() _kargs
             .allocator = allocator,
         });
 
-    schema->fields      = rocs_store_field_list_new(.allocator = allocator);
-    schema->allocator   = allocator;
-    schema->frozen      = false;
-    schema->search_text = search_text;
+    schema->fields               = rocs_store_field_list_new(.allocator = allocator);
+    schema->allocator            = allocator;
+    schema->frozen               = false;
+    schema->search_text          = search_text;
+    schema->search_text_hook     = search_text_hook;
+    schema->search_text_hook_ctx = search_text_hook_ctx;
     return n00b_result_ok(n00b_store_schema_t *, schema);
 }
 
@@ -7259,6 +7423,14 @@ n00b_store_close(n00b_store_t *store)
     if (store == nullptr) {
         return n00b_result_err(bool, N00B_STORE_ERR_ARG);
     }
+    // Close is teardown, so joining the seal worker is appropriate.  Do it
+    // before taking commit_lock because an in-flight seal worker needs that
+    // lock for its catalog commit phase.
+    if (store->seal_pool != nullptr) {
+        n00b_worker_pool_shutdown(store->seal_pool);
+        store->seal_pool          = nullptr;
+        store->seal_pool_capacity = 0;
+    }
     n00b_data_write_lock(store->commit_lock);
     n00b_data_write_lock(store->residency_lock);
     if (store->state != N00B_STORE_STATE_OPEN) {
@@ -8249,18 +8421,30 @@ rocs_store_conduit_process_batch(n00b_store_conduit_ingest_t *adapter,
                                                  0);
     }
     else if (all_sources) {
-        n00b_store_source_list_t *sources =
-            rocs_store_conduit_source_list_new(count, scratch_allocator);
+        uint64_t committed = 0;
+        n00b_err_t last_err = N00B_STORE_OK;
         for (uint32_t i = 0; i < count; i++) {
-            n00b_list_push(*sources,
-                           n00b_variant_get(payloads[i], n00b_buffer_t *));
+            n00b_buffer_t *source =
+                n00b_variant_get(payloads[i], n00b_buffer_t *);
+            n00b_result_t(bool) ingest_r =
+                adapter->source_decoder == nullptr
+                    ? n00b_store_ingest_buf(adapter->store, source)
+                    : rocs_store_ingest_buf_decoded(adapter->store,
+                                                    source,
+                                                    adapter->source_decoder);
+            if (n00b_result_is_ok(ingest_r)) {
+                committed++;
+            }
+            else {
+                last_err = n00b_result_get_err(ingest_r);
+            }
         }
-        batch_r = rocs_store_ingest_batch_common(adapter->store,
-                                                 nullptr,
-                                                 sources,
-                                                 adapter->source_decoder,
-                                                 0,
-                                                 0);
+        batch_r = committed == count
+                ? n00b_result_ok(uint64_t, committed)
+                : n00b_result_err(uint64_t,
+                                  last_err == N00B_STORE_OK
+                                      ? N00B_STORE_ERR_ARG
+                                      : last_err);
     }
     else {
         uint64_t committed = 0;
@@ -8832,6 +9016,79 @@ n00b_store_catalog_visible_entry_at(n00b_store_t *store, uint64_t index)
     return n00b_result_ok(n00b_option_t(n00b_store_catalog_entry_t *),
                           n00b_option_set(n00b_store_catalog_entry_t *,
                                           entry));
+}
+
+n00b_result_t(n00b_option_t(n00b_store_catalog_resume_entry_t))
+n00b_store_catalog_visible_entry_after(n00b_store_t     *store,
+                                       n00b_store_pos_t *after)
+{
+    if (store == nullptr || store->catalog == nullptr) {
+        return n00b_result_err(n00b_option_t(n00b_store_catalog_resume_entry_t),
+                               N00B_STORE_ERR_ARG);
+    }
+
+    n00b_data_read_lock(store->commit_lock);
+    if (store->state != N00B_STORE_STATE_OPEN) {
+        n00b_data_unlock(store->commit_lock);
+        return n00b_result_err(n00b_option_t(n00b_store_catalog_resume_entry_t),
+                               N00B_STORE_ERR_STATE);
+    }
+    if (store->borrowed_catalog_enumeration_disabled) {
+        n00b_data_unlock(store->commit_lock);
+        return n00b_result_err(n00b_option_t(n00b_store_catalog_resume_entry_t),
+                               N00B_STORE_ERR_STATE);
+    }
+
+    uint64_t len = (uint64_t)n00b_list_len(*store->catalog);
+    for (uint64_t i = 0; i < len; i++) {
+        n00b_store_catalog_entry_t *entry =
+            n00b_list_get(*store->catalog, (size_t)i);
+        if (entry == nullptr) {
+            n00b_data_unlock(store->commit_lock);
+            return n00b_result_err(
+                n00b_option_t(n00b_store_catalog_resume_entry_t),
+                N00B_STORE_ERR_STATE);
+        }
+        if (entry->record_count == 0) {
+            continue;
+        }
+
+        uint64_t start_ordinal = 0;
+        if (after != nullptr) {
+            if (entry->generation < after->generation
+                || (entry->generation == after->generation
+                    && entry->shard_id < after->shard_id)) {
+                continue;
+            }
+            if (entry->generation == after->generation
+                && entry->shard_id == after->shard_id) {
+                start_ordinal = after->ordinal == UINT64_MAX
+                                    ? UINT64_MAX
+                                    : after->ordinal + 1;
+            }
+        }
+        if (start_ordinal >= entry->record_count) {
+            continue;
+        }
+
+        n00b_store_catalog_resume_entry_t out = {
+            .entry         = entry,
+            .index         = i,
+            .generation    = entry->generation,
+            .shard_id      = entry->shard_id,
+            .record_count  = entry->record_count,
+            .start_ordinal = start_ordinal,
+        };
+        n00b_data_unlock(store->commit_lock);
+        return n00b_result_ok(
+            n00b_option_t(n00b_store_catalog_resume_entry_t),
+            n00b_option_set(n00b_store_catalog_resume_entry_t, out));
+    }
+
+    n00b_data_unlock(store->commit_lock);
+    return n00b_result_ok(
+        n00b_option_t(n00b_store_catalog_resume_entry_t),
+        n00b_option_none(n00b_store_catalog_resume_entry_t));
 }
 
 n00b_result_t(bool)
@@ -9471,6 +9728,337 @@ n00b_store_pos_compare(n00b_store_pos_t a, n00b_store_pos_t b)
         return a.ordinal < b.ordinal ? -1 : 1;
     }
     return 0;
+}
+
+static bool
+rocs_stream_entry_after(n00b_store_catalog_entry_t *entry,
+                        n00b_store_pos_t          *after,
+                        uint64_t                  *start_ordinal)
+{
+    if (entry == nullptr || entry->record_count == 0) {
+        return false;
+    }
+
+    uint64_t start = 0;
+    if (after != nullptr) {
+        if (entry->generation < after->generation
+            || (entry->generation == after->generation
+                && entry->shard_id < after->shard_id)) {
+            return false;
+        }
+        if (entry->generation == after->generation
+            && entry->shard_id == after->shard_id) {
+            start = after->ordinal == UINT64_MAX ? UINT64_MAX
+                                                 : after->ordinal + 1;
+        }
+    }
+
+    if (start >= entry->record_count) {
+        return false;
+    }
+    if (start_ordinal != nullptr) {
+        *start_ordinal = start;
+    }
+    return true;
+}
+
+static n00b_result_t(bool)
+rocs_stream_release_resident(n00b_store_record_stream_t *stream)
+{
+    if (stream == nullptr || stream->resident == nullptr) {
+        return n00b_result_ok(bool, true);
+    }
+
+    n00b_store_resident_shard_t *resident = stream->resident;
+    stream->resident       = nullptr;
+    stream->root           = nullptr;
+    stream->resident_index = UINT64_MAX;
+    return n00b_store_resident_shard_release(resident);
+}
+
+n00b_result_t(n00b_store_record_stream_t *)
+n00b_store_record_stream_open(n00b_store_t     *store,
+                              n00b_store_pos_t *after) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (store == nullptr || store->catalog == nullptr) {
+        return n00b_result_err(n00b_store_record_stream_t *,
+                               N00B_STORE_ERR_ARG);
+    }
+
+    n00b_store_record_stream_t *stream = n00b_alloc_with_opts(
+        n00b_store_record_stream_t,
+        &(n00b_alloc_opts_t){
+            .allocator = allocator,
+        });
+    stream->store          = store;
+    stream->allocator      = allocator;
+    stream->closed         = false;
+    stream->pinned         = false;
+    stream->sealed         = nullptr;
+    stream->sealed_count   = 0;
+    stream->sealed_index   = 0;
+    stream->sealed_ordinal = 0;
+    stream->resident       = nullptr;
+    stream->root           = nullptr;
+    stream->resident_index = UINT64_MAX;
+    stream->hot_records    = nullptr;
+    stream->hot_count      = 0;
+    stream->hot_ordinal    = 0;
+
+    n00b_data_read_lock(store->commit_lock);
+    n00b_data_write_lock(store->residency_lock);
+    if (store->state != N00B_STORE_STATE_OPEN) {
+        n00b_data_unlock(store->residency_lock);
+        n00b_data_unlock(store->commit_lock);
+        return n00b_result_err(n00b_store_record_stream_t *,
+                               N00B_STORE_ERR_STATE);
+    }
+    if (store->active_pins == UINT64_MAX) {
+        n00b_data_unlock(store->residency_lock);
+        n00b_data_unlock(store->commit_lock);
+        return n00b_result_err(n00b_store_record_stream_t *,
+                               N00B_STORE_ERR_STATE);
+    }
+    store->active_pins++;
+    stream->pinned = true;
+    n00b_data_unlock(store->residency_lock);
+
+    uint64_t sealed_count = 0;
+    uint64_t catalog_len  = (uint64_t)n00b_list_len(*store->catalog);
+    for (uint64_t i = 0; i < catalog_len; i++) {
+        n00b_store_catalog_entry_t *entry =
+            n00b_list_get(*store->catalog, (size_t)i);
+        if (entry == nullptr) {
+            n00b_data_unlock(store->commit_lock);
+            (void)n00b_store_record_stream_close(stream);
+            return n00b_result_err(n00b_store_record_stream_t *,
+                                   N00B_STORE_ERR_STATE);
+        }
+        if (rocs_stream_entry_after(entry, after, nullptr)) {
+            sealed_count++;
+        }
+    }
+
+    if (sealed_count != 0) {
+        stream->sealed = n00b_alloc_array(
+            rocs_stream_catalog_snapshot_t,
+            (int64_t)sealed_count,
+            .allocator = allocator);
+    }
+
+    uint64_t sealed_index = 0;
+    for (uint64_t i = 0; i < catalog_len; i++) {
+        n00b_store_catalog_entry_t *entry =
+            n00b_list_get(*store->catalog, (size_t)i);
+        uint64_t start_ordinal = 0;
+        if (!rocs_stream_entry_after(entry, after, &start_ordinal)) {
+            continue;
+        }
+        stream->sealed[sealed_index++] = (rocs_stream_catalog_snapshot_t){
+            .entry         = entry,
+            .generation    = entry->generation,
+            .shard_id      = entry->shard_id,
+            .record_count  = entry->record_count,
+            .start_ordinal = start_ordinal,
+        };
+    }
+    stream->sealed_count = sealed_index;
+
+    n00b_store_shard_t *hot = store->hot_shard;
+    if (hot != nullptr && hot->records != nullptr && hot->record_count != 0) {
+        n00b_store_pos_t hot_last = {
+            .generation = store->generation,
+            .shard_id   = hot->shard_id,
+            .ordinal    = hot->record_count - 1,
+        };
+        if (after == nullptr || n00b_store_pos_compare(*after, hot_last) < 0) {
+            uint64_t start_ordinal = 0;
+            if (after != nullptr
+                && after->generation == store->generation
+                && after->shard_id == hot->shard_id) {
+                start_ordinal = after->ordinal == UINT64_MAX
+                                    ? UINT64_MAX
+                                    : after->ordinal + 1;
+            }
+            if (start_ordinal < hot->record_count) {
+                uint64_t count = hot->record_count - start_ordinal;
+                stream->hot_records = n00b_alloc_array(
+                    n00b_string_t *,
+                    (int64_t)count,
+                    .allocator = allocator);
+                for (uint64_t i = 0; i < count; i++) {
+                    stream->hot_records[i] =
+                        n00b_list_get(*hot->records,
+                                      (size_t)(start_ordinal + i));
+                }
+                stream->hot_base = (n00b_store_pos_t){
+                    .generation = store->generation,
+                    .shard_id   = hot->shard_id,
+                    .ordinal    = start_ordinal,
+                };
+                stream->hot_count = count;
+            }
+        }
+    }
+
+    n00b_data_unlock(store->commit_lock);
+    return n00b_result_ok(n00b_store_record_stream_t *, stream);
+}
+
+n00b_result_t(n00b_option_t(n00b_store_record_stream_item_t))
+n00b_store_record_stream_next(n00b_store_record_stream_t *stream)
+{
+    if (stream == nullptr || stream->store == nullptr) {
+        return n00b_result_err(
+            n00b_option_t(n00b_store_record_stream_item_t),
+            N00B_STORE_ERR_ARG);
+    }
+    if (stream->closed) {
+        return n00b_result_err(
+            n00b_option_t(n00b_store_record_stream_item_t),
+            N00B_STORE_ERR_STATE);
+    }
+
+    while (stream->sealed_index < stream->sealed_count) {
+        rocs_stream_catalog_snapshot_t *entry =
+            &stream->sealed[stream->sealed_index];
+        if (stream->resident == nullptr
+            || stream->resident_index != stream->sealed_index) {
+            auto release_r = rocs_stream_release_resident(stream);
+            if (n00b_result_is_err(release_r)) {
+                return n00b_result_err(
+                    n00b_option_t(n00b_store_record_stream_item_t),
+                    n00b_result_get_err(release_r));
+            }
+
+            auto resident_r = n00b_store_resident_shard_acquire(
+                stream->store,
+                entry->entry,
+                .allocator = stream->allocator);
+            if (n00b_result_is_err(resident_r)) {
+                return n00b_result_err(
+                    n00b_option_t(n00b_store_record_stream_item_t),
+                    n00b_result_get_err(resident_r));
+            }
+            stream->resident       = n00b_result_get(resident_r);
+            stream->resident_index = stream->sealed_index;
+            stream->sealed_ordinal = entry->start_ordinal;
+
+            auto map_r = n00b_store_resident_shard_map(stream->resident);
+            if (n00b_result_is_err(map_r)) {
+                return n00b_result_err(
+                    n00b_option_t(n00b_store_record_stream_item_t),
+                    n00b_result_get_err(map_r));
+            }
+            auto root_r = n00b_store_map_root(n00b_result_get(map_r),
+                                              .view_allocator =
+                                                  stream->allocator);
+            if (n00b_result_is_err(root_r)) {
+                return n00b_result_err(
+                    n00b_option_t(n00b_store_record_stream_item_t),
+                    n00b_result_get_err(root_r));
+            }
+            stream->root = n00b_result_get(root_r);
+        }
+
+        if (stream->sealed_ordinal < entry->record_count) {
+            uint64_t ordinal = stream->sealed_ordinal++;
+            auto span_r = n00b_store_map_shard_record_span(stream->root,
+                                                           ordinal);
+            if (n00b_result_is_err(span_r)) {
+                return n00b_result_err(
+                    n00b_option_t(n00b_store_record_stream_item_t),
+                    n00b_result_get_err(span_r));
+            }
+
+            n00b_store_record_stream_item_t item = {
+                .pos = {
+                    .generation = entry->generation,
+                    .shard_id   = entry->shard_id,
+                    .ordinal    = ordinal,
+                },
+                .bytes = n00b_result_get(span_r),
+                .hot   = false,
+            };
+            return n00b_result_ok(
+                n00b_option_t(n00b_store_record_stream_item_t),
+                n00b_option_set(n00b_store_record_stream_item_t, item));
+        }
+
+        auto release_r = rocs_stream_release_resident(stream);
+        if (n00b_result_is_err(release_r)) {
+            return n00b_result_err(
+                n00b_option_t(n00b_store_record_stream_item_t),
+                n00b_result_get_err(release_r));
+        }
+        stream->sealed_index++;
+    }
+
+    while (stream->hot_ordinal < stream->hot_count) {
+        uint64_t       index = stream->hot_ordinal++;
+        n00b_string_t *text  = stream->hot_records[index];
+        if (text == nullptr || (text->u8_bytes != 0 && text->data == nullptr)) {
+            return n00b_result_err(
+                n00b_option_t(n00b_store_record_stream_item_t),
+                N00B_STORE_ERR_STATE);
+        }
+
+        n00b_store_record_stream_item_t item = {
+            .pos = {
+                .generation = stream->hot_base.generation,
+                .shard_id   = stream->hot_base.shard_id,
+                .ordinal    = stream->hot_base.ordinal + index,
+            },
+            .bytes = {
+                .data     = (uint8_t *)text->data,
+                .byte_len = (uint64_t)text->u8_bytes,
+            },
+            .hot = true,
+        };
+        return n00b_result_ok(
+            n00b_option_t(n00b_store_record_stream_item_t),
+            n00b_option_set(n00b_store_record_stream_item_t, item));
+    }
+
+    return n00b_result_ok(
+        n00b_option_t(n00b_store_record_stream_item_t),
+        n00b_option_none(n00b_store_record_stream_item_t));
+}
+
+n00b_result_t(bool)
+n00b_store_record_stream_close(n00b_store_record_stream_t *stream)
+{
+    if (stream == nullptr || stream->store == nullptr) {
+        return n00b_result_err(bool, N00B_STORE_ERR_ARG);
+    }
+    if (stream->closed) {
+        return n00b_result_ok(bool, true);
+    }
+
+    auto release_r = rocs_stream_release_resident(stream);
+    if (n00b_result_is_err(release_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(release_r));
+    }
+
+    rocs_store_retired_hot_allocator_list_t *retired = nullptr;
+    if (stream->pinned) {
+        n00b_data_write_lock(stream->store->residency_lock);
+        if (stream->store->active_pins == 0) {
+            n00b_data_unlock(stream->store->residency_lock);
+            return n00b_result_err(bool, N00B_STORE_ERR_STATE);
+        }
+        stream->store->active_pins--;
+        stream->pinned = false;
+        retired = rocs_store_detach_retired_hot_allocators_locked(stream->store);
+        n00b_data_unlock(stream->store->residency_lock);
+    }
+
+    stream->closed = true;
+    rocs_store_destroy_retired_hot_allocators(stream->store, retired);
+    return n00b_result_ok(bool, true);
 }
 
 n00b_result_t(n00b_store_pin_t *)
