@@ -121,6 +121,7 @@ sub_wait_for_publisher_quiescence(_n00b_conduit_sub_base_t *sub)
         if (pub == nullptr) {
             break;
         }
+        n00b_conduit_publish_check_liveness(topic);
         if (n00b_conduit_publish_is_owner(topic)) {
             break;
         }

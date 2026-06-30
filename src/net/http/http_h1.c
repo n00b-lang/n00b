@@ -872,13 +872,15 @@ h1_tls_conn_close(void *u)
     if (!tc) {
         return;
     }
-    if (tc->sub != N00B_CONDUIT_INVALID_SUB_HANDLE) {
-        n00b_conduit_sub_cancel(tc->sub);
-        tc->sub = N00B_CONDUIT_INVALID_SUB_HANDLE;
-    }
+    /* Stop TLS/xform publishers before canceling the app read subscription;
+     * otherwise cancel can wait forever for the decrypt xform's publisher. */
     if (tc->tls) {
         n00b_conduit_tls_close(tc->tls);
         tc->tls = nullptr;
+    }
+    if (tc->sub != N00B_CONDUIT_INVALID_SUB_HANDLE) {
+        n00b_conduit_sub_cancel(tc->sub);
+        tc->sub = N00B_CONDUIT_INVALID_SUB_HANDLE;
     }
     if (tc->inbox) {
         n00b_conduit_inbox_destroy(n00b_buffer_t *, tc->inbox);
