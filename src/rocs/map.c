@@ -239,6 +239,7 @@ typedef struct {
     uint64_t num_flags;
     uint64_t alloc_wordlen;
     uint64_t allocator;
+    uint64_t lock;
 } rocs_mapped_flagset_wire_t;
 
 static_assert(sizeof(rocs_mapped_posting_list_wire_t)
@@ -258,6 +259,10 @@ static_assert(offsetof(rocs_mapped_flagset_wire_t, num_flags)
               == offsetof(n00b_flagset_t, num_flags));
 static_assert(offsetof(rocs_mapped_flagset_wire_t, alloc_wordlen)
               == offsetof(n00b_flagset_t, alloc_wordlen));
+static_assert(offsetof(rocs_mapped_flagset_wire_t, allocator)
+              == offsetof(n00b_flagset_t, allocator));
+static_assert(offsetof(rocs_mapped_flagset_wire_t, lock)
+              == offsetof(n00b_flagset_t, lock));
 
 typedef struct {
     uint64_t data;

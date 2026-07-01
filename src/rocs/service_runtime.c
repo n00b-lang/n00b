@@ -433,6 +433,14 @@ rocs_service_append_memory_body(n00b_buffer_t              *buf,
                                      stats.retired_hot_records,
                                      true);
     rocs_service_append_memory_field(buf,
+                                     r"failed_seal_jobs",
+                                     stats.failed_seal_jobs,
+                                     true);
+    rocs_service_append_memory_field(buf,
+                                     r"failed_seal_records",
+                                     stats.failed_seal_records,
+                                     true);
+    rocs_service_append_memory_field(buf,
                                      r"resident_cache_hits",
                                      stats.resident_cache_hits,
                                      true);
@@ -859,6 +867,16 @@ rocs_service_metrics_body(n00b_rocs_service_t *service)
                             r"gauge",
                             r"records held by retired hot-shard allocators",
                             memory.retired_hot_records);
+    rocs_service_metric_u64(buf,
+                            r"rocs_store_failed_seal_jobs",
+                            r"gauge",
+                            r"failed async seal jobs retained for retry",
+                            memory.failed_seal_jobs);
+    rocs_service_metric_u64(buf,
+                            r"rocs_store_failed_seal_records",
+                            r"gauge",
+                            r"records held by failed async seal jobs",
+                            memory.failed_seal_records);
     rocs_service_metric_u64(buf,
                             r"rocs_service_store_errors_total",
                             r"counter",

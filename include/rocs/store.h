@@ -64,6 +64,9 @@ typedef struct n00b_store_resident_shard_t   n00b_store_resident_shard_t;
 typedef struct n00b_store_conduit_ingest_t    n00b_store_conduit_ingest_t;
 typedef struct n00b_store_config_t            n00b_store_config_t;
 typedef struct n00b_store_record_stream_t     n00b_store_record_stream_t;
+typedef struct n00b_store_index_emit_t        n00b_store_index_emit_t;
+typedef struct n00b_store_index_options_t     n00b_store_index_options_t;
+typedef struct n00b_store_service_profile_t   n00b_store_service_profile_t;
 
 /** @brief List of source JSON buffers for batch ingest. */
 typedef n00b_list_t(n00b_buffer_t *) n00b_store_source_list_t;
@@ -109,14 +112,139 @@ typedef n00b_store_search_text_action_t (*n00b_store_search_text_hook_t)(
     n00b_allocator_t                 *allocator);
 
 /**
- * @brief Variant-backed conduit ingest payload.
+ * @brief Store-service admission policy for bounded ingest pressure.
  *
- * The variant selector is the only discriminator: record payloads contain a
- * parsed JSON node and source payloads contain a byte-exact JSON buffer. No
- * parallel type field is stored in the payload.
+ * ROCS is a database: accepted rows must not be silently dropped. BLOCK waits
+ * before admission until capacity exists. REJECT returns a typed pre-admission
+ * failure that the caller can route to backpressure handling. There is no DROP
+ * mode.
  */
+typedef enum : int32_t {
+    N00B_STORE_INGEST_BACKPRESSURE_BLOCK,
+    N00B_STORE_INGEST_BACKPRESSURE_REJECT,
+} n00b_store_ingest_backpressure_t;
+
+/**
+ * @brief Visibility/lifetime state for a submitted ingest unit.
+ *
+ * The service API accounts for records explicitly from pre-admission through
+ * visible storage. Malformed JSON is represented by an error/tombstone record;
+ * it is not accepted and then lost.
+ */
+typedef enum : int32_t {
+    N00B_STORE_INGEST_RECEIPT_REJECTED_PRE_ADMISSION,
+    N00B_STORE_INGEST_RECEIPT_ADMITTED_QUEUED,
+    N00B_STORE_INGEST_RECEIPT_RANGE_RESERVED,
+    N00B_STORE_INGEST_RECEIPT_ROW_POPULATING,
+    N00B_STORE_INGEST_RECEIPT_READY_NOT_LIVE,
+    N00B_STORE_INGEST_RECEIPT_LIVE_HOT,
+    N00B_STORE_INGEST_RECEIPT_RETIRED_HOT,
+    N00B_STORE_INGEST_RECEIPT_SEALED_VISIBLE,
+    N00B_STORE_INGEST_RECEIPT_MALFORMED_TOMBSTONE,
+} n00b_store_ingest_receipt_state_t;
+
+/**
+ * @brief Optional per-field generic index term emitter.
+ *
+ * Default ROCS indexing emits exact full-string terms plus split terms for
+ * opted-in columns. Split terms use the ROCS text tokenizer, whose default
+ * boundaries include whitespace and punctuation. A hook may add terms for
+ * application-specific reference fields without baking Wax semantics into ROCS.
+ * The hook receives an opaque emitter; it must use ROCS emitter helpers rather
+ * than retaining internal index structures.
+ */
+typedef n00b_result_t(bool) (*n00b_store_index_term_hook_t)(
+    n00b_store_index_emit_t *emit,
+    n00b_string_t           *field_path,
+    n00b_json_node_t        *field_value,
+    void                    *ctx,
+    n00b_allocator_t        *scratch);
+
+/**
+ * @brief Default and hook-driven index policy for service profiles.
+ *
+ * This is process-side policy only. It is not marshaled into shard images; any
+ * durable schema identity needed to interpret sealed shards must be represented
+ * by schema/catalog metadata.
+ */
+struct n00b_store_index_options_t {
+    bool                          exact_full_string;
+    bool                          split_terms;
+    uint64_t                      schema_index_identity;
+    n00b_store_index_term_hook_t  term_hook;
+    void                         *term_hook_ctx;
+};
+
+/**
+ * @brief Process-side service profile for the future ROCS ingest service API.
+ *
+ * The profile describes queueing, worker topology, seal concurrency, allocator
+ * ownership, and index defaults. It is not part of the marshalable shard root.
+ */
+struct n00b_store_service_profile_t {
+    uint64_t                            ingest_worker_count;
+    uint64_t                            seal_worker_count;
+    uint64_t                            ingest_queue_bound;
+    n00b_store_ingest_backpressure_t    ingest_backpressure;
+    n00b_store_source_decoder_t         source_decoder;
+    n00b_store_index_options_t         *index_options;
+    n00b_allocator_t                   *allocator;
+};
+
+/**
+ * @brief Accounting receipt for the future service ingest submission API.
+ */
+typedef struct {
+    n00b_store_ingest_receipt_state_t state;
+    uint64_t                          admitted;
+    uint64_t                          rejected;
+    uint64_t                          malformed;
+    n00b_store_pos_t                  first_pos;
+    n00b_store_pos_t                  last_pos;
+    n00b_err_t                        err;
+} n00b_store_ingest_receipt_t;
+
+#define N00B_STORE_INGEST_BACKPRESSURE_CONTRACT_VALID(_bp) \
+    ((_bp) == N00B_STORE_INGEST_BACKPRESSURE_BLOCK          \
+     || (_bp) == N00B_STORE_INGEST_BACKPRESSURE_REJECT)
+
+#define N00B_STORE_INGEST_RECEIPT_STATE_CONTRACT_VALID(_state)       \
+    ((_state) >= N00B_STORE_INGEST_RECEIPT_REJECTED_PRE_ADMISSION    \
+     && (_state) <= N00B_STORE_INGEST_RECEIPT_MALFORMED_TOMBSTONE)
+
+#define N00B_STORE_INDEX_OPTIONS_CONTRACT_VALID(_opts)       \
+    ((_opts) == nullptr                                      \
+     || ((_opts)->exact_full_string || (_opts)->split_terms  \
+         || (_opts)->term_hook != nullptr))
+
+#define N00B_STORE_SERVICE_PROFILE_CONTRACT_VALID(_profile)          \
+    ((_profile) != nullptr                                           \
+     && (_profile)->ingest_worker_count > 0                          \
+     && N00B_STORE_INGEST_BACKPRESSURE_CONTRACT_VALID(               \
+         (_profile)->ingest_backpressure)                            \
+     && N00B_STORE_INDEX_OPTIONS_CONTRACT_VALID((_profile)->index_options))
+
+#define N00B_STORE_INGEST_RECEIPT_CONTRACT_ACCOUNTED(_receipt)       \
+    (N00B_STORE_INGEST_RECEIPT_STATE_CONTRACT_VALID((_receipt).state) \
+     && ((_receipt).admitted + (_receipt).rejected + (_receipt).malformed) > 0)
+
 typedef n00b_variant_t(n00b_json_node_t *, n00b_buffer_t *)
-    n00b_store_ingest_payload_t;
+    n00b_store_ingest_payload_value_t;
+
+/**
+ * @brief Conduit ingest payload plus per-record ingest options.
+ *
+ * @field value         Variant discriminator and value: record payloads contain
+ *                      a parsed JSON node and source payloads contain a
+ *                      byte-exact JSON buffer.
+ * @field index_enabled Whether this record should populate configured indexes.
+ *                      False still stores the row/source, but emits no index
+ *                      terms for the record.
+ */
+typedef struct {
+    n00b_store_ingest_payload_value_t value;
+    bool                              index_enabled;
+} n00b_store_ingest_payload_t;
 
 /**
  * @brief Error domain for store/schema/policy operations.
@@ -303,6 +431,7 @@ typedef struct {
     uint64_t   submitted;
     uint64_t   committed;
     uint64_t   failed;
+    uint64_t   malformed;
     uint64_t   inbox_queued;
     uint64_t   worker_queued;
     uint64_t   worker_in_flight;
@@ -341,6 +470,14 @@ typedef struct {
 typedef struct {
     uint64_t hot_shard_id;
     uint64_t hot_record_count;
+    uint64_t hot_live_index;
+    uint64_t hot_active_writers;
+    uint64_t hot_writer_reservations;
+    uint64_t hot_writer_completions;
+    uint64_t hot_ready_out_of_order_publications;
+    uint64_t hot_worker_range_commits;
+    uint64_t hot_worker_range_tombstones;
+    uint64_t seal_active_writer_waits;
     uint64_t hot_byte_estimate;
     uint64_t hot_record_text_bytes;
     uint64_t hot_raw_bytes;
@@ -392,6 +529,8 @@ typedef struct {
     uint64_t active_pins;
     uint64_t retired_hot_allocators;
     uint64_t retired_hot_records;
+    uint64_t failed_seal_jobs;
+    uint64_t failed_seal_records;
     uint64_t resident_cache_hits;
     uint64_t resident_cache_misses;
     uint64_t resident_unloads;
@@ -593,6 +732,95 @@ n00b_store_open_config(n00b_store_schema_t *schema,
 };
 
 /**
+ * @brief Construct a service profile for the future ROCS service API.
+ *
+ * @kw ingest_worker_count Number of scratch-isolated ingest workers behind the
+ *                         single service dequeuer. Values greater than one fan
+ *                         out parse/route/index-term preparation and eligible
+ *                         reserved-slot fill/index commit work. The dequeuer
+ *                         still reserves row order and visibility is published
+ *                         only by contiguous reserved ordinal.
+ * @kw seal_worker_count   Number of concurrent seal workers. Zero is reserved
+ *                         for an implementation-defined service default.
+ * @kw ingest_queue_bound  Bounded admission queue size. Zero means use ROCS's
+ *                         service default, not an unbounded queue.
+ * @kw ingest_backpressure Admission behavior when the bounded queue is full.
+ * @kw index_options       Optional caller-owned process-side index policy.
+ * @kw allocator           Allocator for process-side profile state.
+ *
+ * Contract macro: @ref N00B_STORE_SERVICE_PROFILE_CONTRACT_VALID.
+ */
+extern n00b_result_t(n00b_store_service_profile_t *)
+n00b_store_service_profile_new() _kargs
+{
+    uint64_t                          ingest_worker_count = 1;
+    uint64_t                          seal_worker_count   = 1;
+    uint64_t                          ingest_queue_bound  = 0;
+    n00b_store_ingest_backpressure_t  ingest_backpressure =
+        N00B_STORE_INGEST_BACKPRESSURE_BLOCK;
+    n00b_store_source_decoder_t       source_decoder      = nullptr;
+    n00b_store_index_options_t       *index_options       = nullptr;
+    n00b_allocator_t                 *allocator           = nullptr;
+};
+
+/**
+ * @brief Open the future bounded/asynchronous ROCS service profile.
+ *
+ * This declaration is the Phase 1 contract target. The implementation must own
+ * conduit subscription, row-range reservation, hot-shard publication, seal
+ * work, and catalog lifetime management behind the store API.
+ */
+extern n00b_result_t(n00b_store_t *)
+n00b_store_open_service(n00b_vfs_t                   *vfs,
+                        n00b_string_t                *root,
+                        n00b_store_schema_t          *schema,
+                        n00b_store_service_profile_t *profile) _kargs
+{
+    n00b_store_partition_policy_t *partition_policy = nullptr;
+    n00b_store_retain_policy_t    *retain_policy    = nullptr;
+    n00b_store_seal_policy_t      *seal_policy      = nullptr;
+    n00b_store_residency_policy_t *residency_policy = nullptr;
+    n00b_vfs_cache_t              *cache            = nullptr;
+    n00b_store_commit_topic_t     *commit_topic     = nullptr;
+    n00b_store_lifecycle_topic_t  *lifecycle_topic  = nullptr;
+    n00b_string_t                 *display_name     = nullptr;
+    bool                           recovery_journal = false;
+    uint64_t                       retention_window_ns =
+                                       N00B_STORE_DEFAULT_RETENTION_NS;
+    uint64_t                       retention_max_sealed_shards = 0;
+    uint64_t                       retention_max_total_bytes =
+                                       N00B_STORE_DEFAULT_RETENTION_BYTES;
+};
+
+/**
+ * @brief Submit one service-ingest payload through the future admission API.
+ *
+ * Implementations must return a pre-admission reject receipt or an admitted
+ * receipt. They must not drop accepted records. Malformed JSON produces an
+ * error/tombstone accounting path.
+ *
+ * Contract macro: @ref N00B_STORE_INGEST_RECEIPT_CONTRACT_ACCOUNTED.
+ */
+extern n00b_result_t(n00b_store_ingest_receipt_t)
+n00b_store_ingest_submit(n00b_store_t                  *store,
+                         n00b_store_ingest_payload_t    payload);
+
+/** @brief Return service-owned ingest counters for a service-opened store. */
+extern n00b_result_t(n00b_store_conduit_ingest_stats_t)
+n00b_store_service_ingest_stats(n00b_store_t *store);
+
+/**
+ * @brief Add one normalized term through the generic index emitter.
+ *
+ * Application hooks must use this API rather than retaining ROCS reverse-index
+ * internals. The emitter owns ordering, duplicate policy, and allocator choice.
+ */
+extern n00b_result_t(bool)
+n00b_store_index_emit_term(n00b_store_index_emit_t *emit,
+                           n00b_string_t           *column,
+                           n00b_string_t           *term);
+
+/**
  * @brief Construct an empty mutable schema.
  *
  * @kw allocator Allocator for the schema and later field descriptors.
@@ -612,6 +840,11 @@ n00b_store_schema_new() _kargs
     bool                           search_text = false;
     n00b_store_search_text_hook_t  search_text_hook = nullptr;
     void                          *search_text_hook_ctx = nullptr;
+    // Optional generic indexing policy for the reserved catch-all path.
+    // When null, ROCS uses its default exact-full-string plus split-token
+    // behavior. Hooks are additive unless the legacy search_text hook returns
+    // REPLACE or SKIP for a value.
+    n00b_store_index_options_t    *index_options = nullptr;
 };
 
 /**
@@ -1088,7 +1321,10 @@ n00b_store_ingest_topic_get(n00b_conduit_t *conduit,
 
 /** @brief Build a parsed-record ingest payload. */
 extern n00b_result_t(n00b_store_ingest_payload_t)
-n00b_store_ingest_payload_record(n00b_json_node_t *record);
+n00b_store_ingest_payload_record(n00b_json_node_t *record) _kargs
+{
+    bool index = true;
+};
 
 /**
  * @brief Build a raw-source ingest payload.
@@ -1097,17 +1333,39 @@ n00b_store_ingest_payload_record(n00b_json_node_t *record);
  * the payload. Callers must not reuse it after successful publish.
  */
 extern n00b_result_t(n00b_store_ingest_payload_t)
-n00b_store_ingest_payload_source(n00b_buffer_t *source);
+n00b_store_ingest_payload_source(n00b_buffer_t *source) _kargs
+{
+    bool index = true;
+};
 
 /**
  * @brief Publish one ingest payload to a store-ingest topic.
  *
  * This helper claims the process-side publisher role briefly and emits one
- * user-message. It reports publisher/topic errors, not subscriber counts.
+ * user-message. It uses BLOCK backpressure: if the bounded ROCS ingest inbox is
+ * full, it waits before admission. If there is no active ingest subscriber, the
+ * payload is rejected before admission and the caller retains responsibility for
+ * cleanup/retry.
  */
 extern n00b_result_t(bool)
 n00b_store_ingest_topic_publish(n00b_store_ingest_topic_t   *topic,
                                 n00b_store_ingest_payload_t  payload);
+
+/**
+ * @brief Publish one ingest payload with explicit ROCS admission policy.
+ *
+ * BLOCK waits while at least one active ingest subscriber exists but its bounded
+ * inbox is full. REJECT returns @c N00B_STORE_ERR_STATE before admission when
+ * no active subscriber exists or any active subscriber inbox is full. Neither
+ * mode permits accepted records to be dropped by conduit backpressure.
+ */
+extern n00b_result_t(bool)
+n00b_store_ingest_topic_publish_ex(n00b_store_ingest_topic_t   *topic,
+                                   n00b_store_ingest_payload_t  payload) _kargs
+{
+    n00b_store_ingest_backpressure_t backpressure =
+        N00B_STORE_INGEST_BACKPRESSURE_BLOCK;
+};
 
 /**
  * @brief Ingest one parsed JSON object into the store.
@@ -1147,10 +1405,11 @@ n00b_store_ingest_buf(n00b_store_t *store, n00b_buffer_t *source);
  *
  * @param store   Open store returned by @ref n00b_store_open_vfs.
  * @param records List of parsed JSON object pointers.
- * @kw worker_count    Accepted for source compatibility; batch preparation is
- *                     currently single-threaded.
- * @kw queue_capacity  Accepted for source compatibility; batch preparation is
- *                     currently single-threaded.
+ * @kw worker_count    Number of scratch-isolated preparation workers. Values
+ *                     greater than one parse/route/build index terms in
+ *                     parallel; commit remains ordered by input position.
+ * @kw queue_capacity  Bounded preparation queue capacity. Zero selects the
+ *                     worker count.
  *
  * @return Ok(committed_count). On full success this equals the list length.
  *         Worker/preflight failures return typed store errors before any batch
@@ -1175,10 +1434,11 @@ n00b_store_ingest_batch(n00b_store_t             *store,
  *
  * @param store   Open store returned by @ref n00b_store_open_vfs.
  * @param sources List of byte-exact JSON source buffers.
- * @kw worker_count    Accepted for source compatibility; batch preparation is
- *                     currently single-threaded.
- * @kw queue_capacity  Accepted for source compatibility; batch preparation is
- *                     currently single-threaded.
+ * @kw worker_count    Number of scratch-isolated preparation workers. Values
+ *                     greater than one parse/route/build index terms in
+ *                     parallel; commit remains ordered by input position.
+ * @kw queue_capacity  Bounded preparation queue capacity. Zero selects the
+ *                     worker count.
  *
  * @return Ok(committed_count). Parse/preflight failures return typed store
  *         errors before any batch record is appended. Commit-stage failures
@@ -1199,13 +1459,18 @@ n00b_store_ingest_buf_batch(n00b_store_t             *store,
 /**
  * @brief Start asynchronously ingesting from a variant-backed conduit topic.
  *
- * The adapter subscribes with an internal unbounded inbox. Its single adapter
- * thread drains bounded batches from that inbox and ingests them directly; it
- * does not spawn per-store ingest workers.
+ * The adapter subscribes with an internal bounded inbox. Its single adapter
+ * thread drains bounded batches from that inbox. When `worker_count > 1`, the
+ * adapter owns one bounded persistent worker pool for service-local
+ * preparation and eligible reserved-slot fill/index work; each batch waits on
+ * an explicit completion token, not a pool-wide quiesce.
  *
- * @kw worker_count   Accepted for source compatibility; ignored.
- * @kw queue_capacity Maximum records drained into one adapter batch. Zero
- *                    selects the implementation default.
+ * @kw worker_count   Number of scratch-isolated service workers used behind
+ *                    the single dequeuer. Reserved slot assignment remains
+ *                    ordered by dequeue position.
+ * @kw queue_capacity Maximum queued records and maximum records drained into
+ *                    one adapter batch. Zero selects the implementation
+ *                    default.
  * @kw source_decoder Optional raw-source decoder. Null parses source buffers
  *                    as ordinary JSON store records. Non-null decoders run in
  *                    worker scratch storage before the store copies accepted

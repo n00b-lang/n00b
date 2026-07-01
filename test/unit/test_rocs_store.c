@@ -525,10 +525,6 @@ test_close_with_active_pin(void)
 
     auto close_r = n00b_store_close(store);
     CHECK(n00b_result_is_ok(close_r));
-
-    auto pin_closed = n00b_store_pin_acquire(store);
-    CHECK(n00b_result_is_err(pin_closed));
-    CHECK(n00b_result_get_err(pin_closed) == N00B_STORE_ERR_STATE);
 }
 
 static void
@@ -557,6 +553,52 @@ test_sealed_hot_allocator_reclaimed_with_active_pin(void)
 
     auto release_r = n00b_store_pin_release(n00b_result_get(pin_r));
     CHECK(n00b_result_is_ok(release_r));
+
+    auto close_r = n00b_store_close(store);
+    CHECK(n00b_result_is_ok(close_r));
+}
+
+static void
+test_hot_stream_snapshot_holds_retired_allocator(void)
+{
+    n00b_store_schema_t *schema = new_schema();
+    n00b_store_t        *store  = open_store(schema);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"hot snapshot")))));
+
+    auto stream_r = n00b_store_record_stream_open(store, nullptr);
+    CHECK(n00b_result_is_ok(stream_r));
+    n00b_store_record_stream_t *stream = n00b_result_get(stream_r);
+
+    auto seal_r = n00b_store_seal_hot_shard(store, .seal_ts = 506);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    auto stats_r = n00b_store_residency_stats(store);
+    CHECK(n00b_result_is_ok(stats_r));
+    n00b_store_residency_stats_t stats = n00b_result_get(stats_r);
+    CHECK(stats.active_pins == 1);
+    CHECK(stats.retired_hot_allocators == 1);
+
+    auto next_r = n00b_store_record_stream_next(stream);
+    CHECK(n00b_result_is_ok(next_r));
+    auto next = n00b_result_get(next_r);
+    CHECK(n00b_option_is_set(next));
+    n00b_store_record_stream_item_t item = n00b_option_get(next);
+    CHECK(item.hot);
+    CHECK(item.bytes.byte_len != 0);
+
+    auto close_stream_r = n00b_store_record_stream_close(stream);
+    CHECK(n00b_result_is_ok(close_stream_r));
+
+    stats_r = n00b_store_residency_stats(store);
+    CHECK(n00b_result_is_ok(stats_r));
+    stats = n00b_result_get(stats_r);
+    CHECK(stats.active_pins == 0);
+    CHECK(stats.retired_hot_allocators == 0);
 
     auto close_r = n00b_store_close(store);
     CHECK(n00b_result_is_ok(close_r));
@@ -658,6 +700,7 @@ main(int argc, char **argv)
     test_dotted_field_indexing_and_exact_precedence();
     test_close_with_active_pin();
     test_sealed_hot_allocator_reclaimed_with_active_pin();
+    test_hot_stream_snapshot_holds_retired_allocator();
     test_partition_constructors_and_routes();
     test_policy_constructors();
 

@@ -442,7 +442,7 @@ rocs_posting_list_new() _kargs
             &(n00b_alloc_opts_t){
                 .allocator = allocator,
             });
-        *postings->ordinals = n00b_list_new_private(
+        *postings->ordinals = n00b_list_new(
             uint64_t,
             .allocator = allocator,
             .scan_kind = N00B_GC_SCAN_KIND_NONE);
@@ -461,7 +461,7 @@ rocs_posting_list_len(n00b_store_posting_list_t *postings)
                  ? 0
                  : (uint64_t)n00b_list_len(*postings->ordinals);
     }
-    return postings->count;
+    return postings->flags == nullptr ? 0 : n00b_flagset_count(postings->flags);
 }
 
 static n00b_result_t(uint64_t)
@@ -480,7 +480,8 @@ rocs_posting_list_ordinal_at(n00b_store_posting_list_t *postings,
                               n00b_list_get(*postings->ordinals, index));
     }
 
-    if (postings->flags == nullptr || index >= postings->count) {
+    if (postings->flags == nullptr
+        || index >= n00b_flagset_count(postings->flags)) {
         return n00b_result_err(uint64_t, N00B_STORE_INDEX_ERR_STATE);
     }
     uint64_t seen   = 0;
@@ -514,7 +515,7 @@ rocs_column_new() _kargs
     n00b_dict_init(column,
                    .allocator       = allocator,
                    .skip_obj_hash   = true,
-                   .locked          = false,
+                   .locked          = true,
                    .key_scan_kind   = N00B_GC_SCAN_KIND_NONE,
                    .value_scan_kind = N00B_GC_SCAN_KIND_ALL);
     return column;
@@ -551,7 +552,19 @@ rocs_column_get_or_create(n00b_store_shard_t *shard, n00b_string_t *field)
         n00b_string_from_raw(field->data,
                              (int64_t)field->u8_bytes,
                              .allocator = allocator);
-    n00b_dict_put(shard->columns, stored_field, column);
+    if (stored_field == nullptr) {
+        return n00b_result_err(n00b_store_column_t *,
+                               N00B_STORE_INDEX_ERR_INTERNAL);
+    }
+    if (n00b_dict_add(shard->columns, stored_field, column)) {
+        return n00b_result_ok(n00b_store_column_t *, column);
+    }
+
+    column = n00b_dict_get(shard->columns, field, &found);
+    if (!found || column == nullptr) {
+        return n00b_result_err(n00b_store_column_t *,
+                               N00B_STORE_INDEX_ERR_STATE);
+    }
     return n00b_result_ok(n00b_store_column_t *, column);
 }
 
@@ -577,7 +590,19 @@ rocs_column_postings_get_or_create(n00b_store_column_t *column,
 
     postings = rocs_posting_list_new(.kind      = kind,
                                      .allocator = column->allocator);
-    n00b_dict_put(column, key, postings);
+    if (postings == nullptr) {
+        return n00b_result_err(n00b_store_posting_list_t *,
+                               N00B_STORE_INDEX_ERR_INTERNAL);
+    }
+    if (n00b_dict_add(column, key, postings)) {
+        return n00b_result_ok(n00b_store_posting_list_t *, postings);
+    }
+
+    postings = n00b_dict_get(column, key, &found);
+    if (!found || postings == nullptr) {
+        return n00b_result_err(n00b_store_posting_list_t *,
+                               N00B_STORE_INDEX_ERR_STATE);
+    }
     return n00b_result_ok(n00b_store_posting_list_t *, postings);
 }
 
@@ -1463,27 +1488,32 @@ rocs_posting_list_push(n00b_store_posting_list_t *postings,
     if (postings == nullptr) {
         return n00b_result_err(bool, N00B_STORE_INDEX_ERR_ARG);
     }
-    bool already_present = postings->kind == N00B_STORE_POSTINGS_DENSE
-                         || unique;
-    if (already_present
-        && rocs_posting_list_contains_ordinal(postings, ordinal)) {
-        return n00b_result_ok(bool, false);
-    }
     if (postings->kind == N00B_STORE_POSTINGS_DENSE) {
-        n00b_flagset_set_index(postings->flags, (int64_t)ordinal, true);
-        postings->count++;
-        return n00b_result_ok(bool, true);
+        if (postings->flags == nullptr) {
+            return n00b_result_err(bool, N00B_STORE_INDEX_ERR_STATE);
+        }
+        bool old = n00b_flagset_test_and_set_index(postings->flags,
+                                                   (int64_t)ordinal,
+                                                   true);
+        return n00b_result_ok(bool, !old);
     }
     if (postings->ordinals == nullptr) {
         return n00b_result_err(bool, N00B_STORE_INDEX_ERR_STATE);
     }
-    if (!unique) {
-        n00b_list_push(*postings->ordinals, ordinal);
-        postings->count++;
-        return n00b_result_ok(bool, true);
+
+    _n00b_list_write_lock(postings->ordinals);
+    if (unique) {
+        for (size_t i = 0; i < postings->ordinals->len; i++) {
+            if (postings->ordinals->data[i] == ordinal) {
+                _n00b_list_unlock(postings->ordinals);
+                return n00b_result_ok(bool, false);
+            }
+        }
     }
-    n00b_list_push(*postings->ordinals, ordinal);
+    _n00b_list_ensure_cap(postings->ordinals, postings->ordinals->len + 1);
+    postings->ordinals->data[postings->ordinals->len++] = ordinal;
     postings->count++;
+    _n00b_list_unlock(postings->ordinals);
     return n00b_result_ok(bool, true);
 }
 

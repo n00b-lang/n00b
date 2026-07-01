@@ -257,6 +257,23 @@ struct n00b_query_cursor_t {
     _Atomic(bool)              close_complete;
 };
 
+#define ROCS_QUERY_VIEW_CONTRACT_OPEN(_view)                    \
+    ((_view) != nullptr && !(_view)->closed                      \
+     && (_view)->store != nullptr && (_view)->filter != nullptr  \
+     && (_view)->pin != nullptr && (_view)->boundary != nullptr  \
+     && (_view)->cursors != nullptr                              \
+     && (_view)->linear_cursors != nullptr                       \
+     && (_view)->cache != nullptr                                \
+     && ((_view)->mode == N00B_QUERY_MODE_SNAPSHOT               \
+         || (_view)->mode == N00B_QUERY_MODE_LIVE))
+
+#define ROCS_QUERY_CURSOR_CONTRACT_OPEN(_cursor)                 \
+    ((_cursor) != nullptr && !(_cursor)->closed                  \
+     && (_cursor)->view != nullptr                               \
+     && ROCS_QUERY_VIEW_CONTRACT_OPEN((_cursor)->view)           \
+     && (_cursor)->hits != nullptr                               \
+     && (_cursor)->residents != nullptr)
+
 struct n00b_query_hit_t {
     n00b_query_cursor_t *cursor;
     n00b_store_pos_t     pos;
@@ -266,6 +283,27 @@ struct n00b_query_hit_t {
     bool                 valid;
     bool                 owned;
 };
+
+#define ROCS_QUERY_HIT_CONTRACT_VALID(_cursor, _hit) \
+    ((_hit) != nullptr && (_hit)->valid              \
+     && (_hit)->cursor == (_cursor)                  \
+     && (_hit)->record != nullptr                    \
+     && (_hit)->pos.shard_id != 0)
+
+#define ROCS_QUERY_CURSOR_NEXT_CONTRACT_VALID_OR_EOF(_cursor, _result) \
+    (n00b_result_is_err(_result)                                       \
+     || !n00b_option_is_set(n00b_result_value(_result))                \
+     || ROCS_QUERY_HIT_CONTRACT_VALID(                                 \
+         (_cursor), n00b_result_value(_result).value))
+
+#define ROCS_QUERY_POSITION_CONTRACT_VALID(_pos) \
+    ((_pos).shard_id != 0)
+
+#define ROCS_QUERY_POSITION_RESULT_CONTRACT_VALID_OR_NONE(_result) \
+    (n00b_result_is_err(_result)                                  \
+     || !n00b_option_is_set(n00b_result_value(_result))           \
+     || ROCS_QUERY_POSITION_CONTRACT_VALID(                       \
+         n00b_result_value(_result).value))
 
 // Edge state of a linear cursor: whether it sits before the first in-window
 // record, on a concrete record, after the last in-window record, or anchored by
@@ -7961,6 +7999,17 @@ n00b_query_view(n00b_store_t  *store,
 	uint64_t           min_partition_bucket = 0;
 	n00b_allocator_t  *allocator = nullptr;
 }
+    requires {
+        store != nullptr;
+        filter != nullptr;
+        mode == N00B_QUERY_MODE_SNAPSHOT || mode == N00B_QUERY_MODE_LIVE;
+        mode == N00B_QUERY_MODE_SNAPSHOT || as_of == nullptr;
+        out == nullptr || mode == N00B_QUERY_MODE_LIVE;
+    }
+    ensures {
+        n00b_result_is_err(result)
+            || ROCS_QUERY_VIEW_CONTRACT_OPEN(n00b_result_value(result));
+    }
 {
     if (store == nullptr || filter == nullptr) {
         return n00b_result_err(n00b_query_view_t *, N00B_QUERY_ERR_ARG);
@@ -8097,6 +8146,12 @@ n00b_query_view(n00b_store_t  *store,
 
 n00b_result_t(bool)
 n00b_query_view_close(n00b_query_view_t *view)
+    requires {
+        view != nullptr;
+    }
+    ensures {
+        n00b_result_is_err(result) || view->closed;
+    }
 {
     if (view == nullptr) {
         return n00b_result_err(bool, N00B_QUERY_ERR_ARG);
@@ -8431,6 +8486,13 @@ n00b_query_cursor(n00b_query_view_t *view) _kargs
     void                *cancel_ctx = nullptr;
     bool                 reverse    = false;
 }
+    requires {
+        ROCS_QUERY_VIEW_CONTRACT_OPEN(view);
+    }
+    ensures {
+        n00b_result_is_err(result)
+            || ROCS_QUERY_CURSOR_CONTRACT_OPEN(n00b_result_value(result));
+    }
 {
     if (view == nullptr) {
         return n00b_result_err(n00b_query_cursor_t *, N00B_QUERY_ERR_ARG);
@@ -8468,6 +8530,12 @@ n00b_query_cursor(n00b_query_view_t *view) _kargs
 
 n00b_result_t(n00b_option_t(n00b_query_hit_t *))
 n00b_query_cursor_next(n00b_query_cursor_t *cursor)
+    requires {
+        ROCS_QUERY_CURSOR_CONTRACT_OPEN(cursor);
+    }
+    ensures {
+        ROCS_QUERY_CURSOR_NEXT_CONTRACT_VALID_OR_EOF(cursor, result);
+    }
 {
     if (cursor == nullptr) {
         return n00b_result_err(n00b_option_t(n00b_query_hit_t *),
@@ -8501,6 +8569,12 @@ n00b_query_cursor_next(n00b_query_cursor_t *cursor)
 
 n00b_result_t(n00b_option_t(n00b_store_pos_t))
 n00b_query_cursor_position(n00b_query_cursor_t *cursor)
+    requires {
+        ROCS_QUERY_CURSOR_CONTRACT_OPEN(cursor);
+    }
+    ensures {
+        ROCS_QUERY_POSITION_RESULT_CONTRACT_VALID_OR_NONE(result);
+    }
 {
     if (cursor == nullptr) {
         return n00b_result_err(n00b_option_t(n00b_store_pos_t),
@@ -8522,6 +8596,12 @@ n00b_query_cursor_position(n00b_query_cursor_t *cursor)
 
 n00b_result_t(bool)
 n00b_query_cursor_close(n00b_query_cursor_t *cursor)
+    requires {
+        cursor != nullptr;
+    }
+    ensures {
+        n00b_result_is_err(result) || cursor->closed;
+    }
 {
     return rocs_query_cursor_close_internal(cursor);
 }
