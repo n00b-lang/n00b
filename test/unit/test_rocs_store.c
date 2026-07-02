@@ -48,12 +48,21 @@ new_mounted_vfs(void)
 }
 
 static n00b_store_t *
-open_store(n00b_store_schema_t *schema)
+open_store_with_vfs(n00b_store_schema_t *schema, n00b_vfs_t **vfs_out)
 {
     n00b_vfs_t *vfs = new_mounted_vfs();
     auto store_r = n00b_store_open_vfs(vfs, r"/rocs", schema);
     CHECK(n00b_result_is_ok(store_r));
+    if (vfs_out != nullptr) {
+        *vfs_out = vfs;
+    }
     return n00b_result_get(store_r);
+}
+
+static n00b_store_t *
+open_store(n00b_store_schema_t *schema)
+{
+    return open_store_with_vfs(schema, nullptr);
 }
 
 static n00b_json_node_t *
@@ -692,6 +701,68 @@ test_resident_pin_blocks_only_target_shard_drop(void)
 }
 
 static void
+test_resident_cache_hit_does_not_revalidate_backing_object(void)
+{
+    n00b_store_schema_t *schema = new_schema();
+    n00b_vfs_t          *vfs    = nullptr;
+    n00b_store_t        *store  = open_store_with_vfs(schema, &vfs);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"resident cached once")))));
+    auto seal_r = n00b_store_seal_hot_shard(store, .seal_ts = 513);
+    CHECK(n00b_result_is_ok(seal_r));
+    n00b_store_catalog_entry_t *entry = n00b_result_get(seal_r);
+
+    auto resident_r = n00b_store_resident_shard_acquire(store, entry);
+    CHECK(n00b_result_is_ok(resident_r));
+    auto map_r = n00b_store_resident_shard_map(n00b_result_get(resident_r));
+    CHECK(n00b_result_is_ok(map_r));
+    CHECK(n00b_result_is_ok(
+        n00b_store_resident_shard_release(n00b_result_get(resident_r))));
+
+    auto stats_r = n00b_store_residency_stats(store);
+    CHECK(n00b_result_is_ok(stats_r));
+    n00b_store_residency_stats_t stats = n00b_result_get(stats_r);
+    CHECK(stats.cache_misses == 1);
+    CHECK(stats.cache_hits == 0);
+
+    auto path_r = n00b_store_catalog_entry_get_object_path(entry);
+    CHECK(n00b_result_is_ok(path_r));
+    CHECK(n00b_result_is_ok(n00b_vfs_delete(vfs, n00b_result_get(path_r))));
+
+    auto verify_r = n00b_store_catalog_entry_verify_object(store, entry);
+    CHECK(n00b_result_is_err(verify_r));
+    CHECK(n00b_result_get_err(verify_r) == N00B_STORE_ERR_VFS);
+
+    resident_r = n00b_store_resident_shard_acquire(store, entry);
+    CHECK(n00b_result_is_ok(resident_r));
+    map_r = n00b_store_resident_shard_map(n00b_result_get(resident_r));
+    CHECK(n00b_result_is_ok(map_r));
+    CHECK(n00b_result_is_ok(
+        n00b_store_resident_shard_release(n00b_result_get(resident_r))));
+
+    stats_r = n00b_store_residency_stats(store);
+    CHECK(n00b_result_is_ok(stats_r));
+    stats = n00b_result_get(stats_r);
+    CHECK(stats.cache_misses == 1);
+    CHECK(stats.cache_hits == 1);
+
+    auto trim_r = n00b_store_residency_trim(store,
+                                            .target_resident_bytes = 1);
+    CHECK(n00b_result_is_ok(trim_r));
+    CHECK(n00b_result_get(trim_r) != 0);
+
+    resident_r = n00b_store_resident_shard_acquire(store, entry);
+    CHECK(n00b_result_is_err(resident_r));
+    CHECK(n00b_result_get_err(resident_r) == N00B_STORE_ERR_VFS);
+
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+static void
 test_hot_stream_snapshot_holds_retired_allocator(void)
 {
     n00b_store_schema_t *schema = new_schema();
@@ -1025,6 +1096,7 @@ main(int argc, char **argv)
     test_sealed_hot_allocator_reclaimed_with_active_pin();
     test_residency_trim_unloads_unpinned_with_store_pin();
     test_resident_pin_blocks_only_target_shard_drop();
+    test_resident_cache_hit_does_not_revalidate_backing_object();
     test_hot_stream_snapshot_holds_retired_allocator();
     test_record_stream_blocks_only_snapshot_shards();
     test_retention_prunes_unpinned_shards_around_stream_pin();
