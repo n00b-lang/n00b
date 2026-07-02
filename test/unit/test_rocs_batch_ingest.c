@@ -742,6 +742,60 @@ test_batch_durable_failure_recovered_via_journal(void)
     close_store_ok(recovered);
 }
 
+static void
+test_journaled_source_batch_uses_worker_range(void)
+{
+    n00b_vfs_t *vfs = new_memory_vfs();
+    n00b_store_t *store =
+        open_store(schema_with_level(false, N00B_STORE_INDEX_TERM),
+                   .vfs = vfs,
+                   .recovery_journal = true);
+
+    n00b_store_source_list_t *sources = source_list_new();
+    n00b_list_push(*sources, buffer_from_literal("{\"level\":\"jr-a\"}"));
+    n00b_list_push(*sources, buffer_from_literal("{\"level\":\"jr-b\"}"));
+    n00b_list_push(*sources, buffer_from_literal("{\"level\":\"jr-c\"}"));
+
+    auto batch_r = n00b_store_ingest_buf_batch(store,
+                                               sources,
+                                               .worker_count = 2,
+                                               .queue_capacity = 1);
+    CHECK(n00b_result_is_ok(batch_r));
+    CHECK(n00b_result_get(batch_r) == 3);
+
+    auto memory_r = n00b_store_memory_stats(store);
+    CHECK(n00b_result_is_ok(memory_r));
+    n00b_store_memory_stats_t memory = n00b_result_get(memory_r);
+    CHECK(memory.hot_live_index == 3);
+    CHECK(memory.hot_worker_range_commits == 3);
+    CHECK(memory.hot_worker_range_tombstones == 0);
+
+    // Simulate a crash: abandon the open store without close/flush. Recovery
+    // must replay the worker-range journal into a sealed shard.
+    n00b_store_t *recovered =
+        open_store(schema_with_level(false, N00B_STORE_INDEX_TERM),
+                   .vfs = vfs,
+                   .recovery_journal = true);
+
+    auto count_r = n00b_store_catalog_get_entry_count(recovered);
+    CHECK(n00b_result_is_ok(count_r));
+    CHECK(n00b_result_get(count_r) == 1);
+
+    n00b_store_catalog_entry_t *entry = catalog_shard(recovered, 1);
+    auto records_r = n00b_store_catalog_entry_get_record_count(entry);
+    CHECK(n00b_result_is_ok(records_r));
+    CHECK(n00b_result_get(records_r) == 3);
+
+    n00b_store_resident_shard_t *resident = nullptr;
+    n00b_store_map_shard_t *root = resident_root(recovered, entry, &resident);
+    check_mapped_level_hit(root, r"jr-a", 1, 0);
+    check_mapped_level_hit(root, r"jr-b", 1, 1);
+    check_mapped_level_hit(root, r"jr-c", 1, 2);
+
+    CHECK(n00b_result_is_ok(n00b_store_resident_shard_release(resident)));
+    close_store_ok(recovered);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -758,6 +812,7 @@ main(int argc, char *argv[])
     test_batch_ingest_worker_pool_drains();
     test_batch_durable_failure_without_journal_errors();
     test_batch_durable_failure_recovered_via_journal();
+    test_journaled_source_batch_uses_worker_range();
 
     return 0;
 }

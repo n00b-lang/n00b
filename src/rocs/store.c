@@ -467,9 +467,10 @@ typedef struct {
     n00b_store_shard_t           *hot;
     rocs_store_batch_job_t       *batch_job;
     n00b_store_raw_span_t        *raw_span;
-    uint64_t                      ordinal;
+    n00b_store_shard_prepared_slot_t *prepared;
+    rocs_store_posting_target_list_t *targets;
     uint64_t                      byte_delta;
-    bool                          slot_filled;
+    bool                          tombstone;
     n00b_err_t                    err;
 } rocs_store_range_commit_job_t;
 
@@ -599,8 +600,20 @@ static n00b_json_node_t *
 rocs_store_reserved_slot_tombstone(n00b_err_t err,
                                    n00b_allocator_t *allocator);
 
+static n00b_buffer_t *
+rocs_store_buffer_from_record_text(n00b_string_t    *text,
+                                   n00b_allocator_t *allocator)
+{
+    if (text == nullptr || text->data == nullptr || text->u8_bytes < 0) {
+        return nullptr;
+    }
+    return n00b_buffer_from_bytes(text->data,
+                                  (int64_t)text->u8_bytes,
+                                  .allocator = allocator);
+}
+
 static void
-rocs_store_range_commit_worker(void *job_v, void *user_data)
+rocs_store_range_prepare_worker(void *job_v, void *user_data)
 {
     (void)user_data;
     rocs_store_range_commit_job_t *job = job_v;
@@ -616,7 +629,9 @@ rocs_store_range_commit_worker(void *job_v, void *user_data)
 
     job->err         = N00B_STORE_OK;
     job->byte_delta  = 0;
-    job->slot_filled = false;
+    job->prepared    = nullptr;
+    job->targets     = nullptr;
+    job->tombstone   = false;
 
     auto prepared_r = n00b_store_shard_prepare_reserved_slot(
         job->hot,
@@ -650,23 +665,9 @@ rocs_store_range_commit_worker(void *job_v, void *user_data)
         return;
     }
 
-    auto fill_r = n00b_store_shard_fill_prepared_reserved(
-        job->hot,
-        job->ordinal,
-        prepared,
-        .account_byte_estimate = false);
-    if (n00b_result_is_err(fill_r)) {
-        job->err = n00b_result_get_err(fill_r);
-        n00b_restore_current_allocator(prev_alloc);
-        n00b_gc_attrib_exit_ingest(prev_ingest);
-        return;
-    }
-
-    rocs_store_commit_index_targets(n00b_result_get(targets_r),
-                                    job->ordinal);
+    job->prepared    = prepared;
+    job->targets     = n00b_result_get(targets_r);
     job->byte_delta  = prepared->byte_delta;
-    job->slot_filled = true;
-    n00b_atomic_add(&job->store->hot_worker_range_commits, 1);
 
     n00b_restore_current_allocator(prev_alloc);
     n00b_gc_attrib_exit_ingest(prev_ingest);
@@ -6470,7 +6471,7 @@ rocs_store_batch_range_candidate_unlocked(n00b_store_t             *store,
                                           uint64_t                  count)
 {
     if (store == nullptr || jobs == nullptr || count == 0
-        || store->hot_shard == nullptr || store->recovery_journal) {
+        || store->hot_shard == nullptr) {
         return false;
     }
     if (store->hot_shard->record_count
@@ -6591,9 +6592,10 @@ rocs_store_ingest_prepared_range_unlocked(
         job->hot         = store->hot_shard;
         job->batch_job   = jobs[i];
         job->raw_span    = nullptr;
-        job->ordinal     = start + i;
+        job->prepared    = nullptr;
+        job->targets     = nullptr;
         job->byte_delta  = 0;
-        job->slot_filled = false;
+        job->tombstone   = false;
         job->err         = N00B_STORE_OK;
         if (store->hot_shard->retain_raw != nullptr) {
             auto span_r = n00b_store_shard_reserve_raw_span(store->hot_shard,
@@ -6622,7 +6624,7 @@ rocs_store_ingest_prepared_range_unlocked(
     if (worker_pool != nullptr) {
         n00b_err_t worker_err = rocs_store_run_service_worker_jobs(
             worker_pool,
-            rocs_store_range_commit_worker,
+            rocs_store_range_prepare_worker,
             (void *const *)commit_jobs,
             count,
             nullptr,
@@ -6642,7 +6644,7 @@ rocs_store_ingest_prepared_range_unlocked(
         n00b_worker_pool_t *commit_pool = n00b_worker_pool_new(
             workers,
             cap,
-            rocs_store_range_commit_worker,
+            rocs_store_range_prepare_worker,
             nullptr,
             .allocator = allocator);
         if (commit_pool == nullptr) {
@@ -6667,7 +6669,8 @@ rocs_store_ingest_prepared_range_unlocked(
         if (job == nullptr) {
             return n00b_result_err(uint64_t, N00B_STORE_ERR_INTERNAL);
         }
-        if (!job->slot_filled) {
+        if (job->prepared == nullptr || job->targets == nullptr
+            || job->err != N00B_STORE_OK) {
             n00b_json_node_t *tombstone =
                 rocs_store_reserved_slot_tombstone(job->err == N00B_STORE_OK
                                                        ? N00B_STORE_ERR_INTERNAL
@@ -6683,6 +6686,7 @@ rocs_store_ingest_prepared_range_unlocked(
             auto prepared_r = n00b_store_shard_prepare_reserved_slot(
                 store->hot_shard,
                 tombstone,
+                .raw_span = job->raw_span,
                 .allocator = allocator);
             if (n00b_result_is_err(prepared_r)) {
                 while (begun != 0) {
@@ -6692,29 +6696,73 @@ rocs_store_ingest_prepared_range_unlocked(
                 return n00b_result_err(uint64_t,
                                        n00b_result_get_err(prepared_r));
             }
-            n00b_store_shard_prepared_slot_t *prepared =
-                n00b_result_get(prepared_r);
-            auto fill_r = n00b_store_shard_fill_prepared_reserved(
-                store->hot_shard,
-                start + i,
-                prepared,
-                .account_byte_estimate = false);
-            if (n00b_result_is_err(fill_r)) {
+            job->prepared   = n00b_result_get(prepared_r);
+            job->targets    = nullptr;
+            job->byte_delta = job->prepared->byte_delta;
+            job->tombstone  = true;
+            n00b_atomic_add(&store->hot_worker_range_tombstones, 1);
+        }
+        if (job->prepared == nullptr || job->prepared->record_text == nullptr) {
+            while (begun != 0) {
+                rocs_store_hot_writer_end_unlocked(store);
+                begun--;
+            }
+            return n00b_result_err(uint64_t, N00B_STORE_ERR_INTERNAL);
+        }
+        if (rocs_store_journal_active(store)) {
+            n00b_buffer_t *journal_raw = nullptr;
+            if (!job->tombstone && job->batch_job != nullptr
+                && job->batch_job->raw != nullptr) {
+                journal_raw = job->batch_job->raw;
+            }
+            else {
+                journal_raw = rocs_store_buffer_from_record_text(
+                    job->prepared->record_text,
+                    allocator);
+                if (journal_raw == nullptr) {
+                    while (begun != 0) {
+                        rocs_store_hot_writer_end_unlocked(store);
+                        begun--;
+                    }
+                    return n00b_result_err(uint64_t,
+                                           N00B_STORE_ERR_INTERNAL);
+                }
+            }
+            auto journal_r = rocs_store_journal_append(store, journal_raw);
+            if (n00b_result_is_err(journal_r)) {
                 while (begun != 0) {
                     rocs_store_hot_writer_end_unlocked(store);
                     begun--;
                 }
-                return n00b_result_err(uint64_t, n00b_result_get_err(fill_r));
+                return n00b_result_err(uint64_t,
+                                       n00b_result_get_err(journal_r));
             }
-            job->byte_delta  = prepared->byte_delta;
-            job->slot_filled = true;
-            n00b_atomic_add(&store->hot_worker_range_tombstones, 1);
         }
         if (UINT64_MAX - total_byte_delta < job->byte_delta) {
             total_byte_delta = UINT64_MAX;
         }
         else {
             total_byte_delta += job->byte_delta;
+        }
+    }
+
+    for (uint64_t i = 0; i < count; i++) {
+        rocs_store_range_commit_job_t *job = commit_jobs[i];
+        auto fill_r = n00b_store_shard_fill_prepared_reserved(
+            store->hot_shard,
+            start + i,
+            job->prepared,
+            .account_byte_estimate = false);
+        if (n00b_result_is_err(fill_r)) {
+            while (begun != 0) {
+                rocs_store_hot_writer_end_unlocked(store);
+                begun--;
+            }
+            return n00b_result_err(uint64_t, n00b_result_get_err(fill_r));
+        }
+        if (job->targets != nullptr) {
+            rocs_store_commit_index_targets(job->targets, start + i);
+            n00b_atomic_add(&store->hot_worker_range_commits, 1);
         }
     }
 
