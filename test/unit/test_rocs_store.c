@@ -136,6 +136,28 @@ check_route_eq(n00b_store_partition_policy_t *policy,
     CHECK(n00b_unicode_str_eq(n00b_result_get(r), expected));
 }
 
+static n00b_store_pos_t
+entry_pos(n00b_store_catalog_entry_t *entry, uint64_t ordinal)
+{
+    auto id_r  = n00b_store_catalog_entry_get_shard_id(entry);
+    auto gen_r = n00b_store_catalog_entry_get_generation(entry);
+    CHECK(n00b_result_is_ok(id_r));
+    CHECK(n00b_result_is_ok(gen_r));
+    return (n00b_store_pos_t){
+        .shard_id   = n00b_result_get(id_r),
+        .ordinal    = ordinal,
+        .generation = n00b_result_get(gen_r),
+    };
+}
+
+static uint64_t
+entry_shard_id(n00b_store_catalog_entry_t *entry)
+{
+    auto id_r = n00b_store_catalog_entry_get_shard_id(entry);
+    CHECK(n00b_result_is_ok(id_r));
+    return n00b_result_get(id_r);
+}
+
 static void
 test_public_contracts(void)
 {
@@ -667,6 +689,66 @@ test_hot_stream_snapshot_holds_retired_allocator(void)
 }
 
 static void
+test_record_stream_blocks_only_snapshot_shards(void)
+{
+    n00b_store_schema_t *schema = new_schema();
+    n00b_store_t        *store  = open_store(schema);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"stream first")))));
+    auto first_r = n00b_store_seal_hot_shard(store, .seal_ts = 509);
+    CHECK(n00b_result_is_ok(first_r));
+    n00b_store_catalog_entry_t *first = n00b_result_get(first_r);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"stream second")))));
+    auto second_r = n00b_store_seal_hot_shard(store, .seal_ts = 510);
+    CHECK(n00b_result_is_ok(second_r));
+    n00b_store_catalog_entry_t *second = n00b_result_get(second_r);
+
+    n00b_store_pos_t after_first = entry_pos(first, 0);
+    auto stream_r = n00b_store_record_stream_open(store, &after_first);
+    CHECK(n00b_result_is_ok(stream_r));
+    n00b_store_record_stream_t *stream = n00b_result_get(stream_r);
+
+    auto drop_r = n00b_store_drop_sealed_shard(store,
+                                               entry_shard_id(first),
+                                               .drop_reason = r"test");
+    CHECK(n00b_result_is_ok(drop_r));
+
+    drop_r = n00b_store_drop_sealed_shard(store,
+                                          entry_shard_id(second),
+                                          .drop_reason = r"test");
+    CHECK(n00b_result_is_err(drop_r));
+    CHECK(n00b_result_get_err(drop_r) == N00B_STORE_ERR_PINNED);
+
+    auto next_r = n00b_store_record_stream_next(stream);
+    CHECK(n00b_result_is_ok(next_r));
+    auto next = n00b_result_get(next_r);
+    CHECK(n00b_option_is_set(next));
+    n00b_store_record_stream_item_t item = n00b_option_get(next);
+    CHECK(!item.hot);
+    CHECK(item.pos.shard_id == entry_shard_id(second));
+    CHECK(item.pos.ordinal == 0);
+
+    auto close_stream_r = n00b_store_record_stream_close(stream);
+    CHECK(n00b_result_is_ok(close_stream_r));
+
+    drop_r = n00b_store_drop_sealed_shard(store,
+                                          entry_shard_id(second),
+                                          .drop_reason = r"test");
+    CHECK(n00b_result_is_ok(drop_r));
+
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+static void
 test_partition_constructors_and_routes(void)
 {
     auto none_r = n00b_store_partition_policy_new_none();
@@ -764,6 +846,7 @@ main(int argc, char **argv)
     test_sealed_hot_allocator_reclaimed_with_active_pin();
     test_residency_trim_unloads_unpinned_with_store_pin();
     test_hot_stream_snapshot_holds_retired_allocator();
+    test_record_stream_blocks_only_snapshot_shards();
     test_partition_constructors_and_routes();
     test_policy_constructors();
 

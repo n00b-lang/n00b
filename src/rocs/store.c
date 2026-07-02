@@ -42,6 +42,8 @@ typedef n00b_list_t(n00b_store_catalog_entry_t *)
     rocs_store_catalog_list_t;
 typedef n00b_list_t(n00b_store_pin_t *)
     rocs_store_pin_list_t;
+typedef n00b_list_t(n00b_store_record_stream_t *)
+    rocs_store_record_stream_list_t;
 typedef n00b_list_t(n00b_store_posting_list_t *)
     rocs_store_posting_target_list_t;
 typedef struct rocs_store_batch_term rocs_store_batch_term_t;
@@ -320,7 +322,8 @@ struct n00b_store_t {
     _Atomic(uint64_t)              hot_worker_range_tombstones;
     _Atomic(uint64_t)              seal_active_writer_waits;
     uint64_t                       active_pins;
-    rocs_store_pin_list_t         *active_pin_handles;
+    rocs_store_pin_list_t          *active_pin_handles;
+    rocs_store_record_stream_list_t *active_record_streams;
     uint64_t                       hot_snapshot_pins;
     uint64_t                       resident_bytes;
     uint64_t                       resident_shards;
@@ -373,6 +376,7 @@ struct n00b_store_record_stream_t {
     n00b_allocator_t                *allocator;
     bool                             closed;
     bool                             pinned;
+    n00b_store_shard_id_list_t       *sealed_shard_ids;
     rocs_stream_catalog_snapshot_t  *sealed;
     uint64_t                         sealed_count;
     uint64_t                         sealed_index;
@@ -738,6 +742,24 @@ rocs_store_pin_list_new() _kargs
                                   .allocator = allocator,
                                   .scan_kind = N00B_GC_SCAN_KIND_ALL);
     return pins;
+}
+
+static rocs_store_record_stream_list_t *
+rocs_store_record_stream_list_new() _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    rocs_store_record_stream_list_t *streams = n00b_alloc_with_opts(
+        rocs_store_record_stream_list_t,
+        &(n00b_alloc_opts_t){
+            .allocator = allocator,
+        });
+
+    *streams = n00b_list_new_private(n00b_store_record_stream_t *,
+                                     .allocator = allocator,
+                                     .scan_kind = N00B_GC_SCAN_KIND_ALL);
+    return streams;
 }
 
 static n00b_store_shard_id_list_t *
@@ -9087,6 +9109,8 @@ n00b_store_open_vfs(n00b_vfs_t          *vfs,
     store->active_pins       = 0;
     store->active_pin_handles =
         rocs_store_pin_list_new(.allocator = allocator);
+    store->active_record_streams =
+        rocs_store_record_stream_list_new(.allocator = allocator);
     store->hot_snapshot_pins = 0;
     store->borrowed_catalog_enumeration_disabled = false;
 
@@ -10180,6 +10204,49 @@ rocs_store_pin_handles_block_shard_locked(n00b_store_t *store,
     return false;
 }
 
+static uint64_t
+rocs_store_active_record_stream_count_locked(n00b_store_t *store)
+{
+    if (store == nullptr || store->active_record_streams == nullptr) {
+        return 0;
+    }
+    uint64_t count = 0;
+    size_t   len   = n00b_list_len(*store->active_record_streams);
+    for (size_t i = 0; i < len; i++) {
+        n00b_store_record_stream_t *stream =
+            n00b_list_get(*store->active_record_streams, i);
+        if (stream != nullptr && stream->pinned && !stream->closed) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static bool
+rocs_store_record_streams_block_shard_locked(n00b_store_t *store,
+                                             uint64_t      shard_id)
+{
+    if (store == nullptr || store->active_record_streams == nullptr) {
+        return false;
+    }
+    size_t len = n00b_list_len(*store->active_record_streams);
+    for (size_t i = 0; i < len; i++) {
+        n00b_store_record_stream_t *stream =
+            n00b_list_get(*store->active_record_streams, i);
+        if (stream == nullptr || !stream->pinned || stream->closed) {
+            continue;
+        }
+        if (stream->hot_snapshot_pinned) {
+            return true;
+        }
+        if (rocs_store_shard_id_list_contains(stream->sealed_shard_ids,
+                                              shard_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool
 rocs_store_drop_blocked_by_active_pin_locked(n00b_store_t *store,
                                              uint64_t      shard_id)
@@ -10190,17 +10257,25 @@ rocs_store_drop_blocked_by_active_pin_locked(n00b_store_t *store,
     if (rocs_store_pin_handles_block_shard_locked(store, shard_id)) {
         return true;
     }
+    if (rocs_store_record_streams_block_shard_locked(store, shard_id)) {
+        return true;
+    }
 
     uint64_t accounted = rocs_store_active_pin_handle_count_locked(store);
+    uint64_t streams   = rocs_store_active_record_stream_count_locked(store);
+    if (UINT64_MAX - accounted < streams) {
+        return true;
+    }
+    accounted += streams;
+
     uint64_t resident  = rocs_store_resident_pin_count_locked(store);
     if (UINT64_MAX - accounted < resident) {
         return true;
     }
     accounted += resident;
 
-    // Record-stream hot snapshots and any future non-catalog pin class are not
-    // yet target-specific. Keep them broad so this narrowing does not weaken
-    // snapshot safety.
+    // Future non-catalog pin classes are not target-specific. Keep them broad
+    // so this narrowing does not weaken snapshot safety.
     return store->active_pins > accounted;
 }
 
@@ -12306,6 +12381,8 @@ n00b_store_record_stream_open(n00b_store_t     *store,
     stream->allocator      = allocator;
     stream->closed         = false;
     stream->pinned         = false;
+    stream->sealed_shard_ids =
+        rocs_store_shard_id_list_new(.allocator = allocator);
     stream->sealed         = nullptr;
     stream->sealed_count   = 0;
     stream->sealed_index   = 0;
@@ -12332,8 +12409,16 @@ n00b_store_record_stream_open(n00b_store_t     *store,
         return n00b_result_err(n00b_store_record_stream_t *,
                                N00B_STORE_ERR_STATE);
     }
+    if (store->active_record_streams == nullptr
+        || stream->sealed_shard_ids == nullptr) {
+        n00b_data_unlock(store->residency_lock);
+        n00b_data_unlock(store->commit_lock);
+        return n00b_result_err(n00b_store_record_stream_t *,
+                               N00B_STORE_ERR_STATE);
+    }
     store->active_pins++;
     stream->pinned = true;
+    n00b_list_push(*store->active_record_streams, stream);
     n00b_data_unlock(store->residency_lock);
 
     uint64_t sealed_count = 0;
@@ -12374,6 +12459,10 @@ n00b_store_record_stream_open(n00b_store_t     *store,
             .record_count  = entry->record_count,
             .start_ordinal = start_ordinal,
         };
+        if (!rocs_store_shard_id_list_contains(stream->sealed_shard_ids,
+                                               entry->shard_id)) {
+            n00b_list_push(*stream->sealed_shard_ids, entry->shard_id);
+        }
     }
     stream->sealed_count = sealed_index;
 
@@ -12548,6 +12637,24 @@ n00b_store_record_stream_next(n00b_store_record_stream_t *stream)
         n00b_option_none(n00b_store_record_stream_item_t));
 }
 
+static bool
+rocs_store_remove_record_stream_locked(n00b_store_t               *store,
+                                       n00b_store_record_stream_t *stream)
+{
+    if (store == nullptr || store->active_record_streams == nullptr
+        || stream == nullptr) {
+        return false;
+    }
+    size_t len = n00b_list_len(*store->active_record_streams);
+    for (size_t i = 0; i < len; i++) {
+        if (n00b_list_get(*store->active_record_streams, i) == stream) {
+            (void)n00b_list_delete(*store->active_record_streams, i);
+            return true;
+        }
+    }
+    return false;
+}
+
 n00b_result_t(bool)
 n00b_store_record_stream_close(n00b_store_record_stream_t *stream)
     requires {
@@ -12575,6 +12682,11 @@ n00b_store_record_stream_close(n00b_store_record_stream_t *stream)
         n00b_data_read_lock(stream->store->commit_lock);
         n00b_data_write_lock(stream->store->residency_lock);
         if (stream->store->active_pins == 0) {
+            n00b_data_unlock(stream->store->residency_lock);
+            n00b_data_unlock(stream->store->commit_lock);
+            return n00b_result_err(bool, N00B_STORE_ERR_STATE);
+        }
+        if (!rocs_store_remove_record_stream_locked(stream->store, stream)) {
             n00b_data_unlock(stream->store->residency_lock);
             n00b_data_unlock(stream->store->commit_lock);
             return n00b_result_err(bool, N00B_STORE_ERR_STATE);
