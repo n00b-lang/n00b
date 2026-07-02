@@ -43,14 +43,6 @@ typedef struct n00b_store_shard_retention_policy_t
 // oldest sealed shards until the total sealed byte_len is within this budget.
 #define N00B_STORE_DEFAULT_RETENTION_BYTES (UINT64_C(64) << 30)
 
-// Floor for the age-based retention rule when applied automatically by the
-// sealer. Shards with a seal_ts below this value are NOT eligible for the age
-// rule — they carry a non-epoch (synthetic/monotonic) timestamp and the
-// wall-clock cutoff is meaningless for them. ~2001-09-09 in epoch ns; any real
-// capture seal_ts is far above it. Explicit policies (min_seal_ts unset = 0)
-// are unaffected. 1e18 ns.
-#define N00B_STORE_MIN_EPOCH_SEAL_TS_NS (UINT64_C(1000000000000000000))
-
 // Reserved full-text catch-all column name. Enabled per-schema via
 // n00b_store_schema_new(.search_text=true). Index-only (never a record field);
 // the leading "__n00b_" marks it reserved and n00b_store_schema_add_field
@@ -67,6 +59,14 @@ typedef struct n00b_store_record_stream_t     n00b_store_record_stream_t;
 typedef struct n00b_store_index_emit_t        n00b_store_index_emit_t;
 typedef struct n00b_store_index_options_t     n00b_store_index_options_t;
 typedef struct n00b_store_service_profile_t   n00b_store_service_profile_t;
+
+typedef enum : int32_t {
+    N00B_STORE_CATALOG_ENTRY_STATE_UNKNOWN = 0,
+    N00B_STORE_CATALOG_ENTRY_STATE_SEALED = 1,
+    N00B_STORE_CATALOG_ENTRY_STATE_RETIRED_HOT = 2,
+    N00B_STORE_CATALOG_ENTRY_STATE_FAILED_SEAL = 3,
+    N00B_STORE_CATALOG_ENTRY_STATE_QUARANTINED = 4,
+} n00b_store_catalog_entry_state_t;
 
 /** @brief List of source JSON buffers for batch ingest. */
 typedef n00b_list_t(n00b_buffer_t *) n00b_store_source_list_t;
@@ -185,6 +185,7 @@ struct n00b_store_service_profile_t {
     uint64_t                            ingest_worker_count;
     uint64_t                            seal_worker_count;
     uint64_t                            ingest_queue_bound;
+    uint64_t                            ingest_batch_bound;
     n00b_store_ingest_backpressure_t    ingest_backpressure;
     n00b_store_source_decoder_t         source_decoder;
     n00b_store_index_options_t         *index_options;
@@ -515,6 +516,9 @@ typedef struct {
     uint64_t sealed_shards;
     uint64_t sealed_records;
     uint64_t sealed_bytes;
+    uint64_t quarantined_shards;
+    uint64_t quarantined_records;
+    uint64_t quarantined_bytes;
     uint64_t sealed_min_bytes;
     uint64_t sealed_max_bytes;
     uint64_t sealed_avg_bytes;
@@ -747,6 +751,10 @@ n00b_store_open_config(n00b_store_schema_t *schema,
  *                         service default.
  * @kw ingest_queue_bound  Bounded admission queue size. Zero means use ROCS's
  *                         service default, not an unbounded queue.
+ * @kw ingest_batch_bound  Maximum records drained from the admission queue into
+ *                         one transient preparation batch. Zero uses ROCS's
+ *                         service default and is intentionally independent of
+ *                         the admission queue bound.
  * @kw ingest_backpressure Admission behavior when the bounded queue is full.
  * @kw index_options       Optional caller-owned process-side index policy.
  * @kw allocator           Allocator for process-side profile state.
@@ -759,6 +767,7 @@ n00b_store_service_profile_new() _kargs
     uint64_t                          ingest_worker_count = 1;
     uint64_t                          seal_worker_count   = 1;
     uint64_t                          ingest_queue_bound  = 0;
+    uint64_t                          ingest_batch_bound  = 0;
     n00b_store_ingest_backpressure_t  ingest_backpressure =
         N00B_STORE_INGEST_BACKPRESSURE_BLOCK;
     n00b_store_source_decoder_t       source_decoder      = nullptr;
@@ -1474,9 +1483,12 @@ n00b_store_ingest_buf_batch(n00b_store_t             *store,
  * @kw worker_count   Number of scratch-isolated service workers used behind
  *                    the single dequeuer. Reserved slot assignment remains
  *                    ordered by dequeue position.
- * @kw queue_capacity Maximum queued records and maximum records drained into
- *                    one adapter batch. Zero selects the implementation
+ * @kw queue_capacity Maximum queued records. Zero selects the implementation
  *                    default.
+ * @kw batch_capacity Maximum records drained into one adapter batch. Zero
+ *                    selects the implementation default and is capped
+ *                    separately from queue_capacity to bound transient
+ *                    scratch allocation.
  * @kw source_decoder Optional raw-source decoder. Null parses source buffers
  *                    as ordinary JSON store records. Non-null decoders run in
  *                    worker scratch storage before the store copies accepted
@@ -1492,6 +1504,7 @@ n00b_store_conduit_ingest_start(n00b_store_t               *store,
 {
     int32_t           worker_count   = 0;
     int32_t           queue_capacity = 0;
+    int32_t           batch_capacity = 0;
     n00b_store_source_decoder_t source_decoder = nullptr;
     n00b_allocator_t *allocator      = nullptr;
 };
@@ -1621,6 +1634,24 @@ extern n00b_result_t(uint64_t)
 n00b_store_catalog_get_entry_count(n00b_store_t *store);
 
 /**
+ * @brief Return the number of catalog entries, including quarantined entries.
+ *
+ * Visible query/upload paths should use the visible-entry APIs below. This API
+ * is for operator tooling that needs to inspect non-visible catalog state.
+ */
+extern n00b_result_t(uint64_t)
+n00b_store_catalog_all_entry_count(n00b_store_t *store);
+
+/**
+ * @brief Borrow one catalog entry by raw catalog index.
+ *
+ * Returned entries may be sealed, quarantined, or process-side diagnostic
+ * entries. Callers must not retain returned entries across catalog mutation.
+ */
+extern n00b_result_t(n00b_option_t(n00b_store_catalog_entry_t *))
+n00b_store_catalog_all_entry_at(n00b_store_t *store, uint64_t index);
+
+/**
  * @brief Return the number of currently visible sealed catalog entries.
  *
  * This borrowed enumeration path avoids copying catalog strings. Callers must
@@ -1638,6 +1669,15 @@ n00b_store_catalog_visible_entry_count(n00b_store_t *store);
  */
 extern n00b_result_t(n00b_option_t(n00b_store_catalog_entry_t *))
 n00b_store_catalog_visible_entry_at(n00b_store_t *store, uint64_t index);
+
+/**
+ * @brief Find a catalog entry by shard id, including quarantined entries.
+ *
+ * Query and upload paths should use @ref n00b_store_catalog_find_shard, which
+ * hides quarantined entries.
+ */
+extern n00b_result_t(n00b_option_t(n00b_store_catalog_entry_t *))
+n00b_store_catalog_find_any_shard(n00b_store_t *store, uint64_t shard_id);
 
 /**
  * @brief Borrowed catalog entry selected for a strict-after resume position.
@@ -1773,6 +1813,19 @@ n00b_store_drop_sealed_shard(n00b_store_t *store,
     n00b_string_t *drop_reason = nullptr;
 };
 
+/**
+ * @brief Mark one sealed shard as quarantined.
+ *
+ * Quarantine persists in the catalog and removes the shard from normal query,
+ * stream, retention, and upload visibility. The shard object is not deleted.
+ */
+extern n00b_result_t(bool)
+n00b_store_quarantine_shard(n00b_store_t *store,
+                            uint64_t      shard_id) _kargs
+{
+    n00b_string_t *reason = nullptr;
+};
+
 /** @brief Return the oldest retained sealed position, if known. */
 extern n00b_result_t(n00b_option_t(n00b_store_pos_t))
 n00b_store_oldest_available_pos(n00b_store_t *store);
@@ -1780,6 +1833,16 @@ n00b_store_oldest_available_pos(n00b_store_t *store);
 /** @brief Return the age-retention expiry for the oldest retained sealed shard. */
 extern n00b_result_t(n00b_option_t(uint64_t))
 n00b_store_oldest_available_expires_at_ns(n00b_store_t *store);
+
+/**
+ * @brief Return the configured age-retention window in epoch nanoseconds.
+ *
+ * A zero value means age-based retention is disabled for this store. Callers
+ * can add this value to a catalog entry's seal timestamp to display that
+ * entry's age-retention expiry.
+ */
+extern n00b_result_t(uint64_t)
+n00b_store_retention_window_ns(n00b_store_t *store);
 
 /**
  * @brief Check whether a durable position is still retained.
@@ -1903,6 +1966,12 @@ n00b_store_catalog_entry_get_partition_key(n00b_store_catalog_entry_t *entry);
  */
 extern n00b_result_t(n00b_option_t(n00b_string_t *))
 n00b_store_catalog_entry_get_etag(n00b_store_catalog_entry_t *entry);
+
+extern n00b_result_t(n00b_store_catalog_entry_state_t)
+n00b_store_catalog_entry_get_state(n00b_store_catalog_entry_t *entry);
+
+extern n00b_result_t(n00b_string_t *)
+n00b_store_catalog_entry_state_name(n00b_store_catalog_entry_state_t state);
 
 /**
  * @brief Report whether a sealed shard catalog entry is resident in process.

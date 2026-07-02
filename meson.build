@@ -4125,7 +4125,7 @@ test('rocs_service_tool_smoke',
     suite: 'unit',
 )
 
-n00b_rocs_shards_tool = executable('n00b-rocs-shards',
+n00b_rocs_shards_tool = executable('rocsctl',
     ['src/tools/n00b-rocs-shards.c'],
     kwargs: n00b_app_kwargs,
     install: true,

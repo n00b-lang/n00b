@@ -747,7 +747,7 @@ n00b_rocs_wax_daemon_config_set_max_lines(
 }
 
 static n00b_result_t(n00b_string_t *)
-rocs_wax_read_text_file(n00b_string_t *path)
+rocs_wax_read_text_file(n00b_string_t *path, n00b_allocator_t *allocator)
 {
     if (rocs_wax_string_empty(path)) {
         return n00b_result_err(n00b_string_t *, N00B_ROCS_WAX_ERR_SOURCE);
@@ -765,14 +765,18 @@ rocs_wax_read_text_file(n00b_string_t *path)
         return n00b_result_err(n00b_string_t *, N00B_ROCS_WAX_ERR_SOURCE);
     }
 
-    n00b_buffer_t *copy = n00b_buffer_copy(n00b_result_get(buf_r));
+    n00b_buffer_t *copy = n00b_buffer_copy(n00b_result_get(buf_r),
+                                           .allocator = allocator);
     n00b_file_close(file);
-    return n00b_result_ok(n00b_string_t *, n00b_buffer_to_string(copy));
+    return n00b_result_ok(n00b_string_t *,
+                          n00b_buffer_to_string(copy,
+                                                .allocator = allocator));
 }
 
 static n00b_result_t(uint64_t)
 rocs_wax_checkpoint_read(n00b_string_t                    *path,
-                         n00b_rocs_wax_daemon_stats_t    *stats)
+                         n00b_rocs_wax_daemon_stats_t    *stats,
+                         n00b_allocator_t                *allocator)
 {
     if (rocs_wax_string_empty(path)) {
         return n00b_result_ok(uint64_t, 0);
@@ -781,7 +785,7 @@ rocs_wax_checkpoint_read(n00b_string_t                    *path,
         return n00b_result_ok(uint64_t, 0);
     }
 
-    auto text_r = rocs_wax_read_text_file(path);
+    auto text_r = rocs_wax_read_text_file(path, allocator);
     if (n00b_result_is_err(text_r)) {
         if (stats != nullptr) {
             stats->checkpoint_errors++;
@@ -819,9 +823,10 @@ rocs_wax_checkpoint_write(n00b_rocs_wax_daemon_t *daemon, uint64_t line_no)
         return n00b_result_ok(bool, true);
     }
 
-    n00b_string_t *text = n00b_cformat("[|#|]\n", (int64_t)line_no);
-    n00b_buffer_t *buf  = n00b_buffer_from_bytes(text->data,
-                                                 (int64_t)text->u8_bytes);
+    n00b_buffer_t *buf = n00b_buffer_new(0,
+                                         .allocator = daemon->allocator);
+    n00b_buffer_append_uint(buf, line_no);
+    n00b_buffer_append_bytes(buf, "\n", 1);
 
     auto open_r = n00b_file_open(daemon->config->checkpoint_path,
                                  .mode = N00B_FILE_W);
@@ -867,7 +872,8 @@ n00b_rocs_wax_daemon_start(n00b_rocs_wax_daemon_config_t *config) _kargs
     daemon->stopped   = false;
 
     auto checkpoint_r = rocs_wax_checkpoint_read(config->checkpoint_path,
-                                                 &daemon->stats);
+                                                 &daemon->stats,
+                                                 allocator);
     if (n00b_result_is_err(checkpoint_r)) {
         return n00b_result_err(n00b_rocs_wax_daemon_t *,
                                n00b_result_get_err(checkpoint_r));
@@ -953,7 +959,8 @@ n00b_rocs_wax_daemon_run(n00b_rocs_wax_daemon_t *daemon)
         return n00b_result_err(bool, N00B_ROCS_WAX_ERR_CLOSED);
     }
 
-    auto source_r = rocs_wax_read_text_file(daemon->config->fixture_source_path);
+    auto source_r = rocs_wax_read_text_file(daemon->config->fixture_source_path,
+                                            daemon->allocator);
     if (n00b_result_is_err(source_r)) {
         daemon->stats.last_error = N00B_ROCS_WAX_ERR_SOURCE;
         daemon->healthy = false;

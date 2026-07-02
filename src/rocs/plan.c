@@ -12,11 +12,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// TEMP diagnostic counters for query-planner full-scan investigation.
-_Atomic uint64_t n00b_plan_dbg_full_residual       = 0;
-_Atomic uint64_t n00b_plan_dbg_records_materialized = 0;
-_Atomic int64_t  n00b_plan_dbg_last_lookup_err      = 0;
-
 static bool
 rocs_plan_debug_enabled(void)
 {
@@ -603,8 +598,6 @@ _rocs_plan_dispatch_full_residual(_rocs_plan_dispatch_ctx_t *ctx,
     if (ctx == nullptr || residual == nullptr) {
         return n00b_result_err(n00b_plan_dispatch_t *, N00B_PLAN_ERR_ARG);
     }
-    atomic_fetch_add(&n00b_plan_dbg_full_residual, 1);
-
     auto set_r = _rocs_plan_ordset_new(ctx->record_count,
                                       true,
                                       .allocator = ctx->allocator);
@@ -905,8 +898,6 @@ _rocs_plan_dispatch_index_lookup(_rocs_plan_dispatch_ctx_t *ctx,
     }
 
     if (n00b_result_is_err(postings_r)) {
-        atomic_store(&n00b_plan_dbg_last_lookup_err,
-                     (int64_t)n00b_result_get_err(postings_r));
         return _rocs_plan_dispatch_full_residual(ctx, predicate, true);
     }
 
@@ -2490,7 +2481,6 @@ _rocs_plan_verify_candidates(_rocs_plan_verify_ctx_t *ctx,
             break;
         }
 
-        atomic_fetch_add(&n00b_plan_dbg_records_materialized, 1);
         auto json_r = n00b_store_record_view_json(n00b_result_get(record_r),
                                                   .allocator = ctx->allocator);
         if (n00b_result_is_err(json_r)) {

@@ -29,7 +29,7 @@ typedef struct {
     uint32_t version;
     uint32_t base_address;
     uint32_t root_offset;
-    uint32_t payload_front_len;
+    uint32_t flags;
 } test_marshal_stream_header_t;
 
 typedef struct {
@@ -222,6 +222,7 @@ make_fixture(void)
     *root = (test_shard_wire_t){
         .records       = (uint64_t)(uintptr_t)records,
         .columns       = (uint64_t)(uintptr_t)columns,
+        .state         = N00B_SHARD_STATE_SEALED,
         .record_count  = 2,
         .byte_estimate = 128,
         .open_ts       = 11,
@@ -434,7 +435,7 @@ test_nested_range_errors(void)
     uint32_t front_padding = (uint32_t)(test_payload_front_base(hdr)
                                         - sizeof(test_marshal_stream_header_t));
     root->records = ((uint64_t)hdr->base_address << 32)
-                  | (uint64_t)(hdr->payload_front_len - front_padding + 8u);
+                  | (uint64_t)(hdr->flags - front_padding + 8u);
 
     auto open = n00b_store_map_open_buffer(bad);
     CHECK(n00b_result_is_ok(open));

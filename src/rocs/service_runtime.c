@@ -1463,7 +1463,8 @@ rocs_service_append_query_hit(n00b_buffer_t      *buf,
         if (n00b_result_is_err(json_r)) {
             return false;
         }
-        char *encoded = n00b_json_encode(n00b_result_get(json_r));
+        char *encoded = n00b_json_encode(n00b_result_get(json_r),
+                                         .allocator = allocator);
         if (encoded == nullptr) {
             return false;
         }

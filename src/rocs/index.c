@@ -2666,16 +2666,14 @@ n00b_store_record_view_json_copy(n00b_store_record_t *record) _kargs
                                .allocator = allocator);
 }
 
-// Serialize a JSON node graph to a compact n00b string. n00b_json_encode is a
-// char*-returning API with no allocator kwarg, so the char* boundary is
-// confined here in a static helper (per the n00b char*-in-static-.c-helper
-// exception). The returned string honors `allocator`; the transient encode
-// buffer is default-allocated and freed immediately, so it never persists in
-// the wrong arena.
+// Serialize a JSON node graph to a compact n00b string. The returned char*
+// boundary is confined here and allocated from the caller's allocator.
 static n00b_result_t(n00b_string_t *)
 rocs_json_node_to_string(n00b_json_node_t *node, n00b_allocator_t *allocator)
 {
-    char *encoded = n00b_json_encode(node, .pretty = false);
+    char *encoded = n00b_json_encode(node,
+                                     .pretty = false,
+                                     .allocator = allocator);
     if (encoded == nullptr) {
         return n00b_result_err(n00b_string_t *, N00B_STORE_INDEX_ERR_STATE);
     }

@@ -405,7 +405,9 @@ rocs_shard_encode_record(n00b_json_node_t *record,
         return n00b_result_err(n00b_string_t *, N00B_STORE_SHARD_ERR_ARG);
     }
 
-    char *encoded = n00b_json_encode(record, .pretty = false);
+    char *encoded = n00b_json_encode(record,
+                                     .pretty = false,
+                                     .allocator = allocator);
     if (encoded == nullptr) {
         return n00b_result_err(n00b_string_t *, N00B_STORE_SHARD_ERR_ARG);
     }

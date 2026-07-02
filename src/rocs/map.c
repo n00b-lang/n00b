@@ -27,7 +27,7 @@
 #define N00B_MARSHAL_OP_FNPATCH UINT32_C(0xe81cbab0)
 
 // Single wire format (N00B_MARSHAL_VERSION): every stream has a 16-byte-aligned
-// payload front (the header's payload_front_len carries content_len + padding,
+// payload front (the header's flags field carries content_len + padding,
 // content begins at sizeof(header) + padding, vaddr offsets / root_offset are
 // relative to that padded base) and the full alloc record with cached_hash.
 #define N00B_MARSHAL_STATIC_CHECK_MAX      16u
@@ -401,7 +401,7 @@ struct n00b_store_map_buffer_t {
 };
 
 // Bytes of padding between the stream header and the payload-front content. The
-// header's payload_front_len field stores content_len + this padding, so
+// header's flags field stores content_len + this padding, so
 // consumers subtract it to recover the true content length and add it to locate
 // the content base. Constant for the single wire format.
 static uint32_t
@@ -756,12 +756,12 @@ rocs_try_image_layout(uint8_t             *bytes,
                       rocs_image_layout_t *layout)
 {
     rocs_marshal_stream_header_t *hdr = (void *)bytes;
-    if (hdr->payload_front_len < front_padding
-        || (size_t)hdr->payload_front_len > byte_len - sizeof(*hdr)) {
+    if (hdr->flags < front_padding
+        || (size_t)hdr->flags > byte_len - sizeof(*hdr)) {
         return N00B_STORE_MAP_ERR_BAD_LAYOUT;
     }
 
-    uint32_t payload_len = hdr->payload_front_len - front_padding;
+    uint32_t payload_len = hdr->flags - front_padding;
     if (!rocs_root_wire_shape_ok(bytes, byte_len, front_padding, payload_len)) {
         return N00B_STORE_MAP_ERR_BAD_LAYOUT;
     }
@@ -772,7 +772,7 @@ rocs_try_image_layout(uint8_t             *bytes,
                                                        hdr->base_address,
                                                        payload_len,
                                                        sizeof(*hdr)
-                                                           + (size_t)hdr->payload_front_len);
+                                                           + (size_t)hdr->flags);
     if (valid != N00B_STORE_MAP_OK) {
         return valid;
     }
@@ -831,9 +831,9 @@ rocs_detect_image_layout_fast(uint8_t             *bytes,
     }
 
     uint32_t front_padding = rocs_payload_front_padding();
-    if (hdr->payload_front_len >= front_padding
-        && (size_t)hdr->payload_front_len <= byte_len - sizeof(*hdr)) {
-        uint32_t payload_len = hdr->payload_front_len - front_padding;
+    if (hdr->flags >= front_padding
+        && (size_t)hdr->flags <= byte_len - sizeof(*hdr)) {
+        uint32_t payload_len = hdr->flags - front_padding;
         if (rocs_root_wire_shape_ok(bytes,
                                     byte_len,
                                     front_padding,
@@ -1334,7 +1334,7 @@ rocs_map_init_from_bytes(n00b_store_map_t *map, uint8_t *bytes, size_t byte_len)
                                                              &layout);
     if (err != N00B_STORE_MAP_OK) {
         layout.front_padding = rocs_payload_front_padding();
-        layout.payload_len   = hdr->payload_front_len - layout.front_padding;
+        layout.payload_len   = hdr->flags - layout.front_padding;
     }
 
     map->bytes        = bytes;
