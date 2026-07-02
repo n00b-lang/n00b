@@ -881,6 +881,53 @@ test_retention_prunes_unpinned_shards_around_stream_pin(void)
 }
 
 static void
+test_record_stream_reads_hot_tail_without_seal(void)
+{
+    n00b_store_schema_t *schema = new_schema();
+    n00b_store_t        *store  = open_store(schema);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"hot tail first")))));
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"hot tail second")))));
+
+    auto stats_r = n00b_store_memory_stats(store);
+    CHECK(n00b_result_is_ok(stats_r));
+    n00b_store_memory_stats_t stats = n00b_result_get(stats_r);
+    CHECK(stats.sealed_records == 0);
+    CHECK(stats.hot_record_count == 2);
+
+    auto stream_r = n00b_store_record_stream_open(store, nullptr);
+    CHECK(n00b_result_is_ok(stream_r));
+    n00b_store_record_stream_t *stream = n00b_result_get(stream_r);
+
+    for (uint64_t i = 0; i < 2; i++) {
+        auto next_r = n00b_store_record_stream_next(stream);
+        CHECK(n00b_result_is_ok(next_r));
+        auto next = n00b_result_get(next_r);
+        CHECK(n00b_option_is_set(next));
+        n00b_store_record_stream_item_t item = n00b_option_get(next);
+        CHECK(item.hot);
+        CHECK(item.pos.ordinal == i);
+        CHECK(item.bytes.data != nullptr);
+        CHECK(item.bytes.byte_len != 0);
+    }
+
+    auto eof_r = n00b_store_record_stream_next(stream);
+    CHECK(n00b_result_is_ok(eof_r));
+    CHECK(!n00b_option_is_set(n00b_result_get(eof_r)));
+
+    CHECK(n00b_result_is_ok(n00b_store_record_stream_close(stream)));
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+static void
 test_partition_constructors_and_routes(void)
 {
     auto none_r = n00b_store_partition_policy_new_none();
@@ -981,6 +1028,7 @@ main(int argc, char **argv)
     test_hot_stream_snapshot_holds_retired_allocator();
     test_record_stream_blocks_only_snapshot_shards();
     test_retention_prunes_unpinned_shards_around_stream_pin();
+    test_record_stream_reads_hot_tail_without_seal();
     test_partition_constructors_and_routes();
     test_policy_constructors();
 
