@@ -10290,6 +10290,20 @@ rocs_store_drop_blocked_by_active_pin_locked(n00b_store_t *store,
     return false;
 }
 
+static bool
+rocs_store_drop_entry_blocked_locked(n00b_store_t               *store,
+                                     n00b_store_catalog_entry_t *entry)
+{
+    if (store == nullptr || entry == nullptr) {
+        return false;
+    }
+    if (entry->resident_pins != 0) {
+        return true;
+    }
+    return rocs_store_drop_blocked_by_active_pin_locked(store,
+                                                        entry->shard_id);
+}
+
 static n00b_result_t(bool)
 rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
                                     uint64_t       shard_id,
@@ -10314,10 +10328,7 @@ rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
     }
     // Store/query pins and record streams are target-aware by class. Resident
     // pins are target-entry state and block only this entry.
-    if (entry->resident_pins != 0) {
-        return n00b_result_err(bool, N00B_STORE_ERR_PINNED);
-    }
-    if (rocs_store_drop_blocked_by_active_pin_locked(store, shard_id)) {
+    if (rocs_store_drop_entry_blocked_locked(store, entry)) {
         return n00b_result_err(bool, N00B_STORE_ERR_PINNED);
     }
 
@@ -10359,7 +10370,8 @@ rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
 
 static n00b_store_catalog_entry_t *
 rocs_store_oldest_retention_candidate(n00b_store_t                        *store,
-                                      n00b_store_shard_retention_policy_t *policy)
+                                      n00b_store_shard_retention_policy_t *policy,
+                                      n00b_store_shard_id_list_t          *blocked)
 {
     if (store == nullptr || policy == nullptr || store->catalog == nullptr) {
         return nullptr;
@@ -10386,6 +10398,9 @@ rocs_store_oldest_retention_candidate(n00b_store_t                        *store
     for (size_t i = 0; i < len; i++) {
         n00b_store_catalog_entry_t *entry = n00b_list_get(*store->catalog, i);
         if (!rocs_store_catalog_entry_visible_sealed(entry)) {
+            continue;
+        }
+        if (rocs_store_shard_id_list_contains(blocked, entry->shard_id)) {
             continue;
         }
         bool old_by_time = policy->drop_before_seal_ts != 0
@@ -10420,11 +10435,25 @@ n00b_store_apply_shard_retention(
     }
 
     uint64_t dropped = 0;
+    bool     saw_pinned_candidate = false;
+    n00b_store_shard_id_list_t *blocked =
+        rocs_store_shard_id_list_new(.allocator = store->allocator);
+    if (blocked == nullptr) {
+        n00b_data_unlock(store->residency_lock);
+        n00b_data_unlock(store->commit_lock);
+        return n00b_result_err(uint64_t, N00B_STORE_ERR_INTERNAL);
+    }
     while (true) {
         n00b_store_catalog_entry_t *candidate =
-            rocs_store_oldest_retention_candidate(store, policy);
+            rocs_store_oldest_retention_candidate(store, policy, blocked);
         if (candidate == nullptr) {
             break;
+        }
+
+        if (rocs_store_drop_entry_blocked_locked(store, candidate)) {
+            n00b_list_push(*blocked, candidate->shard_id);
+            saw_pinned_candidate = true;
+            continue;
         }
 
         uint64_t shard_id = candidate->shard_id;
@@ -10441,6 +10470,9 @@ n00b_store_apply_shard_retention(
 
     n00b_data_unlock(store->residency_lock);
     n00b_data_unlock(store->commit_lock);
+    if (saw_pinned_candidate) {
+        return n00b_result_err(uint64_t, N00B_STORE_ERR_PINNED);
+    }
     return n00b_result_ok(uint64_t, dropped);
 }
 

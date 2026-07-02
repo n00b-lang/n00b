@@ -983,6 +983,17 @@ rocs_query_shard_id_list_contains(n00b_store_shard_id_list_t *ids,
     return false;
 }
 
+static void
+rocs_query_shard_id_list_add(n00b_store_shard_id_list_t *ids,
+                             uint64_t                    shard_id)
+{
+    if (ids == nullptr || shard_id == 0
+        || rocs_query_shard_id_list_contains(ids, shard_id)) {
+        return;
+    }
+    n00b_list_push(*ids, shard_id);
+}
+
 static rocs_query_rank_term_list_t *
 rocs_query_rank_term_list_new() _kargs
 {
@@ -3356,11 +3367,46 @@ rocs_query_narrow_store_pin_to_boundary(n00b_query_view_t *view)
     for (size_t i = 0; i < len; i++) {
         n00b_query_boundary_entry_t entry =
             n00b_list_get(*view->boundary, i);
-        if (entry.shard_id == 0
-            || rocs_query_shard_id_list_contains(ids, entry.shard_id)) {
-            continue;
+        rocs_query_shard_id_list_add(ids, entry.shard_id);
+    }
+
+    auto narrow_r = n00b_store_pin_narrow_to_shards(view->pin, ids);
+    if (n00b_result_is_err(narrow_r)) {
+        return n00b_result_err(
+            bool,
+            rocs_query_err_from_store(n00b_result_get_err(narrow_r)));
+    }
+    return n00b_result_ok(bool, true);
+}
+
+static n00b_result_t(bool)
+rocs_query_refresh_store_pin_locked(n00b_query_view_t       *view,
+                                    rocs_query_live_state_t *live)
+{
+    if (view == nullptr || view->pin == nullptr || view->boundary == nullptr) {
+        return n00b_result_err(bool, N00B_QUERY_ERR_ARG);
+    }
+
+    n00b_store_shard_id_list_t *ids =
+        rocs_query_shard_id_list_new(.allocator = view->allocator);
+    if (ids == nullptr) {
+        return n00b_result_err(bool, N00B_QUERY_ERR_INTERNAL);
+    }
+
+    size_t boundary_len = n00b_list_len(*view->boundary);
+    for (size_t i = 0; i < boundary_len; i++) {
+        n00b_query_boundary_entry_t entry =
+            n00b_list_get(*view->boundary, i);
+        rocs_query_shard_id_list_add(ids, entry.shard_id);
+    }
+
+    if (live != nullptr && live->pending_positions != nullptr) {
+        size_t pending_len = n00b_list_len(*live->pending_positions);
+        for (size_t i = 0; i < pending_len; i++) {
+            n00b_store_pos_t pos =
+                n00b_list_get(*live->pending_positions, i);
+            rocs_query_shard_id_list_add(ids, pos.shard_id);
         }
-        n00b_list_push(*ids, entry.shard_id);
     }
 
     auto narrow_r = n00b_store_pin_narrow_to_shards(view->pin, ids);
@@ -4504,6 +4550,11 @@ rocs_query_live_tail_scan_once_locked(n00b_query_view_t       *view,
     for (uint64_t i = 0; i < new_count; i++) {
         n00b_store_pos_t pos = n00b_list_get(*new_positions, (size_t)i);
         n00b_list_push(*live->pending_positions, pos);
+    }
+
+    auto pin_r = rocs_query_refresh_store_pin_locked(view, live);
+    if (n00b_result_is_err(pin_r)) {
+        return n00b_result_err(uint64_t, n00b_result_get_err(pin_r));
     }
 
     live->stats.scans++;

@@ -798,6 +798,89 @@ test_record_stream_blocks_only_snapshot_shards(void)
 }
 
 static void
+test_retention_prunes_unpinned_shards_around_stream_pin(void)
+{
+    n00b_store_schema_t *schema = new_schema();
+    n00b_store_t        *store  = open_store(schema);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"retention pinned first")))));
+    auto first_r = n00b_store_seal_hot_shard(store, .seal_ts = 100);
+    CHECK(n00b_result_is_ok(first_r));
+    n00b_store_catalog_entry_t *first = n00b_result_get(first_r);
+
+    auto stream_r = n00b_store_record_stream_open(store, nullptr);
+    CHECK(n00b_result_is_ok(stream_r));
+    n00b_store_record_stream_t *stream = n00b_result_get(stream_r);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"retention unpinned second")))));
+    auto second_r = n00b_store_seal_hot_shard(store, .seal_ts = 200);
+    CHECK(n00b_result_is_ok(second_r));
+    n00b_store_catalog_entry_t *second = n00b_result_get(second_r);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"retention survivor third")))));
+    auto third_r = n00b_store_seal_hot_shard(store, .seal_ts = 5000);
+    CHECK(n00b_result_is_ok(third_r));
+    n00b_store_catalog_entry_t *third = n00b_result_get(third_r);
+
+    auto policy_r = n00b_store_shard_retention_policy_new(
+        .drop_before_seal_ts = 1000,
+        .drop_reason         = r"test");
+    CHECK(n00b_result_is_ok(policy_r));
+
+    auto retention_r = n00b_store_apply_shard_retention(
+        store,
+        n00b_result_get(policy_r));
+    CHECK(n00b_result_is_err(retention_r));
+    CHECK(n00b_result_get_err(retention_r) == N00B_STORE_ERR_PINNED);
+
+    auto first_find_r = n00b_store_catalog_find_shard(store,
+                                                      entry_shard_id(first));
+    CHECK(n00b_result_is_ok(first_find_r));
+    CHECK(n00b_option_is_set(n00b_result_get(first_find_r)));
+
+    auto second_find_r = n00b_store_catalog_find_shard(store,
+                                                       entry_shard_id(second));
+    CHECK(n00b_result_is_ok(second_find_r));
+    CHECK(!n00b_option_is_set(n00b_result_get(second_find_r)));
+
+    auto third_find_r = n00b_store_catalog_find_shard(store,
+                                                      entry_shard_id(third));
+    CHECK(n00b_result_is_ok(third_find_r));
+    CHECK(n00b_option_is_set(n00b_result_get(third_find_r)));
+
+    auto close_stream_r = n00b_store_record_stream_close(stream);
+    CHECK(n00b_result_is_ok(close_stream_r));
+
+    retention_r = n00b_store_apply_shard_retention(
+        store,
+        n00b_result_get(policy_r));
+    CHECK(n00b_result_is_ok(retention_r));
+    CHECK(n00b_result_get(retention_r) == 1);
+
+    first_find_r = n00b_store_catalog_find_shard(store, entry_shard_id(first));
+    CHECK(n00b_result_is_ok(first_find_r));
+    CHECK(!n00b_option_is_set(n00b_result_get(first_find_r)));
+
+    third_find_r = n00b_store_catalog_find_shard(store, entry_shard_id(third));
+    CHECK(n00b_result_is_ok(third_find_r));
+    CHECK(n00b_option_is_set(n00b_result_get(third_find_r)));
+
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+static void
 test_partition_constructors_and_routes(void)
 {
     auto none_r = n00b_store_partition_policy_new_none();
@@ -897,6 +980,7 @@ main(int argc, char **argv)
     test_resident_pin_blocks_only_target_shard_drop();
     test_hot_stream_snapshot_holds_retired_allocator();
     test_record_stream_blocks_only_snapshot_shards();
+    test_retention_prunes_unpinned_shards_around_stream_pin();
     test_partition_constructors_and_routes();
     test_policy_constructors();
 
