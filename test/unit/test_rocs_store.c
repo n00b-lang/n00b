@@ -559,6 +559,68 @@ test_sealed_hot_allocator_reclaimed_with_active_pin(void)
 }
 
 static void
+test_residency_trim_unloads_unpinned_with_store_pin(void)
+{
+    n00b_store_schema_t *schema = new_schema();
+    n00b_store_t        *store  = open_store(schema);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"resident one")))));
+    auto seal1_r = n00b_store_seal_hot_shard(store, .seal_ts = 507);
+    CHECK(n00b_result_is_ok(seal1_r));
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"resident two")))));
+    auto seal2_r = n00b_store_seal_hot_shard(store, .seal_ts = 508);
+    CHECK(n00b_result_is_ok(seal2_r));
+
+    auto resident1_r =
+        n00b_store_resident_shard_acquire(store, n00b_result_get(seal1_r));
+    CHECK(n00b_result_is_ok(resident1_r));
+    auto map1_r = n00b_store_resident_shard_map(n00b_result_get(resident1_r));
+    CHECK(n00b_result_is_ok(map1_r));
+    CHECK(n00b_result_is_ok(
+        n00b_store_resident_shard_release(n00b_result_get(resident1_r))));
+
+    auto resident2_r =
+        n00b_store_resident_shard_acquire(store, n00b_result_get(seal2_r));
+    CHECK(n00b_result_is_ok(resident2_r));
+    auto map2_r = n00b_store_resident_shard_map(n00b_result_get(resident2_r));
+    CHECK(n00b_result_is_ok(map2_r));
+    CHECK(n00b_result_is_ok(
+        n00b_store_resident_shard_release(n00b_result_get(resident2_r))));
+
+    auto resident_count_r = n00b_store_get_resident_shard_count(store);
+    CHECK(n00b_result_is_ok(resident_count_r));
+    CHECK(n00b_result_get(resident_count_r) == 2);
+
+    auto pin_r = n00b_store_pin_acquire(store);
+    CHECK(n00b_result_is_ok(pin_r));
+
+    auto trim_r = n00b_store_residency_trim(store,
+                                            .target_resident_bytes = 1);
+    CHECK(n00b_result_is_ok(trim_r));
+    CHECK(n00b_result_get(trim_r) != 0);
+
+    resident_count_r = n00b_store_get_resident_shard_count(store);
+    CHECK(n00b_result_is_ok(resident_count_r));
+    CHECK(n00b_result_get(resident_count_r) == 0);
+
+    auto pins_r = n00b_store_get_active_pins(store);
+    CHECK(n00b_result_is_ok(pins_r));
+    CHECK(n00b_result_get(pins_r) == 1);
+
+    CHECK(n00b_result_is_ok(n00b_store_pin_release(n00b_result_get(pin_r))));
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+static void
 test_hot_stream_snapshot_holds_retired_allocator(void)
 {
     n00b_store_schema_t *schema = new_schema();
@@ -700,6 +762,7 @@ main(int argc, char **argv)
     test_dotted_field_indexing_and_exact_precedence();
     test_close_with_active_pin();
     test_sealed_hot_allocator_reclaimed_with_active_pin();
+    test_residency_trim_unloads_unpinned_with_store_pin();
     test_hot_stream_snapshot_holds_retired_allocator();
     test_partition_constructors_and_routes();
     test_policy_constructors();

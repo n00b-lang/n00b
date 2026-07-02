@@ -2843,10 +2843,7 @@ rocs_store_resident_unload_entry(n00b_store_t              *store,
     if (entry->resident_map == nullptr) {
         return n00b_result_ok(bool, false);
     }
-    // Store pins protect query snapshots before the cursor has acquired a
-    // per-shard resident pin. Dropping any sealed shard while active_pins is
-    // nonzero can invalidate a cold boundary captured by an active view.
-    if (store->active_pins != 0) {
+    if (entry->resident_pins != 0) {
         return n00b_result_err(bool, N00B_STORE_ERR_PINNED);
     }
 
