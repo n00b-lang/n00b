@@ -140,6 +140,35 @@ make_record(int64_t i)
     return record;
 }
 
+static uint64_t
+elapsed_ns_since(int64_t start)
+{
+    int64_t end = n00b_ns_timestamp();
+    CHECK(end >= start);
+    return (uint64_t)(end - start);
+}
+
+static void
+check_health_status_stats_fast(n00b_store_t *store, uint64_t max_ns)
+{
+    int64_t start = n00b_ns_timestamp();
+    CHECK(start >= 0);
+
+    // Mirror the ROCS calls made by the gateway health/status path. A
+    // non-service store may reject service-ingest stats, but it must do so
+    // promptly and without waiting for async seal workers.
+    auto ingest_r = n00b_store_service_ingest_stats(store);
+    CHECK(n00b_result_is_ok(ingest_r)
+          || n00b_result_get_err(ingest_r) == N00B_STORE_ERR_STATE);
+
+    CHECK(n00b_result_is_ok(n00b_store_oldest_available_pos(store)));
+    CHECK(n00b_result_is_ok(n00b_store_oldest_available_expires_at_ns(store)));
+    CHECK(n00b_result_is_ok(n00b_store_residency_stats(store)));
+    CHECK(n00b_result_is_ok(n00b_store_memory_stats(store)));
+
+    CHECK(elapsed_ns_since(start) < max_ns);
+}
+
 // Ingest n single records (auto-sealing every 50) into a store opened with the
 // given keep_standby setting, flush, and report sealed counts.
 static void
@@ -374,6 +403,15 @@ test_async_seal_backlog_stats(void)
         base_nanosleep_ns(1ULL * N00B_NS_PER_MS);
     }
     CHECK(saw_backlog);
+
+    // T048-19: health/status may take short catalog/residency read locks, but
+    // must not wait on seal IO. The VFS hook keeps the seal worker asleep for
+    // 200ms per shard write; status snapshots should stay comfortably below
+    // that while seal work is active.
+    for (uint32_t i = 0; i < 5; i++) {
+        check_health_status_stats_fast(store, 100ULL * N00B_NS_PER_MS);
+        base_nanosleep_ns(1ULL * N00B_NS_PER_MS);
+    }
 
     slow_shards.enabled = false;
     CHECK(n00b_result_is_ok(n00b_store_flush(store)));
