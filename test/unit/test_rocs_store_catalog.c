@@ -108,6 +108,22 @@ seal_one(n00b_store_t *store, uint64_t seal_ts)
     return n00b_result_get(seal_r);
 }
 
+static n00b_json_node_t *
+record_with_id(uint64_t id)
+{
+    n00b_json_node_t *record = n00b_json_object_new();
+    n00b_json_object_put(record, "id", n00b_json_int_new((int64_t)id));
+    return record;
+}
+
+static n00b_store_catalog_entry_t *
+seal_record(n00b_store_t *store, uint64_t id, uint64_t seal_ts)
+{
+    auto ingest_r = n00b_store_ingest(store, record_with_id(id));
+    CHECK(n00b_result_is_ok(ingest_r));
+    return seal_one(store, seal_ts);
+}
+
 static void
 write_vfs_string(n00b_vfs_t *vfs, n00b_string_t *path, n00b_string_t *data)
 {
@@ -385,6 +401,66 @@ test_corrupt_shard_length_error(void)
 }
 
 static void
+test_corrupt_shard_does_not_poison_catalog_ops(void)
+{
+    n00b_vfs_t   *vfs   = new_memory_vfs(nullptr);
+    n00b_store_t *store = open_store(vfs);
+
+    n00b_store_catalog_entry_t *bad  = seal_record(store, 1, 100);
+    n00b_store_catalog_entry_t *good = seal_record(store, 2, 200);
+
+    auto bad_path_r = n00b_store_catalog_entry_get_object_path(bad);
+    CHECK(n00b_result_is_ok(bad_path_r));
+    write_vfs_string(vfs, n00b_result_get(bad_path_r), r"bad");
+
+    auto bad_verify_r = n00b_store_catalog_entry_verify_object(store, bad);
+    CHECK(n00b_result_is_err(bad_verify_r));
+    CHECK(n00b_result_get_err(bad_verify_r) == N00B_STORE_ERR_CORRUPT);
+    CHECK(n00b_result_is_ok(
+        n00b_store_catalog_entry_verify_object(store, good)));
+
+    auto count_r = n00b_store_catalog_visible_entry_count(store);
+    CHECK(n00b_result_is_ok(count_r));
+    CHECK(n00b_result_get(count_r) == 2);
+
+    auto backlog_r = n00b_store_catalog_backlog(store, nullptr);
+    CHECK(n00b_result_is_ok(backlog_r));
+    n00b_store_backlog_t backlog = n00b_result_get(backlog_r);
+    CHECK(backlog.shards_remaining == 2);
+    CHECK(backlog.records_remaining == 2);
+
+    auto oldest_r = n00b_store_oldest_available_pos(store);
+    CHECK(n00b_result_is_ok(oldest_r));
+    CHECK(n00b_option_is_set(n00b_result_get(oldest_r)));
+    CHECK(n00b_option_get(n00b_result_get(oldest_r)).shard_id == 1);
+
+    auto expires_r = n00b_store_oldest_available_expires_at_ns(store);
+    CHECK(n00b_result_is_ok(expires_r));
+    CHECK(n00b_option_is_set(n00b_result_get(expires_r)));
+
+    auto good_find_r = n00b_store_catalog_find_shard(store, 2);
+    CHECK(n00b_result_is_ok(good_find_r));
+    CHECK(n00b_option_is_set(n00b_result_get(good_find_r)));
+
+    auto drop_r = n00b_store_drop_sealed_shard(store,
+                                               1,
+                                               .drop_reason = r"repair");
+    CHECK(n00b_result_is_ok(drop_r));
+    CHECK(n00b_result_get(drop_r));
+
+    auto bad_find_r = n00b_store_catalog_find_shard(store, 1);
+    CHECK(n00b_result_is_ok(bad_find_r));
+    CHECK(!n00b_option_is_set(n00b_result_get(bad_find_r)));
+
+    good_find_r = n00b_store_catalog_find_shard(store, 2);
+    CHECK(n00b_result_is_ok(good_find_r));
+    CHECK(n00b_option_is_set(n00b_result_get(good_find_r)));
+    CHECK(n00b_result_is_ok(n00b_store_catalog_entry_verify_object(
+        store,
+        n00b_option_get(n00b_result_get(good_find_r)))));
+}
+
+static void
 test_local_catalog_reopen_and_sync(void)
 {
     n00b_vfs_t   *vfs   = new_local_vfs();
@@ -431,6 +507,7 @@ main(int argc, char **argv)
     test_existing_shard_object_blocks_seal();
     test_catalog_failure_rolls_back_visibility();
     test_corrupt_shard_length_error();
+    test_corrupt_shard_does_not_poison_catalog_ops();
     test_local_catalog_reopen_and_sync();
 
     n00b_shutdown();
