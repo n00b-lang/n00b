@@ -9069,7 +9069,8 @@ n00b_cg_emit_func_from_tree(n00b_cg_session_t *s,
                             n00b_parse_tree_t *tree,
                             const char        *func_name) _kargs
 {
-    n00b_cg_type_tag_t ret;
+    n00b_cg_type_tag_t  ret;
+    n00b_cg_type_tag_t *result_type;
 }
 {
     if (!s || !tree || !func_name) {
@@ -9262,6 +9263,7 @@ n00b_cg_session_eval_tree(n00b_cg_session_t *s, n00b_parse_tree_t *tree) _kargs
     n00b_annot_result_t *annot;
     const char          *func_name;
     bool                *ok;
+    n00b_cg_type_tag_t  *out_type;
 }
 {
     if (kargs->ok) {
