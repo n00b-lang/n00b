@@ -456,6 +456,66 @@ test_close_drains_in_flight_async_seals(void)
     CHECK(n00b_result_is_ok(n00b_store_close(reopened)));
 }
 
+static void
+test_close_failed_async_seal_remains_retryable(void)
+{
+    n00b_store_schema_t *schema = make_schema();
+
+    auto seal_r = n00b_store_seal_policy_new(.max_records = 1);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    n00b_vfs_mount_t *mount = nullptr;
+    n00b_vfs_t       *vfs   = new_memory_vfs(.mount_out = &mount);
+    auto store_r = n00b_store_open_vfs(vfs,
+                                       r"/rocs",
+                                       schema,
+                                       .seal_policy      = n00b_result_get(seal_r),
+                                       .keep_standby     = true,
+                                       .seal_worker_count = 1);
+    CHECK(n00b_result_is_ok(store_r));
+    n00b_store_t *store = n00b_result_get(store_r);
+
+    fail_shard_write_t fail_shards = {
+        .enabled = true,
+    };
+    CHECK(n00b_result_is_ok(n00b_vfs_hook_add(mount,
+                                              N00B_VFS_HOOK_PRE_OPEN,
+                                              deny_shard_write_open,
+                                              &fail_shards,
+                                              0)));
+
+    CHECK(n00b_result_is_ok(n00b_store_ingest(store, make_record(300))));
+    CHECK(n00b_result_is_ok(n00b_store_ingest(store, make_record(301))));
+
+    auto failed_close_r = n00b_store_close(store);
+    CHECK(n00b_result_is_err(failed_close_r));
+    CHECK(n00b_result_get_err(failed_close_r) == N00B_STORE_ERR_VFS);
+
+    auto failed_stats_r = n00b_store_memory_stats(store);
+    CHECK(n00b_result_is_ok(failed_stats_r));
+    n00b_store_memory_stats_t failed_stats = n00b_result_get(failed_stats_r);
+    CHECK(failed_stats.failed_seal_jobs == 2);
+    CHECK(failed_stats.failed_seal_records == 2);
+    CHECK(failed_stats.sealed_records == 0);
+
+    fail_shards.enabled = false;
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+
+    auto reopen_r = n00b_store_open_vfs(vfs, r"/rocs", make_schema());
+    CHECK(n00b_result_is_ok(reopen_r));
+    n00b_store_t *reopened = n00b_result_get(reopen_r);
+
+    auto stats_r = n00b_store_memory_stats(reopened);
+    CHECK(n00b_result_is_ok(stats_r));
+    n00b_store_memory_stats_t stats = n00b_result_get(stats_r);
+    CHECK(stats.sealed_records == 2);
+    CHECK(stats.hot_record_count == 0);
+    CHECK(stats.failed_seal_jobs == 0);
+    CHECK(stats.failed_seal_records == 0);
+
+    CHECK(n00b_result_is_ok(n00b_store_close(reopened)));
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -483,6 +543,7 @@ main(int argc, char *argv[])
     test_async_catalog_failure_retains_records();
     test_async_seal_backlog_stats();
     test_close_drains_in_flight_async_seals();
+    test_close_failed_async_seal_remains_retryable();
 
     n00b_eprintf("test_rocs_async_seal OK: N=[|#|] async_shards=[|#|] "
                  "inline_shards=[|#|]\n",
