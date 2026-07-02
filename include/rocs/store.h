@@ -478,6 +478,9 @@ typedef struct {
     uint64_t hot_worker_range_commits;
     uint64_t hot_worker_range_tombstones;
     uint64_t seal_active_writer_waits;
+    uint64_t seal_worker_count;
+    uint64_t seal_queue_pending;
+    uint64_t seal_queue_in_flight;
     uint64_t hot_byte_estimate;
     uint64_t hot_record_text_bytes;
     uint64_t hot_raw_bytes;

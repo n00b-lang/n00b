@@ -17,7 +17,9 @@
 #include <stdint.h>
 
 #include "n00b.h"
+#include "core/platform.h"
 #include "core/runtime.h"
+#include "core/time.h"
 #include "text/strings/format.h"
 #include "text/strings/string_ops.h"
 #include "conduit/print.h"
@@ -63,12 +65,17 @@ typedef struct {
     bool enabled;
 } fail_catalog_write_t;
 
+typedef struct {
+    bool     enabled;
+    uint64_t sleep_ns;
+} slow_shard_write_t;
+
 static void
 deny_shard_write_open(n00b_vfs_hook_ctx_t *ctx, void *cookie)
 {
     fail_shard_write_t *state = cookie;
     if (state == nullptr || !state->enabled || ctx == nullptr
-        || (ctx->flags & N00B_VFS_OPEN_WRITE) == 0
+        || ctx->path == nullptr || (ctx->flags & N00B_VFS_OPEN_WRITE) == 0
         || !n00b_unicode_str_contains(ctx->path,
                                       r"/shards/",
                                       .normalize = false)) {
@@ -77,6 +84,22 @@ deny_shard_write_open(n00b_vfs_hook_ctx_t *ctx, void *cookie)
 
     ctx->denied   = true;
     ctx->deny_err = N00B_VFS_ERR_IO;
+}
+
+static void
+slow_shard_write_open(n00b_vfs_hook_ctx_t *ctx, void *cookie)
+{
+    slow_shard_write_t *state = cookie;
+    if (state == nullptr || !state->enabled || ctx == nullptr
+        || ctx->path == nullptr
+        || (ctx->flags & N00B_VFS_OPEN_WRITE) == 0
+        || !n00b_unicode_str_contains(ctx->path,
+                                      r"/shards/",
+                                      .normalize = false)) {
+        return;
+    }
+
+    base_nanosleep_ns(state->sleep_ns);
 }
 
 static void
@@ -304,6 +327,69 @@ test_async_catalog_failure_retains_records(void)
     CHECK(n00b_result_is_ok(n00b_store_close(store)));
 }
 
+static void
+test_async_seal_backlog_stats(void)
+{
+    n00b_store_schema_t *schema = make_schema();
+
+    auto seal_r = n00b_store_seal_policy_new(.max_records = 1);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    n00b_vfs_mount_t *mount = nullptr;
+    n00b_vfs_t       *vfs   = new_memory_vfs(.mount_out = &mount);
+    auto store_r = n00b_store_open_vfs(vfs,
+                                       r"/rocs",
+                                       schema,
+                                       .seal_policy      = n00b_result_get(seal_r),
+                                       .keep_standby     = true,
+                                       .seal_worker_count = 1);
+    CHECK(n00b_result_is_ok(store_r));
+    n00b_store_t *store = n00b_result_get(store_r);
+
+    slow_shard_write_t slow_shards = {
+        .enabled  = true,
+        .sleep_ns = 200ULL * N00B_NS_PER_MS,
+    };
+    CHECK(n00b_result_is_ok(n00b_vfs_hook_add(mount,
+                                              N00B_VFS_HOOK_PRE_OPEN,
+                                              slow_shard_write_open,
+                                              &slow_shards,
+                                              0)));
+
+    for (int64_t i = 0; i < 8; i++) {
+        CHECK(n00b_result_is_ok(n00b_store_ingest(store, make_record(100 + i))));
+    }
+
+    bool saw_backlog = false;
+    for (uint32_t i = 0; i < 100; i++) {
+        auto stats_r = n00b_store_memory_stats(store);
+        CHECK(n00b_result_is_ok(stats_r));
+        n00b_store_memory_stats_t stats = n00b_result_get(stats_r);
+        CHECK(stats.seal_worker_count == 1);
+        if (stats.seal_queue_in_flight > 0
+            && stats.seal_queue_pending > 0) {
+            saw_backlog = true;
+            break;
+        }
+        base_nanosleep_ns(1ULL * N00B_NS_PER_MS);
+    }
+    CHECK(saw_backlog);
+
+    slow_shards.enabled = false;
+    CHECK(n00b_result_is_ok(n00b_store_flush(store)));
+
+    auto stats_r = n00b_store_memory_stats(store);
+    CHECK(n00b_result_is_ok(stats_r));
+    n00b_store_memory_stats_t stats = n00b_result_get(stats_r);
+    CHECK(stats.seal_queue_pending == 0);
+    CHECK(stats.seal_queue_in_flight == 0);
+    CHECK(stats.failed_seal_jobs == 0);
+    CHECK(stats.failed_seal_records == 0);
+    CHECK(stats.sealed_records == 8);
+
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -329,6 +415,7 @@ main(int argc, char *argv[])
 
     test_async_seal_failure_retains_records();
     test_async_catalog_failure_retains_records();
+    test_async_seal_backlog_stats();
 
     n00b_eprintf("test_rocs_async_seal OK: N=[|#|] async_shards=[|#|] "
                  "inline_shards=[|#|]\n",

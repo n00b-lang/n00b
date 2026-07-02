@@ -4405,6 +4405,31 @@ rocs_store_seal_queue_drain(rocs_store_seal_queue_t *queue)
 }
 
 static void
+rocs_store_seal_queue_snapshot(rocs_store_seal_queue_t *queue,
+                               uint64_t                *pending,
+                               uint64_t                *in_flight)
+{
+    if (pending != nullptr) {
+        *pending = 0;
+    }
+    if (in_flight != nullptr) {
+        *in_flight = 0;
+    }
+    if (queue == nullptr) {
+        return;
+    }
+
+    n00b_condition_lock(&queue->cv);
+    if (pending != nullptr) {
+        *pending = (uint64_t)n00b_list_len(*queue->jobs);
+    }
+    if (in_flight != nullptr) {
+        *in_flight = queue->in_flight;
+    }
+    n00b_condition_unlock(&queue->cv);
+}
+
+static void
 rocs_store_seal_queue_shutdown(rocs_store_seal_queue_t *queue)
 {
     if (queue == nullptr) {
@@ -12008,6 +12033,10 @@ n00b_store_memory_stats(n00b_store_t *store)
         n00b_atomic_load(&store->hot_worker_range_tombstones);
     stats.seal_active_writer_waits =
         n00b_atomic_load(&store->seal_active_writer_waits);
+    stats.seal_worker_count = (uint64_t)store->seal_worker_count;
+    rocs_store_seal_queue_snapshot(store->seal_queue,
+                                   &stats.seal_queue_pending,
+                                   &stats.seal_queue_in_flight);
     rocs_store_hot_allocator_memory_stats(store->hot_allocator, &stats);
     stats.hot_destroy_count = store->hot_destroy_count;
     stats.hot_destroy_records = store->hot_destroy_records;
