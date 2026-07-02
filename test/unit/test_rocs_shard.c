@@ -42,7 +42,7 @@ check_empty_hot_shard(n00b_store_shard_t *shard,
     CHECK(shard->records->lock == nullptr);
     CHECK(n00b_list_len(*shard->records) == 0);
 
-    CHECK(shard->columns->lock == 0);
+    CHECK(shard->columns->lock != 0);
     CHECK(atomic_load(&shard->columns->length) == 0);
 
     if (expect_raw) {
@@ -57,6 +57,16 @@ check_empty_hot_shard(n00b_store_shard_t *shard,
         CHECK(shard->retain_raw == nullptr);
         CHECK(shard->raw_bytes == nullptr);
     }
+}
+
+static n00b_allocator_t *
+test_hot_shard_allocator(n00b_pool_t *pool, const char *name)
+{
+    return n00b_pool_init(pool,
+                          .hidden            = true,
+                          .external_metadata = false,
+                          .inline_headers    = true,
+                          .name              = name);
 }
 
 static n00b_json_node_t *
@@ -228,7 +238,8 @@ test_add_dense_postings(n00b_store_shard_t *shard, n00b_allocator_t *allocator)
                    .value_scan_kind = N00B_GC_SCAN_KIND_ALL);
 
     n00b_store_posting_list_t *postings = test_dense_postings(allocator);
-    CHECK(n00b_dict_add(column, (n00b_uint128_t)0x1234, postings));
+    n00b_uint128_t             key      = (n00b_uint128_t)0x1234;
+    CHECK(n00b_dict_add(column, key, postings));
 
     n00b_string_t *field =
         n00b_string_from_cstr("dense_test", .allocator = allocator);
@@ -615,7 +626,7 @@ test_seal_populated_shard_without_raw(void)
     uint64_t shard_id = UINT64_C(0x5100f00d99aabbcc);
     n00b_pool_t pool = {};
     n00b_allocator_t *allocator =
-        n00b_pool_init(&pool, .name = "test_rocs_shard_seal_scrub");
+        test_hot_shard_allocator(&pool, "test_rocs_shard_seal_scrub");
     auto r = n00b_store_shard_new(.shard_id  = shard_id,
                                   .open_ts   = 27,
                                   .allocator = allocator);
@@ -670,7 +681,7 @@ test_seal_populated_retain_raw_shard(void)
     uint64_t shard_id = UINT64_C(0x5100f00d55667788);
     n00b_pool_t pool = {};
     n00b_allocator_t *allocator =
-        n00b_pool_init(&pool, .name = "test_rocs_shard_raw_seal_scrub");
+        test_hot_shard_allocator(&pool, "test_rocs_shard_raw_seal_scrub");
     auto r = n00b_store_shard_new(.shard_id   = shard_id,
                                   .retain_raw = true,
                                   .open_ts    = 33,

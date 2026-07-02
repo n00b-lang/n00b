@@ -643,6 +643,55 @@ test_residency_trim_unloads_unpinned_with_store_pin(void)
 }
 
 static void
+test_resident_pin_blocks_only_target_shard_drop(void)
+{
+    n00b_store_schema_t *schema = new_schema();
+    n00b_store_t        *store  = open_store(schema);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"resident pinned first")))));
+    auto first_r = n00b_store_seal_hot_shard(store, .seal_ts = 511);
+    CHECK(n00b_result_is_ok(first_r));
+    n00b_store_catalog_entry_t *first = n00b_result_get(first_r);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_ingest(store,
+                          record_with(r"message",
+                                      n00b_json_string_new_from_n00b(
+                                          r"resident pinned second")))));
+    auto second_r = n00b_store_seal_hot_shard(store, .seal_ts = 512);
+    CHECK(n00b_result_is_ok(second_r));
+    n00b_store_catalog_entry_t *second = n00b_result_get(second_r);
+
+    auto resident_r = n00b_store_resident_shard_acquire(store, second);
+    CHECK(n00b_result_is_ok(resident_r));
+
+    auto drop_r = n00b_store_drop_sealed_shard(store,
+                                               entry_shard_id(first),
+                                               .drop_reason = r"test");
+    CHECK(n00b_result_is_ok(drop_r));
+
+    drop_r = n00b_store_drop_sealed_shard(store,
+                                          entry_shard_id(second),
+                                          .drop_reason = r"test");
+    CHECK(n00b_result_is_err(drop_r));
+    CHECK(n00b_result_get_err(drop_r) == N00B_STORE_ERR_PINNED);
+
+    CHECK(n00b_result_is_ok(
+        n00b_store_resident_shard_release(n00b_result_get(resident_r))));
+
+    drop_r = n00b_store_drop_sealed_shard(store,
+                                          entry_shard_id(second),
+                                          .drop_reason = r"test");
+    CHECK(n00b_result_is_ok(drop_r));
+
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+static void
 test_hot_stream_snapshot_holds_retired_allocator(void)
 {
     n00b_store_schema_t *schema = new_schema();
@@ -845,6 +894,7 @@ main(int argc, char **argv)
     test_close_with_active_pin();
     test_sealed_hot_allocator_reclaimed_with_active_pin();
     test_residency_trim_unloads_unpinned_with_store_pin();
+    test_resident_pin_blocks_only_target_shard_drop();
     test_hot_stream_snapshot_holds_retired_allocator();
     test_record_stream_blocks_only_snapshot_shards();
     test_partition_constructors_and_routes();
