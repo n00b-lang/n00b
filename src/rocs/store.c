@@ -4141,6 +4141,8 @@ rocs_store_seal_job_run(rocs_store_seal_job_t *job)
                                                      store->next_shard_id);
     if (n00b_result_is_err(catalog_r)) {
         (void)n00b_vfs_delete(store->vfs, job->object_path);
+        job->old_shard->state   = old_shard_state;
+        job->old_shard->seal_ts = old_shard_seal_ts;
         rocs_store_seal_job_fail_locked(store,
                                         job,
                                         n00b_result_get_err(catalog_r));

@@ -59,6 +59,10 @@ typedef struct {
     bool enabled;
 } fail_shard_write_t;
 
+typedef struct {
+    bool enabled;
+} fail_catalog_write_t;
+
 static void
 deny_shard_write_open(n00b_vfs_hook_ctx_t *ctx, void *cookie)
 {
@@ -68,6 +72,20 @@ deny_shard_write_open(n00b_vfs_hook_ctx_t *ctx, void *cookie)
         || !n00b_unicode_str_contains(ctx->path,
                                       r"/shards/",
                                       .normalize = false)) {
+        return;
+    }
+
+    ctx->denied   = true;
+    ctx->deny_err = N00B_VFS_ERR_IO;
+}
+
+static void
+deny_catalog_write_open(n00b_vfs_hook_ctx_t *ctx, void *cookie)
+{
+    fail_catalog_write_t *state = cookie;
+    if (state == nullptr || !state->enabled || ctx == nullptr
+        || ctx->path == nullptr || (ctx->flags & N00B_VFS_OPEN_WRITE) == 0
+        || !n00b_unicode_str_eq(ctx->path, r"/rocs/catalog.rocs")) {
         return;
     }
 
@@ -218,6 +236,74 @@ test_async_seal_failure_retains_records(void)
     CHECK(n00b_result_is_ok(n00b_store_close(store)));
 }
 
+static void
+test_async_catalog_failure_retains_records(void)
+{
+    n00b_store_schema_t *schema = make_schema();
+
+    auto seal_r = n00b_store_seal_policy_new(.max_records = 1);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    n00b_vfs_mount_t *mount = nullptr;
+    n00b_vfs_t       *vfs   = new_memory_vfs(.mount_out = &mount);
+    auto store_r = n00b_store_open_vfs(vfs,
+                                       r"/rocs",
+                                       schema,
+                                       .seal_policy  = n00b_result_get(seal_r),
+                                       .keep_standby = true);
+    CHECK(n00b_result_is_ok(store_r));
+    n00b_store_t *store = n00b_result_get(store_r);
+
+    fail_catalog_write_t fail_catalog = {
+        .enabled = false,
+    };
+    CHECK(n00b_result_is_ok(n00b_vfs_hook_add(mount,
+                                              N00B_VFS_HOOK_PRE_OPEN,
+                                              deny_catalog_write_open,
+                                              &fail_catalog,
+                                              0)));
+
+    fail_catalog.enabled = true;
+    CHECK(n00b_result_is_ok(n00b_store_ingest(store, make_record(10))));
+    CHECK(n00b_result_is_ok(n00b_store_ingest(store, make_record(11))));
+
+    auto failed_flush_r = n00b_store_flush(store);
+    CHECK(n00b_result_is_err(failed_flush_r));
+    CHECK(n00b_result_get_err(failed_flush_r) == N00B_STORE_ERR_VFS);
+
+    auto failed_stats_r = n00b_store_memory_stats(store);
+    CHECK(n00b_result_is_ok(failed_stats_r));
+    n00b_store_memory_stats_t failed_stats = n00b_result_get(failed_stats_r);
+    CHECK(failed_stats.failed_seal_jobs == 2);
+    CHECK(failed_stats.failed_seal_records == 2);
+    CHECK(failed_stats.sealed_records == 0);
+
+    auto failed_visible_r = n00b_store_catalog_visible_entry_count(store);
+    CHECK(n00b_result_is_ok(failed_visible_r));
+    CHECK(n00b_result_get(failed_visible_r) == 0);
+
+    auto orphan_r = n00b_vfs_stat(vfs, r"/rocs/shards/1.n00b");
+    CHECK(n00b_result_is_err(orphan_r));
+    CHECK(n00b_result_get_err(orphan_r) == N00B_VFS_ERR_NOT_FOUND);
+
+    fail_catalog.enabled = false;
+    CHECK(n00b_result_is_ok(n00b_store_flush(store)));
+
+    auto stats_r = n00b_store_memory_stats(store);
+    CHECK(n00b_result_is_ok(stats_r));
+    n00b_store_memory_stats_t stats = n00b_result_get(stats_r);
+    CHECK(stats.failed_seal_jobs == 0);
+    CHECK(stats.failed_seal_records == 0);
+    CHECK(stats.sealed_records == 2);
+    CHECK(stats.hot_record_count == 0);
+
+    auto visible_r = n00b_store_catalog_visible_entry_count(store);
+    CHECK(n00b_result_is_ok(visible_r));
+    CHECK(n00b_result_get(visible_r) == stats.sealed_shards);
+
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -242,6 +328,7 @@ main(int argc, char *argv[])
     CHECK(async_records == inline_records);
 
     test_async_seal_failure_retains_records();
+    test_async_catalog_failure_retains_records();
 
     n00b_eprintf("test_rocs_async_seal OK: N=[|#|] async_shards=[|#|] "
                  "inline_shards=[|#|]\n",
