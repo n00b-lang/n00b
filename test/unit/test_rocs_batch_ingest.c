@@ -563,6 +563,14 @@ test_batch_partition_grouping(void)
                                            .queue_capacity = 1);
     CHECK(n00b_result_is_ok(batch_r));
     CHECK(n00b_result_get(batch_r) == 3);
+
+    auto memory_r = n00b_store_memory_stats(store);
+    CHECK(n00b_result_is_ok(memory_r));
+    n00b_store_memory_stats_t memory = n00b_result_get(memory_r);
+    CHECK(memory.hot_worker_range_commits == 3);
+    CHECK(memory.hot_worker_range_tombstones == 0);
+    CHECK(memory.hot_live_index == 2);
+
     CHECK(n00b_result_is_ok(n00b_store_flush(store)));
 
     auto count_r = n00b_store_catalog_get_entry_count(store);

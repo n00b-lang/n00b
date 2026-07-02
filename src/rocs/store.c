@@ -6445,11 +6445,6 @@ rocs_store_batch_range_candidate_unlocked(n00b_store_t             *store,
         }
     }
 
-    if (store->hot_shard->record_count != 0
-        && store->hot_partition_key != nullptr
-        && !n00b_unicode_str_eq(store->hot_partition_key, route)) {
-        return false;
-    }
     return true;
 }
 
@@ -9902,37 +9897,68 @@ rocs_store_ingest_batch_common(n00b_store_t             *store,
 
     uint64_t failed_seals_before = rocs_store_failed_seal_job_count(store);
     uint64_t committed           = 0;
-    if (parallel_prepare
-        && rocs_store_batch_range_candidate_unlocked(store, jobs, count)) {
-        auto range_r = rocs_store_ingest_prepared_range_unlocked(
-            store,
-            jobs,
-            count,
-            scratch_allocator,
-            worker_pool,
-            workers,
-            prep_queue_capacity,
-            true);
-        if (n00b_result_is_err(range_r)) {
-            n00b_err_t err = n00b_result_get_err(range_r);
-            if (rocs_store_failed_seal_job_count(store)
-                != failed_seals_before) {
-                err = rocs_store_failed_seal_last_error(store);
+    for (uint64_t i = 0; i < count;) {
+        if (parallel_prepare) {
+            n00b_string_t *route = jobs[i]->route == nullptr ? r"default"
+                                                             : jobs[i]->route;
+            uint64_t run = 1;
+            while (i + run < count) {
+                n00b_string_t *next = jobs[i + run]->route == nullptr
+                                          ? r"default"
+                                          : jobs[i + run]->route;
+                if (!n00b_unicode_str_eq(route, next)) {
+                    break;
+                }
+                run++;
             }
-            n00b_data_unlock(store->commit_lock);
-            ROCS_BATCH_RETURN(n00b_result_err(uint64_t, err));
-        }
-        committed = n00b_result_get(range_r);
-        if (rocs_store_failed_seal_job_count(store) != failed_seals_before) {
-            n00b_err_t seal_err = rocs_store_failed_seal_last_error(store);
-            n00b_data_unlock(store->commit_lock);
-            ROCS_BATCH_RETURN(n00b_result_err(uint64_t, seal_err));
-        }
-        n00b_data_unlock(store->commit_lock);
-        ROCS_BATCH_RETURN(n00b_result_ok(uint64_t, committed));
-    }
 
-    for (uint64_t i = 0; i < count; i++) {
+            while (run != 0
+                   && !rocs_store_batch_range_candidate_unlocked(
+                       store,
+                       &jobs[i],
+                       run)) {
+                run--;
+            }
+
+            if (run != 0) {
+                auto range_r = rocs_store_ingest_prepared_range_unlocked(
+                    store,
+                    &jobs[i],
+                    run,
+                    scratch_allocator,
+                    worker_pool,
+                    workers,
+                    prep_queue_capacity,
+                    true);
+                if (n00b_result_is_err(range_r)) {
+                    n00b_err_t err = n00b_result_get_err(range_r);
+                    bool failed_seals_changed =
+                        rocs_store_failed_seal_job_count(store)
+                        != failed_seals_before;
+                    if (failed_seals_changed) {
+                        err = rocs_store_failed_seal_last_error(store);
+                    }
+                    n00b_data_unlock(store->commit_lock);
+                    if (committed != 0 && !failed_seals_changed) {
+                        ROCS_BATCH_RETURN(n00b_result_ok(uint64_t,
+                                                         committed));
+                    }
+                    ROCS_BATCH_RETURN(n00b_result_err(uint64_t, err));
+                }
+                uint64_t range_committed = n00b_result_get(range_r);
+                committed += range_committed;
+                i += range_committed;
+                if (rocs_store_failed_seal_job_count(store)
+                    != failed_seals_before) {
+                    n00b_err_t seal_err = rocs_store_failed_seal_last_error(
+                        store);
+                    n00b_data_unlock(store->commit_lock);
+                    ROCS_BATCH_RETURN(n00b_result_err(uint64_t, seal_err));
+                }
+                continue;
+            }
+        }
+
         auto ingest_r = rocs_store_ingest_prepared_unlocked(store,
                                                             jobs[i]->record,
                                                             jobs[i]->raw,
@@ -9964,6 +9990,7 @@ rocs_store_ingest_batch_common(n00b_store_t             *store,
             ROCS_BATCH_RETURN(n00b_result_err(uint64_t, err));
         }
         committed++;
+        i++;
     }
 
     // A size-triggered auto-seal can retain a failed shard without returning an
