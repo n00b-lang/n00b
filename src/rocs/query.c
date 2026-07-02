@@ -3129,15 +3129,23 @@ static bool
 rocs_query_entry_in_requested_window(n00b_query_view_t          *view,
                                      n00b_query_boundary_entry_t entry)
 {
-    if (view->has_resume
-        && rocs_query_entry_compare_boundary(entry, view->resume) < 0) {
+    if (view == nullptr || entry.record_count == 0) {
         return false;
+    }
+
+    n00b_store_pos_t lo_pos = rocs_query_entry_first_pos(entry);
+    n00b_store_pos_t hi_pos = rocs_query_entry_last_pos(entry);
+
+    if (view->has_resume
+        && n00b_store_pos_compare(view->resume, lo_pos) > 0) {
+        lo_pos = view->resume;
     }
     if (view->has_as_of
-        && rocs_query_entry_compare_boundary(entry, view->as_of) > 0) {
-        return false;
+        && n00b_store_pos_compare(view->as_of, hi_pos) < 0) {
+        hi_pos = view->as_of;
     }
-    return true;
+
+    return n00b_store_pos_compare(lo_pos, hi_pos) <= 0;
 }
 
 static void
@@ -3780,6 +3788,50 @@ rocs_query_position_in_window(n00b_query_view_t *view, n00b_store_pos_t pos)
         return false;
     }
     return true;
+}
+
+static bool
+rocs_query_boundary_has_window_record(n00b_query_view_t          *view,
+                                      n00b_query_boundary_entry_t boundary)
+{
+    if (view == nullptr || boundary.record_count == 0) {
+        return false;
+    }
+
+    uint64_t lo = 0;
+    uint64_t hi = boundary.record_count - 1;
+
+    if (view->has_resume && view->resume.generation == boundary.generation
+        && view->resume.shard_id == boundary.shard_id) {
+        if (view->resume.ordinal >= hi) {
+            return false;
+        }
+        if (view->resume.ordinal >= lo) {
+            lo = view->resume.ordinal + 1;
+        }
+    }
+    if (view->has_as_of && view->as_of.generation == boundary.generation
+        && view->as_of.shard_id == boundary.shard_id) {
+        if (view->as_of.ordinal < lo) {
+            return false;
+        }
+        if (view->as_of.ordinal < hi) {
+            hi = view->as_of.ordinal;
+        }
+    }
+
+    n00b_store_pos_t lo_pos = {
+        .generation = boundary.generation,
+        .shard_id   = boundary.shard_id,
+        .ordinal    = lo,
+    };
+    n00b_store_pos_t hi_pos = {
+        .generation = boundary.generation,
+        .shard_id   = boundary.shard_id,
+        .ordinal    = hi,
+    };
+    return rocs_query_position_in_window(view, lo_pos)
+        && rocs_query_position_in_window(view, hi_pos);
 }
 
 static bool
@@ -5013,6 +5065,10 @@ rocs_query_cursor_fill_next_snapshot_boundary(n00b_query_cursor_t *cursor)
         n00b_query_boundary_entry_t boundary =
             n00b_list_get(*cursor->view->boundary, (size_t)boundary_index);
         cursor->snapshot_boundary_index++;
+
+        if (!rocs_query_boundary_has_window_record(cursor->view, boundary)) {
+            continue;
+        }
 
         uint64_t before = (uint64_t)n00b_list_len(*cursor->hits);
         n00b_plan_ordset_t *ordinals = nullptr;
@@ -7414,6 +7470,10 @@ rocs_query_cursor_next_snapshot_lazy(n00b_query_cursor_t *cursor)
                 n00b_list_get(*cursor->view->boundary, (size_t)bidx);
             cursor->snapshot_boundary_index++;
 
+            if (!rocs_query_boundary_has_window_record(cursor->view, boundary)) {
+                continue;
+            }
+
             auto planned_r = rocs_query_cursor_plan_boundary(cursor, boundary);
             if (n00b_result_is_err(planned_r)) {
                 if (rocs_query_debug_enabled()) {
@@ -8117,13 +8177,8 @@ n00b_query_view(n00b_store_t  *store,
 	uint64_t           min_partition_bucket = 0;
 	n00b_allocator_t  *allocator = nullptr;
 }
-    requires {
-        store != nullptr;
-        filter != nullptr;
-        mode == N00B_QUERY_MODE_SNAPSHOT || mode == N00B_QUERY_MODE_LIVE;
-        mode == N00B_QUERY_MODE_SNAPSHOT || as_of == nullptr;
-        out == nullptr || mode == N00B_QUERY_MODE_LIVE;
-    }
+    // Null and invalid option combinations are public typed-error inputs for
+    // this API, so the body guards them instead of trapping in `requires`.
     ensures {
         n00b_result_is_err(result)
             || ROCS_QUERY_VIEW_CONTRACT_OPEN(n00b_result_value(result));
@@ -8219,11 +8274,6 @@ n00b_query_view(n00b_store_t  *store,
         view->as_of     = *as_of;
     }
 
-    if (view->has_resume && view->has_as_of
-        && n00b_store_pos_compare(view->resume, view->as_of) > 0) {
-        return n00b_result_ok(n00b_query_view_t *, view);
-    }
-
     auto capture_r = rocs_query_capture_boundary(view);
     if (n00b_result_is_err(capture_r)) {
         rocs_query_release_pin_for_failure(pin);
@@ -8271,9 +8321,7 @@ n00b_query_view(n00b_store_t  *store,
 
 n00b_result_t(bool)
 n00b_query_view_close(n00b_query_view_t *view)
-    requires {
-        view != nullptr;
-    }
+    // Null is a documented typed-error input, guarded in the body.
     ensures {
         n00b_result_is_err(result) || view->closed;
     }
