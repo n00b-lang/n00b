@@ -1786,9 +1786,13 @@ n00b_store_open_service(n00b_vfs_t                   *vfs,
 {
     if (profile == nullptr
         || !N00B_STORE_SERVICE_PROFILE_CONTRACT_VALID(profile)
-        || profile->seal_worker_count > 1) {
+        || profile->seal_worker_count > (uint64_t)INT32_MAX) {
         return n00b_result_err(n00b_store_t *, N00B_STORE_ERR_CONFIG);
     }
+
+    uint64_t seal_workers = profile->seal_worker_count == 0
+                                ? 1
+                                : profile->seal_worker_count;
 
     auto conduit_r = n00b_conduit_new();
     if (n00b_result_is_err(conduit_r)) {
@@ -1817,7 +1821,8 @@ n00b_store_open_service(n00b_vfs_t                   *vfs,
         .lifecycle_topic  = lifecycle_topic,
         .display_name     = display_name,
         .recovery_journal = recovery_journal,
-        .keep_standby     = false,
+        .keep_standby     = true,
+        .seal_worker_count = seal_workers,
         .retention_window_ns = retention_window_ns,
         .retention_max_sealed_shards = retention_max_sealed_shards,
         .retention_max_total_bytes = retention_max_total_bytes,
@@ -9039,6 +9044,7 @@ n00b_store_open_vfs(n00b_vfs_t          *vfs,
     n00b_string_t                 *display_name     = nullptr;
     bool                           recovery_journal = false;
     bool                           keep_standby     = false;
+    uint64_t                       seal_worker_count = 1;
     uint64_t                       retention_window_ns =
                                        N00B_STORE_DEFAULT_RETENTION_NS;
     uint64_t                       retention_max_sealed_shards = 0;
@@ -9050,6 +9056,9 @@ n00b_store_open_vfs(n00b_vfs_t          *vfs,
     if (vfs == nullptr || schema == nullptr || schema->fields == nullptr
         || !rocs_store_root_valid(root)) {
         return n00b_result_err(n00b_store_t *, N00B_STORE_ERR_ARG);
+    }
+    if (keep_standby && seal_worker_count > (uint64_t)INT32_MAX) {
+        return n00b_result_err(n00b_store_t *, N00B_STORE_ERR_CONFIG);
     }
 
     auto freeze_r = n00b_store_schema_freeze(schema);
@@ -9223,17 +9232,17 @@ n00b_store_open_vfs(n00b_vfs_t          *vfs,
         (void)rocs_store_journal_open(store, hot_shard_id);
     }
 
-    // Async-seal machinery (opt-in): a dedicated single-worker seal pool plus a
+    // Async-seal machinery (opt-in): a dedicated seal-worker queue plus a
     // pre-built standby shard, so the ingest worker rotates with a pure pointer
-    // swap and hands the marshal off the hot path.  Off => every seal stays
-    // inline (unchanged for all other stores).  Safe to build without
-    // commit_lock here: the store is not published yet and no seal worker has
-    // any work to run.
+    // swap and hands the marshal off the hot path. Off => every seal stays
+    // inline (unchanged for all other stores). Safe to build without commit_lock
+    // here: the store is not published yet and no seal worker has any work to
+    // run.
     if (store->keep_standby) {
-        // Capacity: how many rotations may queue before the ingest worker has to
-        // block on submit (backpressure).  One worker preserves the
-        // single-sealer ordering the catalog commit relies on.
-        store->seal_worker_count = 1;
+        uint64_t configured_seal_workers = seal_worker_count == 0
+                                               ? 1
+                                               : seal_worker_count;
+        store->seal_worker_count = (int32_t)configured_seal_workers;
         auto seal_queue_r = rocs_store_seal_queue_new(store,
                                                       store->seal_worker_count,
                                                       store->allocator);

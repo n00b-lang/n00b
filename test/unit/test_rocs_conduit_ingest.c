@@ -387,6 +387,57 @@ test_service_profile_accepts_multi_worker_count(void)
 }
 
 static void
+test_service_profile_accepts_multi_seal_worker_count(void)
+{
+    auto profile_r = n00b_store_service_profile_new(
+        .ingest_worker_count = 1,
+        .seal_worker_count   = 2,
+        .ingest_queue_bound  = 4,
+        .ingest_backpressure = N00B_STORE_INGEST_BACKPRESSURE_BLOCK);
+    CHECK(n00b_result_is_ok(profile_r));
+
+    auto seal_r = n00b_store_seal_policy_new(.max_records = 1);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    auto store_r = n00b_store_open_service(new_memory_vfs(),
+                                           r"/rocs",
+                                           new_schema(),
+                                           n00b_result_get(profile_r),
+                                           .seal_policy = n00b_result_get(seal_r));
+    CHECK(n00b_result_is_ok(store_r));
+    n00b_store_t *store = n00b_result_get(store_r);
+
+    for (int64_t i = 0; i < 6; i++) {
+        auto payload_r = n00b_store_ingest_payload_record(record_with_id(i));
+        CHECK(n00b_result_is_ok(payload_r));
+        auto submit_r = n00b_store_ingest_submit(store,
+                                                 n00b_result_get(payload_r));
+        CHECK(n00b_result_is_ok(submit_r));
+    }
+
+    wait_for_stream_records(store, 6);
+
+    auto flush_r = n00b_store_flush(store);
+    CHECK(n00b_result_is_ok(flush_r));
+
+    auto stats_r = n00b_store_service_ingest_stats(store);
+    CHECK(n00b_result_is_ok(stats_r));
+    n00b_store_conduit_ingest_stats_t stats = n00b_result_get(stats_r);
+    CHECK(stats.submitted == 6);
+    CHECK(stats.committed == 6);
+    CHECK(stats.failed == 0);
+
+    auto memory_r = n00b_store_memory_stats(store);
+    CHECK(n00b_result_is_ok(memory_r));
+    n00b_store_memory_stats_t memory = n00b_result_get(memory_r);
+    CHECK(memory.failed_seal_jobs == 0);
+    CHECK(memory.failed_seal_records == 0);
+
+    auto close_r = n00b_store_close(store);
+    CHECK(n00b_result_is_ok(close_r));
+}
+
+static void
 test_conduit_close_drains_accepted_input(void)
 {
     n00b_conduit_t *c = n00b_result_get(n00b_conduit_new());
@@ -540,6 +591,7 @@ main(int argc, char *argv[])
     test_conduit_publish_rejects_without_subscriber();
     test_service_profile_submit_routes_through_conduit();
     test_service_profile_accepts_multi_worker_count();
+    test_service_profile_accepts_multi_seal_worker_count();
     test_conduit_close_drains_accepted_input();
     test_conduit_batches_source_payloads_in_order();
 

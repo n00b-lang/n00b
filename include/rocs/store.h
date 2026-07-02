@@ -740,8 +740,8 @@ n00b_store_open_config(n00b_store_schema_t *schema,
  *                         reserved-slot fill/index commit work. The dequeuer
  *                         still reserves row order and visibility is published
  *                         only by contiguous reserved ordinal.
- * @kw seal_worker_count   Number of concurrent seal workers. Zero is reserved
- *                         for an implementation-defined service default.
+ * @kw seal_worker_count   Number of concurrent seal workers. Zero uses the
+ *                         service default.
  * @kw ingest_queue_bound  Bounded admission queue size. Zero means use ROCS's
  *                         service default, not an unbounded queue.
  * @kw ingest_backpressure Admission behavior when the bounded queue is full.
@@ -1189,6 +1189,8 @@ n00b_store_residency_policy_get_default(void);
  *                      swap and never marshals on the hot path. Defaults to
  *                      false (every seal runs inline, as before). Intended for
  *                      high-throughput single-writer ingest (the gateway).
+ * @kw seal_worker_count Number of concurrent seal workers when
+ *                      @c keep_standby is true. Zero uses the default of one.
  * @kw allocator        Allocator for process-side store state.
  *
  * @pre @p vfs, @p root, and @p schema are non-null; @p root is non-empty and
@@ -1214,6 +1216,7 @@ n00b_store_open_vfs(n00b_vfs_t          *vfs,
     n00b_string_t                 *display_name     = nullptr;
     bool                           recovery_journal = false;
     bool                           keep_standby     = false;
+    uint64_t                       seal_worker_count = 1;
     // Default whole-shard retention, applied automatically by the sealer after
     // each commit (no caller action needed). retention_window_ns drops sealed
     // shards older than the window by seal_ts (epoch ns); defaults to
