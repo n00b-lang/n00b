@@ -949,6 +949,40 @@ rocs_query_pos_list_new() _kargs
     return list;
 }
 
+static n00b_store_shard_id_list_t *
+rocs_query_shard_id_list_new() _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    n00b_store_shard_id_list_t *list = n00b_alloc_with_opts(
+        n00b_store_shard_id_list_t,
+        &(n00b_alloc_opts_t){
+            .allocator = allocator,
+        });
+
+    *list = n00b_list_new_private(uint64_t,
+                                  .allocator = allocator,
+                                  .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    return list;
+}
+
+static bool
+rocs_query_shard_id_list_contains(n00b_store_shard_id_list_t *ids,
+                                  uint64_t                    shard_id)
+{
+    if (ids == nullptr || shard_id == 0) {
+        return false;
+    }
+    size_t len = n00b_list_len(*ids);
+    for (size_t i = 0; i < len; i++) {
+        if (n00b_list_get(*ids, i) == shard_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static rocs_query_rank_term_list_t *
 rocs_query_rank_term_list_new() _kargs
 {
@@ -3302,6 +3336,39 @@ rocs_query_capture_boundary(n00b_query_view_t *view)
 		}
 	}
 
+    return n00b_result_ok(bool, true);
+}
+
+static n00b_result_t(bool)
+rocs_query_narrow_store_pin_to_boundary(n00b_query_view_t *view)
+{
+    if (view == nullptr || view->pin == nullptr || view->boundary == nullptr) {
+        return n00b_result_err(bool, N00B_QUERY_ERR_ARG);
+    }
+
+    n00b_store_shard_id_list_t *ids =
+        rocs_query_shard_id_list_new(.allocator = view->allocator);
+    if (ids == nullptr) {
+        return n00b_result_err(bool, N00B_QUERY_ERR_INTERNAL);
+    }
+
+    size_t len = n00b_list_len(*view->boundary);
+    for (size_t i = 0; i < len; i++) {
+        n00b_query_boundary_entry_t entry =
+            n00b_list_get(*view->boundary, i);
+        if (entry.shard_id == 0
+            || rocs_query_shard_id_list_contains(ids, entry.shard_id)) {
+            continue;
+        }
+        n00b_list_push(*ids, entry.shard_id);
+    }
+
+    auto narrow_r = n00b_store_pin_narrow_to_shards(view->pin, ids);
+    if (n00b_result_is_err(narrow_r)) {
+        return n00b_result_err(
+            bool,
+            rocs_query_err_from_store(n00b_result_get_err(narrow_r)));
+    }
     return n00b_result_ok(bool, true);
 }
 
@@ -8113,6 +8180,13 @@ n00b_query_view(n00b_store_t  *store,
                                n00b_result_get_err(capture_r));
     }
 
+    auto narrow_r = rocs_query_narrow_store_pin_to_boundary(view);
+    if (n00b_result_is_err(narrow_r)) {
+        rocs_query_release_pin_for_failure(pin);
+        return n00b_result_err(n00b_query_view_t *,
+                               n00b_result_get_err(narrow_r));
+    }
+
     auto live_r = rocs_query_capture_live_state(view);
     if (n00b_result_is_err(live_r)) {
         rocs_query_release_pin_for_failure(pin);
@@ -8531,7 +8605,10 @@ n00b_query_cursor(n00b_query_view_t *view) _kargs
 n00b_result_t(n00b_option_t(n00b_query_hit_t *))
 n00b_query_cursor_next(n00b_query_cursor_t *cursor)
     requires {
-        ROCS_QUERY_CURSOR_CONTRACT_OPEN(cursor);
+        cursor == nullptr
+            || (cursor->view != nullptr
+                && cursor->hits != nullptr
+                && cursor->residents != nullptr);
     }
     ensures {
         ROCS_QUERY_CURSOR_NEXT_CONTRACT_VALID_OR_EOF(cursor, result);
@@ -8570,7 +8647,10 @@ n00b_query_cursor_next(n00b_query_cursor_t *cursor)
 n00b_result_t(n00b_option_t(n00b_store_pos_t))
 n00b_query_cursor_position(n00b_query_cursor_t *cursor)
     requires {
-        ROCS_QUERY_CURSOR_CONTRACT_OPEN(cursor);
+        cursor == nullptr
+            || (cursor->view != nullptr
+                && cursor->hits != nullptr
+                && cursor->residents != nullptr);
     }
     ensures {
         ROCS_QUERY_POSITION_RESULT_CONTRACT_VALID_OR_NONE(result);

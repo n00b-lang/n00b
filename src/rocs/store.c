@@ -40,6 +40,8 @@
 typedef n00b_list_t(n00b_store_field_t *) rocs_store_field_list_t;
 typedef n00b_list_t(n00b_store_catalog_entry_t *)
     rocs_store_catalog_list_t;
+typedef n00b_list_t(n00b_store_pin_t *)
+    rocs_store_pin_list_t;
 typedef n00b_list_t(n00b_store_posting_list_t *)
     rocs_store_posting_target_list_t;
 typedef struct rocs_store_batch_term rocs_store_batch_term_t;
@@ -318,6 +320,7 @@ struct n00b_store_t {
     _Atomic(uint64_t)              hot_worker_range_tombstones;
     _Atomic(uint64_t)              seal_active_writer_waits;
     uint64_t                       active_pins;
+    rocs_store_pin_list_t         *active_pin_handles;
     uint64_t                       hot_snapshot_pins;
     uint64_t                       resident_bytes;
     uint64_t                       resident_shards;
@@ -345,6 +348,9 @@ struct n00b_store_t {
 
 struct n00b_store_pin_t {
     n00b_store_t *store;
+    n00b_allocator_t *allocator;
+    n00b_store_shard_id_list_t *shard_ids;
+    bool          all_shards;
     bool          released;
 };
 
@@ -390,7 +396,6 @@ struct n00b_store_record_stream_t {
 #define ROCS_STORE_CATALOG_ENTRY_CONTRACT_VISIBLE(_entry) \
     ((_entry) != nullptr && (_entry)->owner != nullptr     \
      && (_entry)->state == ROCS_STORE_CATALOG_ENTRY_SEALED \
-     && (_entry)->record_count != 0                        \
      && (_entry)->object_path != nullptr                   \
      && (_entry)->partition_key != nullptr)
 
@@ -715,6 +720,42 @@ rocs_store_catalog_list_new() _kargs
                                      .allocator = allocator,
                                      .scan_kind = N00B_GC_SCAN_KIND_ALL);
     return entries;
+}
+
+static rocs_store_pin_list_t *
+rocs_store_pin_list_new() _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    rocs_store_pin_list_t *pins = n00b_alloc_with_opts(
+        rocs_store_pin_list_t,
+        &(n00b_alloc_opts_t){
+            .allocator = allocator,
+        });
+
+    *pins = n00b_list_new_private(n00b_store_pin_t *,
+                                  .allocator = allocator,
+                                  .scan_kind = N00B_GC_SCAN_KIND_ALL);
+    return pins;
+}
+
+static n00b_store_shard_id_list_t *
+rocs_store_shard_id_list_new() _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    n00b_store_shard_id_list_t *ids = n00b_alloc_with_opts(
+        n00b_store_shard_id_list_t,
+        &(n00b_alloc_opts_t){
+            .allocator = allocator,
+        });
+
+    *ids = n00b_list_new_private(uint64_t,
+                                 .allocator = allocator,
+                                 .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    return ids;
 }
 
 static n00b_store_catalog_snapshot_t *
@@ -2829,8 +2870,7 @@ rocs_store_catalog_owns_entry(n00b_store_t              *store,
 
     return entry->owner == store
         && entry->shard_id != 0
-        && rocs_store_catalog_entry_visible_sealed(entry)
-        && entry->record_count != 0;
+        && rocs_store_catalog_entry_visible_sealed(entry);
 }
 
 static n00b_result_t(bool)
@@ -9045,6 +9085,8 @@ n00b_store_open_vfs(n00b_vfs_t          *vfs,
     n00b_atomic_store(&store->hot_worker_range_tombstones, 0);
     n00b_atomic_store(&store->seal_active_writer_waits, 0);
     store->active_pins       = 0;
+    store->active_pin_handles =
+        rocs_store_pin_list_new(.allocator = allocator);
     store->hot_snapshot_pins = 0;
     store->borrowed_catalog_enumeration_disabled = false;
 
@@ -10060,6 +10102,108 @@ rocs_store_emit_lifecycle_drop(n00b_store_t               *store,
     (void)event_r;
 }
 
+static bool
+rocs_store_shard_id_list_contains(n00b_store_shard_id_list_t *ids,
+                                  uint64_t                    shard_id)
+{
+    if (ids == nullptr || shard_id == 0) {
+        return false;
+    }
+    size_t len = n00b_list_len(*ids);
+    for (size_t i = 0; i < len; i++) {
+        if (n00b_list_get(*ids, i) == shard_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint64_t
+rocs_store_resident_pin_count_locked(n00b_store_t *store)
+{
+    if (store == nullptr || store->catalog == nullptr) {
+        return 0;
+    }
+    uint64_t count = 0;
+    size_t   len   = n00b_list_len(*store->catalog);
+    for (size_t i = 0; i < len; i++) {
+        n00b_store_catalog_entry_t *entry = n00b_list_get(*store->catalog, i);
+        if (entry == nullptr) {
+            continue;
+        }
+        if (UINT64_MAX - count < entry->resident_pins) {
+            return UINT64_MAX;
+        }
+        count += entry->resident_pins;
+    }
+    return count;
+}
+
+static uint64_t
+rocs_store_active_pin_handle_count_locked(n00b_store_t *store)
+{
+    if (store == nullptr || store->active_pin_handles == nullptr) {
+        return 0;
+    }
+    uint64_t count = 0;
+    size_t   len   = n00b_list_len(*store->active_pin_handles);
+    for (size_t i = 0; i < len; i++) {
+        n00b_store_pin_t *pin =
+            n00b_list_get(*store->active_pin_handles, i);
+        if (pin != nullptr && !pin->released) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static bool
+rocs_store_pin_handles_block_shard_locked(n00b_store_t *store,
+                                          uint64_t      shard_id)
+{
+    if (store == nullptr || store->active_pin_handles == nullptr) {
+        return false;
+    }
+    size_t len = n00b_list_len(*store->active_pin_handles);
+    for (size_t i = 0; i < len; i++) {
+        n00b_store_pin_t *pin =
+            n00b_list_get(*store->active_pin_handles, i);
+        if (pin == nullptr || pin->released) {
+            continue;
+        }
+        if (pin->all_shards
+            || rocs_store_shard_id_list_contains(pin->shard_ids,
+                                                 shard_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool
+rocs_store_drop_blocked_by_active_pin_locked(n00b_store_t *store,
+                                             uint64_t      shard_id)
+{
+    if (store == nullptr || store->active_pins == 0) {
+        return false;
+    }
+    if (rocs_store_pin_handles_block_shard_locked(store, shard_id)) {
+        return true;
+    }
+
+    uint64_t accounted = rocs_store_active_pin_handle_count_locked(store);
+    uint64_t resident  = rocs_store_resident_pin_count_locked(store);
+    if (UINT64_MAX - accounted < resident) {
+        return true;
+    }
+    accounted += resident;
+
+    // Record-stream hot snapshots and any future non-catalog pin class are not
+    // yet target-specific. Keep them broad so this narrowing does not weaken
+    // snapshot safety.
+    return store->active_pins > accounted;
+}
+
 static n00b_result_t(bool)
 rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
                                     uint64_t       shard_id,
@@ -10082,10 +10226,11 @@ rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
     if (!rocs_store_catalog_entry_visible_sealed(entry)) {
         return n00b_result_err(bool, N00B_STORE_ERR_CORRUPT);
     }
-    // Store pins protect query snapshots before the cursor has acquired a
-    // per-shard resident pin. Dropping any sealed shard while active_pins is
-    // nonzero can invalidate a cold boundary captured by an active view.
-    if (store->active_pins != 0) {
+    // Store pins protect query snapshots before cursors acquire per-shard
+    // resident pins. Query pins may be narrowed to their copied boundary shard
+    // ids; unknown pin classes remain broad until they get their own
+    // target-specific accounting.
+    if (rocs_store_drop_blocked_by_active_pin_locked(store, shard_id)) {
         return n00b_result_err(bool, N00B_STORE_ERR_PINNED);
     }
 
@@ -12487,11 +12632,72 @@ n00b_store_pin_acquire(n00b_store_t *store) _kargs
             .allocator = allocator,
         });
     pin->store    = store;
+    pin->allocator = allocator;
+    pin->shard_ids = nullptr;
+    pin->all_shards = true;
     pin->released = false;
+    if (store->active_pin_handles == nullptr) {
+        n00b_data_unlock(store->residency_lock);
+        return n00b_result_err(n00b_store_pin_t *, N00B_STORE_ERR_STATE);
+    }
+    n00b_list_push(*store->active_pin_handles, pin);
     store->active_pins++;
     n00b_data_unlock(store->residency_lock);
 
     return n00b_result_ok(n00b_store_pin_t *, pin);
+}
+
+static bool
+rocs_store_remove_pin_handle_locked(n00b_store_t     *store,
+                                    n00b_store_pin_t *pin)
+{
+    if (store == nullptr || store->active_pin_handles == nullptr
+        || pin == nullptr) {
+        return false;
+    }
+    size_t len = n00b_list_len(*store->active_pin_handles);
+    for (size_t i = 0; i < len; i++) {
+        if (n00b_list_get(*store->active_pin_handles, i) == pin) {
+            (void)n00b_list_delete(*store->active_pin_handles, i);
+            return true;
+        }
+    }
+    return false;
+}
+
+n00b_result_t(bool)
+n00b_store_pin_narrow_to_shards(n00b_store_pin_t           *pin,
+                                n00b_store_shard_id_list_t *shard_ids)
+{
+    if (pin == nullptr || pin->store == nullptr || shard_ids == nullptr) {
+        return n00b_result_err(bool, N00B_STORE_ERR_ARG);
+    }
+
+    n00b_store_shard_id_list_t *copy =
+        rocs_store_shard_id_list_new(.allocator = pin->allocator);
+    if (copy == nullptr) {
+        return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
+    }
+
+    size_t len = n00b_list_len(*shard_ids);
+    for (size_t i = 0; i < len; i++) {
+        uint64_t shard_id = n00b_list_get(*shard_ids, i);
+        if (shard_id == 0
+            || rocs_store_shard_id_list_contains(copy, shard_id)) {
+            continue;
+        }
+        n00b_list_push(*copy, shard_id);
+    }
+
+    n00b_data_write_lock(pin->store->residency_lock);
+    if (pin->released) {
+        n00b_data_unlock(pin->store->residency_lock);
+        return n00b_result_err(bool, N00B_STORE_ERR_STATE);
+    }
+    pin->shard_ids  = copy;
+    pin->all_shards = false;
+    n00b_data_unlock(pin->store->residency_lock);
+    return n00b_result_ok(bool, true);
 }
 
 n00b_result_t(bool)
@@ -12521,6 +12727,11 @@ n00b_store_pin_release(n00b_store_pin_t *pin)
     }
 
     pin->store->active_pins--;
+    if (!rocs_store_remove_pin_handle_locked(pin->store, pin)) {
+        n00b_data_unlock(pin->store->residency_lock);
+        n00b_data_unlock(pin->store->commit_lock);
+        return n00b_result_err(bool, N00B_STORE_ERR_STATE);
+    }
     pin->released = true;
     rocs_store_retired_hot_allocator_list_t *retired =
         rocs_store_detach_retired_hot_allocators_locked(pin->store);
