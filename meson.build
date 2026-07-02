@@ -264,6 +264,9 @@ endif
 
 if target_os == 'darwin'
   c_args = c_args + ['-Wno-atomic-alignment']
+  c_args = c_args + cc.get_supported_arguments(
+    '-Wno-deprecated-declarations',
+  )
 endif
 
 if conf_release_build
@@ -411,6 +414,7 @@ endif
 
 if conf_release_build
   exe_c_args = exe_c_args + ['-O3', '-ffast-math']
+  exe_c_args = exe_c_args + cc.get_supported_arguments('-fno-finite-math-only')
   if ncc_lto_supported
     exe_c_args = exe_c_args + ['-flto', '--ncc-lto-guard']
     exe_link_args = exe_link_args + ['-flto']

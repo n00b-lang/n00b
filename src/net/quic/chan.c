@@ -502,7 +502,7 @@ _n00b_quic_chan_push_dgram(n00b_quic_chan_t *chan,
     }
     n00b_allocator_t *alloc =
         (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;
-    n00b_buffer_t *buf = n00b_buffer_from_bytes((const char *)bytes,
+    n00b_buffer_t *buf = n00b_buffer_from_bytes((char *)bytes,
                                                 (int64_t)len,
                                                 .allocator = alloc);
     n00b_list_push(chan->dgram_recv_queue, buf);

@@ -526,8 +526,9 @@ n00b_cg_module_new(n00b_cg_session_t *s, const char *name)
     m->session    = s;
     if (name) {
         size_t name_len = strlen(name) + 1;
-        m->name         = n00b_alloc_array(char, name_len);
-        memcpy(m->name, name, name_len);
+        char *module_name = n00b_alloc_array(char, name_len);
+        memcpy(module_name, name, name_len);
+        m->name = module_name;
     }
     m->mir_module = MIR_new_module(s->mir_ctx, name);
     m->state      = N00B_CG_MOD_BUILDING;

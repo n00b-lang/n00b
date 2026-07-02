@@ -692,7 +692,7 @@ n00b_quic_endpoint_run_once(n00b_quic_endpoint_t *ep, int timeout_ms)
      * dispatch path.  Done OUTSIDE the picoquic lock so other threads
      * issuing chan_open / chan_send aren't blocked while we wait on
      * the kernel. */
-    n00b_conduit_io_poll(ep->io, timeout_ms);
+    (void)n00b_conduit_io_poll(ep->io, timeout_ms);
 
     /* Take the picoquic lock for the rest of the function — every
      * call from here mutates picoquic state. */
