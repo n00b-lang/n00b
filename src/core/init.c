@@ -422,12 +422,17 @@ n00b_init_core(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     // when a leak hunt requires it.
     n00b_pool_init(&rt->conduit_pool, .hidden = true, .name = "conduit_pool");
 
-    // Application-level "user_pool": hidden + non-GC like conduit_pool.
-    // High-churn interposed/libc-adjacent allocations must not build an OOB
-    // metadata dict; inline headers keep each allocation self-describing
-    // without ratcheting md_pool to the historical high-water mark.
+    // Application-level "user_pool": GC-VISIBLE (NOT hidden) + non-moving. It holds
+    // gateway job/message/state objects that legitimately reference GC-heap objects
+    // (e.g. enrichment conduit messages carrying a native `wax_normalized_event_t *`),
+    // so the collector MUST be able to trace THROUGH it — a hidden user_pool is
+    // excluded from the per-collect scan tree, which would let the GC reclaim a
+    // still-reachable event and dangle the reference (the exact bug class this
+    // un-hiding fixes). Being a pool it is non-moving, so raw pointers stay valid
+    // across collections. Inline headers keep each allocation self-describing (no OOB
+    // metadata dict) for the high-churn interposed/libc-adjacent alloc rate.
     n00b_pool_init(&rt->user_pool,
-                   .hidden            = true,
+                   .hidden            = false,
                    .inline_headers    = true,
                    .external_metadata = false,
                    .name              = "user_pool");

@@ -27,9 +27,24 @@
 // ============================================================================
 
 n00b_result_t(n00b_conduit_t *)
-n00b_conduit_new(void)
+n00b_conduit_new() _kargs {
+    n00b_allocator_t *allocator = nullptr;
+}
 {
-    n00b_allocator_t *cpool = (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;
+    // Default: libn00b's hidden, non-GC `conduit_pool` — the safe policy for a
+    // generic conduit whose messages carry no GC'd pointers, and the only safe
+    // policy for a conduit that is NOT itself reachable from a GC root (a GC-heap
+    // allocator on an unrooted conduit lets the collector reclaim conduit-internal
+    // lists under live delivery — the documented dangling-reclaim bug class).
+    //
+    // A caller that OWNS a conduit reachable from a GC root AND whose messages carry
+    // GC'd pointers (e.g. the wax pipeline conduit, rooted via a file-scope global)
+    // may pass an explicit GC-scanned allocator so those in-flight pointers are
+    // scanned and kept alive. Default nullptr preserves the historical behavior for
+    // every existing caller.
+    n00b_allocator_t *cpool = allocator
+                                  ? allocator
+                                  : (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;
     n00b_conduit_t   *c     = n00b_alloc_with_opts(n00b_conduit_t,
                                   &(n00b_alloc_opts_t){.allocator = cpool});
     if (!c) {
