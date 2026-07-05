@@ -789,34 +789,6 @@ rocs_posting_value_list_from_mapped_postings(
     return n00b_result_ok(rocs_posting_value_list_t *, out);
 }
 
-static bool
-rocs_posting_value_list_contains(rocs_posting_value_list_t *items,
-                                 uint64_t                   value)
-{
-    if (items == nullptr) {
-        return false;
-    }
-
-    size_t len = n00b_list_len(*items);
-    for (size_t i = 0; i < len; i++) {
-        if (n00b_list_get(*items, i) == value) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static void
-rocs_posting_value_list_push_unique(rocs_posting_value_list_t *items,
-                                    uint64_t                   value)
-{
-    if (items == nullptr
-        || rocs_posting_value_list_contains(items, value)) {
-        return;
-    }
-    n00b_list_push(*items, value);
-}
-
 static void
 rocs_posting_value_list_sort(rocs_posting_value_list_t *items)
 {
@@ -1768,6 +1740,13 @@ rocs_index_lookup_mapped_terms(n00b_store_index_t           *index,
 
     n00b_store_postings_t *postings =
         rocs_postings_new(shard_id, generation, .allocator = allocator);
+    // Candidates are unique by construction: a mapped posting list stores each
+    // ordinal once (sparse list or bitset), and the multi-term path intersects
+    // such lists. Map to ordinals with a plain push — the previous per-value
+    // uniqueness probe was O(n²) over the whole match set and dominated query
+    // CPU on shards with many matches. The sort stays as cheap insurance for
+    // list-ordered inputs, and adjacent-duplicate skipping below preserves the
+    // old dedup semantics at O(n).
     rocs_posting_value_list_t *ordinals =
         rocs_posting_value_list_new(.allocator = allocator);
     size_t candidate_len = n00b_list_len(*candidates);
@@ -1780,17 +1759,20 @@ rocs_index_lookup_mapped_terms(n00b_store_index_t           *index,
                                    n00b_result_get_err(ordinal_r));
         }
 
-        rocs_posting_value_list_push_unique(ordinals,
-                                            n00b_result_get(ordinal_r));
+        n00b_list_push(*ordinals, n00b_result_get(ordinal_r));
     }
 
     rocs_posting_value_list_sort(ordinals);
     size_t ordinal_len = n00b_list_len(*ordinals);
     for (size_t i = 0; i < ordinal_len; i++) {
+        uint64_t ordinal = n00b_list_get(*ordinals, i);
+        if (i > 0 && ordinal == n00b_list_get(*ordinals, i - 1)) {
+            continue;
+        }
         auto add_r = rocs_postings_add_mapped_pos(
             postings,
             shard,
-            n00b_list_get(*ordinals, i),
+            ordinal,
             record_count,
             shard_id,
             generation);
@@ -1881,12 +1863,14 @@ rocs_index_lookup_mapped_catch_all_terms(
                                    n00b_result_get_err(values_r));
         }
 
+        // Cross-column union CAN produce duplicate ordinals (one record
+        // matching in several columns); the sort + adjacent-duplicate skip in
+        // the ordinal loop below dedups in O(n log n), so plain pushes here.
         rocs_posting_value_list_t *field_candidates = n00b_result_get(values_r);
         size_t len = n00b_list_len(*field_candidates);
         for (size_t j = 0; j < len; j++) {
-            rocs_posting_value_list_push_unique(candidates,
-                                                n00b_list_get(*field_candidates,
-                                                              j));
+            n00b_list_push(*candidates,
+                           n00b_list_get(*field_candidates, j));
         }
     }
 
@@ -1900,6 +1884,13 @@ rocs_index_lookup_mapped_catch_all_terms(
 
     n00b_store_postings_t *postings =
         rocs_postings_new(shard_id, generation, .allocator = allocator);
+    // Candidates are unique by construction: a mapped posting list stores each
+    // ordinal once (sparse list or bitset), and the multi-term path intersects
+    // such lists. Map to ordinals with a plain push — the previous per-value
+    // uniqueness probe was O(n²) over the whole match set and dominated query
+    // CPU on shards with many matches. The sort stays as cheap insurance for
+    // list-ordered inputs, and adjacent-duplicate skipping below preserves the
+    // old dedup semantics at O(n).
     rocs_posting_value_list_t *ordinals =
         rocs_posting_value_list_new(.allocator = allocator);
     size_t candidate_len = n00b_list_len(*candidates);
@@ -1912,17 +1903,20 @@ rocs_index_lookup_mapped_catch_all_terms(
                                    n00b_result_get_err(ordinal_r));
         }
 
-        rocs_posting_value_list_push_unique(ordinals,
-                                            n00b_result_get(ordinal_r));
+        n00b_list_push(*ordinals, n00b_result_get(ordinal_r));
     }
 
     rocs_posting_value_list_sort(ordinals);
     size_t ordinal_len = n00b_list_len(*ordinals);
     for (size_t i = 0; i < ordinal_len; i++) {
+        uint64_t ordinal = n00b_list_get(*ordinals, i);
+        if (i > 0 && ordinal == n00b_list_get(*ordinals, i - 1)) {
+            continue;
+        }
         auto add_r = rocs_postings_add_mapped_pos(
             postings,
             shard,
-            n00b_list_get(*ordinals, i),
+            ordinal,
             record_count,
             shard_id,
             generation);
