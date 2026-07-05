@@ -287,8 +287,9 @@
         n00b_atomic_store(&xf->started, false);                               \
         n00b_atomic_store(&xf->stop_requested, false);                        \
         if (cookie_size > 0) {                                                 \
-            xf->cookie = n00b_alloc_array(uint8_t, cookie_size,                \
-                .allocator = (c)->allocator);                                  \
+            xf->cookie = n00b_alloc_array_with_opts(                           \
+                uint8_t, cookie_size,                                          \
+                &(n00b_alloc_opts_t){.allocator = (c)->allocator});            \
         }                                                                      \
         else {                                                                 \
             xf->cookie = nullptr;                                              \
