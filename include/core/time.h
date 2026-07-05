@@ -173,6 +173,23 @@ n00b_timestamp_diff(struct timespec *t1,
 extern n00b_string_t *n00b_iso8601_utc(n00b_duration_t *t);
 
 /**
+ * @brief Parse an RFC-3339 / ISO-8601 UTC timestamp to epoch nanoseconds.
+ *
+ * Accepts `YYYY-MM-DDTHH:MM:SS[.fffffffff]Z` — the exact shape
+ * @ref n00b_iso8601_utc emits, plus optional fractional seconds (extra
+ * fractional digits beyond 9 are accepted and truncated). UTC (`Z`) only;
+ * numeric offsets are rejected. Plain C ABI, allocation- and libc-free —
+ * safe on off-libc worker threads.
+ *
+ * @param data    Timestamp bytes (need not be NUL-terminated).
+ * @param len     Byte length of @p data.
+ * @param out_ns  Out: nanoseconds since the Unix epoch.
+ * @return        true on success; false on any malformed input.
+ */
+extern bool n00b_iso8601_parse_ns(const char *data, size_t len,
+                                  uint64_t *out_ns);
+
+/**
  * @brief Plain-C-ABI ISO-8601 UTC formatter into a caller buffer.
  *
  * Convenience wrapper over @ref n00b_iso8601_utc for callers that cannot
