@@ -32,6 +32,7 @@
 #include "core/lock_common.h" // n00b_core_lock_info_t
 #include "core/callstack.h" // n00b_callstack_pool_get + region geometry
 #include "core/mmaps.h"
+#include "core/pool.h" // n00b_pool_quarantine_find (big-free UAF attribution)
 
 // Output here goes through core/syscall.h's RAW (libc-free) write syscall, NOT
 // libc write().  Two reasons: (1) no-libc — write() is a libc symbol this
@@ -495,6 +496,41 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
                       : overflow      ? "n00b: fatal: stack overflow\n"
                                       : "n00b: fatal: invalid memory access\n");
     _n00b_crash_dump_context(sig, si, uctx, faulting, overflow);
+
+    // Big-free quarantine attribution (pool.c, env N00B_POOL_BIG_QUARANTINE):
+    // a fault address inside a parked (freed + PROT_NONE) big pool allocation
+    // means this crash is a use-after-free of that allocation — name the
+    // freeing call stack. find() is async-signal-safe (atomic loads only).
+    if (si != nullptr) {
+        n00b_option_t(n00b_pool_quarantine_hit_t) qopt =
+            n00b_pool_quarantine_find((uintptr_t)si->si_addr);
+        if (n00b_option_is_set(qopt)) {
+            n00b_pool_quarantine_hit_t qhit = n00b_option_get(qopt);
+            _n00b_crash_write("n00b: crash fault is a QUARANTINED big-free "
+                              "use-after-free: pool=");
+            _n00b_crash_write(qhit.pool_name != nullptr ? qhit.pool_name
+                                                        : "?");
+            _n00b_crash_write(" base=");
+            _n00b_crash_write_hex(qhit.start);
+            _n00b_crash_write(" size=");
+            _n00b_crash_write_u64(qhit.size);
+            _n00b_crash_write(" seq=");
+            _n00b_crash_write_u64(qhit.seq);
+            _n00b_crash_write("\n");
+            for (int qi = 0; qi < N00B_POOL_QUARANTINE_FRAMES; qi++) {
+                if (qhit.frees[qi] == nullptr) {
+                    break;
+                }
+                _n00b_crash_write("n00b: crash freed-by[");
+                _n00b_crash_write_u64((uint64_t)qi);
+                _n00b_crash_write("] ret=");
+                _n00b_crash_write_ptr(qhit.frees[qi]);
+                _n00b_crash_write_addr_offset(" ret_off=",
+                                              (uintptr_t)qhit.frees[qi]);
+                _n00b_crash_write("\n");
+            }
+        }
+    }
 
     // SYMBOLICATED (DWARF) backtrace via the full capture -> resolve -> render
     // path.  This is opt-in debug behavior only. It takes ordinary rwlocks and

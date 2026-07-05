@@ -10,6 +10,7 @@
 #include "n00b.h"
 #include "core/alloc_base.h"
 #include "adt/llstack.h"
+#include "adt/option.h" /* n00b_option_t for n00b_pool_quarantine_find */
 #include "core/align.h"
 
 #define N00B_POST_ROUND_SHIFT 6
@@ -318,3 +319,34 @@ extern bool n00b_pool_diagnostic_lookup_page(uintptr_t addr,
  *      @ref n00b_mem_get_allocator first).
  */
 extern size_t n00b_pool_usable_size(void *ptr);
+
+/**
+ * @brief Big-free quarantine: freeing-call-stack depth recorded per parked
+ *        page (see pool.c "Big-free quarantine").
+ */
+#define N00B_POOL_QUARANTINE_FRAMES 6
+
+/**
+ * @brief Attribution record for a faulting address inside a quarantined
+ *        (freed, PROT_NONE-parked) big pool allocation.
+ */
+typedef struct n00b_pool_quarantine_hit_t {
+    uint64_t    start;
+    uint64_t    size;
+    uint64_t    seq;
+    const char *pool_name;
+    void       *frees[N00B_POOL_QUARANTINE_FRAMES];
+} n00b_pool_quarantine_hit_t;
+
+/**
+ * @brief Look up a faulting address in the big-free quarantine ring.
+ *
+ * Async-signal-safe (plain atomic loads, no locks, no allocation; the option
+ * is a pure value type) — intended for the fatal-signal crash handler, which
+ * uses it to attribute a use-after-free fault to the call stack that freed
+ * the page. Returns none when the quarantine is disabled (env
+ * N00B_POOL_BIG_QUARANTINE unset/0) or the address is not inside a parked
+ * page.
+ */
+extern n00b_option_t(n00b_pool_quarantine_hit_t)
+    n00b_pool_quarantine_find(uintptr_t addr);

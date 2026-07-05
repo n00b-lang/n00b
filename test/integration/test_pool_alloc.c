@@ -1,6 +1,11 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
 
 #include "n00b.h"
 #include "core/alloc.h"
@@ -436,12 +441,101 @@ test_alloc_refcount_survives_compaction(void)
 }
 
 // ============================================================================
+// Big-free quarantine (env N00B_POOL_BIG_QUARANTINE; see pool.c).
+//
+// main() sets the env var before n00b_init so the lazily-latched capacity
+// sees it (the latch happens at the first big free process-wide). The
+// default-off behavior needs no dedicated case here: every other test binary
+// in the suite runs with the env unset, exercising the disabled path.
+// ============================================================================
+
+// Anything above the largest slab class allocates page-granular ("big").
+#define QUAR_BIG_SZ (64 * 1024)
+
+static void
+test_quarantine_find_hit_and_miss(void)
+{
+    n00b_pool_t       pool;
+    n00b_allocator_t *alloc = n00b_pool_init(&pool, .name = "quar_pool");
+
+    void *p = n00b_alloc_array_with_opts(
+        uint8_t, QUAR_BIG_SZ, &(n00b_alloc_opts_t){.allocator = alloc});
+    assert(p != nullptr);
+    uintptr_t inside  = (uintptr_t)p + QUAR_BIG_SZ / 2;
+    uintptr_t outside = (uintptr_t)p + (uintptr_t)QUAR_BIG_SZ * 8;
+
+    // Live allocation: not quarantined.
+    assert(!n00b_option_is_set(n00b_pool_quarantine_find(inside)));
+
+    n00b_free(p);
+
+    // Freed big page is parked: an interior address attributes to it.
+    n00b_option_t(n00b_pool_quarantine_hit_t) opt =
+        n00b_pool_quarantine_find(inside);
+    assert(n00b_option_is_set(opt));
+    n00b_pool_quarantine_hit_t hit = n00b_option_get(opt);
+    assert(hit.start <= (uintptr_t)p);
+    assert(inside < hit.start + hit.size);
+    assert(hit.frees[0] != nullptr); // freeing call stack captured
+    assert(hit.pool_name != nullptr && strcmp(hit.pool_name, "quar_pool") == 0);
+
+    // Unrelated address: no attribution.
+    assert(!n00b_option_is_set(n00b_pool_quarantine_find(outside)));
+
+    printf("  [PASS] quarantine_find_hit_and_miss\n");
+}
+
+static void
+test_quarantine_uaf_faults(void)
+{
+    // Parent allocates + frees a big page (now parked PROT_NONE), then a
+    // forked child touches it: the touch must fault (raw SIGSEGV/SIGBUS, or
+    // n00b's crash handler exiting 128+sig) instead of silently reading
+    // freed memory. The child does no pool/lock work at all, so runtime
+    // fork-safety is not in play.
+    n00b_pool_t       pool;
+    n00b_allocator_t *alloc = n00b_pool_init(&pool, .name = "quar_uaf");
+
+    void *p = n00b_alloc_array_with_opts(
+        uint8_t, QUAR_BIG_SZ, &(n00b_alloc_opts_t){.allocator = alloc});
+    assert(p != nullptr);
+    n00b_free(p);
+
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, 2);
+        }
+        *(volatile char *)p; // must fault: page is parked PROT_NONE
+        _exit(0);            // reached only if the quarantine failed
+    }
+
+    int status = 0;
+    assert(waitpid(pid, &status, 0) == pid);
+    bool died = (WIFSIGNALED(status)
+                 && (WTERMSIG(status) == SIGSEGV
+                     || WTERMSIG(status) == SIGBUS))
+                || (WIFEXITED(status)
+                    && (WEXITSTATUS(status) == 128 + SIGSEGV
+                        || WEXITSTATUS(status) == 128 + SIGBUS));
+    assert(died);
+
+    printf("  [PASS] quarantine_uaf_faults\n");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int
 main(int argc, char **argv)
 {
+    // Must precede n00b_init: the quarantine capacity latches process-wide
+    // at the FIRST big free, and init itself can free big pages.
+    setenv("N00B_POOL_BIG_QUARANTINE", "64", 1);
+
     n00b_runtime_t runtime;
     n00b_init(&runtime, argc, argv);
 
@@ -460,6 +554,8 @@ main(int argc, char **argv)
     test_refcount_noop_on_plain_pool();
     test_alloc_refcount();
     test_alloc_refcount_survives_compaction();
+    test_quarantine_find_hit_and_miss();
+    test_quarantine_uaf_faults();
 
     printf("All pool alloc tests passed.\n");
     return 0;
