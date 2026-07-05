@@ -70,6 +70,7 @@ static _Atomic uint64_t           n00b_pool_big_unmap_fail_bytes;
 
 typedef struct {
     _Atomic(uintptr_t) start; /* 0 = slot empty */
+    _Atomic(uint32_t)  busy;  /* per-slot parker claim (see park below) */
     uint64_t           size;
     uint64_t           seq;
     const char        *pool_name;
@@ -79,7 +80,6 @@ typedef struct {
 [[n00b::nogc]] static n00b_pool_quar_slot_t
     n00b_pool_quar_ring[N00B_POOL_QUAR_RING_MAX];
 static _Atomic uint64_t n00b_pool_quar_cursor;
-static _Atomic uint32_t n00b_pool_quar_ringlock;
 static _Atomic int32_t  n00b_pool_quar_capacity = -1; /* -1 = env unread */
 
 static uint32_t
@@ -164,19 +164,26 @@ pool_quarantine_park(n00b_pool_t *pool, void *addr, size_t mapped)
      * faults inside delete_one_page_entry's own entry-header reads (the page
      * is PROT_NONE), and the crash handler's quarantine lookup attributes it
      * — the faulting stack IS the double-freer, the recorded stack the first
-     * free. A per-free O(ring) scan under this global lock serialized every
-     * big free in the process and stalled high-rate pipelines. */
-    while (atomic_exchange(&n00b_pool_quar_ringlock, 1) != 0) {}
+     * free. */
 
+    /* Fault-on-touch before any slot work: the page is already unlinked and
+     * private to this freeing thread, so no lock is needed around the
+     * syscall. Failure is non-fatal: worst case the page stays readable
+     * until the ring evicts it (same as no quarantine). */
+    (void)mprotect(addr, mapped, PROT_NONE);
+
+    /* Slot claim is PER-SLOT, not a global lock: the cursor hands every
+     * parker a distinct sequence, so two frees contend on the same slot only
+     * when `cap` parks are in flight at once (ring wrap onto an in-progress
+     * slot). The busy bit makes that case correct without ever serializing
+     * the normal path. */
     uint64_t               seq  = atomic_fetch_add(&n00b_pool_quar_cursor, 1);
     n00b_pool_quar_slot_t *slot = &n00b_pool_quar_ring[seq % cap];
 
+    while (atomic_exchange(&slot->busy, 1) != 0) {}
+
     uintptr_t old_start = atomic_load(&slot->start);
     uint64_t  old_size  = slot->size;
-
-    /* Fault-on-touch from this point on. Failure is non-fatal: worst case the
-     * page stays readable until the ring evicts it (same as no quarantine). */
-    (void)mprotect(addr, mapped, PROT_NONE);
 
     /* Publish order matters for the lock-free crash-time reader: empty the
      * slot first, fill the fields, then publish the new start LAST so a
@@ -188,9 +195,9 @@ pool_quarantine_park(n00b_pool_t *pool, void *addr, size_t mapped)
     pool_quar_capture_frames(slot->frees);
     atomic_store(&slot->start, lo);
 
-    atomic_store(&n00b_pool_quar_ringlock, 0);
+    atomic_store(&slot->busy, 0);
 
-    /* Evicted page (if any) is released outside the ring lock. */
+    /* Evicted page (if any) is released outside the slot claim. */
     if (old_start != 0) {
         n00b_safe_munmap((void *)old_start, (size_t)old_size);
     }
