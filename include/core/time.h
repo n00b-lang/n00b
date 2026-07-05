@@ -70,6 +70,24 @@ n00b_ns_timestamp(void)
 }
 
 /**
+ * @brief Get a wall-clock nanosecond timestamp.
+ *
+ * Epoch-based (CLOCK_REALTIME) — use for event/record timestamps that are
+ * stored or compared against calendar time. For deadlines, intervals, and
+ * ordering, use the monotonic n00b_ns_timestamp() instead.
+ *
+ * @return Current time in nanoseconds since the epoch.
+ */
+static inline int64_t
+n00b_wall_ns_timestamp(void)
+{
+    n00b_duration_t d;
+    n00b_capture_timestamp(&d);
+
+    return n00b_ns_from_duration(&d);
+}
+
+/**
  * @brief Get a wall-clock microsecond timestamp.
  * @return Current time in microseconds since the epoch.
  */
