@@ -1040,9 +1040,17 @@ n00b_capture_stack_base(n00b_thread_t *thread,
     }
 
 #ifdef _WIN32
-    // On Windows, use the Thread Environment Block for all threads.
+    // On Windows, foreign service/host threads can provide the full reserved
+    // stack range.  Prefer it over TEB->StackLimit, which is only the current
+    // committed low page and can move downward after large frames are entered.
     (void)runtime;
-    {
+    if (foreign_stack_low != nullptr && foreign_stack_high != nullptr
+        && (char *)foreign_stack_high > (char *)foreign_stack_low) {
+        lowest  = (char *)foreign_stack_low;
+        highest = (char *)foreign_stack_high;
+        size    = (size_t)(highest - lowest);
+    }
+    else {
         NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
         highest = (char *)tib->StackBase;
         lowest  = (char *)tib->StackLimit;
