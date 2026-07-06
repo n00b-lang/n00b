@@ -486,6 +486,33 @@ test_quarantine_find_hit_and_miss(void)
 }
 
 static void
+test_guard_page_per_alloc(void)
+{
+    // main() sets N00B_POOL_PAGE_PER_ALLOC to a filter matching only pools
+    // named *guardpool*. A slab-class (32-byte) allocation from a matching
+    // pool must route through the single-entry page path — proven by the
+    // freed allocation landing in the big-free quarantine, which only sees
+    // page-granular frees. A non-matching pool's small alloc must NOT.
+    n00b_pool_t       gpool;
+    n00b_allocator_t *galloc = n00b_pool_init(&gpool, .name = "guardpool_a");
+    void *gp = n00b_alloc_array_with_opts(
+        uint8_t, 32, &(n00b_alloc_opts_t){.allocator = galloc});
+    assert(gp != nullptr);
+    n00b_free(gp);
+    assert(n00b_option_is_set(n00b_pool_quarantine_find((uintptr_t)gp)));
+
+    n00b_pool_t       ppool;
+    n00b_allocator_t *palloc = n00b_pool_init(&ppool, .name = "plainpool_a");
+    void *pp = n00b_alloc_array_with_opts(
+        uint8_t, 32, &(n00b_alloc_opts_t){.allocator = palloc});
+    assert(pp != nullptr);
+    n00b_free(pp);
+    assert(!n00b_option_is_set(n00b_pool_quarantine_find((uintptr_t)pp)));
+
+    printf("  [PASS] guard_page_per_alloc\n");
+}
+
+static void
 test_quarantine_uaf_faults(void)
 {
     // Parent allocates + frees a big page (now parked PROT_NONE), then a
@@ -533,8 +560,12 @@ int
 main(int argc, char **argv)
 {
     // Must precede n00b_init: the quarantine capacity latches process-wide
-    // at the FIRST big free, and init itself can free big pages.
+    // at the FIRST big free, and init itself can free big pages. The guard
+    // filter latches at the first pool alloc; "guardpool" scopes page-per-
+    // alloc to this file's dedicated test pool so the rest of the suite's
+    // pools stay slab-backed.
     setenv("N00B_POOL_BIG_QUARANTINE", "64", 1);
+    setenv("N00B_POOL_PAGE_PER_ALLOC", "guardpool", 1);
 
     n00b_runtime_t runtime;
     n00b_init(&runtime, argc, argv);
@@ -555,6 +586,7 @@ main(int argc, char **argv)
     test_alloc_refcount();
     test_alloc_refcount_survives_compaction();
     test_quarantine_find_hit_and_miss();
+    test_guard_page_per_alloc();
     test_quarantine_uaf_faults();
 
     printf("All pool alloc tests passed.\n");

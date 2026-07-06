@@ -82,6 +82,55 @@ typedef struct {
 static _Atomic uint64_t n00b_pool_quar_cursor;
 static _Atomic int32_t  n00b_pool_quar_capacity = -1; /* -1 = env unread */
 
+/* Guard mode (env N00B_POOL_PAGE_PER_ALLOC): route EVERY allocation through
+ * the single-entry mmap path so each alloc owns a full page. Combined with
+ * the big-free quarantine this extends use-after-free / double-free
+ * detection to slab-class allocations — a wrongly freed small object parks
+ * its whole page and the next touch (or second free) faults attributably —
+ * at the cost of a page plus an mmap syscall per allocation. Value "1" or
+ * "all" applies to every pool; any other value is a substring filter on the
+ * pool's debug_name (e.g. "system" to target only the system pool). */
+static _Atomic int32_t n00b_pool_guard_mode = -1; /* -1 unread, 0 off,
+                                                     1 all, 2 filtered */
+static const char *n00b_pool_guard_filter;
+
+static bool
+pool_guard_page_per_alloc(n00b_pool_t *pool)
+{
+    int32_t mode = atomic_load(&n00b_pool_guard_mode);
+    if (mode < 0) {
+        /* Raw getenv: same allocator-layer bootstrap exception as
+         * pool_quar_capacity above. */
+        const char *env = getenv("N00B_POOL_PAGE_PER_ALLOC");
+        int32_t     v   = 0;
+        if (env != nullptr && env[0] != '\0') {
+            if ((env[0] == '1' && env[1] == '\0')
+                || strcmp(env, "all") == 0) {
+                v = 1;
+            }
+            else {
+                n00b_pool_guard_filter = env;
+                v                      = 2;
+            }
+        }
+        int32_t expected = -1;
+        atomic_compare_exchange_strong(&n00b_pool_guard_mode, &expected, v);
+        mode = atomic_load(&n00b_pool_guard_mode);
+    }
+    switch (mode) {
+    case 1:
+        return true;
+    case 2: {
+        const char *name = ((n00b_allocator_t *)pool)->debug_name;
+        return name != nullptr
+               && n00b_pool_guard_filter != nullptr
+               && strstr(name, n00b_pool_guard_filter) != nullptr;
+    }
+    default:
+        return false;
+    }
+}
+
 static uint32_t
 pool_quar_capacity(void)
 {
@@ -1169,8 +1218,11 @@ pool_alloc(n00b_pool_t *pool, uint64_t request, void *ignore)
 
     /* On 4 KiB-page Linux, the 4 KiB/8 KiB nominal slab classes cannot fit
      * after the pool page header. Route those requests through the single-entry
-     * mmap path instead of creating undersized slab slots. */
-    if (ix >= N00B_NUM_FREE_LISTS || sz > slab_payload) {
+     * mmap path instead of creating undersized slab slots. The guard-mode
+     * check (page per alloc; see pool_guard_page_per_alloc) also lands here
+     * so slab-class objects become individually parkable by the quarantine. */
+    if (ix >= N00B_NUM_FREE_LISTS || sz > slab_payload
+        || pool_guard_page_per_alloc(pool)) {
         entry = big_mmap(pool, request);
         ix    = N00B_NUM_FREE_LISTS;
     }
