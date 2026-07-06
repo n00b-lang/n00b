@@ -1358,6 +1358,74 @@ pool_global_stats_record_top(n00b_pool_global_stats_t *stats,
     stats->top_system[pos]            = pool->vtable.__system ? 1 : 0;
 }
 
+// Insert-or-aggregate one live pool into the by-name census. Names are the
+// static string literals passed to n00b_pool_init, so pointer-or-strcmp
+// matching is exact; distinct names beyond the table fold into "(other)".
+static void
+pool_name_census_add(n00b_pool_name_census_t *census,
+                     const char              *name,
+                     uint64_t                 mapped)
+{
+    if (name == nullptr || name[0] == '\0') {
+        name = "(unnamed)";
+    }
+    for (uint64_t i = 0; i < census->entry_count; i++) {
+        if (census->name[i] == name || strcmp(census->name[i], name) == 0) {
+            census->pool_count[i]++;
+            census->mapped_bytes[i] += mapped;
+            return;
+        }
+    }
+    if (census->entry_count < N00B_POOL_NAME_CENSUS_MAX) {
+        uint64_t i = census->entry_count++;
+        census->name[i]         = name;
+        census->pool_count[i]   = 1;
+        census->mapped_bytes[i] = mapped;
+        return;
+    }
+    uint64_t last = N00B_POOL_NAME_CENSUS_MAX - 1;
+    census->name[last] = "(other)";
+    census->pool_count[last]++;
+    census->mapped_bytes[last] += mapped;
+}
+
+[[n00b::nogc]] n00b_pool_name_census_t
+n00b_pool_name_census(void)
+{
+    n00b_pool_name_census_t census = {};
+
+    pool_registry_lock();
+    for (uint64_t i = 0; i < N00B_POOL_GLOBAL_REGISTRY_MAX; i++) {
+        n00b_pool_t *pool = n00b_pool_registry[i].pool;
+        if (pool == nullptr) {
+            continue;
+        }
+        census.live_pool_total++;
+        pool_name_census_add(&census,
+                             n00b_pool_registry[i].name,
+                             n00b_pool_mapped_bytes(pool));
+    }
+    pool_registry_unlock();
+
+    // Sort by mapped bytes descending (small fixed table; insertion sort).
+    for (uint64_t i = 1; i < census.entry_count; i++) {
+        const char *name   = census.name[i];
+        uint64_t    count  = census.pool_count[i];
+        uint64_t    mapped = census.mapped_bytes[i];
+        uint64_t    j      = i;
+        while (j > 0 && census.mapped_bytes[j - 1] < mapped) {
+            census.name[j]         = census.name[j - 1];
+            census.pool_count[j]   = census.pool_count[j - 1];
+            census.mapped_bytes[j] = census.mapped_bytes[j - 1];
+            j--;
+        }
+        census.name[j]         = name;
+        census.pool_count[j]   = count;
+        census.mapped_bytes[j] = mapped;
+    }
+    return census;
+}
+
 [[n00b::nogc]] n00b_pool_global_stats_t
 n00b_pool_global_stats(void)
 {

@@ -291,6 +291,29 @@ extern uint64_t n00b_pool_big_map_count(n00b_pool_t *pool);
 
 extern n00b_pool_global_stats_t n00b_pool_global_stats(void);
 
+#define N00B_POOL_NAME_CENSUS_MAX 32
+
+/**
+ * @brief Live-pool census aggregated by pool NAME.
+ *
+ * The per-instance top-N in @ref n00b_pool_global_stats cannot show a leak of
+ * MANY same-named pools (thousands of small per-query / per-job scratch pools,
+ * each individually tiny). This walks the registry once and aggregates mapped
+ * bytes and instance counts per distinct debug name, sorted by mapped bytes
+ * descending. Distinct names beyond the table cap fold into the final
+ * "(other)" entry; unnamed pools count under "(unnamed)". `live_pool_total`
+ * is the number of live registered pools.
+ */
+typedef struct {
+    uint64_t    entry_count;
+    uint64_t    live_pool_total;
+    const char *name[N00B_POOL_NAME_CENSUS_MAX];
+    uint64_t    pool_count[N00B_POOL_NAME_CENSUS_MAX];
+    uint64_t    mapped_bytes[N00B_POOL_NAME_CENSUS_MAX];
+} n00b_pool_name_census_t;
+
+extern n00b_pool_name_census_t n00b_pool_name_census(void);
+
 /**
  * @brief Diagnostic-only lookup of a live pool page by address.
  *

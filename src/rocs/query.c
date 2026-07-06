@@ -520,6 +520,8 @@ rocs_query_err_from_plan(n00b_err_t err)
     switch ((n00b_plan_err_t)err) {
     case N00B_PLAN_ERR_ARG:
         return N00B_QUERY_ERR_ARG;
+    case N00B_PLAN_ERR_CANCELED:
+        return N00B_QUERY_ERR_CANCELED;
     case N00B_PLAN_ERR_ANY_UNSUPPORTED:
     case N00B_PLAN_ERR_EMPTY:
         return N00B_QUERY_ERR_UNSUPPORTED_FILTER;
@@ -5047,7 +5049,13 @@ rocs_query_cursor_plan_boundary(n00b_query_cursor_t        *cursor,
         entry,
         cursor->snapshot_predicate,
         cursor->snapshot_indexes,
-        .allocator = cursor->allocator);
+        .allocator  = cursor->allocator,
+        // Boundary planning can run a long residual verify (per-record JSON
+        // materialize over the whole shard for an unindexed predicate);
+        // thread the cursor's cancel hook down so an abandoned query aborts
+        // there instead of running to completion as a zombie.
+        .cancel_cb  = cursor->cancel_cb,
+        .cancel_ctx = cursor->cancel_ctx);
     if (n00b_result_is_err(result_r)) {
         if (n00b_result_get_err(result_r) == N00B_PLAN_ERR_EMPTY) {
             return n00b_plan_ordset_empty(boundary.record_count,

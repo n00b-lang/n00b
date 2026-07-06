@@ -110,6 +110,8 @@ typedef struct {
     n00b_store_map_shard_t    *mapped_shard;
     uint64_t                   record_count;
     n00b_allocator_t          *allocator;
+    n00b_plan_cancel_fn        cancel_cb;
+    void                      *cancel_ctx;
 } _rocs_plan_verify_ctx_t;
 
 typedef struct {
@@ -2463,6 +2465,16 @@ _rocs_plan_verify_candidates(_rocs_plan_verify_ctx_t *ctx,
 
     uint64_t candidate_count = candidates->count;
     for (uint64_t i = 0; i < candidate_count; i++) {
+        // Cooperative cancellation: each candidate costs a record view + a
+        // full JSON parse, so an unindexed residual over a large shard runs
+        // long. Poll every 1024 candidates (the query.c scan-loop idiom) so a
+        // consumer that vanished mid-verify aborts the plan instead of
+        // burning CPU to completion as a zombie query.
+        if (ctx->cancel_cb != nullptr && (i & 0x3FF) == 0
+            && ctx->cancel_cb(ctx->cancel_ctx)) {
+            verify_err = N00B_PLAN_ERR_CANCELED;
+            break;
+        }
         auto ordinal_r = n00b_plan_ordset_at(candidates, i);
         if (n00b_result_is_err(ordinal_r)) {
             verify_err = n00b_result_get_err(ordinal_r);
@@ -3847,7 +3859,9 @@ n00b_plan_verify_hot(n00b_store_shard_t     *shard,
                      n00b_plan_ordset_t    *candidates,
                      n00b_plan_predicate_t *residual) _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
+    n00b_allocator_t    *allocator  = nullptr;
+    n00b_plan_cancel_fn  cancel_cb  = nullptr;
+    void                *cancel_ctx = nullptr;
 }
 {
     auto record_count_r = _rocs_plan_hot_record_count(shard);
@@ -3862,6 +3876,8 @@ n00b_plan_verify_hot(n00b_store_shard_t     *shard,
         .mapped_shard = nullptr,
         .record_count = n00b_result_get(record_count_r),
         .allocator    = allocator,
+        .cancel_cb    = cancel_cb,
+        .cancel_ctx   = cancel_ctx,
     };
 
     return _rocs_plan_verify_candidates(&ctx,
@@ -3875,7 +3891,9 @@ n00b_plan_verify_mapped(n00b_store_map_shard_t *shard,
                         n00b_plan_ordset_t     *candidates,
                         n00b_plan_predicate_t  *residual) _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
+    n00b_allocator_t    *allocator  = nullptr;
+    n00b_plan_cancel_fn  cancel_cb  = nullptr;
+    void                *cancel_ctx = nullptr;
 }
 {
     auto record_count_r = _rocs_plan_mapped_record_count(shard);
@@ -3890,6 +3908,8 @@ n00b_plan_verify_mapped(n00b_store_map_shard_t *shard,
         .mapped_shard = shard,
         .record_count = n00b_result_get(record_count_r),
         .allocator    = allocator,
+        .cancel_cb    = cancel_cb,
+        .cancel_ctx   = cancel_ctx,
     };
 
     return _rocs_plan_verify_candidates(&ctx,
@@ -3952,7 +3972,9 @@ n00b_result_t(n00b_plan_ordset_t *)
 n00b_plan_dispatch_verify_hot(n00b_plan_dispatch_t *dispatch,
                               n00b_store_shard_t   *shard) _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
+    n00b_allocator_t    *allocator  = nullptr;
+    n00b_plan_cancel_fn  cancel_cb  = nullptr;
+    void                *cancel_ctx = nullptr;
 }
 {
     auto candidates_r = n00b_plan_dispatch_candidates(dispatch);
@@ -3974,7 +3996,9 @@ n00b_plan_dispatch_verify_hot(n00b_plan_dispatch_t *dispatch,
                              n00b_option_is_set(residual_opt)
                                  ? n00b_option_get(residual_opt)
                                  : nullptr,
-                             .allocator = allocator);
+                             .allocator  = allocator,
+                             .cancel_cb  = cancel_cb,
+                             .cancel_ctx = cancel_ctx);
     if (n00b_result_is_err(verified_r) || dispatch->accepted == nullptr) {
         return verified_r;
     }
@@ -3988,7 +4012,9 @@ n00b_result_t(n00b_plan_ordset_t *)
 n00b_plan_dispatch_verify_mapped(n00b_plan_dispatch_t   *dispatch,
                                  n00b_store_map_shard_t *shard) _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
+    n00b_allocator_t    *allocator  = nullptr;
+    n00b_plan_cancel_fn  cancel_cb  = nullptr;
+    void                *cancel_ctx = nullptr;
 }
 {
     auto candidates_r = n00b_plan_dispatch_candidates(dispatch);
@@ -4010,7 +4036,9 @@ n00b_plan_dispatch_verify_mapped(n00b_plan_dispatch_t   *dispatch,
                                 n00b_option_is_set(residual_opt)
                                     ? n00b_option_get(residual_opt)
                                     : nullptr,
-                                .allocator = allocator);
+                                .allocator  = allocator,
+                                .cancel_cb  = cancel_cb,
+                                .cancel_ctx = cancel_ctx);
     if (n00b_result_is_err(verified_r) || dispatch->accepted == nullptr) {
         return verified_r;
     }
@@ -4091,7 +4119,9 @@ n00b_plan_catalog_entry_sealed(n00b_store_t               *store,
                                n00b_plan_predicate_t      *predicate,
                                n00b_plan_index_list_t     *indexes) _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
+    n00b_allocator_t    *allocator  = nullptr;
+    n00b_plan_cancel_fn  cancel_cb  = nullptr;
+    void                *cancel_ctx = nullptr;
 }
 {
     if (store == nullptr || entry == nullptr || predicate == nullptr) {
@@ -4172,7 +4202,9 @@ n00b_plan_catalog_entry_sealed(n00b_store_t               *store,
     auto ordinals_r =
         n00b_plan_dispatch_verify_mapped(n00b_result_get(dispatch_r),
                                          root,
-                                         .allocator = allocator);
+                                         .allocator  = allocator,
+                                         .cancel_cb  = cancel_cb,
+                                         .cancel_ctx = cancel_ctx);
     if (n00b_result_is_err(ordinals_r)) {
         if (rocs_plan_debug_enabled()) {
             fprintf(stderr,
