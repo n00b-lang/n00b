@@ -166,6 +166,18 @@ pool_quarantine_park(n00b_pool_t *pool, void *addr, size_t mapped)
      * — the faulting stack IS the double-freer, the recorded stack the first
      * free. */
 
+    /* Release the PHYSICAL pages before revoking access: a parked page must
+     * cost only address space. PROT_NONE alone leaves the dirty pages
+     * resident/compressed until the ring-wrap munmap; MADV_FREE_REUSABLE
+     * (macOS: immediate phys_footprint credit; MADV_FREE elsewhere) hands
+     * them back now. Must precede the mprotect — the advice needs an
+     * accessible mapping. */
+#if defined(__APPLE__)
+    (void)madvise(addr, mapped, MADV_FREE_REUSABLE);
+#else
+    (void)madvise(addr, mapped, MADV_FREE);
+#endif
+
     /* Fault-on-touch before any slot work: the page is already unlinked and
      * private to this freeing thread, so no lock is needed around the
      * syscall. Failure is non-fatal: worst case the page stays readable
