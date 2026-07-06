@@ -2778,6 +2778,12 @@ ring_test = executable('test_ring',
 )
 test('ring', ring_test, suite: 'unit')
 
+spsc_ring_test = executable('test_spsc_ring',
+    ['test/unit/test_spsc_ring.c'],
+    kwargs: test_common_kwargs,
+)
+test('spsc_ring', spsc_ring_test, suite: 'unit')
+
 stack_test = executable('test_stack',
     ['test/unit/test_stack.c'],
     kwargs: test_common_kwargs,

@@ -412,15 +412,20 @@ n00b_init_core(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 
     n00b_type_registry_init();
 
-    // Conduit infrastructure pool: hidden from GC so the copying
-    // collector never scans or relocates conduit objects.  Objects
-    // that need GC tracing are registered as roots explicitly.
-    //
-    // external_metadata is deliberately OFF here: the hot path
-    // does many allocs/frees per second, and per-alloc OOB+dict
-    // bookkeeping is unaffordable at that rate. Opt back in only
-    // when a leak hunt requires it.
-    n00b_pool_init(&rt->conduit_pool, .hidden = true, .name = "conduit_pool");
+    // Conduit infrastructure pool. GC-VISIBLE (pools never relocate, so
+    // hiding bought nothing except excluding it from the scan tree — which
+    // let GC-heap objects referenced only from conduit memory be reclaimed
+    // out from under live inboxes/messages). inline_headers so the marshal
+    // layout is preserved on the hot path (no per-alloc OOB dict). pool_refcount
+    // keeps the whole pool alive while any holder has a ref (count in the pool
+    // header, orthogonal to the inline-header choice); the last unref reclaims
+    // it. Full ref discipline across conduit usage lands with the upstream
+    // conversion.
+    n00b_pool_init(&rt->conduit_pool,
+                   .hidden         = false,
+                   .inline_headers = true,
+                   .pool_refcount  = true,
+                   .name           = "conduit_pool");
 
     // Application-level "user_pool": GC-VISIBLE (NOT hidden) + non-moving. It holds
     // gateway job/message/state objects that legitimately reference GC-heap objects
