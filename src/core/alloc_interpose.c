@@ -40,6 +40,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #if defined(_WIN32)
+#include <corecrt_startup.h>
 #include <malloc.h>
 #else
 #include <dlfcn.h>
@@ -133,7 +134,11 @@ register_exit_guard_once(void)
 {
     bool expected = false;
     if (atomic_compare_exchange_strong(&exit_guard_registered, &expected, true)) {
+#if defined(_WIN32)
+        (void)_crt_atexit(mark_process_exiting);
+#else
         (void)atexit(mark_process_exiting);
+#endif
     }
 }
 
@@ -228,13 +233,14 @@ n00b_alloc_interpose_runtime_stop(void)
 
 static bool interpose_range_contains(void *ptr);
 
-// True if `p` points anywhere inside an allocation page handed out by this
-// interposer while the runtime is live.
+// While the runtime is live, allocator metadata is authoritative. Interposed
+// allocations can move during collection, so their current page may not be in
+// the static range table that records the page used at allocation time.
 static inline bool
 owned_by_interpose_allocation(void *p)
 {
     n00b_allocator_opt_t a = n00b_mem_get_allocator(p);
-    return n00b_option_is_set(a) && interpose_range_contains(p);
+    return n00b_option_is_set(a);
 }
 
 // Recover the allocation start for a pointer known to live inside an interposed

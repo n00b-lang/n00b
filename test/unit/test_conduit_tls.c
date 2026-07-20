@@ -280,7 +280,7 @@ start_listener(uint16_t *port_out)
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     assert(fd >= 0);
     int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));

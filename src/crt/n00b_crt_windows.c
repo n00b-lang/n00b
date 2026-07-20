@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <windows.h>
 #include <shellapi.h>
 
@@ -129,6 +130,8 @@ n00b_crt_build_envp(void)
 [[noreturn]] void
 n00b_crt_windows_main(void)
 {
+    _set_error_mode(_OUT_TO_STDERR);
+
     int    argc = 0;
     char **argv = n00b_crt_build_argv(&argc);
     char **envp = n00b_crt_build_envp();

@@ -94,6 +94,7 @@ function Test-HasMesonOption {
 }
 
 $OriginalPythonPath = $env:PYTHONPATH
+$OriginalPath = $env:Path
 
 function Enable-WindowsPythonTempfileAclWorkaround {
     if ($env:OS -ne "Windows_NT") {
@@ -132,6 +133,20 @@ public static class N00bBuildErrorMode {
 }
 
 Enable-WindowsPythonTempfileAclWorkaround
+
+if ($env:OS -eq "Windows_NT") {
+    $Libgit2Lib = Join-Path $Root "..\libgit2\build-codex-win-clean\RelWithDebInfo\git2.lib"
+    foreach ($Argument in $MesonArgs) {
+        if ($Argument -match "^-Dlibgit2_lib=(.+)$") {
+            $Libgit2Lib = $Matches[1]
+        }
+    }
+    $Libgit2Dir = Split-Path -Parent $Libgit2Lib
+    if (Test-Path (Join-Path $Libgit2Dir "git2.dll")) {
+        $env:Path = "$Libgit2Dir;$env:Path"
+        Write-BuildMessage "build.ps1: added libgit2 runtime directory to PATH"
+    }
+}
 
 if ($ResolvedLogPath -ne "") {
     Write-BuildMessage "build.ps1: writing build log to $ResolvedLogPath"
@@ -192,6 +207,7 @@ try {
     } else {
         $env:PYTHONPATH = $OriginalPythonPath
     }
+    $env:Path = $OriginalPath
     if ($ResolvedLogPath -ne "") {
         Write-BuildMessage "build.ps1: log ended $(Get-Date -Format o)"
     }
