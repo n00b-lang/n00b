@@ -265,7 +265,17 @@ if target_os == 'darwin'
     link_args = ['-target', target_arch + '-apple-' + target_os,
                  '-isysroot', macos_sdk]
 elif target_os == 'windows'
-    link_args = ['-static', '-Wl,/STACK:16777216']
+    # Native MSVC builds use the wrapper's /MD runtime selection. The old
+    # MinGW-oriented -static flag suppresses those CRT import libraries during
+    # ncc's compile-time image link.
+    link_args = [
+      '-Wl,/STACK:16777216',
+      '--ncc-no-comptime',
+      '--ncc-system-entry',
+      '-lmsvcrt',
+      '-lvcruntime',
+      '-lucrt',
+    ]
 else
     link_args = []
 endif
@@ -418,6 +428,9 @@ exe_c_args = c_args + [
   # link-stage hook because in this build the ObjC compiler links executables.)
   '--ncc-gcmap-prelink',
 ]
+if target_os == 'windows'
+  exe_c_args += '--ncc-no-comptime'
+endif
 
 ncc_lto_supported = cc.has_argument('--ncc-lto-guard')
 
@@ -1290,6 +1303,9 @@ endif
 # prerequisite for ever shipping a shared libn00b; until then, static only.
 n00b = static_library('n00b',
     n00b_dll_src,
+    # Custom-entry builds name n00b_start as the process entry. Windows
+    # system-entry builds leave this empty and initialize n00b from main.
+    objects: n00b_crt_host_stub_src,
     include_directories: incdir,
     dependencies: deps + [libdl_dep, mir_dep, picoquic_dep, monocypher_dep],
     c_args: exe_c_args,
@@ -1404,7 +1420,7 @@ debug_attach_test = executable('test_debug_attach',
 )
 test('debug_attach', debug_attach_test, suite: 'unit')
 
-if n00b_crt_host_stub_file.length() > 0
+if target_os != 'windows' and n00b_crt_host_stub_file.length() > 0
     crt_stub_runner = find_program('sh')
     test('crt_stub_args', crt_stub_runner,
         args: [
@@ -1491,7 +1507,8 @@ thread_exit_test = executable('test_thread_exit',
     ['test/unit/test_thread_exit.c'],
     kwargs: test_common_kwargs,
 )
-test('thread_exit', thread_exit_test, suite: 'unit')
+thread_exit_timeout = host_machine.system() == 'windows' ? 120 : 30
+test('thread_exit', thread_exit_test, suite: 'unit', timeout: thread_exit_timeout)
 
 crash_test = executable('test_crash',
     ['test/unit/test_crash.c'],
@@ -4326,10 +4343,12 @@ n00b_wrap_tool = executable('n00b-wrap',
     install: true,
 )
 
-nfs_exec_poc_tool = executable('nfs-exec-poc',
-    ['src/tools/nfs_exec_poc.c'],
-    kwargs: n00b_app_kwargs,
-)
+if host_machine.system() == 'darwin'
+  nfs_exec_poc_tool = executable('nfs-exec-poc',
+      ['src/tools/nfs_exec_poc.c'],
+      kwargs: n00b_app_kwargs,
+  )
+endif
 
 # WP-016 Phase 2: dedicated setuid-root loopback NFS mount helper for the
 # macOS-only execute-from-bundle NFS execution mode. Built/installed on macOS

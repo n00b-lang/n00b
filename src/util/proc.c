@@ -24,6 +24,7 @@
 #include <unistd.h>
 #if defined(_WIN32)
 #include "internal/win32_sockets.h"
+#include <tlhelp32.h>
 #else
 #include <signal.h>
 #endif
@@ -51,7 +52,7 @@ proc_basename(const char *path, n00b_allocator_t *allocator)
     const char *p    = path;
 
     while (*p) {
-        if (*p == '/') {
+        if (*p == '/' || *p == '\\') {
             base = p + 1;
         }
         p++;
@@ -64,7 +65,59 @@ proc_basename(const char *path, n00b_allocator_t *allocator)
 // Platform-specific helpers.
 // ----------------------------------------------------------------------------
 
-#if defined(__MACH__)
+#if defined(_WIN32)
+
+static n00b_result_t(int64_t)
+proc_raw_ppid(int64_t pid)
+{
+    if (pid <= 0 || pid > 0xffffffffLL) {
+        return n00b_result_err(int64_t, N00B_PROC_ERR_NO_SUCH_PID);
+    }
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return n00b_result_err(int64_t, N00B_PROC_ERR_LOOKUP_FAILED);
+    }
+
+    PROCESSENTRY32W entry = {.dwSize = sizeof(entry)};
+    BOOL found = Process32FirstW(snapshot, &entry);
+
+    while (found && entry.th32ProcessID != (DWORD)pid) {
+        found = Process32NextW(snapshot, &entry);
+    }
+
+    CloseHandle(snapshot);
+    if (!found) {
+        return n00b_result_err(int64_t, N00B_PROC_ERR_NO_SUCH_PID);
+    }
+
+    return n00b_result_ok(int64_t, (int64_t)entry.th32ParentProcessID);
+}
+
+static void
+proc_fill_meta(int64_t pid, n00b_proc_info_t *info, n00b_allocator_t *allocator)
+{
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                                 (DWORD)pid);
+    if (process == nullptr || process == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
+    char  path[32768];
+    DWORD path_len = (DWORD)sizeof(path);
+
+    if (QueryFullProcessImageNameA(process, 0, path, &path_len)
+        && path_len < sizeof(path)) {
+        path[path_len] = '\0';
+        info->exe_path = n00b_string_from_cstr(path, .allocator = allocator);
+        info->exe_name = proc_basename(path, allocator);
+        info->proc_name = proc_basename(path, allocator);
+    }
+
+    CloseHandle(process);
+}
+
+#elif defined(__MACH__)
 
 static n00b_result_t(int64_t)
 proc_raw_ppid(int64_t pid)
@@ -316,7 +369,7 @@ proc_fill_meta(int64_t pid, n00b_proc_info_t *info, n00b_allocator_t *allocator)
     }
 }
 
-#else // unsupported platform (e.g. Windows — future work)
+#else // unsupported platform
 
 static n00b_result_t(int64_t)
 proc_raw_ppid([[maybe_unused]] int64_t pid)
