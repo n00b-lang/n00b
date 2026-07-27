@@ -283,12 +283,13 @@ rocs_wax_add_ref_prefix_terms(n00b_store_search_text_term_list_t *terms,
     }
 }
 
-static n00b_store_search_text_action_t
-rocs_wax_search_text_hook(n00b_string_t                     *path,
-                          n00b_string_t                     *value,
-                          n00b_store_search_text_term_list_t **out_terms,
-                          void                              *ctx,
-                          n00b_allocator_t                  *allocator)
+n00b_store_search_text_action_t
+n00b_rocs_wax_default_search_text_hook(
+    n00b_string_t                      *path,
+    n00b_string_t                      *value,
+    n00b_store_search_text_term_list_t **out_terms,
+    void                               *ctx,
+    n00b_allocator_t                   *allocator)
 {
     (void)path;
     (void)ctx;
@@ -361,12 +362,19 @@ n00b_rocs_wax_err_str(n00b_err_t err)
 n00b_result_t(n00b_store_schema_t *)
 n00b_rocs_wax_schema_new() _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
+    n00b_allocator_t              *allocator            = nullptr;
+    n00b_store_search_text_hook_t  search_text_hook     = nullptr;
+    void                          *search_text_hook_ctx = nullptr;
 }
 {
+    n00b_store_search_text_hook_t effective_hook =
+        search_text_hook == nullptr ? n00b_rocs_wax_default_search_text_hook
+                                    : search_text_hook;
     auto schema_r = n00b_store_schema_new(.allocator        = allocator,
                                           .search_text      = true,
-                                          .search_text_hook = rocs_wax_search_text_hook);
+                                          .search_text_hook = effective_hook,
+                                          .search_text_hook_ctx =
+                                              search_text_hook_ctx);
     if (n00b_result_is_err(schema_r)) {
         return n00b_result_err(n00b_store_schema_t *,
                                N00B_ROCS_WAX_ERR_INTERNAL);

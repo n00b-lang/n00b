@@ -1,6 +1,8 @@
 /* test/unit/test_rocs_wax_schema.c - WP-013 Phase 1 wax event mapping. */
 
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "n00b.h"
 #include "conduit/print.h"
@@ -428,6 +430,126 @@ test_public_store_ingest_and_query(void)
     CHECK(n00b_result_is_ok(n00b_store_close(store)));
 }
 
+static n00b_store_search_text_action_t
+test_replace_large_search_text_hook(
+    n00b_string_t                      *path,
+    n00b_string_t                      *value,
+    n00b_store_search_text_term_list_t **out_terms,
+    void                               *ctx,
+    n00b_allocator_t                   *allocator)
+{
+    n00b_store_search_text_action_t action =
+        n00b_rocs_wax_default_search_text_hook(path,
+                                               value,
+                                               out_terms,
+                                               ctx,
+                                               allocator);
+    if (action != N00B_STORE_SEARCH_TEXT_DEFAULT || value == nullptr
+        || value->data == nullptr || value->u8_bytes <= 512) {
+        return action;
+    }
+
+    n00b_store_search_text_term_list_t *terms = n00b_alloc_with_opts(
+        n00b_store_search_text_term_list_t,
+        &(n00b_alloc_opts_t){.allocator = allocator});
+    *terms = n00b_list_new_private(n00b_string_t *,
+                                   .allocator = allocator,
+                                   .scan_kind = N00B_GC_SCAN_KIND_ALL);
+    n00b_list_push(*terms, r"large-hook-token");
+    *out_terms = terms;
+    return N00B_STORE_SEARCH_TEXT_REPLACE;
+}
+
+static n00b_string_t *
+large_content_record(n00b_string_t *event_id)
+{
+    static char line[16384];
+    size_t      off = 0;
+    int         n   = snprintf(
+        line,
+        sizeof(line),
+        "{\"schema\":\"wax.normalized.v1\",\"kind\":\"ai.message\","
+        "\"event_id\":\"%.*s\",\"ts_ns\":5,"
+        "\"body\":{\"role\":\"boundedrolemarker\",\"content_preview\":\"",
+        (int)event_id->u8_bytes,
+        event_id->data);
+    CHECK(n > 0 && (size_t)n < sizeof(line));
+    off = (size_t)n;
+
+    memcpy(line + off, "zebraearly ", 11);
+    off += 11;
+    for (uint32_t i = 0; i < 140; i++) {
+        CHECK(off + 6 < sizeof(line));
+        line[off++] = 'k';
+        line[off++] = 'w';
+        line[off++] = (char)('0' + (i / 100) % 10);
+        line[off++] = (char)('0' + (i / 10) % 10);
+        line[off++] = (char)('0' + i % 10);
+        line[off++] = ' ';
+    }
+    CHECK(off + 16 < sizeof(line));
+    memcpy(line + off, "kwoverflow ", 11);
+    off += 11;
+    memcpy(line + off, "\"}}", 4);
+    return n00b_string_from_cstr(line);
+}
+
+static void
+test_default_search_text_tokenizes_large_values(void)
+{
+    n00b_store_t *store = open_wax_store();
+
+    auto ingest_r = n00b_store_ingest(
+        store,
+        record_ok(large_content_record(r"wax:test:large-default:1")));
+    CHECK(n00b_result_is_ok(ingest_r));
+
+    auto seal_r = n00b_store_seal_hot_shard(store, .seal_ts = 200);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    CHECK(query_count(store, any_contains(r"boundedrolemarker")) == 1);
+    CHECK(query_count(store, any_contains(r"zebraearly")) == 1);
+    CHECK(query_count(store, any_contains(r"kw005")) == 1);
+    CHECK(query_count(store, any_contains(r"kwoverflow")) == 1);
+
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+// Built-in wax defaults should still tokenize large free-text values. Embedders
+// that need bounded indexing can install their own search_text_hook and delegate
+// default wax reference handling back to n00b_rocs_wax_default_search_text_hook.
+static void
+test_embedder_search_text_hook_can_replace_large_values(void)
+{
+    auto schema_r = n00b_rocs_wax_schema_new(
+        .search_text_hook = test_replace_large_search_text_hook);
+    CHECK(n00b_result_is_ok(schema_r));
+
+    auto store_r =
+        n00b_store_open_vfs(memory_vfs(), r"/rocs-wax-hook",
+                            n00b_result_get(schema_r));
+    CHECK(n00b_result_is_ok(store_r));
+    n00b_store_t *store = n00b_result_get(store_r);
+
+    auto ingest_r = n00b_store_ingest(store,
+                                      record_ok(large_content_record(
+                                          r"wax:test:bounded:1")));
+    CHECK(n00b_result_is_ok(ingest_r));
+
+    auto seal_r = n00b_store_seal_hot_shard(store, .seal_ts = 200);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    // Small value: default full-text indexing unchanged.
+    CHECK(query_count(store, any_contains(r"boundedrolemarker")) == 1);
+    // Large value: hook-provided terms replace default tokenization.
+    CHECK(query_count(store, any_contains(r"large-hook-token")) == 1);
+    CHECK(query_count(store, any_contains(r"zebraearly")) == 0);
+    CHECK(query_count(store, any_contains(r"kw005")) == 0);
+    CHECK(query_count(store, any_contains(r"kwoverflow")) == 0);
+
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -441,6 +563,8 @@ main(int argc, char *argv[])
     test_invalid_lines();
     test_live_body_shape_indexes();
     test_public_store_ingest_and_query();
+    test_default_search_text_tokenizes_large_values();
+    test_embedder_search_text_hook_can_replace_large_values();
 
     n00b_shutdown();
     return 0;

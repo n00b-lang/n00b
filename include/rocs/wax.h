@@ -104,7 +104,12 @@ extern n00b_string_t *n00b_rocs_wax_err_str(n00b_err_t err);
 /**
  * @brief Construct the public rocs schema used for wax normalized events.
  *
- * @kw allocator Allocator for the schema and its field descriptors.
+ * @kw allocator            Allocator for the schema and its field descriptors.
+ * @kw search_text_hook     Optional embedder policy hook for the catch-all
+ *                          full-text column (see
+ *                          @ref n00b_store_search_text_hook_t). Defaults to
+ *                          @ref n00b_rocs_wax_default_search_text_hook.
+ * @kw search_text_hook_ctx Caller-owned context for @c search_text_hook.
  *
  * @return Ok(schema) on success. Any schema-construction failure is converted
  *         to @ref N00B_ROCS_WAX_ERR_INTERNAL.
@@ -119,8 +124,26 @@ extern n00b_string_t *n00b_rocs_wax_err_str(n00b_err_t err);
 extern n00b_result_t(n00b_store_schema_t *)
 n00b_rocs_wax_schema_new() _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
+    n00b_allocator_t              *allocator            = nullptr;
+    n00b_store_search_text_hook_t  search_text_hook     = nullptr;
+    void                          *search_text_hook_ctx = nullptr;
 };
+
+/**
+ * @brief The wax schema's default catch-all search-text policy.
+ *
+ * Recognizes wax reference values (type:tail[:tail...]) and adds ref-prefix /
+ * colon-tail terms; everything else falls through to ROCS default tokenization.
+ * Exposed so an embedder installing its own @c search_text_hook can delegate
+ * the cases it does not handle instead of re-implementing ref handling.
+ */
+extern n00b_store_search_text_action_t
+n00b_rocs_wax_default_search_text_hook(
+    n00b_string_t                      *path,
+    n00b_string_t                      *value,
+    n00b_store_search_text_term_list_t **out_terms,
+    void                               *ctx,
+    n00b_allocator_t                   *allocator);
 
 /**
  * @brief Construct the wax store partition policy.
