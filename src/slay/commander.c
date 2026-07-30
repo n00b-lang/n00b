@@ -9,6 +9,7 @@
 #include "text/strings/string_ops.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -889,11 +890,24 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
                     memcpy(cval, val->data, val->u8_bytes);
 
                     switch (flag.value_type) {
-                    case N00B_CMDR_TYPE_INT:
+                    case N00B_CMDR_TYPE_INT: {
+                        char *end = nullptr;
+                        errno     = 0;
+                        int64_t parsed = strtoll(cval, &end, 10);
+                        if (errno == ERANGE || end == cval || *end != '\0') {
+                            r->ok = false;
+                            n00b_list_push(r->errors,
+                                           r"integer flag value is not a valid int64");
+                            n00b_free(cval);
+                            n00b_free(v);
+                            n00b_list_free(texts);
+                            return;
+                        }
                         *v = n00b_variant_set(n00b_cmdr_val_t,
                                               int64_t,
-                                              strtoll(cval, NULL, 10));
+                                              parsed);
                         break;
+                    }
                     case N00B_CMDR_TYPE_FLOAT:
                         *v = n00b_variant_set(n00b_cmdr_val_t,
                                               double,

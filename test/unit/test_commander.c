@@ -248,6 +248,45 @@ test_int_flag_eq_syntax(void)
     printf("  [PASS] int_flag_eq_syntax\n");
 }
 
+static void
+test_int_flag_validation(void)
+{
+    n00b_cmdr_t *c = build_simple_commander();
+    const char  *invalid[] = {
+        "xyz",
+        "12x",
+        "9223372036854775808",
+        "-9223372036854775809",
+    };
+
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        const char *argv[] = {"--jobs", invalid[i]};
+        n00b_cmdr_result_t *r = n00b_cmdr_parse(c, 2, argv);
+
+        assert(r != NULL);
+        assert(!r->ok);
+        assert(n00b_cmdr_error_count(r) == 1);
+        n00b_cmdr_result_free(r);
+    }
+
+    const char *max_argv[] = {"--jobs", "9223372036854775807"};
+    n00b_cmdr_result_t *max_r = n00b_cmdr_parse(c, 2, max_argv);
+    assert(max_r != NULL);
+    assert(max_r->ok);
+    assert(n00b_cmdr_flag_int(max_r, r"--jobs") == INT64_MAX);
+    n00b_cmdr_result_free(max_r);
+
+    const char *min_argv[] = {"--jobs", "-9223372036854775808"};
+    n00b_cmdr_result_t *min_r = n00b_cmdr_parse(c, 2, min_argv);
+    assert(min_r != NULL);
+    assert(min_r->ok);
+    assert(n00b_cmdr_flag_int(min_r, r"--jobs") == INT64_MIN);
+    n00b_cmdr_result_free(min_r);
+
+    n00b_cmdr_free(c);
+    printf("  [PASS] int_flag_validation\n");
+}
+
 // ============================================================================
 // 7. Subcommands
 // ============================================================================
@@ -721,6 +760,7 @@ main(int argc, char *argv[])
     test_double_dash();
     test_int_flag();
     test_int_flag_eq_syntax();
+    test_int_flag_validation();
     test_subcommand();
     test_parse_failure();
     test_empty_argv();
