@@ -995,6 +995,32 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
         n00b_list_push(r->args, arg);
     }
 
+    n00b_cmdr_command_t *cmd = r->has_cmd
+                                   ? cmdr_get_command(c, r->command)
+                                   : &c->root;
+    int32_t n_specs = cmd ? n00b_list_len(cmd->positionals) : 0;
+
+    if (n_specs > 0) {
+        int64_t min_args = 0;
+        int64_t max_args = 0;
+
+        for (int32_t i = 0; i < n_specs; i++) {
+            n00b_cmdr_positional_spec_t spec =
+                n00b_list_get(cmd->positionals, i);
+            min_args += spec.min;
+            max_args = spec.max < 0 || max_args < 0
+                           ? -1
+                           : max_args + spec.max;
+        }
+
+        int64_t n_args = n00b_list_len(r->args);
+        if (n_args < min_args || (max_args >= 0 && n_args > max_args)) {
+            r->ok = false;
+            n00b_list_push(r->errors,
+                           r"positional argument count is outside declared bounds");
+        }
+    }
+
     n00b_list_free(texts);
 }
 

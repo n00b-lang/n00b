@@ -248,6 +248,38 @@ test_unknown_flag_policy(void)
     printf("  [PASS] unknown_flag_policy\n");
 }
 
+static void
+test_positional_arity(void)
+{
+    n00b_cmdr_t *c = n00b_cmdr_new();
+    n00b_cmdr_add_command(c, r"run", r"Run a file");
+    n00b_cmdr_add_positional(c, r"run", r"input",
+                             N00B_CMDR_TYPE_WORD, 1, 1);
+    n00b_cmdr_add_positional(c, r"run", r"output",
+                             N00B_CMDR_TYPE_WORD, 0, 1);
+
+    const char *missing[] = {"run"};
+    n00b_cmdr_result_t *r = n00b_cmdr_parse(c, 1, missing);
+    assert(r != nullptr);
+    assert(!r->ok);
+    n00b_cmdr_result_free(r);
+
+    const char *valid[] = {"run", "in", "out"};
+    r = n00b_cmdr_parse(c, 3, valid);
+    assert(r != nullptr);
+    assert(r->ok);
+    n00b_cmdr_result_free(r);
+
+    const char *extra[] = {"run", "in", "out", "extra"};
+    r = n00b_cmdr_parse(c, 4, extra);
+    assert(r != nullptr);
+    assert(!r->ok);
+    n00b_cmdr_result_free(r);
+
+    n00b_cmdr_free(c);
+    printf("  [PASS] positional_arity\n");
+}
+
 // ============================================================================
 // 6. Integer flag value
 // ============================================================================
@@ -799,6 +831,7 @@ main(int argc, char *argv[])
     test_short_flag_no_expand();
     test_double_dash();
     test_unknown_flag_policy();
+    test_positional_arity();
     test_int_flag();
     test_int_flag_eq_syntax();
     test_int_flag_validation();
