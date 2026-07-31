@@ -208,6 +208,46 @@ test_double_dash(void)
     printf("  [PASS] double_dash\n");
 }
 
+static void
+test_unknown_flag_policy(void)
+{
+    n00b_cmdr_t *c = build_subcommand_commander();
+    n00b_cmdr_reject_unknown_flags(c, r"build");
+
+    const char *invalid[][3] = {
+        {"build", "--typo", "main.c"},
+        {"build", "--typo=value", nullptr},
+        {"build", "-z", nullptr},
+    };
+    const int counts[] = {3, 2, 2};
+
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        n00b_cmdr_result_t *r = n00b_cmdr_parse(c, counts[i], invalid[i]);
+        assert(r != nullptr);
+        assert(!r->ok);
+        n00b_cmdr_result_free(r);
+    }
+
+    const char *separated[] = {"build", "--", "--typo"};
+    n00b_cmdr_result_t *separated_r = n00b_cmdr_parse(c, 3, separated);
+    assert(separated_r != nullptr);
+    assert(separated_r->ok);
+    assert(n00b_cmdr_arg_count(separated_r) == 1);
+    assert(strcmp(n00b_cmdr_arg_str(separated_r, 0)->data, "--typo") == 0);
+    n00b_cmdr_result_free(separated_r);
+
+    const char *compatible[] = {"test", "--typo"};
+    n00b_cmdr_result_t *compatible_r = n00b_cmdr_parse(c, 2, compatible);
+    assert(compatible_r != nullptr);
+    assert(compatible_r->ok);
+    assert(n00b_cmdr_arg_count(compatible_r) == 1);
+    assert(strcmp(n00b_cmdr_arg_str(compatible_r, 0)->data, "--typo") == 0);
+    n00b_cmdr_result_free(compatible_r);
+
+    n00b_cmdr_free(c);
+    printf("  [PASS] unknown_flag_policy\n");
+}
+
 // ============================================================================
 // 6. Integer flag value
 // ============================================================================
@@ -758,6 +798,7 @@ main(int argc, char *argv[])
     test_short_flag();
     test_short_flag_no_expand();
     test_double_dash();
+    test_unknown_flag_policy();
     test_int_flag();
     test_int_flag_eq_syntax();
     test_int_flag_validation();

@@ -130,6 +130,7 @@ struct n00b_cmdr_command {
     n00b_list_t(n00b_cmdr_command_t)         subcommands; /**< Subcommands. */
     n00b_nonterm_t                          *nt;          /**< Grammar non-terminal (internal). */
     bool                                     has_name;    /**< True if name is set. */
+    bool                                     reject_unknown_flags; /**< Reject unregistered option-shaped arguments before "--". */
 };
 
 /**
@@ -312,6 +313,18 @@ void n00b_cmdr_add_flag_alias(n00b_cmdr_t *c, n00b_string_t *command,
 void n00b_cmdr_add_positional(n00b_cmdr_t *c, n00b_string_t *command,
                                n00b_string_t *name, n00b_cmdr_arg_type_t type,
                                int min, int max);
+
+/**
+ * @brief Reject unregistered option-shaped arguments for a command.
+ *
+ * Unknown flags are positional arguments by default for compatibility.
+ * Arguments after @c -- remain positional.
+ *
+ * @param c        Commander instance.
+ * @param command  Command name, or empty for root.
+ */
+void n00b_cmdr_reject_unknown_flags(n00b_cmdr_t *c,
+                                     n00b_string_t *command);
 
 /**
  * @brief Build the internal grammar from the current spec.

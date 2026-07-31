@@ -9,6 +9,7 @@
 #include "text/strings/string_ops.h"
 
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -346,6 +347,20 @@ n00b_cmdr_add_positional(n00b_cmdr_t *c, n00b_string_t *command,
     p.max  = max;
 
     n00b_list_push(cmd->positionals, p);
+}
+
+void
+n00b_cmdr_reject_unknown_flags(n00b_cmdr_t *c, n00b_string_t *command)
+{
+    if (!c) {
+        return;
+    }
+
+    n00b_cmdr_command_t *cmd = cmdr_get_command(c, command);
+
+    if (cmd) {
+        cmd->reject_unknown_flags = true;
+    }
 }
 
 // ============================================================================
@@ -946,6 +961,16 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
             }
 
             continue;
+        }
+
+        if (cmd->reject_unknown_flags
+            && text->u8_bytes > 1
+            && text->data[0] == '-'
+            && !isdigit((unsigned char)text->data[1])) {
+            r->ok = false;
+            n00b_list_push(r->errors, r"unknown flag");
+            n00b_list_free(texts);
+            return;
         }
 
         // Skip '='
