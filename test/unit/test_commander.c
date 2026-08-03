@@ -280,6 +280,154 @@ test_positional_arity(void)
     printf("  [PASS] positional_arity\n");
 }
 
+static void
+check_policy_behavior(bool condition, const char *label, int *failures)
+{
+    if (condition) {
+        printf("  [PASS] %s\n", label);
+        return;
+    }
+    fprintf(stderr, "  [FAIL] %s\n", label);
+    (*failures)++;
+}
+
+static void
+test_strict_policy_compatibility(void)
+{
+    int failures = 0;
+
+    n00b_cmdr_t *help = n00b_cmdr_new();
+    n00b_cmdr_add_command(help, r"run", r"Run a file");
+    n00b_cmdr_add_flag(help, r"run", r"--help",
+                       N00B_CMDR_TYPE_BOOL, false, r"Show help");
+    n00b_cmdr_add_positional(help, r"run", r"file",
+                             N00B_CMDR_TYPE_WORD, 1, 1);
+    const char *help_argv[] = {"run", "--help"};
+    n00b_cmdr_result_t *result = n00b_cmdr_parse(help, 2, help_argv);
+    check_policy_behavior(result != nullptr && result->ok
+                              && n00b_cmdr_flag_present(result, r"--help"),
+                          "help is not rejected by optional arity policy",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(help);
+
+    n00b_cmdr_t *compatible = n00b_cmdr_new();
+    n00b_cmdr_add_command(compatible, r"run", r"Run a file");
+    n00b_cmdr_add_positional(compatible, r"run", r"file",
+                             N00B_CMDR_TYPE_WORD, 1, 1);
+    const char *unknown_argv[] = {"run", "--typo", "value", "file"};
+    result = n00b_cmdr_parse(compatible, 4, unknown_argv);
+    check_policy_behavior(result != nullptr && result->ok
+                              && n00b_cmdr_arg_count(result) == 3,
+                          "unknown flags remain positional by default",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(compatible);
+
+    n00b_cmdr_t *unbounded = n00b_cmdr_new();
+    n00b_cmdr_add_positional(unbounded, n00b_string_empty(), r"file",
+                             N00B_CMDR_TYPE_WORD, 1, -1);
+    const char *unbounded_argv[] = {"a", "b", "c"};
+    result = n00b_cmdr_parse(unbounded, 3, unbounded_argv);
+    check_policy_behavior(result != nullptr && result->ok
+                              && n00b_cmdr_arg_count(result) == 3,
+                          "unbounded positional arity accepts multiple values",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(unbounded);
+
+    n00b_cmdr_t *strict = n00b_cmdr_new();
+    n00b_cmdr_add_positional(strict, n00b_string_empty(), r"number",
+                             N00B_CMDR_TYPE_WORD, 0, -1);
+    n00b_cmdr_reject_unknown_flags(strict, n00b_string_empty());
+    const char *numbers[] = {"-5", "-.5", "-inf"};
+    for (size_t i = 0; i < sizeof(numbers) / sizeof(numbers[0]); i++) {
+        const char *argv[] = {numbers[i]};
+        result = n00b_cmdr_parse(strict, 1, argv);
+        check_policy_behavior(result != nullptr && result->ok,
+                              numbers[i],
+                              &failures);
+        n00b_cmdr_result_free(result);
+    }
+    const char *not_number[] = {"-5x"};
+    result = n00b_cmdr_parse(strict, 1, not_number);
+    n00b_string_t *error = n00b_cmdr_error_get(result, 0);
+    check_policy_behavior(result != nullptr && !result->ok
+                              && strstr(error->data, "-5x") != nullptr,
+                          "non-numeric option names are rejected by name",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(strict);
+
+    n00b_cmdr_t *integer = build_simple_commander();
+    const char *space_argv[] = {"--jobs", " 5"};
+    result = n00b_cmdr_parse(integer, 2, space_argv);
+    check_policy_behavior(result != nullptr && !result->ok,
+                          "integer flags reject leading whitespace",
+                          &failures);
+    n00b_cmdr_result_free(result);
+
+    const char *garbage_argv[] = {"--jobs", "12x"};
+    result = n00b_cmdr_parse(integer, 2, garbage_argv);
+    error = n00b_cmdr_error_get(result, 0);
+    check_policy_behavior(result != nullptr && !result->ok
+                              && strstr(error->data, "--jobs") != nullptr
+                              && strstr(error->data, "12x") != nullptr,
+                          "integer errors name the flag and value",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(integer);
+
+    n00b_cmdr_t *float_flag = n00b_cmdr_new();
+    n00b_cmdr_add_flag(float_flag, n00b_string_empty(), r"--ratio",
+                       N00B_CMDR_TYPE_FLOAT, true, r"Ratio");
+    const char *float_flag_argv[] = {"--ratio", "1.2x"};
+    result = n00b_cmdr_parse(float_flag, 2, float_flag_argv);
+    check_policy_behavior(result != nullptr && !result->ok,
+                          "float flags reject trailing garbage",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(float_flag);
+
+    n00b_cmdr_t *integer_arg = n00b_cmdr_new();
+    n00b_cmdr_add_positional(integer_arg, n00b_string_empty(), r"count",
+                             N00B_CMDR_TYPE_INT, 1, 1);
+    const char *integer_arg_argv[] = {"9223372036854775808"};
+    result = n00b_cmdr_parse(integer_arg, 1, integer_arg_argv);
+    check_policy_behavior(result != nullptr && !result->ok,
+                          "integer positionals reject overflow",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(integer_arg);
+
+    n00b_cmdr_t *float_arg = n00b_cmdr_new();
+    n00b_cmdr_add_positional(float_arg, n00b_string_empty(), r"ratio",
+                             N00B_CMDR_TYPE_FLOAT, 1, 1);
+    const char *float_arg_argv[] = {"1.2x"};
+    result = n00b_cmdr_parse(float_arg, 1, float_arg_argv);
+    check_policy_behavior(result != nullptr && !result->ok,
+                          "float positionals reject trailing garbage",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(float_arg);
+
+    n00b_cmdr_t *arity_error = n00b_cmdr_new();
+    n00b_cmdr_add_positional(arity_error, n00b_string_empty(), r"file",
+                             N00B_CMDR_TYPE_WORD, 1, 1);
+    const char *arity_argv[] = {"one", "two"};
+    result = n00b_cmdr_parse(arity_error, 2, arity_argv);
+    error = n00b_cmdr_error_get(result, 0);
+    check_policy_behavior(result != nullptr && !result->ok
+                              && n00b_cmdr_error_count(result) == 1
+                              && strstr(error->data, "bounds") != nullptr,
+                          "arity failures report one bounds error",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(arity_error);
+
+    assert(failures == 0);
+}
+
 // ============================================================================
 // 6. Integer flag value
 // ============================================================================
@@ -832,6 +980,7 @@ main(int argc, char *argv[])
     test_double_dash();
     test_unknown_flag_policy();
     test_positional_arity();
+    test_strict_policy_compatibility();
     test_int_flag();
     test_int_flag_eq_syntax();
     test_int_flag_validation();
