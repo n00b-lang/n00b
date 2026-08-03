@@ -257,6 +257,7 @@ test_positional_arity(void)
                              N00B_CMDR_TYPE_WORD, 1, 1);
     n00b_cmdr_add_positional(c, r"run", r"output",
                              N00B_CMDR_TYPE_WORD, 0, 1);
+    n00b_cmdr_enforce_arity(c, r"run");
 
     const char *missing[] = {"run"};
     n00b_cmdr_result_t *r = n00b_cmdr_parse(c, 1, missing);
@@ -302,6 +303,7 @@ test_strict_policy_compatibility(void)
                        N00B_CMDR_TYPE_BOOL, false, r"Show help");
     n00b_cmdr_add_positional(help, r"run", r"file",
                              N00B_CMDR_TYPE_WORD, 1, 1);
+    n00b_cmdr_enforce_arity(help, r"run");
     const char *help_argv[] = {"run", "--help"};
     n00b_cmdr_result_t *result = n00b_cmdr_parse(help, 2, help_argv);
     check_policy_behavior(result != nullptr && result->ok
@@ -327,6 +329,7 @@ test_strict_policy_compatibility(void)
     n00b_cmdr_t *unbounded = n00b_cmdr_new();
     n00b_cmdr_add_positional(unbounded, n00b_string_empty(), r"file",
                              N00B_CMDR_TYPE_WORD, 1, -1);
+    n00b_cmdr_enforce_arity(unbounded, n00b_string_empty());
     const char *unbounded_argv[] = {"a", "b", "c"};
     result = n00b_cmdr_parse(unbounded, 3, unbounded_argv);
     check_policy_behavior(result != nullptr && result->ok
@@ -414,6 +417,7 @@ test_strict_policy_compatibility(void)
     n00b_cmdr_t *arity_error = n00b_cmdr_new();
     n00b_cmdr_add_positional(arity_error, n00b_string_empty(), r"file",
                              N00B_CMDR_TYPE_WORD, 1, 1);
+    n00b_cmdr_enforce_arity(arity_error, n00b_string_empty());
     const char *arity_argv[] = {"one", "two"};
     result = n00b_cmdr_parse(arity_error, 2, arity_argv);
     error = n00b_cmdr_error_get(result, 0);
