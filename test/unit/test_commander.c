@@ -301,10 +301,11 @@ test_strict_policy_compatibility(void)
     n00b_cmdr_add_command(help, r"run", r"Run a file");
     n00b_cmdr_add_flag(help, r"run", r"--help",
                        N00B_CMDR_TYPE_BOOL, false, r"Show help");
+    n00b_cmdr_add_flag_alias(help, r"run", r"--help", r"-h");
     n00b_cmdr_add_positional(help, r"run", r"file",
                              N00B_CMDR_TYPE_WORD, 1, 1);
     n00b_cmdr_enforce_arity(help, r"run");
-    const char *help_argv[] = {"run", "--help"};
+    const char *help_argv[] = {"run", "-h"};
     n00b_cmdr_result_t *result = n00b_cmdr_parse(help, 2, help_argv);
     check_policy_behavior(result != nullptr && result->ok
                               && n00b_cmdr_flag_present(result, r"--help"),
@@ -428,6 +429,33 @@ test_strict_policy_compatibility(void)
                           &failures);
     n00b_cmdr_result_free(result);
     n00b_cmdr_free(arity_error);
+
+    n00b_cmdr_t *no_positionals = n00b_cmdr_new();
+    n00b_cmdr_reject_unknown_flags(no_positionals, n00b_string_empty());
+    n00b_cmdr_enforce_arity(no_positionals, n00b_string_empty());
+    const char *unexpected_argv[] = {"unexpected"};
+    result = n00b_cmdr_parse(no_positionals, 1, unexpected_argv);
+    check_policy_behavior(result != nullptr && !result->ok,
+                          "arity enforcement rejects undeclared positionals",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(no_positionals);
+
+    n00b_cmdr_t *host_flag = n00b_cmdr_new();
+    n00b_cmdr_add_flag(host_flag, n00b_string_empty(), r"--host",
+                       N00B_CMDR_TYPE_WORD, true, r"Host name");
+    n00b_cmdr_add_flag_alias(host_flag, n00b_string_empty(), r"--host", r"-h");
+    n00b_cmdr_add_positional(host_flag, n00b_string_empty(), r"count",
+                             N00B_CMDR_TYPE_INT, 1, 1);
+    n00b_cmdr_reject_unknown_flags(host_flag, n00b_string_empty());
+    n00b_cmdr_enforce_arity(host_flag, n00b_string_empty());
+    const char *host_argv[] = {"-h", "localhost", "not-an-integer"};
+    result = n00b_cmdr_parse(host_flag, 3, host_argv);
+    check_policy_behavior(result != nullptr && !result->ok,
+                          "-h aliases do not bypass positional validation",
+                          &failures);
+    n00b_cmdr_result_free(result);
+    n00b_cmdr_free(host_flag);
 
     assert(failures == 0);
 }

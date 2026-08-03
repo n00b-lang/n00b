@@ -1140,10 +1140,9 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
     }
 
     int32_t n_specs = cmd ? n00b_list_len(cmd->positionals) : 0;
-    bool help_requested = n00b_cmdr_flag_present(r, r"--help")
-                          || n00b_cmdr_flag_present(r, r"-h");
+    bool help_requested = n00b_cmdr_flag_present(r, r"--help");
 
-    if (!help_requested && cmd && cmd->enforce_arity && n_specs > 0) {
+    if (!help_requested && cmd && cmd->enforce_arity) {
         int64_t min_args = 0;
         int64_t max_args = 0;
 
