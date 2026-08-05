@@ -11644,7 +11644,11 @@ n00b_obj_bundle_extract(n00b_obj_bundle_t *bundle,
 {
     bool                          overwrite = false;
     bool                          atomic = true;
+#if defined(_WIN32)
+    bool                          preserve_modes = false;
+#else
     bool                          preserve_modes = true;
+#endif
     bool                          create_dirs = true;
     bool                          allow_absolute_paths = false;
     bool                          allow_parent_refs = false;

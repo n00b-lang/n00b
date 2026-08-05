@@ -1048,6 +1048,7 @@ TEST(word_match_lengths_en_sampled)
     char  *path    = make_path("/data/haystacks/en-sampled.txt");
     size_t total   = 0;
     char  *content = engine_test_slurp_file(path, &total);
+    REQUIRE(content != nullptr && total != 0, "failed to read sampled haystack");
     size_t input_cap;
     if (ckd_add(&input_cap, total, (size_t)1)) {
         n00b_panic("input size overflow");
@@ -2727,7 +2728,11 @@ static char *
 engine_test_slurp_file(const char *path, size_t *out_len)
 {
     if (out_len) *out_len = 0;
+#ifdef _WIN32
+    int fd = _open(path, _O_RDONLY | _O_BINARY);
+#else
     int fd = open(path, O_RDONLY);
+#endif
     if (fd < 0) return nullptr;
 
     struct stat st;

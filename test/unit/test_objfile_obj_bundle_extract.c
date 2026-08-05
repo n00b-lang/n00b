@@ -446,7 +446,8 @@ assert_default_controls(n00b_obj_bundle_extract_result_t *facts,
                      root);
     N00B_TEST_REQUIRE(!n00b_obj_bundle_extract_result_overwrite(facts));
     N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_atomic_requested(facts));
-    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_preserve_modes(facts));
+    N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_preserve_modes(facts)
+                      == host_supports_posix_modes());
     N00B_TEST_REQUIRE(n00b_obj_bundle_extract_result_create_dirs(facts));
     N00B_TEST_REQUIRE(
         !n00b_obj_bundle_extract_result_allow_absolute_paths(facts));
@@ -1364,6 +1365,7 @@ test_direct_failure_preserves_created_directory_facts(void)
     auto result = n00b_obj_bundle_extract(bundle,
                                           root,
                                           .atomic = false,
+                                          .preserve_modes = true,
                                           .allocator = allocator);
     n00b_obj_bundle_error_t *error =
         require_extract_error(result,
@@ -1564,6 +1566,7 @@ test_atomic_staging_failure_cleans_temp_tree(void)
         r"_root");
     auto result = n00b_obj_bundle_extract(bundle,
                                           root,
+                                          .preserve_modes = true,
                                           .allocator = allocator);
     n00b_obj_bundle_error_t *error =
         require_extract_error(result,
