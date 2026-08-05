@@ -94,7 +94,7 @@ n00b_acme_socket_retryable(int err)
 }
 
 static int
-n00b_acme_make_nonblocking(int fd)
+n00b_acme_make_nonblocking(base_socket_t fd)
 {
     u_long mode = 1;
     return ioctlsocket((SOCKET)fd, FIONBIO, &mode) == 0 ? 0 : -1;
@@ -119,7 +119,7 @@ n00b_acme_socket_retryable(int err)
 }
 
 static int
-n00b_acme_make_nonblocking(int fd)
+n00b_acme_make_nonblocking(base_socket_t fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
@@ -346,7 +346,7 @@ get_base_state(void)
 
 static int
 tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
-            int *sock_out)
+            base_socket_t *sock_out)
 {
     /* Resolve without the libc resolver (getaddrinfo): this runs on n00b
      * worker threads, where getaddrinfo's internal libc malloc traps under the
@@ -362,9 +362,9 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
         return N00B_QUIC_ERR_BIND_FAILED;
     }
 
-    int64_t deadline = now_ms() + timeout_ms;
-    int     fd       = -1;
-    int     rc       = N00B_QUIC_ERR_BIND_FAILED;
+    int64_t       deadline = now_ms() + timeout_ms;
+    base_socket_t fd       = BASE_INVALID_SOCKET;
+    int           rc       = N00B_QUIC_ERR_BIND_FAILED;
     int     last_errno  = 0;     /* errno snapshot from the last attempt */
     const char *last_phase = "init";
 
@@ -387,14 +387,14 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
             last_errno = connect_errno;
             last_phase = "connect";
             N00B_ACME_CLOSE_SOCKET(fd);
-            fd = -1;
+            fd = BASE_INVALID_SOCKET;
             continue;
         }
         /* Wait for the socket to become writable. */
         int64_t now = now_ms();
         if (now >= deadline) {
             N00B_ACME_CLOSE_SOCKET(fd);
-            fd = -1;
+            fd = BASE_INVALID_SOCKET;
             rc = N00B_QUIC_ERR_TIMEOUT;
             last_phase = "deadline";
             continue;
@@ -405,7 +405,7 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
             if (pr < 0) last_errno = N00B_ACME_SOCKET_ERRNO();
             last_phase = (pr == 0) ? "poll-timeout" : "poll-error";
             N00B_ACME_CLOSE_SOCKET(fd);
-            fd = -1;
+            fd = BASE_INVALID_SOCKET;
             rc = (pr == 0) ? N00B_QUIC_ERR_TIMEOUT
                            : N00B_QUIC_ERR_BIND_FAILED;
             continue;
@@ -417,7 +417,7 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
             last_errno = err ? err : N00B_ACME_SOCKET_ERRNO();
             last_phase = "post-poll-so_error";
             N00B_ACME_CLOSE_SOCKET(fd);
-            fd = -1;
+            fd = BASE_INVALID_SOCKET;
             rc = N00B_QUIC_ERR_BIND_FAILED;
             continue;
         }
@@ -443,7 +443,7 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
 
 /* Drain encbuf to the socket; non-blocking-safe. */
 static int
-flush_send(int sockfd, ptls_buffer_t *encbuf, int32_t timeout_ms)
+flush_send(base_socket_t sockfd, ptls_buffer_t *encbuf, int32_t timeout_ms)
 {
     int64_t deadline = now_ms() + timeout_ms;
     while (encbuf->off > 0) {
@@ -506,7 +506,7 @@ typedef struct {
 } per_call_ctx_t;
 
 struct n00b_acme_tls_conn {
-    int            sockfd;
+    base_socket_t  sockfd;
     ptls_t        *tls;
     bool           handshake_done;
     bool           peer_eof;
@@ -531,7 +531,7 @@ struct n00b_acme_tls_conn {
 static int
 do_handshake_until_done(n00b_acme_tls_conn_t *c, int64_t deadline);
 static int
-flush_send(int sockfd, ptls_buffer_t *encbuf, int32_t timeout_ms);
+flush_send(base_socket_t sockfd, ptls_buffer_t *encbuf, int32_t timeout_ms);
 
 /* Build a per-call ptls_context_t.  Called when the connection needs
  * to override at least one of:
@@ -631,8 +631,8 @@ n00b_acme_tls_connect_ex(const char                       *host,
         ctx_for_new = &base->base_ctx;
     }
 
-    int sockfd = -1;
-    int rc     = tcp_connect(host, port, timeout_ms, &sockfd);
+    base_socket_t sockfd = BASE_INVALID_SOCKET;
+    int           rc     = tcp_connect(host, port, timeout_ms, &sockfd);
     if (rc != N00B_QUIC_OK) return rc;
     /* TEMP egress bisect (CRAYON_EGRESS_WIRE_LOG): each call is a FRESH
      * connection; logs prove reconnects + pinpoint a handshake hang. */
@@ -668,7 +668,7 @@ n00b_acme_tls_connect_ex(const char                       *host,
                                  nullptr, nullptr, nullptr);
     if (phs_rc != PTLS_ERROR_IN_PROGRESS && phs_rc != 0) {
         ptls_free(c->tls);
-        close(sockfd);
+        N00B_ACME_CLOSE_SOCKET(sockfd);
         return N00B_QUIC_ERR_HANDSHAKE;
     }
 
@@ -947,21 +947,21 @@ void
 n00b_acme_tls_close(n00b_acme_tls_conn_t *c)
 {
     if (!c) return;
-    if (c->encbuf.off > 0 && c->sockfd >= 0) {
+    if (c->encbuf.off > 0 && c->sockfd != BASE_INVALID_SOCKET) {
         (void)flush_send(c->sockfd, &c->encbuf, 100);
     }
     ptls_buffer_dispose(&c->encbuf);
     ptls_buffer_dispose(&c->ptbuf);
     if (c->tls) ptls_free(c->tls);
-    if (c->sockfd >= 0) N00B_ACME_CLOSE_SOCKET(c->sockfd);
-    c->sockfd = -1;
+    if (c->sockfd != BASE_INVALID_SOCKET) N00B_ACME_CLOSE_SOCKET(c->sockfd);
+    c->sockfd = BASE_INVALID_SOCKET;
     c->tls    = nullptr;
 }
 
 bool
 n00b_acme_tls_alive(n00b_acme_tls_conn_t *c)
 {
-    if (!c || c->sockfd < 0 || c->peer_eof) return false;
+    if (!c || c->sockfd == BASE_INVALID_SOCKET || c->peer_eof) return false;
     /* Non-blocking peek: if recv() returns 0 the peer FIN'd; if it
      * returns -1 with EAGAIN we have no data but the socket is OK. */
     char    peek[1];

@@ -149,12 +149,8 @@ test_listen_unix_accept_emits_event(void)
     n00b_conduit_sock_accept_msg_t *msg =
         n00b_conduit_sock_accept_inbox_pop(inbox);
     assert(msg != nullptr);
-    assert(msg->payload.client_fd >= 0);
-    // The accept event hands the caller a raw fd. Releasing it back to
-    // the kernel is a libc-level operation (n00b doesn't wrap close(2)
-    // for arbitrary fds; the conduit-managed alternative would be
-    // n00b_conduit_fd_manage + later n00b_conduit_fd_close).
-    (void)close(msg->payload.client_fd);
+    assert(msg->payload.client_fd != BASE_INVALID_SOCKET);
+    n00b_conduit_release_fd(msg->payload.client_fd);
 
     n00b_conduit_conn_close(conn);
     n00b_conduit_listener_close(listener);

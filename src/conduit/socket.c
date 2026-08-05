@@ -44,7 +44,9 @@
 static void
 listener_insert(n00b_conduit_t *c, n00b_conduit_listener_t *listener)
 {
-    n00b_dict_untyped_put(&c->listeners, (void *)(intptr_t)listener->fd, listener);
+    n00b_dict_untyped_put(&c->listeners,
+                          (void *)(uintptr_t)listener->fd,
+                          listener);
     n00b_atomic_store(&listener->registry_registered, true);
 }
 
@@ -53,7 +55,8 @@ listener_remove(n00b_conduit_t *c, n00b_conduit_listener_t *listener)
 {
     bool expected = true;
     if (n00b_atomic_cas(&listener->registry_registered, &expected, false)) {
-        n00b_dict_untyped_remove(&c->listeners, (void *)(intptr_t)listener->fd);
+        n00b_dict_untyped_remove(&c->listeners,
+                                 (void *)(uintptr_t)listener->fd);
     }
 }
 
@@ -67,14 +70,16 @@ listener_release_native_once(n00b_conduit_listener_t *listener)
 }
 
 n00b_option_t(n00b_conduit_listener_t *)
-n00b_conduit_listener_get(n00b_conduit_t *c, int fd)
+n00b_conduit_listener_get(n00b_conduit_t *c, base_socket_t fd)
 {
-    if (!c || fd < 0) {
+    if (!c || fd == BASE_INVALID_SOCKET) {
         return n00b_option_none(n00b_conduit_listener_t *);
     }
 
     bool found = false;
-    void *val = n00b_dict_untyped_get(&c->listeners, (void *)(intptr_t)fd, &found);
+    void *val = n00b_dict_untyped_get(&c->listeners,
+                                      (void *)(uintptr_t)fd,
+                                      &found);
     if (found) {
         return n00b_option_set(n00b_conduit_listener_t *, (n00b_conduit_listener_t *)val);
     }
@@ -97,7 +102,7 @@ n00b_conduit_listener_get(n00b_conduit_t *c, int fd)
 static n00b_result_t(n00b_conduit_listener_t *)
 finalize_listener(n00b_conduit_t            *c,
                   n00b_conduit_io_backend_t *io,
-                  int                        fd,
+                  base_socket_t              fd,
                   n00b_allocator_t          *allocator);
 
 /*
@@ -114,7 +119,7 @@ finalize_listener(n00b_conduit_t            *c,
 static n00b_result_t(n00b_conduit_conn_t *)
 prepare_outbound_conn(n00b_conduit_t            *c,
                       n00b_conduit_io_backend_t *io,
-                      int                        fd,
+                      base_socket_t              fd,
                       n00b_allocator_t          *allocator);
 
 /*
@@ -151,7 +156,7 @@ unix_socket_errno(int err)
 }
 
 static n00b_result_t(int)
-make_nonblocking(int fd)
+make_nonblocking(base_socket_t fd)
 {
 #ifdef _WIN32
     u_long mode = 1;
@@ -179,13 +184,23 @@ n00b_conduit_listen_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
         return n00b_result_err(n00b_conduit_listener_t *, EINVAL);
     }
 
-    int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
+    base_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == BASE_INVALID_SOCKET) {
         return n00b_result_err(n00b_conduit_listener_t *, N00B_SOCK_ERRNO);
     }
 
     int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+#ifdef _WIN32
+    int reuse_opt = SO_EXCLUSIVEADDRUSE;
+#else
+    int reuse_opt = SO_REUSEADDR;
+#endif
+    if (setsockopt(fd, SOL_SOCKET, reuse_opt,
+                   (const char *)&opt, sizeof(opt)) != 0) {
+        int err = N00B_SOCK_ERRNO;
+        N00B_CLOSE_SOCKET(fd);
+        return n00b_result_err(n00b_conduit_listener_t *, err);
+    }
 
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
@@ -228,7 +243,7 @@ n00b_conduit_listen_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
 static n00b_result_t(n00b_conduit_listener_t *)
 finalize_listener(n00b_conduit_t            *c,
                   n00b_conduit_io_backend_t *io,
-                  int                        fd,
+                  base_socket_t              fd,
                   n00b_allocator_t          *allocator)
 {
     {
@@ -298,7 +313,7 @@ n00b_conduit_listener_accept_topic(n00b_conduit_listener_t *listener)
 uint16_t
 n00b_conduit_listener_local_port(n00b_conduit_listener_t *listener)
 {
-    if (listener == nullptr || listener->fd < 0) {
+    if (listener == nullptr || listener->fd == BASE_INVALID_SOCKET) {
         return 0;
     }
 
@@ -318,9 +333,9 @@ n00b_conduit_listener_local_port(n00b_conduit_listener_t *listener)
 }
 
 void
-n00b_conduit_release_fd(int fd)
+n00b_conduit_release_fd(base_socket_t fd)
 {
-    if (fd >= 0) {
+    if (fd != BASE_INVALID_SOCKET) {
         N00B_CLOSE_SOCKET(fd);
     }
 }
@@ -375,10 +390,10 @@ n00b_conduit_listener_dispatch(n00b_conduit_listener_t *listener, uint32_t io_op
         struct sockaddr_storage client_addr;
         socklen_t addr_len = sizeof(client_addr);
 
-        int client_fd = (int)accept(listener->fd,
-                                     (struct sockaddr *)&client_addr,
-                                     &addr_len);
-        if (client_fd < 0) {
+        base_socket_t client_fd = accept(listener->fd,
+                                         (struct sockaddr *)&client_addr,
+                                         &addr_len);
+        if (client_fd == BASE_INVALID_SOCKET) {
             int err = N00B_SOCK_ERRNO;
             if (err == N00B_EWOULDBLOCK
 #ifndef _WIN32
@@ -473,9 +488,9 @@ publish_conn_status(n00b_conduit_conn_t *conn,
 
 n00b_result_t(n00b_conduit_conn_t *)
 n00b_conduit_conn_from_fd(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
-                          int fd)
+                          base_socket_t fd)
 {
-    if (!c || !io || fd < 0) {
+    if (!c || !io || fd == BASE_INVALID_SOCKET) {
         return n00b_result_err(n00b_conduit_conn_t *, EINVAL);
     }
 
@@ -608,7 +623,7 @@ connect_completion_hook(n00b_conduit_fd_owner_t *owner, void *ctx)
 static n00b_result_t(n00b_conduit_conn_t *)
 prepare_outbound_conn(n00b_conduit_t            *c,
                       n00b_conduit_io_backend_t *io,
-                      int                        fd,
+                      base_socket_t              fd,
                       n00b_allocator_t          *allocator)
 {
     n00b_allocator_t *alloc = allocator ? allocator : c->allocator;
@@ -692,8 +707,8 @@ n00b_conduit_conn_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
         return n00b_result_err(n00b_conduit_conn_t *, EINVAL);
     }
 
-    int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
+    base_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == BASE_INVALID_SOCKET) {
         return n00b_result_err(n00b_conduit_conn_t *, N00B_SOCK_ERRNO);
     }
 
@@ -804,8 +819,8 @@ n00b_conduit_listen_unix(n00b_conduit_t            *c,
         }
     }
 
-    int fd = (int)socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) {
+    base_socket_t fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd == BASE_INVALID_SOCKET) {
         return n00b_result_err(n00b_conduit_listener_t *,
                                 unix_socket_errno(N00B_SOCK_ERRNO));
     }
@@ -861,8 +876,8 @@ n00b_conduit_conn_unix(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
         addr_len = n00b_result_get(a_r);
     }
 
-    int fd = (int)socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) {
+    base_socket_t fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd == BASE_INVALID_SOCKET) {
         return n00b_result_err(n00b_conduit_conn_t *,
                                 unix_socket_errno(N00B_SOCK_ERRNO));
     }

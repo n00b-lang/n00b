@@ -382,10 +382,10 @@ wsa_process_signals(wsa_ctx_t *ctx)
 // ============================================================================
 
 static int
-wsa_find_fd(wsa_ctx_t *ctx, int fd)
+wsa_find_fd(wsa_ctx_t *ctx, base_socket_t fd)
 {
     for (int i = 0; i < ctx->nfds; i++) {
-        if (ctx->pollfds[i].fd == (SOCKET)fd) {
+        if (ctx->pollfds[i].fd == fd) {
             return i;
         }
     }
@@ -575,7 +575,7 @@ wsa_cleanup(void *vctx)
 }
 
 static bool
-wsa_add(void *vctx, int fd, n00b_conduit_io_op_t ops,
+wsa_add(void *vctx, base_socket_t fd, n00b_conduit_io_op_t ops,
         n00b_conduit_io_target_t *target)
 {
     wsa_ctx_t *ctx = vctx;
@@ -600,7 +600,7 @@ wsa_add(void *vctx, int fd, n00b_conduit_io_op_t ops,
     }
 
     idx = ctx->nfds++;
-    ctx->pollfds[idx].fd      = (SOCKET)fd;
+    ctx->pollfds[idx].fd      = fd;
     ctx->pollfds[idx].events  = events;
     ctx->pollfds[idx].revents = 0;
     ctx->targets[idx]         = target;
@@ -608,7 +608,7 @@ wsa_add(void *vctx, int fd, n00b_conduit_io_op_t ops,
 }
 
 static bool
-wsa_modify(void *vctx, int fd, n00b_conduit_io_op_t ops,
+wsa_modify(void *vctx, base_socket_t fd, n00b_conduit_io_op_t ops,
            n00b_conduit_io_target_t *target)
 {
     wsa_ctx_t *ctx = vctx;
@@ -631,7 +631,7 @@ wsa_modify(void *vctx, int fd, n00b_conduit_io_op_t ops,
 }
 
 static bool
-wsa_remove(void *vctx, int fd)
+wsa_remove(void *vctx, base_socket_t fd)
 {
     wsa_ctx_t *ctx = vctx;
     if (!ctx) return false;
@@ -1113,7 +1113,7 @@ wsa_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
     if (n == 0) return 0;
 
     // Drain wakeup FD if it fired
-    int wakeup_idx = wsa_find_fd(ctx, (int)ctx->wakeup_rd);
+    int wakeup_idx = wsa_find_fd(ctx, ctx->wakeup_rd);
     if (wakeup_idx >= 0 && (ctx->pollfds[wakeup_idx].revents & POLLIN)) {
         wsa_drain_wakeup(ctx);
         n--;
@@ -1129,7 +1129,7 @@ wsa_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
         total_seen++;
 
         n00b_conduit_io_event_t *ev = &events[num_events];
-        ev->fd        = (int)ctx->pollfds[i].fd;
+        ev->fd        = ctx->pollfds[i].fd;
         ev->ops       = wsa_events_to_ops(ctx->pollfds[i].revents);
         ev->topic     = nullptr;
         ev->target    = ctx->targets[i];

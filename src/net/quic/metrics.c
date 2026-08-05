@@ -48,7 +48,7 @@
 #define N00B_METRICS_SOCKOPT_PTR(ptr) ((const char *)(ptr))
 
 static void
-metrics_prepare_blocking_socket(int fd)
+metrics_prepare_blocking_socket(base_socket_t fd)
 {
     u_long mode = 0;
     (void)ioctlsocket((SOCKET)fd, FIONBIO, &mode);
@@ -65,7 +65,7 @@ metrics_prepare_blocking_socket(int fd)
 #define N00B_METRICS_WRITE(fd, buf, len) write((fd), (buf), (len))
 
 static void
-metrics_prepare_blocking_socket(int fd)
+metrics_prepare_blocking_socket(base_socket_t fd)
 {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl >= 0) {
@@ -632,8 +632,8 @@ n00b_quic_metrics_listener_run_once(n00b_quic_metric_listener_t *l)
     size_t serviced = 0;
     n00b_conduit_sock_accept_msg_t *msg;
     while ((msg = n00b_conduit_sock_accept_inbox_pop(l->accept_inbox))) {
-        int fd = msg->payload.client_fd;
-        if (fd < 0) continue;
+        base_socket_t fd = msg->payload.client_fd;
+        if (fd == BASE_INVALID_SOCKET) continue;
         _n00b_quic_metrics_handle_conn(l, fd);
         serviced++;
     }
@@ -654,7 +654,8 @@ n00b_quic_metrics_listener_close(n00b_quic_metric_listener_t *l)
 uint16_t
 n00b_quic_metrics_listener_port(n00b_quic_metric_listener_t *l)
 {
-    if (!l || l->closed || !l->tcp_listener || l->tcp_listener->fd < 0) {
+    if (!l || l->closed || !l->tcp_listener ||
+        l->tcp_listener->fd == BASE_INVALID_SOCKET) {
         return 0;
     }
     struct sockaddr_storage ss;
@@ -678,7 +679,8 @@ n00b_quic_metrics_listener_port(n00b_quic_metric_listener_t *l)
 #define METRICS_REQ_MAX 4096
 
 void
-_n00b_quic_metrics_handle_conn(n00b_quic_metric_listener_t *l, int fd)
+_n00b_quic_metrics_handle_conn(n00b_quic_metric_listener_t *l,
+                               base_socket_t                fd)
 {
     /* Read up to METRICS_REQ_MAX bytes; bail on first \r\n\r\n. */
     char    buf[METRICS_REQ_MAX];

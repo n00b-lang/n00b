@@ -38,7 +38,7 @@
  * =========================================================================== */
 
 static n00b_result_t(int)
-udp_make_nonblocking(int fd)
+udp_make_nonblocking(base_socket_t fd)
 {
 #ifdef _WIN32
     u_long mode = 1;
@@ -69,13 +69,23 @@ n00b_conduit_udp_bind(n00b_conduit_t            *c,
         return n00b_result_err(n00b_conduit_udp_t *, EINVAL);
     }
 
-    int fd = (int)socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) {
-        return n00b_result_err(n00b_conduit_udp_t *, errno);
+    base_socket_t fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd == BASE_INVALID_SOCKET) {
+        return n00b_result_err(n00b_conduit_udp_t *, N00B_SOCK_ERRNO);
     }
 
     int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+#ifdef _WIN32
+    int reuse_opt = SO_EXCLUSIVEADDRUSE;
+#else
+    int reuse_opt = SO_REUSEADDR;
+#endif
+    if (setsockopt(fd, SOL_SOCKET, reuse_opt,
+                   (const char *)&opt, sizeof(opt)) != 0) {
+        int err = N00B_SOCK_ERRNO;
+        N00B_CLOSE_SOCKET(fd);
+        return n00b_result_err(n00b_conduit_udp_t *, err);
+    }
 
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
@@ -92,8 +102,9 @@ n00b_conduit_udp_bind(n00b_conduit_t            *c,
     }
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        int err = N00B_SOCK_ERRNO;
         N00B_CLOSE_SOCKET(fd);
-        return n00b_result_err(n00b_conduit_udp_t *, errno);
+        return n00b_result_err(n00b_conduit_udp_t *, err);
     }
 
     {
@@ -301,6 +312,6 @@ n00b_conduit_udp_close(n00b_conduit_udp_t *u)
     n00b_conduit_io_unwatch(u->io, u->fd);
     N00B_CLOSE_SOCKET(u->fd);
     n00b_conduit_topic_close(u->recv_topic);
-    u->fd         = -1;
+    u->fd         = BASE_INVALID_SOCKET;
     u->recv_topic = nullptr;
 }

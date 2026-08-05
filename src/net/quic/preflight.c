@@ -43,6 +43,7 @@
 #define N00B_PREFLIGHT_CLOSE_SOCKET(fd) closesocket((SOCKET)(fd))
 #define N00B_PREFLIGHT_SOCKET_ERRNO() WSAGetLastError()
 #define N00B_PREFLIGHT_SOCKOPT_PTR(ptr) ((const char *)(ptr))
+#define N00B_PREFLIGHT_REUSE_OPT SO_EXCLUSIVEADDRUSE
 #define N00B_PREFLIGHT_EACCES WSAEACCES
 #define N00B_PREFLIGHT_EADDRINUSE WSAEADDRINUSE
 #define N00B_PREFLIGHT_PATH_DELIM ";"
@@ -63,6 +64,7 @@ pf_strtok(char *s, const char *delim, char **saveptr)
 #define N00B_PREFLIGHT_CLOSE_SOCKET(fd) close(fd)
 #define N00B_PREFLIGHT_SOCKET_ERRNO() errno
 #define N00B_PREFLIGHT_SOCKOPT_PTR(ptr) (ptr)
+#define N00B_PREFLIGHT_REUSE_OPT SO_REUSEADDR
 #define N00B_PREFLIGHT_EACCES EACCES
 #define N00B_PREFLIGHT_EADDRINUSE EADDRINUSE
 #define N00B_PREFLIGHT_PATH_DELIM ":"
@@ -183,8 +185,9 @@ check_port_bind(finding_buf_t *fb, const n00b_buffer_t *host_buf, uint16_t port)
         return;
     }
 
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) {
+    base_socket_t fd = socket(res->ai_family, res->ai_socktype,
+                              res->ai_protocol);
+    if (fd == BASE_INVALID_SOCKET) {
         freeaddrinfo(res);
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
                 .detail = r"socket() failed",
@@ -194,7 +197,7 @@ check_port_bind(finding_buf_t *fb, const n00b_buffer_t *host_buf, uint16_t port)
         return;
     }
     int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+    setsockopt(fd, SOL_SOCKET, N00B_PREFLIGHT_REUSE_OPT,
                N00B_PREFLIGHT_SOCKOPT_PTR(&yes), sizeof(yes));
 
     if (bind(fd, res->ai_addr, res->ai_addrlen) != 0) {
@@ -253,8 +256,9 @@ check_metrics_bind(finding_buf_t                      *fb,
                     "literal IPv4/IPv6 wildcard or loopback."));
         return;
     }
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) {
+    base_socket_t fd = socket(res->ai_family, res->ai_socktype,
+                              res->ai_protocol);
+    if (fd == BASE_INVALID_SOCKET) {
         freeaddrinfo(res);
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
                 .detail = n00b_string_from_cstr(
@@ -264,7 +268,7 @@ check_metrics_bind(finding_buf_t                      *fb,
         return;
     }
     int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+    setsockopt(fd, SOL_SOCKET, N00B_PREFLIGHT_REUSE_OPT,
                N00B_PREFLIGHT_SOCKOPT_PTR(&yes), sizeof(yes));
     if (bind(fd, res->ai_addr, res->ai_addrlen) != 0) {
         int saved_errno = N00B_PREFLIGHT_SOCKET_ERRNO();
