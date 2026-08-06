@@ -38,6 +38,7 @@
 #include <WinSock2.h>
 #include <Windows.h>
 #include <assert.h>
+#include <errno.h> /* EIO: used in the shared send path; MSVC leaks it in via Windows.h, MinGW/UCRT does not */
 #include <iphlpapi.h>
 #include <stdint.h>
 #include <stdio.h>
