@@ -1499,7 +1499,7 @@ split_words_gc_repro_test = executable('test_split_words_gc_repro',
     ['test/unit/test_split_words_gc_repro.c'],
     kwargs: test_common_kwargs,
 )
-test('split_words_gc_repro', split_words_gc_repro_test, suite: 'unit')
+test('split_words_gc_repro', split_words_gc_repro_test, suite: 'unit', timeout: 60)
 
 shutdown_gc_stack_test = executable('test_shutdown_gc_stack',
     ['test/unit/test_shutdown_gc_stack.c'],

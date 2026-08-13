@@ -688,44 +688,45 @@ test_held_dead_handle_safe(n00b_runtime_t *rt)
 static void
 test_detached_reaped_without_join(void)
 {
-    // Spawn a worker that records its callstack base, but DO NOT join it.
+    // Spawn a worker that records its callstack base, but DO NOT join it.  Keep
+    // the returned handle only as an observation probe so the test can watch
+    // the detached reaper finish without using the join path.
     reuse_io_t io = {};
     n00b_result_t(n00b_thread_t *) r = n00b_thread_spawn(reuse_worker, &io);
     assert(n00b_result_is_ok(r));
-    // Intentionally drop the handle (do not join): detached, fire-and-forget.
+    n00b_thread_t *child = n00b_result_get(r);
+    assert(child != nullptr);
 
-    // Wait for the worker to have recorded its region base (it does so early in
-    // fn(), before exiting); spin briefly via short spawn/join cycles that also
-    // drive the reaper slow-path sweep.
+    // Wait for the worker to have recorded its region base.  It records before
+    // returning from fn(), so the join_futex timeout wait is only a yield; it is
+    // not a join and it does not reclaim anything.
     void *detached_base = nullptr;
     for (int i = 0; i < 64 && detached_base == nullptr; i++) {
         detached_base = n00b_atomic_load(&io.region_base);
         if (detached_base == nullptr) {
-            // A spawn/join cycle nudges the reaper and yields the CPU so the
-            // detached worker makes progress.
-            (void)spawn_join_get_base();
+            n00b_futex_wait(&child->join_futex, 0, 10000000); // 10ms
         }
     }
     assert(detached_base != nullptr);
 
-    // The detached worker, never joined, must be reaped at OS death and its
-    // region returned to the pool — so a later spawn reuses `detached_base`.
-    bool reused = false;
-    for (int i = 0; i < 64 && !reused; i++) {
-        if (spawn_join_get_base() == detached_base) {
-            reused = true;
+#if defined(_WIN32)
+    printf("  [SKIP] detached_reaped_without_join:direct-reaper "
+           "(Windows detached reaper proof is not host-verified in this "
+           "Linux fix bucket; capstone_detached_volume verifies detached "
+           "reuse)\n");
+#else
+    // Drive the public reaper without calling join. Once reap_futex is set, the
+    // worker is OS-dead and _n00b_reap_reclaim has returned its stack resources.
+    for (int i = 0; i < 128 && n00b_atomic_load(&child->reap_futex) == 0; i++) {
+        n00b_thread_reap_pending();
+        if (n00b_atomic_load(&child->reap_futex) == 0) {
+            n00b_futex_wait(&child->reap_futex, 0, 10000000); // 10ms
         }
     }
-#if defined(_WIN32)
-    // The Windows pool also contains crash altstacks. Its LIFO order can keep
-    // one selected primary stack below the active primary/altstack pair even
-    // though detached stacks are being reaped and reused. The volume test
-    // below checks bounded reuse without depending on that ordering.
-    printf("  [SKIP] detached_reaped_without_join:exact-base "
-           "(Windows LIFO primary/altstack ordering is not deterministic; "
-           "capstone_detached_volume verifies detached reuse)\n");
-#else
-    assert(reused);
+    assert(n00b_atomic_load(&child->reap_futex) == 1);
+    assert(child->callstack == nullptr);
+    assert(n00b_atomic_load(&child->altstack) == nullptr);
+
     printf("  [PASS] detached_reaped_without_join "
            "(never-joined worker runs to completion and is reaped; its "
            "callstack returns to the pool with NO join — default-detached)\n");
@@ -1171,29 +1172,30 @@ main(int argc, char **argv)
 {
     n00b_runtime_t runtime;
     n00b_init(&runtime, argc, argv);
+    n00b_runtime_t *rt = n00b_get_runtime();
 
     printf("Running thread_exit tests...\n");
 
     test_exit_code_published();
     test_default_exit_code_is_zero();
     test_void_return_unchanged();
-    test_thread_struct_from_user_pool(&runtime);
-    test_user_pool_struct_survives_gc(&runtime);
+    test_thread_struct_from_user_pool(rt);
+    test_user_pool_struct_survives_gc(rt);
     test_callstack_region_reused();
-    test_spawn_exit_loop_pooled(&runtime);
+    test_spawn_exit_loop_pooled(rt);
     test_linux_cleartid_death_edge();
 
     // WP-3a Phase 3: default-detached spawn + result-only join.
     test_joinable_both_channels();
-    test_held_dead_handle_safe(&runtime);
+    test_held_dead_handle_safe(rt);
     test_detached_reaped_without_join();
-    test_join_frees_nothing(&runtime);
+    test_join_frees_nothing(rt);
 
     // WP-3a Phase 4: the end-to-end capstone (full lifecycle at volume).
-    test_capstone_detached_volume(&runtime);
-    test_capstone_joinable_volume(&runtime);
-    test_capstone_drop_collects(&runtime);
-    test_capstone_recycled_slot_generation(&runtime);
+    test_capstone_detached_volume(rt);
+    test_capstone_joinable_volume(rt);
+    test_capstone_drop_collects(rt);
+    test_capstone_recycled_slot_generation(rt);
 
     printf("All thread_exit tests passed.\n");
     n00b_shutdown();
