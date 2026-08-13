@@ -197,7 +197,8 @@ n00b_debug_open_all_threads(int32_t slot)
             continue;
         }
         pid_t tid = 0;
-        for (const char *p = e->d_name; *p >= '0' && *p <= '9'; p++) {
+        const char *p = e->d_name;
+        for (; *p >= '0' && *p <= '9'; p++) {
             tid = tid * 10 + (*p - '0');
         }
         n00b_debug_open_for(slot, tid);
