@@ -54,6 +54,11 @@
 #include "core/runtime.h"
 #include "core/sha256.h"
 #include "core/stw.h"
+#if defined(__linux__)
+#include "core/random.h"
+#include "core/syscall.h"
+#include "core/time.h"
+#endif
 #include "core/thread.h"
 #include "crypto/trust.h"
 #include "net/quic/quic_types.h"
@@ -179,14 +184,133 @@ typedef struct {
     ptls_context_t    ctx;
 } echo_server_t;
 
+#if defined(__linux__)
+static void
+tls_test_random_bytes(void *buf, size_t len)
+{
+    n00b_random_bytes((char *)buf, len);
+}
+
+static int
+tls_test_uecc_random(uint8_t *dest, unsigned size)
+{
+    n00b_random_bytes((char *)dest, (size_t)size);
+    return 1;
+}
+
+static uint64_t
+tls_test_get_time_cb(ptls_get_time_t *self)
+{
+    (void)self;
+    return (uint64_t)(n00b_us_timestamp() / 1000);
+}
+
+static ptls_get_time_t tls_test_get_time = {.cb = tls_test_get_time_cb};
+#endif
+
+static base_socket_t
+tls_test_accept(base_socket_t fd)
+{
+#if defined(__linux__)
+    while (true) {
+#if defined(SYS_accept4)
+        long rc = _n00b_raw_linux_syscall4(SYS_accept4,
+                                           (long)fd,
+                                           0,
+                                           0,
+                                           0);
+#else
+        long rc = _n00b_raw_linux_syscall3(SYS_accept,
+                                           (long)fd,
+                                           0,
+                                           0);
+#endif
+        if (rc >= 0) {
+            return (base_socket_t)rc;
+        }
+        if (rc != -EINTR) {
+            return BASE_INVALID_SOCKET;
+        }
+    }
+#else
+    while (true) {
+        base_socket_t cfd = accept(fd, nullptr, nullptr);
+        if (cfd != BASE_INVALID_SOCKET || errno != EINTR) {
+            return cfd;
+        }
+    }
+#endif
+}
+
+static ssize_t
+tls_test_recv(base_socket_t fd, uint8_t *buf, size_t len)
+{
+#if defined(__linux__)
+    while (true) {
+        long rc = _n00b_raw_linux_syscall6(SYS_recvfrom,
+                                           (long)fd,
+                                           (long)(uintptr_t)buf,
+                                           (long)len,
+                                           0,
+                                           0,
+                                           0);
+        if (rc != -EINTR) {
+            return (ssize_t)rc;
+        }
+    }
+#else
+    while (true) {
+        ssize_t rc = recv(fd, buf, len, 0);
+        if (rc >= 0 || errno != EINTR) {
+            return rc;
+        }
+    }
+#endif
+}
+
+static ssize_t
+tls_test_send(base_socket_t fd, const uint8_t *buf, size_t len)
+{
+#if defined(__linux__)
+    while (true) {
+        long rc = _n00b_raw_linux_syscall6(SYS_sendto,
+                                           (long)fd,
+                                           (long)(uintptr_t)buf,
+                                           (long)len,
+                                           0,
+                                           0,
+                                           0);
+        if (rc != -EINTR) {
+            return (ssize_t)rc;
+        }
+    }
+#else
+    while (true) {
+        ssize_t rc = send(fd, buf, len, 0);
+        if (rc >= 0 || errno != EINTR) {
+            return rc;
+        }
+    }
+#endif
+}
+
+static void
+tls_test_close(base_socket_t fd)
+{
+#if defined(__linux__)
+    (void)_n00b_raw_linux_syscall1(SYS_close, (long)fd);
+#else
+    base_closesocket(fd);
+#endif
+}
+
 static bool
 send_all(base_socket_t fd, const uint8_t *data, size_t len)
 {
     size_t off = 0;
     while (off < len) {
-        ssize_t w = send(fd, data + off, len - off, 0);
-        if (w < 0) {
-            if (errno == EINTR) continue;
+        ssize_t w = tls_test_send(fd, data + off, len - off);
+        if (w <= 0) {
             return false;
         }
         off += (size_t)w;
@@ -199,11 +323,11 @@ echo_server_main(void *arg)
 {
     echo_server_t *srv = arg;
 
-    base_socket_t cfd = accept(srv->listen_fd, nullptr, nullptr);
+    base_socket_t cfd = tls_test_accept(srv->listen_fd);
     if (cfd == BASE_INVALID_SOCKET) return nullptr;
 
     ptls_t *tls = ptls_new(&srv->ctx, 1);
-    if (!tls) { base_closesocket(cfd); return nullptr; }
+    if (!tls) { tls_test_close(cfd); return nullptr; }
 
     uint8_t       buf[16384];
     ptls_buffer_t sbuf;
@@ -212,7 +336,7 @@ echo_server_main(void *arg)
 
     bool done = false;
     while (!done) {
-        ssize_t n = recv(cfd, buf, sizeof(buf), 0);
+        ssize_t n = tls_test_recv(cfd, buf, sizeof(buf));
         if (n <= 0) goto cleanup;
         size_t consumed = 0;
         while (consumed < (size_t)n) {
@@ -239,7 +363,7 @@ echo_server_main(void *arg)
     ptls_buffer_init(&enc, enc_storage, sizeof(enc_storage));
 
     while (true) {
-        ssize_t n = recv(cfd, buf, sizeof(buf), 0);
+        ssize_t n = tls_test_recv(cfd, buf, sizeof(buf));
         if (n <= 0) break;
         size_t consumed = 0;
         while (consumed < (size_t)n) {
@@ -269,7 +393,7 @@ echo_done:
 cleanup:
     ptls_buffer_dispose(&sbuf);
     ptls_free(tls);
-    base_closesocket(cfd);
+    tls_test_close(cfd);
     return nullptr;
 }
 
@@ -314,8 +438,13 @@ spawn_echo_server(echo_server_t *srv)
     extract_test_scalar(srv->signer.priv);
     srv->signer.super.cb = server_sign_cb;
 
+#if defined(__linux__)
+    srv->ctx.random_bytes       = tls_test_random_bytes;
+    srv->ctx.get_time           = &tls_test_get_time;
+#else
     srv->ctx.random_bytes       = ptls_minicrypto_random_bytes;
     srv->ctx.get_time           = &ptls_get_time;
+#endif
     srv->ctx.key_exchanges      = ptls_minicrypto_key_exchanges;
     srv->ctx.cipher_suites      = ptls_minicrypto_cipher_suites;
     srv->ctx.certificates.list  = &srv->cert;
@@ -658,6 +787,9 @@ main(int argc, char **argv)
 {
     n00b_runtime_t rt = {};
     n00b_init(&rt, argc, argv);
+#if defined(__linux__)
+    uECC_set_rng(tls_test_uecc_random);
+#endif
 
     printf("test_conduit_tls:\n");
     test_round_trip();
