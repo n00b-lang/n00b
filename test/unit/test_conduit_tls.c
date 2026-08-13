@@ -58,6 +58,7 @@
 #include "crypto/trust.h"
 #include "net/quic/quic_types.h"
 #include "internal/crypto/picotls_certverify.h"
+#include "test_socket_capability.h"
 
 #include "../fixtures/quic_test_pki.h"
 
@@ -656,6 +657,11 @@ test_forced_gc_no_dangle(void)
 int
 main(int argc, char **argv)
 {
+    int skip = n00b_test_skip_if_tcp_listener_unavailable("test_conduit_tls");
+    if (skip) {
+        return skip;
+    }
+
     n00b_runtime_t rt = {};
     n00b_init(&rt, argc, argv);
 

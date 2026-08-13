@@ -21,6 +21,7 @@
 #include "core/runtime.h"
 #include "text/strings/fmt_numbers.h"
 #include "util/path.h"
+#include "test_socket_capability.h"
 
 static n00b_conduit_t *
 make_conduit(void)
@@ -427,6 +428,11 @@ test_local_unsupported_backend_is_structured(void)
 int
 main(int argc, char **argv)
 {
+    int skip = n00b_test_skip_if_unix_listener_unavailable("test_conduit_local_unix_e2e");
+    if (skip) {
+        return skip;
+    }
+
     n00b_runtime_t runtime = {};
     n00b_init(&runtime, argc, argv);
 

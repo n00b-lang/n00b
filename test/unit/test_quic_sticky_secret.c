@@ -24,6 +24,7 @@
 #include "core/runtime.h"
 #include "net/quic/quic_types.h"
 #include "crypto/sticky_secret.h"
+#include "test_socket_capability.h"
 
 /* ============================================================================
  * 1. open + current consistency
@@ -250,6 +251,10 @@ test_close_idempotent(void)
 static void
 test_endpoint_consumes_sticky_secret(void)
 {
+    if (n00b_test_skip_if_udp_bind_unavailable("test_quic_sticky_secret endpoint")) {
+        return;
+    }
+
     /* picoquic uses 16-byte stateless-reset seeds (PICOQUIC_RESET_SECRET_SIZE).
      * The design doc's "32 bytes" was wrong; we follow picoquic. */
     auto ssr = n00b_quic_sticky_secret_open(16);

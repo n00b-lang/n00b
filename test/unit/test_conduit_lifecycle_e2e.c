@@ -18,6 +18,7 @@
 #include "core/file.h"
 #include "core/runtime.h"
 #include "util/path.h"
+#include "test_socket_capability.h"
 
 #ifndef _WIN32
 #include <errno.h>
@@ -257,6 +258,11 @@ test_conn_repeated_close_closes_owner_once(void)
 int
 main(int argc, char **argv)
 {
+    int skip = n00b_test_skip_if_unix_listener_unavailable("test_conduit_lifecycle_e2e");
+    if (skip) {
+        return skip;
+    }
+
     n00b_runtime_t rt;
     n00b_init(&rt, argc, argv);
 
