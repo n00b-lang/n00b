@@ -26,7 +26,6 @@
 #include "core/string.h"
 #include "net/quic/quic_types.h"
 #include "net/quic/manifest.h"
-#include "test_socket_capability.h"
 
 static n00b_buffer_t *
 mk_json(const char *s)
@@ -653,10 +652,6 @@ test_parse_observability_metrics(void)
 static void
 test_preflight_metrics_bind(void)
 {
-    if (n00b_test_skip_if_tcp_listener_unavailable("test_quic_manifest metrics-bind")) {
-        return;
-    }
-
     /* Use port 0 so we can't collide with anything; we just confirm
      * the check ran and produced an INFO. */
     auto r = n00b_quic_manifest_load_json(mk_json(manifest_with_metrics(
@@ -783,10 +778,6 @@ test_fb_push_lift_check_strings_byte_identical(void)
         find_finding_with_check_prefix(rep, "cert-acme-key:");
     assert(acme_key);
     assert(strcmp(acme_key->check->data, "cert-acme-key:e3") == 0);
-
-    if (n00b_test_skip_if_tcp_listener_unavailable("test_quic_manifest port-bind")) {
-        return;
-    }
 
     /* Pattern 3: port-bind INFO — successful bind on 127.0.0.1:0
      * produces a literal "bind() succeeded" detail with nullptr

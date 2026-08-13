@@ -24,7 +24,6 @@
 #include "n00b.h"
 #include "core/runtime.h"
 #include "net/http/http_service.h"
-#include "test_socket_capability.h"
 
 typedef struct {
     int seen;
@@ -394,11 +393,6 @@ test_route_metadata_and_discovery(void)
 int
 main(int argc, char *argv[])
 {
-    int skip = n00b_test_skip_if_tcp_listener_unavailable("test_http_service");
-    if (skip) {
-        return skip;
-    }
-
     n00b_runtime_t rt;
     n00b_init(&rt, argc, argv);
 

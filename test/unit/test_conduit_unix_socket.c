@@ -38,7 +38,6 @@
 #include "core/atomic.h"
 #include "text/strings/fmt_numbers.h"
 #include "util/path.h"
-#include "test_socket_capability.h"
 
 // ============================================================================
 // Helpers
@@ -310,11 +309,6 @@ test_conn_unix_immediate_success_publishes_connected(void)
 int
 main(int argc, char **argv)
 {
-    int skip = n00b_test_skip_if_unix_listener_unavailable("test_conduit_unix_socket");
-    if (skip) {
-        return skip;
-    }
-
     n00b_runtime_t runtime = {};
     n00b_init(&runtime, argc, argv);
 

@@ -14,73 +14,7 @@
 #include "rocs/wax.h"
 #include "text/strings/string_ops.h"
 
-#if !defined(_WIN32)
-#include <arpa/inet.h>
-#include <errno.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
-
 static volatile sig_atomic_t rocs_service_tool_stop_requested = 0;
-
-#if !defined(_WIN32)
-static bool
-rocs_service_tool_socket_denied(int err)
-{
-    return err == EPERM || err == EACCES || err == EAFNOSUPPORT
-        || err == EPROTONOSUPPORT || err == ENOSYS;
-}
-
-static int
-rocs_service_tool_skip_if_tcp_unavailable(void)
-{
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        int err = errno;
-        if (rocs_service_tool_socket_denied(err)) {
-            n00b_eprintf("  [SKIP] n00b-rocs-service smoke requires TCP bind/listen; host denied local sockets: «#»",
-                         n00b_string_from_cstr(strerror(err)));
-            return 77;
-        }
-        return 0;
-    }
-
-    int opt = 1;
-    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    struct sockaddr_in addr = {};
-    addr.sin_family         = AF_INET;
-    addr.sin_port           = htons(0);
-    addr.sin_addr.s_addr    = htonl(INADDR_LOOPBACK);
-
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        int err = errno;
-        close(fd);
-        if (rocs_service_tool_socket_denied(err)) {
-            n00b_eprintf("  [SKIP] n00b-rocs-service smoke requires TCP bind/listen; host denied local sockets: «#»",
-                         n00b_string_from_cstr(strerror(err)));
-            return 77;
-        }
-        return 0;
-    }
-
-    if (listen(fd, 1) != 0) {
-        int err = errno;
-        close(fd);
-        if (rocs_service_tool_socket_denied(err)) {
-            n00b_eprintf("  [SKIP] n00b-rocs-service smoke requires TCP bind/listen; host denied local sockets: «#»",
-                         n00b_string_from_cstr(strerror(err)));
-            return 77;
-        }
-        return 0;
-    }
-
-    close(fd);
-    return 0;
-}
-#endif
 
 static void
 rocs_service_tool_signal(int signum)
@@ -278,12 +212,6 @@ main(int argc, char *argv[])
             goto done;
         }
         if (n00b_unicode_str_eq(arg, r"--smoke-start-stop")) {
-#if !defined(_WIN32)
-            rc = rocs_service_tool_skip_if_tcp_unavailable();
-            if (rc != 0) {
-                goto done;
-            }
-#endif
             rc = rocs_service_tool_smoke();
             goto done;
         }

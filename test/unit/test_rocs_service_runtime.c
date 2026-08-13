@@ -12,7 +12,6 @@
 #include "text/strings/format.h"
 #include "text/strings/string_ops.h"
 #include "util/assert.h"
-#include "test_socket_capability.h"
 
 #include <rocs/n00b_rocs.h>
 #include <rocs/service.h>
@@ -307,11 +306,6 @@ test_invalid_request_errors(void)
 int
 main(int argc, char *argv[])
 {
-    int skip = n00b_test_skip_if_tcp_listener_unavailable("test_rocs_service_runtime");
-    if (skip) {
-        return skip;
-    }
-
     n00b_runtime_t rt;
     n00b_init(&rt, argc, argv);
 
