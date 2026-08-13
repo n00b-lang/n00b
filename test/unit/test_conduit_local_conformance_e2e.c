@@ -15,6 +15,7 @@
 #include "core/platform.h"
 #include "core/runtime.h"
 #include "util/path.h"
+#include "test_socket_capability.h"
 
 typedef enum {
     LOCAL_CONF_AUTO,
@@ -690,6 +691,11 @@ run_bridge_pool_churn_case(void)
 int
 main(int argc, char **argv)
 {
+    int skip = n00b_test_skip_if_unix_listener_unavailable("test_conduit_local_conformance_e2e");
+    if (skip) {
+        return skip;
+    }
+
     n00b_runtime_t runtime = {};
     n00b_init(&runtime, argc, argv);
 
