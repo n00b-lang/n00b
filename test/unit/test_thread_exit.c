@@ -1,9 +1,9 @@
-#include <stdio.h>
 #include <assert.h>
 
 #define __N00B_THREAD_INTERNAL
 
 #include "n00b.h"
+#include "conduit/print.h"
 #include "core/runtime.h"
 #include "core/thread.h"
 #include "core/callstack.h"
@@ -83,8 +83,8 @@ test_exit_code_published(void)
     assert((uintptr_t)ret == (uintptr_t)0x1111);
     assert((uint64_t)(uintptr_t)ret != EXIT_SENTINEL);
 
-    printf("  [PASS] exit_code_published "
-           "(n00b_thread_exit(code) -> n00b_thread_exit_code == code)\n");
+    n00b_printf("  [PASS] exit_code_published "
+                "(n00b_thread_exit(code) -> n00b_thread_exit_code == code)");
 }
 
 // ----------------------------------------------------------------------------
@@ -121,8 +121,8 @@ test_default_exit_code_is_zero(void)
     // fn-return channel is unaffected by the (unused) exit-code channel.
     assert(ret == VOID_SENTINEL);
 
-    printf("  [PASS] default_exit_code_is_zero "
-           "(no n00b_thread_exit -> code 0; `void *` return unchanged)\n");
+    n00b_printf("  [PASS] default_exit_code_is_zero "
+                "(no n00b_thread_exit -> code 0; `void *` return unchanged)");
 }
 
 // ----------------------------------------------------------------------------
@@ -162,8 +162,8 @@ test_void_return_unchanged(void)
     // The two never alias.
     assert((uint64_t)(uintptr_t)ret != n00b_thread_exit_code(child));
 
-    printf("  [PASS] void_return_unchanged "
-           "(fn-return and exit-code are independent channels)\n");
+    n00b_printf("  [PASS] void_return_unchanged "
+                "(fn-return and exit-code are independent channels)");
 }
 
 // ----------------------------------------------------------------------------
@@ -234,9 +234,9 @@ test_thread_struct_from_user_pool(n00b_runtime_t *rt)
     assert(owner == (n00b_allocator_t *)&rt->runtime_obj_pool);
     assert(owner != (n00b_allocator_t *)&rt->system_pool);
 
-    printf("  [PASS] thread_struct_from_user_pool "
-           "(n00b_thread_t owned by user_pool; spawn/join + both channels "
-           "intact; self() resolved on worker)\n");
+    n00b_printf("  [PASS] thread_struct_from_user_pool "
+                "(n00b_thread_t owned by user_pool; spawn/join + both channels "
+                "intact; self() resolved on worker)");
 }
 
 // A worker that takes a write lock (linking it into rec->exclusive_locks) and
@@ -279,8 +279,8 @@ test_user_pool_struct_survives_gc(n00b_runtime_t *rt)
     if (arena == nullptr) {
         // Non-default (caller-supplied) allocator runtime: the forced-collect
         // probe targets the GC'd default arena, which is absent here.
-        printf("  [SKIP] user_pool_struct_survives_gc "
-               "(runtime has no GC'd default arena)\n");
+        n00b_printf("  [SKIP] user_pool_struct_survives_gc "
+                    "(runtime has no GC'd default arena)");
         return;
     }
 
@@ -347,9 +347,9 @@ test_user_pool_struct_survives_gc(n00b_runtime_t *rt)
     assert(n00b_option_is_set(a_opt));
     assert(n00b_option_get(a_opt) == (n00b_allocator_t *)&rt->runtime_obj_pool);
 
-    printf("  [PASS] user_pool_struct_survives_gc "
-           "(forced collect live + after join: struct non-moving, lock/exit "
-           "state intact)\n");
+    n00b_printf("  [PASS] user_pool_struct_survives_gc "
+                "(forced collect live + after join: struct non-moving, lock/exit "
+                "state intact)");
 }
 
 // ============================================================================
@@ -449,9 +449,9 @@ test_callstack_region_reused(void)
     // primary region; recurrence among observed primary regions is the stable
     // bounded-pool invariant.
     assert(observed_primary_region_reuse(128));
-    printf("  [PASS] callstack_region_reused "
-           "(reaped regions return to the pool and later spawns reuse them; "
-           "join did not unmap it)\n");
+    n00b_printf("  [PASS] callstack_region_reused "
+                "(reaped regions return to the pool and later spawns reuse them; "
+                "join did not unmap it)");
 }
 
 // A short-lived worker that is NEVER joined (detached use): it must still be
@@ -515,10 +515,10 @@ test_spawn_exit_loop_pooled(n00b_runtime_t *rt)
     void *base = spawn_join_get_base();
     assert(base != nullptr);
 
-    printf("  [PASS] spawn_exit_loop_pooled "
-           "(%d-cycle mixed joined/detached loop with pooled reuse, survived a "
-           "forced GC, no corruption)\n",
-           ITERS);
+    n00b_printf("  [PASS] spawn_exit_loop_pooled "
+                "([|#|]-cycle mixed joined/detached loop with pooled reuse, survived a "
+                "forced GC, no corruption)",
+                (int64_t)ITERS);
 }
 
 // (Linux-only) The CLONE_CHILD_CLEARTID death edge is the Linux gate for
@@ -534,11 +534,11 @@ test_linux_cleartid_death_edge(void)
     // proves the death edge fired.  Exact reuse of one selected base is not an
     // invariant because crash altstacks share the same pool.
     assert(observed_primary_region_reuse(128));
-    printf("  [PASS] linux_cleartid_death_edge "
-           "(CLONE_CHILD_CLEARTID futex gates pool-return; region reused)\n");
+    n00b_printf("  [PASS] linux_cleartid_death_edge "
+                "(CLONE_CHILD_CLEARTID futex gates pool-return; region reused)");
 #else
-    printf("  [SKIP] linux_cleartid_death_edge "
-           "(Linux-only; macOS dead-Mach-port path covers reuse here)\n");
+    n00b_printf("  [SKIP] linux_cleartid_death_edge "
+                "(Linux-only; macOS dead-Mach-port path covers reuse here)");
 #endif
 }
 
@@ -614,9 +614,9 @@ test_joinable_both_channels(void)
     assert(n00b_thread_exit_code(child) == JOINABLE_CODE);
     assert((uint64_t)(uintptr_t)ret != n00b_thread_exit_code(child));
 
-    printf("  [PASS] joinable_both_channels "
-           "(result-only join captures `void *` fn-return AND 64-bit exit "
-           "code; channels independent)\n");
+    n00b_printf("  [PASS] joinable_both_channels "
+                "(result-only join captures `void *` fn-return AND 64-bit exit "
+                "code; channels independent)");
 }
 
 // (f) A held-DEAD handle is safe to read after join, including across a forced
@@ -664,16 +664,16 @@ test_held_dead_handle_safe(n00b_runtime_t *rt)
         assert(n00b_option_is_set(a_opt));
         assert(n00b_option_get(a_opt) == (n00b_allocator_t *)&rt->runtime_obj_pool);
 
-        printf("  [PASS] held_dead_handle_safe "
-               "(dead worker's handle held in a scanned local: fields readable "
-               "across a forced GC; struct kept alive + non-moving)\n");
+        n00b_printf("  [PASS] held_dead_handle_safe "
+                    "(dead worker's handle held in a scanned local: fields readable "
+                    "across a forced GC; struct kept alive + non-moving)");
     }
     else {
         // No GC'd default arena to drive a collection against; the held-read
         // half still holds (the struct is never freed by join).
-        printf("  [PASS] held_dead_handle_safe "
-               "(dead worker's handle readable post-join; forced-GC half "
-               "skipped — no GC'd default arena)\n");
+        n00b_printf("  [PASS] held_dead_handle_safe "
+                    "(dead worker's handle readable post-join; forced-GC half "
+                    "skipped — no GC'd default arena)");
     }
 
     // Keep `child` observably live to the end so the compiler cannot drop the
@@ -710,10 +710,10 @@ test_detached_reaped_without_join(void)
     assert(detached_base != nullptr);
 
 #if defined(_WIN32)
-    printf("  [SKIP] detached_reaped_without_join:direct-reaper "
-           "(Windows detached reaper proof is not host-verified in this "
-           "Linux fix bucket; capstone_detached_volume verifies detached "
-           "reuse)\n");
+    n00b_printf("  [SKIP] detached_reaped_without_join:direct-reaper "
+                "(Windows detached reaper proof is not host-verified in this "
+                "Linux fix bucket; capstone_detached_volume verifies detached "
+                "reuse)");
 #else
     // Drive the public reaper without calling join. Once reap_futex is set, the
     // worker is OS-dead and _n00b_reap_reclaim has returned its stack resources.
@@ -727,9 +727,9 @@ test_detached_reaped_without_join(void)
     assert(child->callstack == nullptr);
     assert(n00b_atomic_load(&child->altstack) == nullptr);
 
-    printf("  [PASS] detached_reaped_without_join "
-           "(never-joined worker runs to completion and is reaped; its "
-           "callstack returns to the pool with NO join — default-detached)\n");
+    n00b_printf("  [PASS] detached_reaped_without_join "
+                "(never-joined worker runs to completion and is reaped; its "
+                "callstack returns to the pool with NO join — default-detached)");
 #endif
 }
 
@@ -772,9 +772,9 @@ test_join_frees_nothing(n00b_runtime_t *rt)
         assert(n00b_thread_exit_code(child) == JOINABLE_CODE);
     }
 
-    printf("  [PASS] join_frees_nothing "
-           "(struct fully readable immediately after join + across a forced "
-           "GC; callstack reclamation is the reaper's, not the join's)\n");
+    n00b_printf("  [PASS] join_frees_nothing "
+                "(struct fully readable immediately after join + across a forced "
+                "GC; callstack reclamation is the reaper's, not the join's)");
 }
 
 // ============================================================================
@@ -930,20 +930,20 @@ test_capstone_detached_volume(n00b_runtime_t *rt)
     // public footprint metric exists (DF-7), so when this is enabled it should
     // be asserted via the metric the capability adds.
     (void)0; // placeholder for the footprint assertion the capability enables
-    printf("  [PASS] capstone_detached_volume "
-           "(%d detached cycles; callstacks reused from the pool; structs "
-           "GC-reclaimed; survived forced GC)\n",
-           ITERS);
+    n00b_printf("  [PASS] capstone_detached_volume "
+                "([|#|] detached cycles; callstacks reused from the pool; structs "
+                "GC-reclaimed; survived forced GC)",
+                (int64_t)ITERS);
 #else
-    printf("  [SKIP] capstone_detached_volume:no-leak "
-           "(GC-collects-user_pool capability ABSENT in-branch — D-034/DF-1; "
-           "struct leaks until the upstream PR lands; reuse + no-corruption "
-           "half ran live over %d cycles)\n",
-           ITERS);
-    printf("  [PASS] capstone_detached_volume:reuse "
-           "(%d detached cycles; callstacks reused from the pool (%d distinct "
-           "regions); no corruption; survived forced GC)\n",
-           ITERS, distinct);
+    n00b_printf("  [SKIP] capstone_detached_volume:no-leak "
+                "(GC-collects-user_pool capability ABSENT in-branch — D-034/DF-1; "
+                "struct leaks until the upstream PR lands; reuse + no-corruption "
+                "half ran live over [|#|] cycles)",
+                (int64_t)ITERS);
+    n00b_printf("  [PASS] capstone_detached_volume:reuse "
+                "([|#|] detached cycles; callstacks reused from the pool ([|#|] distinct "
+                "regions); no corruption; survived forced GC)",
+                (int64_t)ITERS, (int64_t)distinct);
 #endif
 }
 
@@ -1006,10 +1006,10 @@ test_capstone_joinable_volume(n00b_runtime_t *rt)
         assert(child != nullptr);
     }
 
-    printf("  [PASS] capstone_joinable_volume "
-           "(%d join cycles; both channels captured; post-death held reads "
-           "safe across forced GC)\n",
-           ITERS);
+    n00b_printf("  [PASS] capstone_joinable_volume "
+                "([|#|] join cycles; both channels captured; post-death held reads "
+                "safe across forced GC)",
+                (int64_t)ITERS);
 }
 
 // Capstone (3): HELD -> DROPPED => COLLECTED.  Hold a dead worker's handle in a
@@ -1054,16 +1054,16 @@ test_capstone_drop_collects(n00b_runtime_t *rt)
     }
     // The reclamation assertion goes here once the capability + footprint
     // metric (DF-7) are available.
-    printf("  [PASS] capstone_drop_collects "
-           "(held handle safe; dropped reference reclaimed by the GC)\n");
+    n00b_printf("  [PASS] capstone_drop_collects "
+                "(held handle safe; dropped reference reclaimed by the GC)");
 #else
     (void)arena;
     // Keep `child` live so the compiler cannot drop it before the held read.
     assert(child != nullptr);
-    printf("  [SKIP] capstone_drop_collects "
-           "(held-handle safe-read ran live; drop=>collected gated on the "
-           "GC-collects-user_pool capability — ABSENT in-branch, D-034/DF-1; "
-           "no public user_pool footprint metric exists — DF-7)\n");
+    n00b_printf("  [SKIP] capstone_drop_collects "
+                "(held-handle safe-read ran live; drop=>collected gated on the "
+                "GC-collects-user_pool capability — ABSENT in-branch, D-034/DF-1; "
+                "no public user_pool footprint metric exists — DF-7)");
 #endif
 }
 
@@ -1162,9 +1162,9 @@ test_capstone_recycled_slot_generation(n00b_runtime_t *rt)
     // The round-robin must have revisited at least one slot within the cap.
     assert(saw_recycle);
 
-    printf("  [PASS] capstone_recycled_slot_generation "
-           "(a recycled slot carries a strictly greater generation + distinct "
-           "unique id than a stale handle to its prior occupant)\n");
+    n00b_printf("  [PASS] capstone_recycled_slot_generation "
+                "(a recycled slot carries a strictly greater generation + distinct "
+                "unique id than a stale handle to its prior occupant)");
 }
 
 int
@@ -1174,7 +1174,7 @@ main(int argc, char **argv)
     n00b_init(&runtime, argc, argv);
     n00b_runtime_t *rt = n00b_get_runtime();
 
-    printf("Running thread_exit tests...\n");
+    n00b_printf("Running thread_exit tests...");
 
     test_exit_code_published();
     test_default_exit_code_is_zero();
@@ -1197,7 +1197,7 @@ main(int argc, char **argv)
     test_capstone_drop_collects(rt);
     test_capstone_recycled_slot_generation(rt);
 
-    printf("All thread_exit tests passed.\n");
+    n00b_printf("All thread_exit tests passed.");
     n00b_shutdown();
     return 0;
 }
