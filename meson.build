@@ -4673,7 +4673,14 @@ pool_alloc_test = executable('test_pool_alloc',
     ['test/integration/test_pool_alloc.c'],
     kwargs: test_common_kwargs,
 )
-test('pool_alloc', pool_alloc_test, suite: 'integration')
+test('pool_alloc',
+    pool_alloc_test,
+    suite: 'integration',
+    env: [
+        'N00B_POOL_BIG_QUARANTINE=64',
+        'N00B_POOL_PAGE_PER_ALLOC=guardpool',
+    ],
+)
 
 mmaps_test = executable('test_mmaps',
     ['test/integration/test_mmaps.c'],
