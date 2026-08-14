@@ -184,6 +184,14 @@ typedef struct {
     ptls_context_t    ctx;
 } echo_server_t;
 
+static bool
+tls_test_env_truthy(const char *name)
+{
+    const char *v = getenv(name);
+
+    return v != nullptr && v[0] != '\0' && strcmp(v, "0") != 0;
+}
+
 #if defined(__linux__)
 static void
 tls_test_random_bytes(void *buf, size_t len)
@@ -397,34 +405,162 @@ cleanup:
     return nullptr;
 }
 
-/* Bind a loopback listener on an ephemeral port; return fd, set *port. */
 static base_socket_t
-start_listener(uint16_t *port_out)
+tls_test_socket_stream(int *err_out)
 {
+    if (err_out != nullptr) {
+        *err_out = 0;
+    }
+
+    if (tls_test_env_truthy("N00B_CONDUIT_TLS_SOCKET_DENIED_FIXTURE")) {
+        if (err_out != nullptr) {
+            *err_out = EPERM;
+        }
+        return BASE_INVALID_SOCKET;
+    }
+
     base_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
-    assert(fd != BASE_INVALID_SOCKET);
+    if (fd == BASE_INVALID_SOCKET && err_out != nullptr) {
+#ifdef _WIN32
+        *err_out = WSAGetLastError();
+#else
+        *err_out = errno;
+#endif
+    }
+
+    return fd;
+}
+
+static bool
+tls_test_socket_unavailable_err(int err)
+{
+#ifdef _WIN32
+    return err == WSAEACCES || err == WSAEAFNOSUPPORT
+        || err == WSAEPROTONOSUPPORT;
+#else
+    return err == EPERM || err == EACCES || err == EAFNOSUPPORT
+        || err == EPROTONOSUPPORT || err == ENOSYS;
+#endif
+}
+
+/* Bind a loopback listener on an ephemeral port; return fd, set *port. */
+static bool
+start_listener(uint16_t *port_out, base_socket_t *fd_out, int *err_out)
+{
+    if (err_out != nullptr) {
+        *err_out = 0;
+    }
+    if (fd_out != nullptr) {
+        *fd_out = BASE_INVALID_SOCKET;
+    }
+
+    int           err = 0;
+    base_socket_t fd  = tls_test_socket_stream(&err);
+    if (fd == BASE_INVALID_SOCKET) {
+        if (err_out != nullptr) {
+            *err_out = err;
+        }
+        return false;
+    }
+
     int one = 1;
 #ifdef _WIN32
     int reuse_opt = SO_EXCLUSIVEADDRUSE;
 #else
     int reuse_opt = SO_REUSEADDR;
 #endif
-    assert(setsockopt(fd, SOL_SOCKET, reuse_opt,
-                      (const char *)&one, sizeof(one)) == 0);
+    if (setsockopt(fd, SOL_SOCKET, reuse_opt,
+                   (const char *)&one, sizeof(one)) != 0) {
+#ifdef _WIN32
+        err = WSAGetLastError();
+#else
+        err = errno;
+#endif
+        tls_test_close(fd);
+        if (err_out != nullptr) {
+            *err_out = err;
+        }
+        return false;
+    }
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family      = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port        = 0;
-    assert(bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
-    assert(listen(fd, 4) == 0);
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+#ifdef _WIN32
+        err = WSAGetLastError();
+#else
+        err = errno;
+#endif
+        tls_test_close(fd);
+        if (err_out != nullptr) {
+            *err_out = err;
+        }
+        return false;
+    }
+    if (listen(fd, 4) != 0) {
+#ifdef _WIN32
+        err = WSAGetLastError();
+#else
+        err = errno;
+#endif
+        tls_test_close(fd);
+        if (err_out != nullptr) {
+            *err_out = err;
+        }
+        return false;
+    }
 
     struct sockaddr_in bound;
     socklen_t          blen = sizeof(bound);
-    assert(getsockname(fd, (struct sockaddr *)&bound, &blen) == 0);
+    if (getsockname(fd, (struct sockaddr *)&bound, &blen) != 0) {
+#ifdef _WIN32
+        err = WSAGetLastError();
+#else
+        err = errno;
+#endif
+        tls_test_close(fd);
+        if (err_out != nullptr) {
+            *err_out = err;
+        }
+        return false;
+    }
     *port_out = ntohs(bound.sin_port);
-    return fd;
+    *fd_out   = fd;
+    return true;
+}
+
+static bool
+test_skip_listener_unavailable(n00b_conduit_t *c, const char *name, int err)
+{
+    if (tls_test_socket_unavailable_err(err)) {
+        printf("  [SKIP] %s (loopback TCP unavailable err=%d)\n", name, err);
+        if (c != nullptr) {
+            n00b_conduit_destroy(c);
+        }
+        return true;
+    }
+
+    fprintf(stderr, "  [FAIL] %s: listener setup failed err=%d\n", name, err);
+    abort();
+}
+
+static void
+test_socket_denied_fixture(void)
+{
+    uint16_t      port = 0;
+    base_socket_t fd   = BASE_INVALID_SOCKET;
+    int           err  = 0;
+
+    bool ok = start_listener(&port, &fd, &err);
+    assert(!ok);
+    assert(fd == BASE_INVALID_SOCKET);
+    assert(err == EPERM);
+    assert(tls_test_socket_unavailable_err(err));
+
+    printf("  [PASS] socket-denied fixture (err=%d -> skip path)\n", err);
 }
 
 static n00b_thread_t *
@@ -523,7 +659,11 @@ test_round_trip(void)
     echo_server_t srv;
     spawn_echo_server(&srv);
     uint16_t port = 0;
-    srv.listen_fd = start_listener(&port);
+    int      listen_err = 0;
+    if (!start_listener(&port, &srv.listen_fd, &listen_err)) {
+        (void)test_skip_listener_unavailable(c, "round trip", listen_err);
+        return;
+    }
     auto tr = n00b_thread_spawn(echo_server_main, &srv);
     assert(n00b_result_is_ok(tr));
     n00b_thread_t *server_thread = n00b_result_get(tr);
@@ -660,7 +800,11 @@ test_forced_gc_no_dangle(void)
     echo_server_t srv;
     spawn_echo_server(&srv);
     uint16_t port = 0;
-    srv.listen_fd = start_listener(&port);
+    int      listen_err = 0;
+    if (!start_listener(&port, &srv.listen_fd, &listen_err)) {
+        (void)test_skip_listener_unavailable(c, "forced-gc no-dangle", listen_err);
+        return;
+    }
     /* Isolated: the echo server does raw syscalls and touches no GC heap, so
      * the collector must skip its C stack (see test header). */
     auto tr = n00b_thread_spawn(echo_server_main, &srv);
@@ -792,6 +936,13 @@ main(int argc, char **argv)
 #endif
 
     printf("test_conduit_tls:\n");
+    if (tls_test_env_truthy("N00B_CONDUIT_TLS_SOCKET_DENIED_FIXTURE")) {
+        test_socket_denied_fixture();
+        printf("All test_conduit_tls fixture tests passed.\n");
+        n00b_shutdown();
+        return 0;
+    }
+
     test_round_trip();
     test_forced_gc_no_dangle();
     printf("All test_conduit_tls tests passed.\n");

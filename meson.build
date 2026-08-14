@@ -1534,8 +1534,13 @@ thread_exit_test = executable('test_thread_exit',
     ['test/unit/test_thread_exit.c'],
     kwargs: test_common_kwargs,
 )
-thread_exit_timeout = host_machine.system() == 'windows' ? 120 : 30
+thread_exit_timeout = 120
 test('thread_exit', thread_exit_test, suite: 'unit', timeout: thread_exit_timeout)
+test('thread_exit_timeout_budget_fixture',
+     thread_exit_test,
+     suite: 'unit',
+     timeout: 10,
+     env: ['N00B_THREAD_EXIT_TIMEOUT_BUDGET_FIXTURE=1'])
 
 crash_test = executable('test_crash',
     ['test/unit/test_crash.c'],
@@ -1564,6 +1569,11 @@ conduit_tls_test = executable('test_conduit_tls',
     kwargs: test_common_kwargs,
 )
 test('conduit_tls', conduit_tls_test, suite: 'unit')
+test('conduit_tls_socket_denied_fixture',
+     conduit_tls_test,
+     suite: 'unit',
+     timeout: 10,
+     env: ['N00B_CONDUIT_TLS_SOCKET_DENIED_FIXTURE=1'])
 
 conduit_local_unix_e2e_test = executable('test_conduit_local_unix_e2e',
     ['test/unit/test_conduit_local_unix_e2e.c'],

@@ -1,4 +1,6 @@
 #include <assert.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define __N00B_THREAD_INTERNAL
 
@@ -14,6 +16,43 @@
 #include "core/mmaps.h"
 #include "core/stw.h"
 #include "core/rwlock.h"
+
+#define RECYCLED_SLOT_EXTRA_ITERS 256u
+
+static bool
+thread_exit_env_truthy(const char *name)
+{
+    const char *v = getenv(name);
+
+    return v != nullptr && v[0] != '\0' && strcmp(v, "0") != 0;
+}
+
+static uint32_t
+recycled_slot_iteration_cap(uint32_t max_slots)
+{
+    return max_slots + RECYCLED_SLOT_EXTRA_ITERS;
+}
+
+static void
+test_timeout_budget_fixture(n00b_runtime_t *rt)
+{
+    assert(rt != nullptr);
+    assert(rt->max_threads > 0);
+
+    uint32_t active_cap  = recycled_slot_iteration_cap(rt->max_threads);
+    uint32_t default_cap = recycled_slot_iteration_cap(N00B_THREADS_MAX);
+
+    assert(active_cap == rt->max_threads + RECYCLED_SLOT_EXTRA_ITERS);
+    assert(default_cap == N00B_THREADS_MAX + RECYCLED_SLOT_EXTRA_ITERS);
+    assert(default_cap == 4352);
+
+    n00b_printf("  [PASS] thread_exit timeout fixture "
+                "(active max_threads=[|#|], active recycled-slot cap=[|#|], "
+                "default cap=[|#|])",
+                (int64_t)rt->max_threads,
+                (int64_t)active_cap,
+                (int64_t)default_cap);
+}
 
 // ============================================================================
 // WP-3a Phase 1 regression test: the 64-bit exit-code channel.
@@ -1125,7 +1164,7 @@ test_capstone_recycled_slot_generation(n00b_runtime_t *rt)
     // practice this runs ~max_threads pooled spawn/joins (the callstack pool
     // caps resident memory regardless — DF-4 keep-N).
     bool      saw_recycle = false;
-    const int ITER_CAP    = (int)max_slots + 256;
+    const int ITER_CAP = (int)recycled_slot_iteration_cap(max_slots);
     for (int i = 0; i < ITER_CAP && !saw_recycle; i++) {
         ident_io_t io = {};
         n00b_result_t(n00b_thread_t *) r = n00b_thread_spawn(ident_worker, &io);
@@ -1175,6 +1214,12 @@ main(int argc, char **argv)
     n00b_runtime_t *rt = n00b_get_runtime();
 
     n00b_printf("Running thread_exit tests...");
+
+    if (thread_exit_env_truthy("N00B_THREAD_EXIT_TIMEOUT_BUDGET_FIXTURE")) {
+        test_timeout_budget_fixture(rt);
+        n00b_shutdown();
+        return 0;
+    }
 
     test_exit_code_published();
     test_default_exit_code_is_zero();
