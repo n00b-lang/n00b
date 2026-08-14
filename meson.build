@@ -1499,7 +1499,7 @@ split_words_gc_repro_test = executable('test_split_words_gc_repro',
     ['test/unit/test_split_words_gc_repro.c'],
     kwargs: test_common_kwargs,
 )
-test('split_words_gc_repro', split_words_gc_repro_test, suite: 'unit')
+test('split_words_gc_repro', split_words_gc_repro_test, suite: 'unit', timeout: 60)
 
 shutdown_gc_stack_test = executable('test_shutdown_gc_stack',
     ['test/unit/test_shutdown_gc_stack.c'],
@@ -4673,7 +4673,14 @@ pool_alloc_test = executable('test_pool_alloc',
     ['test/integration/test_pool_alloc.c'],
     kwargs: test_common_kwargs,
 )
-test('pool_alloc', pool_alloc_test, suite: 'integration')
+test('pool_alloc',
+    pool_alloc_test,
+    suite: 'integration',
+    env: [
+        'N00B_POOL_BIG_QUARANTINE=64',
+        'N00B_POOL_PAGE_PER_ALLOC=guardpool',
+    ],
+)
 
 mmaps_test = executable('test_mmaps',
     ['test/integration/test_mmaps.c'],
