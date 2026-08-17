@@ -320,6 +320,13 @@ struct n00b_store_t {
     uint64_t                       schema_generation;
     n00b_store_pos_t               oldest_available;
     bool                           has_oldest_available;
+    // First record of the newest DROPPED sealed shard, in-memory only (drop
+    // history is not persisted). Sealed opens refuse to resume from below it:
+    // a resume position under this mark means records above the watermark
+    // were dropped unread, and succeeding would let a projection advance its
+    // watermark past data it never saw.
+    n00b_store_pos_t               max_dropped_pos;
+    bool                           has_max_dropped_pos;
     // Process-side hot visibility boundary. Rows below this ordinal are fully
     // appended and indexed; future worker fan-out may reserve beyond it, but
     // search/egress/health must not expose those holes.
@@ -10647,6 +10654,18 @@ rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
         return n00b_result_err(bool, N00B_STORE_ERR_VFS);
     }
 
+    n00b_store_pos_t dropped_pos = {
+        .generation = entry->generation,
+        .shard_id   = entry->shard_id,
+        .ordinal    = 0,
+        .seal_ts    = entry->seal_ts,
+    };
+    if (!store->has_max_dropped_pos
+        || n00b_store_pos_compare(store->max_dropped_pos, dropped_pos) < 0) {
+        store->max_dropped_pos     = dropped_pos;
+        store->has_max_dropped_pos = true;
+    }
+
     rocs_store_emit_lifecycle_drop(store, entry, drop_reason);
     return n00b_result_ok(bool, true);
 }
@@ -13250,6 +13269,19 @@ n00b_store_record_stream_open_sealed(n00b_store_t     *store,
     n00b_mutex_unlock(store->residency_lock);
 
     uint64_t catalog_len = (uint64_t)n00b_list_len(*store->catalog);
+
+    // A shard whose first record sits above `after` was dropped unread by
+    // this caller; succeeding would let a projection advance its watermark
+    // past records it never saw. max_dropped_pos is only the newest such
+    // loss, so this refuses conservatively even when the drop sits above
+    // `through`. Drops run under commit_lock, which we hold.
+    if (after != nullptr && store->has_max_dropped_pos
+        && n00b_store_pos_compare(*after, store->max_dropped_pos) < 0) {
+        n00b_mutex_unlock(store->commit_lock);
+        (void)n00b_store_record_stream_close(stream);
+        return n00b_result_err(n00b_store_record_stream_t *,
+                               N00B_STORE_ERR_RETENTION);
+    }
 
     // The bound must resolve to an exact visible sealed record, or the caller
     // would silently treat an aged-out suffix as already-consumed.

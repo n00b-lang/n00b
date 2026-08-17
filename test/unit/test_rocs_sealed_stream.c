@@ -419,6 +419,97 @@ test_retention_refused_inside_open_slice(void)
 }
 
 static void
+test_interior_drop_refuses_resume(void)
+{
+    n00b_store_t *store = open_store();
+
+    n00b_store_catalog_entry_t *a = seal_shard(store, 1, 2, 100);
+    n00b_store_catalog_entry_t *b = seal_shard(store, 2, 2, 200);
+    n00b_store_catalog_entry_t *c = seal_shard(store, 3, 2, 300);
+
+    // A projection consumed through a's last record, then retention dropped
+    // the interior shard before the next run.
+    n00b_store_pos_t watermark = entry_pos(a, 1);
+    CHECK(n00b_result_is_ok(n00b_store_drop_sealed_shard(
+        store,
+        entry_shard_id(b),
+        .drop_reason = r"test")));
+
+    // Resuming above the gap must refuse -- bounded or not -- rather than
+    // deliver only c and let the watermark advance past b unread.
+    n00b_store_pos_t through  = entry_pos(c, 1);
+    auto             stream_r = n00b_store_record_stream_open_sealed(store,
+                                                                     &watermark,
+                                                                     &through);
+    CHECK(n00b_result_is_err(stream_r));
+    CHECK(n00b_result_get_err(stream_r) == N00B_STORE_ERR_RETENTION);
+    check_no_pins(store);
+
+    stream_r = n00b_store_record_stream_open_sealed(store,
+                                                    &watermark,
+                                                    nullptr);
+    CHECK(n00b_result_is_err(stream_r));
+    CHECK(n00b_result_get_err(stream_r) == N00B_STORE_ERR_RETENTION);
+    check_no_pins(store);
+
+    // A fresh full read makes no continuity claim: it sees what survives.
+    stream_r = n00b_store_record_stream_open_sealed(store, nullptr, nullptr);
+    CHECK(n00b_result_is_ok(stream_r));
+    n00b_store_record_stream_t *stream = n00b_result_get(stream_r);
+    n00b_store_pos_t positions[4] = {};
+    CHECK(drain_sealed(stream, positions, 4) == 4);
+    CHECK(n00b_store_pos_compare(positions[1], entry_pos(a, 1)) == 0);
+    CHECK(n00b_store_pos_compare(positions[2], entry_pos(c, 0)) == 0);
+    CHECK(n00b_result_is_ok(n00b_store_record_stream_close(stream)));
+
+    // Once the caller has explicitly re-anchored past the loss, resuming
+    // works again: the refusal is a policy gate, not a wedge.
+    n00b_store_pos_t reanchored = entry_pos(c, 1);
+    stream_r = n00b_store_record_stream_open_sealed(store,
+                                                    &reanchored,
+                                                    nullptr);
+    CHECK(n00b_result_is_ok(stream_r));
+    stream = n00b_result_get(stream_r);
+    check_bound_none(stream);
+    CHECK(drain_sealed(stream, nullptr, 0) == 0);
+    CHECK(n00b_result_is_ok(n00b_store_record_stream_close(stream)));
+
+    check_no_pins(store);
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+static void
+test_consumed_drop_does_not_refuse_resume(void)
+{
+    n00b_store_t *store = open_store();
+
+    n00b_store_catalog_entry_t *a = seal_shard(store, 1, 2, 100);
+    n00b_store_catalog_entry_t *b = seal_shard(store, 2, 2, 200);
+
+    // Dropping a shard the watermark already covers is routine retention of
+    // consumed history, not a gap; the resume must keep working.
+    n00b_store_pos_t watermark = entry_pos(a, 1);
+    CHECK(n00b_result_is_ok(n00b_store_drop_sealed_shard(
+        store,
+        entry_shard_id(a),
+        .drop_reason = r"test")));
+
+    auto stream_r = n00b_store_record_stream_open_sealed(store,
+                                                         &watermark,
+                                                         nullptr);
+    CHECK(n00b_result_is_ok(stream_r));
+    n00b_store_record_stream_t *stream = n00b_result_get(stream_r);
+    n00b_store_pos_t positions[2] = {};
+    CHECK(drain_sealed(stream, positions, 2) == 2);
+    CHECK(n00b_store_pos_compare(positions[0], entry_pos(b, 0)) == 0);
+    CHECK(n00b_store_pos_compare(bound_pos(stream), entry_pos(b, 1)) == 0);
+    CHECK(n00b_result_is_ok(n00b_store_record_stream_close(stream)));
+
+    check_no_pins(store);
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+static void
 test_sealed_bound_stable_across_later_seals(void)
 {
     n00b_store_t *store = open_store();
@@ -510,6 +601,8 @@ main(int argc, char *argv[])
     test_after_and_through_bounds();
     test_unresolvable_through_fails_typed();
     test_retention_refused_inside_open_slice();
+    test_interior_drop_refuses_resume();
+    test_consumed_drop_does_not_refuse_resume();
     test_sealed_bound_stable_across_later_seals();
     test_residency_trim_keeps_open_slice_readable();
 
