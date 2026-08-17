@@ -339,7 +339,8 @@ struct n00b_store_t {
     rocs_store_pin_list_t          *active_pin_handles;
     rocs_store_record_stream_list_t *active_record_streams;
     // Streams that borrowed hot-row string spans; blocks retired-hot arena
-    // reclaim until drained. Atomic so stream open/close touch it lock-free.
+    // reclaim until drained. Stream open publishes and close drains it under
+    // residency_lock, the lock the reclaim decision runs under.
     _Atomic(uint64_t)              hot_snapshot_pins;
     uint64_t                       resident_bytes;
     uint64_t                       resident_shards;
@@ -13007,7 +13008,7 @@ n00b_store_record_stream_open(n00b_store_t     *store,
 
     // Lock-free pin: publish the pin first, then validate the store is still
     // open (pin-before-check pairs with teardown, which drains active_pins after
-    // marking the store closed). active_record_streams is a self-locking list.
+    // marking the store closed).
     if (store->active_record_streams == nullptr
         || stream->sealed_shard_ids == nullptr) {
         return n00b_result_err(n00b_store_record_stream_t *,
@@ -13021,7 +13022,12 @@ n00b_store_record_stream_open(n00b_store_t     *store,
                                N00B_STORE_ERR_STATE);
     }
     stream->pinned = true;
+    // The stream registry is a plain (unlocked) list: close deletes and the
+    // retention sweep walks it under residency_lock, so an unlocked push races
+    // with those and can corrupt the list retention's pin check depends on.
+    n00b_mutex_lock(store->residency_lock);
     n00b_list_push(*store->active_record_streams, stream);
+    n00b_mutex_unlock(store->residency_lock);
 
     uint64_t sealed_count = 0;
     uint64_t catalog_len  = (uint64_t)n00b_list_len(*store->catalog);
@@ -13061,6 +13067,10 @@ n00b_store_record_stream_open(n00b_store_t     *store,
             .allocator = allocator);
     }
 
+    // The stream is already in active_record_streams, and the retention sweep
+    // reads sealed_shard_ids from there under residency_lock; populating it
+    // unlocked races that read on the list container itself.
+    n00b_mutex_lock(store->residency_lock);
     uint64_t sealed_index = 0;
     for (uint64_t i = 0; i < catalog_len; i++) {
         n00b_store_catalog_entry_t *entry =
@@ -13088,7 +13098,16 @@ n00b_store_record_stream_open(n00b_store_t     *store,
         }
     }
     stream->sealed_count = sealed_index;
+    n00b_mutex_unlock(store->residency_lock);
 
+    // Hot snapshot: read the hot-shard pointer, borrow its record pointers,
+    // and publish hot_snapshot_pins in ONE residency_lock critical section.
+    // Retired-hot reclaim (rocs_store_retire_hot_allocator and the detach it
+    // calls) runs under the same lock and declines while hot_snapshot_pins is
+    // non-zero; borrowing before the pin is visible to that side lets a
+    // concurrent seal free the hot arena mid-open, and the cursor then hands
+    // out byte spans into freed memory.
+    n00b_mutex_lock(store->residency_lock);
     n00b_store_shard_t *hot = store->hot_shard;
     uint64_t hot_visible =
         rocs_store_hot_visible_count_unlocked(store, hot);
@@ -13135,6 +13154,7 @@ n00b_store_record_stream_open(n00b_store_t     *store,
             }
         }
     }
+    n00b_mutex_unlock(store->residency_lock);
 
     return n00b_result_ok(n00b_store_record_stream_t *, stream);
 }

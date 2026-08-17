@@ -1734,9 +1734,12 @@ typedef struct {
 /**
  * @brief Open a durable-position scan cursor across sealed shards and hot tail.
  *
- * The cursor snapshots visible sealed catalog entries and the current hot
- * record pointers under the store commit lock, then pins backing lifetime until
- * closed. It does not evaluate predicates or materialize records.
+ * The cursor snapshots visible sealed catalog entries lock-free, and snapshots
+ * the current hot record pointers under the store residency lock with the
+ * hot-lifetime pin published in the same critical section, so a concurrent
+ * seal cannot reclaim the hot arena between borrow and pin. Backing lifetime
+ * stays pinned until closed. It does not evaluate predicates or materialize
+ * records.
  *
  * Time-anchored fallback (see @ref n00b_store_catalog_backlog): if @p after
  * sorts past every sealed shard by position but carries a non-zero `seal_ts`
