@@ -1782,13 +1782,18 @@ n00b_store_record_stream_open(n00b_store_t     *store,
  *   record; the cursor then ends at it (inclusive). If it does not resolve --
  *   aged out, quarantined, or never sealed -- the open FAILS with
  *   N00B_STORE_ERR_RETENTION rather than returning a short read.
- * - A shard dropped ABOVE @p after leaves a gap the slice cannot represent,
- *   so the open fails with N00B_STORE_ERR_RETENTION instead of skipping it
- *   (conservatively: any drop newer than @p after refuses the resume, even
- *   one above @p through). Drop history is in-memory only; across a process
- *   restart a gap is undetectable, so callers must prevent it -- hold a
- *   store pin over the unconsumed range, or retire shards only below the
- *   projection's persisted watermark.
+ * - Records above @p after that were dropped or quarantined leave a gap the
+ *   slice cannot represent, so the open fails with N00B_STORE_ERR_RETENTION
+ *   instead of skipping them; only a watermark at or past a shard's last
+ *   record treats that shard as consumed. Quarantine is detected from the
+ *   catalog, so that refusal lifts if the shard is restored. Drops are
+ *   detected via an in-memory mark of the newest dropped record, so the
+ *   refusal is conservative (a drop above @p through also refuses) and does
+ *   not survive a process restart: across restarts callers must prevent
+ *   gaps -- hold a store pin over the unconsumed range, or retire shards
+ *   only below the projection's persisted watermark. A NULL @p after makes
+ *   no continuity claim: it re-baselines on the currently visible sealed
+ *   state.
  * - The slice is delivered in ascending (generation, shard_id) order even
  *   though the catalog list itself is unordered, so a consumer advancing a
  *   monotonic applied-position watermark never skips records.

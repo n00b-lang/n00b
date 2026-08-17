@@ -320,11 +320,12 @@ struct n00b_store_t {
     uint64_t                       schema_generation;
     n00b_store_pos_t               oldest_available;
     bool                           has_oldest_available;
-    // First record of the newest DROPPED sealed shard, in-memory only (drop
+    // LAST record of the newest DROPPED sealed shard, in-memory only (drop
     // history is not persisted). Sealed opens refuse to resume from below it:
-    // a resume position under this mark means records above the watermark
-    // were dropped unread, and succeeding would let a projection advance its
-    // watermark past data it never saw.
+    // only a watermark at or past a dropped shard's final record proves the
+    // shard was fully consumed, so a resume below this mark means records
+    // above the watermark were dropped unread, and succeeding would let a
+    // projection advance its watermark past data it never saw.
     n00b_store_pos_t               max_dropped_pos;
     bool                           has_max_dropped_pos;
     // Process-side hot visibility boundary. Rows below this ordinal are fully
@@ -10654,16 +10655,19 @@ rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
         return n00b_result_err(bool, N00B_STORE_ERR_VFS);
     }
 
-    n00b_store_pos_t dropped_pos = {
-        .generation = entry->generation,
-        .shard_id   = entry->shard_id,
-        .ordinal    = 0,
-        .seal_ts    = entry->seal_ts,
-    };
-    if (!store->has_max_dropped_pos
-        || n00b_store_pos_compare(store->max_dropped_pos, dropped_pos) < 0) {
-        store->max_dropped_pos     = dropped_pos;
-        store->has_max_dropped_pos = true;
+    if (entry->record_count != 0) {
+        n00b_store_pos_t dropped_pos = {
+            .generation = entry->generation,
+            .shard_id   = entry->shard_id,
+            .ordinal    = entry->record_count - 1,
+            .seal_ts    = entry->seal_ts,
+        };
+        if (!store->has_max_dropped_pos
+            || n00b_store_pos_compare(store->max_dropped_pos, dropped_pos)
+                   < 0) {
+            store->max_dropped_pos     = dropped_pos;
+            store->has_max_dropped_pos = true;
+        }
     }
 
     rocs_store_emit_lifecycle_drop(store, entry, drop_reason);
@@ -13178,6 +13182,39 @@ n00b_store_record_stream_open(n00b_store_t     *store,
     return n00b_result_ok(n00b_store_record_stream_t *, stream);
 }
 
+// Position filtering of rocs_stream_entry_after without the visibility
+// check: whether this entry HOLDS records the (after, through] interval
+// expects, whatever the entry's state.
+static bool
+rocs_stream_entry_in_interval(n00b_store_catalog_entry_t *entry,
+                              n00b_store_pos_t           *after,
+                              n00b_store_pos_t           *through)
+{
+    if (entry == nullptr || entry->record_count == 0) {
+        return false;
+    }
+    if (through != nullptr
+        && (entry->generation > through->generation
+            || (entry->generation == through->generation
+                && entry->shard_id > through->shard_id))) {
+        return false;
+    }
+    uint64_t start = 0;
+    if (after != nullptr) {
+        if (entry->generation < after->generation
+            || (entry->generation == after->generation
+                && entry->shard_id < after->shard_id)) {
+            return false;
+        }
+        if (entry->generation == after->generation
+            && entry->shard_id == after->shard_id) {
+            start = after->ordinal == UINT64_MAX ? UINT64_MAX
+                                                 : after->ordinal + 1;
+        }
+    }
+    return start < entry->record_count;
+}
+
 static int
 rocs_stream_snapshot_pos_compare(const void *a, const void *b)
 {
@@ -13270,11 +13307,14 @@ n00b_store_record_stream_open_sealed(n00b_store_t     *store,
 
     uint64_t catalog_len = (uint64_t)n00b_list_len(*store->catalog);
 
-    // A shard whose first record sits above `after` was dropped unread by
-    // this caller; succeeding would let a projection advance its watermark
-    // past records it never saw. max_dropped_pos is only the newest such
-    // loss, so this refuses conservatively even when the drop sits above
-    // `through`. Drops run under commit_lock, which we hold.
+    // max_dropped_pos is the newest dropped shard's LAST record: a watermark
+    // at or past it proves that shard was fully consumed, while a resume
+    // below it means records above the watermark were dropped unread, and
+    // succeeding would let a projection advance its watermark past them.
+    // Only the newest loss is tracked, so this refuses conservatively even
+    // when the drop sits above `through`. A NULL `after` makes no continuity
+    // claim (it re-baselines on what survives), so it is exempt. Drops run
+    // under commit_lock, which we hold.
     if (after != nullptr && store->has_max_dropped_pos
         && n00b_store_pos_compare(*after, store->max_dropped_pos) < 0) {
         n00b_mutex_unlock(store->commit_lock);
@@ -13317,6 +13357,20 @@ n00b_store_record_stream_open_sealed(n00b_store_t     *store,
             (void)n00b_store_record_stream_close(stream);
             return n00b_result_err(n00b_store_record_stream_t *,
                                    N00B_STORE_ERR_STATE);
+        }
+        // A quarantined shard holding records the resume interval expects is
+        // the same silent loss as a retention gap: the slice would skip it
+        // and the watermark would advance past records never read. Unlike a
+        // drop the entry is still cataloged, so detect it directly; the
+        // refusal lifts if the shard is restored. NULL `after` is exempt for
+        // the same re-baselining reason as the drop guard above.
+        if (after != nullptr
+            && entry->state == ROCS_STORE_CATALOG_ENTRY_QUARANTINED
+            && rocs_stream_entry_in_interval(entry, after, through)) {
+            n00b_mutex_unlock(store->commit_lock);
+            (void)n00b_store_record_stream_close(stream);
+            return n00b_result_err(n00b_store_record_stream_t *,
+                                   N00B_STORE_ERR_RETENTION);
         }
         if (through != nullptr
             && (entry->generation > through->generation

@@ -479,6 +479,103 @@ test_interior_drop_refuses_resume(void)
 }
 
 static void
+test_mid_shard_drop_refuses_resume(void)
+{
+    n00b_store_t *store = open_store();
+
+    (void)seal_shard(store, 1, 2, 100);
+    n00b_store_catalog_entry_t *b = seal_shard(store, 2, 2, 200);
+
+    // A bounded projection stopped mid-shard, then retention dropped that
+    // shard: only a watermark at the shard's LAST record proves it was fully
+    // consumed, so resuming from the middle must refuse.
+    n00b_store_pos_t mid_watermark = entry_pos(b, 0);
+    n00b_store_pos_t end_watermark = entry_pos(b, 1);
+    CHECK(n00b_result_is_ok(n00b_store_drop_sealed_shard(
+        store,
+        entry_shard_id(b),
+        .drop_reason = r"test")));
+
+    auto stream_r = n00b_store_record_stream_open_sealed(store,
+                                                         &mid_watermark,
+                                                         nullptr);
+    CHECK(n00b_result_is_err(stream_r));
+    CHECK(n00b_result_get_err(stream_r) == N00B_STORE_ERR_RETENTION);
+    check_no_pins(store);
+
+    // From the dropped shard's final record the resume is legitimate.
+    stream_r = n00b_store_record_stream_open_sealed(store,
+                                                    &end_watermark,
+                                                    nullptr);
+    CHECK(n00b_result_is_ok(stream_r));
+    n00b_store_record_stream_t *stream = n00b_result_get(stream_r);
+    check_bound_none(stream);
+    CHECK(drain_sealed(stream, nullptr, 0) == 0);
+    CHECK(n00b_result_is_ok(n00b_store_record_stream_close(stream)));
+
+    check_no_pins(store);
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+static void
+test_interior_quarantine_refuses_resume(void)
+{
+    n00b_store_t *store = open_store();
+
+    n00b_store_catalog_entry_t *a = seal_shard(store, 1, 2, 100);
+    n00b_store_catalog_entry_t *b = seal_shard(store, 2, 2, 200);
+    n00b_store_catalog_entry_t *c = seal_shard(store, 3, 2, 300);
+
+    // A projection consumed through a, then the interior shard was
+    // quarantined: its records are as unreadable as a retention gap, and the
+    // through endpoint still resolving must not mask that.
+    n00b_store_pos_t watermark = entry_pos(a, 1);
+    CHECK(n00b_result_is_ok(n00b_store_quarantine_shard(
+        store,
+        entry_shard_id(b),
+        .reason = r"test")));
+
+    n00b_store_pos_t through  = entry_pos(c, 1);
+    auto             stream_r = n00b_store_record_stream_open_sealed(store,
+                                                                     &watermark,
+                                                                     &through);
+    CHECK(n00b_result_is_err(stream_r));
+    CHECK(n00b_result_get_err(stream_r) == N00B_STORE_ERR_RETENTION);
+    check_no_pins(store);
+
+    stream_r = n00b_store_record_stream_open_sealed(store,
+                                                    &watermark,
+                                                    nullptr);
+    CHECK(n00b_result_is_err(stream_r));
+    CHECK(n00b_result_get_err(stream_r) == N00B_STORE_ERR_RETENTION);
+    check_no_pins(store);
+
+    // A full re-baseline is the explicit escape hatch: it sees a and c.
+    stream_r = n00b_store_record_stream_open_sealed(store, nullptr, nullptr);
+    CHECK(n00b_result_is_ok(stream_r));
+    n00b_store_record_stream_t *stream = n00b_result_get(stream_r);
+    n00b_store_pos_t positions[4] = {};
+    CHECK(drain_sealed(stream, positions, 4) == 4);
+    CHECK(n00b_store_pos_compare(positions[2], entry_pos(c, 0)) == 0);
+    CHECK(n00b_result_is_ok(n00b_store_record_stream_close(stream)));
+
+    // Dropping the quarantined shard hands the gap to the drop guard: the
+    // stale watermark keeps refusing.
+    CHECK(n00b_result_is_ok(n00b_store_drop_sealed_shard(
+        store,
+        entry_shard_id(b),
+        .drop_reason = r"test")));
+    stream_r = n00b_store_record_stream_open_sealed(store,
+                                                    &watermark,
+                                                    nullptr);
+    CHECK(n00b_result_is_err(stream_r));
+    CHECK(n00b_result_get_err(stream_r) == N00B_STORE_ERR_RETENTION);
+    check_no_pins(store);
+
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+}
+
+static void
 test_consumed_drop_does_not_refuse_resume(void)
 {
     n00b_store_t *store = open_store();
@@ -602,6 +699,8 @@ main(int argc, char *argv[])
     test_unresolvable_through_fails_typed();
     test_retention_refused_inside_open_slice();
     test_interior_drop_refuses_resume();
+    test_mid_shard_drop_refuses_resume();
+    test_interior_quarantine_refuses_resume();
     test_consumed_drop_does_not_refuse_resume();
     test_sealed_bound_stable_across_later_seals();
     test_residency_trim_keeps_open_slice_readable();
