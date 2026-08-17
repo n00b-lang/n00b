@@ -13159,6 +13159,231 @@ n00b_store_record_stream_open(n00b_store_t     *store,
     return n00b_result_ok(n00b_store_record_stream_t *, stream);
 }
 
+static int
+rocs_stream_snapshot_pos_compare(const void *a, const void *b)
+{
+    const rocs_stream_catalog_snapshot_t *sa = a;
+    const rocs_stream_catalog_snapshot_t *sb = b;
+    if (sa->generation != sb->generation) {
+        return sa->generation < sb->generation ? -1 : 1;
+    }
+    if (sa->shard_id != sb->shard_id) {
+        return sa->shard_id < sb->shard_id ? -1 : 1;
+    }
+    return 0;
+}
+
+n00b_result_t(n00b_store_record_stream_t *)
+n00b_store_record_stream_open_sealed(n00b_store_t     *store,
+                                     n00b_store_pos_t *after,
+                                     n00b_store_pos_t *through) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+    requires {
+        ROCS_STORE_CONTRACT_CATALOG_OWNED(store);
+    }
+    ensures {
+        n00b_result_is_err(result)
+            || (n00b_result_value(result) != nullptr
+                && ROCS_STORE_RECORD_STREAM_CONTRACT_PINNED(
+                    n00b_result_value(result)));
+    }
+{
+    if (store == nullptr || store->catalog == nullptr
+        || store->commit_lock == nullptr) {
+        return n00b_result_err(n00b_store_record_stream_t *,
+                               N00B_STORE_ERR_ARG);
+    }
+
+    n00b_store_record_stream_t *stream = n00b_alloc_with_opts(
+        n00b_store_record_stream_t,
+        &(n00b_alloc_opts_t){
+            .allocator = allocator,
+        });
+    stream->store          = store;
+    stream->allocator      = allocator;
+    stream->closed         = false;
+    stream->pinned         = false;
+    stream->sealed_shard_ids =
+        rocs_store_shard_id_list_new(.allocator = allocator);
+    stream->sealed         = nullptr;
+    stream->sealed_count   = 0;
+    stream->sealed_index   = 0;
+    stream->sealed_ordinal = 0;
+    stream->resident       = nullptr;
+    stream->root           = nullptr;
+    stream->resident_index = UINT64_MAX;
+    stream->hot_records    = nullptr;
+    stream->hot_count      = 0;
+    stream->hot_ordinal    = 0;
+    stream->hot_snapshot_pinned = false;
+
+    if (store->active_record_streams == nullptr
+        || stream->sealed_shard_ids == nullptr) {
+        return n00b_result_err(n00b_store_record_stream_t *,
+                               N00B_STORE_ERR_STATE);
+    }
+
+    // Everything from the open-check through publishing the shard-id list
+    // happens under the commit lock: retention decides what it may drop by
+    // consulting active_record_streams under this lock, so a slice selected
+    // and published here can never lose a shard between selection and use.
+    // Lock order matches the retention sweep (commit before residency; we
+    // take neither residency_lock nor any list-internal lock out of order).
+    n00b_mutex_lock(store->commit_lock);
+    n00b_atomic_add(&store->active_pins, 1);
+    atomic_thread_fence(memory_order_seq_cst);
+    if (store->state != N00B_STORE_STATE_OPEN) {
+        n00b_atomic_add(&store->active_pins, -1);
+        n00b_mutex_unlock(store->commit_lock);
+        return n00b_result_err(n00b_store_record_stream_t *,
+                               N00B_STORE_ERR_STATE);
+    }
+    stream->pinned = true;
+    // The stream registry is a plain (unlocked) list: close deletes under
+    // residency_lock, so every mutation must hold it too or push/delete race
+    // and the retention-pin argument collapses. commit -> residency matches
+    // the retention sweep's order.
+    n00b_mutex_lock(store->residency_lock);
+    n00b_list_push(*store->active_record_streams, stream);
+    n00b_mutex_unlock(store->residency_lock);
+
+    uint64_t catalog_len = (uint64_t)n00b_list_len(*store->catalog);
+
+    // The bound must resolve to an exact visible sealed record, or the caller
+    // would silently treat an aged-out suffix as already-consumed.
+    if (through != nullptr) {
+        bool through_ok = false;
+        for (uint64_t i = 0; i < catalog_len; i++) {
+            n00b_store_catalog_entry_t *entry =
+                n00b_list_get(*store->catalog, (size_t)i);
+            if (entry == nullptr) {
+                continue;
+            }
+            if (entry->generation == through->generation
+                && entry->shard_id == through->shard_id) {
+                through_ok = rocs_store_catalog_entry_visible_sealed(entry)
+                             && entry->record_count > through->ordinal;
+                break;
+            }
+        }
+        if (!through_ok) {
+            n00b_mutex_unlock(store->commit_lock);
+            (void)n00b_store_record_stream_close(stream);
+            return n00b_result_err(n00b_store_record_stream_t *,
+                                   N00B_STORE_ERR_RETENTION);
+        }
+    }
+
+    uint64_t sealed_count = 0;
+    for (uint64_t i = 0; i < catalog_len; i++) {
+        n00b_store_catalog_entry_t *entry =
+            n00b_list_get(*store->catalog, (size_t)i);
+        if (entry == nullptr) {
+            n00b_mutex_unlock(store->commit_lock);
+            (void)n00b_store_record_stream_close(stream);
+            return n00b_result_err(n00b_store_record_stream_t *,
+                                   N00B_STORE_ERR_STATE);
+        }
+        if (through != nullptr
+            && (entry->generation > through->generation
+                || (entry->generation == through->generation
+                    && entry->shard_id > through->shard_id))) {
+            continue;
+        }
+        if (rocs_stream_entry_after(entry, after, nullptr)) {
+            sealed_count++;
+        }
+    }
+
+    if (sealed_count != 0) {
+        stream->sealed = n00b_alloc_array(
+            rocs_stream_catalog_snapshot_t,
+            (int64_t)sealed_count,
+            .allocator = allocator);
+    }
+
+    uint64_t sealed_index = 0;
+    // No null check here: the count pass above rejected null entries under
+    // this same commit_lock hold, and the catalog cannot change meanwhile.
+    for (uint64_t i = 0; i < catalog_len; i++) {
+        n00b_store_catalog_entry_t *entry =
+            n00b_list_get(*store->catalog, (size_t)i);
+        if (through != nullptr
+            && (entry->generation > through->generation
+                || (entry->generation == through->generation
+                    && entry->shard_id > through->shard_id))) {
+            continue;
+        }
+        uint64_t start_ordinal = 0;
+        if (!rocs_stream_entry_after(entry, after, &start_ordinal)) {
+            continue;
+        }
+        uint64_t record_count = entry->record_count;
+        if (through != nullptr
+            && entry->generation == through->generation
+            && entry->shard_id == through->shard_id
+            && record_count > through->ordinal + 1) {
+            // Inclusive bound: cap OUR snapshot copy; the iterator walks the
+            // copy's record_count, never the live entry's.
+            record_count = through->ordinal + 1;
+        }
+        if (start_ordinal >= record_count) {
+            continue;
+        }
+        stream->sealed[sealed_index++] = (rocs_stream_catalog_snapshot_t){
+            .entry         = entry,
+            .generation    = entry->generation,
+            .shard_id      = entry->shard_id,
+            .record_count  = record_count,
+            .start_ordinal = start_ordinal,
+            .seal_ts       = entry->seal_ts,
+        };
+        if (!rocs_store_shard_id_list_contains(stream->sealed_shard_ids,
+                                               entry->shard_id)) {
+            n00b_list_push(*stream->sealed_shard_ids, entry->shard_id);
+        }
+    }
+    stream->sealed_count = sealed_index;
+
+    // The catalog list is NOT ordered; a consumer advancing a monotonic
+    // applied-position watermark would silently skip any shard delivered
+    // out of order. Sort the slice, not the world.
+    if (stream->sealed_count > 1) {
+        qsort(stream->sealed,
+              (size_t)stream->sealed_count,
+              sizeof(rocs_stream_catalog_snapshot_t),
+              rocs_stream_snapshot_pos_compare);
+    }
+
+    n00b_mutex_unlock(store->commit_lock);
+    return n00b_result_ok(n00b_store_record_stream_t *, stream);
+}
+
+n00b_result_t(n00b_option_t(n00b_store_pos_t))
+n00b_store_record_stream_sealed_bound(n00b_store_record_stream_t *stream)
+{
+    if (stream == nullptr || stream->closed) {
+        return n00b_result_err(n00b_option_t(n00b_store_pos_t),
+                               N00B_STORE_ERR_STATE);
+    }
+    if (stream->sealed_count == 0) {
+        return n00b_result_ok(n00b_option_t(n00b_store_pos_t),
+                              n00b_option_none(n00b_store_pos_t));
+    }
+    rocs_stream_catalog_snapshot_t *last =
+        &stream->sealed[stream->sealed_count - 1];
+    n00b_store_pos_t pos = {
+        .generation = last->generation,
+        .shard_id   = last->shard_id,
+        .ordinal    = last->record_count - 1,
+        .seal_ts    = last->seal_ts,
+    };
+    return n00b_result_ok(n00b_option_t(n00b_store_pos_t),
+                          n00b_option_set(n00b_store_pos_t, pos));
+}
+
 n00b_result_t(n00b_option_t(n00b_store_record_stream_item_t))
 n00b_store_record_stream_next(n00b_store_record_stream_t *stream)
     requires {
