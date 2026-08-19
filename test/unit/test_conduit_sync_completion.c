@@ -129,11 +129,7 @@ main(int argc, char **argv)
     }
 
     assert(n00b_atomic_load(&failures) == 0);
-    n00b_conduit_subscription_t(n00b_conduit_topic_base_t *) *stale
-        = n00b_atomic_load(&done_topic->sub_list_head);
-    if (stale != nullptr) {
-        assert(n00b_atomic_load(&stale->state) == N00B_CONDUIT_SUB_REMOVED);
-    }
+    assert(n00b_atomic_load(&done_topic->sub_list_head) == nullptr);
 
     n00b_conduit_topic_close((n00b_conduit_topic_base_t *)done_topic);
     n00b_conduit_xform_destroy((n00b_conduit_xform_base_t *)filter);
