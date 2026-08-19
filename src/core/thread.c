@@ -2997,7 +2997,9 @@ _n00b_os_thread_create(n00b_callstack_t *cs, n00b_tbundle_t *bundle)
 #if defined(__x86_64__)
     n00b_linux_tcbhead_t *tcb = (n00b_linux_tcbhead_t *)tls;
     tcb->tcb                  = tcb; // glibc's "[%fs:0] == self" invariant
+#if defined(__GLIBC__)
     tcb->self                 = tcb;
+#endif
 #elif defined(__aarch64__)
     ((void **)tls)[0] = tls;
 #endif
