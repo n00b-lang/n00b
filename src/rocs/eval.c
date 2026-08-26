@@ -1263,6 +1263,9 @@ n00b_plan_exec_hot(n00b_plan_node_t   *plan,
     if (plan == nullptr || shard == nullptr) {
         return n00b_result_err(n00b_plan_ordset_t *, N00B_PLAN_ERR_ARG);
     }
+    if (shard->records == nullptr || shard->state != N00B_SHARD_STATE_OPEN) {
+        return n00b_result_err(n00b_plan_ordset_t *, N00B_PLAN_ERR_STATE);
+    }
     uint64_t record_count = record_limit;
     if (record_count == UINT64_MAX) {
         auto rc_r = _rocs_plan_hot_record_count(shard);
@@ -1272,8 +1275,7 @@ n00b_plan_exec_hot(n00b_plan_node_t   *plan,
         }
         record_count = n00b_result_get(rc_r);
     }
-    else if (shard->records == nullptr
-             || record_count > (uint64_t)n00b_list_len(*shard->records)) {
+    else if (record_count > (uint64_t)n00b_list_len(*shard->records)) {
         return n00b_result_err(n00b_plan_ordset_t *, N00B_PLAN_ERR_STATE);
     }
     _rocs_plan_exec_ctx_t ctx = {

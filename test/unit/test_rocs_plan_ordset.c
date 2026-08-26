@@ -13,6 +13,7 @@
 #endif
 
 #include "internal/rocs/plan_ir.h"
+#include "internal/rocs/eval.h"
 
 #define CHECK(expr)                                                            \
     do {                                                                       \
@@ -308,6 +309,56 @@ test_postings_past_a_frozen_hot_universe(void)
     check_contains(n00b_result_get(hot_r), 0, true);
 }
 
+static void
+test_hot_plan_uses_the_explicit_published_universe(void)
+{
+    auto index_r = n00b_store_index_new(r"level", N00B_STORE_INDEX_TERM);
+    CHECK(n00b_result_is_ok(index_r));
+    n00b_store_index_t *index = n00b_result_get(index_r);
+
+    auto shard_r = n00b_store_shard_new(.shard_id = UINT64_C(0x700d));
+    CHECK(n00b_result_is_ok(shard_r));
+    n00b_store_shard_t *shard = n00b_result_get(shard_r);
+    for (uint64_t i = 0; i < 2; i++) {
+        n00b_json_node_t *record = n00b_json_object_new();
+        n00b_json_object_put_n00b(record, r"level",
+                                  n00b_json_string_new("error"));
+        auto append_r = n00b_store_shard_append(shard, record);
+        CHECK(n00b_result_is_ok(append_r));
+        auto add_r = n00b_store_index_add(index, shard,
+                                          n00b_result_get(append_r));
+        CHECK(n00b_result_is_ok(add_r));
+    }
+
+    auto target_r = n00b_plan_target_field(r"level");
+    CHECK(n00b_result_is_ok(target_r));
+    n00b_plan_value_t value = n00b_variant_set(
+        n00b_plan_value_t,
+        n00b_json_node_t *,
+        n00b_json_string_new("error"));
+    auto predicate_r = n00b_plan_predicate_eq(n00b_result_get(target_r), value);
+    CHECK(n00b_result_is_ok(predicate_r));
+    n00b_plan_index_list_t *indexes = n00b_plan_index_list_new();
+    CHECK(n00b_result_is_ok(n00b_plan_index_list_append(indexes, index)));
+    auto plan_r = n00b_plan_build(n00b_result_get(predicate_r), indexes);
+    CHECK(n00b_result_is_ok(plan_r));
+
+    auto frozen_r = n00b_plan_exec_hot(n00b_result_get(plan_r), shard,
+                                       .record_limit = 1);
+    CHECK(n00b_result_is_ok(frozen_r));
+    check_record_count(n00b_result_get(frozen_r), 1);
+    check_count(n00b_result_get(frozen_r), 1);
+    check_contains(n00b_result_get(frozen_r), 0, true);
+
+    CHECK_ERR(n00b_plan_exec_hot(n00b_result_get(plan_r), shard,
+                                 .record_limit = 3),
+              N00B_PLAN_ERR_STATE);
+    shard->state = N00B_SHARD_STATE_SEALED;
+    CHECK_ERR(n00b_plan_exec_hot(n00b_result_get(plan_r), shard,
+                                 .record_limit = 1),
+              N00B_PLAN_ERR_STATE);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -320,6 +371,7 @@ main(int argc, char **argv)
     test_boolean_algebra_and_complement();
     test_mismatched_universes_and_null_inputs();
     test_postings_past_a_frozen_hot_universe();
+    test_hot_plan_uses_the_explicit_published_universe();
 
     n00b_shutdown();
     return 0;
