@@ -328,6 +328,8 @@ test_published_record_survives_a_tail_reservation(void)
     n00b_list_push(*shard->records, nullptr);
     CHECK((uint64_t)n00b_list_len(*shard->records) == 2);
     CHECK(shard->record_count == 1);
+    CHECK_ERR(n00b_store_record_view_hot_at(shard, 1),
+              N00B_STORE_INDEX_ERR_STATE);
 
     auto at_r = n00b_store_record_view_hot_at(shard, 0);
     CHECK(n00b_result_is_ok(at_r));
@@ -341,6 +343,25 @@ test_published_record_survives_a_tail_reservation(void)
     CHECK(n00b_result_is_ok(pos_r));
     auto text_r = rocs_hot_shard_record_text(shard, 0);
     CHECK(n00b_result_is_ok(text_r));
+
+    auto target_r = n00b_plan_target_field(r"level");
+    CHECK(n00b_result_is_ok(target_r));
+    n00b_plan_value_t value = n00b_variant_set(
+        n00b_plan_value_t,
+        n00b_json_node_t *,
+        n00b_json_string_new("error"));
+    auto predicate_r = n00b_plan_predicate_eq(n00b_result_get(target_r), value);
+    CHECK(n00b_result_is_ok(predicate_r));
+    auto plan_r = n00b_plan_build(n00b_result_get(predicate_r),
+                                  n00b_plan_index_list_new());
+    CHECK(n00b_result_is_ok(plan_r));
+
+    auto scan_r = n00b_plan_exec_hot(n00b_result_get(plan_r), shard,
+                                     .record_limit = 1);
+    CHECK(n00b_result_is_ok(scan_r));
+    check_record_count(n00b_result_get(scan_r), 1);
+    check_count(n00b_result_get(scan_r), 1);
+    check_contains(n00b_result_get(scan_r), 0, true);
 }
 
 static void

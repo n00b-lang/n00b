@@ -331,7 +331,7 @@ rocs_hot_shard_record_json(n00b_store_shard_t *shard,
     }
 
     uint64_t len = (uint64_t)n00b_list_len(*shard->records);
-    if (ordinal >= len || len != shard->record_count) {
+    if (ordinal >= len) {
         return n00b_result_err(n00b_json_node_t *, N00B_STORE_INDEX_ERR_STATE);
     }
 
@@ -2763,7 +2763,7 @@ n00b_store_record_view_json(n00b_store_record_t *record) _kargs
         }
 
         uint64_t len = (uint64_t)n00b_list_len(*shard->records);
-        if (record->pos.ordinal >= len || len != shard->record_count) {
+        if (record->pos.ordinal >= len) {
             return n00b_result_err(n00b_json_node_t *,
                                    N00B_STORE_INDEX_ERR_STATE);
         }
