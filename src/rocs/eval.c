@@ -1251,23 +1251,28 @@ n00b_result_t(n00b_plan_ordset_t *)
 n00b_plan_exec_hot(n00b_plan_node_t   *plan,
                    n00b_store_shard_t *shard) _kargs
 {
-    n00b_allocator_t    *allocator  = nullptr;
-    n00b_plan_cancel_fn  cancel_cb  = nullptr;
-    void                *cancel_ctx = nullptr;
+    n00b_allocator_t    *allocator    = nullptr;
+    n00b_plan_cancel_fn  cancel_cb    = nullptr;
+    void                *cancel_ctx   = nullptr;
+    uint64_t             record_limit = 0;
 }
 {
     if (plan == nullptr || shard == nullptr) {
         return n00b_result_err(n00b_plan_ordset_t *, N00B_PLAN_ERR_ARG);
     }
-    auto rc_r = _rocs_plan_hot_record_count(shard);
-    if (n00b_result_is_err(rc_r)) {
-        return n00b_result_err(n00b_plan_ordset_t *,
-                               n00b_result_get_err(rc_r));
+    uint64_t record_count = record_limit;
+    if (record_count == 0) {
+        auto rc_r = _rocs_plan_hot_record_count(shard);
+        if (n00b_result_is_err(rc_r)) {
+            return n00b_result_err(n00b_plan_ordset_t *,
+                                   n00b_result_get_err(rc_r));
+        }
+        record_count = n00b_result_get(rc_r);
     }
     _rocs_plan_exec_ctx_t ctx = {
         .source       = _rocs_plan_scan_src_hot,
         .hot_shard    = shard,
-        .record_count = n00b_result_get(rc_r),
+        .record_count = record_count,
         .allocator    = allocator,
         .cancel_cb    = cancel_cb,
         .cancel_ctx   = cancel_ctx,

@@ -8058,7 +8058,8 @@ n00b_store_hot_tail_scan_after(n00b_store_t          *store,
 
     auto ordinals_r = n00b_plan_exec_hot(n00b_result_get(plan_r),
                                          hot,
-                                         .allocator = allocator);
+                                         .allocator    = allocator,
+                                         .record_limit = record_limit);
     if (n00b_result_is_err(ordinals_r)) {
         n00b_pinref_unpin(&store->hot_pin);
         return n00b_result_err(

@@ -368,8 +368,14 @@ rocs_hot_shard_record_text(n00b_store_shard_t *shard,
         return n00b_result_err(n00b_string_t *, N00B_STORE_INDEX_ERR_ARG);
     }
 
+    // No records-list/record_count consistency check: the writer grows the
+    // list before bumping the count and readers hold no commit_lock, so the
+    // pair legitimately disagrees mid-append, and comparing it here fails any
+    // scan that races an append. Safety comes from the caller bounding
+    // `ordinal` by the published hot boundary (advanced only after fill) and
+    // from the rwlocked, pre-sized list, whose slots never move.
     uint64_t len = (uint64_t)n00b_list_len(*shard->records);
-    if (ordinal >= len || len != shard->record_count) {
+    if (ordinal >= len) {
         return n00b_result_err(n00b_string_t *, N00B_STORE_INDEX_ERR_STATE);
     }
 
@@ -2415,8 +2421,11 @@ n00b_store_record_view_hot_at(n00b_store_shard_t *shard,
                                N00B_STORE_INDEX_ERR_STATE);
     }
 
+    // See rocs_hot_shard_record_text: no records-list/record_count
+    // comparison; the mid-append disagreement is legitimate and the caller's
+    // ordinal bound is the guard.
     uint64_t len = (uint64_t)n00b_list_len(*shard->records);
-    if (len != shard->record_count || ordinal >= len) {
+    if (ordinal >= len) {
         return n00b_result_err(n00b_store_record_t *,
                                N00B_STORE_INDEX_ERR_ARG);
     }
@@ -2458,8 +2467,11 @@ n00b_store_record_view_hot_pos(n00b_store_shard_t *shard,
                                N00B_STORE_INDEX_ERR_STATE);
     }
 
+    // See rocs_hot_shard_record_text: no records-list/record_count
+    // comparison; the mid-append disagreement is legitimate and the caller's
+    // ordinal bound is the guard.
     uint64_t len = (uint64_t)n00b_list_len(*shard->records);
-    if (len != shard->record_count || pos.ordinal >= len) {
+    if (pos.ordinal >= len) {
         return n00b_result_err(n00b_store_record_t *,
                                N00B_STORE_INDEX_ERR_ARG);
     }
