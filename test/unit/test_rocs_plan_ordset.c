@@ -272,6 +272,42 @@ test_mismatched_universes_and_null_inputs(void)
     CHECK_ERR(n00b_plan_ordset_complement(nullptr), N00B_PLAN_ERR_ARG);
 }
 
+static void
+test_postings_past_a_frozen_hot_universe(void)
+{
+    auto index_r = n00b_store_index_new(r"level", N00B_STORE_INDEX_TERM);
+    CHECK(n00b_result_is_ok(index_r));
+    n00b_store_index_t *index = n00b_result_get(index_r);
+
+    auto shard_r = n00b_store_shard_new(.shard_id = UINT64_C(0x600d));
+    CHECK(n00b_result_is_ok(shard_r));
+    n00b_store_shard_t *shard = n00b_result_get(shard_r);
+    for (uint64_t i = 0; i < 2; i++) {
+        n00b_json_node_t *record = n00b_json_object_new();
+        n00b_json_object_put_n00b(record, r"level",
+                                  n00b_json_string_new("error"));
+        auto append_r = n00b_store_shard_append(shard, record);
+        CHECK(n00b_result_is_ok(append_r));
+        auto add_r = n00b_store_index_add(index, shard,
+                                          n00b_result_get(append_r));
+        CHECK(n00b_result_is_ok(add_r));
+    }
+
+    auto postings_r = n00b_store_index_lookup(index, shard,
+                                               n00b_json_string_new("error"));
+    CHECK(n00b_result_is_ok(postings_r));
+    auto strict_r = _rocs_plan_ordset_from_postings(
+        n00b_result_get(postings_r), 1);
+    CHECK(n00b_result_is_err(strict_r));
+    CHECK(n00b_result_get_err(strict_r) == N00B_PLAN_ERR_ORDINAL);
+
+    auto hot_r = _rocs_plan_ordset_from_postings(
+        n00b_result_get(postings_r), 1, .allow_unpublished = true);
+    CHECK(n00b_result_is_ok(hot_r));
+    check_count(n00b_result_get(hot_r), 1);
+    check_contains(n00b_result_get(hot_r), 0, true);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -283,6 +319,7 @@ main(int argc, char **argv)
     test_sparse_dense_and_singleton_edges();
     test_boolean_algebra_and_complement();
     test_mismatched_universes_and_null_inputs();
+    test_postings_past_a_frozen_hot_universe();
 
     n00b_shutdown();
     return 0;

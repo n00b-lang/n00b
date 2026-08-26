@@ -672,6 +672,7 @@ _rocs_plan_ordset_from_postings(n00b_store_postings_t *postings,
     n00b_allocator_t    *allocator  = nullptr;
     n00b_plan_cancel_fn  cancel_cb  = nullptr;
     void                *cancel_ctx = nullptr;
+    bool                 allow_unpublished = false;
 }
 {
     if (postings == nullptr) {
@@ -712,12 +713,12 @@ _rocs_plan_ordset_from_postings(n00b_store_postings_t *postings,
         }
 
         n00b_store_pos_t pos = n00b_option_get(pos_opt);
-        // A posting past the frozen universe is a row whose index entry
-        // committed after this plan sized its ordsets (index commit precedes
-        // hot publication). It belongs to a later scan; treating it as an
-        // error fails the whole query for racing an append.
         if (pos.ordinal >= record_count) {
-            continue;
+            if (allow_unpublished) {
+                continue;
+            }
+            return n00b_result_err(n00b_plan_ordset_t *,
+                                   N00B_PLAN_ERR_ORDINAL);
         }
 
         auto insert_r = n00b_plan_ordset_insert(set, pos.ordinal);
@@ -806,15 +807,9 @@ _rocs_plan_hot_record_count(n00b_store_shard_t *shard)
         return n00b_result_err(uint64_t, N00B_PLAN_ERR_STATE);
     }
 
-    // The list grows before record_count is bumped and readers hold no
-    // commit_lock, so the pair disagreeing here is a normal mid-append state,
-    // not corruption; treating it as an error fails any scan that races an
-    // append. The smaller of the two is always a safe universe: every ordinal
-    // below it is pushed, and rows appended after this read belong to a later
-    // scan.
     uint64_t records_len = (uint64_t)n00b_list_len(*shard->records);
-    if (shard->record_count < records_len) {
-        records_len = shard->record_count;
+    if (records_len != shard->record_count) {
+        return n00b_result_err(uint64_t, N00B_PLAN_ERR_STATE);
     }
 
     return n00b_result_ok(uint64_t, records_len);
@@ -3172,4 +3167,3 @@ n00b_plan_partition_may_match(n00b_plan_partition_filter_t *filter,
     }
     return _rocs_plan_partition_may_match(filter->prune, partition_key);
 }
-

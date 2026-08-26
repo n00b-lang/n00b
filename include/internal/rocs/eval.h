@@ -90,11 +90,8 @@ n00b_plan_record_scan_mapped(n00b_store_map_shard_t *shard,
     void                *cancel_ctx = nullptr;
 };
 
-// Execute a plan against a shard. Does every scan, index and record alike.
-// record_limit, when non-zero, is the caller-provided scan universe -- the
-// store passes its published hot boundary (hot_live_index), below which every
-// row is filled and index-committed. Zero falls back to the shard's own
-// counters, which can include reserved-but-unfilled tail rows mid-append.
+// Execute a plan against a shard. record_limit freezes a live scan at the
+// store's published hot boundary. UINT64_MAX is the quiescent-shard fallback.
 extern n00b_result_t(n00b_plan_ordset_t *)
 n00b_plan_exec_hot(n00b_plan_node_t   *plan,
                    n00b_store_shard_t *shard) _kargs
@@ -102,7 +99,7 @@ n00b_plan_exec_hot(n00b_plan_node_t   *plan,
     n00b_allocator_t    *allocator    = nullptr;
     n00b_plan_cancel_fn  cancel_cb    = nullptr;
     void                *cancel_ctx   = nullptr;
-    uint64_t             record_limit = 0;
+    uint64_t             record_limit = UINT64_MAX;
 };
 
 extern n00b_result_t(n00b_plan_ordset_t *)
