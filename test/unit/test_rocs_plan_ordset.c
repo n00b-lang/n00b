@@ -14,6 +14,7 @@
 
 #include "internal/rocs/plan_ir.h"
 #include "internal/rocs/eval.h"
+#include "internal/rocs/index.h"
 
 #define CHECK(expr)                                                            \
     do {                                                                       \
@@ -310,6 +311,39 @@ test_postings_past_a_frozen_hot_universe(void)
 }
 
 static void
+test_published_record_survives_a_tail_reservation(void)
+{
+    auto shard_r = n00b_store_shard_new(.shard_id = UINT64_C(0x650d));
+    CHECK(n00b_result_is_ok(shard_r));
+    n00b_store_shard_t *shard = n00b_result_get(shard_r);
+
+    n00b_json_node_t *record = n00b_json_object_new();
+    n00b_json_object_put_n00b(record, r"level",
+                              n00b_json_string_new("error"));
+    auto append_r = n00b_store_shard_append(shard, record);
+    CHECK(n00b_result_is_ok(append_r));
+
+    // The writer has extended the reservation list but has not published the
+    // new count yet. Ordinal zero was already complete before this state.
+    n00b_list_push(*shard->records, nullptr);
+    CHECK((uint64_t)n00b_list_len(*shard->records) == 2);
+    CHECK(shard->record_count == 1);
+
+    auto at_r = n00b_store_record_view_hot_at(shard, 0);
+    CHECK(n00b_result_is_ok(at_r));
+    auto pos_r = n00b_store_record_view_hot_pos(
+        shard,
+        (n00b_store_pos_t){
+            .generation = shard->seal_ts,
+            .shard_id   = shard->shard_id,
+            .ordinal    = 0,
+        });
+    CHECK(n00b_result_is_ok(pos_r));
+    auto text_r = rocs_hot_shard_record_text(shard, 0);
+    CHECK(n00b_result_is_ok(text_r));
+}
+
+static void
 test_hot_plan_uses_the_explicit_published_universe(void)
 {
     auto index_r = n00b_store_index_new(r"level", N00B_STORE_INDEX_TERM);
@@ -371,6 +405,7 @@ main(int argc, char **argv)
     test_boolean_algebra_and_complement();
     test_mismatched_universes_and_null_inputs();
     test_postings_past_a_frozen_hot_universe();
+    test_published_record_survives_a_tail_reservation();
     test_hot_plan_uses_the_explicit_published_universe();
 
     n00b_shutdown();
