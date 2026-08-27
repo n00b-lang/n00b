@@ -1847,6 +1847,32 @@ scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
             uint64_t vaddr = node->vaddr + i * sizeof(uint64_t);
             emit_cpatch(ctx, vaddr, word);
         }
+        else if (!rewritten && is_ptr && word && node->is_callback) {
+            // Nothing above claimed this word: it is not a registered static,
+            // not a resolvable function symbol, and its high word is not
+            // base_address, so it is not an image-relative vaddr either.
+            //
+            // Falling through here used to write the word out verbatim, with
+            // no patch record and no error -- so a save always "succeeded"
+            // while durably persisting this run's raw process addresses into
+            // the image, for a later process to load and dereference. A 4.2 MB
+            // field image was found carrying 3,949 raw heap addresses in three
+            // distinct bands against 16 correctly relocated references
+            // (n00b-lang/n00b#226).
+            //
+            // Only fail for CALLBACK nodes. Their bitmap is the true per-word
+            // pointer oracle (D-040 OQ-3), so "this is a pointer" is a fact
+            // here, not a guess. The conservative policies must keep falling
+            // through: a DEFAULT/ALL scan legitimately misreads large scalars
+            // as pointers, and PTR_WORDS_KNOWN is not a precision marker, so
+            // rejecting on those would fail valid saves.
+            marshal_set_error(&ctx->status,
+                              &ctx->error,
+                              N00B_MARSHAL_ERR_UNRESOLVED_POINTER,
+                              r"pointer word does not resolve to a static, a "
+                              r"function symbol, or an address in the image");
+            return;
+        }
     }
 
     emit_alloc(ctx, node);
@@ -2028,6 +2054,8 @@ n00b_marshal_status_name(n00b_marshal_status_t code)
         return r"static-identity-length";
     case N00B_MARSHAL_ERR_STATIC_IDENTITY_CHECK_BYTES:
         return r"static-identity-check-bytes";
+    case N00B_MARSHAL_ERR_UNRESOLVED_POINTER:
+        return r"unresolved-pointer";
     case N00B_MARSHAL_ERR_LIMIT:
         return r"limit";
     }
@@ -3048,6 +3076,13 @@ static bool
 unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
 {
     n00b_marshal_stream_header_t *hdr = (void *)ctx->in.data;
+    // Set when a precisely-typed pointer word survives the walk without being
+    // relocated (see the note at the check site). Recorded rather than raised
+    // on the spot so that a more specific defect encountered later in the
+    // stream -- a missing static identity, a malformed record -- still reports
+    // its own status; this is the verdict only for an image that otherwise
+    // parses cleanly.
+    bool saw_unrelocated_pointer = false;
     n00b_marshal_patch_slots_t patch_slots;
     if (!unmarshal_collect_patch_slots(ctx, hdr, &patch_slots)) {
         marshal_set_error(&ctx->status,
@@ -3066,6 +3101,14 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
     while (ix < ctx->in.len) {
         uint32_t op = *(uint32_t *)(ctx->in.data + ix);
         if (op == N00B_MARSHAL_OP_STOP) {
+            if (saw_unrelocated_pointer) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_UNRESOLVED_POINTER,
+                                  r"image contains an unrelocated pointer word "
+                                  r"(a raw address from the writing process)");
+                return false;
+            }
             return true;
         }
         if (op == N00B_MARSHAL_OP_CPATCH) {
@@ -3280,6 +3323,18 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
             }
             uint64_t word = words[i];
             if ((word >> 32) != hdr->base_address) {
+                // Not an image-relative vaddr, and no patch record claimed this
+                // slot. For a CALLBACK segment the bitmap is the precise
+                // pointer oracle (D-040 OQ-3), so this word IS a pointer and it
+                // is carrying an address from whatever process wrote the image.
+                // Loading it and letting the consumer dereference it is the
+                // crash in n00b-lang/n00b#226; refuse the image instead.
+                //
+                // Conservatively-scanned segments still skip: there, "pointer"
+                // is a guess and a large scalar looks identical.
+                if (seg->is_callback && word) {
+                    saw_unrelocated_pointer = true;
+                }
                 continue;
             }
             void *target = addr_for_vaddr(ctx, word);

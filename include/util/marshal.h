@@ -31,6 +31,12 @@ typedef enum {
     N00B_MARSHAL_ERR_STATIC_IDENTITY_SCAN,
     N00B_MARSHAL_ERR_STATIC_IDENTITY_LENGTH,
     N00B_MARSHAL_ERR_STATIC_IDENTITY_CHECK_BYTES,
+    // A word the PRECISE pointer oracle (a callback scan bitmap) says is a
+    // pointer could not be resolved to anything relocatable: not a registered
+    // static, not a resolvable function symbol, and not an address inside the
+    // image being written. Serializing it verbatim would persist this run's raw
+    // process address into the image (n00b-lang/n00b#226).
+    N00B_MARSHAL_ERR_UNRESOLVED_POINTER,
     N00B_MARSHAL_ERR_LIMIT,
 } n00b_marshal_status_t;
 
