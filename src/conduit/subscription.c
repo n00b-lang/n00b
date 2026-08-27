@@ -186,13 +186,18 @@ n00b_conduit_sub_cancel(n00b_conduit_sub_handle_t handle)
                               : nullptr;
     if (lock) n00b_data_write_lock(lock);
 
+    // Snapshot everything we need from `sub` up front: sub_map_remove() drops
+    // the registry entry that keeps it reachable, so no field of `sub` may be
+    // read or written after that call (see n00b#185).
+    n00b_conduit_topic_base_t *topic          = sub->topic;
+    bool                       confirm_cancel = sub->confirm_cancel;
+
     int state = n00b_atomic_load(&sub->state);
     if (state == N00B_CONDUIT_SUB_REMOVED) {
         bool last = sub_unlink_from_topic(sub);
         sub_map_remove(handle);
-        if (last && sub->topic->on_last_unsubscribe) {
-            sub->topic->on_last_unsubscribe(
-                sub->topic, sub->topic->on_last_unsubscribe_ctx);
+        if (last && topic && topic->on_last_unsubscribe) {
+            topic->on_last_unsubscribe(topic, topic->on_last_unsubscribe_ctx);
         }
         if (lock) n00b_data_unlock(lock);
         return;
@@ -206,17 +211,24 @@ n00b_conduit_sub_cancel(n00b_conduit_sub_handle_t handle)
 
     n00b_atomic_store(&sub->state, N00B_CONDUIT_SUB_CANCELING);
     bool last = sub_unlink_from_topic(sub);
-    sub_map_remove(handle);
+    // Publish the terminal state before the map drop -- see the note in
+    // _n00b_conduit_topic_notify_close. sub_map_remove() can be the call that
+    // makes `sub` reclaimable, so nothing may write through it afterwards.
     n00b_atomic_store(&sub->state, N00B_CONDUIT_SUB_REMOVED);
-    if (last && sub->topic->on_last_unsubscribe) {
-        sub->topic->on_last_unsubscribe(
-            sub->topic, sub->topic->on_last_unsubscribe_ctx);
-    }
-    if (lock) n00b_data_unlock(lock);
 
-    if (sub->confirm_cancel) {
+    // The CANCEL_ACK has to be sent while `sub` is still reachable, i.e.
+    // before the map drop below -- it reads sub->sys_queue, sub->topic and
+    // sub->inbox. It is safe here: the subscription is already REMOVED, so no
+    // delivery pass will pick it up again.
+    if (confirm_cancel) {
         sub_send_sys_message(sub, N00B_CONDUIT_MSG_CANCEL_ACK);
     }
+
+    sub_map_remove(handle);
+    if (last && topic && topic->on_last_unsubscribe) {
+        topic->on_last_unsubscribe(topic, topic->on_last_unsubscribe_ctx);
+    }
+    if (lock) n00b_data_unlock(lock);
 }
 
 void
@@ -335,8 +347,15 @@ _n00b_conduit_topic_notify_close(n00b_conduit_topic_base_t *topic)
     while (sub) {
         _n00b_conduit_sub_base_t *next =
             (_n00b_conduit_sub_base_t *)sub->next_for_topic;
-        sub_map_remove(sub->handle);
+        // Mark REMOVED BEFORE dropping the handle from the map. The map is the
+        // registry that keeps this subscription reachable, so once the entry is
+        // gone the owner is free to reclaim `sub` -- and the old order then
+        // wrote `sub->state` through a pointer that could already have been
+        // released. That is a plain write-after-release on the io thread, which
+        // is what a libmalloc heap trap (macOS raises SIGTRAP, sig=5, rather
+        // than aborting) reports (n00b-lang/n00b#185).
         n00b_atomic_store(&sub->state, N00B_CONDUIT_SUB_REMOVED);
+        sub_map_remove(sub->handle);
         sub = next;
     }
 

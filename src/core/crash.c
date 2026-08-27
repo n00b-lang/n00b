@@ -56,6 +56,16 @@
 #endif
 
 static _Atomic int g_n00b_crash_log_fd = -1;
+// Admission gate for the crash dump: 0 = idle, 1 = a thread is rendering the
+// dump, 2 = that dump is complete.
+//
+// The dump is a long sequence of small unlocked writes, so when two threads
+// faulted together their output interleaved mid-token and produced a dump that
+// could not be read literally -- `id=11` for two threads each printing `1`,
+// `os_tid=53795379` for one tid printed twice, `lr_off` duplicated with its
+// value doubled (n00b-lang/n00b#185). Every numeric field in a concurrent dump
+// was therefore untrustworthy, which is exactly when the dump matters most.
+static _Atomic uint32_t g_n00b_crash_dumping = 0;
 static _Atomic bool g_n00b_crash_symbolicate = false;
 
 #if !defined(_WIN32)
@@ -432,6 +442,23 @@ _n00b_crash_dump_context(int sig,
 [[n00b::nogc]] static void
 _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
 {
+    // Let exactly one thread render the dump; see g_n00b_crash_dumping. A
+    // loser must not write anything, or it splices its fields into the
+    // winner's lines. Async-signal-safe: one CAS, then bounded sleeping.
+    uint32_t crash_expected = 0;
+    if (!n00b_atomic_cas(&g_n00b_crash_dumping, &crash_expected, 1u)) {
+        // Give the winner time to finish and exit the process. Bounded, so a
+        // fault inside the handler itself cannot hang us here instead.
+        for (int i = 0; i < 5000; i++) {
+            if (n00b_atomic_load(&g_n00b_crash_dumping) == 2u) {
+                break;
+            }
+            base_nanosleep_ns(1000000); // 1ms
+        }
+        n00b_raw_exit(128 + sig);
+        return;
+    }
+
     // Resolve the FAULTING thread by the altstack region we are running on (a
     // local's address lies in that slot's altstack-callstack region).  We do
     // NOT trust n00b_thread_self() for this: the signal may have landed on a
@@ -446,6 +473,7 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
     // default disposition handles the original fault.
     if (!n00b_default_runtime_is_set()) {
         _n00b_crash_write("n00b: fatal: fault before runtime init\n");
+        n00b_atomic_store(&g_n00b_crash_dumping, 2u);
         n00b_raw_exit(128 + sig);
         return;
     }
@@ -579,6 +607,7 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
         }
     }
 
+    n00b_atomic_store(&g_n00b_crash_dumping, 2u);
     n00b_raw_exit(128 + sig);
     return;
 }
