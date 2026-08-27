@@ -51,6 +51,42 @@ TEST(test_full_casefold)
     ASSERT_STR_EQ(folded->data, "hello world");
 }
 
+TEST(test_full_casefold_ascii_already_folded)
+{
+    // Fast path: all-ASCII, no uppercase.
+    n00b_string_t *folded
+        = n00b_unicode_casefold(r"already folded 123", .allocator = nullptr);
+    ASSERT_STR_EQ(folded->data, "already folded 123");
+    ASSERT_EQ(folded->u8_bytes, 18);
+}
+
+TEST(test_full_casefold_empty)
+{
+    n00b_string_t *folded = n00b_unicode_casefold_raw(nullptr, "", 0);
+    ASSERT_EQ(folded->u8_bytes, 0);
+    ASSERT_STR_EQ(folded->data, "");
+}
+
+TEST(test_full_casefold_sharp_s_expands)
+{
+    // ß (U+00DF) full-folds to "ss": output longer than input, exercising
+    // the exact-size two-pass path.
+    n00b_string_t *folded
+        = n00b_unicode_casefold(r"Stra\xC3\x9Fe", .allocator = nullptr);
+    ASSERT_STR_EQ(folded->data, "strasse");
+    ASSERT_EQ(folded->u8_bytes, 7);
+}
+
+TEST(test_full_casefold_non_ascii_simple)
+{
+    // É (U+00C9) → é (U+00E9): 1:1 two-byte fold on the non-ASCII path,
+    // with surrounding ASCII uppercase folded in the same pass.
+    n00b_string_t *folded
+        = n00b_unicode_casefold(r"CAF\xC3\x89", .allocator = nullptr);
+    ASSERT_STR_EQ(folded->data, "caf\xC3\xA9");
+    ASSERT_EQ(folded->u8_bytes, 5);
+}
+
 TEST(test_casecmp)
 {
     ASSERT_EQ(n00b_unicode_casecmp(r"Hello", r"hello"), 0);
@@ -74,6 +110,10 @@ run_tests(void)
     RUN_TEST(test_full_uppercase);
     RUN_TEST(test_full_lowercase);
     RUN_TEST(test_full_casefold);
+    RUN_TEST(test_full_casefold_ascii_already_folded);
+    RUN_TEST(test_full_casefold_empty);
+    RUN_TEST(test_full_casefold_sharp_s_expands);
+    RUN_TEST(test_full_casefold_non_ascii_simple);
     RUN_TEST(test_casecmp);
     RUN_TEST(test_sharp_s_uppercase);
 }
