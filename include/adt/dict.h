@@ -266,7 +266,12 @@ extern void        _n00b_dict_internal_clear(_n00b_dict_internal_t *);
  * @kw allocator      Allocator for internal storage (nullptr = runtime default).
  * @kw hash           Hash function for keys (nullptr = n00b_hash_word).
  * @kw skip_obj_hash  If true, use the raw key bits instead of calling the hash function.
- * @kw locked         Single threaded; no need to lock mgrations.
+ * @kw locked         If true (the default), synchronize migrations for
+ *                    concurrent access. Set false ONLY for a private,
+ *                    single-threaded dict: false is what skips the
+ *                    migration futex and the per-bucket COPYING/MOVING
+ *                    work, and it also opts the store out of epoch-
+ *                    deferred reclamation.
  * @kw scan_kind      Legacy default scan policy for key/value backing arrays.
  * @kw key_scan_kind  Optional key-array scan policy. Defaults to `scan_kind`.
  * @kw value_scan_kind Optional value-array scan policy. Defaults to `scan_kind`.
