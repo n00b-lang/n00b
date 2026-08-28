@@ -1,0 +1,176 @@
+# Phase 1 CI: build gate.
+#
+# Scope is deliberately narrow: COMPILE everything on Linux and macOS --
+# libn00b, the tools, and all ~470 test binaries -- but do NOT run the suite.
+#
+# Building with -Dbuild_tests=true is load-bearing, not incidental. It is what
+# defines N00B_DEBUG (meson.build: `conf_debug = enable_debug or
+# n00b_build_tests`), and several test sources call debug-only surface --
+# planner work counters, index introspection -- that is compiled out otherwise.
+# Building test targets individually via `ninja <target>` WITHOUT that option
+# produces a pile of bogus "undeclared identifier" errors. Use the option, or
+# ./build.sh --build-tests.
+#
+# The gate builds an explicit TARGET LIST rather than everything, because two
+# tool targets -- n00b and n00b_dev -- do not link on main: n00b_crt_main is
+# undefined, referenced from n00b_start in the crt host stub (n00b#237). That
+# reproduces from a clean checkout with both the pinned ncc and ncc main, so it
+# is a real break and not a stale local artifact. Gating on `bash build.sh`
+# unqualified would therefore be red from day one. Everything else -- libn00b.a,
+# the other tools, and all ~470 test binaries -- does build.
+#
+# ADD THOSE TARGETS BACK (or drop N00B_BUILD_TARGETS entirely) once #237 lands.
+#
+# Three tests fail or hang on main (n00b#234, #235, #236) and are quarantined in
+# meson.build, so the suite is otherwise green -- running it is Phase 2. #234 is
+# a genuine hang, so it sits in a 'known-broken' suite rather than being marked
+# should_fail (meson reports a timeout as TIMEOUT regardless of should_fail).
+#
+# See the PR that introduced this file for the full staging plan.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to a PR makes the in-flight run obsolete; don't burn runners on it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      # Report both platforms on every run. Linux and macOS diverge in exactly
+      # the areas this codebase keeps finding bugs in (raw-clone workers, TLS,
+      # libc interposition), so a Linux-only failure must not hide a macOS one.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # ncc needs Clang 22.1.0+ for C23 #embed / --embed-dir (see ncc/README.md).
+      # Neither runner image ships one: ubuntu-latest is older, and macOS has
+      # Apple clang, which reports 21.x and is NOT sufficient.
+      - name: Install Clang 22 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 22
+          sudo ln -sf /usr/bin/clang-22 /usr/bin/clang
+          sudo ln -sf /usr/bin/clang++-22 /usr/bin/clang++
+          clang --version
+
+      - name: Install Clang 22 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Install build tooling
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade --break-system-packages 'meson>=1.6.0' || \
+            python3 -m pip install --upgrade 'meson>=1.6.0'
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ninja-build pkg-config
+          else
+            brew install ninja pkg-config
+          fi
+          meson --version
+          ninja --version
+
+      - name: Verify toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Fail early and loudly rather than deep inside the n00b compile with
+          # an inscrutable #embed error.
+          ver=$(clang --version | sed -n 's/.*clang version \([0-9]*\).*/\1/p' | head -1)
+          echo "clang major: ${ver}"
+          if [ -z "${ver}" ] || [ "${ver}" -lt 22 ]; then
+            echo "::error::ncc requires Clang 22.1.0+; found: $(clang --version | head -1)"
+            exit 1
+          fi
+
+      # build.sh clones crashappsec/ncc into subprojects/ncc at NCC_REV and
+      # builds it. That is the slow part of a cold build, and it only changes
+      # when the pin in build.sh changes -- so key the cache on that pin.
+      - name: Resolve ncc pin
+        id: ncc
+        shell: bash
+        run: |
+          set -euo pipefail
+          rev=$(sed -n 's/^NCC_REV_DEFAULT="\(.*\)"$/\1/p' build.sh | head -1)
+          if [ -z "${rev}" ]; then
+            echo "::error::could not parse NCC_REV_DEFAULT from build.sh"
+            exit 1
+          fi
+          echo "rev=${rev}" >> "$GITHUB_OUTPUT"
+          echo "ncc pin: ${rev}"
+
+      - name: Cache ncc build
+        uses: actions/cache@v4
+        with:
+          path: subprojects/ncc
+          key: ncc-${{ runner.os }}-${{ steps.ncc.outputs.rev }}
+
+      - name: Build
+        shell: bash
+        env:
+          # meson.build has a VCS guard that refuses to configure outside a jj
+          # workspace (it has caught real stale-checkout builds). actions/checkout
+          # produces a git checkout with no .jj, so the guard MUST be overridden
+          # here or setup fails before compiling anything. The option's own
+          # description names "CI checkouts with no .jj" as the intended use.
+          N00B_SKIP_VCS_CHECK: "1"
+          # Compile the tests (see header: this also sets N00B_DEBUG), but do
+          # not run them -- that is Phase 2.
+          N00B_BUILD_TESTS: "1"
+          N00B_TEST: "0"
+          N00B_UNICODE_ALLOW_DOWNLOADS: "1"
+          # Build everything and keep going past failures, so one broken target
+          # does not mask the rest. The step below decides pass/fail.
+          N00B_KEEP_GOING: "1"
+        run: bash build.sh 2>&1 | tee /tmp/n00b-build.log; exit 0
+
+      # `bash build.sh` currently exits non-zero on main because n00b and
+      # n00b_dev do not link (n00b#237). Rather than let that make the gate
+      # useless, assert the EXACT known-broken set: anything else failing is a
+      # real regression and fails the job, and if #237 is fixed the job also
+      # fails -- telling you to delete this step and gate on build.sh directly.
+      - name: Check build result against known-broken targets
+        shell: bash
+        run: |
+          set -uo pipefail
+          failed=$(grep -oE '^FAILED: \[code=[0-9]+\] [A-Za-z0-9_.:/-]+' /tmp/n00b-build.log \
+                     | awk '{print $NF}' | sort -u || true)
+          expected=$'n00b\nn00b_dev'
+          echo "--- failed targets ---"; echo "${failed:-<none>}"
+          if [ "$(printf '%s' "$failed")" = "$(printf '%s' "$expected")" ]; then
+            echo "::warning::Only the known-broken targets failed (n00b, n00b_dev -- see n00b#237)."
+            exit 0
+          fi
+          if [ -z "$failed" ]; then
+            echo "::error::n00b#237 appears FIXED (nothing failed). Remove this step and the"
+            echo "::error::N00B_KEEP_GOING workaround, and gate on 'bash build.sh' directly."
+            exit 1
+          fi
+          echo "::error::Unexpected build failures (expected only n00b, n00b_dev per #237)."
+          exit 1
