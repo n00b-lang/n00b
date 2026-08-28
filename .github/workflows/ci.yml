@@ -87,15 +87,15 @@ jobs:
           set -euo pipefail
           python3 -m pip install --upgrade --break-system-packages 'meson>=1.6.0' || \
             python3 -m pip install --upgrade 'meson>=1.6.0'
-          # libgit2 >= 1.7.0 is the one HARD system dependency: meson.build
-          # errors out at setup without it (every other optional dep degrades
-          # gracefully via required: false). zlib is used for HTTP content
-          # decompression.
+          # libgit2 is the one HARD system dependency: meson.build errors out
+          # at setup without it (every other optional dep degrades gracefully
+          # via required: false). zlib is used for HTTP content decompression.
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends \
-              ninja-build pkg-config libgit2-dev zlib1g-dev
+              ninja-build pkg-config zlib1g-dev cmake
           else
+            # Homebrew currently ships 1.9.x, which is new enough (see below).
             brew install ninja pkg-config libgit2 zlib
           fi
           meson --version
@@ -136,6 +136,32 @@ jobs:
         with:
           path: subprojects/ncc
           key: ncc-${{ runner.os }}-${{ steps.ncc.outputs.rev }}
+
+      # meson.build asks for libgit2 >= 1.7.0, but src/naudit/blame.c actually
+      # uses 1.9+ blame APIs (git_blame_hunkcount / _hunk_byindex / _hunk_byline)
+      # with no version guard -- so a 1.7 libgit2 configures fine and then fails
+      # to compile. That mismatch is n00b#240. ubuntu-latest (24.04) ships 1.7.2,
+      # so build a new-enough libgit2 from source rather than block this gate on
+      # that decision. macOS takes Homebrew's 1.9.x and needs none of this.
+      #
+      # DROP THIS STEP once #240 is resolved and apt's libgit2 suffices (or the
+      # call sites gain version guards).
+      - name: Build libgit2 (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=1.9.4
+          curl -fsSL "https://github.com/libgit2/libgit2/archive/refs/tags/v${ver}.tar.gz" \
+            -o /tmp/libgit2.tar.gz
+          tar -xzf /tmp/libgit2.tar.gz -C /tmp
+          cmake -S "/tmp/libgit2-${ver}" -B /tmp/libgit2-build \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_CLI=OFF \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build /tmp/libgit2-build -j"$(nproc)"
+          sudo cmake --install /tmp/libgit2-build
+          sudo ldconfig
+          pkg-config --modversion libgit2
 
       # build.sh has a top-level guard that hard-errors when ncc is absent
       # ("ncc not found. n00b must be built with ncc, not clang."). That guard
