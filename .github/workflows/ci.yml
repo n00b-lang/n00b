@@ -126,10 +126,29 @@ jobs:
           echo "ncc pin: ${rev}"
 
       - name: Cache ncc build
+        id: ncc-cache
         uses: actions/cache@v4
         with:
           path: subprojects/ncc
           key: ncc-${{ runner.os }}-${{ steps.ncc.outputs.rev }}
+
+      # build.sh has a top-level guard that hard-errors when ncc is absent
+      # ("ncc not found. n00b must be built with ncc, not clang."). That guard
+      # runs BEFORE ensure_ncc's build-from-subproject fallback, so the
+      # fallback is unreachable on a runner with no ncc -- we have to build it
+      # ourselves and hand the path over via NCC_PATH.
+      - name: Build ncc
+        if: steps.ncc-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf subprojects/ncc
+          git clone https://github.com/crashappsec/ncc.git subprojects/ncc
+          git -C subprojects/ncc checkout "${{ steps.ncc.outputs.rev }}"
+          CC=clang meson setup --buildtype=release \
+            subprojects/ncc/build_release subprojects/ncc
+          meson compile -C subprojects/ncc/build_release
+          test -x subprojects/ncc/build_release/ncc
 
       - name: Build
         shell: bash
@@ -148,6 +167,8 @@ jobs:
           # Build everything and keep going past failures, so one broken target
           # does not mask the rest. The step below decides pass/fail.
           N00B_KEEP_GOING: "1"
+          # Explicit, because build.sh's own guard pre-empts its bootstrap path.
+          NCC_PATH: ${{ github.workspace }}/subprojects/ncc/build_release/ncc
         run: bash build.sh 2>&1 | tee /tmp/n00b-build.log; exit 0
 
       # `bash build.sh` currently exits non-zero on main because n00b and
