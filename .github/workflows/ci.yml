@@ -182,6 +182,10 @@ jobs:
       # real regression and fails the job, and if #237 is fixed the job also
       # fails -- telling you to delete this step and gate on build.sh directly.
       - name: Check build result against known-broken targets
+        # MUST be always(): the Build step can exit non-zero (that is the whole
+        # point), and without this the check is skipped and the job just
+        # inherits Build's failure -- losing the known-broken discrimination.
+        if: always()
         shell: bash
         run: |
           set -uo pipefail
