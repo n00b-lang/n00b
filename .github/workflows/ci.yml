@@ -44,7 +44,11 @@ jobs:
   build:
     name: build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    # macOS needs it: a cold build (ncc from source + ~1800 n00b targets) ran
+    # past 90 min on macos-latest, while ubuntu-latest finished comfortably
+    # inside it. The ncc cache takes a chunk off subsequent runs, but the n00b
+    # compile itself is the bulk and is not cached.
+    timeout-minutes: 180
     strategy:
       # Report both platforms on every run. Linux and macOS diverge in exactly
       # the areas this codebase keeps finding bugs in (raw-clone workers, TLS,
