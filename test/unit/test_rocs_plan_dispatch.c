@@ -1231,13 +1231,25 @@ test_index_only_branches_never_meet_a_record(void)
 // proposed. Case B is the guard rail for that work.
 // ---------------------------------------------------------------------------
 
+// The #686/#202 dual. Cases A and B query the SAME field with the SAME plan
+// index list, so the only thing that differs is what the sealed image carries:
+// an empty column (the field was declared when this shard sealed) or no column
+// at all (it sealed before the declaration). If a change makes Case A pass by
+// keying off "declared but no column" rather than off the empty column itself,
+// Case B fails -- which is precisely the #202 regression that #223 fixed.
 static void
 test_mapped_sparse_eq_declared_but_absent_column(void)
 {
-    // Case A. `level` is declared term-indexed; the sealed shard's records do
-    // not populate it, so the shard carries no column for it.
+    // Case A. `session` is declared term-indexed at seal time and no record in
+    // this shard populates it, so seal writes an EMPTY column for it.
     n00b_store_index_t *declared = term_index(r"session");
     n00b_store_shard_t *shard    = indexed_level_shard(term_index(r"level"));
+
+    // What rocs_store_declare_indexed_columns does for every declared-indexed
+    // field on the real seal path.
+    auto declare_r = n00b_store_index_declare(declared, shard);
+    CHECK(n00b_result_is_ok(declare_r));
+    CHECK(n00b_result_get(declare_r));
 
     auto seal_r = n00b_store_shard_seal(shard,
                                         .seal_ts      = 86,
@@ -1260,21 +1272,24 @@ test_mapped_sparse_eq_declared_but_absent_column(void)
     n00b_plan_records_scanned_reset();
     n00b_plan_ordset_t *set = exec_mapped_ok(plan, n00b_result_get(root_r));
 
-    // The answer is already right today.
+    // Right answer...
     check_ordinals(set, 4, NULL, 0);
-
-    // The cost is not. FAILS today: equals the shard's record count, because
-    // plan.c blanket-marks EQ leaves RECOVER_RECORD_SCAN and eval.c expands to
-    // the universe when the column is absent.
+    // ...and now for free: the empty column is present, so the mapped lookup
+    // resolves to an exact empty set instead of recovering into a full scan.
     CHECK(n00b_plan_records_scanned() == 0);
 }
 
 static void
 test_mapped_sparse_eq_legacy_shard_must_scan(void)
 {
-    // Case B. The field is NOT among the shard's indexes — a shard sealed
-    // before the declaration existed. Records here may populate it.
-    n00b_store_shard_t *shard = indexed_level_shard(term_index(r"level"));
+    // Case B. Same field and same index list as Case A -- but this shard sealed
+    // BEFORE the declaration existed, so nothing wrote a column for it. Records
+    // here may populate `session`; no index was ever built over them, so
+    // scanning is the only sound answer.
+    n00b_store_index_t *declared = term_index(r"session");
+    n00b_store_shard_t *shard    = indexed_level_shard(term_index(r"level"));
+
+    // Deliberately NO n00b_store_index_declare: that is what "legacy" means.
 
     auto seal_r = n00b_store_shard_seal(shard,
                                         .seal_ts      = 87,
@@ -1287,13 +1302,49 @@ test_mapped_sparse_eq_legacy_shard_must_scan(void)
     CHECK(n00b_result_is_ok(root_r));
 
     n00b_plan_node_t *plan = plan_ok(
-        n00b_plan_build(level_eq(r"error"), n00b_plan_index_list_new()));
+        n00b_plan_build(predicate_ok(
+                            n00b_plan_predicate_eq(field_target(r"session"),
+                                                   json_value(
+                                                       n00b_json_string_new_from_n00b(
+                                                           r"64302c47")))),
+                        index_list_with(declared)));
 
     n00b_plan_records_scanned_reset();
     (void)exec_mapped_ok(plan, n00b_result_get(root_r));
 
-    // Scanning is CORRECT here. This must keep passing after #686 is fixed —
-    // it is the #202 regression guard.
+    // Scanning is CORRECT here. This is the #202 regression guard, and it must
+    // keep passing after #686 is fixed.
+    CHECK(n00b_plan_records_scanned() > 0);
+}
+
+// Case C, for completeness: the field is not declared at all, so there is no
+// index descriptor and the plan is a record scan from the start.
+static void
+test_mapped_undeclared_field_eq_scans(void)
+{
+    n00b_store_shard_t *shard = indexed_level_shard(term_index(r"level"));
+
+    auto seal_r = n00b_store_shard_seal(shard,
+                                        .seal_ts      = 88,
+                                        .base_address = 0x8800u);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    auto map_r = n00b_store_map_open_buffer(n00b_result_get(seal_r));
+    CHECK(n00b_result_is_ok(map_r));
+    auto root_r = n00b_store_map_root(n00b_result_get(map_r));
+    CHECK(n00b_result_is_ok(root_r));
+
+    n00b_plan_node_t *plan = plan_ok(
+        n00b_plan_build(predicate_ok(
+                            n00b_plan_predicate_eq(field_target(r"session"),
+                                                   json_value(
+                                                       n00b_json_string_new_from_n00b(
+                                                           r"64302c47")))),
+                        n00b_plan_index_list_new()));
+
+    n00b_plan_records_scanned_reset();
+    (void)exec_mapped_ok(plan, n00b_result_get(root_r));
+
     CHECK(n00b_plan_records_scanned() > 0);
 }
 
@@ -1334,6 +1385,7 @@ main(int argc, char **argv)
     test_mapped_term_eq_uses_index();
     test_mapped_sparse_eq_declared_but_absent_column();
     test_mapped_sparse_eq_legacy_shard_must_scan();
+    test_mapped_undeclared_field_eq_scans();
     test_unusable_index_plans_a_record_scan();
     test_index_miss_and_unusable_lookup();
     test_boolean_plan_shapes();
