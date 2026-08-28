@@ -1207,6 +1207,96 @@ test_index_only_branches_never_meet_a_record(void)
 }
 
 
+
+// ---------------------------------------------------------------------------
+// wax#686 / n00b#202 — the sparse-field EQ pair.
+//
+// These two cases look identical to a sealed shard and MUST NOT be collapsed.
+// #223 (df904c03, "scan sealed shards missing indexes") collapsed them in the
+// safe direction: everything scans. That fixed #202's wrong answers and is what
+// makes wax#686 unbearable — a shard with no column for the field is read and
+// JSON-parsed record by record.
+//
+//   A. shard sealed WITH the field declared, no record populated it
+//      -> genuinely empty. Scanning it is correct but wasteful. This is #686.
+//
+//   B. shard sealed BEFORE the field was declared (legacy)
+//      -> records may populate it and no index exists. Scanning is the ONLY
+//         correct answer. This is #202, and asserting 0 here re-breaks it.
+//
+// A test that asserts records_scanned == 0 for "declared but no column in this
+// shard" without distinguishing B is a #202 regression wearing a #686 fix.
+// Distinguishing them needs a shard-format change (an empty index descriptor
+// written at seal time for every declared field), which is what #202's body
+// proposed. Case B is the guard rail for that work.
+// ---------------------------------------------------------------------------
+
+static void
+test_mapped_sparse_eq_declared_but_absent_column(void)
+{
+    // Case A. `level` is declared term-indexed; the sealed shard's records do
+    // not populate it, so the shard carries no column for it.
+    n00b_store_index_t *declared = term_index(r"session");
+    n00b_store_shard_t *shard    = indexed_level_shard(term_index(r"level"));
+
+    auto seal_r = n00b_store_shard_seal(shard,
+                                        .seal_ts      = 86,
+                                        .base_address = 0x8600u);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    auto map_r = n00b_store_map_open_buffer(n00b_result_get(seal_r));
+    CHECK(n00b_result_is_ok(map_r));
+    auto root_r = n00b_store_map_root(n00b_result_get(map_r));
+    CHECK(n00b_result_is_ok(root_r));
+
+    n00b_plan_node_t *plan = plan_ok(
+        n00b_plan_build(predicate_ok(
+                            n00b_plan_predicate_eq(field_target(r"session"),
+                                                   json_value(
+                                                       n00b_json_string_new_from_n00b(
+                                                           r"64302c47")))),
+                        index_list_with(declared)));
+
+    n00b_plan_records_scanned_reset();
+    n00b_plan_ordset_t *set = exec_mapped_ok(plan, n00b_result_get(root_r));
+
+    // The answer is already right today.
+    check_ordinals(set, 4, NULL, 0);
+
+    // The cost is not. FAILS today: equals the shard's record count, because
+    // plan.c blanket-marks EQ leaves RECOVER_RECORD_SCAN and eval.c expands to
+    // the universe when the column is absent.
+    CHECK(n00b_plan_records_scanned() == 0);
+}
+
+static void
+test_mapped_sparse_eq_legacy_shard_must_scan(void)
+{
+    // Case B. The field is NOT among the shard's indexes — a shard sealed
+    // before the declaration existed. Records here may populate it.
+    n00b_store_shard_t *shard = indexed_level_shard(term_index(r"level"));
+
+    auto seal_r = n00b_store_shard_seal(shard,
+                                        .seal_ts      = 87,
+                                        .base_address = 0x8700u);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    auto map_r = n00b_store_map_open_buffer(n00b_result_get(seal_r));
+    CHECK(n00b_result_is_ok(map_r));
+    auto root_r = n00b_store_map_root(n00b_result_get(map_r));
+    CHECK(n00b_result_is_ok(root_r));
+
+    n00b_plan_node_t *plan = plan_ok(
+        n00b_plan_build(level_eq(r"error"), n00b_plan_index_list_new()));
+
+    n00b_plan_records_scanned_reset();
+    (void)exec_mapped_ok(plan, n00b_result_get(root_r));
+
+    // Scanning is CORRECT here. This must keep passing after #686 is fixed —
+    // it is the #202 regression guard.
+    CHECK(n00b_plan_records_scanned() > 0);
+}
+
 static void
 test_any_field_predicates_never_become_a_record_scan(void)
 {
@@ -1242,6 +1332,8 @@ main(int argc, char **argv)
 
     test_hot_term_eq_uses_index();
     test_mapped_term_eq_uses_index();
+    test_mapped_sparse_eq_declared_but_absent_column();
+    test_mapped_sparse_eq_legacy_shard_must_scan();
     test_unusable_index_plans_a_record_scan();
     test_index_miss_and_unusable_lookup();
     test_boolean_plan_shapes();
