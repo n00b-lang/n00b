@@ -87,11 +87,16 @@ jobs:
           set -euo pipefail
           python3 -m pip install --upgrade --break-system-packages 'meson>=1.6.0' || \
             python3 -m pip install --upgrade 'meson>=1.6.0'
+          # libgit2 >= 1.7.0 is the one HARD system dependency: meson.build
+          # errors out at setup without it (every other optional dep degrades
+          # gracefully via required: false). zlib is used for HTTP content
+          # decompression.
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ninja-build pkg-config
+            sudo apt-get install -y --no-install-recommends \
+              ninja-build pkg-config libgit2-dev zlib1g-dev
           else
-            brew install ninja pkg-config
+            brew install ninja pkg-config libgit2 zlib
           fi
           meson --version
           ninja --version
