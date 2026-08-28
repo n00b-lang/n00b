@@ -11,15 +11,11 @@
 # produces a pile of bogus "undeclared identifier" errors. Use the option, or
 # ./build.sh --build-tests.
 #
-# The gate builds an explicit TARGET LIST rather than everything, because two
-# tool targets -- n00b and n00b_dev -- do not link on main: n00b_crt_main is
-# undefined, referenced from n00b_start in the crt host stub (n00b#237). That
-# reproduces from a clean checkout with both the pinned ncc and ncc main, so it
-# is a real break and not a stale local artifact. Gating on `bash build.sh`
-# unqualified would therefore be red from day one. Everything else -- libn00b.a,
-# the other tools, and all ~470 test binaries -- does build.
-#
-# ADD THOSE TARGETS BACK (or drop N00B_BUILD_TARGETS entirely) once #237 lands.
+# The gate builds everything and fails on any error. n00b#237 (n00b/n00b_dev
+# failing to link on _n00b_crt_main) turned out NOT to reproduce here: it was an
+# artifact of a stale local ncc, and a clean checkout building ncc at the pin
+# links all 1774 targets. The temporary keep-going + known-broken-assertion
+# scaffolding is gone with it.
 #
 # Three tests fail or hang on main (n00b#234, #235, #236) and are quarantined in
 # meson.build, so the suite is otherwise green -- running it is Phase 2. #234 is
@@ -195,38 +191,6 @@ jobs:
           N00B_BUILD_TESTS: "1"
           N00B_TEST: "0"
           N00B_UNICODE_ALLOW_DOWNLOADS: "1"
-          # Build everything and keep going past failures, so one broken target
-          # does not mask the rest. The step below decides pass/fail.
-          N00B_KEEP_GOING: "1"
           # Explicit, because build.sh's own guard pre-empts its bootstrap path.
           NCC_PATH: ${{ github.workspace }}/subprojects/ncc/build_release/ncc
-        run: bash build.sh 2>&1 | tee /tmp/n00b-build.log; exit 0
-
-      # `bash build.sh` currently exits non-zero on main because n00b and
-      # n00b_dev do not link (n00b#237). Rather than let that make the gate
-      # useless, assert the EXACT known-broken set: anything else failing is a
-      # real regression and fails the job, and if #237 is fixed the job also
-      # fails -- telling you to delete this step and gate on build.sh directly.
-      - name: Check build result against known-broken targets
-        # MUST be always(): the Build step can exit non-zero (that is the whole
-        # point), and without this the check is skipped and the job just
-        # inherits Build's failure -- losing the known-broken discrimination.
-        if: always()
-        shell: bash
-        run: |
-          set -uo pipefail
-          failed=$(grep -oE '^FAILED: \[code=[0-9]+\] [A-Za-z0-9_.:/-]+' /tmp/n00b-build.log \
-                     | awk '{print $NF}' | sort -u || true)
-          expected=$'n00b\nn00b_dev'
-          echo "--- failed targets ---"; echo "${failed:-<none>}"
-          if [ "$(printf '%s' "$failed")" = "$(printf '%s' "$expected")" ]; then
-            echo "::warning::Only the known-broken targets failed (n00b, n00b_dev -- see n00b#237)."
-            exit 0
-          fi
-          if [ -z "$failed" ]; then
-            echo "::error::n00b#237 appears FIXED (nothing failed). Remove this step and the"
-            echo "::error::N00B_KEEP_GOING workaround, and gate on 'bash build.sh' directly."
-            exit 1
-          fi
-          echo "::error::Unexpected build failures (expected only n00b, n00b_dev per #237)."
-          exit 1
+        run: bash build.sh
