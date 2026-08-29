@@ -614,16 +614,33 @@ monocypher_dep  = monocypher_proj.get_variable('monocypher_dep')
 #   - `git_oid_fromstr` / `git_oid_tostr` / `git_oid_cmp` (OID
 #     hex formatting + comparison).
 # `git_blame_file` and `git_blame_buffer` have been part of
-# libgit2 since well before 1.0. The `>=1.7.0` floor is set by
-# `git_blame_options_init` — earlier libgit2 releases initialized
-# the blame_options struct via `GIT_BLAME_OPTIONS_INIT` only and
+# libgit2 since well before 1.0. `git_blame_options_init` set the
+# old `>=1.7.0` floor — earlier libgit2 releases initialized the
+# blame_options struct via `GIT_BLAME_OPTIONS_INIT` only and
 # didn't expose the `_init` runtime entry point that we call to
 # tolerate options-struct ABI churn.
-# Required on the dev matrix (macOS Homebrew 1.9.x; Linux distro
-# packages). The include is added to `deps` so libn00b's link
-# line carries `-lgit2` and every consumer (libn00b proper, every
-# test, the `naudit` binary) sees the header path.
-libgit2_dep = dependency('libgit2', version: '>=1.7.0', required: false)
+#
+# The floor is `>=1.9.0` because `src/naudit/blame.c` calls
+# `git_blame_hunkcount` / `git_blame_hunk_byindex` /
+# `git_blame_hunk_byline`, which 1.9 introduced. Those are the
+# CURRENT names: 1.9 renamed the older `git_blame_get_hunk_count`
+# family and kept the old spellings only as deprecated aliases
+# behind `GIT_DEPRECATE_HARD`. There is no version guard at the
+# call sites, so a pre-1.9 libgit2 satisfied the old `>=1.7.0`
+# check and then failed to compile with "use of undeclared
+# identifier" (n00b#240; ubuntu-24.04 ships 1.7.2, which is how
+# CI found it). Raise this floor rather than guarding the call
+# sites: the code wants the modern API, and pinning the declared
+# minimum to what the source actually uses is what keeps the
+# next distro build from configuring and then breaking.
+#
+# Required on the dev matrix (macOS Homebrew 1.9.x). Distros
+# older than libgit2 1.9 — Ubuntu 24.04 LTS among them — need a
+# newer libgit2 than their system package provides. The include
+# is added to `deps` so libn00b's link line carries `-lgit2` and
+# every consumer (libn00b proper, every test, the `naudit`
+# binary) sees the header path.
+libgit2_dep = dependency('libgit2', version: '>=1.9.0', required: false)
 if not libgit2_dep.found()
   if target_os == 'windows'
     fs = import('fs')
@@ -650,7 +667,7 @@ if not libgit2_dep.found()
     )
     message('Using libgit2 fallback: ' + libgit2_lib_opt)
   else
-    error('libgit2 >= 1.7.0 is required')
+    error('libgit2 >= 1.9.0 is required (src/naudit/blame.c uses the 1.9 blame hunk API)')
   endif
 endif
 deps = deps + [libgit2_dep]
@@ -4647,13 +4664,20 @@ ct_image_gc_test = executable('test_ct_image_gc',
         'include_directories': incdir + include_directories('src/crt'),
     },
 )
-# QUARANTINED (n00b#234): HANGS on main -- still killed at 300s, so this is a
-# hang and not a slow test; a timeout bump does not help. Meson reports a
-# timeout as TIMEOUT regardless of should_fail, so the only way to keep a gate
-# green is to keep it out of the gated suite. Registered under 'known-broken'
-# (which CI does not run) so it stays visible and runnable on demand:
+# QUARANTINED (n00b#234). It fails for a real reason: a TYPE_LAYOUT scan
+# descriptor gets a 1-word allocation against a 2-word element stride.
+#
+# On main today that failure presents as a HANG, not an abort -- the assertion
+# fires inside the collector and the reporter allocates, which re-enters the
+# collector. It survives a 300s timeout, so a timeout bump does not help, and
+# meson reports a timeout as TIMEOUT regardless of should_fail. Hence
+# 'known-broken' (which CI does not run) rather than should_fail. The reporting
+# half is fixed separately (#234's assert change), after which this aborts
+# promptly instead -- still failing, still correctly quarantined here.
+#
+# Stays visible and runnable on demand:
 #   meson test --suite known-broken
-# Move back to 'unit' once #234 is fixed.
+# Move back to 'unit' once the layout violation itself is fixed.
 test('ct_image_gc', ct_image_gc_test, suite: 'known-broken', timeout: 120)
 
 buffer_baked_equiv_test = executable('test_buffer_baked_equiv',
@@ -5161,14 +5185,13 @@ if host_machine.system() != 'windows'
         # on Linux so dlsym can resolve runtime builtins (see wrap_jit_kwargs).
         kwargs: wrap_jit_kwargs,
     )
-    # QUARANTINED (n00b#235): fails on main with exit 1 --
-    # "item __<bad-string-arg>_proto was already defined as proto".
-    # should_fail keeps the gate green while the defect is tracked; REMOVE this
-    # once #235 is fixed, or the test silently stops protecting anything.
+    # Was quarantined for n00b#235 ("__<bad-string-arg>_proto was already
+    # defined"). That turned out to be a stale-ncc codegen artifact, not a
+    # repo defect: it passes against the pinned ncc this PR bumps to. The
+    # timeout is kept -- it is a JIT test and the default is tight.
     test('obj_bundle_wrap',
          test_obj_bundle_wrap_test,
          suite: 'unit',
-         should_fail: true,
          timeout: 90,
          workdir: meson.project_source_root())
 
@@ -5880,10 +5903,10 @@ quic_manifest_test = executable('test_quic_manifest',
     ['test/unit/test_quic_manifest.c'],
     kwargs: test_common_kwargs,
 )
-# QUARANTINED (n00b#236): aborts (SIGABRT, exit 134) on main.
-# REMOVE should_fail once #236 is fixed.
-test('quic_manifest', quic_manifest_test, suite: 'unit',
-     should_fail: true, timeout: 90)
+# Was quarantined for n00b#236 (SIGABRT on a dangling policy.idp finding).
+# Same stale-ncc codegen artifact as #235: it passes against the pinned ncc
+# this PR bumps to.
+test('quic_manifest', quic_manifest_test, suite: 'unit', timeout: 90)
 
 # DNS providers (manual + cloudflare) + DNS-01 challenge wrapper.
 quic_dns_provider_test = executable('test_quic_dns_provider',
