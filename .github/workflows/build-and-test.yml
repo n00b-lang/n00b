@@ -1,0 +1,131 @@
+name: build-and-test
+
+# n00b's first CI on its native platforms. Until this existed, nothing
+# automated ever built the library or ran the suite on darwin/arm64 or Linux
+# (the only other workflow is a manually-dispatched Windows component job), and
+# a default install target sat broken on macOS for an unknown length of time --
+# see #259, #260.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same PR makes the older run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned to build.sh's NCC_REV_DEFAULT. These MUST move together: n00b sources
+  # are compiled by ncc, so a drifting ncc silently changes the compiler under
+  # the test suite. If you bump one, bump the other in the same commit.
+  NCC_REV: b1dc42cb811add2c18dd17d4b668350df5cfd00b
+
+jobs:
+  build-and-test:
+    name: build-and-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report both platforms on every run. Without this, a macOS failure hides
+      # whether Linux was also broken, which is the ambiguity this workflow
+      # exists to remove.
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update --quiet
+          # llvm supplies llvm-objcopy, which the gc-stack-map post-link step needs.
+          brew install --quiet meson ninja llvm pkg-config freetype libgit2 libzip notcurses
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build cmake pkg-config clang llvm \
+            libfreetype-dev libzip-dev libnotcurses-dev libx11-dev zlib1g-dev
+
+      # Ubuntu 24.04 ships libgit2 1.7.x. #240 raised the floor to 1.9.0, so the
+      # distro package cannot satisfy meson's `dependency('libgit2')` and the
+      # configure step fails before compiling anything. Build the floor version.
+      - name: Build libgit2 >= 1.9.0 from source (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          git clone --depth 1 --branch v1.9.0 https://github.com/libgit2/libgit2.git /tmp/libgit2
+          cmake -S /tmp/libgit2 -B /tmp/libgit2/build \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build /tmp/libgit2/build -j"$(nproc)"
+          sudo cmake --install /tmp/libgit2/build
+          sudo ldconfig
+
+      - name: Cache ncc
+        id: ncc-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ncc-install
+          key: ncc-${{ runner.os }}-${{ runner.arch }}-${{ env.NCC_REV }}
+
+      # build.sh contains cold-start logic to clone and build ncc itself
+      # (ensure_ncc_subproject / build_ncc), but it is unreachable: the hard-fail
+      # guard at build.sh:199 exits 1 when ncc is absent from PATH, ~585 lines
+      # before ensure_ncc is ever called. On a fresh runner that means
+      # `./build.sh` dies with "ERROR: ncc not found" and never self-bootstraps.
+      # Filed separately; until it is fixed, CI builds ncc explicitly.
+      #
+      # This is deliberately NOT clang. build.sh:190 is explicit that clang links
+      # but produces a runtime-wrong binary -- it lacks the gc-stack-map and
+      # auto-gc-root transforms -- so a clang-built job would be worse than no
+      # job at all: green, and meaningless.
+      - name: Build ncc
+        if: steps.ncc-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/crashappsec/ncc.git /tmp/ncc-src
+          git -C /tmp/ncc-src checkout "$NCC_REV"
+          meson setup --buildtype=release /tmp/ncc-src/build /tmp/ncc-src
+          meson compile -C /tmp/ncc-src/build
+          mkdir -p /tmp/ncc-install
+          cp /tmp/ncc-src/build/ncc /tmp/ncc-install/ncc
+
+      - name: Put ncc on PATH
+        run: |
+          chmod +x /tmp/ncc-install/ncc
+          echo "/tmp/ncc-install" >> "$GITHUB_PATH"
+          echo "NCC_PATH=/tmp/ncc-install/ncc" >> "$GITHUB_ENV"
+
+      - name: Build libn00b and the test suite
+        env:
+          # A GitHub checkout is a plain git clone, not a jj workspace, so the
+          # VCS freshness guard would otherwise refuse to configure.
+          N00B_SKIP_VCS_CHECK: "1"
+          N00B_BUILD_TESTS: "1"
+        run: |
+          ./build.sh
+          # `n00b` and `n00b_dev` are excluded from the gate on purpose: they do
+          # not link on macOS arm64 today (#259 -- -force_load drags the CRT entry
+          # stub into host tools that can never define _n00b_crt_main). Gating on
+          # them would make this workflow red from birth and therefore unusable
+          # as a required check. Re-add them here the moment #259 lands; until
+          # then this gate covers the library and the suite, which is what
+          # downstream consumers actually link.
+
+      - name: Run the test suite
+        env:
+          N00B_SKIP_VCS_CHECK: "1"
+        run: meson test -C build_debug --print-errorlogs --num-processes 4
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meson-logs-${{ matrix.os }}
+          path: build_debug/meson-logs/
+          if-no-files-found: warn
