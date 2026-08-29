@@ -1,20 +1,56 @@
+# Windows build gate. Companion to ci.yml (Linux + macOS); see n00b#239.
+#
+# This was workflow_dispatch-only and took the NCC run id as a HAND-ENTERED
+# input, which cannot run per-PR. It now triggers on pull_request and resolves
+# that run id itself.
+#
+# It still CONSUMES NCC's prebuilt artifact rather than building ncc from
+# source. That is deliberate and is asserted by
+# scripts/test_windows_component_workflow.py ("n00b must consume NCC's artifact
+# instead of rebuilding it"); this change keeps that policy intact.
+#
+# What it adds is a constraint that was previously left to whoever typed the
+# input: the artifact must come from a successful NCC run whose head_sha is
+# exactly NCC_REV_DEFAULT, parsed out of build.sh. Otherwise Windows silently
+# tests a different compiler than Linux and macOS, which is not a gate.
+#
+# NOTE: this requires NCC_REV_DEFAULT to be at or past ncc 4cd3d8a, which is
+# where ncc gained Windows support. The pin bump in #238 satisfies that; on a
+# pin older than 4cd3d8a there will be no Windows artifact to find, and this
+# job will fail with a clear message rather than silently.
+#
+# Still build-only. Running the suite on Windows is a later phase, same staging
+# as ci.yml -- the one previously-green run executed exactly one test, so
+# "Windows builds" is established and "Windows passes" is not.
 name: Windows validation
 
 on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       ncc_run_id:
-        description: Successful NCC Windows workflow run to consume
-        required: true
-        default: "31298720296"
+        description: >-
+          Optional NCC Windows run to consume. Leave empty to auto-resolve the
+          newest successful run matching NCC_REV_DEFAULT from build.sh.
+        required: false
+        default: ""
       ncc_sha:
-        description: Exact NCC source revision built by that run
-        required: true
-        default: 4cd3d8a8ae227cb20d3f782d28cf86768faa69d4
+        description: >-
+          Optional exact NCC revision to require. Leave empty to use
+          NCC_REV_DEFAULT from build.sh.
+        required: false
+        default: ""
       libgit2_ref:
         description: Exact libgit2 revision validated with n00b
         required: true
         default: 44c05e5d12f2b8b86b9730bb50f27daf74143782
+
+concurrency:
+  group: win-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   actions: read
@@ -23,7 +59,9 @@ permissions:
 jobs:
   windows:
     runs-on: windows-2025
-    timeout-minutes: 90
+    # Matches ci.yml: a cold build (libgit2 from source + ~1800 targets) does
+    # not reliably fit in 90 minutes.
+    timeout-minutes: 180
     defaults:
       run:
         shell: pwsh
@@ -37,16 +75,54 @@ jobs:
         working-directory: n00b
         run: python scripts/test_windows_component_workflow.py
 
-      - name: Verify NCC producer run
+      # The pin is the single source of truth for which compiler every platform
+      # builds with. Parsed from build.sh so Windows cannot drift from ci.yml.
+      - name: Resolve ncc pin
+        id: ncc
+        working-directory: n00b
+        shell: bash
+        run: |
+          set -euo pipefail
+          want="${{ inputs.ncc_sha }}"
+          if [ -z "${want}" ]; then
+            want=$(sed -n 's/^NCC_REV_DEFAULT="\(.*\)"$/\1/p' build.sh | head -1)
+          fi
+          if [ -z "${want}" ]; then
+            echo "::error::could not parse NCC_REV_DEFAULT from build.sh"
+            exit 1
+          fi
+          echo "sha=${want}" >> "$GITHUB_OUTPUT"
+          echo "ncc pin: ${want}"
+
+      - name: Resolve NCC producer run
+        id: nccrun
         env:
           GH_TOKEN: ${{ github.token }}
+          WANT_SHA: ${{ steps.ncc.outputs.sha }}
+          GIVEN_RUN: ${{ inputs.ncc_run_id }}
         run: |
-          $run = gh api "repos/crashappsec/ncc/actions/runs/${{ inputs.ncc_run_id }}" | ConvertFrom-Json
-          if ($run.status -ne "completed" -or $run.conclusion -ne "success") {
-            throw "NCC run ${{ inputs.ncc_run_id }} is not successful."
+          if ($env:GIVEN_RUN) {
+            $runId = $env:GIVEN_RUN
+          } else {
+            # Newest successful windows-ncc-build at exactly the pinned sha.
+            $runs = gh api "repos/crashappsec/ncc/actions/runs?head_sha=$env:WANT_SHA&status=success&per_page=100" | ConvertFrom-Json
+            $match = @($runs.workflow_runs | Where-Object { $_.name -eq "windows-ncc-build" }) |
+                     Sort-Object -Property created_at -Descending | Select-Object -First 1
+            if (-not $match) {
+              throw ("No successful windows-ncc-build run found for NCC_REV_DEFAULT $env:WANT_SHA. " +
+                     "If the pin predates ncc 4cd3d8a it has no Windows support; bump the pin. " +
+                     "Otherwise NCC has not published a Windows build for that revision yet.")
+            }
+            $runId = $match.id
           }
-          if ($run.head_sha -ne "${{ inputs.ncc_sha }}") {
-            throw "NCC run built $($run.head_sha), expected ${{ inputs.ncc_sha }}."
+          "run_id=$runId" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          $run = gh api "repos/crashappsec/ncc/actions/runs/$runId" | ConvertFrom-Json
+          if ($run.status -ne "completed" -or $run.conclusion -ne "success") {
+            throw "NCC run $runId is not successful."
+          }
+          if ($run.head_sha -ne $env:WANT_SHA) {
+            throw "NCC run built $($run.head_sha), expected $env:WANT_SHA."
           }
           if ($run.name -ne "windows-ncc-build") {
             throw "Unexpected NCC workflow: $($run.name)"
@@ -57,7 +133,7 @@ jobs:
         with:
           name: ncc-windows-x64
           repository: crashappsec/ncc
-          run-id: ${{ inputs.ncc_run_id }}
+          run-id: ${{ steps.nccrun.outputs.run_id }}
           github-token: ${{ github.token }}
           path: ncc-artifact
 
@@ -65,7 +141,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: libgit2/libgit2
-          ref: ${{ inputs.libgit2_ref }}
+          ref: ${{ inputs.libgit2_ref || '44c05e5d12f2b8b86b9730bb50f27daf74143782' }}
           path: libgit2
 
       - uses: actions/setup-python@v5
