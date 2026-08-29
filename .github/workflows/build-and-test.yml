@@ -87,6 +87,13 @@ jobs:
       # job at all: green, and meaningless.
       - name: Build ncc
         if: steps.ncc-cache.outputs.cache-hit != 'true'
+        env:
+          # ncc's meson.build requires C std gnu23. ubuntu-latest defaults to
+          # gcc-13, which meson does not accept gnu23 for:
+          #   ERROR: Unknown C std ['gnu23']
+          # Ubuntu's clang-18 does support it. macOS's default clang already
+          # does, so this only needs overriding on Linux.
+          CC: ${{ runner.os == 'Linux' && 'clang' || '' }}
         run: |
           git clone https://github.com/crashappsec/ncc.git /tmp/ncc-src
           git -C /tmp/ncc-src checkout "$NCC_REV"
