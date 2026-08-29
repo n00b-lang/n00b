@@ -181,19 +181,34 @@ jobs:
           # set, with nothing quietly outside it.
           ./build.sh
 
-      # Three tests fail on main and are quarantined in meson.build, so this
-      # step gates on a genuinely green suite rather than on a known-red one:
-      #   #235 / #236 -- fixed by the ncc pin bump above, quarantine lifted
-      #   #234        -- ct_image_gc, in a 'known-broken' suite this does not
-      #                  run. It HANGS rather than failing, so should_fail
+      # Quarantine, in meson.build:
+      #   #235 / #236 -- fixed by the ncc pin bump above; quarantine lifted
+      #   #234        -- ct_image_gc HANGS rather than failing, so should_fail
       #                  cannot express it (meson reports a timeout as TIMEOUT
-      #                  regardless) and without the carve-out it would burn
-      #                  the full job timeout on every run.
+      #                  regardless). It sits in a 'known-broken' suite, which
+      #                  the --no-suite flag below is what actually excludes.
       # Run it on demand with: meson test --suite known-broken
+      #
+      # NOTE: this does NOT yet gate on a green suite. Both platforms still
+      # have genuine failures, and they diverge -- Linux SIGABRTs in the debug
+      # tests and SIGSEGVs in split_words_gc_repro / conduit_sync_completion;
+      # macOS SIGBUSes in worker_pool_gc_stress / writable_baked_gc and
+      # SIGSEGVs in x509_parse. Most were invisible before this workflow
+      # existed. They need triage before this job can be a required check.
       - name: Run the test suite
         env:
           N00B_SKIP_VCS_CHECK: "1"
-        run: meson test -C build_debug --print-errorlogs --num-processes 4
+        # An unqualified `meson test` runs EVERY suite, including
+        # 'known-broken'. That is how ct_image_gc still burned 120s on the
+        # first folded run despite the carve-out: labelling a suite does not
+        # exclude it, and the comment above claimed otherwise.
+        #
+        # --no-suite rather than an allowlist of suites: the tree also has
+        # interop, stress, and several +long suites, and an allowlist would
+        # silently stop running anything added later.
+        run: |
+          meson test -C build_debug --print-errorlogs --num-processes 4 \
+            --no-suite known-broken
 
       - name: Upload test logs
         if: always()
