@@ -152,7 +152,11 @@ jobs:
         run: |
           set -euo pipefail
           ver=1.9.4
-          curl -fsSL "https://github.com/libgit2/libgit2/archive/refs/tags/v${ver}.tar.gz" \
+          # --retry: a bare curl here failed a run on a transient 504 from the
+          # GitHub tarball endpoint. A one-shot fetch makes the gate flaky for
+          # reasons that have nothing to do with the code under test.
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+            "https://github.com/libgit2/libgit2/archive/refs/tags/v${ver}.tar.gz" \
             -o /tmp/libgit2.tar.gz
           tar -xzf /tmp/libgit2.tar.gz -C /tmp
           cmake -S "/tmp/libgit2-${ver}" -B /tmp/libgit2-build \
