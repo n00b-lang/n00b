@@ -474,6 +474,38 @@ rocs_query_debug_exec(const char *where)
     }
 }
 
+// #251: N00B_QUERY_ERR_EXECUTION (-8) is the collapse point for eight distinct
+// failures -- five store errors (VFS, CORRUPT, RESIDENCY, PARSE, INDEX) and
+// three plan errors (STATE, ORDINAL, UNIVERSE). A caller that logs the query
+// code alone, as the gateway does, records that "execution failed" and discards
+// which of the eight it was, including whether the store itself is corrupt.
+//
+// Widening the public enum would change a code consumers already switch on, so
+// the underlying error is recorded alongside instead. Thread-local because
+// queries run concurrently and a process-global value would name whichever
+// query lost the race -- the same reasoning as n00b_plan_records_scanned().
+// The code alone is not enough: the store, plan and query enums share one
+// numeric range with different meanings. N00B_PLAN_ERR_CANCELED and
+// N00B_STORE_ERR_VFS are both -7; -9..-13 collide between store and query. So
+// the namespace is recorded with the code.
+static _Thread_local n00b_query_execution_detail_t rocs_query_exec_detail
+    = {.source = N00B_QUERY_DETAIL_NONE, .err = 0};
+
+n00b_query_execution_detail_t
+n00b_query_execution_detail(void)
+{
+    return rocs_query_exec_detail;
+}
+
+static inline n00b_query_err_t
+rocs_query_execution_with_detail(n00b_query_detail_source_t source,
+                                 n00b_err_t                 underlying)
+{
+    rocs_query_exec_detail.source = source;
+    rocs_query_exec_detail.err    = underlying;
+    return N00B_QUERY_ERR_EXECUTION;
+}
+
 static n00b_query_err_t
 rocs_query_err_from_store(n00b_err_t err)
 {
@@ -490,7 +522,7 @@ rocs_query_err_from_store(n00b_err_t err)
     case N00B_STORE_ERR_CORRUPT:
     case N00B_STORE_ERR_PARSE:
     case N00B_STORE_ERR_INDEX:
-        return N00B_QUERY_ERR_EXECUTION;
+        return rocs_query_execution_with_detail(N00B_QUERY_DETAIL_STORE, err);
     case N00B_STORE_ERR_RETENTION:
         return N00B_QUERY_ERR_RETENTION;
     case N00B_STORE_ERR_DUP_FIELD:
@@ -538,7 +570,7 @@ rocs_query_err_from_plan(n00b_err_t err)
     case N00B_PLAN_ERR_STATE:
     case N00B_PLAN_ERR_ORDINAL:
     case N00B_PLAN_ERR_UNIVERSE:
-        return N00B_QUERY_ERR_EXECUTION;
+        return rocs_query_execution_with_detail(N00B_QUERY_DETAIL_PLAN, err);
     case N00B_PLAN_OK:
         return N00B_QUERY_ERR_INTERNAL;
     }
