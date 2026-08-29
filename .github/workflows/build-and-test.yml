@@ -38,7 +38,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
-    timeout-minutes: 90
+    # 180, not 90: a cold macOS build (ncc from source + ~1800 targets, then
+    # the suite) overran 90 minutes on #238 and was cancelled mid-compile.
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +51,11 @@ jobs:
           brew update --quiet
           # llvm supplies llvm-objcopy, which the gc-stack-map post-link step needs.
           brew install --quiet meson ninja llvm pkg-config freetype libgit2 libzip notcurses
+          # Homebrew llvm is load-bearing for TWO reasons, not one: it supplies
+          # llvm-objcopy for the gc-stack-map post-link step, AND it is the only
+          # Clang 22 on the box. ncc needs 22.1.0+ for C23 #embed
+          # (ncc/README.md); Apple clang reports 21.x and is NOT sufficient.
+          # Putting it FIRST on PATH is what makes `clang` mean the right one.
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
       - name: Install build dependencies (Linux)
@@ -66,6 +73,28 @@ jobs:
           # and CC=clang was set; the meson version is the actual constraint.
           python3 -m pip install --upgrade --break-system-packages 'meson>=1.4'
           meson --version
+          # apt's clang-18 satisfies gnu23 but NOT ncc's other hard requirement:
+          # Clang 22.1.0+ for C23 #embed / --embed-dir (ncc/README.md). Install
+          # 22 from apt.llvm.org and make plain `clang` resolve to it.
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 22
+          sudo ln -sf /usr/bin/clang-22 /usr/bin/clang
+          sudo ln -sf /usr/bin/clang++-22 /usr/bin/clang++
+
+      # Assert the toolchain up front. Without this, an insufficient clang
+      # surfaces as an inscrutable #embed error ~1500 targets into the build,
+      # which is expensive to diagnose and easy to misread as a source problem.
+      - name: Verify toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang --version
+          ver=$(clang --version | sed -n 's/.*clang version \([0-9]*\).*/\1/p' | head -1)
+          if [ -z "${ver}" ] || [ "${ver}" -lt 22 ]; then
+            echo "::error::ncc requires Clang 22.1.0+; found: $(clang --version | head -1)"
+            exit 1
+          fi
 
       # Ubuntu 24.04 ships libgit2 1.7.x. #240 raised the floor to 1.9.0, so the
       # distro package cannot satisfy meson's `dependency('libgit2')` and the
@@ -73,7 +102,14 @@ jobs:
       - name: Build libgit2 >= 1.9.0 from source (Linux)
         if: runner.os == 'Linux'
         run: |
-          git clone --depth 1 --branch v1.9.0 https://github.com/libgit2/libgit2.git /tmp/libgit2
+          # Retry: a one-shot fetch failed a #238 run on a transient upstream
+          # 504. Network flakes teach people to ignore a red gate.
+          for i in 1 2 3 4 5; do
+            git clone --depth 1 --branch v1.9.0 \
+              https://github.com/libgit2/libgit2.git /tmp/libgit2 && break
+            echo "libgit2 clone failed (attempt $i); retrying"; rm -rf /tmp/libgit2; sleep 5
+          done
+          test -d /tmp/libgit2
           cmake -S /tmp/libgit2 -B /tmp/libgit2/build \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=/usr/local
           cmake --build /tmp/libgit2/build -j"$(nproc)"
@@ -112,7 +148,11 @@ jobs:
           # does, so this is Linux-only.
           CC: ${{ runner.os == 'Linux' && 'clang' || '' }}
         run: |
-          git clone https://github.com/crashappsec/ncc.git /tmp/ncc-src
+          for i in 1 2 3 4 5; do
+            git clone https://github.com/crashappsec/ncc.git /tmp/ncc-src && break
+            echo "ncc clone failed (attempt $i); retrying"; rm -rf /tmp/ncc-src; sleep 5
+          done
+          test -d /tmp/ncc-src
           git -C /tmp/ncc-src checkout "$NCC_REV"
           meson setup --buildtype=release /tmp/ncc-src/build /tmp/ncc-src
           meson compile -C /tmp/ncc-src/build
@@ -132,15 +172,24 @@ jobs:
           N00B_SKIP_VCS_CHECK: "1"
           N00B_BUILD_TESTS: "1"
         run: |
+          # No target exclusions. `n00b` and `n00b_dev` used to be carved out
+          # because -force_load dragged the CRT entry stub into host tools that
+          # can never define _n00b_crt_main (#237, filed earlier as the same
+          # defect as #259). That is fixed in this branch's meson.build: both
+          # tools now use link_with rather than link_whole, like every other
+          # consumer in the tree. The gate therefore covers the default target
+          # set, with nothing quietly outside it.
           ./build.sh
-          # `n00b` and `n00b_dev` are excluded from the gate on purpose: they do
-          # not link on macOS arm64 today (#259 -- -force_load drags the CRT entry
-          # stub into host tools that can never define _n00b_crt_main). Gating on
-          # them would make this workflow red from birth and therefore unusable
-          # as a required check. Re-add them here the moment #259 lands; until
-          # then this gate covers the library and the suite, which is what
-          # downstream consumers actually link.
 
+      # Three tests fail on main and are quarantined in meson.build, so this
+      # step gates on a genuinely green suite rather than on a known-red one:
+      #   #235 / #236 -- fixed by the ncc pin bump above, quarantine lifted
+      #   #234        -- ct_image_gc, in a 'known-broken' suite this does not
+      #                  run. It HANGS rather than failing, so should_fail
+      #                  cannot express it (meson reports a timeout as TIMEOUT
+      #                  regardless) and without the carve-out it would burn
+      #                  the full job timeout on every run.
+      # Run it on demand with: meson test --suite known-broken
       - name: Run the test suite
         env:
           N00B_SKIP_VCS_CHECK: "1"

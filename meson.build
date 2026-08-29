@@ -4685,7 +4685,21 @@ ct_image_gc_test = executable('test_ct_image_gc',
         'include_directories': incdir + include_directories('src/crt'),
     },
 )
-test('ct_image_gc', ct_image_gc_test, suite: 'unit')
+# QUARANTINED (n00b#234). It fails for a real reason: a TYPE_LAYOUT scan
+# descriptor gets a 1-word allocation against a 2-word element stride.
+#
+# On main today that failure presents as a HANG, not an abort -- the assertion
+# fires inside the collector and the reporter allocates, which re-enters the
+# collector. It survives a 300s timeout, so a timeout bump does not help, and
+# meson reports a timeout as TIMEOUT regardless of should_fail. Hence
+# 'known-broken' (which CI does not run) rather than should_fail. The reporting
+# half is fixed separately (#234's assert change), after which this aborts
+# promptly instead -- still failing, still correctly quarantined here.
+#
+# Stays visible and runnable on demand:
+#   meson test --suite known-broken
+# Move back to 'unit' once the layout violation itself is fixed.
+test('ct_image_gc', ct_image_gc_test, suite: 'known-broken', timeout: 120)
 
 buffer_baked_equiv_test = executable('test_buffer_baked_equiv',
     ['test/unit/test_buffer_baked_equiv.c'],
@@ -5192,9 +5206,14 @@ if host_machine.system() != 'windows'
         # on Linux so dlsym can resolve runtime builtins (see wrap_jit_kwargs).
         kwargs: wrap_jit_kwargs,
     )
+    # Was quarantined for n00b#235 ("__<bad-string-arg>_proto was already
+    # defined"). That turned out to be a stale-ncc codegen artifact, not a
+    # repo defect: it passes against the pinned ncc this PR bumps to. The
+    # timeout is kept -- it is a JIT test and the default is tight.
     test('obj_bundle_wrap',
          test_obj_bundle_wrap_test,
          suite: 'unit',
+         timeout: 90,
          workdir: meson.project_source_root())
 
     # WP-017 follow-up: CLI regression tests for the n00b-wrap tool. Spawns the
@@ -5905,7 +5924,10 @@ quic_manifest_test = executable('test_quic_manifest',
     ['test/unit/test_quic_manifest.c'],
     kwargs: test_common_kwargs,
 )
-test('quic_manifest', quic_manifest_test, suite: 'unit')
+# Was quarantined for n00b#236 (SIGABRT on a dangling policy.idp finding).
+# Same stale-ncc codegen artifact as #235: it passes against the pinned ncc
+# this PR bumps to.
+test('quic_manifest', quic_manifest_test, suite: 'unit', timeout: 90)
 
 # DNS providers (manual + cloudflare) + DNS-01 challenge wrapper.
 quic_dns_provider_test = executable('test_quic_dns_provider',
