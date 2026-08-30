@@ -8,6 +8,7 @@
 #include "conduit/conduit.h"
 #include "conduit/subscription.h"
 #include "core/alloc.h"
+#include "text/strings/format.h"
 #include "core/arena.h"
 #include "core/atomic.h"
 #include "core/buffer.h"
@@ -495,6 +496,25 @@ n00b_query_execution_detail_t
 n00b_query_execution_detail(void)
 {
     return rocs_query_exec_detail;
+}
+
+n00b_string_t *
+n00b_query_execution_detail_str(n00b_query_execution_detail_t detail)
+{
+    // Renders the detail the way a log line needs it: the enum it came from,
+    // resolved through that enum's own name function. Without this, #251's
+    // recorded detail is a bare integer in a namespace the reader has to know
+    // out of band -- and the whole point is that the numeric ranges collide
+    // (N00B_PLAN_ERR_CANCELED and N00B_STORE_ERR_VFS are both -7).
+    switch (detail.source) {
+    case N00B_QUERY_DETAIL_STORE:
+        return n00b_cformat("store:«#»", n00b_store_err_str(detail.err));
+    case N00B_QUERY_DETAIL_PLAN:
+        return n00b_cformat("plan:«#»", n00b_plan_err_str(detail.err));
+    case N00B_QUERY_DETAIL_NONE:
+    default:
+        return r"none";
+    }
 }
 
 static inline n00b_query_err_t

@@ -526,6 +526,58 @@ test_corrupt_skipped_shard_does_not_block_resume_window(void)
     CHECK(n00b_result_get(close_r));
 }
 
+// #251. N00B_QUERY_ERR_EXECUTION (-8) collapses eight distinct errors. #254
+// recorded the underlying error and #256 tagged it with its enum, but nothing
+// read either, so the operator-visible symptom was unchanged: -8 in a log with
+// the cause discarded. This asserts the detail is actually usable -- that two
+// different underlying failures are distinguishable through the public API,
+// and that the rendered form names the enum it came from.
+//
+// Uses only <rocs/query.h>, deliberately: if the detail is not reachable from
+// the public surface, it does not help the gateway that reports -8.
+static void
+test_execution_detail_distinguishes_causes(void)
+{
+    // A store-sourced detail and a plan-sourced detail must not render the
+    // same, even when the raw codes collide. That collision is real:
+    // N00B_PLAN_ERR_CANCELED and N00B_STORE_ERR_VFS are both -7.
+    n00b_query_execution_detail_t store_detail = {
+        .source = N00B_QUERY_DETAIL_STORE,
+        .err    = (n00b_err_t)-7,
+    };
+    n00b_query_execution_detail_t plan_detail = {
+        .source = N00B_QUERY_DETAIL_PLAN,
+        .err    = (n00b_err_t)-7,
+    };
+
+    n00b_string_t *store_str = n00b_query_execution_detail_str(store_detail);
+    n00b_string_t *plan_str  = n00b_query_execution_detail_str(plan_detail);
+
+    CHECK(store_str != NULL);
+    CHECK(plan_str != NULL);
+
+    // The whole point of #256: same numeric code, different meaning, and the
+    // rendered form has to say which.
+    CHECK(!n00b_unicode_str_eq(store_str, plan_str));
+    CHECK(n00b_unicode_str_starts_with(store_str, r"store:"));
+    CHECK(n00b_unicode_str_starts_with(plan_str, r"plan:"));
+
+    // A thread that has seen no execution failure renders as "none" rather
+    // than as a misleading code-zero.
+    n00b_query_execution_detail_t empty = {
+        .source = N00B_QUERY_DETAIL_NONE,
+        .err    = 0,
+    };
+    CHECK(n00b_unicode_str_eq(n00b_query_execution_detail_str(empty), r"none"));
+
+    // The accessor is reachable from the public header and safe to call
+    // before any failure has occurred.
+    n00b_query_execution_detail_t current = n00b_query_execution_detail();
+    CHECK(n00b_query_execution_detail_str(current) != NULL);
+
+    printf("  [PASS] execution detail distinguishes store vs plan (#251)\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -537,6 +589,7 @@ main(int argc, char **argv)
     test_cursor_and_view_close_invalidation();
     test_open_view_blocks_boundary_drop_until_close();
     test_corrupt_skipped_shard_does_not_block_resume_window();
+    test_execution_detail_distinguishes_causes();
 
     n00b_shutdown();
     return 0;
