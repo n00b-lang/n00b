@@ -1059,6 +1059,77 @@ _rocs_plan_exec_recover(_rocs_plan_exec_ctx_t *ctx,
     return _rocs_plan_exec_verify(ctx, n00b_result_get(base_r), node->fallback);
 }
 
+// n00b#245. The column is absent and nobody has measured whether that means
+// "nothing here has the field" or "this shard predates the declaration". Do the
+// residual scan we would have done anyway, then also answer the cheaper
+// question -- does ANY record here populate the field -- and remember it, so
+// this shard never pays again.
+//
+// The extra pass is why this is a probe and not free: it is one field-presence
+// pass on top of the residual scan, on the FIRST query per (shard, field) only.
+// Every later query on that pair is either exact-empty (no scan at all) or the
+// same scan it does today.
+static n00b_result_t(n00b_plan_ordset_t *)
+_rocs_plan_exec_probe_and_recover(_rocs_plan_exec_ctx_t *ctx,
+                                  n00b_plan_node_t      *node,
+                                  n00b_plan_ordset_t    *restrict_to)
+{
+    // Probe against the WHOLE shard, not against restrict_to: the verdict is a
+    // property of the shard and gets cached as one, so narrowing it to a
+    // sibling's selection would cache "no record in this subset has the field"
+    // as "no record has the field" -- a false negative, durable for the life of
+    // the process, and exactly the #202 shape.
+    n00b_plan_predicate_t *exists  = nullptr;
+    auto                   field_r = n00b_store_index_field_name(node->index);
+    if (n00b_result_is_ok(field_r) && n00b_result_get(field_r) != nullptr) {
+        auto target_r = n00b_plan_target_field(n00b_result_get(field_r));
+        if (n00b_result_is_ok(target_r)) {
+            auto exists_r =
+                n00b_plan_predicate_exists(n00b_result_get(target_r));
+            if (n00b_result_is_ok(exists_r)) {
+                exists = n00b_result_get(exists_r);
+            }
+        }
+    }
+
+    if (exists == nullptr) {
+        // Could not build the probe. Fall back to today's behavior; the memo
+        // stays UNKNOWN and the next query tries again.
+        return _rocs_plan_exec_recover(ctx, node, restrict_to);
+    }
+
+    auto full_r = n00b_plan_ordset_full(ctx->record_count,
+                                       .allocator = ctx->allocator);
+    if (n00b_result_is_err(full_r)) {
+        return _rocs_plan_exec_recover(ctx, node, restrict_to);
+    }
+
+    auto probe_r = _rocs_plan_exec_verify(ctx, n00b_result_get(full_r), exists);
+    if (n00b_result_is_err(probe_r)) {
+        // A cancelled probe must not be recorded as a verdict: it measured
+        // nothing.
+        if (n00b_result_get_err(probe_r) == N00B_PLAN_ERR_CANCELED) {
+            return probe_r;
+        }
+        return _rocs_plan_exec_recover(ctx, node, restrict_to);
+    }
+
+    auto count_r = n00b_plan_ordset_count(n00b_result_get(probe_r));
+    if (n00b_result_is_err(count_r)) {
+        return _rocs_plan_exec_recover(ctx, node, restrict_to);
+    }
+    bool any_record = n00b_result_get(count_r) != 0;
+
+    n00b_store_index_column_memo(node->index, ctx->mapped_shard, any_record);
+
+    if (!any_record) {
+        // Nothing here populates the field, so no value of it can match.
+        return n00b_plan_ordset_empty(ctx->record_count,
+                                      .allocator = ctx->allocator);
+    }
+    return _rocs_plan_exec_recover(ctx, node, restrict_to);
+}
+
 static n00b_result_t(n00b_plan_ordset_t *)
 _rocs_plan_exec_index_scan(_rocs_plan_exec_ctx_t *ctx,
                            n00b_plan_node_t      *node,
@@ -1072,11 +1143,25 @@ _rocs_plan_exec_index_scan(_rocs_plan_exec_ctx_t *ctx,
                                              .allocator = ctx->allocator);
     }
     else {
-        auto present_r = n00b_store_index_present_mapped(node->index,
-                                                        ctx->mapped_shard);
-        if (n00b_result_is_err(present_r)
-            || !n00b_result_get(present_r)) {
+        auto column_r = n00b_store_index_column_mapped(node->index,
+                                                      ctx->mapped_shard);
+        if (n00b_result_is_err(column_r)) {
             return _rocs_plan_exec_recover(ctx, node, restrict_to);
+        }
+        switch (n00b_result_get(column_r)) {
+        case N00B_STORE_INDEX_COLUMN_PRESENT:
+            break;
+        case N00B_STORE_INDEX_COLUMN_EMPTY:
+            // Measured: no record in this sealed shard populates the field, and
+            // a sealed shard cannot change. So equality on it is exact-empty --
+            // the answer #223 had to give up to fix #202, recovered here without
+            // giving up soundness, because it rests on a measurement of THIS
+            // shard rather than on a schema declaration that says nothing about
+            // when this shard was written (n00b#245).
+            return n00b_plan_ordset_empty(ctx->record_count,
+                                          .allocator = ctx->allocator);
+        case N00B_STORE_INDEX_COLUMN_UNKNOWN:
+            return _rocs_plan_exec_probe_and_recover(ctx, node, restrict_to);
         }
         postings_r = n00b_store_index_lookup_mapped(node->index,
                                                     ctx->mapped_shard,

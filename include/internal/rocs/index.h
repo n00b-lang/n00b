@@ -111,6 +111,81 @@ n00b_store_index_stats_mapped(n00b_store_index_t     *index,
                               n00b_json_node_t       *value);
 
 /**
+ * @brief Borrow the field name an index is built over.
+ *
+ * The index descriptor is opaque outside index.c, and n00b_plan_node_t does not
+ * carry the field separately, so execution cannot name the field an INDEX_SCAN
+ * covers without this.
+ *
+ * @param index Borrowed process-side index descriptor.
+ * @return Ok(field) for a field index, Ok(nullptr) for a catch-all, or a typed
+ *         index error.
+ */
+extern n00b_result_t(n00b_string_t *)
+n00b_store_index_field_name(n00b_store_index_t *index);
+
+/**
+ * @brief What a sealed shard can say about one index's physical column.
+ *
+ * n00b#241 gave a sealed image two distinguishable states by writing an empty
+ * descriptor at seal time. It could only do that for shards sealed after it
+ * shipped, so every shard already on disk stays in the third state: no column,
+ * and no record of whether that means "nothing here populates the field" or
+ * "this shard predates the declaration" (n00b#245).
+ *
+ * The difference is not recoverable by inspection, but it IS recoverable by
+ * measurement, once per (shard, field): a sealed shard is immutable, so the
+ * answer can never go stale.
+ */
+typedef enum : int32_t {
+    // The column is in the image. Use the index; the lookup is exact.
+    N00B_STORE_INDEX_COLUMN_PRESENT = 0,
+    // No column, and a probe established that no record here populates the
+    // field. Equality is exact-empty and must not scan.
+    N00B_STORE_INDEX_COLUMN_EMPTY = 1,
+    // No column, and nobody has looked. Scanning is the only sound answer
+    // (n00b#202). This is where every pre-#241 shard starts.
+    N00B_STORE_INDEX_COLUMN_UNKNOWN = 2,
+} n00b_store_index_column_t;
+
+/**
+ * @brief Classify an index's column on a sealed shard, consulting the memo.
+ *
+ * Never scans and never blocks on I/O: it reads the column table, then the
+ * process-side memo. A caller that gets UNKNOWN is expected to measure and
+ * report back via @ref n00b_store_index_column_memo.
+ *
+ * @param index Borrowed process-side index descriptor.
+ * @param shard Borrowed sealed mapped shard view.
+ * @return Ok(state) or a typed index error.
+ */
+extern n00b_result_t(n00b_store_index_column_t)
+n00b_store_index_column_mapped(n00b_store_index_t     *index,
+                               n00b_store_map_shard_t *shard);
+
+/**
+ * @brief Record what a field-presence probe found for (shard, field).
+ *
+ * Keyed on (shard_id, seal_ts, field) so a shard id reused after a prune
+ * cannot inherit the previous occupant's verdict. Best-effort: the table is
+ * bounded, and once full this becomes a no-op, which costs speed and never
+ * correctness -- an unmemoized shard simply keeps scanning as it does today.
+ *
+ * Only ever called for a shard whose column is ABSENT. Calling it for a shard
+ * that has the column is harmless but pointless: PRESENT is read from the
+ * image and never from the memo.
+ *
+ * @param index      Borrowed process-side index descriptor.
+ * @param shard      Borrowed sealed mapped shard view.
+ * @param any_record True when at least one record in this shard populates the
+ *                   field. False records the EMPTY verdict.
+ */
+extern void
+n00b_store_index_column_memo(n00b_store_index_t     *index,
+                             n00b_store_map_shard_t *shard,
+                             bool                    any_record);
+
+/**
  * @brief Report whether a sealed shard carries an index's physical column.
  *
  * An absent column is ambiguous for sealed shards because the index may have

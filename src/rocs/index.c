@@ -2,6 +2,7 @@
 
 #include "adt/list.h"
 #include "core/hash.h"
+#include "core/mutex.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -2256,6 +2257,203 @@ n00b_store_index_declare(n00b_store_index_t *index, n00b_store_shard_t *shard)
         return n00b_result_err(bool, n00b_result_get_err(column_r));
     }
     return n00b_result_ok(bool, true);
+}
+
+n00b_result_t(n00b_string_t *)
+n00b_store_index_field_name(n00b_store_index_t *index)
+{
+    if (index == nullptr) {
+        return n00b_result_err(n00b_string_t *, N00B_STORE_INDEX_ERR_ARG);
+    }
+    return n00b_result_ok(n00b_string_t *,
+                          index->catch_all ? nullptr : index->field);
+}
+
+// ---------------------------------------------------------------------------
+// n00b#245 -- the legacy-shard memo.
+//
+// #241 writes an empty descriptor at seal time, so a shard sealed after it
+// shipped can answer "declared and nothing here has it" in O(1). Every shard
+// already on disk has no descriptor and never will: a sealed image is
+// immutable, and a visible sealed CATALOG ENTRY is immutable too -- that
+// immutability is load-bearing for the lock-free query boundary
+// (src/rocs/store.c, the SNAPSHOT comment), so the verdict cannot be cached
+// there either without re-introducing the lock the design exists to avoid.
+//
+// So: cache it in memory. First query on (shard, field) pays one field-presence
+// pass -- the same order of work the query pays today, every time -- and every
+// later query is free. Cost equals today's cost once, instead of forever.
+//
+// Deliberately NOT n00b_dict: this table is read on the query path, and dict
+// has open concurrency defects against exactly that shape (n00b#217 frees a
+// retired store under a lock-free reader; n00b#221 stranded a bucket mutex).
+// A fixed table under one mutex is far less machinery than this needs to be
+// wrong.
+//
+// The tradeoff this does not fix: it re-pays once per process start. crayon-gw
+// restarted 4x in one day on the reporting box, so the first --session query
+// after each restart is still slow. Persisting it is n00b#245's option 2
+// (copy-on-write catalog entry replacement) and is deliberately not this
+// change.
+// ---------------------------------------------------------------------------
+
+// Sized for the reporting box with room to spare: ~400 sealed shards x the 62
+// sparse-term fields the wax schema declares is ~25k pairs, but only the fields
+// a query actually touches are ever inserted. Overflow degrades to today's
+// behavior rather than evicting, because an eviction policy here would be
+// guesswork and the failure mode of getting it wrong is a silent perf cliff.
+#define ROCS_INDEX_MEMO_SLOTS 8192u
+
+typedef struct {
+    uint64_t       shard_id;
+    uint64_t       seal_ts;
+    n00b_string_t *field;
+    bool           any_record;
+    bool           in_use;
+} rocs_index_memo_entry_t;
+
+static rocs_index_memo_entry_t rocs_index_memo[ROCS_INDEX_MEMO_SLOTS];
+static n00b_mutex_t            rocs_index_memo_mutex;
+static bool                    rocs_index_memo_ready = false;
+static uint32_t                rocs_index_memo_count = 0;
+
+static void
+rocs_index_memo_init_once(void)
+{
+    // Callers hold no lock yet, so this races on first use. It is idempotent
+    // and n00b_mutex_init on an already-initialized mutex is safe, but the
+    // flag keeps repeat work off the hot path.
+    if (!rocs_index_memo_ready) {
+        n00b_mutex_init(&rocs_index_memo_mutex);
+        rocs_index_memo_ready = true;
+    }
+}
+
+static uint32_t
+rocs_index_memo_slot(uint64_t shard_id, uint64_t seal_ts, n00b_string_t *field)
+{
+    // seal_ts is in the key, not just shard_id: a shard id reused after a
+    // prune would otherwise inherit the previous occupant's verdict, which is
+    // the one way this memo could produce a WRONG answer rather than a slow
+    // one.
+    uint64_t h = shard_id * 0x9e3779b97f4a7c15ull;
+    h ^= seal_ts + 0x165667b19e3779f9ull;
+    h ^= n00b_string_hash(field);
+    return (uint32_t)(h % ROCS_INDEX_MEMO_SLOTS);
+}
+
+// Linear probe. Returns the matching entry, or the first free slot when
+// `for_insert`, or nullptr when the table is full and there is no match.
+static rocs_index_memo_entry_t *
+rocs_index_memo_find(uint64_t       shard_id,
+                     uint64_t       seal_ts,
+                     n00b_string_t *field,
+                     bool           for_insert)
+{
+    uint32_t start = rocs_index_memo_slot(shard_id, seal_ts, field);
+
+    for (uint32_t i = 0; i < ROCS_INDEX_MEMO_SLOTS; i++) {
+        uint32_t                 slot  = (start + i) % ROCS_INDEX_MEMO_SLOTS;
+        rocs_index_memo_entry_t *entry = &rocs_index_memo[slot];
+
+        if (!entry->in_use) {
+            return for_insert ? entry : nullptr;
+        }
+        if (entry->shard_id == shard_id && entry->seal_ts == seal_ts
+            && entry->field != nullptr
+            && n00b_unicode_str_eq(entry->field, field)) {
+            return entry;
+        }
+    }
+    return nullptr;
+}
+
+n00b_result_t(n00b_store_index_column_t)
+n00b_store_index_column_mapped(n00b_store_index_t     *index,
+                               n00b_store_map_shard_t *shard)
+{
+    auto present_r = n00b_store_index_present_mapped(index, shard);
+    if (n00b_result_is_err(present_r)) {
+        return n00b_result_err(n00b_store_index_column_t,
+                               n00b_result_get_err(present_r));
+    }
+    if (n00b_result_get(present_r)) {
+        return n00b_result_ok(n00b_store_index_column_t,
+                              N00B_STORE_INDEX_COLUMN_PRESENT);
+    }
+
+    // Absent. Only the memo can narrow it further.
+    auto shard_id_r = n00b_store_map_shard_id(shard);
+    auto seal_ts_r  = n00b_store_map_shard_seal_ts(shard);
+    if (n00b_result_is_err(shard_id_r) || n00b_result_is_err(seal_ts_r)
+        || index->field == nullptr) {
+        // Cannot key the memo, so cannot claim more than "unknown". Scanning
+        // is always the sound answer here (n00b#202).
+        return n00b_result_ok(n00b_store_index_column_t,
+                              N00B_STORE_INDEX_COLUMN_UNKNOWN);
+    }
+
+    rocs_index_memo_init_once();
+    n00b_mutex_lock(&rocs_index_memo_mutex);
+    rocs_index_memo_entry_t *entry =
+        rocs_index_memo_find(n00b_result_get(shard_id_r),
+                             n00b_result_get(seal_ts_r),
+                             index->field,
+                             false);
+    bool known      = entry != nullptr;
+    bool any_record = known ? entry->any_record : false;
+    n00b_mutex_unlock(&rocs_index_memo_mutex);
+
+    if (!known) {
+        return n00b_result_ok(n00b_store_index_column_t,
+                              N00B_STORE_INDEX_COLUMN_UNKNOWN);
+    }
+    // Measured and the field was seen: no column to look it up in, so this
+    // still has to scan. The memo saves nothing here, and says so rather than
+    // pretending otherwise.
+    return n00b_result_ok(n00b_store_index_column_t,
+                          any_record ? N00B_STORE_INDEX_COLUMN_UNKNOWN
+                                     : N00B_STORE_INDEX_COLUMN_EMPTY);
+}
+
+void
+n00b_store_index_column_memo(n00b_store_index_t     *index,
+                             n00b_store_map_shard_t *shard,
+                             bool                    any_record)
+{
+    if (index == nullptr || index->field == nullptr || shard == nullptr) {
+        return;
+    }
+    auto shard_id_r = n00b_store_map_shard_id(shard);
+    auto seal_ts_r  = n00b_store_map_shard_seal_ts(shard);
+    if (n00b_result_is_err(shard_id_r) || n00b_result_is_err(seal_ts_r)) {
+        return;
+    }
+
+    rocs_index_memo_init_once();
+    n00b_mutex_lock(&rocs_index_memo_mutex);
+
+    rocs_index_memo_entry_t *entry =
+        rocs_index_memo_find(n00b_result_get(shard_id_r),
+                             n00b_result_get(seal_ts_r),
+                             index->field,
+                             true);
+    if (entry != nullptr && !entry->in_use
+        && rocs_index_memo_count < ROCS_INDEX_MEMO_SLOTS) {
+        entry->shard_id   = n00b_result_get(shard_id_r);
+        entry->seal_ts    = n00b_result_get(seal_ts_r);
+        entry->field      = index->field;
+        entry->any_record = any_record;
+        entry->in_use     = true;
+        rocs_index_memo_count++;
+    }
+    else if (entry != nullptr && entry->in_use) {
+        // A concurrent prober got here first. The shard is immutable, so both
+        // probes measured the same thing; nothing to reconcile.
+        entry->any_record = any_record;
+    }
+
+    n00b_mutex_unlock(&rocs_index_memo_mutex);
 }
 
 n00b_result_t(bool)

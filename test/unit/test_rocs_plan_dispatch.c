@@ -176,6 +176,35 @@ indexed_level_shard(n00b_store_index_t *index)
     return shard;
 }
 
+// The same records as indexed_level_shard, with nothing indexed. Sealing this
+// gives a shard whose records DO populate `level` and which carries no column
+// for it -- a legacy shard in the n00b#202 sense, as opposed to Case A's
+// declared-and-genuinely-empty one. The two are indistinguishable from the
+// column table alone, which is the whole difficulty.
+static n00b_store_shard_t *
+plain_level_shard(void)
+{
+    auto shard_r = n00b_store_shard_new(.shard_id = UINT64_C(0x600d));
+    CHECK(n00b_result_is_ok(shard_r));
+    n00b_store_shard_t *shard = n00b_result_get(shard_r);
+
+    n00b_json_node_t *info =
+        record_with_fields(r"info", r"startup complete");
+    n00b_json_node_t *error_a =
+        record_with_fields(r"error", r"timeout while opening");
+    n00b_json_node_t *error_b =
+        record_with_fields(r"error", r"timeout while reading");
+    n00b_json_node_t *missing =
+        record_with_fields(nullptr, r"message without level");
+
+    CHECK(n00b_result_is_ok(n00b_store_shard_append(shard, info)));
+    CHECK(n00b_result_is_ok(n00b_store_shard_append(shard, error_a)));
+    CHECK(n00b_result_is_ok(n00b_store_shard_append(shard, error_b)));
+    CHECK(n00b_result_is_ok(n00b_store_shard_append(shard, missing)));
+
+    return shard;
+}
+
 static bool
 expected_has(const uint64_t *expected, uint64_t len, uint64_t ordinal)
 {
@@ -1317,6 +1346,92 @@ test_mapped_sparse_eq_legacy_shard_must_scan(void)
     CHECK(n00b_plan_records_scanned() > 0);
 }
 
+// n00b#245. #241's descriptor is written at SEAL time, so it does nothing for a
+// shard already on disk -- which is every shard on an upgraded box, and the only
+// shards that matter to the report. Those cannot be amended (a sealed image is
+// immutable, and a visible sealed catalog entry is immutable too), so the
+// verdict is measured once per (shard, field) and cached in memory instead.
+//
+// This is #243's acceptance criterion: first query scans, second query on the
+// same pair scans nothing. It is the difference between "fixed for data
+// collected from tomorrow" and "fixed".
+static void
+test_legacy_shard_scans_once_then_answers_from_the_memo(void)
+{
+    n00b_store_index_t *declared = term_index(r"session");
+    n00b_store_shard_t *shard    = indexed_level_shard(term_index(r"level"));
+
+    // Legacy, exactly as Case B: no n00b_store_index_declare, so no column.
+    auto seal_r = n00b_store_shard_seal(shard,
+                                        .seal_ts      = 89,
+                                        .base_address = 0x8900u);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    auto map_r = n00b_store_map_open_buffer(n00b_result_get(seal_r));
+    CHECK(n00b_result_is_ok(map_r));
+    auto root_r = n00b_store_map_root(n00b_result_get(map_r));
+    CHECK(n00b_result_is_ok(root_r));
+
+    n00b_plan_node_t *plan = plan_ok(
+        n00b_plan_build(predicate_ok(
+                            n00b_plan_predicate_eq(field_target(r"session"),
+                                                   json_value(
+                                                       n00b_json_string_new_from_n00b(
+                                                           r"64302c47")))),
+                        index_list_with(declared)));
+
+    // First query pays for the measurement. Same order of work as today.
+    n00b_plan_records_scanned_reset();
+    check_ordinals(exec_mapped_ok(plan, n00b_result_get(root_r)), 4, NULL, 0);
+    CHECK(n00b_plan_records_scanned() > 0);
+
+    // Second query on the same (shard, field) is free: no record in this shard
+    // populates `session`, the memo recorded that, and a sealed shard cannot
+    // change, so the answer can never go stale.
+    n00b_plan_records_scanned_reset();
+    check_ordinals(exec_mapped_ok(plan, n00b_result_get(root_r)), 4, NULL, 0);
+    CHECK(n00b_plan_records_scanned() == 0);
+}
+
+// The #202 half of the memo, and the one that makes it sound rather than just
+// fast. A legacy shard whose records DO populate the field must keep scanning
+// forever: there is no column to look the value up in, so every distinct value
+// still needs a pass. A memo that collapsed "the field exists here" into an
+// exact answer would be #202 again, wearing a #245 fix.
+static void
+test_legacy_shard_with_the_field_keeps_scanning(void)
+{
+    n00b_store_index_t *declared = term_index(r"level");
+    // `level` IS populated by every record in this fixture, and the shard is
+    // sealed with no column for it -- a legacy shard in the #202 sense.
+    n00b_store_shard_t *shard = plain_level_shard();
+
+    auto seal_r = n00b_store_shard_seal(shard,
+                                        .seal_ts      = 90,
+                                        .base_address = 0x9000u);
+    CHECK(n00b_result_is_ok(seal_r));
+
+    auto map_r = n00b_store_map_open_buffer(n00b_result_get(seal_r));
+    CHECK(n00b_result_is_ok(map_r));
+    auto root_r = n00b_store_map_root(n00b_result_get(map_r));
+    CHECK(n00b_result_is_ok(root_r));
+
+    n00b_plan_node_t *plan = plan_ok(
+        n00b_plan_build(level_eq(r"error"), index_list_with(declared)));
+
+    // Both passes scan, and both find the rows. The memo must not turn the
+    // second one into an empty answer.
+    for (int pass = 0; pass < 2; pass++) {
+        n00b_plan_records_scanned_reset();
+        uint64_t errors[] = {1, 2};
+        check_ordinals(exec_mapped_ok(plan, n00b_result_get(root_r)),
+                       4,
+                       errors,
+                       2);
+        CHECK(n00b_plan_records_scanned() > 0);
+    }
+}
+
 // Case C, for completeness: the field is not declared at all, so there is no
 // index descriptor and the plan is a record scan from the start.
 static void
@@ -1386,6 +1501,8 @@ main(int argc, char **argv)
     test_mapped_sparse_eq_declared_but_absent_column();
     test_mapped_sparse_eq_legacy_shard_must_scan();
     test_mapped_undeclared_field_eq_scans();
+    test_legacy_shard_scans_once_then_answers_from_the_memo();
+    test_legacy_shard_with_the_field_keeps_scanning();
     test_unusable_index_plans_a_record_scan();
     test_index_miss_and_unusable_lookup();
     test_boolean_plan_shapes();
