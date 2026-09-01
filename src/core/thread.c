@@ -9,12 +9,12 @@
 #endif
 
 #ifdef __APPLE__
+#include <pthread.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <mach/mach_time.h>
 #include <mach/thread_act.h>
 #include <mach/thread_policy.h>
-#include <sys/syscall.h>
 #endif
 
 #if defined(__linux__)
@@ -322,25 +322,16 @@ n00b_os_thread_id(void)
 #if defined(__linux__)
     return (int64_t)_n00b_raw_linux_syscall1(SYS_gettid, 0);
 #elif defined(__APPLE__) && defined(__aarch64__)
-    // n00b workers are RAW Mach threads (thread_create), NOT pthreads, so
-    // pthread_threadid_np(NULL, ...) reads a null pthread_t (TSD slot 0 is our
-    // minimal block, not a real pthread) and yields 0 — collapsing every raw
-    // worker's lock-owner id to 0 and destroying mutual exclusion.  Instead read
-    // the Mach thread port from TSD slot 3 (__TSD_MACH_THREAD_SELF) directly off
-    // the hardware thread pointer (TPIDRRO_EL0), exactly as os_unfair_lock does.
-    // The spawner seeds slot 3 with the thread's thread_create port (raw worker)
-    // and the kernel seeds it for the main pthread — a stable, per-thread,
-    // process-unique scalar, resolvable with NO TCB / n00b_thread_self() and no
-    // send-right minting.  Mask the low 3 reserved bits of the thread pointer.
+    // Read the Mach thread port from libpthread's TSD slot 3 directly off the
+    // hardware thread pointer.  This is stable, process-unique, independent of
+    // n00b_thread_self(), and does not mint another send right.
     uint64_t tpidrro;
     __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tpidrro));
     uint64_t *tsd = (uint64_t *)(uintptr_t)(tpidrro & ~(uint64_t)0x7);
     if (tsd == nullptr) {
         return 0;
     }
-    // TSD slot 3 == __TSD_MACH_THREAD_SELF (see N00B_TSD_SLOT_MACH_THREAD_SELF
-    // below; the macro is defined later in this file so the literal is used
-    // here).
+    // TSD slot 3 is __TSD_MACH_THREAD_SELF in Darwin's TSD ABI.
     return (int64_t)(uint32_t)tsd[3];
 #elif defined(__APPLE__)
 #error "n00b_os_thread_id: macOS non-arm64 needs a no-libc TSD read (x86-64: %gs-relative slot 3); pthread_threadid_np is banned (libc-removal mandate)."
@@ -521,9 +512,8 @@ n00b_thread_init() _kargs
     //   - stack_map / stack_base: the worker's callstack region (already
     //     registered as n00b_mmap_stack by n00b_callstack_alloc);
     //   - stack_top: captured now;
-    //   - control handle: macOS uses the thread_create port the spawner passed
-    //     in via os_thread_port (kept identical to the reaper's death-edge
-    //     port); Linux/Windows read the running thread's own tid here.
+    //   - control handle: macOS uses the Mach port the worker captured before
+    //     initialization; Linux/Windows read the running thread's own tid here.
     // The rec->stack_lo/hi pair (used ONLY by n00b_thread_self() resolution, not
     // by the GC scan) is still published by n00b_capture_stack_base after the
     // slot is known, before the first alloc.  The MAIN thread needs none of this
@@ -534,8 +524,7 @@ n00b_thread_init() _kargs
         init_self.stack_map  = cs->stack_map;
         init_self.stack_base = (void *)cs->stack_high;
         n00b_capture_stack_top(&init_self);
-        // macOS: the spawner's thread_create port.  Also record the raw OS
-        // thread id on every platform so STW can identify the initiator even
+        // Also record the OS thread id so STW can identify the initiator even
         // when n00b_thread_self() cannot resolve a foreign thread.
         init_self.os_thread_port = os_thread_port;
 #if defined(__APPLE__)
@@ -1296,11 +1285,10 @@ typedef struct {
                                  // like `callstack`).  nullptr if the pool draw
                                  // failed — the worker then runs without one.
     n00b_futex_t      ready;     // launcher signals "initialized"
-    void             *tcb;       // minimal platform TSD block (D-021); reclaimed by the reaper
-    // OS-death-edge liveness primitive (WP-3a Phase 2, D-034), seeded by the
-    // spawner in _n00b_os_thread_create and copied onto the worker's struct by
-    // the launcher so the reaper can test the worker's true death.  macOS: the
-    // Mach thread port from thread_create.  Linux: the CLONE_CHILD_CLEARTID
+    void             *tcb;       // Linux raw-clone TCB; reclaimed by the reaper
+    // OS-death-edge liveness primitive copied onto the worker's struct by the
+    // launcher so the reaper can test the worker's true death.  macOS: a Mach
+    // send right captured by the worker.  Linux: the CLONE_CHILD_CLEARTID
     // child-tid futex word lives here (clone()'s ctid points at &bundle->child_tid);
     // the launcher records its address on self->child_tid_word for the reaper.
     uint32_t          os_thread_port; // macOS Mach port (0 on other platforms)
@@ -1353,145 +1341,9 @@ typedef struct {
 } n00b_tbundle_t;
 
 // ============================================================================
-// Minimal n00b-owned per-thread TCB / platform-ABI TSD (D-021).
-//
-// A raw OS worker starts with a zero thread-pointer register.  Any code
-// that reads the thread pointer then faults:
-//
-//   - macOS arm64: os_unfair_lock / _os_nospin_lock_lock execute
-//       mrs x9, TPIDRRO_EL0  ;  ldr w3, [x9, #0x18]  ;  casa ...
-//     i.e. they load a 32-bit owner token from slot 3 of the TSD
-//     (offset 0x18 == __TSD_MACH_THREAD_SELF * 8); cerror stores errno at
-//     slot 1 (offset 0x08 == __TSD_ERRNO).  Verified by disassembly of
-//     _os_nospin_lock_lock and the XNU/libpthread TSD slot layout
-//     (libsyscall os/tsd.h: __TSD_THREAD_SELF=0, __TSD_ERRNO=1,
-//     __TSD_MACH_THREAD_SELF=3).  The slot-3 token is the thread's Mach
-//     port (NOT merely a self port — confirmed against a live worker:
-//     [TSD+0x18] held the thread_create port, low bit reserved for the
-//     lock's "has waiters" flag).
-//   - Linux: glibc locks/errno read the thread pointer via %fs.
-//
-// D-021 resolution: n00b installs its OWN minimal TSD block at worker
-// entry so these primitives operate.  On macOS this is done with the
-// `_thread_set_tsd_base` machdep trap (x16=0x80000000, x3=2 ->
-// thread_set_cthread_self -> machine_thread_set_tsd_base), which lets a
-// running Mach thread set its OWN TPIDRRO_EL0 to our block — keeping the
-// existing Mach thread_create + thread_set_state path and avoiding both
-// the Mach-thread "RO thread pointer" limitation AND libpthread bring-up.
-// (bsdthread_create was the originally-named mechanism in D-021 but is
-// NOT viable here: the kernel rejects a non-PTHREAD_START_CUSTOM call with
-// EINVAL, and a CUSTOM call jumps the child into libpthread's
-// process-registered thread_start trampoline — we do not control the PC —
-// which runs _pthread_start expecting a real, libpthread-initialized
-// pthread_t.  The machdep trap is the off-libpthread primitive that gives
-// the SAME result: the kernel sets our thread pointer.  Verified
-// empirically: a Mach thread that installs a minimal block this way runs
-// os_unfair_lock lock/unlock repeatedly without faulting.)
-//
-// The block is one zeroed page (so any slot libsystem indexes is mapped
-// and zero) mapped via n00b_mmap from a non-GC region; the REAPER frees it
-// at OS-confirmed death (WP-3a Phase 2 / D-034 — _n00b_reap_reclaim ->
-// _n00b_tcb_free; NOT the joiner, which frees nothing under D-034).  It
-// carries no n00b per-thread data (identity stays the stack ID
-// word per D-014/D-019; n00b state stays in n00b_thread_t per D-005/D-012)
-// — only the platform-ABI slots above.
-//
-// The worker still keeps its FOUNDATION syscalls TSD-independent: the
-// futex WAKE is a direct svc syscall (core/futex.h) and the worker's EXIT
-// is a direct bsdthread_terminate (below).  Those run both before and
-// after the TSD is torn down on macOS, so they must not depend on it.
+// Linux raw-clone TCB allocation (n00b-owned, non-GC).
 // ============================================================================
-#ifdef __APPLE__
-static inline long
-_n00b_darwin_syscall(long n, long a0, long a1, long a2, long a3)
-{
-    register long x16 __asm__("x16") = n;
-    register long x0 __asm__("x0")   = a0;
-    register long x1 __asm__("x1")   = a1;
-    register long x2 __asm__("x2")   = a2;
-    register long x3 __asm__("x3")   = a3;
-    __asm__ volatile("svc #0x80"
-                     : "+r"(x0)
-                     : "r"(x16), "r"(x1), "r"(x2), "r"(x3)
-                     : "cc", "memory");
-    return x0;
-}
-
-// TSD slot indices the platform's lock/errno primitives index (XNU
-// libsyscall os/tsd.h).  Each slot is one 64-bit word.
-#define N00B_TSD_SLOT_THREAD_SELF      0  // [TSD+0x00] self-pointer
-#define N00B_TSD_SLOT_MACH_THREAD_SELF 3  // [TSD+0x18] os_unfair_lock owner token
-
-// libpthread keeps part of `struct _pthread` BELOW the TSD slot array, and
-// TPIDRRO_EL0 points AT the slot array (an interior pointer), not the struct
-// base.  ___chkstk_darwin (libsystem_pthread) — the compiler-inserted stack
-// probe emitted in the prologue of any function with a large stack frame —
-// reads the thread's stack bounds from two of those negative-offset fields:
-//   [TPIDRRO_EL0 - 0x30] == stack HIGH (stackaddr, one-past-top)
-//   [TPIDRRO_EL0 - 0x28] == stack LOW  (limit, lowest usable)
-// (Verified by disassembling ___chkstk_darwin on this host: +8 is
-//  `ldur x11, [x10, #-0x30]` with x10 = TPIDRRO_EL0.  The `b.hs` at +16 takes
-//  the page-probe path only when SP has already grown PAST the top (SP >=
-//  [tp-0x30]); a normal downward-growing stack has SP < top, so it falls
-//  through to the [tp-0x28] limit check at +20.)  A raw worker crashed in
-// exactly this path: arc4random_buf's periodic DRBG *reseed*
-// (ccdrbg_df_bc_derive_keys) has a large enough frame to trigger the probe,
-// whose first load faults reading [TPIDRRO_EL0 - 0x30] when the thread pointer
-// sits at the page base (nothing mapped below it).  The normal arc4random
-// *generate* path has small frames, never calls ___chkstk_darwin, and so never
-// reads these fields — which is why random worked everywhere else and only the
-// (intermittent) reseed faulted.
-//
-// So the TCB thread pointer is placed at a fixed offset INTO the page (not at
-// the base), leaving room below for these fields — mirroring how real
-// libpthread uses an interior tsd pointer.  The lock/errno slots (positive
-// offsets) move with it; the spawner seeds the two stack-bound fields from the
-// worker's callstack region (_n00b_tcb_set_stack_bounds).
-#define N00B_TCB_TP_OFFSET             0x100   // thread pointer = page base + this
-#define N00B_TCB_CHKSTK_STACK_HIGH_OFF (-0x30) // [tp + off] = stack high (stackaddr)
-#define N00B_TCB_CHKSTK_STACK_LOW_OFF  (-0x28) // [tp + off] = stack low  (limit)
-
-// The thread pointer (TPIDRRO_EL0 base) for a TCB page from _n00b_tcb_alloc —
-// an INTERIOR pointer, NOT the page base (which is what the reaper munmaps).
-static inline void *
-_n00b_tcb_tp(void *tcb_page)
-{
-    return (char *)tcb_page + N00B_TCB_TP_OFFSET;
-}
-
-// Machdep syscall index for thread_set_cthread_self (machdep_call_table[2]),
-// invoked through the 0x80000000-marked machdep trap.  This is exactly what
-// libsyscall's __thread_set_tsd_base issues (custom.s, arm64):
-//   x0 = tsd_base ; x3 = 2 ; x16 = 0x80000000 ; svc #0x80
-#define N00B_MACHDEP_SET_CTHREAD_SELF 2
-#define N00B_MACHDEP_SYSCALL_MARKER   0x80000000L
-
-// Install @p tsd as the calling Mach thread's own thread pointer
-// (TPIDRRO_EL0 base).  After this returns, os_unfair_lock and the rest of
-// the platform's TSD-reading primitives operate on this block.  TSD-free
-// itself (a raw machdep trap; touches no TSD slot), so it is safe to call
-// as the very first thing a raw worker does.
-static inline void
-_n00b_darwin_set_thread_pointer(void *tsd)
-{
-    register long x0 __asm__("x0")   = (long)(uintptr_t)tsd;
-    register long x3 __asm__("x3")   = N00B_MACHDEP_SET_CTHREAD_SELF;
-    register long x16 __asm__("x16") = N00B_MACHDEP_SYSCALL_MARKER;
-    __asm__ volatile("svc #0x80"
-                     : "+r"(x0)
-                     : "r"(x3), "r"(x16)
-                     : "cc", "memory");
-}
-#endif // __APPLE__
-
-// ============================================================================
-// Minimal TCB allocation (n00b-owned, non-GC).  One zeroed page mapped via
-// n00b_mmap so the GC never moves it and every TSD slot the OS might index
-// is mapped and zero-initialized.  On macOS we additionally seed the two
-// slots the platform's lock/errno paths read (self-pointer + Mach-port
-// token).  Returns nullptr on failure (the spawn path surfaces ENOMEM).
-// ============================================================================
-#ifndef _WIN32
+#if defined(__linux__)
 // One page, raw-mmap'd and NOT registered in the mmap interval tree: the
 // TCB is never GC-scanned as a root and never looked up by address, so it
 // needs no tree entry — and keeping it out of the tree avoids adding
@@ -1560,7 +1412,6 @@ n00b_thread_tcb_stats(void)
 static inline size_t
 _n00b_tcb_map_size(void)
 {
-#if defined(__linux__)
     // Both Linux arches need a mapped page BELOW the thread pointer as headroom
     // for negative-offset TLS reads:
     //   - aarch64: glibc's dynamic TLS resolver reads TCB fields at negative
@@ -1578,12 +1429,8 @@ _n00b_tcb_map_size(void)
     // enter __tls_get_addr / touch __thread state, so map the headroom page on
     // both arches and place the TP one page in (see _n00b_linux_clone_tls).
     return (size_t)n00b_page_size * 2;
-#else
-    return (size_t)n00b_page_size;
-#endif
 }
 
-#if defined(__linux__)
 static inline void *
 _n00b_linux_clone_tls(void *tcb_page)
 {
@@ -1596,10 +1443,9 @@ _n00b_linux_clone_tls(void *tcb_page)
     // headroom aarch64 already relied on.
     return (char *)tcb_page + n00b_page_size;
 }
-#endif
 
 static void *
-_n00b_tcb_alloc(uint32_t mach_port)
+_n00b_tcb_alloc(void)
 {
     size_t bytes = _n00b_tcb_map_size();
     auto map_r = n00b_check_mmap(nullptr,
@@ -1614,23 +1460,6 @@ _n00b_tcb_alloc(uint32_t mach_port)
     }
     void *tcb = n00b_result_get(map_r);
     _n00b_tcb_record_alloc(bytes);
-
-#ifdef __APPLE__
-    // Seed the platform-ABI slots os_unfair_lock / errno read, relative to the
-    // INTERIOR thread pointer (page base + N00B_TCB_TP_OFFSET), not the page
-    // base — see N00B_TCB_TP_OFFSET.  The page is already kernel-zeroed, so
-    // every other slot reads as a benign 0.  The self-pointer slot must hold
-    // the thread pointer itself ([tp+0] == tp invariant).  The two chkstk
-    // stack-bound fields below the thread pointer are seeded by the spawner
-    // (_n00b_tcb_set_stack_bounds), which knows the worker's callstack region.
-    void     *tp                          = _n00b_tcb_tp(tcb);
-    uint64_t *slots                       = (uint64_t *)tp;
-    slots[N00B_TSD_SLOT_THREAD_SELF]      = (uint64_t)(uintptr_t)tp;
-    slots[N00B_TSD_SLOT_MACH_THREAD_SELF] = (uint64_t)mach_port;
-#else
-    (void)mach_port;
-#endif
-
     return tcb;
 }
 
@@ -1643,44 +1472,15 @@ _n00b_tcb_free(void *tcb)
         n00b_safe_munmap(tcb, bytes);
     }
 }
-
-#ifdef __APPLE__
-// Seed the two stack-bound fields ___chkstk_darwin reads (below the thread
-// pointer) from the worker's callstack region, so the stack probe on a
-// large-frame libsystem call (e.g. arc4random_buf's periodic DRBG reseed)
-// validates against real bounds instead of faulting on an unmapped read.
-// Called by the spawner, where the callstack bounds are known.  See
-// N00B_TCB_TP_OFFSET for the full rationale.
-//
-// NOTE: on a genuine overflow ___chkstk_darwin (its +60 path) deliberately
-// faults by dereferencing [stack_low - 8] to raise the overflow signal.  We
-// pass cs->stack_low (the guard-band END), so [stack_low - 8] lands inside the
-// PROT_NONE guard band — correct, and safe because the guard band is a full
-// page (N00B_CALLSTACK_GUARD_PAGES >= 1), far deeper than 8 bytes.
-static inline void
-_n00b_tcb_set_stack_bounds(void *tcb_page, void *stack_low, void *stack_high)
+#elif defined(__APPLE__)
+[[n00b::nogc]] n00b_thread_tcb_stats_t
+n00b_thread_tcb_stats(void)
 {
-    char *tp = (char *)_n00b_tcb_tp(tcb_page);
-    *(uintptr_t *)(tp + N00B_TCB_CHKSTK_STACK_HIGH_OFF) = (uintptr_t)stack_high;
-    *(uintptr_t *)(tp + N00B_TCB_CHKSTK_STACK_LOW_OFF)  = (uintptr_t)stack_low;
+    return (n00b_thread_tcb_stats_t){
+        .page_size_bytes = (uint64_t)n00b_page_size,
+    };
 }
-#endif // __APPLE__
-#endif // !_WIN32
-
-#ifdef __APPLE__
-
-// Terminate the calling raw Mach thread.  bsdthread_terminate(stack,
-// freesize, port, sema) with a zero stack/sema just unwinds the kernel
-// thread; we keep the callstack mapped (the REAPER returns it to the
-// callstack pool at OS-confirmed death — WP-3a Phase 2 / D-034; NOT the
-// joiner, which frees nothing), so we pass 0 for the kernel-side free.
-[[noreturn]] static void
-_n00b_worker_self_terminate(void)
-{
-    _n00b_darwin_syscall(SYS_bsdthread_terminate, 0, 0, 0, 0);
-    __builtin_unreachable();
-}
-#endif // __APPLE__
+#endif
 
 // Publish the worker's n00b-local slot id into the ID word at the top of
 // its own callstack region, BEFORE the first n00b_thread_self() call, so
@@ -1695,8 +1495,7 @@ _n00b_worker_write_id_word(n00b_callstack_t *cs, uint32_t slot)
     *id_word = (uint64_t)slot;
 }
 
-// Apply the OS thread name for the CALLING (worker) thread via the per-OS
-// RAW primitive (D-002/D-009: no pthread_setname_np).  `bytes` is the
+// Apply the OS thread name for the calling worker where supported. `bytes` is the
 // NUL-terminated UTF-8 from the caller's n00b_string_t (an internal helper
 // consuming already-validated bytes — the §2.2 exception); `n` is its byte
 // length.  A no-op when `bytes` is null.
@@ -1705,13 +1504,7 @@ _n00b_worker_write_id_word(n00b_callstack_t *cs, uint32_t slot)
 //     kernel truncates to 16 bytes (TASK_COMM_LEN) including the NUL.
 //   - Win32: SetThreadDescription on the current thread (UTF-16); written
 //     only (host-verified by the user later).
-//   - macOS: store-on-struct only.  The off-libpthread raw primitive is
-//     __proc_info(PROC_INFO_CALL_SETCONTROL, getpid(),
-//     PROC_SELFSET_THREADNAME, 0, name, len) — a 6-arg SYS_proc_info — but
-//     PROC_INFO_CALL_SETCONTROL is kernel-internal and exposed by NO SDK
-//     header, so the exact call number cannot be verified here; guessing it
-//     on the worker's critical path is out of bounds (surfaced as a
-//     deferral).  The name is still stored on self->name by the caller.
+//   - macOS: the name remains stored on the n00b thread struct only.
 static void
 _n00b_os_set_thread_name(const char *bytes, size_t n)
 {
@@ -1737,8 +1530,7 @@ _n00b_os_set_thread_name(const char *bytes, size_t n)
         }
     }
 #else
-    // macOS / other: store-on-struct only (see the function comment / the
-    // surfaced macOS thread-name deferral).
+    // macOS / other: store-on-struct only.
     (void)n;
 #endif
 }
@@ -1746,18 +1538,14 @@ _n00b_os_set_thread_name(const char *bytes, size_t n)
 // ============================================================================
 // Scheduling tier / raw escape apply (WP-002 Phase 3, D-025).
 //
-// Applied on the WORKER ITSELF in the launcher (after init, where n00b_thread_self()
-// resolves), via the per-OS RAW primitive — never pthread_setschedparam /
-// pthread_attr_setschedparam (D-002/D-009):
+// Applied on the worker itself in the launcher after initialization:
 //
 //   - macOS: Mach thread_policy_set(THREAD_PRECEDENCE_POLICY) with a signed
 //     `importance`.  Precedence is the queryable Mach surface (thread_policy_get
 //     reads it back) and is best-effort by construction, so it never fails the
 //     spawn — the realtime tier maps to the highest precedence rather than a
-//     privileged RT scheduler, which is the macOS fail-soft form.  The worker's
-//     real Mach thread port was seeded into its TCB (TSD slot 3) by the spawner
-//     at thread_create; we read it from there rather than calling
-//     mach_thread_self() (which would mint a send right needing teardown).
+//     privileged RT scheduler, which is the macOS fail-soft form. The worker
+//     captures the Mach port used here and releases it after confirmed death.
 //   - Linux: raw sched_setscheduler(SCHED_*) + setpriority(nice) on the calling
 //     thread (tid 0 = self).  EPERM / failures are IGNORED (fail-soft): an
 //     ungrantable privileged tier (realtime without CAP_SYS_NICE) leaves the
@@ -1828,7 +1616,7 @@ _n00b_win_tier_priority(n00b_thread_tier_t tier)
 // Apply a resolved scheduling request to the calling (worker) thread.  When
 // @p raw_set is true, @p raw is applied directly (tier mapping bypassed);
 // otherwise @p tier is mapped per-OS.  Always fail-soft.  @p self carries the
-// worker's TCB (used on macOS to recover the Mach thread port).
+// worker's OS control handle.
 static void
 _n00b_apply_sched(n00b_thread_t *self,
                   n00b_thread_tier_t tier,
@@ -1840,25 +1628,17 @@ _n00b_apply_sched(n00b_thread_t *self,
     }
 
 #if defined(__APPLE__)
-    // The worker's real Mach thread port was seeded into TSD slot 3 of its TCB
-    // by the spawner (thread_create).  Read it back rather than minting a new
-    // send right via mach_thread_self().
-    mach_port_t mp = MACH_PORT_NULL;
-    if (self != nullptr && self->tcb != nullptr) {
-        uint64_t *slots = (uint64_t *)_n00b_tcb_tp(self->tcb);
-        mp              = (mach_port_t)slots[N00B_TSD_SLOT_MACH_THREAD_SELF];
-    }
+    mach_port_t mp = self == nullptr ? MACH_PORT_NULL
+                                     : (mach_port_t)self->os_thread_port;
     if (mp == MACH_PORT_NULL) {
         return; // cannot recover the port; fail-soft.
     }
 
-    // REALTIME tier: THREAD_TIME_CONSTRAINT_POLICY, not precedence.  A raw Mach
-    // thread (no pthread → no pthread QoS class) cannot be lifted above OTHER
-    // PROCESSES' threads by THREAD_PRECEDENCE_POLICY — precedence ranks threads
+    // REALTIME tier: THREAD_TIME_CONSTRAINT_POLICY, not precedence.
+    // THREAD_PRECEDENCE_POLICY ranks threads
     // only WITHIN this task, so it cannot keep the worker scheduled when the
-    // whole machine is oversubscribed (e.g. a Docker VM + a compiler swarm at
-    // load > 100).  Time-constraint places the worker in the real-time band,
-    // which is the cross-process lever available without a pthread.  Conservative
+    // whole machine is oversubscribed. Time-constraint places the worker in the
+    // real-time band. Conservative
     // and PREEMPTIBLE so it earns low scheduling latency without monopolising a
     // core: a sporadic (period 0) server allowed up to ~3 ms of compute within a
     // ~10 ms deadline.  Unprivileged on macOS (audio apps use it); fail-soft —
@@ -2005,8 +1785,7 @@ _n00b_cpuset_lowest(uint64_t mask)
 }
 
 // Apply a requested CPU-id set to the calling (worker) thread.  Always
-// fail-soft.  @p self carries the worker's TCB (used on macOS to recover the
-// Mach thread port, as _n00b_apply_sched does).
+// fail-soft.  @p self carries the worker's OS control handle.
 static void
 _n00b_apply_affinity(n00b_thread_t *self, n00b_thread_cpuset_t set)
 {
@@ -2018,12 +1797,9 @@ _n00b_apply_affinity(n00b_thread_t *self, n00b_thread_cpuset_t set)
     // ADVISORY: Darwin has no hard pin.  Map the set to an L2-affinity tag (the
     // 1-based lowest set CPU, so 0 stays reserved for THREAD_AFFINITY_TAG_NULL)
     // and hint the scheduler via THREAD_AFFINITY_POLICY on the worker's real
-    // Mach port (seeded into TSD slot 3 by the spawner, as _n00b_apply_sched).
-    mach_port_t mp = MACH_PORT_NULL;
-    if (self != nullptr && self->tcb != nullptr) {
-        uint64_t *slots = (uint64_t *)_n00b_tcb_tp(self->tcb);
-        mp              = (mach_port_t)slots[N00B_TSD_SLOT_MACH_THREAD_SELF];
-    }
+    // Mach port captured by the pthread worker before runtime publication.
+    mach_port_t mp = self == nullptr ? MACH_PORT_NULL
+                                     : (mach_port_t)self->os_thread_port;
     if (mp == MACH_PORT_NULL) {
         return; // cannot recover the port; fail-soft.
     }
@@ -2062,13 +1838,12 @@ _n00b_apply_affinity(n00b_thread_t *self, n00b_thread_cpuset_t set)
 // D-034 moves a worker's callstack + TCB reclamation OFF the (buggy) join
 // handshake and ONTO the OS-confirmed-death edge.  The WP-1 join freed the
 // callstack/TCB the instant it observed join_futex == 1 — but the worker is
-// STILL on that stack then (it goes on to run n00b_futex_wake +
-// _n00b_worker_self_terminate).  Pooled reuse of a still-live stack would be
+// STILL on that stack then (it goes on to wake the joiner and return from its
+// entry point).  Pooled reuse of a still-live stack would be
 // catastrophic, so reclamation now waits until the OS confirms the worker is
 // truly off its stack:
 //
-//   - macOS: the worker self-terminates via bsdthread_terminate
-//     (_n00b_worker_self_terminate); its Mach thread port then goes dead.
+//   - macOS: the detached pthread returns; its Mach thread port then goes dead.
 //     thread_info(port, THREAD_BASIC_INFO, …) returns KERN_SUCCESS while the
 //     thread is alive and a non-success error once it is gone (verified: a
 //     self-terminated worker's control-port name becomes a dead name and
@@ -2141,8 +1916,7 @@ _n00b_reap_worker_is_dead(n00b_thread_t *t)
                                                  (thread_info_t)&info,
                                                  &count);
     // KERN_SUCCESS => still alive; any error => the thread (and its port) is
-    // gone.  The worker self-terminated via bsdthread_terminate, so once it is
-    // off the stack the control-port name is dead and thread_info fails.
+    // gone. Once the detached pthread is off the stack, thread_info fails.
     return kr != KERN_SUCCESS;
 #elif defined(__linux__)
     // CLONE_CHILD_CLEARTID: the kernel zeroes *t->child_tid_word at true exit.
@@ -2288,7 +2062,7 @@ n00b_diag_foreign_self_check(void)
 static void
 _n00b_reap_reclaim(n00b_thread_t *t)
 {
-#ifndef _WIN32
+#if defined(__linux__)
     if (t->tcb != nullptr) {
         _n00b_tcb_free(t->tcb);
         t->tcb = nullptr;
@@ -2297,7 +2071,7 @@ _n00b_reap_reclaim(n00b_thread_t *t)
 #if defined(__APPLE__)
     if (t->os_thread_port != 0) {
         // Drop our reference to the (now dead) thread-port name so it cannot
-        // be recycled by a later thread_create under us.
+        // be recycled by a later worker under us.
         (void)mach_port_deallocate(mach_task_self(),
                                    (mach_port_name_t)t->os_thread_port);
         t->os_thread_port = 0;
@@ -2563,12 +2337,10 @@ n00b_thread_reap_pending(void)
     // the world stopped — not from this concurrent signal-thread sweep.
 }
 
-// Common worker prologue/epilogue, shared by every platform's raw entry
-// trampoline.  The trampoline (per OS) sets up the C environment and
-// jumps here with the bundle in hand.  This function must keep the
-// worker resolvable via n00b_thread_self() at every allocating call (it writes the
-// id word first) and must never return on macOS (the caller terminates
-// the Mach thread itself).
+// Common worker prologue/epilogue shared by every platform entry trampoline.
+// The trampoline sets up the C environment and calls this function with the
+// bundle. The identity word is written before any allocating call so
+// n00b_thread_self() can resolve the worker throughout its lifetime.
 
 // Optional hook (libn00b debug substrate): a newly-launched worker self-applies
 // any active all-thread hardware watch/breakpoints before running user code.
@@ -2576,20 +2348,17 @@ n00b_thread_reap_pending(void)
 // when nothing is armed.
 [[gnu::weak]] extern void n00b_debug_thread_enroll(void);
 
-static void
+static void *
 n00b_thread_launcher(void *raw)
 {
     n00b_tbundle_t *bundle = raw;
     n00b_runtime_t *rt     = n00b_get_runtime();
 
 #ifdef __APPLE__
-    // TCB FIRST (D-021): install our minimal TSD block as this Mach thread's
-    // thread pointer BEFORE any code that reads it.  n00b_thread_init's first
-    // allocation is wrapped in a GC-stack push and runs allocator/lock paths
-    // that hit os_unfair_lock (which loads [TPIDRRO_EL0 + 0x18]); on a raw
-    // Mach thread the register is zero, so this must precede it.  The block
-    // and the Mach-port token were prepared by the spawner.
-    _n00b_darwin_set_thread_pointer(_n00b_tcb_tp(bundle->tcb));
+    // pthread_create supplies a complete libpthread TSD before entering us.
+    // Retain our own send right to the worker's Mach port for STW and for the
+    // reaper's OS-death check after this detached pthread returns.
+    bundle->os_thread_port = (uint32_t)mach_thread_self();
 #endif
 
     // Identity FIRST: write our slot id into the callstack ID word so the
@@ -2607,16 +2376,14 @@ n00b_thread_launcher(void *raw)
 
     n00b_crash_install_altstack(bundle->altstack); // WP-3b (D-039)
 
-    // Record the TCB on the permanent thread struct so the REAPER can unmap
-    // it after this worker exits (the worker must not free its own TSD while
-    // still running on it).  Reclamation moved off the joiner onto the
-    // OS-death edge (WP-3a Phase 2, D-034).
+    // Linux raw-clone workers keep their TCB alive until the reaper confirms
+    // OS death. Other platforms leave this null.
     self->tcb = bundle->tcb;
     self->os_thread_handle = bundle->os_thread_handle;
 
     // Record the OS-death-edge liveness primitive on the published struct so
     // the reaper can test this worker's true death (WP-3a Phase 2, D-034).
-    // macOS: the Mach thread port (self-terminated worker -> thread_info fails).
+    // macOS: the retained Mach thread port (thread return -> thread_info fails).
     // Linux: seed the CLONE_CHILD_CLEARTID child-tid word nonzero so a later 0
     // (written by the kernel at true exit) is the unambiguous death signal; the
     // clone() ctid argument already points at self->child_tid (set by the
@@ -2773,94 +2540,42 @@ n00b_thread_launcher(void *raw)
     n00b_atomic_store(join_futex, 1);
     n00b_futex_wake(join_futex, true);
 
-#ifdef __APPLE__
-    // The raw Mach worker has no pthread to unwind into and a null lr;
-    // terminate the kernel thread directly (errno-free).  This is the macOS
-    // death edge: after this, our Mach thread port goes dead and the reaper's
-    // thread_info() check fails, gating callstack-pool return / slot clear.
-    _n00b_worker_self_terminate();
-#endif
+    return result;
 }
 
 // ============================================================================
-// Per-OS raw worker creation.  Returns 0 on success, or a positive errno
-// on failure (the spawn path surfaces it through n00b_result_err).  The
-// child enters n00b_thread_launcher(bundle) on the supplied callstack.
+// Per-OS worker creation. Returns 0 on success, or a positive errno on failure.
+// The child enters n00b_thread_launcher(bundle) on the supplied callstack.
 // ============================================================================
 
 #if defined(__APPLE__)
-// macOS: Mach thread_create + thread_set_state + thread_resume (D-002).
-// We set sp to the top of the usable callstack (16-aligned per the AArch64
-// ABI), pc to the launcher, x0 to the bundle, and lr to 0 so an accidental
-// return faults rather than wanders — the launcher never returns (it
-// self-terminates).
+// macOS: let libpthread create the worker so every libc/libpthread path sees a
+// valid, registered pthread_t.  pthread_attr_setstack keeps n00b's callstack
+// geometry and guard page; the top page is withheld from pthread so its startup
+// frames cannot overwrite n00b's fixed identity word at region_start + S - 8.
 static int
 _n00b_os_thread_create(n00b_callstack_t *cs, n00b_tbundle_t *bundle)
 {
-    thread_t      th;
-    kern_return_t kr = thread_create(mach_task_self(), &th);
-    if (kr != KERN_SUCCESS) {
-        return EAGAIN;
+    pthread_attr_t attr;
+    int            rc = pthread_attr_init(&attr);
+    if (rc != 0) {
+        return rc;
     }
 
-    // The thread port is the os_unfair_lock owner token (TSD slot 3,
-    // D-021).  Allocate + seed the worker's minimal TSD block now that the
-    // port is known; the worker installs it at entry and the REAPER frees it
-    // at OS-confirmed death (WP-3a Phase 2 / D-034 — NOT the joiner, which
-    // frees nothing).  (Token is the thread's real Mach port: unique, nonzero,
-    // low bit free for the lock's waiters flag.)
-    bundle->tcb = _n00b_tcb_alloc((uint32_t)th);
-    if (bundle->tcb == nullptr) {
-        thread_terminate(th);
-        return ENOMEM;
+    size_t stack_size = (size_t)((char *)cs->stack_high
+                                 - (char *)cs->stack_low
+                                 - n00b_page_size);
+    if (stack_size < PTHREAD_STACK_MIN
+        || (rc = pthread_attr_setstack(&attr, cs->stack_low, stack_size)) != 0
+        || (rc = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED)) != 0) {
+        (void)pthread_attr_destroy(&attr);
+        return rc != 0 ? rc : EINVAL;
     }
 
-    // Seed the chkstk stack-bound fields from this worker's callstack region
-    // (D-021 extension): a large-frame libsystem call on the worker (e.g.
-    // arc4random_buf's periodic DRBG reseed) runs ___chkstk_darwin, which reads
-    // the stack bounds from below the thread pointer.  See N00B_TCB_TP_OFFSET.
-    _n00b_tcb_set_stack_bounds(bundle->tcb, cs->stack_low, cs->stack_high);
-
-    // Persist the Mach thread port for the reaper's OS-death check (WP-3a
-    // Phase 2, D-034).  After the worker self-terminates via
-    // bsdthread_terminate, thread_info() on this port fails — that is the
-    // death edge that gates callstack-pool return.  (Previously the port was
-    // only seeded into the TCB slot; the reaper needs it on the bundle ->
-    // struct.)
-    bundle->os_thread_port = (uint32_t)th;
-
-    // Start SP below the identity ID word (which lives at the top word of
-    // the region, region_start + S - 8) so the first stack frame can never
-    // clobber it; then 16-align down per the AArch64 ABI.
-    uintptr_t sp = ((uintptr_t)cs->stack_high - N00B_CALLSTACK_ID_WORD_SIZE)
-                 & ~(uintptr_t)15;
-
-    arm_thread_state64_t state = {};
-    state.__x[0] = (uint64_t)(uintptr_t)bundle;
-    state.__sp   = (uint64_t)sp;
-    state.__pc   = (uint64_t)(uintptr_t)&n00b_thread_launcher;
-    state.__lr   = 0;
-
-    kr = thread_set_state(th,
-                          ARM_THREAD_STATE64,
-                          (thread_state_t)&state,
-                          ARM_THREAD_STATE64_COUNT);
-    if (kr != KERN_SUCCESS) {
-        _n00b_tcb_free(bundle->tcb);
-        bundle->tcb = nullptr;
-        thread_terminate(th);
-        return EINVAL;
-    }
-
-    kr = thread_resume(th);
-    if (kr != KERN_SUCCESS) {
-        _n00b_tcb_free(bundle->tcb);
-        bundle->tcb = nullptr;
-        thread_terminate(th);
-        return EAGAIN;
-    }
-
-    return 0;
+    pthread_t thread;
+    rc = pthread_create(&thread, &attr, n00b_thread_launcher, bundle);
+    (void)pthread_attr_destroy(&attr);
+    return rc;
 }
 
 #elif defined(__linux__)
@@ -2910,8 +2625,7 @@ _n00b_linux_clone_entry(void *raw)
 // wrapper runs glibc child-side trampoline code that assumes a libpthread
 // thread; this lands the child directly in our entry with nothing between the
 // syscall and n00b code.  Written as a normal function with register-pinned
-// extended inline asm (the same pattern as _n00b_darwin_syscall, which ncc
-// lowers fine) — NOT a naked function (ncc instruments bodies, which clang then
+// extended inline asm — NOT a naked function (ncc instruments bodies, which clang then
 // rejects for naked) and NOT file-scope asm (ncc's parser does not accept it).
 //
 // The whole child path lives inside the asm and ends in a syscall, so the child
@@ -2987,9 +2701,8 @@ _n00b_os_raw_clone(unsigned long flags,
 static int
 _n00b_os_thread_create(n00b_callstack_t *cs, n00b_tbundle_t *bundle)
 {
-    // Allocate + seed the minimal TCB (one zeroed page, non-GC).  mach_port
-    // is macOS-only; pass 0 on Linux.
-    bundle->tcb = _n00b_tcb_alloc(0);
+    // Allocate the minimal Linux TCB (two zeroed pages, non-GC).
+    bundle->tcb = _n00b_tcb_alloc();
     if (bundle->tcb == nullptr) {
         return ENOMEM;
     }
@@ -3377,8 +3090,8 @@ n00b_thread_join(n00b_thread_t *thread)
     void *retval = n00b_atomic_load(&thread->join_result);
 
     // Join frees NOTHING (WP-3a Phase 2 / D-034).  Observing join_futex == 1 is
-    // the worker's STILL-ON-STACK window: it has yet to run n00b_futex_wake +
-    // (macOS) _n00b_worker_self_terminate.  The WP-1 join freed thread->callstack
+    // the worker's STILL-ON-STACK window: it has yet to wake the joiner and
+    // return from its OS entry point.  The WP-1 join freed thread->callstack
     // / thread->tcb right here — a use-after-free that pooled reuse would make
     // catastrophic (a later spawn could hand the still-live stack to a new
     // worker).  Reclamation is now the REAPER's, gated on the OS-confirmed-death

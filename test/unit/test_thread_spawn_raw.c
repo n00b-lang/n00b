@@ -1,6 +1,10 @@
 #include <stdio.h>
 #include <assert.h>
 #include <errno.h>
+#if defined(__APPLE__)
+#include <pthread.h>
+#include <stdlib.h>
+#endif
 #if defined(__linux__)
 #include <unistd.h>
 #endif
@@ -16,12 +20,9 @@
 #include "util/dynamic_lib.h"
 
 // ============================================================================
-// WP-001 Phase 3 regression test: raw worker thread creation + native join.
+// Worker thread creation + native join regression test.
 //
-// Spawns several workers via n00b_thread_spawn (now backed by the per-OS
-// raw primitive — macOS Mach thread_create + thread_set_state — on an
-// n00b callstack, NOT pthread_create), and asserts, per the Phase-3 DoD /
-// regression contract:
+// Spawns several workers via n00b_thread_spawn on n00b callstacks and asserts:
 //   - each worker's n00b_thread_self() returns its own distinct
 //     n00b_thread_t * with the correct slot id, recovered from the ID
 //     word it wrote into its own callstack (the masking branch);
@@ -52,6 +53,30 @@ test_worker_libc_write(void)
     assert(n00b_result_is_ok(result));
     assert((uintptr_t)n00b_thread_join(n00b_result_get(result)) == 0);
     printf("  [PASS] worker_libc_write\n");
+}
+#endif
+
+#if defined(__APPLE__)
+static void *
+libpthread_worker(void *unused)
+{
+    (void)unused;
+    pthread_t self = pthread_self();
+    void     *p    = malloc(16);
+    assert(self != nullptr);
+    assert(p != nullptr);
+    *(volatile unsigned char *)p = 0xa5;
+    free(p);
+    return nullptr;
+}
+
+static void
+test_worker_libpthread(void)
+{
+    auto result = n00b_thread_spawn(libpthread_worker, nullptr);
+    assert(n00b_result_is_ok(result));
+    assert(n00b_thread_join(n00b_result_get(result)) == nullptr);
+    printf("  [PASS] worker_libpthread\n");
 }
 #endif
 
@@ -202,6 +227,9 @@ main(int argc, char **argv)
 
 #if defined(__linux__)
     test_worker_libc_write();
+#endif
+#if defined(__APPLE__)
+    test_worker_libpthread();
 #endif
     test_spawn_join_many();
     test_worker_identity_stable_across_depth();
