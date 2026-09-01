@@ -207,4 +207,7 @@ extern void n00b_dict_untyped_unlock_post_copy(n00b_dict_untyped_t *d);
 #define N00B_HT_FLAG_DELETED 4
 #define N00B_HT_FLAG_MOVING  8
 
+/** @brief Test-only: total reader strand backoffs since process start. */
+extern uint64_t n00b_dict_reader_backoff_count_get(void);
+
 #endif

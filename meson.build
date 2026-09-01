@@ -4713,6 +4713,18 @@ dict_untyped_test = executable('test_dict_untyped',
 )
 test('dict_untyped', dict_untyped_test, suite: 'integration')
 
+dict_reader_strand_test = executable('test_dict_reader_strand',
+    ['test/integration/test_dict_reader_strand.c'],
+    kwargs: test_common_kwargs,
+)
+# Two cases, each a fresh process (the reader-strand diagnostic guard is
+# process-global): 'get' covers n00b_acquire_if_present, 'add' covers
+# n00b_acquire_or_add. is_parallel:false — each pins CPU on the stranded spin.
+test('dict_reader_strand_get', dict_reader_strand_test,
+    args: ['get'], suite: 'integration', is_parallel: false)
+test('dict_reader_strand_add', dict_reader_strand_test,
+    args: ['add'], suite: 'integration', is_parallel: false)
+
 arena_alloc_test = executable('test_arena_alloc',
     ['test/integration/test_arena_alloc.c'],
     kwargs: test_common_kwargs,

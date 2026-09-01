@@ -184,11 +184,25 @@ dict_untyped_epoch_exit(bool active)
 // is preserved: we never read a bucket a real holder might still own.
 #define N00B_DICT_READER_SPIN_LIMIT (1ULL << 20)
 
-static _Atomic bool n00b_dict_reader_strand_warned = false;
+static _Atomic bool     n00b_dict_reader_strand_warned = false;
+// Count of reader backoffs, for the regression test to gate on (it waits for
+// several before asserting the diagnostic fired exactly once). Never reset --
+// tests that need a clean count run in a fresh process.
+static _Atomic uint64_t n00b_dict_reader_backoff_count = 0;
+
+uint64_t
+n00b_dict_reader_backoff_count_get(void)
+{
+    return atomic_load_explicit(&n00b_dict_reader_backoff_count,
+                                memory_order_relaxed);
+}
 
 static inline void
 n00b_dict_reader_strand_backoff(void)
 {
+    atomic_fetch_add_explicit(&n00b_dict_reader_backoff_count,
+                              1,
+                              memory_order_relaxed);
     if (!atomic_exchange(&n00b_dict_reader_strand_warned, true)) {
         static const char m[] =
             "n00b_dict: bucket mutex held past the reader spin bound; treating as "
