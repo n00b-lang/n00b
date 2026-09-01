@@ -182,7 +182,19 @@ dict_untyped_epoch_exit(bool active)
 // off to a short sleep so the thread parks instead of melting a core, and emit
 // one diagnostic so the strand is visible rather than silent. The wait itself
 // is preserved: we never read a bucket a real holder might still own.
-#define N00B_DICT_READER_SPIN_LIMIT (1ULL << 20)
+//
+// The bound matches the migrator's magnitude and reasoning: deliberately far
+// above any legitimate wait, so heavy contention (e.g. rocs_async_seal_stress)
+// never trips it -- only a permanently stranded bit does. It is a runtime value
+// rather than a constant solely so the regression test can lower it and reach
+// the backoff without spinning billions of times; production never changes it.
+static _Atomic uint64_t n00b_dict_reader_spin_limit = (1ULL << 32);
+
+void
+n00b_dict_reader_spin_limit_set(uint64_t limit)
+{
+    atomic_store_explicit(&n00b_dict_reader_spin_limit, limit, memory_order_relaxed);
+}
 
 static _Atomic bool     n00b_dict_reader_strand_warned = false;
 // Count of reader backoffs, for the regression test to gate on (it waits for
@@ -463,6 +475,9 @@ n00b_acquire_if_present(n00b_dict_untyped_t       *d,
         return n00b_dict_stw_scan(store, hv, false);
     }
 
+    const uint64_t spin_limit = atomic_load_explicit(&n00b_dict_reader_spin_limit,
+                                                      memory_order_relaxed);
+
     do {
         last_slot = store->last_slot;
         bix       = hv & last_slot;
@@ -487,8 +502,7 @@ n00b_acquire_if_present(n00b_dict_untyped_t       *d,
                     }
                     goto try_again;
                 }
-                if ((flags & N00B_HT_FLAG_MUTEX)
-                    && ++spins >= N00B_DICT_READER_SPIN_LIMIT) {
+                if ((flags & N00B_HT_FLAG_MUTEX) && ++spins >= spin_limit) {
                     n00b_dict_reader_strand_backoff();
                 }
             } while (flags & N00B_HT_FLAG_MUTEX);
@@ -543,6 +557,9 @@ n00b_acquire_or_add(n00b_dict_untyped_t        *d,
         return n00b_dict_stw_scan(store, hv, true);
     }
 
+    const uint64_t spin_limit = atomic_load_explicit(&n00b_dict_reader_spin_limit,
+                                                      memory_order_relaxed);
+
     do {
         last_slot = store->last_slot;
         bix       = hv & last_slot;
@@ -562,8 +579,7 @@ n00b_acquire_or_add(n00b_dict_untyped_t        *d,
                     }
                     goto try_again;
                 }
-                if ((flags & N00B_HT_FLAG_MUTEX)
-                    && ++spins >= N00B_DICT_READER_SPIN_LIMIT) {
+                if ((flags & N00B_HT_FLAG_MUTEX) && ++spins >= spin_limit) {
                     n00b_dict_reader_strand_backoff();
                 }
             } while (flags & N00B_HT_FLAG_MUTEX);

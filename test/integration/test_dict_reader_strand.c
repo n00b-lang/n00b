@@ -112,6 +112,10 @@ sleep_ms(long ms)
 static int
 run_case(bool is_add)
 {
+    // Lower the reader spin bound so the backoff is reached quickly; production
+    // uses a bound far above any legitimate wait (see dict_untyped.c).
+    n00b_dict_reader_spin_limit_set(256);
+
     n00b_dict_untyped_t d;
     n00b_dict_untyped_init(&d,
                            .hash          = identity_hash,

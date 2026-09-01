@@ -210,4 +210,8 @@ extern void n00b_dict_untyped_unlock_post_copy(n00b_dict_untyped_t *d);
 /** @brief Test-only: total reader strand backoffs since process start. */
 extern uint64_t n00b_dict_reader_backoff_count_get(void);
 
+/** @brief Test-only: lower the reader spin bound so a strand reaches the
+ *  backoff without spinning billions of times. Production never calls this. */
+extern void n00b_dict_reader_spin_limit_set(uint64_t limit);
+
 #endif
