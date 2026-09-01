@@ -239,6 +239,7 @@ typedef struct {
     // CALLBACK-scan support: the stored pointer bitmap drives relink for
     // CALLBACK segments (scan_word_for_policy returns false for CALLBACK).
     bool                        is_callback;
+    n00b_marshal_scan_cb_tag_t  scan_cb_tag;
     uint64_t                   *bitmap;
     uint64_t                    bitmap_words;
 } n00b_unmarshal_segment_t;
@@ -664,6 +665,22 @@ scan_word_for_policy(n00b_marshal_alloc_record_t *rec, uint64_t i)
     default:
         return false;
     }
+}
+
+static bool
+scan_policy_is_precise(n00b_gc_scan_kind_t        scan_kind,
+                       n00b_marshal_scan_cb_tag_t scan_cb_tag)
+{
+    // DEFAULT and ALL conservatively scan scalar-bearing objects. The other
+    // selected patterns describe pointer positions rather than candidates.
+    if (scan_kind == N00B_GC_SCAN_KIND_EVERY_OTHER) {
+        return true;
+    }
+    if (scan_kind != N00B_GC_SCAN_KIND_CALLBACK) {
+        return false;
+    }
+    return scan_cb_tag != N00B_MARSHAL_SCAN_CB_TAG_ALL
+        && scan_cb_tag != N00B_MARSHAL_SCAN_CB_TAG_NONE;
 }
 
 // Resolve a scan callback function pointer to its built-in tag.
@@ -1843,6 +1860,15 @@ scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
             }
         }
 
+        if (is_ptr && word && !rewritten
+            && scan_policy_is_precise(node->rec.scan_kind, node->scan_cb_tag)) {
+            marshal_set_error(&ctx->status,
+                              &ctx->error,
+                              N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
+                              r"precise pointer does not resolve to a supported marshal target");
+            return;
+        }
+
         if (!rewritten && (word >> 32) == ctx->base_address) {
             uint64_t vaddr = node->vaddr + i * sizeof(uint64_t);
             emit_cpatch(ctx, vaddr, word);
@@ -2677,27 +2703,33 @@ unmarshal_store_callback_bitmap(n00b_unmarshal_ctx_t     *ctx,
     scan_cb(&map, scan_user);
 
     seg->is_callback  = true;
+    seg->scan_cb_tag  = tag;
     seg->bitmap       = bitmap;
     seg->bitmap_words = map_words;
     return true;
 }
 
 typedef struct {
-    uint64_t *slots;
-    size_t    len;
+    uint64_t vaddr;
+    uint32_t op;
+} n00b_marshal_patch_slot_t;
+
+typedef struct {
+    n00b_marshal_patch_slot_t *slots;
+    size_t                     len;
 } n00b_marshal_patch_slots_t;
 
 static bool
 stream_uses_payload_front(n00b_marshal_stream_header_t *hdr);
 
 static bool
-unmarshal_patch_slot_record(n00b_unmarshal_ctx_t *ctx,
-                            uint32_t              version,
-                            bool                  payload_front,
-                            size_t               *ix,
-                            uint64_t             *slots,
-                            size_t               *slot_ix,
-                            bool                 *done)
+unmarshal_patch_slot_record(n00b_unmarshal_ctx_t      *ctx,
+                            uint32_t                   version,
+                            bool                       payload_front,
+                            size_t                    *ix,
+                            n00b_marshal_patch_slot_t *slots,
+                            size_t                    *slot_ix,
+                            bool                      *done)
 {
     if (ctx->in.len - *ix < sizeof(uint32_t)) {
         return false;
@@ -2728,7 +2760,10 @@ unmarshal_patch_slot_record(n00b_unmarshal_ctx_t *ctx,
         }
         n00b_marshal_cpatch_record_t *rec = (void *)(ctx->in.data + *ix);
         if (slots != nullptr) {
-            slots[*slot_ix] = rec->vaddr;
+            slots[*slot_ix] = (n00b_marshal_patch_slot_t){
+                .vaddr = rec->vaddr,
+                .op    = op,
+            };
         }
         *slot_ix += 1;
         *ix += sizeof(*rec);
@@ -2740,7 +2775,10 @@ unmarshal_patch_slot_record(n00b_unmarshal_ctx_t *ctx,
         }
         n00b_marshal_spatch_record_t *rec = (void *)(ctx->in.data + *ix);
         if (slots != nullptr) {
-            slots[*slot_ix] = rec->vaddr;
+            slots[*slot_ix] = (n00b_marshal_patch_slot_t){
+                .vaddr = rec->vaddr,
+                .op    = op,
+            };
         }
         *slot_ix += 1;
         *ix += sizeof(*rec);
@@ -2755,7 +2793,10 @@ unmarshal_patch_slot_record(n00b_unmarshal_ctx_t *ctx,
             return false;
         }
         if (slots != nullptr) {
-            slots[*slot_ix] = rec->vaddr;
+            slots[*slot_ix] = (n00b_marshal_patch_slot_t){
+                .vaddr = rec->vaddr,
+                .op    = op,
+            };
         }
         *slot_ix += 1;
         *ix += rec->record_len;
@@ -2770,7 +2811,10 @@ unmarshal_patch_slot_record(n00b_unmarshal_ctx_t *ctx,
             return false;
         }
         if (slots != nullptr) {
-            slots[*slot_ix] = rec->vaddr;
+            slots[*slot_ix] = (n00b_marshal_patch_slot_t){
+                .vaddr = rec->vaddr,
+                .op    = op,
+            };
         }
         *slot_ix += 1;
         *ix += rec->record_len;
@@ -2860,15 +2904,19 @@ unmarshal_collect_patch_slots(n00b_unmarshal_ctx_t        *ctx,
     return done && used == count;
 }
 
-static bool
-unmarshal_slot_is_patched(n00b_marshal_patch_slots_t *slots, uint64_t vaddr)
+static uint32_t
+unmarshal_slot_patch_op(n00b_marshal_patch_slots_t *slots, uint64_t vaddr)
 {
+    uint32_t op = 0;
     for (size_t i = 0; i < slots->len; i++) {
-        if (slots->slots[i] == vaddr) {
-            return true;
+        if (slots->slots[i].vaddr == vaddr) {
+            if (slots->slots[i].op == N00B_MARSHAL_OP_CPATCH) {
+                return N00B_MARSHAL_OP_CPATCH;
+            }
+            op = slots->slots[i].op;
         }
     }
-    return false;
+    return op;
 }
 
 static void
@@ -3275,11 +3323,28 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 continue;
             }
             uint64_t slot_vaddr = seg->vaddr + i * sizeof(uint64_t);
-            if (unmarshal_slot_is_patched(&patch_slots, slot_vaddr)) {
+            uint32_t patch_op = unmarshal_slot_patch_op(&patch_slots, slot_vaddr);
+            if (patch_op != 0) {
+                if (patch_op == N00B_MARSHAL_OP_CPATCH
+                    && scan_policy_is_precise(rec.scan_kind, seg->scan_cb_tag)) {
+                    marshal_set_error(&ctx->status,
+                                      &ctx->error,
+                                      N00B_MARSHAL_ERR_BAD_STREAM,
+                                      r"precise pointer slot uses a collision patch");
+                    return false;
+                }
                 continue;
             }
             uint64_t word = words[i];
             if ((word >> 32) != hdr->base_address) {
+                if (word
+                    && scan_policy_is_precise(rec.scan_kind, seg->scan_cb_tag)) {
+                    marshal_set_error(&ctx->status,
+                                      &ctx->error,
+                                      N00B_MARSHAL_ERR_BAD_STREAM,
+                                      r"precise pointer does not resolve inside the stream");
+                    return false;
+                }
                 continue;
             }
             void *target = addr_for_vaddr(ctx, word);

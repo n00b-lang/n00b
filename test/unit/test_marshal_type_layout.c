@@ -7,6 +7,7 @@
 #include "adt/list.h"
 #include "core/alloc.h"
 #include "core/gc_map.h"
+#include "core/mmaps.h"
 #include "core/runtime.h"
 #include "core/static_objects.h" // n00b_static_objects_register_all()
 #include "util/assert.h"
@@ -77,6 +78,43 @@ assert_type_layout_scan(void                         *ptr,
     CHECK(info.hdr.oob->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
     CHECK(info.hdr.oob->scan_cb == n00b_gc_scan_cb_type_layout);
     CHECK(info.hdr.oob->scan_user == (void *)layout);
+}
+
+static void
+test_type_layout_unresolved_pointer_rejected(void)
+{
+    const n00b_gc_struct_layout_t *layout =
+        n00b_gc_type_map_lookup(typehash(type_layout_probe_t *));
+    CHECK(layout != nullptr);
+
+    n00b_arena_t *arena = n00b_new_arena(.size = 8192, .use_gc = true);
+    type_layout_probe_t *src = n00b_alloc_with_opts(type_layout_probe_t,
+                                                    ARENA_OPTS(arena));
+    assert_type_layout_scan(src, layout, 3);
+
+    auto map_r = n00b_mmap(sizeof(uint64_t), .kind = n00b_mmap_api_mmap);
+    CHECK(n00b_result_is_ok(map_r));
+    void    *external = n00b_result_get(map_r);
+    uint32_t ptr_high = (uint32_t)((uint64_t)(uintptr_t)external >> 32);
+    CHECK(ptr_high != 0);
+    uint32_t other_base = ptr_high + 1u;
+    if (other_base == 0) {
+        other_base = 1;
+    }
+    CHECK(other_base != ptr_high);
+
+    src->left         = external;
+    src->scalar_alias = 0;
+    src->right        = nullptr;
+    uint32_t bases[] = {other_base, ptr_high};
+    for (size_t i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
+        n00b_marshal_ctx_t *ctx = n00b_marshal_ctx_new(.base_address = bases[i]);
+        CHECK(n00b_marshal_incremental(ctx, src) == nullptr);
+        CHECK(n00b_marshal_ctx_status(ctx)
+              == N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION);
+        n00b_marshal_ctx_destroy(ctx);
+    }
+    CHECK(n00b_result_is_ok(n00b_munmap(external)));
 }
 
 static void
@@ -242,6 +280,7 @@ main(int argc, char **argv)
     // into the runtime type map so typehash() lookups resolve.
     n00b_static_objects_register_all();
 
+    test_type_layout_unresolved_pointer_rejected();
     test_type_layout_grown_backing_round_trip();
     test_flex_allocations_keep_default_scan();
     test_type_layout_zero_array_round_trip();
