@@ -173,9 +173,10 @@ dict_untyped_epoch_exit(bool active)
 #define N00B_DICT_MIGRATE_SPIN_LIMIT (1ULL << 32)
 
 // Reader-side strand handling for the bucket-MUTEX wait in the two acquire
-// helpers. A live holder releases within a few instructions, so a bit that
-// stays set for the whole time gate has no owner; without a bound each waiter
-// pins a core indefinitely. Past the spin threshold the waiter starts a clock
+// helpers. A live holder normally releases within a few instructions, so a bit
+// that stays set for the whole time gate is treated as likely stranded; without
+// a bound each waiter pins a core indefinitely. Past the spin threshold the
+// waiter starts a clock
 // (the threshold keeps clock reads off the fast path); past the gate it sleeps
 // between retries and emits one diagnostic. The wait itself is never abandoned:
 // returning early would report a present key as absent while a holder still
