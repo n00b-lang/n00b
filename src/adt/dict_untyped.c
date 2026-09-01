@@ -172,6 +172,32 @@ dict_untyped_epoch_exit(bool active)
 // migration; it is deliberately far above any legitimate wait.
 #define N00B_DICT_MIGRATE_SPIN_LIMIT (1ULL << 32)
 
+// Reader-side companion to the migrator bound above. The reader acquire loops
+// (n00b_acquire_if_present / n00b_acquire_or_add) wait for a bucket's MUTEX to
+// clear by spinning. A live holder clears within a few instructions, so a bit
+// still set after this many spins is almost certainly stranded (held by no live
+// thread). Without a bound the reader burns a whole core forever, and the first
+// threshold-crossing put then escalates it into a whole-dict migration storm --
+// the crayon-gw fd_owners wedge in n00b-lang/n00b#221. Past the bound we back
+// off to a short sleep so the thread parks instead of melting a core, and emit
+// one diagnostic so the strand is visible rather than silent. The wait itself
+// is preserved: we never read a bucket a real holder might still own.
+#define N00B_DICT_READER_SPIN_LIMIT (1ULL << 20)
+
+static _Atomic bool n00b_dict_reader_strand_warned = false;
+
+static inline void
+n00b_dict_reader_strand_backoff(void)
+{
+    if (!atomic_exchange(&n00b_dict_reader_strand_warned, true)) {
+        static const char m[] =
+            "n00b_dict: bucket mutex held past the reader spin bound; treating as "
+            "a stranded lock and parking the reader instead of spinning a core\n";
+        n00b_raw_write(2, m, sizeof(m) - 1);
+    }
+    base_nanosleep_ns(N00B_NS_PER_MS);
+}
+
 // Undo a partially-acquired migration: drop the COPYING/MOVING bits we OR'd
 // onto the buckets, then release the dict-wide migration bit and wake everyone
 // parked on it. Without the flag clear, readers would keep taking the
@@ -430,6 +456,7 @@ n00b_acquire_if_present(n00b_dict_untyped_t       *d,
         for (uint32_t i = 0; i <= last_slot; i++) {
             cur = &store->buckets[bix];
 
+            uint64_t spins = 0;
             do {
                 flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
                 if (flags & N00B_HT_FLAG_MOVING) {
@@ -445,6 +472,10 @@ n00b_acquire_if_present(n00b_dict_untyped_t       *d,
                         n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
                     }
                     goto try_again;
+                }
+                if ((flags & N00B_HT_FLAG_MUTEX)
+                    && ++spins >= N00B_DICT_READER_SPIN_LIMIT) {
+                    n00b_dict_reader_strand_backoff();
                 }
             } while (flags & N00B_HT_FLAG_MUTEX);
 
@@ -505,6 +536,7 @@ n00b_acquire_or_add(n00b_dict_untyped_t        *d,
         for (uint32_t i = 0; i <= last_slot; i++) {
             cur = &store->buckets[bix];
 
+            uint64_t spins = 0;
             do {
                 flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
                 if (flags & (N00B_HT_FLAG_COPYING)) {
@@ -515,6 +547,10 @@ n00b_acquire_or_add(n00b_dict_untyped_t        *d,
                         n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
                     }
                     goto try_again;
+                }
+                if ((flags & N00B_HT_FLAG_MUTEX)
+                    && ++spins >= N00B_DICT_READER_SPIN_LIMIT) {
+                    n00b_dict_reader_strand_backoff();
                 }
             } while (flags & N00B_HT_FLAG_MUTEX);
 
