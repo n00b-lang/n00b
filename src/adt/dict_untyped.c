@@ -172,34 +172,31 @@ dict_untyped_epoch_exit(bool active)
 // migration; it is deliberately far above any legitimate wait.
 #define N00B_DICT_MIGRATE_SPIN_LIMIT (1ULL << 32)
 
-// Reader-side companion to the migrator bound above. The reader acquire loops
-// (n00b_acquire_if_present / n00b_acquire_or_add) wait for a bucket's MUTEX to
-// clear by spinning. A live holder clears within a few instructions, so a bit
-// still set after this many spins is almost certainly stranded (held by no live
-// thread). Without a bound the reader burns a whole core forever, and the first
-// threshold-crossing put then escalates it into a whole-dict migration storm --
-// the crayon-gw fd_owners wedge in n00b-lang/n00b#221. Past the bound we back
-// off to a short sleep so the thread parks instead of melting a core, and emit
-// one diagnostic so the strand is visible rather than silent. The wait itself
-// is preserved: we never read a bucket a real holder might still own.
-//
-// The bound matches the migrator's magnitude and reasoning: deliberately far
-// above any legitimate wait, so heavy contention (e.g. rocs_async_seal_stress)
-// never trips it -- only a permanently stranded bit does. It is a runtime value
-// rather than a constant solely so the regression test can lower it and reach
-// the backoff without spinning billions of times; production never changes it.
-static _Atomic uint64_t n00b_dict_reader_spin_limit = (1ULL << 32);
+// Reader-side strand handling for the bucket-MUTEX wait in the two acquire
+// helpers. A live holder releases within a few instructions, so a bit that
+// stays set for the whole time gate has no owner; without a bound each waiter
+// pins a core indefinitely. Past the spin threshold the waiter starts a clock
+// (the threshold keeps clock reads off the fast path); past the gate it sleeps
+// between retries and emits one diagnostic. The wait itself is never abandoned:
+// returning early would report a present key as absent while a holder still
+// owns the bucket. The gate must stay far above any legitimate losing streak
+// under write contention -- sleeping on a merely-contended bucket collapses
+// writer throughput.
+#define N00B_DICT_READER_SPIN_THRESHOLD (1ULL << 20)
+#define N00B_DICT_READER_CLOCK_MASK     0x3ff
 
+static _Atomic uint64_t n00b_dict_reader_strand_gate_ns = 1000000000ULL;
+
+// Test hook: production code must not call this.
 void
-n00b_dict_reader_spin_limit_set(uint64_t limit)
+n00b_dict_reader_strand_gate_set(uint64_t ns)
 {
-    atomic_store_explicit(&n00b_dict_reader_spin_limit, limit, memory_order_relaxed);
+    atomic_store_explicit(&n00b_dict_reader_strand_gate_ns, ns,
+                          memory_order_relaxed);
 }
 
 static _Atomic bool     n00b_dict_reader_strand_warned = false;
-// Count of reader backoffs, for the regression test to gate on (it waits for
-// several before asserting the diagnostic fired exactly once). Never reset --
-// tests that need a clean count run in a fresh process.
+// Never reset; a test needing a clean count must run in a fresh process.
 static _Atomic uint64_t n00b_dict_reader_backoff_count = 0;
 
 uint64_t
@@ -217,11 +214,33 @@ n00b_dict_reader_strand_backoff(void)
                               memory_order_relaxed);
     if (!atomic_exchange(&n00b_dict_reader_strand_warned, true)) {
         static const char m[] =
-            "n00b_dict: bucket mutex held past the reader spin bound; treating as "
+            "n00b_dict: bucket mutex held past the reader wait gate; treating as "
             "a stranded lock and parking the reader instead of spinning a core\n";
         n00b_raw_write(2, m, sizeof(m) - 1);
     }
     base_nanosleep_ns(N00B_NS_PER_MS);
+}
+
+// Called on every losing iteration of a bucket-MUTEX wait. Cheap until the
+// spin threshold; then reads the clock every CLOCK_MASK+1 iterations and backs
+// off once the gate has elapsed.
+static inline void
+n00b_dict_reader_wait_tick(uint64_t *spins, uint64_t *wait_start_ns)
+{
+    if (++*spins < N00B_DICT_READER_SPIN_THRESHOLD
+        || (*spins & N00B_DICT_READER_CLOCK_MASK) != 0) {
+        return;
+    }
+    uint64_t now = base_monotonic_ns();
+    if (*wait_start_ns == 0) {
+        *wait_start_ns = now;
+        return;
+    }
+    uint64_t gate = atomic_load_explicit(&n00b_dict_reader_strand_gate_ns,
+                                         memory_order_relaxed);
+    if (now - *wait_start_ns >= gate) {
+        n00b_dict_reader_strand_backoff();
+    }
 }
 
 // Undo a partially-acquired migration: drop the COPYING/MOVING bits we OR'd
@@ -475,9 +494,6 @@ n00b_acquire_if_present(n00b_dict_untyped_t       *d,
         return n00b_dict_stw_scan(store, hv, false);
     }
 
-    const uint64_t spin_limit = atomic_load_explicit(&n00b_dict_reader_spin_limit,
-                                                      memory_order_relaxed);
-
     do {
         last_slot = store->last_slot;
         bix       = hv & last_slot;
@@ -485,7 +501,8 @@ n00b_acquire_if_present(n00b_dict_untyped_t       *d,
         for (uint32_t i = 0; i <= last_slot; i++) {
             cur = &store->buckets[bix];
 
-            uint64_t spins = 0;
+            uint64_t spins         = 0;
+            uint64_t wait_start_ns = 0;
             do {
                 flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
                 if (flags & N00B_HT_FLAG_MOVING) {
@@ -502,8 +519,8 @@ n00b_acquire_if_present(n00b_dict_untyped_t       *d,
                     }
                     goto try_again;
                 }
-                if ((flags & N00B_HT_FLAG_MUTEX) && ++spins >= spin_limit) {
-                    n00b_dict_reader_strand_backoff();
+                if (flags & N00B_HT_FLAG_MUTEX) {
+                    n00b_dict_reader_wait_tick(&spins, &wait_start_ns);
                 }
             } while (flags & N00B_HT_FLAG_MUTEX);
 
@@ -557,9 +574,6 @@ n00b_acquire_or_add(n00b_dict_untyped_t        *d,
         return n00b_dict_stw_scan(store, hv, true);
     }
 
-    const uint64_t spin_limit = atomic_load_explicit(&n00b_dict_reader_spin_limit,
-                                                      memory_order_relaxed);
-
     do {
         last_slot = store->last_slot;
         bix       = hv & last_slot;
@@ -567,7 +581,8 @@ n00b_acquire_or_add(n00b_dict_untyped_t        *d,
         for (uint32_t i = 0; i <= last_slot; i++) {
             cur = &store->buckets[bix];
 
-            uint64_t spins = 0;
+            uint64_t spins         = 0;
+            uint64_t wait_start_ns = 0;
             do {
                 flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
                 if (flags & (N00B_HT_FLAG_COPYING)) {
@@ -579,8 +594,8 @@ n00b_acquire_or_add(n00b_dict_untyped_t        *d,
                     }
                     goto try_again;
                 }
-                if ((flags & N00B_HT_FLAG_MUTEX) && ++spins >= spin_limit) {
-                    n00b_dict_reader_strand_backoff();
+                if (flags & N00B_HT_FLAG_MUTEX) {
+                    n00b_dict_reader_wait_tick(&spins, &wait_start_ns);
                 }
             } while (flags & N00B_HT_FLAG_MUTEX);
 

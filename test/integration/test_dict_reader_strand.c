@@ -1,18 +1,11 @@
-// Regression coverage for the reader-side strand backoff (see the
-// N00B_DICT_READER_SPIN_LIMIT path in src/adt/dict_untyped.c).
-//
-// Strands one bucket's MUTEX with no owner, then drives readers onto it and
-// checks the mitigation's contract: the reader parks (the backoff counter
-// climbs), the one-time diagnostic fires exactly once no matter how many
-// readers hit it, unrelated keys stay serviceable, and once the strand clears
-// every parked reader completes correctly.
-//
-// Two cases, each a fresh process (the diagnostic guard is process-global):
-//   get  -> exercises n00b_acquire_if_present
-//   add  -> exercises n00b_acquire_or_add
-//
-// Meaningful as a gate: without the backoff the counter never moves and the
-// warning never appears, so both the wait and the final assert fail.
+// Strands one bucket's MUTEX with no owner and asserts the reader strand
+// backoff's contract: waiters park (the backoff counter climbs), the diagnostic
+// fires exactly once regardless of waiter count, unrelated keys stay
+// serviceable, and every waiter completes correctly once the strand clears.
+// The two cases must run in separate processes: the diagnostic guard is
+// process-global, so a second case in the same process would see zero warnings.
+//   get -> n00b_acquire_if_present
+//   add -> n00b_acquire_or_add
 
 #define N00B_USE_INTERNAL_API
 #include <assert.h>
@@ -36,7 +29,7 @@
 #define N_WORKERS      4
 #define BACKOFF_TARGET 8
 #define DEADLINE_NS    (5ULL * 1000 * 1000 * 1000)
-#define WARNING_NEEDLE "bucket mutex held past the reader spin bound"
+#define WARNING_NEEDLE "bucket mutex held past the reader wait gate"
 
 static const char *g_case = "?";
 
@@ -81,8 +74,9 @@ worker_fn(void *arg)
 {
     worker_t *w = arg;
     if (w->is_add) {
-        // Adding an already-present key: acquire_or_add probes to the stranded
-        // bucket, then reports "already present" (false) once it can lock it.
+        // Add an EXISTING key: it must probe to the stranded bucket without
+        // filling a new one, or the put path could trigger a resize/migration
+        // and the test would exercise the migrator instead of the reader wait.
         bool r     = _n00b_dict_untyped_add(w->d, STRANDED_KEY, STRANDED_VALUE);
         w->result  = (void *)(uintptr_t)r;
     }
@@ -112,9 +106,19 @@ sleep_ms(long ms)
 static int
 run_case(bool is_add)
 {
-    // Lower the reader spin bound so the backoff is reached quickly; production
-    // uses a bound far above any legitimate wait (see dict_untyped.c).
-    n00b_dict_reader_spin_limit_set(256);
+    // Capture fd 2 BEFORE shrinking the gate: the gate is process-global, so a
+    // preempted holder in any other dict could emit the one-shot diagnostic,
+    // and it must land in the capture or the exactly-once assert fails.
+    fflush(stderr);
+    int  saved_fd2 = dup(2);
+    char tmpl[]    = "/tmp/n00b_reader_strandXXXXXX";
+    int  cap_fd    = mkstemp(tmpl);
+    if (saved_fd2 < 0 || cap_fd < 0) {
+        fail("could not set up stderr capture");
+    }
+    dup2(cap_fd, 2);
+
+    n00b_dict_reader_strand_gate_set(2ULL * 1000 * 1000);
 
     n00b_dict_untyped_t d;
     n00b_dict_untyped_init(&d,
@@ -124,16 +128,6 @@ run_case(bool is_add)
 
     _n00b_dict_untyped_put(&d, STRANDED_KEY, STRANDED_VALUE);
     _n00b_dict_untyped_put(&d, HEALTHY_KEY, HEALTHY_VALUE);
-
-    // Capture fd 2 (the diagnostic goes there via n00b_raw_write).
-    fflush(stderr);
-    int  saved_fd2 = dup(2);
-    char tmpl[]    = "/tmp/n00b_reader_strandXXXXXX";
-    int  cap_fd    = mkstemp(tmpl);
-    if (saved_fd2 < 0 || cap_fd < 0) {
-        fail("could not set up stderr capture");
-    }
-    dup2(cap_fd, 2);
 
     n00b_dict_untyped_bucket_t *stranded = strand_bucket(&d, STRANDED_KEY);
     if (!stranded) {
@@ -165,7 +159,8 @@ run_case(bool is_add)
         sleep_ms(5);
     }
 
-    // Observations while the strand is still held.
+    // Sample these while the strand is still held; after the clear below the
+    // workers legitimately return and the healthy-key read proves nothing.
     bool any_returned = false;
     for (int i = 0; i < N_WORKERS; i++) {
         if (atomic_load(&workers[i].returned)) {
@@ -191,7 +186,6 @@ run_case(bool is_add)
         }
     }
 
-    // Restore stderr and read what the capture holds.
     fflush(stderr);
     dup2(saved_fd2, 2);
     close(saved_fd2);
@@ -211,7 +205,6 @@ run_case(bool is_add)
         p += 1;
     }
 
-    // Now evaluate — everything is cleaned up.
     if (!reached) {
         fail("readers never parked (backoff counter did not reach target)");
     }
