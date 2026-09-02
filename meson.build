@@ -4759,21 +4759,7 @@ ct_image_gc_test = executable('test_ct_image_gc',
         'include_directories': incdir + include_directories('src/crt'),
     },
 )
-# QUARANTINED (n00b#234). It fails for a real reason: a TYPE_LAYOUT scan
-# descriptor gets a 1-word allocation against a 2-word element stride.
-#
-# On main today that failure presents as a HANG, not an abort -- the assertion
-# fires inside the collector and the reporter allocates, which re-enters the
-# collector. It survives a 300s timeout, so a timeout bump does not help, and
-# meson reports a timeout as TIMEOUT regardless of should_fail. Hence
-# 'known-broken' (which CI does not run) rather than should_fail. The reporting
-# half is fixed separately (#234's assert change), after which this aborts
-# promptly instead -- still failing, still correctly quarantined here.
-#
-# Stays visible and runnable on demand:
-#   meson test --suite known-broken
-# Move back to 'unit' once the layout violation itself is fixed.
-test('ct_image_gc', ct_image_gc_test, suite: 'known-broken', timeout: 120)
+test('ct_image_gc', ct_image_gc_test, suite: 'unit')
 
 buffer_baked_equiv_test = executable('test_buffer_baked_equiv',
     ['test/unit/test_buffer_baked_equiv.c'],
