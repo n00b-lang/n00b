@@ -41,6 +41,10 @@ typedef struct {
     uint64_t               scalar_tail;
 } marshal_limited_scan_t;
 
+typedef struct {
+    void *ptr;
+} marshal_precise_ptr_t;
+
 #define TEST_MARSHAL_OP_ALLOC  UINT32_C(0xe11cbab0)
 #define TEST_MARSHAL_OP_CPATCH UINT32_C(0xe31cbab0)
 #define TEST_MARSHAL_OP_SPATCH UINT32_C(0xe41cbab0)
@@ -317,6 +321,41 @@ marshal_payload_front_base(test_marshal_stream_header_t *hdr)
 {
     (void)hdr;
     return (sizeof(test_marshal_stream_header_t) + 15u) & ~(size_t)15u;
+}
+
+static n00b_buffer_t *
+buffer_copy_with_root_word(n00b_buffer_t *buf, uint64_t value, bool add_cpatch)
+{
+    _n00b_buffer_rlock(buf);
+    int64_t len   = (int64_t)buf->byte_len;
+    size_t  extra = add_cpatch ? sizeof(test_marshal_cpatch_record_t) : 0;
+    char   *bytes = n00b_alloc_array(char, (size_t)len + extra);
+    memcpy(bytes, buf->data, (size_t)len);
+    _n00b_buffer_unlock(buf);
+
+    test_marshal_stream_header_t *hdr = (void *)bytes;
+    size_t payload_base = marshal_payload_front_base(hdr);
+    CHECK(payload_base + hdr->root_offset + sizeof(uint64_t)
+          <= sizeof(*hdr) + hdr->flags);
+    *(uint64_t *)(bytes + payload_base + hdr->root_offset) = value;
+
+    if (add_cpatch) {
+        size_t stop_ix = (size_t)len - sizeof(test_marshal_stop_record_t);
+        test_marshal_stop_record_t *stop = (void *)(bytes + stop_ix);
+        CHECK(stop->op == TEST_MARSHAL_OP_STOP);
+        CHECK(stop->end_of_stream == 1);
+
+        test_marshal_cpatch_record_t patch = {
+            .op       = TEST_MARSHAL_OP_CPATCH,
+            .reserved = 0,
+            .vaddr    = ((uint64_t)hdr->base_address << 32) | hdr->root_offset,
+            .value    = value,
+        };
+        memmove(bytes + stop_ix + sizeof(patch), stop, sizeof(*stop));
+        memcpy(bytes + stop_ix, &patch, sizeof(patch));
+    }
+
+    return n00b_buffer_from_bytes(bytes, len + (int64_t)extra);
 }
 
 static size_t
@@ -683,6 +722,34 @@ test_cycle_shared_and_collision(void)
     assert(root->next == root->alias);
     n00b_gc_unregister_root(root);
 
+}
+
+static void
+test_precise_legacy_pointer_rejected(void)
+{
+    n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
+    marshal_precise_ptr_t *src = n00b_alloc_with_opts(
+        marshal_precise_ptr_t,
+        &(n00b_alloc_opts_t){
+            .allocator = (n00b_allocator_t *)arena,
+            .scan_kind = N00B_GC_SCAN_KIND_EVERY_OTHER,
+        });
+
+    uint32_t base_address = UINT32_C(0x13572468);
+    src->ptr = nullptr;
+    n00b_buffer_t *legacy = n00b_marshal(src, .base_address = base_address);
+    CHECK(legacy != nullptr);
+
+    uint32_t raw_high = base_address + 1u;
+    n00b_buffer_t *raw = buffer_copy_with_root_word(
+        legacy,
+        ((uint64_t)raw_high << 32) | UINT64_C(0x1000),
+        false);
+    assert_unmarshal_status(raw, N00B_MARSHAL_ERR_BAD_STREAM);
+
+    uint64_t collision = ((uint64_t)base_address << 32) | UINT64_C(0x1000);
+    n00b_buffer_t *cpatch = buffer_copy_with_root_word(legacy, collision, true);
+    assert_unmarshal_status(cpatch, N00B_MARSHAL_ERR_BAD_STREAM);
 }
 
 static void
@@ -1172,6 +1239,7 @@ main(int argc, char **argv)
     n00b_init(&runtime, argc, argv);
 
     test_cycle_shared_and_collision();
+    test_precise_legacy_pointer_rejected();
     test_heap_unmarshal_preserves_cached_hash();
     test_static_pointer_patch();
     test_portable_static_pointer_relocation();

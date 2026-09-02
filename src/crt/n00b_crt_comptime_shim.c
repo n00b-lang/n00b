@@ -67,7 +67,7 @@ n00b_rwlock_t *
 n00b_crt_alloc_static_rwlock(void)
 {
     n00b_rwlock_t *lock = n00b_alloc(n00b_rwlock_t);
-    n00b_rw_init(lock);
+    _n00b_rw_init(lock, nullptr);
     return lock;
 }
 
