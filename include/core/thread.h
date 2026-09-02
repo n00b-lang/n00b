@@ -149,7 +149,7 @@ struct n00b_thread_record_t {
  * A small ordered set of OS-agnostic tiers a caller asks for via
  * `n00b_thread_spawn(.priority = …)` / `.scheduler = …`.  The launcher maps
  * the requested tier to each OS's native scheduling primitive on the worker
- * itself (no pthread:
+ * itself:
  *
  *   - macOS: Mach `thread_policy_set(THREAD_PRECEDENCE_POLICY)` with a signed
  *     `importance` (idle → -2 … realtime → +2).  Precedence is the queryable
@@ -218,7 +218,7 @@ typedef struct {
  * `n00b_thread_spawn(.affinity = &(n00b_thread_cpuset_t){.mask = …})`.  The set
  * is a FIXED 64-bit bitmask: bit `n` set means "CPU `n` is in the set" (so this
  * representation addresses logical CPUs 0..63; see the >64-CPU note below).
- * The launcher applies the set to the worker ITSELF (no pthread),
+ * The launcher applies the set to the worker itself,
  * with per-OS strength:
  *
  *   - Linux: HARD PIN via raw `sched_setaffinity(0, sizeof(unsigned long),
@@ -432,7 +432,7 @@ struct n00b_thread_t {
     n00b_thread_cpuset_t        affinity; ///< Requested CPU affinity set (mask == 0 = none).
     n00b_thread_crash_handler_t crash_handler; ///< Registered crash callback (nullptr = none)
     void                 *crash_handler_data;  ///< Opaque argument passed to @ref crash_handler
-    void                 *tcb;       ///< Worker's platform TSD block (nullptr if none).
+    void                 *tcb;       ///< Linux raw-clone TCB (nullptr on other platforms).
     struct n00b_thread_t *reap_next; ///< Pending-reap queue link (rt->reap_pending).
     _Atomic(struct n00b_epoch_hdr_t *) retire_list;
     /// Nesting depth of n00b_epoch_acquire/yield on this thread. Epoch-protected
@@ -445,15 +445,11 @@ struct n00b_thread_t {
     /**
      * @brief macOS: the worker's Mach thread port for the OS-death check.
      *
-     * Seeded by the spawner from `thread_create` (the same port that goes
-     * into TSD slot 3).  The worker self-terminates via
-     * `bsdthread_terminate`; the death edge is this port becoming
-     * unreachable, detected by the reaper with `thread_info(mach_port, …)`
-     * returning a non-`KERN_SUCCESS` error (verified: a self-terminated
-     * worker's control-port name turns into a dead name and `thread_info`
-     * fails with `MACH_SEND_INVALID_DEST`).  The reaper deallocates the port
-     * name after confirming death so it cannot be recycled under us.  0 on
-     * non-macOS and for the main thread.
+     * Captured by the worker with `mach_thread_self()` before it is published.
+     * The death edge is this port becoming unreachable after the detached
+     * pthread returns, detected by `thread_info(mach_port, …)` returning a
+     * non-`KERN_SUCCESS` error. The reaper deallocates the port name after
+     * confirming death. 0 on non-macOS and for the main thread.
      */
     uint32_t                 os_thread_port;
     /**
@@ -771,13 +767,14 @@ extern int32_t n00b_thread_generation(void);
 /**
  * @brief Spawn a new thread with full n00b lifecycle.
  *
- * Reserves a thread slot, allocates an n00b callstack, and creates a raw
- * OS thread (no pthread) wrapped in the n00b launcher (GC registration,
- * STW participation, lock cleanup on exit).
+ * Reserves a thread slot, allocates an n00b callstack, and creates a native
+ * worker wrapped in the n00b launcher (GC registration, STW participation,
+ * lock cleanup on exit). macOS uses a detached pthread on the n00b callstack;
+ * Linux uses raw clone and Windows switches a native thread onto that stack.
  *
  * Threads are detached from the spawner by default. A spawned worker
  * needs NO join to avoid a leak.  Its OS resources (the 8 MiB
- * callstack and the minimal TCB) are reclaimed by the runtime reaper
+ * callstack and, on Linux, the minimal TCB) are reclaimed by the runtime reaper
  * at OS-CONFIRMED death (the worker enqueues itself as it exits; the
  * reaper returns the callstack to the callstack pool and frees the
  * TCB only once the OS confirms it is off that stack — macOS dead
@@ -801,15 +798,11 @@ extern int32_t n00b_thread_generation(void);
  * @param fn   Thread entry point.
  * @param arg  Argument passed to @p fn.
  *
- * @kw name           OS thread name applied to the worker (per-OS raw
- *                    primitive) and stored on the worker's
+ * @kw name           OS thread name applied where supported and stored on the worker's
  *                    n00b_thread_t::name.  nullptr (default) leaves the
  *                    worker unnamed.  Linux applies it via raw
  *                    prctl(PR_SET_NAME); Win32 via SetThreadDescription;
- *                    macOS stores it on the struct only (the off-libpthread
- *                    raw proc_info SETCONTROL path is a surfaced deferral —
- *                    its kernel-internal call number is unverifiable from any
- *                    SDK header, so it is not guessed on the worker path).
+ *                    macOS stores it on the struct only.
  * @kw finalizer      Cleanup callback run EXACTLY ONCE on the worker as it
  *                    exits, BEFORE the join handshake wakes the joiner
  *                    (so a joiner never observes "done" before cleanup).
@@ -1035,12 +1028,11 @@ extern n00b_allocator_t *n00b_thread_scratch_pool(void);
  * @kw acquired_slot Pre-acquired thread slot index (0 = auto-assign).
  * @kw callstack     The worker's OS callstack (nullptr for the main thread).
  *                   When set, the thread's stack bounds are taken directly
- *                   from the callstack region (a raw worker self-describes its
+ *                   from the callstack region (the worker self-describes its
  *                   bounds; no OS stack query is needed) and recorded on the
  *                   thread so the n00b_thread_self() worker-masking back-check resolves.
- * @kw os_thread_port macOS only: the worker's Mach control port (the
- *                   thread_create port the spawner holds, identical to the
- *                   reaper's death-edge port).  Set on the thread BEFORE it is
+ * @kw os_thread_port macOS only: the worker's retained Mach control port,
+ *                   captured before runtime initialization. Set on the thread BEFORE it is
  *                   published as a STW participant so the pure-preemptive STW can
  *                   suspend it from the instant it appears.  0
  *                   (default) for the main thread and on Linux/Windows, which
