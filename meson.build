@@ -6453,7 +6453,36 @@ foreach name : regex_test_names
     # `suite: 'long'` so build.sh's default `add_test_no_suite long` (when
     # `N00B_TEST_ALL=0` and no explicit suites/tests requested) excludes
     # them; opt in via `N00B_TEST_ALL=1` or `--all-tests`.
-    if name == 'engine' or name == 'fuzz_compare'
+    #
+    # regex_engine additionally carries `suite: 'stress'`, which is what
+    # keeps it OUT of per-PR CI (n00b#13).
+    #
+    # Why, in the author's words: this is a line-by-line port of resharp and
+    # "one very big stress test that should only have enough time to pass
+    # when my laptop is completely idle, because I don't like to wait." The
+    # 900s budget is sized for an idle machine, not for a 3-core/7GB shared
+    # runner running four test processes at once. It timed out there roughly
+    # two runs in three while passing in 66s locally.
+    #
+    # So this is a BUDGET mismatch, not a defect. No bug was ever
+    # demonstrated -- only "it did not finish in 900s", which is the expected
+    # outcome for a stress test on a loaded box. Raising the budget further
+    # just makes a red run take longer to go red.
+    #
+    # It is deliberately NOT in 'known-broken': that suite means "this is
+    # broken and should be fixed", which would be a false claim here. It is
+    # in 'stress', alongside the other tests whose results depend on having
+    # the machine to themselves. Run it with:
+    #
+    #     meson test --suite stress          # or
+    #     N00B_TEST_ALL=1 ./build.sh         # or
+    #     ./build_debug/test_regex_engine
+    if name == 'engine'
+        test_suite = ['stress', 'long']
+        # 900s: sized for an idle machine. See the note above -- if this is
+        # not enough, the machine is busy; do not raise it.
+        test_timeout = 900
+    elif name == 'fuzz_compare'
         test_suite = ['unit', 'long']
         # 900/90: see the CI-runner note above the gc timeouts (n00b#261).
         test_timeout = 900
