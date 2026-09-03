@@ -159,21 +159,20 @@ n00b_user_pool_audit_stats(void);
 extern n00b_system_pool_audit_stats_t
 n00b_conduit_pool_audit_stats(void);
 
-// Is the audit in this build at all, and is a given runtime pool under it? Read
-// these before reading any audit snapshot: a zeroed snapshot means "nothing was
-// measured" when these are false, and "this pool holds nothing" only when they
-// are true. Callers that publish audit numbers should publish these beside them.
+// Reports whether per-site pool auditing is available in this build. Callers
+// should publish this state beside audit snapshots because an unavailable audit
+// also returns a zeroed snapshot.
 extern bool
 n00b_pool_audit_compiled(void);
 
+// Report whether each runtime pool is collecting per-site audit data.
 extern bool
 n00b_user_pool_audit_enabled(void);
 
 extern bool
 n00b_conduit_pool_audit_enabled(void);
 
-// False even where the audit IS compiled in: the runtime does not open
-// system_pool with .alloc_audit.
+// The default runtime does not enable auditing for system_pool.
 extern bool
 n00b_system_pool_audit_enabled(void);
 

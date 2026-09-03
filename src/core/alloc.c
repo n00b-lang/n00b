@@ -428,11 +428,7 @@ _n00b_alloc_raw(size_t             n,
     // Currently never pass parameters to the allocator. For future use.
     r = (*opts->allocator->zero_alloc)(opts->allocator, request, nullptr);
 #ifdef N00B_POOL_ALLOC_AUDIT
-    // Guarded on the same predicate that decided the layout above. Calling the
-    // hook unconditionally repeated that lookup, across a TU boundary, for
-    // every allocation in the process -- nearly all of them from pools that are
-    // not audited.
-    //
+    // n00b_alloc_audited also controls the trailing site-word layout above.
     // A caller-supplied alloc_site overrides the innermost N00B_LOC_STRING()
     // capture so per-site audit traces back to the real instantiation.
     if (n00b_alloc_audited) {

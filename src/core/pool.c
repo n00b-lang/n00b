@@ -882,11 +882,8 @@ n00b_user_pool_audit_stats(void)
     return (n00b_system_pool_audit_stats_t){0};
 }
 
-// Whether the audit is in this build, and whether a given pool is actually
-// under it. An all-zero audit block is otherwise unfalsifiable: it reads
-// identically whether the pool holds nothing or nothing was measured. That
-// ambiguity is what made an 8.9 GB user_pool reporting every site empty look
-// like a user_pool fault rather than an audit that was never compiled in.
+// A zeroed snapshot is ambiguous unless callers can distinguish an unavailable
+// audit from an audited pool with no live allocations.
 bool
 n00b_pool_audit_compiled(void)
 {
@@ -919,9 +916,7 @@ n00b_conduit_pool_audit_enabled(void)
 #endif
 }
 
-// False even in a build with the audit compiled in: the runtime does not open
-// system_pool with .alloc_audit, so n00b_system_pool_audit_stats is
-// structurally zero rather than observed to be empty.
+// Runtime initialization leaves auditing disabled for system_pool.
 bool
 n00b_system_pool_audit_enabled(void)
 {

@@ -1,25 +1,5 @@
-/*
- * test_pool_audit.c
- *
- * The per-allocation-site pool audit exists to name the call site responsible
- * for a pool's growth. On an 8.9 GB gateway user_pool it reported every field
- * zero and all sixteen site slots empty (crashappsec/wax#665), and nothing in
- * the output distinguished "this pool holds nothing" from "nothing was
- * measured" -- so the reading was unfalsifiable and was taken for a user_pool
- * fault when the audit was simply not compiled in.
- *
- * Two things are asserted, and which one runs depends on the build:
- *
- *   audit compiled  -> it must actually attribute. N live allocations of a
- *                      known size from one known site, and zeros fail.
- *   audit absent    -> the snapshot must be zero AND the accessors must say
- *                      so, because that pairing is the contract any consumer
- *                      publishing these numbers relies on.
- *
- * Neither branch passes by saying nothing.
- */
+/* Verify pool-audit availability reporting and per-site attribution. */
 
-#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -37,8 +17,7 @@ typedef struct {
 
 [[n00b::nomap]] static n00b_pool_t g_audited;
 
-// Held so the audit's live counters cannot be explained by anything freeing
-// underneath the assertions.
+// Keep allocations live until after the snapshot assertions.
 static void *g_live[AUDIT_LIVE_ALLOCS];
 
 static int
@@ -51,6 +30,8 @@ fail(const char *why)
 int
 main(int argc, char **argv)
 {
+    bool require_compiled = argc > 1
+                            && strcmp(argv[1], "--require-compiled") == 0;
     n00b_runtime_t runtime;
     n00b_init(&runtime, argc, argv);
 
@@ -60,8 +41,10 @@ main(int argc, char **argv)
                                                .name = "test_pool_audit");
 
     if (!n00b_pool_audit_compiled()) {
-        // The build cannot answer. That is allowed; claiming to have looked is
-        // not. Everything must read consistently absent.
+        if (require_compiled) {
+            n00b_shutdown();
+            return fail("audit required but not compiled");
+        }
         int rc = 0;
         if (n00b_pool_alloc_audit_enabled(audited)
             || n00b_user_pool_audit_enabled()
@@ -96,6 +79,10 @@ main(int argc, char **argv)
         n00b_shutdown();
         return fail("a runtime pool opened with .alloc_audit reports disabled");
     }
+    if (n00b_system_pool_audit_enabled()) {
+        n00b_shutdown();
+        return fail("system_pool unexpectedly reports audit enabled");
+    }
 
     for (int i = 0; i < AUDIT_LIVE_ALLOCS; i++) {
         g_live[i] = n00b_alloc_with_opts(
@@ -119,8 +106,6 @@ main(int argc, char **argv)
     else if (a.live_bytes < (uint64_t)AUDIT_LIVE_ALLOCS * AUDIT_OBJ_BYTES) {
         rc = fail("live_bytes is below the bytes this test is holding");
     }
-    // The attribution itself, which is the whole point: at least one site, and
-    // it has to be this file rather than an empty string.
     else if (a.top_count == 0) {
         rc = fail("no top site reported for a pool holding live allocations");
     }
@@ -139,9 +124,7 @@ main(int argc, char **argv)
         rc = fail("top site 0 under-reports the bytes attributed to it");
     }
 
-    // Freeing has to move live_bytes back down, or "a site whose live bytes
-    // never recede" says nothing -- and that reading is the leak signal the
-    // audit is for.
+    // Live bytes must fall after the allocations are released.
     if (rc == 0) {
         uint64_t live_before = a.live_bytes;
         for (int i = 0; i < AUDIT_LIVE_ALLOCS; i++) {
