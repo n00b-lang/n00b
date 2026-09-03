@@ -3106,6 +3106,15 @@ gc_test = executable('test_gc',
 )
 test('gc', gc_test, suite: 'unit')
 
+# Runs in every configuration. With the audit compiled in
+# (-Ddebug_live_census=true) it asserts the attribution; without it, it asserts
+# that the snapshot and the accessors agree the audit is absent.
+pool_audit_test = executable('test_pool_audit',
+    ['test/unit/test_pool_audit.c'],
+    kwargs: test_common_kwargs,
+)
+test('pool_audit', pool_audit_test, suite: 'unit')
+
 gc_census_test = executable('test_gc_census',
     ['test/unit/test_gc_census.c'],
     kwargs: test_common_kwargs,

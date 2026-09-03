@@ -427,12 +427,22 @@ _n00b_alloc_raw(size_t             n,
 
     // Currently never pass parameters to the allocator. For future use.
     r = (*opts->allocator->zero_alloc)(opts->allocator, request, nullptr);
+#ifdef N00B_POOL_ALLOC_AUDIT
+    // Guarded on the same predicate that decided the layout above. Calling the
+    // hook unconditionally repeated that lookup, across a TU boundary, for
+    // every allocation in the process -- nearly all of them from pools that are
+    // not audited.
+    //
     // A caller-supplied alloc_site overrides the innermost N00B_LOC_STRING()
     // capture so per-site audit traces back to the real instantiation.
-    n00b_system_pool_audit_alloc(opts->allocator,
-                                 r,
-                                 request,
-                                 opts->alloc_site ? opts->alloc_site : location);
+    if (n00b_alloc_audited) {
+        n00b_system_pool_audit_alloc(opts->allocator,
+                                     r,
+                                     request,
+                                     opts->alloc_site ? opts->alloc_site
+                                                      : location);
+    }
+#endif
 
     if (opts->allocator->add_inline_header) {
         hdr = r;

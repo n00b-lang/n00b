@@ -882,6 +882,57 @@ n00b_user_pool_audit_stats(void)
     return (n00b_system_pool_audit_stats_t){0};
 }
 
+// Whether the audit is in this build, and whether a given pool is actually
+// under it. An all-zero audit block is otherwise unfalsifiable: it reads
+// identically whether the pool holds nothing or nothing was measured. That
+// ambiguity is what made an 8.9 GB user_pool reporting every site empty look
+// like a user_pool fault rather than an audit that was never compiled in.
+bool
+n00b_pool_audit_compiled(void)
+{
+#ifdef N00B_POOL_ALLOC_AUDIT
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool
+n00b_user_pool_audit_enabled(void)
+{
+#ifdef N00B_POOL_ALLOC_AUDIT
+    n00b_runtime_t *rt = n00b_default_runtime_or_null();
+    return rt != nullptr && rt->user_pool.alloc_audit;
+#else
+    return false;
+#endif
+}
+
+bool
+n00b_conduit_pool_audit_enabled(void)
+{
+#ifdef N00B_POOL_ALLOC_AUDIT
+    n00b_runtime_t *rt = n00b_default_runtime_or_null();
+    return rt != nullptr && rt->conduit_pool.alloc_audit;
+#else
+    return false;
+#endif
+}
+
+// False even in a build with the audit compiled in: the runtime does not open
+// system_pool with .alloc_audit, so n00b_system_pool_audit_stats is
+// structurally zero rather than observed to be empty.
+bool
+n00b_system_pool_audit_enabled(void)
+{
+#ifdef N00B_POOL_ALLOC_AUDIT
+    n00b_runtime_t *rt = n00b_default_runtime_or_null();
+    return rt != nullptr && rt->system_pool.alloc_audit;
+#else
+    return false;
+#endif
+}
+
 n00b_system_pool_audit_stats_t
 n00b_conduit_pool_audit_stats(void)
 {
