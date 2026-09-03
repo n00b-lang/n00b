@@ -249,3 +249,73 @@ jobs:
           name: meson-logs-${{ matrix.os }}
           path: build_debug/meson-logs/
           if-no-files-found: warn
+
+      # n00b#276. meson escalates its own deadlines -- SIGTERM then SIGKILL to
+      # the process GROUP, then a direct kill (mesonbuild/mtest.py `_kill`) --
+      # so the bare-`timeout(1)` bug that issue describes is not inherited by
+      # a `meson test` run. The repo has no bare `timeout N ./test_x` either;
+      # the orphans in #276 came from interactive invocations.
+      #
+      # What can still escape is a grandchild that left the group: a fixture
+      # daemon, or anything that called setsid(). That produces no failure,
+      # no output and no exit code -- the three test processes in #276 had
+      # been wedged for 11.8 hours and were found by accident, in an unrelated
+      # spindump. On a self-hosted or reused runner they accumulate.
+      #
+      # So look for them, print what they were doing, and fail. A hung test
+      # that leaves no trace is worse than one that fails loudly.
+      - name: Fail if any test process survived the suite
+        if: always()
+        run: |
+          set -u
+          dir="$GITHUB_WORKSPACE/build_debug/"
+
+          # Match the EXECUTABLE PATH, not the command line. Grepping the full
+          # args for "build_debug" also matches this step's own shell and the
+          # grep itself, so the check fires every run and stops meaning
+          # anything -- which is how a CI check becomes noise. A token has to
+          # START with the absolute build dir to count.
+          # The dir goes through the ENVIRONMENT, not `awk -v`. An -v
+          # assignment lands in awk's OWN argv, so awk matches itself and the
+          # check fires on every run:
+          #
+          #   ##[error]test processes survived the suite (n00b#276)
+          #    7887  00:00  awk -v d /.../build_debug/ -v self
+          #
+          # Own pid and own parent are skipped for the same reason.
+          leftovers=$(N00B_SWEEP_DIR="$dir" N00B_SWEEP_SELF="$$" \
+            ps -eo pid=,ppid=,etime=,args= 2>/dev/null \
+            | N00B_SWEEP_DIR="$dir" N00B_SWEEP_SELF="$$" awk '
+                BEGIN { d = ENVIRON["N00B_SWEEP_DIR"]
+                        self = ENVIRON["N00B_SWEEP_SELF"] }
+                $1 == self || $2 == self { next }
+                { for (i = 4; i <= NF; i++)
+                    if (index($i, d) == 1) { print; next } }
+              ')
+
+          if [ -z "$leftovers" ]; then
+            echo "No test process survived the suite."
+            exit 0
+          fi
+
+          echo "::error::test processes survived the suite (n00b#276)"
+          printf '%s\n' "$leftovers"
+
+          # A wedged n00b test never prints its own assertion: the handler
+          # deadlocks trying to report with the world stopped (#234). The
+          # stack is the only way to learn which assertion fired, so take one
+          # before killing. Best-effort -- never let this mask the failure.
+          printf '%s\n' "$leftovers" | awk '{print $1}' | while read -r pid; do
+            echo "--- stack for pid $pid ---"
+            if command -v sample >/dev/null 2>&1; then
+              sample "$pid" 1 -f /dev/stdout 2>/dev/null || echo "(sample failed)"
+            elif command -v gdb >/dev/null 2>&1; then
+              gdb -batch -p "$pid" -ex 'thread apply all bt' 2>/dev/null \
+                || echo "(gdb failed; may need ptrace_scope=0)"
+            else
+              echo "(no sampler on this runner)"
+            fi
+            kill -9 "$pid" 2>/dev/null || true
+          done
+
+          exit 1
