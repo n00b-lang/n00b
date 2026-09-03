@@ -2299,6 +2299,15 @@ worker_pool_gc_stress_test = executable('test_worker_pool_gc_stress',
 test('worker_pool_gc_stress', worker_pool_gc_stress_test, suite: 'unit',
      timeout: 120)
 
+# A timed condition wait on a never-notified CV must return by its deadline
+# under spurious wakes (n00b#307).
+condition_timed_wait_test = executable('test_condition_timed_wait',
+    ['test/unit/test_condition_timed_wait.c'],
+    kwargs: test_common_kwargs,
+)
+test('condition_timed_wait', condition_timed_wait_test, suite: 'unit',
+     timeout: 60)
+
 # Deterministic named-object-graph repro of the worker-thread GC trace defect.
 gc_worker_trace_test = executable('test_gc_worker_trace',
     ['test/unit/test_gc_worker_trace.c'],

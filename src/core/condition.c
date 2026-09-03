@@ -198,7 +198,7 @@ base_wait(n00b_condition_t *cv,
                 timeout -= elapsed;
                 last_ts = cur_ts;
 
-                if (timeout < 0) {
+                if (timeout <= 0) {
                     uint32_t expected = N00B_CV_WAIT_LISTED;
 
                     if (n00b_atomic_cas(&rec->cv_info.wait_state,
