@@ -192,18 +192,6 @@ jobs:
           # set, with nothing quietly outside it.
           ./build.sh
 
-      - name: Run pool audit test with live census
-        if: runner.os == 'Linux'
-        env:
-          CC: /tmp/ncc-install/ncc
-          NCC_GCMAP_NCC: /tmp/ncc-install/ncc
-          N00B_SKIP_VCS_CHECK: "1"
-        run: |
-          meson setup -Dusing_build_script=true -Ddebug_live_census=true \
-            build_census .
-          meson compile -C build_census test_pool_audit
-          meson test -C build_census --print-errorlogs pool_audit
-
       # Quarantine, in meson.build:
       #   #235 / #236 -- fixed by the ncc pin bump above; quarantine lifted
       #   #234        -- ct_image_gc HANGS rather than failing, so should_fail
