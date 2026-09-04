@@ -172,6 +172,78 @@ dict_untyped_epoch_exit(bool active)
 // migration; it is deliberately far above any legitimate wait.
 #define N00B_DICT_MIGRATE_SPIN_LIMIT (1ULL << 32)
 
+// Reader-side strand handling for the bucket-MUTEX wait in the two acquire
+// helpers. A live holder normally releases within a few instructions, so a bit
+// that stays set for the whole time gate is treated as likely stranded; without
+// a bound each waiter pins a core indefinitely. Past the spin threshold the
+// waiter starts a clock
+// (the threshold keeps clock reads off the fast path); past the gate it sleeps
+// between retries and emits one diagnostic. The wait itself is never abandoned:
+// returning early would report a present key as absent while a holder still
+// owns the bucket. The gate must stay far above any legitimate losing streak
+// under write contention -- sleeping on a merely-contended bucket collapses
+// writer throughput.
+#define N00B_DICT_READER_SPIN_THRESHOLD (1ULL << 20)
+#define N00B_DICT_READER_CLOCK_MASK     0x3ff
+
+static _Atomic uint64_t n00b_dict_reader_strand_gate_ns = 1000000000ULL;
+
+// Test hook: production code must not call this.
+void
+n00b_dict_reader_strand_gate_set(uint64_t ns)
+{
+    atomic_store_explicit(&n00b_dict_reader_strand_gate_ns, ns,
+                          memory_order_relaxed);
+}
+
+static _Atomic bool     n00b_dict_reader_strand_warned = false;
+// Never reset; a test needing a clean count must run in a fresh process.
+static _Atomic uint64_t n00b_dict_reader_backoff_count = 0;
+
+uint64_t
+n00b_dict_reader_backoff_count_get(void)
+{
+    return atomic_load_explicit(&n00b_dict_reader_backoff_count,
+                                memory_order_relaxed);
+}
+
+static inline void
+n00b_dict_reader_strand_backoff(void)
+{
+    atomic_fetch_add_explicit(&n00b_dict_reader_backoff_count,
+                              1,
+                              memory_order_relaxed);
+    if (!atomic_exchange(&n00b_dict_reader_strand_warned, true)) {
+        static const char m[] =
+            "n00b_dict: bucket mutex held past the reader wait gate; treating as "
+            "a stranded lock and parking the reader instead of spinning a core\n";
+        n00b_raw_write(2, m, sizeof(m) - 1);
+    }
+    base_nanosleep_ns(N00B_NS_PER_MS);
+}
+
+// Called on every losing iteration of a bucket-MUTEX wait. Cheap until the
+// spin threshold; then reads the clock every CLOCK_MASK+1 iterations and backs
+// off once the gate has elapsed.
+static inline void
+n00b_dict_reader_wait_tick(uint64_t *spins, uint64_t *wait_start_ns)
+{
+    if (++*spins < N00B_DICT_READER_SPIN_THRESHOLD
+        || (*spins & N00B_DICT_READER_CLOCK_MASK) != 0) {
+        return;
+    }
+    uint64_t now = base_monotonic_ns();
+    if (*wait_start_ns == 0) {
+        *wait_start_ns = now;
+        return;
+    }
+    uint64_t gate = atomic_load_explicit(&n00b_dict_reader_strand_gate_ns,
+                                         memory_order_relaxed);
+    if (now - *wait_start_ns >= gate) {
+        n00b_dict_reader_strand_backoff();
+    }
+}
+
 // Undo a partially-acquired migration: drop the COPYING/MOVING bits we OR'd
 // onto the buckets, then release the dict-wide migration bit and wake everyone
 // parked on it. Without the flag clear, readers would keep taking the
@@ -430,6 +502,8 @@ n00b_acquire_if_present(n00b_dict_untyped_t       *d,
         for (uint32_t i = 0; i <= last_slot; i++) {
             cur = &store->buckets[bix];
 
+            uint64_t spins         = 0;
+            uint64_t wait_start_ns = 0;
             do {
                 flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
                 if (flags & N00B_HT_FLAG_MOVING) {
@@ -445,6 +519,9 @@ n00b_acquire_if_present(n00b_dict_untyped_t       *d,
                         n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
                     }
                     goto try_again;
+                }
+                if (flags & N00B_HT_FLAG_MUTEX) {
+                    n00b_dict_reader_wait_tick(&spins, &wait_start_ns);
                 }
             } while (flags & N00B_HT_FLAG_MUTEX);
 
@@ -505,6 +582,8 @@ n00b_acquire_or_add(n00b_dict_untyped_t        *d,
         for (uint32_t i = 0; i <= last_slot; i++) {
             cur = &store->buckets[bix];
 
+            uint64_t spins         = 0;
+            uint64_t wait_start_ns = 0;
             do {
                 flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
                 if (flags & (N00B_HT_FLAG_COPYING)) {
@@ -515,6 +594,9 @@ n00b_acquire_or_add(n00b_dict_untyped_t        *d,
                         n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
                     }
                     goto try_again;
+                }
+                if (flags & N00B_HT_FLAG_MUTEX) {
+                    n00b_dict_reader_wait_tick(&spins, &wait_start_ns);
                 }
             } while (flags & N00B_HT_FLAG_MUTEX);
 

@@ -4744,6 +4744,19 @@ dict_untyped_test = executable('test_dict_untyped',
 )
 test('dict_untyped', dict_untyped_test, suite: 'integration')
 
+dict_reader_strand_test = executable('test_dict_reader_strand',
+    ['test/integration/test_dict_reader_strand.c'],
+    kwargs: test_common_kwargs,
+)
+# Each case needs its own process: the strand diagnostic guard is
+# process-global, so a second case in-process would count zero warnings.
+# is_parallel: false because the pass condition is timing-based (wait gate
+# + deadline) and a loaded machine can starve it.
+test('dict_reader_strand_get', dict_reader_strand_test,
+    args: ['get'], suite: 'integration', is_parallel: false)
+test('dict_reader_strand_add', dict_reader_strand_test,
+    args: ['add'], suite: 'integration', is_parallel: false)
+
 arena_alloc_test = executable('test_arena_alloc',
     ['test/integration/test_arena_alloc.c'],
     kwargs: test_common_kwargs,
