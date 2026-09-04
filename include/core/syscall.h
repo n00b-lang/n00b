@@ -316,4 +316,70 @@ n00b_raw_exit(int code)
 
 #endif // __APPLE__ && __aarch64__
 
-#endif // !_WIN32
+#else // _WIN32
+
+// Windows has no raw-syscall path available to us. The toolchain targets the
+// MSVC ABI (windows-component.yml passes --target=x86_64-pc-windows-msvc), so
+// there is no <unistd.h> write() and no syscall() trampoline to wrap.
+//
+// WriteFile on a raw HANDLE is the closest equivalent to the POSIX raw writes
+// above: a thin wrapper over NtWriteFile that does not allocate, does not touch
+// the CRT, and takes no user-mode lock this process holds. That last property
+// is the whole point -- callers reach for this primitive precisely when they
+// cannot use anything richer: a reader that has decided a bucket mutex is
+// stranded (#296), and the crash paths.
+//
+// Deliberately NOT _write()/_get_osfhandle(): both route through the CRT's fd
+// table, which allocates on first use and takes a per-file lock. A CRT-backed
+// implementation would compile, link, pass CI, and reintroduce exactly the
+// deadlock class this primitive exists to avoid -- the worst possible outcome,
+// because nothing here would catch it.
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX 1
+#endif
+#include <windows.h>
+
+/// Best-effort, CRT-free write to @p fd. Matches the POSIX contract above:
+/// one write, return ignored, no retry on a short write.
+///
+/// Windows resolves only fds 1 and 2, through GetStdHandle -- which honours
+/// SetStdHandle redirection. Any other fd is a silent no-op: resolving an
+/// arbitrary fd needs _get_osfhandle, i.e. the CRT, which this primitive must
+/// not touch. Every caller that passes a non-standard fd today
+/// (crash_capture.c, crash.c's log_fd) is itself inside #if !defined(_WIN32),
+/// so nothing currently relies on the general case.
+static inline void
+n00b_raw_write(int fd, const void *buf, unsigned long len)
+{
+    DWORD which;
+
+    switch (fd) {
+    case 1:
+        which = STD_OUTPUT_HANDLE;
+        break;
+    case 2:
+        which = STD_ERROR_HANDLE;
+        break;
+    default:
+        return;
+    }
+
+    HANDLE h = GetStdHandle(which);
+
+    // A service started with no console gets NULL; a failed lookup gets
+    // INVALID_HANDLE_VALUE. Neither is an error worth reacting to from a
+    // best-effort diagnostic, and faulting here would turn the message
+    // describing a problem into a second, worse one.
+    if (h == NULL || h == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
+    DWORD written = 0;
+    (void)WriteFile(h, buf, (DWORD)len, &written, NULL);
+}
+
+#endif // !_WIN32 / _WIN32
