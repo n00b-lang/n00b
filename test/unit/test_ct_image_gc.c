@@ -4,7 +4,6 @@
 
 #define N00B_USE_INTERNAL_API
 #include "n00b.h"
-#include "core/alloc.h"
 #include "core/arena.h"
 #include "core/buffer.h"
 #include "core/gc.h"
@@ -26,23 +25,6 @@ typedef struct {
     ct_gc_node_t *image_node;
     uint64_t      tag;
 } ct_gc_holder_t;
-
-static void
-set_ptr_words(void *obj, uint32_t ptr_words)
-{
-    n00b_alloc_info_t info = n00b_find_alloc_info(obj);
-
-    if (info.kind == n00b_alloc_oob) {
-        info.hdr.oob->ptr_words = ptr_words;
-        if (info.hdr.oob->hcur != nullptr) {
-            info.hdr.oob->hcur->ptr_words = ptr_words;
-        }
-        return;
-    }
-
-    CHECK(info.kind == n00b_alloc_inline);
-    info.hdr.in_line->ptr_words = ptr_words;
-}
 
 static n00b_buffer_t *
 export_one(void *root)
@@ -100,8 +82,6 @@ test_baked_image_is_pinned_and_scanned(void)
 {
     ct_gc_node_t *first  = n00b_alloc(ct_gc_node_t);
     ct_gc_node_t *second = n00b_alloc(ct_gc_node_t);
-    set_ptr_words(first, 1);
-    set_ptr_words(second, 1);
     first->next  = second;
     first->tag   = UINT64_C(0xba5ed001);
     second->next = first;
@@ -166,7 +146,6 @@ static void
 test_baked_image_rejects_heap_pointer_slots(void)
 {
     ct_gc_node_t *first = n00b_alloc(ct_gc_node_t);
-    set_ptr_words(first, 1);
     first->next = nullptr;
     first->tag  = UINT64_C(0xba5ed010);
 
@@ -181,7 +160,6 @@ test_baked_image_rejects_heap_pointer_slots(void)
 
     ct_gc_node_t *copy_first = n00b_result_get(relocate_r);
     ct_gc_node_t *external   = n00b_alloc(ct_gc_node_t);
-    set_ptr_words(external, 1);
     external->next = nullptr;
     external->tag  = UINT64_C(0xba5ed011);
     copy_first->next = external;
