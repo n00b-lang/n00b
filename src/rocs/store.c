@@ -7417,7 +7417,20 @@ rocs_store_ingest_prepared_unlocked(n00b_store_t                 *store,
             store->hot_partition_key,
             false,
             true);
-        (void)seal_r;
+        // Report what THIS call actually did (n00b#294). With defer = true the
+        // marshal runs on the seal worker, so this covers only the synchronous
+        // portion -- state checks, the writer guard, and the rotation itself.
+        // Those are failures of this ingest and belong to its result.
+        //
+        // An ASYNC seal failure is deliberately not reported here. It is not
+        // knowable at this point, and it is not this record's failure: the
+        // record is committed to a shard that is retained for retry. It
+        // surfaces from flush/close instead, which is the contract
+        // test_async_seal_failure_retains_records asserts -- both ingests Ok,
+        // the following flush ERR_VFS.
+        if (n00b_result_is_err(seal_r)) {
+            return n00b_result_err(bool, n00b_result_get_err(seal_r));
+        }
     }
 
     return n00b_result_ok(bool, true);
@@ -10249,21 +10262,30 @@ rocs_store_ingest_common(n00b_store_t     *store,
         return n00b_result_err(bool, preflight);
     }
 
-    uint64_t failed_seals_before = rocs_store_failed_seal_job_count(store);
-    auto     ingest_r            = rocs_store_ingest_prepared_unlocked(store,
+    // No post-hoc catalog inspection here (n00b#294). Every seal this ingest
+    // can be held responsible for now reports through its own return value:
+    // the route-change seal via rocs_store_ensure_hot_route_unlocked, and the
+    // size-triggered seal from rocs_store_ingest_prepared_unlocked. Async
+    // failures belong to flush/close.
+    //
+    // Inspecting the catalog afterwards cannot be made correct, which is why
+    // it is gone rather than narrowed further:
+    //
+    //   - the hot shard can rotate DURING the call (a route change seals it),
+    //     so an id captured beforehand names a shard the record did not land
+    //     in -- reporting the old shard's failure for a record stored in the
+    //     new one, and making the caller's retry a duplicate;
+    //   - rocs_store_seal_hot_shard_unlocked releases and reacquires
+    //     commit_lock around the submit, so whether the async worker has
+    //     recorded a failure by the time the check runs depends on which
+    //     thread relocks first. The same ingest could return Ok or an error
+    //     for identical inputs.
+    auto ingest_r = rocs_store_ingest_prepared_unlocked(store,
                                                         record,
                                                         raw,
                                                         route,
                                                         terms,
                                                         allocator);
-    // A size-triggered auto-seal inside ingest can fail after the record is
-    // accepted into the old hot shard. Surface that as a durability failure
-    // instead of reporting an Ok while the shard is only retained for retry.
-    if (rocs_store_failed_seal_job_count(store) != failed_seals_before) {
-        n00b_err_t seal_err = rocs_store_failed_seal_last_error(store);
-        n00b_mutex_unlock(store->commit_lock);
-        return n00b_result_err(bool, seal_err);
-    }
     n00b_mutex_unlock(store->commit_lock);
     return ingest_r;
 }
