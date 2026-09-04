@@ -159,6 +159,23 @@ n00b_user_pool_audit_stats(void);
 extern n00b_system_pool_audit_stats_t
 n00b_conduit_pool_audit_stats(void);
 
+// Reports whether per-site pool auditing is available in this build. Callers
+// should publish this state beside audit snapshots because an unavailable audit
+// also returns a zeroed snapshot.
+extern bool
+n00b_pool_audit_compiled(void);
+
+// Report whether each runtime pool is collecting per-site audit data.
+extern bool
+n00b_user_pool_audit_enabled(void);
+
+extern bool
+n00b_conduit_pool_audit_enabled(void);
+
+// The default runtime does not enable auditing for system_pool.
+extern bool
+n00b_system_pool_audit_enabled(void);
+
 // Debug-only (N00B_POOL_ALLOC_AUDIT): true iff `allocator` is a pool opened
 // with .alloc_audit=true. The allocator hot path (alloc.c) consults this to
 // decide whether to reserve the trailing site-word; the audit hooks consult

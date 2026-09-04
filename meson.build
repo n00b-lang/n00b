@@ -3115,6 +3115,21 @@ gc_test = executable('test_gc',
 )
 test('gc', gc_test, suite: 'unit')
 
+# Verifies availability reporting in default builds and attribution when
+# debug_live_census is enabled.
+pool_audit_test = executable('test_pool_audit',
+    ['test/unit/test_pool_audit.c'],
+    kwargs: test_common_kwargs,
+)
+pool_audit_test_args = []
+if conf_debug_live_census
+  pool_audit_test_args += ['--require-compiled']
+endif
+test('pool_audit',
+     pool_audit_test,
+     suite: 'unit',
+     args: pool_audit_test_args)
+
 gc_census_test = executable('test_gc_census',
     ['test/unit/test_gc_census.c'],
     kwargs: test_common_kwargs,

@@ -882,6 +882,52 @@ n00b_user_pool_audit_stats(void)
     return (n00b_system_pool_audit_stats_t){0};
 }
 
+// A zeroed snapshot is ambiguous unless callers can distinguish an unavailable
+// audit from an audited pool with no live allocations.
+bool
+n00b_pool_audit_compiled(void)
+{
+#ifdef N00B_POOL_ALLOC_AUDIT
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool
+n00b_user_pool_audit_enabled(void)
+{
+#ifdef N00B_POOL_ALLOC_AUDIT
+    n00b_runtime_t *rt = n00b_default_runtime_or_null();
+    return rt != nullptr && rt->user_pool.alloc_audit;
+#else
+    return false;
+#endif
+}
+
+bool
+n00b_conduit_pool_audit_enabled(void)
+{
+#ifdef N00B_POOL_ALLOC_AUDIT
+    n00b_runtime_t *rt = n00b_default_runtime_or_null();
+    return rt != nullptr && rt->conduit_pool.alloc_audit;
+#else
+    return false;
+#endif
+}
+
+// Runtime initialization leaves auditing disabled for system_pool.
+bool
+n00b_system_pool_audit_enabled(void)
+{
+#ifdef N00B_POOL_ALLOC_AUDIT
+    n00b_runtime_t *rt = n00b_default_runtime_or_null();
+    return rt != nullptr && rt->system_pool.alloc_audit;
+#else
+    return false;
+#endif
+}
+
 n00b_system_pool_audit_stats_t
 n00b_conduit_pool_audit_stats(void)
 {
