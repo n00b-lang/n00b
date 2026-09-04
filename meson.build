@@ -933,6 +933,16 @@ subdir('src/net/http')
 subdir('src/attest')
 
 # ============================================================================
+# hostmeta — host / build-environment metadata collection: the C port
+# of chalk's metadata plugins (cloud instance metadata for AWS / Azure
+# / GCP, the AWS ECS and Lambda execution environments, and nine CI/CD
+# systems). Placed after src/net/http and src/parsers because it drives
+# the HTTP client against metadata endpoints and parses their JSON.
+# ============================================================================
+
+subdir('src/hostmeta')
+
+# ============================================================================
 # naudit — n00b API-guidelines auditor (consolidated from the former
 # standalone n00b-audit project; see WP-008 / D-017). The engine drives
 # a slay/Earley parse of the input file against a metagrammar-merged
@@ -1076,6 +1086,7 @@ n00b_dll_src = (
     n00b_dns_src +
     n00b_http_src +
     n00b_attest_src +
+    n00b_hostmeta_src +
     n00b_naudit_src +
     n00b_clickhouse_src +
     n00b_rocs_src +
@@ -1678,6 +1689,12 @@ http_service_unix_test = executable('test_http_service_unix',
     kwargs: test_common_kwargs,
 )
 test('http_service_unix', http_service_unix_test, suite: 'unit')
+
+hostmeta_test = executable('test_hostmeta',
+    ['test/unit/test_hostmeta.c'],
+    kwargs: test_common_kwargs,
+)
+test('hostmeta', hostmeta_test, suite: 'unit')
 
 chalk_module_test = executable('test_chalk_module',
     ['test/unit/test_chalk_module.c'],
