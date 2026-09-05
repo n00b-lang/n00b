@@ -337,55 +337,65 @@ n00b_raw_exit(int code)
 
 #include <stdint.h> // intptr_t
 
-// Declares GetStdHandle and WriteFile rather than including a Windows
-// header. Four revisions established why each alternative fails; all are
-// recorded because none of the constraints is obvious.
+// Declares GetStdHandle and WriteFile rather than including a Windows header.
+// Five revisions established the constraints; all are recorded because none is
+// obvious and the next person to touch this will hit one.
 //
-//  1. <windows.h> here breaks the platform.h path. platform.h already
-//     includes it at :53 and this header at :420, so a second entry through
-//     a different chain re-opens winnt.h under different conditions:
+//  1. <windows.h> here breaks the platform.h path. platform.h includes it at
+//     :53 and this header at :420, so a second entry through a different chain
+//     re-opens winnt.h under different conditions:
 //
-//       winnt.h:4304: error: type 'struct _CONTEXT' has incompatible
-//                            definitions
+//       winnt.h:4304: error: type 'struct _CONTEXT' has incompatible definitions
 //
-//     Matching platform.h's WIN32_LEAN_AND_MEAN/NOMINMAX guards does NOT
-//     prevent this -- an include guard no-ops the top-level header, not the
-//     nested ones reached by a different path.
+//     Matching platform.h's WIN32_LEAN_AND_MEAN/NOMINMAX guards does NOT help:
+//     an include guard no-ops the top-level header, not the nested ones reached
+//     by a different path.
 //
-//  2. <processenv.h> + <fileapi.h> (the two headers that actually declare
-//     these) cannot be included standalone. They assume the architecture
-//     macro windows.h defines, so on the direct-include path:
+//  2. <processenv.h> + <fileapi.h>, the two headers that actually declare
+//     these, cannot be included standalone -- they assume the architecture
+//     macro windows.h defines:
 //
 //       winnt.h:169: error: "No Target Architecture"
 //
-//  3. Declaring nothing and relying on platform.h fails on the direct-
-//     include path. TEN files include "core/syscall.h" directly -- exit.c,
-//     thread.c, stw.c, signals.c, crash.c, crash_capture.c, memory_info.c,
-//     file.c, io_epoll.c, quic/metrics.c -- and there nothing has provided
-//     them:
+//  3. Declaring nothing and relying on platform.h fails on the direct-include
+//     path. TEN files include "core/syscall.h" directly -- exit.c, thread.c,
+//     stw.c, signals.c, crash.c, crash_capture.c, memory_info.c, file.c,
+//     io_epoll.c, quic/metrics.c -- and there nothing has provided them.
 //
-//       exit.c:9 -> syscall.h:392: error: use of undeclared identifier
-//                                         'GetStdHandle'
+//  4. The final parameter must be `void *`, NOT `struct _OVERLAPPED *`.
+//     include/internal/win32_sockets.h:478 ALREADY declares WriteFile for this
+//     tree, with `void *overlapped`, and a differing declaration collides:
 //
-// So: declare them, matching the SDK exactly. The first attempt at this was
-// rejected only because it typed the last parameter `void *` where the SDK
-// has LPOVERLAPPED:
+//       win32_sockets.h:478: error: conflicting types for 'WriteFile'
 //
-//   WINBASEAPI BOOL WINAPI WriteFile(HANDLE, LPCVOID, DWORD, LPDWORD,
-//                                    LPOVERLAPPED);
+//     That header also declares GetStdHandle (:455). These declarations
+//     therefore deliberately MATCH it rather than the SDK's spelling --
+//     `void *` and `struct _OVERLAPPED *` are compatible against the SDK
+//     (both are pointer-to-object), but not against each other, and this tree
+//     had already chosen `void *`.
 //
-// A forward declaration of `struct _OVERLAPPED` makes the types identical,
-// so this is compatible where windows.h has been seen and sufficient where
-// it has not. This is the same technique platform.h already uses for
-// SystemFunction036 rather than including its header.
-struct _OVERLAPPED;
-
-__declspec(dllimport) void *__stdcall GetStdHandle(unsigned long std_handle);
-__declspec(dllimport) int __stdcall   WriteFile(void               *file,
-                                                const void         *buffer,
-                                                unsigned long       to_write,
-                                                unsigned long      *written,
-                                                struct _OVERLAPPED *overlapped);
+//  5. No `__declspec(dllimport)`. win32_sockets.h declares these without it
+//     (it uses dllimport nowhere), and mixing the two spellings of the same
+//     function is itself a redeclaration conflict whose winner depends on
+//     include order. Matching its plain form makes this order-independent.
+//     Omitting dllimport costs only an indirection thunk.
+//
+//  6. Spelled with the underlying types (`void *`, `unsigned long`, `int`)
+//     rather than HANDLE/DWORD/BOOL. platform.h defines those typedefs at
+//     :66-81, before it includes this header at :420 -- but on the
+//     direct-include path of failure 3 they are not in scope. The raw types
+//     are identical after expansion (platform.h:66,72,75) and need nothing
+//     declared first, so one spelling works on both paths.
+//
+// Not including win32_sockets.h instead: it is an internal header that pulls
+// winsock2/ws2tcpip/afunix/windows.h on the _WINDOWS path, which is failure
+// mode 1 again.
+void *__attribute__((__stdcall__)) GetStdHandle(unsigned long std_handle);
+int __attribute__((__stdcall__)) WriteFile(void          *file,
+                                           const void    *buffer,
+                                           unsigned long  to_write,
+                                           unsigned long *written,
+                                           void          *overlapped);
 
 // From winbase.h / handleapi.h, which we are not including.
 #define N00B_STD_OUTPUT_HANDLE ((unsigned long)-11)
