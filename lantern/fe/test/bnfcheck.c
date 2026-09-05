@@ -18,6 +18,13 @@ int main(int argc, char **argv)
 
     ncc_grammar_t *g = ncc_grammar_new();
     ncc_grammar_set_error_recovery(g, false);
+
+    // Remaining arguments declare the token names this grammar's tokenizer
+    // supplies; without them the load refuses.
+    for (int i = 3; i < argc; i++) {
+        ncc_register_terminal(g, ncc_string_from_cstr(argv[i]));
+    }
+
     bool ok = ncc_bnf_load(ncc_string_from_cstr(p), ncc_string_from_cstr(argv[2]), g);
     printf("load %s: %s\n", argv[1], ok ? "OK" : "FAILED");
     if (!ok) return 1;
@@ -35,6 +42,13 @@ int main(int argc, char **argv)
     }
     printf("  %d nonterminals, %d undefined, %zu rules, %zu annotations\n",
            total, empty, ncc_list_len(g->rules), ncc_grammar_annot_count(g));
+    printf("  named terminals:");
+
+    for (size_t i = 0; i < ncc_list_len(g->named_terms); i++) {
+        printf(" %s", g->named_terms.data[i].value.data);
+    }
+
+    printf("\n");
     ncc_grammar_free(g);
     return 0;
 }

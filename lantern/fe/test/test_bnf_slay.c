@@ -46,11 +46,29 @@ static ncc_string_t slurp(const char *path)
     return ncc_string_from_cstr(p);
 }
 
+// The token names n00b's grammar expects its tokenizer to supply. A grammar
+// has to declare these before loading; a %TOKEN the reader neither knows nor
+// was told about is refused rather than dropped from the production.
+static const char *const N00B_TOKENS[] = {
+    "CHAR_LIT", "EMBED",   "FLOAT_LIT", "HEX_LIT",
+    "INT_LIT",  "NEWLINE", "STRING_LIT",
+};
+
+static void declare_tokens(ncc_grammar_t *g)
+{
+    for (size_t i = 0; i < sizeof(N00B_TOKENS) / sizeof(N00B_TOKENS[0]); i++) {
+        ncc_register_terminal(g, ncc_string_from_cstr(N00B_TOKENS[i]));
+    }
+}
+
 static bool loads(const char *text, const char *start)
 {
-    ncc_grammar_t *g  = ncc_grammar_new();
-    bool           ok = ncc_bnf_load(ncc_string_from_cstr(text),
-                                     ncc_string_from_cstr(start), g);
+    ncc_grammar_t *g = ncc_grammar_new();
+
+    declare_tokens(g);
+
+    bool ok = ncc_bnf_load(ncc_string_from_cstr(text),
+                           ncc_string_from_cstr(start), g);
 
     ncc_grammar_free(g);
 
@@ -105,9 +123,16 @@ static void test_the_slay_grammar_loads(void)
 
     ncc_grammar_t *g = ncc_grammar_new();
 
+    declare_tokens(g);
     check("slay's annotated grammar loads whole",
           ncc_bnf_load(text, ncc_string_from_cstr("module"), g));
     ncc_grammar_free(g);
+
+    ncc_grammar_t *bare = ncc_grammar_new();
+
+    check("and is refused when its token names are not declared",
+          !ncc_bnf_load(text, ncc_string_from_cstr("module"), bare));
+    ncc_grammar_free(bare);
 }
 
 int main(void)

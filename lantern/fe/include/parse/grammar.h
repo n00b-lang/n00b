@@ -16,6 +16,11 @@ ncc_nonterm_t *ncc_nonterm(ncc_grammar_t *g, ncc_string_t name);
 int64_t         ncc_nonterm_id(ncc_nonterm_t *nt);
 int64_t         ncc_register_terminal(ncc_grammar_t *g, ncc_string_t name);
 
+// The id already registered for @p name, or 0. Unlike ncc_register_terminal
+// this never creates one, so a caller can tell a declared token from a
+// misspelled one.
+int64_t ncc_lookup_terminal(ncc_grammar_t *g, ncc_string_t name);
+
 void  ncc_nonterm_set_action(ncc_nonterm_t *nt, ncc_walk_action_t action);
 void  ncc_nonterm_set_user_data(ncc_nonterm_t *nt, void *data);
 void *ncc_nonterm_get_user_data(ncc_nonterm_t *nt);

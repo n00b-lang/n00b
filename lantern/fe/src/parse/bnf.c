@@ -1359,6 +1359,10 @@ token_type_to_id(ncc_string_t name)
 
 static int bnf_anon_counter = 0;
 
+// Names the first %TOKEN a load met that had neither a builtin id nor one the
+// caller declared. Loading fails rather than quietly dropping it.
+static char bnf_undeclared[128];
+
 static int
 resolve_term_to_matches(ncc_grammar_t *user_g,
                         const char     *tagged,
@@ -1424,14 +1428,29 @@ resolve_term_to_matches(ncc_grammar_t *user_g,
         break;
     }
     case 'T': {
+        // A %TOKEN is either one the reader knows or one the caller declared
+        // with ncc_register_terminal before loading. Anything else is refused:
+        // dropping it, which is what this did, silently changes the language
+        // the grammar describes.
         int64_t tok_id = token_type_to_id(val_s);
-        if (tok_id) {
-            ENSURE_CAP();
-            items[n++] = (ncc_match_t){
-                .kind        = NCC_MATCH_TERMINAL,
-                .terminal_id = tok_id,
-            };
+
+        if (!tok_id) {
+            tok_id = ncc_lookup_terminal(user_g, val_s);
         }
+
+        if (!tok_id) {
+            if (!bnf_undeclared[0]) {
+                snprintf(bnf_undeclared, sizeof(bnf_undeclared), "%s", val);
+            }
+
+            break;
+        }
+
+        ENSURE_CAP();
+        items[n++] = (ncc_match_t){
+            .kind        = NCC_MATCH_TERMINAL,
+            .terminal_id = tok_id,
+        };
         break;
     }
     case 'K': {
@@ -1812,6 +1831,8 @@ ncc_bnf_load(ncc_string_t   bnf_text,
         return false;
     }
 
+    bnf_undeclared[0] = 0;
+
     ncc_string_t stripped = ncc_bnf_strip_comments(bnf_text);
     ncc_string_t trimmed  = ncc_bnf_trim_lines(stripped);
     trimmed = bnf_join_continuations(trimmed);
@@ -1868,6 +1889,14 @@ ncc_bnf_load(ncc_string_t   bnf_text,
         &forest, nullptr);
 
     bool success = populate_grammar(user_g, result, start_symbol);
+
+    if (success && bnf_undeclared[0]) {
+        fprintf(stderr,
+                "bnf: %%%s is not a token this reader knows, and the caller "
+                "did not register it before loading\n",
+                bnf_undeclared);
+        success = false;
+    }
 
     free_bnf_result(result);
     ncc_parse_forest_free(&forest);

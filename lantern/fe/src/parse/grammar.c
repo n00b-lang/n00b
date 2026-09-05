@@ -413,6 +413,23 @@ ncc_nonterm_id(ncc_nonterm_t *nt)
 }
 
 int64_t
+ncc_lookup_terminal(ncc_grammar_t *g, ncc_string_t name)
+{
+    if (!g || !name.data) {
+        return 0;
+    }
+
+    bool  found = false;
+    void *val   = _ncc_dict_get(g->terminal_map, (void *)name.data, &found);
+
+    if (found) {
+        return (int64_t)(intptr_t)val;
+    }
+
+    return name.u8_bytes == 1 ? (int64_t)(unsigned char)name.data[0] : 0;
+}
+
+int64_t
 ncc_register_terminal(ncc_grammar_t *g, ncc_string_t name)
 {
     bool  found = false;
