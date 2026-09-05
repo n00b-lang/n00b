@@ -107,8 +107,4 @@ typedef struct {
 char *ir_diags_render_text(ir_diags_t *d, const ir_render_t *r);
 char *ir_diags_render_json(ir_diags_t *d, const ir_render_t *r);
 
-void     ir_diags_mark_seen(const ir_diags_t *d);
-bool     ir_diag_code_seen(ir_diagcode_t c);
-uint32_t ir_diag_unseen(const ir_diagcode_t **out);
-
 #endif

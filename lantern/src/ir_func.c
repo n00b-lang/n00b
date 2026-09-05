@@ -350,6 +350,28 @@ bool ir_instr_push_value(ir_instr_t *in, ir_value_t *v)
     return o != nullptr;
 }
 
+bool ir_instr_push_local(ir_instr_t *in, ir_local_t *l)
+{
+    if (!in || !l) {
+        return false;
+    }
+
+    ir_ctx_t   *ctx = in->block->owner->owner->ctx;
+    ir_value_t *v   = ir_alloc(ctx, sizeof(ir_value_t));
+
+    if (!v) {
+        return false;
+    }
+
+    v->kind  = IR_VAL_LOCAL;
+    v->name  = l->name;
+    v->type  = l->type;
+    v->local = l;
+    v->owner = in->block->owner;
+
+    return ir_instr_push_value(in, v);
+}
+
 bool ir_instr_push_type(ir_instr_t *in, th_type *t)
 {
     ir_operand_t *o = t ? push(in, IR_OPD_TYPE) : nullptr;
@@ -375,6 +397,17 @@ bool ir_instr_push_name(ir_instr_t *in, const char *n)
 bool ir_instr_push_block(ir_instr_t *in, ir_block_t *b)
 {
     ir_operand_t *o = b ? push(in, IR_OPD_BLOCK) : nullptr;
+
+    if (o) {
+        o->block = b;
+    }
+
+    return o != nullptr;
+}
+
+bool ir_instr_push_default(ir_instr_t *in, ir_block_t *b)
+{
+    ir_operand_t *o = b ? push(in, IR_OPD_DEFAULT_BLOCK) : nullptr;
 
     if (o) {
         o->block = b;

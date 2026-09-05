@@ -73,6 +73,8 @@ static ir_opdkind_t kind_of_char(char c)
         return IR_OPD_NAME;
     case 'b':
         return IR_OPD_BLOCK;
+    case 'd':
+        return IR_OPD_DEFAULT_BLOCK;
     case 'c':
         return IR_OPD_CONST;
     case 'a':
@@ -109,6 +111,52 @@ ir_opdkind_t ir_op_operand_kind(ir_op_t op, uint32_t i)
     }
 
     return kind_of_char(p[len - 1]);
+}
+
+static const struct {
+    ir_modgroup_t group;
+    const char   *name;
+} mods[] = {
+    {IR_MOD_OVERFLOW, "wrap"},     {IR_MOD_OVERFLOW, "trap"},
+    {IR_MOD_OVERFLOW, "sat"},      {IR_MOD_OVERFLOW, "undef"},
+    {IR_MOD_DIVZERO, "trap"},      {IR_MOD_DIVZERO, "undef"},
+    {IR_MOD_SHIFT, "mask"},        {IR_MOD_CMPORDER, "ordered"},
+    {IR_MOD_CMPORDER, "unordered"},{IR_MOD_ACCESS, "volatile"},
+    {IR_MOD_ACCESS, "atomic"},     {IR_MOD_FIT, "wrap"},
+    {IR_MOD_FIT, "trap"},          {IR_MOD_FIT, "sat"},
+    {IR_MOD_FIT, "undef"},         {IR_MOD_ROUND, "to_zero"},
+    {IR_MOD_ROUND, "nearest"},     {IR_MOD_ROUND, "floor"},
+    {IR_MOD_ROUND, "ceil"},
+};
+
+bool ir_op_accepts_mod(ir_op_t op, const char *name)
+{
+    if (op >= IR_OP_COUNT || !name) {
+        return false;
+    }
+
+    for (size_t i = 0; i < sizeof(mods) / sizeof(mods[0]); i++) {
+        if ((table[op].mods & mods[i].group) && !strcmp(mods[i].name, name)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool ir_mod_exists(const char *name)
+{
+    if (!name) {
+        return false;
+    }
+
+    for (size_t i = 0; i < sizeof(mods) / sizeof(mods[0]); i++) {
+        if (!strcmp(mods[i].name, name)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 bool ir_op_accepts_operands(ir_op_t op, uint32_t n)

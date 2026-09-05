@@ -52,4 +52,17 @@ struct ir_module_t {
 
 void *ir_grow(ir_ctx_t *ctx, void *p, size_t *cap, size_t need, size_t elem);
 
+typedef struct {
+    char  *p;
+    size_t len;
+    size_t cap;
+} ir_sb;
+
+void  ir_sb_put(ir_sb *b, const char *s, size_t n);
+void  ir_sb_str(ir_sb *b, const char *s);
+void  ir_sb_fmt(ir_sb *b, const char *fmt, ...);
+void  ir_sb_json(ir_sb *b, const char *s);
+void  ir_sb_quote(ir_sb *b, const char *s);
+char *ir_sb_take(ir_sb *b);
+
 #endif

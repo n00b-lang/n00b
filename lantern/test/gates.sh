@@ -3,6 +3,7 @@ set -u
 
 root="$1"
 diag_bin="${2:-}"
+text_bin="${3:-}"
 inc="$root/include/ir"
 src="$root/src"
 fails=0
@@ -26,8 +27,9 @@ g="$(grep -nE '\bth_type\b' "$inc/ir.h" | grep -vE 'th_type[[:space:]]*\*|typeha
 g="$(hits '\bth_unify\b|\bth_instantiate\b|\bth_generalize\b|\bth_apply_subst\b|\bth_occurs\b' "$inc/ir.h $src/*.c $src/*.h")"
 [ -z "$g" ] || fail "TYPE-07 the IR reaches a unifier" "$g"
 
-g="$(hits '\bth_print\b' "$src/*.c $src/*.h $inc/ir.h")"
-[ -z "$g" ] || fail "TYPE-04 the IR decodes types from their printed form" "$g"
+g="$(grep -nE '\bth_print\b' $src/*.c $src/*.h "$inc/ir.h" 2>/dev/null \
+     | grep -v '^[^:]*ir_print\.c:')"
+[ -z "$g" ] || fail "TYPE-04 th_print is used outside the canonical printer" "$g"
 
 g="$(hits 'str(cmp|ncmp|str)\([^)]*th_' "$src/*.c $src/*.h")"
 [ -z "$g" ] || fail "TYPE-04 a type decision is made by string comparison" "$g"
@@ -62,14 +64,23 @@ g="$(grep -nE 'ir_diag_(begin|begin_at|note)\(' "$inc/diag.h" | grep -E 'char \*
 work="${TMPDIR:-/tmp}/ir-gates-$$"
 mkdir -p "$work/golden"
 produced="$work/produced-codes.txt"
+: > "$produced"
 
 if [ -n "$diag_bin" ] && [ -x "$diag_bin" ]; then
     cp "$root"/test/golden/* "$work/golden/" 2>/dev/null
-    "$diag_bin" "$work/golden" >/dev/null 2>&1 || {
-        fail "DIAG-10 the diagnostic test did not pass, so its code coverage is unknown" ""
-    }
+    "$diag_bin" "$work/golden" >/dev/null 2>&1 \
+        || fail "DIAG-10 the diagnostic test did not pass, so its code coverage is unknown" ""
+    cat "$work/produced-codes-diag.txt" >> "$produced" 2>/dev/null
 else
     fail "DIAG-10 no diagnostic binary was given, so coverage cannot be checked" ""
+fi
+
+if [ -n "$text_bin" ] && [ -x "$text_bin" ]; then
+    "$text_bin" "$work" >/dev/null 2>&1 \
+        || fail "DIAG-10 the text test did not pass, so its code coverage is unknown" ""
+    cat "$work/produced-codes-text.txt" >> "$produced" 2>/dev/null
+else
+    fail "DIAG-10 no text binary was given, so coverage cannot be checked" ""
 fi
 
 pending=""

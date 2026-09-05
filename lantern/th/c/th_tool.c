@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "typehash.h"
@@ -109,6 +110,11 @@ static void do_op(th_ctx *ctx, const char *op, char *rest)
     else if (!strcmp(op, "roundtrip")) {
         emit(ctx, th_clone(ctx, t));
     }
+    else if (!strcmp(op, "print")) {
+        const char *s = th_print(ctx, t);
+
+        printf("%s\n", s ? s : "ERROR");
+    }
     else {
         printf("ERROR\tunknown op %s\n", op);
     }
@@ -116,10 +122,12 @@ static void do_op(th_ctx *ctx, const char *op, char *rest)
 
 int main(void)
 {
-    char line[8192];
+    char   *line = nullptr;
+    size_t  cap  = 0;
+    ssize_t got;
 
-    while (fgets(line, sizeof(line), stdin)) {
-        size_t n = strlen(line);
+    while ((got = getline(&line, &cap, stdin)) > 0) {
+        size_t n = (size_t)got;
 
         while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
             line[--n] = 0;
@@ -152,6 +160,7 @@ int main(void)
         }
         th_ctx_free(ctx);
     }
+    free(line);
 
     return 0;
 }

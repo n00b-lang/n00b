@@ -16,8 +16,6 @@ static const struct {
 
 #undef IR_DIAG
 
-static bool seen[IR_DIAG_COUNT];
-
 const char *ir_severity_name(ir_severity_t s)
 {
     switch (s) {
@@ -262,7 +260,6 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
     dg->primary.label = label ? ir_strdup(d->ctx, label) : nullptr;
     dg->seq           = d->seq++;
 
-    seen[code]        = true;
     d->sorted         = false;
 
     if (sev == IR_SEV_FATAL) {
@@ -512,38 +509,4 @@ void ir_diags_sort(ir_diags_t *d)
     }
     qsort(d->v, d->n, sizeof(ir_diag_t), cmp_diag);
     d->sorted = true;
-}
-
-void ir_diags_mark_seen(const ir_diags_t *d)
-{
-    if (!d) {
-        return;
-    }
-
-    for (uint32_t i = 0; i < d->n; i++) {
-        seen[d->v[i].code] = true;
-    }
-}
-
-bool ir_diag_code_seen(ir_diagcode_t c)
-{
-    return c < IR_DIAG_COUNT && seen[c];
-}
-
-uint32_t ir_diag_unseen(const ir_diagcode_t **out)
-{
-    static ir_diagcode_t missing[IR_DIAG_COUNT];
-    uint32_t             n = 0;
-
-    for (uint16_t i = 0; i < IR_DIAG_COUNT; i++) {
-        if (!seen[i]) {
-            missing[n++] = (ir_diagcode_t)i;
-        }
-    }
-
-    if (out) {
-        *out = missing;
-    }
-
-    return n;
 }

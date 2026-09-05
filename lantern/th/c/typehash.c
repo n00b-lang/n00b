@@ -481,6 +481,13 @@ void th_erase_encode(th_ctx *ctx, const th_type *t, th_buf *out)
     enc_node(&e, out, t);
 }
 
+void th_full_encode(th_ctx *ctx, const th_type *t, th_buf *out)
+{
+    th_enc e = {.ctx = ctx, .ok = true};
+
+    enc_node(&e, out, t);
+}
+
 static void norm_children_sum(th_norm *s, th_type *t)
 {
     size_t    n  = t->sum.n;

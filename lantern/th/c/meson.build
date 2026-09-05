@@ -3,6 +3,7 @@ typehash_sources = files(
     'th_parse.c',
     'th_access.c',
     'th_infer.c',
+    'th_print.c',
 )
 
 typehash_lib = library(

@@ -97,6 +97,7 @@ int   th_cmp_slice(const void *a, const void *b);
 int   th_cmp_member(const void *a, const void *b);
 int   th_cmp_kw(const void *a, const void *b);
 void  th_erase_encode(th_ctx *ctx, const th_type *t, th_buf *out);
+void  th_full_encode(th_ctx *ctx, const th_type *t, th_buf *out);
 void  th_buf_free(th_buf *b);
 
 static inline const th_type *th_resolve_c(const th_type *t)

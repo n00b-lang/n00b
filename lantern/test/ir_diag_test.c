@@ -14,6 +14,45 @@ static void check(const char *what, bool ok)
     }
 }
 
+static bool produced[IR_DIAG_COUNT];
+
+static ir_diag_t *beg(ir_diags_t *d, ir_diagcode_t code, ir_span_t span,
+                      const char *label)
+{
+    ir_diag_t *dg = ir_diag_begin(d, code, span, label);
+
+    if (dg) {
+        produced[code] = true;
+    }
+
+    return dg;
+}
+
+static ir_diag_t *beg_at(ir_diags_t *d, ir_diagcode_t code,
+                         const ir_instr_t *in, const ir_block_t *b,
+                         const ir_func_t *f, const char *label)
+{
+    ir_diag_t *dg = ir_diag_begin_at(d, code, in, b, f, label);
+
+    if (dg) {
+        produced[code] = true;
+    }
+
+    return dg;
+}
+
+static bool note(ir_diags_t *d, ir_severity_t sev, ir_diagcode_t code,
+                 ir_span_t span, const char *label)
+{
+    bool ok = ir_diag_note(d, sev, code, span, label);
+
+    if (ok) {
+        produced[code] = true;
+    }
+
+    return ok;
+}
+
 static const char *SRC =
     "func sum(n) {\n"
     "  acc = 0\n"
@@ -103,7 +142,7 @@ static void test_emit(void)
     check("a new accumulator is empty", ir_diags_count(d) == 0);
     check("an empty accumulator has not failed", !ir_diags_failed(d));
 
-    ir_diag_t *dg = ir_diag_begin(d, IR_DIAG_INTERNAL, at(0, 4, 1, 1, 5),
+    ir_diag_t *dg = beg(d, IR_DIAG_INTERNAL, at(0, 4, 1, 1, 5),
                                   "here");
 
     check("a diagnostic is emitted", dg != nullptr);
@@ -119,15 +158,15 @@ static void test_emit(void)
     check("the message is overridable", !strcmp(dg->message, "custom wording"));
 
     check("a diagnostic without a primary span is refused",
-          ir_diag_begin(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, "x") == nullptr);
+          beg(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, "x") == nullptr);
 
-    ir_diag_begin(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2), nullptr);
+    beg(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2), nullptr);
     check("errors and warnings accumulate", ir_diags_count(d) == 2);
     check("warnings are counted separately",
           ir_diags_count_of(d, IR_SEV_WARNING) == 1
               && ir_diags_count_of(d, IR_SEV_ERROR) == 1);
 
-    ir_diag_begin(d, IR_DIAG_OUT_OF_MEMORY, at(0, 1, 1, 1, 2), nullptr);
+    beg(d, IR_DIAG_OUT_OF_MEMORY, at(0, 1, 1, 1, 2), nullptr);
     check("a fatal is recorded as fatal", ir_diags_fatal(d));
     check("accumulation continued up to the fatal", ir_diags_count(d) == 3);
 
@@ -140,23 +179,23 @@ static void test_notes(void)
     ir_diags_t *d   = ir_diags_new(ctx, nullptr);
 
     check("a note with nothing to attach to is refused",
-          !ir_diag_note(d, IR_SEV_NOTE, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
+          !note(d, IR_SEV_NOTE, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
                         "orphan"));
     check("a help with nothing to attach to is refused",
-          !ir_diag_note(d, IR_SEV_HELP, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
+          !note(d, IR_SEV_HELP, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
                         "orphan"));
     check("nothing was recorded", ir_diags_count(d) == 0);
 
-    ir_diag_begin(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), "anchor");
+    beg(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), "anchor");
 
     check("a note attaches to a preceding diagnostic",
-          ir_diag_note(d, IR_SEV_NOTE, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
+          note(d, IR_SEV_NOTE, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
                        "attached"));
     check("a note may have an unknown span",
-          ir_diag_note(d, IR_SEV_NOTE, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN,
+          note(d, IR_SEV_NOTE, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN,
                        "spanless"));
     check("an error severity is refused by the note API",
-          !ir_diag_note(d, IR_SEV_ERROR, IR_DIAG_INTERNAL,
+          !note(d, IR_SEV_ERROR, IR_DIAG_INTERNAL,
                         at(0, 1, 1, 1, 2), "x"));
 
     ir_ctx_free(ctx);
@@ -203,13 +242,13 @@ static void test_policy_effects(void)
     ir_diags_t *d = ir_diags_new(ctx, p);
 
     check("an allowed code is suppressed entirely",
-          ir_diag_begin(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2), nullptr)
+          beg(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2), nullptr)
               == nullptr);
     check("nothing was recorded", ir_diags_count(d) == 0);
 
     ir_policy_set(p, "IR-W0005", IR_POLICY_DENY);
 
-    ir_diag_t *dg = ir_diag_begin(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2),
+    ir_diag_t *dg = beg(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2),
                                   nullptr);
 
     check("deny promotes a warning to an error",
@@ -217,7 +256,7 @@ static void test_policy_effects(void)
 
     ir_policy_set(p, "IR-E0001", IR_POLICY_WARN);
 
-    ir_diag_t *dw = ir_diag_begin(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
+    ir_diag_t *dw = beg(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
                                   nullptr);
 
     check("warn demotes an error to a warning",
@@ -225,14 +264,14 @@ static void test_policy_effects(void)
 
     ir_policy_set(p, "IR-W0005", IR_POLICY_FORBID);
 
-    ir_diag_t *df = ir_diag_begin(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2),
+    ir_diag_t *df = beg(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2),
                                   nullptr);
 
     check("forbid promotes like deny", df && df->severity == IR_SEV_ERROR);
 
     ir_policy_set(p, "IR-F0008", IR_POLICY_ALLOW);
 
-    ir_diag_t *dfat = ir_diag_begin(d, IR_DIAG_OUT_OF_MEMORY,
+    ir_diag_t *dfat = beg(d, IR_DIAG_OUT_OF_MEMORY,
                                     at(0, 1, 1, 1, 2), nullptr);
 
     check("a fatal cannot be suppressed by policy",
@@ -240,7 +279,7 @@ static void test_policy_effects(void)
 
     ir_policy_set(p, "IR-F0008", IR_POLICY_WARN);
 
-    ir_diag_t *dfat2 = ir_diag_begin(d, IR_DIAG_OUT_OF_MEMORY,
+    ir_diag_t *dfat2 = beg(d, IR_DIAG_OUT_OF_MEMORY,
                                      at(0, 1, 1, 1, 2), nullptr);
 
     check("a fatal cannot be demoted by policy",
@@ -265,21 +304,21 @@ static void test_span_fallback(void)
 
     f->span = at(0, 0, 1, 1, 2);
 
-    ir_diag_t *g1 = ir_diag_begin_at(d, IR_DIAG_INTERNAL, in, b, f, nullptr);
+    ir_diag_t *g1 = beg_at(d, IR_DIAG_INTERNAL, in, b, f, nullptr);
 
     check("with only a function span, the function's is used",
           g1 && g1->primary.span.start_line == 1);
 
     b->span = at(14, 22, 2, 3, 10);
 
-    ir_diag_t *g2 = ir_diag_begin_at(d, IR_DIAG_INTERNAL, in, b, f, nullptr);
+    ir_diag_t *g2 = beg_at(d, IR_DIAG_INTERNAL, in, b, f, nullptr);
 
     check("a block span beats the function's",
           g2 && g2->primary.span.start_line == 2);
 
     in->span = at(24, 40, 3, 3, 18);
 
-    ir_diag_t *g3 = ir_diag_begin_at(d, IR_DIAG_INTERNAL, in, b, f, nullptr);
+    ir_diag_t *g3 = beg_at(d, IR_DIAG_INTERNAL, in, b, f, nullptr);
 
     check("an instruction span beats the block's",
           g3 && g3->primary.span.start_line == 3);
@@ -296,10 +335,10 @@ static void test_ordering(void)
 
     ir_diags_t *d = ir_diags_new(ctx, nullptr);
 
-    ir_diag_begin(d, IR_DIAG_INTERNAL, ir_span_make(1, 5, 6, 1, 1, 1, 2), "z");
-    ir_diag_begin(d, IR_DIAG_INTERNAL, at(40, 41, 3, 1, 2), "c");
-    ir_diag_begin(d, IR_DIAG_INTERNAL, at(4, 5, 1, 5, 6), "a");
-    ir_diag_begin(d, IR_DIAG_INTERNAL, at(20, 21, 2, 3, 4), "b");
+    beg(d, IR_DIAG_INTERNAL, ir_span_make(1, 5, 6, 1, 1, 1, 2), "z");
+    beg(d, IR_DIAG_INTERNAL, at(40, 41, 3, 1, 2), "c");
+    beg(d, IR_DIAG_INTERNAL, at(4, 5, 1, 5, 6), "a");
+    beg(d, IR_DIAG_INTERNAL, at(20, 21, 2, 3, 4), "b");
     ir_diags_sort(d);
 
     const char *want[] = {"a", "b", "c", "z"};
@@ -317,17 +356,17 @@ static void test_ordering(void)
     ir_diags_t *e = ir_diags_new(ctx, nullptr);
     ir_span_t   s = at(4, 5, 1, 5, 6);
 
-    ir_diag_begin(e, IR_DIAG_MISSING_PROFILE, s, "second");
-    ir_diag_begin(e, IR_DIAG_INTERNAL, s, "first");
+    beg(e, IR_DIAG_MISSING_PROFILE, s, "second");
+    beg(e, IR_DIAG_INTERNAL, s, "first");
     ir_diags_sort(e);
     check("at one position, ties break by code",
           !strcmp(ir_diags_at(e, 0)->primary.label, "first"));
 
     ir_diags_t *g = ir_diags_new(ctx, nullptr);
 
-    ir_diag_begin(g, IR_DIAG_INTERNAL, s, "one");
-    ir_diag_begin(g, IR_DIAG_INTERNAL, s, "two");
-    ir_diag_begin(g, IR_DIAG_INTERNAL, s, "three");
+    beg(g, IR_DIAG_INTERNAL, s, "one");
+    beg(g, IR_DIAG_INTERNAL, s, "two");
+    beg(g, IR_DIAG_INTERNAL, s, "three");
     ir_diags_sort(g);
     check("identical codes at one position keep insertion order",
           !strcmp(ir_diags_at(g, 0)->primary.label, "one")
@@ -394,7 +433,7 @@ static void test_ordering_is_deterministic(void)
         for (int k = 0; k < N; k++) {
             uint32_t by = set[order[k]].byte;
 
-            ir_diag_begin(d, set[order[k]].code,
+            beg(d, set[order[k]].code,
                           ir_span_make(set[order[k]].file, by, by + 1,
                                        by / 8 + 1, by % 8 + 1, by / 8 + 1,
                                        by % 8 + 2),
@@ -438,7 +477,7 @@ static bool fatal_pass(ir_module_t *m, void *state)
 
     (void)m;
     ran++;
-    ir_diag_begin(d, IR_DIAG_OUT_OF_MEMORY, at(0, 1, 1, 1, 2), nullptr);
+    beg(d, IR_DIAG_OUT_OF_MEMORY, at(0, 1, 1, 1, 2), nullptr);
 
     return true;
 }
@@ -449,7 +488,7 @@ static bool error_pass(ir_module_t *m, void *state)
 
     (void)m;
     ran++;
-    ir_diag_begin(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), nullptr);
+    beg(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), nullptr);
 
     return true;
 }
@@ -552,9 +591,9 @@ static void test_merge(void)
     ir_diags_t *a   = ir_diags_new(ctx, nullptr);
     ir_diags_t *b   = ir_diags_new(ctx, nullptr);
 
-    ir_diag_begin(a, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), "a1");
-    ir_diag_begin(b, IR_DIAG_INTERNAL, at(4, 5, 1, 5, 6), "b1");
-    ir_diag_begin(b, IR_DIAG_OUT_OF_MEMORY, at(6, 7, 1, 7, 8), "b2");
+    beg(a, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), "a1");
+    beg(b, IR_DIAG_INTERNAL, at(4, 5, 1, 5, 6), "b1");
+    beg(b, IR_DIAG_OUT_OF_MEMORY, at(6, 7, 1, 7, 8), "b2");
 
     check("merge succeeds", ir_diags_merge(a, b));
     check("merged diagnostics are counted", ir_diags_count(a) == 3);
@@ -563,7 +602,7 @@ static void test_merge(void)
     ir_ctx_t   *other = ir_ctx_new();
     ir_diags_t *far   = ir_diags_new(other, nullptr);
 
-    ir_diag_begin(far, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), "elsewhere");
+    beg(far, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), "elsewhere");
     check("merging across contexts is refused", !ir_diags_merge(a, far));
     check("the refused merge changed nothing", ir_diags_count(a) == 3);
 
@@ -636,7 +675,7 @@ static void test_rendering(const char *golden_dir)
     ir_module_t *m   = mod(ctx);
     ir_diags_t  *d   = ir_diags_new(ctx, nullptr);
 
-    ir_diag_t *dg = ir_diag_begin(d, IR_DIAG_BAD_ANNOT_KEY,
+    ir_diag_t *dg = beg(d, IR_DIAG_BAD_ANNOT_KEY,
                                   at(16, 19, 2, 3, 6), "this key");
 
     ir_diag_message(dg, d, "annotation key is not namespaced");
@@ -653,10 +692,10 @@ static void test_rendering(const char *golden_dir)
                                      at(27, 31, 3, 3, 8), "inline", exp);
 
     ir_diag_origin(dg, inl);
-    ir_diag_note(d, IR_SEV_NOTE, IR_DIAG_BAD_ANNOT_KEY, at(0, 4, 1, 1, 5),
+    note(d, IR_SEV_NOTE, IR_DIAG_BAD_ANNOT_KEY, at(0, 4, 1, 1, 5),
                  "the enclosing function");
 
-    ir_diag_begin(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, nullptr);
+    beg(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, nullptr);
 
     ir_render_t r = {.source = source_of, .module = m};
 
@@ -703,25 +742,33 @@ static void test_rendering(const char *golden_dir)
 
 static void report_coverage(const char *dir)
 {
-    char  path[512];
-    FILE *f;
+    const char *leaf = "/../produced-codes-diag.txt";
+    size_t      n    = strlen(dir) + strlen(leaf) + 1;
+    char       *path = malloc(n);
 
-    snprintf(path, sizeof(path), "%s/../produced-codes.txt", dir);
+    if (!path) {
+        check("the produced-code list could be written", false);
 
-    f = fopen(path, "w");
+        return;
+    }
+    snprintf(path, n, "%s%s", dir, leaf);
+
+    FILE *f = fopen(path, "w");
 
     if (!f) {
         check("the produced-code list could be written", false);
+        free(path);
 
         return;
     }
 
     for (uint16_t i = 0; i < IR_DIAG_COUNT; i++) {
-        if (ir_diag_code_seen((ir_diagcode_t)i)) {
+        if (produced[i]) {
             fprintf(f, "%s\n", ir_diag_code((ir_diagcode_t)i));
         }
     }
     fclose(f);
+    free(path);
 }
 
 int main(int argc, char **argv)

@@ -1066,7 +1066,8 @@ static th_type *p_union(P *p)
     return th_sum(p->ctx, TH_UNION, arms, n);
 }
 
-th_type *th_parse(th_ctx *ctx, const char *src, th_error *err)
+static th_type *parse_common(th_ctx *ctx, const char *src, th_error *err,
+                             size_t *consumed)
 {
     P p = {.src = src, .len = strlen(src), .ctx = ctx, .err = err};
 
@@ -1079,7 +1080,7 @@ th_type *th_parse(th_ctx *ctx, const char *src, th_error *err)
 
     skip_ws(&p);
 
-    if (!p.failed && p.pos != p.len) {
+    if (!p.failed && !consumed && p.pos != p.len) {
         fail(&p, "trailing input");
     }
 
@@ -1087,5 +1088,32 @@ th_type *th_parse(th_ctx *ctx, const char *src, th_error *err)
         free(p.freev[i].name);
     }
 
-    return p.failed ? nullptr : t;
+    if (p.failed) {
+        return nullptr;
+    }
+
+    if (consumed) {
+        *consumed = p.pos;
+    }
+
+    return t;
+}
+
+th_type *th_parse(th_ctx *ctx, const char *src, th_error *err)
+{
+    return parse_common(ctx, src, err, nullptr);
+}
+
+th_type *th_parse_prefix(th_ctx *ctx, const char *src, size_t *consumed,
+                         th_error *err)
+{
+    size_t n = 0;
+
+    th_type *t = parse_common(ctx, src, err, &n);
+
+    if (consumed) {
+        *consumed = n;
+    }
+
+    return t;
 }

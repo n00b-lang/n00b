@@ -51,6 +51,7 @@ typedef enum : uint8_t {
     IR_OPD_TYPE,
     IR_OPD_NAME,
     IR_OPD_BLOCK,
+    IR_OPD_DEFAULT_BLOCK,
     IR_OPD_CONST,
     IR_OPD_PHI_ARM,
     IR_OPD_SWITCH_ARM,
@@ -82,6 +83,8 @@ bool               ir_op_has_result(ir_op_t op);
 bool               ir_op_is_terminator(ir_op_t op);
 ir_opdkind_t       ir_op_operand_kind(ir_op_t op, uint32_t i);
 bool               ir_op_accepts_operands(ir_op_t op, uint32_t n);
+bool               ir_op_accepts_mod(ir_op_t op, const char *name);
+bool               ir_mod_exists(const char *name);
 
 typedef enum : uint16_t {
     IR_PROP_PARSED       = 0x0001,
@@ -185,6 +188,7 @@ bool        ir_annot_key_ok(const char *key, const char *profile);
 typedef enum : uint8_t {
     IR_VAL_PARAM,
     IR_VAL_INSTR,
+    IR_VAL_LOCAL,
     IR_VAL_GLOBAL,
     IR_VAL_FUNC,
 } ir_valkind_t;
@@ -194,6 +198,7 @@ struct ir_value_t {
     const char  *name;
     th_type     *type;
     ir_instr_t  *def;
+    ir_local_t  *local;
     ir_func_t   *owner;
     uint32_t     index;
 };
@@ -359,9 +364,11 @@ ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op);
 bool        ir_instr_set_dest(ir_instr_t *in, const char *name, th_type *type);
 bool        ir_instr_set_dest_local(ir_instr_t *in, ir_local_t *l);
 bool        ir_instr_push_value(ir_instr_t *in, ir_value_t *v);
+bool        ir_instr_push_local(ir_instr_t *in, ir_local_t *l);
 bool        ir_instr_push_type(ir_instr_t *in, th_type *t);
 bool        ir_instr_push_name(ir_instr_t *in, const char *n);
 bool        ir_instr_push_block(ir_instr_t *in, ir_block_t *b);
+bool        ir_instr_push_default(ir_instr_t *in, ir_block_t *b);
 bool        ir_instr_push_int(ir_instr_t *in, int64_t v);
 bool        ir_instr_push_float(ir_instr_t *in, double v);
 bool        ir_instr_push_phi_arm(ir_instr_t *in, ir_block_t *b, ir_value_t *v);
