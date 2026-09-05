@@ -242,6 +242,57 @@ jobs:
           meson test -C build_debug --print-errorlogs --num-processes 4 \
             --no-suite known-broken --no-suite stress
 
+      # n00b#280 / #281. The quarantine is excluded from the gate above, so
+      # CI produces NO evidence about any test in it -- which means the only
+      # way to decide whether one has been fixed is to run it locally, on one
+      # platform, and generalize. That is exactly the mistake #280 exists to
+      # record: it is the issue about tests that pass on macOS and fail on
+      # Linux, and PR #300 tried to clear nine of them from a macOS-only run
+      # and had to be corrected when CI failed them.
+      #
+      # So run the quarantine here and report it, but never fail on it. This
+      # is a diagnostic, not a gate: `continue-on-error` keeps a known-broken
+      # test from blocking an unrelated PR, while the log and the uploaded
+      # testlog.json give both platforms' verdicts on every entry.
+      #
+      # The intended use is the reverse of the usual one -- an entry that
+      # passes here on BOTH legs, repeatedly, is a candidate to move back to
+      # 'unit'. Without this step that judgement has no data behind it.
+      - name: Quarantine status (diagnostic, never fails the run)
+        if: always()
+        continue-on-error: true
+        env:
+          N00B_SKIP_VCS_CHECK: "1"
+        run: |
+          # Save the GATE's results first. `meson test` rewrites
+          # meson-logs/testlog.json on every invocation, and the upload step
+          # below takes the whole directory -- so running the quarantine here
+          # without this would silently replace the gate's verdicts with the
+          # quarantine's, destroying the artifact every triage in this repo
+          # reads.
+          set -u
+          for f in testlog.json testlog.txt testlog.junit.xml; do
+            if [ -f "build_debug/meson-logs/$f" ]; then
+              cp "build_debug/meson-logs/$f" "build_debug/meson-logs/gate-$f"
+            fi
+          done
+
+          echo "::group::known-broken suite on ${{ matrix.os }}"
+          meson test -C build_debug --print-errorlogs --num-processes 4 \
+            --suite known-broken || true
+          echo "::endgroup::"
+
+          # Now name the quarantine's own output, and restore the gate's to
+          # the filename readers expect.
+          for f in testlog.json testlog.txt testlog.junit.xml; do
+            if [ -f "build_debug/meson-logs/$f" ]; then
+              mv "build_debug/meson-logs/$f" "build_debug/meson-logs/quarantine-$f"
+            fi
+            if [ -f "build_debug/meson-logs/gate-$f" ]; then
+              mv "build_debug/meson-logs/gate-$f" "build_debug/meson-logs/$f"
+            fi
+          done
+
       - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@v4
