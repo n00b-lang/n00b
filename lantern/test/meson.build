@@ -14,6 +14,18 @@ ir_span_test = executable(
 
 test('ir-spans', ir_span_test)
 
+ir_diag_test = executable(
+    'ir_diag_test',
+    'ir_diag_test.c',
+    dependencies: ir_dep,
+)
+
+test(
+    'ir-diagnostics',
+    ir_diag_test,
+    args: [meson.current_source_dir() / 'golden'],
+)
+
 test(
     'ir-gates',
     find_program('sh'),

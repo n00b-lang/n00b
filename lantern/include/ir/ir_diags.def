@@ -1,0 +1,8 @@
+IR_DIAG(INTERNAL,          "IR-E0001", ERROR,   "internal error")
+IR_DIAG(NO_PRIMARY_SPAN,   "IR-E0002", ERROR,   "diagnostic has no primary span")
+IR_DIAG(ORPHAN_NOTE,       "IR-E0003", ERROR,   "note or help with nothing to attach to")
+IR_DIAG(BAD_ANNOT_KEY,     "IR-E0004", ERROR,   "annotation key is not namespaced")
+IR_DIAG(AUTHORED_ANNOT,    "IR-W0005", WARNING, "pass contradicted an authored annotation")
+IR_DIAG(UNKNOWN_OPCODE,    "IR-E0006", ERROR,   "unknown opcode")
+IR_DIAG(MISSING_PROFILE,   "IR-E0007", ERROR,   "extension opcode needs its profile")
+IR_DIAG(OUT_OF_MEMORY,     "IR-F0008", FATAL,   "out of memory")

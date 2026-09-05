@@ -52,6 +52,32 @@ g="$(grep -nE '"(goto|break|continue|min|max|typeof|kwargs_call|generic_call)"' 
 g="$(grep -nE '"(lt_s|lt_u|shr_s|shr_u|add_checked|addu)"' "$inc/ir_ops.def")"
 [ -z "$g" ] || fail "OP-21 signedness or overflow is spelled into a mnemonic" "$g"
 
+g="$(grep -nE '"IR-[EWF][0-9]{4}"' $src/*.c $inc/diag.h 2>/dev/null)"
+[ -z "$g" ] || fail "DIAG-08 a diagnostic code is spelled outside the registry" "$g"
+
+g="$(grep -nE 'ir_diag_(begin|begin_at|note)\(' "$inc/diag.h" | grep -E 'char \*code|const char \*c[^h]')"
+[ -z "$g" ] || fail "DIAG-08 an emit entry point takes a code as a string" "$g"
+
+produced="$root/test/produced-codes.txt"
+pending=""
+
+for id in $(grep -oE '^IR_DIAG\([A-Z_]+' "$inc/ir_diags.def" | cut -d'(' -f2); do
+    code="$(grep -E "^IR_DIAG\($id," "$inc/ir_diags.def" \
+            | sed -E 's/.*"(IR-[EWF][0-9]+)".*/\1/')"
+
+    if grep -qE "IR_DIAG_$id\b" $src/*.c 2>/dev/null; then
+        if [ ! -f "$produced" ] || ! grep -qx "$code" "$produced"; then
+            fail "DIAG-10 $code is emitted by the library but no test produces it" ""
+        fi
+    else
+        pending="$pending $code"
+    fi
+done
+
+if [ -n "$pending" ]; then
+    echo "DIAG-10 pending, declared but not yet emitted by any library code:$pending"
+fi
+
 if [ "$fails" -eq 0 ]; then
     echo "gates: all passed"
 fi

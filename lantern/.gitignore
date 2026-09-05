@@ -4,6 +4,7 @@ subprojects/*/
 !subprojects/*.wrap
 
 local/
+test/produced-codes.txt
 
 .cache/
 compile_commands.json
