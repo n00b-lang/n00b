@@ -3,6 +3,8 @@ build-*/
 subprojects/*/
 !subprojects/*.wrap
 
+local/
+
 .cache/
 compile_commands.json
 
