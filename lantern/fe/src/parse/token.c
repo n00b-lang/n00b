@@ -1,4 +1,3 @@
-// token.c - Token list operations.
 #include "parse/token.h"
 #include <assert.h>
 

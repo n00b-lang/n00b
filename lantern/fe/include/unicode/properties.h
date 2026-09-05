@@ -1,56 +1,40 @@
 #pragma once
-/**
- * @file properties.h
- * @brief Unicode property types and ASCII-only stubs (standalone extraction).
- *
- * Provides the type definitions (enums) from the full n00b Unicode library
- * and stub implementations that handle ASCII only. The parser does not
- * need full Unicode property lookup -- just the types for compilation.
- */
 
 #include "ncc.h"
 #include "lib/option.h"
 
-// ============================================================================
-// General_Category
-// ============================================================================
-
 typedef enum {
-    NCC_UNICODE_GC_LU, /**< Letter, uppercase */
-    NCC_UNICODE_GC_LL, /**< Letter, lowercase */
-    NCC_UNICODE_GC_LT, /**< Letter, titlecase */
-    NCC_UNICODE_GC_LM, /**< Letter, modifier */
-    NCC_UNICODE_GC_LO, /**< Letter, other */
-    NCC_UNICODE_GC_MN, /**< Mark, nonspacing */
-    NCC_UNICODE_GC_MC, /**< Mark, spacing combining */
-    NCC_UNICODE_GC_ME, /**< Mark, enclosing */
-    NCC_UNICODE_GC_ND, /**< Number, decimal digit */
-    NCC_UNICODE_GC_NL, /**< Number, letter */
-    NCC_UNICODE_GC_NO, /**< Number, other */
-    NCC_UNICODE_GC_PC, /**< Punctuation, connector */
-    NCC_UNICODE_GC_PD, /**< Punctuation, dash */
-    NCC_UNICODE_GC_PS, /**< Punctuation, open */
-    NCC_UNICODE_GC_PE, /**< Punctuation, close */
-    NCC_UNICODE_GC_PI, /**< Punctuation, initial quote */
-    NCC_UNICODE_GC_PF, /**< Punctuation, final quote */
-    NCC_UNICODE_GC_PO, /**< Punctuation, other */
-    NCC_UNICODE_GC_SM, /**< Symbol, math */
-    NCC_UNICODE_GC_SC, /**< Symbol, currency */
-    NCC_UNICODE_GC_SK, /**< Symbol, modifier */
-    NCC_UNICODE_GC_SO, /**< Symbol, other */
-    NCC_UNICODE_GC_ZS, /**< Separator, space */
-    NCC_UNICODE_GC_ZL, /**< Separator, line */
-    NCC_UNICODE_GC_ZP, /**< Separator, paragraph */
-    NCC_UNICODE_GC_CC, /**< Other, control */
-    NCC_UNICODE_GC_CF, /**< Other, format */
-    NCC_UNICODE_GC_CS, /**< Other, surrogate */
-    NCC_UNICODE_GC_CO, /**< Other, private use */
-    NCC_UNICODE_GC_CN, /**< Other, not assigned */
+    NCC_UNICODE_GC_LU,
+    NCC_UNICODE_GC_LL,
+    NCC_UNICODE_GC_LT,
+    NCC_UNICODE_GC_LM,
+    NCC_UNICODE_GC_LO,
+    NCC_UNICODE_GC_MN,
+    NCC_UNICODE_GC_MC,
+    NCC_UNICODE_GC_ME,
+    NCC_UNICODE_GC_ND,
+    NCC_UNICODE_GC_NL,
+    NCC_UNICODE_GC_NO,
+    NCC_UNICODE_GC_PC,
+    NCC_UNICODE_GC_PD,
+    NCC_UNICODE_GC_PS,
+    NCC_UNICODE_GC_PE,
+    NCC_UNICODE_GC_PI,
+    NCC_UNICODE_GC_PF,
+    NCC_UNICODE_GC_PO,
+    NCC_UNICODE_GC_SM,
+    NCC_UNICODE_GC_SC,
+    NCC_UNICODE_GC_SK,
+    NCC_UNICODE_GC_SO,
+    NCC_UNICODE_GC_ZS,
+    NCC_UNICODE_GC_ZL,
+    NCC_UNICODE_GC_ZP,
+    NCC_UNICODE_GC_CC,
+    NCC_UNICODE_GC_CF,
+    NCC_UNICODE_GC_CS,
+    NCC_UNICODE_GC_CO,
+    NCC_UNICODE_GC_CN,
 } ncc_unicode_gc_t;
-
-// ============================================================================
-// Bidi_Class
-// ============================================================================
 
 typedef enum {
     NCC_UNICODE_BIDI_L,
@@ -78,10 +62,6 @@ typedef enum {
     NCC_UNICODE_BIDI_PDI,
 } ncc_unicode_bidi_class_t;
 
-// ============================================================================
-// East_Asian_Width
-// ============================================================================
-
 typedef enum {
     NCC_UNICODE_EAW_N,
     NCC_UNICODE_EAW_NA,
@@ -91,16 +71,8 @@ typedef enum {
     NCC_UNICODE_EAW_A,
 } ncc_unicode_eaw_t;
 
-// ============================================================================
-// Script / Block
-// ============================================================================
-
 typedef uint8_t  ncc_unicode_script_t;
 typedef uint16_t ncc_unicode_block_t;
-
-// ============================================================================
-// Joining_Type
-// ============================================================================
 
 typedef enum {
     NCC_UNICODE_JT_U,
@@ -110,10 +82,6 @@ typedef enum {
     NCC_UNICODE_JT_R,
     NCC_UNICODE_JT_T,
 } ncc_unicode_jt_t;
-
-// ============================================================================
-// Binary properties
-// ============================================================================
 
 typedef enum {
     NCC_UNICODE_PROP_WHITE_SPACE,
@@ -165,10 +133,6 @@ typedef enum {
     NCC_UNICODE_PROP_EXTENDED_PICTOGRAPHIC,
 } ncc_unicode_property_t;
 
-// ============================================================================
-// Numeric types
-// ============================================================================
-
 typedef enum {
     NCC_UNICODE_NUMERIC_NONE,
     NCC_UNICODE_NUMERIC_DECIMAL,
@@ -182,10 +146,6 @@ typedef struct {
     int32_t                     denominator;
 } ncc_unicode_numeric_value_t;
 
-// ============================================================================
-// BOM detection
-// ============================================================================
-
 typedef enum {
     NCC_UNICODE_BOM_NONE,
     NCC_UNICODE_BOM_UTF8,
@@ -195,13 +155,6 @@ typedef enum {
     NCC_UNICODE_BOM_UTF32_BE,
 } ncc_unicode_bom_t;
 
-// ============================================================================
-// Stub implementations (ASCII-only)
-// ============================================================================
-
-/**
- * @brief Return the General_Category of a codepoint (ASCII-only stub).
- */
 static inline ncc_unicode_gc_t
 ncc_unicode_general_category(ncc_codepoint_t cp)
 {
@@ -220,19 +173,12 @@ ncc_unicode_general_category(ncc_codepoint_t cp)
     if (cp < 0x20 || cp == 0x7F) {
         return NCC_UNICODE_GC_CC;
     }
-    // Default: treat remaining ASCII punctuation/symbols as PO.
     if (cp < 0x80) {
         return NCC_UNICODE_GC_PO;
     }
-    // Non-ASCII: unassigned.
     return NCC_UNICODE_GC_CN;
 }
 
-/**
- * @brief Test whether a codepoint has a given binary property (stub).
- *
- * Only handles the most common ASCII cases; returns false otherwise.
- */
 static inline bool
 ncc_unicode_has_property(ncc_codepoint_t cp,
                           ncc_unicode_property_t prop)
@@ -264,9 +210,6 @@ ncc_unicode_has_property(ncc_codepoint_t cp,
     }
 }
 
-/**
- * @brief Return the display column width of a codepoint (ASCII stub).
- */
 static inline int
 ncc_unicode_char_width(ncc_codepoint_t cp)
 {
@@ -274,7 +217,7 @@ ncc_unicode_char_width(ncc_codepoint_t cp)
         return 0;
     }
     if (cp < 0x20 || cp == 0x7F) {
-        return 0; // Control characters.
+        return 0;
     }
     return 1;
 }

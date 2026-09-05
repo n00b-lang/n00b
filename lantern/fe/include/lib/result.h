@@ -1,7 +1,7 @@
 #pragma once
 
 #include <assert.h>
-#include "lib/option.h"  // for ncc_voidptr_t typedef
+#include "lib/option.h"
 #include "lib/macros.h"
 
 typedef int ncc_err_t;

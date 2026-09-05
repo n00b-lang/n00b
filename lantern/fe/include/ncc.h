@@ -13,14 +13,12 @@ typedef unsigned __int128 ncc_uint128_t;
 typedef ncc_uint128_t ncc_hash_value_t;
 typedef uint64_t ncc_size_t;
 
-// Forward declarations for types used across headers.
 typedef struct ncc_string_t     ncc_string_t;
 typedef struct ncc_buffer_t     ncc_buffer_t;
 typedef struct ncc_dict_t ncc_dict_t;
 
 typedef ncc_hash_value_t (*ncc_hash_fn)(void *);
 
-// Codepoint predicate for scanner match_if.
 typedef bool (*ncc_cp_predicate_fn)(ncc_codepoint_t, void *);
 
 #define ncc_min(a, b) \

@@ -1,4 +1,3 @@
-// tree_dump.c — Parse tree debug dumper.
 
 #include "parse/tree_dump.h"
 #include "internal/parse/grammar_internal.h"
@@ -48,8 +47,6 @@ print_node(ncc_grammar_t *g, ncc_parse_tree_t *node, FILE *out,
 
     ncc_nt_node_t *pn = &ncc_tree_node_value(node);
 
-    // Skip group wrappers — just recurse into children at same depth.
-    // In raw mode, show them explicitly instead.
     if (pn->group_top && !raw) {
         for (size_t i = 0; i < ncc_tree_num_children(node); i++) {
             print_node(g, ncc_tree_child(node, i), out, depth, raw);

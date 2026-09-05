@@ -1,10 +1,5 @@
 #pragma once
 
-// Style types for ncc rich strings (r"..." transform output).
-//
-// Shared between ncc_runtime.h (standalone, for ncc-compiled code)
-// and core/string.h (libncc internals).
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

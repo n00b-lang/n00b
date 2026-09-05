@@ -1,35 +1,18 @@
 #pragma once
 
-/**
- * @file pwz_internal.h
- * @internal
- * @brief Private types for the PWZ parser engine.
- */
-
 #include "parse/pwz.h"
 #include "scanner/token_stream.h"
 #include "lib/arena.h"
-
-// ============================================================================
-// Forward declarations
-// ============================================================================
 
 typedef struct pwz_exp_t pwz_exp_t;
 typedef struct pwz_cxt_t pwz_cxt_t;
 
 typedef pwz_exp_t *pwz_exp_ptr_t;
 
-// Must be declared before pwz_exp_t so the type is complete inside the union.
 ncc_list_decl(pwz_exp_ptr_t);
 
-// ============================================================================
-// Memo records (inline in grammar exps, arena-allocated for seq_memos)
-// ============================================================================
-
-// Bit 31 of end_pos is used as the in_progress flag.
 #define PWZ_MEM_IN_PROGRESS_BIT ((int32_t)(1u << 31))
 
-// Sentinel for "no position yet". Must not have bit 31 set.
 #define PWZ_POS_BOTTOM ((int32_t)0x7FFFFFFE)
 
 typedef struct pwz_cxt_node_t {
@@ -41,7 +24,7 @@ typedef struct pwz_mem_t {
     pwz_cxt_node_t *parents;
     pwz_exp_t      *result;
     int32_t         start_pos;
-    int32_t         end_pos;    // bit 31 = in_progress flag
+    int32_t         end_pos;
     uint16_t        refcount;
 } pwz_mem_t;
 
@@ -68,10 +51,6 @@ pwz_mem_end_pos(const pwz_mem_t *m)
     return m->end_pos & ~PWZ_MEM_IN_PROGRESS_BIT;
 }
 
-// ============================================================================
-// Contexts (per-parse, arena-allocated)
-// ============================================================================
-
 typedef enum : uint8_t {
     PWZ_CXT_TOP,
     PWZ_CXT_SEQ,
@@ -86,7 +65,7 @@ typedef struct pwz_cxt_t {
     int16_t        nleft;
     union {
         struct {
-            pwz_mem_t     *mem;        // parent memo to propagate completion to
+            pwz_mem_t     *mem;
             pwz_exp_ptr_t *left;
             pwz_exp_ptr_t *right;
             int16_t        nright;
@@ -97,10 +76,6 @@ typedef struct pwz_cxt_t {
     };
 } pwz_cxt_t;
 
-// ============================================================================
-// PWZ expression graph (built once from grammar)
-// ============================================================================
-
 typedef enum {
     PWZ_TOK,
     PWZ_SEQ,
@@ -110,15 +85,15 @@ typedef enum {
 } pwz_exp_kind_t;
 
 struct pwz_exp_t {
-    pwz_mem_t     *mem;          // Per-position memo (arena-allocated)
+    pwz_mem_t     *mem;
     union {
-        int32_t tid;             // PWZ_TOK: terminal ID
-        int16_t nt_id;           // PWZ_SEQ, PWZ_ALT: non-terminal ID
-        ncc_char_class_t cc;     // PWZ_CLASS: character class
+        int32_t tid;
+        int16_t nt_id;
+        ncc_char_class_t cc;
     };
     pwz_exp_kind_t kind;
-    int16_t         rule_ix;     // PWZ_SEQ: rule index
-    int16_t         nchildren;   // PWZ_SEQ: child count
+    int16_t         rule_ix;
+    int16_t         nchildren;
     union {
         struct {
             const char     *name;
@@ -130,10 +105,6 @@ struct pwz_exp_t {
     };
 };
 
-// ============================================================================
-// Zippers & worklist
-// ============================================================================
-
 typedef struct {
     pwz_exp_t *result;
     pwz_mem_t *mem;
@@ -144,22 +115,11 @@ ncc_list_decl(pwz_zipper_t);
 typedef ncc_parse_tree_t *ncc_parse_tree_ptr_t;
 ncc_list_decl(ncc_parse_tree_ptr_t);
 
-// ============================================================================
-// Parser state (full definition)
-// ============================================================================
-
-// One pending step of the derivative machine. The four derive functions call
-// each other in tail position everywhere except two loops (a node's
-// alternatives, a memo's parents), so the whole family runs off this explicit
-// stack instead of the C stack: parse depth is then bounded by memory, not by
-// how deeply the input nests.
 typedef enum {
     PWZ_STEP_DD,
     PWZ_STEP_DDP,
     PWZ_STEP_DU,
     PWZ_STEP_DUP,
-    // Runs after every parent of a memo has been propagated to, in place of
-    // the code that followed the recursive loop.
     PWZ_STEP_DU_DONE,
 } pwz_step_kind_t;
 
@@ -181,9 +141,8 @@ struct ncc_pwz_parser_t {
     pwz_exp_ptr_t               *nt_exps;
     ncc_list_t(pwz_exp_ptr_t)   all_exps;
 
-    // Per-parse arena (result_exps, child arrays, memos, contexts, cxt_nodes).
     ncc_arena_t                 parse_arena;
-    pwz_mem_t                  *free_mems;    // free list for recycled memos
+    pwz_mem_t                  *free_mems;
     ncc_list_t(pwz_zipper_t)    worklist;
     ncc_list_t(pwz_zipper_t)    worklist_swap;
     ncc_list_t(pwz_exp_ptr_t)   tops;
@@ -197,12 +156,8 @@ struct ncc_pwz_parser_t {
     pwz_mem_t                   *mem_bottom;
     pwz_exp_t                   *exp_bottom;
 
-    // Position of the token at which the last failed parse got stuck (the
-    // furthest token no surviving derivation could consume). -1 if the last
-    // parse succeeded or has not run. See ncc_pwz_error_pos().
     int32_t                     error_pos;
 
-    // TS-5 type-aware disambiguation oracle (nullptr => default last-alt policy).
     ncc_pwz_disambig_fn         disambig_cb;
     void                       *disambig_ud;
 };

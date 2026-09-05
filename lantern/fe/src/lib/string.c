@@ -1,4 +1,3 @@
-// string.c — ncc_string_t implementations.
 
 #include "lib/string.h"
 #include "lib/alloc.h"
@@ -20,7 +19,7 @@ ncc_string_from_raw(const char *src, int64_t byte_len)
     s.data = (char *)ncc_alloc_size(1, (size_t)byte_len + 1);
     memcpy(s.data, src, (size_t)byte_len);
     s.u8_bytes   = (size_t)byte_len;
-    s.codepoints = (size_t)byte_len; // Approximate; fine for parser.
+    s.codepoints = (size_t)byte_len;
     s.styling    = nullptr;
 
     return s;
@@ -40,7 +39,7 @@ ncc_string_from_cstr(const char *src)
     s.data = (char *)ncc_alloc_size(1, len + 1);
     memcpy(s.data, src, len);
     s.u8_bytes   = len;
-    s.codepoints = len; // Approximate.
+    s.codepoints = len;
     s.styling    = nullptr;
 
     return s;
@@ -76,8 +75,6 @@ ncc_string_eq(ncc_string_t a, ncc_string_t b)
 
     return memcmp(a.data, b.data, a.u8_bytes) == 0;
 }
-
-// ── ncc_string_to_ansi ──────────────────────────────────────────────────────
 
 static void
 emit_sgr(ncc_buffer_t *buf, const ncc_text_style_t *style)

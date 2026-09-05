@@ -1,10 +1,3 @@
-// bnf.c - BNF grammar-from-text parser
-//
-// Ported from n00b/src/slay/bnf.c with ncc→C23 translation:
-// - *r"..." → NCC_STRING_STATIC(...)
-// - ncc_unicode_str_eq() → ncc_string_eq()
-// - _kargs removed from public API
-// - Always uses PWZ parser
 
 #include "parse/bnf.h"
 #include "parse/pwz.h"
@@ -18,10 +11,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-// ============================================================================
-// Simple UTF-8 decoder for grammar literals
-// ============================================================================
 
 static int32_t
 utf8_decode(const char **pp)
@@ -51,10 +40,6 @@ utf8_decode(const char **pp)
     *pp = (const char *)p;
     return cp;
 }
-
-// ============================================================================
-// Preprocessing
-// ============================================================================
 
 ncc_string_t
 ncc_bnf_strip_comments(ncc_string_t input)
@@ -148,10 +133,6 @@ ncc_bnf_trim_lines(ncc_string_t input)
     return ncc_string_from_raw(result, (int64_t)ri);
 }
 
-// ============================================================================
-// Join continuation lines: remove newlines before lines starting with '|'
-// ============================================================================
-
 static ncc_string_t
 bnf_join_continuations(ncc_string_t input)
 {
@@ -191,11 +172,6 @@ bnf_join_continuations(ncc_string_t input)
     return ncc_string_from_raw(result, (int64_t)ri);
 }
 
-// ============================================================================
-// BNF Tokenizer
-// ============================================================================
-
-// Token IDs for the BNF meta-grammar.
 enum {
     BNF_TOK_LANGLE     = NCC_TOK_START_ID + 1,
     BNF_TOK_RANGLE     = NCC_TOK_START_ID + 2,
@@ -218,10 +194,6 @@ enum {
     BNF_TOK_COMMA      = NCC_TOK_START_ID + 19,
 };
 
-// ============================================================================
-// BNF scanner callback
-// ============================================================================
-
 static bool
 is_bnf_hws(ncc_codepoint_t cp, void *ctx)
 {
@@ -242,7 +214,6 @@ bnf_scan(ncc_scanner_t *s)
 
     ncc_codepoint_t ch = ncc_scan_peek(s, 0);
 
-    // Newline.
     if (ch == '\r' || ch == '\n') {
         ncc_scan_mark(s);
 
@@ -255,7 +226,6 @@ bnf_scan(ncc_scanner_t *s)
         return true;
     }
 
-    // ::=
     if (ch == ':') {
         ncc_scan_mark(s);
 
@@ -268,7 +238,6 @@ bnf_scan(ncc_scanner_t *s)
         return true;
     }
 
-    // < and >
     if (ch == '<') {
         ncc_scan_mark(s);
         ncc_scan_advance(s);
@@ -285,7 +254,6 @@ bnf_scan(ncc_scanner_t *s)
         return true;
     }
 
-    // |
     if (ch == '|') {
         ncc_scan_mark(s);
         ncc_scan_advance(s);
@@ -293,7 +261,6 @@ bnf_scan(ncc_scanner_t *s)
         return true;
     }
 
-    // Token terminal: %NAME or %"..." or %'...'
     if (ch == '%') {
         ncc_scan_advance(s);
 
@@ -349,7 +316,6 @@ bnf_scan(ncc_scanner_t *s)
         return true;
     }
 
-    // Quoted literal: "..." or '...'
     if (ch == '"' || ch == '\'') {
         ncc_codepoint_t quote = ch;
         ncc_scan_advance(s);
@@ -376,7 +342,6 @@ bnf_scan(ncc_scanner_t *s)
         return true;
     }
 
-    // __CLASS (reserved terminal)
     if (ch == '_' && ncc_scan_peek_byte(s, 1) == '_') {
         uint8_t third = ncc_scan_peek_byte(s, 2);
 
@@ -403,7 +368,6 @@ bnf_scan(ncc_scanner_t *s)
         }
     }
 
-    // Rule name
     if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_') {
         ncc_scan_mark(s);
 
@@ -425,7 +389,6 @@ bnf_scan(ncc_scanner_t *s)
         return true;
     }
 
-    // Single-character tokens.
     ncc_scan_mark(s);
     ncc_scan_advance(s);
 
@@ -440,7 +403,6 @@ bnf_scan(ncc_scanner_t *s)
     default:  break;
     }
 
-    // $N (child reference)
     if (ch == '$') {
         ncc_codepoint_t d = ncc_scan_peek(s, 0);
 
@@ -466,10 +428,6 @@ bnf_scan(ncc_scanner_t *s)
 
     return true;
 }
-
-// ============================================================================
-// Helper: extract ncc_string_t from token value
-// ============================================================================
 
 static ncc_string_t
 tok_str(ncc_token_info_t *tok)
@@ -498,10 +456,6 @@ str_eq_lit(ncc_string_t s, const char *lit)
 {
     return ncc_string_eq(s, ncc_string_from_cstr(lit));
 }
-
-// ============================================================================
-// Walk action result types
-// ============================================================================
 
 typedef struct {
     int   tag;
@@ -570,10 +524,6 @@ bnf_result(int tag, void *data)
     r->data = data;
     return r;
 }
-
-// ============================================================================
-// Walk actions for token-based BNF grammar
-// ============================================================================
 
 static void *
 bnf_walk_atom(ncc_nt_node_t *pn, void *children, void *thunk)
@@ -782,12 +732,6 @@ bnf_walk_expression(ncc_nt_node_t *pn, void *children, void *thunk)
     return bnf_result(BNF_LIST, result);
 }
 
-// ============================================================================
-// Annotation walk data
-// ============================================================================
-
-// Retained annotation fields outlive the BNF token stream, so every string
-// kept on an ncc_annotation_t is copied out of the token here.
 static ncc_string_t
 dup_str(ncc_string_t s)
 {
@@ -798,8 +742,6 @@ dup_str(ncc_string_t s)
     return ncc_string_from_raw(s.data, (int64_t)s.u8_bytes);
 }
 
-// A DOLLAR token is a positional child reference ($0, $1, ...); a NAME token
-// names the child non-terminal. Anything else is an unset reference.
 static ncc_child_ref_t
 parse_child_ref(void *result)
 {
@@ -821,7 +763,6 @@ parse_child_ref(void *result)
     return NCC_CHILD_NONE;
 }
 
-// Borrowed: valid only while the BNF token stream is alive.
 static ncc_string_t
 arg_raw(bnf_list_t *args, size_t i)
 {
@@ -918,8 +859,6 @@ bnf_walk_arg_list(ncc_nt_node_t *pn, void *children, void *thunk)
     return bnf_result(BNF_LIST, result);
 }
 
-// Parse an @annotation into a retained ncc_annotation_t. @penalty and
-// @disambig additionally have a runtime effect on grammar construction.
 static void *
 bnf_walk_annotation(ncc_nt_node_t *pn, void *children, void *thunk)
 {
@@ -950,10 +889,6 @@ bnf_walk_annotation(ncc_nt_node_t *pn, void *children, void *thunk)
         break;
 
     case NCC_ANNOT_DECLARES:
-        // @declares($name)
-        // @declares($name, $type)
-        // @declares($name, "kind")
-        // @declares($name, $type, "kind")
         info->name_ref = arg_ref(args, 0);
 
         if (nargs == 2) {
@@ -974,8 +909,6 @@ bnf_walk_annotation(ncc_nt_node_t *pn, void *children, void *thunk)
         break;
 
     case NCC_ANNOT_TYPE:
-        // One argument is the backward-compatible @type($n) type declaration;
-        // two is @type($n, "spec").
         if (nargs >= 2) {
             info->name_ref  = arg_ref(args, 0);
             info->type_spec = arg_str(args, 1);
@@ -1070,10 +1003,6 @@ bnf_walk_annotation(ncc_nt_node_t *pn, void *children, void *thunk)
         break;
 
     case NCC_ANNOT_DISAMBIG:
-        // @disambig(<predicate>[, <cost>]) — names a predicate evaluated
-        // against the symbol table at forest->tree extraction; when it holds,
-        // <cost> (default 1) is added to the alternative's score so the
-        // lowest-scoring (most type-consistent) parse is chosen.
         info->disambig_predicate = arg_str(args, 0);
         info->disambig_cost      = arg_int(args, 1, 0);
 
@@ -1232,10 +1161,6 @@ bnf_walk_syntax(ncc_nt_node_t *pn, void *children, void *thunk)
     return bnf_result(BNF_DICT, result);
 }
 
-// ============================================================================
-// Build the BNF meta-grammar (token-level)
-// ============================================================================
-
 static ncc_grammar_t *
 build_bnf_grammar(void)
 {
@@ -1262,7 +1187,6 @@ build_bnf_grammar(void)
     int64_t DOLLAR     = BNF_TOK_DOLLAR;
     int64_t COMMA      = BNF_TOK_COMMA;
 
-    // Create all non-terminals (NCC_STRING_STATIC replaces ncc *r"...").
     ncc_string_t s_syntax      = NCC_STRING_STATIC("syntax");
     ncc_string_t s_rule        = NCC_STRING_STATIC("rule");
     ncc_string_t s_expression  = NCC_STRING_STATIC("expression");
@@ -1370,10 +1294,6 @@ build_bnf_grammar(void)
     return g;
 }
 
-// ============================================================================
-// Reserved terminal -> character class mapping
-// ============================================================================
-
 static bool
 reserved_to_class(ncc_string_t name, ncc_char_class_t *cc_out)
 {
@@ -1412,10 +1332,6 @@ reserved_to_class(ncc_string_t name, ncc_char_class_t *cc_out)
     return false;
 }
 
-// ============================================================================
-// Token type name -> terminal ID mapping
-// ============================================================================
-
 static int64_t
 token_type_to_id(ncc_string_t name)
 {
@@ -1440,10 +1356,6 @@ token_type_to_id(ncc_string_t name)
 
     return 0;
 }
-
-// ============================================================================
-// Convert walk results into grammar rules
-// ============================================================================
 
 static int bnf_anon_counter = 0;
 
@@ -1674,10 +1586,6 @@ resolve_terms_to_matches(ncc_grammar_t *user_g,
     return n;
 }
 
-// ============================================================================
-// Populate grammar from walk results
-// ============================================================================
-
 static bool
 populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
                  ncc_string_t start_symbol)
@@ -1694,7 +1602,6 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
 
     ncc_string_t *first_name = nullptr;
 
-    // First pass: create all non-terminals.
     for (size_t i = 0; i < pairs->len; i++) {
         bnf_result_t  *pair_r = slist_get(pairs, i);
         bnf_list_t    *pair   = (bnf_list_t *)pair_r->data;
@@ -1712,7 +1619,6 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
         }
     }
 
-    // Set start symbol.
     ncc_string_t start_s;
 
     if (start_symbol.data) {
@@ -1728,7 +1634,6 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
     ncc_nonterm_t *start_nt = ncc_nonterm(user_g, start_s);
     ncc_grammar_set_start(user_g, start_nt);
 
-    // Second pass: create rules.
     for (size_t i = 0; i < pairs->len; i++) {
         bnf_result_t  *pair_r = slist_get(pairs, i);
         bnf_list_t    *pair   = (bnf_list_t *)pair_r->data;
@@ -1740,8 +1645,6 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
                                                      : nullptr;
 
         if (!name || !name->data || name->data[0] == '\0' || !expr_r) {
-            // A statement with no left-hand side is a file-level annotation
-            // (e.g. @tokenizer("n00b")); it governs the grammar as a whole.
             if (file_annots && file_annots->tag == BNF_LIST) {
                 bnf_list_t *fl = (bnf_list_t *)file_annots->data;
 
@@ -1782,14 +1685,11 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
                         disambig_cost      = info->disambig_cost;
                     }
 
-                    // The BNF surface writes annotations in LHS position, so
-                    // they govern every alternative of this non-terminal.
                     ncc_nt_annotate(ncc_get_nonterm(user_g, nt_id), info);
                     a_r->data = nullptr;
                 }
             }
         }
-
 
         bnf_list_t *alternatives = (bnf_list_t *)expr_r->data;
 
@@ -1829,10 +1729,6 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
                 }
             }
 
-            // Attach the TS-5 disambiguation penalty to the (normal) rule. Set
-            // immediately after creation, before the next add_rule may realloc
-            // g->rules. Copy the predicate string — the bnf annotation info is
-            // freed during result cleanup.
             if (rule_p && disambig_predicate.data) {
                 rule_p->disambig_predicate =
                     ncc_string_from_cstr(disambig_predicate.data);
@@ -1847,10 +1743,6 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
 
     return true;
 }
-
-// ============================================================================
-// Free walk results recursively
-// ============================================================================
 
 static void
 free_bnf_result(bnf_result_t *r)
@@ -1904,18 +1796,12 @@ free_bnf_result(bnf_result_t *r)
     }
 
     case BNF_ANNOT:
-        // Retained annotations were handed to the grammar, which nulls
-        // r->data; anything still here was never attached.
         ncc_free((ncc_annotation_t *)r->data);
         break;
     }
 
     ncc_free(r);
 }
-
-// ============================================================================
-// Public API (simplified — always uses PWZ, no _kargs)
-// ============================================================================
 
 bool
 ncc_bnf_load(ncc_string_t   bnf_text,
@@ -1926,12 +1812,10 @@ ncc_bnf_load(ncc_string_t   bnf_text,
         return false;
     }
 
-    // Preprocess.
     ncc_string_t stripped = ncc_bnf_strip_comments(bnf_text);
     ncc_string_t trimmed  = ncc_bnf_trim_lines(stripped);
     trimmed = bnf_join_continuations(trimmed);
 
-    // Ensure text ends with a newline.
     size_t len = trimmed.u8_bytes;
 
     if (len > 0 && trimmed.data[len - 1] != '\n') {
@@ -1942,7 +1826,6 @@ ncc_bnf_load(ncc_string_t   bnf_text,
         trimmed = ncc_string_from_raw(tmp, (int64_t)(len + 1));
     }
 
-    // Tokenize using the scanner API.
     ncc_buffer_t  *bnf_buf = ncc_buffer_from_bytes(trimmed.data,
                                                       (int64_t)trimmed.u8_bytes);
     bool            in_angle = false;
@@ -1960,14 +1843,12 @@ ncc_bnf_load(ncc_string_t   bnf_text,
         return false;
     }
 
-    // Build token pointer array and wrap as a new stream for the parser.
     ncc_token_info_ptr_t *raw_ptrs;
     int32_t                bnf_n = ncc_token_list_build_ptrs(&bnf_tl, &raw_ptrs);
 
     ncc_token_stream_t *parse_ts
         = ncc_token_stream_from_array(raw_ptrs, bnf_n);
 
-    // Build and use the BNF meta-grammar.
     ncc_grammar_t      *meta_g = build_bnf_grammar();
     ncc_parse_forest_t  forest = ncc_pwz_parse_grammar(meta_g, parse_ts);
 
@@ -1983,7 +1864,6 @@ ncc_bnf_load(ncc_string_t   bnf_text,
         return false;
     }
 
-    // Walk the first parse tree.
     bnf_result_t *result = (bnf_result_t *)ncc_parse_forest_walk_best(
         &forest, nullptr);
 

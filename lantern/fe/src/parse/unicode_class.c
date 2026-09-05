@@ -1,13 +1,5 @@
-// unicode_class.c - Character class dispatch for parser engines.
-//
-// Uses n00b's unicode property tables for proper Unicode support
-// instead of locale-dependent wctype.h functions.
 
 #include "internal/parse/unicode_class.h"
-
-// ============================================================================
-// ASCII helpers (no table lookup needed)
-// ============================================================================
 
 static bool
 is_ascii_digit(int32_t cp)
@@ -46,10 +38,6 @@ is_nonzero_digit(int32_t cp)
     return cp >= '1' && cp <= '9';
 }
 
-// ============================================================================
-// Unicode-aware helpers (via n00b property tables)
-// ============================================================================
-
 static bool
 is_whitespace(int32_t cp)
 {
@@ -66,12 +54,10 @@ is_printable(int32_t cp)
 
     ncc_unicode_gc_t gc = ncc_unicode_general_category((ncc_codepoint_t)cp);
 
-    // Control characters (Cc) are not printable.
     if (gc == NCC_UNICODE_GC_CC) {
         return false;
     }
 
-    // Unassigned (Cn) and surrogates (Cs) are not printable.
     if (gc == NCC_UNICODE_GC_CN || gc == NCC_UNICODE_GC_CS) {
         return false;
     }
@@ -100,8 +86,6 @@ is_non_nl_printable(int32_t cp)
 static bool
 is_json_string_char(int32_t cp)
 {
-    // Valid unescaped JSON string character:
-    // any Unicode character except " and \ and control chars (0x00-0x1F).
     if (cp < 0x20) {
         return false;
     }
@@ -112,10 +96,6 @@ is_json_string_char(int32_t cp)
 
     return true;
 }
-
-// ============================================================================
-// Public dispatch
-// ============================================================================
 
 bool
 ncc_codepoint_matches_class(int32_t cp, ncc_char_class_t cc)

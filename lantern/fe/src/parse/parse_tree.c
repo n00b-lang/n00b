@@ -1,12 +1,7 @@
-// parse_tree.c - Shared parse tree operations (engine-agnostic).
 
 #include "parse/parse_tree.h"
 #include "internal/parse/grammar_internal.h"
 #include "lib/alloc.h"
-
-// ============================================================================
-// Node inspection
-// ============================================================================
 
 bool
 ncc_parse_node_is_token(ncc_parse_tree_t *t)
@@ -33,10 +28,6 @@ ncc_parse_node_name(ncc_parse_tree_t *t)
 
     return ncc_option_set(ncc_string_t, ncc_tree_node_value(t).name);
 }
-
-// ============================================================================
-// Tree walking
-// ============================================================================
 
 void *
 ncc_parse_tree_walk(ncc_grammar_t *g, ncc_parse_tree_t *node, void *thunk)
@@ -69,8 +60,6 @@ ncc_parse_tree_walk(ncc_grammar_t *g, ncc_parse_tree_t *node, void *thunk)
         }
     }
 
-    // Group wrapper nodes (from BNF ?, *, +) have pn->id = NCC_GROUP_ID
-    // which won't resolve to a real nonterm. Skip the action lookup.
     if (pn->group_top) {
         return sub_results;
     }
@@ -85,10 +74,6 @@ ncc_parse_tree_walk(ncc_grammar_t *g, ncc_parse_tree_t *node, void *thunk)
 
     return (*action)(pn, sub_results, thunk);
 }
-
-// ============================================================================
-// Tree free
-// ============================================================================
 
 void
 ncc_parse_tree_free(ncc_parse_tree_t *t)

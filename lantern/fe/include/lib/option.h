@@ -4,7 +4,6 @@
 #include "ncc.h"
 #include "lib/macros.h"
 
-// Pointer types need typedef aliases for token-paste to work.
 typedef void       *ncc_voidptr_t;
 typedef char       *ncc_charptr_t;
 typedef const char *ncc_const_charptr_t;
@@ -59,7 +58,6 @@ typedef const char *ncc_const_charptr_t;
         _opt;                                      \
     })
 
-// Common option types.
 ncc_option_decl(int);
 ncc_option_decl(int32_t);
 ncc_option_decl(uint32_t);

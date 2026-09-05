@@ -5,10 +5,6 @@
 
 #include <string.h>
 
-// Symbols are keyed by (owning scope, name) rather than by name alone. Scopes
-// are retained after their pop, so a lookup walks the parent chain probing one
-// hash per level: pop does no work, and a scoped lookup is still correct once
-// the walk that built the table has finished.
 typedef struct {
     int32_t      scope_id;
     ncc_string_t name;
@@ -39,9 +35,6 @@ dup_str(ncc_string_t s)
         return s;
     }
 
-    // The default namespace is the empty string, which must stay distinct
-    // from an absent one: ncc_string_from_raw hands back a null string for a
-    // zero length.
     if (s.u8_bytes == 0) {
         return ncc_string_empty();
     }
@@ -115,9 +108,6 @@ ncc_symtab_free(ncc_symtab_t *st)
         return;
     }
 
-    // The table owns the names it copied on add and push. Every other string
-    // on an entry or scope is borrowed from the grammar's annotations or the
-    // parse tree, which outlive it.
     ncc_scope_t *scope = st->all_scopes;
 
     while (scope) {
@@ -197,7 +187,6 @@ ncc_symtab_ns(ncc_symtab_t *st, ncc_string_t ns_name)
 
     st->namespaces[st->ns_count++] = ns;
 
-    // push_scope_in copies the name, so a borrowed empty string will do.
     ns->root = push_scope_in(st, ns, (ncc_string_t){.data = ""});
 
     return ns;
@@ -219,8 +208,6 @@ ncc_symtab_pop_scope(ncc_symtab_t *st, ncc_string_t ns_name)
 {
     ncc_namespace_t *ns = find_ns(st, ns_name);
 
-    // The file scope is never popped; it is what a scoped lookup falls back
-    // to once the walk has finished.
     if (!ns || !ns->current || !ns->current->parent) {
         return;
     }
@@ -287,8 +274,6 @@ ncc_symtab_add(ncc_symtab_t *st, ncc_string_t ns_name, ncc_string_t name,
     void *prior = _ncc_dict_put(ns->symbols, key, entry);
 
     if (prior) {
-        // Redeclared in the same scope: the key was already present, so the
-        // one just allocated is unused.
         ncc_free(key);
     }
 

@@ -187,7 +187,6 @@ nt_chain(ncc_tree_walk_t *w, int64_t nt_id)
     return found ? (chain_t *)c : nullptr;
 }
 
-// phase < 0 runs every visitor in the chain regardless of phase.
 static bool
 run_chain(ncc_tree_walk_t *w, chain_t *c, ncc_visit_t *v, bool pre,
           bool reverse, int32_t phase)
@@ -217,10 +216,6 @@ run_chain(ncc_tree_walk_t *w, chain_t *c, ncc_visit_t *v, bool pre,
     return descend;
 }
 
-// Annotations governing a node: those on its non-terminal, then those on the
-// rule the node was produced by. Phase is the outer loop so that every
-// registration in one phase has run over the whole node before the next
-// phase starts.
 static bool
 run_annots(ncc_tree_walk_t *w, ncc_visit_t *v, bool pre, bool reverse)
 {
@@ -274,7 +269,6 @@ fill(ncc_tree_walk_t *w, ncc_visit_t *v, frame_t *f)
 
     v->pn = &ncc_tree_node_value(f->node);
 
-    // Group wrappers and error nodes name no non-terminal.
     if (v->pn->id < 0 || v->pn->id == NCC_EMPTY_STRING || v->pn->group_top) {
         return;
     }
@@ -344,8 +338,6 @@ ncc_tree_walk_run(ncc_tree_walk_t *w, ncc_parse_tree_t *root)
                 }
             }
 
-            // run_chain may have grown the frame stack via a nested walk;
-            // re-fetch before touching the frame again.
             f = &w->stack.data[top];
         }
 

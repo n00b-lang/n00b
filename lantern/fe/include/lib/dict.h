@@ -1,12 +1,4 @@
 #pragma once
-/**
- * @file dict.h
- * @brief Simple open-addressing hash table (standalone extraction).
- *
- * Replaces the n00b lock-free robin-hood dictionary with a plain
- * single-threaded open-addressing table using linear probing.
- * Stores void* keys and void* values.
- */
 
 #include <stdint.h>
 #include <string.h>
@@ -17,13 +9,11 @@
 #define NCC_DICT_MIN_SIZE_LOG 4
 #define NCC_DICT_MIN_SIZE     (1 << NCC_DICT_MIN_SIZE_LOG)
 
-// Load factor threshold: resize when count > capacity * 3/4.
 #define _NCC_DICT_LOAD_NUM 3
 #define _NCC_DICT_LOAD_DEN 4
 
 typedef int (*ncc_dict_sort_fn)(const void *, const void *);
 
-// Bucket states.
 #define _NCC_BUCKET_EMPTY    0
 #define _NCC_BUCKET_OCCUPIED 1
 #define _NCC_BUCKET_DELETED  2
@@ -40,21 +30,16 @@ struct ncc_dict_t {
     ncc_hash_fn         hash_fn;
     ncc_dict_key_eq_fn  key_eq;
     ncc_dict_bucket_t  *buckets;
-    size_t               capacity; // Always a power of 2.
-    size_t               count;    // Number of OCCUPIED entries.
+    size_t               capacity;
+    size_t               count;
     size_t               tombstones;
 };
 
-// Compat: n00b uses ncc_dict_item_t in iteration.
 typedef struct {
     void    *key;
     void    *value;
     uint64_t order;
 } ncc_dict_item_t;
-
-// ============================================================================
-// Internal helpers
-// ============================================================================
 
 static inline size_t
 _ncc_dict_mask(const ncc_dict_t *d)
@@ -68,16 +53,13 @@ _ncc_dict_probe(ncc_hash_value_t hv, size_t mask)
     return (size_t)(hv & (ncc_hash_value_t)mask);
 }
 
-// Forward declaration for resize.
 static inline void _ncc_dict_resize(ncc_dict_t *d, size_t new_cap);
 
 static inline void
 _ncc_dict_maybe_resize(ncc_dict_t *d)
 {
-    // Resize when occupied + tombstones exceed 3/4 capacity.
     if ((d->count + d->tombstones) * _NCC_DICT_LOAD_DEN
         > d->capacity * _NCC_DICT_LOAD_NUM) {
-        // If many tombstones, rehash at same size; else double.
         size_t new_cap = d->capacity;
         if (d->count * _NCC_DICT_LOAD_DEN > d->capacity * _NCC_DICT_LOAD_NUM) {
             new_cap = d->capacity * 2;
@@ -119,17 +101,12 @@ _ncc_dict_resize(ncc_dict_t *d, size_t new_cap)
     ncc_free(old_buckets);
 }
 
-// ============================================================================
-// Default key equality (pointer identity).
-// ============================================================================
-
 static inline bool
 _ncc_dict_ptr_eq(const void *a, const void *b)
 {
     return a == b;
 }
 
-// C-string key equality.
 static inline bool
 ncc_dict_cstr_eq(const void *a, const void *b)
 {
@@ -142,17 +119,6 @@ ncc_dict_cstr_eq(const void *a, const void *b)
     return strcmp((const char *)a, (const char *)b) == 0;
 }
 
-// ============================================================================
-// Public API
-// ============================================================================
-
-/**
- * @brief Initialize an untyped dictionary.
- *
- * @param dict    Dictionary to initialize.
- * @param hash_fn Hash function for keys (nullptr = ncc_hash_word).
- * @param key_eq  Key equality function (nullptr = pointer identity).
- */
 static inline void
 ncc_dict_init(ncc_dict_t *dict,
                        ncc_hash_fn         hash_fn,
@@ -167,10 +133,6 @@ ncc_dict_init(ncc_dict_t *dict,
         ncc_dict_bucket_t, NCC_DICT_MIN_SIZE);
 }
 
-/**
- * @brief Insert or update a key/value pair.
- * @return The previous value, or nullptr if newly inserted.
- */
 static inline void *
 _ncc_dict_put(ncc_dict_t *d, void *key, void *value)
 {
@@ -183,7 +145,6 @@ _ncc_dict_put(ncc_dict_t *d, void *key, void *value)
 
     while (true) {
         if (d->buckets[idx].state == _NCC_BUCKET_EMPTY) {
-            // Not found — insert.
             size_t ins = (first_deleted != (size_t)-1) ? first_deleted : idx;
             if (d->buckets[ins].state == _NCC_BUCKET_DELETED) {
                 d->tombstones--;
@@ -201,7 +162,6 @@ _ncc_dict_put(ncc_dict_t *d, void *key, void *value)
             }
         }
         else if (d->key_eq(d->buckets[idx].key, key)) {
-            // Found — update.
             void *old             = d->buckets[idx].value;
             d->buckets[idx].value = value;
             return old;
@@ -211,10 +171,6 @@ _ncc_dict_put(ncc_dict_t *d, void *key, void *value)
     }
 }
 
-/**
- * @brief Look up a key.
- * @return The value, or nullptr if not found. Sets *found accordingly.
- */
 static inline void *
 _ncc_dict_get(ncc_dict_t *d, void *key, bool *found)
 {
@@ -242,9 +198,6 @@ _ncc_dict_get(ncc_dict_t *d, void *key, bool *found)
     }
 }
 
-/**
- * @brief Remove a key. Returns true if found and removed.
- */
 static inline bool
 _ncc_dict_remove(ncc_dict_t *d, void *key)
 {
@@ -269,9 +222,6 @@ _ncc_dict_remove(ncc_dict_t *d, void *key)
     }
 }
 
-/**
- * @brief Insert only if key is absent. Returns false if key exists.
- */
 static inline bool
 _ncc_dict_add(ncc_dict_t *d, void *key, void *value)
 {
@@ -286,9 +236,6 @@ _ncc_dict_add(ncc_dict_t *d, void *key, void *value)
     return true;
 }
 
-/**
- * @brief Replace an existing key's value. Returns false if key absent.
- */
 static inline bool
 _ncc_dict_replace(ncc_dict_t *d, void *key, void *value)
 {
@@ -311,7 +258,6 @@ _ncc_dict_replace(ncc_dict_t *d, void *key, void *value)
     }
 }
 
-// Macro wrappers matching the n00b API (cast through void*).
 #define ncc_dict_put(d, k, v) \
     _ncc_dict_put(d, ((void *)(uintptr_t)(k)), ((void *)(uintptr_t)(v)))
 #define ncc_dict_get(d, k, b) \
@@ -323,9 +269,6 @@ _ncc_dict_replace(ncc_dict_t *d, void *key, void *value)
 #define ncc_dict_remove(d, k) \
     _ncc_dict_remove(d, ((void *)(uintptr_t)(k)))
 
-/**
- * @brief Check whether a key exists in the dictionary.
- */
 static inline bool
 ncc_dict_contains(ncc_dict_t *d, void *v)
 {
@@ -334,9 +277,6 @@ ncc_dict_contains(ncc_dict_t *d, void *v)
     return found;
 }
 
-/**
- * @brief Free the dictionary's internal storage.
- */
 static inline void
 ncc_dict_free(ncc_dict_t *d)
 {
@@ -346,9 +286,6 @@ ncc_dict_free(ncc_dict_t *d)
     d->count    = 0;
 }
 
-/**
- * @brief Return the number of entries in the dictionary.
- */
 static inline size_t
 ncc_dict_len(ncc_dict_t *d)
 {

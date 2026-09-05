@@ -1,23 +1,5 @@
 #pragma once
 
-/**
- * @file commander.h
- * @brief Grammar-based command-line parser.
- *
- * Commander builds a formal grammar from your command-line specification,
- * then parses argv using PWZ. This gives you unambiguous, predictable
- * parsing with proper error reporting.
- *
- * Usage:
- *   ncc_cmdr_t *c = ncc_cmdr_new();
- *   ncc_cmdr_add_flag(c, nullptr, "--verbose", NCC_CMDR_TYPE_BOOL, false, nullptr);
- *   ncc_cmdr_add_positional(c, nullptr, "file", NCC_CMDR_TYPE_WORD, 1, -1);
- *   ncc_cmdr_result_t *r = ncc_cmdr_parse(c, argc - 1, argv + 1);
- *   if (r->ok) { ... }
- *   ncc_cmdr_result_free(r);
- *   ncc_cmdr_free(c);
- */
-
 #include "parse/grammar.h"
 #include "parse/parse_tree.h"
 #include "lib/dict.h"
@@ -25,10 +7,6 @@
 
 #include <stdint.h>
 #include <stdio.h>
-
-// ============================================================================
-// Token type indices
-// ============================================================================
 
 enum {
     NCC_CMDR_TID_WORD  = 0,
@@ -41,10 +19,6 @@ enum {
     NCC_CMDR_TID_FLAG  = 7,
     NCC_CMDR_TID_COUNT = 8,
 };
-
-// ============================================================================
-// Types
-// ============================================================================
 
 typedef enum {
     NCC_CMDR_TYPE_BOOL,
@@ -127,16 +101,8 @@ typedef struct {
     ncc_parse_tree_t    *tree;
 } ncc_cmdr_result_t;
 
-// ============================================================================
-// Lifecycle
-// ============================================================================
-
 ncc_cmdr_t *ncc_cmdr_new(void);
 void         ncc_cmdr_free(ncc_cmdr_t *c);
-
-// ============================================================================
-// Builder API
-// ============================================================================
 
 void ncc_cmdr_set_name(ncc_cmdr_t *c, const char *name);
 void ncc_cmdr_add_command(ncc_cmdr_t *c, const char *name, const char *doc);
@@ -152,19 +118,11 @@ void ncc_cmdr_add_positional(ncc_cmdr_t *c, const char *command,
                                 int min, int max);
 void ncc_cmdr_finalize(ncc_cmdr_t *c);
 
-// ============================================================================
-// Parsing
-// ============================================================================
-
 ncc_cmdr_result_t *ncc_cmdr_parse(ncc_cmdr_t *c, int argc,
                                       const char **argv);
 ncc_cmdr_result_t *ncc_cmdr_parse_string(ncc_cmdr_t *c,
                                               const char *cmdline);
 void                ncc_cmdr_result_free(ncc_cmdr_result_t *r);
-
-// ============================================================================
-// Result queries
-// ============================================================================
 
 const char *ncc_cmdr_result_command(ncc_cmdr_result_t *r);
 bool        ncc_cmdr_flag_present(ncc_cmdr_result_t *r, const char *flag);
@@ -175,9 +133,5 @@ bool        ncc_cmdr_flag_bool(ncc_cmdr_result_t *r, const char *flag);
 int32_t     ncc_cmdr_arg_count(ncc_cmdr_result_t *r);
 const char *ncc_cmdr_arg_str(ncc_cmdr_result_t *r, int index);
 int64_t     ncc_cmdr_arg_int(ncc_cmdr_result_t *r, int index);
-
-// ============================================================================
-// Error output
-// ============================================================================
 
 int32_t ncc_cmdr_print_errors(ncc_cmdr_result_t *r, FILE *out);

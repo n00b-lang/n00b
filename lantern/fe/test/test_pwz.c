@@ -1,9 +1,3 @@
-// test_pwz.c — Smoke tests for the PWZ parser extraction.
-//
-// Tests:
-//   1. Token-level parse: E → E "+" T | T ; T → ID
-//   2. Codepoint-level parse: S → 'a' 'b'
-//   3. Ambiguous grammar (forest): S → S S | 'a'
 
 #include "parse/pwz.h"
 #include "scanner/token_stream.h"
@@ -13,12 +7,9 @@
 #include <stdio.h>
 #include <string.h>
 
-// Terminal IDs.
 #define TOK_PLUS (NCC_TOK_START_ID + 10)
 #define TOK_ID   (NCC_TOK_START_ID + 11)
 
-// Two helpers this test used from ncc's xform layer, which is not part of the
-// port. Inlined rather than dragging 800 lines of transform helpers across.
 static const char *
 leaf_text(ncc_parse_tree_t *node)
 {
@@ -72,8 +63,6 @@ test_basic_parse(void)
     ncc_register_terminal(g, ncc_string_from_cstr("PLUS"));
     ncc_register_terminal(g, ncc_string_from_cstr("ID"));
 
-    // Use IDs via ncc_add_rule_v to avoid dangling pointers into nt_list
-    // (ncc_add_rule creates error NTs which can reallocate nt_list).
     ncc_match_t rule1[] = {
         {.kind = NCC_MATCH_NT, .nt_id = E_id},
         NCC_TERMINAL(TOK_PLUS),

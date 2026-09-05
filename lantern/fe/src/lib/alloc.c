@@ -1,4 +1,3 @@
-// alloc.c — Memory debug counter storage.
 
 #include "lib/alloc.h"
 

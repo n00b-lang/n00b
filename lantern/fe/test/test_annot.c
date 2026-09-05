@@ -62,11 +62,6 @@ slurp(const char *path)
     return ncc_string_from_cstr(p);
 }
 
-// ============================================================================
-// Type binder: stands in for the typehash-backed one, tagging each descriptor
-// so the test can tell which annotation produced it.
-// ============================================================================
-
 typedef struct {
     int from_tree_calls;
     int from_spec_calls;
@@ -107,10 +102,6 @@ bind_spec(void *ctx, ncc_string_t spec)
 
     return tag_desc(spec.u8_bytes ? spec.data[0] : '?');
 }
-
-// ============================================================================
-// Caller-supplied visitors, registered alongside the annotation walk
-// ============================================================================
 
 typedef struct {
     int               decls_seen;
@@ -195,8 +186,6 @@ parse_toy(ncc_grammar_t *g, const char *src, ncc_pwz_parser_t **p_out,
     return ncc_pwz_get_tree(p);
 }
 
-// ============================================================================
-
 static void
 test_annotations_are_retained_on_the_grammar(ncc_grammar_t *g)
 {
@@ -275,8 +264,6 @@ test_the_walk_builds_a_symbol_table(ncc_grammar_t *g)
     ncc_tree_walk_run(w, tree);
     ncc_tree_walk_free(w);
 
-    // --- caller visitors ran alongside the annotation walk ---
-
     check("a caller's visitor fires once per matching node",
           probe.decls_seen == 2);
     check("the module scope was opened", probe.module_scope != nullptr);
@@ -290,8 +277,6 @@ test_the_walk_builds_a_symbol_table(ncc_grammar_t *g)
         check("scope depth counts from the file scope",
               probe.module_scope->depth == 1 && probe.block_scope->depth == 2);
     }
-
-    // --- symbols land in the scope that was open when they were declared ---
 
     ncc_symtab_t *st = r->symtab;
 
@@ -319,8 +304,6 @@ test_the_walk_builds_a_symbol_table(ncc_grammar_t *g)
           b_from_block != nullptr && b_from_block->scope == probe.block_scope);
     check("every declaration was recorded", c != nullptr);
 
-    // --- the type annotation produced a descriptor, not a parse subtree ---
-
     check("@declares($name,$type) binds a type through the binder",
           a && desc_tag(a->type) == 'T');
     check("in the scope where it was written",
@@ -330,15 +313,8 @@ test_the_walk_builds_a_symbol_table(ncc_grammar_t *g)
     check("both binder paths were used",
           log.from_tree_calls == 2 && log.from_spec_calls == 1);
 
-    // --- phases order registrations, not grammar text ---
-    //
-    // <tdecl> writes @type before @declares. @type reads the symbol @declares
-    // creates, so without phases it would find nothing.
-
     check("an annotation can read what a later-written annotation produced",
           c && c->type != nullptr);
-
-    // --- control flow labels ---
 
     check("the @branch node was found", probe.cond_node != nullptr);
 
@@ -369,8 +345,6 @@ test_the_walk_builds_a_symbol_table(ncc_grammar_t *g)
 static void
 test_a_deep_tree_does_not_overflow_the_stack(ncc_grammar_t *g)
 {
-    // <items> ::= <item> <items> is right recursive, so N declarations nest
-    // N deep. A recursive walker dies here; the iterative one does not.
     enum { N = 4000 };
 
     char *src = malloc(N * 4 + 1);

@@ -1,14 +1,5 @@
 #pragma once
 
-/**
- * @file arena.h
- * @brief Simple bump allocator for batch-lifetime allocations.
- *
- * Allocations are 16-byte aligned. There is no per-object free.
- * Call ncc_arena_reset() to reclaim all allocations (blocks are kept
- * for reuse) or ncc_arena_free() to return everything to the OS.
- */
-
 #include <stdalign.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -53,7 +44,6 @@ ncc_arena_alloc(ncc_arena_t *a, size_t size)
 {
     size = _ncc_arena_align_up(size, NCC_ARENA_ALIGNMENT);
 
-    // Try current block.
     if (a->current && a->current->used + size <= a->current->capacity) {
         void *ptr = a->current->data + a->current->used;
         a->current->used += size;
@@ -63,7 +53,6 @@ ncc_arena_alloc(ncc_arena_t *a, size_t size)
         return memset(ptr, 0, size);
     }
 
-    // Try reusing the next block in the chain (from a previous reset).
     if (a->current && a->current->next
         && a->current->next->capacity >= size) {
         a->current = a->current->next;
@@ -74,7 +63,6 @@ ncc_arena_alloc(ncc_arena_t *a, size_t size)
         return memset(a->current->data, 0, size);
     }
 
-    // Allocate a new block.
     size_t block_cap = a->default_block_size;
     if (size > block_cap) {
         block_cap = size;
@@ -91,7 +79,6 @@ ncc_arena_alloc(ncc_arena_t *a, size_t size)
     block->next     = NULL;
 
     if (a->current) {
-        // Insert after current, preserving any tail chain for future resets.
         block->next      = a->current->next;
         a->current->next = block;
     }
@@ -107,11 +94,6 @@ ncc_arena_alloc(ncc_arena_t *a, size_t size)
     return memset(block->data, 0, size);
 }
 
-/**
- * @brief Reset arena: keep all blocks but mark them empty.
- *
- * After reset, subsequent allocations reuse existing blocks.
- */
 static inline void
 ncc_arena_reset(ncc_arena_t *a)
 {
@@ -125,9 +107,6 @@ ncc_arena_reset(ncc_arena_t *a)
 #endif
 }
 
-/**
- * @brief Free arena: return all blocks to the OS.
- */
 static inline void
 ncc_arena_free(ncc_arena_t *a)
 {
@@ -143,9 +122,6 @@ ncc_arena_free(ncc_arena_t *a)
 }
 
 #ifdef NCC_MEM_DEBUG
-/**
- * @brief Return total bytes allocated from this arena (since last reset).
- */
 static inline size_t
 ncc_arena_total_allocated(const ncc_arena_t *a)
 {

@@ -1,11 +1,6 @@
-// parse_forest.c - Engine-agnostic parse forest operations.
 
 #include "parse/parse_forest.h"
 #include "lib/array.h"
-
-// ============================================================================
-// Construction
-// ============================================================================
 
 ncc_parse_forest_t
 ncc_parse_forest_empty(ncc_grammar_t *g)
@@ -26,10 +21,6 @@ ncc_parse_forest_new(ncc_grammar_t          *g,
     };
 }
 
-// ============================================================================
-// Query
-// ============================================================================
-
 int32_t
 ncc_parse_forest_count(ncc_parse_forest_t *f)
 {
@@ -46,10 +37,6 @@ ncc_parse_forest_is_ambiguous(ncc_parse_forest_t *f)
     return ncc_parse_forest_count(f) > 1;
 }
 
-// ============================================================================
-// Access
-// ============================================================================
-
 ncc_parse_tree_t *
 ncc_parse_forest_tree(ncc_parse_forest_t *f, int32_t ix)
 {
@@ -65,10 +52,6 @@ ncc_parse_forest_best(ncc_parse_forest_t *f)
 {
     return ncc_parse_forest_tree(f, 0);
 }
-
-// ============================================================================
-// Walk
-// ============================================================================
 
 void *
 ncc_parse_forest_walk(ncc_parse_forest_t *f,
@@ -90,10 +73,6 @@ ncc_parse_forest_walk_best(ncc_parse_forest_t *f,
 {
     return ncc_parse_forest_walk(f, 0, thunk);
 }
-
-// ============================================================================
-// Cleanup
-// ============================================================================
 
 void
 ncc_parse_forest_free(ncc_parse_forest_t *f)

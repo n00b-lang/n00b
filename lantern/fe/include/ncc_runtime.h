@@ -1,28 +1,9 @@
 #pragma once
-/**
- * @file ncc_runtime.h
- * @brief Runtime support for code compiled by ncc.
- *
- * This header is included by ncc-compiled C output. It provides:
- * - ncc_vargs_t: variadic argument struct for the + parameter transform
- * - Rich string types for r"..." literals
- *
- * This does NOT include ncc's own build infrastructure — it is solely
- * for the output of ncc to link against.
- */
 
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-    // ============================================================================
-    // ncc_vargs_t — variadic argument packing
-    // ============================================================================
-    //
-    // ncc's + transform rewrites:
-    //   void foo(int x, +)   →  void foo(int x, ncc_vargs_t *_ncc_vargs)
-    //   foo(1, a, b, c)      →  foo(1, &(ncc_vargs_t){3, 0, (void*[]){a,b,c}})
 
     typedef struct ncc_vargs_t ncc_vargs_t;
 
@@ -152,10 +133,6 @@ ncc_vargs_peek_forward_address(ncc_vargs_t *vargs, unsigned int n)
     return &vargs->args[ix];
 }
 
-// ============================================================================
-// Rich string support types (for r"..." transform output)
-// ============================================================================
-
 #include "lib/style.h"
 
 typedef struct ncc_string_t ncc_string_t;
@@ -166,12 +143,5 @@ struct ncc_string_t {
     size_t codepoints;
     void  *styling;
 };
-
-// ============================================================================
-// ncc_string_to_ansi() — render styled ncc_string_t to ANSI escape sequences
-// ============================================================================
-//
-// Implemented in string.c (libncc). Returns an allocated char * with embedded
-// ANSI SGR escape sequences; caller frees.
 
 extern char *ncc_string_to_ansi(const ncc_string_t *s);

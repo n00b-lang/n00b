@@ -1,8 +1,3 @@
-// commander.c — Grammar-based command-line parser.
-//
-// Builds a formal grammar from your CLI spec, tokenizes argv,
-// then parses with PWZ. Supports flags, positionals, subcommands,
-// --flag=value syntax, short flag aliases, and -- separator.
 
 #include "parse/commander.h"
 #include "parse/pwz.h"
@@ -13,10 +8,6 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 static ncc_string_t
 cmdr_intern(const char *s)
@@ -67,7 +58,6 @@ find_flag(ncc_cmdr_command_t *cmd, const char *flag_name)
     return nullptr;
 }
 
-// Wrap a C string as ncc_string_t for grammar API calls.
 static ncc_string_t
 cstr_to_rich(const char *s)
 {
@@ -76,10 +66,6 @@ cstr_to_rich(const char *s)
         .u8_bytes = s ? strlen(s) : 0,
     };
 }
-
-// ============================================================================
-// Lifecycle
-// ============================================================================
 
 ncc_cmdr_t *
 ncc_cmdr_new(void)
@@ -98,14 +84,12 @@ free_command(ncc_cmdr_command_t *cmd)
         free_command(&cmd->subcommands[i]);
     }
 
-    // Free interned strings in flag specs.
     for (int32_t i = 0; i < cmd->n_flags; i++) {
         ncc_free(cmd->flags[i].name.data);
         ncc_free(cmd->flags[i].short_name.data);
         ncc_free(cmd->flags[i].doc.data);
     }
 
-    // Free interned strings in positional specs.
     for (int32_t i = 0; i < cmd->n_positionals; i++) {
         ncc_free(cmd->positionals[i].name.data);
     }
@@ -133,10 +117,6 @@ ncc_cmdr_free(ncc_cmdr_t *c)
     ncc_free(c->name.data);
     ncc_free(c);
 }
-
-// ============================================================================
-// Builder API
-// ============================================================================
 
 void
 ncc_cmdr_set_name(ncc_cmdr_t *c, const char *name)
@@ -291,10 +271,6 @@ ncc_cmdr_add_positional(ncc_cmdr_t *c, const char *command,
     p->max  = max;
 }
 
-// ============================================================================
-// Grammar generation
-// ============================================================================
-
 static void
 register_command_terminals(ncc_cmdr_t *c, ncc_cmdr_command_t *cmd)
 {
@@ -326,7 +302,6 @@ build_flag_nt(ncc_cmdr_t *c, [[maybe_unused]] ncc_cmdr_command_t *cmd,
     int64_t bool_tid = c->tok_ids[NCC_CMDR_TID_BOOL];
 
     if (f->takes_value) {
-        // --flag=value
         ncc_add_rule_v(c->grammar, nt_id, 3,
             (ncc_match_t[]){NCC_TERMINAL(flag_tid),
                             NCC_TERMINAL(eq_tid),
@@ -344,12 +319,10 @@ build_flag_nt(ncc_cmdr_t *c, [[maybe_unused]] ncc_cmdr_command_t *cmd,
                                 NCC_TERMINAL(word_tid)});
         }
 
-        // --flag value
         ncc_add_rule_v(c->grammar, nt_id, 2,
             (ncc_match_t[]){NCC_TERMINAL(flag_tid),
                             NCC_TERMINAL(word_tid)});
 
-        // Also accept int/float/bool tokens as values.
         ncc_add_rule_v(c->grammar, nt_id, 2,
             (ncc_match_t[]){NCC_TERMINAL(flag_tid), NCC_TERMINAL(int_tid)});
         ncc_add_rule_v(c->grammar, nt_id, 2,
@@ -358,7 +331,6 @@ build_flag_nt(ncc_cmdr_t *c, [[maybe_unused]] ncc_cmdr_command_t *cmd,
             (ncc_match_t[]){NCC_TERMINAL(flag_tid), NCC_TERMINAL(bool_tid)});
     }
     else {
-        // Boolean flag (no value).
         ncc_add_rule_v(c->grammar, nt_id, 1,
             (ncc_match_t[]){NCC_TERMINAL(flag_tid)});
 
@@ -384,11 +356,9 @@ build_items_nt(ncc_cmdr_t *c, ncc_cmdr_command_t *cmd, const char *prefix)
 
     ncc_match_t items_nt = {.kind = NCC_MATCH_NT, .nt_id = items_id};
 
-    // items -> ""
     ncc_add_rule_v(c->grammar, items_id, 1,
         (ncc_match_t[]){NCC_EPSILON()});
 
-    // items -> flag items  (for each flag)
     for (int32_t i = 0; i < cmd->n_flags; i++) {
         int64_t fnt_id = build_flag_nt(c, cmd, &cmd->flags[i], prefix);
         ncc_add_rule_v(c->grammar, items_id, 2,
@@ -396,7 +366,6 @@ build_items_nt(ncc_cmdr_t *c, ncc_cmdr_command_t *cmd, const char *prefix)
                             items_nt});
     }
 
-    // items -> WORD items | INT items | FLOAT items | BOOL items
     ncc_add_rule_v(c->grammar, items_id, 2,
         (ncc_match_t[]){NCC_TERMINAL(c->tok_ids[NCC_CMDR_TID_WORD]),
                         items_nt});
@@ -410,12 +379,10 @@ build_items_nt(ncc_cmdr_t *c, ncc_cmdr_command_t *cmd, const char *prefix)
         (ncc_match_t[]){NCC_TERMINAL(c->tok_ids[NCC_CMDR_TID_BOOL]),
                         items_nt});
 
-    // items -> FLAG items  (unknown flags become positional args)
     ncc_add_rule_v(c->grammar, items_id, 2,
         (ncc_match_t[]){NCC_TERMINAL(c->tok_ids[NCC_CMDR_TID_FLAG]),
                         items_nt});
 
-    // items -> DD items  (-- separator)
     ncc_add_rule_v(c->grammar, items_id, 2,
         (ncc_match_t[]){NCC_TERMINAL(c->tok_ids[NCC_CMDR_TID_DD]),
                         items_nt});
@@ -459,7 +426,6 @@ ncc_cmdr_finalize(ncc_cmdr_t *c)
     c->grammar = ncc_grammar_new();
     ncc_grammar_set_error_recovery(c->grammar, false);
 
-    // Register base token types.
     c->tok_ids[NCC_CMDR_TID_WORD]  = ncc_register_terminal(
         c->grammar, cstr_to_rich("WORD"));
     c->tok_ids[NCC_CMDR_TID_INT]   = ncc_register_terminal(
@@ -477,7 +443,6 @@ ncc_cmdr_finalize(ncc_cmdr_t *c)
     c->tok_ids[NCC_CMDR_TID_FLAG]  = ncc_register_terminal(
         c->grammar, cstr_to_rich("FLAG"));
 
-    // Register all flag and subcommand terminals.
     register_command_terminals(c, &c->root);
 
     for (int32_t i = 0; i < c->root.n_subcommands; i++) {
@@ -485,7 +450,6 @@ ncc_cmdr_finalize(ncc_cmdr_t *c)
         ncc_register_terminal(c->grammar, c->root.subcommands[i].name);
     }
 
-    // Build grammar.
     int64_t start_id = ncc_nonterm_id(
         ncc_nonterm(c->grammar, cstr_to_rich("cmd")));
     ncc_grammar_set_start_id(c->grammar, start_id);
@@ -509,10 +473,6 @@ ncc_cmdr_finalize(ncc_cmdr_t *c)
     ncc_grammar_finalize(c->grammar);
     c->finalized = true;
 }
-
-// ============================================================================
-// Tokenizer
-// ============================================================================
 
 static bool
 is_int_str(const char *s)
@@ -728,7 +688,6 @@ cmdr_tokenize(const char **argv, int argc, ncc_cmdr_t *c,
             continue;
         }
 
-        // -- means end of flags.
         if (!past_dd && strcmp(arg, "--") == 0) {
             past_dd = true;
             tok_list_push(&tl, make_token("--",
@@ -737,14 +696,12 @@ cmdr_tokenize(const char **argv, int argc, ncc_cmdr_t *c,
             continue;
         }
 
-        // After --, everything is a word.
         if (past_dd) {
             tok_list_push(&tl, make_token(arg, classify_word(c, arg),
                                            tl.len));
             continue;
         }
 
-        // --flag=value
         if (strncmp(arg, "--", 2) == 0 && strlen(arg) > 2) {
             const char *eq = strchr(arg, '=');
 
@@ -783,7 +740,6 @@ cmdr_tokenize(const char **argv, int argc, ncc_cmdr_t *c,
             continue;
         }
 
-        // -x short flag
         if (arg[0] == '-' && arg[1] != '\0'
             && !isdigit((unsigned char)arg[1])) {
             int64_t ftid = find_flag_tid(c, arg);
@@ -793,7 +749,6 @@ cmdr_tokenize(const char **argv, int argc, ncc_cmdr_t *c,
                 continue;
             }
 
-            // Try splitting combined short flags (-abc -> -a -b -c).
             bool can_split = false;
 
             if (strlen(arg) > 2) {
@@ -826,7 +781,6 @@ cmdr_tokenize(const char **argv, int argc, ncc_cmdr_t *c,
             continue;
         }
 
-        // Bare word (may be a subcommand name).
         int64_t tid = classify_word(c, arg);
 
         for (int32_t si = 0; si < c->root.n_subcommands; si++) {
@@ -841,7 +795,6 @@ cmdr_tokenize(const char **argv, int argc, ncc_cmdr_t *c,
         tok_list_push(&tl, make_token(arg, tid, tl.len));
     }
 
-    // Add EOF.
     tok_list_push(&tl, make_token("", NCC_TOK_EOF, tl.len));
 
     *tokens_out   = tl.tokens;
@@ -849,10 +802,6 @@ cmdr_tokenize(const char **argv, int argc, ncc_cmdr_t *c,
 
     return 0;
 }
-
-// ============================================================================
-// Parsing
-// ============================================================================
 
 static ncc_cmdr_result_t *
 make_error_result(const char *msg)
@@ -866,7 +815,6 @@ make_error_result(const char *msg)
     return r;
 }
 
-// Get token text as a C string from a parse tree node.
 static const char *
 get_token_text(ncc_parse_tree_t *node)
 {
@@ -884,7 +832,6 @@ get_token_text(ncc_parse_tree_t *node)
     return val.data;
 }
 
-// Recursively collect all terminal text from a parse tree.
 static void
 collect_terminal_text(ncc_parse_tree_t *tree, const char ***texts,
                       int32_t *n, int32_t *cap)
@@ -958,7 +905,6 @@ extract_result_from_tree(ncc_cmdr_t *c, ncc_parse_tree_t *tree,
             goto add_arg;
         }
 
-        // Check if this is a flag.
         {
             ncc_cmdr_command_t *cmd = r->command.data
                 ? find_command(c, r->command.data) : &c->root;
@@ -1015,12 +961,10 @@ extract_result_from_tree(ncc_cmdr_t *c, ncc_parse_tree_t *tree,
                     v->b   = true;
                 }
 
-                // Store under long flag name.
                 _ncc_dict_put(&r->flags,
                                        (void *)strdup(flag->name.data),
                                        (void *)v);
 
-                // Also store under alias.
                 if (flag->short_name.data) {
                     ncc_cmdr_val_t *alias_v = ncc_alloc(ncc_cmdr_val_t);
                     *alias_v = *v;
@@ -1103,7 +1047,6 @@ ncc_cmdr_parse(ncc_cmdr_t *c, int argc, const char **argv)
         return make_error_result("tokenization failed");
     }
 
-    // Parse using PWZ with a token stream from the array.
     ncc_token_stream_t *ts = ncc_token_stream_from_array(tokens, n_tokens);
     ncc_pwz_parser_t   *pp = ncc_pwz_new(c->grammar);
     bool parse_ok = ncc_pwz_parse(pp, ts);
@@ -1148,7 +1091,6 @@ ncc_cmdr_parse_string(ncc_cmdr_t *c, const char *cmdline)
         return make_error_result("grammar not available");
     }
 
-    // Split cmdline into argv.
     const char **argv = nullptr;
     int          argc = 0;
     int          cap  = 16;
@@ -1218,10 +1160,6 @@ ncc_cmdr_parse_string(ncc_cmdr_t *c, const char *cmdline)
 
     return result;
 }
-
-// ============================================================================
-// Result queries
-// ============================================================================
 
 const char *
 ncc_cmdr_result_command(ncc_cmdr_result_t *r)
@@ -1314,10 +1252,6 @@ ncc_cmdr_arg_int(ncc_cmdr_result_t *r, int index)
     return r->args[index].int_val;
 }
 
-// ============================================================================
-// Result cleanup
-// ============================================================================
-
 void
 ncc_cmdr_result_free(ncc_cmdr_result_t *r)
 {
@@ -1327,7 +1261,6 @@ ncc_cmdr_result_free(ncc_cmdr_result_t *r)
 
     ncc_free(r->command.data);
 
-    // Free interned keys and value structs in the flags dict.
     for (size_t i = 0; i < r->flags.capacity; i++) {
         if (r->flags.buckets[i].state != _NCC_BUCKET_OCCUPIED) {
             continue;
@@ -1356,16 +1289,10 @@ ncc_cmdr_result_free(ncc_cmdr_result_t *r)
 
     ncc_free(r->errors);
 
-    // Parse tree nodes are arena-allocated (ncc_alloc); we just
-    // clear the pointer to avoid stale access.
     r->tree = nullptr;
 
     ncc_free(r);
 }
-
-// ============================================================================
-// Error output
-// ============================================================================
 
 int32_t
 ncc_cmdr_print_errors(ncc_cmdr_result_t *r, FILE *out)

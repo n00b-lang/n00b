@@ -1212,9 +1212,6 @@ th_type *th_parse(th_ctx *ctx, const char *src, th_error *err)
     return parse_common(ctx, src, strlen(src), err, nullptr);
 }
 
-/* The caller usually already knows how much input there is. Measuring it here
-   instead makes parsing one type out of a long buffer cost the length of the
-   whole buffer, and a caller in a loop pays that per type. */
 th_type *th_parse_prefix_n(th_ctx *ctx, const char *src, size_t len,
                            size_t *consumed, th_error *err)
 {

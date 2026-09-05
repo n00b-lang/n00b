@@ -1,4 +1,3 @@
-// test_bnf.c — End-to-end test: load BNF grammar, tokenize C, parse, print tree.
 
 #include <assert.h>
 #include <stdio.h>
@@ -15,10 +14,6 @@
 #include "lib/buffer.h"
 #include "internal/parse/grammar_internal.h"
 
-// ============================================================================
-// C tokenizer callback
-// ============================================================================
-
 static bool
 c_tokenize(ncc_scanner_t *s)
 {
@@ -29,14 +24,12 @@ restart:
         return false;
     }
 
-    // Skip line comments.
     if (ncc_scan_peek_byte(s, 0) == '/'
         && ncc_scan_peek_byte(s, 1) == '/') {
         ncc_scan_skip_line_comment(s);
         goto restart;
     }
 
-    // Skip block comments.
     if (ncc_scan_peek_byte(s, 0) == '/'
         && ncc_scan_peek_byte(s, 1) == '*') {
         ncc_scan_skip_block_comment(s, "/*", "*/");
@@ -46,21 +39,18 @@ restart:
     ncc_scan_mark(s);
     ncc_codepoint_t cp = ncc_scan_peek(s, 0);
 
-    // String literals.
     if (cp == '"') {
         ncc_option_t(ncc_string_t) val = ncc_scan_string_double(s);
         ncc_scan_emit(s, NCC_TOK_STRING_LIT, val);
         return true;
     }
 
-    // Character literals.
     if (cp == '\'') {
         ncc_option_t(ncc_string_t) val = ncc_scan_string_single(s);
         ncc_scan_emit(s, NCC_TOK_CHAR_LIT, val);
         return true;
     }
 
-    // Numbers.
     if ((cp >= '0' && cp <= '9')
         || (cp == '.' && ncc_scan_peek_byte(s, 1) >= '0'
             && ncc_scan_peek_byte(s, 1) <= '9')) {
@@ -71,14 +61,12 @@ restart:
         }
     }
 
-    // Identifiers / keywords.
     if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || cp == '_') {
         ncc_option_t(ncc_string_t) id_val = ncc_scan_identifier(s);
 
         if (ncc_option_is_set(id_val)) {
             ncc_string_t id_str = ncc_option_get(id_val);
 
-            // Try keyword lookup via the scanner's grammar.
             int64_t kw_id = ncc_scan_terminal_id(s, id_str.data);
 
             if (kw_id != NCC_TOK_OTHER) {
@@ -92,7 +80,6 @@ restart:
         }
     }
 
-    // 3-char operators.
     static const char *ops3[] = {
         "<<=", ">>=", "...", nullptr,
     };
@@ -111,7 +98,6 @@ restart:
         }
     }
 
-    // 2-char operators.
     static const char *ops2[] = {
         "->", "++", "--", "<<", ">>", "<=", ">=", "==", "!=",
         "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "^=",
@@ -131,21 +117,15 @@ restart:
         }
     }
 
-    // Single-character token.
     ncc_scan_advance(s);
     ncc_scan_emit_marked(s, (int32_t)cp);
 
     return true;
 }
 
-// ============================================================================
-// Grammar loading
-// ============================================================================
-
 static ncc_grammar_t *
 load_c_grammar(void)
 {
-    // Try several paths — meson runs from build dir.
     const char *paths[] = {
         "c_ncc.bnf",
         "../c_ncc.bnf",
@@ -240,10 +220,6 @@ assert_c_parse_rejects(ncc_grammar_t *g, const char *src)
     }
 }
 
-// ============================================================================
-// Test: load grammar
-// ============================================================================
-
 static void
 test_load_grammar(void)
 {
@@ -256,7 +232,6 @@ test_load_grammar(void)
         return;
     }
 
-    // Check that basic terminals were registered.
     assert(g->terminal_map != nullptr);
     assert(ncc_list_len(g->nt_list) > 0);
     assert(ncc_list_len(g->rules) > 0);
@@ -268,10 +243,6 @@ test_load_grammar(void)
     printf("  PASS\n");
     ncc_grammar_free(g);
 }
-
-// ============================================================================
-// Test: tokenize + parse simple C
-// ============================================================================
 
 static void
 test_parse_simple_c(void)
@@ -358,13 +329,6 @@ test_parse_array_literal_initializers(void)
     ncc_grammar_free(g);
 }
 
-// WP-011 Phase 2: parser-level recognition for dict literals.  Two
-// spellings: explicit `d{...}` <modified_literal> (already covered by
-// the existing <modified_literal> shape; this test pins it down) and
-// bare `{key: value, ...}` <dict_literal> (D-063).  Existing
-// non-dict forms — empty `{}`, comma-only `{1, 2, 3}`, designated
-// initializers `{.x = 5}` — MUST still parse as <braced_initializer>
-// (D-064 plus existing C semantics); regression coverage is below.
 static void
 test_parse_dict_literal_initializers(void)
 {
@@ -377,8 +341,6 @@ test_parse_dict_literal_initializers(void)
         return;
     }
 
-    // Positive: dict literals in both spellings, plus nesting and
-    // multi-pair / trailing-comma variants.  These must all parse.
     assert_c_parse(g,
                    "int explicit_dict = d{1: 2};\n"
                    "int explicit_empty_dict = d{};\n"
@@ -391,9 +353,6 @@ test_parse_dict_literal_initializers(void)
                    "int nested_array_value = d{1: a{2, 3}};\n"
                    "int nested_bracket_value = d{1: [2, 3]};\n");
 
-    // Negative-style regression: braced initializers without `:` keep
-    // their existing C semantics.  These intentionally use an
-    // aggregate-shaped target so the C grammar accepts them.
     assert_c_parse(g,
                    "struct s { int x; };\n"
                    "struct s zero = {};\n"
@@ -405,23 +364,17 @@ test_parse_dict_literal_initializers(void)
     ncc_grammar_free(g);
 }
 
-// ============================================================================
-// Test: BNF preprocessing
-// ============================================================================
-
 static void
 test_bnf_preprocess(void)
 {
     printf("Test: BNF preprocessing...\n");
 
-    // Test comment stripping.
     ncc_string_t input = ncc_string_from_cstr("rule = a | b // comment\nrule2 = c");
     ncc_string_t stripped = ncc_bnf_strip_comments(input);
 
     assert(stripped.data != nullptr);
     printf("  Strip comments: \"%.*s\"\n", (int)stripped.u8_bytes, stripped.data);
 
-    // Test line trimming.
     ncc_string_t padded = ncc_string_from_cstr("  hello  \n  world  \n");
     ncc_string_t trimmed = ncc_bnf_trim_lines(padded);
 
@@ -430,10 +383,6 @@ test_bnf_preprocess(void)
 
     printf("  PASS\n");
 }
-
-// ============================================================================
-// main
-// ============================================================================
 
 int
 main(void)

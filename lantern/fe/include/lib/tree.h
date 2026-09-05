@@ -1,17 +1,4 @@
 #pragma once
-/**
- * @file tree.h
- * @brief Type-safe n-ary tree -- pure macros (standalone extraction).
- *
- * Near-direct copy from the n00b original. ncc_tree_t(N, L) is a
- * tagged union tree node (internal nodes vs leaves). Children are
- * stored in a dynamically-grown pointer array.
- *
- * Usage:
- *     ncc_tree_decl(int, char *);
- *     ncc_tree_t(int, char *) *root = ncc_tree_node(int, char *, 42);
- *     ncc_tree_add_leaf(root, int, char *, "hello");
- */
 
 #include "ncc.h"
 #include "lib/alloc.h"
@@ -21,14 +8,7 @@
 #define NCC_TREE_INITIAL_CAPACITY 4
 #endif
 
-// Tree type names are formed by pasting ncc_tree_<N>___<L>.
-// N and L must be single preprocessor tokens (no spaces, no *).
-// For pointer types, use a typedef first: typedef char* cstr;
 #define ncc_tree_tid(N, L) typeid(ncc_tree, N, __, L)
-
-// ============================================================================
-// Type definition
-// ============================================================================
 
 #define ncc_tree_decl(N, L)                                                   \
     struct ncc_tree_tid(N, L) {                                               \
@@ -45,10 +25,6 @@
     }
 
 #define ncc_tree_t(N, L) struct ncc_tree_tid(N, L)
-
-// ============================================================================
-// Construction
-// ============================================================================
 
 #define ncc_tree_node(N, L, val, ...)                                         \
     ({                                                                         \
@@ -75,10 +51,6 @@
         _bt;                                                                   \
     })
 
-// ============================================================================
-// Internal: grow children array
-// ============================================================================
-
 #define _ncc_tree_grow_children(_ptr, _new_cap)                               \
     do {                                                                       \
         size_t _old_n   = (_ptr)->node.num_children;                           \
@@ -91,10 +63,6 @@
         (_ptr)->node.children = _new_buf;                                      \
         (_ptr)->node.capacity = (_new_cap);                                    \
     } while (0)
-
-// ============================================================================
-// Child addition
-// ============================================================================
 
 #define ncc_tree_add_child(parent, child)                                     \
     ({                                                                         \
@@ -134,10 +102,6 @@
         }                                                                      \
         _al;                                                                   \
     })
-
-// ============================================================================
-// Child mutation
-// ============================================================================
 
 #define ncc_tree_set_child(t, i, child)                                       \
     ({                                                                         \
@@ -207,10 +171,6 @@
         }                                                                      \
     } while (0)
 
-// ============================================================================
-// Accessors
-// ============================================================================
-
 #define ncc_tree_is_leaf(t)        ((t)->is_leaf)
 #define ncc_tree_is_node(t)        (!(t)->is_leaf)
 #define ncc_tree_leaf_value(t)     ((t)->leaf)
@@ -224,10 +184,6 @@
                  *_once = (void *)1;                                           \
              _once;                                                            \
              _once = nullptr)
-
-// ============================================================================
-// Destruction
-// ============================================================================
 
 #define ncc_tree_free_node(t)                                                 \
     do {                                                                       \

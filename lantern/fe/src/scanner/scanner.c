@@ -1,14 +1,9 @@
-// scanner.c — Streaming tokenizer scanner implementation.
 
 #include "scanner/scanner.h"
 #include "scanner/token_stream.h"
 #include "internal/parse/grammar_internal.h"
 #include <assert.h>
 #include <string.h>
-
-// ============================================================================
-// Internal: UTF-8 decode at position
-// ============================================================================
 
 static ncc_codepoint_t
 decode_at(ncc_scanner_t *s, size_t off, int *cp_len)
@@ -29,10 +24,6 @@ decode_at(ncc_scanner_t *s, size_t off, int *cp_len)
     *cp_len = (int)(pos - (uint32_t)off);
     return (ncc_codepoint_t)cp;
 }
-
-// ============================================================================
-// Internal: character class matching
-// ============================================================================
 
 static bool
 cc_match(ncc_char_class_t cc, ncc_codepoint_t cp)
@@ -57,10 +48,10 @@ cc_match(ncc_char_class_t cc, ncc_codepoint_t cp)
     case NCC_CC_WHITESPACE:
         return cp == ' ' || cp == '\t' || cp == '\n' || cp == '\r'
             || cp == '\f' || cp == '\v'
-            || cp == 0x85   // NEL
-            || cp == 0xA0   // NBSP
-            || cp == 0x2028 // Line separator
-            || cp == 0x2029; // Paragraph separator
+            || cp == 0x85
+            || cp == 0xA0
+            || cp == 0x2028
+            || cp == 0x2029;
     case NCC_CC_HEX_DIGIT:
         return (cp >= '0' && cp <= '9')
             || (cp >= 'a' && cp <= 'f')
@@ -82,10 +73,6 @@ cc_match(ncc_char_class_t cc, ncc_codepoint_t cp)
     }
     return false;
 }
-
-// ============================================================================
-// Internal: trivia allocation
-// ============================================================================
 
 static ncc_trivia_t *
 make_trivia(ncc_string_t text)
@@ -124,10 +111,6 @@ append_trivia(ncc_trivia_t **head, ncc_trivia_t *node)
     tail->next = node;
 }
 
-// ============================================================================
-// Scanner lifecycle
-// ============================================================================
-
 ncc_scanner_t *
 ncc_scanner_new(ncc_buffer_t                *buf,
                  ncc_scan_cb_t                cb,
@@ -153,12 +136,10 @@ ncc_scanner_new(ncc_buffer_t                *buf,
     s->grammar   = grammar;
     s->at_eof    = false;
 
-    // Mark defaults to start of input.
     s->mark      = 0;
     s->mark_line = 1;
     s->mark_col  = 1;
 
-    // Terminal ID cache is lazily initialized.
     s->terminal_ids = nullptr;
 
     return s;
@@ -171,10 +152,8 @@ ncc_scanner_free(ncc_scanner_t *s)
         return;
     }
 
-    // Free pending trivia nodes.
     free_trivia_chain(s->pending_leading);
     free_trivia_chain(s->pending_trailing);
-
 
     ncc_free(s);
 }
@@ -194,26 +173,19 @@ ncc_scanner_reset(ncc_scanner_t *s)
     s->mark_col  = 1;
     s->at_eof   = false;
 
-    // Free pending trivia.
     free_trivia_chain(s->pending_leading);
     free_trivia_chain(s->pending_trailing);
     s->pending_leading  = nullptr;
     s->pending_trailing = nullptr;
 
-    // Reset user state if callback is set.
     if (s->reset_cb) {
         s->reset_cb(s);
     }
 }
 
-// ============================================================================
-// Cursor inspection
-// ============================================================================
-
 ncc_codepoint_t
 ncc_scan_peek(ncc_scanner_t *s, int32_t offset)
 {
-    // Guard against negative offsets that would underflow.
     if (offset < 0 && (size_t)(-offset) > s->cursor) {
         return 0;
     }
@@ -262,10 +234,6 @@ ncc_scan_offset(ncc_scanner_t *s)
     return s->cursor;
 }
 
-// ============================================================================
-// Cursor movement
-// ============================================================================
-
 void
 ncc_scan_advance(ncc_scanner_t *s)
 {
@@ -309,10 +277,6 @@ ncc_scan_advance_bytes(ncc_scanner_t *s, size_t n)
     s->cursor = end;
     s->column += (uint32_t)delta;
 }
-
-// ============================================================================
-// Matching helpers
-// ============================================================================
 
 size_t
 ncc_scan_match_str(ncc_scanner_t *s, const char *lit)
@@ -537,17 +501,12 @@ ncc_scan_skip_until_str(ncc_scanner_t *s, const char *needle)
         }
     }
 
-    // Needle not found; advance to end.
     while (s->cursor < s->input_len) {
         ncc_scan_advance(s);
     }
 
     return ncc_result_err(size_t, NCC_ERR_SCAN_NOT_FOUND);
 }
-
-// ============================================================================
-// Mark / extract
-// ============================================================================
 
 void
 ncc_scan_mark(ncc_scanner_t *s)
@@ -571,10 +530,6 @@ ncc_scan_mark_len(ncc_scanner_t *s)
     return s->cursor - s->mark;
 }
 
-// ============================================================================
-// Token emission
-// ============================================================================
-
 void
 ncc_scan_emit(ncc_scanner_t *s, int32_t tid, ncc_option_t(ncc_string_t) value)
 {
@@ -582,7 +537,6 @@ ncc_scan_emit(ncc_scanner_t *s, int32_t tid, ncc_option_t(ncc_string_t) value)
 
     ncc_token_stream_t *ts = s->stream;
 
-    // Grow token array if needed.
     if (ts->token_count >= ts->token_cap) {
         int32_t new_cap = ts->token_cap ? ts->token_cap * 2 : 128;
         ncc_token_info_t **new_tokens = ncc_alloc_array(ncc_token_info_t *, new_cap);
@@ -615,7 +569,6 @@ ncc_scan_emit(ncc_scanner_t *s, int32_t tid, ncc_option_t(ncc_string_t) value)
 
     ts->tokens[ts->token_count++] = tok;
 
-    // Reset mark to current cursor.
     s->mark      = s->cursor;
     s->mark_line = s->line;
     s->mark_col  = s->column;
@@ -628,10 +581,6 @@ ncc_scan_emit_marked(ncc_scanner_t *s, int32_t tid)
 
     ncc_scan_emit(s, tid, ncc_option_set(ncc_string_t, val));
 }
-
-// ============================================================================
-// Trivia helpers
-// ============================================================================
 
 void
 ncc_scan_add_leading_trivia(ncc_scanner_t *s, ncc_string_t text)
@@ -722,7 +671,6 @@ ncc_scan_skip_block_comment(ncc_scanner_t *s,
     size_t closer_len = strlen(closer);
     size_t start      = s->cursor;
 
-    // Skip past opener.
     if (s->cursor + opener_len > s->input_len
         || memcmp(s->input + s->cursor, opener, opener_len) != 0) {
         return false;
@@ -744,10 +692,8 @@ ncc_scan_skip_block_comment(ncc_scanner_t *s,
         }
     }
 
-    // Scan for closer.
     while (s->cursor + closer_len <= s->input_len) {
         if (memcmp(s->input + s->cursor, closer, closer_len) == 0) {
-            // Skip past closer.
             for (size_t i = 0; i < closer_len; ) {
                 int              cp_len;
                 ncc_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
@@ -786,7 +732,6 @@ ncc_scan_skip_block_comment(ncc_scanner_t *s,
         }
     }
 
-    // Unterminated — consume the rest, still collect as trivia.
     while (s->cursor < s->input_len) {
         ncc_scan_advance(s);
     }
@@ -799,10 +744,6 @@ ncc_scan_skip_block_comment(ncc_scanner_t *s,
     return false;
 }
 
-// ============================================================================
-// Grammar integration
-// ============================================================================
-
 int64_t
 ncc_scan_terminal_id(ncc_scanner_t *s, const char *name)
 {
@@ -810,13 +751,11 @@ ncc_scan_terminal_id(ncc_scanner_t *s, const char *name)
         return NCC_TOK_OTHER;
     }
 
-    // Lazily create the terminal ID dict.
     if (!s->terminal_ids) {
         s->terminal_ids = ncc_alloc(ncc_dict_t);
         ncc_dict_init(s->terminal_ids, ncc_hash_cstring, ncc_dict_cstr_eq);
     }
 
-    // Look up in cache.
     bool found;
     void *val = ncc_dict_get(s->terminal_ids, (void *)name, &found);
 
@@ -824,7 +763,6 @@ ncc_scan_terminal_id(ncc_scanner_t *s, const char *name)
         return (int64_t)(intptr_t)val;
     }
 
-    // Look up in grammar's terminal_map.
     if (!s->grammar->terminal_map) {
         return NCC_TOK_OTHER;
     }
@@ -834,7 +772,6 @@ ncc_scan_terminal_id(ncc_scanner_t *s, const char *name)
                                            (void *)name, &gfound);
 
     if (!gfound) {
-        // Cache the miss so we don't re-lookup.
         _ncc_dict_put(s->terminal_ids,
                                (void *)name,
                                (void *)(intptr_t)NCC_TOK_OTHER);
@@ -843,7 +780,6 @@ ncc_scan_terminal_id(ncc_scanner_t *s, const char *name)
 
     int64_t tid = (int64_t)(intptr_t)gval;
 
-    // Cache the hit.
     _ncc_dict_put(s->terminal_ids,
                            (void *)name,
                            (void *)(intptr_t)tid);

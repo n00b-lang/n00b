@@ -1,12 +1,4 @@
 #pragma once
-/**
- * @file identifiers.h
- * @brief ASCII-only identifier character classification (standalone stub).
- *
- * The full n00b runtime performs full Unicode ID_Start / ID_Continue
- * classification. This stub handles ASCII only, which is sufficient
- * for the parser's grammar-level identifier needs.
- */
 
 #include "ncc.h"
 
@@ -40,7 +32,6 @@ ncc_unicode_is_xid_continue(ncc_codepoint_t cp)
 static inline bool
 ncc_unicode_is_pattern_syntax(ncc_codepoint_t cp)
 {
-    // ASCII pattern syntax characters.
     return (cp >= '!' && cp <= '/')
         || (cp >= ':' && cp <= '@')
         || (cp >= '[' && cp <= '^')

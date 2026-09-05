@@ -33,9 +33,6 @@ struct ncc_sym_entry_t {
     ncc_sym_mutability_t     mutability;
     int32_t                  scope_depth;
     ncc_parse_tree_t        *decl_node;
-    // Built when the annotation that names the type fires. There is no
-    // intermediate form: a type the front end learns about is a type
-    // descriptor from that moment on.
     tdesc_t                 *type;
     ncc_sym_entry_t         *shadowed;
     ncc_sym_entry_t         *next_in_scope;
@@ -49,8 +46,6 @@ struct ncc_sym_entry_t {
     bool                     is_method;
     bool                     is_static;
     bool                     is_abstract;
-    // Slot for a later phase to hang a non-type payload (a CFG, a module
-    // handle). The symbol table never reads or frees it.
     void                    *user_data;
 };
 
@@ -76,8 +71,6 @@ struct ncc_namespace_t {
 };
 
 struct ncc_symtab_t {
-    // Namespaces are individually allocated: scopes hold a pointer to their
-    // namespace, so the table must not move them when it grows.
     ncc_namespace_t **namespaces;
     int32_t           ns_count;
     int32_t           ns_cap;
@@ -99,18 +92,13 @@ ncc_sym_entry_t *ncc_symtab_add(ncc_symtab_t *st, ncc_string_t ns_name,
                                 ncc_string_t name, ncc_sym_kind_t kind,
                                 ncc_parse_tree_t *decl_node);
 
-// Innermost-first lookup from the namespace's current scope.
 ncc_sym_entry_t *ncc_symtab_lookup(ncc_symtab_t *st, ncc_string_t ns_name,
                                    ncc_string_t name);
 
-// Innermost-first lookup from an arbitrary retained scope. Scopes survive
-// their pop, so this is the post-walk form of ncc_symtab_lookup. A null
-// @p scope searches only the namespace's file scope.
 ncc_sym_entry_t *ncc_symtab_lookup_scoped(ncc_symtab_t *st, ncc_scope_t *scope,
                                           ncc_string_t ns_name,
                                           ncc_string_t name);
 
-// Lookup confined to one scope, ignoring its parents.
 ncc_sym_entry_t *ncc_symtab_lookup_in(ncc_scope_t *scope, ncc_string_t name);
 
 void         ncc_symtab_set_scope_node(ncc_symtab_t *st, ncc_string_t ns_name,

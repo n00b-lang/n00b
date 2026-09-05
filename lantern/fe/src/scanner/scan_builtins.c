@@ -1,14 +1,9 @@
-// scan_recipes.c — Higher-level scanning recipes for common token patterns.
 
 #include "scanner/scan_builtins.h"
 #include "lib/buffer.h"
 #include "unicode/encoding.h"
 #include <assert.h>
 #include <string.h>
-
-// ============================================================================
-// Internal: hex digit value
-// ============================================================================
 
 static int
 hex_val(ncc_codepoint_t cp)
@@ -18,10 +13,6 @@ hex_val(ncc_codepoint_t cp)
     if (cp >= 'A' && cp <= 'F') return (int)(cp - 'A' + 10);
     return -1;
 }
-
-// ============================================================================
-// Internal: string builder helpers wrapping ncc_buffer_t
-// ============================================================================
 
 static void
 sb_push_cp(ncc_buffer_t *sb, ncc_codepoint_t cp)
@@ -48,10 +39,6 @@ sb_discard(ncc_buffer_t *sb)
     ncc_buffer_free(sb);
 }
 
-// ============================================================================
-// Internal: scan N hex digits into a codepoint
-// ============================================================================
-
 static bool
 scan_hex_digits(ncc_scanner_t *s, int count, ncc_codepoint_t *out)
 {
@@ -73,10 +60,6 @@ scan_hex_digits(ncc_scanner_t *s, int count, ncc_codepoint_t *out)
     return true;
 }
 
-// ============================================================================
-// Internal: quoted string with escape processing
-// ============================================================================
-
 static ncc_option_t(ncc_string_t)
 scan_quoted_string(ncc_scanner_t *s, ncc_codepoint_t quote_cp)
 {
@@ -87,7 +70,7 @@ scan_quoted_string(ncc_scanner_t *s, ncc_codepoint_t quote_cp)
     }
 
     ncc_scan_mark(s);
-    ncc_scan_advance(s);  // Skip opening quote.
+    ncc_scan_advance(s);
 
     ncc_buffer_t *sb = ncc_buffer_empty();
 
@@ -95,12 +78,12 @@ scan_quoted_string(ncc_scanner_t *s, ncc_codepoint_t quote_cp)
         cp = ncc_scan_peek(s, 0);
 
         if (cp == quote_cp) {
-            ncc_scan_advance(s);  // Skip closing quote.
+            ncc_scan_advance(s);
             return sb_finish(sb);
         }
 
         if (cp == '\\') {
-            ncc_scan_advance(s);  // Skip backslash.
+            ncc_scan_advance(s);
 
             if (ncc_scan_at_eof(s)) {
                 sb_discard(sb);
@@ -159,19 +142,13 @@ scan_quoted_string(ncc_scanner_t *s, ncc_codepoint_t quote_cp)
             size_t after  = ncc_scan_offset(s);
             size_t nbytes = after - before;
 
-            // Push raw bytes for a single codepoint.
             ncc_buffer_append(sb, s->input + before, nbytes);
         }
     }
 
-    // Unterminated string.
     sb_discard(sb);
     return ncc_option_none(ncc_string_t);
 }
-
-// ============================================================================
-// String recipes
-// ============================================================================
 
 ncc_option_t(ncc_string_t)
 ncc_scan_string_double(ncc_scanner_t *s)
@@ -215,13 +192,8 @@ ncc_scan_string_raw(ncc_scanner_t *s, const char *quote)
         ncc_scan_advance(s);
     }
 
-    // Unterminated.
     return ncc_option_none(ncc_string_t);
 }
-
-// ============================================================================
-// Number recipes
-// ============================================================================
 
 static bool
 is_digit(ncc_codepoint_t cp)
@@ -383,12 +355,10 @@ ncc_scan_number(ncc_scanner_t *s, int32_t int_tid, int32_t float_tid)
         return false;
     }
 
-    // Save position to try float first, then fallback to integer.
     size_t   saved_cursor = s->cursor;
     uint32_t saved_line   = s->line;
     uint32_t saved_col    = s->column;
 
-    // Try float.
     ncc_scan_mark(s);
 
     ncc_option_t(ncc_string_t) fval = ncc_scan_float(s);
@@ -398,7 +368,6 @@ ncc_scan_number(ncc_scanner_t *s, int32_t int_tid, int32_t float_tid)
         return true;
     }
 
-    // Restore and try integer.
     s->cursor = saved_cursor;
     s->line   = saved_line;
     s->column = saved_col;
@@ -412,17 +381,12 @@ ncc_scan_number(ncc_scanner_t *s, int32_t int_tid, int32_t float_tid)
         return true;
     }
 
-    // Restore cursor on failure.
     s->cursor = saved_cursor;
     s->line   = saved_line;
     s->column = saved_col;
 
     return false;
 }
-
-// ============================================================================
-// Identifier recipe
-// ============================================================================
 
 ncc_option_t(ncc_string_t)
 ncc_scan_identifier(ncc_scanner_t *s)

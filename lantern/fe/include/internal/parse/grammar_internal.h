@@ -1,18 +1,8 @@
 #pragma once
 
-/**
- * @file grammar_internal.h
- * @internal
- * @brief Internal struct definitions for the ncc grammar system.
- */
-
 #include "parse/grammar.h"
 #include "lib/list.h"
 #include "lib/dict.h"
-
-// ============================================================================
-// Container declarations
-// ============================================================================
 
 ncc_list_decl(ncc_match_t);
 ncc_list_decl(ncc_terminal_t);
@@ -21,10 +11,6 @@ ncc_list_decl(ncc_nonterm_t);
 
 typedef ncc_annotation_t *ncc_annotation_ptr_t;
 ncc_list_decl(ncc_annotation_ptr_t);
-
-// ============================================================================
-// Internal structures
-// ============================================================================
 
 struct ncc_terminal_t {
     ncc_string_t value;
@@ -58,13 +44,6 @@ struct ncc_parse_rule_t {
     int32_t                               link_ix;
     ncc_string_t                         doc;
     ncc_list_t(ncc_annotation_ptr_t)     annotations;
-    // TS-5 disambiguation scoring: a NORMAL participating rule (unlike
-    // penalty_rule, which is skipped in graph build) that carries a
-    // symtab-conditional penalty consulted only at forest->tree extraction.
-    // disambig_predicate names a predicate registered with the extractor; when
-    // it holds for this rule's extracted subtree, disambig_cost is added to the
-    // alternative's score and the lowest-scoring alternative is chosen. Empty
-    // predicate => no disambiguation penalty.
     ncc_string_t                         disambig_predicate;
     int32_t                               disambig_cost;
     bool                                  penalty_rule;
@@ -78,10 +57,6 @@ struct ncc_rule_group_t {
     int32_t max;
     int32_t gid;
 };
-
-// ============================================================================
-// LR(0) types
-// ============================================================================
 
 typedef struct {
     int32_t rule_ix;
@@ -100,10 +75,6 @@ typedef struct {
     int32_t symbol;
     int32_t dest_state;
 } ncc_lr0_goto_t;
-
-// ============================================================================
-// Grammar struct
-// ============================================================================
 
 struct ncc_grammar_t {
     ncc_list_t(ncc_terminal_t)   named_terms;
@@ -144,10 +115,6 @@ struct ncc_grammar_t {
     ncc_list_t(ncc_annotation_ptr_t) annotations;
 };
 
-// ============================================================================
-// Inline helpers
-// ============================================================================
-
 static inline ncc_nonterm_t *
 ncc_get_nonterm(ncc_grammar_t *g, int64_t id)
 {
@@ -182,13 +149,6 @@ ncc_is_non_terminal(ncc_match_t *m)
     return m->kind == NCC_MATCH_NT || m->kind == NCC_MATCH_GROUP;
 }
 
-/**
- * @brief Look up the rule for a parse tree node.
- *
- * Parse tree nodes store a **local** rule index (position within the NT's
- * `rule_ids` list).  This helper converts to the global index and returns
- * the `ncc_parse_rule_t *`, or nullptr if anything is out of range.
- */
 static inline ncc_parse_rule_t *
 ncc_get_node_rule(ncc_grammar_t *g, ncc_nt_node_t *pn)
 {

@@ -8,9 +8,6 @@
 #include <stdio.h>
 #include <string.h>
 
-// Registration phases. Every visitor in one phase has run over all of a node's
-// annotations before the next phase starts, so an annotation that reads what
-// another produced works whichever order the two were written in on the rule.
 enum {
     PHASE_SCOPE  = 0,
     PHASE_DECL   = 1,
@@ -26,7 +23,6 @@ typedef struct {
     int32_t             anon_counter;
 } actx_t;
 
-// Borrowed, never freed: the symbol table copies any string it keeps.
 static ncc_string_t
 borrow(const char *s, size_t len)
 {
@@ -76,10 +72,6 @@ bind_from_tree(actx_t *a, ncc_visit_t *v, ncc_child_ref_t ref)
                 : nullptr;
 }
 
-// ============================================================================
-// Phase 0: scopes
-// ============================================================================
-
 static bool
 scope_open(ncc_visit_t *v)
 {
@@ -104,8 +96,6 @@ scope_open(ncc_visit_t *v)
 
     ncc_symtab_set_scope_node(a->out->symtab, ns_default(), v->node);
 
-    // A function scope carries a $return symbol so that a later constraint can
-    // name the return type the way it names any other.
     if (name_is(an->scope_tag, "function")) {
         ncc_symtab_add(a->out->symtab, ns_default(), LIT("$return"),
                        NCC_SYM_VARIABLE, v->node);
@@ -161,10 +151,6 @@ scope_close(ncc_visit_t *v)
     return true;
 }
 
-// ============================================================================
-// Node entry: last_sym is per node
-// ============================================================================
-
 static bool
 node_enter(ncc_visit_t *v)
 {
@@ -172,10 +158,6 @@ node_enter(ncc_visit_t *v)
 
     return true;
 }
-
-// ============================================================================
-// Phase 1: symbol creation
-// ============================================================================
 
 static ncc_sym_kind_t
 sym_kind_of(ncc_string_t spec)
@@ -316,10 +298,6 @@ annot_method(ncc_visit_t *v)
     return member_decl(v, true);
 }
 
-// ============================================================================
-// Phase 2: refinement of the symbol phase 1 created
-// ============================================================================
-
 static bool
 annot_type(ncc_visit_t *v)
 {
@@ -392,7 +370,6 @@ annot_visibility(ncc_visit_t *v)
             a->last_sym->visibility = v->annot->visibility_spec;
         }
         else {
-            // Stamped onto the next symbol a @declares creates.
             a->pending_visibility = v->annot->visibility_spec;
         }
     }
@@ -423,10 +400,6 @@ annot_abstract(ncc_visit_t *v)
 
     return true;
 }
-
-// ============================================================================
-// Phase 3: control flow labels
-// ============================================================================
 
 static ncc_cf_label_t *
 cf_label(ncc_visit_t *v, ncc_cf_kind_t kind)
@@ -560,10 +533,6 @@ cf_notrivia(ncc_visit_t *v)
     return true;
 }
 
-// ============================================================================
-// Registration
-// ============================================================================
-
 void
 ncc_annot_register(ncc_tree_walk_t *w, ncc_annot_result_t *out,
                    const ncc_type_binder_t *binder)
@@ -679,9 +648,6 @@ ncc_annot_result_free(ncc_annot_result_t *r)
     ncc_free(r->shadowed.data);
     ncc_free(r->impl);
 
-    // Type descriptors are not freed here. One descriptor is shared by the
-    // symbol, the parse node and the IR node that refer to the same type, so
-    // it outlives any one of them; whoever the binder allocates from owns it.
     ncc_free(r);
 }
 

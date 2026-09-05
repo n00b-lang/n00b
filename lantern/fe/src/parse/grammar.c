@@ -1,4 +1,3 @@
-// grammar.c - Grammar definition, error rules, and finalization.
 #include "parse/grammar.h"
 #include "parse/annotation.h"
 #include "lib/alloc.h"
@@ -7,10 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-// ============================================================================
-// Nullability computation
-// ============================================================================
 
 static bool
 check_stack_for_nt(ncc_list_t(int) *stack, int64_t ruleset)
@@ -115,10 +110,6 @@ is_nullable_rule(ncc_grammar_t *g, ncc_parse_rule_t *rule, ncc_list_t(int) *stac
     return false;
 }
 
-// ============================================================================
-// Internal: rule management
-// ============================================================================
-
 static bool
 matches_eq(ncc_match_t *a, ncc_match_t *b)
 {
@@ -215,10 +206,6 @@ add_rule_internal(ncc_grammar_t *g,
     return ix;
 }
 
-// ============================================================================
-// Error rule generation
-// ============================================================================
-
 static void
 create_one_error_rule_set(ncc_grammar_t *g, int32_t rule_ix)
 {
@@ -242,8 +229,6 @@ create_one_error_rule_set(ncc_grammar_t *g, int32_t rule_ix)
 
         tok_ct++;
 
-        // Re-resolve the nt pointer since a previous iteration's
-        // ncc_nonterm() may have reallocated nt_list.
         ncc_nonterm_t *cur_nt = ncc_get_nonterm(g, cur_nt_id);
 
         char namebuf[256];
@@ -258,33 +243,25 @@ create_one_error_rule_set(ncc_grammar_t *g, int32_t rule_ix)
         ncc_nonterm_t *nt_err    = ncc_nonterm(g, name);
         ncc_nt_id_t    nt_err_id = ncc_nonterm_id(nt_err);
 
-        // Rule 1: match the terminal normally (cost 0)
         ncc_list_t(ncc_match_t) r1 = ncc_list_new(ncc_match_t);
         ncc_list_push(r1, *m);
         int32_t ok_ix = add_rule_internal(g, nt_err_id, &r1, 0, -1, nullptr);
 
-        // Rule 2: omit the terminal (penalty = token omission)
         ncc_list_t(ncc_match_t) r2 = ncc_list_new(ncc_match_t);
         ncc_match_t empty           = {.kind = NCC_MATCH_EMPTY};
         ncc_list_push(r2, empty);
         add_rule_internal(g, nt_err_id, &r2, 0, ok_ix, nullptr);
 
-        // Rule 3: junk prefix + terminal (bad prefix penalty)
         ncc_list_t(ncc_match_t) r3 = ncc_list_new(ncc_match_t);
         ncc_match_t any             = {.kind = NCC_MATCH_ANY};
         ncc_list_push(r3, any);
         ncc_list_push(r3, *m);
         add_rule_internal(g, nt_err_id, &r3, 0, ok_ix, nullptr);
 
-        // Re-fetch cur since the rule list may have been reallocated.
         cur                   = ncc_get_rule(g, rule_ix);
         cur->contents.data[i] = (ncc_match_t){.kind = NCC_MATCH_NT, .nt_id = nt_err_id};
     }
 }
-
-// ============================================================================
-// Public API
-// ============================================================================
 
 ncc_grammar_t *
 ncc_grammar_new(void)
@@ -341,7 +318,6 @@ ncc_grammar_free(ncc_grammar_t *g)
     ncc_list_free(g->nt_list);
     ncc_list_free(g->named_terms);
 
-    // The untyped dicts are GC-managed; explicit free for predictable cleanup.
     if (g->nt_map) {
         ncc_free(g->nt_map);
     }
@@ -471,7 +447,7 @@ ncc_grammar_set_terminal_category(ncc_grammar_t *g,
                                    ncc_string_t   category)
 {
     if (terminal_id < NCC_TOK_START_ID) {
-        return; // single-char terminals self-describe
+        return;
     }
 
     int32_t ix = (int32_t)(terminal_id - NCC_TOK_START_ID);
@@ -481,7 +457,6 @@ ncc_grammar_set_terminal_category(ncc_grammar_t *g,
         g->has_terminal_categories = true;
     }
 
-    // Extend list with empty strings up to the required index.
     while ((int32_t)g->terminal_categories.len <= ix) {
         ncc_list_push(g->terminal_categories, (ncc_string_t){0});
     }
@@ -523,10 +498,6 @@ ncc_grammar_set_default_action(ncc_grammar_t *g, ncc_walk_action_t action)
     }
 }
 
-// ============================================================================
-// Group match
-// ============================================================================
-
 static int32_t group_id_counter = 1;
 
 ncc_match_t
@@ -559,10 +530,6 @@ ncc_group_match_v(ncc_grammar_t *g, int min, int max, int n, ncc_match_t *items)
 
     return (ncc_match_t){.kind = NCC_MATCH_GROUP, .group = group};
 }
-
-// ============================================================================
-// Rule building
-// ============================================================================
 
 ncc_parse_rule_t *
 ncc_add_rule_v(ncc_grammar_t *g, ncc_nt_id_t nt_id, int n, ncc_match_t *items)
@@ -598,12 +565,6 @@ ncc_add_rule_with_cost_v(ncc_grammar_t *g,
     return ncc_get_rule(g, ix >= 0 ? ix : old_ix);
 }
 
-// ============================================================================
-// FIRST set computation (iterative fixed-point)
-// ============================================================================
-
-// Encode a terminal ID as a void* for use in dict-as-set FIRST sets.
-// Offset by 0x100 to avoid nullptr (0) collisions.
 #define TERM_TO_PTR(id) ((void *)(uintptr_t)((uint64_t)(id) + 0x100))
 
 static inline ncc_dict_t *
@@ -628,8 +589,6 @@ merge_dict_set_into(ncc_dict_t *dst, ncc_dict_t *src)
     }
 }
 
-// Check if a match can derive the empty string, using the first_nullable
-// array instead of nt->nullable (which has a known bug for non-NT-ending rules).
 static inline bool
 match_is_first_nullable(ncc_grammar_t *g, ncc_match_t *m, bool *first_nullable)
 {
@@ -646,7 +605,6 @@ match_is_first_nullable(ncc_grammar_t *g, ncc_match_t *m, bool *first_nullable)
     }
 }
 
-// Check if a rule can derive the empty string.
 static bool
 rule_is_first_nullable(ncc_grammar_t *g, ncc_parse_rule_t *rule, bool *fn)
 {
@@ -661,8 +619,6 @@ rule_is_first_nullable(ncc_grammar_t *g, ncc_parse_rule_t *rule, bool *fn)
     return n > 0;
 }
 
-// Compute the FIRST set for a single rule, given current NT FIRST sets.
-// Returns true if the rule's FIRST set changed.
 static bool
 update_rule_first(ncc_grammar_t *g, ncc_parse_rule_t *rule, bool *first_nullable)
 {
@@ -745,10 +701,6 @@ compute_all_first_sets(ncc_grammar_t *g)
     size_t n_nts   = g->nt_list.len;
     size_t n_rules = g->rules.len;
 
-    // Compute correct nullability for FIRST set purposes.
-    // The parser's nt->nullable has a known limitation for rules ending
-    // with non-NT nullable items (EMPTY, groups with min==0).  We compute
-    // a separate array here via iterative fixed point.
     bool *first_nullable = ncc_alloc_array(bool, n_nts);
 
     bool fn_changed = true;
@@ -775,7 +727,6 @@ compute_all_first_sets(ncc_grammar_t *g)
         }
     }
 
-    // Initialize all FIRST sets.
     for (size_t i = 0; i < n_nts; i++) {
         ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)i);
 
@@ -790,7 +741,6 @@ compute_all_first_sets(ncc_grammar_t *g)
         rule->first_has_any = false;
     }
 
-    // Iterate until fixed point.
     bool changed = true;
 
     while (changed) {
@@ -804,7 +754,6 @@ compute_all_first_sets(ncc_grammar_t *g)
             }
         }
 
-        // Merge rule FIRST sets into their NTs.
         for (size_t i = 0; i < n_nts; i++) {
             ncc_nonterm_t *nt      = ncc_get_nonterm(g, (int64_t)i);
             size_t          old_len = nt->first_set->count;
@@ -827,8 +776,6 @@ compute_all_first_sets(ncc_grammar_t *g)
         }
     }
 
-    // Nullable NTs must not be filtered by FIRST: if the NT derives empty,
-    // any token is compatible (it matches whatever follows the NT).
     for (size_t i = 0; i < n_nts; i++) {
         if (first_nullable[i]) {
             ncc_get_nonterm(g, (int64_t)i)->first_has_any = true;
@@ -837,10 +784,6 @@ compute_all_first_sets(ncc_grammar_t *g)
 
     ncc_free(first_nullable);
 }
-
-// ============================================================================
-// Left-corner sets (flat bitset array in grammar)
-// ============================================================================
 
 static void
 compute_left_corners(ncc_grammar_t *g)
@@ -856,14 +799,12 @@ compute_left_corners(ncc_grammar_t *g)
     g->lc_words_per_nt  = words;
     g->left_corner_sets = ncc_alloc_array(uint64_t, n_nts * (size_t)words);
 
-    // Each NT includes itself.
     for (size_t i = 0; i < n_nts; i++) {
         uint64_t *set = g->left_corner_sets + i * (size_t)words;
 
         set[i / 64] |= (uint64_t)1 << (i % 64);
     }
 
-    // Compute direct left-corners.
     for (size_t i = 0; i < n_nts; i++) {
         ncc_nonterm_t *nt  = ncc_get_nonterm(g, (int64_t)i);
         uint64_t       *set = g->left_corner_sets + i * (size_t)words;
@@ -911,7 +852,6 @@ compute_left_corners(ncc_grammar_t *g)
         }
     }
 
-    // Transitive closure.
     bool changed = true;
 
     while (changed) {
@@ -940,13 +880,6 @@ compute_left_corners(ncc_grammar_t *g)
     }
 }
 
-// ============================================================================
-// LR(0) state table construction
-// ============================================================================
-
-// Encode a ncc_match_t as an int32_t symbol for GOTO keys.
-// NT -> nt_id, TERMINAL -> terminal_id (offset to avoid overlap with NTs),
-// GROUP -> -(1000+gid), ANY -> -1, EMPTY -> -2, CLASS -> -(100+class_id)
 static int32_t
 lr0_symbol_of_match(ncc_match_t *m)
 {
@@ -972,8 +905,6 @@ lr0_symbol_of_match(ncc_match_t *m)
     return -999;
 }
 
-// Build lr0_items[] and lr0_rule_item_base[].
-// For each rule, items at dot 0..len.
 static void
 compute_lr0_items(ncc_grammar_t *g)
 {
@@ -981,7 +912,6 @@ compute_lr0_items(ncc_grammar_t *g)
 
     g->lr0_rule_item_base = ncc_alloc_array(int32_t, n_rules);
 
-    // Count total items first.
     int32_t total = 0;
 
     for (size_t i = 0; i < n_rules; i++) {
@@ -989,7 +919,7 @@ compute_lr0_items(ncc_grammar_t *g)
         int32_t            len = (int32_t)r->contents.len;
 
         g->lr0_rule_item_base[i] = total;
-        total += len + 1; // dot positions 0..len
+        total += len + 1;
     }
 
     g->lr0_items      = ncc_alloc_array(ncc_lr0_item_t, total);
@@ -1010,18 +940,12 @@ compute_lr0_items(ncc_grammar_t *g)
     }
 }
 
-// Compute the LR(0) closure of a set of items.
-// seed_bits is a bitset over lr0_items; seed_list/seed_len are the explicit
-// list of item_ids in the seed. On return, seed_bits and seed_list/seed_len
-// are the closed set.
 static void
 lr0_closure(ncc_grammar_t *g, uint64_t *seed_bits, int32_t *seed_list, int32_t *seed_len)
 {
     int32_t words = (g->lr0_item_count + 63) / 64;
     (void)words;
 
-    // Fixed-point: process items in seed_list; if dot is before NT or GROUP,
-    // add that NT's rules at dot=0.
     for (int32_t idx = 0; idx < *seed_len; idx++) {
         int32_t          item_id = seed_list[idx];
         ncc_lr0_item_t *item    = &g->lr0_items[item_id];
@@ -1055,7 +979,7 @@ lr0_closure(ncc_grammar_t *g, uint64_t *seed_bits, int32_t *seed_list, int32_t *
 
         for (size_t r = 0; r < nt->rule_ids.len; r++) {
             int32_t rix      = nt->rule_ids.data[r];
-            int32_t new_item = g->lr0_rule_item_base[rix]; // dot=0
+            int32_t new_item = g->lr0_rule_item_base[rix];
 
             size_t   w    = (size_t)new_item / 64;
             uint64_t mask = (uint64_t)1 << ((size_t)new_item % 64);
@@ -1068,7 +992,6 @@ lr0_closure(ncc_grammar_t *g, uint64_t *seed_bits, int32_t *seed_list, int32_t *
     }
 }
 
-// Hash an item set (sorted array of item_ids) for state deduplication.
 static uint64_t
 lr0_state_hash(int32_t *items, int32_t count)
 {
@@ -1084,7 +1007,6 @@ lr0_state_hash(int32_t *items, int32_t count)
     return h;
 }
 
-// Simple comparison for sorted item arrays.
 static bool
 lr0_items_eq(int32_t *a, int32_t a_len, int32_t *b, int32_t b_len)
 {
@@ -1095,7 +1017,6 @@ lr0_items_eq(int32_t *a, int32_t a_len, int32_t *b, int32_t b_len)
     return memcmp(a, b, (size_t)a_len * sizeof(int32_t)) == 0;
 }
 
-// qsort comparator for int32_t.
 static int
 cmp_int32(const void *a, const void *b)
 {
@@ -1105,7 +1026,6 @@ cmp_int32(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-// Builder context for LR(0) state construction.
 typedef struct {
     ncc_grammar_t  *g;
     int32_t         *state_starts;
@@ -1125,7 +1045,6 @@ typedef struct {
     int32_t          dedup_cap;
 } lr0_builder_t;
 
-// Find or create a state from a closed, sorted item set. Returns state_id.
 static int32_t
 lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
 {
@@ -1147,7 +1066,6 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
         idx = (idx + 1) & mask;
     }
 
-    // New state.
     int32_t sid = b->states_count++;
 
     if (sid >= b->states_cap) {
@@ -1195,7 +1113,6 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
     b->goto_starts[sid] = 0;
     b->goto_counts[sid] = 0;
 
-    // Insert into dedup table, growing if needed.
     if (b->states_count * 4 >= b->dedup_cap * 3) {
         int32_t  old_dcap  = b->dedup_cap;
         int64_t *old_dhash = b->dedup_hash;
@@ -1241,7 +1158,6 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
     return sid;
 }
 
-// Build the LR(0) automaton.
 static void
 build_lr0_states(ncc_grammar_t *g)
 {
@@ -1277,7 +1193,6 @@ build_lr0_states(ncc_grammar_t *g)
     uint64_t *bits     = ncc_alloc_array(uint64_t, bitset_words);
     int32_t  *itemlist = ncc_alloc_array(int32_t, g->lr0_item_count);
 
-    // Create initial state: closure of start NT's rules at dot=0.
     {
         ncc_nonterm_t *start = ncc_get_nonterm(g, g->default_start);
 
@@ -1403,7 +1318,6 @@ build_lr0_states(ncc_grammar_t *g)
         b.goto_counts[si] = b.gotos_count - b.goto_starts[si];
     }
 
-    // Flatten into grammar struct.
     g->lr0_state_count = b.states_count;
     g->lr0_states      = ncc_alloc_array(ncc_lr0_state_t, b.states_count);
 
@@ -1434,8 +1348,6 @@ build_lr0_states(ncc_grammar_t *g)
     ncc_free(kernel);
 }
 
-// For each NT, find the LR(0) state that corresponds to the closure of
-// that NT's rules at dot=0.
 static void
 lr0_compute_predict_states(ncc_grammar_t *g)
 {
@@ -1469,7 +1381,6 @@ lr0_compute_predict_states(ncc_grammar_t *g)
         lr0_closure(g, bits, itemlist, &len);
         qsort(itemlist, (size_t)len, sizeof(int32_t), cmp_int32);
 
-        // Find matching state by comparing sorted item lists.
         int32_t found = -1;
 
         for (int32_t s = 0; s < g->lr0_state_count; s++) {
@@ -1490,10 +1401,6 @@ lr0_compute_predict_states(ncc_grammar_t *g)
     ncc_free(bits);
     ncc_free(itemlist);
 }
-
-// ============================================================================
-// Finalization
-// ============================================================================
 
 void
 ncc_grammar_finalize(ncc_grammar_t *g)
@@ -1525,8 +1432,6 @@ ncc_grammar_finalize(ncc_grammar_t *g)
     build_lr0_states(g);
     lr0_compute_predict_states(g);
 
-    // Check if the grammar has group NTs (BSR reconstruction doesn't
-    // handle multi-match groups yet, so BSR emission is skipped).
     n = g->nt_list.len;
 
     for (size_t i = 0; i < n; i++) {

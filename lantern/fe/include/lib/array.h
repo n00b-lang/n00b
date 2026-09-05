@@ -1,29 +1,10 @@
 #pragma once
-/**
- * @file array.h
- * @brief Type-safe dynamic array (standalone extraction).
- *
- * Stripped-down version of ncc_array_t: single-threaded only.  The
- * struct field layout mirrors libn00b's n00b_array_t(T) so generated
- * static initializers can be tested against the same shape.
- *
- * Usage:
- *     ncc_array_decl(int);
- *     ncc_array_t(int) arr = ncc_array_new(int, 16);
- *     ncc_array_set(arr, 0, 42);
- *     int x = ncc_array_get(arr, 0);
- *     ncc_array_free(arr);
- */
 
 #include <assert.h>
 #include <string.h>
 
 #include "lib/macros.h"
 #include "lib/alloc.h"
-
-// ============================================================================
-// Type definition
-// ============================================================================
 
 typedef struct ncc_rwlock_t    ncc_rwlock_t;
 typedef struct ncc_allocator_t ncc_allocator_t;
@@ -53,10 +34,6 @@ typedef enum ncc_gc_scan_kind_t ncc_gc_scan_kind_t;
         ncc_gc_scan_cb_t    scan_cb;                                           \
         void               *scan_user;                                         \
     }
-
-// ============================================================================
-// Construction / destruction
-// ============================================================================
 
 #define ncc_array_new(T, N, ...)                                              \
     ({                                                                         \
@@ -95,10 +72,6 @@ typedef enum ncc_gc_scan_kind_t ncc_gc_scan_kind_t;
         *_bl_ap = (typeof(x)){};                                               \
     })
 
-// ============================================================================
-// Access
-// ============================================================================
-
 #define ncc_array_get(x, i)                                                   \
     ({                                                                         \
         auto _bl_ap = &(x);                                                    \
@@ -135,10 +108,6 @@ typedef enum ncc_gc_scan_kind_t ncc_gc_scan_kind_t;
         _bl_ap->cap;                                                           \
     })
 
-// ============================================================================
-// Clone
-// ============================================================================
-
 #define ncc_array_clone(x)                                                    \
     ({                                                                         \
         auto _bl_sp = &(x);                                                    \
@@ -156,10 +125,6 @@ typedef enum ncc_gc_scan_kind_t ncc_gc_scan_kind_t;
                _bl_sp->len * sizeof(_bl_sp->data[0]));                         \
         _bl_copy;                                                              \
     })
-
-// ============================================================================
-// Iteration
-// ============================================================================
 
 #define ncc_array_foreach(arr, var)                                            \
     for (typeof((arr).data) var = (arr).data;                                  \

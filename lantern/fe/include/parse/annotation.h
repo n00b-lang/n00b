@@ -95,7 +95,6 @@ struct ncc_annotation_t {
 };
 
 ncc_annotation_t *ncc_annot_new(ncc_annot_kind_t kind);
-// Frees the annotation and the strings it copied out of the grammar text.
 void              ncc_annot_free(ncc_annotation_t *a);
 const char       *ncc_annot_kind_name(ncc_annot_kind_t kind);
 ncc_annot_kind_t  ncc_annot_kind_from_name(ncc_string_t name);

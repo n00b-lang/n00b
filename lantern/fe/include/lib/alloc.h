@@ -4,10 +4,6 @@
 #include "lib/macros.h"
 #include "lib/align.h"
 
-// ============================================================================
-// Memory debug counters (enabled by -DNCC_MEM_DEBUG)
-// ============================================================================
-
 #ifdef NCC_MEM_DEBUG
 
 #include <stdio.h>
@@ -71,8 +67,6 @@ ncc_mem_report(const char *label)
                                  memory_order_relaxed));
 }
 
-// Tracked header: magic + size, so free can recover the size and detect
-// whether a pointer was allocated through our tracked path.
 #define _NCC_TRACK_MAGIC ((size_t)0xA110CA110CA110CCULL)
 
 typedef struct {
@@ -108,7 +102,6 @@ _ncc_tracked_realloc(void *ptr, size_t new_size)
         (_ncc_track_header_t *)((char *)ptr - sizeof(_ncc_track_header_t));
 
     if (old_hdr->magic != _NCC_TRACK_MAGIC) {
-        // Not our allocation (e.g. strdup, realpath) — fall back to system.
         return realloc(ptr, new_size);
     }
 
@@ -137,13 +130,12 @@ _ncc_tracked_free(void *ptr)
         (_ncc_track_header_t *)((char *)ptr - sizeof(_ncc_track_header_t));
 
     if (hdr->magic != _NCC_TRACK_MAGIC) {
-        // Not our allocation — use system free.
         free(ptr);
         return;
     }
 
     ncc_mem_track_free(hdr->size);
-    hdr->magic = 0;  // Poison to catch double-free.
+    hdr->magic = 0;
     free(hdr);
 }
 
@@ -172,9 +164,8 @@ ncc_free(void *ptr)
     _ncc_tracked_free(ptr);
 }
 
-#else // !NCC_MEM_DEBUG
+#else
 
-// Core allocation: zero-filled.
 #define ncc_alloc(T, ...) \
     ((T *)calloc(1, sizeof(T)))
 
@@ -199,4 +190,4 @@ ncc_free(void *ptr)
     free(ptr);
 }
 
-#endif // NCC_MEM_DEBUG
+#endif
