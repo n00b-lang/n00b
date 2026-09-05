@@ -9,6 +9,7 @@ ir_sources = files(
     'ir_pass.c',
     'ir_print.c',
     'ir_profile.c',
+    'ir_rule.c',
     'ir_sb.c',
     'ir_span.c',
 )

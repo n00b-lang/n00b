@@ -26,6 +26,14 @@ test(
     args: [meson.current_source_dir() / 'golden'],
 )
 
+ir_rule_test = executable(
+    'ir_rule_test',
+    'ir_rule_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-rules', ir_rule_test)
+
 ir_diag_test = executable(
     'ir_diag_test',
     'ir_diag_test.c',

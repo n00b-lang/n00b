@@ -52,14 +52,24 @@ const char *ir_op_spelling(ir_op_t op)
     return op < IR_OP_COUNT ? table[op].spelling : nullptr;
 }
 
+bool ir_opinfo_has_result(const ir_opinfo_t *i)
+{
+    return i && (i->flags & IR_OPF_HASRESULT);
+}
+
+bool ir_opinfo_is_terminator(const ir_opinfo_t *i)
+{
+    return i && (i->flags & IR_OPF_TERMINATOR);
+}
+
 bool ir_op_has_result(ir_op_t op)
 {
-    return op < IR_OP_COUNT && (table[op].flags & IR_OPF_HASRESULT);
+    return ir_opinfo_has_result(ir_op_info(op));
 }
 
 bool ir_op_is_terminator(ir_op_t op)
 {
-    return op < IR_OP_COUNT && (table[op].flags & IR_OPF_TERMINATOR);
+    return ir_opinfo_is_terminator(ir_op_info(op));
 }
 
 static ir_opdkind_t kind_of_char(char c)
@@ -88,13 +98,13 @@ static ir_opdkind_t kind_of_char(char c)
     }
 }
 
-ir_opdkind_t ir_op_operand_kind(ir_op_t op, uint32_t i)
+ir_opdkind_t ir_opinfo_operand_kind(const ir_opinfo_t *info, uint32_t i)
 {
-    if (op >= IR_OP_COUNT) {
+    if (!info) {
         return IR_OPD_VALUE;
     }
 
-    const char *p   = table[op].pattern;
+    const char *p   = info->pattern;
     size_t      len = strlen(p);
 
     if (!len) {
@@ -131,19 +141,24 @@ static const struct {
     {IR_MOD_ROUND, "ceil"},
 };
 
-bool ir_op_accepts_mod(ir_op_t op, const char *name)
+bool ir_opinfo_accepts_mod(const ir_opinfo_t *info, const char *name)
 {
-    if (op >= IR_OP_COUNT || !name) {
+    if (!info || !name) {
         return false;
     }
 
     for (size_t i = 0; i < sizeof(mods) / sizeof(mods[0]); i++) {
-        if ((table[op].mods & mods[i].group) && !strcmp(mods[i].name, name)) {
+        if ((info->mods & mods[i].group) && !strcmp(mods[i].name, name)) {
             return true;
         }
     }
 
     return false;
+}
+
+bool ir_op_accepts_mod(ir_op_t op, const char *name)
+{
+    return ir_opinfo_accepts_mod(ir_op_info(op), name);
 }
 
 bool ir_mod_exists(const char *name)
@@ -161,13 +176,44 @@ bool ir_mod_exists(const char *name)
     return false;
 }
 
-bool ir_op_accepts_operands(ir_op_t op, uint32_t n)
+bool ir_opinfo_accepts_operands(const ir_opinfo_t *i, uint32_t n)
 {
-    if (op >= IR_OP_COUNT) {
+    if (!i) {
         return false;
     }
 
-    return n >= table[op].min_operands
-        && (table[op].max_operands == IR_VAR_ARITY
-            || n <= table[op].max_operands);
+    return n >= i->min_operands
+        && (i->max_operands == IR_VAR_ARITY || n <= i->max_operands);
+}
+
+ir_opdkind_t ir_op_operand_kind(ir_op_t op, uint32_t i)
+{
+    return ir_opinfo_operand_kind(ir_op_info(op), i);
+}
+
+bool ir_op_accepts_operands(ir_op_t op, uint32_t n)
+{
+    return ir_opinfo_accepts_operands(ir_op_info(op), n);
+}
+
+bool ir_op_is_extension(ir_op_t op)
+{
+    return op >= IR_OP_COUNT;
+}
+
+bool ir_op_spelling_is_namespaced(const char *spelling, const char *profile)
+{
+    if (!spelling || !profile) {
+        return false;
+    }
+
+    const char *dot = strchr(spelling, '.');
+
+    if (!dot || dot == spelling || !dot[1]) {
+        return false;
+    }
+
+    size_t n = (size_t)(dot - spelling);
+
+    return strlen(profile) == n && !strncmp(spelling, profile, n);
 }

@@ -86,6 +86,16 @@ bool               ir_op_is_terminator(ir_op_t op);
 ir_opdkind_t       ir_op_operand_kind(ir_op_t op, uint32_t i);
 bool               ir_op_accepts_operands(ir_op_t op, uint32_t n);
 bool               ir_op_accepts_mod(ir_op_t op, const char *name);
+bool               ir_op_is_extension(ir_op_t op);
+bool               ir_opinfo_has_result(const ir_opinfo_t *i);
+bool               ir_opinfo_is_terminator(const ir_opinfo_t *i);
+ir_opdkind_t       ir_opinfo_operand_kind(const ir_opinfo_t *i, uint32_t k);
+bool               ir_opinfo_accepts_operands(const ir_opinfo_t *i,
+                                              uint32_t n);
+bool               ir_opinfo_accepts_mod(const ir_opinfo_t *i,
+                                         const char *name);
+bool               ir_op_spelling_is_namespaced(const char *spelling,
+                                                const char *profile);
 bool               ir_mod_exists(const char *name);
 
 typedef enum : uint16_t {
@@ -126,6 +136,7 @@ typedef struct ir_local_t   ir_local_t;
 typedef struct ir_global_t  ir_global_t;
 typedef struct ir_profile_t ir_profile_t;
 typedef struct ir_region_t  ir_region_t;
+struct ir_rule_t;
 
 typedef struct {
     int32_t  file;
@@ -388,6 +399,10 @@ struct ir_profile_t {
     const char *name;
     size_t      n_scalars;
     const struct ir_scalar_t *scalars;
+    size_t      n_rules;
+    const struct ir_rule_t *rules;
+    size_t      n_ext_ops;
+    const ir_opinfo_t *ext_ops;
 };
 
 typedef struct ir_scalar_t {
@@ -395,6 +410,10 @@ typedef struct ir_scalar_t {
     ir_class_t   class;
     uint32_t     width;
 } ir_scalar_t;
+
+bool ir_module_op_lookup(ir_module_t *m, const char *spelling, ir_op_t *out);
+const ir_opinfo_t *ir_module_op_info(ir_module_t *m, ir_op_t op);
+const char        *ir_module_op_spelling(ir_module_t *m, ir_op_t op);
 
 ir_machine_t ir_machine_of(ir_module_t *m, th_type *t);
 bool         ir_profile_has(ir_module_t *m, th_type *t);

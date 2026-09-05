@@ -710,7 +710,8 @@ static bool parse_block_ref(P *p, ir_func_t *f, ir_instr_t *in)
 static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
                           fixups *fx)
 {
-    ir_opdkind_t want = ir_op_operand_kind(in->op, in->n_operands);
+    ir_opdkind_t want = ir_opinfo_operand_kind(
+        ir_module_op_info(m, in->op), in->n_operands);
 
     if (want == IR_OPD_ARG && p->cur.kind == T_IDENT
         && next_is_punct(p, '=')) {
@@ -1033,8 +1034,13 @@ static bool parse_instr(P *p, ir_module_t *m, ir_func_t *f, ir_block_t *b,
     char    *opname = ident_text(p);
     ir_op_t  op;
 
-    if (!ir_op_lookup(opname, &op)) {
-        fail(p, "unknown opcode");
+    if (!ir_module_op_lookup(m, opname, &op)) {
+        if (strchr(opname, '.')) {
+            fail(p, "this opcode needs a profile that is not loaded");
+        }
+        else {
+            fail(p, "unknown opcode");
+        }
 
         return false;
     }
@@ -1052,7 +1058,7 @@ static bool parse_instr(P *p, ir_module_t *m, ir_func_t *f, ir_block_t *b,
     while (on_line(p, line) && p->cur.kind == T_IDENT) {
         char *mod = ident_text(p);
 
-        if (!ir_op_accepts_mod(op, mod)) {
+        if (!ir_opinfo_accepts_mod(ir_module_op_info(m, op), mod)) {
             if (ir_mod_exists(mod)) {
                 fail(p, "this opcode does not take that modifier");
 
@@ -1069,7 +1075,7 @@ static bool parse_instr(P *p, ir_module_t *m, ir_func_t *f, ir_block_t *b,
         advance(p);
     }
 
-    const ir_opinfo_t *info = ir_op_info(op);
+    const ir_opinfo_t *info = ir_module_op_info(m, op);
 
     for (uint32_t i = 0; i < info->min_operands; i++) {
         if (i && !expect_punct(p, ',', "expected , between operands")) {
@@ -1083,7 +1089,7 @@ static bool parse_instr(P *p, ir_module_t *m, ir_func_t *f, ir_block_t *b,
 
     if (info->max_operands > info->min_operands) {
         if (!info->min_operands && on_line(p, line)
-            && starts_operand(p, ir_op_operand_kind(op, 0))
+            && starts_operand(p, ir_opinfo_operand_kind(info, 0))
             && !parse_operand(p, m, f, in, fx)) {
             return false;
         }

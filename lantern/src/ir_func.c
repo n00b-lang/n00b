@@ -233,12 +233,15 @@ ir_instr_t *ir_block_terminator(ir_block_t *b)
 
     ir_instr_t *last = b->instrs[b->n_instrs - 1];
 
-    return ir_op_is_terminator(last->op) ? last : nullptr;
+    return ir_opinfo_is_terminator(
+               ir_module_op_info(b->owner->owner, last->op))
+               ? last
+               : nullptr;
 }
 
 ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op)
 {
-    if (!b || op >= IR_OP_COUNT) {
+    if (!b || !ir_module_op_info(b->owner->owner, op)) {
         return nullptr;
     }
 
@@ -266,7 +269,9 @@ ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op)
 
 bool ir_instr_set_dest(ir_instr_t *in, const char *name, th_type *type)
 {
-    if (!in || !name || !type || !ir_op_has_result(in->op)) {
+    if (!in || !name || !type
+        || !ir_opinfo_has_result(
+               ir_module_op_info(in->block->owner->owner, in->op))) {
         return false;
     }
 
@@ -292,7 +297,9 @@ bool ir_instr_set_dest(ir_instr_t *in, const char *name, th_type *type)
 
 bool ir_instr_set_dest_local(ir_instr_t *in, ir_local_t *l)
 {
-    if (!in || !l || !ir_op_has_result(in->op)) {
+    if (!in || !l
+        || !ir_opinfo_has_result(
+               ir_module_op_info(in->block->owner->owner, in->op))) {
         return false;
     }
 
@@ -309,10 +316,11 @@ static ir_operand_t *push(ir_instr_t *in, ir_opdkind_t kind)
         return nullptr;
     }
 
-    ir_ctx_t          *ctx  = in->block->owner->owner->ctx;
-    const ir_opinfo_t *info = ir_op_info(in->op);
+    ir_module_t       *mod  = in->block->owner->owner;
+    ir_ctx_t          *ctx  = mod->ctx;
+    const ir_opinfo_t *info = ir_module_op_info(mod, in->op);
 
-    ir_opdkind_t want = ir_op_operand_kind(in->op, in->n_operands);
+    ir_opdkind_t want = ir_opinfo_operand_kind(info, in->n_operands);
 
     if (want != kind
         && !(want == IR_OPD_ARG

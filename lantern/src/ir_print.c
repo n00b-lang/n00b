@@ -5,11 +5,20 @@
 #include "ir_internal.h"
 #include "ir/text.h"
 
-static void put_type(ir_sb *b, ir_module_t *m, th_type *t)
+const char *ir_type_text(ir_module_t *m, th_type *t)
 {
+    if (!m || !t) {
+        return "?";
+    }
+
     const char *s = th_print(ir_ctx_types(m->ctx), t);
 
-    ir_sb_str(b, s ? s : "?");
+    return s ? s : "?";
+}
+
+static void put_type(ir_sb *b, ir_module_t *m, th_type *t)
+{
+    ir_sb_str(b, ir_type_text(m, t));
 }
 
 static void put_span(ir_sb *b, ir_span_t s)
@@ -237,7 +246,7 @@ static void put_instr(ir_sb *b, ir_module_t *m, const ir_instr_t *in)
         ir_sb_fmt(b, "$%s = ", in->dest_local->name);
     }
 
-    ir_sb_str(b, ir_op_spelling(in->op));
+    ir_sb_str(b, ir_module_op_spelling(m, in->op));
 
     for (uint32_t i = 0; i < in->n_mods; i++) {
         ir_sb_fmt(b, " %s", in->mods[i]);
