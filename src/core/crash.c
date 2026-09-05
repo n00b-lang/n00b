@@ -358,6 +358,34 @@ _n00b_crash_ucontext_fp(void *uctx)
 #endif
 }
 
+/* Does si_addr carry a fault address for this signal? (n00b#306)
+ *
+ * POSIX defines si_addr only for SIGSEGV, SIGBUS, SIGILL and SIGFPE. For a
+ * signal raised by abort()/raise()/kill() -- SIGABRT above all -- si_addr is a
+ * union alias over si_pid/si_uid, so printing it yields a number that looks
+ * like a pointer and is not one.
+ *
+ * That is not hypothetical. Every SIGABRT in Linux CI reported
+ *
+ *     fault_addr=0x3e900010d18
+ *
+ * whose high half is 0x3e9 == uid 1001 and whose low half is the pid. It was
+ * read as a clustered memory fault more than once before anyone decoded it.
+ */
+[[n00b::nogc]] static inline bool
+_n00b_crash_si_addr_is_fault(int sig)
+{
+    switch (sig) {
+    case SIGSEGV:
+    case SIGBUS:
+    case SIGILL:
+    case SIGFPE:
+        return true;
+    default:
+        return false;
+    }
+}
+
 [[n00b::nogc]] static void
 _n00b_crash_dump_context(int sig,
                          siginfo_t *si,
@@ -372,8 +400,23 @@ _n00b_crash_dump_context(int sig,
 
     _n00b_crash_write("n00b: crash sig=");
     _n00b_crash_write_u64((uint64_t)sig);
-    _n00b_crash_write(" fault_addr=");
-    _n00b_crash_write_ptr(si != nullptr ? si->si_addr : nullptr);
+    // si_code distinguishes SEGV_MAPERR (unmapped) from SEGV_ACCERR
+    // (mapped, wrong permissions), which is the difference between "bad
+    // pointer" and "the mapping is not what we think it is" -- established
+    // by hand over several rounds during n00b#290.
+    _n00b_crash_write(" si_code=");
+    _n00b_crash_write_u64(si != nullptr ? (uint64_t)(uint32_t)si->si_code : 0);
+    if (_n00b_crash_si_addr_is_fault(sig)) {
+        _n00b_crash_write(" fault_addr=");
+        _n00b_crash_write_ptr(si != nullptr ? si->si_addr : nullptr);
+    }
+    else {
+        // si_addr aliases si_pid/si_uid here and is not an address; report
+        // the sender instead, which is what those members actually hold.
+        _n00b_crash_write(" sender_pid=");
+        _n00b_crash_write_u64(si != nullptr ? (uint64_t)(uint32_t)si->si_pid
+                                            : 0);
+    }
     _n00b_crash_write(" overflow=");
     _n00b_crash_write(overflow ? "1" : "0");
     _n00b_crash_write(" pc=");
@@ -482,7 +525,10 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
     if (faulting != nullptr && si != nullptr) {
         void *glo = n00b_atomic_load(&faulting->guard_lo);
         void *ghi = n00b_atomic_load(&faulting->guard_hi);
-        if (glo != nullptr) {
+        // Only meaningful when si_addr is a fault address (n00b#306);
+        // on a SIGABRT it holds si_pid/si_uid, and a pid that happened to
+        // land inside the guard range would report a phantom overflow.
+        if (glo != nullptr && _n00b_crash_si_addr_is_fault(sig)) {
             uintptr_t fa = (uintptr_t)si->si_addr;
             if (fa >= (uintptr_t)glo && fa < (uintptr_t)ghi) {
                 overflow = true;
@@ -501,7 +547,10 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
     // a fault address inside a parked (freed + PROT_NONE) big pool allocation
     // means this crash is a use-after-free of that allocation — name the
     // freeing call stack. find() is async-signal-safe (atomic loads only).
-    if (si != nullptr) {
+    // Gated on si_addr being a fault address (n00b#306): on a SIGABRT this
+    // would look up a quarantined page by a pid, which can only produce a
+    // false negative or a spurious hit.
+    if (si != nullptr && _n00b_crash_si_addr_is_fault(sig)) {
         n00b_option_t(n00b_pool_quarantine_hit_t) qopt =
             n00b_pool_quarantine_find((uintptr_t)si->si_addr);
         if (n00b_option_is_set(qopt)) {
