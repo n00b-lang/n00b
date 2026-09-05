@@ -27,14 +27,14 @@ ir_sources = files(
 ir_lib = library(
     'ir',
     ir_sources,
-    dependencies: typehash_dep,
+    dependencies: [typehash_dep, fe_dep],
     include_directories: ir_inc,
     install: true,
 )
 
 ir_dep = declare_dependency(
     link_with: ir_lib,
-    dependencies: typehash_dep,
+    dependencies: [typehash_dep, fe_dep],
     include_directories: ir_inc,
 )
 

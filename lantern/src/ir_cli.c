@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "ir_internal.h"
+#include "parse/commander.h"
 #include "ir/analyze.h"
 #include "ir/cli.h"
 #include "ir/layout.h"
@@ -17,11 +18,15 @@
 #define IR_CLI_USAGE 2
 
 typedef struct {
-    ir_ctx_t    *ctx;
-    ir_diags_t  *d;
-    ir_module_t *m;
-    char        *text;
-    const char  *path;
+    ir_ctx_t          *ctx;
+    ir_diags_t        *d;
+    ir_module_t       *m;
+    char              *text;
+    const char        *path;
+    // The command line owns the strings the rest of the run points at, so it
+    // outlives the run rather than being copied out of.
+    ncc_cmdr_t        *cmdr;
+    ncc_cmdr_result_t *args;
 } job;
 
 static const ir_pass_t *const PASSES[] = {
@@ -37,27 +42,95 @@ static const ir_props_t PROPS[] = {
     IR_PROP_VERIFIED,
 };
 
-static void usage(FILE *err)
+static const struct {
+    const char *name;
+    const char *doc;
+} COMMANDS[] = {
+    {"parse",   "read the module and report what the parser found"},
+    {"print",   "write the module back out in canonical form"     },
+    {"verify",  "report which properties hold"                    },
+    {"analyze", "report unreachable blocks, unset and unused locals"},
+    {"explain", "say which typing rule fires for each instruction"},
+    {"pass",    "run passes in order, then print"                 },
+    {"cfg",     "blocks and their successors, with edge kinds"    },
+    {"dom",     "dominators, post-dominators, dominance frontiers"},
+    {"cdg",     "control dependence, over blocks"                 },
+    {"dfg",     "data dependence, over instructions"              },
+    {"pdg",     "both kinds of dependence, in one graph"          },
+    {"regions", "the region overlay, as a nested rendering"       },
+};
+
+#define N_COMMANDS (sizeof(COMMANDS) / sizeof(COMMANDS[0]))
+
+static ncc_cmdr_t *build_cli(void)
 {
-    fputs("usage: ir <command> [options] <file.ir>\n"
-          "\n"
-          "  parse     read the module and report what the parser found\n"
-          "  print     write the module back out in canonical form\n"
-          "  verify    report which properties hold\n"
-          "  analyze   report unreachable blocks, unset and unused locals\n"
-          "  explain   say which typing rule fires for each instruction\n"
-          "  pass      run passes in order, then print\n"
-          "  cfg       blocks and their successors, with edge kinds\n"
-          "  dom       dominators, post-dominators, dominance frontiers\n"
-          "  cdg       control dependence, over blocks\n"
-          "  dfg       data dependence, over instructions\n"
-          "  pdg       both kinds of dependence, in one graph\n"
-          "  regions   the region overlay, as a nested rendering\n"
-          "\n"
-          "  --profile <name>   bce (default) or synth\n"
-          "  --json             render diagnostics as JSON\n"
-          "  --passes <list>    for `pass`: comma separated, in order\n",
-          err);
+    ncc_cmdr_t *c = ncc_cmdr_new();
+
+    ncc_cmdr_set_name(c, "ir");
+    ncc_cmdr_add_flag(c, nullptr, "--help", NCC_CMDR_TYPE_BOOL, false,
+                      "show this help");
+    ncc_cmdr_add_flag_alias(c, nullptr, "--help", "-h");
+
+    for (size_t i = 0; i < N_COMMANDS; i++) {
+        const char *name = COMMANDS[i].name;
+
+        ncc_cmdr_add_command(c, name, COMMANDS[i].doc);
+        ncc_cmdr_add_flag(c, name, "--profile", NCC_CMDR_TYPE_WORD, true,
+                          "bce (default) or synth");
+        ncc_cmdr_add_flag(c, name, "--json", NCC_CMDR_TYPE_BOOL, false,
+                          "render diagnostics as JSON");
+        ncc_cmdr_add_flag(c, name, "--help", NCC_CMDR_TYPE_BOOL, false,
+                          "show this help");
+        ncc_cmdr_add_flag_alias(c, name, "--help", "-h");
+        ncc_cmdr_add_positional(c, name, "file", NCC_CMDR_TYPE_WORD, 1, 1);
+    }
+
+    ncc_cmdr_add_flag(c, "pass", "--passes", NCC_CMDR_TYPE_WORD, true,
+                      "comma separated, in order");
+    ncc_cmdr_finalize(c);
+
+    return c;
+}
+
+static void usage_flags(ncc_cmdr_command_t *cmd, FILE *err)
+{
+    for (int32_t i = 0; i < cmd->n_flags; i++) {
+        ncc_cmdr_flag_spec_t *fl = &cmd->flags[i];
+
+        if (!strcmp(fl->name.data, "--help")) {
+            continue;
+        }
+
+        char spelled[64];
+
+        snprintf(spelled, sizeof(spelled), "%s%s", fl->name.data,
+                 fl->takes_value ? " <value>" : "");
+        fprintf(err, "  %-18s %s\n", spelled, fl->doc.data);
+    }
+}
+
+static void usage(ncc_cmdr_t *c, FILE *err)
+{
+    fputs("usage: ir <command> [options] <file.ir>\n\n", err);
+
+    for (int32_t i = 0; i < c->root.n_subcommands; i++) {
+        ncc_cmdr_command_t *sub = &c->root.subcommands[i];
+
+        fprintf(err, "  %-9s %s\n", sub->name.data, sub->doc.data);
+    }
+
+    fputc('\n', err);
+
+    // Every command carries the same flags but `pass`, which adds --passes,
+    // so printing one of each spells the whole set once.
+    for (int32_t i = 0; i < c->root.n_subcommands; i++) {
+        ncc_cmdr_command_t *sub = &c->root.subcommands[i];
+
+        if (!strcmp(sub->name.data, "pass")) {
+            usage_flags(sub, err);
+            break;
+        }
+    }
 }
 
 static const char *source_of(void *state, int32_t file, size_t *len)
@@ -160,6 +233,14 @@ static void unload(job *j)
         ir_ctx_free(j->ctx);
     }
     free(j->text);
+
+    if (j->args) {
+        ncc_cmdr_result_free(j->args);
+    }
+
+    if (j->cmdr) {
+        ncc_cmdr_free(j->cmdr);
+    }
 }
 
 static const char *tag(ir_instr_t *in, char *buf, size_t n)
@@ -407,70 +488,73 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
     bool                json    = false;
     bool                help    = false;
 
+    job j  = {0};
+
+    j.cmdr = build_cli();
+
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            help = true;
-        }
-        else if (!strcmp(argv[i], "--json")) {
-            json = true;
-        }
-        else if (!strcmp(argv[i], "--profile") && i + 1 < argc) {
-            const char *want = argv[++i];
-
-            if (!strcmp(want, "bce")) {
-                only = &ir_profile_bce;
-            }
-            else if (!strcmp(want, "synth")) {
-                only = &ir_profile_synth;
-            }
-            else {
-                fprintf(err, "ir: no profile named %s\n", want);
-
-                return IR_CLI_USAGE;
-            }
-        }
-        else if (!strcmp(argv[i], "--passes") && i + 1 < argc) {
-            list = argv[++i];
-        }
-        else if (argv[i][0] == '-' && argv[i][1] && strcmp(argv[i], "-")) {
-            fprintf(err, "ir: unknown option %s\n", argv[i]);
-
-            return IR_CLI_USAGE;
-        }
-        else if (!cmd) {
-            cmd = argv[i];
-        }
-        else {
-            path = argv[i];
-        }
+        help = help || !strcmp(argv[i], "-h") || !strcmp(argv[i], "--help");
     }
 
-    if (help || !cmd) {
-        usage(err);
+    if (help || argc < 2) {
+        usage(j.cmdr, err);
+        unload(&j);
 
-        return cmd || help ? IR_CLI_OK : IR_CLI_USAGE;
+        return help ? IR_CLI_OK : IR_CLI_USAGE;
     }
 
-    static const char *const KNOWN[] = {
-        "parse", "print", "verify",  "analyze", "explain", "pass",
-        "cfg",   "dom",   "cdg",     "dfg",     "pdg",     "regions",
-    };
-    bool known = false;
+    j.args = ncc_cmdr_parse(j.cmdr, argc - 1, (const char **)argv + 1);
 
-    for (size_t i = 0; i < sizeof(KNOWN) / sizeof(KNOWN[0]); i++) {
-        known = known || !strcmp(cmd, KNOWN[i]);
-    }
+    if (!j.args->ok || !ncc_cmdr_result_command(j.args)) {
+        const char *bad = argv[1];
 
-    if (!known) {
-        fprintf(err, "ir: no command named %s\n", cmd);
-        usage(err);
+        for (int i = 1; i < argc; i++) {
+            if (argv[i][0] == '-' && argv[i][1] && strcmp(argv[i], "-")) {
+                bad = argv[i];
+                break;
+            }
+        }
+
+        fprintf(err,
+                bad[0] == '-' ? "ir: unknown option %s\n"
+                              : "ir: no command named %s\n",
+                bad);
+        usage(j.cmdr, err);
+        unload(&j);
 
         return IR_CLI_USAGE;
     }
 
+    cmd = ncc_cmdr_result_command(j.args);
+
+    if (ncc_cmdr_flag_present(j.args, "--profile")) {
+        const char *want = ncc_cmdr_flag_str(j.args, "--profile");
+
+        if (want && !strcmp(want, "bce")) {
+            only = &ir_profile_bce;
+        }
+        else if (want && !strcmp(want, "synth")) {
+            only = &ir_profile_synth;
+        }
+        else {
+            fprintf(err, "ir: no profile named %s\n", want ? want : "");
+            unload(&j);
+
+            return IR_CLI_USAGE;
+        }
+    }
+
+    json = ncc_cmdr_flag_present(j.args, "--json");
+    list = ncc_cmdr_flag_present(j.args, "--passes")
+             ? ncc_cmdr_flag_str(j.args, "--passes")
+             : nullptr;
+    path = ncc_cmdr_arg_count(j.args) > 0 ? ncc_cmdr_arg_str(j.args, 0)
+                                          : nullptr;
+
     if (!strcmp(cmd, "pass")) {
         if (!list) {
             fprintf(err, "ir: pass needs --passes\n");
+            unload(&j);
 
             return IR_CLI_USAGE;
         }
@@ -481,6 +565,7 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
 
             if (!pass_named(at, n)) {
                 fprintf(err, "ir: no pass named %.*s\n", (int)n, at);
+                unload(&j);
 
                 return IR_CLI_USAGE;
             }
@@ -490,11 +575,11 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
 
     if (!path) {
         fprintf(err, "ir: %s needs a file\n", cmd);
+        unload(&j);
 
         return IR_CLI_USAGE;
     }
 
-    job  j  = {0};
     bool ok = load(&j, path, only ? &only : BOTH, only ? 1 : 2, err);
 
     if (!ok) {

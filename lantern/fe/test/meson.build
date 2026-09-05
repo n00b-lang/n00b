@@ -41,3 +41,13 @@ test(
     fe_bnf_slay_test,
     workdir: meson.current_source_dir(),
 )
+
+fe_commander_test = executable(
+    'fe_commander_test',
+    'test_commander.c',
+    dependencies: fe_dep,
+)
+
+test('fe-commander', fe_commander_test)
+
+bnfcheck = executable('bnfcheck', 'bnfcheck.c', dependencies: fe_dep)

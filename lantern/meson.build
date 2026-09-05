@@ -18,6 +18,6 @@ subdir('th')
 tdesc_inc = include_directories('tdesc')
 ir_inc    = include_directories('include')
 
+subdir('fe')
 subdir('src')
 subdir('test')
-subdir('fe')
