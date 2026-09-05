@@ -421,6 +421,131 @@ static void test_ordering_is_deterministic(void)
     ir_ctx_free(ctx);
 }
 
+static int ran;
+
+static bool count_pass(ir_module_t *m, void *state)
+{
+    (void)m;
+    (void)state;
+    ran++;
+
+    return true;
+}
+
+static bool fatal_pass(ir_module_t *m, void *state)
+{
+    ir_diags_t *d = state;
+
+    (void)m;
+    ran++;
+    ir_diag_begin(d, IR_DIAG_OUT_OF_MEMORY, at(0, 1, 1, 1, 2), nullptr);
+
+    return true;
+}
+
+static bool error_pass(ir_module_t *m, void *state)
+{
+    ir_diags_t *d = state;
+
+    (void)m;
+    ran++;
+    ir_diag_begin(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), nullptr);
+
+    return true;
+}
+
+static void run_pipeline(const ir_pass_t *passes, size_t n, ir_module_t *m,
+                         ir_diags_t *d)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (ir_diags_fatal(d)) {
+            return;
+        }
+        ir_pass_run(&passes[i], m, d, nullptr);
+    }
+}
+
+static void test_pipeline_stops_on_fatal(void)
+{
+    ir_ctx_t    *ctx = ir_ctx_new();
+    ir_module_t *m   = mod(ctx);
+    ir_diags_t  *d   = ir_diags_new(ctx, nullptr);
+
+    ir_module_establish(m, IR_PROP_PARSED);
+
+    const ir_pass_t errs[] = {
+        {"a", IR_PROP_PARSED, 0, 0, error_pass},
+        {"b", IR_PROP_PARSED, 0, 0, error_pass},
+        {"c", IR_PROP_PARSED, 0, 0, count_pass},
+    };
+
+    ran = 0;
+    run_pipeline(errs, 3, m, d);
+    check("errors do not stop the pipeline; one run reports many",
+          ran == 3 && ir_diags_count(d) == 2 && ir_diags_failed(d));
+
+    ir_diags_t *e = ir_diags_new(ctx, nullptr);
+
+    const ir_pass_t fat[] = {
+        {"a", IR_PROP_PARSED, 0, 0, count_pass},
+        {"b", IR_PROP_PARSED, 0, 0, fatal_pass},
+        {"c", IR_PROP_PARSED, 0, 0, count_pass},
+        {"d", IR_PROP_PARSED, 0, 0, count_pass},
+    };
+
+    ran = 0;
+    run_pipeline(fat, 4, m, e);
+    check("a fatal stops the pipeline", ran == 2 && ir_diags_fatal(e));
+
+    ir_ctx_free(ctx);
+}
+
+static void test_pass_declarations(void)
+{
+    ir_ctx_t    *ctx = ir_ctx_new();
+    ir_module_t *m   = mod(ctx);
+
+    const ir_pass_t good = {"good", IR_PROP_PARSED, IR_PROP_TYPED,
+                            IR_PROP_SSA, count_pass};
+
+    check("a pass declaring requires/establishes/invalidates is valid",
+          ir_pass_declares(&good));
+
+    const ir_pass_t nameless = {nullptr, 0, 0, 0, count_pass};
+    const ir_pass_t bodiless = {"x", 0, 0, 0, nullptr};
+    const ir_pass_t confused = {"x", 0, IR_PROP_TYPED, IR_PROP_TYPED,
+                                count_pass};
+
+    check("a pass with no name is invalid", !ir_pass_declares(&nameless));
+    check("a pass with no body is invalid", !ir_pass_declares(&bodiless));
+    check("a pass that both establishes and invalidates one property "
+          "is invalid",
+          !ir_pass_declares(&confused));
+
+    ir_props_t unmet = 0;
+
+    ran = 0;
+    check("a pass whose requirements are unmet does not run",
+          ir_pass_run(&good, m, nullptr, &unmet) == IR_PASS_UNMET && !ran);
+    check("the unmet requirement is reported", unmet == IR_PROP_PARSED);
+
+    ir_module_establish(m, IR_PROP_PARSED | IR_PROP_SSA);
+    ran = 0;
+    check("a pass whose requirements are met runs",
+          ir_pass_run(&good, m, nullptr, &unmet) == IR_PASS_OK && ran == 1);
+    check("what it establishes is established",
+          ir_module_props(m) & IR_PROP_TYPED);
+    check("what it invalidates is invalidated",
+          !(ir_module_props(m) & IR_PROP_SSA));
+    check("what it does not name is untouched",
+          ir_module_props(m) & IR_PROP_PARSED);
+
+    check("an undeclared pass is refused",
+          ir_pass_run(&confused, m, nullptr, nullptr) == IR_PASS_INVALID);
+
+    ir_ctx_free(ctx);
+}
+
 static void test_merge(void)
 {
     ir_ctx_t   *ctx = ir_ctx_new();
@@ -435,6 +560,14 @@ static void test_merge(void)
     check("merged diagnostics are counted", ir_diags_count(a) == 3);
     check("a merged fatal marks the destination", ir_diags_fatal(a));
 
+    ir_ctx_t   *other = ir_ctx_new();
+    ir_diags_t *far   = ir_diags_new(other, nullptr);
+
+    ir_diag_begin(far, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), "elsewhere");
+    check("merging across contexts is refused", !ir_diags_merge(a, far));
+    check("the refused merge changed nothing", ir_diags_count(a) == 3);
+
+    ir_ctx_free(other);
     ir_ctx_free(ctx);
 }
 
@@ -453,10 +586,18 @@ static bool same_as_golden(const char *path, const char *got)
     FILE *f = fopen(path, "r");
 
     if (!f) {
-        write_file(path, got);
-        printf("NOTE  wrote new golden %s\n", path);
+        if (getenv("IR_BLESS_GOLDEN")) {
+            write_file(path, got);
+            printf("NOTE  blessed new golden %s\n", path);
 
-        return true;
+            return true;
+        }
+
+        printf("FAIL  golden %s is missing; re-run with IR_BLESS_GOLDEN=1 to "
+               "create it\n",
+               path);
+
+        return false;
     }
 
     char  *buf = nullptr;
@@ -533,6 +674,21 @@ static void test_rendering(const char *golden_dir)
     check("machine rendering matches its golden", same_as_golden(p2, js));
     free(js);
 
+    char *chain = ir_diags_render_text(d, &r);
+    char *inner = strstr(chain, "inlined from here");
+    char *outer = strstr(chain, "expanded from here");
+
+    check("origin notes render innermost first",
+          inner && outer && inner < outer);
+    check("a SOURCE origin is not rendered as a note",
+          !strstr(chain, "from here by (null)"));
+
+    char *arrow = strstr(chain, "--> sum.bce:2:3");
+
+    check("the primary location precedes the origin notes",
+          arrow && inner && arrow < inner);
+    free(chain);
+
     ir_render_t bare = {.module = m};
     char       *nc   = ir_diags_render_text(d, &bare);
 
@@ -551,6 +707,7 @@ static void report_coverage(const char *dir)
     FILE *f;
 
     snprintf(path, sizeof(path), "%s/../produced-codes.txt", dir);
+
     f = fopen(path, "w");
 
     if (!f) {
@@ -579,6 +736,8 @@ int main(int argc, char **argv)
     test_span_fallback();
     test_ordering();
     test_ordering_is_deterministic();
+    test_pass_declarations();
+    test_pipeline_stops_on_fatal();
     test_merge();
     test_rendering(golden);
     report_coverage(golden);

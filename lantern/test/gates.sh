@@ -2,6 +2,7 @@
 set -u
 
 root="$1"
+diag_bin="${2:-}"
 inc="$root/include/ir"
 src="$root/src"
 fails=0
@@ -58,7 +59,19 @@ g="$(grep -nE '"IR-[EWF][0-9]{4}"' $src/*.c $inc/diag.h 2>/dev/null)"
 g="$(grep -nE 'ir_diag_(begin|begin_at|note)\(' "$inc/diag.h" | grep -E 'char \*code|const char \*c[^h]')"
 [ -z "$g" ] || fail "DIAG-08 an emit entry point takes a code as a string" "$g"
 
-produced="$root/test/produced-codes.txt"
+work="${TMPDIR:-/tmp}/ir-gates-$$"
+mkdir -p "$work/golden"
+produced="$work/produced-codes.txt"
+
+if [ -n "$diag_bin" ] && [ -x "$diag_bin" ]; then
+    cp "$root"/test/golden/* "$work/golden/" 2>/dev/null
+    "$diag_bin" "$work/golden" >/dev/null 2>&1 || {
+        fail "DIAG-10 the diagnostic test did not pass, so its code coverage is unknown" ""
+    }
+else
+    fail "DIAG-10 no diagnostic binary was given, so coverage cannot be checked" ""
+fi
+
 pending=""
 
 for id in $(grep -oE '^IR_DIAG\([A-Z_]+' "$inc/ir_diags.def" | cut -d'(' -f2); do
@@ -77,6 +90,8 @@ done
 if [ -n "$pending" ]; then
     echo "DIAG-10 pending, declared but not yet emitted by any library code:$pending"
 fi
+
+rm -rf "$work"
 
 if [ "$fails" -eq 0 ]; then
     echo "gates: all passed"

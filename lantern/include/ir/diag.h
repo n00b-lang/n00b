@@ -45,8 +45,10 @@ typedef struct {
     ir_label_t       primary;
     ir_label_t      *secondary;
     uint32_t         n_secondary;
+    uint32_t         cap_secondary;
     ir_suggestion_t *suggestions;
     uint32_t         n_suggestions;
+    uint32_t         cap_suggestions;
     ir_origin_t     *origin;
     uint64_t         seq;
 } ir_diag_t;
@@ -90,6 +92,7 @@ bool             ir_diags_failed(const ir_diags_t *d);
 bool             ir_diags_fatal(const ir_diags_t *d);
 uint32_t         ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev);
 bool             ir_diags_merge(ir_diags_t *dst, ir_diags_t *src);
+
 void             ir_diags_sort(ir_diags_t *d);
 
 typedef const char *(*ir_source_fn)(void *state, int32_t file, size_t *len);

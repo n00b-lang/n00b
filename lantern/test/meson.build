@@ -29,5 +29,6 @@ test(
 test(
     'ir-gates',
     find_program('sh'),
-    args: [files('gates.sh'), meson.project_source_root()],
+    args: [files('gates.sh'), meson.project_source_root(), ir_diag_test],
+    depends: [ir_diag_test],
 )

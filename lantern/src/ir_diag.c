@@ -335,7 +335,7 @@ bool ir_diag_secondary(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
         return false;
     }
 
-    size_t cap = dg->n_secondary;
+    size_t cap = dg->cap_secondary;
 
     dg->secondary = ir_grow(d->ctx, dg->secondary, &cap, dg->n_secondary + 1u,
                             sizeof(ir_label_t));
@@ -343,6 +343,7 @@ bool ir_diag_secondary(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
     if (!dg->secondary) {
         return false;
     }
+    dg->cap_secondary = (uint32_t)cap;
 
     dg->secondary[dg->n_secondary].span  = span;
     dg->secondary[dg->n_secondary].label = label ? ir_strdup(d->ctx, label)
@@ -359,7 +360,7 @@ bool ir_diag_suggest(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
         return false;
     }
 
-    size_t cap = dg->n_suggestions;
+    size_t cap = dg->cap_suggestions;
 
     dg->suggestions = ir_grow(d->ctx, dg->suggestions, &cap,
                               dg->n_suggestions + 1u,
@@ -368,6 +369,7 @@ bool ir_diag_suggest(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
     if (!dg->suggestions) {
         return false;
     }
+    dg->cap_suggestions = (uint32_t)cap;
 
     ir_suggestion_t *s = &dg->suggestions[dg->n_suggestions++];
 
@@ -442,6 +444,10 @@ uint32_t ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev)
 bool ir_diags_merge(ir_diags_t *dst, ir_diags_t *src)
 {
     if (!dst || !src) {
+        return false;
+    }
+
+    if (dst->ctx != src->ctx) {
         return false;
     }
 

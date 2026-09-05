@@ -120,6 +120,7 @@ typedef struct ir_value_t   ir_value_t;
 typedef struct ir_local_t   ir_local_t;
 typedef struct ir_global_t  ir_global_t;
 typedef struct ir_profile_t ir_profile_t;
+typedef struct ir_region_t  ir_region_t;
 
 typedef struct {
     int32_t  file;
@@ -236,6 +237,7 @@ struct ir_instr_t {
     uint32_t      cap_operands;
     const char  **mods;
     uint32_t      n_mods;
+    uint32_t      cap_mods;
     ir_span_t     span;
     ir_origin_t  *origin;
     ir_annots_t   annots;
@@ -286,12 +288,14 @@ struct ir_func_t {
     ir_linkage_t  linkage;
     ir_value_t  **params;
     uint32_t      n_params;
+    uint32_t      cap_params;
     ir_local_t  **locals;
     uint32_t      n_locals;
     uint32_t      cap_locals;
     ir_block_t  **blocks;
     uint32_t      n_blocks;
     uint32_t      cap_blocks;
+    ir_region_t  *regions;
     ir_span_t     span;
     ir_origin_t  *origin;
     ir_annots_t   annots;
@@ -379,6 +383,27 @@ typedef struct ir_scalar_t {
 
 ir_machine_t ir_machine_of(ir_module_t *m, th_type *t);
 bool         ir_profile_has(ir_module_t *m, th_type *t);
+
+typedef bool (*ir_pass_fn)(ir_module_t *m, void *state);
+
+typedef struct {
+    const char *name;
+    ir_props_t  requires;
+    ir_props_t  establishes;
+    ir_props_t  invalidates;
+    ir_pass_fn  run;
+} ir_pass_t;
+
+typedef enum : uint8_t {
+    IR_PASS_OK,
+    IR_PASS_UNMET,
+    IR_PASS_FAILED,
+    IR_PASS_INVALID,
+} ir_pass_result_t;
+
+ir_pass_result_t ir_pass_run(const ir_pass_t *p, ir_module_t *m, void *state,
+                             ir_props_t *unmet);
+bool             ir_pass_declares(const ir_pass_t *p);
 
 extern const ir_profile_t ir_profile_bce;
 extern const ir_profile_t ir_profile_synth;

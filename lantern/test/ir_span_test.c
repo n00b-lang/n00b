@@ -44,6 +44,41 @@ static void locate(const char *src, uint32_t byte, uint32_t *line,
     *col  = scalars_in(src + start, byte - start) + 1;
 }
 
+static bool byte_of(const char *src, size_t n, uint32_t line, uint32_t col,
+                    uint32_t *out)
+{
+    uint32_t ln = 1;
+    size_t   i  = 0;
+
+    while (ln < line) {
+        if (i >= n) {
+            return false;
+        }
+
+        if (src[i++] == '\n') {
+            ln++;
+        }
+    }
+
+    uint32_t c = 1;
+
+    while (c < col) {
+        if (i >= n || src[i] == '\n') {
+            return false;
+        }
+        i++;
+
+        while (i < n && ((unsigned char)src[i] & 0xC0) == 0x80) {
+            i++;
+        }
+        c++;
+    }
+
+    *out = (uint32_t)i;
+
+    return true;
+}
+
 static uint64_t seed = 0x9E3779B97F4A7C15u;
 
 static uint32_t rnd(uint32_t bound)
@@ -103,24 +138,23 @@ static void test_roundtrip(void)
                 return;
             }
 
-            uint32_t rl, rc;
+            uint32_t back;
 
-            locate(src, s.start_byte, &rl, &rc);
-
-            if (rl != s.start_line || rc != s.start_col) {
-                printf("FAIL  span byte %u disagrees with line/col: "
-                       "%u:%u vs %u:%u (corpus %zu)\n",
-                       s.start_byte, s.start_line, s.start_col, rl, rc, c);
+            if (!byte_of(src, len, s.start_line, s.start_col, &back)
+                || back != s.start_byte) {
+                printf("FAIL  start %u:%u resolves to byte %u, span says %u "
+                       "(corpus %zu)\n",
+                       s.start_line, s.start_col, back, s.start_byte, c);
                 fails++;
 
                 return;
             }
 
-            locate(src, s.end_byte, &rl, &rc);
-
-            if (rl != s.end_line || rc != s.end_col) {
-                printf("FAIL  end byte %u disagrees with line/col (corpus "
-                       "%zu)\n", s.end_byte, c);
+            if (!byte_of(src, len, s.end_line, s.end_col, &back)
+                || back != s.end_byte) {
+                printf("FAIL  end %u:%u resolves to byte %u, span says %u "
+                       "(corpus %zu)\n",
+                       s.end_line, s.end_col, back, s.end_byte, c);
                 fails++;
 
                 return;
@@ -166,9 +200,32 @@ static void test_columns_are_scalars(void)
     check("the first position is 1:1", line == 1 && col == 1);
 }
 
+static void test_oracle_disagrees_when_it_should(void)
+{
+    const char *src = "ab\ncaf\xc3\xa9 x\n";
+    size_t      n   = strlen(src);
+    uint32_t    b;
+
+    check("the reverse oracle finds a known position",
+          byte_of(src, n, 2, 1, &b) && b == 3);
+    check("the reverse oracle counts a multibyte scalar as one column",
+          byte_of(src, n, 2, 5, &b) && b == 8);
+    check("the reverse oracle rejects a column past end of line",
+          !byte_of(src, n, 1, 9, &b));
+    check("the reverse oracle rejects a line past end of input",
+          !byte_of(src, n, 9, 1, &b));
+
+    uint32_t line, col;
+
+    locate(src, 8, &line, &col);
+    check("the two oracles agree on a known case, and are independent",
+          line == 2 && col == 5);
+}
+
 int main(void)
 {
     test_columns_are_scalars();
+    test_oracle_disagrees_when_it_should();
     test_roundtrip();
 
     if (!fails) {

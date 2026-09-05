@@ -124,10 +124,11 @@ ir_value_t *ir_param_add(ir_func_t *f, const char *name, th_type *type)
     v->owner = f;
     v->index = f->n_params;
 
-    size_t cap = f->n_params;
+    size_t cap = f->cap_params;
 
-    f->params = ir_grow(ctx, f->params, &cap, f->n_params + 1u,
-                        sizeof(ir_value_t *));
+    f->params     = ir_grow(ctx, f->params, &cap, f->n_params + 1u,
+                            sizeof(ir_value_t *));
+    f->cap_params = (uint32_t)cap;
     f->params[f->n_params++] = v;
 
     return v;
@@ -436,13 +437,14 @@ bool ir_instr_push_mod(ir_instr_t *in, const char *mod)
     }
 
     ir_ctx_t *ctx = in->block->owner->owner->ctx;
-    size_t    cap = in->n_mods;
+    size_t    cap = in->cap_mods;
 
     in->mods = ir_grow(ctx, in->mods, &cap, in->n_mods + 1u, sizeof(char *));
 
     if (!in->mods) {
         return false;
     }
+    in->cap_mods           = (uint32_t)cap;
     in->mods[in->n_mods++] = ir_strdup(ctx, mod);
 
     return true;
