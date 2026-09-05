@@ -573,16 +573,95 @@ rule_first_matches(ncc_parse_rule_t *rule, int64_t token_id)
 // Core derive functions
 // ============================================================================
 
+// Steps are pushed onto p->steps and popped by run_steps, so what reads below
+// as "call d_u" is "push a PWZ_STEP_DU frame". Frames pushed by a step run
+// before anything pushed before it, and a loop pushes its iterations in
+// reverse, which reproduces the depth-first order of the recursive form
+// exactly.
+static void
+push_step(ncc_pwz_parser_t *p, pwz_step_t s)
+{
+    ncc_list_push(p->steps, s);
+}
+
+// A loop pushes its iterations in order and then reverses them, so the first
+// iteration is on top and runs first — the order the recursive form had.
+static void
+reverse_steps(ncc_pwz_parser_t *p, size_t mark)
+{
+    size_t lo = mark;
+    size_t hi = p->steps.len;
+
+    while (hi > lo + 1) {
+        hi--;
+
+        pwz_step_t tmp    = p->steps.data[lo];
+        p->steps.data[lo] = p->steps.data[hi];
+        p->steps.data[hi] = tmp;
+        lo++;
+    }
+}
+
+static void
+step_dd(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
+        pwz_cxt_t *cxt, pwz_exp_t *exp)
+{
+    push_step(p, (pwz_step_t){.kind = PWZ_STEP_DD,
+                              .pos  = pos,
+                              .tok  = tok,
+                              .cxt  = cxt,
+                              .exp  = exp});
+}
+
+static void
+step_ddp(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
+         pwz_mem_t *mem, pwz_exp_t *exp)
+{
+    push_step(p, (pwz_step_t){.kind = PWZ_STEP_DDP,
+                              .pos  = pos,
+                              .tok  = tok,
+                              .mem  = mem,
+                              .exp  = exp});
+}
+
+static void
+step_du(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
+{
+    push_step(p, (pwz_step_t){.kind   = PWZ_STEP_DU,
+                              .pos    = pos,
+                              .result = result,
+                              .mem    = mem});
+}
+
+static void
+step_dup(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
+{
+    push_step(p, (pwz_step_t){.kind   = PWZ_STEP_DUP,
+                              .pos    = pos,
+                              .result = result,
+                              .cxt    = cxt});
+}
+
+static void run_steps(ncc_pwz_parser_t *p, size_t base);
+
 static void
 d_d(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
-    pwz_cxt_t *cxt, pwz_exp_t *exp);
+    pwz_cxt_t *cxt, pwz_exp_t *exp)
+{
+    size_t base = p->steps.len;
+
+    step_dd(p, pos, tok, cxt, exp);
+    run_steps(p, base);
+}
+
 static void
-d_d_prime(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
-          pwz_mem_t *mem, pwz_exp_t *exp);
-static void
-d_u(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem);
-static void
-d_u_prime(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt);
+d_u(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
+{
+    size_t base = p->steps.len;
+
+    step_du(p, pos, result, mem);
+    run_steps(p, base);
+}
 
 static bool
 token_matches(ncc_token_info_t *tok, pwz_exp_t *exp)
@@ -607,14 +686,14 @@ token_matches(ncc_token_info_t *tok, pwz_exp_t *exp)
 }
 
 static void
-d_d(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
-    pwz_cxt_t *cxt, pwz_exp_t *exp)
+run_dd(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
+       pwz_cxt_t *cxt, pwz_exp_t *exp)
 {
     if (exp->mem && exp->mem->start_pos == pos) {
         exp->mem->parents = alloc_cxt_node(p, cxt, exp->mem->parents);
 
         if (pwz_mem_end_pos(exp->mem) != PWZ_POS_BOTTOM) {
-            d_u_prime(p, pwz_mem_end_pos(exp->mem), exp->mem->result, cxt);
+            step_dup(p, pwz_mem_end_pos(exp->mem), exp->mem->result, cxt);
         }
 
         return;
@@ -631,12 +710,12 @@ d_d(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
     mem->parents   = alloc_cxt_node(p, cxt, nullptr);
     exp->mem       = mem;  // takes the initial refcount=1
 
-    d_d_prime(p, pos, tok, mem, exp);
+    step_ddp(p, pos, tok, mem, exp);
 }
 
 static void
-d_d_prime(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
-          pwz_mem_t *mem, pwz_exp_t *exp)
+run_ddp(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
+        pwz_mem_t *mem, pwz_exp_t *exp)
 {
     switch (exp->kind) {
     case PWZ_TOK:
@@ -666,7 +745,7 @@ d_d_prime(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
             result->seq.children  = nullptr;
             result->nchildren = 0;
 
-            d_u(p, pos, result, mem);
+            step_du(p, pos, result, mem);
         }
         else {
             // Store parent memo directly on SeqC; on completion,
@@ -682,7 +761,7 @@ d_d_prime(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
             seq_cxt->seq.right   = exp->seq.children + 1;
             seq_cxt->seq.nright  = exp->nchildren - 1;
 
-            d_d(p, pos, tok, seq_cxt, exp->seq.children[0]);
+            step_dd(p, pos, tok, seq_cxt, exp->seq.children[0]);
         }
 
         break;
@@ -708,6 +787,7 @@ d_d_prime(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
         }
 
         size_t nalts = ncc_list_len(exp->alt.alts);
+        size_t mark  = p->steps.len;
 
         for (size_t i = 0; i < nalts; i++) {
             pwz_exp_t *alt_child = exp->alt.alts.data[i];
@@ -732,8 +812,12 @@ d_d_prime(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
             alt_cxt->kind    = PWZ_CXT_ALT;
             alt_cxt->alt.mem = mem_retain(mem);
 
-            d_d(p, pos, tok, alt_cxt, alt_child);
+            step_dd(p, pos, tok, alt_cxt, alt_child);
         }
+
+        // Contexts were allocated in alternative order, as before; reversing
+        // the frames just pushed makes them pop in that order too.
+        reverse_steps(p, mark);
 
         break;
     }
@@ -741,7 +825,7 @@ d_d_prime(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
 }
 
 static void
-d_u(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
+run_du(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
 {
     int32_t ep = pwz_mem_end_pos(mem);
 
@@ -780,18 +864,24 @@ d_u(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
     mem->end_pos = pos | PWZ_MEM_IN_PROGRESS_BIT;
     mem->result  = result;
 
-    pwz_cxt_node_t *node = mem->parents;
+    // Clearing the guard is what followed the loop in the recursive form, so
+    // it goes on the stack first and runs after every parent has propagated.
+    push_step(p, (pwz_step_t){.kind = PWZ_STEP_DU_DONE, .mem = mem});
 
-    while (node) {
-        d_u_prime(p, pos, result, node->cxt);
-        node = node->next;
+    size_t mark = p->steps.len;
+
+    // The parent list is prepended to, so entries appended while these frames
+    // run land ahead of this snapshot's head and are not walked here — the
+    // same set the recursive loop saw.
+    for (pwz_cxt_node_t *node = mem->parents; node; node = node->next) {
+        step_dup(p, pos, result, node->cxt);
     }
 
-    pwz_mem_set_in_progress(mem, false);
+    reverse_steps(p, mark);
 }
 
 static void
-d_u_prime(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
+run_dup(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
 {
     switch (cxt->kind) {
     case PWZ_CXT_TOP:
@@ -825,7 +915,7 @@ d_u_prime(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
             seq_result->seq.children  = children;
             seq_result->nchildren = total;
 
-            d_u(p, pos, seq_result, cxt->seq.mem);
+            step_du(p, pos, seq_result, cxt->seq.mem);
         }
         else {
             // Paper: d_d (SeqC (m, s, e :: es_L, es_R)) e_R
@@ -855,15 +945,46 @@ d_u_prime(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
             new_seq_cxt->seq.right   = cxt->seq.right + 1;
             new_seq_cxt->seq.nright  = cxt->seq.nright - 1;
 
-            d_d(p, pos, get_token(p, pos), new_seq_cxt, cxt->seq.right[0]);
+            step_dd(p, pos, get_token(p, pos), new_seq_cxt,
+                    cxt->seq.right[0]);
         }
 
         break;
     }
 
     case PWZ_CXT_ALT:
-        d_u(p, pos, result, cxt->alt.mem);
+        step_du(p, pos, result, cxt->alt.mem);
         break;
+    }
+}
+
+static void
+run_steps(ncc_pwz_parser_t *p, size_t base)
+{
+    while (p->steps.len > base) {
+        pwz_step_t s = p->steps.data[--p->steps.len];
+
+        switch (s.kind) {
+        case PWZ_STEP_DD:
+            run_dd(p, s.pos, s.tok, s.cxt, s.exp);
+            break;
+
+        case PWZ_STEP_DDP:
+            run_ddp(p, s.pos, s.tok, s.mem, s.exp);
+            break;
+
+        case PWZ_STEP_DU:
+            run_du(p, s.pos, s.result, s.mem);
+            break;
+
+        case PWZ_STEP_DUP:
+            run_dup(p, s.pos, s.result, s.cxt);
+            break;
+
+        case PWZ_STEP_DU_DONE:
+            pwz_mem_set_in_progress(s.mem, false);
+            break;
+        }
     }
 }
 
@@ -878,6 +999,7 @@ init_parse(ncc_pwz_parser_t *p)
     ncc_list_clear(p->worklist);
     ncc_list_clear(p->worklist_swap);
     ncc_list_clear(p->tops);
+    ncc_list_clear(p->steps);
     p->result_tree  = nullptr;
     p->result_trees = (ncc_parse_tree_array_t){0};
 
@@ -1178,109 +1300,16 @@ score_exp(ncc_pwz_parser_t *p, pwz_exp_t *exp, int32_t *pos)
     return 0;
 }
 
-static ncc_parse_tree_t *
-convert_exp_to_tree(ncc_pwz_parser_t *p, pwz_exp_t *exp,
-                    tree_convert_state_t *st)
+// An alternative is a choice, not a level: picking one is a tail call, so the
+// chain collapses here rather than costing a frame.
+static pwz_exp_t *
+resolve_alts(ncc_pwz_parser_t *p, pwz_exp_t *exp, int32_t pos)
 {
-    if (!exp || exp == p->exp_bottom) {
-        return make_epsilon_node(st->pos);
-    }
-
-    switch (exp->kind) {
-    case PWZ_TOK:
-    case PWZ_CLASS:
-    case PWZ_ANY: {
-        ncc_token_info_t *tok = get_token(p, st->pos);
-
-        if (!tok) {
-            return make_epsilon_node(st->pos);
-        }
-
-        ncc_parse_tree_t *t = make_token_node(tok);
-
-        st->pos++;
-        return t;
-    }
-
-    case PWZ_SEQ: {
-        int32_t start = st->pos;
-
-        if (exp->nchildren == 0) {
-            if (exp->nt_id >= 0) {
-                ncc_nonterm_t *nt = ncc_get_nonterm(p->grammar, exp->nt_id);
-
-                if (nt && nt->group_nt) {
-                    return make_group_node(exp->seq.name, start, start);
-                }
-
-                return make_nt_node(p->grammar, exp->nt_id,
-                                    exp->rule_ix, start, start);
-            }
-
-            return make_epsilon_node(start);
-        }
-
-        // Collect children into a temporary list.
-        ncc_list_t(ncc_parse_tree_ptr_t) children
-            = ncc_list_new_cap(ncc_parse_tree_ptr_t,
-                                        exp->nchildren);
-
-        for (int32_t i = 0; i < exp->nchildren; i++) {
-            ncc_parse_tree_t *child
-                = convert_exp_to_tree(p, exp->seq.children[i], st);
-            ncc_list_push(children, child);
-        }
-
-        int32_t end = st->pos;
-
-        ncc_parse_tree_t *tree;
-
-        if (exp->nt_id >= 0) {
-            ncc_nonterm_t *nt = ncc_get_nonterm(p->grammar, exp->nt_id);
-
-            if (nt && nt->group_nt) {
-                tree = make_group_node(exp->seq.name, start, end);
-            }
-            else {
-                tree = make_nt_node(p->grammar, exp->nt_id,
-                                    exp->rule_ix, start, end);
-            }
-        }
-        else {
-            size_t nch = ncc_list_len(children);
-
-            if (nch == 1) {
-                ncc_parse_tree_t *result = children.data[0];
-                ncc_list_free(children);
-                return result;
-            }
-
-            ncc_nt_node_t pn = {0};
-
-            pn.name  = exp->seq.name ? ncc_string_from_cstr(exp->seq.name)
-                                     : ncc_string_from_cstr("?");
-            pn.id    = exp->nt_id;
-            pn.start = start;
-            pn.end   = end;
-            tree = ncc_tree_node(ncc_nt_node_t, ncc_token_info_ptr_t, pn);
-        }
-
-        size_t nch = ncc_list_len(children);
-
-        for (size_t i = 0; i < nch; i++) {
-            add_child_flattening_same_group(tree, children.data[i]);
-        }
-
-        ncc_list_free(children);
-
-        return tree;
-    }
-
-    case PWZ_ALT: {
+    while (exp && exp != p->exp_bottom && exp->kind == PWZ_ALT) {
         size_t nalts = ncc_list_len(exp->alt.alts);
 
         if (nalts == 0) {
-            return make_epsilon_node(st->pos);
+            return nullptr;
         }
 
         // Default policy: last alternative (grammar order). With a TS-5
@@ -1293,8 +1322,8 @@ convert_exp_to_tree(ncc_pwz_parser_t *p, pwz_exp_t *exp,
             int32_t best = INT32_MAX;
 
             for (size_t i = 0; i < nalts; i++) {
-                int32_t pos = st->pos;
-                int32_t c   = score_exp(p, exp->alt.alts.data[i], &pos);
+                int32_t p2 = pos;
+                int32_t c  = score_exp(p, exp->alt.alts.data[i], &p2);
 
                 if (c <= best) {  // ties resolve to the last alternative
                     best = c;
@@ -1303,11 +1332,158 @@ convert_exp_to_tree(ncc_pwz_parser_t *p, pwz_exp_t *exp,
             }
         }
 
-        return convert_exp_to_tree(p, exp->alt.alts.data[pick], st);
-    }
+        exp = exp->alt.alts.data[pick];
     }
 
-    return make_epsilon_node(st->pos);
+    return exp;
+}
+
+// Building a node needs its children first, so this one is not a chain of tail
+// calls like the derive family: it runs off a frame stack plus a stack of
+// finished subtrees, which a parent pops its children from.
+typedef struct {
+    pwz_exp_t *exp;
+    int32_t    start;
+    int32_t    child_ix;
+    size_t     kids_mark;
+    bool       entered;
+} conv_frame_t;
+
+ncc_list_decl(conv_frame_t);
+
+static ncc_parse_tree_t *
+convert_exp_to_tree(ncc_pwz_parser_t *p, pwz_exp_t *exp,
+                    tree_convert_state_t *st)
+{
+    ncc_list_t(conv_frame_t) frames = ncc_list_new(conv_frame_t);
+    ncc_list_t(ncc_parse_tree_ptr_t) done
+        = ncc_list_new(ncc_parse_tree_ptr_t);
+
+    ncc_list_push(frames, ((conv_frame_t){.exp = exp}));
+
+    while (frames.len > 0) {
+        conv_frame_t *f = &frames.data[frames.len - 1];
+
+        if (!f->entered) {
+            f->entered = true;
+            f->exp     = resolve_alts(p, f->exp, st->pos);
+
+            pwz_exp_t *e = f->exp;
+
+            if (!e || e == p->exp_bottom) {
+                ncc_list_push(done, make_epsilon_node(st->pos));
+                frames.len--;
+                continue;
+            }
+
+            if (e->kind == PWZ_TOK || e->kind == PWZ_CLASS
+                || e->kind == PWZ_ANY) {
+                ncc_token_info_t *tok = get_token(p, st->pos);
+
+                if (!tok) {
+                    ncc_list_push(done, make_epsilon_node(st->pos));
+                }
+                else {
+                    ncc_list_push(done, make_token_node(tok));
+                    st->pos++;
+                }
+
+                frames.len--;
+                continue;
+            }
+
+            if (e->kind != PWZ_SEQ) {
+                ncc_list_push(done, make_epsilon_node(st->pos));
+                frames.len--;
+                continue;
+            }
+
+            f->start = st->pos;
+
+            if (e->nchildren == 0) {
+                ncc_parse_tree_t *t;
+
+                if (e->nt_id >= 0) {
+                    ncc_nonterm_t *nt = ncc_get_nonterm(p->grammar, e->nt_id);
+
+                    t = nt && nt->group_nt
+                          ? make_group_node(e->seq.name, f->start, f->start)
+                          : make_nt_node(p->grammar, e->nt_id, e->rule_ix,
+                                         f->start, f->start);
+                }
+                else {
+                    t = make_epsilon_node(f->start);
+                }
+
+                ncc_list_push(done, t);
+                frames.len--;
+                continue;
+            }
+
+            f->kids_mark = done.len;
+        }
+
+        pwz_exp_t *e = f->exp;
+
+        if (f->child_ix < e->nchildren) {
+            pwz_exp_t *child = e->seq.children[f->child_ix++];
+
+            ncc_list_push(frames, ((conv_frame_t){.exp = child}));
+            continue;
+        }
+
+        // Children are on the done stack from kids_mark up; re-fetch the frame
+        // because pushing children may have moved it.
+        f = &frames.data[frames.len - 1];
+
+        int32_t            start = f->start;
+        int32_t            end   = st->pos;
+        size_t             mark  = f->kids_mark;
+        size_t             nch   = done.len - mark;
+        ncc_parse_tree_t **kids  = done.data + mark;
+        ncc_parse_tree_t  *tree;
+
+        if (e->nt_id >= 0) {
+            ncc_nonterm_t *nt = ncc_get_nonterm(p->grammar, e->nt_id);
+
+            tree = nt && nt->group_nt
+                     ? make_group_node(e->seq.name, start, end)
+                     : make_nt_node(p->grammar, e->nt_id, e->rule_ix, start,
+                                    end);
+        }
+        else if (nch == 1) {
+            // A single anonymous child stands in for its parent; it is already
+            // the top of the done stack.
+            frames.len--;
+            continue;
+        }
+        else {
+            ncc_nt_node_t pn = {0};
+
+            pn.name  = e->seq.name ? ncc_string_from_cstr(e->seq.name)
+                                   : ncc_string_from_cstr("?");
+            pn.id    = e->nt_id;
+            pn.start = start;
+            pn.end   = end;
+            tree = ncc_tree_node(ncc_nt_node_t, ncc_token_info_ptr_t, pn);
+        }
+
+        for (size_t i = 0; i < nch; i++) {
+            add_child_flattening_same_group(tree, kids[i]);
+        }
+
+        done.len = mark;
+        ncc_list_push(done, tree);
+        frames.len--;
+    }
+
+    ncc_parse_tree_t *result = done.len > 0 ? done.data[done.len - 1]
+                                            : make_epsilon_node(st->pos);
+
+    ncc_list_free(frames);
+    ncc_list_free(done);
+
+    return result;
 }
 
 static ncc_parse_tree_t *
@@ -1471,6 +1647,7 @@ ncc_pwz_free(ncc_pwz_parser_t *p)
     ncc_list_free(p->worklist);
     ncc_list_free(p->worklist_swap);
     ncc_list_free(p->tops);
+    ncc_list_free(p->steps);
 
     if (p->result_trees.data) {
         ncc_array_free(p->result_trees);

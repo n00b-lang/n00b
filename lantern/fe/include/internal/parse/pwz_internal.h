@@ -148,6 +148,33 @@ ncc_list_decl(ncc_parse_tree_ptr_t);
 // Parser state (full definition)
 // ============================================================================
 
+// One pending step of the derivative machine. The four derive functions call
+// each other in tail position everywhere except two loops (a node's
+// alternatives, a memo's parents), so the whole family runs off this explicit
+// stack instead of the C stack: parse depth is then bounded by memory, not by
+// how deeply the input nests.
+typedef enum {
+    PWZ_STEP_DD,
+    PWZ_STEP_DDP,
+    PWZ_STEP_DU,
+    PWZ_STEP_DUP,
+    // Runs after every parent of a memo has been propagated to, in place of
+    // the code that followed the recursive loop.
+    PWZ_STEP_DU_DONE,
+} pwz_step_kind_t;
+
+typedef struct {
+    pwz_step_kind_t   kind;
+    int32_t           pos;
+    ncc_token_info_t *tok;
+    pwz_cxt_t        *cxt;
+    pwz_exp_t        *exp;
+    pwz_exp_t        *result;
+    pwz_mem_t        *mem;
+} pwz_step_t;
+
+ncc_list_decl(pwz_step_t);
+
 struct ncc_pwz_parser_t {
     ncc_grammar_t              *grammar;
     pwz_exp_t                   *start_exp;
@@ -160,6 +187,7 @@ struct ncc_pwz_parser_t {
     ncc_list_t(pwz_zipper_t)    worklist;
     ncc_list_t(pwz_zipper_t)    worklist_swap;
     ncc_list_t(pwz_exp_ptr_t)   tops;
+    ncc_list_t(pwz_step_t)      steps;
 
     ncc_token_stream_t         *stream;
 
