@@ -217,7 +217,24 @@ n00b_dict_reader_strand_backoff(void)
         static const char m[] =
             "n00b_dict: bucket mutex held past the reader wait gate; treating as "
             "a stranded lock and parking the reader instead of spinning a core\n";
+#if !defined(_WIN32)
         n00b_raw_write(2, m, sizeof(m) - 1);
+#else
+        // n00b_raw_write is POSIX-only: core/syscall.h defines it three times,
+        // all inside one #if !defined(_WIN32) region (:22-:319), so calling it
+        // here fails to COMPILE on Windows rather than failing at runtime.
+        //
+        // Only the one-shot message is lost. The bound this function exists to
+        // provide -- the backoff counter above and the base_nanosleep_ns park
+        // below -- is outside this block and stays active on every platform, so
+        // a stranded bucket mutex still parks the reader instead of burning a
+        // core. What a Windows user loses is the line explaining why.
+        //
+        // #316 tracks giving Windows a real n00b_raw_write; when it lands this
+        // guard should be deleted, restoring the file to having no platform
+        // conditionals at all.
+        (void)m;
+#endif
     }
     base_nanosleep_ns(N00B_NS_PER_MS);
 }
