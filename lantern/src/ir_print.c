@@ -190,9 +190,29 @@ static void put_operand(ir_sb *b, ir_module_t *m, const ir_operand_t *o)
                   o->phi.value ? o->phi.value->name : "?");
         break;
 
+    case IR_OPD_NAMED_ARG:
+        ir_sb_fmt(b, "%s = ", o->named.name ? o->named.name : "?");
+
+        if (o->named.value && o->named.value->kind == IR_VAL_LOCAL) {
+            ir_sb_fmt(b, "$%s", o->named.value->name);
+        }
+        else if (o->named.value
+                 && (o->named.value->kind == IR_VAL_GLOBAL
+                     || o->named.value->kind == IR_VAL_FUNC)) {
+            ir_sb_fmt(b, "@%s", o->named.value->name);
+        }
+        else {
+            ir_sb_fmt(b, "%%%s",
+                      o->named.value ? o->named.value->name : "?");
+        }
+        break;
+
     case IR_OPD_SWITCH_ARM:
         ir_sb_fmt(b, "[%" PRId64 ": %s]", o->arm.value,
                   o->arm.block ? o->arm.block->name : "?");
+        break;
+
+    case IR_OPD_ARG:
         break;
     }
 }
@@ -252,9 +272,28 @@ static void put_func(ir_sb *b, ir_module_t *m, ir_func_t *f)
 
     ir_sb_fmt(b, "func @%s(", f->name);
 
+    bool first = true;
+
     for (uint32_t i = 0; i < f->n_params; i++) {
-        ir_sb_fmt(b, "%s%%%s: ", i ? ", " : "", f->params[i]->name);
+        ir_sb_fmt(b, "%s%%%s: ", first ? "" : ", ", f->params[i]->name);
         put_type(b, m, f->params[i]->type);
+        first = false;
+    }
+
+    const th_param *rest = th_func_rest(f->type);
+
+    if (rest) {
+        ir_sb_fmt(b, "%s*", first ? "" : ", ");
+        put_type(b, m, rest->type);
+        first = false;
+    }
+
+    for (size_t i = 0; i < th_func_nkw(f->type); i++) {
+        const th_kwparam *k = th_func_kw(f->type, i);
+
+        ir_sb_fmt(b, "%s%s: ", first ? "" : ", ", k->name);
+        put_type(b, m, k->type);
+        first = false;
     }
     ir_sb_str(b, ") -> ");
     put_type(b, m, th_func_ret(f->type));

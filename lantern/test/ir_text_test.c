@@ -38,7 +38,7 @@ static ir_module_t *parse(ir_ctx_t *ctx, const char *text, ir_diags_t **out)
 
 static void write_produced(const char *dir)
 {
-    const char *leaf = "/produced-codes-text.txt";
+    const char *leaf = "/../produced-codes-text.txt";
     size_t      n    = strlen(dir) + strlen(leaf) + 1;
     char       *path = malloc(n);
 
@@ -65,6 +65,68 @@ static void write_produced(const char *dir)
     }
     fclose(f);
     free(path);
+}
+
+static bool same_as_golden(const char *dir, const char *name, const char *got)
+{
+    size_t n    = strlen(dir) + strlen(name) + 2;
+    char  *path = malloc(n);
+
+    if (!path) {
+        return false;
+    }
+    snprintf(path, n, "%s/%s", dir, name);
+
+    FILE *f = fopen(path, "r");
+
+    if (!f) {
+        if (!getenv("IR_BLESS_GOLDEN")) {
+            printf("FAIL  golden %s is missing; re-run with "
+                   "IR_BLESS_GOLDEN=1 to create it\n",
+                   path);
+            free(path);
+
+            return false;
+        }
+
+        f = fopen(path, "w");
+
+        if (f) {
+            fputs(got, f);
+            fclose(f);
+            printf("NOTE  blessed new golden %s\n", path);
+        }
+        free(path);
+
+        return f != nullptr;
+    }
+
+    fseek(f, 0, SEEK_END);
+
+    long   len  = ftell(f);
+    char  *want = malloc((size_t)len + 1);
+
+    rewind(f);
+
+    if (!want || fread(want, 1, (size_t)len, f) != (size_t)len) {
+        fclose(f);
+        free(want);
+        free(path);
+
+        return false;
+    }
+    want[len] = 0;
+    fclose(f);
+
+    bool ok = !strcmp(want, got);
+
+    if (!ok) {
+        printf("---- got ----\n%s---- want ----\n%s----\n", got, want);
+    }
+    free(want);
+    free(path);
+
+    return ok;
 }
 
 static bool round_trips(ir_ctx_t *ctx, const char *text, char **printed)
@@ -555,6 +617,21 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             ir_instr_push_switch_arm(in, (int64_t)rnd(10),
                                      f->blocks[rnd(nblocks)]);
             break;
+
+        case IR_OPD_ARG:
+        case IR_OPD_NAMED_ARG:
+            if (!vals->n) {
+                return;
+            }
+
+            if (rnd(2)) {
+                ir_instr_push_named(in, rnd(2) ? "timeout" : "retries",
+                                    vals->v[rnd(vals->n)]);
+            }
+            else {
+                ir_instr_push_value(in, vals->v[rnd(vals->n)]);
+            }
+            break;
         }
     }
 }
@@ -723,6 +800,124 @@ static ir_module_t *gen_module(ir_ctx_t *ctx, uint32_t seq)
     return m;
 }
 
+
+static void test_named_args(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+
+    const char *src =
+        "module m {\n  profile bce\n\n"
+        "  func @open(%path: i32, timeout: i32, retries: i32) -> i32 {\n"
+        "    block e:\n      return %path\n  }\n\n"
+        "  func @f(%n: i32) -> i32 {\n"
+        "    block e:\n"
+        "      %r: i32 = call @open, %n, timeout = %n, retries = %n\n"
+        "      return %r\n  }\n}\n";
+
+    ir_diags_t  *d = nullptr;
+    ir_module_t *m = parse(ctx, src, &d);
+
+    check("keyword arguments parse", m != nullptr);
+
+    if (!m) {
+        char *r = ir_diags_render_text(d, &(ir_render_t){0});
+
+        printf("%s", r);
+        free(r);
+        ir_ctx_free(ctx);
+
+        return;
+    }
+
+    ir_func_t  *f  = ir_func_find(m, "f");
+    ir_instr_t *in = ir_block_entry(f)->instrs[0];
+
+    check("a call takes callee then arguments",
+          in->op == IR_OP_CALL && in->n_operands == 4);
+    check("a positional argument stays a value",
+          in->operands[1].kind == IR_OPD_VALUE);
+    check("a keyword argument keeps its name",
+          in->operands[2].kind == IR_OPD_NAMED_ARG
+              && !strcmp(in->operands[2].named.name, "timeout"));
+    check("a keyword argument resolves its value",
+          in->operands[2].named.value != nullptr
+              && !strcmp(in->operands[2].named.value->name, "n"));
+    check("keyword arguments round-trip", round_trips(ctx, src, nullptr));
+
+    ir_ctx_free(ctx);
+}
+
+static void test_nfc_identifiers(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+
+    const char *src =
+        "module caf\xc3\xa9 {\n  profile bce\n\n"
+        "  global @na\xc3\xafve: i32\n\n"
+        "  func @\xe6\xbc\xa2(%\xc3\xa9: i32) -> i32 {\n"
+        "    local $\xcf\x80: i32\n\n"
+        "    block \xd0\xb1\xd0\xbb\xd0\xbe\xd0\xba:\n"
+        "      $\xcf\x80 = copy %\xc3\xa9\n"
+        "      return $\xcf\x80\n  }\n}\n";
+
+    char *out = nullptr;
+
+    check("non-ASCII identifiers parse and round-trip",
+          round_trips(ctx, src, &out));
+    check("a non-ASCII module name survives",
+          out && strstr(out, "module caf\xc3\xa9"));
+    check("a non-ASCII global survives",
+          out && strstr(out, "@na\xc3\xafve"));
+    check("a non-ASCII block name survives",
+          out && strstr(out, "block \xd0\xb1\xd0\xbb\xd0\xbe\xd0\xba"));
+    free(out);
+
+    ir_ctx_free(ctx);
+}
+
+static void test_canonical_golden(const char *dir)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+
+    const char *src =
+        "# a module comment\n"
+        "module shapes{profile bce target x86_64-linux\n"
+        "meta !ir.note(\"hand written\")\n"
+        "global @count: i32\n"
+        "static global @seen: (y: i64, x: int)\n"
+        "static func @helper()->void{block e:\nunreachable}\n"
+        "func @sum(%n: i32,%acc: i32)->i32{\n"
+        "local $t: ptr[i32]\n"
+        "block entry:\n"
+        "# the loop counter starts here\n"
+        "%z: i32 = const 0 !loc(0, 1, 2, 1, 3, 1, 4)\n"
+        "jump loop\n"
+        "block loop:\n"
+        "%p: i32 = phi [entry: %z], [body: %s]\n"
+        "%c: bool = lt %p, %n\n"
+        "branch %c, body, done\n"
+        "block body:\n"
+        "%s: i32 = add wrap %p, %acc !ir.rule(\"sint\" from typed)\n"
+        "%sz: u64 = sizeof (i32, i32) -> i32\n"
+        "switch %s, default: done, [0: loop], [1: done]\n"
+        "block done:\n"
+        "return %acc}}\n";
+
+    ir_module_t *m = parse(ctx, src, nullptr);
+
+    check("the golden source parses", m != nullptr);
+
+    if (m) {
+        char *out = ir_module_print(m);
+
+        check("canonical printing matches its golden",
+              same_as_golden(dir, "canonical.ir", out));
+        free(out);
+    }
+
+    ir_ctx_free(ctx);
+}
+
 static void test_generated_round_trip(void)
 {
     uint32_t trials = 400;
@@ -813,6 +1008,9 @@ int main(int argc, char **argv)
     test_meta_round_trip();
     test_both_forms();
     test_cross_profile();
+    test_named_args();
+    test_nfc_identifiers();
+    test_canonical_golden(dir);
     test_errors();
     test_generated_round_trip();
     report_coverage();

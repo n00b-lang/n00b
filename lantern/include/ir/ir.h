@@ -55,6 +55,8 @@ typedef enum : uint8_t {
     IR_OPD_CONST,
     IR_OPD_PHI_ARM,
     IR_OPD_SWITCH_ARM,
+    IR_OPD_NAMED_ARG,
+    IR_OPD_ARG,
 } ir_opdkind_t;
 
 #define IR_OP(id, spelling, lo, hi, res, pat, mods, flags) IR_OP_##id,
@@ -225,6 +227,10 @@ typedef struct {
             ir_block_t *block;
         } arm;
         struct {
+            const char *name;
+            ir_value_t *value;
+        } named;
+        struct {
             int64_t  i;
             double   f;
             bool     is_float;
@@ -365,6 +371,8 @@ bool        ir_instr_set_dest(ir_instr_t *in, const char *name, th_type *type);
 bool        ir_instr_set_dest_local(ir_instr_t *in, ir_local_t *l);
 bool        ir_instr_push_value(ir_instr_t *in, ir_value_t *v);
 bool        ir_instr_push_local(ir_instr_t *in, ir_local_t *l);
+bool        ir_instr_push_named(ir_instr_t *in, const char *name,
+                                ir_value_t *v);
 bool        ir_instr_push_type(ir_instr_t *in, th_type *t);
 bool        ir_instr_push_name(ir_instr_t *in, const char *n);
 bool        ir_instr_push_block(ir_instr_t *in, ir_block_t *b);

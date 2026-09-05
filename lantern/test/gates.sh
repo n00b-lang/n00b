@@ -55,6 +55,14 @@ g="$(grep -nE '"(goto|break|continue|min|max|typeof|kwargs_call|generic_call)"' 
 g="$(grep -nE '"(lt_s|lt_u|shr_s|shr_u|add_checked|addu)"' "$inc/ir_ops.def")"
 [ -z "$g" ] || fail "OP-21 signedness or overflow is spelled into a mnemonic" "$g"
 
+g="$(grep -nE '"(wrap|trap|sat|mask|ordered|unordered|volatile|atomic|to_zero|nearest|floor|ceil)"' \
+     $src/ir_parse.c $src/ir_print.c 2>/dev/null)"
+[ -z "$g" ] || fail "TXT-08 a modifier is spelled in the parser or printer instead of the table" "$g"
+
+g="$(grep -nE 'strcmp\(opname|strcmp\([a-z_]*, *"(add|sub|jump|branch|switch|call|phi)"' \
+     $src/ir_parse.c 2>/dev/null)"
+[ -z "$g" ] || fail "TXT-08 a mnemonic is matched by hand instead of through the table" "$g"
+
 g="$(grep -nE '"IR-[EWF][0-9]{4}"' $src/*.c $inc/diag.h 2>/dev/null)"
 [ -z "$g" ] || fail "DIAG-08 a diagnostic code is spelled outside the registry" "$g"
 
@@ -76,7 +84,7 @@ else
 fi
 
 if [ -n "$text_bin" ] && [ -x "$text_bin" ]; then
-    "$text_bin" "$work" >/dev/null 2>&1 \
+    "$text_bin" "$work/golden" >/dev/null 2>&1 \
         || fail "DIAG-10 the text test did not pass, so its code coverage is unknown" ""
     cat "$work/produced-codes-text.txt" >> "$produced" 2>/dev/null
 else

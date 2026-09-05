@@ -75,6 +75,8 @@ static ir_opdkind_t kind_of_char(char c)
         return IR_OPD_BLOCK;
     case 'd':
         return IR_OPD_DEFAULT_BLOCK;
+    case 'k':
+        return IR_OPD_ARG;
     case 'c':
         return IR_OPD_CONST;
     case 'a':

@@ -20,7 +20,11 @@ ir_text_test = executable(
     dependencies: ir_dep,
 )
 
-test('ir-text', ir_text_test)
+test(
+    'ir-text',
+    ir_text_test,
+    args: [meson.current_source_dir() / 'golden'],
+)
 
 ir_diag_test = executable(
     'ir_diag_test',

@@ -312,7 +312,11 @@ static ir_operand_t *push(ir_instr_t *in, ir_opdkind_t kind)
     ir_ctx_t          *ctx  = in->block->owner->owner->ctx;
     const ir_opinfo_t *info = ir_op_info(in->op);
 
-    if (ir_op_operand_kind(in->op, in->n_operands) != kind) {
+    ir_opdkind_t want = ir_op_operand_kind(in->op, in->n_operands);
+
+    if (want != kind
+        && !(want == IR_OPD_ARG
+             && (kind == IR_OPD_VALUE || kind == IR_OPD_NAMED_ARG))) {
         return nullptr;
     }
 
@@ -345,6 +349,18 @@ bool ir_instr_push_value(ir_instr_t *in, ir_value_t *v)
 
     if (o) {
         o->value = v;
+    }
+
+    return o != nullptr;
+}
+
+bool ir_instr_push_named(ir_instr_t *in, const char *name, ir_value_t *v)
+{
+    ir_operand_t *o = name && v ? push(in, IR_OPD_NAMED_ARG) : nullptr;
+
+    if (o) {
+        o->named.name  = ir_strdup(in->block->owner->owner->ctx, name);
+        o->named.value = v;
     }
 
     return o != nullptr;

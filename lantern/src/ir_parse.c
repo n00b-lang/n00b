@@ -648,9 +648,24 @@ static bool pushed(P *p, bool ok, const char *what)
     return ok;
 }
 
+static bool next_is_punct(P *p, char c)
+{
+    size_t at = p->pos;
+
+    while (at < p->len && (p->src[at] == ' ' || p->src[at] == '\t')) {
+        at++;
+    }
+
+    return at < p->len && p->src[at] == c;
+}
+
 static bool starts_operand(P *p, ir_opdkind_t kind)
 {
     switch (kind) {
+    case IR_OPD_ARG:
+        return p->cur.kind == T_VALUE || p->cur.kind == T_LOCAL
+            || p->cur.kind == T_GLOBAL || p->cur.kind == T_IDENT;
+
     case IR_OPD_VALUE:
         return p->cur.kind == T_VALUE || p->cur.kind == T_LOCAL
             || p->cur.kind == T_GLOBAL;
@@ -696,6 +711,46 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
                           fixups *fx)
 {
     ir_opdkind_t want = ir_op_operand_kind(in->op, in->n_operands);
+
+    if (want == IR_OPD_ARG && p->cur.kind == T_IDENT
+        && next_is_punct(p, '=')) {
+        char *name = ident_text(p);
+
+        advance(p);
+
+        if (!expect_punct(p, '=', "expected = after an argument name")) {
+            return false;
+        }
+
+        if (p->cur.kind != T_VALUE && p->cur.kind != T_LOCAL
+            && p->cur.kind != T_GLOBAL) {
+            fail(p, "expected a value after an argument name");
+
+            return false;
+        }
+
+        ir_value_t *v = ir_alloc(p->ctx, sizeof(ir_value_t));
+
+        if (!v) {
+            fail(p, "out of memory");
+
+            return false;
+        }
+        v->kind = IR_VAL_INSTR;
+        v->name = ident_text(p);
+
+        uint32_t slot = in->n_operands;
+
+        advance(p);
+
+        if (!pushed(p, ir_instr_push_named(in, name, v),
+                    "named argument rejected")) {
+            return false;
+        }
+        need_value(p, fx, in, slot, (char *)v->name, false);
+
+        return true;
+    }
 
     switch (want) {
     case IR_OPD_BLOCK:
@@ -1085,14 +1140,58 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
         return false;
     }
 
-    char   **pnames = nullptr;
-    th_type **ptypes = nullptr;
-    size_t    np     = 0;
-    size_t    ncap   = 0;
-    size_t    tcap   = 0;
+    char      **pnames = nullptr;
+    th_type   **ptypes = nullptr;
+    size_t      np     = 0;
+    size_t      ncap   = 0;
+    size_t      tcap   = 0;
+    th_kwparam *kws    = nullptr;
+    size_t      nkw    = 0;
+    size_t      kcap   = 0;
+    th_param    rest   = {0};
+    bool        has_rest = false;
 
     if (!is_punct(p, ')')) {
         do {
+            if (eat_punct(p, '*')) {
+                th_type *rt = parse_type(p, m);
+
+                if (!rt) {
+                    return false;
+                }
+                rest     = (th_param){.mode = TH_IN, .type = rt};
+                has_rest = true;
+                continue;
+            }
+
+            if (p->cur.kind == T_IDENT) {
+                char *kn = ident_text(p);
+
+                advance(p);
+
+                if (!expect_punct(p, ':',
+                                  "expected : after a keyword parameter")) {
+                    return false;
+                }
+
+                th_type *kt = parse_type(p, m);
+
+                if (!kt) {
+                    return false;
+                }
+                kws = ir_grow(p->ctx, kws, &kcap, nkw + 1,
+                              sizeof(th_kwparam));
+
+                if (!kws) {
+                    fail(p, "out of memory");
+
+                    return false;
+                }
+                kws[nkw++] = (th_kwparam){.name = kn, .mode = TH_IN,
+                                          .type = kt};
+                continue;
+            }
+
             if (p->cur.kind != T_VALUE) {
                 fail(p, "expected a parameter");
 
@@ -1148,8 +1247,8 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
         params[i] = (th_param){.mode = TH_IN, .type = ptypes[i]};
     }
 
-    th_type *ft = th_func(ir_ctx_types(p->ctx), ret, params, np, nullptr,
-                          nullptr, 0);
+    th_type *ft = th_func(ir_ctx_types(p->ctx), ret, params, np,
+                          has_rest ? &rest : nullptr, kws, nkw);
     ir_func_t *f = ir_func_add(m, name, ft, link);
 
     if (!f) {
@@ -1260,11 +1359,20 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
             return false;
         }
 
-        if (fx.v[i].is_phi) {
-            fx.v[i].in->operands[fx.v[i].slot].phi.value = v;
-        }
-        else {
-            fx.v[i].in->operands[fx.v[i].slot].value = v;
+        ir_operand_t *o = &fx.v[i].in->operands[fx.v[i].slot];
+
+        switch (o->kind) {
+        case IR_OPD_PHI_ARM:
+            o->phi.value = v;
+            break;
+
+        case IR_OPD_NAMED_ARG:
+            o->named.value = v;
+            break;
+
+        default:
+            o->value = v;
+            break;
         }
     }
 

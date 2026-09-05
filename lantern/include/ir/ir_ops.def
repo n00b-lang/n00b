@@ -57,7 +57,7 @@ IR_OP(BITCAST,         "bitcast",         1, 1,  ANNOTATED,   "v",   0,         
 IR_OP(SELECT,          "select",          3, 3,  OPERAND1,    "vvv", 0,                              HASRESULT)
 IR_OP(PHI,             "phi",             1, VAR, ANNOTATED,   "a*",  0,                              HASRESULT)
 
-IR_OP(CALL,            "call",            1, VAR, CALLEE_RET,  "vv*", 0,                              HASRESULT | SIDEEFFECT)
+IR_OP(CALL,            "call",            1, VAR, CALLEE_RET,  "vk*", 0,                              HASRESULT | SIDEEFFECT)
 
 IR_OP(SIZEOF,          "sizeof",          1, 1,  U64,         "t",   0,                              HASRESULT | COMPTIME)
 IR_OP(ALIGNOF,         "alignof",         1, 1,  U64,         "t",   0,                              HASRESULT | COMPTIME)
