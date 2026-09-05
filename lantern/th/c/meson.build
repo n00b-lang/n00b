@@ -52,6 +52,19 @@ th_infer_cycle_test = executable(
 
 test('inference-cycles', th_infer_cycle_test)
 
+th_vectors_test = executable(
+    'th_vectors_test',
+    ['th_vectors_test.c'] + nfc_sources,
+    c_args: nfc_args,
+    dependencies: [typehash_dep] + nfc_deps,
+)
+
+test(
+    'th-vectors',
+    th_vectors_test,
+    args: [meson.current_source_dir() / '..' / 'vectors.tsv'],
+)
+
 if have_nfc
     th_nfc_test = executable(
         'th_nfc_test',
