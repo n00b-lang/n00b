@@ -362,40 +362,44 @@ n00b_raw_exit(int code)
 //     stw.c, signals.c, crash.c, crash_capture.c, memory_info.c, file.c,
 //     io_epoll.c, quic/metrics.c -- and there nothing has provided them.
 //
-//  4. The final parameter must be `void *`, NOT `struct _OVERLAPPED *`.
-//     include/internal/win32_sockets.h:478 ALREADY declares WriteFile for this
-//     tree, with `void *overlapped`, and a differing declaration collides:
+//  4. The final parameter must be `struct _OVERLAPPED *`, matching the SDK.
+//     Whether the real SDK headers are in scope VARIES BY TU: ncc's
+//     preprocessing prelude drags um/fileapi.h into TUs that pull CRT
+//     headers (env.c via <string.h>, thread.c via <io.h>, callstack.c, the
+//     crt comptime shim), while src/tools/n00b.c gets no SDK at all. So this
+//     declaration must agree with the SDK:
 //
-//       win32_sockets.h:478: error: conflicting types for 'WriteFile'
+//       syscall.h: error: conflicting types for 'WriteFile'
+//       Windows Kits/10/um/fileapi.h:1155: note: previous declaration is here
 //
-//     That header also declares GetStdHandle (:455). These declarations
-//     therefore deliberately MATCH it rather than the SDK's spelling --
-//     `void *` and `struct _OVERLAPPED *` are compatible against the SDK
-//     (both are pointer-to-object), but not against each other, and this tree
-//     had already chosen `void *`.
+//     Spelling it `void *` instead fixes the no-SDK TUs and breaks the
+//     SDK ones -- the two constraints are mutually exclusive unless every
+//     declaration in the tree agrees. include/internal/win32_sockets.h:478
+//     had `void *`, disagreeing with the real API; it is now corrected to
+//     match, which is what makes a single spelling work everywhere.
 //
-//  5. No `__declspec(dllimport)`. win32_sockets.h declares these without it
-//     (it uses dllimport nowhere), and mixing the two spellings of the same
-//     function is itself a redeclaration conflict whose winner depends on
-//     include order. Matching its plain form makes this order-independent.
-//     Omitting dllimport costs only an indirection thunk.
+//  5. No `__declspec(dllimport)`. win32_sockets.h uses it nowhere, and
+//     mixing the two spellings is order-dependent. Omitting it against the
+//     SDK's dllimport is only a -Winconsistent-dllimport warning, not an
+//     error, and costs an indirection thunk.
 //
 //  6. Spelled with the underlying types (`void *`, `unsigned long`, `int`)
 //     rather than HANDLE/DWORD/BOOL. platform.h defines those typedefs at
 //     :66-81, before it includes this header at :420 -- but on the
 //     direct-include path of failure 3 they are not in scope. The raw types
-//     are identical after expansion (platform.h:66,72,75) and need nothing
-//     declared first, so one spelling works on both paths.
+//     are identical after expansion (platform.h:66,72,75).
 //
 // Not including win32_sockets.h instead: it is an internal header that pulls
 // winsock2/ws2tcpip/afunix/windows.h on the _WINDOWS path, which is failure
 // mode 1 again.
+struct _OVERLAPPED;
+
 void *__attribute__((__stdcall__)) GetStdHandle(unsigned long std_handle);
-int __attribute__((__stdcall__)) WriteFile(void          *file,
-                                           const void    *buffer,
-                                           unsigned long  to_write,
-                                           unsigned long *written,
-                                           void          *overlapped);
+int __attribute__((__stdcall__)) WriteFile(void               *file,
+                                           const void         *buffer,
+                                           unsigned long       to_write,
+                                           unsigned long      *written,
+                                           struct _OVERLAPPED *overlapped);
 
 // From winbase.h / handleapi.h, which we are not including.
 #define N00B_STD_OUTPUT_HANDLE ((unsigned long)-11)
