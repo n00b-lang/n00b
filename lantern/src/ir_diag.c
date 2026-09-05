@@ -160,6 +160,7 @@ struct ir_diags_t {
     uint64_t     seq;
     bool         fatal;
     bool         sorted;
+    bool         anchored;
 };
 
 ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy)
@@ -218,23 +219,19 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
         return nullptr;
     }
 
-    if (!ir_span_known(span) && !is_attachment(sev)) {
-        return nullptr;
-    }
+    if (is_attachment(sev) && !d->anchored) {
+        if (code != IR_DIAG_ORPHAN_NOTE) {
+            ir_diag_t *dg = push(d, IR_DIAG_ORPHAN_NOTE, IR_SEV_ERROR, span,
+                                 label);
 
-    if (is_attachment(sev)) {
-        bool anchored = false;
-
-        for (uint32_t i = d->n; i > 0; i--) {
-            if (!is_attachment(d->v[i - 1].severity)) {
-                anchored = true;
-                break;
+            if (dg) {
+                ir_diag_message(dg, d,
+                                "a note or help has nothing to attach to, and "
+                                "§11 says they never stand alone");
             }
         }
 
-        if (!anchored) {
-            return nullptr;
-        }
+        return nullptr;
     }
 
     if (!apply_policy(d, code, &sev)) {
@@ -260,7 +257,9 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
     dg->primary.label = label ? ir_strdup(d->ctx, label) : nullptr;
     dg->seq           = d->seq++;
 
-    d->sorted         = false;
+    d->sorted   = false;
+    d->anchored = d->anchored
+               || (!is_attachment(sev) && code != IR_DIAG_ORPHAN_NOTE);
 
     if (sev == IR_SEV_FATAL) {
         d->fatal = true;
@@ -299,6 +298,17 @@ ir_diag_t *ir_diag_begin_at(ir_diags_t *d, ir_diagcode_t code,
     }
     else if (f && ir_span_known(f->span)) {
         span = f->span;
+    }
+
+    if (!ir_span_known(span)) {
+        const ir_func_t *owner = f                       ? f
+                              : b                        ? b->owner
+                              : in && in->block          ? in->block->owner
+                                                         : nullptr;
+
+        if (owner && owner->owner) {
+            span = ir_module_span(owner->owner);
+        }
     }
 
     return push(d, code, ir_diag_default_severity(code), span, label);
@@ -464,6 +474,7 @@ bool ir_diags_merge(ir_diags_t *dst, ir_diags_t *src)
         dst->n++;
     }
     dst->fatal |= src->fatal;
+    dst->anchored |= src->anchored;
     dst->sorted = false;
 
     return true;

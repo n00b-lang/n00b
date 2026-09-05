@@ -1,6 +1,78 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "ir_internal.h"
+
+static uint32_t name_hash(const char *k)
+{
+    uint32_t h = 2166136261u;
+
+    for (const unsigned char *p = (const unsigned char *)k; *p; p++) {
+        h = (h ^ *p) * 16777619u;
+    }
+
+    return h;
+}
+
+typedef const char *(*name_of_fn)(const void *node);
+
+static const char *global_name_of(const void *node)
+{
+    return ((const ir_global_t *)node)->name;
+}
+
+static const char *func_name_of(const void *node)
+{
+    return ((const ir_func_t *)node)->name;
+}
+
+static const char *block_name_of(const void *node)
+{
+    return ((const ir_block_t *)node)->name;
+}
+
+static const char *local_name_of(const void *node)
+{
+    return ((const ir_local_t *)node)->name;
+}
+
+static size_t index_slot(void **ix, size_t cap, name_of_fn name_of,
+                         const char *k)
+{
+    size_t i = name_hash(k) & (cap - 1);
+
+    while (ix[i] && strcmp(name_of(ix[i]), k)) {
+        i = (i + 1) & (cap - 1);
+    }
+
+    return i;
+}
+
+static void index_add(ir_ctx_t *ctx, void ***ix, uint32_t *cap, uint32_t n,
+                      void **list, name_of_fn name_of, void *node)
+{
+    size_t want = *cap ? *cap : 16;
+
+    while ((size_t)(n + 1) * 2 > want) {
+        want *= 2;
+    }
+
+    if (!*ix || want != *cap) {
+        *ix  = ir_alloc(ctx, want * sizeof(void *));
+        *cap = (uint32_t)want;
+
+        for (uint32_t k = 0; k < n; k++) {
+            (*ix)[index_slot(*ix, want, name_of, name_of(list[k]))] = list[k];
+        }
+    }
+    (*ix)[index_slot(*ix, *cap, name_of, name_of(node))] = node;
+}
+
+static void *index_find(void **ix, uint32_t cap, name_of_fn name_of,
+                        const char *k)
+{
+    return ix && cap ? ix[index_slot(ix, cap, name_of, k)] : nullptr;
+}
 
 ir_global_t *ir_global_add(ir_module_t *m, const char *name, th_type *type)
 {
@@ -21,6 +93,9 @@ ir_global_t *ir_global_add(ir_module_t *m, const char *name, th_type *type)
     m->globals = ir_grow(m->ctx, m->globals, &m->cap_globals,
                          m->n_globals + 1, sizeof(ir_global_t *));
     m->globals[m->n_globals++] = g;
+    index_add(m->ctx, &m->global_index, &m->global_index_cap,
+              (uint32_t)m->n_globals - 1, (void **)m->globals, global_name_of,
+              g);
 
     return g;
 }
@@ -31,13 +106,8 @@ ir_global_t *ir_global_find(ir_module_t *m, const char *name)
         return nullptr;
     }
 
-    for (size_t i = 0; i < m->n_globals; i++) {
-        if (!strcmp(m->globals[i]->name, name)) {
-            return m->globals[i];
-        }
-    }
-
-    return nullptr;
+    return index_find(m->global_index, m->global_index_cap, global_name_of,
+                      name);
 }
 
 size_t ir_global_count(const ir_module_t *m)
@@ -76,6 +146,8 @@ ir_func_t *ir_func_add(ir_module_t *m, const char *name, th_type *type,
     m->funcs = ir_grow(m->ctx, m->funcs, &m->cap_funcs, m->n_funcs + 1,
                        sizeof(ir_func_t *));
     m->funcs[m->n_funcs++] = f;
+    index_add(m->ctx, &m->func_index, &m->func_index_cap,
+              (uint32_t)m->n_funcs - 1, (void **)m->funcs, func_name_of, f);
 
     return f;
 }
@@ -86,13 +158,7 @@ ir_func_t *ir_func_find(ir_module_t *m, const char *name)
         return nullptr;
     }
 
-    for (size_t i = 0; i < m->n_funcs; i++) {
-        if (!strcmp(m->funcs[i]->name, name)) {
-            return m->funcs[i];
-        }
-    }
-
-    return nullptr;
+    return index_find(m->func_index, m->func_index_cap, func_name_of, name);
 }
 
 size_t ir_func_count(const ir_module_t *m)
@@ -158,6 +224,8 @@ ir_local_t *ir_local_add(ir_func_t *f, const char *name, th_type *type)
                             sizeof(ir_local_t *));
     f->cap_locals = (uint32_t)cap;
     f->locals[f->n_locals++] = l;
+    index_add(ctx, &f->local_index, &f->local_index_cap, f->n_locals - 1,
+              (void **)f->locals, local_name_of, l);
 
     return l;
 }
@@ -168,13 +236,7 @@ ir_local_t *ir_local_find(ir_func_t *f, const char *name)
         return nullptr;
     }
 
-    for (uint32_t i = 0; i < f->n_locals; i++) {
-        if (!strcmp(f->locals[i]->name, name)) {
-            return f->locals[i];
-        }
-    }
-
-    return nullptr;
+    return index_find(f->local_index, f->local_index_cap, local_name_of, name);
 }
 
 ir_block_t *ir_block_add(ir_func_t *f, const char *name)
@@ -201,6 +263,8 @@ ir_block_t *ir_block_add(ir_func_t *f, const char *name)
                             sizeof(ir_block_t *));
     f->cap_blocks = (uint32_t)cap;
     f->blocks[f->n_blocks++] = b;
+    index_add(ctx, &f->block_index, &f->block_index_cap, f->n_blocks - 1,
+              (void **)f->blocks, block_name_of, b);
 
     return b;
 }
@@ -211,13 +275,7 @@ ir_block_t *ir_block_find(ir_func_t *f, const char *name)
         return nullptr;
     }
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        if (!strcmp(f->blocks[i]->name, name)) {
-            return f->blocks[i];
-        }
-    }
-
-    return nullptr;
+    return index_find(f->block_index, f->block_index_cap, block_name_of, name);
 }
 
 ir_block_t *ir_block_entry(ir_func_t *f)
@@ -237,6 +295,38 @@ ir_instr_t *ir_block_terminator(ir_block_t *b)
                ir_module_op_info(b->owner->owner, last->op))
                ? last
                : nullptr;
+}
+
+ir_value_t *ir_operand_value(const ir_operand_t *od)
+{
+    switch (od->kind) {
+    case IR_OPD_VALUE:
+        return od->value;
+    case IR_OPD_NAMED_ARG:
+        return od->named.value;
+    case IR_OPD_PHI_ARM:
+        return od->phi.value;
+    default:
+        return nullptr;
+    }
+}
+
+ir_local_t *ir_operand_local(const ir_operand_t *od)
+{
+    ir_value_t *v = ir_operand_value(od);
+
+    return v && v->kind == IR_VAL_LOCAL ? v->local : nullptr;
+}
+
+bool ir_local_read_earlier(const ir_instr_t *in, uint32_t o, ir_local_t *l)
+{
+    for (uint32_t i = 0; i < o; i++) {
+        if (ir_operand_local(&in->operands[i]) == l) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op)
@@ -440,7 +530,35 @@ bool ir_instr_push_default(ir_instr_t *in, ir_block_t *b)
     return o != nullptr;
 }
 
-bool ir_instr_push_int(ir_instr_t *in, int64_t v)
+ir_lit_t ir_lit_of(ir_int_t v)
+{
+    if (v < 0) {
+        return (ir_lit_t){.mag = (ir_uint_t)0 - (ir_uint_t)v, .neg = true};
+    }
+
+    return (ir_lit_t){.mag = (ir_uint_t)v};
+}
+
+ir_lit_t ir_lit_hex(ir_uint_t v)
+{
+    return (ir_lit_t){.mag = v, .hex = true};
+}
+
+ir_int_t ir_lit_signed(ir_lit_t v)
+{
+    return v.neg ? -(ir_int_t)v.mag : (ir_int_t)v.mag;
+}
+
+bool ir_lit_eq(ir_lit_t a, ir_lit_t b)
+{
+    if (!a.mag && !b.mag) {
+        return true;
+    }
+
+    return a.mag == b.mag && a.neg == b.neg;
+}
+
+bool ir_instr_push_lit(ir_instr_t *in, ir_lit_t v)
 {
     ir_operand_t *o = push(in, IR_OPD_CONST);
 
@@ -451,12 +569,39 @@ bool ir_instr_push_int(ir_instr_t *in, int64_t v)
     return o != nullptr;
 }
 
+bool ir_instr_push_int(ir_instr_t *in, ir_int_t v)
+{
+    return ir_instr_push_lit(in, ir_lit_of(v));
+}
+
+bool ir_instr_push_uint(ir_instr_t *in, ir_uint_t v)
+{
+    return ir_instr_push_lit(in, (ir_lit_t){.mag = v});
+}
+
 bool ir_instr_push_float(ir_instr_t *in, double v)
 {
     ir_operand_t *o = push(in, IR_OPD_CONST);
 
     if (o) {
         o->lit.f        = v;
+        o->lit.is_float = true;
+    }
+
+    return o != nullptr;
+}
+
+bool ir_instr_push_float_text(ir_instr_t *in, const char *text)
+{
+    if (!text) {
+        return false;
+    }
+
+    ir_operand_t *o = push(in, IR_OPD_CONST);
+
+    if (o) {
+        o->lit.f        = strtod(text, nullptr);
+        o->lit.text     = ir_strdup(in->block->owner->owner->ctx, text);
         o->lit.is_float = true;
     }
 
@@ -475,7 +620,7 @@ bool ir_instr_push_phi_arm(ir_instr_t *in, ir_block_t *b, ir_value_t *v)
     return o != nullptr;
 }
 
-bool ir_instr_push_switch_arm(ir_instr_t *in, int64_t v, ir_block_t *b)
+bool ir_instr_push_switch_case(ir_instr_t *in, ir_lit_t v, ir_block_t *b)
 {
     ir_operand_t *o = b ? push(in, IR_OPD_SWITCH_ARM) : nullptr;
 
@@ -487,13 +632,24 @@ bool ir_instr_push_switch_arm(ir_instr_t *in, int64_t v, ir_block_t *b)
     return o != nullptr;
 }
 
+bool ir_instr_push_switch_arm(ir_instr_t *in, ir_int_t v, ir_block_t *b)
+{
+    return ir_instr_push_switch_case(in, ir_lit_of(v), b);
+}
+
 bool ir_instr_push_mod(ir_instr_t *in, const char *mod)
 {
     if (!in || !mod) {
         return false;
     }
 
-    ir_ctx_t *ctx = in->block->owner->owner->ctx;
+    ir_module_t *m = in->block->owner->owner;
+
+    if (!ir_opinfo_accepts_mod(ir_module_op_info(m, in->op), mod)) {
+        return false;
+    }
+
+    ir_ctx_t *ctx = m->ctx;
     size_t    cap = in->cap_mods;
 
     in->mods = ir_grow(ctx, in->mods, &cap, in->n_mods + 1u, sizeof(char *));

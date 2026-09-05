@@ -3,9 +3,18 @@
 
 #include "typehash.h"
 
-#define TH_MAX_FREE     128
-#define TH_MAX_BINDERS  16
-#define TH_MAX_PARAMS   64
+typedef struct {
+    char    *name;
+    th_type *type;
+} th_freev;
+
+typedef struct {
+    char **names;
+    size_t n;
+    size_t cap;
+} th_binding;
+
+#define TH_MAX_PARSE_DEPTH 512
 
 typedef struct {
     const char *src;
@@ -14,19 +23,42 @@ typedef struct {
     th_ctx     *ctx;
     th_error   *err;
     bool        failed;
+    size_t      depth;
 
-    struct {
-        char    *name;
-        th_type *type;
-    } freev[TH_MAX_FREE];
-    size_t nfree;
+    th_freev   *freev;
+    size_t      nfree;
+    size_t      cfree;
 
-    struct {
-        char  *names[TH_MAX_PARAMS];
-        size_t n;
-    } binders[TH_MAX_BINDERS];
-    size_t nb;
+    th_binding *binders;
+    size_t      nb;
+    size_t      cb;
 } P;
+
+static bool reserve(void *slot, size_t *cap, size_t need, size_t elem)
+{
+    void **p = slot;
+
+    if (need <= *cap) {
+        return true;
+    }
+
+    size_t n = *cap ? *cap * 2 : 8;
+
+    while (n < need) {
+        n *= 2;
+    }
+
+    void *q = realloc(*p, n * elem);
+
+    if (!q) {
+        return false;
+    }
+    memset((char *)q + *cap * elem, 0, (n - *cap) * elem);
+    *p   = q;
+    *cap = n;
+
+    return true;
+}
 
 static th_type *p_union(P *p);
 static th_type *p_one(P *p);
@@ -237,10 +269,15 @@ static const char *const RESERVED[] = {
     "array",     "variant",    nullptr,
 };
 
-static bool is_reserved(const char *w)
+static bool word_is(const char *w, size_t n, const char *lit)
+{
+    return strlen(lit) == n && !memcmp(w, lit, n);
+}
+
+static bool is_reserved_n(const char *w, size_t n)
 {
     for (size_t i = 0; RESERVED[i]; i++) {
-        if (!strcmp(RESERVED[i], w)) {
+        if (word_is(w, n, RESERVED[i])) {
             return true;
         }
     }
@@ -248,26 +285,26 @@ static bool is_reserved(const char *w)
     return false;
 }
 
-static uint8_t sugar_attrs(const char *w, bool *found)
+static uint8_t sugar_attrs_n(const char *w, size_t n, bool *found)
 {
     *found = true;
 
-    if (!strcmp(w, "ptr")) {
+    if (word_is(w, n, "ptr")) {
         return TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE;
     }
-    if (!strcmp(w, "ref")) {
+    if (word_is(w, n, "ref")) {
         return 0;
     }
-    if (!strcmp(w, "mutref")) {
+    if (word_is(w, n, "mutref")) {
         return TH_EXCLUSIVE;
     }
-    if (!strcmp(w, "own")) {
+    if (word_is(w, n, "own")) {
         return TH_OWNING;
     }
-    if (!strcmp(w, "gcref")) {
+    if (word_is(w, n, "gcref")) {
         return TH_NULLABLE | TH_RESEATABLE;
     }
-    if (!strcmp(w, "tmpref")) {
+    if (word_is(w, n, "tmpref")) {
         return TH_TEMPORARY;
     }
     *found = false;
@@ -330,8 +367,8 @@ static th_type *p_tvar(P *p)
         }
     }
 
-    if (p->nfree == TH_MAX_FREE) {
-        fail(p, "too many free type variables");
+    if (!reserve(&p->freev, &p->cfree, p->nfree + 1, sizeof(th_freev))) {
+        fail(p, "out of memory");
         free(n);
 
         return nullptr;
@@ -354,14 +391,14 @@ static th_type *p_binder(P *p)
         return nullptr;
     }
 
-    if (p->nb == TH_MAX_BINDERS) {
-        fail(p, "binders nested too deeply");
+    if (!reserve(&p->binders, &p->cb, p->nb + 1, sizeof(th_binding))) {
+        fail(p, "out of memory");
 
         return nullptr;
     }
 
-    size_t slot            = p->nb++;
-    p->binders[slot].n     = 0;
+    size_t slot        = p->nb++;
+    p->binders[slot].n = 0;
 
     do {
         if (!eat_ch(p, '`')) {
@@ -375,7 +412,16 @@ static th_type *p_binder(P *p)
         if (!n) {
             return nullptr;
         }
-        p->binders[slot].names[p->binders[slot].n++] = n;
+
+        th_binding *b = &p->binders[slot];
+
+        if (!reserve(&b->names, &b->cap, b->n + 1, sizeof(char *))) {
+            fail(p, "out of memory");
+            free(n);
+
+            return nullptr;
+        }
+        b->names[b->n++] = n;
     } while (eat_ch(p, ','));
 
     if (!eat_ch(p, ']')) {
@@ -390,6 +436,7 @@ static th_type *p_binder(P *p)
     for (size_t i = 0; i < p->binders[slot].n; i++) {
         free(p->binders[slot].names[i]);
     }
+    p->binders[slot].n = 0;
     p->nb--;
 
     if (!body) {
@@ -399,7 +446,7 @@ static th_type *p_binder(P *p)
     return th_binder(p->ctx, arity, body);
 }
 
-static th_type *p_indirection(P *p, const char *word, uint8_t sugar)
+static th_type *p_indirection(P *p, uint8_t sugar)
 {
     if (!eat_ch(p, '[')) {
         fail(p, "expected [");
@@ -437,7 +484,6 @@ static th_type *p_indirection(P *p, const char *word, uint8_t sugar)
 
         return nullptr;
     }
-    (void)word;
 
     return th_ind(p->ctx, attrs, ref);
 }
@@ -515,16 +561,18 @@ static th_type *p_named(P *p, bool variant)
         return nullptr;
     }
 
-    th_arg  args[TH_MAX_PARAMS];
-    size_t  na = 0;
+    th_arg  *args = nullptr;
+    size_t   na   = 0;
+    size_t   ca   = 0;
     th_type *r;
 
     if (eat_ch(p, '[')) {
         do {
             skip_ws(p);
 
-            if (na == TH_MAX_PARAMS) {
-                fail(p, "too many arguments");
+            if (!reserve(&args, &ca, na + 1, sizeof(th_arg))) {
+                fail(p, "out of memory");
+                free(args);
                 free(n);
 
                 return nullptr;
@@ -551,6 +599,7 @@ static th_type *p_named(P *p, bool variant)
 
         if (!eat_ch(p, ']')) {
             fail(p, "expected ]");
+            free(args);
             free(n);
 
             return nullptr;
@@ -565,6 +614,7 @@ static th_type *p_named(P *p, bool variant)
             free((void *)args[i].str.p);
         }
     }
+    free(args);
     free(n);
 
     return r;
@@ -580,13 +630,15 @@ static th_type *p_tuple(P *p)
         return nullptr;
     }
 
-    th_type *elems[TH_MAX_PARAMS];
-    size_t   n = 0;
+    th_type **elems = nullptr;
+    size_t    n     = 0;
+    size_t    cap   = 0;
 
     if (!at_ch(p, ')')) {
         do {
-            if (n == TH_MAX_PARAMS) {
-                fail(p, "tuple too large");
+            if (!reserve(&elems, &cap, n + 1, sizeof(th_type *))) {
+                fail(p, "out of memory");
+                free(elems);
 
                 return nullptr;
             }
@@ -596,11 +648,16 @@ static th_type *p_tuple(P *p)
 
     if (!eat_ch(p, ')')) {
         fail(p, "expected )");
+        free(elems);
 
         return nullptr;
     }
 
-    return th_tuple(p->ctx, elems, n);
+    th_type *t = th_tuple(p->ctx, elems, n);
+
+    free(elems);
+
+    return t;
 }
 
 static bool looks_like_fields(P *p)
@@ -664,7 +721,7 @@ static bool paren_is_function(P *p)
     return false;
 }
 
-static size_t p_fields(P *p, th_member *out, size_t max)
+static size_t p_fields(P *p, th_member **out, size_t *cap)
 {
     size_t n = 0;
 
@@ -676,13 +733,14 @@ static size_t p_fields(P *p, th_member *out, size_t max)
 
     if (!at_ch(p, ')')) {
         do {
-            if (n == max) {
-                fail(p, "too many fields");
+            if (!reserve(out, cap, n + 1, sizeof(th_member))) {
+                fail(p, "out of memory");
 
                 return n;
             }
 
-            char *nm = take_id(p);
+            th_member *slot = *out;
+            char      *nm   = take_id(p);
 
             if (!nm || !eat_ch(p, ':')) {
                 fail(p, "expected name: type");
@@ -690,8 +748,8 @@ static size_t p_fields(P *p, th_member *out, size_t max)
 
                 return n;
             }
-            out[n].name = nm;
-            out[n].type = p_union(p);
+            slot[n].name = nm;
+            slot[n].type = p_union(p);
             n++;
         } while (eat_ch(p, ','));
     }
@@ -728,11 +786,11 @@ static th_type *p_function(P *p)
 {
     eat_ch(p, '(');
 
-    th_param   params[TH_MAX_PARAMS];
-    th_kwparam kw[TH_MAX_PARAMS];
-    th_param   rest;
-    size_t     np = 0, nkw = 0;
-    bool       has_rest = false;
+    th_param   *params = nullptr;
+    th_kwparam *kw     = nullptr;
+    th_param    rest;
+    size_t      np = 0, nkw = 0, cp = 0, ck = 0;
+    bool        has_rest = false;
 
     if (!at_ch(p, ')')) {
         do {
@@ -743,6 +801,8 @@ static th_type *p_function(P *p)
             if (eat_ch(p, '*')) {
                 if (has_rest) {
                     fail(p, "more than one rest parameter");
+                    free(params);
+                    free(kw);
 
                     return nullptr;
                 }
@@ -772,9 +832,11 @@ static th_type *p_function(P *p)
                     eat_ch(p, ':');
                     p_mode(p, &mode);
 
-                    if (nkw == TH_MAX_PARAMS) {
-                        fail(p, "too many keyword parameters");
+                    if (!reserve(&kw, &ck, nkw + 1, sizeof(th_kwparam))) {
+                        fail(p, "out of memory");
                         free(nm);
+                        free(params);
+                        free(kw);
 
                         return nullptr;
                     }
@@ -786,8 +848,10 @@ static th_type *p_function(P *p)
                 else {
                     p->pos = save;
 
-                    if (np == TH_MAX_PARAMS) {
-                        fail(p, "too many parameters");
+                    if (!reserve(&params, &cp, np + 1, sizeof(th_param))) {
+                        fail(p, "out of memory");
+                        free(params);
+                        free(kw);
 
                         return nullptr;
                     }
@@ -801,6 +865,8 @@ static th_type *p_function(P *p)
 
     if (!eat_ch(p, ')') || !eat_arrow(p)) {
         fail(p, "expected ) ->");
+        free(params);
+        free(kw);
 
         return nullptr;
     }
@@ -812,6 +878,8 @@ static th_type *p_function(P *p)
     for (size_t i = 0; i < nkw; i++) {
         free((void *)kw[i].name);
     }
+    free(params);
+    free(kw);
 
     return r;
 }
@@ -823,13 +891,15 @@ static th_type *p_paren(P *p)
     }
 
     if (looks_like_fields(p)) {
-        th_member m[TH_MAX_PARAMS];
-        size_t    n = p_fields(p, m, TH_MAX_PARAMS);
-        th_type  *r = th_record(p->ctx, m, n);
+        th_member *m   = nullptr;
+        size_t     cap = 0;
+        size_t     n   = p_fields(p, &m, &cap);
+        th_type   *r   = th_record(p->ctx, m, n);
 
         for (size_t i = 0; i < n; i++) {
             free((void *)m[i].name);
         }
+        free(m);
 
         return r;
     }
@@ -941,14 +1011,10 @@ static th_type *p_base(P *p)
     if (at_id(p)) {
         size_t n;
         size_t at = scan_id(p, p->pos, &n);
-        char   w[64];
 
-        if (n < sizeof(w)) {
-            memcpy(w, p->src + at, n);
-            w[n] = 0;
-
+        {
             bool    found;
-            uint8_t sugar = sugar_attrs(w, &found);
+            uint8_t sugar = sugar_attrs_n(p->src + at, n, &found);
 
             if (found) {
                 size_t q = at + n;
@@ -960,11 +1026,11 @@ static th_type *p_base(P *p)
                 if (q < p->len && p->src[q] == '[') {
                     p->pos = at + n;
 
-                    return p_indirection(p, w, sugar);
+                    return p_indirection(p, sugar);
                 }
             }
 
-            if (!strcmp(w, "array")) {
+            if (word_is(p->src + at, n, "array")) {
                 size_t q = at + n;
 
                 while (q < p->len && (p->src[q] == ' ' || p->src[q] == '\t')) {
@@ -978,7 +1044,7 @@ static th_type *p_base(P *p)
                 }
             }
 
-            if (!strcmp(w, "t")) {
+            if (word_is(p->src + at, n, "t")) {
                 size_t q = at + n;
 
                 while (q < p->len && (p->src[q] == ' ' || p->src[q] == '\t')) {
@@ -990,13 +1056,13 @@ static th_type *p_base(P *p)
                 }
             }
 
-            if (!strcmp(w, "variant")) {
+            if (word_is(p->src + at, n, "variant")) {
                 p->pos = at + n;
 
                 return p_named(p, true);
             }
 
-            if (is_reserved(w)) {
+            if (is_reserved_n(p->src + at, n)) {
                 fail(p, "reserved word is not a type name");
 
                 return nullptr;
@@ -1013,7 +1079,18 @@ static th_type *p_base(P *p)
 
 static th_type *p_one(P *p)
 {
-    return p_base(p);
+    if (p->depth >= TH_MAX_PARSE_DEPTH) {
+        fail(p, "type nests deeper than the parser will descend");
+
+        return nullptr;
+    }
+    p->depth++;
+
+    th_type *t = p_base(p);
+
+    p->depth--;
+
+    return t;
 }
 
 static th_type *p_isect(P *p)
@@ -1024,21 +1101,32 @@ static th_type *p_isect(P *p)
         return first;
     }
 
-    th_type *arms[TH_MAX_PARAMS];
-    size_t   n = 0;
+    th_type **arms = nullptr;
+    size_t    n    = 0;
+    size_t    cap  = 0;
 
+    if (!reserve(&arms, &cap, 1, sizeof(th_type *))) {
+        fail(p, "out of memory");
+
+        return nullptr;
+    }
     arms[n++] = first;
 
     while (eat_ch(p, '&')) {
-        if (n == TH_MAX_PARAMS) {
-            fail(p, "too many intersection arms");
+        if (!reserve(&arms, &cap, n + 1, sizeof(th_type *))) {
+            fail(p, "out of memory");
+            free(arms);
 
             return nullptr;
         }
         arms[n++] = p_one(p);
     }
 
-    return th_sum(p->ctx, TH_INTERSECTION, arms, n);
+    th_type *r = th_sum(p->ctx, TH_INTERSECTION, arms, n);
+
+    free(arms);
+
+    return r;
 }
 
 static th_type *p_union(P *p)
@@ -1049,27 +1137,38 @@ static th_type *p_union(P *p)
         return first;
     }
 
-    th_type *arms[TH_MAX_PARAMS];
-    size_t   n = 0;
+    th_type **arms = nullptr;
+    size_t    n    = 0;
+    size_t    cap  = 0;
 
+    if (!reserve(&arms, &cap, 1, sizeof(th_type *))) {
+        fail(p, "out of memory");
+
+        return nullptr;
+    }
     arms[n++] = first;
 
     while (eat_ch(p, '|')) {
-        if (n == TH_MAX_PARAMS) {
-            fail(p, "too many union arms");
+        if (!reserve(&arms, &cap, n + 1, sizeof(th_type *))) {
+            fail(p, "out of memory");
+            free(arms);
 
             return nullptr;
         }
         arms[n++] = p_isect(p);
     }
 
-    return th_sum(p->ctx, TH_UNION, arms, n);
+    th_type *r = th_sum(p->ctx, TH_UNION, arms, n);
+
+    free(arms);
+
+    return r;
 }
 
-static th_type *parse_common(th_ctx *ctx, const char *src, th_error *err,
-                             size_t *consumed)
+static th_type *parse_common(th_ctx *ctx, const char *src, size_t len,
+                             th_error *err, size_t *consumed)
 {
-    P p = {.src = src, .len = strlen(src), .ctx = ctx, .err = err};
+    P p = {.src = src, .len = len, .ctx = ctx, .err = err};
 
     if (err) {
         err->msg    = nullptr;
@@ -1087,6 +1186,15 @@ static th_type *parse_common(th_ctx *ctx, const char *src, th_error *err,
     for (size_t i = 0; i < p.nfree; i++) {
         free(p.freev[i].name);
     }
+    free(p.freev);
+
+    for (size_t i = 0; i < p.cb; i++) {
+        for (size_t k = 0; k < p.binders[i].n; k++) {
+            free(p.binders[i].names[k]);
+        }
+        free(p.binders[i].names);
+    }
+    free(p.binders);
 
     if (p.failed) {
         return nullptr;
@@ -1101,19 +1209,27 @@ static th_type *parse_common(th_ctx *ctx, const char *src, th_error *err,
 
 th_type *th_parse(th_ctx *ctx, const char *src, th_error *err)
 {
-    return parse_common(ctx, src, err, nullptr);
+    return parse_common(ctx, src, strlen(src), err, nullptr);
 }
 
-th_type *th_parse_prefix(th_ctx *ctx, const char *src, size_t *consumed,
-                         th_error *err)
+/* The caller usually already knows how much input there is. Measuring it here
+   instead makes parsing one type out of a long buffer cost the length of the
+   whole buffer, and a caller in a loop pays that per type. */
+th_type *th_parse_prefix_n(th_ctx *ctx, const char *src, size_t len,
+                           size_t *consumed, th_error *err)
 {
-    size_t n = 0;
-
-    th_type *t = parse_common(ctx, src, err, &n);
+    size_t   n = 0;
+    th_type *t = parse_common(ctx, src, len, err, &n);
 
     if (consumed) {
         *consumed = n;
     }
 
     return t;
+}
+
+th_type *th_parse_prefix(th_ctx *ctx, const char *src, size_t *consumed,
+                         th_error *err)
+{
+    return th_parse_prefix_n(ctx, src, strlen(src), consumed, err);
 }

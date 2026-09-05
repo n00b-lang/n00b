@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "ir_internal.h"
+#include "ir/layout.h"
 #include "ir/text.h"
 
 typedef enum : uint8_t {
@@ -21,12 +22,21 @@ typedef struct {
     tokkind     kind;
     const char *s;
     size_t      n;
-    int64_t     i;
+    ir_lit_t    lit;
+    bool        over;
     double      f;
+    const char *text;
     uint32_t    line;
     uint32_t    col;
     uint32_t    byte;
+    uint32_t    width;
 } tok;
+
+typedef struct {
+    ir_value_t **at;
+    size_t       cap;
+    size_t       n;
+} vmap;
 
 typedef struct {
     const char *src;
@@ -38,20 +48,56 @@ typedef struct {
     ir_ctx_t   *ctx;
     ir_diags_t *d;
     tok         cur;
+    tok         prev;
     bool        failed;
     ir_sb       comment;
+    vmap        vals;
 } P;
 
 static void advance(P *p);
 
-static ir_span_t here(P *p)
+static int hex_digit(char c)
 {
-    return ir_span_make(p->file, p->cur.byte, (uint32_t)(p->cur.byte + p->cur.n),
-                        p->cur.line, p->cur.col, p->cur.line,
-                        (uint32_t)(p->cur.col + p->cur.n));
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+
+    return -1;
 }
 
-static void fail(P *p, const char *what)
+static ir_int_t lit_signed(ir_lit_t v)
+{
+    return v.neg ? -(ir_int_t)v.mag : (ir_int_t)v.mag;
+}
+
+static ir_span_t here(P *p)
+{
+    uint32_t w = p->cur.width;
+
+    return ir_span_make(p->file, p->cur.byte, p->cur.byte + w, p->cur.line,
+                        p->cur.col, p->cur.line, p->cur.col + w);
+}
+
+static ir_lit_t tok_lit(P *p, bool neg)
+{
+    ir_lit_t v = p->cur.lit;
+
+    if (neg) {
+        v.neg = !v.neg;
+    }
+
+    return v;
+}
+
+static void fail_at(P *p, ir_span_t where, const char *what)
 {
     if (p->failed) {
         return;
@@ -59,7 +105,7 @@ static void fail(P *p, const char *what)
     p->failed = true;
 
     if (p->d) {
-        ir_diag_t *dg = ir_diag_begin(p->d, IR_DIAG_PARSE, here(p), what);
+        ir_diag_t *dg = ir_diag_begin(p->d, IR_DIAG_PARSE, where, what);
 
         if (dg) {
             ir_diag_message(dg, p->d, what);
@@ -67,19 +113,47 @@ static void fail(P *p, const char *what)
     }
 }
 
+static void fail(P *p, const char *what)
+{
+    fail_at(p, here(p), what);
+}
+
+static void fail_as(P *p, ir_diagcode_t code, const char *what)
+{
+    if (p->failed) {
+        return;
+    }
+    p->failed = true;
+
+    if (p->d) {
+        ir_diag_t *dg = ir_diag_begin(p->d, code, here(p), what);
+
+        if (dg) {
+            ir_diag_message(dg, p->d, what);
+        }
+    }
+}
+
+static void fail_oom(P *p)
+{
+    fail_as(p, IR_DIAG_OUT_OF_MEMORY, "out of memory");
+}
+
 static bool ident_start(unsigned char c)
 {
-    return c == '_' || c == '.' || (c >= 'a' && c <= 'z')
-        || (c >= 'A' && c <= 'Z') || c >= 0x80;
+    return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || c >= 0x80;
 }
 
 static bool ident_cont(unsigned char c)
 {
-    return ident_start(c) || (c >= '0' && c <= '9') || c == '-';
+    return ident_start(c) || (c >= '0' && c <= '9') || c == '-' || c == '.';
 }
 
 static void bump(P *p, size_t n)
 {
+    p->cur.width = (uint32_t)n;
+
     for (size_t i = 0; i < n && p->pos < p->len; i++) {
         if (p->src[p->pos] == '\n') {
             p->line++;
@@ -187,22 +261,82 @@ static void lex(P *p)
     if ((c >= '0' && c <= '9')
         || (c == '-' && p->pos + 1 < p->len && p->src[p->pos + 1] >= '0'
             && p->src[p->pos + 1] <= '9')) {
-        char  *end;
-        double dv = strtod(p->src + p->pos, &end);
-        size_t n  = (size_t)(end - (p->src + p->pos));
-        bool   isf = false;
+        size_t   at  = p->pos + (c == '-' ? 1u : 0u);
+        bool     hex = p->src[at] == '0' && at + 1 < p->len
+                   && (p->src[at + 1] == 'x' || p->src[at + 1] == 'X');
+        size_t   n   = 0;
+        bool     isf = false;
+        double   dv  = 0;
 
-        for (size_t i = 0; i < n; i++) {
-            char ch = p->src[p->pos + i];
+        p->cur.over = false;
+        p->cur.lit  = (ir_lit_t){.neg = c == '-', .hex = hex};
 
-            if (ch == '.' || ch == 'e' || ch == 'E') {
-                isf = true;
+        if (hex) {
+            size_t    k   = at + 2;
+            ir_uint_t acc = 0;
+
+            while (k < p->len && hex_digit(p->src[k]) >= 0) {
+                unsigned d = (unsigned)hex_digit(p->src[k]);
+
+                if (acc >> 124) {
+                    p->cur.over = true;
+                }
+                acc = acc * 16 + d;
+                k++;
+            }
+
+            if (k == at + 2) {
+                fail(p, "expected a hexadecimal digit after 0x");
+            }
+            p->cur.lit.mag = acc;
+            n              = k - p->pos;
+        }
+        else {
+            char *end = nullptr;
+
+            dv = strtod(p->src + p->pos, &end);
+            n  = (size_t)(end - (p->src + p->pos));
+
+            for (size_t i = at; i < p->len; i++) {
+                if (p->src[i] >= '0' && p->src[i] <= '9') {
+                    continue;
+                }
+
+                if (p->src[i] == '.' && i + 1 < p->len
+                    && p->src[i + 1] == '.') {
+                    n  = i - p->pos;
+                    dv = 0;
+                }
+                break;
+            }
+
+            for (size_t i = 0; i < n; i++) {
+                char ch = p->src[p->pos + i];
+
+                if (ch == '.' || ch == 'e' || ch == 'E') {
+                    isf = true;
+                }
+            }
+
+            if (!isf) {
+                ir_uint_t acc = 0;
+
+                for (size_t k = at; k < p->pos + n; k++) {
+                    unsigned d = (unsigned)(p->src[k] - '0');
+
+                    if (acc > (~(ir_uint_t)0 - d) / 10) {
+                        p->cur.over = true;
+                        break;
+                    }
+                    acc = acc * 10 + d;
+                }
+                p->cur.lit.mag = acc;
             }
         }
 
         p->cur.kind = isf ? T_FLOAT : T_INT;
         p->cur.f    = dv;
-        p->cur.i    = strtoll(p->src + p->pos, nullptr, 10);
+        p->cur.text = p->src + p->pos;
         p->cur.n    = n;
         bump(p, n);
 
@@ -229,7 +363,23 @@ static void lex(P *p)
 
 static void advance(P *p)
 {
+    p->prev = p->cur;
     lex(p);
+}
+
+static ir_span_t through_prev(P *p, ir_span_t start)
+{
+    ir_span_t s = start;
+
+    if (p->prev.byte >= start.start_byte) {
+        s = ir_span_make(p->file, start.start_byte,
+                         (uint32_t)(p->prev.byte + p->prev.n),
+                         start.start_line, start.start_col, p->prev.line,
+                         (uint32_t)(p->prev.col + p->prev.n));
+    }
+    s.implied = true;
+
+    return s;
 }
 
 static bool is_punct(P *p, char c)
@@ -344,8 +494,8 @@ static th_type *parse_type(P *p, ir_module_t *m)
 
     th_error err      = {0};
     size_t   consumed = 0;
-    th_type *t = th_parse_prefix(ir_ctx_types(p->ctx), p->src + p->pos,
-                                 &consumed, &err);
+    th_type *t = th_parse_prefix_n(ir_ctx_types(p->ctx), p->src + p->pos,
+                                   p->len - p->pos, &consumed, &err);
 
     if (!t || !consumed) {
         fail(p, err.msg ? err.msg : "expected a type");
@@ -375,7 +525,13 @@ static bool parse_span(P *p, ir_span_t *out)
 
             return false;
         }
-        v[i] = neg ? -p->cur.i : p->cur.i;
+
+        if (p->cur.over) {
+            fail(p, "this literal does not fit in 128 bits");
+
+            return false;
+        }
+        v[i] = lit_signed(tok_lit(p, neg));
         advance(p);
 
         if (i < 6 && !expect_punct(p, ',', "expected , in !loc")) {
@@ -444,7 +600,13 @@ static ir_origin_t *parse_origin(P *p, ir_origin_t *parent)
 
             return nullptr;
         }
-        v[i] = neg ? -p->cur.i : p->cur.i;
+
+        if (p->cur.over) {
+            fail(p, "this literal does not fit in 128 bits");
+
+            return nullptr;
+        }
+        v[i] = lit_signed(tok_lit(p, neg));
         advance(p);
     }
 
@@ -480,7 +642,66 @@ static bool prop_from_name(const char *s, ir_props_t *out)
     return false;
 }
 
-static bool parse_annot(P *p, ir_module_t *m, ir_annots_t *a, const char *key)
+static size_t vmap_slot(const vmap *v, const char *k)
+{
+    size_t h = 1469598103934665603u;
+
+    for (const unsigned char *p = (const unsigned char *)k; *p; p++) {
+        h = (h ^ *p) * 1099511628211u;
+    }
+
+    size_t i = h & (v->cap - 1);
+
+    while (v->at[i] && strcmp(v->at[i]->name, k)) {
+        i = (i + 1) & (v->cap - 1);
+    }
+
+    return i;
+}
+
+static void vmap_reset(P *p, size_t want)
+{
+    p->vals.cap = 16;
+    p->vals.n   = 0;
+
+    while (p->vals.cap < want * 2) {
+        p->vals.cap *= 2;
+    }
+    p->vals.at = ir_alloc(p->ctx, p->vals.cap * sizeof(ir_value_t *));
+}
+
+static void vmap_put(P *p, ir_value_t *val)
+{
+    if (!val || !val->name || !p->vals.at) {
+        return;
+    }
+
+    if ((p->vals.n + 1) * 2 > p->vals.cap) {
+        vmap old = p->vals;
+
+        vmap_reset(p, old.n * 2 + 1);
+
+        for (size_t i = 0; i < old.cap; i++) {
+            if (old.at[i]) {
+                p->vals.at[vmap_slot(&p->vals, old.at[i]->name)] = old.at[i];
+                p->vals.n++;
+            }
+        }
+    }
+
+    size_t at = vmap_slot(&p->vals, val->name);
+
+    p->vals.n += !p->vals.at[at];
+    p->vals.at[at] = val;
+}
+
+static ir_value_t *find_value(P *p, const char *name)
+{
+    return p->vals.at ? p->vals.at[vmap_slot(&p->vals, name)] : nullptr;
+}
+
+static bool parse_annot(P *p, ir_module_t *m, ir_func_t *f,
+                        ir_annots_t *a, const char *key)
 {
     if (!expect_punct(p, '(', "expected ( after an annotation key")) {
         return false;
@@ -493,26 +714,46 @@ static bool parse_annot(P *p, ir_module_t *m, ir_annots_t *a, const char *key)
         an.s    = text_of(p);
         advance(p);
     }
-    else if (is_punct(p, '{')) {
-        an.kind = IR_ANNOT_TYPE;
-        an.t    = parse_type(p, m);
-    }
-    else if (p->cur.kind == T_VALUE) {
-        an.kind = IR_ANNOT_VALUE;
-        an.v    = nullptr;
-        advance(p);
-    }
     else if (is_word(p, "true") || is_word(p, "false")) {
         an.kind = IR_ANNOT_BOOL;
         an.b    = is_word(p, "true");
         advance(p);
     }
+    else if (p->cur.kind == T_VALUE) {
+        char       *vn = ident_text(p);
+        ir_value_t *v  = f ? find_value(p, vn) : nullptr;
+
+        if (!v) {
+            fail(p, "an annotation may only name a value already defined in "
+                    "the enclosing function");
+
+            return false;
+        }
+        an.kind = IR_ANNOT_VALUE;
+        an.v    = v;
+        advance(p);
+    }
     else if (p->cur.kind == T_INT || is_punct(p, '-')) {
         bool neg = eat_punct(p, '-');
 
+        if (p->cur.over) {
+            fail(p, "this literal does not fit in 128 bits");
+
+            return false;
+        }
+
         an.kind = IR_ANNOT_INT;
-        an.i    = neg ? -p->cur.i : p->cur.i;
+        an.i    = tok_lit(p, neg);
         advance(p);
+    }
+    else if (p->cur.kind == T_IDENT || is_punct(p, '(')
+             || is_punct(p, '`') || is_punct(p, '*')) {
+        an.kind = IR_ANNOT_TYPE;
+        an.t    = parse_type(p, m);
+
+        if (!an.t) {
+            return false;
+        }
     }
     else {
         fail(p, "unrecognised annotation value");
@@ -543,8 +784,8 @@ static bool parse_annot(P *p, ir_module_t *m, ir_annots_t *a, const char *key)
     return true;
 }
 
-static void parse_meta(P *p, ir_module_t *m, ir_span_t *span,
-                       ir_origin_t **origin, ir_annots_t *a)
+static void parse_meta_in(P *p, ir_module_t *m, ir_func_t *f, ir_span_t *span,
+                          ir_origin_t **origin, ir_annots_t *a)
 {
     ir_origin_t **chain   = nullptr;
     size_t        n_chain = 0;
@@ -572,14 +813,14 @@ static void parse_meta(P *p, ir_module_t *m, ir_span_t *span,
                             sizeof(ir_origin_t *));
 
             if (!chain) {
-                fail(p, "out of memory");
+                fail_oom(p);
 
                 return;
             }
             chain[n_chain++] = o;
         }
         else {
-            parse_annot(p, m, a, key);
+            parse_annot(p, m, f, a, key);
         }
     }
 
@@ -592,31 +833,11 @@ static void parse_meta(P *p, ir_module_t *m, ir_span_t *span,
     }
 }
 
-static ir_value_t *find_value(ir_func_t *f, const char *name)
-{
-    for (uint32_t i = 0; i < f->n_params; i++) {
-        if (!strcmp(f->params[i]->name, name)) {
-            return f->params[i];
-        }
-    }
-
-    for (uint32_t b = 0; b < f->n_blocks; b++) {
-        for (uint32_t k = 0; k < f->blocks[b]->n_instrs; k++) {
-            ir_instr_t *in = f->blocks[b]->instrs[k];
-
-            if (in->dest_kind == IR_DEST_VALUE && in->dest
-                && !strcmp(in->dest->name, name)) {
-                return in->dest;
-            }
-        }
-    }
-    return nullptr;
-}
-
 typedef struct {
     ir_instr_t *in;
     uint32_t    slot;
     char       *name;
+    ir_span_t   at;
     bool        is_phi;
 } fixup;
 
@@ -627,10 +848,10 @@ typedef struct {
 } fixups;
 
 static void need_value(P *p, fixups *fx, ir_instr_t *in, uint32_t slot,
-                       char *name, bool is_phi)
+                       char *name, ir_span_t at, bool is_phi)
 {
     fx->v = ir_grow(p->ctx, fx->v, &fx->cap, fx->n + 1, sizeof(fixup));
-    fx->v[fx->n++] = (fixup){.in = in, .slot = slot, .name = name,
+    fx->v[fx->n++] = (fixup){.in = in, .slot = slot, .name = name, .at = at,
                              .is_phi = is_phi};
 }
 
@@ -733,7 +954,7 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
         ir_value_t *v = ir_alloc(p->ctx, sizeof(ir_value_t));
 
         if (!v) {
-            fail(p, "out of memory");
+            fail_oom(p);
 
             return false;
         }
@@ -748,7 +969,7 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
                     "named argument rejected")) {
             return false;
         }
-        need_value(p, fx, in, slot, (char *)v->name, false);
+        need_value(p, fx, in, slot, (char *)v->name, here(p), false);
 
         return true;
     }
@@ -808,11 +1029,15 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
         bool neg = eat_punct(p, '-');
 
         if (p->cur.kind == T_FLOAT) {
-            double v = neg ? -p->cur.f : p->cur.f;
+            char *v = ir_alloc(p->ctx, p->cur.n + 2);
 
+            if (neg) {
+                v[0] = '-';
+            }
+            memcpy(v + (neg ? 1 : 0), p->cur.text, p->cur.n);
             advance(p);
 
-            return pushed(p, ir_instr_push_float(in, v),
+            return pushed(p, ir_instr_push_float_text(in, v),
                           "literal operand rejected");
         }
 
@@ -822,11 +1047,17 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             return false;
         }
 
-        int64_t v = neg ? -p->cur.i : p->cur.i;
+        if (p->cur.over) {
+            fail(p, "this literal does not fit in 128 bits");
+
+            return false;
+        }
+
+        ir_lit_t v = tok_lit(p, neg);
 
         advance(p);
 
-        return pushed(p, ir_instr_push_int(in, v),
+        return pushed(p, ir_instr_push_lit(in, v),
                       "literal operand rejected");
     }
 
@@ -859,7 +1090,8 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             return false;
         }
 
-        char *vn = ident_text(p);
+        char     *vn  = ident_text(p);
+        ir_span_t ref = here(p);
 
         advance(p);
 
@@ -871,7 +1103,7 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
         ir_value_t *placeholder = ir_alloc(p->ctx, sizeof(ir_value_t));
 
         if (!placeholder) {
-            fail(p, "out of memory");
+            fail_oom(p);
 
             return false;
         }
@@ -882,7 +1114,7 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
                     "phi arm rejected")) {
             return false;
         }
-        need_value(p, fx, in, slot, vn, true);
+        need_value(p, fx, in, slot, vn, ref, true);
 
         return true;
     }
@@ -900,7 +1132,13 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             return false;
         }
 
-        int64_t v = neg ? -p->cur.i : p->cur.i;
+        if (p->cur.over) {
+            fail(p, "this literal does not fit in 128 bits");
+
+            return false;
+        }
+
+        ir_lit_t v = tok_lit(p, neg);
 
         advance(p);
 
@@ -926,7 +1164,7 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             return false;
         }
 
-        return pushed(p, ir_instr_push_switch_arm(in, v, bb),
+        return pushed(p, ir_instr_push_switch_case(in, v, bb),
                       "switch arm rejected");
     }
 
@@ -952,13 +1190,12 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             char       *n = ident_text(p);
             ir_local_t *l = ir_local_find(f, n);
 
-            advance(p);
-
             if (!l) {
                 fail(p, "unknown local");
 
                 return false;
             }
+            advance(p);
 
             return pushed(p, ir_instr_push_local(in, l),
                           "local operand rejected");
@@ -971,11 +1208,12 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
         }
 
         char       *n           = ident_text(p);
+        ir_span_t   ref         = here(p);
         uint32_t    slot        = in->n_operands;
         ir_value_t *placeholder = ir_alloc(p->ctx, sizeof(ir_value_t));
 
         if (!placeholder) {
-            fail(p, "out of memory");
+            fail_oom(p);
 
             return false;
         }
@@ -987,7 +1225,7 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
                     "value operand rejected")) {
             return false;
         }
-        need_value(p, fx, in, slot, n, false);
+        need_value(p, fx, in, slot, n, ref, false);
 
         return true;
     }
@@ -997,7 +1235,8 @@ static bool parse_operand(P *p, ir_module_t *m, ir_func_t *f, ir_instr_t *in,
 static bool parse_instr(P *p, ir_module_t *m, ir_func_t *f, ir_block_t *b,
                         fixups *fx)
 {
-    char *comment = take_comment(p);
+    char     *comment = take_comment(p);
+    ir_span_t begun   = here(p);
     char *dest_v  = nullptr;
     char *dest_l  = nullptr;
     th_type *dt   = nullptr;
@@ -1039,7 +1278,7 @@ static bool parse_instr(P *p, ir_module_t *m, ir_func_t *f, ir_block_t *b,
             fail(p, "this opcode needs a profile that is not loaded");
         }
         else {
-            fail(p, "unknown opcode");
+            fail_as(p, IR_DIAG_UNKNOWN_OPCODE, "unknown opcode");
         }
 
         return false;
@@ -1102,36 +1341,246 @@ static bool parse_instr(P *p, ir_module_t *m, ir_func_t *f, ir_block_t *b,
     }
 
     if (dest_v && !ir_instr_set_dest(in, dest_v, dt)) {
-        fail(p, "this opcode has no result");
+        fail_at(p, begun, "this opcode has no result");
 
         return false;
+    }
+
+    if (dest_v) {
+        vmap_put(p, in->dest);
     }
 
     if (dest_l) {
         ir_local_t *l = ir_local_find(f, dest_l);
 
         if (!l) {
-            fail(p, "unknown local as destination");
+            fail_at(p, begun, "unknown local as destination");
 
             return false;
         }
 
         if (!ir_instr_set_dest_local(in, l)) {
-            fail(p, "this opcode has no result");
+            fail_at(p, begun, "this opcode has no result");
 
             return false;
         }
     }
 
+    in->span = through_prev(p, begun);
+
     if (on_line(p, line)) {
-        parse_meta(p, m, &in->span, &in->origin, &in->annots);
+        parse_meta_in(p, m, f, &in->span, &in->origin, &in->annots);
     }
 
     return !p->failed;
 }
 
+static bool parse_init(P *p, bool *has, ir_lit_t *lit, double *f,
+                       const char **text, bool *is_float)
+{
+    if (!eat_punct(p, '=')) {
+        return true;
+    }
+
+    bool neg = eat_punct(p, '-');
+
+    if (p->cur.kind == T_FLOAT) {
+        char *v = ir_alloc(p->ctx, p->cur.n + 2);
+
+        if (neg) {
+            v[0] = '-';
+        }
+        memcpy(v + (neg ? 1 : 0), p->cur.text, p->cur.n);
+        *has      = true;
+        *is_float = true;
+        *f        = strtod(v, nullptr);
+        *text     = v;
+        advance(p);
+
+        return true;
+    }
+
+    if (p->cur.kind != T_INT) {
+        fail(p, "expected a literal initializer");
+
+        return false;
+    }
+
+    if (p->cur.over) {
+        fail(p, "this literal does not fit in 128 bits");
+
+        return false;
+    }
+    *has      = true;
+    *is_float = false;
+    *lit      = tok_lit(p, neg);
+    advance(p);
+
+    return true;
+}
+
+static bool parse_layout_val(P *p, ir_module_t *m, ir_layout_val_t *out)
+{
+    ir_symkind_t k;
+    char        *w = p->cur.kind == T_IDENT ? ident_text(p) : nullptr;
+
+    if (w && ir_symkind_from_name(w, &k)) {
+        advance(p);
+
+        if (!expect_punct(p, '(', "expected ( after a symbolic layout value")) {
+            return false;
+        }
+
+        th_type *t = parse_type(p, m);
+
+        if (!t) {
+            return false;
+        }
+
+        const char *member = nullptr;
+
+        if (k == IR_SYM_OFFSETOF) {
+            if (!expect_punct(p, ',', "expected , in offsetof")) {
+                return false;
+            }
+
+            if (p->cur.kind != T_STRING) {
+                fail(p, "expected a quoted member name in offsetof");
+
+                return false;
+            }
+            member = ident_text(p);
+            advance(p);
+        }
+
+        if (!expect_punct(p, ')', "expected ) after a symbolic layout value")) {
+            return false;
+        }
+
+        *out = (ir_layout_val_t){.state    = IR_LAYOUT_SYMBOLIC,
+                                 .authored = true,
+                                 .sym      = k,
+                                 .of       = t,
+                                 .member   = member};
+
+        return true;
+    }
+
+    if (p->cur.kind != T_INT || p->cur.over || p->cur.lit.neg) {
+        fail(p, "expected a layout value");
+
+        return false;
+    }
+
+    *out = (ir_layout_val_t){.state    = IR_LAYOUT_PINNED,
+                             .authored = true,
+                             .value    = (uint64_t)p->cur.lit.mag};
+    advance(p);
+
+    return true;
+}
+
+static bool parse_layout(P *p, ir_module_t *m)
+{
+    th_type *t = parse_type(p, m);
+
+    if (!t) {
+        return false;
+    }
+
+    ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
+
+    if (!d || !expect_punct(p, '{', "expected { to open a layout")) {
+        return false;
+    }
+
+    while (!p->failed && !is_punct(p, '}') && p->cur.kind != T_EOF) {
+        ir_layout_val_t *slot = nullptr;
+
+        if (eat_word(p, "size")) {
+            slot = &d->size;
+        }
+        else if (eat_word(p, "align")) {
+            slot = &d->align;
+        }
+        else if (eat_word(p, "stride")) {
+            slot = &d->stride;
+        }
+
+        if (slot) {
+            if (!expect_punct(p, '=', "expected = in a layout item")) {
+                return false;
+            }
+
+            if (!parse_layout_val(p, m, slot)) {
+                return false;
+            }
+            continue;
+        }
+
+        if (p->cur.kind != T_IDENT) {
+            fail(p, "expected a layout item");
+
+            return false;
+        }
+
+        char *field = ident_text(p);
+
+        advance(p);
+
+        if (p->cur.kind != T_GLOBAL) {
+            fail(p, "expected @ bits after a member name");
+
+            return false;
+        }
+
+        bool joined = p->cur.n == 4 && !strncmp(p->cur.s, "bits", 4);
+
+        if (!joined && p->cur.n) {
+            fail(p, "expected @ bits after a member name");
+
+            return false;
+        }
+        advance(p);
+
+        if (!joined && !eat_word(p, "bits")) {
+            fail(p, "expected @ bits after a member name");
+
+            return false;
+        }
+
+        ir_layout_val_t from = {0};
+        ir_layout_val_t to   = {0};
+
+        if (!parse_layout_val(p, m, &from)
+            || !expect_punct(p, '.', "expected .. between bit bounds")
+            || !expect_punct(p, '.', "expected .. between bit bounds")
+            || !parse_layout_val(p, m, &to)) {
+            return false;
+        }
+
+        if (from.state != IR_LAYOUT_PINNED || to.state != IR_LAYOUT_PINNED
+            || to.value < from.value) {
+            fail(p, "a member's bit range must be two numbers, low then high");
+
+            return false;
+        }
+
+        if (!ir_layout_pin_member(m, t, field, from.value,
+                                  to.value - from.value)) {
+            fail(p, "the member's bit range contradicts one already pinned");
+
+            return false;
+        }
+    }
+
+    return expect_punct(p, '}', "expected } to close a layout");
+}
+
 static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
 {
+    ir_span_t begun = here(p);
+
     if (p->cur.kind != T_GLOBAL) {
         fail(p, "expected a function name");
 
@@ -1189,7 +1638,7 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
                               sizeof(th_kwparam));
 
                 if (!kws) {
-                    fail(p, "out of memory");
+                    fail_oom(p);
 
                     return false;
                 }
@@ -1207,7 +1656,7 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
             ptypes = ir_grow(p->ctx, ptypes, &tcap, np + 1, sizeof(th_type *));
 
             if (!pnames || !ptypes) {
-                fail(p, "out of memory");
+                fail_oom(p);
 
                 return false;
             }
@@ -1244,7 +1693,7 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
     th_param *params = ir_alloc(p->ctx, (np ? np : 1) * sizeof(th_param));
 
     if (!params) {
-        fail(p, "out of memory");
+        fail_oom(p);
 
         return false;
     }
@@ -1264,11 +1713,14 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
     }
     attach_comment(p, &f->annots, comment);
 
+    vmap_reset(p, np + 16);
+
     for (size_t i = 0; i < np; i++) {
-        ir_param_add(f, pnames[i], ptypes[i]);
+        vmap_put(p, ir_param_add(f, pnames[i], ptypes[i]));
     }
 
-    parse_meta(p, m, &f->span, &f->origin, &f->annots);
+    f->span = through_prev(p, begun);
+    parse_meta_in(p, m, f, &f->span, &f->origin, &f->annots);
 
     if (!expect_punct(p, '{', "expected { to open a function body")) {
         return false;
@@ -1287,7 +1739,8 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
             return false;
         }
 
-        char *ln = ident_text(p);
+        ir_span_t begun = here(p);
+        char     *ln    = ident_text(p);
 
         advance(p);
 
@@ -1304,12 +1757,17 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
         ir_local_t *l = ir_local_add(f, ln, lt);
 
         if (!l) {
-            fail(p, "duplicate local");
+            fail_at(p, begun, "duplicate local");
 
             return false;
         }
+        if (!parse_init(p, &l->has_init, &l->init, &l->init_f, &l->init_text,
+                        &l->init_is_float)) {
+            return false;
+        }
         attach_comment(p, &l->annots, lc);
-        parse_meta(p, m, &l->span, nullptr, &l->annots);
+        l->span = through_prev(p, begun);
+        parse_meta_in(p, m, f, &l->span, nullptr, &l->annots);
     }
 
     uint32_t declared = 0;
@@ -1325,7 +1783,8 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
             return false;
         }
 
-        char       *bn = ident_text(p);
+        ir_span_t   begun = here(p);
+        char       *bn    = ident_text(p);
         ir_block_t *b  = ir_block_find(f, bn);
 
         if (!b) {
@@ -1347,7 +1806,8 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
             return false;
         }
         attach_comment(p, &b->annots, bc);
-        parse_meta(p, m, &b->span, &b->origin, &b->annots);
+        b->span = through_prev(p, begun);
+        parse_meta_in(p, m, f, &b->span, &b->origin, &b->annots);
 
         while (!p->failed && !is_word(p, "block") && !is_punct(p, '}')) {
             if (!parse_instr(p, m, f, b, &fx)) {
@@ -1357,10 +1817,10 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
     }
 
     for (size_t i = 0; i < fx.n; i++) {
-        ir_value_t *v = find_value(f, fx.v[i].name);
+        ir_value_t *v = find_value(p, fx.v[i].name);
 
         if (!v) {
-            fail(p, "unknown value");
+            fail_at(p, fx.v[i].at, "unknown value");
 
             return false;
         }
@@ -1398,7 +1858,8 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
 
     advance(&p);
 
-    char *modc = take_comment(&p);
+    ir_span_t mod_start = here(&p);
+    char     *modc      = take_comment(&p);
 
     if (!eat_word(&p, "module")) {
         fail(&p, "expected module");
@@ -1462,6 +1923,10 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
 
     ir_module_t *m = ir_module_new(ctx, name, pro, target);
 
+    if (m) {
+        ir_module_set_span(m, through_prev(&p, mod_start));
+    }
+
     if (!m) {
         fail(&p, "module could not be created");
 
@@ -1470,7 +1935,8 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
     attach_comment(&p, ir_module_annots(m), modc);
 
     if (eat_word(&p, "meta")) {
-        parse_meta(&p, m, nullptr, nullptr, ir_module_annots(m));
+        parse_meta_in(&p, m, nullptr, nullptr, nullptr,
+                      ir_module_annots(m));
     }
 
     while (!p.failed && !is_punct(&p, '}') && p.cur.kind != T_EOF) {
@@ -1488,6 +1954,45 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
             ex   = true;
         }
 
+        if (eat_word(&p, "type")) {
+            if (p.cur.kind != T_IDENT) {
+                fail(&p, "expected a type name");
+
+                return nullptr;
+            }
+
+            char *tn = ident_text(&p);
+
+            advance(&p);
+
+            if (!expect_punct(&p, '=', "expected = after a type name")) {
+                return nullptr;
+            }
+
+            th_type *body = parse_type(&p, m);
+            th_type *name = ir_type_parse(m, tn);
+
+            if (!body || !name) {
+                fail(&p, "a type declaration needs a name and a definition");
+
+                return nullptr;
+            }
+
+            if (!ir_type_define(m, name, body)) {
+                fail(&p, "the type name is not a nominal type");
+
+                return nullptr;
+            }
+            continue;
+        }
+
+        if (eat_word(&p, "layout")) {
+            if (!parse_layout(&p, m)) {
+                return nullptr;
+            }
+            continue;
+        }
+
         if (eat_word(&p, "func")) {
             if (!parse_func(&p, m, link, c)) {
                 return nullptr;
@@ -1502,7 +2007,8 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
                 return nullptr;
             }
 
-            char *gn = ident_text(&p);
+            ir_span_t begun = here(&p);
+            char     *gn    = ident_text(&p);
 
             advance(&p);
 
@@ -1525,8 +2031,15 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
             }
             g->is_static = st;
             g->is_extern = ex;
+
+            if (!parse_init(&p, &g->has_init, &g->init, &g->init_f,
+                            &g->init_text, &g->init_is_float)) {
+                return nullptr;
+            }
             attach_comment(&p, &g->annots, c);
-            parse_meta(&p, m, &g->span, &g->origin, &g->annots);
+            g->span = through_prev(&p, begun);
+            parse_meta_in(&p, m, nullptr, &g->span, &g->origin,
+                          &g->annots);
             continue;
         }
 

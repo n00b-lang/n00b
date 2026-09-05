@@ -72,6 +72,32 @@ bool ir_op_is_terminator(ir_op_t op)
     return ir_opinfo_is_terminator(ir_op_info(op));
 }
 
+const char *ir_opdkind_name(ir_opdkind_t k)
+{
+    switch (k) {
+    case IR_OPD_VALUE:
+        return "value";
+    case IR_OPD_TYPE:
+        return "type";
+    case IR_OPD_NAME:
+        return "name";
+    case IR_OPD_BLOCK:
+        return "block";
+    case IR_OPD_DEFAULT_BLOCK:
+        return "default block";
+    case IR_OPD_CONST:
+        return "literal";
+    case IR_OPD_PHI_ARM:
+        return "phi arm";
+    case IR_OPD_SWITCH_ARM:
+        return "switch arm";
+    case IR_OPD_NAMED_ARG:
+        return "named argument";
+    default:
+        return "argument";
+    }
+}
+
 static ir_opdkind_t kind_of_char(char c)
 {
     switch (c) {

@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,17 +46,13 @@ void ir_sb_str(ir_sb *b, const char *s)
     }
 }
 
-void ir_sb_fmt(ir_sb *b, const char *fmt, ...)
+void ir_sb_vfmt(ir_sb *b, const char *fmt, va_list ap)
 {
-    va_list ap;
     va_list copy;
 
-    va_start(ap, fmt);
     va_copy(copy, ap);
 
     int n = vsnprintf(nullptr, 0, fmt, ap);
-
-    va_end(ap);
 
     if (n < 0 || !need(b, (size_t)n)) {
         va_end(copy);
@@ -65,6 +62,15 @@ void ir_sb_fmt(ir_sb *b, const char *fmt, ...)
     vsnprintf(b->p + b->len, (size_t)n + 1, fmt, copy);
     va_end(copy);
     b->len += (size_t)n;
+}
+
+void ir_sb_fmt(ir_sb *b, const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    ir_sb_vfmt(b, fmt, ap);
+    va_end(ap);
 }
 
 static void escape(ir_sb *b, const char *s)
@@ -124,4 +130,41 @@ char *ir_sb_take(ir_sb *b)
     b->cap = 0;
 
     return r;
+}
+
+void ir_sb_lit(ir_sb *b, ir_lit_t v)
+{
+    static const char HEX[] = "0123456789abcdef";
+    char              digits[sizeof(ir_uint_t) * CHAR_BIT];
+    size_t            n    = 0;
+    ir_uint_t         u    = v.mag;
+    unsigned          base = v.hex ? 16u : 10u;
+
+    if (v.neg && v.mag) {
+        ir_sb_str(b, "-");
+    }
+
+    if (v.hex) {
+        ir_sb_str(b, "0x");
+    }
+
+    do {
+        digits[n++] = HEX[(unsigned)(u % base)];
+        u /= base;
+    } while (u);
+
+    while (n) {
+        char c = digits[--n];
+
+        ir_sb_put(b, &c, 1);
+    }
+}
+
+char *ir_lit_text(ir_lit_t v)
+{
+    ir_sb b = {0};
+
+    ir_sb_lit(&b, v);
+
+    return ir_sb_take(&b);
 }

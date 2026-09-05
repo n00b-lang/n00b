@@ -271,7 +271,8 @@ static void test_rules_live_in_the_profile(void)
     fix         x  = setup(&ir_profile_synth, "int");
     ir_rules_t *rs = ir_rules_from_profile(x.ctx, &ir_profile_synth);
 
-    check("a profile supplies its rules", ir_rules_count(rs) == 3);
+    check("a profile supplies its rules",
+          ir_rules_count(rs) == ir_profile_synth.n_rules);
 
     ir_instr_t      *cat = instr(&x, IR_OP_ADD, "str", 2);
     ir_rule_result_t r   = ir_rule_apply(x.m, rs, cat, x.d);
@@ -372,11 +373,12 @@ static void test_registration_rejects_nonsense(void)
           !ir_rules_add(rs, (ir_rule_t){.name = "x", .op = IR_OP_INDEX,
                                         .match = IR_MATCH_CONSTRUCTOR,
                                         .type_rule = always_decline}));
-    check("an out-of-range opcode is refused",
-          !ir_rules_add(rs, (ir_rule_t){.name = "x", .op = IR_OP_COUNT,
-                                        .match = IR_MATCH_DEFAULT,
-                                        .type_rule = always_decline}));
-    check("nothing was registered", ir_rules_count(rs) == 0);
+    check("a rule for an extension opcode is accepted, since a profile "
+          "supplies both the opcode and its meaning",
+          ir_rules_add(rs, (ir_rule_t){.name = "x", .op = IR_OP_COUNT,
+                                       .match = IR_MATCH_DEFAULT,
+                                       .type_rule = always_decline}));
+    check("only that one was registered", ir_rules_count(rs) == 1);
 
     ir_ctx_free(ctx);
 }
@@ -553,6 +555,29 @@ static void test_extension_opcodes(void)
         check("and round-trips", o2 && !strcmp(out, o2));
         free(out);
         free(o2);
+
+        ir_block_t *b  = ir_block_entry(ir_func_find(m, "f"));
+        ir_rules_t *rs = ir_module_rules(m);
+        ir_match_t  how;
+
+        for (uint32_t k = 0; k < b->n_instrs; k++) {
+            ir_instr_t *ex = b->instrs[k];
+
+            if (!ir_op_is_extension(ex->op)) {
+                continue;
+            }
+
+            const ir_rule_t *rule = ir_rule_resolve(m, rs, ex, &how);
+
+            check("a rule the profile supplied resolves for its own opcode",
+                  rule != nullptr);
+            check("and it is the profile's rule, not a built-in",
+                  rule && !strncmp(rule->name, "synth.", 6));
+
+            ir_rule_result_t got = ir_rule_apply(m, rs, ex, d);
+
+            check("and applying it accepts", got.verdict == IR_RULE_ACCEPT);
+        }
     }
 
     check("every extension opcode is namespaced to its profile",

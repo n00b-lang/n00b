@@ -220,12 +220,123 @@ static bool name(th_ctx *ctx, th_buf *b, const char *s, size_t n)
     return str(b, s, n);
 }
 
+#define PM_DEAD ((const th_type *)(uintptr_t)1)
+
 typedef struct {
-    const th_type *stack[TH_MAX_DEPTH];
-    size_t         depth;
-    bool           erase;
-    th_ctx        *ctx;
-    bool           ok;
+    const th_type **key;
+    size_t         *val;
+    size_t          cap;
+    size_t          used;
+    const th_type **stack;
+    size_t          scap;
+    size_t          depth;
+} th_path;
+
+static size_t pm_slot(const th_type **key, size_t cap, const th_type *t)
+{
+    size_t h = (size_t)((uintptr_t)t >> 4) * 11400714819323198485u;
+    size_t i = h & (cap - 1);
+
+    while (key[i] && key[i] != t) {
+        i = (i + 1) & (cap - 1);
+    }
+
+    return i;
+}
+
+static bool pm_room(th_path *p)
+{
+    if (p->cap && (p->used + 1) * 2 <= p->cap) {
+        return true;
+    }
+
+    size_t          cap = p->cap ? p->cap * 2 : 64;
+    const th_type **key = calloc(cap, sizeof(const th_type *));
+    size_t         *val = calloc(cap, sizeof(size_t));
+
+    if (!key || !val) {
+        free(key);
+        free(val);
+
+        return false;
+    }
+
+    for (size_t i = 0; i < p->depth; i++) {
+        size_t at = pm_slot(key, cap, p->stack[i]);
+
+        key[at] = p->stack[i];
+        val[at] = i;
+    }
+    free(p->key);
+    free(p->val);
+    p->key  = key;
+    p->val  = val;
+    p->cap  = cap;
+    p->used = p->depth;
+
+    return true;
+}
+
+static size_t pm_find(const th_path *p, const th_type *t)
+{
+    if (!p->cap) {
+        return SIZE_MAX;
+    }
+
+    size_t at = pm_slot(p->key, p->cap, t);
+
+    return p->key[at] == t ? p->val[at] : SIZE_MAX;
+}
+
+static bool pm_push(th_path *p, const th_type *t)
+{
+    if (!pm_room(p)) {
+        return false;
+    }
+
+    if (p->depth + 1 > p->scap) {
+        size_t          n = p->scap ? p->scap * 2 : 64;
+        const th_type **q = realloc(p->stack, n * sizeof(const th_type *));
+
+        if (!q) {
+            return false;
+        }
+        p->stack = q;
+        p->scap  = n;
+    }
+
+    size_t at = pm_slot(p->key, p->cap, t);
+
+    p->key[at]          = t;
+    p->val[at]          = p->depth;
+    p->stack[p->depth++] = t;
+    p->used++;
+
+    return true;
+}
+
+static void pm_pop(th_path *p)
+{
+    const th_type *t  = p->stack[--p->depth];
+    size_t         at = pm_slot(p->key, p->cap, t);
+
+    if (p->key[at] == t) {
+        p->key[at] = PM_DEAD;
+    }
+}
+
+static void pm_free(th_path *p)
+{
+    free(p->key);
+    free(p->val);
+    free(p->stack);
+}
+
+typedef struct {
+    th_path  path;
+    bool     erase;
+    th_ctx  *ctx;
+    bool     ok;
 } th_enc;
 
 static void enc_node(th_enc *e, th_buf *b, const th_type *t);
@@ -444,32 +555,29 @@ static void enc_node(th_enc *e, th_buf *b, const th_type *t)
         return;
     }
 
-    for (size_t i = 0; i < e->depth; i++) {
-        if (e->stack[i] == t) {
-            e->ok &= u8(b, 0xFE) && u64(b, e->depth - i);
+    size_t back = pm_find(&e->path, t);
 
-            return;
-        }
-    }
-
-    if (e->depth >= TH_MAX_DEPTH) {
-        e->ok &= u8(b, 0xFD);
+    if (back != SIZE_MAX) {
+        e->ok &= u8(b, 0xFE) && u64(b, e->path.depth - back);
 
         return;
     }
 
-    e->stack[e->depth++] = t;
+    if (!pm_push(&e->path, t)) {
+        e->ok = false;
+
+        return;
+    }
     enc_body(e, b, t);
-    e->depth--;
+    pm_pop(&e->path);
 }
 
 typedef struct {
-    th_type      **seen;
-    size_t         n;
-    size_t         cap;
-    const th_type *stack[TH_MAX_DEPTH];
-    size_t         depth;
-    th_ctx        *ctx;
+    th_type **seen;
+    size_t    n;
+    size_t    cap;
+    th_path   path;
+    th_ctx   *ctx;
 } th_norm;
 
 static void norm_walk(th_norm *s, th_type *t);
@@ -479,6 +587,7 @@ void th_erase_encode(th_ctx *ctx, const th_type *t, th_buf *out)
     th_enc e = {.ctx = ctx, .erase = true, .ok = true};
 
     enc_node(&e, out, t);
+    pm_free(&e.path);
 }
 
 void th_full_encode(th_ctx *ctx, const th_type *t, th_buf *out)
@@ -486,6 +595,7 @@ void th_full_encode(th_ctx *ctx, const th_type *t, th_buf *out)
     th_enc e = {.ctx = ctx, .ok = true};
 
     enc_node(&e, out, t);
+    pm_free(&e.path);
 }
 
 static void norm_children_sum(th_norm *s, th_type *t)
@@ -559,16 +669,13 @@ static void norm_walk(th_norm *s, th_type *t)
         return;
     }
 
-    for (size_t i = 0; i < s->depth; i++) {
-        if (s->stack[i] == t) {
-            return;
-        }
-    }
-
-    if (s->depth >= TH_MAX_DEPTH) {
+    if (pm_find(&s->path, t) != SIZE_MAX) {
         return;
     }
-    s->stack[s->depth++] = t;
+
+    if (!pm_push(&s->path, t)) {
+        return;
+    }
 
     switch (t->kind) {
     case TH_VAR:
@@ -654,7 +761,7 @@ static void norm_walk(th_norm *s, th_type *t)
     }
 
 done:
-    s->depth--;
+    pm_pop(&s->path);
 }
 
 void th_normalize(th_type *t)
@@ -664,6 +771,7 @@ void th_normalize(th_type *t)
 
     norm_walk(&s, t);
     free(s.seen);
+    pm_free(&s.path);
 }
 
 bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
@@ -674,6 +782,7 @@ bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
     th_enc e = {.ctx = ctx, .ok = true};
 
     enc_node(&e, &ctx->scratch, t);
+    pm_free(&e.path);
 
     if (!e.ok) {
         return false;

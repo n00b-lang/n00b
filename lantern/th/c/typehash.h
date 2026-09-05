@@ -6,7 +6,6 @@
 #include <stdint.h>
 
 #define TH_VERSION       0
-#define TH_MAX_DEPTH     256
 #define TH_RESERVED      "__ty."
 #define TH_TUPLE         "__ty.tuple"
 #define TH_UNTYPED       "__ty.untyped"
@@ -119,6 +118,8 @@ th_type *th_tuple(th_ctx *ctx, th_type *const *elems, size_t n);
 th_type *th_parse(th_ctx *ctx, const char *src, th_error *err);
 th_type *th_parse_prefix(th_ctx *ctx, const char *src, size_t *consumed,
                          th_error *err);
+th_type *th_parse_prefix_n(th_ctx *ctx, const char *src, size_t len,
+                           size_t *consumed, th_error *err);
 
 void     th_normalize(th_type *type);
 bool     th_encode(th_ctx *ctx, th_type *type, const uint8_t **out,

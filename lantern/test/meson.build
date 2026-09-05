@@ -34,6 +34,78 @@ ir_rule_test = executable(
 
 test('ir-rules', ir_rule_test)
 
+ir_typing_test = executable(
+    'ir_typing_test',
+    'ir_typing_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-typing', ir_typing_test)
+
+ir_verify_test = executable(
+    'ir_verify_test',
+    'ir_verify_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-verify', ir_verify_test)
+
+ir_grammar_test = executable(
+    'ir_grammar_test',
+    'ir_grammar_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-grammar', ir_grammar_test)
+
+ir_layout_test = executable(
+    'ir_layout_test',
+    'ir_layout_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-layout', ir_layout_test)
+
+ir_promote_test = executable(
+    'ir_promote_test',
+    'ir_promote_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-promote', ir_promote_test)
+
+ir_structure_test = executable(
+    'ir_structure_test',
+    'ir_structure_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-structure', ir_structure_test)
+
+ir_cli_test = executable(
+    'ir_cli_test',
+    'ir_cli_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-cli', ir_cli_test)
+
+ir_pdg_test = executable(
+    'ir_pdg_test',
+    'ir_pdg_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-pdg', ir_pdg_test)
+
+ir_scale_test = executable(
+    'ir_scale_test',
+    'ir_scale_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-scale', ir_scale_test)
+
 ir_diag_test = executable(
     'ir_diag_test',
     'ir_diag_test.c',
@@ -54,6 +126,21 @@ test(
         meson.project_source_root(),
         ir_diag_test,
         ir_text_test,
+        ir_typing_test,
+        ir_verify_test,
+        ir_layout_test,
+        ir_promote_test,
+        ir_structure_test,
+        ir_pdg_test,
     ],
-    depends: [ir_diag_test, ir_text_test],
+    depends: [
+        ir_diag_test,
+        ir_text_test,
+        ir_typing_test,
+        ir_verify_test,
+        ir_layout_test,
+        ir_promote_test,
+        ir_structure_test,
+        ir_pdg_test,
+    ],
 )

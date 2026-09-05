@@ -22,3 +22,5 @@ error[IR-E0004]: annotation key is not namespaced
   help: namespace it with the profile
       + bce.acc
 
+error[IR-E0001]: internal error
+

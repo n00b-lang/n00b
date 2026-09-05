@@ -18,3 +18,5 @@ __pycache__/
 *.dylib
 
 .DS_Store
+*.profraw
+*.profdata

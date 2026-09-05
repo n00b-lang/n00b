@@ -157,18 +157,22 @@ static void test_emit(void)
     ir_diag_message(dg, d, "custom wording");
     check("the message is overridable", !strcmp(dg->message, "custom wording"));
 
-    check("a diagnostic without a primary span is refused",
-          beg(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, "x") == nullptr);
+    ir_diag_t *spanless = beg(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, "x");
+
+    check("a diagnostic with no span is still recorded, not dropped",
+          spanless != nullptr);
+    check("and its span is unknown, for the verifier to flag",
+          spanless && !ir_span_known(spanless->primary.span));
 
     beg(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2), nullptr);
-    check("errors and warnings accumulate", ir_diags_count(d) == 2);
+    check("errors and warnings accumulate", ir_diags_count(d) == 3);
     check("warnings are counted separately",
           ir_diags_count_of(d, IR_SEV_WARNING) == 1
-              && ir_diags_count_of(d, IR_SEV_ERROR) == 1);
+              && ir_diags_count_of(d, IR_SEV_ERROR) == 2);
 
     beg(d, IR_DIAG_OUT_OF_MEMORY, at(0, 1, 1, 1, 2), nullptr);
     check("a fatal is recorded as fatal", ir_diags_fatal(d));
-    check("accumulation continued up to the fatal", ir_diags_count(d) == 3);
+    check("accumulation continued up to the fatal", ir_diags_count(d) == 4);
 
     ir_ctx_free(ctx);
 }
@@ -184,7 +188,16 @@ static void test_notes(void)
     check("a help with nothing to attach to is refused",
           !note(d, IR_SEV_HELP, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
                         "orphan"));
-    check("nothing was recorded", ir_diags_count(d) == 0);
+    check("neither is recorded as a note", ir_diags_count(d) == 2);
+
+    for (uint32_t i = 0; i < ir_diags_count(d); i++) {
+        const ir_diag_t *dg = ir_diags_at(d, i);
+
+        produced[dg->code] = true;
+        check("the orphan is reported rather than dropped in silence",
+              dg->code == IR_DIAG_ORPHAN_NOTE
+                  && dg->severity == IR_SEV_ERROR);
+    }
 
     beg(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), "anchor");
 
@@ -736,6 +749,16 @@ static void test_rendering(const char *golden_dir)
     check("without a source provider it still names locations",
           nc && strstr(nc, "sum.bce:2:3"));
     free(nc);
+
+    char *spanless = ir_diags_render_text(d, &r);
+    char *entry    = strstr(spanless, "error[IR-E0001]: internal error");
+
+    check("a span-less diagnostic still renders", entry != nullptr);
+    check("and carries no invented location",
+          entry && !strstr(entry, "-->"));
+    check("and sorts after the located ones",
+          entry && strstr(spanless, "sum.bce:2:3") < entry);
+    free(spanless);
 
     ir_ctx_free(ctx);
 }

@@ -49,8 +49,13 @@ struct ir_rule_t {
     void            *state;
 };
 
+ir_rules_t *ir_module_rules(ir_module_t *m);
+void        ir_module_set_rules(ir_module_t *m, ir_rules_t *rs);
+
 ir_rules_t *ir_rules_new(ir_ctx_t *ctx);
 ir_rules_t *ir_rules_from_profile(ir_ctx_t *ctx, const ir_profile_t *p);
+bool        ir_rules_add_defaults(ir_rules_t *rs);
+size_t      ir_default_rule_count(void);
 bool        ir_rules_add(ir_rules_t *rs, ir_rule_t rule);
 size_t      ir_rules_count(const ir_rules_t *rs);
 

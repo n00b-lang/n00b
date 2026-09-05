@@ -26,6 +26,17 @@ void *ir_alloc(ir_ctx_t *ctx, size_t n)
     return r;
 }
 
+size_t ir_ctx_bytes(const ir_ctx_t *ctx)
+{
+    size_t n = 0;
+
+    for (const ir_chunk *c = ctx ? ctx->chunks : nullptr; c; c = c->next) {
+        n += c->cap;
+    }
+
+    return n;
+}
+
 char *ir_strdup(ir_ctx_t *ctx, const char *s)
 {
     if (!s) {
@@ -173,6 +184,10 @@ void ir_module_invalidate(ir_module_t *m, ir_props_t p)
         f->props &= (ir_props_t) ~(uint16_t)p;
         ir_annot_invalidate(&f->annots, p);
 
+        if (p & IR_PROP_STRUCTURED) {
+            f->regions = nullptr;
+        }
+
         for (uint32_t b = 0; b < f->n_blocks; b++) {
             ir_block_t *bb = f->blocks[b];
 
@@ -190,6 +205,30 @@ void ir_module_invalidate(ir_module_t *m, ir_props_t p)
 
     for (size_t i = 0; i < m->n_globals; i++) {
         ir_annot_invalidate(&m->globals[i]->annots, p);
+    }
+}
+
+void ir_module_set_profile(ir_module_t *m, const ir_profile_t *p)
+{
+    if (!m || !p) {
+        return;
+    }
+
+    m->profile       = p;
+    m->rules         = nullptr;
+    m->scalar_hashes = nullptr;
+    m->scalars_ready = false;
+}
+
+ir_span_t ir_module_span(const ir_module_t *m)
+{
+    return m ? m->span : IR_SPAN_UNKNOWN;
+}
+
+void ir_module_set_span(ir_module_t *m, ir_span_t s)
+{
+    if (m) {
+        m->span = s;
     }
 }
 
@@ -220,27 +259,125 @@ const char *ir_prop_name(ir_props_t one)
     }
 }
 
+static size_t type_slot(ir_module_t *m, uint64_t h)
+{
+    size_t mask = m->type_index_cap - 1;
+    size_t i    = (size_t)h & mask;
+
+    while (m->type_index[i]) {
+        if (m->types[m->type_index[i] - 1].hash == h) {
+            break;
+        }
+        i = (i + 1) & mask;
+    }
+
+    return i;
+}
+
+static void type_index_grow(ir_module_t *m)
+{
+    size_t want = m->type_index_cap ? m->type_index_cap : 64;
+
+    while ((m->n_types + 1) * 2 > want) {
+        want *= 2;
+    }
+
+    if (want == m->type_index_cap && m->type_index) {
+        return;
+    }
+
+    m->type_index     = ir_alloc(m->ctx, want * sizeof(uint32_t));
+    m->type_index_cap = want;
+
+    for (size_t k = 0; k < m->n_types; k++) {
+        m->type_index[type_slot(m, m->types[k].hash)] = (uint32_t)(k + 1);
+    }
+}
+
+static ir_typeslot_t *type_find(ir_module_t *m, uint64_t h)
+{
+    if (!m->type_index_cap) {
+        return nullptr;
+    }
+
+    uint32_t at = m->type_index[type_slot(m, h)];
+
+    return at ? &m->types[at - 1] : nullptr;
+}
+
 th_type *ir_type_intern(ir_module_t *m, th_type *t)
 {
     if (!m || !t) {
         return nullptr;
     }
 
-    uint64_t h = th_hash(m->ctx->types, t);
+    uint64_t       h    = ir_type_id(m, t);
+    ir_typeslot_t *slot = type_find(m, h);
 
-    for (size_t i = 0; i < m->n_types; i++) {
-        if (m->types[i].hash == h) {
-            return m->types[i].type;
-        }
+    if (slot) {
+        return slot->type;
     }
 
     m->types = ir_grow(m->ctx, m->types, &m->cap_types, m->n_types + 1,
                        sizeof(ir_typeslot_t));
     m->types[m->n_types].hash = h;
     m->types[m->n_types].type = t;
+    m->types[m->n_types].def  = nullptr;
     m->n_types++;
+    type_index_grow(m);
+    m->type_index[type_slot(m, h)] = (uint32_t)m->n_types;
 
     return t;
+}
+
+ir_typeslot_t *ir_type_slot(ir_module_t *m, th_type *t)
+{
+    if (!m || !t) {
+        return nullptr;
+    }
+    ir_type_intern(m, t);
+
+    return type_find(m, ir_type_id(m, t));
+}
+
+ir_typeslot_t *ir_type_slot_at(ir_module_t *m, size_t i)
+{
+    return m && i < m->n_types ? &m->types[i] : nullptr;
+}
+
+th_type *ir_type_at(ir_module_t *m, size_t i)
+{
+    return m && i < m->n_types ? m->types[i].type : nullptr;
+}
+
+bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
+{
+    if (!m || !named || !def || th_kind_of(named) != TH_NAMED) {
+        return false;
+    }
+
+    ir_type_intern(m, named);
+    ir_type_intern(m, def);
+
+    ir_typeslot_t *slot = type_find(m, th_hash(m->ctx->types, named));
+
+    if (!slot) {
+        return false;
+    }
+    slot->def = def;
+
+    return true;
+}
+
+th_type *ir_type_definition(ir_module_t *m, th_type *named)
+{
+    if (!m || !named || th_kind_of(named) != TH_NAMED) {
+        return nullptr;
+    }
+
+    ir_typeslot_t *slot = type_find(m, th_hash(m->ctx->types, named));
+
+    return slot ? slot->def : nullptr;
 }
 
 th_type *ir_type_parse(ir_module_t *m, const char *text)
@@ -255,18 +392,68 @@ th_type *ir_type_parse(ir_module_t *m, const char *text)
     return t ? ir_type_intern(m, t) : nullptr;
 }
 
+static size_t id_slot(th_type **key, size_t cap, const th_type *t)
+{
+    size_t h = (size_t)((uintptr_t)t >> 4) * 11400714819323198485u;
+    size_t i = h & (cap - 1);
+
+    while (key[i] && key[i] != t) {
+        i = (i + 1) & (cap - 1);
+    }
+
+    return i;
+}
+
 uint64_t ir_type_id(ir_module_t *m, th_type *t)
 {
-    return m && t ? th_hash(m->ctx->types, t) : 0;
+    if (!m || !t) {
+        return 0;
+    }
+
+    if ((m->id_n + 1) * 2 > m->id_cap) {
+        size_t    cap = m->id_cap ? m->id_cap * 2 : 64;
+        th_type **key = ir_alloc(m->ctx, cap * sizeof(th_type *));
+        uint64_t *val = ir_alloc(m->ctx, cap * sizeof(uint64_t));
+
+        if (!key || !val) {
+            return th_hash(m->ctx->types, t);
+        }
+
+        for (size_t i = 0; i < m->id_cap; i++) {
+            if (m->id_key[i]) {
+                size_t at = id_slot(key, cap, m->id_key[i]);
+
+                key[at] = m->id_key[i];
+                val[at] = m->id_val[i];
+            }
+        }
+        m->id_key = key;
+        m->id_val = val;
+        m->id_cap = cap;
+    }
+
+    size_t at = id_slot(m->id_key, m->id_cap, t);
+
+    if (!m->id_key[at]) {
+        m->id_key[at] = t;
+        m->id_val[at] = th_hash(m->ctx->types, t);
+        m->id_n++;
+    }
+
+    return m->id_val[at];
 }
 
 bool ir_type_eq(ir_module_t *m, th_type *a, th_type *b)
 {
-    if (!m || !a || !b) {
-        return a == b;
+    if (a == b) {
+        return true;
     }
 
-    return th_hash(m->ctx->types, a) == th_hash(m->ctx->types, b);
+    if (!m || !a || !b) {
+        return false;
+    }
+
+    return ir_type_id(m, a) == ir_type_id(m, b);
 }
 
 size_t ir_type_count(const ir_module_t *m)

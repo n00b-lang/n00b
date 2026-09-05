@@ -11,6 +11,7 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
                              const ir_profile_t *const *profiles,
                              size_t n_profiles, ir_diags_t *d);
 
-bool ir_origin_kind_from_name(const char *s, ir_origin_kind_t *out);
+bool        ir_origin_kind_from_name(const char *s, ir_origin_kind_t *out);
+const char *ir_origin_kind_name(ir_origin_kind_t k);
 
 #endif

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ir/ir.h"
@@ -137,6 +138,125 @@ static void test_types(void)
 
     check("alpha-equivalent types are one type", v1 == v2);
 
+    bool found_a = false;
+    bool found_c = false;
+
+    for (size_t i = 0; i < ir_type_count(m); i++) {
+        found_a = found_a || ir_type_at(m, i) == a;
+        found_c = found_c || ir_type_at(m, i) == c;
+    }
+    check("the type table can be walked, and holds what was interned",
+          found_a && found_c);
+    check("and walking past the end gives nothing",
+          ir_type_at(m, ir_type_count(m)) == nullptr);
+
+    ir_ctx_free(ctx);
+}
+
+static char *wide(const char *open, const char *item, const char *sep,
+                  const char *close, uint32_t n, bool number)
+{
+    size_t room = (size_t)n * 32 + strlen(open) + strlen(close) + 8;
+    char  *s    = malloc(room);
+    size_t at   = (size_t)snprintf(s, room, "%s", open);
+
+    for (uint32_t i = 0; i < n; i++) {
+        at += (size_t)snprintf(s + at, room - at, "%s", i ? sep : "");
+        at += number ? (size_t)snprintf(s + at, room - at, item, i)
+                     : (size_t)snprintf(s + at, room - at, "%s", item);
+    }
+    snprintf(s + at, room - at, "%s", close);
+
+    return s;
+}
+
+static void test_a_type_has_no_size_limit(void)
+{
+    ir_ctx_t    *ctx = ir_ctx_new();
+    ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "test");
+
+    struct {
+        const char *what;
+        const char *open;
+        const char *item;
+        const char *sep;
+        const char *close;
+        bool        number;
+    } shape[] = {
+        {"record fields", "(", "f%u: i32", ", ", ")", true},
+        {"tuple elements", "t(", "i32", ", ", ")", false},
+        {"function parameters", "(", "i32", ", ", ") -> i32", false},
+        {"keyword parameters", "(", "k%u: i32", ", ", ") -> i32", true},
+        {"union arms", "", "N%u", " | ", "", true},
+        {"forall binders", "forall[", "`v%u", ",", "] i32", true},
+        {"free type variables", "t(", "`v%u", ", ", ")", true},
+    };
+
+    for (size_t i = 0; i < sizeof(shape) / sizeof(shape[0]); i++) {
+        char *s = wide(shape[i].open, shape[i].item, shape[i].sep,
+                       shape[i].close, 300, shape[i].number);
+        th_type *t = ir_type_parse(m, s);
+
+        if (!t) {
+            printf("FAIL  300 %s do not parse\n  %.60s...\n", shape[i].what,
+                   s);
+            fails++;
+            free(s);
+            continue;
+        }
+
+        const char *back  = th_print(ir_ctx_types(ctx), t);
+        th_type    *again = back ? ir_type_parse(m, back) : nullptr;
+
+        if (again != t) {
+            printf("FAIL  a type of 300 %s does not survive printing\n",
+                   shape[i].what);
+            fails++;
+        }
+        free(s);
+    }
+    ir_ctx_free(ctx);
+}
+
+static char *nested(uint32_t d, const char *leaf)
+{
+    size_t room = (size_t)d * 6 + 32;
+    char  *s    = malloc(room);
+    size_t at   = 0;
+
+    for (uint32_t i = 0; i < d; i++) {
+        at += (size_t)snprintf(s + at, room - at, "ptr[");
+    }
+    at += (size_t)snprintf(s + at, room - at, "%s", leaf);
+
+    for (uint32_t i = 0; i < d; i++) {
+        at += (size_t)snprintf(s + at, room - at, "]");
+    }
+
+    return s;
+}
+
+static void test_identity_is_the_whole_type(void)
+{
+    ir_ctx_t    *ctx = ir_ctx_new();
+    ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "test");
+    char        *a   = nested(400, "i32");
+    char        *b   = nested(400, "i64");
+    th_type     *ta  = ir_type_parse(m, a);
+    th_type     *tb  = ir_type_parse(m, b);
+
+    check("a deeply nested type parses", ta && tb);
+    check("two types that differ only deep down are two types",
+          ta != tb && !ir_type_eq(m, ta, tb));
+    free(a);
+    free(b);
+
+    char *too_deep = nested(100000, "i32");
+
+    check("and one deeper than the parser will descend is refused, not "
+          "truncated and not a crash",
+          ir_type_parse(m, too_deep) == nullptr);
+    free(too_deep);
     ir_ctx_free(ctx);
 }
 
@@ -461,11 +581,11 @@ static void test_node_annots(void)
     for (size_t i = 0; i < 6; i++) {
         ir_annot_set(ctx, maps[i],
                      (ir_annot_t){.key = "ir.mark", .kind = IR_ANNOT_INT,
-                                  .i = (int64_t)i});
+                                  .i = ir_lit_of((ir_int_t)i)});
 
         ir_annot_t *got = ir_annot_get(maps[i], "ir.mark");
 
-        if (!got || got->i != (int64_t)i) {
+        if (!got || ir_lit_signed(got->i) != (ir_int_t)i) {
             printf("FAIL  %s carries an annotation map\n", names[i]);
             fails++;
         }
@@ -479,6 +599,8 @@ int main(void)
     test_ops();
     test_props();
     test_types();
+    test_a_type_has_no_size_limit();
+    test_identity_is_the_whole_type();
     test_machine_classes();
     test_second_profile();
     test_files_and_spans();

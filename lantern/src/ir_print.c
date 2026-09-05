@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "ir_internal.h"
+#include "ir_internal.h"
+#include "ir/layout.h"
 #include "ir/text.h"
 
 const char *ir_type_text(ir_module_t *m, th_type *t)
@@ -21,16 +23,18 @@ static void put_type(ir_sb *b, ir_module_t *m, th_type *t)
     ir_sb_str(b, ir_type_text(m, t));
 }
 
-static void put_span(ir_sb *b, ir_span_t s)
+static void put_span(ir_sb *b, ir_module_t *m, ir_span_t s)
 {
-    if (!ir_span_known(s)) {
+    (void)m;
+
+    if (!ir_span_known(s) || s.implied) {
         return;
     }
     ir_sb_fmt(b, " !loc(%d, %u, %u, %u, %u, %u, %u)", s.file, s.start_byte,
               s.end_byte, s.start_line, s.start_col, s.end_line, s.end_col);
 }
 
-static const char *origin_kind_name(ir_origin_kind_t k)
+const char *ir_origin_kind_name(ir_origin_kind_t k)
 {
     switch (k) {
     case IR_ORIGIN_SOURCE:
@@ -73,7 +77,7 @@ bool ir_origin_kind_from_name(const char *s, ir_origin_kind_t *out)
 static void put_origin(ir_sb *b, const ir_origin_t *o)
 {
     for (; o; o = o->parent) {
-        ir_sb_fmt(b, " !origin(%s, ", origin_kind_name(o->kind));
+        ir_sb_fmt(b, " !origin(%s, ", ir_origin_kind_name(o->kind));
 
         if (o->agent) {
             ir_sb_quote(b, o->agent);
@@ -103,7 +107,7 @@ static void put_annots(ir_sb *b, ir_module_t *m, ir_annots_t *a)
             ir_sb_str(b, an->b ? "true" : "false");
             break;
         case IR_ANNOT_INT:
-            ir_sb_fmt(b, "%" PRId64, an->i);
+            ir_sb_lit(b, an->i);
             break;
         case IR_ANNOT_STR:
             ir_sb_quote(b, an->s ? an->s : "");
@@ -187,10 +191,15 @@ static void put_operand(ir_sb *b, ir_module_t *m, const ir_operand_t *o)
 
     case IR_OPD_CONST:
         if (o->lit.is_float) {
-            ir_sb_fmt(b, "%.17g", o->lit.f);
+            if (o->lit.text) {
+                ir_sb_str(b, o->lit.text);
+            }
+            else {
+                ir_sb_fmt(b, "%.17g", o->lit.f);
+            }
         }
         else {
-            ir_sb_fmt(b, "%" PRId64, o->lit.i);
+            ir_sb_lit(b, o->lit.i);
         }
         break;
 
@@ -217,7 +226,9 @@ static void put_operand(ir_sb *b, ir_module_t *m, const ir_operand_t *o)
         break;
 
     case IR_OPD_SWITCH_ARM:
-        ir_sb_fmt(b, "[%" PRId64 ": %s]", o->arm.value,
+        ir_sb_str(b, "[");
+        ir_sb_lit(b, o->arm.value);
+        ir_sb_fmt(b, ": %s]",
                   o->arm.block ? o->arm.block->name : "?");
         break;
 
@@ -226,10 +237,33 @@ static void put_operand(ir_sb *b, ir_module_t *m, const ir_operand_t *o)
     }
 }
 
+static void put_init(ir_sb *b, bool has, bool is_float, const char *text,
+                     double f, ir_lit_t lit)
+{
+    if (!has) {
+        return;
+    }
+    ir_sb_str(b, " = ");
+
+    if (is_float) {
+        if (text) {
+            ir_sb_str(b, text);
+        }
+        else {
+            ir_sb_fmt(b, "%.17g", f);
+        }
+
+        return;
+    }
+    ir_sb_lit(b, lit);
+}
+
 static void put_local_slot(ir_sb *b, ir_module_t *m, const ir_local_t *l)
 {
     ir_sb_fmt(b, "$%s: ", l->name);
     put_type(b, m, l->type);
+    put_init(b, l->has_init, l->init_is_float, l->init_text, l->init_f,
+             l->init);
 }
 
 static void put_instr(ir_sb *b, ir_module_t *m, const ir_instr_t *in)
@@ -257,7 +291,7 @@ static void put_instr(ir_sb *b, ir_module_t *m, const ir_instr_t *in)
         put_operand(b, m, &in->operands[i]);
     }
 
-    put_span(b, in->span);
+    put_span(b, m, in->span);
     put_origin(b, in->origin);
     put_annots(b, m, (ir_annots_t *)&in->annots);
     ir_sb_str(b, "\n");
@@ -306,7 +340,7 @@ static void put_func(ir_sb *b, ir_module_t *m, ir_func_t *f)
     }
     ir_sb_str(b, ") -> ");
     put_type(b, m, th_func_ret(f->type));
-    put_span(b, f->span);
+    put_span(b, m, f->span);
     put_origin(b, f->origin);
     put_annots(b, m, &f->annots);
     ir_sb_str(b, " {\n");
@@ -315,7 +349,7 @@ static void put_func(ir_sb *b, ir_module_t *m, ir_func_t *f)
         put_comment(b, &f->locals[i]->annots, "    ");
         ir_sb_str(b, "    local ");
         put_local_slot(b, m, f->locals[i]);
-        put_span(b, f->locals[i]->span);
+        put_span(b, m, f->locals[i]->span);
         put_annots(b, m, &f->locals[i]->annots);
         ir_sb_str(b, "\n");
     }
@@ -332,7 +366,7 @@ static void put_func(ir_sb *b, ir_module_t *m, ir_func_t *f)
         }
         put_comment(b, &bb->annots, "    ");
         ir_sb_fmt(b, "    block %s:", bb->name);
-        put_span(b, bb->span);
+        put_span(b, m, bb->span);
         put_origin(b, bb->origin);
         put_annots(b, m, &bb->annots);
         ir_sb_str(b, "\n");
@@ -342,6 +376,115 @@ static void put_func(ir_sb *b, ir_module_t *m, ir_func_t *f)
         }
     }
     ir_sb_str(b, "  }\n");
+}
+
+static bool put_layout_val(ir_sb *b, ir_module_t *m,
+                           const ir_layout_val_t *v)
+{
+    if (v->state == IR_LAYOUT_PINNED) {
+        ir_sb_fmt(b, "%llu", (unsigned long long)v->value);
+
+        return true;
+    }
+
+    if (v->state == IR_LAYOUT_SYMBOLIC) {
+        ir_sb_fmt(b, "%s(%s", ir_symkind_name(v->sym), ir_type_text(m, v->of));
+
+        if (v->sym == IR_SYM_OFFSETOF) {
+            ir_sb_str(b, ", ");
+            ir_sb_quote(b, v->member ? v->member : "");
+        }
+        ir_sb_str(b, ")");
+
+        return true;
+    }
+
+    return false;
+}
+
+static bool authored_anywhere(const ir_descriptor_t *d)
+{
+    if (d->size.authored || d->align.authored || d->stride.authored) {
+        return true;
+    }
+
+    for (uint32_t i = 0; i < d->n_members; i++) {
+        if (d->members[i].bit_offset.authored) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void put_layouts(ir_sb *b, ir_module_t *m)
+{
+    for (size_t i = 0; i < ir_type_count(m); i++) {
+        ir_typeslot_t   *slot = ir_type_slot_at(m, i);
+        th_type         *t    = slot->type;
+        ir_descriptor_t *d    = nullptr;
+
+        for (size_t k = 0; k < slot->n_descs; k++) {
+            const char *have = slot->descs[k].target;
+            const char *want = ir_module_target(m);
+
+            if (have && want ? !strcmp(have, want) : have == want) {
+                d = &slot->descs[k].d;
+            }
+        }
+
+        if (!d || !authored_anywhere(d)) {
+            continue;
+        }
+
+        ir_sb_fmt(b, "\n  layout %s {\n", ir_type_text(m, t));
+
+        if (d->size.authored) {
+            ir_sb_str(b, "    size = ");
+            put_layout_val(b, m, &d->size);
+            ir_sb_str(b, "\n");
+        }
+
+        if (d->align.authored) {
+            ir_sb_str(b, "    align = ");
+            put_layout_val(b, m, &d->align);
+            ir_sb_str(b, "\n");
+        }
+
+        if (d->stride.authored) {
+            ir_sb_str(b, "    stride = ");
+            put_layout_val(b, m, &d->stride);
+            ir_sb_str(b, "\n");
+        }
+
+        for (uint32_t k = 0; k < d->n_members; k++) {
+            const ir_member_layout_t *ml = &d->members[k];
+
+            if (!ml->bit_offset.authored) {
+                continue;
+            }
+            ir_sb_fmt(b, "    %s @ bits %llu..%llu\n", ml->name,
+                      (unsigned long long)ml->bit_offset.value,
+                      (unsigned long long)(ml->bit_offset.value
+                                           + ml->bit_width.value));
+        }
+        ir_sb_str(b, "  }\n");
+    }
+}
+
+static void put_typedefs(ir_sb *b, ir_module_t *m)
+{
+    for (size_t i = 0; i < ir_type_count(m); i++) {
+        ir_typeslot_t *slot = ir_type_slot_at(m, i);
+        th_type       *t    = slot->type;
+        th_type       *def  = slot->def;
+
+        if (!def) {
+            continue;
+        }
+        ir_sb_fmt(b, "\n  type %s = %s\n", ir_type_text(m, t),
+                  ir_type_text(m, def));
+    }
 }
 
 char *ir_module_print(ir_module_t *m)
@@ -378,6 +521,9 @@ char *ir_module_print(ir_module_t *m)
         }
     }
 
+    put_typedefs(&b, m);
+    put_layouts(&b, m);
+
     for (size_t i = 0; i < ir_global_count(m); i++) {
         ir_global_t *g = ir_global_at(m, i);
 
@@ -394,7 +540,9 @@ char *ir_module_print(ir_module_t *m)
         }
         ir_sb_fmt(&b, "global @%s: ", g->name);
         put_type(&b, m, g->type);
-        put_span(&b, g->span);
+        put_init(&b, g->has_init, g->init_is_float, g->init_text, g->init_f,
+                 g->init);
+        put_span(&b, m, g->span);
         put_origin(&b, g->origin);
         put_annots(&b, m, &g->annots);
         ir_sb_str(&b, "\n");

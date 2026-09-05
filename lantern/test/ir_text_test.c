@@ -2,7 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ir/layout.h"
+#include "ir/pass.h"
 #include "ir/text.h"
+#include "ir/verify.h"
 
 static int  fails = 0;
 static int  gen_ops[IR_OP_COUNT];
@@ -422,7 +425,7 @@ static void test_meta_round_trip(void)
     ir_annot_t *num = ir_annot_get(&in->annots, "ir.n");
 
     check("an int annotation survives",
-          num && num->kind == IR_ANNOT_INT && num->i == 42);
+          num && num->kind == IR_ANNOT_INT && ir_lit_signed(num->i) == 42);
     check("a module annotation survives",
           ir_annot_get(ir_module_annots(m), "ir.note") != nullptr);
 
@@ -557,6 +560,11 @@ typedef struct {
     uint32_t    n;
 } pool;
 
+static ir_block_t *gen_target(ir_func_t *f, uint32_t nblocks)
+{
+    return f->blocks[nblocks > 1 ? 1 + rnd(nblocks - 1) : 0];
+}
+
 static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
                          pool *vals, uint32_t nblocks)
 {
@@ -589,11 +597,11 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             break;
 
         case IR_OPD_BLOCK:
-            ir_instr_push_block(in, f->blocks[rnd(nblocks)]);
+            ir_instr_push_block(in, gen_target(f, nblocks));
             break;
 
         case IR_OPD_DEFAULT_BLOCK:
-            ir_instr_push_default(in, f->blocks[rnd(nblocks)]);
+            ir_instr_push_default(in, gen_target(f, nblocks));
             break;
 
         case IR_OPD_CONST:
@@ -609,13 +617,13 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             if (!vals->n) {
                 return;
             }
-            ir_instr_push_phi_arm(in, f->blocks[rnd(nblocks)],
+            ir_instr_push_phi_arm(in, gen_target(f, nblocks),
                                   vals->v[rnd(vals->n)]);
             break;
 
         case IR_OPD_SWITCH_ARM:
             ir_instr_push_switch_arm(in, (int64_t)rnd(10),
-                                     f->blocks[rnd(nblocks)]);
+                                     gen_target(f, nblocks));
             break;
 
         case IR_OPD_ARG:
@@ -685,7 +693,7 @@ static ir_module_t *gen_module(ir_ctx_t *ctx, uint32_t seq)
             ir_local_add(f, ln, st);
         }
 
-        uint32_t nblocks = 1 + rnd(3);
+        uint32_t nblocks = 2 + rnd(3);
 
         for (uint32_t i = 0; i < nblocks; i++) {
             char bn[16];
@@ -766,22 +774,22 @@ static ir_module_t *gen_module(ir_ctx_t *ctx, uint32_t seq)
 
             switch (term) {
             case IR_OP_JUMP:
-                ir_instr_push_block(t, f->blocks[rnd(nblocks)]);
+                ir_instr_push_block(t, gen_target(f, nblocks));
                 break;
 
             case IR_OP_BRANCH:
                 ir_instr_push_value(t, vals.v[rnd(vals.n)]);
-                ir_instr_push_block(t, f->blocks[rnd(nblocks)]);
-                ir_instr_push_block(t, f->blocks[rnd(nblocks)]);
+                ir_instr_push_block(t, gen_target(f, nblocks));
+                ir_instr_push_block(t, gen_target(f, nblocks));
                 break;
 
             case IR_OP_SWITCH:
                 ir_instr_push_value(t, vals.v[rnd(vals.n)]);
-                ir_instr_push_default(t, f->blocks[rnd(nblocks)]);
+                ir_instr_push_default(t, gen_target(f, nblocks));
 
                 for (uint32_t s = 0; s < 1 + rnd(3); s++) {
                     ir_instr_push_switch_arm(t, (int64_t)rnd(8),
-                                             f->blocks[rnd(nblocks)]);
+                                             gen_target(f, nblocks));
                 }
                 break;
 
@@ -799,7 +807,6 @@ static ir_module_t *gen_module(ir_ctx_t *ctx, uint32_t seq)
 
     return m;
 }
-
 
 static void test_named_args(void)
 {
@@ -871,6 +878,240 @@ static void test_nfc_identifiers(void)
     check("a non-ASCII block name survives",
           out && strstr(out, "block \xd0\xb1\xd0\xbb\xd0\xbe\xd0\xba"));
     free(out);
+
+    ir_ctx_free(ctx);
+}
+
+#define MOD(...) "module m {\n  profile bce\n  target t\n\n" __VA_ARGS__ "}\n"
+
+static void test_an_error_points_at_what_it_is_about(void)
+{
+    static const struct {
+        const char *what;
+        const char *token;
+        const char *src;
+    } cases[] = {
+        {"unknown local",
+         "$nope",
+         MOD("  func @f(%a: i32) -> i32 {\n    block entry:\n"
+             "      %r: i32 = copy $nope\n      return %r\n  }\n")},
+        {"unknown local as destination",
+         "$gone",
+         MOD("  func @f(%a: i32) -> i32 {\n    block entry:\n"
+             "      $gone = copy %a\n      return %a\n  }\n")},
+        {"unknown value",
+         "%missing",
+         MOD("  func @f(%a: i32) -> i32 {\n    block entry:\n"
+             "      return %missing\n  }\n")},
+        {"unknown opcode",
+         "frobnicate",
+         MOD("  func @f(%a: i32) -> i32 {\n    block entry:\n"
+             "      %r: i32 = frobnicate %a\n      return %r\n  }\n")},
+        {"duplicate local",
+         "$x",
+         MOD("  func @f(%a: i32) -> i32 {\n    local $x: i32\n"
+             "    local $x: i64\n    block entry:\n"
+             "      return %a\n  }\n")},
+        {"unknown profile",
+         "nosuch",
+         "module m {\n  profile nosuch\n  target t\n\n"
+         "  func @f(%a: i32) -> i32 {\n    block entry:\n"
+         "      return %a\n  }\n}\n"},
+        {"this opcode has no result",
+         "%r",
+         MOD("  func @f(%a: i32) -> void {\n    block entry:\n"
+             "      %r: i32 = return %a\n  }\n")},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        ir_ctx_t   *ctx = ir_ctx_new();
+        ir_diags_t *d   = ir_diags_new(ctx, nullptr);
+
+        ir_module_parse(ctx, cases[i].src, 0, PROFILES, 2, d);
+
+        if (!ir_diags_count(d)) {
+            printf("FAIL  %s produced no diagnostic\n", cases[i].what);
+            fails++;
+            ir_ctx_free(ctx);
+            continue;
+        }
+
+        const ir_diag_t *dg  = ir_diags_at(d, 0);
+        ir_span_t        s   = dg->primary.span;
+        size_t           n   = strlen(cases[i].token);
+        size_t           len = strlen(cases[i].src);
+
+        if (!ir_span_known(s) || s.end_byte > len || s.start_byte > s.end_byte) {
+            printf("FAIL  %s has no usable span\n", cases[i].what);
+            fails++;
+            ir_ctx_free(ctx);
+            continue;
+        }
+
+        size_t      got = s.end_byte - s.start_byte;
+        const char *at  = cases[i].src + s.start_byte;
+
+        if (got != n || memcmp(at, cases[i].token, n)) {
+            printf("FAIL  %s points at \"%.*s\", not \"%s\"\n", cases[i].what,
+                   (int)got, at, cases[i].token);
+            fails++;
+        }
+        ir_ctx_free(ctx);
+    }
+    check("every parse error points at the token it is about", true);
+}
+
+static void test_spans_come_from_the_text(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+
+    const char *src = "module m {\n"
+                      "  profile bce\n"
+                      "  target t\n"
+                      "\n"
+                      "  func @f(%a: i32) -> i32 {\n"
+                      "    local $t: i32\n"
+                      "\n"
+                      "    block entry:\n"
+                      "      %s: i32 = add wrap %a, %a\n"
+                      "      return %s\n"
+                      "  }\n"
+                      "}\n";
+
+    ir_module_t *m = parse(ctx, src, nullptr);
+
+    check("a module with no !loc parses", m != nullptr);
+
+    if (!m) {
+        ir_ctx_free(ctx);
+
+        return;
+    }
+
+    ir_func_t  *f = ir_func_at(m, 0);
+    ir_block_t *b = ir_block_entry(f);
+
+    check("a function parsed from text knows where it is",
+          ir_span_known(f->span) && f->span.start_line == 5);
+    check("so does a local",
+          f->n_locals == 1 && ir_span_known(f->locals[0]->span)
+              && f->locals[0]->span.start_line == 6);
+    check("so does a block",
+          ir_span_known(b->span) && b->span.start_line == 8);
+    check("so does an instruction",
+          b->n_instrs == 2 && ir_span_known(b->instrs[0]->span)
+              && b->instrs[0]->span.start_line == 9);
+    check("and its span covers the instruction, not one token of it",
+          b->instrs[0]->span.start_col == 7
+              && b->instrs[0]->span.end_col > 20);
+    check("the second instruction is on its own line",
+          ir_span_known(b->instrs[1]->span)
+              && b->instrs[1]->span.start_line == 10);
+
+    check("a span the text implies is marked implied",
+          b->instrs[0]->span.implied);
+
+    char *out = ir_module_print(m);
+
+    check("and is not printed back, since the text already says it",
+          out && !strstr(out, "!loc"));
+    free(out);
+
+    const char *authored = "module m {\n"
+                           "  profile bce\n"
+                           "  target t\n"
+                           "\n"
+                           "  func @f() -> void {\n"
+                           "    block entry:\n"
+                           "      unreachable !loc(3, 90, 95, 40, 2, 40, 7)\n"
+                           "  }\n"
+                           "}\n";
+
+    ir_module_t *am = parse(ctx, authored, nullptr);
+
+    check("an authored !loc parses", am != nullptr);
+
+    if (am) {
+        ir_instr_t *in = ir_block_entry(ir_func_at(am, 0))->instrs[0];
+
+        check("an authored location wins over the one the text implies",
+              in->span.start_line == 40 && in->span.file == 3);
+        check("and is not marked implied", !in->span.implied);
+
+        char *back = ir_module_print(am);
+
+        check("so it is printed back",
+              back && strstr(back, "!loc(3, 90, 95, 40, 2, 40, 7)"));
+        free(back);
+    }
+
+    ir_ctx_free(ctx);
+}
+
+static void test_literal_spellings(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+
+    const char *src = "module m {\n"
+                      "  profile bce\n"
+                      "  target t\n"
+                      "\n"
+                      "  func @f() -> void {\n"
+                      "    block entry:\n"
+                      "      %m: u32 = const 0xdeadbeef "
+                      "!ir.mask(0xcafe)\n"
+                      "      %d: u32 = const 255\n"
+                      "      %w: ubitint[128] = const "
+                      "0xffffffffffffffffffffffffffffffff\n"
+                      "      %n: bitint[128] = const "
+                      "-170141183460469231731687303715884105728\n"
+                      "      %e: f64 = const 1.5e10\n"
+                      "      %p: f64 = const 1.2345678901234567890123456\n"
+                      "      switch %d, default: entry, [0xff: entry]\n"
+                      "  }\n"
+                      "}\n";
+
+    char        *out = nullptr;
+    ir_module_t *m   = parse(ctx, src, nullptr);
+
+    check("a module of mixed literal spellings parses", m != nullptr);
+
+    if (m) {
+        out = ir_module_print(m);
+    }
+
+    check("a hexadecimal literal comes back as hexadecimal",
+          out && strstr(out, "const 0xdeadbeef"));
+    check("a decimal literal comes back as decimal",
+          out && strstr(out, "const 255"));
+    check("the whole of u128 survives the round trip",
+          out && strstr(out, "const 0xffffffffffffffffffffffffffffffff"));
+    check("so does the bottom of i128",
+          out
+              && strstr(out,
+                        "const -170141183460469231731687303715884105728"));
+    check("a float keeps the form it was written in",
+          out && strstr(out, "const 1.5e10"));
+    check("and keeps digits a double cannot hold",
+          out && strstr(out, "const 1.2345678901234567890123456"));
+    check("an annotation keeps the radix it was written in",
+          out && strstr(out, "!ir.mask(0xcafe"));
+    check("a case value keeps its radix too",
+          out && strstr(out, "[0xff: entry]"));
+    check("and the whole thing round-trips", round_trips(ctx, src, nullptr));
+    free(out);
+
+    ir_diags_t  *d  = nullptr;
+    ir_module_t *bad = parse(ctx,
+                             "module m {\n  profile bce\n  target t\n\n"
+                             "  func @f() -> void {\n    block entry:\n"
+                             "      %k: u32 = const 0x1"
+                             "00000000000000000000000000000000\n"
+                             "  }\n}\n",
+                             &d);
+
+    check("a hexadecimal literal wider than 128 bits is refused",
+          bad == nullptr);
 
     ir_ctx_free(ctx);
 }
@@ -971,6 +1212,77 @@ static void test_generated_round_trip(void)
     }
 }
 
+static void test_the_passes_over_the_generated_corpus(void)
+{
+    static const ir_pass_t *const passes[] = {
+        &ir_pass_promote,
+        &ir_pass_split_edges,
+        &ir_pass_structure,
+        &ir_pass_layout,
+    };
+    uint32_t ran[4] = {0};
+
+    for (uint32_t i = 0; i < 400; i++) {
+        ir_ctx_t    *ctx = ir_ctx_new();
+        ir_module_t *m   = gen_module(ctx, i);
+        ir_diags_t  *d   = ir_diags_new(ctx, nullptr);
+        ir_props_t   have = ir_verify(m, d);
+
+        ir_module_establish(m, have);
+
+        for (size_t k = 0; k < sizeof(passes) / sizeof(passes[0]); k++) {
+            if ((have & passes[k]->requires) != passes[k]->requires) {
+                continue;
+            }
+
+            ir_locsnap_t *before = ir_loc_snapshot(m);
+            ir_props_t    unmet  = 0;
+
+            if (ir_pass_run_checked(passes[k], m, d, &unmet, d)
+                != IR_PASS_OK) {
+                continue;
+            }
+            ran[k]++;
+
+            if (!ir_loc_monotone(before, m, passes[k]->name, d)) {
+                printf("FAIL  %s lost a location on generated module %u\n",
+                       passes[k]->name, i);
+                fails++;
+                break;
+            }
+
+            ir_diags_t *vd  = ir_diags_new(ctx, nullptr);
+            ir_props_t  now = ir_verify(m, vd);
+
+            if (!(now & IR_PROP_PARSED)) {
+                char *why  = ir_diags_render_text(vd, &(ir_render_t){0});
+                char *text = ir_module_print(m);
+
+                printf("FAIL  %s left generated module %u malformed\n%s"
+                       "---- module ----\n%s",
+                       passes[k]->name, i, why ? why : "", text ? text : "");
+                free(why);
+                free(text);
+                fails++;
+                break;
+            }
+            have = now;
+        }
+        ir_ctx_free(ctx);
+    }
+
+    for (size_t k = 0; k < sizeof(passes) / sizeof(passes[0]); k++) {
+        if (!ran[k]) {
+            printf("NOTE  %s never ran over the corpus: the generator does "
+                   "not produce modules that meet what it requires\n",
+                   passes[k]->name);
+        }
+    }
+    check("the passes that the corpus can feed ran over it, and no run lost "
+          "a location or broke the module",
+          ran[1] > 0 && ran[2] > 0);
+}
+
 static void report_coverage(void)
 {
     uint32_t covered = 0;
@@ -1010,9 +1322,13 @@ int main(int argc, char **argv)
     test_cross_profile();
     test_named_args();
     test_nfc_identifiers();
+    test_an_error_points_at_what_it_is_about();
+    test_spans_come_from_the_text();
+    test_literal_spellings();
     test_canonical_golden(dir);
     test_errors();
     test_generated_round_trip();
+    test_the_passes_over_the_generated_corpus();
     report_coverage();
     write_produced(dir);
 
