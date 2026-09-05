@@ -412,6 +412,13 @@ base_closesocket(base_socket_t s)
     return closesocket(s);
 }
 
+
+// n00b_raw_write and friends. The POSIX side pulls this in below; Windows
+// needs it too, or core/syscall.h is never included on Windows at all and
+// its _WIN32 branch is dead code. That is exactly how #296 reached main as a
+// compile break: the only unguarded caller had no declaration in scope.
+#include "core/syscall.h"
+
 #else
 
 // ============================================================================
