@@ -14,3 +14,8 @@ project(
 cc = meson.get_compiler('c')
 
 subdir('th')
+
+ir_inc = include_directories('include')
+
+subdir('src')
+subdir('test')

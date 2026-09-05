@@ -1,0 +1,386 @@
+#ifndef IR_H
+#define IR_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "typehash.h"
+
+#define IR_VAR_ARITY UINT32_MAX
+
+typedef enum : uint8_t {
+    IR_MOD_OVERFLOW = 0x01,
+    IR_MOD_DIVZERO  = 0x02,
+    IR_MOD_SHIFT    = 0x04,
+    IR_MOD_CMPORDER = 0x08,
+    IR_MOD_ACCESS   = 0x10,
+    IR_MOD_FIT      = 0x20,
+    IR_MOD_ROUND    = 0x40,
+} ir_modgroup_t;
+
+typedef enum : uint8_t {
+    IR_OPF_HASRESULT  = 0x01,
+    IR_OPF_SIDEEFFECT = 0x02,
+    IR_OPF_TERMINATOR = 0x04,
+    IR_OPF_COMPTIME   = 0x08,
+} ir_opflag_t;
+
+typedef enum : uint8_t {
+    IR_RES_NONE,
+    IR_RES_ANNOTATED,
+    IR_RES_OPERAND0,
+    IR_RES_OPERAND1,
+    IR_RES_BOOL,
+    IR_RES_U32,
+    IR_RES_U64,
+    IR_RES_SINT,
+    IR_RES_SINT32,
+    IR_RES_STR,
+    IR_RES_POINTEE,
+    IR_RES_PTR_TO_ARG0,
+    IR_RES_MEMBER,
+    IR_RES_MEMBER_PTR,
+    IR_RES_ELEM_PTR,
+    IR_RES_VARIANT_ARM,
+    IR_RES_CALLEE_RET,
+} ir_resrule_t;
+
+typedef enum : uint8_t {
+    IR_OPD_VALUE,
+    IR_OPD_TYPE,
+    IR_OPD_NAME,
+    IR_OPD_BLOCK,
+    IR_OPD_CONST,
+    IR_OPD_PHI_ARM,
+    IR_OPD_SWITCH_ARM,
+} ir_opdkind_t;
+
+#define IR_OP(id, spelling, lo, hi, res, pat, mods, flags) IR_OP_##id,
+
+typedef enum : uint16_t {
+#include "ir_ops.def"
+    IR_OP_COUNT,
+} ir_op_t;
+
+#undef IR_OP
+
+typedef struct {
+    const char  *spelling;
+    uint32_t     min_operands;
+    uint32_t     max_operands;
+    ir_resrule_t result;
+    const char  *pattern;
+    uint8_t      mods;
+    uint8_t      flags;
+} ir_opinfo_t;
+
+const ir_opinfo_t *ir_op_info(ir_op_t op);
+bool               ir_op_lookup(const char *spelling, ir_op_t *out);
+const char        *ir_op_spelling(ir_op_t op);
+bool               ir_op_has_result(ir_op_t op);
+bool               ir_op_is_terminator(ir_op_t op);
+ir_opdkind_t       ir_op_operand_kind(ir_op_t op, uint32_t i);
+bool               ir_op_accepts_operands(ir_op_t op, uint32_t n);
+
+typedef enum : uint16_t {
+    IR_PROP_PARSED       = 0x0001,
+    IR_PROP_TYPED        = 0x0002,
+    IR_PROP_SSA          = 0x0004,
+    IR_PROP_STRUCTURED   = 0x0008,
+    IR_PROP_LAID_OUT     = 0x0010,
+    IR_PROP_NO_CRIT_EDGE = 0x0020,
+    IR_PROP_VERIFIED     = 0x0040,
+} ir_props_t;
+
+const char *ir_prop_name(ir_props_t one);
+
+typedef enum : uint8_t {
+    IR_CLASS_OPAQUE,
+    IR_CLASS_VOID,
+    IR_CLASS_BOOL,
+    IR_CLASS_SINT,
+    IR_CLASS_UINT,
+    IR_CLASS_FLOAT,
+    IR_CLASS_PTR,
+    IR_CLASS_AGGREGATE,
+} ir_class_t;
+
+typedef struct {
+    ir_class_t class;
+    uint32_t   width;
+} ir_machine_t;
+
+typedef struct ir_ctx_t     ir_ctx_t;
+typedef struct ir_module_t  ir_module_t;
+typedef struct ir_func_t    ir_func_t;
+typedef struct ir_block_t   ir_block_t;
+typedef struct ir_instr_t   ir_instr_t;
+typedef struct ir_value_t   ir_value_t;
+typedef struct ir_local_t   ir_local_t;
+typedef struct ir_global_t  ir_global_t;
+typedef struct ir_profile_t ir_profile_t;
+
+typedef struct {
+    int32_t  file;
+    uint32_t start_byte, end_byte;
+    uint32_t start_line, start_col;
+    uint32_t end_line, end_col;
+} ir_span_t;
+
+#define IR_SPAN_UNKNOWN ((ir_span_t){.file = -1})
+
+typedef enum : uint8_t {
+    IR_ORIGIN_SOURCE,
+    IR_ORIGIN_INLINED_FROM,
+    IR_ORIGIN_EXPANDED_FROM,
+    IR_ORIGIN_LOWERED_FROM,
+    IR_ORIGIN_GENERATED_BY,
+} ir_origin_kind_t;
+
+typedef struct ir_origin_t ir_origin_t;
+
+struct ir_origin_t {
+    ir_origin_kind_t kind;
+    ir_span_t        span;
+    const char      *agent;
+    ir_origin_t     *parent;
+};
+
+typedef enum : uint8_t {
+    IR_ANNOT_BOOL,
+    IR_ANNOT_INT,
+    IR_ANNOT_STR,
+    IR_ANNOT_TYPE,
+    IR_ANNOT_VALUE,
+} ir_annot_kind_t;
+
+typedef struct {
+    const char     *key;
+    ir_annot_kind_t kind;
+    union {
+        bool        b;
+        int64_t     i;
+        const char *s;
+        th_type    *t;
+        ir_value_t *v;
+    };
+    ir_props_t derived_from;
+} ir_annot_t;
+
+typedef struct {
+    ir_annot_t *a;
+    uint32_t    n;
+    uint32_t    cap;
+} ir_annots_t;
+
+bool        ir_annot_set(ir_ctx_t *ctx, ir_annots_t *m, ir_annot_t a);
+ir_annot_t *ir_annot_get(ir_annots_t *m, const char *key);
+uint32_t    ir_annot_count(const ir_annots_t *m);
+ir_annot_t *ir_annot_at(ir_annots_t *m, uint32_t i);
+void        ir_annot_invalidate(ir_annots_t *m, ir_props_t lost);
+bool        ir_annot_key_ok(const char *key, const char *profile);
+
+typedef enum : uint8_t {
+    IR_VAL_PARAM,
+    IR_VAL_INSTR,
+    IR_VAL_GLOBAL,
+    IR_VAL_FUNC,
+} ir_valkind_t;
+
+struct ir_value_t {
+    ir_valkind_t kind;
+    const char  *name;
+    th_type     *type;
+    ir_instr_t  *def;
+    ir_func_t   *owner;
+    uint32_t     index;
+};
+
+typedef enum : uint8_t {
+    IR_DEST_NONE,
+    IR_DEST_VALUE,
+    IR_DEST_LOCAL,
+} ir_destkind_t;
+
+typedef struct {
+    ir_opdkind_t kind;
+    union {
+        ir_value_t  *value;
+        th_type     *type;
+        const char  *name;
+        ir_block_t  *block;
+        struct {
+            ir_block_t *block;
+            ir_value_t *value;
+        } phi;
+        struct {
+            int64_t     value;
+            ir_block_t *block;
+        } arm;
+        struct {
+            int64_t  i;
+            double   f;
+            bool     is_float;
+        } lit;
+    };
+} ir_operand_t;
+
+struct ir_instr_t {
+    ir_op_t       op;
+    ir_destkind_t dest_kind;
+    ir_value_t   *dest;
+    ir_local_t   *dest_local;
+    ir_operand_t *operands;
+    uint32_t      n_operands;
+    uint32_t      cap_operands;
+    const char  **mods;
+    uint32_t      n_mods;
+    ir_span_t     span;
+    ir_origin_t  *origin;
+    ir_annots_t   annots;
+    ir_block_t   *block;
+    uint32_t      index;
+};
+
+struct ir_block_t {
+    const char   *name;
+    ir_instr_t  **instrs;
+    uint32_t      n_instrs;
+    uint32_t      cap_instrs;
+    ir_span_t     span;
+    ir_origin_t  *origin;
+    ir_annots_t   annots;
+    ir_func_t    *owner;
+    uint32_t      index;
+};
+
+struct ir_local_t {
+    const char  *name;
+    th_type     *type;
+    ir_span_t    span;
+    ir_origin_t *origin;
+    ir_annots_t  annots;
+    uint32_t     index;
+};
+
+struct ir_global_t {
+    const char  *name;
+    th_type     *type;
+    bool         is_static;
+    bool         is_extern;
+    ir_span_t    span;
+    ir_origin_t *origin;
+    ir_annots_t  annots;
+};
+
+typedef enum : uint8_t {
+    IR_LINK_INTERNAL,
+    IR_LINK_EXTERNAL,
+    IR_LINK_EXTERN,
+} ir_linkage_t;
+
+struct ir_func_t {
+    const char   *name;
+    th_type      *type;
+    ir_linkage_t  linkage;
+    ir_value_t  **params;
+    uint32_t      n_params;
+    ir_local_t  **locals;
+    uint32_t      n_locals;
+    uint32_t      cap_locals;
+    ir_block_t  **blocks;
+    uint32_t      n_blocks;
+    uint32_t      cap_blocks;
+    ir_span_t     span;
+    ir_origin_t  *origin;
+    ir_annots_t   annots;
+    ir_props_t    props;
+    ir_module_t  *owner;
+};
+
+ir_ctx_t *ir_ctx_new(void);
+void      ir_ctx_free(ir_ctx_t *ctx);
+th_ctx   *ir_ctx_types(ir_ctx_t *ctx);
+void     *ir_alloc(ir_ctx_t *ctx, size_t n);
+char     *ir_strdup(ir_ctx_t *ctx, const char *s);
+
+ir_module_t *ir_module_new(ir_ctx_t *ctx, const char *name,
+                           const ir_profile_t *profile, const char *target);
+const char  *ir_module_name(const ir_module_t *m);
+const char  *ir_module_target(const ir_module_t *m);
+const ir_profile_t *ir_module_profile(const ir_module_t *m);
+ir_props_t   ir_module_props(const ir_module_t *m);
+void         ir_module_establish(ir_module_t *m, ir_props_t p);
+void         ir_module_invalidate(ir_module_t *m, ir_props_t p);
+ir_annots_t *ir_module_annots(ir_module_t *m);
+
+th_type *ir_type_intern(ir_module_t *m, th_type *t);
+th_type *ir_type_parse(ir_module_t *m, const char *text);
+uint64_t ir_type_id(ir_module_t *m, th_type *t);
+bool     ir_type_eq(ir_module_t *m, th_type *a, th_type *b);
+size_t   ir_type_count(const ir_module_t *m);
+
+int32_t     ir_file_add(ir_module_t *m, const char *path);
+const char *ir_file_path(const ir_module_t *m, int32_t id);
+size_t      ir_file_count(const ir_module_t *m);
+
+ir_span_t    ir_span_make(int32_t file, uint32_t sb, uint32_t eb,
+                          uint32_t sl, uint32_t sc, uint32_t el, uint32_t ec);
+bool         ir_span_known(ir_span_t s);
+ir_origin_t *ir_origin_new(ir_ctx_t *ctx, ir_origin_kind_t kind,
+                           ir_span_t span, const char *agent,
+                           ir_origin_t *parent);
+uint32_t     ir_origin_depth(const ir_origin_t *o);
+
+ir_global_t *ir_global_add(ir_module_t *m, const char *name, th_type *type);
+ir_global_t *ir_global_find(ir_module_t *m, const char *name);
+size_t       ir_global_count(const ir_module_t *m);
+ir_global_t *ir_global_at(ir_module_t *m, size_t i);
+
+ir_func_t   *ir_func_add(ir_module_t *m, const char *name, th_type *type,
+                         ir_linkage_t linkage);
+ir_func_t   *ir_func_find(ir_module_t *m, const char *name);
+size_t       ir_func_count(const ir_module_t *m);
+ir_func_t   *ir_func_at(ir_module_t *m, size_t i);
+ir_value_t  *ir_param_add(ir_func_t *f, const char *name, th_type *type);
+ir_local_t  *ir_local_add(ir_func_t *f, const char *name, th_type *type);
+ir_local_t  *ir_local_find(ir_func_t *f, const char *name);
+ir_block_t  *ir_block_add(ir_func_t *f, const char *name);
+ir_block_t  *ir_block_find(ir_func_t *f, const char *name);
+ir_block_t  *ir_block_entry(ir_func_t *f);
+ir_instr_t  *ir_block_terminator(ir_block_t *b);
+
+ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op);
+bool        ir_instr_set_dest(ir_instr_t *in, const char *name, th_type *type);
+bool        ir_instr_set_dest_local(ir_instr_t *in, ir_local_t *l);
+bool        ir_instr_push_value(ir_instr_t *in, ir_value_t *v);
+bool        ir_instr_push_type(ir_instr_t *in, th_type *t);
+bool        ir_instr_push_name(ir_instr_t *in, const char *n);
+bool        ir_instr_push_block(ir_instr_t *in, ir_block_t *b);
+bool        ir_instr_push_int(ir_instr_t *in, int64_t v);
+bool        ir_instr_push_float(ir_instr_t *in, double v);
+bool        ir_instr_push_phi_arm(ir_instr_t *in, ir_block_t *b, ir_value_t *v);
+bool        ir_instr_push_switch_arm(ir_instr_t *in, int64_t v, ir_block_t *b);
+bool        ir_instr_push_mod(ir_instr_t *in, const char *mod);
+bool        ir_instr_has_mod(const ir_instr_t *in, const char *mod);
+
+struct ir_profile_t {
+    const char *name;
+    size_t      n_scalars;
+    const struct ir_scalar_t *scalars;
+};
+
+typedef struct ir_scalar_t {
+    const char  *type_text;
+    ir_class_t   class;
+    uint32_t     width;
+} ir_scalar_t;
+
+ir_machine_t ir_machine_of(ir_module_t *m, th_type *t);
+bool         ir_profile_has(ir_module_t *m, th_type *t);
+
+extern const ir_profile_t ir_profile_bce;
+extern const ir_profile_t ir_profile_synth;
+
+#endif
