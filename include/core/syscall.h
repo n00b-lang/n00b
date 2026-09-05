@@ -335,13 +335,62 @@ n00b_raw_exit(int code)
 // deadlock class this primitive exists to avoid -- the worst possible outcome,
 // because nothing here would catch it.
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN 1
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX 1
-#endif
-#include <windows.h>
+#include <stdint.h> // intptr_t
+
+// Declares GetStdHandle and WriteFile rather than including a Windows
+// header. Four revisions established why each alternative fails; all are
+// recorded because none of the constraints is obvious.
+//
+//  1. <windows.h> here breaks the platform.h path. platform.h already
+//     includes it at :53 and this header at :420, so a second entry through
+//     a different chain re-opens winnt.h under different conditions:
+//
+//       winnt.h:4304: error: type 'struct _CONTEXT' has incompatible
+//                            definitions
+//
+//     Matching platform.h's WIN32_LEAN_AND_MEAN/NOMINMAX guards does NOT
+//     prevent this -- an include guard no-ops the top-level header, not the
+//     nested ones reached by a different path.
+//
+//  2. <processenv.h> + <fileapi.h> (the two headers that actually declare
+//     these) cannot be included standalone. They assume the architecture
+//     macro windows.h defines, so on the direct-include path:
+//
+//       winnt.h:169: error: "No Target Architecture"
+//
+//  3. Declaring nothing and relying on platform.h fails on the direct-
+//     include path. TEN files include "core/syscall.h" directly -- exit.c,
+//     thread.c, stw.c, signals.c, crash.c, crash_capture.c, memory_info.c,
+//     file.c, io_epoll.c, quic/metrics.c -- and there nothing has provided
+//     them:
+//
+//       exit.c:9 -> syscall.h:392: error: use of undeclared identifier
+//                                         'GetStdHandle'
+//
+// So: declare them, matching the SDK exactly. The first attempt at this was
+// rejected only because it typed the last parameter `void *` where the SDK
+// has LPOVERLAPPED:
+//
+//   WINBASEAPI BOOL WINAPI WriteFile(HANDLE, LPCVOID, DWORD, LPDWORD,
+//                                    LPOVERLAPPED);
+//
+// A forward declaration of `struct _OVERLAPPED` makes the types identical,
+// so this is compatible where windows.h has been seen and sufficient where
+// it has not. This is the same technique platform.h already uses for
+// SystemFunction036 rather than including its header.
+struct _OVERLAPPED;
+
+__declspec(dllimport) void *__stdcall GetStdHandle(unsigned long std_handle);
+__declspec(dllimport) int __stdcall   WriteFile(void               *file,
+                                                const void         *buffer,
+                                                unsigned long       to_write,
+                                                unsigned long      *written,
+                                                struct _OVERLAPPED *overlapped);
+
+// From winbase.h / handleapi.h, which we are not including.
+#define N00B_STD_OUTPUT_HANDLE ((unsigned long)-11)
+#define N00B_STD_ERROR_HANDLE  ((unsigned long)-12)
+#define N00B_INVALID_HANDLE    ((void *)(intptr_t)-1)
 
 /// Best-effort, CRT-free write to @p fd. Matches the POSIX contract above:
 /// one write, return ignored, no retry on a short write.
@@ -355,31 +404,31 @@ n00b_raw_exit(int code)
 static inline void
 n00b_raw_write(int fd, const void *buf, unsigned long len)
 {
-    DWORD which;
+    unsigned long which;
 
     switch (fd) {
     case 1:
-        which = STD_OUTPUT_HANDLE;
+        which = N00B_STD_OUTPUT_HANDLE;
         break;
     case 2:
-        which = STD_ERROR_HANDLE;
+        which = N00B_STD_ERROR_HANDLE;
         break;
     default:
         return;
     }
 
-    HANDLE h = GetStdHandle(which);
+    void *h = GetStdHandle(which);
 
     // A service started with no console gets NULL; a failed lookup gets
     // INVALID_HANDLE_VALUE. Neither is an error worth reacting to from a
     // best-effort diagnostic, and faulting here would turn the message
     // describing a problem into a second, worse one.
-    if (h == NULL || h == INVALID_HANDLE_VALUE) {
+    if (h == nullptr || h == N00B_INVALID_HANDLE) {
         return;
     }
 
-    DWORD written = 0;
-    (void)WriteFile(h, buf, (DWORD)len, &written, NULL);
+    unsigned long written = 0;
+    (void)WriteFile(h, buf, (unsigned long)len, &written, nullptr);
 }
 
 #endif // !_WIN32 / _WIN32
