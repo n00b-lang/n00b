@@ -1,0 +1,23 @@
+@tokenizer("toy")
+
+<prog> @scope("module") ::= <items>
+
+<items> ::= <item> <items>
+          | <item>
+
+<item> ::= <decl>
+         | <block>
+         | <cond>
+         | <tdecl>
+
+<decl> @declares($1,$2,"var") ::= "v" <name> <type> ";"
+
+<tdecl> @type($2,"int") @declares($1,"var") ::= "t" <name> <type> ";"
+
+<block> @scope("block") ::= "{" <items> "}"
+
+<cond> @branch($1,$2,$3) ::= "?" <name> <name> <name>
+
+<name> ::= __LOWER
+
+<type> ::= __UPPER

@@ -15,7 +15,9 @@ cc = meson.get_compiler('c')
 
 subdir('th')
 
-ir_inc = include_directories('include')
+tdesc_inc = include_directories('tdesc')
+ir_inc    = include_directories('include')
 
 subdir('src')
 subdir('test')
+subdir('fe')

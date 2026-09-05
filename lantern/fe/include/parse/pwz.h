@@ -1,0 +1,204 @@
+#pragma once
+
+/**
+ * @file pwz.h
+ * @brief PWZ (Parsing With Zippers) derivative-based parser for arbitrary CFGs.
+ *
+ * Based on Darragh & Adams (ICFP 2020). Handles ambiguous and
+ * left-recursive grammars via generalized zippers and memoization.
+ */
+
+#include "parse/grammar.h"
+#include "parse/parse_forest.h"
+#include "parse/token.h"
+
+typedef struct ncc_token_stream_t ncc_token_stream_t;
+
+// ============================================================================
+// Type-aware disambiguation (TS-5)
+// ============================================================================
+
+/**
+ * @brief Predicate callback consulted at forest->tree extraction.
+ *
+ * The grammar annotates ambiguous productions with `@disambig(<predicate>)`.
+ * When a rule carrying such an annotation is a candidate at an ambiguity node,
+ * the extractor invokes this callback with the predicate name and the rule's
+ * leading token. A true result adds the rule's disambiguation cost to the
+ * alternative's score; the lowest-scoring (most type-consistent) alternative
+ * wins. This lets the symbol table — passed back through @p ud — resolve the
+ * C typedef/identifier ambiguity at the parse layer.
+ *
+ * @param ud         Opaque user data (the symbol table).
+ * @param predicate  Predicate name from the `@disambig` annotation.
+ * @param tok        The leading token of the candidate rule's span.
+ * @return True if the predicate holds (penalty applies).
+ */
+typedef bool (*ncc_pwz_disambig_fn)(void             *ud,
+                                    const char       *predicate,
+                                    ncc_token_info_t *tok);
+
+// ============================================================================
+// Opaque parser state
+// ============================================================================
+
+/** @brief Opaque PWZ parser state. */
+typedef struct ncc_pwz_parser_t ncc_pwz_parser_t;
+
+// ============================================================================
+// Lifecycle
+// ============================================================================
+
+/**
+ * @brief Create a new PWZ parser for a grammar.
+ *
+ * Finalizes the grammar if not already done, then builds the
+ * internal expression graph.
+ *
+ * @param g  Grammar to parse with (must not be nullptr).
+ * @return Newly allocated PWZ parser.
+ */
+ncc_pwz_parser_t *ncc_pwz_new(ncc_grammar_t *g);
+
+/**
+ * @brief Free a PWZ parser and all associated state.
+ * @param p  PWZ parser to free (nullptr is a no-op).
+ */
+void ncc_pwz_free(ncc_pwz_parser_t *p);
+
+/**
+ * @brief Reset a PWZ parser for reuse with the same grammar.
+ *
+ * Clears per-parse state (memos, worklists, results) but keeps the
+ * expression graph intact.
+ *
+ * @param p  PWZ parser to reset.
+ */
+void ncc_pwz_reset(ncc_pwz_parser_t *p);
+
+/**
+ * @brief Release per-parse intermediate state (arena, worklists).
+ *
+ * Call after extracting the parse tree to reduce peak live memory.
+ * The parser remains valid but cannot produce new trees until the
+ * next ncc_pwz_parse() call.
+ *
+ * @param p  PWZ parser (nullptr is a no-op).
+ */
+void ncc_pwz_release_parse_state(ncc_pwz_parser_t *p);
+
+// ============================================================================
+// Parsing
+// ============================================================================
+
+/**
+ * @brief Parse from a token stream with the PWZ parser.
+ *
+ * Tokens are consumed lazily from the stream as needed.
+ *
+ * @param p   PWZ parser to use.
+ * @param ts  Token stream to consume.
+ * @return True if parsing succeeded (at least one complete parse found).
+ */
+bool ncc_pwz_parse(ncc_pwz_parser_t   *p,
+                     ncc_token_stream_t *ts);
+
+// ============================================================================
+// Results
+// ============================================================================
+
+/**
+ * @brief Get the parse tree from the last successful parse.
+ *
+ * Returns the single "best" tree (longest / latest completion).
+ *
+ * @param p  PWZ parser to query.
+ * @return The parse tree, or nullptr if the last parse failed.
+ */
+ncc_parse_tree_t *ncc_pwz_get_tree(ncc_pwz_parser_t *p);
+
+/**
+ * @brief Index of the token at which the last failed parse got stuck.
+ *
+ * After ncc_pwz_parse() returns false, this is the position of the furthest
+ * token that no surviving derivation could consume (i.e. the offending token),
+ * or a value >= the token count to indicate unexpected end of input. Returns
+ * -1 if the last parse succeeded or has not run.
+ *
+ * @param p  PWZ parser to query.
+ * @return Error token index, or -1.
+ */
+int32_t ncc_pwz_error_pos(ncc_pwz_parser_t *p);
+
+/**
+ * @brief Install (or clear) the type-aware disambiguation oracle.
+ *
+ * With an oracle set, the next extraction (see ncc_pwz_reextract) scores
+ * ambiguous alternatives via `@disambig` annotations + this callback and picks
+ * the lowest-scoring parse. Pass @p cb == nullptr to restore the default
+ * (grammar-order, last-alternative) policy.
+ *
+ * @param p   PWZ parser.
+ * @param cb  Predicate callback (nullptr to clear).
+ * @param ud  Opaque user data passed to @p cb (the symbol table).
+ */
+void ncc_pwz_set_disambiguator(ncc_pwz_parser_t    *p,
+                               ncc_pwz_disambig_fn  cb,
+                               void                *ud);
+
+/**
+ * @brief Re-extract a single tree from the retained forest of the last parse.
+ *
+ * Re-runs forest->tree extraction over the forest from the last successful
+ * parse, applying the currently-installed disambiguation oracle. Valid only
+ * before ncc_pwz_release_parse_state(). Returns the new tree (also stored as
+ * the parser's current result tree), or the existing tree if no forest is
+ * retained.
+ *
+ * @param p  PWZ parser.
+ * @return The re-extracted parse tree.
+ */
+ncc_parse_tree_t *ncc_pwz_reextract(ncc_pwz_parser_t *p);
+
+/**
+ * @brief Get all parse trees from an ambiguous parse.
+ * @param p  PWZ parser to query.
+ * @return Array of parse tree pointers (empty if last parse failed).
+ */
+ncc_parse_tree_array_t ncc_pwz_get_trees(ncc_pwz_parser_t *p);
+
+/**
+ * @brief Get a parse forest from the last successful parse.
+ * @param p  PWZ parser to query.
+ * @return Forest wrapping all trees (empty if last parse failed).
+ */
+ncc_parse_forest_t ncc_pwz_get_forest(ncc_pwz_parser_t *p);
+
+// ============================================================================
+// One-shot parse (implements ncc_parse_fn_t)
+// ============================================================================
+
+/**
+ * @brief Parse a token stream against a grammar using PWZ in a single call.
+ *
+ * Wraps the full PWZ lifecycle (new → parse → get_forest → free).
+ * Signature matches `ncc_parse_fn_t` so it can be used as a
+ * pluggable parse engine.
+ *
+ * @param g   Grammar to parse with.
+ * @param ts  Token stream to consume.
+ * @return Parse forest (empty on failure).
+ */
+ncc_parse_forest_t ncc_pwz_parse_grammar(ncc_grammar_t      *g,
+                                             ncc_token_stream_t *ts);
+
+// ============================================================================
+// Debug statistics
+// ============================================================================
+
+#ifdef NCC_MEM_DEBUG
+/**
+ * @brief Print per-type allocation stats for the last parse, then reset.
+ */
+void ncc_pwz_report_stats(void);
+#endif
