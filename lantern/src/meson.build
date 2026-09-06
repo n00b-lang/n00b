@@ -33,7 +33,6 @@ ir_sources = files(
     'ir_diag_render.c',
     'ir_func.c',
     'ir_ops.c',
-    'ir_parse.c',
     'ir_pass.c',
     'ir_print.c',
     'ir_profile.c',

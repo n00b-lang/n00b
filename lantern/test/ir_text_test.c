@@ -329,7 +329,7 @@ static void test_whitespace_and_comments(void)
     ir_ctx_t *ctx = ir_ctx_new();
 
     const char *tight =
-        "module m{profile bce func @f()->void{block e:\nreturn}}";
+        "module m{\nprofile bce\nfunc @f()->void{\nblock e:\nreturn\n}\n}\n";
     const char *loose =
         "module m {\n\n  profile bce\n\n\n  func @f() -> void {\n"
         "    block e:\n\n      return\n  }\n}\n";
@@ -1154,11 +1154,11 @@ static void test_canonical_golden(const char *dir)
 
     const char *src =
         "# a module comment\n"
-        "module shapes{profile bce target x86_64-linux\n"
+        "module shapes{\nprofile bce\ntarget x86_64-linux\n"
         "meta !ir.note(\"hand written\")\n"
         "global @count: i32\n"
         "static global @seen: (y: i64, x: int)\n"
-        "static func @helper()->void{block e:\nunreachable}\n"
+        "static func @helper()->void{\nblock e:\nunreachable\n}\n"
         "func @sum(%n: i32,%acc: i32)->i32{\n"
         "local $t: ptr[i32]\n"
         "block entry:\n"
@@ -1174,7 +1174,7 @@ static void test_canonical_golden(const char *dir)
         "%sz: u64 = sizeof (i32, i32) -> i32\n"
         "switch %s, default: done, [0: loop], [1: done]\n"
         "block done:\n"
-        "return %acc}}\n";
+        "return %acc\n}\n}\n";
 
     ir_module_t *m = parse(ctx, src, nullptr);
 

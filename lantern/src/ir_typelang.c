@@ -542,7 +542,7 @@ static void collect_tvar_names(ncc_grammar_t *g, ncc_parse_tree_t *n,
 
 static bool binder_open(ncc_visit_t *v)
 {
-    bctx  *c = v->user;
+    bctx  *c = v->thunk;
     char **names = calloc(64, sizeof(char *));
     size_t n     = 0;
 
@@ -1018,10 +1018,16 @@ static void *r_int_leaf_or_str(ncc_reduce_t *r)
     bctx    *c   = r->thunk;
     int64_t  tid = ncc_tree_leaf_tid(r->node);
 
+    ncc_string_t text = ncc_tree_leaf_text(r->node);
+
+    if (!text.data) {
+        return nullptr;
+    }
+
     if (tid == tid_int) {
         tl_node *n = node_new(c, TL_INT);
 
-        n->u = strtoull(ncc_tree_leaf_text(r->node).data, nullptr, 10);
+        n->u = strtoull(text.data, nullptr, 10);
 
         return n;
     }
@@ -1029,7 +1035,7 @@ static void *r_int_leaf_or_str(ncc_reduce_t *r)
     if (tid == tid_str || tid == tid_ident) {
         tl_node *n = node_new(c, TL_NAME);
 
-        n->name = strdup(ncc_tree_leaf_text(r->node).data);
+        n->name = strdup(text.data);
 
         return n;
     }

@@ -114,91 +114,100 @@ static void test_the_canonical_module(const char *path)
 
 static void test_the_two_agree_construct_by_construct(void)
 {
+#define HEAD "module m {\n  profile bce\n"
+
     static const struct {
         const char *what;
         const char *src;
     } cases[] = {
-        {"an empty module", "module m { profile bce }"},
-        {"a profile", "module m { profile bce }"},
-        {"a target with dashes", "module m { profile bce target x86_64-linux }"},
-        {"a global", "module m { profile bce global @g: i32 }"},
-        {"a global with linkage", "module m { profile bce static global @g: i32 }"},
-        {"a record-typed global", "module m { profile bce global @g: (x: int, y: i64) }"},
-        {"a type declaration", "module m { profile bce type T = ptr[i32] }"},
+        {"an empty module", "module m {\n  profile bce\n}\n"},
+        {"a profile", "module m {\n  profile bce\n}\n"},
+        {"a target with dashes", "module m {\n  profile bce\n  target x86_64-linux\n}\n"},
+        {"a global", "module m {\n  profile bce\n  global @g: i32\n}\n"},
+        {"a global with linkage", "module m {\n  profile bce\n  static global @g: i32\n}\n"},
+        {"a record-typed global", "module m {\n  profile bce\n  global @g: (x: int, y: i64)\n}\n"},
+        {"a type declaration", "module m {\n  profile bce\n  type T = ptr[i32]\n}\n"},
         {"an empty function",
-         "module m { profile bce func @f() -> void { block e: unreachable } }"},
+         "module m {\n  profile bce\n  func @f() -> void {\n    block e:\n"
+         "      unreachable\n  }\n}\n"},
         {"parameters",
-         "module m { profile bce func @f(%a: i32, %b: i32) -> i32 { block e: return %a } }"},
-        {"a local", "module m { profile bce func @f() -> void {\n"
-                    "  local $t: ptr[i32]\n  block e: unreachable } }"},
+         "module m {\n  profile bce\n"
+         "  func @f(%a: i32, %b: i32) -> i32 {\n    block e:\n"
+         "      return %a\n  }\n}\n"},
+        {"a local", HEAD "  func @f() -> void {\n    local $t: ptr[i32]\n"
+                    "    block e:\n      unreachable\n  }\n}\n"},
         {"a local with an initialiser",
-         "module m { profile bce func @f() -> void {\n  local $n: i32 = 7\n"
-         "  block e: unreachable } }"},
+         HEAD "  func @f() -> void {\n    local $n: i32 = 7\n"
+         "    block e:\n      unreachable\n  }\n}\n"},
         {"a negative initialiser",
-         "module m { profile bce func @f() -> void {\n  local $n: i32 = -7\n"
-         "  block e: unreachable } }"},
+         HEAD "  func @f() -> void {\n    local $n: i32 = -7\n"
+         "    block e:\n      unreachable\n  }\n}\n"},
         {"an instruction with a modifier",
-         "module m { profile bce func @f(%a: i32) -> i32 { block e:\n"
-         "  %s: i32 = add wrap %a, %a\n  return %s } }"},
+         HEAD "  func @f(%a: i32) -> i32 {\n    block e:\n"
+         "      %s: i32 = add wrap %a, %a\n      return %s\n  }\n}\n"},
         {"a phi",
-         "module m { profile bce func @f(%a: i32) -> i32 { block e:\n  jump l\n"
-         " block l:\n  %p: i32 = phi [e: %a]\n  return %p } }"},
+         HEAD "  func @f(%a: i32) -> i32 {\n    block e:\n      jump l\n"
+         "    block l:\n      %p: i32 = phi [e: %a]\n      return %p\n"
+         "  }\n}\n"},
         {"a switch",
-         "module m { profile bce func @f(%a: i32) -> i32 { block e:\n"
-         "  switch %a, default: d, [0: d], [1: d]\n block d: return %a } }"},
+         HEAD "  func @f(%a: i32) -> i32 {\n    block e:\n"
+         "      switch %a, default: d, [0: d], [1: d]\n"
+         "    block d:\n      return %a\n  }\n}\n"},
         {"a location",
-         "module m { profile bce func @f() -> void { block e:\n"
-         "  unreachable !loc(0, 1, 2, 1, 3, 1, 4) } }"},
+         HEAD "  func @f() -> void {\n    block e:\n"
+         "      unreachable !loc(0, 1, 2, 1, 3, 1, 4)\n  }\n}\n"},
         {"an annotation with provenance",
-         "module m { profile bce func @f(%a: i32) -> i32 { block e:\n"
-         "  %s: i32 = add %a, %a !ir.rule(\"sint\" from typed)\n"
-         "  return %s } }"},
-        {"a module annotation", "module m { profile bce meta !ir.note(\"hand written\") }"},
+         HEAD "  func @f(%a: i32) -> i32 {\n    block e:\n"
+         "      %s: i32 = add %a, %a !ir.rule(\"sint\" from typed)\n"
+         "      return %s\n  }\n}\n"},
+        {"a module annotation",
+         HEAD "  meta !ir.note(\"hand written\")\n}\n"},
         {"a sizeof operand",
-         "module m { profile bce func @f() -> u64 { block e:\n"
-         "  %z: u64 = sizeof (i32, i32) -> i32\n  return %z } }"},
-        {"a comment", "module m {\n  # a comment\n  profile bce \n}"},
+         HEAD "  func @f() -> u64 {\n    block e:\n"
+         "      %z: u64 = sizeof (i32, i32) -> i32\n      return %z\n"
+         "  }\n}\n"},
+        {"a comment", "module m {\n  # a comment\n  profile bce\n}\n"},
         {"a name that is also a keyword",
-         "module m { profile bce func @f() -> void {\n  local $size: i32\n"
-         "  block e: unreachable } }"},
+         HEAD "  func @f() -> void {\n    local $size: i32\n"
+         "    block e:\n      unreachable\n  }\n}\n"},
         {"a rest parameter",
-         "module m { profile bce func @f(%a: i32, *i32) -> void {\n"
-         "  block e: unreachable } }"},
+         HEAD "  func @f(%a: i32, *i32) -> void {\n"
+         "    block e:\n      unreachable\n  }\n}\n"},
         {"a keyword parameter",
-         "module m { profile bce func @f(%a: i32, k: i32) -> void {\n"
-         "  block e: unreachable } }"},
+         HEAD "  func @f(%a: i32, k: i32) -> void {\n"
+         "    block e:\n      unreachable\n  }\n}\n"},
         {"extern linkage",
-         "module m { profile bce extern func @f() -> void {\n"
-         "  block e: unreachable } }"},
-        {"an extern global", "module m { profile bce extern global @g: i32 }"},
+         HEAD "  extern func @f() -> void {\n"
+         "    block e:\n      unreachable\n  }\n}\n"},
+        {"an extern global", HEAD "  extern global @g: i32\n}\n"},
         {"a layout declaration",
-         "module m { profile bce layout i32 {\n  size = 4\n  align = 4\n"
-         "  stride = 4\n} }"},
+         HEAD "  layout i32 {\n    size = 4\n    align = 4\n"
+         "    stride = 4\n  }\n}\n"},
         {"a layout member pinned to bits",
-         "module m { profile bce layout (x: i32, y: i32) {\n"
-         "  x @ bits 0 .. 32\n} }"},
+         HEAD "  layout (x: i32, y: i32) {\n    x @ bits 0 .. 32\n  }\n}\n"},
         {"a symbolic layout value",
-         "module m { profile bce layout ptr[i32] {\n"
-         "  size = sizeof(i32)\n  align = alignof(i32)\n} }"},
+         HEAD "  layout ptr[i32] {\n"
+         "    size = sizeof(i32)\n    align = alignof(i32)\n  }\n}\n"},
         {"an offsetof layout value",
-         "module m { profile bce layout (x: i32) {\n"
-         "  size = offsetof((x: i32), \"x\")\n} }"},
+         HEAD "  layout (x: i32) {\n"
+         "    size = offsetof((x: i32), \"x\")\n  }\n}\n"},
         {"an origin",
-         "module m { profile bce func @f() -> void { block e:\n"
-         "  unreachable !origin(source, \"\", 0, 1, 2, 3, 4, 5, 6) } }"},
+         HEAD "  func @f() -> void {\n    block e:\n"
+         "      unreachable !origin(source, \"\", 0, 1, 2, 3, 4, 5, 6)\n"
+         "  }\n}\n"},
         {"a float literal",
-         "module m { profile bce func @f() -> void {\n  local $x: f64 = 1.5\n"
-         "  block e: unreachable } }"},
+         HEAD "  func @f() -> void {\n    local $x: f64 = 1.5\n"
+         "    block e:\n      unreachable\n  }\n}\n"},
         {"a hexadecimal literal",
-         "module m { profile bce func @f() -> void {\n  local $x: i32 = 0x1f\n"
-         "  block e: unreachable } }"},
+         HEAD "  func @f() -> void {\n    local $x: i32 = 0x1f\n"
+         "    block e:\n      unreachable\n  }\n}\n"},
         {"a named argument",
-         "module m { profile bce func @g(%a: i32) -> i32 { block e:\n"
-         "  return %a }\n"
-         " func @f(%a: i32) -> i32 { block e:\n"
-         "  %r: i32 = call @g, k = %a\n  return %r } }"},
+         HEAD "  func @g(%a: i32) -> i32 {\n    block e:\n      return %a\n"
+         "  }\n"
+         "  func @f(%a: i32) -> i32 {\n    block e:\n"
+         "      %r: i32 = call @g, k = %a\n      return %r\n  }\n}\n"},
         {"a module-level type used by a global",
-         "module m { profile bce type T = i32 global @g: T }"},
+         "module m {\n  profile bce\n  type T = i32\n  global @g: T\n}\n"},
     };
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
@@ -214,9 +223,10 @@ static void test_the_grammar_defines_the_whole_surface(void)
         const char *src;
     } cases[] = {
         {"a parameter mode", "module",
-         "module m { profile bce func @f(out %a: i32) -> void {\n"
-         "  block e: unreachable } }"},
-        {"a member pinned to a bit range", "layout-item", "x @ bits 0 .. 32"},
+         "module m {\n  profile bce\n  func @f(out %a: i32) -> void {\n"
+         "    block e:\n      unreachable\n  }\n}\n"},
+        {"a member pinned to a bit range", "layout-item",
+         "x @ bits 0 .. 32\n"},
         {"every origin kind", "origin",
          "!origin(lowered, \"p\", 0, 1, 2, 3, 4, 5, 6)"},
         {"an inout mode", "func-param", "inout %a: i32"},
@@ -262,9 +272,9 @@ static void test_a_composed_keyword_is_still_a_name(void)
         char src[512];
 
         snprintf(src, sizeof src,
-                 "module %s { profile bce target %s\n"
+                 "module %s {\n  profile bce\n  target %s\n"
                  "  func @f() -> void {\n    local $%s: i32\n"
-                 "    block %s: unreachable\n  }\n}\n",
+                 "    block %s:\n      unreachable\n  }\n}\n",
                  WORDS[i], WORDS[i], WORDS[i], WORDS[i]);
 
         if (!grammar_accepts(src, "module")) {

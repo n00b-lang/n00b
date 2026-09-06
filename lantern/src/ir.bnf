@@ -1,4 +1,4 @@
-<module> ::= %"module" <name> %"{" <module-item>* %"}"
+<module> ::= <nl>? %"module" <name> %"{" <nl> <module-item>* %"}" <nl>?
 
 <module-item> ::= <profile-decl>
                 | <target-decl>
@@ -8,17 +8,19 @@
                 | <global-decl>
                 | <func>
 
-<profile-decl> ::= %"profile" <name>
-<target-decl>  ::= %"target" <dotted-name>
-<meta-decl>    ::= %"meta" <annot>
-<type-decl>    ::= %"type" <name> %"=" <typelang-type>
+<nl> ::= %NEWLINE+
 
-<layout-decl> ::= %"layout" <typelang-type> %"{" <layout-item>* %"}"
+<profile-decl> ::= %"profile" <name> <nl>
+<target-decl>  ::= %"target" <dotted-name> <nl>
+<meta-decl>    ::= %"meta" <annot> <nl>
+<type-decl>    ::= %"type" <name> %"=" <typelang-type> <nl>
 
-<layout-item> ::= %"size" %"=" <layout-val>
-                | %"align" %"=" <layout-val>
-                | %"stride" %"=" <layout-val>
-                | <name> %"@" %"bits" <layout-val> %"." %"." <layout-val>
+<layout-decl> ::= %"layout" <typelang-type> %"{" <nl> <layout-item>* %"}" <nl>
+
+<layout-item> ::= %"size" %"=" <layout-val> <nl>
+                | %"align" %"=" <layout-val> <nl>
+                | %"stride" %"=" <layout-val> <nl>
+                | <name> %"@" %"bits" <layout-val> %"." %"." <layout-val> <nl>
 
 <layout-val> ::= <int> | <symbolic-expr>
 
@@ -28,9 +30,9 @@
 
 <linkage> ::= %"static" | %"extern"
 
-<global-decl> ::= <linkage>? %"global" <global> %":" <typelang-type> <init>? <meta>*
+<global-decl> ::= <linkage>? %"global" <global> %":" <typelang-type> <init>? <meta>* <nl>
 
-<func> ::= <linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> <meta>* %"{" <local>* <block>+ %"}"
+<func> ::= <linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> <meta>* %"{" <nl> <local>* <block>+ %"}" <nl>
 
 <params>     ::= <func-param> (%"," <func-param>)*
 <func-param> ::= <param-mode>? <value> %":" <typelang-type>
@@ -38,13 +40,15 @@
                | %"*" <typelang-type>
 <param-mode> ::= %"in" | %"out" | %"inout"
 
-<local> ::= %"local" <local-ref> %":" <typelang-type> <init>? <meta>*
+<local> ::= %"local" <local-ref> %":" <typelang-type> <init>? <meta>* <nl>
 
 <init> ::= %"=" %"-"? <number>
 
-<block> ::= %"block" <name> %":" <meta>* <instr>*
+<block> ::= %"block" <name> %":" <meta>* <nl> <instr>*
 
-<instr> ::= <dest>? <name> <modifier>* <operands>? <meta>*
+<instr> ::= <dest>? <opcode> <modifier>* <operands>? <meta>* %NEWLINE+
+
+<opcode> ::= <name> (%"." <name>)*
 
 <dest> ::= <value> %":" <typelang-type> %"="
          | <local-ref> %"="
@@ -71,9 +75,11 @@
 
 <meta> ::= <loc> | <origin> | <annot>
 
-<loc> ::= %"!" %"loc" %"(" <int> (%"," <int>)* %")"
+<loc> ::= %"!" %"loc" %"(" <signed-int> (%"," <signed-int>)* %")"
 
-<origin> ::= %"!" %"origin" %"(" <origin-kind> %"," %STRING_LIT (%"," <int>)* %")"
+<origin> ::= %"!" %"origin" %"(" <origin-kind> %"," %STRING_LIT (%"," <signed-int>)* %")"
+
+<signed-int> ::= %"-"? <int>
 
 <origin-kind> ::= %"source" | %"inlined" | %"expanded" | %"lowered"
                 | %"generated"
@@ -84,7 +90,7 @@
 
 <ns-key> ::= <name> %"." <name>
 
-<annot-value> ::= %"true" | %"false" | <int> | %STRING_LIT
+<annot-value> ::= %"true" | %"false" | <int> | %"-" <int> | %STRING_LIT
                 | <typelang-type>
                 | <ref>
 

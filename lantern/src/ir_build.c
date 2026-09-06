@@ -63,8 +63,9 @@ struct ib_node {
     bool         over;
     bool         neg;
     bool         present;
-    uint64_t     uval;
-    ir_valkind_t refkind;
+    uint64_t        uval;
+    ir_layout_val_t lay;
+    ir_valkind_t    refkind;
 
     opd_how          how;
     meta_kind        mkind;
@@ -95,7 +96,7 @@ typedef struct {
     size_t                     n_profiles;
 } B;
 
-static void bfail(B *b, ir_span_t at, const char *what)
+static void bfail_as(B *b, ir_diagcode_t code, ir_span_t at, const char *what)
 {
     if (b->failed) {
         return;
@@ -106,11 +107,16 @@ static void bfail(B *b, ir_span_t at, const char *what)
         return;
     }
 
-    ir_diag_t *dg = ir_diag_begin(b->d, IR_DIAG_PARSE, at, what);
+    ir_diag_t *dg = ir_diag_begin(b->d, code, at, what);
 
     if (dg) {
         ir_diag_message(dg, b->d, what);
     }
+}
+
+static void bfail(B *b, ir_span_t at, const char *what)
+{
+    bfail_as(b, IR_DIAG_PARSE, at, what);
 }
 
 static ir_span_t tok_span(B *b, const ncc_token_info_t *t)
@@ -139,37 +145,43 @@ static ib_node *nd(B *b, ib_kind kind, ir_span_t span)
     return n;
 }
 
-static ir_span_t span_of(void *v)
+static ncc_token_info_t *edge_tok(ncc_parse_tree_t *n, bool last)
 {
-    ncc_reduce_list_t *l = ncc_reduce_as_list(v);
+    if (!n) {
+        return nullptr;
+    }
 
-    if (l) {
-        ir_span_t s = IR_SPAN_UNKNOWN;
+    if (ncc_tree_is_leaf(n)) {
+        ncc_token_info_t *t = ncc_parse_node_token(n);
 
-        for (size_t i = 0; i < l->n; i++) {
-            s = ir_span_cover(s, span_of(l->v[i]));
+        return t && t->tid == ir_grammar_tid("NEWLINE") ? nullptr : t;
+    }
+
+    size_t k = ncc_tree_num_children(n);
+
+    for (size_t i = 0; i < k; i++) {
+        ncc_token_info_t *t = edge_tok(ncc_tree_child(n, last ? k - 1 - i : i),
+                                       last);
+
+        if (t) {
+            return t;
         }
-
-        return s;
     }
 
-    if (!v) {
-        return IR_SPAN_UNKNOWN;
-    }
-
-    return ir_typelang_type_of(v) ? IR_SPAN_UNKNOWN
-                                  : ((ib_node *)v)->span;
+    return nullptr;
 }
 
 static ir_span_t cover(ncc_reduce_t *r)
 {
-    ir_span_t s = IR_SPAN_UNKNOWN;
+    B                *b = r->thunk;
+    ncc_token_info_t *a = edge_tok(r->node, false);
+    ncc_token_info_t *z = edge_tok(r->node, true);
 
-    for (size_t i = 0; i < r->n_kids; i++) {
-        s = ir_span_cover(s, span_of(r->kids[i]));
+    if (!a) {
+        return IR_SPAN_UNKNOWN;
     }
 
-    return s;
+    return ir_span_cover(tok_span(b, a), tok_span(b, z ? z : a));
 }
 
 static void *unwrap(void *v)
@@ -260,11 +272,12 @@ static size_t slot_of(ncc_reduce_t *r, const char *role)
     return SIZE_MAX;
 }
 
+static ib_node *leaf_ib(B *b, ncc_parse_tree_t *c);
+static ib_node *kid(ncc_reduce_t *r, size_t i);
+
 static ib_node *at(ncc_reduce_t *r, const char *role)
 {
-    size_t i = slot_of(r, role);
-
-    return i < r->n_kids ? (ib_node *)unwrap(r->kids[i]) : nullptr;
+    return kid(r, slot_of(r, role));
 }
 
 static ib_node *nth_named(ncc_reduce_t *r, const char *role, size_t nth)
@@ -274,7 +287,7 @@ static ib_node *nth_named(ncc_reduce_t *r, const char *role, size_t nth)
     for (size_t i = 0; i < r->n_kids; i++) {
         if (ncc_tree_is_nt(r->grammar, ncc_tree_child(r->node, i), role)
             && seen++ == nth) {
-            return (ib_node *)unwrap(r->kids[i]);
+            return kid(r, i);
         }
     }
 
@@ -313,6 +326,40 @@ static bool has_minus(ncc_reduce_t *r)
     return false;
 }
 
+static bool subtree_has_minus(ncc_parse_tree_t *n, int depth)
+{
+    if (!n || depth > 4) {
+        return false;
+    }
+
+    if (ncc_tree_is_leaf(n)) {
+        return ncc_tree_leaf_tid(n) == '-';
+    }
+
+    for (size_t i = 0; i < ncc_tree_num_children(n); i++) {
+        if (subtree_has_minus(ncc_tree_child(n, i), depth + 1)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool has_minus_tok(ncc_reduce_t *r)
+{
+    for (size_t i = 0; i < r->n_kids; i++) {
+        ncc_parse_tree_t *c = ncc_tree_child(r->node, i);
+
+        if (c && !ncc_tree_is_nt(r->grammar, c, "number")
+            && !ncc_tree_is_nt(r->grammar, c, "int")
+            && subtree_has_minus(c, 0)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static ib_node *str_kid(ncc_reduce_t *r)
 {
     for (size_t i = 0; i < r->n_kids; i++) {
@@ -320,7 +367,7 @@ static ib_node *str_kid(ncc_reduce_t *r)
 
         if (ncc_tree_is_leaf(c)
             && ncc_tree_leaf_tid(c) == ir_grammar_tid("STRING_LIT")) {
-            return (ib_node *)unwrap(r->kids[i]);
+            return leaf_ib(r->thunk, c);
         }
     }
 
@@ -341,9 +388,40 @@ static ncc_reduce_list_t *rep(ncc_reduce_t *r, const char *role)
     return i < r->n_kids ? ncc_reduce_as_list(r->kids[i]) : nullptr;
 }
 
+static ib_node *leaf_ib(B *b, ncc_parse_tree_t *c)
+{
+    ncc_token_info_t *t = ncc_parse_node_token(c);
+    ncc_string_t      s = ncc_tree_leaf_text(c);
+    ib_node          *n = nd(b, IB_NAME,
+                             t && t->tid == ir_grammar_tid("NEWLINE")
+                               ? IR_SPAN_UNKNOWN
+                               : tok_span(b, t));
+
+    if (s.data) {
+        n->text = ir_strdup(b->ctx, s.data);
+    }
+    else if (t && t->tid > 0 && t->tid < 128) {
+        char one[2] = {(char)t->tid, 0};
+
+        n->text = ir_strdup(b->ctx, one);
+    }
+
+    return n;
+}
+
 static ib_node *kid(ncc_reduce_t *r, size_t i)
 {
-    return i < r->n_kids ? (ib_node *)unwrap(r->kids[i]) : nullptr;
+    if (i >= r->n_kids) {
+        return nullptr;
+    }
+
+    ncc_parse_tree_t *c = ncc_tree_child(r->node, i);
+
+    if (c && ncc_tree_is_leaf(c)) {
+        return leaf_ib(r->thunk, c);
+    }
+
+    return (ib_node *)unwrap(r->kids[i]);
 }
 
 static size_t sep_count(ncc_reduce_list_t *l)
@@ -455,28 +533,24 @@ static bool decode_int(const char *s, ir_lit_t *out, bool *over)
     return true;
 }
 
-static void *r_leaf(ncc_reduce_t *r)
-{
-    B                *b = r->thunk;
-    ncc_token_info_t *t = ncc_parse_node_token(r->node);
-    ncc_string_t      s = ncc_tree_leaf_text(r->node);
-    ib_node          *n = nd(b, IB_NAME, tok_span(b, t));
-
-    if (s.data) {
-        n->text = ir_strdup(b->ctx, s.data);
-    }
-    else if (t && t->tid > 0 && t->tid < 128) {
-        char one[2] = {(char)t->tid, 0};
-
-        n->text = ir_strdup(b->ctx, one);
-    }
-
-    return n;
-}
-
 static void *r_name(ncc_reduce_t *r)
 {
     return kid(r, 0);
+}
+
+static void *r_signed_int(ncc_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *k = at(r, "int");
+    ib_node *n = nd(b, IB_NUM, cover(r));
+
+    if (k) {
+        n->lit     = k->lit;
+        n->lit.neg = has_minus_tok(r);
+        n->over    = k->over;
+    }
+
+    return n;
 }
 
 static void *r_int(ncc_reduce_t *r)
@@ -542,25 +616,47 @@ static void *r_global(ncc_reduce_t *r)
     return ref_of(r, IR_VAL_GLOBAL);
 }
 
+static void tokens_into(ir_sb *sb, ncc_parse_tree_t *n, size_t *count)
+{
+    if (!n) {
+        return;
+    }
+
+    if (ncc_tree_is_leaf(n)) {
+        ncc_token_info_t *t = ncc_parse_node_token(n);
+        ncc_string_t      s = ncc_tree_leaf_text(n);
+
+        if (s.data) {
+            ir_sb_str(sb, s.data);
+        }
+        else if (t && t->tid > 0 && t->tid < 128) {
+            char one[2] = {(char)t->tid, 0};
+
+            ir_sb_str(sb, one);
+        }
+        (*count)++;
+
+        return;
+    }
+
+    for (size_t i = 0; i < ncc_tree_num_children(n); i++) {
+        tokens_into(sb, ncc_tree_child(n, i), count);
+    }
+}
+
 static void *r_dotted(ncc_reduce_t *r)
 {
     B      *b  = r->thunk;
     ir_sb   sb = {0};
     ib_node *n = nd(b, IB_NAME, cover(r));
+    size_t  nt = 0;
 
-    ir_sb_str(&sb, kid(r, 0) && kid(r, 0)->text ? kid(r, 0)->text : "");
-
-    ncc_reduce_list_t *rest = tail_group(r);
-
-    for (size_t i = 0; rest && i < rest->n; i++) {
-        ib_node *p = unwrap(rest->v[i]);
-
-        ir_sb_str(&sb, p && p->text ? p->text : "");
-    }
+    tokens_into(&sb, r->node, &nt);
 
     char *s = ir_sb_take(&sb);
 
-    n->text = s ? ir_strdup(b->ctx, s) : nullptr;
+    n->text    = s ? ir_strdup(b->ctx, s) : nullptr;
+    n->present = nt > 1;
     free(s);
 
     return n;
@@ -625,6 +721,7 @@ static bool open_module(ncc_visit_t *v)
 
     if (!pd) {
         bfail(b, IR_SPAN_UNKNOWN, "a module must name its profile");
+        ncc_tree_walk_stop(v->walk);
 
         return false;
     }
@@ -641,7 +738,10 @@ static bool open_module(ncc_visit_t *v)
     }
 
     if (!b->m) {
-        bfail(b, IR_SPAN_UNKNOWN, "unknown profile");
+        bfail(b, tok_span(b, ncc_tree_find_first_terminal(
+                                 nt_child(v->grammar, pd, "name"))),
+              "unknown profile");
+        ncc_tree_walk_stop(v->walk);
 
         return false;
     }
@@ -671,6 +771,10 @@ static void *r_type_decl(ncc_reduce_t *r)
 static void *r_module(ncc_reduce_t *r)
 {
     B *b = r->thunk;
+
+    if (!b->m) {
+        return nullptr;
+    }
 
     ir_module_set_span(b->m, cover(r));
     attach_comment(b, r->node, ir_module_annots(b->m));
@@ -744,47 +848,24 @@ static void apply_init(B *b, ib_node *init, bool *has, ir_lit_t *lit,
 
 static void *r_symbolic(ncc_reduce_t *r)
 {
-    B       *b = r->thunk;
-    ib_node *n = nd(b, IB_LAYVAL, cover(r));
-    ib_node *w = kid(r, 0);
-    th_type *t = type_of(b, raw_at(r, "typelang-type"), cover(r));
+    B            *b = r->thunk;
+    ib_node      *n = nd(b, IB_LAYVAL, cover(r));
+    ib_node      *w = kid(r, 0);
+    ib_node      *f = str_kid(r);
+    th_type      *t = type_of(b, raw_at(r, "typelang-type"), cover(r));
+    ir_symkind_t  k;
 
-    if (!t || !w || !w->text) {
-        return n;
-    }
-
-    ir_descriptor_t *d = ir_layout_ensure(b->m, t, nullptr);
-
-    if (!d) {
-        bfail(b, cover(r), "this type has no descriptor");
+    if (!t || !w || !w->text || !ir_symkind_from_name(w->text, &k)) {
+        bfail(b, cover(r), "expected a symbolic layout value");
 
         return n;
     }
 
-    if (!strcmp(w->text, "sizeof") && ir_layout_is_settled(&d->size)) {
-        n->uval    = d->size.value;
-        n->present = true;
-    }
-    else if (!strcmp(w->text, "alignof")
-             && ir_layout_is_settled(&d->align)) {
-        n->uval    = d->align.value;
-        n->present = true;
-    }
-    else if (!strcmp(w->text, "offsetof")) {
-        ib_node *fld = str_kid(r);
-
-        for (uint32_t i = 0; fld && i < d->n_members; i++) {
-            if (!strcmp(d->members[i].name, fld->text ? fld->text : "")
-                && ir_layout_is_settled(&d->members[i].bit_offset)) {
-                n->uval    = d->members[i].bit_offset.value;
-                n->present = true;
-            }
-        }
-    }
-
-    if (!n->present) {
-        bfail(b, cover(r), "this layout value is not settled");
-    }
+    n->lay = (ir_layout_val_t){.state    = IR_LAYOUT_SYMBOLIC,
+                               .authored = true,
+                               .sym      = k,
+                               .of       = t,
+                               .member   = f ? f->text : nullptr};
 
     return n;
 }
@@ -800,9 +881,10 @@ static void *r_layout_val(ncc_reduce_t *r)
 
     ib_node *n = nd(b, IB_LAYVAL, k ? k->span : IR_SPAN_UNKNOWN);
 
-    if (k && k->kind == IB_NUM && !k->over) {
-        n->uval    = (uint64_t)k->lit.mag;
-        n->present = true;
+    if (k && k->kind == IB_NUM && !k->over && !k->lit.neg) {
+        n->lay = (ir_layout_val_t){.state    = IR_LAYOUT_PINNED,
+                                   .authored = true,
+                                   .value    = (uint64_t)k->lit.mag};
     }
     else {
         bfail(b, n->span, "expected a layout value");
@@ -873,20 +955,38 @@ static void *r_annot_value(ncc_reduce_t *r)
         return n;
     }
 
+    ib_node *num = at(r, "int");
+    ib_node *ref = at(r, "ref");
+    ib_node *str = str_kid(r);
+
+    if (num) {
+        n->annot.kind  = IR_ANNOT_INT;
+        n->annot.i     = num->lit;
+        n->annot.i.neg = has_minus_tok(r);
+
+        return n;
+    }
+
+    if (ref) {
+        n->annot.kind = IR_ANNOT_VALUE;
+        n->text       = ref->text;
+        n->refkind    = ref->refkind;
+
+        return n;
+    }
+
+    if (str) {
+        n->annot.kind = IR_ANNOT_STR;
+        n->annot.s    = str->text;
+
+        return n;
+    }
+
     if (!k) {
         return n;
     }
 
-    if (k->kind == IB_NUM) {
-        n->annot.kind = IR_ANNOT_INT;
-        n->annot.i    = k->lit;
-    }
-    else if (k->kind == IB_REF) {
-        n->annot.kind = IR_ANNOT_VALUE;
-        n->text       = k->text;
-        n->refkind    = k->refkind;
-    }
-    else if (k->text && !strcmp(k->text, "true")) {
+    if (k->text && !strcmp(k->text, "true")) {
         n->annot.kind = IR_ANNOT_BOOL;
         n->annot.b    = true;
     }
@@ -940,7 +1040,7 @@ static void *r_loc(ncc_reduce_t *r)
 
     n->mkind = MT_LOC;
 
-    ib_node *first = at(r, "int");
+    ib_node *first = at(r, "signed-int");
 
     if (first) {
         v[got++] = ir_lit_signed(first->lit);
@@ -1027,10 +1127,6 @@ static void apply_metas(B *b, ncc_reduce_list_t *metas, ir_func_t *f,
             break;
 
         case MT_ORIGIN:
-            if (origin) {
-                *origin = ir_origin_new(b->ctx, mt->okind, mt->loc, mt->text,
-                                        *origin);
-            }
             break;
 
         case MT_ANNOT: {
@@ -1057,6 +1153,19 @@ static void apply_metas(B *b, ncc_reduce_list_t *metas, ir_func_t *f,
             ir_annot_set(b->ctx, annots, a);
             break;
         }
+        }
+    }
+
+    if (!origin) {
+        return;
+    }
+
+    for (size_t i = metas ? metas->n : 0; i-- > 0;) {
+        ib_node *mt = unwrap(metas->v[i]);
+
+        if (mt && mt->kind == IB_META && mt->mkind == MT_ORIGIN) {
+            *origin = ir_origin_new(b->ctx, mt->okind, mt->loc, mt->text,
+                                    *origin);
         }
     }
 }
@@ -1124,7 +1233,29 @@ static void *r_global_decl(ncc_reduce_t *r)
 
 static void *r_layout_item(ncc_reduce_t *r)
 {
-    return r->n_kids ? r->kids[0] : nullptr;
+    B       *b    = r->thunk;
+    ib_node *head = kid(r, 0);
+    ib_node *n    = nd(b, IB_LAYVAL, cover(r));
+    size_t   nv   = 0;
+
+    n->text = head ? head->text : nullptr;
+    n->span = head ? head->span : n->span;
+
+    for (size_t i = 0; i < r->n_kids && nv < 2; i++) {
+        ib_node *e = kid(r, i);
+
+        if (e && e->kind == IB_LAYVAL && e != head) {
+            if (nv++) {
+                n->b = e;
+            }
+            else {
+                n->a = e;
+            }
+        }
+    }
+    n->present = nv == 2;
+
+    return n;
 }
 
 static void *r_layout_decl(ncc_reduce_t *r)
@@ -1137,47 +1268,47 @@ static void *r_layout_decl(ncc_reduce_t *r)
     }
 
     ncc_reduce_list_t *items = rep(r, "layout-item");
+    ir_descriptor_t   *d     = ir_layout_ensure(b->m, t, nullptr);
+
+    if (!d) {
+        bfail(b, cover(r), "this type has no descriptor");
+
+        return nullptr;
+    }
 
     for (size_t i = 0; items && i < items->n; i++) {
-        ncc_reduce_list_t *it = ncc_reduce_as_list(items->v[i]);
+        ib_node *it = unwrap(items->v[i]);
 
-        if (!it || !it->n) {
+        if (!it || it->kind != IB_LAYVAL || !it->a) {
             continue;
         }
 
-        ib_node *head = it->v[0];
+        ib_node *head = it;
 
-        if (it->n == 4 && is_word(head, "size")) {
-            ib_node *v = it->v[2];
-
-            if (!ir_layout_pin_size(b->m, t, v->uval)) {
-                bfail(b, v->span, "this size contradicts one already pinned");
-            }
+        if (is_word(head, "size")) {
+            d->size = it->a->lay;
         }
-        else if (it->n == 4 && is_word(head, "align")) {
-            ib_node *v = it->v[2];
-
-            if (!ir_layout_pin_align(b->m, t, v->uval)) {
-                bfail(b, v->span, "this alignment is not a power of two, or "
-                                  "contradicts one already pinned");
-            }
+        else if (is_word(head, "align")) {
+            d->align = it->a->lay;
         }
-        else if (it->n == 4 && is_word(head, "stride")) {
-            ib_node *v = it->v[2];
-
-            if (!ir_layout_pin_stride(b->m, t, v->uval)) {
-                bfail(b, v->span,
-                      "this stride contradicts one already pinned");
-            }
+        else if (is_word(head, "stride")) {
+            d->stride = it->a->lay;
         }
-        else if (it->n == 8) {
-            ib_node *lo = it->v[3];
-            ib_node *hi = it->v[6];
+        else if (it->present) {
+            ir_layout_val_t lo = it->a->lay;
+            ir_layout_val_t hi = it->b->lay;
 
-            if (!ir_layout_pin_member(b->m, t, head->text, lo->uval,
-                                      hi->uval - lo->uval)) {
+            if (lo.state != IR_LAYOUT_PINNED || hi.state != IR_LAYOUT_PINNED
+                || hi.value < lo.value) {
                 bfail(b, head->span,
-                      "this member layout contradicts one already pinned");
+                      "a member's bit range must be two numbers, low then "
+                      "high");
+            }
+            else if (!ir_layout_pin_member(b->m, t, head->text, lo.value,
+                                           hi.value - lo.value)) {
+                bfail(b, head->span,
+                      "the member's bit range contradicts one already "
+                      "pinned");
             }
         }
     }
@@ -1220,7 +1351,7 @@ static void *r_dest(ncc_reduce_t *r)
 {
     B       *b   = r->thunk;
     ib_node *who = kid(r, 0);
-    ib_node *n   = nd(b, IB_DEST, cover(r));
+    ib_node *n   = nd(b, IB_DEST, who ? who->span : cover(r));
 
     n->text    = who ? who->text : nullptr;
     n->refkind = who ? who->refkind : IR_VAL_INSTR;
@@ -1263,6 +1394,15 @@ static void *r_operand(ncc_reduce_t *r)
             n->lit     = num->lit;
             n->lit.neg = true;
         }
+
+        return n;
+    }
+
+    ib_node *str = str_kid(r);
+
+    if (str) {
+        n->how  = OP_STR;
+        n->text = str->text;
 
         return n;
     }
@@ -1362,12 +1502,14 @@ static void *r_instr(ncc_reduce_t *r)
 {
     B                 *b    = r->thunk;
     ncc_reduce_list_t *dest = rep(r, "dest");
-    ib_node           *op   = at(r, "name");
+    ib_node           *op   = at(r, "opcode");
     ib_node           *n    = nd(b, IB_INSTR, cover(r));
 
     n->a    = dest && dest->n ? unwrap(dest->v[0]) : nullptr;
-    n->text = op ? op->text : nullptr;
-    n->node = r->node;
+    n->text    = op ? op->text : nullptr;
+    n->present = op && op->present;
+    n->loc     = op ? op->span : n->span;
+    n->node    = r->node;
     n->l1   = rep(r, "modifier");
     n->l2   = rep(r, "operands");
     n->l3   = rep(r, "meta");
@@ -1424,6 +1566,7 @@ static void *r_local(ncc_reduce_t *r)
     ib_node *n    = nd(b, IB_LOCAL, cover(r));
 
     n->text = name ? name->text : nullptr;
+    n->loc  = name ? name->span : n->span;
     n->type = type_of(b, raw_at(r, "typelang-type"), n->span);
     n->l1   = rep(r, "init");
     n->l2   = rep(r, "meta");
@@ -1550,8 +1693,27 @@ static void push_operand(B *b, ir_func_t *f, ir_instr_t *in, ib_node *o)
         return;
 
     case OP_WORD:
-        if (want == IR_OPD_BLOCK) {
+        if (want == IR_OPD_BLOCK || want == IR_OPD_DEFAULT_BLOCK) {
             ir_instr_push_block(in, block_named(f, o->text));
+
+            return;
+        }
+
+        if (want == IR_OPD_TYPE) {
+            th_type *t = ir_type_parse(b->m, o->text);
+
+            if (!t) {
+                bfail(b, o->span, "expected a type");
+
+                return;
+            }
+            ir_instr_push_type(in, t);
+
+            return;
+        }
+
+        if (want == IR_OPD_NAME) {
+            ir_instr_push_name(in, o->text);
 
             return;
         }
@@ -1701,7 +1863,7 @@ static void *r_func(ncc_reduce_t *r)
                                         : nullptr;
 
         if (!l) {
-            bfail(b, ln ? ln->span : IR_SPAN_UNKNOWN, "duplicate local");
+            bfail(b, ln ? ln->loc : IR_SPAN_UNKNOWN, "duplicate local");
 
             return nullptr;
         }
@@ -1734,7 +1896,14 @@ static void *r_func(ncc_reduce_t *r)
             ir_op_t  op;
 
             if (!ir_module_op_lookup(b->m, ins->text, &op)) {
-                bfail(b, ins->span, "unknown opcode");
+                if (ins->present) {
+                    bfail(b, ins->loc,
+                          "this opcode needs a profile that is not loaded");
+                }
+                else {
+                    bfail_as(b, IR_DIAG_UNKNOWN_OPCODE, ins->loc,
+                             "unknown opcode");
+                }
 
                 return nullptr;
             }
@@ -1826,7 +1995,7 @@ static void reg(B *b, ncc_tree_walk_t *w, const char *nt, ncc_reduce_fn fn)
     }
 }
 
-ir_module_t *ir_module_build(ir_ctx_t *ctx, const char *text, int32_t file,
+ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
                              const ir_profile_t *const *profiles,
                              size_t n_profiles, ir_diags_t *d)
 {
@@ -1869,12 +2038,12 @@ ir_module_t *ir_module_build(ir_ctx_t *ctx, const char *text, int32_t file,
     ncc_tree_walk_t *w = ncc_tree_walk_new(g, &b);
 
     ir_typelang_install(w, b.types);
-    ncc_walk_reduce_leaf(w, r_leaf, &b);
     ncc_walk_on_nt(w, ncc_string_from_cstr("module"), open_module, nullptr,
                    &b);
 
     reg(&b, w, "name", r_name);
     reg(&b, w, "int", r_int);
+    reg(&b, w, "signed-int", r_signed_int);
     reg(&b, w, "number", r_number);
     reg(&b, w, "value", r_value);
     reg(&b, w, "local-ref", r_local_ref);
@@ -1886,6 +2055,7 @@ ir_module_t *ir_module_build(ir_ctx_t *ctx, const char *text, int32_t file,
     reg(&b, w, "meta-decl", r_meta_decl);
     reg(&b, w, "linkage", r_linkage);
     reg(&b, w, "param-mode", r_mode);
+    reg(&b, w, "origin-kind", r_name);
     reg(&b, w, "modifier", r_modifier);
     reg(&b, w, "init", r_init);
     reg(&b, w, "symbolic-expr", r_symbolic);
@@ -1908,6 +2078,7 @@ ir_module_t *ir_module_build(ir_ctx_t *ctx, const char *text, int32_t file,
     reg(&b, w, "phi-arm", r_phi_arm);
     reg(&b, w, "switch-arm", r_switch_arm);
     reg(&b, w, "default-block", r_default_block);
+    reg(&b, w, "opcode", r_dotted);
     reg(&b, w, "instr", r_instr);
     reg(&b, w, "block", r_block);
     reg(&b, w, "local", r_local);

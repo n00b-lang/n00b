@@ -24,7 +24,8 @@ static int64_t tid_of_name(ncc_grammar_t *g, const char *name)
     return ncc_lookup_terminal(g, ncc_string_from_cstr(name));
 }
 
-static const char *const DECLARED[] = {"INT_LIT", "FLOAT_LIT", "STRING_LIT"};
+static const char *const DECLARED[] = {"INT_LIT", "FLOAT_LIT", "STRING_LIT",
+                                       "NEWLINE"};
 
 ncc_grammar_t *ir_grammar(void)
 {
@@ -96,6 +97,7 @@ void ir_grammar_shutdown(void)
 static int32_t tid_int;
 static int32_t tid_float;
 static int32_t tid_str;
+static int32_t tid_nl;
 
 static bool word_start(ncc_codepoint_t c, void *ctx)
 {
@@ -118,8 +120,31 @@ static bool after_sigil(ncc_scanner_t *s)
 
 static bool ir_scan(ncc_scanner_t *s)
 {
+    bool broke = false;
+
 restart:
-    ncc_scan_skip_whitespace(s);
+    while (!ncc_scan_at_eof(s)) {
+        ncc_codepoint_t c = ncc_scan_peek(s, 0);
+
+        if (c == '\n' || c == '\r') {
+            broke = true;
+            ncc_scan_advance(s);
+            continue;
+        }
+
+        if (c == ' ' || c == '\t' || c == '\v' || c == '\f') {
+            ncc_scan_advance(s);
+            continue;
+        }
+        break;
+    }
+
+    if (broke) {
+        ncc_scan_mark(s);
+        ncc_scan_emit_marked(s, tid_nl);
+
+        return true;
+    }
 
     if (ncc_scan_at_eof(s)) {
         return false;
@@ -129,6 +154,11 @@ restart:
         ncc_scan_mark(s);
         ncc_scan_skip_line_comment(s);
         ncc_scan_add_leading_trivia(s, ncc_scan_extract(s));
+
+        while (!ncc_scan_at_eof(s)
+               && (ncc_scan_peek(s, 0) == '\n' || ncc_scan_peek(s, 0) == '\r')) {
+            ncc_scan_advance(s);
+        }
         goto restart;
     }
 
@@ -196,6 +226,7 @@ ncc_token_stream_t *ir_lex(const char *src, size_t len)
     tid_int   = (int32_t)tid_of_name(g, "INT_LIT");
     tid_float = (int32_t)tid_of_name(g, "FLOAT_LIT");
     tid_str   = (int32_t)tid_of_name(g, "STRING_LIT");
+    tid_nl    = (int32_t)tid_of_name(g, "NEWLINE");
 
     ncc_buffer_t  *buf = ncc_buffer_from_bytes(src, (int64_t)len);
     ncc_scanner_t *sc  = ncc_scanner_new(buf, ir_scan, g,
