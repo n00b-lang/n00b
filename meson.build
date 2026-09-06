@@ -3502,6 +3502,16 @@ conduit_test = executable('test_conduit',
 )
 test('conduit', conduit_test, suite: 'unit')
 
+# Gates the embedded-n00b_condition_t pinning rule (n00b#326): every inbox
+# constructor must yield a pointer the collector cannot relocate, because the
+# lock registry keys locks by address. Convention-only before this test; two
+# constructors had already drifted off it (n00b#324/#325).
+conduit_inbox_pinning_test = executable('test_conduit_inbox_pinning',
+    ['test/unit/test_conduit_inbox_pinning.c'],
+    kwargs: test_common_kwargs,
+)
+test('conduit_inbox_pinning', conduit_inbox_pinning_test, suite: 'unit')
+
 # n00b#327: an interior pointer into an OOB-metadata/no-inline-header allocator
 # cannot be resolved, and must report that distinctly rather than looking like
 # free space (which conservative scanning produces constantly).
