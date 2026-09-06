@@ -211,8 +211,11 @@ jobs:
             "-Dc_args=--target=x86_64-pc-windows-msvc",
             "-Dc_link_args=--target=x86_64-pc-windows-msvc -fuse-ld=lld -llegacy_stdio_definitions $rtBuiltins"
           )
-          .\build.ps1 -BuildDir build_windows_component -BuildType release -NccPath $ncc[0].FullName -MesonArgs $mesonArgs -LogPath n00b-windows.log
-          if ($LASTEXITCODE -ne 0) { throw "n00b build failed with exit code $LASTEXITCODE" }
+          # SETUP ONLY. Configuring defines every test target; it does not
+          # compile them. That distinction is load-bearing here -- see the
+          # target selection below.
+          .\build.ps1 -BuildDir build_windows_component -BuildType release -NccPath $ncc[0].FullName -MesonArgs $mesonArgs -LogPath n00b-windows.log -SetupOnly
+          if ($LASTEXITCODE -ne 0) { throw "n00b configure failed with exit code $LASTEXITCODE" }
           # n00b#319. This used to run exactly one test -- `condition` -- so a
           # green Windows job meant "libn00b compiles and links" and nothing
           # about runtime behaviour. Zero rocs and zero dict tests had ever
@@ -250,7 +253,54 @@ jobs:
           $rocsDict = (meson test -C build_windows_component @suiteArgs --list) |
             ForEach-Object { ($_ -split ':')[-1].Trim() } |
             Where-Object { $_ -match '^(rocs|dict)' }
-          meson test -C build_windows_component --print-errorlogs `
+          $testNames = @('condition') + $rocsDict
+
+          # Build ONLY the tests that are about to run, not `ninja all`.
+          #
+          # -Dbuild_tests=true is required for these targets to compile at all
+          # (it is what turns on N00B_DEBUG), but it also DEFINES every other
+          # test target in the tree -- and a plain `ninja` then compiles all of
+          # them. About 40 of those include <pthread.h>, <sys/socket.h>,
+          # <netinet/in.h> or <sys/select.h>, none of which this target
+          # provides, so the build died before running a single test:
+          #
+          #   test_http_proxy_https_plaintext.c:30:10:
+          #       fatal error: 'pthread.h' file not found
+          #
+          # Those tests are POSIX-only by construction (raw sockets, direct
+          # pthread_create) and none of them match the rocs|dict filter, so
+          # they would not have run on Windows even if they had compiled.
+          # Porting ~40 QUIC/HTTP socket tests to Winsock is a real project;
+          # blocking this job on it would mean rocs and dict stay unrun on
+          # Windows meanwhile, which is the exact gap n00b#319 exists to close.
+          # Tracked separately for whoever takes that on.
+          #
+          # Targets come from meson's own introspection rather than a guessed
+          # `test_` + name, so a test whose executable is named differently
+          # from its test name still builds.
+          $intro = Get-Content build_windows_component/meson-info/intro-tests.json -Raw | ConvertFrom-Json
+          # Note 65 targets for 68 tests is expected, not a bug: several tests
+          # share one executable and differ only by argv (dict_reader_strand
+          # runs a 'get' and an 'add' case that way).
+          $allBases = $intro |
+            Where-Object { $testNames -contains $_.name } |
+            ForEach-Object { [System.IO.Path]::GetFileName($_.cmd[0]) } |
+            Sort-Object -Unique
+          $targets = $allBases | Where-Object { $_ -like '*.exe' }
+          # Anything dropped here is a test driven by an interpreter rather
+          # than a built binary. None exist in this set today; say so out loud
+          # if that changes, because the symptom would otherwise be a
+          # confusing --no-rebuild miss much later.
+          $dropped = $allBases | Where-Object { $_ -notlike '*.exe' }
+          if ($dropped) { Write-Host "not ninja targets, skipped: $($dropped -join ', ')" }
+          if ($targets.Count -eq 0) { throw "no test targets resolved -- introspection or filter is wrong" }
+          Write-Host "building $($targets.Count) test targets for $($testNames.Count) tests"
+          .\build.ps1 -BuildDir build_windows_component -BuildType release -NccPath $ncc[0].FullName -MesonArgs $mesonArgs -LogPath n00b-windows.log -Target $targets
+          if ($LASTEXITCODE -ne 0) { throw "n00b build failed with exit code $LASTEXITCODE" }
+
+          # --no-rebuild: meson would otherwise run `ninja all` itself before
+          # testing, reintroducing exactly the compile failures avoided above.
+          meson test -C build_windows_component --print-errorlogs --no-rebuild `
             --num-processes 4 @suiteArgs condition @rocsDict
           if ($LASTEXITCODE -ne 0) { throw "n00b Windows test suite failed with exit code $LASTEXITCODE" }
 
