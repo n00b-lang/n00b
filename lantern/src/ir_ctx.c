@@ -5,6 +5,8 @@
 #include "ir/typelang.h"
 #include "ir/walk.h"
 
+#include "lib/dict.h"
+
 void *ir_alloc(ir_ctx_t *ctx, size_t n)
 {
     n = (n + 15u) & ~(size_t)15u;
@@ -98,6 +100,12 @@ ir_ctx_t *ir_ctx_new(void)
     }
 
     return ctx;
+}
+
+void drop_dict(void *p)
+{
+    ncc_dict_free(p);
+    free(p);
 }
 
 void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg)
@@ -512,15 +520,31 @@ int32_t ir_file_add(ir_module_t *m, const char *path)
         return -1;
     }
 
-    for (size_t i = 0; i < m->n_files; i++) {
-        if (!strcmp(m->files[i], path)) {
-            return (int32_t)i;
+    if (!m->file_index) {
+        ncc_dict_t *ix = calloc(1, sizeof(ncc_dict_t));
+
+        if (!ix) {
+            return -1;
         }
+        ncc_dict_init(ix, ncc_hash_cstring, ncc_dict_cstr_eq);
+        ir_ctx_on_free(m->ctx, drop_dict, ix);
+        m->file_index = ix;
+    }
+
+    bool   found = false;
+    size_t at    = (size_t)(uintptr_t)ncc_dict_get((ncc_dict_t *)
+                                                       m->file_index,
+                                                   path, &found);
+
+    if (found) {
+        return (int32_t)at;
     }
 
     m->files = ir_grow(m->ctx, m->files, &m->cap_files, m->n_files + 1,
                        sizeof(char *));
     m->files[m->n_files] = ir_strdup(m->ctx, path);
+    ncc_dict_put((ncc_dict_t *)m->file_index, m->files[m->n_files],
+                 m->n_files);
 
     return (int32_t)m->n_files++;
 }

@@ -14,6 +14,7 @@
 #include "scanner/scanner.h"
 #include "scanner/scan_builtins.h"
 #include "scanner/token_stream.h"
+#include "lib/dict.h"
 #include "lib/buffer.h"
 
 #include "typelang_bnf.h"
@@ -190,9 +191,10 @@ typedef struct {
     ncc_grammar_t *g;
     const char    *err;
 
-    freev  *free_vars;
-    size_t  nfree;
-    size_t  cfree;
+    freev     *free_vars;
+    size_t     nfree;
+    size_t     cfree;
+    ncc_dict_t fv_index;
 
     binding *binders;
     size_t   nb;
@@ -479,10 +481,12 @@ static void *r_tvar(ncc_reduce_t *r)
         }
     }
 
-    for (size_t i = 0; i < c->nfree; i++) {
-        if (!strcmp(c->free_vars[i].name, name.data)) {
-            return node_type(c, c->free_vars[i].type);
-        }
+    bool   found = false;
+    size_t at    = (size_t)(uintptr_t)ncc_dict_get(&c->fv_index, name.data,
+                                                   &found);
+
+    if (found) {
+        return node_type(c, c->free_vars[at].type);
     }
 
     if (c->nfree >= c->cfree) {
@@ -494,6 +498,7 @@ static void *r_tvar(ncc_reduce_t *r)
 
     c->free_vars[c->nfree].name = strdup(name.data);
     c->free_vars[c->nfree].type = t;
+    ncc_dict_put(&c->fv_index, c->free_vars[c->nfree].name, c->nfree);
     c->nfree++;
 
     return node_type(c, t);
@@ -1139,6 +1144,8 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
     if (ok) {
         bctx c = {.th = ctx, .g = g};
 
+        ncc_dict_init(&c.fv_index, ncc_hash_cstring, ncc_dict_cstr_eq);
+
         out = lower(&c, ncc_pwz_get_tree(p));
 
         if (!out && err) {
@@ -1149,6 +1156,7 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
             free(c.free_vars[i].name);
         }
 
+        ncc_dict_free(&c.fv_index);
         free(c.free_vars);
         free(c.binders);
     }

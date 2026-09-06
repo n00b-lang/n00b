@@ -6,6 +6,8 @@
 #include "ir/doms.h"
 #include "ir/region_walk.h"
 
+#include "lib/dict.h"
+
 typedef struct {
     ir_region_fn pre;
     ir_region_fn post;
@@ -466,42 +468,50 @@ static uint32_t irreducible(S *s, bool *marked)
 
 typedef struct {
     const bool *marked;
-    uint32_t    n;
+    ncc_dict_t  count;
 } cover_t;
+
+static uintptr_t covered(cover_t *c, ir_region_t *r)
+{
+    bool found = false;
+
+    return (uintptr_t)ncc_dict_get(&c->count, r, &found);
+}
 
 static bool count_covered(ir_region_visit_t *v)
 {
-    cover_t *c = v->user;
+    cover_t  *c = v->user;
+    uintptr_t n = v->region->kind == IR_REGION_BLOCK && v->region->head
+                       && c->marked[v->region->head->index];
 
-    if (v->region->head && c->marked[v->region->head->index]) {
-        c->n++;
+    for (uint32_t i = 0; i < v->region->n_kids; i++) {
+        n += covered(c, v->region->kids[i]);
     }
+
+    ncc_dict_put(&c->count, v->region, n);
 
     return true;
 }
 
-static uint32_t covered_of(ir_region_t *r, const bool *marked)
+static void mark_dispatch(ir_region_t *root, const bool *marked, uint32_t all)
 {
     cover_t c = {.marked = marked};
 
+    ncc_dict_init(&c.count, nullptr, nullptr);
+
     ir_region_walk_t *w = ir_region_walk_new(&c);
 
-    ir_region_on_kind(w, IR_REGION_BLOCK, count_covered, nullptr, nullptr);
-    ir_region_walk_run(w, r);
+    ir_region_on_node(w, nullptr, count_covered, nullptr);
+    ir_region_walk_run(w, root);
     ir_region_walk_free(w);
 
-    return c.n;
-}
-
-static void mark_dispatch(ir_region_t *root, const bool *marked, uint32_t all)
-{
     ir_region_t *at = root;
 
     for (bool moved = true; moved;) {
         moved = false;
 
         for (uint32_t i = 0; i < at->n_kids; i++) {
-            if (covered_of(at->kids[i], marked) == all) {
+            if (covered(&c, at->kids[i]) == all) {
                 at    = at->kids[i];
                 moved = true;
                 break;
@@ -509,6 +519,7 @@ static void mark_dispatch(ir_region_t *root, const bool *marked, uint32_t all)
         }
     }
     at->dispatch = true;
+    ncc_dict_free(&c.count);
 }
 
 static bool structure_func(S *s, ir_func_t *f)

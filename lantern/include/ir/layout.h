@@ -49,6 +49,7 @@ typedef struct {
     ir_layout_val_t     stride;
     ir_member_layout_t *members;
     uint32_t            n_members;
+    void               *member_index;
     ir_indirect_repr_t  indirect;
     ir_variant_repr_t   variant;
     bool                done;

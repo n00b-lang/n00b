@@ -28,6 +28,7 @@ struct ir_ctx_t {
 };
 
 void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg);
+void drop_dict(void *p);
 
 typedef struct ir_descentry_t ir_descentry_t;
 
@@ -78,6 +79,7 @@ struct ir_module_t {
     size_t      n_funcs;
     size_t      cap_funcs;
     void        *func_index;
+    void        *file_index;
 };
 
 struct ir_descentry_t {

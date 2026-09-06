@@ -7,6 +7,8 @@
 #include "ir/text.h"
 #include "ir/walk.h"
 
+#include "lib/dict.h"
+
 const char *ir_layout_state_name(ir_layout_state_t s)
 {
     switch (s) {
@@ -154,13 +156,33 @@ bool ir_layout_pin_align(ir_module_t *m, th_type *t, uint64_t bytes)
     return pin(&d->align, bytes);
 }
 
+static void drop_members(void *p)
+{
+    ncc_dict_free(p);
+    free(p);
+}
+
 static ir_member_layout_t *member_slot(ir_module_t *m, ir_descriptor_t *d,
                                        const char *field)
 {
-    for (uint32_t i = 0; i < d->n_members; i++) {
-        if (!strcmp(d->members[i].name, field)) {
-            return &d->members[i];
+    if (!d->member_index) {
+        ncc_dict_t *ix = calloc(1, sizeof(ncc_dict_t));
+
+        if (!ix) {
+            return nullptr;
         }
+        ncc_dict_init(ix, ncc_hash_cstring, ncc_dict_cstr_eq);
+        ir_ctx_on_free(m->ctx, drop_members, ix);
+        d->member_index = ix;
+    }
+
+    bool   found = false;
+    size_t at    = (size_t)(uintptr_t)ncc_dict_get((ncc_dict_t *)
+                                                       d->member_index,
+                                                   field, &found);
+
+    if (found) {
+        return &d->members[at];
     }
 
     size_t cap = d->n_members;
@@ -172,9 +194,11 @@ static ir_member_layout_t *member_slot(ir_module_t *m, ir_descriptor_t *d,
         return nullptr;
     }
 
-    ir_member_layout_t *slot = &d->members[d->n_members++];
+    ir_member_layout_t *slot = &d->members[d->n_members];
 
     *slot = (ir_member_layout_t){.name = ir_strdup(m->ctx, field)};
+    ncc_dict_put((ncc_dict_t *)d->member_index, slot->name, d->n_members);
+    d->n_members++;
 
     return slot;
 }
