@@ -15,10 +15,19 @@ typedef struct ir_chunk {
     alignas(16) unsigned char data[];
 } ir_chunk;
 
+typedef struct ir_cleanup_t {
+    void (*fn)(void *);
+    void                *arg;
+    struct ir_cleanup_t *next;
+} ir_cleanup_t;
+
 struct ir_ctx_t {
-    ir_chunk *chunks;
-    th_ctx   *types;
+    ir_chunk     *chunks;
+    th_ctx       *types;
+    ir_cleanup_t *cleanups;
 };
+
+void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg);
 
 typedef struct ir_descentry_t ir_descentry_t;
 
@@ -63,14 +72,12 @@ struct ir_module_t {
     ir_global_t **globals;
     size_t        n_globals;
     size_t        cap_globals;
-    void        **global_index;
-    uint32_t      global_index_cap;
+    void         *global_index;
 
     ir_func_t **funcs;
     size_t      n_funcs;
     size_t      cap_funcs;
-    void       **func_index;
-    uint32_t     func_index_cap;
+    void        *func_index;
 };
 
 struct ir_descentry_t {

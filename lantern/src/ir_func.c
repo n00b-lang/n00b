@@ -3,75 +3,46 @@
 
 #include "ir_internal.h"
 
-static uint32_t name_hash(const char *k)
+#include "lib/dict.h"
+
+static void drop_index(void *p)
 {
-    uint32_t h = 2166136261u;
-
-    for (const unsigned char *p = (const unsigned char *)k; *p; p++) {
-        h = (h ^ *p) * 16777619u;
-    }
-
-    return h;
+    ncc_dict_free(p);
+    free(p);
 }
 
-typedef const char *(*name_of_fn)(const void *node);
-
-static const char *global_name_of(const void *node)
+static ncc_dict_t *index_of(ir_ctx_t *ctx, void **slot)
 {
-    return ((const ir_global_t *)node)->name;
-}
+    ncc_dict_t *d = *slot;
 
-static const char *func_name_of(const void *node)
-{
-    return ((const ir_func_t *)node)->name;
-}
+    if (!d) {
+        d = calloc(1, sizeof(ncc_dict_t));
 
-static const char *block_name_of(const void *node)
-{
-    return ((const ir_block_t *)node)->name;
-}
-
-static const char *local_name_of(const void *node)
-{
-    return ((const ir_local_t *)node)->name;
-}
-
-static size_t index_slot(void **ix, size_t cap, name_of_fn name_of,
-                         const char *k)
-{
-    size_t i = name_hash(k) & (cap - 1);
-
-    while (ix[i] && strcmp(name_of(ix[i]), k)) {
-        i = (i + 1) & (cap - 1);
-    }
-
-    return i;
-}
-
-static void index_add(ir_ctx_t *ctx, void ***ix, uint32_t *cap, uint32_t n,
-                      void **list, name_of_fn name_of, void *node)
-{
-    size_t want = *cap ? *cap : 16;
-
-    while ((size_t)(n + 1) * 2 > want) {
-        want *= 2;
-    }
-
-    if (!*ix || want != *cap) {
-        *ix  = ir_alloc(ctx, want * sizeof(void *));
-        *cap = (uint32_t)want;
-
-        for (uint32_t k = 0; k < n; k++) {
-            (*ix)[index_slot(*ix, want, name_of, name_of(list[k]))] = list[k];
+        if (!d) {
+            return nullptr;
         }
+        ncc_dict_init(d, ncc_hash_cstring, ncc_dict_cstr_eq);
+        ir_ctx_on_free(ctx, drop_index, d);
+        *slot = d;
     }
-    (*ix)[index_slot(*ix, *cap, name_of, name_of(node))] = node;
+
+    return d;
 }
 
-static void *index_find(void **ix, uint32_t cap, name_of_fn name_of,
-                        const char *k)
+static void index_add(ir_ctx_t *ctx, void **slot, const char *name, void *node)
 {
-    return ix && cap ? ix[index_slot(ix, cap, name_of, k)] : nullptr;
+    ncc_dict_t *d = index_of(ctx, slot);
+
+    if (d) {
+        ncc_dict_put(d, name, node);
+    }
+}
+
+static void *index_find(void *slot, const char *name)
+{
+    bool found = false;
+
+    return slot ? ncc_dict_get((ncc_dict_t *)slot, name, &found) : nullptr;
 }
 
 ir_global_t *ir_global_add(ir_module_t *m, const char *name, th_type *type)
@@ -93,9 +64,7 @@ ir_global_t *ir_global_add(ir_module_t *m, const char *name, th_type *type)
     m->globals = ir_grow(m->ctx, m->globals, &m->cap_globals,
                          m->n_globals + 1, sizeof(ir_global_t *));
     m->globals[m->n_globals++] = g;
-    index_add(m->ctx, &m->global_index, &m->global_index_cap,
-              (uint32_t)m->n_globals - 1, (void **)m->globals, global_name_of,
-              g);
+    index_add(m->ctx, &m->global_index, g->name, g);
 
     return g;
 }
@@ -106,8 +75,7 @@ ir_global_t *ir_global_find(ir_module_t *m, const char *name)
         return nullptr;
     }
 
-    return index_find(m->global_index, m->global_index_cap, global_name_of,
-                      name);
+    return index_find(m->global_index, name);
 }
 
 size_t ir_global_count(const ir_module_t *m)
@@ -146,8 +114,7 @@ ir_func_t *ir_func_add(ir_module_t *m, const char *name, th_type *type,
     m->funcs = ir_grow(m->ctx, m->funcs, &m->cap_funcs, m->n_funcs + 1,
                        sizeof(ir_func_t *));
     m->funcs[m->n_funcs++] = f;
-    index_add(m->ctx, &m->func_index, &m->func_index_cap,
-              (uint32_t)m->n_funcs - 1, (void **)m->funcs, func_name_of, f);
+    index_add(m->ctx, &m->func_index, f->name, f);
 
     return f;
 }
@@ -158,7 +125,7 @@ ir_func_t *ir_func_find(ir_module_t *m, const char *name)
         return nullptr;
     }
 
-    return index_find(m->func_index, m->func_index_cap, func_name_of, name);
+    return index_find(m->func_index, name);
 }
 
 size_t ir_func_count(const ir_module_t *m)
@@ -196,8 +163,18 @@ ir_value_t *ir_param_add(ir_func_t *f, const char *name, th_type *type)
                             sizeof(ir_value_t *));
     f->cap_params = (uint32_t)cap;
     f->params[f->n_params++] = v;
+    index_add(ctx, &f->value_index, v->name, v);
 
     return v;
+}
+
+ir_value_t *ir_value_find(ir_func_t *f, const char *name)
+{
+    if (!f || !name) {
+        return nullptr;
+    }
+
+    return index_find(f->value_index, name);
 }
 
 ir_local_t *ir_local_add(ir_func_t *f, const char *name, th_type *type)
@@ -224,8 +201,7 @@ ir_local_t *ir_local_add(ir_func_t *f, const char *name, th_type *type)
                             sizeof(ir_local_t *));
     f->cap_locals = (uint32_t)cap;
     f->locals[f->n_locals++] = l;
-    index_add(ctx, &f->local_index, &f->local_index_cap, f->n_locals - 1,
-              (void **)f->locals, local_name_of, l);
+    index_add(ctx, &f->local_index, l->name, l);
 
     return l;
 }
@@ -236,7 +212,7 @@ ir_local_t *ir_local_find(ir_func_t *f, const char *name)
         return nullptr;
     }
 
-    return index_find(f->local_index, f->local_index_cap, local_name_of, name);
+    return index_find(f->local_index, name);
 }
 
 ir_block_t *ir_block_add(ir_func_t *f, const char *name)
@@ -263,8 +239,7 @@ ir_block_t *ir_block_add(ir_func_t *f, const char *name)
                             sizeof(ir_block_t *));
     f->cap_blocks = (uint32_t)cap;
     f->blocks[f->n_blocks++] = b;
-    index_add(ctx, &f->block_index, &f->block_index_cap, f->n_blocks - 1,
-              (void **)f->blocks, block_name_of, b);
+    index_add(ctx, &f->block_index, b->name, b);
 
     return b;
 }
@@ -275,7 +250,7 @@ ir_block_t *ir_block_find(ir_func_t *f, const char *name)
         return nullptr;
     }
 
-    return index_find(f->block_index, f->block_index_cap, block_name_of, name);
+    return index_find(f->block_index, name);
 }
 
 ir_block_t *ir_block_entry(ir_func_t *f)
@@ -381,6 +356,7 @@ bool ir_instr_set_dest(ir_instr_t *in, const char *name, th_type *type)
     in->dest_kind  = IR_DEST_VALUE;
     in->dest       = v;
     in->dest_local = nullptr;
+    index_add(ctx, &f->value_index, v->name, v);
 
     return true;
 }

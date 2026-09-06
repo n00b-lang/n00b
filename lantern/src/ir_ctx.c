@@ -100,10 +100,28 @@ ir_ctx_t *ir_ctx_new(void)
     return ctx;
 }
 
+void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg)
+{
+    ir_cleanup_t *c = ir_alloc(ctx, sizeof(ir_cleanup_t));
+
+    if (!c) {
+        return;
+    }
+
+    c->fn         = fn;
+    c->arg        = arg;
+    c->next       = ctx->cleanups;
+    ctx->cleanups = c;
+}
+
 void ir_ctx_free(ir_ctx_t *ctx)
 {
     if (!ctx) {
         return;
+    }
+
+    for (ir_cleanup_t *k = ctx->cleanups; k; k = k->next) {
+        k->fn(k->arg);
     }
 
     ir_chunk *c = ctx->chunks;

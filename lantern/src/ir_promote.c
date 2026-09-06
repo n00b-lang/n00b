@@ -12,66 +12,8 @@ typedef struct {
     ir_doms_t               *dom;
     const ir_promote_opts_t *opts;
     uint32_t                *counter;
-    const char             **taken;
-    size_t                   taken_cap;
     bool                     ok;
 } P;
-
-static size_t name_slot(P *p, const char *k)
-{
-    size_t h = 1469598103934665603u;
-
-    for (const unsigned char *c = (const unsigned char *)k; *c; c++) {
-        h = (h ^ *c) * 1099511628211u;
-    }
-
-    size_t i = h & (p->taken_cap - 1);
-
-    while (p->taken[i] && strcmp(p->taken[i], k)) {
-        i = (i + 1) & (p->taken_cap - 1);
-    }
-
-    return i;
-}
-
-static bool name_free(P *p, const char *k)
-{
-    return !p->taken[name_slot(p, k)];
-}
-
-static void name_take(P *p, const char *k)
-{
-    p->taken[name_slot(p, k)] = k;
-}
-
-static void gather_names(P *p, ir_func_t *f)
-{
-    size_t want = f->n_params + 1;
-
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        want += f->blocks[i]->n_instrs;
-    }
-    p->taken_cap = 16;
-
-    while (p->taken_cap < want * 4) {
-        p->taken_cap *= 2;
-    }
-    p->taken = ir_alloc(p->m->ctx, p->taken_cap * sizeof(char *));
-
-    for (uint32_t i = 0; i < f->n_params; i++) {
-        name_take(p, f->params[i]->name);
-    }
-
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        for (uint32_t k = 0; k < f->blocks[i]->n_instrs; k++) {
-            ir_instr_t *in = f->blocks[i]->instrs[k];
-
-            if (in->dest_kind == IR_DEST_VALUE && in->dest) {
-                name_take(p, in->dest->name);
-            }
-        }
-    }
-}
 
 static void warn_unset(P *p, const ir_local_t *l)
 {
@@ -109,10 +51,9 @@ static const char *derived_name(P *p, const ir_local_t *l, uint32_t nth)
 
     snprintf(name, n, "%s_%u", l->name, nth);
 
-    for (uint32_t bump = 1; !name_free(p, name); bump++) {
+    for (uint32_t bump = 1; ir_value_find(p->f, name); bump++) {
         snprintf(name, n, "%s_%u.%u", l->name, nth, bump);
     }
-    name_take(p, name);
 
     return name;
 }
@@ -210,7 +151,6 @@ static bool promote_func(P *p, ir_func_t *f)
     p->f       = f;
     p->dom     = ir_doms_of(f);
     p->counter = ir_alloc(p->m->ctx, f->n_locals * sizeof(uint32_t));
-    gather_names(p, f);
 
     ir_ctx_t *ctx = p->m->ctx;
     ir_rd_t  *r   = ir_ssa_of(f, p->dom);

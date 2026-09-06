@@ -34,12 +34,6 @@ typedef struct {
 } tok;
 
 typedef struct {
-    ir_value_t **at;
-    size_t       cap;
-    size_t       n;
-} vmap;
-
-typedef struct {
     const char *src;
     size_t      len;
     size_t      pos;
@@ -52,7 +46,6 @@ typedef struct {
     tok         prev;
     bool        failed;
     ir_sb       comment;
-    vmap        vals;
 } P;
 
 static void advance(P *p);
@@ -645,64 +638,6 @@ static bool prop_from_name(const char *s, ir_props_t *out)
     return false;
 }
 
-static size_t vmap_slot(const vmap *v, const char *k)
-{
-    size_t h = 1469598103934665603u;
-
-    for (const unsigned char *p = (const unsigned char *)k; *p; p++) {
-        h = (h ^ *p) * 1099511628211u;
-    }
-
-    size_t i = h & (v->cap - 1);
-
-    while (v->at[i] && strcmp(v->at[i]->name, k)) {
-        i = (i + 1) & (v->cap - 1);
-    }
-
-    return i;
-}
-
-static void vmap_reset(P *p, size_t want)
-{
-    p->vals.cap = 16;
-    p->vals.n   = 0;
-
-    while (p->vals.cap < want * 2) {
-        p->vals.cap *= 2;
-    }
-    p->vals.at = ir_alloc(p->ctx, p->vals.cap * sizeof(ir_value_t *));
-}
-
-static void vmap_put(P *p, ir_value_t *val)
-{
-    if (!val || !val->name || !p->vals.at) {
-        return;
-    }
-
-    if ((p->vals.n + 1) * 2 > p->vals.cap) {
-        vmap old = p->vals;
-
-        vmap_reset(p, old.n * 2 + 1);
-
-        for (size_t i = 0; i < old.cap; i++) {
-            if (old.at[i]) {
-                p->vals.at[vmap_slot(&p->vals, old.at[i]->name)] = old.at[i];
-                p->vals.n++;
-            }
-        }
-    }
-
-    size_t at = vmap_slot(&p->vals, val->name);
-
-    p->vals.n += !p->vals.at[at];
-    p->vals.at[at] = val;
-}
-
-static ir_value_t *find_value(P *p, const char *name)
-{
-    return p->vals.at ? p->vals.at[vmap_slot(&p->vals, name)] : nullptr;
-}
-
 static bool parse_annot(P *p, ir_module_t *m, ir_func_t *f,
                         ir_annots_t *a, const char *key)
 {
@@ -724,7 +659,7 @@ static bool parse_annot(P *p, ir_module_t *m, ir_func_t *f,
     }
     else if (p->cur.kind == T_VALUE) {
         char       *vn = ident_text(p);
-        ir_value_t *v  = f ? find_value(p, vn) : nullptr;
+        ir_value_t *v  = ir_value_find(f, vn);
 
         if (!v) {
             fail(p, "an annotation may only name a value already defined in "
@@ -1349,10 +1284,6 @@ static bool parse_instr(P *p, ir_module_t *m, ir_func_t *f, ir_block_t *b,
         return false;
     }
 
-    if (dest_v) {
-        vmap_put(p, in->dest);
-    }
-
     if (dest_l) {
         ir_local_t *l = ir_local_find(f, dest_l);
 
@@ -1716,10 +1647,8 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
     }
     attach_comment(p, &f->annots, comment);
 
-    vmap_reset(p, np + 16);
-
     for (size_t i = 0; i < np; i++) {
-        vmap_put(p, ir_param_add(f, pnames[i], ptypes[i]));
+        ir_param_add(f, pnames[i], ptypes[i]);
     }
 
     f->span = through_prev(p, begun);
@@ -1820,7 +1749,7 @@ static bool parse_func(P *p, ir_module_t *m, ir_linkage_t link, char *comment)
     }
 
     for (size_t i = 0; i < fx.n; i++) {
-        ir_value_t *v = find_value(p, fx.v[i].name);
+        ir_value_t *v = ir_value_find(f, fx.v[i].name);
 
         if (!v) {
             fail_at(p, fx.v[i].at, "unknown value");
