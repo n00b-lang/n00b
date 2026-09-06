@@ -1687,6 +1687,28 @@ rocs_service_finish_ingest(n00b_rocs_service_t *service,
     }
 }
 
+// Upper bound on how long one query may hold store_mutex.
+//
+// Deliberately generous: a legitimate ranked query over a large store can take
+// seconds, and this must not turn a slow-but-progressing query into a spurious
+// error. It exists to make an UNBOUNDED one representable -- the same reasoning
+// as ROCS_SEAL_DRAIN_DEADLINE_MS in store.c. A consumer that cannot be told
+// "this query did not finish" has no option but to hang, and with a global
+// mutex it takes the whole service down with it (n00b#255).
+#define ROCS_SERVICE_QUERY_BUDGET_NS (UINT64_C(30) * UINT64_C(1000000000))
+
+// Polled by the cursor during boundary scans. ctx is a borrowed pointer to the
+// caller's monotonic deadline; see the comment at the call site for why a stack
+// address is safe here.
+static bool
+rocs_service_query_expired(void *ctx)
+{
+    if (ctx == nullptr) {
+        return false;
+    }
+    return base_monotonic_ns() >= *(uint64_t *)ctx;
+}
+
 static void
 rocs_service_query_handler(n00b_http_request_t        *req,
                            n00b_http_response_writer_t *resp,
@@ -1783,9 +1805,26 @@ rocs_service_query_handler(n00b_http_request_t        *req,
         return;
     }
 
+    // Bound the query (n00b#255). This handler holds store_mutex across the
+    // WHOLE of n00b_query_run -- scan, materialization, serialization and the
+    // residency trim -- so an unbounded query does not merely run long, it
+    // blocks every other query, both ingest handlers and /v1/status. The
+    // measured field signature was exactly that: GET /v1/query 200 in 0.21s
+    // (never reaches the locked section), POST /v1/query hanging, /v1/sessions
+    // fast (takes the mutex zero times).
+    //
+    // The deadline lives on this stack frame and is only read by the cursor
+    // while n00b_query_run is on the stack below us, so the borrow is valid
+    // for exactly as long as it is used. It is NOT captured anywhere that
+    // outlives the call.
+    uint64_t query_deadline_ns = base_monotonic_ns()
+                                 + ROCS_SERVICE_QUERY_BUDGET_NS;
+
     auto query_r = n00b_query_new(n00b_result_get(filter_r),
-                                  .limit  = n00b_result_get(limit_r),
-                                  .ranked = ranked);
+                                  .limit      = n00b_result_get(limit_r),
+                                  .ranked     = ranked,
+                                  .cancel_cb  = rocs_service_query_expired,
+                                  .cancel_ctx = &query_deadline_ns);
     if (n00b_result_is_err(query_r)) {
         rocs_service_finish_query(service, start_ns, true);
         rocs_service_write_error(resp,

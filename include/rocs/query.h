@@ -970,6 +970,14 @@ n00b_query_new(n00b_filter_t *filter) _kargs
     n00b_store_pos_t            *as_of      = nullptr;
     uint64_t                     limit      = 100;
     n00b_allocator_t            *allocator  = nullptr;
+    // Cooperative cancellation, polled during execution. The cursor API has
+    // always taken these; the snapshot path (n00b_query_run) did not, which
+    // made a one-shot query uninterruptible -- and rocs's service handler
+    // holds store_mutex across the whole of it, so an unbounded query blocked
+    // every other query, both ingest handlers and /v1/status (n00b#255).
+    // cancel_ctx is borrowed.
+    n00b_query_cancel_fn         cancel_cb  = nullptr;
+    void                        *cancel_ctx = nullptr;
 };
 
 /**
