@@ -213,6 +213,22 @@ typedef struct {
 extern n00b_query_execution_detail_t n00b_query_execution_detail(void);
 
 /**
+ * @brief Render an execution detail for a log line.
+ *
+ * Resolves the code through the name function of the enum it actually came
+ * from, producing e.g. @c "store:N00B_STORE_ERR_CORRUPT" or
+ * @c "plan:N00B_PLAN_ERR_CANCELED". A bare code is ambiguous -- the store,
+ * plan and query enums share one small negative range -- so the source is
+ * always included.
+ *
+ * @param detail Value returned by @ref n00b_query_execution_detail.
+ * @return A borrowed, never-null string; @c "none" when no execution failure
+ *         has been recorded on this thread.
+ */
+extern n00b_string_t *n00b_query_execution_detail_str(
+    n00b_query_execution_detail_t detail);
+
+/**
  * @brief Boundary option that triggered a retention diagnostic.
  */
 typedef enum : int32_t {
