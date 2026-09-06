@@ -189,8 +189,15 @@ run_case(bool is_add)
     fflush(stderr);
     dup2(saved_fd2, 2);
     close(saved_fd2);
-    char    buf[8192];
-    ssize_t n = pread(cap_fd, buf, sizeof(buf) - 1, 0);
+    char buf[8192];
+    // lseek + read rather than pread: llvm-mingw does not declare pread, and
+    // this is the only use of it in the tree (n00b#319 builds every test
+    // target on Windows). Nothing else holds this descriptor -- the capture
+    // file is this process's private temp -- so the seek cannot race.
+    ssize_t n = -1;
+    if (lseek(cap_fd, 0, SEEK_SET) == 0) {
+        n = read(cap_fd, buf, sizeof(buf) - 1);
+    }
     if (n < 0) {
         n = 0;
     }
