@@ -316,4 +316,133 @@ n00b_raw_exit(int code)
 
 #endif // __APPLE__ && __aarch64__
 
-#endif // !_WIN32
+#else // _WIN32
+
+// Windows has no raw-syscall path available to us. The toolchain targets the
+// MSVC ABI (windows-component.yml passes --target=x86_64-pc-windows-msvc), so
+// there is no <unistd.h> write() and no syscall() trampoline to wrap.
+//
+// WriteFile on a raw HANDLE is the closest equivalent to the POSIX raw writes
+// above: a thin wrapper over NtWriteFile that does not allocate, does not touch
+// the CRT, and takes no user-mode lock this process holds. That last property
+// is the whole point -- callers reach for this primitive precisely when they
+// cannot use anything richer: a reader that has decided a bucket mutex is
+// stranded (#296), and the crash paths.
+//
+// Deliberately NOT _write()/_get_osfhandle(): both route through the CRT's fd
+// table, which allocates on first use and takes a per-file lock. A CRT-backed
+// implementation would compile, link, pass CI, and reintroduce exactly the
+// deadlock class this primitive exists to avoid -- the worst possible outcome,
+// because nothing here would catch it.
+
+#include <stdint.h> // intptr_t
+
+// Declares GetStdHandle and WriteFile rather than including a Windows header.
+// Five revisions established the constraints; all are recorded because none is
+// obvious and the next person to touch this will hit one.
+//
+//  1. <windows.h> here breaks the platform.h path. platform.h includes it at
+//     :53 and this header at :420, so a second entry through a different chain
+//     re-opens winnt.h under different conditions:
+//
+//       winnt.h:4304: error: type 'struct _CONTEXT' has incompatible definitions
+//
+//     Matching platform.h's WIN32_LEAN_AND_MEAN/NOMINMAX guards does NOT help:
+//     an include guard no-ops the top-level header, not the nested ones reached
+//     by a different path.
+//
+//  2. <processenv.h> + <fileapi.h>, the two headers that actually declare
+//     these, cannot be included standalone -- they assume the architecture
+//     macro windows.h defines:
+//
+//       winnt.h:169: error: "No Target Architecture"
+//
+//  3. Declaring nothing and relying on platform.h fails on the direct-include
+//     path. TEN files include "core/syscall.h" directly -- exit.c, thread.c,
+//     stw.c, signals.c, crash.c, crash_capture.c, memory_info.c, file.c,
+//     io_epoll.c, quic/metrics.c -- and there nothing has provided them.
+//
+//  4. The final parameter must be `struct _OVERLAPPED *`, matching the SDK.
+//     Whether the real SDK headers are in scope VARIES BY TU: ncc's
+//     preprocessing prelude drags um/fileapi.h into TUs that pull CRT
+//     headers (env.c via <string.h>, thread.c via <io.h>, callstack.c, the
+//     crt comptime shim), while src/tools/n00b.c gets no SDK at all. So this
+//     declaration must agree with the SDK:
+//
+//       syscall.h: error: conflicting types for 'WriteFile'
+//       Windows Kits/10/um/fileapi.h:1155: note: previous declaration is here
+//
+//     Spelling it `void *` instead fixes the no-SDK TUs and breaks the
+//     SDK ones -- the two constraints are mutually exclusive unless every
+//     declaration in the tree agrees. include/internal/win32_sockets.h:478
+//     had `void *`, disagreeing with the real API; it is now corrected to
+//     match, which is what makes a single spelling work everywhere.
+//
+//  5. No `__declspec(dllimport)`. win32_sockets.h uses it nowhere, and
+//     mixing the two spellings is order-dependent. Omitting it against the
+//     SDK's dllimport is only a -Winconsistent-dllimport warning, not an
+//     error, and costs an indirection thunk.
+//
+//  6. Spelled with the underlying types (`void *`, `unsigned long`, `int`)
+//     rather than HANDLE/DWORD/BOOL. platform.h defines those typedefs at
+//     :66-81, before it includes this header at :420 -- but on the
+//     direct-include path of failure 3 they are not in scope. The raw types
+//     are identical after expansion (platform.h:66,72,75).
+//
+// Not including win32_sockets.h instead: it is an internal header that pulls
+// winsock2/ws2tcpip/afunix/windows.h on the _WINDOWS path, which is failure
+// mode 1 again.
+struct _OVERLAPPED;
+
+void *__attribute__((__stdcall__)) GetStdHandle(unsigned long std_handle);
+int __attribute__((__stdcall__)) WriteFile(void               *file,
+                                           const void         *buffer,
+                                           unsigned long       to_write,
+                                           unsigned long      *written,
+                                           struct _OVERLAPPED *overlapped);
+
+// From winbase.h / handleapi.h, which we are not including.
+#define N00B_STD_OUTPUT_HANDLE ((unsigned long)-11)
+#define N00B_STD_ERROR_HANDLE  ((unsigned long)-12)
+#define N00B_INVALID_HANDLE    ((void *)(intptr_t)-1)
+
+/// Best-effort, CRT-free write to @p fd. Matches the POSIX contract above:
+/// one write, return ignored, no retry on a short write.
+///
+/// Windows resolves only fds 1 and 2, through GetStdHandle -- which honours
+/// SetStdHandle redirection. Any other fd is a silent no-op: resolving an
+/// arbitrary fd needs _get_osfhandle, i.e. the CRT, which this primitive must
+/// not touch. Every caller that passes a non-standard fd today
+/// (crash_capture.c, crash.c's log_fd) is itself inside #if !defined(_WIN32),
+/// so nothing currently relies on the general case.
+static inline void
+n00b_raw_write(int fd, const void *buf, unsigned long len)
+{
+    unsigned long which;
+
+    switch (fd) {
+    case 1:
+        which = N00B_STD_OUTPUT_HANDLE;
+        break;
+    case 2:
+        which = N00B_STD_ERROR_HANDLE;
+        break;
+    default:
+        return;
+    }
+
+    void *h = GetStdHandle(which);
+
+    // A service started with no console gets NULL; a failed lookup gets
+    // INVALID_HANDLE_VALUE. Neither is an error worth reacting to from a
+    // best-effort diagnostic, and faulting here would turn the message
+    // describing a problem into a second, worse one.
+    if (h == nullptr || h == N00B_INVALID_HANDLE) {
+        return;
+    }
+
+    unsigned long written = 0;
+    (void)WriteFile(h, buf, (unsigned long)len, &written, nullptr);
+}
+
+#endif // !_WIN32 / _WIN32

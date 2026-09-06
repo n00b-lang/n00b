@@ -475,11 +475,15 @@ BOOL __attribute__((__stdcall__)) ReadFile(HANDLE file,
                                            DWORD bytes_to_read,
                                            DWORD *bytes_read,
                                            void *overlapped);
+// `overlapped` is LPOVERLAPPED in the SDK. Declaring it `void *` here made
+// this fallback disagree with um/fileapi.h, so any TU that saw both failed
+// with "conflicting types for 'WriteFile'" (n00b#316). The struct is fully
+// defined at :362 above, so no forward declaration is needed here.
 BOOL __attribute__((__stdcall__)) WriteFile(HANDLE file,
                                             const void *buffer,
                                             DWORD bytes_to_write,
                                             DWORD *bytes_written,
-                                            void *overlapped);
+                                            struct _OVERLAPPED *overlapped);
 BOOL __attribute__((__stdcall__)) PeekNamedPipe(HANDLE pipe,
                                                 void *buffer,
                                                 DWORD buffer_size,
