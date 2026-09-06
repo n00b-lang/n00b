@@ -1,7 +1,8 @@
 #pragma once
 
 #include "parse/token.h"
-#include "tdesc.h"
+#include "typehash.h"
+
 
 typedef int64_t                    ncc_nt_id_t;
 typedef struct ncc_terminal_t     ncc_terminal_t;
@@ -9,10 +10,9 @@ typedef struct ncc_nonterm_t      ncc_nonterm_t;
 typedef struct ncc_parse_rule_t   ncc_parse_rule_t;
 typedef struct ncc_rule_group_t   ncc_rule_group_t;
 typedef struct ncc_grammar_t      ncc_grammar_t;
-typedef struct ncc_earley_item_t  ncc_earley_item_t;
-typedef struct ncc_earley_state_t ncc_earley_state_t;
 typedef struct ncc_annotation_t   ncc_annotation_t;
 typedef struct ncc_scope_t        ncc_scope_t;
+typedef struct ncc_sym_entry_t    ncc_sym_entry_t;
 
 #define NCC_EMPTY_STRING         (-126)
 #define NCC_GROUP_ID             (1 << 28)
@@ -79,6 +79,14 @@ typedef enum {
     NCC_CMP_GT = 1,
 } ncc_earley_cmp_t;
 
+typedef struct {
+    const int64_t *ids;
+    size_t         n;
+    bool           negate;
+} ncc_match_set_t;
+
+bool ncc_match_set_holds(const ncc_match_set_t *s, int64_t tid);
+
 typedef struct ncc_match_t {
     ncc_match_kind_t kind;
     union {
@@ -89,6 +97,17 @@ typedef struct ncc_match_t {
         void             *group;
     };
 } ncc_match_t;
+
+typedef struct {
+    int64_t size;
+    int64_t align;
+    int64_t offset;
+    int64_t width;
+    bool    has_size;
+    bool    has_align;
+    bool    has_offset;
+    bool    has_width;
+} ncc_repr_pin_t;
 
 typedef struct ncc_nt_node_t {
     ncc_string_t name;
@@ -106,8 +125,10 @@ typedef struct ncc_nt_node_t {
     bool          missing;
     bool          bad_prefix;
     void         *parent;
-    ncc_scope_t  *scope;
-    tdesc_t      *type;
+    ncc_scope_t     *scope;
+    ncc_sym_entry_t *sym;
+    th_type         *type;
+    ncc_repr_pin_t   repr;
 } ncc_nt_node_t;
 
 typedef void *(*ncc_walk_action_t)(ncc_nt_node_t *node,

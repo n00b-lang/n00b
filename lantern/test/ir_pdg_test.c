@@ -147,6 +147,17 @@ static char *data_sketch(ir_pdg_t *g)
     return b.p ? b.p : strdup("");
 }
 
+static bool controlled_by(const ir_pdg_t *g, ir_block_t *b, ir_block_t *on)
+{
+    for (uint32_t i = 0; i < ir_controllers_of(g, b); i++) {
+        if (ir_controller_at(g, b, i) == on) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static char *cdg_sketch(ir_pdg_t *g, ir_func_t *f)
 {
     buf b = {0};
@@ -248,7 +259,7 @@ static void test_all_seven_edge_kinds(void)
 
     for (uint32_t k = 0; k < 7; k++) {
         if (!saw[k]) {
-            printf("FAIL  ANA-02 no edge of kind %s occurs in the fixture\n",
+            printf("FAIL  no edge of kind %s occurs in the fixture\n",
                    ir_edge_kind_name((ir_edge_kind_t)k));
             fails++;
         }
@@ -542,9 +553,9 @@ static void test_the_cdg_is_over_blocks(void)
          "t on entry\n"
          "u on t\n");
     check("and asking directly agrees",
-          ir_control_dependent(g, f->blocks[1], f->blocks[0])
-              && ir_control_dependent(g, f->blocks[2], f->blocks[1])
-              && !ir_control_dependent(g, f->blocks[3], f->blocks[0]));
+          controlled_by(g, f->blocks[1], f->blocks[0])
+              && controlled_by(g, f->blocks[2], f->blocks[1])
+              && !controlled_by(g, f->blocks[3], f->blocks[0]));
 
     uint32_t control = 0;
 

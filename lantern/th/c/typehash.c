@@ -7,44 +7,32 @@
 
 #include "typehash.h"
 #include "th_internal.h"
+#include "lib/dict.h"
+#include "lib/list.h"
+#include "lib/option.h"
 
 void *th_alloc(th_ctx *ctx, size_t n)
 {
-    n = (n + 15u) & ~(size_t)15u;
-
-    if (!ctx->chunks || ctx->chunks->used + n > ctx->chunks->cap) {
-        size_t cap = n > TH_CHUNK ? n : TH_CHUNK;
-        th_chunk *c = calloc(1, sizeof(th_chunk) + cap);
-
-        if (!c) {
-            return nullptr;
-        }
-        c->cap      = cap;
-        c->next     = ctx->chunks;
-        ctx->chunks = c;
-    }
-
-    void *r = ctx->chunks->data + ctx->chunks->used;
-    ctx->chunks->used += n;
-
-    return r;
+    return ncc_arena_alloc(&ctx->arena, n);
 }
 
 char *th_strdup(th_ctx *ctx, const char *s, size_t n)
 {
     char *d = th_alloc(ctx, n + 1);
 
-    if (d) {
-        memcpy(d, s, n);
-        d[n] = 0;
-    }
+    memcpy(d, s, n);
+    d[n] = 0;
 
     return d;
 }
 
 th_ctx *th_ctx_new(void)
 {
-    return calloc(1, sizeof(th_ctx));
+    th_ctx *ctx = ncc_alloc(th_ctx);
+
+    ncc_arena_init(&ctx->arena, 0);
+
+    return ctx;
 }
 
 void th_ctx_free(th_ctx *ctx)
@@ -53,16 +41,9 @@ void th_ctx_free(th_ctx *ctx)
         return;
     }
 
-    th_chunk *c = ctx->chunks;
-
-    while (c) {
-        th_chunk *n = c->next;
-        free(c);
-        c = n;
-    }
-
-    free(ctx->scratch.p);
-    free(ctx);
+    ncc_arena_free(&ctx->arena);
+    ncc_buffer_release(&ctx->scratch);
+    ncc_free(ctx);
 }
 
 void th_ctx_set_normalizer(th_ctx *ctx, th_normalizer fn, void *state)
@@ -86,67 +67,26 @@ bool th_is_scheme(const th_type *t)
     return t->kind == TH_BINDER;
 }
 
-static bool buf_need(th_buf *b, size_t n)
+static void u8(ncc_buffer_t *b, uint8_t v)
 {
-    if (b->len + n <= b->cap) {
-        return true;
-    }
-
-    size_t cap = b->cap ? b->cap * 2 : 256;
-
-    while (cap < b->len + n) {
-        cap *= 2;
-    }
-
-    uint8_t *p = realloc(b->p, cap);
-
-    if (!p) {
-        return false;
-    }
-    b->p   = p;
-    b->cap = cap;
-
-    return true;
+    ncc_buffer_append(b, (const char *)&v, 1);
 }
 
-static bool put(th_buf *b, const void *src, size_t n)
+static void u64(ncc_buffer_t *b, uint64_t v)
 {
-    if (!buf_need(b, n)) {
-        return false;
-    }
-    memcpy(b->p + b->len, src, n);
-    b->len += n;
-
-    return true;
-}
-
-static bool u8(th_buf *b, uint8_t v)
-{
-    return put(b, &v, 1);
-}
-
-static bool u32(th_buf *b, uint32_t v)
-{
-    uint8_t t[4] = {(uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8),
-                    (uint8_t)v};
-
-    return put(b, t, 4);
-}
-
-static bool u64(th_buf *b, uint64_t v)
-{
-    uint8_t t[8];
+    char t[8];
 
     for (int i = 0; i < 8; i++) {
-        t[i] = (uint8_t)(v >> (56 - 8 * i));
+        t[i] = (char)(v >> (56 - 8 * i));
     }
 
-    return put(b, t, 8);
+    ncc_buffer_append(b, t, 8);
 }
 
-static bool str(th_buf *b, const char *s, size_t n)
+static void str(ncc_buffer_t *b, const char *s, size_t n)
 {
-    return u64(b, n) && put(b, s, n);
+    u64(b, n);
+    ncc_buffer_append(b, s, n);
 }
 
 static bool is_start(unsigned char c)
@@ -187,10 +127,11 @@ static bool valid_name(const char *s, size_t n)
     return seg != 0;
 }
 
-static bool name(th_ctx *ctx, th_buf *b, const char *s, size_t n)
+static bool name(th_ctx *ctx, ncc_buffer_t *b, const char *s, size_t n)
 {
     if (!valid_name(s, n)) {
-        ctx->err = "not a valid type name";
+        th_err(ctx, TH_ERR_BAD_NAME, nullptr, nullptr, nullptr,
+               "not a valid type name");
 
         return false;
     }
@@ -200,136 +141,82 @@ static bool name(th_ctx *ctx, th_buf *b, const char *s, size_t n)
         size_t      on;
 
         if (!ctx->norm(ctx->norm_state, s, n, &o, &on)) {
-            ctx->err = "name normalization failed";
+            th_err(ctx, TH_ERR_BAD_NAME, nullptr, nullptr, nullptr,
+                   "name normalization failed");
 
             return false;
         }
 
-        return str(b, o, on);
+        str(b, o, on);
+
+        return true;
     }
 
     for (size_t i = 0; i < n; i++) {
         if ((unsigned char)s[i] >= 0x80) {
-            ctx->err = "non-ASCII name requires an NFC normalizer; "
-                       "call th_ctx_set_normalizer";
+            th_err(ctx, TH_ERR_BAD_NAME, nullptr, nullptr, nullptr,
+                   "non-ASCII name requires an NFC normalizer; "
+                   "call th_ctx_set_normalizer");
 
             return false;
         }
     }
 
-    return str(b, s, n);
-}
-
-#define PM_DEAD ((const th_type *)(uintptr_t)1)
-
-typedef struct {
-    const th_type **key;
-    size_t         *val;
-    size_t          cap;
-    size_t          used;
-    const th_type **stack;
-    size_t          scap;
-    size_t          depth;
-} th_path;
-
-static size_t pm_slot(const th_type **key, size_t cap, const th_type *t)
-{
-    size_t h = (size_t)((uintptr_t)t >> 4) * 11400714819323198485u;
-    size_t i = h & (cap - 1);
-
-    while (key[i] && key[i] != t) {
-        i = (i + 1) & (cap - 1);
-    }
-
-    return i;
-}
-
-static bool pm_room(th_path *p)
-{
-    if (p->cap && (p->used + 1) * 2 <= p->cap) {
-        return true;
-    }
-
-    size_t          cap = p->cap ? p->cap * 2 : 64;
-    const th_type **key = calloc(cap, sizeof(const th_type *));
-    size_t         *val = calloc(cap, sizeof(size_t));
-
-    if (!key || !val) {
-        free(key);
-        free(val);
-
-        return false;
-    }
-
-    for (size_t i = 0; i < p->depth; i++) {
-        size_t at = pm_slot(key, cap, p->stack[i]);
-
-        key[at] = p->stack[i];
-        val[at] = i;
-    }
-    free(p->key);
-    free(p->val);
-    p->key  = key;
-    p->val  = val;
-    p->cap  = cap;
-    p->used = p->depth;
+    str(b, s, n);
 
     return true;
+}
+
+typedef th_type       *th_type_ptr_t;
+typedef const th_type *th_type_cptr_t;
+
+ncc_list_decl(th_type_ptr_t);
+
+ncc_option_decl(th_type_cptr_t);
+ncc_list_decl(th_type_cptr_t);
+
+typedef struct {
+    ncc_dict_t                 at;
+    ncc_list_t(th_type_cptr_t) stack;
+} th_path;
+
+static void pm_init(th_path *p)
+{
+    ncc_dict_init(&p->at, nullptr, nullptr);
+    p->stack = ncc_list_new(th_type_cptr_t);
+}
+
+static size_t pm_depth(const th_path *p)
+{
+    return p->stack.len;
 }
 
 static size_t pm_find(const th_path *p, const th_type *t)
 {
-    if (!p->cap) {
-        return SIZE_MAX;
-    }
+    bool   found;
+    size_t at = (size_t)(uintptr_t)ncc_dict_get((ncc_dict_t *)&p->at, t,
+                                               &found);
 
-    size_t at = pm_slot(p->key, p->cap, t);
-
-    return p->key[at] == t ? p->val[at] : SIZE_MAX;
+    return found ? at - 1 : SIZE_MAX;
 }
 
-static bool pm_push(th_path *p, const th_type *t)
+static void pm_push(th_path *p, const th_type *t)
 {
-    if (!pm_room(p)) {
-        return false;
-    }
-
-    if (p->depth + 1 > p->scap) {
-        size_t          n = p->scap ? p->scap * 2 : 64;
-        const th_type **q = realloc(p->stack, n * sizeof(const th_type *));
-
-        if (!q) {
-            return false;
-        }
-        p->stack = q;
-        p->scap  = n;
-    }
-
-    size_t at = pm_slot(p->key, p->cap, t);
-
-    p->key[at]          = t;
-    p->val[at]          = p->depth;
-    p->stack[p->depth++] = t;
-    p->used++;
-
-    return true;
+    ncc_dict_put(&p->at, t, p->stack.len + 1);
+    ncc_list_push(p->stack, t);
 }
 
 static void pm_pop(th_path *p)
 {
-    const th_type *t  = p->stack[--p->depth];
-    size_t         at = pm_slot(p->key, p->cap, t);
+    const th_type *t = ncc_option_get(ncc_list_pop(th_type_cptr_t, p->stack));
 
-    if (p->key[at] == t) {
-        p->key[at] = PM_DEAD;
-    }
+    ncc_dict_remove(&p->at, t);
 }
 
 static void pm_free(th_path *p)
 {
-    free(p->key);
-    free(p->val);
-    free(p->stack);
+    ncc_dict_free(&p->at);
+    ncc_list_free(p->stack);
 }
 
 typedef struct {
@@ -339,15 +226,7 @@ typedef struct {
     bool     ok;
 } th_enc;
 
-static void enc_node(th_enc *e, th_buf *b, const th_type *t);
-
-void th_buf_free(th_buf *b)
-{
-    free(b->p);
-    b->p   = nullptr;
-    b->len = 0;
-    b->cap = 0;
-}
+static void enc_node(th_enc *e, ncc_buffer_t *b, const th_type *t);
 
 int th_cmp_slice(const void *a, const void *b)
 {
@@ -362,279 +241,416 @@ int th_cmp_slice(const void *a, const void *b)
     return x->n < y->n ? -1 : x->n > y->n ? 1 : 0;
 }
 
-static void enc_arg(th_enc *e, th_buf *b, const th_arg *a)
+typedef struct {
+    ncc_buffer_t   pre;
+    const th_type *child;
+} estep;
+
+ncc_option_decl(estep);
+ncc_list_decl(estep);
+
+typedef struct {
+    const th_type    *t;
+    ncc_buffer_t     *out;
+    ncc_list_t(estep) steps;
+    size_t            ninline;
+    size_t            at;
+    ncc_buffer_t     *side;
+    ncc_buffer_t      post;
+    bool              entered;
+    bool              pushed;
+} eframe;
+
+ncc_option_decl(eframe);
+ncc_list_decl(eframe);
+
+static estep *step_add(ncc_list_t(estep) *v, const th_type *child)
 {
-    switch (a->kind) {
-    case TH_ARG_TYPE:
-        e->ok &= u8(b, 0);
-        enc_node(e, b, a->type);
-        break;
-    case TH_ARG_UINT:
-        e->ok &= u8(b, 1) && u64(b, a->u);
-        break;
-    case TH_ARG_SINT:
-        e->ok &= u8(b, 2) && u64(b, (uint64_t)a->s);
-        break;
-    case TH_ARG_STR:
-        e->ok &= u8(b, 3) && str(b, a->str.p, a->str.n);
-        break;
-    }
+    ncc_list_push(*v, ((estep){.child = child}));
+
+    return &v->data[v->len - 1];
 }
 
-static void enc_body(th_enc *e, th_buf *b, const th_type *t)
+static bool enc_plan(th_enc *e, eframe *f)
 {
-    e->ok &= u8(b, (uint8_t)(t->kind + 1));
+    const th_type *t = f->t;
+    estep         *s = nullptr;
 
-    if (!e->ok) {
-        return;
-    }
+    f->steps   = ncc_list_new(estep);
+    f->ninline = 0;
+
+    s = step_add(&f->steps, nullptr);
+
+    u8(&s->pre, (uint8_t)(t->kind + 1));
 
     switch (t->kind) {
     case TH_NAMED:
-        e->ok &= u8(b, t->named.is_variant ? 1 : 0)
-              && name(e->ctx, b, t->named.name, t->named.nlen)
-              && u64(b, t->named.nargs);
+        u8(&s->pre, t->named.is_variant ? 1 : 0);
 
-        for (size_t i = 0; e->ok && i < t->named.nargs; i++) {
-            enc_arg(e, b, &t->named.args[i]);
+        if (!name(e->ctx, &s->pre, t->named.name, t->named.nlen)) {
+            return false;
+        }
+
+        u64(&s->pre, t->named.nargs);
+
+        for (size_t i = 0; i < t->named.nargs; i++) {
+            const th_arg *a  = &t->named.args[i];
+            bool          ty = a->kind == TH_ARG_TYPE;
+
+            s = step_add(&f->steps, ty ? a->type : nullptr);
+
+            switch (a->kind) {
+            case TH_ARG_TYPE:
+                u8(&s->pre, 0);
+                break;
+            case TH_ARG_UINT:
+                u8(&s->pre, 1);
+                u64(&s->pre, a->u);
+                break;
+            case TH_ARG_SINT:
+                u8(&s->pre, 2);
+                u64(&s->pre, (uint64_t)a->s);
+                break;
+            case TH_ARG_STR:
+                u8(&s->pre, 3);
+                str(&s->pre, a->str.p, a->str.n);
+                break;
+            }
         }
         break;
 
     case TH_BITINT:
-        e->ok &= u64(b, t->bitint.width) && u8(b, t->bitint.is_signed ? 1 : 0);
+        u64(&s->pre, t->bitint.width);
+        u8(&s->pre, t->bitint.is_signed ? 1 : 0);
         break;
 
     case TH_INDIRECTION:
-        e->ok &= u8(b, t->ind.attrs);
-        enc_node(e, b, t->ind.referent);
+        s->child = t->ind.referent;
+        u8(&s->pre, t->ind.attrs);
         break;
 
     case TH_SEQUENCE:
+        s->child = t->seq.elem;
+
         if (t->seq.has_extent) {
-            e->ok &= u8(b, 1) && u64(b, t->seq.extent);
+            u8(&s->pre, 1);
+            u64(&s->pre, t->seq.extent);
         }
         else {
-            e->ok &= u8(b, 0);
+            u8(&s->pre, 0);
         }
-        enc_node(e, b, t->seq.elem);
         break;
 
-    case TH_RECORD: {
-        size_t    n  = t->record.n;
-        th_slice *sl = calloc(n ? n : 1, sizeof(th_slice));
-        th_buf   *tb = calloc(n ? n : 1, sizeof(th_buf));
+    case TH_RECORD:
+        f->ninline = f->steps.len;
 
-        for (size_t i = 0; i < n; i++) {
-            e->ok &= name(e->ctx, &tb[i], t->record.members[i].name,
-                          strlen(t->record.members[i].name));
-            enc_node(e, &tb[i], t->record.members[i].type);
-            sl[i].p = tb[i].p;
-            sl[i].n = tb[i].len;
-        }
-        qsort(sl, n, sizeof(th_slice), th_cmp_slice);
-        e->ok &= u64(b, n);
+        for (size_t i = 0; i < t->record.n; i++) {
+            const th_member *m = &t->record.members[i];
 
-        for (size_t i = 0; e->ok && i < n; i++) {
-            e->ok &= put(b, sl[i].p, sl[i].n);
+            s = step_add(&f->steps, m->type);
+
+            if (!name(e->ctx, &s->pre, m->name, strlen(m->name))) {
+                return false;
+            }
         }
 
-        for (size_t i = 0; i < n; i++) {
-            free(tb[i].p);
-        }
-        free(tb);
-        free(sl);
+        u64(&f->post, t->record.n);
         break;
-    }
 
     case TH_FUNCTION: {
         uint8_t flags = (uint8_t)((t->fn.rest ? 1 : 0) | (t->fn.nkw ? 2 : 0));
 
-        e->ok &= u8(b, flags);
-        enc_node(e, b, t->fn.ret);
-        e->ok &= u64(b, t->fn.np);
+        s->child = t->fn.ret;
+        u8(&s->pre, flags);
 
-        for (size_t i = 0; e->ok && i < t->fn.np; i++) {
-            e->ok &= u8(b, t->fn.params[i].mode);
-            enc_node(e, b, t->fn.params[i].type);
+        s = step_add(&f->steps, t->fn.np ? t->fn.params[0].type : nullptr);
+
+        u64(&s->pre, t->fn.np);
+
+        if (t->fn.np) {
+            u8(&s->pre, t->fn.params[0].mode);
+        }
+
+        for (size_t i = 1; i < t->fn.np; i++) {
+            s = step_add(&f->steps, t->fn.params[i].type);
+            u8(&s->pre, t->fn.params[i].mode);
         }
 
         if (t->fn.rest) {
-            e->ok &= u8(b, t->fn.rest->mode);
-            enc_node(e, b, t->fn.rest->type);
+            s = step_add(&f->steps, t->fn.rest->type);
+            u8(&s->pre, t->fn.rest->mode);
+        }
+
+        f->ninline = f->steps.len;
+
+        for (size_t i = 0; i < t->fn.nkw; i++) {
+            const th_kwparam *k = &t->fn.kw[i];
+
+            s = step_add(&f->steps, k->type);
+
+            if (!name(e->ctx, &s->pre, k->name, strlen(k->name))) {
+                return false;
+            }
+
+            u8(&s->pre, k->mode);
         }
 
         if (t->fn.nkw) {
-            size_t    n  = t->fn.nkw;
-            th_slice *sl = calloc(n, sizeof(th_slice));
-            th_buf   *tb = calloc(n, sizeof(th_buf));
-
-            for (size_t i = 0; i < n; i++) {
-                e->ok &= name(e->ctx, &tb[i], t->fn.kw[i].name,
-                              strlen(t->fn.kw[i].name))
-                      && u8(&tb[i], t->fn.kw[i].mode);
-                enc_node(e, &tb[i], t->fn.kw[i].type);
-                sl[i].p = tb[i].p;
-                sl[i].n = tb[i].len;
-            }
-            qsort(sl, n, sizeof(th_slice), th_cmp_slice);
-            e->ok &= u64(b, n);
-
-            for (size_t i = 0; e->ok && i < n; i++) {
-                e->ok &= put(b, sl[i].p, sl[i].n);
-            }
-
-            for (size_t i = 0; i < n; i++) {
-                free(tb[i].p);
-            }
-            free(tb);
-            free(sl);
+            u64(&f->post, t->fn.nkw);
         }
         break;
     }
 
     case TH_BINDER:
-        e->ok &= u64(b, t->binder.arity);
-        enc_node(e, b, t->binder.body);
+        s->child = t->binder.body;
+        u64(&s->pre, t->binder.arity);
         break;
 
     case TH_BOUND:
-        e->ok &= u64(b, t->bound.distance) && u64(b, t->bound.position);
+        u64(&s->pre, t->bound.distance);
+        u64(&s->pre, t->bound.position);
         break;
 
     case TH_VAR:
         if (e->erase) {
-            e->ok &= u64(b, 0);
+            u64(&s->pre, 0);
         }
         else if (!t->var.has_index) {
-            e->ctx->err = "free variable has no index; normalize first";
-            e->ok       = false;
+            th_err(e->ctx, TH_ERR_FREE_VAR, nullptr, nullptr, (th_type *)t,
+                   "free variable has no index; normalize first");
+
+            return false;
         }
         else {
-            e->ok &= u64(b, t->var.index);
+            u64(&s->pre, t->var.index);
         }
         break;
 
-    case TH_SUM: {
-        size_t    n  = t->sum.n;
-        th_slice *sl = calloc(n ? n : 1, sizeof(th_slice));
-        th_buf   *tb = calloc(n ? n : 1, sizeof(th_buf));
+    case TH_SUM:
+        f->ninline = f->steps.len;
 
-        for (size_t i = 0; i < n; i++) {
-            enc_node(e, &tb[i], t->sum.arms[i]);
-            sl[i].p = tb[i].p;
-            sl[i].n = tb[i].len;
-        }
-        qsort(sl, n, sizeof(th_slice), th_cmp_slice);
-        e->ok &= u8(b, t->sum.comb) && u64(b, n);
-
-        for (size_t i = 0; e->ok && i < n; i++) {
-            e->ok &= put(b, sl[i].p, sl[i].n);
+        for (size_t i = 0; i < t->sum.n; i++) {
+            step_add(&f->steps, t->sum.arms[i]);
         }
 
-        for (size_t i = 0; i < n; i++) {
-            free(tb[i].p);
-        }
-        free(tb);
-        free(sl);
+        u8(&f->post, t->sum.comb);
+        u64(&f->post, t->sum.n);
+        break;
+
+    default:
         break;
     }
+
+    if (!f->ninline) {
+        f->ninline = f->steps.len;
     }
+
+    size_t nside = f->steps.len - f->ninline;
+
+    if (nside) {
+        f->side = ncc_alloc_array(ncc_buffer_t, nside);
+    }
+
+    return true;
 }
 
-static void enc_node(th_enc *e, th_buf *b, const th_type *t)
+static void emit(ncc_buffer_t *to, const ncc_buffer_t *from)
+{
+    ncc_buffer_append(to, from->data, from->byte_len);
+}
+
+static void enc_splice(eframe *f)
+{
+    size_t n = f->steps.len - f->ninline;
+
+    emit(f->out, &f->post);
+
+    if (!n) {
+        return;
+    }
+
+    th_slice *sl = ncc_alloc_array(th_slice, n);
+
+    for (size_t i = 0; i < n; i++) {
+        sl[i].p = (uint8_t *)f->side[i].data;
+        sl[i].n = f->side[i].byte_len;
+    }
+
+    qsort(sl, n, sizeof(th_slice), th_cmp_slice);
+
+    for (size_t i = 0; i < n; i++) {
+        ncc_buffer_append(f->out, (const char *)sl[i].p, sl[i].n);
+    }
+
+    ncc_free(sl);
+}
+
+static void enc_frame_free(eframe *f)
+{
+    size_t nsteps = f->steps.len;
+
+    for (size_t i = 0; i < nsteps; i++) {
+        ncc_buffer_release(&f->steps.data[i].pre);
+    }
+    ncc_list_free(f->steps);
+
+    for (size_t i = f->ninline; i < nsteps; i++) {
+        ncc_buffer_release(&f->side[i - f->ninline]);
+    }
+    ncc_free(f->side);
+    ncc_buffer_release(&f->post);
+}
+
+static void enc_node(th_enc *e, ncc_buffer_t *b, const th_type *t)
 {
     if (!e->ok) {
         return;
     }
 
-    t = th_resolve_c(t);
+    ncc_list_t(eframe) st = ncc_list_new_cap(eframe, 16);
 
-    if (!t) {
-        e->ok &= u8(b, 0xFF);
+    ncc_list_push(st, ((eframe){.t = t, .out = b}));
 
-        return;
+    while (st.len && e->ok) {
+        eframe *f = &st.data[st.len - 1];
+
+        if (!f->entered) {
+            f->entered = true;
+            f->t       = th_resolve_c(f->t);
+
+            if (!f->t) {
+                u8(f->out, 0xFF);
+                ncc_list_pop(eframe, st);
+
+                continue;
+            }
+
+            size_t back = pm_find(&e->path, f->t);
+
+            if (back != SIZE_MAX) {
+                u8(f->out, 0xFE);
+                u64(f->out, pm_depth(&e->path) - back);
+                ncc_list_pop(eframe, st);
+
+                continue;
+            }
+
+            pm_push(&e->path, f->t);
+            f->pushed = true;
+
+            if (!enc_plan(e, f)) {
+                e->ok = false;
+
+                break;
+            }
+            f = &st.data[st.len - 1];
+        }
+
+        if (f->at < f->steps.len) {
+            size_t        i  = f->at++;
+            ncc_buffer_t *to = i < f->ninline ? f->out
+                                              : &f->side[i - f->ninline];
+
+            emit(to, &f->steps.data[i].pre);
+
+            const th_type *child = f->steps.data[i].child;
+
+            if (!child) {
+                continue;
+            }
+
+            ncc_list_push(st, ((eframe){.t = child, .out = to}));
+
+            continue;
+        }
+
+        enc_splice(f);
+
+        if (f->pushed) {
+            pm_pop(&e->path);
+        }
+        enc_frame_free(f);
+        ncc_list_pop(eframe, st);
     }
 
-    size_t back = pm_find(&e->path, t);
+    while (st.len) {
+        eframe done = ncc_option_get(ncc_list_pop(eframe, st));
 
-    if (back != SIZE_MAX) {
-        e->ok &= u8(b, 0xFE) && u64(b, e->path.depth - back);
-
-        return;
+        if (done.entered) {
+            enc_frame_free(&done);
+        }
     }
-
-    if (!pm_push(&e->path, t)) {
-        e->ok = false;
-
-        return;
-    }
-    enc_body(e, b, t);
-    pm_pop(&e->path);
+    ncc_list_free(st);
 }
 
 typedef struct {
-    th_type **seen;
-    size_t    n;
-    size_t    cap;
-    th_path   path;
-    th_ctx   *ctx;
+    ncc_dict_t seen;
+    th_path    path;
+    th_ctx    *ctx;
 } th_norm;
 
 static void norm_walk(th_norm *s, th_type *t);
 
-void th_erase_encode(th_ctx *ctx, const th_type *t, th_buf *out)
+void th_erase_encode(th_ctx *ctx, const th_type *t, ncc_buffer_t *out)
 {
     th_enc e = {.ctx = ctx, .erase = true, .ok = true};
 
+    pm_init(&e.path);
     enc_node(&e, out, t);
     pm_free(&e.path);
 }
 
-void th_full_encode(th_ctx *ctx, const th_type *t, th_buf *out)
+void th_full_encode(th_ctx *ctx, const th_type *t, ncc_buffer_t *out)
 {
     th_enc e = {.ctx = ctx, .ok = true};
 
+    pm_init(&e.path);
     enc_node(&e, out, t);
     pm_free(&e.path);
 }
 
-static void norm_children_sum(th_norm *s, th_type *t)
+typedef struct {
+    th_slice key;
+    th_type *arm;
+} th_armkey;
+
+static int cmp_armkey(const void *a, const void *b)
 {
-    size_t    n  = t->sum.n;
-    th_slice *sl = calloc(n ? n : 1, sizeof(th_slice));
-    th_buf   *tb = calloc(n ? n : 1, sizeof(th_buf));
-    th_type **ar = calloc(n ? n : 1, sizeof(th_type *));
+    const th_armkey *x = a, *y = b;
+
+    return th_cmp_slice(&x->key, &y->key);
+}
+
+th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n)
+{
+    th_armkey    *ak = ncc_alloc_array(th_armkey, n);
+    ncc_buffer_t *tb = ncc_alloc_array(ncc_buffer_t, n);
+    th_type     **ar = ncc_alloc_array(th_type *, n);
 
     for (size_t i = 0; i < n; i++) {
-        th_erase_encode(s->ctx, t->sum.arms[i], &tb[i]);
-        sl[i].p = tb[i].p;
-        sl[i].n = tb[i].len;
-        ar[i]   = t->sum.arms[i];
+        th_erase_encode(ctx, arms[i], &tb[i]);
+        ak[i].key.p = (uint8_t *)tb[i].data;
+        ak[i].key.n = tb[i].byte_len;
+        ak[i].arm   = arms[i];
     }
 
-    for (size_t i = 0; i < n; i++) {
-        for (size_t j = i + 1; j < n; j++) {
-            if (th_cmp_slice(&sl[j], &sl[i]) < 0) {
-                th_slice ts = sl[i];
-                th_type *tt = ar[i];
-                sl[i]       = sl[j];
-                sl[j]       = ts;
-                ar[i]       = ar[j];
-                ar[j]       = tt;
-            }
-        }
-    }
+    qsort(ak, n, sizeof(th_armkey), cmp_armkey);
 
     for (size_t i = 0; i < n; i++) {
-        norm_walk(s, ar[i]);
+        ar[i] = ak[i].arm;
+        ncc_buffer_release(&tb[i]);
     }
+    ncc_free(tb);
+    ncc_free(ak);
 
-    for (size_t i = 0; i < n; i++) {
-        free(tb[i].p);
-    }
-    free(tb);
-    free(sl);
-    free(ar);
+    return ar;
+}
+
+static th_type **norm_children_sum(th_norm *s, th_type *t, size_t *out)
+{
+    *out = t->sum.n;
+
+    return th_sort_arms(s->ctx, t->sum.arms, t->sum.n);
 }
 
 int th_cmp_member(const void *a, const void *b)
@@ -661,107 +677,157 @@ int th_cmp_kw(const void *a, const void *b)
     return memcmp(x->name, y->name, xn);
 }
 
-static void norm_walk(th_norm *s, th_type *t)
+typedef struct {
+    th_type  *t;
+    th_type **kids;
+    size_t    n;
+    size_t    next;
+    bool      entered;
+} th_nframe;
+
+ncc_option_decl(th_nframe);
+ncc_list_decl(th_nframe);
+
+static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
 {
-    t = (th_type *)th_resolve_c(t);
+    th_type **kids = nullptr;
+    size_t    n    = 0;
 
-    if (!t) {
-        return;
-    }
-
-    if (pm_find(&s->path, t) != SIZE_MAX) {
-        return;
-    }
-
-    if (!pm_push(&s->path, t)) {
-        return;
-    }
+    *out = 0;
 
     switch (t->kind) {
     case TH_VAR:
-        for (size_t i = 0; i < s->n; i++) {
-            if (s->seen[i] == t) {
-                goto done;
-            }
+        if (ncc_dict_contains(&s->seen, t)) {
+            return nullptr;
         }
 
-        if (s->n == s->cap) {
-            s->cap  = s->cap ? s->cap * 2 : 16;
-            s->seen = realloc(s->seen, s->cap * sizeof(th_type *));
-        }
-        t->var.index     = s->n;
+        t->var.index     = ncc_dict_len(&s->seen);
         t->var.has_index = true;
-        s->seen[s->n++]  = t;
-        break;
+
+        ncc_dict_put(&s->seen, t, t);
+
+        return nullptr;
 
     case TH_NAMED:
+        kids = ncc_alloc_array(th_type *, t->named.nargs);
+
         for (size_t i = 0; i < t->named.nargs; i++) {
             if (t->named.args[i].kind == TH_ARG_TYPE) {
-                norm_walk(s, t->named.args[i].type);
+                kids[n++] = t->named.args[i].type;
             }
         }
         break;
 
     case TH_INDIRECTION:
-        norm_walk(s, t->ind.referent);
+        kids      = ncc_alloc_array(th_type *, 1);
+        kids[n++] = t->ind.referent;
         break;
 
     case TH_SEQUENCE:
-        norm_walk(s, t->seq.elem);
+        kids      = ncc_alloc_array(th_type *, 1);
+        kids[n++] = t->seq.elem;
         break;
 
     case TH_RECORD: {
-        th_member *m = calloc(t->record.n ? t->record.n : 1, sizeof(th_member));
+        th_member *m = ncc_alloc_array(th_member, t->record.n);
 
         memcpy(m, t->record.members, t->record.n * sizeof(th_member));
         qsort(m, t->record.n, sizeof(th_member), th_cmp_member);
 
+        kids = ncc_alloc_array(th_type *, t->record.n);
+
         for (size_t i = 0; i < t->record.n; i++) {
-            norm_walk(s, m[i].type);
+            kids[n++] = m[i].type;
         }
-        free(m);
+        ncc_free(m);
         break;
     }
 
     case TH_FUNCTION: {
-        norm_walk(s, t->fn.ret);
+        size_t want = t->fn.np + t->fn.nkw + 2;
+
+        kids      = ncc_alloc_array(th_type *, want);
+        kids[n++] = t->fn.ret;
 
         for (size_t i = 0; i < t->fn.np; i++) {
-            norm_walk(s, t->fn.params[i].type);
+            kids[n++] = t->fn.params[i].type;
         }
 
         if (t->fn.rest) {
-            norm_walk(s, t->fn.rest->type);
+            kids[n++] = t->fn.rest->type;
         }
 
         if (t->fn.nkw) {
-            th_kwparam *k = calloc(t->fn.nkw, sizeof(th_kwparam));
+            th_kwparam *k = ncc_alloc_array(th_kwparam, t->fn.nkw);
 
             memcpy(k, t->fn.kw, t->fn.nkw * sizeof(th_kwparam));
             qsort(k, t->fn.nkw, sizeof(th_kwparam), th_cmp_kw);
 
             for (size_t i = 0; i < t->fn.nkw; i++) {
-                norm_walk(s, k[i].type);
+                kids[n++] = k[i].type;
             }
-            free(k);
+            ncc_free(k);
         }
         break;
     }
 
     case TH_BINDER:
-        norm_walk(s, t->binder.body);
+        kids      = ncc_alloc_array(th_type *, 1);
+        kids[n++] = t->binder.body;
         break;
 
     case TH_SUM:
-        norm_children_sum(s, t);
-        break;
+        return norm_children_sum(s, t, out);
 
     default:
-        break;
+        return nullptr;
     }
 
-done:
-    pm_pop(&s->path);
+    *out = n;
+
+    return kids;
+}
+
+static void norm_walk(th_norm *s, th_type *root)
+{
+    ncc_list_t(th_nframe) st = ncc_list_new_cap(th_nframe, 16);
+
+    ncc_list_push(st, ((th_nframe){.t = root}));
+
+    while (st.len) {
+        th_nframe *f = &st.data[st.len - 1];
+
+        if (!f->entered) {
+            f->entered = true;
+            f->t       = (th_type *)th_resolve_c(f->t);
+
+            if (!f->t || pm_find(&s->path, f->t) != SIZE_MAX) {
+                f->t = nullptr;
+                ncc_list_pop(th_nframe, st);
+
+                continue;
+            }
+
+            pm_push(&s->path, f->t);
+
+            f->kids = norm_children(s, f->t, &f->n);
+            f       = &st.data[st.len - 1];
+        }
+
+        if (f->next < f->n) {
+            th_type *kid = f->kids[f->next++];
+
+            ncc_list_push(st, ((th_nframe){.t = kid}));
+
+            continue;
+        }
+
+        pm_pop(&s->path);
+        ncc_free(f->kids);
+        ncc_list_pop(th_nframe, st);
+    }
+
+    ncc_list_free(st);
 }
 
 void th_normalize(th_type *t)
@@ -769,26 +835,29 @@ void th_normalize(th_type *t)
     th_ctx  tmp = {0};
     th_norm s   = {.ctx = &tmp};
 
+    ncc_dict_init(&s.seen, nullptr, nullptr);
+    pm_init(&s.path);
     norm_walk(&s, t);
-    free(s.seen);
+    ncc_dict_free(&s.seen);
     pm_free(&s.path);
 }
 
 bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
 {
     th_normalize(t);
-    ctx->scratch.len = 0;
+    ctx->scratch.byte_len = 0;
 
     th_enc e = {.ctx = ctx, .ok = true};
 
+    pm_init(&e.path);
     enc_node(&e, &ctx->scratch, t);
     pm_free(&e.path);
 
     if (!e.ok) {
         return false;
     }
-    *out = ctx->scratch.p;
-    *len = ctx->scratch.len;
+    *out = (const uint8_t *)ctx->scratch.data;
+    *len = ctx->scratch.byte_len;
 
     return true;
 }
@@ -802,16 +871,15 @@ uint64_t th_hash(th_ctx *ctx, th_type *t)
         return 0;
     }
 
-    th_buf b = {0};
+    uint8_t ver[4] = {(uint8_t)(TH_VERSION >> 24), (uint8_t)(TH_VERSION >> 16),
+                      (uint8_t)(TH_VERSION >> 8), (uint8_t)TH_VERSION};
+    XXH3_state_t st;
 
-    u32(&b, TH_VERSION);
-    put(&b, p, n);
+    XXH3_128bits_reset(&st);
+    XXH3_128bits_update(&st, ver, sizeof ver);
+    XXH3_128bits_update(&st, p, n);
 
-    XXH128_hash_t h = XXH3_128bits(b.p, b.len);
-
-    free(b.p);
-
-    return h.low64;
+    return XXH3_128bits_digest(&st).low64;
 }
 
 uint64_t th_arm_tag(const char *n)
@@ -824,16 +892,30 @@ uint64_t th_arm_tag(const char *n)
 const char *th_anon_name(th_ctx *ctx, const char *path, uint64_t line,
                          uint64_t col)
 {
-    th_buf b = {0};
+    size_t       plen = strlen(path);
+    uint8_t      head[8];
+    XXH3_state_t st;
 
-    str(&b, path, strlen(path));
-    u64(&b, line);
-    u64(&b, col);
+    for (int i = 0; i < 8; i++) {
+        head[i] = (uint8_t)(plen >> (56 - 8 * i));
+    }
 
-    XXH128_hash_t h = XXH3_128bits(b.p, b.len);
-    uint64_t      d = h.low64 ? h.low64 : 1;
+    XXH3_128bits_reset(&st);
+    XXH3_128bits_update(&st, head, sizeof head);
+    XXH3_128bits_update(&st, path, plen);
 
-    free(b.p);
+    uint64_t at[2] = {line, col};
+
+    for (int k = 0; k < 2; k++) {
+        for (int i = 0; i < 8; i++) {
+            head[i] = (uint8_t)(at[k] >> (56 - 8 * i));
+        }
+        XXH3_128bits_update(&st, head, sizeof head);
+    }
+
+    uint64_t d = XXH3_128bits_digest(&st).low64;
+
+    d = d ? d : 1;
 
     char *s = th_alloc(ctx, 32);
 
@@ -846,9 +928,7 @@ static th_type *node(th_ctx *ctx, th_kind k)
 {
     th_type *t = th_alloc(ctx, sizeof(th_type));
 
-    if (t) {
-        t->kind = k;
-    }
+    t->kind = k;
 
     return t;
 }
@@ -1017,6 +1097,7 @@ th_type *th_binder(th_ctx *ctx, uint64_t arity, th_type *body)
 
     t->binder.arity = arity;
     t->binder.body  = body;
+    t->binder.qvars = nullptr;
 
     return t;
 }
@@ -1038,13 +1119,25 @@ th_type *th_var(th_ctx *ctx)
     t->var.has_index = false;
     t->var.index     = ctx->next_var++;
     t->var.ref       = nullptr;
+    t->var.name      = nullptr;
+
+    return t;
+}
+
+th_type *th_var_named(th_ctx *ctx, const char *name)
+{
+    th_type *t = th_var(ctx);
+
+    if (name) {
+        t->var.name = th_strdup(ctx, name, strlen(name));
+    }
 
     return t;
 }
 
 th_type *th_tuple(th_ctx *ctx, th_type *const *e, size_t n)
 {
-    th_arg *a = calloc(n ? n : 1, sizeof(th_arg));
+    th_arg *a = ncc_alloc_array(th_arg, n);
 
     for (size_t i = 0; i < n; i++) {
         a[i].kind = TH_ARG_TYPE;
@@ -1053,63 +1146,61 @@ th_type *th_tuple(th_ctx *ctx, th_type *const *e, size_t n)
 
     th_type *t = th_apply(ctx, TH_TUPLE, a, n);
 
-    free(a);
+    ncc_free(a);
 
     return t;
 }
 
+static ncc_hash_value_t enc_hash(void *p)
+{
+    return ncc_buffer_hash((ncc_buffer_t *)p);
+}
+
+static bool enc_eq(const void *a, const void *b)
+{
+    const ncc_buffer_t *x = a, *y = b;
+
+    return x->byte_len == y->byte_len
+        && !memcmp(x->data, y->data, x->byte_len);
+}
+
 th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n)
 {
-    th_type **flat = calloc(n ? n : 1, sizeof(th_type *));
-    size_t    fn = 0, cap = n ? n : 1;
+    ncc_list_t(th_type_ptr_t) flat = ncc_list_new_cap(th_type_ptr_t, n);
 
     for (size_t i = 0; i < n; i++) {
         th_type *a = arms[i];
 
         if (a->kind == TH_SUM && a->sum.comb == comb) {
             for (size_t j = 0; j < a->sum.n; j++) {
-                if (fn == cap) {
-                    cap *= 2;
-                    flat = realloc(flat, cap * sizeof(th_type *));
-                }
-                flat[fn++] = a->sum.arms[j];
+                ncc_list_push(flat, a->sum.arms[j]);
             }
         }
         else {
-            if (fn == cap) {
-                cap *= 2;
-                flat = realloc(flat, cap * sizeof(th_type *));
-            }
-            flat[fn++] = a;
+            ncc_list_push(flat, a);
         }
     }
 
-    th_type **uniq = calloc(fn ? fn : 1, sizeof(th_type *));
-    th_buf   *enc  = calloc(fn ? fn : 1, sizeof(th_buf));
-    size_t    un   = 0;
+    size_t        fn   = flat.len;
+    th_type     **uniq = ncc_alloc_array(th_type *, fn);
+    ncc_buffer_t *enc  = ncc_alloc_array(ncc_buffer_t, fn);
+    size_t        un   = 0;
+    ncc_dict_t    seen;
+
+    ncc_dict_init(&seen, enc_hash, enc_eq);
 
     for (size_t i = 0; i < fn; i++) {
-        th_buf b = {0};
+        th_erase_encode(ctx, flat.data[i], &enc[un]);
 
-        th_erase_encode(ctx, flat[i], &b);
+        if (ncc_dict_contains(&seen, &enc[un])) {
+            ncc_buffer_release(&enc[un]);
 
-        bool dup = false;
-
-        for (size_t j = 0; j < un; j++) {
-            if (enc[j].len == b.len && !memcmp(enc[j].p, b.p, b.len)) {
-                dup = true;
-                break;
-            }
+            continue;
         }
-
-        if (dup) {
-            free(b.p);
-        }
-        else {
-            enc[un]    = b;
-            uniq[un++] = flat[i];
-        }
+        ncc_dict_put(&seen, &enc[un], &enc[un]);
+        uniq[un++] = flat.data[i];
     }
+    ncc_dict_free(&seen);
 
     th_type *r;
 
@@ -1125,11 +1216,11 @@ th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n)
     }
 
     for (size_t i = 0; i < un; i++) {
-        free(enc[i].p);
+        ncc_buffer_release(&enc[i]);
     }
-    free(enc);
-    free(uniq);
-    free(flat);
+    ncc_free(enc);
+    ncc_free(uniq);
+    ncc_list_free(flat);
 
     return r;
 }

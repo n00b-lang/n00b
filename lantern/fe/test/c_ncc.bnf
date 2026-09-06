@@ -1,5 +1,3 @@
-# C2Y Grammar (translated from ncc parse.c)
-
 <provided_identifier> ::= %IDENTIFIER
     | %"_Once"
     | %"_kargs"
@@ -26,16 +24,6 @@
 
 <typedef_name_terminal> ::= %TYPEDEF_NAME
 
-# Ambiguity-aware typedef: the parser considers both interpretations
-# (typedef name vs plain identifier).  Tree scoring resolves the ambiguity:
-# @disambig(id_is_value) penalizes reading an identifier as a TYPE when the
-# symbol table says it names a value (variable/parameter/function), so a value
-# expression that mis-parsed as a type_name (e.g. `lp[2]`) loses to its
-# expression reading at forest->tree extraction. The penalty is deliberately
-# one-directional: it fires only on value names, never on a typedef name being
-# *declared* (a binding occurrence routes through the declarator/identifier, not
-# typedef_name), so it cannot disturb typedef declarations. Typedef *uses*
-# already resolve correctly under the default last-alternative policy.
 <typedef_name> @disambig(id_is_value) ::= <typedef_name_terminal> | %IDENTIFIER
 
 <non_bracket_token> ::= %IDENTIFIER
@@ -259,14 +247,6 @@
 <modified_literal> ::= %IDENTIFIER %"{" <array_literal_list>? %","? %"}"
     | %IDENTIFIER %"{" <dict_pair_list> %","? %"}"
 
-# WP-011: bare dict literal `{key: value, ...}`. Disambiguates from
-# `<braced_initializer>` by requiring at least one `<dict_pair>` (i.e.
-# at least one `:` key/value separator).  Empty `{}` and comma-only
-# initializer lists fall through to `<braced_initializer>`; designated
-# initializers (`.x = 5`) likewise stay in `<braced_initializer>`.
-# The `<modified_literal>` rule above shares <dict_pair_list> so that
-# explicit `d{key: value, ...}` accepts the same body shape; the
-# modifier-vs-bare distinction is resolved by the xform pass.
 <dict_literal> ::= %"{" <dict_pair_list> %","? %"}"
 
 <dict_pair_list> ::= <dict_pair> (%"," <dict_pair>)*
@@ -472,13 +452,6 @@
     | %"__inline"
     | %"__forceinline"
 
-# A bare identifier can match function_specifier's soft-keyword alternative, so
-# a typedef-name in declaration_specifiers (e.g. the return type of
-# `static res_t f(void)`) parses ambiguously as a function_specifier instead of
-# a type_specifier. @disambig(id_is_typedef) penalizes the function-specifier
-# reading when the symbol table says the identifier names a typedef, so the type
-# reading wins. Real function specifiers (inline/_Noreturn/_Once) are never
-# typedefs, so they are unaffected.
 <function_specifier> @disambig(id_is_known) ::= <_kw_kw_fn_specifier>
     | %"_Once"
 
@@ -537,9 +510,6 @@
 <keyword_clause> ::= %"_kargs" %"{" <keyword_param_list> %"}"
     | %"_kargs" %":" %"opaque"
 
-# The `rpc` keyword is contextual — the tokenizer only emits it as a
-# grammar terminal when preceded by `@`, so existing user code that
-# uses `rpc` as an identifier (variable, field, function) is unaffected.
 <rpc_clause> ::= %"@" %"rpc" %"(" <string_literal> %")"
 
 <keyword_param> ::= <declaration_specifiers> <declarator> %"=" <initializer> %";"
@@ -829,10 +799,6 @@
     | <try_expression>
     | <postfix_expression>
 
-# ncc `_try <unary-expression>`: error-propagation for n00b_result_t. Spelled
-# `_try` (not `try`) because n00b uses `try` as an ordinary identifier. Lowered
-# by xform_try: on a non-ok result, the enclosing function returns the error;
-# otherwise the expression yields the unwrapped `.ok` value.
 <try_expression> ::= %"_try" <unary_expression>
 
 <_kw_kw_alignof> ::= %"alignof"
@@ -853,7 +819,4 @@
     | <gcc_asm_statement>
     | <defer_statement>
 
-# ncc `_defer <secondary-block>` (N3199-semantics defer, spelled `_defer` to
-# avoid colliding with libn00b's existing `defer` macro). The block runs at exit
-# of the enclosing scope, LIFO, on all exit paths; lowered by xform_defer.
 <defer_statement> ::= %"_defer" <secondary_block>

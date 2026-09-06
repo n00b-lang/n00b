@@ -23,7 +23,6 @@ typedef bool (*ir_visit_fn)(ir_visit_t *v);
 
 ir_walk_t *ir_walk_new(void *user);
 void       ir_walk_free(ir_walk_t *w);
-void      *ir_walk_user(ir_walk_t *w);
 
 void ir_walk_on_module(ir_walk_t *w, ir_visit_fn pre, ir_visit_fn post,
                        void *thunk);

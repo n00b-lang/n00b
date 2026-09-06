@@ -5,6 +5,7 @@
 #include "ir/ir.h"
 
 char *ir_module_print(ir_module_t *m);
+char *ir_text_format(const char *text, int32_t width);
 const char *ir_type_text(ir_module_t *m, th_type *t);
 
 ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,

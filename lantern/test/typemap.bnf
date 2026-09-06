@@ -1,0 +1,24 @@
+@tokenizer("toy")
+
+<prog> @scope("module") ::= <items>
+
+<items> ::= <item> <items>
+          | <item>
+
+<item> ::= <idecl>
+         | <sdecl>
+         | <ldecl>
+         | <ddecl>
+         | <block>
+
+<idecl> @declares($1,"var") @type($1, int)              ::= "i" <name> ";"
+
+<sdecl> @declares($1,"var") @type($1,"string")          ::= "s" <name> ";"
+
+<ldecl> @declares($1,"var") @type($1, list[int])        ::= "l" <name> ";"
+
+<ddecl> @declares($1,"var") @type($1, dict[int,string]) ::= "d" <name> ";"
+
+<block> @scope("block") ::= "{" <items> "}"
+
+<name> ::= __LOWER

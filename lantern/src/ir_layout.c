@@ -115,6 +115,9 @@ ir_descriptor_t *ir_layout_ensure(ir_module_t *m, th_type *t,
     *e = (ir_descentry_t){.target = ir_strdup(m->ctx,
                                               target ? target : m->target)};
 
+    e->d.type   = t;
+    e->d.target = e->target;
+
     return &e->d;
 }
 
@@ -166,18 +169,15 @@ bool ir_layout_pin_align(ir_module_t *m, th_type *t, uint64_t bytes)
 static void drop_members(void *p)
 {
     ncc_dict_free(p);
-    free(p);
+    ncc_free(p);
 }
 
 static ir_member_layout_t *member_slot(ir_module_t *m, ir_descriptor_t *d,
                                        const char *field)
 {
     if (!d->member_index) {
-        ncc_dict_t *ix = calloc(1, sizeof(ncc_dict_t));
+        ncc_dict_t *ix = ncc_alloc(ncc_dict_t);
 
-        if (!ix) {
-            return nullptr;
-        }
         ncc_dict_init(ix, ncc_hash_cstring, ncc_dict_cstr_eq);
         ir_ctx_on_free(m->ctx, drop_members, ix);
         d->member_index = ix;
@@ -266,19 +266,19 @@ static void refuse(L *l, th_type *t, const char *what, ...)
         return;
     }
 
-    ir_sb   b = {0};
+    ncc_buffer_t *b = ncc_buffer_empty();
     va_list ap;
 
     va_start(ap, what);
-    ir_sb_vfmt(&b, what, ap);
+    ncc_buffer_vprintf(b, what, ap);
     va_end(ap);
 
-    ir_sb_fmt(&b, " (laying out %s)", ir_type_text(l->m, t));
+    ncc_buffer_printf(b, " (laying out %s)", ir_type_text(l->m, t));
 
-    char *msg = ir_sb_take(&b);
+    char *msg = ncc_buffer_take(b);
 
     ir_diag_message(dg, l->d, msg);
-    free(msg);
+    ncc_free(msg);
 }
 
 static ir_layout_val_t resolved(uint64_t v)
@@ -708,9 +708,11 @@ bool ir_layout_run(ir_module_t *m, ir_diags_t *d)
     return l.ok;
 }
 
-static bool layout_pass(ir_module_t *m, void *state)
+static bool layout_pass(ir_module_t *m, ir_diags_t *d, void *state)
 {
-    return ir_layout_run(m, (ir_diags_t *)state);
+    (void)state;
+
+    return ir_layout_run(m, d);
 }
 
 const ir_pass_t ir_pass_layout = {

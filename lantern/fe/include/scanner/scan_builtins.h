@@ -6,7 +6,8 @@ extern ncc_option_t(ncc_string_t) ncc_scan_string_double(ncc_scanner_t *s);
 
 extern ncc_option_t(ncc_string_t) ncc_scan_string_single(ncc_scanner_t *s);
 
-extern ncc_option_t(ncc_string_t) ncc_scan_string_raw(ncc_scanner_t *s, const char *quote);
+extern ncc_option_t(ncc_string_t)
+    ncc_scan_string_raw(ncc_scanner_t *s, ncc_string_t quote);
 
 extern ncc_option_t(ncc_string_t) ncc_scan_integer(ncc_scanner_t *s);
 

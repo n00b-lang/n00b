@@ -44,6 +44,8 @@ typedef struct {
 } ir_variant_repr_t;
 
 typedef struct {
+    th_type            *type;
+    const char         *target;
     ir_layout_val_t     size;
     ir_layout_val_t     align;
     ir_layout_val_t     stride;

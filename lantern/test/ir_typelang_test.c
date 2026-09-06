@@ -26,8 +26,9 @@ static void check_line(char *line, int lineno)
 
     *tab2 = 0;
 
-    const char *type = line;
-    const char *want = tab2 + 1;
+    const char *type      = line;
+    const char *want_enc  = tab1 + 1;
+    const char *want      = tab2 + 1;
 
     for (const char *p = type; *p; p++) {
         if ((unsigned char)*p >= 0x80) {
@@ -48,6 +49,31 @@ static void check_line(char *line, int lineno)
         ir_ctx_free(ctx);
 
         return;
+    }
+
+    const uint8_t *enc = nullptr;
+    size_t         n   = 0;
+
+    if (!th_encode(th, t, &enc, &n)) {
+        printf("FAIL  line %d: %s does not encode (%s)\n", lineno, type,
+               th_last_error(th) ? th_last_error(th) : "-");
+        fails++;
+        ir_ctx_free(ctx);
+
+        return;
+    }
+
+    char hex[8192];
+
+    for (size_t i = 0; i < n && 2 * i + 3 <= sizeof(hex); i++) {
+        snprintf(hex + 2 * i, sizeof(hex) - 2 * i, "%02x", enc[i]);
+    }
+    hex[2 * n] = 0;
+
+    if (*want_enc && strcmp(hex, want_enc)) {
+        printf("FAIL  line %d: %s encodes to\n  %s\nspec says\n  %s\n", lineno,
+               type, hex, want_enc);
+        fails++;
     }
 
     char got[32];

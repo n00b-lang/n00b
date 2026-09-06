@@ -73,17 +73,17 @@ complain(ir_module_t *m, ir_diags_t *d, ir_diagcode_t code, ir_instr_t *in,
         return nullptr;
     }
 
-    ir_sb   b = {0};
+    ncc_buffer_t *b = ncc_buffer_empty();
     va_list ap;
 
     va_start(ap, fmt);
-    ir_sb_vfmt(&b, fmt, ap);
+    ncc_buffer_vprintf(b, fmt, ap);
     va_end(ap);
 
-    char *msg = ir_sb_take(&b);
+    char *msg = ncc_buffer_take(b);
 
     ir_diag_message(dg, d, msg ? msg : fmt);
-    free(msg);
+    ncc_free(msg);
 
     return dg;
 }
@@ -176,29 +176,29 @@ static bool assign_axes(ir_instr_t *in, const axis_t *const *ax, size_t n_ax,
 static void say_axes(ir_module_t *m, ir_diags_t *d, ir_instr_t *in,
                      const axis_t *const *ax, size_t n_ax)
 {
-    ir_sb b = {0};
+    ncc_buffer_t *b = ncc_buffer_empty();
 
     if (!n_ax) {
-        ir_sb_fmt(&b, "%s takes no modifiers here",
+        ncc_buffer_printf(b, "%s takes no modifiers here",
                   ir_module_op_spelling(m, in->op));
     }
     else {
-        ir_sb_fmt(&b, "%s takes exactly one ", ir_module_op_spelling(m, in->op));
+        ncc_buffer_printf(b, "%s takes exactly one ", ir_module_op_spelling(m, in->op));
 
         for (size_t i = 0; i < n_ax; i++) {
             if (i) {
-                ir_sb_str(&b, i + 1 == n_ax ? " and one " : ", one ");
+                ncc_buffer_puts(b, i + 1 == n_ax ? " and one " : ", one ");
             }
-            ir_sb_str(&b, ax[i]->what);
+            ncc_buffer_puts(b, ax[i]->what);
         }
-        ir_sb_str(&b, n_ax == 1 ? " modifier" : " modifier of each");
+        ncc_buffer_puts(b, n_ax == 1 ? " modifier" : " modifier of each");
     }
 
-    char *msg = ir_sb_take(&b);
+    char *msg = ncc_buffer_take(b);
 
     complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "these modifiers", "%s",
              msg ? msg : "wrong modifiers");
-    free(msg);
+    ncc_free(msg);
 }
 
 static bool mods_exact(ir_module_t *m, ir_instr_t *in, ir_diags_t *d,
@@ -531,7 +531,7 @@ static ir_rule_result_t rule_const(ir_module_t *m, ir_instr_t *in,
 
         complain(m, d, IR_DIAG_TYPE_LITERAL, in, "this literal",
                  "%s does not fit in %s", lit, typed(m, t));
-        free(lit);
+        ncc_free(lit);
 
         return REJECT;
     }
@@ -1608,15 +1608,11 @@ static ir_rule_result_t rule_switch(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
 
-    size_t     want = in->n_operands + 1;
-    size_t     cap  = 16;
-
-    while (cap < want * 2) {
-        cap *= 2;
-    }
-
-    ir_lit_t *seen = ir_alloc(m->ctx, cap * sizeof(ir_lit_t));
-    bool     *used = ir_alloc(m->ctx, cap * sizeof(bool));
+    size_t    want  = (in->n_operands + 1) * 2;
+    size_t    cap   = 0;
+    size_t    ucap  = 0;
+    ir_lit_t *seen  = ir_grow(m->ctx, nullptr, &cap, want, sizeof(ir_lit_t));
+    bool     *used  = ir_grow(m->ctx, nullptr, &ucap, want, sizeof(bool));
 
     for (uint32_t i = 0; i < in->n_operands; i++) {
         if (in->operands[i].kind != IR_OPD_SWITCH_ARM) {
@@ -1631,7 +1627,7 @@ static ir_rule_result_t rule_switch(ir_module_t *m, ir_instr_t *in,
             complain(m, d, IR_DIAG_TYPE_LITERAL, in, "this case",
                      "the case value %s is not representable in %s, the type "
                      "of the scrutinee", lit, typed(m, v));
-            free(lit);
+            ncc_free(lit);
 
             return REJECT;
         }
@@ -1648,7 +1644,7 @@ static ir_rule_result_t rule_switch(ir_module_t *m, ir_instr_t *in,
 
             complain(m, d, IR_DIAG_TYPE_ARGS, in, "this switch",
                      "two cases both match %s", lit);
-            free(lit);
+            ncc_free(lit);
 
             return REJECT;
         }

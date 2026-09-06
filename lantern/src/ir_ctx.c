@@ -9,33 +9,16 @@
 
 void *ir_alloc(ir_ctx_t *ctx, size_t n)
 {
-    n = (n + 15u) & ~(size_t)15u;
-
-    if (!ctx->chunks || ctx->chunks->used + n > ctx->chunks->cap) {
-        size_t    cap = n > IR_CHUNK ? n : IR_CHUNK;
-        ir_chunk *c   = calloc(1, sizeof(ir_chunk) + cap);
-
-        if (!c) {
-            return nullptr;
-        }
-        c->cap      = cap;
-        c->next     = ctx->chunks;
-        ctx->chunks = c;
-    }
-
-    void *r = ctx->chunks->data + ctx->chunks->used;
-
-    ctx->chunks->used += n;
-
-    return r;
+    return ncc_arena_alloc(&ctx->arena, n);
 }
 
 size_t ir_ctx_bytes(const ir_ctx_t *ctx)
 {
     size_t n = 0;
 
-    for (const ir_chunk *c = ctx ? ctx->chunks : nullptr; c; c = c->next) {
-        n += c->cap;
+    for (const ncc_arena_block_t *b = ctx ? ctx->arena.first : nullptr; b;
+         b = b->next) {
+        n += b->capacity;
     }
 
     return n;
@@ -50,11 +33,20 @@ char *ir_strdup(ir_ctx_t *ctx, const char *s)
     size_t n = strlen(s);
     char  *d = ir_alloc(ctx, n + 1);
 
-    if (d) {
-        memcpy(d, s, n + 1);
-    }
+    memcpy(d, s, n + 1);
 
     return d;
+}
+
+static size_t next_cap(size_t cap, size_t need)
+{
+    size_t want = cap ? cap * 2 : 8;
+
+    while (want < need) {
+        want *= 2;
+    }
+
+    return want;
 }
 
 void *ir_grow(ir_ctx_t *ctx, void *p, size_t *cap, size_t need, size_t elem)
@@ -63,17 +55,8 @@ void *ir_grow(ir_ctx_t *ctx, void *p, size_t *cap, size_t need, size_t elem)
         return p;
     }
 
-    size_t ncap = *cap ? *cap * 2 : 8;
-
-    while (ncap < need) {
-        ncap *= 2;
-    }
-
-    void *q = ir_alloc(ctx, ncap * elem);
-
-    if (!q) {
-        return p;
-    }
+    size_t ncap = next_cap(*cap, need);
+    void  *q    = ir_alloc(ctx, ncap * elem);
 
     if (p && *cap) {
         memcpy(q, p, *cap * elem);
@@ -85,36 +68,23 @@ void *ir_grow(ir_ctx_t *ctx, void *p, size_t *cap, size_t need, size_t elem)
 
 ir_ctx_t *ir_ctx_new(void)
 {
-    ir_ctx_t *ctx = calloc(1, sizeof(ir_ctx_t));
+    ir_ctx_t *ctx = ncc_alloc(ir_ctx_t);
 
-    if (!ctx) {
-        return nullptr;
-    }
-
+    ncc_arena_init(&ctx->arena, 0);
     ctx->types = th_ctx_new();
-
-    if (!ctx->types) {
-        free(ctx);
-
-        return nullptr;
-    }
 
     return ctx;
 }
 
-void drop_dict(void *p)
+static void drop_dict(void *p)
 {
     ncc_dict_free(p);
-    free(p);
+    ncc_free(p);
 }
 
 void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg)
 {
     ir_cleanup_t *c = ir_alloc(ctx, sizeof(ir_cleanup_t));
-
-    if (!c) {
-        return;
-    }
 
     c->fn         = fn;
     c->arg        = arg;
@@ -132,21 +102,19 @@ void ir_ctx_free(ir_ctx_t *ctx)
         k->fn(k->arg);
     }
 
-    ir_chunk *c = ctx->chunks;
-
-    while (c) {
-        ir_chunk *next = c->next;
-
-        free(c);
-        c = next;
-    }
+    ncc_arena_free(&ctx->arena);
     th_ctx_free(ctx->types);
-    free(ctx);
+    ncc_free(ctx);
 }
 
 th_ctx *ir_ctx_types(ir_ctx_t *ctx)
 {
     return ctx ? ctx->types : nullptr;
+}
+
+static void free_symtab(void *p)
+{
+    ncc_symtab_free(p);
 }
 
 ir_module_t *ir_module_new(ir_ctx_t *ctx, const char *name,
@@ -158,16 +126,56 @@ ir_module_t *ir_module_new(ir_ctx_t *ctx, const char *name,
 
     ir_module_t *m = ir_alloc(ctx, sizeof(ir_module_t));
 
-    if (!m) {
-        return nullptr;
-    }
-
     m->ctx     = ctx;
     m->name    = ir_strdup(ctx, name);
     m->target  = target ? ir_strdup(ctx, target) : nullptr;
     m->profile = profile;
+    m->symtab  = ncc_symtab_new();
+
+    ir_ctx_on_free(ctx, free_symtab, m->symtab);
 
     return m;
+}
+
+void ir_module_set_tree(ir_module_t      *m,
+                        ncc_grammar_t    *g,
+                        ncc_parse_tree_t *tree)
+{
+    if (!m) {
+        return;
+    }
+
+    m->tree_grammar = g;
+    m->tree         = tree;
+
+    if (tree) {
+        ir_module_establish(m, IR_PROP_TREE);
+    }
+    else {
+        ir_module_invalidate(m, IR_PROP_TREE | IR_PROP_SCOPED
+                                    | IR_PROP_SYMBOLS | IR_PROP_CFLOW
+                                    | IR_PROP_TREE_TYPED);
+    }
+}
+
+ncc_parse_tree_t *ir_module_tree(ir_module_t *m)
+{
+    return m ? m->tree : nullptr;
+}
+
+ncc_grammar_t *ir_module_grammar(ir_module_t *m)
+{
+    return m ? m->tree_grammar : nullptr;
+}
+
+ncc_symtab_t *ir_module_symtab(ir_module_t *m)
+{
+    return m ? m->symtab : nullptr;
+}
+
+th_ctx *ir_module_types(ir_module_t *m)
+{
+    return m ? ir_ctx_types(m->ctx) : nullptr;
 }
 
 const char *ir_module_name(const ir_module_t *m)
@@ -295,6 +303,39 @@ ir_annots_t *ir_module_annots(ir_module_t *m)
     return m ? &m->annots : nullptr;
 }
 
+const char *ir_mutability_name(ir_mutability_t m)
+{
+    switch (m) {
+    case IR_MUT_MUTABLE:
+        return "mutable";
+    case IR_MUT_IMMUTABLE:
+        return "immutable";
+    case IR_MUT_CONST:
+        return "const";
+    default:
+        return nullptr;
+    }
+}
+
+bool ir_mutability_from_name(const char *s, ir_mutability_t *out)
+{
+    if (!s) {
+        return false;
+    }
+
+    for (ir_mutability_t m = IR_MUT_MUTABLE; m <= IR_MUT_CONST; m++) {
+        if (!strcmp(s, ir_mutability_name(m))) {
+            if (out) {
+                *out = m;
+            }
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
 const char *ir_prop_name(ir_props_t one)
 {
     switch (one) {
@@ -312,55 +353,42 @@ const char *ir_prop_name(ir_props_t one)
         return "no-critical-edges";
     case IR_PROP_VERIFIED:
         return "verified";
+    case IR_PROP_TREE:
+        return "tree";
+    case IR_PROP_SCOPED:
+        return "scoped";
+    case IR_PROP_SYMBOLS:
+        return "symbols";
+    case IR_PROP_CFLOW:
+        return "control-flow";
+    case IR_PROP_TREE_TYPED:
+        return "tree-typed";
     default:
         return nullptr;
     }
 }
 
-static size_t type_slot(ir_module_t *m, uint64_t h)
+static ncc_dict_t *index_of(ir_ctx_t *ctx, void **slot, ncc_hash_fn hash,
+                            ncc_dict_key_eq_fn eq)
 {
-    size_t mask = m->type_index_cap - 1;
-    size_t i    = (size_t)h & mask;
+    if (!*slot) {
+        ncc_dict_t *ix = ncc_alloc(ncc_dict_t);
 
-    while (m->type_index[i]) {
-        if (m->types[m->type_index[i] - 1].hash == h) {
-            break;
-        }
-        i = (i + 1) & mask;
+        ncc_dict_init(ix, hash, eq);
+        ir_ctx_on_free(ctx, drop_dict, ix);
+        *slot = ix;
     }
 
-    return i;
-}
-
-static void type_index_grow(ir_module_t *m)
-{
-    size_t want = m->type_index_cap ? m->type_index_cap : 64;
-
-    while ((m->n_types + 1) * 2 > want) {
-        want *= 2;
-    }
-
-    if (want == m->type_index_cap && m->type_index) {
-        return;
-    }
-
-    m->type_index     = ir_alloc(m->ctx, want * sizeof(uint32_t));
-    m->type_index_cap = want;
-
-    for (size_t k = 0; k < m->n_types; k++) {
-        m->type_index[type_slot(m, m->types[k].hash)] = (uint32_t)(k + 1);
-    }
+    return *slot;
 }
 
 static ir_typeslot_t *type_find(ir_module_t *m, uint64_t h)
 {
-    if (!m->type_index_cap) {
-        return nullptr;
-    }
+    ncc_dict_t *ix = index_of(m->ctx, &m->type_index, ncc_hash_word, nullptr);
+    bool        found = false;
+    size_t      at    = (size_t)(uintptr_t)ncc_dict_get(ix, h, &found);
 
-    uint32_t at = m->type_index[type_slot(m, h)];
-
-    return at ? &m->types[at - 1] : nullptr;
+    return found ? &m->types[at - 1] : nullptr;
 }
 
 th_type *ir_type_intern(ir_module_t *m, th_type *t)
@@ -382,8 +410,7 @@ th_type *ir_type_intern(ir_module_t *m, th_type *t)
     m->types[m->n_types].type = t;
     m->types[m->n_types].def  = nullptr;
     m->n_types++;
-    type_index_grow(m);
-    m->type_index[type_slot(m, h)] = (uint32_t)m->n_types;
+    ncc_dict_put((ncc_dict_t *)m->type_index, h, m->n_types);
 
     return t;
 }
@@ -447,21 +474,9 @@ th_type *ir_type_parse(ir_module_t *m, const char *text)
     char    *err = nullptr;
     th_type *t   = ir_typelang_parse(m->ctx->types, text, &err);
 
-    free(err);
+    ncc_free(err);
 
     return t ? ir_type_intern(m, t) : nullptr;
-}
-
-static size_t id_slot(th_type **key, size_t cap, const th_type *t)
-{
-    size_t h = (size_t)((uintptr_t)t >> 4) * 11400714819323198485u;
-    size_t i = h & (cap - 1);
-
-    while (key[i] && key[i] != t) {
-        i = (i + 1) & (cap - 1);
-    }
-
-    return i;
 }
 
 uint64_t ir_type_id(ir_module_t *m, th_type *t)
@@ -470,37 +485,26 @@ uint64_t ir_type_id(ir_module_t *m, th_type *t)
         return 0;
     }
 
-    if ((m->id_n + 1) * 2 > m->id_cap) {
-        size_t    cap = m->id_cap ? m->id_cap * 2 : 64;
-        th_type **key = ir_alloc(m->ctx, cap * sizeof(th_type *));
-        uint64_t *val = ir_alloc(m->ctx, cap * sizeof(uint64_t));
+    ncc_dict_t *ix = index_of(m->ctx, &m->id_index, ncc_hash_word, nullptr);
 
-        if (!key || !val) {
-            return th_hash(m->ctx->types, t);
-        }
-
-        for (size_t i = 0; i < m->id_cap; i++) {
-            if (m->id_key[i]) {
-                size_t at = id_slot(key, cap, m->id_key[i]);
-
-                key[at] = m->id_key[i];
-                val[at] = m->id_val[i];
-            }
-        }
-        m->id_key = key;
-        m->id_val = val;
-        m->id_cap = cap;
+    if (!ix) {
+        return th_hash(m->ctx->types, t);
     }
 
-    size_t at = id_slot(m->id_key, m->id_cap, t);
+    bool   found = false;
+    size_t at    = (size_t)(uintptr_t)ncc_dict_get(ix, t, &found);
 
-    if (!m->id_key[at]) {
-        m->id_key[at] = t;
-        m->id_val[at] = th_hash(m->ctx->types, t);
-        m->id_n++;
+    if (found) {
+        return m->ids[at - 1];
     }
 
-    return m->id_val[at];
+    m->ids = ir_grow(m->ctx, m->ids, &m->cap_ids, m->n_ids + 1,
+                     sizeof(uint64_t));
+    m->ids[m->n_ids] = th_hash(m->ctx->types, t);
+    m->n_ids++;
+    ncc_dict_put(ix, t, m->n_ids);
+
+    return m->ids[m->n_ids - 1];
 }
 
 bool ir_type_eq(ir_module_t *m, th_type *a, th_type *b)
@@ -527,21 +531,15 @@ int32_t ir_file_add(ir_module_t *m, const char *path)
         return -1;
     }
 
-    if (!m->file_index) {
-        ncc_dict_t *ix = calloc(1, sizeof(ncc_dict_t));
+    ncc_dict_t *ix = index_of(m->ctx, &m->file_index, ncc_hash_cstring,
+                              ncc_dict_cstr_eq);
 
-        if (!ix) {
-            return -1;
-        }
-        ncc_dict_init(ix, ncc_hash_cstring, ncc_dict_cstr_eq);
-        ir_ctx_on_free(m->ctx, drop_dict, ix);
-        m->file_index = ix;
+    if (!ix) {
+        return -1;
     }
 
     bool   found = false;
-    size_t at    = (size_t)(uintptr_t)ncc_dict_get((ncc_dict_t *)
-                                                       m->file_index,
-                                                   path, &found);
+    size_t at    = (size_t)(uintptr_t)ncc_dict_get(ix, path, &found);
 
     if (found) {
         return (int32_t)at;

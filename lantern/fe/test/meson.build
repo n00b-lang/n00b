@@ -1,7 +1,7 @@
 fe_pwz_test = executable(
     'fe_pwz_test',
     'test_pwz.c',
-    dependencies: fe_dep,
+    dependencies: ir_dep,
 )
 
 test('fe-pwz', fe_pwz_test)
@@ -9,7 +9,7 @@ test('fe-pwz', fe_pwz_test)
 fe_bnf_test = executable(
     'fe_bnf_test',
     'test_bnf.c',
-    dependencies: fe_dep,
+    dependencies: ir_dep,
 )
 
 test(
@@ -21,7 +21,7 @@ test(
 fe_annot_test = executable(
     'fe_annot_test',
     'test_annot.c',
-    dependencies: fe_dep,
+    dependencies: ir_dep,
 )
 
 test(
@@ -33,7 +33,7 @@ test(
 fe_bnf_slay_test = executable(
     'fe_bnf_slay_test',
     'test_bnf_slay.c',
-    dependencies: fe_dep,
+    dependencies: ir_dep,
 )
 
 test(
@@ -45,7 +45,7 @@ test(
 fe_commander_test = executable(
     'fe_commander_test',
     'test_commander.c',
-    dependencies: fe_dep,
+    dependencies: ir_dep,
 )
 
 test('fe-commander', fe_commander_test)
@@ -53,9 +53,61 @@ test('fe-commander', fe_commander_test)
 fe_compose_test = executable(
     'fe_compose_test',
     'test_compose.c',
-    dependencies: fe_dep,
+    dependencies: ir_dep,
 )
 
 test('fe-compose', fe_compose_test)
 
-bnfcheck = executable('bnfcheck', 'bnfcheck.c', dependencies: fe_dep)
+fe_tree_print_test = executable(
+    'fe_tree_print_test',
+    'test_tree_print.c',
+    dependencies: ir_dep,
+)
+
+test('fe-tree-print', fe_tree_print_test)
+
+fe_infer_test = executable(
+    'fe_infer_test',
+    'test_infer.c',
+    dependencies: ir_dep,
+)
+
+test('fe-infer', fe_infer_test)
+
+fe_tokenizer_test = executable(
+    'fe_tokenizer_test',
+    'test_tokenizer.c',
+    dependencies: ir_dep,
+)
+
+test('fe-tokenizer', fe_tokenizer_test)
+
+fe_rewrite_test = executable(
+    'fe_rewrite_test',
+    'test_rewrite.c',
+    dependencies: ir_dep,
+)
+
+test('fe-rewrite', fe_rewrite_test)
+
+fe_generic_print_test = executable(
+    'fe_generic_print_test',
+    'test_generic_print.c',
+    dependencies: ir_dep,
+)
+
+test('fe-generic-print', fe_generic_print_test)
+
+fe_bnf_print_test = executable(
+    'fe_bnf_print_test',
+    'test_bnf_print.c',
+    dependencies: ir_dep,
+)
+
+test(
+    'fe-bnf-print',
+    fe_bnf_print_test,
+    workdir: meson.current_source_dir(),
+)
+
+bnfcheck = executable('bnfcheck', 'bnfcheck.c', dependencies: ir_dep)

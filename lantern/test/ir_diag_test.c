@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "ir/diag.h"
+#include "ir/verify.h"
 
 static int fails = 0;
 
@@ -122,14 +123,13 @@ static void test_registry(void)
     }
 
     check("severities are named",
-          !strcmp(ir_severity_name(IR_SEV_FATAL), "fatal")
-              && !strcmp(ir_severity_name(IR_SEV_ERROR), "error")
+          !strcmp(ir_severity_name(IR_SEV_ERROR), "error")
               && !strcmp(ir_severity_name(IR_SEV_WARNING), "warning")
               && !strcmp(ir_severity_name(IR_SEV_NOTE), "note")
               && !strcmp(ir_severity_name(IR_SEV_HELP), "help"));
 
     check("a code carries a default severity",
-          ir_diag_default_severity(IR_DIAG_OUT_OF_MEMORY) == IR_SEV_FATAL
+          ir_diag_default_severity(IR_DIAG_INTERNAL) == IR_SEV_ERROR
               && ir_diag_default_severity(IR_DIAG_AUTHORED_ANNOT)
                      == IR_SEV_WARNING);
 }
@@ -152,7 +152,6 @@ static void test_emit(void)
     check("it takes the code's default message",
           !strcmp(dg->message, ir_diag_default_text(IR_DIAG_INTERNAL)));
     check("an error means failure", ir_diags_failed(d));
-    check("an error is not fatal", !ir_diags_fatal(d));
 
     ir_diag_message(dg, d, "custom wording");
     check("the message is overridable", !strcmp(dg->message, "custom wording"));
@@ -170,9 +169,10 @@ static void test_emit(void)
           ir_diags_count_of(d, IR_SEV_WARNING) == 1
               && ir_diags_count_of(d, IR_SEV_ERROR) == 2);
 
-    beg(d, IR_DIAG_OUT_OF_MEMORY, at(0, 1, 1, 1, 2), nullptr);
-    check("a fatal is recorded as fatal", ir_diags_fatal(d));
-    check("accumulation continued up to the fatal", ir_diags_count(d) == 4);
+    beg(d, IR_DIAG_UNKNOWN_OPCODE, at(0, 1, 1, 1, 2), nullptr);
+    check("diagnostics keep accumulating", ir_diags_count(d) == 4);
+    check("and the new error is counted with the errors",
+          ir_diags_count_of(d, IR_SEV_ERROR) == 3);
 
     ir_ctx_free(ctx);
 }
@@ -236,7 +236,7 @@ static void test_policy(void)
     check("the longer prefix wins",
           ir_policy_for(p, "IR-E0006") == IR_POLICY_WARN);
     check("the shorter prefix still applies elsewhere",
-          ir_policy_for(p, "IR-F0008") == IR_POLICY_ALLOW);
+          ir_policy_for(p, "IR-W0027") == IR_POLICY_ALLOW);
 
     ir_policy_set(p, "IR-E0006", IR_POLICY_FORBID);
     check("an exact code beats every prefix",
@@ -281,22 +281,6 @@ static void test_policy_effects(void)
                                   nullptr);
 
     check("forbid promotes like deny", df && df->severity == IR_SEV_ERROR);
-
-    ir_policy_set(p, "IR-F0008", IR_POLICY_ALLOW);
-
-    ir_diag_t *dfat = beg(d, IR_DIAG_OUT_OF_MEMORY,
-                                    at(0, 1, 1, 1, 2), nullptr);
-
-    check("a fatal cannot be suppressed by policy",
-          dfat && dfat->severity == IR_SEV_FATAL);
-
-    ir_policy_set(p, "IR-F0008", IR_POLICY_WARN);
-
-    ir_diag_t *dfat2 = beg(d, IR_DIAG_OUT_OF_MEMORY,
-                                     at(0, 1, 1, 1, 2), nullptr);
-
-    check("a fatal cannot be demoted by policy",
-          dfat2 && dfat2->severity == IR_SEV_FATAL);
 
     ir_ctx_free(ctx);
 }
@@ -475,31 +459,20 @@ static void test_ordering_is_deterministic(void)
 
 static int ran;
 
-static bool count_pass(ir_module_t *m, void *state)
+static bool count_pass(ir_module_t *m, ir_diags_t *d, void *state)
 {
     (void)m;
+    (void)d;
     (void)state;
     ran++;
 
     return true;
 }
 
-static bool fatal_pass(ir_module_t *m, void *state)
+static bool error_pass(ir_module_t *m, ir_diags_t *d, void *state)
 {
-    ir_diags_t *d = state;
-
     (void)m;
-    ran++;
-    beg(d, IR_DIAG_OUT_OF_MEMORY, at(0, 1, 1, 1, 2), nullptr);
-
-    return true;
-}
-
-static bool error_pass(ir_module_t *m, void *state)
-{
-    ir_diags_t *d = state;
-
-    (void)m;
+    (void)state;
     ran++;
     beg(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), nullptr);
 
@@ -510,14 +483,11 @@ static void run_pipeline(const ir_pass_t *passes, size_t n, ir_module_t *m,
                          ir_diags_t *d)
 {
     for (size_t i = 0; i < n; i++) {
-        if (ir_diags_fatal(d)) {
-            return;
-        }
-        ir_pass_run(&passes[i], m, d, nullptr);
+        ir_pass_run(&passes[i], m, nullptr, nullptr, d);
     }
 }
 
-static void test_pipeline_stops_on_fatal(void)
+static void test_errors_do_not_stop_the_pipeline(void)
 {
     ir_ctx_t    *ctx = ir_ctx_new();
     ir_module_t *m   = mod(ctx);
@@ -535,19 +505,6 @@ static void test_pipeline_stops_on_fatal(void)
     run_pipeline(errs, 3, m, d);
     check("errors do not stop the pipeline; one run reports many",
           ran == 3 && ir_diags_count(d) == 2 && ir_diags_failed(d));
-
-    ir_diags_t *e = ir_diags_new(ctx, nullptr);
-
-    const ir_pass_t fat[] = {
-        {"a", IR_PROP_PARSED, 0, 0, count_pass},
-        {"b", IR_PROP_PARSED, 0, 0, fatal_pass},
-        {"c", IR_PROP_PARSED, 0, 0, count_pass},
-        {"d", IR_PROP_PARSED, 0, 0, count_pass},
-    };
-
-    ran = 0;
-    run_pipeline(fat, 4, m, e);
-    check("a fatal stops the pipeline", ran == 2 && ir_diags_fatal(e));
 
     ir_ctx_free(ctx);
 }
@@ -578,13 +535,13 @@ static void test_pass_declarations(void)
 
     ran = 0;
     check("a pass whose requirements are unmet does not run",
-          ir_pass_run(&good, m, nullptr, &unmet) == IR_PASS_UNMET && !ran);
+          ir_pass_run(&good, m, nullptr, &unmet, nullptr) == IR_PASS_UNMET && !ran);
     check("the unmet requirement is reported", unmet == IR_PROP_PARSED);
 
     ir_module_establish(m, IR_PROP_PARSED | IR_PROP_SSA);
     ran = 0;
     check("a pass whose requirements are met runs",
-          ir_pass_run(&good, m, nullptr, &unmet) == IR_PASS_OK && ran == 1);
+          ir_pass_run(&good, m, nullptr, &unmet, nullptr) == IR_PASS_OK && ran == 1);
     check("what it establishes is established",
           ir_module_props(m) & IR_PROP_TYPED);
     check("what it invalidates is invalidated",
@@ -593,7 +550,7 @@ static void test_pass_declarations(void)
           ir_module_props(m) & IR_PROP_PARSED);
 
     check("an undeclared pass is refused",
-          ir_pass_run(&confused, m, nullptr, nullptr) == IR_PASS_INVALID);
+          ir_pass_run(&confused, m, nullptr, nullptr, nullptr) == IR_PASS_INVALID);
 
     ir_ctx_free(ctx);
 }
@@ -606,11 +563,13 @@ static void test_merge(void)
 
     beg(a, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), "a1");
     beg(b, IR_DIAG_INTERNAL, at(4, 5, 1, 5, 6), "b1");
-    beg(b, IR_DIAG_OUT_OF_MEMORY, at(6, 7, 1, 7, 8), "b2");
+    beg(b, IR_DIAG_AUTHORED_ANNOT, at(6, 7, 1, 7, 8), "b2");
 
     check("merge succeeds", ir_diags_merge(a, b));
     check("merged diagnostics are counted", ir_diags_count(a) == 3);
-    check("a merged fatal marks the destination", ir_diags_fatal(a));
+    check("and their severities come across",
+          ir_diags_count_of(a, IR_SEV_ERROR) == 2
+              && ir_diags_count_of(a, IR_SEV_WARNING) == 1);
 
     ir_ctx_t   *other = ir_ctx_new();
     ir_diags_t *far   = ir_diags_new(other, nullptr);
@@ -807,7 +766,7 @@ int main(int argc, char **argv)
     test_ordering();
     test_ordering_is_deterministic();
     test_pass_declarations();
-    test_pipeline_stops_on_fatal();
+    test_errors_do_not_stop_the_pipeline();
     test_merge();
     test_rendering(golden);
     report_coverage(golden);

@@ -140,7 +140,6 @@ ncc_scanner_new(ncc_buffer_t                *buf,
     s->mark_line = 1;
     s->mark_col  = 1;
 
-    s->terminal_ids = nullptr;
 
     return s;
 }
@@ -279,15 +278,15 @@ ncc_scan_advance_bytes(ncc_scanner_t *s, size_t n)
 }
 
 size_t
-ncc_scan_match_str(ncc_scanner_t *s, const char *lit)
+ncc_scan_match_str(ncc_scanner_t *s, ncc_string_t lit)
 {
-    size_t len = strlen(lit);
+    size_t len = lit.u8_bytes;
 
     if (s->cursor + len > s->input_len) {
         return 0;
     }
 
-    if (memcmp(s->input + s->cursor, lit, len) != 0) {
+    if (memcmp(s->input + s->cursor, lit.data, len) != 0) {
         return 0;
     }
 
@@ -449,65 +448,6 @@ ncc_scan_skip_class(ncc_scanner_t *s, ncc_char_class_t cc)
     return count;
 }
 
-size_t
-ncc_scan_skip_until_cp(ncc_scanner_t *s, ncc_codepoint_t stop)
-{
-    size_t start = s->cursor;
-
-    while (s->cursor < s->input_len) {
-        int              cp_len;
-        ncc_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-        if (cp == stop) {
-            break;
-        }
-
-        s->cursor += (size_t)cp_len;
-
-        if (cp == '\n') {
-            s->line++;
-            s->column = 1;
-        }
-        else {
-            s->column++;
-        }
-    }
-
-    return s->cursor - start;
-}
-
-ncc_result_t(size_t)
-ncc_scan_skip_until_str(ncc_scanner_t *s, const char *needle)
-{
-    size_t needle_len = strlen(needle);
-    size_t start      = s->cursor;
-
-    while (s->cursor + needle_len <= s->input_len) {
-        if (memcmp(s->input + s->cursor, needle, needle_len) == 0) {
-            return ncc_result_ok(size_t, s->cursor - start);
-        }
-
-        int              cp_len;
-        ncc_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-        s->cursor += (size_t)cp_len;
-
-        if (cp == '\n') {
-            s->line++;
-            s->column = 1;
-        }
-        else {
-            s->column++;
-        }
-    }
-
-    while (s->cursor < s->input_len) {
-        ncc_scan_advance(s);
-    }
-
-    return ncc_result_err(size_t, NCC_ERR_SCAN_NOT_FOUND);
-}
-
 void
 ncc_scan_mark(ncc_scanner_t *s)
 {
@@ -585,17 +525,72 @@ ncc_scan_emit_marked(ncc_scanner_t *s, int32_t tid)
 }
 
 void
-ncc_scan_add_leading_trivia(ncc_scanner_t *s, ncc_string_t text)
+ncc_scan_add_leading_trivia_kind(ncc_scanner_t    *s,
+                                 ncc_string_t      text,
+                                 ncc_trivia_kind_t kind)
 {
     ncc_trivia_t *t = make_trivia(text);
 
+    t->kind = kind;
+
     append_trivia(&s->pending_leading, t);
+}
+
+
+void
+ncc_scan_add_leading_trivia(ncc_scanner_t *s, ncc_string_t text)
+{
+    ncc_scan_add_leading_trivia_kind(s, text, NCC_TRIVIA_COMMENT);
+}
+
+void
+ncc_scan_set_trivia_attach(ncc_scanner_t *s, ncc_trivia_attach_t how)
+{
+    if (s) {
+        s->trivia_attach = (uint8_t)how;
+    }
+}
+
+ncc_trivia_attach_t
+ncc_scan_trivia_attach(const ncc_scanner_t *s)
+{
+    return s ? (ncc_trivia_attach_t)s->trivia_attach
+             : NCC_TRIVIA_ATTACH_RIGHT;
+}
+
+void
+ncc_scan_add_trivia(ncc_scanner_t *s, ncc_string_t text,
+                    ncc_trivia_kind_t kind)
+{
+    if (!s) {
+        return;
+    }
+
+    if (s->trivia_attach == (uint8_t)NCC_TRIVIA_ATTACH_LEFT) {
+        ncc_token_info_t *prev = ncc_scan_prev_token(s);
+        ncc_trivia_t     *t    = make_trivia(text);
+
+        t->kind = kind;
+
+        if (prev && !prev->no_trivia) {
+            append_trivia(&prev->trailing_trivia, t);
+        }
+        else if (!prev) {
+            append_trivia(&s->pending_leading, t);
+        }
+
+        return;
+    }
+
+    ncc_scan_add_leading_trivia_kind(s, text, kind);
 }
 
 void
 ncc_scan_add_trailing_trivia(ncc_scanner_t *s, ncc_string_t text)
 {
     ncc_trivia_t *t = make_trivia(text);
+
+    t->kind = NCC_TRIVIA_COMMENT;
 
     append_trivia(&s->pending_trailing, t);
 }
@@ -632,7 +627,7 @@ ncc_scan_skip_whitespace(ncc_scanner_t *s)
 
         ncc_string_t text = ncc_string_from_raw(s->input + start,
                                                    (int64_t)byte_len);
-        ncc_scan_add_leading_trivia(s, text);
+        ncc_scan_add_leading_trivia_kind(s, text, NCC_TRIVIA_SPACE);
     }
 
     return count;
@@ -660,21 +655,21 @@ ncc_scan_skip_line_comment(ncc_scanner_t *s)
     if (byte_len > 0) {
         ncc_string_t text = ncc_string_from_raw(s->input + start,
                                                    (int64_t)byte_len);
-        ncc_scan_add_trailing_trivia(s, text);
+        ncc_scan_add_trivia(s, text, NCC_TRIVIA_COMMENT);
     }
 }
 
 bool
 ncc_scan_skip_block_comment(ncc_scanner_t *s,
-                              const char     *opener,
-                              const char     *closer)
+                            ncc_string_t opener,
+                            ncc_string_t closer)
 {
-    size_t opener_len = strlen(opener);
-    size_t closer_len = strlen(closer);
+    size_t opener_len = opener.u8_bytes;
+    size_t closer_len = closer.u8_bytes;
     size_t start      = s->cursor;
 
     if (s->cursor + opener_len > s->input_len
-        || memcmp(s->input + s->cursor, opener, opener_len) != 0) {
+        || memcmp(s->input + s->cursor, opener.data, opener_len) != 0) {
         return false;
     }
 
@@ -695,7 +690,7 @@ ncc_scan_skip_block_comment(ncc_scanner_t *s,
     }
 
     while (s->cursor + closer_len <= s->input_len) {
-        if (memcmp(s->input + s->cursor, closer, closer_len) == 0) {
+        if (memcmp(s->input + s->cursor, closer.data, closer_len) == 0) {
             for (size_t i = 0; i < closer_len; ) {
                 int              cp_len;
                 ncc_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
@@ -716,7 +711,7 @@ ncc_scan_skip_block_comment(ncc_scanner_t *s,
 
             ncc_string_t text = ncc_string_from_raw(s->input + start,
                                                        (int64_t)byte_len);
-            ncc_scan_add_leading_trivia(s, text);
+            ncc_scan_add_trivia(s, text, NCC_TRIVIA_COMMENT);
             return true;
         }
 
@@ -742,43 +737,20 @@ ncc_scan_skip_block_comment(ncc_scanner_t *s,
 
     ncc_string_t text = ncc_string_from_raw(s->input + start,
                                                (int64_t)byte_len);
-    ncc_scan_add_leading_trivia(s, text);
+    ncc_scan_add_trivia(s, text, NCC_TRIVIA_COMMENT);
     return false;
 }
 
 int64_t
-ncc_scan_terminal_id(ncc_scanner_t *s, const char *name)
+ncc_scan_terminal_id(ncc_scanner_t *s, ncc_string_t name)
 {
     if (!s->grammar) {
         return NCC_TOK_OTHER;
     }
 
-    if (!s->terminal_ids) {
-        s->terminal_ids = ncc_alloc(ncc_dict_t);
-        ncc_dict_init(s->terminal_ids, ncc_hash_cstring, ncc_dict_cstr_eq);
-    }
+    int64_t tid = ncc_lookup_terminal(s->grammar, name);
 
-    bool found;
-    void *val = ncc_dict_get(s->terminal_ids, (void *)name, &found);
-
-    if (found) {
-        return (int64_t)(intptr_t)val;
-    }
-
-    if (!s->grammar->terminal_map) {
-        return NCC_TOK_OTHER;
-    }
-
-    bool  gfound = false;
-    void *gval   = _ncc_dict_get(s->grammar->terminal_map,
-                                           (void *)name, &gfound);
-
-    int64_t tid = gfound ? (int64_t)(intptr_t)gval : NCC_TOK_OTHER;
-
-    _ncc_dict_put(s->terminal_ids, ncc_string_from_cstr(name).data,
-                  (void *)(intptr_t)tid);
-
-    return tid;
+    return tid ? tid : NCC_TOK_OTHER;
 }
 
 ncc_token_info_t *

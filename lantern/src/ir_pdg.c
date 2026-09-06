@@ -517,16 +517,6 @@ ir_block_t *ir_controller_at(const ir_pdg_t *g, ir_block_t *b, uint32_t i)
     return g->f->blocks[g->cd_at[g->cd_off[b->index] + i]];
 }
 
-bool ir_control_dependent(const ir_pdg_t *g, ir_block_t *b, ir_block_t *on)
-{
-    for (uint32_t i = 0; i < ir_controllers_of(g, b); i++) {
-        if (ir_controller_at(g, b, i) == on) {
-            return true;
-        }
-    }
-
-    return false;
-}
 
 bool ir_pdg_is_exact(const ir_pdg_t *g)
 {

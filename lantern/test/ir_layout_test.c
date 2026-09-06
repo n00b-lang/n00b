@@ -80,7 +80,7 @@ static ir_func_t *touching(env *e, const char *const *types, size_t n)
     for (size_t i = 0; i < n; i++) {
         ir_instr_t *in = ir_instr_add(b, IR_OP_SIZEOF);
 
-        ir_instr_push_type(in, ty(e, types[i]));
+        ir_instr_operand_type(in, ty(e, types[i]));
     }
     ir_instr_add(b, IR_OP_UNREACHABLE);
 
@@ -113,6 +113,34 @@ static void test_descriptors_are_keyed_and_scoped(void)
           th_hash(ir_ctx_types(e->ctx), t) == before);
     check("a second spelling of the same type finds the same descriptor",
           ir_layout_of(e->m, ty(e, "i32"), "x86_64") == a);
+
+    check("a descriptor names the type it describes",
+          a->type == t && b->type == t);
+    check("a descriptor names the target it is scoped to",
+          !strcmp(a->target, "x86_64") && !strcmp(b->target, "wasm32"));
+    check("the pair round-trips from either end",
+          ir_layout_of(e->m, a->type, a->target) == a);
+
+    th_type         *u  = ty(e, "i64");
+    ir_descriptor_t *ua = ir_layout_ensure(e->m, u, "x86_64");
+
+    ua->size = (ir_layout_val_t){.state = IR_LAYOUT_RESOLVED, .value = 8};
+
+    th_ctx *th = ir_ctx_types(e->ctx);
+
+    check("same identity, different descriptors: an adaptor is called for",
+          th_hash(th, a->type) == th_hash(th, b->type) && a->size.value
+                                                              != b->size.value);
+    ir_descriptor_t *c2 = ir_layout_ensure(e->m, t, "arm64");
+
+    c2->size = a->size;
+
+    check("same identity, same descriptor: a no-op",
+          th_hash(th, a->type) == th_hash(th, c2->type)
+              && a->size.value == c2->size.value);
+    check("different identity: a type error, whatever the descriptors say",
+          th_hash(th, a->type) != th_hash(th, ua->type));
+
     close_env(e);
 }
 
@@ -329,7 +357,7 @@ static void test_bitcast_sizes_agree(void)
     ir_instr_t *c = ir_instr_add(b, IR_OP_BITCAST);
 
     ir_instr_set_dest(c, "s", ty(e, "u32"));
-    ir_instr_push_value(c, a);
+    ir_instr_operand_value(c, a);
     ir_instr_add(b, IR_OP_UNREACHABLE);
 
     ir_layout_run(e->m, e->d);
@@ -359,7 +387,7 @@ static void test_the_pass_declares_what_the_spec_says(void)
     ir_props_t unmet = 0;
 
     check("it runs through the pass manager",
-          ir_pass_run_checked(&ir_pass_layout, e->m, e->d, &unmet, e->d)
+          ir_pass_run(&ir_pass_layout, e->m, nullptr, &unmet, e->d)
               == IR_PASS_OK);
     check("and establishes the property it declared",
           (ir_module_props(e->m) & IR_PROP_LAID_OUT) != 0);
@@ -389,7 +417,7 @@ static void test_comptime_is_symbolic_until_laid_out(void)
 
     ir_instr_t *al = ir_instr_add(ir_block_entry(f), IR_OP_ALIGNOF);
 
-    ir_instr_push_type(al, ty(e, "i32"));
+    ir_instr_operand_type(al, ty(e, "i32"));
     ir_rule_apply(e->m, rs, al, e->d);
 
     ir_annot_t *a = ir_annot_get(&al->annots, "ir.const");
@@ -398,8 +426,8 @@ static void test_comptime_is_symbolic_until_laid_out(void)
 
     ir_instr_t *of = ir_instr_add(ir_block_entry(f), IR_OP_OFFSETOF);
 
-    ir_instr_push_type(of, ty(e, "(x: i32, y: u64)"));
-    ir_instr_push_name(of, "y");
+    ir_instr_operand_type(of, ty(e, "(x: i32, y: u64)"));
+    ir_instr_operand_name(of, "y");
     ir_layout_run(e->m, e->d);
     ir_rule_apply(e->m, rs, of, e->d);
 
@@ -409,7 +437,7 @@ static void test_comptime_is_symbolic_until_laid_out(void)
 
     ir_instr_t *sp = ir_instr_add(ir_block_entry(f), IR_OP_SIZEOF);
 
-    ir_instr_push_type(sp, ty(e, "ptr[i32]"));
+    ir_instr_operand_type(sp, ty(e, "ptr[i32]"));
     ir_layout_run(e->m, e->d);
     ir_rule_apply(e->m, rs, sp, e->d);
     check("a type whose size stays symbolic gets no value",
@@ -452,6 +480,41 @@ static void test_a_module_with_no_target(void)
     check("and printing it does not crash", text != nullptr);
     check("and it still says no target",
           text && !strstr(text, "target"));
+    free(text);
+    ir_ctx_free(ctx);
+}
+
+static void test_a_member_may_be_named_for_a_layout_keyword(void)
+{
+    const ir_profile_t *const profiles[] = {&ir_profile_bce};
+    ir_ctx_t                 *ctx        = ir_ctx_new();
+    ir_diags_t               *d          = ir_diags_new(ctx, nullptr);
+    const char               *src        = "module m {\n  profile bce\n"
+                                           "  type Rec = (a: i32, b: i32)\n"
+                                           "  layout Rec {\n"
+                                           "    size = 8\n"
+                                           "    size @ bits 0..32\n"
+                                           "  }\n"
+                                           "  func @f() -> void {\n"
+                                           "    block e:\n      return\n"
+                                           "  }\n}\n";
+    ir_module_t              *m = ir_module_parse(ctx, src, 0, profiles, 1, d);
+
+    check("a layout item may pin a member named for a layout keyword",
+          m != nullptr);
+
+    if (!m) {
+        ir_ctx_free(ctx);
+
+        return;
+    }
+
+    char *text = ir_module_print(m);
+
+    check("the size pin is the size, not the member's low bit",
+          text && strstr(text, "size = 8"));
+    check("and the member pin survives",
+          text && strstr(text, "size @ bits 0..32"));
     free(text);
     ir_ctx_free(ctx);
 }
@@ -524,6 +587,7 @@ int main(int argc, char **argv)
     test_the_pass_declares_what_the_spec_says();
     test_comptime_is_symbolic_until_laid_out();
     test_a_module_with_no_target();
+    test_a_member_may_be_named_for_a_layout_keyword();
     test_variant_and_indirection_are_recorded();
 
     if (argc > 1) {

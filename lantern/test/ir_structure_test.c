@@ -226,7 +226,7 @@ static void test_the_pass_declares_what_the_spec_says(void)
     run_t *r = load(AN_IF);
 
     check("it runs through the pass manager",
-          ir_pass_run_checked(&ir_pass_structure, r->m, r->d, nullptr, r->d)
+          ir_pass_run(&ir_pass_structure, r->m, nullptr, nullptr, r->d)
               == IR_PASS_OK);
     check("and establishes what it declared",
           (ir_module_props(r->m) & IR_PROP_STRUCTURED) != 0);
@@ -428,11 +428,12 @@ static void test_every_named_pass_declares_what_the_spec_lists(void)
         if (p->requires != table[i].requires
             || p->establishes != table[i].establishes
             || !ir_pass_declares(p)) {
-            printf("FAIL  %s declares what §3 lists for it\n", p->name);
+            printf("FAIL  %s does not declare what it needs and gives\n",
+                   p->name);
             fails++;
         }
     }
-    check("the four §3 passes are the four that exist", true);
+    check("the four declared passes are the four that exist", true);
 }
 
 static void test_a_created_block_takes_its_construct_s_span(void)

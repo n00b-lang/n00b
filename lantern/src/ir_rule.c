@@ -68,9 +68,7 @@ ir_rules_t *ir_rules_new(ir_ctx_t *ctx)
 
     ir_rules_t *rs = ir_alloc(ctx, sizeof(ir_rules_t));
 
-    if (rs) {
-        rs->ctx = ctx;
-    }
+    rs->ctx = ctx;
 
     return rs;
 }
@@ -352,15 +350,15 @@ static void kept_authored(ir_diags_t *d, ir_instr_t *in, const char *key,
         return;
     }
 
-    ir_sb b = {0};
+    ncc_buffer_t *b = ncc_buffer_empty();
 
-    ir_sb_fmt(&b, "%s would have written %s, which is already there and was "
+    ncc_buffer_printf(b, "%s would have written %s, which is already there and was "
                   "authored, so the authored one stands", rule, key);
 
-    char *msg = ir_sb_take(&b);
+    char *msg = ncc_buffer_take(b);
 
     ir_diag_message(dg, d, msg);
-    free(msg);
+    ncc_free(msg);
 }
 
 static void set_derived(ir_module_t *m, ir_diags_t *d, ir_instr_t *in,
@@ -453,17 +451,17 @@ ir_rule_result_t ir_rule_apply(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in,
                                                  "destination type");
 
                 if (dg) {
-                    ir_sb b = {0};
+                    ncc_buffer_t *b = ncc_buffer_empty();
 
-                    ir_sb_fmt(&b,
+                    ncc_buffer_printf(b,
                               "the destination is %s and the result is %s",
                               ir_type_text(m, want),
                               ir_type_text(m, r.result));
 
-                    char *msg = ir_sb_take(&b);
+                    char *msg = ncc_buffer_take(b);
 
                     ir_diag_message(dg, d, msg);
-                    free(msg);
+                    ncc_free(msg);
                 }
 
                 return (ir_rule_result_t){.verdict = IR_RULE_REJECT};
@@ -511,31 +509,31 @@ bool ir_rule_lower(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in,
 
 char *ir_rule_explain(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in)
 {
-    ir_sb b = {0};
+    ncc_buffer_t *b = ncc_buffer_empty();
 
     if (!m || !rs || !in) {
-        ir_sb_str(&b, "no instruction\n");
+        ncc_buffer_puts(b, "no instruction\n");
 
-        return ir_sb_take(&b);
+        return ncc_buffer_take(b);
     }
 
     th_type *key = ir_instr_key_type(in);
 
-    ir_sb_fmt(&b, "opcode %s\n", ir_op_spelling(in->op));
-    ir_sb_str(&b, "key type ");
+    ncc_buffer_printf(b, "opcode %s\n", ir_op_spelling(in->op));
+    ncc_buffer_puts(b, "key type ");
 
     if (key) {
-        ir_sb_str(&b, ir_type_text(m, key));
+        ncc_buffer_puts(b, ir_type_text(m, key));
     }
     else {
-        ir_sb_str(&b, "none");
+        ncc_buffer_puts(b, "none");
     }
-    ir_sb_str(&b, "\n");
+    ncc_buffer_puts(b, "\n");
 
     ready_keys(m, rs);
 
     for (size_t rung = 0; rung < sizeof(LADDER) / sizeof(LADDER[0]); rung++) {
-        ir_sb_fmt(&b, "  %-16s", ir_match_name(LADDER[rung]));
+        ncc_buffer_printf(b, "  %-16s", ir_match_name(LADDER[rung]));
 
         bool any = false;
 
@@ -544,27 +542,27 @@ char *ir_rule_explain(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in)
                 continue;
             }
             any = true;
-            ir_sb_fmt(&b, "%s%s", rule_matches(m, rs, i, in, key, ir_type_id(m, key))
+            ncc_buffer_printf(b, "%s%s", rule_matches(m, rs, i, in, key, ir_type_id(m, key))
                                       ? " MATCH "
                                       : " miss ",
                       rs->v[i].name);
         }
 
         if (!any) {
-            ir_sb_str(&b, " no rule at this rung");
+            ncc_buffer_puts(b, " no rule at this rung");
         }
-        ir_sb_str(&b, "\n");
+        ncc_buffer_puts(b, "\n");
     }
 
     ir_match_t       how = IR_MATCH_DEFAULT;
     const ir_rule_t *r   = ir_rule_resolve(m, rs, in, &how);
 
     if (r) {
-        ir_sb_fmt(&b, "resolves to %s by %s\n", r->name, ir_match_name(how));
+        ncc_buffer_printf(b, "resolves to %s by %s\n", r->name, ir_match_name(how));
     }
     else {
-        ir_sb_str(&b, "resolves to nothing\n");
+        ncc_buffer_puts(b, "resolves to nothing\n");
     }
 
-    return ir_sb_take(&b);
+    return ncc_buffer_take(b);
 }

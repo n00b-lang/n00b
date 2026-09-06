@@ -80,50 +80,63 @@ static const struct {
 
 #define N_COMMANDS (sizeof(COMMANDS) / sizeof(COMMANDS[0]))
 
+static const struct {
+    const char         *name;
+    const ir_profile_t *p;
+} PROFILES[] = {
+    {"bce",   &ir_profile_bce  },
+    {"synth", &ir_profile_synth},
+};
+
+#define N_PROFILES (sizeof(PROFILES) / sizeof(PROFILES[0]))
+
 static ncc_cmdr_t *build_cli(void)
 {
     ncc_cmdr_t *c = ncc_cmdr_new();
 
-    ncc_cmdr_set_name(c, "ir");
-    ncc_cmdr_add_flag(c, nullptr, "--help", NCC_CMDR_TYPE_BOOL, false,
-                      "show this help");
-    ncc_cmdr_add_flag_alias(c, nullptr, "--help", "-h");
+    ncc_cmdr_set_name(c, NCC_STRING_STATIC("ir"));
+    ncc_cmdr_add_flag(c, nullptr, NCC_STRING_STATIC("--help"), NCC_CMDR_TYPE_BOOL, false,
+                      NCC_STRING_STATIC("show this help"));
+    ncc_cmdr_add_flag_alias(c, nullptr, NCC_STRING_STATIC("--help"), NCC_STRING_STATIC("-h"));
 
     for (size_t i = 0; i < N_COMMANDS; i++) {
         const char *name = COMMANDS[i].name;
 
         ncc_cmdr_add_command(c, name, COMMANDS[i].doc);
-        ncc_cmdr_add_flag(c, name, "--profile", NCC_CMDR_TYPE_WORD, true,
-                          "bce (default) or synth");
-        ncc_cmdr_add_flag(c, name, "--json", NCC_CMDR_TYPE_BOOL, false,
-                          "render diagnostics as JSON");
-        ncc_cmdr_add_flag(c, name, "--help", NCC_CMDR_TYPE_BOOL, false,
-                          "show this help");
-        ncc_cmdr_add_flag_alias(c, name, "--help", "-h");
-        ncc_cmdr_add_positional(c, name, "file", NCC_CMDR_TYPE_WORD, 1, 1);
+        ncc_cmdr_add_flag(c, name, NCC_STRING_STATIC("--profile"), NCC_CMDR_TYPE_WORD, true,
+                          NCC_STRING_STATIC("bce (default) or synth"));
+        ncc_cmdr_add_flag(c, name, NCC_STRING_STATIC("--json"), NCC_CMDR_TYPE_BOOL, false,
+                          NCC_STRING_STATIC("render diagnostics as JSON"));
+        ncc_cmdr_add_flag(c, name, NCC_STRING_STATIC("--help"), NCC_CMDR_TYPE_BOOL, false,
+                          NCC_STRING_STATIC("show this help"));
+        ncc_cmdr_add_flag_alias(c, name, NCC_STRING_STATIC("--help"), NCC_STRING_STATIC("-h"));
+        ncc_cmdr_add_positional(c, name, NCC_STRING_STATIC("file"), NCC_CMDR_TYPE_WORD, 1, 1);
     }
 
-    ncc_cmdr_add_flag(c, "pass", "--passes", NCC_CMDR_TYPE_WORD, true,
-                      "comma separated, in order");
+    ncc_cmdr_add_flag(c, NCC_STRING_STATIC("pass"), NCC_STRING_STATIC("--passes"), NCC_CMDR_TYPE_WORD, true,
+                      NCC_STRING_STATIC("comma separated, in order"));
     ncc_cmdr_finalize(c);
 
     return c;
 }
 
-static void usage_flags(ncc_cmdr_command_t *cmd, FILE *err)
+static void usage_flags(ncc_cmdr_t *c, const char *command, FILE *err)
 {
-    for (int32_t i = 0; i < cmd->n_flags; i++) {
-        ncc_cmdr_flag_spec_t *fl = &cmd->flags[i];
+    int32_t n = ncc_cmdr_flag_count(c, command);
 
-        if (!strcmp(fl->name.data, "--help")) {
+    for (int32_t i = 0; i < n; i++) {
+        const char *name = ncc_cmdr_flag_name(c, command, i);
+
+        if (!strcmp(name, "--help")) {
             continue;
         }
 
         char spelled[64];
 
-        snprintf(spelled, sizeof(spelled), "%s%s", fl->name.data,
-                 fl->takes_value ? " <value>" : "");
-        fprintf(err, "  %-18s %s\n", spelled, fl->doc.data);
+        snprintf(spelled, sizeof(spelled), "%s%s", name,
+                 ncc_cmdr_flag_takes_value(c, command, i) ? " <value>" : "");
+        fprintf(err, "  %-18s %s\n", spelled,
+                ncc_cmdr_flag_doc(c, command, i));
     }
 }
 
@@ -131,22 +144,15 @@ static void usage(ncc_cmdr_t *c, FILE *err)
 {
     fputs("usage: ir <command> [options] <file.ir>\n\n", err);
 
-    for (int32_t i = 0; i < c->root.n_subcommands; i++) {
-        ncc_cmdr_command_t *sub = &c->root.subcommands[i];
+    int32_t n = ncc_cmdr_command_count(c);
 
-        fprintf(err, "  %-9s %s\n", sub->name.data, sub->doc.data);
+    for (int32_t i = 0; i < n; i++) {
+        fprintf(err, "  %-9s %s\n", ncc_cmdr_command_name(c, i),
+                ncc_cmdr_command_doc(c, i));
     }
 
     fputc('\n', err);
-
-    for (int32_t i = 0; i < c->root.n_subcommands; i++) {
-        ncc_cmdr_command_t *sub = &c->root.subcommands[i];
-
-        if (!strcmp(sub->name.data, "pass")) {
-            usage_flags(sub, err);
-            break;
-        }
-    }
+    usage_flags(c, "pass", err);
 }
 
 static const char *source_of(void *state, int32_t file, size_t *len)
@@ -171,40 +177,23 @@ static char *slurp(const char *path, FILE *err)
         return nullptr;
     }
 
-    size_t cap = 4096;
-    size_t n   = 0;
-    char  *p   = malloc(cap);
+    ncc_buffer_t *b = ncc_buffer_empty();
+    char          chunk[4096];
 
     for (;;) {
-        if (n + 1 >= cap) {
-            cap *= 2;
+        size_t got = fread(chunk, 1, sizeof chunk, f);
 
-            char *q = realloc(p, cap);
-
-            if (!q) {
-                free(p);
-                fclose(f);
-
-                return nullptr;
-            }
-            p = q;
-        }
-
-        size_t got = fread(p + n, 1, cap - n - 1, f);
-
-        n += got;
-
-        if (got == 0) {
+        if (!got) {
             break;
         }
+        ncc_buffer_append(b, chunk, got);
     }
-    p[n] = 0;
 
     if (f != stdin) {
         fclose(f);
     }
 
-    return p;
+    return ncc_buffer_take(b);
 }
 
 static void report(job *j, FILE *out, bool json)
@@ -219,7 +208,7 @@ static void report(job *j, FILE *out, bool json)
 
     if (text) {
         fputs(text, out);
-        free(text);
+        ncc_free(text);
     }
 }
 
@@ -248,7 +237,7 @@ static void unload(job *j)
     if (j->ctx) {
         ir_ctx_free(j->ctx);
     }
-    free(j->text);
+    ncc_free(j->text);
 
     if (j->args) {
         ncc_cmdr_result_free(j->args);
@@ -462,7 +451,7 @@ static bool explain_instr(ir_visit_t *vi)
 
     if (why) {
         fputs(why, u->out);
-        free(why);
+        ncc_free(why);
     }
 
     return false;
@@ -514,7 +503,7 @@ static int cmd_regions(job *j, FILE *out, FILE *err, const char *list)
 
     if (text) {
         fputs(text, out);
-        free(text);
+        ncc_free(text);
     }
 
     return IR_CLI_OK;
@@ -592,7 +581,7 @@ static int cmd_print(job *j, FILE *out, FILE *err, const char *list)
 
     if (text) {
         fputs(text, out);
-        free(text);
+        ncc_free(text);
     }
 
     return IR_CLI_OK;
@@ -623,7 +612,7 @@ static int cmd_pass(job *j, FILE *out, FILE *err, const char *list)
         }
 
         ir_props_t       unmet = 0;
-        ir_pass_result_t r = ir_pass_run_checked(p, j->m, j->d, &unmet, j->d);
+        ir_pass_result_t r = ir_pass_run(p, j->m, nullptr, &unmet, j->d);
 
         if (r == IR_PASS_UNMET) {
             fprintf(err, "ir: %s needs", p->name);
@@ -651,7 +640,7 @@ static int cmd_pass(job *j, FILE *out, FILE *err, const char *list)
 
     if (text) {
         fputs(text, out);
-        free(text);
+        ncc_free(text);
     }
 
     return IR_CLI_OK;
@@ -684,7 +673,7 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
 
     j.args = ncc_cmdr_parse(j.cmdr, argc - 1, (const char **)argv + 1);
 
-    if (!j.args->ok || !ncc_cmdr_result_command(j.args)) {
+    if (!ncc_cmdr_result_ok(j.args) || !ncc_cmdr_result_command(j.args)) {
         const char *bad = argv[1];
 
         for (int i = 1; i < argc; i++) {
@@ -706,16 +695,17 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
 
     cmd = ncc_cmdr_result_command(j.args);
 
-    if (ncc_cmdr_flag_present(j.args, "--profile")) {
-        const char *want = ncc_cmdr_flag_str(j.args, "--profile");
+    if (ncc_cmdr_flag_present(j.args, NCC_STRING_STATIC("--profile"))) {
+        const char *want = ncc_cmdr_flag_str(j.args, NCC_STRING_STATIC("--profile"));
 
-        if (want && !strcmp(want, "bce")) {
-            only = &ir_profile_bce;
+        for (size_t i = 0; want && i < N_PROFILES; i++) {
+            if (!strcmp(want, PROFILES[i].name)) {
+                only = PROFILES[i].p;
+                break;
+            }
         }
-        else if (want && !strcmp(want, "synth")) {
-            only = &ir_profile_synth;
-        }
-        else {
+
+        if (!only) {
             fprintf(err, "ir: no profile named %s\n", want ? want : "");
             unload(&j);
 
@@ -723,9 +713,9 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
         }
     }
 
-    json = ncc_cmdr_flag_present(j.args, "--json");
-    list = ncc_cmdr_flag_present(j.args, "--passes")
-             ? ncc_cmdr_flag_str(j.args, "--passes")
+    json = ncc_cmdr_flag_present(j.args, NCC_STRING_STATIC("--json"));
+    list = ncc_cmdr_flag_present(j.args, NCC_STRING_STATIC("--passes"))
+             ? ncc_cmdr_flag_str(j.args, NCC_STRING_STATIC("--passes"))
              : nullptr;
     path = ncc_cmdr_arg_count(j.args) > 0 ? ncc_cmdr_arg_str(j.args, 0)
                                           : nullptr;

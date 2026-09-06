@@ -163,12 +163,12 @@ ncc_scan_string_single(ncc_scanner_t *s)
 }
 
 ncc_option_t(ncc_string_t)
-ncc_scan_string_raw(ncc_scanner_t *s, const char *quote)
+ncc_scan_string_raw(ncc_scanner_t *s, ncc_string_t quote)
 {
-    size_t qlen = strlen(quote);
+    size_t qlen = quote.u8_bytes;
 
     if (s->cursor + qlen > s->input_len
-        || memcmp(s->input + s->cursor, quote, qlen) != 0) {
+        || memcmp(s->input + s->cursor, quote.data, qlen) != 0) {
         return ncc_option_none(ncc_string_t);
     }
 
@@ -178,7 +178,7 @@ ncc_scan_string_raw(ncc_scanner_t *s, const char *quote)
     size_t content_start = s->cursor;
 
     while (s->cursor + qlen <= s->input_len) {
-        if (memcmp(s->input + s->cursor, quote, qlen) == 0) {
+        if (memcmp(s->input + s->cursor, quote.data, qlen) == 0) {
             size_t  content_end = s->cursor;
             size_t  len         = content_end - content_start;
 

@@ -4,17 +4,17 @@
 #include "ir_internal.h"
 #include "ir/walk.h"
 
+#include "lib/list.h"
+
 typedef struct {
     ir_visit_fn pre;
     ir_visit_fn post;
     void       *thunk;
 } slot_t;
 
-typedef struct chain_t {
-    slot_t         *v;
-    size_t          n;
-    size_t          cap;
-} chain_t;
+ncc_list_decl(slot_t);
+
+typedef ncc_list_t(slot_t) chain_t;
 
 struct ir_walk_t {
     void   *user;
@@ -32,17 +32,12 @@ struct ir_walk_t {
 
 static void add(chain_t *c, ir_visit_fn pre, ir_visit_fn post, void *thunk)
 {
-    if (c->n >= c->cap) {
-        c->cap = c->cap ? c->cap * 2 : 4;
-        c->v   = realloc(c->v, c->cap * sizeof(*c->v));
-    }
-
-    c->v[c->n++] = (slot_t){.pre = pre, .post = post, .thunk = thunk};
+    ncc_list_push(*c, ((slot_t){.pre = pre, .post = post, .thunk = thunk}));
 }
 
 ir_walk_t *ir_walk_new(void *user)
 {
-    ir_walk_t *w = calloc(1, sizeof(*w));
+    ir_walk_t *w = ncc_alloc(typeof(*w));
 
     w->user = user;
 
@@ -55,25 +50,20 @@ void ir_walk_free(ir_walk_t *w)
         return;
     }
 
-    free(w->module.v);
-    free(w->global.v);
-    free(w->func.v);
-    free(w->param.v);
-    free(w->local.v);
-    free(w->block.v);
-    free(w->instr.v);
-    free(w->operand.v);
+    ncc_list_free(w->module);
+    ncc_list_free(w->global);
+    ncc_list_free(w->func);
+    ncc_list_free(w->param);
+    ncc_list_free(w->local);
+    ncc_list_free(w->block);
+    ncc_list_free(w->instr);
+    ncc_list_free(w->operand);
 
     for (int i = 0; i < IR_OP_COUNT; i++) {
-        free(w->by_op[i].v);
+        ncc_list_free(w->by_op[i]);
     }
 
-    free(w);
-}
-
-void *ir_walk_user(ir_walk_t *w)
-{
-    return w ? w->user : nullptr;
+    ncc_free(w);
 }
 
 void ir_walk_on_module(ir_walk_t *w, ir_visit_fn pre, ir_visit_fn post,
@@ -143,15 +133,15 @@ bool ir_walk_stopped(ir_walk_t *w)
 static void run_into(chain_t *c, ir_visit_t *v, bool pre, bool reverse,
                      bool *asked, bool *wants)
 {
-    for (size_t k = 0; k < c->n; k++) {
-        size_t      i  = reverse ? c->n - 1 - k : k;
-        ir_visit_fn fn = pre ? c->v[i].pre : c->v[i].post;
+    for (size_t k = 0; k < c->len; k++) {
+        size_t      i  = reverse ? c->len - 1 - k : k;
+        ir_visit_fn fn = pre ? c->data[i].pre : c->data[i].post;
 
         if (!fn) {
             continue;
         }
 
-        v->thunk = c->v[i].thunk;
+        v->thunk = c->data[i].thunk;
 
         bool want = fn(v);
 

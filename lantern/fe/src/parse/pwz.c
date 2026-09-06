@@ -20,19 +20,6 @@ get_token(ncc_pwz_parser_t *p, int32_t pos)
     return ncc_stream_get(p->stream, pos);
 }
 
-#ifdef NCC_MEM_DEBUG
-typedef struct {
-    size_t mem_count;
-    size_t cxt_count;
-    size_t cxt_node_count;
-    size_t result_exp_count;
-    size_t child_array_count;
-    size_t child_array_bytes;
-} pwz_alloc_stats_t;
-
-static pwz_alloc_stats_t pwz_stats;
-#endif
-
 static pwz_mem_t *
 alloc_mem(ncc_pwz_parser_t *p)
 {
@@ -95,9 +82,6 @@ mem_release(ncc_pwz_parser_t *p, pwz_mem_t *m)
 static pwz_cxt_t *
 alloc_cxt(ncc_pwz_parser_t *p)
 {
-#ifdef NCC_MEM_DEBUG
-    pwz_stats.cxt_count++;
-#endif
     pwz_cxt_t *c = ncc_arena_alloc(&p->parse_arena, sizeof(pwz_cxt_t));
     *c = (pwz_cxt_t){0};
     return c;
@@ -111,51 +95,14 @@ alloc_cxt_node(ncc_pwz_parser_t *p, pwz_cxt_t *cxt, pwz_cxt_node_t *next)
     n->cxt  = cxt;
     n->next = next;
 
-#ifdef NCC_MEM_DEBUG
-    pwz_stats.cxt_node_count++;
-#endif
     return n;
 }
 
 static pwz_exp_t *
 alloc_result_exp(ncc_pwz_parser_t *p)
 {
-#ifdef NCC_MEM_DEBUG
-    pwz_stats.result_exp_count++;
-#endif
     return ncc_arena_alloc(&p->parse_arena, sizeof(pwz_exp_t));
 }
-
-#ifdef NCC_MEM_DEBUG
-static void
-pwz_track_child_array(size_t bytes)
-{
-    pwz_stats.child_array_count++;
-    pwz_stats.child_array_bytes += bytes;
-}
-
-void
-ncc_pwz_report_stats(void)
-{
-    size_t mem_bytes      = pwz_stats.mem_count * sizeof(pwz_mem_t);
-    size_t cxt_bytes      = pwz_stats.cxt_count * sizeof(pwz_cxt_t);
-    size_t cxt_node_bytes = pwz_stats.cxt_node_count * sizeof(pwz_cxt_node_t);
-    size_t exp_bytes      = pwz_stats.result_exp_count * sizeof(pwz_exp_t);
-    size_t total = mem_bytes + cxt_bytes + cxt_node_bytes + exp_bytes
-                 + pwz_stats.child_array_bytes;
-
-    fprintf(stderr, "[pwz] mems=%zu(%zu) cxts=%zu(%zu) cxt_nodes=%zu(%zu) "
-            "result_exps=%zu(%zu) child_arrays=%zu(%zu) total=%zu\n",
-            pwz_stats.mem_count, mem_bytes,
-            pwz_stats.cxt_count, cxt_bytes,
-            pwz_stats.cxt_node_count, cxt_node_bytes,
-            pwz_stats.result_exp_count, exp_bytes,
-            pwz_stats.child_array_count, pwz_stats.child_array_bytes,
-            total);
-
-    pwz_stats = (pwz_alloc_stats_t){0};
-}
-#endif
 
 static void
 register_exp(ncc_pwz_parser_t *p, pwz_exp_t *e)
@@ -199,8 +146,20 @@ make_any_exp(ncc_pwz_parser_t *p)
 }
 
 static pwz_exp_t *
+make_set_exp(ncc_pwz_parser_t *p, const ncc_match_set_t *set)
+{
+    pwz_exp_t *e = ncc_alloc(pwz_exp_t);
+
+    e->kind = PWZ_SET;
+    e->set  = set;
+
+    register_exp(p, e);
+    return e;
+}
+
+static pwz_exp_t *
 make_seq_exp(ncc_pwz_parser_t *p,
-             const char        *name,
+             ncc_string_t       name,
              int64_t            nt_id,
              int32_t            rule_ix,
              pwz_exp_ptr_t     *children,
@@ -291,8 +250,12 @@ build_seq_children(ncc_pwz_parser_t *p,
             break;
         }
 
-        case NCC_MATCH_EMPTY:
         case NCC_MATCH_SET:
+            children[ix++] = make_set_exp(
+                p, (const ncc_match_set_t *)item->set_items);
+            break;
+
+        case NCC_MATCH_EMPTY:
             break;
         }
     }
@@ -344,7 +307,7 @@ expand_group_nt(ncc_pwz_parser_t *p, ncc_grammar_t *g, int64_t nt_id)
 
             build_seq_children(p, rule, &children, &nchildren);
 
-            pwz_exp_t *seq = make_seq_exp(p, nt->name.data, nt_id, (int32_t)i,
+            pwz_exp_t *seq = make_seq_exp(p, nt->name, nt_id, (int32_t)i,
                                           children, nchildren);
             alt_add(alt, seq);
         }
@@ -367,12 +330,12 @@ expand_group_nt(ncc_pwz_parser_t *p, ncc_grammar_t *g, int64_t nt_id)
 
         build_seq_children(p, rule, &children, &nchildren);
 
-        pwz_exp_t *seq = make_seq_exp(p, nt->name.data, nt_id, (int32_t)i,
+        pwz_exp_t *seq = make_seq_exp(p, nt->name, nt_id, (int32_t)i,
                                       children, nchildren);
         alt_add(body_alt, seq);
     }
 
-    pwz_exp_t *empty_seq = make_seq_exp(p, nt->name.data, nt_id, -1, nullptr, 0);
+    pwz_exp_t *empty_seq = make_seq_exp(p, nt->name, nt_id, -1, nullptr, 0);
 
     size_t body_nalts = ncc_list_len(body_alt->alt.alts);
 
@@ -394,7 +357,7 @@ expand_group_nt(ncc_pwz_parser_t *p, ncc_grammar_t *g, int64_t nt_id)
             memcpy(new_children + 1, body_seq->seq.children,
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
 
-            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name.data, nt_id,
+            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name, nt_id,
                                               body_seq->rule_ix,
                                               new_children, new_nc);
             alt_add(alt, rep_seq);
@@ -413,7 +376,7 @@ expand_group_nt(ncc_pwz_parser_t *p, ncc_grammar_t *g, int64_t nt_id)
             memcpy(new_children + 1, body_seq->seq.children,
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
 
-            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name.data, nt_id,
+            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name, nt_id,
                                               body_seq->rule_ix,
                                               new_children, new_nc);
             alt_add(alt, rep_seq);
@@ -464,7 +427,7 @@ build_exp_graph(ncc_pwz_parser_t *p, ncc_grammar_t *g)
 
             build_seq_children(p, rule, &children, &nchildren);
 
-            pwz_exp_t *seq = make_seq_exp(p, nt->name.data, (int64_t)i,
+            pwz_exp_t *seq = make_seq_exp(p, nt->name, (int64_t)i,
                                           (int32_t)j, children, nchildren);
             alt_add(alt_node, seq);
         }
@@ -614,6 +577,9 @@ token_matches(ncc_token_info_t *tok, pwz_exp_t *exp)
     case PWZ_ANY:
         return true;
 
+    case PWZ_SET:
+        return ncc_match_set_holds(exp->set, tok->tid);
+
     default:
         return false;
     }
@@ -636,9 +602,6 @@ run_dd(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
     mem_release(p, exp->mem);
 
     pwz_mem_t *mem = alloc_mem(p);
-#ifdef NCC_MEM_DEBUG
-    pwz_stats.mem_count++;
-#endif
 
     mem->start_pos = pos;
     mem->parents   = alloc_cxt_node(p, cxt, nullptr);
@@ -655,6 +618,7 @@ run_ddp(ncc_pwz_parser_t *p, int32_t pos, ncc_token_info_t *tok,
     case PWZ_TOK:
     case PWZ_CLASS:
     case PWZ_ANY:
+    case PWZ_SET:
         if (token_matches(tok, exp)) {
             pwz_exp_t *result = alloc_result_exp(p);
 
@@ -813,9 +777,6 @@ run_dup(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
 
             pwz_exp_ptr_t *children = ncc_arena_alloc(
                 &p->parse_arena, (size_t)total * sizeof(pwz_exp_ptr_t));
-#ifdef NCC_MEM_DEBUG
-            pwz_track_child_array((size_t)total * sizeof(pwz_exp_ptr_t));
-#endif
 
             for (int32_t i = 0; i < cxt->nleft; i++) {
                 children[i] = cxt->seq.left[i];
@@ -827,8 +788,8 @@ run_dup(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
 
             seq_result->kind          = PWZ_SEQ;
             seq_result->seq.name      = cxt->nt_id >= 0
-                ? ncc_get_nonterm(p->grammar, cxt->nt_id)->name.data
-                : nullptr;
+                ? ncc_get_nonterm(p->grammar, cxt->nt_id)->name
+                : (ncc_string_t){0};
             seq_result->nt_id     = cxt->nt_id;
             seq_result->rule_ix   = cxt->rule_ix;
             seq_result->seq.children  = children;
@@ -841,9 +802,6 @@ run_dup(ncc_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
 
             pwz_exp_ptr_t *new_left = ncc_arena_alloc(
                 &p->parse_arena, (size_t)new_nleft * sizeof(pwz_exp_ptr_t));
-#ifdef NCC_MEM_DEBUG
-            pwz_track_child_array((size_t)new_nleft * sizeof(pwz_exp_ptr_t));
-#endif
 
             for (int32_t i = 0; i < cxt->nleft; i++) {
                 new_left[i] = cxt->seq.left[i];
@@ -919,9 +877,6 @@ init_parse(ncc_pwz_parser_t *p)
     p->result_trees = (ncc_parse_tree_array_t){0};
 
     pwz_mem_t *mem_top = alloc_mem(p);
-#ifdef NCC_MEM_DEBUG
-    pwz_stats.mem_count++;
-#endif
 
     mem_top->start_pos = 0;
 
@@ -1000,7 +955,7 @@ make_epsilon_node(int32_t pos)
 {
     ncc_nt_node_t pn = {0};
 
-    pn.name  = ncc_string_from_cstr("\xce\xb5");
+    pn.name  = NCC_STRING_STATIC("\xce\xb5");
     pn.id    = NCC_EMPTY_STRING;
     pn.start = pos;
     pn.end   = pos;
@@ -1015,7 +970,7 @@ make_nt_node(ncc_grammar_t *g, int64_t nt_id, int32_t rule_index,
     ncc_nonterm_t *nt = ncc_get_nonterm(g, nt_id);
     ncc_nt_node_t  pn = {0};
 
-    pn.name       = (nt && nt->name.data) ? nt->name : ncc_string_from_cstr("?");
+    pn.name       = (nt && nt->name.data) ? nt->name : NCC_STRING_STATIC("?");
     pn.id         = nt_id;
     pn.rule_index = rule_index;
     pn.start      = start;
@@ -1025,11 +980,11 @@ make_nt_node(ncc_grammar_t *g, int64_t nt_id, int32_t rule_index,
 }
 
 static ncc_parse_tree_t *
-make_group_node(const char *name, int32_t start, int32_t end)
+make_group_node(ncc_string_t name, int32_t start, int32_t end)
 {
     ncc_nt_node_t pn = {0};
 
-    pn.name      = name ? ncc_string_from_cstr(name) : ncc_string_from_cstr("group");
+    pn.name      = name.data ? name : NCC_STRING_STATIC("group");
     pn.id        = NCC_GROUP_ID;
     pn.group_top = true;
     pn.start     = start;
@@ -1152,7 +1107,7 @@ score_exp(ncc_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
             }
 
             if (f->exp->kind == PWZ_TOK || f->exp->kind == PWZ_CLASS
-                || f->exp->kind == PWZ_ANY) {
+                || f->exp->kind == PWZ_ANY || f->exp->kind == PWZ_SET) {
                 (*pos)++;
                 last = 0;
                 frames.len--;
@@ -1291,7 +1246,7 @@ convert_exp_to_tree(ncc_pwz_parser_t *p, pwz_exp_t *exp,
             }
 
             if (e->kind == PWZ_TOK || e->kind == PWZ_CLASS
-                || e->kind == PWZ_ANY) {
+                || e->kind == PWZ_ANY || e->kind == PWZ_SET) {
                 ncc_token_info_t *tok = get_token(p, st->pos);
 
                 if (!tok) {
@@ -1370,8 +1325,8 @@ convert_exp_to_tree(ncc_pwz_parser_t *p, pwz_exp_t *exp,
         else {
             ncc_nt_node_t pn = {0};
 
-            pn.name  = e->seq.name ? ncc_string_from_cstr(e->seq.name)
-                                   : ncc_string_from_cstr("?");
+            pn.name  = e->seq.name.data ? e->seq.name
+                                        : NCC_STRING_STATIC("?");
             pn.id    = e->nt_id;
             pn.start = start;
             pn.end   = end;

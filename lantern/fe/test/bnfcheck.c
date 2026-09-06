@@ -13,7 +13,7 @@ int main(int argc, char **argv)
     FILE *f = fopen(argv[1], "rb");
     if (!f) { fprintf(stderr, "cannot open %s\n", argv[1]); return 2; }
     fseek(f, 0, SEEK_END); long n = ftell(f); rewind(f);
-    char *p = malloc((size_t)n + 1);
+    char *p = ncc_alloc_size(1, (size_t)n + 1);
     size_t got = fread(p, 1, (size_t)n, f); p[got] = 0; fclose(f);
 
     ncc_grammar_t *g = ncc_grammar_new();

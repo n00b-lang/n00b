@@ -33,7 +33,7 @@ static ncc_string_t slurp(const char *path)
 
     rewind(f);
 
-    char *p = malloc((size_t)n + 1);
+    char *p = ncc_alloc_size(1, (size_t)n + 1);
 
     if (fread(p, 1, (size_t)n, f) != (size_t)n) {
         p[0] = 0;
@@ -122,13 +122,13 @@ static void test_the_slay_grammar_loads(void)
 
     declare_tokens(g);
     check("slay's annotated grammar loads whole",
-          ncc_bnf_load(text, ncc_string_from_cstr("module"), g));
+          ncc_bnf_load(text, NCC_STRING_STATIC("module"), g));
     ncc_grammar_free(g);
 
     ncc_grammar_t *bare = ncc_grammar_new();
 
     check("and is refused when its token names are not declared",
-          !ncc_bnf_load(text, ncc_string_from_cstr("module"), bare));
+          !ncc_bnf_load(text, NCC_STRING_STATIC("module"), bare));
     ncc_grammar_free(bare);
 }
 

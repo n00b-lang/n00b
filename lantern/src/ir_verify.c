@@ -65,17 +65,17 @@ broke(V *v, ir_diagcode_t code, ir_instr_t *in, ir_block_t *b,
         return;
     }
 
-    ir_sb   sb = {0};
+    ncc_buffer_t *sb = ncc_buffer_empty();
     va_list ap;
 
     va_start(ap, fmt);
-    ir_sb_vfmt(&sb, fmt, ap);
+    ncc_buffer_vprintf(sb, fmt, ap);
     va_end(ap);
 
-    char *msg = ir_sb_take(&sb);
+    char *msg = ncc_buffer_take(sb);
 
     ir_diag_message(dg, v->d, msg ? msg : rule);
-    free(msg);
+    ncc_free(msg);
 }
 
 static bool names_block(ir_func_t *f, ir_block_t *b)
@@ -787,7 +787,7 @@ static void audit_spans(V *v)
         if (bug) {
             ir_diag_message(bug, v->d,
                             "a diagnostic was reported with no primary span, "
-                            "which §11.3 makes a bug in whatever reported it");
+                            "which is a bug in whatever reported it");
         }
 
         return;
@@ -947,15 +947,15 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
                                       ir_module_span(m), "claimed here");
 
         if (dg) {
-            ir_sb sb = {0};
+            ncc_buffer_t *sb = ncc_buffer_empty();
 
-            ir_sb_fmt(&sb, "module %s claims %s, which the verifier finds "
+            ncc_buffer_printf(sb, "module %s claims %s, which the verifier finds "
                            "does not hold", m->name, ir_prop_name(bit));
 
-            char *msg = ir_sb_take(&sb);
+            char *msg = ncc_buffer_take(sb);
 
             ir_diag_message(dg, out, msg);
-            free(msg);
+            ncc_free(msg);
         }
     }
 
@@ -1094,15 +1094,15 @@ bool ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m, const char *agent,
                                          r->b, nullptr, "here");
 
         if (dg) {
-            ir_sb sb = {0};
+            ncc_buffer_t *sb = ncc_buffer_empty();
 
-            ir_sb_fmt(&sb, "%s had a known location before %s ran and has "
+            ncc_buffer_printf(sb, "%s had a known location before %s ran and has "
                            "none after", r->what, agent ? agent : "a pass");
 
-            char *msg = ir_sb_take(&sb);
+            char *msg = ncc_buffer_take(sb);
 
             ir_diag_message(dg, out, msg);
-            free(msg);
+            ncc_free(msg);
         }
     }
     ncc_dict_free(&here);

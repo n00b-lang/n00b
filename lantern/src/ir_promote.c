@@ -30,15 +30,15 @@ static void warn_unset(P *p, const ir_local_t *l)
         return;
     }
 
-    ir_sb b = {0};
+    ncc_buffer_t *b = ncc_buffer_empty();
 
-    ir_sb_fmt(&b, "$%s is read on a path that does not assign it, so promote "
+    ncc_buffer_printf(b, "$%s is read on a path that does not assign it, so promote "
                   "supplied undef", l->name);
 
-    char *msg = ir_sb_take(&b);
+    char *msg = ncc_buffer_take(b);
 
     ir_diag_message(dg, p->opts->diags, msg);
-    free(msg);
+    ncc_free(msg);
 }
 
 static const char *derived_name(P *p, const ir_local_t *l, uint32_t nth)
@@ -288,7 +288,7 @@ static bool promote_func(P *p, ir_func_t *f)
             uint32_t    tok = ir_rd_arm_tok(r, q, i);
             ir_value_t *v   = tok ? val[tok] : und[l->index];
 
-            if (!v || !ir_instr_push_phi_arm(phi[q], ir_rd_arm_block(r, q, i),
+            if (!v || !ir_instr_operand_phi_arm(phi[q], ir_rd_arm_block(r, q, i),
                                              v)) {
                 p->ok = false;
             }
@@ -320,9 +320,11 @@ bool ir_promote(ir_module_t *m, const ir_promote_opts_t *opts)
     return p.ok;
 }
 
-static bool promote_run(ir_module_t *m, void *state)
+static bool promote_run(ir_module_t *m, ir_diags_t *d, void *state)
 {
-    ir_promote_opts_t opts = {.diags = (ir_diags_t *)state};
+    ir_promote_opts_t opts = {.diags = d};
+
+    (void)state;
 
     return ir_promote(m, &opts);
 }
@@ -412,7 +414,7 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
                                                       cut->span, "split-edges",
                                                       0);
 
-                if (!jump || !ir_instr_push_block(jump, to)) {
+                if (!jump || !ir_instr_operand_block(jump, to)) {
                     return false;
                 }
                 retarget(t, to, cut);
@@ -465,9 +467,11 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
     return true;
 }
 
-static bool split_run(ir_module_t *m, void *state)
+static bool split_run(ir_module_t *m, ir_diags_t *d, void *state)
 {
-    return ir_split_edges(m, (ir_diags_t *)state);
+    (void)state;
+
+    return ir_split_edges(m, d);
 }
 
 const ir_pass_t ir_pass_split_edges = {

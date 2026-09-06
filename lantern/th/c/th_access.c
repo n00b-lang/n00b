@@ -288,3 +288,28 @@ bool th_var_index(const th_type *t, uint64_t *index)
 
     return true;
 }
+
+const char *th_var_name(const th_type *t)
+{
+    const th_type *n = as(t, TH_VAR);
+
+    return n ? n->var.name : nullptr;
+}
+
+static bool named_is(const th_type *t, const char *name, size_t n)
+{
+    const th_type *v = as(t, TH_NAMED);
+
+    return v && v->named.nargs == 0 && v->named.nlen == n
+        && !memcmp(v->named.name, name, n);
+}
+
+bool th_is_erased(const th_type *t)
+{
+    return named_is(t, TH_ERASED, sizeof(TH_ERASED) - 1);
+}
+
+bool th_is_bottom(const th_type *t)
+{
+    return named_is(t, TH_BOTTOM, sizeof(TH_BOTTOM) - 1);
+}

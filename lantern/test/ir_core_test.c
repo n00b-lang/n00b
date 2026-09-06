@@ -251,12 +251,13 @@ static void test_identity_is_the_whole_type(void)
     free(a);
     free(b);
 
-    char *too_deep = nested(100000, "i32");
+    char    *deep = nested(100000, "i32");
+    th_type *td   = ir_type_parse(m, deep);
 
-    check("and one deeper than the parser will descend is refused, not "
-          "truncated and not a crash",
-          ir_type_parse(m, too_deep) == nullptr);
-    free(too_deep);
+    check("nesting is bounded by memory, not by a recursion limit", td);
+    check("and a hundred thousand deep is still not the four hundred",
+          td && td != ta && !ir_type_eq(m, td, ta));
+    free(deep);
     ir_ctx_free(ctx);
 }
 
@@ -517,22 +518,22 @@ static void test_structure(void)
     check("the destination is a value with the given type",
           add->dest->kind == IR_VAL_INSTR && add->dest->type == gt);
 
-    check("value operands push", ir_instr_push_value(add, p));
-    check("a second value operand pushes", ir_instr_push_value(add, p));
+    check("value operands push", ir_instr_operand_value(add, p));
+    check("a second value operand pushes", ir_instr_operand_value(add, p));
     check("a third operand is refused by arity",
-          !ir_instr_push_value(add, p));
+          !ir_instr_operand_value(add, p));
     check("a block operand is refused where a value is expected",
-          !ir_instr_push_block(add, body));
+          !ir_instr_operand_block(add, body));
 
-    check("modifiers push", ir_instr_push_mod(add, "wrap"));
+    check("modifiers push", ir_instr_add_mod(add, "wrap"));
     check("modifiers read back", ir_instr_has_mod(add, "wrap"));
     check("an absent modifier is absent", !ir_instr_has_mod(add, "trap"));
 
     ir_instr_t *jump = ir_instr_add(entry, IR_OP_JUMP);
 
     check("a value is refused where a block is expected",
-          !ir_instr_push_value(jump, p));
-    check("a block operand pushes", ir_instr_push_block(jump, body));
+          !ir_instr_operand_value(jump, p));
+    check("a block operand pushes", ir_instr_operand_block(jump, body));
     check("the terminator is found", ir_block_terminator(entry) == jump);
 
     check("a destination is refused on a resultless op",
@@ -552,9 +553,9 @@ static void test_structure(void)
     ir_instr_t *fld = ir_instr_add(body, IR_OP_FIELD);
 
     check("field takes a value then a name",
-          ir_instr_push_value(fld, p) && ir_instr_push_name(fld, "x"));
+          ir_instr_operand_value(fld, p) && ir_instr_operand_name(fld, "x"));
     check("field refuses a name in the value slot",
-          !ir_instr_push_name(ir_instr_add(body, IR_OP_FIELD), "x"));
+          !ir_instr_operand_name(ir_instr_add(body, IR_OP_FIELD), "x"));
 
     ir_ctx_free(ctx);
 }

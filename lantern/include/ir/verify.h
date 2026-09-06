@@ -13,8 +13,7 @@ ir_locsnap_t *ir_loc_snapshot(ir_module_t *m);
 bool          ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m,
                               const char *agent, ir_diags_t *out);
 
-ir_pass_result_t ir_pass_run_checked(const ir_pass_t *p, ir_module_t *m,
-                                     void *state, ir_props_t *unmet,
-                                     ir_diags_t *d);
+ir_pass_result_t ir_pass_run(const ir_pass_t *p, ir_module_t *m, void *state,
+                             ir_props_t *unmet, ir_diags_t *d);
 
 #endif

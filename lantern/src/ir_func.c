@@ -8,7 +8,7 @@
 static void drop_index(void *p)
 {
     ncc_dict_free(p);
-    free(p);
+    ncc_free(p);
 }
 
 static ncc_dict_t *index_of(ir_ctx_t *ctx, void **slot)
@@ -16,11 +16,8 @@ static ncc_dict_t *index_of(ir_ctx_t *ctx, void **slot)
     ncc_dict_t *d = *slot;
 
     if (!d) {
-        d = calloc(1, sizeof(ncc_dict_t));
+        d = ncc_alloc(ncc_dict_t);
 
-        if (!d) {
-            return nullptr;
-        }
         ncc_dict_init(d, ncc_hash_cstring, ncc_dict_cstr_eq);
         ir_ctx_on_free(ctx, drop_index, d);
         *slot = d;
@@ -52,10 +49,6 @@ ir_global_t *ir_global_add(ir_module_t *m, const char *name, th_type *type)
     }
 
     ir_global_t *g = ir_alloc(m->ctx, sizeof(ir_global_t));
-
-    if (!g) {
-        return nullptr;
-    }
 
     g->name = ir_strdup(m->ctx, name);
     g->type = ir_type_intern(m, type);
@@ -101,10 +94,6 @@ ir_func_t *ir_func_add(ir_module_t *m, const char *name, th_type *type,
 
     ir_func_t *f = ir_alloc(m->ctx, sizeof(ir_func_t));
 
-    if (!f) {
-        return nullptr;
-    }
-
     f->name    = ir_strdup(m->ctx, name);
     f->type    = ir_type_intern(m, type);
     f->linkage = linkage;
@@ -147,10 +136,6 @@ ir_value_t *ir_param_add(ir_func_t *f, const char *name, th_type *type)
     ir_ctx_t   *ctx = f->owner->ctx;
     ir_value_t *v   = ir_alloc(ctx, sizeof(ir_value_t));
 
-    if (!v) {
-        return nullptr;
-    }
-
     v->kind  = IR_VAL_PARAM;
     v->name  = ir_strdup(ctx, name);
     v->type  = ir_type_intern(f->owner, type);
@@ -186,10 +171,6 @@ ir_local_t *ir_local_add(ir_func_t *f, const char *name, th_type *type)
     ir_ctx_t   *ctx = f->owner->ctx;
     ir_local_t *l   = ir_alloc(ctx, sizeof(ir_local_t));
 
-    if (!l) {
-        return nullptr;
-    }
-
     l->name  = ir_strdup(ctx, name);
     l->type  = ir_type_intern(f->owner, type);
     l->span  = IR_SPAN_UNKNOWN;
@@ -223,10 +204,6 @@ ir_block_t *ir_block_add(ir_func_t *f, const char *name)
 
     ir_ctx_t   *ctx = f->owner->ctx;
     ir_block_t *b   = ir_alloc(ctx, sizeof(ir_block_t));
-
-    if (!b) {
-        return nullptr;
-    }
 
     b->name  = ir_strdup(ctx, name);
     b->span  = IR_SPAN_UNKNOWN;
@@ -313,10 +290,6 @@ ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op)
     ir_ctx_t   *ctx = b->owner->owner->ctx;
     ir_instr_t *in  = ir_alloc(ctx, sizeof(ir_instr_t));
 
-    if (!in) {
-        return nullptr;
-    }
-
     in->op    = op;
     in->span  = IR_SPAN_UNKNOWN;
     in->block = b;
@@ -343,10 +316,6 @@ bool ir_instr_set_dest(ir_instr_t *in, const char *name, th_type *type)
     ir_func_t  *f   = in->block->owner;
     ir_ctx_t   *ctx = f->owner->ctx;
     ir_value_t *v   = ir_alloc(ctx, sizeof(ir_value_t));
-
-    if (!v) {
-        return false;
-    }
 
     v->kind        = IR_VAL_INSTR;
     v->name        = ir_strdup(ctx, name);
@@ -403,9 +372,6 @@ static ir_operand_t *push(ir_instr_t *in, ir_opdkind_t kind)
     ir_operand_t *grown = ir_grow(ctx, in->operands, &cap, in->n_operands + 1u,
                                   sizeof(ir_operand_t));
 
-    if (!grown) {
-        return nullptr;
-    }
     in->operands     = grown;
     in->cap_operands = (uint32_t)cap;
 
@@ -417,7 +383,7 @@ static ir_operand_t *push(ir_instr_t *in, ir_opdkind_t kind)
     return o;
 }
 
-bool ir_instr_push_value(ir_instr_t *in, ir_value_t *v)
+bool ir_instr_operand_value(ir_instr_t *in, ir_value_t *v)
 {
     ir_operand_t *o = v ? push(in, IR_OPD_VALUE) : nullptr;
 
@@ -428,7 +394,7 @@ bool ir_instr_push_value(ir_instr_t *in, ir_value_t *v)
     return o != nullptr;
 }
 
-bool ir_instr_push_named(ir_instr_t *in, const char *name, ir_value_t *v)
+bool ir_instr_operand_named(ir_instr_t *in, const char *name, ir_value_t *v)
 {
     ir_operand_t *o = name && v ? push(in, IR_OPD_NAMED_ARG) : nullptr;
 
@@ -440,7 +406,7 @@ bool ir_instr_push_named(ir_instr_t *in, const char *name, ir_value_t *v)
     return o != nullptr;
 }
 
-bool ir_instr_push_local(ir_instr_t *in, ir_local_t *l)
+bool ir_instr_operand_local(ir_instr_t *in, ir_local_t *l)
 {
     if (!in || !l) {
         return false;
@@ -449,20 +415,16 @@ bool ir_instr_push_local(ir_instr_t *in, ir_local_t *l)
     ir_ctx_t   *ctx = in->block->owner->owner->ctx;
     ir_value_t *v   = ir_alloc(ctx, sizeof(ir_value_t));
 
-    if (!v) {
-        return false;
-    }
-
     v->kind  = IR_VAL_LOCAL;
     v->name  = l->name;
     v->type  = l->type;
     v->local = l;
     v->owner = in->block->owner;
 
-    return ir_instr_push_value(in, v);
+    return ir_instr_operand_value(in, v);
 }
 
-bool ir_instr_push_type(ir_instr_t *in, th_type *t)
+bool ir_instr_operand_type(ir_instr_t *in, th_type *t)
 {
     ir_operand_t *o = t ? push(in, IR_OPD_TYPE) : nullptr;
 
@@ -473,7 +435,7 @@ bool ir_instr_push_type(ir_instr_t *in, th_type *t)
     return o != nullptr;
 }
 
-bool ir_instr_push_name(ir_instr_t *in, const char *n)
+bool ir_instr_operand_name(ir_instr_t *in, const char *n)
 {
     ir_operand_t *o = n ? push(in, IR_OPD_NAME) : nullptr;
 
@@ -484,7 +446,7 @@ bool ir_instr_push_name(ir_instr_t *in, const char *n)
     return o != nullptr;
 }
 
-bool ir_instr_push_block(ir_instr_t *in, ir_block_t *b)
+bool ir_instr_operand_block(ir_instr_t *in, ir_block_t *b)
 {
     ir_operand_t *o = b ? push(in, IR_OPD_BLOCK) : nullptr;
 
@@ -495,7 +457,7 @@ bool ir_instr_push_block(ir_instr_t *in, ir_block_t *b)
     return o != nullptr;
 }
 
-bool ir_instr_push_default(ir_instr_t *in, ir_block_t *b)
+bool ir_instr_operand_default(ir_instr_t *in, ir_block_t *b)
 {
     ir_operand_t *o = b ? push(in, IR_OPD_DEFAULT_BLOCK) : nullptr;
 
@@ -534,7 +496,7 @@ bool ir_lit_eq(ir_lit_t a, ir_lit_t b)
     return a.mag == b.mag && a.neg == b.neg;
 }
 
-bool ir_instr_push_lit(ir_instr_t *in, ir_lit_t v)
+bool ir_instr_operand_int_lit(ir_instr_t *in, ir_lit_t v)
 {
     ir_operand_t *o = push(in, IR_OPD_CONST);
 
@@ -545,17 +507,17 @@ bool ir_instr_push_lit(ir_instr_t *in, ir_lit_t v)
     return o != nullptr;
 }
 
-bool ir_instr_push_int(ir_instr_t *in, ir_int_t v)
+bool ir_instr_operand_int(ir_instr_t *in, ir_int_t v)
 {
-    return ir_instr_push_lit(in, ir_lit_of(v));
+    return ir_instr_operand_int_lit(in, ir_lit_of(v));
 }
 
-bool ir_instr_push_uint(ir_instr_t *in, ir_uint_t v)
+bool ir_instr_operand_uint(ir_instr_t *in, ir_uint_t v)
 {
-    return ir_instr_push_lit(in, (ir_lit_t){.mag = v});
+    return ir_instr_operand_int_lit(in, (ir_lit_t){.mag = v});
 }
 
-bool ir_instr_push_float(ir_instr_t *in, double v)
+bool ir_instr_operand_float(ir_instr_t *in, double v)
 {
     ir_operand_t *o = push(in, IR_OPD_CONST);
 
@@ -567,7 +529,7 @@ bool ir_instr_push_float(ir_instr_t *in, double v)
     return o != nullptr;
 }
 
-bool ir_instr_push_float_text(ir_instr_t *in, const char *text)
+bool ir_instr_operand_float_text(ir_instr_t *in, const char *text)
 {
     if (!text) {
         return false;
@@ -584,7 +546,7 @@ bool ir_instr_push_float_text(ir_instr_t *in, const char *text)
     return o != nullptr;
 }
 
-bool ir_instr_push_phi_arm(ir_instr_t *in, ir_block_t *b, ir_value_t *v)
+bool ir_instr_operand_phi_arm(ir_instr_t *in, ir_block_t *b, ir_value_t *v)
 {
     ir_operand_t *o = b && v ? push(in, IR_OPD_PHI_ARM) : nullptr;
 
@@ -596,7 +558,7 @@ bool ir_instr_push_phi_arm(ir_instr_t *in, ir_block_t *b, ir_value_t *v)
     return o != nullptr;
 }
 
-bool ir_instr_push_switch_case(ir_instr_t *in, ir_lit_t v, ir_block_t *b)
+bool ir_instr_operand_switch_arm_lit(ir_instr_t *in, ir_lit_t v, ir_block_t *b)
 {
     ir_operand_t *o = b ? push(in, IR_OPD_SWITCH_ARM) : nullptr;
 
@@ -608,12 +570,12 @@ bool ir_instr_push_switch_case(ir_instr_t *in, ir_lit_t v, ir_block_t *b)
     return o != nullptr;
 }
 
-bool ir_instr_push_switch_arm(ir_instr_t *in, ir_int_t v, ir_block_t *b)
+bool ir_instr_operand_switch_arm(ir_instr_t *in, ir_int_t v, ir_block_t *b)
 {
-    return ir_instr_push_switch_case(in, ir_lit_of(v), b);
+    return ir_instr_operand_switch_arm_lit(in, ir_lit_of(v), b);
 }
 
-bool ir_instr_push_mod(ir_instr_t *in, const char *mod)
+bool ir_instr_add_mod(ir_instr_t *in, const char *mod)
 {
     if (!in || !mod) {
         return false;

@@ -1,4 +1,7 @@
-<module> ::= <nl>? %"module" <name> %"{" <nl> <module-item>* %"}" <nl>?
+@tokenizer("ir")
+
+<module> @hardline($5) @indent($5) @hardline($6) @hardline($7) ::=
+<nl>? %"module" <name> %"{" <nl> <module-item>* %"}" <nl>?
 
 <module-item> ::= <profile-decl>
                 | <target-decl>
@@ -15,49 +18,63 @@
 <meta-decl>    ::= %"meta" <annot> <nl>
 <type-decl>    ::= %"type" <name> %"=" <typelang-type> <nl>
 
-<layout-decl> ::= %"layout" <typelang-type> %"{" <nl> <layout-item>* %"}" <nl>
+<layout-decl> @hardline($4) @indent($4) @hardline($5) ::=
+%"layout" <typelang-type> %"{" <nl> <layout-item>* %"}" <nl>
 
-<layout-item> ::= %"size" %"=" <layout-val> <nl>
+<layout-item> @nospace($4) @nospace($5) @nospace($6) ::= %"size" %"=" <layout-val> <nl>
                 | %"align" %"=" <layout-val> <nl>
                 | %"stride" %"=" <layout-val> <nl>
                 | <name> %"@" %"bits" <layout-val> %"." %"." <layout-val> <nl>
 
 <layout-val> ::= <int> | <symbolic-expr>
 
-<symbolic-expr> ::= %"sizeof" %"(" <typelang-type> %")"
+<symbolic-expr> @nospace @space($4) ::= %"sizeof" %"(" <typelang-type> %")"
                   | %"alignof" %"(" <typelang-type> %")"
                   | %"offsetof" %"(" <typelang-type> %"," %STRING_LIT %")"
 
 <linkage> ::= %"static" | %"extern"
 
-<global-decl> ::= <linkage>? %"global" <global> %":" <typelang-type> <init>? <meta>* <nl>
+<mutability> ::= %"mutable" | %"immutable" | %"const"
 
-<func> ::= <linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> <meta>* %"{" <nl> <local>* <block>+ %"}" <nl>
+<global-decl> @nospace($4) ::=
+<linkage>? <mutability>? %"global" <global> %":" <typelang-type> <init>? <meta>* <nl>
 
-<params>     ::= <func-param> (%"," <func-param>)*
-<func-param> ::= <param-mode>? <value> %":" <typelang-type>
-               | <name> %":" <typelang-type>
-               | %"*" <typelang-type>
+<func> @nospace($3) @nospace($4) @nospace($5) @hardline($11) @indent($11) @blankline($12) @indent($12) @hardline($13) ::=
+<linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> <meta>* %"{" <nl> <local>* <block>+ %"}" <nl>
+
+<params>     @nospace($1) ::= <func-param> (%"," <func-param>)*
+<func-param> ::= <func-param-pos> | <func-param-kw> | <func-param-rest>
+
+<func-param-pos>  @nospace($2) ::= <param-mode>? <value> %":" <typelang-type>
+<func-param-kw>   @nospace($1) ::= <name> %":" <typelang-type>
+<func-param-rest> @nospace($1) ::= %"*" <typelang-type>
+
 <param-mode> ::= %"in" | %"out" | %"inout"
 
-<local> ::= %"local" <local-ref> %":" <typelang-type> <init>? <meta>* <nl>
+<local> @nospace($3) ::=
+<mutability>? %"local" <local-ref> %":" <typelang-type> <init>? <meta>* <nl>
 
-<init> ::= %"=" %"-"? <number>
+<init> ::= %"=" <signed-number>
 
-<block> ::= %"block" <name> %":" <meta>* <nl> <instr>*
+<signed-number> @nospace($1) ::= %"-"? <number>
+
+<block> @nospace($2) @hardline($5) @indent($5) ::=
+%"block" <name> %":" <meta>* <nl> <instr>*
 
 <instr> ::= <dest>? <opcode> <modifier>* <operands>? <meta>* %NEWLINE+
 
-<opcode> ::= <name> (%"." <name>)*
+<opcode> @nospace ::= <name> (%"." <name>)*
 
-<dest> ::= <value> %":" <typelang-type> %"="
-         | <local-ref> %"="
+<dest> ::= <dest-value> | <dest-local>
+
+<dest-value> @nospace($1) ::= <value> %":" <typelang-type> %"="
+<dest-local> ::= <local-ref> %"="
 
 <modifier> ::= <name>
 
-<operands> ::= <operand> (%"," <operand>)*
+<operands> @nospace($1) ::= <operand> (%"," <operand>)*
 
-<operand> ::= <ref>
+<operand> @nospace($1) ::= <ref>
             | <number>
             | %"-" <number>
             | %STRING_LIT
@@ -69,38 +86,41 @@
             | <name>
 
 <named-arg>     ::= <name> %"=" <ref>
-<phi-arm>       ::= %"[" <name> %":" <ref> %"]"
-<switch-arm>    ::= %"[" %"-"? <number> %":" <name> %"]"
-<default-block> ::= %"default" %":" <name>
+<phi-arm>       @nospace @space($3) ::= %"[" <name> %":" <ref> %"]"
+<switch-arm>    @nospace @space($4) ::= %"[" %"-"? <number> %":" <name> %"]"
+<default-block> @nospace($1) ::= %"default" %":" <name>
 
 <meta> ::= <loc> | <origin> | <annot>
 
-<loc> ::= %"!" %"loc" %"(" <signed-int> (%"," <signed-int>)* %")"
+<loc> @nospace($1) @nospace($2) @nospace($3) @nospace($4) @nospace($5) ::=
+%"!" %"loc" %"(" <signed-int> (%"," <signed-int>)* %")"
 
-<origin> ::= %"!" %"origin" %"(" <origin-kind> %"," %STRING_LIT (%"," <signed-int>)* %")"
+<origin> @nospace($1) @nospace($2) @nospace($3) @nospace($4) @nospace($6) @nospace($7) ::=
+%"!" %"origin" %"(" <origin-kind> %"," %STRING_LIT (%"," <signed-int>)* %")"
 
-<signed-int> ::= %"-"? <int>
+<signed-int> @nospace($1) ::= %"-"? <int>
 
 <origin-kind> ::= %"source" | %"inlined" | %"expanded" | %"lowered"
                 | %"generated"
 
-<annot> ::= %"!" <ns-key> %"(" <annot-value> <provenance>? %")"
+<annot> @nospace($1) @nospace($2) @nospace($3) @nospace($5) ::=
+%"!" <ns-key> %"(" <annot-value> <provenance>? %")"
 
 <provenance> ::= %"from" <name>
 
-<ns-key> ::= <name> %"." <name>
+<ns-key> @nospace ::= <name> %"." <name>
 
-<annot-value> ::= %"true" | %"false" | <int> | %"-" <int> | %STRING_LIT
+<annot-value> @nospace($1) ::= %"true" | %"false" | <int> | %"-" <int> | %STRING_LIT
                 | <typelang-type>
                 | <ref>
 
 <ref> ::= <value> | <local-ref> | <global>
 
-<value>     ::= %"%" <name>
-<local-ref> ::= %"$" <name>
-<global>    ::= %"@" <name>
+<value>     @nospace ::= %"%" <name>
+<local-ref> @nospace ::= %"$" <name>
+<global>    @nospace ::= %"@" <name>
 
-<dotted-name> ::= <name> ((%"." | %"-") (<name> | <int>))*
+<dotted-name> @nospace ::= <name> ((%"." | %"-") (<name> | <int>))*
 
 <int>    ::= %INT_LIT
 <number> ::= %INT_LIT | %FLOAT_LIT
@@ -113,6 +133,7 @@
          | %"sizeof" | %"alignof" | %"offsetof"
          | %"global" | %"func" | %"local" | %"block"
          | %"static" | %"extern" | %"default" | %"from"
+         | %"mutable" | %"immutable" | %"const"
          | %"loc" | %"origin"
          | %"source" | %"inlined" | %"expanded" | %"lowered" | %"generated"
          | %"true" | %"false"

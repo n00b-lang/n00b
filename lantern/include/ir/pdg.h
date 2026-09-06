@@ -38,8 +38,6 @@ uint32_t             ir_pdg_in_count(const ir_pdg_t *g, ir_instr_t *in);
 const ir_dep_edge_t *ir_pdg_in_at(const ir_pdg_t *g, ir_instr_t *in,
                                   uint32_t i);
 
-bool        ir_control_dependent(const ir_pdg_t *g, ir_block_t *b,
-                                 ir_block_t *on);
 uint32_t    ir_controllers_of(const ir_pdg_t *g, ir_block_t *b);
 ir_block_t *ir_controller_at(const ir_pdg_t *g, ir_block_t *b, uint32_t i);
 

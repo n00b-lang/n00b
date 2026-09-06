@@ -5,98 +5,27 @@
 #include <string.h>
 
 #include "th_internal.h"
-
-typedef struct {
-    char  *p;
-    size_t len;
-    size_t cap;
-} pb;
-
-static void pb_put(pb *b, const char *s, size_t n)
-{
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 128;
-
-        while (cap < b->len + n + 1) {
-            cap *= 2;
-        }
-
-        char *q = realloc(b->p, cap);
-
-        if (!q) {
-            return;
-        }
-        b->p   = q;
-        b->cap = cap;
-    }
-    memcpy(b->p + b->len, s, n);
-    b->len += n;
-    b->p[b->len] = 0;
-}
-
-static void pb_str(pb *b, const char *s)
-{
-    pb_put(b, s, strlen(s));
-}
-
-static void pb_fmt(pb *b, const char *fmt, ...)
-{
-    va_list ap;
-    va_list copy;
-
-    va_start(ap, fmt);
-    va_copy(copy, ap);
-
-    int n = vsnprintf(nullptr, 0, fmt, ap);
-
-    va_end(ap);
-
-    if (n < 0) {
-        va_end(copy);
-
-        return;
-    }
-
-    if (b->len + (size_t)n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 128;
-
-        while (cap < b->len + (size_t)n + 1) {
-            cap *= 2;
-        }
-
-        char *q = realloc(b->p, cap);
-
-        if (!q) {
-            va_end(copy);
-
-            return;
-        }
-        b->p   = q;
-        b->cap = cap;
-    }
-    vsnprintf(b->p + b->len, (size_t)n + 1, fmt, copy);
-    va_end(copy);
-    b->len += (size_t)n;
-}
+#include "lib/list.h"
+#include "lib/option.h"
 
 typedef struct {
     th_ctx *ctx;
     size_t  depth;
 } pctx;
 
-static void varname(pb *b, size_t depth, uint64_t pos)
+static void varname(ncc_buffer_t *b, size_t depth, uint64_t pos)
 {
     static const char alpha[] = "abcdefghijklmnopqrstuvwxyz";
     uint64_t          n       = depth * 8 + pos;
 
-    pb_fmt(b, "%c", alpha[n % 26]);
+    ncc_buffer_printf(b, "%c", alpha[n % 26]);
 
     if (n >= 26) {
-        pb_fmt(b, "%" PRIu64, n / 26);
+        ncc_buffer_printf(b, "%" PRIu64, n / 26);
     }
 }
 
-static void emit(pctx *c, pb *b, const th_type *t);
+static void emit(pctx *c, ncc_buffer_t *b, const th_type *t);
 
 static const struct {
     const char *name;
@@ -125,161 +54,265 @@ static const char *mode_name(th_mode m)
 }
 
 typedef struct {
-    uint8_t *key;
-    size_t   keylen;
-    size_t   index;
+    char  *key;
+    size_t keylen;
+    size_t index;
 } ordered;
 
 static int cmp_ordered(const void *a, const void *b)
 {
     const ordered *x = a, *y = b;
-    th_slice       sx = {.p = x->key, .n = x->keylen};
-    th_slice       sy = {.p = y->key, .n = y->keylen};
+    th_slice       sx = {.p = (uint8_t *)x->key, .n = x->keylen};
+    th_slice       sy = {.p = (uint8_t *)y->key, .n = y->keylen};
 
     return th_cmp_slice(&sx, &sy);
 }
 
-static void emit_arg(pctx *c, pb *b, const th_arg *a)
+typedef enum {
+    W_TYPE,
+    W_LIT,
+    W_ARG,
+    W_ATTRS,
+    W_SEQTAIL,
+    W_DEPTH_DOWN,
+} wkind;
+
+typedef struct {
+    wkind          kind;
+    const th_type *t;
+    const th_arg  *arg;
+    const char    *p;
+    size_t         n;
+} witem;
+
+ncc_option_decl(witem);
+ncc_list_decl(witem);
+
+static void wpush(ncc_list_t(witem) *w, witem it)
+{
+    ncc_list_push(*w, it);
+}
+
+static void wlit(ncc_list_t(witem) *w, const char *s)
+{
+    wpush(w, (witem){.kind = W_LIT, .p = s, .n = strlen(s)});
+}
+
+static void wtext(ncc_list_t(witem) *w, const char *s, size_t n)
+{
+    wpush(w, (witem){.kind = W_LIT, .p = s, .n = n});
+}
+
+static void wtype(ncc_list_t(witem) *w, const th_type *t)
+{
+    wpush(w, (witem){.kind = W_TYPE, .t = t});
+}
+
+static void emit_arg_scalar(ncc_buffer_t *b, const th_arg *a)
 {
     switch (a->kind) {
-    case TH_ARG_TYPE:
-        emit(c, b, a->type);
-        break;
     case TH_ARG_UINT:
-        pb_fmt(b, "%" PRIu64, a->u);
+        ncc_buffer_printf(b, "%" PRIu64, a->u);
         break;
     case TH_ARG_SINT:
-        pb_fmt(b, "%" PRId64, a->s);
+        ncc_buffer_printf(b, "%" PRId64, a->s);
         break;
     case TH_ARG_STR:
-        pb_str(b, "\"");
-        pb_put(b, a->str.p, a->str.n);
-        pb_str(b, "\"");
+        ncc_buffer_puts(b, "\"");
+        ncc_buffer_append(b, a->str.p, a->str.n);
+        ncc_buffer_puts(b, "\"");
+        break;
+    default:
         break;
     }
 }
 
-static void emit_record(pctx *c, pb *b, const th_type *t)
+static void emit_attrs(ncc_buffer_t *b, const th_type *t)
+{
+    ncc_buffer_puts(b, "; ");
+
+    bool first = true;
+
+    for (size_t i = 0; i < sizeof(attr_names) / sizeof(attr_names[0]); i++) {
+        if (t->ind.attrs & attr_names[i].bit) {
+            ncc_buffer_printf(b, "%s%s", first ? "" : ", ", attr_names[i].name);
+            first = false;
+        }
+    }
+    ncc_buffer_puts(b, "]");
+}
+
+static void emit_seqtail(ncc_buffer_t *b, const th_type *t)
+{
+    if (t->seq.has_extent) {
+        ncc_buffer_printf(b, "; %" PRIu64 "]", t->seq.extent);
+    }
+    else {
+        ncc_buffer_puts(b, "]");
+    }
+}
+
+static size_t *sorted_members(pctx *c, const th_type *t)
 {
     size_t   n = t->record.n;
-    ordered *o = calloc(n ? n : 1, sizeof(ordered));
+    ordered *o = ncc_alloc_array(ordered, n);
+    size_t  *ix = ncc_alloc_array(size_t, n);
 
     for (size_t i = 0; i < n; i++) {
         const char *nm  = t->record.members[i].name;
         size_t      len = strlen(nm);
         uint8_t     hdr[8];
-        pb          key = {0};
-        th_buf      enc = {0};
+        ncc_buffer_t key = {0};
+        ncc_buffer_t enc = {0};
 
         for (int k = 0; k < 8; k++) {
             hdr[k] = (uint8_t)(len >> (56 - 8 * k));
         }
-        pb_put(&key, (const char *)hdr, 8);
-        pb_put(&key, nm, len);
+        ncc_buffer_append(&key, (const char *)hdr, 8);
+        ncc_buffer_append(&key, nm, len);
 
         th_full_encode(c->ctx, t->record.members[i].type, &enc);
-        pb_put(&key, (const char *)enc.p, enc.len);
-        th_buf_free(&enc);
+        ncc_buffer_append(&key, enc.data, enc.byte_len);
+        ncc_buffer_release(&enc);
 
-        o[i].key    = (uint8_t *)key.p;
-        o[i].keylen = key.len;
+        o[i].key    = key.data;
+        o[i].keylen = key.byte_len;
         o[i].index  = i;
     }
     qsort(o, n, sizeof(ordered), cmp_ordered);
 
-    pb_str(b, "(");
-
     for (size_t i = 0; i < n; i++) {
-        const th_member *m = &t->record.members[o[i].index];
-
-        pb_fmt(b, "%s%s: ", i ? ", " : "", m->name);
-        emit(c, b, m->type);
+        ix[i] = o[i].index;
+        ncc_free(o[i].key);
     }
-    pb_str(b, ")");
+    ncc_free(o);
 
-    for (size_t i = 0; i < n; i++) {
-        free(o[i].key);
-    }
-    free(o);
+    return ix;
 }
 
-static void emit_function(pctx *c, pb *b, const th_type *t)
-{
-    pb_str(b, "(");
-
-    bool first = true;
-
-    for (size_t i = 0; i < t->fn.np; i++) {
-        pb_str(b, first ? "" : ", ");
-        first = false;
-        pb_str(b, mode_name(t->fn.params[i].mode));
-        emit(c, b, t->fn.params[i].type);
-    }
-
-    if (t->fn.rest) {
-        pb_str(b, first ? "" : ", ");
-        first = false;
-        pb_str(b, mode_name(t->fn.rest->mode));
-        pb_str(b, "*");
-        emit(c, b, t->fn.rest->type);
-    }
-
-    if (t->fn.nkw) {
-        size_t      n = t->fn.nkw;
-        th_kwparam *k = calloc(n, sizeof(th_kwparam));
-
-        memcpy(k, t->fn.kw, n * sizeof(th_kwparam));
-        qsort(k, n, sizeof(th_kwparam), th_cmp_kw);
-
-        for (size_t i = 0; i < n; i++) {
-            pb_str(b, first ? "" : ", ");
-            first = false;
-            pb_fmt(b, "%s: %s", k[i].name, mode_name(k[i].mode));
-            emit(c, b, k[i].type);
-        }
-        free(k);
-    }
-    pb_str(b, ") -> ");
-    emit(c, b, t->fn.ret);
-}
-
-static void emit_sum(pctx *c, pb *b, const th_type *t)
+static size_t *sorted_arms(pctx *c, const th_type *t)
 {
     size_t   n = t->sum.n;
-    ordered *o = calloc(n ? n : 1, sizeof(ordered));
+    ordered *o = ncc_alloc_array(ordered, n);
+    size_t  *ix = ncc_alloc_array(size_t, n);
 
     for (size_t i = 0; i < n; i++) {
-        th_buf enc = {0};
+        ncc_buffer_t enc = {0};
 
         th_full_encode(c->ctx, t->sum.arms[i], &enc);
-        o[i].key    = enc.p;
-        o[i].keylen = enc.len;
+        o[i].key    = enc.data;
+        o[i].keylen = enc.byte_len;
         o[i].index  = i;
     }
     qsort(o, n, sizeof(ordered), cmp_ordered);
 
-    const char *op = t->sum.comb == TH_UNION ? " | " : " & ";
-
-    pb_str(b, "(");
-
     for (size_t i = 0; i < n; i++) {
-        pb_str(b, i ? op : "");
-        emit(c, b, t->sum.arms[o[i].index]);
+        ix[i] = o[i].index;
+        ncc_free(o[i].key);
     }
-    pb_str(b, ")");
+    ncc_free(o);
 
-    for (size_t i = 0; i < n; i++) {
-        free(o[i].key);
-    }
-    free(o);
+    return ix;
 }
 
-static void emit(pctx *c, pb *b, const th_type *t)
+static void plan_record(pctx *c, ncc_buffer_t *b, ncc_list_t(witem) *w, const th_type *t)
+{
+    size_t  n  = t->record.n;
+    size_t *ix = sorted_members(c, t);
+
+    ncc_buffer_puts(b, "(");
+    wlit(w, ")");
+
+    for (size_t k = n; k-- > 0;) {
+        const th_member *m = &t->record.members[ix[k]];
+
+        wtype(w, m->type);
+        wlit(w, ": ");
+        wtext(w, m->name, strlen(m->name));
+
+        if (k) {
+            wlit(w, ", ");
+        }
+    }
+    ncc_free(ix);
+}
+
+static void plan_sum(pctx *c, ncc_buffer_t *b, ncc_list_t(witem) *w, const th_type *t)
+{
+    size_t      n  = t->sum.n;
+    size_t     *ix = sorted_arms(c, t);
+    const char *op = t->sum.comb == TH_UNION ? " | " : " & ";
+
+    ncc_buffer_puts(b, "(");
+    wlit(w, ")");
+
+    for (size_t k = n; k-- > 0;) {
+        wtype(w, t->sum.arms[ix[k]]);
+
+        if (k) {
+            wlit(w, op);
+        }
+    }
+    ncc_free(ix);
+}
+
+static void plan_function(pctx *c, ncc_buffer_t *b, ncc_list_t(witem) *w, const th_type *t)
+{
+    (void)c;
+
+    th_kwparam *kw = nullptr;
+
+    if (t->fn.nkw) {
+        kw = ncc_alloc_array(th_kwparam, t->fn.nkw);
+        memcpy(kw, t->fn.kw, t->fn.nkw * sizeof(th_kwparam));
+        qsort(kw, t->fn.nkw, sizeof(th_kwparam), th_cmp_kw);
+    }
+
+    ncc_buffer_puts(b, "(");
+
+    wtype(w, t->fn.ret);
+    wlit(w, ") -> ");
+
+    size_t slot = t->fn.np + (t->fn.rest ? 1 : 0) + t->fn.nkw;
+
+    for (size_t k = t->fn.nkw; k-- > 0;) {
+        wtype(w, kw[k].type);
+        wlit(w, mode_name(kw[k].mode));
+        wlit(w, ": ");
+        wtext(w, kw[k].name, strlen(kw[k].name));
+
+        if (--slot) {
+            wlit(w, ", ");
+        }
+    }
+    ncc_free(kw);
+
+    if (t->fn.rest) {
+        wtype(w, t->fn.rest->type);
+        wlit(w, "*");
+        wlit(w, mode_name(t->fn.rest->mode));
+
+        if (--slot) {
+            wlit(w, ", ");
+        }
+    }
+
+    for (size_t k = t->fn.np; k-- > 0;) {
+        wtype(w, t->fn.params[k].type);
+        wlit(w, mode_name(t->fn.params[k].mode));
+
+        if (--slot) {
+            wlit(w, ", ");
+        }
+    }
+}
+
+static void expand(pctx *c, ncc_buffer_t *b, ncc_list_t(witem) *w, const th_type *t)
 {
     t = th_resolve_c(t);
 
     if (!t) {
-        pb_str(b, "?");
+        ncc_buffer_puts(b, "?");
 
         return;
     }
@@ -295,125 +328,112 @@ static void emit(pctx *c, pb *b, const th_type *t)
         if (!t->named.is_variant && all_types
             && t->named.nlen == strlen(TH_TUPLE)
             && !memcmp(t->named.name, TH_TUPLE, t->named.nlen)) {
-            pb_str(b, "t(");
+            ncc_buffer_puts(b, "t(");
+            wlit(w, ")");
 
-            for (size_t i = 0; i < t->named.nargs; i++) {
-                pb_str(b, i ? ", " : "");
-                emit(c, b, t->named.args[i].type);
+            for (size_t k = t->named.nargs; k-- > 0;) {
+                wtype(w, t->named.args[k].type);
+
+                if (k) {
+                    wlit(w, ", ");
+                }
             }
-            pb_str(b, ")");
 
             return;
         }
 
         if (t->named.is_variant) {
-            pb_str(b, "variant ");
+            ncc_buffer_puts(b, "variant ");
         }
-        pb_put(b, t->named.name, t->named.nlen);
+        ncc_buffer_append(b, t->named.name, t->named.nlen);
 
-        if (t->named.nargs) {
-            pb_str(b, "[");
+        if (!t->named.nargs) {
+            return;
+        }
+        ncc_buffer_puts(b, "[");
+        wlit(w, "]");
 
-            for (size_t i = 0; i < t->named.nargs; i++) {
-                pb_str(b, i ? ", " : "");
-                emit_arg(c, b, &t->named.args[i]);
+        for (size_t k = t->named.nargs; k-- > 0;) {
+            wpush(w, (witem){.kind = W_ARG, .arg = &t->named.args[k]});
+
+            if (k) {
+                wlit(w, ", ");
             }
-            pb_str(b, "]");
         }
 
         return;
     }
 
     case TH_BITINT:
-        pb_fmt(b, "%s[%" PRIu64 "]",
+        ncc_buffer_printf(b, "%s[%" PRIu64 "]",
                t->bitint.is_signed ? "bitint" : "ubitint", t->bitint.width);
 
         return;
 
-    case TH_INDIRECTION: {
+    case TH_INDIRECTION:
         for (size_t i = 0; i < sizeof(sugar) / sizeof(sugar[0]); i++) {
             if (sugar[i].attrs == t->ind.attrs) {
-                pb_fmt(b, "%s[", sugar[i].name);
-                emit(c, b, t->ind.referent);
-                pb_str(b, "]");
+                ncc_buffer_printf(b, "%s[", sugar[i].name);
+                wlit(w, "]");
+                wtype(w, t->ind.referent);
 
                 return;
             }
         }
-        pb_str(b, "ref[");
-        emit(c, b, t->ind.referent);
-        pb_str(b, "; ");
-
-        bool first = true;
-
-        for (size_t i = 0; i < sizeof(attr_names) / sizeof(attr_names[0]);
-             i++) {
-            if (t->ind.attrs & attr_names[i].bit) {
-                pb_fmt(b, "%s%s", first ? "" : ", ", attr_names[i].name);
-                first = false;
-            }
-        }
-        pb_str(b, "]");
+        ncc_buffer_puts(b, "ref[");
+        wpush(w, (witem){.kind = W_ATTRS, .t = t});
+        wtype(w, t->ind.referent);
 
         return;
-    }
 
     case TH_SEQUENCE:
-        pb_str(b, "array[");
-        emit(c, b, t->seq.elem);
-
-        if (t->seq.has_extent) {
-            pb_fmt(b, "; %" PRIu64 "]", t->seq.extent);
-        }
-        else {
-            pb_str(b, "]");
-        }
+        ncc_buffer_puts(b, "array[");
+        wpush(w, (witem){.kind = W_SEQTAIL, .t = t});
+        wtype(w, t->seq.elem);
 
         return;
 
     case TH_RECORD:
-        emit_record(c, b, t);
+        plan_record(c, b, w, t);
 
         return;
 
     case TH_FUNCTION:
-        emit_function(c, b, t);
+        plan_function(c, b, w, t);
 
         return;
 
-    case TH_BINDER: {
-        pb_str(b, "forall[");
+    case TH_BINDER:
+        ncc_buffer_puts(b, "forall[");
 
         for (uint64_t i = 0; i < t->binder.arity; i++) {
-            pb_str(b, i ? ", `" : "`");
+            ncc_buffer_puts(b, i ? ", `" : "`");
             varname(b, c->depth, i);
         }
-        pb_str(b, "] ");
+        ncc_buffer_puts(b, "] ");
         c->depth++;
-        emit(c, b, t->binder.body);
-        c->depth--;
+        wpush(w, (witem){.kind = W_DEPTH_DOWN});
+        wtype(w, t->binder.body);
 
         return;
-    }
 
-    case TH_BOUND: {
-        pb_str(b, "`");
+    case TH_BOUND:
+        ncc_buffer_puts(b, "`");
 
         if (t->bound.distance == 0 || t->bound.distance > c->depth) {
-            pb_fmt(b, "?%" PRIu64, t->bound.position);
+            ncc_buffer_printf(b, "?%" PRIu64, t->bound.position);
 
             return;
         }
         varname(b, c->depth - t->bound.distance, t->bound.position);
 
         return;
-    }
 
     case TH_VAR:
-        pb_str(b, "`");
+        ncc_buffer_puts(b, "`");
 
         if (!t->var.has_index) {
-            pb_str(b, "?");
+            ncc_buffer_puts(b, "?");
 
             return;
         }
@@ -422,12 +442,120 @@ static void emit(pctx *c, pb *b, const th_type *t)
         return;
 
     case TH_SUM:
-        emit_sum(c, b, t);
+        plan_sum(c, b, w, t);
 
         return;
 
     default:
-        pb_str(b, "?");
+        ncc_buffer_puts(b, "?");
+    }
+}
+
+static void emit(pctx *c, ncc_buffer_t *b, const th_type *root)
+{
+    ncc_list_t(witem) w = ncc_list_new(witem);
+
+    wtype(&w, root);
+
+    while (w.len) {
+        witem it = ncc_option_get(ncc_list_pop(witem, w));
+
+        switch (it.kind) {
+        case W_LIT:
+            ncc_buffer_append(b, (const char *)it.p, it.n);
+            break;
+        case W_DEPTH_DOWN:
+            c->depth--;
+            break;
+        case W_ATTRS:
+            emit_attrs(b, it.t);
+            break;
+        case W_SEQTAIL:
+            emit_seqtail(b, it.t);
+            break;
+        case W_ARG:
+            if (it.arg->kind == TH_ARG_TYPE) {
+                wtype(&w, it.arg->type);
+            }
+            else {
+                emit_arg_scalar(b, it.arg);
+            }
+            break;
+        case W_TYPE:
+            expand(c, b, &w, it.t);
+            break;
+        }
+    }
+
+    ncc_list_free(w);
+}
+
+static void emit_constraint(pctx *c, ncc_buffer_t *b, const th_constraint *k)
+{
+    switch (k->kind) {
+    case TH_CON_IMPLEMENTS:
+        ncc_buffer_puts(b, k->iface);
+        break;
+
+    case TH_CON_UNIFIES:
+        ncc_buffer_puts(b, "== ");
+        emit(c, b, k->target);
+        break;
+
+    case TH_CON_EXCLUDES:
+        ncc_buffer_puts(b, "!= ");
+        emit(c, b, k->target);
+        break;
+
+    case TH_CON_PROMOTES:
+        ncc_buffer_puts(b, "promotes_to ");
+        emit(c, b, k->target);
+        break;
+
+    case TH_CON_ONE_OF:
+        ncc_buffer_puts(b, "one_of(");
+
+        for (size_t i = 0; i < k->one_of.n; i++) {
+            if (i) {
+                ncc_buffer_puts(b, ", ");
+            }
+            emit(c, b, k->one_of.types[i]);
+        }
+        ncc_buffer_puts(b, ")");
+        break;
+
+    case TH_CON_HAS_FIELD:
+        ncc_buffer_printf(b, "has_field(%s: ", k->field.name);
+        emit(c, b, k->field.type);
+        ncc_buffer_puts(b, ")");
+        break;
+
+    case TH_CON_HAS_PARAM:
+        ncc_buffer_printf(b, "has_param(%llu, ",
+                          (unsigned long long)k->param.index);
+        emit(c, b, k->param.type);
+        ncc_buffer_puts(b, ")");
+        break;
+    }
+}
+
+static void emit_where(pctx *c, ncc_buffer_t *b, th_type *type)
+{
+    const th_type *r = th_resolve_c(type);
+
+    if (!r || r->kind != TH_VAR || !r->var.cons.len) {
+        return;
+    }
+
+    ncc_buffer_puts(b, " where `");
+    ncc_buffer_puts(b, r->var.name ? r->var.name : "t");
+    ncc_buffer_puts(b, ": ");
+
+    for (size_t i = 0; i < r->var.cons.len; i++) {
+        if (i) {
+            ncc_buffer_puts(b, " + ");
+        }
+        emit_constraint(c, b, &r->var.cons.data[i]);
     }
 }
 
@@ -439,17 +567,18 @@ const char *th_print(th_ctx *ctx, th_type *type)
     th_normalize(type);
 
     pctx  c = {.ctx = ctx};
-    pb    b = {0};
+    ncc_buffer_t b = {0};
 
     emit(&c, &b, type);
+    emit_where(&c, &b, type);
 
-    if (!b.p) {
+    if (!b.data) {
         return th_strdup(ctx, "", 0);
     }
 
-    char *out = th_strdup(ctx, b.p, b.len);
+    char *out = th_strdup(ctx, b.data, b.byte_len);
 
-    free(b.p);
+    ncc_buffer_release(&b);
 
     return out;
 }

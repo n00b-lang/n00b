@@ -32,7 +32,8 @@ restart:
 
     if (ncc_scan_peek_byte(s, 0) == '/'
         && ncc_scan_peek_byte(s, 1) == '*') {
-        ncc_scan_skip_block_comment(s, "/*", "*/");
+        ncc_scan_skip_block_comment(s, NCC_STRING_STATIC("/*"),
+                                    NCC_STRING_STATIC("*/"));
         goto restart;
     }
 
@@ -67,7 +68,7 @@ restart:
         if (ncc_option_is_set(id_val)) {
             ncc_string_t id_str = ncc_option_get(id_val);
 
-            int64_t kw_id = ncc_scan_terminal_id(s, id_str.data);
+            int64_t kw_id = ncc_scan_terminal_id(s, id_str);
 
             if (kw_id != NCC_TOK_OTHER) {
                 ncc_scan_emit(s, (int32_t)kw_id, id_val);
@@ -80,14 +81,15 @@ restart:
         }
     }
 
-    static const char *ops3[] = {
-        "<<=", ">>=", "...", nullptr,
+    static const ncc_string_t ops3[] = {
+        NCC_STRING_STATIC("<<="), NCC_STRING_STATIC(">>="),
+        NCC_STRING_STATIC("..."),  {0},
     };
 
-    for (const char **op = ops3; *op; op++) {
-        if (ncc_scan_peek_byte(s, 0) == (uint8_t)(*op)[0]
-            && ncc_scan_peek_byte(s, 1) == (uint8_t)(*op)[1]
-            && ncc_scan_peek_byte(s, 2) == (uint8_t)(*op)[2]) {
+    for (const ncc_string_t *op = ops3; op->data; op++) {
+        if (ncc_scan_peek_byte(s, 0) == (uint8_t)op->data[0]
+            && ncc_scan_peek_byte(s, 1) == (uint8_t)op->data[1]
+            && ncc_scan_peek_byte(s, 2) == (uint8_t)op->data[2]) {
             int64_t tid = ncc_scan_terminal_id(s, *op);
 
             if (tid != NCC_TOK_OTHER) {
@@ -98,15 +100,23 @@ restart:
         }
     }
 
-    static const char *ops2[] = {
-        "->", "++", "--", "<<", ">>", "<=", ">=", "==", "!=",
-        "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "^=",
-        "|=", "::", nullptr,
+    static const ncc_string_t ops2[] = {
+        NCC_STRING_STATIC("->"), NCC_STRING_STATIC("++"),
+        NCC_STRING_STATIC("--"), NCC_STRING_STATIC("<<"),
+        NCC_STRING_STATIC(">>"), NCC_STRING_STATIC("<="),
+        NCC_STRING_STATIC(">="), NCC_STRING_STATIC("=="),
+        NCC_STRING_STATIC("!="), NCC_STRING_STATIC("&&"),
+        NCC_STRING_STATIC("||"), NCC_STRING_STATIC("+="),
+        NCC_STRING_STATIC("-="), NCC_STRING_STATIC("*="),
+        NCC_STRING_STATIC("/="), NCC_STRING_STATIC("%="),
+        NCC_STRING_STATIC("&="), NCC_STRING_STATIC("^="),
+        NCC_STRING_STATIC("|="), NCC_STRING_STATIC("::"),
+        {0},
     };
 
-    for (const char **op = ops2; *op; op++) {
-        if (ncc_scan_peek_byte(s, 0) == (uint8_t)(*op)[0]
-            && ncc_scan_peek_byte(s, 1) == (uint8_t)(*op)[1]) {
+    for (const ncc_string_t *op = ops2; op->data; op++) {
+        if (ncc_scan_peek_byte(s, 0) == (uint8_t)op->data[0]
+            && ncc_scan_peek_byte(s, 1) == (uint8_t)op->data[1]) {
             int64_t tid = ncc_scan_terminal_id(s, *op);
 
             if (tid != NCC_TOK_OTHER) {
@@ -369,13 +379,13 @@ test_bnf_preprocess(void)
 {
     printf("Test: BNF preprocessing...\n");
 
-    ncc_string_t input = ncc_string_from_cstr("rule = a | b // comment\nrule2 = c");
+    ncc_string_t input = NCC_STRING_STATIC("rule = a | b // comment\nrule2 = c");
     ncc_string_t stripped = ncc_bnf_strip_comments(input);
 
     assert(stripped.data != nullptr);
     printf("  Strip comments: \"%.*s\"\n", (int)stripped.u8_bytes, stripped.data);
 
-    ncc_string_t padded = ncc_string_from_cstr("  hello  \n  world  \n");
+    ncc_string_t padded = NCC_STRING_STATIC("  hello  \n  world  \n");
     ncc_string_t trimmed = ncc_bnf_trim_lines(padded);
 
     assert(trimmed.data != nullptr);

@@ -3,7 +3,6 @@
 #include "parse/types.h"
 #include "parse/parse_tree.h"
 #include "lib/list.h"
-#include "tdesc.h"
 
 typedef enum {
     NCC_SYM_VARIABLE,
@@ -33,7 +32,7 @@ struct ncc_sym_entry_t {
     ncc_sym_mutability_t     mutability;
     int32_t                  scope_depth;
     ncc_parse_tree_t        *decl_node;
-    tdesc_t                 *type;
+    th_type                 *type;
     ncc_sym_entry_t         *shadowed;
     ncc_sym_entry_t         *next_in_scope;
     ncc_scope_t             *scope;
@@ -46,6 +45,9 @@ struct ncc_sym_entry_t {
     bool                     is_method;
     bool                     is_static;
     bool                     is_abstract;
+    uint32_t                 uses;
+    ncc_string_t             direction;
+    ncc_string_t             constraints;
     void                    *user_data;
 };
 
@@ -87,6 +89,10 @@ ncc_namespace_t *ncc_symtab_ns(ncc_symtab_t *st, ncc_string_t ns_name);
 void ncc_symtab_push_scope(ncc_symtab_t *st, ncc_string_t ns_name,
                            ncc_string_t scope_name);
 void ncc_symtab_pop_scope(ncc_symtab_t *st, ncc_string_t ns_name);
+
+void ncc_symtab_enter_scope(ncc_symtab_t *st, ncc_string_t ns_name,
+                            ncc_scope_t *scope);
+void ncc_symtab_leave_scope(ncc_symtab_t *st, ncc_string_t ns_name);
 
 ncc_sym_entry_t *ncc_symtab_add(ncc_symtab_t *st, ncc_string_t ns_name,
                                 ncc_string_t name, ncc_sym_kind_t kind,

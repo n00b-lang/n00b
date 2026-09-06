@@ -4,7 +4,6 @@
 #include "ir/ir.h"
 
 typedef enum : uint8_t {
-    IR_SEV_FATAL,
     IR_SEV_ERROR,
     IR_SEV_WARNING,
     IR_SEV_NOTE,
@@ -89,7 +88,6 @@ bool       ir_diag_note(ir_diags_t *d, ir_severity_t sev, ir_diagcode_t code,
 uint32_t         ir_diags_count(const ir_diags_t *d);
 const ir_diag_t *ir_diags_at(ir_diags_t *d, uint32_t i);
 bool             ir_diags_failed(const ir_diags_t *d);
-bool             ir_diags_fatal(const ir_diags_t *d);
 uint32_t         ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev);
 bool             ir_diags_merge(ir_diags_t *dst, ir_diags_t *src);
 

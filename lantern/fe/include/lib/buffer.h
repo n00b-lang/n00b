@@ -68,6 +68,10 @@ ncc_buffer_ensure(ncc_buffer_t *buf, size_t extra)
 static inline void
 ncc_buffer_append(ncc_buffer_t *buf, const char *data, size_t len)
 {
+    if (!data || !len) {
+        return;
+    }
+
     ncc_buffer_ensure(buf, len + 1);
     memcpy(buf->data + buf->byte_len, data, len);
     buf->byte_len += len;
@@ -85,7 +89,9 @@ ncc_buffer_putc(ncc_buffer_t *buf, char c)
 static inline void
 ncc_buffer_puts(ncc_buffer_t *buf, const char *s)
 {
-    ncc_buffer_append(buf, s, strlen(s));
+    if (s) {
+        ncc_buffer_append(buf, s, strlen(s));
+    }
 }
 
 static inline void
@@ -137,12 +143,25 @@ ncc_buffer_take(ncc_buffer_t *buf)
 }
 
 static inline void
-ncc_buffer_free(ncc_buffer_t *buf)
+ncc_buffer_release(ncc_buffer_t *buf)
 {
     if (!buf) {
         return;
     }
 
     ncc_free(buf->data);
+    buf->data      = nullptr;
+    buf->byte_len  = 0;
+    buf->alloc_len = 0;
+}
+
+static inline void
+ncc_buffer_free(ncc_buffer_t *buf)
+{
+    if (!buf) {
+        return;
+    }
+
+    ncc_buffer_release(buf);
     ncc_free(buf);
 }

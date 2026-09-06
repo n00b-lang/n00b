@@ -24,6 +24,7 @@ struct ncc_terminal_t {
 struct ncc_nonterm_t {
     ncc_string_t                    name;
     ncc_list_t(int32_t)             rule_ids;
+    int32_t                         unit;
     bool                            defined_here;
     ncc_walk_action_t               action;
     void                            *user_data;
@@ -62,24 +63,6 @@ struct ncc_rule_group_t {
     int32_t gid;
 };
 
-typedef struct {
-    int32_t rule_ix;
-    int16_t dot;
-    int16_t rule_len;
-} ncc_lr0_item_t;
-
-typedef struct {
-    int32_t items_start;
-    int32_t items_count;
-    int32_t gotos_start;
-    int32_t gotos_count;
-} ncc_lr0_state_t;
-
-typedef struct {
-    int32_t symbol;
-    int32_t dest_state;
-} ncc_lr0_goto_t;
-
 struct ncc_grammar_t {
     ncc_list_t(ncc_terminal_t)   named_terms;
     ncc_list_t(ncc_parse_rule_t) rules;
@@ -87,31 +70,16 @@ struct ncc_grammar_t {
     ncc_dict_t           *nt_map;
     ncc_dict_t           *terminal_map;
     int32_t                        default_start;
+    ncc_string_t                   tokenizer_name;
     uint32_t                       max_penalty;
     bool                           error_rules;
     bool                           finalized;
-    bool                           has_groups;
     bool                           hide_penalty_rewrites;
     bool                           hide_groups;
     int                            suspend_penalty_hiding;
     bool                           suspend_group_hiding;
     ncc_walk_action_t             default_action;
     void                          *tokenize_cb;
-
-    uint64_t *left_corner_sets;
-    int32_t   lc_words_per_nt;
-
-    ncc_lr0_item_t  *lr0_items;
-    int32_t           lr0_item_count;
-    int32_t          *lr0_rule_item_base;
-    ncc_lr0_state_t *lr0_states;
-    int32_t           lr0_state_count;
-    int32_t          *lr0_state_items;
-    int32_t           lr0_state_items_total;
-    ncc_lr0_goto_t  *lr0_gotos;
-    int32_t           lr0_goto_count;
-    int32_t           lr0_start_state;
-    int32_t          *lr0_predict_state;
 
     ncc_list_t(ncc_string_t) terminal_categories;
     bool                      has_terminal_categories;

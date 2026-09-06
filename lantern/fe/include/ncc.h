@@ -8,9 +8,8 @@
 #include <errno.h>
 
 typedef uint32_t ncc_codepoint_t;
-typedef int32_t  ncc_color_t;
 typedef unsigned __int128 ncc_uint128_t;
-typedef ncc_uint128_t ncc_hash_value_t;
+typedef uint64_t ncc_hash_value_t;
 typedef uint64_t ncc_size_t;
 
 typedef struct ncc_string_t     ncc_string_t;

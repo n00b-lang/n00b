@@ -2,6 +2,9 @@
 #include "parse/bnf.h"
 #include "parse/pwz.h"
 #include "parse/annotation.h"
+#include "parse/annot_args.h"
+#include "scanner/tokenizer.h"
+#include "internal/parse/annot_grammar.h"
 #include "internal/parse/grammar_internal.h"
 #include "scanner/scanner.h"
 #include "scanner/scan_builtins.h"
@@ -192,6 +195,7 @@ enum {
     BNF_TOK_AT         = NCC_TOK_START_ID + 17,
     BNF_TOK_DOLLAR     = NCC_TOK_START_ID + 18,
     BNF_TOK_COMMA      = NCC_TOK_START_ID + 19,
+    BNF_TOK_INT        = NCC_TOK_START_ID + 20,
 };
 
 static bool
@@ -229,7 +233,7 @@ bnf_scan(ncc_scanner_t *s)
     if (ch == ':') {
         ncc_scan_mark(s);
 
-        if (ncc_scan_match_str(s, "::=")) {
+        if (ncc_scan_match_str(s, NCC_STRING_STATIC("::="))) {
             ncc_scan_emit_marked(s, BNF_TOK_ASSIGN);
             return true;
         }
@@ -368,6 +372,26 @@ bnf_scan(ncc_scanner_t *s)
         }
     }
 
+    if (ch >= '0' && ch <= '9') {
+        ncc_scan_mark(s);
+
+        while (!ncc_scan_at_eof(s)) {
+            ncc_codepoint_t c = ncc_scan_peek(s, 0);
+
+            if (c < '0' || c > '9') {
+                break;
+            }
+
+            ncc_scan_advance(s);
+        }
+
+        ncc_string_t val = ncc_scan_extract(s);
+
+        ncc_scan_emit(s, BNF_TOK_INT,
+                       ncc_option_set(ncc_string_t, val));
+        return true;
+    }
+
     if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_') {
         ncc_scan_mark(s);
 
@@ -424,6 +448,9 @@ bnf_scan(ncc_scanner_t *s)
                            ncc_option_set(ncc_string_t, val));
             return true;
         }
+
+        ncc_scan_emit_marked(s, BNF_TOK_DOLLAR);
+        return true;
     }
 
     return true;
@@ -440,21 +467,17 @@ tok_str(ncc_token_info_t *tok)
 }
 
 static ncc_string_t
-tok_str_or(ncc_token_info_t *tok, const char *fallback)
+tok_str_or(ncc_token_info_t *tok, ncc_string_t fallback)
 {
     ncc_string_t s = tok_str(tok);
 
-    if (s.data) {
-        return s;
-    }
-
-    return ncc_string_from_cstr(fallback);
+    return s.data ? s : fallback;
 }
 
 static inline bool
-str_eq_lit(ncc_string_t s, const char *lit)
+str_eq_lit(ncc_string_t s, ncc_string_t lit)
 {
-    return ncc_string_eq(s, ncc_string_from_cstr(lit));
+    return ncc_string_eq(s, lit);
 }
 
 typedef struct {
@@ -541,7 +564,7 @@ bnf_walk_atom(ncc_nt_node_t *pn, void *children, void *thunk)
 
     if (pn->rule_index == 0) {
         ncc_token_info_t *tok = (ncc_token_info_t *)kids[0];
-        ncc_string_t      val = tok_str_or(tok, "");
+        ncc_string_t      val = tok_str_or(tok, NCC_STRING_STATIC(""));
         size_t             len = val.u8_bytes;
         result                 = ncc_alloc_array(char, len + 3);
         result[0]              = 'L';
@@ -550,7 +573,7 @@ bnf_walk_atom(ncc_nt_node_t *pn, void *children, void *thunk)
     }
     else if (pn->rule_index == 1) {
         ncc_token_info_t *tok = (ncc_token_info_t *)kids[1];
-        ncc_string_t      val = tok_str_or(tok, "");
+        ncc_string_t      val = tok_str_or(tok, NCC_STRING_STATIC(""));
         size_t             len = val.u8_bytes;
         result                 = ncc_alloc_array(char, len + 3);
         result[0]              = 'N';
@@ -559,7 +582,7 @@ bnf_walk_atom(ncc_nt_node_t *pn, void *children, void *thunk)
     }
     else if (pn->rule_index == 2) {
         ncc_token_info_t *tok = (ncc_token_info_t *)kids[0];
-        ncc_string_t      val = tok_str_or(tok, "");
+        ncc_string_t      val = tok_str_or(tok, NCC_STRING_STATIC(""));
         size_t             len = val.u8_bytes;
         result                 = ncc_alloc_array(char, len + 3);
         result[0]              = 'C';
@@ -568,7 +591,7 @@ bnf_walk_atom(ncc_nt_node_t *pn, void *children, void *thunk)
     }
     else if (pn->rule_index == 3) {
         ncc_token_info_t *tok = (ncc_token_info_t *)kids[0];
-        ncc_string_t      val = tok_str_or(tok, "");
+        ncc_string_t      val = tok_str_or(tok, NCC_STRING_STATIC(""));
         size_t             len = val.u8_bytes;
         result                 = ncc_alloc_array(char, len + 3);
         result[0]              = 'T';
@@ -577,7 +600,7 @@ bnf_walk_atom(ncc_nt_node_t *pn, void *children, void *thunk)
     }
     else if (pn->rule_index == 4) {
         ncc_token_info_t *tok = (ncc_token_info_t *)kids[0];
-        ncc_string_t      val = tok_str_or(tok, "");
+        ncc_string_t      val = tok_str_or(tok, NCC_STRING_STATIC(""));
         size_t             len = val.u8_bytes;
         result                 = ncc_alloc_array(char, len + 3);
         result[0]              = 'K';
@@ -732,131 +755,34 @@ bnf_walk_expression(ncc_nt_node_t *pn, void *children, void *thunk)
     return bnf_result(BNF_LIST, result);
 }
 
-static ncc_string_t
-dup_str(ncc_string_t s)
-{
-    if (!s.data) {
-        return s;
-    }
+static const int64_t bnf_arg_excluded[] = {
+    BNF_TOK_LPAREN,
+    BNF_TOK_RPAREN,
+    BNF_TOK_NEWLINE,
+};
 
-    return ncc_string_from_raw(s.data, (int64_t)s.u8_bytes);
-}
+static const ncc_match_set_t bnf_arg_set = {
+    .ids    = bnf_arg_excluded,
+    .n      = sizeof bnf_arg_excluded / sizeof bnf_arg_excluded[0],
+    .negate = true,
+};
 
-static ncc_child_ref_t
-parse_child_ref(void *result)
-{
-    if (!result) {
-        return NCC_CHILD_NONE;
-    }
+static const char *bnf_src;
+static size_t      bnf_src_len;
+static char        bnf_bad_annot[192];
 
-    ncc_token_info_t *tok = (ncc_token_info_t *)result;
-    ncc_string_t      val = tok_str(tok);
-
-    if (tok->tid == BNF_TOK_DOLLAR) {
-        return NCC_CHILD_IX(val.data ? (int32_t)atoi(val.data) : -1);
-    }
-
-    if (tok->tid == BNF_TOK_NAME && val.data) {
-        return NCC_CHILD_NT(dup_str(val));
-    }
-
-    return NCC_CHILD_NONE;
-}
-
-static ncc_string_t
-arg_raw(bnf_list_t *args, size_t i)
-{
-    if (!args || i >= args->len) {
-        return (ncc_string_t){0};
-    }
-
-    return tok_str((ncc_token_info_t *)slist_get(args, i));
-}
-
-static ncc_string_t
-arg_str(bnf_list_t *args, size_t i)
-{
-    return dup_str(arg_raw(args, i));
-}
-
-static ncc_child_ref_t
-arg_ref(bnf_list_t *args, size_t i)
-{
-    if (!args || i >= args->len) {
-        return NCC_CHILD_NONE;
-    }
-
-    return parse_child_ref(slist_get(args, i));
-}
-
-static bool
-arg_is_literal(bnf_list_t *args, size_t i)
-{
-    if (!args || i >= args->len) {
-        return false;
-    }
-
-    ncc_token_info_t *tok = (ncc_token_info_t *)slist_get(args, i);
-
-    return tok && tok->tid == BNF_TOK_LITERAL;
-}
-
-static int32_t
-arg_int(bnf_list_t *args, size_t i, int32_t dflt)
-{
-    ncc_string_t s = arg_raw(args, i);
-
-    if (!s.data) {
-        return dflt;
-    }
-
-    return (int32_t)strtol(s.data, nullptr, 10);
-}
 
 static void *
-bnf_walk_annot_arg(ncc_nt_node_t *pn, void *children, void *thunk)
+bnf_walk_arg_ignore(ncc_nt_node_t *pn, void *children, void *thunk)
 {
     (void)pn;
     (void)thunk;
-    void **kids = (void **)children;
 
-    if (!kids) {
-        return nullptr;
+    if (children) {
+        ncc_free(children);
     }
 
-    void *tok = kids[0];
-    ncc_free(kids);
-    return tok;
-}
-
-static void *
-bnf_walk_arg_list(ncc_nt_node_t *pn, void *children, void *thunk)
-{
-    (void)thunk;
-    void **kids = (void **)children;
-
-    if (!kids) {
-        return bnf_result(BNF_LIST, slist_new());
-    }
-
-    bnf_list_t *result;
-
-    if (pn->rule_index == 0) {
-        result = slist_new();
-        slist_push(result, kids[0]);
-    }
-    else {
-        bnf_result_t *list_r = (bnf_result_t *)kids[2];
-        result = list_r ? (bnf_list_t *)list_r->data : slist_new();
-        slist_prepend(result, kids[0]);
-
-        if (list_r) {
-            ncc_free(list_r);
-        }
-    }
-
-    ncc_free(kids);
-    return bnf_result(BNF_LIST, result);
+    return nullptr;
 }
 
 static void *
@@ -870,154 +796,37 @@ bnf_walk_annotation(ncc_nt_node_t *pn, void *children, void *thunk)
     }
 
     ncc_token_info_t *name_tok = (ncc_token_info_t *)kids[1];
-    bnf_result_t     *args_r   = nullptr;
-    bnf_list_t       *args     = nullptr;
-
-    if (pn->rule_index == 0) {
-        args_r = (bnf_result_t *)kids[3];
-        args   = args_r ? (bnf_list_t *)args_r->data : nullptr;
-    }
-
-    size_t            nargs = args ? args->len : 0;
     ncc_string_t      spelling = tok_str(name_tok);
     ncc_annotation_t *info = ncc_annot_new(ncc_annot_kind_from_name(spelling));
 
-    switch (info->kind) {
-    case NCC_ANNOT_SCOPE_OPEN:
-        info->scope_tag = arg_str(args, 0);
-        info->name_ref  = arg_ref(args, 1);
-        break;
+    if (pn->rule_index == 0 && !ncc_annot_building()) {
+        ncc_token_info_t *lp = (ncc_token_info_t *)kids[2];
+        ncc_token_info_t *rp = (ncc_token_info_t *)kids[4];
+        ncc_string_t      region = {0};
 
-    case NCC_ANNOT_DECLARES:
-        info->name_ref = arg_ref(args, 0);
-
-        if (nargs == 2) {
-            if (arg_is_literal(args, 1)) {
-                info->sym_kind = arg_str(args, 1);
-            }
-            else {
-                info->type_ref = arg_ref(args, 1);
-            }
+        if (lp && rp && bnf_src && rp->start_byte >= lp->end_byte
+            && rp->start_byte <= bnf_src_len) {
+            region = ncc_string_from_raw(bnf_src + lp->end_byte,
+                                         (int64_t)(rp->start_byte
+                                                   - lp->end_byte));
         }
-        else if (nargs >= 3) {
-            info->type_ref = arg_ref(args, 1);
 
-            if (arg_is_literal(args, 2)) {
-                info->sym_kind = arg_str(args, 2);
-            }
+        if (!ncc_annot_parse_args(info, region) && !bnf_bad_annot[0]) {
+            snprintf(bnf_bad_annot,
+                     sizeof(bnf_bad_annot),
+                     "@%s(%.*s)",
+                     spelling.data ? spelling.data : "?",
+                     (int)region.u8_bytes,
+                     region.data ? region.data : "");
         }
-        break;
-
-    case NCC_ANNOT_TYPE:
-        if (nargs >= 2) {
-            info->name_ref  = arg_ref(args, 0);
-            info->type_spec = arg_str(args, 1);
-        }
-        else {
-            info->kind     = NCC_ANNOT_TYPE_DECL;
-            info->name_ref = arg_ref(args, 0);
-        }
-        break;
-
-    case NCC_ANNOT_TYPE_DECL:
-        info->name_ref = arg_ref(args, 0);
-        break;
-
-    case NCC_ANNOT_ASSIGNS:
-        info->name_ref  = arg_ref(args, 0);
-        info->value_ref = arg_ref(args, 1);
-        break;
-
-    case NCC_ANNOT_BRANCH:
-        info->name_ref  = arg_ref(args, 0);
-        info->type_ref  = arg_ref(args, 1);
-        info->value_ref = arg_ref(args, 2);
-        break;
-
-    case NCC_ANNOT_SWITCH:
-    case NCC_ANNOT_LOOP:
-    case NCC_ANNOT_CALL:
-    case NCC_ANNOT_FIELD:
-    case NCC_ANNOT_METHOD:
-        info->name_ref = arg_ref(args, 0);
-        info->type_ref = arg_ref(args, 1);
-        break;
-
-    case NCC_ANNOT_JUMP:
-    case NCC_ANNOT_TOKENIZER:
-        info->scope_tag = arg_str(args, 0);
-        break;
-
-    case NCC_ANNOT_CAPTURE:
-        info->scope_tag      = arg_str(args, 0);
-        info->capture_by_tag = str_eq_lit(arg_raw(args, 1), "dynamic");
-        break;
-
-    case NCC_ANNOT_SOFTLINE:
-    case NCC_ANNOT_HARDLINE:
-    case NCC_ANNOT_NEWLINE:
-    case NCC_ANNOT_SPACE:
-    case NCC_ANNOT_NOSPACE:
-    case NCC_ANNOT_ALIGN:
-    case NCC_ANNOT_INHERITS:
-    case NCC_ANNOT_IMPLEMENTS:
-    case NCC_ANNOT_VARREF:
-    case NCC_ANNOT_RECORD:
-        info->name_ref = arg_ref(args, 0);
-        break;
-
-    case NCC_ANNOT_INFER:
-        info->infer_expr = arg_str(args, 0);
-        break;
-
-    case NCC_ANNOT_ADT:
-        info->adt_kind        = arg_str(args, 0);
-        info->name_ref        = arg_ref(args, 1);
-        info->scope_tag       = arg_str(args, 2);
-        info->adt_keyword_ref = arg_ref(args, 3);
-        break;
-
-    case NCC_ANNOT_VISIBILITY:
-        info->visibility_spec = arg_str(args, 0);
-        break;
-
-    case NCC_ANNOT_OPERATOR:
-        info->op_kind = arg_str(args, 0);
-        break;
-
-    case NCC_ANNOT_LITERAL:
-        info->op_kind  = arg_str(args, 0);
-        info->type_ref = arg_ref(args, 1);
-        break;
-
-    case NCC_ANNOT_NOTRIVIA:
-        info->notrivia_ref = arg_ref(args, 0);
-        break;
-
-    case NCC_ANNOT_PENALTY:
-        info->penalty_cost = arg_int(args, 0, 0);
-
-        if (info->penalty_cost <= 0) {
-            info->penalty_cost = 1;
-        }
-        break;
-
-    case NCC_ANNOT_DISAMBIG:
-        info->disambig_predicate = arg_str(args, 0);
-        info->disambig_cost      = arg_int(args, 1, 0);
-
-        if (info->disambig_cost <= 0) {
-            info->disambig_cost = 1;
-        }
-        break;
-
-    default:
-        break;
     }
-
-    if (args_r) {
-        slist_free(args);
-        ncc_free(args_r);
+    else if (pn->rule_index == 1 && !ncc_annot_building()
+             && ncc_annot_arg_grammar(info->kind).data
+             && !bnf_bad_annot[0]) {
+        snprintf(bnf_bad_annot,
+                 sizeof(bnf_bad_annot),
+                 "@%s() with no arguments",
+                 spelling.data ? spelling.data : "?");
     }
 
     ncc_free(kids);
@@ -1068,7 +877,7 @@ bnf_walk_rule(ncc_nt_node_t *pn, void *children, void *thunk)
     bnf_result_t      *annots_r   = (bnf_result_t *)kids[3];
     bnf_result_t      *expr_r     = (bnf_result_t *)kids[5];
 
-    ncc_string_t  name_s    = tok_str_or(name_tok, "?");
+    ncc_string_t  name_s    = tok_str_or(name_tok, NCC_STRING_STATIC("?"));
     ncc_string_t *heap_name = ncc_alloc(ncc_string_t);
     *heap_name = name_s;
 
@@ -1184,8 +993,6 @@ build_bnf_grammar(void)
     int64_t LPAREN     = BNF_TOK_LPAREN;
     int64_t RPAREN     = BNF_TOK_RPAREN;
     int64_t AT         = BNF_TOK_AT;
-    int64_t DOLLAR     = BNF_TOK_DOLLAR;
-    int64_t COMMA      = BNF_TOK_COMMA;
 
     ncc_string_t s_syntax      = NCC_STRING_STATIC("syntax");
     ncc_string_t s_rule        = NCC_STRING_STATIC("rule");
@@ -1195,8 +1002,8 @@ build_bnf_grammar(void)
     ncc_string_t s_atom        = NCC_STRING_STATIC("atom");
     ncc_string_t s_annotations = NCC_STRING_STATIC("annotations");
     ncc_string_t s_annotation  = NCC_STRING_STATIC("annotation");
-    ncc_string_t s_arg_list    = NCC_STRING_STATIC("arg-list");
-    ncc_string_t s_annot_arg   = NCC_STRING_STATIC("annot-arg");
+    ncc_string_t s_arg_body    = NCC_STRING_STATIC("arg-body");
+    ncc_string_t s_arg_piece   = NCC_STRING_STATIC("arg-piece");
 
     ncc_nonterm(g, s_syntax);
     ncc_nonterm(g, s_rule);
@@ -1206,8 +1013,8 @@ build_bnf_grammar(void)
     ncc_nonterm(g, s_atom);
     ncc_nonterm(g, s_annotations);
     ncc_nonterm(g, s_annotation);
-    ncc_nonterm(g, s_arg_list);
-    ncc_nonterm(g, s_annot_arg);
+    ncc_nonterm(g, s_arg_body);
+    ncc_nonterm(g, s_arg_piece);
 
     ncc_nonterm_t *syntax      = ncc_nonterm(g, s_syntax);
     ncc_nonterm_t *rule        = ncc_nonterm(g, s_rule);
@@ -1217,8 +1024,8 @@ build_bnf_grammar(void)
     ncc_nonterm_t *atom        = ncc_nonterm(g, s_atom);
     ncc_nonterm_t *annotations = ncc_nonterm(g, s_annotations);
     ncc_nonterm_t *annotation  = ncc_nonterm(g, s_annotation);
-    ncc_nonterm_t *arg_list    = ncc_nonterm(g, s_arg_list);
-    ncc_nonterm_t *annot_arg   = ncc_nonterm(g, s_annot_arg);
+    ncc_nonterm_t *arg_body    = ncc_nonterm(g, s_arg_body);
+    ncc_nonterm_t *arg_piece   = ncc_nonterm(g, s_arg_piece);
 
     ncc_grammar_set_start(g, syntax);
 
@@ -1267,18 +1074,19 @@ build_bnf_grammar(void)
     ncc_add_rule(g, annotations, NCC_NT(annotation), NCC_NT(annotations));
 
     ncc_add_rule(g, annotation, NCC_TERMINAL(AT), NCC_TERMINAL(NAME),
-                  NCC_TERMINAL(LPAREN), NCC_NT(arg_list),
+                  NCC_TERMINAL(LPAREN), NCC_NT(arg_body),
                   NCC_TERMINAL(RPAREN));
+    ncc_add_rule(g, annotation, NCC_TERMINAL(AT), NCC_TERMINAL(NAME),
+                  NCC_TERMINAL(LPAREN), NCC_TERMINAL(RPAREN));
     ncc_add_rule(g, annotation, NCC_TERMINAL(AT), NCC_TERMINAL(NAME));
 
-    ncc_add_rule(g, arg_list, NCC_NT(annot_arg));
-    ncc_add_rule(g, arg_list, NCC_NT(annot_arg), NCC_TERMINAL(COMMA),
-                  NCC_NT(arg_list));
+    ncc_add_rule(g, arg_body, NCC_NT(arg_piece));
+    ncc_add_rule(g, arg_body, NCC_NT(arg_piece), NCC_NT(arg_body));
 
-    ncc_add_rule(g, annot_arg, NCC_TERMINAL(LITERAL));
-    ncc_add_rule(g, annot_arg, NCC_TERMINAL(DOLLAR));
-    ncc_add_rule(g, annot_arg, NCC_TERMINAL(NAME));
-    ncc_add_rule(g, annot_arg, NCC_TERMINAL(EMPTY_LIT));
+    ncc_add_rule(g, arg_piece, NCC_SET(&bnf_arg_set));
+    ncc_add_rule(g, arg_piece, NCC_TERMINAL(LPAREN), NCC_TERMINAL(RPAREN));
+    ncc_add_rule(g, arg_piece, NCC_TERMINAL(LPAREN), NCC_NT(arg_body),
+                  NCC_TERMINAL(RPAREN));
 
     ncc_nonterm_set_action(syntax, bnf_walk_syntax);
     ncc_nonterm_set_action(rule, bnf_walk_rule);
@@ -1288,8 +1096,8 @@ build_bnf_grammar(void)
     ncc_nonterm_set_action(atom, bnf_walk_atom);
     ncc_nonterm_set_action(annotations, bnf_walk_annotations);
     ncc_nonterm_set_action(annotation, bnf_walk_annotation);
-    ncc_nonterm_set_action(arg_list, bnf_walk_arg_list);
-    ncc_nonterm_set_action(annot_arg, bnf_walk_annot_arg);
+    ncc_nonterm_set_action(arg_body, bnf_walk_arg_ignore);
+    ncc_nonterm_set_action(arg_piece, bnf_walk_arg_ignore);
 
     return g;
 }
@@ -1302,27 +1110,27 @@ reserved_to_class(ncc_string_t name, ncc_char_class_t *cc_out)
     }
 
     struct {
-        const char       *lit;
+        ncc_string_t     lit;
         ncc_char_class_t cc;
     } map[] = {
-        {"__DIGIT",          NCC_CC_ASCII_DIGIT       },
-        {"__ALPHA",          NCC_CC_ASCII_ALPHA        },
-        {"__UPPER",          NCC_CC_ASCII_UPPER        },
-        {"__LOWER",          NCC_CC_ASCII_LOWER        },
-        {"__HEX",            NCC_CC_HEX_DIGIT          },
-        {"__NONZERO_DIGIT",  NCC_CC_NONZERO_DIGIT      },
-        {"__WHITESPACE",     NCC_CC_WHITESPACE          },
-        {"__WS",             NCC_CC_WHITESPACE          },
-        {"__ID_START",       NCC_CC_ID_START            },
-        {"__ID_CONTINUE",    NCC_CC_ID_CONTINUE         },
-        {"__PRINTABLE",      NCC_CC_PRINTABLE           },
-        {"__UNICODE_DIGIT",  NCC_CC_UNICODE_DIGIT       },
-        {"__JSON_STR",       NCC_CC_JSON_STRING_CHAR    },
-        {"__REGEX_STR",      NCC_CC_REGEX_BODY_CHAR     },
-        {nullptr,               0                          },
+        {NCC_STRING_STATIC("__DIGIT"),          NCC_CC_ASCII_DIGIT       },
+        {NCC_STRING_STATIC("__ALPHA"),          NCC_CC_ASCII_ALPHA        },
+        {NCC_STRING_STATIC("__UPPER"),          NCC_CC_ASCII_UPPER        },
+        {NCC_STRING_STATIC("__LOWER"),          NCC_CC_ASCII_LOWER        },
+        {NCC_STRING_STATIC("__HEX"),            NCC_CC_HEX_DIGIT          },
+        {NCC_STRING_STATIC("__NONZERO_DIGIT"),  NCC_CC_NONZERO_DIGIT      },
+        {NCC_STRING_STATIC("__WHITESPACE"),     NCC_CC_WHITESPACE          },
+        {NCC_STRING_STATIC("__WS"),             NCC_CC_WHITESPACE          },
+        {NCC_STRING_STATIC("__ID_START"),       NCC_CC_ID_START            },
+        {NCC_STRING_STATIC("__ID_CONTINUE"),    NCC_CC_ID_CONTINUE         },
+        {NCC_STRING_STATIC("__PRINTABLE"),      NCC_CC_PRINTABLE           },
+        {NCC_STRING_STATIC("__UNICODE_DIGIT"),  NCC_CC_UNICODE_DIGIT       },
+        {NCC_STRING_STATIC("__JSON_STR"),       NCC_CC_JSON_STRING_CHAR    },
+        {NCC_STRING_STATIC("__REGEX_STR"),      NCC_CC_REGEX_BODY_CHAR     },
+        {{0},               0                          },
     };
 
-    for (int i = 0; map[i].lit; i++) {
+    for (int i = 0; map[i].lit.data; i++) {
         if (str_eq_lit(name, map[i].lit)) {
             *cc_out = map[i].cc;
             return true;
@@ -1336,19 +1144,19 @@ static int64_t
 token_type_to_id(ncc_string_t name)
 {
     struct {
-        const char *lit;
+        ncc_string_t lit;
         int64_t     id;
     } map[] = {
-        {"IDENTIFIER",   NCC_TOK_IDENTIFIER   },
-        {"TYPEDEF_NAME", NCC_TOK_TYPEDEF_NAME  },
-        {"INTEGER",      NCC_TOK_INTEGER       },
-        {"FLOAT",        NCC_TOK_FLOAT         },
-        {"CHAR",         NCC_TOK_CHAR_LIT      },
-        {"STRING",       NCC_TOK_STRING_LIT    },
-        {nullptr,           0                     },
+        {NCC_STRING_STATIC("IDENTIFIER"),   NCC_TOK_IDENTIFIER   },
+        {NCC_STRING_STATIC("TYPEDEF_NAME"), NCC_TOK_TYPEDEF_NAME  },
+        {NCC_STRING_STATIC("INTEGER"),      NCC_TOK_INTEGER       },
+        {NCC_STRING_STATIC("FLOAT"),        NCC_TOK_FLOAT         },
+        {NCC_STRING_STATIC("CHAR"),         NCC_TOK_CHAR_LIT      },
+        {NCC_STRING_STATIC("STRING"),       NCC_TOK_STRING_LIT    },
+        {{0},           0                     },
     };
 
-    for (int i = 0; map[i].lit; i++) {
+    for (int i = 0; map[i].lit.data; i++) {
         if (str_eq_lit(name, map[i].lit)) {
             return map[i].id;
         }
@@ -1359,7 +1167,32 @@ token_type_to_id(ncc_string_t name)
 
 static int bnf_anon_counter = 0;
 
-static char bnf_undeclared[128];
+static char    bnf_undeclared[128];
+static int32_t bnf_load_unit;
+
+int32_t ncc_bnf_last_unit(void)
+{
+    return bnf_load_unit;
+}
+
+typedef struct {
+    int32_t     unit;
+    const char *src;
+    size_t      src_len;
+    char        undeclared[128];
+    char        bad_annot[192];
+} bnf_load_t;
+
+static void
+bnf_restore(const bnf_load_t *saved)
+{
+    bnf_load_unit = saved->unit;
+    bnf_src       = saved->src;
+    bnf_src_len   = saved->src_len;
+
+    memcpy(bnf_undeclared, saved->undeclared, sizeof(bnf_undeclared));
+    memcpy(bnf_bad_annot, saved->bad_annot, sizeof(bnf_bad_annot));
+}
 
 static int
 resolve_term_to_matches(ncc_grammar_t *user_g,
@@ -1376,7 +1209,7 @@ resolve_term_to_matches(ncc_grammar_t *user_g,
     int           cap   = *cap_p;
     char          type  = tagged[0];
     const char   *val   = tagged + 2;
-    ncc_string_t val_s  = ncc_string_from_cstr(val);
+    ncc_string_t val_s  = ncc_string_from_raw(val, (int64_t)strlen(val));
 
 #define ENSURE_CAP()                                                          \
     do {                                                                      \
@@ -1521,9 +1354,9 @@ resolve_group_to_match(ncc_grammar_t    *user_g,
     }
     else {
         char namebuf[64];
-        snprintf(namebuf, sizeof(namebuf),
-                 "$$bnf_anon_%d", bnf_anon_counter++);
-        ncc_string_t   name_s  = ncc_string_from_cstr(namebuf);
+        int  n = snprintf(namebuf, sizeof(namebuf),
+                          "$$bnf_anon_%d", bnf_anon_counter++);
+        ncc_string_t   name_s  = ncc_string_from_raw(namebuf, n > 0 ? n : 0);
         ncc_nonterm_t *anon_nt = ncc_nonterm(user_g, name_s);
         int64_t         anon_id = anon_nt->id;
 
@@ -1665,8 +1498,14 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
                     bnf_result_t *a_r = slist_get(fl, j);
 
                     if (a_r && a_r->tag == BNF_ANNOT && a_r->data) {
-                        ncc_grammar_annotate(user_g,
-                                             (ncc_annotation_t *)a_r->data);
+                        ncc_annotation_t *an = a_r->data;
+
+                        if (an->kind == NCC_ANNOT_TOKENIZER
+                            && an->scope_tag.data) {
+                            ncc_grammar_set_tokenizer(user_g, an->scope_tag);
+                        }
+
+                        ncc_grammar_annotate(user_g, an);
                         a_r->data = nullptr;
                     }
                 }
@@ -1692,6 +1531,9 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
             return false;
         }
         lhs->defined_here = true;
+        lhs->unit         = bnf_load_unit;
+
+        bnf_list_t *line_annots = slist_new();
 
         if (annots_r && annots_r->tag == BNF_LIST) {
             bnf_list_t *annot_list = (bnf_list_t *)annots_r->data;
@@ -1710,7 +1552,7 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
                         disambig_cost      = info->disambig_cost;
                     }
 
-                    ncc_nt_annotate(ncc_get_nonterm(user_g, nt_id), info);
+                    slist_push(line_annots, info);
                     a_r->data = nullptr;
                 }
             }
@@ -1755,13 +1597,25 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
             }
 
             if (rule_p && disambig_predicate.data) {
-                rule_p->disambig_predicate =
-                    ncc_string_from_cstr(disambig_predicate.data);
+                rule_p->disambig_predicate = ncc_string_from_raw(
+                    disambig_predicate.data,
+                    (int64_t)disambig_predicate.u8_bytes);
                 rule_p->disambig_cost = disambig_cost;
+            }
+
+            for (size_t k = 0; rule_p && k < line_annots->len; k++) {
+                ncc_annotation_t *info = slist_get(line_annots, k);
+
+                ncc_rule_annotate(rule_p,
+                                  ai + 1 == alternatives->len
+                                      ? info
+                                      : ncc_annot_clone(info));
             }
 
             ncc_free(items);
         }
+
+        slist_free(line_annots);
     }
 
     return true;
@@ -1835,7 +1689,24 @@ ncc_bnf_load(ncc_string_t   bnf_text,
         return false;
     }
 
+    if (!ncc_annot_grammar()) {
+        return false;
+    }
+
+    static int32_t next_unit = 1;
+
+    bnf_load_t saved = {
+        .unit    = bnf_load_unit,
+        .src     = bnf_src,
+        .src_len = bnf_src_len,
+    };
+
+    memcpy(saved.undeclared, bnf_undeclared, sizeof(saved.undeclared));
+    memcpy(saved.bad_annot, bnf_bad_annot, sizeof(saved.bad_annot));
+
+    bnf_load_unit     = next_unit++;
     bnf_undeclared[0] = 0;
+    bnf_bad_annot[0]  = 0;
 
     ncc_string_t stripped = ncc_bnf_strip_comments(bnf_text);
     ncc_string_t trimmed  = ncc_bnf_trim_lines(stripped);
@@ -1850,6 +1721,9 @@ ncc_bnf_load(ncc_string_t   bnf_text,
         tmp[len + 1] = '\0';
         trimmed = ncc_string_from_raw(tmp, (int64_t)(len + 1));
     }
+
+    bnf_src     = trimmed.data;
+    bnf_src_len = trimmed.u8_bytes;
 
     ncc_buffer_t  *bnf_buf = ncc_buffer_from_bytes(trimmed.data,
                                                       (int64_t)trimmed.u8_bytes);
@@ -1886,6 +1760,7 @@ ncc_bnf_load(ncc_string_t   bnf_text,
         ncc_scanner_free(bnf_sc);
         ncc_buffer_free(bnf_buf);
         ncc_grammar_free(meta_g);
+        bnf_restore(&saved);
         return false;
     }
 
@@ -1902,6 +1777,22 @@ ncc_bnf_load(ncc_string_t   bnf_text,
         success = false;
     }
 
+    if (success && bnf_bad_annot[0]) {
+        fprintf(stderr,
+                "bnf: %s does not match the argument grammar for that "
+                "annotation\n",
+                bnf_bad_annot);
+        success = false;
+    }
+
+    for (size_t i = 0; success && i < ncc_list_len(user_g->nt_list); i++) {
+        ncc_nonterm_t *nt = user_g->nt_list.data[i];
+
+        if (!nt->unit) {
+            nt->unit = bnf_load_unit;
+        }
+    }
+
     free_bnf_result(result);
     ncc_parse_forest_free(&forest);
     ncc_free(raw_ptrs);
@@ -1911,6 +1802,11 @@ ncc_bnf_load(ncc_string_t   bnf_text,
     ncc_scanner_free(bnf_sc);
     ncc_buffer_free(bnf_buf);
     ncc_grammar_free(meta_g);
+
+    int32_t unit = bnf_load_unit;
+
+    bnf_restore(&saved);
+    bnf_load_unit = unit;
 
     return success;
 }

@@ -41,7 +41,15 @@
     X(NOTRIVIA, "notrivia") \
     X(EXPOSES, "exposes") \
     X(RECORD, "record") \
-    X(DISAMBIG, "disambig")
+    X(DISAMBIG, "disambig") \
+    X(MUTABILITY, "mutability") \
+    X(NAMESPACE, "namespace") \
+    X(DIRECTION, "direction") \
+    X(CONSTRAIN, "constrain") \
+    X(SIZE, "size") \
+    X(ALIGNMENT, "alignment") \
+    X(OFFSET, "offset") \
+    X(WIDTH, "width")
 
 typedef enum {
 #define NCC_ANNOT_ENUM(sym, spelling) NCC_ANNOT_##sym,
@@ -74,8 +82,12 @@ ncc_child_ref_is_set(ncc_child_ref_t r)
     return r.kind == NCC_ROLE_BY_INDEX ? r.index >= 0 : r.name.data != nullptr;
 }
 
+typedef struct ncc_infer_expr_t ncc_infer_expr_t;
+
 struct ncc_annotation_t {
-    ncc_annot_kind_t kind;
+    ncc_annot_kind_t  kind;
+    ncc_infer_expr_t *infer_ast;
+    ncc_string_t      args_text;
     ncc_child_ref_t  name_ref;
     ncc_child_ref_t  type_ref;
     ncc_child_ref_t  value_ref;
@@ -92,9 +104,20 @@ struct ncc_annotation_t {
     int32_t          penalty_cost;
     int32_t          disambig_cost;
     bool             capture_by_tag;
+
+    ncc_string_t     mutability;
+    ncc_string_t     ns_name;
+    ncc_string_t     direction;
+    ncc_string_t     constraints;
+
+    ncc_child_ref_t  val_ref;
+    int64_t          val_int;
+    ncc_string_t     val_expr;
+    bool             has_val_int;
 };
 
 ncc_annotation_t *ncc_annot_new(ncc_annot_kind_t kind);
+ncc_annotation_t *ncc_annot_clone(const ncc_annotation_t *a);
 void              ncc_annot_free(ncc_annotation_t *a);
 const char       *ncc_annot_kind_name(ncc_annot_kind_t kind);
 ncc_annot_kind_t  ncc_annot_kind_from_name(ncc_string_t name);
@@ -110,7 +133,10 @@ ncc_annotation_t *ncc_rule_annot_at(const ncc_parse_rule_t *rule, size_t i);
 size_t            ncc_grammar_annot_count(const ncc_grammar_t *g);
 ncc_annotation_t *ncc_grammar_annot_at(const ncc_grammar_t *g, size_t i);
 
-ncc_annotation_t *ncc_nt_find_annot(const ncc_nonterm_t *nt,
+ncc_annotation_t *ncc_rule_find_annot(const ncc_parse_rule_t *rule,
+                                      ncc_annot_kind_t        kind);
+ncc_annotation_t *ncc_nt_find_annot(ncc_grammar_t       *g,
+                                    const ncc_nonterm_t *nt,
                                     ncc_annot_kind_t     kind);
 ncc_annotation_t *ncc_grammar_find_annot(const ncc_grammar_t *g,
                                          ncc_annot_kind_t     kind);

@@ -42,7 +42,7 @@ static int64_t nt_id(ncc_grammar_t *g, const char *name)
 
 static ncc_token_info_t *tk(int64_t tid, const char *text, int i)
 {
-    ncc_token_info_t *t = calloc(1, sizeof(*t));
+    ncc_token_info_t *t = ncc_alloc(typeof(*t));
 
     t->tid   = tid;
     t->index = i;
@@ -125,8 +125,8 @@ static void test_one_grammar_parses_from_several_start_symbols(void)
 {
     ncc_grammar_t *g = compose(TYPES, LANG, "decls");
 
-    int64_t kw_local = ncc_lookup_terminal(g, ncc_string_from_cstr("local"));
-    int64_t kw_ptr   = ncc_lookup_terminal(g, ncc_string_from_cstr("ptr"));
+    int64_t kw_local = ncc_lookup_terminal(g, NCC_STRING_STATIC("local"));
+    int64_t kw_ptr   = ncc_lookup_terminal(g, NCC_STRING_STATIC("ptr"));
 
     ncc_token_info_t *bare[] = {tk(NCC_TOK_IDENTIFIER, "int", 0)};
 
@@ -166,7 +166,7 @@ static void test_a_missing_part_is_still_reported(void)
     ncc_grammar_t *g = ncc_grammar_new();
 
     ncc_grammar_set_error_recovery(g, false);
-    ncc_bnf_load(ncc_string_from_cstr(LANG), ncc_string_from_cstr("decls"), g);
+    ncc_bnf_load(ncc_string_from_cstr(LANG), NCC_STRING_STATIC("decls"), g);
 
     check("a nonterminal no loaded part defines stays undefined",
           ncc_list_len(ncc_get_nonterm(g, nt_id(g, "type"))->rule_ids) == 0);
@@ -217,7 +217,7 @@ static void test_a_reduce_folds_children_into_a_value(void)
     ncc_grammar_t *g = ncc_grammar_new();
 
     ncc_grammar_set_error_recovery(g, false);
-    ncc_bnf_load(ncc_string_from_cstr(G), ncc_string_from_cstr("list"), g);
+    ncc_bnf_load(ncc_string_from_cstr(G), NCC_STRING_STATIC("list"), g);
 
     ncc_token_info_t *toks[] = {
         tk(NCC_TOK_IDENTIFIER, "a", 0),
@@ -234,8 +234,8 @@ static void test_a_reduce_folds_children_into_a_value(void)
 
     ncc_tree_walk_t *w = ncc_tree_walk_new(g, nullptr);
 
-    ncc_walk_reduce_nt(w, ncc_string_from_cstr("item"), r_int, nullptr);
-    ncc_walk_reduce_nt(w, ncc_string_from_cstr("list"), r_sum, nullptr);
+    ncc_walk_reduce_nt(w, NCC_STRING_STATIC("item"), r_int, nullptr);
+    ncc_walk_reduce_nt(w, NCC_STRING_STATIC("list"), r_sum, nullptr);
 
     uintptr_t got = (uintptr_t)ncc_tree_walk_reduce(w, ncc_pwz_get_tree(p));
 
@@ -277,7 +277,7 @@ static void test_a_visitor_can_stop_a_reduce(void)
     ncc_grammar_t *g = ncc_grammar_new();
 
     ncc_grammar_set_error_recovery(g, false);
-    ncc_bnf_load(ncc_string_from_cstr(G), ncc_string_from_cstr("list"), g);
+    ncc_bnf_load(ncc_string_from_cstr(G), NCC_STRING_STATIC("list"), g);
 
     ncc_token_info_t *toks[] = {
         tk(NCC_TOK_IDENTIFIER, "a", 0),
@@ -305,7 +305,7 @@ static void test_a_visitor_can_stop_a_reduce(void)
     w = ncc_tree_walk_new(g, nullptr);
 
     reduced = 0;
-    ncc_walk_on_nt(w, ncc_string_from_cstr("item"), stop_at_item, nullptr,
+    ncc_walk_on_nt(w, NCC_STRING_STATIC("item"), stop_at_item, nullptr,
                    nullptr);
     ncc_walk_reduce_default(w, r_count, nullptr);
 

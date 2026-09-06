@@ -132,10 +132,8 @@ ncc_symtab_free(ncc_symtab_t *st)
         ncc_dict_t *d = st->namespaces[i]->symbols;
 
         if (d) {
-            for (size_t b = 0; b < d->capacity; b++) {
-                if (d->buckets[b].state == _NCC_BUCKET_OCCUPIED) {
-                    ncc_free(d->buckets[b].key);
-                }
+            ncc_dict_foreach (d, e) {
+                ncc_free(e->key);
             }
 
             ncc_dict_free(d);
@@ -214,6 +212,26 @@ ncc_symtab_pop_scope(ncc_symtab_t *st, ncc_string_t ns_name)
 
     ns->current = ns->current->parent;
     ns->depth--;
+}
+
+void
+ncc_symtab_enter_scope(ncc_symtab_t *st, ncc_string_t ns_name,
+                       ncc_scope_t *scope)
+{
+    ncc_namespace_t *ns = find_ns(st, ns_name);
+
+    if (!ns || !scope) {
+        return;
+    }
+
+    ns->current = scope;
+    ns->depth   = scope->depth;
+}
+
+void
+ncc_symtab_leave_scope(ncc_symtab_t *st, ncc_string_t ns_name)
+{
+    ncc_symtab_pop_scope(st, ns_name);
 }
 
 ncc_sym_entry_t *

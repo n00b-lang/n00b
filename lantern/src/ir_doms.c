@@ -13,9 +13,10 @@ struct ir_doms_t {
     int32_t     *idom;
     uint32_t    *pred_off;
     uint32_t    *pred_at;
+    uint32_t    *succ_off;
+    uint32_t    *succ_at;
     uint32_t    *tin;
     uint32_t    *tout;
-    uint32_t    *porder;
     int32_t     *ipdom;
     uint32_t    *df_off;
     uint32_t    *df_at;
@@ -173,22 +174,222 @@ static void build_rpo(ir_doms_t *d, ir_func_t *f)
     }
 }
 
-static int32_t meet(const ir_doms_t *d, const uint32_t *order,
-                    const int32_t *idom, int32_t x, int32_t y)
-{
-    (void)d;
+typedef struct {
+    uint32_t        n;
+    uint32_t        root;
+    const uint32_t *succ_off;
+    const uint32_t *succ_at;
+    const uint32_t *pred_off;
+    const uint32_t *pred_at;
+} lt_graph;
 
-    while (x != y) {
-        while (order[x] > order[y]) {
-            x = idom[x];
+typedef struct {
+    uint32_t *dfn;
+    uint32_t *vertex;
+    uint32_t *parent;
+    uint32_t *semi;
+    uint32_t *ancestor;
+    uint32_t *label;
+    uint32_t *idom;
+    uint32_t *bucket;
+    uint32_t *next;
+    uint32_t *path;
+    uint32_t  n;
+} lt_t;
+
+static uint32_t lt_eval(lt_t *lt, uint32_t v)
+{
+    if (!lt->ancestor[v]) {
+        return lt->label[v];
+    }
+
+    uint32_t n = 0;
+    uint32_t x = v;
+
+    while (lt->ancestor[lt->ancestor[x]]) {
+        lt->path[n++] = x;
+        x             = lt->ancestor[x];
+    }
+
+    for (uint32_t i = n; i-- > 0;) {
+        uint32_t y = lt->path[i];
+        uint32_t a = lt->ancestor[y];
+
+        if (lt->semi[lt->label[a]] < lt->semi[lt->label[y]]) {
+            lt->label[y] = lt->label[a];
+        }
+        lt->ancestor[y] = lt->ancestor[a];
+    }
+
+    return lt->label[v];
+}
+
+static uint32_t lt_dfs(const lt_graph *g, lt_t *lt, uint32_t *stack,
+                       uint32_t *next)
+{
+    uint32_t top = 0;
+    uint32_t at  = 0;
+
+    lt->dfn[g->root] = ++at;
+    lt->vertex[at]   = g->root;
+    lt->parent[at]   = 0;
+    stack[0]         = g->root;
+    next[0]          = g->succ_off[g->root];
+
+    while (true) {
+        uint32_t b    = stack[top];
+        bool     down = false;
+
+        while (next[top] < g->succ_off[b + 1]) {
+            uint32_t to = g->succ_at[next[top]++];
+
+            if (lt->dfn[to]) {
+                continue;
+            }
+
+            lt->dfn[to]  = ++at;
+            lt->vertex[at] = to;
+            lt->parent[at] = lt->dfn[b];
+            stack[++top]   = to;
+            next[top]      = g->succ_off[to];
+            down           = true;
+            break;
         }
 
-        while (order[y] > order[x]) {
-            y = idom[y];
+        if (down) {
+            continue;
+        }
+
+        if (!top) {
+            break;
+        }
+        top--;
+    }
+
+    return at;
+}
+
+static void lt_run(ir_ctx_t *ctx, const lt_graph *g, int32_t *out)
+{
+    uint32_t n  = g->n;
+    lt_t     lt = {0};
+
+    for (uint32_t i = 0; i < n; i++) {
+        out[i] = -1;
+    }
+
+    lt.dfn      = ir_alloc(ctx, n * sizeof(uint32_t));
+    lt.vertex   = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.parent   = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.semi     = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.ancestor = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.label    = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.idom     = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.bucket   = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.next     = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.path     = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+
+    uint32_t *stack = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    uint32_t *step  = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    uint32_t  last  = lt_dfs(g, &lt, stack, step);
+
+    lt.n = last;
+
+    for (uint32_t i = 1; i <= last; i++) {
+        lt.semi[i]  = i;
+        lt.label[i] = i;
+    }
+
+    for (uint32_t i = last; i >= 2; i--) {
+        uint32_t w = lt.vertex[i];
+
+        for (uint32_t k = g->pred_off[w]; k < g->pred_off[w + 1]; k++) {
+            uint32_t p = lt.dfn[g->pred_at[k]];
+
+            if (!p) {
+                continue;
+            }
+
+            uint32_t u = lt_eval(&lt, p);
+
+            if (lt.semi[u] < lt.semi[i]) {
+                lt.semi[i] = lt.semi[u];
+            }
+        }
+
+        lt.next[i]            = lt.bucket[lt.semi[i]];
+        lt.bucket[lt.semi[i]] = i;
+        lt.ancestor[i]        = lt.parent[i];
+
+        for (uint32_t v = lt.bucket[lt.parent[i]]; v; v = lt.next[v]) {
+            uint32_t u = lt_eval(&lt, v);
+
+            lt.idom[v] = lt.semi[u] < lt.semi[v] ? u : lt.parent[i];
+        }
+        lt.bucket[lt.parent[i]] = 0;
+    }
+
+    for (uint32_t i = 2; i <= last; i++) {
+        if (lt.idom[i] != lt.semi[i]) {
+            lt.idom[i] = lt.idom[lt.idom[i]];
         }
     }
 
-    return x;
+    if (last) {
+        lt.idom[1] = 1;
+    }
+
+    for (uint32_t i = 1; i <= last; i++) {
+        out[lt.vertex[i]] = (int32_t)lt.vertex[lt.idom[i]];
+    }
+}
+
+static void build_succs(ir_doms_t *d, ir_func_t *f)
+{
+    ir_ctx_t *ctx = f->owner->ctx;
+    uint32_t  n   = d->n;
+
+    d->succ_off = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+
+    for (uint32_t i = 0; i < n; i++) {
+        d->succ_off[f->blocks[i]->index + 1]
+            = ir_succ_count(ir_block_terminator(f->blocks[i]));
+    }
+
+    for (uint32_t i = 0; i < n; i++) {
+        d->succ_off[i + 1] += d->succ_off[i];
+    }
+
+    d->succ_at = ir_alloc(ctx, (d->succ_off[n] ? d->succ_off[n] : 1)
+                                   * sizeof(uint32_t));
+
+    for (uint32_t i = 0; i < n; i++) {
+        ir_block_t *b  = f->blocks[i];
+        ir_instr_t *t  = ir_block_terminator(b);
+        uint32_t    at = d->succ_off[b->index];
+
+        for (uint32_t k = 0; t && k < t->n_operands; k++) {
+            ir_block_t *to = ir_succ_of(&t->operands[k]);
+
+            if (to) {
+                d->succ_at[at++] = to->index;
+            }
+        }
+    }
+}
+
+static void build_idoms(ir_doms_t *d, ir_func_t *f)
+{
+    lt_graph g = {
+        .n        = d->n,
+        .root     = ir_block_entry(f)->index,
+        .succ_off = d->succ_off,
+        .succ_at  = d->succ_at,
+        .pred_off = d->pred_off,
+        .pred_at  = d->pred_at,
+    };
+
+    lt_run(f->owner->ctx, &g, d->idom);
 }
 
 static void build_tour(ir_doms_t *d, ir_func_t *f)
@@ -259,115 +460,71 @@ static void build_postdoms(ir_doms_t *d, ir_func_t *f)
     ir_ctx_t *ctx  = f->owner->ctx;
     uint32_t  n    = d->n;
     uint32_t  exit = n;
-    uint32_t *ord  = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    uint32_t *post = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    bool     *seen = ir_alloc(ctx, (n + 1) * sizeof(bool));
-    uint32_t *stk  = ir_alloc(ctx, (n + 2) * sizeof(uint32_t));
-    uint32_t *step = ir_alloc(ctx, (n + 2) * sizeof(uint32_t));
-    uint32_t  seq  = 0;
+    uint32_t  m    = n + 1;
+    uint32_t *soff = ir_alloc(ctx, (m + 1) * sizeof(uint32_t));
+    uint32_t *poff = ir_alloc(ctx, (m + 1) * sizeof(uint32_t));
 
-    for (uint32_t i = 0; i <= n; i++) {
-        ord[i]      = UINT32_MAX;
-        d->ipdom[i] = -1;
-    }
+    for (uint32_t v = 0; v < n; v++) {
+        soff[v + 1] = d->pred_off[v + 1] - d->pred_off[v];
+        poff[v + 1] = d->succ_off[v + 1] - d->succ_off[v];
 
-    uint32_t top = 0;
-
-    stk[0]     = exit;
-    step[0]    = 0;
-    seen[exit] = true;
-
-    while (true) {
-        uint32_t b   = stk[top];
-        bool     did = false;
-
-        if (b == exit) {
-            for (uint32_t i = step[top]; i < f->n_blocks; i++) {
-                uint32_t idx = f->blocks[i]->index;
-
-                step[top] = i + 1;
-
-                if (!ir_succ_count(ir_block_terminator(f->blocks[i]))
-                    && !seen[idx]) {
-                    seen[idx]  = true;
-                    stk[++top] = idx;
-                    step[top]  = 0;
-                    did        = true;
-                    break;
-                }
-            }
-        }
-        else if (step[top] < d->pred_off[b + 1] - d->pred_off[b]) {
-            uint32_t p = d->pred_at[d->pred_off[b] + step[top]++];
-
-            if (!seen[p]) {
-                seen[p]    = true;
-                stk[++top] = p;
-                step[top]  = 0;
-                did        = true;
-            }
-            else {
-                did = true;
-            }
-        }
-
-        if (did) {
+        if (soff[v + 1] == 0 && v == exit) {
             continue;
         }
-        post[seq++] = b;
 
-        if (!top) {
-            break;
-        }
-        top--;
-    }
-
-    for (uint32_t i = 0; i < seq; i++) {
-        ord[post[seq - 1 - i]] = i;
-    }
-    d->porder     = ord;
-    d->ipdom[exit] = (int32_t)exit;
-
-    for (bool changed = true; changed;) {
-        changed = false;
-
-        for (uint32_t i = 1; i < seq; i++) {
-            uint32_t b = post[seq - 1 - i];
-
-            if (b == exit) {
-                continue;
-            }
-
-            ir_instr_t *t   = ir_block_terminator(f->blocks[b]);
-            int32_t     now = -1;
-            uint32_t    ns  = t ? t->n_operands : 0;
-
-            if (!ir_succ_count(t)) {
-                now = (int32_t)exit;
-            }
-
-            for (uint32_t k = 0; k < ns; k++) {
-                ir_block_t *sb = ir_succ_of(&t->operands[k]);
-
-                if (!sb) {
-                    continue;
-                }
-
-                uint32_t to = sb->index;
-
-                if (ord[to] == UINT32_MAX || d->ipdom[to] < 0) {
-                    continue;
-                }
-                now = now < 0 ? (int32_t)to
-                              : meet(d, ord, d->ipdom, (int32_t)to, now);
-            }
-
-            if (now >= 0 && d->ipdom[b] != now) {
-                d->ipdom[b] = now;
-                changed     = true;
-            }
+        if (d->succ_off[v + 1] == d->succ_off[v]) {
+            soff[exit + 1]++;
+            poff[v + 1]++;
         }
     }
+
+    for (uint32_t v = 0; v < m; v++) {
+        soff[v + 1] += soff[v];
+        poff[v + 1] += poff[v];
+    }
+
+    uint32_t *sat = ir_alloc(ctx, (soff[m] ? soff[m] : 1) * sizeof(uint32_t));
+    uint32_t *pat = ir_alloc(ctx, (poff[m] ? poff[m] : 1) * sizeof(uint32_t));
+    uint32_t *fill = ir_alloc(ctx, (m + 1) * sizeof(uint32_t));
+
+    for (uint32_t v = 0; v <= m; v++) {
+        fill[v] = soff[v];
+    }
+
+    for (uint32_t v = 0; v < n; v++) {
+        for (uint32_t k = d->pred_off[v]; k < d->pred_off[v + 1]; k++) {
+            sat[fill[v]++] = d->pred_at[k];
+        }
+
+        if (d->succ_off[v + 1] == d->succ_off[v]) {
+            sat[fill[exit]++] = v;
+        }
+    }
+
+    for (uint32_t v = 0; v <= m; v++) {
+        fill[v] = poff[v];
+    }
+
+    for (uint32_t v = 0; v < n; v++) {
+        for (uint32_t k = d->succ_off[v]; k < d->succ_off[v + 1]; k++) {
+            pat[fill[v]++] = d->succ_at[k];
+        }
+
+        if (d->succ_off[v + 1] == d->succ_off[v]) {
+            pat[fill[v]++] = exit;
+        }
+    }
+
+    lt_graph g = {
+        .n        = m,
+        .root     = exit,
+        .succ_off = soff,
+        .succ_at  = sat,
+        .pred_off = poff,
+        .pred_at  = pat,
+    };
+
+    lt_run(ctx, &g, d->ipdom);
 }
 
 ir_doms_t *ir_doms_of(ir_func_t *f)
@@ -394,36 +551,13 @@ ir_doms_t *ir_doms_of(ir_func_t *f)
     }
 
     build_preds(d, f);
+    build_succs(d, f);
     build_rpo(d, f);
 
     if (!d->n_rpo) {
         return d;
     }
-    d->idom[d->rpo[0]->index] = (int32_t)d->rpo[0]->index;
-
-    for (bool changed = true; changed;) {
-        changed = false;
-
-        for (uint32_t i = 1; i < d->n_rpo; i++) {
-            uint32_t b   = d->rpo[i]->index;
-            int32_t  now = -1;
-
-            for (uint32_t k = d->pred_off[b]; k < d->pred_off[b + 1]; k++) {
-                uint32_t p = d->pred_at[k];
-
-                if (d->order[p] == UINT32_MAX || d->idom[p] < 0) {
-                    continue;
-                }
-                now = now < 0 ? (int32_t)p
-                              : meet(d, d->order, d->idom, (int32_t)p, now);
-            }
-
-            if (now >= 0 && d->idom[b] != now) {
-                d->idom[b] = now;
-                changed    = true;
-            }
-        }
-    }
+    build_idoms(d, f);
     build_tour(d, f);
     build_postdoms(d, f);
 

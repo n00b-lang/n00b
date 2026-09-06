@@ -46,26 +46,64 @@ ir_sources = files(
     'ir_doms.c',
     'ir_verify.c',
     'ir_rules_default.c',
-    'ir_sb.c',
+    'ir_fmt.c',
     'ir_span.c',
     'ir_typelang.c',
     'ir_grammar.c',
     'ir_build.c',
     'ir_walk.c',
+    'ir_tree_pass.c',
+    'ir_symcheck.c',
+    'ir_type_diags.c',
 )
 
 ir_lib = library(
     'ir',
-    ir_sources + [typelang_bnf_h, ir_bnf_h],
-    dependencies: [typehash_dep, fe_dep],
-    include_directories: ir_inc,
+    typehash_sources + fe_sources + ir_sources
+        + fe_generated + [typelang_bnf_h, ir_bnf_h],
+    dependencies: th_deps,
+    include_directories: [ir_inc, fe_inc] + th_inc,
     install: true,
 )
 
 ir_dep = declare_dependency(
     link_with: ir_lib,
-    dependencies: [typehash_dep, fe_dep],
-    include_directories: ir_inc,
+    dependencies: th_deps,
+    include_directories: [ir_inc, fe_inc] + th_inc,
+)
+
+ir_public_headers = files(
+    '../include/ir/libir.h',
+    '../include/ir/ir.h',
+    '../include/ir/ir_ops.def',
+    '../include/ir/ir_diags.def',
+    '../include/ir/diag.h',
+    '../include/ir/text.h',
+    '../include/ir/verify.h',
+    '../include/ir/pass.h',
+    '../include/ir/tree_pass.h',
+    '../include/ir/rule.h',
+    '../include/ir/layout.h',
+    '../include/ir/walk.h',
+    '../include/ir/doms.h',
+    '../include/ir/pdg.h',
+    '../include/ir/region_walk.h',
+    '../include/ir/analyze.h',
+    '../include/ir/typelang.h',
+    '../include/ir/grammar.h',
+)
+
+install_headers(ir_public_headers, subdir: 'ir')
+
+pkg = import('pkgconfig')
+pkg.generate(
+    ir_lib,
+    description: 'A typed intermediate representation with a grammar front end',
+)
+
+ir_public_dep = declare_dependency(
+    link_with: ir_lib,
+    include_directories: [ir_inc, fe_inc] + th_inc,
 )
 
 ir_exe = executable(

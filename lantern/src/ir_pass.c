@@ -12,13 +12,16 @@ bool ir_pass_declares(const ir_pass_t *p)
     return (p->establishes & p->invalidates) == 0;
 }
 
-ir_pass_result_t ir_pass_run_checked(const ir_pass_t *p, ir_module_t *m,
-                                     void *state, ir_props_t *unmet,
-                                     ir_diags_t *d)
+static ir_pass_result_t run_bare(const ir_pass_t *p, ir_module_t *m,
+                                 ir_diags_t *d, void *state,
+                                 ir_props_t *unmet);
+
+ir_pass_result_t ir_pass_run(const ir_pass_t *p, ir_module_t *m, void *state,
+                             ir_props_t *unmet, ir_diags_t *d)
 {
     ir_locsnap_t    *before = d ? ir_loc_snapshot(m) : nullptr;
     uint32_t         said   = d ? ir_diags_count(d) : 0;
-    ir_pass_result_t r      = ir_pass_run(p, m, state, unmet);
+    ir_pass_result_t r      = run_bare(p, m, d, state, unmet);
 
     if (r == IR_PASS_OK && before && !ir_loc_monotone(before, m, p->name, d)) {
         return IR_PASS_FAILED;
@@ -29,24 +32,25 @@ ir_pass_result_t ir_pass_run_checked(const ir_pass_t *p, ir_module_t *m,
                                          nullptr, "this pass");
 
         if (dg) {
-            ir_sb b = {0};
+            ncc_buffer_t *b = ncc_buffer_empty();
 
-            ir_sb_fmt(&b, "%s failed and said nothing, which §3 does not "
-                          "allow: a pass reports what it could not do",
+            ncc_buffer_printf(b, "%s failed and said nothing: a pass reports what "
+                          "it could not do",
                       p->name);
 
-            char *msg = ir_sb_take(&b);
+            char *msg = ncc_buffer_take(b);
 
             ir_diag_message(dg, d, msg);
-            free(msg);
+            ncc_free(msg);
         }
     }
 
     return r;
 }
 
-ir_pass_result_t ir_pass_run(const ir_pass_t *p, ir_module_t *m, void *state,
-                             ir_props_t *unmet)
+static ir_pass_result_t run_bare(const ir_pass_t *p, ir_module_t *m,
+                                 ir_diags_t *d, void *state,
+                                 ir_props_t *unmet)
 {
     if (unmet) {
         *unmet = 0;
@@ -66,7 +70,7 @@ ir_pass_result_t ir_pass_run(const ir_pass_t *p, ir_module_t *m, void *state,
         return IR_PASS_UNMET;
     }
 
-    if (!p->run(m, state)) {
+    if (!p->run(m, d, state)) {
         return IR_PASS_FAILED;
     }
 

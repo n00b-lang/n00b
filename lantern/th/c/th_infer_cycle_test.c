@@ -53,10 +53,11 @@ int main(void)
           th_free_vars(ctx, a, nullptr) == 0);
     check("cyclic closed type is closed", th_is_closed(ctx, a));
 
-    th_type *ca = th_clone(ctx, a);
+    th_type *ca = th_instantiate(ctx, th_generalize(ctx, a));
 
-    check("clone of a cyclic type terminates and is non-null", ca != nullptr);
-    check("clone of a cyclic type preserves identity",
+    check("instantiating a cyclic type terminates and is non-null",
+          ca != nullptr);
+    check("instantiating a cyclic type preserves identity",
           th_hash(ctx, ca) == th_hash(ctx, a));
 
     th_type *sa = th_apply_subst(ctx, a);
@@ -64,7 +65,7 @@ int main(void)
     check("apply_subst on a cyclic type preserves identity",
           th_hash(ctx, sa) == th_hash(ctx, a));
 
-    th_type *u = th_unify(ctx, a, th_clone(ctx, a));
+    th_type *u = th_unify(ctx, a, a);
 
     check("a cyclic type unifies with itself", u != nullptr);
 

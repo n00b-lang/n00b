@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "parse/annot_walk.h"
 #include "parse/annotation.h"
@@ -48,7 +49,7 @@ slurp(const char *path)
 
     rewind(f);
 
-    char *p = malloc((size_t)n + 1);
+    char *p = ncc_alloc_size(1, (size_t)n + 1);
 
     if (fread(p, 1, (size_t)n, f) != (size_t)n) {
         p[0] = 0;
@@ -62,45 +63,15 @@ slurp(const char *path)
     return ncc_string_from_cstr(p);
 }
 
-typedef struct {
-    int from_tree_calls;
-    int from_spec_calls;
-} binder_log_t;
+static th_ctx *types;
 
-static tdesc_t *
-tag_desc(char tag)
+static bool
+is_type(th_type *t, const char *typelang)
 {
-    tdesc_t *t = ncc_alloc(tdesc_t);
-
-    memset(t, 0, sizeof(*t));
-    t->ext = (void *)(uintptr_t)(unsigned char)tag;
-
-    return t;
-}
-
-static char
-desc_tag(tdesc_t *t)
-{
-    return t ? (char)(uintptr_t)t->ext : 0;
-}
-
-static tdesc_t *
-bind_tree(void *ctx, ncc_grammar_t *g, ncc_parse_tree_t *node)
-{
-    (void)g;
-    ((binder_log_t *)ctx)->from_tree_calls++;
-
-    ncc_string_t s = ncc_tree_extract_first_identifier(node);
-
-    return tag_desc(s.u8_bytes ? s.data[0] : '?');
-}
-
-static tdesc_t *
-bind_spec(void *ctx, ncc_string_t spec)
-{
-    ((binder_log_t *)ctx)->from_spec_calls++;
-
-    return tag_desc(spec.u8_bytes ? spec.data[0] : '?');
+    return t && types
+        && th_hash(types, t) == th_hash(types, ir_type_from_text(
+                                                   types,
+                                                   S(typelang)));
 }
 
 typedef struct {
@@ -209,10 +180,10 @@ test_annotations_are_retained_on_the_grammar(ncc_grammar_t *g)
 
     if (prog) {
         check("and carries its @scope annotation",
-              ncc_nt_find_annot(prog, NCC_ANNOT_SCOPE_OPEN) != nullptr);
+              ncc_nt_find_annot(g, prog, NCC_ANNOT_SCOPE_OPEN) != nullptr);
     }
 
-    ncc_annotation_t *a = ncc_nt_find_annot(prog, NCC_ANNOT_SCOPE_OPEN);
+    ncc_annotation_t *a = ncc_nt_find_annot(g, prog, NCC_ANNOT_SCOPE_OPEN);
 
     if (a) {
         check("with the tag it was written with",
@@ -233,12 +204,7 @@ test_the_walk_builds_a_symbol_table(ncc_grammar_t *g)
         return;
     }
 
-    binder_log_t      log    = {0};
-    ncc_type_binder_t binder = {
-        .from_tree = bind_tree,
-        .from_spec = bind_spec,
-        .ctx       = &log,
-    };
+    types = th_ctx_new();
 
     probe_t             probe = {0};
     ncc_annot_result_t *r     = ncc_alloc(ncc_annot_result_t);
@@ -250,7 +216,7 @@ test_the_walk_builds_a_symbol_table(ncc_grammar_t *g)
 
     ncc_tree_walk_t *w = ncc_tree_walk_new(g, r);
 
-    ncc_annot_register(w, r, &binder);
+    ncc_annot_register(w, r, types);
 
     check("a visitor can be registered by non-terminal name",
           ncc_walk_on_nt(w, S("decl"), saw_decl, nullptr, &probe));
@@ -304,14 +270,10 @@ test_the_walk_builds_a_symbol_table(ncc_grammar_t *g)
           b_from_block != nullptr && b_from_block->scope == probe.block_scope);
     check("every declaration was recorded", c != nullptr);
 
-    check("@declares($name,$type) binds a type through the binder",
-          a && desc_tag(a->type) == 'T');
-    check("in the scope where it was written",
-          b_from_block && desc_tag(b_from_block->type) == 'U');
-    check("@type(\"spec\") binds through the spec binder",
-          c && desc_tag(c->type) == 'i');
-    check("both binder paths were used",
-          log.from_tree_calls == 2 && log.from_spec_calls == 1);
+    check("@type's argument is typelang, so it becomes that type",
+          is_type(c->type, "int"));
+    check("a @declares type child that is not typelang gets no type",
+          a && a->type == nullptr);
 
     check("an annotation can read what a later-written annotation produced",
           c && c->type != nullptr);
@@ -348,7 +310,7 @@ test_a_deep_tree_does_not_overflow_the_stack(ncc_grammar_t *g)
     const char *want = getenv("IR_DEEP");
     const int   N    = want ? atoi(want) : 600;
 
-    char *src = malloc((size_t)N * 4 + 1);
+    char *src = ncc_alloc_size(1, (size_t)N * 4 + 1);
 
     for (int i = 0; i < N; i++) {
         memcpy(src + i * 4, "vaT;", 4);
@@ -362,7 +324,7 @@ test_a_deep_tree_does_not_overflow_the_stack(ncc_grammar_t *g)
 
     if (!tree) {
         check("a deeply nested program parses", false);
-        free(src);
+        ncc_free(src);
 
         return;
     }
@@ -379,7 +341,254 @@ test_a_deep_tree_does_not_overflow_the_stack(ncc_grammar_t *g)
 
     ncc_pwz_free(p);
     ncc_token_stream_free(ts);
-    free(src);
+    ncc_free(src);
+}
+
+static ncc_nonterm_t *
+nt_named(ncc_grammar_t *g, const char *name)
+{
+    for (size_t i = 0; i < ncc_list_len(g->nt_list); i++) {
+        if (ncc_string_eq(g->nt_list.data[i]->name, S(name))) {
+            return g->nt_list.data[i];
+        }
+    }
+
+    return nullptr;
+}
+
+static void
+test_annotation_arguments_only_need_balanced_parens(void)
+{
+    static const char *src
+        = "<top> @declares($1,$2,\"var\") @disambig(pred(a, b, c()), 4) "
+          "::= <n> <t>\n"
+          "<n> ::= __LOWER\n"
+          "<t> ::= __UPPER\n";
+
+    ncc_grammar_t *g = ncc_grammar_new();
+
+    check("an annotation argument may nest balanced parentheses",
+          ncc_bnf_load(S(src), S("top"), g));
+
+    ncc_nonterm_t *top = nt_named(g, "top");
+
+    check("the annotated non-terminal is there", top != nullptr);
+
+    if (top) {
+        ncc_annotation_t *d = ncc_nt_find_annot(g, top, NCC_ANNOT_DECLARES);
+
+        check("@declares still reads its child references",
+              d != nullptr && d->name_ref.kind == NCC_ROLE_BY_INDEX
+                  && d->name_ref.index == 1
+                  && d->type_ref.index == 2
+                  && ncc_string_eq(d->sym_kind, S("var")));
+
+        check("the annotation that nests parentheses survives the load",
+              ncc_nt_find_annot(g, top, NCC_ANNOT_DISAMBIG) != nullptr);
+    }
+
+    ncc_grammar_free(g);
+
+    static const char *by_name
+        = "<top> @literal(\"int\", $t) ::= <n> <t>\n"
+          "<n> ::= __LOWER\n"
+          "<t> ::= __UPPER\n";
+
+    ncc_grammar_t *g2 = ncc_grammar_new();
+
+    check("a reference may name a non-terminal instead of an index",
+          ncc_bnf_load(S(by_name), S("top"), g2));
+
+    ncc_nonterm_t    *t2 = nt_named(g2, "top");
+    ncc_annotation_t *l  = t2 ? ncc_nt_find_annot(g2, t2, NCC_ANNOT_LITERAL)
+                              : nullptr;
+
+    check("and $name carries the name, not an index",
+          l != nullptr && l->type_ref.kind == NCC_ROLE_BY_NAME
+              && ncc_string_eq(l->type_ref.name, S("t"))
+              && ncc_string_eq(l->op_kind, S("int")));
+
+    ncc_grammar_free(g2);
+
+    static const char *unbalanced
+        = "<top> @disambig(pred(a) ::= <n>\n"
+          "<n> ::= __LOWER\n";
+
+    ncc_grammar_t *bad = ncc_grammar_new();
+
+    check("an unbalanced argument region is not a grammar",
+          !ncc_bnf_load(S(unbalanced), S("top"), bad));
+
+    ncc_grammar_free(bad);
+}
+
+static void
+test_annotation_arguments_carry_integers(void)
+{
+    static const char *src
+        = "<top> @penalty(7) ::= <n>\n"
+          "<mid> @disambig(pred, 3) ::= <n>\n"
+          "<n> ::= __LOWER\n";
+
+    ncc_grammar_t *g = ncc_grammar_new();
+
+    check("a grammar with integer annotation arguments loads",
+          ncc_bnf_load(S(src), S("top"), g));
+
+    ncc_nonterm_t *top = nt_named(g, "top");
+    ncc_nonterm_t *mid = nt_named(g, "mid");
+
+    ncc_annotation_t *p = top ? ncc_nt_find_annot(g, top, NCC_ANNOT_PENALTY)
+                              : nullptr;
+
+    check("@penalty reads the number it was written with",
+          p != nullptr && p->penalty_cost == 7);
+
+    ncc_annotation_t *d = mid ? ncc_nt_find_annot(g, mid, NCC_ANNOT_DISAMBIG)
+                              : nullptr;
+
+    check("@disambig reads its predicate and its cost",
+          d != nullptr && ncc_string_eq(d->disambig_predicate, S("pred"))
+              && d->disambig_cost == 3);
+
+    ncc_grammar_free(g);
+
+    static const char *const BAD[] = {
+        "<top> @penalty(-4) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @penalty(a) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @penalty(1, 2) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @branch($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @assigns($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @scope($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @jump($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @adt(\"enum\", $1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @nospace($1, $2) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @declares(\"v\", $1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @literal(\"int\", t) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @nospace(n) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @varref($) ::= <n>\n<n> ::= __LOWER\n",
+    };
+
+    for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) {
+        ncc_grammar_t *bad = ncc_grammar_new();
+
+        if (ncc_bnf_load(S(BAD[i]), S("top"), bad)) {
+            printf("FAIL  this should not have loaded: %s", BAD[i]);
+            fails++;
+        }
+
+        ncc_grammar_free(bad);
+    }
+}
+
+static void
+test_the_representation_and_declaration_annotations(void)
+{
+    static const char *const G
+        = "<top> @scope(\"module\") ::= <d> <b> <p>\n"
+          "<d> @declares($1,\"var\") @mutability($1,\"const\") "
+          "@constrain($1, == int) @namespace(\"tag\") ::= \"v\" <n> \";\"\n"
+          "<b> @size($2) @width($2) ::= \"b\" %\":\" <num>\n"
+          "<p> @declares($1,\"param\") @direction($1,\"out\") "
+          "@alignment(8) @offset(sizeof(int)) ::= \"p\" <n> \";\"\n"
+          "<n> ::= __LOWER\n"
+          "<num> ::= __DIGIT\n";
+
+    ncc_grammar_t *g = ncc_grammar_new();
+
+    ncc_grammar_set_error_recovery(g, false);
+
+    check("a grammar using every Part 2 annotation loads",
+          ncc_bnf_load(S(G), S("top"), g));
+
+    ncc_pwz_parser_t   *p;
+    ncc_token_stream_t *ts;
+    ncc_parse_tree_t   *tree = parse_toy(g, "va;b:4pq;", &p, &ts);
+
+    if (!tree) {
+        check("the program parses", false);
+        ncc_grammar_free(g);
+
+        return;
+    }
+
+    types = types ? types : th_ctx_new();
+
+    ncc_annot_result_t *r = ncc_annot_walk_tree(g, tree, types);
+
+    ncc_sym_entry_t *a = nullptr;
+    ncc_sym_entry_t *q = nullptr;
+
+    for (ncc_scope_t *s = r->symtab->all_scopes; s; s = s->all_next) {
+        for (ncc_sym_entry_t *e = s->first_in_scope; e; e = e->next_in_scope) {
+            if (e->name.data && !strcmp(e->name.data, "a")) {
+                a = e;
+            }
+
+            if (e->name.data && !strcmp(e->name.data, "q")) {
+                q = e;
+            }
+        }
+    }
+
+    check("@mutability sets the symbol's mutability",
+          a && a->mutability == NCC_SYM_CONST);
+    check("@constrain records the constraint as written",
+          a && a->constraints.data && !strcmp(a->constraints.data, "== int"));
+    check("@direction records the parameter's direction",
+          q && q->direction.data && !strcmp(q->direction.data, "out"));
+    check("@namespace put the declaration in the namespace it named",
+          a && a->scope && a->scope->ns
+              && a->scope->ns->ns_name.data
+              && !strcmp(a->scope->ns->ns_name.data, "tag"));
+
+    ncc_parse_tree_t *b = nullptr;
+
+    for (size_t i = 0; i < ncc_tree_num_children(tree); i++) {
+        ncc_parse_tree_t *k = ncc_tree_child(tree, i);
+
+        if (k && !ncc_tree_is_leaf(k)
+            && ncc_tree_node_value(k).repr.has_size) {
+            b = k;
+        }
+    }
+
+    check("@size($N) read the value out of the parse",
+          b && ncc_tree_node_value(b).repr.size == 4);
+    check("@width($N) read the same child",
+          b && ncc_tree_node_value(b).repr.has_width
+              && ncc_tree_node_value(b).repr.width == 4);
+
+    ncc_annot_result_free(r);
+    ncc_pwz_free(p);
+    ncc_token_stream_free(ts);
+    ncc_grammar_free(g);
+}
+
+static void
+test_part_two_rejections(void)
+{
+    static const char *const BAD[] = {
+        "<top> @mutability($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @namespace($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @direction(\"out\") ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @constrain($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @constrain($1, ?? int) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @size() ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @size(sizeof) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @alignment(1, 2) ::= <n>\n<n> ::= __LOWER\n",
+    };
+
+    for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) {
+        ncc_grammar_t *bad = ncc_grammar_new();
+
+        if (ncc_bnf_load(S(BAD[i]), S("top"), bad)) {
+            printf("FAIL  this should not have loaded: %s", BAD[i]);
+            fails++;
+        }
+
+        ncc_grammar_free(bad);
+    }
 }
 
 int
@@ -391,6 +600,10 @@ main(void)
         return 1;
     }
 
+    test_annotation_arguments_only_need_balanced_parens();
+    test_annotation_arguments_carry_integers();
+    test_the_representation_and_declaration_annotations();
+    test_part_two_rejections();
     test_annotations_are_retained_on_the_grammar(g);
     test_the_walk_builds_a_symbol_table(g);
     test_a_deep_tree_does_not_overflow_the_stack(g);

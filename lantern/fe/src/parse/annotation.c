@@ -1,4 +1,5 @@
 #include "parse/annotation.h"
+#include "parse/infer.h"
 #include "internal/parse/grammar_internal.h"
 #include "lib/alloc.h"
 
@@ -28,6 +29,51 @@ ncc_annot_new(ncc_annot_kind_t kind)
     return a;
 }
 
+static ncc_string_t
+dup_str(ncc_string_t s)
+{
+    return s.data ? ncc_string_from_raw(s.data, (int64_t)s.u8_bytes) : s;
+}
+
+ncc_annotation_t *
+ncc_annot_clone(const ncc_annotation_t *a)
+{
+    if (!a) {
+        return nullptr;
+    }
+
+    ncc_annotation_t *c = ncc_alloc(ncc_annotation_t);
+
+    *c = *a;
+
+    c->infer_ast = ncc_infer_clone(a->infer_ast);
+
+    c->args_text          = dup_str(a->args_text);
+    c->scope_tag          = dup_str(a->scope_tag);
+    c->type_spec          = dup_str(a->type_spec);
+    c->infer_expr         = dup_str(a->infer_expr);
+    c->adt_kind           = dup_str(a->adt_kind);
+    c->visibility_spec    = dup_str(a->visibility_spec);
+    c->op_kind            = dup_str(a->op_kind);
+    c->sym_kind           = dup_str(a->sym_kind);
+    c->disambig_predicate = dup_str(a->disambig_predicate);
+
+    c->mutability           = dup_str(a->mutability);
+    c->ns_name              = dup_str(a->ns_name);
+    c->direction            = dup_str(a->direction);
+    c->constraints          = dup_str(a->constraints);
+    c->val_expr             = dup_str(a->val_expr);
+
+    c->val_ref.name         = dup_str(a->val_ref.name);
+    c->name_ref.name        = dup_str(a->name_ref.name);
+    c->type_ref.name        = dup_str(a->type_ref.name);
+    c->value_ref.name       = dup_str(a->value_ref.name);
+    c->notrivia_ref.name    = dup_str(a->notrivia_ref.name);
+    c->adt_keyword_ref.name = dup_str(a->adt_keyword_ref.name);
+
+    return c;
+}
+
 void
 ncc_annot_free(ncc_annotation_t *a)
 {
@@ -35,7 +81,16 @@ ncc_annot_free(ncc_annotation_t *a)
         return;
     }
 
+    ncc_infer_free(a->infer_ast);
+
     ncc_string_t owned[] = {
+        a->args_text,
+        a->mutability,
+        a->ns_name,
+        a->direction,
+        a->constraints,
+        a->val_expr,
+        a->val_ref.name,
         a->scope_tag,
         a->type_spec,
         a->infer_expr,
@@ -182,7 +237,23 @@ ncc_rule_annot_at(const ncc_parse_rule_t *rule, size_t i)
 }
 
 ncc_annotation_t *
-ncc_nt_find_annot(const ncc_nonterm_t *nt, ncc_annot_kind_t kind)
+ncc_rule_find_annot(const ncc_parse_rule_t *rule, ncc_annot_kind_t kind)
+{
+    for (size_t i = 0; rule && i < ncc_rule_annot_count(rule); i++) {
+        ncc_annotation_t *a = ncc_rule_annot_at(rule, i);
+
+        if (a->kind == kind) {
+            return a;
+        }
+    }
+
+    return nullptr;
+}
+
+ncc_annotation_t *
+ncc_nt_find_annot(ncc_grammar_t       *g,
+                  const ncc_nonterm_t *nt,
+                  ncc_annot_kind_t     kind)
 {
     size_t n = ncc_nt_annot_count(nt);
 
@@ -190,6 +261,16 @@ ncc_nt_find_annot(const ncc_nonterm_t *nt, ncc_annot_kind_t kind)
         ncc_annotation_t *a = ncc_nt_annot_at(nt, i);
 
         if (a->kind == kind) {
+            return a;
+        }
+    }
+
+    for (size_t i = 0; g && nt && i < ncc_list_len(nt->rule_ids); i++) {
+        ncc_annotation_t *a
+            = ncc_rule_find_annot(ncc_get_rule(g, nt->rule_ids.data[i]),
+                                  kind);
+
+        if (a) {
             return a;
         }
     }

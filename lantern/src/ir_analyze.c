@@ -15,14 +15,14 @@ static void say(ir_diags_t *d, ir_diagcode_t code, const ir_instr_t *in,
         return;
     }
 
-    ir_sb sb = {0};
+    ncc_buffer_t *sb = ncc_buffer_empty();
 
-    ir_sb_fmt(&sb, fmt, name);
+    ncc_buffer_printf(sb, fmt, name);
 
-    char *msg = ir_sb_take(&sb);
+    char *msg = ncc_buffer_take(sb);
 
     ir_diag_message(dg, d, msg);
-    free(msg);
+    ncc_free(msg);
 }
 
 typedef struct {

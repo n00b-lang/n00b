@@ -5,15 +5,11 @@
 #include <stdarg.h>
 #include "ir/ir.h"
 #include "ir/layout.h"
-
-#define IR_CHUNK 16384
-
-typedef struct ir_chunk {
-    struct ir_chunk *next;
-    size_t           used;
-    size_t           cap;
-    alignas(16) unsigned char data[];
-} ir_chunk;
+#include "lib/arena.h"
+#include "lib/buffer.h"
+#include "parse/parse_tree.h"
+#include "parse/symtab.h"
+#include "parse/annot_walk.h"
 
 typedef struct ir_cleanup_t {
     void (*fn)(void *);
@@ -22,13 +18,12 @@ typedef struct ir_cleanup_t {
 } ir_cleanup_t;
 
 struct ir_ctx_t {
-    ir_chunk     *chunks;
+    ncc_arena_t   arena;
     th_ctx       *types;
     ir_cleanup_t *cleanups;
 };
 
 void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg);
-void drop_dict(void *p);
 
 typedef struct ir_descentry_t ir_descentry_t;
 
@@ -50,21 +45,25 @@ struct ir_module_t {
     ir_annots_t         annots;
     ir_span_t           span;
 
+    ncc_parse_tree_t   *tree;
+    ncc_grammar_t      *tree_grammar;
+    ncc_symtab_t       *symtab;
+    ncc_annot_result_t *tree_annots;
+
     ir_typeslot_t *types;
     size_t         n_types;
     size_t         cap_types;
-    uint32_t      *type_index;
-    size_t         type_index_cap;
+    void          *type_index;
     struct ir_rules_t *rules;
 
     uint64_t *scalar_hashes;
     th_type **scalar_types;
     bool      scalars_ready;
 
-    th_type  **id_key;
-    uint64_t  *id_val;
-    size_t     id_cap;
-    size_t     id_n;
+    uint64_t *ids;
+    size_t    n_ids;
+    size_t    cap_ids;
+    void     *id_index;
 
     const char **files;
     size_t       n_files;
@@ -120,20 +119,8 @@ ir_local_t *ir_rd_def_local(const ir_rd_t *r, uint32_t d);
 uint32_t    ir_rd_def_tok(const ir_rd_t *r, uint32_t d);
 uint32_t    ir_rd_use_tok(ir_rd_t *r, ir_instr_t *use, ir_local_t *l);
 
-typedef struct {
-    char  *p;
-    size_t len;
-    size_t cap;
-} ir_sb;
-
-void  ir_sb_put(ir_sb *b, const char *s, size_t n);
-void  ir_sb_str(ir_sb *b, const char *s);
-void  ir_sb_fmt(ir_sb *b, const char *fmt, ...);
-void  ir_sb_vfmt(ir_sb *b, const char *fmt, va_list ap);
-void  ir_sb_lit(ir_sb *b, ir_lit_t v);
+void  ir_quote(ncc_buffer_t *b, const char *s);
+void  ir_lit_into(ncc_buffer_t *b, ir_lit_t v);
 char *ir_lit_text(ir_lit_t v);
-void  ir_sb_json(ir_sb *b, const char *s);
-void  ir_sb_quote(ir_sb *b, const char *s);
-char *ir_sb_take(ir_sb *b);
 
 #endif

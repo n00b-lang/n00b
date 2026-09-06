@@ -4,7 +4,6 @@
 #include "lib/buffer.h"
 #include "lib/list.h"
 #include "lib/dict.h"
-#include "lib/result.h"
 #include "parse/token.h"
 #include "parse/types.h"
 #include "unicode/encoding.h"
@@ -13,8 +12,6 @@
 
 typedef struct ncc_scanner_t      ncc_scanner_t;
 typedef struct ncc_token_stream_t ncc_token_stream_t;
-
-#define NCC_ERR_SCAN_NOT_FOUND  (-10)
 
 typedef bool (*ncc_scan_cb_t)(ncc_scanner_t *s);
 
@@ -41,11 +38,11 @@ struct ncc_scanner_t {
 
     ncc_token_stream_t *stream;
 
-    ncc_dict_t *terminal_ids;
 
     ncc_trivia_t    *pending_leading;
     ncc_trivia_t    *pending_trailing;
 
+    uint8_t           trivia_attach;
     bool              at_eof;
 };
 
@@ -77,7 +74,7 @@ extern void ncc_scan_advance_n(ncc_scanner_t *s, int32_t n);
 
 extern void ncc_scan_advance_bytes(ncc_scanner_t *s, size_t n);
 
-extern size_t ncc_scan_match_str(ncc_scanner_t *s, const char *lit);
+extern size_t ncc_scan_match_str(ncc_scanner_t *s, ncc_string_t lit);
 
 extern size_t ncc_scan_match_if(ncc_scanner_t *s, ncc_cp_predicate_fn pred);
 
@@ -88,11 +85,6 @@ extern size_t ncc_scan_match_cp(ncc_scanner_t *s, ncc_codepoint_t cp);
 extern int32_t ncc_scan_skip_while(ncc_scanner_t *s, ncc_cp_predicate_fn pred);
 
 extern int32_t ncc_scan_skip_class(ncc_scanner_t *s, ncc_char_class_t cc);
-
-extern size_t ncc_scan_skip_until_cp(ncc_scanner_t *s, ncc_codepoint_t stop);
-
-extern ncc_result_t(size_t)
-ncc_scan_skip_until_str(ncc_scanner_t *s, const char *needle);
 
 extern void ncc_scan_mark(ncc_scanner_t *s);
 
@@ -108,6 +100,24 @@ extern void ncc_scan_emit_marked(ncc_scanner_t *s, int32_t tid);
 extern void ncc_scan_add_leading_trivia(ncc_scanner_t *s,
                                           ncc_string_t text);
 
+extern void ncc_scan_add_leading_trivia_kind(ncc_scanner_t     *s,
+                                             ncc_string_t       text,
+                                             ncc_trivia_kind_t  kind);
+
+typedef enum : uint8_t {
+    NCC_TRIVIA_ATTACH_RIGHT,
+    NCC_TRIVIA_ATTACH_LEFT,
+} ncc_trivia_attach_t;
+
+extern void ncc_scan_set_trivia_attach(ncc_scanner_t       *s,
+                                       ncc_trivia_attach_t  how);
+
+extern ncc_trivia_attach_t ncc_scan_trivia_attach(const ncc_scanner_t *s);
+
+extern void ncc_scan_add_trivia(ncc_scanner_t     *s,
+                                ncc_string_t       text,
+                                ncc_trivia_kind_t  kind);
+
 extern void ncc_scan_add_trailing_trivia(ncc_scanner_t *s,
                                            ncc_string_t text);
 
@@ -116,9 +126,9 @@ extern int32_t ncc_scan_skip_whitespace(ncc_scanner_t *s);
 extern void ncc_scan_skip_line_comment(ncc_scanner_t *s);
 
 extern bool ncc_scan_skip_block_comment(ncc_scanner_t *s,
-                                          const char *opener,
-                                          const char *closer);
+                                        ncc_string_t opener,
+                                        ncc_string_t closer);
 
-extern int64_t ncc_scan_terminal_id(ncc_scanner_t *s, const char *name);
+extern int64_t ncc_scan_terminal_id(ncc_scanner_t *s, ncc_string_t name);
 
 extern ncc_token_info_t *ncc_scan_prev_token(ncc_scanner_t *s);

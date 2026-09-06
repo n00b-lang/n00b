@@ -1,37 +1,3 @@
-# ============================================================================
-# Typelang -- surface syntax for typehash type terms
-#
-# Notation follows n00b.bnf: <nonterminal>, %"literal", %TOKEN, ::=, |,
-# (...)?  (...)*  (...)+ ,  # comment.
-#
-# Derived from the <type-spec> productions of n00b.bnf.  Every construct that
-# appears there keeps its n00b spelling; the additions carry distinctions
-# typehash encodes that n00b's surface syntax has no way to say.
-#
-# Each production names the spec.md node it builds.  A production with no
-# node mapping is pure syntax.
-# ============================================================================
-
-# ----------------------------------------------------------------------------
-# Lexis
-#
-# %IDENTIFIER is a Unicode identifier: (XID_Start | "_") (XID_Continue | "_")*
-#
-# Source text is normalised to NFC before tokenising.  This is not optional:
-# a combining mark is XID_Continue but is not matched by a naive
-# word-character class, so an identifier written in decomposed form fails to
-# tokenise at all unless the source is normalised first.  Normalising only
-# at hash time is too late.
-# ----------------------------------------------------------------------------
-
-# ----------------------------------------------------------------------------
-# Tiers
-#
-# Upper tier forbids a bare "|", exactly as n00b does, so a union in a
-# declaration position must be parenthesised.  Lower tier permits it, and is
-# used inside [], inside () and after ->, all unambiguously type context.
-# ----------------------------------------------------------------------------
-
 <type>       ::= <one-type>
 <union-type> ::= <isect-type> (%"|" <isect-type>)+
               | <isect-type>
@@ -39,10 +5,6 @@
 <isect-type> ::= <one-type> (%"&" <one-type>)+
                | <one-type>
 
-# There are no type qualifiers.  "const" and "volatile" are rejected with a
-# diagnostic rather than read as names: immutability is a parameter mode or a
-# property of storage, volatility is a codegen instruction about an access
-# path, and atomicity is a distinct type spelled atomic[t].  See spec.md 7.
 <one-type> ::= <base-type>
 
 <base-type> ::= <tvar>
@@ -55,91 +17,30 @@
               | <paren-form>
               | <named-type>
 
-# ----------------------------------------------------------------------------
-# Named types                                                      -> Named
-#
-# A name, optionally applied to arguments.  There is no registry of built-in
-# types: "int", "i64", "string", "Point" and "my.mod.Widget" are all just
-# names, and the encoding cares only about their bytes and length.  A bare
-# name and a constructor applied to no arguments are the same thing, so they
-# are one production and one node.
-#
-# This is also where nominal types land.  If a type's identity is its name,
-# then nothing else about it participates -- not whether it is a struct or a
-# union, not its scope, not its members.  A front end whose language has
-# separate namespaces for tags distinguishes them by qualifying the name.
-#
-# A leading "variant" marks a tagged-variant constructor, which does
-# participate in identity.
-# ----------------------------------------------------------------------------
+<named-type> @nospace($2) ::= %"variant"? <qualified-name> <type-app>?
+<type-app>   @nospace ::= %"[" <type-args> %"]"
 
-<named-type> ::= %"variant"? <qualified-name> <type-app>?
-<type-app>   ::= %"[" <type-args> %"]"
+<qualified-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
-<qualified-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
-
-<type-args> ::= <type-arg> (%"," <type-arg>)*
+<type-args> @nospace($1) ::= <type-arg> (%"," <type-arg>)*
 
 <type-arg> ::= %INT_LIT
              | %STRING_LIT
              | <union-type>
 
-# ----------------------------------------------------------------------------
-# Type variables and binders                        -> Variable, Binder
-#
-# A type variable is spelled as in n00b, and as in n00b it may be free.
-#
-# A free variable is an ordinary type with an ordinary hash -- Vec[`t] is the
-# base type of the Vec generic -- encoded by its first-occurrence index, so
-# the name never reaches the stream and Vec[`t] == Vec[`u] (spec.md 4.10).
-#
-# <binder> is a different thing: it marks a *scheme*.  forall[`a] (`a) -> `a
-# is instantiated fresh at each use; (`a) -> `a has one unknown shared across
-# every occurrence.  They hash differently.  Type inference generalises the
-# second into the first once a function's type is settled, and each call site
-# instantiates its own copy.
-#
-# Binder order is the declared order in the forall list, never order of
-# occurrence.
-# ----------------------------------------------------------------------------
+<tvar> @nospace ::= %"`" %IDENTIFIER
 
-<tvar> ::= %"`" %IDENTIFIER
+<binder> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"forall" %"[" <tvar> (%"," <tvar>)* %"]" <one-type>
 
-<binder> ::= %"forall" %"[" <tvar> (%"," <tvar>)* %"]" <one-type>
-
-# ----------------------------------------------------------------------------
-# Explicit-width integers                                         -> BitInt
-# ----------------------------------------------------------------------------
-
-<bitint> ::= %"bitint" %"[" %INT_LIT %"]"
+<bitint> @nospace ::= %"bitint" %"[" %INT_LIT %"]"
            | %"ubitint" %"[" %INT_LIT %"]"
 
-# ----------------------------------------------------------------------------
-# Indirection                                                -> Indirection
-#
-# n00b spells a reference ref[t].  The named forms below are sugar for
-# attribute sets (spec.md 7.3) and carry no other meaning; the explicit form
-# after ";" is normative and the sugar is defined in terms of it.
-#
-#   ptr[t]     = ref[t; nullable, reseatable, indexable]  C   t *
-#   ref[t]     = ref[t; ]                                 C++ t &,  Rust &t
-#   mutref[t]  = ref[t; exclusive]                        Rust &mut t
-#   own[t]     = ref[t; owning]                           Box<t>
-#   gcref[t]   = ref[t; nullable, reseatable]             managed reference
-#   tmpref[t]  = ref[t; temporary]                        C++ t &&
-#
-# C's "t * const" is ref[t; nullable, indexable] -- a pointer that cannot be
-# repointed.  C's "const t *" has no attribute at all: write-permission
-# through an access path is a checking rule, not a property of the values the
-# type admits.
-# ----------------------------------------------------------------------------
-
-<indirection> ::= <ind-name> %"[" <union-type> <ind-tail>? %"]"
+<indirection> @nospace ::= <ind-name> %"[" <union-type> <ind-tail>? %"]"
 <ind-tail>    ::= %";" <ind-attrs>?
 
 <ind-name> ::= %"ptr" | %"ref" | %"mutref" | %"own" | %"gcref" | %"tmpref"
 
-<ind-attrs> ::= <ind-attr> (%"," <ind-attr>)*
+<ind-attrs> @nospace($1) ::= <ind-attr> (%"," <ind-attr>)*
 
 <ind-attr> ::= %"nullable"
              | %"reseatable"
@@ -148,120 +49,30 @@
              | %"exclusive"
              | %"temporary"
 
-# ----------------------------------------------------------------------------
-# Sequences                                                     -> Sequence
-#
-# The extent is supplied only by languages in which it participates in
-# identity (spec.md 4.4).  array[int] and array[int; 4] are different types;
-# array[int; 4] and array[int; 3] are different types.
-# ----------------------------------------------------------------------------
+<sequence> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"array" %"[" <union-type> (%";" %INT_LIT)? %"]"
 
-<sequence> ::= %"array" %"[" <union-type> (%";" %INT_LIT)? %"]"
+<anon-site> @nospace ::= %"@" %STRING_LIT %":" %INT_LIT %":" %INT_LIT
 
-# ----------------------------------------------------------------------------
-# Records                                                         -> Record
-#
-# A record is identified by what it contains: the set of its fields.  Field
-# order does not participate -- it is a layout fact (spec.md 12).
-#
-# A record with anonymous fields is a tuple, and a tuple is t[a, b, ...] --
-# an n-ary product constructor, which gets order and arity from its argument
-# list.  The parenthesised form is sugar for exactly that, and is also the
-# canonical spelling: __ty.tuple only surfaces for the arities parens cannot
-# express, since (a) is a grouping paren rather than a 1-tuple.
-#
-# __ty. is a reserved prefix for the shared vocabulary (__ty.tuple,
-# __ty.untyped).  A front end must not mint names under it.  See spec.md 4.1.
-#
-# A record has no name and no location.  A type identified by *where it was
-# written* -- C's untagged structs -- is a <named-type> whose name the front
-# end synthesises from the location, which is naming policy and not format.
-# ----------------------------------------------------------------------------
-
-# ----------------------------------------------------------------------------
-# Synthesised anonymous name                                       -> Named
-#
-# Sugar for the name a C front end gives an untagged type, so that it can be
-# written without computing the digest by hand.  It lowers to a <named-type>:
-# @"t.c":1:9  and  _anon_7da51262ab9bf491  are one type.
-# ----------------------------------------------------------------------------
-
-<anon-site> ::= %"@" %STRING_LIT %":" %INT_LIT %":" %INT_LIT
-
-<field-body> ::= %"(" <field-list> %")"
+<field-body> @nospace ::= %"(" <field-list> %")"
                | %"(" %")"
 
-<field-list> ::= <field> (%"," <field>)*
+<field-list> @nospace($1) ::= <field> (%"," <field>)*
 
-# A bitfield width belongs to the field's type, not to the field:
-# C's "int x:3" is  x: bitint[3].
-<field> ::= %IDENTIFIER %":" <union-type>
+<field> @nospace($1) ::= %IDENTIFIER %":" <union-type>
 
-# ----------------------------------------------------------------------------
-# Parenthesised forms                        -> Record, Named, Function
-#
-# All start with "(", and are distinguished as n00b distinguishes them: a
-# "->" after the closing paren makes it a function; named fields make it a
-# record; a comma without names makes it a tuple; a single unnamed type is a
-# grouping paren.  One token of lookahead past ")" is required.
-# ----------------------------------------------------------------------------
-
-<paren-form> ::= <record>
+<paren-form> @nospace ::= <record>
                | <function>
                | %"(" <union-type> %")"
 
 <record> ::= <field-body>
 
-# A tuple is t(...), not (...).  The prefix keeps parentheses unambiguously
-# for grouping -- which "&" and "|" need -- and makes t() and t(a) spellable
-# where () and (a) could not be.  (a, b) in type position is an error that
-# names the fix.
+<tuple> @nospace ::= %"t" %"(" <tuple-args>? %")"
 
-<tuple> ::= %"t" %"(" (<union-type> (%"," <union-type>)*)? %")"
+<tuple-args> @nospace($1) ::= <union-type> (%"," <union-type>)*
 
-# ----------------------------------------------------------------------------
-# Functions                                                     -> Function
-#
-# Positionals, then an optional typed rest parameter, then an optional
-# keyword group.  n00b's spellings, unchanged.
-#
-#   (int, *string) -> void            rest of string
-#   (int, x: int, y: char) -> void    two keyword parameters
-#
-# A parameter is classified by its own syntax, not by its position: a bare
-# type is positional, "*t" is the rest, "name: t" is a keyword.  So they may
-# be written in any order, and all of these are one type:
-#
-#   (int, x: int, y: char) -> void
-#   (y: char, int, x: int) -> void
-#
-# Only the relative order of the positionals is meaningful.  There is no "**"
-# marker -- the name is the marker, which makes the keyword group read exactly
-# like the Record it becomes (spec.md 4.5), so keyword names participate and
-# keyword order does not.  This is the one place typelang departs from n00b's
-# spelling.
-#
-# A rest parameter is always typed; there is no untyped variadic.  C's "..."
-# is a rest over a name the C profile chooses, e.g.
-#
-#   (ptr[char], *__ty.untyped) -> int
-#
-# Every parameter carries a mode (spec.md 7.4), "in" by default.  A mode
-# precedes the type for a positional or rest parameter and follows the colon
-# for a keyword, which is Ada's placement -- except that "inout" is one word.
-# "out x: int" is also accepted and canonicalises to "x: out int".
-#
-#   (out int) -> void
-#   (out *string) -> void
-#   (x: inout int) -> void
-#
-# A mode belongs to the parameter slot, not to the type in it: a variable
-# passed to an inout parameter is not itself of an "inout type".
-# ----------------------------------------------------------------------------
+<function> @nospace($1) @nospace($2) ::= %"(" <param-list>? %")" %"->" <union-type>
 
-<function> ::= %"(" <param-list>? %")" %"->" <union-type>
-
-<param-list> ::= <param> (%"," <param>)*
+<param-list> @nospace($1) ::= <param> (%"," <param>)*
 
 <param> ::= <mode>? <rest-param>
           | <mode>? %IDENTIFIER %":" <mode>? <union-type>
@@ -269,32 +80,4 @@
 
 <mode> ::= %"in" | %"out" | %"inout"
 
-<rest-param> ::= %"*" <union-type>
-
-# ----------------------------------------------------------------------------
-# Unions and intersections                                           -> Sum
-#
-# <union-type> and <isect-type>, above, build a Sum node (spec.md 4.9).  It is
-# normalised on construction -- nested nodes of the same combinator spliced
-# in, duplicate arms dropped, and a one-arm node collapsed to that arm -- and
-# the encoder sorts the arms, so the parser never chooses an order.  This
-# gives commutativity, associativity and idempotence, for both combinators:
-#
-#   a | b            ==  b | a
-#   (a | b) | c      ==  a | (b | c)  ==  a | b | c
-#   a | a            ==  a
-#
-# "&" binds tighter than "|", as in Scala, TypeScript, Java and Kotlin, so
-# "a | b & c" is "a | (b & c)".  Grouping is by parentheses, which is why a
-# tuple is t(a, b): otherwise "(a | b) & c" and a two-element tuple would
-# want the same syntax.
-#
-# The lattice laws -- absorption, distribution, annihilation -- are NOT
-# performed.  They are cross-combinator, or need the format to recognise a
-# top and a bottom type, and they are only valid if the language's | and &
-# really are join and meet over its subtyping order.  A front end that wants
-# them normalises before encoding.  See spec.md 4.9.
-#
-# "&" is the second and last place typelang departs from n00b, whose
-# <type-spec> has no intersection form.
-# ----------------------------------------------------------------------------
+<rest-param> @nospace($1) ::= %"*" <union-type>

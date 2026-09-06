@@ -26,6 +26,7 @@
 ncc_list_decl(int);
 ncc_list_decl(int32_t);
 ncc_list_decl(ncc_string_t);
+ncc_list_decl(ncc_const_charptr_t);
 
 #define _ncc_list_ensure_cap(xptr, needed)                                    \
     do {                                                                       \
@@ -46,7 +47,7 @@ ncc_list_decl(ncc_string_t);
         }                                                                      \
     } while (0)
 
-#define ncc_list_new(T, ...)                                                  \
+#define ncc_list_new(T)                                                       \
     ({                                                                         \
         (ncc_list_t(T)){                                                      \
             .data      = ncc_alloc_array(T, NCC_DEFAULT_LIST_SZ),            \
@@ -55,7 +56,7 @@ ncc_list_decl(ncc_string_t);
         };                                                                     \
     })
 
-#define ncc_list_new_cap(T, N, ...)                                           \
+#define ncc_list_new_cap(T, N)                                               \
     ({                                                                         \
         size_t _bl_rc = ncc_align_closest_pow2_ceil(                          \
                             ncc_max((size_t)(N), (size_t)1));                 \
@@ -319,14 +320,9 @@ ncc_list_decl(ncc_string_t);
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         ncc_array_t(T) _bl_arr = {                                            \
-            .data      = _bl_lp->data,                                         \
-            .len       = _bl_lp->len,                                          \
-            .cap       = _bl_lp->cap,                                          \
-            .lock      = nullptr,                                              \
-            .allocator = nullptr,                                              \
-            .scan_kind = NCC_GC_SCAN_KIND_DEFAULT,                             \
-            .scan_cb   = nullptr,                                              \
-            .scan_user = nullptr,                                              \
+            .data = _bl_lp->data,                                              \
+            .len  = _bl_lp->len,                                               \
+            .cap  = _bl_lp->cap,                                               \
         };                                                                     \
         _bl_lp->data      = nullptr;                                           \
         _bl_lp->len       = 0;                                                 \

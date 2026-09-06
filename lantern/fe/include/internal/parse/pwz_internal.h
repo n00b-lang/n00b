@@ -25,7 +25,7 @@ typedef struct pwz_mem_t {
     pwz_exp_t      *result;
     int32_t         start_pos;
     int32_t         end_pos;
-    uint16_t        refcount;
+    uint32_t        refcount;
 } pwz_mem_t;
 
 static inline bool
@@ -82,6 +82,7 @@ typedef enum {
     PWZ_ALT,
     PWZ_CLASS,
     PWZ_ANY,
+    PWZ_SET,
 } pwz_exp_kind_t;
 
 struct pwz_exp_t {
@@ -90,13 +91,14 @@ struct pwz_exp_t {
         int32_t tid;
         int16_t nt_id;
         ncc_char_class_t cc;
+        const ncc_match_set_t *set;
     };
     pwz_exp_kind_t kind;
     int16_t         rule_ix;
     int16_t         nchildren;
     union {
         struct {
-            const char     *name;
+            ncc_string_t    name;
             pwz_exp_ptr_t  *children;
         } seq;
         struct {

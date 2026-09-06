@@ -13,6 +13,7 @@ void            ncc_grammar_set_max_penalty(ncc_grammar_t *g, uint32_t max);
 void            ncc_grammar_finalize(ncc_grammar_t *g);
 
 ncc_nonterm_t *ncc_nonterm(ncc_grammar_t *g, ncc_string_t name);
+ncc_nonterm_t *ncc_find_nonterm(ncc_grammar_t *g, ncc_string_t name);
 int64_t         ncc_nonterm_id(ncc_nonterm_t *nt);
 int64_t         ncc_register_terminal(ncc_grammar_t *g, ncc_string_t name);
 
@@ -29,6 +30,8 @@ void  ncc_grammar_set_terminal_category(ncc_grammar_t *g, int64_t tid,
 #define NCC_CHAR(cp)     ((ncc_match_t){.kind = NCC_MATCH_TERMINAL, .terminal_id = (int64_t)(cp)})
 #define NCC_TERMINAL(id) ((ncc_match_t){.kind = NCC_MATCH_TERMINAL, .terminal_id = (id)})
 #define NCC_ANY()        ((ncc_match_t){.kind = NCC_MATCH_ANY})
+#define NCC_SET(s)       ((ncc_match_t){.kind = NCC_MATCH_SET, \
+                                        .set_items = (void *)(s)})
 #define NCC_EPSILON()    ((ncc_match_t){.kind = NCC_MATCH_EMPTY})
 #define NCC_CLASS(cc)    ((ncc_match_t){.kind = NCC_MATCH_CLASS, .char_class = (cc)})
 

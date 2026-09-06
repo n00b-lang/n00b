@@ -2,11 +2,13 @@
 #include <string.h>
 
 #include "ir_internal.h"
+#include "lib/option.h"
 #include "ir/pass.h"
 #include "ir/doms.h"
 #include "ir/region_walk.h"
 
 #include "lib/dict.h"
+#include "lib/list.h"
 
 typedef struct {
     ir_region_fn pre;
@@ -14,11 +16,9 @@ typedef struct {
     void        *thunk;
 } rslot_t;
 
-typedef struct {
-    rslot_t *v;
-    size_t   n;
-    size_t   cap;
-} rchain_t;
+ncc_list_decl(rslot_t);
+
+typedef ncc_list_t(rslot_t) rchain_t;
 
 struct ir_region_walk_t {
     void    *user;
@@ -29,17 +29,12 @@ struct ir_region_walk_t {
 
 static void radd(rchain_t *c, ir_region_fn pre, ir_region_fn post, void *thunk)
 {
-    if (c->n >= c->cap) {
-        c->cap = c->cap ? c->cap * 2 : 4;
-        c->v   = realloc(c->v, c->cap * sizeof(*c->v));
-    }
-
-    c->v[c->n++] = (rslot_t){.pre = pre, .post = post, .thunk = thunk};
+    ncc_list_push(*c, ((rslot_t){.pre = pre, .post = post, .thunk = thunk}));
 }
 
 ir_region_walk_t *ir_region_walk_new(void *user)
 {
-    ir_region_walk_t *w = calloc(1, sizeof(*w));
+    ir_region_walk_t *w = ncc_alloc(typeof(*w));
 
     w->user = user;
 
@@ -52,18 +47,13 @@ void ir_region_walk_free(ir_region_walk_t *w)
         return;
     }
 
-    free(w->any.v);
+    ncc_list_free(w->any);
 
     for (int i = 0; i < IR_REGION_KIND_COUNT; i++) {
-        free(w->by_kind[i].v);
+        ncc_list_free(w->by_kind[i]);
     }
 
-    free(w);
-}
-
-void *ir_region_walk_user(ir_region_walk_t *w)
-{
-    return w ? w->user : nullptr;
+    ncc_free(w);
 }
 
 void ir_region_on_node(ir_region_walk_t *w, ir_region_fn pre,
@@ -95,15 +85,15 @@ bool ir_region_walk_stopped(ir_region_walk_t *w)
 static void rrun(rchain_t *c, ir_region_visit_t *v, bool pre, bool reverse,
                  bool *asked, bool *wants)
 {
-    for (size_t k = 0; k < c->n; k++) {
-        size_t       i  = reverse ? c->n - 1 - k : k;
-        ir_region_fn fn = pre ? c->v[i].pre : c->v[i].post;
+    for (size_t k = 0; k < c->len; k++) {
+        size_t       i  = reverse ? c->len - 1 - k : k;
+        ir_region_fn fn = pre ? c->data[i].pre : c->data[i].post;
 
         if (!fn) {
             continue;
         }
 
-        v->thunk = c->v[i].thunk;
+        v->thunk = c->data[i].thunk;
 
         bool want = fn(v);
 
@@ -122,26 +112,28 @@ typedef struct {
     bool         entered;
 } rframe_t;
 
+ncc_option_decl(rframe_t);
+ncc_list_decl(rframe_t);
+
 void ir_region_walk_run(ir_region_walk_t *w, ir_region_t *root)
 {
     if (!w || !root) {
         return;
     }
 
-    size_t    cap   = 16;
-    rframe_t *stack = calloc(cap, sizeof(rframe_t));
-    size_t    sn    = 0;
+    ncc_list_t(rframe_t) stack = ncc_list_new_cap(rframe_t, 16);
 
     w->stopped = false;
-    stack[sn++] = (rframe_t){.r = root};
 
-    while (sn && !w->stopped) {
-        rframe_t         *f = &stack[sn - 1];
+    ncc_list_push(stack, ((rframe_t){.r = root}));
+
+    while (stack.len && !w->stopped) {
+        rframe_t         *f = &stack.data[stack.len - 1];
         ir_region_visit_t v = {.walk   = w,
                                .region = f->r,
                                .parent = f->parent,
                                .index  = f->index,
-                               .depth  = (int32_t)sn - 1,
+                               .depth  = (int32_t)stack.len - 1,
                                .user   = w->user};
 
         if (!f->entered) {
@@ -166,15 +158,13 @@ void ir_region_walk_run(ir_region_walk_t *w, ir_region_t *root)
         }
 
         if (f->next < f->r->n_kids) {
-            uint32_t     at  = f->next++;
-            ir_region_t *kid = f->r->kids[at];
+            uint32_t     at     = f->next++;
+            ir_region_t *kid    = f->r->kids[at];
+            ir_region_t *parent = f->r;
 
-            if (sn == cap) {
-                cap  *= 2;
-                stack = realloc(stack, cap * sizeof(rframe_t));
-                f     = &stack[sn - 1];
-            }
-            stack[sn++] = (rframe_t){.r = kid, .parent = f->r, .index = at};
+            ncc_list_push(stack,
+                          ((rframe_t){.r = kid, .parent = parent,
+                                      .index = at}));
 
             continue;
         }
@@ -187,15 +177,10 @@ void ir_region_walk_run(ir_region_walk_t *w, ir_region_t *root)
         }
 
         rrun(&w->any, &v, false, true, &asked, &wants);
-        sn--;
+        ncc_list_pop(rframe_t, stack);
     }
 
-    free(stack);
-}
-
-void ir_region_walk_run_func(ir_region_walk_t *w, ir_func_t *f)
-{
-    ir_region_walk_run(w, ir_region_root(f));
+    ncc_list_free(stack);
 }
 
 typedef struct {
@@ -342,100 +327,209 @@ static ir_block_t *loop_exit(S *s, ir_block_t **body, uint32_t n, uint32_t id)
     return best;
 }
 
-static ir_region_t *build_seq(S *s, ir_block_t *from, ir_block_t *stop);
+typedef enum : uint8_t {
+    P_STEP,
+    P_LOOP,
+    P_ARMS,
+} sphase;
 
-static ir_region_t *build_loop(S *s, ir_block_t *header, ir_block_t **after)
+typedef struct {
+    ir_region_t  *seq;
+    ir_block_t   *cur;
+    ir_block_t   *stop;
+    size_t        parent;
+    ir_region_t  *result;
+
+    sphase        ph;
+    ir_region_t  *sub;
+    ir_instr_t   *term;
+    ir_block_t   *join;
+    ir_block_t   *after;
+    ir_block_t  **body;
+    bool         *in;
+    uint32_t      nbody;
+    uint32_t      ns;
+    uint32_t      i;
+} sframe;
+
+ncc_list_decl(sframe);
+
+static ir_region_t *seq_done(ir_region_t *seq)
 {
-    ir_ctx_t     *ctx  = s->m->ctx;
-    ir_block_t   *tail = back_edge_source(s, header);
-    uint32_t      n    = natural_loop(s, header, tail);
-    uint32_t      id   = s->mark[header->index];
-    ir_block_t  **body = ir_alloc(ctx, n * sizeof(ir_block_t *));
-
-    memcpy(body, s->work, n * sizeof(ir_block_t *));
-
-    ir_block_t  *out = loop_exit(s, body, n, id);
-    ir_region_t *r   = region(s, IR_REGION_LOOP, header);
-    ir_instr_t  *t   = ir_block_terminator(header);
-    uint32_t     ns  = t ? t->n_operands : 0;
-    bool        *in  = ir_alloc(ctx, (ns ? ns : 1) * sizeof(bool));
-
-    for (uint32_t i = 0; i < ns; i++) {
-        ir_block_t *to = ir_succ_of(&t->operands[i]);
-
-        in[i] = to && s->mark[to->index] == id;
-    }
-    s->placed[header->index] = true;
-    adopt(s, r, region(s, IR_REGION_BLOCK, header));
-
-    for (uint32_t i = 0; i < ns; i++) {
-        ir_block_t *to = ir_succ_of(&t->operands[i]);
-
-        if (in[i] && !s->placed[to->index]) {
-            adopt(s, r, build_seq(s, to, header));
-        }
-    }
-
-    for (uint32_t i = 0; i < n; i++) {
-        if (!s->placed[body[i]->index]) {
-            s->placed[body[i]->index] = true;
-            adopt(s, r, region(s, IR_REGION_BLOCK, body[i]));
-        }
-    }
-    *after = out;
-
-    return r;
-}
-
-static ir_region_t *build_seq(S *s, ir_block_t *from, ir_block_t *stop)
-{
-    ir_region_t *seq = region(s, IR_REGION_SEQ, from);
-    ir_block_t  *cur = from;
-
-    while (cur && cur != stop && !s->placed[cur->index]) {
-        if (is_loop_header_at(s, cur)) {
-            ir_block_t *after = nullptr;
-
-            adopt(s, seq, build_loop(s, cur, &after));
-            cur = after;
-            continue;
-        }
-
-        ir_instr_t *t = ir_block_terminator(cur);
-        uint32_t    n = ir_succ_count(t);
-
-        s->placed[cur->index] = true;
-
-        if (n < 2) {
-            adopt(s, seq, region(s, IR_REGION_BLOCK, cur));
-            cur = n ? ir_succ_at(t, 0) : nullptr;
-            continue;
-        }
-
-        ir_region_t *r = region(s, n == 2 ? IR_REGION_IF : IR_REGION_SWITCH,
-                                cur);
-
-        adopt(s, r, region(s, IR_REGION_BLOCK, cur));
-
-        ir_block_t *join = ir_ipdom_of(s->dom, cur);
-
-        for (uint32_t i = 0; i < t->n_operands; i++) {
-            ir_block_t *arm = ir_succ_of(&t->operands[i]);
-
-            if (arm && arm != join && !s->placed[arm->index]
-                && ir_dominates(s->dom, cur, arm)) {
-                adopt(s, r, build_seq(s, arm, join));
-            }
-        }
-        adopt(s, seq, r);
-        cur = join;
-    }
-
     if (!seq->n_kids) {
         return nullptr;
     }
 
     return seq->n_kids == 1 ? seq->kids[0] : seq;
+}
+
+static void start_loop(S *s, sframe *f)
+{
+    ir_ctx_t   *ctx  = s->m->ctx;
+    ir_block_t *tail = back_edge_source(s, f->cur);
+    uint32_t    n    = natural_loop(s, f->cur, tail);
+    uint32_t    id   = s->mark[f->cur->index];
+
+    f->body  = ir_alloc(ctx, n * sizeof(ir_block_t *));
+    f->nbody = n;
+    memcpy(f->body, s->work, n * sizeof(ir_block_t *));
+
+    f->after = loop_exit(s, f->body, n, id);
+    f->sub   = region(s, IR_REGION_LOOP, f->cur);
+    f->term  = ir_block_terminator(f->cur);
+    f->ns    = f->term ? f->term->n_operands : 0;
+    f->in    = ir_alloc(ctx, (f->ns ? f->ns : 1) * sizeof(bool));
+
+    for (uint32_t i = 0; i < f->ns; i++) {
+        ir_block_t *to = ir_succ_of(&f->term->operands[i]);
+
+        f->in[i] = to && s->mark[to->index] == id;
+    }
+    s->placed[f->cur->index] = true;
+    adopt(s, f->sub, region(s, IR_REGION_BLOCK, f->cur));
+
+    f->join = f->cur;
+    f->i    = 0;
+    f->ph   = P_LOOP;
+}
+
+static void finish_loop(S *s, sframe *f)
+{
+    for (uint32_t i = 0; i < f->nbody; i++) {
+        if (!s->placed[f->body[i]->index]) {
+            s->placed[f->body[i]->index] = true;
+            adopt(s, f->sub, region(s, IR_REGION_BLOCK, f->body[i]));
+        }
+    }
+    adopt(s, f->seq, f->sub);
+
+    f->cur = f->after;
+    f->ph  = P_STEP;
+}
+
+static void start_arms(S *s, sframe *f, uint32_t n)
+{
+    f->sub = region(s, n == 2 ? IR_REGION_IF : IR_REGION_SWITCH, f->cur);
+
+    adopt(s, f->sub, region(s, IR_REGION_BLOCK, f->cur));
+
+    f->term = ir_block_terminator(f->cur);
+    f->join = ir_ipdom_of(s->dom, f->cur);
+    f->ns   = f->term ? f->term->n_operands : 0;
+    f->i    = 0;
+    f->ph   = P_ARMS;
+}
+
+static ir_block_t *next_child(S *s, sframe *f)
+{
+    while (f->i < f->ns) {
+        ir_block_t *to = ir_succ_of(&f->term->operands[f->i++]);
+
+        if (f->ph == P_LOOP) {
+            if (f->in[f->i - 1] && to && !s->placed[to->index]) {
+                return to;
+            }
+
+            continue;
+        }
+
+        if (to && to != f->join && !s->placed[to->index]
+            && ir_dominates(s->dom, f->cur, to)) {
+            return to;
+        }
+    }
+
+    return nullptr;
+}
+
+static ir_region_t *build_seq(S *s, ir_block_t *from, ir_block_t *stop)
+{
+    ncc_list_t(sframe) st   = ncc_list_new(sframe);
+    ir_region_t       *root = nullptr;
+
+    ncc_list_push(st, ((sframe){.seq    = region(s, IR_REGION_SEQ, from),
+                                .cur    = from,
+                                .stop   = stop,
+                                .parent = SIZE_MAX}));
+
+    while (st.len) {
+        size_t  n = st.len;
+        sframe *f = &st.data[n - 1];
+
+        if (f->ph != P_STEP) {
+            adopt(s, f->sub, f->result);
+            f->result = nullptr;
+
+            ir_block_t *kid = next_child(s, f);
+
+            if (kid) {
+                ir_block_t *kstop = f->join;
+
+                ncc_list_push(st,
+                              ((sframe){.seq = region(s, IR_REGION_SEQ, kid),
+                                        .cur    = kid,
+                                        .stop   = kstop,
+                                        .parent = n - 1}));
+
+                continue;
+            }
+
+            if (f->ph == P_LOOP) {
+                finish_loop(s, f);
+            }
+            else {
+                adopt(s, f->seq, f->sub);
+                f->cur = f->join;
+                f->ph  = P_STEP;
+            }
+        }
+
+        bool yielded = false;
+
+        while (f->cur && f->cur != f->stop && !s->placed[f->cur->index]) {
+            if (is_loop_header_at(s, f->cur)) {
+                start_loop(s, f);
+                yielded = true;
+                break;
+            }
+
+            ir_instr_t *t  = ir_block_terminator(f->cur);
+            uint32_t    ns = ir_succ_count(t);
+
+            s->placed[f->cur->index] = true;
+
+            if (ns < 2) {
+                adopt(s, f->seq, region(s, IR_REGION_BLOCK, f->cur));
+                f->cur = ns ? ir_succ_at(t, 0) : nullptr;
+
+                continue;
+            }
+
+            start_arms(s, f, ns);
+            yielded = true;
+            break;
+        }
+
+        if (yielded) {
+            continue;
+        }
+
+        ir_region_t *done = seq_done(f->seq);
+        size_t       up   = f->parent;
+
+        st.len--;
+
+        if (up == SIZE_MAX) {
+            root = done;
+        }
+        else {
+            st.data[up].result = done;
+        }
+    }
+
+    ncc_list_free(st);
+
+    return root;
 }
 
 static uint32_t irreducible(S *s, bool *marked)
@@ -659,9 +753,11 @@ ir_region_t *ir_region_dispatch_site(ir_func_t *f)
     return find_dispatch(ir_region_root(f));
 }
 
-static bool structure_run(ir_module_t *m, void *state)
+static bool structure_run(ir_module_t *m, ir_diags_t *d, void *state)
 {
-    return ir_structure(m, (ir_diags_t *)state);
+    (void)state;
+
+    return ir_structure(m, d);
 }
 
 const ir_pass_t ir_pass_structure = {
@@ -673,9 +769,9 @@ const ir_pass_t ir_pass_structure = {
 
 static bool draw_block(ir_region_visit_t *v)
 {
-    ir_sb *b = v->user;
+    ncc_buffer_t *b = v->user;
 
-    ir_sb_fmt(b, "%*sblock %s\n", v->depth * 2 + 4, "",
+    ncc_buffer_printf(b, "%*sblock %s\n", v->depth * 2 + 4, "",
               v->region->head ? v->region->head->name : "?");
 
     return false;
@@ -683,23 +779,23 @@ static bool draw_block(ir_region_visit_t *v)
 
 static bool draw_open(ir_region_visit_t *v)
 {
-    ir_sb *b = v->user;
+    ncc_buffer_t *b = v->user;
 
     if (v->region->kind == IR_REGION_BLOCK) {
         return true;
     }
 
-    ir_sb_fmt(b, "%*s%s", v->depth * 2 + 4, "",
+    ncc_buffer_printf(b, "%*s%s", v->depth * 2 + 4, "",
               ir_region_kind_name(v->region->kind));
 
     if (v->region->head) {
-        ir_sb_fmt(b, " at %s", v->region->head->name);
+        ncc_buffer_printf(b, " at %s", v->region->head->name);
     }
 
     if (v->region->dispatch) {
-        ir_sb_str(b, "   # irreducible: a back end must emit a dispatch loop");
+        ncc_buffer_puts(b, "   # irreducible: a back end must emit a dispatch loop");
     }
-    ir_sb_str(b, " {\n");
+    ncc_buffer_puts(b, " {\n");
 
     return true;
 }
@@ -707,13 +803,13 @@ static bool draw_open(ir_region_visit_t *v)
 static bool draw_close(ir_region_visit_t *v)
 {
     if (v->region->kind != IR_REGION_BLOCK) {
-        ir_sb_fmt((ir_sb *)v->user, "%*s}\n", v->depth * 2 + 4, "");
+        ncc_buffer_printf((ncc_buffer_t *)v->user, "%*s}\n", v->depth * 2 + 4, "");
     }
 
     return true;
 }
 
-static void draw(ir_sb *b, ir_region_t *r)
+static void draw(ncc_buffer_t *b, ir_region_t *r)
 {
     ir_region_walk_t *w = ir_region_walk_new(b);
 
@@ -729,22 +825,22 @@ char *ir_module_render_nested(ir_module_t *m)
         return nullptr;
     }
 
-    ir_sb b = {0};
+    ncc_buffer_t *b = ncc_buffer_empty();
 
-    ir_sb_fmt(&b, "# a rendering of module %s, not its format\n",
+    ncc_buffer_printf(b, "# a rendering of module %s, not its format\n",
               ir_module_name(m));
 
     for (size_t i = 0; i < ir_func_count(m); i++) {
         ir_func_t *f = ir_func_at(m, i);
 
-        ir_sb_fmt(&b, "\n  func @%s\n", f->name);
+        ncc_buffer_printf(b, "\n  func @%s\n", f->name);
 
         if (!ir_region_root(f)) {
-            ir_sb_str(&b, "    # no overlay; run structure first\n");
+            ncc_buffer_puts(b, "    # no overlay; run structure first\n");
             continue;
         }
-        draw(&b, ir_region_root(f));
+        draw(b, ir_region_root(f));
     }
 
-    return ir_sb_take(&b);
+    return ncc_buffer_take(b);
 }

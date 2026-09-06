@@ -109,7 +109,7 @@ static void test_promote_requires_what_it_declares(void)
     ir_props_t unmet = 0;
 
     check("promote refuses to run on a module that is not typed",
-          ir_pass_run_checked(&ir_pass_promote, r->m, nullptr, &unmet, r->d)
+          ir_pass_run(&ir_pass_promote, r->m, nullptr, &unmet, r->d)
               == IR_PASS_UNMET);
     check("and says which property was missing", unmet == IR_PROP_TYPED);
     done(r);
@@ -242,8 +242,8 @@ static void test_a_local_has_no_address(void)
     ir_block_t *b = ir_block_entry(f);
     ir_instr_t *o = ir_instr_add(b, IR_OP_OFFSET);
 
-    ir_instr_push_local(o, l);
-    ir_instr_push_value(o, ir_param_add(f, "n", ir_type_parse(r->m, "u32")));
+    ir_instr_operand_local(o, l);
+    ir_instr_operand_value(o, ir_param_add(f, "n", ir_type_parse(r->m, "u32")));
 
     ir_rules_t *rs = ir_module_rules(r->m);
 
@@ -551,10 +551,10 @@ static void test_passes_take_one_kind_of_state(void)
     run_t *r = load(DIAMOND);
 
     check("promote through the pass manager takes the diagnostics sink",
-          ir_pass_run_checked(&ir_pass_promote, r->m, r->d, nullptr, r->d)
+          ir_pass_run(&ir_pass_promote, r->m, nullptr, nullptr, r->d)
               == IR_PASS_OK);
     check("and split-edges takes the same",
-          ir_pass_run_checked(&ir_pass_split_edges, r->m, r->d, nullptr, r->d)
+          ir_pass_run(&ir_pass_split_edges, r->m, nullptr, nullptr, r->d)
               == IR_PASS_OK);
     check("split-edges invalidates the region overlay it may have broken",
           ir_pass_split_edges.invalidates == IR_PROP_STRUCTURED);

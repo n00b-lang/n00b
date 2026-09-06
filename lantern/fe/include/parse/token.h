@@ -29,9 +29,15 @@
 
 #define NCC_TOK_STRING_LIT   (NCC_TOK_START_ID + 6)
 
+typedef enum : uint8_t {
+    NCC_TRIVIA_SPACE,
+    NCC_TRIVIA_COMMENT,
+} ncc_trivia_kind_t;
+
 typedef struct ncc_trivia_t {
     ncc_string_t         text;
     struct ncc_trivia_t *next;
+    ncc_trivia_kind_t    kind;
 } ncc_trivia_t;
 
 ncc_option_decl(ncc_string_t);
@@ -50,6 +56,7 @@ typedef struct ncc_token_info_t {
     size_t                         start_byte;
     size_t                         end_byte;
     bool                           system_header;
+    bool                           no_trivia;
 } ncc_token_info_t;
 
 ncc_list_decl(ncc_token_info_t);

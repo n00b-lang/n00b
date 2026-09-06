@@ -136,6 +136,21 @@ matches_eq(ncc_match_t *a, ncc_match_t *b)
     return false;
 }
 
+bool ncc_match_set_holds(const ncc_match_set_t *s, int64_t tid)
+{
+    if (!s) {
+        return false;
+    }
+
+    bool found = false;
+
+    for (size_t i = 0; i < s->n && !found; i++) {
+        found = s->ids[i] == tid;
+    }
+
+    return found != s->negate;
+}
+
 static bool
 rule_exists(ncc_grammar_t *g,
             ncc_nonterm_t *nt,
@@ -232,13 +247,14 @@ create_one_error_rule_set(ncc_grammar_t *g, int32_t rule_ix)
         ncc_nonterm_t *cur_nt = ncc_get_nonterm(g, cur_nt_id);
 
         char namebuf[256];
-        snprintf(namebuf,
-                 sizeof(namebuf),
-                 "$term-%s-%d-%d",
-                 cur_nt->name.data ? cur_nt->name.data : "?",
-                 rule_ix,
-                 tok_ct);
-        ncc_string_t name = ncc_string_from_cstr(namebuf);
+        int nlen = snprintf(namebuf,
+                            sizeof(namebuf),
+                            "$term-%s-%d-%d",
+                            cur_nt->name.data ? cur_nt->name.data : "?",
+                            rule_ix,
+                            tok_ct);
+        ncc_string_t name = ncc_string_from_raw(namebuf,
+                                                nlen > 0 ? nlen : 0);
 
         ncc_nonterm_t *nt_err    = ncc_nonterm(g, name);
         ncc_nt_id_t    nt_err_id = ncc_nonterm_id(nt_err);
@@ -279,13 +295,17 @@ ncc_grammar_new(void)
     g->terminal_map = ncc_alloc(ncc_dict_t);
     ncc_dict_init(g->terminal_map, ncc_hash_cstring, ncc_dict_cstr_eq);
 
-    static const char *const BUILTIN[] = {
-        "IDENTIFIER", "TYPEDEF_NAME", "INTEGER",
-        "FLOAT",      "CHAR_LIT",     "STRING_LIT",
+    static const ncc_string_t BUILTIN[] = {
+        NCC_STRING_STATIC("IDENTIFIER"),
+        NCC_STRING_STATIC("TYPEDEF_NAME"),
+        NCC_STRING_STATIC("INTEGER"),
+        NCC_STRING_STATIC("FLOAT"),
+        NCC_STRING_STATIC("CHAR_LIT"),
+        NCC_STRING_STATIC("STRING_LIT"),
     };
 
     for (size_t i = 0; i < sizeof(BUILTIN) / sizeof(BUILTIN[0]); i++) {
-        ncc_register_terminal(g, ncc_string_from_cstr(BUILTIN[i]));
+        ncc_register_terminal(g, BUILTIN[i]);
     }
 
     return g;
@@ -335,29 +355,6 @@ ncc_grammar_free(ncc_grammar_t *g)
         ncc_free(g->terminal_map);
     }
 
-    if (g->left_corner_sets) {
-        ncc_free(g->left_corner_sets);
-    }
-
-    if (g->lr0_items) {
-        ncc_free(g->lr0_items);
-    }
-    if (g->lr0_rule_item_base) {
-        ncc_free(g->lr0_rule_item_base);
-    }
-    if (g->lr0_states) {
-        ncc_free(g->lr0_states);
-    }
-    if (g->lr0_state_items) {
-        ncc_free(g->lr0_state_items);
-    }
-    if (g->lr0_gotos) {
-        ncc_free(g->lr0_gotos);
-    }
-    if (g->lr0_predict_state) {
-        ncc_free(g->lr0_predict_state);
-    }
-
     if (g->has_terminal_categories) {
         for (size_t i = 0; i < g->terminal_categories.len; i++) {
             ncc_free(g->terminal_categories.data[i].data);
@@ -388,8 +385,6 @@ ncc_grammar_set_start_id(ncc_grammar_t *g, ncc_nt_id_t nt_id)
     if (now) {
         now->start_nt = true;
     }
-
-    g->lr0_start_state = -1;
 }
 
 void
@@ -405,16 +400,25 @@ ncc_grammar_set_max_penalty(ncc_grammar_t *g, uint32_t max)
 }
 
 ncc_nonterm_t *
+ncc_find_nonterm(ncc_grammar_t *g, ncc_string_t name)
+{
+    if (!g || !name.data) {
+        return nullptr;
+    }
+
+    bool  found = false;
+    void *val   = _ncc_dict_get(g->nt_map, (void *)name.data, &found);
+
+    return found ? ncc_get_nonterm(g, (int64_t)(intptr_t)val) : nullptr;
+}
+
+ncc_nonterm_t *
 ncc_nonterm(ncc_grammar_t *g, ncc_string_t name)
 {
-    if (name.data) {
-        bool  found = false;
-        void *val   = _ncc_dict_get(g->nt_map, (void *)name.data, &found);
+    ncc_nonterm_t *have = ncc_find_nonterm(g, name);
 
-        if (found) {
-            int64_t existing = (int64_t)(intptr_t)val;
-            return ncc_get_nonterm(g, existing);
-        }
+    if (have) {
+        return have;
     }
 
     ncc_nonterm_t *nt = ncc_alloc(ncc_nonterm_t);
@@ -509,12 +513,6 @@ ncc_grammar_set_terminal_category(ncc_grammar_t *g,
 }
 
 void
-ncc_set_action(ncc_nonterm_t *nt, ncc_walk_action_t action)
-{
-    nt->action = action;
-}
-
-void
 ncc_nonterm_set_user_data(ncc_nonterm_t *nt, void *data)
 {
     nt->user_data = data;
@@ -554,8 +552,8 @@ ncc_group_match_v(ncc_grammar_t *g, int min, int max, int n, ncc_match_t *items)
     group->max = max;
 
     char namebuf[64];
-    snprintf(namebuf, sizeof(namebuf), "$$group_%d", group->gid);
-    ncc_string_t name = ncc_string_from_cstr(namebuf);
+    int nlen = snprintf(namebuf, sizeof(namebuf), "$$group_%d", group->gid);
+    ncc_string_t name = ncc_string_from_raw(namebuf, nlen > 0 ? nlen : 0);
 
     ncc_nonterm_t *nt = ncc_nonterm(g, name);
     int64_t nt_id = ncc_nonterm_id(nt);
@@ -626,10 +624,8 @@ merge_dict_set_into(ncc_dict_t *dst, ncc_dict_t *src)
         return;
     }
 
-    for (size_t i = 0; i < src->capacity; i++) {
-        if (src->buckets[i].state == _NCC_BUCKET_OCCUPIED) {
-            ncc_dict_add(dst, src->buckets[i].key, (void *)1);
-        }
+    ncc_dict_foreach (src, e) {
+        ncc_dict_add(dst, e->key, (void *)1);
     }
 }
 
@@ -740,6 +736,324 @@ done:
 }
 
 static void
+compute_first_nullable(ncc_grammar_t *g, bool *first_nullable)
+{
+    size_t n_nts = g->nt_list.len;
+
+    if (n_nts == 0) {
+        return;
+    }
+
+    int32_t *wait_start = ncc_alloc_array(int32_t, n_nts + 1);
+    int32_t *cursor     = ncc_alloc_array(int32_t, n_nts);
+
+    for (size_t a = 0; a < n_nts; a++) {
+        ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)a);
+
+        for (size_t j = 0; j < nt->rule_ids.len; j++) {
+            ncc_parse_rule_t *r = ncc_get_rule(g, nt->rule_ids.data[j]);
+
+            for (size_t k = 0; k < r->contents.len; k++) {
+                if (r->contents.data[k].kind == NCC_MATCH_NT) {
+                    cursor[r->contents.data[k].nt_id]++;
+                }
+            }
+        }
+    }
+
+    int32_t total = 0;
+
+    for (size_t b = 0; b < n_nts; b++) {
+        wait_start[b] = total;
+        total += cursor[b];
+        cursor[b]     = wait_start[b];
+    }
+
+    wait_start[n_nts] = total;
+
+    int32_t *wait_list = ncc_alloc_array(int32_t, total ? total : 1);
+
+    for (size_t a = 0; a < n_nts; a++) {
+        ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)a);
+
+        for (size_t j = 0; j < nt->rule_ids.len; j++) {
+            ncc_parse_rule_t *r = ncc_get_rule(g, nt->rule_ids.data[j]);
+
+            for (size_t k = 0; k < r->contents.len; k++) {
+                if (r->contents.data[k].kind == NCC_MATCH_NT) {
+                    wait_list[cursor[r->contents.data[k].nt_id]++] = (int32_t)a;
+                }
+            }
+        }
+    }
+
+    ncc_list_t(int32_t) work = ncc_list_new_cap(int32_t, n_nts);
+
+    for (size_t a = 0; a < n_nts; a++) {
+        ncc_list_push(work, (int32_t)a);
+    }
+
+    while (ncc_list_len(work) > 0) {
+        int32_t a = work.data[ncc_list_len(work) - 1];
+
+        ncc_list_pop(int32_t, work);
+
+        if (first_nullable[a]) {
+            continue;
+        }
+
+        ncc_nonterm_t *nt  = ncc_get_nonterm(g, a);
+        bool           now = false;
+
+        for (size_t j = 0; j < nt->rule_ids.len && !now; j++) {
+            ncc_parse_rule_t *r = ncc_get_rule(g, nt->rule_ids.data[j]);
+
+            now = rule_is_first_nullable(g, r, first_nullable);
+        }
+
+        if (!now) {
+            continue;
+        }
+
+        first_nullable[a] = true;
+
+        for (int32_t e = wait_start[a]; e < wait_start[a + 1]; e++) {
+            if (!first_nullable[wait_list[e]]) {
+                ncc_list_push(work, wait_list[e]);
+            }
+        }
+    }
+
+    ncc_list_free(work);
+    ncc_free(wait_list);
+    ncc_free(cursor);
+    ncc_free(wait_start);
+}
+
+static void
+first_deps_of_rule(ncc_grammar_t       *g,
+                   ncc_parse_rule_t    *rule,
+                   const bool          *first_nullable,
+                   ncc_list_t(int32_t) *out)
+{
+    size_t n = rule->contents.len;
+
+    for (size_t i = 0; i < n; i++) {
+        ncc_match_t *m = &rule->contents.data[i];
+
+        switch (m->kind) {
+        case NCC_MATCH_TERMINAL:
+        case NCC_MATCH_ANY:
+        case NCC_MATCH_CLASS:
+        case NCC_MATCH_SET:
+            return;
+
+        case NCC_MATCH_EMPTY:
+            break;
+
+        case NCC_MATCH_GROUP: {
+            ncc_rule_group_t *grp = (ncc_rule_group_t *)m->group;
+            ncc_nonterm_t    *gnt = ncc_get_nonterm(g, grp->contents_id);
+
+            if (gnt) {
+                ncc_list_push(*out, (int32_t)grp->contents_id);
+            }
+
+            if (grp->min > 0) {
+                return;
+            }
+
+            break;
+        }
+
+        case NCC_MATCH_NT: {
+            ncc_nonterm_t *nt = ncc_get_nonterm(g, m->nt_id);
+
+            if (!nt) {
+                return;
+            }
+
+            ncc_list_push(*out, (int32_t)m->nt_id);
+
+            if (!first_nullable[m->nt_id]) {
+                return;
+            }
+
+            break;
+        }
+        }
+    }
+}
+
+static bool
+refresh_nt_first(ncc_grammar_t *g, ncc_nonterm_t *nt)
+{
+    size_t old_len = nt->first_set->count;
+    bool   old_any = nt->first_has_any;
+
+    for (size_t j = 0; j < nt->rule_ids.len; j++) {
+        ncc_parse_rule_t *rule = ncc_get_rule(g, nt->rule_ids.data[j]);
+
+        merge_dict_set_into(nt->first_set, rule->first_set);
+
+        if (rule->first_has_any) {
+            nt->first_has_any = true;
+        }
+    }
+
+    return nt->first_set->count != old_len || nt->first_has_any != old_any;
+}
+
+static void
+first_sets_by_scc(ncc_grammar_t *g, bool *first_nullable)
+{
+    size_t n_nts = g->nt_list.len;
+
+    if (n_nts == 0) {
+        return;
+    }
+
+    ncc_list_t(int32_t) edges     = ncc_list_new_cap(int32_t, n_nts * 2);
+    int32_t            *dep_start = ncc_alloc_array(int32_t, n_nts + 1);
+
+    for (size_t i = 0; i < n_nts; i++) {
+        ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)i);
+
+        dep_start[i] = (int32_t)ncc_list_len(edges);
+
+        for (size_t j = 0; j < nt->rule_ids.len; j++) {
+            first_deps_of_rule(g,
+                               ncc_get_rule(g, nt->rule_ids.data[j]),
+                               first_nullable,
+                               &edges);
+        }
+    }
+
+    dep_start[n_nts] = (int32_t)ncc_list_len(edges);
+
+    int32_t *index    = ncc_alloc_array(int32_t, n_nts);
+    int32_t *low      = ncc_alloc_array(int32_t, n_nts);
+    bool    *on_stack = ncc_alloc_array(bool, n_nts);
+
+    for (size_t i = 0; i < n_nts; i++) {
+        index[i] = -1;
+    }
+
+    ncc_list_t(int32_t) sccstack = ncc_list_new_cap(int32_t, n_nts);
+    ncc_list_t(int32_t) frame_v  = ncc_list_new_cap(int32_t, n_nts);
+    ncc_list_t(int32_t) frame_e  = ncc_list_new_cap(int32_t, n_nts);
+    ncc_list_t(int32_t) members  = ncc_list_new_cap(int32_t, n_nts);
+
+    int32_t next_index = 0;
+
+    for (size_t root = 0; root < n_nts; root++) {
+        if (index[root] >= 0) {
+            continue;
+        }
+
+        ncc_list_push(frame_v, (int32_t)root);
+        ncc_list_push(frame_e, dep_start[root]);
+
+        index[root]    = next_index;
+        low[root]      = next_index;
+        next_index++;
+        on_stack[root] = true;
+        ncc_list_push(sccstack, (int32_t)root);
+
+        while (ncc_list_len(frame_v) > 0) {
+            size_t  top = ncc_list_len(frame_v) - 1;
+            int32_t v   = frame_v.data[top];
+            int32_t e   = frame_e.data[top];
+
+            if (e < dep_start[v + 1]) {
+                frame_e.data[top] = e + 1;
+
+                int32_t w = edges.data[e];
+
+                if (index[w] < 0) {
+                    index[w]    = next_index;
+                    low[w]      = next_index;
+                    next_index++;
+                    on_stack[w] = true;
+                    ncc_list_push(sccstack, w);
+                    ncc_list_push(frame_v, w);
+                    ncc_list_push(frame_e, dep_start[w]);
+                }
+                else if (on_stack[w] && low[v] > index[w]) {
+                    low[v] = index[w];
+                }
+
+                continue;
+            }
+
+            ncc_list_pop(int32_t, frame_v);
+            ncc_list_pop(int32_t, frame_e);
+
+            if (ncc_list_len(frame_v) > 0) {
+                size_t  parent = ncc_list_len(frame_v) - 1;
+                int32_t pv     = frame_v.data[parent];
+
+                if (low[pv] > low[v]) {
+                    low[pv] = low[v];
+                }
+            }
+
+            if (low[v] != index[v]) {
+                continue;
+            }
+
+            ncc_list_clear(members);
+
+            while (true) {
+                int32_t m = sccstack.data[ncc_list_len(sccstack) - 1];
+
+                ncc_list_pop(int32_t, sccstack);
+                on_stack[m] = false;
+                ncc_list_push(members, m);
+
+                if (m == v) {
+                    break;
+                }
+            }
+
+            bool changed = true;
+
+            while (changed) {
+                changed = false;
+
+                for (size_t k = 0; k < ncc_list_len(members); k++) {
+                    int32_t        m  = members.data[k];
+                    ncc_nonterm_t *nt = ncc_get_nonterm(g, m);
+
+                    for (size_t j = 0; j < nt->rule_ids.len; j++) {
+                        ncc_parse_rule_t *r
+                            = ncc_get_rule(g, nt->rule_ids.data[j]);
+
+                        if (update_rule_first(g, r, first_nullable)) {
+                            changed = true;
+                        }
+                    }
+
+                    if (refresh_nt_first(g, nt)) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    ncc_list_free(members);
+    ncc_list_free(frame_e);
+    ncc_list_free(frame_v);
+    ncc_list_free(sccstack);
+    ncc_free(on_stack);
+    ncc_free(low);
+    ncc_free(index);
+    ncc_free(dep_start);
+    ncc_list_free(edges);
+}
+
+static void
 compute_all_first_sets(ncc_grammar_t *g)
 {
     size_t n_nts   = g->nt_list.len;
@@ -747,29 +1061,7 @@ compute_all_first_sets(ncc_grammar_t *g)
 
     bool *first_nullable = ncc_alloc_array(bool, n_nts);
 
-    bool fn_changed = true;
-
-    while (fn_changed) {
-        fn_changed = false;
-
-        for (size_t i = 0; i < n_nts; i++) {
-            if (first_nullable[i]) {
-                continue;
-            }
-
-            ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)i);
-
-            for (size_t j = 0; j < nt->rule_ids.len; j++) {
-                ncc_parse_rule_t *rule = ncc_get_rule(g, nt->rule_ids.data[j]);
-
-                if (rule_is_first_nullable(g, rule, first_nullable)) {
-                    first_nullable[i] = true;
-                    fn_changed        = true;
-                    break;
-                }
-            }
-        }
-    }
+    compute_first_nullable(g, first_nullable);
 
     for (size_t i = 0; i < n_nts; i++) {
         ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)i);
@@ -785,40 +1077,7 @@ compute_all_first_sets(ncc_grammar_t *g)
         rule->first_has_any = false;
     }
 
-    bool changed = true;
-
-    while (changed) {
-        changed = false;
-
-        for (size_t i = 0; i < n_rules; i++) {
-            ncc_parse_rule_t *rule = ncc_get_rule(g, (int32_t)i);
-
-            if (update_rule_first(g, rule, first_nullable)) {
-                changed = true;
-            }
-        }
-
-        for (size_t i = 0; i < n_nts; i++) {
-            ncc_nonterm_t *nt      = ncc_get_nonterm(g, (int64_t)i);
-            size_t          old_len = nt->first_set->count;
-            bool            old_any = nt->first_has_any;
-
-            for (size_t j = 0; j < nt->rule_ids.len; j++) {
-                int32_t            rule_ix = nt->rule_ids.data[j];
-                ncc_parse_rule_t *rule    = ncc_get_rule(g, rule_ix);
-
-                merge_dict_set_into(nt->first_set, rule->first_set);
-
-                if (rule->first_has_any) {
-                    nt->first_has_any = true;
-                }
-            }
-
-            if (nt->first_set->count != old_len || nt->first_has_any != old_any) {
-                changed = true;
-            }
-        }
-    }
+    first_sets_by_scc(g, first_nullable);
 
     for (size_t i = 0; i < n_nts; i++) {
         if (first_nullable[i]) {
@@ -827,623 +1086,6 @@ compute_all_first_sets(ncc_grammar_t *g)
     }
 
     ncc_free(first_nullable);
-}
-
-static void
-compute_left_corners(ncc_grammar_t *g)
-{
-    size_t n_nts = g->nt_list.len;
-
-    if (n_nts == 0) {
-        return;
-    }
-
-    int32_t words = (int32_t)((n_nts + 63) / 64);
-
-    g->lc_words_per_nt  = words;
-    g->left_corner_sets = ncc_alloc_array(uint64_t, n_nts * (size_t)words);
-
-    for (size_t i = 0; i < n_nts; i++) {
-        uint64_t *set = g->left_corner_sets + i * (size_t)words;
-
-        set[i / 64] |= (uint64_t)1 << (i % 64);
-    }
-
-    for (size_t i = 0; i < n_nts; i++) {
-        ncc_nonterm_t *nt  = ncc_get_nonterm(g, (int64_t)i);
-        uint64_t       *set = g->left_corner_sets + i * (size_t)words;
-
-        for (size_t j = 0; j < nt->rule_ids.len; j++) {
-            int32_t            rule_ix = nt->rule_ids.data[j];
-            ncc_parse_rule_t *rule    = ncc_get_rule(g, rule_ix);
-            size_t             n_match = rule->contents.len;
-
-            for (size_t k = 0; k < n_match; k++) {
-                ncc_match_t *m = &rule->contents.data[k];
-
-                if (m->kind == NCC_MATCH_NT) {
-                    size_t child_id = (size_t)m->nt_id;
-
-                    set[child_id / 64] |= (uint64_t)1 << (child_id % 64);
-
-                    ncc_nonterm_t *child = ncc_get_nonterm(g, m->nt_id);
-
-                    if (!child->nullable) {
-                        break;
-                    }
-                }
-                else if (m->kind == NCC_MATCH_GROUP) {
-                    ncc_rule_group_t *grp      = (ncc_rule_group_t *)m->group;
-                    size_t             child_id = (size_t)grp->contents_id;
-
-                    set[child_id / 64] |= (uint64_t)1 << (child_id % 64);
-
-                    if (grp->min > 0) {
-                        ncc_nonterm_t *gnt = ncc_get_nonterm(g, grp->contents_id);
-
-                        if (!gnt->nullable) {
-                            break;
-                        }
-                    }
-                }
-                else if (m->kind == NCC_MATCH_EMPTY) {
-                    continue;
-                }
-                else {
-                    break;
-                }
-            }
-        }
-    }
-
-    bool changed = true;
-
-    while (changed) {
-        changed = false;
-
-        for (size_t i = 0; i < n_nts; i++) {
-            uint64_t *set_i = g->left_corner_sets + i * (size_t)words;
-
-            for (size_t j = 0; j < n_nts; j++) {
-                if (!((set_i[j / 64] >> (j % 64)) & 1)) {
-                    continue;
-                }
-
-                uint64_t *set_j = g->left_corner_sets + j * (size_t)words;
-
-                for (int32_t w = 0; w < words; w++) {
-                    uint64_t new_bits = set_j[w] & ~set_i[w];
-
-                    if (new_bits) {
-                        set_i[w] |= new_bits;
-                        changed = true;
-                    }
-                }
-            }
-        }
-    }
-}
-
-static int32_t
-lr0_symbol_of_match(ncc_match_t *m)
-{
-    switch (m->kind) {
-    case NCC_MATCH_NT:
-        return (int32_t)m->nt_id;
-    case NCC_MATCH_TERMINAL:
-        return (int32_t)m->terminal_id + 0x10000;
-    case NCC_MATCH_GROUP: {
-        ncc_rule_group_t *grp = (ncc_rule_group_t *)m->group;
-        return -(1000 + grp->gid);
-    }
-    case NCC_MATCH_ANY:
-        return -1;
-    case NCC_MATCH_EMPTY:
-        return -2;
-    case NCC_MATCH_CLASS:
-        return -(100 + (int32_t)m->char_class);
-    case NCC_MATCH_SET:
-        return -3;
-    }
-
-    return -999;
-}
-
-static void
-compute_lr0_items(ncc_grammar_t *g)
-{
-    size_t n_rules = g->rules.len;
-
-    g->lr0_rule_item_base = ncc_alloc_array(int32_t, n_rules);
-
-    int32_t total = 0;
-
-    for (size_t i = 0; i < n_rules; i++) {
-        ncc_parse_rule_t *r   = ncc_get_rule(g, (int32_t)i);
-        int32_t            len = (int32_t)r->contents.len;
-
-        g->lr0_rule_item_base[i] = total;
-        total += len + 1;
-    }
-
-    g->lr0_items      = ncc_alloc_array(ncc_lr0_item_t, total);
-    g->lr0_item_count = total;
-
-    for (size_t i = 0; i < n_rules; i++) {
-        ncc_parse_rule_t *r    = ncc_get_rule(g, (int32_t)i);
-        int32_t            len  = (int32_t)r->contents.len;
-        int32_t            base = g->lr0_rule_item_base[i];
-
-        for (int32_t d = 0; d <= len; d++) {
-            g->lr0_items[base + d] = (ncc_lr0_item_t){
-                .rule_ix  = (int32_t)i,
-                .dot      = (int16_t)d,
-                .rule_len = (int16_t)len,
-            };
-        }
-    }
-}
-
-static void
-lr0_closure(ncc_grammar_t *g, uint64_t *seed_bits, int32_t *seed_list, int32_t *seed_len)
-{
-    int32_t words = (g->lr0_item_count + 63) / 64;
-    (void)words;
-
-    for (int32_t idx = 0; idx < *seed_len; idx++) {
-        int32_t          item_id = seed_list[idx];
-        ncc_lr0_item_t *item    = &g->lr0_items[item_id];
-
-        if (item->dot >= item->rule_len) {
-            continue;
-        }
-
-        ncc_parse_rule_t *rule = ncc_get_rule(g, item->rule_ix);
-        ncc_match_t      *m    = &rule->contents.data[item->dot];
-
-        int64_t predict_nt_id = -1;
-
-        if (m->kind == NCC_MATCH_NT) {
-            predict_nt_id = m->nt_id;
-        }
-        else if (m->kind == NCC_MATCH_GROUP) {
-            ncc_rule_group_t *grp = (ncc_rule_group_t *)m->group;
-            predict_nt_id          = grp->contents_id;
-        }
-
-        if (predict_nt_id < 0) {
-            continue;
-        }
-
-        ncc_nonterm_t *nt = ncc_get_nonterm(g, predict_nt_id);
-
-        if (!nt) {
-            continue;
-        }
-
-        for (size_t r = 0; r < nt->rule_ids.len; r++) {
-            int32_t rix      = nt->rule_ids.data[r];
-            int32_t new_item = g->lr0_rule_item_base[rix];
-
-            size_t   w    = (size_t)new_item / 64;
-            uint64_t mask = (uint64_t)1 << ((size_t)new_item % 64);
-
-            if (!(seed_bits[w] & mask)) {
-                seed_bits[w] |= mask;
-                seed_list[(*seed_len)++] = new_item;
-            }
-        }
-    }
-}
-
-static uint64_t
-lr0_state_hash(int32_t *items, int32_t count)
-{
-    uint64_t h = 0x9e3779b97f4a7c15ULL ^ (uint64_t)count;
-
-    for (int32_t i = 0; i < count; i++) {
-        h ^= ((uint64_t)items[i] + 0x9e3779b97f4a7c15ULL);
-        h = (h ^ (h >> 30)) * 0xbf58476d1ce4e5b9ULL;
-        h = (h ^ (h >> 27)) * 0x94d049bb133111ebULL;
-        h ^= h >> 31;
-    }
-
-    return h;
-}
-
-static bool
-lr0_items_eq(int32_t *a, int32_t a_len, int32_t *b, int32_t b_len)
-{
-    if (a_len != b_len) {
-        return false;
-    }
-
-    return memcmp(a, b, (size_t)a_len * sizeof(int32_t)) == 0;
-}
-
-static int
-cmp_int32(const void *a, const void *b)
-{
-    int32_t x = *(const int32_t *)a;
-    int32_t y = *(const int32_t *)b;
-
-    return (x > y) - (x < y);
-}
-
-typedef struct {
-    ncc_grammar_t  *g;
-    int32_t         *state_starts;
-    int32_t         *state_counts;
-    int32_t         *state_items;
-    int32_t          state_items_total;
-    int32_t          state_items_cap;
-    int32_t         *goto_starts;
-    int32_t         *goto_counts;
-    ncc_lr0_goto_t *gotos;
-    int32_t          gotos_cap;
-    int32_t          gotos_count;
-    int32_t          states_cap;
-    int32_t          states_count;
-    int64_t         *dedup_hash;
-    int32_t         *dedup_sid;
-    int32_t          dedup_cap;
-} lr0_builder_t;
-
-static int32_t
-lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
-{
-    uint64_t h    = lr0_state_hash(items_buf, count);
-    int32_t  mask = b->dedup_cap - 1;
-    int32_t  idx  = (int32_t)(h & (uint64_t)mask);
-
-    while (b->dedup_hash[idx]) {
-        if ((uint64_t)b->dedup_hash[idx] == h) {
-            int32_t sid   = b->dedup_sid[idx];
-            int32_t s_off = b->state_starts[sid];
-            int32_t s_cnt = b->state_counts[sid];
-
-            if (lr0_items_eq(items_buf, count, &b->state_items[s_off], s_cnt)) {
-                return sid;
-            }
-        }
-
-        idx = (idx + 1) & mask;
-    }
-
-    int32_t sid = b->states_count++;
-
-    if (sid >= b->states_cap) {
-        int32_t old_cap = b->states_cap;
-        b->states_cap *= 2;
-
-        int32_t *new_state_starts = ncc_alloc_array(int32_t, b->states_cap);
-        memcpy(new_state_starts, b->state_starts, (size_t)old_cap * sizeof(int32_t));
-        ncc_free(b->state_starts);
-        b->state_starts = new_state_starts;
-
-        int32_t *new_state_counts = ncc_alloc_array(int32_t, b->states_cap);
-        memcpy(new_state_counts, b->state_counts, (size_t)old_cap * sizeof(int32_t));
-        ncc_free(b->state_counts);
-        b->state_counts = new_state_counts;
-
-        int32_t *new_goto_starts = ncc_alloc_array(int32_t, b->states_cap);
-        memcpy(new_goto_starts, b->goto_starts, (size_t)old_cap * sizeof(int32_t));
-        ncc_free(b->goto_starts);
-        b->goto_starts = new_goto_starts;
-
-        int32_t *new_goto_counts = ncc_alloc_array(int32_t, b->states_cap);
-        memcpy(new_goto_counts, b->goto_counts, (size_t)old_cap * sizeof(int32_t));
-        ncc_free(b->goto_counts);
-        b->goto_counts = new_goto_counts;
-    }
-
-    while (b->state_items_total + count > b->state_items_cap) {
-        int32_t  old_si_cap = b->state_items_cap;
-        b->state_items_cap *= 2;
-
-        int32_t *new_si = ncc_alloc_array(int32_t, b->state_items_cap);
-        memcpy(new_si, b->state_items, (size_t)old_si_cap * sizeof(int32_t));
-        ncc_free(b->state_items);
-        b->state_items = new_si;
-    }
-
-    b->state_starts[sid] = b->state_items_total;
-    b->state_counts[sid] = count;
-    memcpy(&b->state_items[b->state_items_total],
-           items_buf,
-           (size_t)count * sizeof(int32_t));
-    b->state_items_total += count;
-
-    b->goto_starts[sid] = 0;
-    b->goto_counts[sid] = 0;
-
-    if (b->states_count * 4 >= b->dedup_cap * 3) {
-        int32_t  old_dcap  = b->dedup_cap;
-        int64_t *old_dhash = b->dedup_hash;
-        int32_t *old_dsid  = b->dedup_sid;
-
-        b->dedup_cap *= 2;
-        b->dedup_hash = ncc_alloc_array(int64_t, b->dedup_cap);
-        b->dedup_sid  = ncc_alloc_array(int32_t, b->dedup_cap);
-
-        int32_t dmask = b->dedup_cap - 1;
-
-        for (int32_t i = 0; i < old_dcap; i++) {
-            if (old_dhash[i]) {
-                int32_t di = (int32_t)((uint64_t)old_dhash[i] & (uint64_t)dmask);
-
-                while (b->dedup_hash[di]) {
-                    di = (di + 1) & dmask;
-                }
-
-                b->dedup_hash[di] = old_dhash[i];
-                b->dedup_sid[di]  = old_dsid[i];
-            }
-        }
-
-        ncc_free(old_dhash);
-        ncc_free(old_dsid);
-
-        idx = (int32_t)(h & (uint64_t)(b->dedup_cap - 1));
-
-        while (b->dedup_hash[idx]) {
-            idx = (idx + 1) & (b->dedup_cap - 1);
-        }
-    }
-
-    b->dedup_hash[idx] = (int64_t)h;
-
-    if (!b->dedup_hash[idx]) {
-        b->dedup_hash[idx] = 1;
-    }
-
-    b->dedup_sid[idx] = sid;
-
-    return sid;
-}
-
-static void
-build_lr0_states(ncc_grammar_t *g)
-{
-    size_t n_rules = g->rules.len;
-    size_t n_nts   = g->nt_list.len;
-
-    if (n_rules == 0 || n_nts == 0) {
-        return;
-    }
-
-    int32_t bitset_words = (g->lr0_item_count + 63) / 64;
-
-    lr0_builder_t b = {
-        .g                 = g,
-        .states_cap        = 256,
-        .states_count      = 0,
-        .state_items_cap   = 4096,
-        .state_items_total = 0,
-        .gotos_cap         = 1024,
-        .gotos_count       = 0,
-        .dedup_cap         = 1024,
-    };
-
-    b.state_starts = ncc_alloc_array(int32_t, b.states_cap);
-    b.state_counts = ncc_alloc_array(int32_t, b.states_cap);
-    b.state_items  = ncc_alloc_array(int32_t, b.state_items_cap);
-    b.goto_starts  = ncc_alloc_array(int32_t, b.states_cap);
-    b.goto_counts  = ncc_alloc_array(int32_t, b.states_cap);
-    b.gotos        = ncc_alloc_array(ncc_lr0_goto_t, b.gotos_cap);
-    b.dedup_hash   = ncc_alloc_array(int64_t, b.dedup_cap);
-    b.dedup_sid    = ncc_alloc_array(int32_t, b.dedup_cap);
-
-    uint64_t *bits     = ncc_alloc_array(uint64_t, bitset_words);
-    int32_t  *itemlist = ncc_alloc_array(int32_t, g->lr0_item_count);
-
-    {
-        ncc_nonterm_t *start = ncc_get_nonterm(g, g->default_start);
-
-        memset(bits, 0, (size_t)bitset_words * sizeof(uint64_t));
-
-        int32_t len = 0;
-
-        for (size_t r = 0; r < start->rule_ids.len; r++) {
-            int32_t rix  = start->rule_ids.data[r];
-            int32_t item = g->lr0_rule_item_base[rix];
-
-            size_t   w    = (size_t)item / 64;
-            uint64_t mask = (uint64_t)1 << ((size_t)item % 64);
-
-            if (!(bits[w] & mask)) {
-                bits[w] |= mask;
-                itemlist[len++] = item;
-            }
-        }
-
-        lr0_closure(g, bits, itemlist, &len);
-        qsort(itemlist, (size_t)len, sizeof(int32_t), cmp_int32);
-
-        g->lr0_start_state = lr0_find_or_create(&b, itemlist, len);
-    }
-
-    int32_t sym_buf_sz = g->lr0_item_count > 256 ? g->lr0_item_count : 256;
-    int32_t *sym_buf   = ncc_alloc_array(int32_t, sym_buf_sz);
-    int32_t *kernel    = ncc_alloc_array(int32_t, g->lr0_item_count);
-
-    for (int32_t si = 0; si < b.states_count; si++) {
-        int32_t s_off = b.state_starts[si];
-        int32_t s_cnt = b.state_counts[si];
-
-        int32_t n_syms = 0;
-
-        for (int32_t j = 0; j < s_cnt; j++) {
-            ncc_lr0_item_t *it = &g->lr0_items[b.state_items[s_off + j]];
-
-            if (it->dot >= it->rule_len) {
-                continue;
-            }
-
-            ncc_parse_rule_t *rule = ncc_get_rule(g, it->rule_ix);
-            ncc_match_t      *m    = &rule->contents.data[it->dot];
-            int32_t            sym  = lr0_symbol_of_match(m);
-
-            bool found = false;
-
-            for (int32_t k = 0; k < n_syms; k++) {
-                if (sym_buf[k] == sym) {
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
-                sym_buf[n_syms++] = sym;
-            }
-        }
-
-        b.goto_starts[si] = b.gotos_count;
-
-        for (int32_t s = 0; s < n_syms; s++) {
-            int32_t sym = sym_buf[s];
-
-            if (sym == -2) {
-                continue;
-            }
-
-            memset(bits, 0, (size_t)bitset_words * sizeof(uint64_t));
-            int32_t klen = 0;
-
-            for (int32_t j = 0; j < s_cnt; j++) {
-                ncc_lr0_item_t *it = &g->lr0_items[b.state_items[s_off + j]];
-
-                if (it->dot >= it->rule_len) {
-                    continue;
-                }
-
-                ncc_parse_rule_t *rule = ncc_get_rule(g, it->rule_ix);
-                ncc_match_t      *m    = &rule->contents.data[it->dot];
-
-                if (lr0_symbol_of_match(m) != sym) {
-                    continue;
-                }
-
-                int32_t next_item = b.state_items[s_off + j] + 1;
-
-                size_t   w    = (size_t)next_item / 64;
-                uint64_t mask = (uint64_t)1 << ((size_t)next_item % 64);
-
-                if (!(bits[w] & mask)) {
-                    bits[w] |= mask;
-                    kernel[klen++] = next_item;
-                }
-            }
-
-            if (klen == 0) {
-                continue;
-            }
-
-            lr0_closure(g, bits, kernel, &klen);
-            qsort(kernel, (size_t)klen, sizeof(int32_t), cmp_int32);
-
-            int32_t dest = lr0_find_or_create(&b, kernel, klen);
-
-            if (b.gotos_count >= b.gotos_cap) {
-                int32_t          old_gcap = b.gotos_cap;
-                b.gotos_cap *= 2;
-                ncc_lr0_goto_t *new_gotos = ncc_alloc_array(ncc_lr0_goto_t, b.gotos_cap);
-                memcpy(new_gotos, b.gotos, (size_t)old_gcap * sizeof(ncc_lr0_goto_t));
-                ncc_free(b.gotos);
-                b.gotos = new_gotos;
-            }
-
-            b.gotos[b.gotos_count++] = (ncc_lr0_goto_t){
-                .symbol     = sym,
-                .dest_state = dest,
-            };
-        }
-
-        b.goto_counts[si] = b.gotos_count - b.goto_starts[si];
-    }
-
-    g->lr0_state_count = b.states_count;
-    g->lr0_states      = ncc_alloc_array(ncc_lr0_state_t, b.states_count);
-
-    for (int32_t i = 0; i < b.states_count; i++) {
-        g->lr0_states[i] = (ncc_lr0_state_t){
-            .items_start = b.state_starts[i],
-            .items_count = b.state_counts[i],
-            .gotos_start = b.goto_starts[i],
-            .gotos_count = b.goto_counts[i],
-        };
-    }
-
-    g->lr0_state_items_total = b.state_items_total;
-    g->lr0_state_items       = b.state_items;
-
-    g->lr0_goto_count = b.gotos_count;
-    g->lr0_gotos      = b.gotos;
-
-    ncc_free(b.state_starts);
-    ncc_free(b.state_counts);
-    ncc_free(b.goto_starts);
-    ncc_free(b.goto_counts);
-    ncc_free(b.dedup_hash);
-    ncc_free(b.dedup_sid);
-    ncc_free(bits);
-    ncc_free(itemlist);
-    ncc_free(sym_buf);
-    ncc_free(kernel);
-}
-
-static void
-lr0_compute_predict_states(ncc_grammar_t *g)
-{
-    size_t n_nts = g->nt_list.len;
-
-    g->lr0_predict_state = ncc_alloc_array(int32_t, n_nts);
-
-    int32_t   bitset_words = (g->lr0_item_count + 63) / 64;
-    uint64_t *bits         = ncc_alloc_array(uint64_t, bitset_words);
-    int32_t  *itemlist     = ncc_alloc_array(int32_t, g->lr0_item_count);
-
-    for (size_t i = 0; i < n_nts; i++) {
-        ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)i);
-
-        memset(bits, 0, (size_t)bitset_words * sizeof(uint64_t));
-        int32_t len = 0;
-
-        for (size_t r = 0; r < nt->rule_ids.len; r++) {
-            int32_t rix  = nt->rule_ids.data[r];
-            int32_t item = g->lr0_rule_item_base[rix];
-
-            size_t   w    = (size_t)item / 64;
-            uint64_t mask = (uint64_t)1 << ((size_t)item % 64);
-
-            if (!(bits[w] & mask)) {
-                bits[w] |= mask;
-                itemlist[len++] = item;
-            }
-        }
-
-        lr0_closure(g, bits, itemlist, &len);
-        qsort(itemlist, (size_t)len, sizeof(int32_t), cmp_int32);
-
-        int32_t found = -1;
-
-        for (int32_t s = 0; s < g->lr0_state_count; s++) {
-            ncc_lr0_state_t *st = &g->lr0_states[s];
-
-            if (lr0_items_eq(itemlist,
-                             len,
-                             &g->lr0_state_items[st->items_start],
-                             st->items_count)) {
-                found = s;
-                break;
-            }
-        }
-
-        g->lr0_predict_state[i] = found;
-    }
-
-    ncc_free(bits);
-    ncc_free(itemlist);
 }
 
 void
@@ -1470,20 +1112,6 @@ ncc_grammar_finalize(ncc_grammar_t *g)
     }
 
     compute_all_first_sets(g);
-    compute_left_corners(g);
-
-    compute_lr0_items(g);
-    build_lr0_states(g);
-    lr0_compute_predict_states(g);
-
-    n = g->nt_list.len;
-
-    for (size_t i = 0; i < n; i++) {
-        if (g->nt_list.data[i]->group_nt) {
-            g->has_groups = true;
-            break;
-        }
-    }
 
     ncc_nonterm_t *start = ncc_get_nonterm(g, g->default_start);
 

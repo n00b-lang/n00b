@@ -2,8 +2,9 @@
 
 #include <stdalign.h>
 #include <stddef.h>
-#include <stdlib.h>
 #include <string.h>
+
+#include "lib/alloc.h"
 
 #define NCC_ARENA_DEFAULT_BLOCK_SIZE (256 * 1024)
 #define NCC_ARENA_ALIGNMENT          16
@@ -19,9 +20,6 @@ typedef struct {
     ncc_arena_block_t *current;
     ncc_arena_block_t *first;
     size_t             default_block_size;
-#ifdef NCC_MEM_DEBUG
-    size_t             total_allocated;
-#endif
 } ncc_arena_t;
 
 static inline void
@@ -47,9 +45,6 @@ ncc_arena_alloc(ncc_arena_t *a, size_t size)
     if (a->current && a->current->used + size <= a->current->capacity) {
         void *ptr = a->current->data + a->current->used;
         a->current->used += size;
-#ifdef NCC_MEM_DEBUG
-        a->total_allocated += size;
-#endif
         return memset(ptr, 0, size);
     }
 
@@ -57,9 +52,6 @@ ncc_arena_alloc(ncc_arena_t *a, size_t size)
         && a->current->next->capacity >= size) {
         a->current = a->current->next;
         a->current->used = size;
-#ifdef NCC_MEM_DEBUG
-        a->total_allocated += size;
-#endif
         return memset(a->current->data, 0, size);
     }
 
@@ -68,11 +60,8 @@ ncc_arena_alloc(ncc_arena_t *a, size_t size)
         block_cap = size;
     }
 
-    ncc_arena_block_t *block = (ncc_arena_block_t *)malloc(
-        sizeof(ncc_arena_block_t) + block_cap);
-    if (!block) {
-        return NULL;
-    }
+    ncc_arena_block_t *block = (ncc_arena_block_t *)ncc_alloc_size(
+        1, sizeof(ncc_arena_block_t) + block_cap);
 
     block->capacity = block_cap;
     block->used     = size;
@@ -87,9 +76,6 @@ ncc_arena_alloc(ncc_arena_t *a, size_t size)
     }
 
     a->current = block;
-#ifdef NCC_MEM_DEBUG
-    a->total_allocated += size;
-#endif
 
     return memset(block->data, 0, size);
 }
@@ -102,9 +88,6 @@ ncc_arena_reset(ncc_arena_t *a)
     }
 
     a->current = a->first;
-#ifdef NCC_MEM_DEBUG
-    a->total_allocated = 0;
-#endif
 }
 
 static inline void
@@ -114,17 +97,9 @@ ncc_arena_free(ncc_arena_t *a)
 
     while (b) {
         ncc_arena_block_t *next = b->next;
-        free(b);
+        ncc_free(b);
         b = next;
     }
 
     *a = (ncc_arena_t){0};
 }
-
-#ifdef NCC_MEM_DEBUG
-static inline size_t
-ncc_arena_total_allocated(const ncc_arena_t *a)
-{
-    return a->total_allocated;
-}
-#endif

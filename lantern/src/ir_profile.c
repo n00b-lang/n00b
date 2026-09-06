@@ -28,7 +28,7 @@ static void ready_scalars(ir_module_t *m)
         th_type *t   = ir_typelang_parse(m->ctx->types,
                                          p->scalars[i].type_text, &err);
 
-        free(err);
+        ncc_free(err);
         m->scalar_hashes[i] = t ? th_hash(m->ctx->types, t) : 0;
         m->scalar_types[i]  = t ? ir_type_intern(m, t) : nullptr;
     }

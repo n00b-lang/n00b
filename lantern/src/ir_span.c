@@ -45,10 +45,6 @@ ir_origin_t *ir_origin_new(ir_ctx_t *ctx, ir_origin_kind_t kind,
 
     ir_origin_t *o = ir_alloc(ctx, sizeof(ir_origin_t));
 
-    if (!o) {
-        return nullptr;
-    }
-
     o->kind   = kind;
     o->span   = span;
     o->agent  = agent ? ir_strdup(ctx, agent) : nullptr;

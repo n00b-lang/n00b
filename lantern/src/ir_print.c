@@ -3,9 +3,14 @@
 #include <string.h>
 
 #include "ir_internal.h"
-#include "ir_internal.h"
+#include "ir/grammar.h"
 #include "ir/layout.h"
 #include "ir/text.h"
+#include "ir/walk.h"
+
+#include "parse/pwz.h"
+#include "parse/tree_print.h"
+#include "scanner/token_stream.h"
 
 const char *ir_type_text(ir_module_t *m, th_type *t)
 {
@@ -18,19 +23,19 @@ const char *ir_type_text(ir_module_t *m, th_type *t)
     return s ? s : "?";
 }
 
-static void put_type(ir_sb *b, ir_module_t *m, th_type *t)
+static void put_type(ncc_buffer_t *b, ir_module_t *m, th_type *t)
 {
-    ir_sb_str(b, ir_type_text(m, t));
+    ncc_buffer_puts(b, ir_type_text(m, t));
 }
 
-static void put_span(ir_sb *b, ir_module_t *m, ir_span_t s)
+static void put_span(ncc_buffer_t *b, ir_module_t *m, ir_span_t s)
 {
     (void)m;
 
     if (!ir_span_known(s) || s.implied) {
         return;
     }
-    ir_sb_fmt(b, " !loc(%d, %u, %u, %u, %u, %u, %u)", s.file, s.start_byte,
+    ncc_buffer_printf(b, " !loc(%d, %u, %u, %u, %u, %u, %u)", s.file, s.start_byte,
               s.end_byte, s.start_line, s.start_col, s.end_line, s.end_col);
 }
 
@@ -74,24 +79,24 @@ bool ir_origin_kind_from_name(const char *s, ir_origin_kind_t *out)
     return false;
 }
 
-static void put_origin(ir_sb *b, const ir_origin_t *o)
+static void put_origin(ncc_buffer_t *b, const ir_origin_t *o)
 {
     for (; o; o = o->parent) {
-        ir_sb_fmt(b, " !origin(%s, ", ir_origin_kind_name(o->kind));
+        ncc_buffer_printf(b, " !origin(%s, ", ir_origin_kind_name(o->kind));
 
         if (o->agent) {
-            ir_sb_quote(b, o->agent);
+            ir_quote(b, o->agent);
         }
         else {
-            ir_sb_str(b, "\"\"");
+            ncc_buffer_puts(b, "\"\"");
         }
-        ir_sb_fmt(b, ", %d, %u, %u, %u, %u, %u, %u)", o->span.file,
+        ncc_buffer_printf(b, ", %d, %u, %u, %u, %u, %u, %u)", o->span.file,
                   o->span.start_byte, o->span.end_byte, o->span.start_line,
                   o->span.start_col, o->span.end_line, o->span.end_col);
     }
 }
 
-static void put_annots(ir_sb *b, ir_module_t *m, ir_annots_t *a)
+static void put_annots(ncc_buffer_t *b, ir_module_t *m, ir_annots_t *a)
 {
     for (uint32_t i = 0; i < ir_annot_count(a); i++) {
         ir_annot_t *an = ir_annot_at(a, i);
@@ -100,36 +105,36 @@ static void put_annots(ir_sb *b, ir_module_t *m, ir_annots_t *a)
             continue;
         }
 
-        ir_sb_fmt(b, " !%s(", an->key);
+        ncc_buffer_printf(b, " !%s(", an->key);
 
         switch (an->kind) {
         case IR_ANNOT_BOOL:
-            ir_sb_str(b, an->b ? "true" : "false");
+            ncc_buffer_puts(b, an->b ? "true" : "false");
             break;
         case IR_ANNOT_INT:
-            ir_sb_lit(b, an->i);
+            ir_lit_into(b, an->i);
             break;
         case IR_ANNOT_STR:
-            ir_sb_quote(b, an->s ? an->s : "");
+            ir_quote(b, an->s ? an->s : "");
             break;
         case IR_ANNOT_TYPE:
             put_type(b, m, an->t);
             break;
         case IR_ANNOT_VALUE:
-            ir_sb_fmt(b, "%%%s", an->v && an->v->name ? an->v->name : "?");
+            ncc_buffer_printf(b, "%%%s", an->v && an->v->name ? an->v->name : "?");
             break;
         }
 
         if (an->derived_from) {
             const char *p = ir_prop_name(an->derived_from);
 
-            ir_sb_fmt(b, " from %s", p ? p : "?");
+            ncc_buffer_printf(b, " from %s", p ? p : "?");
         }
-        ir_sb_str(b, ")");
+        ncc_buffer_puts(b, ")");
     }
 }
 
-static void put_comment(ir_sb *b, ir_annots_t *a, const char *indent)
+static void put_comment(ncc_buffer_t *b, ir_annots_t *a, const char *indent)
 {
     ir_annot_t *c = ir_annot_get(a, "ir.comment");
 
@@ -143,9 +148,9 @@ static void put_comment(ir_sb *b, ir_annots_t *a, const char *indent)
         const char *nl = strchr(p, '\n');
         size_t      n  = nl ? (size_t)(nl - p) : strlen(p);
 
-        ir_sb_fmt(b, "%s# ", indent);
-        ir_sb_put(b, p, n);
-        ir_sb_str(b, "\n");
+        ncc_buffer_printf(b, "%s# ", indent);
+        ncc_buffer_append(b, p, n);
+        ncc_buffer_puts(b, "\n");
 
         if (!nl) {
             break;
@@ -154,22 +159,22 @@ static void put_comment(ir_sb *b, ir_annots_t *a, const char *indent)
     }
 }
 
-static void put_operand(ir_sb *b, ir_module_t *m, const ir_operand_t *o)
+static void put_operand(ncc_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
 {
     switch (o->kind) {
     case IR_OPD_VALUE:
         if (!o->value) {
-            ir_sb_str(b, "%?");
+            ncc_buffer_puts(b, "%?");
         }
         else if (o->value->kind == IR_VAL_GLOBAL
                  || o->value->kind == IR_VAL_FUNC) {
-            ir_sb_fmt(b, "@%s", o->value->name);
+            ncc_buffer_printf(b, "@%s", o->value->name);
         }
         else if (o->value->kind == IR_VAL_LOCAL) {
-            ir_sb_fmt(b, "$%s", o->value->name);
+            ncc_buffer_printf(b, "$%s", o->value->name);
         }
         else {
-            ir_sb_fmt(b, "%%%s", o->value->name);
+            ncc_buffer_printf(b, "%%%s", o->value->name);
         }
         break;
 
@@ -178,57 +183,57 @@ static void put_operand(ir_sb *b, ir_module_t *m, const ir_operand_t *o)
         break;
 
     case IR_OPD_NAME:
-        ir_sb_quote(b, o->name ? o->name : "");
+        ir_quote(b, o->name ? o->name : "");
         break;
 
     case IR_OPD_BLOCK:
-        ir_sb_str(b, o->block ? o->block->name : "?");
+        ncc_buffer_puts(b, o->block ? o->block->name : "?");
         break;
 
     case IR_OPD_DEFAULT_BLOCK:
-        ir_sb_fmt(b, "default: %s", o->block ? o->block->name : "?");
+        ncc_buffer_printf(b, "default: %s", o->block ? o->block->name : "?");
         break;
 
     case IR_OPD_CONST:
         if (o->lit.is_float) {
             if (o->lit.text) {
-                ir_sb_str(b, o->lit.text);
+                ncc_buffer_puts(b, o->lit.text);
             }
             else {
-                ir_sb_fmt(b, "%.17g", o->lit.f);
+                ncc_buffer_printf(b, "%.17g", o->lit.f);
             }
         }
         else {
-            ir_sb_lit(b, o->lit.i);
+            ir_lit_into(b, o->lit.i);
         }
         break;
 
     case IR_OPD_PHI_ARM:
-        ir_sb_fmt(b, "[%s: %%%s]", o->phi.block ? o->phi.block->name : "?",
+        ncc_buffer_printf(b, "[%s: %%%s]", o->phi.block ? o->phi.block->name : "?",
                   o->phi.value ? o->phi.value->name : "?");
         break;
 
     case IR_OPD_NAMED_ARG:
-        ir_sb_fmt(b, "%s = ", o->named.name ? o->named.name : "?");
+        ncc_buffer_printf(b, "%s = ", o->named.name ? o->named.name : "?");
 
         if (o->named.value && o->named.value->kind == IR_VAL_LOCAL) {
-            ir_sb_fmt(b, "$%s", o->named.value->name);
+            ncc_buffer_printf(b, "$%s", o->named.value->name);
         }
         else if (o->named.value
                  && (o->named.value->kind == IR_VAL_GLOBAL
                      || o->named.value->kind == IR_VAL_FUNC)) {
-            ir_sb_fmt(b, "@%s", o->named.value->name);
+            ncc_buffer_printf(b, "@%s", o->named.value->name);
         }
         else {
-            ir_sb_fmt(b, "%%%s",
+            ncc_buffer_printf(b, "%%%s",
                       o->named.value ? o->named.value->name : "?");
         }
         break;
 
     case IR_OPD_SWITCH_ARM:
-        ir_sb_str(b, "[");
-        ir_sb_lit(b, o->arm.value);
-        ir_sb_fmt(b, ": %s]",
+        ncc_buffer_puts(b, "[");
+        ir_lit_into(b, o->arm.value);
+        ncc_buffer_printf(b, ": %s]",
                   o->arm.block ? o->arm.block->name : "?");
         break;
 
@@ -237,164 +242,52 @@ static void put_operand(ir_sb *b, ir_module_t *m, const ir_operand_t *o)
     }
 }
 
-static void put_init(ir_sb *b, bool has, bool is_float, const char *text,
+static void put_init(ncc_buffer_t *b, bool has, bool is_float, const char *text,
                      double f, ir_lit_t lit)
 {
     if (!has) {
         return;
     }
-    ir_sb_str(b, " = ");
+    ncc_buffer_puts(b, " = ");
 
     if (is_float) {
         if (text) {
-            ir_sb_str(b, text);
+            ncc_buffer_puts(b, text);
         }
         else {
-            ir_sb_fmt(b, "%.17g", f);
+            ncc_buffer_printf(b, "%.17g", f);
         }
 
         return;
     }
-    ir_sb_lit(b, lit);
+    ir_lit_into(b, lit);
 }
 
-static void put_local_slot(ir_sb *b, ir_module_t *m, const ir_local_t *l)
+static void put_local_slot(ncc_buffer_t *b, ir_module_t *m, const ir_local_t *l)
 {
-    ir_sb_fmt(b, "$%s: ", l->name);
+    ncc_buffer_printf(b, "$%s: ", l->name);
     put_type(b, m, l->type);
     put_init(b, l->has_init, l->init_is_float, l->init_text, l->init_f,
              l->init);
 }
 
-static void put_instr(ir_sb *b, ir_module_t *m, const ir_instr_t *in)
-{
-    put_comment(b, (ir_annots_t *)&in->annots, "      ");
-    ir_sb_str(b, "      ");
-
-    if (in->dest_kind == IR_DEST_VALUE && in->dest) {
-        ir_sb_fmt(b, "%%%s: ", in->dest->name);
-        put_type(b, m, in->dest->type);
-        ir_sb_str(b, " = ");
-    }
-    else if (in->dest_kind == IR_DEST_LOCAL && in->dest_local) {
-        ir_sb_fmt(b, "$%s = ", in->dest_local->name);
-    }
-
-    ir_sb_str(b, ir_module_op_spelling(m, in->op));
-
-    for (uint32_t i = 0; i < in->n_mods; i++) {
-        ir_sb_fmt(b, " %s", in->mods[i]);
-    }
-
-    for (uint32_t i = 0; i < in->n_operands; i++) {
-        ir_sb_str(b, i ? ", " : " ");
-        put_operand(b, m, &in->operands[i]);
-    }
-
-    put_span(b, m, in->span);
-    put_origin(b, in->origin);
-    put_annots(b, m, (ir_annots_t *)&in->annots);
-    ir_sb_str(b, "\n");
-}
-
-static void put_func(ir_sb *b, ir_module_t *m, ir_func_t *f)
-{
-    put_comment(b, &f->annots, "  ");
-    ir_sb_str(b, "  ");
-
-    switch (f->linkage) {
-    case IR_LINK_INTERNAL:
-        ir_sb_str(b, "static ");
-        break;
-    case IR_LINK_EXTERN:
-        ir_sb_str(b, "extern ");
-        break;
-    default:
-        break;
-    }
-
-    ir_sb_fmt(b, "func @%s(", f->name);
-
-    bool first = true;
-
-    for (uint32_t i = 0; i < f->n_params; i++) {
-        ir_sb_fmt(b, "%s%%%s: ", first ? "" : ", ", f->params[i]->name);
-        put_type(b, m, f->params[i]->type);
-        first = false;
-    }
-
-    const th_param *rest = th_func_rest(f->type);
-
-    if (rest) {
-        ir_sb_fmt(b, "%s*", first ? "" : ", ");
-        put_type(b, m, rest->type);
-        first = false;
-    }
-
-    for (size_t i = 0; i < th_func_nkw(f->type); i++) {
-        const th_kwparam *k = th_func_kw(f->type, i);
-
-        ir_sb_fmt(b, "%s%s: ", first ? "" : ", ", k->name);
-        put_type(b, m, k->type);
-        first = false;
-    }
-    ir_sb_str(b, ") -> ");
-    put_type(b, m, th_func_ret(f->type));
-    put_span(b, m, f->span);
-    put_origin(b, f->origin);
-    put_annots(b, m, &f->annots);
-    ir_sb_str(b, " {\n");
-
-    for (uint32_t i = 0; i < f->n_locals; i++) {
-        put_comment(b, &f->locals[i]->annots, "    ");
-        ir_sb_str(b, "    local ");
-        put_local_slot(b, m, f->locals[i]);
-        put_span(b, m, f->locals[i]->span);
-        put_annots(b, m, &f->locals[i]->annots);
-        ir_sb_str(b, "\n");
-    }
-
-    if (f->n_locals && f->n_blocks) {
-        ir_sb_str(b, "\n");
-    }
-
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *bb = f->blocks[i];
-
-        if (i) {
-            ir_sb_str(b, "\n");
-        }
-        put_comment(b, &bb->annots, "    ");
-        ir_sb_fmt(b, "    block %s:", bb->name);
-        put_span(b, m, bb->span);
-        put_origin(b, bb->origin);
-        put_annots(b, m, &bb->annots);
-        ir_sb_str(b, "\n");
-
-        for (uint32_t k = 0; k < bb->n_instrs; k++) {
-            put_instr(b, m, bb->instrs[k]);
-        }
-    }
-    ir_sb_str(b, "  }\n");
-}
-
-static bool put_layout_val(ir_sb *b, ir_module_t *m,
+static bool put_layout_val(ncc_buffer_t *b, ir_module_t *m,
                            const ir_layout_val_t *v)
 {
     if (v->state == IR_LAYOUT_PINNED) {
-        ir_sb_fmt(b, "%llu", (unsigned long long)v->value);
+        ncc_buffer_printf(b, "%llu", (unsigned long long)v->value);
 
         return true;
     }
 
     if (v->state == IR_LAYOUT_SYMBOLIC) {
-        ir_sb_fmt(b, "%s(%s", ir_symkind_name(v->sym), ir_type_text(m, v->of));
+        ncc_buffer_printf(b, "%s(%s", ir_symkind_name(v->sym), ir_type_text(m, v->of));
 
         if (v->sym == IR_SYM_OFFSETOF) {
-            ir_sb_str(b, ", ");
-            ir_sb_quote(b, v->member ? v->member : "");
+            ncc_buffer_puts(b, ", ");
+            ir_quote(b, v->member ? v->member : "");
         }
-        ir_sb_str(b, ")");
+        ncc_buffer_puts(b, ")");
 
         return true;
     }
@@ -417,7 +310,7 @@ static bool authored_anywhere(const ir_descriptor_t *d)
     return false;
 }
 
-static void put_layouts(ir_sb *b, ir_module_t *m)
+static void put_layouts(ncc_buffer_t *b, ir_module_t *m)
 {
     for (size_t i = 0; i < ir_type_count(m); i++) {
         ir_typeslot_t   *slot = ir_type_slot_at(m, i);
@@ -437,24 +330,24 @@ static void put_layouts(ir_sb *b, ir_module_t *m)
             continue;
         }
 
-        ir_sb_fmt(b, "\n  layout %s {\n", ir_type_text(m, t));
+        ncc_buffer_printf(b, "\n  layout %s {\n", ir_type_text(m, t));
 
         if (d->size.authored) {
-            ir_sb_str(b, "    size = ");
+            ncc_buffer_puts(b, "    size = ");
             put_layout_val(b, m, &d->size);
-            ir_sb_str(b, "\n");
+            ncc_buffer_puts(b, "\n");
         }
 
         if (d->align.authored) {
-            ir_sb_str(b, "    align = ");
+            ncc_buffer_puts(b, "    align = ");
             put_layout_val(b, m, &d->align);
-            ir_sb_str(b, "\n");
+            ncc_buffer_puts(b, "\n");
         }
 
         if (d->stride.authored) {
-            ir_sb_str(b, "    stride = ");
+            ncc_buffer_puts(b, "    stride = ");
             put_layout_val(b, m, &d->stride);
-            ir_sb_str(b, "\n");
+            ncc_buffer_puts(b, "\n");
         }
 
         for (uint32_t k = 0; k < d->n_members; k++) {
@@ -463,16 +356,16 @@ static void put_layouts(ir_sb *b, ir_module_t *m)
             if (!ml->bit_offset.authored) {
                 continue;
             }
-            ir_sb_fmt(b, "    %s @ bits %llu..%llu\n", ml->name,
+            ncc_buffer_printf(b, "    %s @ bits %llu..%llu\n", ml->name,
                       (unsigned long long)ml->bit_offset.value,
                       (unsigned long long)(ml->bit_offset.value
                                            + ml->bit_width.value));
         }
-        ir_sb_str(b, "  }\n");
+        ncc_buffer_puts(b, "  }\n");
     }
 }
 
-static void put_typedefs(ir_sb *b, ir_module_t *m)
+static void put_typedefs(ncc_buffer_t *b, ir_module_t *m)
 {
     for (size_t i = 0; i < ir_type_count(m); i++) {
         ir_typeslot_t *slot = ir_type_slot_at(m, i);
@@ -482,9 +375,239 @@ static void put_typedefs(ir_sb *b, ir_module_t *m)
         if (!def) {
             continue;
         }
-        ir_sb_fmt(b, "\n  type %s = %s\n", ir_type_text(m, t),
+        ncc_buffer_printf(b, "\n  type %s = %s\n", ir_type_text(m, t),
                   ir_type_text(m, def));
     }
+}
+
+static bool on_module_pre(ir_visit_t *v)
+{
+    ncc_buffer_t       *b  = v->user;
+    ir_module_t *m  = v->module;
+    ir_annots_t *ma = ir_module_annots(m);
+
+    put_comment(b, ma, "");
+    ncc_buffer_printf(b, "module %s {\n", ir_module_name(m));
+    ncc_buffer_printf(b, "  profile %s\n", ir_module_profile(m)->name);
+
+    if (ir_module_target(m)) {
+        ncc_buffer_printf(b, "  target %s\n", ir_module_target(m));
+    }
+
+    bool any = false;
+
+    for (uint32_t i = 0; i < ir_annot_count(ma); i++) {
+        if (strcmp(ir_annot_at(ma, i)->key, "ir.comment")) {
+            any = true;
+        }
+    }
+
+    if (any) {
+        ncc_buffer_puts(b, "  meta");
+        put_annots(b, m, ma);
+        ncc_buffer_puts(b, "\n");
+    }
+
+    put_typedefs(b, m);
+    put_layouts(b, m);
+
+    return true;
+}
+
+static bool on_module_post(ir_visit_t *v)
+{
+    ncc_buffer_puts((ncc_buffer_t *)v->user, "}\n");
+
+    return true;
+}
+
+static bool on_global(ir_visit_t *v)
+{
+    ncc_buffer_t       *b = v->user;
+    ir_module_t *m = v->module;
+    ir_global_t *g = v->global;
+
+    ncc_buffer_puts(b, "\n");
+    put_comment(b, &g->annots, "  ");
+    ncc_buffer_puts(b, "  ");
+
+    if (g->is_static) {
+        ncc_buffer_puts(b, "static ");
+    }
+
+    if (g->is_extern) {
+        ncc_buffer_puts(b, "extern ");
+    }
+
+    if (g->mutability != IR_MUT_MUTABLE) {
+        ncc_buffer_printf(b, "%s ", ir_mutability_name(g->mutability));
+    }
+    ncc_buffer_printf(b, "global @%s: ", g->name);
+    put_type(b, m, g->type);
+    put_init(b, g->has_init, g->init_is_float, g->init_text, g->init_f,
+             g->init);
+    put_span(b, m, g->span);
+    put_origin(b, g->origin);
+    put_annots(b, m, &g->annots);
+    ncc_buffer_puts(b, "\n");
+
+    return true;
+}
+
+static void put_signature(ncc_buffer_t *b, ir_module_t *m, ir_func_t *f)
+{
+    ncc_buffer_printf(b, "func @%s(", f->name);
+
+    bool first = true;
+
+    for (uint32_t i = 0; i < f->n_params; i++) {
+        ncc_buffer_printf(b, "%s%%%s: ", first ? "" : ", ", f->params[i]->name);
+        put_type(b, m, f->params[i]->type);
+        first = false;
+    }
+
+    const th_param *rest = th_func_rest(f->type);
+
+    if (rest) {
+        ncc_buffer_printf(b, "%s*", first ? "" : ", ");
+        put_type(b, m, rest->type);
+        first = false;
+    }
+
+    for (size_t i = 0; i < th_func_nkw(f->type); i++) {
+        const th_kwparam *k = th_func_kw(f->type, i);
+
+        ncc_buffer_printf(b, "%s%s: ", first ? "" : ", ", k->name);
+        put_type(b, m, k->type);
+        first = false;
+    }
+    ncc_buffer_puts(b, ") -> ");
+    put_type(b, m, th_func_ret(f->type));
+}
+
+static bool on_func_pre(ir_visit_t *v)
+{
+    ncc_buffer_t       *b = v->user;
+    ir_module_t *m = v->module;
+    ir_func_t   *f = v->func;
+
+    ncc_buffer_puts(b, "\n");
+    put_comment(b, &f->annots, "  ");
+    ncc_buffer_puts(b, "  ");
+
+    switch (f->linkage) {
+    case IR_LINK_INTERNAL:
+        ncc_buffer_puts(b, "static ");
+        break;
+    case IR_LINK_EXTERN:
+        ncc_buffer_puts(b, "extern ");
+        break;
+    default:
+        break;
+    }
+
+    put_signature(b, m, f);
+    put_span(b, m, f->span);
+    put_origin(b, f->origin);
+    put_annots(b, m, &f->annots);
+    ncc_buffer_puts(b, " {\n");
+
+    return true;
+}
+
+static bool on_func_post(ir_visit_t *v)
+{
+    ncc_buffer_puts((ncc_buffer_t *)v->user, "  }\n");
+
+    return true;
+}
+
+static bool on_local(ir_visit_t *v)
+{
+    ncc_buffer_t       *b = v->user;
+    ir_local_t  *l = v->local;
+
+    put_comment(b, &l->annots, "    ");
+    ncc_buffer_puts(b, "    ");
+
+    if (l->mutability != IR_MUT_MUTABLE) {
+        ncc_buffer_printf(b, "%s ", ir_mutability_name(l->mutability));
+    }
+    ncc_buffer_puts(b, "local ");
+    put_local_slot(b, v->module, l);
+    put_span(b, v->module, l->span);
+    put_annots(b, v->module, &l->annots);
+    ncc_buffer_puts(b, "\n");
+
+    return true;
+}
+
+static bool on_block_pre(ir_visit_t *v)
+{
+    ncc_buffer_t       *b  = v->user;
+    ir_block_t  *bb = v->block;
+
+    if (v->index || v->func->n_locals) {
+        ncc_buffer_puts(b, "\n");
+    }
+    put_comment(b, &bb->annots, "    ");
+    ncc_buffer_printf(b, "    block %s:", bb->name);
+    put_span(b, v->module, bb->span);
+    put_origin(b, bb->origin);
+    put_annots(b, v->module, &bb->annots);
+    ncc_buffer_puts(b, "\n");
+
+    return true;
+}
+
+static bool on_instr_pre(ir_visit_t *v)
+{
+    ncc_buffer_t       *b  = v->user;
+    ir_module_t *m  = v->module;
+    ir_instr_t  *in = v->instr;
+
+    put_comment(b, &in->annots, "      ");
+    ncc_buffer_puts(b, "      ");
+
+    if (in->dest_kind == IR_DEST_VALUE && in->dest) {
+        ncc_buffer_printf(b, "%%%s: ", in->dest->name);
+        put_type(b, m, in->dest->type);
+        ncc_buffer_puts(b, " = ");
+    }
+    else if (in->dest_kind == IR_DEST_LOCAL && in->dest_local) {
+        ncc_buffer_printf(b, "$%s = ", in->dest_local->name);
+    }
+
+    ncc_buffer_puts(b, ir_module_op_spelling(m, in->op));
+
+    for (uint32_t i = 0; i < in->n_mods; i++) {
+        ncc_buffer_printf(b, " %s", in->mods[i]);
+    }
+
+    return true;
+}
+
+static bool on_operand(ir_visit_t *v)
+{
+    ncc_buffer_t *b = v->user;
+
+    ncc_buffer_puts(b, v->index ? ", " : " ");
+    put_operand(b, v->module, v->operand);
+
+    return true;
+}
+
+static bool on_instr_post(ir_visit_t *v)
+{
+    ncc_buffer_t      *b  = v->user;
+    ir_instr_t *in = v->instr;
+
+    put_span(b, v->module, in->span);
+    put_origin(b, in->origin);
+    put_annots(b, v->module, &in->annots);
+    ncc_buffer_puts(b, "\n");
+
+    return true;
 }
 
 char *ir_module_print(ir_module_t *m)
@@ -493,66 +616,50 @@ char *ir_module_print(ir_module_t *m)
         return nullptr;
     }
 
-    ir_sb b = {0};
+    ncc_buffer_t *b = ncc_buffer_empty();
+    ir_walk_t *w = ir_walk_new(b);
 
-    put_comment(&b, ir_module_annots(m), "");
-    ir_sb_fmt(&b, "module %s {\n", ir_module_name(m));
-    ir_sb_fmt(&b, "  profile %s\n", ir_module_profile(m)->name);
+    ir_walk_on_module(w, on_module_pre, on_module_post, nullptr);
+    ir_walk_on_global(w, on_global, nullptr);
+    ir_walk_on_func(w, on_func_pre, on_func_post, nullptr);
+    ir_walk_on_local(w, on_local, nullptr);
+    ir_walk_on_block(w, on_block_pre, nullptr, nullptr);
+    ir_walk_on_instr(w, on_instr_pre, on_instr_post, nullptr);
+    ir_walk_on_operand(w, on_operand, nullptr);
 
-    if (ir_module_target(m)) {
-        ir_sb_fmt(&b, "  target %s\n", ir_module_target(m));
+    ir_walk_run(w, m);
+    ir_walk_free(w);
+
+    return ncc_buffer_take(b);
+}
+
+char *ir_text_format(const char *text, int32_t width)
+{
+    ncc_grammar_t *g = text ? ir_grammar() : nullptr;
+
+    if (!g) {
+        return nullptr;
     }
 
-    ir_annots_t *ma = ir_module_annots(m);
+    ncc_grammar_set_start_id(g, ir_grammar_nt("module"));
 
-    if (ir_annot_count(ma)) {
-        bool any = false;
+    size_t              len = strlen(text);
+    ncc_token_stream_t *ts  = ir_lex(text, len);
+    ncc_pwz_parser_t   *p   = ncc_pwz_new(g);
+    char               *out = nullptr;
 
-        for (uint32_t i = 0; i < ir_annot_count(ma); i++) {
-            if (strcmp(ir_annot_at(ma, i)->key, "ir.comment")) {
-                any = true;
-            }
-        }
+    if (ncc_pwz_parse(p, ts)) {
+        ncc_print_opts_t o = {
+            .source = {.data = (char *)text, .u8_bytes = len},
+            .width  = width,
+            .indent = 2,
+        };
 
-        if (any) {
-            ir_sb_str(&b, "  meta");
-            put_annots(&b, m, ma);
-            ir_sb_str(&b, "\n");
-        }
+        out = ncc_tree_print(g, ncc_pwz_get_tree(p), &o);
     }
 
-    put_typedefs(&b, m);
-    put_layouts(&b, m);
+    ncc_pwz_free(p);
+    ncc_token_stream_free(ts);
 
-    for (size_t i = 0; i < ir_global_count(m); i++) {
-        ir_global_t *g = ir_global_at(m, i);
-
-        ir_sb_str(&b, "\n");
-        put_comment(&b, &g->annots, "  ");
-        ir_sb_str(&b, "  ");
-
-        if (g->is_static) {
-            ir_sb_str(&b, "static ");
-        }
-
-        if (g->is_extern) {
-            ir_sb_str(&b, "extern ");
-        }
-        ir_sb_fmt(&b, "global @%s: ", g->name);
-        put_type(&b, m, g->type);
-        put_init(&b, g->has_init, g->init_is_float, g->init_text, g->init_f,
-                 g->init);
-        put_span(&b, m, g->span);
-        put_origin(&b, g->origin);
-        put_annots(&b, m, &g->annots);
-        ir_sb_str(&b, "\n");
-    }
-
-    for (size_t i = 0; i < ir_func_count(m); i++) {
-        ir_sb_str(&b, "\n");
-        put_func(&b, m, ir_func_at(m, i));
-    }
-    ir_sb_str(&b, "}\n");
-
-    return ir_sb_take(&b);
+    return out;
 }

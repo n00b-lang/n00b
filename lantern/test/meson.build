@@ -6,6 +6,18 @@ ir_core_test = executable(
 
 test('ir-core', ir_core_test)
 
+ir_typemap_test = executable(
+    'ir_typemap_test',
+    'ir_typemap_test.c',
+    dependencies: ir_dep,
+)
+
+test(
+    'ir-typemap',
+    ir_typemap_test,
+    args: [meson.current_source_dir()],
+)
+
 ir_span_test = executable(
     'ir_span_test',
     'ir_span_test.c',
@@ -23,7 +35,14 @@ ir_text_test = executable(
 test(
     'ir-text',
     ir_text_test,
+    args: [meson.current_source_dir() / 'golden', '25'],
+)
+
+benchmark(
+    'ir-text-soak',
+    ir_text_test,
     args: [meson.current_source_dir() / 'golden'],
+    timeout: 180,
 )
 
 ir_rule_test = executable(
@@ -118,6 +137,36 @@ test(
     args: [meson.current_source_dir() / 'golden' / 'canonical.ir'],
 )
 
+ir_tree_pass_test = executable(
+    'ir_tree_pass_test',
+    'ir_tree_pass_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-tree-passes', ir_tree_pass_test)
+
+th_cycle_test = executable(
+    'th_cycle_test',
+    th_test_dir / 'th_cycle_test.c',
+    dependencies: ir_dep,
+)
+
+th_infer_cycle_test = executable(
+    'th_infer_cycle_test',
+    th_test_dir / 'th_infer_cycle_test.c',
+    dependencies: ir_dep,
+)
+
+test('inference-cycles', th_infer_cycle_test)
+
+th_constraint_test = executable(
+    'th_constraint_test',
+    th_test_dir / 'th_constraint_test.c',
+    dependencies: ir_dep,
+)
+
+test('th-constraints', th_constraint_test)
+
 ir_typelang_test = executable(
     'ir_typelang_test',
     'ir_typelang_test.c',
@@ -136,10 +185,15 @@ ir_scale_test = executable(
     dependencies: ir_dep,
 )
 
-# Wall-clock guards and the mutation harness are not part of a normal run.
-# They are slow, and the timing ones report a loaded machine as a defect.
-# `meson test --benchmark` runs them.
-benchmark('ir-scale', ir_scale_test)
+benchmark('ir-scale', ir_scale_test, timeout: 180)
+
+ir_public_test = executable(
+    'ir_public_test',
+    'ir_public_test.c',
+    dependencies: ir_public_dep,
+)
+
+test('ir-public', ir_public_test)
 
 ir_diag_test = executable(
     'ir_diag_test',
@@ -167,6 +221,7 @@ benchmark(
         ir_promote_test,
         ir_structure_test,
         ir_pdg_test,
+        ir_tree_pass_test,
     ],
     depends: [
         ir_diag_test,
@@ -177,5 +232,7 @@ benchmark(
         ir_promote_test,
         ir_structure_test,
         ir_pdg_test,
+        ir_tree_pass_test,
     ],
+    timeout: 180,
 )

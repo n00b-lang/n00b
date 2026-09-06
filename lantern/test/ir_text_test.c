@@ -13,6 +13,10 @@
 #include "scanner/token_stream.h"
 
 static int  fails = 0;
+#define FULL_TRIALS 400
+
+static uint32_t trials = FULL_TRIALS;
+
 static int  gen_ops[IR_OP_COUNT];
 static bool produced[IR_DIAG_COUNT];
 
@@ -391,6 +395,82 @@ static void test_types_are_typelang(void)
     ir_ctx_free(ctx);
 }
 
+static void test_mutability_round_trips(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+
+    const char *src =
+        "module m {\n  profile bce\n  target t\n\n"
+        "  const global @k: i32 = 7\n\n"
+        "  immutable global @j: i32 = 1\n\n"
+        "  global @g: i32 = 2\n\n"
+        "  func @f() -> i32 {\n"
+        "    const local $a: i32 = 3\n"
+        "    immutable local $b: i32\n"
+        "    local $c: i32\n\n"
+        "    block entry:\n      return @g\n  }\n}\n";
+
+    ir_diags_t  *d = nullptr;
+    ir_module_t *m = parse(ctx, src, &d);
+
+    check("mutability parses", m != nullptr);
+
+    if (!m) {
+        ir_ctx_free(ctx);
+
+        return;
+    }
+
+    ir_global_t *k = ir_global_find(m, "k");
+    ir_global_t *j = ir_global_find(m, "j");
+    ir_global_t *g = ir_global_find(m, "g");
+
+    check("a const global is const", k && k->mutability == IR_MUT_CONST);
+    check("an immutable global is immutable",
+          j && j->mutability == IR_MUT_IMMUTABLE);
+    check("an unmarked global is mutable",
+          g && g->mutability == IR_MUT_MUTABLE);
+
+    ir_func_t *f = ir_func_find(m, "f");
+
+    check("the function is there", f != nullptr);
+
+    if (f) {
+        check("a const local is const",
+              ir_local_find(f, "a")
+                  && ir_local_find(f, "a")->mutability == IR_MUT_CONST);
+        check("an immutable local is immutable",
+              ir_local_find(f, "b")
+                  && ir_local_find(f, "b")->mutability == IR_MUT_IMMUTABLE);
+        check("an unmarked local is mutable",
+              ir_local_find(f, "c")
+                  && ir_local_find(f, "c")->mutability == IR_MUT_MUTABLE);
+    }
+
+    char *once = ir_module_print(m);
+
+    check("printing keeps every marker",
+          once && strstr(once, "const global @k")
+              && strstr(once, "immutable global @j")
+              && strstr(once, "\n  global @g")
+              && strstr(once, "const local $a")
+              && strstr(once, "immutable local $b")
+              && strstr(once, "    local $c"));
+
+    ir_ctx_t    *c2 = ir_ctx_new();
+    ir_diags_t  *d2 = nullptr;
+    ir_module_t *m2 = parse(c2, once, &d2);
+    char        *twice = m2 ? ir_module_print(m2) : nullptr;
+
+    check("and reparsing gives the same text",
+          twice && !strcmp(once, twice));
+
+    free(once);
+    free(twice);
+    ir_ctx_free(c2);
+    ir_ctx_free(ctx);
+}
+
 static void test_meta_round_trip(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -617,31 +697,31 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             if (!vals->n) {
                 return;
             }
-            ir_instr_push_value(in, vals->v[rnd(vals->n)]);
+            ir_instr_operand_value(in, vals->v[rnd(vals->n)]);
             break;
 
         case IR_OPD_TYPE:
-            ir_instr_push_type(in, ir_type_parse(m, TYPES[rnd(9)]));
+            ir_instr_operand_type(in, ir_type_parse(m, TYPES[rnd(9)]));
             break;
 
         case IR_OPD_NAME:
-            ir_instr_push_name(in, rnd(2) ? "x" : "some.field");
+            ir_instr_operand_name(in, rnd(2) ? "x" : "some.field");
             break;
 
         case IR_OPD_BLOCK:
-            ir_instr_push_block(in, gen_target(f, nblocks));
+            ir_instr_operand_block(in, gen_target(f, nblocks));
             break;
 
         case IR_OPD_DEFAULT_BLOCK:
-            ir_instr_push_default(in, gen_target(f, nblocks));
+            ir_instr_operand_default(in, gen_target(f, nblocks));
             break;
 
         case IR_OPD_CONST:
             if (rnd(4) == 0) {
-                ir_instr_push_float(in, (double)(int32_t)rnd(1000) / 8.0);
+                ir_instr_operand_float(in, (double)(int32_t)rnd(1000) / 8.0);
             }
             else {
-                ir_instr_push_int(in, (int64_t)rnd(2000) - 1000);
+                ir_instr_operand_int(in, (int64_t)rnd(2000) - 1000);
             }
             break;
 
@@ -649,12 +729,12 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             if (!vals->n) {
                 return;
             }
-            ir_instr_push_phi_arm(in, gen_target(f, nblocks),
+            ir_instr_operand_phi_arm(in, gen_target(f, nblocks),
                                   vals->v[rnd(vals->n)]);
             break;
 
         case IR_OPD_SWITCH_ARM:
-            ir_instr_push_switch_arm(in, (int64_t)rnd(10),
+            ir_instr_operand_switch_arm(in, (int64_t)rnd(10),
                                      gen_target(f, nblocks));
             break;
 
@@ -665,11 +745,11 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             }
 
             if (rnd(2)) {
-                ir_instr_push_named(in, rnd(2) ? "timeout" : "retries",
+                ir_instr_operand_named(in, rnd(2) ? "timeout" : "retries",
                                     vals->v[rnd(vals->n)]);
             }
             else {
-                ir_instr_push_value(in, vals->v[rnd(vals->n)]);
+                ir_instr_operand_value(in, vals->v[rnd(vals->n)]);
             }
             break;
         }
@@ -755,7 +835,7 @@ static ir_module_t *gen_module(ir_ctx_t *ctx, uint32_t seq)
                 for (size_t mi = 0; mi < 13; mi++) {
                     if (rnd(3) == 0
                         && ir_op_accepts_mod(op, MODS_FOR[mi])) {
-                        ir_instr_push_mod(in, MODS_FOR[mi]);
+                        ir_instr_add_mod(in, MODS_FOR[mi]);
                     }
                 }
                 gen_operands(m, f, in, &vals, nblocks);
@@ -806,28 +886,28 @@ static ir_module_t *gen_module(ir_ctx_t *ctx, uint32_t seq)
 
             switch (term) {
             case IR_OP_JUMP:
-                ir_instr_push_block(t, gen_target(f, nblocks));
+                ir_instr_operand_block(t, gen_target(f, nblocks));
                 break;
 
             case IR_OP_BRANCH:
-                ir_instr_push_value(t, vals.v[rnd(vals.n)]);
-                ir_instr_push_block(t, gen_target(f, nblocks));
-                ir_instr_push_block(t, gen_target(f, nblocks));
+                ir_instr_operand_value(t, vals.v[rnd(vals.n)]);
+                ir_instr_operand_block(t, gen_target(f, nblocks));
+                ir_instr_operand_block(t, gen_target(f, nblocks));
                 break;
 
             case IR_OP_SWITCH:
-                ir_instr_push_value(t, vals.v[rnd(vals.n)]);
-                ir_instr_push_default(t, gen_target(f, nblocks));
+                ir_instr_operand_value(t, vals.v[rnd(vals.n)]);
+                ir_instr_operand_default(t, gen_target(f, nblocks));
 
                 for (uint32_t s = 0; s < 1 + rnd(3); s++) {
-                    ir_instr_push_switch_arm(t, (int64_t)rnd(8),
+                    ir_instr_operand_switch_arm(t, (int64_t)rnd(8),
                                              gen_target(f, nblocks));
                 }
                 break;
 
             case IR_OP_RETURN:
                 if (vals.n && rnd(2)) {
-                    ir_instr_push_value(t, vals.v[rnd(vals.n)]);
+                    ir_instr_operand_value(t, vals.v[rnd(vals.n)]);
                 }
                 break;
 
@@ -1193,8 +1273,6 @@ static void test_canonical_golden(const char *dir)
 
 static void test_generated_round_trip(void)
 {
-    uint32_t trials = 400;
-
     for (uint32_t i = 0; i < trials; i++) {
         ir_ctx_t    *ctx = ir_ctx_new();
         ir_module_t *m   = gen_module(ctx, i);
@@ -1244,6 +1322,106 @@ static void test_generated_round_trip(void)
     }
 }
 
+static void test_the_grammar_lays_the_text_out(void)
+{
+    static const char *const WANT[] = {
+        "module m {\n",
+        "  profile bce\n",
+        "  target x86-64\n",
+        "  global @g: i32 = 7\n",
+        "  func @f(%a: i32, %b: ptr[i32]) -> i32 {\n",
+        "    local $t: array[i32; 4]\n",
+        "\n",
+        "    block entry:\n",
+        "      %c: i32 = add.wrap %a, %a !ir.note(\"hi\")\n",
+        "      ret %c\n",
+        "  }\n",
+        "}\n",
+    };
+
+    const char *src = "module m {\n"
+                      "profile bce\n"
+                      "target x86-64\n"
+                      "global @g:i32=7\n"
+                      "func @f(%a:i32,%b:ptr[i32])->i32 {\n"
+                      "local $t:array[i32;4]\n"
+                      "block entry:\n"
+                      "%c:i32=add.wrap %a,%a !ir.note(\"hi\")\n"
+                      "ret %c\n"
+                      "}\n"
+                      "}\n";
+
+    char *got = ir_text_format(src, 80);
+
+    check("unspaced source lays out", got != nullptr);
+
+    if (!got) {
+        return;
+    }
+
+    size_t at = 0;
+
+    for (size_t i = 0; i < sizeof(WANT) / sizeof(WANT[0]); i++) {
+        size_t n = strlen(WANT[i]);
+
+        if (strncmp(got + at, WANT[i], n)) {
+            printf("FAIL  line %zu is not what the annotations ask for\n"
+                   "---- want ----\n%s---- got ----\n%s",
+                   i, WANT[i], got + at);
+            fails++;
+            break;
+        }
+        at += n;
+    }
+    free(got);
+}
+
+static void test_the_layout_annotations_round_trip(void)
+{
+    for (uint32_t i = 0; i < trials; i++) {
+        ir_ctx_t    *ctx = ir_ctx_new();
+        ir_module_t *m   = gen_module(ctx, i);
+        char        *one = ir_module_print(m);
+        char        *fmt = ir_text_format(one, 80);
+
+        if (!fmt) {
+            printf("FAIL  generated module %u does not lay out\n---- text ----"
+                   "\n%s",
+                   i, one);
+            fails++;
+            free(one);
+            ir_ctx_free(ctx);
+
+            return;
+        }
+
+        ir_diags_t  *d  = nullptr;
+        ir_module_t *m2 = parse(ctx, fmt, &d);
+        char        *two = m2 ? ir_module_print(m2) : nullptr;
+
+        if (!two || strcmp(one, two)) {
+            char *r = ir_diags_render_text(d, &(ir_render_t){0});
+
+            printf("FAIL  laid-out module %u is not the same module\n%s"
+                   "---- printed ----\n%s---- laid out ----\n%s"
+                   "---- reprinted ----\n%s",
+                   i, r, one, fmt, two ? two : "(did not parse)\n");
+            free(r);
+            fails++;
+            free(one);
+            free(fmt);
+            free(two);
+            ir_ctx_free(ctx);
+
+            return;
+        }
+        free(one);
+        free(fmt);
+        free(two);
+        ir_ctx_free(ctx);
+    }
+}
+
 static void test_the_passes_over_the_generated_corpus(void)
 {
     static const ir_pass_t *const passes[] = {
@@ -1254,7 +1432,7 @@ static void test_the_passes_over_the_generated_corpus(void)
     };
     uint32_t ran[4] = {0};
 
-    for (uint32_t i = 0; i < 400; i++) {
+    for (uint32_t i = 0; i < trials; i++) {
         ir_ctx_t    *ctx = ir_ctx_new();
         ir_module_t *m   = gen_module(ctx, i);
         ir_diags_t  *d   = ir_diags_new(ctx, nullptr);
@@ -1270,7 +1448,7 @@ static void test_the_passes_over_the_generated_corpus(void)
             ir_locsnap_t *before = ir_loc_snapshot(m);
             ir_props_t    unmet  = 0;
 
-            if (ir_pass_run_checked(passes[k], m, d, &unmet, d)
+            if (ir_pass_run(passes[k], m, nullptr, &unmet, d)
                 != IR_PASS_OK) {
                 continue;
             }
@@ -1339,16 +1517,23 @@ static void report_coverage(void)
     if (missing) {
         printf("\n");
     }
-    check("the generator reaches every opcode", missing == 0);
+    if (trials >= FULL_TRIALS) {
+        check("the generator reaches every opcode", missing == 0);
+    }
 }
 
 int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : ".";
 
+    if (argc > 2) {
+        trials = (uint32_t)strtoul(argv[2], nullptr, 10);
+    }
+
     test_lexis();
     test_whitespace_and_comments();
     test_types_are_typelang();
+    test_mutability_round_trips();
     test_meta_round_trip();
     test_both_forms();
     test_cross_profile();
@@ -1360,6 +1545,8 @@ int main(int argc, char **argv)
     test_canonical_golden(dir);
     test_errors();
     test_generated_round_trip();
+    test_the_grammar_lays_the_text_out();
+    test_the_layout_annotations_round_trip();
     test_the_passes_over_the_generated_corpus();
     report_coverage();
     write_produced(dir);

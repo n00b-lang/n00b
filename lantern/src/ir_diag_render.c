@@ -48,7 +48,7 @@ static bool line_of(const ir_render_t *r, ir_span_t s, const char **start,
     return true;
 }
 
-static void render_caret(ir_sb *b, const ir_render_t *r, ir_span_t s,
+static void render_caret(ncc_buffer_t *b, const ir_render_t *r, ir_span_t s,
                          const char *label)
 {
     const char *line;
@@ -58,14 +58,14 @@ static void render_caret(ir_sb *b, const ir_render_t *r, ir_span_t s,
         return;
     }
 
-    ir_sb_fmt(b, "     |\n%4u | ", s.start_line);
-    ir_sb_put(b, line, len);
-    ir_sb_str(b, "\n     | ");
+    ncc_buffer_printf(b, "     |\n%4u | ", s.start_line);
+    ncc_buffer_append(b, line, len);
+    ncc_buffer_puts(b, "\n     | ");
 
     uint32_t pad = s.start_col ? s.start_col - 1 : 0;
 
     for (uint32_t i = 0; i < pad; i++) {
-        ir_sb_str(b, " ");
+        ncc_buffer_puts(b, " ");
     }
 
     uint32_t width = 1;
@@ -75,13 +75,13 @@ static void render_caret(ir_sb *b, const ir_render_t *r, ir_span_t s,
     }
 
     for (uint32_t i = 0; i < width; i++) {
-        ir_sb_str(b, "^");
+        ncc_buffer_puts(b, "^");
     }
 
     if (label) {
-        ir_sb_fmt(b, " %s", label);
+        ncc_buffer_printf(b, " %s", label);
     }
-    ir_sb_str(b, "\n");
+    ncc_buffer_puts(b, "\n");
 }
 
 static const char *origin_word(ir_origin_kind_t k)
@@ -107,7 +107,7 @@ char *ir_diags_render_text(ir_diags_t *d, const ir_render_t *r)
     }
     ir_diags_sort(d);
 
-    ir_sb b = {0};
+    ncc_buffer_t *b = ncc_buffer_empty();
 
     for (uint32_t i = 0; i < ir_diags_count(d); i++) {
         const ir_diag_t *dg = ir_diags_at(d, i);
@@ -116,25 +116,25 @@ char *ir_diags_render_text(ir_diags_t *d, const ir_render_t *r)
                                  ? "  "
                                  : "";
 
-        ir_sb_fmt(&b, "%s%s[%s]: %s\n", ind, ir_severity_name(dg->severity),
+        ncc_buffer_printf(b, "%s%s[%s]: %s\n", ind, ir_severity_name(dg->severity),
                ir_diag_code(dg->code), dg->message);
 
         if (ir_span_known(dg->primary.span)) {
-            ir_sb_fmt(&b, "%s  --> %s:%u:%u\n", ind,
+            ncc_buffer_printf(b, "%s  --> %s:%u:%u\n", ind,
                    file_name(r, dg->primary.span.file),
                    dg->primary.span.start_line, dg->primary.span.start_col);
-            render_caret(&b, r, dg->primary.span, dg->primary.label);
+            render_caret(b, r, dg->primary.span, dg->primary.label);
         }
         else if (dg->primary.label) {
-            ir_sb_fmt(&b, "%s  %s\n", ind, dg->primary.label);
+            ncc_buffer_printf(b, "%s  %s\n", ind, dg->primary.label);
         }
 
         for (uint32_t k = 0; k < dg->n_secondary; k++) {
             const ir_label_t *l = &dg->secondary[k];
 
-            ir_sb_fmt(&b, "%s  --> %s:%u:%u\n", ind, file_name(r, l->span.file),
+            ncc_buffer_printf(b, "%s  --> %s:%u:%u\n", ind, file_name(r, l->span.file),
                    l->span.start_line, l->span.start_col);
-            render_caret(&b, r, l->span, l->label);
+            render_caret(b, r, l->span, l->label);
         }
 
         for (ir_origin_t *o = dg->origin; o; o = o->parent) {
@@ -142,43 +142,43 @@ char *ir_diags_render_text(ir_diags_t *d, const ir_render_t *r)
                 continue;
             }
 
-            ir_sb_fmt(&b, "%s  note: %s", ind, origin_word(o->kind));
+            ncc_buffer_printf(b, "%s  note: %s", ind, origin_word(o->kind));
 
             if (o->agent) {
-                ir_sb_fmt(&b, " by %s", o->agent);
+                ncc_buffer_printf(b, " by %s", o->agent);
             }
 
             if (ir_span_known(o->span)) {
-                ir_sb_fmt(&b, " (%s:%u:%u)", file_name(r, o->span.file),
+                ncc_buffer_printf(b, " (%s:%u:%u)", file_name(r, o->span.file),
                        o->span.start_line, o->span.start_col);
             }
-            ir_sb_str(&b, "\n");
+            ncc_buffer_puts(b, "\n");
         }
 
         for (uint32_t k = 0; k < dg->n_suggestions; k++) {
             const ir_suggestion_t *s = &dg->suggestions[k];
 
-            ir_sb_fmt(&b, "%s  help: %s\n", ind,
+            ncc_buffer_printf(b, "%s  help: %s\n", ind,
                    s->description ? s->description : "try");
-            ir_sb_fmt(&b, "%s      + %s\n", ind, s->replacement);
+            ncc_buffer_printf(b, "%s      + %s\n", ind, s->replacement);
         }
-        ir_sb_str(&b, "\n");
+        ncc_buffer_puts(b, "\n");
     }
 
-    return ir_sb_take(&b);
+    return ncc_buffer_take(b);
 }
 
-static void json_span(ir_sb *b, const ir_render_t *r, ir_span_t s)
+static void json_span(ncc_buffer_t *b, const ir_render_t *r, ir_span_t s)
 {
     if (!ir_span_known(s)) {
-        ir_sb_str(b, "null");
+        ncc_buffer_puts(b, "null");
 
         return;
     }
 
-    ir_sb_str(b, "{\"file\":");
-    ir_sb_json(b, file_name(r, s.file));
-    ir_sb_fmt(b,
+    ncc_buffer_puts(b, "{\"file\":");
+    ir_quote(b, file_name(r, s.file));
+    ncc_buffer_printf(b,
            ",\"file_id\":%d,\"start_byte\":%u,\"end_byte\":%u,"
            "\"start_line\":%u,\"start_col\":%u,\"end_line\":%u,"
            "\"end_col\":%u}",
@@ -193,95 +193,95 @@ char *ir_diags_render_json(ir_diags_t *d, const ir_render_t *r)
     }
     ir_diags_sort(d);
 
-    ir_sb b = {0};
+    ncc_buffer_t *b = ncc_buffer_empty();
 
-    ir_sb_str(&b, "[");
+    ncc_buffer_puts(b, "[");
 
     for (uint32_t i = 0; i < ir_diags_count(d); i++) {
         const ir_diag_t *dg = ir_diags_at(d, i);
 
         if (i) {
-            ir_sb_str(&b, ",");
+            ncc_buffer_puts(b, ",");
         }
-        ir_sb_str(&b, "\n  {\"severity\":");
-        ir_sb_json(&b, ir_severity_name(dg->severity));
-        ir_sb_str(&b, ",\"code\":");
-        ir_sb_json(&b, ir_diag_code(dg->code));
-        ir_sb_str(&b, ",\"message\":");
-        ir_sb_json(&b, dg->message ? dg->message : "");
-        ir_sb_str(&b, ",\"primary\":{\"span\":");
-        json_span(&b, r, dg->primary.span);
-        ir_sb_str(&b, ",\"label\":");
+        ncc_buffer_puts(b, "\n  {\"severity\":");
+        ir_quote(b, ir_severity_name(dg->severity));
+        ncc_buffer_puts(b, ",\"code\":");
+        ir_quote(b, ir_diag_code(dg->code));
+        ncc_buffer_puts(b, ",\"message\":");
+        ir_quote(b, dg->message ? dg->message : "");
+        ncc_buffer_puts(b, ",\"primary\":{\"span\":");
+        json_span(b, r, dg->primary.span);
+        ncc_buffer_puts(b, ",\"label\":");
 
         if (dg->primary.label) {
-            ir_sb_json(&b, dg->primary.label);
+            ir_quote(b, dg->primary.label);
         }
         else {
-            ir_sb_str(&b, "null");
+            ncc_buffer_puts(b, "null");
         }
-        ir_sb_str(&b, "},\"secondary\":[");
+        ncc_buffer_puts(b, "},\"secondary\":[");
 
         for (uint32_t k = 0; k < dg->n_secondary; k++) {
             if (k) {
-                ir_sb_str(&b, ",");
+                ncc_buffer_puts(b, ",");
             }
-            ir_sb_str(&b, "{\"span\":");
-            json_span(&b, r, dg->secondary[k].span);
-            ir_sb_str(&b, ",\"label\":");
+            ncc_buffer_puts(b, "{\"span\":");
+            json_span(b, r, dg->secondary[k].span);
+            ncc_buffer_puts(b, ",\"label\":");
 
             if (dg->secondary[k].label) {
-                ir_sb_json(&b, dg->secondary[k].label);
+                ir_quote(b, dg->secondary[k].label);
             }
             else {
-                ir_sb_str(&b, "null");
+                ncc_buffer_puts(b, "null");
             }
-            ir_sb_str(&b, "}");
+            ncc_buffer_puts(b, "}");
         }
-        ir_sb_str(&b, "],\"suggestions\":[");
+        ncc_buffer_puts(b, "],\"suggestions\":[");
 
         for (uint32_t k = 0; k < dg->n_suggestions; k++) {
             if (k) {
-                ir_sb_str(&b, ",");
+                ncc_buffer_puts(b, ",");
             }
-            ir_sb_str(&b, "{\"span\":");
-            json_span(&b, r, dg->suggestions[k].span);
-            ir_sb_str(&b, ",\"replacement\":");
-            ir_sb_json(&b, dg->suggestions[k].replacement);
-            ir_sb_str(&b, ",\"description\":");
+            ncc_buffer_puts(b, "{\"span\":");
+            json_span(b, r, dg->suggestions[k].span);
+            ncc_buffer_puts(b, ",\"replacement\":");
+            ir_quote(b, dg->suggestions[k].replacement);
+            ncc_buffer_puts(b, ",\"description\":");
 
             if (dg->suggestions[k].description) {
-                ir_sb_json(&b, dg->suggestions[k].description);
+                ir_quote(b, dg->suggestions[k].description);
             }
             else {
-                ir_sb_str(&b, "null");
+                ncc_buffer_puts(b, "null");
             }
-            ir_sb_str(&b, "}");
+            ncc_buffer_puts(b, "}");
         }
-        ir_sb_str(&b, "],\"origin\":[");
+        ncc_buffer_puts(b, "],\"origin\":[");
 
         uint32_t on = 0;
 
         for (ir_origin_t *o = dg->origin; o; o = o->parent) {
             if (on++) {
-                ir_sb_str(&b, ",");
+                ncc_buffer_puts(b, ",");
             }
-            ir_sb_str(&b, "{\"kind\":");
-            ir_sb_json(&b, origin_word(o->kind));
-            ir_sb_str(&b, ",\"agent\":");
+            ncc_buffer_puts(b, "{\"kind\":");
+            ir_quote(b, origin_word(o->kind));
+            ncc_buffer_puts(b, ",\"agent\":");
 
             if (o->agent) {
-                ir_sb_json(&b, o->agent);
+                ir_quote(b, o->agent);
             }
             else {
-                ir_sb_str(&b, "null");
+                ncc_buffer_puts(b, "null");
             }
-            ir_sb_str(&b, ",\"span\":");
-            json_span(&b, r, o->span);
-            ir_sb_str(&b, "}");
+            ncc_buffer_puts(b, ",\"span\":");
+            json_span(b, r, o->span);
+            ncc_buffer_puts(b, "}");
         }
-        ir_sb_str(&b, "]}");
+        ncc_buffer_puts(b, "]}");
     }
-    ir_sb_str(&b, "\n]\n");
+    ncc_buffer_puts(b, "\n]\n");
 
-    return ir_sb_take(&b);
+    return ncc_buffer_take(b);
 }

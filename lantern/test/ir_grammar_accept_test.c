@@ -253,6 +253,44 @@ static void test_the_grammar_defines_the_whole_surface(void)
     }
 }
 
+static void test_a_composed_grammar_keeps_its_own_leaves(void)
+{
+    static const struct {
+        const char *what;
+        const char *src;
+        const char *want;
+    } cases[] = {
+        {"a qualified type name keeps every part",
+         HEAD "  global @g: my.mod.Widget\n}\n", "my.mod.Widget"},
+        {"an array extent survives",
+         HEAD "  global @g: array[i32; 4]\n}\n", "array[i32; 4]"},
+        {"a bit width survives",
+         HEAD "  global @g: bitint[7]\n}\n", "bitint[7]"},
+        {"a dotted opcode keeps every part",
+         "module m {\n  profile synth\n  func @f(%a: str) -> str {\n"
+         "    block e:\n      %c: str = synth.concat %a, %a\n"
+         "      return %c\n  }\n}\n",
+         "synth.concat"},
+    };
+
+    const ir_profile_t *const ps[] = {&ir_profile_bce, &ir_profile_synth};
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        ir_ctx_t    *ctx = ir_ctx_new();
+        ir_diags_t  *d   = ir_diags_new(ctx, nullptr);
+        ir_module_t *m   = ir_module_parse(ctx, cases[i].src, 0, ps, 2, d);
+        char        *out = m ? ir_module_print(m) : nullptr;
+
+        if (!out || !strstr(out, cases[i].want)) {
+            printf("FAIL  %s: %s is missing from\n%s", cases[i].what,
+                   cases[i].want, out ? out : "(refused)\n");
+            fails++;
+        }
+        free(out);
+        ir_ctx_free(ctx);
+    }
+}
+
 static void test_a_composed_keyword_is_still_a_name(void)
 {
     static const char *const WORDS[] = {
@@ -333,6 +371,7 @@ int main(int argc, char **argv)
     test_the_two_agree_construct_by_construct();
     test_the_grammar_defines_the_whole_surface();
     test_a_composed_keyword_is_still_a_name();
+    test_a_composed_grammar_keeps_its_own_leaves();
     test_the_grammar_is_not_merely_permissive();
     ir_grammar_shutdown();
 

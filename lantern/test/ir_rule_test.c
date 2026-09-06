@@ -47,7 +47,7 @@ static ir_instr_t *instr(fix *x, ir_op_t op, const char *type_text, int n)
     ir_value_t *v  = ir_param_add(x->f, "a", t);
 
     for (int i = 0; i < n; i++) {
-        ir_instr_push_value(in, v);
+        ir_instr_operand_value(in, v);
     }
 
     return in;
@@ -336,10 +336,10 @@ static void test_hooks_cannot_change_shape(void)
     ir_value_t *v  = ir_param_add(x.f, "s", st);
 
     check("arity is enforced before any rule runs",
-          ir_instr_push_value(in, v) && ir_instr_push_value(in, v)
-              && !ir_instr_push_value(in, v));
+          ir_instr_operand_value(in, v) && ir_instr_operand_value(in, v)
+              && !ir_instr_operand_value(in, v));
     check("operand kind is enforced before any rule runs",
-          !ir_instr_push_block(in, x.b));
+          !ir_instr_operand_block(in, x.b));
 
     ir_rule_result_t r = ir_rule_apply(x.m, rs, in, x.d);
 

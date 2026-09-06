@@ -20,6 +20,7 @@ typedef struct {
     int32_t           child_index;
     void             *thunk;
     void             *user;
+    ncc_parse_tree_t *replace;
 } ncc_visit_t;
 
 typedef bool (*ncc_visit_fn)(ncc_visit_t *v);
@@ -71,8 +72,15 @@ bool ncc_walk_reduce_nt(ncc_tree_walk_t *w, ncc_string_t nt_name,
 void ncc_walk_reduce_default(ncc_tree_walk_t *w, ncc_reduce_fn fn,
                              void *thunk);
 void ncc_walk_reduce_leaf(ncc_tree_walk_t *w, ncc_reduce_fn fn, void *thunk);
+void ncc_walk_reduce_leaf_in(ncc_tree_walk_t *w, int32_t unit,
+                             ncc_reduce_fn fn, void *thunk);
 
 void *ncc_tree_walk_reduce(ncc_tree_walk_t *w, ncc_parse_tree_t *root);
 
 void ncc_tree_walk_stop(ncc_tree_walk_t *w);
 bool ncc_tree_walk_stopped(ncc_tree_walk_t *w);
+
+ncc_parse_tree_t *ncc_tree_walk_rewrite(ncc_tree_walk_t  *w,
+                                        ncc_parse_tree_t *root);
+
+uint32_t ncc_tree_walk_replaced(const ncc_tree_walk_t *w);

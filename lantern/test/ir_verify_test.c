@@ -428,29 +428,29 @@ static void test_parsed_rules_the_builder_prevents(void)
     ir_instr_t *few = ir_instr_add(b, IR_OP_ADD);
 
     ir_instr_set_dest(few, "s", ir_type_parse(m, "i32"));
-    ir_instr_push_mod(few, "wrap");
-    ir_instr_push_value(few, a);
+    ir_instr_add_mod(few, "wrap");
+    ir_instr_operand_value(few, a);
 
     ir_instr_t *kind = ir_instr_add(b, IR_OP_ADD);
 
     ir_instr_set_dest(kind, "k", ir_type_parse(m, "i32"));
-    ir_instr_push_mod(kind, "wrap");
+    ir_instr_add_mod(kind, "wrap");
 
     check("the builder refuses an operand of the wrong kind",
-          !ir_instr_push_type(kind, ir_type_parse(m, "i32")));
-    ir_instr_push_value(kind, a);
-    ir_instr_push_value(kind, a);
+          !ir_instr_operand_type(kind, ir_type_parse(m, "i32")));
+    ir_instr_operand_value(kind, a);
+    ir_instr_operand_value(kind, a);
     kind->operands[0].kind = IR_OPD_TYPE;
     kind->operands[0].type = ir_type_parse(m, "i32");
 
     ir_instr_t *away = ir_instr_add(b, IR_OP_JUMP);
 
-    ir_instr_push_block(away, gb);
+    ir_instr_operand_block(away, gb);
 
     ir_instr_t *ld = ir_instr_add(b, IR_OP_LOAD);
 
     check("the builder refuses a modifier the opcode does not take",
-          !ir_instr_push_mod(ld, "sat"));
+          !ir_instr_add_mod(ld, "sat"));
 
     ld->mods   = ir_alloc(ctx, sizeof(char *));
     ld->mods[0] = "sat";
@@ -506,7 +506,7 @@ static void test_value_references_resolve(void)
 
     ir_block_add(g, "entry");
     ir_instr_set_dest(c, "s", ir_type_parse(m, "i32"));
-    ir_instr_push_value(c, a);
+    ir_instr_operand_value(c, a);
     ir_instr_add(b, IR_OP_UNREACHABLE);
 
     ir_diags_t *d = ir_diags_new(ctx, nullptr);
@@ -795,8 +795,9 @@ static void test_annotation_invalidation(void)
     ir_ctx_free(ctx);
 }
 
-static bool drop_spans(ir_module_t *m, void *state)
+static bool drop_spans(ir_module_t *m, ir_diags_t *d, void *state)
 {
+    (void)d;
     (void)state;
 
     ir_func_t *f = ir_func_at(m, 0);
@@ -806,16 +807,18 @@ static bool drop_spans(ir_module_t *m, void *state)
     return true;
 }
 
-static bool keep_spans(ir_module_t *m, void *state)
+static bool keep_spans(ir_module_t *m, ir_diags_t *d, void *state)
 {
     (void)m;
+    (void)d;
     (void)state;
 
     return true;
 }
 
-static bool add_a_local(ir_module_t *m, void *state)
+static bool add_a_local(ir_module_t *m, ir_diags_t *d, void *state)
 {
+    (void)d;
     (void)state;
 
     ir_local_add(ir_func_at(m, 0), "t", ir_type_parse(m, "i32"));
@@ -823,16 +826,18 @@ static bool add_a_local(ir_module_t *m, void *state)
     return true;
 }
 
-static bool a_pass_that_gives_up(ir_module_t *m, void *state)
+static bool a_pass_that_gives_up(ir_module_t *m, ir_diags_t *d, void *state)
 {
     (void)m;
+    (void)d;
     (void)state;
 
     return false;
 }
 
-static bool a_pass_that_edits(ir_module_t *m, void *state)
+static bool a_pass_that_edits(ir_module_t *m, ir_diags_t *d, void *state)
 {
+    (void)d;
     (void)state;
 
     ir_func_t *f = ir_func_at(m, 0);
@@ -865,7 +870,7 @@ static void test_a_pass_leaves_foreign_annotations_alone(void)
                        .run         = a_pass_that_edits};
 
     check("a pass that does not know a namespace still runs",
-          ir_pass_run(&edits, m, nullptr, nullptr) == IR_PASS_OK);
+          ir_pass_run(&edits, m, nullptr, nullptr, nullptr) == IR_PASS_OK);
 
     ir_annot_t *kept  = ir_annot_get(&in->annots, "bce.mine");
     ir_annot_t *kept2 = ir_annot_get(&f->annots, "bce.mine");
@@ -892,10 +897,10 @@ static void test_passes(void)
                         .run         = keep_spans};
 
     check("a pass that keeps its locations runs",
-          ir_pass_run_checked(&honest, m, nullptr, nullptr, d) == IR_PASS_OK);
+          ir_pass_run(&honest, m, nullptr, nullptr, d) == IR_PASS_OK);
 
     check("a pass that discards a known location fails",
-          ir_pass_run_checked(&losing, m, nullptr, nullptr, d)
+          ir_pass_run(&losing, m, nullptr, nullptr, d)
               == IR_PASS_FAILED);
 
     ir_pass_t mute = {.name     = "gives-up",
@@ -904,7 +909,7 @@ static void test_passes(void)
     uint32_t  said = ir_diags_count(d);
 
     check("a pass that fails is a failure",
-          ir_pass_run_checked(&mute, m, nullptr, nullptr, d)
+          ir_pass_run(&mute, m, nullptr, nullptr, d)
               == IR_PASS_FAILED);
     check("and failing without saying why is itself reported",
           ir_diags_count(d) > said
@@ -945,11 +950,11 @@ static void test_undeclared_invalidation(void)
                         .run      = keep_spans};
 
     check("the pass runs and declares nothing",
-          ir_pass_run_checked(&sneaky, m, nullptr, nullptr, d) == IR_PASS_OK);
+          ir_pass_run(&sneaky, m, nullptr, nullptr, d) == IR_PASS_OK);
     check("the verifier runs between that pass and the next",
           (ir_verify(m, d) & IR_PROP_PARSED) != 0);
     check("the next pass runs after it",
-          ir_pass_run_checked(&honest, m, nullptr, nullptr, d) == IR_PASS_OK);
+          ir_pass_run(&honest, m, nullptr, nullptr, d) == IR_PASS_OK);
     check("and the verifier runs again after that one",
           (ir_verify(m, d) & IR_PROP_PARSED) != 0);
     check("and finds ssa no longer holds",
@@ -1001,7 +1006,7 @@ static void test_locals_have_no_address(void)
     ir_local_t  *l   = ir_local_add(f, "t", ir_type_parse(m, "i32"));
     ir_instr_t  *ld  = ir_instr_add(b, IR_OP_LOAD);
 
-    ir_instr_push_local(ld, l);
+    ir_instr_operand_local(ld, l);
 
     ir_diags_t *d = ir_diags_new(ctx, nullptr);
     ir_rules_t *rs = ir_module_rules(m);

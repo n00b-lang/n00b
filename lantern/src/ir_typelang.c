@@ -15,6 +15,7 @@
 #include "scanner/scan_builtins.h"
 #include "scanner/token_stream.h"
 #include "lib/dict.h"
+#include "lib/list.h"
 #include "lib/buffer.h"
 
 #include "typelang_bnf.h"
@@ -22,7 +23,7 @@
 static char *msg(const char *what)
 {
     size_t n = strlen(what) + 12;
-    char  *p = malloc(n);
+    char  *p = ncc_alloc_size(1, n);
 
     snprintf(p, n, "typelang: %s", what);
 
@@ -34,9 +35,9 @@ static int64_t        tid_ident;
 static int64_t        tid_int;
 static int64_t        tid_str;
 
-static int64_t lookup(ncc_grammar_t *g, const char *name)
+static int64_t lookup(ncc_grammar_t *g, ncc_string_t name)
 {
-    return ncc_lookup_terminal(g, ncc_string_from_cstr(name));
+    return ncc_lookup_terminal(g, name);
 }
 
 static ncc_grammar_t *load_grammar(void)
@@ -48,19 +49,19 @@ static ncc_grammar_t *load_grammar(void)
     ncc_grammar_t *g = ncc_grammar_new();
 
     ncc_grammar_set_error_recovery(g, false);
-    ncc_register_terminal(g, ncc_string_from_cstr("INT_LIT"));
-    ncc_register_terminal(g, ncc_string_from_cstr("STRING_LIT"));
+    ncc_register_terminal(g, NCC_STRING_STATIC("INT_LIT"));
+    ncc_register_terminal(g, NCC_STRING_STATIC("STRING_LIT"));
 
-    if (!ncc_bnf_load(ncc_string_from_cstr(TYPELANG_BNF),
-                      ncc_string_from_cstr("union-type"), g)) {
+    if (!ncc_bnf_load(NCC_STRING_STATIC(TYPELANG_BNF),
+                      NCC_STRING_STATIC("union-type"), g)) {
         ncc_grammar_free(g);
 
         return nullptr;
     }
 
     tid_ident = NCC_TOK_IDENTIFIER;
-    tid_int   = lookup(g, "INT_LIT");
-    tid_str   = lookup(g, "STRING_LIT");
+    tid_int   = lookup(g, NCC_STRING_STATIC("INT_LIT"));
+    tid_str   = lookup(g, NCC_STRING_STATIC("STRING_LIT"));
 
     grammar = g;
 
@@ -112,10 +113,9 @@ static bool tl_scan(ncc_scanner_t *s)
         ncc_option_t(ncc_string_t) id   = ncc_scan_identifier(s);
 
         if (ncc_option_is_set(id)) {
-            int64_t kw = name
-                           ? NCC_TOK_OTHER
-                           : ncc_scan_terminal_id(
-                               s, ncc_option_get(id).data);
+            int64_t kw = name ? NCC_TOK_OTHER
+                              : ncc_scan_terminal_id(s,
+                                                     ncc_option_get(id));
 
             ncc_scan_emit(s, kw != NCC_TOK_OTHER ? (int32_t)kw
                                                  : NCC_TOK_IDENTIFIER,
@@ -130,7 +130,7 @@ static bool tl_scan(ncc_scanner_t *s)
     if (next > 0 && next < 128 && !isspace((int)next)) {
         char two[3] = {(char)c, (char)next, 0};
 
-        int64_t op = ncc_scan_terminal_id(s, two);
+        int64_t op = ncc_scan_terminal_id(s, ncc_string_borrow(two, 2));
 
         if (op != NCC_TOK_OTHER && op > 0xFF) {
             ncc_scan_advance_n(s, 2);
@@ -184,31 +184,31 @@ typedef struct {
     th_type *type;
 } freev;
 
+ncc_list_decl(freev);
+
 typedef struct {
     char **names;
     size_t n;
 } binding;
+
+ncc_list_decl(binding);
 
 typedef struct {
     th_ctx        *th;
     ncc_grammar_t *g;
     const char    *err;
 
-    freev     *free_vars;
-    size_t     nfree;
-    size_t     cfree;
-    ncc_dict_t fv_index;
+    ncc_list_t(freev) free_vars;
+    ncc_dict_t        fv_index;
 
-    binding *binders;
-    size_t   nb;
-    size_t   cb;
+    ncc_list_t(binding) binders;
 } bctx;
 
 static tl_node *node_new(bctx *c, tl_kind kind)
 {
     (void)c;
 
-    tl_node *n = calloc(1, sizeof(*n));
+    tl_node *n = ncc_alloc(typeof(*n));
 
     n->magic = TL_NODE_MAGIC;
     n->kind  = kind;
@@ -341,7 +341,7 @@ static void *r_qualified_name(ncc_reduce_t *r)
 
     tl_node *n = node_new(c, TL_NAME);
 
-    n->name = strdup(buf);
+    n->name = ncc_strdup(buf);
 
     return n;
 }
@@ -465,7 +465,7 @@ static void *r_type_args(ncc_reduce_t *r)
         list->v[i] = a;
     }
 
-    free(out);
+    ncc_free(out);
 
     return list;
 }
@@ -481,10 +481,11 @@ static void *r_tvar(ncc_reduce_t *r)
         return nullptr;
     }
 
-    for (size_t d = c->nb; d > 0; d--) {
-        for (size_t i = 0; i < c->binders[d - 1].n; i++) {
-            if (!strcmp(c->binders[d - 1].names[i], name.data)) {
-                return node_type(c, th_bound(c->th, c->nb - d + 1, i));
+    for (size_t d = c->binders.len; d > 0; d--) {
+        for (size_t i = 0; i < c->binders.data[d - 1].n; i++) {
+            if (!strcmp(c->binders.data[d - 1].names[i], name.data)) {
+                return node_type(c,
+                                 th_bound(c->th, c->binders.len - d + 1, i));
             }
         }
     }
@@ -494,20 +495,15 @@ static void *r_tvar(ncc_reduce_t *r)
                                                    &found);
 
     if (found) {
-        return node_type(c, c->free_vars[at].type);
-    }
-
-    if (c->nfree >= c->cfree) {
-        c->cfree     = c->cfree ? c->cfree * 2 : 8;
-        c->free_vars = realloc(c->free_vars, c->cfree * sizeof(freev));
+        return node_type(c, c->free_vars.data[at].type);
     }
 
     th_type *t = th_var(c->th);
 
-    c->free_vars[c->nfree].name = strdup(name.data);
-    c->free_vars[c->nfree].type = t;
-    ncc_dict_put(&c->fv_index, c->free_vars[c->nfree].name, c->nfree);
-    c->nfree++;
+    ncc_list_push(c->free_vars,
+                  ((freev){.name = ncc_strdup(name.data), .type = t}));
+    ncc_dict_put(&c->fv_index, c->free_vars.data[c->free_vars.len - 1].name,
+                 c->free_vars.len - 1);
 
     return node_type(c, t);
 }
@@ -519,15 +515,15 @@ static void collect_tvar_names(ncc_grammar_t *g, ncc_parse_tree_t *n,
         return;
     }
 
-    if (ncc_tree_is_nt(g, n, "one-type")) {
+    if (ncc_tree_is_nt(g, n, NCC_STRING_STATIC("one-type"))) {
         return;
     }
 
-    if (ncc_tree_is_nt(g, n, "tvar")) {
+    if (ncc_tree_is_nt(g, n, NCC_STRING_STATIC("tvar"))) {
         ncc_string_t s = ncc_tree_leaf_text(ncc_tree_child(n, 1));
 
         if (s.data && *count < max) {
-            names[(*count)++] = strdup(s.data);
+            names[(*count)++] = ncc_strdup(s.data);
         }
 
         return;
@@ -543,19 +539,12 @@ static void collect_tvar_names(ncc_grammar_t *g, ncc_parse_tree_t *n,
 static bool binder_open(ncc_visit_t *v)
 {
     bctx  *c = v->thunk;
-    char **names = calloc(64, sizeof(char *));
+    char **names = ncc_alloc_array(char *, 64);
     size_t n     = 0;
 
     collect_tvar_names(v->grammar, v->node, names, &n, 64);
 
-    if (c->nb >= c->cb) {
-        c->cb      = c->cb ? c->cb * 2 : 4;
-        c->binders = realloc(c->binders, c->cb * sizeof(binding));
-    }
-
-    c->binders[c->nb].names = names;
-    c->binders[c->nb].n     = n;
-    c->nb++;
+    ncc_list_push(c->binders, ((binding){.names = names, .n = n}));
 
     return true;
 }
@@ -564,15 +553,16 @@ static void *r_binder(ncc_reduce_t *r)
 {
     bctx    *c    = r->thunk;
     th_type *body = kid_type(r, r->n_kids - 1);
-    size_t   n    = c->nb ? c->binders[c->nb - 1].n : 0;
+    size_t   at   = c->binders.len;
+    size_t   n    = at ? c->binders.data[at - 1].n : 0;
 
-    if (c->nb) {
+    if (at) {
         for (size_t i = 0; i < n; i++) {
-            free(c->binders[c->nb - 1].names[i]);
+            ncc_free(c->binders.data[at - 1].names[i]);
         }
 
-        free(c->binders[c->nb - 1].names);
-        c->nb--;
+        ncc_free(c->binders.data[at - 1].names);
+        c->binders.len--;
     }
 
     if (!body) {
@@ -587,7 +577,8 @@ static void *r_binder(ncc_reduce_t *r)
 static void *r_bitint(ncc_reduce_t *r)
 {
     bctx    *c        = r->thunk;
-    bool     is_signed = ncc_tree_leaf_is(ncc_tree_child(r->node, 0), "bitint");
+    bool     is_signed = ncc_tree_leaf_is(ncc_tree_child(r->node, 0),
+                                          NCC_STRING_STATIC("bitint"));
     tl_node *width     = kid(r, 2);
 
     return node_type(c, th_bitint(c->th, width ? width->u : 0, is_signed));
@@ -596,23 +587,24 @@ static void *r_bitint(ncc_reduce_t *r)
 static void *r_ind_attr(ncc_reduce_t *r)
 {
     static const struct {
-        const char *name;
-        uint8_t     bit;
+        ncc_string_t name;
+        uint8_t      bit;
     } map[] = {
-        {"nullable",   TH_NULLABLE  },
-        {"reseatable", TH_RESEATABLE},
-        {"indexable",  TH_INDEXABLE },
-        {"owning",     TH_OWNING    },
-        {"exclusive",  TH_EXCLUSIVE },
-        {"temporary",  TH_TEMPORARY },
+        {NCC_STRING_STATIC("nullable"),   TH_NULLABLE  },
+        {NCC_STRING_STATIC("reseatable"), TH_RESEATABLE},
+        {NCC_STRING_STATIC("indexable"),  TH_INDEXABLE },
+        {NCC_STRING_STATIC("owning"),     TH_OWNING    },
+        {NCC_STRING_STATIC("exclusive"),  TH_EXCLUSIVE },
+        {NCC_STRING_STATIC("temporary"),  TH_TEMPORARY },
     };
 
-    bctx        *c = r->thunk;
-    ncc_string_t s = ncc_tree_leaf_text(ncc_tree_child(r->node, 0));
-    tl_node     *n = node_new(c, TL_ATTR);
+    bctx    *c   = r->thunk;
+    tl_node *n   = node_new(c, TL_ATTR);
+    int32_t  alt = rule_of(r->node);
 
-    for (size_t i = 0; s.data && i < sizeof(map) / sizeof(map[0]); i++) {
-        if (!strcmp(s.data, map[i].name)) {
+    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+        if (ncc_alt_leads_with(r->grammar, NCC_STRING_STATIC("ind-attr"),
+                               alt, map[i].name)) {
             n->attr = map[i].bit;
             break;
         }
@@ -644,22 +636,25 @@ static void *r_ind_attrs(ncc_reduce_t *r)
     return n;
 }
 
-static uint8_t sugar_attrs(const char *w)
+static uint8_t sugar_attrs(ncc_grammar_t *g, int32_t alt)
 {
-    if (!strcmp(w, "ptr")) {
-        return TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE;
-    }
-    if (!strcmp(w, "mutref")) {
-        return TH_EXCLUSIVE;
-    }
-    if (!strcmp(w, "own")) {
-        return TH_OWNING;
-    }
-    if (!strcmp(w, "gcref")) {
-        return TH_NULLABLE | TH_RESEATABLE;
-    }
-    if (!strcmp(w, "tmpref")) {
-        return TH_TEMPORARY;
+    static const struct {
+        ncc_string_t name;
+        uint8_t      attrs;
+    } map[] = {
+        {NCC_STRING_STATIC("ptr"),    TH_NULLABLE | TH_RESEATABLE
+                                          | TH_INDEXABLE       },
+        {NCC_STRING_STATIC("mutref"), TH_EXCLUSIVE             },
+        {NCC_STRING_STATIC("own"),    TH_OWNING                },
+        {NCC_STRING_STATIC("gcref"),  TH_NULLABLE | TH_RESEATABLE},
+        {NCC_STRING_STATIC("tmpref"), TH_TEMPORARY             },
+    };
+
+    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+        if (ncc_alt_leads_with(g, NCC_STRING_STATIC("ind-name"), alt,
+                               map[i].name)) {
+            return map[i].attrs;
+        }
     }
 
     return 0;
@@ -684,9 +679,7 @@ static void *r_ind_tail(ncc_reduce_t *r)
 
 static void *r_indirection(ncc_reduce_t *r)
 {
-    bctx        *c    = r->thunk;
-    ncc_string_t name = ncc_tree_leaf_text(
-        ncc_tree_child(ncc_tree_child(r->node, 0), 0));
+    bctx    *c        = r->thunk;
     th_type *referent = kid_type(r, 2);
 
     if (!referent) {
@@ -695,8 +688,9 @@ static void *r_indirection(ncc_reduce_t *r)
         return nullptr;
     }
 
-    uint8_t            attrs = name.data ? sugar_attrs(name.data) : 0;
-    ncc_reduce_list_t *tail  = ncc_reduce_as_list(kid(r, 3));
+    uint8_t attrs = sugar_attrs(r->grammar,
+                                rule_of(ncc_tree_child(r->node, 0)));
+    ncc_reduce_list_t *tail = ncc_reduce_as_list(kid(r, 3));
 
     for (size_t i = 0; tail && i < tail->n; i++) {
         tl_node *a = tail->v[i];
@@ -765,7 +759,7 @@ static void *r_field(ncc_reduce_t *r)
 
     tl_node *n = node_new(c, TL_MEMBER);
 
-    n->member.name = strdup(name.data);
+    n->member.name = ncc_strdup(name.data);
     n->member.type = type;
 
     return n;
@@ -831,31 +825,35 @@ static void *r_field_body(ncc_reduce_t *r)
     return node_type(c, th_record(c->th, members, nm));
 }
 
+static void *r_tuple_args(ncc_reduce_t *r)
+{
+    tl_node           *got[64];
+    size_t             n    = collect(r, TL_TYPE, got, 64);
+    ncc_reduce_list_t *list = ncc_reduce_list_new(n);
+
+    for (size_t i = 0; i < n; i++) {
+        list->v[i] = got[i];
+    }
+
+    return list;
+}
+
 static void *r_tuple(ncc_reduce_t *r)
 {
     bctx    *c = r->thunk;
     th_type *elems[64];
     size_t   ne = 0;
 
-    ncc_reduce_list_t *inner = ncc_reduce_as_list(kid(r, 2));
+    ncc_reduce_list_t *outer = ncc_reduce_as_list(kid(r, 2));
+    ncc_reduce_list_t *args  = outer && outer->n
+                                 ? ncc_reduce_as_list(outer->v[0])
+                                 : nullptr;
 
-    if (inner) {
-        for (size_t i = 0; i < inner->n && ne < 64; i++) {
-            th_type *t = as_type(inner->v[i]);
+    for (size_t i = 0; args && i < args->n && ne < 64; i++) {
+        th_type *t = as_type(args->v[i]);
 
-            if (t) {
-                elems[ne++] = t;
-            }
-
-            ncc_reduce_list_t *more = ncc_reduce_as_list(inner->v[i]);
-
-            for (size_t j = 0; more && j < more->n && ne < 64; j++) {
-                th_type *u = as_type(more->v[j]);
-
-                if (u) {
-                    elems[ne++] = u;
-                }
-            }
+        if (t) {
+            elems[ne++] = t;
         }
     }
 
@@ -864,13 +862,17 @@ static void *r_tuple(ncc_reduce_t *r)
 
 static void *r_mode(ncc_reduce_t *r)
 {
-    bctx        *c = r->thunk;
-    ncc_string_t s = ncc_tree_leaf_text(ncc_tree_child(r->node, 0));
-    tl_node     *n = node_new(c, TL_MODE);
+    bctx    *c   = r->thunk;
+    tl_node *n   = node_new(c, TL_MODE);
+    int32_t  alt = rule_of(r->node);
 
-    n->mode = s.data && !strcmp(s.data, "out")     ? TH_OUT
-            : s.data && !strcmp(s.data, "inout")   ? TH_INOUT
-                                                   : TH_IN;
+    n->mode = ncc_alt_leads_with(r->grammar, NCC_STRING_STATIC("mode"), alt,
+                                 NCC_STRING_STATIC("out"))
+                ? TH_OUT
+            : ncc_alt_leads_with(r->grammar, NCC_STRING_STATIC("mode"), alt,
+                                 NCC_STRING_STATIC("inout"))
+                ? TH_INOUT
+                                                                  : TH_IN;
 
     return n;
 }
@@ -937,7 +939,7 @@ static void *r_param(ncc_reduce_t *r)
             }
         }
 
-        n->param.name = named.data ? strdup(named.data) : nullptr;
+        n->param.name = ncc_strdup(named.data);
     }
 
     n->param.mode = mode;
@@ -1035,7 +1037,7 @@ static void *r_int_leaf_or_str(ncc_reduce_t *r)
     if (tid == tid_str || tid == tid_ident) {
         tl_node *n = node_new(c, TL_NAME);
 
-        n->name = strdup(text.data);
+        n->name = ncc_strdup(text.data);
 
         return n;
     }
@@ -1043,55 +1045,56 @@ static void *r_int_leaf_or_str(ncc_reduce_t *r)
     return nullptr;
 }
 
-static void reg(ncc_tree_walk_t *w, bctx *c, const char *nt, ncc_reduce_fn fn)
+static void reg(ncc_tree_walk_t *w, bctx *c, ncc_string_t nt,
+                ncc_reduce_fn fn)
 {
-    if (!ncc_walk_reduce_nt(w, ncc_string_from_cstr(nt), fn, c)) {
-        fprintf(stderr, "typelang: no production named <%s>\n", nt);
+    if (!ncc_walk_reduce_nt(w, nt, fn, c)) {
+        fprintf(stderr, "typelang: no production named <%s>\n", nt.data);
     }
 }
 
 static void install(ncc_tree_walk_t *w, bctx *c)
 {
-    reg(w, c, "type", r_pass);
-    reg(w, c, "one-type", r_pass);
-    reg(w, c, "base-type", r_pass);
-    reg(w, c, "record", r_pass);
-    reg(w, c, "paren-form", r_paren_form);
-    reg(w, c, "union-type", r_union);
-    reg(w, c, "isect-type", r_isect);
-    reg(w, c, "named-type", r_named_type);
-    reg(w, c, "qualified-name", r_qualified_name);
-    reg(w, c, "type-args", r_type_args);
-    reg(w, c, "type-arg", r_type_arg);
-    reg(w, c, "tvar", r_tvar);
-    reg(w, c, "binder", r_binder);
-    reg(w, c, "bitint", r_bitint);
-    reg(w, c, "indirection", r_indirection);
-    reg(w, c, "ind-tail", r_ind_tail);
-    reg(w, c, "type-app", r_type_app);
-    reg(w, c, "ind-attr", r_ind_attr);
-    reg(w, c, "ind-attrs", r_ind_attrs);
-    reg(w, c, "sequence", r_sequence);
-    reg(w, c, "anon-site", r_anon_site);
-    reg(w, c, "field", r_field);
-    reg(w, c, "field-list", r_field_list);
-    reg(w, c, "field-body", r_field_body);
-    reg(w, c, "tuple", r_tuple);
-    reg(w, c, "mode", r_mode);
-    reg(w, c, "rest-param", r_rest_param);
-    reg(w, c, "param", r_param);
-    reg(w, c, "param-list", r_param_list);
-    reg(w, c, "function", r_function);
+    reg(w, c, NCC_STRING_STATIC("type"), r_pass);
+    reg(w, c, NCC_STRING_STATIC("one-type"), r_pass);
+    reg(w, c, NCC_STRING_STATIC("base-type"), r_pass);
+    reg(w, c, NCC_STRING_STATIC("record"), r_pass);
+    reg(w, c, NCC_STRING_STATIC("paren-form"), r_paren_form);
+    reg(w, c, NCC_STRING_STATIC("union-type"), r_union);
+    reg(w, c, NCC_STRING_STATIC("isect-type"), r_isect);
+    reg(w, c, NCC_STRING_STATIC("named-type"), r_named_type);
+    reg(w, c, NCC_STRING_STATIC("qualified-name"), r_qualified_name);
+    reg(w, c, NCC_STRING_STATIC("type-args"), r_type_args);
+    reg(w, c, NCC_STRING_STATIC("type-arg"), r_type_arg);
+    reg(w, c, NCC_STRING_STATIC("tvar"), r_tvar);
+    reg(w, c, NCC_STRING_STATIC("binder"), r_binder);
+    reg(w, c, NCC_STRING_STATIC("bitint"), r_bitint);
+    reg(w, c, NCC_STRING_STATIC("indirection"), r_indirection);
+    reg(w, c, NCC_STRING_STATIC("ind-tail"), r_ind_tail);
+    reg(w, c, NCC_STRING_STATIC("type-app"), r_type_app);
+    reg(w, c, NCC_STRING_STATIC("ind-attr"), r_ind_attr);
+    reg(w, c, NCC_STRING_STATIC("ind-attrs"), r_ind_attrs);
+    reg(w, c, NCC_STRING_STATIC("sequence"), r_sequence);
+    reg(w, c, NCC_STRING_STATIC("anon-site"), r_anon_site);
+    reg(w, c, NCC_STRING_STATIC("field"), r_field);
+    reg(w, c, NCC_STRING_STATIC("field-list"), r_field_list);
+    reg(w, c, NCC_STRING_STATIC("field-body"), r_field_body);
+    reg(w, c, NCC_STRING_STATIC("tuple-args"), r_tuple_args);
+    reg(w, c, NCC_STRING_STATIC("tuple"), r_tuple);
+    reg(w, c, NCC_STRING_STATIC("mode"), r_mode);
+    reg(w, c, NCC_STRING_STATIC("rest-param"), r_rest_param);
+    reg(w, c, NCC_STRING_STATIC("param"), r_param);
+    reg(w, c, NCC_STRING_STATIC("param-list"), r_param_list);
+    reg(w, c, NCC_STRING_STATIC("function"), r_function);
 
-    ncc_walk_on_nt(w, ncc_string_from_cstr("binder"), binder_open, nullptr, c);
+    ncc_walk_on_nt(w, NCC_STRING_STATIC("binder"), binder_open, nullptr, c);
 }
 
 static th_type *lower(bctx *c, ncc_parse_tree_t *tree)
 {
     ncc_tree_walk_t *w = ncc_tree_walk_new(c->g, c);
 
-    ncc_walk_reduce_leaf(w, r_int_leaf_or_str, c);
-    install(w, c);
+    ir_typelang_install(w, c->g, (ir_typelang_lower_t *)c);
 
     th_type *out = as_type(ncc_tree_walk_reduce(w, tree));
 
@@ -1099,28 +1102,6 @@ static th_type *lower(bctx *c, ncc_parse_tree_t *tree)
 
     return out;
 }
-#define TL_MAX_DEPTH 512
-
-static bool too_deep(const char *src, size_t len)
-{
-    size_t depth = 0;
-
-    for (size_t i = 0; i < len; i++) {
-        char c = src[i];
-
-        if (c == '[' || c == '(' || c == '{') {
-            if (++depth > TL_MAX_DEPTH) {
-                return true;
-            }
-        }
-        else if (c == ']' || c == ')' || c == '}') {
-            depth -= depth != 0;
-        }
-    }
-
-    return false;
-}
-
 static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
                     char **err)
 {
@@ -1131,14 +1112,6 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
     ncc_grammar_t *g = load_grammar();
 
     if (!g || !src) {
-        return nullptr;
-    }
-
-    if (too_deep(src, len)) {
-        if (err) {
-            *err = msg("this type nests deeper than the parser will descend");
-        }
-
         return nullptr;
     }
 
@@ -1170,13 +1143,13 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
             *err = msg(c.err ? c.err : "cannot build this type");
         }
 
-        for (size_t i = 0; i < c.nfree; i++) {
-            free(c.free_vars[i].name);
+        for (size_t i = 0; i < c.free_vars.len; i++) {
+            ncc_free(c.free_vars.data[i].name);
         }
 
         ncc_dict_free(&c.fv_index);
-        free(c.free_vars);
-        free(c.binders);
+        ncc_list_free(c.free_vars);
+        ncc_list_free(c.binders);
     }
     else if (err) {
         *err = msg("cannot parse a type here");
@@ -1197,11 +1170,7 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
 
 ir_typelang_lower_t *ir_typelang_lower_new(th_ctx *ctx)
 {
-    bctx *c = calloc(1, sizeof(bctx));
-
-    if (!c) {
-        return nullptr;
-    }
+    bctx *c = ncc_alloc(bctx);
 
     c->th = ctx;
     c->g  = load_grammar();
@@ -1211,11 +1180,20 @@ ir_typelang_lower_t *ir_typelang_lower_new(th_ctx *ctx)
     return (ir_typelang_lower_t *)c;
 }
 
-void ir_typelang_install(ncc_tree_walk_t *w, ir_typelang_lower_t *l)
+static int32_t unit_of(ncc_grammar_t *g, ncc_string_t name)
+{
+    ncc_nonterm_t *nt = ncc_find_nonterm(g, name);
+
+    return nt ? nt->unit : 0;
+}
+
+void ir_typelang_install(ncc_tree_walk_t *w, ncc_grammar_t *g,
+                         ir_typelang_lower_t *l)
 {
     bctx *c = (bctx *)l;
 
-    ncc_walk_reduce_leaf(w, r_int_leaf_or_str, c);
+    ncc_walk_reduce_leaf_in(w, unit_of(g, NCC_STRING_STATIC("union-type")), r_int_leaf_or_str,
+                            c);
     install(w, c);
 }
 
@@ -1232,20 +1210,56 @@ void ir_typelang_lower_free(ir_typelang_lower_t *l)
         return;
     }
 
-    for (size_t i = 0; i < c->nfree; i++) {
-        free(c->free_vars[i].name);
+    for (size_t i = 0; i < c->free_vars.len; i++) {
+        ncc_free(c->free_vars.data[i].name);
     }
 
     ncc_dict_free(&c->fv_index);
-    free(c->free_vars);
-    free(c->binders);
-    free(c);
+    ncc_list_free(c->free_vars);
+    ncc_list_free(c->binders);
+    ncc_free(c);
 }
 
 th_type *ir_typelang_parse(th_ctx *ctx, const char *src, char **err)
 {
     return src ? run(ctx, src, strlen(src), nullptr, err) : nullptr;
 }
+
+th_type *ir_type_from_text(th_ctx *types, ncc_string_t spec)
+{
+    if (!types || !spec.data) {
+        return nullptr;
+    }
+
+    char    *err = nullptr;
+    th_type *t   = run(types, spec.data, spec.u8_bytes, nullptr, &err);
+
+    ncc_free(err);
+
+    return t;
+}
+
+th_type *ir_type_from_node(th_ctx           *types,
+                           ncc_grammar_t    *g,
+                           ncc_parse_tree_t *node)
+{
+    if (!types || !g || !node) {
+        return nullptr;
+    }
+
+    ir_typelang_lower_t *l = ir_typelang_lower_new(types);
+    ncc_tree_walk_t     *w = ncc_tree_walk_new(g, nullptr);
+
+    ir_typelang_install(w, g, l);
+
+    th_type *t = ir_typelang_type_of(ncc_tree_walk_reduce(w, node));
+
+    ncc_tree_walk_free(w);
+    ir_typelang_lower_free(l);
+
+    return t;
+}
+
 
 th_type *ir_typelang_parse_prefix(th_ctx *ctx, const char *src, size_t len,
                                   size_t *consumed, char **err)

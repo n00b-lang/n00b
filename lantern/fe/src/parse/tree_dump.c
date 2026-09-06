@@ -1,17 +1,18 @@
-
 #include "parse/tree_dump.h"
 #include "internal/parse/grammar_internal.h"
+#include "lib/alloc.h"
+#include "lib/buffer.h"
 
 static void
-print_indent(FILE *out, int depth)
+print_indent(ncc_buffer_t *b, int depth)
 {
     for (int i = 0; i < depth; i++) {
-        fprintf(out, "  ");
+        ncc_buffer_puts(b, "  ");
     }
 }
 
 static void
-print_node(ncc_grammar_t *g, ncc_parse_tree_t *node, FILE *out,
+print_node(ncc_grammar_t *g, ncc_parse_tree_t *node, ncc_buffer_t *b,
            int depth, bool raw)
 {
     if (!node) {
@@ -25,22 +26,20 @@ print_node(ncc_grammar_t *g, ncc_parse_tree_t *node, FILE *out,
             return;
         }
 
-        print_indent(out, depth);
+        print_indent(b, depth);
 
         if (ncc_option_is_set(tok->value)) {
             ncc_string_t val = ncc_option_get(tok->value);
 
             if (val.data) {
-                fprintf(out, "TOKEN[%d] \"%.*s\"\n",
-                        tok->tid, (int)val.u8_bytes, val.data);
-            }
-            else {
-                fprintf(out, "TOKEN[%d]\n", tok->tid);
+                ncc_buffer_printf(b, "TOKEN[%d] \"%.*s\"\n",
+                                  tok->tid, (int)val.u8_bytes, val.data);
+
+                return;
             }
         }
-        else {
-            fprintf(out, "TOKEN[%d]\n", tok->tid);
-        }
+
+        ncc_buffer_printf(b, "TOKEN[%d]\n", tok->tid);
 
         return;
     }
@@ -49,45 +48,59 @@ print_node(ncc_grammar_t *g, ncc_parse_tree_t *node, FILE *out,
 
     if (pn->group_top && !raw) {
         for (size_t i = 0; i < ncc_tree_num_children(node); i++) {
-            print_node(g, ncc_tree_child(node, i), out, depth, raw);
+            print_node(g, ncc_tree_child(node, i), b, depth, raw);
         }
+
         return;
     }
 
-    print_indent(out, depth);
+    print_indent(b, depth);
 
     if (pn->group_top) {
-        fprintf(out, "[GROUP_TOP]");
+        ncc_buffer_puts(b, "[GROUP_TOP]");
     }
     else if (pn->group_item) {
-        fprintf(out, "[GROUP_ITEM]");
+        ncc_buffer_puts(b, "[GROUP_ITEM]");
     }
 
     if (pn->name.data) {
-        fprintf(out, "<%.*s>", (int)pn->name.u8_bytes, pn->name.data);
+        ncc_buffer_printf(b, "<%.*s>", (int)pn->name.u8_bytes, pn->name.data);
     }
     else {
         ncc_nonterm_t *nt = ncc_get_nonterm(g, pn->id);
 
         if (nt && nt->name.data) {
-            fprintf(out, "<%.*s>", (int)nt->name.u8_bytes, nt->name.data);
+            ncc_buffer_printf(b, "<%.*s>",
+                              (int)nt->name.u8_bytes, nt->name.data);
         }
         else {
-            fprintf(out, "<NT#%lld>", (long long)pn->id);
+            ncc_buffer_printf(b, "<NT#%lld>", (long long)pn->id);
         }
     }
 
-    fprintf(out, " rule=%d", pn->rule_index);
+    ncc_buffer_printf(b, " rule=%d", pn->rule_index);
 
     if (pn->penalty > 0) {
-        fprintf(out, " penalty=%u", pn->penalty);
+        ncc_buffer_printf(b, " penalty=%u", pn->penalty);
     }
 
-    fprintf(out, "\n");
+    ncc_buffer_putc(b, '\n');
 
     for (size_t i = 0; i < ncc_tree_num_children(node); i++) {
-        print_node(g, ncc_tree_child(node, i), out, depth + 1, raw);
+        print_node(g, ncc_tree_child(node, i), b, depth + 1, raw);
     }
+}
+
+char *
+ncc_tree_dump_str(ncc_grammar_t *g, ncc_parse_tree_t *tree, bool raw)
+{
+    ncc_buffer_t *b = ncc_buffer_empty();
+
+    if (tree) {
+        print_node(g, tree, b, 0, raw);
+    }
+
+    return ncc_buffer_take(b);
 }
 
 void
@@ -98,5 +111,8 @@ ncc_tree_dump(ncc_grammar_t *g, ncc_parse_tree_t *tree,
         return;
     }
 
-    print_node(g, tree, out, 0, raw);
+    char *s = ncc_tree_dump_str(g, tree, raw);
+
+    fputs(s, out);
+    ncc_free(s);
 }

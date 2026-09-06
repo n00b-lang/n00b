@@ -44,6 +44,8 @@ struct ncc_tree_walk_t {
     struct ncc_reduce_state_t *reduce;
     int32_t                 max_phase;
     bool                    stopped;
+    uint32_t                replaced;
+    ncc_parse_tree_t       *new_root;
 };
 
 static int32_t
@@ -84,13 +86,11 @@ ncc_tree_walk_free(ncc_tree_walk_t *w)
         return;
     }
 
-    for (size_t b = 0; b < w->by_nt->capacity; b++) {
-        if (w->by_nt->buckets[b].state == _NCC_BUCKET_OCCUPIED) {
-            chain_t *c = (chain_t *)w->by_nt->buckets[b].value;
+    ncc_dict_foreach (w->by_nt, e) {
+        chain_t *c = (chain_t *)e->value;
 
-            ncc_free(c->data);
-            ncc_free(c);
-        }
+        ncc_free(c->data);
+        ncc_free(c);
     }
 
     ncc_dict_free(w->by_nt);
@@ -154,15 +154,7 @@ ncc_walk_on_nt(ncc_tree_walk_t *w, ncc_string_t nt_name, ncc_visit_fn pre,
         return false;
     }
 
-    ncc_nonterm_t *nt   = nullptr;
-    size_t         n    = ncc_list_len(w->g->nt_list);
-
-    for (size_t i = 0; i < n; i++) {
-        if (ncc_string_eq(w->g->nt_list.data[i]->name, nt_name)) {
-            nt = w->g->nt_list.data[i];
-            break;
-        }
-    }
+    ncc_nonterm_t *nt = ncc_find_nonterm(w->g, nt_name);
 
     if (!nt) {
         return false;
@@ -372,8 +364,41 @@ ncc_tree_walk_run(ncc_tree_walk_t *w, ncc_parse_tree_t *root)
 
         run_chain(w, &w->any, &v, false, true, -1);
 
+        if (v.replace && v.replace != v.node) {
+            if (v.parent && v.child_index >= 0) {
+                ncc_tree_set_child(v.parent, (size_t)v.child_index,
+                                   v.replace);
+            }
+            else {
+                w->new_root = v.replace;
+            }
+
+            w->replaced++;
+        }
+
         w->stack.len = top;
     }
+}
+
+ncc_parse_tree_t *
+ncc_tree_walk_rewrite(ncc_tree_walk_t *w, ncc_parse_tree_t *root)
+{
+    if (!w || !root) {
+        return root;
+    }
+
+    w->replaced = 0;
+    w->new_root = nullptr;
+
+    ncc_tree_walk_run(w, root);
+
+    return w->new_root ? w->new_root : root;
+}
+
+uint32_t
+ncc_tree_walk_replaced(const ncc_tree_walk_t *w)
+{
+    return w ? w->replaced : 0;
 }
 
 void
@@ -401,6 +426,7 @@ struct ncc_reduce_state_t {
     ncc_list_t(reducer_t) by_nt;
     reducer_t             any;
     reducer_t             leaf;
+    ncc_list_t(reducer_t) unit_leaf;
     bool                  have_any;
     bool                  have_leaf;
 };
@@ -422,19 +448,13 @@ bool ncc_walk_reduce_nt(ncc_tree_walk_t *w, ncc_string_t nt_name,
         return false;
     }
 
-    size_t n  = ncc_list_len(w->g->nt_list);
-    int64_t id = -1;
+    ncc_nonterm_t *nt = ncc_find_nonterm(w->g, nt_name);
 
-    for (size_t i = 0; i < n; i++) {
-        if (ncc_string_eq(w->g->nt_list.data[i]->name, nt_name)) {
-            id = w->g->nt_list.data[i]->id;
-            break;
-        }
-    }
-
-    if (id < 0) {
+    if (!nt) {
         return false;
     }
+
+    int64_t id = nt->id;
 
     struct ncc_reduce_state_t *st = reduce_state(w);
 
@@ -463,6 +483,48 @@ void ncc_walk_reduce_leaf(ncc_tree_walk_t *w, ncc_reduce_fn fn, void *thunk)
 
     st->leaf      = (reducer_t){.fn = fn, .thunk = thunk};
     st->have_leaf = true;
+}
+
+void ncc_walk_reduce_leaf_in(ncc_tree_walk_t *w, int32_t unit,
+                             ncc_reduce_fn fn, void *thunk)
+{
+    struct ncc_reduce_state_t *st = reduce_state(w);
+
+    while (ncc_list_len(st->unit_leaf) <= (size_t)unit) {
+        ncc_list_push(st->unit_leaf, ((reducer_t){0}));
+    }
+    st->unit_leaf.data[unit] = (reducer_t){.fn = fn, .thunk = thunk};
+}
+
+static reducer_t *leaf_in_unit(struct ncc_reduce_state_t *st, int32_t unit)
+{
+    if (unit > 0 && (size_t)unit < ncc_list_len(st->unit_leaf)
+        && st->unit_leaf.data[unit].fn) {
+        return &st->unit_leaf.data[unit];
+    }
+
+    return nullptr;
+}
+
+static reducer_t *leaf_for(struct ncc_reduce_state_t *st, ncc_grammar_t *g,
+                           ncc_parse_tree_t **up, size_t n)
+{
+    for (size_t i = n; i-- > 0;) {
+        ncc_parse_tree_t *p = up[i];
+
+        if (!p || ncc_tree_is_leaf(p)) {
+            continue;
+        }
+
+        ncc_nonterm_t *nt = ncc_get_nonterm(g, ncc_tree_node_value(p).id);
+        reducer_t     *hit = nt ? leaf_in_unit(st, nt->unit) : nullptr;
+
+        if (hit) {
+            return hit;
+        }
+    }
+
+    return st->have_leaf ? &st->leaf : nullptr;
 }
 
 typedef struct {
@@ -529,7 +591,20 @@ void *ncc_tree_walk_reduce(ncc_tree_walk_t *w, ncc_parse_tree_t *root)
         reducer_t *use = nullptr;
 
         if (ncc_tree_is_leaf(f->node)) {
-            use = st->have_leaf ? &st->leaf : nullptr;
+            ncc_parse_tree_t *up[8];
+            size_t            nup = 0;
+
+            for (size_t k = frames.len - 1; k-- > 0 && nup < 8;) {
+                up[nup++] = frames.data[k].node;
+            }
+
+            for (size_t a = 0, z = nup; a + 1 < z; a++, z--) {
+                ncc_parse_tree_t *t = up[a];
+
+                up[a]     = up[z - 1];
+                up[z - 1] = t;
+            }
+            use = leaf_for(st, w->g, up, nup);
         }
         else {
             ncc_nt_node_t *pn = &ncc_tree_node_value(f->node);

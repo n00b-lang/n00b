@@ -43,7 +43,3 @@ ncc_parse_forest_t ncc_pwz_get_forest(ncc_pwz_parser_t *p);
 
 ncc_parse_forest_t ncc_pwz_parse_grammar(ncc_grammar_t      *g,
                                              ncc_token_stream_t *ts);
-
-#ifdef NCC_MEM_DEBUG
-void ncc_pwz_report_stats(void);
-#endif

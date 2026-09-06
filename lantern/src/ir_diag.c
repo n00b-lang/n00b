@@ -19,8 +19,6 @@ static const struct {
 const char *ir_severity_name(ir_severity_t s)
 {
     switch (s) {
-    case IR_SEV_FATAL:
-        return "fatal";
     case IR_SEV_ERROR:
         return "error";
     case IR_SEV_WARNING:
@@ -88,9 +86,7 @@ ir_policy_t *ir_policy_new(ir_ctx_t *ctx)
 
     ir_policy_t *p = ir_alloc(ctx, sizeof(ir_policy_t));
 
-    if (p) {
-        p->ctx = ctx;
-    }
+    p->ctx = ctx;
 
     return p;
 }
@@ -158,7 +154,6 @@ struct ir_diags_t {
     uint32_t     n;
     uint32_t     cap;
     uint64_t     seq;
-    bool         fatal;
     bool         sorted;
     bool         anchored;
 };
@@ -171,11 +166,9 @@ ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy)
 
     ir_diags_t *d = ir_alloc(ctx, sizeof(ir_diags_t));
 
-    if (d) {
-        d->ctx    = ctx;
-        d->policy = policy;
-        d->sorted = true;
-    }
+    d->ctx    = ctx;
+    d->policy = policy;
+    d->sorted = true;
 
     return d;
 }
@@ -187,10 +180,6 @@ static bool is_attachment(ir_severity_t s)
 
 static bool apply_policy(ir_diags_t *d, ir_diagcode_t code, ir_severity_t *sev)
 {
-    if (*sev == IR_SEV_FATAL) {
-        return true;
-    }
-
     switch (ir_policy_for(d->policy, ir_diag_code(code))) {
     case IR_POLICY_ALLOW:
         return false;
@@ -227,7 +216,7 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
             if (dg) {
                 ir_diag_message(dg, d,
                                 "a note or help has nothing to attach to, and "
-                                "§11 says they never stand alone");
+                                "they never stand alone");
             }
         }
 
@@ -260,10 +249,6 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
     d->sorted   = false;
     d->anchored = d->anchored
                || (!is_attachment(sev) && code != IR_DIAG_ORPHAN_NOTE);
-
-    if (sev == IR_SEV_FATAL) {
-        d->fatal = true;
-    }
 
     return dg;
 }
@@ -419,18 +404,12 @@ bool ir_diags_failed(const ir_diags_t *d)
     }
 
     for (uint32_t i = 0; i < d->n; i++) {
-        if (d->v[i].severity == IR_SEV_ERROR
-            || d->v[i].severity == IR_SEV_FATAL) {
+        if (d->v[i].severity == IR_SEV_ERROR) {
             return true;
         }
     }
 
     return false;
-}
-
-bool ir_diags_fatal(const ir_diags_t *d)
-{
-    return d ? d->fatal : false;
 }
 
 uint32_t ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev)
@@ -473,7 +452,6 @@ bool ir_diags_merge(ir_diags_t *dst, ir_diags_t *src)
         dst->v[dst->n].seq  = dst->seq++;
         dst->n++;
     }
-    dst->fatal |= src->fatal;
     dst->anchored |= src->anchored;
     dst->sorted = false;
 

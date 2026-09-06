@@ -57,11 +57,11 @@ test_basic_parse(void)
 {
     ncc_grammar_t *g = ncc_grammar_new();
 
-    int64_t E_id = ncc_nonterm_id(ncc_nonterm(g, ncc_string_from_cstr("E")));
-    int64_t T_id = ncc_nonterm_id(ncc_nonterm(g, ncc_string_from_cstr("T")));
+    int64_t E_id = ncc_nonterm_id(ncc_nonterm(g, NCC_STRING_STATIC("E")));
+    int64_t T_id = ncc_nonterm_id(ncc_nonterm(g, NCC_STRING_STATIC("T")));
 
-    ncc_register_terminal(g, ncc_string_from_cstr("PLUS"));
-    ncc_register_terminal(g, ncc_string_from_cstr("ID"));
+    ncc_register_terminal(g, NCC_STRING_STATIC("PLUS"));
+    ncc_register_terminal(g, NCC_STRING_STATIC("ID"));
 
     ncc_match_t rule1[] = {
         {.kind = NCC_MATCH_NT, .nt_id = E_id},
@@ -80,11 +80,11 @@ test_basic_parse(void)
 
     ncc_token_info_t tokens[3] = {
         { .tid = TOK_ID,   .index = 0, .line = 1, .column = 1,
-          .value = ncc_option_set(ncc_string_t, ncc_string_from_cstr("a")) },
+          .value = ncc_option_set(ncc_string_t, NCC_STRING_STATIC("a")) },
         { .tid = TOK_PLUS, .index = 1, .line = 1, .column = 3,
-          .value = ncc_option_set(ncc_string_t, ncc_string_from_cstr("+")) },
+          .value = ncc_option_set(ncc_string_t, NCC_STRING_STATIC("+")) },
         { .tid = TOK_ID,   .index = 2, .line = 1, .column = 5,
-          .value = ncc_option_set(ncc_string_t, ncc_string_from_cstr("b")) },
+          .value = ncc_option_set(ncc_string_t, NCC_STRING_STATIC("b")) },
     };
 
     ncc_token_info_t *ptrs[3] = { &tokens[0], &tokens[1], &tokens[2] };
@@ -121,13 +121,13 @@ test_codepoint_parse(void)
 {
     ncc_grammar_t *g = ncc_grammar_new();
 
-    ncc_nonterm_t *S = ncc_nonterm(g, ncc_string_from_cstr("S"));
+    ncc_nonterm_t *S = ncc_nonterm(g, NCC_STRING_STATIC("S"));
 
     ncc_add_rule(g, S, NCC_CHAR('a'), NCC_CHAR('b'));
 
     ncc_grammar_set_start(g, S);
 
-    ncc_string_t input = ncc_string_from_cstr("ab");
+    ncc_string_t input = NCC_STRING_STATIC("ab");
     ncc_token_stream_t *ts = ncc_token_stream_from_codepoints(input);
     assert(ts);
 
@@ -149,13 +149,13 @@ static void
 test_repetition_group_flattening(void)
 {
     ncc_grammar_t *g = ncc_grammar_new();
-    ncc_nonterm_t *S = ncc_nonterm(g, ncc_string_from_cstr("S"));
+    ncc_nonterm_t *S = ncc_nonterm(g, NCC_STRING_STATIC("S"));
 
     ncc_add_rule(g, S, ncc_plus_group(g, NCC_ANY()));
     ncc_grammar_set_start(g, S);
 
     ncc_token_stream_t *ts
-        = ncc_token_stream_from_codepoints(ncc_string_from_cstr("abcd"));
+        = ncc_token_stream_from_codepoints(NCC_STRING_STATIC("abcd"));
     ncc_pwz_parser_t *p = ncc_pwz_new(g);
     assert(ncc_pwz_parse(p, ts));
 
@@ -184,14 +184,14 @@ test_forest(void)
 {
     ncc_grammar_t *g = ncc_grammar_new();
 
-    ncc_nonterm_t *S = ncc_nonterm(g, ncc_string_from_cstr("S"));
+    ncc_nonterm_t *S = ncc_nonterm(g, NCC_STRING_STATIC("S"));
 
     ncc_add_rule(g, S, NCC_NT(S), NCC_NT(S));
     ncc_add_rule(g, S, NCC_CHAR('a'));
 
     ncc_grammar_set_start(g, S);
 
-    ncc_string_t input = ncc_string_from_cstr("aaa");
+    ncc_string_t input = NCC_STRING_STATIC("aaa");
     ncc_token_stream_t *ts = ncc_token_stream_from_codepoints(input);
 
     ncc_parse_forest_t forest = ncc_pwz_parse_grammar(g, ts);
@@ -206,9 +206,75 @@ test_forest(void)
     ncc_grammar_free(g);
 }
 
+static void
+test_set_match(void)
+{
+    static const int64_t excluded[] = {TOK_PLUS};
+
+    static const ncc_match_set_t not_plus = {
+        .ids    = excluded,
+        .n      = 1,
+        .negate = true,
+    };
+
+    static const ncc_match_set_t only_plus = {
+        .ids    = excluded,
+        .n      = 1,
+        .negate = false,
+    };
+
+    assert(ncc_match_set_holds(&only_plus, TOK_PLUS));
+    assert(!ncc_match_set_holds(&only_plus, TOK_ID));
+    assert(!ncc_match_set_holds(&not_plus, TOK_PLUS));
+    assert(ncc_match_set_holds(&not_plus, TOK_ID));
+
+    ncc_grammar_t *g = ncc_grammar_new();
+    int64_t        S = ncc_nonterm_id(ncc_nonterm(g,
+                                                  NCC_STRING_STATIC("S")));
+
+    ncc_register_terminal(g, NCC_STRING_STATIC("PLUS"));
+    ncc_register_terminal(g, NCC_STRING_STATIC("ID"));
+
+    ncc_match_t rule[] = {NCC_SET(&not_plus), NCC_TERMINAL(TOK_PLUS)};
+
+    ncc_add_rule_v(g, S, 2, rule);
+    ncc_grammar_set_start_id(g, S);
+
+    ncc_token_info_t ok[2] = {
+        {.tid = TOK_ID, .index = 0, .line = 1, .column = 1},
+        {.tid = TOK_PLUS, .index = 1, .line = 1, .column = 2},
+    };
+    ncc_token_info_t bad[2] = {
+        {.tid = TOK_PLUS, .index = 0, .line = 1, .column = 1},
+        {.tid = TOK_PLUS, .index = 1, .line = 1, .column = 2},
+    };
+
+    ncc_token_info_t *okp[2]  = {&ok[0], &ok[1]};
+    ncc_token_info_t *badp[2] = {&bad[0], &bad[1]};
+
+    ncc_token_stream_t *ts = ncc_token_stream_from_array(okp, 2);
+    ncc_pwz_parser_t   *p  = ncc_pwz_new(g);
+
+    assert(ncc_pwz_parse(p, ts) && "a token outside the excluded set matches");
+    ncc_pwz_free(p);
+    ncc_token_stream_free(ts);
+
+    ts = ncc_token_stream_from_array(badp, 2);
+    p  = ncc_pwz_new(g);
+
+    assert(!ncc_pwz_parse(p, ts) && "an excluded token does not match");
+    ncc_pwz_free(p);
+    ncc_token_stream_free(ts);
+
+    ncc_grammar_free(g);
+
+    printf("PASS: negated and plain token sets match\n");
+}
+
 int
 main(void)
 {
+    test_set_match();
     test_basic_parse();
     test_codepoint_parse();
     test_repetition_group_flattening();

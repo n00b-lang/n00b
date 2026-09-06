@@ -49,22 +49,22 @@ static ir_module_t *chain(ir_ctx_t *c, uint32_t n, uint32_t locals)
         ir_block_t *e  = ir_block_add(f, nm);
         ir_instr_t *br = ir_instr_add(hd[i], IR_OP_BRANCH);
 
-        ir_instr_push_value(br, cv);
-        ir_instr_push_block(br, t);
-        ir_instr_push_block(br, e);
+        ir_instr_operand_value(br, cv);
+        ir_instr_operand_block(br, t);
+        ir_instr_operand_block(br, e);
 
         if (locals) {
             ir_instr_t *w = ir_instr_add(t, IR_OP_COPY);
 
             ir_instr_set_dest_local(w, f->locals[i % locals]);
-            ir_instr_push_value(w, cv);
+            ir_instr_operand_value(w, cv);
         }
 
         ir_instr_t *j1 = ir_instr_add(t, IR_OP_JUMP);
         ir_instr_t *j2 = ir_instr_add(e, IR_OP_JUMP);
 
-        ir_instr_push_block(j1, hd[i + 1]);
-        ir_instr_push_block(j2, hd[i + 1]);
+        ir_instr_operand_block(j1, hd[i + 1]);
+        ir_instr_operand_block(j2, hd[i + 1]);
     }
     ir_instr_add(hd[n], IR_OP_UNREACHABLE);
     free(hd);
@@ -78,7 +78,18 @@ static double ms(clock_t a, clock_t b)
     return 1000.0 * (double)(b - a) / CLOCKS_PER_SEC;
 }
 
-#define BUDGET_MS 1000.0
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer) \
+    || __has_feature(thread_sanitizer)
+#define SANITIZED 1
+#endif
+#endif
+
+#ifndef SANITIZED
+#define SANITIZED 0
+#endif
+
+#define BUDGET_MS (SANITIZED ? 8000.0 : 1000.0)
 
 static void test_the_pipeline_stays_linear(void)
 {
@@ -142,7 +153,7 @@ static ir_module_t *staircase(ir_ctx_t *c, uint32_t n)
     char         nm[32];
 
     ir_instr_set_dest_local(w0, x);
-    ir_instr_push_value(w0, cv);
+    ir_instr_operand_value(w0, cv);
 
     for (uint32_t i = 0; i < n; i++) {
         snprintf(nm, sizeof nm, "b%u", i);
@@ -150,19 +161,19 @@ static ir_module_t *staircase(ir_ctx_t *c, uint32_t n)
         ir_block_t *next = ir_block_add(f, nm);
         ir_instr_t *j    = ir_instr_add(at, IR_OP_JUMP);
 
-        ir_instr_push_block(j, next);
+        ir_instr_operand_block(j, next);
         at = next;
 
         ir_instr_t *rd = ir_instr_add(at, IR_OP_COPY);
 
         snprintf(nm, sizeof nm, "r%u", i);
         ir_instr_set_dest(rd, nm, ir_type_parse(m, "bool"));
-        ir_instr_push_local(rd, x);
+        ir_instr_operand_local(rd, x);
 
         ir_instr_t *wr = ir_instr_add(at, IR_OP_COPY);
 
         ir_instr_set_dest_local(wr, x);
-        ir_instr_push_value(wr, cv);
+        ir_instr_operand_value(wr, cv);
     }
     ir_instr_add(at, IR_OP_UNREACHABLE);
     ir_module_establish(m, IR_PROP_PARSED | IR_PROP_TYPED);
@@ -237,26 +248,26 @@ static ir_module_t *webbed(ir_ctx_t *c, uint32_t n, uint32_t locals)
         ir_block_t *e  = ir_block_add(f, nm);
         ir_instr_t *br = ir_instr_add(hd[i], IR_OP_BRANCH);
 
-        ir_instr_push_value(br, cv);
-        ir_instr_push_block(br, t);
-        ir_instr_push_block(br, e);
+        ir_instr_operand_value(br, cv);
+        ir_instr_operand_block(br, t);
+        ir_instr_operand_block(br, e);
 
         ir_instr_t *w = ir_instr_add(t, IR_OP_COPY);
 
         ir_instr_set_dest_local(w, f->locals[i % locals]);
-        ir_instr_push_value(w, cv);
+        ir_instr_operand_value(w, cv);
 
         ir_instr_t *rd = ir_instr_add(e, IR_OP_COPY);
 
         snprintf(nm, sizeof nm, "r%u", i);
         ir_instr_set_dest(rd, nm, bt);
-        ir_instr_push_local(rd, f->locals[i % locals]);
+        ir_instr_operand_local(rd, f->locals[i % locals]);
 
         ir_instr_t *j1 = ir_instr_add(t, IR_OP_JUMP);
         ir_instr_t *j2 = ir_instr_add(e, IR_OP_JUMP);
 
-        ir_instr_push_block(j1, hd[i + 1]);
-        ir_instr_push_block(j2, hd[i + 1]);
+        ir_instr_operand_block(j1, hd[i + 1]);
+        ir_instr_operand_block(j2, hd[i + 1]);
     }
     ir_instr_add(hd[n], IR_OP_UNREACHABLE);
     free(hd);
@@ -413,11 +424,11 @@ static ir_module_t *looped(ir_ctx_t *c, uint32_t n)
         ir_instr_t *br  = ir_instr_add(head, IR_OP_BRANCH);
         ir_instr_t *j1  = ir_instr_add(body, IR_OP_JUMP);
 
-        ir_instr_push_block(j0, head);
-        ir_instr_push_value(br, cv);
-        ir_instr_push_block(br, body);
-        ir_instr_push_block(br, out);
-        ir_instr_push_block(j1, head);
+        ir_instr_operand_block(j0, head);
+        ir_instr_operand_value(br, cv);
+        ir_instr_operand_block(br, body);
+        ir_instr_operand_block(br, out);
+        ir_instr_operand_block(j1, head);
         at = out;
     }
     ir_instr_add(at, IR_OP_UNREACHABLE);
@@ -480,7 +491,7 @@ static void test_splitting_a_wide_join_is_linear(void)
         ir_instr_t  *sw = ir_instr_add(e, IR_OP_SWITCH);
         char         nm[32];
 
-        ir_instr_push_value(sw, av);
+        ir_instr_operand_value(sw, av);
 
         for (uint32_t i = 0; i < n; i++) {
             snprintf(nm, sizeof nm, "arm%u", i);
@@ -493,13 +504,13 @@ static void test_splitting_a_wide_join_is_linear(void)
             ir_instr_t *br   = ir_instr_add(arm, IR_OP_BRANCH);
             ir_instr_t *jt   = ir_instr_add(tail, IR_OP_JUMP);
 
-            ir_instr_push_value(br, cv);
-            ir_instr_push_block(br, j);
-            ir_instr_push_block(br, tail);
-            ir_instr_push_block(jt, j);
-            ir_instr_push_switch_arm(sw, (ir_int_t)i, arm);
+            ir_instr_operand_value(br, cv);
+            ir_instr_operand_block(br, j);
+            ir_instr_operand_block(br, tail);
+            ir_instr_operand_block(jt, j);
+            ir_instr_operand_switch_arm(sw, (ir_int_t)i, arm);
         }
-        ir_instr_push_default(sw, j);
+        ir_instr_operand_default(sw, j);
 
         for (uint32_t i = 0; i < 20; i++) {
             ir_instr_t *phi = ir_instr_add(j, IR_OP_PHI);
@@ -509,7 +520,7 @@ static void test_splitting_a_wide_join_is_linear(void)
 
             for (uint32_t k = 0; k < f->n_blocks; k++) {
                 if (f->blocks[k] != j) {
-                    ir_instr_push_phi_arm(phi, f->blocks[k], av);
+                    ir_instr_operand_phi_arm(phi, f->blocks[k], av);
                 }
             }
         }
@@ -558,7 +569,7 @@ static void test_parsing_is_linear_in_the_annotations(void)
         for (uint32_t i = 0; i < n; i++) {
             at += (size_t)snprintf(src + at, room - at,
                                    "      %%v%u: i32 = copy %%a "
-                                   "!ann.of(%%v%u)\n", i, i);
+                                   "!ir.of(%%v%u)\n", i, i);
         }
         snprintf(src + at, room - at, "      return %%a\n  }\n}\n");
 
@@ -632,8 +643,8 @@ static void test_typing_does_not_cost_the_rule_count(void)
             ir_instr_t *in = ir_instr_add(b, IR_OP_ADD);
 
             snprintf(nm, sizeof nm, "v%u", i);
-            ir_instr_push_value(in, av);
-            ir_instr_push_value(in, av);
+            ir_instr_operand_value(in, av);
+            ir_instr_operand_value(in, av);
             ir_instr_set_dest(in, nm, ir_type_parse(m, "i32"));
         }
         ir_instr_add(b, IR_OP_RETURN);
@@ -691,8 +702,8 @@ static void test_a_long_function_is_not_a_long_call_chain(void)
         ir_instr_t *j = ir_instr_add(b[i], IR_OP_JUMP);
 
         ir_instr_set_dest_local(w, f->locals[0]);
-        ir_instr_push_value(w, a);
-        ir_instr_push_block(j, b[i + 1]);
+        ir_instr_operand_value(w, a);
+        ir_instr_operand_block(j, b[i + 1]);
     }
     ir_instr_add(b[n - 1], IR_OP_UNREACHABLE);
     free(b);
@@ -715,32 +726,44 @@ static void test_a_long_function_is_not_a_long_call_chain(void)
 
 static void test_the_shapes_that_were_quadratic(void)
 {
-    ir_ctx_t   *c = ir_ctx_new();
-    ir_diags_t *d = ir_diags_new(c, nullptr);
+    ir_ctx_t   *c      = ir_ctx_new();
+    ir_diags_t *d      = ir_diags_new(c, nullptr);
+    double      before = 0;
 
-    const uint32_t lines = 20000;
-    size_t         cap   = (size_t)lines * 48 + 512;
-    char          *src   = malloc(cap);
-    int            at    = snprintf(src, cap,
-                                    "module m {\n  profile bce\n  target t\n"
-                                    "\n  func @f(%%a: i32) -> void {\n"
-                                    "    block entry:\n");
+    for (uint32_t s = 1; s <= 2; s *= 2) {
+        uint32_t lines = 10000 * s;
+        size_t   cap   = (size_t)lines * 48 + 512;
+        char    *src   = malloc(cap);
+        int      at    = snprintf(src, cap,
+                                  "module m {\n  profile bce\n  target t\n"
+                                  "\n  func @f(%%a: i32) -> void {\n"
+                                  "    block entry:\n");
 
-    for (uint32_t i = 0; i < lines; i++) {
-        at += snprintf(src + at, cap - (size_t)at,
-                       "      %%v%u: i32 = copy %%a\n", i);
+        for (uint32_t i = 0; i < lines; i++) {
+            at += snprintf(src + at, cap - (size_t)at,
+                           "      %%v%u: i32 = copy %%a\n", i);
+        }
+        snprintf(src + at, cap - (size_t)at, "      unreachable\n  }\n}\n");
+
+        const ir_profile_t *const profiles[] = {&ir_profile_bce};
+        clock_t                   t   = clock();
+        ir_module_t              *m   = ir_module_parse(c, src, 0, profiles, 1,
+                                                        d);
+        double                    now = ms(t, clock());
+
+        check("a long straight-line block parses", m != nullptr);
+
+        if (fails || getenv("IR_SCALE_REPORT")) {
+            printf("      %u instructions: parse %.1f ms\n", lines, now);
+        }
+
+        if (before) {
+            check("without the parse being quadratic in the buffer",
+                  now < before * 3 || now < 20.0);
+        }
+        before = now;
+        free(src);
     }
-    snprintf(src + at, cap - (size_t)at, "      unreachable\n  }\n}\n");
-
-    const ir_profile_t *const profiles[] = {&ir_profile_bce};
-    clock_t                   t0         = clock();
-    ir_module_t              *m          = ir_module_parse(c, src, 0, profiles,
-                                                           1, d);
-
-    check("20000 instructions parse", m != nullptr);
-    check("without the parse being quadratic in the buffer",
-          ms(t0, clock()) < BUDGET_MS);
-    free(src);
 
     ir_module_t *sm = ir_module_new(c, "s", &ir_profile_bce, "t");
     ir_func_t   *sf = ir_func_add(sm, "f", ir_type_parse(sm, "(i32) -> void"),
@@ -750,11 +773,11 @@ static void test_the_shapes_that_were_quadratic(void)
     ir_block_t  *so = ir_block_add(sf, "out");
     ir_instr_t  *sw = ir_instr_add(se, IR_OP_SWITCH);
 
-    ir_instr_push_value(sw, sv);
-    ir_instr_push_default(sw, so);
+    ir_instr_operand_value(sw, sv);
+    ir_instr_operand_default(sw, so);
 
     for (uint32_t i = 0; i < 4000; i++) {
-        ir_instr_push_switch_arm(sw, i, so);
+        ir_instr_operand_switch_arm(sw, i, so);
     }
     ir_instr_add(so, IR_OP_UNREACHABLE);
     ir_module_establish(sm, IR_PROP_PARSED | IR_PROP_TYPED);
@@ -777,7 +800,7 @@ static void test_the_shapes_that_were_quadratic(void)
 
         ir_instr_t *in = ir_instr_add(tb, IR_OP_SIZEOF);
 
-        ir_instr_push_type(in, ir_type_parse(tm, ty));
+        ir_instr_operand_type(in, ir_type_parse(tm, ty));
     }
     ir_instr_add(tb, IR_OP_UNREACHABLE);
     ir_module_establish(tm, IR_PROP_PARSED | IR_PROP_TYPED);
@@ -790,8 +813,8 @@ static void test_the_shapes_that_were_quadratic(void)
           ms(t2, clock()) < BUDGET_MS);
 
     if (fails || getenv("IR_SCALE_REPORT")) {
-        printf("      parse %.1f ms, switch %.1f ms, types %.1f ms\n",
-               ms(t0, t1), ms(t1, t2), ms(t2, clock()));
+        printf("      switch %.1f ms, types %.1f ms\n", ms(t1, t2),
+               ms(t2, clock()));
     }
     ir_ctx_free(c);
 }

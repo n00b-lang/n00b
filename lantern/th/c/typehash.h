@@ -9,6 +9,8 @@
 #define TH_RESERVED      "__ty."
 #define TH_TUPLE         "__ty.tuple"
 #define TH_UNTYPED       "__ty.untyped"
+#define TH_ERASED        "__ty.erased"
+#define TH_BOTTOM        "__ty.bottom"
 
 typedef enum : uint8_t {
     TH_NAMED = 0,
@@ -52,6 +54,73 @@ typedef enum : uint8_t {
 
 typedef struct th_ctx  th_ctx;
 typedef struct th_type th_type;
+
+typedef struct {
+    const char *file;
+    uint32_t    start_line;
+    uint32_t    start_col;
+    uint32_t    end_line;
+    uint32_t    end_col;
+} th_span_t;
+
+typedef enum : uint8_t {
+    TH_ERR_UNIFY = 0,
+    TH_ERR_CONSTRAINT,
+    TH_ERR_OCCURS,
+    TH_ERR_NO_SUCH_FIELD,
+    TH_ERR_PARAM_MISMATCH,
+    TH_ERR_ARITY_MISMATCH,
+    TH_ERR_MISSING_KEYWORD,
+    TH_ERR_UNKNOWN_KEYWORD,
+    TH_ERR_NON_EXHAUSTIVE,
+    TH_ERR_UNREACHABLE_PATTERN,
+    TH_ERR_DUPLICATE_VARIANT,
+    TH_ERR_NO_MATCHING_RULE,
+    TH_ERR_BAD_NAME,
+    TH_ERR_FREE_VAR,
+    TH_ERR_KIND_COUNT,
+} th_err_kind;
+
+typedef struct {
+    th_err_kind kind;
+    const char *message;
+    const char *constraint;
+    th_type    *expected;
+    th_type    *got;
+    th_span_t   span;
+    th_span_t   related;
+    bool        has_related;
+} th_error_t;
+
+typedef enum : uint8_t {
+    TH_CON_UNIFIES = 0,
+    TH_CON_ONE_OF,
+    TH_CON_IMPLEMENTS,
+    TH_CON_HAS_FIELD,
+    TH_CON_HAS_PARAM,
+    TH_CON_PROMOTES,
+    TH_CON_EXCLUDES,
+} th_con_kind;
+
+typedef struct {
+    th_con_kind kind;
+    union {
+        th_type    *target;
+        const char *iface;
+        struct {
+            th_type **types;
+            size_t    n;
+        } one_of;
+        struct {
+            const char *name;
+            th_type    *type;
+        } field;
+        struct {
+            uint64_t index;
+            th_type *type;
+        } param;
+    };
+} th_constraint;
 
 typedef struct {
     th_argkind kind;
@@ -109,6 +178,7 @@ th_type *th_binder(th_ctx *ctx, uint64_t arity, th_type *body);
 th_type *th_bound(th_ctx *ctx, uint64_t distance, uint64_t position);
 th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n);
 th_type *th_var(th_ctx *ctx);
+th_type *th_var_named(th_ctx *ctx, const char *name);
 th_type *th_tuple(th_ctx *ctx, th_type *const *elems, size_t n);
 
 void     th_normalize(th_type *type);
@@ -123,6 +193,16 @@ const char *th_anon_name(th_ctx *ctx, const char *path, uint64_t line,
 th_kind th_kind_of(const th_type *type);
 bool    th_is_scheme(const th_type *type);
 const char *th_last_error(const th_ctx *ctx);
+
+void      th_ctx_set_span(th_ctx *ctx, th_span_t span);
+void      th_ctx_set_related(th_ctx *ctx, th_span_t span);
+void      th_ctx_clear_related(th_ctx *ctx);
+th_span_t th_ctx_span(const th_ctx *ctx);
+
+size_t      th_error_count(const th_ctx *ctx);
+bool        th_error_at(const th_ctx *ctx, size_t i, th_error_t *out);
+void        th_errors_clear(th_ctx *ctx);
+const char *th_err_kind_name(th_err_kind kind);
 
 bool   th_named_info(const th_type *type, const char **name, size_t *nlen,
                      bool *is_variant, size_t *nargs);
@@ -160,9 +240,37 @@ size_t   th_sum_len(const th_type *type);
 th_type *th_sum_arm(const th_type *type, size_t i);
 
 bool th_var_index(const th_type *type, uint64_t *index);
+const char *th_var_name(const th_type *type);
+
+bool   th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c);
+size_t th_var_constraint_count(const th_type *var);
+bool   th_var_constraint_at(const th_type *var, size_t i, th_constraint *out);
+
+void th_register_promotion(th_ctx *ctx, const char *from, const char *to);
+bool th_promotes_to(th_ctx *ctx, const char *from, const char *to);
+
+typedef enum : uint8_t {
+    TH_COERCE_NONE    = 0,
+    TH_COERCE_PROMOTE = 1 << 0,
+    TH_COERCE_DEREF   = 1 << 1,
+} th_coerce_flag;
+
+typedef struct {
+    uint8_t  allow;
+    th_type *target;
+} th_coerce_policy;
+
+th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy);
+
+void   th_register_iface(th_ctx *ctx, const char *name, th_type *methods);
+bool   th_implements(th_ctx *ctx, th_type *type, const char *iface);
+size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
+                       size_t max);
 
 th_type *th_resolve(th_type *type);
-th_type *th_clone(th_ctx *ctx, th_type *type);
+
+bool     th_is_erased(const th_type *type);
+bool     th_is_bottom(const th_type *type);
 size_t   th_free_vars(th_ctx *ctx, th_type *type, th_type ***out);
 bool     th_is_closed(th_ctx *ctx, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);

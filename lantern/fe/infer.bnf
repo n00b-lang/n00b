@@ -1,0 +1,49 @@
+<infer-expr> ::= <infer-term> <infer-tail>*
+
+<infer-tail> ::= <infer-op> <infer-term>
+
+<infer-op> ::= %"unify" | %"|"
+
+<infer-term> ::= <self-ref>
+               | <return-ref>
+               | <child-app>
+               | <child-ref>
+               | <type-var>
+               | <group>
+               | <fetch>
+               | <project>
+               | <named-app>
+               | <named>
+
+<self-ref> ::= %"$" %"$"
+
+<return-ref> ::= %"$" %IDENTIFIER
+
+<child-ref> ::= %"$" %INTEGER
+
+<child-app> ::= %"$" %INTEGER %"[" <child-args>? %"]"
+
+<child-args> ::= <child-arg> (%"," <child-arg>)*
+
+<child-arg> ::= <spread> | <infer-expr>
+
+<spread> ::= %"..." %"$" %INTEGER
+
+<type-var> ::= %"`" %IDENTIFIER
+
+<group> ::= %"(" <infer-expr> %")"
+
+<fetch> ::= %"lookup" %"(" <child-ref> %")"
+
+<project> ::= <project-op> %"(" <child-ref> %")"
+
+<project-op> ::= %"return_of"
+               | %"element_of"
+               | %"unwrap_result"
+               | %"method_return"
+
+<named-app> ::= %IDENTIFIER %"[" <named-args> %"]"
+
+<named-args> ::= <infer-expr> (%"," <infer-expr>)*
+
+<named> ::= %IDENTIFIER
