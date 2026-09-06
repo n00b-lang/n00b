@@ -4,6 +4,7 @@
 
 #include "ir_internal.h"
 #include "ir/doms.h"
+#include "ir/walk.h"
 #include "ir/pass.h"
 
 typedef struct {
@@ -74,45 +75,91 @@ typedef struct {
 
 #define NO_TOK UINT32_MAX
 
+typedef struct {
+    P        *p;
+    ir_rd_t  *r;
+    useref   *use;
+    size_t    cap;
+    uint32_t  n;
+    bool     *wants;
+    bool     *warn;
+    bool      ok;
+} gather_t;
+
+static bool gather_operand(ir_visit_t *vi)
+{
+    gather_t   *s = vi->user;
+    ir_local_t *l = ir_operand_local(vi->operand);
+
+    if (!l) {
+        return true;
+    }
+
+    uint32_t tok = ir_rd_use_tok(s->r, vi->instr, l);
+
+    s->use = ir_grow(s->p->m->ctx, s->use, &s->cap, s->n + 1u,
+                     sizeof(useref));
+
+    if (!s->use) {
+        s->ok = false;
+        ir_walk_stop(vi->walk);
+
+        return false;
+    }
+    s->use[s->n++] = (useref){.in   = vi->instr, .slot = vi->index,
+                              .tok  = tok,      .l    = l};
+
+    if (tok == NO_TOK || !tok) {
+        s->wants[l->index] = true;
+        s->warn[l->index]  = s->warn[l->index] || tok != NO_TOK;
+    }
+
+    return true;
+}
+
 static bool gather_uses(P *p, ir_func_t *f, ir_rd_t *r, useref **out,
                         uint32_t *n_out, bool *wants, bool *warn)
 {
-    ir_ctx_t *ctx = p->m->ctx;
-    size_t    cap = 0;
-    useref   *use = nullptr;
-    uint32_t  n   = 0;
+    gather_t s = {.p = p, .r = r, .wants = wants, .warn = warn, .ok = true};
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        for (uint32_t k = 0; k < f->blocks[i]->n_instrs; k++) {
-            ir_instr_t *in = f->blocks[i]->instrs[k];
+    ir_walk_t *w = ir_walk_new(&s);
 
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                ir_local_t *l = ir_operand_local(&in->operands[o]);
+    ir_walk_on_operand(w, gather_operand, nullptr);
+    ir_walk_run_func(w, f);
+    ir_walk_free(w);
 
-                if (!l) {
-                    continue;
-                }
+    *out   = s.use;
+    *n_out = s.n;
 
-                uint32_t tok = ir_rd_use_tok(r, in, l);
+    return s.ok;
+}
 
-                use = ir_grow(ctx, use, &cap, n + 1u, sizeof(useref));
+typedef struct {
+    ir_rd_t     *r;
+    ir_instr_t **phi;
+    bool         ok;
+} mkphi_t;
 
-                if (!use) {
-                    return false;
-                }
-                use[n++] = (useref){.in = in, .slot = o, .tok = tok, .l = l};
+static bool make_phis(ir_visit_t *vi)
+{
+    mkphi_t *s = vi->user;
 
-                if (tok == NO_TOK || !tok) {
-                    wants[l->index] = true;
-                    warn[l->index]  = warn[l->index] || tok != NO_TOK;
-                }
-            }
+    for (uint32_t k = 0; k < ir_rd_phis_in(s->r, vi->block); k++) {
+        uint32_t q = ir_rd_phi_at(s->r, vi->block, k);
+
+        s->phi[q] = ir_instr_generated(vi->block, IR_OP_PHI,
+                                       ir_rd_phi_local(s->r, q)->span,
+                                       "promote", k);
+
+        if (!s->phi[q]) {
+            s->ok = false;
+            ir_walk_stop(vi->walk);
+
+            return false;
         }
     }
-    *out   = use;
-    *n_out = n;
 
-    return true;
+    return false;
 }
 
 typedef struct {
@@ -200,20 +247,16 @@ static bool promote_func(P *p, ir_func_t *f)
         }
     }
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *b = f->blocks[i];
+    mkphi_t mk = {.r = r, .phi = phi, .ok = true};
 
-        for (uint32_t k = 0; k < ir_rd_phis_in(r, b); k++) {
-            uint32_t q = ir_rd_phi_at(r, b, k);
+    ir_walk_t *pw = ir_walk_new(&mk);
 
-            phi[q] = ir_instr_generated(b, IR_OP_PHI,
-                                        ir_rd_phi_local(r, q)->span,
-                                        "promote", k);
+    ir_walk_on_block(pw, make_phis, nullptr, nullptr);
+    ir_walk_run_func(pw, f);
+    ir_walk_free(pw);
 
-            if (!phi[q]) {
-                return false;
-            }
-        }
+    if (!mk.ok) {
+        return false;
     }
 
     number_t nw = {.p = p, .r = r, .val = val, .phi = phi};

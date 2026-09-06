@@ -2,6 +2,7 @@
 
 #include "ir_internal.h"
 #include "ir/doms.h"
+#include "ir/walk.h"
 
 #define RD_NONE UINT32_MAX
 #define TOK_UNSET 0u
@@ -100,6 +101,79 @@ static bool bit_or(uint64_t *dst, const uint64_t *src, uint32_t words)
     return changed;
 }
 
+typedef struct {
+    ir_rd_t  *r;
+    uint32_t *fill;
+    uint32_t  at_def;
+} rd_fill_t;
+
+static bool number_block(ir_visit_t *vi)
+{
+    ir_rd_t *r = vi->user;
+
+    r->base[vi->block->index] = r->n_nodes;
+    r->n_nodes += vi->block->n_instrs;
+
+    return false;
+}
+
+static bool count_instr(ir_visit_t *vi)
+{
+    ir_rd_t *r = vi->user;
+
+    if (vi->instr->dest_kind == IR_DEST_LOCAL && vi->instr->dest_local) {
+        r->n_defs++;
+    }
+
+    return true;
+}
+
+static bool count_operand(ir_visit_t *vi)
+{
+    ir_rd_t    *r = vi->user;
+    ir_local_t *l = ir_operand_local(vi->operand);
+
+    if (l && !ir_local_read_earlier(vi->instr, vi->index, l)) {
+        r->use_off[node_of(r, vi->instr) + 1]++;
+        r->n_uses++;
+    }
+
+    return true;
+}
+
+static bool fill_instr(ir_visit_t *vi)
+{
+    rd_fill_t  *s  = vi->user;
+    ir_rd_t    *r  = s->r;
+    ir_instr_t *in = vi->instr;
+
+    if (in->dest_kind == IR_DEST_LOCAL && in->dest_local) {
+        r->def[s->at_def]       = in;
+        r->def_local[s->at_def] = in->dest_local->index;
+        r->def_id[node_of(r, in)] = s->at_def;
+        r->ldef_off[in->dest_local->index + 1]++;
+        r->bdef_off[vi->block->index + 1]++;
+        s->at_def++;
+    }
+
+    return true;
+}
+
+static bool fill_operand(ir_visit_t *vi)
+{
+    rd_fill_t  *s = vi->user;
+    ir_local_t *l = ir_operand_local(vi->operand);
+
+    if (l && !ir_local_read_earlier(vi->instr, vi->index, l)) {
+        uint32_t u = s->fill[node_of(s->r, vi->instr)]++;
+
+        s->r->use_local[u] = l->index;
+        s->r->use_tok[u]   = RD_NONE;
+    }
+
+    return true;
+}
+
 static void collect(ir_rd_t *r)
 {
     ir_func_t *f   = r->f;
@@ -107,10 +181,11 @@ static void collect(ir_rd_t *r)
 
     r->base = ir_alloc(ctx, (f->n_blocks + 1) * sizeof(uint32_t));
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        r->base[f->blocks[i]->index] = r->n_nodes;
-        r->n_nodes += f->blocks[i]->n_instrs;
-    }
+    ir_walk_t *w = ir_walk_new(r);
+
+    ir_walk_on_block(w, number_block, nullptr, nullptr);
+    ir_walk_run_func(w, f);
+    ir_walk_free(w);
 
     r->use_off = ir_alloc(ctx, (r->n_nodes + 1) * sizeof(uint32_t));
     r->def_id  = ir_alloc(ctx, (r->n_nodes ? r->n_nodes : 1)
@@ -120,24 +195,12 @@ static void collect(ir_rd_t *r)
         r->def_id[i] = RD_NONE;
     }
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        for (uint32_t k = 0; k < f->blocks[i]->n_instrs; k++) {
-            ir_instr_t *in = f->blocks[i]->instrs[k];
+    w = ir_walk_new(r);
 
-            if (in->dest_kind == IR_DEST_LOCAL && in->dest_local) {
-                r->n_defs++;
-            }
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                ir_local_t *l = ir_operand_local(&in->operands[o]);
-
-                if (l && !ir_local_read_earlier(in, o, l)) {
-                    r->use_off[node_of(r, in) + 1]++;
-                    r->n_uses++;
-                }
-            }
-        }
-    }
+    ir_walk_on_instr(w, count_instr, nullptr, nullptr);
+    ir_walk_on_operand(w, count_operand, nullptr);
+    ir_walk_run_func(w, f);
+    ir_walk_free(w);
 
     for (uint32_t i = 0; i < r->n_nodes; i++) {
         r->use_off[i + 1] += r->use_off[i];
@@ -162,34 +225,14 @@ static void collect(ir_rd_t *r)
 
     memcpy(fill, r->use_off, (r->n_nodes + 1) * sizeof(uint32_t));
 
-    uint32_t at_def = 0;
+    rd_fill_t s = {.r = r, .fill = fill};
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        for (uint32_t k = 0; k < f->blocks[i]->n_instrs; k++) {
-            ir_instr_t *in = f->blocks[i]->instrs[k];
-            uint32_t    at = node_of(r, in);
+    w = ir_walk_new(&s);
 
-            if (in->dest_kind == IR_DEST_LOCAL && in->dest_local) {
-                r->def[at_def]       = in;
-                r->def_local[at_def] = in->dest_local->index;
-                r->def_id[at]        = at_def;
-                r->ldef_off[in->dest_local->index + 1]++;
-                r->bdef_off[f->blocks[i]->index + 1]++;
-                at_def++;
-            }
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                ir_local_t *l = ir_operand_local(&in->operands[o]);
-
-                if (l && !ir_local_read_earlier(in, o, l)) {
-                    uint32_t u = fill[at]++;
-
-                    r->use_local[u] = l->index;
-                    r->use_tok[u]   = RD_NONE;
-                }
-            }
-        }
-    }
+    ir_walk_on_instr(w, fill_instr, nullptr, nullptr);
+    ir_walk_on_operand(w, fill_operand, nullptr);
+    ir_walk_run_func(w, f);
+    ir_walk_free(w);
 
     for (uint32_t i = 0; i < f->n_locals; i++) {
         r->ldef_off[i + 1] += r->ldef_off[i];
