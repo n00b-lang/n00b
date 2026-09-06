@@ -1,5 +1,4 @@
 #include <stdlib.h>
-#include <string.h>
 
 #include "ir_internal.h"
 #include "ir/rule.h"
@@ -7,45 +6,9 @@
 #include "ir/pass.h"
 #include "ir/text.h"
 #include "ir/verify.h"
+#include "ir/walk.h"
 
-typedef struct {
-    const void **at;
-    size_t       cap;
-} pset;
-
-static size_t pset_slot(const pset *s, const void *p)
-{
-    size_t h = (size_t)((uintptr_t)p >> 4) * 11400714819323198485u;
-    size_t i = h & (s->cap - 1);
-
-    while (s->at[i] && s->at[i] != p) {
-        i = (i + 1) & (s->cap - 1);
-    }
-
-    return i;
-}
-
-static void pset_init(ir_ctx_t *ctx, pset *s, size_t want)
-{
-    s->cap = 16;
-
-    while (s->cap < want * 2) {
-        s->cap *= 2;
-    }
-    s->at = ir_alloc(ctx, s->cap * sizeof(void *));
-}
-
-static void pset_add(pset *s, const void *p)
-{
-    if (p) {
-        s->at[pset_slot(s, p)] = p;
-    }
-}
-
-static bool pset_has(const pset *s, const void *p)
-{
-    return p && s->at[pset_slot(s, p)] == p;
-}
+#include "lib/dict.h"
 
 typedef struct {
     ir_module_t *m;
@@ -53,8 +16,23 @@ typedef struct {
     bool         bad;
     ir_func_t   *dom_for;
     ir_doms_t   *dom;
-    pset         checked;
+
+    ncc_dict_t   defined;
+    ncc_dict_t   locals;
+    ncc_dict_t   names;
+    ncc_dict_t   checked;
+
+    uint32_t    *arms;
+    uint32_t     terms;
+    bool         phis_run;
+
+    ir_walk_t   *collect;
 } V;
+
+static bool holds(ncc_dict_t *s, const void *p)
+{
+    return p && ncc_dict_contains(s, (void *)(uintptr_t)p);
+}
 
 static ir_doms_t *doms(V *v, ir_func_t *f)
 {
@@ -147,401 +125,398 @@ static void check_annots(V *v, ir_annots_t *a, ir_instr_t *in, ir_block_t *b)
     }
 }
 
-static void check_parsed(V *v, ir_func_t *f)
+static bool collect_param(ir_visit_t *vi)
 {
+    ncc_dict_put(&((V *)vi->user)->defined, vi->param, vi->param);
+
+    return true;
+}
+
+static bool collect_local(ir_visit_t *vi)
+{
+    ncc_dict_put(&((V *)vi->user)->locals, vi->local, vi->local);
+
+    return true;
+}
+
+static bool collect_instr(ir_visit_t *vi)
+{
+    ncc_dict_put(&((V *)vi->user)->defined, vi->instr, vi->instr);
+
+    return false;
+}
+
+static bool parsed_func(ir_visit_t *vi)
+{
+    V         *v = vi->user;
+    ir_func_t *f = vi->func;
+
+    check_origins(v, f->origin, nullptr, nullptr);
+    check_annots(v, &f->annots, nullptr, nullptr);
+
     if (f->n_blocks && ir_pred_count(doms(v, f), ir_block_entry(f))) {
         broke(v, IR_DIAG_VERIFY_PARSED, nullptr, ir_block_entry(f),
               "parsed.entry", "the entry block of %s has a predecessor",
               f->name);
     }
 
-    uint32_t *named = ir_alloc(v->m->ctx,
-                               (f->n_blocks + 1) * sizeof(uint32_t));
+    v->arms = ir_alloc(v->m->ctx, (f->n_blocks + 1) * sizeof(uint32_t));
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *b     = f->blocks[i];
-        uint32_t    terms = 0;
-        bool        run   = true;
-
-        check_annots(v, &b->annots, nullptr, b);
-        check_origins(v, b->origin, nullptr, b);
-
-        for (uint32_t k = 0; k < b->n_instrs; k++) {
-            ir_instr_t *in = b->instrs[k];
-
-            check_annots(v, &in->annots, in, b);
-            check_origins(v, in->origin, in, b);
-
-            if (ir_op_is_terminator(in->op)) {
-                terms++;
-
-                if (k + 1 != b->n_instrs) {
-                    broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.terminator",
-                          "%s terminates block %s but is not its last "
-                          "instruction",
-                          ir_module_op_spelling(v->m, in->op), b->name);
-                }
-            }
-
-            if (is_phi(in) && !run) {
-                broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phi.leading",
-                      "a phi follows a non-phi instruction in block %s",
-                      b->name);
-            }
-            run = run && is_phi(in);
-
-            const ir_opinfo_t *info = ir_module_op_info(v->m, in->op);
-
-            if (!info) {
-                continue;
-            }
-
-            if (!ir_opinfo_accepts_operands(info, in->n_operands)) {
-                broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.arity",
-                      "%s takes %u to %u operands and has %u", info->spelling,
-                      info->min_operands,
-                      info->max_operands == IR_VAR_ARITY ? info->min_operands
-                                                         : info->max_operands,
-                      in->n_operands);
-            }
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                ir_opdkind_t want = ir_opinfo_operand_kind(info, o);
-                ir_opdkind_t got  = in->operands[o].kind;
-                bool         fits = got == want
-                                 || (want == IR_OPD_ARG
-                                     && (got == IR_OPD_VALUE
-                                         || got == IR_OPD_NAMED_ARG));
-
-                if (!fits) {
-                    broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.operand",
-                          "operand %u of %s is a %s where the table says %s",
-                          o, info->spelling, ir_opdkind_name(got),
-                          ir_opdkind_name(want));
-                }
-            }
-
-            for (uint32_t o = 0; o < in->n_mods; o++) {
-                if (!ir_opinfo_accepts_mod(info, in->mods[o])) {
-                    broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.modifier",
-                          "%s does not take the modifier %s", info->spelling,
-                          in->mods[o]);
-                }
-            }
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                ir_operand_t *od = &in->operands[o];
-                ir_block_t   *to = od->kind == IR_OPD_BLOCK         ? od->block
-                                 : od->kind == IR_OPD_DEFAULT_BLOCK ? od->block
-                                 : od->kind == IR_OPD_SWITCH_ARM ? od->arm.block
-                                 : od->kind == IR_OPD_PHI_ARM    ? od->phi.block
-                                                                 : nullptr;
-
-                if (to && !names_block(f, to)) {
-                    broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.block-ref",
-                          "block %s is not a block of %s", to->name, f->name);
-                }
-            }
-
-            if (is_phi(in)) {
-                ir_doms_t *dm = doms(v, f);
-
-                for (uint32_t a = 0; a < in->n_operands; a++) {
-                    if (in->operands[a].kind == IR_OPD_PHI_ARM
-                        && in->operands[a].phi.block) {
-                        named[in->operands[a].phi.block->index]++;
-                    }
-                }
-
-                for (uint32_t p = 0; p < ir_pred_count(dm, b); p++) {
-                    ir_block_t *pred = ir_pred_at(dm, b, p);
-
-                    if (named[pred->index] != 1) {
-                        broke(v, IR_DIAG_VERIFY_PARSED, in, b,
-                              "parsed.phi.arms",
-                              "this phi names block %s %u times and %s is a "
-                              "predecessor once", pred->name,
-                              named[pred->index], pred->name);
-                    }
-                    named[pred->index] = 0;
-                }
-
-                for (uint32_t a = 0; a < in->n_operands; a++) {
-                    ir_block_t *arm = in->operands[a].kind == IR_OPD_PHI_ARM
-                                        ? in->operands[a].phi.block
-                                        : nullptr;
-
-                    if (!arm || !named[arm->index]) {
-                        continue;
-                    }
-                    named[arm->index] = 0;
-                    broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phi.arms",
-                          "this phi names block %s, which is not a "
-                          "predecessor", arm->name);
-                }
-            }
-        }
-
-        if (terms != 1) {
-            broke(v, IR_DIAG_VERIFY_PARSED, nullptr, b, "parsed.terminator",
-                  "block %s has %u terminators and needs exactly one", b->name,
-                  terms);
-        }
-    }
-}
-
-static void check_typed(V *v, ir_func_t *f)
-{
-    ir_rules_t *rs = ir_module_rules(v->m);
+    ncc_dict_init(&v->defined, nullptr, nullptr);
+    ncc_dict_init(&v->locals, nullptr, nullptr);
+    ncc_dict_init(&v->names, ncc_hash_cstring, ncc_dict_cstr_eq);
 
     for (uint32_t i = 0; i < f->n_params; i++) {
-        if (!f->params[i]->type) {
-            broke(v, IR_DIAG_VERIFY_TYPED, nullptr, ir_block_entry(f),
-                  "typed.value", "parameter %s of %s has no type",
-                  f->params[i]->name, f->name);
-        }
+        ncc_dict_add(&v->names, f->params[i]->name, f->params[i]);
     }
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *b = f->blocks[i];
-
-        for (uint32_t k = 0; k < b->n_instrs; k++) {
-            ir_instr_t *in = b->instrs[k];
-
-            if (!ir_module_op_info(v->m, in->op)) {
-                broke(v, IR_DIAG_MISSING_PROFILE, in, b, "typed.extension",
-                      "this extension opcode is not one profile %s supplies",
-                      v->m->profile ? v->m->profile->name : "(none)");
-                continue;
-            }
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                ir_value_t *val = in->operands[o].kind == IR_OPD_VALUE
-                                    ? in->operands[o].value
-                                    : nullptr;
-
-                if (val && !val->type) {
-                    broke(v, IR_DIAG_VERIFY_TYPED, in, b, "typed.value",
-                          "operand %u has no type", o);
-                }
-            }
-
-            ir_verdict_t verdict = ir_rule_apply(v->m, rs, in, v->d).verdict;
-
-            if (verdict == IR_RULE_DECLINE) {
-                broke(v, IR_DIAG_VERIFY_TYPED, in, b, "typed.rule",
-                      "no typing rule resolves for %s with these operand "
-                      "types", ir_module_op_spelling(v->m, in->op));
-            }
-            else if (verdict != IR_RULE_ACCEPT) {
-                v->bad = true;
-            }
-        }
-    }
-}
-
-static void check_ssa(V *v, ir_func_t *f)
-{
-    if (f->n_locals) {
-        broke(v, IR_DIAG_VERIFY_SSA, nullptr, ir_block_entry(f), "ssa.locals",
-              "%s is in SSA form and still declares %u locals", f->name,
-              f->n_locals);
-    }
-
-    ir_doms_t *dom = doms(v, f);
-
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *b = f->blocks[i];
-
-        for (uint32_t k = 0; k < b->n_instrs; k++) {
-            ir_instr_t *in = b->instrs[k];
-
-            if (in->dest_kind == IR_DEST_LOCAL) {
-                broke(v, IR_DIAG_VERIFY_SSA, in, b, "ssa.locals",
-                      "this instruction writes local $%s in SSA form",
-                      in->dest_local ? in->dest_local->name : "?");
-            }
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                ir_operand_t *od  = &in->operands[o];
-                ir_value_t   *val = od->kind == IR_OPD_VALUE     ? od->value
-                                  : od->kind == IR_OPD_NAMED_ARG ? od->named.value
-                                  : od->kind == IR_OPD_PHI_ARM   ? od->phi.value
-                                                                 : nullptr;
-
-                if (!val || val->kind != IR_VAL_INSTR || !val->def
-                    || !val->def->block) {
-                    continue;
-                }
-
-                ir_block_t *from = od->kind == IR_OPD_PHI_ARM ? od->phi.block
-                                                              : b;
-
-                if (!ir_dominates(dom, val->def->block, from)) {
-                    broke(v, IR_DIAG_VERIFY_SSA, in, b, "ssa.dominance",
-                          "%%%s is used here but its definition in block %s "
-                          "does not dominate %s", val->name,
-                          val->def->block->name, from->name);
-                    continue;
-                }
-
-                if (val->def->block == from && od->kind != IR_OPD_PHI_ARM
-                    && val->def->index >= in->index) {
-                    broke(v, IR_DIAG_VERIFY_SSA, in, b, "ssa.dominance",
-                          "%%%s is used before it is defined in block %s",
-                          val->name, b->name);
-                }
-            }
-        }
-    }
-}
-
-typedef struct {
-    const char **at;
-    size_t       cap;
-} nset;
-
-static size_t nset_slot(const nset *s, const char *k)
-{
-    size_t h = 1469598103934665603u;
-
-    for (const unsigned char *p = (const unsigned char *)k; *p; p++) {
-        h = (h ^ *p) * 1099511628211u;
-    }
-
-    size_t i = h & (s->cap - 1);
-
-    while (s->at[i] && strcmp(s->at[i], k)) {
-        i = (i + 1) & (s->cap - 1);
-    }
-
-    return i;
-}
-
-static void nset_init(ir_ctx_t *ctx, nset *s, size_t want)
-{
-    s->cap = 16;
-
-    while (s->cap < want * 2) {
-        s->cap *= 2;
-    }
-    s->at = ir_alloc(ctx, s->cap * sizeof(char *));
-}
-
-static bool nset_add(nset *s, const char *k)
-{
-    size_t i = nset_slot(s, k);
-
-    if (s->at[i]) {
-        return false;
-    }
-    s->at[i] = k;
+    ir_walk_run_func(v->collect, f);
 
     return true;
 }
 
-static void check_uses_resolve(V *v, ir_func_t *f)
+static bool parsed_func_end(ir_visit_t *vi)
 {
-    ir_ctx_t *ctx  = v->m->ctx;
-    size_t    want = f->n_params + 1;
-    pset      defined;
-    pset      locals;
+    V *v = vi->user;
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        want += f->blocks[i]->n_instrs;
+    ncc_dict_free(&v->defined);
+    ncc_dict_free(&v->locals);
+    ncc_dict_free(&v->names);
+
+    return true;
+}
+
+static bool parsed_block(ir_visit_t *vi)
+{
+    V *v = vi->user;
+
+    check_annots(v, &vi->block->annots, nullptr, vi->block);
+    check_origins(v, vi->block->origin, nullptr, vi->block);
+
+    v->terms    = 0;
+    v->phis_run = true;
+
+    return true;
+}
+
+static bool parsed_block_end(ir_visit_t *vi)
+{
+    V *v = vi->user;
+
+    if (v->terms != 1) {
+        broke(v, IR_DIAG_VERIFY_PARSED, nullptr, vi->block,
+              "parsed.terminator",
+              "block %s has %u terminators and needs exactly one",
+              vi->block->name, v->terms);
     }
-    pset_init(ctx, &defined, want);
-    pset_init(ctx, &locals, f->n_locals + 1);
 
-    for (uint32_t i = 0; i < f->n_params; i++) {
-        pset_add(&defined, f->params[i]);
-    }
+    return true;
+}
 
-    for (uint32_t i = 0; i < f->n_locals; i++) {
-        pset_add(&locals, f->locals[i]);
-    }
+static void check_phi_arms(V *v, ir_instr_t *in, ir_block_t *b)
+{
+    ir_doms_t *dm = doms(v, b->owner);
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        for (uint32_t k = 0; k < f->blocks[i]->n_instrs; k++) {
-            pset_add(&defined, f->blocks[i]->instrs[k]);
+    for (uint32_t a = 0; a < in->n_operands; a++) {
+        if (in->operands[a].kind == IR_OPD_PHI_ARM
+            && in->operands[a].phi.block) {
+            v->arms[in->operands[a].phi.block->index]++;
         }
     }
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *b = f->blocks[i];
+    for (uint32_t p = 0; p < ir_pred_count(dm, b); p++) {
+        ir_block_t *pred = ir_pred_at(dm, b, p);
 
-        for (uint32_t k = 0; k < b->n_instrs; k++) {
-            ir_instr_t *in = b->instrs[k];
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                ir_operand_t *od  = &in->operands[o];
-                ir_value_t   *val = od->kind == IR_OPD_VALUE     ? od->value
-                                  : od->kind == IR_OPD_NAMED_ARG ? od->named.value
-                                  : od->kind == IR_OPD_PHI_ARM   ? od->phi.value
-                                                                 : nullptr;
-                bool          ok  = true;
-
-                if (!val) {
-                    continue;
-                }
-
-                switch (val->kind) {
-                case IR_VAL_GLOBAL:
-                case IR_VAL_FUNC:
-                    break;
-                case IR_VAL_LOCAL:
-                    ok = pset_has(&locals, val->local);
-                    break;
-                case IR_VAL_PARAM:
-                    ok = pset_has(&defined, val);
-                    break;
-                default:
-                    ok = pset_has(&defined, val->def);
-                    break;
-                }
-
-                if (!ok) {
-                    broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.value-ref",
-                          "%%%s is not a parameter, local or instruction of %s",
-                          val->name ? val->name : "?", f->name);
-                }
-            }
+        if (v->arms[pred->index] != 1) {
+            broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phi.arms",
+                  "this phi names block %s %u times and %s is a predecessor "
+                  "once", pred->name, v->arms[pred->index], pred->name);
         }
+        v->arms[pred->index] = 0;
+    }
+
+    for (uint32_t a = 0; a < in->n_operands; a++) {
+        ir_block_t *arm = in->operands[a].kind == IR_OPD_PHI_ARM
+                            ? in->operands[a].phi.block
+                            : nullptr;
+
+        if (!arm || !v->arms[arm->index]) {
+            continue;
+        }
+        v->arms[arm->index] = 0;
+        broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phi.arms",
+              "this phi names block %s, which is not a predecessor",
+              arm->name);
     }
 }
 
-static void check_defined_once(V *v, ir_func_t *f)
+static bool parsed_instr(ir_visit_t *vi)
 {
-    ir_ctx_t *ctx  = v->m->ctx;
-    size_t    want = f->n_params + 1;
-    nset      seen;
+    V          *v  = vi->user;
+    ir_instr_t *in = vi->instr;
+    ir_block_t *b  = vi->block;
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        want += f->blocks[i]->n_instrs;
-    }
-    nset_init(ctx, &seen, want);
+    check_annots(v, &in->annots, in, b);
+    check_origins(v, in->origin, in, b);
 
-    for (uint32_t i = 0; i < f->n_params; i++) {
-        nset_add(&seen, f->params[i]->name);
-    }
+    if (ir_op_is_terminator(in->op)) {
+        v->terms++;
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *b = f->blocks[i];
-
-        for (uint32_t k = 0; k < b->n_instrs; k++) {
-            ir_instr_t *in = b->instrs[k];
-
-            if (in->dest_kind != IR_DEST_VALUE || !in->dest) {
-                continue;
-            }
-
-            if (!nset_add(&seen, in->dest->name)) {
-                broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.one-def",
-                      "%%%s is defined more than once in %s, or shadows a "
-                      "parameter", in->dest->name, f->name);
-            }
+        if (in != b->instrs[b->n_instrs - 1]) {
+            broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.terminator",
+                  "%s terminates block %s but is not its last instruction",
+                  ir_module_op_spelling(v->m, in->op), b->name);
         }
     }
+
+    if (is_phi(in) && !v->phis_run) {
+        broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phi.leading",
+              "a phi follows a non-phi instruction in block %s", b->name);
+    }
+    v->phis_run = v->phis_run && is_phi(in);
+
+    const ir_opinfo_t *info = ir_module_op_info(v->m, in->op);
+
+    if (!info) {
+        return true;
+    }
+
+    if (!ir_opinfo_accepts_operands(info, in->n_operands)) {
+        broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.arity",
+              "%s takes %u to %u operands and has %u", info->spelling,
+              info->min_operands,
+              info->max_operands == IR_VAR_ARITY ? info->min_operands
+                                                 : info->max_operands,
+              in->n_operands);
+    }
+
+    for (uint32_t o = 0; o < in->n_mods; o++) {
+        if (!ir_opinfo_accepts_mod(info, in->mods[o])) {
+            broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.modifier",
+                  "%s does not take the modifier %s", info->spelling,
+                  in->mods[o]);
+        }
+    }
+
+    return true;
+}
+
+static bool parsed_operand(ir_visit_t *vi)
+{
+    V                 *v    = vi->user;
+    ir_instr_t        *in   = vi->instr;
+    ir_block_t        *b    = vi->block;
+    ir_operand_t      *od   = vi->operand;
+    const ir_opinfo_t *info = ir_module_op_info(v->m, in->op);
+
+    if (info) {
+        ir_opdkind_t want = ir_opinfo_operand_kind(info, vi->index);
+        ir_opdkind_t got  = od->kind;
+        bool         fits = got == want
+                         || (want == IR_OPD_ARG
+                             && (got == IR_OPD_VALUE
+                                 || got == IR_OPD_NAMED_ARG));
+
+        if (!fits) {
+            broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.operand",
+                  "operand %u of %s is a %s where the table says %s",
+                  vi->index, info->spelling, ir_opdkind_name(got),
+                  ir_opdkind_name(want));
+        }
+
+        ir_block_t *to = od->kind == IR_OPD_BLOCK         ? od->block
+                       : od->kind == IR_OPD_DEFAULT_BLOCK ? od->block
+                       : od->kind == IR_OPD_SWITCH_ARM    ? od->arm.block
+                       : od->kind == IR_OPD_PHI_ARM       ? od->phi.block
+                                                          : nullptr;
+
+        if (to && !names_block(b->owner, to)) {
+            broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.block-ref",
+                  "block %s is not a block of %s", to->name, b->owner->name);
+        }
+    }
+
+    ir_value_t *val = od->kind == IR_OPD_VALUE     ? od->value
+                    : od->kind == IR_OPD_NAMED_ARG ? od->named.value
+                    : od->kind == IR_OPD_PHI_ARM   ? od->phi.value
+                                                   : nullptr;
+
+    if (!val) {
+        return true;
+    }
+
+    bool ok = true;
+
+    switch (val->kind) {
+    case IR_VAL_GLOBAL:
+    case IR_VAL_FUNC:
+        break;
+    case IR_VAL_LOCAL:
+        ok = holds(&v->locals, val->local);
+        break;
+    case IR_VAL_PARAM:
+        ok = holds(&v->defined, val);
+        break;
+    default:
+        ok = holds(&v->defined, val->def);
+        break;
+    }
+
+    if (!ok) {
+        broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.value-ref",
+              "%%%s is not a parameter, local or instruction of %s",
+              val->name ? val->name : "?", b->owner->name);
+    }
+
+    return true;
+}
+
+static bool parsed_instr_end(ir_visit_t *vi)
+{
+    V          *v  = vi->user;
+    ir_instr_t *in = vi->instr;
+    ir_block_t *b  = vi->block;
+
+    if (in->dest_kind == IR_DEST_VALUE && in->dest
+        && !ncc_dict_add(&v->names, in->dest->name, in)) {
+        broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.one-def",
+              "%%%s is defined more than once in %s, or shadows a parameter",
+              in->dest->name, b->owner->name);
+    }
+
+    if (is_phi(in) && ir_module_op_info(v->m, in->op)) {
+        check_phi_arms(v, in, b);
+    }
+
+    return true;
+}
+
+static bool typed_param(ir_visit_t *vi)
+{
+    V *v = vi->user;
+
+    if (!vi->param->type) {
+        broke(v, IR_DIAG_VERIFY_TYPED, nullptr, ir_block_entry(vi->func),
+              "typed.value", "parameter %s of %s has no type",
+              vi->param->name, vi->func->name);
+    }
+
+    return true;
+}
+
+static bool typed_instr(ir_visit_t *vi)
+{
+    V *v = vi->user;
+
+    if (ir_module_op_info(v->m, vi->instr->op)) {
+        return true;
+    }
+
+    broke(v, IR_DIAG_MISSING_PROFILE, vi->instr, vi->block, "typed.extension",
+          "this extension opcode is not one profile %s supplies",
+          v->m->profile ? v->m->profile->name : "(none)");
+
+    return false;
+}
+
+static bool typed_operand(ir_visit_t *vi)
+{
+    V          *v   = vi->user;
+    ir_value_t *val = vi->operand->kind == IR_OPD_VALUE ? vi->operand->value
+                                                        : nullptr;
+
+    if (val && !val->type) {
+        broke(v, IR_DIAG_VERIFY_TYPED, vi->instr, vi->block, "typed.value",
+              "operand %u has no type", vi->index);
+    }
+
+    return true;
+}
+
+static bool typed_instr_end(ir_visit_t *vi)
+{
+    V          *v  = vi->user;
+    ir_instr_t *in = vi->instr;
+
+    if (!ir_module_op_info(v->m, in->op)) {
+        return true;
+    }
+
+    ir_verdict_t verdict = ir_rule_apply(v->m, ir_module_rules(v->m), in,
+                                         v->d).verdict;
+
+    if (verdict == IR_RULE_DECLINE) {
+        broke(v, IR_DIAG_VERIFY_TYPED, in, vi->block, "typed.rule",
+              "no typing rule resolves for %s with these operand types",
+              ir_module_op_spelling(v->m, in->op));
+    }
+    else if (verdict != IR_RULE_ACCEPT) {
+        v->bad = true;
+    }
+
+    return true;
+}
+
+static bool ssa_func(ir_visit_t *vi)
+{
+    V *v = vi->user;
+
+    if (vi->func->n_locals) {
+        broke(v, IR_DIAG_VERIFY_SSA, nullptr, ir_block_entry(vi->func),
+              "ssa.locals", "%s is in SSA form and still declares %u locals",
+              vi->func->name, vi->func->n_locals);
+    }
+
+    return true;
+}
+
+static bool ssa_instr(ir_visit_t *vi)
+{
+    V *v = vi->user;
+
+    if (vi->instr->dest_kind == IR_DEST_LOCAL) {
+        broke(v, IR_DIAG_VERIFY_SSA, vi->instr, vi->block, "ssa.locals",
+              "this instruction writes local $%s in SSA form",
+              vi->instr->dest_local ? vi->instr->dest_local->name : "?");
+    }
+
+    return true;
+}
+
+static bool ssa_operand(ir_visit_t *vi)
+{
+    V            *v   = vi->user;
+    ir_instr_t   *in  = vi->instr;
+    ir_block_t   *b   = vi->block;
+    ir_operand_t *od  = vi->operand;
+    ir_value_t   *val = od->kind == IR_OPD_VALUE     ? od->value
+                      : od->kind == IR_OPD_NAMED_ARG ? od->named.value
+                      : od->kind == IR_OPD_PHI_ARM   ? od->phi.value
+                                                     : nullptr;
+
+    if (!val || val->kind != IR_VAL_INSTR || !val->def || !val->def->block) {
+        return true;
+    }
+
+    ir_doms_t  *dom  = doms(v, b->owner);
+    ir_block_t *from = od->kind == IR_OPD_PHI_ARM ? od->phi.block : b;
+
+    if (!ir_dominates(dom, val->def->block, from)) {
+        broke(v, IR_DIAG_VERIFY_SSA, in, b, "ssa.dominance",
+              "%%%s is used here but its definition in block %s does not "
+              "dominate %s", val->name, val->def->block->name, from->name);
+
+        return true;
+    }
+
+    if (val->def->block == from && od->kind != IR_OPD_PHI_ARM
+        && val->def->index >= in->index) {
+        broke(v, IR_DIAG_VERIFY_SSA, in, b, "ssa.dominance",
+              "%%%s is used before it is defined in block %s", val->name,
+              b->name);
+    }
+
+    return true;
 }
 
 static bool settled_for(V *v, th_type *t, uint64_t *bytes)
@@ -577,14 +552,9 @@ static void check_laid_out_type(V *v, th_type *t, ir_instr_t *in,
         return;
     }
 
-    if (!v->checked.cap) {
-        pset_init(v->m->ctx, &v->checked, ir_type_count(v->m) + 1);
-    }
-
-    if (pset_has(&v->checked, t)) {
+    if (!ncc_dict_add(&v->checked, t, t)) {
         return;
     }
-    pset_add(&v->checked, t);
 
     ir_descriptor_t *d = ir_layout_of(v->m, t, nullptr);
 
@@ -637,83 +607,97 @@ static void check_laid_out_type(V *v, th_type *t, ir_instr_t *in,
     }
 }
 
-static void check_laid_out(V *v, ir_func_t *f)
+static bool laid_out_param(ir_visit_t *vi)
 {
-    for (uint32_t i = 0; i < f->n_params; i++) {
-        check_laid_out_type(v, f->params[i]->type, nullptr,
-                            ir_block_entry(f));
-    }
+    check_laid_out_type(vi->user, vi->param->type, nullptr,
+                        ir_block_entry(vi->func));
 
-    for (uint32_t i = 0; i < f->n_locals; i++) {
-        check_laid_out_type(v, f->locals[i]->type, nullptr, ir_block_entry(f));
-    }
-
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *b = f->blocks[i];
-
-        for (uint32_t k = 0; k < b->n_instrs; k++) {
-            ir_instr_t *in = b->instrs[k];
-
-            if (in->dest_kind == IR_DEST_VALUE && in->dest) {
-                check_laid_out_type(v, in->dest->type, in, b);
-            }
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                if (in->operands[o].kind == IR_OPD_TYPE) {
-                    check_laid_out_type(v, in->operands[o].type, in, b);
-                }
-
-                if (in->operands[o].kind == IR_OPD_VALUE
-                    && in->operands[o].value) {
-                    check_laid_out_type(v, in->operands[o].value->type, in, b);
-                }
-            }
-
-            if (in->op != IR_OP_BITCAST || !in->n_operands
-                || in->operands[0].kind != IR_OPD_VALUE
-                || !in->operands[0].value || !in->dest) {
-                continue;
-            }
-
-            uint64_t from = 0;
-            uint64_t to   = 0;
-
-            if (settled_for(v, in->operands[0].value->type, &from)
-                && settled_for(v, in->dest->type, &to) && from != to) {
-                broke(v, IR_DIAG_VERIFY_LAID_OUT, in, b, "laid-out.bitcast",
-                      "bitcast turns %llu bytes of %s into %llu bytes of %s",
-                      (unsigned long long)from,
-                      ir_type_text(v->m, in->operands[0].value->type),
-                      (unsigned long long)to,
-                      ir_type_text(v->m, in->dest->type));
-            }
-        }
-    }
+    return true;
 }
 
-static void check_no_critical_edges(V *v, ir_func_t *f)
+static bool laid_out_local(ir_visit_t *vi)
 {
-    ir_doms_t *dom = doms(v, f);
+    check_laid_out_type(vi->user, vi->local->type, nullptr,
+                        ir_block_entry(vi->func));
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *b = f->blocks[i];
-        ir_instr_t *t = ir_block_terminator(b);
+    return true;
+}
 
-        if (ir_succ_count(t) < 2) {
-            continue;
-        }
+static bool laid_out_instr(ir_visit_t *vi)
+{
+    ir_instr_t *in = vi->instr;
 
-        for (uint32_t s = 0; s < t->n_operands; s++) {
-            ir_block_t *to = ir_succ_of(&t->operands[s]);
+    if (in->dest_kind == IR_DEST_VALUE && in->dest) {
+        check_laid_out_type(vi->user, in->dest->type, in, vi->block);
+    }
 
-            if (to && ir_pred_count(dom, to) > 1) {
-                broke(v, IR_DIAG_VERIFY_EDGE, t, b, "no-critical-edges.edge",
-                      "the edge from %s to %s is critical: %s has several "
-                      "successors and %s several predecessors", b->name,
-                      to->name, b->name, to->name);
-            }
+    return true;
+}
+
+static bool laid_out_operand(ir_visit_t *vi)
+{
+    ir_operand_t *od = vi->operand;
+
+    if (od->kind == IR_OPD_TYPE) {
+        check_laid_out_type(vi->user, od->type, vi->instr, vi->block);
+    }
+
+    if (od->kind == IR_OPD_VALUE && od->value) {
+        check_laid_out_type(vi->user, od->value->type, vi->instr, vi->block);
+    }
+
+    return true;
+}
+
+static bool laid_out_bitcast(ir_visit_t *vi)
+{
+    V          *v  = vi->user;
+    ir_instr_t *in = vi->instr;
+
+    if (!in->n_operands || in->operands[0].kind != IR_OPD_VALUE
+        || !in->operands[0].value || !in->dest) {
+        return true;
+    }
+
+    uint64_t from = 0;
+    uint64_t to   = 0;
+
+    if (settled_for(v, in->operands[0].value->type, &from)
+        && settled_for(v, in->dest->type, &to) && from != to) {
+        broke(v, IR_DIAG_VERIFY_LAID_OUT, in, vi->block, "laid-out.bitcast",
+              "bitcast turns %llu bytes of %s into %llu bytes of %s",
+              (unsigned long long)from,
+              ir_type_text(v->m, in->operands[0].value->type),
+              (unsigned long long)to, ir_type_text(v->m, in->dest->type));
+    }
+
+    return true;
+}
+
+static bool no_critical_edges(ir_visit_t *vi)
+{
+    V          *v = vi->user;
+    ir_block_t *b = vi->block;
+    ir_instr_t *t = ir_block_terminator(b);
+
+    if (ir_succ_count(t) < 2) {
+        return false;
+    }
+
+    ir_doms_t *dom = doms(v, b->owner);
+
+    for (uint32_t s = 0; s < t->n_operands; s++) {
+        ir_block_t *to = ir_succ_of(&t->operands[s]);
+
+        if (to && ir_pred_count(dom, to) > 1) {
+            broke(v, IR_DIAG_VERIFY_EDGE, t, b, "no-critical-edges.edge",
+                  "the edge from %s to %s is critical: %s has several "
+                  "successors and %s several predecessors", b->name, to->name,
+                  b->name, to->name);
         }
     }
+
+    return false;
 }
 
 static void tally(const ir_region_t *r, uint32_t *seen, uint32_t n)
@@ -731,15 +715,17 @@ static void tally(const ir_region_t *r, uint32_t *seen, uint32_t n)
     }
 }
 
-static void check_structured(V *v, ir_func_t *f)
+static bool check_structured(ir_visit_t *vi)
 {
+    V           *v    = vi->user;
+    ir_func_t   *f    = vi->func;
     ir_region_t *root = ir_region_root(f);
 
     if (!root) {
         broke(v, IR_DIAG_VERIFY_STRUCTURE, nullptr, ir_block_entry(f),
               "structured.overlay", "%s has no region overlay", f->name);
 
-        return;
+        return false;
     }
 
     uint32_t *seen = ir_alloc(v->m->ctx, f->n_blocks * sizeof(uint32_t));
@@ -755,6 +741,8 @@ static void check_structured(V *v, ir_func_t *f)
                   seen[f->blocks[i]->index]);
         }
     }
+
+    return false;
 }
 
 static bool claims(ir_module_t *m, ir_props_t p)
@@ -801,37 +789,50 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
     V          v    = {.m = m, .d = out};
     ir_props_t held = 0;
 
+    ncc_dict_init(&v.checked, nullptr, nullptr);
+
+    v.collect = ir_walk_new(&v);
+
+    ir_walk_on_param(v.collect, collect_param, nullptr);
+    ir_walk_on_local(v.collect, collect_local, nullptr);
+    ir_walk_on_instr(v.collect, collect_instr, nullptr, nullptr);
+
     check_annots(&v, ir_module_annots(m), nullptr, nullptr);
 
-    for (size_t i = 0; i < ir_func_count(m); i++) {
-        ir_func_t *f = ir_func_at(m, i);
+    ir_walk_t *w = ir_walk_new(&v);
 
-        check_origins(&v, f->origin, nullptr, nullptr);
-        check_annots(&v, &f->annots, nullptr, nullptr);
-        check_parsed(&v, f);
-        check_defined_once(&v, f);
-        check_uses_resolve(&v, f);
-    }
+    ir_walk_on_func(w, parsed_func, parsed_func_end, nullptr);
+    ir_walk_on_block(w, parsed_block, parsed_block_end, nullptr);
+    ir_walk_on_instr(w, parsed_instr, parsed_instr_end, nullptr);
+    ir_walk_on_operand(w, parsed_operand, nullptr);
+    ir_walk_run(w, m);
+    ir_walk_free(w);
 
     if (!v.bad) {
         held |= IR_PROP_PARSED;
 
         v.bad = false;
         v.d   = claims(m, IR_PROP_TYPED) ? out : nullptr;
+        w     = ir_walk_new(&v);
 
-        for (size_t i = 0; i < ir_func_count(m); i++) {
-            check_typed(&v, ir_func_at(m, i));
-        }
+        ir_walk_on_param(w, typed_param, nullptr);
+        ir_walk_on_instr(w, typed_instr, typed_instr_end, nullptr);
+        ir_walk_on_operand(w, typed_operand, nullptr);
+        ir_walk_run(w, m);
+        ir_walk_free(w);
 
         if (!v.bad) {
             held |= IR_PROP_TYPED;
 
             v.bad = false;
             v.d   = claims(m, IR_PROP_SSA) ? out : nullptr;
+            w     = ir_walk_new(&v);
 
-            for (size_t i = 0; i < ir_func_count(m); i++) {
-                check_ssa(&v, ir_func_at(m, i));
-            }
+            ir_walk_on_func(w, ssa_func, nullptr, nullptr);
+            ir_walk_on_instr(w, ssa_instr, nullptr, nullptr);
+            ir_walk_on_operand(w, ssa_operand, nullptr);
+            ir_walk_run(w, m);
+            ir_walk_free(w);
 
             if (!v.bad) {
                 held |= IR_PROP_SSA;
@@ -840,10 +841,15 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
 
         v.bad = false;
         v.d   = claims(m, IR_PROP_LAID_OUT) ? out : nullptr;
+        w     = ir_walk_new(&v);
 
-        for (size_t i = 0; i < ir_func_count(m); i++) {
-            check_laid_out(&v, ir_func_at(m, i));
-        }
+        ir_walk_on_param(w, laid_out_param, nullptr);
+        ir_walk_on_local(w, laid_out_local, nullptr);
+        ir_walk_on_instr(w, laid_out_instr, nullptr, nullptr);
+        ir_walk_on_operand(w, laid_out_operand, nullptr);
+        ir_walk_on_op(w, IR_OP_BITCAST, nullptr, laid_out_bitcast, nullptr);
+        ir_walk_run(w, m);
+        ir_walk_free(w);
 
         if (!v.bad) {
             held |= IR_PROP_LAID_OUT;
@@ -851,10 +857,11 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
 
         v.bad = false;
         v.d   = claims(m, IR_PROP_NO_CRIT_EDGE) ? out : nullptr;
+        w     = ir_walk_new(&v);
 
-        for (size_t i = 0; i < ir_func_count(m); i++) {
-            check_no_critical_edges(&v, ir_func_at(m, i));
-        }
+        ir_walk_on_block(w, no_critical_edges, nullptr, nullptr);
+        ir_walk_run(w, m);
+        ir_walk_free(w);
 
         if (!v.bad) {
             held |= IR_PROP_NO_CRIT_EDGE;
@@ -862,10 +869,11 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
 
         v.bad = false;
         v.d   = claims(m, IR_PROP_STRUCTURED) ? out : nullptr;
+        w     = ir_walk_new(&v);
 
-        for (size_t i = 0; i < ir_func_count(m); i++) {
-            check_structured(&v, ir_func_at(m, i));
-        }
+        ir_walk_on_func(w, check_structured, nullptr, nullptr);
+        ir_walk_run(w, m);
+        ir_walk_free(w);
 
         if (!v.bad) {
             held |= IR_PROP_STRUCTURED;
@@ -907,6 +915,9 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
     }
     audit_spans(&v);
 
+    ncc_dict_free(&v.checked);
+    ir_walk_free(v.collect);
+
     return held;
 }
 
@@ -923,6 +934,13 @@ struct ir_locsnap_t {
     size_t       cap;
 };
 
+static bool live_instr(ir_visit_t *vi)
+{
+    ncc_dict_put((ncc_dict_t *)vi->user, vi->instr, vi->instr);
+
+    return false;
+}
+
 static void snap_one(ir_ctx_t *ctx, ir_locsnap_t *s, ir_span_t span,
                      ir_instr_t *in, ir_block_t *b, const char *what)
 {
@@ -937,6 +955,38 @@ static void snap_one(ir_ctx_t *ctx, ir_locsnap_t *s, ir_span_t span,
     s->v[s->n++] = (ir_locrec_t){.span = span, .in = in, .b = b, .what = what};
 }
 
+static bool snap_func(ir_visit_t *vi)
+{
+    snap_one(vi->module->ctx, vi->user, vi->func->span, nullptr, nullptr,
+             "a function");
+
+    return true;
+}
+
+static bool snap_local(ir_visit_t *vi)
+{
+    snap_one(vi->module->ctx, vi->user, vi->local->span, nullptr, nullptr,
+             "a local");
+
+    return true;
+}
+
+static bool snap_block(ir_visit_t *vi)
+{
+    snap_one(vi->module->ctx, vi->user, vi->block->span, nullptr, vi->block,
+             "a block");
+
+    return true;
+}
+
+static bool snap_instr(ir_visit_t *vi)
+{
+    snap_one(vi->module->ctx, vi->user, vi->instr->span, vi->instr, vi->block,
+             "an instruction");
+
+    return false;
+}
+
 ir_locsnap_t *ir_loc_snapshot(ir_module_t *m)
 {
     if (!m) {
@@ -944,27 +994,14 @@ ir_locsnap_t *ir_loc_snapshot(ir_module_t *m)
     }
 
     ir_locsnap_t *s = ir_alloc(m->ctx, sizeof(ir_locsnap_t));
+    ir_walk_t    *w = ir_walk_new(s);
 
-    for (size_t i = 0; i < ir_func_count(m); i++) {
-        ir_func_t *f = ir_func_at(m, i);
-
-        snap_one(m->ctx, s, f->span, nullptr, nullptr, "a function");
-
-        for (uint32_t k = 0; k < f->n_locals; k++) {
-            snap_one(m->ctx, s, f->locals[k]->span, nullptr, nullptr, "a local");
-        }
-
-        for (uint32_t k = 0; k < f->n_blocks; k++) {
-            ir_block_t *b = f->blocks[k];
-
-            snap_one(m->ctx, s, b->span, nullptr, b, "a block");
-
-            for (uint32_t j = 0; j < b->n_instrs; j++) {
-                snap_one(m->ctx, s, b->instrs[j]->span, b->instrs[j], b,
-                         "an instruction");
-            }
-        }
-    }
+    ir_walk_on_func(w, snap_func, nullptr, nullptr);
+    ir_walk_on_local(w, snap_local, nullptr);
+    ir_walk_on_block(w, snap_block, nullptr, nullptr);
+    ir_walk_on_instr(w, snap_instr, nullptr, nullptr);
+    ir_walk_run(w, m);
+    ir_walk_free(w);
 
     return s;
 }
@@ -978,32 +1015,20 @@ bool ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m, const char *agent,
         return true;
     }
 
-    size_t live = 1;
-    pset   here;
+    ncc_dict_t here;
 
-    for (size_t i = 0; i < ir_func_count(m); i++) {
-        ir_func_t *f = ir_func_at(m, i);
+    ncc_dict_init(&here, nullptr, nullptr);
 
-        for (uint32_t b = 0; b < f->n_blocks; b++) {
-            live += f->blocks[b]->n_instrs;
-        }
-    }
-    pset_init(m->ctx, &here, live);
+    ir_walk_t *w = ir_walk_new(&here);
 
-    for (size_t i = 0; i < ir_func_count(m); i++) {
-        ir_func_t *f = ir_func_at(m, i);
-
-        for (uint32_t b = 0; b < f->n_blocks; b++) {
-            for (uint32_t k = 0; k < f->blocks[b]->n_instrs; k++) {
-                pset_add(&here, f->blocks[b]->instrs[k]);
-            }
-        }
-    }
+    ir_walk_on_instr(w, live_instr, nullptr, nullptr);
+    ir_walk_run(w, m);
+    ir_walk_free(w);
 
     for (size_t i = 0; i < before->n; i++) {
         ir_locrec_t *r = &before->v[i];
 
-        if (r->in && !pset_has(&here, r->in)) {
+        if (r->in && !holds(&here, r->in)) {
             continue;
         }
 
@@ -1034,6 +1059,7 @@ bool ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m, const char *agent,
             free(msg);
         }
     }
+    ncc_dict_free(&here);
 
     return ok;
 }

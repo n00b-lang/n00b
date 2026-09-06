@@ -327,6 +327,43 @@ static void test_one_visitor_refusing_children_affects_all(void)
     ir_ctx_free(ctx);
 }
 
+static void test_an_instruction_visitor_can_skip_operands(void)
+{
+    ir_ctx_t    *ctx;
+    ir_module_t *m = load(&ctx);
+
+    if (!m) {
+        return;
+    }
+
+    tally      t = {0};
+    ir_walk_t *w = ir_walk_new(&t);
+
+    ir_walk_on_instr(w, skip_children, nullptr, nullptr);
+    ir_walk_on_operand(w, on_operand, nullptr);
+
+    ir_walk_run(w, m);
+    ir_walk_free(w);
+
+    check("an instruction visitor refusing children skips the operands",
+          t.operands == 0);
+
+    tally      u  = {0};
+    ir_walk_t *w2 = ir_walk_new(&u);
+
+    ir_walk_on_instr(w2, skip_children, nullptr, nullptr);
+    ir_walk_on_op(w2, IR_OP_RETURN, on_return, nullptr, nullptr);
+    ir_walk_on_operand(w2, on_operand, nullptr);
+
+    ir_walk_run(w2, m);
+    ir_walk_free(w2);
+
+    check("an opcode visitor that wants children overrides the refusal",
+          u.operands == 2 && u.returns == 2);
+
+    ir_ctx_free(ctx);
+}
+
 int main(void)
 {
     test_the_walk_reaches_every_node();
@@ -335,6 +372,7 @@ int main(void)
     test_a_function_can_be_walked_alone();
     test_visitors_stack_in_one_pass();
     test_one_visitor_refusing_children_affects_all();
+    test_an_instruction_visitor_can_skip_operands();
 
     if (!fails) {
         printf("ir walk: all checks passed\n");

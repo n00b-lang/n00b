@@ -140,11 +140,9 @@ bool ir_walk_stopped(ir_walk_t *w)
     return w && w->stopped;
 }
 
-static bool run(chain_t *c, ir_visit_t *v, bool pre, bool reverse)
+static void run_into(chain_t *c, ir_visit_t *v, bool pre, bool reverse,
+                     bool *asked, bool *wants)
 {
-    bool asked = false;
-    bool wants = false;
-
     for (size_t k = 0; k < c->n; k++) {
         size_t      i  = reverse ? c->n - 1 - k : k;
         ir_visit_fn fn = pre ? c->v[i].pre : c->v[i].post;
@@ -158,10 +156,18 @@ static bool run(chain_t *c, ir_visit_t *v, bool pre, bool reverse)
         bool want = fn(v);
 
         if (pre) {
-            asked = true;
-            wants = wants || want;
+            *asked = true;
+            *wants = *wants || want;
         }
     }
+}
+
+static bool run(chain_t *c, ir_visit_t *v, bool pre, bool reverse)
+{
+    bool asked = false;
+    bool wants = false;
+
+    run_into(c, v, pre, reverse, &asked, &wants);
 
     return !asked || wants;
 }
@@ -172,11 +178,16 @@ static void walk_instr(ir_walk_t *w, ir_visit_t *v, ir_instr_t *in)
     v->operand = nullptr;
     v->index   = in->index;
 
-    bool descend = run(&w->instr, v, true, false);
+    bool asked = false;
+    bool wants = false;
+
+    run_into(&w->instr, v, true, false, &asked, &wants);
 
     if (in->op >= 0 && in->op < IR_OP_COUNT) {
-        descend = run(&w->by_op[in->op], v, true, false) || descend;
+        run_into(&w->by_op[in->op], v, true, false, &asked, &wants);
     }
+
+    bool descend = !asked || wants;
 
     if (descend && !w->stopped) {
         for (uint32_t i = 0; i < in->n_operands; i++) {
