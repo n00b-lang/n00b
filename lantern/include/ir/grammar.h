@@ -14,6 +14,8 @@ void ir_grammar_shutdown(void);
 typedef struct {
     ncc_token_info_t **v;
     size_t            *at;
+    size_t            *end;
+    char             **note;
     int32_t            n;
     int32_t            cap;
 } ir_tokens_t;

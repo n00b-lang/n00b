@@ -109,13 +109,17 @@ static bool id_more(unsigned char c)
     return c == '_' || isalnum(c) || c >= 0x80;
 }
 
+static char *pending_note;
+
 static void emit(ir_tokens_t *t, int64_t tid, const char *at, size_t len,
-                 uint32_t line, uint32_t col, size_t off)
+                 uint32_t line, uint32_t col, size_t off, size_t end)
 {
     if (t->n >= t->cap) {
-        t->cap = t->cap ? t->cap * 2 : 64;
-        t->v   = realloc(t->v, (size_t)t->cap * sizeof(*t->v));
-        t->at  = realloc(t->at, (size_t)t->cap * sizeof(*t->at));
+        t->cap  = t->cap ? t->cap * 2 : 64;
+        t->v    = realloc(t->v, (size_t)t->cap * sizeof(*t->v));
+        t->at   = realloc(t->at, (size_t)t->cap * sizeof(*t->at));
+        t->end  = realloc(t->end, (size_t)t->cap * sizeof(*t->end));
+        t->note = realloc(t->note, (size_t)t->cap * sizeof(*t->note));
     }
 
     ncc_token_info_t *tok = calloc(1, sizeof(*tok));
@@ -127,22 +131,32 @@ static void emit(ir_tokens_t *t, int64_t tid, const char *at, size_t len,
     tok->value  = ncc_option_set(ncc_string_t,
                                  ncc_string_from_raw(at, (int64_t)len));
 
-    t->at[t->n] = off;
-    t->v[t->n++] = tok;
+    t->at[t->n]   = off;
+    t->end[t->n]  = end;
+    t->note[t->n] = pending_note;
+    pending_note  = nullptr;
+    t->v[t->n++]  = tok;
 }
 
 void ir_tokens_free(ir_tokens_t *t)
 {
     for (int32_t i = 0; i < t->n; i++) {
         free(t->v[i]);
+        free(t->note[i]);
     }
 
     free(t->v);
     free(t->at);
-    t->v   = nullptr;
-    t->at  = nullptr;
-    t->n   = 0;
-    t->cap = 0;
+    free(t->end);
+    free(t->note);
+    free(pending_note);
+    pending_note = nullptr;
+    t->v    = nullptr;
+    t->at   = nullptr;
+    t->end  = nullptr;
+    t->note = nullptr;
+    t->n    = 0;
+    t->cap  = 0;
 }
 
 bool ir_tokenize(const char *src, size_t len, ir_tokens_t *out)
@@ -177,10 +191,22 @@ bool ir_tokenize(const char *src, size_t len, ir_tokens_t *out)
         }
 
         if (c == '#') {
+            size_t start = ++i;
+
             while (i < len && src[i] != '\n') {
                 i++;
             }
 
+            while (start < i && isspace((unsigned char)src[start])) {
+                start++;
+            }
+
+            size_t n = i - start;
+
+            free(pending_note);
+            pending_note = malloc(n + 1);
+            memcpy(pending_note, src + start, n);
+            pending_note[n] = 0;
             continue;
         }
 
@@ -201,7 +227,7 @@ bool ir_tokenize(const char *src, size_t len, ir_tokens_t *out)
             i++;
             col += (uint32_t)(i - start);
             emit(out, tid_str, src + start + 1, i - start - 2, line, at_col,
-                 start);
+                 start, i);
             continue;
         }
 
@@ -255,7 +281,7 @@ bool ir_tokenize(const char *src, size_t len, ir_tokens_t *out)
 
             col += (uint32_t)(i - start);
             emit(out, is_float ? tid_float : tid_int, src + start, i - start,
-                 line, at_col, start);
+                 line, at_col, start, i);
             continue;
         }
 
@@ -289,7 +315,7 @@ bool ir_tokenize(const char *src, size_t len, ir_tokens_t *out)
 
             col += (uint32_t)n;
             emit(out, kw ? kw : NCC_TOK_IDENTIFIER, src + start, n, line,
-                 at_col, start);
+                 at_col, start, i);
             continue;
         }
 
@@ -300,14 +326,14 @@ bool ir_tokenize(const char *src, size_t len, ir_tokens_t *out)
             if (op && op > 0xFF) {
                 i += 2;
                 col += 2;
-                emit(out, op, src + start, 2, line, at_col, start);
+                emit(out, op, src + start, 2, line, at_col, start, i);
                 continue;
             }
         }
 
         i++;
         col++;
-        emit(out, c, src + start, 1, line, at_col, start);
+        emit(out, c, src + start, 1, line, at_col, start, i);
     }
 
     return true;
