@@ -255,7 +255,7 @@ static void *r_paren_form(ncc_reduce_t *r)
 
 static void *r_sum(ncc_reduce_t *r, th_comb comb)
 {
-    bctx    *c    = r->user;
+    bctx    *c    = r->thunk;
     th_type *head = kid_type(r, 0);
 
     if (r->n_kids == 1 || !head) {
@@ -296,7 +296,7 @@ static void *r_isect(ncc_reduce_t *r)
 
 static void *r_qualified_name(ncc_reduce_t *r)
 {
-    bctx  *c = r->user;
+    bctx  *c = r->thunk;
     char   buf[512];
     size_t len = 0;
 
@@ -340,7 +340,7 @@ static void *r_qualified_name(ncc_reduce_t *r)
 
 static void *r_type_arg(ncc_reduce_t *r)
 {
-    bctx    *c    = r->user;
+    bctx    *c    = r->thunk;
     tl_node *n    = node_new(c, TL_ARG);
     tl_node *only = kid(r, 0);
 
@@ -396,7 +396,7 @@ static void *r_type_app(ncc_reduce_t *r)
 
 static void *r_named_type(ncc_reduce_t *r)
 {
-    bctx    *c       = r->user;
+    bctx    *c       = r->thunk;
     tl_node *nm      = nullptr;
     bool     variant = false;
     size_t   at      = 0;
@@ -443,7 +443,7 @@ static void *r_named_type(ncc_reduce_t *r)
 
 static void *r_type_args(ncc_reduce_t *r)
 {
-    bctx    *c = r->user;
+    bctx    *c = r->thunk;
     th_arg   args[64];
     size_t   n = collect_args(r, args, 64);
     tl_node *out = node_new(c, TL_ARG);
@@ -464,7 +464,7 @@ static void *r_type_args(ncc_reduce_t *r)
 
 static void *r_tvar(ncc_reduce_t *r)
 {
-    bctx        *c    = r->user;
+    bctx        *c    = r->thunk;
     ncc_string_t name = ncc_tree_leaf_text(ncc_tree_child(r->node, 1));
 
     if (!name.data) {
@@ -554,7 +554,7 @@ static bool binder_open(ncc_visit_t *v)
 
 static void *r_binder(ncc_reduce_t *r)
 {
-    bctx    *c    = r->user;
+    bctx    *c    = r->thunk;
     th_type *body = kid_type(r, r->n_kids - 1);
     size_t   n    = c->nb ? c->binders[c->nb - 1].n : 0;
 
@@ -578,7 +578,7 @@ static void *r_binder(ncc_reduce_t *r)
 
 static void *r_bitint(ncc_reduce_t *r)
 {
-    bctx    *c        = r->user;
+    bctx    *c        = r->thunk;
     bool     is_signed = ncc_tree_leaf_is(ncc_tree_child(r->node, 0), "bitint");
     tl_node *width     = kid(r, 2);
 
@@ -599,7 +599,7 @@ static void *r_ind_attr(ncc_reduce_t *r)
         {"temporary",  TH_TEMPORARY },
     };
 
-    bctx        *c = r->user;
+    bctx        *c = r->thunk;
     ncc_string_t s = ncc_tree_leaf_text(ncc_tree_child(r->node, 0));
     tl_node     *n = node_new(c, TL_ATTR);
 
@@ -615,7 +615,7 @@ static void *r_ind_attr(ncc_reduce_t *r)
 
 static void *r_ind_attrs(ncc_reduce_t *r)
 {
-    bctx    *c = r->user;
+    bctx    *c = r->thunk;
     tl_node *n = node_new(c, TL_ATTR);
     tl_node *first = kid(r, 0);
 
@@ -659,7 +659,7 @@ static uint8_t sugar_attrs(const char *w)
 
 static void *r_ind_tail(ncc_reduce_t *r)
 {
-    bctx              *c    = r->user;
+    bctx              *c    = r->thunk;
     ncc_reduce_list_t *opt  = ncc_reduce_as_list(kid(r, 1));
     tl_node           *n    = node_new(c, TL_ATTR);
 
@@ -676,7 +676,7 @@ static void *r_ind_tail(ncc_reduce_t *r)
 
 static void *r_indirection(ncc_reduce_t *r)
 {
-    bctx        *c    = r->user;
+    bctx        *c    = r->thunk;
     ncc_string_t name = ncc_tree_leaf_text(
         ncc_tree_child(ncc_tree_child(r->node, 0), 0));
     th_type *referent = kid_type(r, 2);
@@ -703,7 +703,7 @@ static void *r_indirection(ncc_reduce_t *r)
 
 static void *r_sequence(ncc_reduce_t *r)
 {
-    bctx    *c    = r->user;
+    bctx    *c    = r->thunk;
     th_type *elem = kid_type(r, 2);
 
     if (!elem) {
@@ -727,7 +727,7 @@ static void *r_sequence(ncc_reduce_t *r)
 
 static void *r_anon_site(ncc_reduce_t *r)
 {
-    bctx        *c    = r->user;
+    bctx        *c    = r->thunk;
     ncc_string_t path = ncc_tree_leaf_text(ncc_tree_child(r->node, 1));
     tl_node     *line = kid(r, 3);
     tl_node     *col  = kid(r, 5);
@@ -745,7 +745,7 @@ static void *r_anon_site(ncc_reduce_t *r)
 
 static void *r_field(ncc_reduce_t *r)
 {
-    bctx        *c    = r->user;
+    bctx        *c    = r->thunk;
     ncc_string_t name = ncc_tree_leaf_text(ncc_tree_child(r->node, 0));
     th_type     *type = kid_type(r, 2);
 
@@ -802,7 +802,7 @@ static void *r_field_list(ncc_reduce_t *r)
 
 static void *r_field_body(ncc_reduce_t *r)
 {
-    bctx      *c = r->user;
+    bctx      *c = r->thunk;
     th_member  members[64];
     size_t     nm = 0;
 
@@ -825,7 +825,7 @@ static void *r_field_body(ncc_reduce_t *r)
 
 static void *r_tuple(ncc_reduce_t *r)
 {
-    bctx    *c = r->user;
+    bctx    *c = r->thunk;
     th_type *elems[64];
     size_t   ne = 0;
 
@@ -856,7 +856,7 @@ static void *r_tuple(ncc_reduce_t *r)
 
 static void *r_mode(ncc_reduce_t *r)
 {
-    bctx        *c = r->user;
+    bctx        *c = r->thunk;
     ncc_string_t s = ncc_tree_leaf_text(ncc_tree_child(r->node, 0));
     tl_node     *n = node_new(c, TL_MODE);
 
@@ -869,7 +869,7 @@ static void *r_mode(ncc_reduce_t *r)
 
 static void *r_rest_param(ncc_reduce_t *r)
 {
-    bctx    *c = r->user;
+    bctx    *c = r->thunk;
     tl_node *n = node_new(c, TL_PARAM);
 
     n->param.is_rest = true;
@@ -880,7 +880,7 @@ static void *r_rest_param(ncc_reduce_t *r)
 
 static void *r_param(ncc_reduce_t *r)
 {
-    bctx    *c    = r->user;
+    bctx    *c    = r->thunk;
     tl_node *n    = node_new(c, TL_PARAM);
     th_mode  mode = TH_IN;
 
@@ -952,7 +952,7 @@ static void *r_param_list(ncc_reduce_t *r)
 
 static void *r_function(ncc_reduce_t *r)
 {
-    bctx      *c = r->user;
+    bctx      *c = r->thunk;
     th_param   params[64];
     th_kwparam kws[64];
     th_param   rest      = {0};
@@ -1007,7 +1007,7 @@ static void *r_function(ncc_reduce_t *r)
 
 static void *r_int_leaf_or_str(ncc_reduce_t *r)
 {
-    bctx    *c   = r->user;
+    bctx    *c   = r->thunk;
     int64_t  tid = ncc_tree_leaf_tid(r->node);
 
     if (tid == tid_int) {
@@ -1029,51 +1029,55 @@ static void *r_int_leaf_or_str(ncc_reduce_t *r)
     return nullptr;
 }
 
-static void reg(ncc_tree_walk_t *w, const char *nt, ncc_reduce_fn fn)
+static void reg(ncc_tree_walk_t *w, bctx *c, const char *nt, ncc_reduce_fn fn)
 {
-    if (!ncc_walk_reduce_nt(w, ncc_string_from_cstr(nt), fn, nullptr)) {
+    if (!ncc_walk_reduce_nt(w, ncc_string_from_cstr(nt), fn, c)) {
         fprintf(stderr, "typelang: no production named <%s>\n", nt);
     }
+}
+
+static void install(ncc_tree_walk_t *w, bctx *c)
+{
+    reg(w, c, "type", r_pass);
+    reg(w, c, "one-type", r_pass);
+    reg(w, c, "base-type", r_pass);
+    reg(w, c, "record", r_pass);
+    reg(w, c, "paren-form", r_paren_form);
+    reg(w, c, "union-type", r_union);
+    reg(w, c, "isect-type", r_isect);
+    reg(w, c, "named-type", r_named_type);
+    reg(w, c, "qualified-name", r_qualified_name);
+    reg(w, c, "type-args", r_type_args);
+    reg(w, c, "type-arg", r_type_arg);
+    reg(w, c, "tvar", r_tvar);
+    reg(w, c, "binder", r_binder);
+    reg(w, c, "bitint", r_bitint);
+    reg(w, c, "indirection", r_indirection);
+    reg(w, c, "ind-tail", r_ind_tail);
+    reg(w, c, "type-app", r_type_app);
+    reg(w, c, "ind-attr", r_ind_attr);
+    reg(w, c, "ind-attrs", r_ind_attrs);
+    reg(w, c, "sequence", r_sequence);
+    reg(w, c, "anon-site", r_anon_site);
+    reg(w, c, "field", r_field);
+    reg(w, c, "field-list", r_field_list);
+    reg(w, c, "field-body", r_field_body);
+    reg(w, c, "tuple", r_tuple);
+    reg(w, c, "mode", r_mode);
+    reg(w, c, "rest-param", r_rest_param);
+    reg(w, c, "param", r_param);
+    reg(w, c, "param-list", r_param_list);
+    reg(w, c, "function", r_function);
+
+    ncc_walk_on_nt(w, ncc_string_from_cstr("binder"), binder_open, nullptr, c);
 }
 
 static th_type *lower(bctx *c, ncc_parse_tree_t *tree)
 {
     ncc_tree_walk_t *w = ncc_tree_walk_new(c->g, c);
 
-    ncc_walk_reduce_leaf(w, r_int_leaf_or_str, nullptr);
-
-    reg(w, "type", r_pass);
-    reg(w, "one-type", r_pass);
-    reg(w, "base-type", r_pass);
-    reg(w, "record", r_pass);
-    reg(w, "paren-form", r_paren_form);
-    reg(w, "union-type", r_union);
-    reg(w, "isect-type", r_isect);
-    reg(w, "named-type", r_named_type);
-    reg(w, "qualified-name", r_qualified_name);
-    reg(w, "type-args", r_type_args);
-    reg(w, "type-arg", r_type_arg);
-    reg(w, "tvar", r_tvar);
-    reg(w, "binder", r_binder);
-    reg(w, "bitint", r_bitint);
-    reg(w, "indirection", r_indirection);
-    reg(w, "ind-tail", r_ind_tail);
-    reg(w, "type-app", r_type_app);
-    reg(w, "ind-attr", r_ind_attr);
-    reg(w, "ind-attrs", r_ind_attrs);
-    reg(w, "sequence", r_sequence);
-    reg(w, "anon-site", r_anon_site);
-    reg(w, "field", r_field);
-    reg(w, "field-list", r_field_list);
-    reg(w, "field-body", r_field_body);
-    reg(w, "tuple", r_tuple);
-    reg(w, "mode", r_mode);
-    reg(w, "rest-param", r_rest_param);
-    reg(w, "param", r_param);
-    reg(w, "param-list", r_param_list);
-    reg(w, "function", r_function);
-
-    ncc_walk_on_nt(w, ncc_string_from_cstr("binder"), binder_open, nullptr, c);
+    ncc_walk_reduce_leaf(w, r_int_leaf_or_str, c);
+    install(w, c);
 
     th_type *out = as_type(ncc_tree_walk_reduce(w, tree));
 
@@ -1175,6 +1179,53 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
     ncc_token_stream_free(ts);
 
     return out;
+}
+
+ir_typelang_lower_t *ir_typelang_lower_new(th_ctx *ctx)
+{
+    bctx *c = calloc(1, sizeof(bctx));
+
+    if (!c) {
+        return nullptr;
+    }
+
+    c->th = ctx;
+    c->g  = load_grammar();
+
+    ncc_dict_init(&c->fv_index, ncc_hash_cstring, ncc_dict_cstr_eq);
+
+    return (ir_typelang_lower_t *)c;
+}
+
+void ir_typelang_install(ncc_tree_walk_t *w, ir_typelang_lower_t *l)
+{
+    bctx *c = (bctx *)l;
+
+    ncc_walk_reduce_leaf(w, r_int_leaf_or_str, c);
+    install(w, c);
+}
+
+th_type *ir_typelang_type_of(void *reduced)
+{
+    return as_type(reduced);
+}
+
+void ir_typelang_lower_free(ir_typelang_lower_t *l)
+{
+    bctx *c = (bctx *)l;
+
+    if (!c) {
+        return;
+    }
+
+    for (size_t i = 0; i < c->nfree; i++) {
+        free(c->free_vars[i].name);
+    }
+
+    ncc_dict_free(&c->fv_index);
+    free(c->free_vars);
+    free(c->binders);
+    free(c);
 }
 
 th_type *ir_typelang_parse(th_ctx *ctx, const char *src, char **err)
