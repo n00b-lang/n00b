@@ -463,7 +463,12 @@ ncc_register_terminal(ncc_grammar_t *g, ncc_string_t name)
     }
 
     if (name.u8_bytes == 1) {
-        return (int64_t)(unsigned char)name.data[0];
+        int64_t id = (int64_t)(unsigned char)name.data[0];
+
+        _ncc_dict_put(g->terminal_map, (void *)name.data,
+                      (void *)(intptr_t)id);
+
+        return id;
     }
 
     ncc_terminal_t term = {0};

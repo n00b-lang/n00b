@@ -18,7 +18,6 @@
 #include "typelang_bnf.h"
 
 static ncc_grammar_t *grammar;
-static bool           char_terminals[128];
 
 static int64_t tid_of_name(ncc_grammar_t *g, const char *name)
 {
@@ -53,21 +52,6 @@ ncc_grammar_t *ir_grammar(void)
         ncc_grammar_free(g);
 
         return nullptr;
-    }
-
-    memset(char_terminals, 0, sizeof(char_terminals));
-
-    for (size_t i = 0; i < ncc_list_len(g->rules); i++) {
-        ncc_parse_rule_t *r = &g->rules.data[i];
-
-        for (size_t j = 0; j < ncc_list_len(r->contents); j++) {
-            ncc_match_t *m = &r->contents.data[j];
-
-            if (m->kind == NCC_MATCH_TERMINAL && m->terminal_id > 0
-                && m->terminal_id < 128) {
-                char_terminals[m->terminal_id] = true;
-            }
-        }
     }
 
     grammar = g;

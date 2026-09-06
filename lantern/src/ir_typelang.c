@@ -11,7 +11,10 @@
 #include "parse/tree_util.h"
 #include "parse/tree_visit.h"
 #include "internal/parse/grammar_internal.h"
+#include "scanner/scanner.h"
+#include "scanner/scan_builtins.h"
 #include "scanner/token_stream.h"
+#include "lib/buffer.h"
 
 #include "typelang_bnf.h"
 
@@ -26,7 +29,6 @@ static char *msg(const char *what)
 }
 
 static ncc_grammar_t *grammar;
-static bool           char_terminals[128];
 static int64_t        tid_ident;
 static int64_t        tid_int;
 static int64_t        tid_str;
@@ -59,21 +61,6 @@ static ncc_grammar_t *load_grammar(void)
     tid_int   = lookup(g, "INT_LIT");
     tid_str   = lookup(g, "STRING_LIT");
 
-    memset(char_terminals, 0, sizeof(char_terminals));
-
-    for (size_t i = 0; i < ncc_list_len(g->rules); i++) {
-        ncc_parse_rule_t *r = &g->rules.data[i];
-
-        for (size_t j = 0; j < ncc_list_len(r->contents); j++) {
-            ncc_match_t *m = &r->contents.data[j];
-
-            if (m->kind == NCC_MATCH_TERMINAL && m->terminal_id > 0
-                && m->terminal_id < 128) {
-                char_terminals[m->terminal_id] = true;
-            }
-        }
-    }
-
     grammar = g;
 
     return grammar;
@@ -87,133 +74,75 @@ void ir_typelang_shutdown(void)
     }
 }
 
-typedef struct {
-    ncc_token_info_t **v;
-    size_t            *end;
-    int32_t            n;
-    int32_t            cap;
-} toks;
-
-static void emit(toks *t, int64_t tid, const char *at, size_t len, size_t end)
+static bool after_tick(ncc_scanner_t *s)
 {
-    if (t->n >= t->cap) {
-        t->cap = t->cap ? t->cap * 2 : 32;
-        t->v   = realloc(t->v, (size_t)t->cap * sizeof(*t->v));
-        t->end = realloc(t->end, (size_t)t->cap * sizeof(*t->end));
+    ncc_token_info_t *prev = ncc_scan_prev_token(s);
+
+    return prev && prev->tid == '`';
+}
+
+static bool tl_scan(ncc_scanner_t *s)
+{
+    ncc_scan_skip_whitespace(s);
+
+    if (ncc_scan_at_eof(s)) {
+        return false;
     }
 
-    ncc_token_info_t *tok = calloc(1, sizeof(*tok));
+    ncc_scan_mark(s);
 
-    tok->tid   = tid;
-    tok->index = t->n;
-    tok->line  = 1;
-    tok->value = ncc_option_set(ncc_string_t,
-                                ncc_string_from_raw(at, (int64_t)len));
+    ncc_codepoint_t c = ncc_scan_peek(s, 0);
 
-    t->end[t->n] = end;
-    t->v[t->n++] = tok;
-}
+    if (c == '"') {
+        ncc_scan_emit(s, (int32_t)tid_str, ncc_scan_string_double(s));
 
-static bool id_start(unsigned char c)
-{
-    return c == '_' || isalpha(c) || c >= 0x80;
-}
-
-static bool id_more(unsigned char c)
-{
-    return c == '_' || isalnum(c) || c >= 0x80;
-}
-
-static bool tokenize(ncc_grammar_t *g, const char *src, size_t len, toks *t)
-{
-    size_t i = 0;
-
-    while (i < len && src[i]) {
-        if (isspace((unsigned char)src[i])) {
-            i++;
-            continue;
-        }
-
-        if (src[i] == '"') {
-            size_t start = i++;
-
-            while (i < len && src[i] != '"') {
-                i += src[i] == '\\' && i + 1 < len ? 2 : 1;
-            }
-
-            if (i >= len || src[i] != '"') {
-                return false;
-            }
-
-            i++;
-            emit(t, tid_str, src + start + 1, i - start - 2, i);
-            continue;
-        }
-
-        if (isdigit((unsigned char)src[i])) {
-            size_t start = i;
-
-            while (i < len && isdigit((unsigned char)src[i])) {
-                i++;
-            }
-
-            emit(t, tid_int, src + start, i - start, i);
-            continue;
-        }
-
-        if (id_start((unsigned char)src[i])) {
-            size_t start = i;
-
-            while (i < len && id_more((unsigned char)src[i])) {
-                i++;
-            }
-
-            size_t  n  = i - start;
-            char    word[128];
-            int64_t kw = 0;
-
-            bool after_tick = t->n > 0 && t->v[t->n - 1]->tid == '`';
-
-            if (after_tick) {
-                kw = 0;
-            }
-            else if (n == 1) {
-                unsigned char ch = (unsigned char)src[start];
-
-                kw = ch < 128 && char_terminals[ch] ? ch : 0;
-            }
-            else if (n < sizeof(word)) {
-                memcpy(word, src + start, n);
-                word[n] = 0;
-                kw      = lookup(g, word);
-            }
-
-            emit(t, kw ? kw : tid_ident, src + start, n, i);
-            continue;
-        }
-
-        if (i + 1 < len) {
-            char two[3] = {src[i], src[i + 1], 0};
-            int64_t op  = lookup(g, two);
-
-            if (op && op > 0xFF) {
-                emit(t, op, src + i, 2, i + 2);
-                i += 2;
-                continue;
-            }
-        }
-
-        emit(t, (unsigned char)src[i], src + i, 1, i + 1);
-        i++;
+        return true;
     }
+
+    if (c >= '0' && c <= '9') {
+        ncc_scan_emit(s, (int32_t)tid_int, ncc_scan_integer(s));
+
+        return true;
+    }
+
+    if (c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || c >= 0x80) {
+        bool                       name = after_tick(s);
+        ncc_option_t(ncc_string_t) id   = ncc_scan_identifier(s);
+
+        if (ncc_option_is_set(id)) {
+            int64_t kw = name
+                           ? NCC_TOK_OTHER
+                           : ncc_scan_terminal_id(
+                               s, ncc_option_get(id).data);
+
+            ncc_scan_emit(s, kw != NCC_TOK_OTHER ? (int32_t)kw
+                                                 : NCC_TOK_IDENTIFIER,
+                          id);
+
+            return true;
+        }
+    }
+
+    ncc_codepoint_t next = ncc_scan_peek(s, 1);
+
+    if (next > 0 && next < 128 && !isspace((int)next)) {
+        char two[3] = {(char)c, (char)next, 0};
+
+        int64_t op = ncc_scan_terminal_id(s, two);
+
+        if (op != NCC_TOK_OTHER && op > 0xFF) {
+            ncc_scan_advance_n(s, 2);
+            ncc_scan_emit_marked(s, (int32_t)op);
+
+            return true;
+        }
+    }
+
+    ncc_scan_advance(s);
+    ncc_scan_emit_marked(s, (int32_t)c);
 
     return true;
-}
-
-static void free_toks(toks *t)
-{
-    free(t->v);
-    free(t->end);
 }
 
 typedef enum {
@@ -1160,20 +1089,12 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
         return nullptr;
     }
 
-    toks t = {0};
-
-    if (!tokenize(g, src, len, &t) || !t.n) {
-        free_toks(&t);
-
-        if (err) {
-            *err = msg("cannot read a type here");
-        }
-
-        return nullptr;
-    }
-
-    ncc_token_stream_t *ts = ncc_token_stream_from_array(t.v, t.n);
-    ncc_pwz_parser_t   *p  = ncc_pwz_new(g);
+    ncc_buffer_t  *buf = ncc_buffer_from_bytes(src, (int64_t)len);
+    ncc_scanner_t *sc  = ncc_scanner_new(buf, tl_scan, g,
+                                         ncc_option_none(ncc_string_t),
+                                         nullptr, nullptr);
+    ncc_token_stream_t *ts  = ncc_token_stream_new(sc);
+    ncc_pwz_parser_t   *p   = ncc_pwz_new(g);
     th_type            *out = nullptr;
     int32_t             used = 0;
     bool                ok;
@@ -1182,8 +1103,7 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
         ok = ncc_pwz_parse_prefix(p, ts, &used);
     }
     else {
-        ok   = ncc_pwz_parse(p, ts);
-        used = t.n;
+        ok = ncc_pwz_parse(p, ts);
     }
 
     if (ok) {
@@ -1207,12 +1127,14 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
     }
 
     if (out && consumed) {
-        *consumed = used > 0 ? t.end[used - 1] : 0;
+        ncc_token_info_t *last = used > 0 ? ncc_stream_get(ts, used - 1)
+                                          : nullptr;
+
+        *consumed = last ? last->end_byte : 0;
     }
 
     ncc_pwz_free(p);
     ncc_token_stream_free(ts);
-    free_toks(&t);
 
     return out;
 }
