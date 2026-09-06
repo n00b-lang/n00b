@@ -98,6 +98,14 @@ ir_pdg_test = executable(
 
 test('ir-pdg', ir_pdg_test)
 
+ir_walk_test = executable(
+    'ir_walk_test',
+    'ir_walk_test.c',
+    dependencies: ir_dep,
+)
+
+test('ir-walk', ir_walk_test)
+
 ir_grammar_accept_test = executable(
     'ir_grammar_accept_test',
     'ir_grammar_accept_test.c',
