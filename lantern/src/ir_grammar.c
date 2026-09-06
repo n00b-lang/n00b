@@ -78,6 +78,13 @@ int64_t ir_grammar_nt(const char *name)
     return -1;
 }
 
+int64_t ir_grammar_tid(const char *name)
+{
+    ncc_grammar_t *g = ir_grammar();
+
+    return g ? tid_of_name(g, name) : -1;
+}
+
 void ir_grammar_shutdown(void)
 {
     if (grammar) {

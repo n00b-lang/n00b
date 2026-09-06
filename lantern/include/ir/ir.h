@@ -370,6 +370,7 @@ void         ir_module_invalidate(ir_module_t *m, ir_props_t p);
 ir_annots_t *ir_module_annots(ir_module_t *m);
 ir_span_t    ir_module_span(const ir_module_t *m);
 void         ir_module_set_span(ir_module_t *m, ir_span_t s);
+void         ir_module_set_target(ir_module_t *m, const char *target);
 
 th_type *ir_type_intern(ir_module_t *m, th_type *t);
 th_type *ir_type_parse(ir_module_t *m, const char *text);

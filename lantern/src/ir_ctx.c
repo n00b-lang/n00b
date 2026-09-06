@@ -283,6 +283,13 @@ void ir_module_set_span(ir_module_t *m, ir_span_t s)
     }
 }
 
+void ir_module_set_target(ir_module_t *m, const char *target)
+{
+    if (m && target) {
+        m->target = ir_strdup(m->ctx, target);
+    }
+}
+
 ir_annots_t *ir_module_annots(ir_module_t *m)
 {
     return m ? &m->annots : nullptr;

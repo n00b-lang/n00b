@@ -51,6 +51,7 @@ ir_sources = files(
     'ir_span.c',
     'ir_typelang.c',
     'ir_grammar.c',
+    'ir_build.c',
     'ir_walk.c',
 )
 
