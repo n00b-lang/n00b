@@ -44,6 +44,7 @@ ir_sources = files(
     'ir_promote.c',
     'ir_rd.c',
     'ir_structure.c',
+    'ir_doms.c',
     'ir_verify.c',
     'ir_rules_default.c',
     'ir_sb.c',
