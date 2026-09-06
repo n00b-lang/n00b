@@ -2166,7 +2166,19 @@ rocs_live_cursor_test = executable('test_rocs_live_cursor',
     ['test/unit/test_rocs_live_cursor.c'],
     kwargs: test_common_kwargs,
 )
-test('rocs_live_cursor', rocs_live_cursor_test, suite: 'unit')
+# QUARANTINED (n00b#295): hangs on the Linux runner. Not a tight limit --
+# the two observed outcomes are OK at 0.12s and TIMEOUT at exactly the 30s
+# cap with no output, on the same commit. A test whose runtime is bimodal
+# between 0.12s and never is blocking on something, so raising the budget
+# would only make the red take longer to arrive (contrast
+# rocs_large_shard_seal, whose 16.77/20.06/>30s spread is continuous and
+# IS a budget problem).
+#
+# 'known-broken' rather than should_fail: it passes most runs, so
+# should_fail would report UNEXPECTEDPASS and leave the gate red either
+# way. Same reasoning as the n00b#280 group above. Restore its real suite
+# with the fix.
+test('rocs_live_cursor', rocs_live_cursor_test, suite: 'known-broken')
 
 rocs_live_resume_test = executable('test_rocs_live_resume',
     ['test/unit/test_rocs_live_resume.c'],
