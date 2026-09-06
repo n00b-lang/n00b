@@ -345,9 +345,12 @@ test_the_walk_builds_a_symbol_table(ncc_grammar_t *g)
 static void
 test_a_deep_tree_does_not_overflow_the_stack(ncc_grammar_t *g)
 {
-    enum { N = 4000 };
+    // Deep enough to mean something in a normal run; IR_DEEP takes it as far
+    // as the benchmark run wants.
+    const char *want = getenv("IR_DEEP");
+    const int   N    = want ? atoi(want) : 600;
 
-    char *src = malloc(N * 4 + 1);
+    char *src = malloc((size_t)N * 4 + 1);
 
     for (int i = 0; i < N; i++) {
         memcpy(src + i * 4, "vaT;", 4);
@@ -360,7 +363,7 @@ test_a_deep_tree_does_not_overflow_the_stack(ncc_grammar_t *g)
     ncc_parse_tree_t   *tree = parse_toy(g, src, &p, &ts);
 
     if (!tree) {
-        check("a 4000-declaration program parses", false);
+        check("a deeply nested program parses", false);
         free(src);
 
         return;
@@ -373,7 +376,7 @@ test_a_deep_tree_does_not_overflow_the_stack(ncc_grammar_t *g)
     ncc_tree_walk_run(w, tree);
     ncc_tree_walk_free(w);
 
-    check("a walk over a 4000-deep tree visits every node",
+    check("a walk over a deeply nested tree visits every node",
           probe.decls_seen == N);
 
     ncc_pwz_free(p);

@@ -116,7 +116,10 @@ ir_scale_test = executable(
     dependencies: ir_dep,
 )
 
-test('ir-scale', ir_scale_test)
+# Wall-clock guards and the mutation harness are not part of a normal run.
+# They are slow, and the timing ones report a loaded machine as a defect.
+# `meson test --benchmark` runs them.
+benchmark('ir-scale', ir_scale_test)
 
 ir_diag_test = executable(
     'ir_diag_test',
@@ -130,7 +133,7 @@ test(
     args: [meson.current_source_dir() / 'golden'],
 )
 
-test(
+benchmark(
     'ir-gates',
     find_program('sh'),
     args: [
