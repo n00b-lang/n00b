@@ -148,6 +148,12 @@ struct ncc_pwz_parser_t {
     ncc_list_t(pwz_exp_ptr_t)   tops;
     ncc_list_t(pwz_step_t)      steps;
 
+    // Longest prefix of the stream the start symbol derived, and the result
+    // at that point. Recorded as the parse runs, so asking for the longest
+    // prefix costs one pass rather than one parse per candidate length.
+    pwz_exp_t                  *longest_top;
+    int32_t                     longest_end;
+
     ncc_token_stream_t         *stream;
 
     ncc_parse_tree_t           *result_tree;

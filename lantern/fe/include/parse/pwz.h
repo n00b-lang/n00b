@@ -23,6 +23,14 @@ void ncc_pwz_release_parse_state(ncc_pwz_parser_t *p);
 bool ncc_pwz_parse(ncc_pwz_parser_t   *p,
                      ncc_token_stream_t *ts);
 
+// Derive the longest prefix of @p ts the start symbol accepts, rather than
+// requiring the whole stream, and report how many tokens that took. The parse
+// already visits every position once, so this costs one pass and not one
+// parse per candidate length.
+bool ncc_pwz_parse_prefix(ncc_pwz_parser_t   *p,
+                          ncc_token_stream_t *ts,
+                          int32_t            *ntokens);
+
 ncc_parse_tree_t *ncc_pwz_get_tree(ncc_pwz_parser_t *p);
 
 int32_t ncc_pwz_error_pos(ncc_pwz_parser_t *p);

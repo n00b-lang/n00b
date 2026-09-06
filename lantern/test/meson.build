@@ -98,6 +98,18 @@ ir_pdg_test = executable(
 
 test('ir-pdg', ir_pdg_test)
 
+ir_typelang_test = executable(
+    'ir_typelang_test',
+    'ir_typelang_test.c',
+    dependencies: ir_dep,
+)
+
+test(
+    'ir-typelang',
+    ir_typelang_test,
+    args: [meson.project_source_root() / 'th' / 'vectors.tsv'],
+)
+
 ir_scale_test = executable(
     'ir_scale_test',
     'ir_scale_test.c',

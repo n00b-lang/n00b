@@ -913,6 +913,8 @@ init_parse(ncc_pwz_parser_t *p)
     ncc_list_clear(p->worklist_swap);
     ncc_list_clear(p->tops);
     ncc_list_clear(p->steps);
+    p->longest_top  = nullptr;
+    p->longest_end  = 0;
     p->result_tree  = nullptr;
     p->result_trees = (ncc_parse_tree_array_t){0};
 
@@ -970,6 +972,11 @@ run_parse(ncc_pwz_parser_t *p)
 
         for (size_t i = 0; i < wl_len; i++) {
             mem_release(p, p->worklist.data[i].mem);
+        }
+
+        if (ncc_list_len(p->tops) > 0) {
+            p->longest_top = p->tops.data[0];
+            p->longest_end = complete_pos;
         }
 
         if (!have_next) {
@@ -1560,6 +1567,33 @@ ncc_pwz_parse(ncc_pwz_parser_t   *p,
     }
 
     return false;
+}
+
+bool
+ncc_pwz_parse_prefix(ncc_pwz_parser_t   *p,
+                     ncc_token_stream_t *ts,
+                     int32_t            *ntokens)
+{
+    ncc_pwz_reset(p);
+
+    p->stream = ts;
+
+    ncc_stream_get(ts, 0);
+
+    init_parse(p);
+    run_parse(p);
+
+    if (!p->longest_top) {
+        return false;
+    }
+
+    p->result_tree = build_result_tree(p, p->longest_top);
+
+    if (ntokens) {
+        *ntokens = p->longest_end;
+    }
+
+    return true;
 }
 
 ncc_parse_tree_t *

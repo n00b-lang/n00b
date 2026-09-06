@@ -279,6 +279,20 @@ ncc_grammar_new(void)
     g->terminal_map = ncc_alloc(ncc_dict_t);
     ncc_dict_init(g->terminal_map, ncc_hash_cstring, ncc_dict_cstr_eq);
 
+    // The builtin token ids run from NCC_TOK_START_ID + 1, and so does the id
+    // ncc_register_terminal hands out, so without claiming them here the first
+    // named terminal a grammar registers -- every %"keyword" -- would be given
+    // the same id as %IDENTIFIER. Registering them in id order takes those
+    // slots and starts everything else after them.
+    static const char *const BUILTIN[] = {
+        "IDENTIFIER", "TYPEDEF_NAME", "INTEGER",
+        "FLOAT",      "CHAR_LIT",     "STRING_LIT",
+    };
+
+    for (size_t i = 0; i < sizeof(BUILTIN) / sizeof(BUILTIN[0]); i++) {
+        ncc_register_terminal(g, ncc_string_from_cstr(BUILTIN[i]));
+    }
+
     return g;
 }
 
@@ -422,11 +436,10 @@ ncc_lookup_terminal(ncc_grammar_t *g, ncc_string_t name)
     bool  found = false;
     void *val   = _ncc_dict_get(g->terminal_map, (void *)name.data, &found);
 
-    if (found) {
-        return (int64_t)(intptr_t)val;
-    }
-
-    return name.u8_bytes == 1 ? (int64_t)(unsigned char)name.data[0] : 0;
+    // Only what was actually registered. A one-character terminal's id is its
+    // codepoint, but so is any other one-character string, so answering from
+    // the spelling alone would call every single letter a terminal.
+    return found ? (int64_t)(intptr_t)val : 0;
 }
 
 int64_t

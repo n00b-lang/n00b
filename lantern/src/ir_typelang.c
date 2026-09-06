@@ -1,0 +1,1234 @@
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "ir_internal.h"
+#include "ir/typelang.h"
+
+#include "parse/bnf.h"
+#include "parse/pwz.h"
+#include "parse/tree_util.h"
+#include "internal/parse/grammar_internal.h"
+#include "scanner/token_stream.h"
+
+#include "typelang_bnf.h"
+
+// typelang.bnf is the notation typehash spec §16 makes normative. Parsing is
+// the grammar plus a walk that calls typehash's constructors; nothing here
+// re-derives what a type means from its spelling.
+
+static char *msg(const char *what)
+{
+    size_t n = strlen(what) + 12;
+    char  *p = malloc(n);
+
+    snprintf(p, n, "typelang: %s", what);
+
+    return p;
+}
+
+static ncc_grammar_t *grammar;
+static bool           char_terminals[128];
+static int64_t        tid_ident;
+static int64_t        tid_int;
+static int64_t        tid_str;
+
+static int64_t lookup(ncc_grammar_t *g, const char *name)
+{
+    return ncc_lookup_terminal(g, ncc_string_from_cstr(name));
+}
+
+static ncc_grammar_t *load_grammar(void)
+{
+    if (grammar) {
+        return grammar;
+    }
+
+    ncc_grammar_t *g = ncc_grammar_new();
+
+    ncc_grammar_set_error_recovery(g, false);
+    ncc_register_terminal(g, ncc_string_from_cstr("INT_LIT"));
+    ncc_register_terminal(g, ncc_string_from_cstr("STRING_LIT"));
+
+    if (!ncc_bnf_load(ncc_string_from_cstr(TYPELANG_BNF),
+                      ncc_string_from_cstr("union-type"), g)) {
+        ncc_grammar_free(g);
+
+        return nullptr;
+    }
+
+    // %IDENTIFIER is one of the reader's builtin token names, so it has an id
+    // of its own and never appears in the grammar's named-terminal table;
+    // INT_LIT and STRING_LIT are ours, registered above.
+    tid_ident = NCC_TOK_IDENTIFIER;
+    tid_int   = lookup(g, "INT_LIT");
+    tid_str   = lookup(g, "STRING_LIT");
+
+    // A one-character terminal's id is its codepoint, so the only way to know
+    // that `t` is the tuple keyword and `x` is an identifier is to ask which
+    // codepoints the grammar's rules actually mention.
+    memset(char_terminals, 0, sizeof(char_terminals));
+
+    for (size_t i = 0; i < ncc_list_len(g->rules); i++) {
+        ncc_parse_rule_t *r = &g->rules.data[i];
+
+        for (size_t j = 0; j < ncc_list_len(r->contents); j++) {
+            ncc_match_t *m = &r->contents.data[j];
+
+            if (m->kind == NCC_MATCH_TERMINAL && m->terminal_id > 0
+                && m->terminal_id < 128) {
+                char_terminals[m->terminal_id] = true;
+            }
+        }
+    }
+
+    grammar = g;
+
+    return grammar;
+}
+
+void ir_typelang_shutdown(void)
+{
+    if (grammar) {
+        ncc_grammar_free(grammar);
+        grammar = nullptr;
+    }
+}
+
+// ============================================================================
+// Tokenizer
+// ============================================================================
+
+typedef struct {
+    ncc_token_info_t **v;
+    size_t            *end;
+    int32_t            n;
+    int32_t            cap;
+} toks;
+
+static void emit(toks *t, int64_t tid, const char *at, size_t len, size_t end)
+{
+    if (t->n >= t->cap) {
+        t->cap = t->cap ? t->cap * 2 : 32;
+        t->v   = realloc(t->v, (size_t)t->cap * sizeof(*t->v));
+        t->end = realloc(t->end, (size_t)t->cap * sizeof(*t->end));
+    }
+
+    ncc_token_info_t *tok = calloc(1, sizeof(*tok));
+
+    tok->tid   = tid;
+    tok->index = t->n;
+    tok->line  = 1;
+    tok->value = ncc_option_set(ncc_string_t,
+                                ncc_string_from_raw(at, (int64_t)len));
+
+    t->end[t->n] = end;
+    t->v[t->n++] = tok;
+}
+
+static bool id_start(unsigned char c)
+{
+    return c == '_' || isalpha(c) || c >= 0x80;
+}
+
+static bool id_more(unsigned char c)
+{
+    return c == '_' || isalnum(c) || c >= 0x80;
+}
+
+// Every keyword and punctuation mark the grammar writes as %"..." is already a
+// terminal, so a spelling is a keyword exactly when the grammar has it.
+static bool tokenize(ncc_grammar_t *g, const char *src, size_t len, toks *t)
+{
+    size_t i = 0;
+
+    while (i < len && src[i]) {
+        if (isspace((unsigned char)src[i])) {
+            i++;
+            continue;
+        }
+
+        if (src[i] == '"') {
+            size_t start = i++;
+
+            while (i < len && src[i] != '"') {
+                i += src[i] == '\\' && i + 1 < len ? 2 : 1;
+            }
+
+            if (i >= len || src[i] != '"') {
+                return false;
+            }
+
+            i++;
+            emit(t, tid_str, src + start + 1, i - start - 2, i);
+            continue;
+        }
+
+        if (isdigit((unsigned char)src[i])) {
+            size_t start = i;
+
+            while (i < len && isdigit((unsigned char)src[i])) {
+                i++;
+            }
+
+            emit(t, tid_int, src + start, i - start, i);
+            continue;
+        }
+
+        if (id_start((unsigned char)src[i])) {
+            size_t start = i;
+
+            while (i < len && id_more((unsigned char)src[i])) {
+                i++;
+            }
+
+            size_t  n  = i - start;
+            char    word[128];
+            int64_t kw = 0;
+
+            // A backtick introduces a type variable, so what follows names
+            // one even when it is spelled like a keyword: `t is a variable,
+            // not the tuple marker.
+            bool after_tick = t->n > 0 && t->v[t->n - 1]->tid == '`';
+
+            if (after_tick) {
+                kw = 0;
+            }
+            else if (n == 1) {
+                unsigned char ch = (unsigned char)src[start];
+
+                kw = ch < 128 && char_terminals[ch] ? ch : 0;
+            }
+            else if (n < sizeof(word)) {
+                memcpy(word, src + start, n);
+                word[n] = 0;
+                kw      = lookup(g, word);
+            }
+
+            emit(t, kw ? kw : tid_ident, src + start, n, i);
+            continue;
+        }
+
+        // Longest punctuation first: "->" must not lex as "-" then ">".
+        if (i + 1 < len) {
+            char two[3] = {src[i], src[i + 1], 0};
+            int64_t op  = lookup(g, two);
+
+            if (op && op > 0xFF) {
+                emit(t, op, src + i, 2, i + 2);
+                i += 2;
+                continue;
+            }
+        }
+
+        emit(t, (unsigned char)src[i], src + i, 1, i + 1);
+        i++;
+    }
+
+    return true;
+}
+
+static void free_toks(toks *t)
+{
+    for (int32_t i = 0; i < t->n; i++) {
+        free(t->v[i]);
+    }
+
+    free(t->v);
+    free(t->end);
+}
+
+// ============================================================================
+// Build state
+// ============================================================================
+
+typedef struct {
+    char    *name;
+    th_type *type;
+} freev;
+
+typedef struct {
+    char **names;
+    size_t n;
+} binding;
+
+typedef struct {
+    th_ctx        *th;
+    ncc_grammar_t *g;
+    const char    *err;
+
+    freev  *free_vars;
+    size_t  nfree;
+    size_t  cfree;
+
+    binding *binders;
+    size_t   nb;
+    size_t   cb;
+} bctx;
+
+static th_type *build(bctx *c, ncc_parse_tree_t *n);
+
+static const char *nt_of(bctx *c, ncc_parse_tree_t *n)
+{
+    if (!n || ncc_tree_is_leaf(n)) {
+        return nullptr;
+    }
+
+    ncc_nt_node_t *pn = &ncc_tree_node_value(n);
+
+    if (pn->id < 0 || pn->group_top) {
+        return nullptr;
+    }
+
+    ncc_nonterm_t *nt = ncc_get_nonterm(c->g, pn->id);
+
+    return nt && nt->name.data ? nt->name.data : nullptr;
+}
+
+static bool is_nt(bctx *c, ncc_parse_tree_t *n, const char *want)
+{
+    const char *have = nt_of(c, n);
+
+    return have && !strcmp(have, want);
+}
+
+static const char *text_of(ncc_parse_tree_t *n)
+{
+    if (!n || !ncc_tree_is_leaf(n)) {
+        return nullptr;
+    }
+
+    ncc_token_info_t *tok = ncc_tree_leaf_value(n);
+
+    if (!tok || !ncc_option_is_set(tok->value)) {
+        return nullptr;
+    }
+
+    return ncc_option_get(tok->value).data;
+}
+
+static int64_t tid_of(ncc_parse_tree_t *n)
+{
+    if (!n || !ncc_tree_is_leaf(n)) {
+        return 0;
+    }
+
+    ncc_token_info_t *tok = ncc_tree_leaf_value(n);
+
+    return tok ? tok->tid : 0;
+}
+
+static bool word(ncc_parse_tree_t *n, const char *want)
+{
+    const char *t = text_of(n);
+
+    return t && !strcmp(t, want);
+}
+
+// Children with group wrappers dissolved, so a walker sees the sequence the
+// production wrote rather than the shape its quantifiers produced.
+typedef struct {
+    ncc_parse_tree_t **v;
+    size_t             n;
+    size_t             cap;
+} kids;
+
+static void kpush(kids *k, ncc_parse_tree_t *n)
+{
+    if (k->n >= k->cap) {
+        k->cap = k->cap ? k->cap * 2 : 8;
+        k->v   = realloc(k->v, k->cap * sizeof(*k->v));
+    }
+
+    k->v[k->n++] = n;
+}
+
+static void flatten(ncc_parse_tree_t *n, kids *k)
+{
+    size_t nc = ncc_tree_num_children(n);
+
+    for (size_t i = 0; i < nc; i++) {
+        ncc_parse_tree_t *ch = ncc_tree_child(n, i);
+
+        if (!ncc_tree_is_leaf(ch) && ncc_tree_node_value(ch).group_top) {
+            flatten(ch, k);
+            continue;
+        }
+
+        kpush(k, ch);
+    }
+}
+
+static void kfree(kids *k)
+{
+    free(k->v);
+}
+
+// ============================================================================
+// Productions
+// ============================================================================
+
+static th_type *build_tvar(bctx *c, ncc_parse_tree_t *n)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    const char *name = nullptr;
+
+    for (size_t i = 0; i < k.n; i++) {
+        if (tid_of(k.v[i]) == tid_ident) {
+            name = text_of(k.v[i]);
+        }
+    }
+
+    kfree(&k);
+
+    if (!name) {
+        c->err = "a type variable needs a name";
+
+        return nullptr;
+    }
+
+    // Innermost binder wins; the index pair is (how many binders out, which
+    // slot), which is what th_bound takes.
+    for (size_t d = c->nb; d > 0; d--) {
+        for (size_t i = 0; i < c->binders[d - 1].n; i++) {
+            if (!strcmp(c->binders[d - 1].names[i], name)) {
+                return th_bound(c->th, c->nb - d + 1, i);
+            }
+        }
+    }
+
+    // Free variables are shared within one parse and only within one, so the
+    // same spelling twice is one variable.
+    for (size_t i = 0; i < c->nfree; i++) {
+        if (!strcmp(c->free_vars[i].name, name)) {
+            return c->free_vars[i].type;
+        }
+    }
+
+    if (c->nfree >= c->cfree) {
+        c->cfree     = c->cfree ? c->cfree * 2 : 8;
+        c->free_vars = realloc(c->free_vars, c->cfree * sizeof(freev));
+    }
+
+    th_type *t = th_var(c->th);
+
+    c->free_vars[c->nfree].name = strdup(name);
+    c->free_vars[c->nfree].type = t;
+    c->nfree++;
+
+    return t;
+}
+
+static th_type *build_binder(bctx *c, ncc_parse_tree_t *n)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    char  *names[64];
+    size_t nn = 0;
+
+    for (size_t i = 0; i < k.n; i++) {
+        if (!is_nt(c, k.v[i], "tvar")) {
+            continue;
+        }
+
+        kids v = {0};
+
+        flatten(k.v[i], &v);
+
+        for (size_t j = 0; j < v.n; j++) {
+            if (tid_of(v.v[j]) == tid_ident && nn < 64) {
+                names[nn++] = strdup(text_of(v.v[j]));
+            }
+        }
+
+        kfree(&v);
+    }
+
+    if (!nn) {
+        c->err = "forall needs at least one type variable";
+        kfree(&k);
+
+        return nullptr;
+    }
+
+    if (c->nb >= c->cb) {
+        c->cb      = c->cb ? c->cb * 2 : 4;
+        c->binders = realloc(c->binders, c->cb * sizeof(binding));
+    }
+
+    c->binders[c->nb].names = names;
+    c->binders[c->nb].n     = nn;
+    c->nb++;
+
+    th_type *body = nullptr;
+
+    for (size_t i = 0; i < k.n; i++) {
+        if (is_nt(c, k.v[i], "one-type")) {
+            body = build(c, k.v[i]);
+        }
+    }
+
+    c->nb--;
+
+    for (size_t i = 0; i < nn; i++) {
+        free(names[i]);
+    }
+
+    kfree(&k);
+
+    return body ? th_binder(c->th, nn, body) : nullptr;
+}
+
+static th_type *build_bitint(bctx *c, ncc_parse_tree_t *n)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    bool     is_signed = word(k.v[0], "bitint");
+    uint64_t width     = 0;
+
+    for (size_t i = 0; i < k.n; i++) {
+        if (tid_of(k.v[i]) == tid_int) {
+            width = strtoull(text_of(k.v[i]), nullptr, 10);
+        }
+    }
+
+    kfree(&k);
+
+    return th_bitint(c->th, width, is_signed);
+}
+
+static uint8_t sugar_attrs(const char *w)
+{
+    if (!strcmp(w, "ptr")) {
+        return TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE;
+    }
+    if (!strcmp(w, "mutref")) {
+        return TH_EXCLUSIVE;
+    }
+    if (!strcmp(w, "own")) {
+        return TH_OWNING;
+    }
+    if (!strcmp(w, "gcref")) {
+        return TH_NULLABLE | TH_RESEATABLE;
+    }
+    if (!strcmp(w, "tmpref")) {
+        return TH_TEMPORARY;
+    }
+
+    return 0;
+}
+
+static bool attr_bit(const char *w, uint8_t *out)
+{
+    static const struct {
+        const char *name;
+        uint8_t     bit;
+    } map[] = {
+        {"nullable",   TH_NULLABLE  },
+        {"reseatable", TH_RESEATABLE},
+        {"indexable",  TH_INDEXABLE },
+        {"owning",     TH_OWNING    },
+        {"exclusive",  TH_EXCLUSIVE },
+        {"temporary",  TH_TEMPORARY },
+    };
+
+    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+        if (!strcmp(w, map[i].name)) {
+            *out = map[i].bit;
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static th_type *build_indirection(bctx *c, ncc_parse_tree_t *n)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    const char *sugar    = nullptr;
+    uint8_t     attrs    = 0;
+    bool        explicit = false;
+    th_type    *referent = nullptr;
+
+    for (size_t i = 0; i < k.n; i++) {
+        if (is_nt(c, k.v[i], "ind-name")) {
+            kids s = {0};
+
+            flatten(k.v[i], &s);
+            sugar = s.n ? text_of(s.v[0]) : nullptr;
+            kfree(&s);
+            continue;
+        }
+
+        if (is_nt(c, k.v[i], "union-type")) {
+            referent = build(c, k.v[i]);
+            continue;
+        }
+
+        if (is_nt(c, k.v[i], "ind-attrs")) {
+            kids a = {0};
+
+            flatten(k.v[i], &a);
+            explicit = true;
+
+            for (size_t j = 0; j < a.n; j++) {
+                kids one = {0};
+
+                flatten(a.v[j], &one);
+
+                for (size_t m = 0; m < one.n; m++) {
+                    const char *t = text_of(one.v[m]);
+                    uint8_t     b;
+
+                    if (t && attr_bit(t, &b)) {
+                        attrs |= b;
+                    }
+                }
+
+                kfree(&one);
+            }
+
+            kfree(&a);
+        }
+    }
+
+    kfree(&k);
+
+    if (!referent) {
+        c->err = c->err ? c->err : "an indirection needs a referent";
+
+        return nullptr;
+    }
+
+    // The sugar names an attribute set; an explicit list replaces it rather
+    // than adding to it.
+    if (!explicit && sugar) {
+        attrs = sugar_attrs(sugar);
+    }
+
+    return th_ind(c->th, attrs, referent);
+}
+
+static th_type *build_sequence(bctx *c, ncc_parse_tree_t *n)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    th_type *elem   = nullptr;
+    bool     sized  = false;
+    uint64_t extent = 0;
+
+    for (size_t i = 0; i < k.n; i++) {
+        if (is_nt(c, k.v[i], "union-type")) {
+            elem = build(c, k.v[i]);
+        }
+        else if (tid_of(k.v[i]) == tid_int) {
+            sized  = true;
+            extent = strtoull(text_of(k.v[i]), nullptr, 10);
+        }
+    }
+
+    kfree(&k);
+
+    if (!elem) {
+        return nullptr;
+    }
+
+    return sized ? th_array_n(c->th, elem, extent) : th_array(c->th, elem);
+}
+
+static th_type *build_anon_site(bctx *c, ncc_parse_tree_t *n)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    const char *path = nullptr;
+    uint64_t    nums[2] = {0, 0};
+    size_t      nn      = 0;
+
+    for (size_t i = 0; i < k.n; i++) {
+        if (tid_of(k.v[i]) == tid_str) {
+            path = text_of(k.v[i]);
+        }
+        else if (tid_of(k.v[i]) == tid_int && nn < 2) {
+            nums[nn++] = strtoull(text_of(k.v[i]), nullptr, 10);
+        }
+    }
+
+    kfree(&k);
+
+    if (!path || nn != 2) {
+        c->err = "an anonymous site needs a path, a line and a column";
+
+        return nullptr;
+    }
+
+    return th_name(c->th, th_anon_name(c->th, path, nums[0], nums[1]));
+}
+
+static th_type *build_record(bctx *c, ncc_parse_tree_t *n)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    th_member members[64];
+    size_t    nm = 0;
+
+    for (size_t i = 0; i < k.n && nm < 64; i++) {
+        if (!is_nt(c, k.v[i], "field-list")) {
+            continue;
+        }
+
+        kids fl = {0};
+
+        flatten(k.v[i], &fl);
+
+        for (size_t j = 0; j < fl.n && nm < 64; j++) {
+            if (!is_nt(c, fl.v[j], "field")) {
+                continue;
+            }
+
+            kids f = {0};
+
+            flatten(fl.v[j], &f);
+
+            const char *name = nullptr;
+            th_type    *type = nullptr;
+
+            for (size_t m = 0; m < f.n; m++) {
+                if (tid_of(f.v[m]) == tid_ident) {
+                    name = text_of(f.v[m]);
+                }
+                else if (is_nt(c, f.v[m], "union-type")) {
+                    type = build(c, f.v[m]);
+                }
+            }
+
+            kfree(&f);
+
+            if (!name || !type) {
+                kfree(&fl);
+                kfree(&k);
+
+                return nullptr;
+            }
+
+            members[nm].name = name;
+            members[nm].type = type;
+            nm++;
+        }
+
+        kfree(&fl);
+    }
+
+    kfree(&k);
+
+    return th_record(c->th, members, nm);
+}
+
+static th_type *build_tuple(bctx *c, ncc_parse_tree_t *n)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    th_type *elems[64];
+    size_t   ne = 0;
+
+    for (size_t i = 0; i < k.n && ne < 64; i++) {
+        if (!is_nt(c, k.v[i], "union-type")) {
+            continue;
+        }
+
+        th_type *t = build(c, k.v[i]);
+
+        if (!t) {
+            kfree(&k);
+
+            return nullptr;
+        }
+
+        elems[ne++] = t;
+    }
+
+    kfree(&k);
+
+    return th_tuple(c->th, elems, ne);
+}
+
+static bool read_mode(bctx *c, ncc_parse_tree_t *n, th_mode *m)
+{
+    if (!is_nt(c, n, "mode")) {
+        return false;
+    }
+
+    kids k = {0};
+
+    flatten(n, &k);
+
+    const char *t = k.n ? text_of(k.v[0]) : nullptr;
+
+    kfree(&k);
+
+    if (!t) {
+        return false;
+    }
+
+    *m = !strcmp(t, "out") ? TH_OUT : !strcmp(t, "inout") ? TH_INOUT : TH_IN;
+
+    return true;
+}
+
+// A parameter is classified by its own syntax, not its position: a bare type
+// is positional, *t is the rest, and name: t is a keyword (§16.4).
+static bool build_param(bctx *c, ncc_parse_tree_t *n, th_param *pos,
+                        th_param *rest, th_kwparam *kw, int *which)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    th_mode     mode = TH_IN;
+    const char *name = nullptr;
+    th_type    *type = nullptr;
+    bool        is_rest = false;
+
+    for (size_t i = 0; i < k.n; i++) {
+        th_mode m;
+
+        if (read_mode(c, k.v[i], &m)) {
+            mode = m;
+            continue;
+        }
+
+        if (is_nt(c, k.v[i], "rest-param")) {
+            kids r = {0};
+
+            flatten(k.v[i], &r);
+            is_rest = true;
+
+            for (size_t j = 0; j < r.n; j++) {
+                if (is_nt(c, r.v[j], "union-type")) {
+                    type = build(c, r.v[j]);
+                }
+            }
+
+            kfree(&r);
+            continue;
+        }
+
+        if (tid_of(k.v[i]) == tid_ident) {
+            name = text_of(k.v[i]);
+            continue;
+        }
+
+        if (is_nt(c, k.v[i], "union-type")) {
+            type = build(c, k.v[i]);
+        }
+    }
+
+    kfree(&k);
+
+    if (!type) {
+        return false;
+    }
+
+    if (is_rest) {
+        rest->mode = mode;
+        rest->type = type;
+        *which     = 1;
+    }
+    else if (name) {
+        kw->name = name;
+        kw->mode = mode;
+        kw->type = type;
+        *which   = 2;
+    }
+    else {
+        pos->mode = mode;
+        pos->type = type;
+        *which    = 0;
+    }
+
+    return true;
+}
+
+static th_type *build_function(bctx *c, ncc_parse_tree_t *n)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    th_param   params[64];
+    th_kwparam kws[64];
+    th_param   rest      = {0};
+    bool       have_rest = false;
+    size_t     np        = 0;
+    size_t     nkw       = 0;
+    th_type   *ret       = nullptr;
+
+    for (size_t i = 0; i < k.n; i++) {
+        if (is_nt(c, k.v[i], "param-list")) {
+            kids pl = {0};
+
+            flatten(k.v[i], &pl);
+
+            for (size_t j = 0; j < pl.n; j++) {
+                if (!is_nt(c, pl.v[j], "param")) {
+                    continue;
+                }
+
+                th_param   p = {0};
+                th_param   r = {0};
+                th_kwparam w = {0};
+                int        which;
+
+                if (!build_param(c, pl.v[j], &p, &r, &w, &which)) {
+                    kfree(&pl);
+                    kfree(&k);
+
+                    return nullptr;
+                }
+
+                if (which == 0 && np < 64) {
+                    params[np++] = p;
+                }
+                else if (which == 1) {
+                    rest      = r;
+                    have_rest = true;
+                }
+                else if (which == 2 && nkw < 64) {
+                    kws[nkw++] = w;
+                }
+            }
+
+            kfree(&pl);
+            continue;
+        }
+
+        if (is_nt(c, k.v[i], "union-type")) {
+            ret = build(c, k.v[i]);
+        }
+    }
+
+    kfree(&k);
+
+    if (!ret) {
+        return nullptr;
+    }
+
+    return th_func(c->th, ret, params, np, have_rest ? &rest : nullptr, kws,
+                   nkw);
+}
+
+static th_type *build_named(bctx *c, ncc_parse_tree_t *n)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    bool   variant = k.n && word(k.v[0], "variant");
+    char   name[512];
+    size_t len = 0;
+
+    for (size_t i = 0; i < k.n; i++) {
+        if (!is_nt(c, k.v[i], "qualified-name")) {
+            continue;
+        }
+
+        kids q = {0};
+
+        flatten(k.v[i], &q);
+
+        for (size_t j = 0; j < q.n; j++) {
+            const char *part = text_of(q.v[j]);
+            size_t      pl   = part ? strlen(part) : 0;
+
+            if (!pl || len + pl + 1 >= sizeof(name)) {
+                continue;
+            }
+
+            memcpy(name + len, part, pl);
+            len += pl;
+        }
+
+        kfree(&q);
+        break;
+    }
+
+    name[len] = 0;
+
+    th_arg args[64];
+    size_t nargs = 0;
+
+    for (size_t i = 0; i < k.n; i++) {
+        if (!is_nt(c, k.v[i], "type-args")) {
+            continue;
+        }
+
+        kids a = {0};
+
+        flatten(k.v[i], &a);
+
+        for (size_t j = 0; j < a.n && nargs < 64; j++) {
+            if (!is_nt(c, a.v[j], "type-arg")) {
+                continue;
+            }
+
+            kids one = {0};
+
+            flatten(a.v[j], &one);
+
+            ncc_parse_tree_t *sole = one.n == 1 ? one.v[0] : nullptr;
+
+            kfree(&one);
+
+            if (!sole) {
+                continue;
+            }
+
+            if (tid_of(sole) == tid_int) {
+                args[nargs].kind = TH_ARG_UINT;
+                args[nargs].u    = strtoull(text_of(sole), nullptr, 10);
+                nargs++;
+                continue;
+            }
+
+            if (tid_of(sole) == tid_str) {
+                const char *s = text_of(sole);
+
+                args[nargs].kind    = TH_ARG_STR;
+                args[nargs].str.p   = s;
+                args[nargs].str.n   = strlen(s);
+                nargs++;
+                continue;
+            }
+
+            th_type *t = build(c, sole);
+
+            if (!t) {
+                kfree(&a);
+                kfree(&k);
+
+                return nullptr;
+            }
+
+            args[nargs].kind = TH_ARG_TYPE;
+            args[nargs].type = t;
+            nargs++;
+        }
+
+        kfree(&a);
+    }
+
+    kfree(&k);
+
+    if (variant) {
+        return th_variant(c->th, name, args, nargs);
+    }
+
+    return nargs ? th_apply(c->th, name, args, nargs) : th_name(c->th, name);
+}
+
+static th_type *build_sum(bctx *c, ncc_parse_tree_t *n, th_comb comb,
+                          const char *arm_nt)
+{
+    kids k = {0};
+
+    flatten(n, &k);
+
+    th_type *arms[64];
+    size_t   na = 0;
+
+    for (size_t i = 0; i < k.n && na < 64; i++) {
+        if (!is_nt(c, k.v[i], arm_nt)) {
+            continue;
+        }
+
+        th_type *t = build(c, k.v[i]);
+
+        if (!t) {
+            kfree(&k);
+
+            return nullptr;
+        }
+
+        arms[na++] = t;
+    }
+
+    kfree(&k);
+
+    if (na == 1) {
+        return arms[0];
+    }
+
+    return th_sum(c->th, comb, arms, na);
+}
+
+static th_type *build(bctx *c, ncc_parse_tree_t *n)
+{
+    const char *name = nt_of(c, n);
+
+    if (!name) {
+        return nullptr;
+    }
+
+    if (!strcmp(name, "union-type")) {
+        return build_sum(c, n, TH_UNION, "isect-type");
+    }
+
+    if (!strcmp(name, "isect-type")) {
+        return build_sum(c, n, TH_INTERSECTION, "one-type");
+    }
+
+    // Tier and pass-through productions carry one child, except the
+    // parenthesised form, whose three are ( type ).
+    if (!strcmp(name, "type") || !strcmp(name, "one-type")
+        || !strcmp(name, "base-type") || !strcmp(name, "paren-form")
+        || !strcmp(name, "record") || !strcmp(name, "type-arg")) {
+        size_t nc = ncc_tree_num_children(n);
+
+        if (nc == 1) {
+            return build(c, ncc_tree_child(n, 0));
+        }
+
+        if (nc == 3) {
+            return build(c, ncc_tree_child(n, 1));
+        }
+
+        return nullptr;
+    }
+
+    if (!strcmp(name, "named-type")) {
+        return build_named(c, n);
+    }
+    if (!strcmp(name, "tvar")) {
+        return build_tvar(c, n);
+    }
+    if (!strcmp(name, "binder")) {
+        return build_binder(c, n);
+    }
+    if (!strcmp(name, "bitint")) {
+        return build_bitint(c, n);
+    }
+    if (!strcmp(name, "indirection")) {
+        return build_indirection(c, n);
+    }
+    if (!strcmp(name, "sequence")) {
+        return build_sequence(c, n);
+    }
+    if (!strcmp(name, "anon-site")) {
+        return build_anon_site(c, n);
+    }
+    if (!strcmp(name, "tuple")) {
+        return build_tuple(c, n);
+    }
+    if (!strcmp(name, "field-body")) {
+        return build_record(c, n);
+    }
+    if (!strcmp(name, "function")) {
+        return build_function(c, n);
+    }
+
+    c->err = "typelang: unhandled production";
+
+    return nullptr;
+}
+
+// ============================================================================
+
+static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
+                    char **err)
+{
+    if (err) {
+        *err = nullptr;
+    }
+
+    ncc_grammar_t *g = load_grammar();
+
+    if (!g || !src) {
+        return nullptr;
+    }
+
+    toks t = {0};
+
+    if (!tokenize(g, src, len, &t) || !t.n) {
+        free_toks(&t);
+
+        if (err) {
+            *err = msg("cannot read a type here");
+        }
+
+        return nullptr;
+    }
+
+    ncc_token_stream_t *ts = ncc_token_stream_from_array(t.v, t.n);
+    ncc_pwz_parser_t   *p  = ncc_pwz_new(g);
+    th_type            *out = nullptr;
+    int32_t             used = 0;
+    bool                ok;
+
+    if (consumed) {
+        ok = ncc_pwz_parse_prefix(p, ts, &used);
+    }
+    else {
+        ok   = ncc_pwz_parse(p, ts);
+        used = t.n;
+    }
+
+    if (ok) {
+        bctx c = {.th = ctx, .g = g};
+
+        out = build(&c, ncc_pwz_get_tree(p));
+
+        if (!out && err) {
+            *err = msg(c.err ? c.err : "cannot build this type");
+        }
+
+        for (size_t i = 0; i < c.nfree; i++) {
+            free(c.free_vars[i].name);
+        }
+
+        free(c.free_vars);
+        free(c.binders);
+    }
+    else if (err) {
+        *err = msg("cannot parse a type here");
+    }
+
+    if (out && consumed) {
+        *consumed = used > 0 ? t.end[used - 1] : 0;
+    }
+
+    ncc_pwz_free(p);
+    ncc_token_stream_free(ts);
+    free_toks(&t);
+
+    return out;
+}
+
+th_type *ir_typelang_parse(th_ctx *ctx, const char *src, char **err)
+{
+    return src ? run(ctx, src, strlen(src), nullptr, err) : nullptr;
+}
+
+th_type *ir_typelang_parse_prefix(th_ctx *ctx, const char *src, size_t len,
+                                  size_t *consumed, char **err)
+{
+    return run(ctx, src, len, consumed, err);
+}

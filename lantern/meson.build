@@ -13,11 +13,10 @@ project(
 
 cc = meson.get_compiler('c')
 
-subdir('th')
-
 tdesc_inc = include_directories('tdesc')
 ir_inc    = include_directories('include')
 
 subdir('fe')
+subdir('th')
 subdir('src')
 subdir('test')

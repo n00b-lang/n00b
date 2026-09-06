@@ -1,3 +1,16 @@
+typelang_bnf_h = custom_target(
+    'typelang_bnf.h',
+    input: '../th/typelang.bnf',
+    output: 'typelang_bnf.h',
+    command: [
+        find_program('python3'),
+        meson.project_source_root() / 'tools' / 'embed_text.py',
+        '@INPUT@',
+        '@OUTPUT@',
+        'TYPELANG_BNF',
+    ],
+)
+
 ir_sources = files(
     'ir_analyze.c',
     'ir_annot.c',
@@ -22,11 +35,12 @@ ir_sources = files(
     'ir_rules_default.c',
     'ir_sb.c',
     'ir_span.c',
+    'ir_typelang.c',
 )
 
 ir_lib = library(
     'ir',
-    ir_sources,
+    ir_sources + [typelang_bnf_h],
     dependencies: [typehash_dep, fe_dep],
     include_directories: ir_inc,
     install: true,
