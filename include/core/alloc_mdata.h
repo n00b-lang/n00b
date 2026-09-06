@@ -97,12 +97,37 @@ static_assert(offsetof(struct n00b_oob_hdr_t, alloc_extra) % alignof(uint32_t) =
               "n00b_oob_hdr_t.alloc_extra must be aligned for atomic refcounts");
 
 // n00b_alloc_err means we couldn't find a record, but did find the allocator.
+//
+// n00b_alloc_interior_unresolvable is a NARROWER case that used to be reported
+// as n00b_alloc_err, which conflated two very different things (n00b#327). It
+// means: the caller asked to resolve an interior pointer (.scan_for_header),
+// the owning allocator keeps OOB metadata, and that allocator has no inline
+// headers -- so there is no sentinel to scan back to and no ordered index to
+// resolve the base with. The metadata dict is keyed by the exact allocation
+// address (core/oob_md_dict.h), so an interior address simply misses.
+//
+// The distinction matters because n00b_alloc_err on this path is
+// indistinguishable from "this address is in free space", which is a routine,
+// expected outcome of conservative stack scanning. A caller cannot treat the
+// two the same: free space means nothing to do, whereas an unresolvable
+// interior pointer may be the ONLY reference to a live object, and dropping it
+// lets the post-mark sweep reclaim that object out from under a live root.
+//
+// Why this is not simply fixed here: resolving it needs a "greatest base <=
+// addr" lookup, and the metadata is a hash dict with no ordering. Adding an
+// ordered index would put real cost on the GC hot path for a configuration
+// nothing in-tree creates (.alloc_refcount forces this shape; see pool.c).
+// Refusing the configuration outright is also wrong -- a pool whose objects are
+// never reached by interior pointers is fine, and test_pool_alloc.c has one.
+// So the contract is: this shape does not support interior-pointer roots, and
+// now says so explicitly instead of silently looking like free space.
 typedef enum {
     n00b_alloc_none,
     n00b_alloc_inline,
     n00b_alloc_oob,
     n00b_alloc_static_range,
     n00b_alloc_err,
+    n00b_alloc_interior_unresolvable,
 } n00b_alloc_info_kind_t;
 
 typedef struct n00b_alloc_info_t {
@@ -164,6 +189,20 @@ static inline bool
 n00b_alloc_info_is_static_range(n00b_alloc_info_t info)
 {
     return info.kind == n00b_alloc_static_range;
+}
+
+/**
+ * @brief True when an interior pointer could not be resolved because the
+ *        owning allocator has OOB metadata and no inline headers.
+ *
+ * Distinct from a plain miss: see n00b_alloc_info_kind_t. Callers doing
+ * conservative scanning should treat this as "may be a live object I cannot
+ * see", not as "free space". n00b#327.
+ */
+static inline bool
+n00b_alloc_info_is_interior_unresolvable(n00b_alloc_info_t info)
+{
+    return info.kind == n00b_alloc_interior_unresolvable;
 }
 
 static inline n00b_option_t(n00b_alloc_range_t *)
