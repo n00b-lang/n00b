@@ -73,7 +73,8 @@
 # participate in identity.
 # ----------------------------------------------------------------------------
 
-<named-type> ::= %"variant"? <qualified-name> (%"[" <type-args> %"]")?
+<named-type> ::= %"variant"? <qualified-name> <type-app>?
+<type-app>   ::= %"[" <type-args> %"]"
 
 <qualified-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
@@ -133,7 +134,8 @@
 # type admits.
 # ----------------------------------------------------------------------------
 
-<indirection> ::= <ind-name> %"[" <union-type> (%";" <ind-attrs>?)? %"]"
+<indirection> ::= <ind-name> %"[" <union-type> <ind-tail>? %"]"
+<ind-tail>    ::= %";" <ind-attrs>?
 
 <ind-name> ::= %"ptr" | %"ref" | %"mutref" | %"own" | %"gcref" | %"tmpref"
 

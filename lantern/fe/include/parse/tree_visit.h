@@ -62,6 +62,7 @@ typedef struct {
 } ncc_reduce_t;
 
 ncc_reduce_list_t *ncc_reduce_as_list(void *result);
+ncc_reduce_list_t *ncc_reduce_list_new(size_t n);
 
 typedef void *(*ncc_reduce_fn)(ncc_reduce_t *r);
 

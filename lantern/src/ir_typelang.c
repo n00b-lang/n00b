@@ -9,6 +9,7 @@
 #include "parse/bnf.h"
 #include "parse/pwz.h"
 #include "parse/tree_util.h"
+#include "parse/tree_visit.h"
 #include "internal/parse/grammar_internal.h"
 #include "scanner/token_stream.h"
 
@@ -215,6 +216,36 @@ static void free_toks(toks *t)
     free(t->end);
 }
 
+typedef enum {
+    TL_TYPE,
+    TL_NAME,
+    TL_ARG,
+    TL_MEMBER,
+    TL_PARAM,
+    TL_ATTR,
+    TL_MODE,
+    TL_INT,
+} tl_kind;
+
+typedef struct {
+    tl_kind kind;
+    union {
+        th_type   *type;
+        char      *name;
+        th_arg     arg;
+        th_member  member;
+        uint8_t    attr;
+        th_mode    mode;
+        uint64_t   u;
+        struct {
+            th_mode     mode;
+            const char *name;
+            th_type    *type;
+            bool        is_rest;
+        } param;
+    };
+} tl_node;
+
 typedef struct {
     char    *name;
     th_type *type;
@@ -239,25 +270,273 @@ typedef struct {
     size_t   cb;
 } bctx;
 
-static th_type *build(bctx *c, ncc_parse_tree_t *n);
-
-static th_type *build_tvar(bctx *c, ncc_parse_tree_t *n)
+static tl_node *node_new(bctx *c, tl_kind kind)
 {
-    ncc_tree_kids_t k = {0};
+    (void)c;
 
-    ncc_tree_kids(n, &k);
+    tl_node *n = calloc(1, sizeof(*n));
 
-    const char *name = nullptr;
+    n->kind = kind;
 
-    for (size_t i = 0; i < k.n; i++) {
-        if (ncc_tree_leaf_tid(k.v[i]) == tid_ident) {
-            name = ncc_tree_leaf_text(k.v[i]).data;
+    return n;
+}
+
+static tl_node *node_type(bctx *c, th_type *t)
+{
+    tl_node *n = node_new(c, TL_TYPE);
+
+    n->type = t;
+
+    return n;
+}
+
+static th_type *as_type(void *v)
+{
+    tl_node *n = v;
+
+    return n && n->kind == TL_TYPE ? n->type : nullptr;
+}
+
+static int32_t rule_of(ncc_parse_tree_t *n)
+{
+    return ncc_tree_is_leaf(n) ? -1 : ncc_tree_node_value(n).rule_index;
+}
+
+static tl_node *kid(ncc_reduce_t *r, size_t i)
+{
+    return i < r->n_kids ? r->kids[i] : nullptr;
+}
+
+static th_type *kid_type(ncc_reduce_t *r, size_t i)
+{
+    return as_type(kid(r, i));
+}
+
+static void *r_pass(ncc_reduce_t *r)
+{
+    return kid(r, 0);
+}
+
+static void *r_paren_form(ncc_reduce_t *r)
+{
+    return r->n_kids == 3 ? kid(r, 1) : kid(r, 0);
+}
+
+static void *r_sum(ncc_reduce_t *r, th_comb comb)
+{
+    bctx    *c    = r->user;
+    th_type *head = kid_type(r, 0);
+
+    if (r->n_kids == 1 || !head) {
+        return kid(r, 0);
+    }
+
+    ncc_reduce_list_t *rest = ncc_reduce_as_list(kid(r, 1));
+
+    if (!rest) {
+        return kid(r, 0);
+    }
+
+    th_type *arms[64];
+    size_t   n = 0;
+
+    arms[n++] = head;
+
+    for (size_t i = 0; i < rest->n && n < 64; i++) {
+        th_type *t = as_type(rest->v[i]);
+
+        if (t) {
+            arms[n++] = t;
         }
     }
 
-    ncc_tree_kids_free(&k);
+    return node_type(c, n == 1 ? arms[0] : th_sum(c->th, comb, arms, n));
+}
 
-    if (!name) {
+static void *r_union(ncc_reduce_t *r)
+{
+    return r_sum(r, TH_UNION);
+}
+
+static void *r_isect(ncc_reduce_t *r)
+{
+    return r_sum(r, TH_INTERSECTION);
+}
+
+static void *r_qualified_name(ncc_reduce_t *r)
+{
+    bctx  *c = r->user;
+    char   buf[512];
+    size_t len = 0;
+
+    ncc_string_t first = ncc_tree_leaf_text(ncc_tree_child(r->node, 0));
+
+    if (first.data) {
+        len = first.u8_bytes < sizeof(buf) ? first.u8_bytes : 0;
+        memcpy(buf, first.data, len);
+    }
+
+    ncc_reduce_list_t *rest = ncc_reduce_as_list(kid(r, 1));
+
+    if (rest) {
+        for (size_t i = 0; i < rest->n; i++) {
+            tl_node *part = rest->v[i];
+
+            if (!part || part->kind != TL_NAME) {
+                continue;
+            }
+
+            size_t pl = strlen(part->name);
+
+            if (len + pl + 1 >= sizeof(buf)) {
+                break;
+            }
+
+            buf[len++] = '.';
+            memcpy(buf + len, part->name, pl);
+            len += pl;
+        }
+    }
+
+    buf[len]     = 0;
+
+    tl_node *n = node_new(c, TL_NAME);
+
+    n->name = strdup(buf);
+
+    return n;
+}
+
+static void *r_type_arg(ncc_reduce_t *r)
+{
+    bctx    *c    = r->user;
+    tl_node *n    = node_new(c, TL_ARG);
+    tl_node *only = kid(r, 0);
+
+    if (only && only->kind == TL_INT) {
+        n->arg.kind = TH_ARG_UINT;
+        n->arg.u    = only->u;
+
+        return n;
+    }
+
+    if (only && only->kind == TL_NAME) {
+        n->arg.kind  = TH_ARG_STR;
+        n->arg.str.p = only->name;
+        n->arg.str.n = strlen(only->name);
+
+        return n;
+    }
+
+    n->arg.kind = TH_ARG_TYPE;
+    n->arg.type = as_type(only);
+
+    return n;
+}
+
+static size_t collect_args(ncc_reduce_t *r, th_arg *out, size_t max)
+{
+    size_t   n     = 0;
+    tl_node *first = kid(r, 0);
+
+    if (first && first->kind == TL_ARG && n < max) {
+        out[n++] = first->arg;
+    }
+
+    ncc_reduce_list_t *rest = ncc_reduce_as_list(kid(r, 1));
+
+    if (rest) {
+        for (size_t i = 0; i < rest->n && n < max; i++) {
+            tl_node *a = rest->v[i];
+
+            if (a && a->kind == TL_ARG) {
+                out[n++] = a->arg;
+            }
+        }
+    }
+
+    return n;
+}
+
+static void *r_type_app(ncc_reduce_t *r)
+{
+    return kid(r, 1);
+}
+
+static void *r_named_type(ncc_reduce_t *r)
+{
+    bctx    *c       = r->user;
+    tl_node *nm      = nullptr;
+    bool     variant = false;
+    size_t   at      = 0;
+
+    ncc_reduce_list_t *lead = ncc_reduce_as_list(kid(r, 0));
+
+    if (lead) {
+        variant = lead->n > 0;
+        at      = 1;
+    }
+
+    nm = kid(r, at);
+
+    if (!nm || nm->kind != TL_NAME) {
+        c->err = "a named type needs a name";
+
+        return nullptr;
+    }
+
+    th_arg args[64];
+    size_t nargs = 0;
+
+    ncc_reduce_list_t *app = ncc_reduce_as_list(kid(r, at + 1));
+
+    for (size_t i = 0; app && i < app->n; i++) {
+        ncc_reduce_list_t *list = ncc_reduce_as_list(app->v[i]);
+
+        for (size_t j = 0; list && j < list->n && nargs < 64; j++) {
+            tl_node *a = list->v[j];
+
+            if (a && a->kind == TL_ARG) {
+                args[nargs++] = a->arg;
+            }
+        }
+    }
+
+    if (variant) {
+        return node_type(c, th_variant(c->th, nm->name, args, nargs));
+    }
+
+    return node_type(c, nargs ? th_apply(c->th, nm->name, args, nargs)
+                              : th_name(c->th, nm->name));
+}
+
+static void *r_type_args(ncc_reduce_t *r)
+{
+    bctx    *c = r->user;
+    th_arg   args[64];
+    size_t   n = collect_args(r, args, 64);
+    tl_node *out = node_new(c, TL_ARG);
+
+    ncc_reduce_list_t *list = ncc_reduce_list_new(n);
+
+    for (size_t i = 0; i < n; i++) {
+        tl_node *a = node_new(c, TL_ARG);
+
+        a->arg     = args[i];
+        list->v[i] = a;
+    }
+
+    free(out);
+
+    return list;
+}
+
+static void *r_tvar(ncc_reduce_t *r)
+{
+    bctx        *c    = r->user;
+    ncc_string_t name = ncc_tree_leaf_text(ncc_tree_child(r->node, 1));
+
+    if (!name.data) {
         c->err = "a type variable needs a name";
 
         return nullptr;
@@ -265,15 +544,15 @@ static th_type *build_tvar(bctx *c, ncc_parse_tree_t *n)
 
     for (size_t d = c->nb; d > 0; d--) {
         for (size_t i = 0; i < c->binders[d - 1].n; i++) {
-            if (!strcmp(c->binders[d - 1].names[i], name)) {
-                return th_bound(c->th, c->nb - d + 1, i);
+            if (!strcmp(c->binders[d - 1].names[i], name.data)) {
+                return node_type(c, th_bound(c->th, c->nb - d + 1, i));
             }
         }
     }
 
     for (size_t i = 0; i < c->nfree; i++) {
-        if (!strcmp(c->free_vars[i].name, name)) {
-            return c->free_vars[i].type;
+        if (!strcmp(c->free_vars[i].name, name.data)) {
+            return node_type(c, c->free_vars[i].type);
         }
     }
 
@@ -284,46 +563,48 @@ static th_type *build_tvar(bctx *c, ncc_parse_tree_t *n)
 
     th_type *t = th_var(c->th);
 
-    c->free_vars[c->nfree].name = strdup(name);
+    c->free_vars[c->nfree].name = strdup(name.data);
     c->free_vars[c->nfree].type = t;
     c->nfree++;
 
-    return t;
+    return node_type(c, t);
 }
 
-static th_type *build_binder(bctx *c, ncc_parse_tree_t *n)
+static void collect_tvar_names(ncc_grammar_t *g, ncc_parse_tree_t *n,
+                               char **names, size_t *count, size_t max)
 {
-    ncc_tree_kids_t k = {0};
-
-    ncc_tree_kids(n, &k);
-
-    char  *names[64];
-    size_t nn = 0;
-
-    for (size_t i = 0; i < k.n; i++) {
-        if (!ncc_tree_is_nt(c->g, k.v[i], "tvar")) {
-            continue;
-        }
-
-        ncc_tree_kids_t v = {0};
-
-        ncc_tree_kids(k.v[i], &v);
-
-        for (size_t j = 0; j < v.n; j++) {
-            if (ncc_tree_leaf_tid(v.v[j]) == tid_ident && nn < 64) {
-                names[nn++] = strdup(ncc_tree_leaf_text(v.v[j]).data);
-            }
-        }
-
-        ncc_tree_kids_free(&v);
+    if (!n || ncc_tree_is_leaf(n)) {
+        return;
     }
 
-    if (!nn) {
-        c->err = "forall needs at least one type variable";
-        ncc_tree_kids_free(&k);
-
-        return nullptr;
+    if (ncc_tree_is_nt(g, n, "one-type")) {
+        return;
     }
+
+    if (ncc_tree_is_nt(g, n, "tvar")) {
+        ncc_string_t s = ncc_tree_leaf_text(ncc_tree_child(n, 1));
+
+        if (s.data && *count < max) {
+            names[(*count)++] = strdup(s.data);
+        }
+
+        return;
+    }
+
+    size_t nc = ncc_tree_num_children(n);
+
+    for (size_t i = 0; i < nc; i++) {
+        collect_tvar_names(g, ncc_tree_child(n, i), names, count, max);
+    }
+}
+
+static bool binder_open(ncc_visit_t *v)
+{
+    bctx  *c = v->user;
+    char **names = calloc(64, sizeof(char *));
+    size_t n     = 0;
+
+    collect_tvar_names(v->grammar, v->node, names, &n, 64);
 
     if (c->nb >= c->cb) {
         c->cb      = c->cb ? c->cb * 2 : 4;
@@ -331,46 +612,94 @@ static th_type *build_binder(bctx *c, ncc_parse_tree_t *n)
     }
 
     c->binders[c->nb].names = names;
-    c->binders[c->nb].n     = nn;
+    c->binders[c->nb].n     = n;
     c->nb++;
 
-    th_type *body = nullptr;
-
-    for (size_t i = 0; i < k.n; i++) {
-        if (ncc_tree_is_nt(c->g, k.v[i], "one-type")) {
-            body = build(c, k.v[i]);
-        }
-    }
-
-    c->nb--;
-
-    for (size_t i = 0; i < nn; i++) {
-        free(names[i]);
-    }
-
-    ncc_tree_kids_free(&k);
-
-    return body ? th_binder(c->th, nn, body) : nullptr;
+    return true;
 }
 
-static th_type *build_bitint(bctx *c, ncc_parse_tree_t *n)
+static void *r_binder(ncc_reduce_t *r)
 {
-    ncc_tree_kids_t k = {0};
+    bctx    *c    = r->user;
+    th_type *body = kid_type(r, r->n_kids - 1);
+    size_t   n    = c->nb ? c->binders[c->nb - 1].n : 0;
 
-    ncc_tree_kids(n, &k);
+    if (c->nb) {
+        for (size_t i = 0; i < n; i++) {
+            free(c->binders[c->nb - 1].names[i]);
+        }
 
-    bool     is_signed = ncc_tree_leaf_is(k.v[0], "bitint");
-    uint64_t width     = 0;
+        free(c->binders[c->nb - 1].names);
+        c->nb--;
+    }
 
-    for (size_t i = 0; i < k.n; i++) {
-        if (ncc_tree_leaf_tid(k.v[i]) == tid_int) {
-            width = strtoull(ncc_tree_leaf_text(k.v[i]).data, nullptr, 10);
+    if (!body) {
+        c->err = "forall needs a body";
+
+        return nullptr;
+    }
+
+    return node_type(c, th_binder(c->th, n, body));
+}
+
+static void *r_bitint(ncc_reduce_t *r)
+{
+    bctx    *c        = r->user;
+    bool     is_signed = ncc_tree_leaf_is(ncc_tree_child(r->node, 0), "bitint");
+    tl_node *width     = kid(r, 2);
+
+    return node_type(c, th_bitint(c->th, width ? width->u : 0, is_signed));
+}
+
+static void *r_ind_attr(ncc_reduce_t *r)
+{
+    static const struct {
+        const char *name;
+        uint8_t     bit;
+    } map[] = {
+        {"nullable",   TH_NULLABLE  },
+        {"reseatable", TH_RESEATABLE},
+        {"indexable",  TH_INDEXABLE },
+        {"owning",     TH_OWNING    },
+        {"exclusive",  TH_EXCLUSIVE },
+        {"temporary",  TH_TEMPORARY },
+    };
+
+    bctx        *c = r->user;
+    ncc_string_t s = ncc_tree_leaf_text(ncc_tree_child(r->node, 0));
+    tl_node     *n = node_new(c, TL_ATTR);
+
+    for (size_t i = 0; s.data && i < sizeof(map) / sizeof(map[0]); i++) {
+        if (!strcmp(s.data, map[i].name)) {
+            n->attr = map[i].bit;
+            break;
         }
     }
 
-    ncc_tree_kids_free(&k);
+    return n;
+}
 
-    return th_bitint(c->th, width, is_signed);
+static void *r_ind_attrs(ncc_reduce_t *r)
+{
+    bctx    *c = r->user;
+    tl_node *n = node_new(c, TL_ATTR);
+    tl_node *first = kid(r, 0);
+
+    n->attr = first && first->kind == TL_ATTR ? first->attr : 0;
+
+    ncc_reduce_list_t *rest = ncc_reduce_as_list(kid(r, 1));
+
+    if (rest) {
+        for (size_t i = 0; i < rest->n; i++) {
+            tl_node *a = rest->v[i];
+
+            if (a && a->kind == TL_ATTR) {
+                n->attr |= a->attr;
+            }
+        }
+    }
+
+    return n;
 }
 
 static uint8_t sugar_attrs(const char *w)
@@ -394,624 +723,430 @@ static uint8_t sugar_attrs(const char *w)
     return 0;
 }
 
-static bool attr_bit(const char *w, uint8_t *out)
+static void *r_ind_tail(ncc_reduce_t *r)
 {
-    static const struct {
-        const char *name;
-        uint8_t     bit;
-    } map[] = {
-        {"nullable",   TH_NULLABLE  },
-        {"reseatable", TH_RESEATABLE},
-        {"indexable",  TH_INDEXABLE },
-        {"owning",     TH_OWNING    },
-        {"exclusive",  TH_EXCLUSIVE },
-        {"temporary",  TH_TEMPORARY },
-    };
+    bctx              *c    = r->user;
+    ncc_reduce_list_t *opt  = ncc_reduce_as_list(kid(r, 1));
+    tl_node           *n    = node_new(c, TL_ATTR);
 
-    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
-        if (!strcmp(w, map[i].name)) {
-            *out = map[i].bit;
+    for (size_t i = 0; opt && i < opt->n; i++) {
+        tl_node *a = opt->v[i];
 
-            return true;
+        if (a && a->kind == TL_ATTR) {
+            n->attr |= a->attr;
         }
     }
 
-    return false;
+    return n;
 }
 
-static th_type *build_indirection(bctx *c, ncc_parse_tree_t *n)
+static void *r_indirection(ncc_reduce_t *r)
 {
-    ncc_tree_kids_t k = {0};
-
-    ncc_tree_kids(n, &k);
-
-    const char *sugar    = nullptr;
-    uint8_t     attrs    = 0;
-    bool        explicit = false;
-    th_type    *referent = nullptr;
-
-    for (size_t i = 0; i < k.n; i++) {
-        if (ncc_tree_is_nt(c->g, k.v[i], "ind-name")) {
-            ncc_tree_kids_t s = {0};
-
-            ncc_tree_kids(k.v[i], &s);
-            sugar = s.n ? ncc_tree_leaf_text(s.v[0]).data : nullptr;
-            ncc_tree_kids_free(&s);
-            continue;
-        }
-
-        if (ncc_tree_is_nt(c->g, k.v[i], "union-type")) {
-            referent = build(c, k.v[i]);
-            continue;
-        }
-
-        if (ncc_tree_is_nt(c->g, k.v[i], "ind-attrs")) {
-            ncc_tree_kids_t a = {0};
-
-            ncc_tree_kids(k.v[i], &a);
-            explicit = true;
-
-            for (size_t j = 0; j < a.n; j++) {
-                ncc_tree_kids_t one = {0};
-
-                ncc_tree_kids(a.v[j], &one);
-
-                for (size_t m = 0; m < one.n; m++) {
-                    const char *t = ncc_tree_leaf_text(one.v[m]).data;
-                    uint8_t     b;
-
-                    if (t && attr_bit(t, &b)) {
-                        attrs |= b;
-                    }
-                }
-
-                ncc_tree_kids_free(&one);
-            }
-
-            ncc_tree_kids_free(&a);
-        }
-    }
-
-    ncc_tree_kids_free(&k);
+    bctx        *c    = r->user;
+    ncc_string_t name = ncc_tree_leaf_text(
+        ncc_tree_child(ncc_tree_child(r->node, 0), 0));
+    th_type *referent = kid_type(r, 2);
 
     if (!referent) {
-        c->err = c->err ? c->err : "an indirection needs a referent";
+        c->err = "an indirection needs a referent";
 
         return nullptr;
     }
 
-    if (!explicit && sugar) {
-        attrs = sugar_attrs(sugar);
+    uint8_t            attrs = name.data ? sugar_attrs(name.data) : 0;
+    ncc_reduce_list_t *tail  = ncc_reduce_as_list(kid(r, 3));
+
+    for (size_t i = 0; tail && i < tail->n; i++) {
+        tl_node *a = tail->v[i];
+
+        if (a && a->kind == TL_ATTR) {
+            attrs = a->attr;
+        }
     }
 
-    return th_ind(c->th, attrs, referent);
+    return node_type(c, th_ind(c->th, attrs, referent));
 }
 
-static th_type *build_sequence(bctx *c, ncc_parse_tree_t *n)
+static void *r_sequence(ncc_reduce_t *r)
 {
-    ncc_tree_kids_t k = {0};
-
-    ncc_tree_kids(n, &k);
-
-    th_type *elem   = nullptr;
-    bool     sized  = false;
-    uint64_t extent = 0;
-
-    for (size_t i = 0; i < k.n; i++) {
-        if (ncc_tree_is_nt(c->g, k.v[i], "union-type")) {
-            elem = build(c, k.v[i]);
-        }
-        else if (ncc_tree_leaf_tid(k.v[i]) == tid_int) {
-            sized  = true;
-            extent = strtoull(ncc_tree_leaf_text(k.v[i]).data, nullptr, 10);
-        }
-    }
-
-    ncc_tree_kids_free(&k);
+    bctx    *c    = r->user;
+    th_type *elem = kid_type(r, 2);
 
     if (!elem) {
         return nullptr;
     }
 
-    return sized ? th_array_n(c->th, elem, extent) : th_array(c->th, elem);
-}
+    ncc_reduce_list_t *tail = ncc_reduce_as_list(kid(r, 3));
 
-static th_type *build_anon_site(bctx *c, ncc_parse_tree_t *n)
-{
-    ncc_tree_kids_t k = {0};
+    if (tail) {
+        for (size_t i = 0; i < tail->n; i++) {
+            tl_node *e = tail->v[i];
 
-    ncc_tree_kids(n, &k);
-
-    const char *path = nullptr;
-    uint64_t    nums[2] = {0, 0};
-    size_t      nn      = 0;
-
-    for (size_t i = 0; i < k.n; i++) {
-        if (ncc_tree_leaf_tid(k.v[i]) == tid_str) {
-            path = ncc_tree_leaf_text(k.v[i]).data;
-        }
-        else if (ncc_tree_leaf_tid(k.v[i]) == tid_int && nn < 2) {
-            nums[nn++] = strtoull(ncc_tree_leaf_text(k.v[i]).data, nullptr, 10);
+            if (e && e->kind == TL_INT) {
+                return node_type(c, th_array_n(c->th, elem, e->u));
+            }
         }
     }
 
-    ncc_tree_kids_free(&k);
+    return node_type(c, th_array(c->th, elem));
+}
 
-    if (!path || nn != 2) {
+static void *r_anon_site(ncc_reduce_t *r)
+{
+    bctx        *c    = r->user;
+    ncc_string_t path = ncc_tree_leaf_text(ncc_tree_child(r->node, 1));
+    tl_node     *line = kid(r, 3);
+    tl_node     *col  = kid(r, 5);
+
+    if (!path.data || !line || !col) {
         c->err = "an anonymous site needs a path, a line and a column";
 
         return nullptr;
     }
 
-    return th_name(c->th, th_anon_name(c->th, path, nums[0], nums[1]));
+    return node_type(c, th_name(c->th,
+                                th_anon_name(c->th, path.data, line->u,
+                                             col->u)));
 }
 
-static th_type *build_record(bctx *c, ncc_parse_tree_t *n)
+static void *r_field(ncc_reduce_t *r)
 {
-    ncc_tree_kids_t k = {0};
+    bctx        *c    = r->user;
+    ncc_string_t name = ncc_tree_leaf_text(ncc_tree_child(r->node, 0));
+    th_type     *type = kid_type(r, 2);
 
-    ncc_tree_kids(n, &k);
+    if (!name.data || !type) {
+        c->err = "a field needs a name and a type";
 
-    th_member members[64];
-    size_t    nm = 0;
-
-    for (size_t i = 0; i < k.n && nm < 64; i++) {
-        if (!ncc_tree_is_nt(c->g, k.v[i], "field-list")) {
-            continue;
-        }
-
-        ncc_tree_kids_t fl = {0};
-
-        ncc_tree_kids(k.v[i], &fl);
-
-        for (size_t j = 0; j < fl.n && nm < 64; j++) {
-            if (!ncc_tree_is_nt(c->g, fl.v[j], "field")) {
-                continue;
-            }
-
-            ncc_tree_kids_t f = {0};
-
-            ncc_tree_kids(fl.v[j], &f);
-
-            const char *name = nullptr;
-            th_type    *type = nullptr;
-
-            for (size_t m = 0; m < f.n; m++) {
-                if (ncc_tree_leaf_tid(f.v[m]) == tid_ident) {
-                    name = ncc_tree_leaf_text(f.v[m]).data;
-                }
-                else if (ncc_tree_is_nt(c->g, f.v[m], "union-type")) {
-                    type = build(c, f.v[m]);
-                }
-            }
-
-            ncc_tree_kids_free(&f);
-
-            if (!name || !type) {
-                ncc_tree_kids_free(&fl);
-                ncc_tree_kids_free(&k);
-
-                return nullptr;
-            }
-
-            members[nm].name = name;
-            members[nm].type = type;
-            nm++;
-        }
-
-        ncc_tree_kids_free(&fl);
+        return nullptr;
     }
 
-    ncc_tree_kids_free(&k);
+    tl_node *n = node_new(c, TL_MEMBER);
 
-    return th_record(c->th, members, nm);
+    n->member.name = strdup(name.data);
+    n->member.type = type;
+
+    return n;
 }
 
-static th_type *build_tuple(bctx *c, ncc_parse_tree_t *n)
+static size_t collect(ncc_reduce_t *r, tl_kind want, tl_node **out, size_t max)
 {
-    ncc_tree_kids_t k = {0};
+    size_t   n     = 0;
+    tl_node *first = kid(r, 0);
 
-    ncc_tree_kids(n, &k);
+    if (first && first->kind == want && n < max) {
+        out[n++] = first;
+    }
 
+    ncc_reduce_list_t *rest = ncc_reduce_as_list(kid(r, 1));
+
+    if (rest) {
+        for (size_t i = 0; i < rest->n && n < max; i++) {
+            tl_node *e = rest->v[i];
+
+            if (e && e->kind == want) {
+                out[n++] = e;
+            }
+        }
+    }
+
+    return n;
+}
+
+static void *r_field_list(ncc_reduce_t *r)
+{
+    tl_node           *got[64];
+    size_t             n    = collect(r, TL_MEMBER, got, 64);
+    ncc_reduce_list_t *list = ncc_reduce_list_new(n);
+
+    for (size_t i = 0; i < n; i++) {
+        list->v[i] = got[i];
+    }
+
+    return list;
+}
+
+static void *r_field_body(ncc_reduce_t *r)
+{
+    bctx      *c = r->user;
+    th_member  members[64];
+    size_t     nm = 0;
+
+    ncc_reduce_list_t *fields = r->n_kids == 3
+                                  ? ncc_reduce_as_list(kid(r, 1))
+                                  : nullptr;
+
+    if (fields) {
+        for (size_t i = 0; i < fields->n && nm < 64; i++) {
+            tl_node *f = fields->v[i];
+
+            if (f && f->kind == TL_MEMBER) {
+                members[nm++] = f->member;
+            }
+        }
+    }
+
+    return node_type(c, th_record(c->th, members, nm));
+}
+
+static void *r_tuple(ncc_reduce_t *r)
+{
+    bctx    *c = r->user;
     th_type *elems[64];
     size_t   ne = 0;
 
-    for (size_t i = 0; i < k.n && ne < 64; i++) {
-        if (!ncc_tree_is_nt(c->g, k.v[i], "union-type")) {
-            continue;
+    ncc_reduce_list_t *inner = ncc_reduce_as_list(kid(r, 2));
+
+    if (inner) {
+        for (size_t i = 0; i < inner->n && ne < 64; i++) {
+            th_type *t = as_type(inner->v[i]);
+
+            if (t) {
+                elems[ne++] = t;
+            }
+
+            ncc_reduce_list_t *more = ncc_reduce_as_list(inner->v[i]);
+
+            for (size_t j = 0; more && j < more->n && ne < 64; j++) {
+                th_type *u = as_type(more->v[j]);
+
+                if (u) {
+                    elems[ne++] = u;
+                }
+            }
         }
-
-        th_type *t = build(c, k.v[i]);
-
-        if (!t) {
-            ncc_tree_kids_free(&k);
-
-            return nullptr;
-        }
-
-        elems[ne++] = t;
     }
 
-    ncc_tree_kids_free(&k);
-
-    return th_tuple(c->th, elems, ne);
+    return node_type(c, th_tuple(c->th, elems, ne));
 }
 
-static bool read_mode(bctx *c, ncc_parse_tree_t *n, th_mode *m)
+static void *r_mode(ncc_reduce_t *r)
 {
-    if (!ncc_tree_is_nt(c->g, n, "mode")) {
-        return false;
-    }
+    bctx        *c = r->user;
+    ncc_string_t s = ncc_tree_leaf_text(ncc_tree_child(r->node, 0));
+    tl_node     *n = node_new(c, TL_MODE);
 
-    ncc_tree_kids_t k = {0};
+    n->mode = s.data && !strcmp(s.data, "out")     ? TH_OUT
+            : s.data && !strcmp(s.data, "inout")   ? TH_INOUT
+                                                   : TH_IN;
 
-    ncc_tree_kids(n, &k);
-
-    const char *t = k.n ? ncc_tree_leaf_text(k.v[0]).data : nullptr;
-
-    ncc_tree_kids_free(&k);
-
-    if (!t) {
-        return false;
-    }
-
-    *m = !strcmp(t, "out") ? TH_OUT : !strcmp(t, "inout") ? TH_INOUT : TH_IN;
-
-    return true;
+    return n;
 }
 
-static bool build_param(bctx *c, ncc_parse_tree_t *n, th_param *pos,
-                        th_param *rest, th_kwparam *kw, int *which)
+static void *r_rest_param(ncc_reduce_t *r)
 {
-    ncc_tree_kids_t k = {0};
+    bctx    *c = r->user;
+    tl_node *n = node_new(c, TL_PARAM);
 
-    ncc_tree_kids(n, &k);
+    n->param.is_rest = true;
+    n->param.type    = kid_type(r, 1);
 
-    th_mode     mode = TH_IN;
-    const char *name = nullptr;
-    th_type    *type = nullptr;
-    bool        is_rest = false;
+    return n;
+}
 
-    for (size_t i = 0; i < k.n; i++) {
-        th_mode m;
+static void *r_param(ncc_reduce_t *r)
+{
+    bctx    *c    = r->user;
+    tl_node *n    = node_new(c, TL_PARAM);
+    th_mode  mode = TH_IN;
 
-        if (read_mode(c, k.v[i], &m)) {
-            mode = m;
-            continue;
-        }
+    for (size_t i = 0; i < r->n_kids; i++) {
+        ncc_reduce_list_t *opt = ncc_reduce_as_list(kid(r, i));
 
-        if (ncc_tree_is_nt(c->g, k.v[i], "rest-param")) {
-            ncc_tree_kids_t r = {0};
+        if (opt) {
+            for (size_t j = 0; j < opt->n; j++) {
+                tl_node *m = opt->v[j];
 
-            ncc_tree_kids(k.v[i], &r);
-            is_rest = true;
-
-            for (size_t j = 0; j < r.n; j++) {
-                if (ncc_tree_is_nt(c->g, r.v[j], "union-type")) {
-                    type = build(c, r.v[j]);
+                if (m && m->kind == TL_MODE) {
+                    mode = m->mode;
                 }
             }
 
-            ncc_tree_kids_free(&r);
             continue;
         }
 
-        if (ncc_tree_leaf_tid(k.v[i]) == tid_ident) {
-            name = ncc_tree_leaf_text(k.v[i]).data;
+        tl_node *k = kid(r, i);
+
+        if (!k) {
             continue;
         }
 
-        if (ncc_tree_is_nt(c->g, k.v[i], "union-type")) {
-            type = build(c, k.v[i]);
+        if (k->kind == TL_MODE) {
+            mode = k->mode;
+        }
+        else if (k->kind == TL_PARAM) {
+            n->param = k->param;
+        }
+        else if (k->kind == TL_TYPE) {
+            n->param.type = k->type;
         }
     }
 
-    ncc_tree_kids_free(&k);
+    ncc_string_t named = ncc_tree_leaf_text(ncc_tree_child(r->node, 0));
 
-    if (!type) {
-        return false;
-    }
+    if (rule_of(r->node) == 1) {
+        for (size_t i = 0; i < ncc_tree_num_children(r->node); i++) {
+            ncc_string_t s = ncc_tree_leaf_text(ncc_tree_child(r->node, i));
 
-    if (is_rest) {
-        rest->mode = mode;
-        rest->type = type;
-        *which     = 1;
-    }
-    else if (name) {
-        kw->name = name;
-        kw->mode = mode;
-        kw->type = type;
-        *which   = 2;
-    }
-    else {
-        pos->mode = mode;
-        pos->type = type;
-        *which    = 0;
+            if (s.data && ncc_tree_leaf_tid(ncc_tree_child(r->node, i))
+                              == tid_ident) {
+                named = s;
+                break;
+            }
+        }
+
+        n->param.name = named.data ? strdup(named.data) : nullptr;
     }
 
-    return true;
+    n->param.mode = mode;
+
+    return n;
 }
 
-static th_type *build_function(bctx *c, ncc_parse_tree_t *n)
+static void *r_param_list(ncc_reduce_t *r)
 {
-    ncc_tree_kids_t k = {0};
+    tl_node           *got[64];
+    size_t             n    = collect(r, TL_PARAM, got, 64);
+    ncc_reduce_list_t *list = ncc_reduce_list_new(n);
 
-    ncc_tree_kids(n, &k);
+    for (size_t i = 0; i < n; i++) {
+        list->v[i] = got[i];
+    }
 
+    return list;
+}
+
+static void *r_function(ncc_reduce_t *r)
+{
+    bctx      *c = r->user;
     th_param   params[64];
     th_kwparam kws[64];
     th_param   rest      = {0};
     bool       have_rest = false;
     size_t     np        = 0;
     size_t     nkw       = 0;
-    th_type   *ret       = nullptr;
 
-    for (size_t i = 0; i < k.n; i++) {
-        if (ncc_tree_is_nt(c->g, k.v[i], "param-list")) {
-            ncc_tree_kids_t pl = {0};
+    ncc_reduce_list_t *opt = ncc_reduce_as_list(kid(r, 1));
 
-            ncc_tree_kids(k.v[i], &pl);
+    if (opt) {
+        for (size_t i = 0; i < opt->n; i++) {
+            ncc_reduce_list_t *pl = ncc_reduce_as_list(opt->v[i]);
 
-            for (size_t j = 0; j < pl.n; j++) {
-                if (!ncc_tree_is_nt(c->g, pl.v[j], "param")) {
+            for (size_t j = 0; pl && j < pl->n; j++) {
+                tl_node *p = pl->v[j];
+
+                if (!p || p->kind != TL_PARAM) {
                     continue;
                 }
 
-                th_param   p = {0};
-                th_param   r = {0};
-                th_kwparam w = {0};
-                int        which;
-
-                if (!build_param(c, pl.v[j], &p, &r, &w, &which)) {
-                    ncc_tree_kids_free(&pl);
-                    ncc_tree_kids_free(&k);
-
-                    return nullptr;
-                }
-
-                if (which == 0 && np < 64) {
-                    params[np++] = p;
-                }
-                else if (which == 1) {
-                    rest      = r;
+                if (p->param.is_rest) {
+                    rest.mode = p->param.mode;
+                    rest.type = p->param.type;
                     have_rest = true;
                 }
-                else if (which == 2 && nkw < 64) {
-                    kws[nkw++] = w;
+                else if (p->param.name && nkw < 64) {
+                    kws[nkw].name = p->param.name;
+                    kws[nkw].mode = p->param.mode;
+                    kws[nkw].type = p->param.type;
+                    nkw++;
+                }
+                else if (np < 64) {
+                    params[np].mode = p->param.mode;
+                    params[np].type = p->param.type;
+                    np++;
                 }
             }
-
-            ncc_tree_kids_free(&pl);
-            continue;
-        }
-
-        if (ncc_tree_is_nt(c->g, k.v[i], "union-type")) {
-            ret = build(c, k.v[i]);
         }
     }
 
-    ncc_tree_kids_free(&k);
+    th_type *ret = kid_type(r, r->n_kids - 1);
 
     if (!ret) {
-        return nullptr;
-    }
-
-    return th_func(c->th, ret, params, np, have_rest ? &rest : nullptr, kws,
-                   nkw);
-}
-
-static th_type *build_named(bctx *c, ncc_parse_tree_t *n)
-{
-    ncc_tree_kids_t k = {0};
-
-    ncc_tree_kids(n, &k);
-
-    bool   variant = k.n && ncc_tree_leaf_is(k.v[0], "variant");
-    char   name[512];
-    size_t len = 0;
-
-    for (size_t i = 0; i < k.n; i++) {
-        if (!ncc_tree_is_nt(c->g, k.v[i], "qualified-name")) {
-            continue;
-        }
-
-        ncc_tree_kids_t q = {0};
-
-        ncc_tree_kids(k.v[i], &q);
-
-        for (size_t j = 0; j < q.n; j++) {
-            const char *part = ncc_tree_leaf_text(q.v[j]).data;
-            size_t      pl   = part ? strlen(part) : 0;
-
-            if (!pl || len + pl + 1 >= sizeof(name)) {
-                continue;
-            }
-
-            memcpy(name + len, part, pl);
-            len += pl;
-        }
-
-        ncc_tree_kids_free(&q);
-        break;
-    }
-
-    name[len] = 0;
-
-    th_arg args[64];
-    size_t nargs = 0;
-
-    for (size_t i = 0; i < k.n; i++) {
-        if (!ncc_tree_is_nt(c->g, k.v[i], "type-args")) {
-            continue;
-        }
-
-        ncc_tree_kids_t a = {0};
-
-        ncc_tree_kids(k.v[i], &a);
-
-        for (size_t j = 0; j < a.n && nargs < 64; j++) {
-            if (!ncc_tree_is_nt(c->g, a.v[j], "type-arg")) {
-                continue;
-            }
-
-            ncc_tree_kids_t one = {0};
-
-            ncc_tree_kids(a.v[j], &one);
-
-            ncc_parse_tree_t *sole = one.n == 1 ? one.v[0] : nullptr;
-
-            ncc_tree_kids_free(&one);
-
-            if (!sole) {
-                continue;
-            }
-
-            if (ncc_tree_leaf_tid(sole) == tid_int) {
-                args[nargs].kind = TH_ARG_UINT;
-                args[nargs].u    = strtoull(ncc_tree_leaf_text(sole).data, nullptr, 10);
-                nargs++;
-                continue;
-            }
-
-            if (ncc_tree_leaf_tid(sole) == tid_str) {
-                const char *s = ncc_tree_leaf_text(sole).data;
-
-                args[nargs].kind    = TH_ARG_STR;
-                args[nargs].str.p   = s;
-                args[nargs].str.n   = strlen(s);
-                nargs++;
-                continue;
-            }
-
-            th_type *t = build(c, sole);
-
-            if (!t) {
-                ncc_tree_kids_free(&a);
-                ncc_tree_kids_free(&k);
-
-                return nullptr;
-            }
-
-            args[nargs].kind = TH_ARG_TYPE;
-            args[nargs].type = t;
-            nargs++;
-        }
-
-        ncc_tree_kids_free(&a);
-    }
-
-    ncc_tree_kids_free(&k);
-
-    if (variant) {
-        return th_variant(c->th, name, args, nargs);
-    }
-
-    return nargs ? th_apply(c->th, name, args, nargs) : th_name(c->th, name);
-}
-
-static th_type *build_sum(bctx *c, ncc_parse_tree_t *n, th_comb comb,
-                          const char *arm_nt)
-{
-    ncc_tree_kids_t k = {0};
-
-    ncc_tree_kids(n, &k);
-
-    th_type *arms[64];
-    size_t   na = 0;
-
-    for (size_t i = 0; i < k.n && na < 64; i++) {
-        if (!ncc_tree_is_nt(c->g, k.v[i], arm_nt)) {
-            continue;
-        }
-
-        th_type *t = build(c, k.v[i]);
-
-        if (!t) {
-            ncc_tree_kids_free(&k);
-
-            return nullptr;
-        }
-
-        arms[na++] = t;
-    }
-
-    ncc_tree_kids_free(&k);
-
-    if (na == 1) {
-        return arms[0];
-    }
-
-    return th_sum(c->th, comb, arms, na);
-}
-
-static th_type *build(bctx *c, ncc_parse_tree_t *n)
-{
-    const char *name = ncc_tree_nt_name(c->g, n);
-
-    if (!name) {
-        return nullptr;
-    }
-
-    if (!strcmp(name, "union-type")) {
-        return build_sum(c, n, TH_UNION, "isect-type");
-    }
-
-    if (!strcmp(name, "isect-type")) {
-        return build_sum(c, n, TH_INTERSECTION, "one-type");
-    }
-
-    if (!strcmp(name, "type") || !strcmp(name, "one-type")
-        || !strcmp(name, "base-type") || !strcmp(name, "paren-form")
-        || !strcmp(name, "record") || !strcmp(name, "type-arg")) {
-        size_t nc = ncc_tree_num_children(n);
-
-        if (nc == 1) {
-            return build(c, ncc_tree_child(n, 0));
-        }
-
-        if (nc == 3) {
-            return build(c, ncc_tree_child(n, 1));
-        }
+        c->err = "a function needs a return type";
 
         return nullptr;
     }
 
-    if (!strcmp(name, "named-type")) {
-        return build_named(c, n);
-    }
-    if (!strcmp(name, "tvar")) {
-        return build_tvar(c, n);
-    }
-    if (!strcmp(name, "binder")) {
-        return build_binder(c, n);
-    }
-    if (!strcmp(name, "bitint")) {
-        return build_bitint(c, n);
-    }
-    if (!strcmp(name, "indirection")) {
-        return build_indirection(c, n);
-    }
-    if (!strcmp(name, "sequence")) {
-        return build_sequence(c, n);
-    }
-    if (!strcmp(name, "anon-site")) {
-        return build_anon_site(c, n);
-    }
-    if (!strcmp(name, "tuple")) {
-        return build_tuple(c, n);
-    }
-    if (!strcmp(name, "field-body")) {
-        return build_record(c, n);
-    }
-    if (!strcmp(name, "function")) {
-        return build_function(c, n);
+    return node_type(c, th_func(c->th, ret, params, np,
+                                have_rest ? &rest : nullptr, kws, nkw));
+}
+
+static void *r_int_leaf_or_str(ncc_reduce_t *r)
+{
+    bctx    *c   = r->user;
+    int64_t  tid = ncc_tree_leaf_tid(r->node);
+
+    if (tid == tid_int) {
+        tl_node *n = node_new(c, TL_INT);
+
+        n->u = strtoull(ncc_tree_leaf_text(r->node).data, nullptr, 10);
+
+        return n;
     }
 
-    c->err = "typelang: unhandled production";
+    if (tid == tid_str || tid == tid_ident) {
+        tl_node *n = node_new(c, TL_NAME);
+
+        n->name = strdup(ncc_tree_leaf_text(r->node).data);
+
+        return n;
+    }
 
     return nullptr;
 }
 
+static void reg(ncc_tree_walk_t *w, const char *nt, ncc_reduce_fn fn)
+{
+    if (!ncc_walk_reduce_nt(w, ncc_string_from_cstr(nt), fn, nullptr)) {
+        fprintf(stderr, "typelang: no production named <%s>\n", nt);
+    }
+}
+
+static th_type *lower(bctx *c, ncc_parse_tree_t *tree)
+{
+    ncc_tree_walk_t *w = ncc_tree_walk_new(c->g, c);
+
+    ncc_walk_reduce_leaf(w, r_int_leaf_or_str, nullptr);
+
+    reg(w, "type", r_pass);
+    reg(w, "one-type", r_pass);
+    reg(w, "base-type", r_pass);
+    reg(w, "record", r_pass);
+    reg(w, "paren-form", r_paren_form);
+    reg(w, "union-type", r_union);
+    reg(w, "isect-type", r_isect);
+    reg(w, "named-type", r_named_type);
+    reg(w, "qualified-name", r_qualified_name);
+    reg(w, "type-args", r_type_args);
+    reg(w, "type-arg", r_type_arg);
+    reg(w, "tvar", r_tvar);
+    reg(w, "binder", r_binder);
+    reg(w, "bitint", r_bitint);
+    reg(w, "indirection", r_indirection);
+    reg(w, "ind-tail", r_ind_tail);
+    reg(w, "type-app", r_type_app);
+    reg(w, "ind-attr", r_ind_attr);
+    reg(w, "ind-attrs", r_ind_attrs);
+    reg(w, "sequence", r_sequence);
+    reg(w, "anon-site", r_anon_site);
+    reg(w, "field", r_field);
+    reg(w, "field-list", r_field_list);
+    reg(w, "field-body", r_field_body);
+    reg(w, "tuple", r_tuple);
+    reg(w, "mode", r_mode);
+    reg(w, "rest-param", r_rest_param);
+    reg(w, "param", r_param);
+    reg(w, "param-list", r_param_list);
+    reg(w, "function", r_function);
+
+    ncc_walk_on_nt(w, ncc_string_from_cstr("binder"), binder_open, nullptr, c);
+
+    th_type *out = as_type(ncc_tree_walk_reduce(w, tree));
+
+    ncc_tree_walk_free(w);
+
+    return out;
+}
 static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
                     char **err)
 {
@@ -1054,7 +1189,7 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
     if (ok) {
         bctx c = {.th = ctx, .g = g};
 
-        out = build(&c, ncc_pwz_get_tree(p));
+        out = lower(&c, ncc_pwz_get_tree(p));
 
         if (!out && err) {
             *err = msg(c.err ? c.err : "cannot build this type");

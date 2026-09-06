@@ -26,11 +26,3 @@ ncc_string_t ncc_tree_leaf_text(ncc_parse_tree_t *n);
 int64_t      ncc_tree_leaf_tid(ncc_parse_tree_t *n);
 bool         ncc_tree_leaf_is(ncc_parse_tree_t *n, const char *text);
 
-typedef struct {
-    ncc_parse_tree_t **v;
-    size_t             n;
-    size_t             cap;
-} ncc_tree_kids_t;
-
-void ncc_tree_kids(ncc_parse_tree_t *n, ncc_tree_kids_t *out);
-void ncc_tree_kids_free(ncc_tree_kids_t *k);
