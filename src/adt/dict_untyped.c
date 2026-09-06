@@ -114,6 +114,19 @@ new_dict_untyped_store(n00b_dict_untyped_t *d, uint32_t alloc_items)
     return result;
 }
 
+// True when n00b_retire() on this dict's store will actually DEFER the free
+// until readers quiesce, rather than passing it straight to n00b_free().
+//
+// n00b_retire's deferral is armed by n00b_epoch_stamp, which stamps a nonzero
+// write_epoch only for an allocator with use_epochs = true. Every other
+// allocator leaves write_epoch == 0, and n00b_retire then frees immediately --
+// so for those, "retire" is a synonym for "free now", NOT for "free later".
+static inline bool
+dict_untyped_retire_defers(n00b_dict_untyped_t *d)
+{
+    return d->allocator != nullptr && d->allocator->use_epochs;
+}
+
 static inline void
 free_dict_untyped_store(n00b_dict_untyped_t *d, n00b_dict_untyped_store_t *store)
 {
@@ -121,7 +134,30 @@ free_dict_untyped_store(n00b_dict_untyped_t *d, n00b_dict_untyped_store_t *store
         return;
     }
 
-    if (d->epoch_store) {
+    // A LOCKED dict is the concurrent mode: n00b_acquire_if_present returns a
+    // raw &store->buckets[i] and readers walk the store under nothing stronger
+    // than an n00b_epoch_acquire() reservation (dict_untyped_epoch_enter). A
+    // migrating writer that retires this store must therefore not free it
+    // while a reader is still inside it.
+    //
+    // Retiring only honors that reservation when the allocator opted into
+    // epoch reclamation. It almost never has: the runtime default allocator and
+    // every pool in the tree leave use_epochs false (only the OOB metadata pool
+    // sets it), so n00b_retire() freed the store immediately and a concurrent
+    // reader faulted mid-probe -- n00b-lang/n00b#217, seen in the field as a
+    // recurring SIGSEGV inside acquire_if_present.
+    //
+    // So only retire when retiring actually defers, or when there is no
+    // concurrent reader to defer for. Otherwise fall through to the retention
+    // path below and let the store go unreferenced: a GC allocator reclaims it
+    // by reachability once the last reader drops it, and a pool reclaims it
+    // wholesale at pool destroy. Retention is deliberate -- we cannot park it
+    // on an epoch retire list instead, because tearing down a non-use_epochs
+    // pool would then have to reclaim those nodes across threads, which is only
+    // safe under STW and is the documented source of the pool-destroy
+    // retire-list crashes (see the use_epochs kwarg note in n00b_pool_init).
+    if (d->epoch_store
+        && (d->lock == nullptr || dict_untyped_retire_defers(d))) {
         n00b_retire(store);
         return;
     }

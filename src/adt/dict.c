@@ -81,6 +81,10 @@ dict_alloc_store_part(size_t size, n00b_alloc_opts_t *opts)
     return n00b_epoch_alloc(size, opts);
 }
 
+// Free a store part whose last reference is going away with no concurrent
+// reader possible (dict finalization). n00b_retire() is the right call even
+// for a non-epoch allocator: it recovers the hidden n00b_epoch_hdr_t and, with
+// write_epoch == 0, frees immediately.
 static inline void
 dict_free_store_part(_n00b_dict_internal_t *d, void *ptr)
 {
@@ -88,6 +92,44 @@ dict_free_store_part(_n00b_dict_internal_t *d, void *ptr)
     if (ptr == nullptr) {
         return;
     }
+    n00b_retire(ptr);
+}
+
+// Release a store part that a MIGRATION has just replaced. Unlike the
+// finalization path above, lock-free readers may still be inside this store.
+//
+// n00b_retire() only DEFERS the free for an allocator with use_epochs = true;
+// for every other allocator it calls n00b_free() straight away.
+//
+// A LOCKED dict is the concurrent mode: _n00b_dict_internal_get brackets its
+// bucket probe in n00b_epoch_acquire() / n00b_epoch_yield() and walks
+// store->buckets / keys / values directly, so a store part replaced by a
+// migrating writer must outlive any reader still inside it. Because every
+// application dict takes the runtime default allocator -- for which use_epochs
+// is false -- the reservation the reader took was recorded and then never
+// consulted, and the immediate free landed under the in-flight probe
+// (n00b-lang/n00b#217).
+//
+// When retiring would not actually defer, leave the old store part
+// unreferenced instead of freeing it: a GC allocator reclaims it by
+// reachability once the last reader drops it, and a pool reclaims it wholesale
+// at pool destroy. Parking it on an epoch retire list is NOT an option here --
+// tearing down a non-use_epochs pool would then have to reclaim those nodes
+// across threads, which is only safe under STW and is the documented source of
+// the pool-destroy retire-list crashes (see the use_epochs kwarg note in
+// n00b_pool_init).
+static inline void
+dict_retire_store_part(_n00b_dict_internal_t *d, void *ptr)
+{
+    if (ptr == nullptr) {
+        return;
+    }
+
+    if (d != nullptr && d->lock
+        && !(d->allocator != nullptr && d->allocator->use_epochs)) {
+        return;
+    }
+
     n00b_retire(ptr);
 }
 
@@ -312,10 +354,10 @@ dict_migrate(_n00b_dict_internal_t *d, uint32_t ksz, uint32_t vsz)
     // non-epoch allocators such as allocator metadata pools.
     dict_unlock_post_migrate(d, news);
 
-    dict_free_store_part(d, olds->buckets);
-    dict_free_store_part(d, olds->keys);
-    dict_free_store_part(d, olds->values);
-    dict_free_store_part(d, olds);
+    dict_retire_store_part(d, olds->buckets);
+    dict_retire_store_part(d, olds->keys);
+    dict_retire_store_part(d, olds->values);
+    dict_retire_store_part(d, olds);
 }
 
 // Returns the bucket if the key is found. May return a deleted bucket.
