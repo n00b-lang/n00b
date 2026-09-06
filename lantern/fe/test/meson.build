@@ -50,4 +50,12 @@ fe_commander_test = executable(
 
 test('fe-commander', fe_commander_test)
 
+fe_compose_test = executable(
+    'fe_compose_test',
+    'test_compose.c',
+    dependencies: fe_dep,
+)
+
+test('fe-compose', fe_compose_test)
+
 bnfcheck = executable('bnfcheck', 'bnfcheck.c', dependencies: fe_dep)

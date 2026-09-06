@@ -375,7 +375,31 @@ ncc_grammar_free(ncc_grammar_t *g)
 void
 ncc_grammar_set_start_id(ncc_grammar_t *g, ncc_nt_id_t nt_id)
 {
+    if (g->default_start == nt_id) {
+        return;
+    }
+
+    // One grammar can be parsed from more than one start symbol -- a type on
+    // its own, or a whole module that contains types -- so the start is a
+    // property of a parse, not of the grammar.
+    ncc_nonterm_t *was = ncc_get_nonterm(g, g->default_start);
+
+    if (was) {
+        was->start_nt = false;
+    }
+
     g->default_start = nt_id;
+
+    ncc_nonterm_t *now = ncc_get_nonterm(g, nt_id);
+
+    if (now) {
+        now->start_nt = true;
+    }
+
+    // The LR(0) state graph is built outward from the start symbol, so it no
+    // longer describes this grammar. Nothing in the parser reads it, and
+    // marking it absent is honest where leaving it in place would not be.
+    g->lr0_start_state = -1;
 }
 
 void

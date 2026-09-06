@@ -1758,8 +1758,11 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
         }
     }
 
-    ncc_grammar_finalize(user_g);
-
+    // Deliberately not finalised here. Finalisation derives tables from the
+    // whole rule set, so doing it per load would forbid the next one, and
+    // grammars are meant to compose: typelang.bnf defines the types the IR
+    // grammar refers to, and both are loaded into one grammar. The first
+    // parse finalises.
     return true;
 }
 
