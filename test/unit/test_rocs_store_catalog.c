@@ -575,6 +575,84 @@ test_local_catalog_reopen_and_sync(void)
     rm_tmpdir();
 }
 
+// n00b#248. A stale next_open_shard_id used to reject the ENTIRE store with
+// STORE_CORRUPT, even though every shard image was intact and the catalog
+// parsed cleanly. In the field that made an undamaged store permanently
+// unopenable and silently discarded ~1M events/hour.
+//
+// Reproduces the on-disk state directly -- rewrite the header field to a value
+// at or below the highest catalogued shard id, exactly what the orphan-adoption
+// path used to persist -- and asserts the store still opens with its entries
+// intact.
+static void
+test_stale_next_open_shard_id_still_opens(void)
+{
+    n00b_vfs_t   *vfs   = new_local_vfs();
+    n00b_store_t *store = open_store(vfs);
+
+    seal_one(store, 555);
+    auto close_r = n00b_store_close(store);
+    CHECK(n00b_result_is_ok(close_r));
+
+    n00b_string_t *catalog_path = r"/rocs/catalog.rocs";
+
+    auto open_r = n00b_vfs_open(vfs, catalog_path, N00B_VFS_O_R);
+    CHECK(n00b_result_is_ok(open_r));
+    auto read_r = n00b_vfs_read(vfs, n00b_result_get(open_r), UINT64_C(1) << 20);
+    CHECK(n00b_result_is_ok(read_r));
+    n00b_buffer_t *image = n00b_result_get(read_r);
+    CHECK(n00b_result_is_ok(n00b_vfs_close(vfs, n00b_result_get(open_r))));
+
+    int64_t  len   = n00b_buffer_len(image);
+    uint8_t *bytes = (uint8_t *)image->data;
+
+    // Find the little-endian u64 holding the open-shard id and drive it to 1,
+    // which is <= the sealed shard's id. Located by value rather than by a
+    // hardcoded offset so this does not silently stop testing anything if the
+    // header layout gains a field.
+    bool patched = false;
+    for (int64_t i = 0; i + 8 <= len; i++) {
+        uint64_t v = 0;
+        for (int b = 0; b < 8; b++) {
+            v |= ((uint64_t)bytes[i + b]) << (b * 8);
+        }
+        if (v == 2) {  // one sealed shard (id 1) -> next open id is 2
+            for (int b = 0; b < 8; b++) {
+                bytes[i + b] = (b == 0) ? 1 : 0;
+            }
+            patched = true;
+            break;
+        }
+    }
+    CHECK(patched);
+
+    auto wopen_r = n00b_vfs_open(vfs, catalog_path, N00B_VFS_O_W);
+    CHECK(n00b_result_is_ok(wopen_r));
+    auto write_r = n00b_vfs_write(vfs, n00b_result_get(wopen_r), image);
+    CHECK(n00b_result_is_ok(write_r));
+    CHECK(n00b_result_is_ok(n00b_vfs_close(vfs, n00b_result_get(wopen_r))));
+
+    // Before the fix this returned STORE_CORRUPT and the store was lost.
+    auto reopen_r = n00b_store_open_vfs(vfs, r"/rocs", new_schema());
+    CHECK(n00b_result_is_ok(reopen_r));
+    n00b_store_t *reopened = n00b_result_get(reopen_r);
+
+    // The catalog is intact, not merely openable.
+    auto count_r = n00b_store_catalog_get_entry_count(reopened);
+    CHECK(n00b_result_is_ok(count_r));
+    CHECK(n00b_result_get(count_r) == 1);
+
+    // And the repaired id must not collide: the next sealed shard needs an id
+    // above the one already on disk.
+    seal_one(reopened, 556);
+    auto count2_r = n00b_store_catalog_get_entry_count(reopened);
+    CHECK(n00b_result_is_ok(count2_r));
+    CHECK(n00b_result_get(count2_r) == 2);
+
+    rm_tmpdir();
+    printf("  [PASS] stale next_open_shard_id opens and repairs (#248)\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -592,6 +670,7 @@ main(int argc, char **argv)
     test_corrupt_shard_does_not_poison_catalog_ops();
     test_quarantine_hides_and_persists();
     test_local_catalog_reopen_and_sync();
+    test_stale_next_open_shard_id_still_opens();
 
     n00b_shutdown();
     return 0;

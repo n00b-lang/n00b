@@ -3533,12 +3533,44 @@ rocs_store_catalog_parse(n00b_store_t *store, n00b_buffer_t *buf)
         n00b_list_push(*store->catalog, entry);
     }
 
-    if (reader.pos != reader.len || next_open_shard_id == 0
-        || next_open_shard_id <= max_shard_id) {
+    // Two genuinely-corrupt conditions: trailing/short bytes mean the buffer
+    // did not deserialize, and id 0 is never valid (it is the sentinel).
+    if (reader.pos != reader.len || next_open_shard_id == 0) {
         return n00b_result_err(bool, N00B_STORE_ERR_CORRUPT);
     }
 
-    store->next_shard_id = next_open_shard_id + 1;
+    // A stale next_open_shard_id is NOT corruption, and used to be treated as
+    // such -- rejecting the whole store with STORE_CORRUPT (n00b#248). Every
+    // shard image was intact, entries parsed cleanly, and one 8-byte header
+    // field was merely behind an adopted shard's id. The store was left
+    // permanently unopenable and silently discarded ~1M events/hour.
+    //
+    // The writer no longer produces this (the orphan-adoption path now keeps
+    // next_shard_id above every adopted id), but stores already written in the
+    // bad state have to open, and there is no salvage tool in rocs to repair
+    // them out of band. Repair it here instead: advance past the highest
+    // catalogued id, which is exactly the invariant the field is supposed to
+    // hold. Sound because next_shard_id is only ever used to hand an id to the
+    // next NEW shard -- moving it forward can never collide, it can only skip.
+    if (next_open_shard_id <= max_shard_id) {
+        n00b_eprintf(
+            "rocs: catalog next_open_shard_id ([|#|]) is not above the highest "
+            "catalogued shard ([|#|]); repairing to [|#|]. The store is intact "
+            "-- see n00b#248.\n",
+            next_open_shard_id,
+            max_shard_id,
+            max_shard_id + 1);
+        // NB the asymmetry with the else branch, which is deliberate. The
+        // serialized field is the id of the shard that was OPEN (hot) at write
+        // time, so the normal path resumes at +1 to avoid reusing it. Here
+        // there is no trustworthy open-shard id to skip past -- max_shard_id
+        // is the highest id known to exist -- so max_shard_id + 1 is already
+        // the first free id and must not be advanced again.
+        store->next_shard_id = max_shard_id + 1;
+    }
+    else {
+        store->next_shard_id = next_open_shard_id + 1;
+    }
     rocs_store_refresh_oldest_available(store);
     return n00b_result_ok(bool, true);
 }
@@ -3854,6 +3886,23 @@ rocs_store_recover_orphaned_shards(n00b_store_t *store)
             .etag              = stat.etag);
 
         rocs_store_catalog_insert_sorted(store, entry);
+
+        // Adopting a shard must keep next_shard_id above every catalogued id.
+        // It is the id handed to the NEXT new shard (rocs_store_hot_shard_new),
+        // so leaving it behind an adopted id means the next hot shard collides
+        // with an existing one -- and the catalog header written just below
+        // then fails its own consistency check at open, rejecting the entire
+        // store as corrupt (n00b#248).
+        //
+        // This is the actual defect behind that issue: a reinstall reset the
+        // lineage to 1 while shard 153 survived on disk and was adopted here,
+        // so the store persisted next_open_shard_id=4 against max_shard_id=153
+        // and became permanently unopenable. Nothing was damaged; the header
+        // was simply never told about the shard this path had just adopted.
+        if (shard_id >= store->next_shard_id) {
+            store->next_shard_id = shard_id + 1;
+        }
+
         recovered++;
     }
 
