@@ -158,8 +158,8 @@ ncc_walk_on_nt(ncc_tree_walk_t *w, ncc_string_t nt_name, ncc_visit_fn pre,
     size_t         n    = ncc_list_len(w->g->nt_list);
 
     for (size_t i = 0; i < n; i++) {
-        if (ncc_string_eq(w->g->nt_list.data[i].name, nt_name)) {
-            nt = &w->g->nt_list.data[i];
+        if (ncc_string_eq(w->g->nt_list.data[i]->name, nt_name)) {
+            nt = w->g->nt_list.data[i];
             break;
         }
     }
@@ -426,8 +426,8 @@ bool ncc_walk_reduce_nt(ncc_tree_walk_t *w, ncc_string_t nt_name,
     int64_t id = -1;
 
     for (size_t i = 0; i < n; i++) {
-        if (ncc_string_eq(w->g->nt_list.data[i].name, nt_name)) {
-            id = w->g->nt_list.data[i].id;
+        if (ncc_string_eq(w->g->nt_list.data[i]->name, nt_name)) {
+            id = w->g->nt_list.data[i]->id;
             break;
         }
     }

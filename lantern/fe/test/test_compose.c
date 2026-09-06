@@ -31,9 +31,9 @@ static const char *const LANG =
 static int64_t nt_id(ncc_grammar_t *g, const char *name)
 {
     for (size_t i = 0; i < ncc_list_len(g->nt_list); i++) {
-        if (g->nt_list.data[i].name.data
-            && !strcmp(g->nt_list.data[i].name.data, name)) {
-            return g->nt_list.data[i].id;
+        if (g->nt_list.data[i]->name.data
+            && !strcmp(g->nt_list.data[i]->name.data, name)) {
+            return g->nt_list.data[i]->id;
         }
     }
 
@@ -100,7 +100,7 @@ static void test_the_parts_load_in_either_order(void)
         int            undefined = 0;
 
         for (size_t k = 0; k < ncc_list_len(g->nt_list); k++) {
-            ncc_nonterm_t *nt = &g->nt_list.data[k];
+            ncc_nonterm_t *nt = g->nt_list.data[k];
 
             if (nt->group_nt || !nt->name.data || nt->name.data[0] == '$') {
                 continue;

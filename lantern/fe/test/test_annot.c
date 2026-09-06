@@ -200,8 +200,8 @@ test_annotations_are_retained_on_the_grammar(ncc_grammar_t *g)
     ncc_nonterm_t *prog = nullptr;
 
     for (size_t i = 0; i < ncc_list_len(g->nt_list); i++) {
-        if (ncc_string_eq(g->nt_list.data[i].name, S("prog"))) {
-            prog = &g->nt_list.data[i];
+        if (ncc_string_eq(g->nt_list.data[i]->name, S("prog"))) {
+            prog = g->nt_list.data[i];
         }
     }
 

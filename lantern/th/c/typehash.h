@@ -82,11 +82,6 @@ typedef struct {
     th_type    *type;
 } th_kwparam;
 
-typedef struct {
-    const char *msg;
-    size_t      offset;
-} th_error;
-
 th_ctx *th_ctx_new(void);
 void    th_ctx_free(th_ctx *ctx);
 
@@ -94,6 +89,7 @@ typedef bool (*th_normalizer)(void *state, const char *in, size_t inlen,
                               const char **out, size_t *outlen);
 
 void th_ctx_set_normalizer(th_ctx *ctx, th_normalizer fn, void *state);
+void th_install_nfc(th_ctx *ctx);
 
 th_type *th_name(th_ctx *ctx, const char *name);
 th_type *th_apply(th_ctx *ctx, const char *name, const th_arg *args, size_t n);
@@ -114,12 +110,6 @@ th_type *th_bound(th_ctx *ctx, uint64_t distance, uint64_t position);
 th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n);
 th_type *th_var(th_ctx *ctx);
 th_type *th_tuple(th_ctx *ctx, th_type *const *elems, size_t n);
-
-th_type *th_parse(th_ctx *ctx, const char *src, th_error *err);
-th_type *th_parse_prefix(th_ctx *ctx, const char *src, size_t *consumed,
-                         th_error *err);
-th_type *th_parse_prefix_n(th_ctx *ctx, const char *src, size_t len,
-                           size_t *consumed, th_error *err);
 
 void     th_normalize(th_type *type);
 bool     th_encode(th_ctx *ctx, th_type *type, const uint8_t **out,

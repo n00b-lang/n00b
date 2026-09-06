@@ -316,10 +316,11 @@ ncc_grammar_free(ncc_grammar_t *g)
     ncc_list_free(g->rules);
 
     for (size_t i = 0; i < g->nt_list.len; i++) {
-        ncc_nonterm_t *nt = &g->nt_list.data[i];
+        ncc_nonterm_t *nt = g->nt_list.data[i];
 
         ncc_list_free(nt->rule_ids);
         free_annotations(&nt->annotations);
+        ncc_free(nt);
     }
 
     free_annotations(&g->annotations);
@@ -416,21 +417,19 @@ ncc_nonterm(ncc_grammar_t *g, ncc_string_t name)
         }
     }
 
-    ncc_nonterm_t nt = {0};
+    ncc_nonterm_t *nt = ncc_alloc(ncc_nonterm_t);
 
-    nt.name = name;
-    nt.id   = (int64_t)g->nt_list.len;
+    nt->name = name;
+    nt->id   = (int64_t)g->nt_list.len;
 
     ncc_list_push(g->nt_list, nt);
 
     if (name.data) {
-        ncc_nonterm_t *stored = ncc_get_nonterm(g, nt.id);
-        _ncc_dict_put(g->nt_map,
-                               (void *)stored->name.data,
-                               (void *)(intptr_t)stored->id);
+        _ncc_dict_put(g->nt_map, (void *)nt->name.data,
+                      (void *)(intptr_t)nt->id);
     }
 
-    return ncc_get_nonterm(g, nt.id);
+    return nt;
 }
 
 int64_t
@@ -1480,7 +1479,7 @@ ncc_grammar_finalize(ncc_grammar_t *g)
     n = g->nt_list.len;
 
     for (size_t i = 0; i < n; i++) {
-        if (g->nt_list.data[i].group_nt) {
+        if (g->nt_list.data[i]->group_nt) {
             g->has_groups = true;
             break;
         }

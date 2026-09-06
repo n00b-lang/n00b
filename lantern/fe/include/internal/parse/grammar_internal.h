@@ -12,6 +12,9 @@ ncc_list_decl(ncc_nonterm_t);
 typedef ncc_annotation_t *ncc_annotation_ptr_t;
 ncc_list_decl(ncc_annotation_ptr_t);
 
+typedef ncc_nonterm_t *ncc_nonterm_ptr_t;
+ncc_list_decl(ncc_nonterm_ptr_t);
+
 struct ncc_terminal_t {
     ncc_string_t value;
     void         *user_data;
@@ -79,7 +82,7 @@ typedef struct {
 struct ncc_grammar_t {
     ncc_list_t(ncc_terminal_t)   named_terms;
     ncc_list_t(ncc_parse_rule_t) rules;
-    ncc_list_t(ncc_nonterm_t)    nt_list;
+    ncc_list_t(ncc_nonterm_ptr_t) nt_list;
     ncc_dict_t           *nt_map;
     ncc_dict_t           *terminal_map;
     int32_t                        default_start;
@@ -121,7 +124,7 @@ ncc_get_nonterm(ncc_grammar_t *g, int64_t id)
     if (id < 0 || (size_t)id >= ncc_list_len(g->nt_list)) {
         return nullptr;
     }
-    return &g->nt_list.data[id];
+    return g->nt_list.data[id];
 }
 
 static inline ncc_terminal_t *

@@ -68,7 +68,7 @@ int64_t ir_grammar_nt(const char *name)
     }
 
     for (size_t i = 0; i < ncc_list_len(g->nt_list); i++) {
-        ncc_nonterm_t *nt = &g->nt_list.data[i];
+        ncc_nonterm_t *nt = g->nt_list.data[i];
 
         if (nt->name.data && !strcmp(nt->name.data, name)) {
             return nt->id;

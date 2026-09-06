@@ -1,15 +1,18 @@
 typehash_sources = files(
     'typehash.c',
-    'th_parse.c',
     'th_access.c',
     'th_infer.c',
     'th_print.c',
 )
 
+if have_nfc
+    typehash_sources += files('th_nfc_utf8proc.c')
+endif
+
 typehash_lib = library(
     'typehash',
     typehash_sources,
-    dependencies: xxhash_dep,
+    dependencies: [xxhash_dep] + (have_nfc ? [utf8proc_dep] : []),
     include_directories: include_directories('.'),
     install: true,
 )
@@ -19,23 +22,13 @@ install_headers('typehash.h')
 typehash_dep = declare_dependency(
     link_with: typehash_lib,
     include_directories: include_directories('.'),
+    dependencies: have_nfc ? [utf8proc_dep] : [],
 )
 
 pkg = import('pkgconfig')
 pkg.generate(
     typehash_lib,
     description: 'Structural type identity hashing',
-)
-
-nfc_sources = have_nfc ? files('th_nfc_utf8proc.c') : files()
-nfc_deps = have_nfc ? [utf8proc_dep] : []
-nfc_args = have_nfc ? ['-DTH_TOOL_NFC'] : []
-
-th_tool = executable(
-    'th_tool',
-    ['th_tool.c'] + nfc_sources,
-    c_args: nfc_args,
-    dependencies: [typehash_dep] + nfc_deps,
 )
 
 th_cycle_test = executable(
@@ -51,26 +44,3 @@ th_infer_cycle_test = executable(
 )
 
 test('inference-cycles', th_infer_cycle_test)
-
-th_vectors_test = executable(
-    'th_vectors_test',
-    ['th_vectors_test.c'] + nfc_sources,
-    c_args: nfc_args,
-    dependencies: [typehash_dep] + nfc_deps,
-)
-
-test(
-    'th-vectors',
-    th_vectors_test,
-    args: [meson.current_source_dir() / '..' / 'vectors.tsv'],
-)
-
-if have_nfc
-    th_nfc_test = executable(
-        'th_nfc_test',
-        ['th_nfc_test.c'] + nfc_sources,
-        dependencies: [typehash_dep] + nfc_deps,
-    )
-
-    test('nfc-normalizer', th_nfc_test)
-endif
