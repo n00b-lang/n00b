@@ -40,22 +40,40 @@ static const ir_props_t PROPS[] = {
     IR_PROP_VERIFIED,
 };
 
+typedef int (*cmd_fn)(job *j, FILE *out, FILE *err, const char *list);
+
+static int cmd_parse(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_print(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_verify(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_analyze(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_explain(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_pass(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_cfg(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_dom(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_cdg(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_dfg(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_pdg(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_regions(job *j, FILE *out, FILE *err, const char *list);
+
 static const struct {
     const char *name;
     const char *doc;
+    cmd_fn      run;
 } COMMANDS[] = {
-    {"parse",   "read the module and report what the parser found"},
-    {"print",   "write the module back out in canonical form"     },
-    {"verify",  "report which properties hold"                    },
-    {"analyze", "report unreachable blocks, unset and unused locals"},
-    {"explain", "say which typing rule fires for each instruction"},
-    {"pass",    "run passes in order, then print"                 },
-    {"cfg",     "blocks and their successors, with edge kinds"    },
-    {"dom",     "dominators, post-dominators, dominance frontiers"},
-    {"cdg",     "control dependence, over blocks"                 },
-    {"dfg",     "data dependence, over instructions"              },
-    {"pdg",     "both kinds of dependence, in one graph"          },
-    {"regions", "the region overlay, as a nested rendering"       },
+    {"parse",   "read the module and report what the parser found", cmd_parse},
+    {"print",   "write the module back out in canonical form", cmd_print},
+    {"verify",  "report which properties hold", cmd_verify},
+    {"analyze", "report unreachable blocks, unset and unused locals",
+     cmd_analyze},
+    {"explain", "say which typing rule fires for each instruction",
+     cmd_explain},
+    {"pass",    "run passes in order, then print", cmd_pass},
+    {"cfg",     "blocks and their successors, with edge kinds", cmd_cfg},
+    {"dom",     "dominators, post-dominators, dominance frontiers", cmd_dom},
+    {"cdg",     "control dependence, over blocks", cmd_cdg},
+    {"dfg",     "data dependence, over instructions", cmd_dfg},
+    {"pdg",     "both kinds of dependence, in one graph", cmd_pdg},
+    {"regions", "the region overlay, as a nested rendering", cmd_regions},
 };
 
 #define N_COMMANDS (sizeof(COMMANDS) / sizeof(COMMANDS[0]))
@@ -252,8 +270,11 @@ static const char *tag(ir_instr_t *in, char *buf, size_t n)
     return buf;
 }
 
-static void cmd_cfg(job *j, FILE *out)
+static int cmd_cfg(job *j, FILE *out, FILE *err, const char *list)
 {
+    (void)err;
+    (void)list;
+
     for (size_t i = 0; i < ir_func_count(j->m); i++) {
         ir_func_t *f = ir_func_at(j->m, i);
         ir_pdg_t  *g = ir_pdg_of(f);
@@ -278,10 +299,15 @@ static void cmd_cfg(job *j, FILE *out)
             }
         }
     }
+
+    return IR_CLI_OK;
 }
 
-static void cmd_dom(job *j, FILE *out)
+static int cmd_dom(job *j, FILE *out, FILE *err, const char *list)
 {
+    (void)err;
+    (void)list;
+
     for (size_t i = 0; i < ir_func_count(j->m); i++) {
         ir_func_t *f = ir_func_at(j->m, i);
         ir_doms_t *d = ir_doms_of(f);
@@ -305,10 +331,15 @@ static void cmd_dom(job *j, FILE *out)
             }
         }
     }
+
+    return IR_CLI_OK;
 }
 
-static void cmd_cdg(job *j, FILE *out)
+static int cmd_cdg(job *j, FILE *out, FILE *err, const char *list)
 {
+    (void)err;
+    (void)list;
+
     for (size_t i = 0; i < ir_func_count(j->m); i++) {
         ir_func_t *f = ir_func_at(j->m, i);
         ir_pdg_t  *g = ir_pdg_of(f);
@@ -324,6 +355,8 @@ static void cmd_cdg(job *j, FILE *out)
             }
         }
     }
+
+    return IR_CLI_OK;
 }
 
 static void put_edges(FILE *out, ir_pdg_t *g, bool control, bool data)
@@ -350,7 +383,7 @@ static void put_edges(FILE *out, ir_pdg_t *g, bool control, bool data)
     }
 }
 
-static void cmd_graph(job *j, FILE *out, bool control, bool data)
+static int cmd_graph(job *j, FILE *out, bool control, bool data)
 {
     for (size_t i = 0; i < ir_func_count(j->m); i++) {
         ir_func_t *f = ir_func_at(j->m, i);
@@ -360,14 +393,19 @@ static void cmd_graph(job *j, FILE *out, bool control, bool data)
                 ir_pdg_is_exact(g) ? "exact" : "may");
         put_edges(out, g, control, data);
     }
+
+    return IR_CLI_OK;
 }
 
-static void cmd_regions(job *j, FILE *out, FILE *err)
+static int cmd_regions(job *j, FILE *out, FILE *err, const char *list)
 {
+    (void)err;
+    (void)list;
+
     if (!ir_structure(j->m, j->d)) {
         fprintf(err, "ir: the region overlay could not be built\n");
 
-        return;
+        return IR_CLI_OK;
     }
     ir_module_establish(j->m, IR_PROP_STRUCTURED);
 
@@ -377,10 +415,15 @@ static void cmd_regions(job *j, FILE *out, FILE *err)
         fputs(text, out);
         free(text);
     }
+
+    return IR_CLI_OK;
 }
 
-static void cmd_explain(job *j, FILE *out)
+static int cmd_explain(job *j, FILE *out, FILE *err, const char *list)
 {
+    (void)err;
+    (void)list;
+
     ir_rules_t *rs = ir_module_rules(j->m);
 
     for (size_t i = 0; i < ir_func_count(j->m); i++) {
@@ -403,16 +446,23 @@ static void cmd_explain(job *j, FILE *out)
             }
         }
     }
+
+    return IR_CLI_OK;
 }
 
-static void cmd_verify(job *j, FILE *out)
+static int cmd_verify(job *j, FILE *out, FILE *err, const char *list)
 {
+    (void)err;
+    (void)list;
+
     ir_props_t held = ir_verify(j->m, j->d);
 
     for (size_t i = 0; i < sizeof(PROPS) / sizeof(PROPS[0]); i++) {
         fprintf(out, "%-18s %s\n", ir_prop_name(PROPS[i]),
                 held & PROPS[i] ? "holds" : "does not hold");
     }
+
+    return IR_CLI_OK;
 }
 
 static const ir_pass_t *pass_named(const char *name, size_t n)
@@ -424,6 +474,59 @@ static const ir_pass_t *pass_named(const char *name, size_t n)
     }
 
     return nullptr;
+}
+
+static int cmd_dfg(job *j, FILE *out, FILE *err, const char *list)
+{
+    (void)err;
+    (void)list;
+
+    return cmd_graph(j, out, false, true);
+}
+
+static int cmd_pdg(job *j, FILE *out, FILE *err, const char *list)
+{
+    (void)err;
+    (void)list;
+
+    return cmd_graph(j, out, true, true);
+}
+
+static int cmd_parse(job *j, FILE *out, FILE *err, const char *list)
+{
+    (void)err;
+    (void)list;
+
+    fprintf(out, "parsed %s: %zu function%s\n", j->path, ir_func_count(j->m),
+            ir_func_count(j->m) == 1 ? "" : "s");
+
+    return IR_CLI_OK;
+}
+
+static int cmd_print(job *j, FILE *out, FILE *err, const char *list)
+{
+    (void)err;
+    (void)list;
+
+    char *text = ir_module_print(j->m);
+
+    if (text) {
+        fputs(text, out);
+        free(text);
+    }
+
+    return IR_CLI_OK;
+}
+
+static int cmd_analyze(job *j, FILE *out, FILE *err, const char *list)
+{
+    (void)out;
+    (void)err;
+    (void)list;
+
+    ir_analyze(j->m, j->d);
+
+    return IR_CLI_OK;
 }
 
 static int cmd_pass(job *j, FILE *out, FILE *err, const char *list)
@@ -587,47 +690,12 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
         return rc;
     }
 
-    if (!strcmp(cmd, "parse")) {
-        fprintf(out, "parsed %s: %zu function%s\n", j.path,
-                ir_func_count(j.m), ir_func_count(j.m) == 1 ? "" : "s");
-    }
-    else if (!strcmp(cmd, "print")) {
-        char *text = ir_module_print(j.m);
-
-        if (text) {
-            fputs(text, out);
-            free(text);
+    for (size_t i = 0; i < N_COMMANDS; i++) {
+        if (strcmp(cmd, COMMANDS[i].name)) {
+            continue;
         }
-    }
-    else if (!strcmp(cmd, "verify")) {
-        cmd_verify(&j, out);
-    }
-    else if (!strcmp(cmd, "analyze")) {
-        ir_analyze(j.m, j.d);
-    }
-    else if (!strcmp(cmd, "explain")) {
-        cmd_explain(&j, out);
-    }
-    else if (!strcmp(cmd, "cfg")) {
-        cmd_cfg(&j, out);
-    }
-    else if (!strcmp(cmd, "dom")) {
-        cmd_dom(&j, out);
-    }
-    else if (!strcmp(cmd, "cdg")) {
-        cmd_cdg(&j, out);
-    }
-    else if (!strcmp(cmd, "dfg")) {
-        cmd_graph(&j, out, false, true);
-    }
-    else if (!strcmp(cmd, "pdg")) {
-        cmd_graph(&j, out, true, true);
-    }
-    else if (!strcmp(cmd, "regions")) {
-        cmd_regions(&j, out, err);
-    }
-    else if (!strcmp(cmd, "pass")) {
-        int rc = cmd_pass(&j, out, err, list);
+
+        int rc = COMMANDS[i].run(&j, out, err, list);
 
         if (rc != IR_CLI_OK) {
             report(&j, out, json);
@@ -635,7 +703,10 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
 
             return rc;
         }
+
+        break;
     }
+
     report(&j, out, json);
 
     int rc = ok && !ir_diags_failed(j.d) ? IR_CLI_OK : IR_CLI_DIAG;
