@@ -28,19 +28,19 @@
 
 <linkage> ::= %"static" | %"extern"
 
-<global-decl> ::= <linkage>? %"global" <global> %":" <typelang-type> <init>?
+<global-decl> ::= <linkage>? %"global" <global> %":" <typelang-type> <init>? <meta>*
 
-<func> ::= <linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> %"{" <local>* <block>+ %"}"
+<func> ::= <linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> <meta>* %"{" <local>* <block>+ %"}"
 
 <params> ::= <param> (%"," <param>)*
 <param>  ::= <mode>? <value> %":" <typelang-type>
 <mode>   ::= %"in" | %"out" | %"inout"
 
-<local> ::= %"local" <local-ref> %":" <typelang-type> <init>?
+<local> ::= %"local" <local-ref> %":" <typelang-type> <init>? <meta>*
 
 <init> ::= %"=" %"-"? <number>
 
-<block> ::= %"block" <name> %":" <instr>*
+<block> ::= %"block" <name> %":" <meta>* <instr>*
 
 <instr> ::= <dest>? <name> <modifier>* <operands>? <meta>*
 
@@ -92,7 +92,7 @@
 <local-ref> ::= %"$" <name>
 <global>    ::= %"@" <name>
 
-<dotted-name> ::= <name> ((%"." | %"-") <name> | <int>)*
+<dotted-name> ::= <name> ((%"." | %"-") (<name> | <int>))*
 
 <int>    ::= %INT_LIT
 <number> ::= %INT_LIT | %FLOAT_LIT
@@ -109,3 +109,7 @@
          | %"source" | %"inlined" | %"expanded" | %"lowered" | %"generated"
          | %"true" | %"false"
          | %"in" | %"out" | %"inout"
+         | %"array" | %"bitint" | %"ubitint" | %"exclusive" | %"forall"
+         | %"gcref" | %"indexable" | %"literal" | %"mutref" | %"nullable"
+         | %"own" | %"owning" | %"ptr" | %"ref" | %"reseatable" | %"t"
+         | %"temporary" | %"tmpref" | %"variant"

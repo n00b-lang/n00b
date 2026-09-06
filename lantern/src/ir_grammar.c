@@ -109,7 +109,11 @@ static bool after_sigil(ncc_scanner_t *s)
 {
     ncc_token_info_t *prev = ncc_scan_prev_token(s);
 
-    return prev && (prev->tid == '%' || prev->tid == '$' || prev->tid == '@');
+    if (!prev || (prev->tid != '%' && prev->tid != '$' && prev->tid != '@')) {
+        return false;
+    }
+
+    return prev->end_byte == (size_t)ncc_scan_offset(s);
 }
 
 static bool ir_scan(ncc_scanner_t *s)

@@ -161,10 +161,115 @@ static void test_the_two_agree_construct_by_construct(void)
         {"a name that is also a keyword",
          "module m { profile bce func @f() -> void {\n  local $size: i32\n"
          "  block e: unreachable } }"},
+        {"a rest parameter",
+         "module m { profile bce func @f(%a: i32, *i32) -> void {\n"
+         "  block e: unreachable } }"},
+        {"a keyword parameter",
+         "module m { profile bce func @f(%a: i32, k: i32) -> void {\n"
+         "  block e: unreachable } }"},
+        {"extern linkage",
+         "module m { profile bce extern func @f() -> void {\n"
+         "  block e: unreachable } }"},
+        {"an extern global", "module m { profile bce extern global @g: i32 }"},
+        {"a layout declaration",
+         "module m { profile bce layout i32 {\n  size = 4\n  align = 4\n"
+         "  stride = 4\n} }"},
+        {"a layout member pinned to bits",
+         "module m { profile bce layout (x: i32, y: i32) {\n"
+         "  x @ bits 0 .. 32\n} }"},
+        {"a symbolic layout value",
+         "module m { profile bce layout ptr[i32] {\n"
+         "  size = sizeof(i32)\n  align = alignof(i32)\n} }"},
+        {"an offsetof layout value",
+         "module m { profile bce layout (x: i32) {\n"
+         "  size = offsetof((x: i32), \"x\")\n} }"},
+        {"an origin",
+         "module m { profile bce func @f() -> void { block e:\n"
+         "  unreachable !origin(source, \"\", 0, 1, 2, 3, 4, 5, 6) } }"},
+        {"a float literal",
+         "module m { profile bce func @f() -> void {\n  local $x: f64 = 1.5\n"
+         "  block e: unreachable } }"},
+        {"a hexadecimal literal",
+         "module m { profile bce func @f() -> void {\n  local $x: i32 = 0x1f\n"
+         "  block e: unreachable } }"},
+        {"a named argument",
+         "module m { profile bce func @g(%a: i32) -> i32 { block e:\n"
+         "  return %a }\n"
+         " func @f(%a: i32) -> i32 { block e:\n"
+         "  %r: i32 = call @g, k = %a\n  return %r } }"},
+        {"a module-level type used by a global",
+         "module m { profile bce type T = i32 global @g: T }"},
     };
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         agree(cases[i].what, cases[i].src);
+    }
+}
+
+static void test_the_grammar_defines_the_whole_surface(void)
+{
+    static const struct {
+        const char *what;
+        const char *start;
+        const char *src;
+    } cases[] = {
+        {"a parameter mode", "module",
+         "module m { profile bce func @f(out %a: i32) -> void {\n"
+         "  block e: unreachable } }"},
+        {"a member pinned to a bit range", "layout-item", "x @ bits 0 .. 32"},
+        {"every origin kind", "origin",
+         "!origin(lowered, \"p\", 0, 1, 2, 3, 4, 5, 6)"},
+        {"an inout mode", "param", "inout %a: i32"},
+        {"a switch arm with a negative case", "switch-arm", "[-1: d]"},
+        {"a phi arm", "phi-arm", "[e: %a]"},
+        {"a default block", "default-block", "default: d"},
+        {"an annotation with provenance", "annot",
+         "!ir.rule(\"sint\" from typed)"},
+        {"a boolean annotation", "annot", "!ir.flag(true)"},
+        {"a type-valued annotation", "annot", "!ir.ty(i32)"},
+        {"a value-valued annotation", "annot", "!ir.of(%x)"},
+        {"a dotted target", "dotted-name", "x86_64-unknown-linux-gnu"},
+        {"a target with a number", "dotted-name", "armv8.2-a"},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        if (!grammar_accepts(cases[i].src, cases[i].start)) {
+            printf("FAIL  the grammar does not derive %s: %s\n",
+                   cases[i].what, cases[i].src);
+            fails++;
+        }
+    }
+}
+
+static void test_a_composed_keyword_is_still_a_name(void)
+{
+    static const char *const WORDS[] = {
+        "array",  "bitint",     "ubitint",   "exclusive", "forall",
+        "gcref",  "indexable",  "literal",   "mutref",    "nullable",
+        "own",    "owning",     "ptr",       "ref",       "reseatable",
+        "t",      "temporary",  "tmpref",    "variant",   "in",
+        "out",    "inout",      "module",    "profile",   "target",
+        "block",  "local",      "func",      "global",    "type",
+        "layout", "size",       "align",     "stride",    "bits",
+        "loc",    "origin",     "meta",      "from",      "default",
+        "static", "extern",     "true",      "false",     "source",
+        "sizeof", "alignof",    "offsetof",
+    };
+
+    for (size_t i = 0; i < sizeof(WORDS) / sizeof(WORDS[0]); i++) {
+        char src[512];
+
+        snprintf(src, sizeof src,
+                 "module %s { profile bce target %s\n"
+                 "  func @f() -> void {\n    local $%s: i32\n"
+                 "    block %s: unreachable\n  }\n}\n",
+                 WORDS[i], WORDS[i], WORDS[i], WORDS[i]);
+
+        if (!grammar_accepts(src, "module")) {
+            printf("FAIL  the grammar refuses %s as a name, though the "
+                   "IR text format has no such keyword\n", WORDS[i]);
+            fails++;
+        }
     }
 }
 
@@ -214,6 +319,8 @@ int main(int argc, char **argv)
 
     test_the_canonical_module(argc > 1 ? argv[1] : "golden/canonical.ir");
     test_the_two_agree_construct_by_construct();
+    test_the_grammar_defines_the_whole_surface();
+    test_a_composed_keyword_is_still_a_name();
     test_the_grammar_is_not_merely_permissive();
     ir_grammar_shutdown();
 

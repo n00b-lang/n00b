@@ -2,10 +2,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ir/grammar.h"
 #include "ir/layout.h"
 #include "ir/pass.h"
 #include "ir/text.h"
 #include "ir/verify.h"
+
+#include "parse/grammar.h"
+#include "parse/pwz.h"
+#include "scanner/token_stream.h"
 
 static int  fails = 0;
 static int  gen_ops[IR_OP_COUNT];
@@ -132,10 +137,37 @@ static bool same_as_golden(const char *dir, const char *name, const char *got)
     return ok;
 }
 
+static bool derives(const char *text)
+{
+    ncc_grammar_t      *g  = ir_grammar();
+    ncc_token_stream_t *ts = ir_lex(text, strlen(text));
+
+    if (!g || !ts) {
+        return false;
+    }
+
+    ncc_grammar_set_start_id(g, ir_grammar_nt("module"));
+
+    ncc_pwz_parser_t *p  = ncc_pwz_new(g);
+    bool              ok = ncc_pwz_parse(p, ts);
+
+    ncc_pwz_free(p);
+    ncc_token_stream_free(ts);
+
+    return ok;
+}
+
 static bool round_trips(ir_ctx_t *ctx, const char *text, char **printed)
 {
     ir_diags_t  *d = nullptr;
     ir_module_t *m = parse(ctx, text, &d);
+
+    if (m && !derives(text)) {
+        printf("---- the grammar does not derive what the parser read ----\n"
+               "%s",
+               text);
+        fails++;
+    }
 
     if (!m) {
         char *r = ir_diags_render_text(d, &(ir_render_t){0});
