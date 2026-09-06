@@ -2342,7 +2342,20 @@ rocs_large_shard_seal_test = executable('test_rocs_large_shard_seal',
     ['test/unit/test_rocs_large_shard_seal.c'],
     kwargs: test_common_kwargs,
 )
-test('rocs_large_shard_seal', rocs_large_shard_seal_test, suite: 'unit')
+# Timeout raised from meson's 30s default (n00b#261's reasoning, same
+# signature): observed at 16.77s and 20.06s on ubuntu-latest and TIMEOUT at
+# 30.04s on a third run of comparable commits. That spread is continuous and
+# crowds the cap, which is a budget that is too tight for a shared runner --
+# an 80MB shard seal is genuinely heavy work.
+#
+# Distinct from rocs_live_cursor (n00b#295), which is quarantined instead:
+# its outcomes are bimodal (0.12s or the full cap, no output), so it is
+# blocking rather than slow, and more budget would not help it.
+#
+# 180s to match rocs_seal_bench, the other heavy seal test, rather than a
+# marginal bump that would need revisiting on the next slow runner.
+test('rocs_large_shard_seal', rocs_large_shard_seal_test, suite: 'unit',
+     timeout: 180)
 
 rocs_recovery_journal_test = executable('test_rocs_recovery_journal',
     ['test/unit/test_rocs_recovery_journal.c'],
