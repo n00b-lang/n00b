@@ -211,10 +211,6 @@ static bool tokenize(ncc_grammar_t *g, const char *src, size_t len, toks *t)
 
 static void free_toks(toks *t)
 {
-    for (int32_t i = 0; i < t->n; i++) {
-        free(t->v[i]);
-    }
-
     free(t->v);
     free(t->end);
 }

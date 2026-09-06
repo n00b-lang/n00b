@@ -109,54 +109,59 @@ static bool id_more(unsigned char c)
     return c == '_' || isalnum(c) || c >= 0x80;
 }
 
-static char *pending_note;
+static ncc_trivia_t *pending;
 
 static void emit(ir_tokens_t *t, int64_t tid, const char *at, size_t len,
                  uint32_t line, uint32_t col, size_t off, size_t end)
 {
     if (t->n >= t->cap) {
-        t->cap  = t->cap ? t->cap * 2 : 64;
-        t->v    = realloc(t->v, (size_t)t->cap * sizeof(*t->v));
-        t->at   = realloc(t->at, (size_t)t->cap * sizeof(*t->at));
-        t->end  = realloc(t->end, (size_t)t->cap * sizeof(*t->end));
-        t->note = realloc(t->note, (size_t)t->cap * sizeof(*t->note));
+        t->cap = t->cap ? t->cap * 2 : 64;
+        t->v   = realloc(t->v, (size_t)t->cap * sizeof(*t->v));
+        t->at  = realloc(t->at, (size_t)t->cap * sizeof(*t->at));
+        t->end = realloc(t->end, (size_t)t->cap * sizeof(*t->end));
     }
 
     ncc_token_info_t *tok = calloc(1, sizeof(*tok));
 
-    tok->tid    = (int32_t)tid;
-    tok->index  = t->n;
-    tok->line   = line;
-    tok->column = col;
-    tok->value  = ncc_option_set(ncc_string_t,
-                                 ncc_string_from_raw(at, (int64_t)len));
+    tok->tid            = (int32_t)tid;
+    tok->index          = t->n;
+    tok->line           = line;
+    tok->column         = col;
+    tok->leading_trivia = pending;
+    tok->value          = ncc_option_set(ncc_string_t,
+                                         ncc_string_from_raw(at,
+                                                             (int64_t)len));
 
-    t->at[t->n]   = off;
-    t->end[t->n]  = end;
-    t->note[t->n] = pending_note;
-    pending_note  = nullptr;
-    t->v[t->n++]  = tok;
+    pending      = nullptr;
+    t->at[t->n]  = off;
+    t->end[t->n] = end;
+    t->v[t->n++] = tok;
+}
+
+static void free_trivia(ncc_trivia_t *t)
+{
+    while (t) {
+        ncc_trivia_t *next = t->next;
+
+        free(t->text.data);
+        free(t);
+        t = next;
+    }
 }
 
 void ir_tokens_free(ir_tokens_t *t)
 {
-    for (int32_t i = 0; i < t->n; i++) {
-        free(t->v[i]);
-        free(t->note[i]);
-    }
+    free_trivia(pending);
+    pending = nullptr;
 
     free(t->v);
     free(t->at);
     free(t->end);
-    free(t->note);
-    free(pending_note);
-    pending_note = nullptr;
-    t->v    = nullptr;
-    t->at   = nullptr;
-    t->end  = nullptr;
-    t->note = nullptr;
-    t->n    = 0;
-    t->cap  = 0;
+    t->v   = nullptr;
+    t->at  = nullptr;
+    t->end = nullptr;
+    t->n   = 0;
+    t->cap = 0;
 }
 
 bool ir_tokenize(const char *src, size_t len, ir_tokens_t *out)
@@ -201,12 +206,23 @@ bool ir_tokenize(const char *src, size_t len, ir_tokens_t *out)
                 start++;
             }
 
-            size_t n = i - start;
+            ncc_trivia_t *node = calloc(1, sizeof(*node));
+            ncc_trivia_t *tail = pending;
 
-            free(pending_note);
-            pending_note = malloc(n + 1);
-            memcpy(pending_note, src + start, n);
-            pending_note[n] = 0;
+            node->text = ncc_string_from_raw(src + start,
+                                             (int64_t)(i - start));
+
+            if (!tail) {
+                pending = node;
+            }
+            else {
+                while (tail->next) {
+                    tail = tail->next;
+                }
+
+                tail->next = node;
+            }
+
             continue;
         }
 
