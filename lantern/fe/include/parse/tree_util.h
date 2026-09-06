@@ -18,3 +18,19 @@ ncc_parse_tree_t *ncc_tree_get_nth_nt_child(ncc_parse_tree_t *node, int32_t n);
 ncc_parse_tree_t *ncc_tree_resolve_child_ref(ncc_grammar_t    *g,
                                              ncc_parse_tree_t *parent,
                                              ncc_child_ref_t   ref);
+
+const char *ncc_tree_nt_name(ncc_grammar_t *g, ncc_parse_tree_t *n);
+bool ncc_tree_is_nt(ncc_grammar_t *g, ncc_parse_tree_t *n, const char *name);
+
+ncc_string_t ncc_tree_leaf_text(ncc_parse_tree_t *n);
+int64_t      ncc_tree_leaf_tid(ncc_parse_tree_t *n);
+bool         ncc_tree_leaf_is(ncc_parse_tree_t *n, const char *text);
+
+typedef struct {
+    ncc_parse_tree_t **v;
+    size_t             n;
+    size_t             cap;
+} ncc_tree_kids_t;
+
+void ncc_tree_kids(ncc_parse_tree_t *n, ncc_tree_kids_t *out);
+void ncc_tree_kids_free(ncc_tree_kids_t *k);
