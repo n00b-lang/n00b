@@ -1,7 +1,9 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "ir_internal.h"
 #include "ir/rule.h"
+#include "ir/typelang.h"
 
 static ir_machine_t opaque(void)
 {
@@ -22,9 +24,11 @@ static void ready_scalars(ir_module_t *m)
     m->scalar_types  = ir_alloc(m->ctx, n * sizeof(th_type *));
 
     for (size_t i = 0; i < p->n_scalars; i++) {
-        th_error err = {0};
-        th_type *t   = th_parse(m->ctx->types, p->scalars[i].type_text, &err);
+        char    *err = nullptr;
+        th_type *t   = ir_typelang_parse(m->ctx->types,
+                                         p->scalars[i].type_text, &err);
 
+        free(err);
         m->scalar_hashes[i] = t ? th_hash(m->ctx->types, t) : 0;
         m->scalar_types[i]  = t ? ir_type_intern(m, t) : nullptr;
     }

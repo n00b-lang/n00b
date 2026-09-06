@@ -1076,6 +1076,28 @@ static th_type *lower(bctx *c, ncc_parse_tree_t *tree)
 
     return out;
 }
+#define TL_MAX_DEPTH 512
+
+static bool too_deep(const char *src, size_t len)
+{
+    size_t depth = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        char c = src[i];
+
+        if (c == '[' || c == '(' || c == '{') {
+            if (++depth > TL_MAX_DEPTH) {
+                return true;
+            }
+        }
+        else if (c == ']' || c == ')' || c == '}') {
+            depth -= depth != 0;
+        }
+    }
+
+    return false;
+}
+
 static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
                     char **err)
 {
@@ -1086,6 +1108,14 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
     ncc_grammar_t *g = load_grammar();
 
     if (!g || !src) {
+        return nullptr;
+    }
+
+    if (too_deep(src, len)) {
+        if (err) {
+            *err = msg("this type nests deeper than the parser will descend");
+        }
+
         return nullptr;
     }
 

@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "ir_internal.h"
+#include "ir/typelang.h"
 
 void *ir_alloc(ir_ctx_t *ctx, size_t n)
 {
@@ -386,8 +387,10 @@ th_type *ir_type_parse(ir_module_t *m, const char *text)
         return nullptr;
     }
 
-    th_error err = {0};
-    th_type *t   = th_parse(m->ctx->types, text, &err);
+    char    *err = nullptr;
+    th_type *t   = ir_typelang_parse(m->ctx->types, text, &err);
+
+    free(err);
 
     return t ? ir_type_intern(m, t) : nullptr;
 }

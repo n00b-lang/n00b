@@ -4,6 +4,7 @@
 #include "ir_internal.h"
 #include "ir/layout.h"
 #include "ir/text.h"
+#include "ir/typelang.h"
 
 typedef enum : uint8_t {
     T_EOF,
@@ -492,17 +493,19 @@ static th_type *parse_type(P *p, ir_module_t *m)
     p->line = p->cur.line;
     p->col  = p->cur.col;
 
-    th_error err      = {0};
+    char    *err      = nullptr;
     size_t   consumed = 0;
-    th_type *t = th_parse_prefix_n(ir_ctx_types(p->ctx), p->src + p->pos,
-                                   p->len - p->pos, &consumed, &err);
+    th_type *t = ir_typelang_parse_prefix(ir_ctx_types(p->ctx), p->src + p->pos,
+                                          p->len - p->pos, &consumed, &err);
 
     if (!t || !consumed) {
-        fail(p, err.msg ? err.msg : "expected a type");
+        fail(p, err ? err : "expected a type");
+        free(err);
         advance(p);
 
         return nullptr;
     }
+    free(err);
     bump(p, consumed);
     advance(p);
 
