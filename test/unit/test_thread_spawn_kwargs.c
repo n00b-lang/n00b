@@ -756,6 +756,7 @@ typedef struct {
     bool          seen_isolated;       // self->gc_isolated as observed on worker
     n00b_rwlock_t *lock;               // GC-arena lock the worker holds across GC
     n00b_futex_t  park;                // 0 = parked; main stores 1 to release
+    n00b_futex_t  ready;               // worker stores 1 once seen_isolated is set
 } isolation_io_t;
 
 static void *
@@ -765,8 +766,14 @@ isolation_worker(void *raw)
     n00b_thread_t  *self = n00b_thread_self();
     assert(self != nullptr);
 
-    // Observe the isolation flag the launcher set on this worker's struct.
+    // Observe the isolation flag the launcher set on this worker's struct,
+    // then publish that we have done so.  The launcher blocks on this before
+    // asserting: seen_isolated starts poisoned, so without the handshake a
+    // worker that has not been scheduled yet is indistinguishable from one
+    // that ran and disagreed.
     io->seen_isolated = self->gc_isolated;
+    n00b_atomic_store(&io->ready, 1);
+    n00b_futex_wake(&io->ready, true);
 
     // Take the write lock: this links the lock into this thread's
     // rec->exclusive_locks chain, which n00b_scan_thread_stacks must keep
@@ -794,6 +801,8 @@ spawn_parked_isolation_worker(isolation_io_t *io, bool isolation)
     io->seen_isolated       = !isolation; // poison so a no-op write is caught
     n00b_atomic_store(&io->park, 0);
     n00b_futex_init(&io->park);
+    n00b_atomic_store(&io->ready, 0);
+    n00b_futex_init(&io->ready);
 
     n00b_result_t(n00b_thread_t *) r = n00b_thread_spawn(isolation_worker,
                                                          io,
@@ -801,6 +810,12 @@ spawn_parked_isolation_worker(isolation_io_t *io, bool isolation)
     assert(n00b_result_is_ok(r));
     n00b_thread_t *child = n00b_result_get(r);
     assert(child != nullptr);
+
+    // Wait for the worker to publish seen_isolated before returning, so the
+    // caller's assertions read an observation rather than the poison value.
+    while (!n00b_atomic_load(&io->ready)) {
+        n00b_futex_wait(&io->ready, 0, 100000000); // 100ms
+    }
     return child;
 }
 

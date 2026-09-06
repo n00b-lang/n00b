@@ -1512,6 +1512,18 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
             addr = scan_ptr + N00B_ALLOC_HDR_SZ;
         }
 
+        // An allocator with OOB metadata and NO inline header cannot normalize
+        // an interior pointer: the block above is the only place `addr` is
+        // walked back to an allocation base, and it needs a sentinel to find.
+        // The metadata dict below is keyed by the exact base address, so an
+        // interior address misses and used to return n00b_alloc_err -- the same
+        // answer as "this is free space", which is what conservative scanning
+        // produces constantly. Report the two separately so a caller can tell a
+        // routine miss from "there may be a live object here I cannot resolve."
+        // See n00b_alloc_info_kind_t and n00b#327.
+        bool interior_unresolvable = scan_for_header && !al->add_inline_header
+                                  && al->metadata != nullptr;
+
         if (al->metadata) {
             // Metadata reads take the STW read lock too: this same dict can be
             // rebuilt wholesale by the owning allocator's metadata compactor.
@@ -1524,7 +1536,11 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
                 n00b_rw_unlock(&n00b_get_runtime()->critical_execution);
             }
             if (!oob) {
-                *result = (n00b_alloc_info_t){.kind = n00b_alloc_err};
+                *result = (n00b_alloc_info_t){
+                    .kind = interior_unresolvable
+                              ? n00b_alloc_interior_unresolvable
+                              : n00b_alloc_err,
+                };
                 return;
             }
             *result = (n00b_alloc_info_t){
