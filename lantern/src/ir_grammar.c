@@ -9,6 +9,9 @@
 #include "parse/bnf.h"
 #include "parse/pwz.h"
 #include "internal/parse/grammar_internal.h"
+#include "scanner/scanner.h"
+#include "scanner/scan_builtins.h"
+#include "lib/buffer.h"
 #include "scanner/token_stream.h"
 
 #include "ir_bnf.h"
@@ -99,258 +102,110 @@ void ir_grammar_shutdown(void)
     }
 }
 
-static bool id_start(unsigned char c)
+static int32_t tid_int;
+static int32_t tid_float;
+static int32_t tid_str;
+
+static bool word_start(ncc_codepoint_t c, void *ctx)
 {
-    return c == '_' || isalpha(c) || c >= 0x80;
+    (void)ctx;
+
+    return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || c >= 0x80;
 }
 
-static bool id_more(unsigned char c)
+static bool after_sigil(ncc_scanner_t *s)
 {
-    return c == '_' || isalnum(c) || c >= 0x80;
+    ncc_token_info_t *prev = ncc_scan_prev_token(s);
+
+    return prev && (prev->tid == '%' || prev->tid == '$' || prev->tid == '@');
 }
 
-static ncc_trivia_t *pending;
-
-static void emit(ir_tokens_t *t, int64_t tid, const char *at, size_t len,
-                 uint32_t line, uint32_t col, size_t off, size_t end)
+static bool ir_scan(ncc_scanner_t *s)
 {
-    if (t->n >= t->cap) {
-        t->cap = t->cap ? t->cap * 2 : 64;
-        t->v   = realloc(t->v, (size_t)t->cap * sizeof(*t->v));
-        t->at  = realloc(t->at, (size_t)t->cap * sizeof(*t->at));
-        t->end = realloc(t->end, (size_t)t->cap * sizeof(*t->end));
+restart:
+    ncc_scan_skip_whitespace(s);
+
+    if (ncc_scan_at_eof(s)) {
+        return false;
     }
 
-    ncc_token_info_t *tok = calloc(1, sizeof(*tok));
-
-    tok->tid            = (int32_t)tid;
-    tok->index          = t->n;
-    tok->line           = line;
-    tok->column         = col;
-    tok->leading_trivia = pending;
-    tok->value          = ncc_option_set(ncc_string_t,
-                                         ncc_string_from_raw(at,
-                                                             (int64_t)len));
-
-    pending      = nullptr;
-    t->at[t->n]  = off;
-    t->end[t->n] = end;
-    t->v[t->n++] = tok;
-}
-
-static void free_trivia(ncc_trivia_t *t)
-{
-    while (t) {
-        ncc_trivia_t *next = t->next;
-
-        free(t->text.data);
-        free(t);
-        t = next;
+    if (ncc_scan_peek_byte(s, 0) == '#') {
+        ncc_scan_mark(s);
+        ncc_scan_skip_line_comment(s);
+        ncc_scan_add_leading_trivia(s, ncc_scan_extract(s));
+        goto restart;
     }
+
+    ncc_scan_mark(s);
+
+    ncc_codepoint_t c = ncc_scan_peek(s, 0);
+
+    if (c == '"') {
+        ncc_scan_emit(s, tid_str, ncc_scan_string_double(s));
+
+        return true;
+    }
+
+    if (c >= '0' && c <= '9') {
+        if (ncc_scan_number(s, tid_int, tid_float)) {
+            return true;
+        }
+    }
+
+    if (word_start(c, nullptr)) {
+        bool                       name = after_sigil(s);
+        ncc_option_t(ncc_string_t) id   = ncc_scan_identifier(s);
+
+        if (ncc_option_is_set(id)) {
+            ncc_string_t text = ncc_option_get(id);
+            int64_t      kw   = name ? NCC_TOK_OTHER
+                                     : ncc_scan_terminal_id(s, text.data);
+
+            ncc_scan_emit(s, kw != NCC_TOK_OTHER ? (int32_t)kw
+                                                 : NCC_TOK_IDENTIFIER,
+                          id);
+
+            return true;
+        }
+    }
+
+    ncc_codepoint_t next = ncc_scan_peek(s, 1);
+    char            two[3] = {(char)c, (char)next, 0};
+
+    if (next > 0 && next < 128 && !isspace((int)next)) {
+        int64_t op = ncc_scan_terminal_id(s, two);
+
+        if (op != NCC_TOK_OTHER && op > 0xFF) {
+            ncc_scan_advance_n(s, 2);
+            ncc_scan_emit_marked(s, (int32_t)op);
+
+            return true;
+        }
+    }
+
+    ncc_scan_advance(s);
+    ncc_scan_emit_marked(s, (int32_t)c);
+
+    return true;
 }
 
-void ir_tokens_free(ir_tokens_t *t)
-{
-    free_trivia(pending);
-    pending = nullptr;
-
-    free(t->v);
-    free(t->at);
-    free(t->end);
-    t->v   = nullptr;
-    t->at  = nullptr;
-    t->end = nullptr;
-    t->n   = 0;
-    t->cap = 0;
-}
-
-bool ir_tokenize(const char *src, size_t len, ir_tokens_t *out)
+ncc_token_stream_t *ir_lex(const char *src, size_t len)
 {
     ncc_grammar_t *g = ir_grammar();
 
     if (!g || !src) {
-        return false;
+        return nullptr;
     }
 
-    int64_t  tid_int   = tid_of_name(g, "INT_LIT");
-    int64_t  tid_float = tid_of_name(g, "FLOAT_LIT");
-    int64_t  tid_str   = tid_of_name(g, "STRING_LIT");
-    size_t   i         = 0;
-    uint32_t line      = 1;
-    uint32_t col       = 1;
+    tid_int   = (int32_t)tid_of_name(g, "INT_LIT");
+    tid_float = (int32_t)tid_of_name(g, "FLOAT_LIT");
+    tid_str   = (int32_t)tid_of_name(g, "STRING_LIT");
 
-    while (i < len && src[i]) {
-        unsigned char c = (unsigned char)src[i];
+    ncc_buffer_t  *buf = ncc_buffer_from_bytes(src, (int64_t)len);
+    ncc_scanner_t *sc  = ncc_scanner_new(buf, ir_scan, g,
+                                         ncc_option_none(ncc_string_t),
+                                         nullptr, nullptr);
 
-        if (c == '\n') {
-            line++;
-            col = 1;
-            i++;
-            continue;
-        }
-
-        if (isspace(c)) {
-            i++;
-            col++;
-            continue;
-        }
-
-        if (c == '#') {
-            size_t start = ++i;
-
-            while (i < len && src[i] != '\n') {
-                i++;
-            }
-
-            while (start < i && isspace((unsigned char)src[start])) {
-                start++;
-            }
-
-            ncc_trivia_t *node = calloc(1, sizeof(*node));
-            ncc_trivia_t *tail = pending;
-
-            node->text = ncc_string_from_raw(src + start,
-                                             (int64_t)(i - start));
-
-            if (!tail) {
-                pending = node;
-            }
-            else {
-                while (tail->next) {
-                    tail = tail->next;
-                }
-
-                tail->next = node;
-            }
-
-            continue;
-        }
-
-        size_t   start = i;
-        uint32_t at_col = col;
-
-        if (c == '"') {
-            i++;
-
-            while (i < len && src[i] != '"') {
-                i += src[i] == '\\' && i + 1 < len ? 2 : 1;
-            }
-
-            if (i >= len) {
-                return false;
-            }
-
-            i++;
-            col += (uint32_t)(i - start);
-            emit(out, tid_str, src + start + 1, i - start - 2, line, at_col,
-                 start, i);
-            continue;
-        }
-
-        if (isdigit(c)) {
-            bool is_float = false;
-
-            if (c == '0' && i + 1 < len && (src[i + 1] == 'x'
-                                            || src[i + 1] == 'X')) {
-                i += 2;
-
-                while (i < len && isxdigit((unsigned char)src[i])) {
-                    i++;
-                }
-            }
-            else {
-                while (i < len && isdigit((unsigned char)src[i])) {
-                    i++;
-                }
-
-                if (i + 1 < len && src[i] == '.'
-                    && isdigit((unsigned char)src[i + 1])) {
-                    is_float = true;
-                    i++;
-
-                    while (i < len && isdigit((unsigned char)src[i])) {
-                        i++;
-                    }
-                }
-
-                if (i < len && (src[i] == 'e' || src[i] == 'E')) {
-                    size_t save = i;
-
-                    i++;
-
-                    if (i < len && (src[i] == '+' || src[i] == '-')) {
-                        i++;
-                    }
-
-                    if (i < len && isdigit((unsigned char)src[i])) {
-                        is_float = true;
-
-                        while (i < len && isdigit((unsigned char)src[i])) {
-                            i++;
-                        }
-                    }
-                    else {
-                        i = save;
-                    }
-                }
-            }
-
-            col += (uint32_t)(i - start);
-            emit(out, is_float ? tid_float : tid_int, src + start, i - start,
-                 line, at_col, start, i);
-            continue;
-        }
-
-        if (id_start(c)) {
-            while (i < len && id_more((unsigned char)src[i])) {
-                i++;
-            }
-
-            size_t  n  = i - start;
-            int64_t kw = 0;
-
-            bool after_sigil = out->n > 0
-                            && (out->v[out->n - 1]->tid == '%'
-                                || out->v[out->n - 1]->tid == '$'
-                                || out->v[out->n - 1]->tid == '@');
-
-            if (!after_sigil) {
-                if (n == 1) {
-                    unsigned char ch = (unsigned char)src[start];
-
-                    kw = ch < 128 && char_terminals[ch] ? ch : 0;
-                }
-                else if (n < 128) {
-                    char word[128];
-
-                    memcpy(word, src + start, n);
-                    word[n] = 0;
-                    kw      = tid_of_name(g, word);
-                }
-            }
-
-            col += (uint32_t)n;
-            emit(out, kw ? kw : NCC_TOK_IDENTIFIER, src + start, n, line,
-                 at_col, start, i);
-            continue;
-        }
-
-        if (i + 1 < len) {
-            char    two[3] = {src[i], src[i + 1], 0};
-            int64_t op     = tid_of_name(g, two);
-
-            if (op && op > 0xFF) {
-                i += 2;
-                col += 2;
-                emit(out, op, src + start, 2, line, at_col, start, i);
-                continue;
-            }
-        }
-
-        i++;
-        col++;
-        emit(out, c, src + start, 1, line, at_col, start, i);
-    }
-
-    return true;
+    return ncc_token_stream_new(sc);
 }

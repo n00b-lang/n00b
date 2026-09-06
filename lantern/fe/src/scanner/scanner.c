@@ -560,6 +560,8 @@ ncc_scan_emit(ncc_scanner_t *s, int32_t tid, ncc_option_t(ncc_string_t) value)
     tok->line            = s->mark_line;
     tok->column          = s->mark_col;
     tok->endcol          = s->column;
+    tok->start_byte      = s->mark;
+    tok->end_byte        = s->cursor;
     tok->index           = ts->next_index++;
     tok->leading_trivia  = s->pending_leading;
     tok->trailing_trivia = s->pending_trailing;
@@ -771,17 +773,20 @@ ncc_scan_terminal_id(ncc_scanner_t *s, const char *name)
     void *gval   = _ncc_dict_get(s->grammar->terminal_map,
                                            (void *)name, &gfound);
 
-    if (!gfound) {
-        _ncc_dict_put(s->terminal_ids,
-                               (void *)name,
-                               (void *)(intptr_t)NCC_TOK_OTHER);
-        return NCC_TOK_OTHER;
+    int64_t tid = gfound ? (int64_t)(intptr_t)gval : NCC_TOK_OTHER;
+
+    _ncc_dict_put(s->terminal_ids, ncc_string_from_cstr(name).data,
+                  (void *)(intptr_t)tid);
+
+    return tid;
+}
+
+ncc_token_info_t *
+ncc_scan_prev_token(ncc_scanner_t *s)
+{
+    if (!s || !s->stream || s->stream->token_count <= 0) {
+        return nullptr;
     }
 
-    int64_t tid = (int64_t)(intptr_t)gval;
-
-    _ncc_dict_put(s->terminal_ids,
-                           (void *)name,
-                           (void *)(intptr_t)tid);
-    return tid;
+    return s->stream->tokens[s->stream->token_count - 1];
 }

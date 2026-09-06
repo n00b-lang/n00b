@@ -14,24 +14,20 @@ static int fails;
 
 static bool grammar_accepts(const char *src, const char *start)
 {
-    ncc_grammar_t *g = ir_grammar();
-    ir_tokens_t    t = {0};
+    ncc_grammar_t      *g  = ir_grammar();
+    ncc_token_stream_t *ts = ir_lex(src, strlen(src));
 
-    if (!g || !ir_tokenize(src, strlen(src), &t) || !t.n) {
-        ir_tokens_free(&t);
-
+    if (!g || !ts) {
         return false;
     }
 
     ncc_grammar_set_start_id(g, ir_grammar_nt(start));
 
-    ncc_token_stream_t *ts = ncc_token_stream_from_array(t.v, t.n);
-    ncc_pwz_parser_t   *p  = ncc_pwz_new(g);
-    bool                ok = ncc_pwz_parse(p, ts);
+    ncc_pwz_parser_t *p  = ncc_pwz_new(g);
+    bool              ok = ncc_pwz_parse(p, ts);
 
     ncc_pwz_free(p);
     ncc_token_stream_free(ts);
-    ir_tokens_free(&t);
 
     return ok;
 }
@@ -199,13 +195,14 @@ static void test_the_grammar_is_not_merely_permissive(void)
 int main(int argc, char **argv)
 {
     if (argc > 2 && !strcmp(argv[1], "-t")) {
-        ir_tokens_t t = {0};
+        ncc_token_stream_t *ts = ir_lex(argv[2], strlen(argv[2]));
+        ncc_token_info_t   *tk;
 
-        ir_tokenize(argv[2], strlen(argv[2]), &t);
-
-        for (int32_t i = 0; i < t.n; i++) {
-            printf("%2d  tid=%-12d %s\n", i, t.v[i]->tid,
-                   ncc_option_get(t.v[i]->value).data);
+        for (int i = 0; (tk = ncc_stream_get(ts, i)); i++) {
+            printf("%2d tid=%-11d [%zu,%zu) %s\n", i, tk->tid,
+                   tk->start_byte, tk->end_byte,
+                   ncc_option_is_set(tk->value)
+                     ? ncc_option_get(tk->value).data : "");
         }
 
         printf("grammar: %s\n",

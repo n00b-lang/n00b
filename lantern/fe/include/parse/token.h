@@ -47,6 +47,8 @@ typedef struct ncc_token_info_t {
     uint32_t                       line;
     uint32_t                       column;
     uint32_t                       endcol;
+    size_t                         start_byte;
+    size_t                         end_byte;
     bool                           system_header;
 } ncc_token_info_t;
 

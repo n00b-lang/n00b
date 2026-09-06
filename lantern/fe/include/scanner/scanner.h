@@ -120,3 +120,5 @@ extern bool ncc_scan_skip_block_comment(ncc_scanner_t *s,
                                           const char *closer);
 
 extern int64_t ncc_scan_terminal_id(ncc_scanner_t *s, const char *name);
+
+extern ncc_token_info_t *ncc_scan_prev_token(ncc_scanner_t *s);
