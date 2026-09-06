@@ -251,12 +251,85 @@ static void test_a_reduce_folds_children_into_a_value(void)
     ncc_grammar_free(g);
 }
 
+static int reduced;
+
+static void *r_count(ncc_reduce_t *r)
+{
+    (void)r;
+    reduced++;
+
+    return nullptr;
+}
+
+static bool stop_at_item(ncc_visit_t *v)
+{
+    ncc_tree_walk_stop(v->walk);
+
+    return true;
+}
+
+static void test_a_visitor_can_stop_a_reduce(void)
+{
+    static const char *const G =
+        "<list> ::= <item> (%\",\" <item>)*\n"
+        "<item> ::= %IDENTIFIER\n";
+
+    ncc_grammar_t *g = ncc_grammar_new();
+
+    ncc_grammar_set_error_recovery(g, false);
+    ncc_bnf_load(ncc_string_from_cstr(G), ncc_string_from_cstr("list"), g);
+
+    ncc_token_info_t *toks[] = {
+        tk(NCC_TOK_IDENTIFIER, "a", 0),
+        tk(',', ",", 1),
+        tk(NCC_TOK_IDENTIFIER, "b", 2),
+        tk(',', ",", 3),
+        tk(NCC_TOK_IDENTIFIER, "c", 4),
+    };
+
+    ncc_token_stream_t *ts = ncc_token_stream_from_array(toks, 5);
+    ncc_pwz_parser_t   *p  = ncc_pwz_new(g);
+
+    check("the list parses for the stop test", ncc_pwz_parse(p, ts));
+
+    ncc_tree_walk_t *w = ncc_tree_walk_new(g, nullptr);
+
+    reduced = 0;
+    ncc_walk_reduce_default(w, r_count, nullptr);
+    ncc_tree_walk_reduce(w, ncc_pwz_get_tree(p));
+    check("the whole tree reduces when nothing stops it", reduced > 1);
+    ncc_tree_walk_free(w);
+
+    int whole = reduced;
+
+    w = ncc_tree_walk_new(g, nullptr);
+
+    reduced = 0;
+    ncc_walk_on_nt(w, ncc_string_from_cstr("item"), stop_at_item, nullptr,
+                   nullptr);
+    ncc_walk_reduce_default(w, r_count, nullptr);
+
+    void *out = ncc_tree_walk_reduce(w, ncc_pwz_get_tree(p));
+
+    check("stopping in a visitor halts the reduce", reduced < whole);
+    check("and the reduce reports that it stopped",
+          ncc_tree_walk_stopped(w));
+    check("and yields nothing rather than a half-built result",
+          out == nullptr);
+    ncc_tree_walk_free(w);
+
+    ncc_pwz_free(p);
+    ncc_token_stream_free(ts);
+    ncc_grammar_free(g);
+}
+
 int main(void)
 {
     test_the_parts_load_in_either_order();
     test_one_grammar_parses_from_several_start_symbols();
     test_a_missing_part_is_still_reported();
     test_a_reduce_folds_children_into_a_value();
+    test_a_visitor_can_stop_a_reduce();
 
     if (!fails) {
         printf("fe compose: all checks passed\n");

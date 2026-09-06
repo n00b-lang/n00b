@@ -1120,66 +1120,107 @@ exp_to_rule(ncc_pwz_parser_t *p, pwz_exp_t *exp)
     return ncc_get_rule(p->grammar, nt->rule_ids.data[exp->rule_ix]);
 }
 
+typedef struct {
+    pwz_exp_t *exp;
+    size_t     at;
+    int32_t    cost;
+    int32_t    from;
+    int32_t    best_end;
+    bool       entered;
+} score_frame_t;
+
+ncc_list_decl(score_frame_t);
+
 static int32_t
-score_exp(ncc_pwz_parser_t *p, pwz_exp_t *exp, int32_t *pos)
+score_exp(ncc_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
 {
-    if (!exp || exp == p->exp_bottom) {
-        return 0;
-    }
+    ncc_list_t(score_frame_t) frames = ncc_list_new(score_frame_t);
+    int32_t                   last   = 0;
 
-    switch (exp->kind) {
-    case PWZ_TOK:
-    case PWZ_CLASS:
-    case PWZ_ANY:
-        (*pos)++;
-        return 0;
+    ncc_list_push(frames, ((score_frame_t){.exp = root}));
 
-    case PWZ_SEQ: {
-        int32_t           cost  = 0;
-        ncc_parse_rule_t *rule  = exp_to_rule(p, exp);
+    while (frames.len > 0) {
+        score_frame_t *f = &frames.data[frames.len - 1];
 
-        if (rule && rule->disambig_predicate.data && p->disambig_cb) {
-            ncc_token_info_t *tok = get_token(p, *pos);
+        if (!f->entered) {
+            f->entered = true;
 
-            if (p->disambig_cb(p->disambig_ud, rule->disambig_predicate.data,
-                               tok)) {
-                cost += rule->disambig_cost;
+            if (!f->exp || f->exp == p->exp_bottom) {
+                last = 0;
+                frames.len--;
+                continue;
+            }
+
+            if (f->exp->kind == PWZ_TOK || f->exp->kind == PWZ_CLASS
+                || f->exp->kind == PWZ_ANY) {
+                (*pos)++;
+                last = 0;
+                frames.len--;
+                continue;
+            }
+
+            if (f->exp->kind == PWZ_SEQ) {
+                ncc_parse_rule_t *rule = exp_to_rule(p, f->exp);
+
+                if (rule && rule->disambig_predicate.data && p->disambig_cb) {
+                    ncc_token_info_t *tok = get_token(p, *pos);
+
+                    if (p->disambig_cb(p->disambig_ud,
+                                       rule->disambig_predicate.data, tok)) {
+                        f->cost += rule->disambig_cost;
+                    }
+                }
+            }
+            else {
+                if (ncc_list_len(f->exp->alt.alts) == 0) {
+                    last = 0;
+                    frames.len--;
+                    continue;
+                }
+                f->cost     = INT32_MAX;
+                f->from     = *pos;
+                f->best_end = *pos;
             }
         }
-
-        for (int32_t i = 0; i < exp->nchildren; i++) {
-            cost += score_exp(p, exp->seq.children[i], pos);
+        else if (f->exp->kind == PWZ_SEQ) {
+            f->cost += last;
+        }
+        else if (last <= f->cost) {
+            f->cost     = last;
+            f->best_end = *pos;
         }
 
-        return cost;
-    }
+        size_t n = f->exp->kind == PWZ_SEQ ? (size_t)f->exp->nchildren
+                                           : ncc_list_len(f->exp->alt.alts);
 
-    case PWZ_ALT: {
-        size_t nalts = ncc_list_len(exp->alt.alts);
+        if (f->at < n) {
+            pwz_exp_t *kid;
 
-        if (nalts == 0) {
-            return 0;
-        }
-
-        int32_t best     = INT32_MAX;
-        int32_t best_end = *pos;
-
-        for (size_t i = 0; i < nalts; i++) {
-            int32_t p2 = *pos;
-            int32_t c  = score_exp(p, exp->alt.alts.data[i], &p2);
-
-            if (c <= best) {
-                best     = c;
-                best_end = p2;
+            if (f->exp->kind == PWZ_SEQ) {
+                kid = f->exp->seq.children[f->at];
             }
+            else {
+                kid  = f->exp->alt.alts.data[f->at];
+                *pos = f->from;
+            }
+            f->at++;
+            ncc_list_push(frames, ((score_frame_t){.exp = kid}));
+
+            continue;
         }
 
-        *pos = best_end;
-        return best;
-    }
+        f = &frames.data[frames.len - 1];
+
+        if (f->exp->kind == PWZ_ALT) {
+            *pos = f->best_end;
+        }
+        last = f->cost;
+        frames.len--;
     }
 
-    return 0;
+    ncc_list_free(frames);
+
+    return last;
 }
 
 static pwz_exp_t *
@@ -1363,51 +1404,119 @@ build_result_tree(ncc_pwz_parser_t *p, pwz_exp_t *top_result)
     return convert_exp_to_tree(p, top_result, &st);
 }
 
-static int32_t
-count_trees_in_exp(pwz_exp_t *exp)
+#define PWZ_TREES_MANY INT32_MAX
+#define PWZ_COUNTING   ((void *)(intptr_t)-1)
+
+typedef struct {
+    pwz_exp_t *exp;
+    size_t     at;
+    int64_t    acc;
+    bool       entered;
+} count_frame_t;
+
+ncc_list_decl(count_frame_t);
+
+static bool
+counts_by_alt(const pwz_exp_t *e)
 {
-    if (!exp) {
+    return e->kind == PWZ_ALT && e->nt_id == -1;
+}
+
+static size_t
+count_arity(const pwz_exp_t *e)
+{
+    return counts_by_alt(e) ? ncc_list_len(e->alt.alts)
+                            : (size_t)e->nchildren;
+}
+
+static pwz_exp_t *
+count_child(const pwz_exp_t *e, size_t i)
+{
+    return counts_by_alt(e) ? e->alt.alts.data[i] : e->seq.children[i];
+}
+
+static int32_t
+count_trees_in_exp(pwz_exp_t *root)
+{
+    if (!root) {
         return 1;
     }
 
-    if (exp->kind == PWZ_ALT && exp->nt_id == -1) {
-        int32_t total = 0;
-        size_t  nalts = ncc_list_len(exp->alt.alts);
+    ncc_dict_t memo;
 
-        for (size_t i = 0; i < nalts; i++) {
-            total += count_trees_in_exp(exp->alt.alts.data[i]);
+    ncc_dict_init(&memo, ncc_hash_word, nullptr);
+
+    ncc_list_t(count_frame_t) frames = ncc_list_new(count_frame_t);
+    int64_t                   last   = 1;
+
+    ncc_list_push(frames, ((count_frame_t){.exp = root}));
+
+    while (frames.len > 0) {
+        count_frame_t *f = &frames.data[frames.len - 1];
+
+        if (!f->entered) {
+            bool  found = false;
+            void *hit   = ncc_dict_get(&memo, f->exp, &found);
+
+            if (found) {
+                last = hit == PWZ_COUNTING ? PWZ_TREES_MANY
+                                           : (int64_t)(intptr_t)hit;
+                frames.len--;
+                continue;
+            }
+
+            f->entered = true;
+
+            if (!counts_by_alt(f->exp) && f->exp->kind != PWZ_SEQ) {
+                ncc_dict_put(&memo, f->exp, (void *)(intptr_t)1);
+                last = 1;
+                frames.len--;
+                continue;
+            }
+
+            ncc_dict_put(&memo, f->exp, PWZ_COUNTING);
+            f->acc = counts_by_alt(f->exp) ? 0 : 1;
+        }
+        else {
+            f->acc = counts_by_alt(f->exp) ? f->acc + last : f->acc * last;
+
+            if (f->acc > PWZ_TREES_MANY) {
+                f->acc = PWZ_TREES_MANY;
+            }
         }
 
-        return total;
-    }
+        if (f->at < count_arity(f->exp)) {
+            pwz_exp_t *kid = count_child(f->exp, f->at++);
 
-    if (exp->kind == PWZ_SEQ) {
-        int32_t product = 1;
-
-        for (int32_t i = 0; i < exp->nchildren; i++) {
-            product *= count_trees_in_exp(exp->seq.children[i]);
+            ncc_list_push(frames, ((count_frame_t){.exp = kid}));
+            continue;
         }
 
-        return product;
+        f    = &frames.data[frames.len - 1];
+        last = f->acc;
+        ncc_dict_put(&memo, f->exp, (void *)(intptr_t)f->acc);
+        frames.len--;
     }
 
-    return 1;
+    ncc_list_free(frames);
+    ncc_dict_free(&memo);
+
+    return (int32_t)last;
 }
 
 static pwz_exp_t *
 find_top_ambiguity(pwz_exp_t *exp)
 {
-    if (!exp) {
-        return nullptr;
-    }
+    while (exp) {
+        if (exp->kind == PWZ_ALT && exp->nt_id == -1) {
+            return exp;
+        }
 
-    if (exp->kind == PWZ_ALT && exp->nt_id == -1) {
-        return exp;
-    }
-
-    if (exp->kind == PWZ_SEQ && exp->nt_id == -1
-        && exp->nchildren == 1) {
-        return find_top_ambiguity(exp->seq.children[0]);
+        if (exp->kind != PWZ_SEQ || exp->nt_id != -1
+            || exp->nchildren != 1) {
+            return nullptr;
+        }
+        exp = exp->seq.children[0];
     }
 
     return nullptr;

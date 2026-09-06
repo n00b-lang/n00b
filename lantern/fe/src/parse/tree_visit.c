@@ -490,9 +490,10 @@ void *ncc_tree_walk_reduce(ncc_tree_walk_t *w, ncc_parse_tree_t *root)
     ncc_list_t(rframe_t) frames = ncc_list_new(rframe_t);
     ncc_list_t(vptr_t)   done   = ncc_list_new(vptr_t);
 
+    w->stopped = false;
     ncc_list_push(frames, ((rframe_t){.node = root}));
 
-    while (frames.len > 0) {
+    while (frames.len > 0 && !w->stopped) {
         rframe_t *f = &frames.data[frames.len - 1];
 
         if (!f->entered) {
@@ -505,9 +506,13 @@ void *ncc_tree_walk_reduce(ncc_tree_walk_t *w, ncc_parse_tree_t *root)
             fill(w, &v, &vf);
             run_chain(w, &w->any, &v, true, false, -1);
 
-            if (v.nt) {
+            if (v.nt && !w->stopped) {
                 run_chain(w, nt_chain(w, v.pn->id), &v, true, false, -1);
                 run_annots(w, &v, true, false);
+            }
+
+            if (w->stopped) {
+                break;
             }
         }
 
@@ -594,7 +599,7 @@ void *ncc_tree_walk_reduce(ncc_tree_walk_t *w, ncc_parse_tree_t *root)
         frames.len--;
     }
 
-    void *out = done.len ? done.data[done.len - 1] : nullptr;
+    void *out = !w->stopped && done.len ? done.data[done.len - 1] : nullptr;
 
     ncc_list_free(frames);
     ncc_list_free(done);
