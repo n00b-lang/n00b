@@ -6,6 +6,9 @@
 
 #include <string.h>
 
+struct ncc_reduce_state_t;
+static void reduce_release(ncc_tree_walk_t *w);
+
 typedef struct {
     ncc_visit_fn pre;
     ncc_visit_fn post;
@@ -38,6 +41,7 @@ struct ncc_tree_walk_t {
     chain_t                 by_annot[NCC_ANNOT_KIND_COUNT];
     ncc_dict_t             *by_nt;
     ncc_list_t(frame_t)     stack;
+    struct ncc_reduce_state_t *reduce;
     int32_t                 max_phase;
     bool                    stopped;
 };
@@ -100,6 +104,7 @@ ncc_tree_walk_free(ncc_tree_walk_t *w)
     ncc_free(w->leaf.data);
     ncc_free(w->visitors.data);
     ncc_free(w->stack.data);
+    reduce_release(w);
     ncc_free(w);
 }
 
@@ -379,4 +384,234 @@ bool
 ncc_tree_walk_stopped(ncc_tree_walk_t *w)
 {
     return w && w->stopped;
+}
+
+typedef struct {
+    ncc_reduce_fn fn;
+    void         *thunk;
+} reducer_t;
+
+ncc_list_decl(reducer_t);
+
+struct ncc_reduce_state_t {
+    ncc_list_t(reducer_t) by_nt;
+    reducer_t             any;
+    reducer_t             leaf;
+    bool                  have_any;
+    bool                  have_leaf;
+};
+
+static struct ncc_reduce_state_t *reduce_state(ncc_tree_walk_t *w)
+{
+    if (!w->reduce) {
+        w->reduce = ncc_alloc(struct ncc_reduce_state_t);
+        memset(w->reduce, 0, sizeof(*w->reduce));
+    }
+
+    return w->reduce;
+}
+
+bool ncc_walk_reduce_nt(ncc_tree_walk_t *w, ncc_string_t nt_name,
+                        ncc_reduce_fn fn, void *thunk)
+{
+    if (!w || !w->g) {
+        return false;
+    }
+
+    size_t n  = ncc_list_len(w->g->nt_list);
+    int64_t id = -1;
+
+    for (size_t i = 0; i < n; i++) {
+        if (ncc_string_eq(w->g->nt_list.data[i].name, nt_name)) {
+            id = w->g->nt_list.data[i].id;
+            break;
+        }
+    }
+
+    if (id < 0) {
+        return false;
+    }
+
+    struct ncc_reduce_state_t *st = reduce_state(w);
+
+    while ((int64_t)ncc_list_len(st->by_nt) <= id) {
+        reducer_t none = {0};
+
+        ncc_list_push(st->by_nt, none);
+    }
+
+    st->by_nt.data[id] = (reducer_t){.fn = fn, .thunk = thunk};
+
+    return true;
+}
+
+void ncc_walk_reduce_default(ncc_tree_walk_t *w, ncc_reduce_fn fn, void *thunk)
+{
+    struct ncc_reduce_state_t *st = reduce_state(w);
+
+    st->any      = (reducer_t){.fn = fn, .thunk = thunk};
+    st->have_any = true;
+}
+
+void ncc_walk_reduce_leaf(ncc_tree_walk_t *w, ncc_reduce_fn fn, void *thunk)
+{
+    struct ncc_reduce_state_t *st = reduce_state(w);
+
+    st->leaf      = (reducer_t){.fn = fn, .thunk = thunk};
+    st->have_leaf = true;
+}
+
+typedef struct {
+    ncc_parse_tree_t *node;
+    size_t            next;
+    size_t            mark;
+    bool              entered;
+} rframe_t;
+
+ncc_list_decl(rframe_t);
+
+typedef void *vptr_t;
+ncc_list_decl(vptr_t);
+
+#define REDUCE_LIST_MAGIC 0x52644c73u
+
+void *ncc_tree_walk_reduce(ncc_tree_walk_t *w, ncc_parse_tree_t *root)
+{
+    if (!w || !root || !w->reduce) {
+        return nullptr;
+    }
+
+    struct ncc_reduce_state_t *st = w->reduce;
+
+    ncc_list_t(rframe_t) frames = ncc_list_new(rframe_t);
+    ncc_list_t(vptr_t)   done   = ncc_list_new(vptr_t);
+
+    ncc_list_push(frames, ((rframe_t){.node = root}));
+
+    while (frames.len > 0) {
+        rframe_t *f = &frames.data[frames.len - 1];
+
+        if (!f->entered) {
+            ncc_visit_t v;
+            frame_t     vf = {.node = f->node};
+
+            f->entered = true;
+            f->mark    = done.len;
+
+            fill(w, &v, &vf);
+            run_chain(w, &w->any, &v, true, false, -1);
+
+            if (v.nt) {
+                run_chain(w, nt_chain(w, v.pn->id), &v, true, false, -1);
+                run_annots(w, &v, true, false);
+            }
+        }
+
+        if (!ncc_tree_is_leaf(f->node)
+            && f->next < ncc_tree_num_children(f->node)) {
+            ncc_parse_tree_t *ch = ncc_tree_child(f->node, f->next++);
+
+            ncc_list_push(frames, ((rframe_t){.node = ch}));
+            continue;
+        }
+
+        f = &frames.data[frames.len - 1];
+
+        reducer_t *use = nullptr;
+
+        if (ncc_tree_is_leaf(f->node)) {
+            use = st->have_leaf ? &st->leaf : nullptr;
+        }
+        else {
+            ncc_nt_node_t *pn = &ncc_tree_node_value(f->node);
+
+            if (pn->id >= 0 && !pn->group_top
+                && (size_t)pn->id < ncc_list_len(st->by_nt)
+                && st->by_nt.data[pn->id].fn) {
+                use = &st->by_nt.data[pn->id];
+            }
+            else if (st->have_any) {
+                use = &st->any;
+            }
+        }
+
+        void  *result = nullptr;
+        size_t mark   = f->mark;
+
+        if (use) {
+            ncc_reduce_t r = {
+                .walk    = w,
+                .grammar = w->g,
+                .node    = f->node,
+                .kids    = done.data + mark,
+                .n_kids  = done.len - mark,
+                .thunk   = use->thunk,
+                .user    = w->user,
+            };
+
+            result = use->fn(&r);
+        }
+        else if (done.len - mark == 1) {
+            result = done.data[mark];
+        }
+
+        {
+            ncc_visit_t v;
+            frame_t     vf = {.node = f->node};
+
+            fill(w, &v, &vf);
+
+            if (v.nt) {
+                run_annots(w, &v, false, true);
+                run_chain(w, nt_chain(w, v.pn->id), &v, false, true, -1);
+            }
+
+            run_chain(w, &w->any, &v, false, true, -1);
+        }
+
+        if (!use && !ncc_tree_is_leaf(f->node)
+            && ncc_tree_node_value(f->node).group_top) {
+            size_t             n    = done.len - mark;
+            ncc_reduce_list_t *list = ncc_alloc(ncc_reduce_list_t);
+
+            list->n = n;
+            list->v = n ? ncc_alloc_array(vptr_t, n) : nullptr;
+
+            for (size_t i = 0; i < n; i++) {
+                list->v[i] = done.data[mark + i];
+            }
+
+            list->magic = REDUCE_LIST_MAGIC;
+            result      = list;
+        }
+
+        done.len = mark;
+        ncc_list_push(done, result);
+        frames.len--;
+    }
+
+    void *out = done.len ? done.data[done.len - 1] : nullptr;
+
+    ncc_list_free(frames);
+    ncc_list_free(done);
+
+    return out;
+}
+
+static void reduce_release(ncc_tree_walk_t *w)
+{
+    if (!w || !w->reduce) {
+        return;
+    }
+
+    ncc_free(w->reduce->by_nt.data);
+    ncc_free(w->reduce);
+    w->reduce = nullptr;
+}
+
+ncc_reduce_list_t *ncc_reduce_as_list(void *result)
+{
+    ncc_reduce_list_t *l = result;
+
+    return l && l->magic == REDUCE_LIST_MAGIC ? l : nullptr;
 }

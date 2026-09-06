@@ -45,5 +45,33 @@ void ncc_walk_on_leaf(ncc_tree_walk_t *w, ncc_visit_fn fn, void *thunk);
 
 void ncc_tree_walk_run(ncc_tree_walk_t *w, ncc_parse_tree_t *root);
 
+typedef struct {
+    uint32_t magic;
+    void   **v;
+    size_t   n;
+} ncc_reduce_list_t;
+
+typedef struct {
+    ncc_tree_walk_t  *walk;
+    ncc_grammar_t    *grammar;
+    ncc_parse_tree_t *node;
+    void            **kids;
+    size_t            n_kids;
+    void             *thunk;
+    void             *user;
+} ncc_reduce_t;
+
+ncc_reduce_list_t *ncc_reduce_as_list(void *result);
+
+typedef void *(*ncc_reduce_fn)(ncc_reduce_t *r);
+
+bool ncc_walk_reduce_nt(ncc_tree_walk_t *w, ncc_string_t nt_name,
+                        ncc_reduce_fn fn, void *thunk);
+void ncc_walk_reduce_default(ncc_tree_walk_t *w, ncc_reduce_fn fn,
+                             void *thunk);
+void ncc_walk_reduce_leaf(ncc_tree_walk_t *w, ncc_reduce_fn fn, void *thunk);
+
+void *ncc_tree_walk_reduce(ncc_tree_walk_t *w, ncc_parse_tree_t *root);
+
 void ncc_tree_walk_stop(ncc_tree_walk_t *w);
 bool ncc_tree_walk_stopped(ncc_tree_walk_t *w);

@@ -5,6 +5,7 @@
 #include "parse/bnf.h"
 #include "parse/grammar.h"
 #include "parse/pwz.h"
+#include "parse/tree_visit.h"
 #include "scanner/token_stream.h"
 #include "internal/parse/grammar_internal.h"
 
@@ -172,11 +173,90 @@ static void test_a_missing_part_is_still_reported(void)
     ncc_grammar_free(g);
 }
 
+static void *r_int(ncc_reduce_t *r)
+{
+    (void)r;
+
+    return (void *)(uintptr_t)1;
+}
+
+static void *r_sum(ncc_reduce_t *r)
+{
+    if (r->n_kids != 2) {
+        printf("FAIL  <list> saw %zu children, not the 2 its production has\n",
+               r->n_kids);
+        fails++;
+
+        return (void *)(uintptr_t)0;
+    }
+
+    uintptr_t total = (uintptr_t)r->kids[0];
+
+    ncc_reduce_list_t *rest = ncc_reduce_as_list(r->kids[1]);
+
+    if (!rest) {
+        printf("FAIL  the repetition did not come through as a list\n");
+        fails++;
+
+        return (void *)total;
+    }
+
+    for (size_t i = 0; i < rest->n; i++) {
+        total += (uintptr_t)rest->v[i];
+    }
+
+    return (void *)total;
+}
+
+static void test_a_reduce_folds_children_into_a_value(void)
+{
+    static const char *const G =
+        "<list> ::= <item> (%\",\" <item>)*\n"
+        "<item> ::= %IDENTIFIER\n";
+
+    ncc_grammar_t *g = ncc_grammar_new();
+
+    ncc_grammar_set_error_recovery(g, false);
+    ncc_bnf_load(ncc_string_from_cstr(G), ncc_string_from_cstr("list"), g);
+
+    ncc_token_info_t *toks[] = {
+        tk(NCC_TOK_IDENTIFIER, "a", 0),
+        tk(',', ",", 1),
+        tk(NCC_TOK_IDENTIFIER, "b", 2),
+        tk(',', ",", 3),
+        tk(NCC_TOK_IDENTIFIER, "c", 4),
+    };
+
+    ncc_token_stream_t *ts = ncc_token_stream_from_array(toks, 5);
+    ncc_pwz_parser_t   *p  = ncc_pwz_new(g);
+
+    check("the list parses", ncc_pwz_parse(p, ts));
+
+    ncc_tree_walk_t *w = ncc_tree_walk_new(g, nullptr);
+
+    ncc_walk_reduce_nt(w, ncc_string_from_cstr("item"), r_int, nullptr);
+    ncc_walk_reduce_nt(w, ncc_string_from_cstr("list"), r_sum, nullptr);
+
+    uintptr_t got = (uintptr_t)ncc_tree_walk_reduce(w, ncc_pwz_get_tree(p));
+
+    if (got != 3) {
+        printf("FAIL  a reduce over a quantified group saw %llu items, not 3\n",
+               (unsigned long long)got);
+        fails++;
+    }
+
+    ncc_tree_walk_free(w);
+    ncc_pwz_free(p);
+    ncc_token_stream_free(ts);
+    ncc_grammar_free(g);
+}
+
 int main(void)
 {
     test_the_parts_load_in_either_order();
     test_one_grammar_parses_from_several_start_symbols();
     test_a_missing_part_is_still_reported();
+    test_a_reduce_folds_children_into_a_value();
 
     if (!fails) {
         printf("fe compose: all checks passed\n");
