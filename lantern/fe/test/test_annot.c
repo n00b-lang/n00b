@@ -345,8 +345,6 @@ test_the_walk_builds_a_symbol_table(ncc_grammar_t *g)
 static void
 test_a_deep_tree_does_not_overflow_the_stack(ncc_grammar_t *g)
 {
-    // Deep enough to mean something in a normal run; IR_DEEP takes it as far
-    // as the benchmark run wants.
     const char *want = getenv("IR_DEEP");
     const int   N    = want ? atoi(want) : 600;
 

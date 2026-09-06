@@ -98,6 +98,18 @@ ir_pdg_test = executable(
 
 test('ir-pdg', ir_pdg_test)
 
+ir_grammar_accept_test = executable(
+    'ir_grammar_accept_test',
+    'ir_grammar_accept_test.c',
+    dependencies: ir_dep,
+)
+
+test(
+    'ir-grammar-accept',
+    ir_grammar_accept_test,
+    args: [meson.current_source_dir() / 'golden' / 'canonical.ir'],
+)
+
 ir_typelang_test = executable(
     'ir_typelang_test',
     'ir_typelang_test.c',

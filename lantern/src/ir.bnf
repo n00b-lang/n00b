@@ -1,0 +1,111 @@
+<module> ::= %"module" <name> %"{" <module-item>* %"}"
+
+<module-item> ::= <profile-decl>
+                | <target-decl>
+                | <meta-decl>
+                | <type-decl>
+                | <layout-decl>
+                | <global-decl>
+                | <func>
+
+<profile-decl> ::= %"profile" <name>
+<target-decl>  ::= %"target" <dotted-name>
+<meta-decl>    ::= %"meta" <annot>
+<type-decl>    ::= %"type" <name> %"=" <typelang-type>
+
+<layout-decl> ::= %"layout" <typelang-type> %"{" <layout-item>* %"}"
+
+<layout-item> ::= %"size" %"=" <layout-val>
+                | %"align" %"=" <layout-val>
+                | %"stride" %"=" <layout-val>
+                | <name> %"@" %"bits" <layout-val> %"." %"." <layout-val>
+
+<layout-val> ::= <int> | <symbolic-expr>
+
+<symbolic-expr> ::= %"sizeof" %"(" <typelang-type> %")"
+                  | %"alignof" %"(" <typelang-type> %")"
+                  | %"offsetof" %"(" <typelang-type> %"," %STRING_LIT %")"
+
+<linkage> ::= %"static" | %"extern"
+
+<global-decl> ::= <linkage>? %"global" <global> %":" <typelang-type> <init>?
+
+<func> ::= <linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> %"{" <local>* <block>+ %"}"
+
+<params> ::= <param> (%"," <param>)*
+<param>  ::= <mode>? <value> %":" <typelang-type>
+<mode>   ::= %"in" | %"out" | %"inout"
+
+<local> ::= %"local" <local-ref> %":" <typelang-type> <init>?
+
+<init> ::= %"=" %"-"? <number>
+
+<block> ::= %"block" <name> %":" <instr>*
+
+<instr> ::= <dest>? <name> <modifier>* <operands>? <meta>*
+
+<dest> ::= <value> %":" <typelang-type> %"="
+         | <local-ref> %"="
+
+<modifier> ::= <name>
+
+<operands> ::= <operand> (%"," <operand>)*
+
+<operand> ::= <ref>
+            | <number>
+            | %"-" <number>
+            | %STRING_LIT
+            | <named-arg>
+            | <phi-arm>
+            | <switch-arm>
+            | <default-block>
+            | <typelang-type>
+            | <name>
+
+<named-arg>     ::= <name> %"=" <ref>
+<phi-arm>       ::= %"[" <name> %":" <ref> %"]"
+<switch-arm>    ::= %"[" %"-"? <number> %":" <name> %"]"
+<default-block> ::= %"default" %":" <name>
+
+<meta> ::= <loc> | <origin> | <annot>
+
+<loc> ::= %"!" %"loc" %"(" <int> (%"," <int>)* %")"
+
+<origin> ::= %"!" %"origin" %"(" <origin-kind> %"," %STRING_LIT (%"," <int>)* %")"
+
+<origin-kind> ::= %"source" | %"inlined" | %"expanded" | %"lowered"
+                | %"generated"
+
+<annot> ::= %"!" <ns-key> %"(" <annot-value> <provenance>? %")"
+
+<provenance> ::= %"from" <name>
+
+<ns-key> ::= <name> %"." <name>
+
+<annot-value> ::= %"true" | %"false" | <int> | %STRING_LIT
+                | <typelang-type>
+                | <ref>
+
+<ref> ::= <value> | <local-ref> | <global>
+
+<value>     ::= %"%" <name>
+<local-ref> ::= %"$" <name>
+<global>    ::= %"@" <name>
+
+<dotted-name> ::= <name> ((%"." | %"-") <name> | <int>)*
+
+<int>    ::= %INT_LIT
+<number> ::= %INT_LIT | %FLOAT_LIT
+
+<typelang-type> ::= <union-type>
+
+<name> ::= %IDENTIFIER
+         | %"module" | %"profile" | %"target" | %"meta" | %"type"
+         | %"layout" | %"size" | %"align" | %"stride" | %"bits"
+         | %"sizeof" | %"alignof" | %"offsetof"
+         | %"global" | %"func" | %"local" | %"block"
+         | %"static" | %"extern" | %"default" | %"from"
+         | %"loc" | %"origin"
+         | %"source" | %"inlined" | %"expanded" | %"lowered" | %"generated"
+         | %"true" | %"false"
+         | %"in" | %"out" | %"inout"

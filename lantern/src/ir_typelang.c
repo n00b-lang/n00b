@@ -14,10 +14,6 @@
 
 #include "typelang_bnf.h"
 
-// typelang.bnf is the notation typehash spec §16 makes normative. Parsing is
-// the grammar plus a walk that calls typehash's constructors; nothing here
-// re-derives what a type means from its spelling.
-
 static char *msg(const char *what)
 {
     size_t n = strlen(what) + 12;
@@ -58,16 +54,10 @@ static ncc_grammar_t *load_grammar(void)
         return nullptr;
     }
 
-    // %IDENTIFIER is one of the reader's builtin token names, so it has an id
-    // of its own and never appears in the grammar's named-terminal table;
-    // INT_LIT and STRING_LIT are ours, registered above.
     tid_ident = NCC_TOK_IDENTIFIER;
     tid_int   = lookup(g, "INT_LIT");
     tid_str   = lookup(g, "STRING_LIT");
 
-    // A one-character terminal's id is its codepoint, so the only way to know
-    // that `t` is the tuple keyword and `x` is an identifier is to ask which
-    // codepoints the grammar's rules actually mention.
     memset(char_terminals, 0, sizeof(char_terminals));
 
     for (size_t i = 0; i < ncc_list_len(g->rules); i++) {
@@ -95,10 +85,6 @@ void ir_typelang_shutdown(void)
         grammar = nullptr;
     }
 }
-
-// ============================================================================
-// Tokenizer
-// ============================================================================
 
 typedef struct {
     ncc_token_info_t **v;
@@ -137,8 +123,6 @@ static bool id_more(unsigned char c)
     return c == '_' || isalnum(c) || c >= 0x80;
 }
 
-// Every keyword and punctuation mark the grammar writes as %"..." is already a
-// terminal, so a spelling is a keyword exactly when the grammar has it.
 static bool tokenize(ncc_grammar_t *g, const char *src, size_t len, toks *t)
 {
     size_t i = 0;
@@ -187,9 +171,6 @@ static bool tokenize(ncc_grammar_t *g, const char *src, size_t len, toks *t)
             char    word[128];
             int64_t kw = 0;
 
-            // A backtick introduces a type variable, so what follows names
-            // one even when it is spelled like a keyword: `t is a variable,
-            // not the tuple marker.
             bool after_tick = t->n > 0 && t->v[t->n - 1]->tid == '`';
 
             if (after_tick) {
@@ -210,7 +191,6 @@ static bool tokenize(ncc_grammar_t *g, const char *src, size_t len, toks *t)
             continue;
         }
 
-        // Longest punctuation first: "->" must not lex as "-" then ">".
         if (i + 1 < len) {
             char two[3] = {src[i], src[i + 1], 0};
             int64_t op  = lookup(g, two);
@@ -238,10 +218,6 @@ static void free_toks(toks *t)
     free(t->v);
     free(t->end);
 }
-
-// ============================================================================
-// Build state
-// ============================================================================
 
 typedef struct {
     char    *name;
@@ -326,8 +302,6 @@ static bool word(ncc_parse_tree_t *n, const char *want)
     return t && !strcmp(t, want);
 }
 
-// Children with group wrappers dissolved, so a walker sees the sequence the
-// production wrote rather than the shape its quantifiers produced.
 typedef struct {
     ncc_parse_tree_t **v;
     size_t             n;
@@ -365,10 +339,6 @@ static void kfree(kids *k)
     free(k->v);
 }
 
-// ============================================================================
-// Productions
-// ============================================================================
-
 static th_type *build_tvar(bctx *c, ncc_parse_tree_t *n)
 {
     kids k = {0};
@@ -391,8 +361,6 @@ static th_type *build_tvar(bctx *c, ncc_parse_tree_t *n)
         return nullptr;
     }
 
-    // Innermost binder wins; the index pair is (how many binders out, which
-    // slot), which is what th_bound takes.
     for (size_t d = c->nb; d > 0; d--) {
         for (size_t i = 0; i < c->binders[d - 1].n; i++) {
             if (!strcmp(c->binders[d - 1].names[i], name)) {
@@ -401,8 +369,6 @@ static th_type *build_tvar(bctx *c, ncc_parse_tree_t *n)
         }
     }
 
-    // Free variables are shared within one parse and only within one, so the
-    // same spelling twice is one variable.
     for (size_t i = 0; i < c->nfree; i++) {
         if (!strcmp(c->free_vars[i].name, name)) {
             return c->free_vars[i].type;
@@ -612,8 +578,6 @@ static th_type *build_indirection(bctx *c, ncc_parse_tree_t *n)
         return nullptr;
     }
 
-    // The sugar names an attribute set; an explicit list replaces it rather
-    // than adding to it.
     if (!explicit && sugar) {
         attrs = sugar_attrs(sugar);
     }
@@ -794,8 +758,6 @@ static bool read_mode(bctx *c, ncc_parse_tree_t *n, th_mode *m)
     return true;
 }
 
-// A parameter is classified by its own syntax, not its position: a bare type
-// is positional, *t is the rest, and name: t is a keyword (§16.4).
 static bool build_param(bctx *c, ncc_parse_tree_t *n, th_param *pos,
                         th_param *rest, th_kwparam *kw, int *which)
 {
@@ -1096,8 +1058,6 @@ static th_type *build(bctx *c, ncc_parse_tree_t *n)
         return build_sum(c, n, TH_INTERSECTION, "one-type");
     }
 
-    // Tier and pass-through productions carry one child, except the
-    // parenthesised form, whose three are ( type ).
     if (!strcmp(name, "type") || !strcmp(name, "one-type")
         || !strcmp(name, "base-type") || !strcmp(name, "paren-form")
         || !strcmp(name, "record") || !strcmp(name, "type-arg")) {
@@ -1149,8 +1109,6 @@ static th_type *build(bctx *c, ncc_parse_tree_t *n)
 
     return nullptr;
 }
-
-// ============================================================================
 
 static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
                     char **err)

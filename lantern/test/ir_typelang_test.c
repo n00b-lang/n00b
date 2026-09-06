@@ -6,11 +6,6 @@
 #include "ir/typelang.h"
 #include "typehash.h"
 
-// The BNF-driven parser is held to the same §13 conformance vectors as the
-// hand-written one: for each type, the typehash it produces has to be the one
-// the spec documents. Two parsers for one normative grammar only stay honest
-// if both answer to the same vectors.
-
 static int fails;
 
 static void check_line(char *line, int lineno)
@@ -34,9 +29,6 @@ static void check_line(char *line, int lineno)
     const char *type = line;
     const char *want = tab2 + 1;
 
-    // §3 folds NFC into identity, so a non-ASCII name only reproduces its
-    // documented hash with a normaliser installed. The IR context has none,
-    // which is a gap in the context rather than in parsing.
     for (const char *p = type; *p; p++) {
         if ((unsigned char)*p >= 0x80) {
             return;

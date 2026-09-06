@@ -279,11 +279,6 @@ ncc_grammar_new(void)
     g->terminal_map = ncc_alloc(ncc_dict_t);
     ncc_dict_init(g->terminal_map, ncc_hash_cstring, ncc_dict_cstr_eq);
 
-    // The builtin token ids run from NCC_TOK_START_ID + 1, and so does the id
-    // ncc_register_terminal hands out, so without claiming them here the first
-    // named terminal a grammar registers -- every %"keyword" -- would be given
-    // the same id as %IDENTIFIER. Registering them in id order takes those
-    // slots and starts everything else after them.
     static const char *const BUILTIN[] = {
         "IDENTIFIER", "TYPEDEF_NAME", "INTEGER",
         "FLOAT",      "CHAR_LIT",     "STRING_LIT",
@@ -379,9 +374,6 @@ ncc_grammar_set_start_id(ncc_grammar_t *g, ncc_nt_id_t nt_id)
         return;
     }
 
-    // One grammar can be parsed from more than one start symbol -- a type on
-    // its own, or a whole module that contains types -- so the start is a
-    // property of a parse, not of the grammar.
     ncc_nonterm_t *was = ncc_get_nonterm(g, g->default_start);
 
     if (was) {
@@ -396,9 +388,6 @@ ncc_grammar_set_start_id(ncc_grammar_t *g, ncc_nt_id_t nt_id)
         now->start_nt = true;
     }
 
-    // The LR(0) state graph is built outward from the start symbol, so it no
-    // longer describes this grammar. Nothing in the parser reads it, and
-    // marking it absent is honest where leaving it in place would not be.
     g->lr0_start_state = -1;
 }
 
@@ -460,9 +449,6 @@ ncc_lookup_terminal(ncc_grammar_t *g, ncc_string_t name)
     bool  found = false;
     void *val   = _ncc_dict_get(g->terminal_map, (void *)name.data, &found);
 
-    // Only what was actually registered. A one-character terminal's id is its
-    // codepoint, but so is any other one-character string, so answering from
-    // the spelling alone would call every single letter a terminal.
     return found ? (int64_t)(intptr_t)val : 0;
 }
 

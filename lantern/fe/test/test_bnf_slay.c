@@ -46,9 +46,6 @@ static ncc_string_t slurp(const char *path)
     return ncc_string_from_cstr(p);
 }
 
-// The token names n00b's grammar expects its tokenizer to supply. A grammar
-// has to declare these before loading; a %TOKEN the reader neither knows nor
-// was told about is refused rather than dropped from the production.
 static const char *const N00B_TOKENS[] = {
     "CHAR_LIT", "EMBED",   "FLOAT_LIT", "HEX_LIT",
     "INT_LIT",  "NEWLINE", "STRING_LIT",

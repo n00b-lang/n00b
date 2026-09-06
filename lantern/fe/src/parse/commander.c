@@ -379,10 +379,6 @@ build_items_nt(ncc_cmdr_t *c, ncc_cmdr_command_t *cmd, const char *prefix)
         (ncc_match_t[]){NCC_TERMINAL(c->tok_ids[NCC_CMDR_TID_BOOL]),
                         items_nt});
 
-    // No production for the generic flag token: a flag the command did not
-    // declare has to fail the parse rather than be taken for a positional.
-    // Everything after "--" is classified as a word, so passthrough is
-    // unaffected.
     ncc_add_rule_v(c->grammar, items_id, 2,
         (ncc_match_t[]){NCC_TERMINAL(c->tok_ids[NCC_CMDR_TID_DD]),
                         items_nt});
@@ -397,10 +393,6 @@ build_command_grammar(ncc_cmdr_t *c, ncc_cmdr_command_t *cmd,
     int64_t items_id = build_items_nt(c, cmd, prefix);
     ncc_match_t items_nt = {.kind = NCC_MATCH_NT, .nt_id = items_id};
 
-    // The command line ends with an explicit end token, and the start rule
-    // consumes it. Anchoring the parse at end of input is what makes a
-    // trailing argument the grammar cannot place an error rather than a
-    // silently shorter match.
     if (cmd->name.data) {
         int64_t name_tid = ncc_register_terminal(c->grammar, cmd->name);
         ncc_add_rule_v(c->grammar, parent_id, 3,

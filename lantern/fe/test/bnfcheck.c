@@ -19,8 +19,6 @@ int main(int argc, char **argv)
     ncc_grammar_t *g = ncc_grammar_new();
     ncc_grammar_set_error_recovery(g, false);
 
-    // Remaining arguments declare the token names this grammar's tokenizer
-    // supplies; without them the load refuses.
     for (int i = 3; i < argc; i++) {
         ncc_register_terminal(g, ncc_string_from_cstr(argv[i]));
     }

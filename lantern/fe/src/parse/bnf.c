@@ -1359,8 +1359,6 @@ token_type_to_id(ncc_string_t name)
 
 static int bnf_anon_counter = 0;
 
-// Names the first %TOKEN a load met that had neither a builtin id nor one the
-// caller declared. Loading fails rather than quietly dropping it.
 static char bnf_undeclared[128];
 
 static int
@@ -1428,10 +1426,6 @@ resolve_term_to_matches(ncc_grammar_t *user_g,
         break;
     }
     case 'T': {
-        // A %TOKEN is either one the reader knows or one the caller declared
-        // with ncc_register_terminal before loading. Anything else is refused:
-        // dropping it, which is what this did, silently changes the language
-        // the grammar describes.
         int64_t tok_id = token_type_to_id(val_s);
 
         if (!tok_id) {
@@ -1758,11 +1752,6 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
         }
     }
 
-    // Deliberately not finalised here. Finalisation derives tables from the
-    // whole rule set, so doing it per load would forbid the next one, and
-    // grammars are meant to compose: typelang.bnf defines the types the IR
-    // grammar refers to, and both are loaded into one grammar. The first
-    // parse finalises.
     return true;
 }
 

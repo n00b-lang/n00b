@@ -8,11 +8,6 @@
 #include "scanner/token_stream.h"
 #include "internal/parse/grammar_internal.h"
 
-// A grammar is built from more than one source: one file defines the types,
-// another the language that refers to them. Loading does not finalise, so the
-// pieces can be loaded in any order, and the start symbol is chosen per parse
-// rather than fixed when the grammar was written.
-
 static int fails;
 
 static void check(const char *what, bool ok)
@@ -172,8 +167,6 @@ static void test_a_missing_part_is_still_reported(void)
     ncc_grammar_set_error_recovery(g, false);
     ncc_bnf_load(ncc_string_from_cstr(LANG), ncc_string_from_cstr("decls"), g);
 
-    // <type> is referred to and never defined, because the other part was
-    // never loaded.
     check("a nonterminal no loaded part defines stays undefined",
           ncc_list_len(ncc_get_nonterm(g, nt_id(g, "type"))->rule_ids) == 0);
     ncc_grammar_free(g);

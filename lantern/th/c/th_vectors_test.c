@@ -4,18 +4,12 @@
 
 #include "typehash.h"
 
-// The conformance vectors of spec §13: a type written in typelang, the byte
-// stream it encodes to, and its typehash. Whatever parses typelang has to
-// reproduce all three.
-
 static int fails;
 
 #ifdef TH_TOOL_NFC
 void th_install_nfc(th_ctx *ctx);
 #endif
 
-// §3 makes NFC normalisation part of identity, so a vector like `café` only
-// reproduces its documented hash with the normaliser installed.
 static th_ctx *fresh(void)
 {
     th_ctx *ctx = th_ctx_new();

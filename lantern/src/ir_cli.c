@@ -23,8 +23,6 @@ typedef struct {
     ir_module_t       *m;
     char              *text;
     const char        *path;
-    // The command line owns the strings the rest of the run points at, so it
-    // outlives the run rather than being copied out of.
     ncc_cmdr_t        *cmdr;
     ncc_cmdr_result_t *args;
 } job;
@@ -121,8 +119,6 @@ static void usage(ncc_cmdr_t *c, FILE *err)
 
     fputc('\n', err);
 
-    // Every command carries the same flags but `pass`, which adds --passes,
-    // so printing one of each spells the whole set once.
     for (int32_t i = 0; i < c->root.n_subcommands; i++) {
         ncc_cmdr_command_t *sub = &c->root.subcommands[i];
 
