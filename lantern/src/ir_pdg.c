@@ -4,6 +4,7 @@
 #include "ir_internal.h"
 #include "ir/pdg.h"
 #include "ir/doms.h"
+#include "ir/walk.h"
 
 #define NO_LOOP UINT32_MAX
 
@@ -33,6 +34,7 @@ struct ir_pdg_t {
     uint32_t      *loop_of;
     uint32_t      *loop_parent;
     ir_rd_t       *rd;
+    uint32_t      *stamp;
     bool           exact;
 };
 
@@ -226,6 +228,65 @@ static void add_edge(ir_pdg_t *g, ir_instr_t *from, ir_instr_t *to,
                                              .via       = via};
 }
 
+static bool number_block(ir_visit_t *vi)
+{
+    ir_pdg_t *g = vi->user;
+
+    g->base[vi->block->index] = g->n_nodes;
+    g->n_nodes += vi->block->n_instrs;
+
+    return false;
+}
+
+static bool collect_node(ir_visit_t *vi)
+{
+    ir_pdg_t *g = vi->user;
+
+    g->nodes[g->n_nodes++] = vi->instr;
+
+    return false;
+}
+
+static bool control_block(ir_visit_t *vi)
+{
+    ir_pdg_t   *g = vi->user;
+    ir_ctx_t   *ctx = g->f->owner->ctx;
+    ir_block_t *a = vi->block;
+    ir_instr_t *t = ir_block_terminator(a);
+
+    if (!t || !ir_block_reachable(g->dom, a)) {
+        return false;
+    }
+
+    ir_block_t *stop = ir_ipdom_of(g->dom, a);
+
+    for (uint32_t s = 0; s < t->n_operands; s++) {
+        ir_block_t *at = ir_succ_of(&t->operands[s]);
+
+        for (; at && at != stop; at = ir_ipdom_of(g->dom, at)) {
+            if (g->stamp[at->index] == a->index) {
+                break;
+            }
+            g->stamp[at->index] = a->index;
+
+            g->cdp = ir_grow(ctx, g->cdp, &g->cap_cdp, g->n_cdp + 1u,
+                             sizeof(ir_cdp_t));
+
+            if (!g->cdp) {
+                return false;
+            }
+            g->cdp[g->n_cdp++] = (ir_cdp_t){.at = at->index, .on = a->index};
+
+            for (uint32_t k = 0; k < at->n_instrs; k++) {
+                add_edge(g, t, at->instrs[k], IR_DEP_CONTROL, IR_DEP_EXACT,
+                         nullptr);
+            }
+        }
+    }
+
+    return false;
+}
+
 static void control_edges(ir_pdg_t *g)
 {
     ir_func_t *f     = g->f;
@@ -236,96 +297,60 @@ static void control_edges(ir_pdg_t *g)
         stamp[i] = UINT32_MAX;
     }
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *a = f->blocks[i];
-        ir_instr_t *t = ir_block_terminator(a);
+    g->stamp = stamp;
 
-        if (!t || !ir_block_reachable(g->dom, a)) {
-            continue;
-        }
+    ir_walk_t *w = ir_walk_new(g);
 
-        ir_block_t *stop = ir_ipdom_of(g->dom, a);
-
-        for (uint32_t s = 0; s < t->n_operands; s++) {
-            ir_block_t *at = ir_succ_of(&t->operands[s]);
-
-            for (; at && at != stop; at = ir_ipdom_of(g->dom, at)) {
-                if (stamp[at->index] == a->index) {
-                    break;
-                }
-                stamp[at->index] = a->index;
-
-                g->cdp = ir_grow(ctx, g->cdp, &g->cap_cdp, g->n_cdp + 1u,
-                                 sizeof(ir_cdp_t));
-
-                if (!g->cdp) {
-                    return;
-                }
-                g->cdp[g->n_cdp++] = (ir_cdp_t){.at = at->index,
-                                                .on = a->index};
-
-                for (uint32_t k = 0; k < at->n_instrs; k++) {
-                    add_edge(g, t, at->instrs[k], IR_DEP_CONTROL,
-                             IR_DEP_EXACT, nullptr);
-                }
-            }
-        }
-    }
+    ir_walk_on_block(w, control_block, nullptr, nullptr);
+    ir_walk_run_func(w, f);
+    ir_walk_free(w);
 }
 
-static void value_edges(ir_pdg_t *g)
+static bool value_operand(ir_visit_t *vi)
 {
-    ir_func_t *f = g->f;
+    ir_pdg_t   *g   = vi->user;
+    ir_value_t *val = ir_operand_value(vi->operand);
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        ir_block_t *b = f->blocks[i];
-
-        for (uint32_t k = 0; k < b->n_instrs; k++) {
-            ir_instr_t *in = b->instrs[k];
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                ir_value_t *val = ir_operand_value(&in->operands[o]);
-
-                if (val && val->kind == IR_VAL_INSTR && val->def) {
-                    add_edge(g, val->def, in, IR_DEP_DATA, IR_DEP_EXACT,
-                             nullptr);
-                }
-            }
-        }
+    if (val && val->kind == IR_VAL_INSTR && val->def) {
+        add_edge(g, val->def, vi->instr, IR_DEP_DATA, IR_DEP_EXACT, nullptr);
     }
+
+    return true;
 }
 
-static void local_edges(ir_pdg_t *g)
+static bool local_operand(ir_visit_t *vi)
 {
-    ir_func_t *f = g->f;
+    ir_pdg_t   *g = vi->user;
+    ir_local_t *l = ir_operand_local(vi->operand);
 
-    if (!f->n_locals) {
-        return;
+    if (!g->rd || !l || ir_local_read_earlier(vi->instr, vi->index, l)) {
+        return true;
     }
-    g->rd = ir_rd_of(f, g->dom);
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        for (uint32_t k = 0; k < f->blocks[i]->n_instrs; k++) {
-            ir_instr_t *in = f->blocks[i]->instrs[k];
+    uint32_t n = ir_rd_count(g->rd, vi->instr, l);
+    bool     x = n == 1 && !ir_rd_maybe_unset(g->rd, vi->instr, l);
 
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                ir_local_t *l = ir_operand_local(&in->operands[o]);
-
-                if (!l || ir_local_read_earlier(in, o, l)) {
-                    continue;
-                }
-
-                uint32_t n = ir_rd_count(g->rd, in, l);
-                bool     x = n == 1 && !ir_rd_maybe_unset(g->rd, in, l);
-
-                for (uint32_t d = 0; d < n; d++) {
-                    add_edge(g, ir_rd_at(g->rd, in, l, d), in, IR_DEP_DATA,
-                             x ? IR_DEP_EXACT : IR_DEP_MAY, l);
-                }
-                g->exact = g->exact && x;
-            }
-        }
+    for (uint32_t d = 0; d < n; d++) {
+        add_edge(g, ir_rd_at(g->rd, vi->instr, l, d), vi->instr, IR_DEP_DATA,
+                 x ? IR_DEP_EXACT : IR_DEP_MAY, l);
     }
+    g->exact = g->exact && x;
+
+    return true;
+}
+
+static void data_edges(ir_pdg_t *g)
+{
+    if (g->f->n_locals) {
+        g->rd = ir_rd_of(g->f, g->dom);
+    }
+
+    ir_walk_t *w = ir_walk_new(g);
+
+    ir_walk_on_operand(w, value_operand, nullptr);
+    ir_walk_on_operand(w, local_operand, nullptr);
+    ir_walk_run_func(w, g->f);
+    ir_walk_free(w);
 }
 
 static void index_edges(ir_pdg_t *g)
@@ -398,22 +423,23 @@ ir_pdg_t *ir_pdg_of(ir_func_t *f)
 
     mark_loops(g);
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        g->base[f->blocks[i]->index] = g->n_nodes;
-        g->n_nodes += f->blocks[i]->n_instrs;
-    }
+    ir_walk_t *w = ir_walk_new(g);
+
+    ir_walk_on_block(w, number_block, nullptr, nullptr);
+    ir_walk_run_func(w, f);
+    ir_walk_free(w);
+
     g->nodes = ir_alloc(ctx, (g->n_nodes ? g->n_nodes : 1)
                                  * sizeof(ir_instr_t *));
+    g->n_nodes = 0;
+    w          = ir_walk_new(g);
 
-    for (uint32_t i = 0; i < f->n_blocks; i++) {
-        for (uint32_t k = 0; k < f->blocks[i]->n_instrs; k++) {
-            g->nodes[g->base[f->blocks[i]->index] + k] = f->blocks[i]->instrs[k];
-        }
-    }
+    ir_walk_on_instr(w, collect_node, nullptr, nullptr);
+    ir_walk_run_func(w, f);
+    ir_walk_free(w);
 
     control_edges(g);
-    value_edges(g);
-    local_edges(g);
+    data_edges(g);
     index_edges(g);
 
     return g;
