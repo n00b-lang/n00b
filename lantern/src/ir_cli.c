@@ -12,6 +12,7 @@
 #include "ir/rule.h"
 #include "ir/text.h"
 #include "ir/doms.h"
+#include "ir/walk.h"
 #include "ir/verify.h"
 
 #define IR_CLI_OK    0
@@ -271,37 +272,112 @@ static const char *tag(ir_instr_t *in, char *buf, size_t n)
     return buf;
 }
 
+typedef struct {
+    FILE        *out;
+    ir_module_t *m;
+    ir_pdg_t    *pdg;
+    ir_doms_t   *dom;
+    ir_rules_t  *rules;
+    bool         control;
+    bool         data;
+} dump;
+
+static int dump_run(job *j, dump *u, void (*install)(ir_walk_t *w))
+{
+    ir_walk_t *w = ir_walk_new(u);
+
+    u->m = j->m;
+    install(w);
+    ir_walk_run(w, j->m);
+    ir_walk_free(w);
+
+    return IR_CLI_OK;
+}
+
+static bool cfg_func(ir_visit_t *vi)
+{
+    dump *u = vi->user;
+
+    u->pdg = ir_pdg_of(vi->func);
+    fprintf(u->out, "func @%s\n", vi->func->name);
+
+    return true;
+}
+
+static bool cfg_block(ir_visit_t *vi)
+{
+    dump       *u  = vi->user;
+    ir_block_t *bb = vi->block;
+    ir_instr_t *t  = ir_block_terminator(bb);
+
+    for (uint32_t s = 0; t && s < t->n_operands; s++) {
+        ir_block_t *to = ir_succ_of(&t->operands[s]);
+
+        if (to) {
+            fprintf(u->out, "  %s -> %s %s\n", bb->name, to->name,
+                    ir_edge_kind_name(ir_edge_kind(u->pdg, bb, s)));
+        }
+    }
+
+    if (!ir_succ_count(t)) {
+        fprintf(u->out, "  %s -> exit\n", bb->name);
+    }
+
+    return false;
+}
+
+static void install_cfg(ir_walk_t *w)
+{
+    ir_walk_on_func(w, cfg_func, nullptr, nullptr);
+    ir_walk_on_block(w, cfg_block, nullptr, nullptr);
+}
+
 static int cmd_cfg(job *j, FILE *out, FILE *err, const char *list)
 {
     (void)err;
     (void)list;
 
-    for (size_t i = 0; i < ir_func_count(j->m); i++) {
-        ir_func_t *f = ir_func_at(j->m, i);
-        ir_pdg_t  *g = ir_pdg_of(f);
+    dump u = {.out = out};
 
-        fprintf(out, "func @%s\n", f->name);
+    return dump_run(j, &u, install_cfg);
+}
 
-        for (uint32_t b = 0; b < f->n_blocks; b++) {
-            ir_block_t *bb = f->blocks[b];
-            ir_instr_t *t  = ir_block_terminator(bb);
+static bool dom_func(ir_visit_t *vi)
+{
+    dump *u = vi->user;
 
-            for (uint32_t s = 0; t && s < t->n_operands; s++) {
-                ir_block_t *to = ir_succ_of(&t->operands[s]);
+    u->dom = ir_doms_of(vi->func);
+    fprintf(u->out, "func @%s\n", vi->func->name);
 
-                if (to) {
-                    fprintf(out, "  %s -> %s %s\n", bb->name, to->name,
-                            ir_edge_kind_name(ir_edge_kind(g, bb, s)));
-                }
-            }
+    return true;
+}
 
-            if (!ir_succ_count(t)) {
-                fprintf(out, "  %s -> exit\n", bb->name);
-            }
-        }
+static bool dom_block(ir_visit_t *vi)
+{
+    dump       *u  = vi->user;
+    ir_block_t *bb = vi->block;
+    ir_block_t *id = ir_idom_of(u->dom, bb);
+    ir_block_t *ip = ir_ipdom_of(u->dom, bb);
+
+    if (!ir_block_reachable(u->dom, bb)) {
+        fprintf(u->out, "  %s unreachable\n", bb->name);
+
+        return false;
+    }
+    fprintf(u->out, "  %s idom %s ipdom %s\n", bb->name,
+            id ? id->name : "-", ip ? ip->name : "-");
+
+    for (uint32_t k = 0; k < ir_df_count(u->dom, bb); k++) {
+        fprintf(u->out, "    frontier %s\n", ir_df_at(u->dom, bb, k)->name);
     }
 
-    return IR_CLI_OK;
+    return false;
+}
+
+static void install_dom(ir_walk_t *w)
+{
+    ir_walk_on_func(w, dom_func, nullptr, nullptr);
+    ir_walk_on_block(w, dom_block, nullptr, nullptr);
 }
 
 static int cmd_dom(job *j, FILE *out, FILE *err, const char *list)
@@ -309,31 +385,28 @@ static int cmd_dom(job *j, FILE *out, FILE *err, const char *list)
     (void)err;
     (void)list;
 
-    for (size_t i = 0; i < ir_func_count(j->m); i++) {
-        ir_func_t *f = ir_func_at(j->m, i);
-        ir_doms_t *d = ir_doms_of(f);
+    dump u = {.out = out};
 
-        fprintf(out, "func @%s\n", f->name);
+    return dump_run(j, &u, install_dom);
+}
 
-        for (uint32_t b = 0; b < f->n_blocks; b++) {
-            ir_block_t *bb = f->blocks[b];
-            ir_block_t *id = ir_idom_of(d, bb);
-            ir_block_t *ip = ir_ipdom_of(d, bb);
+static bool cdg_block(ir_visit_t *vi)
+{
+    dump       *u  = vi->user;
+    ir_block_t *bb = vi->block;
 
-            if (!ir_block_reachable(d, bb)) {
-                fprintf(out, "  %s unreachable\n", bb->name);
-                continue;
-            }
-            fprintf(out, "  %s idom %s ipdom %s\n", bb->name,
-                    id ? id->name : "-", ip ? ip->name : "-");
-
-            for (uint32_t k = 0; k < ir_df_count(d, bb); k++) {
-                fprintf(out, "    frontier %s\n", ir_df_at(d, bb, k)->name);
-            }
-        }
+    for (uint32_t k = 0; k < ir_controllers_of(u->pdg, bb); k++) {
+        fprintf(u->out, "  %s on %s\n", bb->name,
+                ir_controller_at(u->pdg, bb, k)->name);
     }
 
-    return IR_CLI_OK;
+    return false;
+}
+
+static void install_cdg(ir_walk_t *w)
+{
+    ir_walk_on_func(w, cfg_func, nullptr, nullptr);
+    ir_walk_on_block(w, cdg_block, nullptr, nullptr);
 }
 
 static int cmd_cdg(job *j, FILE *out, FILE *err, const char *list)
@@ -341,23 +414,9 @@ static int cmd_cdg(job *j, FILE *out, FILE *err, const char *list)
     (void)err;
     (void)list;
 
-    for (size_t i = 0; i < ir_func_count(j->m); i++) {
-        ir_func_t *f = ir_func_at(j->m, i);
-        ir_pdg_t  *g = ir_pdg_of(f);
+    dump u = {.out = out};
 
-        fprintf(out, "func @%s\n", f->name);
-
-        for (uint32_t b = 0; b < f->n_blocks; b++) {
-            ir_block_t *bb = f->blocks[b];
-
-            for (uint32_t k = 0; k < ir_controllers_of(g, bb); k++) {
-                fprintf(out, "  %s on %s\n", bb->name,
-                        ir_controller_at(g, bb, k)->name);
-            }
-        }
-    }
-
-    return IR_CLI_OK;
+    return dump_run(j, &u, install_cdg);
 }
 
 static void put_edges(FILE *out, ir_pdg_t *g, bool control, bool data)
@@ -384,18 +443,59 @@ static void put_edges(FILE *out, ir_pdg_t *g, bool control, bool data)
     }
 }
 
-static int cmd_graph(job *j, FILE *out, bool control, bool data)
+static bool explain_func(ir_visit_t *vi)
 {
-    for (size_t i = 0; i < ir_func_count(j->m); i++) {
-        ir_func_t *f = ir_func_at(j->m, i);
-        ir_pdg_t  *g = ir_pdg_of(f);
+    dump *u = vi->user;
 
-        fprintf(out, "func @%s %s\n", f->name,
-                ir_pdg_is_exact(g) ? "exact" : "may");
-        put_edges(out, g, control, data);
+    fprintf(u->out, "func @%s\n", vi->func->name);
+
+    return true;
+}
+
+static bool explain_instr(ir_visit_t *vi)
+{
+    dump *u   = vi->user;
+    char  nm[128];
+    char *why = ir_rule_explain(u->m, u->rules, vi->instr);
+
+    fprintf(u->out, "  %s\n", tag(vi->instr, nm, sizeof nm));
+
+    if (why) {
+        fputs(why, u->out);
+        free(why);
     }
 
-    return IR_CLI_OK;
+    return false;
+}
+
+static void install_explain(ir_walk_t *w)
+{
+    ir_walk_on_func(w, explain_func, nullptr, nullptr);
+    ir_walk_on_instr(w, explain_instr, nullptr, nullptr);
+}
+
+static bool graph_func(ir_visit_t *vi)
+{
+    dump     *u = vi->user;
+    ir_pdg_t *g = ir_pdg_of(vi->func);
+
+    fprintf(u->out, "func @%s %s\n", vi->func->name,
+            ir_pdg_is_exact(g) ? "exact" : "may");
+    put_edges(u->out, g, u->control, u->data);
+
+    return false;
+}
+
+static void install_graph(ir_walk_t *w)
+{
+    ir_walk_on_func(w, graph_func, nullptr, nullptr);
+}
+
+static int cmd_graph(job *j, FILE *out, bool control, bool data)
+{
+    dump u = {.out = out, .control = control, .data = data};
+
+    return dump_run(j, &u, install_graph);
 }
 
 static int cmd_regions(job *j, FILE *out, FILE *err, const char *list)
@@ -425,30 +525,9 @@ static int cmd_explain(job *j, FILE *out, FILE *err, const char *list)
     (void)err;
     (void)list;
 
-    ir_rules_t *rs = ir_module_rules(j->m);
+    dump u = {.out = out, .rules = ir_module_rules(j->m)};
 
-    for (size_t i = 0; i < ir_func_count(j->m); i++) {
-        ir_func_t *f = ir_func_at(j->m, i);
-
-        fprintf(out, "func @%s\n", f->name);
-
-        for (uint32_t b = 0; b < f->n_blocks; b++) {
-            for (uint32_t k = 0; k < f->blocks[b]->n_instrs; k++) {
-                ir_instr_t *in = f->blocks[b]->instrs[k];
-                char        nm[128];
-                char       *why = ir_rule_explain(j->m, rs, in);
-
-                fprintf(out, "  %s\n", tag(in, nm, sizeof nm));
-
-                if (why) {
-                    fputs(why, out);
-                    free(why);
-                }
-            }
-        }
-    }
-
-    return IR_CLI_OK;
+    return dump_run(j, &u, install_explain);
 }
 
 static int cmd_verify(job *j, FILE *out, FILE *err, const char *list)
