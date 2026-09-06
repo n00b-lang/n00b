@@ -6,6 +6,7 @@
 #include "ir/pass.h"
 #include "ir/pdg.h"
 #include "ir/text.h"
+#include "ir/doms.h"
 #include "ir/verify.h"
 
 static int  fails = 0;

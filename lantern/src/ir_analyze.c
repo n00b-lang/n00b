@@ -2,7 +2,7 @@
 
 #include "ir_internal.h"
 #include "ir/analyze.h"
-#include "ir/verify.h"
+#include "ir/doms.h"
 
 static void say(ir_diags_t *d, ir_diagcode_t code, const ir_instr_t *in,
                 const ir_block_t *b, const ir_func_t *f, const char *label,

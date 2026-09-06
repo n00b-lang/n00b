@@ -4,6 +4,7 @@
 
 #include "ir/rule.h"
 #include "ir/text.h"
+#include "ir/doms.h"
 #include "ir/verify.h"
 
 static int  fails = 0;
@@ -1042,6 +1043,55 @@ static void write_produced(const char *dir)
     free(path);
 }
 
+static void test_a_phase_can_be_asked_for_on_its_own(void)
+{
+    const char *src = MOD("  func @f(%a: i32) -> i32 {\n"
+                          "    local $t: i32\n    block entry:\n"
+                          "      $t = copy %a\n      return %a\n  }\n");
+
+    ir_ctx_t    *ctx = ir_ctx_new();
+    ir_diags_t  *d   = ir_diags_new(ctx, nullptr);
+    ir_module_t *m   = ir_module_parse(ctx, src, 0, PROFILES, 2, d);
+
+    check("the module for the single-phase checks parses", m != nullptr);
+
+    if (!m) {
+        ir_ctx_free(ctx);
+
+        return;
+    }
+
+    ir_module_establish(m, IR_PROP_PARSED);
+
+    ir_props_t one = ir_verify_only(m, IR_PROP_PARSED, d);
+
+    check("asking for parsed alone answers parsed",
+          (one & IR_PROP_PARSED) != 0);
+    check("and answers nothing it was not asked",
+          !(one & (IR_PROP_TYPED | IR_PROP_SSA | IR_PROP_LAID_OUT
+                   | IR_PROP_NO_CRIT_EDGE | IR_PROP_STRUCTURED)));
+
+    ir_diags_t *sd  = ir_diags_new(ctx, nullptr);
+    ir_props_t  ssa = ir_verify_only(m, IR_PROP_SSA, sd);
+
+    check("asking for ssa runs typed and parsed, which it needs",
+          (ssa & IR_PROP_PARSED) && (ssa & IR_PROP_TYPED));
+    check("the module is not in ssa form and is told so",
+          !(ssa & IR_PROP_SSA) && told(sd, "ssa.locals"));
+    check("and it is told so though the module never claimed ssa",
+          !(ir_module_props(m) & IR_PROP_SSA));
+    check("asking for ssa does not run the phases ssa does not need",
+          !(ssa & (IR_PROP_LAID_OUT | IR_PROP_NO_CRIT_EDGE
+                   | IR_PROP_STRUCTURED)));
+
+    ir_diags_t *nd = ir_diags_new(ctx, nullptr);
+
+    check("asking for nothing runs nothing",
+          ir_verify_only(m, 0, nd) == 0 && ir_diags_count(nd) == 0);
+
+    ir_ctx_free(ctx);
+}
+
 int main(int argc, char **argv)
 {
     test_graded();
@@ -1064,6 +1114,7 @@ int main(int argc, char **argv)
     test_undeclared_invalidation();
     test_spanless_diagnostic_is_a_bug();
     test_locals_have_no_address();
+    test_a_phase_can_be_asked_for_on_its_own();
 
     if (argc > 1) {
         write_produced(argv[1]);

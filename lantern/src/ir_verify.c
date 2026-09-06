@@ -5,6 +5,7 @@
 #include "ir/layout.h"
 #include "ir/pass.h"
 #include "ir/text.h"
+#include "ir/doms.h"
 #include "ir/verify.h"
 #include "ir/walk.h"
 
@@ -780,13 +781,88 @@ static void audit_spans(V *v)
     }
 }
 
-ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
+static bool parsed_module(ir_visit_t *vi)
 {
-    if (!m) {
-        return 0;
+    check_annots(vi->user, ir_module_annots(vi->module), nullptr, nullptr);
+
+    return true;
+}
+
+static void install_parsed(ir_walk_t *w)
+{
+    ir_walk_on_module(w, parsed_module, nullptr, nullptr);
+    ir_walk_on_func(w, parsed_func, parsed_func_end, nullptr);
+    ir_walk_on_block(w, parsed_block, parsed_block_end, nullptr);
+    ir_walk_on_instr(w, parsed_instr, parsed_instr_end, nullptr);
+    ir_walk_on_operand(w, parsed_operand, nullptr);
+}
+
+static void install_typed(ir_walk_t *w)
+{
+    ir_walk_on_param(w, typed_param, nullptr);
+    ir_walk_on_instr(w, typed_instr, typed_instr_end, nullptr);
+    ir_walk_on_operand(w, typed_operand, nullptr);
+}
+
+static void install_ssa(ir_walk_t *w)
+{
+    ir_walk_on_func(w, ssa_func, nullptr, nullptr);
+    ir_walk_on_instr(w, ssa_instr, nullptr, nullptr);
+    ir_walk_on_operand(w, ssa_operand, nullptr);
+}
+
+static void install_laid_out(ir_walk_t *w)
+{
+    ir_walk_on_param(w, laid_out_param, nullptr);
+    ir_walk_on_local(w, laid_out_local, nullptr);
+    ir_walk_on_instr(w, laid_out_instr, nullptr, nullptr);
+    ir_walk_on_operand(w, laid_out_operand, nullptr);
+    ir_walk_on_op(w, IR_OP_BITCAST, nullptr, laid_out_bitcast, nullptr);
+}
+
+static void install_no_crit_edge(ir_walk_t *w)
+{
+    ir_walk_on_block(w, no_critical_edges, nullptr, nullptr);
+}
+
+static void install_structured(ir_walk_t *w)
+{
+    ir_walk_on_func(w, check_structured, nullptr, nullptr);
+}
+
+typedef struct {
+    ir_props_t prop;
+    ir_props_t needs;
+    void     (*install)(ir_walk_t *w);
+} phase_t;
+
+static const phase_t PHASES[] = {
+    {IR_PROP_PARSED,       0,              install_parsed       },
+    {IR_PROP_TYPED,        IR_PROP_PARSED, install_typed        },
+    {IR_PROP_SSA,          IR_PROP_TYPED,  install_ssa          },
+    {IR_PROP_LAID_OUT,     IR_PROP_PARSED, install_laid_out     },
+    {IR_PROP_NO_CRIT_EDGE, IR_PROP_PARSED, install_no_crit_edge },
+    {IR_PROP_STRUCTURED,   IR_PROP_PARSED, install_structured   },
+};
+
+#define N_PHASES (sizeof(PHASES) / sizeof(PHASES[0]))
+
+static ir_props_t with_needs(ir_props_t want)
+{
+    for (size_t i = N_PHASES; i-- > 0;) {
+        if (want & PHASES[i].prop) {
+            want |= PHASES[i].needs;
+        }
     }
 
+    return want;
+}
+
+static ir_props_t run_phases(ir_module_t *m, ir_props_t want, ir_diags_t *out,
+                             bool only_when_claimed)
+{
     V          v    = {.m = m, .d = out};
+    ir_props_t run  = with_needs(want);
     ir_props_t held = 0;
 
     ncc_dict_init(&v.checked, nullptr, nullptr);
@@ -797,94 +873,55 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
     ir_walk_on_local(v.collect, collect_local, nullptr);
     ir_walk_on_instr(v.collect, collect_instr, nullptr, nullptr);
 
-    check_annots(&v, ir_module_annots(m), nullptr, nullptr);
+    for (size_t i = 0; i < N_PHASES; i++) {
+        const phase_t *p = &PHASES[i];
 
-    ir_walk_t *w = ir_walk_new(&v);
-
-    ir_walk_on_func(w, parsed_func, parsed_func_end, nullptr);
-    ir_walk_on_block(w, parsed_block, parsed_block_end, nullptr);
-    ir_walk_on_instr(w, parsed_instr, parsed_instr_end, nullptr);
-    ir_walk_on_operand(w, parsed_operand, nullptr);
-    ir_walk_run(w, m);
-    ir_walk_free(w);
-
-    if (!v.bad) {
-        held |= IR_PROP_PARSED;
-
-        v.bad = false;
-        v.d   = claims(m, IR_PROP_TYPED) ? out : nullptr;
-        w     = ir_walk_new(&v);
-
-        ir_walk_on_param(w, typed_param, nullptr);
-        ir_walk_on_instr(w, typed_instr, typed_instr_end, nullptr);
-        ir_walk_on_operand(w, typed_operand, nullptr);
-        ir_walk_run(w, m);
-        ir_walk_free(w);
-
-        if (!v.bad) {
-            held |= IR_PROP_TYPED;
-
-            v.bad = false;
-            v.d   = claims(m, IR_PROP_SSA) ? out : nullptr;
-            w     = ir_walk_new(&v);
-
-            ir_walk_on_func(w, ssa_func, nullptr, nullptr);
-            ir_walk_on_instr(w, ssa_instr, nullptr, nullptr);
-            ir_walk_on_operand(w, ssa_operand, nullptr);
-            ir_walk_run(w, m);
-            ir_walk_free(w);
-
-            if (!v.bad) {
-                held |= IR_PROP_SSA;
-            }
+        if (!(run & p->prop) || (held & p->needs) != p->needs) {
+            continue;
         }
 
         v.bad = false;
-        v.d   = claims(m, IR_PROP_LAID_OUT) ? out : nullptr;
-        w     = ir_walk_new(&v);
+        v.d   = only_when_claimed && !claims(m, p->prop) ? nullptr : out;
 
-        ir_walk_on_param(w, laid_out_param, nullptr);
-        ir_walk_on_local(w, laid_out_local, nullptr);
-        ir_walk_on_instr(w, laid_out_instr, nullptr, nullptr);
-        ir_walk_on_operand(w, laid_out_operand, nullptr);
-        ir_walk_on_op(w, IR_OP_BITCAST, nullptr, laid_out_bitcast, nullptr);
+        ir_walk_t *w = ir_walk_new(&v);
+
+        p->install(w);
         ir_walk_run(w, m);
         ir_walk_free(w);
 
         if (!v.bad) {
-            held |= IR_PROP_LAID_OUT;
-        }
-
-        v.bad = false;
-        v.d   = claims(m, IR_PROP_NO_CRIT_EDGE) ? out : nullptr;
-        w     = ir_walk_new(&v);
-
-        ir_walk_on_block(w, no_critical_edges, nullptr, nullptr);
-        ir_walk_run(w, m);
-        ir_walk_free(w);
-
-        if (!v.bad) {
-            held |= IR_PROP_NO_CRIT_EDGE;
-        }
-
-        v.bad = false;
-        v.d   = claims(m, IR_PROP_STRUCTURED) ? out : nullptr;
-        w     = ir_walk_new(&v);
-
-        ir_walk_on_func(w, check_structured, nullptr, nullptr);
-        ir_walk_run(w, m);
-        ir_walk_free(w);
-
-        if (!v.bad) {
-            held |= IR_PROP_STRUCTURED;
+            held |= p->prop;
         }
     }
     v.d = out;
 
+    audit_spans(&v);
+
+    ncc_dict_free(&v.checked);
+    ir_walk_free(v.collect);
+
+    return held;
+}
+
+ir_props_t ir_verify_only(ir_module_t *m, ir_props_t want, ir_diags_t *out)
+{
+    return m ? run_phases(m, want, out, false) : 0;
+}
+
+ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
+{
+    if (!m) {
+        return 0;
+    }
+
+    ir_props_t checked = 0;
+
+    for (size_t i = 0; i < N_PHASES; i++) {
+        checked |= PHASES[i].prop;
+    }
+
+    ir_props_t held    = run_phases(m, checked, out, true);
     ir_props_t claimed = ir_module_props(m);
-    ir_props_t checked = IR_PROP_PARSED | IR_PROP_TYPED | IR_PROP_SSA
-                       | IR_PROP_LAID_OUT | IR_PROP_NO_CRIT_EDGE
-                       | IR_PROP_STRUCTURED;
     ir_props_t lost    = (ir_props_t)(claimed & checked & ~held);
 
     for (ir_props_t bit = 1; bit && lost; bit = (ir_props_t)(bit << 1)) {
@@ -913,10 +950,6 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
         && !((claimed & checked) & ~held)) {
         held |= IR_PROP_VERIFIED;
     }
-    audit_spans(&v);
-
-    ncc_dict_free(&v.checked);
-    ir_walk_free(v.collect);
 
     return held;
 }

@@ -3,7 +3,7 @@
 
 #include "ir_internal.h"
 #include "ir/pass.h"
-#include "ir/verify.h"
+#include "ir/doms.h"
 
 typedef struct {
     ir_module_t  *m;

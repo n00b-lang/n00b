@@ -11,6 +11,7 @@
 #include "ir/pdg.h"
 #include "ir/rule.h"
 #include "ir/text.h"
+#include "ir/doms.h"
 #include "ir/verify.h"
 
 #define IR_CLI_OK    0

@@ -3,7 +3,7 @@
 
 #include "ir_internal.h"
 #include "ir/pdg.h"
-#include "ir/verify.h"
+#include "ir/doms.h"
 
 #define NO_LOOP UINT32_MAX
 

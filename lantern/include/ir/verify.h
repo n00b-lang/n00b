@@ -3,9 +3,9 @@
 
 #include "ir/diag.h"
 #include "ir/ir.h"
-#include "ir/doms.h"
 
 ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out);
+ir_props_t ir_verify_only(ir_module_t *m, ir_props_t want, ir_diags_t *out);
 
 typedef struct ir_locsnap_t ir_locsnap_t;
 
