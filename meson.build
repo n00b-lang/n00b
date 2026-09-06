@@ -3502,6 +3502,15 @@ conduit_test = executable('test_conduit',
 )
 test('conduit', conduit_test, suite: 'unit')
 
+# n00b#327: an interior pointer into an OOB-metadata/no-inline-header allocator
+# cannot be resolved, and must report that distinctly rather than looking like
+# free space (which conservative scanning produces constantly).
+alloc_interior_test = executable('test_alloc_interior_unresolvable',
+    ['test/unit/test_alloc_interior_unresolvable.c'],
+    kwargs: test_common_kwargs,
+)
+test('alloc_interior_unresolvable', alloc_interior_test, suite: 'unit')
+
 path_test = executable('test_path',
     ['test/unit/test_path.c'],
     kwargs: test_common_kwargs,
