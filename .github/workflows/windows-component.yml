@@ -282,10 +282,21 @@ jobs:
           # Note 65 targets for 68 tests is expected, not a bug: several tests
           # share one executable and differ only by argv (dict_reader_strand
           # runs a 'get' and an 'add' case that way).
-          $allBases = $intro |
-            Where-Object { $testNames -contains $_.name } |
-            ForEach-Object { [System.IO.Path]::GetFileName($_.cmd[0]) } |
-            Sort-Object -Unique
+          # cmd[0] is the test binary; `depends` carries anything else the test
+          # needs at RUNTIME -- e.g. rocs_wax_cli spawns the n00b-rocs-wax-cache
+          # tool, which is a separate executable and not named by cmd[0]. Under
+          # `ninja all` that distinction never mattered; building only what runs
+          # makes it load-bearing, so take both.
+          $selected = $intro | Where-Object { $testNames -contains $_.name }
+          $allBases = @(
+            $selected | ForEach-Object { [System.IO.Path]::GetFileName($_.cmd[0]) }
+            # depends entries look like 'n00b-rocs-wax-cache@exe'; ninja wants
+            # the target name, so drop the @suffix and add the .exe this
+            # platform builds.
+            $selected | ForEach-Object { $_.depends } |
+              Where-Object { $_ } |
+              ForEach-Object { ($_ -split '@')[0] + '.exe' }
+          ) | Sort-Object -Unique
           $targets = $allBases | Where-Object { $_ -like '*.exe' }
           # Anything dropped here is a test driven by an interpreter rather
           # than a built binary. None exist in this set today; say so out loud
