@@ -3,8 +3,8 @@
 #include <string.h>
 
 #include "ir_internal.h"
+#include "ir/doms.h"
 #include "ir/pass.h"
-#include "ir/verify.h"
 
 typedef struct {
     ir_module_t             *m;
@@ -174,6 +174,34 @@ static bool gather_uses(P *p, ir_func_t *f, ir_rd_t *r, useref **out,
     return true;
 }
 
+typedef struct {
+    P           *p;
+    ir_rd_t     *r;
+    ir_value_t **val;
+    ir_instr_t **phi;
+} number_t;
+
+static bool number_block(ir_block_t *b, void *thunk)
+{
+    number_t *w = thunk;
+    uint32_t  first;
+    uint32_t  n = ir_rd_defs_in(w->r, b, &first);
+
+    for (uint32_t k = 0; k < ir_rd_phis_in(w->r, b); k++) {
+        uint32_t q = ir_rd_phi_at(w->r, b, k);
+
+        w->val[ir_rd_phi_tok(w->r, q)] = fresh(w->p, w->phi[q],
+                                               ir_rd_phi_local(w->r, q));
+    }
+
+    for (uint32_t d = first; d < first + n; d++) {
+        w->val[ir_rd_def_tok(w->r, d)] = fresh(w->p, ir_rd_def_instr(w->r, d),
+                                               ir_rd_def_local(w->r, d));
+    }
+
+    return true;
+}
+
 static bool promote_func(P *p, ir_func_t *f)
 {
     if (!f->n_locals || !f->n_blocks) {
@@ -248,35 +276,9 @@ static bool promote_func(P *p, ir_func_t *f)
         }
     }
 
-    ir_block_t **stack = ir_alloc(ctx, (f->n_blocks + 1) * sizeof(*stack));
-    uint32_t     sn    = 0;
-    ir_block_t  *entry = ir_block_entry(f);
+    number_t nw = {.p = p, .r = r, .val = val, .phi = phi};
 
-    if (ir_block_reachable(p->dom, entry)) {
-        stack[sn++] = entry;
-    }
-
-    while (sn) {
-        ir_block_t *b = stack[--sn];
-        uint32_t    first;
-        uint32_t    n = ir_rd_defs_in(r, b, &first);
-
-        for (uint32_t k = 0; k < ir_rd_phis_in(r, b); k++) {
-            uint32_t q = ir_rd_phi_at(r, b, k);
-
-            val[ir_rd_phi_tok(r, q)] = fresh(p, phi[q],
-                                             ir_rd_phi_local(r, q));
-        }
-
-        for (uint32_t d = first; d < first + n; d++) {
-            val[ir_rd_def_tok(r, d)] = fresh(p, ir_rd_def_instr(r, d),
-                                             ir_rd_def_local(r, d));
-        }
-
-        for (uint32_t k = ir_dom_kid_count(p->dom, b); k-- > 0;) {
-            stack[sn++] = ir_dom_kid_at(p->dom, b, k);
-        }
-    }
+    ir_dom_walk(p->dom, ir_block_entry(f), number_block, nullptr, &nw);
 
     for (uint32_t i = 0; i < n_use; i++) {
         ir_value_t *v = use[i].tok == NO_TOK || !use[i].tok

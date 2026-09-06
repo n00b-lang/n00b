@@ -1,7 +1,7 @@
 #include <string.h>
 
 #include "ir_internal.h"
-#include "ir/verify.h"
+#include "ir/doms.h"
 
 #define RD_NONE UINT32_MAX
 #define TOK_UNSET 0u
@@ -298,111 +298,114 @@ static void add_arm(ir_rd_t *r, uint32_t phi, uint32_t tok, uint32_t from)
     }
 }
 
-static void rename_walk(ir_rd_t *r)
+typedef struct {
+    ir_rd_t  *r;
+    uint32_t *st_off;
+    uint32_t *st_top;
+    uint32_t *st;
+    uint32_t *trail;
+    uint32_t *mark;
+    uint32_t  tn;
+} rename_t;
+
+static bool rename_enter(ir_block_t *b, void *thunk)
 {
-    ir_func_t *f    = r->f;
-    ir_ctx_t  *ctx  = f->owner->ctx;
-    uint32_t   nb   = f->n_blocks;
-    uint32_t   room = r->n_defs + r->n_phis + 1;
+    rename_t *w = thunk;
+    ir_rd_t  *r = w->r;
 
-    uint32_t *st_off = ir_alloc(ctx, (f->n_locals + 1) * sizeof(uint32_t));
-    uint32_t *st_top = ir_alloc(ctx, f->n_locals * sizeof(uint32_t));
+    w->mark[b->index] = w->tn;
 
-    for (uint32_t i = 0; i < r->n_defs; i++) {
-        st_off[r->def_local[i] + 1]++;
+    for (uint32_t i = r->phi_off[b->index]; i < r->phi_off[b->index + 1];
+         i++) {
+        uint32_t p = r->phi_at[i];
+        uint32_t l = r->phi[p].local;
+
+        w->st[w->st_off[l] + w->st_top[l]++] = TOK_PHI(r, p);
+        w->trail[w->tn++]                    = l;
     }
 
-    for (uint32_t i = 0; i < r->n_phis; i++) {
-        st_off[r->phi[i].local + 1]++;
+    for (uint32_t k = 0; k < b->n_instrs; k++) {
+        ir_instr_t *in = b->instrs[k];
+        uint32_t    at = node_of(r, in);
+
+        for (uint32_t u = r->use_off[at]; u < r->use_off[at + 1]; u++) {
+            uint32_t l = r->use_local[u];
+
+            r->use_tok[u] = w->st_top[l]
+                              ? w->st[w->st_off[l] + w->st_top[l] - 1]
+                              : TOK_UNSET;
+        }
+
+        if (r->def_id[at] != RD_NONE) {
+            uint32_t l = r->def_local[r->def_id[at]];
+
+            w->st[w->st_off[l] + w->st_top[l]++] = TOK_DEF(r->def_id[at]);
+            w->trail[w->tn++]                    = l;
+        }
     }
 
-    for (uint32_t i = 0; i < f->n_locals; i++) {
-        st_off[i + 1] += st_off[i];
-    }
+    ir_instr_t *t = ir_block_terminator(b);
 
-    uint32_t *st    = ir_alloc(ctx, room * sizeof(uint32_t));
-    uint32_t *trail = ir_alloc(ctx, room * sizeof(uint32_t));
-    uint32_t  tn    = 0;
+    for (uint32_t s = 0; t && s < t->n_operands; s++) {
+        ir_block_t *y = ir_succ_of(&t->operands[s]);
 
-    uint32_t     *mark  = ir_alloc(ctx, nb * sizeof(uint32_t));
-    ir_block_t  **stack = ir_alloc(ctx, (2 * nb + 2) * sizeof(ir_block_t *));
-    bool         *down  = ir_alloc(ctx, (2 * nb + 2) * sizeof(bool));
-    uint32_t      sn    = 0;
-    ir_block_t   *entry = ir_block_entry(f);
-
-    if (!entry || !ir_block_reachable(r->dom, entry)) {
-        return;
-    }
-    stack[sn]  = entry;
-    down[sn++] = true;
-
-    while (sn) {
-        ir_block_t *b = stack[--sn];
-
-        if (!down[sn]) {
-            while (tn > mark[b->index]) {
-                st_top[trail[--tn]]--;
-            }
-
+        if (!y) {
             continue;
         }
-        mark[b->index] = tn;
-        stack[sn]      = b;
-        down[sn++]     = false;
 
-        for (uint32_t i = r->phi_off[b->index]; i < r->phi_off[b->index + 1];
+        for (uint32_t i = r->phi_off[y->index]; i < r->phi_off[y->index + 1];
              i++) {
             uint32_t p = r->phi_at[i];
             uint32_t l = r->phi[p].local;
 
-            st[st_off[l] + st_top[l]++] = TOK_PHI(r, p);
-            trail[tn++]                 = l;
-        }
-
-        for (uint32_t k = 0; k < b->n_instrs; k++) {
-            ir_instr_t *in = b->instrs[k];
-            uint32_t    at = node_of(r, in);
-
-            for (uint32_t u = r->use_off[at]; u < r->use_off[at + 1]; u++) {
-                uint32_t l = r->use_local[u];
-
-                r->use_tok[u] = st_top[l] ? st[st_off[l] + st_top[l] - 1]
-                                          : TOK_UNSET;
-            }
-
-            if (r->def_id[at] != RD_NONE) {
-                uint32_t l = r->def_local[r->def_id[at]];
-
-                st[st_off[l] + st_top[l]++] = TOK_DEF(r->def_id[at]);
-                trail[tn++]                 = l;
-            }
-        }
-
-        ir_instr_t *t = ir_block_terminator(b);
-
-        for (uint32_t s = 0; t && s < t->n_operands; s++) {
-            ir_block_t *y = ir_succ_of(&t->operands[s]);
-
-            if (!y) {
-                continue;
-            }
-
-            for (uint32_t i = r->phi_off[y->index];
-                 i < r->phi_off[y->index + 1]; i++) {
-                uint32_t p = r->phi_at[i];
-                uint32_t l = r->phi[p].local;
-
-                add_arm(r, p,
-                        st_top[l] ? st[st_off[l] + st_top[l] - 1] : TOK_UNSET,
-                        b->index);
-            }
-        }
-
-        for (uint32_t k = 0; k < ir_dom_kid_count(r->dom, b); k++) {
-            stack[sn]  = ir_dom_kid_at(r->dom, b, k);
-            down[sn++] = true;
+            add_arm(r, p,
+                    w->st_top[l] ? w->st[w->st_off[l] + w->st_top[l] - 1]
+                                 : TOK_UNSET,
+                    b->index);
         }
     }
+
+    return true;
+}
+
+static bool rename_leave(ir_block_t *b, void *thunk)
+{
+    rename_t *w = thunk;
+
+    while (w->tn > w->mark[b->index]) {
+        w->st_top[w->trail[--w->tn]]--;
+    }
+
+    return true;
+}
+
+static void rename_walk(ir_rd_t *r)
+{
+    ir_func_t *f    = r->f;
+    ir_ctx_t  *ctx  = f->owner->ctx;
+    uint32_t   room = r->n_defs + r->n_phis + 1;
+    rename_t   w    = {.r = r};
+
+    w.st_off = ir_alloc(ctx, (f->n_locals + 1) * sizeof(uint32_t));
+    w.st_top = ir_alloc(ctx, f->n_locals * sizeof(uint32_t));
+
+    for (uint32_t i = 0; i < r->n_defs; i++) {
+        w.st_off[r->def_local[i] + 1]++;
+    }
+
+    for (uint32_t i = 0; i < r->n_phis; i++) {
+        w.st_off[r->phi[i].local + 1]++;
+    }
+
+    for (uint32_t i = 0; i < f->n_locals; i++) {
+        w.st_off[i + 1] += w.st_off[i];
+    }
+
+    w.st    = ir_alloc(ctx, room * sizeof(uint32_t));
+    w.trail = ir_alloc(ctx, room * sizeof(uint32_t));
+    w.mark  = ir_alloc(ctx, f->n_blocks * sizeof(uint32_t));
+
+    ir_dom_walk(r->dom, ir_block_entry(f), rename_enter, rename_leave, &w);
 }
 
 static uint64_t *phi_bits(ir_rd_t *r, uint32_t p)
