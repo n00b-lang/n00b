@@ -196,10 +196,11 @@ static bool
 run_chain(ncc_tree_walk_t *w, chain_t *c, ncc_visit_t *v, bool pre,
           bool reverse, int32_t phase)
 {
-    bool descend = true;
+    bool asked = false;
+    bool wants = false;
 
     if (!c) {
-        return descend;
+        return true;
     }
 
     for (size_t k = 0; k < c->len; k++) {
@@ -213,12 +214,15 @@ run_chain(ncc_tree_walk_t *w, chain_t *c, ncc_visit_t *v, bool pre,
 
         v->thunk = vi->thunk;
 
-        if (!fn(v) && pre) {
-            descend = false;
+        bool want = fn(v);
+
+        if (pre) {
+            asked = true;
+            wants = wants || want;
         }
     }
 
-    return descend;
+    return !asked || wants;
 }
 
 static bool

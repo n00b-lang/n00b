@@ -142,7 +142,8 @@ bool ir_walk_stopped(ir_walk_t *w)
 
 static bool run(chain_t *c, ir_visit_t *v, bool pre, bool reverse)
 {
-    bool descend = true;
+    bool asked = false;
+    bool wants = false;
 
     for (size_t k = 0; k < c->n; k++) {
         size_t      i  = reverse ? c->n - 1 - k : k;
@@ -154,12 +155,15 @@ static bool run(chain_t *c, ir_visit_t *v, bool pre, bool reverse)
 
         v->thunk = c->v[i].thunk;
 
-        if (!fn(v) && pre) {
-            descend = false;
+        bool want = fn(v);
+
+        if (pre) {
+            asked = true;
+            wants = wants || want;
         }
     }
 
-    return descend;
+    return !asked || wants;
 }
 
 static void walk_instr(ir_walk_t *w, ir_visit_t *v, ir_instr_t *in)
@@ -170,9 +174,8 @@ static void walk_instr(ir_walk_t *w, ir_visit_t *v, ir_instr_t *in)
 
     bool descend = run(&w->instr, v, true, false);
 
-    if (in->op >= 0 && in->op < IR_OP_COUNT
-        && !run(&w->by_op[in->op], v, true, false)) {
-        descend = false;
+    if (in->op >= 0 && in->op < IR_OP_COUNT) {
+        descend = run(&w->by_op[in->op], v, true, false) || descend;
     }
 
     if (descend && !w->stopped) {

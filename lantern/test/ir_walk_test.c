@@ -196,8 +196,7 @@ static void test_a_pre_visitor_can_skip_children(void)
     ir_walk_run(w, m);
     ir_walk_free(w);
 
-    check("refusing a block's children skips its instructions",
-          t.instrs == 0);
+    check("the only visitor refusing children skips them", t.instrs == 0);
 
     ir_ctx_free(ctx);
 }
@@ -250,12 +249,92 @@ static void test_a_function_can_be_walked_alone(void)
     ir_ctx_free(ctx);
 }
 
+
+static bool count_a(ir_visit_t *v)
+{
+    tally *t = v->user;
+
+    note(t, 'a');
+    t->instrs++;
+
+    return true;
+}
+
+static bool count_b(ir_visit_t *v)
+{
+    note(v->user, 'b');
+
+    return true;
+}
+
+static bool count_c(ir_visit_t *v)
+{
+    note(v->user, 'c');
+
+    return true;
+}
+
+static void test_visitors_stack_in_one_pass(void)
+{
+    ir_ctx_t    *ctx;
+    ir_module_t *m = load(&ctx);
+
+    if (!m) {
+        return;
+    }
+
+    tally      t = {0};
+    ir_walk_t *w = ir_walk_new(&t);
+
+    ir_walk_on_instr(w, count_a, nullptr, nullptr);
+    ir_walk_on_instr(w, count_b, nullptr, nullptr);
+    ir_walk_on_instr(w, count_c, nullptr, nullptr);
+
+    ir_walk_run(w, m);
+    ir_walk_free(w);
+
+    check("three visitors on one node kind all run", t.instrs == 4);
+    check("in one pass, in registration order, per node",
+          !strcmp(t.order, "abcabcabcabc"));
+
+    ir_ctx_free(ctx);
+}
+
+static void test_one_visitor_refusing_children_affects_all(void)
+{
+    ir_ctx_t    *ctx;
+    ir_module_t *m = load(&ctx);
+
+    if (!m) {
+        return;
+    }
+
+    tally      t = {0};
+    ir_walk_t *w = ir_walk_new(&t);
+
+    ir_walk_on_block(w, skip_children, nullptr, nullptr);
+    ir_walk_on_block(w, block_in, nullptr, nullptr);
+    ir_walk_on_instr(w, on_instr, nullptr, nullptr);
+
+    ir_walk_run(w, m);
+    ir_walk_free(w);
+
+    check("a visitor that refuses children still lets its peers run",
+          t.blocks == 3);
+    check("and one visitor's refusal does not prune another's traversal",
+          t.instrs == 4);
+
+    ir_ctx_free(ctx);
+}
+
 int main(void)
 {
     test_the_walk_reaches_every_node();
     test_a_pre_visitor_can_skip_children();
     test_a_walk_can_be_stopped();
     test_a_function_can_be_walked_alone();
+    test_visitors_stack_in_one_pass();
+    test_one_visitor_refusing_children_affects_all();
 
     if (!fails) {
         printf("ir walk: all checks passed\n");
