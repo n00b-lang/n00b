@@ -24,6 +24,7 @@ struct ncc_terminal_t {
 struct ncc_nonterm_t {
     ncc_string_t                    name;
     ncc_list_t(int32_t)             rule_ids;
+    bool                            defined_here;
     ncc_walk_action_t               action;
     void                            *user_data;
     ncc_list_t(ncc_annotation_ptr_t) annotations;

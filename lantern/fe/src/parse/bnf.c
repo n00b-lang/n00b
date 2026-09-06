@@ -1679,7 +1679,19 @@ populate_grammar(ncc_grammar_t *user_g, bnf_result_t *result,
         ncc_string_t  disambig_predicate = {0};
         int32_t       disambig_cost      = 0;
         bnf_result_t *annots_r = (pair->len >= 3) ? slist_get(pair, 2) : nullptr;
-        int64_t       nt_id    = ncc_nonterm(user_g, *name)->id;
+        ncc_nonterm_t *lhs     = ncc_nonterm(user_g, *name);
+        int64_t       nt_id    = lhs->id;
+
+        if (ncc_list_len(lhs->rule_ids) > 0 && !lhs->defined_here) {
+            fprintf(stderr,
+                    "bnf: <%s> is already defined by a grammar loaded "
+                    "earlier; composing would merge two productions that "
+                    "share a name\n",
+                    name->data ? name->data : "?");
+
+            return false;
+        }
+        lhs->defined_here = true;
 
         if (annots_r && annots_r->tag == BNF_LIST) {
             bnf_list_t *annot_list = (bnf_list_t *)annots_r->data;

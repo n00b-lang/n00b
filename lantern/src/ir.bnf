@@ -32,9 +32,11 @@
 
 <func> ::= <linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> <meta>* %"{" <local>* <block>+ %"}"
 
-<params> ::= <param> (%"," <param>)*
-<param>  ::= <mode>? <value> %":" <typelang-type>
-<mode>   ::= %"in" | %"out" | %"inout"
+<params>     ::= <func-param> (%"," <func-param>)*
+<func-param> ::= <param-mode>? <value> %":" <typelang-type>
+               | <name> %":" <typelang-type>
+               | %"*" <typelang-type>
+<param-mode> ::= %"in" | %"out" | %"inout"
 
 <local> ::= %"local" <local-ref> %":" <typelang-type> <init>? <meta>*
 

@@ -157,8 +157,11 @@ typedef enum {
     TL_INT,
 } tl_kind;
 
+#define TL_NODE_MAGIC 0x546c4e64u
+
 typedef struct {
-    tl_kind kind;
+    uint32_t magic;
+    tl_kind  kind;
     union {
         th_type   *type;
         char      *name;
@@ -207,7 +210,8 @@ static tl_node *node_new(bctx *c, tl_kind kind)
 
     tl_node *n = calloc(1, sizeof(*n));
 
-    n->kind = kind;
+    n->magic = TL_NODE_MAGIC;
+    n->kind  = kind;
 
     return n;
 }
@@ -225,7 +229,11 @@ static th_type *as_type(void *v)
 {
     tl_node *n = v;
 
-    return n && n->kind == TL_TYPE ? n->type : nullptr;
+    if (!n || ncc_reduce_as_list(v) || n->magic != TL_NODE_MAGIC) {
+        return nullptr;
+    }
+
+    return n->kind == TL_TYPE ? n->type : nullptr;
 }
 
 static int32_t rule_of(ncc_parse_tree_t *n)

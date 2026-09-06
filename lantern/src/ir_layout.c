@@ -145,6 +145,13 @@ bool ir_layout_pin_size(ir_module_t *m, th_type *t, uint64_t bytes)
     return d && pin(&d->size, bytes);
 }
 
+bool ir_layout_pin_stride(ir_module_t *m, th_type *t, uint64_t bytes)
+{
+    ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
+
+    return d && pin(&d->stride, bytes);
+}
+
 bool ir_layout_pin_align(ir_module_t *m, th_type *t, uint64_t bytes)
 {
     ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);

@@ -66,6 +66,7 @@ size_t           ir_layout_count(ir_module_t *m, th_type *t);
 
 bool ir_layout_pin_size(ir_module_t *m, th_type *t, uint64_t bytes);
 bool ir_layout_pin_align(ir_module_t *m, th_type *t, uint64_t bytes);
+bool ir_layout_pin_stride(ir_module_t *m, th_type *t, uint64_t bytes);
 bool ir_layout_pin_member(ir_module_t *m, th_type *t, const char *field,
                           uint64_t bit_offset, uint64_t bit_width);
 bool ir_layout_pin_variant(ir_module_t *m, th_type *t, ir_variant_repr_t r);
