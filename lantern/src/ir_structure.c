@@ -4,6 +4,197 @@
 #include "ir_internal.h"
 #include "ir/pass.h"
 #include "ir/doms.h"
+#include "ir/region_walk.h"
+
+typedef struct {
+    ir_region_fn pre;
+    ir_region_fn post;
+    void        *thunk;
+} rslot_t;
+
+typedef struct {
+    rslot_t *v;
+    size_t   n;
+    size_t   cap;
+} rchain_t;
+
+struct ir_region_walk_t {
+    void    *user;
+    rchain_t any;
+    rchain_t by_kind[IR_REGION_KIND_COUNT];
+    bool     stopped;
+};
+
+static void radd(rchain_t *c, ir_region_fn pre, ir_region_fn post, void *thunk)
+{
+    if (c->n >= c->cap) {
+        c->cap = c->cap ? c->cap * 2 : 4;
+        c->v   = realloc(c->v, c->cap * sizeof(*c->v));
+    }
+
+    c->v[c->n++] = (rslot_t){.pre = pre, .post = post, .thunk = thunk};
+}
+
+ir_region_walk_t *ir_region_walk_new(void *user)
+{
+    ir_region_walk_t *w = calloc(1, sizeof(*w));
+
+    w->user = user;
+
+    return w;
+}
+
+void ir_region_walk_free(ir_region_walk_t *w)
+{
+    if (!w) {
+        return;
+    }
+
+    free(w->any.v);
+
+    for (int i = 0; i < IR_REGION_KIND_COUNT; i++) {
+        free(w->by_kind[i].v);
+    }
+
+    free(w);
+}
+
+void *ir_region_walk_user(ir_region_walk_t *w)
+{
+    return w ? w->user : nullptr;
+}
+
+void ir_region_on_node(ir_region_walk_t *w, ir_region_fn pre,
+                       ir_region_fn post, void *thunk)
+{
+    radd(&w->any, pre, post, thunk);
+}
+
+void ir_region_on_kind(ir_region_walk_t *w, ir_region_kind_t kind,
+                       ir_region_fn pre, ir_region_fn post, void *thunk)
+{
+    if (kind < IR_REGION_KIND_COUNT) {
+        radd(&w->by_kind[kind], pre, post, thunk);
+    }
+}
+
+void ir_region_walk_stop(ir_region_walk_t *w)
+{
+    if (w) {
+        w->stopped = true;
+    }
+}
+
+bool ir_region_walk_stopped(ir_region_walk_t *w)
+{
+    return w && w->stopped;
+}
+
+static void rrun(rchain_t *c, ir_region_visit_t *v, bool pre, bool reverse,
+                 bool *asked, bool *wants)
+{
+    for (size_t k = 0; k < c->n; k++) {
+        size_t       i  = reverse ? c->n - 1 - k : k;
+        ir_region_fn fn = pre ? c->v[i].pre : c->v[i].post;
+
+        if (!fn) {
+            continue;
+        }
+
+        v->thunk = c->v[i].thunk;
+
+        bool want = fn(v);
+
+        if (pre) {
+            *asked = true;
+            *wants = *wants || want;
+        }
+    }
+}
+
+typedef struct {
+    ir_region_t *r;
+    ir_region_t *parent;
+    uint32_t     index;
+    uint32_t     next;
+    bool         entered;
+} rframe_t;
+
+void ir_region_walk_run(ir_region_walk_t *w, ir_region_t *root)
+{
+    if (!w || !root) {
+        return;
+    }
+
+    size_t    cap   = 16;
+    rframe_t *stack = calloc(cap, sizeof(rframe_t));
+    size_t    sn    = 0;
+
+    w->stopped = false;
+    stack[sn++] = (rframe_t){.r = root};
+
+    while (sn && !w->stopped) {
+        rframe_t         *f = &stack[sn - 1];
+        ir_region_visit_t v = {.walk   = w,
+                               .region = f->r,
+                               .parent = f->parent,
+                               .index  = f->index,
+                               .depth  = (int32_t)sn - 1,
+                               .user   = w->user};
+
+        if (!f->entered) {
+            bool asked = false;
+            bool wants = false;
+
+            f->entered = true;
+
+            rrun(&w->any, &v, true, false, &asked, &wants);
+
+            if (f->r->kind < IR_REGION_KIND_COUNT) {
+                rrun(&w->by_kind[f->r->kind], &v, true, false, &asked, &wants);
+            }
+
+            if (asked && !wants) {
+                f->next = f->r->n_kids;
+            }
+
+            if (w->stopped) {
+                break;
+            }
+        }
+
+        if (f->next < f->r->n_kids) {
+            uint32_t     at  = f->next++;
+            ir_region_t *kid = f->r->kids[at];
+
+            if (sn == cap) {
+                cap  *= 2;
+                stack = realloc(stack, cap * sizeof(rframe_t));
+                f     = &stack[sn - 1];
+            }
+            stack[sn++] = (rframe_t){.r = kid, .parent = f->r, .index = at};
+
+            continue;
+        }
+
+        bool asked = false;
+        bool wants = false;
+
+        if (f->r->kind < IR_REGION_KIND_COUNT) {
+            rrun(&w->by_kind[f->r->kind], &v, false, true, &asked, &wants);
+        }
+
+        rrun(&w->any, &v, false, true, &asked, &wants);
+        sn--;
+    }
+
+    free(stack);
+}
+
+void ir_region_walk_run_func(ir_region_walk_t *w, ir_func_t *f)
+{
+    ir_region_walk_run(w, ir_region_root(f));
+}
 
 typedef struct {
     ir_module_t  *m;
@@ -273,23 +464,33 @@ static uint32_t irreducible(S *s, bool *marked)
     return n;
 }
 
-static uint32_t covered_of(const ir_region_t *r, const bool *marked)
+typedef struct {
+    const bool *marked;
+    uint32_t    n;
+} cover_t;
+
+static bool count_covered(ir_region_visit_t *v)
 {
-    uint32_t n = 0;
+    cover_t *c = v->user;
 
-    if (!r) {
-        return 0;
+    if (v->region->head && c->marked[v->region->head->index]) {
+        c->n++;
     }
 
-    if (r->kind == IR_REGION_BLOCK && r->head && marked[r->head->index]) {
-        n++;
-    }
+    return true;
+}
 
-    for (uint32_t i = 0; i < r->n_kids; i++) {
-        n += covered_of(r->kids[i], marked);
-    }
+static uint32_t covered_of(ir_region_t *r, const bool *marked)
+{
+    cover_t c = {.marked = marked};
 
-    return n;
+    ir_region_walk_t *w = ir_region_walk_new(&c);
+
+    ir_region_on_kind(w, IR_REGION_BLOCK, count_covered, nullptr, nullptr);
+    ir_region_walk_run(w, r);
+    ir_region_walk_free(w);
+
+    return c.n;
 }
 
 static void mark_dispatch(ir_region_t *root, const bool *marked, uint32_t all)
@@ -377,25 +578,34 @@ ir_region_t *ir_region_root(ir_func_t *f)
     return f ? f->regions : nullptr;
 }
 
+typedef struct {
+    ir_block_t  *want;
+    ir_region_t *hit;
+} seek_t;
+
+static bool seek_block(ir_region_visit_t *v)
+{
+    seek_t *s = v->user;
+
+    if (v->region->head == s->want) {
+        s->hit = v->region;
+        ir_region_walk_stop(v->walk);
+    }
+
+    return true;
+}
+
 static ir_region_t *find_block(ir_region_t *r, ir_block_t *b)
 {
-    if (!r) {
-        return nullptr;
-    }
+    seek_t s = {.want = b};
 
-    if (r->kind == IR_REGION_BLOCK && r->head == b) {
-        return r;
-    }
+    ir_region_walk_t *w = ir_region_walk_new(&s);
 
-    for (uint32_t i = 0; i < r->n_kids; i++) {
-        ir_region_t *hit = find_block(r->kids[i], b);
+    ir_region_on_kind(w, IR_REGION_BLOCK, seek_block, nullptr, nullptr);
+    ir_region_walk_run(w, r);
+    ir_region_walk_free(w);
 
-        if (hit) {
-            return hit;
-        }
-    }
-
-    return nullptr;
+    return s.hit;
 }
 
 ir_region_t *ir_region_of_block(ir_func_t *f, ir_block_t *b)
@@ -408,25 +618,29 @@ bool ir_region_needs_dispatch(const ir_region_t *r)
     return r && r->dispatch;
 }
 
+static bool seek_dispatch(ir_region_visit_t *v)
+{
+    seek_t *s = v->user;
+
+    if (v->region->dispatch) {
+        s->hit = v->region;
+        ir_region_walk_stop(v->walk);
+    }
+
+    return true;
+}
+
 static ir_region_t *find_dispatch(ir_region_t *r)
 {
-    if (!r) {
-        return nullptr;
-    }
+    seek_t s = {0};
 
-    if (r->dispatch) {
-        return r;
-    }
+    ir_region_walk_t *w = ir_region_walk_new(&s);
 
-    for (uint32_t i = 0; i < r->n_kids; i++) {
-        ir_region_t *hit = find_dispatch(r->kids[i]);
+    ir_region_on_node(w, seek_dispatch, nullptr, nullptr);
+    ir_region_walk_run(w, r);
+    ir_region_walk_free(w);
 
-        if (hit) {
-            return hit;
-        }
-    }
-
-    return nullptr;
+    return s.hit;
 }
 
 ir_region_t *ir_region_dispatch_site(ir_func_t *f)
@@ -446,34 +660,56 @@ const ir_pass_t ir_pass_structure = {
     .run         = structure_run,
 };
 
-static void draw(ir_sb *b, ir_module_t *m, const ir_region_t *r, int depth)
+static bool draw_block(ir_region_visit_t *v)
 {
-    if (!r) {
-        return;
+    ir_sb *b = v->user;
+
+    ir_sb_fmt(b, "%*sblock %s\n", v->depth * 2 + 4, "",
+              v->region->head ? v->region->head->name : "?");
+
+    return false;
+}
+
+static bool draw_open(ir_region_visit_t *v)
+{
+    ir_sb *b = v->user;
+
+    if (v->region->kind == IR_REGION_BLOCK) {
+        return true;
     }
 
-    if (r->kind == IR_REGION_BLOCK) {
-        ir_sb_fmt(b, "%*sblock %s\n", depth * 2 + 4, "",
-                  r->head ? r->head->name : "?");
+    ir_sb_fmt(b, "%*s%s", v->depth * 2 + 4, "",
+              ir_region_kind_name(v->region->kind));
 
-        return;
+    if (v->region->head) {
+        ir_sb_fmt(b, " at %s", v->region->head->name);
     }
 
-    ir_sb_fmt(b, "%*s%s", depth * 2 + 4, "", ir_region_kind_name(r->kind));
-
-    if (r->head) {
-        ir_sb_fmt(b, " at %s", r->head->name);
-    }
-
-    if (r->dispatch) {
+    if (v->region->dispatch) {
         ir_sb_str(b, "   # irreducible: a back end must emit a dispatch loop");
     }
     ir_sb_str(b, " {\n");
 
-    for (uint32_t i = 0; i < r->n_kids; i++) {
-        draw(b, m, r->kids[i], depth + 1);
+    return true;
+}
+
+static bool draw_close(ir_region_visit_t *v)
+{
+    if (v->region->kind != IR_REGION_BLOCK) {
+        ir_sb_fmt((ir_sb *)v->user, "%*s}\n", v->depth * 2 + 4, "");
     }
-    ir_sb_fmt(b, "%*s}\n", depth * 2 + 4, "");
+
+    return true;
+}
+
+static void draw(ir_sb *b, ir_region_t *r)
+{
+    ir_region_walk_t *w = ir_region_walk_new(b);
+
+    ir_region_on_node(w, draw_open, draw_close, nullptr);
+    ir_region_on_kind(w, IR_REGION_BLOCK, draw_block, nullptr, nullptr);
+    ir_region_walk_run(w, r);
+    ir_region_walk_free(w);
 }
 
 char *ir_module_render_nested(ir_module_t *m)
@@ -496,7 +732,7 @@ char *ir_module_render_nested(ir_module_t *m)
             ir_sb_str(&b, "    # no overlay; run structure first\n");
             continue;
         }
-        draw(&b, m, ir_region_root(f), 0);
+        draw(&b, ir_region_root(f));
     }
 
     return ir_sb_take(&b);

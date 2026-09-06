@@ -8,6 +8,7 @@
 #include "ir/doms.h"
 #include "ir/verify.h"
 #include "ir/walk.h"
+#include "ir/region_walk.h"
 
 #include "lib/dict.h"
 
@@ -701,19 +702,31 @@ static bool no_critical_edges(ir_visit_t *vi)
     return false;
 }
 
-static void tally(const ir_region_t *r, uint32_t *seen, uint32_t n)
+typedef struct {
+    uint32_t *seen;
+    uint32_t  n;
+} tally_t;
+
+static bool tally_block(ir_region_visit_t *v)
 {
-    if (!r) {
-        return;
+    tally_t *t = v->user;
+
+    if (v->region->head && v->region->head->index < t->n) {
+        t->seen[v->region->head->index]++;
     }
 
-    if (r->kind == IR_REGION_BLOCK && r->head && r->head->index < n) {
-        seen[r->head->index]++;
-    }
+    return true;
+}
 
-    for (uint32_t i = 0; i < r->n_kids; i++) {
-        tally(r->kids[i], seen, n);
-    }
+static void tally(ir_region_t *r, uint32_t *seen, uint32_t n)
+{
+    tally_t t = {.seen = seen, .n = n};
+
+    ir_region_walk_t *w = ir_region_walk_new(&t);
+
+    ir_region_on_kind(w, IR_REGION_BLOCK, tally_block, nullptr, nullptr);
+    ir_region_walk_run(w, r);
+    ir_region_walk_free(w);
 }
 
 static bool check_structured(ir_visit_t *vi)

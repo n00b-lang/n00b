@@ -4,6 +4,7 @@
 
 #include "ir/layout.h"
 #include "ir/pass.h"
+#include "ir/region_walk.h"
 #include "ir/rule.h"
 #include "ir/text.h"
 #include "ir/verify.h"
@@ -511,6 +512,132 @@ static void test_a_loop_with_a_body_of_several_blocks(void)
     done(r);
 }
 
+typedef struct {
+    int  enters, leaves, blocks, loops;
+    int  max_depth;
+    char order[256];
+    size_t at;
+} rtally;
+
+static void rnote(rtally *t, char c)
+{
+    if (t->at + 1 < sizeof t->order) {
+        t->order[t->at++] = c;
+    }
+}
+
+static bool r_enter(ir_region_visit_t *v)
+{
+    rtally *t = v->user;
+
+    t->enters++;
+    rnote(t, 'E');
+
+    if (v->depth > t->max_depth) {
+        t->max_depth = v->depth;
+    }
+
+    return true;
+}
+
+static bool r_leave(ir_region_visit_t *v)
+{
+    rtally *t = v->user;
+
+    t->leaves++;
+    rnote(t, 'e');
+
+    return true;
+}
+
+static bool r_block(ir_region_visit_t *v)
+{
+    ((rtally *)v->user)->blocks++;
+
+    return true;
+}
+
+static bool r_loop(ir_region_visit_t *v)
+{
+    ((rtally *)v->user)->loops++;
+
+    return true;
+}
+
+static bool r_refuse(ir_region_visit_t *v)
+{
+    (void)v;
+
+    return false;
+}
+
+static bool r_stop(ir_region_visit_t *v)
+{
+    ir_region_walk_stop(v->walk);
+
+    return true;
+}
+
+static void test_the_region_walk(void)
+{
+    run_t *r = load(MOD("  func @f(%c: bool, %a: i32) -> i32 {\n"
+                        "    block entry:\n      jump head\n"
+                        "    block head:\n      branch %c, body, out\n"
+                        "    block body:\n      jump head\n"
+                        "    block out:\n      return %a\n  }\n"));
+
+    check("the module for the region walk structures",
+          ir_structure(r->m, r->d));
+
+    ir_func_t   *f    = ir_func_at(r->m, 0);
+    ir_region_t *root = ir_region_root(f);
+
+    rtally            t = {0};
+    ir_region_walk_t *w = ir_region_walk_new(&t);
+
+    ir_region_on_node(w, r_enter, r_leave, nullptr);
+    ir_region_on_kind(w, IR_REGION_BLOCK, r_block, nullptr, nullptr);
+    ir_region_on_kind(w, IR_REGION_LOOP, r_loop, nullptr, nullptr);
+    ir_region_walk_run(w, root);
+    ir_region_walk_free(w);
+
+    check("every region is entered and left once",
+          t.enters == t.leaves && t.enters > 0);
+    check("the walk reaches every block of the function",
+          t.blocks == (int)f->n_blocks);
+    check("and sees the loop", t.loops == 1);
+    check("a kind visitor stacks with the node visitor rather than "
+          "replacing it", t.enters > t.blocks);
+    check("the root is at depth zero", t.order[0] == 'E');
+    check("and a nested region is deeper than the root", t.max_depth > 0);
+
+    rtally            p  = {0};
+    ir_region_walk_t *w2 = ir_region_walk_new(&p);
+
+    ir_region_on_node(w2, r_refuse, nullptr, nullptr);
+    ir_region_on_kind(w2, IR_REGION_BLOCK, r_block, nullptr, nullptr);
+    ir_region_walk_run(w2, root);
+    ir_region_walk_free(w2);
+
+    check("a pre visitor refusing children prunes the subtree",
+          p.blocks == 0);
+
+    rtally            s  = {0};
+    ir_region_walk_t *w3 = ir_region_walk_new(&s);
+
+    ir_region_on_node(w3, r_stop, nullptr, nullptr);
+    ir_region_on_kind(w3, IR_REGION_BLOCK, r_block, nullptr, nullptr);
+    ir_region_walk_run(w3, root);
+
+    check("stopping at the root reaches nothing below it", s.blocks == 0);
+    check("and the walk reports that it stopped", ir_region_walk_stopped(w3));
+    ir_region_walk_free(w3);
+
+    check("walking a null root is not a crash",
+          (ir_region_walk_run(nullptr, nullptr), true));
+    done(r);
+}
+
 static void write_produced(const char *dir)
 {
     size_t n    = strlen(dir) + 32;
@@ -540,6 +667,7 @@ int main(int argc, char **argv)
     test_every_block_exactly_once();
     test_a_broken_overlay_is_caught();
     test_the_overlay_is_deterministic();
+    test_the_region_walk();
     test_the_nested_form_is_a_rendering();
     test_every_named_pass_declares_what_the_spec_lists();
     test_a_created_block_takes_its_construct_s_span();
