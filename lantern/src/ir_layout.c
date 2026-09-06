@@ -5,6 +5,7 @@
 #include "ir_internal.h"
 #include "ir/layout.h"
 #include "ir/text.h"
+#include "ir/walk.h"
 
 const char *ir_layout_state_name(ir_layout_state_t s)
 {
@@ -598,6 +599,59 @@ static void reach(L *l, th_type *t)
     }
 }
 
+static bool reach_global(ir_visit_t *vi)
+{
+    reach(vi->user, vi->global->type);
+
+    return true;
+}
+
+static bool reach_param(ir_visit_t *vi)
+{
+    reach(vi->user, vi->param->type);
+
+    return true;
+}
+
+static bool reach_local(ir_visit_t *vi)
+{
+    reach(vi->user, vi->local->type);
+
+    return true;
+}
+
+static bool reach_dest(ir_visit_t *vi)
+{
+    if (vi->instr->dest_kind == IR_DEST_VALUE && vi->instr->dest) {
+        reach(vi->user, vi->instr->dest->type);
+    }
+
+    return true;
+}
+
+static bool reach_operand(ir_visit_t *vi)
+{
+    ir_operand_t *od = vi->operand;
+
+    if (od->kind == IR_OPD_TYPE) {
+        reach(vi->user, od->type);
+    }
+
+    if (od->kind == IR_OPD_VALUE && od->value) {
+        reach(vi->user, od->value->type);
+    }
+
+    if (od->kind == IR_OPD_NAMED_ARG && od->named.value) {
+        reach(vi->user, od->named.value->type);
+    }
+
+    if (od->kind == IR_OPD_PHI_ARM && od->phi.value) {
+        reach(vi->user, od->phi.value->type);
+    }
+
+    return true;
+}
+
 bool ir_layout_run(ir_module_t *m, ir_diags_t *d)
 {
     if (!m) {
@@ -606,53 +660,15 @@ bool ir_layout_run(ir_module_t *m, ir_diags_t *d)
 
     L l = {.m = m, .d = d, .ok = true, .settled = true};
 
-    for (size_t i = 0; i < ir_global_count(m); i++) {
-        reach(&l, ir_global_at(m, i)->type);
-    }
+    ir_walk_t *w = ir_walk_new(&l);
 
-    for (size_t i = 0; i < ir_func_count(m); i++) {
-        ir_func_t *f = ir_func_at(m, i);
-
-        for (uint32_t k = 0; k < f->n_params; k++) {
-            reach(&l, f->params[k]->type);
-        }
-
-        for (uint32_t k = 0; k < f->n_locals; k++) {
-            reach(&l, f->locals[k]->type);
-        }
-
-        for (uint32_t k = 0; k < f->n_blocks; k++) {
-            ir_block_t *b = f->blocks[k];
-
-            for (uint32_t j = 0; j < b->n_instrs; j++) {
-                ir_instr_t *in = b->instrs[j];
-
-                if (in->dest_kind == IR_DEST_VALUE && in->dest) {
-                    reach(&l, in->dest->type);
-                }
-
-                for (uint32_t o = 0; o < in->n_operands; o++) {
-                    ir_operand_t *od = &in->operands[o];
-
-                    if (od->kind == IR_OPD_TYPE) {
-                        reach(&l, od->type);
-                    }
-
-                    if (od->kind == IR_OPD_VALUE && od->value) {
-                        reach(&l, od->value->type);
-                    }
-
-                    if (od->kind == IR_OPD_NAMED_ARG && od->named.value) {
-                        reach(&l, od->named.value->type);
-                    }
-
-                    if (od->kind == IR_OPD_PHI_ARM && od->phi.value) {
-                        reach(&l, od->phi.value->type);
-                    }
-                }
-            }
-        }
-    }
+    ir_walk_on_global(w, reach_global, nullptr);
+    ir_walk_on_param(w, reach_param, nullptr);
+    ir_walk_on_local(w, reach_local, nullptr);
+    ir_walk_on_instr(w, reach_dest, nullptr, nullptr);
+    ir_walk_on_operand(w, reach_operand, nullptr);
+    ir_walk_run(w, m);
+    ir_walk_free(w);
 
     if (l.ok && l.settled) {
         ir_module_establish(m, IR_PROP_LAID_OUT);

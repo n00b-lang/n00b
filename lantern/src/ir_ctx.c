@@ -3,6 +3,7 @@
 
 #include "ir_internal.h"
 #include "ir/typelang.h"
+#include "ir/walk.h"
 
 void *ir_alloc(ir_ctx_t *ctx, size_t n)
 {
@@ -170,6 +171,48 @@ void ir_module_establish(ir_module_t *m, ir_props_t p)
     }
 }
 
+static bool drop_on_global(ir_visit_t *vi)
+{
+    ir_annot_invalidate(&vi->global->annots, *(ir_props_t *)vi->user);
+
+    return true;
+}
+
+static bool drop_on_func(ir_visit_t *vi)
+{
+    ir_props_t p = *(ir_props_t *)vi->user;
+
+    vi->func->props &= (ir_props_t) ~(uint16_t)p;
+    ir_annot_invalidate(&vi->func->annots, p);
+
+    if (p & IR_PROP_STRUCTURED) {
+        vi->func->regions = nullptr;
+    }
+
+    return true;
+}
+
+static bool drop_on_local(ir_visit_t *vi)
+{
+    ir_annot_invalidate(&vi->local->annots, *(ir_props_t *)vi->user);
+
+    return true;
+}
+
+static bool drop_on_block(ir_visit_t *vi)
+{
+    ir_annot_invalidate(&vi->block->annots, *(ir_props_t *)vi->user);
+
+    return true;
+}
+
+static bool drop_on_instr(ir_visit_t *vi)
+{
+    ir_annot_invalidate(&vi->instr->annots, *(ir_props_t *)vi->user);
+
+    return false;
+}
+
 void ir_module_invalidate(ir_module_t *m, ir_props_t p)
 {
     if (!m) {
@@ -179,34 +222,15 @@ void ir_module_invalidate(ir_module_t *m, ir_props_t p)
     m->props &= (ir_props_t) ~(uint16_t)p;
     ir_annot_invalidate(&m->annots, p);
 
-    for (size_t i = 0; i < m->n_funcs; i++) {
-        ir_func_t *f = m->funcs[i];
+    ir_walk_t *w = ir_walk_new(&p);
 
-        f->props &= (ir_props_t) ~(uint16_t)p;
-        ir_annot_invalidate(&f->annots, p);
-
-        if (p & IR_PROP_STRUCTURED) {
-            f->regions = nullptr;
-        }
-
-        for (uint32_t b = 0; b < f->n_blocks; b++) {
-            ir_block_t *bb = f->blocks[b];
-
-            ir_annot_invalidate(&bb->annots, p);
-
-            for (uint32_t k = 0; k < bb->n_instrs; k++) {
-                ir_annot_invalidate(&bb->instrs[k]->annots, p);
-            }
-        }
-
-        for (uint32_t l = 0; l < f->n_locals; l++) {
-            ir_annot_invalidate(&f->locals[l]->annots, p);
-        }
-    }
-
-    for (size_t i = 0; i < m->n_globals; i++) {
-        ir_annot_invalidate(&m->globals[i]->annots, p);
-    }
+    ir_walk_on_global(w, drop_on_global, nullptr);
+    ir_walk_on_func(w, drop_on_func, nullptr, nullptr);
+    ir_walk_on_local(w, drop_on_local, nullptr);
+    ir_walk_on_block(w, drop_on_block, nullptr, nullptr);
+    ir_walk_on_instr(w, drop_on_instr, nullptr, nullptr);
+    ir_walk_run(w, m);
+    ir_walk_free(w);
 }
 
 void ir_module_set_profile(ir_module_t *m, const ir_profile_t *p)
