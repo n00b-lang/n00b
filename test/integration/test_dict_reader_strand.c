@@ -256,5 +256,6 @@ main(int argc, char **argv)
     g_case      = is_add ? "add" : "get";
 
     printf("Running dict_reader_strand (%s)...\n", g_case);
+    n00b_shutdown();
     return run_case(is_add);
 }
