@@ -6866,7 +6866,7 @@ rocs_query_run_records(n00b_store_t      *store,
 
     // Hand the query's cancel hook to the cursor. Without this the snapshot
     // path is uninterruptible: the cursor polls cancel_cb during boundary
-    // scans (query.c:4320/4393/7783) and threads it into
+    // scans (every 1024 ordinals) and threads it into
     // n00b_plan_catalog_entry_sealed, but a null hook made every one of those
     // polls a no-op (n00b#255).
     auto cursor_r = n00b_query_cursor(view,
@@ -6980,7 +6980,7 @@ rocs_query_run_aggregate(n00b_store_t      *store,
 
     // Hand the query's cancel hook to the cursor. Without this the snapshot
     // path is uninterruptible: the cursor polls cancel_cb during boundary
-    // scans (query.c:4320/4393/7783) and threads it into
+    // scans (every 1024 ordinals) and threads it into
     // n00b_plan_catalog_entry_sealed, but a null hook made every one of those
     // polls a no-op (n00b#255).
     auto cursor_r = n00b_query_cursor(view,

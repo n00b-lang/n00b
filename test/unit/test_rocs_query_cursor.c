@@ -592,8 +592,8 @@ test_execution_detail_distinguishes_causes(void)
 // The defect was NOT a missing mechanism. rocs_query_run_records and
 // rocs_query_run_aggregate are both implemented on n00b_query_cursor, which has
 // always accepted .cancel_cb/.cancel_ctx and polls it during boundary scans
-// (query.c:4320, :4393, :7783) and threads it into
-// n00b_plan_catalog_entry_sealed (:5127). Both call sites built that cursor
+// (every 1024 ordinals) and threads it into
+// n00b_plan_catalog_entry_sealed. Both call sites built that cursor
 // with .allocator ALONE, so every one of those polls was a no-op and the hook
 // was unreachable from n00b_query_run.
 //
