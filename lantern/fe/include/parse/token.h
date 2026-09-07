@@ -71,3 +71,5 @@ extern int32_t ncc_token_list_build_ptrs(ncc_list_t(ncc_token_info_t) *tl,
 typedef struct ncc_parser_t ncc_parser_t;
 
 typedef int64_t (*ncc_tokenizer_fn)(ncc_parser_t *, void **);
+
+void ncc_trivia_free(ncc_trivia_t *t);

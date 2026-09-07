@@ -12,17 +12,7 @@
 #include "scanner/scanner.h"
 #include "scanner/token_stream.h"
 #include "internal/parse/grammar_internal.h"
-
-static int fails = 0;
-
-static void
-check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static void
 same(const char *what, char *got, const char *want)
@@ -297,9 +287,5 @@ main(void)
     ncc_buffer_free(buf);
     ncc_grammar_free(g);
 
-    if (!fails) {
-        printf("fe rewrite: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("fe rewrite");
 }

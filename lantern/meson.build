@@ -16,6 +16,10 @@ cc = meson.get_compiler('c')
 ir_inc = include_directories('include')
 fe_inc = [include_directories('fe/include')]
 
+test_dep = declare_dependency(
+    include_directories: include_directories('test'),
+)
+
 subdir('th')
 subdir('fe')
 subdir('src')

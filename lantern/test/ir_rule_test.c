@@ -4,16 +4,7 @@
 
 #include "ir/rule.h"
 #include "ir/text.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 typedef struct {
     ir_ctx_t    *ctx;
@@ -653,9 +644,5 @@ int main(void)
     test_parsing_ignores_rules();
     test_extension_opcodes();
 
-    if (!fails) {
-        printf("ir rules: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("ir rules");
 }

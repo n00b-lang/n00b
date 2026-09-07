@@ -431,20 +431,12 @@ r_project(ncc_reduce_t *r)
     return wrap(e);
 }
 
-static int32_t
-unit_of(ncc_grammar_t *g, ncc_string_t name)
-{
-    ncc_nonterm_t *nt = ncc_find_nonterm(g, name);
-
-    return nt ? nt->unit : 0;
-}
-
 static void
 install(ncc_tree_walk_t *w, in_ctx *c)
 {
     ncc_grammar_t *g = ncc_annot_grammar();
 
-    ncc_walk_reduce_leaf_in(w, unit_of(g, NCC_STRING_STATIC("infer-expr")),
+    ncc_walk_reduce_leaf_in(w, ncc_nt_unit(g, NCC_STRING_STATIC("infer-expr")),
                             r_leaf, c);
 
 #define REG(name, fn) ncc_walk_reduce_nt(w, (name), fn, c)

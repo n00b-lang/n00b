@@ -1180,19 +1180,12 @@ ir_typelang_lower_t *ir_typelang_lower_new(th_ctx *ctx)
     return (ir_typelang_lower_t *)c;
 }
 
-static int32_t unit_of(ncc_grammar_t *g, ncc_string_t name)
-{
-    ncc_nonterm_t *nt = ncc_find_nonterm(g, name);
-
-    return nt ? nt->unit : 0;
-}
-
 void ir_typelang_install(ncc_tree_walk_t *w, ncc_grammar_t *g,
                          ir_typelang_lower_t *l)
 {
     bctx *c = (bctx *)l;
 
-    ncc_walk_reduce_leaf_in(w, unit_of(g, NCC_STRING_STATIC("union-type")), r_int_leaf_or_str,
+    ncc_walk_reduce_leaf_in(w, ncc_nt_unit(g, NCC_STRING_STATIC("union-type")), r_int_leaf_or_str,
                             c);
     install(w, c);
 }

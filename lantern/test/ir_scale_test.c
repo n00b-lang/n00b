@@ -9,16 +9,7 @@
 #include "ir/text.h"
 #include "ir/rule.h"
 #include "ir/verify.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static ir_module_t *chain(ir_ctx_t *c, uint32_t n, uint32_t locals)
 {
@@ -834,9 +825,5 @@ int main(void)
     test_a_long_function_is_not_a_long_call_chain();
     test_the_shapes_that_were_quadratic();
 
-    if (!fails) {
-        printf("ir scale: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("ir scale");
 }

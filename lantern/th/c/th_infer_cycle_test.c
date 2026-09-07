@@ -2,16 +2,7 @@
 #include <string.h>
 
 #include "typehash.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static th_type *ptr_to(th_ctx *ctx, th_type *t)
 {
@@ -128,9 +119,5 @@ int main(void)
 
     th_ctx_free(ctx);
 
-    if (!fails) {
-        printf("cyclic inference: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("cyclic inference");
 }

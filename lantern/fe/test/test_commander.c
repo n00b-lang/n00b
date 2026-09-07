@@ -2,16 +2,7 @@
 #include <string.h>
 
 #include "parse/commander.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static ncc_cmdr_t *tool(void)
 {
@@ -136,9 +127,5 @@ int main(void)
     test_trailing_junk_is_an_error();
     test_a_double_dash_passes_words_through();
 
-    if (!fails) {
-        printf("fe commander: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("fe commander");
 }

@@ -12,12 +12,6 @@ named(ncc_scanner_t *s, ncc_string_t name, int32_t fallback)
     return id != NCC_TOK_OTHER ? (int32_t)id : fallback;
 }
 
-static bool
-is_digit(ncc_codepoint_t c)
-{
-    return c >= '0' && c <= '9';
-}
-
 static void
 skip_set(ncc_scanner_t *s, const char *set)
 {
@@ -62,7 +56,7 @@ scan_json(ncc_scanner_t *s)
         return true;
     }
 
-    if (c == '-' || is_digit(c)) {
+    if (c == '-' || ncc_cp_is_ascii_digit(c)) {
         ncc_scan_mark(s);
 
         if (c == '-') {
@@ -75,7 +69,7 @@ scan_json(ncc_scanner_t *s)
         while (!ncc_scan_at_eof(s)) {
             ncc_codepoint_t k = ncc_scan_peek(s, 0);
 
-            if (is_digit(k)) {
+            if (ncc_cp_is_ascii_digit(k)) {
                 ncc_scan_advance(s);
 
                 continue;
@@ -162,8 +156,8 @@ restart:
         return true;
     }
 
-    if (is_digit(c)
-        || ((c == '-' || c == '+') && is_digit(ncc_scan_peek(s, 1)))) {
+    if (ncc_cp_is_ascii_digit(c)
+        || ((c == '-' || c == '+') && ncc_cp_is_ascii_digit(ncc_scan_peek(s, 1)))) {
         ncc_scan_mark(s);
 
         if (c == '-' || c == '+') {
@@ -340,8 +334,8 @@ restart:
         return true;
     }
 
-    if (is_digit(c)
-        || (c == '.' && is_digit((ncc_codepoint_t)ncc_scan_peek_byte(s, 1)))) {
+    if (ncc_cp_is_ascii_digit(c)
+        || (c == '.' && ncc_cp_is_ascii_digit((ncc_codepoint_t)ncc_scan_peek_byte(s, 1)))) {
         ncc_scan_mark(s);
 
         if (ncc_scan_number(s, named(s, NCC_STRING_STATIC("INT_LIT"), NCC_TOK_INTEGER),

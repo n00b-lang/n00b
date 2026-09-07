@@ -5,16 +5,7 @@
 #include "ir/ir.h"
 #include "ir/text.h"
 #include "ir/walk.h"
-
-static int fails;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static const char *const SRC =
     "module m {\n"
@@ -374,9 +365,5 @@ int main(void)
     test_one_visitor_refusing_children_affects_all();
     test_an_instruction_visitor_can_skip_operands();
 
-    if (!fails) {
-        printf("ir walk: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("ir walk");
 }

@@ -8,20 +8,10 @@
 #include <string.h>
 
 static void
-free_trivia_chain(ncc_trivia_t *t)
-{
-    while (t) {
-        ncc_trivia_t *next = t->next;
-        ncc_free(t);
-        t = next;
-    }
-}
-
-static void
 free_token_trivia(ncc_token_info_t *tok)
 {
-    free_trivia_chain(tok->leading_trivia);
-    free_trivia_chain(tok->trailing_trivia);
+    ncc_trivia_free(tok->leading_trivia);
+    ncc_trivia_free(tok->trailing_trivia);
     tok->leading_trivia  = nullptr;
     tok->trailing_trivia = nullptr;
 }

@@ -2,12 +2,6 @@
 #include "internal/parse/unicode_class.h"
 
 static bool
-is_ascii_digit(int32_t cp)
-{
-    return cp >= '0' && cp <= '9';
-}
-
-static bool
 is_ascii_upper(int32_t cp)
 {
     return cp >= 'A' && cp <= 'Z';
@@ -28,7 +22,7 @@ is_ascii_alpha(int32_t cp)
 static bool
 is_hex_digit(int32_t cp)
 {
-    return is_ascii_digit(cp) || (cp >= 'a' && cp <= 'f')
+    return ncc_cp_is_ascii_digit(cp) || (cp >= 'a' && cp <= 'f')
         || (cp >= 'A' && cp <= 'F');
 }
 
@@ -106,7 +100,7 @@ ncc_codepoint_matches_class(int32_t cp, ncc_char_class_t cc)
     case NCC_CC_ID_CONTINUE:
         return ncc_unicode_is_id_continue((ncc_codepoint_t)cp);
     case NCC_CC_ASCII_DIGIT:
-        return is_ascii_digit(cp);
+        return ncc_cp_is_ascii_digit(cp);
     case NCC_CC_UNICODE_DIGIT:
         return ncc_unicode_general_category((ncc_codepoint_t)cp) == NCC_UNICODE_GC_ND;
     case NCC_CC_ASCII_UPPER:

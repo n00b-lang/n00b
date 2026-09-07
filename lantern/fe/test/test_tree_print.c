@@ -8,16 +8,7 @@
 #include "parse/tree_print.h"
 #include "scanner/token_stream.h"
 #include "internal/parse/grammar_internal.h"
-
-static int fails;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static int64_t nt_id(ncc_grammar_t *g, const char *name)
 {
@@ -195,9 +186,5 @@ int main(void)
     test_align_hangs_under_the_column_it_names();
     test_blank_lines_and_indentation_come_from_the_grammar();
 
-    if (!fails) {
-        printf("tree print: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("tree print");
 }

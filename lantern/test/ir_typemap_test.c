@@ -11,51 +11,11 @@
 #include "parse/pwz.h"
 #include "parse/symtab.h"
 #include "scanner/token_stream.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static ncc_string_t S(const char *s)
 {
     return ncc_string_from_cstr(s);
-}
-
-static ncc_string_t slurp(const char *path)
-{
-    FILE *f = fopen(path, "rb");
-
-    if (!f) {
-        printf("FAIL  cannot open %s\n", path);
-        fails++;
-
-        return (ncc_string_t){0};
-    }
-
-    fseek(f, 0, SEEK_END);
-
-    long n = ftell(f);
-
-    rewind(f);
-
-    char *p = ncc_alloc_size(1, (size_t)n + 1);
-
-    if (fread(p, 1, (size_t)n, f) != (size_t)n) {
-        p[0] = 0;
-    }
-    else {
-        p[n] = 0;
-    }
-
-    fclose(f);
-
-    return (ncc_string_t){.data = p, .u8_bytes = (int64_t)strlen(p)};
 }
 
 
@@ -222,9 +182,5 @@ int main(int argc, char **argv)
     ncc_pwz_free(p);
     ncc_grammar_free(g);
 
-    if (!fails) {
-        printf("ir typemap: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("ir typemap");
 }

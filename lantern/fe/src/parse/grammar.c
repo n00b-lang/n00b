@@ -904,6 +904,66 @@ refresh_nt_first(ncc_grammar_t *g, ncc_nonterm_t *nt)
     return nt->first_set->count != old_len || nt->first_has_any != old_any;
 }
 
+typedef struct {
+    ncc_list_t(int32_t) edges;
+    int32_t            *start;
+} first_deps_t;
+
+static first_deps_t
+build_first_deps(ncc_grammar_t *g, bool *first_nullable)
+{
+    size_t       n_nts = g->nt_list.len;
+    first_deps_t d     = {
+        .edges = ncc_list_new_cap(int32_t, n_nts * 2),
+        .start = ncc_alloc_array(int32_t, n_nts + 1),
+    };
+
+    for (size_t i = 0; i < n_nts; i++) {
+        ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)i);
+
+        d.start[i] = (int32_t)ncc_list_len(d.edges);
+
+        for (size_t j = 0; j < nt->rule_ids.len; j++) {
+            first_deps_of_rule(g,
+                               ncc_get_rule(g, nt->rule_ids.data[j]),
+                               first_nullable,
+                               &d.edges);
+        }
+    }
+
+    d.start[n_nts] = (int32_t)ncc_list_len(d.edges);
+
+    return d;
+}
+
+static void
+settle_component(ncc_grammar_t *g, ncc_list_t(int32_t) *members,
+                 bool *first_nullable)
+{
+    bool changed = true;
+
+    while (changed) {
+        changed = false;
+
+        for (size_t k = 0; k < ncc_list_len(*members); k++) {
+            int32_t        m  = members->data[k];
+            ncc_nonterm_t *nt = ncc_get_nonterm(g, m);
+
+            for (size_t j = 0; j < nt->rule_ids.len; j++) {
+                ncc_parse_rule_t *r = ncc_get_rule(g, nt->rule_ids.data[j]);
+
+                if (update_rule_first(g, r, first_nullable)) {
+                    changed = true;
+                }
+            }
+
+            if (refresh_nt_first(g, nt)) {
+                changed = true;
+            }
+        }
+    }
+}
+
 static void
 first_sets_by_scc(ncc_grammar_t *g, bool *first_nullable)
 {
@@ -913,27 +973,10 @@ first_sets_by_scc(ncc_grammar_t *g, bool *first_nullable)
         return;
     }
 
-    ncc_list_t(int32_t) edges     = ncc_list_new_cap(int32_t, n_nts * 2);
-    int32_t            *dep_start = ncc_alloc_array(int32_t, n_nts + 1);
-
-    for (size_t i = 0; i < n_nts; i++) {
-        ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)i);
-
-        dep_start[i] = (int32_t)ncc_list_len(edges);
-
-        for (size_t j = 0; j < nt->rule_ids.len; j++) {
-            first_deps_of_rule(g,
-                               ncc_get_rule(g, nt->rule_ids.data[j]),
-                               first_nullable,
-                               &edges);
-        }
-    }
-
-    dep_start[n_nts] = (int32_t)ncc_list_len(edges);
-
-    int32_t *index    = ncc_alloc_array(int32_t, n_nts);
-    int32_t *low      = ncc_alloc_array(int32_t, n_nts);
-    bool    *on_stack = ncc_alloc_array(bool, n_nts);
+    first_deps_t deps     = build_first_deps(g, first_nullable);
+    int32_t     *index    = ncc_alloc_array(int32_t, n_nts);
+    int32_t     *low      = ncc_alloc_array(int32_t, n_nts);
+    bool        *on_stack = ncc_alloc_array(bool, n_nts);
 
     for (size_t i = 0; i < n_nts; i++) {
         index[i] = -1;
@@ -952,10 +995,10 @@ first_sets_by_scc(ncc_grammar_t *g, bool *first_nullable)
         }
 
         ncc_list_push(frame_v, (int32_t)root);
-        ncc_list_push(frame_e, dep_start[root]);
+        ncc_list_push(frame_e, deps.start[root]);
 
-        index[root]    = next_index;
-        low[root]      = next_index;
+        index[root] = next_index;
+        low[root]   = next_index;
         next_index++;
         on_stack[root] = true;
         ncc_list_push(sccstack, (int32_t)root);
@@ -965,19 +1008,19 @@ first_sets_by_scc(ncc_grammar_t *g, bool *first_nullable)
             int32_t v   = frame_v.data[top];
             int32_t e   = frame_e.data[top];
 
-            if (e < dep_start[v + 1]) {
+            if (e < deps.start[v + 1]) {
                 frame_e.data[top] = e + 1;
 
-                int32_t w = edges.data[e];
+                int32_t w = deps.edges.data[e];
 
                 if (index[w] < 0) {
-                    index[w]    = next_index;
-                    low[w]      = next_index;
+                    index[w] = next_index;
+                    low[w]   = next_index;
                     next_index++;
                     on_stack[w] = true;
                     ncc_list_push(sccstack, w);
                     ncc_list_push(frame_v, w);
-                    ncc_list_push(frame_e, dep_start[w]);
+                    ncc_list_push(frame_e, deps.start[w]);
                 }
                 else if (on_stack[w] && low[v] > index[w]) {
                     low[v] = index[w];
@@ -1016,29 +1059,7 @@ first_sets_by_scc(ncc_grammar_t *g, bool *first_nullable)
                 }
             }
 
-            bool changed = true;
-
-            while (changed) {
-                changed = false;
-
-                for (size_t k = 0; k < ncc_list_len(members); k++) {
-                    int32_t        m  = members.data[k];
-                    ncc_nonterm_t *nt = ncc_get_nonterm(g, m);
-
-                    for (size_t j = 0; j < nt->rule_ids.len; j++) {
-                        ncc_parse_rule_t *r
-                            = ncc_get_rule(g, nt->rule_ids.data[j]);
-
-                        if (update_rule_first(g, r, first_nullable)) {
-                            changed = true;
-                        }
-                    }
-
-                    if (refresh_nt_first(g, nt)) {
-                        changed = true;
-                    }
-                }
-            }
+            settle_component(g, &members, first_nullable);
         }
     }
 
@@ -1049,8 +1070,8 @@ first_sets_by_scc(ncc_grammar_t *g, bool *first_nullable)
     ncc_free(on_stack);
     ncc_free(low);
     ncc_free(index);
-    ncc_free(dep_start);
-    ncc_list_free(edges);
+    ncc_free(deps.start);
+    ncc_list_free(deps.edges);
 }
 
 static void

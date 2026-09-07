@@ -3,16 +3,7 @@
 #include <string.h>
 
 #include "ir/libir.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static ir_module_t *build(ir_ctx_t *ctx)
 {
@@ -123,9 +114,5 @@ int main(void)
     free(again);
     ir_ctx_free(ctx);
 
-    if (!fails) {
-        printf("ir public: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("ir public");
 }

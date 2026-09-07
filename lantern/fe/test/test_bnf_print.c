@@ -6,45 +6,12 @@
 #include "parse/annot_args.h"
 #include "parse/bnf.h"
 #include "internal/parse/grammar_internal.h"
-
-static int fails = 0;
+#include "ir_test.h"
 
 static ncc_string_t
 S(const char *s)
 {
     return ncc_string_from_cstr(s);
-}
-
-static ncc_string_t
-slurp(const char *path)
-{
-    FILE *f = fopen(path, "rb");
-
-    if (!f) {
-        printf("FAIL  cannot open %s\n", path);
-        fails++;
-
-        return (ncc_string_t){0};
-    }
-
-    fseek(f, 0, SEEK_END);
-
-    long n = ftell(f);
-
-    rewind(f);
-
-    char *p = ncc_alloc_size(1, (size_t)n + 1);
-
-    if (fread(p, 1, (size_t)n, f) != (size_t)n) {
-        p[0] = 0;
-    }
-    else {
-        p[n] = 0;
-    }
-
-    fclose(f);
-
-    return ncc_string_from_raw(p, (int64_t)n);
 }
 
 static const char *const EXTRA_TOKENS[] = {
@@ -246,9 +213,5 @@ main(void)
     round_trips("n00b.bnf", "module");
     round_trips("c_ncc.bnf", "translation_unit");
 
-    if (!fails) {
-        printf("fe bnf-print: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("fe bnf-print");
 }

@@ -4,17 +4,7 @@
 #include "lib/alloc.h"
 #include "parse/annot_args.h"
 #include "parse/infer.h"
-
-static int fails = 0;
-
-static void
-check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static ncc_string_t
 S(const char *s)
@@ -271,9 +261,5 @@ main(void)
 
     ncc_annot_grammar_shutdown();
 
-    if (!fails) {
-        printf("fe infer: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("fe infer");
 }

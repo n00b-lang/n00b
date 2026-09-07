@@ -5,46 +5,7 @@
 #include "lib/alloc.h"
 #include "parse/bnf.h"
 #include "parse/grammar.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
-
-static ncc_string_t slurp(const char *path)
-{
-    FILE *f = fopen(path, "rb");
-
-    if (!f) {
-        printf("FAIL  cannot open %s\n", path);
-        fails++;
-
-        return ncc_string_empty();
-    }
-
-    fseek(f, 0, SEEK_END);
-
-    long n = ftell(f);
-
-    rewind(f);
-
-    char *p = ncc_alloc_size(1, (size_t)n + 1);
-
-    if (fread(p, 1, (size_t)n, f) != (size_t)n) {
-        p[0] = 0;
-    }
-    else {
-        p[n] = 0;
-    }
-    fclose(f);
-
-    return ncc_string_from_cstr(p);
-}
+#include "ir_test.h"
 
 static const char *const N00B_TOKENS[] = {
     "CHAR_LIT", "EMBED",   "FLOAT_LIT", "HEX_LIT",
@@ -138,9 +99,5 @@ int main(void)
     test_a_rule_may_wrap_after_the_arrow();
     test_the_slay_grammar_loads();
 
-    if (!fails) {
-        printf("fe bnf/slay: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("fe bnf/slay");
 }

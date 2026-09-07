@@ -68,6 +68,12 @@ struct ncc_cmdr_result_t {
 };
 
 static ncc_string_t
+argv_str(const char *s)
+{
+    return ncc_string_borrow(s, s ? strlen(s) : 0);
+}
+
+static ncc_string_t
 cmdr_intern(ncc_string_t s)
 {
     if (!s.data) {
@@ -563,7 +569,7 @@ is_bool_str(const char *s)
 }
 
 static ncc_cmdr_flag_spec_t *
-find_flag_anywhere(ncc_cmdr_t *c, const char *name)
+find_flag_anywhere(ncc_cmdr_t *c, ncc_string_t name)
 {
     if (!c) {
         return nullptr;
@@ -581,7 +587,7 @@ find_flag_anywhere(ncc_cmdr_t *c, const char *name)
 static int64_t
 find_flag_tid(ncc_cmdr_t *c, const char *name)
 {
-    ncc_cmdr_flag_spec_t *f = find_flag_anywhere(c, name);
+    ncc_cmdr_flag_spec_t *f = find_flag_anywhere(c, argv_str(name));
 
     return f ? f->terminal_id : 0;
 }
@@ -589,7 +595,7 @@ find_flag_tid(ncc_cmdr_t *c, const char *name)
 static bool
 flag_takes_value(ncc_cmdr_t *c, const char *name)
 {
-    ncc_cmdr_flag_spec_t *f = find_flag_anywhere(c, name);
+    ncc_cmdr_flag_spec_t *f = find_flag_anywhere(c, argv_str(name));
 
     return f && f->takes_value;
 }
@@ -620,7 +626,7 @@ make_token(const char *value, int64_t tid, int32_t index)
     ncc_token_info_t *tok = ncc_alloc(ncc_token_info_t);
 
     if (value && *value) {
-        ncc_string_t s = cmdr_intern(value);
+        ncc_string_t s = cmdr_intern(argv_str(value));
         tok->value = ncc_option_set(ncc_string_t, s);
     }
 
@@ -774,7 +780,7 @@ make_error_result(const char *msg)
     r->ok       = false;
     r->errors = ncc_list_new_cap(ncc_string_t, 1);
 
-    ncc_list_push(r->errors, cmdr_intern(msg));
+    ncc_list_push(r->errors, cmdr_intern(argv_str(msg)));
 
     return r;
 }
@@ -846,7 +852,7 @@ extract_result_from_tree(ncc_cmdr_t *c, ncc_parse_tree_t *tree,
             for (int32_t si = 0; si < (int32_t)c->root.subcommands.len; si++) {
                 if (c->root.subcommands.data[si].name.data
                     && strcmp(text, c->root.subcommands.data[si].name.data) == 0) {
-                    r->command = cmdr_intern(text);
+                    r->command = cmdr_intern(argv_str(text));
                     goto next;
                 }
             }
@@ -858,16 +864,16 @@ extract_result_from_tree(ncc_cmdr_t *c, ncc_parse_tree_t *tree,
 
         {
             ncc_cmdr_command_t *cmd = r->command.data
-                ? find_command(c, r->command.data) : &c->root;
+                ? find_command(c, r->command) : &c->root;
 
             if (!cmd) {
                 cmd = &c->root;
             }
 
-            ncc_cmdr_flag_spec_t *flag = find_flag(cmd, text);
+            ncc_cmdr_flag_spec_t *flag = find_flag(cmd, argv_str(text));
 
             if (!flag) {
-                flag = find_flag(&c->root, text);
+                flag = find_flag(&c->root, argv_str(text));
             }
 
             if (flag) {
@@ -985,7 +991,7 @@ command_at(ncc_cmdr_t *c, int32_t index)
     return &c->root.subcommands.data[index];
 }
 
-const char *
+ncc_string_t
 ncc_cmdr_command_name(ncc_cmdr_t *c, int32_t index)
 {
     ncc_cmdr_command_t *cmd = command_at(c, index);
@@ -993,7 +999,7 @@ ncc_cmdr_command_name(ncc_cmdr_t *c, int32_t index)
     return cmd ? cmd->name : (ncc_string_t){0};
 }
 
-const char *
+ncc_string_t
 ncc_cmdr_command_doc(ncc_cmdr_t *c, int32_t index)
 {
     ncc_cmdr_command_t *cmd = command_at(c, index);
@@ -1002,7 +1008,7 @@ ncc_cmdr_command_doc(ncc_cmdr_t *c, int32_t index)
 }
 
 static ncc_cmdr_flag_spec_t *
-flag_at(ncc_cmdr_t *c, const char *command, int32_t index)
+flag_at(ncc_cmdr_t *c, ncc_string_t command, int32_t index)
 {
     ncc_cmdr_command_t *cmd = c ? find_command(c, command) : nullptr;
 
@@ -1014,23 +1020,23 @@ flag_at(ncc_cmdr_t *c, const char *command, int32_t index)
 }
 
 int32_t
-ncc_cmdr_flag_count(ncc_cmdr_t *c, const char *command)
+ncc_cmdr_flag_count(ncc_cmdr_t *c, ncc_string_t command)
 {
     ncc_cmdr_command_t *cmd = c ? find_command(c, command) : nullptr;
 
     return cmd ? (int32_t)cmd->flags.len : 0;
 }
 
-const char *
-ncc_cmdr_flag_name(ncc_cmdr_t *c, const char *command, int32_t index)
+ncc_string_t
+ncc_cmdr_flag_name(ncc_cmdr_t *c, ncc_string_t command, int32_t index)
 {
     ncc_cmdr_flag_spec_t *f = flag_at(c, command, index);
 
     return f ? f->name : (ncc_string_t){0};
 }
 
-const char *
-ncc_cmdr_flag_doc(ncc_cmdr_t *c, const char *command, int32_t index)
+ncc_string_t
+ncc_cmdr_flag_doc(ncc_cmdr_t *c, ncc_string_t command, int32_t index)
 {
     ncc_cmdr_flag_spec_t *f = flag_at(c, command, index);
 
@@ -1038,7 +1044,7 @@ ncc_cmdr_flag_doc(ncc_cmdr_t *c, const char *command, int32_t index)
 }
 
 bool
-ncc_cmdr_flag_takes_value(ncc_cmdr_t *c, const char *command, int32_t index)
+ncc_cmdr_flag_takes_value(ncc_cmdr_t *c, ncc_string_t command, int32_t index)
 {
     ncc_cmdr_flag_spec_t *f = flag_at(c, command, index);
 
@@ -1078,7 +1084,8 @@ ncc_cmdr_parse(ncc_cmdr_t *c, int argc, const char **argv)
         r->ok       = false;
         r->errors = ncc_list_new_cap(ncc_string_t, 1);
 
-        ncc_list_push(r->errors, cmdr_intern("parse failed"));
+        ncc_list_push(r->errors,
+                      cmdr_intern(NCC_STRING_STATIC("parse failed")));
     }
     else {
         r->ok   = true;
@@ -1097,7 +1104,7 @@ ncc_cmdr_parse(ncc_cmdr_t *c, int argc, const char **argv)
 }
 
 ncc_cmdr_result_t *
-ncc_cmdr_parse_string(ncc_cmdr_t *c, const char *cmdline)
+ncc_cmdr_parse_string(ncc_cmdr_t *c, ncc_string_t cmdline)
 {
     if (!c) {
         return make_error_result("commander not initialized");
@@ -1114,7 +1121,7 @@ ncc_cmdr_parse_string(ncc_cmdr_t *c, const char *cmdline)
     ncc_list_t(ncc_const_charptr_t) argv
         = ncc_list_new_cap(ncc_const_charptr_t, 16);
 
-    const char *p = cmdline;
+    const char *p = cmdline.data;
 
     while (*p) {
         while (*p && isspace((unsigned char)*p)) {
@@ -1192,17 +1199,17 @@ ncc_cmdr_error_count(ncc_cmdr_result_t *r)
     return r ? (int32_t)r->errors.len : 0;
 }
 
-const char *
+ncc_string_t
 ncc_cmdr_error_str(ncc_cmdr_result_t *r, int32_t index)
 {
     if (!r || index < 0 || (size_t)index >= r->errors.len) {
-        return nullptr;
+        return (ncc_string_t){0};
     }
 
-    return r->errors.data[index].data;
+    return r->errors.data[index];
 }
 
-const char *
+ncc_string_t
 ncc_cmdr_result_command(ncc_cmdr_result_t *r)
 {
     return r ? r->command : (ncc_string_t){0};
@@ -1231,20 +1238,20 @@ ncc_cmdr_flag_get(ncc_cmdr_result_t *r, ncc_string_t flag)
     return found ? (ncc_cmdr_val_t *)val : nullptr;
 }
 
-const char *
-ncc_cmdr_flag_str(ncc_cmdr_result_t *r, const char *flag)
+ncc_string_t
+ncc_cmdr_flag_str(ncc_cmdr_result_t *r, ncc_string_t flag)
 {
     ncc_cmdr_val_t *v = ncc_cmdr_flag_get(r, flag);
 
     if (!v || v->tag != NCC_CMDR_VAL_STR) {
-        return nullptr;
+        return (ncc_string_t){0};
     }
 
-    return v->s.data;
+    return v->s;
 }
 
 int64_t
-ncc_cmdr_flag_int(ncc_cmdr_result_t *r, const char *flag)
+ncc_cmdr_flag_int(ncc_cmdr_result_t *r, ncc_string_t flag)
 {
     ncc_cmdr_val_t *v = ncc_cmdr_flag_get(r, flag);
 
@@ -1256,7 +1263,7 @@ ncc_cmdr_flag_int(ncc_cmdr_result_t *r, const char *flag)
 }
 
 bool
-ncc_cmdr_flag_bool(ncc_cmdr_result_t *r, const char *flag)
+ncc_cmdr_flag_bool(ncc_cmdr_result_t *r, ncc_string_t flag)
 {
     ncc_cmdr_val_t *v = ncc_cmdr_flag_get(r, flag);
 
@@ -1273,14 +1280,14 @@ ncc_cmdr_arg_count(ncc_cmdr_result_t *r)
     return r ? (int32_t)r->args.len : 0;
 }
 
-const char *
+ncc_string_t
 ncc_cmdr_arg_str(ncc_cmdr_result_t *r, int index)
 {
     if (!r || index < 0 || index >= (int32_t)r->args.len) {
-        return nullptr;
+        return (ncc_string_t){0};
     }
 
-    return r->args.data[index].value.data;
+    return r->args.data[index].value;
 }
 
 int64_t

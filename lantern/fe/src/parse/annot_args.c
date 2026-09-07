@@ -343,21 +343,13 @@ ncc_annot_arg_grammar(ncc_annot_kind_t kind)
     return (ncc_string_t){0};
 }
 
-static int32_t
-unit_of(ncc_grammar_t *g, ncc_string_t name)
-{
-    ncc_nonterm_t *nt = ncc_find_nonterm(g, name);
-
-    return nt ? nt->unit : 0;
-}
-
 static void
 install(ncc_tree_walk_t *w, aa_ctx *c)
 {
 #define REG(name, fn) ncc_walk_reduce_nt(w, (name), fn, c)
 
     ncc_walk_reduce_leaf_in(w,
-                            unit_of(ncc_annot_grammar(),
+                            ncc_nt_unit(ncc_annot_grammar(),
                                     NCC_STRING_STATIC("a-ref")),
                             r_leaf,
                             c);

@@ -196,12 +196,6 @@ ncc_scan_string_raw(ncc_scanner_t *s, ncc_string_t quote)
 }
 
 static bool
-is_digit(ncc_codepoint_t cp)
-{
-    return cp >= '0' && cp <= '9';
-}
-
-static bool
 is_hex(ncc_codepoint_t cp)
 {
     return (cp >= '0' && cp <= '9')
@@ -250,7 +244,7 @@ ncc_scan_integer(ncc_scanner_t *s)
 {
     ncc_codepoint_t cp = ncc_scan_peek(s, 0);
 
-    if (!is_digit(cp)) {
+    if (!ncc_cp_is_ascii_digit(cp)) {
         return ncc_option_none(ncc_string_t);
     }
 
@@ -293,7 +287,7 @@ ncc_scan_integer(ncc_scanner_t *s)
         }
     }
 
-    skip_digits(s, is_digit);
+    skip_digits(s, ncc_cp_is_ascii_digit);
     return ncc_option_set(ncc_string_t, ncc_scan_extract(s));
 }
 
@@ -302,12 +296,12 @@ ncc_scan_float(ncc_scanner_t *s)
 {
     ncc_codepoint_t cp = ncc_scan_peek(s, 0);
 
-    if (!is_digit(cp)) {
+    if (!ncc_cp_is_ascii_digit(cp)) {
         return ncc_option_none(ncc_string_t);
     }
 
     ncc_scan_mark(s);
-    skip_digits(s, is_digit);
+    skip_digits(s, ncc_cp_is_ascii_digit);
 
     bool has_dot      = false;
     bool has_exponent = false;
@@ -315,10 +309,10 @@ ncc_scan_float(ncc_scanner_t *s)
     if (ncc_scan_peek(s, 0) == '.') {
         ncc_codepoint_t after_dot = ncc_scan_peek(s, 1);
 
-        if (is_digit(after_dot)) {
+        if (ncc_cp_is_ascii_digit(after_dot)) {
             has_dot = true;
             ncc_scan_advance(s);
-            skip_digits(s, is_digit);
+            skip_digits(s, ncc_cp_is_ascii_digit);
         }
     }
 
@@ -334,7 +328,7 @@ ncc_scan_float(ncc_scanner_t *s)
             ncc_scan_advance(s);
         }
 
-        if (skip_digits(s, is_digit) == 0) {
+        if (skip_digits(s, ncc_cp_is_ascii_digit) == 0) {
             return ncc_option_none(ncc_string_t);
         }
     }
@@ -351,7 +345,7 @@ ncc_scan_number(ncc_scanner_t *s, int32_t int_tid, int32_t float_tid)
 {
     ncc_codepoint_t cp = ncc_scan_peek(s, 0);
 
-    if (!is_digit(cp)) {
+    if (!ncc_cp_is_ascii_digit(cp)) {
         return false;
     }
 

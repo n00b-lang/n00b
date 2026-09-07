@@ -6,8 +6,7 @@
 #include "ir/rule.h"
 #include "ir/text.h"
 #include "ir/verify.h"
-
-static int fails = 0;
+#include "ir_test.h"
 
 static const ir_profile_t *const PROFILES[] = {&ir_profile_bce,
                                                &ir_profile_synth};

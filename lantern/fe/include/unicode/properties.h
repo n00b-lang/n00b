@@ -3,6 +3,12 @@
 #include "ncc.h"
 #include "lib/option.h"
 
+static inline bool
+ncc_cp_is_ascii_digit(ncc_codepoint_t cp)
+{
+    return cp >= '0' && cp <= '9';
+}
+
 typedef enum {
     NCC_UNICODE_GC_LU,
     NCC_UNICODE_GC_LL,

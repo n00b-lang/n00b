@@ -3,16 +3,7 @@
 #include <string.h>
 
 #include "ir/ir.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static uint32_t scalars_in(const char *s, size_t n)
 {
@@ -228,9 +219,5 @@ int main(void)
     test_oracle_disagrees_when_it_should();
     test_roundtrip();
 
-    if (!fails) {
-        printf("ir spans: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("ir spans");
 }

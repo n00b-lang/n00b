@@ -2,16 +2,7 @@
 #include <string.h>
 
 #include "typehash.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool got)
-{
-    if (!got) {
-        printf("FAIL  %s\n", what);
-        fails++;
-    }
-}
+#include "ir_test.h"
 
 static bool binds(th_ctx *ctx, th_constraint c, th_type *to)
 {
@@ -530,9 +521,5 @@ int main(void)
     test_failures_name_what_went_wrong();
     test_a_constrained_var_prints_its_bound();
 
-    if (!fails) {
-        printf("th constraints: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("th constraints");
 }

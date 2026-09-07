@@ -58,24 +58,24 @@ static int cmd_pdg(job *j, FILE *out, FILE *err, const char *list);
 static int cmd_regions(job *j, FILE *out, FILE *err, const char *list);
 
 static const struct {
-    const char *name;
-    const char *doc;
-    cmd_fn      run;
+    ncc_string_t name;
+    ncc_string_t doc;
+    cmd_fn       run;
 } COMMANDS[] = {
-    {"parse",   "read the module and report what the parser found", cmd_parse},
-    {"print",   "write the module back out in canonical form", cmd_print},
-    {"verify",  "report which properties hold", cmd_verify},
-    {"analyze", "report unreachable blocks, unset and unused locals",
+    {NCC_STRING_STATIC("parse"),   NCC_STRING_STATIC("read the module and report what the parser found"), cmd_parse},
+    {NCC_STRING_STATIC("print"),   NCC_STRING_STATIC("write the module back out in canonical form"), cmd_print},
+    {NCC_STRING_STATIC("verify"),  NCC_STRING_STATIC("report which properties hold"), cmd_verify},
+    {NCC_STRING_STATIC("analyze"), NCC_STRING_STATIC("report unreachable blocks, unset and unused locals"),
      cmd_analyze},
-    {"explain", "say which typing rule fires for each instruction",
+    {NCC_STRING_STATIC("explain"), NCC_STRING_STATIC("say which typing rule fires for each instruction"),
      cmd_explain},
-    {"pass",    "run passes in order, then print", cmd_pass},
-    {"cfg",     "blocks and their successors, with edge kinds", cmd_cfg},
-    {"dom",     "dominators, post-dominators, dominance frontiers", cmd_dom},
-    {"cdg",     "control dependence, over blocks", cmd_cdg},
-    {"dfg",     "data dependence, over instructions", cmd_dfg},
-    {"pdg",     "both kinds of dependence, in one graph", cmd_pdg},
-    {"regions", "the region overlay, as a nested rendering", cmd_regions},
+    {NCC_STRING_STATIC("pass"),    NCC_STRING_STATIC("run passes in order, then print"), cmd_pass},
+    {NCC_STRING_STATIC("cfg"),     NCC_STRING_STATIC("blocks and their successors, with edge kinds"), cmd_cfg},
+    {NCC_STRING_STATIC("dom"),     NCC_STRING_STATIC("dominators, post-dominators, dominance frontiers"), cmd_dom},
+    {NCC_STRING_STATIC("cdg"),     NCC_STRING_STATIC("control dependence, over blocks"), cmd_cdg},
+    {NCC_STRING_STATIC("dfg"),     NCC_STRING_STATIC("data dependence, over instructions"), cmd_dfg},
+    {NCC_STRING_STATIC("pdg"),     NCC_STRING_STATIC("both kinds of dependence, in one graph"), cmd_pdg},
+    {NCC_STRING_STATIC("regions"), NCC_STRING_STATIC("the region overlay, as a nested rendering"), cmd_regions},
 };
 
 #define N_COMMANDS (sizeof(COMMANDS) / sizeof(COMMANDS[0]))
@@ -95,12 +95,15 @@ static ncc_cmdr_t *build_cli(void)
     ncc_cmdr_t *c = ncc_cmdr_new();
 
     ncc_cmdr_set_name(c, NCC_STRING_STATIC("ir"));
-    ncc_cmdr_add_flag(c, nullptr, NCC_STRING_STATIC("--help"), NCC_CMDR_TYPE_BOOL, false,
+    ncc_cmdr_add_flag(c, (ncc_string_t){0}, NCC_STRING_STATIC("--help"),
+                      NCC_CMDR_TYPE_BOOL, false,
                       NCC_STRING_STATIC("show this help"));
-    ncc_cmdr_add_flag_alias(c, nullptr, NCC_STRING_STATIC("--help"), NCC_STRING_STATIC("-h"));
+    ncc_cmdr_add_flag_alias(c, (ncc_string_t){0},
+                            NCC_STRING_STATIC("--help"),
+                            NCC_STRING_STATIC("-h"));
 
     for (size_t i = 0; i < N_COMMANDS; i++) {
-        const char *name = COMMANDS[i].name;
+        ncc_string_t name = COMMANDS[i].name;
 
         ncc_cmdr_add_command(c, name, COMMANDS[i].doc);
         ncc_cmdr_add_flag(c, name, NCC_STRING_STATIC("--profile"), NCC_CMDR_TYPE_WORD, true,
@@ -120,23 +123,23 @@ static ncc_cmdr_t *build_cli(void)
     return c;
 }
 
-static void usage_flags(ncc_cmdr_t *c, const char *command, FILE *err)
+static void usage_flags(ncc_cmdr_t *c, ncc_string_t command, FILE *err)
 {
     int32_t n = ncc_cmdr_flag_count(c, command);
 
     for (int32_t i = 0; i < n; i++) {
-        const char *name = ncc_cmdr_flag_name(c, command, i);
+        ncc_string_t name = ncc_cmdr_flag_name(c, command, i);
 
-        if (!strcmp(name, "--help")) {
+        if (ncc_string_eq(name, NCC_STRING_STATIC("--help"))) {
             continue;
         }
 
         char spelled[64];
 
-        snprintf(spelled, sizeof(spelled), "%s%s", name,
+        snprintf(spelled, sizeof(spelled), "%s%s", name.data,
                  ncc_cmdr_flag_takes_value(c, command, i) ? " <value>" : "");
         fprintf(err, "  %-18s %s\n", spelled,
-                ncc_cmdr_flag_doc(c, command, i));
+                ncc_cmdr_flag_doc(c, command, i).data);
     }
 }
 
@@ -147,12 +150,12 @@ static void usage(ncc_cmdr_t *c, FILE *err)
     int32_t n = ncc_cmdr_command_count(c);
 
     for (int32_t i = 0; i < n; i++) {
-        fprintf(err, "  %-9s %s\n", ncc_cmdr_command_name(c, i),
-                ncc_cmdr_command_doc(c, i));
+        fprintf(err, "  %-9s %s\n", ncc_cmdr_command_name(c, i).data,
+                ncc_cmdr_command_doc(c, i).data);
     }
 
     fputc('\n', err);
-    usage_flags(c, "pass", err);
+    usage_flags(c, NCC_STRING_STATIC("pass"), err);
 }
 
 static const char *source_of(void *state, int32_t file, size_t *len)
@@ -650,7 +653,7 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
 {
     const ir_profile_t *const BOTH[] = {&ir_profile_bce, &ir_profile_synth};
     const ir_profile_t *only    = nullptr;
-    const char         *cmd     = nullptr;
+    ncc_string_t        cmd     = {0};
     const char         *path    = nullptr;
     const char         *list    = nullptr;
     bool                json    = false;
@@ -673,7 +676,8 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
 
     j.args = ncc_cmdr_parse(j.cmdr, argc - 1, (const char **)argv + 1);
 
-    if (!ncc_cmdr_result_ok(j.args) || !ncc_cmdr_result_command(j.args)) {
+    if (!ncc_cmdr_result_ok(j.args)
+        || !ncc_cmdr_result_command(j.args).data) {
         const char *bad = argv[1];
 
         for (int i = 1; i < argc; i++) {
@@ -696,7 +700,9 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
     cmd = ncc_cmdr_result_command(j.args);
 
     if (ncc_cmdr_flag_present(j.args, NCC_STRING_STATIC("--profile"))) {
-        const char *want = ncc_cmdr_flag_str(j.args, NCC_STRING_STATIC("--profile"));
+        const char *want
+            = ncc_cmdr_flag_str(j.args,
+                                NCC_STRING_STATIC("--profile")).data;
 
         for (size_t i = 0; want && i < N_PROFILES; i++) {
             if (!strcmp(want, PROFILES[i].name)) {
@@ -715,12 +721,14 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
 
     json = ncc_cmdr_flag_present(j.args, NCC_STRING_STATIC("--json"));
     list = ncc_cmdr_flag_present(j.args, NCC_STRING_STATIC("--passes"))
-             ? ncc_cmdr_flag_str(j.args, NCC_STRING_STATIC("--passes"))
+             ? ncc_cmdr_flag_str(j.args,
+                                 NCC_STRING_STATIC("--passes")).data
              : nullptr;
-    path = ncc_cmdr_arg_count(j.args) > 0 ? ncc_cmdr_arg_str(j.args, 0)
-                                          : nullptr;
+    path = ncc_cmdr_arg_count(j.args) > 0
+             ? ncc_cmdr_arg_str(j.args, 0).data
+             : nullptr;
 
-    if (!strcmp(cmd, "pass")) {
+    if (ncc_string_eq(cmd, NCC_STRING_STATIC("pass"))) {
         if (!list) {
             fprintf(err, "ir: pass needs --passes\n");
             unload(&j);
@@ -743,7 +751,7 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
     }
 
     if (!path) {
-        fprintf(err, "ir: %s needs a file\n", cmd);
+        fprintf(err, "ir: %s needs a file\n", cmd.data);
         unload(&j);
 
         return IR_CLI_USAGE;
@@ -761,7 +769,7 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
     }
 
     for (size_t i = 0; i < N_COMMANDS; i++) {
-        if (strcmp(cmd, COMMANDS[i].name)) {
+        if (!ncc_string_eq(cmd, COMMANDS[i].name)) {
             continue;
         }
 

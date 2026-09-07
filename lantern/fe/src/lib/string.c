@@ -43,6 +43,20 @@ ncc_string_borrow(const char *src, size_t byte_len)
 }
 
 ncc_string_t
+ncc_string_dup(ncc_string_t s)
+{
+    if (!s.data) {
+        return s;
+    }
+
+    if (s.u8_bytes == 0) {
+        return ncc_string_empty();
+    }
+
+    return ncc_string_from_raw(s.data, (int64_t)s.u8_bytes);
+}
+
+ncc_string_t
 ncc_string_empty(void)
 {
     ncc_string_t s = {0};

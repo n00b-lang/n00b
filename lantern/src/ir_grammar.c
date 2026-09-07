@@ -25,7 +25,8 @@ static int32_t        ir_unit;
 
 static int64_t tid_of_name(ncc_grammar_t *g, const char *name)
 {
-    return ncc_lookup_terminal(g, ncc_string_from_cstr(name));
+    return ncc_lookup_terminal(g, ncc_string_borrow(name,
+                                                    strlen(name)));
 }
 
 static const ncc_string_t DECLARED[] = {
@@ -78,7 +79,9 @@ int64_t ir_grammar_nt(const char *name)
 {
     ncc_grammar_t *g = ir_grammar();
 
-    ncc_nonterm_t *nt = g ? ncc_find_nonterm(g, ncc_string_from_cstr(name))
+    ncc_nonterm_t *nt = g ? ncc_find_nonterm(g,
+                                             ncc_string_borrow(name,
+                                                               strlen(name)))
                           : nullptr;
 
     return nt ? nt->id : -1;

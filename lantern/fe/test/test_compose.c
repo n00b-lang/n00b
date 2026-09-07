@@ -8,16 +8,7 @@
 #include "parse/tree_visit.h"
 #include "scanner/token_stream.h"
 #include "internal/parse/grammar_internal.h"
-
-static int fails;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static const char *const TYPES =
     "<type>  ::= <name> | <ptr>\n"
@@ -331,9 +322,5 @@ int main(void)
     test_a_reduce_folds_children_into_a_value();
     test_a_visitor_can_stop_a_reduce();
 
-    if (!fails) {
-        printf("fe compose: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("fe compose");
 }

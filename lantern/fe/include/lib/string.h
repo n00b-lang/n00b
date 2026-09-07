@@ -13,5 +13,6 @@ struct ncc_string_t {
 extern ncc_string_t ncc_string_from_raw(const char *src, int64_t byte_len);
 extern ncc_string_t ncc_string_from_cstr(const char *src);
 extern ncc_string_t ncc_string_borrow(const char *src, size_t byte_len);
+extern ncc_string_t ncc_string_dup(ncc_string_t s);
 extern ncc_string_t ncc_string_empty(void);
 extern bool         ncc_string_eq(ncc_string_t a, ncc_string_t b);

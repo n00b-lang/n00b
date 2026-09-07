@@ -5,8 +5,7 @@
 #include "ir/ir.h"
 #include "ir/typelang.h"
 #include "typehash.h"
-
-static int fails;
+#include "ir_test.h"
 
 static void check_line(char *line, int lineno)
 {

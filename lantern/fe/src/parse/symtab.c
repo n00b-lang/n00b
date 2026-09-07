@@ -28,20 +28,6 @@ symkey_eq(const void *a, const void *b)
     return ka->scope_id == kb->scope_id && ncc_string_eq(ka->name, kb->name);
 }
 
-static ncc_string_t
-dup_str(ncc_string_t s)
-{
-    if (!s.data) {
-        return s;
-    }
-
-    if (s.u8_bytes == 0) {
-        return ncc_string_empty();
-    }
-
-    return ncc_string_from_raw(s.data, (int64_t)s.u8_bytes);
-}
-
 static ncc_dict_t *
 ht_new(ncc_hash_fn hash, ncc_dict_key_eq_fn eq)
 {
@@ -77,7 +63,7 @@ push_scope_in(ncc_symtab_t *st, ncc_namespace_t *ns, ncc_string_t scope_name)
 
     scope->parent = ns->current;
     scope->ns     = ns;
-    scope->name   = dup_str(scope_name);
+    scope->name   = ncc_string_dup(scope_name);
     scope->depth  = ns->depth;
     scope->id     = st->next_scope_id++;
 
@@ -180,7 +166,7 @@ ncc_symtab_ns(ncc_symtab_t *st, ncc_string_t ns_name)
     ncc_namespace_t *ns = ncc_alloc(ncc_namespace_t);
 
     memset(ns, 0, sizeof(*ns));
-    ns->ns_name = dup_str(ns_name);
+    ns->ns_name = ncc_string_dup(ns_name);
     ns->symbols = ht_new(symkey_hash, symkey_eq);
 
     st->namespaces[st->ns_count++] = ns;
@@ -277,7 +263,7 @@ ncc_symtab_add(ncc_symtab_t *st, ncc_string_t ns_name, ncc_string_t name,
 
     memset(entry, 0, sizeof(*entry));
 
-    entry->name        = dup_str(name);
+    entry->name        = ncc_string_dup(name);
     entry->kind        = kind;
     entry->scope_depth = scope->depth;
     entry->decl_node   = decl_node;

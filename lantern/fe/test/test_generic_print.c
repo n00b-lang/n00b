@@ -13,17 +13,7 @@
 #include "scanner/scanner.h"
 #include "scanner/token_stream.h"
 #include "internal/parse/grammar_internal.h"
-
-static int fails = 0;
-
-static void
-check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static void
 same(const char *what, char *got, const char *want)
@@ -417,9 +407,5 @@ main(void)
     test_annotations_win_where_they_exist();
     test_a_comment_the_caller_marks_as_leading_is_kept();
 
-    if (!fails) {
-        printf("fe generic-print: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("fe generic-print");
 }

@@ -29,12 +29,6 @@ ncc_annot_new(ncc_annot_kind_t kind)
     return a;
 }
 
-static ncc_string_t
-dup_str(ncc_string_t s)
-{
-    return s.data ? ncc_string_from_raw(s.data, (int64_t)s.u8_bytes) : s;
-}
-
 ncc_annotation_t *
 ncc_annot_clone(const ncc_annotation_t *a)
 {
@@ -48,28 +42,28 @@ ncc_annot_clone(const ncc_annotation_t *a)
 
     c->infer_ast = ncc_infer_clone(a->infer_ast);
 
-    c->args_text          = dup_str(a->args_text);
-    c->scope_tag          = dup_str(a->scope_tag);
-    c->type_spec          = dup_str(a->type_spec);
-    c->infer_expr         = dup_str(a->infer_expr);
-    c->adt_kind           = dup_str(a->adt_kind);
-    c->visibility_spec    = dup_str(a->visibility_spec);
-    c->op_kind            = dup_str(a->op_kind);
-    c->sym_kind           = dup_str(a->sym_kind);
-    c->disambig_predicate = dup_str(a->disambig_predicate);
+    c->args_text          = ncc_string_dup(a->args_text);
+    c->scope_tag          = ncc_string_dup(a->scope_tag);
+    c->type_spec          = ncc_string_dup(a->type_spec);
+    c->infer_expr         = ncc_string_dup(a->infer_expr);
+    c->adt_kind           = ncc_string_dup(a->adt_kind);
+    c->visibility_spec    = ncc_string_dup(a->visibility_spec);
+    c->op_kind            = ncc_string_dup(a->op_kind);
+    c->sym_kind           = ncc_string_dup(a->sym_kind);
+    c->disambig_predicate = ncc_string_dup(a->disambig_predicate);
 
-    c->mutability           = dup_str(a->mutability);
-    c->ns_name              = dup_str(a->ns_name);
-    c->direction            = dup_str(a->direction);
-    c->constraints          = dup_str(a->constraints);
-    c->val_expr             = dup_str(a->val_expr);
+    c->mutability           = ncc_string_dup(a->mutability);
+    c->ns_name              = ncc_string_dup(a->ns_name);
+    c->direction            = ncc_string_dup(a->direction);
+    c->constraints          = ncc_string_dup(a->constraints);
+    c->val_expr             = ncc_string_dup(a->val_expr);
 
-    c->val_ref.name         = dup_str(a->val_ref.name);
-    c->name_ref.name        = dup_str(a->name_ref.name);
-    c->type_ref.name        = dup_str(a->type_ref.name);
-    c->value_ref.name       = dup_str(a->value_ref.name);
-    c->notrivia_ref.name    = dup_str(a->notrivia_ref.name);
-    c->adt_keyword_ref.name = dup_str(a->adt_keyword_ref.name);
+    c->val_ref.name         = ncc_string_dup(a->val_ref.name);
+    c->name_ref.name        = ncc_string_dup(a->name_ref.name);
+    c->type_ref.name        = ncc_string_dup(a->type_ref.name);
+    c->value_ref.name       = ncc_string_dup(a->value_ref.name);
+    c->notrivia_ref.name    = ncc_string_dup(a->notrivia_ref.name);
+    c->adt_keyword_ref.name = ncc_string_dup(a->adt_keyword_ref.name);
 
     return c;
 }

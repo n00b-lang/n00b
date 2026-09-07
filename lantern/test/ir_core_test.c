@@ -3,16 +3,7 @@
 #include <string.h>
 
 #include "ir/ir.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static void test_ops(void)
 {
@@ -610,9 +601,5 @@ int main(void)
     test_structure();
     test_node_annots();
 
-    if (!fails) {
-        printf("ir core: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("ir core");
 }

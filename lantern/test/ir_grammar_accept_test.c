@@ -9,8 +9,7 @@
 #include "parse/grammar.h"
 #include "parse/pwz.h"
 #include "scanner/token_stream.h"
-
-static int fails;
+#include "ir_test.h"
 
 static bool grammar_accepts(const char *src, const char *start)
 {
@@ -66,7 +65,7 @@ static void agree(const char *what, const char *src)
     }
 }
 
-static char *slurp(const char *path)
+static char *try_read(const char *path)
 {
     FILE *f = fopen(path, "rb");
 
@@ -91,7 +90,7 @@ static char *slurp(const char *path)
 
 static void test_the_canonical_module(const char *path)
 {
-    char *src = slurp(path);
+    char *src = try_read(path);
 
     if (!src) {
         printf("FAIL  cannot open %s\n", path);

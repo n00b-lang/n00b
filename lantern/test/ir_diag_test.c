@@ -4,16 +4,7 @@
 
 #include "ir/diag.h"
 #include "ir/verify.h"
-
-static int fails = 0;
-
-static void check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static bool produced[IR_DIAG_COUNT];
 
@@ -771,9 +762,5 @@ int main(int argc, char **argv)
     test_rendering(golden);
     report_coverage(golden);
 
-    if (!fails) {
-        printf("ir diagnostics: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("ir diagnostics");
 }

@@ -1,0 +1,17 @@
+module m {
+  profile bce
+  target t
+
+  func @f(%c: bool, %a: i32) -> i32 {
+    local $x: i32
+    block entry:
+      $x = copy %a
+      branch %c, body, out
+    block body:
+      $x = add wrap %a, %a
+      jump out
+    block out:
+      %res: i32 = copy $x
+      return %res
+  }
+}

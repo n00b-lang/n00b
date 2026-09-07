@@ -96,6 +96,14 @@ ncc_get_nonterm(ncc_grammar_t *g, int64_t id)
     return g->nt_list.data[id];
 }
 
+static inline int32_t
+ncc_nt_unit(ncc_grammar_t *g, ncc_string_t name)
+{
+    ncc_nonterm_t *nt = ncc_find_nonterm(g, name);
+
+    return nt ? nt->unit : 0;
+}
+
 static inline ncc_terminal_t *
 ncc_get_terminal(ncc_grammar_t *g, int64_t id)
 {

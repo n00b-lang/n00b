@@ -85,16 +85,6 @@ make_trivia(ncc_string_t text)
 }
 
 static void
-free_trivia_chain(ncc_trivia_t *t)
-{
-    while (t) {
-        ncc_trivia_t *next = t->next;
-        ncc_free(t);
-        t = next;
-    }
-}
-
-static void
 append_trivia(ncc_trivia_t **head, ncc_trivia_t *node)
 {
     if (!*head) {
@@ -151,8 +141,8 @@ ncc_scanner_free(ncc_scanner_t *s)
         return;
     }
 
-    free_trivia_chain(s->pending_leading);
-    free_trivia_chain(s->pending_trailing);
+    ncc_trivia_free(s->pending_leading);
+    ncc_trivia_free(s->pending_trailing);
 
     ncc_free(s);
 }
@@ -172,8 +162,8 @@ ncc_scanner_reset(ncc_scanner_t *s)
     s->mark_col  = 1;
     s->at_eof   = false;
 
-    free_trivia_chain(s->pending_leading);
-    free_trivia_chain(s->pending_trailing);
+    ncc_trivia_free(s->pending_leading);
+    ncc_trivia_free(s->pending_trailing);
     s->pending_leading  = nullptr;
     s->pending_trailing = nullptr;
 

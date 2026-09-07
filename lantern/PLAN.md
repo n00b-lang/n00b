@@ -650,6 +650,74 @@ names it, so `ir_lex` goes through the registry like anything else.
   more than triple, which is what "not quadratic" actually means and does not
   depend on machine load.
 
+### Also done — the string convention and the duplication
+
+- **The `fe` string convention is `ncc_string_t`.** Every public function that
+  took or returned a *language* string now does: `tree_util`
+  (`ncc_alt_leads_with`, `ncc_tree_nt_name`, `ncc_tree_is_nt`,
+  `ncc_tree_leaf_is`), the scanner (`ncc_scan_terminal_id`,
+  `ncc_scan_match_str`, `ncc_scan_skip_block_comment`,
+  `ncc_scan_string_raw`), `ncc_annot_arg_grammar`, `ncc_annot_pass_name`, and
+  all 26 `ncc_cmdr_*` entry points. Several of those were comparing with
+  `strcmp` on a pointer whose length had just been thrown away; they use
+  `ncc_string_eq` now.
+
+  What stays `const char *`, deliberately: the UTF-8 decode/validate
+  primitives, which sit *below* the string abstraction; `commander`'s `argv`
+  and the CLI's paths, which are the OS boundary; `buffer.h`'s byte sink and
+  the `printf` format strings; `dict.h`'s C-string key equality;
+  `string.h`'s own constructors; `alloc.h`'s `strdup`/`strndup`; and the public
+  IR entry points `ir_grammar_nt`/`ir_grammar_tid`, which convert once.
+
+  The conversions that were pure waste are gone. 56 call sites passed a
+  *literal* to `ncc_string_from_cstr`, which allocates and copies — they are
+  `NCC_STRING_STATIC` now, and several were outright leaks, because
+  `ncc_nonterm` stores the string it is given without duplicating it. The
+  embedded BNF grammars and `NCC_TOKENIZER_DEFAULT` were being `strlen`'d,
+  `calloc`'d and `memcpy`'d — kilobytes each, on every load — and are now
+  static. `BUILTIN`, `DECLARED`, `OPS`, `THREE`, `TWO`, `SIGS`, `COMMANDS` and
+  two tables in `bnf.c` became `ncc_string_t` arrays. `snprintf` buffers use
+  `ncc_string_from_raw` with the length `snprintf` returned instead of
+  re-measuring it. `pwz`'s `seq.name` became an `ncc_string_t`, which removes
+  an allocation *per parse-tree node* in the forest-to-tree conversion — it
+  was `nt->name.data` degraded to a pointer and then copied back.
+
+  Two things fell out. `scanner.c`'s `terminal_ids` memo cache is deleted: a
+  hit cost one C-string hash lookup and a miss cost two plus an allocation, to
+  cache a lookup into another C-string-keyed dictionary — so it was slower
+  than the thing it memoized, and it leaked the dictionary plus one key per
+  name. And `commander`'s flag dictionary is re-keyed on string *content*, so
+  no `strlen` runs on a caller's string; keyed by `.data` it would have read
+  off the end of a borrowed, unterminated one.
+
+  One real bug came out of the conversion and is worth remembering:
+  `ncc_cmdr_command_name` and `_doc` now return a struct, and two call sites
+  passed them to `printf("%s")`. Varargs, so no compile error — `ir_cli`
+  segfaulted. Swept for the rest.
+
+- **The duplication is gone.** Four helpers existed in two or three copies
+  each: `dup_str` (`annotation.c`, `symtab.c`), `unit_of` (`infer.c`,
+  `annot_args.c`, `ir_typelang.c`), `free_trivia_chain` (`scanner.c`,
+  `token_stream.c`) and `is_digit`/`is_ascii_digit` (`scan_builtins.c`,
+  `tokenizers.c`, `unicode_class.c`). They are now `ncc_string_dup`,
+  `ncc_nt_unit`, `ncc_trivia_free` and `ncc_cp_is_ascii_digit`, each in the
+  header that owns the type. The two `dup_str`s were not identical — one
+  collapsed an empty-but-present string to absent — and the surviving version
+  keeps the distinction.
+
+  `test/ir_test.h` holds the test scaffolding that 23 files each had their own
+  copy of: `fails`, `check()`, `report()` and `slurp()`. **464 lines deleted
+  against 79 added.** Three tests keep a bespoke success line rather than
+  `report()` because `gates.sh` asserts one of them verbatim, and
+  `ir_grammar_accept_test.c` keeps its own file reader under the name
+  `try_read`, because it returns null for "absent, so skip" rather than
+  counting a failure.
+
+- **`first_sets_by_scc` is three functions.** It was 146 lines doing three
+  jobs; it is now `build_first_deps` (the dependency CSR), `settle_component`
+  (the fixpoint over one strongly-connected component) and the Tarjan
+  traversal that calls them.
+
 ### Next
 
 Every item this plan called for is built. What is left is the "Open" list —

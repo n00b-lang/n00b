@@ -13,54 +13,12 @@
 #include "parse/tree_visit.h"
 #include "scanner/token_stream.h"
 #include "internal/parse/grammar_internal.h"
-
-static int fails = 0;
-
-static void
-check(const char *what, bool ok)
-{
-    if (!ok) {
-        fails++;
-        printf("FAIL  %s\n", what);
-    }
-}
+#include "ir_test.h"
 
 static ncc_string_t
 S(const char *s)
 {
     return ncc_string_from_cstr(s);
-}
-
-static ncc_string_t
-slurp(const char *path)
-{
-    FILE *f = fopen(path, "rb");
-
-    if (!f) {
-        printf("FAIL  cannot open %s\n", path);
-        fails++;
-
-        return (ncc_string_t){0};
-    }
-
-    fseek(f, 0, SEEK_END);
-
-    long n = ftell(f);
-
-    rewind(f);
-
-    char *p = ncc_alloc_size(1, (size_t)n + 1);
-
-    if (fread(p, 1, (size_t)n, f) != (size_t)n) {
-        p[0] = 0;
-    }
-    else {
-        p[n] = 0;
-    }
-
-    fclose(f);
-
-    return ncc_string_from_cstr(p);
 }
 
 static th_ctx *types;
@@ -610,9 +568,5 @@ main(void)
 
     ncc_grammar_free(g);
 
-    if (!fails) {
-        printf("fe annot: all checks passed\n");
-    }
-
-    return fails ? 1 : 0;
+    return report("fe annot");
 }
