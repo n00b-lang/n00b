@@ -3527,6 +3527,15 @@ conduit_test = executable('test_conduit',
 )
 test('conduit', conduit_test, suite: 'unit')
 
+# n00b#321: an interior GC root more than one allocation's worth into a large
+# allocation must still resolve; the guard back-scan bound used to be a flat
+# 8 MB and dropped the root past it.
+alloc_interior_large_test = executable('test_alloc_interior_large',
+    ['test/unit/test_alloc_interior_large.c'],
+    kwargs: test_common_kwargs,
+)
+test('alloc_interior_large', alloc_interior_large_test, suite: 'unit')
+
 # Gates the embedded-n00b_condition_t pinning rule (n00b#326): every inbox
 # constructor must yield a pointer the collector cannot relocate, because the
 # lock registry keys locks by address. Convention-only before this test; two
@@ -4570,7 +4579,17 @@ rocs_wax_cli_test = executable('test_rocs_wax_cli',
     ['test/unit/test_rocs_wax_cli.c'],
     kwargs: rocs_wax_test_kwargs,
 )
-test('rocs_wax_cli', rocs_wax_cli_test, suite: 'unit')
+# The test SPAWNS n00b-rocs-wax-cache (ROCS_WAX_CACHE_TOOL_PATH is that
+# target's full_path()), so the tool has to exist before the test runs. That is
+# a runtime dependency meson cannot infer from the sources, and without
+# `depends:` it is only satisfied by accident -- when something else in the
+# build happens to have built the tool first.
+#
+# `ninja all` hides the omission. n00b#319's Windows job builds only the
+# executables backing the tests it runs, which is where it surfaced: the test
+# built, ran, and failed spawning a tool that was never compiled.
+test('rocs_wax_cli', rocs_wax_cli_test, suite: 'unit',
+     depends: [n00b_rocs_wax_cache_tool])
 
 # n00b-wrap (and the obj_bundle_wrap test) JIT-run EMBEDDED_N00B policy programs,
 # which resolve runtime builtins (e.g. the `print` builtin → `n00b_print`) and the
@@ -4928,13 +4947,14 @@ pool_alloc_test = executable('test_pool_alloc',
     ['test/integration/test_pool_alloc.c'],
     kwargs: test_common_kwargs,
 )
-    # QUARANTINED (n00b#281): fails on macOS, PASSES on Linux -- so should_fail
-    # reports UNEXPECTEDPASS there and the gate stays red either way. Same
-    # reason as the n00b#280 group: 'known-broken' states "not gated" without
-    # asserting an outcome on either platform.
+    # Un-quarantined (was n00b#281): the macOS-only failure was
+    # pool_quarantine_park skipping mprotect(PROT_NONE) on Apple, so parked
+    # pages stayed readable and quarantine_uaf_faults' child never faulted.
+    # Fixed in pool.c; Linux behaviour is unchanged, so this now passes on
+    # both platforms and can gate again.
 test('pool_alloc',
     pool_alloc_test,
-    suite: 'known-broken',
+    suite: 'integration',
     env: [
         'N00B_POOL_BIG_QUARANTINE=64',
         'N00B_POOL_PAGE_PER_ALLOC=guardpool',
