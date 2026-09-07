@@ -1,0 +1,935 @@
+@lex-embed("<?php", "?>", as("INLINE_HTML"), open_as("OPEN_TAG"), close_as("CLOSE_TAG"))
+@lex-comment("//")
+@lex-comment("#")
+@lex-comment("/*", "*/")
+@lex-heredoc("<<<", as("HEREDOC"), strip)
+@lex-string('"', '"', escape('\\'), as("ENCAPSED_STRING"))
+@lex-string("'", "'", escape('\\'), as("STRING"))
+@lex-sigil("$", as("VARIABLE"))
+@lex-number(radix("0x", "0123456789abcdefABCDEF"), radix("0b", "01"), radix("0o", "01234567"), sep("_"), exp("eE"), int("INTEGER"), float("FLOAT"))
+@lex-ident(as("IDENTIFIER"))
+@lex-layout(brackets("()[]{}"))
+
+# PHP 8.x Grammar
+#
+# Syntactic grammar for PHP 8.0 - 8.3, modeled after Zend Engine's
+# zend_language_parser.y and translated to dragon_slay BNF format.
+#
+# Lexer-provided tokens:
+#   %IDENTIFIER       - bare identifiers (not starting with $)
+#   %VARIABLE         - variable names ($foo)
+#   %INTEGER          - integer literals (decimal, hex, octal, binary)
+#   %FLOAT            - floating-point literals
+#   %STRING           - single-quoted string literals
+#   %ENCAPSED_STRING  - double-quoted strings with interpolation
+#   %HEREDOC          - heredoc/nowdoc string literals
+#   %INLINE_HTML      - raw HTML outside <?php ... ?> tags
+#
+# The lexer handles:
+#   - Open/close tags (<?php, <?=, ?>)
+#   - Whitespace and comments
+#   - String interpolation within %ENCAPSED_STRING and %HEREDOC
+#   - Variable tokenization ($name -> %VARIABLE)
+#
+# Start symbol: <top-statement-list>
+
+# ============================================================================
+# Top-level structure
+# ============================================================================
+
+<top-statement-list> @hardline ::= (%OPEN_TAG | %CLOSE_TAG | %INLINE_HTML | <top-statement>)*
+
+<top-statement> ::= <statement>
+                  | <function-declaration>
+                  | <class-declaration>
+                  | <interface-declaration>
+                  | <trait-declaration>
+                  | <enum-declaration>
+                  | <namespace-declaration>
+                  | <use-declaration>
+                  | <const-declaration>
+                  | <halt-compiler>
+                  | %INLINE_HTML
+
+<halt-compiler> ::= %"__halt_compiler" %"(" %")" %";"
+
+# ============================================================================
+# Namespace declarations
+# ============================================================================
+
+<namespace-declaration> ::= %"namespace" <namespace-name> %";"
+                          | %"namespace" <namespace-name> %"{" <top-statement-list> %"}"
+                          | %"namespace" %"{" <top-statement-list> %"}"
+
+<namespace-name> ::= %IDENTIFIER (%"\\" %IDENTIFIER)*
+
+# ============================================================================
+# Use declarations (imports)
+# ============================================================================
+
+<use-declaration> ::= %"use" <use-type>? <use-declarations> %";"
+                    | %"use" <use-type>? <namespace-name> %"\\" %"{" <group-use-declarations> %"}" %";"
+
+<use-type> ::= %"function"
+             | %"const"
+
+<use-declarations> ::= <use-declaration-item> (%"," <use-declaration-item>)*
+
+<use-declaration-item> ::= <namespace-name>
+                         | <namespace-name> %"as" %IDENTIFIER
+
+<group-use-declarations> ::= <group-use-declaration-item> (%"," <group-use-declaration-item>)*
+
+<group-use-declaration-item> ::= <use-type>? <namespace-name>
+                               | <use-type>? <namespace-name> %"as" %IDENTIFIER
+
+# ============================================================================
+# Constant declarations (top-level)
+# ============================================================================
+
+<const-declaration> ::= %"const" <const-list> %";"
+
+<const-list> ::= <const-item> (%"," <const-item>)*
+
+<const-item> ::= %IDENTIFIER %"=" <expression>
+
+# ============================================================================
+# Function declarations
+# ============================================================================
+
+<function-declaration> @nospace($2) @nospace($4) @nospace($5) @nospace($6) @nospace($7) @hardline($9) @indent($9) @hardline($10) ::= <attribute-group>* %"function" %"&"? %IDENTIFIER %"(" <parameter-list>? %")" (%":" <type>)? %"{" <inner-statement>* %"}"
+
+
+
+<parameter-list> @nospace($1) ::= <parameter> (%"," <parameter>)*
+
+<parameter> ::= <attribute-group>* <visibility-modifier>? <readonly-modifier>? <type>? %"&"? %"..."? %VARIABLE (%"=" <expression>)?
+
+<visibility-modifier> ::= %"public"
+                        | %"protected"
+                        | %"private"
+
+<readonly-modifier> ::= %"readonly"
+
+
+
+
+# ============================================================================
+# Class declarations
+# ============================================================================
+
+<class-declaration> @hardline($7) @indent($7) @hardline($8) ::= <attribute-group>* <class-modifiers>? %"class" %IDENTIFIER (%"extends" <class-name>)? (%"implements" <class-name-list>)? %"{" <class-statement>* %"}"
+
+<class-modifiers> ::= <class-modifier>+
+
+<class-modifier> ::= %"abstract"
+                   | %"final"
+                   | %"readonly"
+
+
+
+<class-name-list> ::= <class-name> (%"," <class-name>)*
+
+<class-name> ::= <name>
+
+
+<class-statement> @nospace($3) @nospace($5) @nospace($6) @nospace($7) @nospace($8) ::= <attribute-group>* <method-modifiers>? %"function" %"&"? %IDENTIFIER %"(" <parameter-list>? %")" (%":" <type>)? <method-body>
+<class-statement> @nospace($4) ::= <attribute-group>* <property-modifiers> <type>? <property-declaration-list> %";"
+<class-statement> @nospace($5) ::= <attribute-group>* <class-const-modifier>* %"const" <type>? <class-const-list> %";"
+<class-statement> ::= <use-trait-declaration>
+<class-statement> ::= <enum-case-declaration>
+
+<method-body> @hardline($1) @indent($1) @hardline($2) ::= %"{" <inner-statement>* %"}"
+               | %";"
+
+<method-modifiers> ::= <member-modifier>+
+
+<member-modifier> ::= %"public"
+                    | %"protected"
+                    | %"private"
+                    | %"static"
+                    | %"abstract"
+                    | %"final"
+                    | %"readonly"
+
+<property-modifiers> ::= <member-modifier>+
+                       | %"var"
+
+<property-declaration-list> ::= <property-declaration> (%"," <property-declaration>)*
+
+<property-declaration> ::= %VARIABLE
+                         | %VARIABLE %"=" <expression>
+
+
+<class-const-modifier> ::= %"public"
+                         | %"protected"
+                         | %"private"
+                         | %"final"
+
+<class-const-list> ::= <class-const-item> (%"," <class-const-item>)*
+
+<class-const-item> ::= %IDENTIFIER %"=" <expression>
+
+# ============================================================================
+# Interface declarations
+# ============================================================================
+
+<interface-declaration> ::= <attribute-group>* %"interface" %IDENTIFIER (%"extends" <class-name-list>)? %"{" <class-statement>* %"}"
+
+
+# ============================================================================
+# Trait declarations
+# ============================================================================
+
+<trait-declaration> ::= <attribute-group>* %"trait" %IDENTIFIER %"{" <class-statement>* %"}"
+
+<use-trait-declaration> ::= %"use" <class-name-list> %";"
+                          | %"use" <class-name-list> %"{" <trait-adaptation>* %"}"
+
+
+<trait-adaptation> ::= <trait-precedence> %";"
+                     | <trait-alias> %";"
+
+<trait-precedence> ::= <trait-method-reference-fully-qualified> %"insteadof" <class-name-list>
+
+<trait-alias> ::= <trait-method-reference> %"as" <member-modifier>? %IDENTIFIER
+               | <trait-method-reference> %"as" <member-modifier>
+
+<trait-method-reference> ::= <trait-method-reference-fully-qualified>
+                           | %IDENTIFIER
+
+<trait-method-reference-fully-qualified> ::= <class-name> %"::" %IDENTIFIER
+
+# ============================================================================
+# Enum declarations
+# ============================================================================
+
+<enum-declaration> ::= <attribute-group>* %"enum" %IDENTIFIER (%":" <enum-backing-type>)? (%"implements" <class-name-list>)? %"{" <class-statement>* %"}"
+
+
+<enum-backing-type> ::= %"string"
+                      | %"int"
+
+<enum-case-declaration> ::= <attribute-group>* %"case" %IDENTIFIER (%"=" <expression>)? %";"
+
+
+# ============================================================================
+# Statements
+# ============================================================================
+
+
+<inner-statement> ::= <statement>
+                    | <function-declaration>
+                    | <class-declaration>
+                    | <interface-declaration>
+                    | <trait-declaration>
+                    | <enum-declaration>
+
+<statement> ::= %"{" <inner-statement>* %"}"
+             | <if-statement>
+             | <alt-if-statement>
+             | <while-statement>
+             | <do-while-statement>
+             | <for-statement>
+             | <foreach-statement>
+             | <switch-statement>
+             | <match-statement>
+             | <break-statement>
+             | <continue-statement>
+             | <return-statement>
+             | <yield-expression> %";"
+             | <global-statement>
+             | <static-var-statement>
+             | <echo-statement>
+             | <expression> %";"
+             | <unset-statement>
+             | <try-statement>
+             | <throw-statement>
+             | <goto-statement>
+             | <label-statement>
+             | <declare-statement>
+             | <const-declaration>
+             | %INLINE_HTML
+             | %";"
+
+# ============================================================================
+# If / elseif / else
+# ============================================================================
+
+<if-statement> ::= %"if" %"(" <expression> %")" <statement> <elseif-clause>* (%"else" <statement>)?
+
+
+<elseif-clause> ::= %"elseif" %"(" <expression> %")" <statement>
+
+
+# Alternative if syntax (if: ... endif;)
+<alt-if-statement> ::= %"if" %"(" <expression> %")" %":" <inner-statement>* <alt-elseif-clause>* (%"else" %":" <inner-statement>*)? %"endif" %";"
+
+
+<alt-elseif-clause> ::= %"elseif" %"(" <expression> %")" %":" <inner-statement>*
+
+
+# ============================================================================
+# While
+# ============================================================================
+
+<while-statement> ::= %"while" %"(" <expression> %")" <statement>
+                    | %"while" %"(" <expression> %")" %":" <inner-statement>* %"endwhile" %";"
+
+# ============================================================================
+# Do-while
+# ============================================================================
+
+<do-while-statement> ::= %"do" <statement> %"while" %"(" <expression> %")" %";"
+
+# ============================================================================
+# For
+# ============================================================================
+
+<for-statement> ::= %"for" %"(" <expression-list>? %";" <expression-list>? %";" <expression-list>? %")" <statement>
+                  | %"for" %"(" <expression-list>? %";" <expression-list>? %";" <expression-list>? %")" %":" <inner-statement>* %"endfor" %";"
+
+
+<expression-list> ::= <expression> (%"," <expression>)*
+
+# ============================================================================
+# Foreach
+# ============================================================================
+
+<foreach-statement> ::= %"foreach" %"(" <expression> %"as" <foreach-variable> %")" <statement>
+                       | %"foreach" %"(" <expression> %"as" <foreach-variable> %"=>" <foreach-variable> %")" <statement>
+                       | %"foreach" %"(" <expression> %"as" <foreach-variable> %")" %":" <inner-statement>* %"endforeach" %";"
+                       | %"foreach" %"(" <expression> %"as" <foreach-variable> %"=>" <foreach-variable> %")" %":" <inner-statement>* %"endforeach" %";"
+
+<foreach-variable> ::= <variable>
+                     | %"&" <variable>
+                     | <list-expression>
+                     | %"[" <array-destructuring-items> %"]"
+
+# ============================================================================
+# Switch
+# ============================================================================
+
+<switch-statement> ::= %"switch" %"(" <expression> %")" %"{" <switch-case>* %"}"
+                     | %"switch" %"(" <expression> %")" %":" <switch-case>* %"endswitch" %";"
+
+
+<switch-case> ::= %"case" <expression> %":" <inner-statement>*
+               | %"case" <expression> %";" <inner-statement>*
+               | %"default" %":" <inner-statement>*
+               | %"default" %";" <inner-statement>*
+
+# ============================================================================
+# Match expression (used as both statement and expression)
+# ============================================================================
+
+<match-statement> ::= <match-expression> %";"
+
+<match-expression> ::= %"match" %"(" <expression> %")" %"{" (<match-arm> (%"," <match-arm>)* %","?)? %"}"
+
+
+<match-arm> ::= <match-arm-condition-list> %"=>" <expression>
+             | %"default" %"=>" <expression>
+
+<match-arm-condition-list> ::= <expression> (%"," <expression>)*
+
+# ============================================================================
+# Break / continue / return
+# ============================================================================
+
+<break-statement> ::= %"break" <expression>? %";"
+
+<continue-statement> ::= %"continue" <expression>? %";"
+
+<return-statement> @nospace($2) ::= %"return" <expression>? %";"
+
+# ============================================================================
+# Global and static variable statements
+# ============================================================================
+
+<global-statement> ::= %"global" <global-var-list> %";"
+
+<global-var-list> ::= <simple-variable> (%"," <simple-variable>)*
+
+<static-var-statement> ::= %"static" <static-var-list> %";"
+
+<static-var-list> ::= <static-var-item> (%"," <static-var-item>)*
+
+<static-var-item> ::= %VARIABLE
+                    | %VARIABLE %"=" <expression>
+
+# ============================================================================
+# Echo
+# ============================================================================
+
+<echo-statement> ::= %"echo" <expression-list> %";"
+
+# ============================================================================
+# Unset
+# ============================================================================
+
+<unset-statement> ::= %"unset" %"(" <unset-variables> %")" %";"
+
+<unset-variables> ::= <variable> (%"," <variable>)*
+
+# ============================================================================
+# Try / catch / finally
+# ============================================================================
+
+<try-statement> ::= %"try" %"{" <inner-statement>* %"}" <catch-clause>* (%"finally" %"{" <inner-statement>* %"}")?
+
+
+<catch-clause> ::= %"catch" %"(" <catch-type-list> %VARIABLE? %")" %"{" <inner-statement>* %"}"
+
+<catch-type-list> ::= <name> (%"|" <name>)*
+
+
+# ============================================================================
+# Throw (expression in PHP 8.0+)
+# ============================================================================
+
+<throw-statement> ::= %"throw" <expression> %";"
+
+<throw-expression> ::= %"throw" <expression>
+
+# ============================================================================
+# Goto / labels
+# ============================================================================
+
+<goto-statement> ::= %"goto" %IDENTIFIER %";"
+
+<label-statement> ::= %IDENTIFIER %":"
+
+# ============================================================================
+# Declare
+# ============================================================================
+
+<declare-statement> ::= %"declare" %"(" <declare-list> %")" <statement>
+                      | %"declare" %"(" <declare-list> %")" %";"
+                      | %"declare" %"(" <declare-list> %")" %":" <inner-statement>* %"enddeclare" %";"
+
+<declare-list> ::= <declare-item> (%"," <declare-item>)*
+
+<declare-item> ::= %IDENTIFIER %"=" <expression>
+
+# ============================================================================
+# Type system
+# ============================================================================
+
+<type> ::= <nullable-type>
+         | <union-type>
+         | <intersection-type>
+         | <dnf-type>
+
+<nullable-type> ::= %"?" <base-type>
+                  | <base-type>
+
+<union-type> ::= <union-type-member> %"|" <union-type-member> (%"|" <union-type-member>)*
+
+<union-type-member> ::= <base-type>
+                      | <dnf-type-group>
+
+<intersection-type> ::= <base-type> %"&" <base-type> (%"&" <base-type>)*
+
+# Disjunctive Normal Form types: (A&B)|C
+<dnf-type> ::= <dnf-type-member> %"|" <dnf-type-member> (%"|" <dnf-type-member>)*
+
+<dnf-type-member> ::= <base-type>
+                    | <dnf-type-group>
+
+<dnf-type-group> ::= %"(" <base-type> (%"&" <base-type>)+ %")"
+
+<base-type> ::= <name>
+             | <scalar-type>
+             | %"array"
+             | %"callable"
+             | %"static"
+             | %"void"
+             | %"never"
+             | %"null"
+             | %"true"
+             | %"false"
+             | %"self"
+             | %"parent"
+             | %"iterable"
+             | %"mixed"
+
+<scalar-type> ::= %"int"
+               | %"float"
+               | %"string"
+               | %"bool"
+
+# ============================================================================
+# Names (qualified / unqualified / fully-qualified)
+# ============================================================================
+
+<name> ::= <namespace-name>
+         | %"\\" <namespace-name>
+         | %"namespace" %"\\" <namespace-name>
+
+# ============================================================================
+# Expressions
+# ============================================================================
+#
+# Operator precedence (lowest to highest):
+#   yield / yield from
+#   print
+#   assignment (= += -= *= /= .= %= **= &= |= ^= <<= >>= ??=)
+#   ternary (?:), null coalescing (??)
+#   logical or
+#   logical xor
+#   logical and
+#   bitwise or (|)
+#   bitwise xor (^)
+#   bitwise and (&)
+#   equality (== != === !==)
+#   comparison (< <= > >= <=>)
+#   instanceof
+#   shift (<< >>)
+#   additive (+ - .)
+#   multiplicative (* / %)
+#   power (**)
+#   unary (! ~ ++ -- + - @ (cast) clone)
+#   postfix (++ --)
+#   member access (-> ?-> :: [])
+#   new (with arguments)
+#   primary
+
+<expression> ::= <yield-expression>
+              | <assignment-expression>
+
+# ============================================================================
+# Yield expressions
+# ============================================================================
+
+<yield-expression> ::= %"yield" %"from" <expression>
+                     | %"yield" <expression> %"=>" <expression>
+                     | %"yield" <expression>
+                     | %"yield"
+
+# ============================================================================
+# Assignment expressions
+# ============================================================================
+
+<assignment-expression> ::= <variable> %"=" <expression>
+                          | <variable> %"=" %"&" <variable>
+                          | <variable> <compound-assignment-op> <expression>
+                          | <variable> %"??=" <expression>
+                          | <list-expression> %"=" <expression>
+                          | %"[" <array-destructuring-items> %"]" %"=" <expression>
+                          | <null-coalesce-expression>
+
+<compound-assignment-op> ::= %"+="
+                           | %"-="
+                           | %"*="
+                           | %"/="
+                           | %".="
+                           | %"%="
+                           | %"**="
+                           | %"&="
+                           | %"|="
+                           | %"^="
+                           | %"<<="
+                           | %">>="
+
+# ============================================================================
+# List / array destructuring
+# ============================================================================
+
+<list-expression> ::= %"list" %"(" <list-items> %")"
+
+<list-items> ::= <list-item> %","?
+              | <list-item>? (%"," <list-item>?)+
+
+<list-item> ::= <expression> %"=>" <list-target>
+             | <list-target>
+
+<list-target> ::= <variable>
+               | <list-expression>
+               | %"[" <array-destructuring-items> %"]"
+
+<array-destructuring-items> ::= <array-destructuring-item> %","?
+                              | <array-destructuring-item>? (%"," <array-destructuring-item>?)+
+
+<array-destructuring-item> ::= <expression> %"=>" <list-target>
+                             | <list-target>
+
+# ============================================================================
+# Null coalescing (??)
+# ============================================================================
+
+<null-coalesce-expression> ::= <ternary-expression> %"??" <null-coalesce-expression>
+                             | <ternary-expression>
+
+# ============================================================================
+# Ternary expressions (including short ternary ?:)
+# ============================================================================
+
+<ternary-expression> ::= <logical-or-expression> %"?" <expression> %":" <ternary-expression>
+                       | <logical-or-expression> %"?" %":" <ternary-expression>
+                       | <logical-or-expression>
+
+# ============================================================================
+# Logical operators (word forms: or, xor, and)
+# ============================================================================
+
+<logical-or-expression> ::= <logical-or-expression> %"or" <logical-xor-expression>
+                          | <logical-xor-expression>
+
+<logical-xor-expression> ::= <logical-xor-expression> %"xor" <logical-and-expression>
+                           | <logical-and-expression>
+
+<logical-and-expression> ::= <logical-and-expression> %"and" <boolean-or-expression>
+                           | <boolean-or-expression>
+
+# ============================================================================
+# Boolean operators (symbol forms: || &&)
+# ============================================================================
+
+<boolean-or-expression> ::= <boolean-or-expression> %"||" <boolean-and-expression>
+                          | <boolean-and-expression>
+
+<boolean-and-expression> ::= <boolean-and-expression> %"&&" <bitwise-or-expression>
+                           | <bitwise-or-expression>
+
+# ============================================================================
+# Bitwise operators
+# ============================================================================
+
+<bitwise-or-expression> ::= <bitwise-or-expression> %"|" <bitwise-xor-expression>
+                          | <bitwise-xor-expression>
+
+<bitwise-xor-expression> ::= <bitwise-xor-expression> %"^" <bitwise-and-expression>
+                           | <bitwise-and-expression>
+
+<bitwise-and-expression> ::= <bitwise-and-expression> %"&" <equality-expression>
+                           | <equality-expression>
+
+# ============================================================================
+# Equality operators
+# ============================================================================
+
+<equality-expression> ::= <equality-expression> %"==" <comparison-expression>
+                        | <equality-expression> %"!=" <comparison-expression>
+                        | <equality-expression> %"===" <comparison-expression>
+                        | <equality-expression> %"!==" <comparison-expression>
+                        | <comparison-expression>
+
+# ============================================================================
+# Comparison operators (including spaceship <=>)
+# ============================================================================
+
+<comparison-expression> ::= <comparison-expression> %"<" <instanceof-expression>
+                          | <comparison-expression> %"<=" <instanceof-expression>
+                          | <comparison-expression> %">" <instanceof-expression>
+                          | <comparison-expression> %">=" <instanceof-expression>
+                          | <comparison-expression> %"<=>" <instanceof-expression>
+                          | <instanceof-expression>
+
+# ============================================================================
+# Instanceof
+# ============================================================================
+
+<instanceof-expression> ::= <instanceof-expression> %"instanceof" <class-name-reference>
+                          | <shift-expression>
+
+# Note: <class-name-reference> is defined below with the member-access
+# productions, since it is shared between instanceof and member access.
+
+# ============================================================================
+# Shift operators
+# ============================================================================
+
+<shift-expression> ::= <shift-expression> %"<<" <additive-expression>
+                     | <shift-expression> %">>" <additive-expression>
+                     | <additive-expression>
+
+# ============================================================================
+# Additive operators (+ - .)
+# ============================================================================
+
+<additive-expression> ::= <additive-expression> %"+" <multiplicative-expression>
+                        | <additive-expression> %"-" <multiplicative-expression>
+                        | <additive-expression> %"." <multiplicative-expression>
+                        | <multiplicative-expression>
+
+# ============================================================================
+# Multiplicative operators
+# ============================================================================
+
+<multiplicative-expression> ::= <multiplicative-expression> %"*" <power-expression>
+                             | <multiplicative-expression> %"/" <power-expression>
+                             | <multiplicative-expression> %"%" <power-expression>
+                             | <power-expression>
+
+# ============================================================================
+# Power operator (right-associative)
+# ============================================================================
+
+<power-expression> ::= <unary-expression> %"**" <power-expression>
+                     | <unary-expression>
+
+# ============================================================================
+# Unary expressions
+# ============================================================================
+
+<unary-expression> ::= %"!" <unary-expression>
+                     | %"~" <unary-expression>
+                     | %"+" <unary-expression>
+                     | %"-" <unary-expression>
+                     | %"@" <unary-expression>
+                     | %"++" <variable>
+                     | %"--" <variable>
+                     | %"clone" <unary-expression>
+                     | <cast-expression>
+                     | <print-expression>
+                     | <throw-expression>
+                     | <postfix-expression>
+
+<cast-expression> ::= %"(" <cast-type> %")" <unary-expression>
+
+<cast-type> ::= %"int"
+             | %"integer"
+             | %"float"
+             | %"double"
+             | %"real"
+             | %"string"
+             | %"binary"
+             | %"array"
+             | %"object"
+             | %"bool"
+             | %"boolean"
+             | %"unset"
+
+<print-expression> ::= %"print" <expression>
+
+# ============================================================================
+# Postfix expressions
+# ============================================================================
+#
+# PHP's expression grammar is highly intertwined: variables, member access,
+# function calls, array subscripts, and static access all recurse through
+# one another.  We model this with a layered set of productions:
+#
+#   <postfix-expression>       -- post-increment/decrement, or falls through
+#   <call-expression>          -- function/method/static calls, chained calls
+#   <member-access-expression> -- property/method access (-> ?-> ::)
+#   <subscript-expression>     -- array subscript ([]), curly subscript ({})
+#   <dereferenceable>          -- things that can be subscripted/accessed
+#   <primary>                  -- atomic expressions (scalars, parens, etc.)
+
+<postfix-expression> ::= <call-expression> %"++"
+                       | <call-expression> %"--"
+                       | <call-expression>
+
+# ============================================================================
+# Call expressions (function calls, method calls, static calls)
+# ============================================================================
+
+<call-expression> ::= <subscript-expression>
+                    | <name> %"(" <argument-list>? %")"
+                    | <subscript-expression> %"->" <member-name> %"(" <argument-list>? %")"
+                    | <subscript-expression> %"?->" <member-name> %"(" <argument-list>? %")"
+                    | <class-name-reference> %"::" %IDENTIFIER %"(" <argument-list>? %")"
+                    | <class-name-reference> %"::" %VARIABLE %"(" <argument-list>? %")"
+                    | <class-name-reference> %"::" %"{" <expression> %"}" %"(" <argument-list>? %")"
+                    | <call-expression> %"(" <argument-list>? %")"
+                    | <call-expression> %"->" <member-name> %"(" <argument-list>? %")"
+                    | <call-expression> %"?->" <member-name> %"(" <argument-list>? %")"
+                    | <call-expression> %"[" <expression>? %"]"
+                    | <call-expression> %"->" <member-name>
+                    | <call-expression> %"?->" <member-name>
+                    | <call-expression> %"::" %IDENTIFIER
+                    | <callable-expression>
+
+# ============================================================================
+# Subscript and member access expressions
+# ============================================================================
+
+<subscript-expression> ::= <subscript-expression> %"[" <expression>? %"]"
+                         | <subscript-expression> %"{" <expression> %"}"
+                         | <subscript-expression> %"->" <member-name>
+                         | <subscript-expression> %"?->" <member-name>
+                         | <subscript-expression> %"->" %"{" <expression> %"}"
+                         | <subscript-expression> %"?->" %"{" <expression> %"}"
+                         | <class-name-reference> %"::" %IDENTIFIER
+                         | <class-name-reference> %"::" %VARIABLE
+                         | <class-name-reference> %"::" %"{" <expression> %"}"
+                         | <class-name-reference> %"::" %"class"
+                         | <new-expression>
+                         | <primary>
+
+<member-name> ::= %IDENTIFIER
+               | %"{" <expression> %"}"
+               | <simple-variable>
+
+<class-name-reference> ::= <name>
+                         | <subscript-expression>
+                         | %"self"
+                         | %"parent"
+                         | %"static"
+
+# ============================================================================
+# New expression
+# ============================================================================
+
+<new-expression> ::= %"new" <class-name-reference> %"(" <argument-list>? %")"
+                   | %"new" <class-name-reference>
+                   | %"new" <anonymous-class>
+
+# ============================================================================
+# Anonymous classes
+# ============================================================================
+
+<anonymous-class> ::= <attribute-group>* <class-modifiers>? %"class" %"(" <argument-list>? %")" (%"extends" <class-name>)? (%"implements" <class-name-list>)? %"{" <class-statement>* %"}"
+                    | <attribute-group>* <class-modifiers>? %"class" (%"extends" <class-name>)? (%"implements" <class-name-list>)? %"{" <class-statement>* %"}"
+
+# ============================================================================
+# Argument lists (function/method call arguments)
+# ============================================================================
+
+
+<argument-list> @nospace($1) @nospace($2) ::= <argument> (%"," <argument>)* %","?
+
+<argument> ::= <named-argument>
+            | <spread-argument>
+            | <expression>
+
+<named-argument> ::= %IDENTIFIER %":" <expression>
+
+<spread-argument> ::= %"..." <expression>
+
+# ============================================================================
+# First-class callable syntax: strlen(...)
+# ============================================================================
+
+<callable-expression> ::= <name> %"(" %"..." %")"
+                        | <subscript-expression> %"->" <member-name> %"(" %"..." %")"
+                        | <subscript-expression> %"?->" <member-name> %"(" %"..." %")"
+                        | <class-name-reference> %"::" %IDENTIFIER %"(" %"..." %")"
+                        | %"static" %"::" %IDENTIFIER %"(" %"..." %")"
+
+# ============================================================================
+# Closures (anonymous functions)
+# ============================================================================
+
+<closure-expression> ::= <attribute-group>* %"static"? %"function" %"&"? %"(" <parameter-list>? %")" (%"use" %"(" <closure-use-list> %")")? (%":" <type>)? %"{" <inner-statement>* %"}"
+
+
+<closure-use-list> ::= <closure-use-item> (%"," <closure-use-item>)*
+
+<closure-use-item> ::= %"&"? %VARIABLE
+
+# ============================================================================
+# Arrow functions (fn() =>)
+# ============================================================================
+
+<arrow-function> ::= <attribute-group>* %"static"? %"fn" %"&"? %"(" <parameter-list>? %")" (%":" <type>)? %"=>" <expression>
+
+# ============================================================================
+# Variables
+# ============================================================================
+#
+# A <variable> is anything that can appear on the left side of an assignment.
+# In PHP, this includes simple variables ($x), array accesses ($x[0]),
+# property accesses ($x->y), and static property accesses (Foo::$bar).
+# We define <variable> in terms of <simple-variable> (the base case) and
+# the subscript/member-access productions above, which already handle
+# chained access.  Assignment targets are checked semantically.
+
+<variable> ::= <subscript-expression>
+            | <simple-variable>
+
+<simple-variable> ::= %VARIABLE
+                    | %"$" %"{" <expression> %"}"
+                    | %"$" <simple-variable>
+
+# ============================================================================
+# Primary expressions
+# ============================================================================
+#
+# Primaries are the atomic building blocks of expressions: literals,
+# parenthesized sub-expressions, language constructs, and bare names.
+# Everything above in the precedence chain ultimately bottoms out here.
+
+<primary> ::= <scalar>
+           | <array-literal>
+           | <closure-expression>
+           | <arrow-function>
+           | <match-expression>
+           | <simple-variable>
+           | <name>
+           | %"(" <expression> %")"
+           | <exit-expression>
+           | <eval-expression>
+           | <empty-expression>
+           | <isset-expression>
+           | <include-expression>
+
+# ============================================================================
+# Scalar values
+# ============================================================================
+
+<scalar> ::= %INTEGER
+           | %FLOAT
+           | <string-literal>
+           | %"null"
+           | %"true"
+           | %"false"
+
+<string-literal> ::= %STRING
+                   | %ENCAPSED_STRING
+                   | %HEREDOC
+                   | %STRING %STRING+
+
+# ============================================================================
+# Array literal
+# ============================================================================
+
+<array-literal> ::= %"array" %"(" (<array-pair-list> %","?)? %")"
+                  | %"[" (<array-pair-list> %","?)? %"]"
+
+
+<array-pair-list> ::= <array-pair> (%"," <array-pair>)*
+
+<array-pair> ::= <expression> %"=>" <expression>
+              | <expression>
+              | <expression> %"=>" %"&" <variable>
+              | %"&" <variable>
+              | <expression> %"=>" <list-expression>
+              | <list-expression>
+              | %"..." <expression>
+
+# ============================================================================
+# Built-in language constructs (expression forms)
+# ============================================================================
+
+<exit-expression> ::= %"exit" %"(" <expression>? %")"
+                    | %"exit"
+                    | %"die" %"(" <expression>? %")"
+                    | %"die"
+
+<eval-expression> ::= %"eval" %"(" <expression> %")"
+
+<empty-expression> ::= %"empty" %"(" <expression> %")"
+
+<isset-expression> ::= %"isset" %"(" <isset-variables> %")"
+
+<isset-variables> ::= <variable> (%"," <variable>)*
+
+<include-expression> ::= %"include" <expression>
+                       | %"include_once" <expression>
+                       | %"require" <expression>
+                       | %"require_once" <expression>
+
+# ============================================================================
+# Attributes (#[...])
+# ============================================================================
+
+
+<attribute-group> ::= %"#[" <attribute-list-inner> %"]"
+
+<attribute-list-inner> ::= <attribute-item> (%"," <attribute-item>)* %","?
+
+<attribute-item> ::= <name> (%"(" <argument-list>? %")")?
+

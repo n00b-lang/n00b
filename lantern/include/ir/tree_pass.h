@@ -6,7 +6,7 @@
 #include "parse/annot_walk.h"
 #include "parse/tree_visit.h"
 
-typedef void (*ir_tree_hook_fn)(ncc_tree_walk_t *w,
+typedef void (*ir_tree_hook_fn)(parse_tree_walk_t *w,
                                 ir_module_t     *m,
                                 void            *state);
 
@@ -31,4 +31,4 @@ ir_pass_result_t ir_tree_pass_run(const ir_pass_t *p,
 
 bool ir_tree_passes_run(ir_module_t *m, ir_diags_t *d);
 
-ncc_annot_result_t *ir_module_tree_annots(ir_module_t *m);
+parse_annot_result_t *ir_module_tree_annots(ir_module_t *m);

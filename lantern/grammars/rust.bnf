@@ -1,0 +1,1087 @@
+@lex-comment("//")
+@lex-comment("/*", "*/", nested)
+@lex-string('br#"', '"#', raw, multiline, as("RAW_BYTE_STRING"))
+@lex-string('r#"', '"#', raw, multiline, as("RAW_STRING"))
+@lex-string('br"', '"', raw, as("RAW_BYTE_STRING"))
+@lex-string('r"', '"', raw, multiline, as("RAW_STRING"))
+@lex-string("b'", "'", escape('\\'), as("BYTE_LIT"))
+@lex-string('b"', '"', escape('\\'), as("BYTE_STRING"))
+@lex-string('"', '"', escape('\\'), multiline, as("STRING"))
+@lex-string("'", "'", escape('\\'), as("CHAR"))
+@lex-number(radix("0x", "0123456789abcdefABCDEF"), radix("0b", "01"), radix("0o", "01234567"), sep("_"), exp("eE"), int("INTEGER"), float("FLOAT"), suffix("usize", "INTEGER"), suffix("i32", "INTEGER"), suffix("i64", "INTEGER"), suffix("u32", "INTEGER"), suffix("u64", "INTEGER"), suffix("f64", "FLOAT"), suffix("f32", "FLOAT"))
+@lex-ident(as("IDENTIFIER"))
+@lex-layout(brackets("()[]{}"))
+
+# Rust Grammar
+#
+# A syntactic grammar for the Rust programming language, based on the Rust
+# Reference, tree-sitter-rust, and the ANTLR Rust grammar.
+#
+# This is a SYNTACTIC grammar only. Lexical details (string escapes, number
+# formats, raw strings, byte strings, comments, etc.) are handled by the lexer.
+#
+# Token types provided by the lexer:
+#   %IDENTIFIER      - Any identifier that is not a keyword
+#   %INTEGER         - Integer literal (decimal, hex, octal, binary, with optional suffix)
+#   %FLOAT           - Float literal (with optional suffix)
+#   %STRING          - String literal ("..." with escapes)
+#   %RAW_STRING      - Raw string literal (r#"..."#)
+#   %BYTE_STRING     - Byte string literal (b"...")
+#   %RAW_BYTE_STRING - Raw byte string literal (br#"..."#)
+#   %CHAR            - Character literal ('x')
+#   %BYTE_LIT        - Byte literal (b'x')
+#   %LIFETIME        - Lifetime or label ('ident, 'static)
+#
+# Keywords are written as %"keyword".
+# Operators and punctuation are written as %"op".
+
+# ============================================================================
+# Crate (top-level)
+# ============================================================================
+
+# A crate is a sequence of inner attributes followed by items.
+<crate> @hardline ::= <inner-attr>* <item>*
+
+# ============================================================================
+# Attributes
+# ============================================================================
+
+# Outer attribute: #[...]
+<outer-attr> ::= %"#" %"[" <attr> %"]"
+
+# Inner attribute: #![...]
+<inner-attr> ::= %"#" %"!" %"[" <attr> %"]"
+
+# An attribute is a path optionally followed by an attr-input.
+<attr> ::= <simple-path> <attr-input>?
+
+# Attribute input: either delimited token trees or = literal
+<attr-input> ::= <delim-token-tree>
+               | %"=" <expression>
+
+# Delimited token trees for attribute arguments
+<delim-token-tree> ::= %"(" <token-tree>* %")"
+                      | %"[" <token-tree>* %"]"
+                      | %"{" <token-tree>* %"}"
+
+# Token tree: a delimited group or a single non-delimiter token.
+# For a syntactic grammar we approximate with a meta-rule.
+# The parser must handle balanced delimiters; we define this recursively.
+<token-tree> ::= <delim-token-tree>
+               | <non-delim-token>
+
+# Non-delimiter tokens: any single token that is not a grouping delimiter.
+# This is a catch-all for attribute/macro token trees. The lexer provides
+# all token types; we list the ones the grammar uses.
+<non-delim-token> ::= %IDENTIFIER | %INTEGER | %FLOAT | %STRING | %RAW_STRING
+                    | %BYTE_STRING | %RAW_BYTE_STRING | %CHAR | %BYTE_LIT
+                    | %LIFETIME
+                    | %"+" | %"-" | %"*" | %"/" | %"%" | %"^" | %"!" | %"&"
+                    | %"|" | %"&&" | %"||" | %"<<" | %">>" | %"+=" | %"-="
+                    | %"*=" | %"/=" | %"%=" | %"^=" | %"&=" | %"|=" | %"<<="
+                    | %">>=" | %"=" | %"==" | %"!=" | %">" | %"<" | %">="
+                    | %"<=" | %"@" | %"_" | %"." | %".." | %"..." | %"..="
+                    | %"," | %";" | %":" | %"::" | %"->" | %"=>" | %"#"
+                    | %"$" | %"?" | %"~"
+                    | %"as" | %"async" | %"await" | %"break" | %"const"
+                    | %"continue" | %"crate" | %"dyn" | %"else" | %"enum"
+                    | %"extern" | %"false" | %"fn" | %"for" | %"if" | %"impl"
+                    | %"in" | %"let" | %"loop" | %"match" | %"mod" | %"move"
+                    | %"mut" | %"pub" | %"ref" | %"return" | %"self" | %"Self"
+                    | %"static" | %"struct" | %"super" | %"trait" | %"true"
+                    | %"type" | %"unsafe" | %"use" | %"where" | %"while"
+                    | %"yield" | %"union" | %"macro_rules"
+
+# ============================================================================
+# Paths
+# ============================================================================
+
+# Simple path: used in attributes, use declarations, macros.
+<simple-path> @nospace ::= %"::"? <simple-path-segment> (%"::" <simple-path-segment>)*
+
+<simple-path-segment> ::= %IDENTIFIER
+                         | %"super"
+                         | %"self"
+                         | %"crate"
+                         | %"$" %"crate"
+
+# Path in expression context (allows turbofish).
+<path-in-expr> @nospace ::= %"::"? <path-expr-segment> (%"::" <path-expr-segment>)*
+
+<path-expr-segment> ::= <path-ident-segment> (%"::" <generic-args>)?
+
+# Path in type context (no turbofish needed, angle brackets are unambiguous).
+<path-in-type> ::= %"::"? <path-type-segment> (%"::" <path-type-segment>)*
+
+<path-type-segment> ::= <path-ident-segment> <generic-args>?
+
+# Qualified path: <Type as Trait>::item
+<qualified-path-in-expr> ::= <qualified-path-type> (%"::" <path-expr-segment>)+
+
+<qualified-path-in-type> ::= <qualified-path-type> (%"::" <path-type-segment>)+
+
+<qualified-path-type> ::= %"<" <type> (%"as" <path-in-type>)? %">"
+
+# Common path identifier segments
+<path-ident-segment> ::= %IDENTIFIER
+                        | %"super"
+                        | %"self"
+                        | %"Self"
+                        | %"crate"
+                        | %"$" %"crate"
+                        | %"union"
+
+# ============================================================================
+# Generic arguments (at use sites)
+# ============================================================================
+
+<generic-args> ::= %"<" <generic-args-list>? %">"
+
+<generic-args-list> ::= <generic-arg> (%"," <generic-arg>)* %","?
+
+<generic-arg> ::= %LIFETIME
+                 | <type>
+                 | <generic-args-const>
+                 | <generic-args-binding>
+
+# Const generic argument: a block expression or a literal or a negative literal or a path
+<generic-args-const> ::= <block-expr>
+                        | %INTEGER
+                        | %FLOAT
+                        | %"true"
+                        | %"false"
+                        | %CHAR
+                        | %"-" %INTEGER
+                        | %"-" %FLOAT
+
+# Type binding in generic args: Ident = Type or Ident : Bounds
+<generic-args-binding> ::= %IDENTIFIER %"=" <type>
+                          | %IDENTIFIER %":" <type-param-bounds>
+
+# ============================================================================
+# Generic parameters (at definition sites)
+# ============================================================================
+
+<generic-params> ::= %"<" <generic-param-list>? %">"
+
+<generic-param-list> ::= <generic-param> (%"," <generic-param>)* %","?
+
+<generic-param> ::= <outer-attr>* <lifetime-param>
+                   | <outer-attr>* <type-param>
+                   | <outer-attr>* <const-param>
+
+<lifetime-param> ::= %LIFETIME (%":" <lifetime-bounds>)?
+
+<type-param> ::= %IDENTIFIER (%":" <type-param-bounds>)? (%"=" <type>)?
+
+<const-param> ::= %"const" %IDENTIFIER %":" <type> (%"=" <const-param-default>)?
+
+<const-param-default> ::= <block-expr>
+                         | %INTEGER
+                         | %FLOAT
+                         | %"true"
+                         | %"false"
+                         | %CHAR
+                         | %"-" %INTEGER
+                         | %"-" %FLOAT
+
+# ============================================================================
+# Where clauses
+# ============================================================================
+
+<where-clause> ::= %"where" <where-clause-items>
+
+<where-clause-items> ::= <where-clause-item> (%"," <where-clause-item>)* %","?
+
+<where-clause-item> ::= <lifetime-where-clause-item>
+                       | <type-bound-where-clause-item>
+
+# 'a: 'b + 'c
+<lifetime-where-clause-item> ::= %LIFETIME %":" <lifetime-bounds>
+
+# T: Trait + 'a   or   for<'a> T: Trait
+<type-bound-where-clause-item> ::= <for-lifetimes>? <type> %":" <type-param-bounds>?
+
+# ============================================================================
+# Trait bounds and lifetime bounds
+# ============================================================================
+
+<type-param-bounds> ::= <type-param-bound> (%"+" <type-param-bound>)* %"+"?
+
+<type-param-bound> ::= %LIFETIME
+                      | <trait-bound>
+
+<trait-bound> ::= %"?"? <for-lifetimes>? <path-in-type>
+                | %"(" %"?"? <for-lifetimes>? <path-in-type> %")"
+
+<lifetime-bounds> ::= %LIFETIME (%"+" %LIFETIME)* %"+"?
+
+<for-lifetimes> ::= %"for" %"<" <lifetime-param-list> %">"
+
+<lifetime-param-list> ::= <lifetime-param> (%"," <lifetime-param>)* %","?
+
+# ============================================================================
+# Visibility
+# ============================================================================
+
+<visibility> ::= %"pub" <pub-restriction>?
+
+<pub-restriction> ::= %"(" %"crate" %")"
+                     | %"(" %"self" %")"
+                     | %"(" %"super" %")"
+                     | %"(" %"in" <simple-path> %")"
+
+# ============================================================================
+# Items
+# ============================================================================
+
+<item> ::= <outer-attr>* <visibility>? <item-kind>
+
+<item-kind> ::= <module>
+              | <extern-crate>
+              | <use-decl>
+              | <function>
+              | <type-alias>
+              | <struct>
+              | <enum>
+              | <union>
+              | <const-item>
+              | <static-item>
+              | <trait-def>
+              | <impl-block>
+              | <extern-block>
+              | <macro-invocation-semi>
+              | <macro-rules-def>
+
+# ============================================================================
+# Modules
+# ============================================================================
+
+<module> ::= <unsafe-kw>? %"mod" %IDENTIFIER %";"
+           | <unsafe-kw>? %"mod" %IDENTIFIER %"{" <inner-attr>* <item>* %"}"
+
+<unsafe-kw> ::= %"unsafe"
+
+# ============================================================================
+# Extern crate
+# ============================================================================
+
+<extern-crate> ::= %"extern" %"crate" <crate-ref> <as-clause>? %";"
+
+<crate-ref> ::= %IDENTIFIER
+              | %"self"
+
+<as-clause> ::= %"as" %IDENTIFIER
+              | %"as" %"_"
+
+# ============================================================================
+# Use declarations
+# ============================================================================
+
+<use-decl> @nospace($2) ::= %"use" <use-tree> %";"
+
+<use-tree> ::= <simple-path>? %"::" %"*"
+             | <simple-path>? %"::" %"{" <use-tree-list>? %"}"
+             | <simple-path> <as-clause>?
+
+<use-tree-list> ::= <use-tree> (%"," <use-tree>)* %","?
+
+# ============================================================================
+# Functions
+# ============================================================================
+
+<function> @nospace($6) @nospace($7) @nospace($8) @nospace($9) ::= %"const"? %"async"? <unsafe-kw>? <extern-abi>? %"fn" %IDENTIFIER <generic-params>? %"(" <function-params>? %")" <function-return-type>? <where-clause>? (<block-expr> | %";")
+
+
+<extern-abi> ::= %"extern" %STRING?
+
+<function-params> ::= <self-param> (%"," <function-param>)* %","?
+                    | <function-param> (%"," <function-param>)* %","?
+
+<self-param> ::= <outer-attr>* <short-self>
+               | <outer-attr>* <typed-self>
+
+# &self, &mut self, self, mut self
+<short-self> ::= (%"&" %LIFETIME?)? %"mut"? %"self"
+
+# self: Type
+<typed-self> ::= %"mut"? %"self" %":" <type>
+
+<function-param> ::= <outer-attr>* <function-param-pattern>
+                   | <outer-attr>* <type>
+                   | <outer-attr>* %"..."
+
+<function-param-pattern> ::= <pattern> %":" <type>
+
+<function-return-type> ::= %"->" <type>
+
+# ============================================================================
+# Type aliases
+# ============================================================================
+
+<type-alias> ::= %"type" %IDENTIFIER <generic-params>? <where-clause>? (%"=" <type>)? %";"
+
+# ============================================================================
+# Structs
+# ============================================================================
+
+<struct> ::= <struct-struct>
+           | <tuple-struct>
+
+# Named-field struct: struct Foo { x: i32, y: i32 }
+# Unit struct: struct Foo;
+<struct-struct> ::= %"struct" %IDENTIFIER <generic-params>? <where-clause>? (%"{" <struct-fields>? %"}" | %";")
+
+<struct-fields> ::= <struct-field> (%"," <struct-field>)* %","?
+
+<struct-field> ::= <outer-attr>* <visibility>? %IDENTIFIER %":" <type>
+
+# Tuple struct: struct Foo(i32, i32);
+<tuple-struct> ::= %"struct" %IDENTIFIER <generic-params>? %"(" <tuple-fields>? %")" <where-clause>? %";"
+
+<tuple-fields> ::= <tuple-field> (%"," <tuple-field>)* %","?
+
+<tuple-field> ::= <outer-attr>* <visibility>? <type>
+
+# ============================================================================
+# Enums
+# ============================================================================
+
+<enum> ::= %"enum" %IDENTIFIER <generic-params>? <where-clause>? %"{" <enum-variants>? %"}"
+
+<enum-variants> ::= <enum-variant> (%"," <enum-variant>)* %","?
+
+<enum-variant> ::= <outer-attr>* <visibility>? %IDENTIFIER <enum-variant-fields>? <enum-variant-discriminant>?
+
+<enum-variant-fields> ::= %"(" <tuple-fields>? %")"
+                        | %"{" <struct-fields>? %"}"
+
+<enum-variant-discriminant> ::= %"=" <expression>
+
+# ============================================================================
+# Unions
+# ============================================================================
+
+<union> ::= %"union" %IDENTIFIER <generic-params>? <where-clause>? %"{" <struct-fields>? %"}"
+
+# ============================================================================
+# Const items
+# ============================================================================
+
+<const-item> ::= %"const" (%IDENTIFIER | %"_") %":" <type> (%"=" <expression>)? %";"
+
+# ============================================================================
+# Static items
+# ============================================================================
+
+<static-item> ::= %"static" %"mut"? %IDENTIFIER %":" <type> (%"=" <expression>)? %";"
+
+# ============================================================================
+# Traits
+# ============================================================================
+
+<trait-def> ::= <unsafe-kw>? %"trait" %IDENTIFIER <generic-params>? (%":" <type-param-bounds>)? <where-clause>? %"{" <inner-attr>* <trait-item>* %"}"
+
+<trait-item> ::= <outer-attr>* <visibility>? <trait-item-kind>
+
+<trait-item-kind> ::= <trait-fn>
+                    | <trait-type>
+                    | <trait-const>
+                    | <macro-invocation-semi>
+
+# Trait function: fn signature with optional default body.
+<trait-fn> ::= %"const"? %"async"? <unsafe-kw>? <extern-abi>? %"fn" %IDENTIFIER <generic-params>? %"(" <function-params>? %")" <function-return-type>? <where-clause>? (<block-expr> | %";")
+
+# Associated type in trait
+<trait-type> ::= %"type" %IDENTIFIER <generic-params>? (%":" <type-param-bounds>)? <where-clause>? (%"=" <type>)? %";"
+
+# Associated const in trait
+<trait-const> ::= %"const" %IDENTIFIER %":" <type> (%"=" <expression>)? %";"
+
+# ============================================================================
+# Implementations
+# ============================================================================
+
+<impl-block> ::= <unsafe-kw>? %"impl" <generic-params>? <impl-subject> <where-clause>? %"{" <inner-attr>* <impl-item>* %"}"
+
+# Inherent impl: impl Type { ... }
+# Trait impl: impl Trait for Type { ... }
+<impl-subject> ::= %"!"? <path-in-type> %"for" <type>
+                  | <type>
+
+<impl-item> ::= <outer-attr>* <visibility>? <impl-item-kind>
+
+<impl-item-kind> ::= <impl-fn>
+                   | <impl-type>
+                   | <impl-const>
+                   | <macro-invocation-semi>
+
+<impl-fn> ::= %"const"? %"async"? <unsafe-kw>? <extern-abi>? %"fn" %IDENTIFIER <generic-params>? %"(" <function-params>? %")" <function-return-type>? <where-clause>? (<block-expr> | %";")
+
+<impl-type> ::= %"type" %IDENTIFIER <generic-params>? <where-clause>? %"=" <type> %";"
+
+<impl-const> ::= %"const" %IDENTIFIER %":" <type> (%"=" <expression>)? %";"
+
+# ============================================================================
+# Extern blocks
+# ============================================================================
+
+<extern-block> ::= <unsafe-kw>? <extern-abi>? %"{" <inner-attr>* <extern-item>* %"}"
+
+<extern-item> ::= <outer-attr>* <visibility>? <extern-item-kind>
+
+<extern-item-kind> ::= <extern-fn>
+                      | <extern-static>
+                      | <extern-type>
+                      | <macro-invocation-semi>
+
+<extern-fn> ::= %"const"? %"async"? <unsafe-kw>? <extern-abi>? %"fn" %IDENTIFIER <generic-params>? %"(" <extern-fn-params>? %")" <function-return-type>? <where-clause>? %";"
+
+<extern-fn-params> ::= <extern-fn-param> (%"," <extern-fn-param>)* (%"," %"...")? %","?
+                      | %"..."
+
+<extern-fn-param> ::= <outer-attr>* (%IDENTIFIER %":")? <type>
+
+<extern-static> ::= %"static" %"mut"? %IDENTIFIER %":" <type> %";"
+
+<extern-type> ::= %"type" %IDENTIFIER %";"
+
+# ============================================================================
+# Macros
+# ============================================================================
+
+# Macro invocation (expression context): name!(...), name![...], name!{...}
+<macro-invocation> ::= <simple-path> %"!" <delim-token-tree>
+
+# Macro invocation as a statement/item (with semicolon for () and []):
+<macro-invocation-semi> @nospace ::= <simple-path> %"!" %"(" <token-tree>* %")" %";"
+                           | <simple-path> %"!" %"[" <token-tree>* %"]" %";"
+                           | <simple-path> %"!" %"{" <token-tree>* %"}"
+
+# macro_rules! definition
+<macro-rules-def> ::= %"macro_rules" %"!" %IDENTIFIER <macro-rules-body>
+
+<macro-rules-body> ::= %"(" <macro-rules-list> %")" %";"
+                      | %"[" <macro-rules-list> %"]" %";"
+                      | %"{" <macro-rules-list> %"}"
+
+<macro-rules-list> ::= <macro-rule> (%";" <macro-rule>)* %";"?
+
+<macro-rule> ::= <macro-matcher> %"=>" <macro-transcriber>
+
+<macro-matcher> ::= %"(" <macro-match>* %")"
+                  | %"[" <macro-match>* %"]"
+                  | %"{" <macro-match>* %"}"
+
+# Inside a macro matcher, we have tokens, metavariables, and repetitions.
+# This is a simplified representation; the real macro_rules grammar is more
+# complex. We treat it as token trees with $ metavar extensions.
+<macro-match> ::= <token-tree>
+                | %"$" %IDENTIFIER %":" <macro-frag-spec>
+                | %"$" %"(" <macro-match>* %")" <macro-rep-sep>? <macro-rep-op>
+
+<macro-frag-spec> ::= %IDENTIFIER
+# Fragment specifiers: item, block, stmt, pat, pat_param, expr, ty, ident,
+# path, tt, meta, lifetime, vis, literal
+
+<macro-rep-sep> ::= <non-delim-token>
+
+<macro-rep-op> ::= %"*" | %"+" | %"?"
+
+<macro-transcriber> ::= <delim-token-tree>
+
+# ============================================================================
+# Statements
+# ============================================================================
+
+<statement> ::= %";"
+              | <outer-attr>* <let-stmt>
+              | <outer-attr>* <expression-stmt>
+              | <item>
+
+# Let statement: let pattern [: type] [= expr [else { ... }]] ;
+<let-stmt> @nospace($2) @nospace($4) ::= %"let" <pattern> (%":" <type>)? (%"=" <expression> <let-else>?)? %";"
+
+<let-else> ::= %"else" <block-expr>
+
+# Expression statement: expression followed by ; (or a block-like expression
+# that does not need a semicolon).
+<expression-stmt> ::= <expression-without-block> %";"
+                     | <expression-with-block> %";"?
+
+# ============================================================================
+# Expressions
+# ============================================================================
+
+# Rust expressions are divided into those that end with a block (and don't
+# need a semicolon) and those that don't.
+
+<expression> ::= <expression-with-block>
+               | <expression-without-block>
+
+# ============================================================================
+# Expressions without block
+# ============================================================================
+
+<expression-without-block> ::= <outer-attr>* <expr-without-block-kind>
+
+<expr-without-block-kind> ::= <assign-expr>
+
+# ============================================================================
+# Operator precedence (lowest to highest)
+# ============================================================================
+#
+#  1.  =, +=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>= (right-assoc, assignment)
+#  2.  ..  ..=                (range, special)
+#  3.  ||                     (left-assoc, lazy or)
+#  4.  &&                     (left-assoc, lazy and)
+#  5.  ==  !=  <  >  <=  >=  (comparison, non-assoc/chainable)
+#  6.  |                      (left-assoc, bitwise or)
+#  7.  ^                      (left-assoc, bitwise xor)
+#  8.  &                      (left-assoc, bitwise and)
+#  9.  <<  >>                 (left-assoc, shift)
+# 10.  +  -                   (left-assoc, additive)
+# 11.  *  /  %                (left-assoc, multiplicative)
+# 12.  as  :                  (left-assoc, type cast / ascription)
+# 13.  unary: -  !  *  &  &mut  (prefix)
+# 14.  ?                      (postfix, try)
+# 15.  postfix: call, index, field, method call, await
+# 16.  primary: literals, paths, grouped, array, tuple, struct, closures, etc.
+
+# Level 1: Assignment (right-associative)
+<assign-expr> ::= <range-expr> <assign-op> <assign-expr>
+                | <range-expr>
+
+<assign-op> ::= %"=" | %"+=" | %"-=" | %"*=" | %"/=" | %"%="
+              | %"&=" | %"|=" | %"^=" | %"<<=" | %">>="
+
+# Level 2: Range expressions
+# Ranges can appear in various forms: .., a.., ..b, a..b, a..=b, ..=b
+<range-expr> ::= <or-expr> %".." <or-expr>
+               | <or-expr> %"..=" <or-expr>
+               | <or-expr> %".."
+               | %".." <or-expr>
+               | %"..=" <or-expr>
+               | %".."
+               | <or-expr>
+
+# Level 3: Logical OR (left-assoc)
+<or-expr> ::= <or-expr> %"||" <and-expr>
+            | <and-expr>
+
+# Level 4: Logical AND (left-assoc)
+<and-expr> ::= <and-expr> %"&&" <comparison-expr>
+             | <comparison-expr>
+
+# Level 5: Comparison (these do not associate in Rust)
+<comparison-expr> ::= <bitor-expr> <comparison-op> <bitor-expr>
+                    | <bitor-expr>
+
+<comparison-op> ::= %"==" | %"!=" | %"<" | %">" | %"<=" | %">="
+
+# Level 6: Bitwise OR (left-assoc)
+<bitor-expr> ::= <bitor-expr> %"|" <bitxor-expr>
+               | <bitxor-expr>
+
+# Level 7: Bitwise XOR (left-assoc)
+<bitxor-expr> ::= <bitxor-expr> %"^" <bitand-expr>
+                | <bitand-expr>
+
+# Level 8: Bitwise AND (left-assoc)
+<bitand-expr> ::= <bitand-expr> %"&" <shift-expr>
+                | <shift-expr>
+
+# Level 9: Shift (left-assoc)
+<shift-expr> ::= <shift-expr> %"<<" <additive-expr>
+               | <shift-expr> %">>" <additive-expr>
+               | <additive-expr>
+
+# Level 10: Additive (left-assoc)
+<additive-expr> ::= <additive-expr> %"+" <multiplicative-expr>
+                   | <additive-expr> %"-" <multiplicative-expr>
+                   | <multiplicative-expr>
+
+# Level 11: Multiplicative (left-assoc)
+<multiplicative-expr> ::= <multiplicative-expr> %"*" <cast-expr>
+                        | <multiplicative-expr> %"/" <cast-expr>
+                        | <multiplicative-expr> %"%" <cast-expr>
+                        | <cast-expr>
+
+# Level 12: Type cast (left-assoc)
+<cast-expr> ::= <cast-expr> %"as" <type-no-bounds>
+              | <unary-expr>
+
+# Level 13: Unary prefix operators
+<unary-expr> ::= %"-" <unary-expr>
+               | %"!" <unary-expr>
+               | %"*" <unary-expr>
+               | %"&" %"mut"? <unary-expr>
+               | %"&" %LIFETIME %"mut"? <unary-expr>
+               | <postfix-expr>
+
+# Level 14-15: Postfix (try ?, method call, field, index, call, await)
+<postfix-expr> ::= <postfix-expr> %"?"
+                 | <postfix-expr> %"." %IDENTIFIER (%"::" <generic-args>)? %"(" <call-args>? %")"
+                 | <postfix-expr> %"." %IDENTIFIER
+                 | <postfix-expr> %"." %INTEGER
+                 | <postfix-expr> %"." %"await"
+                 | <postfix-expr> %"(" <call-args>? %")"
+                 | <postfix-expr> %"[" <expression> %"]"
+                 | <primary-expr>
+
+# Call arguments
+<call-args> ::= <expression> (%"," <expression>)* %","?
+
+# ============================================================================
+# Primary expressions
+# ============================================================================
+
+<primary-expr> ::= <literal-expr>
+                 | <path-expr>
+                 | <grouped-expr>
+                 | <array-expr>
+                 | <tuple-expr>
+                 | <struct-expr>
+                 | <closure-expr>
+                 | <async-block-expr>
+                 | <unsafe-block-expr>
+                 | <underscore-expr>
+                 | <macro-invocation>
+                 | <expression-with-block>
+
+# ============================================================================
+# Literal expressions
+# ============================================================================
+
+<literal-expr> ::= %INTEGER
+                 | %FLOAT
+                 | %STRING
+                 | %RAW_STRING
+                 | %BYTE_STRING
+                 | %RAW_BYTE_STRING
+                 | %CHAR
+                 | %BYTE_LIT
+                 | %"true"
+                 | %"false"
+
+# ============================================================================
+# Path expressions
+# ============================================================================
+
+<path-expr> ::= <path-in-expr>
+              | <qualified-path-in-expr>
+
+# ============================================================================
+# Grouped expression
+# ============================================================================
+
+<grouped-expr> ::= %"(" <expression> %")"
+
+# ============================================================================
+# Array expressions
+# ============================================================================
+
+<array-expr> ::= %"[" <array-elements>? %"]"
+
+<array-elements> ::= <expression> (%"," <expression>)* %","?
+                   | <expression> %";" <expression>
+
+# ============================================================================
+# Tuple expressions
+# ============================================================================
+
+# () is the unit tuple; (expr,) is a one-element tuple; (a, b, ...) is multi.
+<tuple-expr> ::= %"(" %")"
+               | %"(" <expression> %"," %")"
+               | %"(" <expression> (%"," <expression>)+ %","? %")"
+
+# ============================================================================
+# Struct expressions
+# ============================================================================
+
+<struct-expr> ::= <struct-expr-path> %"{" <struct-expr-fields>? %"}"
+
+<struct-expr-path> ::= <path-in-expr>
+
+<struct-expr-fields> ::= <struct-expr-field> (%"," <struct-expr-field>)* (%"," <struct-base>)? %","?
+                       | <struct-base>
+
+<struct-expr-field> ::= <outer-attr>* (<struct-field-name> %":" <expression> | %IDENTIFIER)
+
+<struct-field-name> ::= %IDENTIFIER | %INTEGER
+
+<struct-base> ::= %".." <expression>
+
+# ============================================================================
+# Closure expressions
+# ============================================================================
+
+<closure-expr> ::= %"move"? %"|" <closure-params>? %"|" (<function-return-type> <block-expr> | <expression>)
+
+# Also handle || with no space as a single token
+<closure-expr> ::= %"move"? %"||" (<function-return-type> <block-expr> | <expression>)
+
+<closure-params> ::= <closure-param> (%"," <closure-param>)* %","?
+
+<closure-param> ::= <outer-attr>* <pattern> (%":" <type>)?
+
+# ============================================================================
+# Async block expression
+# ============================================================================
+
+<async-block-expr> ::= %"async" %"move"? <block-expr>
+
+# ============================================================================
+# Unsafe block expression
+# ============================================================================
+
+<unsafe-block-expr> ::= %"unsafe" <block-expr>
+
+# ============================================================================
+# Underscore expression
+# ============================================================================
+
+<underscore-expr> ::= %"_"
+
+# ============================================================================
+# Expressions with block (don't require trailing semicolon as statements)
+# ============================================================================
+
+<expression-with-block> ::= <outer-attr>* <expr-with-block-kind>
+
+<expr-with-block-kind> ::= <block-expr>
+                          | <if-expr>
+                          | <if-let-expr>
+                          | <match-expr>
+                          | <loop-expr>
+                          | <while-expr>
+                          | <while-let-expr>
+                          | <for-expr>
+                          | <labeled-block-expr>
+
+# ============================================================================
+# Block expression
+# ============================================================================
+
+<block-expr> @hardline($2) @indent($2) @hardline($3) ::= %"{" <inner-attr>* <statements>? %"}"
+
+<statements> @hardline ::= <statement>+ <expression>?
+               | <expression>
+
+# ============================================================================
+# If expressions
+# ============================================================================
+
+<if-expr> ::= %"if" <expression> <block-expr> <else-tail>?
+
+<else-tail> ::= %"else" <block-expr>
+              | %"else" <if-expr>
+              | %"else" <if-let-expr>
+
+# ============================================================================
+# If let expressions
+# ============================================================================
+
+<if-let-expr> ::= %"if" %"let" <pattern> %"=" <expression> <block-expr> <else-tail>?
+
+# ============================================================================
+# Match expressions
+# ============================================================================
+
+<match-expr> ::= %"match" <expression> %"{" <inner-attr>* <match-arms>? %"}"
+
+<match-arms> ::= <match-arm>* <outer-attr>* <pattern> <match-guard>? %"=>" <expression> %","?
+
+<match-arm> ::= <outer-attr>* <pattern> <match-guard>? %"=>" (<expression-without-block> %"," | <expression-with-block> %","?)
+
+<match-guard> ::= %"if" <expression>
+
+# ============================================================================
+# Loop expressions
+# ============================================================================
+
+# Infinite loop
+<loop-expr> ::= %LIFETIME? %"loop" <block-expr>
+
+# While loop
+<while-expr> ::= %LIFETIME? %"while" <expression> <block-expr>
+
+# While let loop
+<while-let-expr> ::= %LIFETIME? %"while" %"let" <pattern> %"=" <expression> <block-expr>
+
+# For loop
+<for-expr> ::= %LIFETIME? %"for" <pattern> %"in" <expression> <block-expr>
+
+# Labeled block
+<labeled-block-expr> ::= %LIFETIME <block-expr>
+
+# ============================================================================
+# Break, continue, return, yield
+# ============================================================================
+
+# These are prefix expressions that can appear in expression position.
+# We handle them inside expression-without-block to avoid ambiguity.
+# But they are also valid as expression-without-block kinds.
+
+# We add break/continue/return/yield as primary-expr alternatives via
+# a separate production that the parser will try.
+
+<primary-expr> ::= <return-expr>
+                 | <break-expr>
+                 | <continue-expr>
+                 | <yield-expr>
+
+<return-expr> ::= %"return" <expression>?
+
+<break-expr> ::= %"break" %LIFETIME? <expression>?
+
+<continue-expr> ::= %"continue" %LIFETIME?
+
+<yield-expr> ::= %"yield" <expression>?
+
+# ============================================================================
+# Patterns
+# ============================================================================
+
+# A pattern is used in let bindings, match arms, function parameters, etc.
+<pattern> ::= <pattern-no-top-alt> (%"|" <pattern-no-top-alt>)*
+
+<pattern-no-top-alt> ::= <pattern-without-range>
+                        | <range-pattern>
+
+<pattern-without-range> ::= <literal-pattern>
+                           | <identifier-pattern>
+                           | <wildcard-pattern>
+                           | <rest-pattern>
+                           | <ref-pattern>
+                           | <struct-pattern>
+                           | <tuple-struct-pattern>
+                           | <tuple-pattern>
+                           | <grouped-pattern>
+                           | <slice-pattern>
+                           | <path-pattern>
+                           | <macro-invocation>
+
+# ============================================================================
+# Literal pattern
+# ============================================================================
+
+<literal-pattern> ::= %"true"
+                    | %"false"
+                    | %CHAR
+                    | %BYTE_LIT
+                    | %STRING
+                    | %RAW_STRING
+                    | %BYTE_STRING
+                    | %RAW_BYTE_STRING
+                    | %INTEGER
+                    | %FLOAT
+                    | %"-" %INTEGER
+                    | %"-" %FLOAT
+
+# ============================================================================
+# Identifier pattern
+# ============================================================================
+
+# Optionally ref, mut, and an optional binding with @
+<identifier-pattern> ::= %"ref"? %"mut"? %IDENTIFIER (%"@" <pattern>)?
+
+# ============================================================================
+# Wildcard pattern
+# ============================================================================
+
+<wildcard-pattern> ::= %"_"
+
+# ============================================================================
+# Rest pattern
+# ============================================================================
+
+<rest-pattern> ::= %".."
+
+# ============================================================================
+# Reference pattern
+# ============================================================================
+
+<ref-pattern> ::= %"&" %"mut"? <pattern-no-top-alt>
+
+# ============================================================================
+# Struct pattern
+# ============================================================================
+
+<struct-pattern> ::= <path-in-expr> %"{" <struct-pattern-fields>? %"}"
+
+<struct-pattern-fields> ::= <struct-pattern-field> (%"," <struct-pattern-field>)* (%"," <struct-pattern-et-cetera>)? %","?
+                          | <struct-pattern-et-cetera>
+
+<struct-pattern-field> ::= <outer-attr>* (<struct-pattern-field-inner>)
+
+<struct-pattern-field-inner> ::= %INTEGER %":" <pattern>
+                               | %IDENTIFIER %":" <pattern>
+                               | %"ref"? %"mut"? %IDENTIFIER
+
+<struct-pattern-et-cetera> ::= <outer-attr>* %".."
+
+# ============================================================================
+# Tuple struct pattern
+# ============================================================================
+
+<tuple-struct-pattern> ::= <path-in-expr> %"(" <tuple-struct-items>? %")"
+
+<tuple-struct-items> ::= <pattern> (%"," <pattern>)* %","?
+
+# ============================================================================
+# Tuple pattern
+# ============================================================================
+
+<tuple-pattern> ::= %"(" <tuple-pattern-items>? %")"
+
+<tuple-pattern-items> ::= <pattern> %","
+                        | <pattern> (%"," <pattern>)+ %","?
+                        | <rest-pattern>
+
+# ============================================================================
+# Grouped pattern
+# ============================================================================
+
+<grouped-pattern> ::= %"(" <pattern> %")"
+
+# ============================================================================
+# Slice pattern
+# ============================================================================
+
+<slice-pattern> ::= %"[" <slice-pattern-items>? %"]"
+
+<slice-pattern-items> ::= <pattern> (%"," <pattern>)* %","?
+
+# ============================================================================
+# Path pattern
+# ============================================================================
+
+<path-pattern> ::= <path-in-expr>
+                 | <qualified-path-in-expr>
+
+# ============================================================================
+# Range pattern
+# ============================================================================
+
+<range-pattern> ::= <range-pattern-bound> %"..=" <range-pattern-bound>
+                  | <range-pattern-bound> %"..."  <range-pattern-bound>
+                  | <range-pattern-bound> %".."
+
+<range-pattern-bound> ::= <literal-pattern>
+                        | <path-in-expr>
+                        | <qualified-path-in-expr>
+
+# ============================================================================
+# Types
+# ============================================================================
+
+<type> ::= <type-no-bounds>
+          | <impl-trait-type>
+          | <trait-object-type>
+
+# Types that do not include bare trait bounds (used after `as` in casts, etc.)
+<type-no-bounds> ::= <paren-type>
+                   | <impl-trait-type-one-bound>
+                   | <trait-object-type-one-bound>
+                   | <path-type>
+                   | <tuple-type>
+                   | <never-type>
+                   | <raw-pointer-type>
+                   | <reference-type>
+                   | <array-type>
+                   | <slice-type>
+                   | <inferred-type>
+                   | <qualified-path-in-type>
+                   | <bare-function-type>
+                   | <macro-invocation>
+
+# ============================================================================
+# Parenthesized type
+# ============================================================================
+
+<paren-type> ::= %"(" <type> %")"
+
+# ============================================================================
+# Impl trait type
+# ============================================================================
+
+<impl-trait-type> ::= %"impl" <type-param-bounds>
+
+<impl-trait-type-one-bound> ::= %"impl" <trait-bound>
+
+# ============================================================================
+# Trait object type
+# ============================================================================
+
+<trait-object-type> ::= %"dyn"? <type-param-bounds>
+
+<trait-object-type-one-bound> ::= %"dyn"? <trait-bound>
+
+# ============================================================================
+# Path type
+# ============================================================================
+
+<path-type> ::= <path-in-type>
+
+# ============================================================================
+# Tuple type
+# ============================================================================
+
+# () is unit, (T,) is one-element tuple, (T, U) is multi-element.
+<tuple-type> ::= %"(" %")"
+               | %"(" <type> %"," %")"
+               | %"(" <type> (%"," <type>)+ %","? %")"
+
+# ============================================================================
+# Never type
+# ============================================================================
+
+<never-type> ::= %"!"
+
+# ============================================================================
+# Raw pointer types
+# ============================================================================
+
+<raw-pointer-type> ::= %"*" %"const" <type-no-bounds>
+                      | %"*" %"mut" <type-no-bounds>
+
+# ============================================================================
+# Reference type
+# ============================================================================
+
+<reference-type> ::= %"&" %LIFETIME? %"mut"? <type-no-bounds>
+
+# ============================================================================
+# Array type
+# ============================================================================
+
+<array-type> ::= %"[" <type> %";" <expression> %"]"
+
+# ============================================================================
+# Slice type
+# ============================================================================
+
+<slice-type> ::= %"[" <type> %"]"
+
+# ============================================================================
+# Inferred type
+# ============================================================================
+
+<inferred-type> ::= %"_"
+
+# ============================================================================
+# Bare function type
+# ============================================================================
+
+<bare-function-type> ::= <for-lifetimes>? <unsafe-kw>? <extern-abi>? %"fn" %"(" <bare-fn-params>? %")" <bare-function-return-type>?
+
+
+<bare-fn-params> ::= <bare-fn-param> (%"," <bare-fn-param>)* (%"," %"...")? %","?
+                   | %"..."
+
+<bare-fn-param> ::= <outer-attr>* (%IDENTIFIER %":")? <type>
+                  | <outer-attr>* (%"_" %":")? <type>
+                  | <outer-attr>* %"mut" %IDENTIFIER %":" <type>
+
+<bare-function-return-type> ::= %"->" <type-no-bounds>

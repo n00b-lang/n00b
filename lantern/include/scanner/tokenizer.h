@@ -1,0 +1,24 @@
+#pragma once
+
+#include "scanner/scanner.h"
+#include "parse/grammar.h"
+
+#define SCAN_TOKENIZER_DEFAULT "text"
+
+void          scan_tokenizers_register_builtin(void);
+
+bool          scan_tokenizer_register(core_string_t name, parse_scan_cb_t fn);
+parse_scan_cb_t scan_tokenizer_for(core_string_t name);
+size_t        scan_tokenizer_count(void);
+core_string_t  scan_tokenizer_name_at(size_t i);
+
+void         scan_grammar_set_tokenizer(parse_grammar_t *g, core_string_t name);
+core_string_t scan_grammar_tokenizer(parse_grammar_t *g);
+
+parse_scan_cb_t scan_grammar_tokenizer_fn(parse_grammar_t *g);
+
+parse_token_stream_t *scan_tokenize(parse_grammar_t  *g,
+                                 const char     *src,
+                                 size_t          len,
+                                 core_buffer_t  **buf_out,
+                                 parse_scanner_t **sc_out);

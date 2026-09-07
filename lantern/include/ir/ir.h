@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "typehash.h"
+#include "th/typehash.h"
 
 #define IR_VAR_ARITY UINT32_MAX
 
@@ -206,6 +206,7 @@ typedef struct {
     ir_annot_t *a;
     uint32_t    n;
     uint32_t    cap;
+    void       *index;
 } ir_annots_t;
 
 bool        ir_annot_set(ir_ctx_t *ctx, ir_annots_t *m, ir_annot_t a);

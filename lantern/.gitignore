@@ -4,7 +4,6 @@ subprojects/*/
 !subprojects/*.wrap
 
 local/
-test/produced-codes-*.txt
 
 .cache/
 compile_commands.json
@@ -20,3 +19,8 @@ __pycache__/
 .DS_Store
 *.profraw
 *.profdata
+
+produced-codes-*.txt
+ir_cli_test_module.ir
+ANNOTATIONS.md
+PLAN.md

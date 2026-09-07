@@ -1,0 +1,629 @@
+@lex-comment("//")
+@lex-comment("/*", "*/")
+@lex-string('"', '"', escape('\\'), as("STRING"))
+@lex-string("`", "`", raw, multiline, as("STRING"))
+@lex-string("'", "'", escape('\\'), as("RUNE"))
+@lex-number(radix("0x", "0123456789abcdefABCDEF"), radix("0b", "01"), radix("0o", "01234567"), sep("_"), exp("eE"), int("INTEGER"), float("FLOAT"), suffix("i", "IMAGINARY"))
+@lex-ident(as("IDENTIFIER"))
+@lex-layout(brackets("()[]"), terminator(";", "break continue fallthrough return ++ --"))
+
+# Go Language Grammar
+# Based on the Go Programming Language Specification (go1.26)
+# https://go.dev/ref/spec
+#
+# This is a SYNTACTIC grammar. Lexical details (how tokens are formed)
+# are handled by the lexer. Semicolons are inserted automatically by the
+# lexer per Go's semicolon rules.
+#
+# Lexer-provided token types:
+#   %IDENTIFIER   - identifiers (letter { letter | unicode_digit })
+#   %INTEGER      - integer literals (decimal, binary, octal, hex)
+#   %FLOAT        - floating-point literals
+#   %IMAGINARY    - imaginary literals (e.g. 3.14i, 2i)
+#   %RUNE         - rune (character) literals (e.g. 'a', '\n')
+#   %STRING       - string literals (raw `...` and interpreted "...")
+#
+# Keywords are written as %"keyword".
+# Operators and punctuation are written as %"op".
+
+# ============================================================================
+# Source file structure
+# ============================================================================
+
+<source-file> @nospace @blankline($2) @blankline($3) ::= <package-clause> %";" (<import-decl> %";")* (<top-level-decl> %";")*
+
+<package-clause> ::= %"package" <package-name>
+
+<package-name> ::= %IDENTIFIER
+
+# ============================================================================
+# Import declarations
+# ============================================================================
+
+<import-decl> ::= %"import" <import-spec>
+                 | %"import" %"(" (<import-spec> %";")* %")"
+
+<import-spec> ::= <import-name>? <import-path>
+
+<import-name> ::= %"." | <package-name>
+
+<import-path> ::= %STRING
+
+# ============================================================================
+# Top-level declarations
+# ============================================================================
+
+<top-level-decl> ::= <declaration>
+                    | <function-decl>
+                    | <method-decl>
+
+<declaration> ::= <const-decl>
+                 | <type-decl>
+                 | <var-decl>
+
+# ============================================================================
+# Constant declarations
+# ============================================================================
+
+<const-decl> ::= %"const" <const-spec>
+                | %"const" %"(" (<const-spec> %";")* %")"
+
+<const-spec> ::= <identifier-list> (<type>? %"=" <expression-list>)?
+
+# ============================================================================
+# Type declarations
+# ============================================================================
+
+<type-decl> ::= %"type" <type-spec>
+               | %"type" %"(" (<type-spec> %";")* %")"
+
+<type-spec> ::= <alias-decl>
+               | <type-def>
+
+<alias-decl> ::= %IDENTIFIER <type-parameters>? %"=" <type>
+
+<type-def> ::= %IDENTIFIER <type-parameters>? <type>
+
+# ============================================================================
+# Variable declarations
+# ============================================================================
+
+<var-decl> ::= %"var" <var-spec>
+              | %"var" %"(" (<var-spec> %";")* %")"
+
+<var-spec> ::= <identifier-list> <type> (%"=" <expression-list>)?
+              | <identifier-list> %"=" <expression-list>
+
+# ============================================================================
+# Function declarations
+# ============================================================================
+
+<function-decl> @nospace($2) @nospace($3) ::= %"func" <function-name> <type-parameters>? <signature> <function-body>?
+
+<function-name> ::= %IDENTIFIER
+
+<function-body> ::= <block>
+
+# ============================================================================
+# Method declarations
+# ============================================================================
+
+<method-decl> @nospace($3) ::= %"func" <receiver> <method-name> <signature> <function-body>?
+
+<receiver> ::= <parameters>
+
+<method-name> ::= %IDENTIFIER
+
+# ============================================================================
+# Type parameters (Go 1.18+ generics)
+# ============================================================================
+
+<type-parameters> ::= %"[" <type-param-list> %","? %"]"
+
+<type-param-list> ::= <type-param-decl> (%"," <type-param-decl>)*
+
+<type-param-decl> ::= <identifier-list> <type-constraint>
+
+<type-constraint> ::= <type-elem>
+
+# ============================================================================
+# Common lists
+# ============================================================================
+
+<identifier-list> ::= %IDENTIFIER (%"," %IDENTIFIER)*
+
+<expression-list> ::= <expression> (%"," <expression>)*
+
+# ============================================================================
+# Types
+# ============================================================================
+
+<type> ::= <type-name> <type-args>?
+           | <type-lit>
+           | %"(" <type> %")"
+
+<type-name> ::= %IDENTIFIER
+               | <qualified-ident>
+
+<qualified-ident> ::= <package-name> %"." %IDENTIFIER
+
+<type-args> ::= %"[" <type-list> %","? %"]"
+
+<type-list> ::= <type> (%"," <type>)*
+
+<type-lit> ::= <array-type>
+              | <struct-type>
+              | <pointer-type>
+              | <function-type>
+              | <interface-type>
+              | <slice-type>
+              | <map-type>
+              | <channel-type>
+
+# ============================================================================
+# Array types
+# ============================================================================
+
+<array-type> ::= %"[" <array-length> %"]" <element-type>
+
+<array-length> ::= <expression>
+
+<element-type> ::= <type>
+
+# ============================================================================
+# Slice types
+# ============================================================================
+
+<slice-type> ::= %"[" %"]" <element-type>
+
+# ============================================================================
+# Struct types
+# ============================================================================
+
+<struct-type> ::= %"struct" %"{" (<field-decl> %";")* %"}"
+
+<field-decl> ::= (<identifier-list> <type> | <embedded-field>) <tag>?
+
+<embedded-field> ::= %"*"? <type-name> <type-args>?
+
+<tag> ::= %STRING
+
+# ============================================================================
+# Pointer types
+# ============================================================================
+
+<pointer-type> ::= %"*" <base-type>
+
+<base-type> ::= <type>
+
+# ============================================================================
+# Function types
+# ============================================================================
+
+<function-type> @nospace($1) ::= %"func" <signature>
+
+<signature> ::= <parameters> <result>?
+
+<result> ::= <parameters>
+            | <type>
+
+<parameters> @nospace ::= %"(" <parameter-list>? %","? %")"
+
+<parameter-list> @nospace($1) ::= <parameter-decl> (%"," <parameter-decl>)*
+
+<parameter-decl> ::= <identifier-list>? %"..."? <type>
+
+# ============================================================================
+# Interface types
+# ============================================================================
+
+<interface-type> ::= %"interface" %"{" (<interface-elem> %";")* %"}"
+
+<interface-elem> ::= <method-elem>
+                    | <type-elem>
+
+<method-elem> @nospace($1) ::= <method-name> <signature>
+
+<type-elem> ::= <type-term> (%"|" <type-term>)*
+
+<type-term> ::= <type>
+               | <underlying-type>
+
+<underlying-type> ::= %"~" <type>
+
+# ============================================================================
+# Map types
+# ============================================================================
+
+<map-type> ::= %"map" %"[" <key-type> %"]" <element-type>
+
+<key-type> ::= <type>
+
+# ============================================================================
+# Channel types
+# ============================================================================
+
+<channel-type> ::= %"chan" %"<-" <element-type>
+                  | %"<-" %"chan" <element-type>
+                  | %"chan" <element-type>
+
+# ============================================================================
+# Blocks
+# ============================================================================
+
+<block> @hardline($1) @indent($1) @hardline($2) ::= %"{" <statement-list> %"}"
+
+<statement-list> @nospace @hardline($0) ::= (<statement>? %";")*
+
+# ============================================================================
+# Statements
+# ============================================================================
+
+<statement> ::= <declaration>
+               | <labeled-stmt>
+               | <simple-stmt>
+               | <go-stmt>
+               | <return-stmt>
+               | <break-stmt>
+               | <continue-stmt>
+               | <goto-stmt>
+               | <fallthrough-stmt>
+               | <block>
+               | <if-stmt>
+               | <switch-stmt>
+               | <select-stmt>
+               | <for-stmt>
+               | <defer-stmt>
+
+# ============================================================================
+# Simple statements
+# ============================================================================
+
+<simple-stmt> ::= <send-stmt>
+                  | <inc-dec-stmt>
+                  | <assignment>
+                  | <short-var-decl>
+                  | <expression-stmt>
+
+<expression-stmt> ::= <expression>
+
+# ============================================================================
+# Send statement
+# ============================================================================
+
+<send-stmt> ::= <channel> %"<-" <expression>
+
+<channel> ::= <expression>
+
+# ============================================================================
+# Inc/dec statements
+# ============================================================================
+
+<inc-dec-stmt> ::= <expression> %"++"
+                  | <expression> %"--"
+
+# ============================================================================
+# Assignment
+# ============================================================================
+
+<assignment> ::= <expression-list> <assign-op> <expression-list>
+
+<assign-op> ::= %"="
+               | %"+="
+               | %"-="
+               | %"*="
+               | %"/="
+               | %"%="
+               | %"&="
+               | %"|="
+               | %"^="
+               | %"<<="
+               | %">>="
+               | %"&^="
+
+# ============================================================================
+# Short variable declaration
+# ============================================================================
+
+<short-var-decl> ::= <identifier-list> %":=" <expression-list>
+
+# ============================================================================
+# Labeled statement
+# ============================================================================
+
+<labeled-stmt> ::= <label> %":" <statement>
+
+<label> ::= %IDENTIFIER
+
+# ============================================================================
+# Go statement (goroutine)
+# ============================================================================
+
+<go-stmt> ::= %"go" <expression>
+
+# ============================================================================
+# Return statement
+# ============================================================================
+
+<return-stmt> ::= %"return" <expression-list>?
+
+# ============================================================================
+# Break / continue / goto / fallthrough
+# ============================================================================
+
+<break-stmt> ::= %"break" <label>?
+
+<continue-stmt> ::= %"continue" <label>?
+
+<goto-stmt> ::= %"goto" <label>
+
+<fallthrough-stmt> ::= %"fallthrough"
+
+# ============================================================================
+# Defer statement
+# ============================================================================
+
+<defer-stmt> ::= %"defer" <expression>
+
+# ============================================================================
+# If statement
+# ============================================================================
+
+<if-stmt> ::= %"if" (<simple-stmt> %";")? <expression> <block> (%"else" (<if-stmt> | <block>))?
+             | %"if" <expression> <block> (%"else" (<if-stmt> | <block>))?
+
+# ============================================================================
+# Switch statements
+# ============================================================================
+
+<switch-stmt> ::= <expr-switch-stmt>
+                  | <type-switch-stmt>
+
+# --- Expression switch ---
+
+<expr-switch-stmt> ::= %"switch" (<simple-stmt> %";")? <expression>? %"{" <expr-case-clause>* %"}"
+                       | %"switch" <expression>? %"{" <expr-case-clause>* %"}"
+
+<expr-case-clause> ::= <expr-switch-case> %":" <statement-list>
+
+<expr-switch-case> ::= %"case" <expression-list>
+                       | %"default"
+
+# --- Type switch ---
+
+<type-switch-stmt> ::= %"switch" (<simple-stmt> %";")? <type-switch-guard> %"{" <type-case-clause>* %"}"
+                       | %"switch" <type-switch-guard> %"{" <type-case-clause>* %"}"
+
+<type-switch-guard> ::= %IDENTIFIER %":=" <primary-expr> %"." %"(" %"type" %")"
+                        | <primary-expr> %"." %"(" %"type" %")"
+
+<type-case-clause> ::= <type-switch-case> %":" <statement-list>
+
+<type-switch-case> ::= %"case" <type-list>
+                       | %"default"
+
+# ============================================================================
+# Select statement
+# ============================================================================
+
+<select-stmt> ::= %"select" %"{" <comm-clause>* %"}"
+
+<comm-clause> ::= <comm-case> %":" <statement-list>
+
+<comm-case> ::= %"case" <send-stmt>
+               | %"case" <recv-stmt>
+               | %"default"
+
+<recv-stmt> ::= <expression-list> %"=" <recv-expr>
+               | <identifier-list> %":=" <recv-expr>
+               | <recv-expr>
+
+<recv-expr> ::= <expression>
+
+# ============================================================================
+# For statement
+# ============================================================================
+
+<for-stmt> ::= %"for" <block>
+              | %"for" <condition> <block>
+              | %"for" <for-clause> <block>
+              | %"for" <range-clause> <block>
+
+<condition> ::= <expression>
+
+<for-clause> ::= <init-stmt>? %";" <condition>? %";" <post-stmt>?
+
+<init-stmt> ::= <simple-stmt>
+
+<post-stmt> ::= <simple-stmt>
+
+<range-clause> ::= <expression-list> %"=" %"range" <expression>
+                  | <identifier-list> %":=" %"range" <expression>
+                  | %"range" <expression>
+
+# ============================================================================
+# Expressions
+# ============================================================================
+#
+# Operator precedence (highest to lowest):
+#   5:  *  /  %  <<  >>  &  &^
+#   4:  +  -  |  ^
+#   3:  ==  !=  <  <=  >  >=
+#   2:  &&
+#   1:  ||
+#
+# We encode precedence via a chain of non-terminals.
+
+<expression> ::= <logical-or-expr>
+
+<logical-or-expr> ::= <logical-or-expr> %"||" <logical-and-expr>
+                     | <logical-and-expr>
+
+<logical-and-expr> ::= <logical-and-expr> %"&&" <comparison-expr>
+                      | <comparison-expr>
+
+<comparison-expr> ::= <comparison-expr> <rel-op> <addition-expr>
+                     | <addition-expr>
+
+<rel-op> ::= %"=="
+            | %"!="
+            | %"<"
+            | %"<="
+            | %">"
+            | %">="
+
+<addition-expr> ::= <addition-expr> <add-op> <multiplication-expr>
+                    | <multiplication-expr>
+
+<add-op> ::= %"+"
+            | %"-"
+            | %"|"
+            | %"^"
+
+<multiplication-expr> ::= <multiplication-expr> <mul-op> <unary-expr>
+                          | <unary-expr>
+
+<mul-op> ::= %"*"
+            | %"/"
+            | %"%"
+            | %"<<"
+            | %">>"
+            | %"&"
+            | %"&^"
+
+# ============================================================================
+# Unary expressions
+# ============================================================================
+
+<unary-expr> ::= <primary-expr>
+                | <unary-op> <unary-expr>
+
+<unary-op> ::= %"+"
+              | %"-"
+              | %"!"
+              | %"^"
+              | %"*"
+              | %"&"
+              | %"<-"
+
+# ============================================================================
+# Primary expressions
+# ============================================================================
+#
+# PrimaryExpr is left-recursive: a primary expression can be followed
+# by selector, index, slice, type assertion, or call operations.
+
+<primary-expr> @nospace($1) ::= <operand>
+                  | <conversion>
+                  | <method-expr>
+                  | <primary-expr> <selector>
+                  | <primary-expr> <index>
+                  | <primary-expr> <slice>
+                  | <primary-expr> <type-assertion>
+                  | <primary-expr> <arguments>
+
+# ============================================================================
+# Operands
+# ============================================================================
+
+<operand> ::= <literal>
+             | <operand-name> <type-args>?
+             | %"(" <expression> %")"
+
+<operand-name> ::= %IDENTIFIER
+                  | <qualified-ident>
+
+<literal> ::= <basic-lit>
+             | <composite-lit>
+             | <function-lit>
+
+<basic-lit> ::= %INTEGER
+               | %FLOAT
+               | %IMAGINARY
+               | %RUNE
+               | %STRING
+
+# ============================================================================
+# Composite literals
+# ============================================================================
+
+<composite-lit> ::= <literal-type> <literal-value>
+
+<literal-type> ::= <struct-type>
+                  | <array-type>
+                  | %"[" %"..." %"]" <element-type>
+                  | <slice-type>
+                  | <map-type>
+                  | <type-name> <type-args>?
+
+<literal-value> ::= %"{" (<element-list> %","?)? %"}"
+
+<element-list> ::= <keyed-element> (%"," <keyed-element>)*
+
+<keyed-element> ::= (<key> %":")? <element>
+
+<key> ::= <field-name>
+          | <expression>
+          | <literal-value>
+
+<field-name> ::= %IDENTIFIER
+
+<element> ::= <expression>
+             | <literal-value>
+
+# ============================================================================
+# Function literals
+# ============================================================================
+
+<function-lit> @nospace($1) ::= %"func" <signature> <function-body>
+
+# ============================================================================
+# Selectors
+# ============================================================================
+
+<selector> @nospace ::= %"." %IDENTIFIER
+
+# ============================================================================
+# Index expressions
+# ============================================================================
+
+<index> ::= %"[" <expression> %"]"
+
+# ============================================================================
+# Slice expressions
+# ============================================================================
+#
+# Simple slice:       a[low : high]
+# Full (3-index):     a[low : high : max]
+
+<slice> ::= %"[" <expression>? %":" <expression>? %"]"
+           | %"[" <expression>? %":" <expression> %":" <expression> %"]"
+
+# ============================================================================
+# Type assertions
+# ============================================================================
+
+<type-assertion> ::= %"." %"(" <type> %")"
+
+# ============================================================================
+# Call expressions (arguments)
+# ============================================================================
+
+<arguments> @nospace ::= %"(" (<argument-list> %"..."? %","?)? %")"
+
+<argument-list> @nospace($1) ::= <expression> (%"," <expression>)*
+                   | <type> %"," <expression> (%"," <expression>)*
+
+# ============================================================================
+# Method expressions
+# ============================================================================
+
+<method-expr> ::= <receiver-type> %"." <method-name>
+
+<receiver-type> ::= <type>
+
+# ============================================================================
+# Type conversions
+# ============================================================================
+
+<conversion> @nospace ::= <type> %"(" <expression> %","? %")"

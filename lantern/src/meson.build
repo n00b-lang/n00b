@@ -1,75 +1,139 @@
+embed = find_program('python3')
+embed_script = meson.project_source_root() / 'tools' / 'embed_text.py'
+
+annot_bnf_h = custom_target(
+    'annot_bnf.h',
+    input: 'parse/annot.bnf',
+    output: 'annot_bnf.h',
+    command: [embed, embed_script, '@INPUT@', '@OUTPUT@', 'ANNOT_BNF'],
+)
+
+infer_bnf_h = custom_target(
+    'infer_bnf.h',
+    input: 'parse/infer.bnf',
+    output: 'infer_bnf.h',
+    command: [embed, embed_script, '@INPUT@', '@OUTPUT@', 'INFER_BNF'],
+)
+
 typelang_bnf_h = custom_target(
     'typelang_bnf.h',
-    input: '../th/typelang.bnf',
+    input: 'th/typelang.bnf',
     output: 'typelang_bnf.h',
-    command: [
-        find_program('python3'),
-        meson.project_source_root() / 'tools' / 'embed_text.py',
-        '@INPUT@',
-        '@OUTPUT@',
-        'TYPELANG_BNF',
-    ],
+    command: [embed, embed_script, '@INPUT@', '@OUTPUT@', 'TYPELANG_BNF'],
 )
 
 ir_bnf_h = custom_target(
     'ir_bnf.h',
-    input: 'ir.bnf',
+    input: 'ir/ir.bnf',
     output: 'ir_bnf.h',
-    command: [
-        find_program('python3'),
-        meson.project_source_root() / 'tools' / 'embed_text.py',
-        '@INPUT@',
-        '@OUTPUT@',
-        'IR_BNF',
-    ],
+    command: [embed, embed_script, '@INPUT@', '@OUTPUT@', 'IR_BNF'],
+)
+
+ir_generated = [annot_bnf_h, infer_bnf_h, typelang_bnf_h, ir_bnf_h]
+
+th_sources = files(
+    'th/typehash.c',
+    'th/access.c',
+    'th/error.c',
+    'th/infer.c',
+    'th/print.c',
+)
+
+if have_nfc
+    th_sources += files('th/nfc_utf8proc.c')
+endif
+
+lib_sources = files(
+    'lib/cache.c',
+    'lib/hash.c',
+    'lib/string.c',
+)
+
+parse_sources = files(
+    'parse/annot_args.c',
+    'parse/annot_grammar.c',
+    'parse/annot_walk.c',
+    'parse/annotation.c',
+    'parse/bnf.c',
+    'parse/bnf_print.c',
+    'parse/commander.c',
+    'parse/grammar.c',
+    'parse/infer.c',
+    'parse/infer_eval.c',
+    'parse/forest.c',
+    'parse/tree.c',
+    'parse/pwz.c',
+    'parse/rewrite.c',
+    'parse/symtab.c',
+    'parse/token.c',
+    'parse/tree_dump.c',
+    'parse/tree_print.c',
+    'parse/tree_util.c',
+    'parse/tree_visit.c',
+    'parse/unicode_class.c',
+)
+
+scanner_sources = files(
+    'scanner/lex.c',
+    'scanner/lex_build.c',
+    'scanner/scan_builtins.c',
+    'scanner/scanner.c',
+    'scanner/token_stream.c',
+    'scanner/tokenizer.c',
+    'scanner/tokenizers.c',
 )
 
 ir_sources = files(
-    'ir_analyze.c',
-    'ir_annot.c',
-    'ir_cli.c',
-    'ir_ctx.c',
-    'ir_diag.c',
-    'ir_diag_render.c',
-    'ir_func.c',
-    'ir_ops.c',
-    'ir_pass.c',
-    'ir_print.c',
-    'ir_profile.c',
-    'ir_rule.c',
-    'ir_derive.c',
-    'ir_layout.c',
-    'ir_pdg.c',
-    'ir_promote.c',
-    'ir_rd.c',
-    'ir_structure.c',
-    'ir_doms.c',
-    'ir_verify.c',
-    'ir_rules_default.c',
-    'ir_fmt.c',
-    'ir_span.c',
-    'ir_typelang.c',
-    'ir_grammar.c',
-    'ir_build.c',
-    'ir_walk.c',
-    'ir_tree_pass.c',
-    'ir_symcheck.c',
-    'ir_type_diags.c',
+    'ir/analyze.c',
+    'ir/annot.c',
+    'ir/build.c',
+    'ir/cli.c',
+    'ir/ctx.c',
+    'ir/derive.c',
+    'ir/diag.c',
+    'ir/diag_render.c',
+    'ir/doms.c',
+    'ir/fmt.c',
+    'ir/func.c',
+    'ir/grammar.c',
+    'ir/layout.c',
+    'ir/ops.c',
+    'ir/pass.c',
+    'ir/pdg.c',
+    'ir/print.c',
+    'ir/profile.c',
+    'ir/promote.c',
+    'ir/rd.c',
+    'ir/rule.c',
+    'ir/rules_default.c',
+    'ir/span.c',
+    'ir/structure.c',
+    'ir/symcheck.c',
+    'ir/tree_pass.c',
+    'ir/type_diags.c',
+    'ir/typelang.c',
+    'ir/verify.c',
+    'ir/walk.c',
 )
 
 ir_lib = library(
     'ir',
-    typehash_sources + fe_sources + ir_sources
-        + fe_generated + [typelang_bnf_h, ir_bnf_h],
-    dependencies: th_deps,
-    include_directories: [ir_inc, fe_inc] + th_inc,
+    th_sources + lib_sources + parse_sources + scanner_sources + ir_sources
+        + ir_generated,
+    dependencies: ir_deps,
+    include_directories: ir_inc,
     install: true,
 )
 
 ir_dep = declare_dependency(
     link_with: ir_lib,
-    dependencies: th_deps,
-    include_directories: [ir_inc, fe_inc] + th_inc,
+    dependencies: ir_deps,
+    include_directories: ir_inc,
+)
+
+ir_public_dep = declare_dependency(
+    link_with: ir_lib,
+    include_directories: ir_inc,
 )
 
 ir_public_headers = files(
@@ -94,6 +158,12 @@ ir_public_headers = files(
 )
 
 install_headers(ir_public_headers, subdir: 'ir')
+install_headers('../include/core.h')
+install_headers('../include/th/typehash.h', subdir: 'th')
+
+foreach d : ['lib', 'parse', 'scanner', 'unicode']
+    install_subdir('../include' / d, install_dir: get_option('includedir'))
+endforeach
 
 pkg = import('pkgconfig')
 pkg.generate(
@@ -101,14 +171,25 @@ pkg.generate(
     description: 'A typed intermediate representation with a grammar front end',
 )
 
-ir_public_dep = declare_dependency(
-    link_with: ir_lib,
-    include_directories: [ir_inc, fe_inc] + th_inc,
-)
-
 ir_exe = executable(
     'ir',
-    'ir_main.c',
+    'ir/main.c',
     dependencies: ir_dep,
+    install: true,
+)
+
+pp_grammar_dir = get_option('prefix') / get_option('datadir') / 'ir/grammars'
+
+install_subdir(
+    '../grammars',
+    install_dir: get_option('datadir') / 'ir',
+    strip_directory: false,
+)
+
+pp_exe = executable(
+    'pp',
+    'pp/main.c',
+    dependencies: ir_dep,
+    c_args: ['-DPP_GRAMMAR_DIR="' + pp_grammar_dir + '"'],
     install: true,
 )

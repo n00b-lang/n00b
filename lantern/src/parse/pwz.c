@@ -1,0 +1,1768 @@
+
+#include "parse/pwz.h"
+#include "parse/tree.h"
+#include "private/parse/pwz.h"
+#include "private/parse/grammar.h"
+#include "private/parse/unicode_class.h"
+#include "lib/alloc.h"
+#include "lib/array.h"
+#include "lib/list.h"
+#include "scanner/token_stream.h"
+
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+static inline parse_token_info_t *
+get_token(parse_pwz_parser_t *p, int32_t pos)
+{
+    return scan_stream_get(p->stream, pos);
+}
+
+static pwz_mem_t *
+alloc_mem(parse_pwz_parser_t *p)
+{
+    pwz_mem_t *m;
+
+    if (p->free_mems) {
+        m = p->free_mems;
+        p->free_mems = (pwz_mem_t *)m->parents;
+    }
+    else {
+        m = core_arena_alloc(&p->parse_arena, sizeof(pwz_mem_t));
+    }
+
+    m->parents   = nullptr;
+    m->result    = p->exp_bottom;
+    m->start_pos = PWZ_POS_BOTTOM;
+    m->end_pos   = PWZ_POS_BOTTOM;
+    m->refcount  = 1;
+
+    return m;
+}
+
+static inline pwz_mem_t *
+mem_retain(pwz_mem_t *m)
+{
+    if (m) {
+        m->refcount++;
+    }
+    return m;
+}
+
+static void mem_release(parse_pwz_parser_t *p, pwz_mem_t *m);
+
+static inline void
+cxt_release_mem(parse_pwz_parser_t *p, pwz_cxt_t *c)
+{
+    switch (c->kind) {
+    case PWZ_CXT_SEQ: mem_release(p, c->seq.mem); break;
+    case PWZ_CXT_ALT: mem_release(p, c->alt.mem); break;
+    case PWZ_CXT_TOP: break;
+    }
+}
+
+static void
+mem_release(parse_pwz_parser_t *p, pwz_mem_t *m)
+{
+    if (!m || --m->refcount > 0) {
+        return;
+    }
+    pwz_cxt_node_t *node = m->parents;
+    while (node) {
+        pwz_cxt_node_t *next = node->next;
+        cxt_release_mem(p, node->cxt);
+        node = next;
+    }
+    m->parents = (pwz_cxt_node_t *)p->free_mems;
+    p->free_mems = m;
+}
+
+static pwz_cxt_t *
+alloc_cxt(parse_pwz_parser_t *p)
+{
+    pwz_cxt_t *c = core_arena_alloc(&p->parse_arena, sizeof(pwz_cxt_t));
+    *c = (pwz_cxt_t){0};
+    return c;
+}
+
+static pwz_cxt_node_t *
+alloc_cxt_node(parse_pwz_parser_t *p, pwz_cxt_t *cxt, pwz_cxt_node_t *next)
+{
+    pwz_cxt_node_t *n = core_arena_alloc(&p->parse_arena, sizeof(pwz_cxt_node_t));
+
+    n->cxt  = cxt;
+    n->next = next;
+
+    return n;
+}
+
+static pwz_exp_t *
+alloc_result_exp(parse_pwz_parser_t *p)
+{
+    return core_arena_alloc(&p->parse_arena, sizeof(pwz_exp_t));
+}
+
+static void
+register_exp(parse_pwz_parser_t *p, pwz_exp_t *e)
+{
+    core_list_push(p->all_exps, e);
+}
+
+static pwz_exp_t *
+make_tok_exp(parse_pwz_parser_t *p, int64_t tid)
+{
+    pwz_exp_t *e = core_alloc(pwz_exp_t);
+
+    e->kind    = PWZ_TOK;
+    e->tid = tid;
+
+    register_exp(p, e);
+    return e;
+}
+
+static pwz_exp_t *
+make_class_exp(parse_pwz_parser_t *p, parse_char_class_t cc)
+{
+    pwz_exp_t *e = core_alloc(pwz_exp_t);
+
+    e->kind   = PWZ_CLASS;
+    e->cc = cc;
+
+    register_exp(p, e);
+    return e;
+}
+
+static pwz_exp_t *
+make_any_exp(parse_pwz_parser_t *p)
+{
+    pwz_exp_t *e = core_alloc(pwz_exp_t);
+
+    e->kind = PWZ_ANY;
+
+    register_exp(p, e);
+    return e;
+}
+
+static pwz_exp_t *
+make_set_exp(parse_pwz_parser_t *p, const parse_match_set_t *set)
+{
+    pwz_exp_t *e = core_alloc(pwz_exp_t);
+
+    e->kind = PWZ_SET;
+    e->set  = set;
+
+    register_exp(p, e);
+    return e;
+}
+
+static pwz_exp_t *
+make_seq_exp(parse_pwz_parser_t *p,
+             core_string_t       name,
+             int64_t            nt_id,
+             int32_t            rule_ix,
+             pwz_exp_ptr_t     *children,
+             int32_t            nchildren)
+{
+    pwz_exp_t *e = core_alloc(pwz_exp_t);
+
+    e->kind          = PWZ_SEQ;
+    e->seq.name      = name;
+    e->nt_id     = nt_id;
+    e->rule_ix   = rule_ix;
+    e->seq.children  = children;
+    e->nchildren = nchildren;
+
+    register_exp(p, e);
+    return e;
+}
+
+static pwz_exp_t *
+make_alt_exp(parse_pwz_parser_t *p, int64_t nt_id)
+{
+    pwz_exp_t *e = core_alloc(pwz_exp_t);
+
+    e->kind      = PWZ_ALT;
+    e->nt_id = nt_id;
+    e->alt.alts  = core_list_new(pwz_exp_ptr_t);
+
+    register_exp(p, e);
+    return e;
+}
+
+static void
+alt_add(pwz_exp_t *alt, pwz_exp_t *child)
+{
+    core_list_push(alt->alt.alts, child);
+}
+
+static void
+build_seq_children(parse_pwz_parser_t *p,
+                   parse_rule_t *rule,
+                   pwz_exp_ptr_t    **out_children,
+                   int32_t           *out_count)
+{
+    size_t n = core_list_len(rule->contents);
+
+    int32_t count = 0;
+
+    for (size_t i = 0; i < n; i++) {
+        parse_match_t *item = &rule->contents.data[i];
+
+        if (item->kind != PARSE_MATCH_EMPTY) {
+            count++;
+        }
+    }
+
+    if (count == 0) {
+        *out_children = nullptr;
+        *out_count    = 0;
+        return;
+    }
+
+    pwz_exp_ptr_t *children = core_alloc_array(pwz_exp_ptr_t, count);
+    int32_t        ix       = 0;
+
+    for (size_t i = 0; i < n; i++) {
+        parse_match_t *item = &rule->contents.data[i];
+
+        switch (item->kind) {
+        case PARSE_MATCH_NT:
+            children[ix++] = p->nt_exps[item->nt_id];
+            break;
+
+        case PARSE_MATCH_TERMINAL:
+            children[ix++] = make_tok_exp(p, item->terminal_id);
+            break;
+
+        case PARSE_MATCH_CLASS:
+            children[ix++] = make_class_exp(p, item->char_class);
+            break;
+
+        case PARSE_MATCH_ANY:
+            children[ix++] = make_any_exp(p);
+            break;
+
+        case PARSE_MATCH_GROUP: {
+            parse_rule_group_t *grp = (parse_rule_group_t *)item->group;
+            children[ix++]         = p->nt_exps[grp->contents_id];
+            break;
+        }
+
+        case PARSE_MATCH_SET:
+            children[ix++] = make_set_exp(
+                p, (const parse_match_set_t *)item->set_items);
+            break;
+
+        case PARSE_MATCH_EMPTY:
+            break;
+        }
+    }
+
+    *out_children = children;
+    *out_count    = ix;
+}
+
+static void
+expand_group_nt(parse_pwz_parser_t *p, parse_grammar_t *g, int64_t nt_id)
+{
+    parse_nonterm_t *nt  = parse_get_nonterm(g, nt_id);
+    pwz_exp_t      *alt = p->nt_exps[nt_id];
+
+    parse_rule_group_t *grp = nullptr;
+
+    for (size_t i = 0; i < core_list_len(g->rules); i++) {
+        parse_rule_t *rule = &g->rules.data[i];
+
+        for (size_t j = 0; j < core_list_len(rule->contents); j++) {
+            parse_match_t *item = &rule->contents.data[j];
+
+            if (item->kind == PARSE_MATCH_GROUP) {
+                parse_rule_group_t *rg = (parse_rule_group_t *)item->group;
+
+                if (rg->contents_id == nt_id) {
+                    grp = rg;
+                    break;
+                }
+            }
+        }
+
+        if (grp) {
+            break;
+        }
+    }
+
+    if (!grp) {
+        for (size_t i = 0; i < core_list_len(nt->rule_ids); i++) {
+            int32_t            rule_ix = nt->rule_ids.data[i];
+            parse_rule_t *rule    = parse_get_rule(g, rule_ix);
+
+            if (rule->penalty_rule) {
+                continue;
+            }
+
+            pwz_exp_ptr_t *children;
+            int32_t        nchildren;
+
+            build_seq_children(p, rule, &children, &nchildren);
+
+            pwz_exp_t *seq = make_seq_exp(p, nt->name, nt_id, (int32_t)i,
+                                          children, nchildren);
+            alt_add(alt, seq);
+        }
+
+        return;
+    }
+
+    pwz_exp_t *body_alt = make_alt_exp(p, nt_id);
+
+    for (size_t i = 0; i < core_list_len(nt->rule_ids); i++) {
+        int32_t            rule_ix = nt->rule_ids.data[i];
+        parse_rule_t *rule    = parse_get_rule(g, rule_ix);
+
+        if (rule->penalty_rule) {
+            continue;
+        }
+
+        pwz_exp_ptr_t *children;
+        int32_t        nchildren;
+
+        build_seq_children(p, rule, &children, &nchildren);
+
+        pwz_exp_t *seq = make_seq_exp(p, nt->name, nt_id, (int32_t)i,
+                                      children, nchildren);
+        alt_add(body_alt, seq);
+    }
+
+    pwz_exp_t *empty_seq = make_seq_exp(p, nt->name, nt_id, -1, nullptr, 0);
+
+    size_t body_nalts = core_list_len(body_alt->alt.alts);
+
+    if (grp->min == 0 && grp->max == 1) {
+        for (size_t i = 0; i < body_nalts; i++) {
+            alt_add(alt, body_alt->alt.alts.data[i]);
+        }
+
+        alt_add(alt, empty_seq);
+    }
+    else if (grp->min == 0 && grp->max == 0) {
+        for (size_t i = 0; i < body_nalts; i++) {
+            pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
+            int32_t    nc       = body_seq->nchildren;
+            int32_t    new_nc   = nc + 1;
+
+            pwz_exp_ptr_t *new_children = core_alloc_array(pwz_exp_ptr_t, new_nc);
+            new_children[0] = alt;
+            memcpy(new_children + 1, body_seq->seq.children,
+                   (size_t)nc * sizeof(pwz_exp_ptr_t));
+
+            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name, nt_id,
+                                              body_seq->rule_ix,
+                                              new_children, new_nc);
+            alt_add(alt, rep_seq);
+        }
+
+        alt_add(alt, empty_seq);
+    }
+    else if (grp->min == 1 && grp->max == 0) {
+        for (size_t i = 0; i < body_nalts; i++) {
+            pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
+            int32_t    nc       = body_seq->nchildren;
+            int32_t    new_nc   = nc + 1;
+
+            pwz_exp_ptr_t *new_children = core_alloc_array(pwz_exp_ptr_t, new_nc);
+            new_children[0] = alt;
+            memcpy(new_children + 1, body_seq->seq.children,
+                   (size_t)nc * sizeof(pwz_exp_ptr_t));
+
+            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name, nt_id,
+                                              body_seq->rule_ix,
+                                              new_children, new_nc);
+            alt_add(alt, rep_seq);
+        }
+
+        for (size_t i = 0; i < body_nalts; i++) {
+            alt_add(alt, body_alt->alt.alts.data[i]);
+        }
+    }
+    else {
+        for (size_t i = 0; i < body_nalts; i++) {
+            alt_add(alt, body_alt->alt.alts.data[i]);
+        }
+    }
+}
+
+static void
+build_exp_graph(parse_pwz_parser_t *p, parse_grammar_t *g)
+{
+    int32_t num_nts = (int32_t)core_list_len(g->nt_list);
+
+    p->nt_exps = core_alloc_array(pwz_exp_ptr_t, num_nts);
+
+    for (int32_t i = 0; i < num_nts; i++) {
+        p->nt_exps[i] = make_alt_exp(p, i);
+    }
+
+    for (int32_t i = 0; i < num_nts; i++) {
+        parse_nonterm_t *nt = parse_get_nonterm(g, i);
+
+        if (nt->group_nt) {
+            expand_group_nt(p, g, i);
+            continue;
+        }
+
+        pwz_exp_t *alt_node = p->nt_exps[i];
+
+        for (size_t j = 0; j < core_list_len(nt->rule_ids); j++) {
+            int32_t            rule_ix = nt->rule_ids.data[j];
+            parse_rule_t *rule    = parse_get_rule(g, rule_ix);
+
+            if (rule->penalty_rule) {
+                continue;
+            }
+
+            pwz_exp_ptr_t *children;
+            int32_t        nchildren;
+
+            build_seq_children(p, rule, &children, &nchildren);
+
+            pwz_exp_t *seq = make_seq_exp(p, nt->name, (int64_t)i,
+                                          (int32_t)j, children, nchildren);
+            alt_add(alt_node, seq);
+        }
+    }
+
+    p->start_exp = p->nt_exps[g->default_start];
+}
+
+static void
+reset_memos(parse_pwz_parser_t *p)
+{
+    size_t num = core_list_len(p->all_exps);
+
+    for (size_t i = 0; i < num; i++) {
+        mem_release(p, p->all_exps.data[i]->mem);
+        p->all_exps.data[i]->mem = nullptr;
+    }
+}
+
+#define TERM_TO_PTR(id) ((void *)(uintptr_t)((uint64_t)(id) + 0x100))
+
+static inline bool
+nt_first_matches(parse_nonterm_t *nt, int64_t token_id)
+{
+    if (nt->first_has_any) {
+        return true;
+    }
+
+    if (!nt->first_set || nt->first_set->count == 0) {
+        return true;
+    }
+
+    return core_dict_contains(nt->first_set, TERM_TO_PTR(token_id));
+}
+
+static inline bool
+rule_first_matches(parse_rule_t *rule, int64_t token_id)
+{
+    if (rule->first_has_any) {
+        return true;
+    }
+
+    if (!rule->first_set || rule->first_set->count == 0) {
+        return true;
+    }
+
+    return core_dict_contains(rule->first_set, TERM_TO_PTR(token_id));
+}
+
+static void
+push_step(parse_pwz_parser_t *p, pwz_step_t s)
+{
+    core_list_push(p->steps, s);
+}
+
+static void
+reverse_steps(parse_pwz_parser_t *p, size_t mark)
+{
+    size_t lo = mark;
+    size_t hi = p->steps.len;
+
+    while (hi > lo + 1) {
+        hi--;
+
+        pwz_step_t tmp    = p->steps.data[lo];
+        p->steps.data[lo] = p->steps.data[hi];
+        p->steps.data[hi] = tmp;
+        lo++;
+    }
+}
+
+static void
+step_dd(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
+        pwz_cxt_t *cxt, pwz_exp_t *exp)
+{
+    push_step(p, (pwz_step_t){.kind = PWZ_STEP_DD,
+                              .pos  = pos,
+                              .tok  = tok,
+                              .cxt  = cxt,
+                              .exp  = exp});
+}
+
+static void
+step_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
+         pwz_mem_t *mem, pwz_exp_t *exp)
+{
+    push_step(p, (pwz_step_t){.kind = PWZ_STEP_DDP,
+                              .pos  = pos,
+                              .tok  = tok,
+                              .mem  = mem,
+                              .exp  = exp});
+}
+
+static void
+step_du(parse_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
+{
+    push_step(p, (pwz_step_t){.kind   = PWZ_STEP_DU,
+                              .pos    = pos,
+                              .result = result,
+                              .mem    = mem});
+}
+
+static void
+step_dup(parse_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
+{
+    push_step(p, (pwz_step_t){.kind   = PWZ_STEP_DUP,
+                              .pos    = pos,
+                              .result = result,
+                              .cxt    = cxt});
+}
+
+static void run_steps(parse_pwz_parser_t *p, size_t base);
+
+static void
+d_d(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
+    pwz_cxt_t *cxt, pwz_exp_t *exp)
+{
+    size_t base = p->steps.len;
+
+    step_dd(p, pos, tok, cxt, exp);
+    run_steps(p, base);
+}
+
+static void
+d_u(parse_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
+{
+    size_t base = p->steps.len;
+
+    step_du(p, pos, result, mem);
+    run_steps(p, base);
+}
+
+static bool
+token_matches(parse_token_info_t *tok, pwz_exp_t *exp)
+{
+    if (!tok) {
+        return false;
+    }
+
+    switch (exp->kind) {
+    case PWZ_TOK:
+        return tok->tid == (int32_t)exp->tid;
+
+    case PWZ_CLASS:
+        return parse_codepoint_matches_class(tok->tid, exp->cc);
+
+    case PWZ_ANY:
+        return true;
+
+    case PWZ_SET:
+        return parse_match_set_holds(exp->set, tok->tid);
+
+    default:
+        return false;
+    }
+}
+
+static void
+run_dd(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
+       pwz_cxt_t *cxt, pwz_exp_t *exp)
+{
+    if (exp->mem && exp->mem->start_pos == pos) {
+        exp->mem->parents = alloc_cxt_node(p, cxt, exp->mem->parents);
+
+        if (pwz_mem_end_pos(exp->mem) != PWZ_POS_BOTTOM) {
+            step_dup(p, pwz_mem_end_pos(exp->mem), exp->mem->result, cxt);
+        }
+
+        return;
+    }
+
+    mem_release(p, exp->mem);
+
+    pwz_mem_t *mem = alloc_mem(p);
+
+    mem->start_pos = pos;
+    mem->parents   = alloc_cxt_node(p, cxt, nullptr);
+    exp->mem       = mem;
+
+    step_ddp(p, pos, tok, mem, exp);
+}
+
+static void
+run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
+        pwz_mem_t *mem, pwz_exp_t *exp)
+{
+    switch (exp->kind) {
+    case PWZ_TOK:
+    case PWZ_CLASS:
+    case PWZ_ANY:
+    case PWZ_SET:
+        if (token_matches(tok, exp)) {
+            pwz_exp_t *result = alloc_result_exp(p);
+
+            result->kind    = exp->kind;
+            result->tid = tok->tid;
+
+            core_list_push(p->worklist_swap,
+                           ((pwz_zipper_t){.result = result,
+                                           .mem = mem_retain(mem)}));
+        }
+
+        break;
+
+    case PWZ_SEQ:
+        if (exp->nchildren == 0) {
+            pwz_exp_t *result = alloc_result_exp(p);
+
+            result->kind          = PWZ_SEQ;
+            result->seq.name      = exp->seq.name;
+            result->nt_id     = exp->nt_id;
+            result->rule_ix   = exp->rule_ix;
+            result->seq.children  = nullptr;
+            result->nchildren = 0;
+
+            step_du(p, pos, result, mem);
+        }
+        else {
+            pwz_cxt_t *seq_cxt = alloc_cxt(p);
+
+            seq_cxt->kind        = PWZ_CXT_SEQ;
+            seq_cxt->seq.mem     = mem_retain(mem);
+            seq_cxt->nt_id   = exp->nt_id;
+            seq_cxt->rule_ix = exp->rule_ix;
+            seq_cxt->seq.left    = nullptr;
+            seq_cxt->nleft   = 0;
+            seq_cxt->seq.right   = exp->seq.children + 1;
+            seq_cxt->seq.nright  = exp->nchildren - 1;
+
+            step_dd(p, pos, tok, seq_cxt, exp->seq.children[0]);
+        }
+
+        break;
+
+    case PWZ_ALT: {
+        if (tok && exp->nt_id >= 0) {
+            parse_nonterm_t *nt = parse_get_nonterm(p->grammar, exp->nt_id);
+
+            if (nt && !nt->group_nt && !nt_first_matches(nt, tok->tid)) {
+                break;
+            }
+        }
+
+        bool can_filter_alts = false;
+
+        if (tok && exp->nt_id >= 0) {
+            parse_nonterm_t *nt = parse_get_nonterm(p->grammar, exp->nt_id);
+
+            if (nt && !nt->group_nt) {
+                can_filter_alts = true;
+            }
+        }
+
+        size_t nalts = core_list_len(exp->alt.alts);
+        size_t mark  = p->steps.len;
+
+        for (size_t i = 0; i < nalts; i++) {
+            pwz_exp_t *alt_child = exp->alt.alts.data[i];
+
+            if (can_filter_alts && alt_child->kind == PWZ_SEQ
+                && alt_child->nt_id >= 0 && alt_child->rule_ix >= 0) {
+                parse_nonterm_t *nt = parse_get_nonterm(p->grammar,
+                                                      alt_child->nt_id);
+
+                if (nt && alt_child->rule_ix < (int32_t)core_list_len(nt->rule_ids)) {
+                    int32_t            rix  = nt->rule_ids.data[alt_child->rule_ix];
+                    parse_rule_t *rule = parse_get_rule(p->grammar, rix);
+
+                    if (rule && !rule_first_matches(rule, tok->tid)) {
+                        continue;
+                    }
+                }
+            }
+
+            pwz_cxt_t *alt_cxt = alloc_cxt(p);
+
+            alt_cxt->kind    = PWZ_CXT_ALT;
+            alt_cxt->alt.mem = mem_retain(mem);
+
+            step_dd(p, pos, tok, alt_cxt, alt_child);
+        }
+
+        reverse_steps(p, mark);
+
+        break;
+    }
+    }
+}
+
+static void
+run_du(parse_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
+{
+    int32_t ep = pwz_mem_end_pos(mem);
+
+    if (ep != PWZ_POS_BOTTOM) {
+        if (pos == ep) {
+            pwz_exp_t *existing = mem->result;
+
+            if (existing->kind == PWZ_ALT && existing->nt_id == -1) {
+                core_list_push(existing->alt.alts, result);
+            }
+            else {
+                pwz_exp_t *copy = alloc_result_exp(p);
+
+                *copy = *existing;
+
+                existing->kind      = PWZ_ALT;
+                existing->nt_id = -1;
+                existing->alt.alts  = core_list_new(pwz_exp_ptr_t);
+                core_list_push(existing->alt.alts, copy);
+                core_list_push(existing->alt.alts, result);
+            }
+
+            return;
+        }
+
+        if (pwz_mem_in_progress(mem)) {
+            return;
+        }
+    }
+
+    mem->end_pos = pos | PWZ_MEM_IN_PROGRESS_BIT;
+    mem->result  = result;
+
+    push_step(p, (pwz_step_t){.kind = PWZ_STEP_DU_DONE, .mem = mem});
+
+    size_t mark = p->steps.len;
+
+    for (pwz_cxt_node_t *node = mem->parents; node; node = node->next) {
+        step_dup(p, pos, result, node->cxt);
+    }
+
+    reverse_steps(p, mark);
+}
+
+static void
+run_dup(parse_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
+{
+    switch (cxt->kind) {
+    case PWZ_CXT_TOP:
+        core_list_push(p->tops, result);
+        break;
+
+    case PWZ_CXT_SEQ: {
+        if (cxt->seq.nright == 0) {
+            int32_t total = cxt->nleft + 1;
+
+            pwz_exp_ptr_t *children = core_arena_alloc(
+                &p->parse_arena, (size_t)total * sizeof(pwz_exp_ptr_t));
+
+            for (int32_t i = 0; i < cxt->nleft; i++) {
+                children[i] = cxt->seq.left[i];
+            }
+
+            children[cxt->nleft] = result;
+
+            pwz_exp_t *seq_result = alloc_result_exp(p);
+
+            seq_result->kind          = PWZ_SEQ;
+            seq_result->seq.name      = cxt->nt_id >= 0
+                ? parse_get_nonterm(p->grammar, cxt->nt_id)->name
+                : (core_string_t){0};
+            seq_result->nt_id     = cxt->nt_id;
+            seq_result->rule_ix   = cxt->rule_ix;
+            seq_result->seq.children  = children;
+            seq_result->nchildren = total;
+
+            step_du(p, pos, seq_result, cxt->seq.mem);
+        }
+        else {
+            int32_t new_nleft = cxt->nleft + 1;
+
+            pwz_exp_ptr_t *new_left = core_arena_alloc(
+                &p->parse_arena, (size_t)new_nleft * sizeof(pwz_exp_ptr_t));
+
+            for (int32_t i = 0; i < cxt->nleft; i++) {
+                new_left[i] = cxt->seq.left[i];
+            }
+
+            new_left[cxt->nleft] = result;
+
+            pwz_cxt_t *new_seq_cxt = alloc_cxt(p);
+
+            new_seq_cxt->kind        = PWZ_CXT_SEQ;
+            new_seq_cxt->seq.mem     = mem_retain(cxt->seq.mem);
+            new_seq_cxt->nt_id   = cxt->nt_id;
+            new_seq_cxt->rule_ix = cxt->rule_ix;
+            new_seq_cxt->seq.left    = new_left;
+            new_seq_cxt->nleft   = new_nleft;
+            new_seq_cxt->seq.right   = cxt->seq.right + 1;
+            new_seq_cxt->seq.nright  = cxt->seq.nright - 1;
+
+            step_dd(p, pos, get_token(p, pos), new_seq_cxt,
+                    cxt->seq.right[0]);
+        }
+
+        break;
+    }
+
+    case PWZ_CXT_ALT:
+        step_du(p, pos, result, cxt->alt.mem);
+        break;
+    }
+}
+
+static void
+run_steps(parse_pwz_parser_t *p, size_t base)
+{
+    while (p->steps.len > base) {
+        pwz_step_t s = p->steps.data[--p->steps.len];
+
+        switch (s.kind) {
+        case PWZ_STEP_DD:
+            run_dd(p, s.pos, s.tok, s.cxt, s.exp);
+            break;
+
+        case PWZ_STEP_DDP:
+            run_ddp(p, s.pos, s.tok, s.mem, s.exp);
+            break;
+
+        case PWZ_STEP_DU:
+            run_du(p, s.pos, s.result, s.mem);
+            break;
+
+        case PWZ_STEP_DUP:
+            run_dup(p, s.pos, s.result, s.cxt);
+            break;
+
+        case PWZ_STEP_DU_DONE:
+            pwz_mem_set_in_progress(s.mem, false);
+            break;
+        }
+    }
+}
+
+static void
+init_parse(parse_pwz_parser_t *p)
+{
+    reset_memos(p);
+    core_list_clear(p->worklist);
+    core_list_clear(p->worklist_swap);
+    core_list_clear(p->tops);
+    core_list_clear(p->steps);
+    p->longest_top  = nullptr;
+    p->longest_end  = 0;
+    p->result_tree  = nullptr;
+    p->result_trees = (parse_tree_array_t){0};
+
+    pwz_mem_t *mem_top = alloc_mem(p);
+
+    mem_top->start_pos = 0;
+
+    pwz_cxt_t *top_cxt = alloc_cxt(p);
+
+    top_cxt->kind    = PWZ_CXT_TOP;
+    mem_top->parents = alloc_cxt_node(p, top_cxt, nullptr);
+
+    pwz_cxt_t *alt_cxt = alloc_cxt(p);
+
+    alt_cxt->kind    = PWZ_CXT_ALT;
+    alt_cxt->alt.mem = mem_retain(mem_top);
+
+    parse_token_info_t *tok = get_token(p, 0);
+
+    d_d(p, 0, tok, alt_cxt, p->start_exp);
+}
+
+static bool
+run_parse(parse_pwz_parser_t *p)
+{
+    if (core_list_len(p->tops) > 0 && scan_stream_token_count(p->stream) == 0) {
+        return true;
+    }
+
+    for (int32_t pos = 0; ; pos++) {
+        core_list_t(pwz_zipper_t) tmp = p->worklist;
+        p->worklist      = p->worklist_swap;
+        p->worklist_swap = tmp;
+        core_list_clear(p->worklist_swap);
+        core_list_clear(p->tops);
+
+        size_t wl_len = core_list_len(p->worklist);
+
+        if (wl_len == 0) {
+            p->error_pos = pos;
+            return false;
+        }
+
+        int32_t complete_pos = pos + 1;
+
+        bool have_next = (scan_stream_get(p->stream, complete_pos) != nullptr);
+
+        for (size_t i = 0; i < wl_len; i++) {
+            pwz_zipper_t *z = &p->worklist.data[i];
+            d_u(p, complete_pos, z->result, z->mem);
+        }
+
+        for (size_t i = 0; i < wl_len; i++) {
+            mem_release(p, p->worklist.data[i].mem);
+        }
+
+        if (core_list_len(p->tops) > 0) {
+            p->longest_top = p->tops.data[0];
+            p->longest_end = complete_pos;
+        }
+
+        if (!have_next) {
+            if (core_list_len(p->tops) > 0) {
+                return true;
+            }
+            p->error_pos = complete_pos;
+            return false;
+        }
+    }
+}
+
+static parse_tree_t *
+make_token_node(parse_token_info_t *tok)
+{
+    return core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t, tok);
+}
+
+static parse_tree_t *
+make_epsilon_node(int32_t pos)
+{
+    parse_nt_node_t pn = {0};
+
+    pn.name  = CORE_STRING_STATIC("\xce\xb5");
+    pn.id    = PARSE_EMPTY_STRING;
+    pn.start = pos;
+    pn.end   = pos;
+
+    return core_tree_node(parse_nt_node_t, parse_token_info_ptr_t, pn);
+}
+
+static parse_tree_t *
+make_nt_node(parse_grammar_t *g, int64_t nt_id, int32_t rule_index,
+             int32_t start, int32_t end)
+{
+    parse_nonterm_t *nt = parse_get_nonterm(g, nt_id);
+    parse_nt_node_t  pn = {0};
+
+    pn.name       = (nt && nt->name.data) ? nt->name : CORE_STRING_STATIC("?");
+    pn.id         = nt_id;
+    pn.rule_index = rule_index;
+    pn.start      = start;
+    pn.end        = end;
+
+    return core_tree_node(parse_nt_node_t, parse_token_info_ptr_t, pn);
+}
+
+static parse_tree_t *
+make_group_node(core_string_t name, int32_t start, int32_t end)
+{
+    parse_nt_node_t pn = {0};
+
+    pn.name      = name.data ? name : CORE_STRING_STATIC("group");
+    pn.id        = PARSE_GROUP_ID;
+    pn.group_top = true;
+    pn.start     = start;
+    pn.end       = end;
+
+    return core_tree_node(parse_nt_node_t, parse_token_info_ptr_t, pn);
+}
+
+static bool
+same_group_node(parse_tree_t *a, parse_tree_t *b)
+{
+    if (!a || !b || core_tree_is_leaf(a) || core_tree_is_leaf(b)) {
+        return false;
+    }
+
+    parse_nt_node_t an = core_tree_node_value(a);
+    parse_nt_node_t bn = core_tree_node_value(b);
+
+    if (!an.group_top || !bn.group_top) {
+        return false;
+    }
+
+    if (an.name.u8_bytes != bn.name.u8_bytes) {
+        return false;
+    }
+
+    if (an.name.u8_bytes == 0) {
+        return true;
+    }
+
+    return an.name.data && bn.name.data
+        && memcmp(an.name.data, bn.name.data,
+                  (size_t)an.name.u8_bytes) == 0;
+}
+
+static void
+add_child_flattening_same_group(parse_tree_t *parent,
+                                parse_tree_t *child)
+{
+    if (!parent || !child) {
+        return;
+    }
+
+    if (same_group_node(parent, child)) {
+        if (parent->node.num_children == 0) {
+            core_free(parent->node.children);
+            parent->node.children     = child->node.children;
+            parent->node.num_children = child->node.num_children;
+            parent->node.capacity     = child->node.capacity;
+            child->node.children      = nullptr;
+            child->node.num_children  = 0;
+            child->node.capacity      = 0;
+            core_free(child);
+            return;
+        }
+
+        size_t nch = core_tree_num_children(child);
+
+        for (size_t i = 0; i < nch; i++) {
+            (void)core_tree_add_child(parent, core_tree_child(child, i));
+        }
+
+        core_tree_free_node(child);
+        return;
+    }
+
+    (void)core_tree_add_child(parent, child);
+}
+
+typedef struct {
+    int32_t            pos;
+    parse_pwz_parser_t *parser;
+} tree_convert_state_t;
+
+static parse_rule_t *
+exp_to_rule(parse_pwz_parser_t *p, pwz_exp_t *exp)
+{
+    if (!exp || exp->kind != PWZ_SEQ || exp->nt_id < 0 || exp->rule_ix < 0) {
+        return nullptr;
+    }
+
+    parse_nonterm_t *nt = parse_get_nonterm(p->grammar, exp->nt_id);
+
+    if (!nt || (size_t)exp->rule_ix >= core_list_len(nt->rule_ids)) {
+        return nullptr;
+    }
+
+    return parse_get_rule(p->grammar, nt->rule_ids.data[exp->rule_ix]);
+}
+
+typedef struct {
+    pwz_exp_t *exp;
+    size_t     at;
+    int32_t    cost;
+    int32_t    from;
+    int32_t    best_end;
+    bool       entered;
+} score_frame_t;
+
+core_list_decl(score_frame_t);
+
+static int32_t
+score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
+{
+    core_list_t(score_frame_t) frames = core_list_new(score_frame_t);
+    int32_t                   last   = 0;
+
+    core_list_push(frames, ((score_frame_t){.exp = root}));
+
+    while (frames.len > 0) {
+        score_frame_t *f = &frames.data[frames.len - 1];
+
+        if (!f->entered) {
+            f->entered = true;
+
+            if (!f->exp || f->exp == p->exp_bottom) {
+                last = 0;
+                frames.len--;
+                continue;
+            }
+
+            if (f->exp->kind == PWZ_TOK || f->exp->kind == PWZ_CLASS
+                || f->exp->kind == PWZ_ANY || f->exp->kind == PWZ_SET) {
+                (*pos)++;
+                last = 0;
+                frames.len--;
+                continue;
+            }
+
+            if (f->exp->kind == PWZ_SEQ) {
+                parse_rule_t *rule = exp_to_rule(p, f->exp);
+
+                if (rule && rule->disambig_predicate.data && p->disambig_cb) {
+                    parse_token_info_t *tok = get_token(p, *pos);
+
+                    if (p->disambig_cb(p->disambig_ud,
+                                       rule->disambig_predicate.data, tok)) {
+                        f->cost += rule->disambig_cost;
+                    }
+                }
+            }
+            else {
+                if (core_list_len(f->exp->alt.alts) == 0) {
+                    last = 0;
+                    frames.len--;
+                    continue;
+                }
+                f->cost     = INT32_MAX;
+                f->from     = *pos;
+                f->best_end = *pos;
+            }
+        }
+        else if (f->exp->kind == PWZ_SEQ) {
+            f->cost += last;
+        }
+        else if (last <= f->cost) {
+            f->cost     = last;
+            f->best_end = *pos;
+        }
+
+        size_t n = f->exp->kind == PWZ_SEQ ? (size_t)f->exp->nchildren
+                                           : core_list_len(f->exp->alt.alts);
+
+        if (f->at < n) {
+            pwz_exp_t *kid;
+
+            if (f->exp->kind == PWZ_SEQ) {
+                kid = f->exp->seq.children[f->at];
+            }
+            else {
+                kid  = f->exp->alt.alts.data[f->at];
+                *pos = f->from;
+            }
+            f->at++;
+            core_list_push(frames, ((score_frame_t){.exp = kid}));
+
+            continue;
+        }
+
+        f = &frames.data[frames.len - 1];
+
+        if (f->exp->kind == PWZ_ALT) {
+            *pos = f->best_end;
+        }
+        last = f->cost;
+        frames.len--;
+    }
+
+    core_list_free(frames);
+
+    return last;
+}
+
+static pwz_exp_t *
+resolve_alts(parse_pwz_parser_t *p, pwz_exp_t *exp, int32_t pos)
+{
+    while (exp && exp != p->exp_bottom && exp->kind == PWZ_ALT) {
+        size_t nalts = core_list_len(exp->alt.alts);
+
+        if (nalts == 0) {
+            return nullptr;
+        }
+
+        size_t pick = nalts - 1;
+
+        if (p->disambig_cb && nalts > 1) {
+            int32_t best = INT32_MAX;
+
+            for (size_t i = 0; i < nalts; i++) {
+                int32_t p2 = pos;
+                int32_t c  = score_exp(p, exp->alt.alts.data[i], &p2);
+
+                if (c <= best) {
+                    best = c;
+                    pick = i;
+                }
+            }
+        }
+
+        exp = exp->alt.alts.data[pick];
+    }
+
+    return exp;
+}
+
+typedef struct {
+    pwz_exp_t *exp;
+    int32_t    start;
+    int32_t    child_ix;
+    size_t     kids_mark;
+    bool       entered;
+} conv_frame_t;
+
+core_list_decl(conv_frame_t);
+
+static parse_tree_t *
+convert_exp_to_tree(parse_pwz_parser_t *p, pwz_exp_t *exp,
+                    tree_convert_state_t *st)
+{
+    core_list_t(conv_frame_t) frames = core_list_new(conv_frame_t);
+    core_list_t(parse_tree_ptr_t) done
+        = core_list_new(parse_tree_ptr_t);
+
+    core_list_push(frames, ((conv_frame_t){.exp = exp}));
+
+    while (frames.len > 0) {
+        conv_frame_t *f = &frames.data[frames.len - 1];
+
+        if (!f->entered) {
+            f->entered = true;
+            f->exp     = resolve_alts(p, f->exp, st->pos);
+
+            pwz_exp_t *e = f->exp;
+
+            if (!e || e == p->exp_bottom) {
+                core_list_push(done, make_epsilon_node(st->pos));
+                frames.len--;
+                continue;
+            }
+
+            if (e->kind == PWZ_TOK || e->kind == PWZ_CLASS
+                || e->kind == PWZ_ANY || e->kind == PWZ_SET) {
+                parse_token_info_t *tok = get_token(p, st->pos);
+
+                if (!tok) {
+                    core_list_push(done, make_epsilon_node(st->pos));
+                }
+                else {
+                    core_list_push(done, make_token_node(tok));
+                    st->pos++;
+                }
+
+                frames.len--;
+                continue;
+            }
+
+            if (e->kind != PWZ_SEQ) {
+                core_list_push(done, make_epsilon_node(st->pos));
+                frames.len--;
+                continue;
+            }
+
+            f->start = st->pos;
+
+            if (e->nchildren == 0) {
+                parse_tree_t *t;
+
+                if (e->nt_id >= 0) {
+                    parse_nonterm_t *nt = parse_get_nonterm(p->grammar, e->nt_id);
+
+                    t = nt && nt->group_nt
+                          ? make_group_node(e->seq.name, f->start, f->start)
+                          : make_nt_node(p->grammar, e->nt_id, e->rule_ix,
+                                         f->start, f->start);
+                }
+                else {
+                    t = make_epsilon_node(f->start);
+                }
+
+                core_list_push(done, t);
+                frames.len--;
+                continue;
+            }
+
+            f->kids_mark = done.len;
+        }
+
+        pwz_exp_t *e = f->exp;
+
+        if (f->child_ix < e->nchildren) {
+            pwz_exp_t *child = e->seq.children[f->child_ix++];
+
+            core_list_push(frames, ((conv_frame_t){.exp = child}));
+            continue;
+        }
+
+        f = &frames.data[frames.len - 1];
+
+        int32_t            start = f->start;
+        int32_t            end   = st->pos;
+        size_t             mark  = f->kids_mark;
+        size_t             nch   = done.len - mark;
+        parse_tree_t **kids  = done.data + mark;
+        parse_tree_t  *tree;
+
+        if (e->nt_id >= 0) {
+            parse_nonterm_t *nt = parse_get_nonterm(p->grammar, e->nt_id);
+
+            tree = nt && nt->group_nt
+                     ? make_group_node(e->seq.name, start, end)
+                     : make_nt_node(p->grammar, e->nt_id, e->rule_ix, start,
+                                    end);
+        }
+        else if (nch == 1) {
+            frames.len--;
+            continue;
+        }
+        else {
+            parse_nt_node_t pn = {0};
+
+            pn.name  = e->seq.name.data ? e->seq.name
+                                        : CORE_STRING_STATIC("?");
+            pn.id    = e->nt_id;
+            pn.start = start;
+            pn.end   = end;
+            tree = core_tree_node(parse_nt_node_t, parse_token_info_ptr_t, pn);
+        }
+
+        for (size_t i = 0; i < nch; i++) {
+            add_child_flattening_same_group(tree, kids[i]);
+        }
+
+        done.len = mark;
+        core_list_push(done, tree);
+        frames.len--;
+    }
+
+    parse_tree_t *result = done.len > 0 ? done.data[done.len - 1]
+                                            : make_epsilon_node(st->pos);
+
+    core_list_free(frames);
+    core_list_free(done);
+
+    return result;
+}
+
+static parse_tree_t *
+build_result_tree(parse_pwz_parser_t *p, pwz_exp_t *top_result)
+{
+    tree_convert_state_t st = {.pos = 0, .parser = p};
+
+    return convert_exp_to_tree(p, top_result, &st);
+}
+
+#define PWZ_TREES_MANY INT32_MAX
+#define PWZ_COUNTING   ((void *)(intptr_t)-1)
+
+typedef struct {
+    pwz_exp_t *exp;
+    size_t     at;
+    int64_t    acc;
+    bool       entered;
+} count_frame_t;
+
+core_list_decl(count_frame_t);
+
+static bool
+counts_by_alt(const pwz_exp_t *e)
+{
+    return e->kind == PWZ_ALT && e->nt_id == -1;
+}
+
+static size_t
+count_arity(const pwz_exp_t *e)
+{
+    return counts_by_alt(e) ? core_list_len(e->alt.alts)
+                            : (size_t)e->nchildren;
+}
+
+static pwz_exp_t *
+count_child(const pwz_exp_t *e, size_t i)
+{
+    return counts_by_alt(e) ? e->alt.alts.data[i] : e->seq.children[i];
+}
+
+static int32_t
+count_trees_in_exp(pwz_exp_t *root)
+{
+    if (!root) {
+        return 1;
+    }
+
+    core_dict_t memo;
+
+    core_dict_init(&memo, core_hash_word, nullptr);
+
+    core_list_t(count_frame_t) frames = core_list_new(count_frame_t);
+    int64_t                   last   = 1;
+
+    core_list_push(frames, ((count_frame_t){.exp = root}));
+
+    while (frames.len > 0) {
+        count_frame_t *f = &frames.data[frames.len - 1];
+
+        if (!f->entered) {
+            bool  found = false;
+            void *hit   = core_dict_get(&memo, f->exp, &found);
+
+            if (found) {
+                last = hit == PWZ_COUNTING ? PWZ_TREES_MANY
+                                           : (int64_t)(intptr_t)hit;
+                frames.len--;
+                continue;
+            }
+
+            f->entered = true;
+
+            if (!counts_by_alt(f->exp) && f->exp->kind != PWZ_SEQ) {
+                core_dict_put(&memo, f->exp, (void *)(intptr_t)1);
+                last = 1;
+                frames.len--;
+                continue;
+            }
+
+            core_dict_put(&memo, f->exp, PWZ_COUNTING);
+            f->acc = counts_by_alt(f->exp) ? 0 : 1;
+        }
+        else {
+            f->acc = counts_by_alt(f->exp) ? f->acc + last : f->acc * last;
+
+            if (f->acc > PWZ_TREES_MANY) {
+                f->acc = PWZ_TREES_MANY;
+            }
+        }
+
+        if (f->at < count_arity(f->exp)) {
+            pwz_exp_t *kid = count_child(f->exp, f->at++);
+
+            core_list_push(frames, ((count_frame_t){.exp = kid}));
+            continue;
+        }
+
+        f    = &frames.data[frames.len - 1];
+        last = f->acc;
+        core_dict_put(&memo, f->exp, (void *)(intptr_t)f->acc);
+        frames.len--;
+    }
+
+    core_list_free(frames);
+    core_dict_free(&memo);
+
+    return (int32_t)last;
+}
+
+static pwz_exp_t *
+find_top_ambiguity(pwz_exp_t *exp)
+{
+    while (exp) {
+        if (exp->kind == PWZ_ALT && exp->nt_id == -1) {
+            return exp;
+        }
+
+        if (exp->kind != PWZ_SEQ || exp->nt_id != -1
+            || exp->nchildren != 1) {
+            return nullptr;
+        }
+        exp = exp->seq.children[0];
+    }
+
+    return nullptr;
+}
+
+static void
+enumerate_trees(parse_pwz_parser_t   *p,
+                pwz_exp_t           *top_result,
+                parse_tree_ptr_t **out,
+                int32_t              *out_count)
+{
+    int32_t total = count_trees_in_exp(top_result);
+
+    if (total <= 1) {
+        *out_count = 1;
+        *out       = core_alloc_array(parse_tree_ptr_t, 1);
+        (*out)[0]  = build_result_tree(p, top_result);
+        return;
+    }
+
+    pwz_exp_t *amb = find_top_ambiguity(top_result);
+
+    if (amb) {
+        size_t nalts = core_list_len(amb->alt.alts);
+
+        *out_count = (int32_t)nalts;
+        *out       = core_alloc_array(parse_tree_ptr_t, nalts);
+
+        for (size_t i = 0; i < nalts; i++) {
+            tree_convert_state_t st = {.pos = 0, .parser = p};
+            (*out)[i] = convert_exp_to_tree(p, amb->alt.alts.data[i], &st);
+        }
+
+        return;
+    }
+
+    *out_count = 1;
+    *out       = core_alloc_array(parse_tree_ptr_t, 1);
+    (*out)[0]  = build_result_tree(p, top_result);
+}
+
+parse_pwz_parser_t *
+parse_pwz_new(parse_grammar_t *g)
+{
+    parse_grammar_finalize(g);
+
+    parse_pwz_parser_t *p = core_alloc(parse_pwz_parser_t);
+
+    p->grammar       = g;
+    core_arena_init(&p->parse_arena, CORE_ARENA_DEFAULT_BLOCK_SIZE);
+    p->all_exps      = core_list_new(pwz_exp_ptr_t);
+    p->worklist      = core_list_new(pwz_zipper_t);
+    p->worklist_swap = core_list_new(pwz_zipper_t);
+    p->tops          = core_list_new(pwz_exp_ptr_t);
+    p->disambig_cb   = nullptr;
+    p->disambig_ud   = nullptr;
+
+    p->exp_bottom       = core_alloc(pwz_exp_t);
+    p->exp_bottom->kind = PWZ_SEQ;
+
+    p->mem_bottom            = core_alloc(pwz_mem_t);
+    p->mem_bottom->start_pos = PWZ_POS_BOTTOM;
+    p->mem_bottom->end_pos   = PWZ_POS_BOTTOM;
+
+    build_exp_graph(p, g);
+
+    return p;
+}
+
+void
+parse_pwz_free(parse_pwz_parser_t *p)
+{
+    if (!p) {
+        return;
+    }
+
+    reset_memos(p);
+    core_arena_free(&p->parse_arena);
+
+    size_t num_exps = core_list_len(p->all_exps);
+
+    for (size_t i = 0; i < num_exps; i++) {
+        pwz_exp_t *e = p->all_exps.data[i];
+
+        if (e->kind == PWZ_SEQ && e->seq.children) {
+            core_free(e->seq.children);
+        }
+        else if (e->kind == PWZ_ALT) {
+            core_list_free(e->alt.alts);
+        }
+
+        core_free(e);
+    }
+
+    core_list_free(p->all_exps);
+    core_free(p->nt_exps);
+    core_free(p->exp_bottom);
+    core_free(p->mem_bottom);
+    core_list_free(p->worklist);
+    core_list_free(p->worklist_swap);
+    core_list_free(p->tops);
+    core_list_free(p->steps);
+
+    if (p->result_trees.data) {
+        core_array_free(p->result_trees);
+    }
+
+    core_free(p);
+}
+
+void
+parse_pwz_release_parse_state(parse_pwz_parser_t *p)
+{
+    if (!p) {
+        return;
+    }
+
+    reset_memos(p);
+    core_arena_free(&p->parse_arena);
+    p->free_mems = nullptr;
+    core_list_clear(p->worklist);
+    core_list_clear(p->worklist_swap);
+    core_list_clear(p->tops);
+}
+
+void
+parse_pwz_reset(parse_pwz_parser_t *p)
+{
+    reset_memos(p);
+    core_arena_reset(&p->parse_arena);
+    p->free_mems = nullptr;
+    core_list_clear(p->worklist);
+    core_list_clear(p->worklist_swap);
+    core_list_clear(p->tops);
+    p->stream       = nullptr;
+    p->result_tree  = nullptr;
+    p->result_trees = (parse_tree_array_t){0};
+    p->error_pos    = -1;
+}
+
+bool
+parse_pwz_parse(parse_pwz_parser_t   *p,
+               parse_token_stream_t *ts)
+{
+    parse_pwz_reset(p);
+
+    p->stream = ts;
+
+    scan_stream_get(ts, 0);
+
+    init_parse(p);
+    bool ok = run_parse(p);
+
+    if (ok && core_list_len(p->tops) > 0) {
+        p->result_tree = build_result_tree(p, p->tops.data[0]);
+        return true;
+    }
+
+    return false;
+}
+
+bool
+parse_pwz_parse_prefix(parse_pwz_parser_t   *p,
+                     parse_token_stream_t *ts,
+                     int32_t            *ntokens)
+{
+    parse_pwz_reset(p);
+
+    p->stream = ts;
+
+    scan_stream_get(ts, 0);
+
+    init_parse(p);
+    run_parse(p);
+
+    if (!p->longest_top) {
+        return false;
+    }
+
+    p->result_tree = build_result_tree(p, p->longest_top);
+
+    if (ntokens) {
+        *ntokens = p->longest_end;
+    }
+
+    return true;
+}
+
+parse_tree_t *
+parse_pwz_get_tree(parse_pwz_parser_t *p)
+{
+    return p->result_tree;
+}
+
+int32_t
+parse_pwz_error_pos(parse_pwz_parser_t *p)
+{
+    return p ? p->error_pos : -1;
+}
+
+void
+parse_pwz_set_disambiguator(parse_pwz_parser_t    *p,
+                          parse_pwz_disambig_fn  cb,
+                          void                *ud)
+{
+    if (!p) {
+        return;
+    }
+
+    p->disambig_cb = cb;
+    p->disambig_ud = ud;
+}
+
+parse_tree_t *
+parse_pwz_reextract(parse_pwz_parser_t *p)
+{
+    if (!p || core_list_len(p->tops) == 0) {
+        return p ? p->result_tree : nullptr;
+    }
+
+    p->result_tree = build_result_tree(p, p->tops.data[0]);
+
+    return p->result_tree;
+}
+
+parse_tree_array_t
+parse_pwz_get_trees(parse_pwz_parser_t *p)
+{
+    if (p->result_trees.data) {
+        return p->result_trees;
+    }
+
+    size_t ntops = core_list_len(p->tops);
+
+    if (ntops == 0) {
+        p->result_trees = core_array_new(parse_tree_ptr_t, 0);
+        return p->result_trees;
+    }
+
+    if (ntops == 1) {
+        parse_tree_ptr_t *raw_trees = nullptr;
+        int32_t                raw_count = 0;
+
+        enumerate_trees(p, p->tops.data[0], &raw_trees, &raw_count);
+
+        p->result_trees = core_array_new(parse_tree_ptr_t, raw_count);
+
+        for (int32_t i = 0; i < raw_count; i++) {
+            core_array_set(p->result_trees, i, raw_trees[i]);
+        }
+
+        if (raw_trees) {
+            core_free(raw_trees);
+        }
+    }
+    else {
+        p->result_trees = core_array_new(parse_tree_ptr_t, (int32_t)ntops);
+
+        for (size_t i = 0; i < ntops; i++) {
+            core_array_set(p->result_trees, (int32_t)i,
+                           build_result_tree(p, p->tops.data[i]));
+        }
+    }
+
+    return p->result_trees;
+}
+
+parse_forest_t
+parse_pwz_get_forest(parse_pwz_parser_t *p)
+{
+    parse_tree_array_t trees = parse_pwz_get_trees(p);
+
+    return parse_forest_new(p->grammar, trees);
+}
+
+parse_forest_t
+parse_pwz_parse_grammar(parse_grammar_t      *g,
+                        parse_token_stream_t *ts)
+{
+    parse_pwz_parser_t *p = parse_pwz_new(g);
+    bool               ok = parse_pwz_parse(p, ts);
+
+    if (!ok) {
+        parse_pwz_free(p);
+        return parse_forest_empty(g);
+    }
+
+    parse_forest_t forest = parse_pwz_get_forest(p);
+
+    p->result_trees = (parse_tree_array_t){0};
+    parse_pwz_free(p);
+
+    return forest;
+}

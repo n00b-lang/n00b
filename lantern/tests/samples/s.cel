@@ -1,0 +1,1 @@
+request.auth.claims["email"].endsWith("@example.com") && size(request.headers) > 0u

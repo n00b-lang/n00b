@@ -1,0 +1,1185 @@
+@lex-comment("//")
+@lex-comment("/*", "*/", nested)
+@lex-string('"""', '"""', escape('\\'), multiline, as("MULTILINE_STRING"))
+@lex-string('#"', '"#', raw, as("STRING"))
+@lex-string('"', '"', escape('\\'), as("STRING"))
+@lex-regex("/", "/", as("REGEX_LIT"))
+@lex-sigil("$", as("IMPLICIT_PARAM"), digits)
+@lex-number(radix("0x", "0123456789abcdefABCDEF"), radix("0b", "01"), radix("0o", "01234567"), sep("_"), exp("eE"), int("INTEGER"), float("FLOAT"))
+@lex-ident(as("IDENTIFIER"))
+@lex-layout(brackets("()[]"), terminator("NEWLINE", "break continue fallthrough return"))
+
+# Swift Grammar
+#
+# Comprehensive syntactic grammar for Swift, based on The Swift Programming
+# Language specification. Covers all major language features including
+# declarations, statements, expressions, types, patterns, generics,
+# concurrency, and attributes.
+#
+# Lexer-provided tokens:
+#   %IDENTIFIER       Identifiers (including contextual keywords used as identifiers)
+#   %INTEGER          Integer literals (decimal, hex, octal, binary)
+#   %FLOAT            Floating-point literals
+#   %STRING           String literals (including interpolation)
+#   %MULTILINE_STRING Multiline string literals
+#   %REGEX_LIT        Regex literals
+#   %IMPLICIT_PARAM   Implicit closure parameters ($0, $1, ...)
+#
+# Start symbol: <top-level-declaration>
+
+# ============================================================================
+# Top-Level Structure
+# ============================================================================
+
+<top-level-declaration> ::= <statements>?
+
+<statements> @hardline @nospace($1) @nospace($2) ::= <statement> (<statement-separator> <statement>)* <statement-separator>?
+
+<statement-separator> ::= %";" | %NEWLINE
+
+<statement> ::= <declaration> <statement-separator>?
+              | <expression> <statement-separator>?
+              | <loop-statement> <statement-separator>?
+              | <branch-statement> <statement-separator>?
+              | <labeled-statement> <statement-separator>?
+              | <control-transfer-statement> <statement-separator>?
+              | <defer-statement> <statement-separator>?
+              | <do-statement> <statement-separator>?
+              | <compiler-control-statement>
+
+# ============================================================================
+# Import Declarations
+# ============================================================================
+
+<import-declaration> ::= <attribute-list>? %"import" <import-kind>? <import-path>
+
+<import-kind> ::= %"typealias" | %"struct" | %"class" | %"enum"
+                | %"protocol" | %"let" | %"var" | %"func"
+
+<import-path> ::= <import-path-identifier> (%"." <import-path-identifier>)*
+
+<import-path-identifier> ::= %IDENTIFIER | <operator>
+
+# ============================================================================
+# Constant and Variable Declarations
+# ============================================================================
+
+<constant-declaration> ::= <attribute-list>? <declaration-modifiers>? %"let" <pattern-initializer-list>
+
+<variable-declaration> ::= <variable-declaration-head> <pattern-initializer-list>
+                         | <variable-declaration-head> <variable-name> <type-annotation> <code-block>
+                         | <variable-declaration-head> <variable-name> <type-annotation> <getter-setter-block>
+                         | <variable-declaration-head> <variable-name> <type-annotation> <getter-setter-keyword-block>
+                         | <variable-declaration-head> <variable-name> <initializer> <willset-didset-block>
+                         | <variable-declaration-head> <variable-name> <type-annotation> <initializer>? <willset-didset-block>
+
+<variable-declaration-head> ::= <attribute-list>? <declaration-modifiers>? %"var"
+
+<variable-name> ::= %IDENTIFIER
+
+<pattern-initializer-list> ::= <pattern-initializer> (%"," <pattern-initializer>)*
+
+<pattern-initializer> ::= <pattern> <initializer>?
+
+<initializer> ::= %"=" <expression>
+
+# Getter/Setter blocks
+<getter-setter-block> ::= <code-block>
+                        | %"{" <getter-clause> <setter-clause>? %"}"
+                        | %"{" <setter-clause> <getter-clause> %"}"
+
+<getter-clause> ::= <attribute-list>? <mutation-modifier>? %"get" <code-block>
+
+<setter-clause> ::= <attribute-list>? <mutation-modifier>? %"set" <setter-name>? <code-block>
+
+<setter-name> ::= %"(" %IDENTIFIER %")"
+
+<getter-setter-keyword-block> ::= %"{" <getter-keyword-clause> <setter-keyword-clause>? %"}"
+                                | %"{" <setter-keyword-clause> <getter-keyword-clause> %"}"
+
+<getter-keyword-clause> ::= <attribute-list>? <mutation-modifier>? %"get"
+
+<setter-keyword-clause> ::= <attribute-list>? <mutation-modifier>? %"set"
+
+<willset-didset-block> ::= %"{" <willset-clause> <didset-clause>? %"}"
+                         | %"{" <didset-clause> <willset-clause>? %"}"
+
+<willset-clause> ::= <attribute-list>? %"willSet" <setter-name>? <code-block>
+
+<didset-clause> ::= <attribute-list>? %"didSet" <setter-name>? <code-block>
+
+# ============================================================================
+# Type Alias Declaration
+# ============================================================================
+
+<typealias-declaration> ::= <attribute-list>? <access-level-modifier>? %"typealias" %IDENTIFIER <generic-parameter-clause>? <typealias-assignment>
+
+<typealias-assignment> ::= %"=" <type>
+
+# ============================================================================
+# Function Declarations
+# ============================================================================
+
+<function-declaration> @nospace($2) @nospace($3) ::= <function-head> <function-name> <generic-parameter-clause>? <function-signature> <generic-where-clause>? <function-body>?
+
+<function-head> ::= <attribute-list>? <declaration-modifiers>? %"func"
+
+<function-name> ::= %IDENTIFIER | <operator>
+
+<function-signature> ::= <parameter-clause> <async-keyword>? <throws-clause>? <function-result>?
+
+<function-result> ::= %"->" <attribute-list>? <type>
+
+<function-body> ::= <code-block>
+
+<parameter-clause> @nospace ::= %"(" %")"
+                     | %"(" <parameter-list> %")"
+
+<parameter-list> @nospace($1) ::= <parameter> (%"," <parameter>)*
+
+<parameter> @nospace($3) ::= <attribute-list>? <external-parameter-name>? <local-parameter-name> <type-annotation> <default-argument-clause>?
+              | <attribute-list>? <external-parameter-name>? <local-parameter-name> <type-annotation> %"..."
+
+<external-parameter-name> ::= %IDENTIFIER | %"_"
+
+<local-parameter-name> ::= %IDENTIFIER | %"_"
+
+<default-argument-clause> ::= %"=" <expression>
+
+<async-keyword> ::= %"async"
+
+<throws-clause> ::= %"throws" (%"(" <type> %")")?
+                  | %"rethrows"
+
+# ============================================================================
+# Enum Declarations
+# ============================================================================
+
+<enum-declaration> ::= <attribute-list>? <access-level-modifier>? <indirect-keyword>? %"enum" %IDENTIFIER <generic-parameter-clause>? <type-inheritance-clause>? <generic-where-clause>? %"{" <enum-members>? %"}"
+
+<indirect-keyword> ::= %"indirect"
+
+<enum-members> ::= <enum-member> <enum-members>?
+
+<enum-member> ::= <declaration>
+               | <enum-case-clause>
+               | <compiler-control-statement>
+
+<enum-case-clause> ::= <attribute-list>? <indirect-keyword>? %"case" <enum-case-list>
+
+<enum-case-list> ::= <enum-case> (%"," <enum-case>)*
+
+<enum-case> ::= <enum-case-name> <enum-case-tuple>?
+              | <enum-case-name> <raw-value-assignment>
+
+<enum-case-name> ::= %IDENTIFIER
+
+<enum-case-tuple> ::= %"(" <enum-case-tuple-members>? %")"
+
+<enum-case-tuple-members> ::= <enum-case-tuple-member> (%"," <enum-case-tuple-member>)*
+
+<enum-case-tuple-member> ::= <attribute-list>? (%IDENTIFIER %":")? <type>
+
+<raw-value-assignment> ::= %"=" <raw-value-literal>
+
+<raw-value-literal> ::= <numeric-literal>
+                       | <static-string-literal>
+                       | <boolean-literal>
+
+# ============================================================================
+# Struct Declarations
+# ============================================================================
+
+<struct-declaration> ::= <attribute-list>? <access-level-modifier>? %"struct" %IDENTIFIER <generic-parameter-clause>? <type-inheritance-clause>? <generic-where-clause>? <struct-body>
+
+<struct-body> ::= %"{" <struct-members>? %"}"
+
+<struct-members> ::= <struct-member> <struct-members>?
+
+<struct-member> ::= <declaration>
+                  | <compiler-control-statement>
+
+# ============================================================================
+# Class Declarations
+# ============================================================================
+
+<class-declaration> ::= <attribute-list>? <access-level-modifier>? %"final"? %"class" %IDENTIFIER <generic-parameter-clause>? <type-inheritance-clause>? <generic-where-clause>? <class-body>
+
+
+<class-body> @hardline($1) @indent($1) @hardline($2) ::= %"{" <class-members>? %"}"
+
+<class-members> ::= <class-member> <class-members>?
+
+<class-member> ::= <declaration>
+                 | <compiler-control-statement>
+
+# ============================================================================
+# Actor Declarations
+# ============================================================================
+
+<actor-declaration> ::= <attribute-list>? <access-level-modifier>? %"actor" %IDENTIFIER <generic-parameter-clause>? <type-inheritance-clause>? <generic-where-clause>? <actor-body>
+
+<actor-body> ::= %"{" <actor-members>? %"}"
+
+<actor-members> ::= <actor-member> <actor-members>?
+
+<actor-member> ::= <declaration>
+                 | <compiler-control-statement>
+
+# ============================================================================
+# Protocol Declarations
+# ============================================================================
+
+<protocol-declaration> ::= <attribute-list>? <access-level-modifier>? %"protocol" %IDENTIFIER <primary-associated-type-clause>? <type-inheritance-clause>? <generic-where-clause>? <protocol-body>
+
+<primary-associated-type-clause> ::= %"<" <primary-associated-type-list> %">"
+
+<primary-associated-type-list> ::= %IDENTIFIER (%"," %IDENTIFIER)*
+
+<protocol-body> ::= %"{" <protocol-members>? %"}"
+
+<protocol-members> ::= <protocol-member> <protocol-members>?
+
+<protocol-member> ::= <protocol-member-declaration>
+                    | <compiler-control-statement>
+
+<protocol-member-declaration> ::= <protocol-property-declaration>
+                                | <protocol-method-declaration>
+                                | <protocol-initializer-declaration>
+                                | <protocol-subscript-declaration>
+                                | <protocol-associated-type-declaration>
+                                | <typealias-declaration>
+
+<protocol-property-declaration> ::= <variable-declaration-head> <variable-name> <type-annotation> <getter-setter-keyword-block>
+
+<protocol-method-declaration> ::= <function-head> <function-name> <generic-parameter-clause>? <function-signature> <generic-where-clause>?
+
+<protocol-initializer-declaration> ::= <initializer-head> <generic-parameter-clause>? <parameter-clause> <throws-clause>? <generic-where-clause>?
+
+<protocol-subscript-declaration> ::= <subscript-head> <subscript-result> <generic-where-clause>? <getter-setter-keyword-block>
+
+<protocol-associated-type-declaration> ::= <attribute-list>? <access-level-modifier>? %"associatedtype" %IDENTIFIER <type-inheritance-clause>? <typealias-assignment>? <generic-where-clause>?
+
+# ============================================================================
+# Initializer Declarations
+# ============================================================================
+
+<initializer-declaration> ::= <initializer-head> <generic-parameter-clause>? <parameter-clause> <async-keyword>? <throws-clause>? <generic-where-clause>? <initializer-body>
+
+<initializer-head> ::= <attribute-list>? <declaration-modifiers>? %"init"
+                     | <attribute-list>? <declaration-modifiers>? %"init" %"?"
+                     | <attribute-list>? <declaration-modifiers>? %"init" %"!"
+
+<initializer-body> ::= <code-block>
+
+# ============================================================================
+# Deinitializer Declarations
+# ============================================================================
+
+<deinitializer-declaration> ::= <attribute-list>? %"deinit" <code-block>
+
+# ============================================================================
+# Extension Declarations
+# ============================================================================
+
+<extension-declaration> ::= <attribute-list>? <access-level-modifier>? %"extension" <type-identifier> <type-inheritance-clause>? <generic-where-clause>? <extension-body>
+
+<extension-body> ::= %"{" <extension-members>? %"}"
+
+<extension-members> ::= <extension-member> <extension-members>?
+
+<extension-member> ::= <declaration>
+                     | <compiler-control-statement>
+
+# ============================================================================
+# Subscript Declarations
+# ============================================================================
+
+<subscript-declaration> ::= <subscript-head> <subscript-result> <generic-where-clause>? <getter-setter-block>
+                          | <subscript-head> <subscript-result> <generic-where-clause>? <getter-setter-keyword-block>
+
+<subscript-head> ::= <attribute-list>? <declaration-modifiers>? %"subscript" <generic-parameter-clause>? <parameter-clause>
+
+<subscript-result> ::= %"->" <attribute-list>? <type>
+
+# ============================================================================
+# Operator Declarations
+# ============================================================================
+
+<operator-declaration> ::= <prefix-operator-declaration>
+                         | <postfix-operator-declaration>
+                         | <infix-operator-declaration>
+
+<prefix-operator-declaration> ::= %"prefix" %"operator" <operator>
+
+<postfix-operator-declaration> ::= %"postfix" %"operator" <operator>
+
+<infix-operator-declaration> ::= %"infix" %"operator" <operator> <infix-operator-group>?
+
+<infix-operator-group> ::= %":" <precedence-group-name>
+
+# ============================================================================
+# Precedence Group Declarations
+# ============================================================================
+
+<precedence-group-declaration> ::= %"precedencegroup" <precedence-group-name> %"{" <precedence-group-attributes>? %"}"
+
+<precedence-group-name> ::= %IDENTIFIER
+
+<precedence-group-attributes> ::= <precedence-group-attribute> <precedence-group-attributes>?
+
+<precedence-group-attribute> ::= <precedence-group-relation>
+                               | <precedence-group-assignment>
+                               | <precedence-group-associativity>
+
+<precedence-group-relation> ::= %"higherThan" %":" <precedence-group-names>
+                              | %"lowerThan" %":" <precedence-group-names>
+
+<precedence-group-names> ::= <precedence-group-name> (%"," <precedence-group-name>)*
+
+<precedence-group-assignment> ::= %"assignment" %":" <boolean-literal>
+
+<precedence-group-associativity> ::= %"associativity" %":" <associativity-value>
+
+<associativity-value> ::= %"left" | %"right" | %"none"
+
+# ============================================================================
+# Macro Declarations
+# ============================================================================
+
+<macro-declaration> ::= <attribute-list>? <declaration-modifiers>? %"macro" %IDENTIFIER <generic-parameter-clause>? <function-signature> <generic-where-clause>? <macro-definition>?
+
+<macro-definition> ::= %"=" <macro-expansion-expression>
+
+<macro-expansion-expression> ::= %"#" %IDENTIFIER <generic-argument-clause>? <macro-arguments>?
+
+<macro-arguments> ::= %"(" <argument-list>? %")" <trailing-closures>?
+
+# ============================================================================
+# Declarations (summary)
+# ============================================================================
+
+<declaration> ::= <import-declaration>
+                | <constant-declaration>
+                | <variable-declaration>
+                | <typealias-declaration>
+                | <function-declaration>
+                | <enum-declaration>
+                | <struct-declaration>
+                | <class-declaration>
+                | <actor-declaration>
+                | <protocol-declaration>
+                | <initializer-declaration>
+                | <deinitializer-declaration>
+                | <extension-declaration>
+                | <subscript-declaration>
+                | <operator-declaration>
+                | <precedence-group-declaration>
+                | <macro-declaration>
+
+# ============================================================================
+# Code Blocks
+# ============================================================================
+
+<code-block> @hardline($1) @indent($1) @hardline($2) ::= %"{" <statements>? %"}"
+
+# ============================================================================
+# Loop Statements
+# ============================================================================
+
+<loop-statement> ::= <for-in-statement>
+                   | <while-statement>
+                   | <repeat-while-statement>
+
+# For-in statement
+<for-in-statement> ::= %"for" %"case"? <pattern> %"in" <expression> <where-clause>? <code-block>
+
+# While statement
+<while-statement> ::= %"while" <condition-list> <code-block>
+
+# Repeat-while statement
+<repeat-while-statement> ::= %"repeat" <code-block> %"while" <expression>
+
+# ============================================================================
+# Branch Statements
+# ============================================================================
+
+<branch-statement> ::= <if-statement>
+                     | <guard-statement>
+                     | <switch-statement>
+
+# If statement
+<if-statement> ::= %"if" <condition-list> <code-block> <else-clause>?
+
+<else-clause> ::= %"else" <code-block>
+               | %"else" <if-statement>
+
+# Guard statement
+<guard-statement> ::= %"guard" <condition-list> %"else" <code-block>
+
+# Condition list
+<condition-list> ::= <condition> (%"," <condition>)*
+
+<condition> ::= <expression>
+              | <availability-condition>
+              | <case-condition>
+              | <optional-binding-condition>
+
+<case-condition> ::= %"case" <pattern> <initializer>
+
+<optional-binding-condition> ::= %"let" <pattern> <initializer>?
+                               | %"var" <pattern> <initializer>?
+
+# Availability condition
+<availability-condition> ::= %"#available" %"(" <availability-arguments> %")"
+                           | %"#unavailable" %"(" <availability-arguments> %")"
+
+<availability-arguments> ::= <availability-argument> (%"," <availability-argument>)*
+
+<availability-argument> ::= <platform-name> <platform-version>
+                          | %"*"
+
+<platform-name> ::= %IDENTIFIER
+
+<platform-version> ::= %INTEGER (%"." %INTEGER (%"." %INTEGER)?)?
+
+# Switch statement
+<switch-statement> ::= %"switch" <expression> %"{" <switch-cases>? %"}"
+
+<switch-cases> ::= <switch-case> <switch-cases>?
+
+<switch-case> ::= <case-label> <statements>
+               | <default-label> <statements>
+               | <conditional-switch-case>
+
+<case-label> ::= <attribute-list>? %"case" <case-item-list> %":"
+
+<case-item-list> ::= <case-item> (%"," <case-item>)*
+
+<case-item> ::= <pattern> <where-clause>?
+
+<default-label> ::= <attribute-list>? %"default" %":"
+
+<conditional-switch-case> ::= <switch-if-directive-clause> <switch-elseif-directive-clauses>? <switch-else-directive-clause>? %"#endif"
+
+<switch-if-directive-clause> ::= %"#if" <compiler-control-expression> <switch-cases>?
+
+<switch-elseif-directive-clauses> ::= <switch-elseif-directive-clause> <switch-elseif-directive-clauses>?
+
+<switch-elseif-directive-clause> ::= %"#elseif" <compiler-control-expression> <switch-cases>?
+
+<switch-else-directive-clause> ::= %"#else" <switch-cases>?
+
+<where-clause> ::= %"where" <expression>
+
+# ============================================================================
+# Labeled Statements
+# ============================================================================
+
+<labeled-statement> ::= <statement-label> <loop-statement>
+                      | <statement-label> <if-statement>
+                      | <statement-label> <switch-statement>
+                      | <statement-label> <do-statement>
+
+<statement-label> ::= %IDENTIFIER %":"
+
+# ============================================================================
+# Control Transfer Statements
+# ============================================================================
+
+<control-transfer-statement> ::= <break-statement>
+                               | <continue-statement>
+                               | <fallthrough-statement>
+                               | <return-statement>
+                               | <throw-statement>
+
+<break-statement> ::= %"break" %IDENTIFIER?
+
+<continue-statement> ::= %"continue" %IDENTIFIER?
+
+<fallthrough-statement> ::= %"fallthrough"
+
+<return-statement> ::= %"return" <expression>?
+
+<throw-statement> ::= %"throw" <expression>
+
+# ============================================================================
+# Defer Statement
+# ============================================================================
+
+<defer-statement> ::= %"defer" <code-block>
+
+# ============================================================================
+# Do Statement / Error Handling
+# ============================================================================
+
+<do-statement> ::= %"do" <code-block> <catch-clauses>?
+
+<catch-clauses> ::= <catch-clause> <catch-clauses>?
+
+<catch-clause> ::= %"catch" <catch-pattern-list>? <code-block>
+
+<catch-pattern-list> ::= <catch-pattern> (%"," <catch-pattern>)*
+
+<catch-pattern> ::= <pattern> <where-clause>?
+
+# ============================================================================
+# Compiler Control Statements
+# ============================================================================
+
+<compiler-control-statement> ::= <conditional-compilation-block>
+                               | <line-control-statement>
+                               | <diagnostic-statement>
+
+<conditional-compilation-block> ::= <if-directive-clause> <elseif-directive-clauses>? <else-directive-clause>? %"#endif"
+
+<if-directive-clause> ::= %"#if" <compiler-control-expression> <statements>?
+
+<elseif-directive-clauses> ::= <elseif-directive-clause> <elseif-directive-clauses>?
+
+<elseif-directive-clause> ::= %"#elseif" <compiler-control-expression> <statements>?
+
+<else-directive-clause> ::= %"#else" <statements>?
+
+<compiler-control-expression> ::= <platform-condition>
+                                | %IDENTIFIER
+                                | <boolean-literal>
+                                | %"(" <compiler-control-expression> %")"
+                                | %"!" <compiler-control-expression>
+                                | <compiler-control-expression> %"&&" <compiler-control-expression>
+                                | <compiler-control-expression> %"||" <compiler-control-expression>
+
+<platform-condition> ::= %"os" %"(" <operating-system> %")"
+                       | %"arch" %"(" <architecture> %")"
+                       | %"swift" %"(" %">=" <swift-version> %")"
+                       | %"swift" %"(" %"<" <swift-version> %")"
+                       | %"compiler" %"(" %">=" <swift-version> %")"
+                       | %"canImport" %"(" <import-path> %")"
+                       | %"targetEnvironment" %"(" <environment> %")"
+                       | %"hasFeature" %"(" %IDENTIFIER %")"
+
+<operating-system> ::= %"macOS" | %"iOS" | %"watchOS" | %"tvOS" | %"visionOS"
+                     | %"Linux" | %"Windows"
+
+<architecture> ::= %"i386" | %"x86_64" | %"arm" | %"arm64"
+
+<swift-version> ::= %INTEGER (%"." %INTEGER)*
+
+<environment> ::= %"simulator" | %"macCatalyst"
+
+<line-control-statement> ::= %"#sourceLocation" %"(" %"file" %":" <static-string-literal> %"," %"line" %":" %INTEGER %")"
+                           | %"#sourceLocation" %"(" %")"
+
+<diagnostic-statement> ::= %"#warning" %"(" <static-string-literal> %")"
+                         | %"#error" %"(" <static-string-literal> %")"
+
+# ============================================================================
+# Expressions
+# ============================================================================
+
+<expression> ::= <try-operator>? <await-operator>? <prefix-expression> <infix-expressions>?
+
+<expression-list> ::= <expression> (%"," <expression>)*
+
+# ============================================================================
+# Prefix Expressions
+# ============================================================================
+
+<prefix-expression> ::= <prefix-operator>? <postfix-expression>
+                      | <in-out-expression>
+
+<in-out-expression> ::= %"&" %IDENTIFIER
+
+# ============================================================================
+# Infix Expressions (Binary Operators)
+# ============================================================================
+
+<infix-expressions> ::= <infix-expression> <infix-expressions>?
+
+<infix-expression> ::= <binary-operator> <prefix-expression>
+                     | <assignment-operator> <try-operator>? <await-operator>? <prefix-expression>
+                     | <conditional-operator> <try-operator>? <await-operator>? <prefix-expression>
+                     | <type-casting-operator>
+
+<assignment-operator> ::= %"="
+
+<conditional-operator> ::= %"?" <expression> %":"
+
+<type-casting-operator> ::= %"is" <type>
+                          | %"as" <type>
+                          | %"as" %"?" <type>
+                          | %"as" %"!" <type>
+
+# ============================================================================
+# Try and Await Operators
+# ============================================================================
+
+<try-operator> ::= %"try"
+                 | %"try" %"?"
+                 | %"try" %"!"
+
+<await-operator> ::= %"await"
+
+# ============================================================================
+# Postfix Expressions
+# ============================================================================
+
+<postfix-expression> ::= <primary-expression> <postfix-operations>?
+
+<postfix-operations> ::= <postfix-operation> <postfix-operations>?
+
+<postfix-operation> ::= <postfix-operator>
+                      | <function-call-suffix>
+                      | <initializer-suffix>
+                      | <explicit-member-suffix>
+                      | <postfix-self-suffix>
+                      | <subscript-suffix>
+                      | <forced-value-suffix>
+                      | <optional-chaining-suffix>
+
+# Function call
+<function-call-suffix> ::= <function-call-argument-clause> <trailing-closures>?
+                         | <trailing-closures>
+
+<function-call-argument-clause> ::= %"(" %")"
+                                  | %"(" <function-call-argument-list> %")"
+
+<function-call-argument-list> ::= <function-call-argument> (%"," <function-call-argument>)*
+
+<function-call-argument> ::= %IDENTIFIER %":" <expression>
+                           | <operator> %":" <expression>
+                           | <expression>
+
+# Trailing closures
+<trailing-closures> ::= <closure-expression> <labeled-trailing-closures>?
+
+<labeled-trailing-closures> ::= <labeled-trailing-closure> <labeled-trailing-closures>?
+
+<labeled-trailing-closure> ::= %IDENTIFIER %":" <closure-expression>
+
+# Initializer suffix
+<initializer-suffix> ::= %"." %"init"
+                       | %"." %"init" %"(" <argument-names> %")"
+
+<argument-names> ::= <argument-name> <argument-names>?
+
+<argument-name> ::= %IDENTIFIER %":" | %"_" %":"
+
+# Explicit member access
+<explicit-member-suffix> ::= %"." %INTEGER
+                           | %"." %IDENTIFIER <generic-argument-clause>?
+                           | %"." %IDENTIFIER %"(" <argument-names> %")"
+
+# Self access
+<postfix-self-suffix> ::= %"." %"self"
+
+# Subscript
+<subscript-suffix> ::= %"[" <function-call-argument-list> %"]"
+
+# Forced value
+<forced-value-suffix> ::= %"!"
+
+# Optional chaining
+<optional-chaining-suffix> ::= %"?"
+
+# ============================================================================
+# Primary Expressions
+# ============================================================================
+
+<primary-expression> ::= %IDENTIFIER <generic-argument-clause>?
+                       | <literal-expression>
+                       | <self-expression>
+                       | <superclass-expression>
+                       | <closure-expression>
+                       | <parenthesized-expression>
+                       | <tuple-expression>
+                       | <implicit-member-expression>
+                       | <wildcard-expression>
+                       | <key-path-expression>
+                       | <selector-expression>
+                       | <key-path-string-expression>
+                       | <macro-expansion-expression>
+                       | %IMPLICIT_PARAM
+
+# ============================================================================
+# Literal Expressions
+# ============================================================================
+
+<literal-expression> ::= <literal>
+                       | <array-literal>
+                       | <dictionary-literal>
+                       | %"#file"
+                       | %"#fileID"
+                       | %"#filePath"
+                       | %"#line"
+                       | %"#column"
+                       | %"#function"
+                       | %"#dsohandle"
+
+<literal> ::= <numeric-literal>
+            | <string-literal>
+            | <boolean-literal>
+            | <nil-literal>
+            | <regex-literal>
+
+<numeric-literal> ::= <prefix-operator>? %INTEGER
+                    | <prefix-operator>? %FLOAT
+
+<string-literal> ::= %STRING
+                   | %MULTILINE_STRING
+
+<static-string-literal> ::= %STRING
+
+<boolean-literal> ::= %"true" | %"false"
+
+<nil-literal> ::= %"nil"
+
+<regex-literal> ::= %REGEX_LIT
+
+# Array literal
+<array-literal> ::= %"[" <array-literal-items>? %"]"
+
+<array-literal-items> ::= <array-literal-item> (%"," <array-literal-item>)* %","?
+
+<array-literal-item> ::= <expression>
+
+# Dictionary literal
+<dictionary-literal> ::= %"[" <dictionary-literal-items> %"]"
+                       | %"[" %":" %"]"
+
+<dictionary-literal-items> ::= <dictionary-literal-item> (%"," <dictionary-literal-item>)* %","?
+
+<dictionary-literal-item> ::= <expression> %":" <expression>
+
+# ============================================================================
+# Self Expressions
+# ============================================================================
+
+<self-expression> ::= %"self"
+                    | %"self" %"." %IDENTIFIER
+                    | %"self" %"[" <function-call-argument-list> %"]"
+                    | %"self" %"." %"init"
+
+# ============================================================================
+# Superclass Expressions
+# ============================================================================
+
+<superclass-expression> ::= <superclass-method-expression>
+                          | <superclass-subscript-expression>
+                          | <superclass-initializer-expression>
+
+<superclass-method-expression> ::= %"super" %"." %IDENTIFIER
+
+<superclass-subscript-expression> ::= %"super" %"[" <function-call-argument-list> %"]"
+
+<superclass-initializer-expression> ::= %"super" %"." %"init"
+
+# ============================================================================
+# Closure Expressions
+# ============================================================================
+
+<closure-expression> ::= %"{" <attribute-list>? <closure-signature>? <statements>? %"}"
+
+<closure-signature> ::= <capture-list>? <closure-parameter-clause> <async-keyword>? <throws-clause>? <function-result>? %"in"
+                      | <capture-list> %"in"
+
+<closure-parameter-clause> ::= %"(" <closure-parameter-list>? %")"
+                             | <identifier-list>
+
+<closure-parameter-list> ::= <closure-parameter> (%"," <closure-parameter>)*
+
+<closure-parameter> ::= <closure-parameter-name> <type-annotation>? %"..."?
+                      | <closure-parameter-name>
+
+<closure-parameter-name> ::= %IDENTIFIER | %"_"
+
+<identifier-list> ::= %IDENTIFIER (%"," %IDENTIFIER)*
+
+# Capture list
+<capture-list> ::= %"[" <capture-list-items> %"]"
+
+<capture-list-items> ::= <capture-list-item> (%"," <capture-list-item>)*
+
+<capture-list-item> ::= <capture-specifier>? <capture-item-expression>
+
+<capture-specifier> ::= %"weak" | %"unowned" | %"unowned" %"(" %"safe" %")" | %"unowned" %"(" %"unsafe" %")"
+
+<capture-item-expression> ::= %IDENTIFIER
+                            | %IDENTIFIER %"=" <expression>
+                            | %"self"
+
+# ============================================================================
+# Parenthesized and Tuple Expressions
+# ============================================================================
+
+<parenthesized-expression> ::= %"(" <expression> %")"
+
+<tuple-expression> ::= %"(" %")"
+                     | %"(" <tuple-element-list> %")"
+
+<tuple-element-list> ::= <tuple-element> %"," <tuple-element> (%"," <tuple-element>)*
+
+<tuple-element> ::= %IDENTIFIER %":" <expression>
+                  | <expression>
+
+# ============================================================================
+# Implicit Member Expression
+# ============================================================================
+
+<implicit-member-expression> ::= %"." %IDENTIFIER
+                               | %"." %"init"
+
+# ============================================================================
+# Wildcard Expression
+# ============================================================================
+
+<wildcard-expression> ::= %"_"
+
+# ============================================================================
+# Key-Path Expression
+# ============================================================================
+
+<key-path-expression> ::= %"\\" <type>? %"." <key-path-components>
+
+<key-path-components> ::= <key-path-component> (%"." <key-path-component>)*
+
+<key-path-component> ::= %IDENTIFIER <key-path-postfixes>?
+                       | <key-path-postfixes>
+
+<key-path-postfixes> ::= <key-path-postfix> <key-path-postfixes>?
+
+<key-path-postfix> ::= %"?"
+                     | %"!"
+                     | %"self"
+                     | %"[" <function-call-argument-list> %"]"
+
+# ============================================================================
+# Selector Expression
+# ============================================================================
+
+<selector-expression> ::= %"#selector" %"(" <expression> %")"
+                        | %"#selector" %"(" %"getter" %":" <expression> %")"
+                        | %"#selector" %"(" %"setter" %":" <expression> %")"
+
+# ============================================================================
+# Key-Path String Expression
+# ============================================================================
+
+<key-path-string-expression> ::= %"#keyPath" %"(" <expression> %")"
+
+# ============================================================================
+# Operators
+# ============================================================================
+
+# Binary operators (standard Swift operators)
+<binary-operator> ::= %"+"  | %"-"  | %"*"  | %"/"  | %"%"
+                    | %"+=" | %"-=" | %"*=" | %"/=" | %"%="
+                    | %"==" | %"!=" | %"<"  | %">"  | %"<=" | %">="
+                    | %"===" | %"!=="
+                    | %"&&" | %"||"
+                    | %"&"  | %"|"  | %"^"  | %"~"
+                    | %"&=" | %"|=" | %"^="
+                    | %"<<" | %">>"
+                    | %"<<=" | %">>="
+                    | %"??" | %"..<" | %"..."
+                    | %"&+" | %"&-" | %"&*"
+                    | <custom-operator>
+
+<prefix-operator> ::= %"-" | %"!" | %"~" | %"..<"
+                    | <custom-operator>
+
+<postfix-operator> ::= %"..."
+                     | <custom-operator>
+
+<operator> ::= <binary-operator>
+             | <prefix-operator>
+             | <postfix-operator>
+
+<custom-operator> ::= %IDENTIFIER
+
+# ============================================================================
+# Patterns
+# ============================================================================
+
+<pattern> ::= <wildcard-pattern> <type-annotation>?
+            | <identifier-pattern> <type-annotation>?
+            | <value-binding-pattern>
+            | <tuple-pattern> <type-annotation>?
+            | <enum-case-pattern>
+            | <optional-pattern>
+            | <expression-pattern>
+            | <is-cast-pattern>
+            | <as-cast-pattern>
+
+<wildcard-pattern> ::= %"_"
+
+<identifier-pattern> ::= %IDENTIFIER
+
+<value-binding-pattern> ::= %"var" <pattern>
+                          | %"let" <pattern>
+
+<tuple-pattern> ::= %"(" <tuple-pattern-element-list>? %")"
+
+<tuple-pattern-element-list> ::= <tuple-pattern-element> (%"," <tuple-pattern-element>)*
+
+<tuple-pattern-element> ::= (%IDENTIFIER %":")? <pattern>
+
+<enum-case-pattern> ::= <type-identifier>? %"." <enum-case-name> <tuple-pattern>?
+
+<optional-pattern> ::= <identifier-pattern> %"?"
+
+<expression-pattern> ::= <expression>
+
+<is-cast-pattern> ::= %"is" <type>
+
+<as-cast-pattern> ::= <pattern> %"as" <type>
+
+# ============================================================================
+# Types
+# ============================================================================
+
+<type> ::= <function-type>
+          | <array-type>
+          | <dictionary-type>
+          | <type-identifier>
+          | <tuple-type>
+          | <optional-type>
+          | <implicitly-unwrapped-optional-type>
+          | <protocol-composition-type>
+          | <opaque-type>
+          | <existential-type>
+          | <boxed-protocol-type>
+          | <metatype-type>
+          | <any-type>
+          | <self-type>
+          | %"(" <type> %")"
+
+# Type identifier
+<type-identifier> ::= <type-name> <generic-argument-clause>? (%"." <type-name> <generic-argument-clause>?)*
+
+<type-name> ::= %IDENTIFIER
+
+# Tuple type
+<tuple-type> ::= %"(" %")"
+               | %"(" <tuple-type-element-list> %")"
+
+<tuple-type-element-list> ::= <tuple-type-element> (%"," <tuple-type-element>)*
+
+<tuple-type-element> ::= <element-name> <type-annotation>
+                       | <type>
+
+<element-name> ::= %IDENTIFIER | %"_"
+
+# Function type
+<function-type> ::= <attribute-list>? <function-type-argument-clause> <async-keyword>? %"throws"? %"->" <type>
+
+<function-type-argument-clause> ::= %"(" %")"
+                                  | %"(" <function-type-argument-list> %"..."? %")"
+
+<function-type-argument-list> ::= <function-type-argument> (%"," <function-type-argument>)*
+
+<function-type-argument> ::= <attribute-list>? %"inout"? <type>
+                           | <argument-label> <type-annotation>
+
+<argument-label> ::= %IDENTIFIER | %"_"
+
+# Array type
+<array-type> ::= %"[" <type> %"]"
+
+# Dictionary type
+<dictionary-type> ::= %"[" <type> %":" <type> %"]"
+
+# Optional type
+<optional-type> ::= <type> %"?"
+
+# Implicitly unwrapped optional type
+<implicitly-unwrapped-optional-type> ::= <type> %"!"
+
+# Protocol composition type
+<protocol-composition-type> ::= <type-identifier> %"&" <protocol-composition-continuation>
+
+<protocol-composition-continuation> ::= <type-identifier> (%"&" <type-identifier>)*
+
+# Opaque type
+<opaque-type> ::= %"some" <type>
+
+# Existential type
+<existential-type> ::= %"any" <type>
+
+# Boxed protocol type (explicit Any)
+<boxed-protocol-type> ::= %"Any"
+
+# Metatype type
+<metatype-type> ::= <type> %"." %"Type"
+                  | <type> %"." %"Protocol"
+
+# Any type
+<any-type> ::= %"Any"
+
+# Self type
+<self-type> ::= %"Self"
+
+# Type annotation
+<type-annotation> ::= %":" <attribute-list>? %"inout"? <type>
+
+# ============================================================================
+# Type Inheritance
+# ============================================================================
+
+<type-inheritance-clause> ::= %":" <type-inheritance-list>
+
+<type-inheritance-list> ::= <type-identifier> (%"," <type-identifier>)*
+
+# ============================================================================
+# Generics
+# ============================================================================
+
+# Generic parameter clause
+<generic-parameter-clause> ::= %"<" <generic-parameter-list> %">"
+
+<generic-parameter-list> ::= <generic-parameter> (%"," <generic-parameter>)*
+
+<generic-parameter> ::= <type-name>
+                      | <type-name> %":" <type-identifier>
+                      | <type-name> %":" <protocol-composition-type>
+                      | %"each" <type-name>
+
+# Generic argument clause
+<generic-argument-clause> ::= %"<" <generic-argument-list> %">"
+
+<generic-argument-list> ::= <generic-argument> (%"," <generic-argument>)*
+
+<generic-argument> ::= <type>
+
+# Generic where clause
+<generic-where-clause> ::= %"where" <requirement-list>
+
+<requirement-list> ::= <requirement> (%"," <requirement>)*
+
+<requirement> ::= <conformance-requirement>
+               | <same-type-requirement>
+
+<conformance-requirement> ::= <type-identifier> %":" <type-identifier>
+                            | <type-identifier> %":" <protocol-composition-type>
+
+<same-type-requirement> ::= <type-identifier> %"==" <type>
+
+# ============================================================================
+# Attributes
+# ============================================================================
+
+<attribute-list> ::= <attribute> <attribute-list>?
+
+<attribute> ::= %"@" <attribute-name> <attribute-argument-clause>?
+
+<attribute-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
+
+<attribute-argument-clause> ::= %"(" <balanced-tokens>? %")"
+
+<balanced-tokens> ::= <balanced-token> <balanced-tokens>?
+
+<balanced-token> ::= %"(" <balanced-tokens>? %")"
+                   | %"[" <balanced-tokens>? %"]"
+                   | %"{" <balanced-tokens>? %"}"
+                   | %IDENTIFIER
+                   | <literal>
+                   | <operator>
+                   | %"," | %":" | %";" | %"=" | %"@" | %"#"
+                   | %"&" | %"->" | %"." | %"?" | %"!"
+
+# ============================================================================
+# Access Control and Declaration Modifiers
+# ============================================================================
+
+<declaration-modifiers> ::= <declaration-modifier> <declaration-modifiers>?
+
+<declaration-modifier> ::= %"class"
+                         | %"convenience"
+                         | %"dynamic"
+                         | %"final"
+                         | %"infix"
+                         | %"lazy"
+                         | %"optional"
+                         | %"override"
+                         | %"postfix"
+                         | %"prefix"
+                         | %"required"
+                         | %"static"
+                         | %"unowned"
+                         | %"unowned" %"(" %"safe" %")"
+                         | %"unowned" %"(" %"unsafe" %")"
+                         | %"weak"
+                         | %"nonisolated"
+                         | %"distributed"
+                         | %"consuming"
+                         | %"borrowing"
+                         | %"noncopyable"
+                         | <mutation-modifier>
+                         | <access-level-modifier>
+
+<access-level-modifier> ::= %"private"
+                          | %"private" %"(" %"set" %")"
+                          | %"fileprivate"
+                          | %"fileprivate" %"(" %"set" %")"
+                          | %"internal"
+                          | %"internal" %"(" %"set" %")"
+                          | %"public"
+                          | %"public" %"(" %"set" %")"
+                          | %"open"
+                          | %"open" %"(" %"set" %")"
+                          | %"package"
+                          | %"package" %"(" %"set" %")"
+
+<mutation-modifier> ::= %"mutating" | %"nonmutating"
+
+# ============================================================================
+# Argument List (for function calls, macro expansions, etc.)
+# ============================================================================
+
+<argument-list> ::= <argument> (%"," <argument>)*
+
+<argument> ::= %IDENTIFIER %":" <expression>
+             | <operator> %":" <expression>
+             | <expression>
+
+# ============================================================================
+# Result Builder (used in function bodies with @resultBuilder attribute)
+#
+# Result builders are syntactic sugar; the builder methods (buildBlock,
+# buildEither, buildOptional, etc.) are resolved by the type checker.
+# No special grammar productions are required -- they use the existing
+# statement/expression grammar with attribute annotations.
+# ============================================================================
+
+# ============================================================================
+# Concurrency
+# ============================================================================
+
+# async/await are handled via <async-keyword> and <await-operator> above.
+#
+# Actor declarations are handled by <actor-declaration>.
+#
+# Task { } and TaskGroup are ordinary function/initializer calls and
+# need no special grammar productions.
+#
+# The structured concurrency keywords (async let) are covered by the
+# existing declaration grammar:
+#   attribute-list? declaration-modifiers? "let" pattern-initializer-list
+# where the expression on the right side may use "await".
+
+# ============================================================================
+# Property Wrappers
+#
+# Property wrappers are applied via attributes (@Wrapper var x: T = ...).
+# The attribute grammar above (@attribute-name with optional arguments)
+# covers their syntactic form.  The compiler resolves the wrapper type
+# and synthesizes the backing storage.  No additional grammar is needed.
+# ============================================================================
+
+# ============================================================================
+# String Interpolation
+#
+# String interpolation (\(expr)) is handled by the lexer, which produces
+# %STRING tokens containing interpolation segments.  No grammar-level
+# productions are needed.
+# ============================================================================

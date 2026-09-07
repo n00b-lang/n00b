@@ -1,0 +1,760 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "ir/typelang.h"
+#include "ir/layout.h"
+#include "lib/alloc.h"
+#include "parse/annot_walk.h"
+#include "parse/annotation.h"
+#include "parse/bnf.h"
+#include "parse/pwz.h"
+#include "parse/symtab.h"
+#include "parse/tree_util.h"
+#include "parse/tree_visit.h"
+#include "scanner/token_stream.h"
+#include "private/parse/grammar.h"
+#include "harness.h"
+
+static core_string_t
+S(const char *s)
+{
+    return core_string_from_cstr(s);
+}
+
+static th_ctx *types;
+
+static bool
+is_type(th_type *t, const char *typelang)
+{
+    return t && types
+        && th_hash(types, t) == th_hash(types, ir_type_from_text(
+                                                   types,
+                                                   S(typelang)));
+}
+
+typedef struct {
+    int               decls_seen;
+    parse_tree_t *block_node;
+    parse_tree_t *cond_node;
+    parse_scope_t      *module_scope;
+    parse_scope_t      *block_scope;
+} probe_t;
+
+static bool
+saw_decl(parse_visit_t *v)
+{
+    ((probe_t *)v->thunk)->decls_seen++;
+
+    return true;
+}
+
+static bool
+saw_block(parse_visit_t *v)
+{
+    probe_t *p = (probe_t *)v->thunk;
+
+    p->block_node  = v->node;
+    p->block_scope = v->pn->scope;
+
+    return true;
+}
+
+static bool
+saw_prog(parse_visit_t *v)
+{
+    ((probe_t *)v->thunk)->module_scope = v->pn->scope;
+
+    return true;
+}
+
+static bool
+saw_cond(parse_visit_t *v)
+{
+    ((probe_t *)v->thunk)->cond_node = v->node;
+
+    return true;
+}
+
+static parse_grammar_t *
+load_toy(void)
+{
+    core_string_t text = slurp("toy.bnf");
+
+    if (!text.data) {
+        return nullptr;
+    }
+
+    parse_grammar_t *g = parse_grammar_new();
+
+    parse_grammar_set_error_recovery(g, false);
+
+    if (!parse_bnf_load(text, S("prog"), g)) {
+        check("toy.bnf loads", false);
+        parse_grammar_free(g);
+
+        return nullptr;
+    }
+
+    return g;
+}
+
+static parse_tree_t *
+parse_toy(parse_grammar_t *g, const char *src, parse_pwz_parser_t **p_out,
+          parse_token_stream_t **ts_out)
+{
+    parse_token_stream_t *ts = scan_token_stream_from_codepoints(S(src));
+    parse_pwz_parser_t   *p  = parse_pwz_new(g);
+
+    if (!parse_pwz_parse(p, ts)) {
+        return nullptr;
+    }
+
+    *p_out  = p;
+    *ts_out = ts;
+
+    return parse_pwz_get_tree(p);
+}
+
+static void
+test_annotations_are_retained_on_the_grammar(parse_grammar_t *g)
+{
+    parse_annotation_t *tok = parse_grammar_find_annot(g, PARSE_ANNOT_TOKENIZER);
+
+    check("a file-level annotation is retained on the grammar", tok != nullptr);
+
+    if (tok) {
+        check("and keeps its argument", core_string_eq(tok->scope_tag, S("toy")));
+    }
+
+    parse_nonterm_t *prog = nullptr;
+
+    for (size_t i = 0; i < core_list_len(g->nt_list); i++) {
+        if (core_string_eq(g->nt_list.data[i]->name, S("prog"))) {
+            prog = g->nt_list.data[i];
+        }
+    }
+
+    check("the start non-terminal exists", prog != nullptr);
+
+    if (prog) {
+        check("and carries its @scope annotation",
+              parse_nt_find_annot(g, prog, PARSE_ANNOT_SCOPE_OPEN) != nullptr);
+    }
+
+    parse_annotation_t *a = parse_nt_find_annot(g, prog, PARSE_ANNOT_SCOPE_OPEN);
+
+    if (a) {
+        check("with the tag it was written with",
+              core_string_eq(a->scope_tag, S("module")));
+    }
+}
+
+static void
+test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
+{
+    parse_pwz_parser_t   *p;
+    parse_token_stream_t *ts;
+    parse_tree_t   *tree = parse_toy(g, "vaT;{vbU;}?xyztcV;", &p, &ts);
+
+    if (!tree) {
+        check("the toy program parses", false);
+
+        return;
+    }
+
+    types = th_ctx_new();
+
+    probe_t             probe = {0};
+    parse_annot_result_t *r     = core_alloc(parse_annot_result_t);
+
+    memset(r, 0, sizeof(*r));
+    r->symtab    = parse_symtab_new();
+    r->cf_labels = core_alloc(core_dict_t);
+    core_dict_init(r->cf_labels, core_hash_word, nullptr);
+
+    parse_tree_walk_t *w = parse_tree_walk_new(g, r);
+
+    parse_annot_register(w, r, types, nullptr);
+
+    check("a visitor can be registered by non-terminal name",
+          parse_walk_on_nt(w, S("decl"), saw_decl, nullptr, &probe));
+    check("registering an unknown non-terminal fails",
+          !parse_walk_on_nt(w, S("no-such-rule"), saw_decl, nullptr, &probe));
+
+    parse_walk_on_nt(w, S("block"), nullptr, saw_block, &probe);
+    parse_walk_on_nt(w, S("prog"), nullptr, saw_prog, &probe);
+    parse_walk_on_nt(w, S("cond"), nullptr, saw_cond, &probe);
+
+    parse_tree_walk_run(w, tree);
+    parse_tree_walk_free(w);
+
+    check("a caller's visitor fires once per matching node",
+          probe.decls_seen == 2);
+    check("the module scope was opened", probe.module_scope != nullptr);
+    check("the block scope was opened", probe.block_scope != nullptr);
+
+    if (probe.module_scope && probe.block_scope) {
+        check("the block scope nests inside the module scope",
+              probe.block_scope->parent == probe.module_scope);
+        check("and the module scope is tagged as the annotation wrote it",
+              core_string_eq(probe.module_scope->scope_tag, S("module")));
+        check("scope depth counts from the file scope",
+              probe.module_scope->depth == 1 && probe.block_scope->depth == 2);
+    }
+
+    parse_symtab_t *st = r->symtab;
+
+    parse_sym_entry_t *a = parse_symtab_lookup_scoped(st, probe.module_scope,
+                                                  core_string_empty(), S("a"));
+    parse_sym_entry_t *b_from_module
+        = parse_symtab_lookup_scoped(st, probe.module_scope, core_string_empty(),
+                                   S("b"));
+    parse_sym_entry_t *b_from_block
+        = parse_symtab_lookup_scoped(st, probe.block_scope, core_string_empty(),
+                                   S("b"));
+    parse_sym_entry_t *a_from_block
+        = parse_symtab_lookup_scoped(st, probe.block_scope, core_string_empty(),
+                                   S("a"));
+    parse_sym_entry_t *c = parse_symtab_lookup_scoped(st, probe.module_scope,
+                                                  core_string_empty(), S("c"));
+
+    check("a symbol declared at module scope is found there", a != nullptr);
+    check("a symbol declared in a block is not visible outside it",
+          b_from_module == nullptr);
+    check("but is visible from inside the block", b_from_block != nullptr);
+    check("and the enclosing scope is still reachable from the block",
+          a_from_block == a);
+    check("a scope is still searchable after the walk popped it",
+          b_from_block != nullptr && b_from_block->scope == probe.block_scope);
+    check("every declaration was recorded", c != nullptr);
+
+    check("@type's argument is typelang, so it becomes that type",
+          is_type(c->type, "int"));
+    check("a @declares type child that is not typelang gets no type",
+          a && a->type == nullptr);
+
+    check("an annotation can read what a later-written annotation produced",
+          c && c->type != nullptr);
+
+    check("the @branch node was found", probe.cond_node != nullptr);
+
+    parse_cf_label_t *cf = parse_cf_label_lookup(r, probe.cond_node);
+
+    check("@branch produces a control flow label", cf != nullptr);
+
+    if (cf) {
+        check("of the right kind", cf->kind == PARSE_CF_BRANCH);
+        check("with all three arms resolved",
+              cf->cond && cf->then_body && cf->else_body
+                  && cf->cond != cf->then_body
+                  && cf->then_body != cf->else_body);
+        check("and each arm is the child the annotation named",
+              core_string_eq(parse_tree_extract_first_identifier(cf->cond), S("x"))
+                  && core_string_eq(
+                      parse_tree_extract_first_identifier(cf->then_body), S("y"))
+                  && core_string_eq(
+                      parse_tree_extract_first_identifier(cf->else_body),
+                      S("z")));
+    }
+
+    parse_annot_result_free(r);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+}
+
+static void
+test_a_deep_tree_does_not_overflow_the_stack(parse_grammar_t *g)
+{
+    const char *want = getenv("IR_DEEP");
+    const int   N    = want ? atoi(want) : 600;
+
+    char *src = core_alloc_size(1, (size_t)N * 4 + 1);
+
+    for (int i = 0; i < N; i++) {
+        memcpy(src + i * 4, "vaT;", 4);
+    }
+
+    src[N * 4] = 0;
+
+    parse_pwz_parser_t   *p;
+    parse_token_stream_t *ts;
+    parse_tree_t   *tree = parse_toy(g, src, &p, &ts);
+
+    if (!tree) {
+        check("a deeply nested program parses", false);
+        core_free(src);
+
+        return;
+    }
+
+    probe_t          probe = {0};
+    parse_tree_walk_t *w     = parse_tree_walk_new(g, nullptr);
+
+    parse_walk_on_nt(w, S("decl"), saw_decl, nullptr, &probe);
+    parse_tree_walk_run(w, tree);
+    parse_tree_walk_free(w);
+
+    check("a walk over a deeply nested tree visits every node",
+          probe.decls_seen == N);
+
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    core_free(src);
+}
+
+static parse_nonterm_t *
+nt_named(parse_grammar_t *g, const char *name)
+{
+    for (size_t i = 0; i < core_list_len(g->nt_list); i++) {
+        if (core_string_eq(g->nt_list.data[i]->name, S(name))) {
+            return g->nt_list.data[i];
+        }
+    }
+
+    return nullptr;
+}
+
+static void
+test_annotation_arguments_only_need_balanced_parens(void)
+{
+    static const char *src
+        = "<top> @declares($1,$2,\"var\") @disambig(pred(a, b, c()), 4) "
+          "::= <n> <t>\n"
+          "<n> ::= __LOWER\n"
+          "<t> ::= __UPPER\n";
+
+    parse_grammar_t *g = parse_grammar_new();
+
+    check("an annotation argument may nest balanced parentheses",
+          parse_bnf_load(S(src), S("top"), g));
+
+    parse_nonterm_t *top = nt_named(g, "top");
+
+    check("the annotated non-terminal is there", top != nullptr);
+
+    if (top) {
+        parse_annotation_t *d = parse_nt_find_annot(g, top, PARSE_ANNOT_DECLARES);
+
+        check("@declares still reads its child references",
+              d != nullptr && d->name_ref.kind == PARSE_ROLE_BY_INDEX
+                  && d->name_ref.index == 1
+                  && d->type_ref.index == 2
+                  && core_string_eq(d->sym_kind, S("var")));
+
+        check("the annotation that nests parentheses survives the load",
+              parse_nt_find_annot(g, top, PARSE_ANNOT_DISAMBIG) != nullptr);
+    }
+
+    parse_grammar_free(g);
+
+    static const char *by_name
+        = "<top> @literal(\"int\", $t) ::= <n> <t>\n"
+          "<n> ::= __LOWER\n"
+          "<t> ::= __UPPER\n";
+
+    parse_grammar_t *g2 = parse_grammar_new();
+
+    check("a reference may name a non-terminal instead of an index",
+          parse_bnf_load(S(by_name), S("top"), g2));
+
+    parse_nonterm_t    *t2 = nt_named(g2, "top");
+    parse_annotation_t *l  = t2 ? parse_nt_find_annot(g2, t2, PARSE_ANNOT_LITERAL)
+                              : nullptr;
+
+    check("and $name carries the name, not an index",
+          l != nullptr && l->type_ref.kind == PARSE_ROLE_BY_NAME
+              && core_string_eq(l->type_ref.name, S("t"))
+              && core_string_eq(l->op_kind, S("int")));
+
+    parse_grammar_free(g2);
+
+    static const char *unbalanced
+        = "<top> @disambig(pred(a) ::= <n>\n"
+          "<n> ::= __LOWER\n";
+
+    parse_grammar_t *bad = parse_grammar_new();
+
+    check("an unbalanced argument region is not a grammar",
+          !parse_bnf_load(S(unbalanced), S("top"), bad));
+
+    parse_grammar_free(bad);
+}
+
+static void
+test_annotation_arguments_carry_integers(void)
+{
+    static const char *src
+        = "<top> @penalty(7) ::= <n>\n"
+          "<mid> @disambig(pred, 3) ::= <n>\n"
+          "<n> ::= __LOWER\n";
+
+    parse_grammar_t *g = parse_grammar_new();
+
+    check("a grammar with integer annotation arguments loads",
+          parse_bnf_load(S(src), S("top"), g));
+
+    parse_nonterm_t *top = nt_named(g, "top");
+    parse_nonterm_t *mid = nt_named(g, "mid");
+
+    parse_annotation_t *p = top ? parse_nt_find_annot(g, top, PARSE_ANNOT_PENALTY)
+                              : nullptr;
+
+    check("@penalty reads the number it was written with",
+          p != nullptr && p->penalty_cost == 7);
+
+    parse_annotation_t *d = mid ? parse_nt_find_annot(g, mid, PARSE_ANNOT_DISAMBIG)
+                              : nullptr;
+
+    check("@disambig reads its predicate and its cost",
+          d != nullptr && core_string_eq(d->disambig_predicate, S("pred"))
+              && d->disambig_cost == 3);
+
+    parse_grammar_free(g);
+
+    static const char *const BAD[] = {
+        "<top> @penalty(-4) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @penalty(a) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @penalty(1, 2) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @branch($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @assigns($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @scope($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @jump($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @adt(\"enum\", $1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @nospace($1, $2) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @declares(\"v\", $1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @literal(\"int\", t) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @nospace(n) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @varref($) ::= <n>\n<n> ::= __LOWER\n",
+    };
+
+    for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) {
+        parse_grammar_t *bad = parse_grammar_new();
+
+        if (parse_bnf_load(S(BAD[i]), S("top"), bad)) {
+            printf("FAIL  this should not have loaded: %s", BAD[i]);
+            fails++;
+        }
+
+        parse_grammar_free(bad);
+    }
+}
+
+static void
+test_implements_is_checked_not_carried(void)
+{
+    static const char *const G
+        = "<top> @scope(\"module\") ::= <d>\n"
+          "<d> @declares($1,\"var\") @type($1, int) @implements($2) "
+          "::= \"v\" <n> <i> \";\"\n"
+          "<n> ::= __LOWER\n"
+          "<i> ::= __UPPER\n";
+
+    parse_grammar_t *g = parse_grammar_new();
+
+    parse_grammar_set_error_recovery(g, false);
+
+    check("an @implements grammar loads", parse_bnf_load(S(G), S("top"), g));
+
+    parse_pwz_parser_t   *p;
+    parse_token_stream_t *ts;
+    parse_tree_t   *tree = parse_toy(g, "vaR;", &p, &ts);
+
+    if (!tree) {
+        check("the declaration parses", false);
+        parse_grammar_free(g);
+
+        return;
+    }
+
+    th_ctx             *tc = th_ctx_new();
+    parse_annot_result_t *r  = parse_annot_result_new(nullptr);
+
+    for (int ph = PARSE_ANNOT_PASS_SCOPE; ph <= PARSE_ANNOT_PASS_INFER; ph++) {
+        parse_tree_walk_t *w = parse_tree_walk_new(g, r);
+
+        parse_annot_register_pass(w, r, tc, nullptr, (parse_annot_pass_t)ph);
+        parse_tree_walk_run(w, tree);
+        parse_tree_walk_free(w);
+    }
+
+    parse_sym_entry_t *d = nullptr;
+
+    for (parse_scope_t *s = r->symtab->all_scopes; s && !d; s = s->all_next) {
+        for (parse_sym_entry_t *e = s->first_in_scope; e; e = e->next_in_scope) {
+            if (e->name.data && !strcmp(e->name.data, "a")) {
+                d = e;
+                break;
+            }
+        }
+    }
+
+    check("the declaration was found", d != nullptr);
+    check("@implements against an interface int cannot satisfy is an error",
+          th_error_count(tc) > 0);
+
+    parse_annot_result_free(r);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_an_adt_builds_a_variant_type(void)
+{
+    static const char *const G
+        = "<top> @scope(\"module\") ::= <adt>\n"
+          "<adt> @adt(\"union\", $1, \"arm\", $0) ::= \"u\" <n> \"{\" <as> \"}\"\n"
+          "<as> ::= <arm> <as> | <arm>\n"
+          "<arm> @declares($1,\"var\") @type($1, int) ::= <n> \";\"\n"
+          "<n> ::= __LOWER\n";
+
+    parse_grammar_t *g = parse_grammar_new();
+
+    parse_grammar_set_error_recovery(g, false);
+
+    check("an adt grammar loads", parse_bnf_load(S(G), S("top"), g));
+
+    parse_pwz_parser_t   *p;
+    parse_token_stream_t *ts;
+    parse_tree_t   *tree = parse_toy(g, "ut{a;b;}", &p, &ts);
+
+    if (!tree) {
+        check("the adt parses", false);
+        parse_grammar_free(g);
+
+        return;
+    }
+
+    types = types ? types : th_ctx_new();
+
+    parse_annot_result_t *r = parse_annot_result_new(nullptr);
+
+    for (int ph = PARSE_ANNOT_PASS_SCOPE; ph <= PARSE_ANNOT_PASS_INFER; ph++) {
+        parse_tree_walk_t *w = parse_tree_walk_new(g, r);
+
+        parse_annot_register_pass(w, r, types, nullptr,
+                                (parse_annot_pass_t)ph);
+        parse_tree_walk_run(w, tree);
+        parse_tree_walk_free(w);
+    }
+
+    th_type *var = nullptr;
+
+    for (parse_scope_t *s = r->symtab->all_scopes; s && !var; s = s->all_next) {
+        for (parse_sym_entry_t *e = s->first_in_scope; e; e = e->next_in_scope) {
+            if (e->kind == PARSE_SYM_TAG && e->type) {
+                var = e->type;
+                break;
+            }
+        }
+    }
+
+    check("@adt gave its tag symbol a type", var != nullptr);
+    bool is_variant = false;
+
+    check("and the type reached th as a variant",
+          var && th_named_info(var, nullptr, nullptr, &is_variant, nullptr)
+              && is_variant);
+    check("with one argument per arm", var && th_named_nargs(var) == 2);
+
+    parse_annot_result_free(r);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_the_repr_annotations_reach_the_layout_descriptor(void)
+{
+    static const char *const G
+        = "<top> @scope(\"module\") ::= <rec>\n"
+          "<rec> @scope(\"record\") @record($1) @size(8) @alignment(4) "
+          "::= \"r\" <n> \"{\" <fs> \"}\"\n"
+          "<fs> ::= <f> <fs> | <f>\n"
+          "<f> @field($1) @offset(0) @width(4) ::= <n> \";\"\n"
+          "<n> ::= __LOWER\n";
+
+    parse_grammar_t *g = parse_grammar_new();
+
+    parse_grammar_set_error_recovery(g, false);
+
+    check("a record grammar with representation pins loads",
+          parse_bnf_load(S(G), S("top"), g));
+
+    parse_pwz_parser_t   *p;
+    parse_token_stream_t *ts;
+    parse_tree_t   *tree = parse_toy(g, "rt{a;}", &p, &ts);
+
+    if (!tree) {
+        check("the record parses", false);
+        parse_grammar_free(g);
+
+        return;
+    }
+
+    ir_ctx_t    *ctx = ir_ctx_new();
+    ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "host");
+
+    parse_annot_result_t *r = parse_annot_result_new(nullptr);
+
+    for (int ph = PARSE_ANNOT_PASS_SCOPE; ph <= PARSE_ANNOT_PASS_INFER; ph++) {
+        parse_tree_walk_t *w = parse_tree_walk_new(g, r);
+
+        parse_annot_register_pass(w, r, ir_module_types(m), m,
+                                (parse_annot_pass_t)ph);
+        parse_tree_walk_run(w, tree);
+        parse_tree_walk_free(w);
+    }
+
+    th_type *rec = nullptr;
+
+    for (parse_scope_t *s = r->symtab->all_scopes; s && !rec; s = s->all_next) {
+        for (parse_sym_entry_t *e = s->first_in_scope; e; e = e->next_in_scope) {
+            if (e->type && th_kind_of(e->type) == TH_RECORD) {
+                rec = e->type;
+                break;
+            }
+        }
+    }
+
+    check("@record established a record type", rec != nullptr);
+
+    ir_descriptor_t *d = rec ? ir_layout_of(m, rec, nullptr) : nullptr;
+
+    check("the annotations reached a layout descriptor", d != nullptr);
+    check("@size pinned the descriptor's size",
+          d && ir_layout_is_settled(&d->size) && d->size.value == 8);
+    check("@alignment pinned the descriptor's alignment",
+          d && ir_layout_is_settled(&d->align) && d->align.value == 4);
+
+    parse_annot_result_free(r);
+    ir_ctx_free(ctx);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_the_representation_and_declaration_annotations(void)
+{
+    static const char *const G
+        = "<top> @scope(\"module\") ::= <d> <b> <p>\n"
+          "<d> @declares($1,\"var\") @mutability($1,\"const\") "
+          "@constrain($1, == int) @namespace(\"tag\") ::= \"v\" <n> \";\"\n"
+          "<b> @size($2) @width($2) ::= \"b\" %\":\" <num>\n"
+          "<p> @declares($1,\"param\") @direction($1,\"out\") "
+          "@alignment(8) @offset(sizeof(int)) ::= \"p\" <n> \";\"\n"
+          "<n> ::= __LOWER\n"
+          "<num> ::= __DIGIT\n";
+
+    parse_grammar_t *g = parse_grammar_new();
+
+    parse_grammar_set_error_recovery(g, false);
+
+    check("a grammar using every Part 2 annotation loads",
+          parse_bnf_load(S(G), S("top"), g));
+
+    parse_pwz_parser_t   *p;
+    parse_token_stream_t *ts;
+    parse_tree_t   *tree = parse_toy(g, "va;b:4pq;", &p, &ts);
+
+    if (!tree) {
+        check("the program parses", false);
+        parse_grammar_free(g);
+
+        return;
+    }
+
+    types = types ? types : th_ctx_new();
+
+    parse_annot_result_t *r = parse_annot_walk_tree(g, tree, types, nullptr);
+
+    parse_sym_entry_t *a = nullptr;
+    parse_sym_entry_t *q = nullptr;
+
+    for (parse_scope_t *s = r->symtab->all_scopes; s; s = s->all_next) {
+        for (parse_sym_entry_t *e = s->first_in_scope; e; e = e->next_in_scope) {
+            if (e->name.data && !strcmp(e->name.data, "a")) {
+                a = e;
+            }
+
+            if (e->name.data && !strcmp(e->name.data, "q")) {
+                q = e;
+            }
+        }
+    }
+
+    check("@mutability sets the symbol's mutability",
+          a && a->mutability == PARSE_SYM_CONST);
+    th_constraint con  = {0};
+    bool          got  = a && a->type
+                      && th_var_constraint_count(a->type) == 1
+                      && th_var_constraint_at(a->type, 0, &con);
+
+    check("@constrain put a constraint on the symbol's type variable", got);
+    check("and it is the == constraint the annotation wrote",
+          got && con.kind == TH_CON_UNIFIES);
+    check("@direction records the parameter's direction as a th_mode",
+          q && q->has_mode && q->mode == TH_OUT);
+    check("@namespace put the declaration in the namespace it named",
+          a && a->scope && a->scope->ns
+              && a->scope->ns->ns_name.data
+              && !strcmp(a->scope->ns->ns_name.data, "tag"));
+
+    parse_annot_result_free(r);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_part_two_rejections(void)
+{
+    static const char *const BAD[] = {
+        "<top> @mutability($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @namespace($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @direction(\"out\") ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @constrain($1) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @constrain($1, ?? int) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @size() ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @size(sizeof) ::= <n>\n<n> ::= __LOWER\n",
+        "<top> @alignment(1, 2) ::= <n>\n<n> ::= __LOWER\n",
+    };
+
+    for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) {
+        parse_grammar_t *bad = parse_grammar_new();
+
+        if (parse_bnf_load(S(BAD[i]), S("top"), bad)) {
+            printf("FAIL  this should not have loaded: %s", BAD[i]);
+            fails++;
+        }
+
+        parse_grammar_free(bad);
+    }
+}
+
+int
+main(void)
+{
+    parse_grammar_t *g = load_toy();
+
+    if (!g) {
+        return 1;
+    }
+
+    test_annotation_arguments_only_need_balanced_parens();
+    test_annotation_arguments_carry_integers();
+    test_the_representation_and_declaration_annotations();
+    test_the_repr_annotations_reach_the_layout_descriptor();
+    test_an_adt_builds_a_variant_type();
+    test_implements_is_checked_not_carried();
+    test_part_two_rejections();
+    test_annotations_are_retained_on_the_grammar(g);
+    test_the_walk_builds_a_symbol_table(g);
+    test_a_deep_tree_does_not_overflow_the_stack(g);
+
+    parse_grammar_free(g);
+
+    return report("fe annot");
+}
