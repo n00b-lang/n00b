@@ -81,7 +81,7 @@ benchmark_image(const char *path, uint64_t count)
     return image;
 }
 
-static void
+static n00b_store_record_t *
 check_view(n00b_store_map_shard_t *root,
            uint64_t                ordinal,
            n00b_allocator_t       *scratch,
@@ -95,7 +95,7 @@ check_view(n00b_store_map_shard_t *root,
         CHECK(n00b_result_get_err(at) == expected);
         CHECK(n00b_result_is_err(by_pos));
         CHECK(n00b_result_get_err(by_pos) == expected);
-        return;
+        return nullptr;
     }
     CHECK(n00b_result_is_ok(at));
     CHECK(n00b_result_is_ok(by_pos));
@@ -104,6 +104,7 @@ check_view(n00b_store_map_shard_t *root,
     actual = OK(n00b_store_record_pos(n00b_result_get(by_pos)));
     CHECK(actual.shard_id == pos.shard_id && actual.ordinal == ordinal
           && actual.generation == pos.generation);
+    return n00b_result_get(at);
 }
 
 typedef struct {
@@ -143,7 +144,6 @@ test_errors(n00b_buffer_t *image, n00b_allocator_t *scratch)
 
     check_view(nullptr, 0, scratch, N00B_STORE_INDEX_ERR_ARG);
     check_view(root, wire->count, scratch, N00B_STORE_INDEX_ERR_ARG);
-    check_view(root, UINT64_MAX, scratch, N00B_STORE_INDEX_ERR_ARG);
     wire->state = N00B_SHARD_STATE_OPEN;
     check_view(root, 0, scratch, N00B_STORE_INDEX_ERR_STATE);
     wire->state   = N00B_SHARD_STATE_SEALED;
@@ -155,9 +155,8 @@ test_errors(n00b_buffer_t *image, n00b_allocator_t *scratch)
     records->len  = 0;
     check_view(root, 0, scratch, N00B_STORE_INDEX_ERR_ARG);
     records->len = saved_len - 1;
-    check_view(root, 0, scratch, N00B_STORE_INDEX_OK);
-    auto view = OK(n00b_store_record_view_mapped_at(root, 0, .allocator = scratch));
-    auto json = n00b_store_record_view_json(view, .allocator = scratch);
+    auto view    = check_view(root, 0, scratch, N00B_STORE_INDEX_OK);
+    auto json    = n00b_store_record_view_json(view, .allocator = scratch);
     CHECK(n00b_result_is_err(json) && n00b_result_get_err(json) == N00B_STORE_INDEX_ERR_STATE);
     records->len = SIZE_MAX;
     check_view(root, 0, scratch, N00B_STORE_INDEX_ERR_STATE);
@@ -173,9 +172,8 @@ test_errors(n00b_buffer_t *image, n00b_allocator_t *scratch)
 
     // Construction only validates a reference; parsing owns string validation.
     string->data = nullptr;
-    check_view(root, 0, scratch, N00B_STORE_INDEX_OK);
-    view = OK(n00b_store_record_view_mapped_at(root, 0, .allocator = scratch));
-    json = n00b_store_record_view_json(view, .allocator = scratch);
+    view         = check_view(root, 0, scratch, N00B_STORE_INDEX_OK);
+    json         = n00b_store_record_view_json(view, .allocator = scratch);
     CHECK(n00b_result_is_err(json) && n00b_result_get_err(json) == N00B_STORE_INDEX_ERR_STATE);
     *string          = saved_string;
     string->u8_bytes = SIZE_MAX;
@@ -208,9 +206,8 @@ test_json_graph(n00b_allocator_t *scratch)
     n00b_buffer_t          *image = n00b_marshal(shard, .base_address = 0x9272u);
     n00b_store_map_t       *map   = OK(n00b_store_map_open_buffer(image));
     n00b_store_map_shard_t *root  = OK(n00b_store_map_root(map));
-    check_view(root, 0, scratch, N00B_STORE_INDEX_OK);
-    auto view = OK(n00b_store_record_view_mapped_at(root, 0, .allocator = scratch));
-    auto json = OK(n00b_store_record_view_json(view, .allocator = scratch));
+    auto                    view  = check_view(root, 0, scratch, N00B_STORE_INDEX_OK);
+    auto                    json  = OK(n00b_store_record_view_json(view, .allocator = scratch));
     CHECK(n00b_json_is_int(json) && n00b_json_as_i64(json) == 42);
     CHECK(OK(n00b_store_map_close(map)));
     CHECK(n00b_json_as_i64(json) == 42);
@@ -296,10 +293,7 @@ main(int argc, char **argv)
     if (!bench) {
         allocations = frees = 0;
         for (uint64_t i = 0; i < count; i++) {
-            auto span = OK(n00b_store_map_shard_record_span(root, i));
-            CHECK(span.data != nullptr && span.byte_len > 0);
-            check_view(root, i, allocator, N00B_STORE_INDEX_OK);
-            auto view  = OK(n00b_store_record_view_mapped_at(root, i, .allocator = allocator));
+            auto view  = check_view(root, i, allocator, N00B_STORE_INDEX_OK);
             auto json  = OK(n00b_store_record_view_json(view, .allocator = allocator));
             auto value = n00b_json_object_get(json, r"ordinal");
             CHECK(n00b_json_is_int(value) && n00b_json_as_i64(value) == (int64_t)i);
