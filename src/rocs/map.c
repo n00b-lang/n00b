@@ -1796,6 +1796,20 @@ n00b_store_map_shard_record_ref(n00b_store_map_shard_t *shard,
     }
     uint8_t *data = rocs_map_resolve_span(shard->map, list->data, span);
     if (data == nullptr) {
+        if (getenv("ROCS_QUERY_DEBUG") != NULL) {
+            fprintf(stderr,
+                    "rocs map: list slot data range failed "
+                    "ordinal=%llu len=%llu span=%zu data=0x%llx "
+                    "base=0x%x payload_len=%u byte_len=%zu root_offset=%u\n",
+                    (unsigned long long)ordinal,
+                    (unsigned long long)list->len,
+                    span,
+                    (unsigned long long)list->data,
+                    shard->map->base_address,
+                    shard->map->payload_len,
+                    shard->map->byte_len,
+                    shard->map->root_offset);
+        }
         return n00b_result_err(n00b_option_t(uint64_t), N00B_STORE_MAP_ERR_RANGE);
     }
     uint64_t vaddr;
@@ -1867,37 +1881,18 @@ n00b_store_map_shard_record_json_string(n00b_store_map_shard_t *shard,
         return n00b_result_err(n00b_string_t *, N00B_STORE_MAP_ERR_BAD_LAYOUT);
     }
 
-    auto records_r = n00b_store_map_shard_records(shard);
-    if (n00b_result_is_err(records_r)) {
-        return n00b_result_err(n00b_string_t *, n00b_result_get_err(records_r));
-    }
-    n00b_store_map_list_t *records = n00b_result_get(records_r);
-    if (records->wire->len != shard->wire->record_count) {
-        return n00b_result_err(n00b_string_t *, N00B_STORE_MAP_ERR_BAD_LAYOUT);
-    }
-    if (ordinal >= records->wire->len) {
-        return n00b_result_err(n00b_string_t *, N00B_STORE_MAP_ERR_RANGE);
-    }
-
-    auto slot_r = n00b_store_map_list_slot(records, ordinal);
-    if (n00b_result_is_err(slot_r)) {
-        return n00b_result_err(n00b_string_t *, n00b_result_get_err(slot_r));
-    }
-    n00b_option_t(n00b_store_map_slot_t *) slot_opt = n00b_result_get(slot_r);
-    if (!n00b_option_is_set(slot_opt)) {
-        return n00b_result_err(n00b_string_t *, N00B_STORE_MAP_ERR_RANGE);
-    }
-
-    auto ref_r = n00b_store_map_slot_ref(n00b_option_get(slot_opt));
+    auto ref_r = n00b_store_map_shard_record_ref(shard, ordinal, true);
     if (n00b_result_is_err(ref_r)) {
         return n00b_result_err(n00b_string_t *, n00b_result_get_err(ref_r));
     }
-    n00b_option_t(n00b_store_map_ref_t *) ref_opt = n00b_result_get(ref_r);
-    if (!n00b_option_is_set(ref_opt)) {
+    n00b_option_t(uint64_t) ref = n00b_result_get(ref_r);
+    if (!n00b_option_is_set(ref)) {
+        return n00b_result_err(n00b_string_t *, N00B_STORE_MAP_ERR_RANGE);
+    }
+    uint64_t vaddr = n00b_option_get(ref);
+    if (vaddr == 0) {
         return n00b_result_err(n00b_string_t *, N00B_STORE_MAP_ERR_BAD_LAYOUT);
     }
-
-    uint64_t vaddr = n00b_option_get(ref_opt)->vaddr;
 
     // Records are stored as compact (`.pretty = false`) JSON strings at vaddr
     // (see rocs_store_shard_append). Copy those bytes out verbatim; callers

@@ -16,6 +16,10 @@
 #include "util/assert.h"
 #include "util/marshal.h"
 
+#ifndef N00B_DEBUG
+#error "test_rocs_mapped_record requires N00B_DEBUG; use -Dbuild_tests=true"
+#endif
+
 #define CHECK(expr) n00b_require((expr), "test check failed: " #expr)
 #define OK(expr)                                                                               \
     ({                                                                                         \
@@ -145,7 +149,7 @@ test_errors(n00b_buffer_t *image, n00b_allocator_t *scratch)
     check_view(nullptr, 0, scratch, N00B_STORE_INDEX_ERR_ARG);
     check_view(root, wire->count, scratch, N00B_STORE_INDEX_ERR_ARG);
     wire->state = N00B_SHARD_STATE_OPEN;
-    check_view(root, 0, scratch, N00B_STORE_INDEX_ERR_STATE);
+    check_view(root, 1, scratch, N00B_STORE_INDEX_ERR_STATE);
     wire->state   = N00B_SHARD_STATE_SEALED;
     wire->records = 0;
     check_view(root, 0, scratch, N00B_STORE_INDEX_ERR_STATE);
@@ -297,6 +301,10 @@ main(int argc, char **argv)
             auto json  = OK(n00b_store_record_view_json(view, .allocator = allocator));
             auto value = n00b_json_object_get(json, r"ordinal");
             CHECK(n00b_json_is_int(value) && n00b_json_as_i64(value) == (int64_t)i);
+            auto text = OK(n00b_store_record_view_json_string(view, .allocator = allocator));
+            auto span = OK(n00b_store_map_shard_record_span(root, i));
+            CHECK(text->u8_bytes == span.byte_len
+                  && memcmp(text->data, span.data, text->u8_bytes) == 0);
             n00b_arena_reset(scratch);
         }
         CHECK(allocations == 0 && frees == 0);
