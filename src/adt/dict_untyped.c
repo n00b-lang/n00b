@@ -12,6 +12,7 @@
 #include "core/alloc.h"
 #include "core/align.h"
 #include "adt/dict_untyped.h"
+#include "adt/dict_sync.h"
 #include "core/atomic.h"
 #include "core/epoch.h"
 #include "core/futex.h"
@@ -200,105 +201,6 @@ dict_untyped_epoch_exit(bool active)
     }
 }
 
-// Bound on the per-bucket mutex wait in n00b_dict_untyped_lock. A real holder
-// releases within a few instructions, so the wait stays a tight spin -- adding
-// a sleep here measurably slowed rocs_async_seal_stress, because migrations are
-// frequent and the common wait is very short. The bound exists only to convert
-// a PERMANENTLY stranded mutex from a whole-dict outage into a skipped
-// migration; it is deliberately far above any legitimate wait.
-#define N00B_DICT_MIGRATE_SPIN_LIMIT (1ULL << 32)
-
-// Reader-side strand handling for the bucket-MUTEX wait in the two acquire
-// helpers. A live holder normally releases within a few instructions, so a bit
-// that stays set for the whole time gate is treated as likely stranded; without
-// a bound each waiter pins a core indefinitely. Past the spin threshold the
-// waiter starts a clock
-// (the threshold keeps clock reads off the fast path); past the gate it sleeps
-// between retries and emits one diagnostic. The wait itself is never abandoned:
-// returning early would report a present key as absent while a holder still
-// owns the bucket. The gate must stay far above any legitimate losing streak
-// under write contention -- sleeping on a merely-contended bucket collapses
-// writer throughput.
-#define N00B_DICT_READER_SPIN_THRESHOLD (1ULL << 20)
-#define N00B_DICT_READER_CLOCK_MASK     0x3ff
-
-static _Atomic uint64_t n00b_dict_reader_strand_gate_ns = 1000000000ULL;
-
-// Test hook: production code must not call this.
-void
-n00b_dict_reader_strand_gate_set(uint64_t ns)
-{
-    atomic_store_explicit(&n00b_dict_reader_strand_gate_ns, ns,
-                          memory_order_relaxed);
-}
-
-static _Atomic bool     n00b_dict_reader_strand_warned = false;
-// Never reset; a test needing a clean count must run in a fresh process.
-static _Atomic uint64_t n00b_dict_reader_backoff_count = 0;
-
-uint64_t
-n00b_dict_reader_backoff_count_get(void)
-{
-    return atomic_load_explicit(&n00b_dict_reader_backoff_count,
-                                memory_order_relaxed);
-}
-
-static inline void
-n00b_dict_reader_strand_backoff(void)
-{
-    atomic_fetch_add_explicit(&n00b_dict_reader_backoff_count,
-                              1,
-                              memory_order_relaxed);
-    if (!atomic_exchange(&n00b_dict_reader_strand_warned, true)) {
-        static const char m[] =
-            "n00b_dict: bucket mutex held past the reader wait gate; treating as "
-            "a stranded lock and parking the reader instead of spinning a core\n";
-        n00b_raw_write(2, m, sizeof(m) - 1);
-    }
-    base_nanosleep_ns(N00B_NS_PER_MS);
-}
-
-// Called on every losing iteration of a bucket-MUTEX wait. Cheap until the
-// spin threshold; then reads the clock every CLOCK_MASK+1 iterations and backs
-// off once the gate has elapsed.
-static inline void
-n00b_dict_reader_wait_tick(uint64_t *spins, uint64_t *wait_start_ns)
-{
-    if (++*spins < N00B_DICT_READER_SPIN_THRESHOLD
-        || (*spins & N00B_DICT_READER_CLOCK_MASK) != 0) {
-        return;
-    }
-    uint64_t now = base_monotonic_ns();
-    if (*wait_start_ns == 0) {
-        *wait_start_ns = now;
-        return;
-    }
-    uint64_t gate = atomic_load_explicit(&n00b_dict_reader_strand_gate_ns,
-                                         memory_order_relaxed);
-    if (now - *wait_start_ns >= gate) {
-        n00b_dict_reader_strand_backoff();
-    }
-}
-
-// Bound on the migration's own per-bucket wait, separate from the reader
-// backoff above: a reader waits for a holder it must not answer without, while
-// the migration is free to give the resize up.
-static _Atomic(uint64_t) dict_migrate_spin_limit = N00B_DICT_MIGRATE_SPIN_LIMIT;
-
-#ifdef N00B_DEBUG
-// Lower the bound so a test can reach the give-up path. Seconds of spinning is
-// the point in a running system and unusable in a suite, and the behaviour
-// under test is what happens AFTER the bound, not the bound itself. Zero
-// restores the default.
-void
-n00b_dict_migrate_spin_limit_set(uint64_t limit)
-{
-    atomic_store_explicit(&dict_migrate_spin_limit,
-                          limit == 0 ? N00B_DICT_MIGRATE_SPIN_LIMIT : limit,
-                          memory_order_relaxed);
-}
-#endif
-
 // Undo a partially-acquired migration: drop the COPYING/MOVING bits we OR'd
 // onto the buckets, then release the dict-wide migration bit and wake everyone
 // parked on it. Without the flag clear, readers would keep taking the
@@ -319,38 +221,44 @@ dict_untyped_abandon_migration(n00b_dict_untyped_t       *d,
     }
 }
 
+// Take ownership of the migration of `d` and quiesce its current store.
+//
+// On success MIGRATION_ACTIVE is set, every bucket carries COPYING|MOVING, no
+// bucket MUTEX is held, and *count is the number of live entries. Returns
+// false either because another thread owns the migration (nothing was
+// changed; the caller may wait on _migration_state for it to finish) or
+// because the drain wait hit its gate and the migration was ABANDONED. The
+// two are told apart through *abandoned, because a writer has to: losing the
+// race means the store changes and retrying is right; abandoning means it does
+// not, and a writer that retried would trip the same threshold, re-take the
+// migration bit, re-park every reader for another full gate, and never finish
+// (n00b-lang/n00b#358).
+//
+// `in_stw` is the caller's single sample of the stopped-world flag (see
+// n00b_dict_in_stw). Under STW this never waits on anything -- see
+// "Stopped-world migration" in adt/dict_sync.h.
 bool
 n00b_dict_untyped_lock(n00b_dict_untyped_t *d,
-                       bool                 try,
                        uint32_t            *count,
-                       bool                *abandoned)
+                       bool                *abandoned,
+                       bool                 in_stw)
 {
-    uint32_t flags    = N00B_HT_FLAG_COPYING;
-    uint32_t new_used = 0;
+    const uint32_t flags    = N00B_HT_FLAGS_MIGRATING;
+    uint32_t       new_used = 0;
 
-    if (abandoned != nullptr) {
-        *abandoned = false;
-    }
+    *abandoned = false;
 
-    if (try) {
-        flags |= N00B_HT_FLAG_MOVING;
-    }
-    else {
-        n00b_atomic_add(&d->wait_ct, 1);
-    }
+    uint32_t v = n00b_atomic_or(&d->_migration_state, N00B_DICT_MIGRATION_ACTIVE);
 
-    uint32_t v = n00b_atomic_or(&d->_migration_state, 1UL << 31);
-
-    while (v & (1UL << 31)) {
-        if (try) {
-            return false;
+    if (v & N00B_DICT_MIGRATION_ACTIVE) {
+        if (in_stw) {
+            // The owner is a suspended thread: it can neither finish nor be
+            // waited for (n00b-lang/n00b#272). Report it as abandoned so the
+            // writer lands in the oversized store instead of parking forever.
+            n00b_dict_stw_contention();
+            *abandoned = true;
         }
-        n00b_futex_wait_timespec(&d->_migration_state, v, nullptr);
-        v = n00b_atomic_or(&d->_migration_state, 1UL << 31);
-    }
-
-    if (!try) {
-        n00b_atomic_add(&d->wait_ct, -1);
+        return false;
     }
 
     n00b_dict_untyped_store_t  *s = n00b_atomic_load(&d->store);
@@ -374,47 +282,42 @@ n00b_dict_untyped_lock(n00b_dict_untyped_t *d,
         }
     }
 
-    // If we noticed writes in progress, go through the range of the store that
-    // contained threads and wait for those bucket mutexes to clear.
-    //
-    // The dict-wide migration bit is ALREADY SET at this point, so every reader
-    // and remover on this dict is parked on _migration_state until we clear it.
-    // An unbounded, non-yielding spin here therefore turns one stranded bucket
-    // mutex into a permanent whole-dict outage: n00b-lang/n00b#221 saw 63
-    // threads parked on the migration futex for 2h43m, taking out socket
-    // creation, HTTP serve, egress and shard sealing at once because the wedged
-    // dict was the conduit fd registry.
-    //
-    // So: give up after a bound rather than spinning forever. On give-up we
-    // ABANDON the migration and clear the bits we set, which keeps the dict
-    // live -- readers and removers make progress against the un-migrated store
-    // instead of parking forever.
-    //
-    // Give-up is reported through @p abandoned rather than folded into the
-    // false return, because a writer has to tell it from losing the race for
-    // the migration. Losing means the store changes and retrying is right;
-    // abandoning means it does not, and a writer that retried would trip the
-    // same threshold, re-take the migration bit, re-park every reader for
-    // another full spin, and never finish. See the callers of
-    // n00b_dict_untyped_migrate.
-    if (last_active != -1) {
-        // Read once, outside the spin: the bound never changes under a running
-        // wait, and a load per iteration would put a shared line in the middle
-        // of the tightest loop in the file.
-        uint64_t limit = atomic_load_explicit(&dict_migrate_spin_limit,
-                                              memory_order_relaxed);
+    if (last_active == -1) {
+        *count = new_used;
+        return true;
+    }
 
-        for (int i = first_active; i <= last_active; i++) {
-            uint64_t spins = 0;
+    if (in_stw) {
+        // Sole runner: a MUTEX here belongs to a suspended thread, so waiting
+        // on it could never end (n00b-lang/n00b#272). It also means the
+        // collector is resizing a dict a mutator is inside, which no
+        // collector-side dict should be. Report it and copy the store as it
+        // stands rather than wait.
+        n00b_dict_stw_contention();
+        *count = new_used;
+        return true;
+    }
 
-            while (n00b_atomic_load(&s->buckets[i].flags) & N00B_HT_FLAG_MUTEX) {
-                if (++spins >= limit) {
-                    dict_untyped_abandon_migration(d, s, flags);
-                    if (abandoned != nullptr) {
-                        *abandoned = true;
-                    }
-                    return false;
-                }
+    // We noticed writes in progress: wait for the recorded bucket mutexes to
+    // clear before copying. MIGRATION_ACTIVE is already set, so every other
+    // thread on this dict is parked until we finish or give up --
+    // n00b-lang/n00b#221 saw 63 threads parked for 2h43m behind one stranded
+    // mutex on the conduit fd registry. See "Migrator-side drain wait" in
+    // adt/dict_sync.h for why the wait yields past a spin threshold and is
+    // bounded by ONE wall-clock gate across the whole range (n00b-lang/n00b#360:
+    // the old per-bucket iteration budget was hours on a wide table). Past the
+    // gate we abandon: drop the bits we set and lower the migration bit, which
+    // keeps the dict live and merely oversized.
+    uint64_t spins         = 0;
+    uint64_t wait_start_ns = 0;
+
+    for (int i = first_active; i <= last_active; i++) {
+        while (n00b_atomic_load(&s->buckets[i].flags) & N00B_HT_FLAG_MUTEX) {
+            if (!n00b_dict_migrate_wait_tick(&spins, &wait_start_ns)) {
+                dict_untyped_abandon_migration(d, s, flags);
+                n00b_dict_migration_abandoned();
+                *abandoned = true;
+                return false;
             }
         }
     }
@@ -435,45 +338,33 @@ dict_untyped_unlock_post_migrate(n00b_dict_untyped_t *d, n00b_dict_untyped_store
     }
 }
 
-void
-n00b_dict_untyped_unlock_post_copy(n00b_dict_untyped_t *d)
-{
-    n00b_dict_untyped_store_t *s = n00b_atomic_load(&d->store);
-
-    for (uint32_t i = 0; i <= s->last_slot; i++) {
-        n00b_atomic_and(&s->buckets[i].flags, ~N00B_HT_FLAG_COPYING);
-    }
-
-    atomic_store(&d->_migration_state, 0);
-
-    if (n00b_atomic_load(&d->wait_ct)) {
-        n00b_futex_wake(&d->_migration_state, true);
-    }
-}
-
 // Returns whether the store may have changed, i.e. whether a caller that was
 // waiting for room should look again. False means this call ABANDONED the
 // migration on a stranded bucket mutex: d->store is the same store, still over
 // its threshold, so a caller that retried on the strength of it would loop.
 static bool
-n00b_dict_untyped_migrate(n00b_dict_untyped_t *d)
+n00b_dict_untyped_migrate(n00b_dict_untyped_t *d, bool in_stw)
 {
     uint32_t                    nitems    = 0;
     bool                        abandoned = false;
     n00b_dict_untyped_store_t  *olds;
     n00b_dict_untyped_bucket_t *bold;
 
-    if (!n00b_dict_untyped_lock(d, true, &nitems, &abandoned)) {
-        // Either another thread owns the migration, or we owned it and
-        // abandoned a stranded bucket-mutex wait (in which case the migration
-        // bit is already clear and this wait falls straight through). Balance
-        // the wait_ct increment on both paths: it gates the futex_wake in the
+    if (!n00b_dict_untyped_lock(d, &nitems, &abandoned, in_stw)) {
+        if (abandoned) {
+            // We owned the migration and gave it back (or, under STW, it is
+            // owned by a suspended thread that can never finish). The store is
+            // unchanged and there is nothing to wait for.
+            return false;
+        }
+        // Another thread owns the migration: wait for it to publish its
+        // store. Balance the wait_ct increment: it gates the futex_wake in the
         // unlock helpers, so leaking it made every later migration issue a
         // wake syscall for a waiter that no longer exists.
         n00b_atomic_add(&d->wait_ct, 1);
         n00b_futex_wait_for_value(&d->_migration_state, 0);
         n00b_atomic_add(&d->wait_ct, -1);
-        return !abandoned;
+        return true;
     }
     olds = n00b_atomic_load(&d->store);
 
@@ -559,6 +450,22 @@ n00b_dict_untyped_readonly_scan(n00b_dict_untyped_store_t *store, __int128_t hv)
     return nullptr;
 }
 
+// Whether the COPYING/MOVING bits a reader just saw on a bucket of `store`
+// are backed by a migration: one owns the dict, or one has already published
+// a newer store. Checked in this order -- a migrator publishes its store
+// BEFORE lowering MIGRATION_ACTIVE -- so a clear word followed by an unchanged
+// store means the bits outlived their migrator and are stranded
+// (n00b-lang/n00b#365; see "stranded COPYING/MOVING repair" in adt/dict_sync.h).
+static inline bool
+dict_untyped_migration_pending(n00b_dict_untyped_t       *d,
+                               n00b_dict_untyped_store_t *store)
+{
+    if (n00b_dict_migration_active(&d->_migration_state)) {
+        return true;
+    }
+    return n00b_atomic_load(&d->store) != store;
+}
+
 static inline n00b_dict_untyped_bucket_t *
 n00b_acquire_if_present(n00b_dict_untyped_t       *d,
                         n00b_dict_untyped_store_t *store,
@@ -590,18 +497,31 @@ n00b_acquire_if_present(n00b_dict_untyped_t       *d,
             do {
                 flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
                 if (flags & N00B_HT_FLAG_MOVING) {
-                    // If pre-OR had no MUTEX, we just took it; clear
-                    // it before parking on the migration futex.  A
-                    // migration thread may have pre-recorded this
-                    // bucket in its [first_active, last_active] range
-                    // (because a prior reader briefly held MUTEX
-                    // pre-migration-OR), and is busy-waiting for the
-                    // MUTEX to clear.  Leaving it set deadlocks us
-                    // against migration.
-                    if (!(flags & N00B_HT_FLAG_MUTEX)) {
-                        n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
+                    if (dict_untyped_migration_pending(d, store)) {
+                        // If pre-OR had no MUTEX, we just took it; clear
+                        // it before parking on the migration futex.  A
+                        // migration thread may have pre-recorded this
+                        // bucket in its [first_active, last_active] range
+                        // (because a prior reader briefly held MUTEX
+                        // pre-migration-OR), and is waiting for the
+                        // MUTEX to clear.  Leaving it set deadlocks us
+                        // against migration.
+                        if (!(flags & N00B_HT_FLAG_MUTEX)) {
+                            n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
+                        }
+                        goto try_again;
                     }
-                    goto try_again;
+                    // No migrator owns this store: the bit outlived its
+                    // migration (n00b-lang/n00b#365). Parking would return
+                    // at once and spin us forever. If we hold MUTEX, repair
+                    // the bucket and carry on with it; if another thread
+                    // holds it, wait for that thread below like any other
+                    // MUTEX wait.
+                    if (!(flags & N00B_HT_FLAG_MUTEX)) {
+                        n00b_dict_stranded_flags_repair(&cur->flags,
+                                                        &d->_migration_state);
+                        break;
+                    }
                 }
                 if (flags & N00B_HT_FLAG_MUTEX) {
                     n00b_dict_reader_wait_tick(&spins, &wait_start_ns);
@@ -669,14 +589,19 @@ n00b_acquire_or_add(n00b_dict_untyped_t        *d,
             uint64_t wait_start_ns = 0;
             do {
                 flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
-                if (flags & (N00B_HT_FLAG_COPYING)) {
-                    // See sibling note in acquire_if_present: clear
-                    // MUTEX before parking on the migration futex, or
-                    // we deadlock the migration's bucket busy-wait.
-                    if (!(flags & N00B_HT_FLAG_MUTEX)) {
-                        n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
+                if (flags & N00B_HT_FLAG_COPYING) {
+                    // See the sibling notes in n00b_acquire_if_present.
+                    if (dict_untyped_migration_pending(d, store)) {
+                        if (!(flags & N00B_HT_FLAG_MUTEX)) {
+                            n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
+                        }
+                        goto try_again;
                     }
-                    goto try_again;
+                    if (!(flags & N00B_HT_FLAG_MUTEX)) {
+                        n00b_dict_stranded_flags_repair(&cur->flags,
+                                                        &d->_migration_state);
+                        break;
+                    }
                 }
                 if (flags & N00B_HT_FLAG_MUTEX) {
                     n00b_dict_reader_wait_tick(&spins, &wait_start_ns);
@@ -772,7 +697,7 @@ try_again:
             // One attempt. A migration that abandons clears may_migrate, and
             // the retry then takes a bucket in the oversized store rather than
             // asking again for a resize that cannot happen.
-            may_migrate = n00b_dict_untyped_migrate(d);
+            may_migrate = n00b_dict_untyped_migrate(d, in_stw);
             store       = n00b_atomic_load(&d->store);
             goto try_again;
         }
@@ -901,7 +826,7 @@ try_again:
             // Reservation given back, and one migration attempt. See the
             // sibling note in _n00b_dict_untyped_put.
             n00b_atomic_add(&store->used_count, -1);
-            may_migrate = n00b_dict_untyped_migrate(d);
+            may_migrate = n00b_dict_untyped_migrate(d, in_stw);
             store       = n00b_atomic_load(&d->store);
             goto try_again;
         }
@@ -1005,7 +930,7 @@ try_again:
                 // Reservation given back, and one migration attempt. See the
                 // sibling note in _n00b_dict_untyped_put.
                 n00b_atomic_add(&store->used_count, -1);
-                may_migrate = n00b_dict_untyped_migrate(d);
+                may_migrate = n00b_dict_untyped_migrate(d, in_stw);
                 store       = n00b_atomic_load(&d->store);
                 goto try_again;
             }
