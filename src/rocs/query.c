@@ -137,6 +137,13 @@ struct n00b_query_t {
     bool                          has_as_of;
     n00b_store_pos_t              as_of;
     uint64_t                      limit;
+    // Cooperative cancellation for the SNAPSHOT path (n00b#255). The cursor
+    // has always accepted these; rocs_query_run_records and
+    // rocs_query_run_aggregate built their cursor without them, so a one-shot
+    // query had no way to be given up on -- and the service handler holds
+    // store_mutex for its whole duration.
+    n00b_query_cancel_fn          cancel_cb;
+    void                         *cancel_ctx;
 };
 
 struct n00b_query_agg_row_t {
@@ -206,7 +213,6 @@ struct n00b_query_cursor_t {
     n00b_plan_predicate_t     *snapshot_predicate;
     n00b_plan_index_list_t    *snapshot_indexes;
     // Built once with the predicate; a plan does not vary per shard.
-    n00b_plan_node_t          *snapshot_plan;
     rocs_query_ordset_ref_list_t *snapshot_cached_refs;
     rocs_query_cache_key_t     snapshot_cache_key;
     n00b_query_hit_t          *current_hit;
@@ -5069,16 +5075,9 @@ rocs_query_cursor_prepare_snapshot(n00b_query_cursor_t *cursor)
     cursor->snapshot_predicate = n00b_result_get(lowered_r);
     cursor->snapshot_indexes   = n00b_result_get(indexes_r);
 
-    auto snap_plan_r = n00b_plan_build(
-        cursor->snapshot_predicate,
-        cursor->snapshot_indexes,
-        .allocator = cursor->allocator);
-    if (n00b_result_is_err(snap_plan_r)) {
-        return n00b_result_err(bool,
-                               rocs_query_err_from_plan(
-                                   n00b_result_get_err(snap_plan_r)));
-    }
-    cursor->snapshot_plan = n00b_result_get(snap_plan_r);
+    // No plan is built here. A plan belongs to the shards whose counts were
+    // folded into it (plan.h rule 4), and this runs before any boundary's
+    // shard is open. Each boundary builds its own.
     cursor->snapshot_cache_key = n00b_result_get(key_r);
     cursor->snapshot_use_cache = cursor->snapshot_cache_key.cacheable
         && cursor->snapshot_cache_key.bytes != nullptr
@@ -5140,10 +5139,13 @@ rocs_query_cursor_plan_boundary(n00b_query_cursor_t        *cursor,
         boundary,
         cursor->allocator)!;
 
+    // Predicate and descriptors, not a prebuilt plan: each boundary's shard
+    // gets a plan settled from its own counts (plan.h rule 4).
     auto result_r = n00b_plan_catalog_entry_sealed(
         cursor->view->store,
         entry,
-        cursor->snapshot_plan,
+        cursor->snapshot_predicate,
+        cursor->snapshot_indexes,
         .allocator  = cursor->allocator,
         // Boundary planning can run a long residual verify (per-record JSON
         // materialize over the whole shard for an unindexed predicate);
@@ -5959,6 +5961,22 @@ rocs_query_rank_index_for_term(n00b_plan_index_list_t *indexes,
         name = n00b_result_get(name_r);
     }
 
+    if (!any) {
+        // The planner's choice, not a second one. Ranking against a
+        // descriptor other than the one that will serve the leaf describes a
+        // query nobody runs, so this asks the planner rather than applying a
+        // rule of its own.
+        n00b_store_index_t *chosen = _rocs_plan_choose_index(
+            indexes, name,
+            N00B_STORE_INDEX_OP_CONTAINS, N00B_STORE_INDEX_FULLTEXT);
+        if (chosen == nullptr) {
+            return n00b_result_ok(n00b_option_t(n00b_store_index_t *),
+                                  n00b_option_none(n00b_store_index_t *));
+        }
+        return n00b_result_ok(n00b_option_t(n00b_store_index_t *),
+                              n00b_option_set(n00b_store_index_t *, chosen));
+    }
+
     uint64_t len = (uint64_t)n00b_list_len(*indexes);
     for (uint64_t i = 0; i < len; i++) {
         n00b_store_index_t *index = n00b_list_get(*indexes, (size_t)i);
@@ -5966,7 +5984,7 @@ rocs_query_rank_index_for_term(n00b_plan_index_list_t *indexes,
             return n00b_result_err(n00b_option_t(n00b_store_index_t *),
                                    N00B_QUERY_ERR_STATE);
         }
-        if (any) {
+        {
             auto catch_all_r = n00b_store_index_is_catch_all(index);
             if (n00b_result_is_err(catch_all_r)) {
                 return n00b_result_err(
@@ -5982,16 +6000,6 @@ rocs_query_rank_index_for_term(n00b_plan_index_list_t *indexes,
             continue;
         }
 
-        n00b_store_advert_t advert =
-            n00b_store_index_advertise(index,
-                                       name,
-                                       N00B_STORE_INDEX_OP_CONTAINS);
-        if (advert.accelerates
-            && advert.kind == N00B_STORE_INDEX_FULLTEXT) {
-            return n00b_result_ok(
-                n00b_option_t(n00b_store_index_t *),
-                n00b_option_set(n00b_store_index_t *, index));
-        }
     }
 
     return n00b_result_ok(n00b_option_t(n00b_store_index_t *),
@@ -6665,6 +6673,8 @@ n00b_query_new(n00b_filter_t *filter) _kargs
     n00b_store_pos_t            *as_of      = nullptr;
     uint64_t                     limit      = 100;
     n00b_allocator_t            *allocator  = nullptr;
+    n00b_query_cancel_fn         cancel_cb  = nullptr;
+    void                        *cancel_ctx = nullptr;
 }
 {
     if (filter == nullptr) {
@@ -6704,6 +6714,8 @@ n00b_query_new(n00b_filter_t *filter) _kargs
     query->allocator  = allocator;
     query->ranked     = ranked;
     query->limit      = limit;
+    query->cancel_cb  = cancel_cb;
+    query->cancel_ctx = cancel_ctx;
     query->has_as_of  = as_of != nullptr;
     if (as_of != nullptr) {
         query->as_of = *as_of;
@@ -6853,7 +6865,15 @@ rocs_query_run_records(n00b_store_t      *store,
     }
     n00b_query_view_t *view = n00b_result_get(view_r);
 
-    auto cursor_r = n00b_query_cursor(view, .allocator = allocator);
+    // Hand the query's cancel hook to the cursor. Without this the snapshot
+    // path is uninterruptible: the cursor polls cancel_cb during boundary
+    // scans (every 1024 ordinals) and threads it into
+    // n00b_plan_catalog_entry_sealed, but a null hook made every one of those
+    // polls a no-op (n00b#255).
+    auto cursor_r = n00b_query_cursor(view,
+                                      .allocator  = allocator,
+                                      .cancel_cb  = query->cancel_cb,
+                                      .cancel_ctx = query->cancel_ctx);
     if (n00b_result_is_err(cursor_r)) {
         n00b_result_error_t error = n00b_result_get_error(cursor_r);
         (void)n00b_query_view_close(view);
@@ -6959,7 +6979,15 @@ rocs_query_run_aggregate(n00b_store_t      *store,
     }
     n00b_query_view_t *view = n00b_result_get(view_r);
 
-    auto cursor_r = n00b_query_cursor(view, .allocator = allocator);
+    // Hand the query's cancel hook to the cursor. Without this the snapshot
+    // path is uninterruptible: the cursor polls cancel_cb during boundary
+    // scans (every 1024 ordinals) and threads it into
+    // n00b_plan_catalog_entry_sealed, but a null hook made every one of those
+    // polls a no-op (n00b#255).
+    auto cursor_r = n00b_query_cursor(view,
+                                      .allocator  = allocator,
+                                      .cancel_cb  = query->cancel_cb,
+                                      .cancel_ctx = query->cancel_ctx);
     if (n00b_result_is_err(cursor_r)) {
         n00b_result_error_t error = n00b_result_get_error(cursor_r);
         (void)n00b_query_view_close(view);

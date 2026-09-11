@@ -57,6 +57,18 @@ extern n00b_result_t(n00b_store_map_memory_stats_t)
 n00b_store_map_memory_stats(n00b_store_map_t *map);
 
 /**
+ * @brief Resolve a record reference without allocating child view handles.
+ *
+ * None means the ordinal is outside the records list; Some(0) is a null slot.
+ * require_count checks the list length against the shard's record count.
+ * Only the reference is validated: records may contain strings or JSON graphs.
+ */
+extern n00b_result_t(n00b_option_t(uint64_t))
+n00b_store_map_shard_record_ref(n00b_store_map_shard_t *shard,
+                                uint64_t                ordinal,
+                                bool                    require_count);
+
+/**
  * @brief Materialize one sealed mapped record as a hot JSON graph.
  *
  * @param shard Borrowed sealed mapped shard view.
@@ -121,4 +133,16 @@ n00b_store_map_posting_list_contains(n00b_store_map_posting_list_t *postings,
 
 #ifdef __cplusplus
 }
+#endif
+
+/** @brief Whether a sealed sparse posting list claims ascending order. */
+extern bool
+rocs_mapped_postings_advertise_order(n00b_store_map_posting_list_t *postings);
+
+// Clear a sparse list's order bit, leaving the ordinals as they are. Debug
+// builds only: writes into the mapped image, and refuses any backing but a
+// writable copy. Reaches the linear-scan fallback a seal cannot produce.
+#ifdef N00B_DEBUG
+extern bool
+rocs_mapped_postings_clear_order(n00b_store_map_posting_list_t *postings);
 #endif
