@@ -31,6 +31,15 @@
 
 #define MAGIC 0xC0FFEE0000000042ULL
 
+// Progress markers on unbuffered stderr: a crash under the collector loses
+// buffered stdout, and CI has no core dumps, so this is how a red run says
+// where it died.
+static void
+stage(const char *what)
+{
+    fprintf(stderr, "  .. %s\n", what);
+}
+
 // A word parked in NONE-scanned arena memory: neither a root nor rewritten,
 // so it can hold a snapshot of a pointer-shaped value across a collection.
 // (A stack copy cannot: the stack is scanned conservatively and rewritten.)
@@ -82,8 +91,10 @@ collect(n00b_arena_t *arena)
 static __attribute__((noinline)) void
 test_alias_word_not_forwarded(n00b_allocator_t *dict_al, n00b_arena_t *arena, const char *label)
 {
+    stage(label);
     n00b_dict_untyped_t *d = new_dict_on(dict_al);
     n00b_dict_untyped_put(d, 7, 700);
+    stage("alias: dict ready");
 
     // The from-space object we alias. Its ONLY reference is the crafted bucket
     // word, so if the collector treats that word as a pointer it forwards the
@@ -102,8 +113,10 @@ test_alias_word_not_forwarded(n00b_allocator_t *dict_al, n00b_arena_t *arena, co
     b->insert_order       = (uint32_t)taddr;
     atomic_store(&b->flags, flags_before);
     uint64_t *before = park(arena, ((uint64_t)flags_before << 32) | b->insert_order);
+    stage("alias: crafted, collecting");
 
     collect(arena);
+    stage("alias: collected");
 
     // Re-find the bucket: an arena-resident store has moved.
     b = bucket_for(d, 7);
@@ -125,6 +138,7 @@ test_alias_word_not_forwarded(n00b_allocator_t *dict_al, n00b_arena_t *arena, co
     // Undo the crafted flags before the dict is touched again: whatever the
     // address's upper bits were, they are not a legitimate flag state.
     atomic_store(&b->flags, 0);
+    stage("alias: word intact, probing key");
     bool  found = false;
     void *v     = n00b_dict_untyped_get(d, 7, &found);
     assert(found && (uint64_t)(uintptr_t)v == 700);
@@ -148,8 +162,10 @@ test_value_pointer_forwarded(n00b_allocator_t *dict_al, n00b_arena_t *arena, con
     n00b_dict_untyped_put(d, 9, obj);
     uint64_t *old_addr = park(arena, (uint64_t)(uintptr_t)obj);
     obj                = nullptr; // the dict is now the only reference
+    stage("forward: collecting");
 
     collect(arena);
+    stage("forward: collected, probing key");
 
     bool      found = false;
     uint64_t *got   = n00b_dict_untyped_get(d, 9, &found);
@@ -167,10 +183,15 @@ main(int argc, char **argv)
 {
     n00b_runtime_t rt;
     n00b_init(&rt, argc, argv);
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
 
     printf("test_dict_gc_scan:\n");
 
-    n00b_allocator_t *cpool = (n00b_allocator_t *)&rt.conduit_pool;
+    // Through the runtime accessor, never the `rt` local: n00b_init may keep
+    // the live runtime elsewhere, leaving the local only partly populated
+    // (it did on Linux, where &rt.conduit_pool was an uninitialised pool).
+    n00b_allocator_t *cpool = (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;
 
     // Pool-resident dict (the fd registry's shape): the store stays put and is
     // reached from the stack through the dict struct.
@@ -194,6 +215,7 @@ main(int argc, char **argv)
     }
 
     printf("test_dict_gc_scan: OK\n");
+    stage("shutting down");
     n00b_shutdown();
     return 0;
 }
