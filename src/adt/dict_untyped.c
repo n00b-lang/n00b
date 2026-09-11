@@ -13,6 +13,7 @@
 #include "core/align.h"
 #include "adt/dict_untyped.h"
 #include "adt/dict_sync.h"
+#include "core/gc_map.h"
 #include "core/atomic.h"
 #include "core/epoch.h"
 #include "core/futex.h"
@@ -86,6 +87,69 @@ new_dict_untyped_size(uint32_t last_bucket, uint32_t size)
     return table_size;
 }
 
+// Precise GC scan for an epoch-allocated store: mark only each bucket's key and
+// value word.
+//
+// A store used to be scanned with the conservative "every word" policy. That
+// is unsafe under a moving collector: any word that happens to equal an
+// address inside a live from-space object is treated as a pointer to it and
+// REWRITTEN to the object's new address (n00b_visit_possible_pointer; only
+// suspended-thread registers are pinned instead). Two bucket words are not
+// pointers but routinely look like one:
+//
+//   * `insert_order | flags << 32` -- once flags is nonzero (MUTEX held,
+//     DELETED after a remove, COPYING/MOVING during a migration) the word is
+//     0x1_0000_xxxx / 0x4_0000_xxxx / ..., i.e. a small offset above a 4 GB
+//     boundary. A fat process's arena segments land exactly there (macOS hands
+//     out fresh regions at 4 GB boundaries once the low range is full), and
+//     insert_order is dense, so some bucket aliases some object. After the
+//     rewrite `flags` holds the upper 32 bits of the object's NEW address:
+//     MUTEX with no owner, MOVING with no migrator (n00b-lang/n00b#365, #221),
+//     or DELETED lost so a removed key comes back.
+//   * `hv`, a random 128-bit hash: rarer, but a hit silently breaks lookups.
+//
+// So the store describes itself. The layout the callback sees is the
+// n00b_epoch_alloc payload: the hidden epoch header, the store header, then
+// the buckets. Bucket count is derived from the allocation length (floor), so
+// trailing bytes an allocator adds (pool audit words) are simply not marked.
+//
+// Deliberately a dict-private callback rather than a built-in: the length-
+// derived built-in aborts the process unless the allocation is a whole number
+// of elements, and an abort inside the collector is not an acceptable failure
+// mode. The cost is that an untyped store cannot be marshaled (marshal only
+// round-trips the built-in callbacks, and reports anything else as an explicit
+// error) -- none is today.
+static void
+dict_untyped_store_scan_cb(n00b_gc_map_t *m, void *user)
+{
+    (void)user;
+
+    const uint64_t prefix = (sizeof(n00b_epoch_hdr_t)
+                             + offsetof(n00b_dict_untyped_store_t, buckets))
+                          / sizeof(void *);
+    const uint64_t stride = sizeof(n00b_dict_untyped_bucket_t) / sizeof(void *);
+    const uint64_t key    = offsetof(n00b_dict_untyped_bucket_t, key) / sizeof(void *);
+    const uint64_t value  = offsetof(n00b_dict_untyped_bucket_t, value) / sizeof(void *);
+
+    static_assert(sizeof(n00b_epoch_hdr_t) % sizeof(void *) == 0);
+    static_assert(offsetof(n00b_dict_untyped_store_t, buckets) % sizeof(void *) == 0);
+    static_assert(sizeof(n00b_dict_untyped_bucket_t) % sizeof(void *) == 0);
+    static_assert(offsetof(n00b_dict_untyped_bucket_t, key) % sizeof(void *) == 0);
+    static_assert(offsetof(n00b_dict_untyped_bucket_t, value) % sizeof(void *) == 0);
+
+    if (m->num_words <= prefix) {
+        return;
+    }
+
+    uint64_t nbuckets = (m->num_words - prefix) / stride;
+
+    for (uint64_t i = 0; i < nbuckets; i++) {
+        uint64_t base = prefix + i * stride;
+        n00b_gc_map_mark(m, base + key);
+        n00b_gc_map_mark(m, base + value);
+    }
+}
+
 static inline n00b_dict_untyped_store_t *
 new_dict_untyped_store(n00b_dict_untyped_t *d, uint32_t alloc_items)
 {
@@ -98,6 +162,16 @@ new_dict_untyped_store(n00b_dict_untyped_t *d, uint32_t alloc_items)
     };
 
     if (d->epoch_store) {
+        // epoch_store means the caller left the scan policy to us (DEFAULT,
+        // ALL or NONE, no callback). NONE stays NONE; anything else gets the
+        // precise per-bucket scan above -- see its comment for why the
+        // conservative scan is never right for a store. ALL is honoured in
+        // spirit: key and value words are still scanned conservatively.
+        if (d->scan_kind != N00B_GC_SCAN_KIND_NONE) {
+            opts.scan_kind = N00B_GC_SCAN_KIND_CALLBACK;
+            opts.scan_cb   = dict_untyped_store_scan_cb;
+            opts.scan_user = nullptr;
+        }
         size_t bytes = sizeof(n00b_dict_untyped_store_t)
                     + sizeof(n00b_dict_untyped_bucket_t) * alloc_items;
         result       = n00b_epoch_alloc(bytes, &opts);

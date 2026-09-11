@@ -3509,6 +3509,12 @@ dict_untyped_migrate_test = executable('test_dict_untyped_migrate',
 test('dict_untyped_migrate', dict_untyped_migrate_test, suite: 'unit',
     is_parallel: false, timeout: 120)
 
+dict_gc_scan_test = executable('test_dict_gc_scan',
+    ['test/unit/test_dict_gc_scan.c'],
+    kwargs: test_common_kwargs,
+)
+test('dict_gc_scan', dict_gc_scan_test, suite: 'unit')
+
 # ============================================================================
 # Conduit tests
 # ============================================================================
