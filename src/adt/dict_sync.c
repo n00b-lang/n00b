@@ -21,11 +21,13 @@ static _Atomic uint64_t reader_backoff_count        = 0;
 static _Atomic uint64_t migrate_abandon_count       = 0;
 static _Atomic uint64_t stranded_flags_repair_count = 0;
 static _Atomic uint64_t stw_contention_count        = 0;
+static _Atomic uint64_t insert_dropped_count        = 0;
 
 static _Atomic bool reader_strand_warned   = false;
 static _Atomic bool migrate_abandon_warned = false;
 static _Atomic bool stranded_flags_warned  = false;
 static _Atomic bool stw_contention_warned  = false;
+static _Atomic bool insert_dropped_warned  = false;
 
 // Diagnostics go out raw: these paths can run with the world stopped or from
 // a TLS-free worker, where stdio is not safe. Each fires once per process.
@@ -78,6 +80,15 @@ n00b_dict_stw_contention(void)
               "inside; not waiting on it\n");
 }
 
+void
+n00b_dict_insert_dropped(void)
+{
+    atomic_fetch_add_explicit(&insert_dropped_count, 1, memory_order_relaxed);
+    WARN_ONCE(insert_dropped_warned,
+              "n00b_dict: an insert was refused: the store is full and its "
+              "resize could not run\n");
+}
+
 // ---------------------------------------------------------------------------
 // Test hooks.
 // ---------------------------------------------------------------------------
@@ -116,4 +127,10 @@ uint64_t
 n00b_dict_stw_contention_count_get(void)
 {
     return atomic_load_explicit(&stw_contention_count, memory_order_relaxed);
+}
+
+uint64_t
+n00b_dict_insert_dropped_count_get(void)
+{
+    return atomic_load_explicit(&insert_dropped_count, memory_order_relaxed);
 }

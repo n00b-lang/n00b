@@ -203,6 +203,12 @@ extern void n00b_dict_migration_abandoned(void);
  *  suspended mutator inside a dict it is resizing. */
 extern void n00b_dict_stw_contention(void);
 
+/** @brief Count and one-shot diagnostic for an insert refused because the
+ *  store was full and its one resize attempt did not run. A put has no way
+ *  to report this to its caller (nullptr is also "newly inserted"), so this
+ *  is the only signal the field gets. */
+extern void n00b_dict_insert_dropped(void);
+
 // ---------------------------------------------------------------------------
 // Test hooks. Production code must not call the setters. Counters are never
 // reset; a test needing a clean count must run in a fresh process or diff.
@@ -213,5 +219,6 @@ extern void     n00b_dict_migrate_abandon_gate_set(uint64_t ns);
 extern uint64_t n00b_dict_migrate_abandon_count_get(void);
 extern uint64_t n00b_dict_stranded_flags_repair_count_get(void);
 extern uint64_t n00b_dict_stw_contention_count_get(void);
+extern uint64_t n00b_dict_insert_dropped_count_get(void);
 
 #endif // N00B_USE_INTERNAL_API

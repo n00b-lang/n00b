@@ -594,6 +594,19 @@ try_again:;
         // Every slot reserved, so there is nowhere to put this. Only reachable
         // once a migration has been abandoned (see below); a table whose
         // migrations run stays under its threshold and always has room.
+        //
+        // The table filled because a resize could not run THEN. This call
+        // gets its own attempt: the mutex that blocked the earlier one has
+        // usually cleared by now, and without a retry here a store that once
+        // filled would refuse every new key for the rest of its life. Still
+        // bounded to one attempt per call, for the same reason as the
+        // threshold path.
+        if (may_migrate) {
+            may_migrate = dict_migrate(d, ksz, vsz);
+            store = (__n00b_internal_type_erased_store_t *)n00b_atomic_load(&d->store);
+            goto try_again;
+        }
+        n00b_dict_insert_dropped();
         n00b_epoch_yield();
         return nullptr;
     }
@@ -735,7 +748,14 @@ try_again:;
     n00b_dict_bucket_t *bucket = acquire_or_add(d, &store, hv);
 
     if (bucket == nullptr) {
-        // See the sibling note in _n00b_dict_internal_put.
+        // Full table: one bounded resize attempt, then give up. See the
+        // sibling note in _n00b_dict_internal_put.
+        if (may_migrate) {
+            may_migrate = dict_migrate(d, ksz, vsz);
+            store = (__n00b_internal_type_erased_store_t *)n00b_atomic_load(&d->store);
+            goto try_again;
+        }
+        n00b_dict_insert_dropped();
         n00b_epoch_yield();
         return false;
     }
@@ -856,7 +876,14 @@ _n00b_dict_internal_cas(_n00b_dict_internal_t *d,
 try_again:
         b = acquire_or_add(d, &store, hv);
         if (b == nullptr) {
-            // See the sibling note in _n00b_dict_internal_put.
+            // Full table: one bounded resize attempt, then give up. See the
+            // sibling note in _n00b_dict_internal_put.
+            if (may_migrate) {
+                may_migrate = dict_migrate(d, ksz, vsz);
+                store = (__n00b_internal_type_erased_store_t *)n00b_atomic_load(&d->store);
+                goto try_again;
+            }
+            n00b_dict_insert_dropped();
             n00b_epoch_yield();
             return false;
         }

@@ -309,8 +309,9 @@ dict_untyped_abandon_migration(n00b_dict_untyped_t       *d,
 // (n00b-lang/n00b#358).
 //
 // `in_stw` is the caller's single sample of the stopped-world flag (see
-// n00b_dict_in_stw). Under STW this never waits on anything -- see
-// "Stopped-world migration" in adt/dict_sync.h.
+// n00b_dict_in_stw). Under STW this never waits on anything: a foreign
+// migration or a held bucket both mean a suspended thread, and both are
+// reported as abandoned -- see "Stopped-world migration" in adt/dict_sync.h.
 bool
 n00b_dict_untyped_lock(n00b_dict_untyped_t *d,
                        uint32_t            *count,
@@ -363,13 +364,20 @@ n00b_dict_untyped_lock(n00b_dict_untyped_t *d,
 
     if (in_stw) {
         // Sole runner: a MUTEX here belongs to a suspended thread, so waiting
-        // on it could never end (n00b-lang/n00b#272). It also means the
-        // collector is resizing a dict a mutator is inside, which no
-        // collector-side dict should be. Report it and copy the store as it
-        // stands rather than wait.
+        // on it could never end (n00b-lang/n00b#272). Nor can we copy around
+        // it: that thread is mid-update on a bucket of THIS store and will
+        // finish its write here when resumed, so publishing a copy now loses
+        // that write (and may copy a half-initialised entry). Abandon instead:
+        // drop the bits we set, lower the migration bit, and let the caller
+        // land in the oversized store, which the suspended writer will still
+        // be updating when it comes back. It also means the collector is
+        // resizing a dict a mutator is inside, which no collector-side dict
+        // should be; counted and reported once.
         n00b_dict_stw_contention();
-        *count = new_used;
-        return true;
+        dict_untyped_abandon_migration(d, s, flags);
+        n00b_dict_migration_abandoned();
+        *abandoned = true;
+        return false;
     }
 
     // We noticed writes in progress: wait for the recorded bucket mutexes to
@@ -753,6 +761,19 @@ try_again:
         // Every slot reserved, so there is nowhere to put this. Only reachable
         // once a migration has been abandoned (see below); a table whose
         // migrations run stays under its threshold and always has room.
+        //
+        // The table filled because a resize could not run THEN. This call
+        // gets its own attempt: the mutex that blocked the earlier one has
+        // usually cleared by now, and without a retry here a store that once
+        // filled would refuse every new key for the rest of its life. Still
+        // bounded to one attempt per call, for the same reason as the
+        // threshold path.
+        if (may_migrate) {
+            may_migrate = n00b_dict_untyped_migrate(d, in_stw);
+            store       = n00b_atomic_load(&d->store);
+            goto try_again;
+        }
+        n00b_dict_insert_dropped();
         dict_untyped_epoch_exit(epoch_active);
         return nullptr;
     }
@@ -888,7 +909,14 @@ try_again:
     n00b_dict_untyped_bucket_t *bucket = n00b_acquire_or_add(d, &store, hv, in_stw);
 
     if (bucket == nullptr) {
-        // See the sibling note in _n00b_dict_untyped_put.
+        // Full table: one bounded resize attempt, then give up. See the
+        // sibling note in _n00b_dict_untyped_put.
+        if (may_migrate) {
+            may_migrate = n00b_dict_untyped_migrate(d, in_stw);
+            store       = n00b_atomic_load(&d->store);
+            goto try_again;
+        }
+        n00b_dict_insert_dropped();
         dict_untyped_epoch_exit(epoch_active);
         return false;
     }
@@ -984,7 +1012,14 @@ _n00b_dict_untyped_cas(n00b_dict_untyped_t *d,
 try_again:
         b = n00b_acquire_or_add(d, &store, hv, in_stw);
         if (b == nullptr) {
-            // See the sibling note in _n00b_dict_untyped_put.
+            // Full table: one bounded resize attempt, then give up. See the
+            // sibling note in _n00b_dict_untyped_put.
+            if (may_migrate) {
+                may_migrate = n00b_dict_untyped_migrate(d, in_stw);
+                store       = n00b_atomic_load(&d->store);
+                goto try_again;
+            }
+            n00b_dict_insert_dropped();
             dict_untyped_epoch_exit(epoch_active);
             return false;
         }

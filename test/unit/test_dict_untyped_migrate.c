@@ -80,6 +80,9 @@ init_dict(n00b_dict_untyped_t *d)
 
     // The fill below has to cross the threshold before it runs out of keys.
     assert(out.threshold <= out.last_key);
+    // Keys `capacity - 1` and `capacity` home on the last bucket and bucket 0
+    // respectively; the full-store tests use them to fill every slot.
+    assert(out.capacity >= 8);
     return out;
 }
 
@@ -293,6 +296,139 @@ test_unstranded_dict_still_migrates(void)
 }
 
 // ---------------------------------------------------------------------------
+// A store that filled up while its resize could not run.
+//
+// Abandoning lets writes land in the oversized store, so it can fill to the
+// last slot. Once full, acquire-or-add returns nullptr for any new key. That
+// path used to be a bare failure, which made the fullness permanent: even
+// after the mutex that blocked the resize had cleared, no later insert ever
+// asked for one again. Each insert now gets one bounded resize attempt there.
+// ---------------------------------------------------------------------------
+
+// The realistic shape: a writer holds a bucket it owns (an existing key) for
+// a long time; resizes abandon; the table fills; the writer finishes. The
+// next new key must grow the table, not be refused.
+static void
+test_full_store_recovers_once_the_holder_releases(void)
+{
+    n00b_dict_untyped_t d;
+    layout_t            l = init_dict(&d);
+    fill(&d, 1, l.threshold - 1);
+
+    uint64_t held = l.threshold / 2; // reserved bucket, off every home path
+    assert(held >= 1);
+    strand_bucket(&d, (uint32_t)held);
+    n00b_dict_migrate_abandon_gate_set(TEST_GATE_NS);
+
+    // Every remaining slot has a key whose HOME it is, so no probe crosses
+    // the held bucket: 1..last_slot directly, and `capacity` for bucket 0.
+    fill(&d, l.threshold, l.capacity - 1);
+    uint64_t v0 = 1000 + l.capacity;
+    assert(n00b_dict_untyped_add(&d, l.capacity, v0));
+
+    n00b_dict_untyped_store_t *full = n00b_atomic_load(&d.store);
+    assert(full->last_slot + 1 == l.capacity);
+    for (uint32_t i = 0; i <= full->last_slot; i++) {
+        assert(full->buckets[i].hv != 0);
+    }
+
+    // The holder finishes.
+    n00b_atomic_and(&full->buckets[held].flags, ~(uint32_t)N00B_HT_FLAG_MUTEX);
+
+    // A new key whose home is taken probes the whole table, finds nothing,
+    // and must resize rather than fail.
+    uint64_t abandons = n00b_dict_migrate_abandon_count_get();
+    uint64_t dropped  = n00b_dict_insert_dropped_count_get();
+    uint64_t k        = l.capacity + 1;
+    uint64_t v        = 1000 + k;
+    assert(n00b_dict_untyped_add(&d, k, v));
+    assert(n00b_atomic_load(&d.store) != full);
+    assert(n00b_atomic_load(&d.store)->last_slot + 1 > l.capacity);
+    assert(n00b_dict_migrate_abandon_count_get() == abandons);
+    assert(n00b_dict_insert_dropped_count_get() == dropped);
+
+    // Nothing lost across the recovery, including bucket 0 and the held key.
+    check_all_readable(&d, l.capacity + 1);
+
+    printf("  [PASS] full_store_recovers_once_the_holder_releases\n");
+}
+
+// Same shape through put and cas, which have their own copies of the path.
+static void
+test_full_store_recovers_via_put_and_cas(void)
+{
+    for (int which = 0; which < 2; which++) {
+        n00b_dict_untyped_t d;
+        layout_t            l = init_dict(&d);
+        fill(&d, 1, l.threshold - 1);
+
+        uint64_t held = l.threshold / 2;
+        strand_bucket(&d, (uint32_t)held);
+        n00b_dict_migrate_abandon_gate_set(TEST_GATE_NS);
+        fill(&d, l.threshold, l.capacity - 1);
+        uint64_t v0 = 1000 + l.capacity;
+        assert(n00b_dict_untyped_add(&d, l.capacity, v0));
+        n00b_dict_untyped_store_t *full = n00b_atomic_load(&d.store);
+        n00b_atomic_and(&full->buckets[held].flags, ~(uint32_t)N00B_HT_FLAG_MUTEX);
+
+        uint64_t k = l.capacity + 1;
+        uint64_t v = 1000 + k;
+        if (which == 0) {
+            void *prev = n00b_dict_untyped_put(&d, k, v);
+            assert(prev == nullptr);
+        }
+        else {
+            assert(n00b_dict_untyped_cas(&d, k, 0, v, .null_old_means_absence = true));
+        }
+        assert(n00b_atomic_load(&d.store) != full);
+        check_all_readable(&d, l.capacity + 1);
+    }
+    printf("  [PASS] full_store_recovers_via_put_and_cas\n");
+}
+
+// When the resize STILL cannot run, the refusal is bounded (one attempt per
+// call, no spin) and counted, and the very next call after the blocker
+// clears succeeds. Modelled under STW with the migration word held by a
+// phantom owner, the one blocker a full-table probe cannot itself wedge on.
+static void
+test_full_store_refusal_is_bounded_and_counted(void)
+{
+    n00b_dict_untyped_t d;
+    layout_t            l = init_dict(&d);
+    fill(&d, 1, l.threshold - 1);
+
+    n00b_atomic_or(&d._migration_state, N00B_DICT_MIGRATION_ACTIVE);
+
+    n00b_stop_the_world();
+    fill(&d, l.threshold, l.capacity - 1);
+    uint64_t v0 = 1000 + l.capacity;
+    assert(n00b_dict_untyped_add(&d, l.capacity, v0)); // bucket 0: table full
+    n00b_dict_untyped_store_t *full = n00b_atomic_load(&d.store);
+
+    uint64_t dropped    = n00b_dict_insert_dropped_count_get();
+    uint64_t contention = n00b_dict_stw_contention_count_get();
+    uint64_t k          = l.capacity + 1;
+    uint64_t v          = 1000 + k;
+    uint64_t t0         = base_monotonic_ns();
+    assert(!n00b_dict_untyped_add(&d, k, v));
+    uint64_t elapsed = base_monotonic_ns() - t0;
+    assert(elapsed < 500ULL * N00B_NS_PER_MS);
+    assert(n00b_dict_insert_dropped_count_get() == dropped + 1);
+    assert(n00b_dict_stw_contention_count_get() == contention + 1); // ONE attempt
+    assert(n00b_atomic_load(&d.store) == full);
+
+    // Blocker gone: the next call resizes and lands, still under STW.
+    atomic_store(&d._migration_state, 0);
+    assert(n00b_dict_untyped_add(&d, k, v));
+    n00b_restart_the_world();
+
+    assert(n00b_atomic_load(&d.store) != full);
+    check_all_readable(&d, l.capacity + 1);
+
+    printf("  [PASS] full_store_refusal_is_bounded_and_counted\n");
+}
+
+// ---------------------------------------------------------------------------
 // COPYING/MOVING with no migration behind it (#365).
 //
 // The #365 capture: sixteen threads in n00b_acquire_if_present, each seeing
@@ -402,26 +538,37 @@ test_live_migration_bits_are_not_repaired(void)
 // The collector is the only thread that runs while the world is stopped, so a
 // bucket MUTEX or a migration owned by anyone else belongs to a suspended
 // thread and can never clear. The acquire helpers already knew that; the
-// migrator's two waits did not. A stranded MUTEX stands in for the suspended
-// mutator here: before the fix the resize spins the full drain bound on it
-// (and then abandons, on a dict that immediately asks to resize again).
+// migrator's two waits did not. Nor may the migrator copy AROUND a held
+// bucket: its owner will finish writing into this store when resumed, so a
+// published copy would lose that write. Both cases abandon at once. A
+// stranded MUTEX stands in for the suspended mutator here; the first test
+// resumes it by hand and checks its write is not lost.
 // ---------------------------------------------------------------------------
 
 static void
-test_stw_migration_does_not_wait_on_a_bucket_mutex(void)
+test_stw_migration_abandons_on_a_held_bucket_mutex(void)
 {
     n00b_dict_untyped_t d;
     layout_t            l = init_dict(&d);
     fill(&d, 1, l.threshold - 1);
 
+    // A "suspended writer": it acquired the bucket for `held` (an existing
+    // key) and was stopped before storing its new value. That is exactly a
+    // reserved bucket with MUTEX set and no running owner.
+    uint64_t held = l.threshold / 2;
+    assert(held >= 1);
     n00b_dict_untyped_store_t *before = n00b_atomic_load(&d.store);
-    strand_bucket(&d, l.stranded);
+    strand_bucket(&d, (uint32_t)held);
     // The default gate: if the migrator waits at all this takes a second per
     // attempt, and the deadline below catches it.
     n00b_dict_migrate_abandon_gate_set(1000ULL * N00B_NS_PER_MS);
 
     uint64_t contention = n00b_dict_stw_contention_count_get();
     uint64_t abandons   = n00b_dict_migrate_abandon_count_get();
+    // The threshold test reads the PRE-increment count, so the insert that
+    // reaches the threshold lands quietly and every one after it asks for a
+    // resize: last_key - threshold asks, one abandon each.
+    uint64_t attempts   = l.last_key - l.threshold;
 
     n00b_stop_the_world();
     uint64_t t0 = base_monotonic_ns();
@@ -429,16 +576,36 @@ test_stw_migration_does_not_wait_on_a_bucket_mutex(void)
     uint64_t elapsed = base_monotonic_ns() - t0;
     n00b_restart_the_world();
 
-    // The resize ran (the store grew) instead of waiting or giving up, and it
-    // said so.
-    assert(n00b_atomic_load(&d.store) != before);
-    assert(n00b_atomic_load(&d.store)->last_slot > before->last_slot);
-    assert(n00b_dict_migrate_abandon_count_get() == abandons);
-    assert(n00b_dict_stw_contention_count_get() > contention);
+    // No wait, no copy: every resize was abandoned at once and the writes
+    // landed in the store the suspended writer is still inside.
     assert(elapsed < 500ULL * N00B_NS_PER_MS);
-    check_all_readable(&d, l.last_key);
+    assert(n00b_atomic_load(&d.store) == before);
+    assert(n00b_dict_stw_contention_count_get() == contention + attempts);
+    assert(n00b_dict_migrate_abandon_count_get() == abandons + attempts);
+    assert(n00b_atomic_load(&d._migration_state) == 0);
+    for (uint32_t i = 0; i <= before->last_slot; i++) {
+        assert(!(n00b_atomic_load(&before->buckets[i].flags) & N00B_HT_FLAGS_MIGRATING));
+    }
 
-    printf("  [PASS] stw_migration_does_not_wait_on_a_bucket_mutex\n");
+    // Resume the writer: it finishes its update in the bucket it holds and
+    // releases. Had the collector published a copy, this write would land in
+    // a dead store and the lookup below would read the stale 1000 + held.
+    uint64_t v2 = 2000 + held;
+    before->buckets[held].value = (void *)(uintptr_t)v2;
+    n00b_atomic_and(&before->buckets[held].flags, ~(uint32_t)N00B_HT_FLAG_MUTEX);
+
+    bool  found = false;
+    void *got   = n00b_dict_untyped_get(&d, held, &found);
+    assert(found && (uint64_t)(uintptr_t)got == v2);
+    for (uint64_t k = 1; k <= l.last_key; k++) {
+        if (k == held) {
+            continue;
+        }
+        got = n00b_dict_untyped_get(&d, k, &found);
+        assert(found && (uint64_t)(uintptr_t)got == 1000 + k);
+    }
+
+    printf("  [PASS] stw_migration_abandons_on_a_held_bucket_mutex\n");
 }
 
 // The other wait: the migration word already raised by a (suspended) thread.
@@ -488,7 +655,10 @@ main(int argc, char **argv)
     test_get_repairs_stranded_moving_flag();
     test_add_repairs_stranded_copying_flag();
     test_live_migration_bits_are_not_repaired();
-    test_stw_migration_does_not_wait_on_a_bucket_mutex();
+    test_full_store_recovers_once_the_holder_releases();
+    test_full_store_recovers_via_put_and_cas();
+    test_full_store_refusal_is_bounded_and_counted();
+    test_stw_migration_abandons_on_a_held_bucket_mutex();
     test_stw_migration_does_not_wait_on_a_foreign_migration();
     printf("test_dict_untyped_migrate: OK\n");
 
