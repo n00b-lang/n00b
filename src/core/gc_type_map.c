@@ -251,6 +251,12 @@ dyn_search_locked(uint64_t type_hash, uint64_t count, bool *found)
     return lo;
 }
 
+bool
+n00b_gc_type_map_available(void)
+{
+    return gen_table_present() || n00b_atomic_load(&dyn_count) != 0;
+}
+
 const n00b_gc_struct_layout_t *
 n00b_gc_type_map_lookup(uint64_t type_hash)
 {
