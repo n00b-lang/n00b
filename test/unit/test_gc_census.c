@@ -171,7 +171,11 @@ main(int argc, char **argv)
 
     printf("test_gc_census:\n");
 #if defined(N00B_DEBUG)
-    test_debug_census_publishes_typed_buffer(&rt);
+    // The runtime the process actually uses, not the init local: on Linux the
+    // local is not the live runtime (its pools and conduit are garbage there),
+    // which is the SIGSEGV this test showed on ubuntu before and after the
+    // census fix. Same rule as n00b#366's dict_gc_scan lesson.
+    test_debug_census_publishes_typed_buffer(n00b_get_runtime());
 #else
     printf("  [SKIP] debug census publish requires N00B_DEBUG\n");
 #endif
