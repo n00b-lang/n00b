@@ -1414,11 +1414,43 @@ n00b_gc_shrink_primary_segment(n00b_arena_t *arena)
 
     char    *tail     = segment->data + target;
     uint64_t tail_len = old_size - target;
+
+    /* Today the only caller reaches this with the to-space segment, which is
+     * still hidden and therefore has no registry record, so the fixup below
+     * does not fire. It is here because this is the ONLY place a live segment
+     * shrinks, and shrinking a registered one without shortening its record
+     * would now be a crash rather than a stale entry: n00b#275 made arena
+     * segments record their permissions so the mark loop's guard scan can
+     * trust them WITHOUT asking the kernel, so a record that outlived its
+     * mapping would have the scan read unmapped memory on that authority --
+     * the n00b#290 failure mode, reached from the other side.
+     *
+     * Carrying the recorded allocation high-water across keeps the tightened
+     * scan bound (n00b#395) from resetting to "nothing recorded" on a segment
+     * that is full of live objects. */
+    uint64_t carried        = 0;
+    bool     was_registered = (segment->mmap_rec != nullptr);
+
+    if (was_registered) {
+        carried = atomic_load_explicit(&segment->mmap_rec->max_alloc_len,
+                                       memory_order_relaxed);
+        n00b_mmap_unregister(segment->data);
+        segment->mmap_rec = nullptr;
+    }
+
     n00b_safe_munmap(tail, tail_len);
 
     segment->size      = target;
     segment->last_addr = segment->data + target;
     arena->segment_end = segment->last_addr;
+
+    if (was_registered) {
+        segment->mmap_rec = n00b_register_arena_segment(segment->data,
+                                                        segment->last_addr,
+                                                        arena);
+        n00b_mmap_note_alloc_len(segment->mmap_rec, carried);
+    }
+
     n00b_atomic_store(&n00b_gc_last_primary_shrink_bytes, tail_len);
     n00b_atomic_add(&n00b_gc_total_primary_shrink_bytes, tail_len);
 }
@@ -1506,6 +1538,13 @@ n00b_forward_alloc(n00b_collect_t *ctx, n00b_inline_hdr_t *old)
     top = n00b_atomic_load(&ctx->to_space->next_alloc);
     new = (n00b_inline_hdr_t *)top;
     top = top + old->alloc_len;
+
+    /* n00b#395: the to-space is hidden (and so unregistered) for the duration
+     * of the collect, so record the extent here and seed it onto the segment's
+     * registry record when the to-space is registered as the live segment. */
+    if (old->alloc_len > ctx->to_space_max_alloc_len) {
+        ctx->to_space_max_alloc_len = old->alloc_len;
+    }
 
     ctx->to_space->alloc_count++;
 
@@ -3481,6 +3520,9 @@ n00b_collect_setup(n00b_collect_t *ctx, n00b_arena_t *from_space, bool out_of_me
     ctx->from_space = from_space;
     ctx->to_space   = n00b_create_destination_arena(from_space, out_of_memory);
     ctx->pin_all    = n00b_gc_pin_all_policy();
+    // The context is an uninitialized stack struct; every field is assigned
+    // here by hand.
+    ctx->to_space_max_alloc_len = 0;
 
     /* Bump the runtime's GC epoch counter and snapshot it onto the
      * collection context. The mark phase stamps this value onto
@@ -3658,12 +3700,24 @@ n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain)
             else {
                 pinned_pages += run_len / pg;
                 retained_runs++;
+                n00b_mmap_info_t *run_rec = nullptr;
                 if (unregister) {
-                    n00b_register_arena_segment(run_addr, run_addr + run_len, live);
+                    run_rec = n00b_register_arena_segment(run_addr,
+                                                          run_addr + run_len,
+                                                          live);
                 }
                 n00b_segment_t *keep
                     = n00b_alloc_with_opts(n00b_segment_t,
                                            &(n00b_alloc_opts_t){.allocator = sp});
+                /* A retained run gets a FRESH registry record, and the objects
+                 * already inside it were recorded against the from-space
+                 * record that was just dropped. Leaving the new record's
+                 * max_alloc_len at 0 is the honest answer -- it means "no
+                 * per-mapping bound recorded", and the guard scan falls back
+                 * to the global all-time high-water mark, exactly as it did
+                 * before n00b#395. Nothing is ever bump-allocated into a
+                 * retained run, so the 0 cannot go stale. */
+                keep->mmap_rec                      = run_rec;
                 keep->size                          = run_len;
                 keep->data                          = run_addr;
                 keep->last_addr                     = run_addr + run_len;
@@ -3755,10 +3809,13 @@ n00b_collection_cleanup(n00b_collect_t *ctx)
 
     ctx->to_space->vtable.hidden = false;
 
-    n00b_register_arena_segment(new_segment->data,
-                                ctx->from_space->segment_end,
-                                ctx->from_space,
-                                .file = ctx->from_space->vtable.debug_name);
+    new_segment->mmap_rec
+        = n00b_register_arena_segment(new_segment->data,
+                                      ctx->from_space->segment_end,
+                                      ctx->from_space,
+                                      .file = ctx->from_space->vtable.debug_name);
+    n00b_mmap_note_alloc_len(new_segment->mmap_rec,
+                             ctx->to_space_max_alloc_len);
 
     // Page-granular reclaim of the from-space: return unpinned page runs to the
     // kernel and retain pinned runs in place (chained into the live arena as

@@ -297,7 +297,7 @@ n00b_arena_audit_histogram(n00b_arena_census_bucket_t *out, uint32_t cap)
 }
 #endif
 
-void
+n00b_mmap_info_t *
 n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena) _kargs
 {
     const char *file = nullptr;
@@ -305,11 +305,61 @@ n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena) _kargs
 {
     n00b_mmap_rec_kind_t kind = n00b_get_arena_addr_type(arena, (void *)start);
 
-    (void)n00b_mmap_register(start,
-                             end,
-                             kind,
-                             .file      = file,
-                             .allocator = (n00b_allocator_t *)arena);
+    /* An arena segment's data region is an anonymous PROT_READ|PROT_WRITE
+     * mapping for its whole registered life: every unmap of one (arena
+     * delete, from-space reclaim, primary-segment shrink) unregisters the
+     * record -- or re-registers it at the surviving extent -- BEFORE the
+     * munmap, so a registered arena segment is always fully readable.
+     *
+     * Recording that here is what keeps the mark loop out of the kernel.
+     * n00b_check_memory_perms answers from the registry only when the record's
+     * perms are KNOWN; arena segments registered as perms_unknown, so the
+     * once-per-page permission check inside _find_sentinal's backward guard
+     * scan fell through to the pipe write() + poll() probe on every page it
+     * walked. n00b#384 fixed exactly this for pool pages; arena segments are
+     * the other half, and on a heap whose objects live in the GC arena they
+     * are the half that the conservative scan actually walks (n00b#275). */
+    auto opt = n00b_mmap_register(start,
+                                  end,
+                                  kind,
+                                  .file      = file,
+                                  .allocator = (n00b_allocator_t *)arena,
+                                  .perms     = n00b_mmap_perms_rw);
+
+    return n00b_option_is_set(opt) ? n00b_option_get(opt) : nullptr;
+}
+
+/* Record an allocation's extent against the mapping it landed in, so the
+ * conservative backward guard scan can bound itself by "one allocation in THIS
+ * mapping" instead of "the largest allocation this process ever made"
+ * (n00b#395).  Called after the bump CAS commits and before the caller writes
+ * the allocation's guard word, so any scan that can find the guard also sees a
+ * bound that covers it. */
+static inline void
+n00b_arena_note_alloc_extent(n00b_arena_t *arena, char *base, uint64_t len)
+{
+    n00b_segment_t *seg = n00b_atomic_load(&arena->current_segment);
+
+    if (seg != nullptr && base >= seg->data
+        && base + len <= seg->data + seg->size) {
+        n00b_mmap_note_alloc_len(seg->mmap_rec, len);
+        return;
+    }
+
+    /* The bump landed somewhere other than the currently published segment:
+     * n00b_add_arena_segment makes next_alloc/segment_end visible before it
+     * publishes current_segment, so a racing allocator can claim space in the
+     * new segment while current_segment still names the old one.  Recording
+     * against the wrong segment would leave THIS allocation unaccounted for in
+     * its own mapping, and the guard scan could then stop short of its header
+     * -- the n00b#321 failure.  Resolve the owning record the slow way; this
+     * is a narrow race, not the common path.  A miss means the mapping is not
+     * registered at all (a hidden arena), and nothing ever scans those. */
+    auto opt = n00b_mmap_by_address(base);
+
+    if (n00b_option_is_set(opt)) {
+        n00b_mmap_note_alloc_len(n00b_option_get(opt), len);
+    }
 }
 
 static void
@@ -377,14 +427,23 @@ n00b_add_arena_segment(n00b_arena_t *arena, uint64_t request_len)
     segment->retained     = false;
     segment->pin_bitmap   = nullptr;
     segment->next_segment = old_segment;
-    arena->next_alloc     = (char *)n00b_align((uint64_t)data);
-    arena->segment_end    = data + size;
-    segment->last_addr    = arena->segment_end;
-    n00b_atomic_store(&arena->current_segment, segment);
+    segment->last_addr    = data + size;
+    segment->mmap_rec     = nullptr;
 
+    /* Register (and seed the per-segment scan bound with the request that
+     * forced this segment to exist) BEFORE next_alloc/segment_end become
+     * visible.  From the instant another thread can bump into this segment,
+     * its mapping must already carry a bound that covers what lands in it. */
     if (!arena->vtable.hidden) {
-        n00b_register_arena_segment(data, arena->segment_end, arena);
+        segment->mmap_rec = n00b_register_arena_segment(data,
+                                                        data + size,
+                                                        arena);
+        n00b_mmap_note_alloc_len(segment->mmap_rec, request_len);
     }
+
+    arena->next_alloc  = (char *)n00b_align((uint64_t)data);
+    arena->segment_end = segment->last_addr;
+    n00b_atomic_store(&arena->current_segment, segment);
 
     // Make the lock a full thread fence so we ensure our fields are
     // fully written before people use them.
@@ -490,6 +549,8 @@ n00b_arena_alloc(n00b_arena_t *arena, uint64_t request, void *ignore)
         }
     } while (!n00b_atomic_cas(&arena->next_alloc, &found_value, desired_value));
     n00b_atomic_add(&arena->alloc_count, 1);
+
+    n00b_arena_note_alloc_extent(arena, found_value, request);
 
     return found_value;
 }
@@ -666,13 +727,17 @@ n00b_arena_reset(n00b_arena_t *arena)
     segment->pin_bitmap   = nullptr;
     segment->next_segment = nullptr;
     segment->last_addr    = data + total;
-    arena->segment_end    = segment->last_addr;
-    arena->next_alloc     = (char *)n00b_align((uint64_t)data);
-    n00b_atomic_store(&arena->current_segment, segment);
+    segment->mmap_rec     = nullptr;
 
     if (unregister) {
-        n00b_register_arena_segment(data, arena->segment_end, arena);
+        segment->mmap_rec = n00b_register_arena_segment(data,
+                                                        segment->last_addr,
+                                                        arena);
     }
+
+    arena->segment_end = segment->last_addr;
+    arena->next_alloc  = (char *)n00b_align((uint64_t)data);
+    n00b_atomic_store(&arena->current_segment, segment);
 
     n00b_atomic_fence();
     n00b_atomic_store(&arena->mutex, 0);
