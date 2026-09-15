@@ -125,6 +125,12 @@ check_bound_is_per_mapping(void *live)
     uint64_t per_mapping = atomic_load(&rec->max_alloc_len);
     uint64_t global      = n00b_atomic_load(&n00b_max_inline_alloc_len);
 
+    printf("  ... live object is in a kind-%d mapping of %llu bytes"
+           " (pin-all policy: %s)\n",
+           rec->kind,
+           (unsigned long long)(rec->end - rec->start),
+           n00b_gc_pin_all_policy() ? "on" : "off");
+
     if (global < BIG_ALLOC_BYTES) {
         fail("the global high-water never saw the large allocation, so this"
              " test cannot tell a tight bound from an inflated one");
@@ -165,6 +171,16 @@ static void
 check_scan_actually_walks_less(void)
 {
     n00b_arena_t *arena = n00b_get_runtime()->default_arena;
+
+    /* Put SOMETHING in the current segment first.  Under the pin-all policy
+     * (no GC type map linked, n00b#309 -- Linux CI, wax) a collect copies
+     * nothing into the new segment, so right after one its record has no
+     * allocation to bound by and the walk is limited only by the mapping's
+     * start.  That is correct, but it is not what this check measures. */
+    uint8_t *seed = n00b_alloc_array(uint8_t, 4096);
+    assert(seed != nullptr);
+    memset(seed, 0x33, 4096);
+
     char         *next  = n00b_atomic_load(&arena->next_alloc);
     /* Well past the 8 MB floor's reach would need 8 MB of headroom; 1 MB is
      * plenty to clear the per-mapping bound, and clearing THAT is the point --
@@ -186,6 +202,12 @@ check_scan_actually_walks_less(void)
 
     uint64_t bound_words
         = (atomic_load(&rec->max_alloc_len) + 7) / sizeof(uint64_t);
+
+    if (bound_words == 0) {
+        fail("an allocation into the current segment was not recorded"
+             " against its mapping");
+        return;
+    }
 
     uint64_t calls0 = atomic_load(&n00b_sentinel_scan_calls);
     uint64_t words0 = atomic_load(&n00b_sentinel_scan_words);

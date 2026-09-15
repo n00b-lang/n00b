@@ -338,11 +338,39 @@ n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena) _kargs
 static inline void
 n00b_arena_note_alloc_extent(n00b_arena_t *arena, char *base, uint64_t len)
 {
+    /* Stop-the-world is purely preemptive (stw.c): a thread can be suspended
+     * anywhere in here, a collect can run to completion, and the thread then
+     * resumes with whatever it had loaded.  Between the CAS and this note that
+     * means the segment descriptor AND its registry record may both have been
+     * freed by n00b_reclaim_pinned_pages, and writing a bound into a recycled
+     * record would corrupt whatever the registry pool handed that slot to
+     * next.  Hold the STW gate for the duration, exactly as every registry
+     * mutation does (mmap_lock): the initiator takes it for writing before it
+     * suspends anyone, so a collect cannot begin while we are inside.  A
+     * collect that DID intervene (we were suspended before taking the gate)
+     * has already accounted for this allocation through the thread's
+     * published in-flight reservation (n00b_pin_raw_range -> pin_max).
+     *
+     * Same short-circuits as mmap_lock: the collector itself allocates (the
+     * metadata arenas) while it holds the gate for writing, and before the
+     * runtime is up there is nothing to gate against. */
+    n00b_runtime_t *rt   = n00b_default_runtime_or_null();
+    bool            gate = rt != nullptr
+                        && n00b_atomic_load(&rt->startup_complete)
+                        && !n00b_atomic_load(&rt->stw_active);
+
+    if (gate) {
+        n00b_rw_read_lock(&rt->critical_execution);
+    }
+
     n00b_segment_t *seg = n00b_atomic_load(&arena->current_segment);
 
     if (seg != nullptr && base >= seg->data
         && base + len <= seg->data + seg->size) {
         n00b_mmap_note_alloc_len(seg->mmap_rec, len);
+        if (gate) {
+            n00b_rw_unlock(&rt->critical_execution);
+        }
         return;
     }
 
@@ -359,6 +387,10 @@ n00b_arena_note_alloc_extent(n00b_arena_t *arena, char *base, uint64_t len)
 
     if (n00b_option_is_set(opt)) {
         n00b_mmap_note_alloc_len(n00b_option_get(opt), len);
+    }
+
+    if (gate) {
+        n00b_rw_unlock(&rt->critical_execution);
     }
 }
 
@@ -429,6 +461,7 @@ n00b_add_arena_segment(n00b_arena_t *arena, uint64_t request_len)
     segment->next_segment = old_segment;
     segment->last_addr    = data + size;
     segment->mmap_rec     = nullptr;
+    segment->pin_max_alloc_len = 0;
 
     /* Register (and seed the per-segment scan bound with the request that
      * forced this segment to exist) BEFORE next_alloc/segment_end become
@@ -728,6 +761,7 @@ n00b_arena_reset(n00b_arena_t *arena)
     segment->next_segment = nullptr;
     segment->last_addr    = data + total;
     segment->mmap_rec     = nullptr;
+    segment->pin_max_alloc_len = 0;
 
     if (unregister) {
         segment->mmap_rec = n00b_register_arena_segment(data,

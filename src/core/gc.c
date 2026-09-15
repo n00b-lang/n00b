@@ -2975,7 +2975,8 @@ n00b_pin_bitmaps_alloc(n00b_collect_t *ctx)
         seg->pin_bitmap = n00b_alloc_array_with_opts(uint8_t,
                                                      nbytes,
                                                      &(n00b_alloc_opts_t){.allocator = scratch});
-        seg             = seg->next_segment;
+        seg->pin_max_alloc_len = 0;
+        seg                    = seg->next_segment;
     }
 }
 
@@ -3035,6 +3036,11 @@ n00b_pin_object_pages(n00b_collect_t *ctx, n00b_alloc_info_t ainfo)
     for (uint64_t pg = first; pg <= last; pg++) {
         seg->pin_bitmap[pg >> 3] |= (uint8_t)(1u << (pg & 7));
     }
+    // The retained runs this segment leaves behind are bounded by the largest
+    // thing pinned in it (n00b#395); see n00b_reclaim_pinned_pages.
+    if (fl > seg->pin_max_alloc_len) {
+        seg->pin_max_alloc_len = fl;
+    }
 }
 
 // Mark every page of the raw range [start, start+len) pinned, if it falls in a
@@ -3060,6 +3066,12 @@ n00b_pin_raw_range(n00b_collect_t *ctx, char *start, uint64_t len)
     uint64_t last  = (uint64_t)(end - 1 - seg->data) / n00b_page_size;
     for (uint64_t pg = first; pg <= last; pg++) {
         seg->pin_bitmap[pg >> 3] |= (uint8_t)(1u << (pg & 7));
+    }
+    // The reservation becomes an object of exactly this length once the
+    // suspended thread resumes, and that thread may have been stopped before
+    // it could record the extent itself (n00b_arena_note_alloc_extent).
+    if (len > seg->pin_max_alloc_len) {
+        seg->pin_max_alloc_len = len;
     }
 }
 
@@ -3710,14 +3722,22 @@ n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain)
                     = n00b_alloc_with_opts(n00b_segment_t,
                                            &(n00b_alloc_opts_t){.allocator = sp});
                 /* A retained run gets a FRESH registry record, and the objects
-                 * already inside it were recorded against the from-space
-                 * record that was just dropped. Leaving the new record's
-                 * max_alloc_len at 0 is the honest answer -- it means "no
-                 * per-mapping bound recorded", and the guard scan falls back
-                 * to the global all-time high-water mark, exactly as it did
-                 * before n00b#395. Nothing is ever bump-allocated into a
-                 * retained run, so the 0 cannot go stale. */
+                 * inside it were recorded against the from-space record that
+                 * was just dropped.  Seed it with the largest footprint pinned
+                 * in this segment: nothing lives in a retained run except what
+                 * was pinned there (unpinned pages are unmapped above), and
+                 * every pin recorded its footprint, so this can never be
+                 * smaller than a live allocation in the run -- while staying
+                 * far below the global all-time high-water mark a since-dead
+                 * large object left behind (n00b#395).  Under the pin-all
+                 * policy (a binary with no GC type map, n00b#309) EVERY
+                 * survivor lives in a run like this, so without it the
+                 * per-mapping bound would never apply to that heap at all.
+                 * Nothing is ever bump-allocated into a retained run, so the
+                 * value cannot go stale. */
                 keep->mmap_rec                      = run_rec;
+                keep->pin_max_alloc_len             = 0;
+                n00b_mmap_note_alloc_len(run_rec, seg->pin_max_alloc_len);
                 keep->size                          = run_len;
                 keep->data                          = run_addr;
                 keep->last_addr                     = run_addr + run_len;

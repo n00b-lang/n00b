@@ -46,6 +46,13 @@ struct n00b_segment_t {
     // allocation without a per-allocation interval-tree lookup (n00b#395).
     // nullptr for hidden arenas, which are never registered and never scanned.
     n00b_mmap_info_t *mmap_rec;
+    // Transient, per-collect, alongside pin_bitmap: the largest in-arena
+    // footprint of any object (or in-flight reservation) pinned in THIS
+    // segment.  Every page run this segment leaves behind gets a fresh
+    // registry record, and this is the tightest bound that is still safe for
+    // it: nothing lives in a retained run except what was pinned there, and
+    // every pin records its footprint here (n00b#395).  0 outside a collect.
+    uint64_t          pin_max_alloc_len;
 };
 
 struct n00b_arena_t {
