@@ -37,6 +37,14 @@ typedef struct {
     uint64_t fastpath_hits;
     uint64_t indeterminate;
     uint64_t scan_bound;
+    // n00b#395 follow-up: what the guard scan actually walked. Once the
+    // per-mapping bound is in, the global scan bound above still rises and
+    // stays risen, so these two are the numbers that say whether the SCAN
+    // got longer -- as opposed to the collect getting slower for a reason
+    // that is not the scan at all (a to-space sized to the peak, say).
+    uint64_t scan_calls;
+    uint64_t scan_words;
+    uint64_t arena_bytes;
 } phase_t;
 
 // Held across both phases so the live set is provably identical.
@@ -59,6 +67,8 @@ measure(const char *label, n00b_arena_t *arena)
     n00b_atomic_store(&n00b_memperm_syscall_probes, 0);
     n00b_atomic_store(&n00b_memperm_fastpath_hits, 0);
     n00b_atomic_store(&n00b_memperm_indeterminate, 0);
+    n00b_atomic_store(&n00b_sentinel_scan_calls, 0);
+    n00b_atomic_store(&n00b_sentinel_scan_words, 0);
 
     uint64_t t0 = base_monotonic_ns();
     for (int i = 0; i < COLLECTS; i++) {
@@ -72,6 +82,9 @@ measure(const char *label, n00b_arena_t *arena)
         .fastpath_hits  = n00b_atomic_load(&n00b_memperm_fastpath_hits),
         .scan_bound     = n00b_atomic_load(&n00b_max_inline_alloc_len),
         .indeterminate  = n00b_atomic_load(&n00b_memperm_indeterminate),
+        .scan_calls     = n00b_atomic_load(&n00b_sentinel_scan_calls),
+        .scan_words     = n00b_atomic_load(&n00b_sentinel_scan_words),
+        .arena_bytes    = n00b_arena_size(arena),
     };
 
     printf("  %-8s wall %10llu ns | syscall probes %8llu | indeterminate %6llu | fastpath %8llu | scan bound %12llu\n",
@@ -81,6 +94,12 @@ measure(const char *label, n00b_arena_t *arena)
            (unsigned long long)p.indeterminate,
            (unsigned long long)p.fastpath_hits,
            (unsigned long long)p.scan_bound);
+    printf("  %-8s guard scans %8llu | words walked %12llu | words/scan %8llu | arena %12llu B\n",
+           "",
+           (unsigned long long)p.scan_calls,
+           (unsigned long long)p.scan_words,
+           (unsigned long long)(p.scan_calls ? p.scan_words / p.scan_calls : 0),
+           (unsigned long long)p.arena_bytes);
     return p;
 }
 
@@ -129,6 +148,14 @@ main(int argc, char **argv)
     if (before.wall_ns > 0) {
         printf("  wall           %.2fx\n",
                (double)after.wall_ns / (double)before.wall_ns);
+    }
+    if (before.scan_words > 0) {
+        printf("  words walked   %.2fx\n",
+               (double)after.scan_words / (double)before.scan_words);
+    }
+    else {
+        printf("  words walked   BEFORE was 0 -- after = %llu\n",
+               (unsigned long long)after.scan_words);
     }
     if (before.syscall_probes > 0) {
         printf("  syscall probes %.2fx\n",
