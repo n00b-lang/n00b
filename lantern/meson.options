@@ -1,11 +1,4 @@
 option(
-    'xxhash_include',
-    type: 'string',
-    value: '',
-    description: 'Directory containing xxhash.h, when it is not installed',
-)
-
-option(
     'nfc',
     type: 'feature',
     value: 'auto',

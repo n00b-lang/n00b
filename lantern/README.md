@@ -35,8 +35,9 @@ make it easy to do a modern pretty printer.
   MacOS and Windows.
 
 - I also am very wary about adding AI into a project at this point,
-  but since I've done it here, there are a bunch of "guardrails" that
-  we enforce at build-time.
+  but it's become necessary to move at a modern pace. I'm trying to
+  move tiny pieces at a time via AI, but may lead to some weird side
+  effects until I've fully cleaned up.
 
 - The type hashing algorithm is written to be general across most
   modern programming languages; in most languages, you should be able

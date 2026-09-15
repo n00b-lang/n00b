@@ -120,20 +120,20 @@ ir_lib = library(
     'ir',
     th_sources + lib_sources + parse_sources + scanner_sources + ir_sources
         + ir_generated,
-    dependencies: ir_deps,
-    include_directories: ir_inc,
+    dependencies: lantern_deps,
+    include_directories: lantern_inc,
     install: true,
 )
 
 ir_dep = declare_dependency(
     link_with: ir_lib,
-    dependencies: ir_deps,
-    include_directories: ir_inc,
+    dependencies: lantern_deps,
+    include_directories: lantern_inc,
 )
 
 ir_public_dep = declare_dependency(
     link_with: ir_lib,
-    include_directories: ir_inc,
+    include_directories: lantern_inc,
 )
 
 ir_public_headers = files(

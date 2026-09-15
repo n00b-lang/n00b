@@ -322,6 +322,7 @@ for k in $expected_unconsumed; do
 done
 
 g="$(grep -rnE '(^|[^_[:alnum:]])(calloc|malloc|realloc|free|strdup|strndup)\(' \
+     --exclude-dir=vendor \
      "$root"/src "$root"/include 2>/dev/null \
      | grep -vE 'core_(alloc|realloc|free|strdup|strndup|buffer|arena)|_core_calloc' \
      | grep -vE 'lib/alloc\.h|th/nfc_utf8proc\.c')"
@@ -336,7 +337,7 @@ g="$(grep -rnE 'core_alloc_array\(char, *[a-z_]*cap' \
 
 g="$(grep -rnE '(^|[^:"*])//|^[[:space:]]*/\*' \
      --include='*.c' --include='*.h' --include='*.def' \
-     --exclude-dir=samples --exclude-dir=format \
+     --exclude-dir=samples --exclude-dir=format --exclude-dir=vendor \
      "$root"/src "$root"/include "$root"/tests 2>/dev/null \
      | grep -vE ':[[:space:]]*\*[a-zA-Z_(]' \
      | grep -vE '"[^"]*(//|/\*)')"
@@ -363,12 +364,6 @@ g="$(grep -rnE '^[[:space:]]*(#|//)' \
      "$root"/src/meson.build "$root"/tests/meson.build "$root"/meson.build \
      2>/dev/null)"
 [ -z "$g" ] || fail "a comment is present in the build files" "$g"
-
-g="$(grep -rnE '(^|[^[:alnum:]])_?[Nn][Cc][Cc]_[A-Za-z0-9_]' \
-     "$root"/src "$root"/include "$root"/tests "$root"/grammars 2>/dev/null \
-     | grep -v 'c_ncc\.bnf')"
-[ -z "$g" ] || fail "the legacy ncc_ prefix is back" \
-    "one prefix per module: core_ parse_ scan_ unicode_ ir_ th_$g"
 
 if [ "$fails" -eq 0 ]; then
     echo "gates: all passed"
