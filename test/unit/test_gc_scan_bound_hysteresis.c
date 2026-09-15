@@ -14,12 +14,17 @@
 // that is how PR #384 came to look sufficient.
 //
 // A NULL RESULT KILLS THE MODEL and is worth more than the fix.
+//
+// The one thing this bench MUST get right is that the big allocation is dead
+// when AFTER runs.  It checks that (arena size after the reclaim collect) and
+// refuses to report if it is not; see allocate_and_drop_big().
 
 #include <assert.h>
 #include <stdio.h>
 
 #include "n00b.h"
 #include "core/alloc.h"
+#include "core/arena.h"
 #include "core/atomic.h"
 #include "core/gc.h"
 #include "core/memory_info.h"
@@ -103,6 +108,46 @@ measure(const char *label, n00b_arena_t *arena)
     return p;
 }
 
+// The big allocation is made in its own frame and the frame is then torn
+// down, because a stack slot in main() would keep it alive: this test runs at
+// -O0, main()'s locals get a fixed slot for the whole function, and the
+// collector's own stack is scanned conservatively from the collect frame down
+// through main()'s.  n00b#398's first version did `{ void *big = ...; }` in
+// main() and the object survived every collect that followed -- copied in
+// moving mode (primary used 524,304,896 B after the "reclaim"), retained in
+// pin-all mode -- which is what n00b#406 measured.
+static __attribute__((noinline)) void
+allocate_and_drop_big(void)
+{
+    volatile uint8_t *big = n00b_alloc_array(uint8_t, BIG_BYTES);
+    assert(big != nullptr);
+    big[0]             = 1;
+    big[BIG_BYTES - 1] = 1;
+    // Returning drops the only reference: the slot is in THIS frame, and the
+    // pointer never left a caller-saved register.
+}
+
+// Overwrite the stack region the dead frame (and any callee spill slots below
+// main()) occupied, and clear the callee-saved registers, so nothing that
+// looked like the big pointer can be found by the conservative scan.  The
+// buffer is volatile so the store loop is not optimised away; 256 KB is far
+// more than allocate_and_drop_big() plus n00b_alloc's own frames used.
+static __attribute__((noinline)) void
+scrub_dead_frames(void)
+{
+    volatile uint8_t junk[256 * 1024];
+    for (size_t i = 0; i < sizeof(junk); i++) {
+        junk[i] = 0;
+    }
+#if defined(__aarch64__)
+    __asm__ volatile("" ::: "x19", "x20", "x21", "x22", "x23", "x24", "x25",
+                     "x26", "x27", "x28", "memory");
+#elif defined(__x86_64__)
+    __asm__ volatile("" ::: "rbx", "r12", "r13", "r14", "r15", "memory");
+#endif
+    (void)junk[sizeof(junk) - 1];
+}
+
 int
 main(int argc, char **argv)
 {
@@ -128,16 +173,31 @@ main(int argc, char **argv)
 
     phase_t before = measure("BEFORE", arena);
 
-    // One large allocation, immediately unreachable. It is collected below --
-    // only the high-water mark survives it. That is the whole point: the live
-    // set in AFTER is identical to BEFORE.
-    {
-        void *big = n00b_alloc_array(uint8_t, BIG_BYTES);
-        assert(big != nullptr);
-        ((uint8_t *)big)[0]             = 1;
-        ((uint8_t *)big)[BIG_BYTES - 1] = 1;
+    // One large allocation, then make it GENUINELY unreachable before the
+    // reclaim collect.  See kill_big_allocation() for why that takes work,
+    // and n00b#406 for what happens when it is skipped.
+    allocate_and_drop_big();
+    scrub_dead_frames();
+
+    n00b_collect(arena); // reclaim it; only the high-water mark survives
+
+    // The AFTER phase measures NOTHING unless the object actually died.  A
+    // live 500 MB object is copied (moving GC) or retained (pin-all) on every
+    // later collect, and that shows up as exactly the "arena stays at peak,
+    // collect 50x slower" shape a hysteresis would -- which is how n00b#406
+    // got filed against a bench whose big object was still reachable through
+    // a dead stack slot.  Check the arena rather than the object: if the
+    // object lived, its 500 MB is still mapped in here.
+    uint64_t arena_after_reclaim = n00b_arena_size(arena);
+    printf("  arena after the reclaim collect: %llu B\n",
+           (unsigned long long)arena_after_reclaim);
+    if (arena_after_reclaim >= BIG_BYTES) {
+        printf("  [FAIL] the big allocation survived the reclaim collect: a"
+               " stale root still reaches it, so AFTER would measure a live"
+               " %llu MB object, not hysteresis\n",
+               (unsigned long long)(BIG_BYTES >> 20));
+        return 1;
     }
-    n00b_collect(arena); // reclaim it; the bound does not come back down
 
     phase_t after = measure("AFTER", arena);
 
