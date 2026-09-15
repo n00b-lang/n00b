@@ -47,8 +47,7 @@ make it easy to do a modern pretty printer.
   This can be made to work with structural or named equivolence, or
   even a mixture of the two.
 
-##
-Background
+## Background
 
 This is a partial extraction of a bunch of language tools I've been
 honing for more than a decade.
@@ -71,3 +70,8 @@ well spec'd, I am not particularly happy with the liberties taken.
 I'm probably going to avoid major API changes though until I manually
 redo most of this once the next version of n00b is up.
 
+
+## Note well
+
+- As mentioned above, a LOT of missing here, including my unicode
+  implementation and constraint library. Don't expect stability yet!
