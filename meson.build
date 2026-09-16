@@ -1906,7 +1906,6 @@ if target_os != 'windows'
       dependencies: [picoquic_dep, monocypher_dep, mir_dep, libgit2_dep],
       build_by_default: n00b_build_tests,
   )
-endif
   if target_os != 'windows'
     test('static_grammar_image', n00b_gcmap_index,
          args: ['--exec', test_static_grammar_image_exe.full_path()],
@@ -1917,6 +1916,7 @@ endif
     test('static_grammar_image', test_static_grammar_image_exe, suite: 'unit',
          timeout: 180)
   endif
+endif
 
   # WP-008 Phase 4 behavioral-equivalence proof: the linked baked c_ncc
   # grammar parses the same representative C input as the legacy heap
@@ -3055,7 +3055,6 @@ attest_oci_push_smoke_test = executable('test_attest_oci_push_smoke',
     ['test/unit/test_attest_oci_push_smoke.c'],
     kwargs: test_common_kwargs,
 )
-endif
 # WP-004 Phase 2 trailing addition (DF-012): Docker-gated full
 # HEAD/POST/PUT/PUT push against the zot fixture in
 # test/fixtures/zot/.  N00B_TEST_ZOT_SRC_ROOT carries the absolute
@@ -3069,6 +3068,7 @@ test('attest_oci_push_smoke', attest_oci_push_smoke_test,
      env: {
          'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
      })
+endif
 
 # WP-004 Phase 3: discover-side smoke against zot. Pushes two
 # envelopes with distinct predicate-types and asserts list_referrers
@@ -3541,7 +3541,6 @@ if target_os != 'windows'
             'c_args': exe_c_args + ['-Wno-atomic-access'],
         },
     )
-endif
     # Not in the default 'unit' suite — this is a stress / repro test
     # that intentionally drives high churn on the GC + pool paths and
     # can take several seconds to run. It's a self-contained, no-priv,
@@ -3550,6 +3549,7 @@ endif
     # `./scripts/build.sh build && ./build/test_hidden_pool_stw` or
     # `meson test -C build --suite stress`.
     test('hidden_pool_stw', hidden_pool_stw_test, suite: 'stress', timeout: 60)
+endif
 endif
 
 check_perms_dyld_gap_test = executable('test_check_perms_dyld_gap',
