@@ -654,7 +654,34 @@ rocs_shard_marshal_to_allocator(n00b_store_shard_t *shard,
     // Use the context-based marshal so that on failure we can report the
     // exact marshal status + reason (rotation otherwise flattens every seal
     // failure to N00B_STORE_ERR_INTERNAL and we are blind to the cause).
-    n00b_marshal_ctx_t *ctx   = n00b_marshal_ctx_new(.base_address = base_address);
+    // N00B_MARSHAL_F_NO_STW: seal must NOT stop the world (n00b#227).
+    //
+    // The marshal default became stop-the-world because the marshaller copies
+    // raw object bytes into scratch before resolving pointers, so a moving
+    // collection mid-marshal mints stale pointers into the image. That hazard
+    // does not exist here, and this caller meets the flag's stated condition
+    // exactly -- every object in the graph lives in a non-moving pool:
+    //
+    //   "The hot shard is self-contained: shard_append copies every value
+    //    (record bytes, column field-name strings, postings, ordinals,
+    //    flagsets, raw spans) into this pool, and the shard holds no pointers
+    //    into GC-managed arenas."                          (rocs/store.c:962)
+    //
+    // The hot allocator is hidden from GC root scanning (no metadata pool, so
+    // n00b_mmap_is_gc_scannable is false) and is destroyed wholesale at
+    // seal/retire rather than object-by-object, so a collection cannot move
+    // anything the marshaller is walking.
+    //
+    // Stopping the world here is also actively harmful: seal runs on a rocs
+    // worker while the service's HTTP threads are live, so an STW across a
+    // whole shard marshal freezes the listener. That is what broke
+    // rocs_service_runtime / rocs_service_smoke / rocs_service_health on the
+    // Linux leg -- each one passes its startup case and then fails its first
+    // request, reproducibly, while rocs_async_seal (which seals with no
+    // server to starve) passes.
+    n00b_marshal_ctx_t *ctx   = n00b_marshal_ctx_new(
+        .flags        = N00B_MARSHAL_F_NO_STW,
+        .base_address = base_address);
     n00b_buffer_t      *image = n00b_marshal_incremental(ctx, shard, .close = true);
 
     if (image == nullptr) {
