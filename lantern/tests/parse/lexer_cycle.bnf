@@ -1,0 +1,3 @@
+@lexer("lexer_cycle_a.lex")
+
+<file> ::= %WORD

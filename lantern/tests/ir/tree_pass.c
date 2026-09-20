@@ -28,7 +28,7 @@ static const char *const TOY
     = "@tokenizer(\"toy\")\n"
       "<prog> @scope(\"module\") ::= <items>\n"
       "<items> ::= <item> <items> | <item>\n"
-      "<item> ::= <decl> | <cond> | <block> | <pair> | <num> | <rec>\n"
+      "<item> ::= <decl> | <cond> | <block> | <pair> | <num> | <rec> | <bad>\n"
       "<decl> @declares($1,\"var\") @type($1, int) ::= \"v\" <name> \";\"\n"
       "<lit> @infer(int) ::= \"n\"\n"
       "<num> @literal(\"int\") ::= \"q\"\n"
@@ -36,6 +36,7 @@ static const char *const TOY
       "<fields> ::= <fld> <fields> | <fld>\n"
       "<fld> @field($1) @type($1, int) ::= \"f\" <name>\n"
       "<pair> @infer(list[$0]) ::= <lit> <lit>\n"
+      "<bad> @infer(int unify string) ::= \"X\"\n"
       "<cond> @branch($1,$2,$3) ::= \"?\" <use> <use> <use>\n"
       "<use> @varref($0) ::= <name>\n"
       "<block> @scope(\"block\") ::= \"{\" <items> \"}\"\n"
@@ -46,7 +47,8 @@ parse_toy(parse_grammar_t *g, const char *src, parse_pwz_parser_t **pp,
           parse_token_stream_t **tsp)
 {
     *tsp = scan_token_stream_from_codepoints(S(src));
-    *pp  = parse_pwz_new(g);
+    *pp  = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(g, S("prog"))));
 
     return parse_pwz_parse(*pp, *tsp) ? parse_pwz_get_tree(*pp) : nullptr;
 }
@@ -133,7 +135,8 @@ int main(void)
 
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
-    parse_tree_t   *tree = parse_toy(g, "va;vb;{va;}?xyznnqrpfmfn", &p,
+    const char *toy_source = "va;vb;{va;}?xyznnqrpfmfnX";
+    parse_tree_t   *tree = parse_toy(g, toy_source, &p,
                                          &ts);
 
     if (!tree) {
@@ -236,6 +239,20 @@ int main(void)
     check("the inference pass runs",
           ir_tree_pass_run(&ir_pass_annot_infer, m, nullptr, nullptr, nullptr)
               == IR_PASS_OK);
+
+    ir_diags_t *inference_diags = ir_diags_new(ctx, nullptr);
+
+    check("an inference mismatch is retained for diagnostics",
+          ir_import_type_errors(m, inference_diags) == 1);
+
+    const ir_diag_t *inference_diag = ir_diags_at(inference_diags, 0);
+    uint32_t bad_col = (uint32_t)strlen(toy_source);
+
+    check("an inference diagnostic points at its source production",
+          inference_diag && inference_diag->primary.span.start_line == 1
+              && inference_diag->primary.span.start_col == bad_col
+              && inference_diag->primary.span.end_line == 1
+              && inference_diag->primary.span.end_col == bad_col + 1);
 
     parse_tree_t *pair = find_nt(g, tree, CORE_STRING_STATIC("pair"));
 

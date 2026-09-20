@@ -42,7 +42,7 @@ span_of(parse_tree_t *node)
         .end_byte   = (uint32_t)tok->end_byte,
         .start_line = tok->line,
         .start_col  = tok->column,
-        .end_line   = tok->line,
+        .end_line   = tok->endline ? tok->endline : tok->line,
         .end_col    = tok->endcol,
     };
 }

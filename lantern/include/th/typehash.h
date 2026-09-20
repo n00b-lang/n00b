@@ -280,6 +280,9 @@ bool   th_coercion_at(const th_ctx *ctx, size_t i, th_coercion_t *out);
 void   th_coercions_clear(th_ctx *ctx);
 
 void   th_register_iface(th_ctx *ctx, const char *name, th_type *methods);
+bool   th_register_method(th_ctx *ctx, th_type *receiver, const char *name,
+                          th_type *signature);
+th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name);
 bool   th_implements(th_ctx *ctx, th_type *type, const char *iface);
 size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
                        size_t max);

@@ -34,21 +34,14 @@ static char *
 format_one(const char *grammar_path, const char *start, core_string_t src,
            int32_t indent)
 {
-    core_string_t gtext = slurp(grammar_path);
-
-    if (!gtext.data) {
-        return nullptr;
-    }
-
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
-    parse_bnf_declare_terminals(g, gtext);
 
-    if (!parse_bnf_load(gtext, core_string_borrow(start, strlen(start)), g)) {
+    if (!parse_bnf_load_file(grammar_path,
+                             core_string_borrow(start, strlen(start)), g)) {
         check("the grammar loads", false);
         parse_grammar_free(g);
-        core_free(gtext.data);
 
         return nullptr;
     }
@@ -60,7 +53,9 @@ format_one(const char *grammar_path, const char *start, core_string_t src,
     char               *out = nullptr;
 
     if (ts) {
-        parse_pwz_parser_t *p = parse_pwz_new(g);
+        parse_pwz_parser_t *p = parse_pwz_new_for_start(
+            g, parse_nonterm_id(parse_find_nonterm(
+                   g, core_string_from_cstr(start))));
 
         if (parse_pwz_parse(p, ts)) {
             parse_print_opts_t o = {
@@ -79,7 +74,6 @@ format_one(const char *grammar_path, const char *start, core_string_t src,
     }
 
     parse_grammar_free(g);
-    core_free(gtext.data);
 
     return out;
 }

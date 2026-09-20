@@ -440,6 +440,90 @@ static doc_t *doc_text(pr_t *p, const char *s, size_t len)
     return d;
 }
 
+static gap_t
+trivia_gap(core_string_t text)
+{
+    size_t newlines = 0;
+
+    for (size_t i = 0; text.data && i < text.u8_bytes; i++) {
+        if (text.data[i] == '\n') {
+            newlines++;
+        }
+    }
+
+    return newlines > 1 ? GAP_BLANK : newlines ? GAP_HARD : GAP_SPACE;
+}
+
+static bool
+has_comment(parse_trivia_t *trivia)
+{
+    for (parse_trivia_t *item = trivia; item; item = item->next) {
+        if (item->kind == PARSE_TRIVIA_COMMENT && item->text.data
+            && item->text.u8_bytes) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void
+put_leading_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
+                   parse_trivia_t *trivia)
+{
+    gap_t before = GAP_NONE;
+
+    for (parse_trivia_t *item = trivia; item; item = item->next) {
+        if (item->kind == PARSE_TRIVIA_SPACE) {
+            before = trivia_gap(item->text);
+            continue;
+        }
+
+        if (item->kind != PARSE_TRIVIA_COMMENT || !item->text.data
+            || !item->text.u8_bytes) {
+            continue;
+        }
+
+        if (before != GAP_NONE) {
+            core_list_push(*parts, doc_gap(p, before));
+        }
+
+        core_list_push(*parts,
+                       doc_text(p, item->text.data, item->text.u8_bytes));
+        before = GAP_HARD;
+    }
+
+    if (before != GAP_NONE) {
+        core_list_push(*parts, doc_gap(p, before));
+    }
+}
+
+static void
+put_trailing_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
+                    parse_trivia_t *trivia)
+{
+    gap_t before = GAP_SPACE;
+
+    for (parse_trivia_t *item = trivia; item; item = item->next) {
+        if (item->kind == PARSE_TRIVIA_SPACE) {
+            before = trivia_gap(item->text);
+            continue;
+        }
+
+        if (item->kind != PARSE_TRIVIA_COMMENT || !item->text.data
+            || !item->text.u8_bytes) {
+            continue;
+        }
+
+        core_list_push(*parts, doc_gap(p, before));
+        core_list_push(*parts,
+                       doc_text(p, item->text.data, item->text.u8_bytes));
+        before = GAP_HARD;
+    }
+
+    core_list_push(*parts, doc_gap(p, GAP_HARD));
+}
+
 static void *reduce_leaf(parse_reduce_t *r)
 {
     pr_t             *p = r->thunk;
@@ -473,33 +557,24 @@ static void *reduce_leaf(parse_reduce_t *r)
         len    = 1;
     }
 
-    bool any_comment = false;
+    bool leading_comments  = has_comment(t->leading_trivia);
+    bool trailing_comments = has_comment(t->trailing_trivia);
 
-    for (parse_trivia_t *tv = t->leading_trivia; tv; tv = tv->next) {
-        if (tv->kind == PARSE_TRIVIA_COMMENT && tv->text.data
-            && tv->text.u8_bytes) {
-            any_comment = true;
-            break;
-        }
-    }
-
-    if (!any_comment) {
+    if (!leading_comments && !trailing_comments) {
         return doc_text(p, s, len);
     }
 
     core_list_t(doc_ptr_t) parts = core_list_new(doc_ptr_t);
 
-    for (parse_trivia_t *tv = t->leading_trivia; tv; tv = tv->next) {
-        if (tv->kind != PARSE_TRIVIA_COMMENT || !tv->text.data
-            || !tv->text.u8_bytes) {
-            continue;
-        }
-
-        core_list_push(parts, doc_text(p, tv->text.data, tv->text.u8_bytes));
-        core_list_push(parts, doc_gap(p, GAP_HARD));
+    if (leading_comments) {
+        put_leading_trivia(p, &parts, t->leading_trivia);
     }
 
     core_list_push(parts, doc_text(p, s, len));
+
+    if (trailing_comments) {
+        put_trailing_trivia(p, &parts, t->trailing_trivia);
+    }
 
     doc_t *d = doc_seq(p, D_SEQ, parts.data, parts.len);
 

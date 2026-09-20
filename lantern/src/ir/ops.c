@@ -1,8 +1,6 @@
-#include <stdlib.h>
 #include <string.h>
 
 #include "ir/ir.h"
-#include "lib/dict.h"
 
 #define VAR IR_VAR_ARITY
 
@@ -30,46 +28,23 @@ const ir_opinfo_t *ir_op_info(ir_op_t op)
     return op < IR_OP_COUNT ? &table[op] : nullptr;
 }
 
-static core_dict_t spell_index;
-static bool        spell_ready;
-
-static void free_spell_index(void)
-{
-    core_dict_free(&spell_index);
-    spell_ready = false;
-}
-
-static void build_spell_index(void)
-{
-    core_dict_init(&spell_index, core_hash_cstring, core_dict_cstr_eq);
-
-    for (uint16_t i = 0; i < IR_OP_COUNT; i++) {
-        _core_dict_put(&spell_index, (void *)table[i].spelling,
-                       (void *)(uintptr_t)i);
-    }
-
-    spell_ready = true;
-    atexit(free_spell_index);
-}
-
 bool ir_op_lookup(const char *spelling, ir_op_t *out)
 {
     if (!spelling) {
         return false;
     }
 
-    if (!spell_ready) {
-        build_spell_index();
+    for (uint16_t i = 0; i < IR_OP_COUNT; i++) {
+        if (!strcmp(table[i].spelling, spelling)) {
+            if (out) {
+                *out = (ir_op_t)i;
+            }
+
+            return true;
+        }
     }
 
-    bool  found = false;
-    void *val   = _core_dict_get(&spell_index, (void *)spelling, &found);
-
-    if (found && out) {
-        *out = (ir_op_t)(uintptr_t)val;
-    }
-
-    return found;
+    return false;
 }
 
 const char *ir_op_spelling(ir_op_t op)
@@ -192,42 +167,17 @@ static const struct {
     {IR_MOD_ROUND, "ceil"},
 };
 
-static core_dict_t mod_index;
-static bool        mod_ready;
-
-static void free_mod_index(void)
-{
-    core_dict_free(&mod_index);
-    mod_ready = false;
-}
-
-static void build_mod_index(void)
-{
-    core_dict_init(&mod_index, core_hash_cstring, core_dict_cstr_eq);
-
-    for (size_t i = 0; i < sizeof(mods) / sizeof(mods[0]); i++) {
-        bool      found = false;
-        uintptr_t seen  = (uintptr_t)_core_dict_get(&mod_index,
-                                                   (void *)mods[i].name,
-                                                   &found);
-
-        _core_dict_put(&mod_index, (void *)mods[i].name,
-                       (void *)(seen | (uintptr_t)mods[i].group));
-    }
-
-    mod_ready = true;
-    atexit(free_mod_index);
-}
-
 static uintptr_t mod_groups(const char *name)
 {
-    if (!mod_ready) {
-        build_mod_index();
+    uintptr_t groups = 0;
+
+    for (size_t i = 0; i < sizeof(mods) / sizeof(mods[0]); i++) {
+        if (!strcmp(mods[i].name, name)) {
+            groups |= (uintptr_t)mods[i].group;
+        }
     }
 
-    bool found = false;
-
-    return (uintptr_t)_core_dict_get(&mod_index, (void *)name, &found);
+    return groups;
 }
 
 bool ir_opinfo_accepts_mod(const ir_opinfo_t *info, const char *name)

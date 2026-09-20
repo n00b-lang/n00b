@@ -26,6 +26,7 @@
     X(TYPE, "type") \
     X(INFER, "infer") \
     X(TOKENIZER, "tokenizer") \
+    X(LEXER, "lexer") \
     X(ADT, "adt") \
     X(FIELD, "field") \
     X(METHOD, "method") \
@@ -53,14 +54,28 @@
     X(WIDTH, "width") \
     X(LEX_COMMENT, "lex-comment") \
     X(LEX_STRING, "lex-string") \
+    X(LEX_STRING_FAMILY, "lex-string-family") \
+    X(LEX_STRING_ESCAPES, "lex-string-escapes") \
     X(LEX_NUMBER, "lex-number") \
+    X(LEX_NUMBER_SUFFIXES, "lex-number-suffixes") \
     X(LEX_LAYOUT, "lex-layout") \
     X(LEX_SIGIL, "lex-sigil") \
     X(LEX_REGEX, "lex-regex") \
+    X(LEX_HEREDOC_HEADER, "lex-heredoc-header") \
     X(LEX_HEREDOC, "lex-heredoc") \
     X(LEX_IDENT, "lex-ident") \
+    X(LEX_IDENT_PROFILE, "lex-ident-profile") \
     X(LEX_EMBED, "lex-embed") \
-    X(LEX_DIRECTIVE, "lex-directive")
+    X(LEX_FENCE, "lex-fence") \
+    X(LEX_USE, "lex-use") \
+    X(LEX_OPERATOR_SET, "lex-operator-set") \
+    X(LEX_OPERATORS, "lex-operators") \
+    X(LEX_WHITESPACE, "lex-whitespace") \
+    X(LEX_FALLBACK, "lex-fallback") \
+    X(LEX_DIRECTIVE, "lex-directive") \
+    X(LEX_LITERAL_HOOK, "lex-literal-hook") \
+    X(LEX_RECOVER, "lex-recover") \
+    X(LEX_SOFT_KEYWORDS, "lex-soft-keywords")
 
 typedef enum {
 #define PARSE_ANNOT_ENUM(sym, spelling) PARSE_ANNOT_##sym,
@@ -113,6 +128,7 @@ typedef struct parse_infer_expr_t parse_infer_expr_t;
 
 struct parse_annotation_t {
     parse_annot_kind_t  kind;
+    core_string_t       source_origin;
     parse_infer_expr_t *infer_ast;
     core_string_t      args_text;
     parse_child_ref_t  name_ref;

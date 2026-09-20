@@ -11,6 +11,7 @@
 #include "scanner/token_stream.h"
 #include "scanner/tokenizer.h"
 #include "lib/alloc.h"
+#include "private/parse/grammar.h"
 
 #define PP_OK    0
 #define PP_ERROR 1
@@ -31,7 +32,7 @@ static const language_t LANGUAGES[] = {
     {"go",         "go.bnf",         "source-file",           ".go"           },
     {"java",       "java.bnf",       "compilation-unit",      ".java"         },
     {"javascript", "javascript.bnf", "module",                ".js.mjs.cjs.jsx"},
-    {"json",       "json.bnf",       "value",                 ".json"         },
+    {"json",       "json.bnf",       "json",                  ".json"         },
     {"kotlin",     "kotlin.bnf",     "kotlin-file",           ".kt.kts"       },
     {"lua",        "lua.bnf",        "chunk",                 ".lua"          },
     {"php",        "php.bnf",        "top-statement-list",    ".php"          },
@@ -204,7 +205,7 @@ load_grammar(const char *path, const char *start, FILE *err)
     core_string_t start_s = start ? core_string_borrow(start, strlen(start))
                                  : (core_string_t){0};
 
-    if (!parse_bnf_load(s, start_s, g)) {
+    if (!parse_bnf_load_file(path, start_s, g)) {
         fprintf(err, "pp: %s did not load\n", path);
         parse_grammar_free(g);
         core_free(text);
@@ -468,7 +469,11 @@ main(int argc, char **argv)
         rc = write_tokens(g, ts, stdout);
     }
     else {
-        parse_pwz_parser_t *p = parse_pwz_new(g);
+        parse_nt_id_t start_id = start
+            ? parse_nonterm_id(parse_find_nonterm(
+                  g, core_string_from_cstr(start)))
+            : g->nt_list.data[0]->id;
+        parse_pwz_parser_t *p = parse_pwz_new_for_start(g, start_id);
 
         if (!parse_pwz_parse(p, ts)) {
             int32_t at = parse_pwz_error_pos(p);

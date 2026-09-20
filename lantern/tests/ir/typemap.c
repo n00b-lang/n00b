@@ -61,7 +61,8 @@ int main(int argc, char **argv)
 
     parse_token_stream_t *ts = scan_token_stream_from_codepoints(
         S("ia;sb;lc;de;{id;}"));
-    parse_pwz_parser_t   *p  = parse_pwz_new(g);
+    parse_pwz_parser_t   *p  = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(g, S("prog"))));
 
     if (!parse_pwz_parse(p, ts)) {
         check("the program parses", false);

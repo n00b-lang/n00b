@@ -146,10 +146,16 @@ static ir_span_t tok_span(B *b, const parse_token_info_t *t)
         return IR_SPAN_UNKNOWN;
     }
 
-    uint32_t  w = t->endcol > t->column ? t->endcol - t->column : 1;
+    uint32_t end_line = t->endline ? t->endline : t->line;
+    uint32_t end_col  = t->endcol;
+
+    if (!end_col) {
+        end_col = t->column + 1;
+    }
+
     ir_span_t s = ir_span_make(b->file, (uint32_t)t->start_byte,
                                (uint32_t)t->end_byte, t->line, t->column,
-                               t->line, t->column + w);
+                               end_line, end_col);
 
     s.implied = true;
 
@@ -796,6 +802,10 @@ typedef enum {
     LAY_SIZE,
     LAY_ALIGN,
     LAY_STRIDE,
+    LAY_INDIRECT,
+    LAY_WORDS,
+    LAY_VARIANT_TAG,
+    LAY_NICHE,
 } lay_kind;
 
 static lay_kind lay_kind_of(parse_grammar_t *g, int32_t rule_ix)
@@ -807,6 +817,10 @@ static lay_kind lay_kind_of(parse_grammar_t *g, int32_t rule_ix)
         {CORE_STRING_STATIC("size"),   LAY_SIZE  },
         {CORE_STRING_STATIC("align"),  LAY_ALIGN },
         {CORE_STRING_STATIC("stride"), LAY_STRIDE},
+        {CORE_STRING_STATIC("indirect"), LAY_INDIRECT},
+        {CORE_STRING_STATIC("words"), LAY_WORDS},
+        {CORE_STRING_STATIC("variant"), LAY_VARIANT_TAG},
+        {CORE_STRING_STATIC("niche"), LAY_NICHE},
     };
 
     for (size_t i = 0; i < sizeof(tab) / sizeof(tab[0]); i++) {
@@ -1328,10 +1342,11 @@ static void *r_layout_item(parse_reduce_t *r)
     ib_node *head = kid(r, 0);
     ib_node *n    = nd(b, IB_LAYVAL, cover(r));
     size_t   nv   = 0;
+    lay_kind kind = lay_kind_of(r->grammar, rule_of(r));
 
     n->text = head ? head->text : nullptr;
     n->span = head ? head->span : n->span;
-    n->uval = (uint64_t)lay_kind_of(r->grammar, rule_of(r));
+    n->uval = (uint64_t)kind;
 
     for (size_t i = 0; i < r->n_kids && nv < 2; i++) {
         ib_node *e = kid(r, i);
@@ -1347,6 +1362,29 @@ static void *r_layout_item(parse_reduce_t *r)
     }
     n->present = nv == 2;
 
+    if (kind == LAY_INDIRECT) {
+        ib_node *repr = at(r, CORE_STRING_STATIC("indirect-kind"));
+
+        n->present = repr && repr->text && !strcmp(repr->text, "fat");
+    }
+    else if (kind == LAY_NICHE) {
+        ib_node *value = at(r, CORE_STRING_STATIC("layout-bool"));
+
+        n->present = value && value->text && !strcmp(value->text, "true");
+    }
+
+    return n;
+}
+
+static void *r_layout_target(parse_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *n = nd(b, IB_NAME, cover(r));
+    ib_node *s = str_kid(r);
+
+    n->text    = s ? s->text : nullptr;
+    n->present = s != nullptr;
+
     return n;
 }
 
@@ -1360,7 +1398,11 @@ static void *r_layout_decl(parse_reduce_t *r)
     }
 
     parse_reduce_list_t *items = rep(r, CORE_STRING_STATIC("layout-item"));
-    ir_descriptor_t   *d     = ir_layout_ensure(b->m, t, nullptr);
+    ib_node *target = at(r, CORE_STRING_STATIC("layout-target"));
+    ir_descriptor_t *d = !target ? ir_layout_ensure(b->m, t, nullptr)
+                           : target->present
+                               ? ir_layout_ensure(b->m, t, target->text)
+                               : ir_layout_ensure_targetless(b->m, t);
 
     if (!d) {
         bfail(b, cover(r), "this type has no descriptor");
@@ -1371,11 +1413,27 @@ static void *r_layout_decl(parse_reduce_t *r)
     for (size_t i = 0; items && i < items->n; i++) {
         ib_node *it = unwrap(items->v[i]);
 
-        if (!it || it->kind != IB_LAYVAL || !it->lo) {
+        if (!it || it->kind != IB_LAYVAL) {
             continue;
         }
 
         ib_node *head = it;
+
+        if (it->uval == LAY_INDIRECT) {
+            d->indirect.fat = it->present;
+            d->indirect.authored = true;
+
+            continue;
+        }
+        if (it->uval == LAY_NICHE) {
+            d->variant.niche = it->present;
+            d->variant.authored = true;
+
+            continue;
+        }
+        if (!it->lo) {
+            continue;
+        }
 
         if (it->uval == LAY_SIZE) {
             d->size = it->lo->lay;
@@ -1385,6 +1443,27 @@ static void *r_layout_decl(parse_reduce_t *r)
         }
         else if (it->uval == LAY_STRIDE) {
             d->stride = it->lo->lay;
+        }
+        else if (it->uval == LAY_WORDS) {
+            d->indirect.words = it->lo->lay;
+            d->indirect.authored = true;
+        }
+        else if (it->uval == LAY_VARIANT_TAG && it->present) {
+            ir_layout_val_t lo = it->lo->lay;
+            ir_layout_val_t hi = it->hi->lay;
+
+            if (lo.state != IR_LAYOUT_PINNED || hi.state != IR_LAYOUT_PINNED
+                || hi.value < lo.value) {
+                bfail(b, head->span,
+                      "a variant tag's bit range must be two numbers, low "
+                      "then high");
+            }
+            else {
+                d->variant.tag_bit_offset = lo;
+                d->variant.tag_bit_width  = hi;
+                d->variant.tag_bit_width.value -= lo.value;
+                d->variant.authored = true;
+            }
         }
         else if (it->present) {
             ir_layout_val_t lo = it->lo->lay;
@@ -1396,8 +1475,9 @@ static void *r_layout_decl(parse_reduce_t *r)
                       "a member's bit range must be two numbers, low then "
                       "high");
             }
-            else if (!ir_layout_pin_member(b->m, t, head->text, lo.value,
-                                           hi.value - lo.value)) {
+            else if (!ir_layout_descriptor_pin_member(b->m, d, head->text,
+                                                       lo.value,
+                                                       hi.value - lo.value)) {
                 bfail(b, head->span,
                       "the member's bit range contradicts one already "
                       "pinned");
@@ -2108,10 +2188,9 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
         return nullptr;
     }
 
-    parse_grammar_set_start_id(g, ir_grammar_nt("module"));
-
     parse_token_stream_t *ts = ir_lex(text, strlen(text));
-    parse_pwz_parser_t   *p  = parse_pwz_new(g);
+    parse_pwz_parser_t   *p
+        = parse_pwz_new_for_start(g, ir_grammar_nt("module"));
 
     if (!parse_pwz_parse(p, ts)) {
         ir_diag_t *dg = ir_diag_begin(d, IR_DIAG_PARSE,
@@ -2162,6 +2241,9 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
     reg(&b, w, CORE_STRING_STATIC("signed-number"), r_signed_number);
     reg(&b, w, CORE_STRING_STATIC("symbolic-expr"), r_symbolic);
     reg(&b, w, CORE_STRING_STATIC("layout-val"), r_layout_val);
+    reg(&b, w, CORE_STRING_STATIC("layout-target"), r_layout_target);
+    reg(&b, w, CORE_STRING_STATIC("indirect-kind"), r_name);
+    reg(&b, w, CORE_STRING_STATIC("layout-bool"), r_name);
     reg(&b, w, CORE_STRING_STATIC("layout-item"), r_layout_item);
     reg(&b, w, CORE_STRING_STATIC("layout-decl"), r_layout_decl);
     reg(&b, w, CORE_STRING_STATIC("ns-key"), r_ns_key);

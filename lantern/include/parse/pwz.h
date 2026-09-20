@@ -12,7 +12,8 @@ typedef bool (*parse_pwz_disambig_fn)(void             *ud,
 
 typedef struct parse_pwz_parser_t parse_pwz_parser_t;
 
-parse_pwz_parser_t *parse_pwz_new(parse_grammar_t *g);
+parse_pwz_parser_t *parse_pwz_new_for_start(parse_grammar_t *g,
+                                            parse_nt_id_t start);
 
 void parse_pwz_free(parse_pwz_parser_t *p);
 
@@ -42,4 +43,9 @@ parse_tree_array_t parse_pwz_get_trees(parse_pwz_parser_t *p);
 parse_forest_t parse_pwz_get_forest(parse_pwz_parser_t *p);
 
 parse_forest_t parse_pwz_parse_grammar(parse_grammar_t      *g,
-                                             parse_token_stream_t *ts);
+                                       parse_nt_id_t         start,
+                                       parse_token_stream_t *ts);
+parse_forest_t parse_pwz_parse_grammar_at(parse_grammar_t *g,
+                                          parse_nt_id_t start,
+                                          parse_token_stream_t *ts,
+                                          int32_t *error_pos);

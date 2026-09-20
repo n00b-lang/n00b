@@ -517,6 +517,9 @@ build_flag_nt(parse_cmdr_t *c, [[maybe_unused]] parse_cmdr_command_t *cmd,
     return nt_id;
 }
 
+static bool flag_shadowed_by_command(parse_cmdr_command_t *cmd,
+                                    const parse_cmdr_flag_spec_t *flag);
+
 static int64_t
 build_items_nt(parse_cmdr_t *c, parse_cmdr_command_t *cmd, const char *prefix)
 {
@@ -535,11 +538,23 @@ build_items_nt(parse_cmdr_t *c, parse_cmdr_command_t *cmd, const char *prefix)
     parse_add_rule_v(c->grammar, items_id, 1,
         (parse_match_t[]){PARSE_EPSILON()});
 
-    for (int32_t i = 0; i < (int32_t)cmd->flags.len; i++) {
-        int64_t fnt_id = build_flag_nt(c, cmd, &cmd->flags.data[i], prefix);
+    for (int32_t i = 0; i < (int32_t)c->root.flags.len; i++) {
+        if (cmd != &c->root
+            && flag_shadowed_by_command(cmd, &c->root.flags.data[i])) continue;
+        int64_t fnt_id = build_flag_nt(c, cmd, &c->root.flags.data[i], prefix);
         parse_add_rule_v(c->grammar, items_id, 2,
             (parse_match_t[]){{.kind = PARSE_MATCH_NT, .nt_id = fnt_id},
                             items_nt});
+    }
+
+    if (cmd != &c->root) {
+        for (int32_t i = 0; i < (int32_t)cmd->flags.len; i++) {
+            parse_cmdr_flag_spec_t *flag = &cmd->flags.data[i];
+            int64_t fnt_id = build_flag_nt(c, cmd, flag, prefix);
+            parse_add_rule_v(c->grammar, items_id, 2,
+                (parse_match_t[]){{.kind = PARSE_MATCH_NT, .nt_id = fnt_id},
+                                items_nt});
+        }
     }
 
     parse_add_rule_v(c->grammar, items_id, 2,
@@ -626,8 +641,6 @@ parse_cmdr_finalize(parse_cmdr_t *c)
 
     int64_t start_id = parse_nonterm_id(
         parse_nonterm(c->grammar, CORE_STRING_STATIC("cmd")));
-    parse_grammar_set_start_id(c->grammar, start_id);
-
     if ((int32_t)c->root.subcommands.len > 0) {
         for (int32_t i = 0; i < (int32_t)c->root.subcommands.len; i++) {
             parse_cmdr_command_t *sub = &c->root.subcommands.data[i];
@@ -703,33 +716,38 @@ is_bool_str(const char *s)
 }
 
 static parse_cmdr_flag_spec_t *
-find_flag_anywhere(parse_cmdr_t *c, core_string_t name)
+find_flag_scoped(parse_cmdr_t *c, parse_cmdr_command_t *cmd, core_string_t name)
 {
     if (!c) {
         return nullptr;
     }
 
-    parse_cmdr_flag_spec_t *f = find_flag(&c->root, name);
+    parse_cmdr_flag_spec_t *f = cmd && cmd != &c->root
+        ? find_flag(cmd, name) : nullptr;
+    return f ? f : find_flag(&c->root, name);
+}
 
-    for (int32_t si = 0; !f && si < (int32_t)c->root.subcommands.len; si++) {
-        f = find_flag(&c->root.subcommands.data[si], name);
-    }
-
-    return f;
+static bool
+flag_shadowed_by_command(parse_cmdr_command_t *cmd,
+                         const parse_cmdr_flag_spec_t *flag)
+{
+    return cmd && (find_flag(cmd, flag->name)
+                   || (flag->short_name.data
+                       && find_flag(cmd, flag->short_name)));
 }
 
 static int64_t
-find_flag_tid(parse_cmdr_t *c, const char *name)
+find_flag_tid(parse_cmdr_t *c, parse_cmdr_command_t *cmd, const char *name)
 {
-    parse_cmdr_flag_spec_t *f = find_flag_anywhere(c, argv_str(name));
+    parse_cmdr_flag_spec_t *f = find_flag_scoped(c, cmd, argv_str(name));
 
     return f ? f->terminal_id : 0;
 }
 
 static bool
-flag_takes_value(parse_cmdr_t *c, const char *name)
+flag_takes_value(parse_cmdr_t *c, parse_cmdr_command_t *cmd, const char *name)
 {
-    parse_cmdr_flag_spec_t *f = find_flag_anywhere(c, argv_str(name));
+    parse_cmdr_flag_spec_t *f = find_flag_scoped(c, cmd, argv_str(name));
 
     return f && f->takes_value;
 }
@@ -768,12 +786,65 @@ make_token(const char *value, int64_t tid, int32_t index)
     tok->index  = index;
     tok->line   = 1;
     tok->column = 1;
+    tok->endline = 1;
+    tok->endcol  = value ? (uint32_t)strlen(value) + 1 : 1;
+    tok->origin = PARSE_TOKEN_SOURCE;
 
     return tok;
 }
 
+static parse_cmdr_command_t *
+command_in_args(parse_cmdr_t *c, const char **argv, int argc)
+{
+    for (int i = 0; i < argc; i++) {
+        const char *arg = argv[i];
+        if (!arg) continue;
+        if (strcmp(arg, "--") == 0) break;
+        if (arg[0] == '-') continue;
+        for (int32_t si = 0; si < (int32_t)c->root.subcommands.len; si++) {
+            parse_cmdr_command_t *cmd = &c->root.subcommands.data[si];
+            if (cmd->name.data && strcmp(arg, cmd->name.data) == 0) return cmd;
+        }
+    }
+    return &c->root;
+}
+
+static const char **
+move_leading_flags_after_command(parse_cmdr_command_t *scope,
+                                 parse_cmdr_t *c,
+                                 const char **argv, int argc)
+{
+    if (!scope || !scope->name.data || !argv || argc < 2) return nullptr;
+    int command_index = -1;
+    for (int i = 0; i < argc; i++) {
+        if (argv[i] && strcmp(argv[i], scope->name.data) == 0) {
+            command_index = i;
+            break;
+        }
+        if (argv[i] && strcmp(argv[i], "--") == 0) break;
+    }
+    if (command_index <= 0) return nullptr;
+    for (int i = 0; i < command_index; i++) {
+        if (!argv[i] || argv[i][0] != '-') return nullptr;
+        if (strchr(argv[i], '=')) continue;
+        parse_cmdr_flag_spec_t *flag =
+            find_flag_scoped(c, scope, argv_str(argv[i]));
+        if (flag && flag->takes_value) {
+            if (i + 1 >= command_index) return nullptr;
+            i++;
+        }
+    }
+
+    const char **ordered = core_alloc_array(const char *, argc);
+    ordered[0] = argv[command_index];
+    for (int i = 0; i < command_index; i++) ordered[i + 1] = argv[i];
+    for (int i = command_index + 1; i < argc; i++) ordered[i] = argv[i];
+    return ordered;
+}
+
 static int32_t
 cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
+              parse_cmdr_command_t *scope,
               parse_token_info_t ***tokens_out, int32_t *n_tokens_out)
 {
     if (!argv || argc <= 0 || !tokens_out || !n_tokens_out || !c) {
@@ -814,7 +885,7 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
                 char *flag_name = core_alloc_size(1, flag_len + 1);
                 memcpy(flag_name, arg, flag_len);
 
-                int64_t ftid = find_flag_tid(c, flag_name);
+                int64_t ftid = find_flag_tid(c, scope, flag_name);
 
                 if (!ftid) {
                     ftid = c->tok_ids[PARSE_CMDR_TID_FLAG];
@@ -832,7 +903,7 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
                                                (int32_t)tl.len));
             }
             else {
-                int64_t ftid = find_flag_tid(c, arg);
+                int64_t ftid = find_flag_tid(c, scope, arg);
 
                 if (!ftid) {
                     ftid = c->tok_ids[PARSE_CMDR_TID_FLAG];
@@ -846,7 +917,7 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
 
         if (arg[0] == '-' && arg[1] != '\0'
             && !isdigit((unsigned char)arg[1])) {
-            int64_t ftid = find_flag_tid(c, arg);
+            int64_t ftid = find_flag_tid(c, scope, arg);
 
             if (ftid) {
                 core_list_push(tl, make_token(arg, ftid, (int32_t)tl.len));
@@ -860,9 +931,9 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
 
                 for (int j = 1; arg[j]; j++) {
                     char    short_flag[3] = {'-', arg[j], '\0'};
-                    int64_t stid = find_flag_tid(c, short_flag);
+                    int64_t stid = find_flag_tid(c, scope, short_flag);
 
-                    if (!stid || flag_takes_value(c, short_flag)) {
+                    if (!stid || flag_takes_value(c, scope, short_flag)) {
                         can_split = false;
                         break;
                     }
@@ -872,7 +943,7 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
             if (can_split) {
                 for (int j = 1; arg[j]; j++) {
                     char    short_flag[3] = {'-', arg[j], '\0'};
-                    int64_t stid = find_flag_tid(c, short_flag);
+                    int64_t stid = find_flag_tid(c, scope, short_flag);
                     core_list_push(tl, make_token(short_flag, stid, (int32_t)tl.len));
                 }
             }
@@ -967,6 +1038,14 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
     parse_tree_walk_free(w);
 
     int32_t n = (int32_t)texts.len;
+    for (int32_t i = 0; i < n; i++) {
+        if (!texts.data[i] || strcmp(texts.data[i], "--") == 0) break;
+        parse_cmdr_command_t *cmd = find_command(c, argv_str(texts.data[i]));
+        if (cmd && cmd != &c->root) {
+            r->command = cmdr_intern(argv_str(texts.data[i]));
+            break;
+        }
+    }
 
     bool past_dd = false;
 
@@ -981,6 +1060,9 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
             past_dd = true;
             goto next;
         }
+
+        if (r->command.data && !past_dd
+            && strcmp(text, r->command.data) == 0) goto next;
 
         if (!r->command.data && !past_dd) {
             for (int32_t si = 0; si < (int32_t)c->root.subcommands.len; si++) {
@@ -1087,6 +1169,40 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
     }
 
     core_list_free(texts);
+}
+
+static void
+validate_positional_count(parse_cmdr_t *c, parse_cmdr_result_t *r)
+{
+    parse_cmdr_command_t *cmd = find_command(c, r->command);
+    size_t min = 0;
+    size_t max = 0;
+    bool unbounded = false;
+
+    for (size_t i = 0; i < cmd->positionals.len; i++) {
+        parse_cmdr_positional_spec_t *p = &cmd->positionals.data[i];
+        min += p->min > 0 ? (size_t)p->min : 0;
+        if (p->max < 0) unbounded = true;
+        else max += (size_t)p->max;
+    }
+
+    if (r->args.len >= min && (unbounded || r->args.len <= max)) return;
+
+    r->ok = false;
+    if (!r->errors.data) r->errors = core_list_new(core_string_t);
+    core_buffer_t message = {0};
+    if (r->args.len < min) {
+        core_buffer_printf(&message, "expected at least %zu argument%s",
+                           min, min == 1 ? "" : "s");
+    }
+    else {
+        core_buffer_printf(&message, "expected at most %zu argument%s",
+                           max, max == 1 ? "" : "s");
+    }
+    core_list_push(r->errors,
+                   core_string_from_raw(message.data,
+                                        (int64_t)message.byte_len));
+    core_buffer_release(&message);
 }
 
 static void
@@ -1203,12 +1319,21 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
     parse_token_info_t **tokens = nullptr;
     int32_t             n_tokens = 0;
 
-    if (cmdr_tokenize(args, nargs, c, &tokens, &n_tokens) < 0) {
+    parse_cmdr_command_t *scope = command_in_args(c, args, nargs);
+    const char **ordered = move_leading_flags_after_command(scope, c, args, nargs);
+    const char **input = ordered ? ordered : args;
+    if (cmdr_tokenize(input, nargs, c, scope, &tokens, &n_tokens) < 0) {
+        core_free(ordered);
         return make_error_result("tokenization failed");
     }
+    core_free(ordered);
 
     parse_token_stream_t *ts = scan_token_stream_from_array(tokens, n_tokens);
-    parse_pwz_parser_t   *pp = parse_pwz_new(c->grammar);
+    parse_pwz_parser_t   *pp
+        = parse_pwz_new_for_start(c->grammar,
+                                  parse_nonterm_id(parse_nonterm(
+                                      c->grammar,
+                                      CORE_STRING_STATIC("cmd"))));
     bool parse_ok = parse_pwz_parse(pp, ts);
 
     parse_cmdr_result_t *r = core_alloc(parse_cmdr_result_t);
@@ -1227,6 +1352,7 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
 
         if (r->tree) {
             extract_result_from_tree(c, r->tree, r);
+            validate_positional_count(c, r);
         }
     }
 
@@ -1251,6 +1377,20 @@ core_string_t
 parse_cmdr_result_command(parse_cmdr_result_t *r)
 {
     return r ? r->command : (core_string_t){0};
+}
+
+int32_t
+parse_cmdr_result_error_count(parse_cmdr_result_t *r)
+{
+    return r ? (int32_t)r->errors.len : 0;
+}
+
+core_string_t
+parse_cmdr_result_error(parse_cmdr_result_t *r, int index)
+{
+    if (!r || index < 0 || (size_t)index >= r->errors.len)
+        return (core_string_t){0};
+    return r->errors.data[index];
 }
 
 bool
@@ -1369,4 +1509,3 @@ parse_cmdr_result_free(parse_cmdr_result_t *r)
 
     core_free(r);
 }
-

@@ -69,7 +69,8 @@ static bool same_target(const char *a, const char *b)
     return a && b ? !strcmp(a, b) : a == b;
 }
 
-ir_descriptor_t *ir_layout_of(ir_module_t *m, th_type *t, const char *target)
+static ir_descriptor_t *layout_of_exact(ir_module_t *m, th_type *t,
+                                        const char *target)
 {
     ir_typeslot_t *s = ir_type_slot(m, t);
 
@@ -77,10 +78,8 @@ ir_descriptor_t *ir_layout_of(ir_module_t *m, th_type *t, const char *target)
         return nullptr;
     }
 
-    const char *want = target ? target : m->target;
-
     for (size_t i = 0; i < s->n_descs; i++) {
-        if (same_target(s->descs[i].target, want)) {
+        if (same_target(s->descs[i].target, target)) {
             return &s->descs[i].d;
         }
     }
@@ -88,10 +87,20 @@ ir_descriptor_t *ir_layout_of(ir_module_t *m, th_type *t, const char *target)
     return nullptr;
 }
 
-ir_descriptor_t *ir_layout_ensure(ir_module_t *m, th_type *t,
-                                  const char *target)
+ir_descriptor_t *ir_layout_of(ir_module_t *m, th_type *t, const char *target)
 {
-    ir_descriptor_t *found = ir_layout_of(m, t, target);
+    return layout_of_exact(m, t, target ? target : m->target);
+}
+
+ir_descriptor_t *ir_layout_of_targetless(ir_module_t *m, th_type *t)
+{
+    return layout_of_exact(m, t, nullptr);
+}
+
+static ir_descriptor_t *layout_ensure_exact(ir_module_t *m, th_type *t,
+                                            const char *target)
+{
+    ir_descriptor_t *found = layout_of_exact(m, t, target);
 
     if (found) {
         return found;
@@ -112,13 +121,23 @@ ir_descriptor_t *ir_layout_ensure(ir_module_t *m, th_type *t,
 
     ir_descentry_t *e = &s->descs[s->n_descs++];
 
-    *e = (ir_descentry_t){.target = ir_strdup(m->ctx,
-                                              target ? target : m->target)};
+    *e = (ir_descentry_t){.target = ir_strdup(m->ctx, target)};
 
     e->d.type   = t;
     e->d.target = e->target;
 
     return &e->d;
+}
+
+ir_descriptor_t *ir_layout_ensure(ir_module_t *m, th_type *t,
+                                  const char *target)
+{
+    return layout_ensure_exact(m, t, target ? target : m->target);
+}
+
+ir_descriptor_t *ir_layout_ensure_targetless(ir_module_t *m, th_type *t)
+{
+    return layout_ensure_exact(m, t, nullptr);
 }
 
 size_t ir_layout_count(ir_module_t *m, th_type *t)
@@ -215,6 +234,15 @@ bool ir_layout_pin_member(ir_module_t *m, th_type *t, const char *field,
 {
     ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
 
+    return ir_layout_descriptor_pin_member(m, d, field, bit_offset,
+                                           bit_width);
+}
+
+bool ir_layout_descriptor_pin_member(ir_module_t *m, ir_descriptor_t *d,
+                                     const char *field, uint64_t bit_offset,
+                                     uint64_t bit_width)
+{
+
     if (!d || !field || !bit_width) {
         return false;
     }
@@ -236,7 +264,24 @@ bool ir_layout_pin_variant(ir_module_t *m, th_type *t, ir_variant_repr_t r)
     r.tag_bit_offset.authored = true;
     r.tag_bit_width.state     = IR_LAYOUT_PINNED;
     r.tag_bit_width.authored  = true;
+    r.authored                = true;
     d->variant             = r;
+
+    return true;
+}
+
+bool ir_layout_pin_indirect(ir_module_t *m, th_type *t, ir_indirect_repr_t r)
+{
+    ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
+
+    if (!d || !r.words.value) {
+        return false;
+    }
+
+    r.words.state    = IR_LAYOUT_PINNED;
+    r.words.authored = true;
+    r.authored       = true;
+    d->indirect      = r;
 
     return true;
 }

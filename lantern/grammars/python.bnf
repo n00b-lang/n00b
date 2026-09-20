@@ -1,18 +1,4 @@
-@lex-comment("# type:", as("TYPE_COMMENT"))
-@lex-comment("#")
-@lex-string('"""', '"""', escape('\\'), multiline, as("STRING"))
-@lex-string("'''", "'''", escape('\\'), multiline, as("STRING"))
-@lex-string('f"', '"', escape('\\'), interp("{", "}"), hole_tokens, as("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"))
-@lex-string("f'", "'", escape('\\'), interp("{", "}"), hole_tokens, as("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"))
-@lex-string('r"', '"', raw, as("STRING"))
-@lex-string("r'", "'", raw, as("STRING"))
-@lex-string('b"', '"', escape('\\'), as("STRING"))
-@lex-string("b'", "'", escape('\\'), as("STRING"))
-@lex-string('"', '"', escape('\\'), as("STRING"))
-@lex-string("'", "'", escape('\\'), as("STRING"))
-@lex-number(radix("0x", "0123456789abcdefABCDEF"), radix("0b", "01"), radix("0o", "01234567"), sep("_"), exp("eE"), int("INTEGER"), float("FLOAT"), suffix("j", "FLOAT"), suffix("J", "FLOAT"))
-@lex-ident(as("IDENTIFIER"))
-@lex-layout(indent("INDENT", "DEDENT"), newline("NEWLINE"), eof("ENDMARKER"), continue('\\'), brackets("()[]{}"))
+@lexer("python.lex")
 
 # Python 3.13 Grammar
 #

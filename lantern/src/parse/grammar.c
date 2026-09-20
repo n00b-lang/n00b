@@ -7,7 +7,11 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
+#include <pthread.h>
 #include <string.h>
+
+static pthread_mutex_t grammar_finalize_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static bool
 check_stack_for_nt(core_list_t(int) *stack, int64_t ruleset)
@@ -324,6 +328,7 @@ parse_grammar_new(void)
 
     core_cache_init(&g->annot_cache);
     core_cache_set_enabled(&g->annot_cache, false);
+    pthread_mutex_init(&g->annot_cache_lock, nullptr);
 
     static const core_string_t BUILTIN[] = {
         CORE_STRING_STATIC("IDENTIFIER"),
@@ -359,10 +364,18 @@ parse_grammar_free(parse_grammar_t *g)
     }
 
     core_cache_free(&g->annot_cache);
+    pthread_mutex_destroy(&g->annot_cache_lock);
 
     for (size_t i = 0; i < g->rules.len; i++) {
-        core_list_free(g->rules.data[i].contents);
-        free_annotations(&g->rules.data[i].annotations);
+        parse_rule_t *rule = &g->rules.data[i];
+
+        core_list_free(rule->contents);
+        free_annotations(&rule->annotations);
+        core_free(rule->disambig_predicate.data);
+        if (rule->first_set) {
+            core_dict_free(rule->first_set);
+            core_free(rule->first_set);
+        }
     }
 
     core_list_free(g->rules);
@@ -372,6 +385,10 @@ parse_grammar_free(parse_grammar_t *g)
 
         core_list_free(nt->rule_ids);
         free_annotations(&nt->annotations);
+        if (nt->first_set) {
+            core_dict_free(nt->first_set);
+            core_free(nt->first_set);
+        }
         core_free(nt);
     }
 
@@ -383,6 +400,7 @@ parse_grammar_free(parse_grammar_t *g)
     }
 
     core_list_free(g->named_terms);
+    core_list_free(g->contextual_sources);
 
     if (g->lex_compiled) {
         scan_lex_free((scan_lex_t *)g->lex_compiled);
@@ -422,28 +440,6 @@ parse_grammar_free(parse_grammar_t *g)
 }
 
 void
-parse_grammar_set_start_id(parse_grammar_t *g, parse_nt_id_t nt_id)
-{
-    if (g->default_start == nt_id) {
-        return;
-    }
-
-    parse_nonterm_t *was = parse_get_nonterm(g, g->default_start);
-
-    if (was) {
-        was->start_nt = false;
-    }
-
-    g->default_start = nt_id;
-
-    parse_nonterm_t *now = parse_get_nonterm(g, nt_id);
-
-    if (now) {
-        now->start_nt = true;
-    }
-}
-
-void
 parse_grammar_set_error_recovery(parse_grammar_t *g, bool enable)
 {
     g->error_rules = enable;
@@ -479,14 +475,15 @@ parse_nonterm(parse_grammar_t *g, core_string_t name)
 
     parse_nonterm_t *nt = core_alloc(parse_nonterm_t);
 
-    nt->name = name;
-    nt->id   = (int64_t)g->nt_list.len;
+    nt->id = (int64_t)g->nt_list.len;
 
     core_list_push(g->nt_list, nt);
 
     if (name.data) {
-        _core_dict_put(g->nt_map, name_key(nt->name),
-                      (void *)(intptr_t)nt->id);
+        core_string_t *key = name_key(name);
+
+        nt->name = *key;
+        _core_dict_put(g->nt_map, key, (void *)(intptr_t)nt->id);
     }
 
     return nt;
@@ -522,10 +519,9 @@ parse_register_terminal(parse_grammar_t *g, core_string_t name)
     }
 
     if (name.u8_bytes == 1) {
-        int64_t      id   = (int64_t)(unsigned char)name.data[0];
-        core_string_t key  = core_string_dup(name);
+        int64_t id = (int64_t)(unsigned char)name.data[0];
 
-        _core_dict_put(g->terminal_map, name_key(key),
+        _core_dict_put(g->terminal_map, name_key(name),
                       (void *)(intptr_t)id);
 
         return id;
@@ -596,20 +592,21 @@ parse_grammar_set_default_action(parse_grammar_t *g, parse_walk_action_t action)
     }
 }
 
-static int32_t group_id_counter = 1;
+static _Atomic int32_t group_id_counter = 1;
 
 parse_match_t
 parse_group_match_v(parse_grammar_t *g, int min, int max, int n, parse_match_t *items)
 {
     parse_rule_group_t *group = core_alloc(parse_rule_group_t);
 
-    group->gid = group_id_counter++;
+    group->gid = atomic_fetch_add(&group_id_counter, 1);
     group->min = min;
     group->max = max;
 
     char namebuf[64];
     int nlen = snprintf(namebuf, sizeof(namebuf), "$$group_%d", group->gid);
-    core_string_t name = core_string_from_raw(namebuf, nlen > 0 ? nlen : 0);
+    core_string_t name = core_string_borrow(namebuf,
+                                             nlen > 0 ? (size_t)nlen : 0);
 
     parse_nonterm_t *nt = parse_nonterm(g, name);
     int64_t nt_id = parse_nonterm_id(nt);
@@ -731,9 +728,14 @@ update_rule_first(parse_grammar_t *g, parse_rule_t *rule, bool *first_nullable)
         parse_match_t *m = &rule->contents.data[i];
 
         switch (m->kind) {
-        case PARSE_MATCH_TERMINAL:
-            core_dict_add(rule->first_set, TERM_TO_PTR(m->terminal_id), (void *)1);
+        case PARSE_MATCH_TERMINAL: {
+            int32_t contextual
+                = parse_contextual_source_tid(g, m->terminal_id);
+            int64_t first_tid = contextual ? contextual : m->terminal_id;
+
+            core_dict_add(rule->first_set, TERM_TO_PTR(first_tid), (void *)1);
             goto done;
+        }
         case PARSE_MATCH_ANY:
         case PARSE_MATCH_CLASS:
         case PARSE_MATCH_SET:
@@ -1277,11 +1279,55 @@ parse_grammar_report_undefined(const parse_grammar_t *g, FILE *out)
 }
 
 void
-parse_grammar_finalize(parse_grammar_t *g)
+parse_grammar_prepare_contextual(parse_grammar_t *g,
+                                 const core_string_t *spellings,
+                                 core_string_t source_name)
 {
-    if (g->finalized) {
+    if (!g) {
         return;
     }
+
+    while (g->contextual_sources.len < g->named_terms.len) {
+        core_list_push(g->contextual_sources, 0);
+    }
+    if (!spellings) {
+        return;
+    }
+
+    if (!source_name.data) {
+        source_name = CORE_STRING_STATIC("IDENTIFIER");
+    }
+    int32_t source_tid = (int32_t)parse_terminal_id(g, source_name);
+
+    for (const core_string_t *word = spellings; word->data; word++) {
+        int64_t terminal_id = parse_lookup_terminal(g, *word);
+        int64_t ix = terminal_id - PARSE_TOK_START_ID - 1;
+
+        if (ix >= 0 && (size_t)ix < g->contextual_sources.len) {
+            g->contextual_sources.data[ix] = source_tid;
+        }
+    }
+}
+
+void
+parse_grammar_finalize(parse_grammar_t *g)
+{
+    if (!g) {
+        return;
+    }
+
+    pthread_mutex_lock(&grammar_finalize_lock);
+
+    if (g->finalized) {
+        pthread_mutex_unlock(&grammar_finalize_lock);
+        return;
+    }
+
+    const scan_lex_spec_t *lex_spec = scan_grammar_lex(g);
+
+    parse_grammar_prepare_contextual(
+        g, lex_spec ? lex_spec->soft_keywords : nullptr,
+        lex_spec ? lex_spec->tok_ident : (core_string_t){0});
 
     size_t n = g->nt_list.len;
 
@@ -1301,14 +1347,13 @@ parse_grammar_finalize(parse_grammar_t *g)
 
     compute_all_first_sets(g);
 
-    parse_nonterm_t *start = parse_get_nonterm(g, g->default_start);
-
-    if (start) {
-        start->start_nt = true;
-    }
+    (void)scan_grammar_lex_compiled(g);
 
     g->finalized = true;
 
+    pthread_mutex_lock(&g->annot_cache_lock);
     core_cache_invalidate(&g->annot_cache);
     core_cache_set_enabled(&g->annot_cache, true);
+    pthread_mutex_unlock(&g->annot_cache_lock);
+    pthread_mutex_unlock(&grammar_finalize_lock);
 }

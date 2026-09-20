@@ -1,0 +1,3 @@
+@lexer("lexer_package_error.lex")
+
+<file> ::= %WORD

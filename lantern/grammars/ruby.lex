@@ -1,0 +1,17 @@
+@lex-comment("#")
+@lex-heredoc-header("ruby-label", quotes("single", "double"))
+@lex-heredoc("<<~", header("ruby-label"), as("HEREDOC"), queue,
+             terminator_indent("allow"), body_indent("strip"))
+@lex-heredoc("<<-", header("ruby-label"), as("HEREDOC"), queue,
+             terminator_indent("allow"), body_indent("keep"))
+@lex-string-family(plain, quotes('"', "'"), escape('\\'), as("STRING"))
+@lex-string-family(prefixes("%q", "%w"), pair("(", ")"), pair("[", "]"), pair("{", "}"), pair("<", ">"), nested, multiline, escape('\\'), as("Q"))
+@lex-regex("/", "/", not_after("IDENTIFIER", "CONSTANT", "INTEGER", "FLOAT", "STRING", "Q", "REGEX", "IVAR", "CVAR", "GVAR", "HEREDOC", ")", "]", "}", "true", "false", "nil", "self"), flags("imxounse"), as("REGEX"))
+@lex-sigil("@@", as("CVAR"))
+@lex-sigil("@", as("IVAR"))
+@lex-sigil("$", as("GVAR"))
+@lex-number(digits("0123456789"), sep("_"), point("leading", "trailing"), exp("eE"), int("INTEGER"), float("FLOAT"))
+@lex-number(prefix("0x"), digits("0123456789abcdefABCDEF"), sep("_"), int("INTEGER"))
+@lex-number(prefix("0b"), digits("01"), sep("_"), int("INTEGER"))
+@lex-ident(as("IDENTIFIER"), extra("?!"), upper("CONSTANT"))
+@lex-layout(continue('\\'), brackets("()[]"), terminator("NEWLINE", "end break next redo retry return"))

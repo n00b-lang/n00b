@@ -45,8 +45,11 @@ endif
 
 lib_sources = files(
     'lib/cache.c',
+    'lib/diagnostic.c',
     'lib/hash.c',
+    'lib/module.c',
     'lib/string.c',
+    'lib/work_queue.c',
 )
 
 parse_sources = files(
@@ -54,6 +57,7 @@ parse_sources = files(
     'parse/annot_grammar.c',
     'parse/annot_walk.c',
     'parse/annotation.c',
+    'parse/ambiguity.c',
     'parse/bnf.c',
     'parse/bnf_print.c',
     'parse/commander.c',
@@ -75,12 +79,17 @@ parse_sources = files(
 
 scanner_sources = files(
     'scanner/lex.c',
+    'scanner/lex_analysis.c',
+    'scanner/lex_conformance.c',
     'scanner/lex_build.c',
+    'scanner/lex_image.c',
+    'scanner/literal_hook.c',
     'scanner/scan_builtins.c',
     'scanner/scanner.c',
     'scanner/token_stream.c',
     'scanner/tokenizer.c',
     'scanner/tokenizers.c',
+    'scanner/unicode_profile.c',
 )
 
 ir_sources = files(

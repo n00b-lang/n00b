@@ -74,6 +74,7 @@ typedef struct {
     parse_scanner_t      *sc;
     core_buffer_t       *buf;
     parse_tree_t   *tree;
+    parse_nt_id_t start;
 } run_t;
 
 static bool
@@ -81,6 +82,8 @@ run(run_t *r, const char *bnf, const char *start, const char *src)
 {
     *r      = (run_t){0};
     r->g    = parse_grammar_new();
+    r->start = parse_nonterm_id(parse_nonterm(
+        r->g, core_string_from_cstr(start)));
 
     parse_grammar_set_error_recovery(r->g, false);
 
@@ -97,7 +100,7 @@ run(run_t *r, const char *bnf, const char *start, const char *src)
     r->sc  = scan_scanner_new(r->buf, toy_scan, r->g,
                              core_option_none(core_string_t), nullptr, nullptr);
     r->ts  = scan_token_stream_new(r->sc);
-    r->p   = parse_pwz_new(r->g);
+    r->p   = parse_pwz_new_for_start(r->g, r->start);
 
     if (!parse_pwz_parse(r->p, r->ts)) {
         printf("FAIL  %s does not parse\n", src);
@@ -241,6 +244,67 @@ test_a_comment_the_caller_marks_as_leading_is_kept(void)
     run_free(&r);
 }
 
+static parse_tree_t *
+last_leaf(parse_tree_t *tree)
+{
+    while (tree && !core_tree_is_leaf(tree)) {
+        size_t n = core_tree_num_children(tree);
+
+        tree = n ? core_tree_child(tree, n - 1) : nullptr;
+    }
+
+    return tree;
+}
+
+static void
+test_a_comment_attached_to_the_previous_token_is_kept(void)
+{
+    run_t r;
+
+    if (!run(&r, PLAIN, "prog", "let a = b;")) {
+        return;
+    }
+
+    parse_tree_t *leaf = last_leaf(r.tree);
+    parse_token_info_t *tok = leaf ? core_tree_leaf_value(leaf) : nullptr;
+    parse_trivia_t *tv = core_alloc(parse_trivia_t);
+
+    tv->text = CORE_STRING_STATIC("# after");
+    tv->kind = PARSE_TRIVIA_COMMENT;
+
+    if (tok) {
+        tok->trailing_trivia = tv;
+    }
+
+    parse_print_opts_t o = {.width = 200, .indent = 4};
+    char *s = parse_tree_print(r.g, r.tree, &o);
+
+    same("trailing comment trivia is printed", s,
+         "let a = b ; # after\n");
+
+    core_free(s);
+    run_free(&r);
+}
+
+static void
+test_a_final_comment_is_printed(void)
+{
+    run_t r;
+
+    if (!run(&r, PLAIN, "prog", "let a = b;\n# final")) {
+        return;
+    }
+
+    parse_print_opts_t o = {.width = 200, .indent = 4};
+    char *s = parse_tree_print(r.g, r.tree, &o);
+
+    same("a final attach-right comment survives parsing and printing", s,
+         "let a = b ;\n# final\n");
+
+    core_free(s);
+    run_free(&r);
+}
+
 static bool
 comment_scan(parse_scanner_t *s)
 {
@@ -346,6 +410,37 @@ test_trivia_attaches_right_by_default(void)
 }
 
 static void
+test_final_trivia_attaches_to_the_last_token(void)
+{
+    const char *src = "a\n# final";
+    core_buffer_t *buf = core_buffer_from_bytes(src, (int64_t)strlen(src));
+    parse_scanner_t *sc = scan_scanner_new(
+        buf, comment_scan, nullptr, core_option_none(core_string_t), nullptr,
+        nullptr);
+    parse_token_stream_t *ts = scan_token_stream_new(sc);
+
+    while (scan_stream_next(ts)) {
+        ;
+    }
+
+    parse_token_info_t *tok = scan_stream_get(ts, 0);
+    size_t comments = 0;
+
+    for (parse_trivia_t *tv = tok ? tok->trailing_trivia : nullptr; tv;
+         tv = tv->next) {
+        if (tv->kind == PARSE_TRIVIA_COMMENT) {
+            comments++;
+        }
+    }
+
+    check("attach-right preserves a final comment", comments == 1);
+
+    scan_token_stream_free(ts);
+    scan_scanner_free(sc);
+    core_buffer_free(buf);
+}
+
+static void
 test_notrivia_clears_it(void)
 {
     static const char *const G
@@ -369,7 +464,9 @@ test_notrivia_clears_it(void)
                                          core_option_none(core_string_t),
                                          nullptr, nullptr);
     parse_token_stream_t *ts = scan_token_stream_new(sc);
-    parse_pwz_parser_t   *p  = parse_pwz_new(g);
+    parse_pwz_parser_t   *p
+        = parse_pwz_new_for_start(g, parse_nonterm_id(
+              parse_find_nonterm(g, CORE_STRING_STATIC("top"))));
 
     if (!parse_pwz_parse(p, ts)) {
         check("x # gap\\ny parses", false);
@@ -400,12 +497,15 @@ int
 main(void)
 {
     test_trivia_attaches_right_by_default();
+    test_final_trivia_attaches_to_the_last_token();
     test_notrivia_clears_it();
 
     test_a_tree_dumps_without_any_annotations();
     test_formatting_falls_back_to_one_space();
     test_annotations_win_where_they_exist();
     test_a_comment_the_caller_marks_as_leading_is_kept();
+    test_a_comment_attached_to_the_previous_token_is_kept();
+    test_a_final_comment_is_printed();
 
     return report("fe generic-print");
 }

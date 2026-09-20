@@ -651,6 +651,21 @@ annot_record(parse_visit_t *v)
         sym->type = rec;
     }
 
+    for (parse_scope_t *s = v->pn->scope; s; s = nullptr) {
+        for (parse_sym_entry_t *e = s->first_in_scope; e;
+             e = e->next_in_scope) {
+            if (!e->is_method || !e->name.data) {
+                continue;
+            }
+
+            if (!e->type) {
+                e->type = th_var(a->types);
+            }
+
+            th_register_method(a->types, rec, e->name.data, e->type);
+        }
+    }
+
     if (a->module) {
         for (parse_scope_t *s = v->pn->scope; s; s = nullptr) {
             for (parse_sym_entry_t *e = s->first_in_scope; e;
@@ -955,6 +970,8 @@ cf_notrivia(parse_visit_t *v)
                                       : nullptr;
 
     if (tok) {
+        parse_trivia_free(tok->leading_trivia);
+        parse_trivia_free(tok->trailing_trivia);
         tok->leading_trivia  = nullptr;
         tok->trailing_trivia = nullptr;
         tok->no_trivia       = true;
@@ -1023,7 +1040,22 @@ infer_propagate(parse_visit_t *v)
 {
     actx_t *a = (actx_t *)v->thunk;
 
-    if (!a->types || v->pn->type) {
+    if (!a->types) {
+        return true;
+    }
+
+    if (v->pn->sym && v->pn->sym->type) {
+        if (v->pn->type) {
+            th_unify(a->types, v->pn->type, v->pn->sym->type);
+        }
+        else {
+            v->pn->type = v->pn->sym->type;
+        }
+
+        return true;
+    }
+
+    if (v->pn->type) {
         return true;
     }
 

@@ -20,9 +20,8 @@ static bool grammar_accepts(const char *src, const char *start)
         return false;
     }
 
-    parse_grammar_set_start_id(g, ir_grammar_nt(start));
-
-    parse_pwz_parser_t *p  = parse_pwz_new(g);
+    parse_pwz_parser_t *p
+        = parse_pwz_new_for_start(g, ir_grammar_nt(start));
     bool              ok = parse_pwz_parse(p, ts);
 
     parse_pwz_free(p);

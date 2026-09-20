@@ -8,7 +8,9 @@
 #include "parse/pwz.h"
 #include "parse/tree_dump.h"
 #include "scanner/scan_builtins.h"
+#include "scanner/lex.h"
 #include "scanner/scanner.h"
+#include "scanner/tokenizer.h"
 #include "scanner/token_stream.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
@@ -200,7 +202,9 @@ parse_c_source(parse_grammar_t *g, const char *src)
                                              core_option_none(core_string_t),
                                              nullptr, nullptr);
     parse_token_stream_t *ts = scan_token_stream_new(scanner);
-    parse_pwz_parser_t *p = parse_pwz_new(g);
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(
+               g, CORE_STRING_STATIC("translation_unit"))));
     assert(p);
 
     bool ok = parse_pwz_parse(p, ts);
@@ -274,7 +278,9 @@ test_parse_simple_c(void)
                                                 nullptr, nullptr);
     parse_token_stream_t *ts = scan_token_stream_new(scanner);
 
-    parse_pwz_parser_t *p = parse_pwz_new(g);
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(
+               g, CORE_STRING_STATIC("translation_unit"))));
     assert(p);
 
     bool ok = parse_pwz_parse(p, ts);
@@ -394,10 +400,211 @@ test_bnf_preprocess(void)
     printf("  PASS\n");
 }
 
+static void
+test_bnf_errors_are_available_to_callers(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+
+    assert(!parse_bnf_load(CORE_STRING_STATIC("<x> ::= \"\"\n"),
+                           CORE_STRING_STATIC("x"), g));
+    assert(parse_bnf_error() != nullptr);
+    assert(strstr(parse_bnf_error(), "empty string literal") != nullptr);
+
+    parse_grammar_t *valid = parse_grammar_new();
+
+    assert(parse_bnf_load(CORE_STRING_STATIC("<x> ::= 'x'\n"),
+                          CORE_STRING_STATIC("x"), valid));
+    assert(parse_bnf_error() == nullptr);
+
+    parse_grammar_t *multiline = parse_grammar_new();
+
+    assert(parse_bnf_load(CORE_STRING_STATIC(
+                              "<x> @scope(\n"
+                              "    \"test\"\n"
+                              ") ::= 'x'\n"),
+                          CORE_STRING_STATIC("x"), multiline));
+
+    parse_grammar_t *malformed = parse_grammar_new();
+
+    assert(!parse_bnf_load(CORE_STRING_STATIC(
+                               "<x> ::= 'x'\n"
+                               "<y> ::= (\n"),
+                           CORE_STRING_STATIC("x"), malformed));
+
+    parse_bnf_error_info_t info = {0};
+
+    assert(parse_bnf_error_info(&info));
+    assert(info.message == parse_bnf_error());
+    assert(info.start_line == 2);
+    assert(info.start_byte >= strlen("<x> ::= 'x'\n"));
+
+    parse_grammar_free(g);
+    parse_grammar_free(valid);
+    parse_grammar_free(multiline);
+    parse_grammar_free(malformed);
+}
+
+static scan_status_t
+tokenization_status(parse_grammar_t *g, const char *source)
+{
+    core_buffer_t       *buf = nullptr;
+    parse_scanner_t      *sc  = nullptr;
+    parse_token_stream_t *ts  = scan_tokenize(g, source, strlen(source),
+                                               &buf, &sc);
+
+    while (scan_stream_next(ts)) {
+    }
+
+    scan_status_t result = scan_status(sc);
+
+    scan_token_stream_free(ts);
+    scan_scanner_free(sc);
+    core_buffer_free(buf);
+
+    return result;
+}
+
+static void
+test_lexer_files_are_relative_to_the_grammar(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+
+    parse_grammar_set_error_recovery(g, false);
+    assert(parse_bnf_load_file("lexer_import.bnf", (core_string_t){0}, g));
+    assert(scan_grammar_lex(g) != nullptr);
+
+    core_buffer_t       *buf = nullptr;
+    parse_scanner_t      *sc  = nullptr;
+    parse_token_stream_t *ts  = scan_tokenize(g, "hello??world", 12, &buf, &sc);
+    parse_token_info_t   *word = scan_stream_next(ts);
+    parse_token_info_t   *op   = scan_stream_next(ts);
+    parse_token_info_t   *word2 = scan_stream_next(ts);
+
+    assert(word != nullptr);
+    assert(word->tid == parse_terminal_id(g, CORE_STRING_STATIC("WORD")));
+    assert(op != nullptr);
+    assert(op->tid == parse_terminal_id(g, CORE_STRING_STATIC("??")));
+    assert(word2 != nullptr);
+    assert(word2->tid == parse_terminal_id(g, CORE_STRING_STATIC("WORD")));
+    assert(scan_stream_next(ts) == nullptr);
+    assert(scan_status(sc) == SCAN_STATUS_COMPLETE);
+
+    scan_token_stream_free(ts);
+    scan_scanner_free(sc);
+    core_buffer_free(buf);
+
+    assert(tokenization_status(g, "'a'") == SCAN_STATUS_COMPLETE);
+    assert(tokenization_status(g, "'ab'") == SCAN_STATUS_INVALID);
+    assert(tokenization_status(g, "'\\n'") == SCAN_STATUS_COMPLETE);
+    assert(tokenization_status(g, "'\\x41'") == SCAN_STATUS_COMPLETE);
+    assert(tokenization_status(g, "'\\q'") == SCAN_STATUS_INVALID);
+    parse_grammar_free(g);
+
+    parse_grammar_t *missing = parse_grammar_new();
+
+    assert(!parse_bnf_load_file("lexer_missing.bnf",
+                                CORE_STRING_STATIC("file"), missing));
+    assert(parse_bnf_error() != nullptr);
+    assert(strstr(parse_bnf_error(), "lexer_does_not_exist.lex") != nullptr);
+    parse_grammar_free(missing);
+
+    parse_grammar_t *invalid = parse_grammar_new();
+
+    assert(!parse_bnf_load_file("lexer_invalid.bnf",
+                                CORE_STRING_STATIC("file"), invalid));
+    assert(parse_bnf_error() != nullptr);
+    assert(strstr(parse_bnf_error(), "only lexical declarations") != nullptr);
+    parse_grammar_free(invalid);
+
+    parse_grammar_t *malformed = parse_grammar_new();
+
+    assert(!parse_bnf_load_file("lexer_malformed.bnf",
+                                CORE_STRING_STATIC("file"), malformed));
+    assert(parse_bnf_error() != nullptr);
+    assert(strstr(parse_bnf_error(), "lexer_malformed.lex") != nullptr);
+    assert(strstr(parse_bnf_error(), "not valid BNF") != nullptr);
+    parse_grammar_free(malformed);
+
+    parse_grammar_t *cycle = parse_grammar_new();
+
+    assert(!parse_bnf_load_file("lexer_cycle.bnf",
+                                CORE_STRING_STATIC("file"), cycle));
+    assert(parse_bnf_error() != nullptr);
+    assert(strstr(parse_bnf_error(), "lexer import cycle") != nullptr);
+    parse_grammar_free(cycle);
+
+    parse_grammar_t *conflict = parse_grammar_new();
+
+    assert(parse_bnf_load_file("lexer_conflict_origin.bnf",
+                               CORE_STRING_STATIC("file"), conflict));
+    assert(scan_grammar_lex_compiled(conflict) == nullptr);
+    assert(scan_lex_compile_error() != nullptr);
+    assert(strstr(scan_lex_compile_error(),
+                  "lexer_conflict_origin.lex") != nullptr);
+    assert(strstr(scan_lex_compile_error(),
+                  "lexer_conflict_origin_import.lex") != nullptr);
+    parse_grammar_free(conflict);
+
+    parse_grammar_t *package_conflict = parse_grammar_new();
+
+    assert(parse_bnf_load_file("lexer_conflict_package.bnf",
+                               CORE_STRING_STATIC("file"),
+                               package_conflict));
+    assert(scan_grammar_lex_compiled(package_conflict) == nullptr);
+    assert(scan_lex_compile_error() != nullptr);
+    assert(strstr(scan_lex_compile_error(),
+                  "lexer_conflict_package.lex") != nullptr);
+    assert(strstr(scan_lex_compile_error(),
+                  "lexer_conflict_package_defs.lex") != nullptr);
+    parse_grammar_free(package_conflict);
+
+    parse_grammar_t *removed = parse_grammar_new();
+
+    assert(parse_bnf_load_file("lexer_remove_used.bnf",
+                               CORE_STRING_STATIC("file"), removed));
+    assert(scan_grammar_lex(removed) == nullptr);
+    assert(scan_lex_build_error() != nullptr);
+    assert(strstr(scan_lex_build_error(), "grammar uses") != nullptr);
+    parse_grammar_free(removed);
+
+    parse_grammar_t *unknown = parse_grammar_new();
+
+    assert(parse_bnf_load_file("lexer_unknown_set.bnf",
+                               CORE_STRING_STATIC("file"), unknown));
+    assert(scan_grammar_lex(unknown) == nullptr);
+    assert(scan_lex_build_error() != nullptr);
+    assert(strstr(scan_lex_build_error(), "unknown set 'missing'") != nullptr);
+    parse_grammar_free(unknown);
+
+    parse_grammar_t *package_error = parse_grammar_new();
+
+    assert(parse_bnf_load_file("lexer_package_error.bnf",
+                               CORE_STRING_STATIC("file"), package_error));
+    assert(scan_grammar_lex(package_error) == nullptr);
+    assert(scan_lex_build_error() != nullptr);
+    assert(strstr(scan_lex_build_error(), "remove absent operator")
+           != nullptr);
+    assert(strstr(scan_lex_build_error(), "lexer_package_error.lex")
+           != nullptr);
+    parse_grammar_free(package_error);
+
+    parse_grammar_t *memory = parse_grammar_new();
+
+    assert(parse_bnf_load(
+        CORE_STRING_STATIC("@lexer(\"relative.lex\")\n<file> ::= 'x'\n"),
+        CORE_STRING_STATIC("file"), memory));
+    assert(scan_grammar_lex(memory) == nullptr);
+    assert(scan_lex_build_error() != nullptr);
+    assert(strstr(scan_lex_build_error(), "parse_bnf_load_file") != nullptr);
+    parse_grammar_free(memory);
+}
+
 int
 main(void)
 {
     test_bnf_preprocess();
+    test_bnf_errors_are_available_to_callers();
+    test_lexer_files_are_relative_to_the_grammar();
     test_load_grammar();
     test_parse_simple_c();
     test_parse_array_literal_initializers();

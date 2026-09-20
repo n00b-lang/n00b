@@ -1,17 +1,6 @@
 # C2Y Grammar (translated from bCe parse.c)
 
-@lex-comment("//")
-@lex-comment("/*", "*/")
-@lex-string('r"', '"', raw, as("STRING"))
-@lex-string('b"', '"', escape('\\'), as("STRING"))
-@lex-string('"', '"', escape('\\'), as("STRING"))
-@lex-string("'", "'", escape('\\'), as("CHAR"))
-@lex-number(radix("0x", "0123456789abcdefABCDEF'"), radix("0X", "0123456789abcdefABCDEF'"), radix("0b", "01'"), radix("0B", "01'"), sep("'"), exp("eEpP"), int("INTEGER"), float("FLOAT"))
-@lex-number(suffix("ull", "INTEGER"), suffix("ULL", "INTEGER"), suffix("ul", "INTEGER"), suffix("UL", "INTEGER"), suffix("ll", "INTEGER"), suffix("LL", "INTEGER"), suffix("u", "INTEGER"), suffix("U", "INTEGER"), suffix("l", "INTEGER"), suffix("L", "INTEGER"), suffix("f", "FLOAT"), suffix("F", "FLOAT"))
-@lex-ident(as("IDENTIFIER"))
-@lex-layout(brackets("()[]"), continue('\\'))
-@lex-directive("%", eol("PP_EOL"), as("PP_DIRECTIVE"))
-@lex-directive("#", eol("PP_EOL"), as("PP_DIRECTIVE"))
+@lexer("bce.lex")
 
 <provided_identifier> ::= %IDENTIFIER
 

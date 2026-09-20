@@ -178,6 +178,7 @@ ir_outcome_t ir_policy_for(const ir_policy_t *p, const char *code)
 struct ir_diags_t {
     ir_ctx_t    *ctx;
     ir_policy_t *policy;
+    core_diagnostics_t *core;
     ir_diag_t   *v;
     uint32_t     n;
     uint32_t     cap;
@@ -185,6 +186,8 @@ struct ir_diags_t {
     bool         sorted;
     bool         anchored;
 };
+
+static bool core_policy(void *, core_diag_severity_t *, core_string_t);
 
 ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy)
 {
@@ -196,7 +199,10 @@ ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy)
 
     d->ctx    = ctx;
     d->policy = policy;
+    d->core   = core_diagnostics_new();
     d->sorted = true;
+    core_diagnostics_set_policy(d->core, core_policy, policy);
+    ir_ctx_on_free(ctx, (void (*)(void *))core_diagnostics_free, d->core);
 
     return d;
 }
@@ -206,26 +212,23 @@ static bool is_attachment(ir_severity_t s)
     return s == IR_SEV_NOTE || s == IR_SEV_HELP;
 }
 
-static bool apply_policy(ir_diags_t *d, ir_diagcode_t code, ir_severity_t *sev)
+static bool
+core_policy(void *context, core_diag_severity_t *severity, core_string_t code)
 {
-    switch (ir_policy_for(d->policy, ir_diag_code(code))) {
-    case IR_POLICY_ALLOW:
-        return false;
+    ir_policy_t *policy = context;
+    ir_outcome_t outcome = ir_policy_for(policy, code.data);
+    bool attached = *severity == CORE_DIAG_NOTE || *severity == CORE_DIAG_HELP;
+    switch (outcome) {
+    case IR_POLICY_ALLOW: return false;
     case IR_POLICY_WARN:
-        if (!is_attachment(*sev)) {
-            *sev = IR_SEV_WARNING;
-        }
+        if (!attached) *severity = CORE_DIAG_WARNING;
         break;
     case IR_POLICY_DENY:
     case IR_POLICY_FORBID:
-        if (!is_attachment(*sev)) {
-            *sev = IR_SEV_ERROR;
-        }
+        if (!attached) *severity = CORE_DIAG_ERROR;
         break;
-    default:
-        break;
+    default: break;
     }
-
     return true;
 }
 
@@ -251,9 +254,23 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
         return nullptr;
     }
 
-    if (!apply_policy(d, code, &sev)) {
+    core_diag_severity_t core_severity = sev == IR_SEV_HELP ? CORE_DIAG_HELP
+        : sev == IR_SEV_NOTE ? CORE_DIAG_NOTE
+        : sev == IR_SEV_WARNING ? CORE_DIAG_WARNING : CORE_DIAG_ERROR;
+    size_t core_index = core_diagnostics_count(d->core);
+    if (!core_diagnostics_report(d->core, nullptr, core_severity,
+            core_string_from_cstr(ir_diag_code(code)),
+            core_string_from_cstr(ir_diag_default_text(code)))) {
         return nullptr;
     }
+    const core_diagnostic_t *core_item =
+        core_diagnostics_at(d->core, core_index);
+    if (!core_item) {
+        return nullptr;
+    }
+    sev = core_item->severity == CORE_DIAG_WARNING ? IR_SEV_WARNING
+        : core_item->severity == CORE_DIAG_NOTE ? IR_SEV_NOTE
+        : core_item->severity == CORE_DIAG_HELP ? IR_SEV_HELP : IR_SEV_ERROR;
 
     size_t cap = d->cap;
 
@@ -273,6 +290,7 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
     dg->primary.span  = span;
     dg->primary.label = label ? ir_strdup(d->ctx, label) : nullptr;
     dg->seq           = d->seq++;
+    dg->core_index     = core_index;
 
     d->sorted   = false;
     d->anchored = d->anchored
@@ -345,6 +363,9 @@ bool ir_diag_message(ir_diag_t *dg, ir_diags_t *d, const char *message)
 
     dg->message = ir_strdup(d->ctx, message);
 
+    core_diagnostic_set_message(d->core, dg->core_index,
+                                core_string_from_cstr(message));
+
     return dg->message != nullptr;
 }
 
@@ -412,7 +433,7 @@ bool ir_diag_origin(ir_diag_t *dg, ir_origin_t *o)
 
 uint32_t ir_diags_count(const ir_diags_t *d)
 {
-    return d ? d->n : 0;
+    return d ? (uint32_t)core_diagnostics_count(d->core) : 0;
 }
 
 const ir_diag_t *ir_diags_at(ir_diags_t *d, uint32_t i)
@@ -427,17 +448,7 @@ const ir_diag_t *ir_diags_at(ir_diags_t *d, uint32_t i)
 
 bool ir_diags_failed(const ir_diags_t *d)
 {
-    if (!d) {
-        return false;
-    }
-
-    for (uint32_t i = 0; i < d->n; i++) {
-        if (d->v[i].severity == IR_SEV_ERROR) {
-            return true;
-        }
-    }
-
-    return false;
+    return d && core_diagnostics_failed(d->core);
 }
 
 uint32_t ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev)
@@ -446,13 +457,10 @@ uint32_t ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev)
         return 0;
     }
 
-    uint32_t n = 0;
-
-    for (uint32_t i = 0; i < d->n; i++) {
-        n += d->v[i].severity == sev;
-    }
-
-    return n;
+    core_diag_severity_t core_sev = sev == IR_SEV_WARNING ? CORE_DIAG_WARNING
+        : sev == IR_SEV_NOTE ? CORE_DIAG_NOTE
+        : sev == IR_SEV_HELP ? CORE_DIAG_HELP : CORE_DIAG_ERROR;
+    return (uint32_t)core_diagnostics_count_severity(d->core, core_sev);
 }
 
 bool ir_diags_merge(ir_diags_t *dst, ir_diags_t *src)
@@ -464,6 +472,9 @@ bool ir_diags_merge(ir_diags_t *dst, ir_diags_t *src)
     if (dst->ctx != src->ctx) {
         return false;
     }
+
+    size_t core_base = core_diagnostics_count(dst->core);
+    if (!core_diagnostics_merge(dst->core, src->core)) return false;
 
     size_t cap = dst->cap;
 
@@ -478,6 +489,7 @@ bool ir_diags_merge(ir_diags_t *dst, ir_diags_t *src)
     for (uint32_t i = 0; i < src->n; i++) {
         dst->v[dst->n]      = src->v[i];
         dst->v[dst->n].seq  = dst->seq++;
+        dst->v[dst->n].core_index += core_base;
         dst->n++;
     }
     dst->anchored |= src->anchored;

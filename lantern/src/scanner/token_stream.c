@@ -7,6 +7,130 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define SCAN_EDIT_CHECKPOINT_TOKENS 32
+
+struct scan_stream_checkpoint_t {
+    int32_t token_count;
+    int32_t next_index;
+    size_t  cursor;
+    size_t  mark;
+    uint32_t line;
+    uint32_t column;
+    uint32_t mark_line;
+    uint32_t mark_col;
+    uint8_t trivia_attach;
+    core_string_t lexer_context;
+    void *state;
+    parse_trivia_t *pending_leading;
+    parse_trivia_t *pending_trailing;
+};
+
+static parse_trivia_t *
+clone_trivia(const parse_trivia_t *source)
+{
+    parse_trivia_t *head = nullptr;
+    parse_trivia_t **tail = &head;
+
+    for (const parse_trivia_t *at = source; at; at = at->next) {
+        parse_trivia_t *copy = core_alloc(parse_trivia_t);
+        *copy = *at;
+        copy->text = core_string_dup(at->text);
+        copy->owns_text = true;
+        copy->next = nullptr;
+        *tail = copy;
+        tail = &copy->next;
+    }
+    return head;
+}
+
+static parse_trivia_t *
+trivia_tail(parse_trivia_t *head)
+{
+    while (head && head->next) {
+        head = head->next;
+    }
+    return head;
+}
+
+static void
+free_checkpoint(parse_token_stream_t *ts, scan_stream_checkpoint_t *cp)
+{
+    if (cp->state && ts->scanner->state_free_cb) {
+        ts->scanner->state_free_cb(cp->state);
+    }
+    parse_trivia_free(cp->pending_leading);
+    parse_trivia_free(cp->pending_trailing);
+    *cp = (scan_stream_checkpoint_t){0};
+}
+
+static void
+truncate_checkpoints(parse_token_stream_t *ts, size_t keep)
+{
+    for (size_t i = keep; i < ts->checkpoint_count; i++) {
+        free_checkpoint(ts, &ts->checkpoints[i]);
+    }
+    ts->checkpoint_count = keep;
+}
+
+static void
+maybe_checkpoint(parse_token_stream_t *ts)
+{
+    parse_scanner_t *s = ts->scanner;
+
+    if (!ts->edits_enabled || !s->state_clone_cb
+        || s->source_base || s->input_offset
+        || (ts->token_count && ts->token_count % SCAN_EDIT_CHECKPOINT_TOKENS)) {
+        return;
+    }
+    if (ts->checkpoint_count
+        && ts->checkpoints[ts->checkpoint_count - 1].token_count
+               == ts->token_count) {
+        return;
+    }
+    if (ts->checkpoint_count == ts->checkpoint_cap) {
+        size_t cap = ts->checkpoint_cap ? ts->checkpoint_cap * 2 : 16;
+        ts->checkpoints = core_realloc(ts->checkpoints,
+                                       cap * sizeof(*ts->checkpoints));
+        memset(ts->checkpoints + ts->checkpoint_cap, 0,
+               (cap - ts->checkpoint_cap) * sizeof(*ts->checkpoints));
+        ts->checkpoint_cap = cap;
+    }
+
+    scan_stream_checkpoint_t *cp = &ts->checkpoints[ts->checkpoint_count++];
+    *cp = (scan_stream_checkpoint_t){
+        .token_count = ts->token_count,
+        .next_index = ts->next_index,
+        .cursor = s->cursor,
+        .mark = s->mark,
+        .line = s->line,
+        .column = s->column,
+        .mark_line = s->mark_line,
+        .mark_col = s->mark_col,
+        .trivia_attach = s->trivia_attach,
+        .lexer_context = s->lexer_context,
+        .state = s->state_clone_cb(s->user_state),
+        .pending_leading = clone_trivia(s->pending_leading),
+        .pending_trailing = clone_trivia(s->pending_trailing),
+    };
+}
+
+static void
+ensure_checkpoint_capacity(parse_token_stream_t *ts, size_t needed)
+{
+    if (needed <= ts->checkpoint_cap) {
+        return;
+    }
+    size_t cap = ts->checkpoint_cap ? ts->checkpoint_cap : 16;
+    while (cap < needed) {
+        cap *= 2;
+    }
+    ts->checkpoints = core_realloc(ts->checkpoints,
+                                   cap * sizeof(*ts->checkpoints));
+    memset(ts->checkpoints + ts->checkpoint_cap, 0,
+           (cap - ts->checkpoint_cap) * sizeof(*ts->checkpoints));
+    ts->checkpoint_cap = cap;
+}
+
 static void
 free_token_trivia(parse_token_info_t *tok)
 {
@@ -16,18 +140,332 @@ free_token_trivia(parse_token_info_t *tok)
     tok->trailing_trivia = nullptr;
 }
 
+static void free_stream_token(parse_token_info_t *tok);
+
+static bool
+option_string_eq(core_option_t(core_string_t) a,
+                 core_option_t(core_string_t) b)
+{
+    bool a_set = core_option_is_set(a);
+    bool b_set = core_option_is_set(b);
+    return a_set == b_set
+        && (!a_set || core_string_eq(core_option_get(a), core_option_get(b)));
+}
+
+static bool
+trivia_eq(const parse_trivia_t *a, const parse_trivia_t *b)
+{
+    while (a && b) {
+        if (a->kind != b->kind || !core_string_eq(a->text, b->text)) {
+            return false;
+        }
+        a = a->next;
+        b = b->next;
+    }
+    return !a && !b;
+}
+
+static bool
+shifted_span_eq(size_t fresh, size_t old, ptrdiff_t delta)
+{
+    if (delta < 0) {
+        size_t amount = (size_t)-delta;
+        return old >= amount && fresh == old - amount;
+    }
+    return fresh == old + (size_t)delta;
+}
+
+static bool
+same_shifted_token(const parse_token_info_t *fresh,
+                   const parse_token_info_t *old,
+                   ptrdiff_t delta)
+{
+    return fresh->tid == old->tid
+        && fresh->origin == old->origin
+        && option_string_eq(fresh->value, old->value)
+        && option_string_eq(fresh->literal_type, old->literal_type)
+        && trivia_eq(fresh->leading_trivia, old->leading_trivia)
+        && trivia_eq(fresh->trailing_trivia, old->trailing_trivia)
+        && shifted_span_eq(fresh->start_byte, old->start_byte, delta)
+        && shifted_span_eq(fresh->end_byte, old->end_byte, delta)
+        && fresh->has_content_span == old->has_content_span
+        && (!fresh->has_content_span
+            || (shifted_span_eq(fresh->content_start_byte,
+                                old->content_start_byte, delta)
+                && shifted_span_eq(fresh->content_end_byte,
+                                   old->content_end_byte, delta)))
+        && fresh->has_label_span == old->has_label_span
+        && (!fresh->has_label_span
+            || (shifted_span_eq(fresh->label_start_byte,
+                                old->label_start_byte, delta)
+                && shifted_span_eq(fresh->label_end_byte,
+                                   old->label_end_byte, delta)));
+}
+
+static void
+free_token_contents(parse_token_info_t *tok)
+{
+    free_token_trivia(tok);
+    if (tok->owns_value && core_option_is_set(tok->value)) {
+        core_free(core_option_get(tok->value).data);
+    }
+    if (tok->owns_file && core_option_is_set(tok->file)) {
+        core_free(core_option_get(tok->file).data);
+    }
+    if (tok->owns_literal_type && core_option_is_set(tok->literal_type)) {
+        core_free(core_option_get(tok->literal_type).data);
+    }
+}
+
+static void
+clear_stale_tokens(parse_token_stream_t *ts)
+{
+    for (int32_t i = 0; i < ts->stale_count; i++) {
+        free_stream_token(ts->stale_tokens[i]);
+    }
+    core_free(ts->stale_tokens);
+    ts->stale_tokens = nullptr;
+    ts->stale_count = 0;
+}
+
+static void
+clear_stale_checkpoints(parse_token_stream_t *ts)
+{
+    for (size_t i = 0; i < ts->stale_checkpoint_count; i++) {
+        free_checkpoint(ts, &ts->stale_checkpoints[i]);
+    }
+    core_free(ts->stale_checkpoints);
+    ts->stale_checkpoints = nullptr;
+    ts->stale_checkpoint_count = 0;
+}
+
+static void
+reconcile_stale_suffix(parse_token_stream_t *ts)
+{
+    int32_t fresh = ts->token_count - 1;
+    int32_t old = ts->stale_count - 1;
+
+    while (fresh >= 0 && old >= 0
+           && ts->tokens[fresh]->start_byte >= ts->stale_new_end
+           && ts->stale_tokens[old]->start_byte >= ts->stale_old_end
+           && same_shifted_token(ts->tokens[fresh], ts->stale_tokens[old],
+                                 ts->stale_byte_delta)) {
+        parse_token_info_t *fresh_token = ts->tokens[fresh];
+        parse_token_info_t *old_token = ts->stale_tokens[old];
+        int32_t stable_index = old_token->index;
+
+        free_token_contents(old_token);
+        *old_token = *fresh_token;
+        old_token->index = stable_index;
+        core_free(fresh_token);
+        ts->tokens[fresh] = old_token;
+        ts->stale_tokens[old] = nullptr;
+        fresh--;
+        old--;
+    }
+    clear_stale_tokens(ts);
+    clear_stale_checkpoints(ts);
+}
+
+static size_t
+shift_byte(size_t value, ptrdiff_t delta)
+{
+    return delta < 0 ? value - (size_t)-delta : value + (size_t)delta;
+}
+
+static uint32_t
+shift_u32(uint32_t value, int64_t delta)
+{
+    return (uint32_t)((int64_t)value + delta);
+}
+
+static void
+shift_reused_token(parse_token_info_t *token,
+                   const scan_stream_checkpoint_t *checkpoint,
+                   const parse_scanner_t *scanner, ptrdiff_t byte_delta)
+{
+    token->start_byte = shift_byte(token->start_byte, byte_delta);
+    token->end_byte = shift_byte(token->end_byte, byte_delta);
+    if (token->has_content_span) {
+        token->content_start_byte = shift_byte(token->content_start_byte,
+                                               byte_delta);
+        token->content_end_byte = shift_byte(token->content_end_byte,
+                                             byte_delta);
+    }
+    if (token->has_label_span) {
+        token->label_start_byte = shift_byte(token->label_start_byte,
+                                             byte_delta);
+        token->label_end_byte = shift_byte(token->label_end_byte,
+                                           byte_delta);
+    }
+
+    int64_t line_delta = (int64_t)scanner->line - checkpoint->line;
+    int64_t column_delta = (int64_t)scanner->column - checkpoint->column;
+    if (token->line == checkpoint->line) {
+        token->column = shift_u32(token->column, column_delta);
+    }
+    if (token->endline == checkpoint->line) {
+        token->endcol = shift_u32(token->endcol, column_delta);
+    }
+    token->line = shift_u32(token->line, line_delta);
+    token->endline = shift_u32(token->endline, line_delta);
+}
+
+static bool
+try_converge(parse_token_stream_t *ts)
+{
+    parse_scanner_t *s = ts->scanner;
+    if (!ts->stale_checkpoint_count || !s->state_equal_cb
+        || ts->stale_final_status != SCAN_STATUS_COMPLETE) {
+        return false;
+    }
+
+    for (size_t i = 0; i < ts->stale_checkpoint_count; i++) {
+        scan_stream_checkpoint_t *cp = &ts->stale_checkpoints[i];
+        if (cp->cursor < ts->stale_old_end
+            || shift_byte(cp->cursor, ts->stale_byte_delta) != s->cursor
+            || !s->state_equal_cb(s->user_state, cp->state)) {
+            continue;
+        }
+
+        int32_t stale_at = cp->token_count - ts->stale_base_token_count;
+        if (stale_at < 0 || stale_at > ts->stale_count) {
+            continue;
+        }
+        int32_t add = ts->stale_count - stale_at;
+        if (ts->token_count + add > ts->token_cap) {
+            int32_t cap = ts->token_cap;
+            while (cap < ts->token_count + add) {
+                cap *= 2;
+            }
+            ts->tokens = core_realloc(ts->tokens,
+                                      (size_t)cap * sizeof(*ts->tokens));
+            ts->token_cap = cap;
+        }
+        for (int32_t j = stale_at; j < ts->stale_count; j++) {
+            parse_token_info_t *token = ts->stale_tokens[j];
+            shift_reused_token(token, cp, s, ts->stale_byte_delta);
+            ts->tokens[ts->token_count++] = token;
+            ts->stale_tokens[j] = nullptr;
+        }
+
+        int32_t token_delta = ts->token_count
+                            - (cp->token_count
+                               + ts->stale_count - stale_at);
+        ensure_checkpoint_capacity(
+            ts, ts->checkpoint_count + ts->stale_checkpoint_count - i);
+        for (size_t j = i; j < ts->stale_checkpoint_count; j++) {
+            scan_stream_checkpoint_t moved = ts->stale_checkpoints[j];
+            moved.cursor = shift_byte(moved.cursor, ts->stale_byte_delta);
+            moved.mark = shift_byte(moved.mark, ts->stale_byte_delta);
+            int64_t line_shift = (int64_t)s->line - cp->line;
+            int64_t column_shift = (int64_t)s->column - cp->column;
+            if (moved.line == cp->line) {
+                moved.column = shift_u32(moved.column, column_shift);
+            }
+            if (moved.mark_line == cp->line) {
+                moved.mark_col = shift_u32(moved.mark_col, column_shift);
+            }
+            moved.line = shift_u32(moved.line, line_shift);
+            moved.mark_line = shift_u32(moved.mark_line, line_shift);
+            moved.token_count += token_delta;
+            if (s->state_shift_cb) {
+                s->state_shift_cb(moved.state, ts->stale_edit_start,
+                                  ts->stale_old_end,
+                                  ts->stale_byte_delta);
+            }
+            ts->checkpoints[ts->checkpoint_count++] = moved;
+            ts->stale_checkpoints[j] = (scan_stream_checkpoint_t){0};
+        }
+
+        int64_t line_delta = (int64_t)s->line - cp->line;
+        int64_t column_delta = (int64_t)s->column - cp->column;
+        s->line = shift_u32(ts->stale_final_line, line_delta);
+        s->column = ts->stale_final_line == cp->line
+                  ? shift_u32(ts->stale_final_column, column_delta)
+                  : ts->stale_final_column;
+        s->cursor = s->input_len;
+        s->mark = s->cursor;
+        s->mark_line = s->line;
+        s->mark_col = s->column;
+        s->at_eof = true;
+        s->status = s->had_recovery ? SCAN_STATUS_RECOVERED
+                                    : SCAN_STATUS_COMPLETE;
+        s->status_message = s->had_recovery ? s->recovery_message
+                                            : (core_string_t){0};
+        s->status_lexer = s->had_recovery ? s->recovery_lexer
+                                          : (core_string_t){0};
+        s->status_start_byte = s->had_recovery
+                             ? s->recovery_start_byte : 0;
+        s->status_end_byte = s->had_recovery ? s->recovery_end_byte : 0;
+        clear_stale_tokens(ts);
+        clear_stale_checkpoints(ts);
+        return true;
+    }
+    return false;
+}
+
+static void
+append_pending_eof_trivia(parse_token_stream_t *ts)
+{
+    parse_scanner_t *scanner = ts->scanner;
+
+    if (!scanner
+        || (!scanner->pending_leading && !scanner->pending_trailing)) {
+        return;
+    }
+
+    if (ts->token_count <= 0) {
+        return;
+    }
+
+    parse_token_info_t *last = ts->tokens[ts->token_count - 1];
+    parse_trivia_t **tail = &last->trailing_trivia;
+
+    while (*tail) {
+        tail = &(*tail)->next;
+    }
+
+    *tail = scanner->pending_leading;
+    scanner->pending_leading = nullptr;
+
+    while (*tail) {
+        tail = &(*tail)->next;
+    }
+
+    *tail = scanner->pending_trailing;
+    scanner->pending_trailing = nullptr;
+}
+
 static bool
 ensure_filled(parse_token_stream_t *ts, int32_t target)
 {
     while (ts->token_count <= target) {
+        if (try_converge(ts)) {
+            return ts->token_count > target;
+        }
         if (ts->scanner->at_eof) {
             return false;
         }
 
+        maybe_checkpoint(ts);
         bool got = ts->scanner->cb(ts->scanner);
 
         if (!got) {
             ts->scanner->at_eof = true;
+            if (ts->scanner->status == SCAN_STATUS_ACTIVE) {
+                ts->scanner->status = ts->scanner->source_final
+                                          ? (ts->scanner->had_recovery
+                                                 ? SCAN_STATUS_RECOVERED
+                                                 : SCAN_STATUS_COMPLETE)
+                                          : SCAN_STATUS_INCOMPLETE;
+            }
+            if (ts->scanner->status != SCAN_STATUS_INCOMPLETE) {
+                append_pending_eof_trivia(ts);
+            }
+            if (ts->stale_count) {
+                reconcile_stale_suffix(ts);
+            }
             return ts->token_count > target;
         }
     }
@@ -56,6 +494,14 @@ scan_token_stream_new(parse_scanner_t *scanner)
 }
 
 void
+scan_token_stream_take_scanner(parse_token_stream_t *ts)
+{
+    if (ts) {
+        ts->owns_scanner = true;
+    }
+}
+
+void
 scan_token_stream_free(parse_token_stream_t *ts)
 {
     if (!ts) {
@@ -65,12 +511,40 @@ scan_token_stream_free(parse_token_stream_t *ts)
     for (int32_t i = 0; i < ts->token_count; i++) {
         if (ts->tokens[i]) {
             free_token_trivia(ts->tokens[i]);
+            if (ts->tokens[i]->owns_value
+                && core_option_is_set(ts->tokens[i]->value)) {
+                core_free(core_option_get(ts->tokens[i]->value).data);
+            }
+            if (ts->tokens[i]->owns_file
+                && core_option_is_set(ts->tokens[i]->file)) {
+                core_free(core_option_get(ts->tokens[i]->file).data);
+            }
+            if (ts->tokens[i]->owns_literal_type
+                && core_option_is_set(ts->tokens[i]->literal_type)) {
+                core_free(core_option_get(ts->tokens[i]->literal_type).data);
+            }
             core_free(ts->tokens[i]);
         }
     }
 
+    truncate_checkpoints(ts, 0);
+    core_free(ts->checkpoints);
+    clear_stale_tokens(ts);
+    clear_stale_checkpoints(ts);
+
+    parse_scanner_t *scanner = ts->scanner;
+    bool owns_scanner = ts->owns_scanner;
+
+    if (scanner) {
+        scanner->stream = nullptr;
+    }
+
     core_free(ts->tokens);
     core_free(ts);
+
+    if (owns_scanner) {
+        scan_scanner_free(scanner);
+    }
 }
 
 parse_token_info_t *
@@ -156,6 +630,78 @@ scan_stream_get(parse_token_stream_t *ts, int32_t pos)
     return ts->tokens[pos];
 }
 
+bool
+scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos)
+{
+    if (!ts || ts->edits_enabled || pos < 0
+        || !ensure_filled(ts, pos) || pos >= ts->token_count) {
+        return false;
+    }
+
+    parse_token_info_t *token = ts->tokens[pos];
+    size_t start = token->start_byte;
+    size_t end = token->end_byte;
+    parse_scanner_t *scanner = ts->scanner;
+    if (start < scanner->source_base || end < start
+        || end - scanner->source_base > scanner->input_len) {
+        return false;
+    }
+
+    core_string_t text = core_string_borrow(
+        scanner->input + (start - scanner->source_base), end - start);
+    parse_trivia_t *trivia = core_alloc(parse_trivia_t);
+    *trivia = (parse_trivia_t){
+        .text = core_string_dup(text),
+        .kind = PARSE_TRIVIA_SPACE,
+        .owns_text = true,
+    };
+
+    parse_trivia_t *head = token->leading_trivia;
+    parse_trivia_t **tail = &head;
+    while (*tail) {
+        tail = &(*tail)->next;
+    }
+    *tail = trivia;
+    tail = &trivia->next;
+    while (token->trailing_trivia) {
+        parse_trivia_t *next = token->trailing_trivia->next;
+        token->trailing_trivia->next = nullptr;
+        *tail = token->trailing_trivia;
+        tail = &(*tail)->next;
+        token->trailing_trivia = next;
+    }
+
+    if (pos + 1 < ts->token_count) {
+        parse_token_info_t *next = ts->tokens[pos + 1];
+        *tail = next->leading_trivia;
+        next->leading_trivia = head;
+    }
+    else if (pos > 0) {
+        parse_token_info_t *previous = ts->tokens[pos - 1];
+        parse_trivia_t **previous_tail = &previous->trailing_trivia;
+        while (*previous_tail) {
+            previous_tail = &(*previous_tail)->next;
+        }
+        *previous_tail = head;
+    }
+    else {
+        parse_trivia_free(head);
+        return false;
+    }
+
+    token->leading_trivia = nullptr;
+    token->trailing_trivia = nullptr;
+    free_stream_token(token);
+    memmove(ts->tokens + pos, ts->tokens + pos + 1,
+            (size_t)(ts->token_count - pos - 1) * sizeof(*ts->tokens));
+    ts->token_count--;
+    if (pos < ts->pos) {
+        ts->pos--;
+    }
+    ts->exhausted = false;
+    return true;
+}
+
 int32_t
 scan_stream_token_count(parse_token_stream_t *ts)
 {
@@ -172,6 +718,18 @@ scan_stream_reset(parse_token_stream_t *ts)
     for (int32_t i = 0; i < ts->token_count; i++) {
         if (ts->tokens[i]) {
             free_token_trivia(ts->tokens[i]);
+            if (ts->tokens[i]->owns_value
+                && core_option_is_set(ts->tokens[i]->value)) {
+                core_free(core_option_get(ts->tokens[i]->value).data);
+            }
+            if (ts->tokens[i]->owns_file
+                && core_option_is_set(ts->tokens[i]->file)) {
+                core_free(core_option_get(ts->tokens[i]->file).data);
+            }
+            if (ts->tokens[i]->owns_literal_type
+                && core_option_is_set(ts->tokens[i]->literal_type)) {
+                core_free(core_option_get(ts->tokens[i]->literal_type).data);
+            }
             core_free(ts->tokens[i]);
             ts->tokens[i] = nullptr;
         }
@@ -182,7 +740,241 @@ scan_stream_reset(parse_token_stream_t *ts)
     ts->next_index  = 0;
     ts->exhausted   = false;
 
+    truncate_checkpoints(ts, 0);
+    clear_stale_tokens(ts);
+    clear_stale_checkpoints(ts);
+
     scan_scanner_reset(ts->scanner);
+    maybe_checkpoint(ts);
+}
+
+bool
+scan_stream_append(parse_token_stream_t *ts, const char *data, size_t len)
+{
+    if (!ts || !scan_scanner_append(ts->scanner, data, len)) {
+        return false;
+    }
+
+    ts->exhausted = false;
+    return true;
+}
+
+bool
+scan_stream_finish(parse_token_stream_t *ts)
+{
+    return ts && scan_scanner_finish(ts->scanner);
+}
+
+bool
+scan_stream_enable_edits(parse_token_stream_t *ts)
+{
+    if (!ts || !ts->scanner || !ts->scanner->state_clone_cb
+        || ts->token_count || ts->scanner->source_base
+        || ts->scanner->input_offset) {
+        return false;
+    }
+    ts->edits_enabled = true;
+    maybe_checkpoint(ts);
+    return ts->checkpoint_count == 1;
+}
+
+static void
+free_stream_token(parse_token_info_t *tok)
+{
+    if (!tok) {
+        return;
+    }
+    free_token_contents(tok);
+    core_free(tok);
+}
+
+bool
+scan_stream_replace(parse_token_stream_t *ts,
+                    size_t start_byte, size_t end_byte,
+                    const char *replacement, size_t replacement_len)
+{
+    if (!ts || !ts->scanner || !ts->scanner->buffer
+        || !ts->edits_enabled || !ts->scanner->state_clone_cb
+        || !ts->scanner->source_final
+        || ts->scanner->source_base || ts->scanner->input_offset
+        || start_byte > end_byte
+        || end_byte > ts->scanner->buffer->byte_len
+        || (replacement_len && !replacement)) {
+        return false;
+    }
+
+    while (!ts->scanner->at_eof) {
+        if (!ensure_filled(ts, ts->token_count)) {
+            break;
+        }
+    }
+    maybe_checkpoint(ts);
+    if (!ts->checkpoint_count) {
+        return false;
+    }
+
+    size_t chosen = 0;
+    for (size_t i = 1; i < ts->checkpoint_count; i++) {
+        if (ts->checkpoints[i].cursor > start_byte) {
+            break;
+        }
+        chosen = i;
+    }
+    scan_stream_checkpoint_t *cp = &ts->checkpoints[chosen];
+    parse_scanner_t *s = ts->scanner;
+
+    clear_stale_checkpoints(ts);
+    ts->stale_checkpoint_count = ts->checkpoint_count - chosen - 1;
+    if (ts->stale_checkpoint_count) {
+        ts->stale_checkpoints = core_alloc_array(
+            scan_stream_checkpoint_t, ts->stale_checkpoint_count);
+        memcpy(ts->stale_checkpoints, ts->checkpoints + chosen + 1,
+               ts->stale_checkpoint_count
+                   * sizeof(*ts->stale_checkpoints));
+        memset(ts->checkpoints + chosen + 1, 0,
+               ts->stale_checkpoint_count * sizeof(*ts->checkpoints));
+    }
+    ts->checkpoint_count = chosen + 1;
+
+    ts->stale_count = ts->token_count - cp->token_count;
+    if (ts->stale_count) {
+        ts->stale_tokens = core_alloc_array(parse_token_info_t *,
+                                             ts->stale_count);
+        memcpy(ts->stale_tokens, ts->tokens + cp->token_count,
+               (size_t)ts->stale_count * sizeof(*ts->stale_tokens));
+        memset(ts->tokens + cp->token_count, 0,
+               (size_t)ts->stale_count * sizeof(*ts->tokens));
+    }
+    ts->stale_old_end = end_byte;
+    ts->stale_new_end = start_byte + replacement_len;
+    ts->stale_edit_start = start_byte;
+    ts->stale_byte_delta = (ptrdiff_t)replacement_len
+                         - (ptrdiff_t)(end_byte - start_byte);
+    ts->stale_base_token_count = cp->token_count;
+    ts->stale_final_line = s->line;
+    ts->stale_final_column = s->column;
+    ts->stale_final_status = s->status;
+    ts->token_count = cp->token_count;
+    if (ts->pos > ts->token_count) {
+        ts->pos = ts->token_count;
+    }
+
+    if (s->state_free_cb) {
+        s->state_free_cb(s->user_state);
+    }
+    s->user_state = s->state_clone_cb(cp->state);
+    parse_trivia_free(s->pending_leading);
+    parse_trivia_free(s->pending_trailing);
+    s->pending_leading = clone_trivia(cp->pending_leading);
+    s->pending_leading_tail = trivia_tail(s->pending_leading);
+    s->pending_trailing = clone_trivia(cp->pending_trailing);
+    s->pending_trailing_tail = trivia_tail(s->pending_trailing);
+    s->last_trailing_tail = ts->token_count
+        ? trivia_tail(ts->tokens[ts->token_count - 1]->trailing_trivia)
+        : nullptr;
+
+    core_buffer_t *buffer = s->buffer;
+    size_t removed = end_byte - start_byte;
+    char *owned_replacement = nullptr;
+    uintptr_t replacement_at = (uintptr_t)replacement;
+    uintptr_t buffer_start = (uintptr_t)buffer->data;
+    uintptr_t buffer_end = buffer_start + buffer->byte_len;
+    if (replacement_len && replacement_at >= buffer_start
+        && replacement_at < buffer_end) {
+        owned_replacement = core_alloc_size(1, replacement_len);
+        memcpy(owned_replacement, replacement, replacement_len);
+        replacement = owned_replacement;
+    }
+    if (replacement_len > removed) {
+        core_buffer_ensure(buffer, replacement_len - removed);
+    }
+    size_t suffix = buffer->byte_len - end_byte;
+    if (replacement_len != removed) {
+        memmove(buffer->data + start_byte + replacement_len,
+                buffer->data + end_byte, suffix);
+    }
+    if (replacement_len) {
+        memcpy(buffer->data + start_byte, replacement, replacement_len);
+    }
+    core_free(owned_replacement);
+    buffer->byte_len = buffer->byte_len - removed + replacement_len;
+    buffer->data[buffer->byte_len] = '\0';
+
+    s->input = buffer->data;
+    s->input_len = buffer->byte_len;
+    s->cursor = cp->cursor;
+    s->mark = cp->mark;
+    s->line = cp->line;
+    s->column = cp->column;
+    s->mark_line = cp->mark_line;
+    s->mark_col = cp->mark_col;
+    s->trivia_attach = cp->trivia_attach;
+    s->lexer_context = cp->lexer_context;
+    s->at_eof = false;
+    s->status = SCAN_STATUS_ACTIVE;
+    s->status_message = (core_string_t){0};
+    s->status_lexer = (core_string_t){0};
+    s->status_start_byte = 0;
+    s->status_end_byte = 0;
+    s->had_recovery = false;
+    s->recovery_message = (core_string_t){0};
+    s->recovery_lexer = (core_string_t){0};
+    s->recovery_start_byte = 0;
+    s->recovery_end_byte = 0;
+    s->source_final = true;
+    s->append_closed = true;
+    ts->exhausted = false;
+    return true;
+}
+
+bool
+scan_stream_insert(parse_token_stream_t *ts, size_t at_byte,
+                   const char *text, size_t text_len)
+{
+    return scan_stream_replace(ts, at_byte, at_byte, text, text_len);
+}
+
+bool
+scan_stream_delete(parse_token_stream_t *ts,
+                   size_t start_byte, size_t end_byte)
+{
+    return scan_stream_replace(ts, start_byte, end_byte, nullptr, 0);
+}
+
+bool
+scan_stream_discard_consumed(parse_token_stream_t *ts)
+{
+    if (!ts || ts->edits_enabled) {
+        return false;
+    }
+    int32_t drop = ts->pos > 1 ? ts->pos - 1 : 0;
+    for (int32_t i = 0; i < drop; i++) {
+        parse_token_info_t *tok = ts->tokens[i];
+        if (!tok) {
+            continue;
+        }
+        free_token_trivia(tok);
+        if (tok->owns_value && core_option_is_set(tok->value)) {
+            core_free(core_option_get(tok->value).data);
+        }
+        if (tok->owns_file && core_option_is_set(tok->file)) {
+            core_free(core_option_get(tok->file).data);
+        }
+        if (tok->owns_literal_type && core_option_is_set(tok->literal_type)) {
+            core_free(core_option_get(tok->literal_type).data);
+        }
+        core_free(tok);
+    }
+
+    if (drop) {
+        memmove(ts->tokens, ts->tokens + drop,
+                (size_t)(ts->token_count - drop) * sizeof(*ts->tokens));
+        ts->token_count -= drop;
+        ts->pos -= drop;
+    }
+
+    bool source_discarded = scan_scanner_discard_consumed(ts->scanner);
+    return source_discarded || drop > 0;
 }
 
 scan_stream_mark_t
@@ -252,7 +1044,14 @@ array_scan_cb(parse_scanner_t *s)
     }
 
     parse_token_info_t *copy = core_alloc(parse_token_info_t);
+
     *copy = *src;
+    copy->leading_trivia  = nullptr;
+    copy->trailing_trivia = nullptr;
+    copy->owns_value = false;
+    copy->owns_literal_type = false;
+    copy->owns_file  = false;
+    copy->tree_owned = false;
     copy->index = ts->next_index++;
 
     ts->tokens[ts->token_count++] = copy;
@@ -284,7 +1083,12 @@ scan_token_stream_from_array(parse_token_info_t **tokens, int32_t count)
                                             st,
                                             array_scan_reset_cb);
 
-    return scan_token_stream_new(sc);
+    scan_scanner_take_state(sc, core_free);
+    scan_scanner_take_buffer(sc);
+    parse_token_stream_t *ts = scan_token_stream_new(sc);
+    scan_token_stream_take_scanner(ts);
+
+    return ts;
 }
 
 typedef struct {
@@ -342,11 +1146,17 @@ cp_scan_cb(parse_scanner_t *s)
     tok->index  = ts->next_index++;
     tok->line   = st->line;
     tok->column = st->column;
+    tok->endline = st->line;
+    tok->endcol  = st->column + 1;
+    tok->start_byte = start_pos;
+    tok->end_byte   = st->byte_pos;
+    tok->origin = PARSE_TOKEN_SOURCE;
 
     uint32_t cp_byte_len = st->byte_pos - start_pos;
     core_string_t val = core_string_from_raw(st->data + start_pos,
-                                               (int64_t)cp_byte_len);
+                                             (int64_t)cp_byte_len);
     tok->value = core_option_set(core_string_t, val);
+    tok->owns_value = true;
 
     cp_scan_emit(ts, tok);
 
@@ -390,5 +1200,10 @@ scan_token_stream_from_codepoints(core_string_t input)
                                             st,
                                             cp_scan_reset_cb);
 
-    return scan_token_stream_new(sc);
+    scan_scanner_take_state(sc, core_free);
+    scan_scanner_take_buffer(sc);
+    parse_token_stream_t *ts = scan_token_stream_new(sc);
+    scan_token_stream_take_scanner(ts);
+
+    return ts;
 }

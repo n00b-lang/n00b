@@ -112,9 +112,8 @@ static bool derives(const char *text)
         return false;
     }
 
-    parse_grammar_set_start_id(g, ir_grammar_nt("module"));
-
-    parse_pwz_parser_t *p  = parse_pwz_new(g);
+    parse_pwz_parser_t *p
+        = parse_pwz_new_for_start(g, ir_grammar_nt("module"));
     bool              ok = parse_pwz_parse(p, ts);
 
     parse_pwz_free(p);

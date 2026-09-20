@@ -16,7 +16,8 @@ S(const char *s)
 
 static const char *const EXTRA_TOKENS[] = {
     "CHAR_LIT",  "EMBED",      "FLOAT_LIT", "HEX_LIT",
-    "INT_LIT",   "NEWLINE",    "STRING_LIT",
+    "INT_LIT",   "LITERAL_PREFIX", "NEWLINE", "STRING_LIT",
+    "INDENT",    "DEDENT",
 };
 
 static bool
@@ -63,7 +64,7 @@ reprint_counting(core_string_t text, const char *start, const char *what,
     }
 
     if (!parse_bnf_load(text, S(start), g)) {
-        printf("FAIL  %s does not load\n", what);
+        printf("FAIL  %s does not load: %s\n", what, parse_bnf_error());
         fails++;
         parse_grammar_free(g);
 

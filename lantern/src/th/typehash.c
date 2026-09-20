@@ -60,6 +60,7 @@ void th_ctx_free(th_ctx *ctx)
 
     core_list_free(ctx->promos);
     core_list_free(ctx->ifaces);
+    core_list_free(ctx->methods);
     core_list_free(ctx->errors);
     core_list_free(ctx->coercions);
     core_arena_free(&ctx->arena);

@@ -32,4 +32,5 @@ void *parse_forest_walk_best(parse_forest_t *f,
 void parse_forest_free(parse_forest_t *f);
 
 typedef parse_forest_t (*parse_fn_t)(parse_grammar_t      *g,
-                                                parse_token_stream_t *ts);
+                                     parse_nt_id_t         start,
+                                     parse_token_stream_t *ts);

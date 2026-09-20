@@ -1145,7 +1145,9 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
                                          core_option_none(core_string_t),
                                          nullptr, nullptr);
     parse_token_stream_t *ts  = scan_token_stream_new(sc);
-    parse_pwz_parser_t   *p   = parse_pwz_new(g);
+    parse_pwz_parser_t   *p   = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(
+                g, CORE_STRING_STATIC("union-type"))));
     th_type            *out = nullptr;
     int32_t             used = 0;
     bool                ok;

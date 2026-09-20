@@ -1,0 +1,5 @@
+@lex-use("lexer_operator_sets.lex")
+@lex-ident(as("WORD"))
+@lex-string("'", "'", escape('\\'), scalar, escapes("n"), escape_digits("x", "0123456789abcdefABCDEF", "2"), as("CHAR"))
+@lex-operators(use("comparison"), add("??"), remove("!="))
+@lex-fallback("reject")

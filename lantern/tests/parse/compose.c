@@ -6,6 +6,7 @@
 #include "parse/grammar.h"
 #include "parse/pwz.h"
 #include "parse/tree_visit.h"
+#include "scanner/tokenizer.h"
 #include "scanner/token_stream.h"
 #include "private/parse/grammar.h"
 #include "harness.h"
@@ -46,10 +47,9 @@ static parse_token_info_t *tk(int64_t tid, const char *text, int i)
 static bool parses(parse_grammar_t *g, const char *start,
                    parse_token_info_t **toks, int n)
 {
-    parse_grammar_set_start_id(g, nt_id(g, start));
-
     parse_token_stream_t *ts = scan_token_stream_from_array(toks, n);
-    parse_pwz_parser_t   *p  = parse_pwz_new(g);
+    parse_pwz_parser_t   *p
+        = parse_pwz_new_for_start(g, nt_id(g, start));
     bool                ok = parse_pwz_parse(p, ts);
 
     parse_pwz_free(p);
@@ -151,6 +151,44 @@ static void test_a_missing_part_is_still_reported(void)
     parse_grammar_free(g);
 }
 
+static void test_a_failed_load_changes_nothing(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+
+    parse_grammar_set_error_recovery(g, false);
+    check("the transaction baseline grammar loads",
+          parse_bnf_load(CORE_STRING_STATIC("<ok> ::= 'x'\n"),
+                         CORE_STRING_STATIC("ok"), g));
+
+    size_t nonterms = core_list_len(g->nt_list);
+    size_t rules = core_list_len(g->rules);
+    size_t terminals = core_list_len(g->named_terms);
+    size_t annotations = core_list_len(g->annotations);
+
+    check("a grammar with an undeclared token is rejected",
+          !parse_bnf_load(CORE_STRING_STATIC(
+                              "@tokenizer(\"json\")\n"
+                              "<bad> ::= %MISSING\n"),
+                          CORE_STRING_STATIC("bad"), g));
+    check("a rejected load adds no nonterminals",
+          core_list_len(g->nt_list) == nonterms
+              && parse_find_nonterm(g, CORE_STRING_STATIC("bad")) == nullptr);
+    check("a rejected load adds no rules, terminals, or annotations",
+          core_list_len(g->rules) == rules
+              && core_list_len(g->named_terms) == terminals
+              && core_list_len(g->annotations) == annotations);
+    check("a rejected load does not change the tokenizer",
+          !strcmp(scan_grammar_tokenizer(g).data, "text"));
+
+    check("an empty literal is rejected before installing its production",
+          !parse_bnf_load(CORE_STRING_STATIC("<empty> ::= \"\"\n"),
+                          CORE_STRING_STATIC("empty"), g)
+              && parse_find_nonterm(g, CORE_STRING_STATIC("empty")) == nullptr
+              && core_list_len(g->rules) == rules);
+
+    parse_grammar_free(g);
+}
+
 static void *r_int(parse_reduce_t *r)
 {
     (void)r;
@@ -206,7 +244,8 @@ static void test_a_reduce_folds_children_into_a_value(void)
     };
 
     parse_token_stream_t *ts = scan_token_stream_from_array(toks, 5);
-    parse_pwz_parser_t   *p  = parse_pwz_new(g);
+    parse_pwz_parser_t   *p  = parse_pwz_new_for_start(
+        g, nt_id(g, "list"));
 
     check("the list parses", parse_pwz_parse(p, ts));
 
@@ -266,7 +305,8 @@ static void test_a_visitor_can_stop_a_reduce(void)
     };
 
     parse_token_stream_t *ts = scan_token_stream_from_array(toks, 5);
-    parse_pwz_parser_t   *p  = parse_pwz_new(g);
+    parse_pwz_parser_t   *p  = parse_pwz_new_for_start(
+        g, nt_id(g, "list"));
 
     check("the list parses for the stop test", parse_pwz_parse(p, ts));
 
@@ -306,6 +346,7 @@ int main(void)
     test_the_parts_load_in_either_order();
     test_one_grammar_parses_from_several_start_symbols();
     test_a_missing_part_is_still_reported();
+    test_a_failed_load_changes_nothing();
     test_a_reduce_folds_children_into_a_value();
     test_a_visitor_can_stop_a_reduce();
 

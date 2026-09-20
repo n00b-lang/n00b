@@ -297,7 +297,8 @@ static bool put_layout_val(core_buffer_t *b, ir_module_t *m,
 
 static bool authored_anywhere(const ir_descriptor_t *d)
 {
-    if (d->size.authored || d->align.authored || d->stride.authored) {
+    if (d->size.authored || d->align.authored || d->stride.authored
+        || d->indirect.authored || d->variant.authored) {
         return true;
     }
 
@@ -313,55 +314,87 @@ static bool authored_anywhere(const ir_descriptor_t *d)
 static void put_layouts(core_buffer_t *b, ir_module_t *m)
 {
     for (size_t i = 0; i < ir_type_count(m); i++) {
-        ir_typeslot_t   *slot = ir_type_slot_at(m, i);
-        th_type         *t    = slot->type;
-        ir_descriptor_t *d    = nullptr;
+        ir_typeslot_t *slot = ir_type_slot_at(m, i);
+        th_type       *t    = slot->type;
 
         for (size_t k = 0; k < slot->n_descs; k++) {
-            const char *have = slot->descs[k].target;
-            const char *want = ir_module_target(m);
+            ir_descriptor_t *d = &slot->descs[k].d;
 
-            if (have && want ? !strcmp(have, want) : have == want) {
-                d = &slot->descs[k].d;
-            }
-        }
-
-        if (!d || !authored_anywhere(d)) {
-            continue;
-        }
-
-        core_buffer_printf(b, "\n  layout %s {\n", ir_type_text(m, t));
-
-        if (d->size.authored) {
-            core_buffer_puts(b, "    size = ");
-            put_layout_val(b, m, &d->size);
-            core_buffer_puts(b, "\n");
-        }
-
-        if (d->align.authored) {
-            core_buffer_puts(b, "    align = ");
-            put_layout_val(b, m, &d->align);
-            core_buffer_puts(b, "\n");
-        }
-
-        if (d->stride.authored) {
-            core_buffer_puts(b, "    stride = ");
-            put_layout_val(b, m, &d->stride);
-            core_buffer_puts(b, "\n");
-        }
-
-        for (uint32_t k = 0; k < d->n_members; k++) {
-            const ir_member_layout_t *ml = &d->members[k];
-
-            if (!ml->bit_offset.authored) {
+            if (!authored_anywhere(d)) {
                 continue;
             }
-            core_buffer_printf(b, "    %s @ bits %llu..%llu\n", ml->name,
-                      (unsigned long long)ml->bit_offset.value,
-                      (unsigned long long)(ml->bit_offset.value
-                                           + ml->bit_width.value));
+
+            core_buffer_printf(b, "\n  layout %s", ir_type_text(m, t));
+
+            const char *module_target = ir_module_target(m);
+
+            if (d->target && (!module_target
+                              || strcmp(d->target, module_target))) {
+                core_buffer_puts(b, " for ");
+                ir_quote(b, d->target);
+            }
+            else if (!d->target && module_target) {
+                core_buffer_puts(b, " without target");
+            }
+            core_buffer_puts(b, " {\n");
+
+            if (d->size.authored) {
+                core_buffer_puts(b, "    size = ");
+                put_layout_val(b, m, &d->size);
+                core_buffer_puts(b, "\n");
+            }
+
+            if (d->align.authored) {
+                core_buffer_puts(b, "    align = ");
+                put_layout_val(b, m, &d->align);
+                core_buffer_puts(b, "\n");
+            }
+
+            if (d->stride.authored) {
+                core_buffer_puts(b, "    stride = ");
+                put_layout_val(b, m, &d->stride);
+                core_buffer_puts(b, "\n");
+            }
+
+            if (d->indirect.authored) {
+                core_buffer_printf(b, "    indirect = %s\n",
+                                   d->indirect.fat ? "fat" : "thin");
+
+                if (d->indirect.words.authored) {
+                    core_buffer_puts(b, "    words = ");
+                    put_layout_val(b, m, &d->indirect.words);
+                    core_buffer_puts(b, "\n");
+                }
+            }
+
+            if (d->variant.authored) {
+                if (d->variant.tag_bit_offset.authored
+                    && d->variant.tag_bit_width.authored) {
+                    uint64_t lo = d->variant.tag_bit_offset.value;
+                    uint64_t hi = lo + d->variant.tag_bit_width.value;
+
+                    core_buffer_printf(b,
+                                       "    variant tag @ bits %llu..%llu\n",
+                                       (unsigned long long)lo,
+                                       (unsigned long long)hi);
+                }
+                core_buffer_printf(b, "    niche = %s\n",
+                                   d->variant.niche ? "true" : "false");
+            }
+
+            for (uint32_t j = 0; j < d->n_members; j++) {
+                const ir_member_layout_t *ml = &d->members[j];
+
+                if (!ml->bit_offset.authored) {
+                    continue;
+                }
+                core_buffer_printf(b, "    %s @ bits %llu..%llu\n", ml->name,
+                          (unsigned long long)ml->bit_offset.value,
+                          (unsigned long long)(ml->bit_offset.value
+                                               + ml->bit_width.value));
+            }
+            core_buffer_puts(b, "  }\n");
         }
-        core_buffer_puts(b, "  }\n");
     }
 }
 
@@ -641,11 +674,10 @@ char *ir_text_format(const char *text, int32_t width)
         return nullptr;
     }
 
-    parse_grammar_set_start_id(g, ir_grammar_nt("module"));
-
     size_t              len = strlen(text);
     parse_token_stream_t *ts  = ir_lex(text, len);
-    parse_pwz_parser_t   *p   = parse_pwz_new(g);
+    parse_pwz_parser_t   *p
+        = parse_pwz_new_for_start(g, ir_grammar_nt("module"));
     char               *out = nullptr;
 
     if (parse_pwz_parse(p, ts)) {

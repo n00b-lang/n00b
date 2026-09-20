@@ -56,27 +56,35 @@ typedef struct {
     core_string_t      text;
 } in_node;
 
+typedef in_node *in_node_ptr_t;
+core_list_decl(in_node_ptr_t);
+
 struct parse_infer_lower_t {
     bool failed;
+    core_list_t(in_node_ptr_t) nodes;
 };
 
 typedef struct parse_infer_lower_t in_ctx;
 
 static in_node *
-node_new(in_tag tag)
+node_new(in_ctx *c, in_tag tag)
 {
     in_node *n = core_alloc(in_node);
 
     n->magic = IN_MAGIC;
     n->tag   = tag;
 
+    if (c) {
+        core_list_push(c->nodes, n);
+    }
+
     return n;
 }
 
 static in_node *
-wrap(parse_infer_expr_t *e)
+wrap(in_ctx *c, parse_infer_expr_t *e)
 {
-    in_node *n = node_new(IN_EXPR);
+    in_node *n = node_new(c, IN_EXPR);
 
     n->expr = e;
 
@@ -128,6 +136,12 @@ kid_text(parse_reduce_t *r, size_t i)
     return n && n->tag == IN_LEAF ? n->text : (core_string_t){0};
 }
 
+static core_string_t
+dup_text(core_string_t text)
+{
+    return text.data ? core_string_dup(text) : text;
+}
+
 static void
 fail(parse_reduce_t *r)
 {
@@ -141,7 +155,7 @@ fail(parse_reduce_t *r)
 static void *
 r_leaf(parse_reduce_t *r)
 {
-    in_node *n = node_new(IN_LEAF);
+    in_node *n = node_new(r->thunk, IN_LEAF);
 
     n->tid  = parse_tree_leaf_tid(r->node);
     n->text = parse_tree_leaf_text(r->node);
@@ -164,7 +178,7 @@ r_group(parse_reduce_t *r)
 static void *
 r_op(parse_reduce_t *r)
 {
-    in_node *n  = node_new(IN_OP);
+    in_node *n  = node_new(r->thunk, IN_OP);
     in_node *lf = kid(r, 0);
 
     n->tid = lf ? lf->tid : 0;
@@ -176,7 +190,7 @@ static void *
 r_tail(parse_reduce_t *r)
 {
     in_node *op   = kid(r, 0);
-    in_node *n    = node_new(IN_TAIL);
+    in_node *n    = node_new(r->thunk, IN_TAIL);
     parse_infer_expr_t *e = expr_new(op && op->tid == tid_unify
                                        ? PARSE_INFER_UNIFY
                                        : PARSE_INFER_SUM);
@@ -215,7 +229,7 @@ r_expr(parse_reduce_t *r)
         lhs          = t->tail;
     }
 
-    return wrap(lhs);
+    return wrap(r->thunk, lhs);
 }
 
 static void *
@@ -223,7 +237,7 @@ r_self_ref(parse_reduce_t *r)
 {
     (void)r;
 
-    return wrap(expr_new(PARSE_INFER_SELF));
+    return wrap(r->thunk, expr_new(PARSE_INFER_SELF));
 }
 
 static void *
@@ -233,7 +247,7 @@ r_return_ref(parse_reduce_t *r)
         fail(r);
     }
 
-    return wrap(expr_new(PARSE_INFER_RETURN));
+    return wrap(r->thunk, expr_new(PARSE_INFER_RETURN));
 }
 
 static void *
@@ -247,7 +261,7 @@ r_child_ref(parse_reduce_t *r)
         fail(r);
     }
 
-    return wrap(e);
+    return wrap(r->thunk, e);
 }
 
 static void *
@@ -255,13 +269,13 @@ r_type_var(parse_reduce_t *r)
 {
     parse_infer_expr_t *e = expr_new(PARSE_INFER_TVAR);
 
-    e->name = kid_text(r, 1);
+    e->name = dup_text(kid_text(r, 1));
 
     if (!e->name.data) {
         fail(r);
     }
 
-    return wrap(e);
+    return wrap(r->thunk, e);
 }
 
 static void *
@@ -269,13 +283,13 @@ r_named(parse_reduce_t *r)
 {
     parse_infer_expr_t *e = expr_new(PARSE_INFER_NAMED);
 
-    e->name = kid_text(r, 0);
+    e->name = dup_text(kid_text(r, 0));
 
     if (!e->name.data) {
         fail(r);
     }
 
-    return wrap(e);
+    return wrap(r->thunk, e);
 }
 
 static void *
@@ -289,7 +303,7 @@ r_spread(parse_reduce_t *r)
         fail(r);
     }
 
-    return wrap(e);
+    return wrap(r->thunk, e);
 }
 
 static size_t
@@ -326,7 +340,7 @@ r_args(parse_reduce_t *r)
 
     holder->n_args = collect(r, &holder->args);
 
-    return wrap(holder);
+    return wrap(r->thunk, holder);
 }
 
 static void *
@@ -335,7 +349,7 @@ r_named_app(parse_reduce_t *r)
     parse_infer_expr_t *e    = expr_new(PARSE_INFER_NAMED_APP);
     parse_infer_expr_t *args = kid_expr(r, 2);
 
-    e->name = kid_text(r, 0);
+    e->name = dup_text(kid_text(r, 0));
 
     if (args) {
         e->args   = args->args;
@@ -347,7 +361,7 @@ r_named_app(parse_reduce_t *r)
         fail(r);
     }
 
-    return wrap(e);
+    return wrap(r->thunk, e);
 }
 
 static void *
@@ -372,7 +386,7 @@ r_child_app(parse_reduce_t *r)
         }
     }
 
-    return wrap(e);
+    return wrap(r->thunk, e);
 }
 
 static void *
@@ -391,7 +405,7 @@ r_fetch(parse_reduce_t *r)
         fail(r);
     }
 
-    return wrap(e);
+    return wrap(r->thunk, e);
 }
 
 static void *
@@ -428,7 +442,7 @@ r_project(parse_reduce_t *r)
         fail(r);
     }
 
-    return wrap(e);
+    return wrap(r->thunk, e);
 }
 
 static void
@@ -467,13 +481,19 @@ install(parse_tree_walk_t *w, in_ctx *c)
 parse_infer_lower_t *
 parse_infer_lower_new(void)
 {
-    return core_alloc(parse_infer_lower_t);
+    parse_infer_lower_t *l = core_alloc(parse_infer_lower_t);
+    l->nodes = core_list_new(in_node_ptr_t);
+    return l;
 }
 
 void
 parse_infer_lower_free(parse_infer_lower_t *l)
 {
     if (l) {
+        for (size_t i = 0; i < l->nodes.len; i++) {
+            core_free(l->nodes.data[i]);
+        }
+        core_list_free(l->nodes);
         core_free(l);
     }
 }
@@ -516,9 +536,9 @@ parse_infer_parse(core_string_t expr)
     parse_scanner_t      *sc  = nullptr;
     parse_token_stream_t *ts  = parse_annot_lex(expr, &buf, &sc);
 
-    parse_grammar_set_start(g, parse_nonterm(g, CORE_STRING_STATIC("infer-expr")));
-
-    parse_pwz_parser_t *p   = parse_pwz_new(g);
+    parse_nt_id_t start = parse_nonterm_id(
+        parse_nonterm(g, CORE_STRING_STATIC("infer-expr")));
+    parse_pwz_parser_t *p   = parse_pwz_new_for_start(g, start);
     parse_infer_expr_t *out = nullptr;
 
     if (parse_pwz_parse(p, ts)) {
@@ -589,6 +609,8 @@ parse_infer_free(parse_infer_expr_t *e)
     if (e->args) {
         core_free(e->args);
     }
+
+    core_free(e->name.data);
 
     core_free(e);
 }

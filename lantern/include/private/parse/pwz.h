@@ -93,6 +93,8 @@ struct pwz_exp_t {
         parse_char_class_t cc;
         const parse_match_set_t *set;
     };
+    core_string_t contextual_spelling;
+    int32_t       match_tid;
     pwz_exp_kind_t kind;
     int16_t         rule_ix;
     int16_t         nchildren;
@@ -117,6 +119,17 @@ core_list_decl(pwz_zipper_t);
 typedef parse_tree_t *parse_tree_ptr_t;
 core_list_decl(parse_tree_ptr_t);
 
+typedef struct {
+    pwz_exp_t *exp;
+    int32_t    pos;
+    int32_t    score;
+    int32_t    end_pos;
+    bool       visiting;
+    bool       done;
+} pwz_score_entry_t;
+
+core_list_decl(pwz_score_entry_t);
+
 typedef enum {
     PWZ_STEP_DD,
     PWZ_STEP_DDP,
@@ -139,6 +152,7 @@ core_list_decl(pwz_step_t);
 
 struct parse_pwz_parser_t {
     parse_grammar_t              *grammar;
+    parse_nt_id_t                 start_nt;
     pwz_exp_t                   *start_exp;
     pwz_exp_ptr_t               *nt_exps;
     core_list_t(pwz_exp_ptr_t)   all_exps;
@@ -149,6 +163,10 @@ struct parse_pwz_parser_t {
     core_list_t(pwz_zipper_t)    worklist_swap;
     core_list_t(pwz_exp_ptr_t)   tops;
     core_list_t(pwz_step_t)      steps;
+    core_list_t(pwz_score_entry_t) score_cache;
+    int32_t                    *score_index;
+    size_t                      score_index_cap;
+    bool                        score_cache_enabled;
 
     pwz_exp_t                  *longest_top;
     int32_t                     longest_end;
@@ -165,4 +183,10 @@ struct parse_pwz_parser_t {
 
     parse_pwz_disambig_fn         disambig_cb;
     void                       *disambig_ud;
+    uint32_t                    score_evaluations;
+    uint32_t                    score_predicate_calls;
+    uint32_t                    score_tie_count;
 };
+
+/* Test/diagnostic hook; normal parsers keep score memoization enabled. */
+void parse_pwz_set_score_cache_enabled(parse_pwz_parser_t *p, bool enabled);

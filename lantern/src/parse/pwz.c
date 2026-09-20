@@ -111,12 +111,17 @@ register_exp(parse_pwz_parser_t *p, pwz_exp_t *e)
 }
 
 static pwz_exp_t *
-make_tok_exp(parse_pwz_parser_t *p, int64_t tid)
+make_tok_exp(parse_pwz_parser_t *p, parse_grammar_t *g, int64_t tid)
 {
     pwz_exp_t *e = core_alloc(pwz_exp_t);
+    int32_t contextual = parse_contextual_source_tid(g, tid);
 
-    e->kind    = PWZ_TOK;
-    e->tid = tid;
+    e->kind      = PWZ_TOK;
+    e->tid       = tid;
+    e->match_tid = contextual ? contextual : (int32_t)tid;
+    if (contextual) {
+        e->contextual_spelling = parse_terminal_name(g, tid);
+    }
 
     register_exp(p, e);
     return e;
@@ -233,7 +238,7 @@ build_seq_children(parse_pwz_parser_t *p,
             break;
 
         case PARSE_MATCH_TERMINAL:
-            children[ix++] = make_tok_exp(p, item->terminal_id);
+            children[ix++] = make_tok_exp(p, p->grammar, item->terminal_id);
             break;
 
         case PARSE_MATCH_CLASS:
@@ -394,7 +399,8 @@ expand_group_nt(parse_pwz_parser_t *p, parse_grammar_t *g, int64_t nt_id)
 }
 
 static void
-build_exp_graph(parse_pwz_parser_t *p, parse_grammar_t *g)
+build_exp_graph(parse_pwz_parser_t *p, parse_grammar_t *g,
+                parse_nt_id_t start)
 {
     int32_t num_nts = (int32_t)core_list_len(g->nt_list);
 
@@ -433,7 +439,7 @@ build_exp_graph(parse_pwz_parser_t *p, parse_grammar_t *g)
         }
     }
 
-    p->start_exp = p->nt_exps[g->default_start];
+    p->start_exp = p->nt_exps[start];
 }
 
 static void
@@ -568,8 +574,17 @@ token_matches(parse_token_info_t *tok, pwz_exp_t *exp)
     }
 
     switch (exp->kind) {
-    case PWZ_TOK:
-        return tok->tid == (int32_t)exp->tid;
+    case PWZ_TOK: {
+        if (tok->tid != exp->match_tid) {
+            return false;
+        }
+        if (!exp->contextual_spelling.data) {
+            return true;
+        }
+        return core_option_is_set(tok->value)
+            && core_string_eq(core_option_get(tok->value),
+                              exp->contextual_spelling);
+    }
 
     case PWZ_CLASS:
         return parse_codepoint_matches_class(tok->tid, exp->cc);
@@ -623,7 +638,8 @@ run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
             pwz_exp_t *result = alloc_result_exp(p);
 
             result->kind    = exp->kind;
-            result->tid = tok->tid;
+            result->tid     = tok->tid;
+            result->match_tid = tok->tid;
 
             core_list_push(p->worklist_swap,
                            ((pwz_zipper_t){.result = result,
@@ -912,6 +928,16 @@ run_parse(parse_pwz_parser_t *p)
         size_t wl_len = core_list_len(p->worklist);
 
         if (wl_len == 0) {
+            int32_t trailing = pos;
+            parse_token_info_t *tok = get_token(p, trailing);
+            while (tok && tok->ignore_if_no_match) {
+                tok = get_token(p, ++trailing);
+            }
+            if (!tok && p->longest_top && p->longest_end == pos) {
+                core_list_clear(p->tops);
+                core_list_push(p->tops, p->longest_top);
+                return true;
+            }
             p->error_pos = pos;
             return false;
         }
@@ -919,10 +945,22 @@ run_parse(parse_pwz_parser_t *p)
         int32_t complete_pos = pos + 1;
 
         bool have_next = (scan_stream_get(p->stream, complete_pos) != nullptr);
+        parse_token_info_t *input = get_token(p, complete_pos);
 
         for (size_t i = 0; i < wl_len; i++) {
             pwz_zipper_t *z = &p->worklist.data[i];
+            size_t before = p->worklist_swap.len;
+            size_t before_tops = p->tops.len;
             d_u(p, complete_pos, z->result, z->mem);
+            if (input && input->ignore_if_no_match
+                && p->worklist_swap.len == before
+                && p->tops.len == before_tops) {
+                core_list_push(p->worklist_swap,
+                               ((pwz_zipper_t){
+                                   .result = z->result,
+                                   .mem = mem_retain(z->mem),
+                               }));
+            }
         }
 
         for (size_t i = 0; i < wl_len; i++) {
@@ -1086,9 +1124,117 @@ typedef struct {
 
 core_list_decl(score_frame_t);
 
+static size_t
+score_slot(pwz_exp_t *exp, int32_t pos, size_t cap)
+{
+    uint64_t h = (uint64_t)(uintptr_t)exp ^ ((uint64_t)(uint32_t)pos << 32);
+
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+
+    return (size_t)h & (cap - 1);
+}
+
+static void
+score_index_place(parse_pwz_parser_t *p, size_t entry_ix)
+{
+    pwz_score_entry_t *e = &p->score_cache.data[entry_ix];
+    size_t             i = score_slot(e->exp, e->pos, p->score_index_cap);
+
+    while (p->score_index[i] >= 0) {
+        i = (i + 1) & (p->score_index_cap - 1);
+    }
+
+    p->score_index[i] = (int32_t)entry_ix;
+}
+
+static void
+score_index_grow(parse_pwz_parser_t *p)
+{
+    size_t cap = p->score_index_cap ? p->score_index_cap * 2 : 1024;
+
+    core_free(p->score_index);
+    p->score_index = core_alloc_array(int32_t, cap);
+    p->score_index_cap = cap;
+
+    for (size_t i = 0; i < cap; i++) {
+        p->score_index[i] = -1;
+    }
+
+    for (size_t i = 0; i < p->score_cache.len; i++) {
+        score_index_place(p, i);
+    }
+}
+
+static void
+score_cache_clear(parse_pwz_parser_t *p)
+{
+    core_list_clear(p->score_cache);
+
+    for (size_t i = 0; i < p->score_index_cap; i++) {
+        p->score_index[i] = -1;
+    }
+}
+
+static void
+score_cache_free(parse_pwz_parser_t *p)
+{
+    core_list_free(p->score_cache);
+    core_free(p->score_index);
+    p->score_index = nullptr;
+    p->score_index_cap = 0;
+}
+
+static pwz_score_entry_t *
+score_cache_entry(parse_pwz_parser_t *p, pwz_exp_t *exp, int32_t pos)
+{
+    if (!p->score_cache_enabled) {
+        core_list_push(p->score_cache,
+                       ((pwz_score_entry_t){.exp = exp, .pos = pos}));
+        return &p->score_cache.data[p->score_cache.len - 1];
+    }
+
+    if (p->score_index_cap == 0) {
+        score_index_grow(p);
+    }
+
+    size_t i = score_slot(exp, pos, p->score_index_cap);
+
+    while (p->score_index[i] >= 0) {
+        pwz_score_entry_t *entry = &p->score_cache.data[p->score_index[i]];
+
+        if (entry->exp == exp && entry->pos == pos) {
+            return entry;
+        }
+
+        i = (i + 1) & (p->score_index_cap - 1);
+    }
+
+    core_list_push(p->score_cache,
+                   ((pwz_score_entry_t){.exp = exp, .pos = pos}));
+
+    size_t entry_ix = p->score_cache.len - 1;
+
+    if ((entry_ix + 1) * 2 > p->score_index_cap) {
+        score_index_grow(p);
+    }
+    else {
+        p->score_index[i] = (int32_t)entry_ix;
+    }
+
+    return &p->score_cache.data[entry_ix];
+}
+
 static int32_t
 score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
 {
+    if (p->score_evaluations < UINT32_MAX) {
+        p->score_evaluations++;
+    }
+
     core_list_t(score_frame_t) frames = core_list_new(score_frame_t);
     int32_t                   last   = 0;
 
@@ -1106,15 +1252,38 @@ score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
                 continue;
             }
 
+            pwz_score_entry_t *cached = score_cache_entry(p, f->exp, *pos);
+
+            if (cached->done) {
+                last = cached->score;
+                *pos = cached->end_pos;
+                frames.len--;
+                continue;
+            }
+
+            if (cached->visiting) {
+                last = INT32_MAX / 4;
+                frames.len--;
+                continue;
+            }
+
+            cached->visiting = true;
+
             if (f->exp->kind == PWZ_TOK || f->exp->kind == PWZ_CLASS
                 || f->exp->kind == PWZ_ANY || f->exp->kind == PWZ_SET) {
                 (*pos)++;
                 last = 0;
+                cached = score_cache_entry(p, f->exp, *pos - 1);
+                cached->score = 0;
+                cached->end_pos = *pos;
+                cached->visiting = false;
+                cached->done = true;
                 frames.len--;
                 continue;
             }
 
             if (f->exp->kind == PWZ_SEQ) {
+                f->from = *pos;
                 parse_rule_t *rule = exp_to_rule(p, f->exp);
 
                 if (rule && rule->disambig_predicate.data && p->disambig_cb) {
@@ -1122,13 +1291,24 @@ score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
 
                     if (p->disambig_cb(p->disambig_ud,
                                        rule->disambig_predicate.data, tok)) {
+                        if (p->score_predicate_calls < UINT32_MAX) {
+                            p->score_predicate_calls++;
+                        }
                         f->cost += rule->disambig_cost;
+                    }
+                    else if (p->score_predicate_calls < UINT32_MAX) {
+                        p->score_predicate_calls++;
                     }
                 }
             }
             else {
                 if (core_list_len(f->exp->alt.alts) == 0) {
                     last = 0;
+                    cached = score_cache_entry(p, f->exp, *pos);
+                    cached->score = 0;
+                    cached->end_pos = *pos;
+                    cached->visiting = false;
+                    cached->done = true;
                     frames.len--;
                     continue;
                 }
@@ -1138,7 +1318,13 @@ score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
             }
         }
         else if (f->exp->kind == PWZ_SEQ) {
-            f->cost += last;
+            if (f->cost >= INT32_MAX / 4 || last >= INT32_MAX / 4
+                || f->cost > INT32_MAX / 4 - last) {
+                f->cost = INT32_MAX / 4;
+            }
+            else {
+                f->cost += last;
+            }
         }
         else if (last <= f->cost) {
             f->cost     = last;
@@ -1170,6 +1356,12 @@ score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
             *pos = f->best_end;
         }
         last = f->cost;
+
+        pwz_score_entry_t *cached = score_cache_entry(p, f->exp, f->from);
+        cached->score = last;
+        cached->end_pos = *pos;
+        cached->visiting = false;
+        cached->done = true;
         frames.len--;
     }
 
@@ -1198,6 +1390,10 @@ resolve_alts(parse_pwz_parser_t *p, pwz_exp_t *exp, int32_t pos)
                 int32_t c  = score_exp(p, exp->alt.alts.data[i], &p2);
 
                 if (c <= best) {
+                    if (i > 0 && c == best
+                        && p->score_tie_count < UINT32_MAX) {
+                        p->score_tie_count++;
+                    }
                     best = c;
                     pick = i;
                 }
@@ -1355,6 +1551,8 @@ static parse_tree_t *
 build_result_tree(parse_pwz_parser_t *p, pwz_exp_t *top_result)
 {
     tree_convert_state_t st = {.pos = 0, .parser = p};
+
+    score_cache_clear(p);
 
     return convert_exp_to_tree(p, top_result, &st);
 }
@@ -1514,18 +1712,25 @@ enumerate_trees(parse_pwz_parser_t   *p,
 }
 
 parse_pwz_parser_t *
-parse_pwz_new(parse_grammar_t *g)
+parse_pwz_new_for_start(parse_grammar_t *g, parse_nt_id_t start)
 {
+    if (!g || start < 0 || (size_t)start >= core_list_len(g->nt_list)) {
+        return nullptr;
+    }
+
     parse_grammar_finalize(g);
 
     parse_pwz_parser_t *p = core_alloc(parse_pwz_parser_t);
 
     p->grammar       = g;
+    p->start_nt      = start;
     core_arena_init(&p->parse_arena, CORE_ARENA_DEFAULT_BLOCK_SIZE);
     p->all_exps      = core_list_new(pwz_exp_ptr_t);
     p->worklist      = core_list_new(pwz_zipper_t);
     p->worklist_swap = core_list_new(pwz_zipper_t);
     p->tops          = core_list_new(pwz_exp_ptr_t);
+    p->score_cache   = core_list_new(pwz_score_entry_t);
+    p->score_cache_enabled = true;
     p->disambig_cb   = nullptr;
     p->disambig_ud   = nullptr;
 
@@ -1536,9 +1741,20 @@ parse_pwz_new(parse_grammar_t *g)
     p->mem_bottom->start_pos = PWZ_POS_BOTTOM;
     p->mem_bottom->end_pos   = PWZ_POS_BOTTOM;
 
-    build_exp_graph(p, g);
+    build_exp_graph(p, g, start);
 
     return p;
+}
+
+void
+parse_pwz_set_score_cache_enabled(parse_pwz_parser_t *p, bool enabled)
+{
+    if (!p) {
+        return;
+    }
+
+    p->score_cache_enabled = enabled;
+    score_cache_clear(p);
 }
 
 void
@@ -1574,10 +1790,18 @@ parse_pwz_free(parse_pwz_parser_t *p)
     core_list_free(p->worklist_swap);
     core_list_free(p->tops);
     core_list_free(p->steps);
+    score_cache_free(p);
 
     if (p->result_trees.data) {
+        for (size_t i = 0; i < p->result_trees.len; i++) {
+            if (p->result_trees.data[i] == p->result_tree) {
+                p->result_tree = nullptr;
+            }
+            parse_tree_free(p->result_trees.data[i]);
+        }
         core_array_free(p->result_trees);
     }
+    parse_tree_free(p->result_tree);
 
     core_free(p);
 }
@@ -1600,6 +1824,20 @@ parse_pwz_release_parse_state(parse_pwz_parser_t *p)
 void
 parse_pwz_reset(parse_pwz_parser_t *p)
 {
+    if (!p) {
+        return;
+    }
+    if (p->result_trees.data) {
+        for (size_t i = 0; i < p->result_trees.len; i++) {
+            if (p->result_trees.data[i] == p->result_tree) {
+                p->result_tree = nullptr;
+            }
+            parse_tree_free(p->result_trees.data[i]);
+        }
+        core_array_free(p->result_trees);
+    }
+    parse_tree_free(p->result_tree);
+
     reset_memos(p);
     core_arena_reset(&p->parse_arena);
     p->free_mems = nullptr;
@@ -1610,6 +1848,9 @@ parse_pwz_reset(parse_pwz_parser_t *p)
     p->result_tree  = nullptr;
     p->result_trees = (parse_tree_array_t){0};
     p->error_pos    = -1;
+    p->score_evaluations = 0;
+    p->score_predicate_calls = 0;
+    p->score_tie_count = 0;
 }
 
 bool
@@ -1692,6 +1933,17 @@ parse_pwz_reextract(parse_pwz_parser_t *p)
         return p ? p->result_tree : nullptr;
     }
 
+    if (p->result_trees.data) {
+        for (size_t i = 0; i < p->result_trees.len; i++) {
+            if (p->result_trees.data[i] == p->result_tree) {
+                p->result_tree = nullptr;
+            }
+            parse_tree_free(p->result_trees.data[i]);
+        }
+        core_array_free(p->result_trees);
+        p->result_trees = (parse_tree_array_t){0};
+    }
+    parse_tree_free(p->result_tree);
     p->result_tree = build_result_tree(p, p->tops.data[0]);
 
     return p->result_tree;
@@ -1712,6 +1964,19 @@ parse_pwz_get_trees(parse_pwz_parser_t *p)
     }
 
     if (ntops == 1) {
+        int32_t total = count_trees_in_exp(p->tops.data[0]);
+        if (total <= 1) {
+            p->result_trees = core_array_new(parse_tree_ptr_t, 1);
+            core_array_set(p->result_trees, 0,
+                           p->result_tree
+                               ? p->result_tree
+                               : build_result_tree(p, p->tops.data[0]));
+            p->result_tree = p->result_trees.data[0];
+            return p->result_trees;
+        }
+
+        parse_tree_free(p->result_tree);
+        p->result_tree = nullptr;
         parse_tree_ptr_t *raw_trees = nullptr;
         int32_t                raw_count = 0;
 
@@ -1728,6 +1993,8 @@ parse_pwz_get_trees(parse_pwz_parser_t *p)
         }
     }
     else {
+        parse_tree_free(p->result_tree);
+        p->result_tree = nullptr;
         p->result_trees = core_array_new(parse_tree_ptr_t, (int32_t)ntops);
 
         for (size_t i = 0; i < ntops; i++) {
@@ -1743,16 +2010,40 @@ parse_forest_t
 parse_pwz_get_forest(parse_pwz_parser_t *p)
 {
     parse_tree_array_t trees = parse_pwz_get_trees(p);
-
-    return parse_forest_new(p->grammar, trees);
+    parse_forest_t forest = parse_forest_new(p->grammar, trees);
+    p->result_tree = nullptr;
+    p->result_trees = (parse_tree_array_t){0};
+    return forest;
 }
 
 parse_forest_t
 parse_pwz_parse_grammar(parse_grammar_t      *g,
+                        parse_nt_id_t         start,
                         parse_token_stream_t *ts)
 {
-    parse_pwz_parser_t *p = parse_pwz_new(g);
+    return parse_pwz_parse_grammar_at(g, start, ts, nullptr);
+}
+
+parse_forest_t
+parse_pwz_parse_grammar_at(parse_grammar_t      *g,
+                           parse_nt_id_t         start,
+                           parse_token_stream_t *ts,
+                           int32_t              *error_pos)
+{
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(g, start);
+
+    if (!p) {
+        if (error_pos) {
+            *error_pos = -1;
+        }
+        return parse_forest_empty(g);
+    }
+
     bool               ok = parse_pwz_parse(p, ts);
+
+    if (error_pos) {
+        *error_pos = parse_pwz_error_pos(p);
+    }
 
     if (!ok) {
         parse_pwz_free(p);
@@ -1761,7 +2052,6 @@ parse_pwz_parse_grammar(parse_grammar_t      *g,
 
     parse_forest_t forest = parse_pwz_get_forest(p);
 
-    p->result_trees = (parse_tree_array_t){0};
     parse_pwz_free(p);
 
     return forest;

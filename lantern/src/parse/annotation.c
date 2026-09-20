@@ -3,6 +3,8 @@
 #include "private/parse/grammar.h"
 #include "lib/alloc.h"
 
+#include <pthread.h>
+
 #include <string.h>
 
 static const char *const kind_spellings[PARSE_ANNOT_KIND_COUNT] = {
@@ -43,6 +45,7 @@ parse_annot_clone(const parse_annotation_t *a)
     c->infer_ast = parse_infer_clone(a->infer_ast);
 
     c->args_text          = core_string_dup(a->args_text);
+    c->source_origin      = core_string_dup(a->source_origin);
     c->scope_tag          = core_string_dup(a->scope_tag);
     c->type_spec          = core_string_dup(a->type_spec);
     c->infer_expr         = core_string_dup(a->infer_expr);
@@ -116,6 +119,7 @@ parse_annot_free(parse_annotation_t *a)
 
     core_string_t owned[] = {
         a->args_text,
+        a->source_origin,
         a->mutability,
         a->ns_name,
         a->direction,
@@ -226,7 +230,9 @@ parse_grammar_annotate(parse_grammar_t *g, parse_annotation_t *a)
     }
 
     core_list_push(g->annotations, a);
+    pthread_mutex_lock(&g->annot_cache_lock);
     core_cache_invalidate(&g->annot_cache);
+    pthread_mutex_unlock(&g->annot_cache_lock);
 }
 
 size_t
@@ -250,10 +256,15 @@ parse_grammar_find_annot(parse_grammar_t *g, parse_annot_kind_t kind)
 {
     void *hit = nullptr;
 
-    if (g
-        && core_cache_get(&g->annot_cache, g, PARSE_QUERY_GRAMMAR_ANNOT,
-                          (uint64_t)kind, &hit)) {
-        return (parse_annotation_t *)hit;
+    if (g) {
+        pthread_mutex_lock(&g->annot_cache_lock);
+        bool found = core_cache_get(&g->annot_cache, g,
+                                    PARSE_QUERY_GRAMMAR_ANNOT,
+                                    (uint64_t)kind, &hit);
+        pthread_mutex_unlock(&g->annot_cache_lock);
+        if (found) {
+            return (parse_annotation_t *)hit;
+        }
     }
 
     size_t              n   = parse_grammar_annot_count(g);
@@ -268,8 +279,10 @@ parse_grammar_find_annot(parse_grammar_t *g, parse_annot_kind_t kind)
     }
 
     if (g) {
+        pthread_mutex_lock(&g->annot_cache_lock);
         core_cache_put(&g->annot_cache, g, PARSE_QUERY_GRAMMAR_ANNOT,
                        (uint64_t)kind, out);
+        pthread_mutex_unlock(&g->annot_cache_lock);
     }
 
     return out;
@@ -313,10 +326,15 @@ parse_rule_find_annot(parse_grammar_t *g, const parse_rule_t *rule,
 {
     void *hit = nullptr;
 
-    if (g && rule
-        && core_cache_get(&g->annot_cache, (void *)rule,
-                          PARSE_QUERY_RULE_ANNOT, (uint64_t)kind, &hit)) {
-        return (parse_annotation_t *)hit;
+    if (g && rule) {
+        pthread_mutex_lock(&g->annot_cache_lock);
+        bool found = core_cache_get(&g->annot_cache, (void *)rule,
+                                    PARSE_QUERY_RULE_ANNOT,
+                                    (uint64_t)kind, &hit);
+        pthread_mutex_unlock(&g->annot_cache_lock);
+        if (found) {
+            return (parse_annotation_t *)hit;
+        }
     }
 
     parse_annotation_t *out = nullptr;
@@ -330,8 +348,10 @@ parse_rule_find_annot(parse_grammar_t *g, const parse_rule_t *rule,
     }
 
     if (g && rule) {
+        pthread_mutex_lock(&g->annot_cache_lock);
         core_cache_put(&g->annot_cache, (void *)rule, PARSE_QUERY_RULE_ANNOT,
                        (uint64_t)kind, out);
+        pthread_mutex_unlock(&g->annot_cache_lock);
     }
 
     return out;
@@ -344,10 +364,15 @@ parse_nt_find_annot(parse_grammar_t       *g,
 {
     void *hit = nullptr;
 
-    if (g && nt
-        && core_cache_get(&g->annot_cache, (void *)nt,
-                          PARSE_QUERY_NT_ANNOT, (uint64_t)kind, &hit)) {
-        return (parse_annotation_t *)hit;
+    if (g && nt) {
+        pthread_mutex_lock(&g->annot_cache_lock);
+        bool found = core_cache_get(&g->annot_cache, (void *)nt,
+                                    PARSE_QUERY_NT_ANNOT,
+                                    (uint64_t)kind, &hit);
+        pthread_mutex_unlock(&g->annot_cache_lock);
+        if (found) {
+            return (parse_annotation_t *)hit;
+        }
     }
 
     size_t              n   = parse_nt_annot_count(nt);
@@ -367,8 +392,10 @@ parse_nt_find_annot(parse_grammar_t       *g,
     }
 
     if (g && nt) {
+        pthread_mutex_lock(&g->annot_cache_lock);
         core_cache_put(&g->annot_cache, (void *)nt, PARSE_QUERY_NT_ANNOT,
                        (uint64_t)kind, out);
+        pthread_mutex_unlock(&g->annot_cache_lock);
     }
 
     return out;

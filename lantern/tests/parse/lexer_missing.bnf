@@ -1,0 +1,3 @@
+@lexer("lexer_does_not_exist.lex")
+
+<file> ::= %"x"

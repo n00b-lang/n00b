@@ -1,11 +1,4 @@
-@lex-comment("//")
-@lex-comment("/*", "*/", nested)
-@lex-string('"""', '"""', multiline, as("MULTILINE_STRING"))
-@lex-string('"', '"', escape('\\'), as("STRING"))
-@lex-string("'", "'", escape('\\'), as("CHAR"))
-@lex-number(radix("0x", "0123456789abcdefABCDEF"), radix("0b", "01"), sep("_"), exp("eE"), int("INTEGER"), float("FLOAT"), suffix("L", "INTEGER"), suffix("f", "FLOAT"), suffix("u", "INTEGER"))
-@lex-ident(as("IDENTIFIER"))
-@lex-layout(newline("NL"), eof("EOF"), brackets("()[]"))
+@lexer("kotlin.lex")
 
 # ============================================================================
 # Kotlin Grammar (Syntactic)

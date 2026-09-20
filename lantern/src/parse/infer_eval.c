@@ -148,6 +148,35 @@ named_is(const th_type *t, const char *want)
     return nlen == strlen(want) && !memcmp(nm, want, nlen);
 }
 
+static bool
+leaf_has_text(parse_tree_t *leaf, void *arg)
+{
+    (void)arg;
+
+    parse_token_info_t *tok = core_tree_leaf_value(leaf);
+
+    return tok && core_option_is_set(tok->value)
+        && core_option_get(tok->value).u8_bytes;
+}
+
+static core_string_t
+last_text(parse_tree_t *node)
+{
+    parse_tree_t *leaf = parse_tree_scan_leaves(node, true, leaf_has_text,
+                                                 nullptr);
+
+    return leaf ? core_option_get(core_tree_leaf_value(leaf)->value)
+                : (core_string_t){0};
+}
+
+static bool
+text_is(core_string_t text, const char *want)
+{
+    size_t n = strlen(want);
+
+    return text.u8_bytes == n && !memcmp(text.data, want, n);
+}
+
 static th_type *
 project(ictx *c, parse_infer_proj_t op, int32_t ix)
 {
@@ -161,7 +190,13 @@ project(ictx *c, parse_infer_proj_t op, int32_t ix)
     case PARSE_INFER_RETURN_OF: {
         th_type *r = th_func_ret(t);
 
-        return r ? r : t;
+        if (r) {
+            return r;
+        }
+
+        th_kind kind = th_kind_of(t);
+
+        return kind == TH_NAMED || kind == TH_RECORD ? t : fresh(c);
     }
 
     case PARSE_INFER_ELEMENT_OF: {
@@ -173,6 +208,9 @@ project(ictx *c, parse_infer_proj_t op, int32_t ix)
 
         if (named_is(t, "dict")) {
             e = named_arg_last(t);
+        }
+        else if (named_is(t, "string")) {
+            e = t;
         }
         else {
             e = named_arg_first(t);
@@ -198,8 +236,42 @@ project(ictx *c, parse_infer_proj_t op, int32_t ix)
         return inner;
     }
 
-    case PARSE_INFER_METHOD_RETURN:
-        return fresh(c);
+    case PARSE_INFER_METHOD_RETURN: {
+        core_string_t name = last_text(c->v->node);
+
+        if (!name.data) {
+            return fresh(c);
+        }
+
+        if (named_is(t, "option") || named_is(t, "result")) {
+            if (text_is(name, "is_set?") || text_is(name, "ok?")
+                || text_is(name, "is_ok?")) {
+                return th_name(c->tc, "bool");
+            }
+            if (text_is(name, "unwrap")) {
+                th_type *inner = named_arg_first(t);
+
+                return inner ? inner : fresh(c);
+            }
+        }
+
+        char *method_name = core_alloc_array(char, name.u8_bytes + 1);
+
+        memcpy(method_name, name.data, name.u8_bytes);
+        method_name[name.u8_bytes] = 0;
+
+        th_type *signature = th_method_lookup(c->tc, t, method_name);
+
+        if (!signature) {
+            signature = th_record_lookup(t, method_name);
+        }
+
+        th_type *ret = signature ? th_func_ret(signature) : nullptr;
+
+        core_free(method_name);
+
+        return ret ? ret : fresh(c);
+    }
     }
 
     return fresh(c);
@@ -396,6 +468,34 @@ parse_infer_eval(const parse_infer_expr_t *e,
 
     if (!e || !v || !tc) {
         return nullptr;
+    }
+
+    parse_tree_t *first_leaf = parse_tree_scan_leaves(v->node, false, nullptr,
+                                                       nullptr);
+    parse_tree_t *last_leaf  = parse_tree_scan_leaves(v->node, true, nullptr,
+                                                       nullptr);
+    parse_token_info_t *first = first_leaf ? core_tree_leaf_value(first_leaf)
+                                           : nullptr;
+    parse_token_info_t *last  = last_leaf ? core_tree_leaf_value(last_leaf)
+                                          : first;
+
+    if (first) {
+        const char *file = core_option_is_set(first->file)
+                               ? core_option_get(first->file).data
+                               : nullptr;
+
+        th_ctx_set_span(tc,
+                        (th_span_t){.file = file,
+                                    .start_line = first->line,
+                                    .start_col = first->column,
+                                    .end_line = last && last->endline
+                                                    ? last->endline
+                                                    : last ? last->line
+                                                           : first->line,
+                                    .end_col = last && last->endcol
+                                                   ? last->endcol
+                                                   : last ? last->column + 1
+                                                          : first->column + 1});
     }
 
     ictx c = {.tc = tc, .st = st, .v = v, .tvars = core_list_new(tvar_t)};

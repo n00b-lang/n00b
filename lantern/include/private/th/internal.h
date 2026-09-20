@@ -25,9 +25,16 @@ typedef struct {
     th_type    *methods;
 } th_iface;
 
+typedef struct {
+    th_type    *receiver;
+    const char *name;
+    th_type    *signature;
+} th_method;
+
 core_list_decl(th_constraint);
 core_list_decl(th_promo);
 core_list_decl(th_iface);
+core_list_decl(th_method);
 
 struct th_type {
     th_kind kind;
@@ -100,6 +107,7 @@ struct th_ctx {
     uint64_t               next_var;
     core_list_t(th_promo)   promos;
     core_list_t(th_iface)   ifaces;
+    core_list_t(th_method)  methods;
     core_dict_t            *promo_index;
     core_dict_t            *iface_index;
     core_list_t(th_error_t) errors;

@@ -39,11 +39,16 @@ typedef struct aa_node {
     parse_tree_t *tree;
     struct aa_node   *items[AA_MAX];
     size_t            n;
+    bool              owns_str;
 } aa_node;
 
+typedef aa_node *aa_node_ptr_t;
+core_list_decl(aa_node_ptr_t);
+
 typedef struct {
-    bool         failed;
-    core_string_t region;
+    bool                     failed;
+    core_string_t            region;
+    core_list_t(aa_node_ptr_t) nodes;
 } aa_ctx;
 
 static void
@@ -84,12 +89,17 @@ dup(core_string_t s)
 
 
 static aa_node *
-aa_new(aa_tag tag)
+aa_new(parse_reduce_t *r, aa_tag tag)
 {
     aa_node *n = core_alloc(aa_node);
 
     n->magic = AA_MAGIC;
     n->tag   = tag;
+
+    aa_ctx *c = r ? r->thunk : nullptr;
+    if (c) {
+        core_list_push(c->nodes, n);
+    }
 
     return n;
 }
@@ -122,7 +132,7 @@ fail(parse_reduce_t *r)
 static void *
 r_leaf(parse_reduce_t *r)
 {
-    aa_node *n = aa_new(AA_LEAF);
+    aa_node *n = aa_new(r, AA_LEAF);
 
     n->i   = (int32_t)parse_tree_leaf_tid(r->node);
     n->str = parse_tree_leaf_text(r->node);
@@ -133,7 +143,7 @@ r_leaf(parse_reduce_t *r)
 static void *
 r_ref(parse_reduce_t *r)
 {
-    aa_node *n    = aa_new(AA_REF);
+    aa_node *n    = aa_new(r, AA_REF);
     aa_node *what = kid(r, 1);
 
     n->ref = PARSE_CHILD_NONE;
@@ -154,7 +164,7 @@ r_ref(parse_reduce_t *r)
 static void *
 r_tag(parse_reduce_t *r)
 {
-    aa_node *n  = aa_new(AA_TAG);
+    aa_node *n  = aa_new(r, AA_TAG);
     aa_node *lf = kid(r, 0);
 
     n->str = lf ? lf->str : (core_string_t){0};
@@ -165,7 +175,7 @@ r_tag(parse_reduce_t *r)
 static void *
 r_int(parse_reduce_t *r)
 {
-    aa_node *n  = aa_new(AA_INT);
+    aa_node *n  = aa_new(r, AA_INT);
     aa_node *lf = kid(r, 0);
 
     n->i = lf && lf->str.data ? (int32_t)strtol(lf->str.data, nullptr, 10) : 0;
@@ -176,7 +186,7 @@ r_int(parse_reduce_t *r)
 static void *
 r_infer(parse_reduce_t *r)
 {
-    aa_node *n = aa_new(AA_INFER);
+    aa_node *n = aa_new(r, AA_INFER);
 
     n->infer = parse_infer_reduced(r->n_kids ? r->kids[0] : nullptr);
 
@@ -191,7 +201,7 @@ static void *
 r_type(parse_reduce_t *r)
 {
     aa_ctx  *c  = r->thunk;
-    aa_node *n  = aa_new(AA_TYPE);
+    aa_node *n  = aa_new(r, AA_TYPE);
     size_t   lo = (size_t)-1;
     size_t   hi = 0;
 
@@ -199,6 +209,7 @@ r_type(parse_reduce_t *r)
 
     if (lo < hi && c && c->region.data && hi <= c->region.u8_bytes) {
         n->str = core_string_from_raw(c->region.data + lo, (int64_t)(hi - lo));
+        n->owns_str = true;
     }
     else {
         fail(r);
@@ -211,7 +222,7 @@ static void *
 r_pred(parse_reduce_t *r)
 {
     aa_ctx  *c  = r->thunk;
-    aa_node *n  = aa_new(AA_PRED);
+    aa_node *n  = aa_new(r, AA_PRED);
     size_t   lo = (size_t)-1;
     size_t   hi = 0;
 
@@ -219,6 +230,7 @@ r_pred(parse_reduce_t *r)
 
     if (lo < hi && c && c->region.data && hi <= c->region.u8_bytes) {
         n->str = core_string_from_raw(c->region.data + lo, (int64_t)(hi - lo));
+        n->owns_str = true;
     }
     else {
         fail(r);
@@ -231,7 +243,7 @@ static void *
 r_span(parse_reduce_t *r)
 {
     aa_ctx  *c  = r->thunk;
-    aa_node *n  = aa_new(AA_TAG);
+    aa_node *n  = aa_new(r, AA_TAG);
     size_t   lo = (size_t)-1;
     size_t   hi = 0;
 
@@ -239,6 +251,7 @@ r_span(parse_reduce_t *r)
 
     if (lo < hi && c && c->region.data && hi <= c->region.u8_bytes) {
         n->str = core_string_from_raw(c->region.data + lo, (int64_t)(hi - lo));
+        n->owns_str = true;
     }
     else {
         fail(r);
@@ -290,7 +303,7 @@ con_kind_of(core_string_t op, bool *ok)
 static void *
 r_con(parse_reduce_t *r)
 {
-    aa_node *n = aa_new(AA_CON);
+    aa_node *n = aa_new(r, AA_CON);
     bool     named = false;
 
     for (size_t i = 0; i < r->n_kids; i++) {
@@ -319,6 +332,7 @@ r_con(parse_reduce_t *r)
             if (!ok) {
                 n->i   = (int32_t)TH_CON_IMPLEMENTS;
                 n->str = dup(k->str);
+                n->owns_str = true;
             }
 
             named = true;
@@ -327,6 +341,7 @@ r_con(parse_reduce_t *r)
 
         if (n->i == (int32_t)TH_CON_HAS_FIELD && !n->str.data) {
             n->str = dup(k->str);
+            n->owns_str = true;
         }
         else if (n->i == (int32_t)TH_CON_HAS_PARAM && k->str.data) {
             n->index = (uint64_t)strtoull(k->str.data, nullptr, 10);
@@ -339,7 +354,7 @@ r_con(parse_reduce_t *r)
 static void *
 r_con_list(parse_reduce_t *r)
 {
-    aa_node *n = aa_new(AA_ARGS);
+    aa_node *n = aa_new(r, AA_ARGS);
 
     for (size_t i = 0; i < r->n_kids; i++) {
         aa_node *k = as_aa(r->kids[i]);
@@ -374,16 +389,17 @@ r_lex_opt(parse_reduce_t *r)
 
     fail(r);
 
-    return aa_new(AA_LEXOPT);
+    return aa_new(r, AA_LEXOPT);
 }
 
 static void *
 r_lex_flag(parse_reduce_t *r)
 {
-    aa_node *n  = aa_new(AA_LEXOPT);
+    aa_node *n  = aa_new(r, AA_LEXOPT);
     aa_node *lf = kid(r, 0);
 
     n->str = lf ? dup(lf->str) : (core_string_t){0};
+    n->owns_str = n->str.data != nullptr;
 
     return n;
 }
@@ -415,10 +431,11 @@ aa_splice(parse_reduce_t *r, aa_node *n, aa_node *from)
 static void *
 r_lex_call(parse_reduce_t *r)
 {
-    aa_node *n  = aa_new(AA_LEXOPT);
+    aa_node *n  = aa_new(r, AA_LEXOPT);
     aa_node *lf = kid(r, 0);
 
     n->str = lf ? dup(lf->str) : (core_string_t){0};
+    n->owns_str = n->str.data != nullptr;
 
     for (size_t i = 1; i < r->n_kids; i++) {
         aa_node *k = as_aa(r->kids[i]);
@@ -441,7 +458,7 @@ r_lex_call(parse_reduce_t *r)
 static void *
 r_lex_args(parse_reduce_t *r)
 {
-    aa_node *n = aa_new(AA_ARGS);
+    aa_node *n = aa_new(r, AA_ARGS);
 
     for (size_t i = 0; i < r->n_kids; i++) {
         aa_node *k = as_aa(r->kids[i]);
@@ -464,7 +481,7 @@ r_lex_args(parse_reduce_t *r)
 static void *
 r_lex_opts(parse_reduce_t *r)
 {
-    aa_node *n = aa_new(AA_ARGS);
+    aa_node *n = aa_new(r, AA_ARGS);
 
     for (size_t i = 0; i < r->n_kids; i++) {
         aa_node *k = as_aa(r->kids[i]);
@@ -487,7 +504,7 @@ r_lex_opts(parse_reduce_t *r)
 static void *
 r_args(parse_reduce_t *r)
 {
-    aa_node *n = aa_new(AA_ARGS);
+    aa_node *n = aa_new(r, AA_ARGS);
 
     for (size_t i = 0; i < r->n_kids; i++) {
         aa_node *k = as_aa(r->kids[i]);
@@ -557,16 +574,31 @@ static struct {
     {PARSE_ANNOT_ALIGNMENT,  CORE_STRING_STATIC("a-val")},
     {PARSE_ANNOT_OFFSET,     CORE_STRING_STATIC("a-val")},
     {PARSE_ANNOT_WIDTH,      CORE_STRING_STATIC("a-val")},
+    {PARSE_ANNOT_LEXER,      CORE_STRING_STATIC("a-tag")},
     {PARSE_ANNOT_LEX_COMMENT, CORE_STRING_STATIC("a-lex")},
     {PARSE_ANNOT_LEX_STRING,  CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_STRING_FAMILY, CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_STRING_ESCAPES, CORE_STRING_STATIC("a-lex")},
     {PARSE_ANNOT_LEX_NUMBER,  CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_NUMBER_SUFFIXES, CORE_STRING_STATIC("a-lex")},
     {PARSE_ANNOT_LEX_LAYOUT,  CORE_STRING_STATIC("a-lex")},
     {PARSE_ANNOT_LEX_SIGIL,   CORE_STRING_STATIC("a-lex")},
     {PARSE_ANNOT_LEX_REGEX,   CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_HEREDOC_HEADER, CORE_STRING_STATIC("a-lex")},
     {PARSE_ANNOT_LEX_HEREDOC, CORE_STRING_STATIC("a-lex")},
     {PARSE_ANNOT_LEX_IDENT,   CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_IDENT_PROFILE, CORE_STRING_STATIC("a-lex")},
     {PARSE_ANNOT_LEX_EMBED,   CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_FENCE,   CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_USE,     CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_LEX_OPERATOR_SET, CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_OPERATORS, CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_WHITESPACE, CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_FALLBACK, CORE_STRING_STATIC("a-lex")},
     {PARSE_ANNOT_LEX_DIRECTIVE, CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_LITERAL_HOOK, CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_RECOVER, CORE_STRING_STATIC("a-lex")},
+    {PARSE_ANNOT_LEX_SOFT_KEYWORDS, CORE_STRING_STATIC("a-lex")},
 };
 
 core_string_t
@@ -623,7 +655,12 @@ arg_ref(aa_node *args, size_t i)
 {
     aa_node *a = i < args->n ? args->items[i] : nullptr;
 
-    return a && a->tag == AA_REF ? a->ref : PARSE_CHILD_NONE;
+    if (!a || a->tag != AA_REF) {
+        return PARSE_CHILD_NONE;
+    }
+    parse_child_ref_t result = a->ref;
+    result.name = dup(a->ref.name);
+    return result;
 }
 
 static core_string_t
@@ -650,21 +687,24 @@ arg_is(aa_node *args, size_t i, aa_tag tag)
 }
 
 static void
-free_args(aa_node *n)
+free_args(aa_ctx *c)
 {
-    if (!n) {
+    if (!c) {
         return;
     }
 
-    for (size_t i = 0; i < n->n; i++) {
-        free_args(n->items[i]);
-    }
-
-    if (n->infer) {
+    for (size_t i = 0; i < c->nodes.len; i++) {
+        aa_node *n = c->nodes.data[i];
         parse_infer_free(n->infer);
+        if (n->owns_str) {
+            core_free(n->str.data);
+        }
+        if (n->tag == AA_REF) {
+            core_free(n->ref.name.data);
+        }
+        core_free(n);
     }
-
-    core_free(n);
+    core_list_free(c->nodes);
 }
 
 static void
@@ -803,6 +843,8 @@ decode(parse_annotation_t *a, aa_node *args)
 
     case PARSE_ANNOT_JUMP:
     case PARSE_ANNOT_TOKENIZER:
+    case PARSE_ANNOT_LEXER:
+    case PARSE_ANNOT_LEX_USE:
         a->scope_tag = arg_tag(args, 0);
         break;
 
@@ -875,14 +917,27 @@ decode(parse_annotation_t *a, aa_node *args)
 
     case PARSE_ANNOT_LEX_COMMENT:
     case PARSE_ANNOT_LEX_STRING:
+    case PARSE_ANNOT_LEX_STRING_FAMILY:
+    case PARSE_ANNOT_LEX_STRING_ESCAPES:
     case PARSE_ANNOT_LEX_NUMBER:
+    case PARSE_ANNOT_LEX_NUMBER_SUFFIXES:
     case PARSE_ANNOT_LEX_LAYOUT:
     case PARSE_ANNOT_LEX_SIGIL:
     case PARSE_ANNOT_LEX_REGEX:
+    case PARSE_ANNOT_LEX_HEREDOC_HEADER:
     case PARSE_ANNOT_LEX_HEREDOC:
     case PARSE_ANNOT_LEX_IDENT:
+    case PARSE_ANNOT_LEX_IDENT_PROFILE:
     case PARSE_ANNOT_LEX_EMBED:
+    case PARSE_ANNOT_LEX_FENCE:
+    case PARSE_ANNOT_LEX_OPERATOR_SET:
+    case PARSE_ANNOT_LEX_OPERATORS:
+    case PARSE_ANNOT_LEX_WHITESPACE:
+    case PARSE_ANNOT_LEX_FALLBACK:
     case PARSE_ANNOT_LEX_DIRECTIVE:
+    case PARSE_ANNOT_LEX_LITERAL_HOOK:
+    case PARSE_ANNOT_LEX_RECOVER:
+    case PARSE_ANNOT_LEX_SOFT_KEYWORDS:
         decode_lex(a, args && args->n ? args->items[0] : nullptr);
         break;
 
@@ -965,13 +1020,15 @@ parse_annot_parse_args(parse_annotation_t *a, core_string_t text)
         return false;
     }
 
-    parse_grammar_set_start(g, start);
-
-    parse_pwz_parser_t *p  = parse_pwz_new(g);
+    parse_pwz_parser_t *p
+        = parse_pwz_new_for_start(g, parse_nonterm_id(start));
     bool              ok = false;
 
     if (parse_pwz_parse(p, ts)) {
-        aa_ctx             c  = {.region = text};
+        aa_ctx             c  = {
+            .region = text,
+            .nodes = core_list_new(aa_node_ptr_t),
+        };
         parse_infer_lower_t *il = parse_infer_lower_new();
         parse_tree_walk_t   *w  = parse_tree_walk_new(g, &c);
 
@@ -990,7 +1047,7 @@ parse_annot_parse_args(parse_annotation_t *a, core_string_t text)
             }
         }
 
-        free_args(args);
+        free_args(&c);
         parse_infer_lower_free(il);
     }
 

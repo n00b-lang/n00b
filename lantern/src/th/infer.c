@@ -184,6 +184,63 @@ void th_register_iface(th_ctx *ctx, const char *name, th_type *methods)
                    (void *)(uintptr_t)ctx->ifaces.len);
 }
 
+bool th_register_method(th_ctx *ctx, th_type *receiver, const char *name,
+                        th_type *signature)
+{
+    if (!ctx || !receiver || !name || !*name || !signature) {
+        return false;
+    }
+
+    receiver = (th_type *)(uintptr_t)th_resolve_c(receiver);
+
+    for (size_t i = 0; i < ctx->methods.len; i++) {
+        th_method *method = &ctx->methods.data[i];
+
+        if (method->receiver == receiver && !strcmp(method->name, name)) {
+            method->signature = signature;
+
+            return true;
+        }
+    }
+
+    core_list_push(ctx->methods,
+                   ((th_method){.receiver = receiver,
+                                .name = th_strdup(ctx, name, strlen(name)),
+                                .signature = signature}));
+
+    return true;
+}
+
+th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name)
+{
+    if (!ctx || !receiver || !name || !*name) {
+        return nullptr;
+    }
+
+    receiver = (th_type *)(uintptr_t)th_resolve_c(receiver);
+
+    for (size_t i = 0; i < ctx->methods.len; i++) {
+        th_method *method = &ctx->methods.data[i];
+
+        if (method->receiver == receiver && !strcmp(method->name, name)) {
+            return method->signature;
+        }
+    }
+
+    uint64_t receiver_hash = th_hash(ctx, receiver);
+
+    for (size_t i = 0; i < ctx->methods.len; i++) {
+        th_method *method = &ctx->methods.data[i];
+
+        if (!strcmp(method->name, name)
+            && th_hash(ctx, method->receiver) == receiver_hash) {
+            return method->signature;
+        }
+    }
+
+    return nullptr;
+}
+
 static const th_iface *iface_named(th_ctx *ctx, const char *name)
 {
     if (!ctx->iface_index) {

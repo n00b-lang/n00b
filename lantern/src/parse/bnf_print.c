@@ -79,15 +79,22 @@ same_annots(const parse_rule_t *a, const parse_rule_t *b)
 static void put_items(core_buffer_t *b, parse_grammar_t *g,
                       const core_list_t(parse_match_t) *items);
 
-static void
-put_group(core_buffer_t *b, parse_grammar_t *g, const parse_rule_group_t *grp)
+static bool
+is_bnf_anon(const parse_nonterm_t *nt)
 {
-    parse_nonterm_t *body = parse_get_nonterm(g, grp->contents_id);
+    static const char prefix[] = "$$bnf_anon_";
 
+    return nt && nt->name.data && nt->name.u8_bytes >= sizeof(prefix) - 1
+           && !memcmp(nt->name.data, prefix, sizeof(prefix) - 1);
+}
+
+static void
+put_bnf_anon(core_buffer_t *b, parse_grammar_t *g, const parse_nonterm_t *nt)
+{
     core_buffer_putc(b, '(');
 
-    for (size_t i = 0; body && i < core_list_len(body->rule_ids); i++) {
-        parse_rule_t *r = parse_get_rule(g, body->rule_ids.data[i]);
+    for (size_t i = 0; i < core_list_len(nt->rule_ids); i++) {
+        parse_rule_t *r = parse_get_rule(g, nt->rule_ids.data[i]);
 
         if (i) {
             core_buffer_puts(b, " | ");
@@ -99,6 +106,42 @@ put_group(core_buffer_t *b, parse_grammar_t *g, const parse_rule_group_t *grp)
     }
 
     core_buffer_putc(b, ')');
+}
+
+static void
+put_group(core_buffer_t *b, parse_grammar_t *g, const parse_rule_group_t *grp)
+{
+    parse_nonterm_t *body = parse_get_nonterm(g, grp->contents_id);
+    parse_rule_t    *only = body && core_list_len(body->rule_ids) == 1
+                              ? parse_get_rule(g, body->rule_ids.data[0])
+                              : nullptr;
+    parse_match_t   *item = only && core_list_len(only->contents) == 1
+                              ? &only->contents.data[0]
+                              : nullptr;
+    parse_nonterm_t *anon = item && item->kind == PARSE_MATCH_NT
+                              ? parse_get_nonterm(g, item->nt_id)
+                              : nullptr;
+
+    if (is_bnf_anon(anon)) {
+        put_bnf_anon(b, g, anon);
+    }
+    else {
+        core_buffer_putc(b, '(');
+
+        for (size_t i = 0; body && i < core_list_len(body->rule_ids); i++) {
+            parse_rule_t *r = parse_get_rule(g, body->rule_ids.data[i]);
+
+            if (i) {
+                core_buffer_puts(b, " | ");
+            }
+
+            if (r) {
+                put_items(b, g, &r->contents);
+            }
+        }
+
+        core_buffer_putc(b, ')');
+    }
 
     if (grp->min == 0 && grp->max == 1) {
         core_buffer_putc(b, '?');
@@ -177,9 +220,14 @@ put_items(core_buffer_t *b, parse_grammar_t *g,
         case PARSE_MATCH_NT: {
             parse_nonterm_t *nt = parse_get_nonterm(g, m->nt_id);
 
-            core_buffer_putc(b, '<');
-            put_str(b, nt ? nt->name : core_string_empty());
-            core_buffer_putc(b, '>');
+            if (is_bnf_anon(nt)) {
+                put_bnf_anon(b, g, nt);
+            }
+            else {
+                core_buffer_putc(b, '<');
+                put_str(b, nt ? nt->name : core_string_empty());
+                core_buffer_putc(b, '>');
+            }
             break;
         }
 

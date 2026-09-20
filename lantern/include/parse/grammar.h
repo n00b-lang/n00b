@@ -6,10 +6,6 @@
 
 parse_grammar_t *parse_grammar_new(void);
 void            parse_grammar_free(parse_grammar_t *g);
-void            parse_grammar_set_start_id(parse_grammar_t *g, parse_nt_id_t nt_id);
-
-#define parse_grammar_set_start(g, nt) \
-    parse_grammar_set_start_id((g), parse_nonterm_id(nt))
 void            parse_grammar_set_error_recovery(parse_grammar_t *g, bool enable);
 void            parse_grammar_set_max_penalty(parse_grammar_t *g, uint32_t max);
 void            parse_grammar_finalize(parse_grammar_t *g);

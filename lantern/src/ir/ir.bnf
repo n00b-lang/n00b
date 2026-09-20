@@ -18,13 +18,22 @@
 <meta-decl>    ::= %"meta" <annot> <nl>
 <type-decl>    ::= %"type" <name> %"=" <typelang-type> <nl>
 
-<layout-decl> @hardline($4) @indent($4) @hardline($5) ::=
-%"layout" <typelang-type> %"{" <nl> <layout-item>* %"}" <nl>
+<layout-decl> @hardline($5) @indent($5) @hardline($6) ::=
+%"layout" <typelang-type> <layout-target>? %"{" <nl> <layout-item>* %"}" <nl>
+
+<layout-target> ::= %"for" %STRING_LIT | %"without" %"target"
 
 <layout-item> @nospace($4) @nospace($5) @nospace($6) ::= %"size" %"=" <layout-val> <nl>
                 | %"align" %"=" <layout-val> <nl>
                 | %"stride" %"=" <layout-val> <nl>
                 | <name> %"@" %"bits" <layout-val> %"." %"." <layout-val> <nl>
+                | %"indirect" %"=" <indirect-kind> <nl>
+                | %"words" %"=" <layout-val> <nl>
+                | %"variant" %"tag" %"@" %"bits" <layout-val> %"." %"." <layout-val> <nl>
+                | %"niche" %"=" <layout-bool> <nl>
+
+<indirect-kind> ::= %"thin" | %"fat"
+<layout-bool> ::= %"false" | %"true"
 
 <layout-val> ::= <int> | <symbolic-expr>
 
@@ -130,6 +139,8 @@
 <name> ::= %IDENTIFIER
          | %"module" | %"profile" | %"target" | %"meta" | %"type"
          | %"layout" | %"size" | %"align" | %"stride" | %"bits"
+         | %"without" | %"indirect" | %"words" | %"tag" | %"niche"
+         | %"thin" | %"fat"
          | %"sizeof" | %"alignof" | %"offsetof"
          | %"global" | %"func" | %"local" | %"block"
          | %"static" | %"extern" | %"default" | %"from"

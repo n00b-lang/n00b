@@ -1,17 +1,4 @@
-@lex-comment("#")
-@lex-heredoc("<<~", as("HEREDOC"), strip)
-@lex-heredoc("<<-", as("HEREDOC"), strip)
-@lex-string('"', '"', escape('\\'), as("STRING"))
-@lex-string("'", "'", escape('\\'), as("STRING"))
-@lex-string("%q(", ")", as("Q"))
-@lex-string("%w(", ")", as("Q"))
-@lex-regex("/", "/", flags("imxounse"), as("REGEX"))
-@lex-sigil("@@", as("CVAR"))
-@lex-sigil("@", as("IVAR"))
-@lex-sigil("$", as("GVAR"))
-@lex-number(radix("0x", "0123456789abcdefABCDEF"), radix("0b", "01"), sep("_"), exp("eE"), int("INTEGER"), float("FLOAT"))
-@lex-ident(as("IDENTIFIER"), extra("?!"), upper("CONSTANT"))
-@lex-layout(continue('\\'), brackets("()[]"), terminator("NEWLINE", "end break next redo retry return"))
+@lexer("ruby.lex")
 
 # Ruby 3.x Grammar
 #

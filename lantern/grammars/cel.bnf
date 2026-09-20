@@ -1,13 +1,4 @@
-@lex-comment("//")
-@lex-string('"', '"', escape('\\'), as("STRING"))
-@lex-string("'", "'", escape('\\'), as("STRING"))
-@lex-string('"""', '"""', escape('\\'), multiline, as("STRING"))
-@lex-string('b"', '"', escape('\\'), as("BYTES"))
-@lex-string("r'", "'", raw, as("STRING"))
-@lex-string('r"', '"', raw, as("STRING"))
-@lex-number(radix("0x", "0123456789abcdefABCDEF"), exp("eE"), int("INTEGER"), float("FLOAT"), suffix("u", "UINT"), suffix("U", "UINT"))
-@lex-ident(as("IDENTIFIER"))
-@lex-layout(brackets("()[]{}"))
+@lexer("cel.lex")
 
 # Google Common Expression Language (CEL) Grammar
 # Based on the CEL Language Definition

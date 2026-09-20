@@ -2,8 +2,26 @@
 
 #include "parse/grammar.h"
 
+typedef struct {
+    const char *message;
+    size_t      start_byte;
+    size_t      end_byte;
+    uint32_t    start_line;
+    uint32_t    start_col;
+    uint32_t    end_line;
+    uint32_t    end_col;
+} parse_bnf_error_info_t;
+
 extern bool parse_bnf_load(core_string_t bnf_text, core_string_t start_symbol,
                            parse_grammar_t *user_g);
+extern bool parse_bnf_load_with_origin(core_string_t bnf_text,
+                                       const char *origin,
+                                       core_string_t start_symbol,
+                                       parse_grammar_t *user_g);
+extern bool parse_bnf_load_file(const char *path, core_string_t start_symbol,
+                                parse_grammar_t *user_g);
+extern const char *parse_bnf_error(void);
+extern bool parse_bnf_error_info(parse_bnf_error_info_t *out);
 extern size_t       parse_bnf_declare_terminals(parse_grammar_t *g,
                                               core_string_t bnf_text);
 extern int32_t      parse_bnf_last_unit(void);

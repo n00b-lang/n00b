@@ -5,6 +5,8 @@
 #include "lib/dict.h"
 #include "lib/cache.h"
 
+#include <pthread.h>
+
 core_list_decl(parse_match_t);
 core_list_decl(parse_terminal_t);
 core_list_decl(parse_rule_t);
@@ -35,7 +37,6 @@ struct parse_nonterm_t {
     bool                             group_nt;
     bool                             empty_is_error;
     bool                             error_nulled;
-    bool                             start_nt;
     bool                             finalized;
     bool                             nullable;
     bool                             no_error_rule;
@@ -70,7 +71,6 @@ struct parse_grammar_t {
     core_list_t(parse_nonterm_ptr_t) nt_list;
     core_dict_t           *nt_map;
     core_dict_t           *terminal_map;
-    int32_t                        default_start;
     core_string_t                   tokenizer_name;
     uint32_t                       max_penalty;
     bool                           error_rules;
@@ -88,11 +88,29 @@ struct parse_grammar_t {
 
     core_list_t(core_string_t) terminal_categories;
     bool                      has_terminal_categories;
+    core_list_t(int32_t)      contextual_sources;
 
     core_list_t(parse_annotation_ptr_t) annotations;
 
     core_cache_t annot_cache;
+    pthread_mutex_t annot_cache_lock;
 };
+
+static inline int32_t
+parse_contextual_source_tid(const parse_grammar_t *g, int64_t terminal_id)
+{
+    int64_t ix = terminal_id - PARSE_TOK_START_ID - 1;
+
+    if (!g || ix < 0 || (size_t)ix >= g->contextual_sources.len) {
+        return 0;
+    }
+
+    return g->contextual_sources.data[ix];
+}
+
+void parse_grammar_prepare_contextual(parse_grammar_t *g,
+                                      const core_string_t *spellings,
+                                      core_string_t source_name);
 
 static inline parse_nonterm_t *
 parse_get_nonterm(parse_grammar_t *g, int64_t id)

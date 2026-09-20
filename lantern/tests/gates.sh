@@ -290,7 +290,7 @@ kinds="$(sed -n '/#define PARSE_ANNOT_KINDS/,/^$/p' "$ann_h" \
 consumers="$(ls "$root"/src/*/*.c 2>/dev/null \
              | grep -vE '/(annotation|annot_args|annot_grammar|bnf|bnf_print)\.c$')"
 
-at_build_time="PENALTY DISAMBIG TOKENIZER"
+at_build_time="PENALTY DISAMBIG TOKENIZER LEX_USE"
 
 expected_unconsumed=""
 

@@ -582,6 +582,30 @@ static void test_a_constrained_var_prints_its_bound(void)
     th_ctx_free(ctx);
 }
 
+static void test_methods_are_attached_to_receiver_types(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_member field = {.name = "value", .type = th_name(ctx, "int")};
+    th_type *receiver = th_record(ctx, &field, 1);
+    th_type *signature = th_func(ctx, th_name(ctx, "string"), nullptr, 0,
+                                 nullptr, nullptr, 0);
+
+    check("a method signature registers on its receiver",
+          th_register_method(ctx, receiver, "render", signature));
+    check("the registered signature is found by receiver and name",
+          th_method_lookup(ctx, receiver, "render") == signature);
+
+    th_member same_field = {.name = "value", .type = th_name(ctx, "int")};
+    th_type *equivalent = th_record(ctx, &same_field, 1);
+
+    check("an equivalent receiver spelling finds the same method",
+          th_method_lookup(ctx, equivalent, "render") == signature);
+    check("a different method name does not match",
+          th_method_lookup(ctx, receiver, "missing") == nullptr);
+
+    th_ctx_free(ctx);
+}
+
 int main(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -608,6 +632,7 @@ int main(void)
     test_errors_accumulate_with_their_own_spans();
     test_failures_name_what_went_wrong();
     test_a_constrained_var_prints_its_bound();
+    test_methods_are_attached_to_receiver_types();
 
     return report("th constraints");
 }

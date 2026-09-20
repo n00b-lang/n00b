@@ -4,6 +4,13 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 
+if [ "$(uname -s)" = Darwin ] && [ -z "${SDKROOT:-}" ]; then
+    if command -v xcrun >/dev/null 2>&1; then
+        SDKROOT="$(xcrun --show-sdk-path)"
+        export SDKROOT
+    fi
+fi
+
 usage() {
     cat <<'USAGE'
 Usage: ./build.sh [command] [args]

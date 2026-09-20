@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -85,7 +86,7 @@ parse_bnf_strip_comments(core_string_t input)
 
     result[ri] = '\0';
 
-    return core_string_from_raw(result, (int64_t)ri);
+    return core_string_borrow(result, ri);
 }
 
 core_string_t
@@ -133,7 +134,7 @@ parse_bnf_trim_lines(core_string_t input)
 
     result[ri] = '\0';
 
-    return core_string_from_raw(result, (int64_t)ri);
+    return core_string_borrow(result, ri);
 }
 
 static core_string_t
@@ -147,8 +148,43 @@ bnf_join_continuations(core_string_t input)
     const char *src    = input.data;
     char       *result = core_alloc_array(char, len + 1);
     size_t      ri     = 0;
+    bool        in_sq  = false;
+    bool        in_dq  = false;
+    bool        escape = false;
+    bool        annotation = false;
+    size_t      annotation_depth = 0;
 
     for (size_t i = 0; i < len; i++) {
+        char c = src[i];
+
+        if (escape) {
+            escape = false;
+        }
+        else if ((in_sq || in_dq) && c == '\\') {
+            escape = true;
+        }
+        else if (!in_dq && c == '\'') {
+            in_sq = !in_sq;
+        }
+        else if (!in_sq && c == '"') {
+            in_dq = !in_dq;
+        }
+        else if (!in_sq && !in_dq) {
+            if (c == '@' && !annotation_depth) {
+                annotation = true;
+            }
+            else if (annotation && c == '(') {
+                annotation_depth++;
+            }
+            else if (annotation_depth && c == ')') {
+                annotation_depth--;
+
+                if (!annotation_depth) {
+                    annotation = false;
+                }
+            }
+        }
+
         if (src[i] == '\n') {
             size_t j = i + 1;
 
@@ -160,10 +196,15 @@ bnf_join_continuations(core_string_t input)
             bool assign_last = ri >= 3 && result[ri - 3] == ':'
                             && result[ri - 2] == ':' && result[ri - 1] == '=';
 
-            if (alt_next || (assign_last && j < len)) {
+            if ((annotation_depth && !in_sq && !in_dq)
+                || alt_next || (assign_last && j < len)) {
                 result[ri++] = ' ';
                 i = j - 1;
                 continue;
+            }
+
+            if (!annotation_depth) {
+                annotation = false;
             }
         }
 
@@ -172,7 +213,7 @@ bnf_join_continuations(core_string_t input)
 
     result[ri] = '\0';
 
-    return core_string_from_raw(result, (int64_t)ri);
+    return core_string_borrow(result, ri);
 }
 
 enum {
@@ -198,7 +239,7 @@ enum {
     BNF_TOK_INT        = PARSE_TOK_START_ID + 20,
 };
 
-static char bnf_empty_lit[192];
+static _Thread_local char bnf_empty_lit[192];
 
 static bool
 is_bnf_hws(core_codepoint_t cp, void *ctx)
@@ -293,8 +334,8 @@ bnf_scan(parse_scanner_t *s)
                 scan_advance(s);
             }
 
-            scan_emit(s, BNF_TOK_TOKEN_LIT,
-                           core_option_set(core_string_t, val));
+            scan_emit_owned(s, BNF_TOK_TOKEN_LIT,
+                            core_option_set(core_string_t, val));
             return true;
         }
 
@@ -314,8 +355,8 @@ bnf_scan(parse_scanner_t *s)
             }
 
             core_string_t val = scan_extract(s);
-            scan_emit(s, BNF_TOK_TOKEN_TYPE,
-                           core_option_set(core_string_t, val));
+            scan_emit_owned(s, BNF_TOK_TOKEN_TYPE,
+                            core_option_set(core_string_t, val));
             return true;
         }
 
@@ -357,7 +398,7 @@ bnf_scan(parse_scanner_t *s)
         }
 
         int32_t tid = (val.u8_bytes == 0) ? BNF_TOK_EMPTY_LIT : BNF_TOK_LITERAL;
-        scan_emit(s, tid, core_option_set(core_string_t, val));
+        scan_emit_owned(s, tid, core_option_set(core_string_t, val));
         return true;
     }
 
@@ -381,8 +422,8 @@ bnf_scan(parse_scanner_t *s)
             }
 
             core_string_t val = scan_extract(s);
-            scan_emit(s, BNF_TOK_CLASS,
-                           core_option_set(core_string_t, val));
+            scan_emit_owned(s, BNF_TOK_CLASS,
+                            core_option_set(core_string_t, val));
             return true;
         }
     }
@@ -402,8 +443,8 @@ bnf_scan(parse_scanner_t *s)
 
         core_string_t val = scan_extract(s);
 
-        scan_emit(s, BNF_TOK_INT,
-                       core_option_set(core_string_t, val));
+        scan_emit_owned(s, BNF_TOK_INT,
+                        core_option_set(core_string_t, val));
         return true;
     }
 
@@ -423,8 +464,8 @@ bnf_scan(parse_scanner_t *s)
         }
 
         core_string_t val = scan_extract(s);
-        scan_emit(s, BNF_TOK_NAME,
-                       core_option_set(core_string_t, val));
+        scan_emit_owned(s, BNF_TOK_NAME,
+                        core_option_set(core_string_t, val));
         return true;
     }
 
@@ -459,8 +500,8 @@ bnf_scan(parse_scanner_t *s)
             }
 
             core_string_t val = scan_extract(s);
-            scan_emit(s, BNF_TOK_DOLLAR,
-                           core_option_set(core_string_t, val));
+            scan_emit_owned(s, BNF_TOK_DOLLAR,
+                            core_option_set(core_string_t, val));
             return true;
         }
 
@@ -782,9 +823,45 @@ static const parse_match_set_t bnf_arg_set = {
     .negate = true,
 };
 
-static const char *bnf_src;
-static size_t      bnf_src_len;
-static char        bnf_bad_annot[192];
+static _Thread_local const char *bnf_src;
+static _Thread_local size_t      bnf_src_len;
+static _Thread_local char        bnf_bad_annot[192];
+static _Thread_local char        bnf_error[1024];
+static _Thread_local parse_bnf_error_info_t bnf_error_location;
+
+const char *parse_bnf_error(void)
+{
+    return bnf_error[0] ? bnf_error : nullptr;
+}
+
+bool parse_bnf_error_info(parse_bnf_error_info_t *out)
+{
+    if (!out || !bnf_error[0]) {
+        return false;
+    }
+
+    *out          = bnf_error_location;
+    out->message  = bnf_error;
+
+    return true;
+}
+
+static void
+bnf_error_at_token(parse_token_info_t *tok)
+{
+    bnf_error_location = (parse_bnf_error_info_t){0};
+
+    if (!tok) {
+        return;
+    }
+
+    bnf_error_location.start_byte = tok->start_byte;
+    bnf_error_location.end_byte   = tok->end_byte;
+    bnf_error_location.start_line = tok->line;
+    bnf_error_location.start_col  = tok->column;
+    bnf_error_location.end_line   = tok->endline ? tok->endline : tok->line;
+    bnf_error_location.end_col    = tok->endcol ? tok->endcol : tok->column + 1;
+}
 
 
 static void *
@@ -826,7 +903,9 @@ bnf_walk_annotation(parse_nt_node_t *pn, void *children, void *thunk)
                                                    - lp->end_byte));
         }
 
-        if (!parse_annot_parse_args(info, region) && !bnf_bad_annot[0]) {
+        bool args_ok = parse_annot_parse_args(info, region);
+
+        if (!args_ok && !bnf_bad_annot[0]) {
             snprintf(bnf_bad_annot,
                      sizeof(bnf_bad_annot),
                      "@%s(%.*s)",
@@ -834,6 +913,8 @@ bnf_walk_annotation(parse_nt_node_t *pn, void *children, void *thunk)
                      (int)region.u8_bytes,
                      region.data ? region.data : "");
         }
+
+        core_free(region.data);
     }
     else if (pn->rule_index == 1 && !parse_annot_building()
              && parse_annot_arg_grammar(info->kind).data
@@ -1042,8 +1123,6 @@ build_bnf_grammar(void)
     parse_nonterm_t *arg_body    = parse_nonterm(g, s_arg_body);
     parse_nonterm_t *arg_piece   = parse_nonterm(g, s_arg_piece);
 
-    parse_grammar_set_start(g, syntax);
-
     parse_add_rule(g, syntax, PARSE_NT(rule));
     parse_add_rule(g, syntax, PARSE_NT(rule), PARSE_NT(syntax));
     parse_add_rule(g, syntax, PARSE_TERMINAL(NEWLINE), PARSE_NT(syntax));
@@ -1161,10 +1240,10 @@ token_type_to_id(core_string_t name)
     return parse_builtin_terminal_id(name);
 }
 
-static int bnf_anon_counter = 0;
+static _Atomic int bnf_anon_counter = 0;
 
-static char    bnf_undeclared[512];
-static int32_t bnf_load_unit;
+static _Thread_local char    bnf_undeclared[512];
+static _Thread_local int32_t bnf_load_unit;
 
 static bool
 term_char(char c, bool first)
@@ -1248,7 +1327,7 @@ resolve_term_to_matches(parse_grammar_t *user_g,
     int           cap   = *cap_p;
     char          type  = tagged[0];
     const char   *val   = tagged + 2;
-    core_string_t val_s  = core_string_from_raw(val, (int64_t)strlen(val));
+    core_string_t val_s = core_string_borrow(val, strlen(val));
 
 #define ENSURE_CAP()                                                          \
     do {                                                                      \
@@ -1401,8 +1480,10 @@ resolve_group_to_match(parse_grammar_t    *user_g,
     else {
         char namebuf[64];
         int  n = snprintf(namebuf, sizeof(namebuf),
-                          "$$bnf_anon_%d", bnf_anon_counter++);
-        core_string_t   name_s  = core_string_from_raw(namebuf, n > 0 ? n : 0);
+                          "$$bnf_anon_%d",
+                          atomic_fetch_add(&bnf_anon_counter, 1));
+        core_string_t   name_s  = core_string_borrow(namebuf,
+                                                      n > 0 ? (size_t)n : 0);
         parse_nonterm_t *anon_nt = parse_nonterm(user_g, name_s);
         int64_t         anon_id = anon_nt->id;
 
@@ -1478,9 +1559,143 @@ resolve_terms_to_matches(parse_grammar_t *user_g,
     return n;
 }
 
+static void
+preflight_term(parse_grammar_t *user_g, const char *tagged)
+{
+    if (!tagged || strlen(tagged) < 2 || tagged[0] != 'T') {
+        return;
+    }
+
+    const char   *name = tagged + 2;
+    core_string_t text = core_string_borrow(name, strlen(name));
+
+    if (token_type_to_id(text) || parse_lookup_terminal(user_g, text)) {
+        return;
+    }
+
+    char one[136];
+
+    snprintf(one, sizeof(one), " %%%s", name);
+
+    if (!strstr(bnf_undeclared, one)) {
+        size_t at = strlen(bnf_undeclared);
+
+        snprintf(bnf_undeclared + at, sizeof(bnf_undeclared) - at,
+                 "%s", one);
+    }
+}
+
+static void
+preflight_terms(parse_grammar_t *user_g, bnf_list_t *terms)
+{
+    for (size_t i = 0; terms && i < terms->len; i++) {
+        bnf_result_t *term = slist_get(terms, i);
+
+        if (!term) {
+            continue;
+        }
+
+        if (term->tag == BNF_GROUP) {
+            bnf_group_info_t *group = term->data;
+
+            for (size_t j = 0; group && group->alternatives
+                               && j < group->alternatives->len; j++) {
+                bnf_result_t *alt = slist_get(group->alternatives, j);
+
+                if (alt && alt->tag == BNF_LIST) {
+                    preflight_terms(user_g, alt->data);
+                }
+            }
+        }
+        else {
+            preflight_term(user_g, term->data);
+        }
+    }
+}
+
+static bool
+preflight_grammar(parse_grammar_t *user_g, bnf_result_t *result,
+                  core_string_t start_symbol)
+{
+    if (!result || result->tag != BNF_DICT) {
+        snprintf(bnf_error, sizeof(bnf_error),
+                 "the BNF did not reduce to a grammar");
+
+        return false;
+    }
+
+    bnf_list_t *pairs = result->data;
+
+    if (!pairs || !pairs->len) {
+        snprintf(bnf_error, sizeof(bnf_error),
+                 "the grammar contains no productions");
+
+        return false;
+    }
+
+    bool has_production = false;
+
+    for (size_t i = 0; i < pairs->len; i++) {
+        bnf_result_t *pair_result = slist_get(pairs, i);
+        bnf_list_t   *pair = pair_result ? pair_result->data : nullptr;
+        bnf_result_t *name_result = slist_get(pair, 0);
+        bnf_result_t *expr_result = slist_get(pair, 1);
+        core_string_t *name = name_result ? name_result->data : nullptr;
+
+        if (!name || !name->data || !name->u8_bytes || !expr_result) {
+            continue;
+        }
+
+        has_production = true;
+
+        parse_nonterm_t *existing = parse_find_nonterm(user_g, *name);
+
+        if (existing && core_list_len(existing->rule_ids) > 0
+            && !existing->defined_here) {
+            snprintf(bnf_error,
+                     sizeof(bnf_error),
+                     "<%s> is already defined by a grammar loaded earlier; "
+                     "composing would merge two productions that share a "
+                     "name",
+                     name->data);
+
+            return false;
+        }
+
+        bnf_list_t *alternatives = expr_result->data;
+
+        for (size_t j = 0; alternatives && j < alternatives->len; j++) {
+            bnf_result_t *alternative = slist_get(alternatives, j);
+
+            if (alternative && alternative->tag == BNF_LIST) {
+                preflight_terms(user_g, alternative->data);
+            }
+        }
+    }
+
+    if (!start_symbol.data && !has_production) {
+        snprintf(bnf_error, sizeof(bnf_error),
+                 "the grammar has no production to use as its start symbol");
+
+        return false;
+    }
+
+    if (bnf_undeclared[0]) {
+        snprintf(bnf_error,
+                 sizeof(bnf_error),
+                 "tokens were not registered before loading:%s",
+                 bnf_undeclared);
+
+        return false;
+    }
+
+    return true;
+}
+
 static bool
 populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
-                 core_string_t start_symbol)
+                 core_string_t start_symbol,
+                 core_string_t *resolved_start)
 {
     if (!result || result->tag != BNF_DICT) {
         return false;
@@ -1523,8 +1738,11 @@ populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
         return false;
     }
 
-    parse_nonterm_t *start_nt = parse_nonterm(user_g, start_s);
-    parse_grammar_set_start(user_g, start_nt);
+    if (resolved_start) {
+        *resolved_start = core_string_dup(start_s);
+    }
+
+    parse_nonterm(user_g, start_s);
 
     for (size_t i = 0; i < pairs->len; i++) {
         bnf_result_t  *pair_r = slist_get(pairs, i);
@@ -1568,11 +1786,12 @@ populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
         int64_t       nt_id    = lhs->id;
 
         if (core_list_len(lhs->rule_ids) > 0 && !lhs->defined_here) {
-            fprintf(stderr,
-                    "bnf: <%s> is already defined by a grammar loaded "
-                    "earlier; composing would merge two productions that "
-                    "share a name\n",
-                    name->data ? name->data : "?");
+            snprintf(bnf_error,
+                     sizeof(bnf_error),
+                     "<%s> is already defined by a grammar loaded earlier; "
+                     "composing would merge two productions that share a "
+                     "name",
+                     name->data ? name->data : "?");
 
             return false;
         }
@@ -1719,17 +1938,18 @@ free_bnf_result(bnf_result_t *r)
     }
 
     case BNF_ANNOT:
-        core_free((parse_annotation_t *)r->data);
+        parse_annot_free((parse_annotation_t *)r->data);
         break;
     }
 
     core_free(r);
 }
 
-bool
-parse_bnf_load(core_string_t   bnf_text,
-              core_string_t   start_symbol,
-              parse_grammar_t *user_g)
+static bool
+parse_bnf_load_impl(core_string_t   bnf_text,
+                    core_string_t   start_symbol,
+                    parse_grammar_t *user_g,
+                    core_string_t   *resolved_start)
 {
     if (!bnf_text.data || !user_g) {
         return false;
@@ -1739,7 +1959,10 @@ parse_bnf_load(core_string_t   bnf_text,
         return false;
     }
 
-    static int32_t next_unit = 1;
+    static _Atomic int32_t next_unit = 1;
+
+    bnf_error[0] = 0;
+    bnf_error_location = (parse_bnf_error_info_t){0};
 
     bnf_load_t saved = {
         .unit    = bnf_load_unit,
@@ -1751,23 +1974,26 @@ parse_bnf_load(core_string_t   bnf_text,
     memcpy(saved.bad_annot, bnf_bad_annot, sizeof(saved.bad_annot));
     memcpy(saved.empty_lit, bnf_empty_lit, sizeof(saved.empty_lit));
 
-    bnf_load_unit     = next_unit++;
+    bnf_load_unit     = atomic_fetch_add(&next_unit, 1);
     bnf_undeclared[0] = 0;
     bnf_bad_annot[0]  = 0;
     bnf_empty_lit[0]  = 0;
 
     core_string_t stripped = parse_bnf_strip_comments(bnf_text);
     core_string_t trimmed  = parse_bnf_trim_lines(stripped);
-    trimmed = bnf_join_continuations(trimmed);
+    core_free(stripped.data);
+
+    core_string_t joined = bnf_join_continuations(trimmed);
+    core_free(trimmed.data);
+    trimmed = joined;
 
     size_t len = trimmed.u8_bytes;
 
     if (len > 0 && trimmed.data[len - 1] != '\n') {
-        char *tmp = core_alloc_array(char, len + 2);
-        memcpy(tmp, trimmed.data, len);
-        tmp[len]     = '\n';
-        tmp[len + 1] = '\0';
-        trimmed = core_string_from_raw(tmp, (int64_t)(len + 1));
+        trimmed.data = core_realloc(trimmed.data, len + 2);
+        trimmed.data[len]     = '\n';
+        trimmed.data[len + 1] = '\0';
+        trimmed.u8_bytes      = len + 1;
     }
 
     bnf_src     = trimmed.data;
@@ -1783,10 +2009,14 @@ parse_bnf_load(core_string_t   bnf_text,
     core_list_t(parse_token_info_t) bnf_tl = scan_stream_collect(bnf_ts);
 
     if (core_list_len(bnf_tl) == 0) {
+        snprintf(bnf_error, sizeof(bnf_error),
+                 "the grammar contains no tokens");
         core_list_free(bnf_tl);
         scan_token_stream_free(bnf_ts);
         scan_scanner_free(bnf_sc);
         core_buffer_free(bnf_buf);
+        bnf_restore(&saved);
+        core_free(trimmed.data);
         return false;
     }
 
@@ -1796,10 +2026,27 @@ parse_bnf_load(core_string_t   bnf_text,
     parse_token_stream_t *parse_ts
         = scan_token_stream_from_array(raw_ptrs, bnf_n);
 
-    parse_grammar_t      *meta_g = build_bnf_grammar();
-    parse_forest_t  forest = parse_pwz_parse_grammar(meta_g, parse_ts);
+    parse_grammar_t *meta_g = build_bnf_grammar();
+    int32_t error_pos = -1;
+    parse_nt_id_t meta_start = parse_nonterm_id(
+        parse_find_nonterm(meta_g, CORE_STRING_STATIC("syntax")));
+    parse_forest_t forest = parse_pwz_parse_grammar_at(meta_g, meta_start, parse_ts,
+                                                       &error_pos);
 
     if (parse_forest_count(&forest) < 1) {
+        snprintf(bnf_error, sizeof(bnf_error),
+                 "the grammar is not valid BNF");
+
+        parse_token_info_t *at = nullptr;
+
+        if (bnf_n > 0) {
+            int32_t ix = error_pos < 0 ? 0
+                       : error_pos < bnf_n ? error_pos
+                                           : bnf_n - 1;
+
+            at = raw_ptrs[ix];
+        }
+        bnf_error_at_token(at);
         parse_forest_free(&forest);
         core_free(raw_ptrs);
         scan_token_stream_free(parse_ts);
@@ -1809,41 +2056,44 @@ parse_bnf_load(core_string_t   bnf_text,
         core_buffer_free(bnf_buf);
         parse_grammar_free(meta_g);
         bnf_restore(&saved);
+        core_free(trimmed.data);
         return false;
     }
 
     bnf_result_t *result = (bnf_result_t *)parse_forest_walk_best(
         &forest, nullptr);
 
-    bool success = populate_grammar(user_g, result, start_symbol);
+    bool success = true;
 
     if (bnf_empty_lit[0]) {
-        fprintf(stderr,
-                "bnf: an empty string literal is not a production; write the "
-                "empty case with a group operator instead\n"
-                "     at %s\n"
-                "     <x> ::= \"\"        is rejected\n"
-                "     <y> ::= <x>?      says the same thing, once\n",
-                bnf_empty_lit);
-        success = false;
-    }
-
-    if (success && bnf_undeclared[0]) {
-        fprintf(stderr,
-                "bnf: these tokens are not known to this reader and were not "
-                "registered before loading:%s\n"
-                "     call parse_bnf_declare_terminals() on the grammar text, "
-                "or register each one\n",
-                bnf_undeclared);
+        snprintf(bnf_error,
+                 sizeof(bnf_error),
+                 "an empty string literal is not a production at %s; use an "
+                 "optional group for the empty case",
+                 bnf_empty_lit);
         success = false;
     }
 
     if (success && bnf_bad_annot[0]) {
-        fprintf(stderr,
-                "bnf: %s does not match the argument grammar for that "
-                "annotation\n",
-                bnf_bad_annot);
+        snprintf(bnf_error,
+                 sizeof(bnf_error),
+                 "%s does not match the argument grammar for that annotation",
+                 bnf_bad_annot);
         success = false;
+    }
+
+    if (success) {
+        success = preflight_grammar(user_g, result, start_symbol);
+    }
+
+    if (success) {
+        success = populate_grammar(user_g, result, start_symbol,
+                                   resolved_start);
+    }
+
+    if (!success && !bnf_error[0]) {
+        snprintf(bnf_error, sizeof(bnf_error),
+                 "the grammar could not be loaded");
     }
 
     for (size_t i = 0; success && i < core_list_len(user_g->nt_list); i++) {
@@ -1868,6 +2118,276 @@ parse_bnf_load(core_string_t   bnf_text,
 
     bnf_restore(&saved);
     bnf_load_unit = unit;
+    core_free(trimmed.data);
 
+    return success;
+}
+
+bool
+parse_bnf_load(core_string_t bnf_text, core_string_t start_symbol,
+               parse_grammar_t *user_g)
+{
+    return parse_bnf_load_impl(bnf_text, start_symbol, user_g, nullptr);
+}
+
+static core_string_t
+read_bnf_file(const char *path)
+{
+    FILE *f = path ? fopen(path, "rb") : nullptr;
+
+    if (!f) {
+        return (core_string_t){0};
+    }
+
+    if (fseek(f, 0, SEEK_END) || ftell(f) < 0) {
+        fclose(f);
+
+        return (core_string_t){0};
+    }
+
+    long size = ftell(f);
+
+    if (fseek(f, 0, SEEK_SET)) {
+        fclose(f);
+
+        return (core_string_t){0};
+    }
+
+    char  *data = core_alloc_array(char, (size_t)size + 1);
+    size_t got  = fread(data, 1, (size_t)size, f);
+
+    fclose(f);
+
+    if (got != (size_t)size) {
+        core_free(data);
+
+        return (core_string_t){0};
+    }
+
+    data[got] = '\0';
+
+    return core_string_from_raw(data, (int64_t)got);
+}
+
+static char *
+relative_to(const char *origin, core_string_t imported)
+{
+    if (!origin || !imported.data || !imported.u8_bytes) {
+        return nullptr;
+    }
+
+    if (imported.data[0] == '/') {
+        char *result = core_alloc_array(char, imported.u8_bytes + 1);
+
+        memcpy(result, imported.data, imported.u8_bytes);
+        result[imported.u8_bytes] = '\0';
+
+        return result;
+    }
+
+    const char *slash = strrchr(origin, '/');
+    size_t      base  = slash ? (size_t)(slash - origin + 1) : 0;
+    char       *result = core_alloc_array(char, base + imported.u8_bytes + 1);
+
+    if (base) {
+        memcpy(result, origin, base);
+    }
+
+    memcpy(result + base, imported.data, imported.u8_bytes);
+    result[base + imported.u8_bytes] = '\0';
+
+    return result;
+}
+
+static bool
+load_lexer_file(const char *path, core_string_t start_symbol,
+                parse_grammar_t *grammar, const char **stack, size_t depth)
+{
+    if (depth >= 64) {
+        snprintf(bnf_error, sizeof(bnf_error),
+                 "lexer import depth exceeds 64 at '%s'", path);
+
+        return false;
+    }
+
+    for (size_t i = 0; i < depth; i++) {
+        if (!strcmp(stack[i], path)) {
+            snprintf(bnf_error, sizeof(bnf_error),
+                     "lexer import cycle reaches '%s'", path);
+
+            return false;
+        }
+    }
+
+    core_string_t text = read_bnf_file(path);
+
+    if (!text.data) {
+        snprintf(bnf_error, sizeof(bnf_error), "cannot read lexer '%s'", path);
+
+        return false;
+    }
+
+    stack[depth] = path;
+
+    size_t annot_start = parse_grammar_annot_count(grammar);
+    size_t rules_start = core_list_len(grammar->rules);
+    bool   success     = parse_bnf_load(text, start_symbol, grammar);
+
+    core_free(text.data);
+
+    if (!success) {
+        char reason[sizeof(bnf_error)];
+
+        snprintf(reason, sizeof(reason), "%s",
+                 bnf_error[0] ? bnf_error : "invalid BNF");
+        snprintf(bnf_error, sizeof(bnf_error), "lexer '%s': %.900s",
+                 path, reason);
+        return false;
+    }
+
+    size_t annot_end = parse_grammar_annot_count(grammar);
+
+    for (size_t i = annot_start; i < annot_end; i++) {
+        parse_annotation_t *a = parse_grammar_annot_at(grammar, i);
+        if (a && !a->source_origin.data) {
+            a->source_origin = core_string_from_cstr(path);
+        }
+    }
+
+    if (core_list_len(grammar->rules) != rules_start) {
+        snprintf(bnf_error, sizeof(bnf_error),
+                 "lexer '%s' may contain only lexical declarations", path);
+
+        return false;
+    }
+
+    for (size_t i = annot_start; i < annot_end; i++) {
+        parse_annotation_t *a = parse_grammar_annot_at(grammar, i);
+
+        if (a && (a->kind < PARSE_ANNOT_LEX_COMMENT
+                  || a->kind > PARSE_ANNOT_LEX_SOFT_KEYWORDS)) {
+            snprintf(bnf_error, sizeof(bnf_error),
+                     "lexer '%s' may contain only lexical declarations", path);
+
+            return false;
+        }
+    }
+
+    for (size_t i = annot_start; i < annot_end; i++) {
+        parse_annotation_t *a = parse_grammar_annot_at(grammar, i);
+
+        if (!a || a->kind != PARSE_ANNOT_LEX_USE) {
+            continue;
+        }
+
+        char *fragment_path = relative_to(path, a->scope_tag);
+
+        if (!fragment_path) {
+            snprintf(bnf_error, sizeof(bnf_error),
+                     "lexer '%s' has an empty fragment import", path);
+
+            return false;
+        }
+
+        success = load_lexer_file(fragment_path, start_symbol, grammar,
+                                  stack, depth + 1);
+        core_free(fragment_path);
+
+        if (!success) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool
+parse_bnf_load_with_origin(core_string_t    text,
+                           const char      *origin,
+                           core_string_t    start_symbol,
+                           parse_grammar_t *user_g)
+{
+    if (!text.data || !origin || !user_g) {
+        return false;
+    }
+
+    size_t annot_start = parse_grammar_annot_count(user_g);
+
+    parse_bnf_declare_terminals(user_g, text);
+    core_string_t resolved_start = {0};
+    bool success = parse_bnf_load_impl(text, start_symbol, user_g,
+                                       &resolved_start);
+
+    if (!success) {
+        core_free(resolved_start.data);
+        return false;
+    }
+
+    for (size_t i = annot_start; i < parse_grammar_annot_count(user_g); i++) {
+        parse_annotation_t *a = parse_grammar_annot_at(user_g, i);
+        if (a && !a->source_origin.data) {
+            a->source_origin = core_string_from_cstr(origin);
+        }
+    }
+
+    int32_t grammar_unit = bnf_load_unit;
+    parse_annotation_t *lexer = nullptr;
+
+    for (size_t i = annot_start; i < parse_grammar_annot_count(user_g); i++) {
+        parse_annotation_t *a = parse_grammar_annot_at(user_g, i);
+
+        if (!a || a->kind != PARSE_ANNOT_LEXER) {
+            continue;
+        }
+
+        if (lexer) {
+            snprintf(bnf_error, sizeof(bnf_error),
+                     "grammar '%s' imports more than one lexer", origin);
+
+            core_free(resolved_start.data);
+            return false;
+        }
+
+        lexer = a;
+    }
+
+    if (!lexer) {
+        core_free(resolved_start.data);
+        return true;
+    }
+
+    char *lexer_path = relative_to(origin, lexer->scope_tag);
+    core_string_t import_start = resolved_start;
+
+    const char *stack[64] = {0};
+
+    success = load_lexer_file(lexer_path, import_start, user_g, stack, 0);
+
+    core_free(lexer_path);
+    core_free(resolved_start.data);
+    bnf_load_unit = grammar_unit;
+
+    return success;
+}
+
+bool
+parse_bnf_load_file(const char      *path,
+                    core_string_t    start_symbol,
+                    parse_grammar_t *user_g)
+{
+    if (!path || !user_g) {
+        return false;
+    }
+
+    core_string_t text = read_bnf_file(path);
+
+    if (!text.data) {
+        snprintf(bnf_error, sizeof(bnf_error), "cannot read grammar '%s'", path);
+
+        return false;
+    }
+
+    bool success = parse_bnf_load_with_origin(text, path, start_symbol, user_g);
+    core_free(text.data);
     return success;
 }

@@ -37,10 +37,9 @@ static parse_token_info_t *tk(int64_t tid, const char *text, int i)
 static char *lay_out(parse_grammar_t *g, const char *start,
                      parse_token_info_t **toks, int n, int32_t width)
 {
-    parse_grammar_set_start_id(g, nt_id(g, start));
-
     parse_token_stream_t *ts = scan_token_stream_from_array(toks, n);
-    parse_pwz_parser_t   *p  = parse_pwz_new(g);
+    parse_pwz_parser_t   *p
+        = parse_pwz_new_for_start(g, nt_id(g, start));
     char               *out = nullptr;
 
     if (parse_pwz_parse(p, ts)) {

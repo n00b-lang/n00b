@@ -118,8 +118,8 @@ test_the_builtin_tokenizers(void)
 
     scan_grammar_set_tokenizer(g, S("shell"));
 
-    check("shell: a redirect and a pipe are separate",
-          count_tokens(g, "a > b | c") == 5);
+    check("shell: redirects and pipes precede the synthetic line ending",
+          count_tokens(g, "a > b | c") == 6);
     check("shell: a hash comment is skipped",
           count_tokens(g, "a # note\n") == 2);
 
@@ -165,6 +165,34 @@ test_the_grammar_is_the_operator_table(void)
     check("a keyword is not split out of a longer identifier",
           count_tokens(g, "ax->b") == 3);
 
+    parse_grammar_free(g);
+}
+
+static void
+test_stream_token_to_trivia(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+    scan_grammar_set_tokenizer(g, S("c"));
+    parse_register_terminal(g, S("+"));
+
+    core_buffer_t *buf = nullptr;
+    parse_scanner_t *scanner = nullptr;
+    parse_token_stream_t *stream = scan_tokenize(g, "a + b", 5,
+                                                  &buf, &scanner);
+    parse_token_info_t *last = scan_stream_get(stream, 2);
+    bool converted = scan_stream_token_to_trivia(stream, 1);
+    parse_token_info_t *next = scan_stream_get(stream, 1);
+    parse_trivia_t *trivia = next ? next->leading_trivia : nullptr;
+
+    check("a stream token can be converted to trivia",
+          converted && scan_stream_token_count(stream) == 2
+              && last && next == last);
+    check("token conversion preserves the token spelling as trivia",
+          trivia && core_string_eq(trivia->text, S("+")));
+
+    scan_token_stream_free(stream);
+    scan_scanner_free(scanner);
+    core_buffer_free(buf);
     parse_grammar_free(g);
 }
 
@@ -241,6 +269,7 @@ main(void)
 
     test_the_builtin_tokenizers();
     test_the_grammar_is_the_operator_table();
+    test_stream_token_to_trivia();
 
     return report("fe tokenizer");
 }

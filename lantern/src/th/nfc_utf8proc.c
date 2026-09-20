@@ -28,7 +28,7 @@ static bool nfc(void *state, const char *in, size_t inlen, const char **out,
     return true;
 }
 
-static nfc_state g_nfc;
+static _Thread_local nfc_state g_nfc;
 
 void th_install_nfc(th_ctx *ctx)
 {

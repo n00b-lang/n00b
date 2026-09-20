@@ -27,7 +27,7 @@ typedef struct {
     const parse_cmdr_flag_t *flags;
     core_string_t           arg;
     int                    min_args;
-    int                    max_args;
+    int                    max_args; /* Negative means unbounded. */
 } parse_cmdr_cmd_t;
 
 typedef struct {
@@ -37,7 +37,7 @@ typedef struct {
     const parse_cmdr_cmd_t  *commands;
     core_string_t           arg;
     int                    min_args;
-    int                    max_args;
+    int                    max_args; /* Negative means unbounded. */
 } parse_cmdr_spec_t;
 
 typedef struct parse_cmdr_t        parse_cmdr_t;
@@ -53,6 +53,8 @@ void               parse_cmdr_result_free(parse_cmdr_result_t *r);
 
 bool         parse_cmdr_result_ok(parse_cmdr_result_t *r);
 core_string_t parse_cmdr_result_command(parse_cmdr_result_t *r);
+int32_t      parse_cmdr_result_error_count(parse_cmdr_result_t *r);
+core_string_t parse_cmdr_result_error(parse_cmdr_result_t *r, int index);
 
 bool         parse_cmdr_flag_present(parse_cmdr_result_t *r, core_string_t flag);
 core_string_t parse_cmdr_flag_str(parse_cmdr_result_t *r, core_string_t flag);

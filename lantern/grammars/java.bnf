@@ -1,11 +1,4 @@
-@lex-comment("//")
-@lex-comment("/*", "*/")
-@lex-string('"""', '"""', escape('\\'), multiline, as("TEXT_BLOCK"))
-@lex-string('"', '"', escape('\\'), as("STRING"))
-@lex-string("'", "'", escape('\\'), as("CHAR"))
-@lex-number(radix("0x", "0123456789abcdefABCDEF"), radix("0b", "01"), sep("_"), exp("eE"), int("INTEGER"), float("FLOAT"), suffix("L", "INTEGER"), suffix("l", "INTEGER"), suffix("f", "FLOAT"), suffix("d", "FLOAT"))
-@lex-ident(as("IDENTIFIER"))
-@lex-layout(brackets("()[]{}"))
+@lexer("java.lex")
 
 # Java SE 21 Grammar (JLS Chapter 19)
 # Syntactic grammar only — lexer-provided tokens for literals and identifiers.

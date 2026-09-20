@@ -109,6 +109,9 @@ parse_tree_free(parse_tree_t *t)
                 core_list_push(stack, n->node.children[i]);
             }
         }
+        else {
+            parse_token_free_from_tree(core_tree_leaf_value(n));
+        }
 
         core_tree_free_node(n);
     }

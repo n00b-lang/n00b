@@ -1,13 +1,4 @@
-@lex-comment("//")
-@lex-comment("/*", "*/")
-@lex-string('"""', '"""', multiline, raw, as("RAW_STRING"))
-@lex-string('$"', '"', escape('\\'), as("INTERPOLATED_STRING"))
-@lex-string('@"', '"', raw, multiline, as("VERBATIM_STRING"))
-@lex-string('"', '"', escape('\\'), as("STRING"))
-@lex-string("'", "'", escape('\\'), as("CHAR"))
-@lex-number(radix("0x", "0123456789abcdefABCDEF"), radix("0b", "01"), sep("_"), exp("eE"), int("INTEGER"), float("FLOAT"), suffix("UL", "INTEGER"), suffix("L", "INTEGER"), suffix("u", "INTEGER"), suffix("f", "FLOAT"), suffix("m", "FLOAT"), suffix("d", "FLOAT"))
-@lex-ident(as("IDENTIFIER"))
-@lex-layout(brackets("()[]{}"))
+@lexer("csharp.lex")
 
 # C# 12 Grammar
 # Based on ECMA-334 (C# Language Specification) and the Roslyn parser

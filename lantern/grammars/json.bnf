@@ -1,4 +1,7 @@
 # JSON grammar
+@lexer("json.lex")
+
+<json>    ::= <ws> <value> <ws>
 <value>   ::= <object> | <array> | <string> | <number> | "true" | "false" | "null"
 <object>  ::= "{" <ws> "}" | "{" <members> "}"
 <members> ::= <member> | <member> "," <members>

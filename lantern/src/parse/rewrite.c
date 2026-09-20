@@ -8,7 +8,7 @@
 #include <string.h>
 
 parse_tree_t *
-parse_tree_clone(parse_tree_t *tree)
+parse_tree_clone(const parse_tree_t *tree)
 {
     if (!tree) {
         return nullptr;
@@ -16,15 +16,7 @@ parse_tree_clone(parse_tree_t *tree)
 
     if (core_tree_is_leaf(tree)) {
         parse_token_info_t *src = core_tree_leaf_value(tree);
-        parse_token_info_t *tok = nullptr;
-
-        if (src) {
-            tok  = core_alloc(parse_token_info_t);
-            *tok = *src;
-
-            tok->leading_trivia  = nullptr;
-            tok->trailing_trivia = nullptr;
-        }
+        parse_token_info_t *tok = parse_token_clone_for_tree(src);
 
         return core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t, tok);
     }
@@ -87,24 +79,270 @@ parse_tree_make_nt_with(parse_grammar_t     *g,
 }
 
 parse_tree_t *
-parse_tree_make_token(int64_t      tid,
-                    core_string_t text,
-                    uint32_t     line,
-                    uint32_t     column)
+parse_tree_make_synthetic_token(int64_t tid, core_string_t text)
 {
     parse_token_info_t *tok = core_alloc(parse_token_info_t);
 
     memset(tok, 0, sizeof(*tok));
 
     tok->tid    = (int32_t)tid;
-    tok->line   = line;
-    tok->column = column;
+    tok->origin = PARSE_TOKEN_SYNTHETIC;
+    tok->tree_owned = true;
 
     if (text.data) {
-        tok->value = core_option_set(core_string_t, text);
+        tok->value = core_option_set(core_string_t, core_string_dup(text));
+        tok->owns_value = true;
     }
 
     return core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t, tok);
+}
+
+typedef struct {
+    parse_grammar_t                         *grammar;
+    th_ctx                                  *types;
+    const parse_type_materialization_rule_t *rules;
+    size_t                                   rule_count;
+    parse_type_syntax_builder_fn             build_syntax;
+    void                                    *state;
+    char                                   **err;
+    bool                                     failed;
+} type_materialization_t;
+
+static void
+materialization_error(type_materialization_t *m, const char *message)
+{
+    if (m->err && !*m->err) {
+        *m->err = core_strdup(message);
+    }
+
+    m->failed = true;
+}
+
+static bool
+materialization_rules_valid(type_materialization_t *m)
+{
+    for (size_t i = 0; i < m->rule_count; i++) {
+        const parse_type_materialization_rule_t *rule = &m->rules[i];
+        parse_nonterm_t *nt = parse_find_nonterm(m->grammar, rule->node_name);
+
+        if (!nt || rule->implicit_rule_index < 0
+            || rule->explicit_rule_index < 0
+            || (size_t)rule->implicit_rule_index >= nt->rule_ids.len
+            || (size_t)rule->explicit_rule_index >= nt->rule_ids.len
+            || rule->implicit_rule_index == rule->explicit_rule_index) {
+            materialization_error(m, "invalid type materialization rule");
+
+            return false;
+        }
+
+        for (size_t j = 0; j < i; j++) {
+            const parse_type_materialization_rule_t *prior = &m->rules[j];
+
+            if (core_string_eq(rule->node_name, prior->node_name)
+                && rule->implicit_rule_index == prior->implicit_rule_index) {
+                materialization_error(m,
+                                      "duplicate type materialization rule");
+
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+static const parse_type_materialization_rule_t *
+materialization_rule_for(type_materialization_t *m, parse_nt_node_t *pn)
+{
+    for (size_t i = 0; i < m->rule_count; i++) {
+        const parse_type_materialization_rule_t *rule = &m->rules[i];
+
+        if (pn->rule_index == rule->implicit_rule_index
+            && core_string_eq(pn->name, rule->node_name)) {
+            return rule;
+        }
+    }
+
+    return nullptr;
+}
+
+static void
+mark_synthetic(parse_tree_t *tree)
+{
+    if (core_tree_is_leaf(tree)) {
+        parse_token_info_t *token = core_tree_leaf_value(tree);
+
+        if (token) {
+            token->origin          = PARSE_TOKEN_SYNTHETIC;
+            token->line            = 0;
+            token->column          = 0;
+            token->endline         = 0;
+            token->endcol          = 0;
+            token->start_byte      = 0;
+            token->end_byte        = 0;
+            token->system_header   = false;
+        }
+
+        return;
+    }
+
+    size_t child_count = core_tree_num_children(tree);
+
+    for (size_t i = 0; i < child_count; i++) {
+        mark_synthetic(core_tree_child(tree, i));
+    }
+}
+
+static void
+free_syntax(parse_tree_array_t *syntax)
+{
+    for (size_t i = 0; i < syntax->len; i++) {
+        parse_tree_free(syntax->data[i]);
+    }
+
+    core_array_free(*syntax);
+}
+
+static bool
+materialize_node(type_materialization_t *m, parse_tree_t *node)
+{
+    if (m->failed || !node) {
+        return false;
+    }
+
+    if (core_tree_is_leaf(node)) {
+        return true;
+    }
+
+    size_t child_count = core_tree_num_children(node);
+
+    for (size_t i = 0; i < child_count; i++) {
+        if (!materialize_node(m, core_tree_child(node, i))) {
+            return false;
+        }
+    }
+
+    parse_nt_node_t *pn = &core_tree_node_value(node);
+    const parse_type_materialization_rule_t *rule
+        = materialization_rule_for(m, pn);
+
+    if (!rule) {
+        return true;
+    }
+
+    if (rule->insert_before_child > child_count) {
+        materialization_error(m,
+                              "type insertion is outside the node's children");
+
+        return false;
+    }
+
+    th_type *type = pn->type ? th_resolve(pn->type) : nullptr;
+
+    if (!type || !th_is_closed(m->types, type)) {
+        materialization_error(m,
+                              "type materialization requires a resolved type");
+
+        return false;
+    }
+
+    parse_tree_array_t syntax = m->build_syntax(m->grammar,
+                                                rule,
+                                                node,
+                                                type,
+                                                m->state,
+                                                m->err);
+
+    if (m->err && *m->err) {
+        free_syntax(&syntax);
+        m->failed = true;
+
+        return false;
+    }
+
+    if (!syntax.data || !syntax.len) {
+        core_array_free(syntax);
+
+        if (!m->err || !*m->err) {
+            materialization_error(m,
+                                  "type syntax builder returned no syntax");
+        }
+        else {
+            m->failed = true;
+        }
+
+        return false;
+    }
+
+    for (size_t i = 0; i < syntax.len; i++) {
+        if (!syntax.data[i]) {
+            free_syntax(&syntax);
+            materialization_error(m,
+                                  "type syntax builder returned a null node");
+
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < syntax.len; i++) {
+        mark_synthetic(syntax.data[i]);
+        core_tree_insert_child_at(node,
+                                  rule->insert_before_child + i,
+                                  syntax.data[i]);
+    }
+
+    pn->rule_index = rule->explicit_rule_index;
+    core_array_free(syntax);
+
+    return true;
+}
+
+parse_tree_t *
+parse_tree_materialize_types(
+    parse_grammar_t                         *grammar,
+    th_ctx                                  *types,
+    const parse_tree_t                      *source,
+    const parse_type_materialization_rule_t *rules,
+    size_t                                   rule_count,
+    parse_type_syntax_builder_fn             build_syntax,
+    void                                    *state,
+    char                                   **err)
+{
+    if (err) {
+        *err = nullptr;
+    }
+
+    type_materialization_t m = {
+        .grammar      = grammar,
+        .types        = types,
+        .rules        = rules,
+        .rule_count   = rule_count,
+        .build_syntax = build_syntax,
+        .state        = state,
+        .err          = err,
+    };
+
+    if (!grammar || !types || !source || !rules || !rule_count
+        || !build_syntax) {
+        materialization_error(&m,
+                              "type materialization requires all arguments");
+
+        return nullptr;
+    }
+
+    if (!materialization_rules_valid(&m)) {
+        return nullptr;
+    }
+
+    parse_tree_t *result = parse_tree_clone(source);
+
+    if (!materialize_node(&m, result)) {
+        parse_tree_free(result);
+
+        return nullptr;
+    }
+
+    return result;
 }
 
 struct parse_template_t {
@@ -155,15 +393,9 @@ parse_template_parse(parse_grammar_t *g,
                                  nullptr);
     t->stream  = scan_token_stream_new(t->scanner);
 
-    int32_t saved = g->default_start;
-
-    parse_grammar_set_start(g, start);
-
-    t->parser = parse_pwz_new(g);
+    t->parser = parse_pwz_new_for_start(g, parse_nonterm_id(start));
 
     bool ok = parse_pwz_parse(t->parser, t->stream);
-
-    parse_grammar_set_start_id(g, saved);
 
     if (!ok) {
         if (err) {

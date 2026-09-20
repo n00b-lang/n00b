@@ -11,11 +11,12 @@
 #include "annot_bnf.h"
 #include "infer_bnf.h"
 
-#include <stdio.h>
+#include <pthread.h>
 #include <string.h>
 
 static parse_grammar_t *grammar;
-static parse_grammar_t *building;
+static _Thread_local parse_grammar_t *building;
+static pthread_mutex_t grammar_lock = PTHREAD_MUTEX_INITIALIZER;
 
 bool
 parse_annot_building(void)
@@ -94,12 +95,18 @@ add_type_span(parse_grammar_t *g)
 parse_grammar_t *
 parse_annot_grammar(void)
 {
-    if (grammar) {
-        return grammar;
-    }
-
     if (building) {
         return building;
+    }
+
+    pthread_mutex_lock(&grammar_lock);
+
+    if (grammar) {
+        parse_grammar_t *result = grammar;
+
+        pthread_mutex_unlock(&grammar_lock);
+
+        return result;
     }
 
     parse_grammar_t *g = parse_grammar_new();
@@ -125,14 +132,14 @@ parse_annot_grammar(void)
     building = nullptr;
 
     if (!ok) {
-        fprintf(stderr,
-                "bnf: the annotation-argument grammar does not load\n");
         parse_grammar_free(g);
+        pthread_mutex_unlock(&grammar_lock);
 
         return nullptr;
     }
 
     grammar = g;
+    pthread_mutex_unlock(&grammar_lock);
 
     return grammar;
 }
@@ -140,10 +147,14 @@ parse_annot_grammar(void)
 void
 parse_annot_grammar_shutdown(void)
 {
+    pthread_mutex_lock(&grammar_lock);
+
     if (grammar) {
         parse_grammar_free(grammar);
         grammar = nullptr;
     }
+
+    pthread_mutex_unlock(&grammar_lock);
 }
 
 static core_option_t(core_string_t)
@@ -201,19 +212,19 @@ annot_scan(parse_scanner_t *s)
     core_codepoint_t c = scan_peek(s, 0);
 
     if (c == '"') {
-        scan_emit(s, PARSE_TOK_STRING_LIT, scan_string_double(s));
+        scan_emit_owned(s, PARSE_TOK_STRING_LIT, scan_string_double(s));
 
         return true;
     }
 
     if (c == '\'') {
-        scan_emit(s, PARSE_TOK_STRING_LIT, scan_string_single(s));
+        scan_emit_owned(s, PARSE_TOK_STRING_LIT, scan_string_single(s));
 
         return true;
     }
 
     if (c >= '0' && c <= '9') {
-        scan_emit(s, PARSE_TOK_INTEGER, scan_integer(s));
+        scan_emit_owned(s, PARSE_TOK_INTEGER, scan_integer(s));
 
         return true;
     }
@@ -228,10 +239,10 @@ annot_scan(parse_scanner_t *s)
                               : scan_terminal_id(s,
                                                      core_option_get(id));
 
-            scan_emit(s,
-                          kw != PARSE_TOK_OTHER ? (int32_t)kw
-                                              : PARSE_TOK_IDENTIFIER,
-                          id);
+            scan_emit_owned(s,
+                            kw != PARSE_TOK_OTHER ? (int32_t)kw
+                                                  : PARSE_TOK_IDENTIFIER,
+                            id);
 
             return true;
         }

@@ -2,6 +2,7 @@
 #define IR_DIAG_H
 
 #include "ir/ir.h"
+#include "lib/diagnostic.h"
 
 typedef enum : uint8_t {
     IR_SEV_ERROR,
@@ -50,6 +51,7 @@ typedef struct {
     uint32_t         cap_suggestions;
     ir_origin_t     *origin;
     uint64_t         seq;
+    size_t           core_index;
 } ir_diag_t;
 
 typedef enum : uint8_t {

@@ -1,11 +1,4 @@
-@lex-comment("--[[", "]]")
-@lex-comment("--")
-@lex-string('"', '"', escape('\\'), as("STRING"))
-@lex-string("'", "'", escape('\\'), as("STRING"))
-@lex-string("[[", "]]", raw, multiline, as("STRING"))
-@lex-number(radix("0x", "0123456789abcdefABCDEF"), exp("eE"), int("INTEGER"), float("FLOAT"))
-@lex-ident(as("IDENTIFIER"))
-@lex-layout(brackets("()[]{}"))
+@lexer("lua.lex")
 
 # Lua 5.4 Grammar
 #

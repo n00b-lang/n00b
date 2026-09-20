@@ -8,6 +8,7 @@
 #include "parse/rewrite.h"
 #include "parse/tree_dump.h"
 #include "parse/tree_print.h"
+#include "parse/tree_util.h"
 #include "scanner/scan_builtins.h"
 #include "scanner/scanner.h"
 #include "scanner/token_stream.h"
@@ -69,10 +70,13 @@ lang_scan(parse_scanner_t *s)
 static const char *const LANG
     = "<prog> ::= <stmts>\n"
       "<stmts> ::= <stmt> <stmts> | <stmt>\n"
-      "<stmt> ::= <with> | <call> | <plain>\n"
+      "<stmt> ::= <with> | <call> | <plain> | <decl>\n"
       "<with> ::= %\"with\" \"(\" %IDENTIFIER \")\" \"{\" <stmts> \"}\"\n"
       "<call> ::= %IDENTIFIER \"(\" %IDENTIFIER \")\" \";\"\n"
-      "<plain> ::= %IDENTIFIER \";\"\n";
+      "<plain> ::= %IDENTIFIER \";\"\n"
+      "<decl> ::= %\"let\" %IDENTIFIER \"=\" %IDENTIFIER \";\"\n"
+      "         | %\"let\" %IDENTIFIER \":\" <type> \"=\" %IDENTIFIER \";\"\n"
+      "<type> ::= %IDENTIFIER\n";
 
 static parse_grammar_t *g;
 
@@ -83,13 +87,11 @@ parse_with(const char *nt, const char *src, parse_pwz_parser_t **pp,
 {
     parse_nonterm_t *start = parse_find_nonterm(g, S(nt));
 
-    parse_grammar_set_start(g, start);
-
     *bufp = core_buffer_from_bytes(src, (int64_t)strlen(src));
     *scp  = scan_scanner_new(*bufp, lang_scan, g,
                             core_option_none(core_string_t), nullptr, nullptr);
     *tsp  = scan_token_stream_new(*scp);
-    *pp   = parse_pwz_new(g);
+    *pp   = parse_pwz_new_for_start(g, parse_nonterm_id(start));
 
     return parse_pwz_parse(*pp, *tsp) ? parse_pwz_get_tree(*pp) : nullptr;
 }
@@ -103,6 +105,56 @@ render(parse_tree_t *t)
 }
 
 static int rewrites;
+
+static parse_tree_t *
+find_nt(parse_tree_t *node, core_string_t name)
+{
+    if (!node || core_tree_is_leaf(node)) {
+        return nullptr;
+    }
+
+    if (core_string_eq(core_tree_node_value(node).name, name)) {
+        return node;
+    }
+
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *found = find_nt(core_tree_child(node, i), name);
+
+        if (found) {
+            return found;
+        }
+    }
+
+    return nullptr;
+}
+
+static parse_tree_array_t
+build_type_syntax(parse_grammar_t                         *grammar,
+                  const parse_type_materialization_rule_t *rule,
+                  const parse_tree_t                      *node,
+                  th_type                                 *type,
+                  void                                    *state,
+                  char                                   **err)
+{
+    (void)rule;
+    (void)node;
+    (void)err;
+
+    th_ctx             *types  = state;
+    const char         *text   = th_print(types, type);
+    parse_tree_array_t  syntax = core_array_new(parse_tree_ptr_t, 2);
+    parse_tree_t       *type_node = parse_tree_make_nt(grammar, S("type"), 0);
+
+    core_tree_add_child(
+        type_node,
+        parse_tree_make_synthetic_token(PARSE_TOK_IDENTIFIER,
+                                        core_string_borrow(text,
+                                                           strlen(text))));
+    core_array_set(syntax, 0, parse_tree_make_synthetic_token(':', S(":")));
+    core_array_set(syntax, 1, type_node);
+
+    return syntax;
+}
 
 static bool
 desugar_with(parse_visit_t *v)
@@ -231,15 +283,40 @@ main(void)
 
     check("but is a different node", lone != tree);
 
+    parse_token_info_t *source_token = parse_tree_find_first_terminal(tree);
+    parse_trivia_t *source_comment = core_alloc(parse_trivia_t);
+
+    source_comment->text = CORE_STRING_STATIC("# retained");
+    source_comment->kind = PARSE_TRIVIA_COMMENT;
+    source_token->leading_trivia = source_comment;
+
+    parse_tree_t *commented = parse_tree_clone(tree);
+    parse_token_info_t *cloned_token
+        = parse_tree_find_first_terminal(commented);
+
+    check("a clone owns an independent copy of comment trivia",
+          cloned_token && cloned_token->leading_trivia
+              && cloned_token->leading_trivia != source_comment
+              && core_string_eq(cloned_token->leading_trivia->text,
+                                source_comment->text));
+    same("a cloned tree retains its comments",
+         render(commented),
+         "# retained\nwith ( r ) { a ; b ; }");
+
+    source_token->leading_trivia = nullptr;
+    parse_trivia_free(source_comment);
+    parse_tree_free(commented);
+
     parse_tree_t *made = parse_tree_make_nt(g, S("plain"), 0);
 
     check("a node can be built from the grammar by name", made != nullptr);
 
     if (made) {
+        core_tree_add_child(
+            made,
+            parse_tree_make_synthetic_token(PARSE_TOK_IDENTIFIER, S("z")));
         core_tree_add_child(made,
-                           parse_tree_make_token(PARSE_TOK_IDENTIFIER, S("z"),
-                                               1, 1));
-        core_tree_add_child(made, parse_tree_make_token(';', S(";"), 1, 2));
+                            parse_tree_make_synthetic_token(';', S(";")));
 
         same("and renders as its parts", render(made), "z ;");
     }
@@ -261,9 +338,88 @@ main(void)
 
         check("each instance is independent", i1 != i2);
         parse_template_free(t);
+        same("instances retain token text after their template is freed",
+             render(i1), "x ; y ;");
+        parse_tree_free(i1);
+        parse_tree_free(i2);
     }
 
-    parse_grammar_set_start(g, parse_find_nonterm(g, S("prog")));
+    parse_pwz_parser_t   *typed_p;
+    parse_token_stream_t *typed_ts;
+    parse_scanner_t      *typed_sc;
+    core_buffer_t        *typed_buf;
+    parse_tree_t         *implicit = parse_with("prog", "let x = y;", &typed_p,
+                                                &typed_ts, &typed_sc,
+                                                &typed_buf);
+    parse_tree_t         *decl = find_nt(implicit, S("decl"));
+    th_ctx               *types = th_ctx_new();
+
+    check("the implicit declaration parsed", decl != nullptr);
+
+    if (decl) {
+        parse_token_info_t *source_token = parse_tree_find_first_terminal(decl);
+
+        check("parsed tokens retain source provenance",
+              source_token && source_token->origin == PARSE_TOKEN_SOURCE);
+
+        core_tree_node_value(decl).type = th_name(types, "int");
+
+        const parse_type_materialization_rule_t type_rules[] = {
+            {
+                .node_name           = S("decl"),
+                .implicit_rule_index = 0,
+                .explicit_rule_index = 1,
+                .insert_before_child = 2,
+            },
+        };
+        char         *type_err = nullptr;
+        parse_tree_t *explicit = parse_tree_materialize_types(
+            g, types, implicit, type_rules, 1, build_type_syntax, types,
+            &type_err);
+
+        check("a resolved type materializes", explicit && !type_err);
+        same("materialization leaves the source tree unchanged",
+             render(implicit), "let x = y ;");
+        same("materialization selects the explicit grammar production",
+             render(explicit), "let x : int = y ;");
+
+        parse_tree_t *explicit_decl = find_nt(explicit, S("decl"));
+
+        check("the inserted separator is synthetic",
+              explicit_decl
+                  && parse_node_token(core_tree_child(explicit_decl, 2))->origin
+                         == PARSE_TOKEN_SYNTHETIC);
+
+        parse_tree_t *explicit_type = explicit_decl
+                                      ? core_tree_child(explicit_decl, 3)
+                                      : nullptr;
+        parse_token_info_t *type_token = explicit_type
+                                         ? parse_tree_find_first_terminal(
+                                               explicit_type)
+                                         : nullptr;
+
+        check("the inserted type syntax is synthetic",
+              type_token && type_token->origin == PARSE_TOKEN_SYNTHETIC);
+
+        parse_tree_free(explicit);
+        core_free(type_err);
+
+        core_tree_node_value(decl).type = th_var(types);
+        explicit = parse_tree_materialize_types(
+            g, types, implicit, type_rules, 1, build_type_syntax, types,
+            &type_err);
+
+        check("an unresolved type is rejected",
+              !explicit && type_err
+                  && strstr(type_err, "requires a resolved type"));
+        core_free(type_err);
+    }
+
+    th_ctx_free(types);
+    parse_pwz_free(typed_p);
+    scan_token_stream_free(typed_ts);
+    scan_scanner_free(typed_sc);
+    core_buffer_free(typed_buf);
 
     parse_tree_walk_t *w = parse_tree_walk_new(g, nullptr);
 
@@ -281,6 +437,8 @@ main(void)
          "context_init ( r ) ; a ; b ; context_end ( r ) ;");
 
     parse_tree_walk_free(w);
+    parse_tree_free(lone);
+    parse_tree_free(made);
     parse_pwz_free(p);
     scan_token_stream_free(ts);
     scan_scanner_free(sc);

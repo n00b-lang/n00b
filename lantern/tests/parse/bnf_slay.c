@@ -9,7 +9,8 @@
 
 static const char *const N00B_TOKENS[] = {
     "CHAR_LIT", "EMBED",   "FLOAT_LIT", "HEX_LIT",
-    "INT_LIT",  "NEWLINE", "STRING_LIT",
+    "INT_LIT",  "LITERAL_PREFIX", "NEWLINE", "STRING_LIT",
+    "INDENT",   "DEDENT",
 };
 
 static void declare_tokens(parse_grammar_t *g)

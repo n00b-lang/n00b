@@ -1,0 +1,3 @@
+@lexer("lexer_invalid.lex")
+
+<file> ::= %WORD

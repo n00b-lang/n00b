@@ -546,6 +546,83 @@ static void test_variant_and_indirection_are_recorded(void)
     close_env(e);
 }
 
+static void test_all_authored_layout_state_round_trips(void)
+{
+    const ir_profile_t *const profiles[] = {&ir_profile_bce};
+    const char *src = "module m {\n"
+                      "  profile bce\n"
+                      "  target host\n"
+                      "  type Choice = variant Choice[i32]\n"
+                      "  layout ptr[i32] {\n"
+                      "    indirect = fat\n"
+                      "    words = 2\n"
+                      "  }\n"
+                      "  layout Choice {\n"
+                      "    variant tag @ bits 8..16\n"
+                      "    niche = true\n"
+                      "  }\n"
+                      "  layout i32 for \"wasm32\" {\n"
+                      "    size = 4\n"
+                      "  }\n"
+                      "  layout i32 without target {\n"
+                      "    align = 4\n"
+                      "  }\n"
+                      "}\n";
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *d = ir_diags_new(ctx, nullptr);
+    ir_module_t *m = ir_module_parse(ctx, src, 0, profiles, 1, d);
+
+    check("the complete layout syntax parses", m != nullptr);
+
+    char *printed = m ? ir_module_print(m) : nullptr;
+
+    check("fat indirections print with their word count",
+          printed && strstr(printed, "indirect = fat")
+              && strstr(printed, "words = 2"));
+    check("variant representation prints its tag and niche",
+          printed && strstr(printed, "variant tag @ bits 8..16")
+              && strstr(printed, "niche = true"));
+    check("non-module targets print explicitly",
+          printed && strstr(printed, "layout i32 for \"wasm32\""));
+    check("a targetless descriptor stays distinguishable",
+          printed && strstr(printed, "layout i32 without target"));
+
+    ir_diags_t *again_diags = ir_diags_new(ctx, nullptr);
+    ir_module_t *again = printed
+                             ? ir_module_parse(ctx, printed, 0, profiles, 1,
+                                               again_diags)
+                             : nullptr;
+
+    check("printed layout state parses again", again != nullptr);
+
+    if (again) {
+        th_type *ptr_type = ir_type_parse(again, "ptr[i32]");
+        th_type *variant_type = ir_type_parse(again, "Choice");
+        ir_descriptor_t *ptr = ir_layout_of_targetless(again, ptr_type);
+        ir_descriptor_t *variant = ir_layout_of_targetless(again, variant_type);
+        th_type *i32 = ir_type_parse(again, "i32");
+        ir_descriptor_t *wasm = ir_layout_of(again, i32, "wasm32");
+        ir_descriptor_t *targetless = ir_layout_of_targetless(again, i32);
+
+
+        check("indirection representation survives the round trip",
+              ptr && ptr->indirect.authored && ptr->indirect.fat
+                  && ptr->indirect.words.value == 2);
+        check("variant representation survives the round trip",
+              variant && variant->variant.authored && variant->variant.niche
+                  && variant->variant.tag_bit_offset.value == 8
+                  && variant->variant.tag_bit_width.value == 8);
+        check("a named alternate target survives the round trip",
+              wasm && wasm->size.authored && wasm->size.value == 4);
+        check("a targetless descriptor survives the round trip",
+              targetless && targetless->align.authored
+                  && targetless->align.value == 4);
+    }
+
+    free(printed);
+    ir_ctx_free(ctx);
+}
+
 
 int main(void)
 {
@@ -562,6 +639,7 @@ int main(void)
     test_a_module_with_no_target();
     test_a_member_may_be_named_for_a_layout_keyword();
     test_variant_and_indirection_are_recorded();
+    test_all_authored_layout_state_round_trips();
 
     dump_produced_codes("produced-codes-layout.txt", produced);
 

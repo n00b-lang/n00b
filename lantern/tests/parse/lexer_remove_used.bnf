@@ -1,0 +1,3 @@
+@lexer("lexer_remove_used.lex")
+
+<file> ::= %WORD %"!=" %WORD

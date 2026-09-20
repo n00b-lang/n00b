@@ -1,0 +1,27 @@
+func identity(item: `item) return: `item {
+    return item
+}
+
+func parse(text: string?, radix: int = 10) return: int fail: ParseError {
+    return 42
+}
+
+var grammar = bnf[- 
+    <sum> ::= <number> ("+" <number>)*
+-]
+
+var values = set[int]{1, 2, 3}
+var point = (x: int = 1, y = 2)
+
+with file: File = opened(path="input.txt") {
+    var number = parse(text=file.read(), radix=16)!
+
+    switch number {
+        case 1 to 3 {
+            file.write("small")
+        }
+        else {
+            file.write("large")
+        }
+    }
+}

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -100,11 +101,13 @@ load_toy(void)
 }
 
 static parse_tree_t *
-parse_toy(parse_grammar_t *g, const char *src, parse_pwz_parser_t **p_out,
+parse_toy(parse_grammar_t *g, const char *start, const char *src,
+          parse_pwz_parser_t **p_out,
           parse_token_stream_t **ts_out)
 {
     parse_token_stream_t *ts = scan_token_stream_from_codepoints(S(src));
-    parse_pwz_parser_t   *p  = parse_pwz_new(g);
+    parse_pwz_parser_t   *p = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(g, S(start))));
 
     if (!parse_pwz_parse(p, ts)) {
         return nullptr;
@@ -114,6 +117,29 @@ parse_toy(parse_grammar_t *g, const char *src, parse_pwz_parser_t **p_out,
     *ts_out = ts;
 
     return parse_pwz_get_tree(p);
+}
+
+static parse_tree_t *
+find_node(parse_grammar_t *g, parse_tree_t *node, const char *name)
+{
+    if (!node || core_tree_is_leaf(node)) {
+        return nullptr;
+    }
+
+    if (core_string_eq(parse_tree_nt_name(g, node),
+                       core_string_borrow(name, strlen(name)))) {
+        return node;
+    }
+
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *found = find_node(g, core_tree_child(node, i), name);
+
+        if (found) {
+            return found;
+        }
+    }
+
+    return nullptr;
 }
 
 static void
@@ -150,12 +176,73 @@ test_annotations_are_retained_on_the_grammar(parse_grammar_t *g)
     }
 }
 
+typedef struct {
+    parse_grammar_t *grammar;
+    parse_nonterm_t *nonterm;
+    bool             ok;
+} annot_lookup_run_t;
+
+static void *
+lookup_annotations_concurrently(void *arg)
+{
+    annot_lookup_run_t *run = arg;
+    run->ok = true;
+
+    for (int i = 0; i < 2000; i++) {
+        parse_annotation_t *file
+            = parse_grammar_find_annot(run->grammar, PARSE_ANNOT_TOKENIZER);
+        parse_annotation_t *scope
+            = parse_nt_find_annot(run->grammar, run->nonterm,
+                                  PARSE_ANNOT_SCOPE_OPEN);
+
+        if (!file || !scope) {
+            run->ok = false;
+            break;
+        }
+    }
+
+    return nullptr;
+}
+
+static void
+test_annotation_cache_is_thread_safe(parse_grammar_t *g)
+{
+    parse_nonterm_t *prog = parse_find_nonterm(g, S("prog"));
+    enum { N_THREADS = 8 };
+    pthread_t threads[N_THREADS];
+    annot_lookup_run_t runs[N_THREADS];
+    bool created[N_THREADS] = {0};
+
+    parse_grammar_finalize(g);
+
+    for (int i = 0; i < N_THREADS; i++) {
+        runs[i] = (annot_lookup_run_t){.grammar = g, .nonterm = prog};
+        created[i] = pthread_create(&threads[i], nullptr,
+                                    lookup_annotations_concurrently,
+                                    &runs[i]) == 0;
+    }
+
+    bool ok = prog != nullptr;
+    for (int i = 0; i < N_THREADS; i++) {
+        if (!created[i]) {
+            ok = false;
+            continue;
+        }
+
+        pthread_join(threads[i], nullptr);
+        ok &= runs[i].ok;
+    }
+
+    check("annotation cache lookups are safe across threads", ok);
+}
+
 static void
 test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
 {
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
-    parse_tree_t   *tree = parse_toy(g, "vaT;{vbU;}?xyztcV;", &p, &ts);
+    parse_tree_t   *tree
+        = parse_toy(g, "prog", "vaT;{vbU;}?xyztcV;", &p, &ts);
 
     if (!tree) {
         check("the toy program parses", false);
@@ -279,7 +366,7 @@ test_a_deep_tree_does_not_overflow_the_stack(parse_grammar_t *g)
 
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
-    parse_tree_t   *tree = parse_toy(g, src, &p, &ts);
+    parse_tree_t   *tree = parse_toy(g, "prog", src, &p, &ts);
 
     if (!tree) {
         check("a deeply nested program parses", false);
@@ -458,7 +545,7 @@ test_implements_is_checked_not_carried(void)
 
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
-    parse_tree_t   *tree = parse_toy(g, "vaR;", &p, &ts);
+    parse_tree_t   *tree = parse_toy(g, "top", "vaR;", &p, &ts);
 
     if (!tree) {
         check("the declaration parses", false);
@@ -517,7 +604,7 @@ test_an_adt_builds_a_variant_type(void)
 
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
-    parse_tree_t   *tree = parse_toy(g, "ut{a;b;}", &p, &ts);
+    parse_tree_t   *tree = parse_toy(g, "top", "ut{a;b;}", &p, &ts);
 
     if (!tree) {
         check("the adt parses", false);
@@ -568,11 +655,14 @@ static void
 test_the_repr_annotations_reach_the_layout_descriptor(void)
 {
     static const char *const G
-        = "<top> @scope(\"module\") ::= <rec>\n"
+        = "<top> @scope(\"module\") ::= <rec> <access>\n"
           "<rec> @scope(\"record\") @record($1) @size(8) @alignment(4) "
           "::= \"r\" <n> \"{\" <fs> \"}\"\n"
-          "<fs> ::= <f> <fs> | <f>\n"
+          "<fs> ::= <f> <fs> | <meth> <fs> | <f> | <meth>\n"
           "<f> @field($1) @offset(0) @width(4) ::= <n> \";\"\n"
+          "<meth> @method($1) @type($1, \"() -> i\") ::= \"m\" <n>\n"
+          "<access> @infer(\"method_return($0)\") ::= <use> %\".\" <n>\n"
+          "<use> @varref($0) ::= <n>\n"
           "<n> ::= __LOWER\n";
 
     parse_grammar_t *g = parse_grammar_new();
@@ -584,7 +674,7 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
 
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
-    parse_tree_t   *tree = parse_toy(g, "rt{a;}", &p, &ts);
+    parse_tree_t   *tree = parse_toy(g, "top", "rt{a;mf}t.f", &p, &ts);
 
     if (!tree) {
         check("the record parses", false);
@@ -628,6 +718,31 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
     check("@alignment pinned the descriptor's alignment",
           d && ir_layout_is_settled(&d->align) && d->align.value == 4);
 
+    th_type *method = rec ? th_method_lookup(ir_module_types(m), rec, "f")
+                          : nullptr;
+    th_type *method_return = method ? th_func_ret(method) : nullptr;
+    const char *return_name = nullptr;
+    size_t return_name_len = 0;
+
+    check("@method registers its signature on the record type",
+          method != nullptr);
+    check("the registered method preserves its return type",
+          method_return
+              && th_named_info(method_return, &return_name, &return_name_len,
+                               nullptr, nullptr)
+              && return_name_len == 1 && return_name[0] == 'i');
+
+    parse_tree_t *access = find_node(g, tree, "access");
+    th_type *access_type = access ? core_tree_node_value(access).type : nullptr;
+    const char *access_name = nullptr;
+    size_t access_name_len = 0;
+
+    check("method_return resolves through the receiver method registry",
+          access_type
+              && th_named_info(access_type, &access_name, &access_name_len,
+                               nullptr, nullptr)
+              && access_name_len == 1 && access_name[0] == 'i');
+
     parse_annot_result_free(r);
     ir_ctx_free(ctx);
     parse_pwz_free(p);
@@ -657,7 +772,7 @@ test_the_representation_and_declaration_annotations(void)
 
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
-    parse_tree_t   *tree = parse_toy(g, "va;b:4pq;", &p, &ts);
+    parse_tree_t   *tree = parse_toy(g, "top", "va;b:4pq;", &p, &ts);
 
     if (!tree) {
         check("the program parses", false);
@@ -751,6 +866,7 @@ main(void)
     test_implements_is_checked_not_carried();
     test_part_two_rejections();
     test_annotations_are_retained_on_the_grammar(g);
+    test_annotation_cache_is_thread_safe(g);
     test_the_walk_builds_a_symbol_table(g);
     test_a_deep_tree_does_not_overflow_the_stack(g);
 

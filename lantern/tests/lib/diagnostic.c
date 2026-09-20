@@ -1,0 +1,58 @@
+#include <string.h>
+
+#include "lib/diagnostic.h"
+#include "lib/module.h"
+#include "harness.h"
+
+static bool
+promote_warning(void *context, core_diag_severity_t *severity,
+                core_string_t code)
+{
+    (void)context;
+    (void)code;
+    if (*severity == CORE_DIAG_WARNING) *severity = CORE_DIAG_ERROR;
+    return true;
+}
+
+int main(void)
+{
+    core_module_spec_t module = {0};
+    core_source_file_t source = {0};
+    core_translation_unit_t unit = {0};
+    check("module identity initializes",
+          core_module_spec_init(&module, CORE_STRING_STATIC("pkg.mod")));
+    check("source initializes", core_source_file_init(
+        &source, CORE_STRING_STATIC("pkg/mod.n00b"), "", 0));
+    check("translation unit owns its diagnostic sink",
+          core_translation_unit_init(&unit, &module, &source));
+
+    core_diagnostics_t *build = core_diagnostics_new();
+    core_diagnostics_t *tu = core_translation_unit_diagnostics(&unit);
+    core_diagnostics_set_policy(build, promote_warning, nullptr);
+    check("TU diagnostic retains its module and source context",
+          core_diagnostics_report(tu, &unit, CORE_DIAG_ERROR,
+              CORE_STRING_STATIC("TEST-E0001"),
+              CORE_STRING_STATIC("bad declaration")));
+    check("TU warnings can be collected before build-level policy runs",
+          core_diagnostics_report(tu, &unit, CORE_DIAG_WARNING,
+              CORE_STRING_STATIC("TEST-W0001"),
+              CORE_STRING_STATIC("warning")));
+    check("TU diagnostics merge into build diagnostics",
+          core_diagnostics_merge(build, tu)
+              && core_diagnostics_count(build) == 2
+              && core_diagnostics_count_severity(build, CORE_DIAG_ERROR) == 2
+              && core_diagnostics_failed(build));
+    const core_diagnostic_t *diagnostic = core_diagnostics_at(build, 0);
+    check("merged diagnostic retains TU identity and path",
+          diagnostic
+              && core_string_eq(diagnostic->module,
+                                CORE_STRING_STATIC("pkg.mod"))
+              && core_string_eq(diagnostic->path,
+                                CORE_STRING_STATIC("pkg/mod.n00b")));
+
+    core_diagnostics_free(build);
+    core_translation_unit_release(&unit);
+    core_module_spec_release(&module);
+    core_source_file_release(&source);
+    return report("lib diagnostics");
+}

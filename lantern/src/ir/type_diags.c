@@ -7,6 +7,8 @@
 #include "lib/buffer.h"
 #include "th/typehash.h"
 
+#include <string.h>
+
 static ir_diagcode_t
 code_for(th_err_kind kind)
 {
@@ -35,13 +37,28 @@ code_for(th_err_kind kind)
 }
 
 static ir_span_t
-span_from(th_span_t s)
+span_from(ir_module_t *m, th_span_t s)
 {
     if (!s.start_line && !s.end_line) {
-        return (ir_span_t){.implied = true};
+        return (ir_span_t){.file = -1, .implied = true};
+    }
+
+    int32_t file = -1;
+
+    if (m && s.file) {
+        for (size_t i = 0; i < ir_file_count(m); i++) {
+            const char *path = ir_file_path(m, (int32_t)i);
+
+            if (path && !strcmp(path, s.file)) {
+                file = (int32_t)i;
+
+                break;
+            }
+        }
     }
 
     return (ir_span_t){
+        .file       = file,
         .start_line = s.start_line,
         .start_col  = s.start_col,
         .end_line   = s.end_line,
@@ -91,7 +108,7 @@ uint32_t ir_import_type_errors(ir_module_t *m, ir_diags_t *d)
             continue;
         }
 
-        ir_diag_t *dg = ir_diag_begin(d, code_for(e.kind), span_from(e.span),
+        ir_diag_t *dg = ir_diag_begin(d, code_for(e.kind), span_from(m, e.span),
                                       th_err_kind_name(e.kind));
 
         if (!dg) {
@@ -108,7 +125,7 @@ uint32_t ir_import_type_errors(ir_module_t *m, ir_diags_t *d)
         core_free(msg);
 
         if (e.has_related) {
-            ir_diag_secondary(d, dg, span_from(e.related), "related");
+            ir_diag_secondary(d, dg, span_from(m, e.related), "related");
         }
 
         made++;

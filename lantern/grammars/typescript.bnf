@@ -1,12 +1,4 @@
-@lex-comment("//")
-@lex-comment("/*", "*/")
-@lex-string("`", "`", escape('\\'), multiline, interp("${", "}"), as("TEMPLATE_HEAD", "TEMPLATE_MIDDLE", "TEMPLATE_TAIL"))
-@lex-string('"', '"', escape('\\'), as("STRING"))
-@lex-string("'", "'", escape('\\'), as("STRING"))
-@lex-regex("/", "/", flags("dgimsuvy"), as("REGEX_LIT"))
-@lex-number(radix("0x", "0123456789abcdefABCDEF"), radix("0b", "01"), radix("0o", "01234567"), sep("_"), exp("eE"), int("INTEGER"), float("FLOAT"))
-@lex-ident(as("IDENTIFIER"), start("$"), extra("$"))
-@lex-layout(brackets("()[]{}"))
+@lexer("typescript.lex")
 
 # TypeScript Grammar
 #

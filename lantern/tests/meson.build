@@ -32,13 +32,18 @@ suites = [
 
     ['lib-macros',          'lib/macros.c',          {}],
     ['lib-cache',           'lib/cache.c',           {}],
+    ['lib-diagnostics',     'lib/diagnostic.c',      {}],
+    ['lib-module',          'lib/module.c',          {}],
+    ['lib-work-queue',      'lib/work_queue.c',      {}],
     ['lib-arena',           'lib/arena.c',           {}],
 
     ['th-cycles',           'th/cycle.c',            {}],
+    ['th-nest-tmp',         'th/nest_tmp.c',         {}],
     ['th-inference-cycles', 'th/infer_cycle.c',      {}],
     ['th-constraints',      'th/constraint.c',       {}],
 
     ['fe-pwz',              'parse/pwz.c',           {}],
+    ['fe-ambiguity',        'parse/ambiguity.c',     {}],
     ['fe-commander',        'parse/commander.c',     {}],
     ['fe-compose',          'parse/compose.c',       {}],
     ['fe-tree-print',       'parse/tree_print.c',    {}],
@@ -70,6 +75,12 @@ foreach s : suites
     built += {s[0]: exe}
 endforeach
 
+ambiguity_cli = executable(
+    'ambiguity-audit',
+    'parse/ambiguity_cli.c',
+    dependencies: tdep,
+)
+
 ir_public_test = executable(
     'ir_public',
     'ir/public.c',
@@ -79,11 +90,20 @@ ir_public_test = executable(
 test('ir-public', ir_public_test)
 
 ir_scale_test = executable('ir_scale', 'ir/scale.c', dependencies: tdep)
+lexer_perf_test = executable('scanner_lex_perf', 'scanner/lex_perf.c',
+                             dependencies: tdep)
 
 benchmark('ir-scale', ir_scale_test, timeout: 180)
 benchmark('ir-text-soak', built['ir-text'], args: [golden])
+benchmark('lexer-throughput', lexer_perf_test, timeout: 180)
 
 bnfcheck = executable('bnfcheck', 'parse/bnfcheck.c', dependencies: ir_dep)
+
+test(
+    'fe-language-spec-check',
+    bnfcheck,
+    args: [d_gram / 'n00b.bnf', 'module'],
+)
 
 gate_bins = [
     built['ir-diagnostics'],
