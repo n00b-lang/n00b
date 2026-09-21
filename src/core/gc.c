@@ -51,6 +51,7 @@
 #include <mach-o/loader.h>
 #endif
 
+#include <stdio.h>
 #include <stdlib.h>
 #include "n00b.h"
 #include "util/assert.h"
