@@ -281,7 +281,7 @@ n00b_epoch_flush_all_stw(n00b_runtime_t *rt)
 
     for (uint32_t i = 0; i < rt->max_threads; i++) {
         n00b_thread_t *t = n00b_atomic_load(&rt->threads[i].thread);
-        if (t == nullptr) {
+        if (n00b_thread_slot_is_vacant(t)) {
             continue;
         }
         n00b_epoch_hdr_t *cur = n00b_atomic_read_then_set(&t->retire_list,
@@ -568,7 +568,7 @@ n00b_epoch_drain_allocator_stw(n00b_allocator_t *allocator)
     for (uint32_t i = 0; i < rt->max_threads; i++) {
         n00b_thread_record_t *rec = &rt->threads[i];
         n00b_thread_t        *t   = n00b_atomic_load(&rec->thread);
-        if (t != nullptr) {
+        if (!n00b_thread_slot_is_vacant(t)) {
             n00b_epoch_drain_allocator_nodes(&t->retire_list,
                                              allocator,
                                              &free_list);

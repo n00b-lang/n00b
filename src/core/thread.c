@@ -2197,7 +2197,8 @@ n00b_reap_dead_foreign_threads(void)
         n00b_thread_t        *t   = rec->thread;
         // Unmanaged records carry a recorded Mach port and NO callstack.  Raw
         // workers have a callstack and are reaped via reap_pending.
-        if (t == nullptr || t->callstack != nullptr || t->os_thread_port == 0) {
+        if (n00b_thread_slot_is_vacant(t) || t->callstack != nullptr
+            || t->os_thread_port == 0) {
             continue;
         }
         if (!_n00b_reap_worker_is_dead(t)) {

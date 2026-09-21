@@ -8,6 +8,7 @@
 #include "core/gc.h"
 #include "core/stw.h"
 #include "core/atomic.h"
+#include "core/thread.h"
 
 // ============================================================================
 // Test helper type
@@ -436,6 +437,33 @@ test_memo_resize_during_collection(void)
     printf("  [PASS] memo resize during collection\n");
 }
 
+static void
+test_collect_skips_reserved_worker_slot(void)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    assert(rt != nullptr);
+    assert(rt->default_arena != nullptr);
+
+    uint32_t slot = rt->max_threads;
+    for (uint32_t i = 0; i < rt->max_threads; i++) {
+        n00b_thread_t *expected = nullptr;
+        if (n00b_atomic_cas(&rt->threads[i].thread,
+                            &expected,
+                            N00B_THREAD_SLOT_PLACEHOLDER)) {
+            slot = i;
+            break;
+        }
+    }
+    assert(slot < rt->max_threads);
+
+    n00b_collect(rt->default_arena);
+
+    n00b_thread_t *expected = N00B_THREAD_SLOT_PLACEHOLDER;
+    assert(n00b_atomic_cas(&rt->threads[slot].thread, &expected, nullptr));
+
+    printf("  [PASS] collect skips reserved worker slot\n");
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -460,6 +488,7 @@ main(int argc, char **argv)
     test_alloc_after_collection();
     test_large_linked_list();
     test_memo_resize_during_collection();
+    test_collect_skips_reserved_worker_slot();
 
     printf("All GC tests passed.\n");
     n00b_shutdown();
