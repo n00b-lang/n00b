@@ -1667,6 +1667,7 @@ local_xpc_peer_facts(void *native_conn)
         .uid             = n00b_option_none(uint64_t),
         .gid             = n00b_option_none(uint64_t),
         .code_signing_id = n00b_option_none(n00b_string_t *),
+        .sid             = n00b_option_none(n00b_string_t *),
     };
 
 #if defined(__APPLE__)
@@ -1703,6 +1704,7 @@ local_windows_peer_facts(void *native_conn)
         .uid             = n00b_option_none(uint64_t),
         .gid             = n00b_option_none(uint64_t),
         .code_signing_id = n00b_option_none(n00b_string_t *),
+        .sid             = n00b_option_none(n00b_string_t *),
     };
 
 #if defined(_WIN32)
@@ -1712,10 +1714,16 @@ local_windows_peer_facts(void *native_conn)
     bool has_pid = false;
     bool has_uid = false;
     bool has_gid = false;
+    void *sid     = nullptr;
+    bool  has_sid = false;
     _n00b_conduit_local_windows_native_peer_facts(native_conn,
                                                   &pid, &has_pid,
                                                   &uid, &has_uid,
-                                                  &gid, &has_gid);
+                                                  &gid, &has_gid,
+                                                  &sid, &has_sid);
+    if (has_sid && sid != nullptr) {
+        peer.sid = n00b_option_set(n00b_string_t *, (n00b_string_t *)sid);
+    }
     if (has_pid) {
         peer.pid = n00b_option_set(uint64_t, pid);
     }
@@ -1854,6 +1862,7 @@ local_listener_process_unix_accept(n00b_conduit_local_listener_t *listener)
         .uid             = n00b_option_none(uint64_t),
         .gid             = n00b_option_none(uint64_t),
         .code_signing_id = n00b_option_none(n00b_string_t *),
+        .sid             = n00b_option_none(n00b_string_t *),
     };
     publish_local_accept(listener, local_conn, peer);
     n00b_free(sock_msg);

@@ -41,6 +41,17 @@ typedef struct {
     n00b_option_t(uint64_t)      uid;
     n00b_option_t(uint64_t)      gid;
     n00b_option_t(n00b_string_t *) code_signing_id;
+    /* Windows named backend only: the connected client's user SID in string
+     * form ("S-1-5-18"). Captured at accept from the accepted pipe instance,
+     * which is race-free -- resolving `pid` to a token afterwards is not,
+     * because process ids are reused.
+     *
+     * Unset on every other backend, and may be unset on Windows if the SID
+     * could not be read. That is not an error: when the listener supplied a
+     * security_descriptor the kernel has already made the allow/deny decision,
+     * so this is for audit and for finer-grained per-route policy above it --
+     * never the admission check itself. */
+    n00b_option_t(n00b_string_t *) sid;
 } n00b_conduit_local_peer_t;
 
 typedef struct {

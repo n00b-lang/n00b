@@ -57,6 +57,7 @@ test_local_xpc_public_header_shape(void)
         .uid             = n00b_option_none(uint64_t),
         .gid             = n00b_option_none(uint64_t),
         .code_signing_id = n00b_option_none(n00b_string_t *),
+        .sid             = n00b_option_none(n00b_string_t *),
     };
     assert(peer.backend == N00B_CONDUIT_LOCAL_XPC);
     assert(n00b_option_is_set(peer.pid) == false);

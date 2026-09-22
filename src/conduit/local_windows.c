@@ -200,6 +200,10 @@ struct local_windows_conn_state {
     int                 terminal_status;
     uint64_t            peer_pid;
     bool                has_peer_pid;
+    /* Client user SID, captured ONCE at accept from the accepted pipe instance
+     * (see local_windows_peer_sid_string). Null when unavailable or on the
+     * client side of a connection. */
+    n00b_string_t      *peer_sid;
     local_windows_op_t *connect_op;
     local_windows_op_t *read_op;
     local_windows_op_t *write_op;
@@ -660,6 +664,102 @@ done:
     return result;
 }
 
+/* Capture the connected client's user SID from the ACCEPTED pipe instance
+ * (n00b#411 gap 3).
+ *
+ * Impersonation reads the token of THIS CONNECTION, which is why it is the
+ * right primitive here: the alternative -- take the pid and open the process --
+ * races process-id reuse, so a pid that has been recycled between accept and
+ * lookup resolves to a different principal's token. There is no such window
+ * when the token comes from the pipe instance itself.
+ *
+ * Returns a freshly allocated UTF-8 SID string ("S-1-5-18"), or null if the
+ * SID cannot be determined. Null is not an error: the caller leaves the option
+ * unset and callers above it fall back to whatever the DACL already decided.
+ *
+ * RevertToSelf() runs on every exit path. Failing to revert would leave this
+ * thread impersonating the client for whatever it does next, which is a
+ * privilege bug far worse than a missing audit field -- so the revert is
+ * unconditional and happens before any allocation that could fail. */
+static n00b_string_t *
+local_windows_peer_sid_string(HANDLE pipe, n00b_allocator_t *allocator)
+{
+    if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE) {
+        return nullptr;
+    }
+
+    if (!ImpersonateNamedPipeClient(pipe)) {
+        return nullptr;
+    }
+
+    uint8_t token_buf[512];
+    DWORD   token_len  = 0;
+    HANDLE  thread_tok = nullptr;
+    bool    have_user  = false;
+
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &thread_tok)) {
+        have_user = GetTokenInformation(thread_tok, TokenUser, token_buf,
+                                        (DWORD)sizeof(token_buf), &token_len)
+                  ? true
+                  : false;
+    }
+
+    local_windows_close_handle(&thread_tok);
+    /* Back to our own identity before anything else. */
+    (void)RevertToSelf();
+
+    if (!have_user) {
+        return nullptr;
+    }
+
+    HMODULE advapi = LoadLibraryA("advapi32.dll");
+    if (advapi == nullptr) {
+        return nullptr;
+    }
+    local_windows_sid_to_string_fn to_string =
+        (local_windows_sid_to_string_fn)(void *)GetProcAddress(
+            advapi, "ConvertSidToStringSidW");
+    if (to_string == nullptr) {
+        (void)FreeLibrary(advapi);
+        return nullptr;
+    }
+
+    TOKEN_USER *user     = (TOKEN_USER *)token_buf;
+    wchar_t    *wide_sid = nullptr;
+    BOOL        ok       = to_string(user->User.Sid, &wide_sid);
+    (void)FreeLibrary(advapi);
+
+    if (!ok || wide_sid == nullptr) {
+        return nullptr;
+    }
+
+    /* A SID string is ASCII by construction ("S-", digits, hyphens), so the
+     * narrowing is a wchar->byte copy. Bound the scan anyway rather than trust
+     * the OS string to be terminated within any particular length. */
+    uint64_t len = 0;
+    while (len < 512 && wide_sid[len] != L'\0') {
+        len++;
+    }
+
+    char *narrow = n00b_alloc_array_with_opts(
+        char, len + 1, &(n00b_alloc_opts_t){.allocator = allocator});
+    if (narrow == nullptr) {
+        LocalFree(wide_sid);
+        return nullptr;
+    }
+    for (uint64_t i = 0; i < len; i++) {
+        wchar_t ch = wide_sid[i];
+        narrow[i]  = (ch > 0 && ch < 0x80) ? (char)ch : '?';
+    }
+    narrow[len] = '\0';
+    LocalFree(wide_sid);
+
+    n00b_string_t *result = n00b_string_from_cstr(narrow,
+                                                  .allocator = allocator);
+    n00b_free(narrow);
+    return result;
+}
+
 /* `same_user_only` false means an explicit DACL authorized this connection at
  * the kernel's access check; re-applying the same-user test would then reject
  * exactly the cross-user callers the DACL was written to admit. The pid is
@@ -892,6 +992,13 @@ local_windows_listener_complete_accept(local_windows_listener_state_t *state)
 
     conn->peer_pid     = peer_pid;
     conn->has_peer_pid = true;
+    /* Capture the SID here, on the accepted instance, while we still hold it
+     * and before any client I/O -- this is the only point where impersonation
+     * is race-free. A null result is tolerated: with an explicit DACL the
+     * kernel has already made the allow/deny decision, so the SID is for audit
+     * and finer-grained policy above it, not for admission. */
+    conn->peer_sid = local_windows_peer_sid_string(accepted_pipe,
+                                                   state->allocator);
     (void)local_windows_listener_arm(state);
     return conn;
 }
@@ -1100,8 +1207,16 @@ _n00b_conduit_local_windows_native_peer_facts(void     *raw_state,
                                               uint64_t *uid,
                                               bool     *has_uid,
                                               uint64_t *gid,
-                                              bool     *has_gid)
+                                              bool     *has_gid,
+                                              void    **sid,
+                                              bool     *has_sid)
 {
+    if (sid != nullptr) {
+        *sid = nullptr;
+    }
+    if (has_sid != nullptr) {
+        *has_sid = false;
+    }
     if (pid != nullptr) {
         *pid = 0;
     }
@@ -1122,7 +1237,16 @@ _n00b_conduit_local_windows_native_peer_facts(void     *raw_state,
     }
 
     local_windows_conn_state_t *state = raw_state;
-    if (state == nullptr || pid == nullptr || has_pid == nullptr) {
+    if (state == nullptr) {
+        return;
+    }
+
+    if (state->peer_sid != nullptr && sid != nullptr && has_sid != nullptr) {
+        *sid     = state->peer_sid;
+        *has_sid = true;
+    }
+
+    if (pid == nullptr || has_pid == nullptr) {
         return;
     }
 

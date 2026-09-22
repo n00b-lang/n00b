@@ -49,13 +49,21 @@ extern int _n00b_conduit_local_windows_native_connect(void       *owner_token,
 extern void *_n00b_conduit_local_windows_native_listener_pop_accept(
     void *state);
 
+/* `sid`/`has_sid` carry the client's user SID as an `n00b_string_t *` (opaque
+   here to keep this ABI n00b-free in shape, like the other out-params). It is
+   captured once at accept from the accepted pipe instance -- race-free, unlike
+   resolving the pid to a token afterwards. Null/false when unavailable, which
+   is not an error: with an explicit DACL the kernel already decided admission,
+   so the SID is for audit and per-route policy above it. */
 extern void _n00b_conduit_local_windows_native_peer_facts(void     *state,
                                                           uint64_t *pid,
                                                           bool     *has_pid,
                                                           uint64_t *uid,
                                                           bool     *has_uid,
                                                           uint64_t *gid,
-                                                          bool     *has_gid);
+                                                          bool     *has_gid,
+                                                          void    **sid,
+                                                          bool     *has_sid);
 
 extern int _n00b_conduit_local_windows_native_send(void       *state,
                                                    const void *data,

@@ -117,11 +117,14 @@ test_local_windows_public_header_shape(void)
         .uid             = n00b_option_none(uint64_t),
         .gid             = n00b_option_none(uint64_t),
         .code_signing_id = n00b_option_none(n00b_string_t *),
+        .sid             = n00b_option_none(n00b_string_t *),
     };
     assert(peer.backend == N00B_CONDUIT_LOCAL_WINDOWS_NAMED);
     assert(n00b_option_is_set(peer.pid) == false);
     assert(n00b_option_is_set(peer.uid) == false);
     assert(n00b_option_is_set(peer.gid) == false);
+    // n00b#411 gap 3: the SID field exists and defaults unset.
+    assert(n00b_option_is_set(peer.sid) == false);
     assert(n00b_option_is_set(peer.code_signing_id) == false);
 }
 
