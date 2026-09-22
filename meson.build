@@ -1379,6 +1379,30 @@ n00b = static_library('n00b',
 # ObjC link wrapper rather than ncc's own link-stage hook because libn00b carries
 # the Cocoa ObjC bridge, so meson links executables with the ObjC compiler, not
 # ncc.)
+#
+# The dictionary is per-executable, but libn00b.a's CONTRIBUTION to it is the
+# same for all ~600 of them, and collecting it means extracting and scanning
+# every one of the archive's ~620 members. Do that once here: `--ncc-gcraw-dump`
+# writes the archive's raw records to a blob, which the wrapper feeds to
+# `--ncc-gcmap-emit` in place of libn00b.a. The blob is an input to every link,
+# so it is declared via `link_depends` in n00b_app_kwargs below.
+n00b_gcraw = custom_target('n00b-gcraw',
+    input: n00b,
+    output: 'libn00b.gcraw',
+    command: [cc.cmd_array(), '--ncc-gcraw-dump=@OUTPUT@', '@INPUT@'],
+    build_by_default: true,
+)
+
+# Where the ObjC wrapper drives the link (Darwin), it swaps the blob in for
+# libn00b.a itself and the link line is untouched. Elsewhere ncc is the link
+# driver and aggregates from its own argv, so the blob is named there; ncc
+# drops it before handing the line to the compiler, and skips the archive it
+# shadows.
+if target_os == 'darwin'
+  gcraw_link_args = []
+else
+  gcraw_link_args = [n00b_gcraw.full_path()]
+endif
 
 # Shared kwargs for executables that link the full libn00b. This is the
 # "always build" variant used by the shipped tools/binaries. Tests use
@@ -1393,8 +1417,11 @@ n00b_app_kwargs = {
     # compiled with sanitizer hooks but no runtime, producing
     # `__ubsan_handle_*`-not-found at link time.  Phase 2 audit item
     # #9.
-    'link_args': exe_link_args,
+    'link_args': exe_link_args + gcraw_link_args,
     'link_with': [n00b],
+    # Orders the gcraw blob ahead of every link that consults it; see the
+    # n00b_gcraw target above.
+    'link_depends': [n00b_gcraw],
     # libn00b now references picoquic symbols (endpoint, conn, chan).
     # Static-library deps don't propagate transitively in meson, so
     # every test that links libn00b also needs picoquic_dep on its
@@ -1450,31 +1477,37 @@ debug_watch_test = executable('test_debug_watch',
     ['test/unit/test_debug_watch.c'],
     kwargs: test_common_kwargs,
 )
-    # QUARANTINED (n00b#280): fails on Linux, passes on macOS. should_fail
-    # cannot express that -- it turns the macOS pass into UNEXPECTEDPASS --
-    # so it sits in 'known-broken', which CI excludes. Restore its real
-    # suite with the fix.
-test('debug_watch', debug_watch_test, suite: 'known-broken')
+# Un-quarantined (n00b#280). The Linux failure was the perf_event_open errno
+# being reported as NO_SLOT whatever went wrong (#423): the very first install
+# claimed "all hardware slots are in use" with all four debug registers free.
+# Correctly classified, the runner's refusal is UNSUPPORTED, which this test
+# already handles by skipping. So it runs for real on macOS and skips cleanly
+# on Linux, instead of aborting there and being excluded on both.
+test('debug_watch', debug_watch_test, suite: 'unit')
 
 debug_break_test = executable('test_debug_break',
     ['test/unit/test_debug_break.c'],
     kwargs: test_common_kwargs,
 )
-    # QUARANTINED (n00b#280): fails on Linux, passes on macOS. should_fail
-    # cannot express that -- it turns the macOS pass into UNEXPECTEDPASS --
-    # so it sits in 'known-broken', which CI excludes. Restore its real
-    # suite with the fix.
-test('debug_break', debug_break_test, suite: 'known-broken')
+# Un-quarantined (n00b#280). The Linux failure was the perf_event_open errno
+# being reported as NO_SLOT whatever went wrong (#423): the very first install
+# claimed "all hardware slots are in use" with all four debug registers free.
+# Correctly classified, the runner's refusal is UNSUPPORTED, which this test
+# already handles by skipping. So it runs for real on macOS and skips cleanly
+# on Linux, instead of aborting there and being excluded on both.
+test('debug_break', debug_break_test, suite: 'unit')
 
 debug_allthread_test = executable('test_debug_allthread',
     ['test/unit/test_debug_allthread.c'],
     kwargs: test_common_kwargs,
 )
-    # QUARANTINED (n00b#280): fails on Linux, passes on macOS. should_fail
-    # cannot express that -- it turns the macOS pass into UNEXPECTEDPASS --
-    # so it sits in 'known-broken', which CI excludes. Restore its real
-    # suite with the fix.
-test('debug_allthread', debug_allthread_test, suite: 'known-broken')
+# Un-quarantined (n00b#280). The Linux failure was the perf_event_open errno
+# being reported as NO_SLOT whatever went wrong (#423): the very first install
+# claimed "all hardware slots are in use" with all four debug registers free.
+# Correctly classified, the runner's refusal is UNSUPPORTED, which this test
+# already handles by skipping. So it runs for real on macOS and skips cleanly
+# on Linux, instead of aborting there and being excluded on both.
+test('debug_allthread', debug_allthread_test, suite: 'unit')
 
 debug_attach_test = executable('test_debug_attach',
     ['test/unit/test_debug_attach.c'],
@@ -1574,11 +1607,14 @@ thread_self_migration_test = executable('test_thread_self_migration',
 )
 test('thread_self_migration', thread_self_migration_test, suite: 'unit')
 
+# n00b#333: POSIX-only (raw pthreads); not built on Windows.
+if target_os != 'windows'
 thread_self_foreign_test = executable('test_thread_self_foreign',
     ['test/unit/test_thread_self_foreign.c'],
     kwargs: test_common_kwargs,
 )
 test('thread_self_foreign', thread_self_foreign_test, suite: 'unit')
+endif
 
 thread_self_bench = executable('test_thread_self_bench',
     ['test/unit/test_thread_self_bench.c'],
@@ -1619,16 +1655,25 @@ conduit_unix_socket_test = executable('test_conduit_unix_socket',
 )
 test('conduit_unix_socket', conduit_unix_socket_test, suite: 'unit')
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 conduit_tls_test = executable('test_conduit_tls',
     ['test/unit/test_conduit_tls.c'],
     kwargs: test_common_kwargs,
 )
-test('conduit_tls', conduit_tls_test, suite: 'unit')
+# n00b#330: the in-test I/O budget is 30 s (N00B_TLS_TEST_IO_BUDGET_MS), so
+# the meson timeout must sit above it -- at the 30 s default the whole-test
+# timeout fires first and a stall is reported as a bare expiry instead of the
+# stage-naming diagnostic. Normal runtime is ~1.2-1.8 s on macOS.
+# conduit_tls_socket_denied_fixture below keeps its 10 s: it fails at socket()
+# with EPERM by construction and never reaches a handshake.
+test('conduit_tls', conduit_tls_test, suite: 'unit', timeout: 120)
 test('conduit_tls_socket_denied_fixture',
      conduit_tls_test,
      suite: 'unit',
      timeout: 10,
      env: ['N00B_CONDUIT_TLS_SOCKET_DENIED_FIXTURE=1'])
+endif
 
 conduit_local_unix_e2e_test = executable('test_conduit_local_unix_e2e',
     ['test/unit/test_conduit_local_unix_e2e.c'],
@@ -1641,9 +1686,16 @@ conduit_local_conformance_e2e_test = executable(
     ['test/unit/test_conduit_local_conformance_e2e.c'],
     kwargs: test_common_kwargs,
 )
+# n00b#415: the in-test I/O budget is 30 s (N00B_TEST_IO_BUDGET_MS), so the
+# meson timeout has to sit above it -- at the 30 s default the whole-test
+# timeout fires first and a wedge is reported as a bare expiry instead of the
+# assertion that names the stalled read. Normal runtime is ~8.6 s on macOS and
+# ~5.3 s on Linux, so this is ~14x the observed cost and ~7x its worst
+# measured (half-speed runner) case.
 test('conduit_local_conformance_e2e',
      conduit_local_conformance_e2e_test,
-     suite: 'unit')
+     suite: 'unit',
+     timeout: 120)
 
 if target_os == 'darwin'
   conduit_local_xpc_e2e_src = configure_file(
@@ -1655,7 +1707,10 @@ if target_os == 'darwin'
       [conduit_local_xpc_e2e_src],
       kwargs: test_common_kwargs,
   )
-  test('conduit_local_xpc_e2e', conduit_local_xpc_e2e_test, suite: 'unit')
+  # Same reasoning as conduit_local_conformance_e2e above (n00b#415); this one
+  # normally runs in ~1.3 s.
+  test('conduit_local_xpc_e2e', conduit_local_xpc_e2e_test, suite: 'unit',
+       timeout: 120)
 endif
 
 if target_os == 'windows'
@@ -1663,14 +1718,19 @@ if target_os == 'windows'
       ['test/unit/test_conduit_local_windows_e2e.c'],
       kwargs: test_common_kwargs,
   )
-  test('conduit_local_windows_e2e', conduit_local_windows_e2e_test, suite: 'unit')
+  # Same reasoning as conduit_local_conformance_e2e above (n00b#415).
+  test('conduit_local_windows_e2e', conduit_local_windows_e2e_test, suite: 'unit',
+       timeout: 120)
 endif
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 conduit_lifecycle_e2e_test = executable('test_conduit_lifecycle_e2e',
     ['test/unit/test_conduit_lifecycle_e2e.c'],
     kwargs: test_common_kwargs,
 )
 test('conduit_lifecycle_e2e', conduit_lifecycle_e2e_test, suite: 'unit')
+endif
 
 env_test = executable('test_env',
     ['test/unit/test_env.c'],
@@ -1850,6 +1910,8 @@ if conf_static_grammar_image
   # The static-grammar-image test drives the bake tool as a subprocess and
   # exercises the build-time-baked c_ncc object linked in via c_grammar_image.
   # It needs both the bake-tool path and the c_ncc.bnf path at compile time.
+# n00b#333: POSIX-only (fork/waitpid); not built on Windows.
+if target_os != 'windows'
   test_static_grammar_image_exe = executable(
       'test_static_grammar_image',
       ['test/unit/test_static_grammar_image.c',
@@ -1878,6 +1940,7 @@ if conf_static_grammar_image
     test('static_grammar_image', test_static_grammar_image_exe, suite: 'unit',
          timeout: 180)
   endif
+endif
 
   # WP-008 Phase 4 behavioral-equivalence proof: the linked baked c_ncc
   # grammar parses the same representative C input as the legacy heap
@@ -2431,14 +2494,44 @@ worker_pool_gc_stress_test = executable('test_worker_pool_gc_stress',
 test('worker_pool_gc_stress', worker_pool_gc_stress_test, suite: 'unit',
      timeout: 120)
 
+# n00b#309 reproducer: user_pool jobs through a worker pool while a helper
+# thread forces collections every 150ms (the wax test_754_stress shape, no wax).
+# 20s by default; N00B_RIG_SECONDS raises it for soak runs, N00B_RIG_POOL=arena
+# places the pool struct in the moving arena (wax's AI work pool shape).
+worker_pool_collector_rig_test = executable('test_worker_pool_collector_rig',
+    ['test/unit/test_worker_pool_collector_rig.c'],
+    kwargs: test_common_kwargs,
+)
+test('worker_pool_collector_rig', worker_pool_collector_rig_test, suite: 'unit',
+     timeout: 180)
+# Same rig under the pin-all policy (what a consumer without the gcmap
+# dictionary, e.g. wax, gets by default): nothing is copied, no word rewritten.
+test('worker_pool_collector_rig_pin_all', worker_pool_collector_rig_test,
+     suite: 'unit', timeout: 180, env: ['N00B_GC_PIN_ALL=1'])
+
 # A timed condition wait on a never-notified CV must return by its deadline
 # under spurious wakes (n00b#307).
 condition_timed_wait_test = executable('test_condition_timed_wait',
     ['test/unit/test_condition_timed_wait.c'],
     kwargs: test_common_kwargs,
 )
+# is_parallel: false because the pass condition is timing-based: a waiter that
+# stays inside ONE timed wait for longer than BUDGET_NS + 20*HANG_NS (~2.0005 s,
+# against a 500 us budget) is reported as hung. That detector is measuring the
+# scheduler as much as the code, and on a 3-core macOS runner with four test
+# processes in flight it fires on starvation alone.
+#
+# n00b#413: the test passed at 20.1 s for months, then the 2026-09-15 merge
+# batch shifted it from position ~116 to ~93 -- into the suite's heaviest
+# cluster (rocs_seal_bench 76 s, worker_pool_collector_rig 22 s,
+# rocs_async_seal_stress 35 s, worker_pool_collector_rig_pin_all 23 s,
+# worker_pool_gc_stress 36 s) -- and started failing at ~8.4 s on main and on
+# every PR built against it. Nothing about the condition variable changed; the
+# neighbours did. Serialising it measures the primitive again instead of the
+# runner's load, the same reason dict_untyped_migrate and the vault tests carry
+# this flag.
 test('condition_timed_wait', condition_timed_wait_test, suite: 'unit',
-     timeout: 60)
+     is_parallel: false, timeout: 60)
 
 # Deterministic named-object-graph repro of the worker-thread GC trace defect.
 gc_worker_trace_test = executable('test_gc_worker_trace',
@@ -2471,6 +2564,52 @@ rocs_large_shard_seal_test = executable('test_rocs_large_shard_seal',
 # marginal bump that would need revisiting on the next slow runner.
 test('rocs_large_shard_seal', rocs_large_shard_seal_test, suite: 'unit',
      timeout: 180)
+
+# n00b-lang/n00b#431: n00b_add_arena_segment must hold the STW gate for the
+# whole operation.  Hammers segment adds from several threads while the main
+# thread forces collects, with the segment-chain audit on; a lock-order mistake
+# in the gate hangs here and a chain the collector no longer owns aborts.
+# QUARANTINED (n00b#431): this is the crash, not a test of the fix.
+#
+# Six threads allocating 4 MB objects against forced collects reproduces the
+# #431 crash family LOCALLY -- roughly 7 runs in 10 on a 10-core macOS box,
+# with several distinct faults (a write into an unmapped page just past a live
+# allocation; a garbage thread pointer in n00b_epoch_flush_all_stw).  That
+# family had only ever been seen on one Windows box at about one crash per six
+# 420-second cold restarts, so having it here at all is the point of checking
+# it in.
+#
+# It is NOT fixed.  The STW gate on n00b_add_arena_segment in this change is a
+# real hole and closes a documented contract violation, but it does not move
+# this test's failure rate (7/10 before, 7/10 after), so at least one more
+# mechanism is live.
+#
+# 'known-broken' rather than should_fail: it passes ~30% of runs, so
+# should_fail would report UNEXPECTEDPASS. Same reasoning as rocs_live_cursor.
+# Restore its real suite with the fix.
+gc_large_alloc_churn_test = executable('test_gc_large_alloc_churn',
+    ['test/unit/test_gc_large_alloc_churn.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_large_alloc_churn', gc_large_alloc_churn_test, suite: 'known-broken',
+     timeout: 300)
+
+arena_segment_stw_race_test = executable('test_arena_segment_stw_race',
+    ['test/unit/test_arena_segment_stw_race.c'],
+    kwargs: test_common_kwargs,
+)
+test('arena_segment_stw_race', arena_segment_stw_race_test, suite: 'unit',
+     timeout: 180)
+
+# n00b-lang/n00b#432: the marshal's private scratch pool must stay within a
+# small multiple of the image it produces.  It used to retain one block per
+# marshaled allocation plus every superseded half of the output buffer, which on
+# Windows is committed memory held for the whole marshal.
+marshal_scratch_bound_test = executable('test_marshal_scratch_bound',
+    ['test/unit/test_marshal_scratch_bound.c'],
+    kwargs: test_common_kwargs,
+)
+test('marshal_scratch_bound', marshal_scratch_bound_test, suite: 'unit')
 
 rocs_recovery_journal_test = executable('test_rocs_recovery_journal',
     ['test/unit/test_rocs_recovery_journal.c'],
@@ -2987,6 +3126,8 @@ attest_oci_manifest_test = executable('test_attest_oci_manifest',
 )
 test('attest_oci_manifest', attest_oci_manifest_test, suite: 'unit')
 
+# n00b#333: POSIX-only (fork/waitpid); not built on Windows.
+if target_os != 'windows'
 attest_oci_push_smoke_test = executable('test_attest_oci_push_smoke',
     ['test/unit/test_attest_oci_push_smoke.c'],
     kwargs: test_common_kwargs,
@@ -3004,6 +3145,7 @@ test('attest_oci_push_smoke', attest_oci_push_smoke_test,
      env: {
          'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
      })
+endif
 
 # WP-004 Phase 3: discover-side smoke against zot. Pushes two
 # envelopes with distinct predicate-types and asserts list_referrers
@@ -3129,6 +3271,8 @@ test('attest_mark_pe_e2e',
 # /usr/bin/codesign --verify --deep --strict (non-fatal SKIP on
 # tooling failure).
 if host_machine.system() == 'darwin'
+# n00b#333: POSIX-only (fork/waitpid); not built on Windows.
+if target_os != 'windows'
     attest_mark_macho_e2e_test = executable(
         'test_attest_mark_macho_e2e_macos',
         ['test/unit/test_attest_mark_macho_e2e_macos.c'],
@@ -3139,6 +3283,7 @@ if host_machine.system() == 'darwin'
          suite: 'unit',
          env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
          workdir: meson.project_source_root())
+endif
 endif
 
 # WP-005 Phase 2: `n00b_attest_cli_mark` end-to-end regression
@@ -3279,9 +3424,7 @@ gc_census_test = executable('test_gc_census',
     ['test/unit/test_gc_census.c'],
     kwargs: test_common_kwargs,
 )
-    # QUARANTINED (n00b#281) -- remove should_fail with the fix.
-test('gc_census', gc_census_test, suite: 'unit',
-     should_fail: true)
+test('gc_census', gc_census_test, suite: 'unit')
 
 gc_register_roots_api_test = executable('test_gc_register_roots_api',
     ['test/unit/test_gc_register_roots_api.c'],
@@ -3309,6 +3452,18 @@ gc_scan_map_test = executable('test_gc_scan_map',
     kwargs: test_common_kwargs,
 )
 test('gc_scan_map', gc_scan_map_test, suite: 'unit')
+
+# n00b#395 -- measures whether one large, since-collected allocation makes
+# later collects worse over an unchanged live set. Reports numbers; it is an
+# instrument, not a gate, so it is not in the default 'unit' suite.
+gc_scan_bound_hysteresis_test = executable('test_gc_scan_bound_hysteresis',
+    ['test/unit/test_gc_scan_bound_hysteresis.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_scan_bound_hysteresis',
+    gc_scan_bound_hysteresis_test,
+    suite: 'bench',
+    timeout: 300)
 
 gc_stack_test = executable('test_gc_stack',
     ['test/unit/test_gc_stack.c'],
@@ -3448,6 +3603,8 @@ current_allocator_test = executable('test_current_allocator',
 test('current_allocator', current_allocator_test, suite: 'unit')
 
 if target_os != 'windows'
+# n00b#333: POSIX-only (raw pthreads); not built on Windows.
+if target_os != 'windows'
     hidden_pool_stw_test = executable('test_hidden_pool_stw',
         ['test/unit/test_hidden_pool_stw.c'],
         kwargs: test_common_kwargs + {
@@ -3469,6 +3626,7 @@ if target_os != 'windows'
     # `./scripts/build.sh build && ./build/test_hidden_pool_stw` or
     # `meson test -C build --suite stress`.
     test('hidden_pool_stw', hidden_pool_stw_test, suite: 'stress', timeout: 60)
+endif
 endif
 
 check_perms_dyld_gap_test = executable('test_check_perms_dyld_gap',
@@ -3667,6 +3825,28 @@ alloc_interior_large_test = executable('test_alloc_interior_large',
 )
 test('alloc_interior_large', alloc_interior_large_test, suite: 'unit')
 
+# n00b#275 + n00b#395: the conservative guard scan's per-page cost (arena
+# segments must record their permissions, or every page of every backward walk
+# pays a pipe write()+poll()) and its LENGTH (the bound must come from the
+# mapping being walked, not from a monotonic all-time high-water mark that one
+# large allocation raises for the life of the process).
+gc_scan_bound_test = executable('test_gc_scan_bound',
+    ['test/unit/test_gc_scan_bound.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_scan_bound', gc_scan_bound_test, suite: 'unit')
+
+# n00b#213: n00b_check_kernel_page_map caches "something is mapped here" by
+# registering the probed page, and nothing ever unregisters it -- the one
+# registration site in the process with no counterpart. The cache is now
+# capped; this probes far more pages than the cap and checks the registry does
+# not grow past it.
+mmap_probe_cache_test = executable('test_mmap_probe_cache_bound',
+    ['test/unit/test_mmap_probe_cache_bound.c'],
+    kwargs: test_common_kwargs,
+)
+test('mmap_probe_cache_bound', mmap_probe_cache_test, suite: 'unit')
+
 # Gates the embedded-n00b_condition_t pinning rule (n00b#326): every inbox
 # constructor must yield a pointer the collector cannot relocate, because the
 # lock registry keys locks by address. Convention-only before this test; two
@@ -3710,11 +3890,14 @@ io_test = executable('test_io',
 )
 test('io', io_test, suite: 'unit')
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 socket_test = executable('test_socket',
     ['test/unit/test_socket.c'],
     kwargs: test_common_kwargs,
 )
 test('socket', socket_test, suite: 'unit')
+endif
 
 fd_managed_test = executable('test_fd_managed',
     ['test/unit/test_fd_managed.c'],
@@ -3736,11 +3919,14 @@ signal_test = executable('test_signal',
 )
 test('signal', signal_test, suite: 'unit')
 
+# n00b#333: POSIX-only (fork/waitpid); not built on Windows.
+if target_os != 'windows'
 proc_lifecycle_test = executable('test_proc_lifecycle',
     ['test/unit/test_proc_lifecycle.c'],
     kwargs: test_common_kwargs,
 )
 test('proc_lifecycle', proc_lifecycle_test, suite: 'unit')
+endif
 
 file_change_test = executable('test_file_change',
     ['test/unit/test_file_change.c'],
@@ -3748,11 +3934,14 @@ file_change_test = executable('test_file_change',
 )
 test('file_change', file_change_test, suite: 'unit')
 
+# n00b#333: POSIX-only (fork/waitpid); not built on Windows.
+if target_os != 'windows'
 subproc_test = executable('test_subproc',
     ['test/unit/test_subproc.c'],
     kwargs: test_common_kwargs,
 )
 test('subproc', subproc_test, suite: 'unit', timeout: 120)
+endif
 
 timer_test = executable('test_timer',
     ['test/unit/test_timer.c'],
@@ -4597,6 +4786,8 @@ display_hexdump_contracts_test = executable('test_display_hexdump_contracts',
 test('display_hexdump_contracts', display_hexdump_contracts_test, suite: 'unit')
 
 if conf_cocoa
+# n00b#333: POSIX-only (fork/waitpid); not built on Windows.
+if target_os != 'windows'
   cocoa_test = executable('test_cocoa_backend',
       ['test/unit/test_cocoa_backend.m'],
       include_directories: incdir,
@@ -4605,6 +4796,7 @@ if conf_cocoa
       build_by_default: n00b_build_tests,
   )
   test('cocoa_backend', cocoa_test, suite: 'unit')
+endif
 
   cocoa_bridge_contracts_test = executable('test_display_cocoa_bridge_contracts',
       ['test/unit/test_display_cocoa_bridge_contracts.m'],
@@ -5097,6 +5289,16 @@ mmaps_test = executable('test_mmaps',
 )
 test('mmaps', mmaps_test, suite: 'integration')
 
+# n00b#399: the kernel probe behind n00b_check_memory_perms may only read
+# EFAULT as a verdict about the address; every other failure is the probe's
+# own and comes back as perms_unknown, never as no_access (which truncates a
+# conservative scan). Checks the two verdicts on unregistered raw pages.
+memperm_probe_test = executable('test_memperm_probe',
+    ['test/unit/test_memperm_probe.c'],
+    kwargs: test_common_kwargs,
+)
+test('memperm_probe', memperm_probe_test, suite: 'unit')
+
 alloc_metadata_test = executable('test_alloc_metadata',
     ['test/integration/test_alloc_metadata.c'],
     kwargs: test_common_kwargs,
@@ -5182,10 +5384,12 @@ if target_os != 'windows'
         suite: 'integration',
     )
 
-    # QUARANTINED (n00b#281). Was should_fail, but it PASSES on the CI macOS
-    # runner while failing locally, so should_fail reported UNEXPECTEDPASS and
-    # kept the run red. should_fail asserts an outcome; this one is not
-    # consistent enough to assert either way, so it goes to known-broken.
+    # Un-quarantined (n00b#281). The Linux failure was one line of
+    # cutover_report.txt: `notcurses_available` is a live host probe recorded
+    # into a byte-exact fixture, and it flipped to false when the runner image
+    # changed. The harness now declares that probe's outcome the same way it
+    # already pins TERM/DISPLAY/WAYLAND_DISPLAY, so the fixture no longer
+    # depends on whether notcurses can start on the runner.
 test('display_m6_artifacts',
         sh_prog,
         args: [
@@ -5197,7 +5401,7 @@ test('display_m6_artifacts',
             display_m6_cutover_report,
             meson.project_source_root(),
         ],
-        suite: 'known-broken')
+        suite: 'integration')
   endif
 endif
 
@@ -5465,6 +5669,8 @@ test('objfile_macho_oracle', objfile_macho_oracle_test,
 # strip -> insert loadable LC_SEGMENT_64 + slide __LINKEDIT -> redirect
 # LC_MAIN -> ad-hoc resign via the existing chalk path -> verify + run.
 if host_machine.system() == 'darwin'
+# n00b#333: POSIX-only (fork/waitpid); not built on Windows.
+if target_os != 'windows'
     macho_entrypoint_spike_test = executable(
         'test_macho_entrypoint_spike_macos',
         ['test/unit/test_macho_entrypoint_spike_macos.c'],
@@ -5476,6 +5682,7 @@ if host_machine.system() == 'darwin'
          timeout: 120,
          env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
          workdir: meson.project_source_root())
+endif
 endif
 
 # WP-016: gated per-mode execute-from-bundle execution test. Registered on ALL
@@ -5682,11 +5889,14 @@ quic_audit_test = executable('test_quic_audit',
 test('quic_audit', quic_audit_test, suite: 'unit')
 
 # Phase 5 § 5.1 — Prometheus metrics registry + listener.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_metrics_test = executable('test_quic_metrics',
     ['test/unit/test_quic_metrics.c'],
     kwargs: test_common_kwargs,
 )
 test('quic_metrics', quic_metrics_test, suite: 'unit')
+endif
 
 # Phase 6 chunk 1 — HTTPS URL parser.
 http_url_test = executable('test_http_url',
@@ -5705,12 +5915,15 @@ test('http_proxy', http_proxy_test, suite: 'unit')
 # grouped-005 regression: an `https://` proxy URL must never get a
 # plaintext CONNECT (or Proxy-Authorization credential) — h1_tls_connect
 # must reject it before dialing.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 http_proxy_https_plaintext_test = executable('test_http_proxy_https_plaintext',
     ['test/unit/test_http_proxy_https_plaintext.c'],
     kwargs: test_common_kwargs,
 )
 test('http_proxy_https_plaintext', http_proxy_https_plaintext_test,
      suite: 'unit', timeout: 10)
+endif
 
 # grouped-003 (H1 half) regression: mTLS client-cert requests must fail
 # closed when a proxy route applies, instead of silently dialing the
@@ -5772,6 +5985,13 @@ rwlock_contention_test = executable('test_rwlock_contention',
 )
 test('rwlock_contention', rwlock_contention_test, suite: 'unit', timeout: 30)
 
+# n00b#271: spinlock holders must not be starved by waiters that outnumber cores.
+spinlock_contention_test = executable('test_spinlock_contention',
+    ['test/unit/test_spinlock_contention.c'],
+    kwargs: test_common_kwargs,
+)
+test('spinlock_contention', spinlock_contention_test, suite: 'unit', timeout: 120)
+
 # PoC for the picotls CertificateVerify gap (see audit).
 tls_certverify_gap_test = executable('test_tls_certverify_gap',
     ['test/unit/test_tls_certverify_gap.c'],
@@ -5802,12 +6022,15 @@ test('rsa_pss_roundtrip', rsa_pss_roundtrip_test,
 # End-to-end QUIC mTLS handshake (loopback) — covers the h3 / picoquic
 # side of n00b_picotls_install_client_auth, including the server-side
 # verify_sign installation that catches forged client CertificateVerify.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_mtls_handshake_test = executable('test_quic_mtls_handshake',
     ['test/unit/test_quic_mtls_handshake.c'],
     kwargs: test_common_kwargs,
 )
 test('quic_mtls_handshake', quic_mtls_handshake_test, suite: 'unit',
      timeout: 30)
+endif
 
 # Phase 6 chunk 5 — public dispatcher (synchronous form;
 # topic-shaped variant follows in a sub-chunk).
@@ -5820,12 +6043,15 @@ test('http_client', http_client_test, suite: 'unit', timeout: 30)
 # grouped-003 (H3 half) regression: the public dispatcher's default
 # prefer_h3=true must not dial the origin directly over H3/QUIC when a
 # proxy route applies — it must defer to the proxy-aware h1 CONNECT path.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 http_h3_proxy_policy_test = executable('test_http_h3_proxy_policy',
     ['test/unit/test_http_h3_proxy_policy.c'],
     kwargs: test_common_kwargs,
 )
 test('http_h3_proxy_policy', http_h3_proxy_policy_test,
      suite: 'unit', timeout: 15)
+endif
 
 # DF-014 + DF-015 — per-call max_body_size + redirect_host_allowlist
 # kwargs.  Substrate cases run unconditionally; integration leg
@@ -5882,17 +6108,23 @@ http_auth_test = executable('test_http_auth',
 test('http_auth', http_auth_test, suite: 'unit')
 
 # Local HTTP/1 service/router.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 http_service_test = executable('test_http_service',
     ['test/unit/test_http_service.c'],
     kwargs: test_common_kwargs,
 )
 test('http_service', http_service_test, suite: 'unit')
+endif
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 http_json_parquet_test = executable('test_http_json_parquet',
     ['test/unit/test_http_json_parquet.c'],
     kwargs: test_common_kwargs,
 )
 test('http_json_parquet', http_json_parquet_test, suite: 'unit')
+endif
 
 # Phase 4 § 4.1 — CBOR encoder + decoder (RFC 8949).  Unit tests
 # cover Appendix A vectors + n00b round-trips + decoder hardening +
@@ -5936,28 +6168,36 @@ test('quic_rpc_status', quic_rpc_status_test, suite: 'unit')
 # dispatcher, and exercises register/lookup, success, application
 # error, UNIMPLEMENTED, deadline-already-expired, and client-cancel
 # mid-flight.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_rpc_unary_test = executable('test_quic_rpc_unary',
     ['test/unit/test_quic_rpc_unary.c'],
     kwargs: quic_test_kwargs,
 )
 test('quic_rpc_unary', quic_rpc_unary_test, suite: 'unit', timeout: 60)
+endif
 
 # Phase 4 § 4.7 — Streaming RPC: server-stream / client-stream / bidi
 # end-to-end loopback.  Mirrors the unary test scaffold but exercises
 # the streaming wire shapes (multiple DATA frames + early-publish on
 # the H3 server side + the n00b_rpc_stream_t(T) FIFO).
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_rpc_streaming_test = executable('test_quic_rpc_streaming',
     ['test/unit/test_quic_rpc_streaming.c'],
     kwargs: quic_test_kwargs,
 )
 test('quic_rpc_streaming', quic_rpc_streaming_test,
      suite: 'unit', timeout: 90)
+endif
 
 # Phase 4 § 4.9 — RPC auth wiring (per-channel + per-call).
 # Server-side dispatcher consults manifest auth.policies[] +
 # rpc.services[] to gate inbound RPCs; per-call n00b-rpc-policy
 # header lets a request opt into a stricter policy (downgrades
 # rejected).  Audit emits one event per dispatch.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_rpc_auth_test = executable('test_quic_rpc_auth',
     ['test/unit/test_quic_rpc_auth.c',
      'test/fixtures/synthetic_idp.c'],
@@ -5969,6 +6209,7 @@ quic_rpc_auth_test = executable('test_quic_rpc_auth',
     build_by_default: n00b_build_tests,
 )
 test('quic_rpc_auth', quic_rpc_auth_test, suite: 'unit', timeout: 90)
+endif
 
 # Phase 4 § 4.3 — H3 frame encoder + decoder (RFC 9114).
 # Frame round-trip + truncated input + oversized + malformed.
@@ -5982,22 +6223,28 @@ test('quic_h3_frame', quic_h3_frame_test, suite: 'unit')
 # fixture in `test/fixtures/caddy/`.  Run after:
 #   eval "$(bash test/fixtures/caddy/start.sh)"
 # Skips cleanly when N00B_TEST_DOCKER is unset.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_h3_caddy_smoke_test = executable('test_quic_h3_caddy_smoke',
     ['test/unit/test_quic_h3_caddy_smoke.c'],
     kwargs: quic_test_kwargs,
 )
 test('quic_h3_caddy_smoke', quic_h3_caddy_smoke_test,
      suite: 'interop', timeout: 60)
+endif
 
 # Phase 4 § 4.4 — In-process H3 server loopback (client + server
 # endpoint pair on UDP/lo).  Exercises GET, POST, 404, server reset,
 # and GOAWAY emission on close.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_h3_server_loopback_test = executable('test_quic_h3_server_loopback',
     ['test/unit/test_quic_h3_server_loopback.c'],
     kwargs: quic_test_kwargs,
 )
 test('quic_h3_server_loopback', quic_h3_server_loopback_test,
      suite: 'unit', timeout: 60)
+endif
 
 # WP-004 Phase 5 closeout — h3 mid-stream `max_body_size` enforcement
 # regression (DF-014 lift).  Pins the receive-loop guard introduced on
@@ -6006,23 +6253,29 @@ test('quic_h3_server_loopback', quic_h3_server_loopback_test,
 # cap must trigger an `H3_EXCESSIVE_LOAD` stream reset before any
 # excess bytes accumulate.  Uses the same in-process loopback fixture
 # as `test_quic_h3_server_loopback`.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 http_h3_max_body_cap_test = executable('test_http_h3_max_body_cap',
     ['test/unit/test_http_h3_max_body_cap.c'],
     kwargs: quic_test_kwargs,
 )
 test('http_h3_max_body_cap', http_h3_max_body_cap_test,
      suite: 'unit', timeout: 60)
+endif
 
 # Phase 4 § 4.4 — Docker-gated H3 GET / + POST /echo smoke against
 # the nginx-quic fixture in `test/fixtures/nginx-quic/`.  Run after:
 #   eval "$(bash test/fixtures/nginx-quic/start.sh)"
 # Skips cleanly when N00B_TEST_DOCKER is unset.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_h3_nginx_smoke_test = executable('test_quic_h3_nginx_smoke',
     ['test/unit/test_quic_h3_nginx_smoke.c'],
     kwargs: quic_test_kwargs,
 )
 test('quic_h3_nginx_smoke', quic_h3_nginx_smoke_test,
      suite: 'interop', timeout: 60)
+endif
 
 # Phase 3 § 7 + § 10.10 — synthetic in-process IdP fixture wired
 # end-to-end (OIDC + JWT + DPoP + mTLS-bound + policy + audit).
@@ -6101,6 +6354,8 @@ quic_phase5_demo = executable('quic_phase5_demo',
     dependencies: [picoquic_dep],
 )
 
+# n00b#333: POSIX-only (fork/waitpid); not built on Windows.
+if target_os != 'windows'
 quic_phase5_demo_smoke_test = executable('test_quic_phase5_demo_smoke',
     ['test/unit/test_quic_phase5_demo_smoke.c'],
     kwargs: test_common_kwargs,
@@ -6109,6 +6364,7 @@ test('quic_phase5_demo_smoke', quic_phase5_demo_smoke_test,
      suite: ['unit', 'long'], timeout: 90,
      env: {'N00B_QUIC_PHASE5_DEMO_BIN': quic_phase5_demo.full_path()},
      depends: [quic_phase5_demo])
+endif
 
 # Phase 5 § 5.4 — K8s playbook fixture smoke (kind + n00b deploy).
 # Gated on N00B_TEST_KIND=1 + kind/kubectl/docker on PATH.
@@ -6161,6 +6417,8 @@ test('quic_phase5_zitadel_smoke', quic_phase5_zitadel_test,
 # asserts the canonical Hello + Stream output appears.  The demo binary
 # path is passed via the N00B_QUIC_RPC_DEMO_BIN env var (set on the
 # test invocation below).
+# n00b#333: POSIX-only (fork/waitpid); not built on Windows.
+if target_os != 'windows'
 quic_rpc_demo_smoke_test = executable('test_quic_rpc_demo_smoke',
     ['test/unit/test_quic_rpc_demo_smoke.c'],
     kwargs: test_common_kwargs,
@@ -6169,6 +6427,7 @@ test('quic_rpc_demo_smoke', quic_rpc_demo_smoke_test,
      suite: ['unit', 'long'], timeout: 90,
      env: {'N00B_QUIC_RPC_DEMO_BIN': quic_rpc_demo.full_path()},
      depends: [quic_rpc_demo])
+endif
 
 # ACME end-to-end (Phase 2.3a): directory + newNonce + newAccount.
 # Skipped unless STEPCA_DIR_URL is in the env — start the fixture via
@@ -6215,11 +6474,14 @@ quic_cert_store_test = executable('test_quic_cert_store',
 test('quic_cert_store', quic_cert_store_test, suite: 'unit')
 
 # Endpoint hot-reload (cert + key swap).
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_endpoint_reload_test = executable('test_quic_endpoint_reload',
     ['test/unit/test_quic_endpoint_reload.c'],
     kwargs: test_common_kwargs,
 )
 test('quic_endpoint_reload', quic_endpoint_reload_test, suite: 'unit')
+endif
 
 # Sticky secret (stateless-reset / address-validation token rotation).
 quic_sticky_secret_test = executable('test_quic_sticky_secret',
@@ -6263,25 +6525,34 @@ quic_dns_provider_test = executable('test_quic_dns_provider',
 test('quic_dns_provider', quic_dns_provider_test, suite: 'unit')
 
 # Per-cnx SNI routing (cert store wired into picotls callbacks).
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_sni_routing_test = executable('test_quic_sni_routing',
     ['test/unit/test_quic_sni_routing.c'],
     kwargs: test_common_kwargs,
 )
 test('quic_sni_routing', quic_sni_routing_test, suite: 'unit')
+endif
 
 # Phase 3 § 5 — trust→picotls verify-cert bridge end-to-end.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_trust_bridge_test = executable('test_quic_trust_bridge',
     ['test/unit/test_quic_trust_bridge.c'],
     kwargs: test_common_kwargs,
 )
 test('quic_trust_bridge', quic_trust_bridge_test, suite: 'unit')
+endif
 
 # Phase 3 § 5.3 tail — mid-handshake-reload no-tear property.
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_reload_race_test = executable('test_quic_reload_race',
     ['test/unit/test_quic_reload_race.c'],
     kwargs: test_common_kwargs,
 )
 test('quic_reload_race', quic_reload_race_test, suite: 'unit')
+endif
 
 # test_quic_acme_http_network removed in Phase 6 chunk 11 — its
 # Let's-Encrypt-staging coverage runs through test_quic_acme_session
@@ -6289,47 +6560,68 @@ test('quic_reload_race', quic_reload_race_test, suite: 'unit')
 # STEPCA_LEAF_FP env var is set; the basic h1 round-trip against
 # public endpoints is exercised by test_http_h1_network.
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_endpoint_test = executable('test_quic_endpoint',
     ['test/unit/test_quic_endpoint.c'],
     kwargs: quic_test_kwargs,
 )
 test('quic_endpoint', quic_endpoint_test, suite: 'unit')
+endif
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_conn_test = executable('test_quic_conn',
     ['test/unit/test_quic_conn.c'],
     kwargs: test_common_kwargs,
 )
 test('quic_conn', quic_conn_test, suite: 'unit')
+endif
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_chan_test = executable('test_quic_chan',
     ['test/unit/test_quic_chan.c'],
     kwargs: test_common_kwargs,
 )
 test('quic_chan', quic_chan_test, suite: 'unit')
+endif
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_chan_recv_test = executable('test_quic_chan_recv',
     ['test/unit/test_quic_chan_recv.c'],
     kwargs: test_common_kwargs,
 )
 test('quic_chan_recv', quic_chan_recv_test, suite: 'unit')
+endif
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_handshake_test = executable('test_quic_handshake',
     ['test/unit/test_quic_handshake.c'],
     kwargs: quic_test_kwargs,
 )
 test('quic_handshake', quic_handshake_test, suite: 'unit', timeout: 30)
+endif
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_accept_test = executable('test_quic_accept',
     ['test/unit/test_quic_accept.c'],
     kwargs: quic_test_kwargs,
 )
 test('quic_accept', quic_accept_test, suite: 'unit', timeout: 30)
+endif
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 quic_qlog_test = executable('test_quic_qlog',
     ['test/unit/test_quic_qlog.c'],
     kwargs: quic_test_kwargs,
 )
 test('quic_qlog', quic_qlog_test, suite: 'unit', timeout: 30)
+endif
 
 # Perf harness — built but not registered as a CI test (it's
 # benchmarking, not assertion-based).  Run manually with
@@ -6361,11 +6653,14 @@ perf_quic_stream_scaling = executable('perf_quic_stream_scaling',
 if target_os == 'windows'
 endif
 
+# n00b#333: POSIX-only (raw BSD sockets); not built on Windows.
+if target_os != 'windows'
 conduit_udp_test = executable('test_conduit_udp',
     ['test/unit/test_conduit_udp.c'],
     kwargs: test_common_kwargs,
 )
 test('conduit_udp', conduit_udp_test, suite: 'unit')
+endif
 
 
 
@@ -6396,23 +6691,21 @@ regex_resharp_test = executable('test_regex_resharp',
         'c_args': exe_c_args + ['--ncc-no-gc-stack-maps'],
     },
 )
-# QUARANTINED (n00b#288). The 900s budget was the right call and it did its
-# job: with room to finish, the run stopped reporting a bare TIMEOUT and named
-# the actual fault -- 328 of 329 cases pass, and one blows the harness's own
-# 5s per-case budget:
+# Un-quarantined (n00b#288). The whole 329-case corpus now runs in ~18s on
+# macOS and ~45s on Linux, so the 900s budget and the 'slow' opt-out that
+# existed to keep it off every push are both gone.
 #
-#   tests08_semantics.toml:15  semantics_multi_intersection
-#   pattern='.*[a-z].*&.*[A-Z].*&.*\d.*&[a-zA-Z\d]{8,}&~(.*\d\d.*)'
+# What it was actually reporting was the build type, not the engine. The
+# harness caps each case at 5s, and at -O0 four of them exceeded that in the
+# regex engine alone; the suite then spent most of its time in ncc's
+# gc-stack-map push/pop pair rather than in matching. Built -O2 the corpus
+# passes 329/329 with no case near the per-case budget.
 #
-# A 5-way intersection with a negated term. The 2-way intersections in the
-# same file, same input, pass comfortably -- so the cost tracks the number of
-# intersected terms, as a product construction would.
-#
-# The timeout stays at 900s rather than reverting: it is what makes the run
-# diagnose itself instead of just expiring.
+# 300s is ~6x the slowest measured run, which leaves room for a loaded runner
+# without going back to a budget long enough to hide a genuine hang.
 test('regex_resharp', regex_resharp_test,
-    suite: 'known-broken',
-    timeout: 900,
+    suite: 'unit',
+    timeout: 300,
     env: {
         'N00B_RESHARP_TEST_DIR': meson.current_source_dir() / 'test/data/resharp/tests',
     })

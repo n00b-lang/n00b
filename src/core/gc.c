@@ -51,11 +51,14 @@
 #include <mach-o/loader.h>
 #endif
 
+#include <stdio.h>
+#include <stdlib.h>
 #include "n00b.h"
 #include "util/assert.h"
 #include "conduit/write.h"
 #include "core/syscall.h" // n00b_raw_write — STW-safe direct-fd census emit
 #include "core/gc.h"
+#include "core/gc_map.h"
 // Full GC stack-map / policy struct + enum defs (this TU defines the stack API).
 #include "core/codegen_abi_inject.h"
 #include "core/gc_stack.h"
@@ -326,6 +329,7 @@ static void        n00b_pin_object_pages(n00b_collect_t *ctx, n00b_alloc_info_t 
 static bool        n00b_alloc_is_pinned(n00b_collect_t *ctx, n00b_alloc_info_t ainfo);
 static void        n00b_scan_pinned_in_place(n00b_collect_t *ctx, n00b_alloc_info_t ainfo);
 static void        n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain);
+static void        gc_audit_segment_chain(n00b_arena_t *arena, const char *when);
 
 // GC pin accounting (non-static so a debugger can read them). Per-collect: how
 // many from-space pages were RETAINED (pinned, linked back into the live arena)
@@ -655,7 +659,9 @@ n00b_debug_census_rows_from_dicts(n00b_debug_census_t      *census,
     }
 
     n00b_debug_census_row_t *rows
-        = n00b_alloc_array(n00b_debug_census_row_t, n, .allocator = census->allocator);
+        = n00b_alloc_array_with_opts(n00b_debug_census_row_t,
+                                     n,
+                                     &(n00b_alloc_opts_t){.allocator = census->allocator});
 
     uint64_t i = 0;
     n00b_dict_foreach(primary, ck, cv, {
@@ -1410,11 +1416,43 @@ n00b_gc_shrink_primary_segment(n00b_arena_t *arena)
 
     char    *tail     = segment->data + target;
     uint64_t tail_len = old_size - target;
+
+    /* Today the only caller reaches this with the to-space segment, which is
+     * still hidden and therefore has no registry record, so the fixup below
+     * does not fire. It is here because this is the ONLY place a live segment
+     * shrinks, and shrinking a registered one without shortening its record
+     * would now be a crash rather than a stale entry: n00b#275 made arena
+     * segments record their permissions so the mark loop's guard scan can
+     * trust them WITHOUT asking the kernel, so a record that outlived its
+     * mapping would have the scan read unmapped memory on that authority --
+     * the n00b#290 failure mode, reached from the other side.
+     *
+     * Carrying the recorded allocation high-water across keeps the tightened
+     * scan bound (n00b#395) from resetting to "nothing recorded" on a segment
+     * that is full of live objects. */
+    uint64_t carried        = 0;
+    bool     was_registered = (segment->mmap_rec != nullptr);
+
+    if (was_registered) {
+        carried = atomic_load_explicit(&segment->mmap_rec->max_alloc_len,
+                                       memory_order_relaxed);
+        n00b_mmap_unregister(segment->data);
+        segment->mmap_rec = nullptr;
+    }
+
     n00b_safe_munmap(tail, tail_len);
 
     segment->size      = target;
     segment->last_addr = segment->data + target;
     arena->segment_end = segment->last_addr;
+
+    if (was_registered) {
+        segment->mmap_rec = n00b_register_arena_segment(segment->data,
+                                                        segment->last_addr,
+                                                        arena);
+        n00b_mmap_note_alloc_len(segment->mmap_rec, carried);
+    }
+
     n00b_atomic_store(&n00b_gc_last_primary_shrink_bytes, tail_len);
     n00b_atomic_add(&n00b_gc_total_primary_shrink_bytes, tail_len);
 }
@@ -1502,6 +1540,33 @@ n00b_forward_alloc(n00b_collect_t *ctx, n00b_inline_hdr_t *old)
     top = n00b_atomic_load(&ctx->to_space->next_alloc);
     new = (n00b_inline_hdr_t *)top;
     top = top + old->alloc_len;
+
+    /* This is a RAW bump: no CAS (the world is stopped, the collector is the
+     * sole runner) -- but it still has to respect the end of the segment, and
+     * until now it did not check.
+     *
+     * "The survivors always fit" holds by construction, because the to-space is
+     * sized from the from-space's whole capacity.  But it held SILENTLY: an
+     * object that did not fit was memcpy'd past the end of the mapped segment,
+     * i.e. an out-of-bounds write from inside the collector with the world
+     * stopped, which lands wherever the next mapping happens to be.
+     *
+     * Make the invariant explicit.  A failure here is a bug in the to-space
+     * sizing, and it needs to say so at the point of the mistake rather than
+     * corrupt whatever is next in the address space and fault somewhere else
+     * entirely (n00b#431).  Growing the to-space instead of aborting is the
+     * right end state, but it requires the multi-segment to-space path to be
+     * sound first -- see the issue. */
+    n00b_require(top <= ctx->to_space->segment_end,
+                 "GC to-space overrun: a survivor does not fit the to-space, "
+                 "which is sized from the from-space's capacity (n00b#431)");
+
+    /* n00b#395: the to-space is hidden (and so unregistered) for the duration
+     * of the collect, so record the extent here and seed it onto the segment's
+     * registry record when the to-space is registered as the live segment. */
+    if (old->alloc_len > ctx->to_space_max_alloc_len) {
+        ctx->to_space_max_alloc_len = old->alloc_len;
+    }
 
     ctx->to_space->alloc_count++;
 
@@ -2220,7 +2285,12 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx, uint64_t **base, size_t i, bool
 
     if (n00b_is_first_visit(ctx, old_hdr, &fw_hdr)) {
         if (in_from_space) {
-            if (n00b_alloc_is_pinned(ctx, ainfo)) {
+            // n00b#309 / #368: under pin_all every reached object is treated
+            // like an ambiguous-root target. Nothing is copied and no scanned
+            // word is rewritten, so a data word that merely aliases a
+            // from-space address (`producer_id << 32 | magic`, `head << 32 |
+            // cap`, a lock's packed fields) survives the collection intact.
+            if (ctx->pin_all || n00b_alloc_is_pinned(ctx, ainfo)) {
                 // Ambiguous-root pinned: keep in place.  The sentinel
                 // fw_hdr == old_hdr marks "pinned" for this and every
                 // subsequent visit.  Pin ALL of this object's pages first so a
@@ -2927,7 +2997,8 @@ n00b_pin_bitmaps_alloc(n00b_collect_t *ctx)
         seg->pin_bitmap = n00b_alloc_array_with_opts(uint8_t,
                                                      nbytes,
                                                      &(n00b_alloc_opts_t){.allocator = scratch});
-        seg             = seg->next_segment;
+        seg->pin_max_alloc_len = 0;
+        seg                    = seg->next_segment;
     }
 }
 
@@ -2987,6 +3058,11 @@ n00b_pin_object_pages(n00b_collect_t *ctx, n00b_alloc_info_t ainfo)
     for (uint64_t pg = first; pg <= last; pg++) {
         seg->pin_bitmap[pg >> 3] |= (uint8_t)(1u << (pg & 7));
     }
+    // The retained runs this segment leaves behind are bounded by the largest
+    // thing pinned in it (n00b#395); see n00b_reclaim_pinned_pages.
+    if (fl > seg->pin_max_alloc_len) {
+        seg->pin_max_alloc_len = fl;
+    }
 }
 
 // Mark every page of the raw range [start, start+len) pinned, if it falls in a
@@ -3012,6 +3088,12 @@ n00b_pin_raw_range(n00b_collect_t *ctx, char *start, uint64_t len)
     uint64_t last  = (uint64_t)(end - 1 - seg->data) / n00b_page_size;
     for (uint64_t pg = first; pg <= last; pg++) {
         seg->pin_bitmap[pg >> 3] |= (uint8_t)(1u << (pg & 7));
+    }
+    // The reservation becomes an object of exactly this length once the
+    // suspended thread resumes, and that thread may have been stopped before
+    // it could record the extent itself (n00b_arena_note_alloc_extent).
+    if (len > seg->pin_max_alloc_len) {
+        seg->pin_max_alloc_len = len;
     }
 }
 
@@ -3081,8 +3163,11 @@ n00b_pin_prepass(n00b_collect_t *ctx)
         // but the object's GC metadata is not yet registered, so the trace can't
         // discover it.  Without pinning, its page would be reclaimed out from
         // under the suspended thread (the async-seal use-after-reclaim).
-        char    *infl_start = (char *)n00b_atomic_load(&t->gc_inflight_start);
-        uint64_t infl_len   = n00b_atomic_load(&t->gc_inflight_len);
+        // `start` is the publication gate (see n00b_arena_alloc): acquire it
+        // first, so a non-null value guarantees the matching `len` is visible.
+        char *infl_start = (char *)atomic_load_explicit(&t->gc_inflight_start,
+                                                        memory_order_acquire);
+        uint64_t infl_len = n00b_atomic_load(&t->gc_inflight_len);
         if (infl_start != nullptr && infl_len != 0) {
             n00b_pin_raw_range(ctx, infl_start, infl_len);
         }
@@ -3434,11 +3519,47 @@ n00b_process_finalizers(n00b_collect_t *ctx)
 // Collection setup
 // ============================================================================
 
+// n00b#309 / #368. Copying is only sound when every scanned word that
+// resolves into from-space really is a pointer. Without a link-time GC type
+// map every DEFAULT scan is conservative, so a consumer linked without the
+// gcmap wrapper (wax) has ambiguous words throughout its heap and the forward
+// step rewrites any of them that alias a live from-space address. In that
+// configuration pin everything reached: page-granular mark-sweep, dead-only
+// pages returned, live pages retained in place. With a type map present the
+// copying collector stays on (typed objects scan precisely; #368 tracks the
+// remaining conservative words). N00B_GC_PIN_ALL=0|1 overrides either way.
+// Decided once, at the first collection, so a process never mixes modes.
+bool
+n00b_gc_pin_all_policy(void)
+{
+    static _Atomic int decided = -1; // -1 undecided, 0 copy, 1 pin all
+    int                v       = n00b_atomic_load(&decided);
+    if (v >= 0) {
+        return v == 1;
+    }
+    const char *env = getenv("N00B_GC_PIN_ALL");
+    if (env != nullptr && (env[0] == '0' || env[0] == '1') && env[1] == '\0') {
+        v = env[0] - '0';
+    }
+    else {
+        v = n00b_gc_type_map_available() ? 0 : 1;
+    }
+    int expected = -1;
+    if (!n00b_atomic_cas(&decided, &expected, v)) {
+        v = expected;
+    }
+    return v == 1;
+}
+
 static void
 n00b_collect_setup(n00b_collect_t *ctx, n00b_arena_t *from_space, bool out_of_memory)
 {
     ctx->from_space = from_space;
     ctx->to_space   = n00b_create_destination_arena(from_space, out_of_memory);
+    ctx->pin_all    = n00b_gc_pin_all_policy();
+    // The context is an uninitialized stack struct; every field is assigned
+    // here by hand.
+    ctx->to_space_max_alloc_len = 0;
 
     /* Bump the runtime's GC epoch counter and snapshot it onto the
      * collection context. The mark phase stamps this value onto
@@ -3616,12 +3737,32 @@ n00b_reclaim_pinned_pages(n00b_collect_t *ctx, n00b_segment_t *from_chain)
             else {
                 pinned_pages += run_len / pg;
                 retained_runs++;
+                n00b_mmap_info_t *run_rec = nullptr;
                 if (unregister) {
-                    n00b_register_arena_segment(run_addr, run_addr + run_len, live);
+                    run_rec = n00b_register_arena_segment(run_addr,
+                                                          run_addr + run_len,
+                                                          live);
                 }
                 n00b_segment_t *keep
                     = n00b_alloc_with_opts(n00b_segment_t,
                                            &(n00b_alloc_opts_t){.allocator = sp});
+                /* A retained run gets a FRESH registry record, and the objects
+                 * inside it were recorded against the from-space record that
+                 * was just dropped.  Seed it with the largest footprint pinned
+                 * in this segment: nothing lives in a retained run except what
+                 * was pinned there (unpinned pages are unmapped above), and
+                 * every pin recorded its footprint, so this can never be
+                 * smaller than a live allocation in the run -- while staying
+                 * far below the global all-time high-water mark a since-dead
+                 * large object left behind (n00b#395).  Under the pin-all
+                 * policy (a binary with no GC type map, n00b#309) EVERY
+                 * survivor lives in a run like this, so without it the
+                 * per-mapping bound would never apply to that heap at all.
+                 * Nothing is ever bump-allocated into a retained run, so the
+                 * value cannot go stale. */
+                keep->mmap_rec                      = run_rec;
+                keep->pin_max_alloc_len             = 0;
+                n00b_mmap_note_alloc_len(run_rec, seg->pin_max_alloc_len);
                 keep->size                          = run_len;
                 keep->data                          = run_addr;
                 keep->last_addr                     = run_addr + run_len;
@@ -3713,10 +3854,13 @@ n00b_collection_cleanup(n00b_collect_t *ctx)
 
     ctx->to_space->vtable.hidden = false;
 
-    n00b_register_arena_segment(new_segment->data,
-                                ctx->from_space->segment_end,
-                                ctx->from_space,
-                                .file = ctx->from_space->vtable.debug_name);
+    new_segment->mmap_rec
+        = n00b_register_arena_segment(new_segment->data,
+                                      ctx->from_space->segment_end,
+                                      ctx->from_space,
+                                      .file = ctx->from_space->vtable.debug_name);
+    n00b_mmap_note_alloc_len(new_segment->mmap_rec,
+                             ctx->to_space_max_alloc_len);
 
     // Page-granular reclaim of the from-space: return unpinned page runs to the
     // kernel and retain pinned runs in place (chained into the live arena as
@@ -3741,12 +3885,120 @@ n00b_collection_cleanup(n00b_collect_t *ctx)
     // unattributed. No-op unless the audit is compiled in.
     n00b_arena_audit_census_nolock();
 
+    gc_audit_segment_chain(ctx->from_space, "after reclaim");
+
     n00b_atomic_fence();
 }
 
 // ============================================================================
 // Entry point
 // ============================================================================
+
+// Opt-in segment-chain audit (env N00B_GC_AUDIT_SEGMENT_CHAIN).
+//
+// Every crash signature on n00b#431 is a chain walk that dereferenced a
+// descriptor whose system_pool slot had been recycled, or a reclaim that took
+// `data`/`size` from one -- so the chain is the thing worth checking, and it
+// is only checkable here, with the world stopped.
+//
+// Env-gated rather than compiled out, so it can be turned on in a shipped
+// binary on a box that reproduces (the audit is O(segments) plus one registry
+// lookup each, which is real cost on a pin-all heap carrying 100k+ retained
+// runs -- far too much to leave on).
+//
+// Aborts with the offending descriptor named, which turns an access violation
+// inside n00b_arena_size into a diagnosis.
+static bool
+gc_audit_segment_chain_enabled(void)
+{
+    static _Atomic int enabled;
+    int                cached = n00b_atomic_load(&enabled);
+
+    if (cached != 0) {
+        return cached == 2;
+    }
+
+    bool on = getenv("N00B_GC_AUDIT_SEGMENT_CHAIN") != nullptr;
+    n00b_atomic_store(&enabled, on ? 2 : 1);
+    return on;
+}
+
+static void
+gc_audit_segment_chain(n00b_arena_t *arena, const char *when)
+{
+    if (!gc_audit_segment_chain_enabled()) {
+        return;
+    }
+
+    n00b_segment_t *seg = arena->current_segment;
+    uint64_t        ix  = 0;
+
+    while (seg != nullptr) {
+        const char *bad = nullptr;
+
+        if (seg->data == nullptr || seg->size == 0) {
+            bad = "null data or zero size";
+        }
+        else if (((uintptr_t)seg->data & ((uintptr_t)n00b_page_size - 1)) != 0) {
+            bad = "data is not page aligned";
+        }
+        else if (seg->last_addr < seg->data
+                 || seg->last_addr > seg->data + seg->size) {
+            bad = "last_addr outside the segment";
+        }
+        else if (!arena->vtable.hidden) {
+            auto opt = n00b_mmap_by_address(seg->data);
+            if (!n00b_option_is_set(opt)) {
+                bad = "data is not a registered mapping";
+            }
+            else {
+                n00b_mmap_info_t *map = n00b_option_get(opt);
+                if (map->allocator != (n00b_allocator_t *)arena) {
+                    bad = "mapping belongs to a different allocator";
+                }
+                else if ((uint64_t)(uintptr_t)seg->data < map->start
+                         || (uint64_t)(uintptr_t)(seg->data + seg->size)
+                                > map->end) {
+                    bad = "segment extends past its mapping";
+                }
+            }
+        }
+
+        if (bad != nullptr) {
+            fprintf(stderr,
+                    "n00b: FATAL: GC segment-chain audit failed %s on arena "
+                    "'%s': segment #%llu at %p is %s (data=%p size=%llu "
+                    "last_addr=%p retained=%d next=%p). This is the n00b#431 "
+                    "shape: a descriptor on the live chain that the collector "
+                    "no longer owns.\n",
+                    when,
+                    arena->vtable.debug_name ? arena->vtable.debug_name
+                                             : "(unnamed)",
+                    (unsigned long long)ix,
+                    (void *)seg,
+                    bad,
+                    (void *)seg->data,
+                    (unsigned long long)seg->size,
+                    (void *)seg->last_addr,
+                    (int)seg->retained,
+                    (void *)seg->next_segment);
+            fflush(stderr);
+            abort();
+        }
+
+        seg = seg->next_segment;
+        if (++ix > (1u << 24)) {
+            fprintf(stderr,
+                    "n00b: FATAL: GC segment-chain audit found a cycle (or an "
+                    "absurdly long chain) %s on arena '%s'.\n",
+                    when,
+                    arena->vtable.debug_name ? arena->vtable.debug_name
+                                             : "(unnamed)");
+            fflush(stderr);
+            abort();
+        }
+    }
+}
 
 // We do not want the compiler to inline this, otherwise it will quite
 // likely blend the stack frame in a way we don't like w/
@@ -3756,6 +4008,8 @@ n00b_collect_internal(n00b_arena_t *arena, bool out_of_memory)
 {
     n00b_collect_t  ctx;
     n00b_segment_t *segment = arena->current_segment;
+
+    gc_audit_segment_chain(arena, "at collect entry");
 #if defined(N00B_CENSUS_ENABLED)
     n00b_debug_census_t *timing_census = g_debug_census;
     uint64_t internal_start_ns         = timing_census == nullptr ? 0 : n00b_gc_timestamp_ns();
@@ -3980,9 +4234,10 @@ n00b_collect(n00b_arena_t *arena) _kargs
                     .leak_sample_capacity = N00B_DEBUG_CENSUS_LEAK_SAMPLE_MAX,
                 };
                 natural_census->leak_samples
-                    = n00b_alloc_array(n00b_debug_leak_sample_t,
-                                       N00B_DEBUG_CENSUS_LEAK_SAMPLE_MAX,
-                                       .allocator = natural_census_alloc);
+                    = n00b_alloc_array_with_opts(
+                        n00b_debug_leak_sample_t,
+                        N00B_DEBUG_CENSUS_LEAK_SAMPLE_MAX,
+                        &(n00b_alloc_opts_t){.allocator = natural_census_alloc});
                 natural_census_started_ns = n00b_gc_timestamp_ns();
                 g_debug_census            = natural_census;
             }
@@ -4355,9 +4610,9 @@ n00b_debug_find_leaks_to_conduit(n00b_conduit_topic_t(n00b_buffer_t *) * topic)
         .allocator            = ca,
         .leak_sample_capacity = N00B_DEBUG_CENSUS_LEAK_SAMPLE_MAX,
     };
-    census->leak_samples = n00b_alloc_array(n00b_debug_leak_sample_t,
-                                            N00B_DEBUG_CENSUS_LEAK_SAMPLE_MAX,
-                                            .allocator = ca);
+    census->leak_samples = n00b_alloc_array_with_opts(n00b_debug_leak_sample_t,
+                                                      N00B_DEBUG_CENSUS_LEAK_SAMPLE_MAX,
+                                                      &(n00b_alloc_opts_t){.allocator = ca});
 
     /* Toggle the runtime flag that turns the standard sweep into
      * "record, don't reclaim" mode for the duration of one collection.

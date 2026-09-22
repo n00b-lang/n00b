@@ -52,6 +52,10 @@
 #include <ucontext.h> // ucontext_t register snapshot supplied by sigaction
 #endif
 #include "core/syscall.h" // n00b_raw_write — libc-free, AS-safe
+#include <sys/stat.h>      // fstat: same-file check for the two crash sinks (#377)
+#if defined(__linux__)
+#include <sys/syscall.h>   // SYS_fstat for the raw same-file check
+#endif
 #include <stdlib.h>       // getenv during init only; never in the handler
 #endif
 
@@ -157,16 +161,80 @@ n00b_crash_install_altstack(n00b_callstack_t *as_cs)
 
 #if !defined(_WIN32)
 
-// Async-signal-safe writes to stderr and, when configured, the durable crash
-// fd. Raw syscalls only: no stdio, locks, allocation, errno TLS, or conduit.
+// The dump is rendered into this buffer and flushed with ONE write(2) per
+// sink (n00b-lang/n00b#377). Rendering field-by-field meant dozens of
+// interleavable writes per dump: with a supervisor also writing to fd 2, or
+// with the crash log and stderr resolving to the same file, fields from two
+// streams spliced together into impossible records (`sig=1111`, a pc_off a
+// hundred times the image size, a UUID written twice). One write per sink is
+// atomic with respect to any other single write on a regular file or pipe
+// under PIPE_BUF, which is what makes a dump readable at all.
+//
+// Static, so the handler allocates nothing. Sized for the longest dump this
+// file can produce (context + image + thread + 16 frames + fatal line) with
+// room to spare; overflow truncates the tail rather than writing past it.
+#define N00B_CRASH_RENDER_CAP 4096
+static char   g_n00b_crash_render[N00B_CRASH_RENDER_CAP];
+static size_t g_n00b_crash_render_len = 0;
+
 [[n00b::nogc]] static void
 _n00b_crash_write_bytes(const char *s, size_t n)
 {
-    n00b_raw_write(2, s, n);
-    int log_fd = n00b_atomic_load(&g_n00b_crash_log_fd);
-    if (log_fd >= 0 && log_fd != 2) {
-        n00b_raw_write(log_fd, s, n);
+    size_t room = N00B_CRASH_RENDER_CAP - g_n00b_crash_render_len;
+    if (n > room) {
+        n = room;
     }
+    for (size_t i = 0; i < n; i++) {
+        g_n00b_crash_render[g_n00b_crash_render_len + i] = s[i];
+    }
+    g_n00b_crash_render_len += n;
+}
+
+// True when two descriptors are open on the same file. The old guard,
+// `log_fd != 2`, only caught the log fd BEING descriptor 2; the normal
+// deployment shape is a supervisor capturing stderr into the same log the
+// crash fd was opened on, i.e. two descriptors, one file. Async-signal-safe:
+// fstat is a plain syscall.
+[[n00b::nogc]] static bool
+_n00b_crash_same_file(int a, int b)
+{
+    if (a == b) {
+        return true;
+    }
+    struct stat sa;
+    struct stat sb;
+#if defined(__linux__)
+    // Raw syscall: the handler can run on a TLS-less raw-clone worker, where
+    // the libc wrapper's errno store faults (the same reason file.c keeps
+    // file_linux_raw_fstat and futex.h issues ulock/futex directly).
+    long ra = _n00b_raw_linux_syscall2(SYS_fstat, (long)a, (long)(uintptr_t)&sa);
+    long rb = _n00b_raw_linux_syscall2(SYS_fstat, (long)b, (long)(uintptr_t)&sb);
+    if (ra < 0 || rb < 0) {
+        return false;
+    }
+#else
+    if (fstat(a, &sa) != 0 || fstat(b, &sb) != 0) {
+        return false;
+    }
+#endif
+    return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
+
+// Flush the rendered dump: one write to stderr, one to the crash log if it is
+// a different file. Resets the buffer for the next (fatal-line) record.
+[[n00b::nogc]] static void
+_n00b_crash_flush(void)
+{
+    size_t n = g_n00b_crash_render_len;
+    if (n == 0) {
+        return;
+    }
+    n00b_raw_write(2, g_n00b_crash_render, n);
+    int log_fd = n00b_atomic_load(&g_n00b_crash_log_fd);
+    if (log_fd >= 0 && !_n00b_crash_same_file(log_fd, 2)) {
+        n00b_raw_write(log_fd, g_n00b_crash_render, n);
+    }
+    g_n00b_crash_render_len = 0;
 }
 
 [[n00b::nogc]] static void
@@ -538,12 +606,26 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
     // default disposition handles the original fault.
     if (!n00b_default_runtime_is_set()) {
         _n00b_crash_write("n00b: fatal: fault before runtime init\n");
+        _n00b_crash_flush();
         n00b_atomic_store(&g_n00b_crash_dumping, 2u);
         n00b_raw_exit(128 + sig);
         return;
     }
     n00b_runtime_t *rt       = n00b_default_runtime_or_null();
     n00b_thread_t  *faulting = nullptr;
+
+    // Progress marker (n00b#303). A SIGSEGV that produces NO dump at all means
+    // this handler faulted on its own way to the first write: SA_RESETHAND is
+    // set, so a second fault takes the OS default and exits 139 silently. The
+    // one thing this function dereferences before its first record is the
+    // per-slot thread walk below (`t->altstack` for every published slot). A
+    // single raw write here, straight to fd 2 and bypassing the render buffer,
+    // turns a silent 139 into "did it reach the walk, and did it get past it":
+    // marker present + no dump = the walk faulted; no marker = the fault is
+    // earlier (altstack resolution or the CAS). Two short lines per crash; the
+    // normal dump follows immediately.
+    static const char k_crash_marker_walk[] = "n00b: crash handler: thread walk\n";
+    n00b_raw_write(2, k_crash_marker_walk, sizeof(k_crash_marker_walk) - 1);
 
     if (rt != nullptr && rt->threads != nullptr) {
         for (uint32_t i = 0; i < rt->max_threads; i++) {
@@ -567,24 +649,50 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
         }
     }
 
-    // Classify: a fault address inside the faulting thread's PROT_NONE guard
-    // band is a stack overflow (lock-free range compare on the cached bounds).
-    // guard_lo/hi are _Atomic — load with acquire to pair with the owning
-    // thread's release store (it stores hi then lo before its altstack install).
+    // Classify a stack overflow (n00b#342, folding #343). Two mechanisms
+    // defeated the old "fault address inside the guard band" test:
+    //   A. no band exists: the main thread and foreign threads never get one,
+    //      so glo == nullptr and the test could not fire;
+    //   B. the band is one page (16 KB on arm64 macOS) and a frame larger than
+    //      that steps over it on its first touch, landing BELOW guard_lo.
+    // Both produced "invalid memory access" with a large, varying address,
+    // which sent a P0 (n00b#250) down the pointer-bug path for eight days.
+    // Classify against the thread's STACK BOUNDS instead: a fault below the
+    // stack's low edge but within one stack-size of it is an overflow whether
+    // or not a band exists and whether or not the frame landed inside one.
+    // Bounds: workers publish [stack_lo, stack_hi) from their callstack, the
+    // main thread from the OS query (thread.c n00b_capture_stack_base); both
+    // are on the record, published hi-then-lo, so a non-null lo is complete.
+    // Only meaningful when si_addr is a fault address (n00b#306); on SIGABRT
+    // it holds si_pid/si_uid.
     bool overflow = false;
-    if (faulting != nullptr && si != nullptr) {
-        void *glo = n00b_atomic_load(&faulting->guard_lo);
-        void *ghi = n00b_atomic_load(&faulting->guard_hi);
-        // Only meaningful when si_addr is a fault address (n00b#306);
-        // on a SIGABRT it holds si_pid/si_uid, and a pid that happened to
-        // land inside the guard range would report a phantom overflow.
-        if (glo != nullptr && _n00b_crash_si_addr_is_fault(sig)) {
-            uintptr_t fa = (uintptr_t)si->si_addr;
-            if (fa >= (uintptr_t)glo && fa < (uintptr_t)ghi) {
-                overflow = true;
+    if (faulting != nullptr && si != nullptr && _n00b_crash_si_addr_is_fault(sig)) {
+        uintptr_t fa  = (uintptr_t)si->si_addr;
+        void     *glo = n00b_atomic_load(&faulting->guard_lo);
+        void     *ghi = n00b_atomic_load(&faulting->guard_hi);
+        if (glo != nullptr && fa >= (uintptr_t)glo && fa < (uintptr_t)ghi) {
+            overflow = true; // inside the band: the unambiguous case
+        }
+        else {
+            n00b_thread_record_t *rec = faulting->record;
+            void *slo = rec != nullptr ? n00b_atomic_load(&rec->stack_lo) : nullptr;
+            void *shi = rec != nullptr ? n00b_atomic_load(&rec->stack_hi) : nullptr;
+            if (slo != nullptr && shi != nullptr && shi > slo) {
+                uintptr_t lo   = (uintptr_t)slo;
+                uintptr_t size = (uintptr_t)shi - lo;
+                // Below the low edge, within one stack-size of it. The window
+                // bounds the directional test so an unrelated wild pointer
+                // that happens to be lower in the address space is not
+                // misreported as an overflow.
+                if (fa < lo && lo - fa <= size) {
+                    overflow = true;
+                }
             }
         }
     }
+
+    static const char k_crash_marker_done[] = "n00b: crash handler: thread walk done\n";
+    n00b_raw_write(2, k_crash_marker_done, sizeof(k_crash_marker_done) - 1);
 
     _n00b_crash_write(sig == SIGABRT ? "n00b: fatal: aborted\n"
                       : sig == SIGILL ? "n00b: fatal: illegal instruction\n"
@@ -678,6 +786,7 @@ _n00b_crash_handler(int sig, siginfo_t *si, void *uctx)
         }
     }
 
+    _n00b_crash_flush();
     n00b_atomic_store(&g_n00b_crash_dumping, 2u);
     n00b_raw_exit(128 + sig);
     return;

@@ -399,6 +399,9 @@ struct n00b_store_t {
     _Atomic(uint64_t)              failed_seal_vfs_other;
     _Atomic(n00b_err_t)            failed_seal_last_vfs_error;
     bool                           borrowed_catalog_enumeration_disabled;
+    /* n00b#249: set when open found the catalog CORRUPT, set it aside as
+     * catalog.corrupt, and rebuilt entries from the shard images on disk. */
+    bool                           catalog_corrupt_recovered;
 };
 
 struct n00b_store_pin_t {
@@ -586,11 +589,10 @@ rocs_store_run_service_worker_jobs(n00b_worker_pool_t *pool,
         return N00B_STORE_OK;
     }
 
-    rocs_store_service_worker_item_t *items = n00b_alloc_array(
+    rocs_store_service_worker_item_t *items = n00b_alloc_array_with_opts(
         rocs_store_service_worker_item_t,
         (int64_t)count,
-        .allocator = allocator,
-        .scan_kind = N00B_GC_SCAN_KIND_ALL);
+        &(n00b_alloc_opts_t){.allocator = allocator, .scan_kind = N00B_GC_SCAN_KIND_ALL});
     if (items == nullptr) {
         return N00B_STORE_ERR_INTERNAL;
     }
@@ -1068,8 +1070,22 @@ rocs_store_hot_allocator_destroy(n00b_store_t      *store,
     uint64_t      arena_used = arena == nullptr ? 0 : n00b_arena_used(arena);
     uint64_t      arena_size = arena == nullptr ? 0 : n00b_arena_size(arena);
 
+    // n00b#310: n00b_mmap_registry_stats() walks the WHOLE registry tree
+    // (O(regions)), and this destroy ran it twice per retired hot allocator.
+    // On a process with hundreds of thousands of mapped regions that made
+    // shutdown's retired-allocator drain take longer than launchd's kill
+    // timeout. The two walks only feed the hot_destroy_last_registry_*
+    // diagnostics, so take them only when those diagnostics are wanted
+    // (N00B_ROCS_HOT_DESTROY_REGISTRY_STATS=1); the counters read 0 otherwise.
+    static _Atomic int want_registry_stats = -1;
+    int                wrs = n00b_atomic_load(&want_registry_stats);
+    if (wrs < 0) {
+        const char *env = getenv("N00B_ROCS_HOT_DESTROY_REGISTRY_STATS");
+        wrs = (env != nullptr && env[0] == '1') ? 1 : 0;
+        n00b_atomic_store(&want_registry_stats, wrs);
+    }
     n00b_mmap_registry_stats_t registry_before = {};
-    if (store != nullptr) {
+    if (store != nullptr && wrs) {
         registry_before = n00b_mmap_registry_stats();
     }
 
@@ -1082,7 +1098,10 @@ rocs_store_hot_allocator_destroy(n00b_store_t      *store,
         return;
     }
 
-    n00b_mmap_registry_stats_t registry_after = n00b_mmap_registry_stats();
+    n00b_mmap_registry_stats_t registry_after = {};
+    if (wrs) {
+        registry_after = n00b_mmap_registry_stats();
+    }
     store->hot_destroy_count =
         rocs_store_u64_add_sat(store->hot_destroy_count, 1);
     store->hot_destroy_records =
@@ -3673,6 +3692,12 @@ rocs_store_catalog_parse(n00b_store_t *store, n00b_buffer_t *buf)
     return n00b_result_ok(bool, true);
 }
 
+bool
+n00b_store_opened_degraded(n00b_store_t *store)
+{
+    return store != nullptr && store->catalog_corrupt_recovered;
+}
+
 static n00b_result_t(bool)
 rocs_store_catalog_load(n00b_store_t *store)
 {
@@ -4829,9 +4854,10 @@ rocs_store_seal_queue_new(n00b_store_t *store,
 
     queue->store        = store;
     queue->jobs         = rocs_store_seal_job_list_new(.allocator = allocator);
-    queue->threads      = n00b_alloc_array(n00b_thread_t *,
-                                           thread_count,
-                                           .allocator = allocator);
+    queue->threads      = n00b_alloc_array_with_opts(
+        n00b_thread_t *,
+        thread_count,
+        &(n00b_alloc_opts_t){.allocator = allocator});
     queue->thread_count = thread_count;
     queue->in_flight    = 0;
     queue->stopping     = false;
@@ -5103,8 +5129,9 @@ rocs_store_seal_hot_shard_unlocked(n00b_store_t  *store,
 
         // Build the seal job from the soon-to-be-detached old shard before
         // the swap, so it captures the old shard's identity, not the new one.
-        rocs_store_seal_job_t *job = n00b_alloc(rocs_store_seal_job_t,
-                                                .allocator = store->allocator);
+        rocs_store_seal_job_t *job = n00b_alloc_with_opts(
+            rocs_store_seal_job_t,
+            &(n00b_alloc_opts_t){.allocator = store->allocator});
         job->store             = store;
         job->old_shard         = old_shard;
         job->old_allocator     = old_hot_allocator;
@@ -6261,6 +6288,66 @@ rocs_store_append_default_search_text(rocs_store_batch_term_list_t *out,
                                        .include_full_value = false);
 }
 
+// n00b#267: the walk used to allocate a fresh "parent.key" string per object
+// key per node (O(nodes x depth) bytes) and a materialized entry list per
+// object node. The path is now a single growable byte buffer owned by the
+// top-level call: a child appends ".key", recurses, and truncates back. The
+// n00b_string_t handed to the hooks is rebuilt over that buffer only at a
+// string leaf that actually needs a path (hooks configured), so the common
+// case allocates nothing per node.
+typedef struct {
+    char    *data;
+    uint64_t len;
+    uint64_t cap;
+} rocs_store_search_path_t;
+
+static bool
+rocs_store_search_path_push(rocs_store_search_path_t *p,
+                            n00b_string_t            *key,
+                            n00b_allocator_t         *allocator,
+                            uint64_t                 *saved_len)
+{
+    *saved_len = p->len;
+    if (key == nullptr) {
+        return true;
+    }
+    uint64_t klen = (uint64_t)key->u8_bytes;
+    uint64_t need = p->len + (p->len ? 1 : 0) + klen;
+    if (need > (uint64_t)INT64_MAX) {
+        return false;
+    }
+    if (need > p->cap) {
+        uint64_t ncap = p->cap ? p->cap : 128;
+        while (ncap < need) {
+            ncap *= 2;
+        }
+        char *nd = n00b_alloc_array_with_opts(char,
+                                              ncap,
+                                              &(n00b_alloc_opts_t){
+                                                  .allocator = allocator,
+                                                  .scan_kind = N00B_GC_SCAN_KIND_NONE,
+                                              });
+        if (p->len) {
+            memcpy(nd, p->data, (size_t)p->len);
+        }
+        p->data = nd;
+        p->cap  = ncap;
+    }
+    if (p->len) {
+        p->data[p->len++] = '.';
+    }
+    memcpy(p->data + p->len, key->data, (size_t)klen);
+    p->len += klen;
+    return true;
+}
+
+static n00b_result_t(bool)
+rocs_store_collect_search_text_walk(rocs_store_batch_term_list_t *out,
+                                    n00b_store_schema_t          *schema,
+                                    n00b_json_node_t             *node,
+                                    rocs_store_search_path_t     *path,
+                                    n00b_allocator_t             *allocator);
+
 static n00b_result_t(bool)
 rocs_store_collect_search_text(rocs_store_batch_term_list_t *out,
                                n00b_store_schema_t          *schema,
@@ -6268,8 +6355,41 @@ rocs_store_collect_search_text(rocs_store_batch_term_list_t *out,
                                n00b_string_t                *path,
                                n00b_allocator_t             *allocator)
 {
+    rocs_store_search_path_t buf = {};
+    if (path != nullptr && path->u8_bytes > 0) {
+        buf.cap  = (uint64_t)path->u8_bytes < 128 ? 128 : (uint64_t)path->u8_bytes;
+        buf.data = n00b_alloc_array_with_opts(char,
+                                              buf.cap,
+                                              &(n00b_alloc_opts_t){
+                                                  .allocator = allocator,
+                                                  .scan_kind = N00B_GC_SCAN_KIND_NONE,
+                                              });
+        memcpy(buf.data, path->data, (size_t)path->u8_bytes);
+        buf.len = (uint64_t)path->u8_bytes;
+    }
+    return rocs_store_collect_search_text_walk(out, schema, node, &buf, allocator);
+}
+
+static n00b_result_t(bool)
+rocs_store_collect_search_text_walk(rocs_store_batch_term_list_t *out,
+                                    n00b_store_schema_t          *schema,
+                                    n00b_json_node_t             *node,
+                                    rocs_store_search_path_t     *pbuf,
+                                    n00b_allocator_t             *allocator)
+{
     if (node == nullptr) {
         return n00b_result_ok(bool, true);
+    }
+    // The hooks take an n00b_string_t path; build it over the buffer only
+    // here, at a string leaf, and only when a hook is configured.
+    n00b_string_t *path = nullptr;
+    if (n00b_json_is_string(node) && pbuf->len > 0 && schema != nullptr
+        && (schema->search_text_hook != nullptr
+            || (schema->index_options != nullptr
+                && schema->index_options->term_hook != nullptr))) {
+        path = n00b_string_from_raw(pbuf->data,
+                                    (int64_t)pbuf->len,
+                                    .allocator = allocator);
     }
     if (n00b_json_is_string(node)) {
         n00b_store_search_text_action_t action = N00B_STORE_SEARCH_TEXT_DEFAULT;
@@ -6325,12 +6445,11 @@ rocs_store_collect_search_text(rocs_store_batch_term_list_t *out,
     if (n00b_json_is_array(node)) {
         size_t n = n00b_json_array_len(node);
         for (size_t i = 0; i < n; i++) {
-            auto r = rocs_store_collect_search_text(out,
-                                                    schema,
-                                                    n00b_json_array_get(node,
-                                                                        i),
-                                                    path,
-                                                    allocator);
+            auto r = rocs_store_collect_search_text_walk(out,
+                                                         schema,
+                                                         n00b_json_array_get(node, i),
+                                                         pbuf,
+                                                         allocator);
             if (n00b_result_is_err(r)) {
                 return r;
             }
@@ -6338,41 +6457,39 @@ rocs_store_collect_search_text(rocs_store_batch_term_list_t *out,
         return n00b_result_ok(bool, true);
     }
     if (n00b_json_is_object(node)) {
-        auto entries_r = n00b_json_object_entries(node, .allocator = allocator);
-        if (n00b_result_is_err(entries_r)) {
-            return n00b_result_err(bool, n00b_result_get_err(entries_r));
+        // Iterate the object's dict in place: no entry list, no per-entry
+        // wrapper. Keys and values are borrowed from the tree, as before.
+        n00b_json_object_t *dict = n00b_json_as_object(node);
+        if (dict == nullptr) {
+            return n00b_result_err(bool, N00B_STORE_ERR_INDEX);
         }
-        n00b_json_object_entry_list_t *entries = n00b_result_get(entries_r);
-        if (entries != nullptr) {
-            size_t n = n00b_list_len(*entries);
-            for (size_t i = 0; i < n; i++) {
-                n00b_json_object_entry_t *e = n00b_list_get(*entries, i);
-                if (e == nullptr) {
-                    continue;
-                }
-                n00b_string_t *child_path = path;
-                if (schema != nullptr
-                    && (schema->search_text_hook != nullptr
-                        || (schema->index_options != nullptr
-                            && schema->index_options->term_hook != nullptr))) {
-                    child_path = rocs_store_search_child_path(path,
-                                                             e->key,
-                                                             allocator);
-                    if (child_path == nullptr) {
-                        return n00b_result_err(bool, N00B_STORE_ERR_INDEX);
-                    }
-                }
-                auto r = rocs_store_collect_search_text(out,
-                                                        schema,
-                                                        e->value,
-                                                        child_path,
-                                                        allocator);
-                if (n00b_result_is_err(r)) {
-                    return r;
-                }
+        bool track_path = schema != nullptr
+                       && (schema->search_text_hook != nullptr
+                           || (schema->index_options != nullptr
+                               && schema->index_options->term_hook != nullptr));
+        n00b_result_t(bool) walk_err = n00b_result_ok(bool, true);
+        n00b_dict_foreach(dict, key, child, {
+            if (key == nullptr || child == nullptr) {
+                continue;
             }
-        }
-        return n00b_result_ok(bool, true);
+            uint64_t saved = pbuf->len;
+            if (track_path
+                && !rocs_store_search_path_push(pbuf, key, allocator, &saved)) {
+                walk_err = n00b_result_err(bool, N00B_STORE_ERR_INDEX);
+                break;
+            }
+            auto r = rocs_store_collect_search_text_walk(out,
+                                                         schema,
+                                                         child,
+                                                         pbuf,
+                                                         allocator);
+            pbuf->len = saved;
+            if (n00b_result_is_err(r)) {
+                walk_err = r;
+                break;
+            }
+        });
+        return walk_err;
     }
     return n00b_result_ok(bool, true); // number / bool / null: not text
 }
@@ -6677,10 +6794,10 @@ rocs_store_buffer_hex_string(n00b_buffer_t    *raw,
     }
 
     uint64_t hex_len = raw_len * 2;
-    char    *hex     = n00b_alloc_array(char,
-                                     (int64_t)hex_len + 1,
-                                     .allocator = allocator,
-                                     .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    char    *hex     = n00b_alloc_array_with_opts(
+        char,
+        (int64_t)hex_len + 1,
+        &(n00b_alloc_opts_t){.allocator = allocator, .scan_kind = N00B_GC_SCAN_KIND_NONE});
     if (hex == nullptr) {
         return nullptr;
     }
@@ -7205,10 +7322,10 @@ rocs_store_ingest_prepared_range_unlocked(
     }
     uint64_t start = n00b_result_get(reserve_r);
 
-    rocs_store_range_commit_job_t **commit_jobs = n00b_alloc_array(
+    rocs_store_range_commit_job_t **commit_jobs = n00b_alloc_array_with_opts(
         rocs_store_range_commit_job_t *,
         (int64_t)count,
-        .allocator = allocator);
+        &(n00b_alloc_opts_t){.allocator = allocator});
     if (commit_jobs == nullptr) {
         (void)n00b_store_shard_cancel_tail_reservation(store->hot_shard,
                                                        start,
@@ -7221,9 +7338,9 @@ rocs_store_ingest_prepared_range_unlocked(
     }
 
     for (uint64_t i = 0; i < count; i++) {
-        rocs_store_range_commit_job_t *job = n00b_alloc(
+        rocs_store_range_commit_job_t *job = n00b_alloc_with_opts(
             rocs_store_range_commit_job_t,
-            .allocator = allocator);
+            &(n00b_alloc_opts_t){.allocator = allocator});
         if (job == nullptr) {
             (void)n00b_store_shard_cancel_tail_reservation(store->hot_shard,
                                                            start,
@@ -8819,8 +8936,10 @@ n00b_store_ingest_topic_publish_ex(n00b_store_ingest_topic_t   *topic,
         return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
     }
 
+    // Store ingest is multi-producer. Contention is not backpressure: the
+    // caller's payload has not reached the capacity check or the consumer yet.
     n00b_result_t(n00b_conduit_publisher_t *) pub_r =
-        n00b_conduit_publish_try_claim(base);
+        n00b_conduit_publish_claim(base);
     if (n00b_result_is_err(pub_r)) {
         return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
     }
@@ -9930,7 +10049,34 @@ n00b_store_open_vfs(n00b_vfs_t          *vfs,
 
     auto catalog_r = rocs_store_catalog_load(store);
     if (n00b_result_is_err(catalog_r)) {
-        return n00b_result_err(n00b_store_t *, n00b_result_get_err(catalog_r));
+        n00b_err_t cat_err = n00b_result_get_err(catalog_r);
+        // n00b#249: a corrupt catalog used to be permanent store loss even
+        // though every shard image carries its own header. Degraded open:
+        // set the corrupt catalog aside (never overwrite evidence), start from
+        // an empty catalog, and let rocs_store_recover_orphaned_shards below
+        // rebuild one entry per intact sealed shard image found on disk (it
+        // already does exactly that for shards the catalog does not know,
+        // and writes a fresh catalog when it adopts any). Records in shards
+        // that fail their own header check stay unreachable, and the caller
+        // can see that this happened through n00b_store_opened_degraded().
+        // Anything other than CORRUPT (VFS failure, parse of a newer format)
+        // is still fatal: the data is not known to be reachable.
+        if (cat_err != N00B_STORE_ERR_CORRUPT) {
+            return n00b_result_err(n00b_store_t *, cat_err);
+        }
+        auto cpath_r = rocs_store_catalog_path(store);
+        if (n00b_result_is_ok(cpath_r)) {
+            n00b_string_t *cpath = n00b_result_get(cpath_r);
+            n00b_string_t *aside = n00b_unicode_str_cat(cpath,
+                                                        r".corrupt",
+                                                        .allocator = store->allocator);
+            // Best effort: rename is atomic where the VFS supports it; if it
+            // fails the corrupt file is simply overwritten by the rebuild.
+            (void)n00b_vfs_rename(store->vfs, cpath, aside);
+        }
+        // Drop whatever a partial parse may have inserted before it failed.
+        store->catalog = rocs_store_catalog_list_new(.allocator = store->allocator);
+        store->catalog_corrupt_recovered = true;
     }
 
     // Replay orphaned recovery journals into sealed shards before choosing the
@@ -10711,19 +10857,19 @@ rocs_store_ingest_batch_common(n00b_store_t             *store,
         scratch_allocator);
     bool alloc_redirected = true;
 
-    rocs_store_batch_job_t **jobs = n00b_alloc_array(
+    rocs_store_batch_job_t **jobs = n00b_alloc_array_with_opts(
         rocs_store_batch_job_t *,
         (int64_t)count,
-        .allocator = scratch_allocator);
+        &(n00b_alloc_opts_t){.allocator = scratch_allocator});
     if (jobs == nullptr) {
         ROCS_BATCH_RETURN(
             n00b_result_err(uint64_t, N00B_STORE_ERR_INTERNAL));
     }
 
     for (uint64_t i = 0; i < count; i++) {
-        rocs_store_batch_job_t *job = n00b_alloc(
+        rocs_store_batch_job_t *job = n00b_alloc_with_opts(
             rocs_store_batch_job_t,
-            .allocator = scratch_allocator);
+            &(n00b_alloc_opts_t){.allocator = scratch_allocator});
         job->store        = store;
         job->input_record = nullptr;
         job->source       = nullptr;
@@ -10978,6 +11124,10 @@ rocs_store_emit_lifecycle_drop(n00b_store_t               *store,
     (void)event_r;
 }
 
+/* Linear membership. Only for SHORT, unordered lists -- the per-apply
+ * `blocked` list in retention, which holds one id per shard that refused to
+ * drop this round. Anything sized by the catalog goes through the sorted form
+ * below (n00b#400). */
 static bool
 rocs_store_shard_id_list_contains(n00b_store_shard_id_list_t *ids,
                                   uint64_t                    shard_id)
@@ -10992,6 +11142,79 @@ rocs_store_shard_id_list_contains(n00b_store_shard_id_list_t *ids,
         }
     }
     return false;
+}
+
+static int
+rocs_store_u64_compare(const void *left, const void *right)
+{
+    uint64_t l = *(const uint64_t *)left;
+    uint64_t r = *(const uint64_t *)right;
+    return l < r ? -1 : (l > r ? 1 : 0);
+}
+
+/* Put a shard-id list in canonical form: ascending, no duplicates, no zero
+ * (zero is "no shard" everywhere in the store). O(n log n).
+ *
+ * n00b#400: the lists that scale with the catalog -- a narrowed pin's ids and a
+ * record stream's sealed ids -- used to be deduplicated by a linear `contains`
+ * over the list being built, once per element, so building one was O(n^2) in
+ * the catalog. At 16,016 sealed shards that was ~128M list reads per query
+ * before the first shard was opened, ~7 s of wall clock on a warm store; the
+ * ids come out of the catalog already unique, so the scan never found
+ * anything. Callers now push everything and canonicalise once here, and
+ * membership against a canonical list is a binary search. */
+static void
+rocs_store_shard_id_list_canonicalize(n00b_store_shard_id_list_t *ids)
+{
+    if (ids == nullptr) {
+        return;
+    }
+    _n00b_list_write_lock(ids);
+    size_t len = ids->len;
+    if (len > 1) {
+        qsort(ids->data, len, sizeof(uint64_t), rocs_store_u64_compare);
+    }
+    size_t out = 0;
+    for (size_t i = 0; i < len; i++) {
+        uint64_t v = ids->data[i];
+        if (v == 0 || (out > 0 && ids->data[out - 1] == v)) {
+            continue;
+        }
+        ids->data[out++] = v;
+    }
+    ids->len = out;
+    _n00b_list_unlock(ids);
+}
+
+/* Membership in a list produced by rocs_store_shard_id_list_canonicalize.
+ * O(log n). Undefined on a list that has not been canonicalised. */
+static bool
+rocs_store_shard_id_list_contains_sorted(n00b_store_shard_id_list_t *ids,
+                                         uint64_t                    shard_id)
+{
+    if (ids == nullptr || shard_id == 0) {
+        return false;
+    }
+    _n00b_list_read_lock(ids);
+    size_t lo = 0;
+    size_t hi = ids->len;
+    bool   found = false;
+    while (lo < hi) {
+        size_t   mid = lo + (hi - lo) / 2;
+        uint64_t v   = ids->data[mid];
+        if (v == shard_id) {
+            found = true;
+            break;
+        }
+        if (v < shard_id) {
+            lo = mid + 1;
+        }
+        else {
+            hi = mid;
+        }
+    }
+    _n00b_list_unlock(ids);
+    return found;
 }
 
 static bool
@@ -11009,8 +11232,8 @@ rocs_store_pin_handles_block_shard_locked(n00b_store_t *store,
             continue;
         }
         if (pin->all_shards
-            || rocs_store_shard_id_list_contains(pin->shard_ids,
-                                                 shard_id)) {
+            || rocs_store_shard_id_list_contains_sorted(pin->shard_ids,
+                                                        shard_id)) {
             return true;
         }
     }
@@ -11034,8 +11257,8 @@ rocs_store_record_streams_block_shard_locked(n00b_store_t *store,
         if (stream->hot_snapshot_pinned) {
             return true;
         }
-        if (rocs_store_shard_id_list_contains(stream->sealed_shard_ids,
-                                              shard_id)) {
+        if (rocs_store_shard_id_list_contains_sorted(stream->sealed_shard_ids,
+                                                     shard_id)) {
             return true;
         }
     }
@@ -11539,7 +11762,8 @@ static n00b_store_record_list_t *
 rocs_store_conduit_record_list_new(uint64_t count, n00b_allocator_t *allocator)
 {
     n00b_store_record_list_t *records =
-        n00b_alloc(n00b_store_record_list_t, .allocator = allocator);
+        n00b_alloc_with_opts(n00b_store_record_list_t,
+                             &(n00b_alloc_opts_t){.allocator = allocator});
     *records = n00b_list_new_cap_private(n00b_json_node_t *,
                                          count,
                                          .allocator = allocator,
@@ -11551,7 +11775,8 @@ static n00b_store_source_list_t *
 rocs_store_conduit_source_list_new(uint64_t count, n00b_allocator_t *allocator)
 {
     n00b_store_source_list_t *sources =
-        n00b_alloc(n00b_store_source_list_t, .allocator = allocator);
+        n00b_alloc_with_opts(n00b_store_source_list_t,
+                             &(n00b_alloc_opts_t){.allocator = allocator});
     *sources = n00b_list_new_cap_private(n00b_buffer_t *,
                                          count,
                                          .allocator = allocator,
@@ -11584,11 +11809,11 @@ rocs_store_conduit_process_batch(n00b_store_conduit_ingest_t *adapter,
                        .use_epochs        = false,
                        .name              = "rocs_conduit_batch_scratch");
 
-    n00b_store_ingest_payload_t *payloads = n00b_alloc_array(
+    n00b_store_ingest_payload_t *payloads = n00b_alloc_array_with_opts(
         n00b_store_ingest_payload_t,
         cap,
-        .allocator = scratch_allocator,
-        .scan_kind = N00B_GC_SCAN_KIND_ALL);
+        &(n00b_alloc_opts_t){.allocator = scratch_allocator,
+                             .scan_kind = N00B_GC_SCAN_KIND_ALL});
     if (payloads == nullptr) {
         rocs_store_conduit_payload_cleanup(first->payload);
         n00b_free(first);
@@ -13578,10 +13803,10 @@ n00b_store_record_stream_open(n00b_store_t     *store,
     }
 
     if (sealed_count != 0) {
-        stream->sealed = n00b_alloc_array(
+        stream->sealed = n00b_alloc_array_with_opts(
             rocs_stream_catalog_snapshot_t,
             (int64_t)sealed_count,
-            .allocator = allocator);
+            &(n00b_alloc_opts_t){.allocator = allocator});
     }
 
     // The stream is already in active_record_streams, and the retention sweep
@@ -13609,12 +13834,12 @@ n00b_store_record_stream_open(n00b_store_t     *store,
             .start_ordinal = start_ordinal,
             .seal_ts       = entry->seal_ts,
         };
-        if (!rocs_store_shard_id_list_contains(stream->sealed_shard_ids,
-                                               entry->shard_id)) {
-            n00b_list_push(*stream->sealed_shard_ids, entry->shard_id);
-        }
+        n00b_list_push(*stream->sealed_shard_ids, entry->shard_id);
     }
     stream->sealed_count = sealed_index;
+    // One canonicalisation instead of a linear dedupe per push (n00b#400);
+    // the drop-blocking check binary-searches this list.
+    rocs_store_shard_id_list_canonicalize(stream->sealed_shard_ids);
     n00b_mutex_unlock(store->residency_lock);
 
     // Hot snapshot: read the hot-shard pointer, borrow its record pointers,
@@ -13651,10 +13876,10 @@ n00b_store_record_stream_open(n00b_store_t     *store,
             }
             if (start_ordinal < hot_visible) {
                 uint64_t count = hot_visible - start_ordinal;
-                stream->hot_records = n00b_alloc_array(
+                stream->hot_records = n00b_alloc_array_with_opts(
                     n00b_string_t *,
                     (int64_t)count,
-                    .allocator = allocator);
+                    &(n00b_alloc_opts_t){.allocator = allocator});
                 for (uint64_t i = 0; i < count; i++) {
                     stream->hot_records[i] =
                         n00b_list_get(*hot->records,
@@ -13878,13 +14103,22 @@ n00b_store_record_stream_open_sealed(n00b_store_t     *store,
     }
 
     if (sealed_count != 0) {
-        stream->sealed = n00b_alloc_array(
+        stream->sealed = n00b_alloc_array_with_opts(
             rocs_stream_catalog_snapshot_t,
             (int64_t)sealed_count,
-            .allocator = allocator);
+            &(n00b_alloc_opts_t){.allocator = allocator});
     }
 
     uint64_t sealed_index = 0;
+    // The stream is already in active_record_streams, whose readers (the
+    // retention sweep, manual drop, close) all hold residency_lock. Today they
+    // also hold commit_lock first, so this build is already serialised against
+    // them -- but the list is now binary-searched, and a search over a
+    // half-sorted list answers wrong where the old linear scan merely answered
+    // early, so guard it the way the ordered-stream open above does rather
+    // than rely on every reader keeping the outer lock. commit -> residency is
+    // the sweep's order.
+    n00b_mutex_lock(store->residency_lock);
     // No null check here: the count pass above rejected null entries under
     // this same commit_lock hold, and the catalog cannot change meanwhile.
     for (uint64_t i = 0; i < catalog_len; i++) {
@@ -13920,12 +14154,13 @@ n00b_store_record_stream_open_sealed(n00b_store_t     *store,
             .start_ordinal = start_ordinal,
             .seal_ts       = entry->seal_ts,
         };
-        if (!rocs_store_shard_id_list_contains(stream->sealed_shard_ids,
-                                               entry->shard_id)) {
-            n00b_list_push(*stream->sealed_shard_ids, entry->shard_id);
-        }
+        n00b_list_push(*stream->sealed_shard_ids, entry->shard_id);
     }
     stream->sealed_count = sealed_index;
+    // One canonicalisation instead of a linear dedupe per push (n00b#400);
+    // the drop-blocking check binary-searches this list.
+    rocs_store_shard_id_list_canonicalize(stream->sealed_shard_ids);
+    n00b_mutex_unlock(store->residency_lock);
 
     // The catalog list is NOT ordered; a consumer advancing a monotonic
     // applied-position watermark would silently skip any shard delivered
@@ -14244,15 +14479,16 @@ n00b_store_pin_narrow_to_shards(n00b_store_pin_t           *pin,
         return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
     }
 
+    // Copy everything, then canonicalise once: sorted, unique, zero-free.
+    // n00b#400: this used to dedupe with a linear scan over `copy` per id,
+    // O(n^2) in the number of boundaries in the view, and n00b_query_view
+    // hands it every boundary in the catalog -- ~7 s per query at 16k shards
+    // before a single shard was opened. The ids arrive unique anyway.
     size_t len = n00b_list_len(*shard_ids);
     for (size_t i = 0; i < len; i++) {
-        uint64_t shard_id = n00b_list_get(*shard_ids, i);
-        if (shard_id == 0
-            || rocs_store_shard_id_list_contains(copy, shard_id)) {
-            continue;
-        }
-        n00b_list_push(*copy, shard_id);
+        n00b_list_push(*copy, n00b_list_get(*shard_ids, i));
     }
+    rocs_store_shard_id_list_canonicalize(copy);
 
     n00b_mutex_lock(pin->store->residency_lock);
     if (pin->released) {

@@ -113,6 +113,17 @@ typedef struct {
  *       sites that bracket their own stop-the-world around a collect remain
  *       safe.
  */
+/**
+ * @brief Whether collections pin every reached from-space object in place
+ *        instead of copying (see n00b_collect_t.pin_all).
+ *
+ * Default: true when no link-time GC type map is linked into the process
+ * (every DEFAULT scan is conservative, so forwarding would rewrite data words
+ * that merely alias a from-space address, n00b#368), false otherwise.
+ * Override with N00B_GC_PIN_ALL=0|1. Evaluated once, at the first collection.
+ */
+extern bool n00b_gc_pin_all_policy(void);
+
 extern void
 n00b_collect(n00b_arena_t *arena) _kargs
 {
@@ -319,6 +330,23 @@ typedef struct {
      * pre-filter, so a widened range is safe, a narrowed one is not. */
     uint64_t                          scan_floor;
     uint64_t                          scan_ceiling;
+    /* n00b#309 / #368: when set, every from-space object reached by the trace
+     * is pinned in place (page-granular mark-sweep) instead of being copied,
+     * and no scanned word is ever rewritten. This is the only sound mode when
+     * heap words are ambiguous, i.e. when no link-time GC type map is present
+     * (a consumer linked without the gcmap wrapper) and every DEFAULT scan is
+     * conservative. Set from n00b_gc_pin_all_policy() in n00b_collect_setup. */
+    bool                              pin_all;
+    /* n00b#395: largest object forwarded into the to-space this collect.
+     * The to-space arena is HIDDEN (unregistered) while the collect runs, so
+     * n00b_forward_alloc has no registry record to record extents against.
+     * The maximum is accumulated here instead -- single-writer, under
+     * stop-the-world -- and seeded onto the segment's record at the moment the
+     * to-space is registered as the live arena's segment. Without it, the
+     * mapping holding the entire live heap would report "nothing recorded"
+     * after every collect and the guard scan would fall back to the global
+     * all-time high-water mark. */
+    uint64_t                          to_space_max_alloc_len;
 } n00b_collect_t;
 
 // ============================================================================
@@ -365,3 +393,21 @@ n00b_arena_size(n00b_arena_t *arena)
 
     return sz;
 }
+
+/**
+ * @brief Number of segments on @p arena's chain (diagnostics).
+ */
+static inline uint64_t
+n00b_arena_segment_count(n00b_arena_t *arena)
+{
+    uint64_t        n       = 0;
+    n00b_segment_t *segment = arena->current_segment;
+
+    while (segment) {
+        n++;
+        segment = segment->next_segment;
+    }
+
+    return n;
+}
+

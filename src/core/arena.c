@@ -297,7 +297,7 @@ n00b_arena_audit_histogram(n00b_arena_census_bucket_t *out, uint32_t cap)
 }
 #endif
 
-void
+n00b_mmap_info_t *
 n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena) _kargs
 {
     const char *file = nullptr;
@@ -305,15 +305,116 @@ n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena) _kargs
 {
     n00b_mmap_rec_kind_t kind = n00b_get_arena_addr_type(arena, (void *)start);
 
-    (void)n00b_mmap_register(start,
-                             end,
-                             kind,
-                             .file      = file,
-                             .allocator = (n00b_allocator_t *)arena);
+    /* An arena segment's data region is an anonymous PROT_READ|PROT_WRITE
+     * mapping for its whole registered life: every unmap of one (arena
+     * delete, from-space reclaim, primary-segment shrink) unregisters the
+     * record -- or re-registers it at the surviving extent -- BEFORE the
+     * munmap, so a registered arena segment is always fully readable.
+     *
+     * Recording that here is what keeps the mark loop out of the kernel.
+     * n00b_check_memory_perms answers from the registry only when the record's
+     * perms are KNOWN; arena segments registered as perms_unknown, so the
+     * once-per-page permission check inside _find_sentinal's backward guard
+     * scan fell through to the pipe write() + poll() probe on every page it
+     * walked. n00b#384 fixed exactly this for pool pages; arena segments are
+     * the other half, and on a heap whose objects live in the GC arena they
+     * are the half that the conservative scan actually walks (n00b#275). */
+    auto opt = n00b_mmap_register(start,
+                                  end,
+                                  kind,
+                                  .file      = file,
+                                  .allocator = (n00b_allocator_t *)arena,
+                                  .perms     = n00b_mmap_perms_rw);
+
+    return n00b_option_is_set(opt) ? n00b_option_get(opt) : nullptr;
 }
 
+/* Record an allocation's extent against the mapping it landed in, so the
+ * conservative backward guard scan can bound itself by "one allocation in THIS
+ * mapping" instead of "the largest allocation this process ever made"
+ * (n00b#395).  Called after the bump CAS commits and before the caller writes
+ * the allocation's guard word, so any scan that can find the guard also sees a
+ * bound that covers it. */
+static inline void
+n00b_arena_note_alloc_extent(n00b_arena_t *arena, char *base, uint64_t len)
+{
+    /* Stop-the-world is purely preemptive (stw.c): a thread can be suspended
+     * anywhere in here, a collect can run to completion, and the thread then
+     * resumes with whatever it had loaded.  Between the CAS and this note that
+     * means the segment descriptor AND its registry record may both have been
+     * freed by n00b_reclaim_pinned_pages, and writing a bound into a recycled
+     * record would corrupt whatever the registry pool handed that slot to
+     * next.  Hold the STW gate for the duration, exactly as every registry
+     * mutation does (mmap_lock): the initiator takes it for writing before it
+     * suspends anyone, so a collect cannot begin while we are inside.  A
+     * collect that DID intervene (we were suspended before taking the gate)
+     * has already accounted for this allocation through the thread's
+     * published in-flight reservation (n00b_pin_raw_range -> pin_max).
+     *
+     * Same short-circuits as mmap_lock: the collector itself allocates (the
+     * metadata arenas) while it holds the gate for writing, and before the
+     * runtime is up there is nothing to gate against. */
+    n00b_runtime_t *rt   = n00b_default_runtime_or_null();
+    bool            gate = rt != nullptr
+                        && n00b_atomic_load(&rt->startup_complete)
+                        && !n00b_atomic_load(&rt->stw_active);
+
+    if (gate) {
+        n00b_rw_read_lock(&rt->critical_execution);
+    }
+
+    n00b_segment_t *seg = n00b_atomic_load(&arena->current_segment);
+
+    if (seg != nullptr && base >= seg->data
+        && base + len <= seg->data + seg->size) {
+        n00b_mmap_note_alloc_len(seg->mmap_rec, len);
+        if (gate) {
+            n00b_rw_unlock(&rt->critical_execution);
+        }
+        return;
+    }
+
+    /* The bump landed somewhere other than the currently published segment:
+     * n00b_add_arena_segment makes next_alloc/segment_end visible before it
+     * publishes current_segment, so a racing allocator can claim space in the
+     * new segment while current_segment still names the old one.  Recording
+     * against the wrong segment would leave THIS allocation unaccounted for in
+     * its own mapping, and the guard scan could then stop short of its header
+     * -- the n00b#321 failure.  Resolve the owning record the slow way; this
+     * is a narrow race, not the common path.  A miss means the mapping is not
+     * registered at all (a hidden arena), and nothing ever scans those. */
+    auto opt = n00b_mmap_by_address(base);
+
+    if (n00b_option_is_set(opt)) {
+        n00b_mmap_note_alloc_len(n00b_option_get(opt), len);
+    }
+
+    if (gate) {
+        n00b_rw_unlock(&rt->critical_execution);
+    }
+}
+
+// Count of segment allocations that only succeeded after falling back from
+// "at least as big as the previous segment" to "just enough for this request"
+// (non-static so a debugger / crash dump can read it). A nonzero value means
+// the process is near its commit or address-space limit and the heap is
+// fragmenting into smaller segments rather than dying -- see n00b#431.
+_Atomic uint64_t n00b_arena_segment_shrink_retries = 0;
+
+/* Test-only interposition point (n00b#431).  Null in production and checked
+ * once per SEGMENT ADD, which happens once per segment's worth of allocation,
+ * so the cost is not measurable.
+ *
+ * It exists because the bug this file's gate fixes is a window of a few
+ * instructions between the segment mmap and the three stores that publish it;
+ * on a developer box it is hit perhaps once in many thousands of collects,
+ * which is not a test.  A test sets this hook to widen the window on demand
+ * and then races a collect into it, which makes both the corruption (without
+ * the gate) and its absence (with it) deterministic. */
+void (*n00b_arena_segment_publish_hook)(n00b_arena_t *) = nullptr;
+
 static void
-n00b_add_arena_segment(n00b_arena_t *arena, uint64_t request_len)
+arena_add_segment_under_gate(n00b_arena_t *arena, uint64_t request_len)
 {
     n00b_segment_t *old_segment;
     n00b_segment_t *segment;
@@ -348,10 +449,44 @@ n00b_add_arena_segment(n00b_arena_t *arena, uint64_t request_len)
         size = needed;
     }
 
-    size       = n00b_page_align(size);
+    size            = n00b_page_align(size);
+    uint64_t minimum = n00b_page_align(needed);
     auto seg_r = n00b_check_mmap(nullptr, size, N00B_MPROT, N00B_MFLAG, -1, 0);
 
+    /* `size` is "at least as big as the previous segment", which on a chain
+     * that has grown can be orders of magnitude more than THIS request needs.
+     * A failure at that size is not necessarily out of memory -- it is very
+     * often just "that much contiguous commit is not available".  Retry once at
+     * the minimum that satisfies the request before giving up.
+     *
+     * n00b#431 signature B is this exact case: a Windows daemon at 101 GiB of
+     * commit charge died in an abort() here while building a to-space, INSIDE a
+     * stop-the-world collect, so its consumer never got to seal its store.  A
+     * smaller segment would have let the collect finish; the arena simply adds
+     * another segment when it needs one. */
+    if (n00b_result_is_err(seg_r) && minimum < size) {
+        n00b_atomic_add(&n00b_arena_segment_shrink_retries, 1);
+        size  = minimum;
+        seg_r = n00b_check_mmap(nullptr, size, N00B_MPROT, N00B_MFLAG, -1, 0);
+    }
+
     if (n00b_result_is_err(seg_r)) {
+        /* Terminal.  Say WHY, in the crash log, before dying: an abort() with
+         * no context here reads as a bare ucrtbase fast-fail in a Windows
+         * event log, which is how n00b#431 signature B spent a week
+         * unattributed.  This runs with the world stopped, so keep it to one
+         * write(2)-backed fprintf and no allocation. */
+        fprintf(stderr,
+                "n00b: FATAL: arena '%s' cannot map a %llu-byte segment for a "
+                "%llu-byte request (errno=%d); chain is %llu bytes over %llu "
+                "segments. Out of memory or out of contiguous address space.\n",
+                arena->vtable.debug_name ? arena->vtable.debug_name : "(unnamed)",
+                (unsigned long long)size,
+                (unsigned long long)request_len,
+                n00b_result_get_err(seg_r),
+                (unsigned long long)n00b_arena_size(arena),
+                (unsigned long long)n00b_arena_segment_count(arena));
+        fflush(stderr);
         abort(); // out of memory.
     }
 
@@ -377,14 +512,36 @@ n00b_add_arena_segment(n00b_arena_t *arena, uint64_t request_len)
     segment->retained     = false;
     segment->pin_bitmap   = nullptr;
     segment->next_segment = old_segment;
-    arena->next_alloc     = (char *)n00b_align((uint64_t)data);
-    arena->segment_end    = data + size;
-    segment->last_addr    = arena->segment_end;
-    n00b_atomic_store(&arena->current_segment, segment);
+    segment->last_addr    = data + size;
+    segment->mmap_rec     = nullptr;
+    segment->pin_max_alloc_len = 0;
 
+    /* Register (and seed the per-segment scan bound with the request that
+     * forced this segment to exist) BEFORE next_alloc/segment_end become
+     * visible.  From the instant another thread can bump into this segment,
+     * its mapping must already carry a bound that covers what lands in it. */
     if (!arena->vtable.hidden) {
-        n00b_register_arena_segment(data, arena->segment_end, arena);
+        segment->mmap_rec = n00b_register_arena_segment(data,
+                                                        data + size,
+                                                        arena);
+        n00b_mmap_note_alloc_len(segment->mmap_rec, request_len);
     }
+
+    /* Everything below this line republishes the arena's view of where
+     * allocation happens.  A collect that lands in here and completes would be
+     * undone by these three stores -- see the comment on
+     * n00b_add_arena_segment.  The hook is how the test gets to stand in that
+     * exact spot. */
+    if (n00b_arena_segment_publish_hook != nullptr && !arena->vtable.hidden) {
+        // Hidden arenas are excluded: the collector builds its to-space as a
+        // hidden arena with the world stopped, and a test that stalled THERE
+        // would be stalling inside STW.
+        n00b_arena_segment_publish_hook(arena);
+    }
+
+    arena->next_alloc  = (char *)n00b_align((uint64_t)data);
+    arena->segment_end = segment->last_addr;
+    n00b_atomic_store(&arena->current_segment, segment);
 
     // Make the lock a full thread fence so we ensure our fields are
     // fully written before people use them.
@@ -394,6 +551,84 @@ n00b_add_arena_segment(n00b_arena_t *arena, uint64_t request_len)
     // up the mutex and other people can see us.
     n00b_atomic_fence();
     atomic_store(&arena->mutex, 0);
+}
+
+/* Adding a segment is CRITICAL EXECUTION (WP-001), and until n00b#431 it was
+ * the one piece of critical execution that did not hold the gate.
+ *
+ * The body above mmaps a region, links a fresh descriptor onto the chain, and
+ * then REPUBLISHES the arena's three published fields:
+ *
+ *     arena->next_alloc  = ...;      // new segment
+ *     arena->segment_end = ...;      // new segment
+ *     n00b_atomic_store(&arena->current_segment, segment);
+ *
+ * Stop-the-world is purely preemptive: without the gate a collect can begin
+ * anywhere in there, run to completion, and the thread then resumes and
+ * finishes those three stores with values it computed BEFORE the collect.
+ * That is unrecoverable, and it is the common root of every crash signature on
+ * n00b#431:
+ *
+ *   * `arena->current_segment` is clobbered back to the mutator's segment,
+ *     whose `next_segment` is the pre-collect from-space head -- descriptors
+ *     n00b_reclaim_pinned_pages has already handed back to system_pool.  The
+ *     next walk of the chain (n00b_arena_size from n00b_create_destination_arena)
+ *     dereferences a recycled system_pool slot: signature A, where the
+ *     descriptor's bytes had become an HTTP request buffer, byte-identical
+ *     across two crashes seven hours apart because the slot is reused
+ *     deterministically by the same allocation that resumed.
+ *   * The collector's to-space is dropped from the chain entirely, and
+ *     `next_alloc` / `segment_end` are rewound to the mutator's segment.
+ *   * On the NEXT collect, n00b_pin_bitmaps_alloc and n00b_reclaim_pinned_pages
+ *     walk that chain through the freed descriptors and take `data` / `size`
+ *     from whatever now occupies those slots -- so the reclaim munmaps (on
+ *     Windows, MEM_DECOMMITs) arbitrary address ranges.  That is signatures
+ *     D, E and the n00b_unicode_str_eq fault: three unrelated readers touching
+ *     "a page the collector returned to the kernel while a live object still
+ *     needed it", with no relationship between the reader and the reclaim
+ *     because there is none -- the range was garbage.
+ *
+ * It also explains why the scan-clamp candidate could never fire: nothing ran
+ * past a segment's mapped extent.  The extents themselves were fiction.
+ *
+ * Even the window where the thread is suspended mid-add is unsound on its own:
+ * n00b_register_arena_segment has already put the new region in the mmap tree
+ * as a managed segment of this arena, so n00b_pin_candidate accepts an address
+ * in it -- but the segment is not on the chain yet, so n00b_from_segment_for
+ * returns null and n00b_pin_object_pages silently declines to pin.  Objects a
+ * suspended thread's registers point at would not be retained.
+ *
+ * Fix: hold the gate across the WHOLE operation, the same way every registry
+ * mutation and n00b_arena_note_alloc_extent already do.  The read lock is
+ * reentrant (see _n00b_rw_read_lock's per-thread read log), so the nested
+ * acquires inside n00b_register_arena_segment / n00b_mmap_note_alloc_len cost
+ * nothing and cannot deadlock against a waiting writer.  Gate BEFORE the
+ * arena spin lock, never after: that way any thread holding arena->mutex also
+ * holds the gate, so a stop can never begin with the lock held and a spinning
+ * thread can always make progress.
+ *
+ * Same short-circuits as n00b_arena_note_alloc_extent: the collector itself
+ * adds segments (building the to-space) while it holds the gate for writing
+ * and stw_active is set, and before the runtime is up there is nothing to gate
+ * against.
+ */
+static void
+n00b_add_arena_segment(n00b_arena_t *arena, uint64_t request_len)
+{
+    n00b_runtime_t *rt   = n00b_default_runtime_or_null();
+    bool            gate = rt != nullptr
+                        && n00b_atomic_load(&rt->startup_complete)
+                        && !n00b_atomic_load(&rt->stw_active);
+
+    if (gate) {
+        n00b_rw_read_lock(&rt->critical_execution);
+    }
+
+    arena_add_segment_under_gate(arena, request_len);
+
+    if (gate) {
+        n00b_rw_unlock(&rt->critical_execution);
+    }
 }
 
 static inline bool
@@ -433,12 +668,20 @@ n00b_arena_alloc(n00b_arena_t *arena, uint64_t request, void *ignore)
         desired_value = found_value + request;
 
         if (self != nullptr) {
-            atomic_store_explicit(&self->gc_inflight_start,
-                                  found_value,
-                                  memory_order_relaxed);
+            /* The reservation is TWO words, and the collector's pin pre-pass
+             * only honors it when BOTH are set (`start != null && len != 0`).
+             * So `start` is the publication gate and must be written LAST, with
+             * release ordering: a collector that samples this thread between
+             * the two stores would otherwise read a valid `start` against a
+             * stale `len == 0`, silently decline to pin, and reclaim storage
+             * this thread is about to write its inline header into (n00b#431).
+             * n00b_alloc clears them in the mirror-image order. */
             atomic_store_explicit(&self->gc_inflight_len,
                                   request,
                                   memory_order_relaxed);
+            atomic_store_explicit(&self->gc_inflight_start,
+                                  found_value,
+                                  memory_order_release);
         }
 
         if (arena_changed(arena, desired_value)) {
@@ -489,7 +732,10 @@ n00b_arena_alloc(n00b_arena_t *arena, uint64_t request, void *ignore)
             }
         }
     } while (!n00b_atomic_cas(&arena->next_alloc, &found_value, desired_value));
+
     n00b_atomic_add(&arena->alloc_count, 1);
+
+    n00b_arena_note_alloc_extent(arena, found_value, request);
 
     return found_value;
 }
@@ -666,13 +912,18 @@ n00b_arena_reset(n00b_arena_t *arena)
     segment->pin_bitmap   = nullptr;
     segment->next_segment = nullptr;
     segment->last_addr    = data + total;
-    arena->segment_end    = segment->last_addr;
-    arena->next_alloc     = (char *)n00b_align((uint64_t)data);
-    n00b_atomic_store(&arena->current_segment, segment);
+    segment->mmap_rec     = nullptr;
+    segment->pin_max_alloc_len = 0;
 
     if (unregister) {
-        n00b_register_arena_segment(data, arena->segment_end, arena);
+        segment->mmap_rec = n00b_register_arena_segment(data,
+                                                        segment->last_addr,
+                                                        arena);
     }
+
+    arena->segment_end = segment->last_addr;
+    arena->next_alloc  = (char *)n00b_align((uint64_t)data);
+    n00b_atomic_store(&arena->current_segment, segment);
 
     n00b_atomic_fence();
     n00b_atomic_store(&arena->mutex, 0);

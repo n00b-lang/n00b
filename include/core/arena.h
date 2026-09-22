@@ -41,6 +41,18 @@ struct n00b_segment_t {
     // cleanup.  Set by the ambiguous-root pin pre-pass; consumed by the forward
     // phase + page reclaim.  nullptr outside an active collection.
     uint8_t        *pin_bitmap;
+    // The global-registry record for this segment's data mmap, captured at
+    // registration so the allocation path can record the segment's largest
+    // allocation without a per-allocation interval-tree lookup (n00b#395).
+    // nullptr for hidden arenas, which are never registered and never scanned.
+    n00b_mmap_info_t *mmap_rec;
+    // Transient, per-collect, alongside pin_bitmap: the largest in-arena
+    // footprint of any object (or in-flight reservation) pinned in THIS
+    // segment.  Every page run this segment leaves behind gets a fresh
+    // registry record, and this is the tightest bound that is still safe for
+    // it: nothing lives in a retained run except what was pinned there, and
+    // every pin records its footprint here (n00b#395).  0 outside a collect.
+    uint64_t          pin_max_alloc_len;
 };
 
 struct n00b_arena_t {
@@ -137,6 +149,29 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
 };
 
 /**
+ * @brief Count of arena segment allocations that only succeeded after falling
+ *        back from "at least as big as the previous segment" to "just enough
+ *        for this request".
+ *
+ * Nonzero means the process is near its commit or address-space limit and the
+ * heap is fragmenting into smaller segments rather than aborting (n00b#431).
+ */
+extern _Atomic uint64_t n00b_arena_segment_shrink_retries;
+
+/**
+ * @brief Test-only hook, run inside n00b_add_arena_segment immediately before
+ *        it republishes next_alloc / segment_end / current_segment.
+ *
+ * Null in production.  Exists so the n00b#431 race -- a stop-the-world that
+ * lands between the segment mmap and that publish -- can be made deterministic
+ * in a test instead of depending on a few-instruction window.  Do not set it
+ * outside tests.  Never called for a hidden arena, so a hook cannot stall
+ * inside the collector's own to-space build.
+ */
+extern void (*n00b_arena_segment_publish_hook)(n00b_arena_t *arena);
+
+
+/**
  * @brief Register a finalizer to run when @p obj is collected or freed.
  * @param obj       Object to attach the finalizer to. May be from any
  *                  allocator that flows through n00b_free or GC sweep;
@@ -183,8 +218,10 @@ struct n00b_finalizer_info_t {
  * @param end    End address of the segment.
  * @param arena  Owning arena.
  * @param file   Debug name / source file (may be nullptr).
+ * @return       The registry record for the segment, or nullptr when the
+ *               owning arena is hidden (hidden arenas are never registered).
  */
-extern void
+extern n00b_mmap_info_t *
 n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena) _kargs
 {
     const char *file = nullptr;
