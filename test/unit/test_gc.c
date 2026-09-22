@@ -441,8 +441,9 @@ static void
 test_collect_skips_reserved_worker_slot(void)
 {
     n00b_runtime_t *rt = n00b_get_runtime();
-    assert(rt != nullptr);
-    assert(rt->default_arena != nullptr);
+    n00b_require(rt != nullptr, "runtime must be initialized");
+    n00b_require(rt->default_arena != nullptr,
+                 "default arena must be initialized");
 
     uint32_t slot = rt->max_threads;
     for (uint32_t i = 0; i < rt->max_threads; i++) {
@@ -454,12 +455,16 @@ test_collect_skips_reserved_worker_slot(void)
             break;
         }
     }
-    assert(slot < rt->max_threads);
+    n00b_require(slot < rt->max_threads,
+                 "test requires an available worker slot");
 
     n00b_collect(rt->default_arena);
 
     n00b_thread_t *expected = N00B_THREAD_SLOT_PLACEHOLDER;
-    assert(n00b_atomic_cas(&rt->threads[slot].thread, &expected, nullptr));
+    n00b_require(n00b_atomic_cas(&rt->threads[slot].thread,
+                                 &expected,
+                                 nullptr),
+                 "reserved worker slot changed during collection");
 
     printf("  [PASS] collect skips reserved worker slot\n");
 }
