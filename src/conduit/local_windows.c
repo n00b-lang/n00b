@@ -83,23 +83,7 @@ typedef struct _TOKEN_USER {
     SID_AND_ATTRIBUTES User;
 } TOKEN_USER;
 
-[[gnu::stdcall]] BOOL ImpersonateNamedPipeClient(HANDLE pipe);
-[[gnu::stdcall]] BOOL RevertToSelf(void);
-[[gnu::stdcall]] BOOL OpenThreadToken(HANDLE thread,
-                                      DWORD  desired_access,
-                                      BOOL   open_as_self,
-                                      HANDLE *token_handle);
-[[gnu::stdcall]] HANDLE GetCurrentThread(void);
 [[gnu::stdcall]] void LocalFree(void *mem);
-
-/* advapi32, resolved dynamically. */
-typedef BOOL(__attribute__((__stdcall__)) *
-             local_windows_sddl_to_sd_fn)(const wchar_t *sddl,
-                                          DWORD          revision,
-                                          void         **out_sd,
-                                          unsigned long *out_size);
-typedef BOOL(__attribute__((__stdcall__)) *
-             local_windows_sid_to_string_fn)(void *sid, wchar_t **out_string);
 
 [[gnu::stdcall]] HANDLE CreateNamedPipeW(
     const wchar_t *name,
@@ -138,6 +122,18 @@ typedef BOOL(__attribute__((__stdcall__)) *
     DWORD *return_len);
 [[gnu::stdcall]] BOOL EqualSid(void *sid1, void *sid2);
 #endif
+
+/* Function-pointer type for the advapi32 entry point we resolve at run time.
+ * This is OUR type, not a Win32 declaration, so they must live OUTSIDE the
+ * `#ifndef _WINDOWS` block above -- that block exists only to declare the Win32
+ * API surface for the non-Windows build, and a real Windows build skips it
+ * entirely and gets those from the platform headers. Declaring these inside it
+ * made them invisible in the build that actually uses them. */
+typedef BOOL(__attribute__((__stdcall__)) *
+             local_windows_sddl_to_sd_fn)(const wchar_t *sddl,
+                                          DWORD          revision,
+                                          void         **out_sd,
+                                          unsigned long *out_size);
 
 #ifndef LOCAL_WINDOWS_WRITE_WAIT_MS
 #define LOCAL_WINDOWS_WRITE_WAIT_MS 25UL
