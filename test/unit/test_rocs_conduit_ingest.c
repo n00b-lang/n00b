@@ -658,9 +658,8 @@ test_service_profile_accepts_multi_seal_worker_count(void)
     auto flush_r = n00b_store_flush(store);
     CHECK(n00b_result_is_ok(flush_r));
 
-    auto stats_r = n00b_store_service_ingest_stats(store);
-    CHECK(n00b_result_is_ok(stats_r));
-    n00b_store_conduit_ingest_stats_t stats = n00b_result_get(stats_r);
+    n00b_store_conduit_ingest_stats_t stats =
+        wait_for_service_stats(store, 6, 6);
     CHECK_STAT(stats, submitted, 6);
     CHECK_STAT(stats, committed, 6);
     CHECK_STAT(stats, failed, 0);
