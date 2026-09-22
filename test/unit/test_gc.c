@@ -469,6 +469,41 @@ test_collect_skips_reserved_worker_slot(void)
     printf("  [PASS] collect skips reserved worker slot\n");
 }
 
+#define RETAINED_SEGMENT_COUNT 1024
+
+static void
+test_pin_all_graph_across_retained_segments(void)
+{
+    if (!n00b_gc_pin_all_policy()) {
+        return;
+    }
+
+    n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
+    test_obj_t   *objects[RETAINED_SEGMENT_COUNT];
+
+    for (uint64_t i = 0; i < RETAINED_SEGMENT_COUNT; i++) {
+        objects[i]        = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
+        objects[i]->value = 0x51000000ULL + i;
+        objects[i]->next  = i == 0 ? nullptr : objects[i - 1];
+    }
+
+    uint64_t        segments = 0;
+    n00b_segment_t *seg      = arena->current_segment;
+    for (; seg; seg = seg->next_segment) {
+        segments++;
+    }
+    assert(segments > 1);
+
+    n00b_collect(arena);
+
+    for (uint64_t i = 0; i < RETAINED_SEGMENT_COUNT; i++) {
+        assert(objects[i]->value == 0x51000000ULL + i);
+        assert(objects[i]->next == (i == 0 ? nullptr : objects[i - 1]));
+    }
+
+    printf("  [PASS] pin-all graph across retained segments\n");
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -494,6 +529,7 @@ main(int argc, char **argv)
     test_large_linked_list();
     test_memo_resize_during_collection();
     test_collect_skips_reserved_worker_slot();
+    test_pin_all_graph_across_retained_segments();
 
     printf("All GC tests passed.\n");
     n00b_shutdown();
