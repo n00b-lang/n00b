@@ -218,11 +218,47 @@ _n00b_result_error_from_payload(uint64_t payload_type, void *payload)
  * Usage: n00b_result_t(void *) r = n00b_check_mmap(nullptr, sz, ...);
  */
 #ifdef _WIN32
+/**
+ * @brief POSIX mmap `prot` bits -> a Windows page-protection constant.
+ *
+ * The Windows shim used to hardcode PAGE_READWRITE and cast `prot` to void.
+ * Every in-tree caller passes N00B_MPROT (READ|WRITE), so that was latent
+ * rather than live -- but it means a PROT_NONE mapping would come back fully
+ * writable, i.e. a guard page that does not guard, and it would fail silently
+ * (n00b-lang/n00b#394, #407).  Translate instead.
+ *
+ * PROT_NONE is 0 in POSIX, so "no bits set" is the guard case and must map to
+ * PAGE_NOACCESS -- which VirtualAlloc accepts with MEM_COMMIT.
+ */
+static inline unsigned long
+n00b_win_page_prot(int prot)
+{
+    bool r = (prot & PROT_READ) != 0;
+    bool w = (prot & PROT_WRITE) != 0;
+#ifdef PROT_EXEC
+    bool x = (prot & PROT_EXEC) != 0;
+#else
+    bool x = false;
+#endif
+
+    if (x) {
+        return w ? PAGE_EXECUTE_READWRITE
+                 : (r ? PAGE_EXECUTE_READ : PAGE_EXECUTE);
+    }
+    if (w) {
+        return PAGE_READWRITE; // Windows has no write-only page protection.
+    }
+    if (r) {
+        return PAGE_READONLY;
+    }
+    return PAGE_NOACCESS;
+}
+
 #define n00b_check_mmap(addr, sz, prot, flags, fd, offset)                                     \
     ({                                                                                         \
-        (void)(prot); (void)(flags); (void)(fd); (void)(offset);                               \
+        (void)(flags); (void)(fd); (void)(offset);                                             \
         void *_p = VirtualAlloc((addr), (sz),                                                  \
-                     MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);                                \
+                     MEM_COMMIT | MEM_RESERVE, n00b_win_page_prot(prot));                      \
         _p == nullptr ? n00b_result_err(void *, ENOMEM)                                        \
                       : n00b_result_ok(void *, _p);                                            \
     })
