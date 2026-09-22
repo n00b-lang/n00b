@@ -424,6 +424,86 @@ test_local_unsupported_backend_is_structured(void)
     teardown_conduit(c);
 }
 
+/* n00b#411: a security descriptor is an authorization decision, so a backend
+ * that cannot honour it must REFUSE to listen rather than quietly listen
+ * without it -- silently dropping it would leave the caller believing the
+ * endpoint is access-controlled when it is wide open. Only the Windows named
+ * backend has an OS-level ACL object.
+ *
+ * This is the half of the SDDL work that is testable off Windows: the reject
+ * path. That the descriptor actually admits Administrators and denies everyone
+ * else can only be established on Windows hardware. */
+/* n00b#411, client half: relaxing the same-user check on the SERVER is just as
+ * much an authorization decision as supplying a DACL, so a backend that has no
+ * such check must refuse rather than accept the flag and ignore it. Only the
+ * Windows named backend verifies the server's user.
+ *
+ * Without this, a caller could pass allow_any_server on POSIX, get a
+ * connection, and believe they had opted into something -- when in fact AF_UNIX
+ * never made that check and the flag meant nothing. */
+static void
+test_local_allow_any_server_rejected_off_windows(void)
+{
+    n00b_conduit_t *c    = make_conduit();
+    n00b_string_t  *path = build_tmp_path("anysrv-reject");
+
+    auto lr = n00b_conduit_local_listen(c, path,
+                                        .backend      = N00B_CONDUIT_LOCAL_UNIX,
+                                        .unlink_stale = true);
+    assert(n00b_result_is_ok(lr));
+    n00b_conduit_local_listener_t *listener = n00b_result_get(lr);
+
+    auto cr = n00b_conduit_local_connect(c, path,
+                                         .backend          = N00B_CONDUIT_LOCAL_UNIX,
+                                         .allow_any_server = true);
+    assert(n00b_result_is_err(cr));
+    assert(n00b_result_get_err(cr) == N00B_CONDUIT_ERR_NOT_SUPPORTED);
+
+    // AUTO resolves to UNIX here, so it must reject for the same reason.
+    auto ar = n00b_conduit_local_connect(c, path, .allow_any_server = true);
+    assert(n00b_result_is_err(ar));
+    assert(n00b_result_get_err(ar) == N00B_CONDUIT_ERR_NOT_SUPPORTED);
+
+    // Absent flag is the default and must still connect normally.
+    auto ok_r = n00b_conduit_local_connect(c, path,
+                                           .backend = N00B_CONDUIT_LOCAL_UNIX);
+    assert(n00b_result_is_ok(ok_r));
+    n00b_conduit_local_conn_close(n00b_result_get(ok_r));
+
+    n00b_conduit_local_listener_close(listener);
+    teardown_conduit(c);
+}
+
+static void
+test_local_security_descriptor_rejected_off_windows(void)
+{
+    n00b_conduit_t *c    = make_conduit();
+    n00b_string_t  *path = build_tmp_path("sddl-reject");
+
+    auto lr = n00b_conduit_local_listen(
+        c, path,
+        .backend             = N00B_CONDUIT_LOCAL_UNIX,
+        .security_descriptor = r"D:P(A;;GA;;;SY)(A;;GA;;;BA)");
+    assert(n00b_result_is_err(lr));
+    assert(n00b_result_get_err(lr) == N00B_CONDUIT_ERR_NOT_SUPPORTED);
+
+    // AUTO resolves to UNIX here, so it must reject for the same reason.
+    auto ar = n00b_conduit_local_listen(
+        c, path,
+        .security_descriptor = r"D:P(A;;GA;;;SY)");
+    assert(n00b_result_is_err(ar));
+    assert(n00b_result_get_err(ar) == N00B_CONDUIT_ERR_NOT_SUPPORTED);
+
+    // Absent descriptor is the default and must still listen normally.
+    auto ok_r = n00b_conduit_local_listen(c, path,
+                                          .backend      = N00B_CONDUIT_LOCAL_UNIX,
+                                          .unlink_stale = true);
+    assert(n00b_result_is_ok(ok_r));
+    n00b_conduit_local_listener_close(n00b_result_get(ok_r));
+
+    teardown_conduit(c);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -431,6 +511,8 @@ main(int argc, char **argv)
     n00b_init(&runtime, argc, argv);
 
     test_local_unsupported_backend_is_structured();
+    test_local_security_descriptor_rejected_off_windows();
+    test_local_allow_any_server_rejected_off_windows();
     test_local_auto_backend_behavior();
     test_local_unix_multiple_clients();
     test_local_unix_ping_pong_and_close();

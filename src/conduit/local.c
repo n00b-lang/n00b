@@ -737,6 +737,7 @@ static n00b_result_t(n00b_conduit_local_listener_t *)
 local_windows_listen(n00b_conduit_t   *c,
                      n00b_string_t    *name,
                      int               backlog,
+                     n00b_string_t    *security_descriptor,
                      n00b_allocator_t *allocator)
     requires {
         c != nullptr;
@@ -768,7 +769,10 @@ local_windows_listen(n00b_conduit_t   *c,
     n00b_conduit_local_listener_t *listener = n00b_result_get(listener_r);
     void *native_listener = nullptr;
     int native_status = _n00b_conduit_local_windows_native_listen(
-        listener, name->data, name->u8_bytes, backlog, &native_listener,
+        listener, name->data, name->u8_bytes, backlog,
+        security_descriptor == nullptr ? nullptr : security_descriptor->data,
+        security_descriptor == nullptr ? 0 : security_descriptor->u8_bytes,
+        &native_listener,
         listener->allocator);
     if (native_status != N00B_LOCAL_WINDOWS_NATIVE_OK) {
         close_topic_if_set(listener->accept_topic);
@@ -784,6 +788,7 @@ local_windows_listen(n00b_conduit_t   *c,
     return n00b_result_ok(n00b_conduit_local_listener_t *, listener);
 #else
     (void)backlog;
+    (void)security_descriptor;
     (void)allocator;
     return n00b_result_err(n00b_conduit_local_listener_t *,
                            N00B_CONDUIT_ERR_NOT_SUPPORTED);
@@ -793,6 +798,7 @@ local_windows_listen(n00b_conduit_t   *c,
 static n00b_result_t(n00b_conduit_local_conn_t *)
 local_windows_connect(n00b_conduit_t   *c,
                       n00b_string_t    *name,
+                      bool              allow_any_server,
                       n00b_allocator_t *allocator)
     requires {
         c != nullptr;
@@ -825,7 +831,8 @@ local_windows_connect(n00b_conduit_t   *c,
     n00b_conduit_local_conn_t *conn = n00b_result_get(conn_r);
     void *native_conn = nullptr;
     int native_status = _n00b_conduit_local_windows_native_connect(
-        conn, name->data, name->u8_bytes, &native_conn, conn->allocator);
+        conn, name->data, name->u8_bytes, allow_any_server ? 1 : 0,
+        &native_conn, conn->allocator);
     if (native_status != N00B_LOCAL_WINDOWS_NATIVE_OK) {
         close_topic_if_set(conn->read_topic);
         close_topic_if_set(conn->write_topic);
@@ -850,6 +857,7 @@ local_windows_connect(n00b_conduit_t   *c,
 
     return n00b_result_ok(n00b_conduit_local_conn_t *, conn);
 #else
+    (void)allow_any_server;
     (void)allocator;
     return n00b_result_err(n00b_conduit_local_conn_t *,
                            N00B_CONDUIT_ERR_NOT_SUPPORTED);
@@ -2146,6 +2154,7 @@ n00b_conduit_local_listen(n00b_conduit_t *c, n00b_string_t *name)
         int                          backlog      = 0;
         bool                         unlink_stale = false;
         int                          mode         = 0;
+        n00b_string_t               *security_descriptor = nullptr;
         n00b_allocator_t            *allocator    = nullptr;
         n00b_worker_pool_t          *bridge_pool  = nullptr;
     }
@@ -2178,6 +2187,17 @@ n00b_conduit_local_listen(n00b_conduit_t *c, n00b_string_t *name)
     }
 
     backend = resolve_backend(backend);
+
+    /* A security descriptor is an authorization decision. Silently dropping it
+     * on a backend that cannot honour it would leave the caller believing the
+     * endpoint is access-controlled when it is not, which is strictly worse
+     * than refusing to listen. Only the Windows named backend has an OS-level
+     * ACL object; everything else rejects. */
+    if (security_descriptor != nullptr
+        && backend != N00B_CONDUIT_LOCAL_WINDOWS_NAMED) {
+        return n00b_result_err(n00b_conduit_local_listener_t *,
+                               N00B_CONDUIT_ERR_NOT_SUPPORTED);
+    }
 
     if (backend == N00B_CONDUIT_LOCAL_UNIX) {
         auto io_r = resolve_fd_io(c, io);
@@ -2220,7 +2240,8 @@ n00b_conduit_local_listen(n00b_conduit_t *c, n00b_string_t *name)
         return xpc_r;
     }
     if (backend == N00B_CONDUIT_LOCAL_WINDOWS_NAMED) {
-        auto win_r = local_windows_listen(c, name, backlog, allocator);
+        auto win_r = local_windows_listen(c, name, backlog,
+                                          security_descriptor, allocator);
         if (!n00b_result_is_err(win_r)) {
             n00b_result_get(win_r)->bridge_pool = bridge_pool;
         }
@@ -2234,9 +2255,10 @@ n00b_conduit_local_listen(n00b_conduit_t *c, n00b_string_t *name)
 n00b_result_t(n00b_conduit_local_conn_t *)
 n00b_conduit_local_connect(n00b_conduit_t *c, n00b_string_t *name)
     _kargs {
-        n00b_conduit_local_backend_t backend   = N00B_CONDUIT_LOCAL_AUTO;
-        n00b_conduit_io_backend_t   *io        = nullptr;
-        n00b_allocator_t            *allocator = nullptr;
+        n00b_conduit_local_backend_t backend          = N00B_CONDUIT_LOCAL_AUTO;
+        n00b_conduit_io_backend_t   *io               = nullptr;
+        bool                         allow_any_server = false;
+        n00b_allocator_t            *allocator        = nullptr;
     }
     requires {
         c != nullptr;
@@ -2267,6 +2289,16 @@ n00b_conduit_local_connect(n00b_conduit_t *c, n00b_string_t *name)
     }
 
     backend = resolve_backend(backend);
+
+    /* Same reasoning as security_descriptor on the listener: relaxing a peer
+     * check is a security decision, and silently ignoring it on a backend with
+     * no such check would leave the caller believing they opted into something
+     * they did not. Only the Windows named backend verifies the server's user;
+     * everything else rejects rather than pretend. */
+    if (allow_any_server && backend != N00B_CONDUIT_LOCAL_WINDOWS_NAMED) {
+        return n00b_result_err(n00b_conduit_local_conn_t *,
+                               N00B_CONDUIT_ERR_NOT_SUPPORTED);
+    }
 
     if (backend == N00B_CONDUIT_LOCAL_UNIX) {
         auto io_r = resolve_fd_io(c, io);
@@ -2312,7 +2344,7 @@ n00b_conduit_local_connect(n00b_conduit_t *c, n00b_string_t *name)
         return local_xpc_connect(c, name, allocator);
     }
     if (backend == N00B_CONDUIT_LOCAL_WINDOWS_NAMED) {
-        return local_windows_connect(c, name, allocator);
+        return local_windows_connect(c, name, allow_any_server, allocator);
     }
 
     return n00b_result_err(n00b_conduit_local_conn_t *,

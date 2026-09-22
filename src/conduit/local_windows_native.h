@@ -21,16 +21,28 @@ typedef enum {
 
 extern int _n00b_conduit_local_windows_native_backend_present(void);
 
+/* `sddl_data`/`sddl_len` carry an optional SDDL security-descriptor string
+ * (UTF-8, not NUL-terminated) for the pipe. When non-null it is converted with
+ * ConvertStringSecurityDescriptorToSecurityDescriptorW and used as the pipe's
+ * SECURITY_ATTRIBUTES, AND it replaces the default same-user peer check -- the
+ * kernel's DACL check becomes the authorization boundary. Null keeps the
+ * process default DACL plus the same-user check. */
 extern int _n00b_conduit_local_windows_native_listen(void       *owner_token,
                                                      const void *name_data,
                                                      uint64_t    name_len,
                                                      int         backlog,
+                                                     const void *sddl_data,
+                                                     uint64_t    sddl_len,
                                                      void      **out_state,
                                                      void       *allocator);
 
+/* `allow_any_server` non-zero skips the default same-user check on the SERVER
+   process, for clients of a deliberately cross-user endpoint (see the
+   security_descriptor note on listen). Zero keeps today's behaviour. */
 extern int _n00b_conduit_local_windows_native_connect(void       *owner_token,
                                                       const void *name_data,
                                                       uint64_t    name_len,
+                                                      int         allow_any_server,
                                                       void      **out_state,
                                                       void       *allocator);
 

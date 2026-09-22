@@ -18,6 +18,19 @@
  * publishing. Clients verify the server with GetNamedPipeServerProcessId plus
  * the same SID check before returning a connected local handle. If the peer
  * identity cannot be verified as the current user, the native pipe is closed.
+ *
+ * Explicit-DACL mode (n00b#411): a listener may instead supply an SDDL string.
+ * It becomes the pipe's SECURITY_DESCRIPTOR and REPLACES the same-user check --
+ * the kernel's access check against that DACL is then the authorization
+ * boundary, which is the whole point of supplying one. A service running as
+ * LocalSystem whose authorized callers are Administrators and a service SID has
+ * no same-user peer, so the default policy would reject every legitimate
+ * client. The two modes are mutually exclusive by construction: same_user_only
+ * is false exactly when a descriptor was supplied.
+ *
+ * advapi32 is resolved at run time (LoadLibraryA/GetProcAddress) rather than
+ * linked, matching http_compression.c / http_cookies.c / dynamic_lib.c, so the
+ * link line is unchanged.
  */
 
 #include "adt/list.h"
@@ -69,6 +82,24 @@ typedef struct _SID_AND_ATTRIBUTES {
 typedef struct _TOKEN_USER {
     SID_AND_ATTRIBUTES User;
 } TOKEN_USER;
+
+[[gnu::stdcall]] BOOL ImpersonateNamedPipeClient(HANDLE pipe);
+[[gnu::stdcall]] BOOL RevertToSelf(void);
+[[gnu::stdcall]] BOOL OpenThreadToken(HANDLE thread,
+                                      DWORD  desired_access,
+                                      BOOL   open_as_self,
+                                      HANDLE *token_handle);
+[[gnu::stdcall]] HANDLE GetCurrentThread(void);
+[[gnu::stdcall]] void LocalFree(void *mem);
+
+/* advapi32, resolved dynamically. */
+typedef BOOL(__attribute__((__stdcall__)) *
+             local_windows_sddl_to_sd_fn)(const wchar_t *sddl,
+                                          DWORD          revision,
+                                          void         **out_sd,
+                                          unsigned long *out_size);
+typedef BOOL(__attribute__((__stdcall__)) *
+             local_windows_sid_to_string_fn)(void *sid, wchar_t **out_string);
 
 [[gnu::stdcall]] HANDLE CreateNamedPipeW(
     const wchar_t *name,
@@ -146,6 +177,13 @@ struct local_windows_listener_state {
     int                            backlog;
     bool                           closing;
     bool                           released;
+    /* False exactly when an explicit SDDL was supplied: the kernel's DACL check
+     * has already authorized the peer, so the same-user check must not also
+     * run (it would reject every cross-user client the DACL just allowed). */
+    bool                           same_user_only;
+    /* LocalAlloc'd by ConvertStringSecurityDescriptorToSecurityDescriptorW;
+     * freed with LocalFree, not the n00b allocator. Null in same-user mode. */
+    void                          *security_descriptor;
     wchar_t                       *pipe_name;
     n00b_mutex_t                   lock;
     local_windows_op_t            *accept_op;
@@ -622,8 +660,15 @@ done:
     return result;
 }
 
+/* `same_user_only` false means an explicit DACL authorized this connection at
+ * the kernel's access check; re-applying the same-user test would then reject
+ * exactly the cross-user callers the DACL was written to admit. The pid is
+ * still read for the peer record either way -- it is informational, and unlike
+ * the SID it is subject to process-id reuse. */
 static bool
-local_windows_pipe_peer_allowed(HANDLE pipe, uint64_t *peer_pid)
+local_windows_pipe_peer_allowed(HANDLE    pipe,
+                                bool      same_user_only,
+                                uint64_t *peer_pid)
 {
     ULONG pid = 0;
     if (!GetNamedPipeClientProcessId(pipe, &pid)) {
@@ -631,6 +676,9 @@ local_windows_pipe_peer_allowed(HANDLE pipe, uint64_t *peer_pid)
     }
     if (peer_pid != nullptr) {
         *peer_pid = (uint64_t)pid;
+    }
+    if (!same_user_only) {
+        return true;
     }
     return local_windows_pid_is_same_user(pid);
 }
@@ -663,6 +711,68 @@ local_windows_listener_drop_pending(local_windows_listener_state_t *state)
     local_windows_close_handle(&state->pipe);
 }
 
+/* Convert a UTF-8 SDDL string to a SECURITY_DESCRIPTOR via advapi32.
+ *
+ * SDDL is ASCII by definition (SDDL_* tokens, SID strings, hex), so widening is
+ * a byte-to-wchar copy -- no multibyte decoding is needed and a non-ASCII byte
+ * is simply invalid SDDL, which the OS converter rejects for us.
+ *
+ * Returns the LocalAlloc'd descriptor, or null on any failure. */
+static void *
+local_windows_sd_from_sddl(const void       *sddl_data,
+                           uint64_t          sddl_len,
+                           n00b_allocator_t *allocator)
+{
+    if (sddl_data == nullptr || sddl_len == 0) {
+        return nullptr;
+    }
+
+    const uint8_t *src = sddl_data;
+    for (uint64_t i = 0; i < sddl_len; i++) {
+        if (src[i] == 0 || src[i] > 0x7f) {
+            return nullptr; // embedded NUL or non-ASCII: not valid SDDL
+        }
+    }
+
+    wchar_t *wide = n00b_alloc_array_with_opts(
+        wchar_t, sddl_len + 1,
+        &(n00b_alloc_opts_t){.allocator = allocator});
+    if (wide == nullptr) {
+        return nullptr;
+    }
+    for (uint64_t i = 0; i < sddl_len; i++) {
+        wide[i] = (wchar_t)src[i];
+    }
+    wide[sddl_len] = L'\0';
+
+    /* advapi32 is already resident in every Win32 process, so this is a
+     * refcount bump and a symbol lookup, not a load. Balance it anyway --
+     * FreeLibrary on every path, including the error paths -- so the module
+     * refcount is not leaked once per listen. The returned function pointer is
+     * NOT used after the release: the descriptor is fully converted first, and
+     * the pointer is not retained on the listener state. */
+    HMODULE advapi = LoadLibraryA("advapi32.dll");
+    if (advapi == nullptr) {
+        n00b_free(wide);
+        return nullptr;
+    }
+    local_windows_sddl_to_sd_fn convert =
+        (local_windows_sddl_to_sd_fn)(void *)GetProcAddress(
+            advapi, "ConvertStringSecurityDescriptorToSecurityDescriptorW");
+    if (convert == nullptr) {
+        (void)FreeLibrary(advapi);
+        n00b_free(wide);
+        return nullptr;
+    }
+
+    void *sd = nullptr;
+    // 1 == SDDL_REVISION_1
+    BOOL ok = convert(wide, 1, &sd, nullptr);
+    (void)FreeLibrary(advapi);
+    n00b_free(wide);
+    return ok ? sd : nullptr;
+}
+
 static int
 local_windows_listener_arm(local_windows_listener_state_t *state)
 {
@@ -675,6 +785,15 @@ local_windows_listener_arm(local_windows_listener_state_t *state)
         return N00B_LOCAL_WINDOWS_NATIVE_OK;
     }
 
+    SECURITY_ATTRIBUTES  sa;
+    SECURITY_ATTRIBUTES *sa_ptr = nullptr;
+    if (state->security_descriptor != nullptr) {
+        sa.nLength              = (DWORD)sizeof(sa);
+        sa.lpSecurityDescriptor = state->security_descriptor;
+        sa.bInheritHandle       = FALSE;
+        sa_ptr                  = &sa;
+    }
+
     state->pipe = CreateNamedPipeW(
         state->pipe_name,
         PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
@@ -684,7 +803,7 @@ local_windows_listener_arm(local_windows_listener_state_t *state)
         LOCAL_WINDOWS_PIPE_BUFFER_SIZE,
         LOCAL_WINDOWS_PIPE_BUFFER_SIZE,
         0,
-        nullptr);
+        sa_ptr);
     if (state->pipe == INVALID_HANDLE_VALUE) {
         state->pipe = nullptr;
         return N00B_LOCAL_WINDOWS_NATIVE_IO;
@@ -753,7 +872,9 @@ local_windows_listener_complete_accept(local_windows_listener_state_t *state)
     local_windows_op_release(&state->accept_op);
 
     uint64_t peer_pid = 0;
-    if (!local_windows_pipe_peer_allowed(accepted_pipe, &peer_pid)) {
+    if (!local_windows_pipe_peer_allowed(accepted_pipe,
+                                         state->same_user_only,
+                                         &peer_pid)) {
         (void)DisconnectNamedPipe(accepted_pipe);
         local_windows_close_handle(&accepted_pipe);
         (void)local_windows_listener_arm(state);
@@ -786,6 +907,8 @@ _n00b_conduit_local_windows_native_listen(void       *owner_token,
                                           const void *name_data,
                                           uint64_t    name_len,
                                           int         backlog,
+                                          const void *sddl_data,
+                                          uint64_t    sddl_len,
                                           void      **out_state,
                                           void       *allocator)
 {
@@ -815,6 +938,23 @@ _n00b_conduit_local_windows_native_listen(void       *owner_token,
     state->allocator   = alloc;
     state->backlog     = backlog;
     state->pipe_name   = pipe_name;
+
+    /* Convert the descriptor BEFORE anything is armed: a caller that asked for
+     * an explicit DACL must never end up listening under the same-user default
+     * because the SDDL turned out to be malformed. Fail the listen instead. */
+    state->security_descriptor = nullptr;
+    state->same_user_only      = true;
+    if (sddl_data != nullptr && sddl_len != 0) {
+        state->security_descriptor = local_windows_sd_from_sddl(sddl_data,
+                                                                sddl_len,
+                                                                alloc);
+        if (state->security_descriptor == nullptr) {
+            n00b_free(pipe_name);
+            n00b_free(state);
+            return N00B_LOCAL_WINDOWS_NATIVE_INVALID;
+        }
+        state->same_user_only = false;
+    }
     state->accepted = n00b_alloc_with_opts(
         local_windows_accept_queue_t,
         &(n00b_alloc_opts_t){.allocator = alloc,
@@ -844,6 +984,7 @@ int
 _n00b_conduit_local_windows_native_connect(void       *owner_token,
                                            const void *name_data,
                                            uint64_t    name_len,
+                                           int         allow_any_server,
                                            void      **out_state,
                                            void       *allocator)
 {
@@ -901,7 +1042,9 @@ _n00b_conduit_local_windows_native_connect(void       *owner_token,
         return N00B_LOCAL_WINDOWS_NATIVE_IO;
     }
 
-    if (!local_windows_pipe_server_allowed(pipe, &peer_pid)) {
+    if (!local_windows_pipe_server_allowed(pipe,
+                                           allow_any_server == 0,
+                                           &peer_pid)) {
         local_windows_close_handle(&pipe);
         n00b_free(pipe_name);
         return N00B_LOCAL_WINDOWS_NATIVE_CONNECT;
@@ -1314,6 +1457,11 @@ _n00b_conduit_local_windows_native_release_listener(void *raw_state)
     if (state->pipe_name != nullptr) {
         n00b_free(state->pipe_name);
         state->pipe_name = nullptr;
+    }
+    if (state->security_descriptor != nullptr) {
+        // LocalAlloc'd by the SDDL converter, so LocalFree -- not n00b_free.
+        LocalFree(state->security_descriptor);
+        state->security_descriptor = nullptr;
     }
     state->released = true;
     n00b_mutex_unlock(&state->lock);

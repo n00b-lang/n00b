@@ -202,6 +202,21 @@ typedef n00b_conduit_inbox_t(n00b_conduit_local_status_payload_t)
  * @kw unlink_stale Remove stale AF_UNIX socket path before listening.
  *     Defaults to false.
  * @kw mode Backend file mode for path-like local transports. Defaults to 0.
+ * @kw security_descriptor SDDL string applied to the listening endpoint on
+ *     backends that have an OS-level access-control object. Windows named
+ *     backend only; ignored elsewhere.
+ *
+ *     When supplied it becomes the named pipe's SECURITY_DESCRIPTOR **and it
+ *     replaces the default same-user peer check**: the kernel's access check
+ *     against this DACL becomes the authorization boundary, which is the point
+ *     of supplying one. A service running as LocalSystem whose authorized
+ *     callers are Administrators and a service SID cannot use the same-user
+ *     default, because no legitimate client is the same user.
+ *
+ *     When absent (the default) the pipe is created with the process default
+ *     DACL and every peer is verified to be the same user, exactly as before.
+ *
+ *     Example: `D:P(A;;GA;;;SY)(A;;GA;;;BA)`
  * @kw allocator Optional allocator for local listener bookkeeping. Defaults to
  *     nullptr.
  * @return Ok(listener) on success, or Err(code) on failure.
@@ -230,6 +245,7 @@ n00b_conduit_local_listen(n00b_conduit_t *c, n00b_string_t *name)
         int                          backlog      = 0;
         bool                         unlink_stale = false;
         int                          mode         = 0;
+        n00b_string_t               *security_descriptor = nullptr;
         n00b_allocator_t            *allocator    = nullptr;
         n00b_worker_pool_t          *bridge_pool  = nullptr;
     };
@@ -270,6 +286,23 @@ n00b_conduit_local_bridge_pool_new(int32_t size, int32_t cap)
  * @kw backend Backend selector. Defaults to @ref N00B_CONDUIT_LOCAL_AUTO.
  * @kw io Optional IO backend for FD-backed implementations. Defaults to
  *     nullptr.
+ * @kw allow_any_server Accept a server owned by a different user. Windows named
+ *     backend only; ignored elsewhere.
+ *
+ *     By default a client verifies that the server process runs as the same
+ *     user and refuses the connection otherwise, which is the right default
+ *     for a same-user endpoint: it stops a hostile local process from
+ *     squatting the pipe name and impersonating the service.
+ *
+ *     That check is wrong for a service deliberately shared across users -- a
+ *     daemon running as LocalSystem whose authorized callers are
+ *     Administrators has no same-user peer in either direction. Such a client
+ *     must set this, and is then responsible for authenticating the server by
+ *     another means if it needs to.
+ *
+ *     This is the client-side counterpart of @c security_descriptor on
+ *     @ref n00b_conduit_local_listen: a DACL admits cross-user clients, and
+ *     this lets those clients complete the connection.
  * @kw allocator Optional allocator for local connection bookkeeping. Defaults
  *     to nullptr.
  * @return Ok(connection) on success, or Err(code) on failure.
@@ -291,9 +324,10 @@ n00b_conduit_local_bridge_pool_new(int32_t size, int32_t cap)
 extern n00b_result_t(n00b_conduit_local_conn_t *)
 n00b_conduit_local_connect(n00b_conduit_t *c, n00b_string_t *name)
     _kargs {
-        n00b_conduit_local_backend_t backend   = N00B_CONDUIT_LOCAL_AUTO;
-        n00b_conduit_io_backend_t   *io        = nullptr;
-        n00b_allocator_t            *allocator = nullptr;
+        n00b_conduit_local_backend_t backend          = N00B_CONDUIT_LOCAL_AUTO;
+        n00b_conduit_io_backend_t   *io               = nullptr;
+        bool                         allow_any_server = false;
+        n00b_allocator_t            *allocator        = nullptr;
     };
 
 /**
