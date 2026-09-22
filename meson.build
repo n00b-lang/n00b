@@ -2558,6 +2558,42 @@ rocs_large_shard_seal_test = executable('test_rocs_large_shard_seal',
 test('rocs_large_shard_seal', rocs_large_shard_seal_test, suite: 'unit',
      timeout: 180)
 
+# n00b-lang/n00b#431: n00b_add_arena_segment must hold the STW gate for the
+# whole operation.  Hammers segment adds from several threads while the main
+# thread forces collects, with the segment-chain audit on; a lock-order mistake
+# in the gate hangs here and a chain the collector no longer owns aborts.
+# QUARANTINED (n00b#431): this is the crash, not a test of the fix.
+#
+# Six threads allocating 4 MB objects against forced collects reproduces the
+# #431 crash family LOCALLY -- roughly 7 runs in 10 on a 10-core macOS box,
+# with several distinct faults (a write into an unmapped page just past a live
+# allocation; a garbage thread pointer in n00b_epoch_flush_all_stw).  That
+# family had only ever been seen on one Windows box at about one crash per six
+# 420-second cold restarts, so having it here at all is the point of checking
+# it in.
+#
+# It is NOT fixed.  The STW gate on n00b_add_arena_segment in this change is a
+# real hole and closes a documented contract violation, but it does not move
+# this test's failure rate (7/10 before, 7/10 after), so at least one more
+# mechanism is live.
+#
+# 'known-broken' rather than should_fail: it passes ~30% of runs, so
+# should_fail would report UNEXPECTEDPASS. Same reasoning as rocs_live_cursor.
+# Restore its real suite with the fix.
+gc_large_alloc_churn_test = executable('test_gc_large_alloc_churn',
+    ['test/unit/test_gc_large_alloc_churn.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_large_alloc_churn', gc_large_alloc_churn_test, suite: 'known-broken',
+     timeout: 300)
+
+arena_segment_stw_race_test = executable('test_arena_segment_stw_race',
+    ['test/unit/test_arena_segment_stw_race.c'],
+    kwargs: test_common_kwargs,
+)
+test('arena_segment_stw_race', arena_segment_stw_race_test, suite: 'unit',
+     timeout: 180)
+
 # n00b-lang/n00b#432: the marshal's private scratch pool must stay within a
 # small multiple of the image it produces.  It used to retain one block per
 # marshaled allocation plus every superseded half of the output buffer, which on
@@ -6648,38 +6684,21 @@ regex_resharp_test = executable('test_regex_resharp',
         'c_args': exe_c_args + ['--ncc-no-gc-stack-maps'],
     },
 )
-# QUARANTINED (n00b#288). The 900s budget was the right call and it did its
-# job: with room to finish, the run stopped reporting a bare TIMEOUT and named
-# the actual fault -- 328 of 329 cases pass, and one blows the harness's own
-# 5s per-case budget:
+# Un-quarantined (n00b#288). The whole 329-case corpus now runs in ~18s on
+# macOS and ~45s on Linux, so the 900s budget and the 'slow' opt-out that
+# existed to keep it off every push are both gone.
 #
-#   tests08_semantics.toml:15  semantics_multi_intersection
-#   pattern='.*[a-z].*&.*[A-Z].*&.*\d.*&[a-zA-Z\d]{8,}&~(.*\d\d.*)'
+# What it was actually reporting was the build type, not the engine. The
+# harness caps each case at 5s, and at -O0 four of them exceeded that in the
+# regex engine alone; the suite then spent most of its time in ncc's
+# gc-stack-map push/pop pair rather than in matching. Built -O2 the corpus
+# passes 329/329 with no case near the per-case budget.
 #
-# A 5-way intersection with a negated term. The 2-way intersections in the
-# same file, same input, pass comfortably -- so the cost tracks the number of
-# intersected terms, as a product construction would.
-#
-# The timeout stays at 900s rather than reverting: it is what makes the run
-# diagnose itself instead of just expiring.
-# n00b#288: also in 'slow' so the routine quarantine sweep can skip it.
-# This one test costs the Ubuntu job 10-15 MINUTES of every push -- it
-# TIMEOUTs at its 900 s cap on most runs and the other nine quarantined
-# tests together come to under two minutes. With the build step now at
-# parity after #416/#419, it is the single largest reason the Linux job
-# is slower than the macOS one (44m vs 28m, 15.3m of that gap here).
-#
-# The 900 s stays: the note below is right that it is what makes the run
-# diagnose itself, and #288 exists BECAUSE raising 300->900 produced the
-# named failing case instead of a bare expiry. Lowering it would trade
-# that diagnosis back for a symptom, and anything under ~600 s would
-# start failing macOS (169 s, doubling on a half-speed runner -- the
-# #415 class). So the cadence moves instead of the budget.
-#
-# Run it on demand with `meson test -C build_debug --suite slow`.
+# 300s is ~6x the slowest measured run, which leaves room for a loaded runner
+# without going back to a budget long enough to hide a genuine hang.
 test('regex_resharp', regex_resharp_test,
-    suite: ['known-broken', 'slow'],
-    timeout: 900,
+    suite: 'unit',
+    timeout: 300,
     env: {
         'N00B_RESHARP_TEST_DIR': meson.current_source_dir() / 'test/data/resharp/tests',
     })
