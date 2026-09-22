@@ -679,8 +679,19 @@ local_windows_pipe_peer_allowed(HANDLE    pipe,
     return local_windows_pid_is_same_user(pid);
 }
 
+/* Client-side mirror of local_windows_pipe_peer_allowed. `same_user_only` false
+ * is the caller's explicit `allow_any_server` opt-out, for a client of a
+ * deliberately cross-user endpoint -- e.g. an Administrators-token client of a
+ * LocalSystem daemon, where the server is never the same user and this check
+ * would otherwise refuse the connection the server's DACL just admitted.
+ *
+ * Note the asymmetry with the listener side: a DACL authorizes clients TO the
+ * server, so there is no kernel check standing in for this one. A caller that
+ * opts out owns authenticating the server by other means. */
 static bool
-local_windows_pipe_server_allowed(HANDLE pipe, uint64_t *peer_pid)
+local_windows_pipe_server_allowed(HANDLE    pipe,
+                                  bool      same_user_only,
+                                  uint64_t *peer_pid)
 {
     ULONG pid = 0;
     if (!GetNamedPipeServerProcessId(pipe, &pid)) {
@@ -688,6 +699,9 @@ local_windows_pipe_server_allowed(HANDLE pipe, uint64_t *peer_pid)
     }
     if (peer_pid != nullptr) {
         *peer_pid = (uint64_t)pid;
+    }
+    if (!same_user_only) {
+        return true;
     }
     return local_windows_pid_is_same_user(pid);
 }

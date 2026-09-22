@@ -83,6 +83,21 @@ jobs:
         working-directory: n00b
         run: python scripts/test_windows_component_workflow.py
 
+      # src/conduit/local_windows.c compiles ONLY on Windows (see
+      # src/conduit/meson.build), so no developer build sees it -- `ninja` even
+      # reports "no work to do" after editing it. Two defects reached this lane
+      # during n00b#411 for that reason: our own typedefs placed inside the
+      # `#ifndef _WINDOWS` block (which declares the Win32 surface for the
+      # NON-Windows build, so a real Windows build never sees them), and a
+      # helper whose call site gained a parameter its definition did not.
+      #
+      # This runs BEFORE the ~20-minute build so both classes fail in seconds
+      # with a named line instead of a cryptic "too many arguments" deep in a
+      # compile log.
+      - name: Check local_windows.c guards and arity
+        working-directory: n00b
+        run: python scripts/check_local_windows_guards.py
+
       # The pin is the single source of truth for which compiler every platform
       # builds with. Parsed from build.sh so Windows cannot drift from ci.yml.
       - name: Resolve ncc pin
