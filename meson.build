@@ -2165,6 +2165,23 @@ rocs_plan_cost_env_test = executable('test_rocs_plan_cost_env',
 )
 test('rocs_plan_cost_env', rocs_plan_cost_env_test, suite: 'unit')
 
+bench_rocs_zone_map = executable('bench_rocs_zone_map',
+    ['test/unit/bench_rocs_zone_map.c'],
+    kwargs: test_common_kwargs,
+)
+
+# Registered so the workload keeps ingesting, sealing and recording bounds as
+# it claims to. Sized right down here; run the binary directly for timings.
+test('rocs_zone_map_bench',
+    bench_rocs_zone_map,
+    suite: 'unit',
+    env: {
+        'ROCS_BENCH_SHARDS': '8',
+        'ROCS_BENCH_RECORDS': '64',
+        'ROCS_BENCH_ROUNDS': '1',
+    },
+)
+
 bench_rocs_ingest = executable('bench_rocs_ingest',
     ['test/unit/bench_rocs_ingest.c'],
     kwargs: test_common_kwargs,
@@ -2234,6 +2251,18 @@ rocs_plan_predicate_test = executable('test_rocs_plan_predicate',
     kwargs: test_common_kwargs,
 )
 test('rocs_plan_predicate', rocs_plan_predicate_test, suite: 'unit')
+
+rocs_zone_map_test = executable('test_rocs_zone_map',
+    ['test/unit/test_rocs_zone_map.c'],
+    kwargs: test_common_kwargs,
+)
+test('rocs_zone_map', rocs_zone_map_test, suite: 'unit')
+
+rocs_plan_rewrite_test = executable('test_rocs_plan_rewrite',
+    ['test/unit/test_rocs_plan_rewrite.c'],
+    kwargs: test_common_kwargs,
+)
+test('rocs_plan_rewrite', rocs_plan_rewrite_test, suite: 'unit')
 
 rocs_plan_ordset_test = executable('test_rocs_plan_ordset',
     ['test/unit/test_rocs_plan_ordset.c'],
