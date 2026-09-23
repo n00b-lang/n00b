@@ -192,6 +192,14 @@ typedef enum : int32_t {
     N00B_STORE_INGEST_BACKPRESSURE_REJECT,
 } n00b_store_ingest_backpressure_t;
 
+// Upper bound on one BLOCK wait in n00b_store_ingest_topic_publish_ex before
+// admission is re-checked (n00b#417). The wake normally comes from the
+// consumer's dequeue; this is the safety net so a publisher parked on an
+// inbox whose subscriber then closes is not parked forever, and it bounds the
+// exposure to any lost wakeup to one interval. Not a poll cadence: a
+// publisher only reaches it when nothing was dequeued for this long.
+#define N00B_STORE_INGEST_BLOCK_WAIT_MS 250
+
 /**
  * @brief Visibility/lifetime state for a submitted ingest unit.
  *
@@ -235,6 +243,14 @@ typedef n00b_result_t(bool) (*n00b_store_index_term_hook_t)(
  * durable schema identity needed to interpret sealed shards must be represented
  * by schema/catalog metadata.
  */
+// Defaults for n00b_store_index_options_t.search_text_max_depth / _max_terms.
+// Depth 64 is far past any real record shape (transcripts nest ~5 deep); the
+// term cap is per record and counts every appended term, exact-full-string
+// terms included, so a 1 MB message body still indexes ~250k tokens before
+// the walk gives up on it.
+#define N00B_STORE_SEARCH_TEXT_MAX_DEPTH_DEFAULT 64u
+#define N00B_STORE_SEARCH_TEXT_MAX_TERMS_DEFAULT (1u << 18)
+
 struct n00b_store_index_options_t {
     bool                          exact_full_string;
     bool                          split_terms;
@@ -243,6 +259,19 @@ struct n00b_store_index_options_t {
     // 0 selects the built-in default. Keeps IDs/refs exact-matchable while
     // avoiding casefolding/hashing large content blobs on the ingest thread.
     uint32_t                      exact_full_string_max_bytes;
+    // Bounds on the reserved search-text walk, PER RECORD (n00b#417). The walk
+    // descends arrays and objects recursively and appends one term per token;
+    // without a bound one pathological record holds the ingest worker for as
+    // long as it likes -- measured as a 290% CPU / 447 GB VSZ embedder with
+    // nothing in the store's accounting to say why. 0 selects the built-in
+    // default (N00B_STORE_SEARCH_TEXT_MAX_DEPTH_DEFAULT /
+    // N00B_STORE_SEARCH_TEXT_MAX_TERMS_DEFAULT). On exceeding either, term
+    // collection stops for THAT record, the record is still indexed with what
+    // was collected, and n00b_store_conduit_ingest_stats_t.search_text_truncated
+    // is incremented. The caps only need to be generous, not tight: the goal is
+    // to bound the tail, not to change indexing for ordinary records.
+    uint32_t                      search_text_max_depth;
+    uint32_t                      search_text_max_terms;
     uint64_t                      schema_index_identity;
     n00b_store_index_term_hook_t  term_hook;
     void                         *term_hook_ctx;
@@ -344,6 +373,13 @@ typedef enum : int32_t {
     // that means "unknown, try again" rather than "failed". A caller that
     // cannot be told this can only hang (n00b#264).
     N00B_STORE_ERR_TIMEOUT   = -15,
+    // The bounded ingest inbox is full. Only n00b_store_ingest_topic_publish_ex
+    // returns it, and only under BACKPRESSURE_REJECT. Kept distinct from
+    // N00B_STORE_ERR_STATE (no active subscriber / topic closing) on purpose:
+    // FULL means "retry shortly", STATE means "give up". A caller that could
+    // not tell them apart parked a producer for its whole deadline on every
+    // submit during shutdown (n00b#417).
+    N00B_STORE_ERR_FULL      = -16,
 } n00b_store_err_t;
 
 /**
@@ -515,6 +551,15 @@ typedef struct {
     uint64_t   worker_queued;
     uint64_t   worker_in_flight;
     n00b_err_t last_error;
+    // Bounded-inbox capacity (0 = unbounded), so "full" is directly observable
+    // as inbox_queued >= inbox_capacity instead of being inferred from
+    // inbox_queued + worker_queued + worker_in_flight > 0 (n00b#417).
+    uint64_t   inbox_capacity;
+    // Records whose reserved search-text walk hit the per-record depth or
+    // term budget and was cut short (n00b#417). Those records ARE indexed,
+    // with whatever was collected; this counter is the only place that says
+    // the index for them is incomplete.
+    uint64_t   search_text_truncated;
 } n00b_store_conduit_ingest_stats_t;
 
 /**
@@ -912,6 +957,18 @@ n00b_store_ingest_submit(n00b_store_t                  *store,
 /** @brief Return service-owned ingest counters for a service-opened store. */
 extern n00b_result_t(n00b_store_conduit_ingest_stats_t)
 n00b_store_service_ingest_stats(n00b_store_t *store);
+
+/**
+ * @brief Records whose reserved search-text walk was truncated by the
+ *        per-record depth/term budget (n00b#417), since the store opened.
+ *
+ * The same number is carried in
+ * n00b_store_conduit_ingest_stats_t.search_text_truncated; this accessor is
+ * for embedders that ingest directly (n00b_store_ingest) and have no conduit
+ * adapter to ask. Monotonic, process-side only; not persisted.
+ */
+extern uint64_t
+n00b_store_search_text_truncated_count(n00b_store_t *store);
 
 /**
  * @brief Add one normalized term through the generic index emitter.
@@ -1464,11 +1521,22 @@ n00b_store_ingest_topic_publish(n00b_store_ingest_topic_t   *topic,
  * @brief Publish one ingest payload with explicit ROCS admission policy.
  *
  * BLOCK waits while at least one active ingest subscriber exists but its bounded
- * inbox is full. REJECT returns @c N00B_STORE_ERR_STATE before admission when
- * no active subscriber exists or any active subscriber inbox is full. Both
- * policies first wait for any current publisher to yield, so REJECT does not
- * make publisher-role acquisition non-blocking. Neither mode permits accepted
- * records to be dropped by conduit backpressure.
+ * inbox is full. The wait is a real condition wait on the full inbox, woken by
+ * the consumer's dequeue (n00b_conduit_inbox_wait_not_full), not a poll; it
+ * re-checks admission at least every N00B_STORE_INGEST_BLOCK_WAIT_MS so a
+ * subscriber that closes underneath a blocked publisher is still noticed.
+ *
+ * REJECT returns before admission with a code that says WHY:
+ *   - @c N00B_STORE_ERR_FULL  -- every active subscriber's inbox is full.
+ *                                Retry shortly.
+ *   - @c N00B_STORE_ERR_STATE -- no active subscriber, or the topic is
+ *                                closing. Retrying will not help.
+ * (Before n00b#417 both cases returned STATE, and a caller routing
+ * rejections to backpressure handling had no way to tell them apart.)
+ *
+ * Both policies first wait for any current publisher to yield, so REJECT does
+ * not make publisher-role acquisition non-blocking. Neither mode permits
+ * accepted records to be dropped by conduit backpressure.
  */
 extern n00b_result_t(bool)
 n00b_store_ingest_topic_publish_ex(n00b_store_ingest_topic_t   *topic,

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "n00b.h"
@@ -15,6 +16,13 @@
 #include "vfs/vfs.h"
 
 #include <rocs/store.h>
+
+// The typed topic/subscription generators for the store ingest payload live in
+// store.c (not a public header); the n00b#417 tests below subscribe a manual
+// inbox to a store ingest topic, so instantiate them here too. They are
+// static-inline generators, so a second instantiation in this TU is fine.
+N00B_CONDUIT_SUBSCRIPTION_IMPL(n00b_store_ingest_payload_t);
+N00B_CONDUIT_TOPIC_IMPL(n00b_store_ingest_payload_t);
 
 #define CHECK(expr)                                                            \
     do {                                                                       \
@@ -303,6 +311,9 @@ test_conduit_ingests_variant_payloads(void)
     CHECK_STAT(stats, failed, 0);
     CHECK_STAT(stats, malformed, 1);
     CHECK(stats.last_error == N00B_STORE_ERR_PARSE);
+    // n00b#417: "full" is observable directly, and no record here was cut.
+    CHECK_STAT(stats, inbox_capacity, 1);
+    CHECK_STAT(stats, search_text_truncated, 0);
 
     auto close_r = n00b_store_conduit_ingest_close(adapter);
     CHECK(n00b_result_is_ok(close_r));
@@ -395,6 +406,180 @@ test_conduit_ingests_variant_payloads(void)
     auto stream_close_r = n00b_store_record_stream_close(stream);
     CHECK(n00b_result_is_ok(stream_close_r));
 
+    n00b_conduit_destroy(c);
+}
+
+// ---------------------------------------------------------------------------
+// n00b#417: a full bounded inbox is reported as FULL (not STATE), and a BLOCK
+// publisher parks on a real condition wait that the consumer's dequeue wakes.
+//
+// Both tests subscribe a MANUAL inbox (no adapter thread) so "full" is
+// deterministic: nothing drains it until the test pops.
+// ---------------------------------------------------------------------------
+
+static int64_t
+mono_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+}
+
+static n00b_store_ingest_inbox_t *
+subscribe_manual_inbox(n00b_conduit_t             *c,
+                       n00b_store_ingest_topic_t  *topic,
+                       uint32_t                    limit,
+                       n00b_conduit_sub_handle_t  *out_sub)
+{
+    n00b_store_ingest_inbox_t *inbox = n00b_alloc_with_opts(
+        n00b_store_ingest_inbox_t,
+        &(n00b_alloc_opts_t){});
+    // Same shape the adapter uses (store.c ingest_start): bounded, DROP_NEWEST
+    // so a push past the limit is refused rather than queued.
+    n00b_conduit_inbox_init(n00b_store_ingest_payload_t,
+                            inbox,
+                            c,
+                            N00B_CONDUIT_BP_DROP_NEWEST,
+                            limit);
+    *out_sub = n00b_conduit_subscribe(n00b_store_ingest_payload_t,
+                                      topic,
+                                      inbox,
+                                      .operations = N00B_CONDUIT_OP_ALL);
+    CHECK(*out_sub != N00B_CONDUIT_INVALID_SUB_HANDLE);
+    return inbox;
+}
+
+static n00b_err_t
+publish_reject(n00b_store_ingest_topic_t *topic, int64_t id)
+{
+    auto payload_r = n00b_store_ingest_payload_record(record_with_id(id));
+    CHECK(n00b_result_is_ok(payload_r));
+    auto publish_r = n00b_store_ingest_topic_publish_ex(
+        topic,
+        n00b_result_get(payload_r),
+        .backpressure = N00B_STORE_INGEST_BACKPRESSURE_REJECT);
+    return n00b_result_is_ok(publish_r) ? N00B_STORE_OK
+                                        : n00b_result_get_err(publish_r);
+}
+
+static void
+test_reject_on_full_inbox_returns_full(void)
+{
+    n00b_conduit_t *c = n00b_result_get(n00b_conduit_new());
+
+    auto topic_r = n00b_store_ingest_topic_get(
+        c,
+        n00b_conduit_int_uri(N00B_CONDUIT_TAG_USER_EVENT, 7206));
+    CHECK(n00b_result_is_ok(topic_r));
+    n00b_store_ingest_topic_t *topic = n00b_result_get(topic_r);
+
+    n00b_conduit_sub_handle_t  sub;
+    n00b_store_ingest_inbox_t *inbox = subscribe_manual_inbox(c, topic, 1, &sub);
+
+    // Capacity 1: the first publish is admitted, the second finds it full.
+    CHECK(publish_reject(topic, 1) == N00B_STORE_OK);
+    CHECK(publish_reject(topic, 2) == N00B_STORE_ERR_FULL);
+    // Still full, still FULL -- and specifically NOT the "no subscriber" code.
+    CHECK(publish_reject(topic, 3) == N00B_STORE_ERR_FULL);
+
+    // Draining one makes room; the next publish is admitted again.
+    n00b_store_ingest_msg_t *msg = n00b_store_ingest_inbox_pop(inbox);
+    CHECK(msg != nullptr);
+    CHECK(publish_reject(topic, 4) == N00B_STORE_OK);
+
+    // Cancelling the only subscriber is the STATE case, not FULL.
+    n00b_conduit_sub_cancel(sub);
+    CHECK(publish_reject(topic, 5) == N00B_STORE_ERR_STATE);
+
+    n00b_conduit_destroy(c);
+}
+
+typedef struct {
+    n00b_store_ingest_topic_t *topic;
+    _Atomic bool               started;
+    _Atomic bool               done;
+    _Atomic int64_t            done_ns;
+    bool                       published;
+    n00b_err_t                 err;
+} block_publisher_ctx_t;
+
+static void *
+block_publisher_main(void *arg)
+{
+    block_publisher_ctx_t *ctx = arg;
+    auto payload_r = n00b_store_ingest_payload_record(record_with_id(2));
+    CHECK(n00b_result_is_ok(payload_r));
+
+    atomic_store(&ctx->started, true);
+    auto publish_r = n00b_store_ingest_topic_publish_ex(
+        ctx->topic,
+        n00b_result_get(payload_r),
+        .backpressure = N00B_STORE_INGEST_BACKPRESSURE_BLOCK);
+    ctx->published = n00b_result_is_ok(publish_r);
+    ctx->err = ctx->published ? N00B_STORE_OK : n00b_result_get_err(publish_r);
+    atomic_store(&ctx->done_ns, mono_ns());
+    atomic_store(&ctx->done, true);
+    return nullptr;
+}
+
+static void
+test_block_publisher_wakes_on_dequeue(void)
+{
+    n00b_conduit_t *c = n00b_result_get(n00b_conduit_new());
+
+    auto topic_r = n00b_store_ingest_topic_get(
+        c,
+        n00b_conduit_int_uri(N00B_CONDUIT_TAG_USER_EVENT, 7207));
+    CHECK(n00b_result_is_ok(topic_r));
+    n00b_store_ingest_topic_t *topic = n00b_result_get(topic_r);
+
+    n00b_conduit_sub_handle_t  sub;
+    n00b_store_ingest_inbox_t *inbox = subscribe_manual_inbox(c, topic, 1, &sub);
+    CHECK(publish_reject(topic, 1) == N00B_STORE_OK); // now full
+
+    block_publisher_ctx_t ctx = {.topic = topic};
+    auto thread_r = n00b_thread_spawn(block_publisher_main, &ctx);
+    CHECK(n00b_result_is_ok(thread_r));
+    n00b_thread_t *thread = n00b_result_get(thread_r);
+    while (!atomic_load(&ctx.started)) {
+        base_nanosleep_ns(1000);
+    }
+    // Give it time to reach the wait. It must NOT complete: the inbox is full
+    // and nothing is draining it.
+    for (uint32_t i = 0; i < 60 && !atomic_load(&ctx.done); i++) {
+        base_nanosleep_ns(N00B_NS_PER_MS);
+    }
+    CHECK(!atomic_load(&ctx.done));
+
+    // One dequeue is the wake. Measure from here to the publisher's return.
+    int64_t t0 = mono_ns();
+    n00b_store_ingest_msg_t *msg = n00b_store_ingest_inbox_pop(inbox);
+    CHECK(msg != nullptr);
+    for (uint32_t i = 0; i < 2000 && !atomic_load(&ctx.done); i++) {
+        base_nanosleep_ns(N00B_NS_PER_MS);
+    }
+    CHECK(atomic_load(&ctx.done));
+    CHECK(ctx.published);
+    CHECK(ctx.err == N00B_STORE_OK);
+
+    // What is being pinned is that the wake came from the dequeue and not
+    // from the N00B_STORE_INGEST_BLOCK_WAIT_MS safety timeout, so the bound
+    // is well under that interval. Generous for a loaded CI box.
+    int64_t woke_after_ms = (atomic_load(&ctx.done_ns) - t0) / 1000000LL;
+    if (woke_after_ms >= N00B_STORE_INGEST_BLOCK_WAIT_MS / 2) {
+        fprintf(stderr,
+                "BLOCK publisher woke %lld ms after the dequeue (safety "
+                "timeout is %d ms): the condition wake did not fire\n",
+                (long long)woke_after_ms,
+                (int)N00B_STORE_INGEST_BLOCK_WAIT_MS);
+    }
+    CHECK(woke_after_ms < N00B_STORE_INGEST_BLOCK_WAIT_MS / 2);
+
+    // The woken publisher's record landed.
+    CHECK(n00b_store_ingest_inbox_msg_count(inbox) == 1);
+
+    n00b_thread_join(thread);
+    n00b_conduit_sub_cancel(sub);
     n00b_conduit_destroy(c);
 }
 
@@ -826,6 +1011,8 @@ main(int argc, char *argv[])
 
     test_conduit_ingests_variant_payloads();
     test_conduit_publish_rejects_without_subscriber();
+    test_reject_on_full_inbox_returns_full();
+    test_block_publisher_wakes_on_dequeue();
     test_reject_policy_serializes_before_admission();
     test_service_profile_submit_routes_through_conduit();
     test_service_profile_accepts_multi_worker_count();

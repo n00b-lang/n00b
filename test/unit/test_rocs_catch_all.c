@@ -183,6 +183,11 @@ check_scan_impl(const char             *label,
         CHECK(pos.ordinal == expected[i]);
     }
     CHECK(scan.has_last_observed);
+    if (scan.last_observed.ordinal != last_ordinal) {
+        fprintf(stderr, "last_observed mismatch (%s): ordinal=%llu expected=%llu scanned_records=%llu matches=%llu\n",
+                label, (unsigned long long)scan.last_observed.ordinal, (unsigned long long)last_ordinal,
+                (unsigned long long)scan.scanned_records, (unsigned long long)n00b_list_len(*scan.matches));
+    }
     CHECK(scan.last_observed.ordinal == last_ordinal);
 }
 
@@ -359,6 +364,116 @@ test_no_opt_in_schema_does_not_broad_scan_strings(void)
 
     check_scan(store, any_contains(r"alpha"), nullptr, 0, 0);
     check_scan(store, any_contains(r"collision"), nullptr, 0, 0);
+}
+
+// ---------------------------------------------------------------------------
+// n00b#417: the reserved search-text walk is bounded per record. A too-deep
+// subtree is skipped (its siblings still index); the term cap stops the
+// record; both are counted; the record is never rejected.
+// ---------------------------------------------------------------------------
+
+// {"lvl":{"lvl":...{leaf_key: leaf_value}}} with `depth` object levels under
+// the root, plus `top_key: top_value` on the root itself.
+static n00b_json_node_t *
+nested_record(uint32_t       depth,
+              n00b_string_t *leaf_key,
+              n00b_string_t *leaf_value,
+              n00b_string_t *top_key,
+              n00b_string_t *top_value)
+{
+    n00b_json_node_t *root = n00b_json_object_new();
+    if (top_key != nullptr) {
+        put_string(root, top_key, top_value);
+    }
+    n00b_json_node_t *cur = root;
+    for (uint32_t i = 0; i < depth; i++) {
+        n00b_json_node_t *child = n00b_json_object_new();
+        n00b_json_object_put_n00b(cur, r"lvl", child);
+        cur = child;
+    }
+    put_string(cur, leaf_key, leaf_value);
+    return root;
+}
+
+static void
+test_search_text_depth_cap_skips_subtree_and_counts(void)
+{
+    n00b_store_index_options_t options = {
+        .exact_full_string     = true,
+        .split_terms           = true,
+        .search_text_max_depth = 4,
+    };
+    n00b_store_t *store = open_search_text_store(&options);
+    CHECK(n00b_store_search_text_truncated_count(store) == 0);
+
+    // Root is depth 1; eight "lvl" levels put the leaf at depth 9 > 4.
+    ingest(store, nested_record(8, r"leaf", r"deepterm", r"top", r"shallowterm"));
+    CHECK(n00b_store_search_text_truncated_count(store) == 1);
+
+    uint64_t hit0[] = {0};
+    // The shallow sibling is indexed whatever order the object walk took...
+    check_scan(store, any_contains(r"shallowterm"), hit0, 1, 0);
+    // ...and the too-deep leaf is not.
+    check_scan(store, any_contains(r"deepterm"), nullptr, 0, 0);
+
+    // A record inside the cap is untouched and does not count.
+    ingest(store, nested_record(2, r"leaf", r"okterm", nullptr, nullptr));
+    CHECK(n00b_store_search_text_truncated_count(store) == 1);
+    uint64_t hit1[] = {1};
+    check_scan(store, any_contains(r"okterm"), hit1, 1, 1);
+}
+
+static void
+test_search_text_term_cap_stops_record_and_counts(void)
+{
+    // exact-full-string only: exactly one term per string, so the cap maps
+    // onto a known number of array elements.
+    n00b_store_index_options_t options = {
+        .exact_full_string     = true,
+        .split_terms           = false,
+        .search_text_max_terms = 8,
+    };
+    n00b_store_t *store = open_search_text_store(&options);
+
+    n00b_json_node_t *record = n00b_json_object_new();
+    n00b_json_node_t *list   = n00b_json_array_new();
+    static const char *const words[] = {
+        "w00", "w01", "w02", "w03", "w04", "w05", "w06", "w07", "w08", "w09",
+        "w10", "w11", "w12", "w13", "w14", "w15", "w16", "w17", "w18", "w19",
+    };
+    for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
+        n00b_json_array_push(list,
+                             n00b_json_string_new_from_n00b(
+                                 n00b_string_from_cstr((char *)words[i])));
+    }
+    n00b_json_object_put_n00b(record, r"list", list);
+    ingest(store, record);
+    CHECK(n00b_store_search_text_truncated_count(store) == 1);
+
+    uint64_t hit0[] = {0};
+    // Arrays walk in order: the first eight made it in, the rest did not.
+    check_scan(store, any_contains(r"w00"), hit0, 1, 0);
+    check_scan(store, any_contains(r"w07"), hit0, 1, 0);
+    check_scan(store, any_contains(r"w08"), nullptr, 0, 0);
+    check_scan(store, any_contains(r"w19"), nullptr, 0, 0);
+}
+
+static void
+test_search_text_default_caps_engage(void)
+{
+    // No options: the built-in defaults must still bound the walk. 80 levels
+    // is past N00B_STORE_SEARCH_TEXT_MAX_DEPTH_DEFAULT (64); 10 is not.
+    n00b_store_t *store = open_search_text_store(nullptr);
+    ingest(store, nested_record(80, r"leaf", r"abyss", r"top", r"surface"));
+    CHECK(n00b_store_search_text_truncated_count(store) == 1);
+    ingest(store, nested_record(10, r"leaf", r"reachable", nullptr, nullptr));
+    CHECK(n00b_store_search_text_truncated_count(store) == 1);
+
+    uint64_t hit0[] = {0};
+    uint64_t hit1[] = {1};
+    check_scan(store, any_contains(r"surface"), hit0, 1, 1);
+    check_scan(store, any_contains(r"abyss"), nullptr, 0, 1);
+    check_scan(store, any_contains(r"reachable"), hit1, 1, 1);
 }
 
 static void
@@ -542,6 +657,9 @@ main(int argc, char **argv)
     test_no_opt_in_schema_does_not_broad_scan_strings();
     test_reserved_search_text_defaults_exact_and_split_terms();
     test_reserved_search_text_options_gate_exact_and_split_terms();
+    test_search_text_depth_cap_skips_subtree_and_counts();
+    test_search_text_term_cap_stops_record_and_counts();
+    test_search_text_default_caps_engage();
     test_reserved_search_text_generic_hook_terms_are_searchable();
 
     n00b_shutdown();

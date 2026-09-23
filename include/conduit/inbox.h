@@ -168,6 +168,12 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
         n00b_conduit_sys_queue_t             sys_queue;                                        \
         /* Notification */                                                                     \
         n00b_condition_t                     cv;                                               \
+        /* Producer-side "space available" wait for BOUNDED inboxes: a        */             \
+        /* blocking publisher parks on space_cv instead of spin-sleeping and  */             \
+        /* pop_raw wakes it. pop notifies only when space_waiters != 0, so the */             \
+        /* uncontended consumer pays one load. See wait_not_full (n00b#417).  */             \
+        n00b_condition_t                     space_cv;                                         \
+        _Atomic(uint32_t)                    space_waiters;                                    \
         n00b_conduit_t                      *conduit;                                          \
         /* noscan: points at the inbox's backing POOL (never a GC-collected    */             \
         /* object). Tracing it would pin the whole pool as live every          */             \
@@ -193,6 +199,8 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
         n00b_atomic_store(&inbox->flags, 0);                                                   \
         n00b_conduit_sys_queue_init(&inbox->sys_queue);                                        \
         n00b_condition_init(&inbox->cv);                                                        \
+        n00b_condition_init(&inbox->space_cv);                                                  \
+        n00b_atomic_store(&inbox->space_waiters, 0);                                           \
         inbox->conduit = c;                                                                    \
         inbox->allocator = nullptr;                                                            \
         inbox->name = nullptr;                                                                 \
@@ -239,8 +247,51 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
             }                                                                                  \
         }                                                                                      \
         n00b_atomic_add(&inbox->count, (uint32_t)-1);                                          \
+        /* Producer handshake, the other half of wait_not_full: the count   */                 \
+        /* drop above must be ordered before this waiters load, and the     */                 \
+        /* producer's waiters increment before ITS count re-check, so at    */                 \
+        /* least one side sees the other and a wakeup cannot be lost. Both  */                 \
+        /* sides use seq_cst fences: acq_rel RMWs alone do not give that.   */                 \
+        atomic_thread_fence(memory_order_seq_cst);                                             \
+        if (inbox->limit > 0                                                                   \
+            && atomic_load_explicit(&inbox->space_waiters, memory_order_seq_cst) != 0) {      \
+            n00b_condition_notify(&inbox->space_cv, .all = true, .auto_unlock = true);        \
+        }                                                                                      \
         head->header.next = nullptr;                                                           \
         return head;                                                                           \
+    }                                                                                          \
+                                                                                               \
+    /* Producer-side: block until the inbox has room or timeout_ms elapses  */                 \
+    /* (0 = no timeout). Returns true when the inbox is NOT full on return.  */                \
+    /* Unbounded inboxes (limit == 0) never block. This is what a BLOCK      */                \
+    /* publisher should call instead of sleeping and re-polling: the wakeup  */                \
+    /* comes from the dequeue, which is the only place that knows (n00b#417).*/                \
+    static inline bool                                                                         \
+    _N00B_INBOX_FN(wait_not_full, T)(n00b_conduit_inbox_t(T) *inbox, int64_t timeout_ms)       \
+    {                                                                                          \
+        if (!inbox || inbox->limit == 0) return true;                                          \
+        atomic_fetch_add_explicit(&inbox->space_waiters, 1, memory_order_seq_cst);             \
+        atomic_thread_fence(memory_order_seq_cst);                                             \
+        bool room = n00b_atomic_load(&inbox->count) < inbox->limit;                            \
+        if (!room) {                                                                           \
+            n00b_condition_lock(&inbox->space_cv);                                              \
+            /* Re-check under the CV lock. A pop that ran between the check  */                \
+            /* above and this lock either saw our waiters increment (and its */                \
+            /* notify serializes after our wait through the CV lock) or ran  */                \
+            /* before it, in which case the count is already down here.      */                \
+            room = n00b_atomic_load(&inbox->count) < inbox->limit;                             \
+            if (!room) {                                                                       \
+                n00b_condition_wait(&inbox->space_cv,                                           \
+                                    .timeout_ms  = timeout_ms,                                 \
+                                    .auto_unlock = true);                                      \
+                room = n00b_atomic_load(&inbox->count) < inbox->limit;                         \
+            }                                                                                  \
+            else {                                                                             \
+                n00b_condition_unlock(&inbox->space_cv);                                        \
+            }                                                                                  \
+        }                                                                                      \
+        atomic_fetch_sub_explicit(&inbox->space_waiters, 1, memory_order_seq_cst);             \
+        return room;                                                                           \
     }                                                                                          \
                                                                                                \
     /* Public consumer entry point. Drains any DROP_OLDEST credits    */                       \
@@ -346,6 +397,7 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
             n00b_free_with_allocator_hint(inbox->allocator, sys);                              \
         }                                                                                      \
         n00b_condition_destroy(&inbox->cv);                                                     \
+        n00b_condition_destroy(&inbox->space_cv);                                               \
     }
 
 /**
@@ -376,6 +428,10 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
     _N00B_INBOX_FN(has_messages, T)(inbox)
 #define n00b_conduit_inbox_full(T, inbox) \
     _N00B_INBOX_FN(is_full, T)(inbox)
+/* Block a producer until the bounded inbox has room, or timeout_ms passes.  */
+/* Returns true when not full on return. See the inline for the handshake.  */
+#define n00b_conduit_inbox_wait_not_full(T, inbox, timeout_ms) \
+    _N00B_INBOX_FN(wait_not_full, T)(inbox, timeout_ms)
 #define n00b_conduit_inbox_destroy(T, inbox) \
     _N00B_INBOX_FN(destroy, T)(inbox)
 

@@ -54,6 +54,35 @@ typedef n00b_list_t(n00b_store_posting_list_t *)
 typedef struct rocs_store_batch_term rocs_store_batch_term_t;
 typedef n00b_list_t(rocs_store_batch_term_t)
     rocs_store_batch_term_list_t;
+
+/* Per-record budget for the reserved search-text walk (n00b#417).
+ *
+ * rocs_store_collect_search_text descends arrays and objects recursively and
+ * appends a term per token, and before this it did both without bound: one
+ * record with deep or very wide string content could hold the ingest worker
+ * indefinitely (measured: 290% CPU, 447 GB VSZ, ~1/6 of samples inside mmap
+ * from per-token casefold buffers), with no counter anywhere to say so.
+ *
+ * The budget is carried through the walk and into the tokenizer's visitor.
+ * Exceeding it stops collection for THAT record and sets `truncated`; the
+ * record is still indexed with what was gathered, and the caller counts the
+ * truncation into store->search_text_truncated. Terms are counted as growth of
+ * the output list since the walk began, which covers exact-full-string terms
+ * and hook-emitted terms as well as tokenizer output. */
+typedef struct {
+    uint32_t depth;
+    uint32_t max_depth;
+    uint64_t max_terms;
+    uint64_t start_terms;
+    // Either cap was hit somewhere in this record (what gets counted).
+    bool     truncated;
+    // The TERM cap was hit: nothing more may be appended for this record, so
+    // the walk stops outright. The DEPTH cap only skips the too-deep subtree
+    // and continues with its siblings -- a shallow field next to a deep one
+    // still gets indexed, and skipping a subtree is O(1), so that is safe.
+    bool     terms_exhausted;
+} rocs_store_search_budget_t;
+
 typedef struct rocs_store_retired_hot_allocator
     rocs_store_retired_hot_allocator_t;
 typedef n00b_list_t(rocs_store_retired_hot_allocator_t *)
@@ -327,6 +356,10 @@ struct n00b_store_t {
     n00b_conduit_t                *service_conduit;
     n00b_store_ingest_topic_t     *service_ingest_topic;
     n00b_store_conduit_ingest_t   *service_ingest;
+    // Records whose reserved search-text walk hit the per-record budget
+    // (n00b#417). Process-side, monotonic; read by the ingest stats and
+    // n00b_store_search_text_truncated_count.
+    _Atomic(uint64_t)              search_text_truncated;
     n00b_store_state_t             state;
     bool                           read_only;
     bool                           recovery_journal;
@@ -5965,12 +5998,86 @@ rocs_store_append_normalized_terms(rocs_store_batch_term_list_t *out,
     return n00b_result_ok(bool, true);
 }
 
+static rocs_store_search_budget_t
+rocs_store_search_budget_for(n00b_store_schema_t          *schema,
+                             rocs_store_batch_term_list_t *out)
+{
+    uint32_t max_depth = N00B_STORE_SEARCH_TEXT_MAX_DEPTH_DEFAULT;
+    uint32_t max_terms = N00B_STORE_SEARCH_TEXT_MAX_TERMS_DEFAULT;
+    if (schema != nullptr && schema->index_options != nullptr) {
+        if (schema->index_options->search_text_max_depth != 0) {
+            max_depth = schema->index_options->search_text_max_depth;
+        }
+        if (schema->index_options->search_text_max_terms != 0) {
+            max_terms = schema->index_options->search_text_max_terms;
+        }
+    }
+    return (rocs_store_search_budget_t){
+        .depth           = 0,
+        .max_depth       = max_depth,
+        .max_terms       = max_terms,
+        .start_terms     = out == nullptr ? 0 : (uint64_t)n00b_list_len(*out),
+        .truncated       = false,
+        .terms_exhausted = false,
+    };
+}
+
+// True once this record has used its term budget; latches `truncated`.
+static inline bool
+rocs_store_search_budget_exhausted(rocs_store_search_budget_t   *budget,
+                                   rocs_store_batch_term_list_t *out)
+{
+    if (budget == nullptr) {
+        return false;
+    }
+    if (budget->terms_exhausted) {
+        return true;
+    }
+    if (out != nullptr
+        && (uint64_t)n00b_list_len(*out) - budget->start_terms >= budget->max_terms) {
+        budget->truncated       = true;
+        budget->terms_exhausted = true;
+        return true;
+    }
+    return false;
+}
+
+// Enter one nesting level; false (and latched `truncated`) at the depth cap.
+static inline bool
+rocs_store_search_budget_descend(rocs_store_search_budget_t *budget)
+{
+    if (budget == nullptr) {
+        return true;
+    }
+    if (budget->terms_exhausted) {
+        return false;
+    }
+    if (budget->depth >= budget->max_depth) {
+        budget->truncated = true; // counted; the caller skips this subtree only
+        return false;
+    }
+    budget->depth++;
+    return true;
+}
+
+static inline void
+rocs_store_search_budget_ascend(rocs_store_search_budget_t *budget)
+{
+    if (budget != nullptr && budget->depth > 0) {
+        budget->depth--;
+    }
+}
+
 typedef struct {
     rocs_store_batch_term_list_t *out;
     n00b_string_t                *field;
     n00b_store_postings_kind_t    postings;
     n00b_allocator_t             *allocator;
     n00b_err_t                    err;
+    // Optional per-record budget (reserved search-text path only). When it
+    // runs out the visitor returns false, which STOPS the tokenizer -- that is
+    // what bounds a single multi-MB string, not just the walk around it.
+    rocs_store_search_budget_t   *budget;
 } rocs_store_key_append_ctx_t;
 
 static bool
@@ -5978,6 +6085,11 @@ rocs_store_append_key_visitor(void *ctx_ptr, n00b_uint128_t key)
 {
     rocs_store_key_append_ctx_t *ctx = ctx_ptr;
     if (ctx == nullptr || ctx->out == nullptr || ctx->field == nullptr) {
+        return false;
+    }
+    if (rocs_store_search_budget_exhausted(ctx->budget, ctx->out)) {
+        // Deliberate stop, not an error: ctx->err stays OK and the caller
+        // reads ctx->budget->truncated to tell the two apart.
         return false;
     }
 
@@ -6003,7 +6115,8 @@ rocs_store_append_text_keys(rocs_store_batch_term_list_t *out,
                             uint8_t                       ngram_n,
                             n00b_allocator_t             *allocator) _kargs
 {
-    bool include_full_value = true;
+    bool                        include_full_value = true;
+    rocs_store_search_budget_t *budget             = nullptr;
 }
 {
     if (out == nullptr || field == nullptr || value == nullptr) {
@@ -6019,6 +6132,7 @@ rocs_store_append_text_keys(rocs_store_batch_term_list_t *out,
         .postings  = postings,
         .allocator = allocator,
         .err       = N00B_STORE_OK,
+        .budget    = budget,
     };
 
     n00b_result_t(uint64_t) keys_r;
@@ -6043,6 +6157,12 @@ rocs_store_append_text_keys(rocs_store_batch_term_list_t *out,
         return n00b_result_err(bool, N00B_STORE_ERR_INDEX);
     }
 
+    if (budget != nullptr && budget->terms_exhausted && ctx.err == N00B_STORE_OK) {
+        // The normalizer reports a visitor `false` as N00B_STORE_NORM_ERR_STATE;
+        // this one was our budget stop, so it is a successful, shorter index
+        // for this record -- the caller counts it, the record is not rejected.
+        return n00b_result_ok(bool, true);
+    }
     if (n00b_result_is_err(keys_r)) {
         return n00b_result_err(bool, N00B_STORE_ERR_INDEX);
     }
@@ -6252,7 +6372,8 @@ static n00b_result_t(bool)
 rocs_store_append_default_search_text(rocs_store_batch_term_list_t *out,
                                       n00b_store_schema_t          *schema,
                                       n00b_json_node_t             *node,
-                                      n00b_allocator_t             *allocator)
+                                      n00b_allocator_t             *allocator,
+                                      rocs_store_search_budget_t   *budget)
 {
     if (!n00b_json_is_string(node)) {
         return n00b_result_ok(bool, true);
@@ -6285,7 +6406,8 @@ rocs_store_append_default_search_text(rocs_store_batch_term_list_t *out,
                                        node,
                                        N00B_STORE_NGRAM_DEFAULT_N,
                                        allocator,
-                                       .include_full_value = false);
+                                       .include_full_value = false,
+                                       .budget             = budget);
 }
 
 // n00b#267: the walk used to allocate a fresh "parent.key" string per object
@@ -6346,14 +6468,16 @@ rocs_store_collect_search_text_walk(rocs_store_batch_term_list_t *out,
                                     n00b_store_schema_t          *schema,
                                     n00b_json_node_t             *node,
                                     rocs_store_search_path_t     *path,
-                                    n00b_allocator_t             *allocator);
+                                    n00b_allocator_t             *allocator,
+                                    rocs_store_search_budget_t   *budget);
 
 static n00b_result_t(bool)
 rocs_store_collect_search_text(rocs_store_batch_term_list_t *out,
                                n00b_store_schema_t          *schema,
                                n00b_json_node_t             *node,
                                n00b_string_t                *path,
-                               n00b_allocator_t             *allocator)
+                               n00b_allocator_t             *allocator,
+                               rocs_store_search_budget_t   *budget)
 {
     rocs_store_search_path_t buf = {};
     if (path != nullptr && path->u8_bytes > 0) {
@@ -6367,7 +6491,7 @@ rocs_store_collect_search_text(rocs_store_batch_term_list_t *out,
         memcpy(buf.data, path->data, (size_t)path->u8_bytes);
         buf.len = (uint64_t)path->u8_bytes;
     }
-    return rocs_store_collect_search_text_walk(out, schema, node, &buf, allocator);
+    return rocs_store_collect_search_text_walk(out, schema, node, &buf, allocator, budget);
 }
 
 static n00b_result_t(bool)
@@ -6375,9 +6499,12 @@ rocs_store_collect_search_text_walk(rocs_store_batch_term_list_t *out,
                                     n00b_store_schema_t          *schema,
                                     n00b_json_node_t             *node,
                                     rocs_store_search_path_t     *pbuf,
-                                    n00b_allocator_t             *allocator)
+                                    n00b_allocator_t             *allocator,
+                                    rocs_store_search_budget_t   *budget)
 {
-    if (node == nullptr) {
+    // A budget that has already run out ends the walk for this record at every
+    // remaining node; nothing below allocates or tokenizes past that point.
+    if (node == nullptr || (budget != nullptr && budget->terms_exhausted)) {
         return n00b_result_ok(bool, true);
     }
     // The hooks take an n00b_string_t path; build it over the buffer only
@@ -6392,6 +6519,9 @@ rocs_store_collect_search_text_walk(rocs_store_batch_term_list_t *out,
                                     .allocator = allocator);
     }
     if (n00b_json_is_string(node)) {
+        if (rocs_store_search_budget_exhausted(budget, out)) {
+            return n00b_result_ok(bool, true);
+        }
         n00b_store_search_text_action_t action = N00B_STORE_SEARCH_TEXT_DEFAULT;
         n00b_store_search_text_term_list_t *terms = nullptr;
         if (schema != nullptr && schema->search_text_hook != nullptr) {
@@ -6421,7 +6551,8 @@ rocs_store_collect_search_text_walk(rocs_store_batch_term_list_t *out,
             return rocs_store_append_default_search_text(out,
                                                          schema,
                                                          node,
-                                                         allocator);
+                                                         allocator,
+                                                         budget);
         }
         case N00B_STORE_SEARCH_TEXT_REPLACE:
         {
@@ -6443,18 +6574,28 @@ rocs_store_collect_search_text_walk(rocs_store_batch_term_list_t *out,
         return n00b_result_err(bool, N00B_STORE_ERR_INDEX);
     }
     if (n00b_json_is_array(node)) {
+        if (!rocs_store_search_budget_descend(budget)) {
+            return n00b_result_ok(bool, true); // depth cap: stop, counted
+        }
+        n00b_result_t(bool) res = n00b_result_ok(bool, true);
         size_t n = n00b_json_array_len(node);
         for (size_t i = 0; i < n; i++) {
             auto r = rocs_store_collect_search_text_walk(out,
                                                          schema,
                                                          n00b_json_array_get(node, i),
                                                          pbuf,
-                                                         allocator);
+                                                         allocator,
+                                                         budget);
             if (n00b_result_is_err(r)) {
-                return r;
+                res = r;
+                break;
+            }
+            if (budget != nullptr && budget->terms_exhausted) {
+                break;
             }
         }
-        return n00b_result_ok(bool, true);
+        rocs_store_search_budget_ascend(budget);
+        return res;
     }
     if (n00b_json_is_object(node)) {
         // Iterate the object's dict in place: no entry list, no per-entry
@@ -6462,6 +6603,9 @@ rocs_store_collect_search_text_walk(rocs_store_batch_term_list_t *out,
         n00b_json_object_t *dict = n00b_json_as_object(node);
         if (dict == nullptr) {
             return n00b_result_err(bool, N00B_STORE_ERR_INDEX);
+        }
+        if (!rocs_store_search_budget_descend(budget)) {
+            return n00b_result_ok(bool, true); // depth cap: stop, counted
         }
         bool track_path = schema != nullptr
                        && (schema->search_text_hook != nullptr
@@ -6482,13 +6626,18 @@ rocs_store_collect_search_text_walk(rocs_store_batch_term_list_t *out,
                                                          schema,
                                                          child,
                                                          pbuf,
-                                                         allocator);
+                                                         allocator,
+                                                         budget);
             pbuf->len = saved;
             if (n00b_result_is_err(r)) {
                 walk_err = r;
                 break;
             }
+            if (budget != nullptr && budget->terms_exhausted) {
+                break;
+            }
         });
+        rocs_store_search_budget_ascend(budget);
         return walk_err;
     }
     return n00b_result_ok(bool, true); // number / bool / null: not text
@@ -6596,14 +6745,24 @@ rocs_store_build_batch_terms(n00b_store_t     *store,
     // column. Replaces the old per-field include_in_all fan-out and the wax
     // adapter's injected "search_text" JSON field. Index-only.
     if (store->schema->search_text) {
+        rocs_store_search_budget_t budget
+            = rocs_store_search_budget_for(store->schema, out);
         auto catch_r = rocs_store_collect_search_text(out,
                                                       store->schema,
                                                       record,
                                                       r"",
-                                                      ta);
+                                                      ta,
+                                                      &budget);
         if (n00b_result_is_err(catch_r)) {
             err = n00b_result_get_err(catch_r);
             goto done;
+        }
+        if (budget.truncated) {
+            // Indexed, but incomplete -- and this counter is the only thing
+            // that says so (n00b#417). Relaxed: a statistic, read under no lock.
+            atomic_fetch_add_explicit(&store->search_text_truncated,
+                                      1,
+                                      memory_order_relaxed);
         }
     }
 
@@ -7824,6 +7983,7 @@ n00b_store_err_str(n00b_err_t err)
     case N00B_STORE_ERR_RETENTION: return r"RETENTION";
     case N00B_STORE_ERR_CONFIG:    return r"CONFIG";
     case N00B_STORE_ERR_TIMEOUT:   return r"TIMEOUT";
+    case N00B_STORE_ERR_FULL:      return r"FULL";
     }
     return r"UNKNOWN";
 }
@@ -8881,15 +9041,19 @@ n00b_store_ingest_payload_source(n00b_buffer_t *source) _kargs
 }
 
 static void
-rocs_store_ingest_topic_admission_state(n00b_store_ingest_topic_t *topic,
-                                        bool                      *has_active,
-                                        bool                      *full)
+rocs_store_ingest_topic_admission_state(n00b_store_ingest_topic_t  *topic,
+                                        bool                       *has_active,
+                                        bool                       *full,
+                                        n00b_store_ingest_inbox_t **full_inbox)
 {
     if (has_active != nullptr) {
         *has_active = false;
     }
     if (full != nullptr) {
         *full = false;
+    }
+    if (full_inbox != nullptr) {
+        *full_inbox = nullptr;
     }
     if (topic == nullptr) {
         return;
@@ -8911,6 +9075,11 @@ rocs_store_ingest_topic_admission_state(n00b_store_ingest_topic_t *topic,
                                        sub->inbox)) {
             if (full != nullptr) {
                 *full = true;
+            }
+            if (full_inbox != nullptr) {
+                // The inbox a BLOCK publisher should wait on: its consumer's
+                // dequeue is the only event that can make room here.
+                *full_inbox = sub->inbox;
             }
             break;
         }
@@ -8952,9 +9121,13 @@ n00b_store_ingest_topic_publish_ex(n00b_store_ingest_topic_t   *topic,
             return n00b_result_err(bool, N00B_STORE_ERR_STATE);
         }
 
-        bool has_active = false;
-        bool full       = false;
-        rocs_store_ingest_topic_admission_state(topic, &has_active, &full);
+        bool                       has_active = false;
+        bool                       full       = false;
+        n00b_store_ingest_inbox_t *full_inbox = nullptr;
+        rocs_store_ingest_topic_admission_state(topic,
+                                                &has_active,
+                                                &full,
+                                                &full_inbox);
         if (!has_active) {
             n00b_conduit_publish_yield(pub);
             return n00b_result_err(bool, N00B_STORE_ERR_STATE);
@@ -8963,11 +9136,29 @@ n00b_store_ingest_topic_publish_ex(n00b_store_ingest_topic_t   *topic,
             break;
         }
         if (backpressure == N00B_STORE_INGEST_BACKPRESSURE_REJECT) {
+            // FULL, not STATE: "retry shortly", distinguishable from "no
+            // subscriber / closing" (n00b#417). Before this a caller routing
+            // rejections to backpressure handling could not tell the two apart
+            // and parked a producer for its whole deadline during shutdown.
             n00b_conduit_publish_yield(pub);
-            return n00b_result_err(bool, N00B_STORE_ERR_STATE);
+            return n00b_result_err(bool, N00B_STORE_ERR_FULL);
         }
 
-        base_nanosleep_ns(1ULL * N00B_NS_PER_MS);
+        // BLOCK: a real wait, woken by the consumer's dequeue -- the one event
+        // that can make room. This used to be an unbounded 1 ms spin-sleep, and
+        // in the n00b#417 capture the producer spent 99% of its publish time
+        // there. The timeout is a safety net (subscriber closed underneath us,
+        // or a wakeup lost), after which admission is simply re-checked.
+        if (full_inbox != nullptr) {
+            n00b_conduit_inbox_wait_not_full(n00b_store_ingest_payload_t,
+                                             full_inbox,
+                                             N00B_STORE_INGEST_BLOCK_WAIT_MS);
+        }
+        else {
+            // A full subscription with no inbox pointer to wait on: nothing to
+            // park against, so fall back to the short sleep.
+            base_nanosleep_ns(1ULL * N00B_NS_PER_MS);
+        }
     }
 
     n00b_store_ingest_msg_t  *msg = n00b_alloc_with_opts(
@@ -12342,6 +12533,13 @@ n00b_store_conduit_ingest_close(n00b_store_conduit_ingest_t *ingest)
         n00b_condition_notify(&ingest->inbox->cv,
                               .all = true,
                               .auto_unlock = true);
+        // Publishers parked in n00b_store_ingest_topic_publish_ex (BLOCK) are
+        // waiting on space_cv for a dequeue that will now never come; wake them
+        // so they re-check admission and get STATE at once instead of after
+        // N00B_STORE_INGEST_BLOCK_WAIT_MS (n00b#417).
+        n00b_condition_notify(&ingest->inbox->space_cv,
+                              .all         = true,
+                              .auto_unlock = true);
     }
     if (ingest->thread != nullptr) {
         n00b_thread_join(ingest->thread);
@@ -12382,7 +12580,23 @@ n00b_store_conduit_ingest_stats(n00b_store_conduit_ingest_t *ingest)
         ingest->worker_pool == nullptr
             ? 0
             : (uint64_t)n00b_worker_pool_in_flight(ingest->worker_pool);
+    stats.inbox_capacity = ingest->inbox == nullptr ? 0 : ingest->inbox->limit;
+    stats.search_text_truncated =
+        ingest->store == nullptr
+            ? 0
+            : atomic_load_explicit(&ingest->store->search_text_truncated,
+                                   memory_order_relaxed);
     return n00b_result_ok(n00b_store_conduit_ingest_stats_t, stats);
+}
+
+uint64_t
+n00b_store_search_text_truncated_count(n00b_store_t *store)
+{
+    if (store == nullptr) {
+        return 0;
+    }
+    return atomic_load_explicit(&store->search_text_truncated,
+                                memory_order_relaxed);
 }
 
 static n00b_result_t(n00b_string_t *)
