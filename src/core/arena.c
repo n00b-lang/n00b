@@ -717,6 +717,32 @@ n00b_arena_alloc(n00b_arena_t *arena, uint64_t request, void *ignore)
              * (the CAS), so we re-read here explicitly. */
             found_value   = n00b_atomic_load(&arena->next_alloc);
             desired_value = found_value + request;
+            /* RE-PUBLISH the in-flight reservation for the value the CAS below
+             * will actually commit (n00b#431, the remaining reclaim defect).
+             *
+             * The publish at the top of this loop recorded the PRE-collect
+             * `found_value`.  This path replaces `found_value` with the
+             * post-collect bump position and then goes straight to the CAS
+             * without passing the top of the loop again, so without this the
+             * reservation the collector pins is the OLD address and the storage
+             * this thread is about to bump is invisible to every collect that
+             * lands between the CAS and the header/metadata registration.  That
+             * window is not a few instructions: n00b_arena_note_alloc_extent
+             * and the metadata insert both take the critical_execution read
+             * lock, which a collector doing back-to-back collects starves for
+             * dozens of collects.  Measured: every fault in the churn repro was
+             * a thread whose published reservation was a stale first-segment
+             * address while its real bump sat in a segment reclaimed whole,
+             * with `published != committed` and `a collect ran between publish
+             * and CAS` on every one. */
+            if (self != nullptr) {
+                atomic_store_explicit(&self->gc_inflight_len,
+                                      request,
+                                      memory_order_relaxed);
+                atomic_store_explicit(&self->gc_inflight_start,
+                                      found_value,
+                                      memory_order_release);
+            }
             /* Re-check arena_changed against the recomputed desired:
              * the swap can put next_alloc near the new (possibly
              * smaller) segment_end, and we MUST NOT let the CAS bump
