@@ -319,7 +319,7 @@ typedef struct {
      * queries this small GC-only tree per candidate word instead of the global
      * mmap interval tree — misses never touch the global tree, skipping both its
      * deep search and the per-word lazy 'unmanaged' registration that bloats it.
-     * Opaque here (n00b_interval_tree_t(void *) *); gc.c casts it. */
+     * Opaque here; gc.c casts it to the private owner-payload tree type. */
     void                             *scan_tree;
     /* Fast-reject gate for the conservative scan: the union bounds of the
      * scan tree AND the cached static-object tree, computed once per collect
@@ -410,4 +410,3 @@ n00b_arena_segment_count(n00b_arena_t *arena)
 
     return n;
 }
-

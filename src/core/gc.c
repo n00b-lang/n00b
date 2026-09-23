@@ -1990,13 +1990,19 @@ n00b_process_worklist(n00b_collect_t *ctx)
 // is allocated from the collect's work_pool, so it is reclaimed when work_pool
 // is destroyed at cleanup (no manual free).  It is queried with a raw, lockless
 // augmented-interval point search: the world is stopped during the scan, so the
-// builder is the sole writer and the tree is immutable while we read it.
+// builder is the sole writer and the tree is immutable while we read it. Each
+// hit carries its allocator so tracing does not rescan every retained segment
+// for each reached pointer.
 // ============================================================================
+
+typedef struct {
+    n00b_allocator_t *allocator;
+} n00b_scan_owner_t;
 
 static void
 n00b_scan_tree_add_allocator(n00b_allocator_t *al, void *arg)
 {
-    n00b_interval_tree_t(void *) *tree = arg;
+    n00b_interval_tree_t(n00b_scan_owner_t) *tree = arg;
 
     // Match n00b_mmap_is_gc_scannable exactly: skip only the OPAQUE hidden
     // allocators (hidden with no OOB metadata — system_pool, the collector's own
@@ -2015,7 +2021,11 @@ n00b_scan_tree_add_allocator(n00b_allocator_t *al, void *arg)
             uint64_t lo = (uint64_t)pg;
             uint64_t hi = lo + (uint64_t)pg->mapped_size;
             if (hi > lo) {
-                (void)n00b_interval_insert(tree, lo, hi, nullptr);
+                (void)n00b_interval_insert(
+                    tree,
+                    lo,
+                    hi,
+                    ((n00b_scan_owner_t){.allocator = al}));
             }
             pg = pg->next;
         }
@@ -2028,7 +2038,11 @@ n00b_scan_tree_add_allocator(n00b_allocator_t *al, void *arg)
             uint64_t lo = (uint64_t)seg->data;
             uint64_t hi = lo + seg->size;
             if (hi > lo) {
-                (void)n00b_interval_insert(tree, lo, hi, nullptr);
+                (void)n00b_interval_insert(
+                    tree,
+                    lo,
+                    hi,
+                    ((n00b_scan_owner_t){.allocator = al}));
             }
             seg = seg->next_segment;
         }
@@ -2130,9 +2144,9 @@ n00b_build_scan_tree(n00b_collect_t *ctx)
 {
     n00b_build_static_scan_tree_once();
 
-    n00b_allocator_t             *wp   = (n00b_allocator_t *)&ctx->work_pool;
-    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
-        n00b_interval_tree_t(void *),
+    n00b_allocator_t                       *wp = (n00b_allocator_t *)&ctx->work_pool;
+    n00b_interval_tree_t(n00b_scan_owner_t) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(n00b_scan_owner_t),
         &(n00b_alloc_opts_t){.allocator = wp});
 
     n00b_interval_tree_init(tree, .allocator = wp);
@@ -2146,7 +2160,7 @@ n00b_build_scan_tree(n00b_collect_t *ctx)
     uint64_t ceiling = 0;
 
     if (tree->root != nullptr) {
-        n00b_interval_node_t(void *) *n = tree->root;
+        n00b_interval_node_t(n00b_scan_owner_t) *n = tree->root;
         while (n->left != nullptr) {
             n = n->left;
         }
@@ -2173,17 +2187,17 @@ n00b_build_scan_tree(n00b_collect_t *ctx)
     ctx->scan_ceiling = ceiling;
 }
 
-[[n00b::nogc]] static inline bool
-n00b_scan_tree_contains(n00b_collect_t *ctx, uint64_t addr)
+[[n00b::nogc]] static inline n00b_scan_owner_t *
+n00b_scan_tree_owner(n00b_collect_t *ctx, uint64_t addr)
 {
-    n00b_interval_tree_t(void *) *tree = ctx->scan_tree;
+    n00b_interval_tree_t(n00b_scan_owner_t) *tree = ctx->scan_tree;
     if (tree == nullptr) {
-        return false;
+        return nullptr;
     }
-    n00b_interval_node_t(void *) *node = tree->root;
+    n00b_interval_node_t(n00b_scan_owner_t) *node = tree->root;
     while (node != nullptr) {
         if (addr >= node->low && addr < node->high) {
-            return true;
+            return &node->data;
         }
         if (node->left != nullptr && node->left->maximum > addr) {
             node = node->left;
@@ -2192,7 +2206,7 @@ n00b_scan_tree_contains(n00b_collect_t *ctx, uint64_t addr)
             node = node->right;
         }
     }
-    return false;
+    return nullptr;
 }
 
 [[n00b::nogc]] static inline bool
@@ -2237,7 +2251,8 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx, uint64_t **base, size_t i, bool
     // A miss in BOTH is a definitive non-pointer / dyld / stack / control
     // address: return false.  Once the private tree is built, a miss IS the
     // answer — we never fall back to n00b_mmap_by_address / range_by_address.
-    if (!n00b_scan_tree_contains(ctx, (uint64_t)word)) {
+    n00b_scan_owner_t *owner = n00b_scan_tree_owner(ctx, (uint64_t)word);
+    if (owner == nullptr) {
         n00b_alloc_range_t *range = n00b_static_scan_range((uint64_t)word);
         if (range != nullptr) {
             n00b_add_alloc_range_to_worklist(ctx, range);
@@ -2281,7 +2296,7 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx, uint64_t **base, size_t i, bool
 #endif
     }
 
-    bool in_from_space = n00b_addr_in_arena((void *)word, ctx->from_space);
+    bool in_from_space = owner->allocator == (n00b_allocator_t *)ctx->from_space;
 
     if (n00b_is_first_visit(ctx, old_hdr, &fw_hdr)) {
         if (in_from_space) {
