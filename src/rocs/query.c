@@ -553,6 +553,10 @@ rocs_query_err_from_store(n00b_err_t err)
     // it routes through the detail channel (#254) rather than collapsing into
     // a bare -8: a caller reading the detail can tell "retryable" from "broke".
     case N00B_STORE_ERR_TIMEOUT:
+    // FULL is an ingest-admission code (bounded inbox full, retry); a query
+    // cannot produce it, but it is in the domain and this switch is exhaustive.
+    // Same channel as TIMEOUT: retryable, not "broke".
+    case N00B_STORE_ERR_FULL:
         return rocs_query_execution_with_detail(N00B_QUERY_DETAIL_STORE, err);
     case N00B_STORE_ERR_RETENTION:
         return N00B_QUERY_ERR_RETENTION;
