@@ -471,6 +471,19 @@ test_collect_skips_reserved_worker_slot(void)
 
 #define RETAINED_SEGMENT_COUNT 1024
 
+static uint64_t
+count_retained_segments(n00b_arena_t *arena)
+{
+    uint64_t        count = 0;
+    n00b_segment_t *seg   = arena->current_segment;
+
+    for (; seg; seg = seg->next_segment) {
+        count += seg->retained;
+    }
+
+    return count;
+}
+
 static void
 test_pin_all_graph_across_retained_segments(void)
 {
@@ -479,27 +492,27 @@ test_pin_all_graph_across_retained_segments(void)
     }
 
     n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
-    test_obj_t   *objects[RETAINED_SEGMENT_COUNT];
+    test_obj_t   *head  = nullptr;
 
     for (uint64_t i = 0; i < RETAINED_SEGMENT_COUNT; i++) {
-        objects[i]        = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
-        objects[i]->value = 0x51000000ULL + i;
-        objects[i]->next  = i == 0 ? nullptr : objects[i - 1];
+        test_obj_t *node = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
+        node->value      = 0x51000000ULL + i;
+        node->next       = head;
+        head             = node;
     }
-
-    uint64_t        segments = 0;
-    n00b_segment_t *seg      = arena->current_segment;
-    for (; seg; seg = seg->next_segment) {
-        segments++;
-    }
-    assert(segments > 1);
 
     n00b_collect(arena);
+    assert(count_retained_segments(arena) > 1);
+    n00b_collect(arena);
+    assert(count_retained_segments(arena) > 1);
 
-    for (uint64_t i = 0; i < RETAINED_SEGMENT_COUNT; i++) {
-        assert(objects[i]->value == 0x51000000ULL + i);
-        assert(objects[i]->next == (i == 0 ? nullptr : objects[i - 1]));
+    test_obj_t *node = head;
+    for (uint64_t i = RETAINED_SEGMENT_COUNT; i > 0; i--) {
+        assert(node != nullptr);
+        assert(node->value == 0x51000000ULL + i - 1);
+        node = node->next;
     }
+    assert(node == nullptr);
 
     printf("  [PASS] pin-all graph across retained segments\n");
 }
