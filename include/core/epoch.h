@@ -281,6 +281,12 @@ n00b_epoch_flush_all_stw(n00b_runtime_t *rt)
 
     for (uint32_t i = 0; i < rt->max_threads; i++) {
         n00b_thread_t *t = n00b_atomic_load(&rt->threads[i].thread);
+        // A bare `t == nullptr` is NOT enough: a slot pre-acquired by a spawn
+        // that has not yet published its thread holds N00B_THREAD_SLOT_PLACEHOLDER
+        // (~0), which is non-null.  Taking &t->retire_list off it wraps to a
+        // small address (~0 + offsetof) and faults on the store -- observed as
+        // EXC_BAD_ACCESS at 0x22f right here.  Every other rt->threads[] walk
+        // site already uses this predicate; this one did not (n00b#431).
         if (n00b_thread_slot_is_vacant(t)) {
             continue;
         }
@@ -568,6 +574,9 @@ n00b_epoch_drain_allocator_stw(n00b_allocator_t *allocator)
     for (uint32_t i = 0; i < rt->max_threads; i++) {
         n00b_thread_record_t *rec = &rt->threads[i];
         n00b_thread_t        *t   = n00b_atomic_load(&rec->thread);
+        // is_vacant, not a bare null test: a spawn-reserved slot holds
+        // N00B_THREAD_SLOT_PLACEHOLDER (~0) and &t->retire_list off it wraps to
+        // a small address (n00b#431).
         if (!n00b_thread_slot_is_vacant(t)) {
             n00b_epoch_drain_allocator_nodes(&t->retire_list,
                                              allocator,
