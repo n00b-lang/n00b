@@ -3430,6 +3430,7 @@ gc_test = executable('test_gc',
     kwargs: test_common_kwargs,
 )
 test('gc', gc_test, suite: 'unit')
+test('gc_pin_all', gc_test, suite: 'unit', env: ['N00B_GC_PIN_ALL=1'])
 
 # Verifies availability reporting in default builds and attribution when
 # debug_live_census is enabled.

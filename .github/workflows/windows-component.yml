@@ -260,7 +260,7 @@ jobs:
           $rocsDict = (meson test -C build_windows_component @suiteArgs --list) |
             ForEach-Object { ($_ -split ':')[-1].Trim() } |
             Where-Object { $_ -match '^(rocs|dict)' }
-          $testNames = @('condition', 'gc') + $rocsDict
+          $testNames = @('condition', 'gc', 'gc_pin_all') + $rocsDict
 
           # Build ONLY the tests that are about to run, not `ninja all`.
           #
@@ -319,7 +319,7 @@ jobs:
           # --no-rebuild: meson would otherwise run `ninja all` itself before
           # testing, reintroducing exactly the compile failures avoided above.
           meson test -C build_windows_component --print-errorlogs --no-rebuild `
-            --num-processes 4 @suiteArgs condition gc @rocsDict
+            --num-processes 4 @suiteArgs condition gc gc_pin_all @rocsDict
           if ($LASTEXITCODE -ne 0) { throw "n00b Windows test suite failed with exit code $LASTEXITCODE" }
 
       - name: Upload validation evidence
