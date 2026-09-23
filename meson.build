@@ -2603,14 +2603,16 @@ test('rocs_large_shard_seal', rocs_large_shard_seal_test, suite: 'unit',
 # 420-second cold restarts, so having it here at all is the point of checking
 # it in.
 #
-# It is NOT fixed.  The STW gate on n00b_add_arena_segment in this change is a
-# real hole and closes a documented contract violation, but it does not move
-# this test's failure rate (7/10 before, 7/10 after), so at least one more
-# mechanism is live.
+# The crash IS fixed (n00b#431, the re-publish in n00b_arena_alloc's
+# out-of-memory path): interleaved A/B on this box, unfixed 8 crashes in 20
+# against fixed 0 in 20.  What keeps it quarantined is a separate, rarer
+# HANG (2 in 20 fixed, seen unfixed too): the last worker parks in _n00b_stop_the_world
+# waiting for critical_execution with no holder anywhere -- n00b#453.  A
+# hang is a 300 s timeout in CI, which is exactly the flake this suite must
+# not carry.  Restore its real suite when #453 lands.
 #
-# 'known-broken' rather than should_fail: it passes ~30% of runs, so
+# 'known-broken' rather than should_fail: it passes most runs, so
 # should_fail would report UNEXPECTEDPASS. Same reasoning as rocs_live_cursor.
-# Restore its real suite with the fix.
 gc_large_alloc_churn_test = executable('test_gc_large_alloc_churn',
     ['test/unit/test_gc_large_alloc_churn.c'],
     kwargs: test_common_kwargs,
