@@ -21,6 +21,19 @@
 #include "core/atomic.h"
 #include "core/futex.h"
 
+static inline bool
+stw_bypass_for_lock(n00b_runtime_t *rt, n00b_rwlock_t *lock)
+{
+    if (!n00b_atomic_load(&rt->stw_active)) {
+        return false;
+    }
+    if (lock != &rt->critical_execution) {
+        return true;
+    }
+    // A late worker must wait for the gate owner or it can collect beside it.
+    return n00b_atomic_load(&lock->data).owner == n00b_os_thread_id();
+}
+
 static n00b_thread_read_log_t *
 find_read_lock_record(n00b_rwlock_t *lock, n00b_thread_t *thread)
 {
@@ -142,7 +155,7 @@ _n00b_rw_write_lock(n00b_rwlock_t *lock, char *loc)
 {
     // STW-active short-circuit (WP-001): no-op acquire while the world is
     // stopped (the collector is the sole runner).
-    if (n00b_atomic_load(&n00b_get_runtime()->stw_active)) {
+    if (stw_bypass_for_lock(n00b_get_runtime(), lock)) {
         return 0;
     }
 
@@ -218,7 +231,7 @@ _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
 
     // STW-active short-circuit (WP-001): no-op acquire while the world is
     // stopped (the collector is the sole runner).
-    if (n00b_atomic_load(&rt->stw_active)) {
+    if (stw_bypass_for_lock(rt, lock)) {
         return;
     }
 
@@ -367,7 +380,7 @@ _n00b_rw_unlock(n00b_rwlock_t *lock, char *loc)
 
     // STW-active short-circuit (WP-001): no-op release while the world is
     // stopped (mirrors the acquire short-circuit).
-    if (n00b_atomic_load(&rt->stw_active)) {
+    if (stw_bypass_for_lock(rt, lock)) {
         return true;
     }
 

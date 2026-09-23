@@ -1,10 +1,12 @@
 #include <stdio.h>
 #include <assert.h>
+#include <pthread.h>
+#include <unistd.h>
 
 // test_lock_chain reads the calling thread's lock chain via n00b_thread_self()
 // ->record (internal introspection on the main thread), so the internal thread
-// surface stays exposed; the contention workers below run on n00b_thread_spawn
-// workers (NOT pthread_create + n00b_thread_init).
+// surface stays exposed. The late gate probe uses a raw pthread so it cannot
+// be pre-suspended as a registered n00b worker.
 #define __N00B_THREAD_INTERNAL
 
 #include "n00b.h"
@@ -14,6 +16,7 @@
 #include "core/rwlock.h"
 #include "core/lock_common.h"
 #include "core/atomic.h"
+#include "core/stw.h"
 
 // ============================================================================
 // 1. Basic read/write lock
@@ -34,6 +37,44 @@ test_basic_rw(void)
     n00b_rw_unlock(&rw);
 
     printf("  [PASS] basic rw lock/unlock\n");
+}
+
+typedef struct {
+    n00b_runtime_t *runtime;
+    _Atomic bool started;
+    _Atomic bool entered;
+} late_gate_probe_t;
+
+static void *
+late_gate_worker(void *arg)
+{
+    late_gate_probe_t *probe = arg;
+    atomic_store(&probe->started, true);
+    n00b_rw_read_lock(&probe->runtime->critical_execution);
+    atomic_store(&probe->entered, true);
+    n00b_rw_unlock(&probe->runtime->critical_execution);
+    return nullptr;
+}
+
+static void
+test_late_gate_reader(n00b_runtime_t *runtime)
+{
+    late_gate_probe_t probe = {.runtime = runtime};
+    pthread_t worker;
+    n00b_stop_the_world();
+    assert(pthread_create(&worker, nullptr, late_gate_worker, &probe) == 0);
+    for (int i = 0; i < 1000 && !atomic_load(&probe.started); i++) {
+        usleep(1000);
+    }
+    bool started = atomic_load(&probe.started);
+    usleep(100000);
+    bool entered_while_stopped = atomic_load(&probe.entered);
+    n00b_restart_the_world();
+    assert(pthread_join(worker, nullptr) == 0);
+    assert(started);
+    assert(!entered_while_stopped);
+    assert(atomic_load(&probe.entered));
+    printf("  [PASS] late STW gate reader waits for restart\n");
 }
 
 // ============================================================================
@@ -239,6 +280,7 @@ main(int argc, char *argv[])
     n00b_init(&rt, argc, argv);
 
     printf("test_rwlock:\n");
+    test_late_gate_reader(&rt);
     test_basic_rw();
     test_write_nesting();
     test_read_nesting();
