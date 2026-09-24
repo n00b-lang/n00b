@@ -62,6 +62,8 @@ test_late_gate_reader(n00b_runtime_t *runtime)
     late_gate_probe_t probe = {.runtime = runtime};
     pthread_t worker;
     n00b_stop_the_world();
+    assert(n00b_atomic_load(&runtime->stw_active));
+    assert(n00b_atomic_load(&runtime->critical_execution.futex) & N00B_RW_W_LOCK);
     assert(pthread_create(&worker, nullptr, late_gate_worker, &probe) == 0);
     for (int i = 0; i < 1000 && !atomic_load(&probe.started); i++) {
         usleep(1000);
@@ -280,7 +282,7 @@ main(int argc, char *argv[])
     n00b_init(&rt, argc, argv);
 
     printf("test_rwlock:\n");
-    test_late_gate_reader(&rt);
+    test_late_gate_reader(n00b_get_runtime());
     test_basic_rw();
     test_write_nesting();
     test_read_nesting();
