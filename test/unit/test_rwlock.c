@@ -16,6 +16,7 @@
 #include "core/rwlock.h"
 #include "core/lock_common.h"
 #include "core/atomic.h"
+#include "core/futex.h"
 #include "core/stw.h"
 
 // ============================================================================
@@ -37,6 +38,17 @@ test_basic_rw(void)
     n00b_rw_unlock(&rw);
 
     printf("  [PASS] basic rw lock/unlock\n");
+}
+
+static void
+test_expired_futex_wait(void)
+{
+    n00b_futex_t word = 1;
+    assert(!n00b_futex_timed_wait_for_value(&word, 0, 0));
+    assert(!n00b_futex_timed_wait_for_value(&word, 0, 10000));
+    assert(word == 1);
+    assert(n00b_futex_timed_wait_for_value(&word, 1, 0));
+    printf("  [PASS] expired futex wait\n");
 }
 
 typedef struct {
@@ -282,6 +294,7 @@ main(int argc, char *argv[])
     n00b_init(&rt, argc, argv);
 
     printf("test_rwlock:\n");
+    test_expired_futex_wait();
     test_late_gate_reader(n00b_get_runtime());
     test_basic_rw();
     test_write_nesting();
