@@ -351,6 +351,11 @@ n00b_futex_timed_wait_for_value(volatile n00b_futex_t *futex, uint32_t v32, int6
     if (cur == v32) {
         return true;
     }
+    // Darwin treats a zero ulock timeout as unbounded; a spent budget must
+    // return before it can strand a waiter after the value changes.
+    if (remaining <= 0) {
+        return false;
+    }
     while (true) {
         if (n00b_futex_wait((void *)futex, cur, remaining) == ETIMEDOUT) {
             return false; // Got timeout
@@ -373,7 +378,7 @@ n00b_futex_timed_wait_for_value(volatile n00b_futex_t *futex, uint32_t v32, int6
         now = n00b_ns_timestamp();
         remaining -= (now - start); // Subtract time elapsed.
 
-        if (remaining < 0) {
+        if (remaining <= 0) {
             return false;
         }
         start = now;
