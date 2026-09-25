@@ -20,16 +20,58 @@ llvm_mingw = run_command(
   check: true,
 ).stdout().strip()
 
+# MIR is compiled for the TARGET, not for whatever the build machine happens to
+# be. Both branches below used to assume x86-64 -- one by naming the triple in
+# the driver's filename, the other by taking a bare `clang`, which targets the
+# host. Host and target agreed on every Windows build this had ever seen, so the
+# assumption cost nothing and stayed invisible.
+#
+# Cross-building windows-arm64 from an x64 runner is where it stops being
+# invisible: MIR compiled to x86-64 objects, lld-link skipped those archive
+# members while linking an aarch64 image, and the build failed with ~20
+# undefined MIR_* symbols referenced from n00b's own codegen -- which reads as a
+# missing dependency rather than as a wrong-architecture one, and cost a while
+# to see for what it was. See crashappsec/wax#1117.
+if host_machine.cpu_family() == 'aarch64'
+  mir_target_arch = 'aarch64'
+else
+  mir_target_arch = 'x86_64'
+endif
+mir_triple = mir_target_arch + '-w64-mingw32'
+
 if llvm_mingw != ''
   # Cross-build to Windows (or any time the user has explicitly pointed
-  # at an llvm-mingw root): use that clang directly.
-  c_cmd = llvm_mingw / 'bin' / 'x86_64-w64-mingw32-clang'
+  # at an llvm-mingw root): use that clang directly. llvm-mingw installs one
+  # triple-prefixed driver per target it ships (install-wrappers.sh links
+  # `$arch-w64-$os-clang` for each of i686/x86_64/armv7/aarch64/arm64ec), and
+  # each one carries its own --target, so naming the triple is all it takes.
+  c_cmd = llvm_mingw / 'bin' / mir_triple + '-clang'
 else
   # Native build: use whichever clang is on PATH.
   c_cmd = find_program('clang', required: true).full_path()
 endif
 
 mir_c_args = ['-c', '-O2', '-DMIR_PARALLEL_GEN=0', '-w']
+if llvm_mingw == '' and host_machine.system() == 'windows' \
+   and host_machine.cpu_family() != build_machine.cpu_family()
+  # A bare `clang` defaults to the BUILD machine, so a cross-build that did not
+  # point at an llvm-mingw root would silently emit host-architecture objects
+  # and fail at link with the symptom described above. Say the target out loud.
+  #
+  # Deliberately narrow on BOTH axes.
+  #
+  # Windows only, because mir_triple is a mingw triple: a cross-build to, say,
+  # linux-arm64 would otherwise be handed --target=aarch64-w64-mingw32 and be
+  # pointed at the wrong OS entirely. (A bare clang is equally wrong there, but
+  # that is the pre-existing behaviour on a path nothing currently exercises;
+  # widening it is a separate change with its own toolchain assumptions.)
+  #
+  # Differing architectures only, so a native build passes exactly the flags it
+  # passes today. In particular this does NOT force a mingw triple onto a native
+  # Windows clang that may be targeting MSVC -- that clang has no mingw sysroot
+  # and the flag would break a build that works.
+  mir_c_args += '--target=' + mir_triple
+endif
 if host_machine.system() != 'windows'
   mir_c_args += '-fPIC'
 endif
