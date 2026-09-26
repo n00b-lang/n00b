@@ -56,7 +56,6 @@ typedef struct {
 
 core_list_decl(lex_term_node_t);
 core_list_decl(lex_term_edge_t);
-core_list_decl(int32_t);
 
 bool scan_lex_analyze_spec(const scan_lex_spec_t *spec,
                            parse_grammar_t *grammar,

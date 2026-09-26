@@ -87,10 +87,17 @@ scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
          name && name->data; name++) {
         char *text = core_strndup(name->data, name->u8_bytes);
         UErrorCode status = U_ZERO_ERROR;
-        UScriptCode codes[8];
-        int32_t count = uscript_getCode(text, codes, 8, &status);
+        int32_t count = uscript_getCode(text, nullptr, 0, &status);
+        UScriptCode *codes = count > 0
+                                 ? core_alloc_array(UScriptCode, count)
+                                 : nullptr;
+        if (codes) {
+            status = U_ZERO_ERROR;
+            count = uscript_getCode(text, codes, count, &status);
+        }
         core_free(text);
-        if (U_FAILURE(status) || count < 1) {
+        if (!codes || U_FAILURE(status) || count < 1) {
+            core_free(codes);
             snprintf(error, error_size,
                      "Unicode profile '%.*s' names unknown script '%.*s'",
                      (int)spec->name.u8_bytes, spec->name.data,
@@ -111,6 +118,7 @@ scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
                 profile->scripts[profile->script_count++] = codes[i];
             }
         }
+        core_free(codes);
     }
 
     UErrorCode status = U_ZERO_ERROR;

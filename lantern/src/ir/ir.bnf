@@ -150,6 +150,7 @@
          | %"true" | %"false"
          | %"in" | %"out" | %"inout"
          | %"array" | %"bitint" | %"ubitint" | %"exclusive" | %"forall"
+         | %"i" | %"u"
          | %"gcref" | %"indexable" | %"literal" | %"mutref" | %"nullable"
          | %"own" | %"owning" | %"ptr" | %"ref" | %"reseatable" | %"t"
          | %"temporary" | %"tmpref" | %"variant"

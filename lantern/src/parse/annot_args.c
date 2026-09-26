@@ -13,7 +13,6 @@
 #include <string.h>
 
 #define AA_MAGIC 0x41413031u
-#define AA_MAX   32
 
 typedef enum : uint8_t {
     AA_REF,
@@ -28,6 +27,9 @@ typedef enum : uint8_t {
     AA_LEXOPT,
 } aa_tag;
 
+typedef struct aa_node *aa_node_ptr_t;
+core_list_decl(aa_node_ptr_t);
+
 typedef struct aa_node {
     uint32_t          magic;
     aa_tag            tag;
@@ -37,13 +39,10 @@ typedef struct aa_node {
     uint64_t          index;
     parse_infer_expr_t *infer;
     parse_tree_t *tree;
-    struct aa_node   *items[AA_MAX];
+    core_list_t(aa_node_ptr_t) items;
     size_t            n;
     bool              owns_str;
 } aa_node;
-
-typedef aa_node *aa_node_ptr_t;
-core_list_decl(aa_node_ptr_t);
 
 typedef struct {
     bool                     failed;
@@ -102,6 +101,16 @@ aa_new(parse_reduce_t *r, aa_tag tag)
     }
 
     return n;
+}
+
+static void
+aa_append(aa_node *n, aa_node *item)
+{
+    if (!n->items.data) {
+        n->items = core_list_new(aa_node_ptr_t);
+    }
+    core_list_push(n->items, item);
+    n->n++;
 }
 
 static aa_node *
@@ -314,9 +323,7 @@ r_con(parse_reduce_t *r)
         }
 
         if (k->tag == AA_TYPE) {
-            if (n->n < AA_MAX) {
-                n->items[n->n++] = k;
-            }
+            aa_append(n, k);
             continue;
         }
 
@@ -363,12 +370,12 @@ r_con_list(parse_reduce_t *r)
             continue;
         }
 
-        if (k->tag == AA_CON && n->n < AA_MAX) {
-            n->items[n->n++] = k;
+        if (k->tag == AA_CON) {
+            aa_append(n, k);
         }
         else if (k->tag == AA_ARGS) {
-            for (size_t j = 0; j < k->n && n->n < AA_MAX; j++) {
-                n->items[n->n++] = k->items[j];
+            for (size_t j = 0; j < k->n; j++) {
+                aa_append(n, k->items.data[j]);
             }
         }
     }
@@ -407,13 +414,12 @@ r_lex_flag(parse_reduce_t *r)
 static bool
 aa_push(parse_reduce_t *r, aa_node *n, aa_node *item)
 {
-    if (n->n >= AA_MAX) {
-        fail(r);
-
-        return false;
+    (void)r;
+    if (!n->items.data) {
+        n->items = core_list_new(aa_node_ptr_t);
     }
-
-    n->items[n->n++] = item;
+    core_list_push(n->items, item);
+    n->n++;
 
     return true;
 }
@@ -422,7 +428,7 @@ static void
 aa_splice(parse_reduce_t *r, aa_node *n, aa_node *from)
 {
     for (size_t j = 0; j < from->n; j++) {
-        if (!aa_push(r, n, from->items[j])) {
+        if (!aa_push(r, n, from->items.data[j])) {
             return;
         }
     }
@@ -513,13 +519,11 @@ r_args(parse_reduce_t *r)
             continue;
         }
 
-        if (n->n == AA_MAX) {
-            fail(r);
-
-            break;
+        if (!n->items.data) {
+            n->items = core_list_new(aa_node_ptr_t);
         }
-
-        n->items[n->n++] = k;
+        core_list_push(n->items, k);
+        n->n++;
     }
 
     return n;
@@ -569,6 +573,7 @@ static struct {
     {PARSE_ANNOT_MUTABILITY, CORE_STRING_STATIC("a-mutability")},
     {PARSE_ANNOT_NAMESPACE,  CORE_STRING_STATIC("a-namespace")},
     {PARSE_ANNOT_DIRECTION,  CORE_STRING_STATIC("a-direction")},
+    {PARSE_ANNOT_PASS_BY,    CORE_STRING_STATIC("a-tag")},
     {PARSE_ANNOT_CONSTRAIN,  CORE_STRING_STATIC("a-constrain")},
     {PARSE_ANNOT_SIZE,       CORE_STRING_STATIC("a-val")},
     {PARSE_ANNOT_ALIGNMENT,  CORE_STRING_STATIC("a-val")},
@@ -653,7 +658,7 @@ install(parse_tree_walk_t *w, aa_ctx *c)
 static parse_child_ref_t
 arg_ref(aa_node *args, size_t i)
 {
-    aa_node *a = i < args->n ? args->items[i] : nullptr;
+    aa_node *a = i < args->n ? args->items.data[i] : nullptr;
 
     if (!a || a->tag != AA_REF) {
         return PARSE_CHILD_NONE;
@@ -666,7 +671,7 @@ arg_ref(aa_node *args, size_t i)
 static core_string_t
 arg_tag(aa_node *args, size_t i)
 {
-    aa_node *a = i < args->n ? args->items[i] : nullptr;
+    aa_node *a = i < args->n ? args->items.data[i] : nullptr;
 
     return a && (a->tag == AA_TAG || a->tag == AA_PRED) ? dup(a->str)
                                                         : (core_string_t){0};
@@ -675,7 +680,7 @@ arg_tag(aa_node *args, size_t i)
 static int32_t
 arg_int(aa_node *args, size_t i, int32_t dflt)
 {
-    aa_node *a = i < args->n ? args->items[i] : nullptr;
+    aa_node *a = i < args->n ? args->items.data[i] : nullptr;
 
     return a && a->tag == AA_INT ? a->i : dflt;
 }
@@ -683,7 +688,7 @@ arg_int(aa_node *args, size_t i, int32_t dflt)
 static bool
 arg_is(aa_node *args, size_t i, aa_tag tag)
 {
-    return i < args->n && args->items[i]->tag == tag;
+    return i < args->n && args->items.data[i]->tag == tag;
 }
 
 static void
@@ -717,7 +722,7 @@ decode_cons(parse_annotation_t *a, aa_node *list)
     a->constraints = core_list_new(parse_con_spec_t);
 
     for (size_t i = 0; i < list->n; i++) {
-        aa_node *c = list->items[i];
+        aa_node *c = list->items.data[i];
 
         if (!c || c->tag != AA_CON) {
             continue;
@@ -731,8 +736,8 @@ decode_cons(parse_annotation_t *a, aa_node *list)
         };
 
         for (size_t j = 0; j < c->n; j++) {
-            if (c->items[j] && c->items[j]->tag == AA_TYPE) {
-                core_list_push(s.types, dup(c->items[j]->str));
+            if (c->items.data[j] && c->items.data[j]->tag == AA_TYPE) {
+                core_list_push(s.types, dup(c->items.data[j]->str));
             }
         }
 
@@ -750,7 +755,7 @@ decode_lex(parse_annotation_t *a, aa_node *list)
     a->lex_opts = core_list_new(parse_lex_opt_t);
 
     for (size_t i = 0; i < list->n; i++) {
-        aa_node *o = list->items[i];
+        aa_node *o = list->items.data[i];
 
         if (!o) {
             continue;
@@ -765,8 +770,8 @@ decode_lex(parse_annotation_t *a, aa_node *list)
             opt.name = dup(o->str);
 
             for (size_t j = 0; j < o->n; j++) {
-                if (o->items[j] && o->items[j]->tag == AA_TAG) {
-                    core_list_push(opt.args, dup(o->items[j]->str));
+                if (o->items.data[j] && o->items.data[j]->tag == AA_TAG) {
+                    core_list_push(opt.args, dup(o->items.data[j]->str));
                 }
             }
         }
@@ -808,7 +813,7 @@ decode(parse_annotation_t *a, aa_node *args)
             a->kind = PARSE_ANNOT_TYPE_DECL;
         }
         else {
-            a->type_spec = dup(args->items[1]->str);
+            a->type_spec = dup(args->items.data[1]->str);
 
             th_ctx *probe = th_ctx_new();
             bool    ok    = ir_type_from_text(probe, a->type_spec) != nullptr;
@@ -910,9 +915,13 @@ decode(parse_annotation_t *a, aa_node *args)
         a->direction = arg_tag(args, 1);
         break;
 
+    case PARSE_ANNOT_PASS_BY:
+        a->pass_by = arg_tag(args, 0);
+        break;
+
     case PARSE_ANNOT_CONSTRAIN:
         a->name_ref = arg_ref(args, 0);
-        decode_cons(a, args->n > 1 ? args->items[1] : nullptr);
+        decode_cons(a, args->n > 1 ? args->items.data[1] : nullptr);
         break;
 
     case PARSE_ANNOT_LEX_COMMENT:
@@ -938,7 +947,7 @@ decode(parse_annotation_t *a, aa_node *args)
     case PARSE_ANNOT_LEX_LITERAL_HOOK:
     case PARSE_ANNOT_LEX_RECOVER:
     case PARSE_ANNOT_LEX_SOFT_KEYWORDS:
-        decode_lex(a, args && args->n ? args->items[0] : nullptr);
+        decode_lex(a, args && args->n ? args->items.data[0] : nullptr);
         break;
 
     case PARSE_ANNOT_SIZE:
@@ -949,7 +958,7 @@ decode(parse_annotation_t *a, aa_node *args)
             a->val_ref = arg_ref(args, 0);
         }
         else if (arg_is(args, 0, AA_INT)) {
-            a->val_int     = args->items[0]->i;
+            a->val_int     = args->items.data[0]->i;
             a->has_val_int = true;
         }
         else {
@@ -965,11 +974,11 @@ decode(parse_annotation_t *a, aa_node *args)
         }
 
         if (arg_is(args, at, AA_INFER)) {
-            a->infer_ast           = args->items[at]->infer;
-            args->items[at]->infer = nullptr;
+            a->infer_ast           = args->items.data[at]->infer;
+            args->items.data[at]->infer = nullptr;
         }
         else {
-            a->infer_ast = parse_infer_parse(args->items[at]->str);
+            a->infer_ast = parse_infer_parse(args->items.data[at]->str);
         }
 
         if (!a->infer_ast) {

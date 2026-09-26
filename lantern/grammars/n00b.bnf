@@ -268,7 +268,7 @@
 
 <func-prelude> @visibility("protected") ::= %"func"
 <func-prelude> ::= <func-visibility> %"func"
-<func-type-signature> ::= <param-decl> <where-clause>? <function-result>?
+<func-type-signature> ::= <param-decl> <function-result>? <where-clause>?
 
 <param-decl> ::= %"(" <formals>? %")"
 
@@ -563,7 +563,7 @@
 <tspec-vargs> ::= %"*" <union-tspec>
 <tspec-kargs> ::= %"**" <tspec-field> (%"," <tspec-field>)*
 
-<where-clause> ::= %"[" <type-constraint> (%"," <type-constraint>)* %","? %"]"
+<where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)*
 
 <type-constraint> ::= %"`" %IDENTIFIER %":" <constraint-list>
 

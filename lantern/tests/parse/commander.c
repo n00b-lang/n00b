@@ -239,6 +239,35 @@ static void test_flags_before_commands_and_command_scope_precedence(void)
     parse_cmdr_free(c);
 }
 
+static void test_repeatable_flags_preserve_all_values(void)
+{
+    static const parse_cmdr_flag_t flags[] = {
+        {CORE_STRING_STATIC("--define"), CORE_STRING_STATIC("-D"),
+         PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("definition")},
+        {{0}, {0}, 0, false, {0}},
+    };
+    static const parse_cmdr_spec_t spec = {
+        .tool = CORE_STRING_STATIC("tool"), .flags = flags,
+        .arg = CORE_STRING_STATIC("file"), .min_args = 1, .max_args = 1,
+    };
+    parse_cmdr_t *c = parse_cmdr_new(&spec);
+    check("a repeatable flag can be configured",
+          parse_cmdr_flag_set_repeatable(c, (core_string_t){0},
+              CORE_STRING_STATIC("--define"), true));
+    parse_cmdr_result_t *r = parse_cmdr_parse(c, 5,
+        (const char *[]) {"-D", "A=1", "--define", "B=2", "unit.n00b"});
+    check("repeatable flags retain the number of values",
+          parse_cmdr_result_ok(r)
+              && parse_cmdr_flag_value_count(r, CORE_STRING_STATIC("--define")) == 2);
+    check("repeatable flags retain values in command-line order",
+          core_string_eq(parse_cmdr_flag_str_at(r,
+              CORE_STRING_STATIC("--define"), 0), CORE_STRING_STATIC("A=1"))
+              && core_string_eq(parse_cmdr_flag_str_at(r,
+                  CORE_STRING_STATIC("--define"), 1), CORE_STRING_STATIC("B=2")));
+    parse_cmdr_result_free(r);
+    parse_cmdr_free(c);
+}
+
 int main(void)
 {
     test_a_command_and_its_arguments_come_back();
@@ -249,6 +278,7 @@ int main(void)
     test_positional_minimum_and_maximum_are_enforced();
     test_global_flags_are_inherited_by_commands();
     test_flags_before_commands_and_command_scope_precedence();
+    test_repeatable_flags_preserve_all_values();
 
     return report("fe commander");
 }

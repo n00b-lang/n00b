@@ -27,6 +27,9 @@ typedef struct {
 typedef struct core_translation_unit_t {
     core_module_spec_t module;
     core_source_file_t source;
+    struct core_translation_unit_t **imports;
+    size_t import_count;
+    size_t import_capacity;
     void *user_data;
     core_module_user_data_free_fn user_data_free;
     core_diagnostics_t *diagnostics;
@@ -45,6 +48,9 @@ typedef struct {
     core_module_resolve_fn resolve;
     void *context;
 } core_module_resolver_t;
+
+typedef bool (*core_translation_unit_scc_fn)(
+    void *context, core_translation_unit_t *const *members, size_t count);
 
 bool core_module_spec_init(core_module_spec_t *spec, core_string_t identifier);
 void core_module_spec_release(core_module_spec_t *spec);
@@ -74,6 +80,19 @@ void core_translation_unit_set_user_data(
 void *core_translation_unit_user_data(const core_translation_unit_t *unit);
 core_diagnostics_t *core_translation_unit_diagnostics(
     core_translation_unit_t *unit);
+/* Imported TUs are borrowed; their owner must keep them alive as long as the
+ * importing TU may use these references. Duplicate imports are ignored. */
+bool core_translation_unit_add_import(core_translation_unit_t *unit,
+                                      core_translation_unit_t *imported);
+size_t core_translation_unit_import_count(
+    const core_translation_unit_t *unit);
+core_translation_unit_t *core_translation_unit_import(
+    const core_translation_unit_t *unit, size_t index);
+/* Visits reachable import-graph SCCs dependency-first. The member array is
+ * borrowed for the duration of the callback. */
+bool core_translation_unit_visit_sccs(core_translation_unit_t *root,
+                                      core_translation_unit_scc_fn callback,
+                                      void *context);
 
 core_module_resolve_status_t core_module_resolve(
     const core_module_resolver_t *resolver, const core_module_spec_t *module,

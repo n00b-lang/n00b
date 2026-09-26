@@ -31,9 +31,12 @@ struct parse_sym_entry_t {
     core_string_t             name;
     parse_sym_kind_t           kind;
     parse_sym_mutability_t     mutability;
+    core_string_t             direction;
+    core_string_t             pass_by;
     int32_t                  scope_depth;
     parse_tree_t        *decl_node;
     th_type                 *type;
+    th_type                 *error_type;
     parse_sym_entry_t         *shadowed;
     parse_sym_entry_t         *next_in_scope;
     parse_scope_t             *scope;
@@ -45,7 +48,10 @@ struct parse_sym_entry_t {
     bool                     is_field;
     bool                     is_method;
     bool                     is_static;
+    bool                     is_thread_local;
     bool                     is_abstract;
+    bool                     is_optional;
+    bool                     is_variadic;
     uint32_t                 uses;
     th_mode                  mode;
     bool                     has_mode;

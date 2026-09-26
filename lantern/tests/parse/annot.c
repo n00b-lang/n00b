@@ -9,6 +9,7 @@
 #include "parse/annot_walk.h"
 #include "parse/annotation.h"
 #include "parse/bnf.h"
+#include "parse/infer.h"
 #include "parse/pwz.h"
 #include "parse/symtab.h"
 #include "parse/tree_util.h"
@@ -75,6 +76,25 @@ saw_cond(parse_visit_t *v)
     ((probe_t *)v->thunk)->cond_node = v->node;
 
     return true;
+}
+
+typedef struct {
+    size_t enters;
+    size_t exits;
+} node_probe_t;
+
+static void
+count_annot_nodes(parse_visit_t *v, bool entering, void *context)
+{
+    node_probe_t *probe = context;
+    (void)v;
+
+    if (entering) {
+        probe->enters++;
+    }
+    else {
+        probe->exits++;
+    }
 }
 
 static parse_grammar_t *
@@ -528,6 +548,33 @@ test_annotation_arguments_carry_integers(void)
 }
 
 static void
+test_annotation_argument_lists_are_growable(void)
+{
+    core_buffer_t src = {0};
+    static const char prefix[] = "<top> @constrain($1, ";
+    core_buffer_append(&src, prefix, sizeof(prefix) - 1);
+    for (size_t i = 0; i < 40; i++) {
+        if (i) core_buffer_append(&src, "+", 1);
+        core_buffer_printf(&src, "Trait%zu", i);
+    }
+    static const char suffix[] = ") ::= <n>\n<n> ::= __LOWER\n";
+    core_buffer_append(&src, suffix, sizeof(suffix) - 1);
+
+    parse_grammar_t *g = parse_grammar_new();
+    bool loaded = parse_bnf_load(
+        core_string_borrow(src.data, src.byte_len), S("top"), g);
+    parse_nonterm_t *top = loaded ? nt_named(g, "top") : nullptr;
+    parse_annotation_t *annotation = top
+        ? parse_nt_find_annot(g, top, PARSE_ANNOT_CONSTRAIN) : nullptr;
+
+    check("annotation argument lists accept more than 32 entries",
+          annotation && core_list_len(annotation->constraints) == 40);
+
+    parse_grammar_free(g);
+    core_buffer_release(&src);
+}
+
+static void
 test_implements_is_checked_not_carried(void)
 {
     static const char *const G
@@ -660,7 +707,7 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
           "::= \"r\" <n> \"{\" <fs> \"}\"\n"
           "<fs> ::= <f> <fs> | <meth> <fs> | <f> | <meth>\n"
           "<f> @field($1) @offset(0) @width(4) ::= <n> \";\"\n"
-          "<meth> @method($1) @type($1, \"() -> i\") ::= \"m\" <n>\n"
+          "<meth> @method($1) @type($1, \"() -> int\") ::= \"m\" <n>\n"
           "<access> @infer(\"method_return($0)\") ::= <use> %\".\" <n>\n"
           "<use> @varref($0) ::= <n>\n"
           "<n> ::= __LOWER\n";
@@ -669,8 +716,13 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
 
     parse_grammar_set_error_recovery(g, false);
 
-    check("a record grammar with representation pins loads",
-          parse_bnf_load(S(G), S("top"), g));
+    bool grammar_loaded = parse_bnf_load(S(G), S("top"), g);
+    check("a record grammar with representation pins loads", grammar_loaded);
+    if (!grammar_loaded) {
+        fprintf(stderr, "record grammar load error: %s\n", parse_bnf_error());
+        parse_grammar_free(g);
+        return;
+    }
 
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
@@ -730,7 +782,7 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
           method_return
               && th_named_info(method_return, &return_name, &return_name_len,
                                nullptr, nullptr)
-              && return_name_len == 1 && return_name[0] == 'i');
+              && return_name_len == 3 && !memcmp(return_name, "int", 3));
 
     parse_tree_t *access = find_node(g, tree, "access");
     th_type *access_type = access ? core_tree_node_value(access).type : nullptr;
@@ -741,7 +793,7 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
           access_type
               && th_named_info(access_type, &access_name, &access_name_len,
                                nullptr, nullptr)
-              && access_name_len == 1 && access_name[0] == 'i');
+              && access_name_len == 3 && !memcmp(access_name, "int", 3));
 
     parse_annot_result_free(r);
     ir_ctx_free(ctx);
@@ -759,7 +811,7 @@ test_the_representation_and_declaration_annotations(void)
           "@constrain($1, == int) @namespace(\"tag\") ::= \"v\" <n> \";\"\n"
           "<b> @size($2) @width($2) ::= \"b\" %\":\" <num>\n"
           "<p> @declares($1,\"param\") @direction($1,\"out\") "
-          "@alignment(8) @offset(sizeof(int)) ::= \"p\" <n> \";\"\n"
+          "@alignment(8) @offset(sizeof(int)) @pass_by(\"ref\") ::= \"p\" <n> \";\"\n"
           "<n> ::= __LOWER\n"
           "<num> ::= __DIGIT\n";
 
@@ -812,12 +864,296 @@ test_the_representation_and_declaration_annotations(void)
           got && con.kind == TH_CON_UNIFIES);
     check("@direction records the parameter's direction as a th_mode",
           q && q->has_mode && q->mode == TH_OUT);
+    check("@direction preserves the source-level mode spelling",
+          q && core_string_eq(q->direction, S("out")));
+    check("@pass_by records a separate parameter passing strategy",
+          q && core_string_eq(q->pass_by, S("ref")));
     check("@namespace put the declaration in the namespace it named",
           a && a->scope && a->scope->ns
               && a->scope->ns->ns_name.data
               && !strcmp(a->scope->ns->ns_name.data, "tag"));
 
     parse_annot_result_free(r);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_initial_symbol_walk_callback(parse_grammar_t *g)
+{
+    parse_pwz_parser_t *p;
+    parse_token_stream_t *ts;
+    parse_tree_t *tree = parse_toy(g, "prog", "vaT;{vbU;}?xyztcV;",
+                                   &p, &ts);
+    check("initial-symbol sample parses", tree != nullptr);
+    if (!tree) return;
+
+    parse_annot_result_t *result = parse_annot_result_new(nullptr);
+    node_probe_t probe = {0};
+    parse_annot_result_set_node_callback(result, count_annot_nodes, &probe);
+    parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
+    parse_annot_register_pass(walk, result, nullptr, nullptr,
+                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
+    parse_tree_walk_run(walk, tree);
+
+    check("initial-symbol pass visits each nonterminal on entry and exit",
+          probe.enters > 0 && probe.enters == probe.exits);
+    check("initial-symbol pass creates its module scope",
+          core_tree_node_value(tree).scope != nullptr);
+    check("initial-symbol pass records the declared name",
+          parse_symtab_lookup_scoped(result->symtab,
+              core_tree_node_value(tree).scope, S(""), S("a")) != nullptr);
+    parse_sym_entry_t *inferred = parse_symtab_lookup_scoped(
+        result->symtab, core_tree_node_value(tree).scope, S(""), S("a"));
+    parse_annot_result_mark_inferred(result, inferred);
+    parse_annot_result_mark_inferred(result, inferred);
+    check("inferred-symbol worklist deduplicates symbol references",
+          core_list_len(result->inferred) == 1);
+
+    parse_tree_walk_free(walk);
+    parse_annot_result_free(result);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+}
+
+static void
+test_apply_ordered_annotation_kinds(parse_grammar_t *g)
+{
+    parse_pwz_parser_t *p;
+    parse_token_stream_t *ts;
+    parse_tree_t *tree = parse_toy(g, "prog", "vaT;{vbU;}?xyztcV;", &p, &ts);
+    check("single-node annotation sample parses", tree != nullptr);
+    if (!tree) return;
+
+    parse_annot_result_t *result = parse_annot_result_new(nullptr);
+    node_probe_t probe = {0};
+    parse_annot_result_set_node_callback(result, count_annot_nodes, &probe);
+    parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
+    parse_annot_register_pass(walk, result, nullptr, nullptr,
+                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
+    const parse_annot_kind_t kinds[] = {PARSE_ANNOT_SCOPE_OPEN};
+
+    parse_tree_walk_apply_node(walk, tree, nullptr, 0, -1, kinds,
+                               sizeof(kinds) / sizeof(kinds[0]), true);
+    check("single-node entry applies only the requested scope annotation",
+          core_tree_node_value(tree).scope != nullptr && probe.enters == 1
+              && probe.exits == 0);
+    parse_tree_walk_apply_node(walk, tree, nullptr, 0, -1, kinds,
+                               sizeof(kinds) / sizeof(kinds[0]), false);
+    check("single-node exit balances the node callback without descending",
+          probe.enters == 1 && probe.exits == 1);
+
+    parse_tree_walk_free(walk);
+    parse_annot_result_free(result);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+}
+
+static void
+apply_selected_tree(parse_tree_walk_t *walk, parse_tree_t *node,
+                    parse_tree_t *parent, int32_t depth, int32_t child_index,
+                    const parse_annot_kind_t *kinds, size_t kind_count)
+{
+    parse_tree_walk_apply_node(walk, node, parent, depth, child_index,
+                               kinds, kind_count, true);
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        apply_selected_tree(walk, core_tree_child(node, i), node, depth + 1,
+                            (int32_t)i, kinds, kind_count);
+    }
+    parse_tree_walk_apply_node(walk, node, parent, depth, child_index,
+                               kinds, kind_count, false);
+}
+
+static void
+test_selected_type_annotations_per_node(parse_grammar_t *g)
+{
+    parse_pwz_parser_t *p;
+    parse_token_stream_t *ts;
+    parse_tree_t *tree = parse_toy(g, "prog", "tbI;", &p, &ts);
+    check("per-node type annotation sample parses", tree != nullptr);
+    if (!tree) return;
+
+    parse_annot_result_t *result = parse_annot_result_new(nullptr);
+    parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
+    parse_annot_register_pass(walk, result, types, nullptr,
+                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
+    const parse_annot_kind_t kinds[] = {
+        PARSE_ANNOT_SCOPE_OPEN,
+        PARSE_ANNOT_DECLARES,
+        PARSE_ANNOT_TYPE,
+    };
+    apply_selected_tree(walk, tree, nullptr, 0, -1, kinds,
+                        sizeof(kinds) / sizeof(kinds[0]));
+
+    parse_scope_t *scope = core_tree_node_value(tree).scope;
+    parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
+        result->symtab, scope, S(""), S("b"));
+    check("selected declaration and type annotations bind an explicitly typed symbol",
+          symbol && is_type(symbol->type, "int"));
+    check("per-node entry and exit preserve the module scope tree",
+          scope && core_string_eq(scope->scope_tag, S("module"))
+              && parse_symtab_current_scope(result->symtab, S(""))
+                     == scope->parent);
+
+    parse_tree_walk_free(walk);
+    parse_annot_result_free(result);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+}
+
+static void
+test_inference_result_is_propagated(void)
+{
+    static const char *const G
+        = "@tokenizer(\"toy\")\n"
+          "<top> @scope(\"module\") ::= <decl>\n"
+          "<decl> @declares($1, \"var\") @infer(\"$1 unify int\") "
+          "::= \"v\" <name> \";\"\n"
+          "<name> ::= __LOWER\n";
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    check("inference propagation grammar loads", parse_bnf_load(S(G), S("top"), g));
+    if (!parse_find_nonterm(g, S("top"))) {
+        parse_grammar_free(g);
+        return;
+    }
+
+    parse_pwz_parser_t *p;
+    parse_token_stream_t *ts;
+    parse_tree_t *tree = parse_toy(g, "top", "va;", &p, &ts);
+    check("inference propagation sample parses", tree != nullptr);
+    if (!tree) {
+        parse_grammar_free(g);
+        return;
+    }
+
+    parse_annot_result_t *result = parse_annot_result_new(nullptr);
+    parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
+    parse_annot_register_pass(walk, result, types, nullptr,
+                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
+    const parse_annot_kind_t kinds[] = {
+        PARSE_ANNOT_SCOPE_OPEN,
+        PARSE_ANNOT_DECLARES,
+        PARSE_ANNOT_INFER,
+    };
+    apply_selected_tree(walk, tree, nullptr, 0, -1, kinds,
+                        sizeof(kinds) / sizeof(kinds[0]));
+
+    parse_scope_t *scope = core_tree_node_value(tree).scope;
+    parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
+        result->symtab, scope, S(""), S("a"));
+    check("the infer annotation's unified result reaches its symbol",
+          symbol && is_type(symbol->type, "int"));
+
+    parse_tree_walk_free(walk);
+    parse_annot_result_free(result);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_symbol_lookup_instantiates_schemes(void)
+{
+    static const char *const G
+        = "@tokenizer(\"toy\")\n"
+          "<top> @scope(\"module\") ::= <expr>\n"
+          "<expr> @declares($1, \"function\") @visibility(\"public\") "
+          "::= \"v\" <name> \";\"\n"
+          "<name> ::= __LOWER\n";
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    check("scheme lookup grammar loads", parse_bnf_load(S(G), S("top"), g));
+
+    parse_pwz_parser_t *p;
+    parse_token_stream_t *ts;
+    parse_tree_t *tree = parse_toy(g, "top", "va;", &p, &ts);
+    check("scheme lookup sample parses", tree != nullptr);
+    if (!tree) {
+        parse_grammar_free(g);
+        return;
+    }
+
+    th_ctx *tc = th_ctx_new();
+    parse_annot_result_t *result = parse_annot_walk_tree(g, tree, tc, nullptr);
+    parse_scope_t *scope = core_tree_node_value(tree).scope;
+    parse_tree_t *expr_node = find_node(g, tree, "expr");
+    th_type *variable = th_var(tc);
+    th_param param = {.mode = TH_IN, .type = variable};
+    th_type *identity = th_func(tc, variable, &param, 1, nullptr, nullptr, 0);
+    parse_symtab_enter_scope(result->symtab, S(""), scope);
+    parse_sym_entry_t *symbol = parse_symtab_lookup_in(scope, S("a"));
+    symbol->type = th_generalize(tc, identity);
+    parse_symtab_enter_scope(result->symtab, S(""), scope->parent);
+
+    parse_infer_expr_t *lookup = parse_infer_parse(S("lookup($1)"));
+    parse_visit_t visit = {
+        .grammar = g,
+        .node = expr_node,
+        .pn = &core_tree_node_value(expr_node),
+    };
+    visit.pn->scope = scope;
+    bool ok_a = false, ok_b = false;
+    th_type *use_a = parse_infer_eval(lookup, &visit, tc, result->symtab,
+                                     &ok_a);
+    th_type *use_b = parse_infer_eval(lookup, &visit, tc, result->symtab,
+                                     &ok_b);
+    check("each lookup instantiates the exported scheme", ok_a && ok_b
+              && use_a && use_b && !th_is_scheme(use_a)
+              && !th_is_scheme(use_b) && use_a != use_b);
+    check("per-node annotation clients retain declared visibility",
+          core_string_eq(symbol->visibility, S("public")));
+
+    parse_infer_free(lookup);
+    parse_annot_result_free(result);
+    th_ctx_free(tc);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_scoped_declaration_is_bound_outside_its_body(void)
+{
+    static const char *const G
+        = "@tokenizer(\"toy\")\n"
+          "<top> @scope(\"module\") ::= <func>\n"
+          "<func> @scope(\"function\", $1) @declares($1, \"function\") "
+          "::= \"f\" <name>\n"
+          "<name> ::= __LOWER\n";
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    check("scoped-declaration grammar loads", parse_bnf_load(S(G), S("top"), g));
+
+    parse_pwz_parser_t *p;
+    parse_token_stream_t *ts;
+    parse_tree_t *tree = parse_toy(g, "top", "fa", &p, &ts);
+    check("scoped-declaration sample parses", tree != nullptr);
+    if (!tree) {
+        parse_grammar_free(g);
+        return;
+    }
+
+    parse_annot_result_t *result = parse_annot_result_new(nullptr);
+    parse_tree_walk_t *walk = parse_tree_walk_new(g, result);
+    parse_annot_register_pass(walk, result, nullptr, nullptr,
+                              PARSE_ANNOT_PASS_INITIAL_SYMBOLS);
+    parse_tree_walk_run(walk, tree);
+    parse_tree_t *func = find_node(g, tree, "func");
+    parse_sym_entry_t *symbol = func
+        ? core_tree_node_value(func).sym : nullptr;
+
+    check("function symbol is provisionally stored in its enclosing module",
+          symbol && symbol->kind == PARSE_SYM_FUNCTION
+              && symbol->scope == core_tree_node_value(tree).scope);
+    check("function body still has its own scope",
+          func && core_tree_node_value(func).scope
+              && core_tree_node_value(func).scope
+                     != core_tree_node_value(tree).scope);
+
+    parse_tree_walk_free(walk);
+    parse_annot_result_free(result);
     parse_pwz_free(p);
     scan_token_stream_free(ts);
     parse_grammar_free(g);
@@ -849,6 +1185,28 @@ test_part_two_rejections(void)
     }
 }
 
+static void
+test_pass_by_modes(void)
+{
+    static const char *const MODES[] = {"in", "out", "inout", "ref"};
+    bool all_load = true;
+    for (size_t i = 0; i < sizeof(MODES) / sizeof(MODES[0]); i++) {
+        core_buffer_t grammar_text = {0};
+        core_buffer_printf(&grammar_text,
+            "<top> @tokenizer(\"toy\") @scope(\"module\") ::= <p>\n"
+            "<p> @declares($1,\"param\") @pass_by(\"%s\") ::= \"v\" <n> \";\"\n"
+            "<n> ::= __LOWER\n", MODES[i]);
+        parse_grammar_t *g = parse_grammar_new();
+        parse_grammar_set_error_recovery(g, false);
+        all_load = all_load && parse_bnf_load(
+            core_string_borrow(grammar_text.data, grammar_text.byte_len),
+            S("top"), g);
+        parse_grammar_free(g);
+        core_buffer_release(&grammar_text);
+    }
+    check("pass_by accepts in, out, inout, and ref values", all_load);
+}
+
 int
 main(void)
 {
@@ -860,11 +1218,19 @@ main(void)
 
     test_annotation_arguments_only_need_balanced_parens();
     test_annotation_arguments_carry_integers();
+    test_annotation_argument_lists_are_growable();
     test_the_representation_and_declaration_annotations();
+    test_initial_symbol_walk_callback(g);
+    test_apply_ordered_annotation_kinds(g);
+    test_selected_type_annotations_per_node(g);
+    test_inference_result_is_propagated();
+    test_symbol_lookup_instantiates_schemes();
+    test_scoped_declaration_is_bound_outside_its_body();
     test_the_repr_annotations_reach_the_layout_descriptor();
     test_an_adt_builds_a_variant_type();
     test_implements_is_checked_not_carried();
     test_part_two_rejections();
+    test_pass_by_modes();
     test_annotations_are_retained_on_the_grammar(g);
     test_annotation_cache_is_thread_safe(g);
     test_the_walk_builds_a_symbol_table(g);

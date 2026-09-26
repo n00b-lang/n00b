@@ -240,7 +240,7 @@ static void unload(job *j)
     }
 }
 
-static const char *tag(ir_instr_t *in, char *buf, size_t n)
+static char *tag(ir_instr_t *in)
 {
     const char *name = in->dest_kind == IR_DEST_VALUE && in->dest
                          ? in->dest->name
@@ -248,9 +248,10 @@ static const char *tag(ir_instr_t *in, char *buf, size_t n)
                          ? in->dest_local->name
                          : ir_op_spelling(in->op);
 
-    snprintf(buf, n, "%s#%u:%s", in->block->name, in->index, name);
-
-    return buf;
+    core_buffer_t *buf = core_buffer_empty();
+    core_buffer_printf(buf, "%s#%u:%s", in->block->name, in->index,
+                       name);
+    return core_buffer_take(buf);
 }
 
 typedef struct {
@@ -402,9 +403,6 @@ static int cmd_cdg(job *j, FILE *out, FILE *err, const char *list)
 
 static void put_edges(FILE *out, ir_pdg_t *g, bool control, bool data)
 {
-    char from[128];
-    char to[128];
-
     for (uint32_t i = 0; i < ir_pdg_edge_count(g); i++) {
         const ir_dep_edge_t *e  = ir_pdg_edge_at(g, i);
         bool                 is = e->kind == IR_DEP_CONTROL;
@@ -412,10 +410,13 @@ static void put_edges(FILE *out, ir_pdg_t *g, bool control, bool data)
         if ((is && !control) || (!is && !data)) {
             continue;
         }
-        fprintf(out, "  %-8s %s %s %s", is ? "control" : "data",
-                tag(e->from, from, sizeof from),
+        char *from = tag(e->from);
+        char *to = tag(e->to);
+        fprintf(out, "  %-8s %s %s %s", is ? "control" : "data", from,
                 e->certainty == IR_DEP_EXACT ? "=>" : "~>",
-                tag(e->to, to, sizeof to));
+                to);
+        core_free(from);
+        core_free(to);
 
         if (e->via) {
             fprintf(out, " via $%s", e->via->name);
@@ -436,10 +437,11 @@ static bool explain_func(ir_visit_t *vi)
 static bool explain_instr(ir_visit_t *vi)
 {
     dump *u   = vi->user;
-    char  nm[128];
     char *why = ir_rule_explain(u->m, u->rules, vi->instr);
+    char *nm = tag(vi->instr);
 
-    fprintf(u->out, "  %s\n", tag(vi->instr, nm, sizeof nm));
+    fprintf(u->out, "  %s\n", nm);
+    core_free(nm);
 
     if (why) {
         fputs(why, u->out);

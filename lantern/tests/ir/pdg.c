@@ -538,6 +538,18 @@ static void test_the_cdg_is_over_blocks(void)
                         "    block join:\n      return\n"
                         "  }\n"));
     ir_func_t *f = func_of(r);
+    if (!f) {
+        check("the nested-branch function parses", false);
+        for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
+            const ir_diag_t *diag = ir_diags_at(r->d, i);
+            printf("  parse diagnostic at %u:%u: %s\n",
+                   diag->primary.span.start_line,
+                   diag->primary.span.start_col,
+                   diag->message ? diag->message : "(no message)");
+        }
+        done(r);
+        return;
+    }
     ir_pdg_t  *g = ir_pdg_of(f);
     char      *s = cdg_sketch(g, f);
 

@@ -35,9 +35,15 @@ th_sources = files(
     'th/typehash.c',
     'th/access.c',
     'th/error.c',
+    'th/environment.c',
+    'th/environment_archive.c',
     'th/infer.c',
     'th/print.c',
 )
+
+logic_sources = files('logic/clpfd_domain.c', 'logic/clpfd_store.c',
+                      'logic/clpfd_label.c', 'logic/datalog.c',
+                      'logic/program.c')
 
 if have_nfc
     th_sources += files('th/nfc_utf8proc.c')
@@ -48,6 +54,8 @@ lib_sources = files(
     'lib/diagnostic.c',
     'lib/hash.c',
     'lib/module.c',
+    'lib/object_archive.c',
+    'lib/persist_arena.c',
     'lib/string.c',
     'lib/work_queue.c',
 )
@@ -112,6 +120,7 @@ ir_sources = files(
     'ir/print.c',
     'ir/profile.c',
     'ir/promote.c',
+    'ir/range.c',
     'ir/rd.c',
     'ir/rule.c',
     'ir/rules_default.c',
@@ -127,7 +136,7 @@ ir_sources = files(
 
 ir_lib = library(
     'ir',
-    th_sources + lib_sources + parse_sources + scanner_sources + ir_sources
+    th_sources + logic_sources + lib_sources + parse_sources + scanner_sources + ir_sources
         + ir_generated,
     dependencies: lantern_deps,
     include_directories: lantern_inc,
@@ -169,10 +178,13 @@ ir_public_headers = files(
 install_headers(ir_public_headers, subdir: 'ir')
 install_headers('../include/core.h')
 install_headers('../include/th/typehash.h', subdir: 'th')
+install_headers('../include/th/environment.h', subdir: 'th')
 
 foreach d : ['lib', 'parse', 'scanner', 'unicode']
     install_subdir('../include' / d, install_dir: get_option('includedir'))
 endforeach
+
+install_subdir('../include/logic', install_dir: get_option('includedir'))
 
 pkg = import('pkgconfig')
 pkg.generate(

@@ -45,6 +45,10 @@ typedef struct parse_cmdr_result_t parse_cmdr_result_t;
 
 parse_cmdr_t *parse_cmdr_new(const parse_cmdr_spec_t *spec);
 void        parse_cmdr_free(parse_cmdr_t *c);
+bool        parse_cmdr_flag_set_repeatable(parse_cmdr_t *c,
+                                           core_string_t command,
+                                           core_string_t flag,
+                                           bool repeatable);
 void        parse_cmdr_print_usage(parse_cmdr_t *c, FILE *out);
 
 parse_cmdr_result_t *parse_cmdr_parse(parse_cmdr_t *c, int nargs,
@@ -58,6 +62,10 @@ core_string_t parse_cmdr_result_error(parse_cmdr_result_t *r, int index);
 
 bool         parse_cmdr_flag_present(parse_cmdr_result_t *r, core_string_t flag);
 core_string_t parse_cmdr_flag_str(parse_cmdr_result_t *r, core_string_t flag);
+int32_t      parse_cmdr_flag_value_count(parse_cmdr_result_t *r,
+                                         core_string_t flag);
+core_string_t parse_cmdr_flag_str_at(parse_cmdr_result_t *r,
+                                     core_string_t flag, int32_t index);
 int64_t      parse_cmdr_flag_int(parse_cmdr_result_t *r, core_string_t flag,
                                int64_t dflt);
 

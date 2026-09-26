@@ -11,6 +11,7 @@
 #include "scanner/token_stream.h"
 #include "scanner/tokenizer.h"
 #include "lib/alloc.h"
+#include "lib/buffer.h"
 #include "private/parse/grammar.h"
 
 #define PP_OK    0
@@ -329,19 +330,14 @@ main(int argc, char **argv)
         return PP_USAGE;
     }
 
-    core_string_t arg  = parse_cmdr_arg_str(r, 0);
-    char         path[4096];
-
-    snprintf(path, sizeof(path), "%.*s", (int)arg.u8_bytes, arg.data);
+    core_string_t arg = parse_cmdr_arg_str(r, 0);
+    const char *path = arg.data;
 
     const char *dir = getenv("PP_GRAMMAR_DIR");
 
     if (parse_cmdr_flag_present(r, S("--grammar-dir"))) {
-        static char buf[4096];
         core_string_t d = parse_cmdr_flag_str(r, S("--grammar-dir"));
-
-        snprintf(buf, sizeof(buf), "%.*s", (int)d.u8_bytes, d.data);
-        dir = buf;
+        dir = d.data;
     }
 
 
@@ -349,26 +345,24 @@ main(int argc, char **argv)
 
     if (parse_cmdr_flag_present(r, S("--language"))) {
         core_string_t l = parse_cmdr_flag_str(r, S("--language"));
-        char         name[64];
-
-        snprintf(name, sizeof(name), "%.*s", (int)l.u8_bytes, l.data);
-        lang = language_named(name);
+        lang = language_named(l.data);
 
         if (!lang) {
-            fprintf(stderr, "pp: no language named '%s'\n", name);
+            fprintf(stderr, "pp: no language named '%.*s'\n",
+                    (int)l.u8_bytes, l.data);
             list_languages(stderr);
 
             return PP_USAGE;
         }
     }
 
-    char grammar_path[4096];
+    char *owned_grammar_path = nullptr;
+    const char *grammar_path = nullptr;
 
     if (parse_cmdr_flag_present(r, S("--grammar"))) {
         core_string_t gp = parse_cmdr_flag_str(r, S("--grammar"));
 
-        snprintf(grammar_path, sizeof(grammar_path), "%.*s",
-                 (int)gp.u8_bytes, gp.data);
+        grammar_path = gp.data;
     }
     else {
         if (!lang) {
@@ -404,14 +398,20 @@ main(int argc, char **argv)
         for (size_t i = dir ? 0 : 1;
              !found && i < sizeof(where) / sizeof(where[0]);
              i++) {
-            snprintf(grammar_path, sizeof(grammar_path), "%s/%s", where[i],
-                     lang->grammar);
+            core_buffer_t *candidate = core_buffer_empty();
+            core_buffer_printf(candidate, "%s/%s", where[i], lang->grammar);
+            char *candidate_path = core_buffer_take(candidate);
 
-            FILE *probe = fopen(grammar_path, "r");
+            FILE *probe = fopen(candidate_path, "r");
 
             if (probe) {
                 fclose(probe);
+                owned_grammar_path = candidate_path;
+                grammar_path = owned_grammar_path;
                 found = true;
+            }
+            else {
+                core_free(candidate_path);
             }
         }
 
@@ -428,14 +428,12 @@ main(int argc, char **argv)
     const char *start = lang ? lang->start : nullptr;
 
     if (parse_cmdr_flag_present(r, S("--start"))) {
-        static char sbuf[128];
         core_string_t st = parse_cmdr_flag_str(r, S("--start"));
-
-        snprintf(sbuf, sizeof(sbuf), "%.*s", (int)st.u8_bytes, st.data);
-        start = sbuf;
+        start = st.data;
     }
 
     parse_grammar_t *g = load_grammar(grammar_path, start, stderr);
+    core_free(owned_grammar_path);
 
     if (!g) {
         return PP_ERROR;

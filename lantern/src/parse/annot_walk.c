@@ -151,7 +151,24 @@ scope_close(parse_visit_t *v)
 static bool
 node_enter(parse_visit_t *v)
 {
-    ((actx_t *)v->thunk)->last_sym = nullptr;
+    actx_t *a = (actx_t *)v->thunk;
+    a->last_sym = nullptr;
+
+    if (a->out->on_node) {
+        a->out->on_node(v, true, a->out->on_node_context);
+    }
+
+    return true;
+}
+
+static bool
+node_leave(parse_visit_t *v)
+{
+    actx_t *a = (actx_t *)v->thunk;
+
+    if (a->out->on_node) {
+        a->out->on_node(v, false, a->out->on_node_context);
+    }
 
     return true;
 }
@@ -209,8 +226,26 @@ annot_declares(parse_visit_t *v)
     }
 
     parse_sym_kind_t   kind = sym_kind_of(an->sym_kind);
-    parse_sym_entry_t *sym  = parse_symtab_add(a->out->symtab, decl_ns(a), nm,
+    core_string_t namespace_name = decl_ns(a);
+    parse_namespace_t *ns = parse_symtab_ns(a->out->symtab, namespace_name);
+    parse_scope_t *decl_scope = ns ? ns->current : nullptr;
+    bool scope_is_decl_body = v->pn->scope && decl_scope == v->pn->scope
+                           && v->pn->scope->node == v->node
+                           && v->pn->scope->parent;
+
+    if (scope_is_decl_body) {
+        parse_symtab_enter_scope(a->out->symtab,
+                                 decl_scope->ns->ns_name,
+                                 decl_scope->parent);
+    }
+
+    parse_sym_entry_t *sym  = parse_symtab_add(a->out->symtab, namespace_name, nm,
                                            kind, v->node);
+
+    if (scope_is_decl_body) {
+        parse_symtab_enter_scope(a->out->symtab,
+                                 decl_scope->ns->ns_name, decl_scope);
+    }
 
     sym->mutability = kind == PARSE_SYM_PARAM ? PARSE_SYM_IMMUTABLE
                                             : PARSE_SYM_MUTABLE;
@@ -375,16 +410,36 @@ annot_direction(parse_visit_t *v)
         {CORE_STRING_STATIC("in"),    TH_IN   },
         {CORE_STRING_STATIC("out"),   TH_OUT  },
         {CORE_STRING_STATIC("inout"), TH_INOUT},
+        {CORE_STRING_STATIC("modify"), TH_INOUT},
     };
 
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
         if (core_string_eq(modes[i].spelling, v->annot->direction)) {
             sym->mode     = modes[i].mode;
             sym->has_mode = true;
+            sym->direction = v->annot->direction;
             break;
         }
     }
 
+    return true;
+}
+
+static bool
+annot_pass_by(parse_visit_t *v)
+{
+    actx_t *a = v->thunk;
+    parse_sym_entry_t *sym = subject(a, v);
+    core_string_t mode = v->annot->pass_by;
+    static const char *const allowed[] = {"in", "out", "inout", "ref"};
+
+    if (!sym || !mode.data) return true;
+    for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
+        if (name_is(mode, allowed[i])) {
+            sym->pass_by = mode;
+            break;
+        }
+    }
     return true;
 }
 
@@ -551,7 +606,10 @@ annot_literal(parse_visit_t *v)
     }
 
     if (v->pn->type) {
-        th_unify(a->types, v->pn->type, t);
+        th_type *unified = th_unify(a->types, v->pn->type, t);
+        if (unified) {
+            v->pn->type = unified;
+        }
     }
     else {
         v->pn->type = t;
@@ -938,6 +996,7 @@ cf_varref(parse_visit_t *v)
                            ? v->pn->scope
                            : parse_symtab_current_scope(a->out->symtab,
                                                       ns_default());
+    v->pn->scope = scope;
     parse_sym_entry_t *sym = parse_symtab_lookup_scoped(a->out->symtab, scope,
                                                     ns_default(), nm);
 
@@ -1006,7 +1065,10 @@ annot_infer(parse_visit_t *v)
             parse_nt_node_t *pn = &core_tree_node_value(k);
 
             if (pn->type) {
-                th_unify(a->types, pn->type, t);
+                th_type *unified = th_unify_in_place(a->types, pn->type, t);
+                if (unified) {
+                    pn->type = unified;
+                }
             }
             else {
                 pn->type = t;
@@ -1017,15 +1079,26 @@ annot_infer(parse_visit_t *v)
     }
 
     if (v->pn->type) {
-        th_unify(a->types, v->pn->type, t);
+        th_type *unified = th_unify_in_place(a->types, v->pn->type, t);
+        if (unified) {
+            v->pn->type = unified;
+            t = unified;
+        }
     }
     else {
         v->pn->type = t;
     }
 
-    if (v->pn->sym) {
+    if (v->pn->sym
+        && (!v->pn->sym->type || !th_is_scheme(v->pn->sym->type))) {
         if (v->pn->sym->type) {
-            th_unify(a->types, v->pn->sym->type, v->pn->type);
+            th_type *unified = th_unify_in_place(a->types,
+                                                 v->pn->sym->type,
+                                                 v->pn->type);
+            if (unified) {
+                v->pn->sym->type = unified;
+                v->pn->type = unified;
+            }
         }
         else {
             v->pn->sym->type = v->pn->type;
@@ -1044,18 +1117,33 @@ infer_propagate(parse_visit_t *v)
         return true;
     }
 
+    for (size_t i = 0; i < parse_nt_annot_count(v->nt); i++) {
+        parse_annotation_t *annotation = parse_nt_annot_at(v->nt, i);
+        if (annotation && annotation->kind == PARSE_ANNOT_INFER)
+            return true;
+    }
+    if (parse_rule_find_annot(v->grammar, v->rule, PARSE_ANNOT_INFER))
+        return true;
+
     if (v->pn->sym && v->pn->sym->type) {
+        if (th_is_scheme(v->pn->sym->type)) {
+            if (!v->pn->type)
+                v->pn->type = th_instantiate(a->types, v->pn->sym->type);
+            return true;
+        }
+
         if (v->pn->type) {
-            th_unify(a->types, v->pn->type, v->pn->sym->type);
+            th_type *unified = th_unify_in_place(a->types, v->pn->type,
+                                                 v->pn->sym->type);
+            if (unified) {
+                v->pn->type = unified;
+                v->pn->sym->type = unified;
+            }
         }
         else {
             v->pn->type = v->pn->sym->type;
         }
 
-        return true;
-    }
-
-    if (v->pn->type) {
         return true;
     }
 
@@ -1077,7 +1165,13 @@ infer_propagate(parse_visit_t *v)
     }
 
     if (sole) {
-        v->pn->type = core_tree_node_value(sole).type;
+        th_type *child_type = core_tree_node_value(sole).type;
+        if (child_type && v->pn->type) {
+            th_type *unified = th_unify_in_place(a->types, v->pn->type,
+                                                 child_type);
+            if (unified) v->pn->type = unified;
+        }
+        else if (child_type) v->pn->type = child_type;
     }
 
     return true;
@@ -1116,6 +1210,8 @@ parse_annot_pass_name(parse_annot_pass_t p)
         return CORE_STRING_STATIC("annot.scope");
     case PARSE_ANNOT_PASS_SYMBOLS:
         return CORE_STRING_STATIC("annot.symbols");
+    case PARSE_ANNOT_PASS_INITIAL_SYMBOLS:
+        return CORE_STRING_STATIC("annot.initial-symbols");
     case PARSE_ANNOT_PASS_REFINE:
         return CORE_STRING_STATIC("annot.refine");
     case PARSE_ANNOT_PASS_CFLOW:
@@ -1146,6 +1242,78 @@ parse_annot_result_new(parse_symtab_t *borrowed)
 }
 
 void
+parse_annot_result_set_node_callback(parse_annot_result_t *result,
+                                     parse_annot_node_callback_fn callback,
+                                     void *context)
+{
+    if (!result) {
+        return;
+    }
+
+    result->on_node = callback;
+    result->on_node_context = context;
+}
+
+void
+parse_annot_result_mark_inferred(parse_annot_result_t *result,
+                                 parse_sym_entry_t *symbol)
+{
+    if (!result || !symbol) {
+        return;
+    }
+
+    for (size_t i = 0; i < core_list_len(result->inferred); i++) {
+        if (result->inferred.data[i] == symbol) {
+            return;
+        }
+    }
+
+    core_list_push(result->inferred, symbol);
+}
+
+size_t
+parse_annot_resolve_undefined(parse_annot_result_t *result)
+{
+    if (!result || !result->symtab) return 0;
+
+    size_t resolved = 0;
+    size_t retained = 0;
+    for (size_t i = 0; i < result->undefined.len; i++) {
+        parse_tree_t *node = result->undefined.data[i];
+        parse_nt_node_t *pn = node && !core_tree_is_leaf(node)
+            ? &core_tree_node_value(node) : nullptr;
+        core_string_t name = node ? parse_tree_extract_first_identifier(node)
+                                  : (core_string_t){0};
+        parse_sym_entry_t *symbol = pn && pn->scope && name.data
+            ? parse_symtab_lookup_scoped(result->symtab, pn->scope,
+                                         ns_default(), name)
+            : nullptr;
+        if (symbol) {
+            pn->sym = symbol;
+            if (symbol->type && result->impl) {
+                actx_t *a = result->impl;
+                if (a->types) {
+                    th_type *symbol_type = th_is_scheme(symbol->type)
+                        ? th_instantiate(a->types, symbol->type)
+                        : symbol->type;
+                    if (pn->type) {
+                        th_type *unified = th_unify_in_place(
+                            a->types, pn->type, symbol_type);
+                        if (unified) pn->type = unified;
+                    }
+                    else pn->type = symbol_type;
+                }
+            }
+            symbol->uses++;
+            resolved++;
+        }
+        else result->undefined.data[retained++] = node;
+    }
+    result->undefined.len = retained;
+    return resolved;
+}
+
+void
 parse_annot_register_pass(parse_tree_walk_t    *w,
                         parse_annot_result_t *out,
                         th_ctx             *types,
@@ -1170,10 +1338,11 @@ parse_annot_register_pass(parse_tree_walk_t    *w,
     a->module = m;
 
     bool all = which == PARSE_ANNOT_PASS_ALL;
+    bool initial_symbols = which == PARSE_ANNOT_PASS_INITIAL_SYMBOLS;
 
-    parse_walk_on_node(w, node_enter, nullptr, a);
+    parse_walk_on_node(w, node_enter, node_leave, a);
 
-    if (all || which == PARSE_ANNOT_PASS_SCOPE) {
+    if (all || initial_symbols || which == PARSE_ANNOT_PASS_SCOPE) {
         parse_walk_on_annot_phase(w, PARSE_ANNOT_SCOPE_OPEN, PHASE_SCOPE,
                                 scope_open, scope_close, a);
         parse_walk_on_annot_phase(w, PARSE_ANNOT_ADT, PHASE_SCOPE, adt_scope_open,
@@ -1186,11 +1355,11 @@ parse_annot_register_pass(parse_tree_walk_t    *w,
                                 scope_leave, a);
     }
 
-    bool symbols = all || which == PARSE_ANNOT_PASS_SYMBOLS;
-    bool refine  = all || which == PARSE_ANNOT_PASS_REFINE;
+    bool symbols = all || initial_symbols || which == PARSE_ANNOT_PASS_SYMBOLS;
+    bool refine  = all || initial_symbols || which == PARSE_ANNOT_PASS_REFINE;
     bool cflow   = all || which == PARSE_ANNOT_PASS_CFLOW;
 
-    if (all || which == PARSE_ANNOT_PASS_INFER) {
+    if (all || initial_symbols || which == PARSE_ANNOT_PASS_INFER) {
         parse_walk_on_node(w, nullptr, infer_propagate, a);
         parse_walk_on_annot_phase(w, PARSE_ANNOT_INFER, PHASE_INFER, nullptr,
                                 annot_infer, a);
@@ -1240,6 +1409,8 @@ parse_annot_register_pass(parse_tree_walk_t    *w,
                             annot_mutability, nullptr, a);
     parse_walk_on_annot_phase(w, PARSE_ANNOT_DIRECTION, PHASE_REFINE,
                             annot_direction, nullptr, a);
+    parse_walk_on_annot_phase(w, PARSE_ANNOT_PASS_BY, PHASE_REFINE,
+                            annot_pass_by, nullptr, a);
     parse_walk_on_annot_phase(w, PARSE_ANNOT_CONSTRAIN, PHASE_REFINE,
                             annot_constrain, nullptr, a);
     parse_walk_on_annot_phase(w, PARSE_ANNOT_OFFSET, PHASE_REFINE, annot_repr,
@@ -1318,6 +1489,7 @@ parse_annot_result_free(parse_annot_result_t *r)
 
     core_free(r->params.data);
     core_free(r->shadowed.data);
+    core_free(r->inferred.data);
     core_free(r->undefined.data);
     core_free(r->impl);
 

@@ -104,7 +104,8 @@ symbol_type(ictx *c, int32_t ix)
         sym->type = fresh(c);
     }
 
-    return sym->type;
+    return th_is_scheme(sym->type) ? th_instantiate(c->tc, sym->type)
+                                   : sym->type;
 }
 
 static th_type *
@@ -231,9 +232,10 @@ project(ictx *c, parse_infer_proj_t op, int32_t ix)
         th_type *inner = fresh(c);
         th_arg   a     = {.kind = TH_ARG_TYPE, .type = inner};
 
-        th_unify(c->tc, t, th_apply(c->tc, "result", &a, 1));
+        th_type *result = th_unify_in_place(c->tc, t,
+                                            th_apply(c->tc, "result", &a, 1));
 
-        return inner;
+        return result ? named_arg_first(result) : nullptr;
     }
 
     case PARSE_INFER_METHOD_RETURN: {
@@ -431,9 +433,7 @@ eval(ictx *c, const parse_infer_expr_t *e)
             return l;
         }
 
-        th_unify(c->tc, l, r);
-
-        return l;
+        return th_unify_in_place(c->tc, l, r);
     }
 
     case PARSE_INFER_SUM: {

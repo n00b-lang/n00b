@@ -74,6 +74,23 @@ static void test_promotes(th_ctx *ctx)
     check("promotes accepts the target itself", binds(ctx, c, f64));
     check("promotes rejects a type with no path", !binds(ctx, c, s));
 
+    th_type *i8 = th_bitint(ctx, 8, true);
+    th_type *i16 = th_bitint(ctx, 16, true);
+    th_type *u8 = th_bitint(ctx, 8, false);
+    th_type *u16 = th_bitint(ctx, 16, false);
+    th_type *i8_signed = th_bitint(ctx, 8, true);
+    check("signed bit integers promote only to wider signed widths",
+          th_type_promotes_to(ctx, i8, i16) &&
+              !th_type_promotes_to(ctx, i16, i8) &&
+              !th_type_promotes_to(ctx, i8, u16));
+    check("unsigned bit integers promote to wider unsigned or signed widths",
+          th_type_promotes_to(ctx, u8, u16) &&
+              th_type_promotes_to(ctx, u8, i16) &&
+              !th_type_promotes_to(ctx, u8, i8_signed));
+    check("bit-integer promotions participate in coercion constraints",
+          binds(ctx, (th_constraint){.kind = TH_CON_PROMOTES, .target = i16},
+                i8));
+
     (void)i64;
 }
 
@@ -327,6 +344,14 @@ static void test_coerce(th_ctx *ctx)
           !th_is_bottom(th_coerce(ctx, ref, deref)));
     check("an impossible coercion is bottom",
           th_is_bottom(th_coerce(ctx, s, deref)));
+
+    th_type *bits8 = th_bitint(ctx, 8, true);
+    th_type *bits16 = th_bitint(ctx, 16, true);
+    check("coercion records a value-preserving bit-integer promotion",
+          !th_is_bottom(th_coerce(
+              ctx, bits8,
+              (th_coerce_policy){.allow = TH_COERCE_PROMOTE,
+                                 .target = bits16})));
 }
 
 static bool wrap_i32_to_string(th_ctx *ctx, th_type *from, th_type *to,

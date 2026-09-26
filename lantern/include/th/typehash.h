@@ -54,6 +54,7 @@ typedef enum : uint8_t {
 
 typedef struct th_ctx  th_ctx;
 typedef struct th_type th_type;
+typedef struct th_env  th_env;
 
 typedef struct {
     const char *file;
@@ -248,6 +249,8 @@ bool   th_var_constraint_at(const th_type *var, size_t i, th_constraint *out);
 
 void th_register_promotion(th_ctx *ctx, const char *from, const char *to);
 bool th_promotes_to(th_ctx *ctx, const char *from, const char *to);
+bool th_type_promotes_to(th_ctx *ctx, const th_type *from,
+                         const th_type *to);
 
 typedef enum : uint8_t {
     TH_COERCE_NONE        = 0,
@@ -283,6 +286,8 @@ void   th_register_iface(th_ctx *ctx, const char *name, th_type *methods);
 bool   th_register_method(th_ctx *ctx, th_type *receiver, const char *name,
                           th_type *signature);
 th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name);
+/* For an unresolved constrained type variable, true means the trait is a
+ * retained obligation, not proof of a concrete implementation or dispatch. */
 bool   th_implements(th_ctx *ctx, th_type *type, const char *iface);
 size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
                        size_t max);
@@ -295,8 +300,14 @@ size_t   th_free_vars(th_ctx *ctx, th_type *type, th_type ***out);
 bool     th_is_closed(th_ctx *ctx, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);
 th_type *th_apply_subst(th_ctx *ctx, th_type *type);
+/* Unifies fresh copies of both inputs; neither input is constrained. */
 th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b);
+/* Constrains the original monomorphic variables; failure may leave bindings. */
+th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b);
 th_type *th_instantiate(th_ctx *ctx, th_type *type);
 th_type *th_generalize(th_ctx *ctx, th_type *type);
+th_type *th_generalize_excluding(th_ctx *ctx, th_type *type,
+                                 th_type *const *environment,
+                                 size_t environment_count);
 
 #endif

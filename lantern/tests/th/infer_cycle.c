@@ -117,6 +117,22 @@ int main(void)
                           == th_hash(ctx, gen));
     }
 
+    th_type *outer = th_var(ctx);
+    th_type *inner = th_var(ctx);
+    th_type *members[] = {outer, inner};
+    th_type *pair = th_tuple(ctx, members, 2);
+    th_type *environment[] = {outer};
+    th_type *relative = th_generalize_excluding(ctx, pair, environment, 1);
+    uint64_t arity = 0;
+    check("environment-aware generalization leaves outer variables free",
+          relative && th_binder_arity(relative, &arity) && arity == 1
+              && th_free_vars(ctx, relative, nullptr) == 1);
+    th_type *relative_instance = relative ? th_instantiate(ctx, relative)
+                                          : nullptr;
+    check("instantiation freshens only quantified variables",
+          relative_instance
+              && th_free_vars(ctx, relative_instance, nullptr) == 2);
+
     th_ctx_free(ctx);
 
     return report("cyclic inference");

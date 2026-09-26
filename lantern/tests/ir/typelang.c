@@ -2,10 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "harness.h"
 #include "ir/ir.h"
 #include "ir/typelang.h"
+#include "lib/buffer.h"
 #include "th/typehash.h"
-#include "harness.h"
 
 static void check_line(char *line, int lineno)
 {
@@ -25,9 +26,9 @@ static void check_line(char *line, int lineno)
 
     *tab2 = 0;
 
-    const char *type      = line;
-    const char *want_enc  = tab1 + 1;
-    const char *want      = tab2 + 1;
+    const char *type     = line;
+    const char *want_enc = tab1 + 1;
+    const char *want     = tab2 + 1;
 
     for (const char *p = type; *p; p++) {
         if ((unsigned char)*p >= 0x80) {
@@ -35,10 +36,10 @@ static void check_line(char *line, int lineno)
         }
     }
 
-    ir_ctx_t   *ctx  = ir_ctx_new();
-    th_ctx     *th   = ir_ctx_types(ctx);
-    char       *err  = nullptr;
-    th_type    *t    = ir_typelang_parse(th, type, &err);
+    ir_ctx_t *ctx = ir_ctx_new();
+    th_ctx   *th  = ir_ctx_types(ctx);
+    char     *err = nullptr;
+    th_type  *t   = ir_typelang_parse(th, type, &err);
 
     if (!t) {
         printf("FAIL  line %d: %s -- %s\n", lineno, type,
@@ -80,8 +81,8 @@ static void check_line(char *line, int lineno)
     snprintf(got, sizeof(got), "%llu", (unsigned long long)th_hash(th, t));
 
     if (strcmp(got, want)) {
-        printf("FAIL  line %d: %s hashes %s, spec says %s (%s)\n", lineno,
-               type, got, want, th_last_error(th) ? th_last_error(th) : "-");
+        printf("FAIL  line %d: %s hashes %s, spec says %s (%s)\n", lineno, type,
+               got, want, th_last_error(th) ? th_last_error(th) : "-");
         fails++;
     }
 
@@ -97,18 +98,17 @@ static void test_a_type_can_be_read_out_of_a_longer_text(void)
         const char *src;
         size_t      want;
     } cases[] = {
-        {"i32, rest",       3 },
-        {"ptr[i32] = 4",    8 },
+        {"i32, rest", 3},
+        {"ptr[i32] = 4", 8},
         {"(x: int) -> void, next", 16},
-        {"i32",             3 },
+        {"i32", 3},
     };
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         size_t   used = 0;
         char    *err  = nullptr;
-        th_type *t    = ir_typelang_parse_prefix(th, cases[i].src,
-                                                 strlen(cases[i].src), &used,
-                                                 &err);
+        th_type *t    = ir_typelang_parse_prefix(
+            th, cases[i].src, strlen(cases[i].src), &used, &err);
 
         if (!t) {
             printf("FAIL  prefix parse of %s -- %s\n", cases[i].src,
@@ -119,12 +119,159 @@ static void test_a_type_can_be_read_out_of_a_longer_text(void)
         }
 
         if (used != cases[i].want) {
-            printf("FAIL  %s consumed %zu bytes, expected %zu\n",
-                   cases[i].src, used, cases[i].want);
+            printf("FAIL  %s consumed %zu bytes, expected %zu\n", cases[i].src,
+                   used, cases[i].want);
             fails++;
         }
     }
 
+    ir_ctx_free(ctx);
+}
+
+static void test_n00b_function_failure_channel(void)
+{
+    ir_ctx_t *ctx     = ir_ctx_new();
+    th_ctx   *th      = ir_ctx_types(ctx);
+    th_type  *failure = nullptr;
+    char     *err     = nullptr;
+    th_type  *fn = ir_typelang_parse_function(th, "(`a, `a) -> `a fail: `e",
+                                              &failure, &err);
+    bool shared  = fn && th_func_nparams(fn) == 2 &&
+                  th_func_param(fn, 0)->type == th_func_param(fn, 1)->type &&
+                  th_func_param(fn, 0)->type == th_func_ret(fn);
+    if (!fn || !failure || !shared) {
+        printf("FAIL  typelang fail channel: %s\n", err ? err : "missing type");
+        fails++;
+    }
+    free(err);
+
+    failure = nullptr;
+    fn      = ir_typelang_parse_function(
+        th, "(`a) -> `a fail: `e where `a: Copy + != string", &failure, &err);
+    th_constraint constraint = {0};
+    bool          retained =
+        fn && th_func_nparams(fn) == 1 &&
+        th_var_constraint_count(th_func_param(fn, 0)->type) == 2 &&
+        th_var_constraint_at(th_func_param(fn, 0)->type, 0, &constraint) &&
+        constraint.kind == TH_CON_IMPLEMENTS &&
+        strcmp(constraint.iface, "Copy") == 0;
+    if (!retained) {
+        printf("FAIL  typelang function where constraints: %s\n",
+               err ? err : "constraint was not retained");
+        fails++;
+    }
+    free(err);
+    th_type *scheme       = fn ? th_generalize(th, fn) : nullptr;
+    th_type *instantiated = scheme ? th_instantiate(th, scheme) : nullptr;
+    if (instantiated && th_func_nparams(instantiated) == 1 &&
+        th_var_constraint_count(th_func_param(instantiated, 0)->type) == 2)
+        retained = true;
+    else
+        retained = false;
+    if (!scheme || !strstr(th_print(th, scheme), "where `a: Copy + != string"))
+        retained = false;
+    if (!retained) {
+        printf("FAIL  generalization dropped a function where constraint\n");
+        fails++;
+    }
+    ir_ctx_free(ctx);
+}
+
+static void test_plain_function_type(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    th_ctx   *th  = ir_ctx_types(ctx);
+    char     *err = nullptr;
+    th_type  *fn  = ir_typelang_parse(th, "() -> int", &err);
+    if (!fn || th_kind_of(fn) != TH_FUNCTION || th_func_nparams(fn) != 0) {
+        printf("FAIL  plain function type: %s\n", err ? err : "missing type");
+        fails++;
+    }
+    free(err);
+    ir_ctx_free(ctx);
+}
+
+static void test_large_tuple_is_not_truncated(void)
+{
+    ir_ctx_t      *ctx = ir_ctx_new();
+    core_buffer_t *src = core_buffer_from_cstr("t(");
+    for (size_t i = 0; i < 70; i++) {
+        if (i)
+            core_buffer_putc(src, ',');
+        core_buffer_puts(src, "int");
+    }
+    core_buffer_putc(src, ')');
+
+    char       *err     = nullptr;
+    th_type    *type    = ir_typelang_parse(ir_ctx_types(ctx), src->data, &err);
+    const char *printed = type ? th_print(ir_ctx_types(ctx), type) : "";
+    size_t      count   = 0;
+    for (const char *p = printed; (p = strstr(p, "int")); p += 3)
+        count++;
+    if (!type || count != 70) {
+        printf("FAIL  a 70-element tuple retained %zu elements: %s\n", count,
+               err ? err : printed);
+        fails++;
+    }
+    free(err);
+    core_buffer_free(src);
+    ir_ctx_free(ctx);
+}
+
+static void test_large_binder_is_not_truncated(void)
+{
+    ir_ctx_t      *ctx = ir_ctx_new();
+    core_buffer_t *src = core_buffer_from_cstr("forall[");
+    for (size_t i = 0; i < 70; i++) {
+        if (i)
+            core_buffer_putc(src, ',');
+        core_buffer_printf(src, "`t%zu", i);
+    }
+    core_buffer_puts(src, "]int");
+
+    char    *err   = nullptr;
+    th_type *type  = ir_typelang_parse(ir_ctx_types(ctx), src->data, &err);
+    uint64_t arity = 0;
+    if (!type || !th_binder_arity(type, &arity) || arity != 70) {
+        printf("FAIL  a 70-variable binder retained %llu variables: %s\n",
+               (unsigned long long)arity, err ? err : "wrong binder arity");
+        fails++;
+    }
+    free(err);
+    core_buffer_free(src);
+    ir_ctx_free(ctx);
+}
+
+static void test_bitslice_prefix_types(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    th_ctx   *th  = ir_ctx_types(ctx);
+    static const struct {
+        const char *text;
+        bool        is_signed;
+    } valid[] = {{"i:32", true}, {"u:32", false}};
+    for (size_t i = 0; i < sizeof(valid) / sizeof(valid[0]); i++) {
+        char    *err       = nullptr;
+        th_type *type      = ir_typelang_parse(th, valid[i].text, &err);
+        uint64_t width     = 0;
+        bool     is_signed = false;
+        if (!type || !th_bitint_info(type, &width, &is_signed) || width != 32 ||
+            is_signed != valid[i].is_signed) {
+            printf("FAIL  bitslice type %s: %s\n", valid[i].text,
+                   err ? err : "wrong bit integer type");
+            fails++;
+        }
+        free(err);
+    }
+    static const char *const invalid[] = {"i", "u"};
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        char *err = nullptr;
+        if (ir_typelang_parse(th, invalid[i], &err)) {
+            printf("FAIL  bare %s unexpectedly parsed as a type\n", invalid[i]);
+            fails++;
+        }
+        free(err);
+    }
     ir_ctx_free(ctx);
 }
 
@@ -161,7 +308,7 @@ int main(int argc, char **argv)
     }
 
     char line[8192];
-    int  n = 0;
+    int  n      = 0;
     int  lineno = 0;
 
     while (fgets(line, sizeof(line), f)) {
@@ -184,6 +331,11 @@ int main(int argc, char **argv)
     fclose(f);
 
     test_a_type_can_be_read_out_of_a_longer_text();
+    test_plain_function_type();
+    test_large_tuple_is_not_truncated();
+    test_large_binder_is_not_truncated();
+    test_bitslice_prefix_types();
+    test_n00b_function_failure_channel();
     test_nonsense_is_refused();
     ir_typelang_shutdown();
 

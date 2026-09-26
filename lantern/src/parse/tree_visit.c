@@ -251,6 +251,90 @@ run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
     return descend;
 }
 
+static void fill(parse_tree_walk_t *w, parse_visit_t *v, frame_t *f);
+
+static void
+run_annot_kinds(parse_tree_walk_t *w, parse_visit_t *v,
+                const parse_annot_kind_t *kinds, size_t kind_count,
+                bool entering)
+{
+    if (!v->nt || !kinds) {
+        return;
+    }
+
+    size_t n_nt = parse_nt_annot_count(v->nt);
+    size_t n_rule = parse_rule_annot_count(v->rule);
+    size_t total = n_nt + n_rule;
+
+    for (size_t k = 0; k < kind_count; k++) {
+        size_t kind_ix = entering ? k : kind_count - 1 - k;
+        parse_annot_kind_t kind = kinds[kind_ix];
+        if (kind < 0 || kind >= PARSE_ANNOT_KIND_COUNT) {
+            continue;
+        }
+
+        for (int32_t p = 0; p <= w->max_phase; p++) {
+            int32_t phase = entering ? p : w->max_phase - p;
+            for (size_t j = 0; j < total; j++) {
+                size_t annot_ix = entering ? j : total - 1 - j;
+                parse_annotation_t *annot
+                    = annot_ix < n_nt
+                          ? parse_nt_annot_at(v->nt, annot_ix)
+                          : parse_rule_annot_at(v->rule, annot_ix - n_nt);
+                if (!annot || annot->kind != kind) {
+                    continue;
+                }
+
+                v->annot = annot;
+                run_chain(w, &w->by_annot[kind], v, entering,
+                          !entering, phase);
+            }
+        }
+    }
+
+    v->annot = nullptr;
+}
+
+void
+parse_tree_walk_apply_node(parse_tree_walk_t *w, parse_tree_t *node,
+                           parse_tree_t *parent, int32_t depth,
+                           int32_t child_index,
+                           const parse_annot_kind_t *kinds,
+                           size_t kind_count, bool entering)
+{
+    if (!w || !node) {
+        return;
+    }
+
+    frame_t f = {.node = node, .parent = parent, .depth = depth,
+                 .child_index = child_index};
+    parse_visit_t v;
+    fill(w, &v, &f);
+
+    if (core_tree_is_leaf(node)) {
+        if (entering) {
+            run_chain(w, &w->leaf, &v, true, false, -1);
+        }
+        return;
+    }
+
+    if (entering) {
+        run_chain(w, &w->any, &v, true, false, -1);
+        if (v.nt) {
+            run_chain(w, nt_chain(w, v.pn->id), &v, true, false, -1);
+        }
+    }
+
+    run_annot_kinds(w, &v, kinds, kind_count, entering);
+
+    if (!entering) {
+        if (v.nt) {
+            run_chain(w, nt_chain(w, v.pn->id), &v, false, true, -1);
+        }
+        run_chain(w, &w->any, &v, false, true, -1);
+    }
+}
+
 static void
 fill(parse_tree_walk_t *w, parse_visit_t *v, frame_t *f)
 {
@@ -269,6 +353,7 @@ fill(parse_tree_walk_t *w, parse_visit_t *v, frame_t *f)
     }
 
     v->pn = &core_tree_node_value(f->node);
+    v->pn->parent = f->parent;
 
     if (v->pn->id < 0 || v->pn->id == PARSE_EMPTY_STRING || v->pn->group_top) {
         return;
@@ -506,11 +591,20 @@ static reducer_t *leaf_in_unit(struct parse_reduce_state_t *st, int32_t unit)
     return nullptr;
 }
 
+typedef struct {
+    parse_tree_t *node;
+    size_t            next;
+    size_t            mark;
+    bool              entered;
+} rframe_t;
+
+core_list_decl(rframe_t);
+
 static reducer_t *leaf_for(struct parse_reduce_state_t *st, parse_grammar_t *g,
-                           parse_tree_t **up, size_t n)
+                           core_list_t(rframe_t) frames)
 {
-    for (size_t i = n; i-- > 0;) {
-        parse_tree_t *p = up[i];
+    for (size_t i = frames.len - 1; i-- > 0;) {
+        parse_tree_t *p = frames.data[i].node;
 
         if (!p || core_tree_is_leaf(p)) {
             continue;
@@ -526,15 +620,6 @@ static reducer_t *leaf_for(struct parse_reduce_state_t *st, parse_grammar_t *g,
 
     return st->have_leaf ? &st->leaf : nullptr;
 }
-
-typedef struct {
-    parse_tree_t *node;
-    size_t            next;
-    size_t            mark;
-    bool              entered;
-} rframe_t;
-
-core_list_decl(rframe_t);
 
 typedef void *vptr_t;
 core_list_decl(vptr_t);
@@ -591,20 +676,7 @@ void *parse_tree_walk_reduce(parse_tree_walk_t *w, parse_tree_t *root)
         reducer_t *use = nullptr;
 
         if (core_tree_is_leaf(f->node)) {
-            parse_tree_t *up[8];
-            size_t            nup = 0;
-
-            for (size_t k = frames.len - 1; k-- > 0 && nup < 8;) {
-                up[nup++] = frames.data[k].node;
-            }
-
-            for (size_t a = 0, z = nup; a + 1 < z; a++, z--) {
-                parse_tree_t *t = up[a];
-
-                up[a]     = up[z - 1];
-                up[z - 1] = t;
-            }
-            use = leaf_for(st, w->g, up, nup);
+            use = leaf_for(st, w->g, frames);
         }
         else {
             parse_nt_node_t *pn = &core_tree_node_value(f->node);

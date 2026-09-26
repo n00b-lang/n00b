@@ -2,6 +2,88 @@
 
 #include "lib/alloc.h"
 #include "lib/diagnostic.h"
+#include "lib/list.h"
+
+typedef core_translation_unit_t *core_tu_ptr_t;
+core_list_decl(core_tu_ptr_t);
+
+typedef struct {
+    core_list_t(core_tu_ptr_t) *units;
+    int *indices;
+    int *lowlinks;
+    size_t *stack;
+    bool *on_stack;
+    size_t stack_len;
+    int next_index;
+    core_translation_unit_scc_fn callback;
+    void *context;
+    bool succeeded;
+} core_tu_scc_ctx_t;
+
+static bool
+core_tu_list_contains(core_list_t(core_tu_ptr_t) *units,
+                      core_translation_unit_t *unit)
+{
+    for (size_t i = 0; i < units->len; i++)
+        if (units->data[i] == unit) return true;
+    return false;
+}
+
+static void
+core_tu_collect_imports(core_list_t(core_tu_ptr_t) *units,
+                        core_translation_unit_t *unit)
+{
+    if (!unit || core_tu_list_contains(units, unit)) return;
+    core_list_push(*units, unit);
+    for (size_t i = 0; i < core_translation_unit_import_count(unit); i++)
+        core_tu_collect_imports(units,
+            core_translation_unit_import(unit, i));
+}
+
+static size_t
+core_tu_index(core_tu_scc_ctx_t *ctx, core_translation_unit_t *unit)
+{
+    for (size_t i = 0; i < ctx->units->len; i++)
+        if (ctx->units->data[i] == unit) return i;
+    return SIZE_MAX;
+}
+
+static void
+core_tu_scc_visit(core_tu_scc_ctx_t *ctx, size_t at)
+{
+    if (!ctx->succeeded) return;
+    ctx->indices[at] = ctx->lowlinks[at] = ctx->next_index++;
+    ctx->stack[ctx->stack_len++] = at;
+    ctx->on_stack[at] = true;
+    core_translation_unit_t *unit = ctx->units->data[at];
+    for (size_t i = 0; i < core_translation_unit_import_count(unit); i++) {
+        size_t next = core_tu_index(ctx,
+            core_translation_unit_import(unit, i));
+        if (next == SIZE_MAX) continue;
+        if (ctx->indices[next] < 0) {
+            core_tu_scc_visit(ctx, next);
+            if (ctx->lowlinks[next] < ctx->lowlinks[at])
+                ctx->lowlinks[at] = ctx->lowlinks[next];
+        }
+        else if (ctx->on_stack[next]
+                 && ctx->indices[next] < ctx->lowlinks[at]) {
+            ctx->lowlinks[at] = ctx->indices[next];
+        }
+        if (!ctx->succeeded) return;
+    }
+    if (ctx->lowlinks[at] != ctx->indices[at]) return;
+
+    core_list_t(core_tu_ptr_t) members = core_list_new(core_tu_ptr_t);
+    size_t member;
+    do {
+        member = ctx->stack[--ctx->stack_len];
+        ctx->on_stack[member] = false;
+        core_list_push(members, ctx->units->data[member]);
+    } while (member != at);
+    ctx->succeeded = ctx->callback(ctx->context, members.data,
+                                   members.len);
+    core_list_free(members);
+}
 
 bool
 core_module_spec_init(core_module_spec_t *spec, core_string_t identifier)
@@ -125,6 +207,7 @@ core_translation_unit_release(core_translation_unit_t *unit)
     if (!unit) return;
     if (unit->user_data_free) unit->user_data_free(unit->user_data);
     core_diagnostics_free(unit->diagnostics);
+    core_free(unit->imports);
     core_module_spec_release(&unit->module);
     core_source_file_release(&unit->source);
     *unit = (core_translation_unit_t){0};
@@ -151,6 +234,69 @@ core_diagnostics_t *
 core_translation_unit_diagnostics(core_translation_unit_t *unit)
 {
     return unit ? unit->diagnostics : nullptr;
+}
+
+bool
+core_translation_unit_add_import(core_translation_unit_t *unit,
+                                 core_translation_unit_t *imported)
+{
+    if (!unit || !imported) return false;
+    for (size_t i = 0; i < unit->import_count; i++)
+        if (unit->imports[i] == imported
+            || core_module_spec_eq(&unit->imports[i]->module,
+                                   &imported->module))
+            return true;
+    if (unit->import_count == unit->import_capacity) {
+        size_t capacity = unit->import_capacity ? unit->import_capacity * 2 : 4;
+        unit->imports = core_realloc(unit->imports,
+                                     sizeof(*unit->imports) * capacity);
+        unit->import_capacity = capacity;
+    }
+    unit->imports[unit->import_count++] = imported;
+    return true;
+}
+
+size_t
+core_translation_unit_import_count(const core_translation_unit_t *unit)
+{
+    return unit ? unit->import_count : 0;
+}
+
+core_translation_unit_t *
+core_translation_unit_import(const core_translation_unit_t *unit,
+                             size_t index)
+{
+    return unit && index < unit->import_count ? unit->imports[index] : nullptr;
+}
+
+bool
+core_translation_unit_visit_sccs(core_translation_unit_t *root,
+                                 core_translation_unit_scc_fn callback,
+                                 void *context)
+{
+    if (!root || !callback) return false;
+    core_list_t(core_tu_ptr_t) units = core_list_new(core_tu_ptr_t);
+    core_tu_collect_imports(&units, root);
+    core_tu_scc_ctx_t state = {
+        .units = &units,
+        .indices = core_alloc_array(int, units.len),
+        .lowlinks = core_alloc_array(int, units.len),
+        .stack = core_alloc_array(size_t, units.len),
+        .on_stack = core_alloc_array(bool, units.len),
+        .callback = callback,
+        .context = context,
+        .succeeded = true,
+    };
+    memset(state.on_stack, 0, units.len * sizeof(bool));
+    for (size_t i = 0; i < units.len; i++) state.indices[i] = -1;
+    for (size_t i = 0; i < units.len && state.succeeded; i++)
+        if (state.indices[i] < 0) core_tu_scc_visit(&state, i);
+    core_free(state.indices);
+    core_free(state.lowlinks);
+    core_free(state.stack);
+    core_free(state.on_stack);
+    core_list_free(units);
+    return state.succeeded;
 }
 
 core_module_resolve_status_t

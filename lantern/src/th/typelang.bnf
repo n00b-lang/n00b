@@ -34,6 +34,9 @@
 
 <bitint> @nospace ::= %"bitint" %"[" %INT_LIT %"]"
            | %"ubitint" %"[" %INT_LIT %"]"
+           | %"i" %":" %INT_LIT
+           | %"u" %":" %INT_LIT
+           | %"bits" %":" %INT_LIT
 
 <indirection> @nospace ::= <ind-name> %"[" <union-type> <ind-tail>? %"]"
 <ind-tail>    ::= %";" <ind-attrs>?
@@ -70,7 +73,21 @@
 
 <tuple-args> @nospace($1) ::= <union-type> (%"," <union-type>)*
 
-<function> @nospace($1) @nospace($2) ::= %"(" <param-list>? %")" %"->" <union-type>
+<function> @nospace($1) @nospace($2) ::= %"(" <param-list>? %")" %"->" <function-result> <function-where>?
+
+<function-where> ::= %"where" <function-constraint> (%"," <function-constraint>)*
+
+<function-constraint> ::= %"`" %IDENTIFIER %":" <function-constraint-items>
+
+<function-constraint-items> ::= <function-constraint-item> (%"+" <function-constraint-item>)*
+
+<function-constraint-item> ::= %"!=" <union-type>
+                             | %IDENTIFIER
+
+<function-result> ::= <union-type>
+                    | <union-type> <function-error>
+
+<function-error> ::= %"fail" %":" <union-type>
 
 <param-list> @nospace($1) ::= <param> (%"," <param>)*
 

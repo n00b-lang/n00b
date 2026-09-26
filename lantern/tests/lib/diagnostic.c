@@ -29,10 +29,13 @@ int main(void)
     core_diagnostics_t *build = core_diagnostics_new();
     core_diagnostics_t *tu = core_translation_unit_diagnostics(&unit);
     core_diagnostics_set_policy(build, promote_warning, nullptr);
-    check("TU diagnostic retains its module and source context",
-          core_diagnostics_report(tu, &unit, CORE_DIAG_ERROR,
+    check("TU diagnostic retains its module and source location",
+          core_diagnostics_report_at(tu, &unit, CORE_DIAG_ERROR,
               CORE_STRING_STATIC("TEST-E0001"),
-              CORE_STRING_STATIC("bad declaration")));
+              CORE_STRING_STATIC("bad declaration"),
+              (core_diag_location_t){.line = 3, .column = 4,
+                                     .end_line = 3, .end_column = 8,
+                                     .has_location = true}));
     check("TU warnings can be collected before build-level policy runs",
           core_diagnostics_report(tu, &unit, CORE_DIAG_WARNING,
               CORE_STRING_STATIC("TEST-W0001"),
@@ -48,7 +51,10 @@ int main(void)
               && core_string_eq(diagnostic->module,
                                 CORE_STRING_STATIC("pkg.mod"))
               && core_string_eq(diagnostic->path,
-                                CORE_STRING_STATIC("pkg/mod.n00b")));
+                                CORE_STRING_STATIC("pkg/mod.n00b"))
+              && diagnostic->location.has_location
+              && diagnostic->location.line == 3
+              && diagnostic->location.column == 4);
 
     core_diagnostics_free(build);
     core_translation_unit_release(&unit);

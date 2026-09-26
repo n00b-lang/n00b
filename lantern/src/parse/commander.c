@@ -31,6 +31,7 @@ typedef struct {
         core_string_t s;
     };
 } parse_cmdr_val_t;
+core_list_decl(parse_cmdr_val_t);
 #include "parse/pwz.h"
 #include "parse/tree_visit.h"
 #include "lib/alloc.h"
@@ -54,6 +55,7 @@ typedef struct {
     core_string_t        short_name;
     parse_cmdr_arg_type_t value_type;
     bool                takes_value;
+    bool                repeatable;
     core_string_t        doc;
     int64_t             terminal_id;
 } parse_cmdr_flag_spec_t;
@@ -93,6 +95,7 @@ struct parse_cmdr_t {
 struct parse_cmdr_result_t {
     core_string_t                 command;
     core_dict_t                   flags;
+    core_dict_t                   repeated_flags;
     core_list_t(parse_cmdr_arg_t)   args;
     core_list_t(core_string_t)     errors;
     bool                         ok;
@@ -242,6 +245,18 @@ parse_cmdr_new(const parse_cmdr_spec_t *spec)
     parse_cmdr_finalize(c);
 
     return c;
+}
+
+bool
+parse_cmdr_flag_set_repeatable(parse_cmdr_t *c, core_string_t command,
+                               core_string_t flag_name, bool repeatable)
+{
+    if (!c) return false;
+    parse_cmdr_command_t *scope = find_command(c, command);
+    parse_cmdr_flag_spec_t *flag = find_flag(scope, flag_name);
+    if (!flag) return false;
+    flag->repeatable = repeatable;
+    return true;
 }
 
 void
@@ -982,12 +997,52 @@ static parse_cmdr_result_t *
 make_error_result(const char *msg)
 {
     parse_cmdr_result_t *r = core_alloc(parse_cmdr_result_t);
+    core_dict_init(&r->flags, flag_key_hash, flag_key_eq);
+    core_dict_init(&r->repeated_flags, flag_key_hash, flag_key_eq);
     r->ok       = false;
     r->errors = core_list_new_cap(core_string_t, 1);
 
     core_list_push(r->errors, cmdr_intern(argv_str(msg)));
 
     return r;
+}
+
+static parse_cmdr_val_t
+clone_flag_value(const parse_cmdr_val_t *value)
+{
+    parse_cmdr_val_t copy = *value;
+    if (copy.tag == PARSE_CMDR_VAL_STR && copy.s.data)
+        copy.s = core_string_from_raw(copy.s.data, (int64_t)copy.s.u8_bytes);
+    return copy;
+}
+
+static void
+append_repeat_value(parse_cmdr_result_t *result, core_string_t name,
+                    const parse_cmdr_val_t *value)
+{
+    bool found = false;
+    core_list_t(parse_cmdr_val_t) *values =
+        _core_dict_get(&result->repeated_flags, &name, &found);
+    if (!found) {
+        values = core_alloc(core_list_t(parse_cmdr_val_t));
+        *values = core_list_new(parse_cmdr_val_t);
+        _core_dict_put(&result->repeated_flags, flag_key(name), values);
+    }
+    core_list_push(*values, clone_flag_value(value));
+}
+
+static void
+store_flag_value(parse_cmdr_result_t *result, core_string_t name,
+                 parse_cmdr_val_t *value)
+{
+    core_string_t *key = flag_key(name);
+    parse_cmdr_val_t *old = _core_dict_put(&result->flags, key, value);
+    if (old) {
+        core_free(key->data);
+        core_free(key);
+        if (old->tag == PARSE_CMDR_VAL_STR) core_free(old->s.data);
+        core_free(old);
+    }
 }
 
 static const char *
@@ -1134,7 +1189,9 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
                     v->b   = true;
                 }
 
-                _core_dict_put(&r->flags, flag_key(flag->name), (void *)v);
+                if (flag->repeatable)
+                    append_repeat_value(r, flag->name, v);
+                store_flag_value(r, flag->name, v);
 
                 if (flag->short_name.data) {
                     parse_cmdr_val_t *alias_v = core_alloc(parse_cmdr_val_t);
@@ -1143,8 +1200,9 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
                         alias_v->s = core_string_from_raw(
                             alias_v->s.data, (int64_t)alias_v->s.u8_bytes);
                     }
-                    _core_dict_put(&r->flags, flag_key(flag->short_name),
-                                  (void *)alias_v);
+                    store_flag_value(r, flag->short_name, alias_v);
+                    if (flag->repeatable)
+                        append_repeat_value(r, flag->short_name, v);
                 }
 
                 goto next;
@@ -1338,6 +1396,7 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
 
     parse_cmdr_result_t *r = core_alloc(parse_cmdr_result_t);
     core_dict_init(&r->flags, flag_key_hash, flag_key_eq);
+    core_dict_init(&r->repeated_flags, flag_key_hash, flag_key_eq);
 
     if (!parse_ok) {
         r->ok       = false;
@@ -1428,6 +1487,34 @@ parse_cmdr_flag_str(parse_cmdr_result_t *r, core_string_t flag)
     return v->s;
 }
 
+int32_t
+parse_cmdr_flag_value_count(parse_cmdr_result_t *r, core_string_t flag)
+{
+    if (!r || !flag.data) return 0;
+    bool found = false;
+    core_list_t(parse_cmdr_val_t) *values =
+        _core_dict_get(&r->repeated_flags, &flag, &found);
+    if (found) return (int32_t)values->len;
+    return parse_cmdr_flag_get(r, flag) ? 1 : 0;
+}
+
+core_string_t
+parse_cmdr_flag_str_at(parse_cmdr_result_t *r, core_string_t flag,
+                       int32_t index)
+{
+    if (!r || !flag.data || index < 0) return (core_string_t){0};
+    bool found = false;
+    core_list_t(parse_cmdr_val_t) *values =
+        _core_dict_get(&r->repeated_flags, &flag, &found);
+    if (found) {
+        if ((size_t)index >= values->len
+            || values->data[index].tag != PARSE_CMDR_VAL_STR)
+            return (core_string_t){0};
+        return values->data[index].s;
+    }
+    return index == 0 ? parse_cmdr_flag_str(r, flag) : (core_string_t){0};
+}
+
 int64_t
 parse_cmdr_flag_int(parse_cmdr_result_t *r, core_string_t flag, int64_t dflt)
 {
@@ -1492,6 +1579,18 @@ parse_cmdr_result_free(parse_cmdr_result_t *r)
     }
 
     core_dict_free(&r->flags);
+
+    core_dict_foreach (&r->repeated_flags, e) {
+        core_free(((core_string_t *)e->key)->data);
+        core_free(e->key);
+        core_list_t(parse_cmdr_val_t) *values = e->value;
+        for (size_t i = 0; i < values->len; i++)
+            if (values->data[i].tag == PARSE_CMDR_VAL_STR)
+                core_free(values->data[i].s.data);
+        core_list_free(*values);
+        core_free(values);
+    }
+    core_dict_free(&r->repeated_flags);
 
     for (size_t i = 0; i < r->args.len; i++) {
         core_free(r->args.data[i].value.data);

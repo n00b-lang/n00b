@@ -31,3 +31,4 @@ IR_DIAG(UNUSED_LOCAL,      "IR-W0031", WARNING, "a local is assigned and never r
 IR_DIAG(UNUSED_SYMBOL,     "IR-W0032", WARNING, "a declared symbol is never used")
 IR_DIAG(SHADOWED_SYMBOL,   "IR-W0033", WARNING, "a declaration shadows an outer one")
 IR_DIAG(UNDEFINED_SYMBOL,  "IR-E0034", ERROR,   "a name is used but never declared")
+IR_DIAG(RANGE_UNSAT,       "IR-W0035", WARNING, "numeric range constraints are inconsistent")

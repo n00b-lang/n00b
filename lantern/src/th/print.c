@@ -559,6 +559,32 @@ static void emit_where(pctx *c, core_buffer_t *b, th_type *type)
     }
 }
 
+static void emit_binder_where(pctx *c, core_buffer_t *b, th_type *type)
+{
+    const th_type *scheme = th_resolve_c(type);
+    if (!scheme || scheme->kind != TH_BINDER || !scheme->binder.qvars) return;
+    const th_type *body = th_resolve_c(scheme->binder.body);
+    if (!body || body->kind != TH_FUNCTION) return;
+
+    bool started = false;
+    for (uint64_t i = 0; i < scheme->binder.arity; i++) {
+        const th_type *var = th_resolve_c(scheme->binder.qvars[i]);
+        if (!var || var->kind != TH_VAR || !var->var.cons.len) continue;
+        if (!started) {
+            core_buffer_puts(b, " where ");
+            started = true;
+        }
+        else core_buffer_puts(b, ", ");
+        core_buffer_putc(b, '`');
+        varname(b, 0, i);
+        core_buffer_puts(b, ": ");
+        for (size_t j = 0; j < var->var.cons.len; j++) {
+            if (j) core_buffer_puts(b, " + ");
+            emit_constraint(c, b, &var->var.cons.data[j]);
+        }
+    }
+}
+
 const char *th_print(th_ctx *ctx, th_type *type)
 {
     if (!ctx || !type) {
@@ -571,6 +597,7 @@ const char *th_print(th_ctx *ctx, th_type *type)
 
     emit(&c, &b, type);
     emit_where(&c, &b, type);
+    emit_binder_where(&c, &b, type);
 
     if (!b.data) {
         return th_strdup(ctx, "", 0);

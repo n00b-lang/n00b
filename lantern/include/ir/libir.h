@@ -13,6 +13,7 @@
 #include "ir/pdg.h"
 #include "ir/region_walk.h"
 #include "ir/analyze.h"
+#include "ir/range.h"
 #include "ir/typelang.h"
 #include "ir/grammar.h"
 #include "ir/tree_pass.h"

@@ -53,6 +53,17 @@ core_diagnostics_report(core_diagnostics_t *d,
                         core_diag_severity_t severity, core_string_t code,
                         core_string_t message)
 {
+    return core_diagnostics_report_at(d, unit, severity, code, message,
+                                     (core_diag_location_t){0});
+}
+
+bool
+core_diagnostics_report_at(core_diagnostics_t *d,
+                           const core_translation_unit_t *unit,
+                           core_diag_severity_t severity, core_string_t code,
+                           core_string_t message,
+                           core_diag_location_t location)
+{
     if (!d || !code.data || !message.data) return false;
     if (d->policy && !d->policy(d->policy_context, &severity, code))
         return true;
@@ -60,6 +71,7 @@ core_diagnostics_report(core_diagnostics_t *d,
         .severity = severity,
         .code = core_string_dup(code),
         .message = core_string_dup(message),
+        .location = location,
     };
     if (unit) {
         item.module = core_string_dup(unit->module.identifier);
@@ -148,7 +160,11 @@ core_diagnostics_render_text(const core_diagnostics_t *d)
         if (item->module.data)
             core_buffer_printf(out, "  --> module %.*s\n",
                 (int)item->module.u8_bytes, item->module.data);
-        if (item->path.data)
+        if (item->path.data && item->location.has_location)
+            core_buffer_printf(out, "  --> %.*s:%u:%u\n",
+                (int)item->path.u8_bytes, item->path.data,
+                item->location.line, item->location.column);
+        else if (item->path.data)
             core_buffer_printf(out, "  --> %.*s\n",
                 (int)item->path.u8_bytes, item->path.data);
     }

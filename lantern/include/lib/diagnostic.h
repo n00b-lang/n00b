@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "lib/string.h"
 
 typedef struct core_translation_unit_t core_translation_unit_t;
@@ -14,11 +17,20 @@ typedef enum {
 } core_diag_severity_t;
 
 typedef struct {
+    uint32_t line;
+    uint32_t column;
+    uint32_t end_line;
+    uint32_t end_column;
+    bool has_location;
+} core_diag_location_t;
+
+typedef struct {
     core_diag_severity_t severity;
     core_string_t code;
     core_string_t message;
     core_string_t module;
     core_string_t path;
+    core_diag_location_t location;
     void *user_data;
 } core_diagnostic_t;
 
@@ -34,6 +46,11 @@ bool core_diagnostics_report(core_diagnostics_t *diagnostics,
                              const core_translation_unit_t *unit,
                              core_diag_severity_t severity, core_string_t code,
                              core_string_t message);
+bool core_diagnostics_report_at(core_diagnostics_t *diagnostics,
+                                const core_translation_unit_t *unit,
+                                core_diag_severity_t severity,
+                                core_string_t code, core_string_t message,
+                                core_diag_location_t location);
 bool core_diagnostic_set_message(core_diagnostics_t *diagnostics,
                                  size_t index,
                                  core_string_t message);

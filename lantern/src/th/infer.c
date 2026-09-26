@@ -6,6 +6,23 @@
 #include "lib/list.h"
 #include "lib/option.h"
 
+typedef const char *iface_name_ptr;
+core_list_decl(iface_name_ptr);
+
+static bool nullary_name(const th_type *type, const char **name);
+
+static bool iface_name_seen(core_list_t(iface_name_ptr) *names,
+                            const char *name)
+{
+    for (size_t i = 0; i < names->len; i++) {
+        if (!strcmp(names->data[i], name)) {
+            return true;
+        }
+    }
+    core_list_push(*names, name);
+    return false;
+}
+
 static th_constraint *con_same_slot(th_type *var, th_constraint c)
 {
     for (size_t i = 0; i < var->var.cons.len; i++) {
@@ -161,6 +178,31 @@ bool th_promotes_to(th_ctx *ctx, const char *from, const char *to)
     return hit;
 }
 
+bool th_type_promotes_to(th_ctx *ctx, const th_type *from, const th_type *to)
+{
+    from = th_resolve_c(from);
+    to = th_resolve_c(to);
+    if (!ctx || !from || !to)
+        return false;
+    if (from == to)
+        return true;
+    if (from->kind == TH_BITINT && to->kind == TH_BITINT) {
+        if (from->bitint.width == to->bitint.width &&
+            from->bitint.is_signed == to->bitint.is_signed)
+            return true;
+        if (from->bitint.width >= to->bitint.width)
+            return false;
+        if (from->bitint.is_signed)
+            return to->bitint.is_signed;
+        return !to->bitint.is_signed ||
+               from->bitint.width < to->bitint.width;
+    }
+    const char *from_name = nullptr, *to_name = nullptr;
+    return nullary_name(from, &from_name) &&
+           nullary_name(to, &to_name) &&
+           th_promotes_to(ctx, from_name, to_name);
+}
+
 static bool uni_in_place(th_ctx *ctx, th_type *a, th_type *b);
 
 void th_register_iface(th_ctx *ctx, const char *name, th_type *methods)
@@ -281,9 +323,21 @@ bool th_implements(th_ctx *ctx, th_type *type, const char *iface)
         return false;
     }
 
+    th_type *resolved = th_resolve(type);
+    if (resolved && resolved->kind == TH_VAR) {
+        for (size_t c = 0; c < resolved->var.cons.len; c++) {
+            const th_constraint *constraint = &resolved->var.cons.data[c];
+            if (constraint->kind == TH_CON_IMPLEMENTS && constraint->iface &&
+                !strcmp(constraint->iface, iface)) {
+                return true;
+            }
+        }
+    }
+
     const th_iface *i = iface_named(ctx, iface);
 
-    return i && satisfies(ctx, type, i->methods);
+    return (i && satisfies(ctx, type, i->methods))
+        || th_env_implements(ctx, type, iface);
 }
 
 size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
@@ -294,11 +348,29 @@ size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
     }
 
     size_t n = 0;
+    core_list_t(iface_name_ptr) emitted = core_list_new(iface_name_ptr);
+    th_type *resolved = th_resolve(type);
+    if (resolved && resolved->kind == TH_VAR) {
+        for (size_t c = 0; c < resolved->var.cons.len; c++) {
+            const th_constraint *constraint = &resolved->var.cons.data[c];
+            if (constraint->kind != TH_CON_IMPLEMENTS || !constraint->iface ||
+                iface_name_seen(&emitted, constraint->iface)) {
+                continue;
+            }
+            if (out && n < max) {
+                out[n] = constraint->iface;
+            }
+            n++;
+        }
+    }
 
     for (size_t i = 0; i < ctx->ifaces.len; i++) {
         const th_iface *f = &ctx->ifaces.data[i];
 
         if (!satisfies(ctx, type, f->methods)) {
+            continue;
+        }
+        if (iface_name_seen(&emitted, f->name)) {
             continue;
         }
 
@@ -308,6 +380,31 @@ size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
         n++;
     }
 
+    if (ctx->environment) {
+        for (size_t i = 0; i < ctx->environment->traits.len; i++) {
+            const th_env_trait_t *trait = &ctx->environment->traits.data[i];
+            bool already_seen = false;
+            for (size_t j = 0; j < ctx->ifaces.len; j++)
+                if (!strcmp(ctx->ifaces.data[j].name, trait->name)) {
+                    already_seen = true;
+                    break;
+                }
+            for (size_t j = 0; !already_seen && j < i; j++)
+                if (!strcmp(ctx->environment->traits.data[j].name,
+                            trait->name)) {
+                    already_seen = true;
+                    break;
+                }
+            if (already_seen || !th_env_implements(ctx, type, trait->name))
+                continue;
+            if (iface_name_seen(&emitted, trait->name))
+                continue;
+            if (out && n < max) out[n] = trait->name;
+            n++;
+        }
+    }
+
+    core_list_free(emitted);
     return n;
 }
 
@@ -404,10 +501,7 @@ th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy)
     }
 
     if (policy.allow & TH_COERCE_PROMOTE) {
-        const char *a, *b;
-
-        if (nullary_name(from, &a) && nullary_name(policy.target, &b)
-            && th_promotes_to(ctx, a, b)) {
+        if (th_type_promotes_to(ctx, from, policy.target)) {
             record_coercion(ctx, TH_COERCE_PROMOTE, from, policy.target);
 
             return policy.target;
@@ -500,17 +594,7 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
         }
 
         case TH_CON_PROMOTES: {
-            const char *a, *b;
-
-            if (!nullary_name(bound_to, &a) || !nullary_name(c->target, &b)) {
-                th_err(ctx, TH_ERR_CONSTRAINT, "promotes", c->target,
-                       bound_to,
-                       "constraint promotes needs nullary named types");
-
-                return false;
-            }
-
-            if (!th_promotes_to(ctx, a, b)) {
+            if (!th_type_promotes_to(ctx, bound_to, c->target)) {
                 th_err(ctx, TH_ERR_CONSTRAINT, "promotes", c->target,
                        bound_to,
                        "constraint promotes has no promotion path");
@@ -1478,6 +1562,24 @@ th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)
     return r;
 }
 
+th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b)
+{
+    if (!ctx || !a || !b) return nullptr;
+
+    size_t before = th_error_count(ctx);
+    if (!uni_in_place(ctx, a, b)) {
+        if (th_error_count(ctx) == before) {
+            th_err(ctx, TH_ERR_UNIFY, nullptr, b, a,
+                   "types do not unify");
+        }
+        return nullptr;
+    }
+
+    th_type *r = th_apply_subst(ctx, a);
+    th_normalize(r);
+    return r;
+}
+
 typedef struct {
     core_dict_t memo;
     th_type **fresh;
@@ -1574,18 +1676,15 @@ static bool gen_subst(th_ctx *ctx, th_type *t, uint64_t depth, core_dict_t *memo
     return true;
 }
 
-th_type *th_generalize(th_ctx *ctx, th_type *t)
+static th_type *generalize_vars(th_ctx *ctx, th_type *t, th_type **vars,
+                                size_t nvars)
 {
-    th_gen s = {0};
-
-    s.nvars = th_free_vars(ctx, t, &s.vars);
-
-    if (!s.nvars) {
+    if (!nvars) {
         th_normalize(t);
-
         return t;
     }
 
+    th_gen s = {.vars = vars, .nvars = nvars};
     core_dict_init(&s.memo, nullptr, nullptr);
     core_dict_init(&s.index, nullptr, nullptr);
 
@@ -1599,10 +1698,45 @@ th_type *th_generalize(th_ctx *ctx, th_type *t)
     core_dict_free(&s.index);
 
     th_type *r = th_binder(ctx, s.nvars, body);
-
     r->binder.qvars = s.vars;
-
     th_normalize(r);
-
     return r;
+}
+
+th_type *th_generalize(th_ctx *ctx, th_type *t)
+{
+    th_type **vars = nullptr;
+    size_t nvars = th_free_vars(ctx, t, &vars);
+    return generalize_vars(ctx, t, vars, nvars);
+}
+
+th_type *th_generalize_excluding(th_ctx *ctx, th_type *t,
+                                 th_type *const *environment,
+                                 size_t environment_count)
+{
+    if (!environment || !environment_count)
+        return th_generalize(ctx, t);
+
+    core_dict_t fixed;
+    core_dict_init(&fixed, nullptr, nullptr);
+    for (size_t i = 0; i < environment_count; i++) {
+        th_type **vars = nullptr;
+        size_t nvars = th_free_vars(ctx, environment[i], &vars);
+        for (size_t j = 0; j < nvars; j++)
+            core_dict_put(&fixed, vars[j], 1);
+    }
+
+    th_type **candidates = nullptr;
+    size_t count = th_free_vars(ctx, t, &candidates);
+    th_type **generalizable = th_alloc(ctx,
+        (count ? count : 1) * sizeof(th_type *));
+    size_t n_generalizable = 0;
+    for (size_t i = 0; i < count; i++) {
+        bool is_fixed = false;
+        core_dict_get(&fixed, candidates[i], &is_fixed);
+        if (!is_fixed)
+            generalizable[n_generalizable++] = candidates[i];
+    }
+    core_dict_free(&fixed);
+    return generalize_vars(ctx, t, generalizable, n_generalizable);
 }

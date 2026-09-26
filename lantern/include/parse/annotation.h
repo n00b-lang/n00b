@@ -47,6 +47,7 @@
     X(MUTABILITY, "mutability") \
     X(NAMESPACE, "namespace") \
     X(DIRECTION, "direction") \
+    X(PASS_BY, "pass_by") \
     X(CONSTRAIN, "constrain") \
     X(SIZE, "size") \
     X(ALIGNMENT, "alignment") \
@@ -151,6 +152,7 @@ struct parse_annotation_t {
     core_string_t     mutability;
     core_string_t     ns_name;
     core_string_t     direction;
+    core_string_t     pass_by;
     core_list_t(parse_con_spec_t) constraints;
     core_list_t(parse_lex_opt_t)  lex_opts;
 

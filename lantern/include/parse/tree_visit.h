@@ -46,6 +46,12 @@ void parse_walk_on_leaf(parse_tree_walk_t *w, parse_visit_fn fn, void *thunk);
 
 void parse_tree_walk_run(parse_tree_walk_t *w, parse_tree_t *root);
 
+void parse_tree_walk_apply_node(parse_tree_walk_t *w, parse_tree_t *node,
+                                parse_tree_t *parent, int32_t depth,
+                                int32_t child_index,
+                                const parse_annot_kind_t *kinds,
+                                size_t kind_count, bool entering);
+
 typedef struct {
     uint32_t magic;
     void   **v;
