@@ -1,0 +1,612 @@
+@lexer("n00b.lex")
+
+<module> @scope("module") ::= <other-top-stmts>? <eos>*
+
+<eos> ::= %NEWLINE | %";"
+
+<block-start> ::= %"{" <eos>*
+                | %":" %NEWLINE %INDENT
+<block-end> ::= <eos>* %"}"
+              | %DEDENT
+
+<other-top-stmts> ::= <eos>* <top-level-stmt> (<eos>+ <top-level-stmt>)*
+
+<top-level-stmt> ::=  <enum-stmt>
+                   | <if-stmt>
+                   | <for-stmt>
+                   | <while-stmt>
+                   | <when-stmt>
+                   | <typecase-stmt>
+                   | <switch-stmt>
+                   | <try-stmt>
+                   | <func-def>
+                   | <context-def>
+                   | <with-stmt>
+                   | <comptime-stmt>
+                   | <variable-decl>
+                   | <labeled-for>
+                   | <labeled-while>
+                   | <labeled-typecase>
+                   | <labeled-switch>
+                   | <assert-stmt>
+                   | <import-stmt>
+                   | <assign-stmt>
+                   | <binop-assign-stmt>
+                   | <expression-stmt>
+                   | <alias-stmt>
+                   | <type-decl>
+                   | <variant-decl>
+                   | <trait-decl>
+
+<body> @scope("block") ::= <block-start> <body-stmts>? <block-end>
+<block> ::= <body>
+<body-stmts> @infer("$0") ::= <value-stmt>
+<body-stmts>              ::= <body-stmt-list>
+<body-stmts> @infer("$2") ::= <body-stmt-list> <eos>+ <value-stmt>
+<body-stmt-list>          ::= <body-stmt> (<eos>+ <body-stmt>)*
+<body-stmt>            ::=  <block>
+                         | <if-stmt>
+                         | <for-stmt>
+                         | <while-stmt>
+                         | <when-stmt>
+                         | <typecase-stmt>
+                         | <switch-stmt>
+                         | <try-stmt>
+                         | <with-stmt>
+                         | <continue-stmt>
+                         | <break-stmt>
+                         | <return-stmt>
+                         | <fail-stmt>
+                         | <variable-decl>
+                         | <labeled-for>
+                         | <labeled-while>
+                         | <labeled-typecase>
+                         | <labeled-switch>
+                         | <assert-stmt>
+                         | <assign-stmt>
+                         | <binop-assign-stmt>
+                         | <expression-stmt>
+
+<label> ::= %IDENTIFIER %":"
+
+<labeled-for> ::= <label> <for-stmt>
+<labeled-while> ::= <label> <while-stmt>
+<labeled-typecase> ::= <label> <typecase-stmt>
+<labeled-switch> ::= <label> <switch-stmt>
+
+<if-stmt> @scope("if") @branch($1, $2, $3) ::= %"if" <expression> <body> <elif-chain>
+
+<elif-chain> ::= <elif-clause>* <else-clause>?
+
+<elif-clause> @branch($1, $2) ::= %"elif" <expression> <body>
+<else-clause> ::= %"else" <body>
+
+<if-value-expr> @scope("if") @branch($1, $2, $3) @infer("$1 unify $2") ::=
+       %"if" <expression> <value-body> <value-elif-chain>
+
+<value-body> @scope("block") @infer("$1") ::= <block-start> <value-body-stmts> <block-end>
+
+<value-body-stmts> @infer("$0") ::= <value-stmt>
+<value-body-stmts> @infer("$2") ::= <body-stmt-list> <eos>+ <value-stmt>
+
+<value-elif-chain> @infer("$0") ::= <value-else-clause>
+<value-elif-chain> @infer("$0 unify $1") ::= <value-elif-clause> <value-elif-chain>
+
+<value-elif-clause> @branch($1, $2) @infer("$1") ::= %"elif" <expression> <value-body>
+<value-else-clause> @infer("$0") ::= %"else" <value-body>
+
+<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify element_of($3)") ::=
+       %"for" <for-var-list> %"in" <for-in-target-list> <body>
+
+<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify $3") ::=
+       %"for" <for-var-list> %"in" <range> <body>
+
+<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify $3") ::=
+       %"for" <for-var-list> %"from" <range> <body>
+
+<for-var-list> ::= %IDENTIFIER
+<for-var-list> @infer("$0 unify $2") ::= %IDENTIFIER %"," <for-var-list>
+
+<for-in-target-list> ::= <expression>
+
+<while-stmt> @scope("while") @loop($1, $2) ::= %"while" <expression> <body>
+
+<member-chain> ::= <member-chain> %"." %IDENTIFIER
+<member-chain> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
+
+<when-stmt> ::= %"when" <expression> <body> <else-when-clause>* <ctime-else>?
+<else-when-clause> ::= %"else" %"when" <expression> <body>
+<ctime-else> ::= %"else" <body>
+
+<typecase-stmt> @scope("typecase") @switch($2, $5) ::=
+       %"typecase" %"(" <expression> %")" <block-start> <typecase-cases> <block-end>
+
+<typecase-cases> ::= (<eos>* %"case" <typecase-case-block>)+ <eos>* <case-else>?
+
+<typecase-case-block> ::= <type-spec-list> <body>
+
+<type-spec-list> ::= <type-spec> (%"," <type-spec>)* %","?
+
+<try-stmt> @scope("try") ::= %"try" <try-body> <try-error-clause>
+<try-body> @scope("block") ::= <block-start> <try-body-stmts>? <block-end>
+<try-body-stmts> ::= <value-stmt>
+                    | <body-stmt-list>
+                    | <body-stmt-list> <eos>+ <value-stmt>
+<try-error-clause> @scope("try-error") @declares($2, "error") ::=
+       %"else" %IDENTIFIER <body>
+<try-error-clause> @scope("try-error") @declares($2, $4, "error") @infer("$2 unify $4") ::=
+       %"else" %IDENTIFIER %":" <type-spec> <body>
+
+<try-value-expr> @scope("try") @infer("$2 unify $3") ::=
+       %"try" <value-body> <try-value-error-clause>
+<try-value-error-clause> @scope("try-error") @declares($2, "error") ::=
+       %"else" %IDENTIFIER <value-body>
+<try-value-error-clause> @scope("try-error") @declares($2, $4, "error") @infer("$2 unify $4") ::=
+       %"else" %IDENTIFIER %":" <type-spec> <value-body>
+
+# Using the `type` keyword creates a 'brand new' type, meaning that
+# name equiv is required for there to be equal types.
+# The `alias` keyword here means that we have one type, with multiple names.
+
+<alias-stmt> @scope("type", $1) @declares($1) @type($1) ::= %"type" %IDENTIFIER %"=" <type-spec>
+               | %"alias" %IDENTIFIER %"=" <type-spec>
+
+<context-def> @scope("context", $1) @declares($1) ::=
+       %"context" %IDENTIFIER <param-decl> <context-spec> <context-body>
+
+<context-spec> ::= <provides-clause>? <error-type>?
+<provides-clause> ::= %"provides" %":" <type-spec>
+
+<context-body> ::= <block-start> <context-hooks>? <block-end>
+<context-hooks> ::= <context-hook> (<eos>+ <context-hook>)*
+
+<context-hook> ::= <context-enter>
+                 | <context-exit>
+                 | <context-error>
+                 | <context-ensure>
+
+<context-enter> @scope("context-hook") ::= %"enter" %"(" %")" <body>
+<context-exit> @scope("context-hook") ::= %"exit" <context-hook-params> <body>
+<context-error> @scope("context-hook") ::= %"error" <context-hook-params> <body>
+<context-ensure> @scope("context-hook") ::= %"ensure" <context-hook-params> <body>
+
+<context-hook-params> ::= %"(" <pos-param>? %")"
+
+<with-stmt> ::= %"with" <context-manager> (%"," <context-manager>)* %","? <body>
+<context-manager> @declares($0, $2) @assigns($0, $4) @infer("$0 unify $4") ::=
+       %IDENTIFIER %":" <type-spec> %"=" <context-call>
+<context-manager> @declares($0) @assigns($0, $2) @infer("$0 unify $2") ::=
+       %IDENTIFIER %"=" <context-call>
+<context-manager> ::= <context-call>
+<context-call> @infer("return_of($0)") @call($0, $2) ::=
+       <member-chain> %"(" <call-args> %")"
+<context-call> @infer("return_of($0)") @call($0) ::=
+       <member-chain> %"(" %")"
+
+<switch-stmt> @scope("switch") @switch($1, $3) @infer("$1 unify $3") ::=
+       %"switch" <expression> <block-start> <switch-cases> <block-end>
+
+<switch-cases> ::= <branch-list> <eos>* <case-else>?
+
+<branch-list> @infer("$2") ::= <eos>* %"case" <switch-case-block>
+<branch-list> @infer("$2 unify $3") ::= <eos>* %"case" <switch-case-block> <branch-list>
+
+<switch-case-block> ::= <case-expr-list> <body>
+
+<case-expr-list> @infer("$0") ::= <case-expr-item>
+
+<case-expr-list> @infer("$0 unify $2") ::=
+           <case-expr-item> %"," <case-expr-list>
+<case-expr-list> @infer("$0") ::= <case-expr-item> %","
+
+<case-expr-item> @infer("$0 unify $2") ::= <expression> <range-sep> <expression>
+<case-expr-item> @infer("$0")             ::= <expression>
+
+<case-else> ::= %"else" <body>
+
+<switch-value-expr> @scope("switch") @switch($1, $3) @infer("$2") ::=
+       %"switch" <expression> <block-start> <switch-value-cases> <block-end>
+
+<switch-value-cases> @infer("$0 unify $1") ::= <switch-value-branch-list> <switch-value-else>
+
+<switch-value-branch-list> @infer("$0") ::= <switch-value-case-prefix>
+<switch-value-branch-list> @infer("$0 unify $1") ::=
+       <switch-value-case-prefix> <switch-value-branch-list>
+
+<switch-value-case-prefix> @infer("$0") ::= <eos>* %"case" <switch-value-case-block>
+
+<switch-value-case-block> @infer("$1") ::= <case-expr-list> <value-body>
+
+<switch-value-else> @infer("$0") ::= <eos>* %"else" <value-body>
+
+<range> @infer("$0") ::= <range-parts>
+<range-parts> @infer("$0 unify $2") ::= <expression> <range-sep> <expression>
+
+<range-sep> ::= %"to" | %"until"
+
+<break-stmt> @jump("break") ::= %"break" %IDENTIFIER?
+<continue-stmt> @jump("continue") ::= %"continue" %IDENTIFIER?
+<return-stmt> @jump("return") @infer("$1") ::= %"return" <expression>
+<return-stmt> @jump("return") ::= %"return"
+<fail-stmt> @jump("fail") @infer("$1") ::= %"fail" <expression>
+<value-stmt> @infer("$0") ::= %"value" <expression>
+
+<assert-stmt> ::= (%"assert"|%"require") <expression>
+
+<import-stmt> @declares($1, "module") ::= %"import" <member-chain> (%"from" %STRING_LIT)?
+
+<variable-decl> ::= <declaration-prefix> <sym-decl-list>
+
+<declaration-prefix> ::= <storage-class>? <binding-kind>
+<storage-class> ::= %"thread"
+<binding-kind> ::= %"var" | %"let" | %"const"
+
+<sym-decl-list> ::= <sym-decl> %"," <sym-decl-list>
+                  | <sym-decl>
+
+<sym-decl> @declares($0, $2) @assigns($0, $4)  @infer("$0 unify $4") ::=
+         %IDENTIFIER %":" <type-spec> <assign-op> <expression>
+<sym-decl> @declares($0, $2) @infer("$0 unify $2") ::= %IDENTIFIER %":" <type-spec>
+<sym-decl> @declares($0) @assigns($0, $2) @infer("$0 unify $2") ::= %IDENTIFIER <assign-op> <expression>
+<sym-decl> @declares($0) ::= %IDENTIFIER
+
+<assign-op> ::= %"="
+
+<comptime-stmt> ::= %"comptime" <body>
+
+<func-def> @scope("function", $1) @declares($1, "function") ::=
+    <func-prelude> %IDENTIFIER <func-type-signature> <body>
+
+<member-visibility> @visibility("public") ::= %"public"
+<member-visibility> @visibility("private") ::= %"private"
+<member-visibility> @visibility("package") ::= %"package"
+<member-visibility> @visibility("opaque") ::= %"opaque"
+
+<func-visibility> @visibility("public") ::= %"public"
+<func-visibility> @visibility("private") ::= %"private"
+<func-visibility> @visibility("package") ::= %"package"
+
+<func-prelude> @visibility("protected") ::= %"func"
+<func-prelude> ::= <func-visibility> %"func"
+<func-type-signature> ::= <param-decl> <function-result>? <where-clause>?
+
+<param-decl> ::= %"(" <formals>? %")"
+
+<formals> ::= <required-params> (%"," <default-params>)? (%"," <vargs-param>)? %","?
+            | <default-params> (%"," <vargs-param>)? %","?
+            | <vargs-param> %","?
+
+<required-params> ::= <pos-param> (%"," <pos-param>)*
+<default-params> ::= <default-param> (%"," <default-param>)*
+
+<pos-param> @declares($0, "param") @direction($0, "in") @pass_by("in") ::=
+    %IDENTIFIER
+<pos-param> @declares($0, $2, "param") @direction($0, "in") @pass_by("in") ::=
+    %IDENTIFIER %":" <type-spec>
+<pos-param> @declares($1, "param") @direction($1, "out") @pass_by("out") ::=
+    %"out" %IDENTIFIER
+<pos-param> @declares($1, $3, "param") @direction($1, "out") @pass_by("out") ::=
+    %"out" %IDENTIFIER %":" <type-spec>
+<pos-param> @declares($1, "param") @direction($1, "modify") @pass_by("inout") ::=
+    %"modify" %IDENTIFIER
+<pos-param> @declares($1, $3, "param") @direction($1, "modify") @pass_by("inout") ::=
+    %"modify" %IDENTIFIER %":" <type-spec>
+
+<default-param> @declares($0, "param") @direction($0, "in") @pass_by("in") @infer("$0 unify $2") ::=
+                %IDENTIFIER %"=" <expression>
+<default-param> @declares($0, $2, "param") @direction($0, "in") @pass_by("in") @infer("$0 unify $4") ::=
+                %IDENTIFIER %":" <type-spec> %"=" <expression>
+
+<vargs-param> @declares($1, $3, "param") @direction($1, "in") @pass_by("in") ::=
+    %"*" %IDENTIFIER %":" <type-spec>
+<vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
+    %"*" %IDENTIFIER
+
+<function-result> ::= <return-type>? <error-type>?
+
+<return-type> ::= <return-sigil> <union-tspec>
+
+<return-sigil> ::= %"->"
+                 | %"return" %":"
+
+<error-type> ::= %"fail" %":" <one-tspec>
+
+<enum-stmt> @scope("enum", $1) @type($1) @declares($1) @exposes ::= <enum-prefix> %IDENTIFIER <block-start> <enum-items> <block-end>
+
+<enum-prefix> ::= <member-visibility>? %"enum"
+
+<enum-items> ::= <enum-item> (<eos>* %"," <eos>* <enum-item>)* (<eos>* %",")?
+
+<enum-item> @declares($0) ::= %IDENTIFIER <enum-value>
+<enum-item> @declares($0) ::= %IDENTIFIER
+
+<enum-value> ::= %":" <simple-lit>
+               | %"=" <simple-lit>
+
+<assign-stmt> @assigns($0, $2) ::= <expression> <assign-op> <expression>
+
+<binop-assign-stmt> @assigns($0, $2) ::= <expression> <binop-assign-op> <expression>
+
+<binop-assign-op> ::= %"+=" | %"-=" | %"*=" | %"/=" | %"%="
+                    | %"&=" | %"|=" | %"^="
+                    | %"<<=" | %">>="
+
+<expression-stmt> ::= <expression>
+
+<expression> ::= <or-expr>
+
+<or-expr> @infer("bool") ::= <or-expr> %"or" <and-expr>
+<or-expr>                ::= <and-expr>
+
+<and-expr> @infer("bool") ::= <and-expr> %"and" <equality-expr>
+<and-expr>                ::= <equality-expr>
+
+<equality-expr> @infer("bool") ::= <compare-expr> <equality-op> <compare-expr>
+<equality-expr>                ::= <compare-expr>
+<equality-op> ::= %"==" | %"!="
+
+<compare-expr> @infer("compare($0, $2)") ::= <bitor-expr> <compare-op> <bitor-expr>
+<compare-expr>                ::= <bitor-expr>
+<compare-op> ::= %"<" | %"<=" | %">" | %">="
+
+<bitor-expr> @infer("$0 unify $2") ::= <bitor-expr> %"|" <bitxor-expr>
+<bitor-expr>                       ::= <bitxor-expr>
+
+<bitxor-expr> @infer("$0 unify $2") ::= <bitxor-expr> %"^" <bitand-expr>
+<bitxor-expr>                       ::= <bitand-expr>
+
+<bitand-expr> @infer("$0 unify $2") ::= <bitand-expr> %"&" <shift-expr>
+<bitand-expr>                       ::= <shift-expr>
+
+<shift-expr> @infer("$0") ::= <shift-expr> <shift-op> <add-expr>
+<shift-expr>              ::= <add-expr>
+<shift-op> ::= %"<<" | %">>"
+
+<add-expr> @infer("$0 unify $2") ::= <add-expr> <add-op> <mul-expr>
+<add-expr>                       ::= <mul-expr>
+<add-op> ::= %"+" | %"-"
+
+<mul-expr> @infer("$0 unify $2") ::= <mul-expr> <mul-op> <unary-expr>
+<mul-expr>                       ::= <unary-expr>
+<mul-op> ::= %"*" | %"/" | %"%"
+
+<unary-expr> @infer("bool")     ::= %"!" <unary-expr>
+<unary-expr> @infer("$0")       ::= %"-" <unary-expr>
+<unary-expr> @infer("$0")       ::= %"+" <unary-expr>
+<unary-expr> @infer("ref[$0]")  ::= %"ref" <unary-expr>
+<unary-expr> @operator("cast") @infer("$0") ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
+<unary-expr>                    ::= <postfix-expr>
+
+<postfix-expr> @infer("method_return($0)") ::= <postfix-expr> %"." %IDENTIFIER
+<postfix-expr> @infer("element_of($0)") ::= <postfix-expr> %"[" <index-contents> %"]"
+<postfix-expr> @infer("slice_of($0)") ::= <postfix-expr> %"[" <slice-contents> %"]"
+<postfix-expr> @operator("unwrap_result") @infer("unwrap_result($0)") ::= <postfix-expr> %"!"
+<postfix-expr> @infer("return_of($0)") @call($0, $2) ::= <postfix-expr> %"(" <call-args> %")"
+<postfix-expr> @infer("return_of($0)") @call($0)     ::= <postfix-expr> %"(" %")"
+<postfix-expr>                          ::= <primary>
+
+<index-contents> ::= <expression>
+
+<slice-contents> ::= <expression> %":" <expression>
+                   | <expression> %":"
+                   | %":" <expression>
+                   | %":"
+
+<call-args> ::= <positional-args> (%"," <keyword-args>)? %","?
+              | <keyword-args> %","?
+
+<positional-args> ::= <expression> (%"," <expression>)*
+<keyword-args> ::= <call-kw-arg> (%"," <call-kw-arg>)*
+
+<call-kw-arg> ::= %IDENTIFIER %"=" <expression>
+
+<primary> ::= <simple-lit>
+            | <tagged-lit>
+            | <embed-lit>
+            | <list-lit>
+            | <dict-or-set-lit>
+            | <block-value-expr>
+            | <if-value-expr>
+            | <switch-value-expr>
+            | <try-value-expr>
+            | <comptime-value-expr>
+            | <typeof-expr>
+            | <tuple-or-paren>
+
+<primary> ::= <literal-expr> %":" <type-spec>
+
+<literal-expr> ::= <simple-lit>
+                 | <tagged-lit>
+                 | <embed-lit>
+                 | <list-lit>
+                 | <dict-or-set-lit>
+                 | <tuple-or-paren>
+
+<primary> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
+
+<typeof-expr> @infer("typespec") ::= %"typeof" %"(" <expression> %")"
+
+<block-value-expr> @scope("block") @infer("$1") ::= <block-start> <value-body-stmts> <block-end>
+
+<comptime-value-expr> @scope("comptime") @infer("$2") ::=
+       %"comptime" (<expression> | <value-body>)
+
+# Literal modifiers are uniformly adjacent identifier-plus-literal syntax. A
+# modifier names a compile-time handler; it is not a runtime call or a value
+# binding. The ordinary identifier and literal tokens are paired by this
+# production, and @nospace requires them to be adjacent.
+# Resolution uses compile-time literal-handler and type metadata.
+# The prefix must be adjacent to its payload. Examples:
+#
+#     set{1, 2, 3}
+#     regex"[a-z]+"
+#     ffi[- int puts(const char *); -]
+#     image[- ... -]
+#
+# A parameterized prefix may carry type information, as in set[int]{}. Integer
+# and floating-point literals do not permit modifiers; the other permitted
+# literal shapes are selected by their registered handler.
+# There is no postfix literal-modifier syntax.
+#
+# The handler runs after lexical decoding and before type checking completes.
+# It receives the prefix arguments, decoded payload, raw host-source span, and the
+# payload form. It returns a typed compile-time value or syntax object. Failure
+# is a compile-time diagnostic anchored in the literal; there is no runtime
+# fallback. Cached results must include the handler and all declared external
+# inputs in their cache key.
+<tagged-lit> @notrivia($1) @nospace($1) @adjacent("prefix") ::=
+       <literal-prefix> (%"[" <tspec-list> %"]")? <literal-payload>
+
+<literal-prefix> ::= %IDENTIFIER
+
+<literal-payload> ::= <modified-simple-lit>
+                    | <embed-lit>
+                    | <list-lit>
+                    | <dict-or-set-lit>
+
+<modified-simple-lit> ::= %STRING_LIT
+
+# EMBED is a free-form fence literal. The lexer expresses the proposed syntax
+# with fill("-") and pad("required"): [- ws... ws -]. The opening and closing
+# dash delimiters balance, but their whitespace may differ. The literal prefix
+# selects the handler and the fence only delimits the payload. Boundary
+# whitespace is excluded from the payload, preserving the existing automatic
+# trimming behavior. pad("optional") is available for fence forms that permit
+# an unpadded boundary. Encoding should be handled by a literal modifier rather
+# than by a special parameter embedded in the fence delimiter.
+#
+<embed-lit> ::= %EMBED
+
+<simple-lit> @literal("int")    ::= %INT_LIT
+<simple-lit> @literal("int")    ::= %HEX_LIT
+<simple-lit> @literal("f64")    ::= %FLOAT_LIT
+<simple-lit> @literal("string") ::= %STRING_LIT
+<simple-lit> @literal("char")   ::= %CHAR_LIT
+<simple-lit>                    ::= <bool-lit>
+
+<bool-lit> @literal("bool") ::= %"true"
+<bool-lit> @literal("bool") ::= %"false"
+
+<literal> ::= <simple-lit>
+            | <tagged-lit>
+            | <embed-lit>
+            | <type-spec>
+            | <list-lit>
+            | <dict-or-set-lit>
+            | <tuple-or-paren>
+
+<list-lit> @infer("$0")        ::= %"[" <list-elems> %"]"
+<list-lit> @infer("`t") @constrain($0, Bracket_Literal) ::= %"[" %"]"
+
+<list-elems> @infer("list[$0] unify $1") ::= <expression> %"," <list-elems>
+<list-elems> @infer("list[$0]")          ::= <expression>
+<list-elems> @infer("list[$0]")          ::= <expression> %","
+
+# Empty braces introduce a type variable with an implicit literal-shape trait.
+# Context and literal modifiers solve that shape; they are not an untyped
+# dictionary/set choice made by the parser.
+<dict-or-set-lit> @infer("$0") ::= %"{" <dict-entries> %"}"
+<dict-or-set-lit> @infer("$0") ::= %"{" <set-entries> %"}"
+<dict-or-set-lit> @infer("`t") @constrain($0, Brace_Literal) ::= %"{" %"}"
+
+<dict-entries> @infer("$0 unify $1") ::= <dict-entry> %"," <dict-entries>
+<dict-entries>                       ::= <dict-entry>
+<dict-entries>                       ::= <dict-entry> %","
+
+<dict-entry> @infer("dict[$0, $1]") ::= <expression> %":" <expression>
+
+<set-entries> @infer("set[$0] unify $1") ::= <expression> %"," <set-entries>
+<set-entries> @infer("set[$0]")          ::= <expression>
+<set-entries> @infer("set[$0]")          ::= <expression> %","
+
+<tuple-or-paren> @infer("`t") ::= %"(" <expression> %"," <expr-comma-list> %")"
+<tuple-or-paren>              ::= %"(" <expression> %")"
+<tuple-or-paren> @record($1)  ::= %"(" <named-field-list> %")"
+
+<named-field-list> ::= <named-field> %"," <named-field-list>
+                     | <named-field>
+                     | <named-field> %","
+
+<named-field> ::= %IDENTIFIER (%":" <type-spec>)? <assign-op> <expression>
+
+<expr-comma-list> ::= <expression> %"," <expr-comma-list>
+                    | <expression>
+
+<type-spec> ::= <one-tspec> <where-clause>?
+
+<union-tspec> ::= <one-tspec> (%"|" <one-tspec>)+
+                | <one-tspec>
+
+<one-tspec> @infer("option[$0]") ::= <base-tspec> %"?"
+<one-tspec> ::= <base-tspec>
+
+<base-tspec> ::= <tspec-tvar>
+               | %"nil"
+               | <sized-int-tspec>
+               | <member-chain> (%"[" <tspec-list> %"]")?
+               | <tspec-func>
+               | %"(" <union-tspec> %")"
+
+<tspec-tvar> ::= %"`" %IDENTIFIER
+
+<sized-int-tspec> @adjacent("prefix") ::= %i %":" <integer-size>
+                                          | %u %":" <integer-size>
+                                          | %bits %":" <integer-size>
+<integer-size> ::= %INT_LIT | %HEX_LIT
+
+<tspec-list> ::= <union-tspec> %"," <tspec-list>
+              | <union-tspec>
+              | <union-tspec> %","
+
+<tspec-func> ::= %"(" <tspec-func-params> %")" <function-result>
+               | %"(" %")" <function-result>
+
+<tspec-func-params> ::= <union-tspec> (%"," <tspec-func-params>)* (%"," <tspec-vargs>)? (%"," <tspec-kargs>)?
+                       | <tspec-vargs> (%"," <tspec-kargs>)?
+                       | <tspec-kargs>
+
+<tspec-field> ::= %IDENTIFIER %":" <union-tspec>
+
+<tspec-vargs> ::= %"*" <union-tspec>
+<tspec-kargs> ::= %"**" <tspec-field> (%"," <tspec-field>)*
+
+<where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)*
+
+<type-constraint> ::= %"`" %IDENTIFIER %":" <constraint-list>
+
+<constraint-list> ::= <one-constraint> (%"+" <one-constraint>)*
+
+<one-constraint> ::= %"!=" <one-tspec>
+                   | <trait-name>
+
+<trait-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
+
+<type-decl> @scope("type", $2) @declares($2) @type($2) @exposes ::=
+       <member-visibility>? %"type" %IDENTIFIER <type-body>
+
+<type-body> ::= <block-start> <type-decl-spec-list> <block-end>
+<type-decl-spec-list> ::= (<type-decl-one> (<eos>+ <type-decl-one>)*)?
+
+<type-decl-one> @declares($1, $3) ::= <member-visibility>? %IDENTIFIER %":" <type-spec>
+<type-decl-one> @declares($1) ::= <member-visibility>? %IDENTIFIER
+
+<variant-decl> @scope("variant", $2) @declares($2) @type($2) @exposes ::=
+       <member-visibility>? %"variant" %IDENTIFIER <variant-body>
+
+<variant-body> ::= <block-start> <variant-decl-spec-list> <block-end>
+<variant-decl-spec-list> ::= (<variant-decl-one> (<eos>+ <variant-decl-one>)*)?
+<variant-decl-one> @declares($1, $3) ::= <member-visibility>? %IDENTIFIER %":" <type-spec>
+
+<trait-decl> @scope("trait", $2) @declares($2) @type($2) @exposes ::= <member-visibility>? %"trait" %IDENTIFIER <where-clause>? <trait-body>
+
+<trait-body> ::= <block-start> <trait-spec-list> <block-end>
+<trait-spec-list> ::= (<trait-spec> (<eos>+ <trait-spec>)*)?
+
+<trait-spec> @declares($1, $2, "function") @scope("trait") ::=
+       <func-prelude> %IDENTIFIER <trait-func-type-signature>
+
+<trait-func-type-signature> ::= <trait-param-decl> <function-result>
+<trait-param-decl> ::= %"(" <trait-obj-tref> (%"," <formals>)? %")"
+
+<trait-obj-tref> @declares($1, $3, "param") ::= <param-mode> %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($0, $2, "param") ::= %IDENTIFIER %":" <tspec-tvar>
