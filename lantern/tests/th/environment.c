@@ -560,6 +560,42 @@ int main(void) {
   check("deferred method resolution rejects a missing implementation",
         !th_unify_in_place(inside, missing_receiver,
                            th_name(inside, "string")));
+  th_ctx *late_environment_context = th_ctx_new();
+  th_type *late_receiver = th_var(late_environment_context);
+  th_type *late_result = th_var(late_environment_context);
+  th_var_constrain(late_environment_context, late_receiver,
+                   (th_constraint){.kind = TH_CON_METHOD,
+                                   .method = {.name = "get",
+                                              .result = late_result}});
+  th_arg late_box_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(late_environment_context, "int"),
+  };
+  th_type *late_box = th_apply(late_environment_context, "Box",
+                               &late_box_arg, 1);
+  bool bound_before_environment = th_unify_in_place(
+      late_environment_context, late_receiver, late_box) != nullptr;
+  check("environment attachment validates previously bound method obligations",
+        bound_before_environment &&
+            th_ctx_set_environment(late_environment_context, env, "consumer",
+                                   "base") &&
+            th_unify(late_environment_context, late_result,
+                     th_name(late_environment_context, "int")));
+  th_ctx *late_invalid_context = th_ctx_new();
+  th_type *late_invalid_receiver = th_var(late_invalid_context);
+  th_var_constrain(late_invalid_context, late_invalid_receiver,
+                   (th_constraint){.kind = TH_CON_METHOD,
+                                   .method = {.name = "get",
+                                              .result = th_var(late_invalid_context)}});
+  bool invalid_bound_early = th_unify_in_place(
+      late_invalid_context, late_invalid_receiver,
+      th_name(late_invalid_context, "string")) != nullptr;
+  check("late environment attachment reports a missing method implementation",
+        invalid_bound_early &&
+            !th_ctx_set_environment(late_invalid_context, env, "consumer",
+                                    "base"));
+  th_ctx_free(late_invalid_context);
+  th_ctx_free(late_environment_context);
   check("integer receiver promotes to a matching trait method",
         th_env_method_lookup(inside, th_bitint(inside, 8, true),
                              "IntegerText", "show", &selected) &&

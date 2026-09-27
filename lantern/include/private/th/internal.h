@@ -147,6 +147,8 @@ struct th_type {
 
 core_list_decl(th_error_t);
 core_list_decl(th_coercion_t);
+typedef th_type *th_type_ptr_t;
+core_list_decl(th_type_ptr_t);
 
 struct th_ctx {
   core_arena_t arena;
@@ -162,6 +164,7 @@ struct th_ctx {
   core_dict_t *iface_index;
   core_list_t(th_error_t) errors;
   core_list_t(th_coercion_t) coercions;
+  core_list_t(th_type_ptr_t) pending_method_constraints;
   th_coerce_fn custom;
   void *custom_user;
   th_span_t span;

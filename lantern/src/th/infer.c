@@ -11,6 +11,14 @@ core_list_decl(iface_name_ptr);
 
 static bool nullary_name(const th_type *type, const char **name);
 
+static void defer_method_constraints(th_ctx *ctx, th_type *variable)
+{
+    if (!ctx || !variable) return;
+    for (size_t i = 0; i < ctx->pending_method_constraints.len; i++)
+        if (ctx->pending_method_constraints.data[i] == variable) return;
+    core_list_push(ctx->pending_method_constraints, variable);
+}
+
 static bool iface_name_seen(core_list_t(iface_name_ptr) *names,
                             const char *name)
 {
@@ -711,6 +719,10 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
             break;
 
         case TH_CON_METHOD: {
+            if (!ctx->environment) {
+                defer_method_constraints(ctx, (th_type *)var);
+                break;
+            }
             th_env_method_t method = {0};
             th_env_method_status_t status = th_env_method_resolve_by_name(
                 ctx, bound_to, c->method.name, &method, nullptr);
@@ -734,6 +746,23 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
         }
     }
 
+    return true;
+}
+
+bool th_ctx_validate_constraints(th_ctx *ctx)
+{
+    if (!ctx || !ctx->environment) return false;
+    size_t pending = 0;
+    for (size_t i = 0; i < ctx->pending_method_constraints.len; i++) {
+        th_type *variable = ctx->pending_method_constraints.data[i];
+        th_type *bound_to = th_resolve(variable);
+        if (!bound_to || bound_to->kind == TH_VAR) {
+            ctx->pending_method_constraints.data[pending++] = variable;
+            continue;
+        }
+        if (!con_check(ctx, variable, bound_to)) return false;
+    }
+    ctx->pending_method_constraints.len = pending;
     return true;
 }
 

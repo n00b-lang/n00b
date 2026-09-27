@@ -63,6 +63,7 @@ void th_ctx_free(th_ctx *ctx)
     core_list_free(ctx->methods);
     core_list_free(ctx->errors);
     core_list_free(ctx->coercions);
+    core_list_free(ctx->pending_method_constraints);
     core_arena_free(&ctx->arena);
     core_buffer_release(&ctx->scratch);
     core_free(ctx);

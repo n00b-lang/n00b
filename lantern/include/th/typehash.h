@@ -253,6 +253,9 @@ const char *th_var_name(const th_type *type);
 bool   th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c);
 size_t th_var_constraint_count(const th_type *var);
 bool   th_var_constraint_at(const th_type *var, size_t i, th_constraint *out);
+/* Recheck method obligations deferred until an environment is attached.
+ * th_ctx_set_environment() calls this automatically. */
+bool   th_ctx_validate_constraints(th_ctx *ctx);
 
 void th_register_promotion(th_ctx *ctx, const char *from, const char *to);
 bool th_promotes_to(th_ctx *ctx, const char *from, const char *to);

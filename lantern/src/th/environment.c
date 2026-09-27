@@ -663,7 +663,7 @@ bool th_ctx_set_environment(th_ctx *ctx, const th_env *env, const char *module,
   ctx->environment = env;
   ctx->module = th_strdup(ctx, module, strlen(module));
   ctx->package = th_strdup(ctx, package, strlen(package));
-  return true;
+  return th_ctx_validate_constraints(ctx);
 }
 
 static bool visible_to(const th_ctx *ctx, th_env_visibility_t visibility,

@@ -345,6 +345,23 @@ project(ictx *c, parse_infer_proj_t op, int32_t ix)
                     }
                     core_free(requirements);
                 }
+            } else {
+                th_type *result = fresh(c);
+                th_type *receiver = th_resolve(t);
+                bool receiver_is_fresh = th_kind_of(receiver) == TH_VAR;
+                if (!receiver_is_fresh) receiver = fresh(c);
+                bool constrained = th_var_constrain(
+                    c->tc, receiver,
+                    (th_constraint){.kind = TH_CON_METHOD,
+                                    .method = {.name = method_name,
+                                               .result = result}});
+                if (constrained && !receiver_is_fresh)
+                    constrained = th_unify_in_place(c->tc, receiver, t) != nullptr;
+                if (constrained)
+                    signature = th_func(c->tc, result, nullptr, 0,
+                                        nullptr, nullptr, 0);
+                else
+                    c->failed = true;
             }
         }
 
