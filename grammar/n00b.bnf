@@ -226,8 +226,8 @@
 
 <break-stmt> @jump("break") ::= %"break" %IDENTIFIER?
 <continue-stmt> @jump("continue") ::= %"continue" %IDENTIFIER?
-<return-stmt> @jump("return") @infer("$1") ::= %"return" <expression>
-<return-stmt> @jump("return") ::= %"return"
+<return-stmt> @jump("return") @emit("return", $1) @infer("$1") ::= %"return" <expression>
+<return-stmt> @jump("return") @emit("return") ::= %"return"
 <fail-stmt> @jump("fail") @infer("$1") ::= %"fail" <expression>
 <value-stmt> @infer("$0") ::= %"value" <expression>
 
@@ -333,41 +333,41 @@
 
 <expression-stmt> ::= <expression>
 
-<expression> ::= <or-expr>
+<expression> @emit("identity", $0) ::= <or-expr>
 
 <or-expr> @infer("bool") ::= <or-expr> %"or" <and-expr>
-<or-expr>                ::= <and-expr>
+<or-expr> @emit("identity", $0) ::= <and-expr>
 
 <and-expr> @infer("bool") ::= <and-expr> %"and" <equality-expr>
-<and-expr>                ::= <equality-expr>
+<and-expr> @emit("identity", $0) ::= <equality-expr>
 
 <equality-expr> @infer("bool") ::= <compare-expr> <equality-op> <compare-expr>
-<equality-expr>                ::= <compare-expr>
+<equality-expr> @emit("identity", $0) ::= <compare-expr>
 <equality-op> ::= %"==" | %"!="
 
 <compare-expr> @infer("compare($0, $2)") ::= <bitor-expr> <compare-op> <bitor-expr>
-<compare-expr>                ::= <bitor-expr>
+<compare-expr> @emit("identity", $0) ::= <bitor-expr>
 <compare-op> ::= %"<" | %"<=" | %">" | %">="
 
 <bitor-expr> @infer("$0 unify $2") ::= <bitor-expr> %"|" <bitxor-expr>
-<bitor-expr>                       ::= <bitxor-expr>
+<bitor-expr> @emit("identity", $0) ::= <bitxor-expr>
 
 <bitxor-expr> @infer("$0 unify $2") ::= <bitxor-expr> %"^" <bitand-expr>
-<bitxor-expr>                       ::= <bitand-expr>
+<bitxor-expr> @emit("identity", $0) ::= <bitand-expr>
 
 <bitand-expr> @infer("$0 unify $2") ::= <bitand-expr> %"&" <shift-expr>
-<bitand-expr>                       ::= <shift-expr>
+<bitand-expr> @emit("identity", $0) ::= <shift-expr>
 
 <shift-expr> @infer("$0") ::= <shift-expr> <shift-op> <add-expr>
-<shift-expr>              ::= <add-expr>
+<shift-expr> @emit("identity", $0) ::= <add-expr>
 <shift-op> ::= %"<<" | %">>"
 
-<add-expr> @infer("$0 unify $2") ::= <add-expr> <add-op> <mul-expr>
-<add-expr>                       ::= <mul-expr>
+<add-expr> @emit("binary", $0, $2) @infer("$0 unify $2") ::= <add-expr> <add-op> <mul-expr>
+<add-expr> @emit("identity", $0) ::= <mul-expr>
 <add-op> ::= %"+" | %"-"
 
-<mul-expr> @infer("$0 unify $2") ::= <mul-expr> <mul-op> <unary-expr>
-<mul-expr>                       ::= <unary-expr>
+<mul-expr> @emit("binary", $0, $2) @infer("$0 unify $2") ::= <mul-expr> <mul-op> <unary-expr>
+<mul-expr> @emit("identity", $0) ::= <unary-expr>
 <mul-op> ::= %"*" | %"/" | %"%"
 
 <unary-expr> @infer("bool")     ::= %"!" <unary-expr>
@@ -375,7 +375,7 @@
 <unary-expr> @infer("$0")       ::= %"+" <unary-expr>
 <unary-expr> @infer("ref[$0]")  ::= %"ref" <unary-expr>
 <unary-expr> @operator("cast") @infer("$0") ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
-<unary-expr>                    ::= <postfix-expr>
+<unary-expr> @emit("identity", $0) ::= <postfix-expr>
 
 <postfix-expr> @infer("method_return($0)") ::= <postfix-expr> %"." %IDENTIFIER
 <postfix-expr> @infer("element_of($0)") ::= <postfix-expr> %"[" <index-contents> %"]"
@@ -383,7 +383,7 @@
 <postfix-expr> @operator("unwrap_result") @infer("unwrap_result($0)") ::= <postfix-expr> %"!"
 <postfix-expr> @infer("return_of($0)") @call($0, $2) ::= <postfix-expr> %"(" <call-args> %")"
 <postfix-expr> @infer("return_of($0)") @call($0)     ::= <postfix-expr> %"(" %")"
-<postfix-expr>                          ::= <primary>
+<postfix-expr> @emit("identity", $0) ::= <primary>
 
 <index-contents> ::= <expression>
 
@@ -400,7 +400,7 @@
 
 <call-kw-arg> ::= %IDENTIFIER %"=" <expression>
 
-<primary> ::= <simple-lit>
+<primary> @emit("identity", $0) ::= <simple-lit>
             | <tagged-lit>
             | <embed-lit>
             | <list-lit>
@@ -422,7 +422,7 @@
                  | <dict-or-set-lit>
                  | <tuple-or-paren>
 
-<primary> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
+<primary> @varref($0) @emit("reference") @infer("lookup($0)") ::= %IDENTIFIER
 
 <typeof-expr> @infer("typespec") ::= %"typeof" %"(" <expression> %")"
 
@@ -477,15 +477,15 @@
 #
 <embed-lit> ::= %EMBED
 
-<simple-lit> @literal("int")    ::= %INT_LIT
-<simple-lit> @literal("int")    ::= %HEX_LIT
+<simple-lit> @literal("int") @emit("literal") ::= %INT_LIT
+<simple-lit> @literal("int") @emit("literal") ::= %HEX_LIT
 <simple-lit> @literal("f64")    ::= %FLOAT_LIT
 <simple-lit> @literal("string") ::= %STRING_LIT
 <simple-lit> @literal("char")   ::= %CHAR_LIT
 <simple-lit>                    ::= <bool-lit>
 
-<bool-lit> @literal("bool") ::= %"true"
-<bool-lit> @literal("bool") ::= %"false"
+<bool-lit> @literal("bool") @emit("literal") ::= %"true"
+<bool-lit> @literal("bool") @emit("literal") ::= %"false"
 
 <literal> ::= <simple-lit>
             | <tagged-lit>

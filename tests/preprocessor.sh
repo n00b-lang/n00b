@@ -21,6 +21,18 @@ if "$compiler" parse --jobs 129 "$tmp/parallel_first.n00b" \
 fi
 grep -q -- '--jobs must be between 0 and 128' "$tmp/parallel_bad_jobs.out"
 
+cat >"$tmp/lower_arithmetic.n00b" <<'EOF'
+func add(left: int, right: int) -> int { return left + right }
+EOF
+"$compiler" lower "$tmp/lower_arithmetic.n00b" \
+    >"$tmp/lower_arithmetic.ir" 2>"$tmp/lower_arithmetic.err" || {
+    cat "$tmp/lower_arithmetic.err"
+    exit 1
+}
+grep -q '@add' "$tmp/lower_arithmetic.ir"
+grep -q '= add trap' "$tmp/lower_arithmetic.ir"
+grep -q 'return %' "$tmp/lower_arithmetic.ir"
+
 cat >"$tmp/spaced_index.n00b" <<'EOF'
 func get_item(items) { return items [0] }
 EOF

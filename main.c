@@ -1,10 +1,13 @@
 #include <stdio.h>
 #include <pthread.h>
+#include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "driver.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
+#include "lib/dict.h"
 #include "lib/list.h"
 #include "lib/work_queue.h"
 #include "lib/diagnostic.h"
@@ -16,6 +19,8 @@
 #include "parse/tree.h"
 #include "parse/tree_util.h"
 #include "parse/annot_walk.h"
+#include "ir/libir.h"
+#include "ir/ir.h"
 #include "ir/typelang.h"
 #include "th/environment.h"
 #include "scanner/token_stream.h"
@@ -24,6 +29,19 @@
 #include "preprocessor.h"
 
 enum { N00BB_JOB_LOCATE_TU = 1, N00BB_JOB_PREPROCESS = 2 };
+
+static const ir_scalar_t N00BB_SCALARS[] = {
+    {"int", IR_CLASS_SINT, 64, IR_ROLE_NONE},
+    {"bool", IR_CLASS_BOOL, 1, IR_ROLE_NONE},
+    {"f64", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
+    {"nil", IR_CLASS_VOID, 0, IR_ROLE_NONE},
+};
+
+static const ir_profile_t N00BB_PROFILE = {
+    .name = "n00bb",
+    .n_scalars = sizeof(N00BB_SCALARS) / sizeof(N00BB_SCALARS[0]),
+    .scalars = N00BB_SCALARS,
+};
 
 typedef struct {
     core_work_job_t *job;
@@ -58,8 +76,19 @@ typedef struct {
     parse_tree_walk_t *reference_walk;
     parse_tree_t *annotation_root;
     th_ctx *types;
+    ir_module_t *ir_module;
     bool inference_finalized;
 } n00bb_tu_state_t;
+
+typedef struct {
+    parse_grammar_t *grammar;
+    core_translation_unit_t *unit;
+    ir_module_t *module;
+    ir_func_t *function;
+    ir_diags_t *diagnostics;
+    core_dict_t symbols;
+    int32_t file_id;
+} n00bb_lower_context_t;
 
 typedef struct {
     core_work_queue_t *queue;
@@ -1452,6 +1481,467 @@ symbol_visibility(parse_sym_entry_t *symbol)
     return TH_ENV_PRIVATE;
 }
 
+static ir_lower_result_t
+lower_error(ir_lower_context_t *context, ir_diagcode_t code, ir_span_t span,
+            const char *message)
+{
+    if (context && context->diagnostics) {
+        ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics, code,
+                                              span, nullptr);
+        ir_diag_message(diagnostic, context->diagnostics, message);
+    }
+    return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+}
+
+static ir_lower_result_t
+n00bb_lower_identity(ir_lower_context_t *context, parse_visit_t *visit,
+                     ir_value_t *const *operands, size_t operand_count,
+                     th_type *result_type, ir_span_t span, void *state)
+{
+    (void)context;
+    (void)visit;
+    (void)result_type;
+    (void)span;
+    (void)state;
+    return operand_count == 1
+        ? (ir_lower_result_t){IR_LOWER_VALUE, operands[0]}
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+}
+
+static ir_lower_result_t
+n00bb_lower_reference(ir_lower_context_t *context, parse_visit_t *visit,
+                      ir_value_t *const *operands, size_t operand_count,
+                      th_type *result_type, ir_span_t span, void *state)
+{
+    (void)operands;
+    (void)result_type;
+    (void)state;
+    n00bb_lower_context_t *lower = context->user;
+    parse_sym_entry_t *symbol = visit->pn ? visit->pn->sym : nullptr;
+    bool found = false;
+    ir_value_t *value = symbol
+        ? core_dict_get(&lower->symbols, symbol, &found) : nullptr;
+    if (operand_count || !found || !value)
+        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+                           "this name has no lowered local or parameter value");
+    return (ir_lower_result_t){IR_LOWER_VALUE, value};
+}
+
+static ir_lower_result_t
+n00bb_lower_literal(ir_lower_context_t *context, parse_visit_t *visit,
+                    ir_value_t *const *operands, size_t operand_count,
+                    th_type *result_type, ir_span_t span, void *state)
+{
+    (void)operands;
+    (void)state;
+    if (operand_count || !result_type)
+        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                           "literal lowering needs an inferred result type");
+    core_string_t text = first_token_text(visit->node);
+    if (!text.data)
+        return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
+                           "literal token has no decoded value");
+    bool is_bool = ir_type_eq(context->module, result_type,
+                              ir_type_parse(context->module, "bool"));
+    int64_t value = 0;
+    if (is_bool) {
+        if (core_string_eq(text, CORE_STRING_STATIC("true"))) value = 1;
+        else if (!core_string_eq(text, CORE_STRING_STATIC("false")))
+            return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
+                               "unsupported boolean literal spelling");
+    }
+    else {
+        char *end = nullptr;
+        errno = 0;
+        value = strtoll(text.data, &end, 0);
+        if (errno || end == text.data || *end)
+            return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
+                               "integer literal is outside the bootstrap lowering subset");
+    }
+    ir_lower_context_t *ir = context;
+    ir_instr_t *instruction = ir_instr_add(ir->block, IR_OP_CONST);
+    char name[48];
+    snprintf(name, sizeof(name), "__n00bb_%llu",
+             (unsigned long long)ir->next_value_id++);
+    if (!instruction || !ir_instr_set_dest(instruction, name, result_type)
+        || !ir_instr_operand_int(instruction, value))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not emit an IR constant");
+    instruction->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
+}
+
+static ir_lower_result_t
+n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
+                   ir_value_t *const *operands, size_t operand_count,
+                   th_type *result_type, ir_span_t span, void *state)
+{
+    (void)state;
+    if (operand_count != 2 || !result_type)
+        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                           "binary operation has incomplete operands or type");
+    core_string_t spelling = core_tree_num_children(visit->node) > 1
+        ? first_token_text(core_tree_child(visit->node, 1))
+        : (core_string_t){0};
+    ir_op_t op;
+    if (core_string_eq(spelling, CORE_STRING_STATIC("+"))) op = IR_OP_ADD;
+    else if (core_string_eq(spelling, CORE_STRING_STATIC("-"))) op = IR_OP_SUB;
+    else if (core_string_eq(spelling, CORE_STRING_STATIC("*"))) op = IR_OP_MUL;
+    else if (core_string_eq(spelling, CORE_STRING_STATIC("/"))) op = IR_OP_DIV;
+    else if (core_string_eq(spelling, CORE_STRING_STATIC("%"))) op = IR_OP_REM;
+    else return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+                            "this binary operator is not lowered yet");
+
+    ir_instr_t *instruction = ir_instr_add(context->block, op);
+    char name[48];
+    snprintf(name, sizeof(name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    if (!instruction || !ir_instr_set_dest(instruction, name, result_type)
+        || !ir_instr_operand_value(instruction, operands[0])
+        || !ir_instr_operand_value(instruction, operands[1]))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not emit a binary IR operation");
+    if (ir_op_accepts_mod(op, "trap") && !ir_instr_add_mod(instruction, "trap"))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not set checked arithmetic semantics");
+    instruction->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
+}
+
+static ir_lower_result_t
+n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
+                   ir_value_t *const *operands, size_t operand_count,
+                   th_type *result_type, ir_span_t span, void *state)
+{
+    (void)visit;
+    (void)result_type;
+    (void)state;
+    if (operand_count > 1)
+        return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
+                           "return has an unsupported number of values");
+    ir_instr_t *instruction = ir_instr_add(context->block, IR_OP_RETURN);
+    if (!instruction || (operand_count
+        && !ir_instr_operand_value(instruction, operands[0])))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not emit a return instruction");
+    instruction->span = span;
+    return (ir_lower_result_t){.status = IR_LOWER_TERMINATED};
+}
+
+static bool
+n00bb_reject_unlowered(ir_lower_context_t *context, parse_visit_t *visit,
+                       bool entering, void *state)
+{
+    (void)state;
+    if (!entering) return true;
+    bool unsupported = visit->annot->kind == PARSE_ANNOT_BRANCH
+        || visit->annot->kind == PARSE_ANNOT_LOOP
+        || visit->annot->kind == PARSE_ANNOT_SWITCH
+        || visit->annot->kind == PARSE_ANNOT_CALL
+        || visit->annot->kind == PARSE_ANNOT_ASSIGNS
+        || visit->annot->kind == PARSE_ANNOT_OPERATOR;
+    if (visit->annot->kind == PARSE_ANNOT_JUMP) {
+        core_string_t name = parse_tree_nt_name(visit->grammar, visit->node);
+        unsupported = !core_string_eq(name, CORE_STRING_STATIC("return-stmt"));
+    }
+    if (!unsupported) return true;
+    ir_span_t span = IR_SPAN_UNKNOWN;
+    parse_token_info_t *token = parse_tree_find_first_terminal(visit->node);
+    if (token) span = ir_span_make(context->file_id,
+        (uint32_t)token->start_byte, (uint32_t)token->end_byte,
+        token->line, token->column, token->endline, token->endcol);
+    ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics,
+        IR_DIAG_VERIFY_PARSED, span, "this source construct");
+    ir_diag_message(diagnostic, context->diagnostics,
+                    "construct is outside the current lowering subset");
+    return false;
+}
+
+static const parse_sym_entry_t *
+function_symbol_at(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return node && nt_is(grammar, node, "func-def")
+        ? core_tree_node_value(node).sym : nullptr;
+}
+
+static void
+collect_ir_parameters(parse_grammar_t *grammar, parse_tree_t *node,
+                      core_list_t(parse_sym_entry_ptr_t) *parameters,
+                      parse_sym_entry_t **rest)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    if (nt_is(grammar, node, "pos-param")
+        || nt_is(grammar, node, "default-param")) {
+        core_list_push(*parameters, core_tree_node_value(node).sym);
+        return;
+    }
+    if (nt_is(grammar, node, "vargs-param")) {
+        *rest = core_tree_node_value(node).sym;
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        collect_ir_parameters(grammar, core_tree_child(node, i), parameters,
+                              rest);
+}
+
+static bool
+n00bb_nil_type(th_ctx *types, th_type *type)
+{
+    return type && th_hash(types, th_resolve(type))
+        == th_hash(types, th_name(types, "nil"));
+}
+
+static bool
+initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
+                      core_list_t(core_translation_unit_ptr_t) *units)
+{
+    for (size_t i = 0; i < units->len; i++) {
+        core_translation_unit_t *unit = units->data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (!state || !state->annotation_root) return false;
+        state->ir_module = ir_module_new(ir_context,
+            unit->module.identifier.data, &N00BB_PROFILE, "host");
+        if (!state->ir_module) return false;
+        core_string_t path = core_source_file_path(&unit->source);
+        int32_t file_id = ir_file_add(state->ir_module, path.data);
+        ir_module_set_span(state->ir_module,
+            ir_span_make(file_id, 0,
+                (uint32_t)core_source_file_size(&unit->source), 1, 1, 1, 1));
+        ir_module_set_tree(state->ir_module, grammar, state->annotation_root);
+    }
+
+    for (size_t i = 0; i < units->len; i++) {
+        core_translation_unit_t *unit = units->data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
+        for (size_t s = 0; s < scopes.len; s++) {
+            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
+                 symbol; symbol = symbol->next_in_scope) {
+                if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->type)
+                    continue;
+                bool definition = function_symbol_at(grammar,
+                                                       symbol->decl_node);
+                ir_linkage_t linkage = !definition ? IR_LINK_EXTERN
+                    : symbol_visibility(symbol) == TH_ENV_PRIVATE
+                        ? IR_LINK_INTERNAL : IR_LINK_EXTERNAL;
+                if (!ir_func_add(state->ir_module, symbol->name.data,
+                                 symbol->type, linkage)) {
+                    core_list_free(scopes);
+                    return false;
+                }
+            }
+        }
+        core_list_free(scopes);
+    }
+    return true;
+}
+
+static bool
+lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
+                    core_translation_unit_t *unit,
+                    parse_sym_entry_t *symbol, ir_ctx_t *ir_context)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_tree_t *declaration = symbol ? symbol->decl_node : nullptr;
+    parse_tree_t *body = child_nt(grammar, declaration, "body");
+    ir_func_t *function = state && state->ir_module && symbol
+        ? ir_func_find(state->ir_module, symbol->name.data) : nullptr;
+    if (!state || !body || !function || !symbol->type) return false;
+
+    ir_diags_t *diagnostics = ir_diags_new_attached(
+        ir_context, nullptr, core_translation_unit_diagnostics(unit), unit);
+    if (!diagnostics) return false;
+    if (!n00bb_nil_type(state->types, symbol->error_type)) {
+        ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
+            IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, "this function");
+        ir_diag_message(diagnostic, diagnostics,
+                        "the bootstrap IR slice does not lower failure return channels yet");
+        return false;
+    }
+
+    core_list_t(parse_sym_entry_ptr_t) parameters =
+        core_list_new(parse_sym_entry_ptr_t);
+    parse_sym_entry_t *rest = nullptr;
+    parse_tree_t *signature = child_nt(grammar, declaration,
+                                       "func-type-signature");
+    collect_ir_parameters(grammar, signature, &parameters, &rest);
+    if (rest || parameters.len != th_func_nparams(symbol->type)) {
+        ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
+            IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, "these parameters");
+        ir_diag_message(diagnostic, diagnostics,
+                        "variadic and unmatched parameter forms are not lowered yet");
+        core_list_free(parameters);
+        return false;
+    }
+
+    ir_block_t *entry = ir_block_add(function, "entry");
+    if (!entry) {
+        core_list_free(parameters);
+        return false;
+    }
+    n00bb_lower_context_t lower_data = {
+        .grammar = grammar,
+        .unit = unit,
+        .module = state->ir_module,
+        .function = function,
+        .diagnostics = diagnostics,
+        .file_id = ir_file_count(state->ir_module) - 1,
+    };
+    core_dict_init(&lower_data.symbols, nullptr, nullptr);
+    for (size_t i = 0; i < parameters.len; i++) {
+        parse_sym_entry_t *parameter = parameters.data[i];
+        const th_param *type_param = th_func_param(symbol->type, i);
+        if (!parameter || !type_param || !parameter->name.data
+            || type_param->mode != TH_IN || parameter->is_optional) {
+            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
+                IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, "this parameter");
+            ir_diag_message(diagnostic, diagnostics,
+                            "only required in parameters are lowered by the bootstrap slice");
+            core_dict_free(&lower_data.symbols);
+            core_list_free(parameters);
+            return false;
+        }
+        ir_value_t *value = ir_param_add(function, parameter->name.data,
+                                         type_param->type);
+        if (!value) {
+            core_dict_free(&lower_data.symbols);
+            core_list_free(parameters);
+            return false;
+        }
+        core_dict_put(&lower_data.symbols, parameter, value);
+    }
+    core_list_free(parameters);
+
+    ir_lower_context_t context = {
+        .module = state->ir_module,
+        .function = function,
+        .block = entry,
+        .diagnostics = diagnostics,
+        .file_id = lower_data.file_id,
+        .user = &lower_data,
+        .reachable = true,
+    };
+    ir_lower_result_t lowered = ir_lower_tree(lowerer, &context, grammar, body);
+    if (lowered.status == IR_LOWER_FAILED || ir_diags_failed(diagnostics)) {
+        core_dict_free(&lower_data.symbols);
+        return false;
+    }
+    if (context.reachable) {
+        if (!n00bb_nil_type(state->types, th_func_ret(symbol->type))) {
+            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
+                IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, "this function body");
+            ir_diag_message(diagnostic, diagnostics,
+                            "this non-void function can reach its end without returning a value");
+            core_dict_free(&lower_data.symbols);
+            return false;
+        }
+        ir_instr_t *ret = ir_instr_add(entry, IR_OP_RETURN);
+        if (!ret) {
+            core_dict_free(&lower_data.symbols);
+            return false;
+        }
+        ret->span = ir_module_span(state->ir_module);
+    }
+    core_dict_free(&lower_data.symbols);
+    return !ir_diags_failed(diagnostics);
+}
+
+static bool
+lower_requests_to_ir(parse_grammar_t *grammar, core_work_queue_t *queue,
+                     core_list_t(locate_request_t) *requests,
+                     ir_ctx_t *ir_context)
+{
+    core_list_t(core_translation_unit_ptr_t) units =
+        core_list_new(core_translation_unit_ptr_t);
+    for (size_t i = 0; i < requests->len; i++) {
+        if (!requests->data[i].root_input) continue;
+        core_translation_unit_t *root = core_work_job_result(
+            queue, requests->data[i].job);
+        collect_import_closure(root, &units);
+    }
+    bool ok = units.len && initialize_ir_modules(ir_context, grammar, &units);
+    ir_lowerer_t *lowerer = ir_lowerer_new(ir_context);
+    ok = ok && lowerer
+        && ir_lowerer_register(lowerer, "identity", n00bb_lower_identity,
+                               nullptr)
+        && ir_lowerer_register(lowerer, "reference", n00bb_lower_reference,
+                               nullptr)
+        && ir_lowerer_register(lowerer, "literal", n00bb_lower_literal,
+                               nullptr)
+        && ir_lowerer_register(lowerer, "binary", n00bb_lower_binary,
+                               nullptr)
+        && ir_lowerer_register(lowerer, "return", n00bb_lower_return,
+                               nullptr);
+    static const parse_annot_kind_t rejected_kinds[] = {
+        PARSE_ANNOT_BRANCH, PARSE_ANNOT_LOOP, PARSE_ANNOT_SWITCH,
+        PARSE_ANNOT_CALL, PARSE_ANNOT_ASSIGNS, PARSE_ANNOT_OPERATOR,
+        PARSE_ANNOT_JUMP,
+    };
+    for (size_t i = 0; ok && i < sizeof(rejected_kinds)
+                                      / sizeof(rejected_kinds[0]); i++)
+        ok = ir_lowerer_register_visit(lowerer, rejected_kinds[i],
+                                       n00bb_reject_unlowered, nullptr);
+
+    for (size_t i = 0; ok && i < units.len; i++) {
+        core_translation_unit_t *unit = units.data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
+        for (size_t s = 0; ok && s < scopes.len; s++) {
+            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
+                 ok && symbol; symbol = symbol->next_in_scope) {
+                if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->type
+                    || !function_symbol_at(grammar, symbol->decl_node))
+                    continue;
+                ok = lower_function_body(lowerer, grammar, unit, symbol,
+                                         ir_context);
+            }
+        }
+        core_list_free(scopes);
+    }
+
+    for (size_t i = 0; ok && i < units.len; i++) {
+        core_translation_unit_t *unit = units.data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        ir_module_establish(state->ir_module, IR_PROP_PARSED | IR_PROP_TYPED);
+        ir_diags_t *diagnostics = ir_diags_new_attached(
+            ir_context, nullptr, core_translation_unit_diagnostics(unit), unit);
+        ir_props_t properties = ir_verify(state->ir_module, diagnostics);
+        ok = !ir_diags_failed(diagnostics)
+            && (properties & IR_PROP_PARSED)
+            && ir_structure(state->ir_module, diagnostics)
+            && !ir_diags_failed(diagnostics);
+        for (size_t f = 0; ok && f < ir_func_count(state->ir_module); f++) {
+            ir_func_t *function = ir_func_at(state->ir_module, f);
+            if (function->n_blocks && !ir_pdg_of(function)) ok = false;
+        }
+    }
+
+    core_diagnostics_t *build_diagnostics = core_diagnostics_new();
+    for (size_t i = 0; i < units.len; i++) {
+        core_diagnostics_merge(build_diagnostics,
+            core_translation_unit_diagnostics(units.data[i]));
+        if (core_diagnostics_failed(
+                core_translation_unit_diagnostics(units.data[i])))
+            ok = false;
+    }
+    if (core_diagnostics_count(build_diagnostics)) {
+        char *text = core_diagnostics_render_text(build_diagnostics);
+        if (text) { fputs(text, stderr); core_free(text); }
+    }
+    core_diagnostics_free(build_diagnostics);
+
+    if (ok) {
+        for (size_t i = 0; i < units.len; i++) {
+            char *text = ir_module_print(tu_state(units.data[i])->ir_module);
+            if (!text) { ok = false; break; }
+            fputs(text, stdout);
+            core_free(text);
+        }
+    }
+    core_list_free(units);
+    return ok;
+}
+
 static bool
 register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                           core_translation_unit_t *unit,
@@ -1803,6 +2293,9 @@ static const parse_cmdr_cmd_t COMMANDS[] = {
      nullptr, CORE_STRING_STATIC("input"), 1, 1},
     {CORE_STRING_STATIC("preprocess"),
      CORE_STRING_STATIC("emit preprocessor output for one input"),
+     nullptr, CORE_STRING_STATIC("input"), 1, 1},
+    {CORE_STRING_STATIC("lower"),
+     CORE_STRING_STATIC("lower a module and its imports to Lantern IR"),
      nullptr, CORE_STRING_STATIC("input"), 1, 1},
     {CORE_STRING_STATIC("locate-tu"),
      CORE_STRING_STATIC("locate and load translation units"),
@@ -2706,6 +3199,7 @@ main(int argc, char **argv)
     bool parse_command = core_string_eq(command, CORE_STRING_STATIC("parse"));
     bool locate_only = core_string_eq(command, CORE_STRING_STATIC("locate-tu"));
     bool preprocess_command = core_string_eq(command, CORE_STRING_STATIC("preprocess"));
+    bool lower_command = core_string_eq(command, CORE_STRING_STATIC("lower"));
     bool show_tokens = lex_command || parse_cmdr_flag_present(
         args, CORE_STRING_STATIC("--dump-tokens"));
     bool show_tree = parse_command || parse_cmdr_flag_present(
@@ -2733,7 +3227,8 @@ main(int argc, char **argv)
     };
     parse_grammar_t *grammar = nullptr;
     th_env *environment = nullptr;
-    th_ctx *types = th_ctx_new();
+    ir_ctx_t *ir_context = ir_ctx_new();
+    th_ctx *types = ir_ctx_types(ir_context);
     if (!locate_only) {
         grammar = parse_grammar_new();
         parse_grammar_set_error_recovery(grammar, false);
@@ -2760,8 +3255,10 @@ main(int argc, char **argv)
             || (!locate_only && !lex_command && !parse_command),
         show_preprocessed, show_symbols, &preprocessor_options,
         types, (size_t)requested_jobs, &environment);
+    if (located && lower_command)
+        located = lower_requests_to_ir(grammar, queue, &requests, ir_context);
     if (located && !locate_only && !lex_command && !parse_command
-        && !preprocess_command) {
+        && !preprocess_command && !lower_command) {
         fprintf(stderr,
                 "n00bb: translation units are located; '%.*s' processing is not implemented yet\n",
                 (int)command.u8_bytes, command.data);
@@ -2770,7 +3267,7 @@ main(int argc, char **argv)
 
     release_requests(queue, &requests);
     th_env_free(environment);
-    th_ctx_free(types);
+    ir_ctx_free(ir_context);
     parse_grammar_free(grammar);
     n00bb_resolver_free(resolver);
     core_work_queue_free(queue);
