@@ -411,6 +411,13 @@ int main(void) {
         register_function(env, "base.int.add", "add", "int", "base",
                           TH_ENV_PUBLIC, fn2(types, integer, integer, integer)));
 
+  th_type *private_get_receiver = th_var(types);
+  check("register private trait method for requirement visibility",
+        th_env_register_trait(
+            env, "SecretGetter", "private_traits", "base", TH_ENV_PRIVATE,
+            method_record(types, "get",
+                          fn1(types, private_get_receiver, integer))));
+
   check("freeze environment", th_env_freeze(env));
 
   th_ctx *inside = th_ctx_new();
@@ -463,6 +470,34 @@ int main(void) {
         th_env_method_candidates(inside, "Readable", "read", nullptr, 0) == 3 &&
             th_env_method_candidates(outside, "Readable", "read", nullptr, 0) ==
                 0);
+  th_env_method_requirement_t get_requirements[3] = {0};
+  size_t get_requirement_count = th_env_method_requirements(
+      inside, "get", get_requirements, 3);
+  check("member inference can enumerate visible trait contracts by method",
+        get_requirement_count == 2 &&
+            !strcmp(get_requirements[0].trait_name, "BoxReadable") &&
+            !strcmp(get_requirements[1].trait_name, "PairReadable") &&
+            th_env_method_requirements(outside, "get", nullptr, 0) == 2);
+  th_type *box_requirement_receiver = get_requirement_count
+      ? (th_type *)th_func_param(get_requirements[0].signature, 0)->type
+      : nullptr;
+  th_type *box_requirement_result = get_requirement_count
+      ? th_func_ret(get_requirements[0].signature) : nullptr;
+  check("method requirement keeps receiver and result variables related",
+        box_requirement_receiver && box_requirement_result &&
+            th_unify_in_place(inside, box_requirement_receiver,
+                              consumer_int) &&
+            th_unify_in_place(inside, box_requirement_result, consumer_int));
+  th_env_method_requirement_t repeated_requirements[2] = {0};
+  size_t repeated_count = th_env_method_requirements(
+      inside, "get", repeated_requirements, 2);
+  th_type *repeated_receiver = repeated_count
+      ? (th_type *)th_func_param(repeated_requirements[0].signature, 0)->type
+      : nullptr;
+  check("each method requirement query has independent type variables",
+        repeated_count == 2 && repeated_receiver &&
+            th_unify_in_place(inside, repeated_receiver,
+                              th_name(inside, "string")));
   check("all methods are required for a trait fact",
         !th_implements(inside, consumer_int, "Paired"));
   check("method dispatch requires the complete trait contract",

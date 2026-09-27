@@ -5,6 +5,7 @@
 
 #include "ir/typelang.h"
 #include "ir/layout.h"
+#include "th/environment.h"
 #include "lib/alloc.h"
 #include "parse/annot_walk.h"
 #include "parse/annotation.h"
@@ -803,6 +804,94 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
 }
 
 static void
+test_trait_method_inference_uses_visible_requirement(void)
+{
+    static const char *const G =
+        "<top> @tokenizer(\"toy\") ::= <access>\n"
+        "<access> @infer(\"method_return($0)\") ::= <use> %\".\" <n>\n"
+        "<use> @infer(\"`a\") ::= <n>\n"
+        "<n> ::= __LOWER\n";
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    check("trait method inference grammar loads", loaded);
+    if (!loaded) {
+        parse_grammar_free(g);
+        return;
+    }
+
+    parse_pwz_parser_t *parser = nullptr;
+    parse_token_stream_t *tokens = nullptr;
+    parse_tree_t *tree = parse_toy(g, "top", "x.r", &parser, &tokens);
+    check("trait method inference expression parses", tree != nullptr);
+    if (!tree) {
+        if (parser) parse_pwz_free(parser);
+        if (tokens) scan_token_stream_free(tokens);
+        parse_grammar_free(g);
+        return;
+    }
+
+    th_ctx *definitions = th_ctx_new();
+    th_type *self = th_var(definitions);
+    th_param required_param = {.mode = TH_IN, .type = self};
+    th_member requirement = {
+        .name = "r",
+        .type = th_func(definitions, th_name(definitions, "string"),
+                        &required_param, 1, nullptr, nullptr, 0),
+    };
+    th_env *environment = th_env_new();
+    th_param implementation_param = {
+        .mode = TH_IN, .type = th_name(definitions, "int")};
+    bool registered =
+        th_env_register_trait(environment, "Render", "traits", "base",
+                              TH_ENV_PUBLIC,
+                              th_record(definitions, &requirement, 1)) &&
+        th_env_register_function(
+            environment, "base.int.render", "r", "ints", "base",
+            TH_ENV_PUBLIC,
+            th_func(definitions, th_name(definitions, "string"),
+                    &implementation_param, 1, nullptr, nullptr, 0)) &&
+        th_env_freeze(environment);
+    th_ctx *inference = th_ctx_new();
+    bool attached = registered && th_ctx_set_environment(
+        inference, environment, "client", "base");
+    parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
+    for (int phase = PARSE_ANNOT_PASS_SCOPE;
+         attached && phase <= PARSE_ANNOT_PASS_INFER; phase++) {
+        parse_tree_walk_t *walk = parse_tree_walk_new(g, annotations);
+        parse_annot_register_pass(walk, annotations, inference, nullptr,
+                                  (parse_annot_pass_t)phase);
+        parse_tree_walk_run(walk, tree);
+        parse_tree_walk_free(walk);
+    }
+    parse_tree_t *access = find_node(g, tree, "access");
+    parse_tree_t *use = find_node(g, tree, "use");
+    th_type *actual = access ? core_tree_node_value(access).type : nullptr;
+    th_type *receiver = use ? core_tree_node_value(use).type : nullptr;
+    const char *obligations[1] = {0};
+    check("unique trait method infers its return and retains receiver obligation",
+          attached && actual && receiver &&
+              th_unify(inference, actual,
+                       th_name(inference, "string")) != nullptr &&
+              th_infer_ifaces(inference, receiver, obligations, 1) == 1 &&
+              !strcmp(obligations[0], "Render"));
+    check("trait method obligation rejects a type with no implementation",
+          receiver && !th_unify(inference, receiver,
+                                th_name(inference, "string")));
+    check("later receiver unification discharges the trait obligation",
+          receiver && th_unify_in_place(inference, receiver,
+                                        th_name(inference, "int")));
+
+    parse_annot_result_free(annotations);
+    th_ctx_free(inference);
+    th_env_free(environment);
+    th_ctx_free(definitions);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+    parse_grammar_free(g);
+}
+
+static void
 test_the_representation_and_declaration_annotations(void)
 {
     static const char *const G
@@ -1227,6 +1316,7 @@ main(void)
     test_symbol_lookup_instantiates_schemes();
     test_scoped_declaration_is_bound_outside_its_body();
     test_the_repr_annotations_reach_the_layout_descriptor();
+    test_trait_method_inference_uses_visible_requirement();
     test_an_adt_builds_a_variant_type();
     test_implements_is_checked_not_carried();
     test_part_two_rejections();

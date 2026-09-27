@@ -1009,3 +1009,31 @@ size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,
   core_list_free(candidates);
   return count;
 }
+
+size_t th_env_method_requirements(
+    th_ctx *ctx, const char *method_name,
+    th_env_method_requirement_t *requirements, size_t max_requirements) {
+  if (!ctx || !ctx->environment || !ctx->environment->frozen ||
+      !method_name)
+    return 0;
+  const th_env *env = ctx->environment;
+  size_t count = 0;
+  for (size_t i = 0; i < env->traits.len; i++) {
+    const th_env_trait_t *trait = &env->traits.data[i];
+    if (!visible_to(ctx, trait->visibility, trait->module, trait->package) ||
+        !th_record_lookup(trait->scheme, method_name))
+      continue;
+    if (requirements && count < max_requirements) {
+      th_type *scheme = th_generalize(ctx, trait->scheme);
+      th_type *methods = th_instantiate(ctx, scheme);
+      th_type *signature = th_record_lookup(methods, method_name);
+      if (signature)
+        requirements[count] = (th_env_method_requirement_t){
+            .trait_name = trait->name,
+            .signature = signature,
+        };
+    }
+    count++;
+  }
+  return count;
+}

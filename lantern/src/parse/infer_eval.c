@@ -6,6 +6,7 @@
 #include "private/parse/grammar.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
+#include "th/environment.h"
 #include "th/typehash.h"
 
 #include <string.h>
@@ -266,6 +267,25 @@ project(ictx *c, parse_infer_proj_t op, int32_t ix)
 
         if (!signature) {
             signature = th_record_lookup(t, method_name);
+        }
+
+        if (!signature) {
+            th_env_method_requirement_t requirement = {0};
+            size_t requirement_count = th_env_method_requirements(
+                c->tc, method_name, &requirement, 1);
+            if (requirement_count == 1 && requirement.signature &&
+                th_func_nparams(requirement.signature)) {
+                th_type *self = th_func_param(
+                    requirement.signature, 0)->type;
+                bool constrained = th_var_constrain(
+                    c->tc, self,
+                    (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                                    .iface = requirement.trait_name});
+                if (constrained && th_unify_in_place(c->tc, self, t))
+                    signature = requirement.signature;
+                else
+                    c->failed = true;
+            }
         }
 
         th_type *ret = signature ? th_func_ret(signature) : nullptr;

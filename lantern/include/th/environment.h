@@ -23,6 +23,11 @@ typedef struct {
   th_type *signature;
 } th_env_method_t;
 
+typedef struct {
+  const char *trait_name;
+  th_type *signature;
+} th_env_method_requirement_t;
+
 typedef enum {
   TH_ENV_METHOD_NOT_FOUND,
   TH_ENV_METHOD_FOUND,
@@ -141,5 +146,13 @@ th_env_method_status_t th_env_method_resolve(th_ctx *context, th_type *receiver,
 size_t th_env_method_candidates(th_ctx *context, const char *trait_name,
                                 const char *method_name,
                                 th_env_method_t *methods, size_t max_methods);
+/* Enumerate visible trait contracts declaring `method_name`. Returned
+ * signatures are fresh instances allocated in `context`; each call is
+ * independent, while type-variable relationships within one trait contract
+ * are preserved. Names borrow from the frozen environment. Returns the total
+ * count even when `max_requirements` is smaller. */
+size_t th_env_method_requirements(
+    th_ctx *context, const char *method_name,
+    th_env_method_requirement_t *requirements, size_t max_requirements);
 
 #endif
