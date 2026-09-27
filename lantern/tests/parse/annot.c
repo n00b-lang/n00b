@@ -882,6 +882,70 @@ test_trait_method_inference_uses_visible_requirement(void)
           receiver && th_unify_in_place(inference, receiver,
                                         th_name(inference, "int")));
 
+    parse_pwz_parser_t *multi_parser = nullptr;
+    parse_token_stream_t *multi_tokens = nullptr;
+    parse_tree_t *multi_tree = parse_toy(g, "top", "x.r", &multi_parser,
+                                          &multi_tokens);
+    th_ctx *multi_definitions = th_ctx_new();
+    th_type *render_self = th_var(multi_definitions);
+    th_type *other_self = th_var(multi_definitions);
+    th_env *multi_env = th_env_new();
+    th_type *int_type = th_name(multi_definitions, "int");
+    th_type *string_type = th_name(multi_definitions, "string");
+    th_type *bool_type = th_name(multi_definitions, "bool");
+    th_param render_param = {.mode = TH_IN, .type = int_type};
+    bool multi_registered = multi_tree &&
+        th_env_register_trait(
+            multi_env, "Render", "traits", "base", TH_ENV_PUBLIC,
+            th_record(multi_definitions,
+                      &(th_member){.name = "r", .type = th_func(
+                          multi_definitions, string_type,
+                          (th_param[]){{.mode = TH_IN, .type = render_self}},
+                          1, nullptr, nullptr, 0)}, 1)) &&
+        th_env_register_trait(
+            multi_env, "OtherRender", "traits", "base", TH_ENV_PUBLIC,
+            th_record(multi_definitions,
+                      &(th_member){.name = "r", .type = th_func(
+                          multi_definitions, bool_type,
+                          (th_param[]){{.mode = TH_IN, .type = other_self}},
+                          1, nullptr, nullptr, 0)}, 1)) &&
+        th_env_register_function(
+            multi_env, "base.int.render", "r", "ints", "base",
+            TH_ENV_PUBLIC,
+            th_func(multi_definitions, string_type, &render_param, 1,
+                    nullptr, nullptr, 0)) &&
+        th_env_freeze(multi_env);
+    th_ctx *multi_inference = th_ctx_new();
+    bool multi_attached = multi_registered && th_ctx_set_environment(
+        multi_inference, multi_env, "client", "base");
+    parse_annot_result_t *multi_annotations = parse_annot_result_new(nullptr);
+    for (int phase = PARSE_ANNOT_PASS_SCOPE;
+         multi_attached && phase <= PARSE_ANNOT_PASS_INFER; phase++) {
+        parse_tree_walk_t *walk = parse_tree_walk_new(g, multi_annotations);
+        parse_annot_register_pass(walk, multi_annotations, multi_inference,
+                                  nullptr, (parse_annot_pass_t)phase);
+        parse_tree_walk_run(walk, multi_tree);
+        parse_tree_walk_free(walk);
+    }
+    parse_tree_t *multi_access = find_node(g, multi_tree, "access");
+    parse_tree_t *multi_use = find_node(g, multi_tree, "use");
+    th_type *multi_actual = multi_access
+        ? core_tree_node_value(multi_access).type : nullptr;
+    th_type *multi_receiver = multi_use
+        ? core_tree_node_value(multi_use).type : nullptr;
+    check("ambiguous visible method names retain a deferred result obligation",
+          multi_attached && multi_actual && multi_receiver &&
+              th_unify_in_place(multi_inference, multi_receiver,
+                                th_name(multi_inference, "int")) &&
+              th_unify(multi_inference, multi_actual,
+                       th_name(multi_inference, "string")));
+    parse_annot_result_free(multi_annotations);
+    th_ctx_free(multi_inference);
+    th_env_free(multi_env);
+    th_ctx_free(multi_definitions);
+    parse_pwz_free(multi_parser);
+    scan_token_stream_free(multi_tokens);
+
     parse_annot_result_free(annotations);
     th_ctx_free(inference);
     th_env_free(environment);

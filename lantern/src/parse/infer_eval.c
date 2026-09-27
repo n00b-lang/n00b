@@ -305,7 +305,17 @@ project(ictx *c, parse_infer_proj_t op, int32_t ix)
                 }
             } else if (requirement_count > 1) {
                 if (th_kind_of(th_resolve(t)) == TH_VAR) {
-                    c->failed = true;
+                    th_type *result = fresh(c);
+                    if (th_var_constrain(
+                            c->tc, th_resolve(t),
+                            (th_constraint){
+                                .kind = TH_CON_METHOD,
+                                .method = {.name = method_name,
+                                           .result = result}}))
+                        signature = th_func(c->tc, result, nullptr, 0,
+                                            nullptr, nullptr, 0);
+                    else
+                        c->failed = true;
                 } else {
                     th_env_method_requirement_t *requirements =
                         core_alloc_array(th_env_method_requirement_t,

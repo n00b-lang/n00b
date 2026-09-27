@@ -536,6 +536,12 @@ static void emit_constraint(pctx *c, core_buffer_t *b, const th_constraint *k)
         emit(c, b, k->param.type);
         core_buffer_puts(b, ")");
         break;
+
+    case TH_CON_METHOD:
+        core_buffer_printf(b, "method(%s: ", k->method.name);
+        emit(c, b, k->method.result);
+        core_buffer_puts(b, ")");
+        break;
     }
 }
 

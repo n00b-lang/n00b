@@ -101,6 +101,9 @@ typedef enum : uint8_t {
     TH_CON_HAS_PARAM,
     TH_CON_PROMOTES,
     TH_CON_EXCLUDES,
+    /* Resolve a named receiver method when this variable becomes concrete;
+     * its dispatch-selected return type unifies with `method.result`. */
+    TH_CON_METHOD,
 } th_con_kind;
 
 typedef struct {
@@ -120,6 +123,10 @@ typedef struct {
             uint64_t index;
             th_type *type;
         } param;
+        struct {
+            const char *name;
+            th_type *result;
+        } method;
     };
 } th_constraint;
 

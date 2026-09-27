@@ -44,6 +44,10 @@ static bool write_string_arg(core_object_writer_t *writer,
          core_object_writer_bytes(writer, data, size);
 }
 
+static uint32_t type_archive_version(const th_type *type) {
+  return *(const uint32_t *)((const char *)type + sizeof(*type));
+}
+
 static bool read_string_arg(core_object_reader_t *reader, const char **data,
                             size_t *size) {
   if (!read_count(reader, size))
@@ -78,14 +82,18 @@ static bool save_constraint(core_object_writer_t *writer,
   case TH_CON_HAS_PARAM:
     return core_object_writer_u64(writer, constraint->param.index) &&
            write_type_ref(writer, constraint->param.type);
+  case TH_CON_METHOD:
+    return core_object_writer_string(writer, constraint->method.name) &&
+           write_type_ref(writer, constraint->method.result);
   }
   return false;
 }
 
 static bool read_constraint(core_object_reader_t *reader,
-                            th_constraint *constraint) {
+                            th_constraint *constraint, uint32_t version) {
   uint32_t kind;
-  if (!core_object_reader_u32(reader, &kind) || kind > TH_CON_EXCLUDES)
+  if (!core_object_reader_u32(reader, &kind) ||
+      kind > (version >= 2 ? TH_CON_METHOD : TH_CON_EXCLUDES))
     return false;
   constraint->kind = (th_con_kind)kind;
   switch (constraint->kind) {
@@ -114,6 +122,11 @@ static bool read_constraint(core_object_reader_t *reader,
   case TH_CON_HAS_PARAM:
     return core_object_reader_u64(reader, &constraint->param.index) &&
            read_type_ref(reader, &constraint->param.type);
+  case TH_CON_METHOD:
+    return core_object_reader_string(reader, (char **)&constraint->method.name) &&
+           constraint->method.name &&
+           read_type_ref(reader, &constraint->method.result) &&
+           constraint->method.result;
   }
   return false;
 }
@@ -215,12 +228,15 @@ static bool save_type(core_object_writer_t *writer, const void *object,
 static void *type_allocate(core_persist_arena_t *arena, uint32_t version,
                            core_object_reader_t *payload, void *user_data) {
   (void)payload;
-  if (version != 1)
+  if (version < 1 || version > 2)
     return nullptr;
+  /* Carry the record schema into restore_type without changing th_type. */
   th_type *type = core_persist_arena_alloc_transient(
-      arena, sizeof(*type), alignof(th_type), nullptr);
-  if (type)
+      arena, sizeof(*type) + sizeof(uint32_t), alignof(th_type), nullptr);
+  if (type) {
     type->kind = (th_kind)(uintptr_t)user_data;
+    *(uint32_t *)((char *)type + sizeof(*type)) = version;
+  }
   return type;
 }
 
@@ -386,7 +402,8 @@ static bool restore_type(core_object_reader_t *reader, void *object,
     type->var.cons.len = type->var.cons.cap = count;
     if (count && !type->var.cons.data) return false;
     for (size_t i = 0; i < count; i++)
-      if (!read_constraint(reader, &type->var.cons.data[i])) return false;
+      if (!read_constraint(reader, &type->var.cons.data[i],
+                           type_archive_version(type))) return false;
     return true;
   }
   return false;
@@ -595,7 +612,7 @@ static bool register_environment_codecs(
   for (uint32_t kind = 0; kind <= TH_VAR; kind++)
     if (!core_object_archive_register(registry, (core_object_archive_type_t){
             .type_id = type_archive_id((th_kind)kind),
-            .current_version = 1,
+            .current_version = 2,
             .oldest_supported_version = 1,
             .allocate = type_allocate,
             .save = save_type,

@@ -40,6 +40,11 @@ static th_constraint *con_same_slot(th_type *var, th_constraint c)
         if (c.kind == TH_CON_HAS_PARAM && e->param.index == c.param.index) {
             return e;
         }
+
+        if (c.kind == TH_CON_METHOD &&
+            !strcmp(e->method.name, c.method.name)) {
+            return e;
+        }
     }
 
     return nullptr;
@@ -51,9 +56,27 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
         return false;
     }
 
+    if (c.kind == TH_CON_METHOD) {
+        if (!ctx || !c.method.name || !*c.method.name || !c.method.result)
+            return false;
+        c.method.name = th_strdup(ctx, c.method.name, strlen(c.method.name));
+    }
+
     th_constraint *slot = con_same_slot(var, c);
 
     if (slot) {
+        if (c.kind == TH_CON_METHOD) {
+            if (slot->method.result && c.method.result &&
+                !th_unify_in_place(ctx, slot->method.result,
+                                   c.method.result)) {
+                th_err(ctx, TH_ERR_CONSTRAINT, "method", slot->method.result,
+                       c.method.result,
+                       "method result conflicts with one already constrained");
+                return false;
+            }
+            return true;
+        }
+
         th_type *have = c.kind == TH_CON_HAS_FIELD ? slot->field.type
                                                    : slot->param.type;
         th_type *want = c.kind == TH_CON_HAS_FIELD ? c.field.type
@@ -686,6 +709,28 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
                 return false;
             }
             break;
+
+        case TH_CON_METHOD: {
+            th_env_method_t method = {0};
+            th_env_method_status_t status = th_env_method_resolve_by_name(
+                ctx, bound_to, c->method.name, &method, nullptr);
+            th_type *signature = status == TH_ENV_METHOD_FOUND
+                ? th_instantiate(ctx, method.signature) : nullptr;
+            const th_param *receiver =
+                signature ? th_func_param(signature, 0) : nullptr;
+            if (!receiver || !th_func_ret(signature) ||
+                !uni_in_place(ctx, receiver->type, bound_to) ||
+                !uni_in_place(ctx, c->method.result,
+                              th_func_ret(signature))) {
+                th_err(ctx, TH_ERR_CONSTRAINT, c->method.name,
+                       c->method.result, bound_to,
+                       status == TH_ENV_METHOD_AMBIGUOUS
+                           ? "method dispatch is ambiguous"
+                           : "no matching method implementation");
+                return false;
+            }
+            break;
+        }
         }
     }
 
@@ -739,8 +784,59 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
         if (!found) {
             core_dict_put(acc, t, core_dict_len(acc) + 1);
         }
-
-        return nullptr;
+        for (size_t i = 0; i < t->var.cons.len; i++) {
+            const th_constraint *c = &t->var.cons.data[i];
+            switch (c->kind) {
+            case TH_CON_UNIFIES:
+            case TH_CON_PROMOTES:
+            case TH_CON_EXCLUDES:
+                n += c->target != nullptr;
+                break;
+            case TH_CON_ONE_OF:
+                n += c->one_of.n;
+                break;
+            case TH_CON_HAS_FIELD:
+                n += c->field.type != nullptr;
+                break;
+            case TH_CON_HAS_PARAM:
+                n += c->param.type != nullptr;
+                break;
+            case TH_CON_METHOD:
+                n += c->method.result != nullptr;
+                break;
+            case TH_CON_IMPLEMENTS:
+                break;
+            }
+        }
+        size_t count = n;
+        n = 0;
+        kids = core_alloc_array(th_type *, count);
+        for (size_t i = 0; i < t->var.cons.len; i++) {
+            const th_constraint *c = &t->var.cons.data[i];
+            switch (c->kind) {
+            case TH_CON_UNIFIES:
+            case TH_CON_PROMOTES:
+            case TH_CON_EXCLUDES:
+                if (c->target) kids[n++] = c->target;
+                break;
+            case TH_CON_ONE_OF:
+                for (size_t j = 0; j < c->one_of.n; j++)
+                    kids[n++] = c->one_of.types[j];
+                break;
+            case TH_CON_HAS_FIELD:
+                if (c->field.type) kids[n++] = c->field.type;
+                break;
+            case TH_CON_HAS_PARAM:
+                if (c->param.type) kids[n++] = c->param.type;
+                break;
+            case TH_CON_METHOD:
+                if (c->method.result) kids[n++] = c->method.result;
+                break;
+            case TH_CON_IMPLEMENTS:
+                break;
+            }
+        }
+        break;
     }
 
     case TH_NAMED:
@@ -1583,6 +1679,7 @@ th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b)
 typedef struct {
     core_dict_t memo;
     th_type **fresh;
+    th_type **qvars;
     uint64_t  arity;
     uint64_t  depth;
 } th_inst;
@@ -1612,6 +1709,61 @@ static bool inst_subst(th_ctx *ctx, th_type *t, uint64_t depth, core_dict_t *mem
     return false;
 }
 
+static bool inst_constraint_subst(th_ctx *ctx, th_type *t, uint64_t depth,
+                                  core_dict_t *memo, void *st,
+                                  th_type **out)
+{
+    th_inst *s = st;
+    (void)ctx;
+    (void)depth;
+    (void)memo;
+    if (t->kind != TH_VAR) return false;
+    for (uint64_t i = 0; i < s->arity; i++) {
+        if (s->qvars && s->qvars[i] == t) {
+            *out = s->fresh[i];
+            return true;
+        }
+    }
+    *out = t;
+    return true;
+}
+
+static th_constraint instantiate_constraint(th_ctx *ctx, th_constraint c,
+                                             th_inst *s)
+{
+    switch (c.kind) {
+    case TH_CON_UNIFIES:
+    case TH_CON_PROMOTES:
+    case TH_CON_EXCLUDES:
+        c.target = rebuild(ctx, c.target, &s->memo, true,
+                           inst_constraint_subst, s);
+        break;
+    case TH_CON_ONE_OF: {
+        th_type **types = th_alloc(ctx, c.one_of.n * sizeof(th_type *));
+        for (size_t i = 0; i < c.one_of.n; i++)
+            types[i] = rebuild(ctx, c.one_of.types[i], &s->memo, true,
+                               inst_constraint_subst, s);
+        c.one_of.types = types;
+        break;
+    }
+    case TH_CON_HAS_FIELD:
+        c.field.type = rebuild(ctx, c.field.type, &s->memo, true,
+                               inst_constraint_subst, s);
+        break;
+    case TH_CON_HAS_PARAM:
+        c.param.type = rebuild(ctx, c.param.type, &s->memo, true,
+                               inst_constraint_subst, s);
+        break;
+    case TH_CON_METHOD:
+        c.method.result = rebuild(ctx, c.method.result, &s->memo, true,
+                                  inst_constraint_subst, s);
+        break;
+    case TH_CON_IMPLEMENTS:
+        break;
+    }
+    return c;
+}
+
 th_type *th_instantiate(th_ctx *ctx, th_type *t)
 {
     t = th_resolve(t);
@@ -1621,7 +1773,7 @@ th_type *th_instantiate(th_ctx *ctx, th_type *t)
     }
 
     uint64_t n = t->binder.arity;
-    th_inst  s = {.arity = n, .depth = 0};
+    th_inst  s = {.arity = n, .depth = 0, .qvars = t->binder.qvars};
 
     core_dict_init(&s.memo, nullptr, nullptr);
     s.fresh = core_alloc_array(th_type *, n);
@@ -1633,11 +1785,16 @@ th_type *th_instantiate(th_ctx *ctx, th_type *t)
 
         if (q) {
             s.fresh[i]->var.name = q->var.name;
-
-            for (size_t j = 0; j < q->var.cons.len; j++) {
-                core_list_push(s.fresh[i]->var.cons, q->var.cons.data[j]);
-            }
         }
+    }
+
+    for (uint64_t i = 0; i < n; i++) {
+        th_type *q = t->binder.qvars ? t->binder.qvars[i] : nullptr;
+        if (!q) continue;
+        for (size_t j = 0; j < q->var.cons.len; j++)
+            th_var_constrain(ctx, s.fresh[i],
+                             instantiate_constraint(ctx,
+                                 q->var.cons.data[j], &s));
     }
 
     th_type *r = rebuild(ctx, t->binder.body, &s.memo, true, inst_subst, &s);

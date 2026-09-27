@@ -527,6 +527,39 @@ int main(void) {
                 TH_ENV_METHOD_FOUND &&
             !strcmp(selected.qualified_name, "base.box.int_get") &&
             !strcmp(selected_trait, "BoxReadable"));
+  th_arg concrete_pair_args[] = {
+      {.kind = TH_ARG_TYPE, .type = th_name(inside, "int")},
+      {.kind = TH_ARG_TYPE, .type = th_name(inside, "int")},
+  };
+  th_type *concrete_pair = th_apply(inside, "Pair", concrete_pair_args, 2);
+  th_type *scheme_receiver = th_var(inside);
+  th_type *scheme_result = th_var(inside);
+  check("retain a deferred method result on an unresolved receiver",
+        th_var_constrain(
+            inside, scheme_receiver,
+            (th_constraint){.kind = TH_CON_METHOD,
+                            .method = {.name = "get",
+                                       .result = scheme_result}}));
+  th_type *deferred_scheme = th_generalize(
+      inside, fn1(inside, scheme_receiver, scheme_result));
+  th_type *deferred_call = th_instantiate(inside, deferred_scheme);
+  th_type *deferred_receiver =
+      (th_type *)th_func_param(deferred_call, 0)->type;
+  th_type *deferred_result = th_func_ret(deferred_call);
+  check("concrete receiver resolves the deferred method and its result",
+        th_unify_in_place(inside, deferred_receiver, box_int) &&
+            th_unify(inside, deferred_result, th_name(inside, "int")));
+  th_type *ambiguous_call = th_instantiate(inside, deferred_scheme);
+  th_type *ambiguous_receiver =
+      (th_type *)th_func_param(ambiguous_call, 0)->type;
+  check("deferred method resolution rejects ambiguous concrete dispatch",
+        !th_unify_in_place(inside, ambiguous_receiver, concrete_pair));
+  th_type *missing_call = th_instantiate(inside, deferred_scheme);
+  th_type *missing_receiver =
+      (th_type *)th_func_param(missing_call, 0)->type;
+  check("deferred method resolution rejects a missing implementation",
+        !th_unify_in_place(inside, missing_receiver,
+                           th_name(inside, "string")));
   check("integer receiver promotes to a matching trait method",
         th_env_method_lookup(inside, th_bitint(inside, 8, true),
                              "IntegerText", "show", &selected) &&
@@ -564,11 +597,6 @@ int main(void) {
               !strcmp(box_dispatch_candidates[0].qualified_name,
                       "base.box.int_get"))));
 
-  th_arg concrete_pair_args[] = {
-      {.kind = TH_ARG_TYPE, .type = th_name(inside, "int")},
-      {.kind = TH_ARG_TYPE, .type = th_name(inside, "int")},
-  };
-  th_type *concrete_pair = th_apply(inside, "Pair", concrete_pair_args, 2);
   check("incomparable overlapping methods are reported as ambiguous",
         th_env_method_resolve(inside, concrete_pair, "PairReadable", "get",
                               &selected) == TH_ENV_METHOD_AMBIGUOUS);
@@ -618,6 +646,13 @@ int main(void) {
   th_type *fetch_receiver = th_var(base_library_types);
   th_type *string_type = th_name(base_library_types, "string");
   th_type *link_generic_element = th_var(base_library_types);
+  th_type *deferred_fetch_receiver = th_var(base_library_types);
+  th_type *deferred_fetch_result = th_var(base_library_types);
+  bool deferred_fetch_constrained = th_var_constrain(
+      base_library_types, deferred_fetch_receiver,
+      (th_constraint){.kind = TH_CON_METHOD,
+                      .method = {.name = "fetch",
+                                 .result = deferred_fetch_result}});
   th_arg link_generic_box_arg = {
       .kind = TH_ARG_TYPE,
       .type = link_generic_element,
@@ -648,6 +683,13 @@ int main(void) {
                 method_record(base_library_types, "bound_same",
                               fn1(base_library_types, bound_trait_receiver,
                                   bound_trait_receiver))) &&
+            deferred_fetch_constrained && th_env_register_trait(
+                base_library, "DeferredFetch", "traits", "base",
+                TH_ENV_PUBLIC,
+                method_record(base_library_types, "probe",
+                              fn1(base_library_types,
+                                  deferred_fetch_receiver,
+                                  deferred_fetch_result))) &&
             th_env_register_function(
                 base_library, "base.generic.fetch", "fetch", "generic",
                 "base", TH_ENV_PUBLIC,
@@ -781,6 +823,29 @@ int main(void) {
                                  &persisted_bound_identity) &&
             !strcmp(persisted_bound_identity.qualified_name,
                     "base.generic.bound_identity"));
+  th_env_method_requirement_t deferred_requirement = {0};
+  bool deferred_requirement_loaded = persisted_library &&
+      th_env_method_requirements(persisted_check_types, "probe",
+                                 &deferred_requirement, 1) == 1;
+  th_type *loaded_deferred_receiver = deferred_requirement_loaded
+      ? (th_type *)th_func_param(deferred_requirement.signature, 0)->type
+      : nullptr;
+  th_type *loaded_deferred_result = deferred_requirement_loaded
+      ? th_func_ret(deferred_requirement.signature) : nullptr;
+  th_constraint loaded_deferred_constraint = {0};
+  bool has_deferred_constraint = loaded_deferred_receiver &&
+      th_var_constraint_count(loaded_deferred_receiver) == 1 &&
+      th_var_constraint_at(loaded_deferred_receiver, 0,
+                           &loaded_deferred_constraint) &&
+      loaded_deferred_constraint.kind == TH_CON_METHOD &&
+      !strcmp(loaded_deferred_constraint.method.name, "fetch") &&
+      loaded_deferred_constraint.method.result == loaded_deferred_result;
+  check("archive preserves deferred method constraints and result linkage",
+        has_deferred_constraint &&
+            th_unify_in_place(persisted_check_types,
+                              loaded_deferred_receiver, persisted_box_int) &&
+            th_unify(persisted_check_types, loaded_deferred_result,
+                     th_name(persisted_check_types, "string")));
   check("loaded image preserves type layout and function ABI metadata",
         persisted_library &&
             th_env_metadata_count(persisted_library) == 3 &&
