@@ -51,12 +51,13 @@ cat >"$tmp/lower_import_call.n00b" <<'EOF'
 import dep
 func call_imported(item: int) -> int { return dep.imported(item) }
 EOF
-N00B_PATH="$tmp" "$compiler" lower "$tmp/lower_import_call.n00b" \
-    >"$tmp/lower_import_call.ir" 2>"$tmp/lower_import_call.err" || {
-    cat "$tmp/lower_import_call.err"
+if N00B_PATH="$tmp" "$compiler" lower "$tmp/lower_import_call.n00b" \
+    >"$tmp/lower_import_call.ir" 2>"$tmp/lower_import_call.err"; then
+    echo 'member syntax unexpectedly lowered as a direct function call' >&2
     exit 1
-}
-grep -q '= call @imported, %item' "$tmp/lower_import_call.ir"
+fi
+grep -q 'trait-dispatched calls are not lowered yet' \
+    "$tmp/lower_import_call.err"
 
 cat >"$tmp/spaced_index.n00b" <<'EOF'
 func get_item(items) { return items [0] }

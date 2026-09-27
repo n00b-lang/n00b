@@ -1573,12 +1573,48 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (operand_count || !result_type)
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                            "call lowering needs a result type");
-    parse_tree_t *callee = core_tree_num_children(visit->node)
-        ? core_tree_child(visit->node, 0) : nullptr;
     n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller_state = lower
+        ? tu_state(lower->unit) : nullptr;
+    parse_tree_t *call_node = visit->node;
+    parse_cf_label_t *call_label = nullptr;
+    bool found_call_args = false;
+    for (parse_tree_t *ancestor = visit->node; ancestor;
+         ancestor = core_tree_node_value(ancestor).parent) {
+        parse_cf_label_t *candidate = caller_state
+            ? parse_cf_label_lookup(caller_state->annotations, ancestor)
+            : nullptr;
+        if (candidate && candidate->kind == PARSE_CF_CALL) {
+            call_node = ancestor;
+            call_label = candidate;
+            break;
+        }
+        if (!found_call_args
+            && descendant_nt(visit->grammar, ancestor, "call-args")) {
+            call_node = ancestor;
+            found_call_args = true;
+        }
+    }
+    if (!call_label && caller_state && caller_state->annotations) {
+        core_dict_foreach(caller_state->annotations->cf_labels, entry) {
+            parse_cf_label_t *candidate = entry->value;
+            if (candidate && candidate->kind == PARSE_CF_CALL
+                && candidate->cond == visit->node) {
+                call_label = candidate;
+                call_node = candidate->self;
+                break;
+            }
+        }
+    }
+    parse_tree_t *callee = call_label
+        && call_label->kind == PARSE_CF_CALL ? call_label->cond
+        : (core_tree_num_children(call_node)
+            ? core_tree_child(call_node, 0) : visit->node);
+    if (member_access_node(visit->grammar, callee))
+        return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
+                           "trait-dispatched calls are not lowered yet");
     parse_sym_entry_t *symbol = callee && lower
-        ? call_function_symbol(visit->grammar, lower->unit, callee,
-            member_access_node(visit->grammar, callee) != nullptr)
+        ? call_function_symbol(visit->grammar, lower->unit, callee, false)
         : nullptr;
     if (!symbol) {
         core_buffer_t path = {0};
@@ -1615,7 +1651,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         || th_func_rest(signature))
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                            "only non-variadic function calls are lowered here");
-    parse_tree_t *args = descendant_nt(visit->grammar, visit->node,
+    parse_tree_t *args = descendant_nt(visit->grammar, call_node,
                                        "call-args");
     if (args && descendant_nt(visit->grammar, args, "keyword-args"))
         return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
@@ -1627,9 +1663,16 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool collected = !positional || collect_positional_values(
         visit->grammar, positional, context, &values);
     if (!collected || values.len != th_func_nparams(signature)) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "call has %zu lowered arguments but target expects %zu",
+            values.len, th_func_nparams(signature));
+        ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics,
+            IR_DIAG_VERIFY_TYPED, span, nullptr);
+        ir_diag_message(diagnostic, context->diagnostics, message.data);
+        core_buffer_release(&message);
         core_list_free(values);
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "call arguments do not match the lowered function signature");
+        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     }
     for (size_t i = 0; i < values.len; i++) {
         const th_param *parameter = th_func_param(signature, i);
