@@ -33,6 +33,19 @@ grep -q '@add' "$tmp/lower_arithmetic.ir"
 grep -q '= add trap' "$tmp/lower_arithmetic.ir"
 grep -q 'return %' "$tmp/lower_arithmetic.ir"
 
+cat >"$tmp/lower_if.n00b" <<'EOF'
+func choose(flag: bool) -> int { if flag { return 1 } else { return 2 } }
+EOF
+"$compiler" lower "$tmp/lower_if.n00b" \
+    >"$tmp/lower_if.ir" 2>"$tmp/lower_if.err" || {
+    cat "$tmp/lower_if.err"
+    exit 1
+}
+grep -Eq 'branch %flag, __n00bb_if_then_[0-9]+, __n00bb_if_else_[0-9]+' \
+    "$tmp/lower_if.ir"
+grep -q 'return %' "$tmp/lower_if.ir"
+grep -q 'unreachable' "$tmp/lower_if.ir"
+
 cat >"$tmp/lower_call.n00b" <<'EOF'
 func identity(item: int) -> int { return item }
 func call_identity(item: int) -> int { return identity(item) }

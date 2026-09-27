@@ -82,8 +82,22 @@ typedef struct {
 } n00bb_tu_state_t;
 
 typedef struct {
+    parse_tree_t *node;
+    parse_tree_t *condition;
+    parse_tree_t *body;
+    parse_tree_t *else_body;
+    ir_block_t *join;
+    ir_block_t *else_block;
+    bool join_reachable;
+    bool active;
+} n00bb_branch_frame_t;
+core_list_decl(n00bb_branch_frame_t);
+
+typedef struct {
     core_list_t(core_translation_unit_ptr_t) *units;
     core_translation_unit_t *unit;
+    core_list_t(n00bb_branch_frame_t) branches;
+    uint64_t next_block_id;
 } n00bb_lower_context_t;
 
 typedef struct {
@@ -1507,6 +1521,211 @@ lower_error(ir_lower_context_t *context, ir_diagcode_t code, ir_span_t span,
     return (ir_lower_result_t){.status = IR_LOWER_FAILED};
 }
 
+static parse_token_info_t *
+last_tree_terminal(parse_tree_t *node)
+{
+    if (!node) return nullptr;
+    if (core_tree_is_leaf(node)) return parse_node_token(node);
+    for (size_t i = core_tree_num_children(node); i > 0; i--) {
+        parse_token_info_t *token =
+            last_tree_terminal(core_tree_child(node, i - 1));
+        if (token) return token;
+    }
+    return nullptr;
+}
+
+static ir_span_t
+lower_span_for_tree(ir_lower_context_t *context, parse_tree_t *node)
+{
+    parse_token_info_t *first = parse_tree_find_first_terminal(node);
+    parse_token_info_t *last = last_tree_terminal(node);
+    if (!context || context->file_id < 0 || !first || !last
+        || first->start_byte > UINT32_MAX || last->end_byte > UINT32_MAX)
+        return IR_SPAN_UNKNOWN;
+    return ir_span_make(context->file_id, (uint32_t)first->start_byte,
+                        (uint32_t)last->end_byte, first->line, first->column,
+                        last->endline, last->endcol);
+}
+
+static ir_block_t *
+n00bb_branch_block(ir_lower_context_t *context, n00bb_lower_context_t *lower,
+                   const char *role)
+{
+    char name[64];
+    snprintf(name, sizeof(name), "__n00bb_%s_%llu", role,
+             (unsigned long long)lower->next_block_id++);
+    return ir_block_add(context->function, name);
+}
+
+static bool
+n00bb_lower_branch_annotation(ir_lower_context_t *context,
+                              parse_visit_t *visit, bool entering, void *state)
+{
+    (void)state;
+    n00bb_lower_context_t *lower = context->user;
+    if (!lower) return false;
+    if (!entering) {
+        if (lower->branches.len
+            && lower->branches.data[lower->branches.len - 1].node == visit->node) {
+            n00bb_branch_frame_t frame =
+                lower->branches.data[lower->branches.len - 1];
+            lower->branches.len--;
+            if (frame.active && !frame.join_reachable) {
+                ir_instr_t *unreachable =
+                    ir_instr_add(frame.join, IR_OP_UNREACHABLE);
+                if (!unreachable) return false;
+                unreachable->span = lower_span_for_tree(context, frame.node);
+            }
+            if (frame.active) {
+                context->block = frame.join;
+                context->reachable = frame.join_reachable;
+            }
+        }
+        return true;
+    }
+
+    core_string_t kind = parse_tree_nt_name(visit->grammar, visit->node);
+    if (!core_string_eq(kind, CORE_STRING_STATIC("if-stmt"))) {
+        lower_error(context, IR_DIAG_VERIFY_PARSED,
+                    lower_span_for_tree(context, visit->node),
+                    "this branch form is not lowered yet");
+        return false;
+    }
+
+    n00bb_tu_state_t *tu = tu_state(lower->unit);
+    parse_cf_label_t *label = tu
+        ? parse_cf_label_lookup(tu->annotations, visit->node) : nullptr;
+    if (!label || label->kind != PARSE_CF_BRANCH || !label->cond
+        || !label->then_body)
+        return false;
+    if (descendant_nt(visit->grammar, label->else_body, "elif-clause")) {
+        lower_error(context, IR_DIAG_VERIFY_PARSED,
+                    lower_span_for_tree(context, visit->node),
+                    "elif branches are not lowered yet");
+        return false;
+    }
+
+    parse_tree_t *else_clause = descendant_nt(visit->grammar,
+                                               label->else_body,
+                                               "else-clause");
+    parse_tree_t *else_body = else_clause
+        ? child_nt(visit->grammar, else_clause, "body") : nullptr;
+    if (terminal_count(label->else_body) && !else_body) {
+        lower_error(context, IR_DIAG_VERIFY_PARSED,
+                    lower_span_for_tree(context, visit->node),
+                    "this branch form is not lowered yet");
+        return false;
+    }
+    if (!context->reachable) {
+        core_list_push(lower->branches, ((n00bb_branch_frame_t){
+            .node = visit->node,
+            .active = false,
+        }));
+        return true;
+    }
+    ir_block_t *join = n00bb_branch_block(context, lower, "if_join");
+    ir_block_t *else_block = else_body
+        ? n00bb_branch_block(context, lower, "if_else") : nullptr;
+    if (!join || (else_body && !else_block)) return false;
+    core_list_push(lower->branches, ((n00bb_branch_frame_t){
+        .node = visit->node,
+        .condition = label->cond,
+        .body = label->then_body,
+        .else_body = else_body,
+        .join = join,
+        .else_block = else_block,
+        .join_reachable = !else_body,
+        .active = context->reachable,
+    }));
+    return true;
+}
+
+static bool
+n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
+                        bool entering, void *state)
+{
+    (void)state;
+    n00bb_lower_context_t *lower = context->user;
+    if (!lower || !core_string_eq(visit->annot->scope_tag,
+                                  CORE_STRING_STATIC("block")))
+        return true;
+    for (size_t i = lower->branches.len; i > 0; i--) {
+        n00bb_branch_frame_t *frame = &lower->branches.data[i - 1];
+        if (!frame->active) continue;
+        bool then_body = frame->body == visit->node;
+        bool else_body = frame->else_body == visit->node;
+        if (!then_body && !else_body) continue;
+        if (entering) {
+            if (else_body) {
+                context->block = frame->else_block;
+                context->reachable = true;
+                return true;
+            }
+            ir_value_t *condition =
+                ir_lower_node_value(context, frame->condition);
+            th_type *bool_type = th_name(tu_state(lower->unit)->types, "bool");
+            if (!condition || !bool_type
+                || !ir_type_eq(context->module, condition->type, bool_type)) {
+                lower_error(context, IR_DIAG_TYPE_MISMATCH,
+                    lower_span_for_tree(context, frame->node),
+                    "if condition must lower to bool");
+                return false;
+            }
+            ir_block_t *then_block =
+                n00bb_branch_block(context, lower, "if_then");
+            ir_instr_t *branch = then_block
+                ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
+            bool emitted = branch
+                && ir_instr_operand_value(branch, condition)
+                && ir_instr_operand_block(branch, then_block)
+                && ir_instr_operand_block(branch, frame->else_block
+                    ? frame->else_block : frame->join);
+            if (!emitted) {
+                lower_error(context, IR_DIAG_INTERNAL,
+                    lower_span_for_tree(context, frame->node),
+                    "could not emit conditional branch");
+                return false;
+            }
+            branch->span = lower_span_for_tree(context, frame->node);
+            context->block = then_block;
+            context->reachable = true;
+        }
+        else if (then_body) {
+            if (context->reachable) {
+                ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
+                if (!jump || !ir_instr_operand_block(jump, frame->join)) {
+                    lower_error(context, IR_DIAG_INTERNAL,
+                        lower_span_for_tree(context, frame->node),
+                        "could not emit branch join");
+                    return false;
+                }
+                jump->span = lower_span_for_tree(context, frame->node);
+                frame->join_reachable = true;
+            }
+            context->block = frame->else_body
+                ? frame->else_block : frame->join;
+            context->reachable = true;
+        }
+        else {
+            if (context->reachable) {
+                ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
+                if (!jump || !ir_instr_operand_block(jump, frame->join)) {
+                    lower_error(context, IR_DIAG_INTERNAL,
+                        lower_span_for_tree(context, frame->node),
+                        "could not emit branch join");
+                    return false;
+                }
+                jump->span = lower_span_for_tree(context, frame->node);
+                frame->join_reachable = true;
+            }
+            context->block = frame->join;
+            context->reachable = frame->join_reachable;
+        }
+        return true;
+    }
+    return true;
+}
+
 static ir_lower_result_t
 n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
                    ir_value_t *const *operands, size_t operand_count,
@@ -1916,7 +2135,9 @@ lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     }
     core_list_free(function_scopes);
 
+    lower_data.branches = core_list_new(n00bb_branch_frame_t);
     ir_lower_result_t lowered = ir_lower_tree(lowerer, &context, grammar, body);
+    core_list_free(lower_data.branches);
     if (lowered.status == IR_LOWER_FAILED || ir_diags_failed(diagnostics)) {
         return false;
     }
@@ -1955,11 +2176,14 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_work_queue_t *queue,
     ok = ok && lowerer
         && ir_lowerer_register(lowerer, "binary", n00bb_lower_binary,
                                nullptr)
-        && ir_lowerer_register(lowerer, "call", n00bb_lower_call, nullptr);
+        && ir_lowerer_register(lowerer, "call", n00bb_lower_call, nullptr)
+        && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_BRANCH,
+                                     n00bb_lower_branch_annotation, nullptr)
+        && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
+                                     n00bb_lower_branch_body, nullptr);
     static const parse_annot_kind_t rejected_kinds[] = {
-        PARSE_ANNOT_BRANCH, PARSE_ANNOT_LOOP, PARSE_ANNOT_SWITCH,
-        PARSE_ANNOT_CALL, PARSE_ANNOT_ASSIGNS, PARSE_ANNOT_OPERATOR,
-        PARSE_ANNOT_JUMP,
+        PARSE_ANNOT_LOOP, PARSE_ANNOT_SWITCH, PARSE_ANNOT_CALL,
+        PARSE_ANNOT_ASSIGNS, PARSE_ANNOT_OPERATOR, PARSE_ANNOT_JUMP,
     };
     for (size_t i = 0; ok && i < sizeof(rejected_kinds)
                                       / sizeof(rejected_kinds[0]); i++)
