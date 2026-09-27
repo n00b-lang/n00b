@@ -11,12 +11,12 @@ core_list_decl(iface_name_ptr);
 
 static bool nullary_name(const th_type *type, const char **name);
 
-static void defer_method_constraints(th_ctx *ctx, th_type *variable)
+static void defer_environment_constraints(th_ctx *ctx, th_type *variable)
 {
     if (!ctx || !variable) return;
-    for (size_t i = 0; i < ctx->pending_method_constraints.len; i++)
-        if (ctx->pending_method_constraints.data[i] == variable) return;
-    core_list_push(ctx->pending_method_constraints, variable);
+    for (size_t i = 0; i < ctx->pending_environment_constraints.len; i++)
+        if (ctx->pending_environment_constraints.data[i] == variable) return;
+    core_list_push(ctx->pending_environment_constraints, variable);
 }
 
 static bool iface_name_seen(core_list_t(iface_name_ptr) *names,
@@ -49,10 +49,6 @@ static th_constraint *con_same_slot(th_type *var, th_constraint c)
             return e;
         }
 
-        if (c.kind == TH_CON_METHOD &&
-            !strcmp(e->method.name, c.method.name)) {
-            return e;
-        }
     }
 
     return nullptr;
@@ -65,26 +61,18 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
     }
 
     if (c.kind == TH_CON_METHOD) {
-        if (!ctx || !c.method.name || !*c.method.name || !c.method.result)
+        if (!ctx || !c.method.name || !*c.method.name || !c.method.result ||
+            (c.method.call &&
+             th_kind_of(th_resolve(c.method.call)) != TH_FUNCTION))
             return false;
         c.method.name = th_strdup(ctx, c.method.name, strlen(c.method.name));
+        core_list_push(var->var.cons, c);
+        return true;
     }
 
     th_constraint *slot = con_same_slot(var, c);
 
     if (slot) {
-        if (c.kind == TH_CON_METHOD) {
-            if (slot->method.result && c.method.result &&
-                !th_unify_in_place(ctx, slot->method.result,
-                                   c.method.result)) {
-                th_err(ctx, TH_ERR_CONSTRAINT, "method", slot->method.result,
-                       c.method.result,
-                       "method result conflicts with one already constrained");
-                return false;
-            }
-            return true;
-        }
-
         th_type *have = c.kind == TH_CON_HAS_FIELD ? slot->field.type
                                                    : slot->param.type;
         th_type *want = c.kind == TH_CON_HAS_FIELD ? c.field.type
@@ -105,6 +93,25 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
     core_list_push(var->var.cons, c);
 
     return true;
+}
+
+bool th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
+                       th_type *result, th_type *call)
+{
+    if (!ctx || !receiver || !name || !*name || !result ||
+        (call && th_kind_of(th_resolve(call)) != TH_FUNCTION))
+        return false;
+    th_type *resolved = th_resolve(receiver);
+    bool is_variable = th_kind_of(resolved) == TH_VAR;
+    th_type *obligation = is_variable ? resolved : th_var(ctx);
+    if (!th_var_constrain(ctx, obligation,
+                          (th_constraint){.kind = TH_CON_METHOD,
+                                          .method = {.name = name,
+                                                     .result = result,
+                                                     .call = call}}))
+        return false;
+    return is_variable ||
+           th_unify_in_place(ctx, obligation, receiver) != nullptr;
 }
 
 size_t th_var_constraint_count(const th_type *var)
@@ -710,6 +717,10 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
         }
 
         case TH_CON_IMPLEMENTS:
+            if (!ctx->environment && !iface_named(ctx, c->iface)) {
+                defer_environment_constraints(ctx, (th_type *)var);
+                break;
+            }
             if (!th_implements(ctx, bound_to, c->iface)) {
                 th_err(ctx, TH_ERR_CONSTRAINT, c->iface, nullptr, bound_to,
                        "constraint implements: interface not satisfied");
@@ -720,7 +731,7 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
 
         case TH_CON_METHOD: {
             if (!ctx->environment) {
-                defer_method_constraints(ctx, (th_type *)var);
+                defer_environment_constraints(ctx, (th_type *)var);
                 break;
             }
             th_env_method_t method = {0};
@@ -730,10 +741,35 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
                 ? th_instantiate(ctx, method.signature) : nullptr;
             const th_param *receiver =
                 signature ? th_func_param(signature, 0) : nullptr;
-            if (!receiver || !th_func_ret(signature) ||
-                !uni_in_place(ctx, receiver->type, bound_to) ||
-                !uni_in_place(ctx, c->method.result,
-                              th_func_ret(signature))) {
+            bool matches = receiver && th_func_ret(signature);
+            if (matches) {
+                matches = uni_in_place(ctx, receiver->type, bound_to) &&
+                    uni_in_place(ctx, c->method.result,
+                                 th_func_ret(signature));
+            }
+            th_type *call = c->method.call;
+            size_t call_nparams = call ? th_func_nparams(call) : 0;
+            size_t target_nparams = signature
+                ? th_func_nparams(signature) : 0;
+            if (matches && call && call_nparams > target_nparams - 1 &&
+                !th_func_rest(signature))
+                matches = false;
+            for (size_t i = 0; matches && call && i < call_nparams; i++) {
+                const th_param *actual = th_func_param(call, i);
+                const th_param *formal = i + 1 < target_nparams
+                    ? th_func_param(signature, i + 1)
+                    : th_func_rest(signature);
+                matches = actual && formal &&
+                    uni_in_place(ctx, actual->type, formal->type);
+            }
+            for (size_t i = 0; matches && call && i < th_func_nkw(call); i++) {
+                const th_kwparam *actual = th_func_kw(call, i);
+                const th_kwparam *formal = actual
+                    ? th_func_kw_lookup(signature, actual->name) : nullptr;
+                matches = actual && formal &&
+                    uni_in_place(ctx, actual->type, formal->type);
+            }
+            if (!matches) {
                 th_err(ctx, TH_ERR_CONSTRAINT, c->method.name,
                        c->method.result, bound_to,
                        status == TH_ENV_METHOD_AMBIGUOUS
@@ -753,16 +789,16 @@ bool th_ctx_validate_constraints(th_ctx *ctx)
 {
     if (!ctx || !ctx->environment) return false;
     size_t pending = 0;
-    for (size_t i = 0; i < ctx->pending_method_constraints.len; i++) {
-        th_type *variable = ctx->pending_method_constraints.data[i];
+    for (size_t i = 0; i < ctx->pending_environment_constraints.len; i++) {
+        th_type *variable = ctx->pending_environment_constraints.data[i];
         th_type *bound_to = th_resolve(variable);
         if (!bound_to || bound_to->kind == TH_VAR) {
-            ctx->pending_method_constraints.data[pending++] = variable;
+            ctx->pending_environment_constraints.data[pending++] = variable;
             continue;
         }
         if (!con_check(ctx, variable, bound_to)) return false;
     }
-    ctx->pending_method_constraints.len = pending;
+    ctx->pending_environment_constraints.len = pending;
     return true;
 }
 
@@ -832,6 +868,7 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
                 break;
             case TH_CON_METHOD:
                 n += c->method.result != nullptr;
+                n += c->method.call != nullptr;
                 break;
             case TH_CON_IMPLEMENTS:
                 break;
@@ -860,6 +897,7 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
                 break;
             case TH_CON_METHOD:
                 if (c->method.result) kids[n++] = c->method.result;
+                if (c->method.call) kids[n++] = c->method.call;
                 break;
             case TH_CON_IMPLEMENTS:
                 break;
@@ -1786,6 +1824,8 @@ static th_constraint instantiate_constraint(th_ctx *ctx, th_constraint c,
     case TH_CON_METHOD:
         c.method.result = rebuild(ctx, c.method.result, &s->memo, true,
                                   inst_constraint_subst, s);
+        c.method.call = rebuild(ctx, c.method.call, &s->memo, true,
+                                inst_constraint_subst, s);
         break;
     case TH_CON_IMPLEMENTS:
         break;

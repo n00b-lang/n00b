@@ -134,7 +134,8 @@ th_type *ir_instr_key_type(ir_instr_t *in)
     for (uint32_t i = 0; i < in->n_operands; i++) {
         const ir_operand_t *o = &in->operands[i];
 
-        if (o->kind == IR_OPD_VALUE && o->value) {
+        if ((o->kind == IR_OPD_VALUE || o->kind == IR_OPD_SPREAD) &&
+            o->value) {
             return o->value->type;
         }
 
@@ -317,6 +318,7 @@ static ir_uint_t boxed_operands(ir_module_t *m, ir_instr_t *in, uint32_t win)
 
         switch (in->operands[i].kind) {
         case IR_OPD_VALUE:
+        case IR_OPD_SPREAD:
             t = in->operands[i].value ? in->operands[i].value->type : nullptr;
             break;
         case IR_OPD_NAMED_ARG:

@@ -101,8 +101,9 @@ typedef enum : uint8_t {
     TH_CON_HAS_PARAM,
     TH_CON_PROMOTES,
     TH_CON_EXCLUDES,
-    /* Resolve a named receiver method when this variable becomes concrete;
-     * its dispatch-selected return type unifies with `method.result`. */
+    /* Resolve a named receiver method when this variable becomes concrete.
+     * `call`, when present, is the positional/keyword call shape without the
+     * receiver; its return type is `result`. */
     TH_CON_METHOD,
 } th_con_kind;
 
@@ -126,6 +127,7 @@ typedef struct {
         struct {
             const char *name;
             th_type *result;
+            th_type *call;
         } method;
     };
 } th_constraint;
@@ -251,6 +253,11 @@ bool th_var_index(const th_type *type, uint64_t *index);
 const char *th_var_name(const th_type *type);
 
 bool   th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c);
+/* Attach a deferred method-call obligation to a concrete or unresolved
+ * receiver. `call` is the positional/keyword argument shape excluding the
+ * receiver; `result` is unified with the selected method's return type. */
+bool   th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
+                         th_type *result, th_type *call);
 size_t th_var_constraint_count(const th_type *var);
 bool   th_var_constraint_at(const th_type *var, size_t i, th_constraint *out);
 /* Recheck method obligations deferred until an environment is attached.

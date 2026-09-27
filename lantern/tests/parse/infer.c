@@ -29,6 +29,7 @@ static const char *const CORPUS[] = {
     "$2 unify $3",
     "$3 unify (list[$1] | array[$1])",
     "bool",
+    "compare($0, $2)",
     "dict[$0, $1]",
     "element_of($0)",
     "list[`e]",
@@ -170,6 +171,21 @@ test_shapes(void)
     }
     else {
         check("unwrap_result($2) parses", false);
+    }
+
+    e = parse_infer_parse(S("compare($0, $2)"));
+
+    if (e) {
+        check("comparison inference keeps both operand references",
+              e->kind == PARSE_INFER_COMPARE && e->lhs && e->rhs &&
+                  e->lhs->kind == PARSE_INFER_CHILD &&
+                  e->lhs->index == 0 &&
+                  e->rhs->kind == PARSE_INFER_CHILD &&
+                  e->rhs->index == 2);
+        parse_infer_free(e);
+    }
+    else {
+        check("compare($0, $2) parses", false);
     }
 
     e = parse_infer_parse(S("$$"));

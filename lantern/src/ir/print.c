@@ -178,6 +178,11 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
         }
         break;
 
+    case IR_OPD_SPREAD:
+        core_buffer_printf(b, "*%%%s",
+                           o->value && o->value->name ? o->value->name : "?");
+        break;
+
     case IR_OPD_TYPE:
         put_type(b, m, o->type);
         break;
@@ -261,6 +266,31 @@ static void put_init(core_buffer_t *b, bool has, bool is_float, const char *text
         return;
     }
     ir_lit_into(b, lit);
+}
+
+static void put_global_record_init(core_buffer_t *b, const ir_global_t *global)
+{
+    if (!global->has_record_init) return;
+    core_buffer_puts(b, " = {");
+    for (size_t i = 0; i < global->n_record_init; i++) {
+        const ir_global_init_value_t *value = &global->record_init[i];
+        core_buffer_printf(b, "%s%s = ", i ? ", " : " ",
+                           value->member ? value->member : "?");
+        switch (value->kind) {
+        case IR_GLOBAL_INIT_INT:
+            ir_lit_into(b, value->integer);
+            break;
+        case IR_GLOBAL_INIT_FLOAT:
+            core_buffer_printf(b, "%.17g", value->floating);
+            break;
+        case IR_GLOBAL_INIT_SYMBOL:
+            core_buffer_printf(b, "@%s",
+                               value->symbol && value->symbol->name
+                                   ? value->symbol->name : "?");
+            break;
+        }
+    }
+    core_buffer_puts(b, global->n_record_init ? " }" : "}");
 }
 
 static void put_local_slot(core_buffer_t *b, ir_module_t *m, const ir_local_t *l)
@@ -479,6 +509,7 @@ static bool on_global(ir_visit_t *v)
     put_type(b, m, g->type);
     put_init(b, g->has_init, g->init_is_float, g->init_text, g->init_f,
              g->init);
+    put_global_record_init(b, g);
     put_span(b, m, g->span);
     put_origin(b, g->origin);
     put_annots(b, m, &g->annots);
@@ -494,6 +525,7 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
     bool first = true;
 
     for (uint32_t i = 0; i < f->n_params; i++) {
+        if (f->params[i]->is_keyword || f->params[i]->is_rest) continue;
         core_buffer_printf(b, "%s%%%s: ", first ? "" : ", ", f->params[i]->name);
         put_type(b, m, f->params[i]->type);
         first = false;
@@ -503,6 +535,11 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
 
     if (rest) {
         core_buffer_printf(b, "%s*", first ? "" : ", ");
+        ir_value_t *rest_value = nullptr;
+        for (uint32_t i = 0; i < f->n_params; i++)
+            if (f->params[i]->is_rest) rest_value = f->params[i];
+        if (rest_value)
+            core_buffer_printf(b, "%%%s: ", rest_value->name);
         put_type(b, m, rest->type);
         first = false;
     }

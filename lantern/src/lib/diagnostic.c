@@ -144,6 +144,12 @@ core_diagnostics_failed(const core_diagnostics_t *d)
         || core_diagnostics_count_severity(d, CORE_DIAG_ERROR);
 }
 
+bool
+core_diagnostics_has_fatal(const core_diagnostics_t *d)
+{
+    return core_diagnostics_count_severity(d, CORE_DIAG_FATAL) != 0;
+}
+
 char *
 core_diagnostics_render_text(const core_diagnostics_t *d)
 {

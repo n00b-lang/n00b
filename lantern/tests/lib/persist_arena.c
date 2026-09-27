@@ -14,6 +14,37 @@ typedef struct persist_node {
   uint64_t value;
 } persist_node_t;
 
+static void test_native_abi_tag(void) {
+  char path[] = "/tmp/lantern-persist-abi-XXXXXX";
+  int placeholder = mkstemp(path);
+  check("temporary ABI-tag path is available", placeholder >= 0);
+  if (placeholder < 0) return;
+  close(placeholder);
+  unlink(path);
+
+  uint64_t schema = UINT64_C(0x746573742d616269);
+  uint64_t tag = core_persist_arena_native_abi_tag(schema);
+  check("native ABI tags incorporate the application schema",
+        tag != 0 && tag != core_persist_arena_native_abi_tag(schema + 1));
+
+  core_persist_arena_t *arena = nullptr;
+  core_persist_arena_error_t error;
+  bool created = core_persist_arena_create(path, 256, tag, &arena, &error);
+  check("create arena with a derived native ABI tag", created && arena);
+  if (arena) core_persist_arena_close(arena, nullptr);
+  arena = nullptr;
+  check("native ABI tag reopens on the same target",
+        core_persist_arena_open(path, tag, false, &arena, &error) && arena);
+  if (arena) core_persist_arena_close(arena, nullptr);
+  arena = nullptr;
+  check("different application schema tag is rejected",
+        !core_persist_arena_open(
+            path, core_persist_arena_native_abi_tag(schema + 1), false,
+            &arena, &error) && error == CORE_PERSIST_ARENA_INCOMPATIBLE &&
+            !arena);
+  unlink(path);
+}
+
 static void test_round_trip_and_address_collision(void) {
   char path[] = "/tmp/lantern-persist-arena-XXXXXX";
   int placeholder = mkstemp(path);
@@ -149,6 +180,7 @@ static void test_malformed_file(void) {
 }
 
 int main(void) {
+  test_native_abi_tag();
   test_round_trip_and_address_collision();
   test_malformed_file();
   return report("persistent arena");

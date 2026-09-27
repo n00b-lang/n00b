@@ -37,6 +37,7 @@ struct parse_sym_entry_t {
     parse_tree_t        *decl_node;
     th_type                 *type;
     th_type                 *error_type;
+    th_type                 *callable_contract;
     parse_sym_entry_t         *shadowed;
     parse_sym_entry_t         *next_in_scope;
     parse_scope_t             *scope;

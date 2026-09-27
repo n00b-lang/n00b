@@ -956,6 +956,273 @@ test_trait_method_inference_uses_visible_requirement(void)
 }
 
 static void
+test_ordering_inference_uses_comparable_trait(void)
+{
+    static const char *const G =
+        "<top> @tokenizer(\"toy\") ::= <comparison>\n"
+        "<comparison> @infer(\"compare($0, $2)\") ::= <left> %\"<\" <right>\n"
+        "<left> @infer(\"Meter\") ::= __LOWER\n"
+        "<right> @infer(\"Meter\") ::= __LOWER\n";
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    check("ordering inference grammar loads", loaded);
+    if (!loaded) {
+        parse_grammar_free(g);
+        return;
+    }
+
+    parse_pwz_parser_t *parser = nullptr;
+    parse_token_stream_t *tokens = nullptr;
+    parse_tree_t *tree = parse_toy(g, "top", "x<x", &parser, &tokens);
+    check("ordering expression parses", tree != nullptr);
+    if (!tree) {
+        if (parser) parse_pwz_free(parser);
+        if (tokens) scan_token_stream_free(tokens);
+        parse_grammar_free(g);
+        return;
+    }
+
+    th_ctx *definitions = th_ctx_new();
+    th_type *self = th_var(definitions);
+    th_param required_params[] = {
+        {.mode = TH_IN, .type = self},
+        {.mode = TH_IN, .type = self},
+    };
+    th_type *compare_code = ir_type_from_text(definitions, S("i:2"));
+    th_member requirement = {
+        .name = "cmp",
+        .type = th_func(definitions,
+                        compare_code, required_params, 2, nullptr, nullptr, 0),
+    };
+    th_param implementation_params[] = {
+        {.mode = TH_IN, .type = th_name(definitions, "Meter")},
+        {.mode = TH_IN, .type = th_name(definitions, "Meter")},
+    };
+    th_env *environment = th_env_new();
+    bool trait_registered = th_env_register_trait(environment,
+        "Comparable", "traits", "base", TH_ENV_PUBLIC,
+        th_record(definitions, &requirement, 1));
+    bool function_registered = trait_registered &&
+        th_env_register_function(environment, "base.meter.cmp", "cmp",
+            "meter", "base", TH_ENV_PUBLIC,
+            th_func(definitions, compare_code,
+                    implementation_params, 2, nullptr, nullptr, 0));
+    bool registered = function_registered && th_env_freeze(environment);
+    th_ctx *inference = th_ctx_new();
+    bool attached = registered &&
+        th_ctx_set_environment(inference, environment, "client", "base");
+    parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
+    for (int phase = PARSE_ANNOT_PASS_SCOPE;
+         attached && phase <= PARSE_ANNOT_PASS_INFER; phase++) {
+        parse_tree_walk_t *walk = parse_tree_walk_new(g, annotations);
+        parse_annot_register_pass(walk, annotations, inference, nullptr,
+                                  (parse_annot_pass_t)phase);
+        parse_tree_walk_run(walk, tree);
+        parse_tree_walk_free(walk);
+    }
+    parse_tree_t *comparison = find_node(g, tree, "comparison");
+    th_type *actual = comparison
+        ? core_tree_node_value(comparison).type : nullptr;
+    check("Comparable test declarations register", registered);
+    check("Comparable return type parses as i:2", compare_code != nullptr);
+    check("Comparable trait registers", trait_registered);
+    check("Comparable candidate registers", function_registered);
+    check("Comparable environment attaches", attached);
+    check("comparison node receives an inferred type", actual != nullptr);
+    check("ordering inference validates Comparable.cmp and returns bool",
+          attached && actual &&
+              th_unify(inference, actual, th_name(inference, "bool")));
+
+    parse_annot_result_free(annotations);
+    th_ctx_free(inference);
+    th_env_free(environment);
+    th_ctx_free(definitions);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+    parse_grammar_free(g);
+}
+
+static void
+test_index_inference_uses_index_load_trait(void)
+{
+    static const char *const G =
+        "<top> @tokenizer(\"toy\") ::= <access>\n"
+        "<access> @infer(\"element_of($0)\") ::= <receiver> %\"[\" <index-contents> %\"]\"\n"
+        "<index-contents> ::= <expression>\n"
+        "<receiver> @infer(\"OpaqueBox[int]\") ::= __LOWER\n"
+        "<expression> @infer(\"int\") ::= __LOWER\n";
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    check("index inference grammar loads", loaded);
+    if (!loaded) {
+        parse_grammar_free(g);
+        return;
+    }
+
+    parse_pwz_parser_t *parser = nullptr;
+    parse_token_stream_t *tokens = nullptr;
+    parse_tree_t *tree = parse_toy(g, "top", "a[i]", &parser, &tokens);
+    check("single-index expression parses", tree != nullptr);
+    if (!tree) {
+        if (parser) parse_pwz_free(parser);
+        if (tokens) scan_token_stream_free(tokens);
+        parse_grammar_free(g);
+        return;
+    }
+
+    th_ctx *definitions = th_ctx_new();
+    th_type *receiver_var = th_var(definitions);
+    th_type *string_type = th_name(definitions, "string");
+    th_type *int_type = th_name(definitions, "int");
+    th_type *indexable = th_apply(
+        definitions, "OpaqueBox",
+        (th_arg[]){{.kind = TH_ARG_TYPE, .type = int_type}}, 1);
+    th_param required_params[] = {
+        {.mode = TH_IN, .type = receiver_var},
+        {.mode = TH_IN, .type = int_type},
+    };
+    th_param implementation_params[] = {
+        {.mode = TH_IN, .type = indexable},
+        {.mode = TH_IN, .type = int_type},
+    };
+    th_member required = {
+        .name = "load",
+        .type = th_func(definitions, th_var(definitions), required_params, 2,
+                        nullptr, nullptr, 0),
+    };
+    th_env *environment = th_env_new();
+    bool registered = th_env_register_trait(
+        environment, "Index_Load", "builtins", "base", TH_ENV_PUBLIC,
+        th_record(definitions, &required, 1)) &&
+        th_env_register_function(
+            environment, "base.opaque_box.load", "load", "opaque_box",
+            "base", TH_ENV_PUBLIC,
+            th_func(definitions, string_type, implementation_params, 2,
+                    nullptr, nullptr, 0)) && th_env_freeze(environment);
+    th_ctx *inference = th_ctx_new();
+    bool attached = registered && th_ctx_set_environment(
+        inference, environment, "client", "base");
+    parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
+    for (int phase = PARSE_ANNOT_PASS_SCOPE;
+         attached && phase <= PARSE_ANNOT_PASS_INFER; phase++) {
+        parse_tree_walk_t *walk = parse_tree_walk_new(g, annotations);
+        parse_annot_register_pass(walk, annotations, inference, nullptr,
+                                  (parse_annot_pass_t)phase);
+        parse_tree_walk_run(walk, tree);
+        parse_tree_walk_free(walk);
+    }
+    parse_tree_t *access = find_node(g, tree, "access");
+    th_type *actual = access ? core_tree_node_value(access).type : nullptr;
+    check("index result comes from the Index_Load contract",
+          attached && actual &&
+              th_hash(inference, actual) ==
+                  th_hash(inference, th_name(inference, "string")));
+
+    parse_annot_result_free(annotations);
+    th_ctx_free(inference);
+    th_env_free(environment);
+    th_ctx_free(definitions);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+    parse_grammar_free(g);
+}
+
+static void
+test_slice_inference_uses_index_slice_trait(void)
+{
+    static const char *const G =
+        "<top> @tokenizer(\"toy\") ::= <access>\n"
+        "<access> @infer(\"slice_of($0)\") ::= <receiver> %\"[\" <index-contents> %\"]\"\n"
+        "<index-contents> ::= <expression> %\":\" <expression>\n"
+        "                   | <expression> %\":\"\n"
+        "                   | %\":\" <expression>\n"
+        "                   | %\":\"\n"
+        "<receiver> @infer(\"OpaqueBox[int]\") ::= __LOWER\n"
+        "<expression> @infer(\"int\") ::= __DIGIT\n";
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    check("slice inference grammar loads", loaded);
+    if (!loaded) {
+        parse_grammar_free(g);
+        return;
+    }
+
+    th_ctx *definitions = th_ctx_new();
+    th_type *receiver_var = th_var(definitions);
+    th_type *item_var = th_var(definitions);
+    th_arg view_item = {.kind = TH_ARG_TYPE, .type = item_var};
+    th_type *view_of_item = th_apply(definitions, "view", &view_item, 1);
+    th_type *integer = th_name(definitions, "int");
+    th_param requirement_params[] = {
+        {.mode = TH_IN, .type = receiver_var},
+        {.mode = TH_IN, .type = integer},
+        {.mode = TH_IN, .type = integer},
+    };
+    th_member requirement = {
+        .name = "slice",
+        .type = th_func(definitions, view_of_item, requirement_params, 3,
+                        nullptr, nullptr, 0),
+    };
+    th_type *int_box = th_apply(
+        definitions, "OpaqueBox",
+        (th_arg[]){{.kind = TH_ARG_TYPE, .type = integer}}, 1);
+    th_arg view_of_int_arg = {.kind = TH_ARG_TYPE, .type = integer};
+    th_type *view_of_int = th_apply(definitions, "view", &view_of_int_arg, 1);
+    th_param implementation_params[] = {
+        {.mode = TH_IN, .type = int_box},
+        {.mode = TH_IN, .type = integer},
+        {.mode = TH_IN, .type = integer},
+    };
+    th_env *environment = th_env_new();
+    bool registered = th_env_register_trait(
+        environment, "Index_Slice", "builtins", "base", TH_ENV_PUBLIC,
+        th_record(definitions, &requirement, 1)) &&
+        th_env_register_function(
+            environment, "base.opaque_box.slice", "slice", "opaque_box",
+            "base", TH_ENV_PUBLIC,
+            th_func(definitions, view_of_int, implementation_params, 3,
+                    nullptr, nullptr, 0)) && th_env_freeze(environment);
+    th_ctx *inference = th_ctx_new();
+    bool attached = registered && th_ctx_set_environment(
+        inference, environment, "client", "base");
+    const char *sources[] = {"a[2:4]", "a[2:]", "a[:4]", "a[:]"};
+    bool all_inferred = attached;
+    for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); i++) {
+        parse_pwz_parser_t *parser = nullptr;
+        parse_token_stream_t *tokens = nullptr;
+        parse_tree_t *tree = parse_toy(g, "top", sources[i], &parser, &tokens);
+        parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
+        bool ok = tree != nullptr;
+        for (int phase = PARSE_ANNOT_PASS_SCOPE;
+             ok && phase <= PARSE_ANNOT_PASS_INFER; phase++) {
+            parse_tree_walk_t *walk = parse_tree_walk_new(g, annotations);
+            parse_annot_register_pass(walk, annotations, inference, nullptr,
+                                      (parse_annot_pass_t)phase);
+            parse_tree_walk_run(walk, tree);
+            parse_tree_walk_free(walk);
+        }
+        parse_tree_t *access = tree ? find_node(g, tree, "access") : nullptr;
+        th_type *actual = access ? core_tree_node_value(access).type : nullptr;
+        all_inferred = all_inferred && ok && actual &&
+            th_hash(inference, actual) == th_hash(inference, view_of_int);
+        parse_annot_result_free(annotations);
+        if (parser) parse_pwz_free(parser);
+        if (tokens) scan_token_stream_free(tokens);
+    }
+    check("Index_Slice declares int bounds and a view result", registered);
+    check("all four slice forms infer view[T] through Index_Slice.slice",
+          all_inferred);
+
+    th_ctx_free(inference);
+    th_env_free(environment);
+    th_ctx_free(definitions);
+    parse_grammar_free(g);
+}
+
+static void
 test_the_representation_and_declaration_annotations(void)
 {
     static const char *const G
@@ -1267,6 +1534,76 @@ test_symbol_lookup_instantiates_schemes(void)
 }
 
 static void
+test_function_visibility_does_not_leak_to_parameters(void)
+{
+    static const char *const G =
+        "@tokenizer(\"toy\")\n"
+        "<top> @scope(\"module\") ::= <func>\n"
+        "<func> @scope(\"function\", $2) @declares($2, \"function\") ::= "
+        "<func-prelude> <name> <param> \";\"\n"
+        "<func-prelude> @visibility(\"public\") ::= \"P\"\n"
+        "<param> @declares($1, \"param\") ::= <name>\n"
+        "<name> ::= __LOWER\n";
+    parse_grammar_t *grammar = parse_grammar_new();
+    parse_grammar_set_error_recovery(grammar, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), grammar);
+    parse_pwz_parser_t *parser = nullptr;
+    parse_token_stream_t *tokens = nullptr;
+    parse_tree_t *tree = loaded
+        ? parse_toy(grammar, "top", "Pfx;", &parser, &tokens)
+        : nullptr;
+    th_ctx *types = th_ctx_new();
+    parse_annot_result_t *result = tree
+        ? parse_annot_walk_tree(grammar, tree, types, nullptr) : nullptr;
+    parse_tree_t *func_node = result ? find_node(grammar, tree, "func") : nullptr;
+    parse_sym_entry_t *function = func_node
+        ? core_tree_node_value(func_node).sym : nullptr;
+    check("function-prelude visibility binds to the function declaration",
+          loaded && tree && function
+              && core_string_eq(function->visibility, S("public")));
+    parse_annot_result_free(result);
+    th_ctx_free(types);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+    parse_grammar_free(grammar);
+}
+
+static void
+test_visibility_prefix_binds_to_non_function_declaration(void)
+{
+    static const char *const G =
+        "@tokenizer(\"toy\")\n"
+        "<top> @scope(\"module\") ::= <trait>\n"
+        "<trait> @scope(\"trait\", $2) @declares($2) ::= "
+        "<visibility> <name> \";\"\n"
+        "<visibility> @visibility(\"public\") ::= \"P\"\n"
+        "<name> ::= __LOWER\n";
+    parse_grammar_t *grammar = parse_grammar_new();
+    parse_grammar_set_error_recovery(grammar, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), grammar);
+    parse_pwz_parser_t *parser = nullptr;
+    parse_token_stream_t *tokens = nullptr;
+    parse_tree_t *tree = loaded
+        ? parse_toy(grammar, "top", "Pf;", &parser, &tokens) : nullptr;
+    th_ctx *types = th_ctx_new();
+    parse_annot_result_t *result = tree
+        ? parse_annot_walk_tree(grammar, tree, types, nullptr) : nullptr;
+    parse_tree_t *trait_node = tree ? find_node(grammar, tree, "trait") : nullptr;
+    parse_sym_entry_t *trait = trait_node
+        ? core_tree_node_value(trait_node).sym : nullptr;
+    check("non-function visibility grammar loads", loaded);
+    check("non-function visibility sample parses", tree != nullptr);
+    check("non-function declaration symbol is attached", trait != nullptr);
+    check("visibility prefix binds to a non-function declaration",
+          trait && core_string_eq(trait->visibility, S("public")));
+    parse_annot_result_free(result);
+    th_ctx_free(types);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+    parse_grammar_free(grammar);
+}
+
+static void
 test_scoped_declaration_is_bound_outside_its_body(void)
 {
     static const char *const G
@@ -1378,9 +1715,14 @@ main(void)
     test_selected_type_annotations_per_node(g);
     test_inference_result_is_propagated();
     test_symbol_lookup_instantiates_schemes();
+    test_function_visibility_does_not_leak_to_parameters();
+    test_visibility_prefix_binds_to_non_function_declaration();
     test_scoped_declaration_is_bound_outside_its_body();
     test_the_repr_annotations_reach_the_layout_descriptor();
     test_trait_method_inference_uses_visible_requirement();
+    test_ordering_inference_uses_comparable_trait();
+    test_index_inference_uses_index_load_trait();
+    test_slice_inference_uses_index_slice_trait();
     test_an_adt_builds_a_variant_type();
     test_implements_is_checked_not_carried();
     test_part_two_rejections();

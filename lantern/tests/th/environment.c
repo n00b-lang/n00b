@@ -57,9 +57,13 @@ static bool mutate_environment_visibility(const char *path, bool trait,
                                           uint32_t value) {
   core_persist_arena_t *arena = nullptr;
   core_persist_arena_error_t error;
-  if (!core_persist_arena_open(path, TEST_ENV_ARCHIVE_ABI, true, &arena,
-                               &error))
+  if (!core_persist_arena_open(path,
+                               core_persist_arena_native_abi_tag(
+                                   TEST_ENV_ARCHIVE_ABI),
+                               true, &arena,
+                               &error)) {
     return false;
+  }
   test_archive_image_t *image = core_persist_arena_root(arena);
   bool valid = core_persist_arena_contains(arena, image, sizeof(*image));
   test_archive_record_t *root_record = nullptr;
@@ -101,8 +105,8 @@ static bool mutate_environment_visibility(const char *path, bool trait,
     } else if (valid) {
       for (size_t i = 0; valid && i < trait_count; i++) {
         valid = skip_archive_strings(payload, size, &offset, 3) &&
-                offset <= size && size - offset >= 20;
-        if (valid) offset += 20;
+                offset <= size && size - offset >= 52;
+        if (valid) offset += 52;
       }
       if (valid && offset <= size && size - offset >= 8) {
         size_t function_count = (size_t)read_le_u64(payload + offset);
@@ -130,7 +134,10 @@ static bool mutate_environment_metadata_owner(const char *path,
                                               uint32_t value) {
   core_persist_arena_t *arena = nullptr;
   core_persist_arena_error_t error;
-  if (!core_persist_arena_open(path, TEST_ENV_ARCHIVE_ABI, true, &arena,
+  if (!core_persist_arena_open(path,
+                               core_persist_arena_native_abi_tag(
+                                   TEST_ENV_ARCHIVE_ABI),
+                               true, &arena,
                                &error))
     return false;
   test_archive_image_t *image = core_persist_arena_root(arena);
@@ -170,8 +177,8 @@ static bool mutate_environment_metadata_owner(const char *path,
     for (size_t i = 0; valid && i < count; i++) {
       size_t strings = group == 0 ? 3 : 4;
       valid = skip_archive_strings(payload, size, &offset, strings) &&
-              offset <= size && size - offset >= 20;
-      if (valid) offset += 20;
+              offset <= size && size - offset >= 52;
+      if (valid) offset += 52;
     }
   }
   size_t metadata_count = 0;
@@ -226,6 +233,7 @@ static bool register_function(th_env *env, const char *qualified_name,
 typedef struct {
   const th_env *environment;
   bool ok;
+  bool composed_ok;
 } environment_query_run_t;
 
 static void *query_frozen_environment(void *raw) {
@@ -243,6 +251,31 @@ static void *query_frozen_environment(void *raw) {
                                     &method) == TH_ENV_METHOD_FOUND &&
               !strcmp(method.qualified_name, "base.ints.read_first");
   }
+  th_arg integer_arg = {.kind = TH_ARG_TYPE,
+                        .type = th_name(context, "int")};
+  th_type *box_integer = th_apply(context, "Box", &integer_arg, 1);
+  th_env_dispatch_entry_t entry = {0};
+  bool direct_call = false;
+  run->ok = run->ok && th_env_method_plan_dispatch(
+      context, "BoxReadable", "get", &box_integer, 1, &entry, 1, nullptr,
+      &direct_call) == TH_ENV_METHOD_FOUND && direct_call &&
+      !strcmp(entry.method.qualified_name, "base.box.int_get");
+
+  const th_env *sources[] = {run->environment};
+  th_env *composed = th_env_compose(sources, 1);
+  th_ctx *composed_context = th_ctx_new();
+  run->composed_ok = composed && th_env_freeze(composed) &&
+      th_ctx_set_environment(composed_context, composed, "consumer", "base");
+  if (run->composed_ok) {
+    th_type *composed_integer = th_name(composed_context, "int");
+    th_env_method_t method = {0};
+    run->composed_ok = th_env_method_resolve(
+        composed_context, composed_integer, "Readable", "read", &method) ==
+            TH_ENV_METHOD_FOUND &&
+        !strcmp(method.qualified_name, "base.ints.read_first");
+  }
+  th_ctx_free(composed_context);
+  th_env_free(composed);
   th_ctx_free(context);
   return nullptr;
 }
@@ -323,13 +356,14 @@ int main(void) {
   check("register generic Box function candidate",
         register_function(env, "base.box.generic_get", "get", "box-generic",
                           "base", TH_ENV_PACKAGE,
-                          fn1(types, generic_box, generic_element)));
+                          fn1(types, generic_box, generic_box)));
 
   th_arg concrete_box_arg = {.kind = TH_ARG_TYPE, .type = integer};
   th_type *concrete_box = th_apply(types, "Box", &concrete_box_arg, 1);
   check("register concrete Box function candidate",
         register_function(env, "base.box.int_get", "get", "box-int", "base",
-                          TH_ENV_PACKAGE, fn1(types, concrete_box, integer)));
+                          TH_ENV_PACKAGE,
+                          fn1(types, concrete_box, concrete_box)));
 
   th_type *pair_trait_receiver = th_var(types);
   check("register trait used to test overlapping receiver patterns",
@@ -411,6 +445,38 @@ int main(void) {
         register_function(env, "base.int.add", "add", "int", "base",
                           TH_ENV_PUBLIC, fn2(types, integer, integer, integer)));
 
+  th_type *fallible_receiver = th_var(types);
+  th_type *read_error = th_name(types, "ReadError");
+  check("register trait success and failure channels",
+        th_env_register_trait_channels(
+            env, "FallibleRead", "traits", "base", TH_ENV_PUBLIC,
+            method_record(types, "fallible_read",
+                          fn1(types, fallible_receiver, string)),
+            method_record(types, "fallible_read", read_error)) &&
+            th_env_register_function_channels(
+                env, "base.reads.int_read", "fallible_read", "reads",
+                "base", TH_ENV_PUBLIC, fn1(types, integer, string),
+                read_error) &&
+            th_env_register_function_channels(
+                env, "base.reads.wrong_error", "fallible_read", "reads",
+                "base", TH_ENV_PUBLIC, fn1(types, integer, string),
+                th_name(types, "WriteError")));
+
+  th_type *correlated_channel_var = th_var(types);
+  th_type *correlated_contract = th_generalize(types,
+      th_env_signature_contract(types,
+          fn1(types, correlated_channel_var, correlated_channel_var),
+          correlated_channel_var));
+  th_type *wrong_correlated_contract = th_env_signature_contract(
+      types, fn1(types, integer, integer), string);
+  check("register jointly quantified trait and function channel contracts",
+        th_env_register_trait_contracts(
+            env, "CorrelatedFailure", "traits", "base", TH_ENV_PUBLIC,
+            method_record(types, "correlated", correlated_contract)) &&
+            th_env_register_function_contract(
+                env, "base.reads.correlated_wrong", "correlated", "reads",
+                "base", TH_ENV_PUBLIC, wrong_correlated_contract));
+
   th_type *private_get_receiver = th_var(types);
   check("register private trait method for requirement visibility",
         th_env_register_trait(
@@ -436,6 +502,11 @@ int main(void) {
             !th_env_type_visible(inside, "Secret") &&
             th_env_type_visible(inside, "PackageType") &&
             !th_env_type_visible(outside, "PackageType"));
+  check("shared type context can change module visibility view",
+        th_ctx_set_environment_scope(outside, "secrets", "base") &&
+            th_env_type_visible(outside, "Secret") &&
+            th_ctx_set_environment_scope(outside, "consumer", "other") &&
+            !th_env_type_visible(outside, "Secret"));
 
   th_type *consumer_int = th_name(inside, "int");
   th_env_method_t selected = {0};
@@ -464,6 +535,21 @@ int main(void) {
             == nullptr);
   check("ordinary function candidate supplies open-trait fact",
         th_implements(inside, consumer_int, "Readable"));
+  th_env_method_t fallible_candidates[2] = {0};
+  th_env_method_t fallible_method = {0};
+  check("trait candidate matching checks its separately tracked failure type",
+        th_env_method_candidates(inside, "FallibleRead", "fallible_read",
+                                 fallible_candidates, 2) == 1 &&
+            !strcmp(fallible_candidates[0].qualified_name,
+                    "base.reads.int_read") &&
+            th_env_method_lookup(inside, consumer_int, "FallibleRead",
+                                 "fallible_read", &fallible_method) &&
+            th_unify(inside, fallible_method.error_type, read_error) &&
+            th_implements(inside, consumer_int, "FallibleRead"));
+  check("trait channel matching preserves shared quantified variables",
+        !th_implements(inside, consumer_int, "CorrelatedFailure") &&
+            th_env_method_candidates(inside, "CorrelatedFailure",
+                                     "correlated", nullptr, 0) == 0);
   check("package-scoped candidate is invisible outside package",
         !th_implements(outside, th_name(outside, "int"), "Readable"));
   check("dispatch generation can enumerate viable method candidates",
@@ -483,11 +569,13 @@ int main(void) {
       : nullptr;
   th_type *box_requirement_result = get_requirement_count
       ? th_func_ret(get_requirements[0].signature) : nullptr;
+  th_type *box_int = th_apply(
+      inside, "Box",
+      &(th_arg){.kind = TH_ARG_TYPE, .type = th_name(inside, "int")}, 1);
   check("method requirement keeps receiver and result variables related",
         box_requirement_receiver && box_requirement_result &&
-            th_unify_in_place(inside, box_requirement_receiver,
-                              consumer_int) &&
-            th_unify_in_place(inside, box_requirement_result, consumer_int));
+            th_unify_in_place(inside, box_requirement_receiver, box_int) &&
+            th_unify_in_place(inside, box_requirement_result, box_int));
   th_env_method_requirement_t repeated_requirements[2] = {0};
   size_t repeated_count = th_env_method_requirements(
       inside, "get", repeated_requirements, 2);
@@ -513,9 +601,6 @@ int main(void) {
                              &selected) &&
             !strcmp(selected.module, "ints"));
 
-  th_type *box_int = th_apply(
-      inside, "Box",
-      &(th_arg){.kind = TH_ARG_TYPE, .type = th_name(inside, "int")}, 1);
   check(
       "most specific function candidate wins dispatch",
       th_env_method_lookup(inside, box_int, "BoxReadable", "get", &selected) &&
@@ -527,6 +612,32 @@ int main(void) {
                 TH_ENV_METHOD_FOUND &&
             !strcmp(selected.qualified_name, "base.box.int_get") &&
             !strcmp(selected_trait, "BoxReadable"));
+  th_env_vtable_slot_t box_slots[1] = {0};
+  size_t box_slot_count = 0;
+  th_env_vtable_plan_t box_vtable = {0};
+  check("concrete trait values receive a complete vtable plan",
+        th_env_trait_vtable_plan(inside, "BoxReadable", box_int, box_slots,
+                                 1, &box_slot_count, &box_vtable) ==
+                TH_ENV_METHOD_FOUND &&
+            box_slot_count == 1 &&
+            box_vtable.concrete_type == box_int &&
+            box_vtable.concrete_type_hash == th_hash(inside, box_int) &&
+            box_vtable.slot_count == 1 &&
+            box_vtable.required_slot_count == 1 &&
+            !strcmp(box_slots[0].method_name, "get") &&
+            !strcmp(box_slots[0].implementation.qualified_name,
+                    "base.box.int_get"));
+  th_env_vtable_slot_t missing_slots[2] = {
+      {.method_name = "unchanged"}, {.method_name = "unchanged"}};
+  size_t missing_slot_count = 7;
+  check("incomplete trait implementations cannot produce partial vtables",
+        th_env_trait_vtable_plan(inside, "Paired", consumer_int,
+                                 missing_slots, 2, &missing_slot_count,
+                                 nullptr) ==
+                TH_ENV_METHOD_NOT_FOUND &&
+            missing_slot_count == 0 &&
+            !strcmp(missing_slots[0].method_name, "unchanged") &&
+            !strcmp(missing_slots[1].method_name, "unchanged"));
   th_arg concrete_pair_args[] = {
       {.kind = TH_ARG_TYPE, .type = th_name(inside, "int")},
       {.kind = TH_ARG_TYPE, .type = th_name(inside, "int")},
@@ -548,7 +659,7 @@ int main(void) {
   th_type *deferred_result = th_func_ret(deferred_call);
   check("concrete receiver resolves the deferred method and its result",
         th_unify_in_place(inside, deferred_receiver, box_int) &&
-            th_unify(inside, deferred_result, th_name(inside, "int")));
+            th_unify(inside, deferred_result, box_int));
   th_type *ambiguous_call = th_instantiate(inside, deferred_scheme);
   th_type *ambiguous_receiver =
       (th_type *)th_func_param(ambiguous_call, 0)->type;
@@ -580,7 +691,7 @@ int main(void) {
             th_ctx_set_environment(late_environment_context, env, "consumer",
                                    "base") &&
             th_unify(late_environment_context, late_result,
-                     th_name(late_environment_context, "int")));
+                     late_box));
   th_ctx *late_invalid_context = th_ctx_new();
   th_type *late_invalid_receiver = th_var(late_invalid_context);
   th_var_constrain(late_invalid_context, late_invalid_receiver,
@@ -594,6 +705,32 @@ int main(void) {
         invalid_bound_early &&
             !th_ctx_set_environment(late_invalid_context, env, "consumer",
                                     "base"));
+  th_ctx *late_trait_context = th_ctx_new();
+  th_type *late_trait_receiver = th_var(late_trait_context);
+  th_var_constrain(late_trait_context, late_trait_receiver,
+                   (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                                   .iface = "Readable"});
+  bool trait_bound_before_environment = th_unify_in_place(
+      late_trait_context, late_trait_receiver,
+      th_name(late_trait_context, "int")) != nullptr;
+  check("environment attachment validates a trait bound after early binding",
+        trait_bound_before_environment &&
+            th_ctx_set_environment(late_trait_context, env, "consumer",
+                                   "base"));
+  th_ctx *late_invalid_trait_context = th_ctx_new();
+  th_type *late_invalid_trait_receiver = th_var(late_invalid_trait_context);
+  th_var_constrain(late_invalid_trait_context, late_invalid_trait_receiver,
+                   (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                                   .iface = "Readable"});
+  bool invalid_trait_bound_early = th_unify_in_place(
+      late_invalid_trait_context, late_invalid_trait_receiver,
+      th_name(late_invalid_trait_context, "string")) != nullptr;
+  check("environment attachment rejects a failed trait bound after binding",
+        invalid_trait_bound_early &&
+            !th_ctx_set_environment(late_invalid_trait_context, env,
+                                    "consumer", "base"));
+  th_ctx_free(late_invalid_trait_context);
+  th_ctx_free(late_trait_context);
   th_ctx_free(late_invalid_context);
   th_ctx_free(late_environment_context);
   check("integer receiver promotes to a matching trait method",
@@ -630,8 +767,67 @@ int main(void) {
                       "base.box.int_get")) ||
              (!strcmp(box_dispatch_candidates[1].qualified_name,
                       "base.box.generic_get") &&
-              !strcmp(box_dispatch_candidates[0].qualified_name,
+             !strcmp(box_dispatch_candidates[0].qualified_name,
                       "base.box.int_get"))));
+  th_arg dispatch_string_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(inside, "string"),
+  };
+  th_type *box_string =
+      th_apply(inside, "Box", &dispatch_string_arg, 1);
+  th_type *possible_box_receivers[] = {box_int, box_string};
+  th_env_dispatch_entry_t dispatch_entries[2] = {0};
+  size_t dispatch_count = 0;
+  bool direct_box_call = true;
+  th_env_method_status_t dispatch_status = th_env_method_plan_dispatch(
+      inside, "BoxReadable", "get", possible_box_receivers, 2,
+      dispatch_entries, 2, &dispatch_count, &direct_box_call);
+  check("known trait-value receiver types produce a complete runtime plan",
+        dispatch_status == TH_ENV_METHOD_FOUND && dispatch_count == 2 &&
+            !direct_box_call &&
+            dispatch_entries[0].receiver_type == box_int &&
+            dispatch_entries[1].receiver_type == box_string &&
+            !strcmp(dispatch_entries[0].method.qualified_name,
+                    "base.box.int_get") &&
+            !strcmp(dispatch_entries[1].method.qualified_name,
+                    "base.box.generic_get"));
+  th_env_dispatch_entry_t static_entry = {0};
+  bool direct_box_int = false;
+  check("a single known runtime receiver reduces to a direct call",
+        th_env_method_plan_dispatch(inside, "BoxReadable", "get", &box_int,
+                                    1, &static_entry, 1, &dispatch_count,
+                                    &direct_box_int) == TH_ENV_METHOD_FOUND &&
+            dispatch_count == 1 && direct_box_int &&
+            !strcmp(static_entry.method.qualified_name,
+                    "base.box.int_get"));
+  th_env_dispatch_entry_t truncated_entry = {0};
+  size_t full_dispatch_count = 0;
+  check("dispatch plans report required capacity without losing order",
+        th_env_method_plan_dispatch(
+            inside, "BoxReadable", "get", possible_box_receivers, 2,
+            &truncated_entry, 1, &full_dispatch_count, nullptr) ==
+                TH_ENV_METHOD_FOUND &&
+            full_dispatch_count == 2 &&
+            truncated_entry.receiver_type == box_int &&
+            !strcmp(truncated_entry.method.qualified_name,
+                    "base.box.int_get"));
+  th_type *unsupported_receiver = th_name(inside, "string");
+  th_env_dispatch_entry_t absent_entry = {0};
+  size_t absent_count = 99;
+  check("a missing implementation rejects dispatch planning atomically",
+        th_env_method_plan_dispatch(inside, "BoxReadable", "get",
+                                    &unsupported_receiver, 1, &absent_entry, 1,
+                                    &absent_count, nullptr) ==
+                TH_ENV_METHOD_NOT_FOUND &&
+            absent_count == 0 && !absent_entry.method.qualified_name);
+  th_env_dispatch_entry_t untouched_entry = {0};
+  size_t rejected_count = 99;
+  check("ambiguous runtime receiver types reject the whole dispatch plan",
+        th_env_method_plan_dispatch(inside, "PairReadable", "get",
+                                    &concrete_pair, 1, &untouched_entry, 1,
+                                    &rejected_count, nullptr) ==
+                TH_ENV_METHOD_AMBIGUOUS &&
+            rejected_count == 0 && !untouched_entry.method.qualified_name);
 
   check("incomparable overlapping methods are reported as ambiguous",
         th_env_method_resolve(inside, concrete_pair, "PairReadable", "get",
@@ -652,16 +848,21 @@ int main(void) {
                        &query_runs[i]) == 0;
   }
   bool concurrent_queries_ok = true;
+  bool concurrent_composition_ok = true;
   for (size_t i = 0; i < QUERY_THREADS; i++) {
     if (!query_created[i]) {
       concurrent_queries_ok = false;
+      concurrent_composition_ok = false;
       continue;
     }
     pthread_join(query_threads[i], nullptr);
     concurrent_queries_ok &= query_runs[i].ok;
+    concurrent_composition_ok &= query_runs[i].composed_ok;
   }
   check("frozen trait facts support concurrent independent queries",
         concurrent_queries_ok);
+  check("independent environments compose concurrently from frozen inputs",
+        concurrent_composition_ok);
 
   th_type *unknown = th_var(inside);
   check("open receiver query stays unresolved and unbound",
@@ -681,14 +882,24 @@ int main(void) {
   th_ctx *base_library_types = th_ctx_new();
   th_type *fetch_receiver = th_var(base_library_types);
   th_type *string_type = th_name(base_library_types, "string");
+  th_type *fetch_argument_type = th_name(base_library_types, "int");
   th_type *link_generic_element = th_var(base_library_types);
   th_type *deferred_fetch_receiver = th_var(base_library_types);
   th_type *deferred_fetch_result = th_var(base_library_types);
+  th_param deferred_fetch_argument = {
+      .mode = TH_IN,
+      .type = fetch_argument_type,
+  };
+  th_type *deferred_fetch_call = th_func(
+      base_library_types, deferred_fetch_result, &deferred_fetch_argument, 1,
+      nullptr, nullptr, 0);
+  th_type *fetch_error_type = th_name(base_library_types, "FetchError");
   bool deferred_fetch_constrained = th_var_constrain(
       base_library_types, deferred_fetch_receiver,
       (th_constraint){.kind = TH_CON_METHOD,
                       .method = {.name = "fetch",
-                                 .result = deferred_fetch_result}});
+                                 .result = deferred_fetch_result,
+                                 .call = deferred_fetch_call}});
   th_arg link_generic_box_arg = {
       .kind = TH_ARG_TYPE,
       .type = link_generic_element,
@@ -696,66 +907,158 @@ int main(void) {
   const uint8_t box_layout[] = {1, 8, 8, 0};
   const uint8_t fetch_trait_abi[] = {1, 2, 0};
   const uint8_t generic_fetch_abi[] = {2, 1, 1};
+  th_type *marker_methods = th_record(base_library_types, nullptr, 0);
+  th_type *bracket_element = th_var(base_library_types);
+  th_type *array_element = th_var(base_library_types);
+  th_type *brace_element = th_var(base_library_types);
+  th_type *dict_key = th_var(base_library_types);
+  th_type *dict_value = th_var(base_library_types);
+  th_arg list_pattern_arg = {.kind = TH_ARG_TYPE, .type = bracket_element};
+  th_arg set_pattern_arg = {.kind = TH_ARG_TYPE, .type = brace_element};
+  th_arg dict_pattern_args[] = {
+      {.kind = TH_ARG_TYPE, .type = dict_key},
+      {.kind = TH_ARG_TYPE, .type = dict_value},
+  };
+  check("register builtin literal-shape marker traits",
+        th_env_register_trait_contracts(
+            base_library, "Bracket_Literal", "builtins", "base",
+            TH_ENV_PUBLIC, marker_methods) &&
+            th_env_register_trait_contracts(
+                base_library, "Brace_Literal", "builtins", "base",
+                TH_ENV_PUBLIC, marker_methods));
+  check("register intrinsic collection-shape type facts",
+        th_env_register_intrinsic_type_pattern(
+            base_library, "Bracket_Literal",
+            th_apply(base_library_types, "list", &list_pattern_arg, 1)) &&
+            th_env_register_intrinsic_type_pattern(
+                base_library, "Bracket_Literal",
+                th_array(base_library_types, array_element)) &&
+            th_env_register_intrinsic_type_pattern(
+                base_library, "Brace_Literal",
+                th_apply(base_library_types, "set", &set_pattern_arg, 1)) &&
+            th_env_register_intrinsic_type_pattern(
+                base_library, "Brace_Literal",
+                th_apply(base_library_types, "dict", dict_pattern_args, 2)));
   th_type *same_trait_receiver = th_var(base_library_types);
   th_type *bound_trait_receiver = th_var(base_library_types);
-  th_type *bound_value = th_bound(base_library_types, 0, 0);
-  check("build frozen base library for later linking",
+  th_type *bound_value = th_bound(base_library_types, 1, 0);
+  check("register persisted Box type",
         th_env_register_type(base_library, "Box", "types", "base",
-                             TH_ENV_PUBLIC) &&
-            th_env_register_type(base_library, "PrivateBox", "private_types",
-                                 "base", TH_ENV_PRIVATE) &&
-            th_env_register_trait(
-                base_library, "Fetch", "traits", "base", TH_ENV_PUBLIC,
-                method_record(base_library_types, "fetch",
-                              fn1(base_library_types, fetch_receiver,
-                                  string_type))) &&
-            th_env_register_trait(
-                base_library, "Same", "traits", "base", TH_ENV_PUBLIC,
-                method_record(base_library_types, "same",
-                              fn1(base_library_types, same_trait_receiver,
-                                  same_trait_receiver))) &&
-            th_env_register_trait(
-                base_library, "BoundSame", "traits", "base", TH_ENV_PUBLIC,
-                method_record(base_library_types, "bound_same",
-                              fn1(base_library_types, bound_trait_receiver,
-                                  bound_trait_receiver))) &&
-            deferred_fetch_constrained && th_env_register_trait(
-                base_library, "DeferredFetch", "traits", "base",
-                TH_ENV_PUBLIC,
-                method_record(base_library_types, "probe",
-                              fn1(base_library_types,
-                                  deferred_fetch_receiver,
-                                  deferred_fetch_result))) &&
-            th_env_register_function(
-                base_library, "base.generic.fetch", "fetch", "generic",
-                "base", TH_ENV_PUBLIC,
-                fn1(base_library_types,
-                    th_apply(base_library_types, "Box",
-                             &link_generic_box_arg, 1),
-                    string_type)) &&
-            th_env_register_function(
-                base_library, "base.generic.identity", "same", "generic",
-                "base", TH_ENV_PUBLIC,
-                th_generalize(base_library_types,
-                    fn1(base_library_types, link_generic_element,
-                        link_generic_element))) &&
-            th_env_register_function(
-                base_library, "base.generic.bound_identity", "bound_same",
-                "generic", "base", TH_ENV_PUBLIC,
-                th_binder(base_library_types, 1,
-                    fn1(base_library_types, bound_value, bound_value))) &&
-            th_env_register_metadata(base_library, TH_ENV_METADATA_TYPE,
-                                     "Box", "layout", 1, box_layout,
-                                     sizeof(box_layout)) &&
-            th_env_register_metadata(base_library, TH_ENV_METADATA_TRAIT,
-                                     "Fetch", "dispatch", 1,
-                                     fetch_trait_abi,
-                                     sizeof(fetch_trait_abi)) &&
-            th_env_register_metadata(base_library, TH_ENV_METADATA_FUNCTION,
-                                     "base.generic.fetch", "abi", 1,
-                                     generic_fetch_abi,
-                                     sizeof(generic_fetch_abi)) &&
-            th_env_freeze(base_library));
+                             TH_ENV_PUBLIC));
+  check("register persisted PrivateBox type",
+        th_env_register_type(base_library, "PrivateBox", "private_types",
+                             "base", TH_ENV_PRIVATE));
+  check("register persisted Fetch trait",
+        th_env_register_trait_channels(
+            base_library, "Fetch", "traits", "base", TH_ENV_PUBLIC,
+            method_record(base_library_types, "fetch",
+                          fn2(base_library_types, fetch_receiver,
+                              fetch_argument_type, string_type)),
+            method_record(base_library_types, "fetch", fetch_error_type)));
+  check("register persisted Same trait",
+        th_env_register_trait(
+            base_library, "Same", "traits", "base", TH_ENV_PUBLIC,
+            method_record(base_library_types, "same",
+                          fn1(base_library_types, same_trait_receiver,
+                              same_trait_receiver))));
+  check("register persisted BoundSame trait",
+        th_env_register_trait(
+            base_library, "BoundSame", "traits", "base", TH_ENV_PUBLIC,
+            method_record(base_library_types, "bound_same",
+                          fn1(base_library_types, bound_trait_receiver,
+                              bound_trait_receiver))));
+  check("register persisted DeferredFetch trait",
+        deferred_fetch_constrained && th_env_register_trait(
+            base_library, "DeferredFetch", "traits", "base", TH_ENV_PUBLIC,
+            method_record(base_library_types, "probe",
+                          fn1(base_library_types, deferred_fetch_receiver,
+                              deferred_fetch_result))));
+  check("register persisted generic Fetch implementation",
+        th_env_register_function_channels(
+            base_library, "base.generic.fetch", "fetch", "generic", "base",
+            TH_ENV_PUBLIC,
+            fn2(base_library_types,
+                th_apply(base_library_types, "Box", &link_generic_box_arg, 1),
+                fetch_argument_type, string_type), fetch_error_type));
+  check("register persisted generic identity implementation",
+        th_env_register_function(
+            base_library, "base.generic.identity", "same", "generic", "base",
+            TH_ENV_PUBLIC,
+            th_generalize(base_library_types,
+                fn1(base_library_types, link_generic_element,
+                    link_generic_element))));
+  check("register persisted bound identity implementation",
+        th_env_register_function(
+            base_library, "base.generic.bound_identity", "bound_same",
+            "generic", "base", TH_ENV_PUBLIC,
+            th_binder(base_library_types, 1,
+                fn1(base_library_types, bound_value, bound_value))));
+  check("register persisted type layout metadata",
+        th_env_register_metadata(base_library, TH_ENV_METADATA_TYPE, "Box",
+                                 "layout", 1, box_layout,
+                                 sizeof(box_layout)));
+  check("register persisted trait metadata",
+        th_env_register_metadata(base_library, TH_ENV_METADATA_TRAIT, "Fetch",
+                                 "dispatch", 1, fetch_trait_abi,
+                                 sizeof(fetch_trait_abi)));
+  check("register persisted function metadata",
+        th_env_register_metadata(base_library, TH_ENV_METADATA_FUNCTION,
+                                 "base.generic.fetch", "abi", 1,
+                                 generic_fetch_abi,
+                                 sizeof(generic_fetch_abi)));
+  check("freeze base library for later linking", th_env_freeze(base_library));
+
+  th_arg live_array_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(base_library_types, "int"),
+  };
+  th_arg live_list_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(base_library_types, "int"),
+  };
+  th_arg live_set_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(base_library_types, "int"),
+  };
+  th_arg live_dict_args[] = {
+      {.kind = TH_ARG_TYPE,
+       .type = th_name(base_library_types, "string")},
+      {.kind = TH_ARG_TYPE,
+       .type = th_name(base_library_types, "int")},
+  };
+  th_type *live_array = th_array(base_library_types, live_array_arg.type);
+  th_type *live_list = th_apply(base_library_types, "list",
+                                &live_list_arg, 1);
+  th_type *live_set = th_apply(base_library_types, "set", &live_set_arg, 1);
+  th_type *live_dict = th_apply(base_library_types, "dict", live_dict_args, 2);
+  th_type *live_bracket_variable = th_var(base_library_types);
+  th_type *live_list_variable = th_var(base_library_types);
+  th_type *live_brace_variable = th_var(base_library_types);
+  th_type *live_dict_variable = th_var(base_library_types);
+  bool live_pending_constraint =
+      th_var_constrain(base_library_types, live_list_variable,
+          (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                          .iface = "Bracket_Literal"}) &&
+      th_var_constrain(base_library_types, live_bracket_variable,
+          (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                          .iface = "Bracket_Literal"}) &&
+      th_var_constrain(base_library_types, live_brace_variable,
+          (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                          .iface = "Brace_Literal"}) &&
+      th_var_constrain(base_library_types, live_dict_variable,
+          (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                          .iface = "Brace_Literal"}) &&
+      th_unify_in_place(base_library_types, live_list_variable, live_list) &&
+      th_unify_in_place(base_library_types, live_bracket_variable,
+                        live_array) &&
+      th_unify_in_place(base_library_types, live_brace_variable, live_set) &&
+      th_unify_in_place(base_library_types, live_dict_variable, live_dict);
+  check("live intrinsic marker facts match in their shared type context",
+        live_pending_constraint &&
+            th_ctx_set_environment(base_library_types, base_library, "client",
+                                   "base") &&
+            th_env_implements(base_library_types, live_array,
+                              "Bracket_Literal"));
 
   th_ctx *source_check_types = th_ctx_new();
   th_arg source_box_arg = {
@@ -772,7 +1075,9 @@ int main(void) {
                            "Fetch", "fetch", &source_method);
   check("source-built library resolves the generic method before saving",
         source_dispatch_ok &&
-            !strcmp(source_method.qualified_name, "base.generic.fetch"));
+            !strcmp(source_method.qualified_name, "base.generic.fetch") &&
+            th_unify(source_check_types, source_method.error_type,
+                     th_name(source_check_types, "FetchError")));
 
   char image_path[] = "/tmp/lantern-th-env-XXXXXX";
   int image_fd = mkstemp(image_path);
@@ -820,9 +1125,10 @@ int main(void) {
         persisted_library && th_env_is_frozen(persisted_library) &&
             image_error == CORE_OBJECT_ARCHIVE_OK);
   th_env *image_collision = th_env_load(image_path, &image_error);
-  check("a second image load reports the occupied fixed address",
-        !image_collision &&
-            image_error == CORE_OBJECT_ARCHIVE_ADDRESS_UNAVAILABLE);
+  check("a second image load restores an independent relocated environment",
+        image_collision && image_collision != persisted_library &&
+            th_env_is_frozen(image_collision) &&
+            image_error == CORE_OBJECT_ARCHIVE_OK);
 
   th_ctx *persisted_check_types = th_ctx_new();
   th_type *persisted_int = th_name(persisted_check_types, "int");
@@ -845,6 +1151,8 @@ int main(void) {
                                  "Fetch", "fetch", &persisted_method) &&
             !strcmp(persisted_method.qualified_name,
                     "base.generic.fetch") &&
+            th_unify(persisted_check_types, persisted_method.error_type,
+                     th_name(persisted_check_types, "FetchError")) &&
             source_dispatch_ok &&
             !strcmp(persisted_method.qualified_name,
                     source_method.qualified_name) &&
@@ -852,6 +1160,110 @@ int main(void) {
                                  "Same", "same", &persisted_identity) &&
             !strcmp(persisted_identity.qualified_name,
                     "base.generic.identity"));
+  th_arg loaded_list_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(persisted_check_types, "string"),
+  };
+  th_arg loaded_array_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(persisted_check_types, "int"),
+  };
+  th_arg loaded_set_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(persisted_check_types, "int"),
+  };
+  th_arg loaded_dict_args[] = {
+      {.kind = TH_ARG_TYPE, .type = th_name(persisted_check_types, "string")},
+      {.kind = TH_ARG_TYPE, .type = th_name(persisted_check_types, "int")},
+  };
+  th_arg loaded_tuple_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(persisted_check_types, "int"),
+  };
+  check("loaded intrinsic marker facts validate collection shapes",
+        persisted_library &&
+            th_env_implements(persisted_check_types,
+                th_apply(persisted_check_types, "list", &loaded_list_arg, 1),
+                "Bracket_Literal") &&
+            th_env_implements(persisted_check_types,
+                th_array(persisted_check_types, loaded_array_arg.type),
+                "Bracket_Literal") &&
+            th_env_implements(persisted_check_types,
+                th_apply(persisted_check_types, "set", &loaded_set_arg, 1),
+                "Brace_Literal") &&
+            th_env_implements(persisted_check_types,
+                th_apply(persisted_check_types, "dict", loaded_dict_args, 2),
+                "Brace_Literal") &&
+            !th_env_implements(persisted_check_types,
+                th_apply(persisted_check_types, "tuple", &loaded_tuple_arg, 1),
+                "Bracket_Literal"));
+  th_type *empty_brace_type = th_var(persisted_check_types);
+  check("empty brace trait constraint accepts a linked dictionary type",
+        th_var_constrain(persisted_check_types, empty_brace_type,
+            (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                            .iface = "Brace_Literal"}) &&
+            th_unify_in_place(persisted_check_types, empty_brace_type,
+                th_apply(persisted_check_types, "dict", loaded_dict_args, 2)));
+  th_ctx *wrong_shape_types = th_ctx_new();
+  th_ctx_set_environment(wrong_shape_types, persisted_library, "client", "base");
+  th_type *wrong_brace_type = th_var(wrong_shape_types);
+  th_arg wrong_shape_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(wrong_shape_types, "int"),
+  };
+  check("empty brace trait constraint rejects an unrelated type",
+        th_var_constrain(wrong_shape_types, wrong_brace_type,
+            (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                            .iface = "Brace_Literal"}) &&
+            !th_unify_in_place(wrong_shape_types, wrong_brace_type,
+                th_apply(wrong_shape_types, "tuple", &wrong_shape_arg, 1)));
+  th_env *literal_extension = th_env_new();
+  th_ctx *literal_extension_types = th_ctx_new();
+  th_type *extension_marker_methods =
+      th_record(literal_extension_types, nullptr, 0);
+  th_type *vector_element = th_var(literal_extension_types);
+  th_arg vector_pattern_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = vector_element,
+  };
+  bool literal_extension_ready =
+      th_env_register_trait_contracts(
+          literal_extension, "Bracket_Literal", "builtins", "base",
+          TH_ENV_PUBLIC, extension_marker_methods) &&
+      th_env_register_intrinsic_type_pattern(
+          literal_extension, "Bracket_Literal",
+          th_apply(literal_extension_types, "Vector", &vector_pattern_arg, 1)) &&
+      th_env_freeze(literal_extension);
+  check("register a linked builtin-shape contribution",
+        literal_extension_ready);
+  const th_env *literal_inputs[] = {persisted_library, literal_extension};
+  th_env *literal_composed = literal_extension_ready
+      ? th_env_compose(literal_inputs, 2) : nullptr;
+  bool literal_composed_ready =
+      literal_composed && th_env_freeze(literal_composed);
+  check("compose and freeze a second contribution to a marker trait",
+        literal_composed_ready);
+  th_ctx *literal_composed_types = th_ctx_new();
+  th_arg literal_vector_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(literal_composed_types, "string"),
+  };
+  th_arg literal_dict_args[] = {
+      {.kind = TH_ARG_TYPE, .type = th_name(literal_composed_types, "string")},
+      {.kind = TH_ARG_TYPE, .type = th_name(literal_composed_types, "int")},
+  };
+  bool literal_context_ready = literal_composed_ready &&
+      th_ctx_set_environment(literal_composed_types, literal_composed,
+                             "client", "base");
+  check("attach the composed intrinsic environment", literal_context_ready);
+  check("link open builtin-shape facts across matching marker traits",
+        literal_context_ready &&
+            th_env_implements(literal_composed_types,
+                th_apply(literal_composed_types, "Vector", &literal_vector_arg,
+                         1), "Bracket_Literal") &&
+            th_env_implements(literal_composed_types,
+                th_apply(literal_composed_types, "dict", literal_dict_args, 2),
+                "Brace_Literal"));
   check("loader retains binders without an optional quantified-variable list",
         persisted_library &&
             th_env_method_lookup(persisted_check_types, persisted_int,
@@ -875,13 +1287,39 @@ int main(void) {
                            &loaded_deferred_constraint) &&
       loaded_deferred_constraint.kind == TH_CON_METHOD &&
       !strcmp(loaded_deferred_constraint.method.name, "fetch") &&
-      loaded_deferred_constraint.method.result == loaded_deferred_result;
-  check("archive preserves deferred method constraints and result linkage",
+      loaded_deferred_constraint.method.result == loaded_deferred_result &&
+      loaded_deferred_constraint.method.call &&
+      th_func_nparams(loaded_deferred_constraint.method.call) == 1;
+  check("archive preserves deferred method call arguments and result linkage",
         has_deferred_constraint &&
             th_unify_in_place(persisted_check_types,
                               loaded_deferred_receiver, persisted_box_int) &&
             th_unify(persisted_check_types, loaded_deferred_result,
                      th_name(persisted_check_types, "string")));
+  th_ctx *bad_method_call_context = th_ctx_new();
+  th_ctx_set_environment(bad_method_call_context, persisted_library, "client",
+                         "base");
+  th_type *bad_method_receiver = th_var(bad_method_call_context);
+  th_type *bad_method_result = th_var(bad_method_call_context);
+  th_param bad_method_argument = {
+      .mode = TH_IN,
+      .type = th_name(bad_method_call_context, "string"),
+  };
+  th_type *bad_method_call = th_func(
+      bad_method_call_context, bad_method_result, &bad_method_argument, 1,
+      nullptr, nullptr, 0);
+  bool bad_method_obligation = th_var_constrain(
+      bad_method_call_context, bad_method_receiver,
+      (th_constraint){.kind = TH_CON_METHOD,
+                      .method = {.name = "fetch",
+                                 .result = bad_method_result,
+                                 .call = bad_method_call}});
+  check("method obligations reject mismatched argument types",
+        bad_method_obligation &&
+            !th_unify_in_place(bad_method_call_context,
+                               bad_method_receiver, persisted_box_int));
+  th_ctx_free(bad_method_call_context);
+  th_ctx_free(wrong_shape_types);
   check("loaded image preserves type layout and function ABI metadata",
         persisted_library &&
             th_env_metadata_count(persisted_library) == 3 &&
@@ -956,11 +1394,13 @@ int main(void) {
       th_apply(linked_types, "Box", &linked_box_arg, 1);
   check("link module contributions into a new environment snapshot",
         linked_library &&
-            th_env_register_function(
+            th_env_register_function_channels(
                 linked_library, "plugin.int_box.fetch", "fetch", "int-box",
                 "plugin", TH_ENV_PUBLIC,
-                fn1(linked_types, linked_box_int,
-                    th_name(linked_types, "string"))) &&
+                fn2(linked_types, linked_box_int,
+                    th_name(linked_types, "int"),
+                    th_name(linked_types, "string")),
+                th_name(linked_types, "FetchError")) &&
             th_env_register_metadata(linked_library,
                                      TH_ENV_METADATA_FUNCTION,
                                      "plugin.int_box.fetch", "abi", 1,
@@ -988,9 +1428,12 @@ int main(void) {
                     sizeof(fetch_trait_abi)) &&
             th_env_metadata_at(linked_library, 2, &function_metadata) &&
             function_metadata.owner_kind == TH_ENV_METADATA_FUNCTION &&
+            !strcmp(function_metadata.owner_name, "base.generic.fetch") &&
+            !strcmp(function_metadata.key, "abi") &&
+            th_env_metadata_at(linked_library, 3, &function_metadata) &&
+            function_metadata.owner_kind == TH_ENV_METADATA_FUNCTION &&
             !strcmp(function_metadata.owner_name, "plugin.int_box.fetch") &&
             !strcmp(function_metadata.key, "abi"));
-
   th_ctx *base_consumer = th_ctx_new();
   th_ctx *linked_consumer = th_ctx_new();
   th_env_method_t base_method = {0};
@@ -1012,6 +1455,8 @@ int main(void) {
             th_env_method_lookup(linked_consumer, linked_box_int, "Fetch",
                                  "fetch", &linked_method) &&
             !strcmp(base_method.qualified_name, "base.generic.fetch") &&
+            th_unify(base_consumer, base_method.error_type,
+                     th_name(base_consumer, "FetchError")) &&
             !strcmp(linked_method.qualified_name, "plugin.int_box.fetch"));
 
   th_ctx_free(outside);
@@ -1021,7 +1466,12 @@ int main(void) {
   th_ctx_free(base_consumer);
   th_ctx_free(linked_consumer);
   th_env_free(linked_library);
+  th_env_free(image_collision);
   th_ctx_free(linked_types);
+  th_ctx_free(literal_composed_types);
+  th_env_free(literal_composed);
+  th_ctx_free(literal_extension_types);
+  th_env_free(literal_extension);
   th_ctx_free(persisted_check_types);
   th_ctx_free(source_check_types);
   th_env_free(persisted_library);
@@ -1030,5 +1480,5 @@ int main(void) {
   th_ctx_free(base_library_types);
   th_ctx_free(utility_types);
   th_ctx_free(types);
-  return 0;
+  return report("type environment");
 }

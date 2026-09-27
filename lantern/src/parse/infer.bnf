@@ -12,6 +12,7 @@
                | <group>
                | <fetch>
                | <project>
+               | <compare>
                | <named-app>
                | <named>
 
@@ -39,8 +40,11 @@
 
 <project-op> ::= %"return_of"
                | %"element_of"
+               | %"slice_of"
                | %"unwrap_result"
                | %"method_return"
+
+<compare> ::= %"compare" %"(" <child-ref> %"," <child-ref> %")"
 
 <named-app> ::= %IDENTIFIER %"[" <named-args> %"]"
 

@@ -194,31 +194,59 @@ core_work_submit(core_work_queue_t *q, uint32_t kind,
     }
     if (out) *out = job;
     pthread_cond_broadcast(&q->changed);
+    core_work_submit_result_t result =
+        job->state == CORE_WORK_FAILED ? CORE_WORK_DEPENDENCY_FAILED
+                                       : CORE_WORK_SUBMITTED;
     pthread_mutex_unlock(&q->lock);
-    return job->state == CORE_WORK_FAILED ? CORE_WORK_DEPENDENCY_FAILED
-                                          : CORE_WORK_SUBMITTED;
+    return result;
+}
+
+static bool
+work_take(core_work_queue_t *q, bool filter_kind, uint32_t kind,
+         core_work_job_t **out)
+{
+    if (!q || !out) return false;
+    pthread_mutex_lock(&q->lock);
+    size_t ready_at = SIZE_MAX;
+    for (;;) {
+        for (size_t i = 0; i < q->ready.len; i++) {
+            if (!filter_kind || q->ready.data[i]->key.kind == kind) {
+                ready_at = i;
+                break;
+            }
+        }
+        if (ready_at != SIZE_MAX ||
+            (q->closed && q->terminal == q->jobs.count))
+            break;
+        pthread_cond_wait(&q->changed, &q->lock);
+    }
+
+    if (ready_at == SIZE_MAX) {
+        pthread_mutex_unlock(&q->lock);
+        return false;
+    }
+    core_work_job_t *job = q->ready.data[ready_at];
+    q->ready.len--;
+    if (ready_at < q->ready.len)
+        memmove(q->ready.data + ready_at, q->ready.data + ready_at + 1,
+                (q->ready.len - ready_at) * sizeof(*q->ready.data));
+    job->state = CORE_WORK_RUNNING;
+    *out = job;
+    pthread_mutex_unlock(&q->lock);
+    return true;
 }
 
 bool
 core_work_take(core_work_queue_t *q, core_work_job_t **out)
 {
-    if (!q || !out) return false;
-    pthread_mutex_lock(&q->lock);
-    while (!q->ready.len && (!q->closed || q->terminal < q->jobs.count))
-        pthread_cond_wait(&q->changed, &q->lock);
-    if (!q->ready.len) {
-        pthread_mutex_unlock(&q->lock);
-        return false;
-    }
-    core_work_job_t *job = q->ready.data[0];
-    q->ready.len--;
-    if (q->ready.len)
-        memmove(q->ready.data, q->ready.data + 1,
-                q->ready.len * sizeof(*q->ready.data));
-    job->state = CORE_WORK_RUNNING;
-    *out = job;
-    pthread_mutex_unlock(&q->lock);
-    return true;
+    return work_take(q, false, 0, out);
+}
+
+bool
+core_work_take_kind(core_work_queue_t *q, uint32_t kind,
+                    core_work_job_t **out)
+{
+    return work_take(q, true, kind, out);
 }
 
 bool
@@ -252,6 +280,14 @@ core_work_complete(core_work_queue_t *q, core_work_job_t *job, bool succeeded,
     pthread_cond_broadcast(&q->changed);
     pthread_mutex_unlock(&q->lock);
     return true;
+}
+
+bool
+core_work_complete_tu(core_work_queue_t *q, core_work_job_t *job,
+                      core_translation_unit_t *unit, bool succeeded)
+{
+    return core_work_complete(q, job,
+        succeeded && !core_translation_unit_has_fatal_diagnostics(unit), unit);
 }
 
 bool

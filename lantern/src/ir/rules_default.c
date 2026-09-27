@@ -22,6 +22,7 @@ static th_type *opd_type(ir_instr_t *in, uint32_t i)
 
     switch (o->kind) {
     case IR_OPD_VALUE:
+    case IR_OPD_SPREAD:
         return o->value ? o->value->type : nullptr;
     case IR_OPD_NAMED_ARG:
         return o->named.value ? o->named.value->type : nullptr;
@@ -97,6 +98,7 @@ static void blame(ir_diags_t *d, ir_diag_t *dg, ir_instr_t *in, uint32_t i,
 
     const ir_operand_t *o = &in->operands[i];
     const ir_value_t   *v = o->kind == IR_OPD_VALUE      ? o->value
+                          : o->kind == IR_OPD_SPREAD    ? o->value
                           : o->kind == IR_OPD_NAMED_ARG  ? o->named.value
                           : o->kind == IR_OPD_PHI_ARM    ? o->phi.value
                                                          : nullptr;
@@ -1354,11 +1356,41 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
     size_t          np    = th_func_nparams(callee);
     size_t          given = 0;
     const th_param *rest  = th_func_rest(callee);
+    bool spread_seen = false;
 
     for (uint32_t i = 1; i < in->n_operands; i++) {
+        if (in->operands[i].kind == IR_OPD_SPREAD) {
+            ir_value_t *spread = in->operands[i].value;
+            if (!rest || !spread || !spread->is_rest || given < np ||
+                spread_seen || !arg_matches(m, rest->mode, rest->type,
+                                            opd_type(in, i))) {
+                complain(m, d, IR_DIAG_TYPE_ARGS, in, "this spread argument",
+                         "a spread argument must match the callee's rest "
+                         "parameter and follow all fixed positional arguments");
+                return REJECT;
+            }
+            spread_seen = true;
+            continue;
+        }
         if (in->operands[i].kind == IR_OPD_NAMED_ARG) {
+            const char *name = in->operands[i].named.name;
+            if (!name) {
+                complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
+                         "a keyword argument must have a name");
+                return REJECT;
+            }
+            for (uint32_t j = 1; j < i; j++) {
+                if (in->operands[j].kind == IR_OPD_NAMED_ARG &&
+                    in->operands[j].named.name &&
+                    !strcmp(name, in->operands[j].named.name)) {
+                    complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
+                             "keyword parameter %s is supplied more than once",
+                             name);
+                    return REJECT;
+                }
+            }
             const th_kwparam *k = th_func_kw_lookup(callee,
-                                                    in->operands[i].named.name);
+                                                    name);
 
             if (!k) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
@@ -1385,6 +1417,12 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
                 return REJECT;
             }
             continue;
+        }
+
+        if (spread_seen) {
+            complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
+                     "positional arguments cannot follow a spread argument");
+            return REJECT;
         }
 
         const th_param *p = given < np ? th_func_param(callee, given) : rest;

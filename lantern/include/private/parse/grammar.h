@@ -75,6 +75,7 @@ struct parse_grammar_t {
     uint32_t                       max_penalty;
     bool                           error_rules;
     bool                           finalized;
+    bool                           has_adjacency;
     bool                           hide_penalty_rewrites;
     bool                           hide_groups;
     int                            suspend_penalty_hiding;

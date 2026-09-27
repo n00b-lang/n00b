@@ -18,6 +18,7 @@ static int64_t tid_int;
 static int64_t tid_unify;
 static int64_t tid_return_of;
 static int64_t tid_element_of;
+static int64_t tid_slice_of;
 static int64_t tid_unwrap;
 static int64_t tid_method_return;
 
@@ -34,6 +35,7 @@ learn_tids(parse_grammar_t *g)
     tid_unify         = TID("unify");
     tid_return_of     = TID("return_of");
     tid_element_of    = TID("element_of");
+    tid_slice_of      = TID("slice_of");
     tid_unwrap        = TID("unwrap_result");
     tid_method_return = TID("method_return");
 
@@ -422,6 +424,9 @@ r_project(parse_reduce_t *r)
     else if (tid == tid_element_of) {
         e->proj = PARSE_INFER_ELEMENT_OF;
     }
+    else if (tid == tid_slice_of) {
+        e->proj = PARSE_INFER_SLICE_OF;
+    }
     else if (tid == tid_unwrap) {
         e->proj = PARSE_INFER_UNWRAP_RESULT;
     }
@@ -442,6 +447,16 @@ r_project(parse_reduce_t *r)
         fail(r);
     }
 
+    return wrap(r->thunk, e);
+}
+
+static void *
+r_compare(parse_reduce_t *r)
+{
+    parse_infer_expr_t *e = expr_new(PARSE_INFER_COMPARE);
+    e->lhs = kid_expr(r, 2);
+    e->rhs = kid_expr(r, 4);
+    if (!e->lhs || !e->rhs) fail(r);
     return wrap(r->thunk, e);
 }
 
@@ -470,6 +485,7 @@ install(parse_tree_walk_t *w, in_ctx *c)
     REG(CORE_STRING_STATIC("group"), r_group);
     REG(CORE_STRING_STATIC("fetch"), r_fetch);
     REG(CORE_STRING_STATIC("project"), r_project);
+    REG(CORE_STRING_STATIC("compare"), r_compare);
     REG(CORE_STRING_STATIC("project-op"), r_op);
     REG(CORE_STRING_STATIC("named-app"), r_named_app);
     REG(CORE_STRING_STATIC("named-args"), r_args);
@@ -629,6 +645,7 @@ parse_infer_kind_name(parse_infer_kind_t k)
     case PARSE_INFER_SPREAD:    return "spread";
     case PARSE_INFER_LOOKUP:    return "lookup";
     case PARSE_INFER_PROJECT:   return "project";
+    case PARSE_INFER_COMPARE:   return "compare";
     case PARSE_INFER_UNIFY:     return "unify";
     case PARSE_INFER_SUM:       return "sum";
     }
@@ -642,6 +659,7 @@ parse_infer_proj_name(parse_infer_proj_t p)
     switch (p) {
     case PARSE_INFER_RETURN_OF:      return "return_of";
     case PARSE_INFER_ELEMENT_OF:     return "element_of";
+    case PARSE_INFER_SLICE_OF:      return "slice_of";
     case PARSE_INFER_UNWRAP_RESULT:  return "unwrap_result";
     case PARSE_INFER_METHOD_RETURN:  return "method_return";
     }
@@ -722,6 +740,14 @@ print_one(sbuf *b, const parse_infer_expr_t *e)
         emit(b, parse_infer_proj_name(e->proj));
         emit(b, "($");
         emit_int(b, e->index);
+        emit(b, ")");
+        break;
+
+    case PARSE_INFER_COMPARE:
+        emit(b, "compare(");
+        print_one(b, e->lhs);
+        emit(b, ", ");
+        print_one(b, e->rhs);
         emit(b, ")");
         break;
 

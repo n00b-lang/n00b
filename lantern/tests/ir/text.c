@@ -661,6 +661,9 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             ir_instr_operand_value(in, vals->v[rnd(vals->n)]);
             break;
 
+        case IR_OPD_SPREAD:
+            break;
+
         case IR_OPD_TYPE:
             ir_instr_operand_type(in, ir_type_parse(m, TYPES[rnd(9)]));
             break;

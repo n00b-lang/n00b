@@ -237,6 +237,12 @@ core_translation_unit_diagnostics(core_translation_unit_t *unit)
 }
 
 bool
+core_translation_unit_has_fatal_diagnostics(const core_translation_unit_t *unit)
+{
+    return unit && core_diagnostics_has_fatal(unit->diagnostics);
+}
+
+bool
 core_translation_unit_add_import(core_translation_unit_t *unit,
                                  core_translation_unit_t *imported)
 {

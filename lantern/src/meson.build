@@ -127,6 +127,7 @@ ir_sources = files(
     'ir/span.c',
     'ir/structure.c',
     'ir/symcheck.c',
+    'ir/trait.c',
     'ir/tree_pass.c',
     'ir/type_diags.c',
     'ir/typelang.c',

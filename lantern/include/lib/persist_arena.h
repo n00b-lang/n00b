@@ -18,6 +18,13 @@ typedef enum {
   CORE_PERSIST_ARENA_BAD_POINTER,
 } core_persist_arena_error_t;
 
+/* Derive an ABI tag for native mapped data from an application/schema tag and
+ * the current target's OS, architecture, endianness, pointer/data-model sizes,
+ * and fundamental alignments. Change the application tag when persisted C
+ * layouts or invariants change. This detects common incompatibilities; it is
+ * not a portable serialization format or a substitute for schema versioning. */
+uint64_t core_persist_arena_native_abi_tag(uint64_t application_tag);
+
 /* Raw arenas may contain native pointers. Their graph must be self-contained
  * and is only loadable with a compatible ABI and at the recorded virtual
  * address. Reopening never replaces an existing mapping; collisions fail. */

@@ -443,6 +443,44 @@ test_memoized_disambiguation(void)
     parse_grammar_free(g);
 }
 
+static void
+test_adjacency_annotation(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+    assert(parse_bnf_load(
+        CORE_STRING_STATIC("<S> @adjacent(\"prefix\") ::= %\"(\" %\"x\"\n"),
+        CORE_STRING_STATIC("S"), g));
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(g, CORE_STRING_STATIC("S"))));
+    assert(p);
+
+    parse_token_info_t adjacent_tokens[2] = {
+        {.tid = '(', .index = 0, .start_byte = 0, .end_byte = 1},
+        {.tid = 'x', .index = 1, .start_byte = 1, .end_byte = 2},
+    };
+    parse_token_info_t *adjacent_ptrs[2] = {
+        &adjacent_tokens[0], &adjacent_tokens[1],
+    };
+    parse_token_stream_t *ts = scan_token_stream_from_array(adjacent_ptrs, 2);
+    assert(ts && parse_pwz_parse(p, ts));
+    scan_token_stream_free(ts);
+
+    parse_token_info_t spaced_tokens[2] = {
+        {.tid = '(', .index = 0, .start_byte = 0, .end_byte = 1},
+        {.tid = 'x', .index = 1, .start_byte = 2, .end_byte = 3},
+    };
+    parse_token_info_t *spaced_ptrs[2] = {
+        &spaced_tokens[0], &spaced_tokens[1],
+    };
+    ts = scan_token_stream_from_array(spaced_ptrs, 2);
+    assert(ts && !parse_pwz_parse(p, ts));
+    scan_token_stream_free(ts);
+
+    parse_pwz_free(p);
+    parse_grammar_free(g);
+    printf("PASS: grammar adjacency assertion\n");
+}
+
 int
 main(void)
 {
@@ -453,6 +491,7 @@ main(void)
     test_forest();
     test_parallel_starts();
     test_memoized_disambiguation();
+    test_adjacency_annotation();
 
     printf("\nAll PWZ smoke tests passed.\n");
     return 0;

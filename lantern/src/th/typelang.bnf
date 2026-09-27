@@ -82,7 +82,7 @@
 <function-constraint-items> ::= <function-constraint-item> (%"+" <function-constraint-item>)*
 
 <function-constraint-item> ::= %"!=" <union-type>
-                             | %IDENTIFIER
+                             | <qualified-name>
 
 <function-result> ::= <union-type>
                     | <union-type> <function-error>

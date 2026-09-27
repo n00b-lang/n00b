@@ -6,6 +6,7 @@
 #include "parse/symtab.h"
 #include "parse/cf_label.h"
 #include "parse/tree_visit.h"
+#include "lib/diagnostic.h"
 
 typedef struct ir_module_t ir_module_t;
 
@@ -27,6 +28,9 @@ typedef struct {
     core_list_t(parse_tree_ptr_t) undefined;
     void *impl;
     bool  borrowed_symtab;
+    bool  inference_failed;
+    core_diagnostics_t *diagnostics;
+    const core_translation_unit_t *diagnostic_unit;
     parse_annot_node_callback_fn on_node;
     void *on_node_context;
 } parse_annot_result_t;
@@ -47,6 +51,9 @@ parse_annot_result_t *parse_annot_result_new(parse_symtab_t *borrowed);
 void parse_annot_result_set_node_callback(
     parse_annot_result_t *result, parse_annot_node_callback_fn callback,
     void *context);
+void parse_annot_result_set_diagnostics(
+    parse_annot_result_t *result, core_diagnostics_t *diagnostics,
+    const core_translation_unit_t *unit);
 void parse_annot_result_mark_inferred(parse_annot_result_t *result,
                                       parse_sym_entry_t *symbol);
 size_t parse_annot_resolve_undefined(parse_annot_result_t *result);

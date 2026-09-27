@@ -48,6 +48,7 @@ typedef enum : uint8_t {
 
 typedef enum : uint8_t {
     IR_OPD_VALUE,
+    IR_OPD_SPREAD, /* Call-only expansion of a bound rest parameter. */
     IR_OPD_TYPE,
     IR_OPD_NAME,
     IR_OPD_BLOCK,
@@ -232,7 +233,25 @@ struct ir_value_t {
     ir_local_t  *local;
     ir_func_t   *owner;
     uint32_t     index;
+    bool         is_keyword;
+    bool         is_rest;
 };
+
+typedef enum : uint8_t {
+    IR_GLOBAL_INIT_INT,
+    IR_GLOBAL_INIT_FLOAT,
+    IR_GLOBAL_INIT_SYMBOL,
+} ir_global_init_kind_t;
+
+typedef struct {
+    const char *member;
+    ir_global_init_kind_t kind;
+    union {
+        ir_lit_t integer;
+        double floating;
+        ir_value_t *symbol;
+    };
+} ir_global_init_value_t;
 
 typedef enum : uint8_t {
     IR_DEST_NONE,
@@ -333,6 +352,9 @@ struct ir_global_t {
     double       init_f;
     const char  *init_text;
     bool         init_is_float;
+    bool         has_record_init;
+    ir_global_init_value_t *record_init;
+    size_t       n_record_init;
     ir_span_t    span;
     ir_origin_t *origin;
     ir_annots_t  annots;
@@ -412,6 +434,14 @@ ir_origin_t *ir_origin_new(ir_ctx_t *ctx, ir_origin_kind_t kind,
 uint32_t     ir_origin_depth(const ir_origin_t *o);
 
 ir_global_t *ir_global_add(ir_module_t *m, const char *name, th_type *type);
+ir_value_t  *ir_global_address(ir_module_t *m, ir_global_t *global);
+ir_value_t  *ir_func_address(ir_module_t *m, ir_func_t *function);
+/* Set a constant record initializer by member name. Symbol values
+ * must name a function/global whose address type matches the corresponding
+ * indirection member. */
+bool         ir_global_set_record_initializer(
+    ir_module_t *m, ir_global_t *global,
+    const ir_global_init_value_t *values, size_t count);
 ir_global_t *ir_global_find(ir_module_t *m, const char *name);
 size_t       ir_global_count(const ir_module_t *m);
 ir_global_t *ir_global_at(ir_module_t *m, size_t i);
@@ -422,6 +452,8 @@ ir_func_t   *ir_func_find(ir_module_t *m, const char *name);
 size_t       ir_func_count(const ir_module_t *m);
 ir_func_t   *ir_func_at(ir_module_t *m, size_t i);
 ir_value_t  *ir_param_add(ir_func_t *f, const char *name, th_type *type);
+ir_value_t  *ir_kwparam_add(ir_func_t *f, const char *name, th_type *type);
+ir_value_t  *ir_restparam_add(ir_func_t *f, const char *name, th_type *type);
 ir_local_t  *ir_local_add(ir_func_t *f, const char *name, th_type *type);
 ir_local_t  *ir_local_find(ir_func_t *f, const char *name);
 ir_value_t  *ir_value_find(ir_func_t *f, const char *name);
@@ -434,6 +466,9 @@ ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op);
 bool        ir_instr_set_dest(ir_instr_t *in, const char *name, th_type *type);
 bool        ir_instr_set_dest_local(ir_instr_t *in, ir_local_t *l);
 bool        ir_instr_operand_value(ir_instr_t *in, ir_value_t *v);
+/* Append a call-only spread operand for a parameter added with
+ * ir_restparam_add(). */
+bool        ir_instr_operand_spread(ir_instr_t *in, ir_value_t *v);
 bool        ir_instr_operand_local(ir_instr_t *in, ir_local_t *l);
 bool        ir_instr_operand_named(ir_instr_t *in, const char *name,
                                    ir_value_t *v);

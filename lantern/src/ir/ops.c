@@ -77,6 +77,8 @@ const char *ir_opdkind_name(ir_opdkind_t k)
     switch (k) {
     case IR_OPD_VALUE:
         return "value";
+    case IR_OPD_SPREAD:
+        return "spread argument";
     case IR_OPD_TYPE:
         return "type";
     case IR_OPD_NAME:

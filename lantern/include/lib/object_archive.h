@@ -61,6 +61,8 @@ bool core_object_writer_u32(core_object_writer_t *writer, uint32_t value);
 bool core_object_writer_u64(core_object_writer_t *writer, uint64_t value);
 bool core_object_writer_string(core_object_writer_t *writer,
                                const char *value);
+/* A null reference may use type_id 0; non-null references require a registered
+ * nonzero type ID. */
 bool core_object_writer_ref(core_object_writer_t *writer, uint64_t type_id,
                             const void *object);
 
@@ -71,6 +73,8 @@ void *core_object_reader_alloc(core_object_reader_t *reader, size_t size,
 bool core_object_reader_u32(core_object_reader_t *reader, uint32_t *out);
 bool core_object_reader_u64(core_object_reader_t *reader, uint64_t *out);
 bool core_object_reader_string(core_object_reader_t *reader, char **out);
+/* A nonzero type ID requires an exact match. Zero accepts any registered type;
+ * null references are accepted for either form. */
 bool core_object_reader_ref(core_object_reader_t *reader, uint64_t type_id,
                             void **out);
 

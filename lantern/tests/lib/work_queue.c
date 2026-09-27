@@ -1,4 +1,5 @@
 #include "core.h"
+#include "lib/diagnostic.h"
 #include "lib/work_queue.h"
 #include "harness.h"
 
@@ -9,6 +10,21 @@ worker(void *arg)
     core_work_job_t *job;
     while (core_work_take(q, &job))
         core_work_complete(q, job, true, nullptr);
+    return nullptr;
+}
+
+typedef struct {
+    core_work_queue_t *queue;
+    uint32_t kind;
+} kind_worker_t;
+
+static void *
+worker_kind(void *arg)
+{
+    kind_worker_t *worker = arg;
+    core_work_job_t *job;
+    while (core_work_take_kind(worker->queue, worker->kind, &job))
+        core_work_complete(worker->queue, job, true, nullptr);
     return nullptr;
 }
 
@@ -80,6 +96,34 @@ main(void)
     core_module_spec_release(&module);
 
     q = core_work_queue_new();
+    core_module_spec_init(&module, CORE_STRING_STATIC("pkg.phases"));
+    core_work_job_t *lex_phase = nullptr;
+    core_work_job_t *parse_phase = nullptr;
+    check("phase-filtered workers can share one dependency queue",
+          core_work_submit(q, 10, &module, nullptr, 0, &lex_phase) ==
+                  CORE_WORK_SUBMITTED &&
+              core_work_submit(q, 20, &module, (core_work_job_t *[]){lex_phase},
+                               1, &parse_phase) == CORE_WORK_SUBMITTED);
+    kind_worker_t lexical_worker = {.queue = q, .kind = 10};
+    pthread_t lexical_thread;
+    bool worker_started = pthread_create(&lexical_thread, nullptr,
+                                         worker_kind, &lexical_worker) == 0;
+    if (!worker_started && core_work_take(q, &taken))
+        core_work_complete(q, taken, true, nullptr);
+    core_work_job_t *taken_parse = nullptr;
+    bool parse_taken = core_work_take_kind(q, 20, &taken_parse) &&
+                       taken_parse == parse_phase;
+    check("the matching phase wakes after its dependency completes",
+          parse_taken && core_work_complete(q, parse_phase, true, nullptr));
+    core_work_queue_close(q);
+    if (worker_started) pthread_join(lexical_thread, nullptr);
+    check("filtered workers complete their assigned phase",
+          worker_started && core_work_wait(q, lex_phase) &&
+              core_work_wait(q, parse_phase));
+    core_work_queue_free(q);
+    core_module_spec_release(&module);
+
+    q = core_work_queue_new();
     pthread_t workers[2];
     pthread_create(&workers[0], nullptr, worker, q);
     pthread_create(&workers[1], nullptr, worker, q);
@@ -100,6 +144,42 @@ main(void)
           core_work_wait(q, analysis));
     core_work_queue_free(q);
     core_module_spec_release(&module);
+
+    q = core_work_queue_new();
+    core_module_spec_t fatal_module = {0};
+    core_source_file_t source = {0};
+    core_translation_unit_t unit = {0};
+    core_module_spec_init(&fatal_module,
+                          CORE_STRING_STATIC("pkg.fatal_diagnostic"));
+    core_source_file_init(&source, CORE_STRING_STATIC("fatal.n00b"), "", 0);
+    bool unit_initialized = core_translation_unit_init(&unit, &fatal_module,
+                                                       &source);
+    core_work_job_t *phase = nullptr;
+    core_work_job_t *dependent = nullptr;
+    core_work_job_t *phase_deps[] = {phase};
+    check("fatal-diagnostic test TU initializes", unit_initialized);
+    check("phase with TU is submitted",
+          core_work_submit(q, 30, &fatal_module, nullptr, 0, &phase) ==
+              CORE_WORK_SUBMITTED);
+    phase_deps[0] = phase;
+    check("dependent TU phase is submitted",
+          core_work_submit(q, 31, &fatal_module, phase_deps, 1, &dependent) ==
+              CORE_WORK_SUBMITTED);
+    bool phase_taken = core_work_take(q, &taken) && taken == phase;
+    check("fatal-diagnostic phase starts", phase_taken);
+    core_diagnostics_report(core_translation_unit_diagnostics(&unit), &unit,
+        CORE_DIAG_FATAL, CORE_STRING_STATIC("TEST-F0001"),
+        CORE_STRING_STATIC("fatal compilation diagnostic"));
+    check("TU-aware completion propagates its fatal diagnostic",
+          unit_initialized && core_work_complete_tu(q, phase, &unit, true)
+              && core_work_job_state(q, dependent) == CORE_WORK_FAILED
+              && !core_work_wait(q, dependent));
+    core_work_queue_close(q);
+    check("fatal dependency chain has no runnable work",
+          !core_work_take(q, &taken));
+    core_work_queue_free(q);
+    core_translation_unit_release(&unit);
+    core_module_spec_release(&fatal_module);
 
     return report("lib-work-queue");
 }

@@ -8,8 +8,8 @@
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/hash.h"
+#include "lib/module.h"
 
-#include <stdio.h>
 #include <string.h>
 
 enum {
@@ -251,7 +251,7 @@ annot_declares(parse_visit_t *v)
                                             : PARSE_SYM_MUTABLE;
     sym->type       = type_of_child(a, v, an->type_ref);
 
-    if (a->pending_visibility.data) {
+    if (a->pending_visibility.data && kind != PARSE_SYM_PARAM) {
         sym->visibility       = a->pending_visibility;
         a->pending_visibility = (core_string_t){0};
     }
@@ -447,9 +447,9 @@ static bool
 annot_constrain(parse_visit_t *v)
 {
     actx_t          *a   = (actx_t *)v->thunk;
-    parse_sym_entry_t *sym = subject(a, v);
+    parse_sym_entry_t *sym = v->pn->sym;
 
-    if (!sym || core_list_len(v->annot->constraints) == 0) {
+    if (core_list_len(v->annot->constraints) == 0) {
         return true;
     }
 
@@ -457,9 +457,8 @@ annot_constrain(parse_visit_t *v)
         return true;
     }
 
-    if (!sym->type) {
-        sym->type = th_var(a->types);
-    }
+    th_type **target = sym ? &sym->type : &v->pn->type;
+    if (!*target) *target = th_var(a->types);
 
     for (size_t i = 0; i < core_list_len(v->annot->constraints); i++) {
         parse_con_spec_t *s = &v->annot->constraints.data[i];
@@ -514,7 +513,7 @@ annot_constrain(parse_visit_t *v)
             continue;
         }
 
-        th_var_constrain(a->types, sym->type, c);
+        th_var_constrain(a->types, *target, c);
     }
 
     return true;
@@ -843,10 +842,22 @@ static bool
 annot_visibility(parse_visit_t *v)
 {
     actx_t          *a   = (actx_t *)v->thunk;
-    parse_sym_entry_t *sym = subject(a, v);
+    parse_sym_entry_t *sym = v->pn->sym;
 
     if (v->annot->visibility_spec.u8_bytes > 0) {
-        if (sym) {
+        parse_sym_entry_t *parent_declaration = v->parent &&
+            !core_tree_is_leaf(v->parent)
+            ? core_tree_node_value(v->parent).sym : nullptr;
+        parse_namespace_t *ns = parse_symtab_ns(a->out->symtab, ns_default());
+        parse_scope_t *scope = ns ? ns->current : nullptr;
+        if ((!parent_declaration ||
+             parent_declaration->kind == PARSE_SYM_PARAM) &&
+            scope && scope->node)
+            parent_declaration = core_tree_node_value(scope->node).sym;
+        if (parent_declaration &&
+            parent_declaration->kind != PARSE_SYM_PARAM)
+            sym = parent_declaration;
+        if (sym && sym->kind != PARSE_SYM_PARAM) {
             sym->visibility = v->annot->visibility_spec;
         }
         else {
@@ -1043,6 +1054,23 @@ cf_notrivia(parse_visit_t *v)
     return true;
 }
 
+static void
+annot_report_infer_failure(parse_visit_t *v, actx_t *a)
+{
+    a->out->inference_failed = true;
+    if (!a->out->diagnostics) return;
+    parse_token_info_t *token = parse_tree_find_first_terminal(v->node);
+    core_diagnostics_report_at(a->out->diagnostics,
+        a->out->diagnostic_unit, CORE_DIAG_FATAL,
+        CORE_STRING_STATIC("LANTERN-T0001"),
+        CORE_STRING_STATIC("type inference failed"),
+        token ? (core_diag_location_t){
+            .line = token->line, .column = token->column,
+            .end_line = token->endline,
+            .end_column = token->endcol, .has_location = true,
+        } : (core_diag_location_t){0});
+}
+
 static bool
 annot_infer(parse_visit_t *v)
 {
@@ -1058,6 +1086,7 @@ annot_infer(parse_visit_t *v)
                                  &ok);
 
     if (!ok || !t) {
+        annot_report_infer_failure(v, a);
         return true;
     }
 
@@ -1093,6 +1122,9 @@ annot_infer(parse_visit_t *v)
         v->pn->type = t;
     }
 
+    if (v->pn->sym && v->pn->sym->kind == PARSE_SYM_FUNCTION)
+        return true;
+
     if (v->pn->sym
         && (!v->pn->sym->type || !th_is_scheme(v->pn->sym->type))) {
         if (v->pn->sym->type) {
@@ -1109,6 +1141,54 @@ annot_infer(parse_visit_t *v)
         }
     }
 
+    return true;
+}
+
+static bool
+resolve_symbol_use_type(th_ctx *types, parse_sym_entry_t *symbol,
+                        th_type **out)
+{
+    if (!types || !symbol || !symbol->type || !out) return false;
+    if (th_is_scheme(symbol->type)) {
+        *out = th_instantiate(types, symbol->type);
+        return true;
+    }
+    if (symbol->kind != PARSE_SYM_FUNCTION) {
+        *out = symbol->type;
+        return true;
+    }
+    size_t capacity = 0;
+    for (parse_sym_entry_t *entry = symbol->scope
+            ? symbol->scope->first_in_scope : nullptr;
+         entry;
+         entry = entry->next_in_scope) {
+        if (entry->kind == PARSE_SYM_FUNCTION) continue;
+        capacity += (entry->type != nullptr) + (entry->error_type != nullptr);
+    }
+    th_type **environment = capacity
+        ? core_alloc_array(th_type *, capacity) : nullptr;
+    size_t count = 0;
+    for (parse_sym_entry_t *entry = symbol->scope
+            ? symbol->scope->first_in_scope : nullptr;
+         entry;
+         entry = entry->next_in_scope) {
+        if (entry->kind == PARSE_SYM_FUNCTION) continue;
+        if (entry->type) environment[count++] = entry->type;
+        if (entry->error_type) environment[count++] = entry->error_type;
+    }
+    th_type *scheme = th_generalize_excluding(types, symbol->type,
+                                               environment, count);
+    core_free(environment);
+    *out = th_instantiate(types, scheme);
+    return true;
+}
+
+static bool
+infer_function_reference(actx_t *a, parse_nt_node_t *node,
+                         parse_sym_entry_t *symbol)
+{
+    if (node->type) return true;
+    resolve_symbol_use_type(a->types, symbol, &node->type);
     return true;
 }
 
@@ -1130,6 +1210,8 @@ infer_propagate(parse_visit_t *v)
         return true;
 
     if (v->pn->sym && v->pn->sym->type) {
+        if (v->pn->sym->kind == PARSE_SYM_FUNCTION)
+            return infer_function_reference(a, v->pn, v->pn->sym);
         if (th_is_scheme(v->pn->sym->type)) {
             if (!v->pn->type)
                 v->pn->type = th_instantiate(a->types, v->pn->sym->type);
@@ -1259,6 +1341,16 @@ parse_annot_result_set_node_callback(parse_annot_result_t *result,
 }
 
 void
+parse_annot_result_set_diagnostics(parse_annot_result_t *result,
+                                   core_diagnostics_t *diagnostics,
+                                   const core_translation_unit_t *unit)
+{
+    if (!result) return;
+    result->diagnostics = diagnostics;
+    result->diagnostic_unit = unit;
+}
+
+void
 parse_annot_result_mark_inferred(parse_annot_result_t *result,
                                  parse_sym_entry_t *symbol)
 {
@@ -1297,9 +1389,9 @@ parse_annot_resolve_undefined(parse_annot_result_t *result)
             if (symbol->type && result->impl) {
                 actx_t *a = result->impl;
                 if (a->types) {
-                    th_type *symbol_type = th_is_scheme(symbol->type)
-                        ? th_instantiate(a->types, symbol->type)
-                        : symbol->type;
+                    th_type *symbol_type = nullptr;
+                    resolve_symbol_use_type(a->types, symbol,
+                                            &symbol_type);
                     if (pn->type) {
                         th_type *unified = th_unify_in_place(
                             a->types, pn->type, symbol_type);

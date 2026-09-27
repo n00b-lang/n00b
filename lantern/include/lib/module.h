@@ -80,6 +80,8 @@ void core_translation_unit_set_user_data(
 void *core_translation_unit_user_data(const core_translation_unit_t *unit);
 core_diagnostics_t *core_translation_unit_diagnostics(
     core_translation_unit_t *unit);
+bool core_translation_unit_has_fatal_diagnostics(
+    const core_translation_unit_t *unit);
 /* Imported TUs are borrowed; their owner must keep them alive as long as the
  * importing TU may use these references. Duplicate imports are ignored. */
 bool core_translation_unit_add_import(core_translation_unit_t *unit,

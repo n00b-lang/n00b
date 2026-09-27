@@ -209,10 +209,13 @@ static uint64_t object_id_for(core_list_t(archive_object_t) *objects,
 
 bool core_object_writer_ref(core_object_writer_t *writer, uint64_t type_id,
                             const void *object) {
-  if (!writer || !writer->ok || !type_id) {
+  if (!writer || !writer->ok || (!type_id && object)) {
     if (writer) writer->ok = false;
     return false;
   }
+  if (!type_id)
+    return core_object_writer_u64(writer, 0) &&
+           core_object_writer_u64(writer, 0);
   bool valid = true;
   uint64_t id = object_id_for(writer->objects, type_id, object, &valid);
   writer->ok = valid && core_object_writer_u64(writer, type_id) &&
@@ -286,8 +289,9 @@ bool core_object_reader_ref(core_object_reader_t *reader, uint64_t type_id,
   uint64_t encoded_type, id;
   if (!reader || !out || !reader->resolve_refs ||
       !core_object_reader_u64(reader, &encoded_type) ||
-      !core_object_reader_u64(reader, &id) || encoded_type != type_id ||
-      id > reader->objects->len) {
+      !core_object_reader_u64(reader, &id) || id > reader->objects->len ||
+      (id == 0 ? (encoded_type && type_id && encoded_type != type_id)
+               : (!encoded_type || (type_id && encoded_type != type_id)))) {
     if (reader) reader->ok = false;
     return false;
   }
@@ -296,7 +300,7 @@ bool core_object_reader_ref(core_object_reader_t *reader, uint64_t type_id,
     return true;
   }
   archive_object_t *entry = &reader->objects->data[id - 1];
-  if (entry->type_id != type_id || !entry->restored) {
+  if (entry->type_id != encoded_type || !entry->restored) {
     reader->ok = false;
     return false;
   }

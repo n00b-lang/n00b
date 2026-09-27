@@ -40,6 +40,8 @@ typedef struct {
   const char *package;
   th_env_visibility_t visibility;
   th_type *scheme;
+  th_type *errors;
+  th_type *contracts;
   core_datalog_symbol_t logic_symbol;
 } th_env_trait_t;
 
@@ -51,8 +53,16 @@ typedef struct {
   th_env_visibility_t visibility;
   size_t order;
   th_type *scheme;
+  th_type *error_type;
+  th_type *contract;
   core_datalog_symbol_t logic_symbol;
 } th_env_function_t;
+
+typedef struct {
+  const char *trait_name;
+  th_type *receiver_pattern;
+  core_datalog_symbol_t logic_symbol;
+} th_env_intrinsic_type_t;
 
 typedef struct {
   size_t trait_index;
@@ -82,6 +92,7 @@ core_list_decl(th_iface);
 core_list_decl(th_method);
 core_list_decl(th_env_trait_t);
 core_list_decl(th_env_function_t);
+core_list_decl(th_env_intrinsic_type_t);
 core_list_decl(th_env_method_symbol_t);
 core_list_decl(th_env_type_origin_t);
 core_list_decl(th_env_metadata_record_t);
@@ -164,7 +175,7 @@ struct th_ctx {
   core_dict_t *iface_index;
   core_list_t(th_error_t) errors;
   core_list_t(th_coercion_t) coercions;
-  core_list_t(th_type_ptr_t) pending_method_constraints;
+  core_list_t(th_type_ptr_t) pending_environment_constraints;
   th_coerce_fn custom;
   void *custom_user;
   th_span_t span;
@@ -179,11 +190,13 @@ struct th_env {
   th_ctx *types;
   core_list_t(th_env_trait_t) traits;
   core_list_t(th_env_function_t) functions;
+  core_list_t(th_env_intrinsic_type_t) intrinsic_types;
   core_list_t(th_env_type_origin_t) type_origins;
   core_list_t(th_env_method_symbol_t) method_symbols;
   core_list_t(th_env_metadata_record_t) metadata;
   core_datalog_engine_t *logic;
   core_datalog_relation_id_t candidate_relation;
+  core_datalog_relation_id_t intrinsic_type_relation;
   core_object_archive_t *persisted_archive;
   uint32_t archive_schema_version;
   bool frozen;

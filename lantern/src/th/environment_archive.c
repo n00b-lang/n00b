@@ -5,9 +5,15 @@
 
 #include "lib/alloc.h"
 
-#define TH_ENV_ARCHIVE_ABI UINT64_C(0x7468656e76617201)
+core_list_decl(th_member);
+
+#define TH_ENV_ARCHIVE_SCHEMA UINT64_C(0x7468656e76617201)
 #define TH_ENV_ARCHIVE_ROOT_TYPE UINT64_C(0x7468656e762e726f)
 #define TH_TYPE_ARCHIVE_BASE UINT64_C(0x7468747970650000)
+
+static uint64_t environment_archive_abi(void) {
+  return core_persist_arena_native_abi_tag(TH_ENV_ARCHIVE_SCHEMA);
+}
 
 static uint64_t type_archive_id(th_kind kind) {
   return TH_TYPE_ARCHIVE_BASE | (uint64_t)kind + 1;
@@ -84,7 +90,8 @@ static bool save_constraint(core_object_writer_t *writer,
            write_type_ref(writer, constraint->param.type);
   case TH_CON_METHOD:
     return core_object_writer_string(writer, constraint->method.name) &&
-           write_type_ref(writer, constraint->method.result);
+           write_type_ref(writer, constraint->method.result) &&
+           write_type_ref(writer, constraint->method.call);
   }
   return false;
 }
@@ -126,7 +133,8 @@ static bool read_constraint(core_object_reader_t *reader,
     return core_object_reader_string(reader, (char **)&constraint->method.name) &&
            constraint->method.name &&
            read_type_ref(reader, &constraint->method.result) &&
-           constraint->method.result;
+           constraint->method.result &&
+           (version < 3 || read_type_ref(reader, &constraint->method.call));
   }
   return false;
 }
@@ -228,7 +236,7 @@ static bool save_type(core_object_writer_t *writer, const void *object,
 static void *type_allocate(core_persist_arena_t *arena, uint32_t version,
                            core_object_reader_t *payload, void *user_data) {
   (void)payload;
-  if (version < 1 || version > 2)
+  if (version < 1 || version > 4)
     return nullptr;
   /* Carry the record schema into restore_type without changing th_type. */
   th_type *type = core_persist_arena_alloc_transient(
@@ -429,7 +437,9 @@ static bool save_environment(core_object_writer_t *writer, const void *object,
         !core_object_writer_string(writer, trait->module) ||
         !core_object_writer_string(writer, trait->package) ||
         !core_object_writer_u32(writer, trait->visibility) ||
-        !write_type_ref(writer, trait->scheme)) return false;
+        !write_type_ref(writer, trait->scheme) ||
+        !write_type_ref(writer, trait->errors) ||
+        !write_type_ref(writer, trait->contracts)) return false;
   }
   if (!write_count(writer, env->functions.len)) return false;
   for (size_t i = 0; i < env->functions.len; i++) {
@@ -439,7 +449,9 @@ static bool save_environment(core_object_writer_t *writer, const void *object,
         !core_object_writer_string(writer, function->module) ||
         !core_object_writer_string(writer, function->package) ||
         !core_object_writer_u32(writer, function->visibility) ||
-        !write_type_ref(writer, function->scheme)) return false;
+        !write_type_ref(writer, function->scheme) ||
+        !write_type_ref(writer, function->error_type) ||
+        !write_type_ref(writer, function->contract)) return false;
   }
   if (!write_count(writer, env->metadata.len)) return false;
   for (size_t i = 0; i < env->metadata.len; i++) {
@@ -452,6 +464,12 @@ static bool save_environment(core_object_writer_t *writer, const void *object,
         !core_object_writer_bytes(writer, metadata->data, metadata->size))
       return false;
   }
+  if (!write_count(writer, env->intrinsic_types.len)) return false;
+  for (size_t i = 0; i < env->intrinsic_types.len; i++) {
+    const th_env_intrinsic_type_t *fact = &env->intrinsic_types.data[i];
+    if (!core_object_writer_string(writer, fact->trait_name) ||
+        !write_type_ref(writer, fact->receiver_pattern)) return false;
+  }
   return true;
 }
 
@@ -461,7 +479,7 @@ static void *environment_allocate(core_persist_arena_t *arena,
                                   void *user_data) {
   (void)payload;
   (void)user_data;
-  if (version < 1 || version > 2) return nullptr;
+  if (version < 1 || version > 5) return nullptr;
   th_env *temporary = th_env_new();
   th_env *mapped = core_persist_arena_alloc_transient(
       arena, sizeof(*mapped), alignof(th_env), nullptr);
@@ -505,7 +523,39 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         !core_object_reader_string(reader, (char **)&trait.package) ||
         !core_object_reader_u32(reader, &visibility) ||
         visibility > TH_ENV_PUBLIC ||
-        !read_type_ref(reader, &trait.scheme)) return false;
+        !read_type_ref(reader, &trait.scheme) ||
+        (env->archive_schema_version >= 3
+             ? !read_type_ref(reader, &trait.errors)
+             : false) ||
+        (env->archive_schema_version >= 4
+             ? !read_type_ref(reader, &trait.contracts)
+             : false)) return false;
+    if (env->archive_schema_version < 3) {
+      core_list_t(th_member) errors = core_list_new(th_member);
+      for (size_t j = 0; j < th_record_len(trait.scheme); j++) {
+        const th_member *method = th_record_member(trait.scheme, j);
+        core_list_push(errors, ((th_member){
+            .name = method->name,
+            .type = th_name(env->types, "nil"),
+        }));
+      }
+      trait.errors = th_record(env->types, errors.data, errors.len);
+      core_list_free(errors);
+    }
+    if (env->archive_schema_version < 4) {
+      core_list_t(th_member) contracts = core_list_new(th_member);
+      for (size_t j = 0; j < th_record_len(trait.scheme); j++) {
+        const th_member *method = th_record_member(trait.scheme, j);
+        th_type *error = th_record_lookup(trait.errors, method->name);
+        core_list_push(contracts, ((th_member){
+            .name = method->name,
+            .type = th_env_signature_contract(env->types, method->type,
+                                               error),
+        }));
+      }
+      trait.contracts = th_record(env->types, contracts.data, contracts.len);
+      core_list_free(contracts);
+    }
     trait.visibility = (th_env_visibility_t)visibility;
     core_list_push(env->traits, trait);
   }
@@ -521,7 +571,18 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         !core_object_reader_string(reader, (char **)&function.package) ||
         !core_object_reader_u32(reader, &visibility) ||
         visibility > TH_ENV_PUBLIC ||
-        !read_type_ref(reader, &function.scheme)) return false;
+        !read_type_ref(reader, &function.scheme) ||
+        (env->archive_schema_version >= 3
+             ? !read_type_ref(reader, &function.error_type)
+             : false) ||
+        (env->archive_schema_version >= 4
+             ? !read_type_ref(reader, &function.contract)
+             : false)) return false;
+    if (env->archive_schema_version < 3)
+      function.error_type = th_name(env->types, "nil");
+    if (env->archive_schema_version < 4)
+      function.contract = th_env_signature_contract(env->types,
+          function.scheme, function.error_type);
     function.visibility = (th_env_visibility_t)visibility;
     function.order = i;
     core_list_push(env->functions, function);
@@ -548,6 +609,17 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
     }
     core_list_push(env->metadata, metadata);
   }
+  if (env->archive_schema_version >= 5) {
+    if (!read_count(reader, &count) ||
+        count > SIZE_MAX / sizeof(th_env_intrinsic_type_t)) return false;
+    for (size_t i = 0; i < count; i++) {
+      th_env_intrinsic_type_t fact = {0};
+      if (!core_object_reader_string(reader, (char **)&fact.trait_name) ||
+          !fact.trait_name || !read_type_ref(reader, &fact.receiver_pattern) ||
+          !fact.receiver_pattern) return false;
+      core_list_push(env->intrinsic_types, fact);
+    }
+  }
   return true;
 }
 
@@ -557,10 +629,12 @@ static bool finalize_environment(void *object, void *user_data) {
   core_list_t(th_env_type_origin_t) origins = env->type_origins;
   core_list_t(th_env_trait_t) traits = env->traits;
   core_list_t(th_env_function_t) functions = env->functions;
+  core_list_t(th_env_intrinsic_type_t) intrinsic_types = env->intrinsic_types;
   core_list_t(th_env_metadata_record_t) metadata = env->metadata;
   env->type_origins = core_list_new(th_env_type_origin_t);
   env->traits = core_list_new(th_env_trait_t);
   env->functions = core_list_new(th_env_function_t);
+  env->intrinsic_types = core_list_new(th_env_intrinsic_type_t);
   env->metadata = core_list_new(th_env_metadata_record_t);
   bool ok = true;
   for (size_t i = 0; ok && i < origins.len; i++) {
@@ -570,15 +644,20 @@ static bool finalize_environment(void *object, void *user_data) {
   }
   for (size_t i = 0; ok && i < traits.len; i++) {
     th_env_trait_t *entry = &traits.data[i];
-    ok = th_env_register_trait(env, entry->name, entry->module,
-                               entry->package, entry->visibility,
-                               entry->scheme);
+    ok = th_env_register_trait_contracts(
+        env, entry->name, entry->module, entry->package, entry->visibility,
+        entry->contracts);
   }
   for (size_t i = 0; ok && i < functions.len; i++) {
     th_env_function_t *entry = &functions.data[i];
-    ok = th_env_register_function(env, entry->qualified_name, entry->root_name,
-                                  entry->module, entry->package,
-                                  entry->visibility, entry->scheme);
+    ok = th_env_register_function_contract(
+        env, entry->qualified_name, entry->root_name, entry->module,
+        entry->package, entry->visibility, entry->contract);
+  }
+  for (size_t i = 0; ok && i < intrinsic_types.len; i++) {
+    th_env_intrinsic_type_t *entry = &intrinsic_types.data[i];
+    ok = th_env_register_intrinsic_type_pattern(
+        env, entry->trait_name, entry->receiver_pattern);
   }
   for (size_t i = 0; ok && i < metadata.len; i++) {
     th_env_metadata_record_t *entry = &metadata.data[i];
@@ -589,6 +668,7 @@ static bool finalize_environment(void *object, void *user_data) {
   core_list_free(origins);
   core_list_free(traits);
   core_list_free(functions);
+  core_list_free(intrinsic_types);
   core_list_free(metadata);
   return ok && th_env_freeze(env);
 }
@@ -602,7 +682,7 @@ static bool register_environment_codecs(
     core_object_archive_registry_t *registry) {
   if (!core_object_archive_register(registry, (core_object_archive_type_t){
           .type_id = TH_ENV_ARCHIVE_ROOT_TYPE,
-          .current_version = 2,
+          .current_version = 5,
           .oldest_supported_version = 1,
           .allocate = environment_allocate,
           .save = save_environment,
@@ -612,7 +692,7 @@ static bool register_environment_codecs(
   for (uint32_t kind = 0; kind <= TH_VAR; kind++)
     if (!core_object_archive_register(registry, (core_object_archive_type_t){
             .type_id = type_archive_id((th_kind)kind),
-            .current_version = 2,
+            .current_version = 4,
             .oldest_supported_version = 1,
             .allocate = type_allocate,
             .save = save_type,
@@ -631,7 +711,7 @@ bool th_env_save(const th_env *env, const char *path, size_t mapping_capacity,
       core_object_archive_registry_new();
   bool registered = register_environment_codecs(registry);
   bool ok = registered && core_object_archive_save(
-      path, mapping_capacity, TH_ENV_ARCHIVE_ABI, registry,
+      path, mapping_capacity, environment_archive_abi(), registry,
       TH_ENV_ARCHIVE_ROOT_TYPE, env, error);
   if (!registered && error)
     *error = CORE_OBJECT_ARCHIVE_CALLBACK_FAILED;
@@ -652,7 +732,7 @@ th_env *th_env_load(const char *path, core_object_archive_error_t *error) {
     return nullptr;
   }
   core_object_archive_t *archive = nullptr;
-  bool loaded = core_object_archive_load(path, TH_ENV_ARCHIVE_ABI, registry,
+  bool loaded = core_object_archive_load(path, environment_archive_abi(), registry,
                                          &archive, error);
   core_object_archive_registry_free(registry);
   if (!loaded) return nullptr;

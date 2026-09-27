@@ -9,6 +9,9 @@
 #include "lib/diagnostic.h"
 #include "th/typehash.h"
 
+#define TH_ENV_CONTRACT_SUCCESS "success"
+#define TH_ENV_CONTRACT_FAILURE "failure"
+
 typedef enum {
   TH_ENV_PRIVATE,
   TH_ENV_PACKAGE,
@@ -21,12 +24,36 @@ typedef struct {
   const char *module;
   const char *package;
   th_type *signature;
+  th_type *error_type;
+  /* Canonical callable contract; jointly quantifies both channels. */
+  th_type *contract;
 } th_env_method_t;
 
 typedef struct {
   const char *trait_name;
   th_type *signature;
+  th_type *error_type;
+  th_type *contract;
 } th_env_method_requirement_t;
+
+typedef struct {
+  th_type *receiver_type;
+  th_env_method_t method;
+} th_env_dispatch_entry_t;
+
+typedef struct {
+  const char *method_name;
+  th_env_method_t implementation;
+} th_env_vtable_slot_t;
+
+typedef struct {
+  const char *trait_name;
+  th_type *concrete_type;
+  uint64_t concrete_type_hash;
+  th_env_vtable_slot_t *slots;
+  size_t slot_count;
+  size_t required_slot_count;
+} th_env_vtable_plan_t;
 
 typedef enum {
   TH_ENV_METHOD_NOT_FOUND,
@@ -65,12 +92,15 @@ typedef struct {
 } th_env_metadata_view_t;
 
 
-/* Signature terms are borrowed immutable schemes. Their owning module/type
- * contexts must outlive the environment; the environment must outlive every
- * inference context attached to it. Publish registrations only after their
- * schemes are finalized, then freeze before concurrent queries. A frozen
- * environment supports concurrent queries from distinct th_ctx instances;
- * callers must not mutate or destroy it while queries are in flight. */
+/* This is a language-neutral environment: callers provide stable qualified
+ * identities and resolved visibility. Source spelling, import lookup, and
+ * name mangling remain frontend responsibilities. Signature terms are
+ * borrowed immutable schemes. Their owning module/type contexts must outlive
+ * the environment; the environment must outlive every inference context
+ * attached to it. Publish registrations only after their schemes are
+ * finalized, then freeze before concurrent queries. A frozen environment
+ * supports concurrent queries from distinct th_ctx instances; callers must
+ * not mutate or destroy it while queries are in flight. */
 th_env *th_env_new(void);
 void th_env_free(th_env *environment);
 
@@ -78,7 +108,9 @@ void th_env_free(th_env *environment);
  * source snapshots remain unchanged; their borrowed signature contexts must
  * outlive the composed environment. A loaded environment must likewise remain
  * alive while a composed snapshot borrows its schemes. Add newly linked
- * declarations to the result, then freeze it before publishing for queries.
+ * declarations (including open-trait contributions) to the result, then
+ * freeze it before publishing for queries. Do not mutate a published snapshot;
+ * link further contributions by composing a fresh environment.
  * Duplicate or conflicting declarations make composition fail and return NULL. */
 th_env *th_env_compose(const th_env *const *environments, size_t count);
 /* On failure, error identifies the conflicting stable declaration/metadata
@@ -101,14 +133,57 @@ th_env *th_env_load(const char *path, core_object_archive_error_t *error);
 bool th_env_register_type(th_env *environment, const char *qualified_type_name,
                           const char *module, const char *package,
                           th_env_visibility_t visibility);
+/* Trait method signatures use Lantern's canonical receiver-first shape:
+ * parameter zero is the receiver, and its type must be an unbound type
+ * variable. A frontend for a language with another receiver convention can
+ * normalize the signature and provide an adapter for its source ABI. */
 bool th_env_register_trait(th_env *environment, const char *qualified_name,
                            const char *module, const char *package,
                            th_env_visibility_t visibility, th_type *methods);
+/* `methods` and `errors` are records with the same method names. Their success
+ * signatures and failure types are paired before generalization; use the
+ * contract API when registering already-quantified channels that share type
+ * variables. */
+bool th_env_register_trait_channels(
+    th_env *environment, const char *qualified_name, const char *module,
+    const char *package, th_env_visibility_t visibility, th_type *methods,
+    th_type *errors);
+/* The method map holds jointly quantified channel contracts, with each value
+ * built by th_env_signature_contract(). */
+bool th_env_register_trait_contracts(
+    th_env *environment, const char *qualified_name, const char *module,
+    const char *package, th_env_visibility_t visibility,
+    th_type *method_contracts);
+/* Register an intrinsic type-pattern fact for a methodless marker trait.
+ * This is for language/runtime builtins whose implementation cannot be
+ * expressed as an ordinary function signature. Patterns are borrowed and
+ * universally instantiated for each query; ordinary traits must continue to
+ * derive implementations from matching functions. */
+bool th_env_register_intrinsic_type_pattern(th_env *environment,
+                                           const char *trait_name,
+                                           th_type *receiver_pattern);
 bool th_env_register_function(th_env *environment, const char *qualified_name,
                               const char *root_name, const char *module,
                               const char *package,
                               th_env_visibility_t visibility,
                               th_type *signature);
+bool th_env_register_function_channels(
+    th_env *environment, const char *qualified_name, const char *root_name,
+    const char *module, const char *package,
+    th_env_visibility_t visibility, th_type *signature, th_type *error_type);
+bool th_env_register_function_contract(
+    th_env *environment, const char *qualified_name, const char *root_name,
+    const char *module, const char *package,
+    th_env_visibility_t visibility, th_type *contract);
+th_type *th_env_signature_contract(th_ctx *context, th_type *signature,
+                                   th_type *error_type);
+/* A callable contract keeps the successful function signature and failure
+ * type in one quantified universe. The legacy registration wrappers use nil
+ * when the frontend has no separate failure type; frontends with another
+ * error model may encode it in their return type or adapt it at this boundary.
+ */
+bool th_env_signature_channels(th_ctx *context, th_type *contract,
+                               th_type **signature, th_type **error_type);
 /* Metadata keys are producer-namespaced; each key has its own schema version.
  * Payloads are opaque copied bytes and must not contain process-local pointers.
  * Views borrow storage owned by the environment. */
@@ -119,12 +194,24 @@ bool th_env_register_metadata(th_env *environment,
 size_t th_env_metadata_count(const th_env *environment);
 bool th_env_metadata_at(const th_env *environment, size_t index,
                         th_env_metadata_view_t *out);
+/* Finalize a complete link/import closure. Ordinary functions whose complete
+ * success/failure contracts match trait requirements contribute candidates.
+ * The logic relation indexes only stable (trait, method, function) identities;
+ * it does not encode type variables, substitutions, constraints, or
+ * specificity. Candidate matching and receiver-dependent selection remain in
+ * the type layer. Only direct signature matches are derived: this layer does
+ * not infer trait inheritance or other implication edges. The frozen
+ * environment is immutable and safe for concurrent queries; publish a newly
+ * composed snapshot to add more open-trait facts. */
 bool th_env_freeze(th_env *environment);
 bool th_env_is_frozen(const th_env *environment);
 
 /* Attach once, after the environment is frozen. It remains borrowed. */
 bool th_ctx_set_environment(th_ctx *context, const th_env *environment,
                             const char *module, const char *package);
+/* Changes the visibility perspective while retaining the attached snapshot. */
+bool th_ctx_set_environment_scope(th_ctx *context, const char *module,
+                                 const char *package);
 bool th_env_type_visible(const th_ctx *context,
                          const char *qualified_type_name);
 bool th_env_implements(th_ctx *context, th_type *receiver,
@@ -146,12 +233,32 @@ th_env_method_status_t th_env_method_resolve_by_name(
     th_ctx *context, th_type *receiver, const char *method_name,
     th_env_method_t *method, const char **trait_name);
 /* Enumerate every visible signature-compatible implementation of a trait
- * method. This is the candidate set for building a trait-value runtime
- * dispatch table; unlike method_resolve(), it does not select for one runtime
- * receiver type. Returns the total count even when `max_methods` is smaller. */
+ * method. The logic relation indexes declarations; generic instantiation,
+ * concrete receiver matching, constraints, and specificity remain in the type
+ * layer. This is the candidate set for building a trait-value runtime dispatch
+ * table; unlike method_resolve(), it does not select for one receiver type.
+ * Returns the total count even when `max_methods` is smaller. */
 size_t th_env_method_candidates(th_ctx *context, const char *trait_name,
                                 const char *method_name,
                                 th_env_method_t *methods, size_t max_methods);
+/* Resolve one target for every concrete receiver type a compiler knows can
+ * reach a trait-valued call. On success, entries preserve receiver order;
+ * `required_count` reports the full size even when capacity is smaller. If
+ * every receiver selects the same function, `direct_call` is true and codegen
+ * may omit a runtime type switch. No partial plan is written on failure. */
+th_env_method_status_t th_env_method_plan_dispatch(
+    th_ctx *context, const char *trait_name, const char *method_name,
+    th_type *const *receiver_types, size_t receiver_count,
+    th_env_dispatch_entry_t *entries, size_t capacity,
+    size_t *required_count, bool *direct_call);
+/* Plan every slot of one concrete type's trait vtable, in trait declaration
+ * order. Each slot uses ordinary most-specific method resolution. The full
+ * plan is validated before any caller buffer is written; required_count is
+ * set only on success and may exceed capacity. */
+th_env_method_status_t th_env_trait_vtable_plan(
+    th_ctx *context, const char *trait_name, th_type *concrete_type,
+    th_env_vtable_slot_t *slots, size_t capacity, size_t *required_count,
+    th_env_vtable_plan_t *plan);
 /* Enumerate visible trait contracts declaring `method_name`. Returned
  * signatures are fresh instances allocated in `context`; each call is
  * independent, while type-variable relationships within one trait contract

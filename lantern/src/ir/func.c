@@ -72,6 +72,100 @@ ir_global_t *ir_global_find(ir_module_t *m, const char *name)
     return ir_index_find(m->global_index, name);
 }
 
+ir_value_t *ir_global_address(ir_module_t *m, ir_global_t *global)
+{
+    if (!m || !global || ir_global_find(m, global->name) != global)
+        return nullptr;
+    ir_value_t *value = ir_alloc(m->ctx, sizeof(*value));
+    value->kind = IR_VAL_GLOBAL;
+    value->name = global->name;
+    value->type = global->type;
+    return value;
+}
+
+ir_value_t *ir_func_address(ir_module_t *m, ir_func_t *function)
+{
+    if (!m || !function || ir_func_find(m, function->name) != function)
+        return nullptr;
+    ir_value_t *value = ir_alloc(m->ctx, sizeof(*value));
+    value->kind = IR_VAL_FUNC;
+    value->name = function->name;
+    value->type = function->type;
+    value->owner = function;
+    return value;
+}
+
+static bool global_init_integer_fits(ir_lit_t value, ir_machine_t machine)
+{
+    uint32_t width = machine.width;
+    if (machine.class == IR_CLASS_BOOL)
+        return !value.neg && value.mag <= 1;
+    if (!width || width > 128) return false;
+    if (machine.class == IR_CLASS_UINT) {
+        if (value.neg) return false;
+        return width == 128 || value.mag < ((ir_uint_t)1 << width);
+    }
+    if (machine.class != IR_CLASS_SINT) return false;
+    if (width == 128) {
+        ir_uint_t sign = (ir_uint_t)1 << 127;
+        return value.neg ? value.mag <= sign : value.mag < sign;
+    }
+    ir_uint_t sign = (ir_uint_t)1 << (width - 1);
+    return value.neg ? value.mag <= sign : value.mag < sign;
+}
+
+bool ir_global_set_record_initializer(
+    ir_module_t *m, ir_global_t *global,
+    const ir_global_init_value_t *values, size_t count)
+{
+    if (!m || !global || ir_global_find(m, global->name) != global ||
+        th_kind_of(global->type) != TH_RECORD || (count && !values) ||
+        count != th_record_len(global->type) || global->has_init ||
+        global->has_record_init)
+        return false;
+
+    for (size_t i = 0; i < count; i++) {
+        if (!values[i].member) return false;
+        const th_type *field = th_record_lookup(global->type, values[i].member);
+        if (!field) return false;
+        for (size_t j = 0; j < i; j++)
+            if (!strcmp(values[i].member, values[j].member)) return false;
+        th_type *member_type = (th_type *)field;
+        ir_machine_t machine = ir_machine_of(m, member_type);
+        switch (values[i].kind) {
+        case IR_GLOBAL_INIT_INT:
+            if (!global_init_integer_fits(values[i].integer, machine))
+                return false;
+            break;
+        case IR_GLOBAL_INIT_FLOAT:
+            if (machine.class != IR_CLASS_FLOAT) return false;
+            break;
+        case IR_GLOBAL_INIT_SYMBOL: {
+            ir_value_t *symbol = values[i].symbol;
+            if (!symbol || th_kind_of(member_type) != TH_INDIRECTION ||
+                !ir_type_eq(m, th_ind_referent(member_type), symbol->type) ||
+                (symbol->kind != IR_VAL_FUNC &&
+                 symbol->kind != IR_VAL_GLOBAL))
+                return false;
+            break;
+        }
+        default:
+            return false;
+        }
+    }
+
+    global->record_init = count
+        ? ir_alloc(m->ctx, count * sizeof(*values)) : nullptr;
+    if (count) {
+        memcpy(global->record_init, values, count * sizeof(*values));
+        for (size_t i = 0; i < count; i++)
+            global->record_init[i].member = ir_strdup(m->ctx, values[i].member);
+    }
+    global->n_record_init = count;
+    global->has_record_init = true;
+    return true;
+}
+
 size_t ir_global_count(const ir_module_t *m)
 {
     return m ? m->n_globals : 0;
@@ -152,6 +246,31 @@ ir_value_t *ir_param_add(ir_func_t *f, const char *name, th_type *type)
     ir_index_add(ctx, &f->value_index, v->name, v);
 
     return v;
+}
+
+ir_value_t *ir_kwparam_add(ir_func_t *f, const char *name, th_type *type)
+{
+    if (!f || !name || !type || ir_value_find(f, name)) return nullptr;
+    const th_kwparam *declared = th_func_kw_lookup(f->type, name);
+    if (!declared || !ir_type_eq(f->owner, declared->type, type))
+        return nullptr;
+    ir_value_t *value = ir_param_add(f, name, type);
+    if (value) value->is_keyword = true;
+    return value;
+}
+
+ir_value_t *ir_restparam_add(ir_func_t *f, const char *name, th_type *type)
+{
+    const th_param *rest = f ? th_func_rest(f->type) : nullptr;
+    if (!rest || !name || !*name || !type || ir_value_find(f, name) ||
+        !ir_type_eq(f->owner, rest->type, type))
+        return nullptr;
+    for (uint32_t i = 0; i < f->n_params; i++)
+        if (f->params[i]->is_rest)
+            return nullptr;
+    ir_value_t *value = ir_param_add(f, name, type);
+    if (value) value->is_rest = true;
+    return value;
 }
 
 ir_value_t *ir_value_find(ir_func_t *f, const char *name)
@@ -254,6 +373,7 @@ ir_value_t *ir_operand_value(const ir_operand_t *od)
 {
     switch (od->kind) {
     case IR_OPD_VALUE:
+    case IR_OPD_SPREAD:
         return od->value;
     case IR_OPD_NAMED_ARG:
         return od->named.value;
@@ -360,7 +480,8 @@ static ir_operand_t *push(ir_instr_t *in, ir_opdkind_t kind)
 
     if (want != kind
         && !(want == IR_OPD_ARG
-             && (kind == IR_OPD_VALUE || kind == IR_OPD_NAMED_ARG))) {
+             && (kind == IR_OPD_VALUE || kind == IR_OPD_SPREAD ||
+                 kind == IR_OPD_NAMED_ARG))) {
         return nullptr;
     }
 
@@ -392,6 +513,14 @@ bool ir_instr_operand_value(ir_instr_t *in, ir_value_t *v)
         o->value = v;
     }
 
+    return o != nullptr;
+}
+
+bool ir_instr_operand_spread(ir_instr_t *in, ir_value_t *v)
+{
+    ir_operand_t *o = in && in->op == IR_OP_CALL && v && v->is_rest
+        ? push(in, IR_OPD_SPREAD) : nullptr;
+    if (o) o->value = v;
     return o != nullptr;
 }
 

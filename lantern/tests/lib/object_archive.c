@@ -85,7 +85,8 @@ static bool node_save(core_object_writer_t *writer, const void *object,
   return core_object_writer_u64(writer, node->value) &&
          core_object_writer_string(writer, node->label) &&
          core_object_writer_ref(writer, TEST_NODE_TYPE, node->left) &&
-         core_object_writer_ref(writer, TEST_NODE_TYPE, node->right);
+         core_object_writer_ref(writer, TEST_NODE_TYPE, node->right) &&
+         core_object_writer_ref(writer, 0, nullptr);
 }
 
 static bool node_restore(core_object_reader_t *reader, void *object,
@@ -93,11 +94,12 @@ static bool node_restore(core_object_reader_t *reader, void *object,
   if (user_data && reject_node_restore)
     return false;
   test_node_t *node = object;
-  void *left = nullptr, *right = nullptr;
+  void *left = nullptr, *right = nullptr, *absent = nullptr;
   if (!core_object_reader_u64(reader, &node->value) ||
       !core_object_reader_string(reader, &node->label) ||
-      !core_object_reader_ref(reader, TEST_NODE_TYPE, &left) ||
-      !core_object_reader_ref(reader, TEST_NODE_TYPE, &right))
+      !core_object_reader_ref(reader, 0, &left) ||
+      !core_object_reader_ref(reader, TEST_NODE_TYPE, &right) ||
+      !core_object_reader_ref(reader, 0, &absent) || absent)
     return false;
   node->left = left;
   node->right = right;
@@ -152,9 +154,14 @@ int main(void) {
         core_object_archive_save(path2, 65536, TEST_ARCHIVE_ABI, registry,
                                  TEST_NODE_TYPE, &second_root, &error) &&
             error == CORE_OBJECT_ARCHIVE_OK);
+  core_object_archive_t *archive = nullptr;
+  check("archive ABI mismatch is rejected before object restoration",
+        !core_object_archive_load(path, TEST_ARCHIVE_ABI + 1, registry,
+                                  &archive, &error) &&
+            error == CORE_OBJECT_ARCHIVE_INCOMPATIBLE && !archive &&
+            node_destroy_calls == 0);
   core_object_archive_registry_t *missing_codec =
       core_object_archive_registry_new();
-  core_object_archive_t *archive = nullptr;
   check("loading requires codecs for referenced object kinds",
         !core_object_archive_load(path, TEST_ARCHIVE_ABI, missing_codec,
                                   &archive, &error) &&

@@ -17,6 +17,7 @@
     X(NEWLINE, "newline") \
     X(SPACE, "space") \
     X(NOSPACE, "nospace") \
+    X(ADJACENT, "adjacent") \
     X(GROUP, "group") \
     X(SOFTLINE, "softline") \
     X(HARDLINE, "hardline") \

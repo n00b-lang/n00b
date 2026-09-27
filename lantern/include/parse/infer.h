@@ -16,6 +16,7 @@ typedef enum : uint8_t {
     PARSE_INFER_SPREAD,
     PARSE_INFER_LOOKUP,
     PARSE_INFER_PROJECT,
+    PARSE_INFER_COMPARE,
     PARSE_INFER_UNIFY,
     PARSE_INFER_SUM,
 } parse_infer_kind_t;
@@ -23,6 +24,7 @@ typedef enum : uint8_t {
 typedef enum : uint8_t {
     PARSE_INFER_RETURN_OF,
     PARSE_INFER_ELEMENT_OF,
+    PARSE_INFER_SLICE_OF,
     PARSE_INFER_UNWRAP_RESULT,
     PARSE_INFER_METHOD_RETURN,
 } parse_infer_proj_t;

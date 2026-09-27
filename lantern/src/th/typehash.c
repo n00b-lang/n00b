@@ -63,7 +63,7 @@ void th_ctx_free(th_ctx *ctx)
     core_list_free(ctx->methods);
     core_list_free(ctx->errors);
     core_list_free(ctx->coercions);
-    core_list_free(ctx->pending_method_constraints);
+    core_list_free(ctx->pending_environment_constraints);
     core_arena_free(&ctx->arena);
     core_buffer_release(&ctx->scratch);
     core_free(ctx);
@@ -190,10 +190,7 @@ static bool name(th_ctx *ctx, core_buffer_t *b, const char *s, size_t n)
     return true;
 }
 
-typedef th_type       *th_type_ptr_t;
 typedef const th_type *th_type_cptr_t;
-
-core_list_decl(th_type_ptr_t);
 
 core_option_decl(th_type_cptr_t);
 core_list_decl(th_type_cptr_t);

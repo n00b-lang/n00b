@@ -570,7 +570,9 @@
 <constraint-list> ::= <one-constraint> (%"+" <one-constraint>)*
 
 <one-constraint> ::= %"!=" <one-tspec>
-                   | %IDENTIFIER
+                   | <trait-name>
+
+<trait-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
 <type-decl> @scope("type", $2) @declares($2) @type($2) @exposes ::=
        <member-visibility>? %"type" %IDENTIFIER <type-body>

@@ -566,6 +566,7 @@ static struct {
     {PARSE_ANNOT_CONCAT,     CORE_STRING_STATIC("a-ref")},
     {PARSE_ANNOT_SPACE,      CORE_STRING_STATIC("a-ref")},
     {PARSE_ANNOT_NOSPACE,    CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_ADJACENT,   CORE_STRING_STATIC("a-tag")},
     {PARSE_ANNOT_NEWLINE,    CORE_STRING_STATIC("a-ref")},
     {PARSE_ANNOT_SOFTLINE,   CORE_STRING_STATIC("a-ref")},
     {PARSE_ANNOT_HARDLINE,   CORE_STRING_STATIC("a-ref")},
@@ -899,6 +900,13 @@ decode(parse_annotation_t *a, aa_node *args)
 
     case PARSE_ANNOT_NOTRIVIA:
         a->notrivia_ref = arg_ref(args, 0);
+        break;
+
+    case PARSE_ANNOT_ADJACENT:
+        a->scope_tag = arg_tag(args, 0);
+        if (!core_string_eq(a->scope_tag, CORE_STRING_STATIC("prefix"))) {
+            return false;
+        }
         break;
 
     case PARSE_ANNOT_MUTABILITY:

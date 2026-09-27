@@ -62,4 +62,5 @@ const core_diagnostic_t *core_diagnostics_at(
 size_t core_diagnostics_count_severity(const core_diagnostics_t *diagnostics,
                                        core_diag_severity_t severity);
 bool core_diagnostics_failed(const core_diagnostics_t *diagnostics);
+bool core_diagnostics_has_fatal(const core_diagnostics_t *diagnostics);
 char *core_diagnostics_render_text(const core_diagnostics_t *diagnostics);

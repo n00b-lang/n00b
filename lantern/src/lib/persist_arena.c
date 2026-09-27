@@ -15,6 +15,30 @@
 #define CORE_PERSIST_ARENA_ENDIAN UINT32_C(0x01020304)
 #define CORE_PERSIST_ARENA_NO_ROOT UINT64_MAX
 
+#if defined(__x86_64__) || defined(_M_X64)
+#define CORE_PERSIST_ARCH_ID UINT64_C(1)
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#define CORE_PERSIST_ARCH_ID UINT64_C(2)
+#elif defined(__i386__) || defined(_M_IX86)
+#define CORE_PERSIST_ARCH_ID UINT64_C(3)
+#elif defined(__arm__) || defined(_M_ARM)
+#define CORE_PERSIST_ARCH_ID UINT64_C(4)
+#else
+#define CORE_PERSIST_ARCH_ID UINT64_C(255)
+#endif
+
+#if defined(__APPLE__)
+#define CORE_PERSIST_OS_ID UINT64_C(1)
+#elif defined(_WIN32)
+#define CORE_PERSIST_OS_ID UINT64_C(2)
+#elif defined(__linux__)
+#define CORE_PERSIST_OS_ID UINT64_C(3)
+#elif defined(__FreeBSD__)
+#define CORE_PERSIST_OS_ID UINT64_C(4)
+#else
+#define CORE_PERSIST_OS_ID UINT64_C(255)
+#endif
+
 typedef struct {
   uint64_t mapping_base;
   uint64_t magic;
@@ -27,6 +51,37 @@ typedef struct {
   uint64_t used;
   uint64_t root_offset;
 } core_persist_arena_header_t;
+
+static uint64_t abi_mix(uint64_t hash, uint64_t value) {
+  for (unsigned i = 0; i < 8; i++) {
+    hash ^= (uint8_t)(value >> (i * 8));
+    hash *= UINT64_C(1099511628211);
+  }
+  return hash;
+}
+
+uint64_t core_persist_arena_native_abi_tag(uint64_t application_tag) {
+  const uint16_t endian_probe = 1;
+  uint64_t hash = UINT64_C(14695981039346656037);
+  const uint64_t values[] = {
+      application_tag,
+      CORE_PERSIST_ARCH_ID,
+      CORE_PERSIST_OS_ID,
+      sizeof(void *),
+      sizeof(void (*)(void)),
+      sizeof(size_t),
+      sizeof(long),
+      sizeof(wchar_t),
+      sizeof(long double),
+      alignof(max_align_t),
+      alignof(core_persist_arena_header_t),
+      sizeof(core_persist_arena_header_t),
+      *(const uint8_t *)&endian_probe,
+  };
+  for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++)
+    hash = abi_mix(hash, values[i]);
+  return hash;
+}
 
 struct core_persist_arena {
   void *mapping;

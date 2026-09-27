@@ -317,6 +317,7 @@ static bool parsed_operand(ir_visit_t *vi)
         bool         fits = got == want
                          || (want == IR_OPD_ARG
                              && (got == IR_OPD_VALUE
+                                 || got == IR_OPD_SPREAD
                                  || got == IR_OPD_NAMED_ARG));
 
         if (!fits) {
@@ -339,6 +340,7 @@ static bool parsed_operand(ir_visit_t *vi)
     }
 
     ir_value_t *val = od->kind == IR_OPD_VALUE     ? od->value
+                    : od->kind == IR_OPD_SPREAD   ? od->value
                     : od->kind == IR_OPD_NAMED_ARG ? od->named.value
                     : od->kind == IR_OPD_PHI_ARM   ? od->phi.value
                                                    : nullptr;
@@ -424,8 +426,9 @@ static bool typed_instr(ir_visit_t *vi)
 static bool typed_operand(ir_visit_t *vi)
 {
     V          *v   = vi->user;
-    ir_value_t *val = vi->operand->kind == IR_OPD_VALUE ? vi->operand->value
-                                                        : nullptr;
+    ir_value_t *val = vi->operand->kind == IR_OPD_VALUE ||
+                      vi->operand->kind == IR_OPD_SPREAD
+                          ? vi->operand->value : nullptr;
 
     if (val && !val->type) {
         broke(v, IR_DIAG_VERIFY_TYPED, vi->instr, vi->block, "typed.value",
@@ -492,6 +495,7 @@ static bool ssa_operand(ir_visit_t *vi)
     ir_block_t   *b   = vi->block;
     ir_operand_t *od  = vi->operand;
     ir_value_t   *val = od->kind == IR_OPD_VALUE     ? od->value
+                      : od->kind == IR_OPD_SPREAD   ? od->value
                       : od->kind == IR_OPD_NAMED_ARG ? od->named.value
                       : od->kind == IR_OPD_PHI_ARM   ? od->phi.value
                                                      : nullptr;
@@ -644,7 +648,7 @@ static bool laid_out_operand(ir_visit_t *vi)
         check_laid_out_type(vi->user, od->type, vi->instr, vi->block);
     }
 
-    if (od->kind == IR_OPD_VALUE && od->value) {
+    if ((od->kind == IR_OPD_VALUE || od->kind == IR_OPD_SPREAD) && od->value) {
         check_laid_out_type(vi->user, od->value->type, vi->instr, vi->block);
     }
 

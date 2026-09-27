@@ -489,6 +489,24 @@ parse_nonterm(parse_grammar_t *g, core_string_t name)
     return nt;
 }
 
+int32_t
+parse_grammar_single_child_rule(parse_grammar_t *g, core_string_t parent_name,
+                               core_string_t child_name)
+{
+    if (!g) return -1;
+    parse_nonterm_t *parent = parse_find_nonterm(g, parent_name);
+    parse_nonterm_t *child = parse_find_nonterm(g, child_name);
+    if (!parent || !child) return -1;
+    for (size_t i = 0; i < parent->rule_ids.len; i++) {
+        parse_rule_t *rule = parse_get_rule(g, parent->rule_ids.data[i]);
+        if (rule && rule->contents.len == 1
+            && rule->contents.data[0].kind == PARSE_MATCH_NT
+            && rule->contents.data[0].nt_id == child->id)
+            return (int32_t)i;
+    }
+    return -1;
+}
+
 int64_t
 parse_nonterm_id(parse_nonterm_t *nt)
 {
@@ -509,22 +527,17 @@ parse_lookup_terminal(parse_grammar_t *g, core_string_t name)
 }
 
 int64_t
-parse_register_terminal(parse_grammar_t *g, core_string_t name)
+parse_register_named_terminal(parse_grammar_t *g, core_string_t name)
 {
+    if (!g || !name.data || !name.u8_bytes) {
+        return 0;
+    }
+
     bool  found = false;
     void *val   = _core_dict_get(g->terminal_map, &name, &found);
 
     if (found) {
         return (int64_t)(intptr_t)val;
-    }
-
-    if (name.u8_bytes == 1) {
-        int64_t id = (int64_t)(unsigned char)name.data[0];
-
-        _core_dict_put(g->terminal_map, name_key(name),
-                      (void *)(intptr_t)id);
-
-        return id;
     }
 
     parse_terminal_t term = {0};
@@ -539,6 +552,31 @@ parse_register_terminal(parse_grammar_t *g, core_string_t name)
                   (void *)(intptr_t)stored->id);
 
     return term.id;
+}
+
+int64_t
+parse_register_terminal(parse_grammar_t *g, core_string_t name)
+{
+    if (!g || !name.data || !name.u8_bytes) {
+        return 0;
+    }
+
+    int64_t existing = parse_lookup_terminal(g, name);
+
+    if (existing) {
+        return existing;
+    }
+
+    if (name.u8_bytes == 1) {
+        int64_t id = (int64_t)(unsigned char)name.data[0];
+
+        _core_dict_put(g->terminal_map, name_key(name),
+                      (void *)(intptr_t)id);
+
+        return id;
+    }
+
+    return parse_register_named_terminal(g, name);
 }
 
 void
@@ -1321,6 +1359,18 @@ parse_grammar_finalize(parse_grammar_t *g)
     if (g->finalized) {
         pthread_mutex_unlock(&grammar_finalize_lock);
         return;
+    }
+
+    for (size_t i = 0; i < g->rules.len; i++) {
+        parse_rule_t *rule = &g->rules.data[i];
+        for (size_t j = 0; j < rule->annotations.len; j++) {
+            if (rule->annotations.data[j]
+                    && rule->annotations.data[j]->kind == PARSE_ANNOT_ADJACENT) {
+                g->has_adjacency = true;
+                break;
+            }
+        }
+        if (g->has_adjacency) break;
     }
 
     const scan_lex_spec_t *lex_spec = scan_grammar_lex(g);

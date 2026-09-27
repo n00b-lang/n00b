@@ -31,6 +31,7 @@ typedef enum : uint8_t {
 
 typedef enum : uint8_t {
     OP_REF,
+    OP_SPREAD,
     OP_NUM,
     OP_STR,
     OP_NAMED,
@@ -59,6 +60,7 @@ struct ib_node {
     ir_span_t span;
 
     const char *text;
+    const char *member;
     th_type    *type;
 
     ir_lit_t     lit;
@@ -903,6 +905,64 @@ static void *r_init(parse_reduce_t *r)
     return n;
 }
 
+static void *r_global_init_value(parse_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *n = nd(b, IB_INIT, cover(r));
+    ib_node *member = nth_named(r, CORE_STRING_STATIC("name"), 0);
+    ib_node *atom = nullptr;
+    for (size_t i = 0; i < r->n_kids; i++) {
+        ib_node *candidate = kid(r, i);
+        if (candidate && (candidate->kind == IB_NUM ||
+                          candidate->kind == IB_REF)) {
+            atom = candidate;
+            break;
+        }
+    }
+    if (!member || !member->text) return nullptr;
+    n->member = member->text;
+    if (atom && atom->kind == IB_NUM) {
+        n->neg = atom->neg;
+        n->is_float = atom->is_float;
+        n->text = atom->text;
+        n->lit = atom->lit;
+        n->over = atom->over;
+    } else if (atom && atom->kind == IB_REF && atom->text) {
+        n->present = true;
+        n->text = atom->text;
+        n->refkind = IR_VAL_GLOBAL;
+    }
+    return n;
+}
+
+static void *r_global_init_values(parse_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *n = nd(b, IB_OPERAND, cover(r));
+    n->first = kid(r, 0);
+    n->l1 = tail_group(r);
+    return n;
+}
+
+static void *r_global_init(parse_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *n = nd(b, IB_INIT, cover(r));
+    n->present = true;
+    ib_node *number = at(r, CORE_STRING_STATIC("signed-number"));
+    if (number) {
+        n->neg = number->neg;
+        n->is_float = number->is_float;
+        n->text = number->text;
+        n->lit = number->lit;
+        n->over = number->over;
+    } else {
+        n->uval = 1;
+        n->first = at(r, CORE_STRING_STATIC("global-init-values"));
+    }
+    return n;
+}
+
 static void apply_init(B *b, ib_node *init, bool *has, ir_lit_t *lit, double *f,
                        const char **text, bool *is_float)
 {
@@ -1302,11 +1362,56 @@ static void *r_global_decl(parse_reduce_t *r)
 
     g->mutability = mutability_of(r);
 
-    parse_reduce_list_t *init = rep(r, CORE_STRING_STATIC("init"));
-
-    if (init && init->n) {
-        apply_init(b, init->v[0], &g->has_init, &g->init, &g->init_f,
+    parse_reduce_list_t *global_init =
+        rep(r, CORE_STRING_STATIC("global-init"));
+    ib_node *record_init = global_init && global_init->n
+        ? unwrap(global_init->v[0]) : nullptr;
+    if (record_init && !record_init->uval) {
+        apply_init(b, record_init, &g->has_init, &g->init, &g->init_f,
                    &g->init_text, &g->init_is_float);
+    } else if (record_init) {
+        ib_node *values_node = record_init->first;
+        size_t count = values_node && values_node->first
+            ? 1 + sep_count(values_node->l1) : 0;
+        ir_global_init_value_t *values = ir_alloc(
+            b->ctx, count ? count * sizeof(*values) : 1);
+        for (size_t i = 0; i < count; i++) {
+            ib_node *value = i ? sep_at(values_node->l1, i - 1)
+                               : values_node->first;
+            if (!value) {
+                bfail(b, record_init->span,
+                      "invalid value in global record initializer");
+                return nullptr;
+            }
+            values[i].member = value->member;
+            if (value->refkind == IR_VAL_GLOBAL && value->text) {
+                ir_value_t *symbol = ir_alloc(b->ctx, sizeof(*symbol));
+                symbol->kind = IR_VAL_GLOBAL;
+                symbol->name = value->text;
+                values[i].kind = IR_GLOBAL_INIT_SYMBOL;
+                values[i].symbol = symbol;
+            } else if (value->kind == IB_INIT) {
+                if (value->over) {
+                    bfail(b, value->span,
+                          "this literal does not fit in 128 bits");
+                    return nullptr;
+                }
+                if (value->is_float) {
+                    values[i].kind = IR_GLOBAL_INIT_FLOAT;
+                    values[i].floating = strtod(value->text, nullptr);
+                    if (value->neg) values[i].floating = -values[i].floating;
+                } else {
+                    values[i].kind = IR_GLOBAL_INIT_INT;
+                    values[i].integer = value->lit;
+                }
+            } else {
+                bfail(b, value->span,
+                      "unsupported value in global record initializer");
+                return nullptr;
+            }
+        }
+        g->record_init = values;
+        g->n_record_init = count;
     }
     g->span = cover(r);
     apply_metas(b, rep(r, CORE_STRING_STATIC("meta")), nullptr, &g->span,
@@ -1473,8 +1578,11 @@ static void *r_param(parse_reduce_t *r)
     B       *b = r->thunk;
     ib_node *n = nd(b, IB_PARAM, cover(r));
 
-    if (r->n_kids == 2) {
+    if (parse_tree_is_nt(r->grammar, r->node,
+                         CORE_STRING_STATIC("func-param-rest"))) {
         n->neg = true;
+        ib_node *who = r->n_kids == 4 ? kid(r, 1) : nullptr;
+        n->text = who ? who->text : nullptr;
         n->type =
             type_of(b, raw_at(r, CORE_STRING_STATIC("typelang-type")), n->span);
 
@@ -1589,6 +1697,17 @@ static void *r_operand(parse_reduce_t *r)
         break;
     }
 
+    return n;
+}
+
+static void *r_spread_arg(parse_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *value = at(r, CORE_STRING_STATIC("value"));
+    ib_node *n = nd(b, IB_OPERAND, cover(r));
+    if (!value || !value->text) return nullptr;
+    n->how = OP_SPREAD;
+    n->refname = value->text;
     return n;
 }
 
@@ -1756,6 +1875,12 @@ static void push_operand(B *b, ir_func_t *f, ir_instr_t *in, ib_node *o)
     }
 
     switch (o->how) {
+    case OP_SPREAD: {
+        ir_value_t *value = ir_value_find(f, o->refname);
+        if (!value || !value->is_rest || !ir_instr_operand_spread(in, value))
+            bfail(b, o->span, "spread operand must name a rest parameter");
+        return;
+    }
     case OP_NAMED: {
         ir_value_t *v = o->refkind == IR_VAL_GLOBAL
                             ? global_value(b, o->refname)
@@ -1998,8 +2123,18 @@ static void *r_func(parse_reduce_t *r)
     for (size_t i = 0; i < pv.len; i++) {
         ib_node *p = pv.data[i];
 
-        if (p && !p->neg && p->refkind == IR_VAL_INSTR && p->type) {
+        if (p && p->neg && p->text && p->type) {
+            if (!ir_restparam_add(f, p->text, p->type)) {
+                bfail(b, p->span, "duplicate or invalid rest parameter");
+                return nullptr;
+            }
+        } else if (p && !p->neg && p->refkind == IR_VAL_INSTR && p->type) {
             ir_param_add(f, p->text, p->type);
+        } else if (p && !p->neg && p->refkind == IR_VAL_GLOBAL && p->type) {
+            if (!ir_kwparam_add(f, p->text, p->type)) {
+                bfail(b, p->span, "duplicate or invalid keyword parameter");
+                return nullptr;
+            }
         }
     }
 
@@ -2155,6 +2290,38 @@ static void reg(B *b, parse_tree_walk_t *w, core_string_t nt,
     }
 }
 
+static void resolve_global_initializers(B *b)
+{
+    for (size_t gi = 0; gi < ir_global_count(b->m) && !b->failed; gi++) {
+        ir_global_t *global = ir_global_at(b->m, gi);
+        if (!global->record_init || global->has_record_init) continue;
+        for (size_t vi = 0; vi < global->n_record_init; vi++) {
+            ir_global_init_value_t *item = &global->record_init[vi];
+            if (item->kind != IR_GLOBAL_INIT_SYMBOL) continue;
+            ir_value_t *symbol = item->symbol;
+            ir_func_t *function = ir_func_find(b->m, symbol->name);
+            ir_global_t *target = ir_global_find(b->m, symbol->name);
+            if (function) {
+                symbol->kind = IR_VAL_FUNC;
+                symbol->type = function->type;
+                symbol->owner = function;
+            } else if (target) {
+                symbol->kind = IR_VAL_GLOBAL;
+                symbol->type = target->type;
+            } else {
+                bfail(b, global->span,
+                      "global initializer references an unknown symbol");
+                break;
+            }
+        }
+        if (!b->failed && !ir_global_set_record_initializer(
+                b->m, global, global->record_init, global->n_record_init)) {
+            bfail(b, global->span,
+                  "global record initializer does not match its type");
+        }
+    }
+}
+
 ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
                              const ir_profile_t *const *profiles,
                              size_t n_profiles, ir_diags_t *d)
@@ -2237,6 +2404,9 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
     reg(&b, w, CORE_STRING_STATIC("origin-kind"), r_name);
     reg(&b, w, CORE_STRING_STATIC("modifier"), r_modifier);
     reg(&b, w, CORE_STRING_STATIC("init"), r_init);
+    reg(&b, w, CORE_STRING_STATIC("global-init-value"), r_global_init_value);
+    reg(&b, w, CORE_STRING_STATIC("global-init-values"), r_global_init_values);
+    reg(&b, w, CORE_STRING_STATIC("global-init"), r_global_init);
     reg(&b, w, CORE_STRING_STATIC("signed-number"), r_signed_number);
     reg(&b, w, CORE_STRING_STATIC("symbolic-expr"), r_symbolic);
     reg(&b, w, CORE_STRING_STATIC("layout-val"), r_layout_val);
@@ -2259,6 +2429,7 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
     reg(&b, w, CORE_STRING_STATIC("dest-value"), r_dest);
     reg(&b, w, CORE_STRING_STATIC("dest-local"), r_dest);
     reg(&b, w, CORE_STRING_STATIC("operand"), r_operand);
+    reg(&b, w, CORE_STRING_STATIC("spread-arg"), r_spread_arg);
     reg(&b, w, CORE_STRING_STATIC("operands"), r_operands);
     reg(&b, w, CORE_STRING_STATIC("named-arg"), r_named_arg);
     reg(&b, w, CORE_STRING_STATIC("phi-arm"), r_phi_arm);
@@ -2272,6 +2443,7 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
     reg(&b, w, CORE_STRING_STATIC("module"), r_module);
 
     parse_tree_walk_reduce(w, parse_pwz_get_tree(p));
+    resolve_global_initializers(&b);
     parse_tree_walk_free(w);
     ir_typelang_lower_free(b.types);
     parse_pwz_free(p);

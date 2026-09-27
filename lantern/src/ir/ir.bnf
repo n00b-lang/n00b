@@ -46,7 +46,7 @@
 <mutability> ::= %"mutable" | %"immutable" | %"const"
 
 <global-decl> @nospace($4) ::=
-<linkage>? <mutability>? %"global" <global> %":" <typelang-type> <init>? <meta>* <nl>
+<linkage>? <mutability>? %"global" <global> %":" <typelang-type> <global-init>? <meta>* <nl>
 
 <func> @nospace($3) @nospace($4) @nospace($5) @hardline($11) @indent($11) @blankline($12) @indent($12) @hardline($13) ::=
 <linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> <meta>* %"{" <nl> <local>* <block>+ %"}" <nl>
@@ -56,7 +56,8 @@
 
 <func-param-pos>  @nospace($2) ::= <param-mode>? <value> %":" <typelang-type>
 <func-param-kw>   @nospace($1) ::= <name> %":" <typelang-type>
-<func-param-rest> @nospace($1) ::= %"*" <typelang-type>
+<func-param-rest> @nospace($1) ::= %"*" <value> %":" <typelang-type>
+                                    | %"*" <typelang-type>
 
 <param-mode> ::= %"in" | %"out" | %"inout"
 
@@ -64,6 +65,10 @@
 <mutability>? %"local" <local-ref> %":" <typelang-type> <init>? <meta>* <nl>
 
 <init> ::= %"=" <signed-number>
+<global-init> ::= %"=" <signed-number>
+                | %"=" %"{" <global-init-values>? %"}"
+<global-init-values> ::= <global-init-value> (%"," <global-init-value>)*
+<global-init-value> ::= <name> %"=" (<signed-number> | <global>)
 
 <signed-number> @nospace($1) ::= %"-"? <number>
 
@@ -84,6 +89,7 @@
 <operands> @nospace($1) ::= <operand> (%"," <operand>)*
 
 <operand> @nospace($1) ::= <ref>
+            | <spread-arg>
             | <number>
             | %"-" <number>
             | %STRING_LIT
@@ -93,6 +99,8 @@
             | <default-block>
             | <typelang-type>
             | <name>
+
+<spread-arg> ::= %"*" <value>
 
 <named-arg>     ::= <name> %"=" <ref>
 <phi-arm>       @nospace @space($3) ::= %"[" <name> %":" <ref> %"]"

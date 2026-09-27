@@ -1176,7 +1176,8 @@ static _Thread_local char bnf_undeclared[512];
 static _Thread_local int32_t bnf_load_unit;
 
 static bool term_char(char c, bool first) {
-  return (c >= 'A' && c <= 'Z') || c == '_' || (!first && c >= '0' && c <= '9');
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' ||
+         (!first && c >= '0' && c <= '9');
 }
 
 size_t parse_bnf_declare_terminals(parse_grammar_t *g, core_string_t bnf_text) {
@@ -1201,7 +1202,7 @@ size_t parse_bnf_declare_terminals(parse_grammar_t *g, core_string_t bnf_text) {
     core_string_t name = core_string_borrow(bnf_text.data + s, e - s);
 
     if (!token_type_to_id(name) && !parse_lookup_terminal(g, name)) {
-      parse_register_terminal(g, name);
+      parse_register_named_terminal(g, name);
       n++;
     }
 

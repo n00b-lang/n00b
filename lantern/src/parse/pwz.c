@@ -1,5 +1,6 @@
 
 #include "parse/pwz.h"
+#include "parse/annotation.h"
 #include "parse/tree.h"
 #include "private/parse/pwz.h"
 #include "private/parse/grammar.h"
@@ -1095,6 +1096,7 @@ add_child_flattening_same_group(parse_tree_t *parent,
 typedef struct {
     int32_t            pos;
     parse_pwz_parser_t *parser;
+    bool               invalid;
 } tree_convert_state_t;
 
 static parse_rule_t *
@@ -1355,6 +1357,20 @@ score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
         if (f->exp->kind == PWZ_ALT) {
             *pos = f->best_end;
         }
+
+        parse_rule_t *rule = exp_to_rule(p, f->exp);
+        for (size_t i = 0; rule && i < rule->annotations.len; i++) {
+            parse_annotation_t *a = rule->annotations.data[i];
+            if (!a || a->kind != PARSE_ANNOT_ADJACENT) {
+                continue;
+            }
+            parse_token_info_t *first = get_token(p, f->from);
+            parse_token_info_t *second = get_token(p, f->from + 1);
+            if (!first || !second || first->end_byte != second->start_byte) {
+                f->cost = INT32_MAX / 4;
+            }
+            break;
+        }
         last = f->cost;
 
         pwz_score_entry_t *cached = score_cache_entry(p, f->exp, f->from);
@@ -1382,7 +1398,7 @@ resolve_alts(parse_pwz_parser_t *p, pwz_exp_t *exp, int32_t pos)
 
         size_t pick = nalts - 1;
 
-        if (p->disambig_cb && nalts > 1) {
+        if ((p->disambig_cb || p->grammar->has_adjacency) && nalts > 0) {
             int32_t best = INT32_MAX;
 
             for (size_t i = 0; i < nalts; i++) {
@@ -1397,6 +1413,9 @@ resolve_alts(parse_pwz_parser_t *p, pwz_exp_t *exp, int32_t pos)
                     best = c;
                     pick = i;
                 }
+            }
+            if (best >= INT32_MAX / 4) {
+                return nullptr;
             }
         }
 
@@ -1435,7 +1454,33 @@ convert_exp_to_tree(parse_pwz_parser_t *p, pwz_exp_t *exp,
 
             pwz_exp_t *e = f->exp;
 
-            if (!e || e == p->exp_bottom) {
+            parse_rule_t *rule = exp_to_rule(p, e);
+            bool check_adjacent = false;
+            for (size_t i = 0; rule && i < rule->annotations.len; i++) {
+                parse_annotation_t *a = rule->annotations.data[i];
+                if (a && a->kind == PARSE_ANNOT_ADJACENT) {
+                    check_adjacent = true;
+                    break;
+                }
+            }
+            if (check_adjacent) {
+                int32_t score_pos = st->pos;
+                if (score_exp(p, e, &score_pos) >= INT32_MAX / 4) {
+                    st->invalid = true;
+                    core_list_push(done, make_epsilon_node(st->pos));
+                    frames.len--;
+                    continue;
+                }
+            }
+
+            if (!e) {
+                st->invalid = true;
+                core_list_push(done, make_epsilon_node(st->pos));
+                frames.len--;
+                continue;
+            }
+
+            if (e == p->exp_bottom) {
                 core_list_push(done, make_epsilon_node(st->pos));
                 frames.len--;
                 continue;
@@ -1544,7 +1589,7 @@ convert_exp_to_tree(parse_pwz_parser_t *p, pwz_exp_t *exp,
     core_list_free(frames);
     core_list_free(done);
 
-    return result;
+    return st->invalid ? nullptr : result;
 }
 
 static parse_tree_t *
@@ -1868,7 +1913,7 @@ parse_pwz_parse(parse_pwz_parser_t   *p,
 
     if (ok && core_list_len(p->tops) > 0) {
         p->result_tree = build_result_tree(p, p->tops.data[0]);
-        return true;
+        return p->result_tree != nullptr;
     }
 
     return false;
@@ -1893,6 +1938,9 @@ parse_pwz_parse_prefix(parse_pwz_parser_t   *p,
     }
 
     p->result_tree = build_result_tree(p, p->longest_top);
+    if (!p->result_tree) {
+        return false;
+    }
 
     if (ntokens) {
         *ntokens = p->longest_end;
