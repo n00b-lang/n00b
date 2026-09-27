@@ -28,6 +28,9 @@
 
 enum { N00BB_JOB_LOCATE_TU = 1, N00BB_JOB_PREPROCESS = 2 };
 
+typedef ir_value_t *n00bb_ir_value_ptr_t;
+core_list_decl(n00bb_ir_value_ptr_t);
+
 static const ir_scalar_t N00BB_SCALARS[] = {
     {"int", IR_CLASS_SINT, 64, IR_ROLE_NONE},
     {"bool", IR_CLASS_BOOL, 1, IR_ROLE_NONE},
@@ -77,6 +80,11 @@ typedef struct {
     ir_module_t *ir_module;
     bool inference_finalized;
 } n00bb_tu_state_t;
+
+typedef struct {
+    core_list_t(core_translation_unit_ptr_t) *units;
+    core_translation_unit_t *unit;
+} n00bb_lower_context_t;
 
 typedef struct {
     core_work_queue_t *queue;
@@ -1098,6 +1106,24 @@ call_function_symbol(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return symbol && symbol->kind == PARSE_SYM_FUNCTION ? symbol : nullptr;
 }
 
+static core_translation_unit_t *
+unit_for_symbol(core_list_t(core_translation_unit_ptr_t) *units,
+                parse_sym_entry_t *symbol)
+{
+    for (size_t i = 0; units && i < units->len; i++) {
+        core_translation_unit_t *unit = units->data[i];
+        core_list_t(parse_scope_ptr_t) scopes = module_scopes(tu_state(unit));
+        bool found = false;
+        for (size_t s = 0; !found && s < scopes.len; s++)
+            for (parse_sym_entry_t *candidate = scopes.data[s]->first_in_scope;
+                 candidate; candidate = candidate->next_in_scope)
+                if (candidate == symbol) { found = true; break; }
+        core_list_free(scopes);
+        if (found) return unit;
+    }
+    return nullptr;
+}
+
 static parse_sym_entry_t *
 enclosing_function_symbol(parse_grammar_t *grammar, parse_tree_t *node)
 {
@@ -1519,6 +1545,120 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
 }
 
 static bool
+collect_positional_values(parse_grammar_t *grammar, parse_tree_t *node,
+                          ir_lower_context_t *context,
+                          core_list_t(n00bb_ir_value_ptr_t) *values)
+{
+    if (!node || core_tree_is_leaf(node)) return true;
+    if (nt_is(grammar, node, "expression")) {
+        ir_value_t *value = ir_lower_node_value(context, node);
+        if (!value) return false;
+        core_list_push(*values, value);
+        return true;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        if (!collect_positional_values(grammar, core_tree_child(node, i),
+                                       context, values))
+            return false;
+    return true;
+}
+
+static ir_lower_result_t
+n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
+                 ir_value_t *const *operands, size_t operand_count,
+                 th_type *result_type, ir_span_t span, void *state)
+{
+    (void)operands;
+    (void)state;
+    if (operand_count || !result_type)
+        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                           "call lowering needs a result type");
+    parse_tree_t *callee = core_tree_num_children(visit->node)
+        ? core_tree_child(visit->node, 0) : nullptr;
+    n00bb_lower_context_t *lower = context->user;
+    parse_sym_entry_t *symbol = callee && lower
+        ? call_function_symbol(visit->grammar, lower->unit, callee,
+            member_access_node(visit->grammar, callee) != nullptr)
+        : nullptr;
+    if (!symbol) {
+        core_buffer_t path = {0};
+        append_node_tokens(callee, &path);
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+                           "call target %s did not resolve to a declared function",
+                           path.data ? path.data : "<unknown>");
+        ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics,
+            IR_DIAG_UNDEFINED_SYMBOL, span, nullptr);
+        ir_diag_message(diagnostic, context->diagnostics, message.data);
+        core_buffer_release(&message);
+        core_buffer_release(&path);
+        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    }
+    core_translation_unit_t *callee_unit = lower
+        ? unit_for_symbol(lower->units, symbol) : nullptr;
+    if (!callee_unit)
+        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+                           "call target is outside the lowered import closure");
+    n00bb_tu_state_t *callee_state = tu_state(callee_unit);
+    ir_func_t *callee_function = callee_state && symbol
+        ? ir_func_find(callee_state->ir_module, symbol->name.data) : nullptr;
+    if (!callee_function)
+        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+                           "call target has no IR declaration in its module");
+    ir_value_t *callee_value =
+        ir_func_address(callee_state->ir_module, callee_function);
+    if (!callee_value)
+        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+                           "call target has no lowered function declaration");
+    th_type *signature = th_resolve(callee_value->type);
+    if (!signature || th_kind_of(signature) != TH_FUNCTION
+        || th_func_rest(signature))
+        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+                           "only non-variadic function calls are lowered here");
+    parse_tree_t *args = descendant_nt(visit->grammar, visit->node,
+                                       "call-args");
+    if (args && descendant_nt(visit->grammar, args, "keyword-args"))
+        return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
+                           "keyword arguments are not lowered yet");
+    core_list_t(n00bb_ir_value_ptr_t) values =
+        core_list_new(n00bb_ir_value_ptr_t);
+    parse_tree_t *positional = args
+        ? descendant_nt(visit->grammar, args, "positional-args") : nullptr;
+    bool collected = !positional || collect_positional_values(
+        visit->grammar, positional, context, &values);
+    if (!collected || values.len != th_func_nparams(signature)) {
+        core_list_free(values);
+        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                           "call arguments do not match the lowered function signature");
+    }
+    for (size_t i = 0; i < values.len; i++) {
+        const th_param *parameter = th_func_param(signature, i);
+        if (!parameter || parameter->mode != TH_IN) {
+            core_list_free(values);
+            return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                               "only in parameters are supported by this call lowering");
+        }
+    }
+    ir_instr_t *instruction = ir_instr_add(context->block, IR_OP_CALL);
+    char name[48];
+    do {
+        snprintf(name, sizeof(name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+    } while (ir_value_find(context->function, name));
+    bool emitted = instruction
+        && ir_instr_set_dest(instruction, name, result_type)
+        && ir_instr_operand_value(instruction, callee_value);
+    for (size_t i = 0; emitted && i < values.len; i++)
+        emitted = ir_instr_operand_value(instruction, values.data[i]);
+    core_list_free(values);
+    if (!emitted)
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not emit the function call");
+    instruction->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
+}
+
+static bool
 n00bb_reject_unlowered(ir_lower_context_t *context, parse_visit_t *visit,
                        bool entering, void *state)
 {
@@ -1527,9 +1667,15 @@ n00bb_reject_unlowered(ir_lower_context_t *context, parse_visit_t *visit,
     bool unsupported = visit->annot->kind == PARSE_ANNOT_BRANCH
         || visit->annot->kind == PARSE_ANNOT_LOOP
         || visit->annot->kind == PARSE_ANNOT_SWITCH
-        || visit->annot->kind == PARSE_ANNOT_CALL
         || visit->annot->kind == PARSE_ANNOT_ASSIGNS
         || visit->annot->kind == PARSE_ANNOT_OPERATOR;
+    if (visit->annot->kind == PARSE_ANNOT_CALL) {
+        parse_annotation_t *emit = visit->rule
+            ? parse_rule_find_annot(visit->grammar, visit->rule,
+                                    PARSE_ANNOT_EMIT) : nullptr;
+        unsupported = !emit || !core_string_eq(
+            emit->emit_action, CORE_STRING_STATIC("call"));
+    }
     if (visit->annot->kind == PARSE_ANNOT_JUMP) {
         core_string_t name = parse_tree_nt_name(visit->grammar, visit->node);
         unsupported = !core_string_eq(name, CORE_STRING_STATIC("return-stmt"));
@@ -1629,7 +1775,8 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
 static bool
 lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                     core_translation_unit_t *unit,
-                    parse_sym_entry_t *symbol, ir_ctx_t *ir_context)
+                    parse_sym_entry_t *symbol, ir_ctx_t *ir_context,
+                    core_list_t(core_translation_unit_ptr_t) *units)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     parse_tree_t *declaration = symbol ? symbol->decl_node : nullptr;
@@ -1670,12 +1817,17 @@ lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         return false;
     }
     int32_t file_id = ir_file_count(state->ir_module) - 1;
+    n00bb_lower_context_t lower_data = {
+        .units = units,
+        .unit = unit,
+    };
     ir_lower_context_t context = {
         .module = state->ir_module,
         .function = function,
         .block = entry,
         .diagnostics = diagnostics,
         .file_id = file_id,
+        .user = &lower_data,
         .reachable = true,
     };
     for (size_t i = 0; i < parameters.len; i++) {
@@ -1702,6 +1854,24 @@ lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         }
     }
     core_list_free(parameters);
+
+    core_list_t(parse_scope_ptr_t) function_scopes = module_scopes(state);
+    for (size_t s = 0; s < function_scopes.len; s++) {
+        for (parse_sym_entry_t *candidate = function_scopes.data[s]->first_in_scope;
+             candidate; candidate = candidate->next_in_scope) {
+            if (candidate->kind != PARSE_SYM_FUNCTION || !candidate->type)
+                continue;
+            ir_func_t *target = ir_func_find(state->ir_module,
+                                             candidate->name.data);
+            ir_value_t *address = target
+                ? ir_func_address(state->ir_module, target) : nullptr;
+            if (!address || !ir_lower_bind_value(&context, candidate, address)) {
+                core_list_free(function_scopes);
+                return false;
+            }
+        }
+    }
+    core_list_free(function_scopes);
 
     ir_lower_result_t lowered = ir_lower_tree(lowerer, &context, grammar, body);
     if (lowered.status == IR_LOWER_FAILED || ir_diags_failed(diagnostics)) {
@@ -1741,7 +1911,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_work_queue_t *queue,
     ir_lowerer_t *lowerer = ir_lowerer_new(ir_context);
     ok = ok && lowerer
         && ir_lowerer_register(lowerer, "binary", n00bb_lower_binary,
-                               nullptr);
+                               nullptr)
+        && ir_lowerer_register(lowerer, "call", n00bb_lower_call, nullptr);
     static const parse_annot_kind_t rejected_kinds[] = {
         PARSE_ANNOT_BRANCH, PARSE_ANNOT_LOOP, PARSE_ANNOT_SWITCH,
         PARSE_ANNOT_CALL, PARSE_ANNOT_ASSIGNS, PARSE_ANNOT_OPERATOR,
@@ -1763,7 +1934,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_work_queue_t *queue,
                     || !function_symbol_at(grammar, symbol->decl_node))
                     continue;
                 ok = lower_function_body(lowerer, grammar, unit, symbol,
-                                         ir_context);
+                                         ir_context, &units);
             }
         }
         core_list_free(scopes);

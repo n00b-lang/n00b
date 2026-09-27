@@ -33,6 +33,31 @@ grep -q '@add' "$tmp/lower_arithmetic.ir"
 grep -q '= add trap' "$tmp/lower_arithmetic.ir"
 grep -q 'return %' "$tmp/lower_arithmetic.ir"
 
+cat >"$tmp/lower_call.n00b" <<'EOF'
+func identity(item: int) -> int { return item }
+func call_identity(item: int) -> int { return identity(item) }
+EOF
+"$compiler" lower "$tmp/lower_call.n00b" \
+    >"$tmp/lower_call.ir" 2>"$tmp/lower_call.err" || {
+    cat "$tmp/lower_call.err"
+    exit 1
+}
+grep -q '= call @identity, %item' "$tmp/lower_call.ir"
+
+cat >"$tmp/dep.n00b" <<'EOF'
+public func imported(item: int) -> int { return item }
+EOF
+cat >"$tmp/lower_import_call.n00b" <<'EOF'
+import dep
+func call_imported(item: int) -> int { return dep.imported(item) }
+EOF
+N00B_PATH="$tmp" "$compiler" lower "$tmp/lower_import_call.n00b" \
+    >"$tmp/lower_import_call.ir" 2>"$tmp/lower_import_call.err" || {
+    cat "$tmp/lower_import_call.err"
+    exit 1
+}
+grep -q '= call @imported, %item' "$tmp/lower_import_call.ir"
+
 cat >"$tmp/spaced_index.n00b" <<'EOF'
 func get_item(items) { return items [0] }
 EOF

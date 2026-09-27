@@ -381,8 +381,8 @@
 <postfix-expr> @infer("element_of($0)") ::= <postfix-expr> %"[" <index-contents> %"]"
 <postfix-expr> @infer("slice_of($0)") ::= <postfix-expr> %"[" <slice-contents> %"]"
 <postfix-expr> @operator("unwrap_result") @infer("unwrap_result($0)") ::= <postfix-expr> %"!"
-<postfix-expr> @infer("return_of($0)") @call($0, $2) ::= <postfix-expr> %"(" <call-args> %")"
-<postfix-expr> @infer("return_of($0)") @call($0)     ::= <postfix-expr> %"(" %")"
+<postfix-expr> @emit("call") @infer("return_of($0)") @call($0) ::= <postfix-expr> %"(" %")"
+<postfix-expr> @emit("call") @infer("return_of($0)") @call($0, $2) ::= <postfix-expr> %"(" <call-args> %")"
 <postfix-expr> @emit("identity", $0) ::= <primary>
 
 <index-contents> ::= <expression>
