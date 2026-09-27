@@ -25,6 +25,7 @@ typedef struct {
     ir_func_t *function;
     ir_block_t *block;
     ir_diags_t *diagnostics;
+    int32_t file_id;
     void *user;
     uint64_t next_value_id;
     bool reachable;
@@ -34,14 +35,23 @@ typedef ir_lower_result_t (*ir_lower_action_fn)(
     ir_lower_context_t *context, parse_visit_t *visit,
     ir_value_t *const *operands, size_t operand_count, th_type *result_type,
     ir_span_t span, void *state);
+typedef bool (*ir_lower_visit_fn)(ir_lower_context_t *context,
+                                  parse_visit_t *visit, bool entering,
+                                  void *state);
 
 ir_lowerer_t *ir_lowerer_new(ir_ctx_t *ctx);
 bool ir_lowerer_register(ir_lowerer_t *lowerer, const char *action,
                          ir_lower_action_fn callback, void *state);
+bool ir_lowerer_register_visit(ir_lowerer_t *lowerer,
+                               parse_annot_kind_t kind,
+                               ir_lower_visit_fn callback, void *state);
 ir_lower_result_t ir_lower_emit(
     ir_lowerer_t *lowerer, ir_lower_context_t *context,
     const parse_annotation_t *annotation, parse_visit_t *visit,
     ir_value_t *const *operands, size_t operand_count, th_type *result_type,
     ir_span_t span);
+ir_lower_result_t ir_lower_tree(ir_lowerer_t *lowerer,
+                                ir_lower_context_t *context,
+                                parse_grammar_t *grammar, parse_tree_t *root);
 
 #endif
