@@ -87,6 +87,10 @@ main(void)
     ir_value_t *left = ir_param_add(function, "left", i32);
     ir_value_t *right = ir_param_add(function, "right", i32);
     ir_local_t *local = ir_local_add(function, "local", i32);
+    th_type *callee_signature = ir_type_parse(module, "(i32) -> i32");
+    ir_func_t *callee_function = ir_func_add(module, "callee",
+        callee_signature, IR_LINK_EXTERN);
+    ir_value_t *callee_value = ir_func_address(module, callee_function);
     ir_block_t *block = ir_block_add(function, "entry");
     int32_t file_id = ir_file_add(module, "lower.n00b");
     ir_diags_t *diagnostics = ir_diags_new(ctx, nullptr);
@@ -109,6 +113,9 @@ main(void)
           "<literal> @literal(\"int\") @emit(\"literal\") ::= \"7\"\n"
           "<set> @assigns($0, $2) ::= <target> \"=\" <literal>\n"
           "<target> @emit(\"reference\") ::= \"x\"\n"
+          "<call> @emit(\"call\", $0, $2) ::= <callee> \"(\" <argument> \")\"\n"
+          "<callee> @emit(\"reference\") ::= \"f\"\n"
+          "<argument> @emit(\"reference\") ::= \"a\"\n"
           "<ret> @emit(\"return\", $1) ::= \"r\" <literal>\n";
     parse_grammar_t *grammar = parse_grammar_new();
     bool grammar_loaded = parse_bnf_load(
@@ -132,6 +139,11 @@ main(void)
     parse_sym_entry_t local_symbol = {
         .name = CORE_STRING_STATIC("local"), .type = i32,
     };
+    parse_sym_entry_t callee_symbol = {
+        .name = CORE_STRING_STATIC("callee"),
+        .kind = PARSE_SYM_FUNCTION,
+        .type = callee_signature,
+    };
     parse_tree_t *left_node = find_nonterminal(grammar, tree, "left");
     parse_tree_t *right_node = find_nonterminal(grammar, tree, "right");
     if (left_node) core_tree_node_value(left_node).sym = &left_symbol;
@@ -140,6 +152,7 @@ main(void)
     check("symbols bind to IR values and locals",
           ir_lower_bind_value(&lower, &left_symbol, left)
               && ir_lower_bind_value(&lower, &right_symbol, right)
+              && ir_lower_bind_value(&lower, &callee_symbol, callee_value)
               && ir_lower_bind_local(&lower, &local_symbol, local)
               && ir_lowerer_register_visit(lowerer,
                   PARSE_ANNOT_SCOPE_OPEN, count_lower_visit, &visit_counts));
@@ -158,6 +171,31 @@ main(void)
               && tree_sum.value->def->span.end_byte == 3);
     check("lowering hooks run on scope entry and exit",
           visit_counts.enters == 1 && visit_counts.exits == 1);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+
+    parser = parse_pwz_new_for_start(grammar, parse_nonterm_id(
+        parse_find_nonterm(grammar, CORE_STRING_STATIC("call"))));
+    tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("f(a)"));
+    parsed = parser && parse_pwz_parse(parser, tokens);
+    tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
+    parse_tree_t *callee_node = find_nonterminal(grammar, tree, "callee");
+    parse_tree_t *argument_node = find_nonterminal(grammar, tree, "argument");
+    if (callee_node) {
+        core_tree_node_value(callee_node).sym = &callee_symbol;
+        core_tree_node_value(callee_node).type = callee_signature;
+    }
+    if (argument_node) {
+        core_tree_node_value(argument_node).sym = &left_symbol;
+        core_tree_node_value(argument_node).type = i32;
+    }
+    if (tree) core_tree_node_value(tree).type = i32;
+    ir_lower_result_t called = tree
+        ? ir_lower_tree(lowerer, &lower, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    check("declarative call lowering handles a typed function and argument",
+          called.status == IR_LOWER_VALUE && called.value
+              && called.value->def && called.value->def->op == IR_OP_CALL);
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
 
@@ -282,7 +320,7 @@ main(void)
               && (ir_module_props(module) & IR_PROP_STRUCTURED));
     ir_pdg_t *pdg = ir_pdg_of(function);
     check("Lantern builds a dependence graph from the lowered instructions",
-          pdg && ir_pdg_node_count(pdg) == 7);
+          pdg && ir_pdg_node_count(pdg) == 8);
 
     ir_ctx_free(ctx);
     return report("IR lowering");

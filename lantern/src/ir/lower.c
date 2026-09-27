@@ -7,6 +7,7 @@
 #include "ir/lower.h"
 #include "private/ir/internal.h"
 #include "lib/dict.h"
+#include "parse/symtab.h"
 #include "parse/tree_util.h"
 
 typedef struct {
@@ -55,6 +56,26 @@ ir_lowerer_new(ir_ctx_t *ctx)
     return lowerer;
 }
 
+ir_value_t *
+ir_lower_node_value(ir_lower_context_t *context, parse_tree_t *node)
+{
+    if (!context || !context->tree_values || !node) return nullptr;
+    bool found = false;
+    ir_value_t *value = core_dict_get(context->tree_values, node, &found);
+    return found ? value : nullptr;
+}
+
+ir_value_t *
+ir_lower_child_value(ir_lower_context_t *context, parse_visit_t *visit,
+                     parse_child_ref_t child)
+{
+    if (!context || !context->tree_values || !visit || !visit->grammar)
+        return nullptr;
+    parse_tree_t *node = parse_tree_resolve_child_ref(
+        visit->grammar, visit->node, child);
+    return ir_lower_node_value(context, node);
+}
+
 static bool
 lower_bind_symbol(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                   ir_value_t *value, ir_local_t *local)
@@ -66,7 +87,9 @@ lower_bind_symbol(ir_lower_context_t *context, parse_sym_entry_t *symbol,
          binding; binding = binding->next) {
         if (binding->symbol == symbol) return false;
     }
-    if ((value && value->owner != context->function)
+    if ((value && value->owner != context->function
+         && !(value->kind == IR_VAL_FUNC && value->owner
+              && value->owner->owner == context->module))
         || (local && ir_local_find(context->function, local->name) != local))
         return false;
     ir_lower_symbol_binding_t *binding =
@@ -159,6 +182,15 @@ lower_find_binding(ir_lower_context_t *context, parse_sym_entry_t *symbol)
     return nullptr;
 }
 
+static bool
+lower_value_accessible(ir_lower_context_t *context, ir_value_t *value)
+{
+    if (!context || !value) return false;
+    if (value->owner == context->function) return true;
+    return value->kind == IR_VAL_FUNC && value->owner
+        && value->owner->owner == context->module;
+}
+
 static parse_annotation_t *
 lower_find_annotation(parse_visit_t *visit, parse_annot_kind_t kind)
 {
@@ -237,6 +269,8 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
     if (!strcmp(action, "identity")) {
         if (operand_count == 1 && operands && operands[0])
             return (ir_lower_result_t){IR_LOWER_VALUE, operands[0]};
+        if (operand_count == 1 && operands && !operands[0])
+            return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
         return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
                              "identity lowering requires one child value");
     }
@@ -245,6 +279,8 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
             ? visit->pn->sym : nullptr;
         ir_lower_symbol_binding_t *binding =
             lower_find_binding(context, symbol);
+        if (!binding && symbol && symbol->kind == PARSE_SYM_MODULE)
+            return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
         if (!binding)
             return lower_failure(context, IR_DIAG_UNDEFINED_SYMBOL, span,
                                  "reference has no IR binding in this lowering context");
@@ -369,9 +405,9 @@ ir_lower_emit(ir_lowerer_t *lowerer, ir_lower_context_t *context,
         return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
                              "lowered operation has an invalid operand count");
     for (size_t i = 0; i < operand_count; i++) {
-        if (!operands || !operands[i]
-            || operands[i]->owner != context->function
-            || ir_op_operand_kind(op, (uint32_t)i) != IR_OPD_VALUE)
+        ir_opdkind_t kind = ir_op_operand_kind(op, (uint32_t)i);
+        if (!operands || !lower_value_accessible(context, operands[i])
+            || (kind != IR_OPD_VALUE && kind != IR_OPD_ARG))
             return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
                                  "declarative lowering requires value operands");
     }
@@ -564,7 +600,7 @@ lower_tree_node(parse_visit_t *visit)
         bool found = false;
         operands[i] = child
             ? core_dict_get(&state->values, child, &found) : nullptr;
-        if (!found || !operands[i]) {
+        if (!found) {
             core_free(operands);
             lower_failure(state->context, IR_DIAG_VERIFY_PARSED,
                           span_of_tree(state->context, visit->node),
@@ -601,12 +637,14 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
         .context = context,
     };
     core_dict_init(&state.values, nullptr, nullptr);
+    context->tree_values = &state.values;
     parse_tree_walk_t *walk = parse_tree_walk_new(grammar, &state);
     parse_walk_on_node(walk, lower_tree_enter, lower_tree_node, nullptr);
     parse_tree_walk_run(walk, root);
     bool found = false;
     ir_value_t *value = core_dict_get(&state.values, root, &found);
     parse_tree_walk_free(walk);
+    context->tree_values = nullptr;
     core_dict_free(&state.values);
     if (state.failed || !found)
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};

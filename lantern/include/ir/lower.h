@@ -28,6 +28,7 @@ typedef struct {
     ir_diags_t *diagnostics;
     int32_t file_id;
     void *symbol_bindings;
+    void *tree_values;
     void *user;
     uint64_t next_value_id;
     bool reachable;
@@ -42,6 +43,11 @@ typedef bool (*ir_lower_visit_fn)(ir_lower_context_t *context,
                                   void *state);
 
 ir_lowerer_t *ir_lowerer_new(ir_ctx_t *ctx);
+ir_value_t *ir_lower_node_value(ir_lower_context_t *context,
+                                parse_tree_t *node);
+ir_value_t *ir_lower_child_value(ir_lower_context_t *context,
+                                 parse_visit_t *visit,
+                                 parse_child_ref_t child);
 bool ir_lower_bind_value(ir_lower_context_t *context,
                          parse_sym_entry_t *symbol, ir_value_t *value);
 bool ir_lower_bind_local(ir_lower_context_t *context,
