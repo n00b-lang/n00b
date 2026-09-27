@@ -1686,7 +1686,15 @@ preprocessor_annotation_node(void *context, core_translation_unit_t *unit,
         PARSE_ANNOT_WIDTH,
     };
     static const parse_annot_kind_t reference_kinds[] = {
+        PARSE_ANNOT_BRANCH,
+        PARSE_ANNOT_LOOP,
+        PARSE_ANNOT_SWITCH,
+        PARSE_ANNOT_JUMP,
+        PARSE_ANNOT_CAPTURE,
+        PARSE_ANNOT_ASSIGNS,
         PARSE_ANNOT_VARREF,
+        PARSE_ANNOT_OPERATOR,
+        PARSE_ANNOT_NOTRIVIA,
         PARSE_ANNOT_CALL,
     };
     if (entering) {
