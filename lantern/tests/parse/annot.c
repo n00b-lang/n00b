@@ -549,6 +549,47 @@ test_annotation_arguments_carry_integers(void)
 }
 
 static void
+test_emit_annotations_retain_action_and_operands(void)
+{
+    static const char *const G
+        = "<top> @emit(\"add\", $1, $right) ::= <left> <right>\n"
+          "<left> ::= __LOWER\n"
+          "<right> ::= __UPPER\n";
+    parse_grammar_t *g = parse_grammar_new();
+    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    parse_nonterm_t *top = loaded ? nt_named(g, "top") : nullptr;
+    parse_annotation_t *emit = top
+        ? parse_nt_find_annot(g, top, PARSE_ANNOT_EMIT) : nullptr;
+
+    check("an emit annotation accepts an action and child references",
+          emit && core_string_eq(emit->emit_action, S("add"))
+              && core_list_len(emit->emit_operands) == 2);
+    check("emit operands retain indexed and named references",
+          emit && emit->emit_operands.data[0].kind == PARSE_ROLE_BY_INDEX
+              && emit->emit_operands.data[0].index == 1
+              && emit->emit_operands.data[1].kind == PARSE_ROLE_BY_NAME
+              && core_string_eq(emit->emit_operands.data[1].name, S("right")));
+
+    parse_annotation_t *copy = emit ? parse_annot_clone(emit) : nullptr;
+    check("emit annotations clone their action and operand references",
+          copy && core_string_eq(copy->emit_action, S("add"))
+              && core_list_len(copy->emit_operands) == 2
+              && copy->emit_operands.data[1].name.data
+                     != emit->emit_operands.data[1].name.data
+              && core_string_eq(copy->emit_operands.data[1].name, S("right")));
+
+    parse_annot_free(copy);
+    parse_grammar_free(g);
+
+    static const char *const BAD
+        = "<top> @emit(add, $1) ::= <left>\n<left> ::= __LOWER\n";
+    parse_grammar_t *bad = parse_grammar_new();
+    check("an emit action must be a quoted tag",
+          !parse_bnf_load(S(BAD), S("top"), bad));
+    parse_grammar_free(bad);
+}
+
+static void
 test_annotation_argument_lists_are_growable(void)
 {
     core_buffer_t src = {0};
@@ -1708,6 +1749,7 @@ main(void)
 
     test_annotation_arguments_only_need_balanced_parens();
     test_annotation_arguments_carry_integers();
+    test_emit_annotations_retain_action_and_operands();
     test_annotation_argument_lists_are_growable();
     test_the_representation_and_declaration_annotations();
     test_initial_symbol_walk_callback(g);

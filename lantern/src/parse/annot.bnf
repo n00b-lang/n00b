@@ -45,6 +45,8 @@
 
 <a-direction> ::= <ref> %"," <tag>
 
+<a-emit> ::= <tag> (%"," <ref>)*
+
 <a-constrain> ::= <ref> %"," <con-list>
 
 <con-list> ::= <con> | <con> %"+" <con-list>

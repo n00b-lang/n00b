@@ -50,6 +50,7 @@
     X(DIRECTION, "direction") \
     X(PASS_BY, "pass_by") \
     X(CONSTRAIN, "constrain") \
+    X(EMIT, "emit") \
     X(SIZE, "size") \
     X(ALIGNMENT, "alignment") \
     X(OFFSET, "offset") \
@@ -114,6 +115,8 @@ typedef struct {
     core_string_t    name;
 } parse_child_ref_t;
 
+core_list_decl(parse_child_ref_t);
+
 #define PARSE_CHILD_IX(i) \
     ((parse_child_ref_t){.kind = PARSE_ROLE_BY_INDEX, .index = (i)})
 #define PARSE_CHILD_NT(n) \
@@ -154,6 +157,8 @@ struct parse_annotation_t {
     core_string_t     ns_name;
     core_string_t     direction;
     core_string_t     pass_by;
+    core_string_t     emit_action;
+    core_list_t(parse_child_ref_t) emit_operands;
     core_list_t(parse_con_spec_t) constraints;
     core_list_t(parse_lex_opt_t)  lex_opts;
 

@@ -529,6 +529,28 @@ r_args(parse_reduce_t *r)
     return n;
 }
 
+static void
+emit_args_append(parse_reduce_list_t *list, aa_node *args)
+{
+    if (!list || !args) return;
+    for (size_t i = 0; i < list->n; i++) {
+        aa_node *item = as_aa(list->v[i]);
+        if (item && item->tag != AA_LEAF) aa_append(args, item);
+    }
+}
+
+static void *
+r_emit_args(parse_reduce_t *r)
+{
+    aa_node *args = aa_new(r, AA_ARGS);
+    for (size_t i = 0; i < r->n_kids; i++) {
+        aa_node *item = as_aa(r->kids[i]);
+        if (item && item->tag != AA_LEAF) aa_append(args, item);
+        else emit_args_append(parse_reduce_as_list(r->kids[i]), args);
+    }
+    return args;
+}
+
 static struct {
     parse_annot_kind_t kind;
     core_string_t     nt;
@@ -576,6 +598,7 @@ static struct {
     {PARSE_ANNOT_DIRECTION,  CORE_STRING_STATIC("a-direction")},
     {PARSE_ANNOT_PASS_BY,    CORE_STRING_STATIC("a-tag")},
     {PARSE_ANNOT_CONSTRAIN,  CORE_STRING_STATIC("a-constrain")},
+    {PARSE_ANNOT_EMIT,       CORE_STRING_STATIC("a-emit")},
     {PARSE_ANNOT_SIZE,       CORE_STRING_STATIC("a-val")},
     {PARSE_ANNOT_ALIGNMENT,  CORE_STRING_STATIC("a-val")},
     {PARSE_ANNOT_OFFSET,     CORE_STRING_STATIC("a-val")},
@@ -652,6 +675,7 @@ install(parse_tree_walk_t *w, aa_ctx *c)
     for (size_t i = 0; i < sizeof(SIGS) / sizeof(SIGS[0]); i++) {
         REG(SIGS[i].nt, r_args);
     }
+    REG(CORE_STRING_STATIC("a-emit"), r_emit_args);
 
 #undef REG
 }
@@ -930,6 +954,23 @@ decode(parse_annotation_t *a, aa_node *args)
     case PARSE_ANNOT_CONSTRAIN:
         a->name_ref = arg_ref(args, 0);
         decode_cons(a, args->n > 1 ? args->items.data[1] : nullptr);
+        break;
+
+    case PARSE_ANNOT_EMIT:
+        if (!args->n || !arg_is(args, 0, AA_TAG)) return false;
+        a->emit_action = arg_tag(args, 0);
+        if (!a->emit_action.data || !a->emit_action.u8_bytes) return false;
+        if (args->n > 1) {
+            a->emit_operands = core_list_new(parse_child_ref_t);
+            for (size_t i = 1; i < args->n; i++) {
+                parse_child_ref_t ref = arg_ref(args, i);
+                if (!parse_child_ref_is_set(ref)) {
+                    core_free(ref.name.data);
+                    return false;
+                }
+                core_list_push(a->emit_operands, ref);
+            }
+        }
         break;
 
     case PARSE_ANNOT_LEX_COMMENT:

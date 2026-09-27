@@ -58,7 +58,17 @@ parse_annot_clone(const parse_annotation_t *a)
     c->mutability           = core_string_dup(a->mutability);
     c->ns_name              = core_string_dup(a->ns_name);
     c->direction            = core_string_dup(a->direction);
+    c->emit_action          = core_string_dup(a->emit_action);
     c->val_expr             = core_string_dup(a->val_expr);
+
+    if (core_list_len(a->emit_operands) > 0) {
+        c->emit_operands = core_list_new(parse_child_ref_t);
+        for (size_t i = 0; i < core_list_len(a->emit_operands); i++) {
+            parse_child_ref_t ref = a->emit_operands.data[i];
+            ref.name = core_string_dup(ref.name);
+            core_list_push(c->emit_operands, ref);
+        }
+    }
 
     if (core_list_len(a->constraints) > 0) {
         c->constraints = core_list_new(parse_con_spec_t);
@@ -123,6 +133,7 @@ parse_annot_free(parse_annotation_t *a)
         a->mutability,
         a->ns_name,
         a->direction,
+        a->emit_action,
         a->val_expr,
         a->val_ref.name,
         a->scope_tag,
@@ -156,6 +167,10 @@ parse_annot_free(parse_annotation_t *a)
     }
 
     core_list_free(a->constraints);
+
+    for (size_t i = 0; i < core_list_len(a->emit_operands); i++)
+        core_free(a->emit_operands.data[i].name.data);
+    core_list_free(a->emit_operands);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
         parse_lex_opt_t *o = &a->lex_opts.data[i];
