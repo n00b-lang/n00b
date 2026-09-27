@@ -982,6 +982,44 @@ bool th_env_method_lookup(th_ctx *ctx, th_type *receiver,
          TH_ENV_METHOD_FOUND;
 }
 
+th_env_method_status_t th_env_method_resolve_by_name(
+    th_ctx *ctx, th_type *receiver, const char *method_name,
+    th_env_method_t *out, const char **trait_name) {
+  if (out) *out = (th_env_method_t){0};
+  if (trait_name) *trait_name = nullptr;
+  if (!ctx || !ctx->environment || !ctx->environment->frozen || !receiver ||
+      !method_name)
+    return TH_ENV_METHOD_NOT_FOUND;
+
+  th_env_method_t selected = {0};
+  const char *selected_trait = nullptr;
+  for (size_t i = 0; i < ctx->environment->traits.len; i++) {
+    const th_env_trait_t *trait = &ctx->environment->traits.data[i];
+    if (!visible_to(ctx, trait->visibility, trait->module, trait->package) ||
+        !th_record_lookup(trait->scheme, method_name))
+      continue;
+    th_env_method_t candidate = {0};
+    th_env_method_status_t status = th_env_method_resolve(
+        ctx, receiver, trait->name, method_name, &candidate);
+    if (status == TH_ENV_METHOD_AMBIGUOUS)
+      return status;
+    if (status != TH_ENV_METHOD_FOUND)
+      continue;
+    if (selected.qualified_name &&
+        strcmp(selected.qualified_name, candidate.qualified_name))
+      return TH_ENV_METHOD_AMBIGUOUS;
+    if (!selected.qualified_name) {
+      selected = candidate;
+      selected_trait = trait->name;
+    }
+  }
+  if (!selected.qualified_name)
+    return TH_ENV_METHOD_NOT_FOUND;
+  if (out) *out = selected;
+  if (trait_name) *trait_name = selected_trait;
+  return TH_ENV_METHOD_FOUND;
+}
+
 size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,
                                 const char *method_name, th_env_method_t *out,
                                 size_t max_methods) {

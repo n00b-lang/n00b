@@ -139,6 +139,12 @@ th_env_method_status_t th_env_method_resolve(th_ctx *context, th_type *receiver,
                                              const char *trait_name,
                                              const char *method_name,
                                              th_env_method_t *method);
+/* Resolve receiver.method_name across all visible trait contracts declaring
+ * that method. A function satisfying several contracts is one target; distinct
+ * applicable functions or an ambiguous per-trait match return AMBIGUOUS. */
+th_env_method_status_t th_env_method_resolve_by_name(
+    th_ctx *context, th_type *receiver, const char *method_name,
+    th_env_method_t *method, const char **trait_name);
 /* Enumerate every visible signature-compatible implementation of a trait
  * method. This is the candidate set for building a trait-value runtime
  * dispatch table; unlike method_resolve(), it does not select for one runtime

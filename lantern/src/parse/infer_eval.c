@@ -35,6 +35,27 @@ fresh(ictx *c)
     return th_var(c->tc);
 }
 
+static th_type *
+method_requirement_return(ictx *c, th_type *receiver,
+                          const th_env_method_requirement_t *requirement)
+{
+    if (!requirement || !requirement->signature ||
+        !th_func_nparams(requirement->signature)) {
+        c->failed = true;
+        return nullptr;
+    }
+    th_type *self = th_func_param(requirement->signature, 0)->type;
+    if (!th_var_constrain(
+            c->tc, self,
+            (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                            .iface = requirement->trait_name}) ||
+        !th_unify_in_place(c->tc, self, receiver)) {
+        c->failed = true;
+        return nullptr;
+    }
+    return th_func_ret(requirement->signature);
+}
+
 static parse_tree_t *
 child(ictx *c, int32_t ix)
 {
@@ -270,21 +291,50 @@ project(ictx *c, parse_infer_proj_t op, int32_t ix)
         }
 
         if (!signature) {
-            th_env_method_requirement_t requirement = {0};
             size_t requirement_count = th_env_method_requirements(
-                c->tc, method_name, &requirement, 1);
-            if (requirement_count == 1 && requirement.signature &&
-                th_func_nparams(requirement.signature)) {
-                th_type *self = th_func_param(
-                    requirement.signature, 0)->type;
-                bool constrained = th_var_constrain(
-                    c->tc, self,
-                    (th_constraint){.kind = TH_CON_IMPLEMENTS,
-                                    .iface = requirement.trait_name});
-                if (constrained && th_unify_in_place(c->tc, self, t))
-                    signature = requirement.signature;
-                else
+                c->tc, method_name, nullptr, 0);
+            if (requirement_count == 1) {
+                th_env_method_requirement_t requirement = {0};
+                th_env_method_requirements(c->tc, method_name, &requirement,
+                                           1);
+                th_type *result = method_requirement_return(
+                    c, t, &requirement);
+                if (result) {
+                    core_free(method_name);
+                    return result;
+                }
+            } else if (requirement_count > 1) {
+                if (th_kind_of(th_resolve(t)) == TH_VAR) {
                     c->failed = true;
+                } else {
+                    th_env_method_requirement_t *requirements =
+                        core_alloc_array(th_env_method_requirement_t,
+                                         requirement_count);
+                    th_env_method_requirements(c->tc, method_name,
+                                               requirements,
+                                               requirement_count);
+                    th_env_method_t selected = {0};
+                    const char *trait_name = nullptr;
+                    th_env_method_status_t status =
+                        th_env_method_resolve_by_name(
+                            c->tc, t, method_name, &selected, &trait_name);
+                    if (status == TH_ENV_METHOD_FOUND) {
+                        for (size_t i = 0; i < requirement_count; i++) {
+                            if (strcmp(requirements[i].trait_name,
+                                       trait_name))
+                                continue;
+                            th_type *result = method_requirement_return(
+                                c, t, &requirements[i]);
+                            core_free(requirements);
+                            core_free(method_name);
+                            return result ? result : fresh(c);
+                        }
+                        c->failed = true;
+                    } else {
+                        c->failed = true;
+                    }
+                    core_free(requirements);
+                }
             }
         }
 

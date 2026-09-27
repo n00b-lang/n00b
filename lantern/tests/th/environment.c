@@ -520,6 +520,13 @@ int main(void) {
       "most specific function candidate wins dispatch",
       th_env_method_lookup(inside, box_int, "BoxReadable", "get", &selected) &&
           !strcmp(selected.qualified_name, "base.box.int_get"));
+  const char *selected_trait = nullptr;
+  check("method-name lookup selects the applicable visible trait contract",
+        th_env_method_resolve_by_name(inside, box_int, "get", &selected,
+                                      &selected_trait) ==
+                TH_ENV_METHOD_FOUND &&
+            !strcmp(selected.qualified_name, "base.box.int_get") &&
+            !strcmp(selected_trait, "BoxReadable"));
   check("integer receiver promotes to a matching trait method",
         th_env_method_lookup(inside, th_bitint(inside, 8, true),
                              "IntegerText", "show", &selected) &&
@@ -565,6 +572,10 @@ int main(void) {
   check("incomparable overlapping methods are reported as ambiguous",
         th_env_method_resolve(inside, concrete_pair, "PairReadable", "get",
                               &selected) == TH_ENV_METHOD_AMBIGUOUS);
+  check("method-name lookup propagates ambiguity across trait contracts",
+        th_env_method_resolve_by_name(inside, concrete_pair, "get", &selected,
+                                      &selected_trait) ==
+            TH_ENV_METHOD_AMBIGUOUS);
 
   enum { QUERY_THREADS = 8 };
   pthread_t query_threads[QUERY_THREADS];
