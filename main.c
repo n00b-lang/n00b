@@ -1,7 +1,5 @@
 #include <stdio.h>
 #include <pthread.h>
-#include <errno.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "driver.h"
@@ -79,16 +77,6 @@ typedef struct {
     ir_module_t *ir_module;
     bool inference_finalized;
 } n00bb_tu_state_t;
-
-typedef struct {
-    parse_grammar_t *grammar;
-    core_translation_unit_t *unit;
-    ir_module_t *module;
-    ir_func_t *function;
-    ir_diags_t *diagnostics;
-    core_dict_t symbols;
-    int32_t file_id;
-} n00bb_lower_context_t;
 
 typedef struct {
     core_work_queue_t *queue;
@@ -1494,84 +1482,6 @@ lower_error(ir_lower_context_t *context, ir_diagcode_t code, ir_span_t span,
 }
 
 static ir_lower_result_t
-n00bb_lower_identity(ir_lower_context_t *context, parse_visit_t *visit,
-                     ir_value_t *const *operands, size_t operand_count,
-                     th_type *result_type, ir_span_t span, void *state)
-{
-    (void)context;
-    (void)visit;
-    (void)result_type;
-    (void)span;
-    (void)state;
-    return operand_count == 1
-        ? (ir_lower_result_t){IR_LOWER_VALUE, operands[0]}
-        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
-}
-
-static ir_lower_result_t
-n00bb_lower_reference(ir_lower_context_t *context, parse_visit_t *visit,
-                      ir_value_t *const *operands, size_t operand_count,
-                      th_type *result_type, ir_span_t span, void *state)
-{
-    (void)operands;
-    (void)result_type;
-    (void)state;
-    n00bb_lower_context_t *lower = context->user;
-    parse_sym_entry_t *symbol = visit->pn ? visit->pn->sym : nullptr;
-    bool found = false;
-    ir_value_t *value = symbol
-        ? core_dict_get(&lower->symbols, symbol, &found) : nullptr;
-    if (operand_count || !found || !value)
-        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-                           "this name has no lowered local or parameter value");
-    return (ir_lower_result_t){IR_LOWER_VALUE, value};
-}
-
-static ir_lower_result_t
-n00bb_lower_literal(ir_lower_context_t *context, parse_visit_t *visit,
-                    ir_value_t *const *operands, size_t operand_count,
-                    th_type *result_type, ir_span_t span, void *state)
-{
-    (void)operands;
-    (void)state;
-    if (operand_count || !result_type)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "literal lowering needs an inferred result type");
-    core_string_t text = first_token_text(visit->node);
-    if (!text.data)
-        return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                           "literal token has no decoded value");
-    bool is_bool = ir_type_eq(context->module, result_type,
-                              ir_type_parse(context->module, "bool"));
-    int64_t value = 0;
-    if (is_bool) {
-        if (core_string_eq(text, CORE_STRING_STATIC("true"))) value = 1;
-        else if (!core_string_eq(text, CORE_STRING_STATIC("false")))
-            return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                               "unsupported boolean literal spelling");
-    }
-    else {
-        char *end = nullptr;
-        errno = 0;
-        value = strtoll(text.data, &end, 0);
-        if (errno || end == text.data || *end)
-            return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                               "integer literal is outside the bootstrap lowering subset");
-    }
-    ir_lower_context_t *ir = context;
-    ir_instr_t *instruction = ir_instr_add(ir->block, IR_OP_CONST);
-    char name[48];
-    snprintf(name, sizeof(name), "__n00bb_%llu",
-             (unsigned long long)ir->next_value_id++);
-    if (!instruction || !ir_instr_set_dest(instruction, name, result_type)
-        || !ir_instr_operand_int(instruction, value))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
-                           "could not emit an IR constant");
-    instruction->span = span;
-    return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
-}
-
-static ir_lower_result_t
 n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
                    ir_value_t *const *operands, size_t operand_count,
                    th_type *result_type, ir_span_t span, void *state)
@@ -1606,26 +1516,6 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
                            "could not set checked arithmetic semantics");
     instruction->span = span;
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
-}
-
-static ir_lower_result_t
-n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
-                   ir_value_t *const *operands, size_t operand_count,
-                   th_type *result_type, ir_span_t span, void *state)
-{
-    (void)visit;
-    (void)result_type;
-    (void)state;
-    if (operand_count > 1)
-        return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
-                           "return has an unsupported number of values");
-    ir_instr_t *instruction = ir_instr_add(context->block, IR_OP_RETURN);
-    if (!instruction || (operand_count
-        && !ir_instr_operand_value(instruction, operands[0])))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
-                           "could not emit a return instruction");
-    instruction->span = span;
-    return (ir_lower_result_t){.status = IR_LOWER_TERMINATED};
 }
 
 static bool
@@ -1779,15 +1669,15 @@ lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         core_list_free(parameters);
         return false;
     }
-    n00bb_lower_context_t lower_data = {
-        .grammar = grammar,
-        .unit = unit,
+    int32_t file_id = ir_file_count(state->ir_module) - 1;
+    ir_lower_context_t context = {
         .module = state->ir_module,
         .function = function,
+        .block = entry,
         .diagnostics = diagnostics,
-        .file_id = ir_file_count(state->ir_module) - 1,
+        .file_id = file_id,
+        .reachable = true,
     };
-    core_dict_init(&lower_data.symbols, nullptr, nullptr);
     for (size_t i = 0; i < parameters.len; i++) {
         parse_sym_entry_t *parameter = parameters.data[i];
         const th_param *type_param = th_func_param(symbol->type, i);
@@ -1797,33 +1687,24 @@ lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, "this parameter");
             ir_diag_message(diagnostic, diagnostics,
                             "only required in parameters are lowered by the bootstrap slice");
-            core_dict_free(&lower_data.symbols);
             core_list_free(parameters);
             return false;
         }
         ir_value_t *value = ir_param_add(function, parameter->name.data,
                                          type_param->type);
         if (!value) {
-            core_dict_free(&lower_data.symbols);
             core_list_free(parameters);
             return false;
         }
-        core_dict_put(&lower_data.symbols, parameter, value);
+        if (!ir_lower_bind_value(&context, parameter, value)) {
+            core_list_free(parameters);
+            return false;
+        }
     }
     core_list_free(parameters);
 
-    ir_lower_context_t context = {
-        .module = state->ir_module,
-        .function = function,
-        .block = entry,
-        .diagnostics = diagnostics,
-        .file_id = lower_data.file_id,
-        .user = &lower_data,
-        .reachable = true,
-    };
     ir_lower_result_t lowered = ir_lower_tree(lowerer, &context, grammar, body);
     if (lowered.status == IR_LOWER_FAILED || ir_diags_failed(diagnostics)) {
-        core_dict_free(&lower_data.symbols);
         return false;
     }
     if (context.reachable) {
@@ -1832,17 +1713,14 @@ lower_function_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, "this function body");
             ir_diag_message(diagnostic, diagnostics,
                             "this non-void function can reach its end without returning a value");
-            core_dict_free(&lower_data.symbols);
             return false;
         }
         ir_instr_t *ret = ir_instr_add(entry, IR_OP_RETURN);
         if (!ret) {
-            core_dict_free(&lower_data.symbols);
             return false;
         }
         ret->span = ir_module_span(state->ir_module);
     }
-    core_dict_free(&lower_data.symbols);
     return !ir_diags_failed(diagnostics);
 }
 
@@ -1862,15 +1740,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_work_queue_t *queue,
     bool ok = units.len && initialize_ir_modules(ir_context, grammar, &units);
     ir_lowerer_t *lowerer = ir_lowerer_new(ir_context);
     ok = ok && lowerer
-        && ir_lowerer_register(lowerer, "identity", n00bb_lower_identity,
-                               nullptr)
-        && ir_lowerer_register(lowerer, "reference", n00bb_lower_reference,
-                               nullptr)
-        && ir_lowerer_register(lowerer, "literal", n00bb_lower_literal,
-                               nullptr)
         && ir_lowerer_register(lowerer, "binary", n00bb_lower_binary,
-                               nullptr)
-        && ir_lowerer_register(lowerer, "return", n00bb_lower_return,
                                nullptr);
     static const parse_annot_kind_t rejected_kinds[] = {
         PARSE_ANNOT_BRANCH, PARSE_ANNOT_LOOP, PARSE_ANNOT_SWITCH,
