@@ -179,6 +179,8 @@ struct ir_diags_t {
     ir_ctx_t    *ctx;
     ir_policy_t *policy;
     core_diagnostics_t *core;
+    core_diagnostics_t *destination;
+    const core_translation_unit_t *unit;
     ir_diag_t   *v;
     uint32_t     n;
     uint32_t     cap;
@@ -207,9 +209,29 @@ ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy)
     return d;
 }
 
+ir_diags_t *ir_diags_new_attached(
+    ir_ctx_t *ctx, ir_policy_t *policy, core_diagnostics_t *destination,
+    const core_translation_unit_t *unit)
+{
+    if (!destination || !unit) return nullptr;
+    ir_diags_t *d = ir_diags_new(ctx, policy);
+    if (!d) return nullptr;
+    d->destination = destination;
+    d->unit = unit;
+    return d;
+}
+
 static bool is_attachment(ir_severity_t s)
 {
     return s == IR_SEV_NOTE || s == IR_SEV_HELP;
+}
+
+static core_diag_severity_t
+core_severity_of(ir_severity_t severity)
+{
+    return severity == IR_SEV_WARNING ? CORE_DIAG_WARNING
+        : severity == IR_SEV_NOTE ? CORE_DIAG_NOTE
+        : severity == IR_SEV_HELP ? CORE_DIAG_HELP : CORE_DIAG_ERROR;
 }
 
 static bool
@@ -268,6 +290,26 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
     if (!core_item) {
         return nullptr;
     }
+    size_t destination_index = SIZE_MAX;
+    if (d->destination && d->unit) {
+        core_diag_location_t location = {0};
+        if (ir_span_known(span)) {
+            location = (core_diag_location_t){
+                .line = span.start_line,
+                .column = span.start_col,
+                .end_line = span.end_line,
+                .end_column = span.end_col,
+                .has_location = true,
+            };
+        }
+        destination_index = core_diagnostics_count(d->destination);
+        if (!core_diagnostics_report_at(d->destination, d->unit,
+                core_severity_of(sev),
+                core_string_from_cstr(ir_diag_code(code)),
+                core_string_from_cstr(ir_diag_default_text(code)), location)
+            || core_diagnostics_count(d->destination) == destination_index)
+            destination_index = SIZE_MAX;
+    }
     sev = core_item->severity == CORE_DIAG_WARNING ? IR_SEV_WARNING
         : core_item->severity == CORE_DIAG_NOTE ? IR_SEV_NOTE
         : core_item->severity == CORE_DIAG_HELP ? IR_SEV_HELP : IR_SEV_ERROR;
@@ -291,6 +333,7 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
     dg->primary.label = label ? ir_strdup(d->ctx, label) : nullptr;
     dg->seq           = d->seq++;
     dg->core_index     = core_index;
+    dg->destination_index = destination_index;
 
     d->sorted   = false;
     d->anchored = d->anchored
@@ -365,6 +408,10 @@ bool ir_diag_message(ir_diag_t *dg, ir_diags_t *d, const char *message)
 
     core_diagnostic_set_message(d->core, dg->core_index,
                                 core_string_from_cstr(message));
+    if (d->destination && dg->destination_index != SIZE_MAX)
+        core_diagnostic_set_message(d->destination,
+                                    dg->destination_index,
+                                    core_string_from_cstr(message));
 
     return dg->message != nullptr;
 }
@@ -448,7 +495,9 @@ const ir_diag_t *ir_diags_at(ir_diags_t *d, uint32_t i)
 
 bool ir_diags_failed(const ir_diags_t *d)
 {
-    return d && core_diagnostics_failed(d->core);
+    if (!d) return false;
+    return d->destination ? core_diagnostics_failed(d->destination)
+                          : core_diagnostics_failed(d->core);
 }
 
 uint32_t ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev)
@@ -490,6 +539,33 @@ bool ir_diags_merge(ir_diags_t *dst, ir_diags_t *src)
         dst->v[dst->n]      = src->v[i];
         dst->v[dst->n].seq  = dst->seq++;
         dst->v[dst->n].core_index += core_base;
+        dst->v[dst->n].destination_index = SIZE_MAX;
+        if (dst->destination && dst->unit) {
+            const ir_diag_t *source_diag = &src->v[i];
+            const core_diagnostic_t *source_core =
+                core_diagnostics_at(src->core, source_diag->core_index);
+            if (source_core) {
+                core_diag_location_t location = {0};
+                if (ir_span_known(source_diag->primary.span)) {
+                    ir_span_t span = source_diag->primary.span;
+                    location = (core_diag_location_t){
+                        .line = span.start_line,
+                        .column = span.start_col,
+                        .end_line = span.end_line,
+                        .end_column = span.end_col,
+                        .has_location = true,
+                    };
+                }
+                size_t index = core_diagnostics_count(dst->destination);
+                if (core_diagnostics_report_at(dst->destination, dst->unit,
+                        core_severity_of(source_diag->severity),
+                        core_string_from_cstr(
+                            ir_diag_code(source_diag->code)),
+                        source_core->message, location)
+                    && core_diagnostics_count(dst->destination) > index)
+                    dst->v[dst->n].destination_index = index;
+            }
+        }
         dst->n++;
     }
     dst->anchored |= src->anchored;

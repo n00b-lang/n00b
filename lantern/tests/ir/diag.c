@@ -4,6 +4,7 @@
 
 #include "ir/diag.h"
 #include "ir/verify.h"
+#include "lib/module.h"
 #include "harness.h"
 
 static bool produced[IR_DIAG_COUNT];
@@ -123,6 +124,61 @@ static void test_registry(void)
           ir_diag_default_severity(IR_DIAG_INTERNAL) == IR_SEV_ERROR
               && ir_diag_default_severity(IR_DIAG_AUTHORED_ANNOT)
                      == IR_SEV_WARNING);
+}
+
+static void test_diagnostics_attach_to_translation_units(void)
+{
+    core_module_spec_t module = {0};
+    core_source_file_t source = {0};
+    core_translation_unit_t unit = {0};
+    bool initialized = core_module_spec_init(
+            &module, CORE_STRING_STATIC("pkg.lowering"))
+        && core_source_file_init(&source,
+            CORE_STRING_STATIC("pkg/lowering.n00b"), "value", 5)
+        && core_translation_unit_init(&unit, &module, &source);
+    check("a test translation unit initializes", initialized);
+    if (!initialized) return;
+
+    ir_ctx_t *ctx = ir_ctx_new();
+    core_diagnostics_t *destination =
+        core_translation_unit_diagnostics(&unit);
+    ir_diags_t *diagnostics = ir_diags_new_attached(ctx, nullptr,
+                                                     destination, &unit);
+    ir_span_t span = ir_span_make(0, 0, 5, 2, 3, 2, 8);
+    ir_diag_t *item = ir_diag_begin(diagnostics, IR_DIAG_UNKNOWN_OPCODE,
+                                    span, "invalid key");
+    ir_diag_message(item, diagnostics, "lowering metadata is invalid");
+    const core_diagnostic_t *attached = core_diagnostics_at(destination, 0);
+    check("IR diagnostics land in the owning TU with source identity",
+          attached
+              && core_string_eq(attached->module,
+                                CORE_STRING_STATIC("pkg.lowering"))
+              && core_string_eq(attached->path,
+                                CORE_STRING_STATIC("pkg/lowering.n00b"))
+              && attached->location.has_location
+              && attached->location.line == 2
+              && attached->location.column == 3
+              && core_string_eq(attached->message,
+                                CORE_STRING_STATIC("lowering metadata is invalid")));
+    check("attached IR errors make the shared TU diagnostics fail",
+          ir_diags_failed(diagnostics)
+              && core_diagnostics_failed(destination));
+
+    ir_diags_t *more = ir_diags_new(ctx, nullptr);
+    ir_diag_t *merged = ir_diag_begin(more, IR_DIAG_TYPE_MISMATCH, span,
+                                      "from another pass");
+    ir_diag_message(merged, more, "operand types disagree");
+    check("merged pass diagnostics also attach to the TU",
+          ir_diags_merge(diagnostics, more)
+              && core_diagnostics_count(destination) == 2
+              && core_string_eq(
+                  core_diagnostics_at(destination, 1)->message,
+                  CORE_STRING_STATIC("operand types disagree")));
+
+    ir_ctx_free(ctx);
+    core_translation_unit_release(&unit);
+    core_module_spec_release(&module);
+    core_source_file_release(&source);
 }
 
 static void test_emit(void)
@@ -719,6 +775,7 @@ int main(int argc, char **argv)
     const char *golden = argc > 1 ? argv[1] : ".";
 
     test_registry();
+    test_diagnostics_attach_to_translation_units();
     test_emit();
     test_notes();
     test_policy();

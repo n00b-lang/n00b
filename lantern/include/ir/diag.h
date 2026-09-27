@@ -52,6 +52,7 @@ typedef struct {
     ir_origin_t     *origin;
     uint64_t         seq;
     size_t           core_index;
+    size_t           destination_index;
 } ir_diag_t;
 
 typedef enum : uint8_t {
@@ -72,6 +73,9 @@ ir_outcome_t ir_policy_for(const ir_policy_t *p, const char *code);
 typedef struct ir_diags_t ir_diags_t;
 
 ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy);
+ir_diags_t *ir_diags_new_attached(
+    ir_ctx_t *ctx, ir_policy_t *policy, core_diagnostics_t *destination,
+    const core_translation_unit_t *unit);
 
 ir_diag_t *ir_diag_begin(ir_diags_t *d, ir_diagcode_t code, ir_span_t span,
                          const char *label);

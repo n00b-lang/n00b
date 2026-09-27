@@ -114,6 +114,7 @@ ir_sources = files(
     'ir/func.c',
     'ir/grammar.c',
     'ir/layout.c',
+    'ir/lower.c',
     'ir/ops.c',
     'ir/pass.c',
     'ir/pdg.c',

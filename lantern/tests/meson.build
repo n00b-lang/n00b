@@ -10,6 +10,7 @@ golden  = d_ir / 'golden'
 
 suites = [
     ['ir-core',             'ir/core.c',             {}],
+    ['ir-lower',            'ir/lower.c',            {}],
     ['ir-spans',            'ir/span.c',             {}],
     ['ir-rules',            'ir/rule.c',             {}],
     ['ir-typing',           'ir/typing.c',           {}],
