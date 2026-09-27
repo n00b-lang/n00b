@@ -4,14 +4,10 @@
 #include "ir/libir.h"
 #include "parse/bnf.h"
 #include "parse/pwz.h"
+#include "parse/symtab.h"
 #include "parse/tree_util.h"
 #include "scanner/token_stream.h"
 #include "harness.h"
-
-typedef struct {
-    ir_value_t *left;
-    ir_value_t *right;
-} parameter_values_t;
 
 typedef struct {
     size_t enters;
@@ -48,22 +44,20 @@ lower_identity(ir_lower_context_t *context, parse_visit_t *visit,
         : (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
 }
 
-static ir_lower_result_t
-lower_parameter(ir_lower_context_t *context, parse_visit_t *visit,
-                ir_value_t *const *operands, size_t operand_count,
-                th_type *result_type, ir_span_t span, void *state)
+static parse_tree_t *
+find_nonterminal(parse_grammar_t *grammar, parse_tree_t *node,
+                const char *name)
 {
-    (void)context;
-    (void)operands;
-    (void)result_type;
-    (void)span;
-    parameter_values_t *values = state;
-    core_string_t name = parse_tree_nt_name(visit->grammar, visit->node);
-    if (core_string_eq(name, CORE_STRING_STATIC("left")) && !operand_count)
-        return (ir_lower_result_t){IR_LOWER_VALUE, values->left};
-    if (core_string_eq(name, CORE_STRING_STATIC("right")) && !operand_count)
-        return (ir_lower_result_t){IR_LOWER_VALUE, values->right};
-    return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    if (!node || core_tree_is_leaf(node)) return nullptr;
+    if (core_string_eq(parse_tree_nt_name(grammar, node),
+                       core_string_from_cstr(name)))
+        return node;
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *found = find_nonterminal(
+            grammar, core_tree_child(node, i), name);
+        if (found) return found;
+    }
+    return nullptr;
 }
 
 static parse_annotation_t *
@@ -92,6 +86,7 @@ main(void)
                                       IR_LINK_EXTERNAL);
     ir_value_t *left = ir_param_add(function, "left", i32);
     ir_value_t *right = ir_param_add(function, "right", i32);
+    ir_local_t *local = ir_local_add(function, "local", i32);
     ir_block_t *block = ir_block_add(function, "entry");
     int32_t file_id = ir_file_add(module, "lower.n00b");
     ir_diags_t *diagnostics = ir_diags_new(ctx, nullptr);
@@ -109,8 +104,12 @@ main(void)
     static const char *const grammar_text
         = "@tokenizer(\"toy\")\n"
           "<sum> @scope(\"sum\") @emit(\"add\", $0, $2) ::= <left> \"+\" <right>\n"
-          "<left> @emit(\"parameter\") ::= \"a\"\n"
-          "<right> @emit(\"parameter\") ::= \"b\"\n";
+          "<left> @emit(\"reference\") ::= \"a\"\n"
+          "<right> @emit(\"reference\") ::= \"b\"\n"
+          "<literal> @literal(\"int\") @emit(\"literal\") ::= \"7\"\n"
+          "<set> @assigns($0, $2) ::= <target> \"=\" <literal>\n"
+          "<target> @emit(\"reference\") ::= \"x\"\n"
+          "<ret> @emit(\"return\", $1) ::= \"r\" <literal>\n";
     parse_grammar_t *grammar = parse_grammar_new();
     bool grammar_loaded = parse_bnf_load(
         core_string_from_cstr(grammar_text), CORE_STRING_STATIC("sum"),
@@ -124,11 +123,24 @@ main(void)
     bool parsed = parser && parse_pwz_parse(parser, tokens);
     parse_tree_t *tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
     check("a tiny annotated expression grammar parses", tree != nullptr);
-    parameter_values_t parameters = {.left = left, .right = right};
+    parse_sym_entry_t left_symbol = {
+        .name = CORE_STRING_STATIC("left"), .type = i32,
+    };
+    parse_sym_entry_t right_symbol = {
+        .name = CORE_STRING_STATIC("right"), .type = i32,
+    };
+    parse_sym_entry_t local_symbol = {
+        .name = CORE_STRING_STATIC("local"), .type = i32,
+    };
+    parse_tree_t *left_node = find_nonterminal(grammar, tree, "left");
+    parse_tree_t *right_node = find_nonterminal(grammar, tree, "right");
+    if (left_node) core_tree_node_value(left_node).sym = &left_symbol;
+    if (right_node) core_tree_node_value(right_node).sym = &right_symbol;
     visit_counts_t visit_counts = {0};
-    check("the tree driver registers frontend value callbacks",
-          ir_lowerer_register(lowerer, "parameter", lower_parameter,
-                              &parameters)
+    check("symbols bind to IR values and locals",
+          ir_lower_bind_value(&lower, &left_symbol, left)
+              && ir_lower_bind_value(&lower, &right_symbol, right)
+              && ir_lower_bind_local(&lower, &local_symbol, local)
               && ir_lowerer_register_visit(lowerer,
                   PARSE_ANNOT_SCOPE_OPEN, count_lower_visit, &visit_counts));
     if (tree) core_tree_node_value(tree).type = i32;
@@ -146,6 +158,69 @@ main(void)
               && tree_sum.value->def->span.end_byte == 3);
     check("lowering hooks run on scope entry and exit",
           visit_counts.enters == 1 && visit_counts.exits == 1);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+
+    parser = parse_pwz_new_for_start(grammar, parse_nonterm_id(
+        parse_find_nonterm(grammar, CORE_STRING_STATIC("literal"))));
+    tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("7"));
+    parsed = parser && parse_pwz_parse(parser, tokens);
+    tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
+    if (tree) core_tree_node_value(tree).type = i32;
+    ir_lower_result_t literal = tree
+        ? ir_lower_tree(lowerer, &lower, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    check("literal annotations lower scalar values generically",
+          literal.status == IR_LOWER_VALUE && literal.value
+              && literal.value->def
+              && literal.value->def->op == IR_OP_CONST);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+
+    parser = parse_pwz_new_for_start(grammar, parse_nonterm_id(
+        parse_find_nonterm(grammar, CORE_STRING_STATIC("set"))));
+    tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("x=7"));
+    parsed = parser && parse_pwz_parse(parser, tokens);
+    tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
+    parse_tree_t *target_node = find_nonterminal(grammar, tree, "target");
+    if (target_node) core_tree_node_value(target_node).sym = &local_symbol;
+    parse_tree_t *assigned_literal = find_nonterminal(grammar, tree, "literal");
+    if (assigned_literal) core_tree_node_value(assigned_literal).type = i32;
+    ir_lower_result_t assigned = tree
+        ? ir_lower_tree(lowerer, &lower, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    check("assign annotations lower through Lantern local destinations",
+          assigned.status == IR_LOWER_NO_VALUE
+              && block->instrs[block->n_instrs - 1]->dest_local == local);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+
+    ir_func_t *return_function = ir_func_add(
+        module, "returning", ir_type_parse(module, "() -> i32"),
+        IR_LINK_EXTERNAL);
+    ir_block_t *return_block = ir_block_add(return_function, "entry");
+    ir_lower_context_t return_context = {
+        .module = module,
+        .function = return_function,
+        .block = return_block,
+        .diagnostics = diagnostics,
+        .file_id = file_id,
+        .reachable = true,
+    };
+    parser = parse_pwz_new_for_start(grammar, parse_nonterm_id(
+        parse_find_nonterm(grammar, CORE_STRING_STATIC("ret"))));
+    tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("r7"));
+    parsed = parser && parse_pwz_parse(parser, tokens);
+    tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
+    parse_tree_t *return_literal = find_nonterminal(grammar, tree, "literal");
+    if (return_literal) core_tree_node_value(return_literal).type = i32;
+    ir_lower_result_t returned = tree
+        ? ir_lower_tree(lowerer, &return_context, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    check("return annotations lower and terminate through the tree driver",
+          returned.status == IR_LOWER_TERMINATED
+              && ir_block_terminator(return_block)
+              && ir_block_terminator(return_block)->op == IR_OP_RETURN);
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
     parse_grammar_free(grammar);
@@ -207,7 +282,7 @@ main(void)
               && (ir_module_props(module) & IR_PROP_STRUCTURED));
     ir_pdg_t *pdg = ir_pdg_of(function);
     check("Lantern builds a dependence graph from the lowered instructions",
-          pdg && ir_pdg_node_count(pdg) == 3);
+          pdg && ir_pdg_node_count(pdg) == 7);
 
     ir_ctx_free(ctx);
     return report("IR lowering");

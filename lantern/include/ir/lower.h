@@ -7,6 +7,7 @@
 #include "parse/tree_visit.h"
 
 typedef struct ir_lowerer_t ir_lowerer_t;
+typedef struct parse_sym_entry_t parse_sym_entry_t;
 
 typedef enum : uint8_t {
     IR_LOWER_VALUE,
@@ -26,6 +27,7 @@ typedef struct {
     ir_block_t *block;
     ir_diags_t *diagnostics;
     int32_t file_id;
+    void *symbol_bindings;
     void *user;
     uint64_t next_value_id;
     bool reachable;
@@ -40,6 +42,10 @@ typedef bool (*ir_lower_visit_fn)(ir_lower_context_t *context,
                                   void *state);
 
 ir_lowerer_t *ir_lowerer_new(ir_ctx_t *ctx);
+bool ir_lower_bind_value(ir_lower_context_t *context,
+                         parse_sym_entry_t *symbol, ir_value_t *value);
+bool ir_lower_bind_local(ir_lower_context_t *context,
+                         parse_sym_entry_t *symbol, ir_local_t *local);
 bool ir_lowerer_register(ir_lowerer_t *lowerer, const char *action,
                          ir_lower_action_fn callback, void *state);
 bool ir_lowerer_register_visit(ir_lowerer_t *lowerer,
