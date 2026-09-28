@@ -1,0 +1,1 @@
+package type PackageRecord { field: int }

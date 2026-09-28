@@ -1,0 +1,6 @@
+import cycle_trait_a
+import cycle_trait_b
+
+func use_cycle_trait(item: cycle_trait_a.CycleWidget) -> cycle_trait_a.CycleWidget {
+    return cycle_trait_b.dispatch(item)
+}

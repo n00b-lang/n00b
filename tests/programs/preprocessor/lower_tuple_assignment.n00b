@@ -1,0 +1,5 @@
+func tuple_assignment() -> int {
+    var pair: tuple[int, int] = (1, 2)
+    pair = (3, 4)
+    return 0
+}

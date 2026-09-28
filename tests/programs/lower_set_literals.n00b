@@ -1,0 +1,14 @@
+func lower_set_values() -> set[int] {
+    var values: set[int] = {10, 20}
+    return values
+}
+
+func lower_tagged_set_values() -> set[int] {
+    var values: set[int] = set{30, 40}
+    return values
+}
+
+func lower_empty_tagged_set() -> set[int] {
+    var values: set[int] = s{}
+    return values
+}

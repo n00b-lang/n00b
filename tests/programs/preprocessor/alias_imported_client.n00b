@@ -1,0 +1,9 @@
+import alias_forwarder
+
+var imported_global: int = 1
+
+func imported_alias() {
+    var imported_ref = alias_forwarder.forward_reference(ref imported_global)
+    var imported_global_ref = alias_forwarder.reference_global()
+    return imported_ref
+}

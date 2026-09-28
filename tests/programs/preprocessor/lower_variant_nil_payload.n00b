@@ -1,0 +1,10 @@
+variant SwitchValue {
+    number: int
+    empty: nil
+}
+func lower_variant_nil_payload(item: SwitchValue) {
+    switch item {
+        case empty { return item.empty }
+        else { return }
+    }
+}

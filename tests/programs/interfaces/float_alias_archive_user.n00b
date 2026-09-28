@@ -1,0 +1,5 @@
+import float_alias_archive_dep
+
+func use_archive_add(left: f64, right: float) -> f64 {
+    return float_alias_archive_dep.archive_add(left, right)
+}

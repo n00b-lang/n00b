@@ -1,0 +1,2 @@
+func required(input: int) -> int { return input }
+func missing_required() -> int { return required() }

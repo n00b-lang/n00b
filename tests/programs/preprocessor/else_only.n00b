@@ -1,0 +1,7 @@
+when false {
+    var first_removed = true
+} else when false {
+    var middle_removed = true
+} else {
+    var final_selected = true
+}

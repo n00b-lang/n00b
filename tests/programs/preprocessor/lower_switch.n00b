@@ -1,0 +1,9 @@
+func choose(code: int) -> int {
+    switch code {
+    case 1 { return 10 }
+    case 2, 3 { return 20 }
+    case -1 { break }
+    else { return 0 }
+    }
+    return 30
+}

@@ -1,0 +1,3 @@
+func invalid_dict_locking_type(item: dict_locking[int]) -> int {
+    return 0
+}

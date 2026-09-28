@@ -1,0 +1,18 @@
+func calculate_extent() -> int {
+    return 1
+}
+
+const extent: int = 0
+
+comptime {
+    var candidate: int = calculate_extent()
+    if candidate > 0 {
+        extent = candidate
+    } elif candidate == 0 {
+        extent = 4
+    } else {
+        extent = 3
+    }
+}
+
+var positive_branch_join: int[extent] = new[int[extent]]()

@@ -1,0 +1,45 @@
+var aliased_global: int = 1
+
+func return_reference(item_ref) {
+    return item_ref
+}
+
+func relay_reference(item_ref) {
+    return return_reference(return_reference(item_ref))
+}
+
+func produce_reference() {
+    return ref aliased_global
+}
+
+func alias_from_call() {
+    return relay_reference(produce_reference())
+}
+
+func assigned_call_alias() {
+    var call_ref = relay_reference(ref aliased_global)
+    return call_ref
+}
+
+func assigned_global_call_alias() {
+    var produced_ref = produce_reference()
+    return produced_ref
+}
+
+func function_alias() {
+    var local_ref = ref aliased_global
+    var copied_ref = local_ref
+    return relay_reference(copied_ref)
+}
+
+trait ReturnArgument {
+    func return_argument(self: `T, item: `A) -> `A
+}
+func return_argument(self: int, item) { return item }
+
+func trait_alias(receiver: int) {
+    var local_ref = ref aliased_global
+    return receiver.return_argument(local_ref)
+}
+
+var stored_reference = relay_reference(ref aliased_global)

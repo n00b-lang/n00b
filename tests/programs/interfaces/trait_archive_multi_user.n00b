@@ -1,0 +1,38 @@
+import trait_archive_render_dep
+import trait_archive_measure_dep
+import trait_archive_other_impl
+
+type ArchiveWidget {
+}
+
+public func render(self: ArchiveWidget) -> int {
+    return 1
+}
+
+public func measure(self: ArchiveWidget) -> int fail: string {
+    return 3
+}
+
+func use_archived_render(item: ArchiveWidget) -> int {
+    return trait_archive_render_dep.archived_render(item)
+}
+
+func use_archived_render_again(item: trait_archive_other_impl.ArchiveOther) -> int {
+    return trait_archive_render_dep.archived_render(item)
+}
+
+func use_archived_measure(item: ArchiveWidget) -> int fail: string {
+    return trait_archive_measure_dep.archived_measure(item)!
+}
+
+func use_archived_measure_again(item: trait_archive_other_impl.ArchiveOther) -> int fail: string {
+    return trait_archive_measure_dep.archived_measure(item)!
+}
+
+func dispatch_archive_render(item: ArchiveWidget) -> int {
+    return item.render()
+}
+
+func dispatch_archive_measure(item: ArchiveWidget) -> int fail: string {
+    return item.measure()!
+}

@@ -1,0 +1,14 @@
+context LocalHookValues(id: int) provides: int {
+    enter() {
+        var entered: int = id + 1
+        return entered
+    }
+    exit(guard) {
+        var released: int = guard + 2
+        extra = released + 1
+    }
+}
+func use_local_hooks() -> int {
+    with first = LocalHookValues(3) {}
+    return 0
+}

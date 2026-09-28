@@ -1,0 +1,16 @@
+func calculate_extent() -> int {
+    return 1
+}
+
+const extent: int = 1
+
+comptime {
+    var candidate: int = calculate_extent()
+    if candidate > 0 + 1 {
+        extent = candidate
+    } else {
+        extent = 2
+    }
+}
+
+var complex_condition_unproven: int[extent] = new[int[extent]]()

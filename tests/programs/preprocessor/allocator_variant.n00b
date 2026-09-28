@@ -1,0 +1,8 @@
+variant AllocationState {
+    none: nil
+    some: int
+}
+
+func allocate_variant(allocator: Allocator) -> AllocationState {
+    return new_using_allocator[AllocationState](allocator)
+}

@@ -1,0 +1,26 @@
+context RecoverExit() fail: int {
+    enter() {}
+    exit() { fail 13 }
+    error(problem) {}
+    ensure() {}
+}
+context PropagatingExit() fail: int {
+    enter() {}
+    exit() { fail 17 }
+    error(problem) { fail problem }
+    ensure() {}
+}
+context UnhandledExit() fail: int {
+    enter() {}
+    exit() { fail 19 }
+    ensure() {}
+}
+func recover_exit_error() -> nil fail: int {
+    with RecoverExit() {}
+}
+func propagate_error_hook_failure() -> nil fail: int {
+    with PropagatingExit() {}
+}
+func propagate_unhandled_exit_failure() -> nil fail: int {
+    with UnhandledExit() {}
+}

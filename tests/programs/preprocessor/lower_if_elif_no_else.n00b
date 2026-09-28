@@ -1,0 +1,5 @@
+func choose_default(flag_a: bool, flag_b: bool) -> int {
+    if flag_a { return 1 }
+    elif flag_b { return 2 }
+    return 3
+}

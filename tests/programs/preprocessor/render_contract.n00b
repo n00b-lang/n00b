@@ -1,0 +1,3 @@
+public trait Render {
+    func render(self: `T) -> string
+}

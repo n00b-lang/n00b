@@ -1,0 +1,10 @@
+variant SwitchValue {
+    number: int
+    empty: nil
+}
+func lower_variant_exhaustive(item: SwitchValue) -> int {
+    switch item {
+        case number { return item.number }
+        case empty { return 0 }
+    }
+}

@@ -1,0 +1,3 @@
+func unregistered_fence_modifier() {
+    custom[- payload -]
+}

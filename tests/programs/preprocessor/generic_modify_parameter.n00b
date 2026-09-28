@@ -1,0 +1,8 @@
+func assign_same(modify item: `T) {
+    item = item
+}
+
+func use_assign_same() {
+    var number: int = 1
+    assign_same(number)
+}

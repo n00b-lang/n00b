@@ -1,0 +1,6 @@
+import record_dep
+type SharedRecord { local: float }
+func use_remote(item: record_dep.SharedRecord) -> record_dep.SharedRecord {
+    return item
+}
+func use_local(item: SharedRecord) -> SharedRecord { return item }

@@ -1,0 +1,12 @@
+import contract
+import int_impl
+import label_impl
+
+func generic_render(item: `T) -> int where `T: contract.Render {
+    item.measure()
+    return item.render()
+}
+
+func render_bool(item: bool) -> int {
+    return generic_render(item)
+}

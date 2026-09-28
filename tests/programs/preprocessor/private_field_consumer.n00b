@@ -1,0 +1,5 @@
+import public_dep
+
+func read_private_field(item: public_dep.PublicRecord) -> int {
+    return item.secret
+}

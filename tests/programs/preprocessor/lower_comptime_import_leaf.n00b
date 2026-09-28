@@ -1,0 +1,9 @@
+const imported_seed: int = 0
+
+comptime {
+    imported_seed = 6
+}
+
+public func compile_constant() -> int {
+    return imported_seed
+}

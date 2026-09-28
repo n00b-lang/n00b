@@ -1,0 +1,9 @@
+import initializer_comptime_conditional_write_b
+
+comptime {
+    if true {
+        initializer_comptime_conditional_write_b.shared_value = 7
+    }
+}
+
+var copied_value: int = initializer_comptime_conditional_write_b.shared_value

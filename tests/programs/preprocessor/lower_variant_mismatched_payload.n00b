@@ -1,0 +1,9 @@
+variant MismatchedPayloadValue {
+    number: int
+}
+
+func mismatched_payload() -> MismatchedPayloadValue {
+    var item: MismatchedPayloadValue = new[MismatchedPayloadValue]()
+    item.number = "not a number"
+    return item
+}

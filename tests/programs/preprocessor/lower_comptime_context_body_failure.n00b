@@ -1,0 +1,18 @@
+context BodyFailure() fail: int {
+    enter() {}
+    exit() {}
+    error(problem) {}
+    ensure() {}
+}
+
+func fail_body() -> int fail: int { fail 23 }
+
+func body_failure_value() -> int fail: int {
+    return comptime {
+        var result: int = 5
+        with BodyFailure() {
+            result = fail_body()!
+        }
+        value result
+    }
+}

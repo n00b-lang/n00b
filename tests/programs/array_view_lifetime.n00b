@@ -1,0 +1,27 @@
+trait Index_Slice {
+    func slice(self: `T, start_ix: int = 0, end_ix: int = -1) -> view[`E]
+}
+
+func slice(self: array[int], start_ix: int = 0, end_ix: int = -1) -> view[int] {
+    return self [:]
+}
+
+var retained_view: view[int]
+
+func consume_view(item: view[int]) -> int { return 0 }
+
+func retain_view(item: view[int]) { retained_view = item }
+
+func read_local_view(items: array[int]) -> int {
+    var local_view: view[int] = items [:]
+    return consume_view(local_view)
+}
+
+func return_view(items: array[int]) -> view[int] {
+    return items [:]
+}
+
+func pass_to_escaping_parameter(items: array[int]) {
+    var local_view: view[int] = items [:]
+    retain_view(local_view)
+}

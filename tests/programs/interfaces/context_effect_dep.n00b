@@ -1,0 +1,18 @@
+public var shared_value: int = 0
+
+public func write_shared(next_value: int) {
+    ref_write(ref shared_value, next_value)
+}
+
+context UpdatingContext(next_value: int) {
+    enter() {}
+    exit() { write_shared(next_value) }
+}
+
+context FailingUpdatingContext(next_value: int) fail: int {
+    enter() {}
+    exit() {
+        write_shared(next_value)
+        fail 17
+    }
+}

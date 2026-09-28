@@ -1,0 +1,3 @@
+func read_option_unchecked(item: int?) -> int {
+    return item.get()
+}

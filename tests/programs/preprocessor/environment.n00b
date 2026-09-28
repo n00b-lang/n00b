@@ -1,0 +1,3 @@
+when preproc_env_defines("N00BB_TEST_ENV") and preproc_env("N00BB_TEST_ENV") == "present" {
+    var environment_selected = true
+}

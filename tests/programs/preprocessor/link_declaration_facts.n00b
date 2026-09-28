@@ -1,0 +1,6 @@
+var matrix: array[array[int]]
+const values: array[int] = [1, 2]
+const limit: int = 41
+const label: string = "archive\nvalue"
+const empty_label: string = ""
+const computed: int = 20 + 21

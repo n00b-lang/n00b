@@ -1,0 +1,2 @@
+func may_fail() -> int fail: int { fail 9 }
+may_fail()!

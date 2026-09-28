@@ -1,0 +1,6 @@
+const character = 'x'
+const mismatched: bool = 1
+const too_wide = 170141183460469231731687303715884105728
+when true {
+    var selected = true
+}

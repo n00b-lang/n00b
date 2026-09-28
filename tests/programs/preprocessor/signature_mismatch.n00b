@@ -1,0 +1,1 @@
+func wrong() -> string { return 1 }

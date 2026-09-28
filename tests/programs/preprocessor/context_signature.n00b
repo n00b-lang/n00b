@@ -1,0 +1,6 @@
+context TestContext(resource: int) provides: int fail: int {
+    enter() { return resource }
+    exit(guard) {}
+    error(err) {}
+    ensure(guard) {}
+}

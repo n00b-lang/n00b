@@ -1,0 +1,11 @@
+public var remote_global: int = 23
+public thread var worker_count: int = 0
+public thread var worker_ratio: f64 = -1.25
+public thread var worker_label: string = "worker\nzero"
+public thread var empty_worker_label: string = ""
+public const fixed_global: int = 41
+public const negative_global: int = -123
+public const enabled: bool = true
+public const ratio: f64 = 1.25
+public const label: string = "archive\nvalue"
+public const empty_label: string = ""

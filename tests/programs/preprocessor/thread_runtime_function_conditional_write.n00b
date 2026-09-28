@@ -1,0 +1,8 @@
+thread var worker_state: int
+
+func conditional_write_and_read(should_initialize: bool) -> int {
+    if should_initialize {
+        worker_state = 42
+    }
+    return worker_state
+}

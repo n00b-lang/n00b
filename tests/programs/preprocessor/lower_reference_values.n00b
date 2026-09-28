@@ -1,0 +1,14 @@
+var global_target: int = 9
+func borrow_local() {
+    var local_target: int
+    local_target = 1
+    local_target += 2
+    var borrowed = ref local_target
+    return borrowed
+}
+func borrow_parameter(target: int) {
+    return ref target
+}
+func borrow_global() {
+    return ref global_target
+}

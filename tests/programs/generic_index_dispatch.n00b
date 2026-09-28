@@ -1,0 +1,9 @@
+trait Index_Load {
+    func load(self: `T, index: int) -> string
+}
+
+func load(self: array[int], index: int) -> string { return "loaded" }
+
+func generic_get(items: `C, index: int) -> string where `C: Index_Load {
+    return items [index]
+}

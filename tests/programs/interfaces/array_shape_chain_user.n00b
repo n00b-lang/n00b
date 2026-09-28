@@ -1,0 +1,9 @@
+import array_shape_chain_middle
+
+func get_values() -> array[int] {
+    return array_shape_chain_middle.values
+}
+
+func echo_values(input: array[int]) -> array[int] {
+    return array_shape_chain_middle.echo(input)
+}

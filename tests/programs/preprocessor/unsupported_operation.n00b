@@ -1,0 +1,3 @@
+when "alpha" < "beta" {
+    var impossible = true
+}

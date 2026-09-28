@@ -1,0 +1,8 @@
+func small_storage() -> int {
+    var small: int = 7
+    return small
+}
+
+func large_storage() {
+    var large: i:65536
+}

@@ -1,0 +1,7 @@
+import dep
+const enabled = false
+when enabled {
+    var shadow_removed = true
+} else {
+    var local_shadow_won = true
+}

@@ -1,0 +1,7 @@
+trait Index_Slice {
+    func slice(self: `Container, start_ix: int = 0, end_ix: int = -1) -> view[`Element]
+}
+func slice(self: array[int], start_ix: int = 0, end_ix: int = -1) -> view[int] {
+    return self[:]
+}
+func invalid(items: array[int]) { return items["wrong":] }

@@ -1,0 +1,12 @@
+var shared_value: int
+
+func initialize_shared_value() {
+    var borrowed = ref shared_value
+    ref_write(borrowed, 7)
+}
+
+comptime {
+    initialize_shared_value()
+}
+
+var copied_value: int = shared_value

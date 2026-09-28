@@ -1,0 +1,6 @@
+const lowest = -170141183460469231731687303715884105728
+when lowest < 0 {
+    var selected = true
+} else {
+    var removed = false
+}

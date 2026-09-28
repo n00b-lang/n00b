@@ -1,0 +1,3 @@
+thread var worker_state: int
+var observed_state: int = worker_state
+worker_state = 42

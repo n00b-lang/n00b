@@ -1,0 +1,9 @@
+import cycle_trait_b
+import cycle_trait_contract
+
+public type CycleWidget {
+}
+
+public func echo(self: CycleWidget) -> CycleWidget {
+    return self
+}

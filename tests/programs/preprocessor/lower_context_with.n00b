@@ -1,0 +1,34 @@
+context Recorder(id: int) provides: int {
+    enter() { return id }
+    exit(guard) {}
+    ensure(guard) {}
+}
+context QuietRecorder(id: int) provides: int {
+    enter() { return id }
+    ensure(guard) {}
+}
+context FailingEnter(id: int) provides: int fail: int {
+    enter() { fail id }
+    error(problem) {}
+    ensure(guard) {}
+}
+func context_return() -> int {
+    with first = Recorder(1), second = Recorder(2) {
+        return first + second
+    }
+}
+func context_fallthrough() -> int {
+    with Recorder(3) {}
+    return 4
+}
+func context_failure() -> int fail: int {
+    with Recorder(4) { fail 8 }
+}
+func context_failure_without_error() -> int fail: int {
+    with QuietRecorder(6) { fail 9 }
+}
+func context_enter_failure() -> int fail: int {
+    with prior = QuietRecorder(10), failed = FailingEnter(11) {
+        return prior + failed
+    }
+}

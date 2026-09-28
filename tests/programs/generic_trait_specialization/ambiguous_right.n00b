@@ -1,0 +1,9 @@
+import contract
+
+public func render(self: dict[`K, string]) -> int {
+    return 2
+}
+
+public func measure(self: dict[`K, string]) -> int {
+    return 2
+}

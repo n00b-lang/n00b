@@ -1,0 +1,5 @@
+var global_value: int = 1
+func update_global(delta: int) -> int {
+    global_value = global_value + delta
+    return global_value
+}

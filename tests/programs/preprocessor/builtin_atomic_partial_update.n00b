@@ -1,0 +1,7 @@
+type Pair {
+    first: int
+}
+
+func update_pair(pair: atomic[Pair]) {
+    pair.first = 1
+}

@@ -1,0 +1,14 @@
+thread var worker_state: int
+
+private func initialize_worker_state() {
+    worker_state = 42
+}
+
+private func read_worker_state() -> int {
+    return worker_state
+}
+
+func initialize_then_read() -> int {
+    initialize_worker_state()
+    return read_worker_state()
+}

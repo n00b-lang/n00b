@@ -1,0 +1,3 @@
+func invalid_rich_substitutions() -> string {
+    return rich"«#» «#0»"
+}

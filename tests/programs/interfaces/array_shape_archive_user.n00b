@@ -1,0 +1,9 @@
+import array_shape_archive_dep
+
+func get_grid() -> int[4] {
+    return array_shape_archive_dep.grid
+}
+
+func echo_grid(input: int[]) -> int[] {
+    return array_shape_archive_dep.echo(input)
+}

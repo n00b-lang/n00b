@@ -1,0 +1,11 @@
+const extent: int = 1
+
+comptime {
+    if true {
+        extent = 2
+    } else {
+        extent = 0
+    }
+}
+
+var uncertain_branch_join: int[extent] = new[int[extent]]()

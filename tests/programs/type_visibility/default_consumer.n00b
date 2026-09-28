@@ -1,0 +1,4 @@
+import default_dep
+func consume(item: default_dep.DefaultRecord) -> default_dep.DefaultRecord {
+    return item
+}

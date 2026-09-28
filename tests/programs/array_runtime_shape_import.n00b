@@ -1,0 +1,5 @@
+import array_shape_return_dep
+
+func call_imported_shaped_return(input: int[]) {
+    var target: int[4] = array_shape_return_dep.remote_return(input)
+}

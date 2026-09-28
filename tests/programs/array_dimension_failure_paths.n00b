@@ -1,0 +1,12 @@
+func too_wide() -> i128 {
+    return 18446744073709551616
+}
+
+func signed_i128_min() -> i128 {
+    return -170141183460469231731687303715884105728
+}
+
+var zero_extent: int[0]
+var negative_extent: int[-1]
+var too_wide_extent: int[too_wide()]
+var overflowing_product: int[4294967296][2]

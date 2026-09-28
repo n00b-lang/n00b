@@ -42,6 +42,7 @@ typedef struct {
 typedef struct {
     core_string_t name;
     core_string_t module;
+    parse_tree_t *declaration;
     pp_value_t value;
     bool eligible;
 } pp_binding_t;
@@ -94,7 +95,7 @@ static void pp_error(pp_context_t *ctx, parse_tree_t *at,
 static void pp_warn_cycle_dependency(pp_context_t *ctx,
                                     parse_tree_t *at,
                                     core_string_t module);
-static bool is_builtin_name(core_string_t name);
+bool n00bb_preprocessor_builtin_name(core_string_t name);
 static bool validate_expr_forms(pp_context_t *ctx, parse_tree_t *node);
 static bool evaluate_when_condition(pp_context_t *ctx,
                                     parse_tree_t *condition,
@@ -102,16 +103,6 @@ static bool evaluate_when_condition(pp_context_t *ctx,
 static core_string_t builtin_name(pp_context_t *ctx, parse_tree_t *node);
 static bool process_module(pp_context_t *ctx, core_translation_unit_t *unit,
                            parse_tree_t *tree);
-
-static void
-visit_node(pp_context_t *ctx, parse_tree_t *node, parse_tree_t *parent,
-           int32_t depth, int32_t child_index, bool entering)
-{
-    if (ctx->options && ctx->options->visit_node) {
-        ctx->options->visit_node(ctx->options->visit_context, ctx->unit,
-                                 node, parent, depth, child_index, entering);
-    }
-}
 
 static core_string_t
 own_string(pp_context_t *ctx, core_string_t value)
@@ -129,13 +120,11 @@ hex_digit(unsigned char c)
     return -1;
 }
 
-static bool
-decode_quoted_string(pp_context_t *ctx, core_string_t raw,
-                     core_string_t *decoded)
+bool
+n00bb_decode_string_literal(core_string_t raw, core_buffer_t *buffer)
 {
-    if (!raw.data || raw.u8_bytes < 2 || raw.data[0] != '"'
+    if (!buffer || !raw.data || raw.u8_bytes < 2 || raw.data[0] != '"'
         || raw.data[raw.u8_bytes - 1] != '"') return false;
-    core_buffer_t *buffer = core_buffer_empty();
     for (size_t i = 1; i + 1 < raw.u8_bytes; i++) {
         unsigned char c = raw.data[i];
         if (c != '\\') {
@@ -177,16 +166,25 @@ decode_quoted_string(pp_context_t *ctx, core_string_t raw,
         default: goto invalid;
         }
     }
-    {
-        size_t length = buffer->byte_len;
-        char *data = core_buffer_take(buffer);
-        *decoded = own_string(ctx, core_string_borrow(data, length));
-        return true;
-    }
+    return true;
 invalid:
-    core_buffer_free(buffer);
-    pp_error(ctx, nullptr, "invalid escape in preprocessor string literal");
     return false;
+}
+
+static bool
+decode_quoted_string(pp_context_t *ctx, core_string_t raw,
+                     core_string_t *decoded)
+{
+    core_buffer_t *buffer = core_buffer_empty();
+    if (!n00bb_decode_string_literal(raw, buffer)) {
+        core_buffer_free(buffer);
+        pp_error(ctx, nullptr, "invalid escape in preprocessor string literal");
+        return false;
+    }
+    size_t length = buffer->byte_len;
+    char *data = core_buffer_take(buffer);
+    *decoded = own_string(ctx, core_string_borrow(data, length));
+    return true;
 }
 
 static core_string_t
@@ -1068,7 +1066,7 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
                     ? external_definition_kind(raw) : PP_ANY)
                 : PP_ANY;
         }
-        else if (is_builtin_name(name)) kind = PP_INT;
+        else if (n00bb_preprocessor_builtin_name(name)) kind = PP_INT;
         else {
             pp_error(ctx, call,
                      "unsupported processor-time builtin in preprocessor expression");
@@ -1255,7 +1253,7 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
 
     core_string_t name = node_name(ctx->grammar, node);
     if (is_name(ctx->grammar, node, "tagged-lit")
-        && is_builtin_name(builtin_name(ctx, node)))
+        && n00bb_preprocessor_builtin_name(builtin_name(ctx, node)))
         return eval_builtin(ctx, node, out);
     if (is_literal_node(ctx->grammar, node)) {
         if (parse_literal(ctx, node, out)) return true;
@@ -1507,6 +1505,7 @@ remember_const(pp_context_t *ctx, parse_tree_t *decl)
             .name = own_string(ctx, core_string_dup(name)),
             .module = own_string(ctx, core_string_dup(
                 ctx->unit->module.identifier)),
+            .declaration = sym,
         };
         if (is_const && expr) {
             pp_kind_t initializer_kind = const_literal_kind(ctx, expr);
@@ -1571,8 +1570,8 @@ selected_when_body(pp_context_t *ctx, parse_tree_t *when)
     return nullptr;
 }
 
-static bool
-is_builtin_name(core_string_t name)
+bool
+n00bb_preprocessor_builtin_name(core_string_t name)
 {
     static const char *names[] = {
         "target_os", "target_os_major", "target_os_minor", "target_os_patch",
@@ -1682,7 +1681,7 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
             core_buffer_t *callee = core_buffer_empty();
             bool valid = core_tree_num_children(node)
                 && collect_name_chain(ctx, core_tree_child(node, 0), callee)
-                && is_builtin_name(core_string_borrow(callee->data,
+                && n00bb_preprocessor_builtin_name(core_string_borrow(callee->data,
                                                        callee->byte_len));
             core_buffer_free(callee);
             if (!valid) {
@@ -1706,7 +1705,7 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
                                              "literal-payload");
         parse_tree_t *tuple = payload
             ? child_named(ctx->grammar, payload, "tuple-or-paren") : nullptr;
-        if (!is_builtin_name(builtin) || !tuple
+        if (!n00bb_preprocessor_builtin_name(builtin) || !tuple
             || core_tree_node_value(tuple).rule_index != 1) {
             pp_error(ctx, node,
                      "literal modifiers are not allowed in a preprocessor condition");
@@ -1904,7 +1903,7 @@ replace_builtin(pp_context_t *ctx, parse_tree_t **slot)
 {
     parse_tree_t *node = *slot;
     core_string_t name = builtin_name(ctx, node);
-    if (!is_builtin_name(name)
+    if (!n00bb_preprocessor_builtin_name(name)
         || core_string_eq(name, CORE_STRING_STATIC("compile_warning"))
         || core_string_eq(name, CORE_STRING_STATIC("compile_error")))
         return false;
@@ -2024,10 +2023,6 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
 
     if (is_name(ctx->grammar, node, "import-stmt")) {
         process_import(ctx, node);
-        if (!ctx->failed) {
-            visit_node(ctx, node, parent, depth, child_index, true);
-            visit_node(ctx, node, parent, depth, child_index, false);
-        }
         return;
     }
 
@@ -2087,7 +2082,6 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
     }
     if (replace_builtin(ctx, slot)) node = *slot;
     if (ctx->failed || !node) return;
-    visit_node(ctx, node, parent, depth, child_index, true);
     for (size_t i = 0; i < core_tree_num_children(node);) {
         parse_tree_t *child = core_tree_child(node, i);
         process_node(ctx, &child, node, depth + 1, (int32_t)i);
@@ -2105,7 +2099,6 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
             || is_name(ctx->grammar, node, "body-stmt")
             || is_name(ctx->grammar, node, "expression-stmt")))
         *slot = nullptr;
-    visit_node(ctx, node, parent, depth, child_index, false);
     if (scoped_body) ctx->bindings.len = binding_mark;
 }
 
@@ -2187,7 +2180,6 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     bool previous_cycle_warning = ctx->cycle_warning_emitted;
     ctx->unit = unit;
     ctx->cycle_warning_emitted = false;
-    visit_node(ctx, tree, nullptr, 0, -1, true);
     core_list_t(pp_deferred_stmt_t) imports =
         core_list_new(pp_deferred_stmt_t);
     core_list_t(pp_deferred_stmt_t) deferred =
@@ -2203,7 +2195,6 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
             pp_error(ctx, tree, "module statement tree changed during preprocessing");
             break;
         }
-    visit_node(ctx, tree, nullptr, 0, -1, false);
     core_list_free(imports);
     core_list_free(deferred);
     bool succeeded = !ctx->failed

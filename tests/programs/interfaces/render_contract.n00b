@@ -1,0 +1,25 @@
+public trait Render {
+    func render(self: `T) -> int
+}
+
+public func external_value() -> int {
+    return 7
+}
+
+public type ArchivedPoint {
+    x: int
+}
+
+public variant ArchivedValue {
+    number: int
+    text: string
+}
+
+public enum ArchivedColor {
+    red,
+    green: 2
+}
+
+public type RestrictedPoint {
+    private x: int
+}

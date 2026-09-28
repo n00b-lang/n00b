@@ -1,0 +1,18 @@
+func lower_array_values() -> array[int] {
+    var values: array[int] = [10, 20, 30]
+    return values
+}
+func lower_empty_array() -> array[int] {
+    var values: array[int] = []
+    return values
+}
+
+func lower_tagged_array() -> array[int] {
+    var values: array[int] = array[10, 20]
+    return values
+}
+
+func lower_short_tagged_array() -> array[int] {
+    var values: array[int] = a[30, 40]
+    return values
+}

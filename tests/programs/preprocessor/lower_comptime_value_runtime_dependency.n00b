@@ -1,0 +1,5 @@
+var runtime_value: int = 1
+
+func invalid_compile_time_value() -> int {
+    return comptime runtime_value
+}

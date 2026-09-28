@@ -1,0 +1,4 @@
+import package_dep
+func consume(item: package_dep.PackageRecord) -> package_dep.PackageRecord {
+    return item
+}

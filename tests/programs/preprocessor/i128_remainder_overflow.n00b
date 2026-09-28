@@ -1,0 +1,4 @@
+const lowest = -170141183460469231731687303715884105728
+when lowest % -1 == 0 {
+    var unreachable = true
+}

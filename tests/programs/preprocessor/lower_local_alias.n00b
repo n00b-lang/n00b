@@ -1,0 +1,4 @@
+func local_alias() {
+    var target = 7
+    var borrowed = ref target
+}

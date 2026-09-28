@@ -1,0 +1,13 @@
+var shared_value: int
+
+func maybe_initialize_shared_value(flag: bool) {
+    if flag {
+        shared_value = 7
+    }
+}
+
+comptime {
+    maybe_initialize_shared_value(true)
+}
+
+var copied_value: int = shared_value

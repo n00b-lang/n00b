@@ -1,0 +1,3 @@
+public func remote_return(input: int[]) -> int[4] {
+    return input
+}

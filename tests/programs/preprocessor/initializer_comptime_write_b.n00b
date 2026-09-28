@@ -1,0 +1,2 @@
+import initializer_comptime_write_a
+public var shared_value: int

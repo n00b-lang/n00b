@@ -1,0 +1,1 @@
+func parallel_second() { return 2 }

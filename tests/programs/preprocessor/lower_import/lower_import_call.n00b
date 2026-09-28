@@ -1,0 +1,2 @@
+import dep
+func call_imported(item: int) -> int { return dep.imported(item) }

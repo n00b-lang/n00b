@@ -1,0 +1,6 @@
+type WrongReceiverMode {
+    payload: int
+}
+
+func __init(self: WrongReceiverMode) {
+}

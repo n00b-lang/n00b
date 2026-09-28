@@ -1,0 +1,6 @@
+func comptime_value_body() -> int {
+    return comptime {
+        let local_value = 42
+        value local_value
+    }
+}

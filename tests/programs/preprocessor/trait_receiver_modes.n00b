@@ -1,0 +1,3 @@
+trait CursorOps {
+    func next(modify self: `Cursor) -> `Item?
+}

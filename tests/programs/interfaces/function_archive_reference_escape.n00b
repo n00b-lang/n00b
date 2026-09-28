@@ -1,0 +1,11 @@
+import function_archive_dep
+
+func use_archived_reference() {
+    var target = 1
+    function_archive_dep.archived_keep(ref target)
+    var return_target = 2
+    var returned_ref = function_archive_dep.archived_return(ref return_target)
+    var imported_global_ref = function_archive_dep.archived_global_reference()
+    var cycle_target = 3
+    function_archive_dep.archived_cycle_a(ref cycle_target)
+}

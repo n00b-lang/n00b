@@ -1,0 +1,6 @@
+thread var worker_state: int
+
+func initialize_and_read() -> int {
+    worker_state = 42
+    return worker_state
+}

@@ -1,0 +1,12 @@
+func add_one(x: int) -> int {
+    return x + 1
+}
+
+func use_atomic(x: atomic[int]) -> int {
+    return add_one(x)
+}
+
+func make_atomic(x: int) -> atomic[int] {
+    var result: atomic[int] = x
+    return result
+}

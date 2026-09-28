@@ -1,0 +1,1 @@
+func nested_compile_time() -> int { return comptime 4 }

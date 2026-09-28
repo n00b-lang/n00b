@@ -1,0 +1,7 @@
+func read_option_or_default(item: int?) -> int {
+    return item.get_or_else(0)
+}
+
+func test_option_is_nil(item: int?) -> bool {
+    return item.is_nil()
+}

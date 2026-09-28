@@ -1,0 +1,8 @@
+func labeled_switch(flag: bool, code: int) {
+    outer: while flag {
+        choice: switch code {
+        case 1 { break choice }
+        }
+        break outer
+    }
+}

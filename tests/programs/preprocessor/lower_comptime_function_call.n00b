@@ -1,0 +1,5 @@
+func compile_value() -> int { return 7 }
+
+comptime {
+    var computed: int = compile_value()
+}

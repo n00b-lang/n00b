@@ -1,0 +1,4 @@
+func local_only(input: int) -> int {
+    let copy = input
+    return copy
+}

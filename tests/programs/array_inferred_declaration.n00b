@@ -1,0 +1,5 @@
+var inferred_values = a[1, 2]
+
+func read_inferred_values() -> array[int] {
+    return inferred_values
+}

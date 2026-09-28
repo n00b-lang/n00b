@@ -1,0 +1,5 @@
+import array_archive_dep
+
+func get_grid() -> array[array[int]] {
+    return array_archive_dep.grid
+}

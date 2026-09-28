@@ -1,0 +1,5 @@
+func initial_value() -> int { return 3 }
+var dynamic: int = initial_value()
+dynamic = initial_value()
+var static_value: int = 0
+comptime { static_value = 9; var compile_value: int = 4 }

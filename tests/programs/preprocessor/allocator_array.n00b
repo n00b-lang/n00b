@@ -1,0 +1,3 @@
+func allocate_array(allocator: Allocator) -> int[] {
+    return new_using_allocator[int[]](allocator, 4)
+}

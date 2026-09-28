@@ -1,0 +1,5 @@
+func calculate_extent() -> int {
+    return 3
+}
+
+var call_sized: int[calculate_extent()]

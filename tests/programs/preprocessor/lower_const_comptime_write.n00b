@@ -1,0 +1,2 @@
+const constant_value: int = 1
+comptime { constant_value = 2 }

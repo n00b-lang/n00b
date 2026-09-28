@@ -1,0 +1,14 @@
+type CompletePayload {
+    first: int
+    second: int
+}
+
+variant IncompletePayloadValue {
+    record: CompletePayload
+}
+
+func incomplete_payload() -> IncompletePayloadValue {
+    var item: IncompletePayloadValue = new[IncompletePayloadValue]()
+    item.record = (first = 1)
+    return item
+}

@@ -1,0 +1,13 @@
+func extent() -> int {
+    return 4
+}
+
+public var grid: int[extent()]
+
+public type GridHolder {
+    public cells: int[extent()]
+}
+
+public func echo(input: int[extent()]) -> int[extent()] {
+    return input
+}

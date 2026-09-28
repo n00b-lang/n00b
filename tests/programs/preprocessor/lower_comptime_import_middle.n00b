@@ -1,0 +1,12 @@
+import lower_comptime_import_leaf
+
+const middle_adjustment: int = 0
+
+comptime {
+    middle_adjustment = 4
+}
+
+public func compile_value(delta: int) -> int {
+    return lower_comptime_import_leaf.compile_constant() + delta
+        + middle_adjustment
+}

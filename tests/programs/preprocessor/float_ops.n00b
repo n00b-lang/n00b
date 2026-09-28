@@ -1,0 +1,8 @@
+when !false and (-1.5 < +0.0) and (1.5 + 2.5 == 4.0) and (2.0 != 3.0) {
+    var float_selected = true
+} else {
+    var float_removed = true
+}
+when "alpha" != "beta" {
+    var string_not_equal = true
+}

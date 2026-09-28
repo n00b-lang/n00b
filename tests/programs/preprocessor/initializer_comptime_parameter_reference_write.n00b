@@ -1,0 +1,14 @@
+var first_value: int
+var second_value: int
+
+func initialize(reference) {
+    ref_write(reference, 17)
+}
+
+comptime {
+    initialize(ref first_value)
+    initialize(ref second_value)
+}
+
+var first_copy: int = first_value
+var second_copy: int = second_value

@@ -1,0 +1,4 @@
+when dep.enabled {
+    var import_still_precedes_module = true
+}
+import dep

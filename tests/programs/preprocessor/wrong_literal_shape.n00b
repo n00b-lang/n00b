@@ -1,0 +1,3 @@
+func wrong_literal_shape() {
+    var not_a_collection: int = {}
+}

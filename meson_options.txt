@@ -1,0 +1,7 @@
+option(
+    'stack_object_limit_bytes',
+    type: 'integer',
+    value: 4096,
+    min: 0,
+    description: 'Maximum known object size kept in automatic local storage',
+)

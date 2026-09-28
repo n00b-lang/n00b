@@ -1,0 +1,5 @@
+import render_contract
+
+func read_restricted(point: render_contract.RestrictedPoint) -> int {
+    return point.x
+}

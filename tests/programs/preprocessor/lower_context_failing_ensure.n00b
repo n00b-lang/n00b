@@ -1,0 +1,7 @@
+context FailingEnsure() {
+    enter() {}
+    ensure() { fail 31 }
+}
+func use_failing_ensure() {
+    with FailingEnsure() {}
+}

@@ -1,0 +1,7 @@
+type ConstructorFailure {
+    payload: int
+}
+
+func __init(modify self: ConstructorFailure) fail: int {
+    fail 1
+}

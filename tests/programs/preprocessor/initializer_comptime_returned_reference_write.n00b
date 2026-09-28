@@ -1,0 +1,19 @@
+var shared_value: int
+
+func direct_reference() {
+    return ref shared_value
+}
+
+func forward_reference(reference) {
+    return reference
+}
+
+func initialize_shared_value() {
+    ref_write(forward_reference(direct_reference()), 9)
+}
+
+comptime {
+    initialize_shared_value()
+}
+
+var copied_value: int = shared_value

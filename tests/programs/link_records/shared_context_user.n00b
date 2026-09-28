@@ -1,0 +1,4 @@
+import shared_link_dep
+func shared_context_user() {
+    with shared_link_dep.SharedLinkContext() {}
+}

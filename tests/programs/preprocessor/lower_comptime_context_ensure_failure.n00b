@@ -1,0 +1,11 @@
+context FailingEnsure() {
+    enter() {}
+    ensure() { fail 31 }
+}
+
+func ensure_failure_value() -> int {
+    return comptime {
+        with FailingEnsure() {}
+        value 1
+    }
+}

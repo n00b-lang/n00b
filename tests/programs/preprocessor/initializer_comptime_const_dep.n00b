@@ -1,0 +1,8 @@
+public const scalar_value: int = 1
+public const pair_value = (1, 2)
+const replacement_pair = (3, 4)
+
+comptime {
+    scalar_value = 2
+    pair_value = replacement_pair
+}

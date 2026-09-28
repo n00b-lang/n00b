@@ -1,0 +1,11 @@
+type Meter {
+    amount: int
+}
+trait Comparable {
+    func cmp(left: `T, right: `T) -> i:2
+}
+func cmp(left: Meter, right: Meter) -> i:2 { return 0 : i:2 }
+func less(left: Meter, right: Meter) { return left < right }
+func less_equal(left: Meter, right: Meter) { return left <= right }
+func greater(left: Meter, right: Meter) { return left > right }
+func greater_equal(left: Meter, right: Meter) { return left >= right }

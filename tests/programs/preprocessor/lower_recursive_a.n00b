@@ -1,0 +1,5 @@
+import lower_recursive_b
+public func from_a(flag: bool) -> int {
+    if flag { return lower_recursive_b.from_b(false) }
+    else { return lower_recursive_b.from_b(true) }
+}

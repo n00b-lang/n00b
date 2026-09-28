@@ -1,0 +1,2 @@
+import render_contract
+public func render(self: int) -> string { return "plugin" }

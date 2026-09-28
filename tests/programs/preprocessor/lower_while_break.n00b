@@ -1,0 +1,4 @@
+func loop_break(flag: bool) -> int {
+    while flag { break }
+    return 1
+}

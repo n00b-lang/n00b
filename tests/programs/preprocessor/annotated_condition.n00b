@@ -1,0 +1,3 @@
+when true : bool {
+    var unexpected = true
+}

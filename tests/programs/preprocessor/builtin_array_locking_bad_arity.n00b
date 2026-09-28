@@ -1,0 +1,3 @@
+func invalid_array_locking_type(item: array_locking[int, bool]) -> int {
+    return 0
+}

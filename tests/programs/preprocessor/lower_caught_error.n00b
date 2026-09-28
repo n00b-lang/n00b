@@ -1,0 +1,4 @@
+func fail_with_int() -> int fail: int { fail 7 }
+func catch_error() -> int {
+    try { return fail_with_int()! } else err { return err }
+}

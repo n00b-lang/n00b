@@ -1,0 +1,19 @@
+context QuietRecorder() {
+    enter() {}
+    exit() {}
+    ensure() {}
+}
+
+context FailingEnter() fail: int {
+    enter() { fail 31 }
+    error(problem) {}
+    ensure() {}
+}
+
+func enter_failure_value() -> int {
+    return comptime {
+        var result: int = 5
+        with QuietRecorder(), FailingEnter() { result = 8 }
+        value result
+    }
+}

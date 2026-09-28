@@ -1,0 +1,13 @@
+public enum Color {
+    red,
+    green: 2
+}
+public variant Value {
+    some: int
+}
+public trait Render {
+    func render(self: `T) -> string
+}
+public type Point {
+    x: int
+}

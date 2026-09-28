@@ -1,0 +1,2 @@
+import functions_dep
+func consume() -> int { return functions_dep.default_private_global }

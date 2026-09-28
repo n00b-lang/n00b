@@ -1,0 +1,11 @@
+trait Index_Load {
+    func load(self: `T, index: int) -> array[int] fail: int
+}
+
+func load(self: array[array[int]], index: int) -> array[int] fail: int {
+    return new[array[int]](2)
+}
+
+func get_row(rows: array[array[int]]) -> array[int] fail: int {
+    return rows [0]!
+}

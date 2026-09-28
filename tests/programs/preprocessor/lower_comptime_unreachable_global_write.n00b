@@ -1,0 +1,10 @@
+var result: int = 0
+
+func stop() {
+    return
+    result = 2
+}
+
+comptime {
+    stop()
+}

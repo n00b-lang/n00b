@@ -1,0 +1,2 @@
+import functions_dep
+func consume() { functions_dep.private_function() }

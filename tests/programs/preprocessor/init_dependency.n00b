@@ -1,0 +1,2 @@
+func dependency_init() -> int { return 1 }
+var dependency_value: int = dependency_init()

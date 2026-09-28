@@ -1,0 +1,13 @@
+func defaulted(first: int = later + 1, later: int = 4,
+               last: int = 8) -> int {
+    return first + later + last
+}
+func named(first: int, second: int = 5) -> int { return first + second }
+func first_value() -> int { return 1 }
+func second_value() -> int { return 2 }
+func use_defaults() -> int { return defaulted(last = 12) }
+func use_partial_default() -> int { return defaulted(7, last = 10) }
+func use_named_arguments() -> int { return named(second = 9, first = 2) }
+func use_named_evaluation_order() -> int {
+    return named(second = second_value(), first = first_value())
+}

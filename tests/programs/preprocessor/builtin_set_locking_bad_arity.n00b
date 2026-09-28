@@ -1,0 +1,3 @@
+func invalid_set_locking_type(item: set_locking[int, bool]) -> int {
+    return 0
+}

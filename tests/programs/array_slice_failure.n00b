@@ -1,0 +1,21 @@
+trait Index_Slice {
+    func slice(self: `T, start_ix: int = 0, end_ix: int = -1) -> view[`E] fail: int
+}
+
+func slice(self: array[int], start_ix: int = 0, end_ix: int = -1) -> view[int] fail: int {
+    if start_ix > end_ix { fail 7 }
+    return self [:]!
+}
+
+func propagate_slice(items: array[int]) -> view[int] fail: int {
+    return items [:]!
+}
+
+func catch_slice(items: array[int]) -> int {
+    try {
+        var local_view: view[int] = items [:]!
+    } else err {
+        return err
+    }
+    return 0
+}

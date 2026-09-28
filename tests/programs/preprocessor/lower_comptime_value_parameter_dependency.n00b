@@ -1,0 +1,3 @@
+func invalid_compile_time_parameter(input: int) -> int {
+    return comptime input
+}

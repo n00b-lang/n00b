@@ -1,0 +1,2 @@
+const enabled = true
+public func imported_identity(item: `a) -> `a { return item }

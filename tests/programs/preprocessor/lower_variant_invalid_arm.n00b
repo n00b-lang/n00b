@@ -1,0 +1,9 @@
+variant InvalidArmValue {
+    number: int
+}
+
+func invalid_arm() -> InvalidArmValue {
+    var item: InvalidArmValue = new[InvalidArmValue]()
+    item.missing = 42
+    return item
+}

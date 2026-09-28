@@ -1,0 +1,64 @@
+trait Index_Store {
+    func store(self: `T, index: int, item: array[int]) -> nil fail: int
+}
+
+func store(self: array[array[int]], index: int, item: array[int]) -> nil fail: int {}
+
+var global_target: int[4]
+
+func consume(input: int[4]) {}
+
+func forward(input: int[]) {
+    consume(input)
+}
+
+func assign(input: int[]) {
+    var target: int[4] = input
+    target = input
+}
+
+func return_fixed(input: int[]) -> int[4] {
+    return input
+}
+
+func return_fallible(input: int[]) -> int[4] fail: int {
+    return input
+}
+
+func assign_global(input: int[]) {
+    global_target = input
+}
+
+func replace_out(out target: int[4], input: int[]) {
+    target = input
+}
+
+func update_inout(modify target: int[4], input: int[]) {
+    target = input
+}
+
+func call_out(input: int[]) {
+    var target: int[] = input
+    replace_out(target, input)
+}
+
+func call_inout(input: int[]) {
+    var target: int[] = input
+    update_inout(target, input)
+}
+
+func call_shaped_return(input: int[]) {
+    var target: int[4] = return_fixed(input)
+}
+
+func call_fallible_shaped_return(input: int[]) -> int[4] fail: int {
+    return return_fallible(input)!
+}
+
+func store_shaped_row(matrix: int[4][5], row: int[]) -> nil fail: int {
+    matrix [0] = row
+}
+
+func catch_shaped_store(matrix: int[4][5], row: int[]) -> nil {
+    try { matrix [0] = row } else err { return }
+}

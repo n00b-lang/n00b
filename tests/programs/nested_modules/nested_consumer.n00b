@@ -1,0 +1,5 @@
+import deep.tools
+
+func use_nested(item: deep.tools.Answer) -> int {
+    return deep.tools.answer(item)
+}

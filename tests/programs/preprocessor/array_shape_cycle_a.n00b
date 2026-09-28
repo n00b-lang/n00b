@@ -1,0 +1,3 @@
+import array_shape_cycle_b
+
+var outer_grid: int[2][3]

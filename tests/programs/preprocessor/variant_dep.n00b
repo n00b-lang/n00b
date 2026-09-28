@@ -1,0 +1,4 @@
+public variant RemoteValue {
+    number: int
+    text: string
+}

@@ -1,0 +1,13 @@
+trait Render {
+    func render(self: `T) -> `R
+}
+
+func render(self: int) -> int { return self }
+
+func generic_render(item: `T) -> `R where `T: Render {
+    return item.render()
+}
+
+func call_generic_render() -> int {
+    return generic_render(42)
+}

@@ -1,0 +1,7 @@
+type NoConstructor {
+    payload: int
+}
+
+func invalid_construction() -> NoConstructor {
+    return new[NoConstructor]()
+}

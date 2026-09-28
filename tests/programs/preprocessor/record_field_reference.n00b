@@ -1,0 +1,7 @@
+type FieldRecord {
+    amount: int
+}
+
+func read_field(item: FieldRecord) -> int {
+    return item.amount
+}

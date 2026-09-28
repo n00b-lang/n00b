@@ -1,0 +1,5 @@
+func choose(flag_a: bool, flag_b: bool) -> int {
+    if flag_a { return 1 }
+    elif flag_b { return 2 }
+    else { return 3 }
+}

@@ -1,0 +1,6 @@
+var total: int = 1
+
+func compound_global_assignment() -> int {
+    total += 2
+    return total
+}

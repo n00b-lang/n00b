@@ -1,0 +1,20 @@
+const extent: int = 4
+var one_dimensional: int[4]
+var rectangular: int[4][5]
+var mixed_shape: int[4][]
+var unsized_shape: int[][]
+var explicit_array_shape: array[int][]
+var named_extent_shape: int[extent]
+
+type ShapeHolder {
+    public rectangular_field: int[extent][5]
+    public ragged_field: int[4][]
+}
+
+func shape_parameter(input: int[4][5]) -> int[4][] {
+    return input
+}
+
+func shape_return() -> int[4] {
+    return one_dimensional
+}

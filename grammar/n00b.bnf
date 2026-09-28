@@ -30,6 +30,7 @@
                    | <labeled-switch>
                    | <assert-stmt>
                    | <import-stmt>
+                   | <visible-inferred-assign>
                    | <assign-stmt>
                    | <binop-assign-stmt>
                    | <expression-stmt>
@@ -53,6 +54,7 @@
                          | <switch-stmt>
                          | <try-stmt>
                          | <with-stmt>
+                         | <comptime-stmt>
                          | <continue-stmt>
                          | <break-stmt>
                          | <return-stmt>
@@ -96,17 +98,15 @@
 <value-elif-clause> @branch($1, $2) @infer("$2") ::= %"elif" <expression> <value-body>
 <value-else-clause> @infer("$1") ::= %"else" <value-body>
 
-<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify element_of(method_return(method_return($3, iter), next))") ::=
+<for-stmt> @scope("for") @loop($3, $4) @infer("`t unify element_of(method_return(method_return($3, iter), next))") ::=
        %"for" <for-var-list> %"in" <for-in-target-list> <body>
 
-<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify $3") ::=
-       %"for" <for-var-list> %"in" <range> <body>
+<for-stmt> @scope("for") @loop($3, $4) @infer("$1 unify $3") ::=
+       %"for" <for-range-var> %"from" <range-loop> <body>
 
-<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify $3") ::=
-       %"for" <for-var-list> %"from" <range> <body>
-
-<for-var-list> ::= %IDENTIFIER
-<for-var-list> ::= %IDENTIFIER %"," <for-var-list>
+<for-range-var> @declares($0) @infer("`t") ::= %IDENTIFIER
+<for-var-list> @declares($0) @infer("`t") ::= %IDENTIFIER
+<for-var-list> @declares($0) @infer("`t") ::= %IDENTIFIER %"," <for-var-list>
 
 <for-in-target-list> ::= <expression>
 
@@ -149,7 +149,9 @@
 # name equiv is required for there to be equal types.
 # The `alias` keyword here means that we have one type, with multiple names.
 
-<alias-stmt> @scope("type", $1) @declares($1) @type($1) ::= %"type" %IDENTIFIER %"=" <type-spec>
+<alias-stmt> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
+       <member-visibility>? %"alias" %IDENTIFIER %"=" <type-spec>
+     | <member-visibility>? %"type" %IDENTIFIER %"=" <type-spec>
                | %"alias" %IDENTIFIER %"=" <type-spec>
 
 <context-def> @scope("context", $1) @declares($1) ::=
@@ -222,8 +224,9 @@
 
 <range> @infer("$0") ::= <range-parts>
 <range-parts> @infer("$0 unify $2") ::= <expression> <range-sep> <expression>
-
-<range-sep> ::= %"to" | %"until"
+<range-loop> @infer("$0") ::= <range-parts> <range-step>?
+<range-step> ::= %"step" <expression>
+<range-sep> ::= %"to" | %"until" | %".."
 
 <break-stmt> @jump("break") ::= %"break" %IDENTIFIER?
 <continue-stmt> @jump("continue") ::= %"continue" %IDENTIFIER?
@@ -236,7 +239,15 @@
 
 <import-stmt> @declares($1, "module") ::= %"import" <member-chain> (%"from" %STRING_LIT)?
 
-<variable-decl> ::= <declaration-prefix> <sym-decl-list>
+<variable-decl> ::= <variable-visibility>? <declaration-prefix> <sym-decl-list>
+
+<variable-visibility> @visibility("public") ::= %"public"
+<variable-visibility> @visibility("private") ::= %"private"
+<variable-visibility> @visibility("package") ::= %"package"
+
+<visible-inferred-assign> @visibility("public") ::= %"public" <assign-stmt>
+<visible-inferred-assign> @visibility("private") ::= %"private" <assign-stmt>
+<visible-inferred-assign> @visibility("package") ::= %"package" <assign-stmt>
 
 <declaration-prefix> ::= <storage-class>? <binding-kind>
 <storage-class> ::= %"thread"
@@ -312,7 +323,7 @@
 
 <error-type> ::= %"fail" %":" <one-tspec>
 
-<enum-stmt> @scope("enum", $1) @type($1) @declares($1) @exposes ::= <enum-prefix> %IDENTIFIER <block-start> <enum-items> <block-end>
+<enum-stmt> @namespace("type") @scope("enum", $1) @type($1) @exposes ::= <enum-prefix> %IDENTIFIER <block-start> <enum-items> <block-end>
 
 <enum-prefix> ::= <member-visibility>? %"enum"
 
@@ -343,11 +354,13 @@
 <and-expr> @infer("bool") ::= <and-expr> %"and" <equality-expr>
 <and-expr> @emit("identity", $0) ::= <equality-expr>
 
-<equality-expr> @infer("bool") ::= <compare-expr> <equality-op> <compare-expr>
+<equality-expr> @emit("binary", $0, $2) @infer("bool") ::=
+    <compare-expr> <equality-op> <compare-expr>
 <equality-expr> @emit("identity", $0) ::= <compare-expr>
 <equality-op> ::= %"==" | %"!="
 
-<compare-expr> @infer("compare($0, $2)") ::= <bitor-expr> <compare-op> <bitor-expr>
+<compare-expr> @emit("binary", $0, $2) @infer("compare($0, $2)") ::=
+    <bitor-expr> <compare-op> <bitor-expr>
 <compare-expr> @emit("identity", $0) ::= <bitor-expr>
 <compare-op> ::= %"<" | %"<=" | %">" | %">="
 
@@ -373,15 +386,15 @@
 <mul-op> ::= %"*" | %"/" | %"%"
 
 <unary-expr> @infer("bool")     ::= %"!" <unary-expr>
-<unary-expr> @infer("$0")       ::= %"-" <unary-expr>
-<unary-expr> @infer("$0")       ::= %"+" <unary-expr>
-<unary-expr> @infer("ref[$0]")  ::= %"ref" <unary-expr>
+<unary-expr> @emit("negate", $1) @infer("$1") ::= %"-" <unary-expr>
+<unary-expr> @emit("identity", $1) @infer("$1") ::= %"+" <unary-expr>
+<unary-expr> @operator("ref") @infer("ref[$1]") ::= %"ref" <unary-expr>
 <unary-expr> @operator("cast") @infer("$0") ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> @emit("identity", $0) ::= <postfix-expr>
 
-<postfix-expr> @infer("method_return($0)") ::= <postfix-expr> %"." %IDENTIFIER
-<postfix-expr> @infer("element_of($0)") ::= <postfix-expr> %"[" <index-contents> %"]"
-<postfix-expr> @infer("slice_of($0)") ::= <postfix-expr> %"[" <slice-contents> %"]"
+<postfix-expr> @emit("module_member") @infer("field_return($0)") ::= <postfix-expr> %"." %IDENTIFIER
+<postfix-expr> @emit("call") @infer("element_of($0)") ::= <postfix-expr> %"[" <index-contents> %"]"
+<postfix-expr> @emit("call") @infer("slice_of($0)") ::= <postfix-expr> %"[" <slice-contents> %"]"
 <postfix-expr> @operator("unwrap_result") @infer("unwrap_result($0)") ::= <postfix-expr> %"!"
 <postfix-expr> @emit("call") @infer("return_of($0)") @call($0) ::= <postfix-expr> %"(" %")"
 <postfix-expr> @emit("call") @infer("return_of($0)") @call($0, $2) ::= <postfix-expr> %"(" <call-args> %")"
@@ -412,6 +425,8 @@
             | <switch-value-expr>
             | <try-value-expr>
             | <comptime-value-expr>
+            | <new-expr>
+            | <allocator-new-expr>
             | <typeof-expr>
             | <tuple-or-paren>
 
@@ -427,6 +442,10 @@
 <primary> @varref($0) @emit("reference") @infer("lookup($0)") ::= %IDENTIFIER
 
 <typeof-expr> @infer("typespec") ::= %"typeof" %"(" <expression> %")"
+
+<new-expr> @infer("`t") @emit("array_new") ::= %"new" (%"[" <type-spec> %"]")? %"(" <call-args>? %")"
+
+<allocator-new-expr> @infer("`t") @emit("allocator_new") ::= %"new_using_allocator" %"[" <type-spec> %"]" %"(" <call-args> %")"
 
 <block-value-expr> @scope("block") @infer("$1") ::= <block-start> <value-body-stmts> <block-end>
 
@@ -456,17 +475,21 @@
 # is a compile-time diagnostic anchored in the literal; there is no runtime
 # fallback. Cached results must include the handler and all declared external
 # inputs in their cache key.
-<tagged-lit> @notrivia($1) @nospace($1) @adjacent("prefix") ::=
+<tagged-lit> @notrivia($1) @nospace($1) @adjacent("prefix") @infer("`t") @emit("tagged_literal") ::=
        <literal-prefix> (%"[" <tspec-list> %"]")? <literal-payload>
 
 <literal-prefix> ::= %IDENTIFIER
 
 <literal-payload> ::= <modified-simple-lit>
                     | <embed-lit>
-                    | <list-lit>
+                    | <tagged-list-lit>
                     | <dict-or-set-lit>
 
-<modified-simple-lit> ::= %STRING_LIT
+# Tagged list payloads need a distinct node so their handler owns the literal
+# shape instead of also lowering it as an ordinary list literal.
+<tagged-list-lit> ::= %"[" <list-elems> %"]"
+
+<modified-simple-lit> @emit("string_literal") ::= %STRING_LIT
 
 # EMBED is a free-form fence literal. The lexer expresses the proposed syntax
 # with fill("-") and pad("required"): [- ws... ws -]. The opening and closing
@@ -481,10 +504,11 @@
 
 <simple-lit> @literal("int") @emit("literal") ::= %INT_LIT
 <simple-lit> @literal("int") @emit("literal") ::= %HEX_LIT
-<simple-lit> @literal("f64")    ::= %FLOAT_LIT
-<simple-lit> @literal("string") ::= %STRING_LIT
+<simple-lit> @literal("f64") @emit("literal") ::= %FLOAT_LIT
+<simple-lit> @literal("string") @infer("string") @emit("string_literal") ::= %STRING_LIT
 <simple-lit> @literal("char")   ::= %CHAR_LIT
 <simple-lit> @literal("bool") @emit("literal") ::= <bool-lit>
+<simple-lit> @literal("nil") @infer("nil") @emit("nil_literal") ::= %"nil"
 
 <bool-lit> @literal("bool") @emit("literal") ::= %"true"
 <bool-lit> @literal("bool") @emit("literal") ::= %"false"
@@ -507,9 +531,11 @@
 # Empty braces introduce a type variable with an implicit literal-shape trait.
 # Context and literal modifiers solve that shape; they are not an untyped
 # dictionary/set choice made by the parser.
-<dict-or-set-lit> @infer("$0") ::= %"{" <dict-entries> %"}"
-<dict-or-set-lit> @infer("$0") ::= %"{" <set-entries> %"}"
-<dict-or-set-lit> @infer("`t") @constrain($0, Brace_Literal) ::= %"{" %"}"
+<dict-or-set-lit> @emit("brace_literal") @infer("$0") ::=
+       %"{" <dict-entries> %"}"
+<dict-or-set-lit> @emit("brace_literal") @infer("$0") ::=
+       %"{" <set-entries> %"}"
+<dict-or-set-lit> @emit("brace_literal") @infer("`t") @constrain($0, Brace_Literal) ::= %"{" %"}"
 
 <dict-entries> @infer("$0 unify $1") ::= <dict-entry> %"," <dict-entries>
 <dict-entries>                       ::= <dict-entry>
@@ -523,13 +549,16 @@
 
 <tuple-or-paren> @infer("`t") ::= %"(" <expression> %"," <expr-comma-list> %")"
 <tuple-or-paren>              ::= %"(" <expression> %")"
-<tuple-or-paren> @record($1)  ::= %"(" <named-field-list> %")"
+<tuple-or-paren> @infer("`t") ::= %"(" <named-field-list> %")"
 
 <named-field-list> ::= <named-field> %"," <named-field-list>
                      | <named-field>
                      | <named-field> %","
 
-<named-field> ::= %IDENTIFIER (%":" <type-spec>)? <assign-op> <expression>
+<named-field> @infer("$2 unify $4") ::=
+       %IDENTIFIER %":" <type-spec> <assign-op> <expression>
+<named-field> @infer("$2") ::=
+       %IDENTIFIER <assign-op> <expression>
 
 <expr-comma-list> ::= <expression> %"," <expr-comma-list>
                     | <expression>
@@ -542,12 +571,20 @@
 <one-tspec> @infer("option[$0]") ::= <base-tspec> %"?"
 <one-tspec> ::= <base-tspec>
 
-<base-tspec> ::= <tspec-tvar>
-               | %"nil"
-               | <sized-int-tspec>
-               | <member-chain> (%"[" <tspec-list> %"]")?
-               | <tspec-func>
-               | %"(" <union-tspec> %")"
+<base-tspec> ::= <base-tspec-core> <array-dimensions>*
+
+<base-tspec-core> ::= <tspec-tvar>
+                    | %"nil"
+                    | <sized-int-tspec>
+                    | <member-chain> <tspec-application>?
+                    | <tspec-func>
+                    | %"(" <union-tspec> %")"
+
+<tspec-application> @disambig(n00bb_not_generic_type, 100) ::=
+    %"[" <tspec-list> %"]"
+<array-dimensions> @disambig(n00bb_generic_type, 100) ::=
+    <array-dimension>+
+<array-dimension> ::= %"[" <expression>? %"]"
 
 <tspec-tvar> ::= %"`" %IDENTIFIER
 
@@ -583,7 +620,7 @@
 
 <trait-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
-<type-decl> @scope("type", $2) @declares($2) @type($2) @exposes ::=
+<type-decl> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
        <member-visibility>? %"type" %IDENTIFIER <type-body>
 
 <type-body> ::= <block-start> <type-decl-spec-list> <block-end>
@@ -594,14 +631,14 @@
 <type-decl-one> @field($1) ::=
        <member-visibility>? %IDENTIFIER
 
-<variant-decl> @scope("variant", $2) @declares($2) @type($2) @exposes ::=
+<variant-decl> @namespace("type") @scope("variant", $2) @type($2) @exposes ::=
        <member-visibility>? %"variant" %IDENTIFIER <variant-body>
 
 <variant-body> ::= <block-start> <variant-decl-spec-list> <block-end>
 <variant-decl-spec-list> ::= (<variant-decl-one> (<eos>+ <variant-decl-one>)*)?
 <variant-decl-one> @declares($1, $3) ::= <member-visibility>? %IDENTIFIER %":" <type-spec>
 
-<trait-decl> @scope("trait", $2) @declares($2) @type($2) @exposes ::= <member-visibility>? %"trait" %IDENTIFIER <where-clause>? <trait-body>
+<trait-decl> @namespace("type") @scope("trait", $2) @type($2) @exposes ::= <member-visibility>? %"trait" %IDENTIFIER <where-clause>? <trait-body>
 
 <trait-body> ::= <block-start> <trait-spec-list> <block-end>
 <trait-spec-list> ::= (<trait-spec> (<eos>+ <trait-spec>)*)?

@@ -1,0 +1,6 @@
+variant ConstructorVariant {
+    item: int
+}
+
+func __init(modify self: ConstructorVariant) {
+}

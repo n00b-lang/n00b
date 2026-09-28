@@ -1,0 +1,10 @@
+public type ImportedAuditRecord {
+    never_set: int
+    write_only: int
+}
+
+func set_imported_field(item: ImportedAuditRecord) {
+    item.write_only = 1
+}
+
+func imported_orphan() {}

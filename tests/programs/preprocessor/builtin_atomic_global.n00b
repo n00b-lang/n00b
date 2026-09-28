@@ -1,0 +1,6 @@
+var counter: atomic[int] = 0
+
+func update_counter(input: int) -> int {
+    counter = input
+    return counter
+}

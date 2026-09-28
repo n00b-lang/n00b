@@ -1,0 +1,5 @@
+import array_alias_archive_dep
+
+func use_alias(input: int[]) -> int[] {
+    return array_alias_archive_dep.echo_row(input)
+}

@@ -1,0 +1,160 @@
+var target: int = 1
+var borrowed = ref target
+var borrowed_copy = borrowed
+var module_borrow = ref target
+var aggregate_global_target = 25
+trait KeepsArgument {
+    func keep(self: `T, input_ref: `R) -> int
+}
+func keep(self: int, input_ref) -> int { return 0 }
+trait ReturnsArgument {
+    func echo(self: `T, input_ref: `R) -> `R
+}
+func echo(self: int, input_ref) { return input_ref }
+func generic_echo(item: `T, input_ref: `R) -> `R where `T: ReturnsArgument {
+    return item.echo(input_ref)
+}
+trait PacksArgument {
+    func pack(self: `T, input_ref: `R) -> list[`R]
+}
+func pack(self: int, input_ref) { return [input_ref] }
+trait ReferenceIdentity {
+    func identity(self: `T) -> `T
+}
+func identity(self) { return self }
+func direct_echo(input_ref) { return input_ref }
+func stores_local_reference() {
+    var short_lived = 3
+    module_borrow = ref short_lived
+}
+func returns_local_reference() {
+    var local_target = 2
+    return ref local_target
+}
+func keep_reference(input_ref) {}
+func passes_stored_reference() {
+    var call_target = 5
+    var borrowed_call = ref call_target
+    var borrowed_copy_call = borrowed_call
+    keep_reference(borrowed_call)
+}
+func keep_parameter_copy(input_ref) {
+    var local_copy = input_ref
+}
+func return_parameter_copy(input_ref) {
+    var local_copy = input_ref
+    return local_copy
+}
+func forward_to_escaping_parameter(input_ref) {
+    return_parameter_copy(input_ref)
+}
+func recursive_escape_a(input_ref) {
+    recursive_escape_b(input_ref)
+}
+func recursive_escape_b(input_ref) {
+    recursive_escape_a(input_ref)
+    return_parameter_copy(input_ref)
+}
+func local_copy_does_not_escape() {
+    var copy_target = 9
+    keep_parameter_copy(ref copy_target)
+}
+func returned_copy_escapes() {
+    var returned_copy_target = 10
+    return_parameter_copy(ref returned_copy_target)
+}
+func nested_forwarding_copy_escapes() {
+    var nested_copy_target = 11
+    forward_to_escaping_parameter(ref nested_copy_target)
+}
+func recursive_forwarding_copy_escapes() {
+    var recursive_copy_target = 12
+    recursive_escape_a(ref recursive_copy_target)
+}
+func returns_stored_reference() {
+    var return_target = 6
+    var borrowed_return = ref return_target
+    return borrowed_return
+}
+func stores_reference_in_container() {
+    var container_target = 7
+    var borrowed_container = ref container_target
+    var references = [borrowed_container]
+}
+func returns_reference_container() {
+    var escaping_target = 8
+    var escaping_reference = ref escaping_target
+    var escaping_references = [escaping_reference]
+    return escaping_references
+}
+func make_reference_container() {
+    var returned_container_target = 13
+    return [ref returned_container_target]
+}
+func use_reference_container() {
+    var container_result = make_reference_container()
+}
+func use_variable_reference_container() {
+    var variable_container_result = returns_reference_container()
+}
+func global_reference_ignoring_argument(ignored) {
+    return ref aggregate_global_target
+}
+func nested_call_container(input_ref) {
+    return [global_reference_ignoring_argument(input_ref)]
+}
+func nested_call_container_via_variable(input_ref) {
+    var intermediate_container = [global_reference_ignoring_argument(input_ref)]
+    var copied_container = intermediate_container
+    return copied_container
+}
+func use_nested_call_container() {
+    var unrelated_nested_target = 26
+    var nested_call_result = nested_call_container(ref unrelated_nested_target)
+}
+func use_nested_call_container_via_variable() {
+    var unrelated_nested_copy_target = 27
+    var nested_copy_result = nested_call_container_via_variable(
+        ref unrelated_nested_copy_target)
+}
+func use_generic_trait_alias() {
+    var generic_trait_target = 28
+    var item = 1
+    var generic_trait_result = generic_echo(item, ref generic_trait_target)
+}
+func package_reference(item_ref) {
+    return [item_ref]
+}
+func use_parameter_reference_container() {
+    var parameter_container_target = 14
+    var parameter_container_result = package_reference(ref parameter_container_target)
+}
+func unused_trait_argument_does_not_escape() {
+    var trait_target = 15
+    var item = 1
+    item.keep(ref trait_target)
+}
+func trait_receiver_alias() {
+    var trait_receiver_target = 16
+    var trait_receiver = ref trait_receiver_target
+    var trait_receiver_result = trait_receiver.identity()
+    var direct_identity_result = identity(trait_receiver)
+}
+func trait_explicit_argument_alias() {
+    var trait_argument_target = 20
+    var item = 1
+    var trait_argument_result = item.echo(ref trait_argument_target)
+}
+func trait_aggregate_argument_alias() {
+    var trait_aggregate_target = 21
+    var item = 1
+    var trait_aggregate_result = item.pack(ref trait_aggregate_target)
+}
+func direct_returned_argument_escapes() {
+    var direct_return_target = 17
+    var direct_return_result = direct_echo(ref direct_return_target)
+}
+func alias_free_local() {
+    var isolated = 4
+    return isolated
+}

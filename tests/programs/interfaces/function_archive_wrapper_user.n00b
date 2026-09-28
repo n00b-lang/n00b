@@ -1,0 +1,11 @@
+import function_archive_wrapper
+import function_archive_dep
+
+func use_archived_wrappers() {
+    var target = 1
+    function_archive_wrapper.archived_keep_wrapper(ref target)
+    var return_target = 2
+    var returned_ref = function_archive_wrapper.archived_return_wrapper(
+        ref return_target)
+    var global_ref = function_archive_wrapper.archived_global_wrapper()
+}

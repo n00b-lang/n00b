@@ -1,0 +1,5 @@
+import dep
+import dep2
+when enabled {
+    var ambiguous = true
+}

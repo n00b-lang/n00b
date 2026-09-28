@@ -1,0 +1,10 @@
+public type ArchiveOther {
+}
+
+public func render(self: ArchiveOther) -> int {
+    return 2
+}
+
+public func measure(self: ArchiveOther) -> int fail: string {
+    return 4
+}

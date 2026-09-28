@@ -1,0 +1,11 @@
+trait Index_Store {
+    func store(self: `T, index: int, item: array[int])
+}
+
+func store(self: array[array[int]], index: int, item: array[int]) {}
+
+func make_rows() {
+    var rows: int[][] = new[array[array[int]]](3)
+    rows [0] = new[array[int]](5)
+    rows [1] = new[array[int]](2)
+}

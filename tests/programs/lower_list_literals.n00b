@@ -1,0 +1,14 @@
+func lower_list_values() -> list[int] {
+    var values: list[int] = [10, 20]
+    return values
+}
+
+func lower_tagged_list_values() -> list[int] {
+    var values: list[int] = list[30, 40]
+    return values
+}
+
+func lower_short_tagged_list_values() -> list[int] {
+    var values: list[int] = l[50, 60]
+    return values
+}

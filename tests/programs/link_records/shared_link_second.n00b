@@ -1,0 +1,5 @@
+import shared_link_dep
+var shared_link_copy: int = shared_link_dep.shared_link_value()
+public func second_root() -> int {
+    return shared_link_dep.shared_link_value()
+}

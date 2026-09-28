@@ -1,0 +1,3 @@
+func consume(items: list[int]) {
+    for item in items { }
+}

@@ -1,0 +1,17 @@
+context DefaultedContext(base: int, middle: int = base + 1,
+                         final: int = middle + 1) provides: int {
+    enter() { return final }
+    ensure(guard) {}
+}
+
+func context_default_chain() -> int {
+    with result_value = DefaultedContext(10) {
+        return result_value
+    }
+}
+
+func context_default_override() -> int {
+    with result_value = DefaultedContext(10, final = 20) {
+        return result_value
+    }
+}

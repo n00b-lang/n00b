@@ -1,0 +1,3 @@
+func unsupported_string_shape() -> string {
+    return binary[1]
+}

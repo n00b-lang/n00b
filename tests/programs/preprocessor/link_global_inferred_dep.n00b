@@ -1,0 +1,3 @@
+import link_global_dep
+
+public remote_global = link_global_dep.remote_global

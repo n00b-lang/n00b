@@ -1,0 +1,3 @@
+import initializer_comptime_write_b
+comptime { initializer_comptime_write_b.shared_value = 7 }
+var copied_value: int = initializer_comptime_write_b.shared_value

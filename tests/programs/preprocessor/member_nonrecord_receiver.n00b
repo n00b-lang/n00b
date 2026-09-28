@@ -1,0 +1,3 @@
+func read_nonrecord(item: int) -> int {
+    return item.payload
+}

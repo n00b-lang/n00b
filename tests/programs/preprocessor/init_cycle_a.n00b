@@ -1,0 +1,4 @@
+import init_cycle_b
+func init_cycle_a_value() -> int { return 1 }
+var init_cycle_a_runtime: int = init_cycle_a_value()
+comptime { var init_cycle_a_compile: int = 1 }

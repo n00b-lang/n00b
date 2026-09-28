@@ -1,0 +1,9 @@
+type Blob {
+    a: int
+    b: int
+    c: int
+}
+
+func use_blob(blob_value: atomic[Blob]) -> atomic[Blob] {
+    return blob_value
+}

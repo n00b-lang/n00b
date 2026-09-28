@@ -1,0 +1,4 @@
+func package_function() {}
+private func private_function() {}
+public func public_function() {}
+var default_private_global: int = 0

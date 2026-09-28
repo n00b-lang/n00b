@@ -1,0 +1,5 @@
+import lower_comptime_failure_middle
+
+func runtime_value() -> int {
+    return comptime lower_comptime_failure_middle.fail_value()!
+}

@@ -1,0 +1,2 @@
+func fail_with_int() -> int fail: int { fail 7 }
+func unhandled_error() -> int { return fail_with_int() }

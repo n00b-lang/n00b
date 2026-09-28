@@ -1,0 +1,6 @@
+func multi_name_non_tuple_loop() {
+    for first, second in [0, 1] {
+        first
+        second
+    }
+}

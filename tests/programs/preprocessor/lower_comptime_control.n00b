@@ -1,0 +1,8 @@
+comptime {
+    var compile_value: int = 0
+    if true {
+        compile_value = 1
+    } else {
+        compile_value = 2
+    }
+}

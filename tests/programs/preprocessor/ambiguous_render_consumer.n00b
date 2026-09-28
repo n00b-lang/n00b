@@ -1,0 +1,7 @@
+import render_contract
+import render_plugin
+import other_render_contract
+func generic_render(item: `T) -> string where `T: Render {
+    return item.render()
+}
+func call_generic_render() -> string { return generic_render(1) }

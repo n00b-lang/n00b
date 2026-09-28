@@ -1,0 +1,2 @@
+import initializer_cycle_import_b
+public var cycle_a: int = initializer_cycle_import_b.cycle_b

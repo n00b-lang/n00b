@@ -1,0 +1,13 @@
+import contract
+
+public type Label {
+    payload: int
+}
+
+public func render(self: Label) -> int {
+    return self.payload
+}
+
+public func measure(self: Label) -> int {
+    return self.payload
+}

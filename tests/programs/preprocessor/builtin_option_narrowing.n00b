@@ -1,0 +1,7 @@
+func read_option(item: int?) -> int {
+    if item != nil {
+        return item.get()
+    } else {
+        return 0
+    }
+}

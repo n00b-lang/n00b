@@ -1,0 +1,6 @@
+import recursive_b
+func needs_text(item: string) -> string { return item }
+public func from_a() {
+    if true { return recursive_b.from_b() } else { return needs_text("text") }
+}
+func checks_group_type() { return needs_text(from_a()) }

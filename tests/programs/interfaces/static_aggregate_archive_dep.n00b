@@ -1,0 +1,12 @@
+public type StaticPoint {
+    x: int
+    label: string
+}
+
+public const point: StaticPoint = (label = "point", x = 7)
+public const anonymous = (right = "r", left = 8)
+public const pair = (9, "tuple")
+public const lookup: dict[string, int] = {"one": 1, "two": 2}
+public const flags: set[int] = {1, 2}
+public const empty_lookup: dict[string, int] = {}
+public const empty_flags: set[int] = {}

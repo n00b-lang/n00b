@@ -1,0 +1,15 @@
+type LoopItem {
+    number: int
+    label: string
+}
+
+var next_item: LoopItem?
+public func iter(self: int) -> string { return "cursor" }
+public func next(modify self: string) -> LoopItem? { return next_item }
+
+func multi_name_loop(items: int) {
+    for number, label in items {
+        number + 1
+        label + "!"
+    }
+}

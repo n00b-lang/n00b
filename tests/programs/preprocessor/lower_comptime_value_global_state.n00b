@@ -1,0 +1,9 @@
+const phase_state: int = 7
+
+comptime {
+    phase_state = 7
+}
+
+func read_phase_state() -> int {
+    return comptime phase_state
+}

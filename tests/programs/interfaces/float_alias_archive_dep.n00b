@@ -1,0 +1,3 @@
+public func archive_add(left: float, right: f64) -> float {
+    return left + right
+}

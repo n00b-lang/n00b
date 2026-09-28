@@ -1,0 +1,8 @@
+import generic_trait_archive_dep
+
+type ArchivePlain {
+}
+
+func use_archived_render(item: ArchivePlain) -> int {
+    return generic_trait_archive_dep.archived_render(item)
+}

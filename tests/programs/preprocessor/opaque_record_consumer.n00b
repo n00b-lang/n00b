@@ -1,0 +1,5 @@
+import opaque_dep
+
+func read_hidden(item: opaque_dep.OpaqueRecord) -> int {
+    return item.hidden
+}

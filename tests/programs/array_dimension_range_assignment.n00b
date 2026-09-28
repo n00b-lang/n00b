@@ -1,0 +1,7 @@
+const extent: int = 1
+
+comptime {
+    extent = 2
+}
+
+var positive_assignment: int[extent] = new[int[extent]]()

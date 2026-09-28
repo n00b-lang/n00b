@@ -1,0 +1,3 @@
+when compile_warning("not a value") {
+    var impossible = true
+}

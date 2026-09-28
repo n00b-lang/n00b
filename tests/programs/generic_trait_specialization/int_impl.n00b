@@ -1,0 +1,9 @@
+import contract
+
+public func render(self: int) -> int {
+    return self
+}
+
+public func measure(self: int) -> int {
+    return self
+}

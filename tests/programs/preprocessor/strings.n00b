@@ -1,0 +1,10 @@
+when "a\n" == "a\x0a" {
+    var selected = 1
+    when "\xff" == "ÿ" {
+        var unicode_selected = true
+    } else {
+        var unicode_removed = true
+    }
+} else {
+    var removed = 2
+}

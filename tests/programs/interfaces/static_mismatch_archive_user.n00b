@@ -1,0 +1,5 @@
+import static_mismatch_archive_dep
+
+func read_zero() -> int {
+    return static_mismatch_archive_dep.zero
+}

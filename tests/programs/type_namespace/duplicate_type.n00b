@@ -1,0 +1,2 @@
+type DuplicateType {}
+type DuplicateType { field: int }

@@ -1,0 +1,11 @@
+variant SwitchValue {
+    number: int
+    empty: nil
+}
+func identity_variant(item: SwitchValue) -> SwitchValue { return item }
+func lower_variant_nonvariable_subject(item: SwitchValue) {
+    switch identity_variant(item) {
+        case number {}
+        else {}
+    }
+}

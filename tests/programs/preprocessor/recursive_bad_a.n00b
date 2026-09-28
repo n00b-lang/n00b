@@ -1,0 +1,4 @@
+import recursive_bad_b
+func needs_int(item: int) -> int { return item }
+public func from_a() { return recursive_bad_b.from_b() }
+func rejects_bad_group_type() { return needs_int(from_a()) }

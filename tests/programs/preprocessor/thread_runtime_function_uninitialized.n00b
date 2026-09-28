@@ -1,0 +1,5 @@
+thread var worker_state: int
+
+func read_worker_state() -> int {
+    return worker_state
+}

@@ -1,0 +1,7 @@
+public type DeepAnswer {
+    amount: int
+}
+
+public func answer(item: DeepAnswer) -> int {
+    return item.amount
+}

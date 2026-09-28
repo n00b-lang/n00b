@@ -1,0 +1,1 @@
+func writes_output(out result: int) { result = 1 }

@@ -1,0 +1,6 @@
+import lower_comptime_import_leaf
+import lower_comptime_import_middle
+
+func runtime_value() -> int {
+    return comptime lower_comptime_import_middle.compile_value(3)
+}

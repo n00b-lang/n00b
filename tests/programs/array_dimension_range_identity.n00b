@@ -1,0 +1,4 @@
+const extent: int = 7
+
+var positive_identity: int[extent - extent + 1] = new[int[extent - extent + 1]]()
+var positive_constant: int[extent + 1] = new[int[extent + 1]]()

@@ -1,0 +1,3 @@
+func needs_text(item: string) -> string { return item }
+func wrong_argument() { return needs_text(1) }
+func wrong_variable_argument(item: int) -> string { return needs_text(item) }

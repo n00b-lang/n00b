@@ -1,0 +1,1 @@
+var ragged_literal: int[2][2] = a[a[1, 2], a[3]]

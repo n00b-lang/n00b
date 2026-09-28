@@ -1,0 +1,7 @@
+func lower_switch_expression_pattern(code: int, wanted: int) -> int {
+    switch code {
+        case wanted { return 1 }
+        case 0 { return 2 }
+        else { return 3 }
+    }
+}

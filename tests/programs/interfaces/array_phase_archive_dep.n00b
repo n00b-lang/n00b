@@ -1,0 +1,2 @@
+public const fixed_values: array[int] = [1, 2]
+public thread var worker_values: array[int] = [3, 4]

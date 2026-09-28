@@ -1,0 +1,3 @@
+func unregistered_string_modifier() -> string {
+    return custom"payload"
+}

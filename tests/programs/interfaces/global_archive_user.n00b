@@ -1,0 +1,14 @@
+import global_archive_dep
+
+func read_remote() -> int { return global_archive_dep.remote_global }
+func read_worker_count() -> int { return global_archive_dep.worker_count }
+func read_worker_ratio() -> f64 { return global_archive_dep.worker_ratio }
+func read_worker_label() -> string { return global_archive_dep.worker_label }
+func read_empty_worker_label() -> string {
+    return global_archive_dep.empty_worker_label
+}
+func read_label() -> string { return global_archive_dep.label }
+
+func write_remote(new_value: int) {
+    global_archive_dep.remote_global = new_value
+}

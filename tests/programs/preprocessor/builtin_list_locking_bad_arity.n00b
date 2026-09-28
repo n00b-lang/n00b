@@ -1,0 +1,3 @@
+func invalid_list_locking_type(item: list_locking[int, bool]) -> int {
+    return 0
+}

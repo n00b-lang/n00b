@@ -1,0 +1,5 @@
+public type Answer {
+    public payload: int
+}
+
+public func answer(item: Answer) -> int { return item.payload }

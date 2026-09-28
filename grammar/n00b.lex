@@ -6,6 +6,9 @@
 		    escapes('\\'),
 		    escapes('"'),
 		    escapes("'"),
+		    escape_literal("«"),
+		    escape_literal("»"),
+		    escape_literal("["),
 		    escape_digits("x", "0123456789abcdefABCDEF", "2"),
 		    escape_digits("u", "0123456789abcdefABCDEF", "4"),
 		    escape_digits("U", "0123456789abcdefABCDEF", "8"))
@@ -32,3 +35,4 @@
 @lex-layout(indent("INDENT", "DEDENT"), newline("NEWLINE"),
 	    tabs("reject"), mixed_indent("reject"), brackets("()[]"))
 @lex-fallback("reject")
+@lex-operators(add(".."))

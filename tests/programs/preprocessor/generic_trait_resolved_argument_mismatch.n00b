@@ -1,0 +1,15 @@
+trait ReadFailure {
+    func read_failure(self: `T, input: `A) -> bool
+}
+
+func read_failure(self: int, input: int) -> bool {
+    return true
+}
+
+func generic_read_failure(item: `T, input: `A) -> bool where `T: ReadFailure {
+    return item.read_failure(input)
+}
+
+func use_read_failure() -> bool {
+    return generic_read_failure(1, "wrong")
+}
