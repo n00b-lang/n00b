@@ -33,6 +33,8 @@ typedef struct {
     int32_t             anon_counter;
 } actx_t;
 
+static bool link_type_members(parse_sym_entry_t *type, parse_scope_t *members);
+
 static core_string_t
 ns_default(void)
 {
@@ -66,7 +68,8 @@ type_of_child(actx_t *a, parse_visit_t *v, parse_child_ref_t ref)
     parse_tree_t *node = parse_tree_resolve_child_ref(v->grammar, v->node,
                                                         ref);
 
-    return node ? ir_type_from_node(a->types, v->grammar, node) : nullptr;
+    return node ? parse_annot_resolve_type_node(a->out, a->types,
+        v->grammar, node) : nullptr;
 }
 
 static bool
@@ -84,14 +87,17 @@ scope_open(parse_visit_t *v)
         }
     }
 
-    parse_symtab_push_scope(a->out->symtab, ns_default(), scope_name);
+    parse_symtab_push_scope_all(a->out->symtab, scope_name);
 
     parse_scope_t *scope = parse_symtab_current_scope(a->out->symtab, ns_default());
 
     v->pn->scope     = scope;
-    scope->scope_tag = an->scope_tag;
-
-    parse_symtab_set_scope_node(a->out->symtab, ns_default(), v->node);
+    for (int32_t i = 0; i < a->out->symtab->ns_count; i++) {
+        parse_scope_t *peer = parse_symtab_scope_in_namespace(
+            a->out->symtab, scope, a->out->symtab->namespaces[i]->ns_name);
+        if (peer) peer->scope_tag = an->scope_tag;
+    }
+    parse_symtab_set_scope_node_all(a->out->symtab, v->node);
 
     if (name_is(an->scope_tag, "function")) {
         parse_symtab_add(a->out->symtab, ns_default(),
@@ -116,7 +122,7 @@ adt_scope_open(parse_visit_t *v)
         scope_name = core_string_borrow(buf, n > 0 ? (size_t)n : 0);
     }
 
-    parse_symtab_push_scope(a->out->symtab, ns_default(), scope_name);
+    parse_symtab_push_scope_all(a->out->symtab, scope_name);
 
     parse_scope_t *scope = parse_symtab_current_scope(a->out->symtab, ns_default());
     core_string_t kind  = an->adt_kind;
@@ -130,10 +136,15 @@ adt_scope_open(parse_visit_t *v)
     }
 
     v->pn->scope     = scope;
-    scope->adt_kind  = kind;
-    scope->scope_tag = an->scope_tag.data ? an->scope_tag : an->adt_kind;
+    for (int32_t i = 0; i < a->out->symtab->ns_count; i++) {
+        parse_scope_t *peer = parse_symtab_scope_in_namespace(
+            a->out->symtab, scope, a->out->symtab->namespaces[i]->ns_name);
+        if (!peer) continue;
+        peer->adt_kind = kind;
+        peer->scope_tag = an->scope_tag.data ? an->scope_tag : an->adt_kind;
+    }
 
-    parse_symtab_set_scope_node(a->out->symtab, ns_default(), v->node);
+    parse_symtab_set_scope_node_all(a->out->symtab, v->node);
 
     return true;
 }
@@ -143,7 +154,7 @@ scope_close(parse_visit_t *v)
 {
     actx_t *a = (actx_t *)v->thunk;
 
-    parse_symtab_pop_scope(a->out->symtab, ns_default());
+    parse_symtab_pop_scope_all(a->out->symtab);
 
     return true;
 }
@@ -166,6 +177,12 @@ node_leave(parse_visit_t *v)
 {
     actx_t *a = (actx_t *)v->thunk;
 
+    parse_sym_entry_t *sym = v->pn ? v->pn->sym : nullptr;
+    if (sym && sym->kind == PARSE_SYM_TYPEDEF && sym->member_scope
+        && !link_type_members(sym, sym->member_scope)) {
+        a->out->inference_failed = true;
+    }
+
     if (a->out->on_node) {
         a->out->on_node(v, false, a->out->on_node_context);
     }
@@ -187,7 +204,8 @@ static void
 declared(actx_t *a, parse_visit_t *v, parse_sym_entry_t *sym)
 {
     a->last_sym = sym;
-    v->pn->sym  = sym;
+    if (!parse_tree_set_resolution_symbol(v->node, sym))
+        a->out->inference_failed = true;
 }
 
 static parse_sym_entry_t *
@@ -229,9 +247,9 @@ annot_declares(parse_visit_t *v)
     core_string_t namespace_name = decl_ns(a);
     parse_namespace_t *ns = parse_symtab_ns(a->out->symtab, namespace_name);
     parse_scope_t *decl_scope = ns ? ns->current : nullptr;
-    bool scope_is_decl_body = v->pn->scope && decl_scope == v->pn->scope
-                           && v->pn->scope->node == v->node
-                           && v->pn->scope->parent;
+    bool scope_is_decl_body = v->pn->scope && decl_scope
+                           && decl_scope->node == v->node
+                           && decl_scope->parent;
 
     if (scope_is_decl_body) {
         parse_symtab_enter_scope(a->out->symtab,
@@ -270,6 +288,19 @@ annot_declares(parse_visit_t *v)
 }
 
 static bool
+link_type_members(parse_sym_entry_t *type, parse_scope_t *members)
+{
+    if (!type || !members) return false;
+    type->member_scope = members;
+    for (parse_sym_entry_t *member = members->first_in_scope; member;
+         member = member->next_in_scope) {
+        if (member->owner_type && member->owner_type != type) return false;
+        member->owner_type = type;
+    }
+    return true;
+}
+
+static bool
 annot_type_decl(parse_visit_t *v)
 {
     actx_t           *a  = (actx_t *)v->thunk;
@@ -280,10 +311,29 @@ annot_type_decl(parse_visit_t *v)
         return true;
     }
 
-    parse_sym_entry_t *sym = parse_symtab_add(a->out->symtab, ns_default(), nm,
-                                          PARSE_SYM_TYPEDEF, v->node);
+    core_string_t namespace_name = decl_ns(a);
+    parse_namespace_t *ns = parse_symtab_ns(a->out->symtab, namespace_name);
+    parse_scope_t *decl_scope = ns ? ns->current : nullptr;
+    bool scope_is_decl_body = v->pn->scope && decl_scope
+                           && decl_scope->node == v->node
+                           && decl_scope->parent;
+
+    if (scope_is_decl_body) {
+        parse_symtab_enter_scope(a->out->symtab, namespace_name,
+                                 decl_scope->parent);
+    }
+
+    parse_sym_entry_t *sym = parse_symtab_add(a->out->symtab, namespace_name,
+                                          nm, PARSE_SYM_TYPEDEF, v->node);
+
+    if (scope_is_decl_body) {
+        parse_symtab_enter_scope(a->out->symtab, namespace_name, decl_scope);
+    }
 
     sym->type = type_of_child(a, v, an->name_ref);
+    parse_scope_t *members = decl_scope && decl_scope->lexical_scope
+        ? decl_scope->lexical_scope : decl_scope;
+    if (members && !link_type_members(sym, members)) return false;
 
     declared(a, v, sym);
 
@@ -339,6 +389,21 @@ member_decl(parse_visit_t *v, bool is_method)
     sym->is_field  = !is_method;
     sym->is_method = is_method;
     sym->type = type_of_child(a, v, an->type_ref);
+    if (a->pending_visibility.data) {
+        sym->visibility = a->pending_visibility;
+        a->pending_visibility = (core_string_t){0};
+    }
+
+    parse_scope_t *member_scope = v->pn->scope;
+    parse_sym_entry_t *owner = member_scope && member_scope->node
+        && !core_tree_is_leaf(member_scope->node)
+        ? core_tree_node_value(member_scope->node).sym : nullptr;
+    if (owner && owner->kind == PARSE_SYM_TYPEDEF) {
+        sym->owner_type = owner;
+        if (owner->member_scope && owner->member_scope != member_scope)
+            return false;
+        owner->member_scope = member_scope;
+    }
 
     declared(a, v, sym);
 
@@ -669,6 +734,25 @@ annot_adt_close(parse_visit_t *v)
 }
 
 static bool
+collect_record_members(actx_t *a, parse_tree_t *node, parse_scope_t *scope,
+                       core_list_t(th_member) *members)
+{
+    if (!node || core_tree_is_leaf(node)) return true;
+    parse_sym_entry_t *field = core_tree_node_value(node).sym;
+    if (field && field->is_field && field->scope == scope) {
+        if (!field->type) field->type = th_var(a->types);
+        core_list_push(*members, ((th_member){
+            .name = field->name.data,
+            .type = field->type,
+        }));
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        if (!collect_record_members(a, core_tree_child(node, i), scope,
+                                    members)) return false;
+    return true;
+}
+
+static bool
 annot_record(parse_visit_t *v)
 {
     actx_t          *a   = (actx_t *)v->thunk;
@@ -680,23 +764,7 @@ annot_record(parse_visit_t *v)
     }
 
     core_list_t(th_member) members = core_list_new(th_member);
-
-    for (parse_scope_t *s = v->pn->scope; s && !members.len; s = nullptr) {
-        for (parse_sym_entry_t *e = s->first_in_scope; e;
-             e = e->next_in_scope) {
-            if (!e->is_field) {
-                continue;
-            }
-
-            if (!e->type) {
-                e->type = th_var(a->types);
-            }
-
-            core_list_push(members,
-                           ((th_member){.name = e->name.data,
-                                        .type = e->type}));
-        }
-    }
+    collect_record_members(a, v->node, v->pn->scope, &members);
 
     th_type *rec = th_record(a->types, members.data, members.len);
 
@@ -710,6 +778,8 @@ annot_record(parse_visit_t *v)
 
     if (sym) {
         sym->type = rec;
+        if (v->pn->scope && !link_type_members(sym, v->pn->scope))
+            return false;
     }
 
     for (parse_scope_t *s = v->pn->scope; s; s = nullptr) {
@@ -747,7 +817,7 @@ annot_record(parse_visit_t *v)
         parse_scope_t *outer = inner ? inner->parent : nullptr;
 
         if (outer) {
-            parse_symtab_enter_scope(a->out->symtab, ns_default(), outer);
+            parse_symtab_enter_scope_all(a->out->symtab, outer);
         }
 
         parse_sym_entry_t *bound = parse_symtab_add(a->out->symtab, ns_default(),
@@ -755,11 +825,12 @@ annot_record(parse_visit_t *v)
                                                 v->node);
 
         if (outer) {
-            parse_symtab_enter_scope(a->out->symtab, ns_default(), inner);
+            parse_symtab_enter_scope_all(a->out->symtab, inner);
         }
 
         if (bound) {
             bound->type = rec;
+            if (inner && !link_type_members(bound, inner)) return false;
             declared(a, v, bound);
         }
     }
@@ -839,6 +910,27 @@ annot_implements(parse_visit_t *v)
 }
 
 static bool
+field_symbol_for_node(parse_tree_t *root, parse_tree_t *target,
+                      parse_sym_entry_t *field,
+                      parse_sym_entry_t **result)
+{
+    if (!root) return false;
+    if (!core_tree_is_leaf(root)) {
+        parse_sym_entry_t *symbol = core_tree_node_value(root).sym;
+        if (symbol && symbol->is_field) field = symbol;
+    }
+    if (root == target) {
+        *result = field;
+        return true;
+    }
+    if (core_tree_is_leaf(root)) return false;
+    for (size_t i = 0; i < core_tree_num_children(root); i++)
+        if (field_symbol_for_node(core_tree_child(root, i), target, field,
+                                  result)) return true;
+    return false;
+}
+
+static bool
 annot_visibility(parse_visit_t *v)
 {
     actx_t          *a   = (actx_t *)v->thunk;
@@ -850,10 +942,20 @@ annot_visibility(parse_visit_t *v)
             ? core_tree_node_value(v->parent).sym : nullptr;
         parse_namespace_t *ns = parse_symtab_ns(a->out->symtab, ns_default());
         parse_scope_t *scope = ns ? ns->current : nullptr;
+        parse_sym_entry_t *field = nullptr;
+        bool type_member = scope && scope->node
+            && core_string_eq(scope->scope_tag,
+                              CORE_STRING_STATIC("type"))
+            && field_symbol_for_node(scope->node, v->node, nullptr, &field)
+            && field;
         if ((!parent_declaration ||
-             parent_declaration->kind == PARSE_SYM_PARAM) &&
+             parent_declaration->kind == PARSE_SYM_PARAM) && !type_member &&
             scope && scope->node)
             parent_declaration = core_tree_node_value(scope->node).sym;
+        if (type_member) {
+            sym = field;
+            parent_declaration = nullptr;
+        }
         if (parent_declaration &&
             parent_declaration->kind != PARSE_SYM_PARAM)
             sym = parent_declaration;
@@ -988,6 +1090,8 @@ cf_assigns(parse_visit_t *v)
 
     l->cond      = child(v, v->annot->name_ref);
     l->then_body = child(v, v->annot->value_ref);
+    parse_sym_entry_t *symbol = v->pn ? v->pn->sym : nullptr;
+    if (symbol && !parse_sym_add_definition(symbol, v->node)) return false;
 
     return true;
 }
@@ -1016,8 +1120,8 @@ cf_varref(parse_visit_t *v)
                                                     ns_default(), nm);
 
     if (sym) {
-        sym->uses++;
-        v->pn->sym = sym;
+        if (!parse_sym_add_use(sym, v->node)) return false;
+        if (!parse_tree_set_resolution_symbol(v->node, sym)) return false;
     }
     else {
         core_list_push(a->out->undefined, v->node);
@@ -1082,8 +1186,9 @@ annot_infer(parse_visit_t *v)
     }
 
     bool     ok = false;
-    th_type *t  = parse_infer_eval(an->infer_ast, v, a->types, a->out->symtab,
-                                 &ok);
+    th_type *t = parse_infer_eval_with_type_node_resolver(an->infer_ast, v,
+        a->types, a->out->symtab, a->out->type_node_resolver,
+        a->out->type_node_resolver_context, &ok);
 
     if (!ok || !t) {
         annot_report_infer_failure(v, a);
@@ -1269,7 +1374,7 @@ scope_reenter(parse_visit_t *v)
     actx_t *a = (actx_t *)v->thunk;
 
     if (v->pn->scope) {
-        parse_symtab_enter_scope(a->out->symtab, ns_default(), v->pn->scope);
+        parse_symtab_enter_scope_all(a->out->symtab, v->pn->scope);
     }
 
     return true;
@@ -1281,7 +1386,7 @@ scope_leave(parse_visit_t *v)
     actx_t *a = (actx_t *)v->thunk;
 
     if (v->pn->scope) {
-        parse_symtab_leave_scope(a->out->symtab, ns_default());
+        parse_symtab_leave_scope_all(a->out->symtab);
         a->last_sym = nullptr;
     }
 
@@ -1341,6 +1446,27 @@ parse_annot_result_set_node_callback(parse_annot_result_t *result,
 }
 
 void
+parse_annot_result_set_type_node_resolver(
+    parse_annot_result_t *result,
+    parse_infer_type_node_resolver_fn resolver, void *context)
+{
+    if (!result) return;
+    result->type_node_resolver = resolver;
+    result->type_node_resolver_context = context;
+}
+
+th_type *
+parse_annot_resolve_type_node(parse_annot_result_t *result, th_ctx *types,
+                              parse_grammar_t *grammar, parse_tree_t *node)
+{
+    if (!types || !grammar || !node) return nullptr;
+    th_type *resolved = result && result->type_node_resolver
+        ? result->type_node_resolver(types, grammar, node,
+              result->type_node_resolver_context) : nullptr;
+    return resolved ? resolved : ir_type_from_node(types, grammar, node);
+}
+
+void
 parse_annot_result_set_diagnostics(parse_annot_result_t *result,
                                    core_diagnostics_t *diagnostics,
                                    const core_translation_unit_t *unit)
@@ -1348,23 +1474,6 @@ parse_annot_result_set_diagnostics(parse_annot_result_t *result,
     if (!result) return;
     result->diagnostics = diagnostics;
     result->diagnostic_unit = unit;
-}
-
-void
-parse_annot_result_mark_inferred(parse_annot_result_t *result,
-                                 parse_sym_entry_t *symbol)
-{
-    if (!result || !symbol) {
-        return;
-    }
-
-    for (size_t i = 0; i < core_list_len(result->inferred); i++) {
-        if (result->inferred.data[i] == symbol) {
-            return;
-        }
-    }
-
-    core_list_push(result->inferred, symbol);
 }
 
 size_t
@@ -1396,7 +1505,11 @@ parse_annot_resolve_undefined(parse_annot_result_t *result)
                     else pn->type = symbol_type;
                 }
             }
-            symbol->uses++;
+            if (!parse_sym_add_use(symbol, node)) {
+                result->inference_failed = true;
+                result->undefined.data[retained++] = node;
+                continue;
+            }
             resolved++;
         }
         else result->undefined.data[retained++] = node;
@@ -1581,7 +1694,6 @@ parse_annot_result_free(parse_annot_result_t *r)
 
     core_free(r->params.data);
     core_free(r->shadowed.data);
-    core_free(r->inferred.data);
     core_free(r->undefined.data);
     core_free(r->impl);
 

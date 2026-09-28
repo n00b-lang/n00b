@@ -17,10 +17,20 @@ typedef struct ir_cleanup_t {
     struct ir_cleanup_t *next;
 } ir_cleanup_t;
 
+typedef struct {
+    uint64_t hash;
+    th_type *type;
+    th_type *definition;
+    struct ir_module_t *owner;
+} ir_context_type_definition_t;
+
 struct ir_ctx_t {
     core_arena_t   arena;
     th_ctx       *types;
     ir_cleanup_t *cleanups;
+    ir_context_type_definition_t *type_definitions;
+    size_t type_definition_count;
+    size_t type_definition_capacity;
 };
 
 void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg);
@@ -124,6 +134,7 @@ uint32_t    ir_rd_def_tok(const ir_rd_t *r, uint32_t d);
 uint32_t    ir_rd_use_tok(ir_rd_t *r, ir_instr_t *use, ir_local_t *l);
 
 void  ir_quote(core_buffer_t *b, const char *s);
+void  ir_quote_n(core_buffer_t *b, const char *s, size_t length);
 void  ir_lit_into(core_buffer_t *b, ir_lit_t v);
 char *ir_lit_text(ir_lit_t v);
 

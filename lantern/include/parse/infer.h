@@ -27,9 +27,13 @@ typedef enum : uint8_t {
     PARSE_INFER_SLICE_OF,
     PARSE_INFER_UNWRAP_RESULT,
     PARSE_INFER_METHOD_RETURN,
+    PARSE_INFER_FIELD_RETURN,
 } parse_infer_proj_t;
 
 typedef struct parse_infer_expr_t parse_infer_expr_t;
+typedef th_type *(*parse_infer_type_node_resolver_fn)(
+    th_ctx *types, parse_grammar_t *grammar, parse_tree_t *node,
+    void *context);
 
 struct parse_infer_expr_t {
     parse_infer_kind_t   kind;
@@ -63,3 +67,7 @@ th_type *parse_infer_eval(const parse_infer_expr_t *e,
                         th_ctx                 *tc,
                         parse_symtab_t           *st,
                         bool                   *ok);
+th_type *parse_infer_eval_with_type_node_resolver(
+    const parse_infer_expr_t *e, parse_visit_t *v, th_ctx *tc,
+    parse_symtab_t *st, parse_infer_type_node_resolver_fn resolver,
+    void *resolver_context, bool *ok);

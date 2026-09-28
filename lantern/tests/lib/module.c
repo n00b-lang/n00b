@@ -123,6 +123,17 @@ main(void)
     check("duplicate import references are stored only once",
           core_translation_unit_add_import(&unit, &dependency)
               && core_translation_unit_import_count(&unit) == 1);
+    core_module_spec_t duplicate_spec = {0};
+    core_source_file_t duplicate_source = {0};
+    core_translation_unit_t duplicate_module = {0};
+    core_module_spec_init(&duplicate_spec, CORE_STRING_STATIC("pkg.absent"));
+    core_source_file_init(&duplicate_source,
+        CORE_STRING_STATIC("mem://pkg/absent-copy"), "", 0);
+    core_translation_unit_init(&duplicate_module, &duplicate_spec,
+                               &duplicate_source);
+    check("distinct source TUs with one module identity are diagnosed",
+          !core_translation_unit_add_import(&unit, &duplicate_module)
+              && core_translation_unit_has_fatal_diagnostics(&unit));
     check("cyclic translation-unit references are permitted",
           core_translation_unit_add_import(&dependency, &unit)
               && core_translation_unit_import(&dependency, 0) == &unit);
@@ -154,6 +165,7 @@ main(void)
               && !invalid.path.data && !invalid.contents);
 
     core_translation_unit_release(&dependency);
+    core_translation_unit_release(&duplicate_module);
     core_translation_unit_release(&unit);
     core_translation_unit_release(&leaf);
     check("translation-unit and source payloads are released",
@@ -161,6 +173,7 @@ main(void)
     core_source_file_release(&missing);
     core_source_file_release(&invalid);
     core_module_spec_release(&other);
+    core_module_spec_release(&duplicate_spec);
     core_module_spec_release(&spec);
     core_module_spec_release(&leaf_spec);
     check("module-spec payload is released", released == 3);

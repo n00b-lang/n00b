@@ -666,6 +666,26 @@ static void test_function_error_channels_unify_and_generalize(void)
     th_ctx_free(ctx);
 }
 
+static void test_named_type_record_definitions(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_member members[] = {
+        {.name = "amount", .type = th_name(ctx, "int")},
+    };
+    th_type *named = th_name(ctx, "FieldRecord");
+    th_type *record = th_record(ctx, members, 1);
+    th_type *different = th_record(ctx, nullptr, 0);
+
+    check("named types retain their identity while exposing record shape",
+          th_type_define(ctx, named, record)
+          && th_type_definition(ctx, named) == record
+          && th_record_lookup_in(ctx, named, "amount") == members[0].type
+          && th_record_lookup(named, "amount") == nullptr);
+    check("a named type definition cannot be silently replaced",
+          !th_type_define(ctx, named, different));
+    th_ctx_free(ctx);
+}
+
 int main(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -694,6 +714,7 @@ int main(void)
     test_a_constrained_var_prints_its_bound();
     test_methods_are_attached_to_receiver_types();
     test_function_error_channels_unify_and_generalize();
+    test_named_type_record_definitions();
 
     return report("th constraints");
 }

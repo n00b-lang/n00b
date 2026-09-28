@@ -65,6 +65,7 @@ bool        ir_symkind_from_name(const char *s, ir_symkind_t *out);
 
 ir_descriptor_t *ir_layout_of(ir_module_t *m, th_type *t, const char *target);
 ir_descriptor_t *ir_layout_of_targetless(ir_module_t *m, th_type *t);
+void ir_layout_invalidate_type(ir_module_t *m, th_type *t);
 ir_descriptor_t *ir_layout_ensure(ir_module_t *m, th_type *t,
                                   const char *target);
 ir_descriptor_t *ir_layout_ensure_targetless(ir_module_t *m, th_type *t);
@@ -82,6 +83,9 @@ bool ir_layout_pin_variant(ir_module_t *m, th_type *t, ir_variant_repr_t r);
 bool ir_layout_pin_indirect(ir_module_t *m, th_type *t, ir_indirect_repr_t r);
 
 bool ir_layout_run(ir_module_t *m, ir_diags_t *d);
+/* Compute one type's layout even when the type is not reachable from an IR
+ * value or instruction. The descriptor is stored for the module target. */
+bool ir_layout_compute(ir_module_t *m, th_type *type, ir_diags_t *d);
 bool ir_layout_is_settled(const ir_layout_val_t *v);
 
 extern const ir_pass_t ir_pass_layout;

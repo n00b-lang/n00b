@@ -7,7 +7,7 @@
 #include "th/environment.h"
 
 #define TEST_ENV_ROOT_TYPE UINT64_C(0x7468656e762e726f)
-#define TEST_ENV_ARCHIVE_ABI UINT64_C(0x7468656e76617202)
+#define TEST_ENV_ARCHIVE_ABI UINT64_C(0x7468656e76617204)
 
 typedef struct {
   uint64_t id;
@@ -89,8 +89,8 @@ static bool mutate_environment_visibility(const char *path, bool trait,
     offset = 8;
     for (size_t i = 0; valid && i < origin_count; i++) {
       valid = skip_archive_strings(payload, size, &offset, 3) &&
-              offset <= size && size - offset >= 4;
-      if (valid) offset += 4;
+              offset <= size && size - offset >= 24;
+      if (valid) offset += 24;
     }
     size_t trait_count = 0;
     if (valid && offset <= size && size - offset >= 8) {
@@ -100,7 +100,7 @@ static bool mutate_environment_visibility(const char *path, bool trait,
     size_t target = 0;
     if (valid && trait && trait_count) {
       valid = skip_archive_strings(payload, size, &offset, 3) &&
-              offset <= size && size - offset >= 4;
+              offset <= size && size - offset >= 24;
       target = offset;
     } else if (valid) {
       for (size_t i = 0; valid && i < trait_count; i++) {
@@ -163,8 +163,8 @@ static bool mutate_environment_metadata_owner(const char *path,
     offset += 8;
     for (size_t i = 0; valid && i < count; i++) {
       valid = skip_archive_strings(payload, size, &offset, 3) &&
-              offset <= size && size - offset >= 4;
-      if (valid) offset += 4;
+              offset <= size && size - offset >= 24;
+      if (valid) offset += 24;
     }
   } else valid = false;
   for (unsigned group = 0; valid && group < 2; group++) {
@@ -179,6 +179,16 @@ static bool mutate_environment_metadata_owner(const char *path,
       valid = skip_archive_strings(payload, size, &offset, strings) &&
               offset <= size && size - offset >= 52;
       if (valid) offset += 52;
+    }
+  }
+  if (valid && root_record->schema_version >= 8) {
+    valid = offset <= size && size - offset >= 8;
+    size_t count = valid ? (size_t)read_le_u64(payload + offset) : 0;
+    if (valid) offset += 8;
+    for (size_t i = 0; valid && i < count; i++) {
+      valid = skip_archive_strings(payload, size, &offset, 4) &&
+              offset <= size && size - offset >= 20;
+      if (valid) offset += 20;
     }
   }
   size_t metadata_count = 0;
@@ -389,6 +399,33 @@ int main(void) {
             env, "base.pairs.int_get", "get", "pairs", "base", TH_ENV_PUBLIC,
             fn1(types, th_apply(types, "Pair", first_int_pair_args, 2),
                 integer)));
+
+  th_type *map_trait_receiver = th_var(types);
+  check("register trait for overlapping map receiver patterns",
+        th_env_register_trait(
+            env, "MapReadable", "traits", "base", TH_ENV_PUBLIC,
+            method_record(types, "map_get",
+                          fn1(types, map_trait_receiver, integer))));
+  th_arg int_value_map_args[] = {
+      {.kind = TH_ARG_TYPE, .type = integer},
+      {.kind = TH_ARG_TYPE, .type = th_var(types)},
+  };
+  th_arg text_value_map_args[] = {
+      {.kind = TH_ARG_TYPE, .type = th_var(types)},
+      {.kind = TH_ARG_TYPE, .type = string},
+  };
+  check("register first partially concrete map method",
+        register_function(env, "base.maps.int_get", "map_get", "maps-int",
+                          "base", TH_ENV_PUBLIC,
+                          fn1(types, th_apply(types, "Map",
+                                              int_value_map_args, 2),
+                              integer)));
+  check("register second incomparable map method",
+        register_function(env, "base.maps.text_get", "map_get", "maps-text",
+                          "base", TH_ENV_PUBLIC,
+                          fn1(types, th_apply(types, "Map",
+                                              text_value_map_args, 2),
+                              integer)));
 
   th_type *integer_text_receiver = th_var(types);
   check("register integer text trait",
@@ -647,6 +684,16 @@ int main(void) {
       "most specific function candidate wins dispatch",
       th_env_method_lookup(inside, box_int, "BoxReadable", "get", &selected) &&
           !strcmp(selected.qualified_name, "base.box.int_get"));
+  th_type *box_pattern_item = th_var(inside);
+  th_arg box_pattern_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = box_pattern_item,
+  };
+  th_type *box_pattern = th_apply(inside, "Box", &box_pattern_arg, 1);
+  check("structural type-pattern subsumption distinguishes generic receivers",
+        box_pattern && th_env_type_pattern_subsumes(box_pattern, box_int) &&
+            !th_env_type_pattern_subsumes(box_int, box_pattern) &&
+            th_env_type_pattern_subsumes(box_int, box_int));
   const char *selected_trait = nullptr;
   check("method-name lookup selects the applicable visible trait contract",
         th_env_method_resolve_by_name(inside, box_int, "get", &selected,
@@ -771,6 +818,53 @@ int main(void) {
         invalid_trait_bound_early &&
             !th_ctx_set_environment(late_invalid_trait_context, env,
                                     "consumer", "base"));
+  th_ctx *scoped_method_context = th_ctx_new();
+  th_type *scoped_method_receiver = th_var(scoped_method_context);
+  th_type *scoped_method_result = th_var(scoped_method_context);
+  bool scoped_method_added = th_ctx_set_scope(
+      scoped_method_context, "consumer", "base") &&
+      th_var_constrain(scoped_method_context, scoped_method_receiver,
+          (th_constraint){.kind = TH_CON_METHOD,
+              .method = {.name = "read", .result = scoped_method_result}});
+  bool scoped_method_bound = scoped_method_added &&
+      th_unify_in_place(scoped_method_context, scoped_method_receiver,
+                        th_name(scoped_method_context, "int"));
+  check("deferred method obligations retain their authoring package",
+        scoped_method_bound &&
+            th_ctx_set_environment(scoped_method_context, env, "consumer",
+                                   "other") &&
+            th_unify(scoped_method_context, scoped_method_result,
+                     th_name(scoped_method_context, "int")));
+  th_ctx *scoped_trait_context = th_ctx_new();
+  th_type *scoped_trait_receiver = th_var(scoped_trait_context);
+  bool scoped_trait_added = th_ctx_set_scope(
+      scoped_trait_context, "consumer", "base") &&
+      th_var_constrain(scoped_trait_context, scoped_trait_receiver,
+          (th_constraint){.kind = TH_CON_IMPLEMENTS, .iface = "Readable"});
+  bool scoped_trait_bound = scoped_trait_added &&
+      th_unify_in_place(scoped_trait_context, scoped_trait_receiver,
+                        th_name(scoped_trait_context, "int"));
+  check("deferred trait obligations retain their authoring package",
+        scoped_trait_bound &&
+            th_ctx_set_environment(scoped_trait_context, env, "consumer",
+                                   "other"));
+  th_ctx *wrong_scoped_trait_context = th_ctx_new();
+  th_type *wrong_scoped_trait_receiver = th_var(wrong_scoped_trait_context);
+  bool wrong_scope_added = th_ctx_set_scope(
+      wrong_scoped_trait_context, "consumer", "other") &&
+      th_var_constrain(wrong_scoped_trait_context, wrong_scoped_trait_receiver,
+          (th_constraint){.kind = TH_CON_IMPLEMENTS, .iface = "Readable"});
+  bool wrong_scope_bound = wrong_scope_added &&
+      th_unify_in_place(wrong_scoped_trait_context,
+                        wrong_scoped_trait_receiver,
+                        th_name(wrong_scoped_trait_context, "int"));
+  check("deferred trait obligations do not inherit a later package scope",
+        wrong_scope_bound &&
+            !th_ctx_set_environment(wrong_scoped_trait_context, env,
+                                    "consumer", "base"));
+  th_ctx_free(wrong_scoped_trait_context);
+  th_ctx_free(scoped_trait_context);
+  th_ctx_free(scoped_method_context);
   th_ctx_free(late_invalid_trait_context);
   th_ctx_free(late_trait_context);
   th_ctx_free(late_invalid_context);
@@ -874,6 +968,16 @@ int main(void) {
   check("incomparable overlapping methods are reported as ambiguous",
         th_env_method_resolve(inside, concrete_pair, "PairReadable", "get",
                               &selected) == TH_ENV_METHOD_AMBIGUOUS);
+  th_arg concrete_map_args[] = {
+      {.kind = TH_ARG_TYPE, .type = th_name(inside, "int")},
+      {.kind = TH_ARG_TYPE, .type = th_name(inside, "string")},
+  };
+  th_type *concrete_map = th_apply(inside, "Map", concrete_map_args, 2);
+  check("generic map receiver satisfies both overlapping candidates",
+        th_env_implements(inside, concrete_map, "MapReadable"));
+  check("incomparable map receiver patterns are ambiguous",
+        th_env_method_resolve(inside, concrete_map, "MapReadable", "map_get",
+                              &selected) == TH_ENV_METHOD_AMBIGUOUS);
   check("method-name lookup propagates ambiguity across trait contracts",
         th_env_method_resolve_by_name(inside, concrete_pair, "get", &selected,
                                       &selected_trait) ==
@@ -936,7 +1040,8 @@ int main(void) {
       base_library_types, deferred_fetch_result, &deferred_fetch_argument, 1,
       nullptr, nullptr, 0);
   th_type *fetch_error_type = th_name(base_library_types, "FetchError");
-  bool deferred_fetch_constrained = th_var_constrain(
+  bool deferred_fetch_constrained = th_ctx_set_scope(
+      base_library_types, "traits", "base") && th_var_constrain(
       base_library_types, deferred_fetch_receiver,
       (th_constraint){.kind = TH_CON_METHOD,
                       .method = {.name = "fetch",
@@ -949,6 +1054,7 @@ int main(void) {
   const uint8_t box_layout[] = {1, 8, 8, 0};
   const uint8_t fetch_trait_abi[] = {1, 2, 0};
   const uint8_t generic_fetch_abi[] = {2, 1, 1};
+  const uint8_t global_semantics[] = {1, 3, 0};
   th_type *marker_methods = th_record(base_library_types, nullptr, 0);
   th_type *bracket_element = th_var(base_library_types);
   th_type *array_element = th_var(base_library_types);
@@ -987,6 +1093,14 @@ int main(void) {
   check("register persisted Box type",
         th_env_register_type(base_library, "Box", "types", "base",
                              TH_ENV_PUBLIC));
+  th_member box_shape_member = {
+      .name = "value",
+      .type = th_name(base_library_types, "int"),
+  };
+  th_type *box_shape = th_record(base_library_types, &box_shape_member, 1);
+  check("register a structural definition for a named type",
+        box_shape && th_env_register_type_shape(
+            base_library, "Box", TH_ENV_TYPE_SHAPE_RECORD, box_shape));
   check("register persisted PrivateBox type",
         th_env_register_type(base_library, "PrivateBox", "private_types",
                              "base", TH_ENV_PRIVATE));
@@ -1035,6 +1149,10 @@ int main(void) {
             "generic", "base", TH_ENV_PUBLIC,
             th_binder(base_library_types, 1,
                 fn1(base_library_types, bound_value, bound_value))));
+  check("register a typed external value declaration",
+        th_env_register_value(base_library, "base.counter", "counter",
+            "base", "base", TH_ENV_PUBLIC,
+            th_name(base_library_types, "int")));
   check("register persisted type layout metadata",
         th_env_register_metadata(base_library, TH_ENV_METADATA_TYPE, "Box",
                                  "layout", 1, box_layout,
@@ -1048,6 +1166,10 @@ int main(void) {
                                  "base.generic.fetch", "abi", 1,
                                  generic_fetch_abi,
                                  sizeof(generic_fetch_abi)));
+  check("register value-owned semantic metadata",
+        th_env_register_metadata(base_library, TH_ENV_METADATA_VALUE,
+            "base.counter", "n00b.global", 1, global_semantics,
+            sizeof(global_semantics)));
   check("freeze base library for later linking", th_env_freeze(base_library));
 
   th_arg live_array_arg = {
@@ -1182,10 +1304,24 @@ int main(void) {
   th_env_method_t persisted_bound_identity = {0};
   th_env_metadata_view_t persisted_layout = {0};
   th_env_metadata_view_t persisted_function_abi = {0};
+  th_env_metadata_view_t persisted_value_metadata = {0};
+  bool persisted_environment_attached = persisted_library &&
+      th_ctx_set_environment(persisted_check_types, persisted_library,
+                             "client", "base");
+  th_env_type_shape_kind_t persisted_shape_kind = TH_ENV_TYPE_SHAPE_NONE;
+  th_type *persisted_box_shape = persisted_environment_attached
+      ? th_env_type_shape(persisted_check_types, "Box", &persisted_shape_kind)
+      : nullptr;
   check("loaded library rebuilds trait facts and keeps generic dispatch",
         persisted_library &&
-            th_ctx_set_environment(persisted_check_types, persisted_library,
-                                   "client", "base") &&
+            persisted_environment_attached &&
+            persisted_box_shape &&
+            persisted_shape_kind == TH_ENV_TYPE_SHAPE_RECORD &&
+            th_record_len(persisted_box_shape) == 1 &&
+            !strcmp(th_record_member(persisted_box_shape, 0)->name, "value") &&
+            th_unify(persisted_check_types,
+                th_record_member(persisted_box_shape, 0)->type,
+                th_name(persisted_check_types, "int")) &&
             th_env_implements(persisted_check_types, persisted_box_int,
                               "Fetch") &&
             !th_env_type_visible(persisted_check_types, "PrivateBox") &&
@@ -1202,6 +1338,38 @@ int main(void) {
                                  "Same", "same", &persisted_identity) &&
             !strcmp(persisted_identity.qualified_name,
                     "base.generic.identity"));
+  bool loaded_type_view = false, loaded_trait_view = false;
+  bool loaded_function_view = false, loaded_value_view = false;
+  for (size_t i = 0; persisted_library &&
+       i < th_env_declaration_count(persisted_library); i++) {
+    th_env_declaration_view_t declaration = {0};
+    if (!th_env_declaration_at(persisted_library, i, &declaration)) continue;
+    loaded_type_view |= declaration.kind == TH_ENV_DECLARATION_TYPE &&
+        !strcmp(declaration.qualified_name, "Box") &&
+        !strcmp(declaration.package, "base") &&
+        declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_RECORD &&
+        declaration.type_shape == persisted_box_shape;
+    loaded_trait_view |= declaration.kind == TH_ENV_DECLARATION_TRAIT &&
+        !strcmp(declaration.qualified_name, "Fetch") &&
+        declaration.contract != nullptr;
+    loaded_function_view |=
+        declaration.kind == TH_ENV_DECLARATION_FUNCTION &&
+        !strcmp(declaration.qualified_name, "base.generic.fetch") &&
+        !strcmp(declaration.root_name, "fetch") && declaration.contract;
+    loaded_value_view |= declaration.kind == TH_ENV_DECLARATION_VALUE &&
+        !strcmp(declaration.qualified_name, "base.counter") &&
+        !strcmp(declaration.root_name, "counter") &&
+        declaration.value_type &&
+        th_hash(persisted_check_types, declaration.value_type) ==
+            th_hash(persisted_check_types, persisted_int);
+  }
+  th_env_declaration_view_t declaration_out_of_range = {0};
+  check("loaded environment enumerates stable imported declarations",
+        loaded_type_view && loaded_trait_view && loaded_function_view &&
+        loaded_value_view &&
+        !th_env_declaration_at(persisted_library,
+                               th_env_declaration_count(persisted_library),
+                               &declaration_out_of_range));
   th_arg loaded_list_arg = {
       .kind = TH_ARG_TYPE,
       .type = th_name(persisted_check_types, "string"),
@@ -1328,6 +1496,9 @@ int main(void) {
       th_var_constraint_at(loaded_deferred_receiver, 0,
                            &loaded_deferred_constraint) &&
       loaded_deferred_constraint.kind == TH_CON_METHOD &&
+      loaded_deferred_constraint.has_scope &&
+      !strcmp(loaded_deferred_constraint.scope_module, "traits") &&
+      !strcmp(loaded_deferred_constraint.scope_package, "base") &&
       !strcmp(loaded_deferred_constraint.method.name, "fetch") &&
       loaded_deferred_constraint.method.result == loaded_deferred_result &&
       loaded_deferred_constraint.method.call &&
@@ -1364,7 +1535,7 @@ int main(void) {
   th_ctx_free(wrong_shape_types);
   check("loaded image preserves type layout and function ABI metadata",
         persisted_library &&
-            th_env_metadata_count(persisted_library) == 3 &&
+            th_env_metadata_count(persisted_library) == 4 &&
             th_env_metadata_at(persisted_library, 0, &persisted_layout) &&
             persisted_layout.owner_kind == TH_ENV_METADATA_TYPE &&
             !strcmp(persisted_layout.owner_name, "Box") &&
@@ -1377,7 +1548,13 @@ int main(void) {
             !strcmp(persisted_function_abi.owner_name,
                     "base.generic.fetch") &&
             !memcmp(persisted_function_abi.data, generic_fetch_abi,
-                    sizeof(generic_fetch_abi)));
+                    sizeof(generic_fetch_abi)) &&
+            th_env_metadata_at(persisted_library, 3,
+                               &persisted_value_metadata) &&
+            persisted_value_metadata.owner_kind == TH_ENV_METADATA_VALUE &&
+            !strcmp(persisted_value_metadata.owner_name, "base.counter") &&
+            !memcmp(persisted_value_metadata.data, global_semantics,
+                    sizeof(global_semantics)));
 
   th_env *conflicting_library = th_env_new();
   check("build library with a duplicate function identity",
@@ -1427,6 +1604,30 @@ int main(void) {
             !strcmp(compose_error.metadata_key, "layout"));
   th_env_free(metadata_conflict_library);
 
+  th_ctx *conflicting_shape_types = th_ctx_new();
+  th_env *shape_conflict_library = th_env_new();
+  th_member conflicting_shape_member = {
+      .name = "other",
+      .type = th_name(conflicting_shape_types, "string"),
+  };
+  th_type *conflicting_shape = th_record(conflicting_shape_types,
+      &conflicting_shape_member, 1);
+  check("build library with conflicting named type shape",
+        th_env_register_type(shape_conflict_library, "Box", "types", "base",
+                             TH_ENV_PUBLIC) &&
+            th_env_register_type_shape(shape_conflict_library, "Box",
+                TH_ENV_TYPE_SHAPE_RECORD, conflicting_shape) &&
+            th_env_freeze(shape_conflict_library));
+  const th_env *shape_conflict_inputs[] = {base_library,
+                                           shape_conflict_library};
+  conflicted = th_env_compose_diagnose(shape_conflict_inputs, 2,
+                                       &compose_error);
+  check("link conflict identifies incompatible named type shapes",
+        !conflicted && compose_error.status == TH_ENV_COMPOSE_TYPE_CONFLICT &&
+            !strcmp(compose_error.identity, "Box"));
+  th_env_free(shape_conflict_library);
+  th_ctx_free(conflicting_shape_types);
+
   const th_env *base_libraries[] = {persisted_library};
   th_env *linked_library = th_env_compose(base_libraries, 1);
   th_ctx *linked_types = th_ctx_new();
@@ -1450,10 +1651,19 @@ int main(void) {
                                      sizeof(generic_fetch_abi)) &&
             th_env_freeze(linked_library));
 
+  th_ctx_set_environment(linked_types, linked_library, "client", "base");
+  th_env_type_shape_kind_t linked_shape_kind = TH_ENV_TYPE_SHAPE_NONE;
+  th_type *linked_box_shape = th_env_type_shape(linked_types, "Box",
+                                                &linked_shape_kind);
+  check("composed snapshots retain canonical named type shapes",
+        linked_box_shape && linked_shape_kind == TH_ENV_TYPE_SHAPE_RECORD &&
+            th_record_len(linked_box_shape) == 1 &&
+            !strcmp(th_record_member(linked_box_shape, 0)->name, "value"));
+
   th_env_metadata_view_t layout_metadata = {0};
   th_env_metadata_view_t function_metadata = {0};
-  check("type and function metadata survive environment composition",
-        th_env_metadata_count(linked_library) == 4 &&
+  check("type, function, and value metadata survive environment composition",
+        th_env_metadata_count(linked_library) == 5 &&
             th_env_metadata_at(linked_library, 0, &layout_metadata) &&
             layout_metadata.owner_kind == TH_ENV_METADATA_TYPE &&
             !strcmp(layout_metadata.owner_name, "Box") &&
@@ -1473,6 +1683,10 @@ int main(void) {
             !strcmp(function_metadata.owner_name, "base.generic.fetch") &&
             !strcmp(function_metadata.key, "abi") &&
             th_env_metadata_at(linked_library, 3, &function_metadata) &&
+            function_metadata.owner_kind == TH_ENV_METADATA_VALUE &&
+            !strcmp(function_metadata.owner_name, "base.counter") &&
+            !strcmp(function_metadata.key, "n00b.global") &&
+            th_env_metadata_at(linked_library, 4, &function_metadata) &&
             function_metadata.owner_kind == TH_ENV_METADATA_FUNCTION &&
             !strcmp(function_metadata.owner_name, "plugin.int_box.fetch") &&
             !strcmp(function_metadata.key, "abi"));

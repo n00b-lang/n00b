@@ -37,6 +37,583 @@ is_type(th_type *t, const char *typelang)
 }
 
 typedef struct {
+    parse_tree_t *target;
+    parse_tree_t *parent;
+    bool saw_parent;
+} walk_parent_probe_t;
+
+static bool
+capture_walk_parent(parse_visit_t *visit)
+{
+    walk_parent_probe_t *probe = visit ? visit->thunk : nullptr;
+    if (probe && visit->node == probe->target)
+        probe->saw_parent = visit->parent == probe->parent;
+    return true;
+}
+
+static void
+test_tree_resolution_is_scope_or_symbol_without_replacing_lexical_scope(void)
+{
+    parse_scope_t lexical_scope = {0};
+    parse_scope_t module_scope = {0};
+    parse_sym_entry_t symbol = {0};
+    parse_tree_t *node = core_tree_node(parse_nt_node_t,
+        parse_token_info_ptr_t, ((parse_nt_node_t){.scope = &lexical_scope}));
+    parse_symtab_t *symtab = parse_symtab_new();
+    bool scope_set = node
+        && parse_tree_set_resolution_scope(node, &module_scope);
+    bool lexical_scope_lookup = node && symtab
+        && parse_symtab_scope_for_node(symtab, node) == &lexical_scope;
+    parse_node_resolution_t scope_ref = parse_tree_resolution(node);
+    bool scope_ok = scope_set
+        && scope_ref.kind == PARSE_NODE_RESOLUTION_SCOPE
+        && scope_ref.target.scope == &module_scope
+        && core_tree_node_value(node).scope == &lexical_scope;
+    bool symbol_set = node
+        && parse_tree_set_resolution_symbol(node, &symbol);
+    parse_node_resolution_t symbol_ref = parse_tree_resolution(node);
+    bool symbol_ok = symbol_set
+        && symbol_ref.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        && symbol_ref.target.symbol == &symbol
+        && core_tree_node_value(node).sym == &symbol
+        && core_tree_node_value(node).scope == &lexical_scope;
+    check("tree resolution stores either a target scope or symbol independently of lexical scope",
+          scope_ok && symbol_ok && lexical_scope_lookup);
+    parse_symtab_free(symtab);
+    if (node) {
+        core_free(node->node.children);
+        core_free(node);
+    }
+}
+
+static void
+test_tree_integer_range_fact(void)
+{
+    parse_tree_t *node = core_tree_node(parse_nt_node_t,
+        parse_token_info_ptr_t, ((parse_nt_node_t){0}));
+    int64_t minimum = 0, maximum = 0;
+    bool unset = node && !parse_tree_integer_range(node, &minimum, &maximum);
+    bool set = node && parse_tree_set_integer_range(node, 2, 7);
+    bool invalid_rejected = node
+        && !parse_tree_set_integer_range(node, 8, 7);
+    bool read = node && parse_tree_integer_range(node, &minimum, &maximum);
+    check("tree stores integer range analysis separately from inferred type",
+          unset && set && invalid_rejected && read
+          && minimum == 2 && maximum == 7);
+    if (node) {
+        core_free(node->node.children);
+        core_free(node);
+    }
+}
+
+static bool
+visit_type_namespace_scope(parse_scope_t *scope, void *context)
+{
+    size_t *count = context;
+    if (!scope->ns
+        || !core_string_eq(scope->ns->ns_name, S("type"))) return false;
+    (*count)++;
+    return true;
+}
+
+static bool
+stop_namespace_scope_visit(parse_scope_t *scope, void *context)
+{
+    (void)scope;
+    (*(size_t *)context)++;
+    return false;
+}
+
+static bool
+count_namespace_symbol(parse_sym_entry_t *symbol, void *context)
+{
+    (void)symbol;
+    (*(size_t *)context)++;
+    return true;
+}
+
+static void
+test_symbol_namespace_scope_iteration(void)
+{
+    parse_symtab_t *st = parse_symtab_new();
+    parse_symtab_push_scope_all(st, S("module"));
+    parse_symtab_push_scope_all(st, S("function"));
+    parse_symtab_pop_scope_all(st);
+
+    parse_symtab_ns(st, S("type"));
+    size_t count = 0;
+    bool all_type_scopes = parse_symtab_visit_namespace_scopes(
+        st, S("type"), visit_type_namespace_scope, &count);
+
+    size_t stopped_count = 0;
+    bool stopped = parse_symtab_visit_namespace_scopes(
+        st, S("type"), stop_namespace_scope_visit, &stopped_count);
+
+    check("namespace scope visitor covers only mirrored namespace scopes",
+          all_type_scopes && count == 3);
+    check("namespace scope visitor reports early termination",
+          !stopped && stopped_count == 1);
+    check("namespace scope visitor rejects an unknown namespace",
+          !parse_symtab_visit_namespace_scopes(st, S("missing"),
+              visit_type_namespace_scope, &count));
+    parse_symtab_free(st);
+}
+
+static void
+test_symbol_namespaces_share_lexical_scopes(void)
+{
+    parse_symtab_t *st = parse_symtab_new();
+    core_string_t type_ns = S("type");
+    parse_symtab_push_scope_all(st, S("module"));
+    parse_scope_t *module_scope = parse_symtab_current_scope(st, S(""));
+    parse_sym_entry_t *value = parse_symtab_add(
+        st, S(""), S("Shared"), PARSE_SYM_VARIABLE, nullptr);
+    parse_symtab_push_scope_all(st, S("function"));
+    parse_scope_t *function_scope = parse_symtab_current_scope(st, S(""));
+    parse_sym_entry_t *local_value = parse_symtab_add(
+        st, S(""), S("Shared"), PARSE_SYM_VARIABLE, nullptr);
+    parse_symtab_pop_scope_all(st);
+
+    parse_sym_entry_t *type = parse_symtab_add(
+        st, type_ns, S("Shared"), PARSE_SYM_TYPEDEF, nullptr);
+    parse_scope_t *type_function_scope = parse_symtab_scope_in_namespace(
+        st, function_scope, type_ns);
+    parse_symtab_enter_scope(st, type_ns, type_function_scope);
+    parse_sym_entry_t *local_type = parse_symtab_add(
+        st, type_ns, S("Shared"), PARSE_SYM_TYPEDEF, nullptr);
+
+    bool pass = value && type && local_type && local_value
+        && type_function_scope
+        && value->kind == PARSE_SYM_VARIABLE
+        && type->kind == PARSE_SYM_TYPEDEF
+        && parse_symtab_lookup_scoped(st, module_scope, type_ns, S("Shared"))
+            == type
+        && parse_symtab_lookup_scoped(st, function_scope, type_ns,
+                                      S("Shared")) == local_type
+        && parse_symtab_lookup_scoped(st, function_scope, S(""),
+                                      S("Shared")) == local_value
+        && parse_symtab_scope_in_namespace(st, module_scope, type_ns)
+            == type->scope
+        && type->scope != value->scope
+        && type_function_scope->depth == function_scope->depth
+        && local_type->scope == type_function_scope;
+    size_t module_matches = 0;
+    size_t function_matches = 0;
+    size_t peer_scope_matches = 0;
+    bool found_module_names = parse_symtab_visit_name_across_namespaces(
+        st, value->scope, S("Shared"), count_namespace_symbol,
+        &module_matches);
+    bool found_function_names = parse_symtab_visit_name_across_namespaces(
+        st, function_scope, S("Shared"), count_namespace_symbol,
+        &function_matches);
+    bool found_peer_scope_names = parse_symtab_visit_name_across_namespaces(
+        st, type_function_scope, S("Shared"), count_namespace_symbol,
+        &peer_scope_matches);
+    pass = pass && found_module_names && module_matches == 2
+        && found_function_names && function_matches == 2
+        && found_peer_scope_names && peer_scope_matches == 2;
+    check("late symbol namespaces mirror lexical scopes without merging tables",
+          pass);
+    parse_symtab_free(st);
+}
+
+static void
+test_symtab_phase_lifetime_and_alias_facts(void)
+{
+    parse_symtab_t *st = parse_symtab_new();
+    core_string_t ns = CORE_STRING_STATIC("phase-test");
+    parse_sym_entry_t *value = parse_symtab_add(
+        st, ns, CORE_STRING_STATIC("value"), PARSE_SYM_VARIABLE, nullptr);
+    parse_sym_entry_t *view = parse_symtab_add(
+        st, ns, CORE_STRING_STATIC("view"), PARSE_SYM_VARIABLE, nullptr);
+    parse_sym_entry_t *safe_value = parse_symtab_add(
+        st, ns, CORE_STRING_STATIC("safe_value"), PARSE_SYM_VARIABLE,
+        nullptr);
+    parse_sym_entry_t *safe_view = parse_symtab_add(
+        st, ns, CORE_STRING_STATIC("safe_view"), PARSE_SYM_VARIABLE,
+        nullptr);
+    parse_sym_entry_t *bridge = parse_symtab_add(
+        st, ns, CORE_STRING_STATIC("bridge"), PARSE_SYM_VARIABLE, nullptr);
+    parse_sym_entry_t *unknown_value = parse_symtab_add(
+        st, ns, CORE_STRING_STATIC("unknown_value"), PARSE_SYM_VARIABLE,
+        nullptr);
+    parse_sym_entry_t *unbounded_value = parse_symtab_add(
+        st, ns, CORE_STRING_STATIC("unbounded_value"), PARSE_SYM_VARIABLE,
+        nullptr);
+    parse_sym_entry_t *incomplete_value = parse_symtab_add(
+        st, ns, CORE_STRING_STATIC("incomplete_value"), PARSE_SYM_VARIABLE,
+        nullptr);
+    parse_sym_entry_t *unknown_view = parse_symtab_add(
+        st, ns, CORE_STRING_STATIC("unknown_view"), PARSE_SYM_VARIABLE,
+        nullptr);
+    parse_sym_entry_t *null_payload = parse_symtab_add(
+        st, ns, CORE_STRING_STATIC("null_payload"), PARSE_SYM_VARIABLE,
+        nullptr);
+    int compile_value = 11;
+    int runtime_init = 12;
+    int compile_binding = 13;
+    int runtime_binding = 14;
+    int runtime_function_a = 17;
+    int runtime_function_b = 18;
+    int runtime_binding_a = 19;
+    int runtime_binding_b = 20;
+    int cfg_from = 15;
+    int cfg_to = 16;
+    int lifetime_entry = 21;
+    int lifetime_instruction = 22;
+    void *observed_comptime = nullptr;
+    void *observed_runtime = nullptr;
+
+    parse_sym_set_phases(value, PARSE_SYM_PHASE_BOTH,
+                         PARSE_SYM_PHASE_COMPTIME,
+                         PARSE_SYM_PHASE_BOTH);
+    parse_sym_set_phase_values(value, &compile_value, &runtime_init);
+    parse_sym_set_phase_values_with_presence(null_payload, true, nullptr,
+                                              true, nullptr);
+    bool phase_bindings_set = parse_sym_set_phase_binding(
+        value, PARSE_SYM_PHASE_COMPTIME, &compile_binding)
+        && parse_sym_set_phase_binding(value, PARSE_SYM_PHASE_RUNTIME,
+                                       &runtime_binding)
+        && parse_sym_set_function_binding(value, PARSE_SYM_PHASE_RUNTIME,
+                                          &runtime_function_a,
+                                          &runtime_binding_a)
+        && parse_sym_set_function_binding(value, PARSE_SYM_PHASE_RUNTIME,
+                                          &runtime_function_b,
+                                          &runtime_binding_b)
+        && parse_sym_set_function_binding(value, PARSE_SYM_PHASE_RUNTIME,
+                                          &runtime_function_a,
+                                          &runtime_binding);
+    const parse_sym_function_binding_t *function_binding_a =
+        parse_sym_function_binding_at(value, PARSE_SYM_PHASE_RUNTIME, 0);
+    const parse_sym_function_binding_t *function_binding_b =
+        parse_sym_function_binding_at(value, PARSE_SYM_PHASE_RUNTIME, 1);
+    check("symbols retain phase bindings for every owning IR function",
+          phase_bindings_set
+              && parse_sym_function_binding_count(
+                  value, PARSE_SYM_PHASE_RUNTIME) == 2
+              && function_binding_a
+              && function_binding_a->function == &runtime_function_a
+              && function_binding_a->binding == &runtime_binding
+              && function_binding_b
+              && function_binding_b->function == &runtime_function_b
+              && function_binding_b->binding == &runtime_binding_b);
+    parse_sym_set_storage_class(value, CORE_STRING_STATIC("gc"), true,
+                                CORE_STRING_STATIC("gc"));
+    parse_sym_set_storage_duration(value, PARSE_SYM_STORAGE_DYNAMIC);
+    parse_sym_set_lifetime(value, (parse_sym_lifetime_t){
+        .region = 3,
+        .start_point = 10,
+        .end_point = 20,
+        .finalization_point = 19,
+        .has_start = true,
+        .has_end = true,
+        .has_finalization_point = true,
+    });
+    bool lifetime_starts = parse_sym_set_lifetime_start(value,
+        (parse_sym_lifetime_start_t){
+            .phase = PARSE_SYM_PHASE_RUNTIME,
+            .function = &runtime_function_a,
+            .binding = &runtime_binding,
+            .point = &lifetime_entry,
+            .at_entry = true,
+        })
+        && parse_sym_set_lifetime_start(value,
+            (parse_sym_lifetime_start_t){
+                .phase = PARSE_SYM_PHASE_RUNTIME,
+                .function = &runtime_function_b,
+                .binding = &runtime_binding_b,
+                .point = &lifetime_instruction,
+            });
+    bool cfg_edges = parse_sym_set_lifetime_edge(value,
+        (parse_sym_lifetime_edge_t){
+            .function = &runtime_function_a,
+            .binding = &runtime_binding,
+            .from = &cfg_from,
+            .to = &cfg_to,
+            .phase = PARSE_SYM_PHASE_RUNTIME,
+            .direct = PARSE_SYM_LIVENESS_DEAD,
+            .aliases = PARSE_SYM_LIVENESS_LIVE,
+            .ends_live_range = true,
+        })
+        && parse_sym_set_lifetime_edge(value,
+            (parse_sym_lifetime_edge_t){
+                .function = &runtime_function_a,
+                .binding = &runtime_binding,
+                .from = &cfg_from,
+                .phase = PARSE_SYM_PHASE_COMPTIME,
+                .direct = PARSE_SYM_LIVENESS_UNKNOWN,
+                .aliases = PARSE_SYM_LIVENESS_UNKNOWN,
+                .is_exit = true,
+            })
+        && parse_sym_set_lifetime_edge(value,
+            (parse_sym_lifetime_edge_t){
+                .function = &runtime_function_a,
+                .binding = &runtime_binding,
+                .from = &cfg_from,
+                .to = &cfg_to,
+                .phase = PARSE_SYM_PHASE_RUNTIME,
+                .direct = PARSE_SYM_LIVENESS_LIVE,
+                .aliases = PARSE_SYM_LIVENESS_UNKNOWN,
+                .ends_live_range = true,
+            })
+        && parse_sym_set_lifetime_edge(value,
+            (parse_sym_lifetime_edge_t){
+                .function = &runtime_function_b,
+                .binding = &runtime_binding_b,
+                .from = &cfg_from,
+                .to = &cfg_to,
+                .phase = PARSE_SYM_PHASE_RUNTIME,
+                .direct = PARSE_SYM_LIVENESS_LIVE,
+                .aliases = PARSE_SYM_LIVENESS_LIVE,
+            })
+        && !parse_sym_set_lifetime_edge(value,
+            (parse_sym_lifetime_edge_t){
+                .from = &cfg_from,
+                .phase = PARSE_SYM_PHASE_RUNTIME,
+                .direct = PARSE_SYM_LIVENESS_DEAD,
+                .aliases = PARSE_SYM_LIVENESS_DEAD,
+            });
+
+    parse_sym_set_phases(view, PARSE_SYM_PHASE_RUNTIME,
+                         PARSE_SYM_PHASE_BOTH,
+                         PARSE_SYM_PHASE_COMPTIME
+                             | PARSE_SYM_PHASE_RUNTIME);
+    bool alias_added = parse_symtab_add_alias(
+        view, value, PARSE_SYM_ALIAS_DERIVED, 14, true);
+    parse_sym_set_lifetime(safe_value, (parse_sym_lifetime_t){
+        .region = 4,
+        .start_point = 1,
+        .end_point = 12,
+        .has_start = true,
+        .has_end = true,
+    });
+    parse_sym_set_lifetime(safe_view, (parse_sym_lifetime_t){
+        .region = 4,
+        .start_point = 2,
+        .end_point = 12,
+        .has_start = true,
+        .has_end = true,
+    });
+    parse_sym_set_lifetime(bridge, (parse_sym_lifetime_t){
+        .region = 4,
+        .start_point = 3,
+        .end_point = 12,
+        .has_start = true,
+        .has_end = true,
+    });
+    bool safe_alias_added = parse_symtab_update_alias_use(
+        safe_view, safe_value, PARSE_SYM_ALIAS_DERIVED, 3, 9, false)
+        && parse_symtab_update_alias_use(
+            safe_view, safe_value, PARSE_SYM_ALIAS_DERIVED, 3, 14, false)
+        && parse_symtab_update_alias_use(
+            bridge, safe_view, PARSE_SYM_ALIAS_DERIVED, 4, 13, false)
+        && parse_symtab_update_alias_use(
+            safe_value, bridge, PARSE_SYM_ALIAS_DERIVED, 2, 10, false);
+    parse_sym_set_alias_analysis_complete(safe_value, true);
+    parse_sym_set_alias_analysis_complete(safe_view, true);
+    parse_sym_set_alias_analysis_complete(bridge, true);
+    bool unknown_alias_added = parse_symtab_add_alias(
+        unknown_view, unknown_value, PARSE_SYM_ALIAS_MAY, 5, false);
+    parse_sym_set_alias_analysis_complete(unknown_value, true);
+    parse_sym_set_alias_analysis_complete(unknown_view, true);
+    parse_sym_set_alias_analysis_complete(unbounded_value, true);
+    bool late_edge_invalidates = parse_symtab_add_alias(
+        unknown_view, unknown_value, PARSE_SYM_ALIAS_MAY, 6, false)
+        && !unknown_view->alias_analysis_complete
+        && !unknown_value->alias_analysis_complete;
+    parse_sym_set_alias_analysis_complete(unknown_value, true);
+    parse_sym_set_alias_analysis_complete(unknown_view, true);
+
+    check("phase-aware symbols expose only available reads",
+          parse_sym_can_read(value, PARSE_SYM_PHASE_COMPTIME)
+              && parse_sym_can_read(value, PARSE_SYM_PHASE_RUNTIME)
+              && !parse_sym_can_read(view, PARSE_SYM_PHASE_COMPTIME));
+    check("phase-specific mutability is independent",
+          parse_sym_can_write(value, PARSE_SYM_PHASE_COMPTIME)
+              && !parse_sym_can_write(value, PARSE_SYM_PHASE_RUNTIME)
+              && parse_sym_can_write(view, PARSE_SYM_PHASE_RUNTIME));
+    check("symbols retain their lexical lifetime region",
+          unknown_view->lifetime.has_region
+              && unknown_view->lifetime.region
+                    == (uint64_t)unknown_view->scope->id);
+    check("static initialization is distinct from reading runtime values",
+          parse_sym_can_initialize(view, PARSE_SYM_PHASE_COMPTIME)
+              && !parse_sym_can_read(view, PARSE_SYM_PHASE_COMPTIME)
+              && !parse_sym_can_write(view, PARSE_SYM_PHASE_COMPTIME));
+    check("compile-time value and runtime initializer remain distinct",
+          parse_sym_get_comptime_value(value, &observed_comptime)
+              && observed_comptime == &compile_value
+              && parse_sym_get_runtime_initializer(value, &observed_runtime)
+              && observed_runtime == &runtime_init);
+    check("explicit presence distinguishes null payloads from missing values",
+          parse_sym_get_comptime_value(null_payload, &observed_comptime)
+              && !observed_comptime
+              && parse_sym_get_runtime_initializer(null_payload,
+                                                    &observed_runtime)
+              && !observed_runtime
+              && !parse_sym_get_comptime_value(incomplete_value,
+                                               &observed_comptime)
+              && !parse_sym_get_runtime_initializer(incomplete_value,
+                                                     &observed_runtime));
+    check("one source symbol retains separate phase bindings",
+          phase_bindings_set
+              && parse_sym_phase_binding(value, PARSE_SYM_PHASE_COMPTIME)
+                    == &compile_binding
+              && parse_sym_phase_binding(value, PARSE_SYM_PHASE_RUNTIME)
+                    == &runtime_binding
+              && !parse_sym_phase_binding(value, PARSE_SYM_PHASE_BOTH));
+    check("storage request and compiler selection are retained",
+          value->storage_class_required
+              && core_string_eq(value->requested_storage_class,
+                                CORE_STRING_STATIC("gc"))
+              && core_string_eq(value->selected_storage_class,
+                                CORE_STRING_STATIC("gc")));
+    parse_sym_set_storage_class(value, value->requested_storage_class, true,
+                                value->requested_storage_class);
+    check("storage class setter preserves aliased input strings",
+          value->storage_class_required
+              && core_string_eq(value->requested_storage_class,
+                                CORE_STRING_STATIC("gc"))
+              && core_string_eq(value->selected_storage_class,
+                                CORE_STRING_STATIC("gc")));
+    parse_sym_set_storage_class(value, (core_string_t){0}, true,
+                                (core_string_t){0});
+    check("required storage remains required when its class is missing",
+          value->storage_class_required
+              && !value->requested_storage_class.u8_bytes
+              && !value->selected_storage_class.u8_bytes);
+    parse_sym_set_storage_class(value, CORE_STRING_STATIC("gc"), true,
+                                CORE_STRING_STATIC("gc"));
+    check("storage duration is tracked separately from storage class",
+          value->storage_duration == PARSE_SYM_STORAGE_DYNAMIC
+              && !strcmp(parse_sym_storage_duration_name(
+                    value->storage_duration), "dynamic")
+              && unknown_view->storage_duration
+                    == PARSE_SYM_STORAGE_UNSPECIFIED);
+    check("lifetime endpoints and finalization point are retained",
+          value->lifetime.region == 3 && value->lifetime.has_start
+              && value->lifetime.start_point == 10 && value->lifetime.has_end
+              && value->lifetime.end_point == 20
+              && value->lifetime.has_finalization_point
+              && value->lifetime.finalization_point == 19);
+    const parse_sym_lifetime_start_t *entry_start =
+        parse_sym_lifetime_start_at(value, 0);
+    const parse_sym_lifetime_start_t *instruction_start =
+        parse_sym_lifetime_start_at(value, 1);
+    check("lifetime starts retain function, binding, and IR point identity",
+          lifetime_starts && parse_sym_lifetime_start_count(value) == 2
+              && entry_start
+              && entry_start->function == &runtime_function_a
+              && entry_start->binding == &runtime_binding
+              && entry_start->point == &lifetime_entry
+              && entry_start->at_entry
+              && instruction_start
+              && instruction_start->function == &runtime_function_b
+              && instruction_start->binding == &runtime_binding_b
+              && instruction_start->point == &lifetime_instruction
+              && !instruction_start->at_entry);
+    const parse_sym_lifetime_edge_t *runtime_edge =
+        parse_sym_lifetime_edge_at(value, 0);
+    const parse_sym_lifetime_edge_t *comptime_exit =
+        parse_sym_lifetime_edge_at(value, 1);
+    bool lifetime_ends = parse_sym_set_lifetime_end(value,
+        (parse_sym_lifetime_end_t){
+            .phase = PARSE_SYM_PHASE_RUNTIME,
+            .function = &runtime_function_a,
+            .binding = &runtime_binding,
+            .point = &lifetime_instruction,
+        }) && parse_sym_set_lifetime_end(value,
+            (parse_sym_lifetime_end_t){
+                .phase = PARSE_SYM_PHASE_RUNTIME,
+                .function = &runtime_function_b,
+                .binding = &runtime_binding_b,
+                .from = &cfg_from,
+                .to = &cfg_to,
+                .on_edge = true,
+            }) && !parse_sym_set_lifetime_end(value,
+            (parse_sym_lifetime_end_t){
+                .phase = PARSE_SYM_PHASE_RUNTIME,
+                .function = &runtime_function_a,
+                .binding = &runtime_binding,
+                .on_edge = true,
+            });
+    bool ranges_finished =
+        parse_sym_finish_lifetime_range(value, PARSE_SYM_PHASE_RUNTIME,
+            &runtime_function_a, &runtime_binding, true)
+        && parse_sym_finish_lifetime_range(value, PARSE_SYM_PHASE_RUNTIME,
+            &runtime_function_b, &runtime_binding_b, true)
+        && !parse_sym_finish_lifetime_range(value, PARSE_SYM_PHASE_COMPTIME,
+            &runtime_function_a, &runtime_binding, true);
+    const parse_sym_lifetime_range_t *range_a =
+        parse_sym_lifetime_range_at(value, 0);
+    const parse_sym_lifetime_range_t *range_b =
+        parse_sym_lifetime_range_at(value, 1);
+    const parse_sym_lifetime_range_t *incomplete_range =
+        parse_sym_lifetime_range_at(value, 2);
+    check("symbols retain deduplicated CFG lifetime facts by phase",
+          cfg_edges && parse_sym_lifetime_edge_count(value) == 3
+              && runtime_edge && runtime_edge->from == &cfg_from
+              && runtime_edge->function == &runtime_function_a
+              && runtime_edge->binding == &runtime_binding
+              && runtime_edge->to == &cfg_to
+              && runtime_edge->phase == PARSE_SYM_PHASE_RUNTIME
+              && runtime_edge->direct == PARSE_SYM_LIVENESS_LIVE
+              && runtime_edge->aliases == PARSE_SYM_LIVENESS_UNKNOWN
+              && runtime_edge->ends_live_range
+              && comptime_exit && comptime_exit->is_exit
+              && comptime_exit->to == nullptr
+              && comptime_exit->phase == PARSE_SYM_PHASE_COMPTIME
+              && parse_sym_lifetime_edge_at(value, 2)->function
+                    == &runtime_function_b
+              && parse_sym_lifetime_edge_at(value, 2)->binding
+                    == &runtime_binding_b
+              && lifetime_ends && ranges_finished
+              && parse_sym_lifetime_range_count(value) == 3
+              && range_a && range_a->start_count == 1
+              && range_a->edge_count == 1 && range_a->end_count == 1
+              && range_a->complete
+              && range_b && range_b->start_count == 1
+              && range_b->edge_count == 1 && range_b->end_count == 1
+              && range_b->complete
+              && incomplete_range && !incomplete_range->start_count
+              && incomplete_range->edge_count == 1
+              && !incomplete_range->complete);
+    bool range_reset = parse_sym_begin_lifetime_range(value,
+        PARSE_SYM_PHASE_RUNTIME, &runtime_function_a, &runtime_binding);
+    range_a = parse_sym_lifetime_range_at(value, 0);
+    range_b = parse_sym_lifetime_range_at(value, 1);
+    check("restarting one lifetime range clears only its owner facts",
+          range_reset && range_a && !range_a->complete
+              && !range_a->start_count && !range_a->edge_count
+              && !range_a->end_count
+              && range_b && range_b->complete
+              && range_b->start_count == 1 && range_b->edge_count == 1
+              && range_b->end_count == 1);
+    const parse_sym_alias_t *forward = parse_sym_alias_at(view, 0);
+    const parse_sym_alias_t *reverse = parse_sym_aliased_by_at(value, 0);
+    check("alias relationships are queryable in both directions",
+          alias_added && parse_sym_alias_count(view) == 1
+              && parse_sym_aliased_by_count(value) == 1
+              && forward && forward->other == value && forward->escapes
+              && reverse && reverse->other == view && reverse->escapes);
+    check("escaping or unbounded aliases prevent early finalization",
+          !parse_sym_can_finalize_at(value, 30)
+              && unknown_alias_added && late_edge_invalidates
+              && !parse_sym_can_finalize_at(unknown_value, 15)
+              && !parse_sym_can_finalize_at(unbounded_value, 15)
+              && !parse_sym_can_finalize_at(incomplete_value, 15));
+    const parse_sym_alias_t *bounded_alias =
+        parse_sym_alias_at(safe_view, 0);
+    check("finalization waits for transitive alias last uses across cycles",
+          safe_alias_added && bounded_alias && bounded_alias->has_last_use
+              && bounded_alias->last_use == 14
+              && !parse_sym_can_finalize_at(safe_value, 14)
+              && parse_sym_can_finalize_at(safe_value, 15));
+
+    parse_symtab_free(st);
+}
+
+typedef struct {
     int               decls_seen;
     parse_tree_t *block_node;
     parse_tree_t *cond_node;
@@ -319,6 +896,31 @@ test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
     parse_tree_walk_run(w, tree);
     parse_tree_walk_free(w);
 
+    parse_tree_t *subtree = nullptr;
+    int32_t subtree_index = -1;
+    for (size_t i = 0; i < core_tree_num_children(tree); i++) {
+        parse_tree_t *child = core_tree_child(tree, i);
+        if (core_tree_is_leaf(child)) continue;
+        subtree = child;
+        subtree_index = (int32_t)i;
+        break;
+    }
+    walk_parent_probe_t parent_probe = {
+        .target = subtree,
+        .parent = tree,
+    };
+    parse_tree_walk_t *subtree_walk = parse_tree_walk_new(g, nullptr);
+    if (subtree && subtree_walk) {
+        parse_walk_on_node(subtree_walk, capture_walk_parent, nullptr,
+                           &parent_probe);
+        parse_tree_walk_run_with_parent(subtree_walk, subtree, tree, 1,
+                                        subtree_index);
+    }
+    check("a subtree walk preserves its structural parent",
+          subtree && subtree_walk && parent_probe.saw_parent
+              && core_tree_node_value(subtree).parent == tree);
+    parse_tree_walk_free(subtree_walk);
+
     check("a caller's visitor fires once per matching node",
           probe.decls_seen == 2);
     check("the module scope was opened", probe.module_scope != nullptr);
@@ -368,6 +970,17 @@ test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
           name_node && parse_symtab_resolve_node(
               st, name_node, core_string_empty()) == a
               && core_tree_node_value(name_node).sym == a);
+    bool deferred_scope_resolves = name_node
+        && parse_tree_set_resolution_scope(name_node, probe.block_scope)
+        && parse_symtab_resolve_node(st, name_node,
+                                     core_string_empty()) == a;
+    parse_node_resolution_t resolved_scope = name_node
+        ? parse_tree_resolution(name_node) : (parse_node_resolution_t){0};
+    check("a deferred scope target resolves through that scope and binds the symbol",
+          deferred_scope_resolves
+          && resolved_scope.kind == PARSE_NODE_RESOLUTION_SYMBOL
+          && resolved_scope.target.symbol == a
+          && core_tree_node_value(name_node).scope == probe.module_scope);
     check("a scope is still searchable after the walk popped it",
           b_from_block != nullptr && b_from_block->scope == probe.block_scope);
     check("every declaration was recorded", c != nullptr);
@@ -904,8 +1517,11 @@ static void
 test_trait_method_inference_uses_visible_requirement(void)
 {
     static const char *const G =
-        "<top> @tokenizer(\"toy\") ::= <access>\n"
-        "<access> @infer(\"method_return($0)\") ::= <use> %\".\" <n>\n"
+        "<top> @tokenizer(\"toy\") ::= <postfix-expr>\n"
+        "<postfix-expr> @infer(\"return_of($0)\") ::= "
+        "<postfix-expr> %\"(\" %\")\"\n"
+        "<postfix-expr> @infer(\"field_return($0)\") ::= "
+        "<use> %\".\" <n>\n"
         "<use> @infer(\"`a\") ::= <n>\n"
         "<n> ::= __LOWER\n";
     parse_grammar_t *g = parse_grammar_new();
@@ -919,8 +1535,8 @@ test_trait_method_inference_uses_visible_requirement(void)
 
     parse_pwz_parser_t *parser = nullptr;
     parse_token_stream_t *tokens = nullptr;
-    parse_tree_t *tree = parse_toy(g, "top", "x.r", &parser, &tokens);
-    check("trait method inference expression parses", tree != nullptr);
+    parse_tree_t *tree = parse_toy(g, "top", "x.r()", &parser, &tokens);
+    check("trait method call inference expression parses", tree != nullptr);
     if (!tree) {
         if (parser) parse_pwz_free(parser);
         if (tokens) scan_token_stream_free(tokens);
@@ -961,7 +1577,7 @@ test_trait_method_inference_uses_visible_requirement(void)
         parse_tree_walk_run(walk, tree);
         parse_tree_walk_free(walk);
     }
-    parse_tree_t *access = find_node(g, tree, "access");
+    parse_tree_t *access = tree;
     parse_tree_t *use = find_node(g, tree, "use");
     th_type *actual = access ? core_tree_node_value(access).type : nullptr;
     th_type *receiver = use ? core_tree_node_value(use).type : nullptr;
@@ -981,7 +1597,7 @@ test_trait_method_inference_uses_visible_requirement(void)
 
     parse_pwz_parser_t *multi_parser = nullptr;
     parse_token_stream_t *multi_tokens = nullptr;
-    parse_tree_t *multi_tree = parse_toy(g, "top", "x.r", &multi_parser,
+    parse_tree_t *multi_tree = parse_toy(g, "top", "x.r()", &multi_parser,
                                           &multi_tokens);
     th_ctx *multi_definitions = th_ctx_new();
     th_type *render_self = th_var(multi_definitions);
@@ -1024,7 +1640,7 @@ test_trait_method_inference_uses_visible_requirement(void)
         parse_tree_walk_run(walk, multi_tree);
         parse_tree_walk_free(walk);
     }
-    parse_tree_t *multi_access = find_node(g, multi_tree, "access");
+    parse_tree_t *multi_access = multi_tree;
     parse_tree_t *multi_use = find_node(g, multi_tree, "use");
     th_type *multi_actual = multi_access
         ? core_tree_node_value(multi_access).type : nullptr;
@@ -1423,10 +2039,22 @@ test_initial_symbol_walk_callback(parse_grammar_t *g)
               core_tree_node_value(tree).scope, S(""), S("a")) != nullptr);
     parse_sym_entry_t *inferred = parse_symtab_lookup_scoped(
         result->symtab, core_tree_node_value(tree).scope, S(""), S("a"));
-    parse_annot_result_mark_inferred(result, inferred);
-    parse_annot_result_mark_inferred(result, inferred);
-    check("inferred-symbol worklist deduplicates symbol references",
-          core_list_len(result->inferred) == 1);
+    parse_sym_mark_type_inferred(inferred);
+    check("inferred type state is stored on its symbol",
+          inferred && inferred->type_is_inferred);
+    check("symbol retains its declaration node",
+          inferred && inferred->decl_node != nullptr);
+    check("symbol accepts a definition site", parse_sym_add_definition(inferred, tree));
+    check("duplicate definition sites are ignored", parse_sym_add_definition(inferred, tree));
+    check("symbol accepts a use site", parse_sym_add_use(inferred, tree));
+    check("duplicate use sites are ignored", parse_sym_add_use(inferred, tree));
+    check("symbol definition and use sites are stored without duplicates",
+          inferred && inferred->definition_count == 1
+              && inferred->definition_nodes[0] == tree
+              && inferred->use_count == 1 && inferred->use_nodes[0] == tree);
+    check("a classified write can be removed from use sites",
+          parse_sym_remove_use(inferred, tree)
+              && inferred->use_count == 0 && inferred->uses == 0);
 
     parse_tree_walk_free(walk);
     parse_annot_result_free(result);
@@ -1519,6 +2147,46 @@ test_selected_type_annotations_per_node(parse_grammar_t *g)
     scan_token_stream_free(ts);
 }
 
+static th_type *
+resolve_test_type_node(th_ctx *tc, parse_grammar_t *grammar,
+                      parse_tree_t *node, void *context)
+{
+    (void)grammar;
+    (void)node;
+    (*(size_t *)context)++;
+    return th_name(tc, "resolver_type");
+}
+
+static void
+test_frontend_type_node_resolver(void)
+{
+    parse_grammar_t *grammar = load_toy();
+    parse_pwz_parser_t *parser = nullptr;
+    parse_token_stream_t *tokens = nullptr;
+    parse_tree_t *tree = grammar
+        ? parse_toy(grammar, "prog", "taI;", &parser, &tokens) : nullptr;
+    th_ctx *tc = th_ctx_new();
+    parse_annot_result_t *result = parse_annot_result_new(nullptr);
+    size_t resolver_calls = 0;
+    parse_annot_result_set_type_node_resolver(result,
+        resolve_test_type_node, &resolver_calls);
+    parse_tree_t *type_node = tree ? find_node(grammar, tree, "type")
+                                   : nullptr;
+    th_type *resolved = parse_annot_resolve_type_node(result, tc, grammar,
+                                                       type_node);
+    bool resolver_type = resolved
+        && th_hash(tc, resolved) == th_hash(tc, th_name(tc, "resolver_type"));
+    check("frontend type-node resolver is invoked for a type annotation",
+          type_node && resolver_calls == 1);
+    check("frontend type-node resolver supplies the annotation type",
+          resolver_type);
+    parse_annot_result_free(result);
+    th_ctx_free(tc);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+    parse_grammar_free(grammar);
+}
+
 static void
 test_inference_result_is_propagated(void)
 {
@@ -1568,6 +2236,54 @@ test_inference_result_is_propagated(void)
     parse_pwz_free(p);
     scan_token_stream_free(ts);
     parse_grammar_free(g);
+}
+
+static void
+test_symbol_records_declaration_definition_and_use_nodes(void)
+{
+    static const char *const G
+        = "@tokenizer(\"toy\")\n"
+          "<top> @scope(\"module\") ::= <decl> <read>\n"
+          "<decl> @declares($1, \"var\") @assigns($1, $3) ::= "
+          "\"v\" <name> \"=\" <name> \";\"\n"
+          "<read> ::= \"r\" <ref> \";\"\n"
+          "<ref> @varref($0) ::= <name>\n"
+          "<name> ::= __LOWER\n";
+    parse_grammar_t *grammar = parse_grammar_new();
+    parse_grammar_set_error_recovery(grammar, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), grammar);
+    check("symbol site grammar loads", loaded);
+    if (!loaded) {
+        parse_grammar_free(grammar);
+        return;
+    }
+
+    parse_pwz_parser_t *parser;
+    parse_token_stream_t *tokens;
+    parse_tree_t *tree = parse_toy(grammar, "top", "va=b;ra;",
+                                   &parser, &tokens);
+    check("symbol site sample parses", tree != nullptr);
+    if (tree) {
+        parse_annot_result_t *result = parse_annot_walk_tree(
+            grammar, tree, nullptr, nullptr);
+        parse_scope_t *scope = core_tree_node_value(tree).scope;
+        parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
+            result->symtab, scope, S(""), S("a"));
+        parse_tree_t *declaration = find_node(grammar, tree, "decl");
+        parse_tree_t *use = find_node(grammar, tree, "ref");
+        check("symbol retains its declaration node",
+              symbol && symbol->decl_node == declaration);
+        check("assignment annotation records the definition node",
+              symbol && symbol->definition_count == 1
+                  && symbol->definition_nodes[0] == declaration);
+        check("variable-reference annotation records the use node",
+              symbol && symbol->use_count == 1
+                  && symbol->use_nodes[0] == use && symbol->uses == 1);
+        parse_annot_result_free(result);
+        parse_pwz_free(parser);
+        scan_token_stream_free(tokens);
+    }
+    parse_grammar_free(grammar);
 }
 
 static void
@@ -1672,6 +2388,64 @@ test_error_propagation_preserves_return_type(void)
               == th_hash(tc, th_name(tc, "i32")));
 
     parse_infer_free(projection);
+    th_ctx_free(tc);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_indirection_inference_constructors(void)
+{
+    static const char *const G =
+        "@tokenizer(\"toy\")\n"
+        "<top> ::= <inner>\n"
+        "<inner> ::= \"x\"\n";
+    static const struct {
+        const char *name;
+        uint8_t attrs;
+    } constructors[] = {
+        {"ref", 0},
+        {"ptr", TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE},
+        {"mutref", TH_EXCLUSIVE},
+        {"own", TH_OWNING},
+        {"gcref", TH_NULLABLE | TH_RESEATABLE},
+        {"tmpref", TH_TEMPORARY},
+    };
+
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    parse_pwz_parser_t *p = nullptr;
+    parse_token_stream_t *ts = nullptr;
+    parse_tree_t *tree = loaded ? parse_toy(g, "top", "x", &p, &ts) : nullptr;
+    th_ctx *tc = th_ctx_new();
+    parse_tree_t *inner = tree ? core_tree_child(tree, 0) : nullptr;
+    if (inner && !core_tree_is_leaf(inner))
+        core_tree_node_value(inner).type = th_name(tc, "int");
+    parse_visit_t visit = {
+        .grammar = g,
+        .node = tree,
+        .pn = tree ? &core_tree_node_value(tree) : nullptr,
+    };
+    bool all = loaded && tree && inner;
+    for (size_t i = 0; all && i < sizeof(constructors) / sizeof(constructors[0]);
+         i++) {
+        char source[32];
+        snprintf(source, sizeof(source), "%s[$0]", constructors[i].name);
+        parse_infer_expr_t *expr = parse_infer_parse(S(source));
+        bool ok = false;
+        th_type *type = expr
+            ? parse_infer_eval(expr, &visit, tc, nullptr, &ok) : nullptr;
+        uint8_t attrs = UINT8_MAX;
+        all = ok && type && th_kind_of(type) == TH_INDIRECTION
+            && th_ind_attrs(type, &attrs) && attrs == constructors[i].attrs
+            && th_hash(tc, th_ind_referent(type))
+                   == th_hash(tc, th_name(tc, "int"));
+        parse_infer_free(expr);
+    }
+    check("inference applications for built-in indirections make TH_INDIRECTION types",
+          all);
     th_ctx_free(tc);
     parse_pwz_free(p);
     scan_token_stream_free(ts);
@@ -1858,11 +2632,14 @@ main(void)
     test_annotation_argument_lists_are_growable();
     test_the_representation_and_declaration_annotations();
     test_initial_symbol_walk_callback(g);
+    test_symbol_records_declaration_definition_and_use_nodes();
     test_apply_ordered_annotation_kinds(g);
     test_selected_type_annotations_per_node(g);
+    test_frontend_type_node_resolver();
     test_inference_result_is_propagated();
     test_symbol_lookup_instantiates_schemes();
     test_error_propagation_preserves_return_type();
+    test_indirection_inference_constructors();
     test_function_visibility_does_not_leak_to_parameters();
     test_visibility_prefix_binds_to_non_function_declaration();
     test_scoped_declaration_is_bound_outside_its_body();
@@ -1878,6 +2655,11 @@ main(void)
     test_annotations_are_retained_on_the_grammar(g);
     test_annotation_cache_is_thread_safe(g);
     test_the_walk_builds_a_symbol_table(g);
+    test_symtab_phase_lifetime_and_alias_facts();
+    test_symbol_namespaces_share_lexical_scopes();
+    test_symbol_namespace_scope_iteration();
+    test_tree_resolution_is_scope_or_symbol_without_replacing_lexical_scope();
+    test_tree_integer_range_fact();
     test_a_deep_tree_does_not_overflow_the_stack(g);
 
     parse_grammar_free(g);

@@ -19,6 +19,28 @@ static void defer_environment_constraints(th_ctx *ctx, th_type *variable)
     core_list_push(ctx->pending_environment_constraints, variable);
 }
 
+typedef struct {
+    const char *module;
+    const char *package;
+} constraint_scope_t;
+
+static constraint_scope_t enter_constraint_scope(
+    th_ctx *ctx, const th_constraint *constraint)
+{
+    constraint_scope_t previous = {ctx->module, ctx->package};
+    if (constraint->has_scope) {
+        ctx->module = constraint->scope_module;
+        ctx->package = constraint->scope_package;
+    }
+    return previous;
+}
+
+static void leave_constraint_scope(th_ctx *ctx, constraint_scope_t previous)
+{
+    ctx->module = previous.module;
+    ctx->package = previous.package;
+}
+
 static bool iface_name_seen(core_list_t(iface_name_ptr) *names,
                             const char *name)
 {
@@ -65,6 +87,13 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
             (c.method.call &&
              th_kind_of(th_resolve(c.method.call)) != TH_FUNCTION))
             return false;
+        if (!c.has_scope && (ctx->module || ctx->package)) {
+            const char *module = ctx->module ? ctx->module : "";
+            const char *package = ctx->package ? ctx->package : "";
+            c.scope_module = th_strdup(ctx, module, strlen(module));
+            c.scope_package = th_strdup(ctx, package, strlen(package));
+            c.has_scope = true;
+        }
         c.method.name = th_strdup(ctx, c.method.name, strlen(c.method.name));
         core_list_push(var->var.cons, c);
         return true;
@@ -88,6 +117,25 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
         }
 
         return true;
+    }
+
+    if (c.kind == TH_CON_HAS_FIELD) {
+        if (!ctx || !c.field.name || !*c.field.name) return false;
+        c.field.name = th_strdup(ctx, c.field.name, strlen(c.field.name));
+    }
+
+    if (ctx && c.kind == TH_CON_IMPLEMENTS && !c.has_scope &&
+        (ctx->module || ctx->package)) {
+        const char *module = ctx->module ? ctx->module : "";
+        const char *package = ctx->package ? ctx->package : "";
+        c.scope_module = th_strdup(ctx, module, strlen(module));
+        c.scope_package = th_strdup(ctx, package, strlen(package));
+        c.has_scope = true;
+    }
+
+    if (c.kind == TH_CON_IMPLEMENTS && c.iface) {
+        if (!ctx) return false;
+        c.iface = th_strdup(ctx, c.iface, strlen(c.iface));
     }
 
     core_list_push(var->var.cons, c);
@@ -345,7 +393,7 @@ static bool satisfies(th_ctx *ctx, th_type *type, th_type *methods)
             return false;
         }
 
-        have = th_record_lookup(type, m->name);
+        have = th_record_lookup_in(ctx, type, m->name);
 
         if (!have || !th_unify(ctx, have, m->type)) {
             return false;
@@ -666,7 +714,8 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
         }
 
         case TH_CON_HAS_FIELD: {
-            th_type *m = th_record_lookup(bound_to, c->field.name);
+            th_type *m = th_record_lookup_in(ctx, bound_to,
+                                            c->field.name);
 
             if (!m) {
                 th_err(ctx, TH_ERR_NO_SUCH_FIELD, "has_field",
@@ -721,7 +770,10 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
                 defer_environment_constraints(ctx, (th_type *)var);
                 break;
             }
-            if (!th_implements(ctx, bound_to, c->iface)) {
+            constraint_scope_t previous = enter_constraint_scope(ctx, c);
+            bool implements = th_implements(ctx, bound_to, c->iface);
+            leave_constraint_scope(ctx, previous);
+            if (!implements) {
                 th_err(ctx, TH_ERR_CONSTRAINT, c->iface, nullptr, bound_to,
                        "constraint implements: interface not satisfied");
 
@@ -734,9 +786,11 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
                 defer_environment_constraints(ctx, (th_type *)var);
                 break;
             }
+            constraint_scope_t previous = enter_constraint_scope(ctx, c);
             th_env_method_t method = {0};
             th_env_method_status_t status = th_env_method_resolve_by_name(
                 ctx, bound_to, c->method.name, &method, nullptr);
+            leave_constraint_scope(ctx, previous);
             th_type *signature = status == TH_ENV_METHOD_FOUND
                 ? th_instantiate(ctx, method.signature) : nullptr;
             const th_param *receiver =

@@ -25,12 +25,24 @@ typedef struct {
     th_ctx       *tc;
     parse_symtab_t *st;
     parse_visit_t  *v;
+    parse_infer_type_node_resolver_fn type_node_resolver;
+    void *type_node_resolver_context;
     core_list_t(tvar_t) tvars;
     bool          failed;
 } ictx;
 
 static th_type *eval(ictx *c, const parse_infer_expr_t *e);
 static th_type *fresh(ictx *c);
+
+static th_type *named_application(ictx *c, const char *name,
+                                  const th_arg *args, size_t n)
+{
+    uint8_t attrs;
+    if (n == 1 && args[0].kind == TH_ARG_TYPE
+        && th_indirection_attrs(name, &attrs))
+        return th_ind(c->tc, attrs, args[0].type);
+    return th_apply(c->tc, name, args, n);
+}
 
 static bool node_is(parse_grammar_t *grammar, parse_tree_t *node,
                     const char *name)
@@ -92,19 +104,27 @@ static bool tree_contains(parse_tree_t *root, const parse_tree_t *target)
     return false;
 }
 
-static th_type *method_call_shape(ictx *c, th_type *result)
+static parse_tree_t *method_call_parent(ictx *c)
 {
     parse_tree_t *parent = c->v->parent;
-    parse_tree_t *node = c->v->node;
-    if (!node_is(c->v->grammar, parent, "postfix-expr") ||
-        core_tree_num_children(parent) < 3 ||
-        core_tree_child(parent, 0) != node ||
-        !core_tree_is_leaf(core_tree_child(parent, 1)) ||
-        !parse_tree_leaf_is(core_tree_child(parent, 1),
-                             CORE_STRING_STATIC("(")))
-        return nullptr;
+    return node_is(c->v->grammar, parent, "postfix-expr") &&
+           core_tree_num_children(parent) >= 3 &&
+           core_tree_child(parent, 0) == c->v->node &&
+           core_tree_is_leaf(core_tree_child(parent, 1)) &&
+           parse_tree_leaf_is(core_tree_child(parent, 1),
+                              CORE_STRING_STATIC("("))
+        ? parent : nullptr;
+}
 
-    parse_tree_t *call_args = core_tree_child(parent, 2);
+static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
+{
+    if (!node_is(c->v->grammar, call, "postfix-expr") ||
+        core_tree_num_children(call) < 3 ||
+        !core_tree_is_leaf(core_tree_child(call, 1)) ||
+        !parse_tree_leaf_is(core_tree_child(call, 1),
+                            CORE_STRING_STATIC("("))) return nullptr;
+
+    parse_tree_t *call_args = core_tree_child(call, 2);
     parse_tree_t *positional = child_named(c->v->grammar, call_args,
                                             "positional-args");
     parse_tree_t *keywords = child_named(c->v->grammar, call_args,
@@ -143,6 +163,13 @@ static th_type *method_call_shape(ictx *c, th_type *result)
     core_list_free(params);
     core_list_free(kwparams);
     return shape;
+}
+
+static th_type *method_call_shape(ictx *c, th_type *result)
+{
+    parse_tree_t *parent = method_call_parent(c);
+    if (!parent) return nullptr;
+    return call_shape(c, parent, result);
 }
 
 static th_type *index_call_shape(ictx *c, th_type *result)
@@ -343,12 +370,18 @@ method_requirement_return(ictx *c, th_type *receiver,
         c->failed = true;
         return nullptr;
     }
-    th_type *self = th_func_param(requirement->signature, 0)->type;
+    th_type *signature = th_instantiate(
+        c->tc, th_generalize(c->tc, requirement->signature));
+    if (!signature || !th_func_nparams(signature)) {
+        c->failed = true;
+        return nullptr;
+    }
+    th_type *self = th_func_param(signature, 0)->type;
     if (!th_var_constrain(
             c->tc, self,
             (th_constraint){.kind = TH_CON_IMPLEMENTS,
                             .iface = requirement->trait_name}) ||
-        !unify_method_call_shape(c, requirement->signature, receiver,
+        !unify_method_call_shape(c, signature, receiver,
                                  result, call_shape)) {
         c->failed = true;
         return nullptr;
@@ -543,6 +576,30 @@ last_text(parse_tree_t *node)
                 : (core_string_t){0};
 }
 
+static th_type *
+field_projection(ictx *c, th_type *receiver, core_string_t name)
+{
+    if (!name.data) return fresh(c);
+    char *field_name = core_alloc_array(char, name.u8_bytes + 1);
+    memcpy(field_name, name.data, name.u8_bytes);
+    field_name[name.u8_bytes] = 0;
+    th_type *result = fresh(c);
+    th_type *field = th_record_lookup_in(c->tc, receiver, field_name);
+    if (field) {
+        core_free(field_name);
+        return field;
+    }
+    th_type *resolved = th_resolve(receiver);
+    bool constrained = resolved && th_kind_of(resolved) == TH_VAR
+        && th_var_constrain(c->tc, resolved,
+            (th_constraint){
+                .kind = TH_CON_HAS_FIELD,
+                .field = {.name = field_name, .type = result}});
+    core_free(field_name);
+    if (!constrained) c->failed = true;
+    return result;
+}
+
 static bool
 text_is(core_string_t text, const char *want)
 {
@@ -560,15 +617,27 @@ project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
 
     switch (op) {
     case PARSE_INFER_RETURN_OF: {
-        th_type *r = th_func_ret(t);
-
-        if (r) {
-            return r;
+        th_type *result = fresh(c);
+        th_type *shape = call_shape(c, c->v->node, result);
+        if (!shape) {
+            th_type *r = th_func_ret(t);
+            if (r) return r;
+            th_kind kind = th_kind_of(t);
+            return kind == TH_NAMED || kind == TH_RECORD ? t : fresh(c);
         }
 
-        th_kind kind = th_kind_of(t);
-
-        return kind == TH_NAMED || kind == TH_RECORD ? t : fresh(c);
+        th_type *resolved = th_resolve(t);
+        if (resolved && th_kind_of(resolved) == TH_FUNCTION) {
+            th_type *ret = th_func_ret(resolved);
+            return ret ? ret : result;
+        }
+        if (!resolved || th_kind_of(resolved) != TH_VAR ||
+            !th_unify_in_place(c->tc, t, shape)) {
+            c->failed = true;
+            return result;
+        }
+        th_type *ret = th_func_ret(t);
+        return ret ? ret : result;
     }
 
     case PARSE_INFER_ELEMENT_OF: {
@@ -646,26 +715,49 @@ project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
         memcpy(method_name, name.data, name.u8_bytes);
         method_name[name.u8_bytes] = 0;
 
+        th_type *call_result = fresh(c);
+        th_type *call = method_call_shape(c, call_result);
         th_type *signature = th_method_lookup(c->tc, t, method_name);
+        if (signature && th_kind_of(th_resolve(signature)) == TH_FUNCTION) {
+            th_type *instance = th_instantiate(
+                c->tc, th_generalize(c->tc, signature));
+            bool matched = call
+                ? unify_method_call_shape(c, instance, t, call_result, call)
+                : true;
+            core_free(method_name);
+            if (!matched) {
+                c->failed = true;
+                return call_result;
+            }
+            return call ? call : th_func_ret(instance);
+        }
 
-        if (!signature) {
-            signature = th_record_lookup(t, method_name);
+        signature = th_record_lookup_in(c->tc, t, method_name);
+        if (signature && th_kind_of(th_resolve(signature)) == TH_FUNCTION) {
+            th_type *instance = th_instantiate(
+                c->tc, th_generalize(c->tc, signature));
+            bool matched = !call || th_unify_in_place(c->tc, instance, call);
+            core_free(method_name);
+            if (!matched) {
+                c->failed = true;
+                return call_result;
+            }
+            th_type *ret = th_func_ret(instance);
+            return call ? call : ret;
         }
 
         if (!signature) {
             size_t requirement_count = th_env_method_requirements(
                 c->tc, method_name, nullptr, 0);
-            th_type *method_result = fresh(c);
-            th_type *call_shape = method_call_shape(c, method_result);
             if (requirement_count == 1) {
                 th_env_method_requirement_t requirement = {0};
                 th_env_method_requirements(c->tc, method_name, &requirement,
                                            1);
                 th_type *resolved = method_requirement_return(
-                    c, t, &requirement, method_result, call_shape);
+                    c, t, &requirement, call_result, call);
                 if (resolved) {
                     core_free(method_name);
-                    return resolved;
+                    return call ? call : resolved;
                 }
             } else if (requirement_count > 1) {
                 if (th_kind_of(th_resolve(t)) == TH_VAR) {
@@ -674,10 +766,10 @@ project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
                             (th_constraint){
                                 .kind = TH_CON_METHOD,
                                 .method = {.name = method_name,
-                                           .result = method_result,
-                                           .call = call_shape}})) {
+                                           .result = call_result,
+                                           .call = call}})) {
                         core_free(method_name);
-                        return method_result;
+                        return call ? call : call_result;
                     }
                     else
                         c->failed = true;
@@ -699,11 +791,11 @@ project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
                                        trait_name))
                                 continue;
                             th_type *resolved = method_requirement_return(
-                                c, t, &requirements[i], method_result,
-                                call_shape);
+                                c, t, &requirements[i], call_result, call);
                             core_free(requirements);
                             core_free(method_name);
-                            return resolved ? resolved : fresh(c);
+                            return resolved
+                                ? (call ? call : resolved) : fresh(c);
                         }
                         c->failed = true;
                     } else {
@@ -713,12 +805,12 @@ project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
                 }
             } else {
                 th_type *resolved = infer_method_obligation(
-                    c, t, method_name, method_result, call_shape);
+                    c, t, method_name, call_result, call);
                 core_free(method_name);
-                return resolved;
+                return call ? call : resolved;
             }
             core_free(method_name);
-            return method_result;
+            return call ? call : call_result;
         }
 
         th_type *ret = signature ? th_func_ret(signature) : nullptr;
@@ -727,6 +819,13 @@ project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
 
         return ret ? ret : fresh(c);
     }
+
+    case PARSE_INFER_FIELD_RETURN:
+        if (method_call_parent(c))
+            return project(c, PARSE_INFER_METHOD_RETURN, t,
+                explicit_name.data ? explicit_name : last_text(c->v->node));
+        return field_projection(c, t,
+            explicit_name.data ? explicit_name : last_text(c->v->node));
     }
 
     return fresh(c);
@@ -750,7 +849,11 @@ spread_args(ictx *c, int32_t ix, core_list_t(th_arg) * out)
             continue;
         }
 
-        th_type *t = ir_type_from_node(c->tc, c->v->grammar, k);
+        th_type *t = c->type_node_resolver
+            ? c->type_node_resolver(c->tc, c->v->grammar, k,
+                                    c->type_node_resolver_context)
+            : nullptr;
+        if (!t) t = ir_type_from_node(c->tc, c->v->grammar, k);
 
         if (t) {
             core_list_push(*out,
@@ -832,8 +935,8 @@ eval(ictx *c, const parse_infer_expr_t *e)
 
         app_args(c, e, &args);
 
-        th_type *r = th_apply(c->tc, e->name.data ? e->name.data : "",
-                              args.data, args.len);
+        th_type *r = named_application(c,
+            e->name.data ? e->name.data : "", args.data, args.len);
 
         core_list_free(args);
 
@@ -855,7 +958,7 @@ eval(ictx *c, const parse_infer_expr_t *e)
 
         app_args(c, e, &args);
 
-        th_type *r = th_apply(c->tc, nm.data, args.data, args.len);
+        th_type *r = named_application(c, nm.data, args.data, args.len);
 
         core_list_free(args);
 
@@ -931,11 +1034,10 @@ eval(ictx *c, const parse_infer_expr_t *e)
 }
 
 th_type *
-parse_infer_eval(const parse_infer_expr_t *e,
-               parse_visit_t            *v,
-               th_ctx                 *tc,
-               parse_symtab_t           *st,
-               bool                   *ok)
+parse_infer_eval_with_type_node_resolver(
+    const parse_infer_expr_t *e, parse_visit_t *v, th_ctx *tc,
+    parse_symtab_t *st, parse_infer_type_node_resolver_fn resolver,
+    void *resolver_context, bool *ok)
 {
     if (ok) {
         *ok = false;
@@ -973,7 +1075,14 @@ parse_infer_eval(const parse_infer_expr_t *e,
                                                           : first->column + 1});
     }
 
-    ictx c = {.tc = tc, .st = st, .v = v, .tvars = core_list_new(tvar_t)};
+    ictx c = {
+        .tc = tc,
+        .st = st,
+        .v = v,
+        .type_node_resolver = resolver,
+        .type_node_resolver_context = resolver_context,
+        .tvars = core_list_new(tvar_t),
+    };
 
     th_type *t = eval(&c, e);
 
@@ -984,4 +1093,12 @@ parse_infer_eval(const parse_infer_expr_t *e,
     core_list_free(c.tvars);
 
     return t;
+}
+
+th_type *
+parse_infer_eval(const parse_infer_expr_t *e, parse_visit_t *v, th_ctx *tc,
+                 parse_symtab_t *st, bool *ok)
+{
+    return parse_infer_eval_with_type_node_resolver(e, v, tc, st,
+        nullptr, nullptr, ok);
 }

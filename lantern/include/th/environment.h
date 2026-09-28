@@ -62,6 +62,7 @@ typedef enum {
   TH_ENV_METADATA_TYPE,
   TH_ENV_METADATA_TRAIT,
   TH_ENV_METADATA_FUNCTION,
+  TH_ENV_METADATA_VALUE,
 } th_env_metadata_owner_t;
 
 typedef enum {
@@ -71,6 +72,7 @@ typedef enum {
   TH_ENV_COMPOSE_TRAIT_CONFLICT,
   TH_ENV_COMPOSE_FUNCTION_CONFLICT,
   TH_ENV_COMPOSE_METADATA_CONFLICT,
+  TH_ENV_COMPOSE_VALUE_CONFLICT,
 } th_env_compose_status_t;
 
 typedef struct {
@@ -88,6 +90,39 @@ typedef struct {
   size_t size;
 } th_env_metadata_view_t;
 
+typedef enum {
+  TH_ENV_DECLARATION_TYPE,
+  TH_ENV_DECLARATION_TRAIT,
+  TH_ENV_DECLARATION_FUNCTION,
+  TH_ENV_DECLARATION_VALUE,
+} th_env_declaration_kind_t;
+
+typedef enum {
+  TH_ENV_TYPE_SHAPE_NONE,
+  TH_ENV_TYPE_SHAPE_RECORD,
+  TH_ENV_TYPE_SHAPE_VARIANT,
+  TH_ENV_TYPE_SHAPE_ENUM,
+  TH_ENV_TYPE_SHAPE_ALIAS,
+} th_env_type_shape_kind_t;
+
+/* Stable declaration metadata exposed to language frontends when constructing
+ * imported symbol tables. `contract` is null for types, a jointly quantified
+ * method-contract record for traits, and a jointly quantified callable
+ * contract for functions. All strings/types are borrowed from the frozen
+ * environment and remain valid while it is alive. */
+typedef struct {
+  th_env_declaration_kind_t kind;
+  const char *qualified_name;
+  const char *root_name;
+  const char *module;
+  const char *package;
+  th_env_visibility_t visibility;
+  th_type *contract;
+  th_env_type_shape_kind_t type_shape_kind;
+  th_type *type_shape;
+  th_type *value_type;
+} th_env_declaration_view_t;
+
 
 /* This is a language-neutral environment: callers provide stable qualified
  * identities and resolved visibility. Source spelling, import lookup, and
@@ -99,6 +134,8 @@ typedef struct {
  * supports concurrent queries from distinct th_ctx instances; callers must
  * not mutate or destroy it while queries are in flight. */
 th_env *th_env_new(void);
+/* Create an environment whose type allocations use a caller-owned universe. */
+th_env *th_env_new_in_context(th_ctx *types);
 void th_env_free(th_env *environment);
 
 /* Compose frozen library environments into a new mutable environment. The
@@ -119,6 +156,9 @@ th_env *th_env_compose_diagnose(const th_env *const *environments,
 th_env *th_env_compose_report(const th_env *const *environments, size_t count,
                               core_diagnostics_t *diagnostics,
                               th_env_compose_error_t *error);
+th_env *th_env_compose_report_in_context(
+    const th_env *const *environments, size_t count, th_ctx *types,
+    core_diagnostics_t *diagnostics, th_env_compose_error_t *error);
 
 /* Save requires a frozen environment. A zero mapping_capacity selects an
  * automatic size with transient room for reconstituting the loaded graph. */
@@ -127,9 +167,23 @@ bool th_env_save(const th_env *environment, const char *path,
                  core_object_archive_error_t *error);
 th_env *th_env_load(const char *path, core_object_archive_error_t *error);
 
+size_t th_env_declaration_count(const th_env *environment);
+bool th_env_declaration_at(const th_env *environment, size_t index,
+                           th_env_declaration_view_t *out);
+
 bool th_env_register_type(th_env *environment, const char *qualified_type_name,
                           const char *module, const char *package,
                           th_env_visibility_t visibility);
+/* A structural type definition is borrowed like a signature term and must
+ * remain alive while the environment is queried. It is archived with the
+ * frozen environment and reconciled when snapshots are composed. */
+bool th_env_register_type_shape(th_env *environment,
+                                const char *qualified_type_name,
+                                th_env_type_shape_kind_t shape_kind,
+                                th_type *shape);
+th_type *th_env_type_shape(const th_ctx *context,
+                           const char *qualified_type_name,
+                           th_env_type_shape_kind_t *shape_kind);
 /* Trait method signatures use Lantern's canonical receiver-first shape:
  * parameter zero is the receiver, and its type must be an unbound type
  * variable. A frontend for a language with another receiver convention can
@@ -171,6 +225,10 @@ bool th_env_register_function_contract(
     th_env *environment, const char *qualified_name, const char *root_name,
     const char *module, const char *package,
     th_env_visibility_t visibility, th_type *contract);
+bool th_env_register_value(th_env *environment, const char *qualified_name,
+                           const char *root_name, const char *module,
+                           const char *package, th_env_visibility_t visibility,
+                           th_type *value_type);
 th_type *th_env_signature_contract(th_ctx *context, th_type *signature,
                                    th_type *error_type);
 /* A callable contract is a function type with an intrinsic failure channel.
@@ -225,6 +283,10 @@ th_env_method_status_t th_env_method_resolve(th_ctx *context, th_type *receiver,
 th_env_method_status_t th_env_method_resolve_by_name(
     th_ctx *context, th_type *receiver, const char *method_name,
     th_env_method_t *method, const char **trait_name);
+/* True when every type matched by `specific` is also matched by `general`.
+ * This compares structural type patterns without binding either type. */
+bool th_env_type_pattern_subsumes(const th_type *general,
+                                  const th_type *specific);
 /* Enumerate every visible signature-compatible implementation of a trait
  * method. The logic relation indexes declarations; generic instantiation,
  * concrete receiver matching, constraints, and specificity remain in the type

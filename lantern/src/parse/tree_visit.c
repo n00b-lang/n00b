@@ -380,6 +380,14 @@ push_frame(parse_tree_walk_t *w, parse_tree_t *node, parse_tree_t *parent,
 void
 parse_tree_walk_run(parse_tree_walk_t *w, parse_tree_t *root)
 {
+    parse_tree_walk_run_with_parent(w, root, nullptr, 0, -1);
+}
+
+void
+parse_tree_walk_run_with_parent(parse_tree_walk_t *w, parse_tree_t *root,
+                                parse_tree_t *parent, int32_t depth,
+                                int32_t child_index)
+{
     if (!w || !root) {
         return;
     }
@@ -387,7 +395,7 @@ parse_tree_walk_run(parse_tree_walk_t *w, parse_tree_t *root)
     w->stopped   = false;
     w->stack.len = 0;
 
-    push_frame(w, root, nullptr, 0, -1);
+    push_frame(w, root, parent, depth, child_index);
 
     while (w->stack.len > 0) {
         size_t      top = w->stack.len - 1;

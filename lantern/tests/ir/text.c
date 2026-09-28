@@ -397,6 +397,36 @@ static void test_function_failure_channel_round_trips(void)
     ir_ctx_free(ctx);
 }
 
+static void test_phase_result_text_round_trips(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    const char *src =
+        "module m {\n"
+        "  profile bce\n"
+        "  target t\n\n"
+        "  func @consumer() -> i32 {\n"
+        "    block entry:\n"
+        "      %result: i32 = phase.result !ir.phase_result(\"build.value.1\")\n"
+        "      return %result\n"
+        "  }\n"
+        "}\n";
+    ir_diags_t *diagnostics = ir_diags_new(ctx, nullptr);
+    ir_module_t *module = ir_module_parse(ctx, src, 0, PROFILES,
+        sizeof(PROFILES) / sizeof(PROFILES[0]), diagnostics);
+    ir_func_t *consumer = module ? ir_func_find(module, "consumer") : nullptr;
+    ir_instr_t *phase_result = consumer && consumer->n_blocks
+        && consumer->blocks[0]->n_instrs
+        ? consumer->blocks[0]->instrs[0] : nullptr;
+    check("text IR parses typed cross-phase result references",
+          phase_result && phase_result->op == IR_OP_PHASE_RESULT
+              && ir_instr_phase_result(phase_result)
+              && !strcmp(ir_instr_phase_result(phase_result),
+                         "build.value.1"));
+    check("text IR round-trips phase result identity",
+          module && round_trips(ctx, src, nullptr));
+    ir_ctx_free(ctx);
+}
+
 static void test_variant_type_definition_round_trips(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -492,6 +522,296 @@ static void test_mutability_round_trips(void)
     ir_ctx_free(ctx);
 }
 
+static void test_global_string_initializer_round_trips(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    const char *source =
+        "module strings {\n  profile bce\n  target t\n\n"
+        "  const global @label: string = \"archive\\nvalue\"\n"
+        "  const global @empty: string = \"\"\n"
+        "  global @binary: string\n}\n";
+    ir_diags_t *diagnostics = nullptr;
+    ir_module_t *module = parse(ctx, source, &diagnostics);
+    ir_global_t *label = module ? ir_global_find(module, "label") : nullptr;
+    ir_global_t *empty = module ? ir_global_find(module, "empty") : nullptr;
+    ir_global_t *binary = module ? ir_global_find(module, "binary") : nullptr;
+    const char bytes[] = {'a', '\0', 'b'};
+    bool binary_set = binary && ir_global_set_string_initializer(
+        module, binary, bytes, sizeof(bytes));
+    check("global strings use typed static initializers, including empty strings",
+          label && empty && label->has_static_initializer
+              && label->static_initializer->kind == IR_GLOBAL_INIT_STRING
+              && empty->has_static_initializer
+              && empty->static_initializer->kind == IR_GLOBAL_INIT_STRING
+              && binary_set && binary->has_static_initializer
+              && binary->static_initializer->string.length == sizeof(bytes)
+              && !memcmp(binary->static_initializer->string.bytes, bytes,
+                         sizeof(bytes)));
+    char *printed = module ? ir_module_print(module) : nullptr;
+    check("global string initializer spelling round-trips",
+          printed && strstr(printed,
+              "const global @label: string = \"archive\\nvalue\"")
+              && strstr(printed, "const global @empty: string = \"\"")
+              && strstr(printed,
+                        "global @binary: string = \"a\\u0000b\""));
+    ir_ctx_t *round_ctx = ir_ctx_new();
+    ir_diags_t *round_diags = nullptr;
+    ir_module_t *round_trip = printed
+        ? parse(round_ctx, printed, &round_diags) : nullptr;
+    check("printed global string initializers reparse", round_trip != nullptr);
+    ir_global_t *round_binary = round_trip
+        ? ir_global_find(round_trip, "binary") : nullptr;
+    check("embedded NUL survives typed global initializer text round-trip",
+          round_binary && round_binary->has_static_initializer
+              && round_binary->static_initializer->kind
+                  == IR_GLOBAL_INIT_STRING
+              && round_binary->static_initializer->string.length
+                  == sizeof(bytes)
+              && !memcmp(round_binary->static_initializer->string.bytes,
+                         bytes, sizeof(bytes)));
+    free(printed);
+    ir_ctx_free(round_ctx);
+    ir_ctx_free(ctx);
+}
+
+static void test_recursive_global_initializers(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    const char *source =
+        "module init_tree {\n  profile bce\n  target t\n\n"
+        "  global @enabled: bool = true\n"
+        "  global @answer: i64 = 42\n"
+        "  global @ratio: f64 = 1.5\n"
+        "  global @deferred: i64 = "
+        "$\"default:init_tree:deferred\"\n"
+        "  global @numbers: list[i64] = [1, 2, 3]\n"
+        "  global @fixed_array: array[i64; 3] = [1, 2, 3]\n"
+        "  global @fixed_matrix: array[array[i64; 2]; 2] = "
+        "[[1, 2], [3, 4]]\n"
+        "  global @pair: __ty.tuple[i64, string] = (7, \"seven\")\n"
+        "  global @state: (values: list[i64], ready: bool) = "
+        "{values = [4, 5], ready = true}\n"
+        "  global @flags: set[i64] = set{1, 2}\n"
+        "  global @empty_flags: set[i64] = set{}\n"
+        "  global @lookup: dict[string, i64] = "
+        "dict{\"one\" => 1, \"two\" => 2}\n"
+        "  global @empty_lookup: dict[string, i64] = dict{}\n"
+        "}\n";
+    ir_module_t *module = parse(ctx, source, nullptr);
+    ir_global_t *numbers = module ? ir_global_find(module, "numbers") : nullptr;
+    ir_global_t *fixed_array = module
+        ? ir_global_find(module, "fixed_array") : nullptr;
+    ir_global_t *fixed_matrix = module
+        ? ir_global_find(module, "fixed_matrix") : nullptr;
+    ir_global_t *enabled = module ? ir_global_find(module, "enabled") : nullptr;
+    ir_global_t *answer = module ? ir_global_find(module, "answer") : nullptr;
+    ir_global_t *ratio = module ? ir_global_find(module, "ratio") : nullptr;
+    ir_global_t *deferred = module
+        ? ir_global_find(module, "deferred") : nullptr;
+    ir_global_t *pair = module ? ir_global_find(module, "pair") : nullptr;
+    ir_global_t *state = module ? ir_global_find(module, "state") : nullptr;
+    ir_global_t *flags = module ? ir_global_find(module, "flags") : nullptr;
+    ir_global_t *empty_flags = module
+        ? ir_global_find(module, "empty_flags") : nullptr;
+    ir_global_t *lookup = module ? ir_global_find(module, "lookup") : nullptr;
+    ir_global_t *empty_lookup = module
+        ? ir_global_find(module, "empty_lookup") : nullptr;
+    check("recursive aggregate global initializers parse", module != nullptr);
+    check("scalar globals use the same typed initializer representation",
+          enabled && answer && ratio
+              && enabled->has_static_initializer
+              && enabled->static_initializer->kind == IR_GLOBAL_INIT_BOOL
+              && enabled->static_initializer->boolean
+              && answer->has_static_initializer
+              && answer->static_initializer->kind == IR_GLOBAL_INIT_INT
+              && ir_lit_signed(answer->static_initializer->integer) == 42
+              && ratio->has_static_initializer
+              && ratio->static_initializer->kind == IR_GLOBAL_INIT_FLOAT
+              && ratio->static_initializer->floating == 1.5
+              && deferred && deferred->has_static_initializer
+              && deferred->static_initializer->kind
+                  == IR_GLOBAL_INIT_PHASE_RESULT
+              && !strcmp(deferred->static_initializer->phase_result.identifier,
+                  "default:init_tree:deferred"));
+    bool result_initializer = answer
+        && ir_global_set_phase_result_initializer(module, answer,
+                                                   "default:init_tree:answer");
+    check("a phase result replaces literal data and remains type-valid",
+          result_initializer
+              && ir_global_static_initializer_valid(module, answer)
+              && answer->static_initializer->kind
+                  == IR_GLOBAL_INIT_PHASE_RESULT
+              && ir_global_set_phase_result_initializer(module, answer,
+                   "default:init_tree:answer")
+              && !ir_global_set_phase_result_initializer(module, answer,
+                   "other:answer"));
+    check("sequence initializer is retained and type-valid",
+          numbers && numbers->has_static_initializer
+              && ir_global_static_initializer_valid(module, numbers)
+              && numbers->static_initializer->kind
+                  == IR_GLOBAL_INIT_SEQUENCE
+              && numbers->static_initializer->aggregate.count == 3);
+    uint64_t array_extent = 0, matrix_extent = 0, row_extent = 0;
+    th_type *matrix_row = fixed_matrix
+        ? th_seq_elem(th_resolve(fixed_matrix->type)) : nullptr;
+    check("fixed array initializers retain rank and every declared extent",
+          fixed_array && fixed_matrix
+              && ir_global_static_initializer_valid(module, fixed_array)
+              && ir_global_static_initializer_valid(module, fixed_matrix)
+              && th_seq_extent(th_resolve(fixed_array->type), &array_extent)
+              && array_extent == 3
+              && th_seq_extent(th_resolve(fixed_matrix->type),
+                               &matrix_extent)
+              && matrix_extent == 2 && matrix_row
+              && th_seq_extent(th_resolve(matrix_row), &row_extent)
+              && row_extent == 2
+              && fixed_matrix->static_initializer->aggregate.items[1]
+                     .aggregate.count == 2);
+    check("tuple initializer retains its nested string value",
+          pair && pair->has_static_initializer
+              && pair->static_initializer->kind == IR_GLOBAL_INIT_TUPLE
+              && pair->static_initializer->aggregate.count == 2
+              && pair->static_initializer->aggregate.items[1].kind
+                  == IR_GLOBAL_INIT_STRING);
+    check("record initializer recursively retains sequence and boolean",
+          state && state->has_static_initializer
+              && state->static_initializer->kind == IR_GLOBAL_INIT_RECORD
+              && state->static_initializer->aggregate.count == 2
+              && state->static_initializer->aggregate.items[0]
+                     .aggregate.count == 2
+              && state->static_initializer->aggregate.items[1].kind
+                  == IR_GLOBAL_INIT_BOOL
+              && state->static_initializer->aggregate.items[1].boolean);
+    check("set and dictionary initializers retain their kinds",
+          flags && lookup && flags->has_static_initializer
+              && flags->static_initializer->kind == IR_GLOBAL_INIT_SET
+              && lookup->has_static_initializer
+              && lookup->static_initializer->kind
+                  == IR_GLOBAL_INIT_DICTIONARY
+              && lookup->static_initializer->aggregate.count == 4);
+    check("empty set and dictionary initializers are represented",
+          empty_flags && empty_lookup
+              && ir_global_static_initializer_valid(module, empty_flags)
+              && ir_global_static_initializer_valid(module, empty_lookup)
+              && empty_flags->static_initializer->kind == IR_GLOBAL_INIT_SET
+              && empty_flags->static_initializer->aggregate.count == 0
+              && empty_lookup->static_initializer->kind
+                  == IR_GLOBAL_INIT_DICTIONARY
+              && empty_lookup->static_initializer->aggregate.count == 0);
+    check("recursive initializer text round-trips",
+          round_trips(ctx, source, nullptr));
+    ir_ctx_free(ctx);
+}
+
+static void test_phase_mutability_round_trips(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    const char *src =
+        "module phase {\n  profile bce\n  target host\n\n"
+        "  const global @config: i32 = 1 !ir.comptime_mutability(0)\n\n"
+        "  func @init(%source: i32, %target: ptr[i32]) -> i32 "
+        "!ir.execution_phase(1) {\n"
+        "    local $captured: i32\n"
+        "    block entry:\n"
+        "      $captured = copy %source\n"
+        "      return %source\n  }\n}\n";
+    ir_diags_t *diagnostics = nullptr;
+    ir_module_t *module = parse(ctx, src, &diagnostics);
+    ir_global_t *global = module ? ir_global_find(module, "config") : nullptr;
+    ir_func_t *function = module ? ir_func_find(module, "init") : nullptr;
+    ir_value_t *source = function ? ir_value_find(function, "source") : nullptr;
+    ir_value_t *target = function ? ir_value_find(function, "target") : nullptr;
+    ir_local_t *captured = function
+        ? ir_local_find(function, "captured") : nullptr;
+    ir_instr_t *copy_instruction = nullptr;
+    ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
+    for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
+        if (entry->instrs[i]->op == IR_OP_COPY)
+            copy_instruction = entry->instrs[i];
+
+    check("phase-specific mutability metadata parses",
+          module && global && function);
+    check("runtime and compile-time mutability remain distinct",
+          global && global->mutability == IR_MUT_CONST
+              && ir_global_comptime_mutability(global) == IR_MUT_MUTABLE);
+    check("function execution phase parses",
+          function
+              && ir_func_execution_phase(function) == IR_PHASE_COMPTIME);
+    check("phase-specific metadata survives text round-trip",
+          round_trips(ctx, src, nullptr));
+    check("global storage rejects an unhonored required class",
+          global && !ir_global_set_storage_class(
+              ctx, global, "pool", true, "gc"));
+    bool binding_facts = source && target && captured && copy_instruction
+        && ir_value_set_phase_access(ctx, source, IR_PHASE_ACCESS_BOTH,
+            IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_NONE)
+        && ir_value_set_indirect_access(ctx, target,
+            IR_INDIRECT_ACCESS_READ_WRITE)
+        && ir_value_set_phase_access(ctx, ir_local_value(function, captured),
+            IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_NONE,
+            IR_PHASE_ACCESS_COMPTIME)
+        && ir_instr_set_binding_initialization(copy_instruction, true);
+    bool phase_facts = global && function && binding_facts
+        && ir_global_set_phase_access(ctx, global,
+            IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_COMPTIME,
+            IR_PHASE_ACCESS_COMPTIME)
+        && ir_global_set_storage_class(ctx, global, "pool", true, "pool")
+        && ir_global_set_storage_duration(
+            ctx, global, IR_STORAGE_DURATION_MODULE)
+        && ir_func_set_initializer(ctx, function, true);
+    char *serialized = phase_facts ? ir_module_print(module) : nullptr;
+    ir_module_t *copy = serialized ? parse(ctx, serialized, nullptr) : nullptr;
+    ir_global_t *copy_global = copy
+        ? ir_global_find(copy, "config") : nullptr;
+    ir_func_t *copy_function = copy
+        ? ir_func_find(copy, "init") : nullptr;
+    ir_value_t *copy_source = copy_function
+        ? ir_value_find(copy_function, "source") : nullptr;
+    ir_value_t *copy_target = copy_function
+        ? ir_value_find(copy_function, "target") : nullptr;
+    ir_local_t *copy_captured = copy_function
+        ? ir_local_find(copy_function, "captured") : nullptr;
+    ir_instr_t *copy_binding_init = nullptr;
+    ir_block_t *copy_entry = copy_function
+        ? ir_block_entry(copy_function) : nullptr;
+    for (uint32_t i = 0; copy_entry && i < copy_entry->n_instrs; i++)
+        if (copy_entry->instrs[i]->op == IR_OP_COPY
+            && ir_instr_is_binding_initialization(copy_entry->instrs[i]))
+            copy_binding_init = copy_entry->instrs[i];
+    bool storage_required = false;
+    const char *storage_requested = nullptr;
+    const char *storage_selected = ir_global_storage_class(
+        copy_global, &storage_required, &storage_requested);
+    check("global phase masks and initializer identity survive IR round-trip",
+          copy_global && copy_function
+              && ir_global_can_read(copy_global, IR_PHASE_COMPTIME)
+              && ir_global_can_read(copy_global, IR_PHASE_RUNTIME)
+              && ir_global_can_write(copy_global, IR_PHASE_COMPTIME)
+              && !ir_global_can_write(copy_global, IR_PHASE_RUNTIME)
+              && ir_global_can_initialize(copy_global, IR_PHASE_COMPTIME)
+              && ir_func_is_initializer(copy_function));
+    check("global storage duration and required class survive IR round-trip",
+          copy_global
+              && ir_global_storage_duration(copy_global)
+                     == IR_STORAGE_DURATION_MODULE
+              && storage_required && storage_requested && storage_selected
+              && !strcmp(storage_requested, "pool")
+              && !strcmp(storage_selected, "pool"));
+    check("value phase facts and declaration initialization survive IR round-trip",
+          copy_source && copy_captured && copy_binding_init
+              && ir_value_can_read(copy_source, IR_PHASE_COMPTIME)
+              && !ir_value_can_write(copy_source, IR_PHASE_COMPTIME)
+              && ir_value_can_initialize(
+                  ir_local_value(copy_function, copy_captured),
+                  IR_PHASE_COMPTIME));
+    check("indirect parameter effects survive IR text round-trip",
+          copy_target
+              && ir_value_indirect_access(copy_target)
+                     == IR_INDIRECT_ACCESS_READ_WRITE);
+    free(serialized);
+    ir_ctx_free(ctx);
+}
+
 static void test_meta_round_trip(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -564,6 +884,82 @@ static void test_meta_round_trip(void)
 
     check("metadata round-trips", round_trips(ctx, src, nullptr));
 
+    ir_ctx_free(ctx);
+}
+
+static void test_binding_facts_round_trip(void)
+{
+    const char *src =
+        "module binding {\n  profile bce\n\n"
+        "  global @owner: i32\n"
+        "  global @view: i32 !ir.binding_phases(3) !ir.alias0(@owner)\n"
+        "\n  func @f(%owner: i32, %view: i32 !ir.binding_phases(3)"
+        " !ir.alias0(%owner)) -> i32 {\n"
+        "    local $owner2: i32\n"
+        "    local $view2: i32 !ir.alias0($owner2)\n"
+        "\n    block entry:\n  }\n}\n";
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *diagnostics = nullptr;
+    ir_module_t *module = parse(ctx, src, &diagnostics);
+    check("binding facts parse on globals, parameters, and locals",
+          module != nullptr);
+    if (!module) {
+        char *rendered = ir_diags_render_text(diagnostics,
+                                               &(ir_render_t){0});
+        printf("%s", rendered ? rendered : "");
+        free(rendered);
+        ir_ctx_free(ctx);
+        return;
+    }
+
+    ir_global_t *global_view = ir_global_find(module, "view");
+    ir_annot_t *global_alias = global_view
+        ? ir_annot_get(&global_view->annots, "ir.alias0") : nullptr;
+    check("a global alias resolves to the referenced global",
+          global_alias && global_alias->kind == IR_ANNOT_VALUE
+              && global_alias->v && global_alias->v->global
+              && !strcmp(global_alias->v->global->name, "owner"));
+
+    ir_func_t *function = ir_func_find(module, "f");
+    ir_value_t *parameter = function
+        ? ir_value_find(function, "view") : nullptr;
+    ir_annot_t *parameter_alias = parameter
+        ? ir_annot_get(ir_value_annots(parameter), "ir.alias0") : nullptr;
+    check("a parameter alias resolves to its peer parameter",
+          parameter_alias && parameter_alias->kind == IR_ANNOT_VALUE
+              && parameter_alias->v
+              && !strcmp(parameter_alias->v->name, "owner"));
+
+    ir_local_t *local_view = function
+        ? ir_local_find(function, "view2") : nullptr;
+    ir_value_t *local_value = function && local_view
+        ? ir_local_value(function, local_view) : nullptr;
+    ir_annot_t *local_alias = local_value
+        ? ir_annot_get(ir_value_annots(local_value), "ir.alias0") : nullptr;
+    check("a local alias resolves to its local storage identity",
+          local_alias && local_alias->kind == IR_ANNOT_VALUE
+              && local_alias->v && local_alias->v->local
+              && !strcmp(local_alias->v->local->name, "owner2"));
+
+    char *printed = ir_module_print(module);
+    ir_ctx_t *ctx2 = ir_ctx_new();
+    ir_diags_t *diagnostics2 = nullptr;
+    ir_module_t *round_trip = printed
+        ? parse(ctx2, printed, &diagnostics2) : nullptr;
+    check("binding and alias facts survive IR text round-trip",
+          round_trip != nullptr);
+    if (!round_trip && diagnostics2) {
+        char *rendered = ir_diags_render_text(diagnostics2,
+                                               &(ir_render_t){0});
+        printf("%s", rendered ? rendered : "");
+        free(rendered);
+    }
+    char *printed_again = round_trip ? ir_module_print(round_trip) : nullptr;
+    check("binding fact round-trip is text-stable",
+          printed && printed_again && !strcmp(printed, printed_again));
+    free(printed);
+    free(printed_again);
+    ir_ctx_free(ctx2);
     ir_ctx_free(ctx);
 }
 
@@ -644,6 +1040,10 @@ static void test_errors(void)
         " jump nowhere\n }\n}",
         "module m {\n profile bce\n func @f() -> void {\n block e:\n"
         " %x: i32 = and ordered %a, %b\n }\n}",
+        "module m {\n profile bce\n target t\n"
+        " global @bad: i32 = \"wrong\"\n}",
+        "module m {\n profile bce\n target t\n"
+        " global @bad: list[i32] = [1, \"wrong\"]\n}",
     };
 
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
@@ -1558,9 +1958,14 @@ int main(int argc, char **argv)
     test_whitespace_and_comments();
     test_types_are_typelang();
     test_function_failure_channel_round_trips();
+    test_phase_result_text_round_trips();
     test_variant_type_definition_round_trips();
     test_mutability_round_trips();
+    test_global_string_initializer_round_trips();
+    test_recursive_global_initializers();
+    test_phase_mutability_round_trips();
     test_meta_round_trip();
+    test_binding_facts_round_trip();
     test_both_forms();
     test_cross_profile();
     test_named_args();

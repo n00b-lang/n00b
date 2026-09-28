@@ -649,24 +649,21 @@ static void *r_ind_attrs(parse_reduce_t *r)
 
 static uint8_t sugar_attrs(parse_grammar_t *g, int32_t alt)
 {
-    static const struct {
-        core_string_t name;
-        uint8_t       attrs;
-    } map[] = {
-        {CORE_STRING_STATIC("ptr"), TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE},
-        {CORE_STRING_STATIC("mutref"), TH_EXCLUSIVE},
-        {CORE_STRING_STATIC("own"), TH_OWNING},
-        {CORE_STRING_STATIC("gcref"), TH_NULLABLE | TH_RESEATABLE},
-        {CORE_STRING_STATIC("tmpref"), TH_TEMPORARY},
+    static const core_string_t names[] = {
+        CORE_STRING_STATIC("ref"), CORE_STRING_STATIC("ptr"),
+        CORE_STRING_STATIC("mutref"), CORE_STRING_STATIC("own"),
+        CORE_STRING_STATIC("gcref"), CORE_STRING_STATIC("tmpref"),
     };
 
-    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         if (parse_alt_leads_with(g, CORE_STRING_STATIC("ind-name"), alt,
-                                 map[i].name)) {
-            return map[i].attrs;
+                                 names[i])) {
+            const char *name = names[i].data;
+            uint8_t attrs = 0;
+            th_indirection_attrs(name, &attrs);
+            return attrs;
         }
     }
-
     return 0;
 }
 

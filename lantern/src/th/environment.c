@@ -269,12 +269,20 @@ static bool receiver_subsumes(th_type *general, th_type *specific) {
   return result;
 }
 
+bool th_env_type_pattern_subsumes(const th_type *general,
+                                  const th_type *specific) {
+  return general && specific && receiver_subsumes((th_type *)general,
+                                                   (th_type *)specific);
+}
+
 th_env *th_env_new(void) {
   th_env *env = core_alloc(th_env);
   memset(env, 0, sizeof(*env));
   env->types = th_ctx_new();
+  env->owns_types = true;
   env->traits = core_list_new(th_env_trait_t);
   env->functions = core_list_new(th_env_function_t);
+  env->values = core_list_new(th_env_value_t);
   env->intrinsic_types = core_list_new(th_env_intrinsic_type_t);
   env->type_origins = core_list_new(th_env_type_origin_t);
   env->method_symbols = core_list_new(th_env_method_symbol_t);
@@ -286,6 +294,20 @@ th_env *th_env_new(void) {
       env->logic, CORE_STRING_STATIC("intrinsic_trait_type"), 2);
   return env;
 }
+
+th_env *th_env_new_in_context(th_ctx *types) {
+  if (!types) return nullptr;
+  th_env *env = th_env_new();
+  if (!env) return nullptr;
+  th_ctx_free(env->types);
+  env->types = types;
+  env->owns_types = false;
+  return env;
+}
+
+static th_env *th_env_compose_diagnose_in_context(
+    const th_env *const *environments, size_t count, th_ctx *types,
+    th_env_compose_error_t *error);
 
 th_env *th_env_compose(const th_env *const *environments, size_t count) {
   return th_env_compose_diagnose(environments, count, nullptr);
@@ -318,6 +340,10 @@ static void report_compose_error(core_diagnostics_t *diagnostics,
     code = "TH-L0005";
     kind = "conflicting metadata";
     break;
+  case TH_ENV_COMPOSE_VALUE_CONFLICT:
+    code = "TH-L0006";
+    kind = "conflicting value declaration";
+    break;
   }
   char message[512];
   int length = error->identity
@@ -344,21 +370,46 @@ static void report_compose_error(core_diagnostics_t *diagnostics,
 th_env *th_env_compose_report(const th_env *const *environments, size_t count,
                               core_diagnostics_t *diagnostics,
                               th_env_compose_error_t *error) {
+  return th_env_compose_report_in_context(environments, count, nullptr,
+                                          diagnostics, error);
+}
+
+th_env *th_env_compose_report_in_context(
+    const th_env *const *environments, size_t count, th_ctx *types,
+    core_diagnostics_t *diagnostics, th_env_compose_error_t *error) {
   th_env_compose_error_t local_error = {0};
-  th_env *result = th_env_compose_diagnose(
-      environments, count, error ? error : &local_error);
+  th_env *result = th_env_compose_diagnose_in_context(
+      environments, count, types, error ? error : &local_error);
   report_compose_error(diagnostics, error ? error : &local_error);
   return result;
 }
 
 th_env *th_env_compose_diagnose(const th_env *const *environments,
                                 size_t count, th_env_compose_error_t *error) {
+  return th_env_compose_diagnose_in_context(environments, count, nullptr,
+                                            error);
+}
+
+static th_type *
+composition_type(const th_env *source, th_env *destination,
+                 const th_type *type)
+{
+  if (!type) return nullptr;
+  return source->types == destination->types
+      ? (th_type *)type : th_type_clone(destination->types, type);
+}
+
+static th_env *
+th_env_compose_diagnose_in_context(const th_env *const *environments,
+                                   size_t count, th_ctx *types,
+                                   th_env_compose_error_t *error)
+{
   if (error)
     *error = (th_env_compose_error_t){.status = TH_ENV_COMPOSE_OK};
   if (count && !environments)
     goto invalid_source;
 
-  th_env *composed = th_env_new();
+  th_env *composed = types ? th_env_new_in_context(types) : th_env_new();
   for (size_t i = 0; i < count; i++) {
     const th_env *source = environments[i];
     if (!source || !source->frozen)
@@ -368,6 +419,16 @@ th_env *th_env_compose_diagnose(const th_env *const *environments,
       const th_env_type_origin_t *origin = &source->type_origins.data[j];
       if (!th_env_register_type(composed, origin->name, origin->module,
                                 origin->package, origin->visibility)) {
+        if (error)
+          *error = (th_env_compose_error_t){
+              .status = TH_ENV_COMPOSE_TYPE_CONFLICT,
+              .identity = origin->name};
+        goto fail;
+      }
+      if (origin->shape_kind != TH_ENV_TYPE_SHAPE_NONE &&
+          !th_env_register_type_shape(composed, origin->name,
+              origin->shape_kind,
+              composition_type(source, composed, origin->shape))) {
         if (error)
           *error = (th_env_compose_error_t){
               .status = TH_ENV_COMPOSE_TYPE_CONFLICT,
@@ -386,7 +447,8 @@ th_env *th_env_compose_diagnose(const th_env *const *environments,
           !strcmp(existing->package, trait->package);
       if (!merge_marker && !th_env_register_trait_contracts(
               composed, trait->name, trait->module, trait->package,
-              trait->visibility, trait->contracts)) {
+              trait->visibility,
+              composition_type(source, composed, trait->contracts))) {
         if (error)
           *error = (th_env_compose_error_t){
               .status = TH_ENV_COMPOSE_TRAIT_CONFLICT,
@@ -399,7 +461,7 @@ th_env *th_env_compose_diagnose(const th_env *const *environments,
       if (!th_env_register_function_contract(
               composed, function->qualified_name, function->root_name,
               function->module, function->package, function->visibility,
-              function->contract)) {
+              composition_type(source, composed, function->contract))) {
         if (error)
           *error = (th_env_compose_error_t){
               .status = TH_ENV_COMPOSE_FUNCTION_CONFLICT,
@@ -407,11 +469,26 @@ th_env *th_env_compose_diagnose(const th_env *const *environments,
         goto fail;
       }
     }
+    for (size_t j = 0; j < source->values.len; j++) {
+      const th_env_value_t *value = &source->values.data[j];
+      if (!th_env_register_value(composed, value->qualified_name,
+              value->root_name, value->module, value->package,
+              value->visibility,
+              composition_type(source, composed, value->type))) {
+        if (error)
+          *error = (th_env_compose_error_t){
+              .status = TH_ENV_COMPOSE_VALUE_CONFLICT,
+              .identity = value->qualified_name};
+        goto fail;
+      }
+    }
     for (size_t j = 0; j < source->intrinsic_types.len; j++) {
       const th_env_intrinsic_type_t *fact =
           &source->intrinsic_types.data[j];
       if (!th_env_register_intrinsic_type_pattern(
-              composed, fact->trait_name, fact->receiver_pattern)) {
+              composed, fact->trait_name,
+              composition_type(source, composed,
+                              fact->receiver_pattern))) {
         if (error)
           *error = (th_env_compose_error_t){
               .status = TH_ENV_COMPOSE_TRAIT_CONFLICT,
@@ -457,13 +534,15 @@ invalid_source:
 void th_env_release_contents(th_env *env) {
   core_list_free(env->traits);
   core_list_free(env->functions);
+  core_list_free(env->values);
   core_list_free(env->intrinsic_types);
   core_list_free(env->type_origins);
   core_list_free(env->method_symbols);
   core_list_free(env->metadata);
   core_datalog_engine_free(env->logic);
   env->logic = nullptr;
-  th_ctx_free(env->types);
+  if (env->owns_types)
+    th_ctx_free(env->types);
   env->types = nullptr;
 }
 
@@ -501,6 +580,30 @@ bool th_env_register_type(th_env *env, const char *name, const char *module,
                      .visibility = visibility,
                  }));
   return true;
+}
+
+bool th_env_register_type_shape(th_env *env, const char *name,
+                                th_env_type_shape_kind_t shape_kind,
+                                th_type *shape) {
+  if (!env || env->frozen || !name || !*name || !shape ||
+      shape_kind <= TH_ENV_TYPE_SHAPE_NONE ||
+      shape_kind > TH_ENV_TYPE_SHAPE_ALIAS)
+    return false;
+  for (size_t i = 0; i < env->type_origins.len; i++) {
+    th_env_type_origin_t *origin = &env->type_origins.data[i];
+    if (strcmp(origin->name, name)) continue;
+    if (origin->shape_kind == TH_ENV_TYPE_SHAPE_NONE) {
+      origin->shape_kind = shape_kind;
+      origin->shape = shape;
+      return true;
+    }
+    if (origin->shape_kind != shape_kind) return false;
+    core_list_t(type_pair_t) seen = core_list_new(type_pair_t);
+    bool equal = pattern_equal(origin->shape, shape, &seen);
+    core_list_free(seen);
+    return equal;
+  }
+  return false;
 }
 
 bool th_env_register_trait(th_env *env, const char *name, const char *module,
@@ -722,6 +825,33 @@ bool th_env_register_function_contract(
   return true;
 }
 
+bool th_env_register_value(th_env *env, const char *qualified_name,
+                           const char *root_name, const char *module,
+                           const char *package, th_env_visibility_t visibility,
+                           th_type *value_type) {
+  if (!env || env->frozen || !qualified_name || !*qualified_name ||
+      !root_name || !*root_name || !module || !package || !value_type ||
+      visibility > TH_ENV_PUBLIC) return false;
+  for (size_t i = 0; i < env->values.len; i++) {
+    const th_env_value_t *current = &env->values.data[i];
+    if (strcmp(current->qualified_name, qualified_name)) continue;
+    return !strcmp(current->module, module) &&
+        !strcmp(current->package, package) &&
+        current->visibility == visibility &&
+        th_hash(env->types, current->type) == th_hash(env->types, value_type);
+  }
+  core_list_push(env->values, ((th_env_value_t){
+      .qualified_name = th_strdup(env->types, qualified_name,
+                                  strlen(qualified_name)),
+      .root_name = th_strdup(env->types, root_name, strlen(root_name)),
+      .module = th_strdup(env->types, module, strlen(module)),
+      .package = th_strdup(env->types, package, strlen(package)),
+      .visibility = visibility,
+      .type = value_type,
+  }));
+  return true;
+}
+
 static bool metadata_owner_exists(const th_env *env,
                                   th_env_metadata_owner_t owner_kind,
                                   const char *owner_name) {
@@ -738,6 +868,11 @@ static bool metadata_owner_exists(const th_env *env,
       if (!strcmp(env->functions.data[i].qualified_name, owner_name))
         return true;
     return false;
+  case TH_ENV_METADATA_VALUE:
+    for (size_t i = 0; i < env->values.len; i++)
+      if (!strcmp(env->values.data[i].qualified_name, owner_name))
+        return true;
+    return false;
   }
   return false;
 }
@@ -747,7 +882,7 @@ bool th_env_register_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
                               uint32_t version, const void *data,
                               size_t size) {
   if (!env || env->frozen || owner_kind < TH_ENV_METADATA_TYPE ||
-      owner_kind > TH_ENV_METADATA_FUNCTION ||
+      owner_kind > TH_ENV_METADATA_VALUE ||
       !owner_name || !*owner_name || !key || !*key || !version ||
       (size && !data) || !metadata_owner_exists(env, owner_kind, owner_name))
     return false;
@@ -792,6 +927,77 @@ bool th_env_metadata_at(const th_env *env, size_t index,
       .size = entry->size,
   };
   return true;
+}
+
+size_t th_env_declaration_count(const th_env *env) {
+  if (!env || env->type_origins.len > SIZE_MAX - env->traits.len ||
+      env->type_origins.len + env->traits.len >
+          SIZE_MAX - env->functions.len ||
+      env->type_origins.len + env->traits.len + env->functions.len >
+          SIZE_MAX - env->values.len)
+    return 0;
+  return env->type_origins.len + env->traits.len + env->functions.len +
+      env->values.len;
+}
+
+bool th_env_declaration_at(const th_env *env, size_t index,
+                           th_env_declaration_view_t *out) {
+  if (!env || !out) return false;
+  if (index < env->type_origins.len) {
+    const th_env_type_origin_t *origin = &env->type_origins.data[index];
+    *out = (th_env_declaration_view_t){
+        .kind = TH_ENV_DECLARATION_TYPE,
+        .qualified_name = origin->name,
+        .module = origin->module,
+        .package = origin->package,
+        .visibility = origin->visibility,
+        .type_shape_kind = origin->shape_kind,
+        .type_shape = origin->shape,
+    };
+    return true;
+  }
+  index -= env->type_origins.len;
+  if (index < env->traits.len) {
+    const th_env_trait_t *trait = &env->traits.data[index];
+    *out = (th_env_declaration_view_t){
+        .kind = TH_ENV_DECLARATION_TRAIT,
+        .qualified_name = trait->name,
+        .module = trait->module,
+        .package = trait->package,
+        .visibility = trait->visibility,
+        .contract = trait->contracts,
+    };
+    return true;
+  }
+  index -= env->traits.len;
+  if (index < env->functions.len) {
+    const th_env_function_t *function = &env->functions.data[index];
+    *out = (th_env_declaration_view_t){
+        .kind = TH_ENV_DECLARATION_FUNCTION,
+        .qualified_name = function->qualified_name,
+        .root_name = function->root_name,
+        .module = function->module,
+        .package = function->package,
+        .visibility = function->visibility,
+        .contract = function->contract,
+    };
+    return true;
+  }
+  index -= env->functions.len;
+  if (index < env->values.len) {
+    const th_env_value_t *value = &env->values.data[index];
+    *out = (th_env_declaration_view_t){
+        .kind = TH_ENV_DECLARATION_VALUE,
+        .qualified_name = value->qualified_name,
+        .root_name = value->root_name,
+        .module = value->module,
+        .package = value->package,
+        .visibility = value->visibility,
+        .value_type = value->type,
+    };
+    return true;
+  }
+  return false;
 }
 
 bool th_env_freeze(th_env *env) {
@@ -874,20 +1080,26 @@ bool th_ctx_set_environment(th_ctx *ctx, const th_env *env, const char *module,
     return ctx->environment == env && ctx->module && ctx->package &&
            !strcmp(ctx->module, module) && !strcmp(ctx->package, package);
   ctx->environment = env;
-  ctx->module = th_strdup(ctx, module, strlen(module));
-  ctx->package = th_strdup(ctx, package, strlen(package));
+  if (!th_ctx_set_scope(ctx, module, package)) return false;
   return th_ctx_validate_constraints(ctx);
+}
+
+bool th_ctx_set_scope(th_ctx *ctx, const char *module, const char *package) {
+  if (!ctx) return false;
+  module = module ? module : "";
+  package = package ? package : "";
+  if (!ctx->module || strcmp(ctx->module, module))
+    ctx->module = th_strdup(ctx, module, strlen(module));
+  if (!ctx->package || strcmp(ctx->package, package))
+    ctx->package = th_strdup(ctx, package, strlen(package));
+  return true;
 }
 
 bool th_ctx_set_environment_scope(th_ctx *ctx, const char *module,
                                   const char *package) {
   if (!ctx || !ctx->environment)
     return false;
-  module = module ? module : "";
-  package = package ? package : "";
-  ctx->module = th_strdup(ctx, module, strlen(module));
-  ctx->package = th_strdup(ctx, package, strlen(package));
-  return true;
+  return th_ctx_set_scope(ctx, module, package);
 }
 
 static bool visible_to(const th_ctx *ctx, th_env_visibility_t visibility,
@@ -910,6 +1122,22 @@ bool th_env_type_visible(const th_ctx *ctx, const char *name) {
                         origin->package);
   }
   return false;
+}
+
+th_type *th_env_type_shape(const th_ctx *ctx, const char *name,
+                           th_env_type_shape_kind_t *shape_kind) {
+  if (shape_kind) *shape_kind = TH_ENV_TYPE_SHAPE_NONE;
+  if (!ctx || !ctx->environment || !name) return nullptr;
+  const th_env *env = ctx->environment;
+  for (size_t i = 0; i < env->type_origins.len; i++) {
+    const th_env_type_origin_t *origin = &env->type_origins.data[i];
+    if (strcmp(origin->name, name) ||
+        !visible_to(ctx, origin->visibility, origin->module,
+                    origin->package)) continue;
+    if (shape_kind) *shape_kind = origin->shape_kind;
+    return origin->shape;
+  }
+  return nullptr;
 }
 
 static th_env_type_origin_t *receiver_origin(const th_env *env,

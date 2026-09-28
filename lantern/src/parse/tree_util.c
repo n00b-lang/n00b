@@ -2,6 +2,65 @@
 #include "private/parse/grammar.h"
 #include "lib/list.h"
 
+bool
+parse_tree_set_resolution_scope(parse_tree_t *node, parse_scope_t *scope)
+{
+    if (!node || core_tree_is_leaf(node) || !scope) return false;
+    parse_nt_node_t *pn = &core_tree_node_value(node);
+    pn->resolution = (parse_node_resolution_t){
+        .kind = PARSE_NODE_RESOLUTION_SCOPE,
+        .target.scope = scope,
+    };
+    pn->sym = nullptr;
+    return true;
+}
+
+bool
+parse_tree_set_resolution_symbol(parse_tree_t *node,
+                                 parse_sym_entry_t *symbol)
+{
+    if (!node || core_tree_is_leaf(node) || !symbol) return false;
+    parse_nt_node_t *pn = &core_tree_node_value(node);
+    pn->resolution = (parse_node_resolution_t){
+        .kind = PARSE_NODE_RESOLUTION_SYMBOL,
+        .target.symbol = symbol,
+    };
+    pn->sym = symbol;
+    return true;
+}
+
+parse_node_resolution_t
+parse_tree_resolution(const parse_tree_t *node)
+{
+    return node && !core_tree_is_leaf((parse_tree_t *)node)
+        ? core_tree_node_value((parse_tree_t *)node).resolution
+        : (parse_node_resolution_t){0};
+}
+
+bool
+parse_tree_set_integer_range(parse_tree_t *node, int64_t minimum,
+                             int64_t maximum)
+{
+    if (!node || core_tree_is_leaf(node) || minimum > maximum) return false;
+    parse_nt_node_t *pn = &core_tree_node_value(node);
+    pn->integer_range_known = true;
+    pn->integer_range_minimum = minimum;
+    pn->integer_range_maximum = maximum;
+    return true;
+}
+
+bool
+parse_tree_integer_range(const parse_tree_t *node, int64_t *minimum,
+                         int64_t *maximum)
+{
+    if (!node || core_tree_is_leaf((parse_tree_t *)node)) return false;
+    const parse_nt_node_t *pn = &core_tree_node_value((parse_tree_t *)node);
+    if (!pn->integer_range_known) return false;
+    if (minimum) *minimum = pn->integer_range_minimum;
+    if (maximum) *maximum = pn->integer_range_maximum;
+    return true;
+}
+
 const parse_rule_t *parse_tree_rule(parse_grammar_t *g, parse_tree_t *node)
 {
     if (!g || !node || core_tree_is_leaf(node)) return nullptr;

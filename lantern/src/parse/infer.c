@@ -21,6 +21,7 @@ static int64_t tid_element_of;
 static int64_t tid_slice_of;
 static int64_t tid_unwrap;
 static int64_t tid_method_return;
+static int64_t tid_field_return;
 
 static void
 learn_tids(parse_grammar_t *g)
@@ -38,6 +39,7 @@ learn_tids(parse_grammar_t *g)
     tid_slice_of      = TID("slice_of");
     tid_unwrap        = TID("unwrap_result");
     tid_method_return = TID("method_return");
+    tid_field_return  = TID("field_return");
 
 #undef TID
 }
@@ -432,6 +434,9 @@ r_project(parse_reduce_t *r)
     else if (tid == tid_method_return) {
         e->proj = PARSE_INFER_METHOD_RETURN;
     }
+    else if (tid == tid_field_return) {
+        e->proj = PARSE_INFER_FIELD_RETURN;
+    }
     else {
         fail(r);
     }
@@ -439,7 +444,8 @@ r_project(parse_reduce_t *r)
     e->lhs = kid_expr(r, 2);
     if (r->n_kids == 6) {
         e->name = dup_text(kid_text(r, 4));
-        if (e->proj != PARSE_INFER_METHOD_RETURN || !e->lhs
+        if ((e->proj != PARSE_INFER_METHOD_RETURN
+             && e->proj != PARSE_INFER_FIELD_RETURN) || !e->lhs
             || !e->name.data) {
             fail(r);
         }
@@ -663,6 +669,7 @@ parse_infer_proj_name(parse_infer_proj_t p)
     case PARSE_INFER_SLICE_OF:      return "slice_of";
     case PARSE_INFER_UNWRAP_RESULT:  return "unwrap_result";
     case PARSE_INFER_METHOD_RETURN:  return "method_return";
+    case PARSE_INFER_FIELD_RETURN:   return "field_return";
     }
 
     return "?";

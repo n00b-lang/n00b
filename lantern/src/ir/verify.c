@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "private/ir/internal.h"
 #include "ir/rule.h"
@@ -260,6 +261,12 @@ static bool parsed_instr(ir_visit_t *vi)
 
     check_annots(v, &in->annots, in, b);
     check_origins(v, in->origin, in, b);
+    if (in->op == IR_OP_PHASE_RESULT
+        && (!ir_instr_phase_result(in)
+            || !ir_instr_phase_result(in)[0])) {
+        broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phase-result-id",
+              "phase.result requires a nonempty ir.phase_result identifier");
+    }
 
     if (ir_op_is_terminator(in->op)) {
         v->terms++;
@@ -408,9 +415,600 @@ static bool typed_param(ir_visit_t *vi)
     return true;
 }
 
+static bool typed_global(ir_visit_t *vi)
+{
+    V *v = vi->user;
+    if (vi->global->has_static_initializer
+        && !ir_global_static_initializer_valid(v->m, vi->global)) {
+        v->bad = true;
+        if (v->d) {
+            ir_diag_t *diagnostic = ir_diag_begin(v->d,
+                IR_DIAG_VERIFY_TYPED, vi->global->span,
+                "this global static initializer");
+            if (diagnostic) {
+                char message[256];
+                snprintf(message, sizeof(message),
+                    "static initializer for global %s does not match its declared type",
+                    vi->global->name);
+                ir_diag_message(diagnostic, v->d, message);
+            }
+        }
+    }
+    ir_annot_t *requirement = ir_annot_get(
+        (ir_annots_t *)&vi->global->annots, "ir.storage_required");
+    if (!requirement) return true;
+
+    bool valid_requirement = requirement->kind == IR_ANNOT_BOOL;
+    bool required = !valid_requirement || requirement->b;
+    if (!required) return true;
+
+    bool reported_required = false;
+    const char *requested = nullptr;
+    const char *selected = ir_global_storage_class(
+        vi->global, &reported_required, &requested);
+    if (valid_requirement && reported_required && requested && selected
+        && !strcmp(requested, selected)) return true;
+
+    v->bad = true;
+    if (v->d) {
+        ir_diag_t *diagnostic = ir_diag_begin(v->d,
+            IR_DIAG_VERIFY_STORAGE, vi->global->span,
+            "this global storage requirement");
+        if (diagnostic) {
+            char message[320];
+            snprintf(message, sizeof(message),
+                "global %s requires storage class %s, but selected class is %s",
+                vi->global->name,
+                valid_requirement && requested ? requested : "(missing)",
+                selected ? selected : "(missing)");
+            ir_diag_message(diagnostic, v->d,
+                            message);
+        }
+    }
+    return true;
+}
+
+static bool typed_allocation_storage(ir_visit_t *vi)
+{
+    ir_instr_t *allocation = vi->instr;
+    if (allocation->op != IR_OP_ALLOC) return true;
+
+    ir_annot_t *required = ir_annot_get(&allocation->annots,
+                                        "ir.storage_required");
+    if (!required) return true;
+    if (required->kind != IR_ANNOT_BOOL) {
+        broke(vi->user, IR_DIAG_VERIFY_STORAGE, allocation, vi->block,
+              "storage.required",
+              "allocation has malformed required storage metadata");
+        return false;
+    }
+    if (!required->b) return true;
+
+    ir_annot_t *storage = ir_annot_get(&allocation->annots,
+                                      "ir.storage_class");
+    if (storage && storage->kind == IR_ANNOT_STR && storage->s
+        && *storage->s) return true;
+
+    broke(vi->user, IR_DIAG_VERIFY_STORAGE, allocation, vi->block,
+          "storage.required",
+          "allocation requires a storage class, but its selected class is %s",
+          storage && storage->kind == IR_ANNOT_STR ? "empty" : "missing");
+    return false;
+}
+
+typedef struct {
+    ir_value_t **pending;
+    size_t pending_count;
+    size_t pending_capacity;
+    ir_value_t **targets;
+    size_t target_count;
+    size_t target_capacity;
+    bool external_writable;
+    bool complete;
+} store_target_set_t;
+
+static bool store_target_add(ir_value_t ***items, size_t *count,
+                             size_t *capacity, ir_value_t *value)
+{
+    for (size_t i = 0; i < *count; i++)
+        if ((*items)[i] == value) return true;
+    if (*count == *capacity) {
+        size_t next = *capacity ? *capacity * 2 : 8;
+        ir_value_t **grown = realloc(*items, next * sizeof(*grown));
+        if (!grown) return false;
+        *items = grown;
+        *capacity = next;
+    }
+    (*items)[(*count)++] = value;
+    return true;
+}
+
+static bool store_target_enqueue(store_target_set_t *set, ir_value_t *value)
+{
+    return value && store_target_add(&set->pending, &set->pending_count,
+                                     &set->pending_capacity, value);
+}
+
+static bool store_target_enqueue_indirect(store_target_set_t *set,
+                                          ir_value_t *value)
+{
+    return value && value->type
+        && th_kind_of(value->type) == TH_INDIRECTION
+        && store_target_enqueue(set, value);
+}
+
+static bool store_target_finish(store_target_set_t *set, ir_value_t *value)
+{
+    return value && store_target_add(&set->targets, &set->target_count,
+                            &set->target_capacity, value);
+}
+
+static bool store_target_annotation_edges(store_target_set_t *set,
+                                          ir_value_t *value)
+{
+    ir_annots_t *annots = ir_value_annots(value);
+    ir_annot_t *count = ir_annot_get(annots, "ir.alias_count");
+    if (!count || count->kind != IR_ANNOT_INT || count->i.neg
+        || count->i.mag > UINT32_MAX
+        || count->i.mag > ir_annot_count(annots)) return false;
+    ir_annot_t *resolved = ir_annot_get(annots,
+                                        "ir.alias_analysis_complete");
+    ir_annot_t *unresolved = ir_annot_get(annots, "ir.alias_unresolved");
+    if (!resolved || resolved->kind != IR_ANNOT_BOOL || !resolved->b
+        || !unresolved || unresolved->kind != IR_ANNOT_BOOL
+        || unresolved->b || !count->i.mag) return false;
+
+    for (uint64_t i = 0; i < count->i.mag; i++) {
+        char key[48];
+        snprintf(key, sizeof(key), "ir.alias%llu",
+                 (unsigned long long)i);
+        ir_annot_t *edge = ir_annot_get(annots, key);
+        if (!edge || edge->kind != IR_ANNOT_VALUE || !edge->v
+            || !store_target_enqueue(set, edge->v)) return false;
+    }
+    return true;
+}
+
+static bool store_target_parameter_is_writable(const ir_value_t *value)
+{
+    ir_indirect_access_t access = ir_value_indirect_access(value);
+    return access == IR_INDIRECT_ACCESS_WRITE
+        || access == IR_INDIRECT_ACCESS_READ_WRITE;
+}
+
+static bool store_target_parameter_has_unknown_aliases(
+    const ir_value_t *value)
+{
+    ir_annots_t *annots = ir_value_annots((ir_value_t *)value);
+    ir_annot_t *count = annots
+        ? ir_annot_get(annots, "ir.alias_count") : nullptr;
+    ir_annot_t *complete = annots
+        ? ir_annot_get(annots, "ir.alias_analysis_complete") : nullptr;
+    return value && value->kind == IR_VAL_PARAM
+        && count && count->kind == IR_ANNOT_INT && !count->i.neg
+        && !count->i.mag
+        && complete && complete->kind == IR_ANNOT_BOOL && !complete->b;
+}
+
+static bool store_target_collect(store_target_set_t *set,
+                                 ir_value_t *address,
+                                 bool preserve_parameters)
+{
+    memset(set, 0, sizeof(*set));
+    set->complete = store_target_enqueue(set, address);
+    for (size_t cursor = 0; set->complete && cursor < set->pending_count;
+         cursor++) {
+        ir_value_t *value = set->pending[cursor];
+        if (value->kind != IR_VAL_INSTR || !value->def) {
+            if (value->type && th_kind_of(value->type) == TH_INDIRECTION) {
+                if (preserve_parameters && value->kind == IR_VAL_PARAM) {
+                    set->complete = store_target_finish(set, value);
+                    continue;
+                }
+                ir_annot_t *aliases = ir_annot_get(ir_value_annots(value),
+                                                    "ir.alias_count");
+                if (aliases && store_target_parameter_has_unknown_aliases(
+                        value) && store_target_parameter_is_writable(value))
+                    set->external_writable = true;
+                else if (aliases)
+                    set->complete = store_target_annotation_edges(set, value);
+                else if (store_target_parameter_is_writable(value))
+                    set->external_writable = true;
+                else
+                    set->complete = false;
+                continue;
+            }
+            set->complete = store_target_finish(set, value);
+            continue;
+        }
+
+        ir_instr_t *definition = value->def;
+        switch (definition->op) {
+        case IR_OP_ALLOC:
+        case IR_OP_ALLOCA:
+            set->complete = store_target_finish(set, value);
+            break;
+        case IR_OP_ADDRESS_OF:
+            set->complete = definition->n_operands == 1
+                && store_target_finish(set,
+                    ir_operand_value(&definition->operands[0]));
+            break;
+        case IR_OP_COPY:
+        case IR_OP_CAST:
+        case IR_OP_BITCAST:
+        case IR_OP_FIELD:
+        case IR_OP_INDEX:
+        case IR_OP_OFFSET:
+            set->complete = definition->n_operands > 0
+                && store_target_enqueue_indirect(set,
+                    ir_operand_value(&definition->operands[0]));
+            break;
+        case IR_OP_SELECT:
+            set->complete = definition->n_operands == 3
+                && store_target_enqueue_indirect(set,
+                    ir_operand_value(&definition->operands[1]))
+                && store_target_enqueue_indirect(set,
+                    ir_operand_value(&definition->operands[2]));
+            break;
+        case IR_OP_PHI:
+            if (!definition->n_operands) set->complete = false;
+            for (uint32_t i = 0; set->complete
+                 && i < definition->n_operands; i++)
+                set->complete = store_target_enqueue_indirect(set,
+                    ir_operand_value(&definition->operands[i]));
+            break;
+        default:
+            if (value->type
+                && th_kind_of(value->type) == TH_INDIRECTION) {
+                ir_annot_t *aliases = ir_annot_get(ir_value_annots(value),
+                                                    "ir.alias_count");
+                if (aliases)
+                    set->complete = store_target_annotation_edges(set, value);
+                else if (store_target_parameter_is_writable(value))
+                    set->external_writable = true;
+                else
+                    set->complete = false;
+            }
+            else
+                set->complete = store_target_finish(set, value);
+            break;
+        }
+    }
+    return set->complete;
+}
+
+static void store_target_set_free(store_target_set_t *set)
+{
+    free(set->pending);
+    free(set->targets);
+}
+
+bool ir_value_visit_store_targets(const ir_value_t *address,
+                                  ir_store_target_visitor_fn visitor,
+                                  void *context)
+{
+    th_type *type = address && address->type
+        ? th_resolve(address->type) : nullptr;
+    if (!type || th_kind_of(type) != TH_INDIRECTION || !visitor)
+        return false;
+    store_target_set_t set;
+    bool complete = store_target_collect(&set, (ir_value_t *)address, false);
+    for (size_t i = 0; complete && i < set.target_count; i++)
+        complete = visitor(context, set.targets[i]);
+    store_target_set_free(&set);
+    return complete;
+}
+
+bool ir_value_visit_store_origins(const ir_value_t *address,
+                                  ir_store_target_visitor_fn visitor,
+                                  void *context)
+{
+    th_type *type = address && address->type
+        ? th_resolve(address->type) : nullptr;
+    if (!address || !visitor
+        || (address->kind != IR_VAL_GLOBAL
+            && (!type || th_kind_of(type) != TH_INDIRECTION)))
+        return false;
+    store_target_set_t set;
+    bool complete = store_target_collect(&set, (ir_value_t *)address, true);
+    for (size_t i = 0; complete && i < set.target_count; i++)
+        complete = visitor(context, set.targets[i]);
+    store_target_set_free(&set);
+    return complete;
+}
+
+static bool store_targets_include(const ir_value_t *address,
+                                  const ir_value_t *target)
+{
+    store_target_set_t set;
+    bool complete = store_target_collect(&set, (ir_value_t *)address, false);
+    bool found = false;
+    for (size_t i = 0; complete && i < set.target_count; i++)
+        found |= set.targets[i] == target;
+    store_target_set_free(&set);
+    return complete && found;
+}
+
+static bool initialization_binding_can_write(const ir_value_t *binding,
+                                              ir_execution_phase_t phase)
+{
+    if (binding->kind == IR_VAL_GLOBAL && binding->global)
+        return ir_global_can_write(binding->global, phase);
+    return ir_value_can_write(binding, phase);
+}
+
+static bool initialization_binding_can_initialize(
+    const ir_value_t *binding, ir_execution_phase_t phase)
+{
+    if (binding->kind == IR_VAL_GLOBAL && binding->global)
+        return ir_global_can_initialize(binding->global, phase);
+    return ir_value_can_initialize(binding, phase);
+}
+
+static bool initialization_event(const ir_instr_t *instruction,
+                                 const ir_value_t *binding,
+                                 ir_func_t *function,
+                                 ir_execution_phase_t phase)
+{
+    if (!binding || !ir_instr_is_binding_initialization(instruction))
+        return false;
+    bool matches = instruction->op == IR_OP_COPY
+        && instruction->dest_kind == IR_DEST_LOCAL
+        && instruction->dest_local
+        && ir_local_value(function, instruction->dest_local) == binding;
+    if (instruction->op == IR_OP_STORE && instruction->n_operands)
+        matches = store_targets_include(
+            ir_operand_value(&instruction->operands[0]), binding);
+    else if (instruction->op == IR_OP_GLOBAL_STORE && instruction->n_operands
+             && binding->kind == IR_VAL_GLOBAL && binding->global) {
+        ir_value_t *target = ir_operand_value(&instruction->operands[0]);
+        ir_global_t *global = target && target->kind == IR_VAL_GLOBAL
+            ? target->global ? target->global
+                             : ir_global_find(function->owner, target->name)
+            : nullptr;
+        matches = global == binding->global;
+    }
+    return matches && !initialization_binding_can_write(binding, phase)
+        && initialization_binding_can_initialize(binding, phase);
+}
+
+static ptrdiff_t init_event_index(ir_instr_t *instruction,
+                                  ir_instr_t **events, size_t count)
+{
+    for (size_t i = 0; i < count; i++)
+        if (events[i] == instruction) return (ptrdiff_t)i;
+    return -1;
+}
+
+static bool binding_reentry_header(V *v, ir_func_t *function,
+                                   ir_doms_t *graph, ir_block_t *entry,
+                                   const ir_value_t *binding,
+                                   ir_block_t **out)
+{
+    *out = nullptr;
+    ir_annot_t *annot = ir_annot_get(
+        ir_value_annots((ir_value_t *)binding),
+        "ir.binding_reentry_header");
+    if (!annot) return true;
+    ir_block_t *header = annot->kind == IR_ANNOT_STR && annot->s
+        ? ir_block_find(function, annot->s) : nullptr;
+    bool has_backedge = false;
+    for (uint32_t i = 0; header && i < ir_pred_count(graph, header); i++) {
+        ir_block_t *pred = ir_pred_at(graph, header, i);
+        has_backedge |= pred && ir_block_reachable(graph, pred)
+            && ir_dominates(graph, header, pred);
+    }
+    if (!header || !ir_block_reachable(graph, header) || !has_backedge) {
+        broke(v, IR_DIAG_VERIFY_PHASE, nullptr, entry,
+              "phase.binding-reentry-region",
+              "binding %s names an invalid loop re-entry header",
+              binding->name ? binding->name : "(unnamed)");
+        return false;
+    }
+    *out = header;
+    return true;
+}
+
+static void verify_binding_initialization_events(
+    V *v, ir_func_t *function, ir_doms_t *graph, ir_block_t *entry,
+    ir_value_t *binding)
+{
+    uint32_t block_count = function->n_blocks;
+    ir_execution_phase_t phase = ir_func_execution_phase(function);
+    const char *name = binding->name ? binding->name : "(unnamed)";
+    if (initialization_binding_can_write(binding, phase)
+        || !initialization_binding_can_initialize(binding, phase)) return;
+
+    ir_block_t *reentry_header = nullptr;
+    if (!binding_reentry_header(v, function, graph, entry, binding,
+                                &reentry_header)) return;
+
+    ir_instr_t **events = nullptr;
+    size_t event_count = 0;
+    size_t event_capacity = 0;
+    for (uint32_t b = 0; b < block_count; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; ir_block_reachable(graph, block)
+             && i < block->n_instrs; i++) {
+            ir_instr_t *instruction = block->instrs[i];
+            if (!initialization_event(instruction, binding, function, phase))
+                continue;
+            if (event_count == event_capacity) {
+                size_t capacity = event_capacity ? event_capacity * 2 : 4;
+                ir_instr_t **grown = realloc(events,
+                                              capacity * sizeof(*grown));
+                if (!grown) {
+                    broke(v, IR_DIAG_VERIFY_PHASE, instruction, block,
+                          "phase.binding-initialization-analysis",
+                          "could not analyze binding initialization paths");
+                    event_count = 0;
+                    goto done;
+                }
+                events = grown;
+                event_capacity = capacity;
+            }
+            events[event_count++] = instruction;
+        }
+    }
+    if (event_count < 2) goto done;
+
+    size_t words = (event_count + 63) / 64;
+    if (block_count > SIZE_MAX / words / sizeof(uint64_t)) {
+        broke(v, IR_DIAG_VERIFY_PHASE, nullptr, entry,
+              "phase.binding-initialization-analysis",
+              "binding initialization analysis exceeds available capacity");
+        goto done;
+    }
+    size_t cells = (size_t)block_count * words;
+    uint64_t *in = calloc(cells, sizeof(*in));
+    uint64_t *out = calloc(cells, sizeof(*out));
+    uint64_t *state = calloc(words, sizeof(*state));
+    if (!in || !out || !state) {
+        free(in);
+        free(out);
+        free(state);
+        broke(v, IR_DIAG_VERIFY_PHASE, nullptr, entry,
+              "phase.binding-initialization-analysis",
+              "could not analyze binding initialization paths");
+        goto done;
+    }
+
+    bool changed;
+    do {
+        changed = false;
+        for (uint32_t b = 0; b < block_count; b++) {
+            ir_block_t *block = function->blocks[b];
+            if (!ir_block_reachable(graph, block)) continue;
+            uint64_t *block_in = in + (size_t)b * words;
+            uint64_t *block_out = out + (size_t)b * words;
+            for (uint32_t p = 0; p < ir_pred_count(graph, block); p++) {
+                ir_block_t *pred = ir_pred_at(graph, block, p);
+                if (!pred || !ir_block_reachable(graph, pred)) continue;
+                if (block == reentry_header
+                    && ir_dominates(graph, reentry_header, pred)) continue;
+                uint64_t *pred_out = out + (size_t)pred->index * words;
+                for (size_t w = 0; w < words; w++) {
+                    uint64_t merged = block_in[w] | pred_out[w];
+                    if (merged != block_in[w]) {
+                        block_in[w] = merged;
+                        changed = true;
+                    }
+                }
+            }
+            for (size_t w = 0; w < words; w++) {
+                uint64_t merged = block_out[w] | block_in[w];
+                if (merged != block_out[w]) {
+                    block_out[w] = merged;
+                    changed = true;
+                }
+            }
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ptrdiff_t event = init_event_index(block->instrs[i],
+                                                   events, event_count);
+                if (event < 0) continue;
+                size_t word = (size_t)event / 64;
+                uint64_t bit = UINT64_C(1) << ((size_t)event % 64);
+                if (!(block_out[word] & bit)) {
+                    block_out[word] |= bit;
+                    changed = true;
+                }
+            }
+        }
+    } while (changed);
+
+    bool diagnosed = false;
+    for (uint32_t b = 0; b < block_count && !diagnosed; b++) {
+        ir_block_t *block = function->blocks[b];
+        if (!ir_block_reachable(graph, block)) continue;
+        memcpy(state, in + (size_t)b * words, words * sizeof(*state));
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *instruction = block->instrs[i];
+            ptrdiff_t event = init_event_index(instruction, events,
+                                               event_count);
+            if (event < 0) continue;
+            size_t event_word = (size_t)event / 64;
+            uint64_t event_bit = UINT64_C(1) << ((size_t)event % 64);
+            bool prior_distinct_site = false;
+            for (size_t w = 0; w < words; w++) {
+                uint64_t prior = state[w];
+                if (w == event_word) prior &= ~event_bit;
+                prior_distinct_site |= prior != 0;
+            }
+            if (prior_distinct_site) {
+                broke(v, IR_DIAG_VERIFY_PHASE, instruction, block,
+                      "phase.binding-initialized-once",
+                      "immutable binding %s has multiple initialization sites on a reachable path",
+                      name);
+                diagnosed = true;
+                break;
+            }
+            state[event_word] |= event_bit;
+        }
+    }
+    free(in);
+    free(out);
+    free(state);
+done:
+    free(events);
+}
+
+static void verify_single_binding_initialization(V *v, ir_func_t *function)
+{
+    uint32_t block_count = function->n_blocks;
+    ir_doms_t *graph = doms(v, function);
+    ir_block_t *entry = ir_block_entry(function);
+    if (!graph || !entry || entry->index >= block_count) {
+        if (function->n_blocks)
+            broke(v, IR_DIAG_VERIFY_PHASE, nullptr, entry,
+                  "phase.binding-initialization-analysis",
+                  "could not analyze binding initialization paths");
+        return;
+    }
+
+    for (uint32_t i = 0; i < function->n_locals; i++) {
+        ir_local_t *local = function->locals[i];
+        verify_binding_initialization_events(v, function, graph, entry,
+            ir_local_value(function, local));
+    }
+    for (uint32_t b = 0; b < block_count; b++) {
+        ir_block_t *block = function->blocks[b];
+        if (!ir_block_reachable(graph, block)) continue;
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *instruction = block->instrs[i];
+            if (instruction->op == IR_OP_ALLOC && instruction->dest)
+                verify_binding_initialization_events(v, function, graph,
+                    entry, instruction->dest);
+        }
+    }
+    for (size_t i = 0; i < ir_global_count(function->owner); i++) {
+        ir_global_t *global = ir_global_at(function->owner, i);
+        ir_value_t binding = {
+            .kind = IR_VAL_GLOBAL,
+            .name = global->name,
+            .type = global->type,
+            .global = global,
+        };
+        verify_binding_initialization_events(v, function, graph, entry,
+                                             &binding);
+    }
+}
+
+static bool typed_func(ir_visit_t *vi)
+{
+    verify_single_binding_initialization(vi->user, vi->func);
+    return true;
+}
+
 static bool typed_instr(ir_visit_t *vi)
 {
     V *v = vi->user;
+
+    if (vi->instr->op == IR_OP_PHASE_RESULT
+        && ir_func_execution_phase(vi->func) != IR_PHASE_RUNTIME) {
+        broke(v, IR_DIAG_VERIFY_PHASE, vi->instr, vi->block,
+              "phase.result-runtime-only",
+              "phase.result values may only be consumed by runtime functions");
+    }
 
     if (ir_module_op_info(v->m, vi->instr->op)) {
         return true;
@@ -435,7 +1033,108 @@ static bool typed_operand(ir_visit_t *vi)
               "operand %u has no type", vi->index);
     }
 
+    if (val && val->kind == IR_VAL_GLOBAL) {
+        if (!(vi->instr->op == IR_OP_GLOBAL_STORE && vi->index == 0)) {
+            ir_global_t *global = val->global
+                ? val->global : ir_global_find(v->m, val->name);
+            ir_execution_phase_t phase = ir_func_execution_phase(vi->func);
+            if (global && !ir_global_can_read(global, phase)) {
+                broke(v, IR_DIAG_VERIFY_PHASE, vi->instr, vi->block,
+                      "phase.global-read",
+                      "global %s is unavailable during %s execution",
+                      global->name,
+                      phase == IR_PHASE_COMPTIME
+                          ? "compile-time" : "runtime");
+            }
+        }
+    }
+    else if (val && !(vi->instr->op == IR_OP_ADDRESS_OF
+                      && vi->index == 0)
+             && !(vi->instr->op == IR_OP_STORE && vi->index == 0
+                  && val->kind == IR_VAL_INSTR && val->def
+                  && (val->def->op == IR_OP_ADDRESS_OF
+                      || val->def->op == IR_OP_ALLOC))) {
+        ir_execution_phase_t phase = ir_func_execution_phase(vi->func);
+        if (!ir_value_can_read(val, phase)) {
+            broke(v, IR_DIAG_VERIFY_PHASE, vi->instr, vi->block,
+                  "phase.binding-read",
+                  "binding %s is unavailable during %s execution",
+                  val->name ? val->name : "(unnamed)",
+                  phase == IR_PHASE_COMPTIME ? "compile-time" : "runtime");
+        }
+    }
+
     return true;
+}
+
+static bool check_binding_write(V *v, ir_instr_t *in, ir_block_t *block,
+                                ir_value_t *binding)
+{
+    if (!binding) return true;
+    ir_execution_phase_t phase = ir_func_execution_phase(in->block->owner);
+    bool allowed = ir_value_can_write(binding, phase)
+        || (ir_instr_is_binding_initialization(in)
+            && ir_value_can_initialize(binding, phase));
+    if (allowed) return true;
+    broke(v, IR_DIAG_VERIFY_PHASE, in, block,
+          ir_instr_is_binding_initialization(in)
+              ? "phase.binding-initialize" : "phase.binding-write",
+          "binding %s cannot be %s during %s execution",
+          binding->name ? binding->name : "(unnamed)",
+          ir_instr_is_binding_initialization(in)
+              ? "initialized" : "written",
+          phase == IR_PHASE_COMPTIME ? "compile-time" : "runtime");
+    return false;
+}
+
+static void check_store_target_write(V *v, ir_instr_t *in,
+                                     ir_block_t *block,
+                                     ir_value_t *address)
+{
+    store_target_set_t targets;
+    bool complete = store_target_collect(&targets, address, false);
+    bool pointer_address = address && address->type
+        && th_kind_of(address->type) == TH_INDIRECTION;
+    if (!complete || (pointer_address && !targets.target_count
+                      && !targets.external_writable)) {
+        broke(v, IR_DIAG_VERIFY_PHASE, in, block,
+              "phase.store-alias-incomplete",
+              "cannot verify a store through an incomplete alias target set");
+        store_target_set_free(&targets);
+        return;
+    }
+    if (!targets.target_count) {
+        if (!targets.external_writable)
+            check_binding_write(v, in, block, address);
+        store_target_set_free(&targets);
+        return;
+    }
+
+    for (size_t i = 0; i < targets.target_count; i++) {
+        ir_value_t *target = targets.targets[i];
+        if (target->kind == IR_VAL_GLOBAL) {
+            ir_global_t *global = target->global
+                ? target->global : ir_global_find(v->m, target->name);
+            ir_func_t *function = in->block->owner;
+            ir_execution_phase_t phase = ir_func_execution_phase(function);
+            if (!global || (!ir_global_can_write(global, phase)
+                && !((ir_instr_is_binding_initialization(in)
+                      || ir_func_is_initializer(function))
+                     && ir_global_can_initialize(global, phase)))) {
+                broke(v, IR_DIAG_VERIFY_PHASE, in, block,
+                      "phase.binding-write",
+                      "global %s cannot be written through its address during %s execution",
+                      global ? global->name
+                             : target->name ? target->name : "(unnamed)",
+                      phase == IR_PHASE_COMPTIME
+                          ? "compile-time" : "runtime");
+            }
+        }
+        else {
+            check_binding_write(v, in, block, target);
+        }
+    }
+    store_target_set_free(&targets);
 }
 
 static bool typed_instr_end(ir_visit_t *vi)
@@ -445,6 +1144,17 @@ static bool typed_instr_end(ir_visit_t *vi)
 
     if (!ir_module_op_info(v->m, in->op)) {
         return true;
+    }
+
+    typed_allocation_storage(vi);
+
+    if (in->op == IR_OP_COPY && in->dest_kind == IR_DEST_LOCAL
+        && in->dest_local)
+        check_binding_write(v, in, vi->block,
+                           ir_local_value(vi->func, in->dest_local));
+    else if (in->op == IR_OP_STORE && in->n_operands) {
+        check_store_target_write(v, in, vi->block,
+                                 ir_operand_value(&in->operands[0]));
     }
 
     ir_verdict_t verdict = ir_rule_apply(v->m, ir_module_rules(v->m), in,
@@ -462,14 +1172,65 @@ static bool typed_instr_end(ir_visit_t *vi)
     return true;
 }
 
+static bool lifetime_instr(ir_visit_t *vi)
+{
+    ir_instr_t *in = vi->instr;
+    if (in->op != IR_OP_FINALIZE && in->op != IR_OP_DEALLOC)
+        return true;
+
+    ir_value_t *value = in->n_operands
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    if (!value) return true;
+
+    ir_liveness_t direct = ir_value_liveness_after(value, in);
+    if (direct == IR_LIVENESS_LIVE) {
+        broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
+              "lifetime.no-live-use",
+              "%s has a reachable use after this %s",
+              value->name ? value->name : "the value",
+              in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");
+        return true;
+    }
+    if (direct == IR_LIVENESS_UNKNOWN) {
+        broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
+              "lifetime.unknown-direct",
+              "cannot prove that %s has no reachable use after this %s",
+              value->name ? value->name : "the value",
+              in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");
+        return true;
+    }
+
+    ir_liveness_t aliases = ir_value_alias_liveness_after(value, in);
+    if (aliases == IR_LIVENESS_LIVE) {
+        broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
+              "lifetime.no-live-alias",
+              "an alias of %s has a reachable use after this %s",
+              value->name ? value->name : "the value",
+              in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");
+    }
+    else if (aliases == IR_LIVENESS_UNKNOWN) {
+        broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
+              "lifetime.unknown-alias",
+              "cannot prove that %s has no live aliases at this %s",
+              value->name ? value->name : "the value",
+              in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");
+    }
+
+    return true;
+}
+
 static bool ssa_func(ir_visit_t *vi)
 {
     V *v = vi->user;
 
-    if (vi->func->n_locals) {
-        broke(v, IR_DIAG_VERIFY_SSA, nullptr, ir_block_entry(vi->func),
-              "ssa.locals", "%s is in SSA form and still declares %u locals",
-              vi->func->name, vi->func->n_locals);
+    for (uint32_t i = 0; i < vi->func->n_locals; i++) {
+        ir_local_t *local = vi->func->locals[i];
+        if (!local->address_taken) {
+            broke(v, IR_DIAG_VERIFY_SSA, nullptr, ir_block_entry(vi->func),
+                  "ssa.locals",
+                  "%s is in SSA form but local $%s is not address-taken",
+                  vi->func->name, local->name);
+        }
     }
 
     return true;
@@ -479,7 +1240,9 @@ static bool ssa_instr(ir_visit_t *vi)
 {
     V *v = vi->user;
 
-    if (vi->instr->dest_kind == IR_DEST_LOCAL) {
+    if (vi->instr->dest_kind == IR_DEST_LOCAL
+        && (!vi->instr->dest_local
+            || !vi->instr->dest_local->address_taken)) {
         broke(v, IR_DIAG_VERIFY_SSA, vi->instr, vi->block, "ssa.locals",
               "this instruction writes local $%s in SSA form",
               vi->instr->dest_local ? vi->instr->dest_local->name : "?");
@@ -498,7 +1261,15 @@ static bool ssa_operand(ir_visit_t *vi)
                       : od->kind == IR_OPD_SPREAD   ? od->value
                       : od->kind == IR_OPD_NAMED_ARG ? od->named.value
                       : od->kind == IR_OPD_PHI_ARM   ? od->phi.value
-                                                     : nullptr;
+                                                      : nullptr;
+
+    if (val && val->kind == IR_VAL_LOCAL
+        && (!val->local || !val->local->address_taken)) {
+        broke(v, IR_DIAG_VERIFY_SSA, in, b, "ssa.locals",
+              "this instruction reads local $%s in SSA form",
+              val->local ? val->local->name : "?");
+        return true;
+    }
 
     if (!val || val->kind != IR_VAL_INSTR || !val->def || !val->def->block) {
         return true;
@@ -822,8 +1593,11 @@ static void install_parsed(ir_walk_t *w)
 
 static void install_typed(ir_walk_t *w)
 {
+    ir_walk_on_global(w, typed_global, nullptr);
+    ir_walk_on_func(w, typed_func, nullptr, nullptr);
     ir_walk_on_param(w, typed_param, nullptr);
     ir_walk_on_instr(w, typed_instr, typed_instr_end, nullptr);
+    ir_walk_on_instr(w, lifetime_instr, nullptr, nullptr);
     ir_walk_on_operand(w, typed_operand, nullptr);
 }
 

@@ -8,6 +8,7 @@
 #include "ir/pass.h"
 #include "ir/rule.h"
 #include "ir/layout.h"
+#include "ir/shape.h"
 #include "ir/lower.h"
 #include "ir/walk.h"
 #include "ir/doms.h"

@@ -62,12 +62,15 @@ struct ib_node {
     const char *text;
     const char *member;
     th_type    *type;
+    ib_node    *second;
 
     ir_lit_t     lit;
     bool         is_float;
     bool         over;
     bool         neg;
     bool         present;
+    bool         is_string;
+    size_t       text_length;
     uint64_t     uval;
     ir_valkind_t refkind;
 
@@ -119,6 +122,8 @@ typedef struct {
     size_t                     n_profiles;
 } B;
 
+static ir_value_t *global_value(B *b, const char *name);
+
 static void bfail_as(B *b, ir_diagcode_t code, ir_span_t at, const char *what)
 {
     if (b->failed) {
@@ -168,6 +173,7 @@ static ib_node *nd(B *b, ib_kind kind, ir_span_t span)
 {
     ib_node *n = ir_alloc(b->ctx, sizeof(ib_node));
 
+    memset(n, 0, sizeof(*n));
     n->kind = kind;
     n->span = span;
 
@@ -400,8 +406,14 @@ static ib_node *leaf_ib(B *b, parse_tree_t *c)
                     t && t->tid == ir_grammar_tid("NEWLINE") ? IR_SPAN_UNKNOWN
                                                              : tok_span(b, t));
 
-    if (s.data) {
-        n->text = ir_strdup(b->ctx, s.data);
+    if (s.data || (t && t->tid == ir_grammar_tid("STRING_LIT"))) {
+        char *copy = ir_alloc(b->ctx, s.u8_bytes + 1);
+        if (copy) {
+            if (s.u8_bytes) memcpy(copy, s.data, s.u8_bytes);
+            copy[s.u8_bytes] = '\0';
+            n->text = copy;
+        }
+        n->text_length = s.u8_bytes;
     } else if (t && t->tid > 0 && t->tid < 128) {
         char one[2] = {(char)t->tid, 0};
 
@@ -913,29 +925,35 @@ static void *r_init(parse_reduce_t *r)
 static void *r_global_init_value(parse_reduce_t *r)
 {
     B       *b = r->thunk;
+    ib_node *raw = kid(r, 0);
     ib_node *n = nd(b, IB_INIT, cover(r));
-    ib_node *member = nth_named(r, CORE_STRING_STATIC("name"), 0);
-    ib_node *atom = nullptr;
-    for (size_t i = 0; i < r->n_kids; i++) {
-        ib_node *candidate = kid(r, i);
-        if (candidate && (candidate->kind == IB_NUM ||
-                          candidate->kind == IB_REF)) {
-            atom = candidate;
-            break;
-        }
-    }
-    if (!member || !member->text) return nullptr;
-    n->member = member->text;
-    if (atom && atom->kind == IB_NUM) {
-        n->neg = atom->neg;
-        n->is_float = atom->is_float;
-        n->text = atom->text;
-        n->lit = atom->lit;
-        n->over = atom->over;
-    } else if (atom && atom->kind == IB_REF && atom->text) {
+    if (!raw) return nullptr;
+    if (raw->kind == IB_INIT) return raw;
+    n->present = true;
+    if (raw->kind == IB_NUM) {
+        n->uval = raw->is_float ? IR_GLOBAL_INIT_FLOAT : IR_GLOBAL_INIT_INT;
+        n->neg = raw->neg;
+        n->is_float = raw->is_float;
+        n->text = raw->text;
+        n->lit = raw->lit;
+        n->over = raw->over;
+    } else if (raw->kind == IB_REF && raw->text) {
+        n->uval = IR_GLOBAL_INIT_SYMBOL;
         n->present = true;
-        n->text = atom->text;
+        n->text = raw->text;
         n->refkind = IR_VAL_GLOBAL;
+    } else if (raw->kind == IB_NAME && raw->text) {
+        if (!strcmp(raw->text, "true") || !strcmp(raw->text, "false")) {
+            n->uval = IR_GLOBAL_INIT_BOOL;
+            n->neg = !strcmp(raw->text, "true");
+        } else {
+            n->uval = IR_GLOBAL_INIT_STRING;
+            n->is_string = true;
+            n->text = raw->text;
+            n->text_length = raw->text_length;
+        }
+    } else {
+        return nullptr;
     }
     return n;
 }
@@ -951,21 +969,109 @@ static void *r_global_init_values(parse_reduce_t *r)
 
 static void *r_global_init(parse_reduce_t *r)
 {
+    return at(r, CORE_STRING_STATIC("global-init-value"));
+}
+
+static ib_node *global_init_aggregate(parse_reduce_t *r,
+                                      ir_global_init_kind_t kind,
+                                      core_string_t values_role)
+{
     B       *b = r->thunk;
     ib_node *n = nd(b, IB_INIT, cover(r));
-    n->present = true;
-    ib_node *number = at(r, CORE_STRING_STATIC("signed-number"));
-    if (number) {
-        n->neg = number->neg;
-        n->is_float = number->is_float;
-        n->text = number->text;
-        n->lit = number->lit;
-        n->over = number->over;
-    } else {
-        n->uval = 1;
-        n->first = at(r, CORE_STRING_STATIC("global-init-values"));
+    ib_node *values = at(r, values_role);
+    n->uval = kind;
+    if (values) {
+        parse_reduce_list_t *empty = parse_reduce_as_list(values);
+        if (empty) {
+            if (empty->n) {
+                bfail(b, cover(r), "invalid aggregate initializer reduction");
+                return nullptr;
+            }
+            return n;
+        }
+        n->first = values->first;
+        n->l1 = values->l1;
     }
     return n;
+}
+
+static void *r_global_init_sequence(parse_reduce_t *r)
+{
+    return global_init_aggregate(r, IR_GLOBAL_INIT_SEQUENCE,
+        CORE_STRING_STATIC("global-init-values"));
+}
+
+static void *r_global_init_tuple(parse_reduce_t *r)
+{
+    return global_init_aggregate(r, IR_GLOBAL_INIT_TUPLE,
+        CORE_STRING_STATIC("global-init-values"));
+}
+
+static void *r_global_init_set(parse_reduce_t *r)
+{
+    return global_init_aggregate(r, IR_GLOBAL_INIT_SET,
+        CORE_STRING_STATIC("global-init-values"));
+}
+
+static void *r_global_init_field(parse_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *field = nd(b, IB_INIT, cover(r));
+    ib_node *name = at(r, CORE_STRING_STATIC("name"));
+    field->member = name ? name->text : nullptr;
+    field->first = at(r, CORE_STRING_STATIC("global-init-value"));
+    return field;
+}
+
+static void *r_global_init_fields(parse_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *n = nd(b, IB_OPERAND, cover(r));
+    n->first = at(r, CORE_STRING_STATIC("global-init-field"));
+    n->l1 = tail_group(r);
+    return n;
+}
+
+static void *r_global_init_record(parse_reduce_t *r)
+{
+    return global_init_aggregate(r, IR_GLOBAL_INIT_RECORD,
+        CORE_STRING_STATIC("global-init-fields"));
+}
+
+static void *r_global_init_pair(parse_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *pair = nd(b, IB_INIT, cover(r));
+    pair->first = at(r, CORE_STRING_STATIC("global-init-value"));
+    pair->second = nth_named(r, CORE_STRING_STATIC("global-init-value"), 1);
+    return pair;
+}
+
+static void *r_global_init_pairs(parse_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *n = nd(b, IB_OPERAND, cover(r));
+    n->first = at(r, CORE_STRING_STATIC("global-init-pair"));
+    n->l1 = tail_group(r);
+    return n;
+}
+
+static void *r_global_init_dictionary(parse_reduce_t *r)
+{
+    return global_init_aggregate(r, IR_GLOBAL_INIT_DICTIONARY,
+        CORE_STRING_STATIC("global-init-pairs"));
+}
+
+static void *r_global_init_phase_result(parse_reduce_t *r)
+{
+    ib_node *identifier = str_kid(r);
+    if (!identifier || !identifier->text || !identifier->text[0])
+        return nullptr;
+    ib_node *value = nd(r->thunk, IB_INIT, cover(r));
+    value->present = true;
+    value->uval = IR_GLOBAL_INIT_PHASE_RESULT;
+    value->text = identifier->text;
+    return value;
 }
 
 static void apply_init(B *b, ib_node *init, bool *has, ir_lit_t *lit, double *f,
@@ -991,6 +1097,110 @@ static void apply_init(B *b, ib_node *init, bool *has, ir_lit_t *lit, double *f,
         return;
     }
     *lit = init->lit;
+}
+
+static size_t global_init_item_count(ib_node *list)
+{
+    return list && list->first ? 1 + sep_count(list->l1) : 0;
+}
+
+static ib_node *global_init_item_at(ib_node *list, size_t index)
+{
+    return !index ? list ? list->first : nullptr
+                  : sep_at(list ? list->l1 : nullptr, index - 1);
+}
+
+static bool build_global_init_value(B *b, ib_node *source,
+                                    ir_global_init_value_t *value,
+                                    size_t depth)
+{
+    if (!source || !value || depth > 64) return false;
+    memset(value, 0, sizeof(*value));
+    value->member = source->member;
+    value->kind = (ir_global_init_kind_t)source->uval;
+    switch (value->kind) {
+    case IR_GLOBAL_INIT_BOOL:
+        value->boolean = source->neg;
+        return true;
+    case IR_GLOBAL_INIT_INT:
+        if (source->over) return false;
+        value->integer = source->lit;
+        return true;
+    case IR_GLOBAL_INIT_FLOAT:
+        value->floating = source->text ? strtod(source->text, nullptr) : 0;
+        if (source->neg) value->floating = -value->floating;
+        return true;
+    case IR_GLOBAL_INIT_STRING:
+        value->string.bytes = source->text;
+        value->string.length = source->text_length;
+        return true;
+    case IR_GLOBAL_INIT_PHASE_RESULT:
+        if (!source->text || !source->text[0]) return false;
+        value->phase_result.identifier = source->text;
+        return true;
+    case IR_GLOBAL_INIT_SYMBOL: {
+        if (!source->text) return false;
+        ir_value_t *symbol = ir_alloc(b->ctx, sizeof(*symbol));
+        if (!symbol) return false;
+        symbol->kind = IR_VAL_GLOBAL;
+        symbol->name = source->text;
+        value->symbol = symbol;
+        return true;
+    }
+    case IR_GLOBAL_INIT_SEQUENCE:
+    case IR_GLOBAL_INIT_TUPLE:
+    case IR_GLOBAL_INIT_SET: {
+        size_t count = global_init_item_count(source);
+        ir_global_init_value_t *items = ir_alloc(b->ctx,
+            count ? count * sizeof(*items) : 1);
+        if (!items) return false;
+        for (size_t i = 0; i < count; i++)
+            if (!build_global_init_value(b, global_init_item_at(source, i),
+                                         &items[i], depth + 1))
+                return false;
+        value->aggregate.items = items;
+        value->aggregate.count = count;
+        return true;
+    }
+    case IR_GLOBAL_INIT_RECORD: {
+        size_t count = global_init_item_count(source);
+        ir_global_init_value_t *items = ir_alloc(b->ctx,
+            count ? count * sizeof(*items) : 1);
+        if (!items) return false;
+        for (size_t i = 0; i < count; i++) {
+            ib_node *field = global_init_item_at(source, i);
+            if (!field || !field->member || !field->first
+                || !build_global_init_value(b, field->first, &items[i],
+                                            depth + 1))
+                return false;
+            items[i].member = field->member;
+        }
+        value->aggregate.items = items;
+        value->aggregate.count = count;
+        return true;
+    }
+    case IR_GLOBAL_INIT_DICTIONARY: {
+        size_t pairs = global_init_item_count(source);
+        if (pairs > SIZE_MAX / 2) return false;
+        size_t count = pairs * 2;
+        ir_global_init_value_t *items = ir_alloc(b->ctx,
+            count ? count * sizeof(*items) : 1);
+        if (!items) return false;
+        for (size_t i = 0; i < pairs; i++) {
+            ib_node *pair = global_init_item_at(source, i);
+            if (!pair || !pair->first || !pair->second
+                || !build_global_init_value(b, pair->first, &items[i * 2],
+                                            depth + 1)
+                || !build_global_init_value(b, pair->second,
+                                            &items[i * 2 + 1], depth + 1))
+                return false;
+        }
+        value->aggregate.items = items;
+        value->aggregate.count = count;
+        return true;
+    }
+    }
+    return false;
 }
 
 static void *r_symbolic(parse_reduce_t *r)
@@ -1281,12 +1491,21 @@ static void apply_metas(B *b, parse_reduce_list_t *metas, ir_func_t *f,
             ir_annot_t a = mt->annot;
 
             if (a.kind == IR_ANNOT_VALUE) {
-                a.v = f ? ir_value_find(f, mt->from) : nullptr;
+                if (mt->refkind == IR_VAL_LOCAL) {
+                    ir_local_t *local = f
+                        ? ir_local_find(f, mt->from) : nullptr;
+                    a.v = local ? ir_local_value(f, local) : nullptr;
+                }
+                else if (mt->refkind == IR_VAL_GLOBAL) {
+                    a.v = global_value(b, mt->from);
+                }
+                else {
+                    a.v = f ? ir_value_find(f, mt->from) : nullptr;
+                }
 
                 if (!a.v) {
                     bfail(b, mt->span,
-                          "an annotation may only name a value already "
-                          "defined in the enclosing function");
+                          "an annotation refers to an unknown IR value");
 
                     return;
                 }
@@ -1369,54 +1588,16 @@ static void *r_global_decl(parse_reduce_t *r)
 
     parse_reduce_list_t *global_init =
         rep(r, CORE_STRING_STATIC("global-init"));
-    ib_node *record_init = global_init && global_init->n
+    ib_node *initializer = global_init && global_init->n
         ? unwrap(global_init->v[0]) : nullptr;
-    if (record_init && !record_init->uval) {
-        apply_init(b, record_init, &g->has_init, &g->init, &g->init_f,
-                   &g->init_text, &g->init_is_float);
-    } else if (record_init) {
-        ib_node *values_node = record_init->first;
-        size_t count = values_node && values_node->first
-            ? 1 + sep_count(values_node->l1) : 0;
-        ir_global_init_value_t *values = ir_alloc(
-            b->ctx, count ? count * sizeof(*values) : 1);
-        for (size_t i = 0; i < count; i++) {
-            ib_node *value = i ? sep_at(values_node->l1, i - 1)
-                               : values_node->first;
-            if (!value) {
-                bfail(b, record_init->span,
-                      "invalid value in global record initializer");
-                return nullptr;
-            }
-            values[i].member = value->member;
-            if (value->refkind == IR_VAL_GLOBAL && value->text) {
-                ir_value_t *symbol = ir_alloc(b->ctx, sizeof(*symbol));
-                symbol->kind = IR_VAL_GLOBAL;
-                symbol->name = value->text;
-                values[i].kind = IR_GLOBAL_INIT_SYMBOL;
-                values[i].symbol = symbol;
-            } else if (value->kind == IB_INIT) {
-                if (value->over) {
-                    bfail(b, value->span,
-                          "this literal does not fit in 128 bits");
-                    return nullptr;
-                }
-                if (value->is_float) {
-                    values[i].kind = IR_GLOBAL_INIT_FLOAT;
-                    values[i].floating = strtod(value->text, nullptr);
-                    if (value->neg) values[i].floating = -values[i].floating;
-                } else {
-                    values[i].kind = IR_GLOBAL_INIT_INT;
-                    values[i].integer = value->lit;
-                }
-            } else {
-                bfail(b, value->span,
-                      "unsupported value in global record initializer");
-                return nullptr;
-            }
+    if (initializer) {
+        ir_global_init_value_t *value = ir_alloc(b->ctx, sizeof(*value));
+        if (!build_global_init_value(b, initializer, value, 0)) {
+            bfail(b, initializer->span,
+                  "invalid or oversized global initializer");
+            return nullptr;
         }
-        g->record_init = values;
-        g->n_record_init = count;
+        g->static_initializer = value;
     }
     g->span = cover(r);
     apply_metas(b, rep(r, CORE_STRING_STATIC("meta")), nullptr, &g->span,
@@ -1582,11 +1763,12 @@ static void *r_param(parse_reduce_t *r)
 {
     B       *b = r->thunk;
     ib_node *n = nd(b, IB_PARAM, cover(r));
+    n->l1 = rep(r, CORE_STRING_STATIC("meta"));
 
     if (parse_tree_is_nt(r->grammar, r->node,
                          CORE_STRING_STATIC("func-param-rest"))) {
         n->neg = true;
-        ib_node *who = r->n_kids == 4 ? kid(r, 1) : nullptr;
+        ib_node *who = at(r, CORE_STRING_STATIC("value"));
         n->text = who ? who->text : nullptr;
         n->type =
             type_of(b, raw_at(r, CORE_STRING_STATIC("typelang-type")), n->span);
@@ -1855,13 +2037,8 @@ static ir_value_t *global_value(B *b, const char *name)
 {
     ir_global_t *g  = ir_global_find(b->m, name);
     ir_func_t   *fn = ir_func_find(b->m, name);
-    ir_value_t  *v  = ir_alloc(b->ctx, sizeof(ir_value_t));
-
-    v->kind = g ? IR_VAL_GLOBAL : IR_VAL_FUNC;
-    v->name = name;
-    v->type = g ? g->type : fn ? fn->type : nullptr;
-
-    return v;
+    return g ? ir_global_address(b->m, g)
+             : fn ? ir_func_address(b->m, fn) : nullptr;
 }
 
 static void push_operand(B *b, ir_func_t *f, ir_instr_t *in, ib_node *o)
@@ -2150,6 +2327,18 @@ static void *r_func(parse_reduce_t *r)
         }
     }
 
+    for (size_t i = 0; i < pv.len; i++) {
+        ib_node *p = pv.data[i];
+        if (!p || !p->text || !p->l1) continue;
+        ir_value_t *value = ir_value_find(f, p->text);
+        if (!value) {
+            bfail(b, p->span, "parameter annotations need a named value");
+            return nullptr;
+        }
+        apply_metas(b, p->l1, f, nullptr, nullptr, &value->annots);
+        if (b->failed) return nullptr;
+    }
+
     core_list_free(pv);
     f->span = cover(r);
     apply_metas(b, rep(r, CORE_STRING_STATIC("meta")), f, &f->span, &f->origin,
@@ -2307,34 +2496,61 @@ static void reg(B *b, parse_tree_walk_t *w, core_string_t nt,
     }
 }
 
+static bool resolve_static_initializer_symbols(B *b,
+                                                ir_global_init_value_t *value,
+                                                size_t depth)
+{
+    if (!value || depth > 64) return false;
+    if (value->kind == IR_GLOBAL_INIT_SYMBOL) {
+        ir_value_t *symbol = value->symbol;
+        if (!symbol || !symbol->name) return false;
+        ir_func_t *function = ir_func_find(b->m, symbol->name);
+        ir_global_t *target = ir_global_find(b->m, symbol->name);
+        if (function) {
+            symbol->kind = IR_VAL_FUNC;
+            symbol->type = function->type;
+            symbol->owner = function;
+        } else if (target) {
+            symbol->kind = IR_VAL_GLOBAL;
+            symbol->type = target->type;
+        } else {
+            return false;
+        }
+        return true;
+    }
+    switch (value->kind) {
+    case IR_GLOBAL_INIT_SEQUENCE:
+    case IR_GLOBAL_INIT_TUPLE:
+    case IR_GLOBAL_INIT_RECORD:
+    case IR_GLOBAL_INIT_SET:
+    case IR_GLOBAL_INIT_DICTIONARY:
+        if (value->aggregate.count && !value->aggregate.items) return false;
+        for (size_t i = 0; i < value->aggregate.count; i++)
+            if (!resolve_static_initializer_symbols(
+                    b, (ir_global_init_value_t *)&value->aggregate.items[i],
+                    depth + 1))
+                return false;
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
 static void resolve_global_initializers(B *b)
 {
     for (size_t gi = 0; gi < ir_global_count(b->m) && !b->failed; gi++) {
         ir_global_t *global = ir_global_at(b->m, gi);
-        if (!global->record_init || global->has_record_init) continue;
-        for (size_t vi = 0; vi < global->n_record_init; vi++) {
-            ir_global_init_value_t *item = &global->record_init[vi];
-            if (item->kind != IR_GLOBAL_INIT_SYMBOL) continue;
-            ir_value_t *symbol = item->symbol;
-            ir_func_t *function = ir_func_find(b->m, symbol->name);
-            ir_global_t *target = ir_global_find(b->m, symbol->name);
-            if (function) {
-                symbol->kind = IR_VAL_FUNC;
-                symbol->type = function->type;
-                symbol->owner = function;
-            } else if (target) {
-                symbol->kind = IR_VAL_GLOBAL;
-                symbol->type = target->type;
-            } else {
+        if (global->static_initializer && !global->has_static_initializer) {
+            ir_global_init_value_t *pending = global->static_initializer;
+            if (!resolve_static_initializer_symbols(b, pending, 0)) {
                 bfail(b, global->span,
                       "global initializer references an unknown symbol");
-                break;
+            } else if (!ir_global_set_static_initializer(b->m, global,
+                                                          pending)) {
+                bfail(b, global->span,
+                      "global initializer does not match its type");
             }
-        }
-        if (!b->failed && !ir_global_set_record_initializer(
-                b->m, global, global->record_init, global->n_record_init)) {
-            bfail(b, global->span,
-                  "global record initializer does not match its type");
         }
     }
 }
@@ -2424,6 +2640,23 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
     reg(&b, w, CORE_STRING_STATIC("global-init-value"), r_global_init_value);
     reg(&b, w, CORE_STRING_STATIC("global-init-values"), r_global_init_values);
     reg(&b, w, CORE_STRING_STATIC("global-init"), r_global_init);
+    reg(&b, w, CORE_STRING_STATIC("global-init-sequence"),
+        r_global_init_sequence);
+    reg(&b, w, CORE_STRING_STATIC("global-init-tuple"),
+        r_global_init_tuple);
+    reg(&b, w, CORE_STRING_STATIC("global-init-set"), r_global_init_set);
+    reg(&b, w, CORE_STRING_STATIC("global-init-field"), r_global_init_field);
+    reg(&b, w, CORE_STRING_STATIC("global-init-fields"),
+        r_global_init_fields);
+    reg(&b, w, CORE_STRING_STATIC("global-init-record"),
+        r_global_init_record);
+    reg(&b, w, CORE_STRING_STATIC("global-init-pair"), r_global_init_pair);
+    reg(&b, w, CORE_STRING_STATIC("global-init-pairs"),
+        r_global_init_pairs);
+    reg(&b, w, CORE_STRING_STATIC("global-init-dictionary"),
+        r_global_init_dictionary);
+    reg(&b, w, CORE_STRING_STATIC("global-init-phase-result"),
+        r_global_init_phase_result);
     reg(&b, w, CORE_STRING_STATIC("signed-number"), r_signed_number);
     reg(&b, w, CORE_STRING_STATIC("symbolic-expr"), r_symbolic);
     reg(&b, w, CORE_STRING_STATIC("layout-val"), r_layout_val);

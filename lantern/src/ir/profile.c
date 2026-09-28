@@ -114,6 +114,8 @@ ir_machine_t ir_machine_of(ir_module_t *m, th_type *t)
         return opaque();
     }
 
+    t = th_resolve(t);
+
     switch (th_kind_of(t)) {
     case TH_BITINT: {
         uint64_t w  = 0;
@@ -197,7 +199,12 @@ th_type *ir_profile_role(ir_module_t *m, ir_role_t role)
 
 bool ir_profile_has(ir_module_t *m, th_type *t)
 {
-    if (!m || !t || th_kind_of(t) != TH_NAMED) {
+    if (!m || !t) {
+        return false;
+    }
+
+    t = th_resolve(t);
+    if (th_kind_of(t) != TH_NAMED) {
         return false;
     }
 

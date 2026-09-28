@@ -7,6 +7,7 @@
 #include "parse/cf_label.h"
 #include "parse/tree_visit.h"
 #include "lib/diagnostic.h"
+#include "parse/infer.h"
 
 typedef struct ir_module_t ir_module_t;
 
@@ -24,7 +25,6 @@ typedef struct {
     core_dict_t   *cf_labels;
     core_list_t(parse_sym_entry_ptr_t) params;
     core_list_t(parse_sym_entry_ptr_t) shadowed;
-    core_list_t(parse_sym_entry_ptr_t) inferred;
     core_list_t(parse_tree_ptr_t) undefined;
     void *impl;
     bool  borrowed_symtab;
@@ -33,6 +33,8 @@ typedef struct {
     const core_translation_unit_t *diagnostic_unit;
     parse_annot_node_callback_fn on_node;
     void *on_node_context;
+    parse_infer_type_node_resolver_fn type_node_resolver;
+    void *type_node_resolver_context;
 } parse_annot_result_t;
 
 typedef enum : uint8_t {
@@ -51,11 +53,18 @@ parse_annot_result_t *parse_annot_result_new(parse_symtab_t *borrowed);
 void parse_annot_result_set_node_callback(
     parse_annot_result_t *result, parse_annot_node_callback_fn callback,
     void *context);
+/* A null result from the resolver delegates to ir_type_from_node(). */
+void parse_annot_result_set_type_node_resolver(
+    parse_annot_result_t *result,
+    parse_infer_type_node_resolver_fn resolver,
+    void *context);
+th_type *parse_annot_resolve_type_node(parse_annot_result_t *result,
+                                       th_ctx *types,
+                                       parse_grammar_t *grammar,
+                                       parse_tree_t *node);
 void parse_annot_result_set_diagnostics(
     parse_annot_result_t *result, core_diagnostics_t *diagnostics,
     const core_translation_unit_t *unit);
-void parse_annot_result_mark_inferred(parse_annot_result_t *result,
-                                      parse_sym_entry_t *symbol);
 size_t parse_annot_resolve_undefined(parse_annot_result_t *result);
 
 void parse_annot_register(parse_tree_walk_t *w, parse_annot_result_t *out,

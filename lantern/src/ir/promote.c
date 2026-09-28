@@ -62,8 +62,20 @@ static const char *derived_name(P *p, const ir_local_t *l, uint32_t nth)
 static ir_value_t *fresh(P *p, ir_instr_t *in, const ir_local_t *l)
 {
     const char *name = derived_name(p, l, p->counter[l->index]++);
-
-    return ir_instr_set_dest(in, name, l->type) ? in->dest : nullptr;
+    ir_value_t *value = ir_instr_set_dest(in, name, l->type)
+        ? in->dest : nullptr;
+    ir_annots_t *source = ir_value_annots(
+        ir_local_value(p->f, (ir_local_t *)l));
+    ir_annots_t *target = ir_value_annots(value);
+    ir_ctx_t *ctx = p->m->ctx;
+    for (uint32_t i = 0; value && source && target
+         && i < ir_annot_count(source); i++) {
+        if (!ir_annot_set(ctx, target, *ir_annot_at(source, i))) {
+            p->ok = false;
+            return nullptr;
+        }
+    }
+    return value;
 }
 
 typedef struct {
@@ -91,7 +103,7 @@ static bool gather_operand(ir_visit_t *vi)
     gather_t   *s = vi->user;
     ir_local_t *l = ir_operand_local(vi->operand);
 
-    if (!l) {
+    if (!l || l->address_taken) {
         return true;
     }
 
@@ -194,6 +206,20 @@ static bool promote_func(P *p, ir_func_t *f)
 {
     if (!f->n_locals || !f->n_blocks) {
         return true;
+    }
+    for (uint32_t i = 0; i < f->n_locals; i++)
+        f->locals[i]->address_taken = false;
+    for (uint32_t b = 0; b < f->n_blocks; b++) {
+        ir_block_t *block = f->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *instruction = block->instrs[i];
+            if (instruction->op != IR_OP_ADDRESS_OF
+                || !instruction->n_operands) continue;
+            ir_local_t *local = ir_operand_local(&instruction->operands[0]);
+            if (local && local->index < f->n_locals
+                && f->locals[local->index] == local)
+                local->address_taken = true;
+        }
     }
     p->f       = f;
     p->dom     = ir_doms_of(f);
@@ -311,7 +337,16 @@ static bool promote_func(P *p, ir_func_t *f)
         if (instruction->n_operands != ir_pred_count(p->dom, join))
             p->ok = false;
     }
-    f->n_locals = 0;
+    uint32_t retained = 0;
+    for (uint32_t i = 0; i < f->n_locals; i++) {
+        ir_local_t *local = f->locals[i];
+        if (!local->address_taken) continue;
+        f->locals[retained] = local;
+        local->index = retained;
+        if (local->value) local->value->index = retained;
+        retained++;
+    }
+    f->n_locals = retained;
 
     return p->ok;
 }

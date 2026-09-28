@@ -594,6 +594,20 @@ build_string_option(lex_build_t *b, scan_lex_string_t *s,
     else if (named(o, "escapes")) {
         merge_simple_escapes(b, s, arg(o, 0));
     }
+    else if (named(o, "escape_literal")) {
+        core_string_t prefix = arg(o, 0);
+        if (!prefix.data || !prefix.u8_bytes) {
+            if (!b->err[0]) {
+                snprintf(b->err, sizeof(b->err),
+                         "@lex-%s: escape_literal() needs a nonempty prefix",
+                         kind);
+            }
+        }
+        else {
+            core_list_push(*escapes,
+                ((scan_lex_escape_t){.prefix = prefix, .width = 0}));
+        }
+    }
     else if (named(o, "escape_digits")) {
         core_string_t width_text = arg(o, 2);
         uint32_t      width      = 0;
@@ -761,7 +775,8 @@ build_string_escapes(lex_build_t *b, const parse_annotation_t *a)
                 }
             }
         }
-        else if (!named(o, "escapes") && !named(o, "escape_digits")) {
+        else if (!named(o, "escapes") && !named(o, "escape_literal")
+                 && !named(o, "escape_digits")) {
             oops(b, "string-escapes", o->name);
             continue;
         }

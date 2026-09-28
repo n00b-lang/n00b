@@ -6,6 +6,9 @@
 		    escapes('\\'),
 		    escapes('"'),
 		    escapes("'"),
+		    escape_literal("«"),
+		    escape_literal("»"),
+		    escape_literal("["),
 		    escape_digits("x", "0123456789abcdefABCDEF", "2"),
 		    escape_digits("u", "0123456789abcdefABCDEF", "4"),
 		    escape_digits("U", "0123456789abcdefABCDEF", "8"))

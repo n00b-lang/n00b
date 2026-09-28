@@ -121,7 +121,8 @@ static bool count_instr(ir_visit_t *vi)
 {
     ir_rd_t *r = vi->user;
 
-    if (vi->instr->dest_kind == IR_DEST_LOCAL && vi->instr->dest_local) {
+    if (vi->instr->dest_kind == IR_DEST_LOCAL && vi->instr->dest_local
+        && !vi->instr->dest_local->address_taken) {
         r->n_defs++;
     }
 
@@ -133,7 +134,8 @@ static bool count_operand(ir_visit_t *vi)
     ir_rd_t    *r = vi->user;
     ir_local_t *l = ir_operand_local(vi->operand);
 
-    if (l && !ir_local_read_earlier(vi->instr, vi->index, l)) {
+    if (l && !l->address_taken
+        && !ir_local_read_earlier(vi->instr, vi->index, l)) {
         r->use_off[node_of(r, vi->instr) + 1]++;
         r->n_uses++;
     }
@@ -147,7 +149,8 @@ static bool fill_instr(ir_visit_t *vi)
     ir_rd_t    *r  = s->r;
     ir_instr_t *in = vi->instr;
 
-    if (in->dest_kind == IR_DEST_LOCAL && in->dest_local) {
+    if (in->dest_kind == IR_DEST_LOCAL && in->dest_local
+        && !in->dest_local->address_taken) {
         r->def[s->at_def]       = in;
         r->def_local[s->at_def] = in->dest_local->index;
         r->def_id[node_of(r, in)] = s->at_def;
@@ -164,7 +167,8 @@ static bool fill_operand(ir_visit_t *vi)
     rd_fill_t  *s = vi->user;
     ir_local_t *l = ir_operand_local(vi->operand);
 
-    if (l && !ir_local_read_earlier(vi->instr, vi->index, l)) {
+    if (l && !l->address_taken
+        && !ir_local_read_earlier(vi->instr, vi->index, l)) {
         uint32_t u = s->fill[node_of(s->r, vi->instr)]++;
 
         s->r->use_local[u] = l->index;

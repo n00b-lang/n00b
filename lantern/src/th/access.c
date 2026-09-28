@@ -145,6 +145,53 @@ th_type *th_record_lookup(const th_type *t, const char *name)
     return nullptr;
 }
 
+static bool same_named_type(const th_type *left, const th_type *right)
+{
+    const char *left_name = nullptr, *right_name = nullptr;
+    size_t left_len = 0, right_len = 0;
+    return th_named_info(left, &left_name, &left_len, nullptr, nullptr)
+        && th_named_info(right, &right_name, &right_len, nullptr, nullptr)
+        && left_len == right_len
+        && !memcmp(left_name, right_name, left_len);
+}
+
+bool th_type_define(th_ctx *ctx, th_type *type, th_type *definition)
+{
+    if (!ctx || !type || !definition || th_kind_of(th_resolve(type)) != TH_NAMED
+        || th_kind_of(th_resolve(definition)) != TH_RECORD) return false;
+    for (size_t i = 0; i < ctx->type_definitions.len; i++) {
+        th_type_definition_t *entry = &ctx->type_definitions.data[i];
+        if (!same_named_type(entry->type, type)) continue;
+        if (entry->definition == definition
+            || th_hash(ctx, entry->definition) == th_hash(ctx, definition))
+            return true;
+        return false;
+    }
+    core_list_push(ctx->type_definitions,
+                   ((th_type_definition_t){type, definition}));
+    return true;
+}
+
+th_type *th_type_definition(const th_ctx *ctx, const th_type *type)
+{
+    if (!ctx || !type) return nullptr;
+    type = th_resolve_c(type);
+    for (size_t i = 0; i < ctx->type_definitions.len; i++) {
+        const th_type_definition_t *entry = &ctx->type_definitions.data[i];
+        if (same_named_type(entry->type, type)) return entry->definition;
+    }
+    return nullptr;
+}
+
+th_type *th_record_lookup_in(const th_ctx *ctx, const th_type *type,
+                             const char *name)
+{
+    th_type *member = th_record_lookup(type, name);
+    if (member || !ctx) return member;
+    th_type *definition = th_type_definition(ctx, type);
+    return definition ? th_record_lookup(definition, name) : nullptr;
+}
+
 th_type *th_func_ret(const th_type *t)
 {
     const th_type *n = as(t, TH_FUNCTION);

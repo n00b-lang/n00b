@@ -345,6 +345,307 @@ bool ir_mutability_from_name(const char *s, ir_mutability_t *out)
     return false;
 }
 
+bool ir_func_set_execution_phase(ir_ctx_t *ctx, ir_func_t *function,
+                                 ir_execution_phase_t phase)
+{
+    if (!ctx || !function || phase > IR_PHASE_COMPTIME) return false;
+    return ir_annot_set(ctx, &function->annots, (ir_annot_t){
+        .key = "ir.execution_phase",
+        .kind = IR_ANNOT_INT,
+        .i = {.mag = (ir_uint_t)phase},
+    });
+}
+
+ir_execution_phase_t ir_func_execution_phase(const ir_func_t *function)
+{
+    if (!function) return IR_PHASE_RUNTIME;
+    ir_annot_t *phase = ir_annot_get(
+        (ir_annots_t *)&function->annots, "ir.execution_phase");
+    if (!phase || phase->kind != IR_ANNOT_INT || phase->i.neg
+        || phase->i.mag > IR_PHASE_COMPTIME)
+        return IR_PHASE_RUNTIME;
+    return (ir_execution_phase_t)phase->i.mag;
+}
+
+bool ir_func_set_initializer(ir_ctx_t *ctx, ir_func_t *function,
+                             bool is_initializer)
+{
+    if (!ctx || !function) return false;
+    return ir_annot_set(ctx, &function->annots, (ir_annot_t){
+        .key = "ir.initializer",
+        .kind = IR_ANNOT_BOOL,
+        .b = is_initializer,
+    });
+}
+
+bool ir_func_is_initializer(const ir_func_t *function)
+{
+    if (!function) return false;
+    ir_annot_t *initializer = ir_annot_get(
+        (ir_annots_t *)&function->annots, "ir.initializer");
+    return initializer && initializer->kind == IR_ANNOT_BOOL
+        && initializer->b;
+}
+
+static bool valid_phase_access(ir_phase_access_t access);
+
+bool ir_value_set_phase_access(ir_ctx_t *ctx, ir_value_t *value,
+                               ir_phase_access_t available,
+                               ir_phase_access_t mutable_in,
+                               ir_phase_access_t initializable_in)
+{
+    if (!ctx || !value || !valid_phase_access(available)
+        || !valid_phase_access(mutable_in)
+        || !valid_phase_access(initializable_in)) return false;
+    ir_annots_t *annots = ir_value_annots(value);
+    return annots
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.binding_phases",
+               .kind = IR_ANNOT_INT,
+               .i = {.mag = available},
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.binding_mutable_phases",
+               .kind = IR_ANNOT_INT,
+               .i = {.mag = mutable_in},
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.binding_initializer_phases",
+               .kind = IR_ANNOT_INT,
+               .i = {.mag = initializable_in},
+           });
+}
+
+static bool value_phase_allows(const ir_value_t *value, const char *key,
+                               ir_execution_phase_t phase)
+{
+    if (!value || phase > IR_PHASE_COMPTIME) return false;
+    ir_annots_t *annots = ir_value_annots((ir_value_t *)value);
+    ir_annot_t *available = ir_annot_get(annots, "ir.binding_phases");
+    ir_annot_t *mutable = ir_annot_get(
+        annots, "ir.binding_mutable_phases");
+    ir_annot_t *initializable = ir_annot_get(
+        annots, "ir.binding_initializer_phases");
+    if (!available && !mutable && !initializable) return true;
+    if (!available || !mutable || !initializable) return false;
+    ir_annot_t *access = ir_annot_get(annots, key);
+    ir_annot_t *facts[] = {available, mutable, initializable};
+    for (size_t i = 0; i < sizeof(facts) / sizeof(facts[0]); i++)
+        if (facts[i]->kind != IR_ANNOT_INT || facts[i]->i.neg
+            || facts[i]->i.mag > IR_PHASE_ACCESS_BOTH) return false;
+    ir_phase_access_t phase_bit = phase == IR_PHASE_COMPTIME
+        ? IR_PHASE_ACCESS_COMPTIME : IR_PHASE_ACCESS_RUNTIME;
+    return ((ir_phase_access_t)access->i.mag & phase_bit) != 0;
+}
+
+bool ir_value_can_read(const ir_value_t *value, ir_execution_phase_t phase)
+{
+    return value_phase_allows(value, "ir.binding_phases", phase);
+}
+
+bool ir_value_can_write(const ir_value_t *value, ir_execution_phase_t phase)
+{
+    return ir_value_can_read(value, phase)
+        && value_phase_allows(value, "ir.binding_mutable_phases", phase);
+}
+
+bool ir_value_can_initialize(const ir_value_t *value,
+                             ir_execution_phase_t phase)
+{
+    return value_phase_allows(value, "ir.binding_initializer_phases", phase);
+}
+
+bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *parameter,
+                                  ir_indirect_access_t access)
+{
+    if (!ctx || !parameter || parameter->kind != IR_VAL_PARAM
+        || !parameter->type
+        || th_kind_of(parameter->type) != TH_INDIRECTION
+        || access < IR_INDIRECT_ACCESS_READ
+        || access > IR_INDIRECT_ACCESS_READ_WRITE) return false;
+    return ir_annot_set(ctx, ir_value_annots(parameter), (ir_annot_t){
+        .key = "ir.indirect_access",
+        .kind = IR_ANNOT_INT,
+        .i = {.mag = access},
+    });
+}
+
+ir_indirect_access_t ir_value_indirect_access(const ir_value_t *parameter)
+{
+    if (!parameter || parameter->kind != IR_VAL_PARAM) return
+        IR_INDIRECT_ACCESS_UNSPECIFIED;
+    ir_annot_t *access = ir_annot_get(
+        ir_value_annots((ir_value_t *)parameter), "ir.indirect_access");
+    if (!access || access->kind != IR_ANNOT_INT || access->i.neg
+        || access->i.mag < IR_INDIRECT_ACCESS_READ
+        || access->i.mag > IR_INDIRECT_ACCESS_READ_WRITE)
+        return IR_INDIRECT_ACCESS_UNSPECIFIED;
+    return (ir_indirect_access_t)access->i.mag;
+}
+
+bool ir_global_set_comptime_mutability(ir_ctx_t *ctx, ir_global_t *global,
+                                       ir_mutability_t mutability)
+{
+    if (!ctx || !global || mutability > IR_MUT_CONST) return false;
+    return ir_annot_set(ctx, &global->annots, (ir_annot_t){
+        .key = "ir.comptime_mutability",
+        .kind = IR_ANNOT_INT,
+        .i = {.mag = (ir_uint_t)mutability},
+    });
+}
+
+ir_mutability_t ir_global_comptime_mutability(const ir_global_t *global)
+{
+    if (!global) return IR_MUT_MUTABLE;
+    ir_annot_t *mutability = ir_annot_get(
+        (ir_annots_t *)&global->annots, "ir.comptime_mutability");
+    if (!mutability || mutability->kind != IR_ANNOT_INT
+        || mutability->i.neg || mutability->i.mag > IR_MUT_CONST)
+        return global->mutability;
+    return (ir_mutability_t)mutability->i.mag;
+}
+
+static bool valid_phase_access(ir_phase_access_t access)
+{
+    return access <= IR_PHASE_ACCESS_BOTH;
+}
+
+bool ir_global_set_phase_access(ir_ctx_t *ctx, ir_global_t *global,
+                                ir_phase_access_t available,
+                                ir_phase_access_t mutable_in,
+                                ir_phase_access_t initializable_in)
+{
+    if (!ctx || !global || !valid_phase_access(available)
+        || !valid_phase_access(mutable_in)
+        || !valid_phase_access(initializable_in)) return false;
+    return ir_annot_set(ctx, &global->annots, (ir_annot_t){
+               .key = "ir.global_available_phases",
+               .kind = IR_ANNOT_INT,
+               .i = {.mag = available},
+           })
+        && ir_annot_set(ctx, &global->annots, (ir_annot_t){
+               .key = "ir.global_mutable_phases",
+               .kind = IR_ANNOT_INT,
+               .i = {.mag = mutable_in},
+           })
+        && ir_annot_set(ctx, &global->annots, (ir_annot_t){
+               .key = "ir.global_initializer_phases",
+               .kind = IR_ANNOT_INT,
+               .i = {.mag = initializable_in},
+           });
+}
+
+static bool global_phase_allows(const ir_global_t *global, const char *key,
+                                ir_execution_phase_t phase)
+{
+    if (!global || phase > IR_PHASE_COMPTIME) return false;
+    ir_annots_t *annots = (ir_annots_t *)&global->annots;
+    ir_annot_t *available = ir_annot_get(
+        annots, "ir.global_available_phases");
+    ir_annot_t *mutable = ir_annot_get(
+        annots, "ir.global_mutable_phases");
+    ir_annot_t *initializable = ir_annot_get(
+        annots, "ir.global_initializer_phases");
+    if (!available && !mutable && !initializable) return true;
+    if (!available || !mutable || !initializable) return false;
+    ir_annot_t *access = ir_annot_get(annots, key);
+    ir_annot_t *facts[] = {available, mutable, initializable};
+    for (size_t i = 0; i < sizeof(facts) / sizeof(facts[0]); i++)
+        if (facts[i]->kind != IR_ANNOT_INT || facts[i]->i.neg
+            || facts[i]->i.mag > IR_PHASE_ACCESS_BOTH) return false;
+    ir_phase_access_t phase_bit = phase == IR_PHASE_COMPTIME
+        ? IR_PHASE_ACCESS_COMPTIME : IR_PHASE_ACCESS_RUNTIME;
+    return ((ir_phase_access_t)access->i.mag & phase_bit) != 0;
+}
+
+bool ir_global_can_read(const ir_global_t *global, ir_execution_phase_t phase)
+{
+    return global_phase_allows(global, "ir.global_available_phases", phase);
+}
+
+bool ir_global_can_write(const ir_global_t *global,
+                         ir_execution_phase_t phase)
+{
+    return ir_global_can_read(global, phase)
+        && global_phase_allows(global, "ir.global_mutable_phases", phase);
+}
+
+bool ir_global_can_initialize(const ir_global_t *global,
+                              ir_execution_phase_t phase)
+{
+    return global_phase_allows(global, "ir.global_initializer_phases", phase);
+}
+
+bool ir_global_set_storage_class(ir_ctx_t *ctx, ir_global_t *global,
+                                 const char *requested, bool required,
+                                 const char *selected)
+{
+    if (!ctx || !global
+        || (required && (!requested || !*requested || !selected
+                         || strcmp(requested, selected)))) return false;
+    const char *request = ir_strdup(ctx, requested ? requested : "");
+    const char *selection = ir_strdup(ctx, selected ? selected : "");
+    return request && selection
+        && ir_annot_set(ctx, &global->annots, (ir_annot_t){
+               .key = "ir.storage_requested",
+               .kind = IR_ANNOT_STR,
+               .s = request,
+           })
+        && ir_annot_set(ctx, &global->annots, (ir_annot_t){
+               .key = "ir.storage_selected",
+               .kind = IR_ANNOT_STR,
+               .s = selection,
+           })
+        && ir_annot_set(ctx, &global->annots, (ir_annot_t){
+               .key = "ir.storage_required",
+               .kind = IR_ANNOT_BOOL,
+               .b = required,
+           });
+}
+
+const char *ir_global_storage_class(const ir_global_t *global,
+                                    bool *required,
+                                    const char **requested)
+{
+    if (required) *required = false;
+    if (requested) *requested = nullptr;
+    if (!global) return nullptr;
+    ir_annots_t *annots = (ir_annots_t *)&global->annots;
+    ir_annot_t *need = ir_annot_get(annots, "ir.storage_required");
+    ir_annot_t *request = ir_annot_get(annots, "ir.storage_requested");
+    ir_annot_t *selection = ir_annot_get(annots, "ir.storage_selected");
+    if (required && need && need->kind == IR_ANNOT_BOOL)
+        *required = need->b;
+    if (requested && request && request->kind == IR_ANNOT_STR
+        && request->s && *request->s) *requested = request->s;
+    return selection && selection->kind == IR_ANNOT_STR && selection->s
+        && *selection->s ? selection->s : nullptr;
+}
+
+bool ir_global_set_storage_duration(ir_ctx_t *ctx, ir_global_t *global,
+                                    ir_storage_duration_t duration)
+{
+    if (!ctx || !global || duration > IR_STORAGE_DURATION_DYNAMIC)
+        return false;
+    return ir_annot_set(ctx, &global->annots, (ir_annot_t){
+        .key = "ir.storage_duration",
+        .kind = IR_ANNOT_INT,
+        .i = {.mag = duration},
+    });
+}
+
+ir_storage_duration_t ir_global_storage_duration(
+    const ir_global_t *global)
+{
+    if (!global) return IR_STORAGE_DURATION_UNSPECIFIED;
+    ir_annot_t *duration = ir_annot_get(
+        (ir_annots_t *)&global->annots, "ir.storage_duration");
+    if (!duration || duration->kind != IR_ANNOT_INT || duration->i.neg
+        || duration->i.mag > IR_STORAGE_DURATION_DYNAMIC)
+        return IR_STORAGE_DURATION_UNSPECIFIED;
+    return (ir_storage_duration_t)duration->i.mag;
+}
+
 const char *ir_prop_name(ir_props_t one)
 {
     switch (one) {
@@ -458,7 +759,32 @@ bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
     if (!slot) {
         return false;
     }
+    uint64_t hash = th_hash(m->ctx->types, named);
+    for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
+        ir_context_type_definition_t *entry =
+            &m->ctx->type_definitions[i];
+        if (entry->hash != hash) continue;
+        if (th_hash(m->ctx->types, entry->definition)
+            != th_hash(m->ctx->types, def))
+            return false;
+        bool changed = slot->def == nullptr;
+        slot->def = entry->definition;
+        if (changed) ir_layout_invalidate_type(m, named);
+        return true;
+    }
+    m->ctx->type_definitions = ir_grow(m->ctx,
+        m->ctx->type_definitions, &m->ctx->type_definition_capacity,
+        m->ctx->type_definition_count + 1,
+        sizeof(*m->ctx->type_definitions));
+    m->ctx->type_definitions[m->ctx->type_definition_count++] =
+        (ir_context_type_definition_t){
+            .hash = hash,
+            .type = named,
+            .definition = def,
+            .owner = m,
+        };
     slot->def = def;
+    ir_layout_invalidate_type(m, named);
 
     return true;
 }
@@ -469,9 +795,26 @@ th_type *ir_type_definition(ir_module_t *m, th_type *named)
         return nullptr;
     }
 
-    ir_typeslot_t *slot = type_find(m, th_hash(m->ctx->types, named));
-
+    uint64_t hash = th_hash(m->ctx->types, named);
+    for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
+        ir_context_type_definition_t *entry =
+            &m->ctx->type_definitions[i];
+        if (entry->hash == hash) return entry->definition;
+    }
+    ir_typeslot_t *slot = type_find(m, hash);
     return slot ? slot->def : nullptr;
+}
+
+ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named)
+{
+    if (!m || !named || th_kind_of(named) != TH_NAMED) return nullptr;
+    uint64_t hash = th_hash(m->ctx->types, named);
+    for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
+        ir_context_type_definition_t *entry =
+            &m->ctx->type_definitions[i];
+        if (entry->hash == hash) return entry->owner;
+    }
+    return nullptr;
 }
 
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)
@@ -521,6 +864,12 @@ uint64_t ir_type_id(ir_module_t *m, th_type *t)
 {
     if (!m || !t) {
         return 0;
+    }
+
+    // Inference variables can change their resolved shape after unification.
+    // Their identities are therefore live hashes, not cacheable IDs.
+    if (!th_is_closed(m->ctx->types, t)) {
+        return th_hash(m->ctx->types, t);
     }
 
     core_dict_t *ix = index_of(m->ctx, &m->id_index, core_hash_word, nullptr);

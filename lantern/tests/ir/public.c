@@ -79,6 +79,18 @@ int main(void)
 
     check("to the same module", again && text && !strcmp(text, again));
 
+    ir_module_t *extern_module = ir_module_new(ctx, "externs",
+        &ir_profile_bce, "host");
+    th_type *extern_signature = ir_type_parse(extern_module,
+        "(i32, bool) -> i32");
+    ir_func_t *external = extern_signature
+        ? ir_func_add(extern_module, "external", extern_signature,
+                      IR_LINK_EXTERN) : nullptr;
+    char *extern_text = extern_module ? ir_module_print(extern_module) : nullptr;
+    check("an external signature prints its positional parameter types",
+        external && extern_text && strstr(extern_text,
+            "extern func @external(%arg0: i32, %arg1: bool) -> i32"));
+
     check("the type target is reachable from the umbrella header",
           ir_type_parse(m, "(i32, *u8) -> bool") != nullptr);
 
@@ -112,6 +124,7 @@ int main(void)
 
     free(text);
     free(again);
+    free(extern_text);
     ir_ctx_free(ctx);
 
     return report("ir public");

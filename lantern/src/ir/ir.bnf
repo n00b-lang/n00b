@@ -57,9 +57,9 @@
 <params>     @nospace($1) ::= <func-param> (%"," <func-param>)*
 <func-param> ::= <func-param-pos> | <func-param-kw> | <func-param-rest>
 
-<func-param-pos>  @nospace($2) ::= <param-mode>? <value> %":" <typelang-type>
-<func-param-kw>   @nospace($1) ::= <name> %":" <typelang-type>
-<func-param-rest> @nospace($1) ::= %"*" <value> %":" <typelang-type>
+<func-param-pos>  @nospace($2) ::= <param-mode>? <value> %":" <typelang-type> <meta>*
+<func-param-kw>   @nospace($1) ::= <name> %":" <typelang-type> <meta>*
+<func-param-rest> @nospace($1) ::= %"*" <value> %":" <typelang-type> <meta>*
                                     | %"*" <typelang-type>
 
 <param-mode> ::= %"in" | %"out" | %"inout"
@@ -68,10 +68,23 @@
 <mutability>? %"local" <local-ref> %":" <typelang-type> <init>? <meta>* <nl>
 
 <init> ::= %"=" <signed-number>
-<global-init> ::= %"=" <signed-number>
-                | %"=" %"{" <global-init-values>? %"}"
+<global-init> ::= %"=" <global-init-value>
+<global-init-value> ::= <signed-number> | %STRING_LIT | %"true" | %"false"
+                      | <global> | <global-init-sequence>
+                      | <global-init-tuple> | <global-init-record>
+                      | <global-init-set> | <global-init-dictionary>
+                      | <global-init-phase-result>
+<global-init-phase-result> @nospace($2) ::= %"$" %STRING_LIT
+<global-init-sequence> ::= %"[" <global-init-values>? %"]"
+<global-init-tuple> ::= %"(" <global-init-values>? %")"
+<global-init-record> ::= %"{" <global-init-fields>? %"}"
+<global-init-set> ::= %"set" %"{" <global-init-values>? %"}"
+<global-init-dictionary> ::= %"dict" %"{" <global-init-pairs>? %"}"
 <global-init-values> ::= <global-init-value> (%"," <global-init-value>)*
-<global-init-value> ::= <name> %"=" (<signed-number> | <global>)
+<global-init-fields> ::= <global-init-field> (%"," <global-init-field>)*
+<global-init-field> ::= <name> %"=" <global-init-value>
+<global-init-pairs> ::= <global-init-pair> (%"," <global-init-pair>)*
+<global-init-pair> ::= <global-init-value> %"=>" <global-init-value>
 
 <signed-number> @nospace($1) ::= %"-"? <number>
 
@@ -160,6 +173,7 @@
          | %"loc" | %"origin"
          | %"source" | %"inlined" | %"expanded" | %"lowered" | %"generated"
          | %"true" | %"false"
+         | %"set" | %"dict"
          | %"in" | %"out" | %"inout"
          | %"array" | %"bitint" | %"ubitint" | %"exclusive" | %"forall"
          | %"i" | %"u"

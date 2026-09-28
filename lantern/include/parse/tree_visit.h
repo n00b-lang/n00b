@@ -45,6 +45,12 @@ void parse_walk_on_annot(parse_tree_walk_t *w, parse_annot_kind_t kind,
 void parse_walk_on_leaf(parse_tree_walk_t *w, parse_visit_fn fn, void *thunk);
 
 void parse_tree_walk_run(parse_tree_walk_t *w, parse_tree_t *root);
+/* Preserve a subtree root's position in its owning tree during the walk. */
+void parse_tree_walk_run_with_parent(parse_tree_walk_t *w,
+                                     parse_tree_t *root,
+                                     parse_tree_t *parent,
+                                     int32_t depth,
+                                     int32_t child_index);
 
 void parse_tree_walk_apply_node(parse_tree_walk_t *w, parse_tree_t *node,
                                 parse_tree_t *parent, int32_t depth,

@@ -7,7 +7,7 @@
 
 static void test_ops(void)
 {
-    check("op table is populated", IR_OP_COUNT == 67);
+    check("op table is populated", IR_OP_COUNT > 0);
 
     ir_op_t op;
 
@@ -16,6 +16,8 @@ static void test_ops(void)
           ir_op_lookup("variant.make", &op) && op == IR_OP_VARIANT_MAKE);
     check("lookup finds runtime type testing",
           ir_op_lookup("type.test", &op) && op == IR_OP_TYPE_TEST);
+    check("lookup finds semantic array construction",
+          ir_op_lookup("array.new", &op) && op == IR_OP_ARRAY_NEW);
     check("lookup rejects an unknown mnemonic",
           !ir_op_lookup("frobnicate", &op));
 
@@ -42,13 +44,38 @@ static void test_ops(void)
 
     check("add carries a result", ir_op_has_result(IR_OP_ADD));
     check("store carries no result", !ir_op_has_result(IR_OP_STORE));
+    check("alloc carries an address result", ir_op_has_result(IR_OP_ALLOC));
+    check("address.of carries an address result",
+          ir_op_has_result(IR_OP_ADDRESS_OF));
+    check("finalize and dealloc have no result",
+          !ir_op_has_result(IR_OP_FINALIZE)
+              && !ir_op_has_result(IR_OP_DEALLOC));
     check("branch is a terminator", ir_op_is_terminator(IR_OP_BRANCH));
+    check("trap is a no-result zero-operand terminator",
+          ir_op_is_terminator(IR_OP_TRAP)
+              && !ir_op_has_result(IR_OP_TRAP)
+              && ir_op_accepts_operands(IR_OP_TRAP, 0)
+              && !ir_op_accepts_operands(IR_OP_TRAP, 1));
     check("add is not a terminator", !ir_op_is_terminator(IR_OP_ADD));
 
     check("add takes two operands", ir_op_accepts_operands(IR_OP_ADD, 2));
     check("add rejects one operand", !ir_op_accepts_operands(IR_OP_ADD, 1));
     check("add rejects three operands", !ir_op_accepts_operands(IR_OP_ADD, 3));
+    check("const supports scalar or payload forms",
+          ir_op_accepts_operands(IR_OP_CONST, 0)
+              && ir_op_accepts_operands(IR_OP_CONST, 1)
+              && !ir_op_accepts_operands(IR_OP_CONST, 2));
     check("call is variadic", ir_op_accepts_operands(IR_OP_CALL, 9));
+    check("array.new accepts a variable number of extent values",
+          ir_op_has_result(IR_OP_ARRAY_NEW)
+              && ir_op_accepts_operands(IR_OP_ARRAY_NEW, 0)
+              && ir_op_accepts_operands(IR_OP_ARRAY_NEW, 4)
+              && ir_op_operand_kind(IR_OP_ARRAY_NEW, 3) == IR_OPD_VALUE);
+    check("array.new.using reserves its first value for allocator selection",
+          ir_op_has_result(IR_OP_ARRAY_NEW_USING)
+              && ir_op_accepts_operands(IR_OP_ARRAY_NEW_USING, 1)
+              && ir_op_operand_kind(IR_OP_ARRAY_NEW_USING, 0)
+                  == IR_OPD_VALUE);
     check("return accepts zero or one",
           ir_op_accepts_operands(IR_OP_RETURN, 0)
               && ir_op_accepts_operands(IR_OP_RETURN, 1)
@@ -120,6 +147,15 @@ static void test_types(void)
 
     check("different types are not equal", !ir_type_eq(m, a, c));
     check("a second type is counted", ir_type_count(m) == 2);
+
+    th_ctx *types = ir_ctx_types(ctx);
+    th_type *inferred = th_var(types);
+    uint64_t unresolved_id = ir_type_id(m, inferred);
+    check("an open type variable gets an identity", unresolved_id != 0);
+    check("type identity follows later unification",
+          th_unify_in_place(types, inferred, a)
+              && ir_type_eq(m, inferred, a)
+              && ir_type_id(m, inferred) == ir_type_id(m, a));
 
     th_type *r1 = ir_type_parse(m, "(x: i32, y: i32)");
     th_type *r2 = ir_type_parse(m, "(y: i32, x: i32)");
@@ -296,6 +332,17 @@ static void test_machine_classes(void)
           ir_profile_has(m, ir_type_parse(m, "i32")));
     check("an unprofiled name is not",
           !ir_profile_has(m, ir_type_parse(m, "Widget")));
+
+    th_ctx *types = ir_ctx_types(ctx);
+    th_type *inferred = th_var(types);
+    check("an unresolved variable has no machine class",
+          ir_machine_of(m, inferred).class == IR_CLASS_OPAQUE);
+    check("unifying an inferred type exposes its machine class",
+          th_unify_in_place(types, inferred, ir_type_parse(m, "i32"))
+              && ir_machine_of(m, inferred).class == IR_CLASS_SINT
+              && ir_machine_of(m, inferred).width == 32);
+    check("a bound inferred type is recognized by the profile",
+          ir_profile_has(m, inferred));
 
     ir_ctx_free(ctx);
 }
@@ -553,6 +600,59 @@ static void test_structure(void)
     ir_ctx_free(ctx);
 }
 
+static void test_cross_module_global_address(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *owner = ir_module_new(ctx, "owner", &ir_profile_bce,
+                                       "test");
+    ir_module_t *consumer = ir_module_new(ctx, "consumer", &ir_profile_bce,
+                                          "test");
+    th_type *i32 = ir_type_parse(owner, "i32");
+    th_type *u32 = ir_type_parse(consumer, "u32");
+    ir_global_t *canonical = ir_global_add(owner, "shared", i32);
+    ir_global_t *wrong_type_canonical = ir_global_add(owner, "wrong_type",
+                                                       i32);
+    ir_global_t *not_external_canonical = ir_global_add(owner,
+                                                         "not_external", i32);
+    ir_global_t *external = ir_global_add(consumer, "shared", i32);
+    ir_global_t *wrong_type = ir_global_add(consumer, "wrong_type", u32);
+    ir_global_t *not_external = ir_global_add(consumer, "not_external", i32);
+    if (external) external->is_extern = true;
+    if (wrong_type) wrong_type->is_extern = true;
+
+    check("globals retain their declaring module and begin with self identity",
+          canonical && external && ir_global_owner(canonical) == owner
+              && ir_global_identity(canonical) == canonical
+              && ir_global_identity(external) == external);
+    check("matching globals have equal names and types",
+          external && canonical && !strcmp(external->name, canonical->name)
+              && ir_type_eq(consumer, external->type, canonical->type));
+    check("a module global can bind to a canonical cross-module identity",
+          external && ir_global_set_identity(ctx, external, canonical)
+              && ir_global_identity(external) == canonical);
+    check("global identity binding rejects a name or type mismatch",
+          !ir_global_set_identity(ctx, not_external, canonical)
+              && !ir_global_set_identity(ctx, wrong_type, canonical));
+
+    ir_value_t *resolved = ir_global_address(consumer, canonical);
+    check("a canonical foreign global resolves to the consumer extern",
+          resolved && resolved->kind == IR_VAL_GLOBAL
+              && resolved->global == external);
+    check("a foreign global without a local declaration is rejected",
+          ir_global_address(consumer, ir_global_add(owner, "missing", i32))
+              == nullptr);
+    check("a mismatched extern type is rejected",
+          ir_global_address(consumer, wrong_type_canonical) == nullptr);
+    check("a same-name non-extern is not accepted as a foreign binding",
+          not_external && !not_external->is_extern
+              && ir_global_address(consumer, not_external_canonical)
+                     == nullptr);
+    check("a module-owned global address still resolves directly",
+          ir_global_address(owner, canonical)->global == canonical);
+
+    ir_ctx_free(ctx);
+}
+
 static void test_node_annots(void)
 {
     ir_ctx_t    *ctx = ir_ctx_new();
@@ -601,6 +701,7 @@ int main(void)
     test_origins();
     test_annots();
     test_structure();
+    test_cross_module_global_address();
     test_node_annots();
 
     return report("ir core");

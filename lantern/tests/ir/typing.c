@@ -3,11 +3,50 @@
 #include <string.h>
 
 #include "ir/rule.h"
+#include "ir/shape.h"
 #include "ir/text.h"
 #include "harness.h"
 
 static bool covered[IR_OP_COUNT];
 static bool produced[IR_DIAG_COUNT];
+
+static void
+test_context_owned_named_types(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *owner = ir_module_new(ctx, "owner", &ir_profile_bce, "host");
+    ir_module_t *consumer = ir_module_new(ctx, "consumer", &ir_profile_bce,
+                                          "host");
+    th_type *named = ir_type_parse(owner, "pkg.Point");
+    th_type *definition = ir_type_parse(owner, "(x: i32, y: u64)");
+    check("one module owns a context-wide named type definition",
+          ir_type_define(owner, named, definition)
+              && ir_type_definition_owner(owner, named) == owner);
+    check("another module resolves the canonical named type definition",
+          ir_type_definition(consumer, named) == definition
+              && ir_type_definition_owner(consumer, named) == owner);
+    check("a consumer can reuse the same named type representation",
+          ir_type_define(consumer, named, definition)
+              && ir_type_definition(consumer, named) == definition
+              && ir_type_definition_owner(consumer, named) == owner);
+    check("a consumer cannot install a conflicting type representation",
+          !ir_type_define(consumer, named,
+                          ir_type_parse(consumer, "(x: u64, y: i32)")));
+
+    th_type *callable = ir_type_parse(owner, "() -> i32 fail: string");
+    th_type *outcome = ir_call_outcome_type(owner, callable);
+    check("the defining module owns the call outcome type",
+          outcome && ir_type_definition_owner(owner, outcome) == owner);
+    check("consumer modules can inspect the shared call outcome definition",
+          outcome && ir_type_definition(consumer, outcome)
+              == ir_type_definition(owner, outcome)
+              && ir_type_definition_owner(consumer, outcome) == owner);
+    th_type *consumer_outcome = ir_call_outcome_type(consumer, callable);
+    check("consumer modules reuse the shared call outcome type",
+          outcome && consumer_outcome
+              && ir_type_eq(consumer, consumer_outcome, outcome));
+    ir_ctx_free(ctx);
+}
 
 typedef struct {
     ir_ctx_t    *ctx;
@@ -412,6 +451,76 @@ static void test_memory(void)
 {
     env *e = open_env(&ir_profile_bce, "i32");
 
+    ir_local_t *local = ir_local_add(e->f, "item", ir_type_parse(e->m, "i32"));
+    ir_instr_t *address = op(e, IR_OP_ADDRESS_OF);
+    ir_instr_operand_local(address, local);
+    check("address.of returns a pointer to the existing local",
+          accepts_as(e, address, "ref[i32]"));
+
+    ir_global_t *addressable_global = ir_global_add(
+        e->m, "item_global", ir_type_parse(e->m, "i32"));
+    ir_instr_t *global_address = op(e, IR_OP_ADDRESS_OF);
+    ir_instr_operand_value(global_address,
+                           ir_global_address(e->m, addressable_global));
+    check("address.of returns a pointer to the existing global",
+          accepts_as(e, global_address, "ref[i32]"));
+
+    ir_instr_t *copy = op(e, IR_OP_COPY);
+    ir_instr_operand_value(copy, val(e, "i32"));
+    ir_instr_set_dest(copy, "temporary", ir_type_parse(e->m, "i32"));
+    ir_instr_t *bad_address = op(e, IR_OP_ADDRESS_OF);
+    ir_instr_operand_value(bad_address, copy->dest);
+    check("address.of rejects a non-binding value",
+          apply(e, bad_address) == IR_RULE_REJECT);
+
+    ir_instr_t *alloc = op(e, IR_OP_ALLOC);
+    ir_instr_operand_type(alloc, ir_type_parse(e->m, "i32"));
+    check("alloc yields an address to its type",
+          accepts_as(e, alloc, "ptr[i32]"));
+    check("alloc preserves an extensible required storage class",
+          ir_instr_set_storage_class(alloc, "gc", true));
+    bool storage_required = false;
+    check("alloc exposes its selected storage class and requirement",
+          !strcmp(ir_instr_storage_class(alloc, &storage_required), "gc")
+              && storage_required);
+
+    ir_instr_t *ref_alloc = op(e, IR_OP_ALLOC);
+    ir_instr_set_dest(ref_alloc, "heap_ref", ir_type_parse(e->m, "ref[i32]"));
+    ir_instr_operand_type(ref_alloc, ir_type_parse(e->m, "i32"));
+    check("alloc accepts a front-end-selected ref result type",
+          accepts_as(e, ref_alloc, "ref[i32]"));
+    ir_instr_t *bad_ref_alloc = op(e, IR_OP_ALLOC);
+    ir_instr_set_dest(bad_ref_alloc, "bad_heap_ref",
+                      ir_type_parse(e->m, "ref[u32]"));
+    ir_instr_operand_type(bad_ref_alloc, ir_type_parse(e->m, "i32"));
+    check("alloc rejects an indirection with the wrong referent",
+          apply(e, bad_ref_alloc) == IR_RULE_REJECT);
+
+    ir_instr_t *alloc_using = op(e, IR_OP_ALLOC_USING);
+    ir_instr_operand_type(alloc_using, ir_type_parse(e->m, "i32"));
+    ir_instr_operand_value(alloc_using, val(e, "Allocator"));
+    check("alloc.using retains a generic runtime allocator operand",
+          accepts_as(e, alloc_using, "ptr[i32]"));
+    ir_instr_t *alloc_using_bad = op(e, IR_OP_ALLOC_USING);
+    ir_instr_operand_type(alloc_using_bad, ir_type_parse(e->m, "i32"));
+    check("alloc.using requires an allocator operand",
+          apply(e, alloc_using_bad) == IR_RULE_REJECT);
+
+    ir_instr_t *finalize = op(e, IR_OP_FINALIZE);
+    ir_instr_operand_value(finalize, val(e, "i32"));
+    check("finalize is an explicit side-effecting no-result operation",
+          accepts_as(e, finalize, nullptr));
+
+    ir_instr_t *dealloc = op(e, IR_OP_DEALLOC);
+    ir_instr_operand_value(dealloc, val(e, "ptr[i32]"));
+    check("dealloc accepts an address and yields no result",
+          accepts_as(e, dealloc, nullptr));
+
+    ir_instr_t *deallocbad = op(e, IR_OP_DEALLOC);
+    ir_instr_operand_value(deallocbad, val(e, "i32"));
+    check("dealloc rejects non-address values",
+          apply(e, deallocbad) == IR_RULE_REJECT);
+
     ir_instr_t *al = op(e, IR_OP_ALLOCA);
 
     ir_instr_operand_type(al, ir_type_parse(e->m, "i32"));
@@ -466,8 +575,49 @@ static void test_memory(void)
     ir_instr_operand_value(constant_store,
         constant ? ir_global_address(e->m, constant) : nullptr);
     ir_instr_operand_value(constant_store, val(e, "i32"));
-    check("global.store rejects writes to constant globals",
+    check("phase mutability metadata is accepted",
+          constant
+              && ir_global_set_comptime_mutability(
+                  e->ctx, constant, IR_MUT_MUTABLE)
+              && ir_func_set_execution_phase(e->ctx, e->f,
+                                             IR_PHASE_COMPTIME)
+              && ir_func_execution_phase(e->f) == IR_PHASE_COMPTIME);
+    check("global.store accepts a compile-time write to a const global",
+          apply(e, constant_store) == IR_RULE_ACCEPT);
+    check("runtime phase can be restored",
+          ir_func_set_execution_phase(e->ctx, e->f, IR_PHASE_RUNTIME)
+              && ir_func_execution_phase(e->f) == IR_PHASE_RUNTIME);
+    check("global.store rejects runtime writes to constant globals",
           apply(e, constant_store) == IR_RULE_REJECT);
+
+    ir_global_t *phase_limited = ir_global_add(
+        e->m, "phase_limited", ir_type_parse(e->m, "i32"));
+    ir_instr_t *phase_store = op(e, IR_OP_GLOBAL_STORE);
+    ir_instr_operand_value(phase_store,
+        phase_limited ? ir_global_address(e->m, phase_limited) : nullptr);
+    ir_instr_operand_value(phase_store, val(e, "i32"));
+    bool phase_contract = phase_limited
+        && ir_global_set_phase_access(e->ctx, phase_limited,
+            IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_RUNTIME,
+            IR_PHASE_ACCESS_COMPTIME)
+        && ir_func_set_execution_phase(e->ctx, e->f, IR_PHASE_COMPTIME);
+    check("ordinary compile-time code cannot write a runtime-only global",
+          phase_contract && apply(e, phase_store) == IR_RULE_REJECT);
+    check("a compile-time initializer can initialize that global",
+          phase_contract
+              && ir_func_set_initializer(e->ctx, e->f, true)
+              && apply(e, phase_store) == IR_RULE_ACCEPT);
+    check("an initializer marker is queryable and clearable",
+          ir_func_is_initializer(e->f)
+              && ir_func_set_initializer(e->ctx, e->f, false)
+              && !ir_func_is_initializer(e->f));
+    check("a marked compile-time assignment can initialize a global",
+          phase_contract
+              && ir_instr_set_binding_initialization(phase_store, true)
+              && apply(e, phase_store) == IR_RULE_ACCEPT);
+    check("runtime mutable access remains allowed",
+          ir_func_set_execution_phase(e->ctx, e->f, IR_PHASE_RUNTIME)
+              && apply(e, phase_store) == IR_RULE_ACCEPT);
 
     ir_instr_t *fd = op(e, IR_OP_FIELD);
 
@@ -654,6 +804,23 @@ static void test_aggregates_and_variants(void)
     check("inserting the wrong member type is rejected",
           apply(e, insbad) == IR_RULE_REJECT);
 
+    ir_instr_t *vn = op(e, IR_OP_VARIANT_NEW);
+    ir_instr_set_dest(vn, "empty", ir_type_parse(e->m, "variant R[i32]"));
+    check("variant.new yields an unset value of its destination type",
+          accepts_as(e, vn, "variant R[i32]"));
+
+    ir_instr_t *vnu = op(e, IR_OP_VARIANT_NEW_USING);
+    ir_instr_set_dest(vnu, "empty_using_allocator",
+                      ir_type_parse(e->m, "variant R[i32]"));
+    ir_instr_operand_value(vnu, val(e, "Allocator"));
+    check("variant.new.using yields unset storage with its allocator",
+          accepts_as(e, vnu, "variant R[i32]"));
+
+    ir_instr_t *vnbad = op(e, IR_OP_VARIANT_NEW);
+    ir_instr_set_dest(vnbad, "not_variant", ir_type_parse(e->m, "i32"));
+    check("variant.new rejects a non-variant destination",
+          apply(e, vnbad) == IR_RULE_REJECT);
+
     ir_instr_t *vm = op(e, IR_OP_VARIANT_MAKE);
 
     ir_instr_set_dest(vm, "r", ir_type_parse(e->m, "variant R[i32]"));
@@ -692,6 +859,36 @@ static void test_aggregates_and_variants(void)
     check("option.is_nil rejects a non-option",
           apply(e, option_is_nil_bad) == IR_RULE_REJECT);
 
+    ir_instr_t *nil_value = op(e, IR_OP_NIL);
+    ir_instr_set_dest(nil_value, "nil_value", ir_type_parse(e->m, "nil"));
+    check("nil produces the nil sentinel type", accepts_as(e, nil_value, "nil"));
+
+    ir_instr_t *nil_value_bad = op(e, IR_OP_NIL);
+    ir_instr_set_dest(nil_value_bad, "nil_value_bad",
+                      ir_type_parse(e->m, "i32"));
+    check("nil rejects a non-nil result type",
+          apply(e, nil_value_bad) == IR_RULE_REJECT);
+
+    ir_instr_t *option_none = op(e, IR_OP_OPTION_NONE);
+    ir_instr_set_dest(option_none, "option_none",
+                      ir_type_parse(e->m, "option[i32]"));
+    check("option.none produces a contextual option value",
+          accepts_as(e, option_none, "option[i32]"));
+
+    ir_instr_t *option_some = op(e, IR_OP_OPTION_SOME);
+    ir_instr_set_dest(option_some, "option_some",
+                      ir_type_parse(e->m, "option[i32]"));
+    ir_instr_operand_value(option_some, val(e, "i32"));
+    check("option.some wraps a value of the element type",
+          accepts_as(e, option_some, "option[i32]"));
+
+    ir_instr_t *option_some_bad = op(e, IR_OP_OPTION_SOME);
+    ir_instr_set_dest(option_some_bad, "option_some_bad",
+                      ir_type_parse(e->m, "option[i32]"));
+    ir_instr_operand_value(option_some_bad, val(e, "string"));
+    check("option.some rejects a mismatched payload",
+          apply(e, option_some_bad) == IR_RULE_REJECT);
+
     ir_instr_t *option_get = op(e, IR_OP_OPTION_GET);
     ir_instr_set_dest(option_get, "option_value", ir_type_parse(e->m, "i32"));
     ir_instr_operand_value(option_get, val(e, "option[i32]"));
@@ -704,6 +901,45 @@ static void test_aggregates_and_variants(void)
     ir_instr_operand_value(option_get_bad, val(e, "option[i32]"));
     check("option.get rejects a mismatched destination type",
           apply(e, option_get_bad) == IR_RULE_REJECT);
+
+    ir_instr_t *option_get_or_else = op(e, IR_OP_OPTION_GET_OR_ELSE);
+    ir_instr_operand_value(option_get_or_else, val(e, "option[i32]"));
+    ir_instr_operand_value(option_get_or_else, val(e, "i32"));
+    check("option.get_or_else accepts a matching fallback",
+          accepts_as(e, option_get_or_else, "i32"));
+
+    ir_instr_t *option_get_or_else_bad = op(e, IR_OP_OPTION_GET_OR_ELSE);
+    ir_instr_operand_value(option_get_or_else_bad, val(e, "option[i32]"));
+    ir_instr_operand_value(option_get_or_else_bad, val(e, "string"));
+    check("option.get_or_else rejects a mismatched fallback",
+          apply(e, option_get_or_else_bad) == IR_RULE_REJECT);
+
+    ir_instr_t *atomic_load = op(e, IR_OP_LOAD);
+    ir_instr_operand_value(atomic_load, val(e, "ref[atomic[i32]]"));
+    ir_instr_add_mod(atomic_load, "atomic");
+    check("atomic load unwraps the atomic storage type",
+          accepts_as(e, atomic_load, "i32"));
+
+    ir_instr_t *atomic_store = op(e, IR_OP_STORE);
+    ir_instr_operand_value(atomic_store, val(e, "ref[atomic[i32]]"));
+    ir_instr_operand_value(atomic_store, val(e, "i32"));
+    ir_instr_add_mod(atomic_store, "atomic");
+    check("atomic store accepts the underlying value type",
+          apply(e, atomic_store) == IR_RULE_ACCEPT);
+
+    ir_instr_t *atomic_wrap = op(e, IR_OP_ATOMIC_WRAP);
+    ir_instr_set_dest(atomic_wrap, "atomic_wrap",
+                      ir_type_parse(e->m, "atomic[i32]"));
+    ir_instr_operand_value(atomic_wrap, val(e, "i32"));
+    check("atomic.wrap converts an underlying value to its atomic type",
+          accepts_as(e, atomic_wrap, "atomic[i32]"));
+
+    ir_instr_t *atomic_wrap_bad = op(e, IR_OP_ATOMIC_WRAP);
+    ir_instr_set_dest(atomic_wrap_bad, "atomic_wrap_bad",
+                      ir_type_parse(e->m, "atomic[i32]"));
+    ir_instr_operand_value(atomic_wrap_bad, val(e, "string"));
+    check("atomic.wrap rejects a mismatched underlying value",
+          apply(e, atomic_wrap_bad) == IR_RULE_REJECT);
 
     ir_instr_t *tt = op(e, IR_OP_TYPE_TEST);
     ir_instr_operand_value(tt, val(e, "i32 | string"));
@@ -735,6 +971,22 @@ static void test_aggregates_and_variants(void)
 
     ir_type_define(e->m, ir_type_parse(e->m, "variant R[i32]"),
                    ir_type_parse(e->m, "(ok: i32, err: u64)"));
+
+    ir_type_define(e->m, ir_type_parse(e->m, "NamedPayload"),
+                   ir_type_parse(e->m, "(amount: i32)"));
+    ir_type_define(e->m, ir_type_parse(e->m, "variant NamedWrap[i32]"),
+                   ir_type_parse(e->m, "(number: NamedPayload)"));
+    check("named variant payload definition is retained",
+          ir_type_definition(e->m,
+              ir_type_parse(e->m, "NamedPayload")) != NULL);
+
+    ir_instr_t *vrecord = op(e, IR_OP_VARIANT_MAKE);
+    ir_instr_set_dest(vrecord, "wrapped_record",
+                      ir_type_parse(e->m, "variant NamedWrap[i32]"));
+    ir_instr_operand_name(vrecord, "number");
+    ir_instr_operand_value(vrecord, val(e, "(amount: i32)"));
+    check("variant.make accepts a matching named-field record literal",
+          accepts_as(e, vrecord, "variant NamedWrap[i32]"));
 
     ir_instr_t *vd = op(e, IR_OP_VARIANT_MAKE);
 
@@ -817,6 +1069,21 @@ static void test_aggregates_and_variants(void)
     check("and in that order they match",
           accepts_as(e, agg, "(x: i32, y: u64)"));
 
+    ir_instr_t *tuple = op(e, IR_OP_AGGREGATE);
+    ir_instr_set_dest(tuple, "tuple", ir_type_parse(e->m, "t(i32, u64)"));
+    ir_instr_operand_value(tuple, val(e, "i32"));
+    ir_instr_operand_value(tuple, val(e, "u64"));
+    check("an aggregate constructs a tuple with positional element types",
+          accepts_as(e, tuple, "t(i32, u64)"));
+
+    ir_instr_t *bad_tuple = op(e, IR_OP_AGGREGATE);
+    ir_instr_set_dest(bad_tuple, "bad_tuple",
+                      ir_type_parse(e->m, "t(i32, u64)"));
+    ir_instr_operand_value(bad_tuple, val(e, "u64"));
+    ir_instr_operand_value(bad_tuple, val(e, "i32"));
+    check("tuple aggregate elements are checked positionally",
+          apply(e, bad_tuple) == IR_RULE_REJECT);
+
     ir_instr_t *array = op(e, IR_OP_AGGREGATE);
     ir_instr_set_dest(array, "array", ir_type_parse(e->m, "array[i32; 2]"));
     ir_instr_operand_value(array, val(e, "i32"));
@@ -837,6 +1104,294 @@ static void test_aggregates_and_variants(void)
     ir_instr_operand_value(array_bad_element, val(e, "u64"));
     check("a sequence aggregate checks each element type",
           apply(e, array_bad_element) == IR_RULE_REJECT);
+
+    ir_instr_t *bytes = op(e, IR_OP_CONST);
+    const uint8_t byte_payload[] = {0, 'x', 0xff};
+    ir_instr_set_dest(bytes, "bytes", ir_type_parse(e->m, "string"));
+    bool byte_form_set = ir_instr_set_const_bytes(bytes, byte_payload,
+                                                   sizeof(byte_payload));
+    size_t byte_length = 0;
+    const char *byte_hex = ir_instr_const_bytes_hex(bytes, &byte_length);
+    check("byte constants preserve embedded zeroes in their IR payload",
+          byte_form_set && byte_hex && !strcmp(byte_hex, "0078ff")
+              && byte_length == sizeof(byte_payload)
+              && accepts_as(e, bytes, "string"));
+
+    ir_instr_t *elements = op(e, IR_OP_AGGREGATE);
+    ir_instr_set_dest(elements, "elements",
+                      ir_type_parse(e->m, "list[i32]"));
+    ir_instr_operand_value(elements, val(e, "i32"));
+    ir_instr_operand_value(elements, val(e, "i32"));
+    check("a typed element aggregate accepts matching values",
+          ir_instr_set_aggregate_form(elements, IR_AGGREGATE_ELEMENTS)
+              && accepts_as(e, elements, "list[i32]"));
+
+    ir_instr_t *bad_elements = op(e, IR_OP_AGGREGATE);
+    ir_instr_set_dest(bad_elements, "bad_elements",
+                      ir_type_parse(e->m, "list[i32]"));
+    ir_instr_operand_value(bad_elements, val(e, "u64"));
+    check("a typed element aggregate rejects mismatched values",
+          ir_instr_set_aggregate_form(bad_elements, IR_AGGREGATE_ELEMENTS)
+              && apply(e, bad_elements) == IR_RULE_REJECT);
+
+    ir_instr_t *pairs = op(e, IR_OP_AGGREGATE);
+    ir_instr_set_dest(pairs, "pairs",
+                      ir_type_parse(e->m, "map[i32, u64]"));
+    ir_instr_operand_value(pairs, val(e, "i32"));
+    ir_instr_operand_value(pairs, val(e, "u64"));
+    check("a pair aggregate verifies alternating key and value types",
+          ir_instr_set_aggregate_form(pairs, IR_AGGREGATE_PAIRS)
+              && accepts_as(e, pairs, "map[i32, u64]"));
+
+    ir_instr_t *odd_pairs = op(e, IR_OP_AGGREGATE);
+    ir_instr_set_dest(odd_pairs, "odd_pairs",
+                      ir_type_parse(e->m, "map[i32, u64]"));
+    ir_instr_operand_value(odd_pairs, val(e, "i32"));
+    check("a pair aggregate rejects a missing value",
+          ir_instr_set_aggregate_form(odd_pairs, IR_AGGREGATE_PAIRS)
+              && apply(e, odd_pairs) == IR_RULE_REJECT);
+
+    th_type *array_new_type = ir_type_parse(e->m,
+                                             "array[array[i32]]");
+    ir_value_t *outer_extent = val(e, "u64");
+    ir_value_t *inner_extent = val(e, "u64");
+    ir_value_t *element_count = val(e, "u64");
+    ir_value_t *outer_stride = val(e, "u64");
+    ir_value_t *inner_stride = val(e, "u64");
+    ir_shape_t *array_new_shape = ir_shape_new(e->ctx,
+        ir_type_parse(e->m, "i32"), 2);
+    bool array_new_shape_ok = array_new_shape && element_count
+        && outer_stride && inner_stride
+        && ir_shape_set_extent(array_new_shape, 0, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_RUNTIME,
+            .value = outer_extent,
+        })
+        && ir_shape_set_extent(array_new_shape, 1, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_RUNTIME,
+            .value = inner_extent,
+        })
+        && ir_shape_set_element_count(array_new_shape,
+            (ir_shape_measure_t){
+                .kind = IR_SHAPE_MEASURE_RUNTIME,
+                .value = element_count,
+            })
+        && ir_shape_set_stride(array_new_shape, 0, (ir_shape_measure_t){
+            .kind = IR_SHAPE_MEASURE_RUNTIME,
+            .value = outer_stride,
+        })
+        && ir_shape_set_stride(array_new_shape, 1, (ir_shape_measure_t){
+            .kind = IR_SHAPE_MEASURE_RUNTIME,
+            .value = inner_stride,
+        })
+        && ir_shape_set_storage(array_new_shape, 2, true);
+    ir_instr_t *array_new = op(e, IR_OP_ARRAY_NEW);
+    bool array_new_built = array_new_type && outer_extent && inner_extent
+        && array_new_shape_ok
+        && ir_instr_set_dest(array_new, "created", array_new_type)
+        && ir_instr_set_array_init(e->ctx, array_new,
+                                   IR_ARRAY_INIT_LANGUAGE_ZERO)
+        && ir_instr_operand_value(array_new, outer_extent)
+        && ir_instr_operand_value(array_new, inner_extent)
+        && ir_value_set_shape(array_new->dest, array_new_shape);
+    check("array.new accepts runtime extents matching its shape",
+          array_new_built
+              && accepts_as(e, array_new, "array[array[i32]]"));
+    ir_instr_t *array_new_using = op(e, IR_OP_ARRAY_NEW_USING);
+    bool array_new_using_built = array_new_type && outer_extent
+        && inner_extent && array_new_shape_ok
+        && ir_instr_set_dest(array_new_using, "created_using_allocator",
+                             array_new_type)
+        && ir_instr_set_array_init(e->ctx, array_new_using,
+                                   IR_ARRAY_INIT_LANGUAGE_ZERO)
+        && ir_instr_operand_value(array_new_using, val(e, "Allocator"))
+        && ir_instr_operand_value(array_new_using, outer_extent)
+        && ir_instr_operand_value(array_new_using, inner_extent)
+        && ir_value_set_shape(array_new_using->dest, array_new_shape);
+    check("array.new.using preserves its allocator and shape extents",
+          array_new_using_built
+              && accepts_as(e, array_new_using, "array[array[i32]]"));
+    ir_array_init_t array_init = IR_ARRAY_INIT_UNINITIALIZED;
+    check("array.new retains its typed element initialization policy",
+          array_new_built
+              && ir_instr_array_init(array_new, &array_init)
+              && array_init == IR_ARRAY_INIT_LANGUAGE_ZERO);
+    ir_instr_t *array_new_missing_init = op(e, IR_OP_ARRAY_NEW);
+    bool array_new_missing_init_built = array_new_type && outer_extent
+        && inner_extent && array_new_shape_ok
+        && ir_instr_set_dest(array_new_missing_init, "created_without_init",
+                             array_new_type)
+        && ir_instr_operand_value(array_new_missing_init, outer_extent)
+        && ir_instr_operand_value(array_new_missing_init, inner_extent)
+        && ir_value_set_shape(array_new_missing_init->dest, array_new_shape);
+    check("array.new requires an element initialization policy",
+          array_new_missing_init_built
+              && apply(e, array_new_missing_init) == IR_RULE_REJECT);
+    ir_instr_t *array_new_bad_init = op(e, IR_OP_ARRAY_NEW);
+    bool array_new_bad_init_built = array_new_type && outer_extent
+        && inner_extent && array_new_shape_ok
+        && ir_instr_set_dest(array_new_bad_init, "created_with_bad_init",
+                             array_new_type)
+        && ir_annot_set(e->ctx, &array_new_bad_init->annots, (ir_annot_t){
+            .key = "ir.array.element_initialization",
+            .kind = IR_ANNOT_STR,
+            .s = "unknown",
+        })
+        && ir_instr_operand_value(array_new_bad_init, outer_extent)
+        && ir_instr_operand_value(array_new_bad_init, inner_extent)
+        && ir_value_set_shape(array_new_bad_init->dest, array_new_shape);
+    check("array.new rejects an unknown element initialization policy",
+          array_new_bad_init_built
+              && apply(e, array_new_bad_init) == IR_RULE_REJECT);
+
+    ir_shape_t *expected_shape = ir_shape_new(e->ctx,
+        ir_type_parse(e->m, "i32"), 1);
+    bool expected_shape_ok = expected_shape
+        && ir_shape_set_extent(expected_shape, 0, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_STATIC,
+            .static_value = 2,
+        });
+    ir_value_t *shaped_sequence = val(e, "array[i32]");
+    ir_shape_t *actual_shape = ir_shape_new(e->ctx,
+        ir_type_parse(e->m, "i32"), 1);
+    bool actual_shape_ok = actual_shape && outer_extent
+        && ir_shape_set_extent(actual_shape, 0, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_RUNTIME,
+            .value = outer_extent,
+        })
+        && ir_value_set_shape(shaped_sequence, actual_shape);
+    ir_instr_t *shape_check = op(e, IR_OP_SEQUENCE_SHAPE_CHECK);
+    bool shape_check_built = expected_shape_ok && actual_shape_ok
+        && ir_instr_operand_value(shape_check, shaped_sequence)
+        && ir_instr_set_shape_constraint(shape_check, expected_shape);
+    check("sequence.shape.check accepts a runtime sequence with a required shape",
+          shape_check_built && apply(e, shape_check) == IR_RULE_ACCEPT);
+
+    ir_instr_t *shape_check_missing = op(e, IR_OP_SEQUENCE_SHAPE_CHECK);
+    bool shape_check_missing_built = actual_shape_ok
+        && ir_instr_operand_value(shape_check_missing, shaped_sequence);
+    check("sequence.shape.check requires an expected shape",
+          shape_check_missing_built
+              && apply(e, shape_check_missing) == IR_RULE_REJECT);
+
+    ir_value_t *unshaped_sequence = val(e, "array[i32]");
+    ir_instr_t *shape_check_unshaped = op(e, IR_OP_SEQUENCE_SHAPE_CHECK);
+    bool shape_check_unshaped_built = expected_shape_ok && unshaped_sequence
+        && ir_instr_operand_value(shape_check_unshaped, unshaped_sequence)
+        && ir_instr_set_shape_constraint(shape_check_unshaped,
+                                         expected_shape);
+    check("sequence.shape.check accepts a runtime value without static extents",
+          shape_check_unshaped_built
+              && apply(e, shape_check_unshaped) == IR_RULE_ACCEPT);
+
+    ir_shape_t *archived_shape = ir_shape_new(e->ctx,
+        ir_type_parse(e->m, "i32"), 1);
+    bool archived_shape_ok = archived_shape
+        && ir_shape_set_extent(archived_shape, 0, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_COMPTIME,
+            .producer_identifier = "dep.__array_extent_0",
+        });
+    ir_instr_t *archived_shape_check = op(e, IR_OP_SEQUENCE_SHAPE_CHECK);
+    bool archived_shape_check_built = archived_shape_ok
+        && unshaped_sequence
+        && ir_instr_operand_value(archived_shape_check, unshaped_sequence)
+        && ir_instr_set_shape_constraint(archived_shape_check,
+                                         archived_shape);
+    check("sequence.shape.check accepts a deferred external producer identity",
+          archived_shape_check_built
+              && apply(e, archived_shape_check) == IR_RULE_ACCEPT);
+
+    th_type *bound_signature = ir_type_parse(e->m, "() -> u64");
+    ir_func_t *bound_producer = bound_signature
+        ? ir_func_add(e->m, "array_bound", bound_signature,
+                      IR_LINK_INTERNAL) : nullptr;
+    bool bound_producer_ok = bound_producer
+        && ir_func_set_execution_phase(e->ctx, bound_producer,
+                                       IR_PHASE_COMPTIME);
+    ir_shape_t *comptime_shape = ir_shape_new(e->ctx,
+        ir_type_parse(e->m, "i32"), 1);
+    bool comptime_shape_ok = bound_producer_ok && comptime_shape
+        && element_count && inner_stride
+        && ir_shape_set_extent(comptime_shape, 0, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_COMPTIME,
+            .value = outer_extent,
+            .producer = bound_producer,
+        })
+        && ir_shape_set_element_count(comptime_shape,
+            (ir_shape_measure_t){
+                .kind = IR_SHAPE_MEASURE_RUNTIME,
+                .value = element_count,
+            })
+        && ir_shape_set_stride(comptime_shape, 0, (ir_shape_measure_t){
+            .kind = IR_SHAPE_MEASURE_RUNTIME,
+            .value = inner_stride,
+        })
+        && ir_shape_set_storage(comptime_shape, 1, true);
+    ir_instr_t *array_new_comptime = op(e, IR_OP_ARRAY_NEW);
+    bool array_new_comptime_built = comptime_shape_ok
+        && ir_instr_set_dest(array_new_comptime, "created_from_comptime",
+                             ir_type_parse(e->m, "array[i32]"))
+        && ir_instr_set_array_init(e->ctx, array_new_comptime,
+                                   IR_ARRAY_INIT_UNINITIALIZED)
+        && ir_instr_operand_value(array_new_comptime, outer_extent)
+        && ir_value_set_shape(array_new_comptime->dest, comptime_shape);
+    check("array.new retains a full-comptime extent producer",
+          array_new_comptime_built
+              && accepts_as(e, array_new_comptime, "array[i32]"));
+
+    ir_instr_t *array_new_wrong_element = op(e, IR_OP_ARRAY_NEW);
+    bool array_new_wrong_element_built = comptime_shape_ok && outer_extent
+        && ir_instr_set_dest(array_new_wrong_element,
+                             "created_with_wrong_element",
+                             ir_type_parse(e->m, "array[u64]"))
+        && ir_instr_set_array_init(e->ctx, array_new_wrong_element,
+                                   IR_ARRAY_INIT_LANGUAGE_ZERO)
+        && ir_instr_operand_value(array_new_wrong_element, outer_extent)
+        && ir_value_set_shape(array_new_wrong_element->dest, comptime_shape);
+    check("array.new rejects shape metadata with the wrong leaf type",
+          array_new_wrong_element_built
+              && apply(e, array_new_wrong_element) == IR_RULE_REJECT);
+
+    ir_shape_t *missing_value_shape = ir_shape_new(e->ctx,
+        ir_type_parse(e->m, "i32"), 1);
+    bool missing_value_shape_ok = bound_producer_ok && missing_value_shape
+        && ir_shape_set_extent(missing_value_shape, 0,
+            (ir_shape_extent_t){
+                .kind = IR_SHAPE_EXTENT_COMPTIME,
+                .producer = bound_producer,
+            })
+        && ir_shape_set_element_count(missing_value_shape,
+            (ir_shape_measure_t){
+                .kind = IR_SHAPE_MEASURE_RUNTIME,
+                .value = element_count,
+            })
+        && ir_shape_set_stride(missing_value_shape, 0,
+            (ir_shape_measure_t){
+                .kind = IR_SHAPE_MEASURE_RUNTIME,
+                .value = inner_stride,
+            })
+        && ir_shape_set_storage(missing_value_shape, 1, true);
+    ir_instr_t *array_new_missing_extent = op(e, IR_OP_ARRAY_NEW);
+    bool array_new_missing_extent_built = missing_value_shape_ok
+        && ir_instr_set_dest(array_new_missing_extent,
+                             "created_without_comptime_extent",
+                             ir_type_parse(e->m, "array[i32]"))
+        && ir_instr_set_array_init(e->ctx, array_new_missing_extent,
+                                   IR_ARRAY_INIT_LANGUAGE_ZERO)
+        && ir_value_set_shape(array_new_missing_extent->dest,
+                              missing_value_shape);
+    check("array.new rejects a known extent without a graph value",
+          array_new_missing_extent_built
+              && apply(e, array_new_missing_extent) == IR_RULE_REJECT);
+
+    ir_instr_t *array_new_missing_shape = op(e, IR_OP_ARRAY_NEW);
+    bool array_new_missing_built = array_new_type
+        && ir_instr_set_dest(array_new_missing_shape, "created_without_shape",
+                             array_new_type)
+        && ir_instr_set_array_init(e->ctx, array_new_missing_shape,
+                                   IR_ARRAY_INIT_LANGUAGE_ZERO);
+    check("array.new requires shape metadata",
+          array_new_missing_built
+              && apply(e, array_new_missing_shape) == IR_RULE_REJECT);
 
     ir_type_define(e->m, ir_type_parse(e->m, "Pair"),
                    ir_type_parse(e->m, "(a: i32, b: u64)"));
@@ -862,6 +1417,7 @@ typedef struct {
 static const conv_t CONVERSIONS[] = {
     {"i32", "i64", false, false, "integer to wider integer"},
     {"i32", "i8", true, false, "integer to narrower integer"},
+    {"u128", "u64", true, false, "wide unsigned integer to narrower integer"},
     {"f64", "i32", true, true, "float to integer"},
     {"i32", "f64", false, true, "integer to float"},
     {"f32", "f64", false, false, "float to wider float"},
@@ -955,6 +1511,15 @@ static void test_conversion(void)
     ir_instr_set_dest(widen_s, "ws", ir_type_parse(e->m, "i64"));
     ir_instr_operand_value(widen_s, val(e, "i32"));
     check("nor is sign extension", accepts_as(e, widen_s, "i64"));
+
+    ir_instr_t *signed_to_unsigned = op(e, IR_OP_CAST);
+    ir_instr_set_dest(signed_to_unsigned, "su", ir_type_parse(e->m, "u64"));
+    ir_instr_operand_value(signed_to_unsigned, val(e, "i64"));
+    check("signed-to-unsigned conversion requires an explicit fit policy",
+          !accepts_as(e, signed_to_unsigned, "u64"));
+    check("signed-to-unsigned conversion accepts a checked fit policy",
+          ir_instr_add_mod(signed_to_unsigned, "trap")
+              && accepts_as(e, signed_to_unsigned, "u64"));
 
     const conv_t bad = {"(x: i32)", "i32", false, false, "record to integer"};
 
@@ -1147,6 +1712,183 @@ static void test_select_phi_call(void)
     close_env(e);
 }
 
+static void test_generic_callable_contracts(void)
+{
+    env *e = open_env(&ir_profile_bce, "i32");
+    th_type *identity_body = ir_type_parse(e->m, "(`a) -> `a");
+    th_type *identity_contract = identity_body
+        ? th_generalize(ir_ctx_types(e->ctx), identity_body) : nullptr;
+    ir_func_t *identity = identity_body
+        ? ir_func_add(e->m, "identity", identity_body, IR_LINK_EXTERNAL)
+        : nullptr;
+    bool identity_set = identity && identity_contract
+        && ir_func_set_callable_contract(identity, identity_contract);
+    ir_value_t *identity_value = identity
+        ? ir_func_address(e->m, identity) : nullptr;
+    check("a quantified contract is retained on its function",
+          identity_contract && th_kind_of(identity_contract) == TH_BINDER
+              && identity_set
+              && ir_func_callable_contract(identity) == identity_contract);
+    check("a function address exposes its callable contract",
+          identity_set && identity_value
+              && identity_value->type == identity_contract);
+    uint64_t frozen_hash = identity_contract
+        ? th_hash(ir_ctx_types(e->ctx), identity_contract) : 0;
+
+    ir_instr_t *integer_call = op(e, IR_OP_CALL);
+    if (integer_call) {
+        ir_instr_set_dest(integer_call, "identity_integer",
+                          ir_type_parse(e->m, "i32"));
+        ir_instr_operand_value(integer_call, identity_value);
+        ir_instr_operand_value(integer_call, val(e, "i32"));
+        ir_instr_set_call_signature(integer_call,
+            ir_type_parse(e->m, "(i32) -> i32"));
+    }
+    check("a generic function contract instantiates for an integer call",
+          identity_set && integer_call
+              && apply(e, integer_call) == IR_RULE_ACCEPT);
+
+    ir_instr_t *boolean_call = op(e, IR_OP_CALL);
+    if (boolean_call) {
+        ir_instr_set_dest(boolean_call, "identity_boolean",
+                          ir_type_parse(e->m, "bool"));
+        ir_instr_operand_value(boolean_call, identity_value);
+        ir_instr_operand_value(boolean_call, val(e, "bool"));
+        ir_instr_set_call_signature(boolean_call,
+            ir_type_parse(e->m, "(bool) -> bool"));
+    }
+    ir_rule_result_t boolean_result = identity_set && boolean_call
+        ? ir_rule_apply(e->m, e->rs, boolean_call, e->d)
+        : (ir_rule_result_t){0};
+    harvest(e);
+    check("a later boolean call receives its own generic instance",
+          boolean_result.verdict == IR_RULE_ACCEPT);
+    check("generic calls do not refine the frozen callable contract",
+          identity_contract
+              && th_hash(ir_ctx_types(e->ctx), identity_contract)
+                    == frozen_hash);
+
+    th_type *pair_body = ir_type_parse(e->m, "(`a, `a) -> `a");
+    th_type *pair_contract = pair_body
+        ? th_generalize(ir_ctx_types(e->ctx), pair_body) : nullptr;
+    ir_func_t *pair = pair_body
+        ? ir_func_add(e->m, "same_pair", pair_body, IR_LINK_EXTERNAL)
+        : nullptr;
+    bool pair_set = pair && pair_contract
+        && ir_func_set_callable_contract(pair, pair_contract);
+    ir_value_t *pair_value = pair ? ir_func_address(e->m, pair) : nullptr;
+    ir_instr_t *mismatched_pair = op(e, IR_OP_CALL);
+    if (mismatched_pair) {
+        ir_instr_set_dest(mismatched_pair, "bad_pair",
+                          ir_type_parse(e->m, "i32"));
+        ir_instr_operand_value(mismatched_pair, pair_value);
+        ir_instr_operand_value(mismatched_pair, val(e, "i32"));
+        ir_instr_operand_value(mismatched_pair, val(e, "bool"));
+        ir_instr_set_call_signature(mismatched_pair,
+            ir_type_parse(e->m, "(i32, i32) -> i32"));
+    }
+    check("one generic instantiation correlates all positional arguments",
+          pair_set && mismatched_pair
+              && apply(e, mismatched_pair) == IR_RULE_REJECT);
+
+    ir_instr_t *bad_signature = op(e, IR_OP_CALL);
+    if (bad_signature) {
+        ir_instr_set_dest(bad_signature, "bad_signature", ir_type_parse(e->m,
+                            "i32"));
+        ir_instr_operand_value(bad_signature, pair_value);
+        ir_instr_operand_value(bad_signature, val(e, "i32"));
+        ir_instr_operand_value(bad_signature, val(e, "i32"));
+        ir_instr_set_call_signature(bad_signature,
+            ir_type_parse(e->m, "(i32, bool) -> i32"));
+    }
+    check("a supplied call signature must instantiate the frozen contract",
+          pair_set && bad_signature
+              && apply(e, bad_signature) == IR_RULE_REJECT);
+
+    th_type *context_body = ir_type_parse(e->m, "() -> `a");
+    th_type *context_contract = context_body
+        ? th_generalize(ir_ctx_types(e->ctx), context_body) : nullptr;
+    ir_func_t *contextual = context_body
+        ? ir_func_add(e->m, "contextual", context_body, IR_LINK_EXTERNAL)
+        : nullptr;
+    bool context_set = contextual && context_contract
+        && ir_func_set_callable_contract(contextual, context_contract);
+    ir_instr_t *context_call = op(e, IR_OP_CALL);
+    if (context_call) {
+        ir_instr_set_dest(context_call, "contextual_integer",
+                          ir_type_parse(e->m, "i32"));
+        ir_instr_operand_value(context_call,
+                               ir_func_address(e->m, contextual));
+        ir_instr_set_call_signature(context_call,
+            ir_type_parse(e->m, "() -> i32"));
+    }
+    check("the expected call result can constrain a generic return type",
+          context_set && context_call
+              && apply(e, context_call) == IR_RULE_ACCEPT);
+
+    ir_block_t *identity_block = ir_block_add(identity, "entry");
+    ir_value_t *identity_param = identity_block
+        ? ir_param_add(identity, "value",
+                       th_func_param(identity_body, 0)->type) : nullptr;
+    ir_instr_t *identity_return = identity_block
+        ? ir_instr_add(identity_block, IR_OP_RETURN) : nullptr;
+    if (identity_return) ir_instr_operand_value(identity_return,
+                                                 identity_param);
+
+    ir_block_t *pair_block = ir_block_add(pair, "entry");
+    ir_value_t *pair_first = pair_block
+        ? ir_param_add(pair, "first", th_func_param(pair_body, 0)->type)
+        : nullptr;
+    if (pair_block)
+        ir_param_add(pair, "second", th_func_param(pair_body, 1)->type);
+    ir_instr_t *pair_return = pair_block
+        ? ir_instr_add(pair_block, IR_OP_RETURN) : nullptr;
+    if (pair_return) ir_instr_operand_value(pair_return, pair_first);
+
+    ir_block_t *context_block = ir_block_add(contextual, "entry");
+    if (context_block) ir_instr_add(context_block, IR_OP_RETURN);
+    ir_instr_t *caller_return = ir_instr_add(e->b, IR_OP_RETURN);
+    if (caller_return && e->f->n_params)
+        ir_instr_operand_value(caller_return, e->f->params[0]);
+
+    char *text = ir_module_print(e->m);
+    ir_ctx_t *roundtrip_ctx = ir_ctx_new();
+    ir_diags_t *roundtrip_diags = ir_diags_new(roundtrip_ctx, nullptr);
+    const ir_profile_t *profiles[] = {&ir_profile_bce};
+    ir_module_t *roundtrip = text
+        ? ir_module_parse(roundtrip_ctx, text, 0, profiles, 1,
+                          roundtrip_diags) : nullptr;
+    ir_func_t *roundtrip_identity = roundtrip
+        ? ir_func_find(roundtrip, "identity") : nullptr;
+    ir_func_t *roundtrip_caller = roundtrip
+        ? ir_func_find(roundtrip, "f") : nullptr;
+    bool has_roundtrip_call_signature = false;
+    for (uint32_t i = 0; roundtrip_caller
+         && i < roundtrip_caller->n_blocks; i++) {
+        ir_block_t *block = roundtrip_caller->blocks[i];
+        for (uint32_t j = 0; j < block->n_instrs; j++) {
+            ir_instr_t *instruction = block->instrs[j];
+            has_roundtrip_call_signature |= instruction->op == IR_OP_CALL
+                && ir_instr_call_signature(instruction) != nullptr;
+        }
+    }
+    check("IR text round-trips generic callable and call-site contracts",
+          roundtrip && roundtrip_identity
+              && ir_func_callable_contract(roundtrip_identity)
+              && has_roundtrip_call_signature
+              && ir_diags_count(roundtrip_diags) == 0);
+    if (!roundtrip || !roundtrip_identity || !has_roundtrip_call_signature
+        || ir_diags_count(roundtrip_diags)) {
+        char *errors = ir_diags_render_text(roundtrip_diags, nullptr);
+        printf("  IR text: %s\n", text ? text : "<null>");
+        if (errors) { printf("  %s", errors); free(errors); }
+    }
+    core_free(text);
+    ir_ctx_free(roundtrip_ctx);
+
+    close_env(e);
+}
+
 static void test_comptime_and_terminators(void)
 {
     env *e = open_env(&ir_profile_bce, "i32");
@@ -1223,6 +1965,10 @@ static void test_comptime_and_terminators(void)
     ir_instr_t *u = op(e, IR_OP_UNREACHABLE);
 
     check("unreachable yields nothing", accepts_as(e, u, nullptr));
+
+    ir_instr_t *trap = op(e, IR_OP_TRAP);
+
+    check("trap yields nothing", accepts_as(e, trap, nullptr));
 
     ir_instr_t *br = op(e, IR_OP_BRANCH);
 
@@ -1320,6 +2066,18 @@ static void test_comptime_and_terminators(void)
     close_env(e);
 }
 
+static void test_phase_result_type(void)
+{
+    env *e = open_env(&ir_profile_bce, "i32");
+    ir_instr_t *result = op(e, IR_OP_PHASE_RESULT);
+    bool set = result && ir_instr_set_dest(result, "phase_value",
+        ir_type_parse(e->m, "i32"))
+        && ir_instr_set_phase_result(e->ctx, result, "module.value.1");
+    check("a phase result is a typed external runtime value",
+          set && accepts_as(e, result, "i32"));
+    close_env(e);
+}
+
 static void test_constants_and_copy(void)
 {
     env *e = open_env(&ir_profile_bce, "i32");
@@ -1330,6 +2088,11 @@ static void test_constants_and_copy(void)
     ir_instr_operand_int(c, 7);
     check("const takes its type from its destination",
           accepts_as(e, c, "i32"));
+
+    ir_instr_t *empty = op(e, IR_OP_CONST);
+    ir_instr_set_dest(empty, "empty", ir_type_parse(e->m, "i32"));
+    check("a scalar const without a payload is rejected",
+          apply(e, empty) == IR_RULE_REJECT);
 
     ir_instr_t *cbad = op(e, IR_OP_CONST);
 
@@ -2083,7 +2846,7 @@ static void report_coverage(void)
 
 int main(void)
 {
-
+    test_context_owned_named_types();
     test_constants_and_copy();
     test_arithmetic();
     test_bitwise_and_shifts();
@@ -2092,6 +2855,8 @@ int main(void)
     test_aggregates_and_variants();
     test_conversion();
     test_select_phi_call();
+    test_phase_result_type();
+    test_generic_callable_contracts();
     test_comptime_and_terminators();
     test_second_profile();
     test_constants_are_target_independent();

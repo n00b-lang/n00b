@@ -21,6 +21,8 @@
 <type-app>   @nospace ::= %"[" <type-args> %"]"
 
 <qualified-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
+<qualified-name> @nospace ::= %"set" (%"." %IDENTIFIER)*
+<qualified-name> @nospace ::= %"dict" (%"." %IDENTIFIER)*
 
 <type-args> @nospace($1) ::= <type-arg> (%"," <type-arg>)*
 

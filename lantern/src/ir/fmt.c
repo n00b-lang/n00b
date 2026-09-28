@@ -4,10 +4,11 @@
 
 #include "private/ir/internal.h"
 
-static void escape(core_buffer_t *b, const char *s)
+static void escape_n(core_buffer_t *b, const char *s, size_t length)
 {
-    for (const unsigned char *p = (const unsigned char *)s; p && *p; p++) {
-        switch (*p) {
+    for (size_t i = 0; s && i < length; i++) {
+        unsigned char c = (unsigned char)s[i];
+        switch (c) {
         case '"':
             core_buffer_puts(b, "\\\"");
             break;
@@ -24,11 +25,11 @@ static void escape(core_buffer_t *b, const char *s)
             core_buffer_puts(b, "\\r");
             break;
         default:
-            if (*p < 0x20) {
-                core_buffer_printf(b, "\\u%04x", *p);
+            if (c < 0x20 || c == 0x7f) {
+                core_buffer_printf(b, "\\u%04x", c);
             }
             else {
-                core_buffer_append(b, (const char *)p, 1);
+                core_buffer_append(b, (const char *)&s[i], 1);
             }
         }
     }
@@ -36,8 +37,13 @@ static void escape(core_buffer_t *b, const char *s)
 
 void ir_quote(core_buffer_t *b, const char *s)
 {
+    ir_quote_n(b, s, s ? strlen(s) : 0);
+}
+
+void ir_quote_n(core_buffer_t *b, const char *s, size_t length)
+{
     core_buffer_puts(b, "\"");
-    escape(b, s);
+    escape_n(b, s, length);
     core_buffer_puts(b, "\"");
 }
 

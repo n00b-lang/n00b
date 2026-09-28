@@ -30,7 +30,9 @@ th_ctx *th_ctx_new(void)
 {
     th_ctx *ctx = core_alloc(th_ctx);
 
+    memset(ctx, 0, sizeof(*ctx));
     core_arena_init(&ctx->arena, 0);
+    ctx->type_definitions = core_list_new(th_type_definition_t);
 
     return ctx;
 }
@@ -60,6 +62,7 @@ void th_ctx_free(th_ctx *ctx)
 
     core_list_free(ctx->promos);
     core_list_free(ctx->ifaces);
+    core_list_free(ctx->type_definitions);
     core_list_free(ctx->methods);
     core_list_free(ctx->errors);
     core_list_free(ctx->coercions);
@@ -67,6 +70,219 @@ void th_ctx_free(th_ctx *ctx)
     core_arena_free(&ctx->arena);
     core_buffer_release(&ctx->scratch);
     core_free(ctx);
+}
+
+typedef struct {
+    const th_type *source;
+    th_type *copy;
+} th_clone_entry_t;
+core_list_decl(th_clone_entry_t);
+
+static const char *
+clone_string(th_ctx *destination, const char *source)
+{
+    return source ? th_strdup(destination, source, strlen(source)) : nullptr;
+}
+
+static th_type *clone_type_graph(th_ctx *destination, const th_type *source,
+                                 core_list_t(th_clone_entry_t) *seen);
+
+static bool
+clone_constraint_graph(th_ctx *destination, const th_constraint *source,
+                       th_constraint *copy,
+                       core_list_t(th_clone_entry_t) *seen)
+{
+    *copy = *source;
+    copy->scope_module = clone_string(destination, source->scope_module);
+    copy->scope_package = clone_string(destination, source->scope_package);
+    switch (source->kind) {
+    case TH_CON_UNIFIES:
+    case TH_CON_PROMOTES:
+    case TH_CON_EXCLUDES:
+        copy->target = clone_type_graph(destination, source->target, seen);
+        return !source->target || copy->target;
+    case TH_CON_ONE_OF:
+        copy->one_of.types = source->one_of.n
+            ? core_alloc_array(th_type *, source->one_of.n) : nullptr;
+        for (size_t i = 0; i < source->one_of.n; i++) {
+            copy->one_of.types[i] = clone_type_graph(destination,
+                source->one_of.types[i], seen);
+            if (!copy->one_of.types[i]) return false;
+        }
+        return true;
+    case TH_CON_IMPLEMENTS:
+        copy->iface = clone_string(destination, source->iface);
+        return !source->iface || copy->iface;
+    case TH_CON_HAS_FIELD:
+        copy->field.name = clone_string(destination, source->field.name);
+        copy->field.type = clone_type_graph(destination, source->field.type,
+                                             seen);
+        return (!source->field.name || copy->field.name)
+            && (!source->field.type || copy->field.type);
+    case TH_CON_HAS_PARAM:
+        copy->param.type = clone_type_graph(destination, source->param.type,
+                                            seen);
+        return !source->param.type || copy->param.type;
+    case TH_CON_METHOD:
+        copy->method.name = clone_string(destination, source->method.name);
+        copy->method.result = clone_type_graph(destination,
+            source->method.result, seen);
+        copy->method.call = clone_type_graph(destination,
+            source->method.call, seen);
+        return (!source->method.name || copy->method.name)
+            && (!source->method.result || copy->method.result)
+            && (!source->method.call || copy->method.call);
+    }
+    return false;
+}
+
+static th_type *
+clone_type_graph(th_ctx *destination, const th_type *source,
+                core_list_t(th_clone_entry_t) *seen)
+{
+    if (!source) return nullptr;
+    for (size_t i = 0; i < seen->len; i++)
+        if (seen->data[i].source == source) return seen->data[i].copy;
+
+    th_type *copy = th_alloc(destination, sizeof(*copy));
+    if (!copy) return nullptr;
+    memset(copy, 0, sizeof(*copy));
+    copy->kind = source->kind;
+    core_list_push(*seen, ((th_clone_entry_t){source, copy}));
+    switch (source->kind) {
+    case TH_NAMED:
+        copy->named = source->named;
+        copy->named.name = clone_string(destination, source->named.name);
+        copy->named.args = source->named.nargs
+            ? core_alloc_array(th_arg, source->named.nargs) : nullptr;
+        for (size_t i = 0; i < source->named.nargs; i++) {
+            copy->named.args[i] = source->named.args[i];
+            if (source->named.args[i].kind == TH_ARG_TYPE) {
+                copy->named.args[i].type = clone_type_graph(destination,
+                    source->named.args[i].type, seen);
+                if (!copy->named.args[i].type) return nullptr;
+            }
+            else if (source->named.args[i].kind == TH_ARG_STR) {
+                size_t len = source->named.args[i].str.n;
+                char *text = th_strdup(destination,
+                    source->named.args[i].str.p, len);
+                if (!text) return nullptr;
+                copy->named.args[i].str.p = text;
+            }
+        }
+        return copy->named.name ? copy : nullptr;
+    case TH_BITINT:
+        copy->bitint = source->bitint;
+        return copy;
+    case TH_INDIRECTION:
+        copy->ind.attrs = source->ind.attrs;
+        copy->ind.referent = clone_type_graph(destination,
+            source->ind.referent, seen);
+        return copy->ind.referent ? copy : nullptr;
+    case TH_SEQUENCE:
+        copy->seq = source->seq;
+        copy->seq.elem = clone_type_graph(destination, source->seq.elem, seen);
+        return copy->seq.elem ? copy : nullptr;
+    case TH_RECORD:
+        copy->record.n = source->record.n;
+        copy->record.members = source->record.n
+            ? core_alloc_array(th_member, source->record.n) : nullptr;
+        for (size_t i = 0; i < source->record.n; i++) {
+            copy->record.members[i].name = clone_string(destination,
+                source->record.members[i].name);
+            copy->record.members[i].type = clone_type_graph(destination,
+                source->record.members[i].type, seen);
+            if (!copy->record.members[i].name
+                || !copy->record.members[i].type) return nullptr;
+        }
+        return copy;
+    case TH_FUNCTION:
+        copy->fn.ret = clone_type_graph(destination, source->fn.ret, seen);
+        copy->fn.error = clone_type_graph(destination, source->fn.error, seen);
+        copy->fn.np = source->fn.np;
+        copy->fn.params = source->fn.np
+            ? core_alloc_array(th_param, source->fn.np) : nullptr;
+        for (size_t i = 0; i < source->fn.np; i++) {
+            copy->fn.params[i] = source->fn.params[i];
+            copy->fn.params[i].type = clone_type_graph(destination,
+                source->fn.params[i].type, seen);
+            if (!copy->fn.params[i].type) return nullptr;
+        }
+        if (source->fn.rest) {
+            copy->fn.rest = th_alloc(destination, sizeof(*copy->fn.rest));
+            if (!copy->fn.rest) return nullptr;
+            *copy->fn.rest = *source->fn.rest;
+            copy->fn.rest->type = clone_type_graph(destination,
+                source->fn.rest->type, seen);
+            if (!copy->fn.rest->type) return nullptr;
+        }
+        copy->fn.nkw = source->fn.nkw;
+        copy->fn.kw = source->fn.nkw
+            ? core_alloc_array(th_kwparam, source->fn.nkw) : nullptr;
+        for (size_t i = 0; i < source->fn.nkw; i++) {
+            copy->fn.kw[i] = source->fn.kw[i];
+            copy->fn.kw[i].name = clone_string(destination,
+                source->fn.kw[i].name);
+            copy->fn.kw[i].type = clone_type_graph(destination,
+                source->fn.kw[i].type, seen);
+            if (!copy->fn.kw[i].name || !copy->fn.kw[i].type)
+                return nullptr;
+        }
+        return copy->fn.ret ? copy : nullptr;
+    case TH_BINDER:
+        copy->binder.arity = source->binder.arity;
+        copy->binder.body = clone_type_graph(destination,
+            source->binder.body, seen);
+        if (source->binder.qvars) {
+            copy->binder.qvars = core_alloc_array(th_type *,
+                (size_t)source->binder.arity);
+            for (uint64_t i = 0; i < source->binder.arity; i++) {
+                copy->binder.qvars[i] = clone_type_graph(destination,
+                    source->binder.qvars[i], seen);
+                if (!copy->binder.qvars[i]) return nullptr;
+            }
+        }
+        return copy->binder.body ? copy : nullptr;
+    case TH_BOUND:
+        copy->bound = source->bound;
+        return copy;
+    case TH_SUM:
+        copy->sum.comb = source->sum.comb;
+        copy->sum.n = source->sum.n;
+        copy->sum.arms = source->sum.n
+            ? core_alloc_array(th_type *, source->sum.n) : nullptr;
+        for (size_t i = 0; i < source->sum.n; i++) {
+            copy->sum.arms[i] = clone_type_graph(destination,
+                source->sum.arms[i], seen);
+            if (!copy->sum.arms[i]) return nullptr;
+        }
+        return copy;
+    case TH_VAR:
+        copy->var.index = source->var.index;
+        copy->var.has_index = source->var.has_index;
+        copy->var.name = clone_string(destination, source->var.name);
+        copy->var.ref = clone_type_graph(destination, source->var.ref, seen);
+        copy->var.cons = core_list_new(th_constraint);
+        for (size_t i = 0; i < source->var.cons.len; i++) {
+            th_constraint constraint;
+            if (!clone_constraint_graph(destination,
+                    &source->var.cons.data[i], &constraint, seen))
+                return nullptr;
+            core_list_push(copy->var.cons, constraint);
+        }
+        return copy;
+    }
+    return nullptr;
+}
+
+th_type *
+th_type_clone(th_ctx *destination, const th_type *source)
+{
+    if (!destination || !source) return nullptr;
+    core_list_t(th_clone_entry_t) seen = core_list_new(th_clone_entry_t);
+    th_type *copy = clone_type_graph(destination, source, &seen);
+    core_list_free(seen);
+    return copy;
 }
 
 void th_ctx_set_normalizer(th_ctx *ctx, th_normalizer fn, void *state)
@@ -1023,6 +1239,20 @@ th_type *th_ind(th_ctx *ctx, uint8_t attrs, th_type *r)
     t->ind.referent = r;
 
     return t;
+}
+
+bool th_indirection_attrs(const char *name, uint8_t *attrs)
+{
+    if (!name || !attrs) return false;
+    if (!strcmp(name, "ref")) *attrs = 0;
+    else if (!strcmp(name, "ptr"))
+        *attrs = TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE;
+    else if (!strcmp(name, "mutref")) *attrs = TH_EXCLUSIVE;
+    else if (!strcmp(name, "own")) *attrs = TH_OWNING;
+    else if (!strcmp(name, "gcref")) *attrs = TH_NULLABLE | TH_RESEATABLE;
+    else if (!strcmp(name, "tmpref")) *attrs = TH_TEMPORARY;
+    else return false;
+    return true;
 }
 
 th_type *th_array(th_ctx *ctx, th_type *e)

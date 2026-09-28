@@ -33,27 +33,95 @@ static void test_trapping_add_bounds(void)
     ir_ctx_free(ctx);
 }
 
-static void test_branching_is_unsupported(void)
+static void test_branch_path_refines_integer_ranges(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
     ir_module_t *m = ir_module_new(ctx, "ranges", &ir_profile_bce, "test");
-    ir_func_t *f = ir_func_add(m, "f", ir_type_parse(m, "(bool) -> void"),
+    ir_func_t *f = ir_func_add(m, "f", ir_type_parse(m, "(i:8) -> i:8"),
                                IR_LINK_EXTERNAL);
+    ir_value_t *input = ir_param_add(f, "input", ir_type_parse(m, "i:8"));
+    ir_block_t *entry = ir_block_add(f, "entry");
+    ir_block_t *positive = ir_block_add(f, "positive");
+    ir_block_t *nonpositive = ir_block_add(f, "nonpositive");
+    ir_instr_t *zero = ir_instr_add(entry, IR_OP_CONST);
+    ir_instr_set_dest(zero, "zero", ir_type_parse(m, "i:8"));
+    ir_instr_operand_int(zero, 0);
+    ir_instr_t *compare = ir_instr_add(entry, IR_OP_GT);
+    ir_instr_set_dest(compare, "is_positive", ir_type_parse(m, "bool"));
+    ir_instr_operand_value(compare, input);
+    ir_instr_operand_value(compare, zero->dest);
+    ir_instr_t *branch = ir_instr_add(entry, IR_OP_BRANCH);
+    ir_instr_operand_value(branch, compare->dest);
+    ir_instr_operand_block(branch, positive);
+    ir_instr_operand_block(branch, nonpositive);
+    ir_instr_t *one = ir_instr_add(positive, IR_OP_CONST);
+    ir_instr_set_dest(one, "one", ir_type_parse(m, "i:8"));
+    ir_instr_operand_int(one, 1);
+    ir_instr_t *sum = ir_instr_add(positive, IR_OP_ADD);
+    ir_instr_set_dest(sum, "sum", ir_type_parse(m, "i:8"));
+    ir_instr_operand_value(sum, input);
+    ir_instr_operand_value(sum, one->dest);
+    ir_instr_add_mod(sum, "trap");
+    ir_instr_t *positive_return = ir_instr_add(positive, IR_OP_RETURN);
+    ir_instr_operand_value(positive_return, sum->dest);
+    ir_instr_t *nonpositive_return = ir_instr_add(nonpositive, IR_OP_RETURN);
+    ir_instr_operand_value(nonpositive_return, input);
+
+    ir_range_analysis_t *a = ir_range_analyze_function(f, nullptr);
+    int64_t low = 0, high = 0;
+    bool sum_bounds = ir_range_analysis_bounds(a, sum->dest, &low, &high);
+    check("acyclic branch paths are analyzed separately",
+          ir_range_analysis_status(a) == IR_RANGE_COMPLETE);
+    check("the true comparison edge narrows checked arithmetic",
+          sum_bounds
+              && low == 2 && high == 127);
+    check("path ranges merge to a conservative parameter interval",
+          ir_range_analysis_bounds(a, input, &low, &high)
+              && low == -128 && high == 126);
+    ir_range_analysis_free(a);
+    ir_ctx_free(ctx);
+}
+
+static void test_phi_ranges_merge_reachable_arms(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *m = ir_module_new(ctx, "ranges", &ir_profile_bce, "test");
+    ir_func_t *f = ir_func_add(m, "choose",
+        ir_type_parse(m, "(bool) -> i:8"), IR_LINK_EXTERNAL);
     ir_value_t *condition = ir_param_add(f, "condition",
                                          ir_type_parse(m, "bool"));
     ir_block_t *entry = ir_block_add(f, "entry");
     ir_block_t *left = ir_block_add(f, "left");
     ir_block_t *right = ir_block_add(f, "right");
+    ir_block_t *join = ir_block_add(f, "join");
+    ir_instr_t *two = ir_instr_add(entry, IR_OP_CONST);
+    ir_instr_set_dest(two, "two", ir_type_parse(m, "i:8"));
+    ir_instr_operand_int(two, 2);
+    ir_instr_t *nine = ir_instr_add(entry, IR_OP_CONST);
+    ir_instr_set_dest(nine, "nine", ir_type_parse(m, "i:8"));
+    ir_instr_operand_int(nine, 9);
     ir_instr_t *branch = ir_instr_add(entry, IR_OP_BRANCH);
     ir_instr_operand_value(branch, condition);
     ir_instr_operand_block(branch, left);
     ir_instr_operand_block(branch, right);
-    ir_instr_add(left, IR_OP_RETURN);
-    ir_instr_add(right, IR_OP_RETURN);
-    ir_range_analysis_t *a = ir_range_analyze_function(f, nullptr);
-    check("conditional control flow remains explicitly unsupported",
-          ir_range_analysis_status(a) == IR_RANGE_UNSUPPORTED);
-    ir_range_analysis_free(a);
+    ir_instr_t *left_jump = ir_instr_add(left, IR_OP_JUMP);
+    ir_instr_operand_block(left_jump, join);
+    ir_instr_t *right_jump = ir_instr_add(right, IR_OP_JUMP);
+    ir_instr_operand_block(right_jump, join);
+    ir_instr_t *phi = ir_instr_add(join, IR_OP_PHI);
+    ir_instr_set_dest(phi, "selected", ir_type_parse(m, "i:8"));
+    ir_instr_operand_phi_arm(phi, left, two->dest);
+    ir_instr_operand_phi_arm(phi, right, nine->dest);
+    ir_instr_t *ret = ir_instr_add(join, IR_OP_RETURN);
+    ir_instr_operand_value(ret, phi->dest);
+
+    ir_range_analysis_t *analysis = ir_range_analyze_function(f, nullptr);
+    int64_t low = 0, high = 0;
+    check("phi ranges include only the selected predecessor arm",
+          ir_range_analysis_status(analysis) == IR_RANGE_COMPLETE
+              && ir_range_analysis_bounds(analysis, phi->dest, &low, &high)
+              && low == 2 && high == 9);
+    ir_range_analysis_free(analysis);
     ir_ctx_free(ctx);
 }
 
@@ -245,14 +313,53 @@ static void test_int64_domain_boundaries(void)
     ir_ctx_free(ctx);
 }
 
+static void test_named_integer_range(void)
+{
+    static const ir_scalar_t scalars[] = {
+        {"int", IR_CLASS_SINT, 64, IR_ROLE_NONE},
+    };
+    static const ir_profile_t profile = {
+        .name = "named-int-test",
+        .n_scalars = sizeof(scalars) / sizeof(scalars[0]),
+        .scalars = scalars,
+    };
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *m = ir_module_new(ctx, "ranges", &profile, "test");
+    ir_func_t *f = ir_func_add(m, "named_int", ir_type_parse(m, "() -> int"),
+                               IR_LINK_EXTERNAL);
+    ir_block_t *block = ir_block_add(f, "entry");
+    ir_instr_t *one = ir_instr_add(block, IR_OP_CONST);
+    ir_instr_set_dest(one, "one", ir_type_parse(m, "int"));
+    ir_instr_operand_int(one, 1);
+    ir_instr_t *two = ir_instr_add(block, IR_OP_CONST);
+    ir_instr_set_dest(two, "two", ir_type_parse(m, "int"));
+    ir_instr_operand_int(two, 2);
+    ir_instr_t *sum = ir_instr_add(block, IR_OP_ADD);
+    ir_instr_set_dest(sum, "sum", ir_type_parse(m, "int"));
+    ir_instr_operand_value(sum, one->dest);
+    ir_instr_operand_value(sum, two->dest);
+    ir_instr_add_mod(sum, "trap");
+
+    ir_range_analysis_t *analysis = ir_range_analyze_function(f, nullptr);
+    int64_t lo = 0, hi = 0;
+    check("named int arithmetic receives exact range facts",
+          ir_range_analysis_status(analysis) == IR_RANGE_COMPLETE
+              && ir_range_analysis_bounds(analysis, sum->dest, &lo, &hi)
+              && lo == 3 && hi == 3);
+    ir_range_analysis_free(analysis);
+    ir_ctx_free(ctx);
+}
+
 int main(void)
 {
     test_trapping_add_bounds();
-    test_branching_is_unsupported();
+    test_branch_path_refines_integer_ranges();
+    test_phi_ranges_merge_reachable_arms();
     test_loop_is_unsupported();
     test_unconditional_block_chain();
     test_trapped_overflow_reports_source();
     test_wide_literal_does_not_wrap();
     test_int64_domain_boundaries();
+    test_named_integer_range();
     return report("IR ranges");
 }

@@ -313,19 +313,26 @@ static void test_trait_receiver_adapters(void) {
         ? th_record_member(vtable->type, 1) : nullptr;
     const th_member *update_slot = vtable
         ? th_record_member(vtable->type, 2) : nullptr;
-    bool assembled = vtable && vtable->has_record_init &&
+    bool assembled = vtable && vtable->has_static_initializer &&
         vtable->is_static && vtable->mutability == IR_MUT_CONST &&
-        vtable->n_record_init == 3 && type_info && render_slot &&
+        vtable->static_initializer->kind == IR_GLOBAL_INIT_RECORD &&
+        vtable->static_initializer->aggregate.count == 3 && type_info && render_slot &&
         update_slot &&
         !strcmp(type_info->name, IR_TRAIT_VTABLE_TYPE_INFO_FIELD) &&
         !strcmp(render_slot->name, "render") &&
         !strcmp(update_slot->name, "update") &&
-        vtable->record_init[0].kind == IR_GLOBAL_INIT_INT &&
-        ir_lit_signed(vtable->record_init[0].integer) == 17 &&
-        vtable->record_init[1].kind == IR_GLOBAL_INIT_SYMBOL &&
-        vtable->record_init[1].symbol->owner == adapter &&
-        vtable->record_init[2].kind == IR_GLOBAL_INIT_SYMBOL &&
-        vtable->record_init[2].symbol->owner == mutable_adapter;
+        vtable->static_initializer->aggregate.items[0].kind
+            == IR_GLOBAL_INIT_INT &&
+        ir_lit_signed(vtable->static_initializer->aggregate.items[0].integer)
+            == 17 &&
+        vtable->static_initializer->aggregate.items[1].kind
+            == IR_GLOBAL_INIT_SYMBOL &&
+        vtable->static_initializer->aggregate.items[1].symbol->owner
+            == adapter &&
+        vtable->static_initializer->aggregate.items[2].kind
+            == IR_GLOBAL_INIT_SYMBOL &&
+        vtable->static_initializer->aggregate.items[2].symbol->owner
+            == mutable_adapter;
     check("trait vtable globals assemble type info and ordered adapter slots",
           assembled);
     check("record initializer rejects a member-count mismatch",
@@ -647,6 +654,43 @@ static void test_pins_are_honored(void)
               && y->bit_offset.value == 96);
     check("and the unpinned one is placed by the pass",
           x && x->bit_offset.state == IR_LAYOUT_RESOLVED);
+    close_env(e);
+}
+
+static void test_explicitly_computes_unreachable_type(void)
+{
+    env *e = open_env("x86_64");
+    th_type *record = ty(e, "(x: i32, y: u64)");
+    check("an explicitly requested, otherwise unreachable type lays out",
+          ir_layout_compute(e->m, record, e->d));
+    ir_descriptor_t *descriptor = ir_layout_of(e->m, record, nullptr);
+    check("explicit layout computation records the descriptor",
+          descriptor && ir_layout_is_settled(&descriptor->size)
+              && descriptor->size.value == 16
+              && descriptor->members[1].bit_offset.value == 64);
+    close_env(e);
+}
+
+static void test_representation_alias_inherits_layout(void)
+{
+    env *e = open_env("x86_64");
+    th_type *alias = th_name(ir_ctx_types(e->ctx), "ScalarAlias");
+    th_type *base = ty(e, "i32");
+    check("an undefined representation alias is unresolved",
+          alias && !ir_layout_compute(e->m, alias, e->d));
+    check("a scalar representation alias is defined",
+          alias && base && ir_type_define(e->m, alias, base));
+    check("a scalar representation alias computes its layout",
+          ir_layout_compute(e->m, alias, e->d));
+    ir_descriptor_t *layout = ir_layout_of(e->m, alias, nullptr);
+    ir_descriptor_t *base_layout = ir_layout_of(e->m, base, nullptr);
+    check("a scalar alias has a layout descriptor", layout != nullptr);
+    check("a scalar alias inherits its base size",
+          layout && base_layout
+              && layout->size.value == base_layout->size.value);
+    check("a scalar alias inherits its base alignment",
+          layout && base_layout
+              && layout->align.value == base_layout->align.value);
     close_env(e);
 }
 
@@ -1042,6 +1086,126 @@ static void test_all_authored_layout_state_round_trips(void)
     ir_ctx_free(ctx);
 }
 
+static void test_recursive_global_static_initializer(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    th_ctx *types = ir_ctx_types(ctx);
+    ir_module_t *module = ir_module_new(ctx, "static_values",
+                                        &ir_profile_bce, nullptr);
+    th_type *integer = th_name(types, "i64");
+    th_type *string = th_name(types, "string");
+    th_arg list_arg = {.kind = TH_ARG_TYPE, .type = integer};
+    th_arg dict_args[] = {
+        {.kind = TH_ARG_TYPE, .type = string},
+        {.kind = TH_ARG_TYPE, .type = th_name(types, "bool")},
+    };
+    th_type *list_type = th_apply(types, "list", &list_arg, 1);
+    th_type *dict_type = th_apply(types, "dict", dict_args, 2);
+    th_type *tuple_type = th_tuple(types,
+        (th_type *[]){integer, string}, 2);
+    th_type *record_type = th_record(types, (th_member[]){
+        {.name = "enabled", .type = th_name(types, "bool")},
+        {.name = "pair", .type = tuple_type},
+        {.name = "values", .type = list_type},
+        {.name = "labels", .type = dict_type},
+    }, 4);
+    ir_global_t *global = ir_global_add(module, "config", record_type);
+    char pair_text[] = "ok";
+    ir_global_init_value_t pair_items[] = {
+        {.kind = IR_GLOBAL_INIT_INT, .integer = ir_lit_of(7)},
+        {.kind = IR_GLOBAL_INIT_STRING,
+         .string = {.bytes = pair_text, .length = 2}},
+    };
+    ir_global_init_value_t list_items[] = {
+        {.kind = IR_GLOBAL_INIT_INT, .integer = ir_lit_of(1)},
+        {.kind = IR_GLOBAL_INIT_INT, .integer = ir_lit_of(2)},
+    };
+    ir_global_init_value_t dict_items[] = {
+        {.kind = IR_GLOBAL_INIT_STRING,
+         .string = {.bytes = "ready", .length = 5}},
+        {.kind = IR_GLOBAL_INIT_BOOL, .boolean = true},
+    };
+    ir_global_init_value_t fields[] = {
+        {.member = "enabled", .kind = IR_GLOBAL_INIT_BOOL,
+         .boolean = true},
+        {.member = "pair", .kind = IR_GLOBAL_INIT_TUPLE,
+         .aggregate = {.items = pair_items, .count = 2}},
+        {.member = "values", .kind = IR_GLOBAL_INIT_SEQUENCE,
+         .aggregate = {.items = list_items, .count = 2}},
+        {.member = "labels", .kind = IR_GLOBAL_INIT_DICTIONARY,
+         .aggregate = {.items = dict_items, .count = 2}},
+    };
+    ir_global_init_value_t initializer = {
+        .kind = IR_GLOBAL_INIT_RECORD,
+        .aggregate = {.items = fields, .count = 4},
+    };
+    ir_global_t *list_global = ir_global_add(module, "list_value", list_type);
+    th_type *fixed_array_type = ir_type_parse(module, "array[i64; 2]");
+    ir_global_t *fixed_array_global = fixed_array_type
+        ? ir_global_add(module, "fixed_array", fixed_array_type) : nullptr;
+    ir_global_t *tuple_global = ir_global_add(module, "tuple_value", tuple_type);
+    ir_global_t *dict_global = ir_global_add(module, "dict_value", dict_type);
+    bool list_set = list_global && ir_global_set_static_initializer(
+            module, list_global,
+            &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_SEQUENCE,
+                .aggregate = {.items = list_items, .count = 2}});
+    bool tuple_set = tuple_global && ir_global_set_static_initializer(
+            module, tuple_global,
+            &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_TUPLE,
+                .aggregate = {.items = pair_items, .count = 2}});
+    bool dict_set = dict_global && ir_global_set_static_initializer(
+            module, dict_global,
+            &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_DICTIONARY,
+                .aggregate = {.items = dict_items, .count = 2}});
+    check("sequence initializer node matches its type", list_set);
+    check("fixed array initializer validates declared extent",
+          fixed_array_global
+              && ir_global_set_static_initializer(module, fixed_array_global,
+                  &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_SEQUENCE,
+                      .aggregate = {.items = list_items, .count = 2}}));
+    ir_global_t *bad_fixed_array = ir_global_add(module, "bad_fixed_array",
+                                                 fixed_array_type);
+    check("fixed array initializer rejects payload extent mismatch",
+          bad_fixed_array
+              && !ir_global_set_static_initializer(module, bad_fixed_array,
+                  &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_SEQUENCE,
+                      .aggregate = {.items = list_items, .count = 1}}));
+    check("tuple initializer node matches its type", tuple_set);
+    check("dictionary initializer node matches its type", dict_set);
+    bool set = global && ir_global_set_static_initializer(
+        module, global, &initializer);
+    pair_text[0] = 'X';
+    pair_items[0].integer = ir_lit_of(99);
+    bool retained = set && global->has_static_initializer
+        && ir_global_static_initializer_valid(module, global)
+        && global->static_initializer->aggregate.items[1]
+            .aggregate.items[0].integer.mag == 7
+        && global->static_initializer->aggregate.items[1]
+            .aggregate.items[1].string.bytes[0] == 'o';
+    check("global static initializers retain typed recursive aggregate data",
+          retained);
+
+    ir_global_t *bad = ir_global_add(module, "bad_config", record_type);
+    ir_global_init_value_t bad_fields[] = {
+        {.member = "enabled", .kind = IR_GLOBAL_INIT_INT,
+         .integer = ir_lit_of(1)},
+        {.member = "pair", .kind = IR_GLOBAL_INIT_TUPLE,
+         .aggregate = {.items = pair_items, .count = 2}},
+        {.member = "values", .kind = IR_GLOBAL_INIT_SEQUENCE,
+         .aggregate = {.items = list_items, .count = 2}},
+        {.member = "labels", .kind = IR_GLOBAL_INIT_DICTIONARY,
+         .aggregate = {.items = dict_items, .count = 2}},
+    };
+    ir_global_init_value_t bad_initializer = {
+        .kind = IR_GLOBAL_INIT_RECORD,
+        .aggregate = {.items = bad_fields, .count = 4},
+    };
+    check("global static initializer rejects recursively mismatched types",
+          bad && !ir_global_set_static_initializer(module, bad,
+                                                    &bad_initializer));
+    ir_ctx_free(ctx);
+}
+
 
 int main(void)
 {
@@ -1051,6 +1215,8 @@ int main(void)
     test_descriptors_are_keyed_and_scoped();
     test_the_pass_computes_around_pins();
     test_pins_are_honored();
+    test_explicitly_computes_unreachable_type();
+    test_representation_alias_inherits_layout();
     test_an_unsatisfiable_pin_fails_loudly();
     test_symbolic_survives_a_target_change();
     test_laid_out_is_verified();
@@ -1062,6 +1228,7 @@ int main(void)
     test_a_member_may_be_named_for_a_layout_keyword();
     test_variant_and_indirection_are_recorded();
     test_all_authored_layout_state_round_trips();
+    test_recursive_global_static_initializer();
 
     dump_produced_codes("produced-codes-layout.txt", produced);
 

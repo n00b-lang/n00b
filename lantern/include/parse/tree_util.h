@@ -34,3 +34,14 @@ const parse_rule_t *parse_tree_rule(parse_grammar_t *g, parse_tree_t *n);
 core_string_t parse_tree_leaf_text(parse_tree_t *n);
 int64_t      parse_tree_leaf_tid(parse_tree_t *n);
 bool         parse_tree_leaf_is(parse_tree_t *n, core_string_t text);
+/* Resolution is separate from the node's lexical scope. */
+bool parse_tree_set_resolution_scope(parse_tree_t *node,
+                                     parse_scope_t *scope);
+bool parse_tree_set_resolution_symbol(parse_tree_t *node,
+                                      parse_sym_entry_t *symbol);
+parse_node_resolution_t parse_tree_resolution(const parse_tree_t *node);
+/* Attach an analysis result to a typed expression without changing its type. */
+bool parse_tree_set_integer_range(parse_tree_t *node, int64_t minimum,
+                                  int64_t maximum);
+bool parse_tree_integer_range(const parse_tree_t *node, int64_t *minimum,
+                              int64_t *maximum);

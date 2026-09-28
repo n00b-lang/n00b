@@ -630,6 +630,24 @@ scan_stream_get(parse_token_stream_t *ts, int32_t pos)
     return ts->tokens[pos];
 }
 
+parse_token_info_t *
+scan_stream_previous_token(parse_token_stream_t *ts,
+                           const parse_token_info_t *token)
+{
+    if (!ts || !token) return nullptr;
+    int32_t lo = 0;
+    int32_t hi = ts->token_count;
+    while (lo < hi) {
+        int32_t mid = lo + (hi - lo) / 2;
+        parse_token_info_t *candidate = ts->tokens[mid];
+        if (candidate->index < token->index) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo >= ts->token_count || ts->tokens[lo] != token || lo == 0)
+        return nullptr;
+    return ts->tokens[lo - 1];
+}
+
 bool
 scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos)
 {

@@ -107,6 +107,20 @@ typedef struct parse_match_t {
     };
 } parse_match_t;
 
+typedef enum : uint8_t {
+    PARSE_NODE_RESOLUTION_NONE,
+    PARSE_NODE_RESOLUTION_SCOPE,
+    PARSE_NODE_RESOLUTION_SYMBOL,
+} parse_node_resolution_kind_t;
+
+typedef struct {
+    parse_node_resolution_kind_t kind;
+    union {
+        parse_scope_t *scope;
+        parse_sym_entry_t *symbol;
+    } target;
+} parse_node_resolution_t;
+
 typedef struct parse_nt_node_t {
     core_string_t name;
     int64_t       noscan;
@@ -126,6 +140,10 @@ typedef struct parse_nt_node_t {
     parse_scope_t     *scope;
     parse_sym_entry_t *sym;
     th_type         *type;
+    parse_node_resolution_t resolution;
+    bool integer_range_known;
+    int64_t integer_range_minimum;
+    int64_t integer_range_maximum;
 } parse_nt_node_t;
 
 typedef void *(*parse_walk_action_t)(parse_nt_node_t *node,

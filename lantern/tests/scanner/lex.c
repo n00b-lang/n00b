@@ -1733,6 +1733,44 @@ static void test_composable_string_escape_profiles(void) {
                "one-byte ASCII prefix and a width from 1 through 32");
 }
 
+static void test_literal_string_escape_prefixes(void) {
+  static const char *const G =
+      "@lex-string-escapes(\"rich\", escapes(\"n\"), "
+      "escape_literal(\"«\"), escape_literal(\"»\"), "
+      "escape_literal(\"[\"))\n"
+      "@lex-string('\"', '\"', escape(\"\\\\\"), "
+      "use_escapes(\"rich\"), as(\"STRING\"))\n"
+      "<file> ::= %STRING\n";
+  parse_grammar_t *g = parse_grammar_new();
+  core_string_t text = core_string_from_cstr(G);
+
+  parse_grammar_set_error_recovery(g, false);
+  parse_bnf_declare_terminals(g, text);
+  bool loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  check("exact multi-byte string escape prefixes compile",
+        loaded && scan_grammar_lex_compiled(g));
+  check("exact multi-byte string escape prefixes are accepted",
+        loaded && source_status(g, "\"\\«\\»\\[\"")
+            == SCAN_STATUS_COMPLETE);
+  check("exact escape prefixes do not admit unrelated escapes",
+        loaded && source_status(g, "\"\\q\"") == SCAN_STATUS_INVALID);
+  parse_grammar_free(g);
+  core_free(text.data);
+
+  static const char *const BAD =
+      "@lex-string-escapes(\"bad\", escape_literal(\"\"))\n"
+      "<file> ::= %STRING\n";
+  g = parse_grammar_new();
+  text = core_string_from_cstr(BAD);
+  parse_grammar_set_error_recovery(g, false);
+  parse_bnf_declare_terminals(g, text);
+  bool bad_loaded = parse_bnf_load(text, CORE_STRING_STATIC("file"), g);
+  bool rejected = !bad_loaded || !scan_grammar_lex_compiled(g);
+  check("exact string escape prefixes cannot be empty", rejected);
+  parse_grammar_free(g);
+  core_free(text.data);
+}
+
 static void test_large_string_family_dispatch_is_bounded(void) {
   core_buffer_t *source = core_buffer_empty();
 
@@ -4756,6 +4794,7 @@ int main(void) {
   test_string_families_diagnose_invalid_declarations();
   test_paired_string_families_nest();
   test_composable_string_escape_profiles();
+  test_literal_string_escape_prefixes();
   test_large_string_family_dispatch_is_bounded();
   test_large_number_suffix_dispatch_is_bounded();
   test_long_numeric_trie_paths_resume_linearly();

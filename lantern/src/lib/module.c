@@ -247,11 +247,21 @@ core_translation_unit_add_import(core_translation_unit_t *unit,
                                  core_translation_unit_t *imported)
 {
     if (!unit || !imported) return false;
+    if (unit->imports_finalized) {
+        core_diagnostics_report(unit->diagnostics, unit, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("LANTERN-L0004"),
+            CORE_STRING_STATIC("cannot add an import after translation unit imports are finalized"));
+        return false;
+    }
     for (size_t i = 0; i < unit->import_count; i++)
-        if (unit->imports[i] == imported
-            || core_module_spec_eq(&unit->imports[i]->module,
-                                   &imported->module))
-            return true;
+        if (unit->imports[i] == imported) return true;
+        else if (core_module_spec_eq(&unit->imports[i]->module,
+                                     &imported->module)) {
+            core_diagnostics_report(unit->diagnostics, unit, CORE_DIAG_FATAL,
+                CORE_STRING_STATIC("LANTERN-L0001"),
+                CORE_STRING_STATIC("translation unit imports distinct sources with the same module identity"));
+            return false;
+        }
     if (unit->import_count == unit->import_capacity) {
         size_t capacity = unit->import_capacity ? unit->import_capacity * 2 : 4;
         unit->imports = core_realloc(unit->imports,
@@ -259,6 +269,7 @@ core_translation_unit_add_import(core_translation_unit_t *unit,
         unit->import_capacity = capacity;
     }
     unit->imports[unit->import_count++] = imported;
+    unit->import_revision++;
     return true;
 }
 
@@ -275,14 +286,41 @@ core_translation_unit_import(const core_translation_unit_t *unit,
     return unit && index < unit->import_count ? unit->imports[index] : nullptr;
 }
 
-bool
-core_translation_unit_visit_sccs(core_translation_unit_t *root,
-                                 core_translation_unit_scc_fn callback,
-                                 void *context)
+uint64_t
+core_translation_unit_import_revision(const core_translation_unit_t *unit)
 {
-    if (!root || !callback) return false;
+    return unit ? unit->import_revision : 0;
+}
+
+bool
+core_translation_unit_finalize_imports(core_translation_unit_t *unit)
+{
+    if (!unit) return false;
+    unit->imports_finalized = true;
+    return true;
+}
+
+bool
+core_translation_unit_imports_finalized(const core_translation_unit_t *unit)
+{
+    return unit && unit->imports_finalized;
+}
+
+bool
+core_translation_units_visit_sccs(core_translation_unit_t *const *roots,
+                                   size_t root_count,
+                                   core_translation_unit_scc_fn callback,
+                                   void *context)
+{
+    if ((!roots && root_count) || !root_count || !callback) return false;
     core_list_t(core_tu_ptr_t) units = core_list_new(core_tu_ptr_t);
-    core_tu_collect_imports(&units, root);
+    for (size_t i = 0; i < root_count; i++) {
+        if (!roots[i]) {
+            core_list_free(units);
+            return false;
+        }
+        core_tu_collect_imports(&units, roots[i]);
+    }
     core_tu_scc_ctx_t state = {
         .units = &units,
         .indices = core_alloc_array(int, units.len),
@@ -303,6 +341,15 @@ core_translation_unit_visit_sccs(core_translation_unit_t *root,
     core_free(state.on_stack);
     core_list_free(units);
     return state.succeeded;
+}
+
+bool
+core_translation_unit_visit_sccs(core_translation_unit_t *root,
+                                 core_translation_unit_scc_fn callback,
+                                 void *context)
+{
+    return root && core_translation_units_visit_sccs(&root, 1, callback,
+                                                     context);
 }
 
 core_module_resolve_status_t

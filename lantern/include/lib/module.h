@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 #include "core.h"
 #include "lib/buffer.h"
 #include "lib/string.h"
@@ -30,6 +32,8 @@ typedef struct core_translation_unit_t {
     struct core_translation_unit_t **imports;
     size_t import_count;
     size_t import_capacity;
+    uint64_t import_revision;
+    bool imports_finalized;
     void *user_data;
     core_module_user_data_free_fn user_data_free;
     core_diagnostics_t *diagnostics;
@@ -83,18 +87,29 @@ core_diagnostics_t *core_translation_unit_diagnostics(
 bool core_translation_unit_has_fatal_diagnostics(
     const core_translation_unit_t *unit);
 /* Imported TUs are borrowed; their owner must keep them alive as long as the
- * importing TU may use these references. Duplicate imports are ignored. */
+ * importing TU may use these references. Re-adding the same TU is ignored;
+ * a distinct TU with the same module identity is diagnosed and rejected. */
 bool core_translation_unit_add_import(core_translation_unit_t *unit,
                                       core_translation_unit_t *imported);
 size_t core_translation_unit_import_count(
     const core_translation_unit_t *unit);
 core_translation_unit_t *core_translation_unit_import(
     const core_translation_unit_t *unit, size_t index);
+uint64_t core_translation_unit_import_revision(
+    const core_translation_unit_t *unit);
+/* Finalized imports are immutable; adding another import reports a fatal TU
+ * diagnostic and fails. Finalize only after import discovery is complete. */
+bool core_translation_unit_finalize_imports(core_translation_unit_t *unit);
+bool core_translation_unit_imports_finalized(
+    const core_translation_unit_t *unit);
 /* Visits reachable import-graph SCCs dependency-first. The member array is
  * borrowed for the duration of the callback. */
 bool core_translation_unit_visit_sccs(core_translation_unit_t *root,
                                       core_translation_unit_scc_fn callback,
                                       void *context);
+bool core_translation_units_visit_sccs(
+    core_translation_unit_t *const *roots, size_t root_count,
+    core_translation_unit_scc_fn callback, void *context);
 
 core_module_resolve_status_t core_module_resolve(
     const core_module_resolver_t *resolver, const core_module_spec_t *module,

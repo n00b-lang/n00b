@@ -97,6 +97,31 @@ ir_descriptor_t *ir_layout_of_targetless(ir_module_t *m, th_type *t)
     return layout_of_exact(m, t, nullptr);
 }
 
+static void invalidate_value(ir_layout_val_t *value)
+{
+    if (value && !value->authored) *value = (ir_layout_val_t){0};
+}
+
+void ir_layout_invalidate_type(ir_module_t *m, th_type *t)
+{
+    ir_typeslot_t *slot = ir_type_slot(m, t);
+    if (!slot) return;
+    for (size_t i = 0; i < slot->n_descs; i++) {
+        ir_descriptor_t *d = &slot->descs[i].d;
+        d->done = false;
+        invalidate_value(&d->size);
+        invalidate_value(&d->align);
+        invalidate_value(&d->stride);
+        invalidate_value(&d->indirect.words);
+        invalidate_value(&d->variant.tag_bit_offset);
+        invalidate_value(&d->variant.tag_bit_width);
+        for (uint32_t j = 0; j < d->n_members; j++) {
+            invalidate_value(&d->members[j].bit_offset);
+            invalidate_value(&d->members[j].bit_width);
+        }
+    }
+}
+
 static ir_descriptor_t *layout_ensure_exact(ir_module_t *m, th_type *t,
                                             const char *target)
 {
@@ -648,16 +673,55 @@ static bool lay_out(L *l, th_type *t, ir_descriptor_t **out)
         th_named_info(t, nullptr, nullptr, &is_variant, nullptr);
     }
 
-    bool ok = is_variant                        ? lay_out_variant(l, t, d)
-            : th_kind_of(t) == TH_RECORD        ? lay_out_record(l, t, t, d)
-            : def && th_kind_of(def) == TH_RECORD ? lay_out_record(l, t, def, d)
-            : th_kind_of(t) == TH_SEQUENCE      ? lay_out_sequence(l, t, d)
-                                                : lay_out_scalar(l, t, d);
+    bool ok;
+    if (is_variant) ok = lay_out_variant(l, t, d);
+    else if (th_kind_of(t) == TH_RECORD)
+        ok = lay_out_record(l, t, t, d);
+    else if (def && th_kind_of(def) == TH_RECORD)
+        ok = lay_out_record(l, t, def, d);
+    else if (def) {
+        ir_descriptor_t *base = nullptr;
+        ok = lay_out(l, def, &base);
+        if (ok && base) {
+            if (d->size.state == IR_LAYOUT_UNSET) d->size = base->size;
+            if (d->align.state == IR_LAYOUT_UNSET) d->align = base->align;
+            if (d->stride.state == IR_LAYOUT_UNSET)
+                d->stride = base->stride;
+            if (d->indirect.words.state == IR_LAYOUT_UNSET)
+                d->indirect = base->indirect;
+            if (!d->variant.authored) d->variant = base->variant;
+            for (uint32_t i = 0; ok && i < base->n_members; i++) {
+                ir_member_layout_t *member = member_slot(
+                    l->m, d, base->members[i].name);
+                if (!member) {
+                    ok = false;
+                    break;
+                }
+                if (member->bit_offset.state == IR_LAYOUT_UNSET)
+                    member->bit_offset = base->members[i].bit_offset;
+                if (member->bit_width.state == IR_LAYOUT_UNSET)
+                    member->bit_width = base->members[i].bit_width;
+            }
+        }
+    }
+    else if (th_kind_of(t) == TH_SEQUENCE) ok = lay_out_sequence(l, t, d);
+    else ok = lay_out_scalar(l, t, d);
 
     l->n_open--;
     d->done = ok;
 
     return ok;
+}
+
+bool ir_layout_compute(ir_module_t *m, th_type *type, ir_diags_t *d)
+{
+    if (!m || !type) return false;
+    L layout = {.m = m, .d = d, .ok = true, .settled = true};
+    ir_descriptor_t *descriptor = nullptr;
+    bool ok = lay_out(&layout, type, &descriptor);
+    return ok && layout.ok && descriptor
+        && ir_layout_is_settled(&descriptor->size)
+        && ir_layout_is_settled(&descriptor->align);
 }
 
 static void reach(L *l, th_type *t)

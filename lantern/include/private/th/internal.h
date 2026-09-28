@@ -29,6 +29,11 @@ typedef struct {
 } th_iface;
 
 typedef struct {
+  th_type *type;
+  th_type *definition;
+} th_type_definition_t;
+
+typedef struct {
   th_type *receiver;
   const char *name;
   th_type *signature;
@@ -59,6 +64,15 @@ typedef struct {
 } th_env_function_t;
 
 typedef struct {
+  const char *qualified_name;
+  const char *root_name;
+  const char *module;
+  const char *package;
+  th_env_visibility_t visibility;
+  th_type *type;
+} th_env_value_t;
+
+typedef struct {
   const char *trait_name;
   th_type *receiver_pattern;
   core_datalog_symbol_t logic_symbol;
@@ -75,6 +89,8 @@ typedef struct {
   const char *module;
   const char *package;
   th_env_visibility_t visibility;
+  th_env_type_shape_kind_t shape_kind;
+  th_type *shape;
 } th_env_type_origin_t;
 
 typedef struct {
@@ -89,9 +105,11 @@ typedef struct {
 core_list_decl(th_constraint);
 core_list_decl(th_promo);
 core_list_decl(th_iface);
+core_list_decl(th_type_definition_t);
 core_list_decl(th_method);
 core_list_decl(th_env_trait_t);
 core_list_decl(th_env_function_t);
+core_list_decl(th_env_value_t);
 core_list_decl(th_env_intrinsic_type_t);
 core_list_decl(th_env_method_symbol_t);
 core_list_decl(th_env_type_origin_t);
@@ -171,6 +189,7 @@ struct th_ctx {
   uint64_t next_var;
   core_list_t(th_promo) promos;
   core_list_t(th_iface) ifaces;
+  core_list_t(th_type_definition_t) type_definitions;
   core_list_t(th_method) methods;
   core_dict_t *promo_index;
   core_dict_t *iface_index;
@@ -191,6 +210,7 @@ struct th_env {
   th_ctx *types;
   core_list_t(th_env_trait_t) traits;
   core_list_t(th_env_function_t) functions;
+  core_list_t(th_env_value_t) values;
   core_list_t(th_env_intrinsic_type_t) intrinsic_types;
   core_list_t(th_env_type_origin_t) type_origins;
   core_list_t(th_env_method_symbol_t) method_symbols;
@@ -200,6 +220,7 @@ struct th_env {
   core_datalog_relation_id_t intrinsic_type_relation;
   core_object_archive_t *persisted_archive;
   uint32_t archive_schema_version;
+  bool owns_types;
   bool frozen;
 };
 

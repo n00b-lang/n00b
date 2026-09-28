@@ -109,6 +109,11 @@ typedef enum : uint8_t {
 
 typedef struct {
     th_con_kind kind;
+    /* Environment-backed constraints retain the visibility perspective in
+     * which they were authored, even when resolution is deferred. */
+    const char *scope_module;
+    const char *scope_package;
+    bool has_scope;
     union {
         th_type    *target;
         const char *iface;
@@ -163,12 +168,18 @@ typedef struct {
 
 th_ctx *th_ctx_new(void);
 void    th_ctx_free(th_ctx *ctx);
+/* Deep-copy a type graph into another type context, preserving graph sharing. */
+th_type *th_type_clone(th_ctx *destination, const th_type *source);
 
 typedef bool (*th_normalizer)(void *state, const char *in, size_t inlen,
                               const char **out, size_t *outlen);
 
 void th_ctx_set_normalizer(th_ctx *ctx, th_normalizer fn, void *state);
 void th_install_nfc(th_ctx *ctx);
+/* Set the current module/package perspective used when new environment-backed
+ * constraints are created. This may be called before an environment is
+ * attached; existing constraints retain their captured scope. */
+bool th_ctx_set_scope(th_ctx *ctx, const char *module, const char *package);
 
 th_type *th_name(th_ctx *ctx, const char *name);
 th_type *th_apply(th_ctx *ctx, const char *name, const th_arg *args, size_t n);
@@ -176,12 +187,19 @@ th_type *th_variant(th_ctx *ctx, const char *name, const th_arg *args,
                     size_t n);
 th_type *th_bitint(th_ctx *ctx, uint64_t width, bool is_signed);
 th_type *th_ind(th_ctx *ctx, uint8_t attrs, th_type *referent);
+bool     th_indirection_attrs(const char *name, uint8_t *attrs);
 th_type *th_array(th_ctx *ctx, th_type *elem);
 th_type *th_array_n(th_ctx *ctx, th_type *elem, uint64_t extent);
 th_type *th_record(th_ctx *ctx, const th_member *members, size_t n);
 th_type *th_record_stub(th_ctx *ctx);
 void     th_record_fill(th_ctx *ctx, th_type *stub, const th_member *members,
                         size_t n);
+/* Associate a named type with its structural definition in this type context.
+ * Definitions are semantic metadata and do not change the named type's identity. */
+bool     th_type_define(th_ctx *ctx, th_type *type, th_type *definition);
+th_type *th_type_definition(const th_ctx *ctx, const th_type *type);
+th_type *th_record_lookup_in(const th_ctx *ctx, const th_type *type,
+                             const char *name);
 th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *params, size_t np,
                  const th_param *rest, const th_kwparam *kw, size_t nkw);
 /* The optional error type is a separate callable channel, not part of ret.

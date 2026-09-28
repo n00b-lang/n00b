@@ -419,6 +419,7 @@ static void test_extension_opcodes(void)
         free(rp);
     }
     ir_ctx_free(ctx);
+
 }
 
 static ir_module_t *built(ir_ctx_t *ctx, ir_func_t **out)
@@ -520,6 +521,7 @@ static void test_parsed_rules_the_builder_prevents(void)
         }
     }
     ir_ctx_free(ctx);
+
 }
 
 static void test_value_references_resolve(void)
@@ -1029,7 +1031,7 @@ static void test_spanless_diagnostic_is_a_bug(void)
     ir_ctx_free(ctx);
 }
 
-static void test_locals_have_no_address(void)
+static void test_address_of_local(void)
 {
     ir_ctx_t    *ctx = ir_ctx_new();
     ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "t");
@@ -1037,28 +1039,1354 @@ static void test_locals_have_no_address(void)
                                    IR_LINK_EXTERNAL);
     ir_block_t  *b   = ir_block_add(f, "entry");
     ir_local_t  *l   = ir_local_add(f, "t", ir_type_parse(m, "i32"));
-    ir_instr_t  *ld  = ir_instr_add(b, IR_OP_LOAD);
+    ir_instr_t  *address = ir_instr_add(b, IR_OP_ADDRESS_OF);
 
-    ir_instr_operand_local(ld, l);
+    ir_instr_operand_local(address, l);
 
     ir_diags_t *d = ir_diags_new(ctx, nullptr);
     ir_rules_t *rs = ir_module_rules(m);
 
-    check("a local read has the local's type, not a pointer to it",
-          ir_rule_apply(m, rs, ld, d).verdict == IR_RULE_REJECT);
+    ir_rule_result_t typed = ir_rule_apply(m, rs, address, d);
+    check("address.of yields a pointer to the local's type",
+          typed.verdict == IR_RULE_ACCEPT
+              && ir_type_eq(m, typed.result, ir_type_parse(m, "ref[i32]")));
+    ir_ctx_free(ctx);
+}
 
-    bool takes_address = false;
+static bool set_alias_analysis_complete(ir_ctx_t *ctx, ir_value_t *value,
+                                        ir_value_t *alias,
+                                        bool is_alias)
+{
+    ir_annots_t *annots = ir_value_annots(value);
+    if (!ir_annot_set(ctx, annots, (ir_annot_t){
+            .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+            .b = true,
+        })
+        || !ir_annot_set(ctx, annots, (ir_annot_t){
+            .key = "ir.lifetime_escapes", .kind = IR_ANNOT_BOOL,
+            .b = false,
+        })
+        || !ir_annot_set(ctx, annots, (ir_annot_t){
+            .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+            .b = false,
+        })) return false;
 
-    for (uint16_t i = 0; i < IR_OP_COUNT; i++) {
-        const char *sp = ir_op_spelling((ir_op_t)i);
-
-        takes_address = takes_address
-                     || (sp && (strstr(sp, "addrof") || strstr(sp, "addr_of")
-                                || strstr(sp, "lea")));
+    if (is_alias) {
+        return ir_annot_set(ctx, annots, (ir_annot_t){
+                   .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+                   .i = {.mag = 0},
+               })
+            && ir_annot_set(ctx, annots, (ir_annot_t){
+                   .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+                   .i = {.mag = 1},
+               })
+            && ir_annot_set(ctx, annots, (ir_annot_t){
+                   .key = "ir.aliased_by0", .kind = IR_ANNOT_VALUE,
+                   .v = alias,
+               })
+            && ir_annot_set(ctx, annots, (ir_annot_t){
+                   .key = "ir.aliased_by0_escapes", .kind = IR_ANNOT_BOOL,
+                   .b = false,
+               });
     }
 
-    check("and no opcode takes the address of anything", !takes_address);
+    return ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+               .i = {.mag = 1},
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+               .i = {.mag = 0},
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias0", .kind = IR_ANNOT_VALUE, .v = alias,
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias0_escapes", .kind = IR_ANNOT_BOOL,
+               .b = false,
+           });
+}
+
+static bool set_empty_alias_analysis_complete(ir_ctx_t *ctx,
+                                             ir_value_t *value)
+{
+    ir_annots_t *annots = ir_value_annots(value);
+    return ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+               .b = true,
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.lifetime_escapes", .kind = IR_ANNOT_BOOL,
+               .b = false,
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+               .b = false,
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+               .i = {.mag = 0},
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+               .i = {.mag = 0},
+           });
+}
+
+static void test_release_liveness(void)
+{
+    run_t *direct = verify(MOD(
+        "  func @f(%p: ptr[i32]) -> void {\n"
+        "    block entry:\n"
+        "      dealloc %p\n"
+        "      dealloc %p\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED | IR_PROP_TYPED);
+    check("dealloc rejects a later direct use of its address",
+          !typed(direct) && said(direct, "lifetime.no-live-use"));
+    done(direct);
+
+    run_t *alias = verify(MOD(
+        "  func @f(%owner: ptr[i32], %alias: ptr[i32]) -> void {\n"
+        "    block entry:\n"
+        "      finalize %owner\n"
+        "      dealloc %alias\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED | IR_PROP_TYPED);
+    ir_func_t *function = ir_func_find(alias->m, "f");
+    ir_value_t *owner = function ? ir_value_find(function, "owner") : nullptr;
+    ir_value_t *other = function ? ir_value_find(function, "alias") : nullptr;
+    bool facts = owner && other
+        && set_alias_analysis_complete(alias->ctx, owner, other, false)
+        && set_alias_analysis_complete(alias->ctx, other, owner, true);
+    alias->held = ir_verify(alias->m, alias->d);
+    check("finalize rejects a later use through a complete alias component",
+          facts && !typed(alias) && said(alias, "lifetime.no-live-alias"));
+    done(alias);
+
+    run_t *unknown = verify(MOD(
+        "  func @f(%p: ptr[i32]) -> void {\n"
+        "    block entry:\n"
+        "      dealloc %p\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED | IR_PROP_TYPED);
+    check("dealloc rejects incomplete alias information",
+          !typed(unknown) && said(unknown, "lifetime.unknown-alias"));
+    done(unknown);
+
+    const char *safe_source = MOD(
+        "  func @f(%p: ptr[i32]) -> void {\n"
+        "    block entry:\n"
+        "      dealloc %p\n"
+        "      return\n"
+        "  }\n");
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *diags = ir_diags_new(ctx, nullptr);
+    ir_module_t *module = ir_module_parse(ctx, safe_source, 0, PROFILES, 2,
+                                          diags);
+    ir_func_t *safe_function = module
+        ? ir_func_find(module, "f") : nullptr;
+    ir_value_t *safe_value = safe_function
+        ? ir_value_find(safe_function, "p") : nullptr;
+    bool safe_facts = safe_value
+        && set_empty_alias_analysis_complete(ctx, safe_value);
+    if (module && safe_facts) {
+        ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
+        ir_props_t held = ir_verify(module, diags);
+        check("dealloc accepts a dead value with complete alias facts",
+              (held & IR_PROP_TYPED) && !ir_diags_failed(diags));
+    }
+    else {
+        check("dealloc test fixture receives complete alias facts", false);
+    }
     ir_ctx_free(ctx);
+}
+
+static void test_global_phase_access(void)
+{
+    const char *source = MOD(
+        "  global @runtime_only: i32\n\n"
+        "  func @init() -> void !ir.execution_phase(1) {\n"
+        "    block entry:\n"
+        "      %value: i32 = load @runtime_only\n"
+        "      return\n"
+        "  }\n");
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *diags = ir_diags_new(ctx, nullptr);
+    ir_module_t *module = ir_module_parse(ctx, source, 0, PROFILES, 2,
+                                          diags);
+    ir_global_t *global = module
+        ? ir_global_find(module, "runtime_only") : nullptr;
+    bool partial_contract = global && ir_annot_set(ctx, &global->annots,
+        (ir_annot_t){.key = "ir.global_available_phases",
+            .kind = IR_ANNOT_INT, .i = {.mag = IR_PHASE_ACCESS_RUNTIME}})
+        && !ir_global_can_read(global, IR_PHASE_RUNTIME);
+    check("partial global phase metadata fails conservatively",
+          partial_contract);
+    bool contract = global && ir_global_set_phase_access(ctx, global,
+        IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_RUNTIME,
+        IR_PHASE_ACCESS_COMPTIME);
+    check("global phase contract distinguishes availability, mutation, and initialization",
+          contract
+              && !ir_global_can_read(global, IR_PHASE_COMPTIME)
+              && ir_global_can_read(global, IR_PHASE_RUNTIME)
+              && !ir_global_can_write(global, IR_PHASE_COMPTIME)
+              && ir_global_can_write(global, IR_PHASE_RUNTIME)
+              && ir_global_can_initialize(global, IR_PHASE_COMPTIME));
+    bool inconsistent_contract = contract
+        && ir_global_set_phase_access(ctx, global,
+            IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_COMPTIME,
+            IR_PHASE_ACCESS_COMPTIME);
+    check("mutability does not make an unavailable global writable",
+          inconsistent_contract
+              && !ir_global_can_write(global, IR_PHASE_COMPTIME));
+    contract = contract && ir_global_set_phase_access(ctx, global,
+        IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_RUNTIME,
+        IR_PHASE_ACCESS_COMPTIME);
+    if (module && contract) {
+        ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
+        ir_props_t held = ir_verify(module, diags);
+        bool rejected = !(held & IR_PROP_TYPED);
+        for (uint32_t i = 0; i < ir_diags_count(diags); i++) {
+            const ir_diag_t *diagnostic = ir_diags_at(diags, i);
+            produced[diagnostic->code] = true;
+        }
+        bool phase_diagnostic = false;
+        for (uint32_t i = 0; i < ir_diags_count(diags); i++) {
+            const ir_diag_t *diagnostic = ir_diags_at(diags, i);
+            phase_diagnostic |= diagnostic->code == IR_DIAG_VERIFY_PHASE;
+        }
+        check("typed IR rejects reading a runtime-only global at compile time",
+              rejected && phase_diagnostic);
+    }
+    else {
+        check("global phase access test fixture is valid", false);
+    }
+    ir_ctx_free(ctx);
+}
+
+static void test_binding_phase_access(void)
+{
+    const char *source = MOD(
+        "  func @init(%input: i32) -> i32 !ir.execution_phase(1) {\n"
+        "    block entry:\n"
+        "      return %input\n"
+        "  }\n");
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *diags = ir_diags_new(ctx, nullptr);
+    ir_module_t *module = ir_module_parse(ctx, source, 0, PROFILES, 2,
+                                          diags);
+    ir_func_t *function = module ? ir_func_find(module, "init") : nullptr;
+    ir_value_t *input = function ? ir_value_find(function, "input") : nullptr;
+    bool access = input && ir_value_set_phase_access(ctx, input,
+        IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
+        IR_PHASE_ACCESS_NONE);
+    check("binding phase access exposes independent read/write/init queries",
+          access && !ir_value_can_read(input, IR_PHASE_COMPTIME)
+              && ir_value_can_read(input, IR_PHASE_RUNTIME)
+              && !ir_value_can_write(input, IR_PHASE_RUNTIME)
+              && !ir_value_can_initialize(input, IR_PHASE_RUNTIME));
+    if (module && access) {
+        ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
+        ir_props_t held = ir_verify(module, diags);
+        bool phase_diagnostic = false;
+        for (uint32_t i = 0; i < ir_diags_count(diags); i++) {
+            const ir_diag_t *diagnostic = ir_diags_at(diags, i);
+            produced[diagnostic->code] = true;
+            phase_diagnostic |= diagnostic->code == IR_DIAG_VERIFY_PHASE;
+        }
+        check("typed IR rejects reading a runtime-only binding at compile time",
+              !(held & IR_PROP_TYPED) && phase_diagnostic);
+    }
+    else {
+        check("binding phase access test fixture is valid", false);
+    }
+    ir_ctx_free(ctx);
+}
+
+static void test_store_through_address_phase_access(void)
+{
+    run_t *r = verify(MOD(
+        "  func @f(%input: i32) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      %address: ref[i32] = address.of $x\n"
+        "      store %address, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    bool configured = local && ir_value_set_phase_access(r->ctx,
+        ir_local_value(function, local), IR_PHASE_ACCESS_RUNTIME,
+        IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_NONE);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    bool phase_diagnostic = false;
+    for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
+        const ir_diag_t *diagnostic = ir_diags_at(r->d, i);
+        produced[diagnostic->code] = true;
+        phase_diagnostic |= diagnostic->code == IR_DIAG_VERIFY_PHASE;
+    }
+    check("typed IR checks phase permissions through address.of",
+          configured && !typed(r) && phase_diagnostic);
+    done(r);
+
+    r = verify(MOD(
+        "  global @x: i32\n"
+        "  func @f(%input: i32) -> void {\n"
+        "    block entry:\n"
+        "      %address: ref[i32] = address.of @x\n"
+        "      store %address, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    ir_global_t *global = r->m ? ir_global_find(r->m, "x") : nullptr;
+    configured = global && ir_global_set_phase_access(r->ctx, global,
+        IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
+        IR_PHASE_ACCESS_NONE);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    phase_diagnostic = false;
+    for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
+        const ir_diag_t *diagnostic = ir_diags_at(r->d, i);
+        produced[diagnostic->code] = true;
+        phase_diagnostic |= diagnostic->code == IR_DIAG_VERIFY_PHASE;
+    }
+    check("typed IR checks phase permissions through a global address",
+          configured && !typed(r) && phase_diagnostic);
+    done(r);
+
+    r = verify(MOD(
+        "  global @x: i32\n"
+        "  func @f(%input: i32) -> void !ir.execution_phase(1) {\n"
+        "    block entry:\n"
+        "      %address: ref[i32] = address.of @x\n"
+        "      store %address, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    global = r->m ? ir_global_find(r->m, "x") : nullptr;
+    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
+    ir_instr_t *store = nullptr;
+    for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
+        if (entry->instrs[i]->op == IR_OP_STORE) store = entry->instrs[i];
+    configured = global && function && store
+        && ir_global_set_phase_access(r->ctx, global,
+            IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_RUNTIME,
+            IR_PHASE_ACCESS_COMPTIME)
+        && ir_instr_set_binding_initialization(store, true);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("typed IR accepts an initialization-marked store through a global address",
+          configured && typed(r));
+    done(r);
+}
+
+static void test_store_through_forwarded_addresses(void)
+{
+    run_t *r = verify(MOD(
+        "  func @f(%address: ptr[i32], %input: i32) -> void {\n"
+        "    block entry:\n"
+        "      store %address, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_value_t *parameter = function
+        ? ir_value_find(function, "address") : nullptr;
+    bool configured = parameter && ir_value_set_indirect_access(r->ctx,
+        parameter, IR_INDIRECT_ACCESS_WRITE);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("typed IR accepts writes through explicit indirect-access effects",
+          configured && typed(r)
+              && ir_value_indirect_access(parameter)
+                     == IR_INDIRECT_ACCESS_WRITE);
+    done(r);
+
+    r = verify(MOD(
+        "  func @f(%input: i32) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      %address: ref[i32] = address.of $x\n"
+        "      %copy: ref[i32] = copy %address\n"
+        "      store %copy, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    configured = local && ir_value_set_phase_access(r->ctx,
+        ir_local_value(function, local), IR_PHASE_ACCESS_RUNTIME,
+        IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_NONE);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("typed IR follows copied addresses to their binding phase",
+          configured && !typed(r) && said(r, "phase.binding-write"));
+    done(r);
+
+    r = verify(MOD(
+        "  func @f(%condition: bool, %input: i32) -> void {\n"
+        "    local $x: i32\n"
+        "    local $y: i32\n"
+        "    block entry:\n"
+        "      branch %condition, left, right\n"
+        "    block left:\n"
+        "      %left_address: ref[i32] = address.of $x\n"
+        "      jump join\n"
+        "    block right:\n"
+        "      %right_address: ref[i32] = address.of $y\n"
+        "      jump join\n"
+        "    block join:\n"
+        "      %address: ref[i32] = phi [left: %left_address], "
+        "[right: %right_address]\n"
+        "      store %address, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_local_t *left = function ? ir_local_find(function, "x") : nullptr;
+    ir_local_t *right = function ? ir_local_find(function, "y") : nullptr;
+    configured = left && right
+        && ir_value_set_phase_access(r->ctx,
+            ir_local_value(function, left), IR_PHASE_ACCESS_RUNTIME,
+            IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE)
+        && ir_value_set_phase_access(r->ctx,
+            ir_local_value(function, right), IR_PHASE_ACCESS_RUNTIME,
+            IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_NONE);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("typed IR checks every binding reached through a phi address",
+          configured && !typed(r) && said(r, "phase.binding-write"));
+    done(r);
+}
+
+typedef struct {
+    ir_value_t *targets[4];
+    size_t count;
+} store_target_capture_t;
+
+static bool capture_store_target(void *context, ir_value_t *target)
+{
+    store_target_capture_t *capture = context;
+    if (capture->count == sizeof(capture->targets) / sizeof(*capture->targets))
+        return false;
+    capture->targets[capture->count++] = target;
+    return true;
+}
+
+static void test_store_target_visitor(void)
+{
+    run_t *r = verify(MOD(
+        "  global @shared: i32\n"
+        "  func @f(%input: i32) -> void {\n"
+        "    block entry:\n"
+        "      %address: ref[i32] = address.of @shared\n"
+        "      %forwarded: ref[i32] = copy %address\n"
+        "      store %forwarded, %input\n"
+        "      return\n"
+        "    }\n"
+        ), IR_PROP_PARSED);
+    ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_instr_t *store = nullptr;
+    ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
+    for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
+        if (entry->instrs[i]->op == IR_OP_STORE) store = entry->instrs[i];
+    store_target_capture_t capture = {0};
+    bool complete = store && ir_value_visit_store_targets(
+        ir_operand_value(&store->operands[0]), capture_store_target, &capture);
+    ir_global_t *shared = r->m ? ir_global_find(r->m, "shared") : nullptr;
+    check("the store-target visitor fixture parses and finds its store",
+          store && shared);
+    check("the store-target visitor completes with one binding target",
+          complete && capture.count == 1);
+    check("the store-target visitor follows forwarded addresses to globals",
+          complete && capture.count == 1
+              && capture.targets[0]->kind == IR_VAL_GLOBAL
+              && capture.targets[0]->global == shared);
+    ir_local_t *returned = ir_local_add(function, "returned",
+                                        ir_type_parse(r->m, "ref[i32]"));
+    ir_value_t *returned_value = returned
+        ? ir_local_value(function, returned) : nullptr;
+    ir_value_t *shared_value = ir_global_address(r->m, shared);
+    ir_alias_target_t returned_alias = {.value = shared_value};
+    bool aliased = returned_value && shared_value
+        && ir_value_set_alias_targets(r->ctx, returned_value,
+                                      &returned_alias, 1, true);
+    capture = (store_target_capture_t){0};
+    complete = aliased && ir_value_visit_store_targets(returned_value,
+        capture_store_target, &capture);
+    check("known aliases can be attached to an indirect value",
+          complete && capture.count == 1
+              && capture.targets[0]->kind == IR_VAL_GLOBAL
+              && capture.targets[0]->global == shared);
+    ir_global_t *items = ir_global_add(r->m, "items",
+        ir_type_parse(r->m, "array[i32]"));
+    ir_value_t *items_address = items
+        ? ir_global_address(r->m, items) : nullptr;
+    ir_local_t *view = ir_local_add(function, "view",
+        ir_type_parse(r->m, "view[i32]"));
+    ir_value_t *view_value = view ? ir_local_value(function, view) : nullptr;
+    ir_alias_target_t view_alias = {
+        .value = items_address,
+        .escapes = true,
+    };
+    bool view_aliased = view_value && items_address
+        && ir_value_set_alias_targets(r->ctx, view_value, &view_alias, 1,
+                                      true);
+    ir_annot_t *view_target = view_value
+        ? ir_annot_get(ir_value_annots(view_value), "ir.alias0") : nullptr;
+    ir_annot_t *view_escape = view_value
+        ? ir_annot_get(ir_value_annots(view_value), "ir.alias0_escapes")
+        : nullptr;
+    check("non-pointer view values retain backing-storage provenance",
+          view_aliased && view_target
+              && view_target->kind == IR_ANNOT_VALUE
+              && view_target->v == items_address && view_escape
+              && view_escape->kind == IR_ANNOT_BOOL && view_escape->b);
+    ir_local_t *projected_view = ir_local_add(function, "projected_view",
+        ir_type_parse(r->m, "view[i32]"));
+    ir_value_t *projected_view_value = projected_view
+        ? ir_local_value(function, projected_view) : nullptr;
+    bool copied_view_alias = projected_view_value
+        && ir_value_copy_alias_targets(r->ctx, projected_view_value,
+                                      view_value);
+    ir_annot_t *projected_target = projected_view_value
+        ? ir_annot_get(ir_value_annots(projected_view_value), "ir.alias0")
+        : nullptr;
+    ir_annot_t *projected_escape = projected_view_value
+        ? ir_annot_get(ir_value_annots(projected_view_value),
+                       "ir.alias0_escapes") : nullptr;
+    check("alias provenance survives value-preserving result projections",
+          copied_view_alias && projected_target
+              && projected_target->kind == IR_ANNOT_VALUE
+              && projected_target->v == items_address && projected_escape
+              && projected_escape->kind == IR_ANNOT_BOOL
+              && projected_escape->b);
+    check("view provenance is not treated as an indirect store address",
+          view_value && !ir_value_visit_store_targets(view_value,
+              capture_store_target, &capture));
+    ir_global_t *other_items = ir_global_add(r->m, "other_items",
+        ir_type_parse(r->m, "array[i32]"));
+    ir_value_t *other_items_address = other_items
+        ? ir_global_address(r->m, other_items) : nullptr;
+    bool appended_alias = other_items_address
+        && ir_value_add_alias_target(r->ctx, view_value,
+            (ir_alias_target_t){.value = other_items_address});
+    bool duplicate_alias = appended_alias
+        && ir_value_add_alias_target(r->ctx, view_value,
+            (ir_alias_target_t){.value = other_items_address,
+                                .escapes = true});
+    ir_annot_t *alias_count = view_value
+        ? ir_annot_get(ir_value_annots(view_value), "ir.alias_count") : nullptr;
+    ir_annot_t *second_alias = view_value
+        ? ir_annot_get(ir_value_annots(view_value), "ir.alias1") : nullptr;
+    ir_annot_t *second_escape = view_value
+        ? ir_annot_get(ir_value_annots(view_value), "ir.alias1_escapes")
+        : nullptr;
+    ir_annot_t *alias_complete = view_value
+        ? ir_annot_get(ir_value_annots(view_value),
+                       "ir.alias_analysis_complete") : nullptr;
+    ir_annot_t *reverse_count = other_items_address
+        ? ir_annot_get(ir_value_annots(other_items_address),
+                       "ir.aliased_by_count") : nullptr;
+    check("incremental alias discovery retains distinct targets and reverse edges",
+          duplicate_alias && alias_count && alias_count->kind == IR_ANNOT_INT
+              && alias_count->i.mag == 2 && second_alias
+              && second_alias->kind == IR_ANNOT_VALUE
+              && second_alias->v == other_items_address && reverse_count
+              && reverse_count->kind == IR_ANNOT_INT
+              && reverse_count->i.mag == 1);
+    ir_annot_t *reverse_escape = other_items_address
+        ? ir_annot_get(ir_value_annots(other_items_address),
+                       "ir.aliased_by0_escapes") : nullptr;
+    check("duplicate alias discovery upgrades escape provenance",
+          second_escape && second_escape->kind == IR_ANNOT_BOOL
+              && second_escape->b && reverse_escape
+              && reverse_escape->kind == IR_ANNOT_BOOL
+              && reverse_escape->b && alias_complete
+              && alias_complete->kind == IR_ANNOT_BOOL
+              && !alias_complete->b);
+    done(r);
+
+    r = verify(MOD(
+        "  func @f(%address: ptr[i32], %input: i32) -> void {\n"
+        "    block entry:\n"
+        "      store %address, %input\n"
+        "      return\n"
+        "    }\n"
+        ), IR_PROP_PARSED);
+    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    entry = function ? ir_block_entry(function) : nullptr;
+    store = nullptr;
+    for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
+        if (entry->instrs[i]->op == IR_OP_STORE) store = entry->instrs[i];
+    capture = (store_target_capture_t){0};
+    complete = store && ir_value_visit_store_targets(
+        ir_operand_value(&store->operands[0]), capture_store_target, &capture);
+    check("the store-target visitor reports unresolved pointer targets",
+          !complete);
+    ir_value_t *formal = function && function->n_params
+        ? function->params[0] : nullptr;
+    bool unknown_alias = formal
+        && ir_value_set_alias_targets(r->ctx, formal, nullptr, 0, false)
+        && ir_value_set_indirect_access(r->ctx, formal,
+                                        IR_INDIRECT_ACCESS_READ_WRITE);
+    capture = (store_target_capture_t){0};
+    complete = unknown_alias && ir_value_visit_store_targets(
+        formal, capture_store_target, &capture);
+    check("a writable formal permits an unknown but incomplete alias set",
+          complete && capture.count == 0);
+    capture = (store_target_capture_t){0};
+    complete = store && ir_value_visit_store_origins(
+        ir_operand_value(&store->operands[0]), capture_store_target,
+        &capture);
+    check("the store-origin visitor retains an unresolved formal parameter",
+          complete && capture.count == 1
+              && capture.targets[0]->kind == IR_VAL_PARAM
+              && capture.targets[0]->index == 0);
+
+    ir_global_t *origin = ir_global_add(r->m, "origin",
+                                        ir_type_parse(r->m, "i32"));
+    ir_value_t *origin_value = origin ? ir_global_address(r->m, origin)
+                                      : nullptr;
+    ir_value_t *address = function && function->n_params
+        ? function->params[0] : nullptr;
+    ir_alias_target_t parameter_alias = {.value = origin_value};
+    aliased = address && origin_value
+        && ir_value_set_alias_targets(r->ctx, address, &parameter_alias, 1,
+                                      true);
+    capture = (store_target_capture_t){0};
+    complete = aliased && ir_value_visit_store_targets(address,
+        capture_store_target, &capture);
+    check("the effective store-target visitor follows parameter aliases",
+          complete && capture.count == 1
+              && capture.targets[0]->kind == IR_VAL_GLOBAL
+              && capture.targets[0]->global == origin);
+    capture = (store_target_capture_t){0};
+    complete = aliased && ir_value_visit_store_origins(address,
+        capture_store_target, &capture);
+    check("the store-origin visitor keeps formal identity under aliases",
+          complete && capture.count == 1
+              && capture.targets[0] == address);
+    capture = (store_target_capture_t){0};
+    complete = origin_value && ir_value_visit_store_origins(origin_value,
+        capture_store_target, &capture);
+    check("the store-origin visitor accepts direct global bindings",
+          complete && capture.count == 1
+              && capture.targets[0] == origin_value);
+    done(r);
+}
+
+static bool configure_indirect_initializations(run_t *r)
+{
+    ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    if (!local || !ir_value_set_phase_access(r->ctx,
+            ir_local_value(function, local), IR_PHASE_ACCESS_BOTH,
+            IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_RUNTIME)) return false;
+
+    size_t events = 0;
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *instruction = block->instrs[i];
+            if (instruction->op != IR_OP_STORE) continue;
+            if (!ir_instr_set_binding_initialization(instruction, true))
+                return false;
+            events++;
+        }
+    }
+    return events > 0;
+}
+
+static bool set_single_alias_target(ir_ctx_t *ctx, ir_value_t *holder,
+                                    ir_value_t *target, bool complete)
+{
+    ir_annots_t *annots = ir_value_annots(holder);
+    return annots && target
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+               .i = {.mag = 1},
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias0", .kind = IR_ANNOT_VALUE, .v = target,
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+               .b = complete,
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+               .b = !complete,
+           });
+}
+
+static void test_alias_store_target_phase_access(void)
+{
+    run_t *r = verify(MOD(
+        "  func @f(%p: ref[i32], %input: i32) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      store %p, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    ir_value_t *target = function && local
+        ? ir_local_value(function, local) : nullptr;
+    bool configured = target
+        && ir_value_set_phase_access(r->ctx, target,
+            IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
+            IR_PHASE_ACCESS_NONE)
+        && set_single_alias_target(r->ctx,
+            function ? ir_value_find(function, "p") : nullptr,
+            target, true);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("typed IR applies write permissions through a complete alias target",
+          configured && !typed(r) && said(r, "phase.binding-write"));
+    done(r);
+
+    r = verify(MOD(
+        "  func @f(%p: ref[i32], %input: i32) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      store %p, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    local = function ? ir_local_find(function, "x") : nullptr;
+    target = function && local ? ir_local_value(function, local) : nullptr;
+    configured = target
+        && set_single_alias_target(r->ctx,
+            function ? ir_value_find(function, "p") : nullptr,
+            target, false);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("typed IR rejects stores through an incomplete alias set",
+          configured && !typed(r)
+              && said(r, "phase.store-alias-incomplete"));
+    done(r);
+
+    r = verify(MOD(
+        "  func @f(%p: ref[i32], %input: i32) -> void {\n"
+        "    block entry:\n"
+        "      store %p, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_value_t *pointer = function ? ir_value_find(function, "p") : nullptr;
+    configured = pointer && ir_annot_set(r->ctx,
+        ir_value_annots(pointer), (ir_annot_t){
+            .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+            .i = {.mag = UINT32_MAX},
+        }) && ir_annot_set(r->ctx, ir_value_annots(pointer),
+            (ir_annot_t){.key = "ir.alias_analysis_complete",
+                         .kind = IR_ANNOT_BOOL, .b = true})
+        && ir_annot_set(r->ctx, ir_value_annots(pointer),
+            (ir_annot_t){.key = "ir.alias_unresolved",
+                         .kind = IR_ANNOT_BOOL, .b = false});
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("typed IR bounds malformed alias target counts",
+          configured && !typed(r)
+              && said(r, "phase.store-alias-incomplete"));
+    done(r);
+}
+
+static bool has_multiple_initialization_diagnostic(ir_diags_t *diagnostics)
+{
+    for (uint32_t i = 0; i < ir_diags_count(diagnostics); i++) {
+        const ir_diag_t *diagnostic = ir_diags_at(diagnostics, i);
+        if (diagnostic->code == IR_DIAG_VERIFY_PHASE
+            && strstr(diagnostic->message,
+                      "multiple initialization sites")) return true;
+    }
+    return false;
+}
+
+static void test_indirect_local_initialization(void)
+{
+    run_t *multiple = verify(MOD(
+        "  func @f() -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      %a: ref[i32] = address.of $x\n"
+        "      %one: i32 = const 1\n"
+        "      store %a, %one\n"
+        "      %b: ref[i32] = address.of $x\n"
+        "      %two: i32 = const 2\n"
+        "      store %b, %two\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    bool configured = configure_indirect_initializations(multiple);
+    if (configured) {
+        ir_module_establish(multiple->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        multiple->held = ir_verify(multiple->m, multiple->d);
+    }
+    check("typed IR rejects distinct indirect initialization sites on one path",
+          configured && !typed(multiple)
+              && has_multiple_initialization_diagnostic(multiple->d));
+    done(multiple);
+
+    run_t *branches = verify(MOD(
+        "  func @f(%condition: bool) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      branch %condition, left, right\n"
+        "    block left:\n"
+        "      %a: ref[i32] = address.of $x\n"
+        "      %one: i32 = const 1\n"
+        "      store %a, %one\n"
+        "      jump join\n"
+        "    block right:\n"
+        "      %b: ref[i32] = address.of $x\n"
+        "      %two: i32 = const 2\n"
+        "      store %b, %two\n"
+        "      jump join\n"
+        "    block join:\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    configured = configure_indirect_initializations(branches);
+    if (configured) {
+        ir_module_establish(branches->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        branches->held = ir_verify(branches->m, branches->d);
+    }
+    check("typed IR permits branch-exclusive indirect initialization sites",
+          configured && typed(branches) && !ir_diags_failed(branches->d));
+    done(branches);
+
+    run_t *loop = verify(MOD(
+        "  func @f(%condition: bool) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      jump loop\n"
+        "    block loop:\n"
+        "      %a: ref[i32] = address.of $x\n"
+        "      %one: i32 = const 1\n"
+        "      store %a, %one\n"
+        "      branch %condition, loop, exit\n"
+        "    block exit:\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    configured = configure_indirect_initializations(loop);
+    if (configured) {
+        ir_module_establish(loop->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        loop->held = ir_verify(loop->m, loop->d);
+    }
+    check("typed IR counts repeated execution of one indirect init site once",
+          configured && typed(loop) && !ir_diags_failed(loop->d));
+    done(loop);
+
+    run_t *aliases = verify(MOD(
+        "  func @f(%p: ref[i32], %q: ref[i32]) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      %one: i32 = const 1\n"
+        "      store %p, %one\n"
+        "      %two: i32 = const 2\n"
+        "      store %q, %two\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    ir_func_t *function = aliases->m ? ir_func_find(aliases->m, "f") : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    ir_value_t *target = function && local
+        ? ir_local_value(function, local) : nullptr;
+    configured = function && target
+        && set_single_alias_target(aliases->ctx,
+                                   ir_value_find(function, "p"), target, true)
+        && set_single_alias_target(aliases->ctx,
+                                   ir_value_find(function, "q"), target, true)
+        && configure_indirect_initializations(aliases);
+    if (configured) {
+        ir_module_establish(aliases->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        aliases->held = ir_verify(aliases->m, aliases->d);
+    }
+    check("typed IR counts complete alias targets in initialization dataflow",
+          configured && !typed(aliases)
+              && has_multiple_initialization_diagnostic(aliases->d));
+    done(aliases);
+
+    run_t *allocated = verify(MOD(
+        "  func @f() -> void {\n"
+        "    block entry:\n"
+        "      %address: ref[i32] = alloc i32\n"
+        "      %one: i32 = const 1\n"
+        "      store %address, %one\n"
+        "      %two: i32 = const 2\n"
+        "      store %address, %two\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    function = allocated->m ? ir_func_find(allocated->m, "f") : nullptr;
+    ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
+    ir_instr_t *allocation = nullptr;
+    size_t stores = 0;
+    configured = true;
+    for (uint32_t i = 0; entry && i < entry->n_instrs; i++) {
+        if (entry->instrs[i]->op == IR_OP_ALLOC)
+            allocation = entry->instrs[i];
+        if (entry->instrs[i]->op == IR_OP_STORE) {
+            stores++;
+            configured = configured && ir_instr_set_binding_initialization(
+                entry->instrs[i], true);
+        }
+    }
+    configured = allocation && allocation->dest && stores == 2
+        && configured && ir_value_set_phase_access(allocated->ctx,
+            allocation->dest, IR_PHASE_ACCESS_BOTH,
+            IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_RUNTIME);
+    if (configured) {
+        ir_module_establish(allocated->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        allocated->held = ir_verify(allocated->m, allocated->d);
+    }
+    check("typed IR enforces single initialization for allocated bindings",
+          configured && !typed(allocated)
+              && has_multiple_initialization_diagnostic(allocated->d));
+    done(allocated);
+}
+
+static void test_global_single_initialization(void)
+{
+    run_t *r = verify(MOD(
+        "  global @x: i32\n"
+        "  func @init() -> void {\n"
+        "    block entry:\n"
+        "      %one: i32 = const 1\n"
+        "      global.store @x, %one\n"
+        "      %two: i32 = const 2\n"
+        "      global.store @x, %two\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    ir_global_t *global = r->m ? ir_global_find(r->m, "x") : nullptr;
+    ir_func_t *function = r->m ? ir_func_find(r->m, "init") : nullptr;
+    ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
+    bool configured = global && function && entry
+        && ir_global_set_phase_access(r->ctx, global,
+            IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
+            IR_PHASE_ACCESS_RUNTIME)
+        && ir_func_set_initializer(r->ctx, function, true);
+    size_t stores = 0;
+    for (uint32_t i = 0; configured && i < entry->n_instrs; i++) {
+        ir_instr_t *instruction = entry->instrs[i];
+        if (instruction->op != IR_OP_GLOBAL_STORE) continue;
+        stores++;
+        configured = ir_instr_set_binding_initialization(instruction, true);
+    }
+    configured = configured && stores == 2;
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("typed IR rejects multiple initialization sites for an immutable global",
+          configured && !typed(r)
+              && has_multiple_initialization_diagnostic(r->d));
+    done(r);
+}
+
+static void test_loop_binding_reentry(void)
+{
+    const char *source = MOD(
+        "  func @f(%condition: bool, %again: bool) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      jump loop\n"
+        "    block loop:\n"
+        "      branch %condition, left, right\n"
+        "    block left:\n"
+        "      %one: i32 = const 1\n"
+        "      $x = copy %one\n"
+        "      jump latch\n"
+        "    block right:\n"
+        "      %two: i32 = const 2\n"
+        "      $x = copy %two\n"
+        "      jump latch\n"
+        "    block latch:\n"
+        "      branch %again, loop, exit\n"
+        "    block exit:\n"
+        "      return\n"
+        "  }\n");
+    for (bool reenters = false; ; reenters = true) {
+        run_t *r = verify(source, IR_PROP_PARSED);
+        ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
+        ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+        ir_block_t *header = function ? ir_block_find(function, "loop")
+                                     : nullptr;
+        ir_value_t *binding = function && local
+            ? ir_local_value(function, local) : nullptr;
+        bool configured = binding && header
+            && ir_value_set_phase_access(r->ctx, binding,
+                IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_NONE,
+                IR_PHASE_ACCESS_RUNTIME);
+        if (configured && reenters)
+            configured = ir_value_set_binding_reentry(binding, header);
+        size_t events = 0;
+        for (uint32_t b = 0; configured && b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ir_instr_t *instruction = block->instrs[i];
+                if (instruction->op != IR_OP_COPY
+                    || instruction->dest_local != local) continue;
+                events++;
+                configured = ir_instr_set_binding_initialization(
+                    instruction, true);
+            }
+        }
+        configured = configured && events == 2;
+        if (configured && reenters) {
+            char *serialized = ir_module_print(r->m);
+            ir_module_t *copy = serialized
+                ? ir_module_parse(r->ctx, serialized, 0, PROFILES, 2, r->d)
+                : nullptr;
+            free(serialized);
+            r->m = copy;
+            function = copy ? ir_func_find(copy, "f") : nullptr;
+            local = function ? ir_local_find(function, "x") : nullptr;
+            binding = function && local
+                ? ir_local_value(function, local) : nullptr;
+            ir_annot_t *reentry = binding
+                ? ir_annot_get(ir_value_annots(binding),
+                               "ir.binding_reentry_header") : nullptr;
+            configured = reentry && reentry->kind == IR_ANNOT_STR
+                && !strcmp(reentry->s, "loop");
+        }
+        if (configured) {
+            ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+            r->held = ir_verify(r->m, r->d);
+        }
+        if (reenters)
+            check("loop re-entry resets initialization state between iterations",
+                  configured && typed(r) && !ir_diags_failed(r->d));
+        else
+            check("distinct init sites across loop iterations require a re-entry contract",
+                  configured && !typed(r)
+                      && has_multiple_initialization_diagnostic(r->d));
+        done(r);
+        if (reenters) break;
+    }
+
+    run_t *same_iteration = verify(MOD(
+        "  func @f(%again: bool) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      jump loop\n"
+        "    block loop:\n"
+        "      %one: i32 = const 1\n"
+        "      $x = copy %one\n"
+        "      %two: i32 = const 2\n"
+        "      $x = copy %two\n"
+        "      branch %again, loop, exit\n"
+        "    block exit:\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    ir_func_t *function = same_iteration->m
+        ? ir_func_find(same_iteration->m, "f") : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    ir_block_t *header = function ? ir_block_find(function, "loop") : nullptr;
+    ir_value_t *binding = function && local
+        ? ir_local_value(function, local) : nullptr;
+    bool configured = binding && header
+        && ir_value_set_phase_access(same_iteration->ctx, binding,
+            IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_NONE,
+            IR_PHASE_ACCESS_RUNTIME)
+        && ir_value_set_binding_reentry(binding, header);
+    for (uint32_t i = 0; configured && i < header->n_instrs; i++) {
+        ir_instr_t *instruction = header->instrs[i];
+        if (instruction->op == IR_OP_COPY
+            && instruction->dest_local == local)
+            configured = ir_instr_set_binding_initialization(
+                instruction, true);
+    }
+    if (configured) {
+        ir_module_establish(same_iteration->m,
+                            IR_PROP_PARSED | IR_PROP_TYPED);
+        same_iteration->held = ir_verify(same_iteration->m,
+                                         same_iteration->d);
+    }
+    check("loop re-entry does not excuse duplicate sites in one iteration",
+          configured && !typed(same_iteration)
+              && has_multiple_initialization_diagnostic(
+                  same_iteration->d));
+    done(same_iteration);
+}
+
+static void test_local_phase_writes(void)
+{
+    const char *valid_source = MOD(
+        "  func @f() -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      %one: i32 = const 1\n"
+        "      $x = copy %one\n"
+        "      return\n"
+        "  }\n");
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *diags = ir_diags_new(ctx, nullptr);
+    ir_module_t *module = ir_module_parse(ctx, valid_source, 0, PROFILES, 2,
+                                          diags);
+    ir_func_t *function = module ? ir_func_find(module, "f") : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    ir_instr_t *copy = nullptr;
+    ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
+    for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
+        if (entry->instrs[i]->op == IR_OP_COPY) copy = entry->instrs[i];
+    bool setup = local && copy
+        && ir_value_set_phase_access(ctx, ir_local_value(function, local),
+            IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_NONE,
+            IR_PHASE_ACCESS_RUNTIME)
+        && ir_instr_set_binding_initialization(copy, true);
+    if (module && setup) {
+        ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
+        ir_props_t held = ir_verify(module, diags);
+        check("immutable local declaration initialization is allowed once",
+              (held & IR_PROP_TYPED) && !ir_diags_failed(diags));
+    }
+    else {
+        check("immutable local initialization test fixture is valid", false);
+    }
+    ir_ctx_free(ctx);
+
+    const char *invalid_source = MOD(
+        "  func @f() -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      %one: i32 = const 1\n"
+        "      %two: i32 = const 2\n"
+        "      $x = copy %one\n"
+        "      $x = copy %two\n"
+        "      return\n"
+        "  }\n");
+    ctx = ir_ctx_new();
+    diags = ir_diags_new(ctx, nullptr);
+    module = ir_module_parse(ctx, invalid_source, 0, PROFILES, 2, diags);
+    function = module ? ir_func_find(module, "f") : nullptr;
+    local = function ? ir_local_find(function, "x") : nullptr;
+    entry = function ? ir_block_entry(function) : nullptr;
+    copy = nullptr;
+    for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
+        if (entry->instrs[i]->op == IR_OP_COPY) {
+            copy = entry->instrs[i];
+            break;
+        }
+    setup = local && copy
+        && ir_value_set_phase_access(ctx, ir_local_value(function, local),
+            IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_NONE,
+            IR_PHASE_ACCESS_RUNTIME);
+    for (uint32_t i = 0; setup && entry && i < entry->n_instrs; i++)
+        if (entry->instrs[i]->op == IR_OP_COPY)
+            setup = ir_instr_set_binding_initialization(entry->instrs[i],
+                                                        true);
+    if (module && setup) {
+        ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
+        ir_props_t held = ir_verify(module, diags);
+        bool duplicate_diagnostic = false;
+        for (uint32_t i = 0; i < ir_diags_count(diags); i++) {
+            const ir_diag_t *diagnostic = ir_diags_at(diags, i);
+            produced[diagnostic->code] = true;
+            duplicate_diagnostic |= diagnostic->code == IR_DIAG_VERIFY_PHASE
+                && strstr(diagnostic->message,
+                          "multiple initialization sites") != nullptr;
+        }
+        check("typed IR rejects multiple immutable initialization sites on one path",
+              !(held & IR_PROP_TYPED) && duplicate_diagnostic);
+    }
+    else {
+        check("immutable local reassignment test fixture is valid", false);
+    }
+    ir_ctx_free(ctx);
+
+    const char *branch_source = MOD(
+        "  func @f(%condition: bool) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      branch %condition, left, right\n"
+        "    block left:\n"
+        "      %one: i32 = const 1\n"
+        "      $x = copy %one\n"
+        "      jump join\n"
+        "    block right:\n"
+        "      %two: i32 = const 2\n"
+        "      $x = copy %two\n"
+        "      jump join\n"
+        "    block join:\n"
+        "      return\n"
+        "  }\n");
+    ctx = ir_ctx_new();
+    diags = ir_diags_new(ctx, nullptr);
+    module = ir_module_parse(ctx, branch_source, 0, PROFILES, 2, diags);
+    function = module ? ir_func_find(module, "f") : nullptr;
+    local = function ? ir_local_find(function, "x") : nullptr;
+    setup = local && ir_value_set_phase_access(ctx,
+        ir_local_value(function, local), IR_PHASE_ACCESS_BOTH,
+        IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_RUNTIME);
+    size_t branch_initializers = 0;
+    for (uint32_t b = 0; setup && b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *instruction = function->blocks[b]->instrs[i];
+            if (instruction->op != IR_OP_COPY
+                || instruction->dest_kind != IR_DEST_LOCAL
+                || instruction->dest_local != local) continue;
+            setup = ir_instr_set_binding_initialization(instruction, true);
+            branch_initializers++;
+        }
+    if (module && setup && branch_initializers == 2) {
+        ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
+        ir_props_t held = ir_verify(module, diags);
+        check("mutually exclusive branches may initialize one immutable binding",
+              (held & IR_PROP_TYPED) && !ir_diags_failed(diags));
+    }
+    else {
+        check("branch initialization test fixture is valid", false);
+    }
+    ir_ctx_free(ctx);
+
+    const char *loop_source = MOD(
+        "  func @f(%condition: bool) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      jump loop\n"
+        "    block loop:\n"
+        "      %one: i32 = const 1\n"
+        "      $x = copy %one\n"
+        "      branch %condition, loop, exit\n"
+        "    block exit:\n"
+        "      return\n"
+        "  }\n");
+    ctx = ir_ctx_new();
+    diags = ir_diags_new(ctx, nullptr);
+    module = ir_module_parse(ctx, loop_source, 0, PROFILES, 2, diags);
+    function = module ? ir_func_find(module, "f") : nullptr;
+    local = function ? ir_local_find(function, "x") : nullptr;
+    entry = function ? ir_block_find(function, "loop") : nullptr;
+    copy = nullptr;
+    for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
+        if (entry->instrs[i]->op == IR_OP_COPY) copy = entry->instrs[i];
+    setup = local && copy
+        && ir_value_set_phase_access(ctx, ir_local_value(function, local),
+            IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_NONE,
+            IR_PHASE_ACCESS_RUNTIME)
+        && ir_instr_set_binding_initialization(copy, true);
+    if (module && setup) {
+        ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
+        ir_props_t held = ir_verify(module, diags);
+        check("re-entering one static initialization site in a loop is not a second site",
+              (held & IR_PROP_TYPED) && !ir_diags_failed(diags));
+    }
+    else {
+        check("loop initialization test fixture is valid", false);
+    }
+    ir_ctx_free(ctx);
+}
+
+static void test_global_storage_requirement(void)
+{
+    const char *source = MOD(
+        "  global @state: i32\n"
+        "  func @f() -> void {\n"
+        "    block entry:\n      return\n  }\n");
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *diags = ir_diags_new(ctx, nullptr);
+    ir_module_t *module = ir_module_parse(ctx, source, 0, PROFILES, 2,
+                                          diags);
+    ir_global_t *global = module ? ir_global_find(module, "state") : nullptr;
+    bool malformed = global
+        && ir_global_set_storage_class(ctx, global, "pool", false, "gc")
+        && ir_annot_set(ctx, &global->annots, (ir_annot_t){
+            .key = "ir.storage_required", .kind = IR_ANNOT_BOOL, .b = true,
+        });
+    char *serialized = malformed ? ir_module_print(module) : nullptr;
+    module = serialized
+        ? ir_module_parse(ctx, serialized, 0, PROFILES, 2, diags) : nullptr;
+    global = module ? ir_global_find(module, "state") : nullptr;
+    malformed = malformed && module && global;
+    free(serialized);
+    if (module && malformed) {
+        ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
+        ir_props_t held = ir_verify(module, diags);
+        bool storage_diagnostic = false;
+        for (uint32_t i = 0; i < ir_diags_count(diags); i++) {
+            const ir_diag_t *diagnostic = ir_diags_at(diags, i);
+            produced[diagnostic->code] = true;
+            storage_diagnostic |= diagnostic->code == IR_DIAG_VERIFY_STORAGE;
+        }
+        check("typed IR rejects an unhonored required global storage class",
+              !(held & IR_PROP_TYPED) && storage_diagnostic);
+    }
+    else {
+        check("global storage requirement test fixture is valid", false);
+    }
+    ir_ctx_free(ctx);
+
+    run_t *malformed_requirement = verify(MOD(
+        "  global @state: i32 !ir.storage_required(\"yes\")\n"
+        "  func @f() -> void {\n"
+        "    block entry:\n      return\n  }\n"),
+        IR_PROP_PARSED | IR_PROP_TYPED);
+    bool storage_diagnostic = false;
+    for (uint32_t i = 0; i < ir_diags_count(malformed_requirement->d); i++)
+        storage_diagnostic |= ir_diags_at(malformed_requirement->d, i)->code
+            == IR_DIAG_VERIFY_STORAGE;
+    check("typed IR rejects malformed global storage requirement metadata",
+          !typed(malformed_requirement) && storage_diagnostic);
+    done(malformed_requirement);
+}
+
+static void test_allocation_storage_requirement(void)
+{
+    run_t *missing = verify(MOD(
+        "  func @f() -> void {\n"
+        "    block entry:\n"
+        "      %p: ptr[i32] = alloc i32 !ir.storage_required(true)\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED | IR_PROP_TYPED);
+    check("typed IR rejects alloc with a missing required storage class",
+          !typed(missing) && said(missing, "storage.required"));
+    done(missing);
+
+    run_t *malformed = verify(MOD(
+        "  func @f() -> void {\n"
+        "    block entry:\n"
+        "      %p: ptr[i32] = alloc i32 !ir.storage_required(\"yes\")\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED | IR_PROP_TYPED);
+    check("typed IR rejects malformed required storage metadata",
+          !typed(malformed) && said(malformed, "storage.required"));
+    done(malformed);
+
+    run_t *valid = verify(MOD(
+        "  func @f() -> void {\n"
+        "    block entry:\n"
+        "      %p: ptr[i32] = alloc i32\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    ir_func_t *function = valid->m
+        ? ir_func_find(valid->m, "f") : nullptr;
+    ir_block_t *entry = function ? ir_block_find(function, "entry") : nullptr;
+    ir_instr_t *allocation = entry && entry->n_instrs
+        ? entry->instrs[0] : nullptr;
+    bool configured = allocation
+        && ir_instr_set_storage_class(allocation, "pool", true);
+    if (configured) {
+        ir_module_establish(valid->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        valid->held = ir_verify(valid->m, valid->d);
+    }
+    check("typed IR accepts alloc with its required selected class",
+          configured && typed(valid) && !ir_diags_failed(valid->d));
+    done(valid);
 }
 
 
@@ -1133,7 +2461,20 @@ int main(void)
     test_passes();
     test_undeclared_invalidation();
     test_spanless_diagnostic_is_a_bug();
-    test_locals_have_no_address();
+    test_address_of_local();
+    test_release_liveness();
+    test_global_phase_access();
+    test_binding_phase_access();
+    test_store_through_address_phase_access();
+    test_store_through_forwarded_addresses();
+    test_store_target_visitor();
+    test_alias_store_target_phase_access();
+    test_indirect_local_initialization();
+    test_global_single_initialization();
+    test_loop_binding_reentry();
+    test_local_phase_writes();
+    test_global_storage_requirement();
+    test_allocation_storage_requirement();
     test_a_phase_can_be_asked_for_on_its_own();
 
     dump_produced_codes("produced-codes-verify.txt", produced);
