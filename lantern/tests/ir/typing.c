@@ -442,6 +442,33 @@ static void test_memory(void)
     check("storing the wrong type is rejected",
           apply(e, stbad) == IR_RULE_REJECT);
 
+    ir_global_t *global = ir_global_add(e->m, "counter",
+                                        ir_type_parse(e->m, "i32"));
+    if (global) global->mutability = IR_MUT_MUTABLE;
+    ir_value_t *global_value = global
+        ? ir_global_address(e->m, global) : nullptr;
+    ir_instr_t *global_store = op(e, IR_OP_GLOBAL_STORE);
+    ir_instr_operand_value(global_store, global_value);
+    ir_instr_operand_value(global_store, val(e, "i32"));
+    check("global.store accepts a matching module global",
+          accepts_as(e, global_store, nullptr));
+
+    ir_instr_t *global_store_bad = op(e, IR_OP_GLOBAL_STORE);
+    ir_instr_operand_value(global_store_bad, global_value);
+    ir_instr_operand_value(global_store_bad, val(e, "u64"));
+    check("global.store rejects a mismatched value type",
+          apply(e, global_store_bad) == IR_RULE_REJECT);
+
+    ir_global_t *constant = ir_global_add(e->m, "constant",
+                                          ir_type_parse(e->m, "i32"));
+    if (constant) constant->mutability = IR_MUT_CONST;
+    ir_instr_t *constant_store = op(e, IR_OP_GLOBAL_STORE);
+    ir_instr_operand_value(constant_store,
+        constant ? ir_global_address(e->m, constant) : nullptr);
+    ir_instr_operand_value(constant_store, val(e, "i32"));
+    check("global.store rejects writes to constant globals",
+          apply(e, constant_store) == IR_RULE_REJECT);
+
     ir_instr_t *fd = op(e, IR_OP_FIELD);
 
     ir_instr_operand_value(fd, val(e, "ptr[(x: i32, y: u64)]"));
@@ -655,6 +682,49 @@ static void test_aggregates_and_variants(void)
     check("variant.tag on a non-variant is rejected",
           apply(e, vtbad) == IR_RULE_REJECT);
 
+    ir_instr_t *option_is_nil = op(e, IR_OP_OPTION_IS_NIL);
+    ir_instr_operand_value(option_is_nil, val(e, "option[i32]"));
+    check("option.is_nil accepts an option and returns bool",
+          accepts_as(e, option_is_nil, "bool"));
+
+    ir_instr_t *option_is_nil_bad = op(e, IR_OP_OPTION_IS_NIL);
+    ir_instr_operand_value(option_is_nil_bad, val(e, "i32"));
+    check("option.is_nil rejects a non-option",
+          apply(e, option_is_nil_bad) == IR_RULE_REJECT);
+
+    ir_instr_t *option_get = op(e, IR_OP_OPTION_GET);
+    ir_instr_set_dest(option_get, "option_value", ir_type_parse(e->m, "i32"));
+    ir_instr_operand_value(option_get, val(e, "option[i32]"));
+    check("option.get yields the option element type",
+          accepts_as(e, option_get, "i32"));
+
+    ir_instr_t *option_get_bad = op(e, IR_OP_OPTION_GET);
+    ir_instr_set_dest(option_get_bad, "option_value_bad",
+                      ir_type_parse(e->m, "string"));
+    ir_instr_operand_value(option_get_bad, val(e, "option[i32]"));
+    check("option.get rejects a mismatched destination type",
+          apply(e, option_get_bad) == IR_RULE_REJECT);
+
+    ir_instr_t *tt = op(e, IR_OP_TYPE_TEST);
+    ir_instr_operand_value(tt, val(e, "i32 | string"));
+    ir_instr_operand_type(tt, ir_type_parse(e->m, "i32"));
+    check("type.test accepts a member type of a union",
+          accepts_as(e, tt, "bool"));
+
+    ir_instr_t *tn = op(e, IR_OP_TYPE_NARROW);
+    ir_instr_set_dest(tn, "narrowed", ir_type_parse(e->m, "i32"));
+    ir_instr_operand_value(tn, val(e, "i32 | string"));
+    ir_instr_operand_type(tn, ir_type_parse(e->m, "i32"));
+    check("type.narrow extracts the requested union member",
+          accepts_as(e, tn, "i32"));
+
+    ir_instr_t *tnbad = op(e, IR_OP_TYPE_NARROW);
+    ir_instr_set_dest(tnbad, "bad_narrow", ir_type_parse(e->m, "u64"));
+    ir_instr_operand_value(tnbad, val(e, "i32 | string"));
+    ir_instr_operand_type(tnbad, ir_type_parse(e->m, "u64"));
+    check("type.narrow rejects a type outside the source union",
+          apply(e, tnbad) == IR_RULE_REJECT);
+
     ir_instr_t *vp = op(e, IR_OP_VARIANT_PAYLOAD);
 
     ir_instr_set_dest(vp, "p", ir_type_parse(e->m, "i32"));
@@ -746,6 +816,27 @@ static void test_aggregates_and_variants(void)
     ir_instr_operand_value(agg, val(e, "u64"));
     check("and in that order they match",
           accepts_as(e, agg, "(x: i32, y: u64)"));
+
+    ir_instr_t *array = op(e, IR_OP_AGGREGATE);
+    ir_instr_set_dest(array, "array", ir_type_parse(e->m, "array[i32; 2]"));
+    ir_instr_operand_value(array, val(e, "i32"));
+    ir_instr_operand_value(array, val(e, "i32"));
+    check("an aggregate constructs a fixed-extent sequence",
+          accepts_as(e, array, "array[i32; 2]"));
+
+    ir_instr_t *array_bad_extent = op(e, IR_OP_AGGREGATE);
+    ir_instr_set_dest(array_bad_extent, "array_bad_extent",
+                      ir_type_parse(e->m, "array[i32; 2]"));
+    ir_instr_operand_value(array_bad_extent, val(e, "i32"));
+    check("a fixed-extent sequence aggregate checks its extent",
+          apply(e, array_bad_extent) == IR_RULE_REJECT);
+
+    ir_instr_t *array_bad_element = op(e, IR_OP_AGGREGATE);
+    ir_instr_set_dest(array_bad_element, "array_bad_element",
+                      ir_type_parse(e->m, "array[i32]"));
+    ir_instr_operand_value(array_bad_element, val(e, "u64"));
+    check("a sequence aggregate checks each element type",
+          apply(e, array_bad_element) == IR_RULE_REJECT);
 
     ir_type_define(e->m, ir_type_parse(e->m, "Pair"),
                    ir_type_parse(e->m, "(a: i32, b: u64)"));
@@ -949,6 +1040,28 @@ static void test_select_phi_call(void)
     ir_instr_operand_value(c, val(e, "i32"));
     ir_instr_operand_named(c, "x", val(e, "u64"));
     check("call yields the callee's return type", accepts_as(e, c, "i64"));
+
+    ir_value_t *fallible = ir_alloc(e->ctx, sizeof(ir_value_t));
+    fallible->kind = IR_VAL_FUNC;
+    fallible->name = "fallible";
+    fallible->type = ir_type_parse(e->m,
+                                   "(i32) -> i64 fail: string");
+    th_type *outcome_type = ir_call_outcome_type(e->m, fallible->type);
+    ir_instr_t *handled_call = op(e, IR_OP_CALL);
+    ir_instr_set_dest(handled_call, "fallible_outcome", outcome_type);
+    ir_instr_operand_value(handled_call, fallible);
+    ir_instr_operand_value(handled_call, val(e, "i32"));
+    ir_rule_result_t handled_result = ir_rule_apply(e->m, e->rs,
+                                                    handled_call, e->d);
+    check("fallible calls expose both channels through a tagged outcome",
+          outcome_type && handled_result.verdict == IR_RULE_ACCEPT
+              && ir_type_eq(e->m, handled_result.result, outcome_type));
+
+    ir_instr_t *discarded_call = op(e, IR_OP_CALL);
+    ir_instr_operand_value(discarded_call, fallible);
+    ir_instr_operand_value(discarded_call, val(e, "i32"));
+    check("a fallible call cannot discard its error channel",
+          apply(e, discarded_call) == IR_RULE_REJECT);
 
     ir_instr_t *few = op(e, IR_OP_CALL);
 
@@ -1190,7 +1303,20 @@ static void test_comptime_and_terminators(void)
     check("a void function may not return a value",
           apply(v, rvbad) == IR_RULE_REJECT);
 
+    env *failing = open_env(&ir_profile_bce, "i32");
+    failing->f->type = ir_type_parse(failing->m,
+                                     "() -> i32 fail: i32");
+    ir_instr_t *failure = op(failing, IR_OP_FAIL);
+    ir_instr_operand_value(failure, val(failing, "i32"));
+    check("fail accepts a value matching the function failure channel",
+          accepts_as(failing, failure, nullptr));
+    ir_instr_t *wrong_failure = op(failing, IR_OP_FAIL);
+    ir_instr_operand_value(wrong_failure, val(failing, "bool"));
+    check("fail rejects a value with the wrong failure type",
+          apply(failing, wrong_failure) == IR_RULE_REJECT);
+
     close_env(v);
+    close_env(failing);
     close_env(e);
 }
 

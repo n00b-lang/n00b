@@ -1152,14 +1152,16 @@ static void *r_function(parse_reduce_t *r)
         return nullptr;
     }
 
-    th_type *fn = th_func(c->th, ret, params.data, params.len,
-                          have_rest ? &rest : nullptr, kws.data, kws.len);
+    th_type *error = result ? result->error_type : nullptr;
+    th_type *fn = th_func_with_error(c->th, ret, error, params.data,
+                          params.len, have_rest ? &rest : nullptr,
+                          kws.data, kws.len);
 
     core_list_free(params);
     core_list_free(kws);
 
     tl_node *lowered    = node_type(c, fn);
-    lowered->error_type = result ? result->error_type : nullptr;
+    lowered->error_type = error;
     return lowered;
 }
 

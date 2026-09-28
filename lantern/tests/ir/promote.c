@@ -538,6 +538,37 @@ static void test_promote_handles_loops(void)
     done(n);
 }
 
+static void test_promote_handles_unreachable_predecessors(void)
+{
+    run_t *r = load(MOD("  func @f(%start: i32, %step: i32, %c: bool) -> i32 {\n"
+                        "    local $x: i32\n"
+                        "    block entry:\n"
+                        "      $x = copy %start\n"
+                        "      jump head\n"
+                        "    block head:\n"
+                        "      %cur: i32 = copy $x\n"
+                        "      branch %c, body, out\n"
+                        "    block body:\n"
+                        "      return %cur\n"
+                        "    block dead_latch:\n"
+                        "      %old: i32 = copy $x\n"
+                        "      %next: i32 = add wrap %old, %step\n"
+                        "      $x = copy %next\n"
+                        "      jump head\n"
+                        "    block out:\n"
+                        "      %result: i32 = copy $x\n"
+                        "      return %result\n  }\n"));
+
+    check("a loop with an unreachable predecessor promotes",
+          ir_promote(r->m, nullptr));
+    snap(r);
+    check("the promoted phi has an undef arm for the unreachable predecessor",
+          r->out && strstr(r->out, "[dead_latch: %x_0]"));
+    check("the result verifies as SSA",
+          r->m && (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
+    done(r);
+}
+
 static void test_passes_take_one_kind_of_state(void)
 {
     run_t *r = load(DIAMOND);
@@ -639,6 +670,7 @@ int main(void)
     test_split_edges();
     test_a_local_read_before_it_is_set();
     test_promote_handles_loops();
+    test_promote_handles_unreachable_predecessors();
     test_passes_take_one_kind_of_state();
     test_critical_edges_are_verified();
     test_verified_is_the_summary();

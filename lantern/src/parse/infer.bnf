@@ -36,7 +36,8 @@
 
 <fetch> ::= %"lookup" %"(" <child-ref> %")"
 
-<project> ::= <project-op> %"(" <child-ref> %")"
+<project> ::= <project-op> %"(" <infer-expr> %")"
+            | <project-op> %"(" <infer-expr> %"," %IDENTIFIER %")"
 
 <project-op> ::= %"return_of"
                | %"element_of"

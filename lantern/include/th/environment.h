@@ -9,9 +9,6 @@
 #include "lib/diagnostic.h"
 #include "th/typehash.h"
 
-#define TH_ENV_CONTRACT_SUCCESS "success"
-#define TH_ENV_CONTRACT_FAILURE "failure"
-
 typedef enum {
   TH_ENV_PRIVATE,
   TH_ENV_PACKAGE,
@@ -140,16 +137,15 @@ bool th_env_register_type(th_env *environment, const char *qualified_type_name,
 bool th_env_register_trait(th_env *environment, const char *qualified_name,
                            const char *module, const char *package,
                            th_env_visibility_t visibility, th_type *methods);
-/* `methods` and `errors` are records with the same method names. Their success
- * signatures and failure types are paired before generalization; use the
- * contract API when registering already-quantified channels that share type
- * variables. */
+/* `methods` and `errors` are records with the same method names. The error
+ * entries are attached to each function type before the methods are
+ * generalized together. */
 bool th_env_register_trait_channels(
     th_env *environment, const char *qualified_name, const char *module,
     const char *package, th_env_visibility_t visibility, th_type *methods,
     th_type *errors);
-/* The method map holds jointly quantified channel contracts, with each value
- * built by th_env_signature_contract(). */
+/* The method map holds jointly quantified function types, including their
+ * failure channels, with each value built by th_env_signature_contract(). */
 bool th_env_register_trait_contracts(
     th_env *environment, const char *qualified_name, const char *module,
     const char *package, th_env_visibility_t visibility,
@@ -177,11 +173,8 @@ bool th_env_register_function_contract(
     th_env_visibility_t visibility, th_type *contract);
 th_type *th_env_signature_contract(th_ctx *context, th_type *signature,
                                    th_type *error_type);
-/* A callable contract keeps the successful function signature and failure
- * type in one quantified universe. The legacy registration wrappers use nil
- * when the frontend has no separate failure type; frontends with another
- * error model may encode it in their return type or adapt it at this boundary.
- */
+/* A callable contract is a function type with an intrinsic failure channel.
+ * A nil failure type means that the callable has no failure exits. */
 bool th_env_signature_channels(th_ctx *context, th_type *contract,
                                th_type **signature, th_type **error_type);
 /* Metadata keys are producer-namespaced; each key has its own schema version.

@@ -126,6 +126,7 @@ struct th_type {
     } record;
     struct {
       th_type *ret;
+      th_type *error;
       th_param *params;
       size_t np;
       th_param *rest;

@@ -507,6 +507,12 @@ static bool ssa_operand(ir_visit_t *vi)
     ir_doms_t  *dom  = doms(v, b->owner);
     ir_block_t *from = od->kind == IR_OPD_PHI_ARM ? od->phi.block : b;
 
+    if (!ir_block_reachable(dom, b)
+        || (od->kind == IR_OPD_PHI_ARM
+            && !ir_block_reachable(dom, from))) {
+        return true;
+    }
+
     if (!ir_dominates(dom, val->def->block, from)) {
         broke(v, IR_DIAG_VERIFY_SSA, in, b, "ssa.dominance",
               "%%%s is used here but its definition in block %s does not "

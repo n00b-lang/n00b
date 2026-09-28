@@ -378,7 +378,9 @@ static bool enc_plan(th_enc *e, eframe *f)
         break;
 
     case TH_FUNCTION: {
-        uint8_t flags = (uint8_t)((t->fn.rest ? 1 : 0) | (t->fn.nkw ? 2 : 0));
+        uint8_t flags = (uint8_t)((t->fn.rest ? 1 : 0) |
+                                  (t->fn.nkw ? 2 : 0) |
+                                  (t->fn.error ? 4 : 0));
 
         s->child = t->fn.ret;
         u8(&s->pre, flags);
@@ -417,6 +419,9 @@ static bool enc_plan(th_enc *e, eframe *f)
 
         if (t->fn.nkw) {
             u64(&f->post, t->fn.nkw);
+        }
+        if (t->fn.error) {
+            step_add(&f->steps, t->fn.error);
         }
         break;
     }
@@ -764,7 +769,7 @@ static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
     }
 
     case TH_FUNCTION: {
-        size_t want = t->fn.np + t->fn.nkw + 2;
+        size_t want = t->fn.np + t->fn.nkw + 3;
 
         kids      = core_alloc_array(th_type *, want);
         kids[n++] = t->fn.ret;
@@ -788,6 +793,7 @@ static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
             }
             core_free(k);
         }
+        if (t->fn.error) kids[n++] = t->fn.error;
         break;
     }
 
@@ -1078,12 +1084,15 @@ void th_record_fill(th_ctx *ctx, th_type *stub, const th_member *m, size_t n)
     }
 }
 
-th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *p, size_t np,
-                 const th_param *rest, const th_kwparam *kw, size_t nkw)
+th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
+                            const th_param *p, size_t np,
+                            const th_param *rest, const th_kwparam *kw,
+                            size_t nkw)
 {
     th_type *t = node(ctx, TH_FUNCTION);
 
     t->fn.ret = ret;
+    t->fn.error = error;
     t->fn.np  = np;
 
     if (np) {
@@ -1109,6 +1118,12 @@ th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *p, size_t np,
     }
 
     return t;
+}
+
+th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *p, size_t np,
+                 const th_param *rest, const th_kwparam *kw, size_t nkw)
+{
+    return th_func_with_error(ctx, ret, nullptr, p, np, rest, kw, nkw);
 }
 
 th_type *th_binder(th_ctx *ctx, uint64_t arity, th_type *body)

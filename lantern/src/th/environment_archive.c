@@ -7,7 +7,7 @@
 
 core_list_decl(th_member);
 
-#define TH_ENV_ARCHIVE_SCHEMA UINT64_C(0x7468656e76617201)
+#define TH_ENV_ARCHIVE_SCHEMA UINT64_C(0x7468656e76617202)
 #define TH_ENV_ARCHIVE_ROOT_TYPE UINT64_C(0x7468656e762e726f)
 #define TH_TYPE_ARCHIVE_BASE UINT64_C(0x7468747970650000)
 
@@ -188,6 +188,7 @@ static bool save_type(core_object_writer_t *writer, const void *object,
     return true;
   case TH_FUNCTION:
     if (!write_type_ref(writer, type->fn.ret) ||
+        !write_type_ref(writer, type->fn.error) ||
         !write_count(writer, type->fn.np)) return false;
     for (size_t i = 0; i < type->fn.np; i++)
       if (!core_object_writer_u32(writer, type->fn.params[i].mode) ||
@@ -340,6 +341,7 @@ static bool restore_type(core_object_reader_t *reader, void *object,
     return true;
   case TH_FUNCTION:
     if (!read_type_ref(reader, &type->fn.ret) || !type->fn.ret ||
+        !read_type_ref(reader, &type->fn.error) ||
         !read_count(reader, &type->fn.np) ||
         type->fn.np > SIZE_MAX / sizeof(th_param)) return false;
     type->fn.params = read_array(reader, type->fn.np, sizeof(th_param),

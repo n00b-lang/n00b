@@ -120,6 +120,11 @@ parse_sym_entry_t *parse_symtab_lookup_scoped(parse_symtab_t *st, parse_scope_t 
 
 parse_sym_entry_t *parse_symtab_lookup_in(parse_scope_t *scope, core_string_t name);
 
+/* Resolve a single-name reference node in its attached lexical scope. */
+parse_sym_entry_t *parse_symtab_resolve_node(parse_symtab_t *st,
+                                             parse_tree_t *node,
+                                             core_string_t ns_name);
+
 void         parse_symtab_set_scope_node(parse_symtab_t *st, core_string_t ns_name,
                                        parse_tree_t *node);
 parse_scope_t *parse_symtab_scope_for_node(parse_symtab_t     *st,

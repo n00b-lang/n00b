@@ -1,4 +1,5 @@
 #include <math.h>
+#include <inttypes.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -570,6 +571,36 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
 {
     th_type *rc = record_of(m, t);
 
+    if (!rc && th_kind_of(th_resolve(t)) == TH_SEQUENCE) {
+        th_type *sequence = th_resolve(t);
+        th_type *element = th_seq_elem(sequence);
+        uint64_t extent = 0;
+        bool has_extent = th_seq_extent(sequence, &extent);
+
+        if (has_extent && extent != in->n_operands) {
+            complain(m, d, IR_DIAG_TYPE_ARGS, in, "these operands",
+                     "%s has extent %" PRIu64 " and %u values were given",
+                     typed(m, t), extent, in->n_operands);
+            return REJECT;
+        }
+
+        for (uint32_t i = 0; i < in->n_operands; i++) {
+            if (!element || !same(m, ir_type_intern(m, element),
+                                  opd_type(in, i))) {
+                blame(d,
+                      complain(m, d, IR_DIAG_TYPE_MISMATCH, in,
+                               "this sequence element",
+                               "element %u of %s is %s, and the value given "
+                               "is %s", i, typed(m, t), typed(m, element),
+                               typed(m, opd_type(in, i))),
+                      in, i, "the value is defined here");
+                return REJECT;
+            }
+        }
+
+        return ACCEPT(t);
+    }
+
     if (!rc) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this destination",
                  "aggregate builds a record, and %s is not one", typed(m, t));
@@ -730,6 +761,34 @@ static ir_rule_result_t rule_store(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
 
+    return ACCEPT(nullptr);
+}
+
+static ir_rule_result_t rule_global_store(ir_module_t *m, ir_instr_t *in,
+                                          ir_diags_t *d, void *state)
+{
+    (void)state;
+    if (in->n_operands < 2 || in->operands[0].kind != IR_OPD_VALUE
+        || !in->operands[0].value
+        || in->operands[0].value->kind != IR_VAL_GLOBAL)
+        return DECLINE;
+    ir_value_t *target = in->operands[0].value;
+    ir_global_t *global = ir_global_find(m, target->name);
+    th_type *value = opd_type(in, 1);
+    if (!global || !value) return DECLINE;
+    if (global->mutability == IR_MUT_CONST) {
+        complain(m, d, IR_DIAG_TYPE_ARGS, in, "this global",
+                 "a constant global cannot be assigned at runtime");
+        return REJECT;
+    }
+    if (!same(m, global->type, value)) {
+        blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
+                           "storing %s in global %s of type %s",
+                           typed(m, value), global->name,
+                           typed(m, global->type)),
+              in, 1, "the value is defined here");
+        return REJECT;
+    }
     return ACCEPT(nullptr);
 }
 
@@ -1193,6 +1252,116 @@ static ir_rule_result_t rule_variant_payload(ir_module_t *m, ir_instr_t *in,
     return ACCEPT(t);
 }
 
+static bool is_option_type(th_type *type, th_type **element)
+{
+    const char *name = nullptr;
+    size_t nargs = 0;
+    bool is_variant = true;
+    if (!type || !th_named_info(type, &name, nullptr, &is_variant, &nargs)
+        || is_variant || nargs != 1 || !name || strcmp(name, "option"))
+        return false;
+    const th_arg *arg = th_named_arg(type, 0);
+    if (!arg || arg->kind != TH_ARG_TYPE || !arg->type) return false;
+    if (element) *element = arg->type;
+    return true;
+}
+
+static ir_rule_result_t rule_option_is_nil(ir_module_t *m, ir_instr_t *in,
+                                           ir_diags_t *d, void *state)
+{
+    (void)state;
+    if (!is_option_type(opd_type(in, 0), nullptr)) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
+                 "option.is_nil requires an option value, and this one is %s",
+                 typed(m, opd_type(in, 0)));
+        return REJECT;
+    }
+    return ACCEPT(ir_profile_scalar(m, IR_CLASS_BOOL, 1));
+}
+
+static ir_rule_result_t rule_option_get(ir_module_t *m, ir_instr_t *in,
+                                        ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *element = nullptr;
+    if (!is_option_type(opd_type(in, 0), &element)) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
+                 "option.get requires an option value, and this one is %s",
+                 typed(m, opd_type(in, 0)));
+        return REJECT;
+    }
+    return ACCEPT(element);
+}
+
+static bool type_test_source(ir_module_t *m, th_type *source,
+                             th_type *target)
+{
+    if (!source || !target) return false;
+    if (ir_type_eq(m, source, target)) return true;
+    th_comb target_comb;
+    if (th_sum_comb(target, &target_comb) && target_comb == TH_UNION) {
+        for (size_t i = 0; i < th_sum_len(target); i++)
+            if (!type_test_source(m, source, th_sum_arm(target, i)))
+                return false;
+        return true;
+    }
+    th_comb comb;
+    if (th_sum_comb(source, &comb) && comb == TH_UNION) {
+        for (size_t i = 0; i < th_sum_len(source); i++)
+            if (ir_type_eq(m, th_sum_arm(source, i), target)) return true;
+        return false;
+    }
+    const char *name = nullptr;
+    size_t length = 0;
+    return th_named_info(source, &name, &length, nullptr, nullptr)
+        && length == 3 && !memcmp(name, "any", 3);
+}
+
+static ir_rule_result_t rule_type_test(ir_module_t *m, ir_instr_t *in,
+                                       ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *source = opd_type(in, 0);
+    th_type *target = opd_type(in, 1);
+    if (!source || !target) return DECLINE;
+    if (!type_test_source(m, source, target)) {
+        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this type test",
+                 "%s cannot contain a value of %s", typed(m, source),
+                 typed(m, target));
+        return REJECT;
+    }
+    th_type *boolean = ir_profile_scalar(m, IR_CLASS_BOOL, 0);
+    if (!boolean) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "here",
+                 "type.test yields bool, which profile %s does not define",
+                 m->profile->name);
+        return REJECT;
+    }
+    return ACCEPT(boolean);
+}
+
+static ir_rule_result_t rule_type_narrow(ir_module_t *m, ir_instr_t *in,
+                                         ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *source = opd_type(in, 0);
+    th_type *target = opd_type(in, 1);
+    if (!source || !target) return DECLINE;
+    if (!type_test_source(m, source, target)) {
+        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this narrowing",
+                 "%s cannot be narrowed to %s", typed(m, source),
+                 typed(m, target));
+        return REJECT;
+    }
+    if (!ir_type_eq(m, declared(in), target)) {
+        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this destination",
+                 "type.narrow targets %s, and its destination is %s",
+                 typed(m, target), typed(m, declared(in)));
+        return REJECT;
+    }
+    return ACCEPT(target);
+}
+
 static ir_rule_result_t rule_cast(ir_module_t *m, ir_instr_t *in,
                                   ir_diags_t *d, void *state)
 {
@@ -1330,6 +1499,18 @@ static bool arg_matches(ir_module_t *m, th_mode mode, th_type *want,
     return to && same(m, ir_type_intern(m, want), ir_type_intern(m, to));
 }
 
+static bool call_arg_matches(ir_module_t *m, th_mode mode, th_type *want,
+                             th_type *got)
+{
+    if (!want || !got) return false;
+    if (mode != TH_IN) {
+        got = th_ind_referent(got);
+        if (!got) return false;
+    }
+    return same(m, ir_type_intern(m, want), ir_type_intern(m, got))
+        || th_unify(ir_ctx_types(m->ctx), want, got) != nullptr;
+}
+
 static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
                                   ir_diags_t *d, void *state)
 {
@@ -1353,6 +1534,18 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
 
+    th_type *outcome_type = ir_call_outcome_type(m, callee);
+    if (!outcome_type) return DECLINE;
+    th_type *failure = th_func_error(callee);
+    bool has_failure = failure
+        && ir_machine_of(m, failure).class != IR_CLASS_VOID;
+    if (has_failure && !same(m, declared(in), outcome_type)) {
+        complain(m, d, IR_DIAG_VERIFY_TYPED, in, "this call",
+                 "a call with an error channel must produce its tagged outcome type %s",
+                 typed(m, outcome_type));
+        return REJECT;
+    }
+
     size_t          np    = th_func_nparams(callee);
     size_t          given = 0;
     const th_param *rest  = th_func_rest(callee);
@@ -1362,8 +1555,8 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
         if (in->operands[i].kind == IR_OPD_SPREAD) {
             ir_value_t *spread = in->operands[i].value;
             if (!rest || !spread || !spread->is_rest || given < np ||
-                spread_seen || !arg_matches(m, rest->mode, rest->type,
-                                            opd_type(in, i))) {
+                spread_seen || !call_arg_matches(m, rest->mode, rest->type,
+                                                 opd_type(in, i))) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in, "this spread argument",
                          "a spread argument must match the callee's rest "
                          "parameter and follow all fixed positional arguments");
@@ -1400,7 +1593,7 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
                 return REJECT;
             }
 
-            if (!arg_matches(m, k->mode, k->type, opd_type(in, i))) {
+            if (!call_arg_matches(m, k->mode, k->type, opd_type(in, i))) {
                 blame(d,
                       complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
                                k->mode == TH_IN
@@ -1427,7 +1620,7 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
 
         const th_param *p = given < np ? th_func_param(callee, given) : rest;
 
-        if (p && !arg_matches(m, p->mode, p->type, opd_type(in, i))) {
+        if (p && !call_arg_matches(m, p->mode, p->type, opd_type(in, i))) {
             blame(d,
                   complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
                            p->mode != TH_IN
@@ -1462,9 +1655,7 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
 
-    th_type *ret = th_func_ret(callee);
-
-    return ACCEPT(ret ? ir_type_intern(m, ret) : nullptr);
+    return ACCEPT(outcome_type);
 }
 
 static ir_rule_result_t rule_size_like(ir_module_t *m, ir_instr_t *in,
@@ -1739,6 +1930,29 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
     return ACCEPT(nullptr);
 }
 
+static ir_rule_result_t rule_fail(ir_module_t *m, ir_instr_t *in,
+                                  ir_diags_t *d, void *state)
+{
+    (void)state;
+    ir_func_t *function = in->block ? in->block->owner : nullptr;
+    th_type *error = function ? th_func_error(function->type) : nullptr;
+    if (!error || ir_machine_of(m, error).class == IR_CLASS_VOID) {
+        complain(m, d, IR_DIAG_VERIFY_TYPED, in, "this failure exit",
+                 "%s has no non-void failure channel",
+                 function ? function->name : "this function");
+        return REJECT;
+    }
+    if (in->n_operands != 1
+        || !same(m, ir_type_intern(m, error), opd_type(in, 0))) {
+        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this failure value",
+                 "%s fails with %s, but this value is %s",
+                 function->name, typed(m, ir_type_intern(m, error)),
+                 in->n_operands ? typed(m, opd_type(in, 0)) : "no value");
+        return REJECT;
+    }
+    return ACCEPT(nullptr);
+}
+
 static ir_rule_result_t rule_none(ir_module_t *m, ir_instr_t *in,
                                   ir_diags_t *d, void *state)
 {
@@ -1764,6 +1978,7 @@ static const entry DEFAULTS[] = {
     {IR_OP_ALLOCA, "ir.alloca", rule_alloca},
     {IR_OP_LOAD, "ir.load", rule_load},
     {IR_OP_STORE, "ir.store", rule_store},
+    {IR_OP_GLOBAL_STORE, "ir.global.store", rule_global_store},
     {IR_OP_FIELD, "ir.field", rule_field},
     {IR_OP_INDEX, "ir.index", rule_index},
     {IR_OP_OFFSET, "ir.offset", rule_offset},
@@ -1777,6 +1992,10 @@ static const entry DEFAULTS[] = {
     {IR_OP_VARIANT_MAKE, "ir.variant.make", rule_variant_make},
     {IR_OP_VARIANT_TAG, "ir.variant.tag", rule_variant_tag},
     {IR_OP_VARIANT_PAYLOAD, "ir.variant.payload", rule_variant_payload},
+    {IR_OP_OPTION_IS_NIL, "ir.option.is_nil", rule_option_is_nil},
+    {IR_OP_OPTION_GET, "ir.option.get", rule_option_get},
+    {IR_OP_TYPE_TEST, "ir.type.test", rule_type_test},
+    {IR_OP_TYPE_NARROW, "ir.type.narrow", rule_type_narrow},
     {IR_OP_ADD, "ir.add", rule_arith},
     {IR_OP_SUB, "ir.sub", rule_arith},
     {IR_OP_MUL, "ir.mul", rule_arith},
@@ -1817,6 +2036,7 @@ static const entry DEFAULTS[] = {
     {IR_OP_BRANCH, "ir.branch", rule_branch},
     {IR_OP_SWITCH, "ir.switch", rule_switch},
     {IR_OP_RETURN, "ir.return", rule_return},
+    {IR_OP_FAIL, "ir.fail", rule_fail},
     {IR_OP_UNREACHABLE, "ir.unreachable", rule_none},
 };
 

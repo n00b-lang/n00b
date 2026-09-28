@@ -552,10 +552,8 @@ text_is(core_string_t text, const char *want)
 }
 
 static th_type *
-project(ictx *c, parse_infer_proj_t op, int32_t ix)
+project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
 {
-    th_type *t = type_of(c, ix);
-
     if (!t) {
         return fresh(c);
     }
@@ -619,25 +617,13 @@ project(ictx *c, parse_infer_proj_t op, int32_t ix)
     }
 
     case PARSE_INFER_UNWRAP_RESULT: {
-        if (named_is(t, "result") || named_is(t, "option")) {
-            th_type *inner = named_arg_first(t);
-
-            if (inner) {
-                return inner;
-            }
-        }
-
-        th_type *inner = fresh(c);
-        th_arg   a     = {.kind = TH_ARG_TYPE, .type = inner};
-
-        th_type *result = th_unify_in_place(c->tc, t,
-                                            th_apply(c->tc, "result", &a, 1));
-
-        return result ? named_arg_first(result) : nullptr;
+        return t;
     }
 
     case PARSE_INFER_METHOD_RETURN: {
-        core_string_t name = last_text(c->v->node);
+        core_string_t name = explicit_name.data
+                               ? explicit_name
+                               : last_text(c->v->node);
 
         if (!name.data) {
             return fresh(c);
@@ -887,8 +873,10 @@ eval(ictx *c, const parse_infer_expr_t *e)
         return t ? t : fresh(c);
     }
 
-    case PARSE_INFER_PROJECT:
-        return project(c, e->proj, e->index);
+    case PARSE_INFER_PROJECT: {
+        th_type *input = e->lhs ? eval(c, e->lhs) : type_of(c, e->index);
+        return project(c, e->proj, input, e->name);
+    }
 
     case PARSE_INFER_COMPARE: {
         th_type *left = eval(c, e->lhs);

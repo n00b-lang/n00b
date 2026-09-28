@@ -23,10 +23,25 @@ count_lower_visit(ir_lower_context_t *context, parse_visit_t *visit,
     if (!visit->annot || visit->annot->kind != PARSE_ANNOT_SCOPE_OPEN
         || !core_string_eq(visit->annot->scope_tag,
                            CORE_STRING_STATIC("sum")))
-        return false;
+        return true;
     if (entering) counts->enters++;
     else counts->exits++;
     return true;
+}
+
+static bool
+publish_child_value(ir_lower_context_t *context, parse_visit_t *visit,
+                    bool entering, void *state)
+{
+    (void)state;
+    if (!visit->annot || visit->annot->kind != PARSE_ANNOT_SCOPE_OPEN
+        || !core_string_eq(visit->annot->scope_tag,
+                           CORE_STRING_STATIC("publish")) || entering)
+        return true;
+    parse_tree_t *child = core_tree_num_children(visit->node)
+        ? core_tree_child(visit->node, 0) : nullptr;
+    ir_value_t *value = ir_lower_node_value(context, child);
+    return value && ir_lower_set_node_value(context, visit->node, value);
 }
 
 static ir_lower_result_t
@@ -42,6 +57,21 @@ lower_identity(ir_lower_context_t *context, parse_visit_t *visit,
     return operand_count
         ? (ir_lower_result_t){IR_LOWER_VALUE, operands[0]}
         : (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+}
+
+static ir_lower_result_t
+lower_terminate(ir_lower_context_t *context, parse_visit_t *visit,
+                ir_value_t *const *operands, size_t operand_count,
+                th_type *result_type, ir_span_t span, void *state)
+{
+    (void)visit;
+    (void)operands;
+    (void)result_type;
+    (void)state;
+    if (operand_count) return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    return ir_lower_emit_terminator(context, IR_OP_UNREACHABLE, span)
+        ? (ir_lower_result_t){.status = IR_LOWER_TERMINATED}
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
 }
 
 static parse_tree_t *
@@ -107,16 +137,21 @@ main(void)
 
     static const char *const grammar_text
         = "@tokenizer(\"toy\")\n"
-          "<sum> @scope(\"sum\") @emit(\"add\", $0, $2) ::= <left> \"+\" <right>\n"
+          "<sum> @scope(\"sum\") @emit(\"add\", $left, $right) ::= <left> \"+\" <right>\n"
           "<left> @emit(\"reference\") ::= \"a\"\n"
           "<right> @emit(\"reference\") ::= \"b\"\n"
           "<literal> @literal(\"int\") @emit(\"literal\") ::= \"7\"\n"
           "<set> @assigns($0, $2) ::= <target> \"=\" <literal>\n"
+          "<owner_set> @assigns($0, $2) ::= \"x\" \"=\" <literal>\n"
           "<target> @emit(\"reference\") ::= \"x\"\n"
+          "<indexed_set> @assigns($0, $2) ::= <indexed_target> \"=\" <literal>\n"
+          "<indexed_target> ::= <base> \"[\" <literal> \"]\"\n"
+          "<base> @emit(\"reference\") ::= \"x\"\n"
           "<call> @emit(\"call\", $0, $2) ::= <callee> \"(\" <argument> \")\"\n"
           "<callee> @emit(\"reference\") ::= \"f\"\n"
           "<argument> @emit(\"reference\") ::= \"a\"\n"
-          "<ret> @emit(\"return\", $1) ::= \"r\" <literal>\n";
+          "<ret> @emit(\"return\", $1) ::= \"r\" <literal>\n"
+          "<publish> @scope(\"publish\") ::= <left>\n";
     parse_grammar_t *grammar = parse_grammar_new();
     bool grammar_loaded = parse_bnf_load(
         core_string_from_cstr(grammar_text), CORE_STRING_STATIC("sum"),
@@ -144,6 +179,12 @@ main(void)
         .kind = PARSE_SYM_FUNCTION,
         .type = callee_signature,
     };
+    ir_global_t *global = ir_global_add(module, "global", i32);
+    parse_sym_entry_t global_symbol = {
+        .name = CORE_STRING_STATIC("global"), .type = i32,
+    };
+    ir_value_t *global_value = global
+        ? ir_global_address(module, global) : nullptr;
     parse_tree_t *left_node = find_nonterminal(grammar, tree, "left");
     parse_tree_t *right_node = find_nonterminal(grammar, tree, "right");
     if (left_node) core_tree_node_value(left_node).sym = &left_symbol;
@@ -153,9 +194,19 @@ main(void)
           ir_lower_bind_value(&lower, &left_symbol, left)
               && ir_lower_bind_value(&lower, &right_symbol, right)
               && ir_lower_bind_value(&lower, &callee_symbol, callee_value)
+              && ir_lower_bind_value(&lower, &global_symbol, global_value)
               && ir_lower_bind_local(&lower, &local_symbol, local)
+              && ir_lower_bound_local(&lower, &local_symbol) == local
               && ir_lowerer_register_visit(lowerer,
-                  PARSE_ANNOT_SCOPE_OPEN, count_lower_visit, &visit_counts));
+                  PARSE_ANNOT_SCOPE_OPEN, count_lower_visit, &visit_counts)
+              && ir_lowerer_register_visit(lowerer,
+                  PARSE_ANNOT_SCOPE_OPEN, publish_child_value, nullptr));
+    void *binding_checkpoint = ir_lower_bindings_checkpoint(&lower);
+    check("a scoped binding can refine a symbol while retaining its local",
+          ir_lower_bind_scoped_value(&lower, &left_symbol, right, local)
+              && ir_lower_bound_local(&lower, &left_symbol) == local
+              && ir_lower_bindings_restore(&lower, binding_checkpoint)
+              && ir_lower_bound_local(&lower, &left_symbol) == nullptr);
     if (tree) core_tree_node_value(tree).type = i32;
     ir_lower_result_t tree_sum = tree
         ? ir_lower_tree(lowerer, &lower, grammar, tree)
@@ -171,6 +222,24 @@ main(void)
               && tree_sum.value->def->span.end_byte == 3);
     check("lowering hooks run on scope entry and exit",
           visit_counts.enters == 1 && visit_counts.exits == 1);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+
+    parser = parse_pwz_new_for_start(grammar, parse_nonterm_id(
+        parse_find_nonterm(grammar, CORE_STRING_STATIC("publish"))));
+    tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("a"));
+    parsed = parser && parse_pwz_parse(parser, tokens);
+    tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
+    left_node = find_nonterminal(grammar, tree, "left");
+    if (left_node) {
+        core_tree_node_value(left_node).sym = &left_symbol;
+        core_tree_node_value(left_node).type = i32;
+    }
+    ir_lower_result_t published = tree
+        ? ir_lower_tree(lowerer, &lower, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    check("a callback can publish a synthesized node value",
+          published.status == IR_LOWER_VALUE && published.value == left);
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
 
@@ -224,11 +293,32 @@ main(void)
     if (target_node) core_tree_node_value(target_node).sym = &local_symbol;
     parse_tree_t *assigned_literal = find_nonterminal(grammar, tree, "literal");
     if (assigned_literal) core_tree_node_value(assigned_literal).type = i32;
+    size_t assignment_start = block->n_instrs;
     ir_lower_result_t assigned = tree
         ? ir_lower_tree(lowerer, &lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
     check("assign annotations lower through Lantern local destinations",
           assigned.status == IR_LOWER_NO_VALUE
+              && block->n_instrs == assignment_start + 2
+              && block->instrs[assignment_start]->op == IR_OP_CONST
+              && block->instrs[block->n_instrs - 1]->dest_local == local);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+
+    parser = parse_pwz_new_for_start(grammar, parse_nonterm_id(
+        parse_find_nonterm(grammar, CORE_STRING_STATIC("owner_set"))));
+    tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("x=7"));
+    parsed = parser && parse_pwz_parse(parser, tokens);
+    tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
+    if (tree) core_tree_node_value(tree).sym = &local_symbol;
+    assigned_literal = find_nonterminal(grammar, tree, "literal");
+    if (assigned_literal) core_tree_node_value(assigned_literal).type = i32;
+    assignment_start = block->n_instrs;
+    assigned = tree ? ir_lower_tree(lowerer, &lower, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    check("assign annotations use their owner's declared symbol for leaf targets",
+          assigned.status == IR_LOWER_NO_VALUE
+              && block->n_instrs == assignment_start + 2
               && block->instrs[block->n_instrs - 1]->dest_local == local);
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
@@ -261,12 +351,12 @@ main(void)
               && ir_block_terminator(return_block)->op == IR_OP_RETURN);
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
-    parse_grammar_free(grammar);
-
     check("a custom lowering action registers once",
           ir_lowerer_register(lowerer, "identity", lower_identity, nullptr)
               && !ir_lowerer_register(lowerer, "identity", lower_identity,
                                       nullptr));
+    check("a custom terminator action registers",
+          ir_lowerer_register(lowerer, "terminate", lower_terminate, nullptr));
 
     parse_annotation_t *identity = emit_annotation("identity", 1);
     ir_lower_result_t custom = ir_lower_emit(lowerer, &lower, identity, nullptr,
@@ -302,6 +392,31 @@ main(void)
               && ir_block_terminator(block)->op == IR_OP_RETURN);
     parse_annot_free(ret);
 
+    ir_func_t *callback_function = ir_func_add(
+        module, "callback_terminator", ir_type_parse(module, "() -> nil"),
+        IR_LINK_EXTERNAL);
+    ir_block_t *callback_block = callback_function
+        ? ir_block_add(callback_function, "entry") : nullptr;
+    ir_lower_context_t callback_context = {
+        .module = module,
+        .function = callback_function,
+        .block = callback_block,
+        .diagnostics = diagnostics,
+        .file_id = file_id,
+        .reachable = true,
+    };
+    parse_annotation_t *terminate = emit_annotation("terminate", 0);
+    ir_lower_result_t callback_terminated = ir_lower_emit(
+        lowerer, &callback_context, terminate, nullptr, nullptr, 0, nullptr,
+        IR_SPAN_UNKNOWN);
+    check("a callback-emitted terminator updates IR reachability",
+          callback_terminated.status == IR_LOWER_TERMINATED
+              && !callback_context.reachable && callback_block
+              && ir_block_terminator(callback_block)
+              && ir_block_terminator(callback_block)->op
+                  == IR_OP_UNREACHABLE);
+    parse_annot_free(terminate);
+
     lower.reachable = true;
     parse_annotation_t *unknown = emit_annotation("not_a_real_op", 0);
     ir_lower_result_t failed = ir_lower_emit(lowerer, &lower, unknown, nullptr,
@@ -320,7 +435,52 @@ main(void)
               && (ir_module_props(module) & IR_PROP_STRUCTURED));
     ir_pdg_t *pdg = ir_pdg_of(function);
     check("Lantern builds a dependence graph from the lowered instructions",
-          pdg && ir_pdg_node_count(pdg) == 8);
+          pdg && ir_pdg_node_count(pdg) == 9);
+
+    parser = parse_pwz_new_for_start(grammar, parse_nonterm_id(
+        parse_find_nonterm(grammar, CORE_STRING_STATIC("indexed_set"))));
+    tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("x[7]=7"));
+    parsed = parser && parse_pwz_parse(parser, tokens);
+    tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
+    parse_tree_t *base_node = find_nonterminal(grammar, tree, "base");
+    if (base_node) core_tree_node_value(base_node).sym = &local_symbol;
+    assigned = tree ? ir_lower_tree(lowerer, &lower, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    check("unsupported compound lvalues are rejected",
+          assigned.status == IR_LOWER_FAILED);
+    check("compound lvalue rejection emits one diagnostic",
+          ir_diags_count(diagnostics) == 3);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+    parse_grammar_free(grammar);
+
+    static const char *const invalid_emit_grammar
+        = "<sum> @emit(\"add\", $4) ::= <left> \"+\" <right>\n"
+          "<left> @emit(\"reference\") ::= \"a\"\n"
+          "<right> @emit(\"reference\") ::= \"b\"\n";
+    grammar = parse_grammar_new();
+    bool invalid_grammar_loaded = parse_bnf_load(
+        core_string_from_cstr(invalid_emit_grammar),
+        CORE_STRING_STATIC("sum"), grammar);
+    parser = invalid_grammar_loaded ? parse_pwz_new_for_start(
+        grammar, parse_nonterm_id(parse_find_nonterm(
+            grammar, CORE_STRING_STATIC("sum")))) : nullptr;
+    tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("a+b"));
+    parsed = parser && parse_pwz_parse(parser, tokens);
+    tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
+    size_t instruction_count_before = block->n_instrs;
+    size_t diagnostic_count_before = ir_diags_count(diagnostics);
+    ir_lower_result_t invalid_emit = tree
+        ? ir_lower_tree(lowerer, &lower, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    check("lowering preflights exact-rule child references",
+          invalid_emit.status == IR_LOWER_FAILED
+              && ir_diags_count(diagnostics) == diagnostic_count_before + 1);
+    check("invalid emit metadata fails before emitting IR",
+          block->n_instrs == instruction_count_before);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+    parse_grammar_free(grammar);
 
     ir_ctx_free(ctx);
     return report("IR lowering");

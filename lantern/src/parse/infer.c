@@ -415,7 +415,6 @@ r_project(parse_reduce_t *r)
 {
     parse_infer_expr_t *e   = expr_new(PARSE_INFER_PROJECT);
     in_node          *op  = kid(r, 0);
-    parse_infer_expr_t *ref = kid_expr(r, 2);
     int64_t           tid = op && op->tag == IN_OP ? op->tid : 0;
 
     if (tid == tid_return_of) {
@@ -437,13 +436,15 @@ r_project(parse_reduce_t *r)
         fail(r);
     }
 
-    e->index = ref ? ref->index : -1;
-
-    if (ref) {
-        core_free(ref);
+    e->lhs = kid_expr(r, 2);
+    if (r->n_kids == 6) {
+        e->name = dup_text(kid_text(r, 4));
+        if (e->proj != PARSE_INFER_METHOD_RETURN || !e->lhs
+            || !e->name.data) {
+            fail(r);
+        }
     }
-
-    if (e->index < 0) {
+    else if (!e->lhs) {
         fail(r);
     }
 
@@ -738,8 +739,12 @@ print_one(sbuf *b, const parse_infer_expr_t *e)
 
     case PARSE_INFER_PROJECT:
         emit(b, parse_infer_proj_name(e->proj));
-        emit(b, "($");
-        emit_int(b, e->index);
+        emit(b, "(");
+        print_one(b, e->lhs);
+        if (e->name.data) {
+            emit(b, ", ");
+            core_buffer_append(b, e->name.data, e->name.u8_bytes);
+        }
         emit(b, ")");
         break;
 

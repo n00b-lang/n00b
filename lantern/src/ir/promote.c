@@ -224,6 +224,12 @@ static bool promote_func(P *p, ir_func_t *f)
                 warn[l] = true;
             }
         }
+        ir_block_t *join = ir_rd_phi_block(r, q);
+        uint32_t local = ir_rd_phi_local(r, q)->index;
+        for (uint32_t i = 0; i < ir_pred_count(p->dom, join); i++) {
+            ir_block_t *pred = ir_pred_at(p->dom, join, i);
+            if (!ir_block_reachable(p->dom, pred)) want[local] = true;
+        }
     }
 
     uint32_t at = 0;
@@ -262,6 +268,10 @@ static bool promote_func(P *p, ir_func_t *f)
     number_t nw = {.p = p, .r = r, .val = val, .phi = phi};
 
     ir_dom_walk(p->dom, ir_block_entry(f), number_block, nullptr, &nw);
+    for (uint32_t i = 0; i < f->n_blocks; i++) {
+        ir_block_t *block = f->blocks[i];
+        if (!ir_block_reachable(p->dom, block)) number_block(block, &nw);
+    }
 
     for (uint32_t i = 0; i < n_use; i++) {
         ir_value_t *v = use[i].tok == NO_TOK || !use[i].tok
@@ -278,21 +288,28 @@ static bool promote_func(P *p, ir_func_t *f)
 
     for (uint32_t q = 0; q < np; q++) {
         ir_local_t *l = ir_rd_phi_local(r, q);
-
-        if (ir_rd_arm_count(r, q)
-            != ir_pred_count(p->dom, ir_rd_phi_block(r, q))) {
-            p->ok = false;
-        }
+        ir_instr_t *instruction = phi[q];
 
         for (uint32_t i = 0; i < ir_rd_arm_count(r, q); i++) {
             uint32_t    tok = ir_rd_arm_tok(r, q, i);
             ir_value_t *v   = tok ? val[tok] : und[l->index];
 
-            if (!v || !ir_instr_operand_phi_arm(phi[q], ir_rd_arm_block(r, q, i),
+            if (!v || !ir_instr_operand_phi_arm(instruction,
+                                                ir_rd_arm_block(r, q, i),
                                              v)) {
                 p->ok = false;
             }
         }
+        ir_block_t *join = ir_rd_phi_block(r, q);
+        for (uint32_t i = 0; i < ir_pred_count(p->dom, join); i++) {
+            ir_block_t *pred = ir_pred_at(p->dom, join, i);
+            if (ir_block_reachable(p->dom, pred)) continue;
+            ir_value_t *value = und[l->index];
+            if (!value || !ir_instr_operand_phi_arm(instruction, pred, value))
+                p->ok = false;
+        }
+        if (instruction->n_operands != ir_pred_count(p->dom, join))
+            p->ok = false;
     }
     f->n_locals = 0;
 

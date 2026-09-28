@@ -184,6 +184,12 @@ void     th_record_fill(th_ctx *ctx, th_type *stub, const th_member *members,
                         size_t n);
 th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *params, size_t np,
                  const th_param *rest, const th_kwparam *kw, size_t nkw);
+/* The optional error type is a separate callable channel, not part of ret.
+ * Pass nullptr when the function type has no failure channel. */
+th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
+                            const th_param *params, size_t np,
+                            const th_param *rest, const th_kwparam *kw,
+                            size_t nkw);
 th_type *th_binder(th_ctx *ctx, uint64_t arity, th_type *body);
 th_type *th_bound(th_ctx *ctx, uint64_t distance, uint64_t position);
 th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n);
@@ -232,6 +238,7 @@ const th_member *th_record_member(const th_type *type, size_t i);
 th_type *th_record_lookup(const th_type *type, const char *name);
 
 th_type *th_func_ret(const th_type *type);
+th_type *th_func_error(const th_type *type);
 size_t   th_func_nparams(const th_type *type);
 const th_param *th_func_param(const th_type *type, size_t i);
 const th_param *th_func_rest(const th_type *type);

@@ -373,45 +373,11 @@ parse_rule_find_annot(parse_grammar_t *g, const parse_rule_t *rule,
 }
 
 parse_annotation_t *
-parse_nt_find_annot(parse_grammar_t       *g,
-                  const parse_nonterm_t *nt,
-                  parse_annot_kind_t     kind)
+parse_nt_find_direct_annot(const parse_nonterm_t *nt, parse_annot_kind_t kind)
 {
-    void *hit = nullptr;
-
-    if (g && nt) {
-        pthread_mutex_lock(&g->annot_cache_lock);
-        bool found = core_cache_get(&g->annot_cache, (void *)nt,
-                                    PARSE_QUERY_NT_ANNOT,
-                                    (uint64_t)kind, &hit);
-        pthread_mutex_unlock(&g->annot_cache_lock);
-        if (found) {
-            return (parse_annotation_t *)hit;
-        }
+    for (size_t i = 0; i < parse_nt_annot_count(nt); i++) {
+        parse_annotation_t *annotation = parse_nt_annot_at(nt, i);
+        if (annotation && annotation->kind == kind) return annotation;
     }
-
-    size_t              n   = parse_nt_annot_count(nt);
-    parse_annotation_t *out = nullptr;
-
-    for (size_t i = 0; i < n && !out; i++) {
-        parse_annotation_t *a = parse_nt_annot_at(nt, i);
-
-        if (a->kind == kind) {
-            out = a;
-        }
-    }
-
-    for (size_t i = 0; !out && g && nt && i < core_list_len(nt->rule_ids); i++) {
-        out = parse_rule_find_annot(g, parse_get_rule(g, nt->rule_ids.data[i]),
-                                  kind);
-    }
-
-    if (g && nt) {
-        pthread_mutex_lock(&g->annot_cache_lock);
-        core_cache_put(&g->annot_cache, (void *)nt, PARSE_QUERY_NT_ANNOT,
-                       (uint64_t)kind, out);
-        pthread_mutex_unlock(&g->annot_cache_lock);
-    }
-
-    return out;
+    return nullptr;
 }

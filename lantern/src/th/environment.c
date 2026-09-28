@@ -106,7 +106,9 @@ static bool pattern_equal(const th_type *a, const th_type *b,
   case TH_FUNCTION:
     if (a->fn.np != b->fn.np || a->fn.nkw != b->fn.nkw ||
         !!a->fn.rest != !!b->fn.rest ||
-        !pattern_equal(a->fn.ret, b->fn.ret, seen))
+        !!a->fn.error != !!b->fn.error ||
+        !pattern_equal(a->fn.ret, b->fn.ret, seen) ||
+        (a->fn.error && !pattern_equal(a->fn.error, b->fn.error, seen)))
       return false;
     for (size_t i = 0; i < a->fn.np; i++)
       if (a->fn.params[i].mode != b->fn.params[i].mode ||
@@ -214,7 +216,12 @@ static bool pattern_subsumes(const th_type *general, const th_type *specific,
     if (general->fn.np != specific->fn.np ||
         general->fn.nkw != specific->fn.nkw ||
         !!general->fn.rest != !!specific->fn.rest ||
+        !!general->fn.error != !!specific->fn.error ||
         !pattern_subsumes(general->fn.ret, specific->fn.ret, bindings, seen))
+      return false;
+    if (general->fn.error &&
+        !pattern_subsumes(general->fn.error, specific->fn.error, bindings,
+                          seen))
       return false;
     for (size_t i = 0; i < general->fn.np; i++)
       if (general->fn.params[i].mode != specific->fn.params[i].mode ||
@@ -510,12 +517,16 @@ th_type *th_env_signature_contract(th_ctx *ctx, th_type *signature,
     signature = th_instantiate(ctx, signature);
   if (th_kind_of(error_type) == TH_BINDER)
     error_type = th_instantiate(ctx, error_type);
-  if (!signature || !error_type) return nullptr;
-  th_member channels[] = {
-      {.name = TH_ENV_CONTRACT_SUCCESS, .type = signature},
-      {.name = TH_ENV_CONTRACT_FAILURE, .type = error_type},
-  };
-  return th_generalize(ctx, th_record(ctx, channels, 2));
+  if (!signature || th_kind_of(signature) != TH_FUNCTION || !error_type)
+    return nullptr;
+  if (signature->fn.error &&
+      !th_unify(ctx, signature->fn.error, error_type)) return nullptr;
+  th_type *failure = signature->fn.error ? signature->fn.error : error_type;
+  th_type *paired = th_func_with_error(
+      ctx, signature->fn.ret, failure, signature->fn.params,
+      signature->fn.np, signature->fn.rest, signature->fn.kw,
+      signature->fn.nkw);
+  return paired ? th_generalize(ctx, paired) : nullptr;
 }
 
 static bool signature_channels_raw(th_ctx *ctx, th_type *contract,
@@ -524,17 +535,13 @@ static bool signature_channels_raw(th_ctx *ctx, th_type *contract,
   if (signature) *signature = nullptr;
   if (error_type) *error_type = nullptr;
   if (!contract) return false;
-  if (th_kind_of(contract) != TH_RECORD) return false;
-  th_type *success = th_record_lookup(contract, TH_ENV_CONTRACT_SUCCESS);
-  th_type *failure = th_record_lookup(contract, TH_ENV_CONTRACT_FAILURE);
-  if (!success || !failure) return false;
-  if (th_kind_of(success) == TH_BINDER)
-    success = th_instantiate(ctx, success);
-  if (th_kind_of(failure) == TH_BINDER)
-    failure = th_instantiate(ctx, failure);
-  if (!success || th_kind_of(success) != TH_FUNCTION) return false;
-  if (signature) *signature = success;
-  if (error_type) *error_type = failure;
+  if (th_kind_of(contract) == TH_BINDER)
+    contract = th_instantiate(ctx, contract);
+  if (!contract || th_kind_of(contract) != TH_FUNCTION) return false;
+  if (signature) *signature = contract;
+  if (error_type)
+    *error_type = contract->fn.error ? contract->fn.error
+                                     : th_name(ctx, "nil");
   return true;
 }
 

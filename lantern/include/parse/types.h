@@ -22,7 +22,6 @@ typedef struct parse_sym_entry_t    parse_sym_entry_t;
 #define PARSE_IX_START_OF_PROGRAM (-1)
 
 typedef enum {
-    PARSE_QUERY_NT_ANNOT,
     PARSE_QUERY_RULE_ANNOT,
     PARSE_QUERY_GRAMMAR_ANNOT,
     PARSE_QUERY_CHILD_BY_NT_NAME,

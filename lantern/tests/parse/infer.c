@@ -166,7 +166,9 @@ test_shapes(void)
     if (e) {
         check("a projection keeps its operator and its child",
               e->kind == PARSE_INFER_PROJECT
-                  && e->proj == PARSE_INFER_UNWRAP_RESULT && e->index == 2);
+                  && e->proj == PARSE_INFER_UNWRAP_RESULT && e->lhs
+                  && e->lhs->kind == PARSE_INFER_CHILD
+                  && e->lhs->index == 2);
         parse_infer_free(e);
     }
     else {

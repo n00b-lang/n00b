@@ -943,7 +943,7 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
     }
 
     case TH_FUNCTION: {
-        kids      = core_alloc_array(th_type *, t->fn.np + t->fn.nkw + 2);
+        kids      = core_alloc_array(th_type *, t->fn.np + t->fn.nkw + 3);
         kids[n++] = t->fn.ret;
 
         for (size_t i = 0; i < t->fn.np; i++) {
@@ -965,6 +965,7 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
             }
             core_free(k);
         }
+        if (t->fn.error) kids[n++] = t->fn.error;
         break;
     }
 
@@ -1112,6 +1113,7 @@ bool th_occurs(th_ctx *ctx, th_type *var, th_type *t)
 
         case TH_FUNCTION:
             core_list_push(work, cur->fn.ret);
+            if (cur->fn.error) core_list_push(work, cur->fn.error);
 
             for (size_t i = 0; i < cur->fn.np; i++) {
                 core_list_push(work, cur->fn.params[i].type);
@@ -1217,6 +1219,7 @@ static void plan_kids(th_ctx *ctx, th_type *out, const th_type *t,
 
     case TH_FUNCTION:
         rpush(w, &out->fn.ret, t->fn.ret, depth);
+        if (t->fn.error) rpush(w, &out->fn.error, t->fn.error, depth);
 
         if (t->fn.np) {
             out->fn.params = th_alloc(ctx, t->fn.np * sizeof(th_param));
@@ -1463,7 +1466,7 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
                      core_list_t(tpair) *w)
 {
     if (!a->fn.rest != !b->fn.rest || a->fn.np != b->fn.np
-        || a->fn.nkw != b->fn.nkw) {
+        || a->fn.nkw != b->fn.nkw || !a->fn.error != !b->fn.error) {
         th_err(ctx, TH_ERR_ARITY_MISMATCH, nullptr, b, a,
                "the two signatures differ in arity");
 
@@ -1525,6 +1528,7 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
     }
 
     upush(w, a->fn.ret, b->fn.ret);
+    if (a->fn.error) upush(w, a->fn.error, b->fn.error);
 
     return true;
 }

@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "private/ir/internal.h"
@@ -471,6 +472,35 @@ th_type *ir_type_definition(ir_module_t *m, th_type *named)
     ir_typeslot_t *slot = type_find(m, th_hash(m->ctx->types, named));
 
     return slot ? slot->def : nullptr;
+}
+
+th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)
+{
+    if (!m || !callable) return nullptr;
+    callable = th_resolve(callable);
+    if (!callable || th_kind_of(callable) != TH_FUNCTION) return nullptr;
+
+    th_type *ret = th_func_ret(callable);
+    th_type *error = th_func_error(callable);
+    if (!ret) return nullptr;
+    if (!error || ir_machine_of(m, error).class == IR_CLASS_VOID)
+        return ir_type_intern(m, ret);
+
+    th_type *parts[] = {ret, error};
+    th_type *key = th_tuple(m->ctx->types, parts, 2);
+    if (!key) return nullptr;
+    char name[64];
+    snprintf(name, sizeof(name), "__lantern_call_outcome_%016llx",
+             (unsigned long long)th_hash(m->ctx->types, key));
+    th_type *outcome = th_variant(m->ctx->types, name, nullptr, 0);
+    th_member arms[] = {{"ok", ret}, {"error", error}};
+    th_type *definition = th_record(m->ctx->types, arms, 2);
+    th_type *existing = ir_type_definition(m, outcome);
+    if (!existing && !ir_type_define(m, outcome, definition)) return nullptr;
+    if (existing && th_hash(m->ctx->types, existing)
+                        != th_hash(m->ctx->types, definition))
+        return nullptr;
+    return ir_type_intern(m, outcome);
 }
 
 th_type *ir_type_parse(ir_module_t *m, const char *text)

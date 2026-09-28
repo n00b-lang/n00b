@@ -553,6 +553,11 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
     }
     core_buffer_puts(b, ") -> ");
     put_type(b, m, th_func_ret(f->type));
+    th_type *error = th_func_error(f->type);
+    if (error) {
+        core_buffer_puts(b, " fail: ");
+        put_type(b, m, error);
+    }
 }
 
 static bool on_func_pre(ir_visit_t *v)

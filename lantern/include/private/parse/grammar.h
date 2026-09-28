@@ -55,6 +55,7 @@ struct parse_rule_t {
     int32_t                               disambig_cost;
     bool                                  penalty_rule;
     bool                                  first_has_any;
+    bool                                  nullable;
     void                                 *thunk;
 };
 

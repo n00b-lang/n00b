@@ -1378,14 +1378,10 @@ parse_annot_resolve_undefined(parse_annot_result_t *result)
         parse_tree_t *node = result->undefined.data[i];
         parse_nt_node_t *pn = node && !core_tree_is_leaf(node)
             ? &core_tree_node_value(node) : nullptr;
-        core_string_t name = node ? parse_tree_extract_first_identifier(node)
-                                  : (core_string_t){0};
-        parse_sym_entry_t *symbol = pn && pn->scope && name.data
-            ? parse_symtab_lookup_scoped(result->symtab, pn->scope,
-                                         ns_default(), name)
+        parse_sym_entry_t *symbol = pn && pn->scope
+            ? parse_symtab_resolve_node(result->symtab, node, ns_default())
             : nullptr;
         if (symbol) {
-            pn->sym = symbol;
             if (symbol->type && result->impl) {
                 actx_t *a = result->impl;
                 if (a->types) {

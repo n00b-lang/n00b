@@ -2,6 +2,17 @@
 #include "private/parse/grammar.h"
 #include "lib/list.h"
 
+const parse_rule_t *parse_tree_rule(parse_grammar_t *g, parse_tree_t *node)
+{
+    if (!g || !node || core_tree_is_leaf(node)) return nullptr;
+    parse_nt_node_t *pn = &core_tree_node_value(node);
+    parse_nonterm_t *nt = parse_find_nonterm(g, pn->name);
+    if (!nt || pn->rule_index < 0
+        || (size_t)pn->rule_index >= core_list_len(nt->rule_ids))
+        return nullptr;
+    return parse_get_rule(g, nt->rule_ids.data[pn->rule_index]);
+}
+
 bool
 parse_alt_leads_with(parse_grammar_t *g, core_string_t nt_name, int32_t rule_ix,
                    core_string_t word)

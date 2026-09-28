@@ -6,6 +6,7 @@
 
 #include "ir/lower.h"
 #include "private/ir/internal.h"
+#include "private/parse/grammar.h"
 #include "lib/dict.h"
 #include "parse/symtab.h"
 #include "parse/tree_util.h"
@@ -29,6 +30,12 @@ typedef struct ir_lower_symbol_binding_t {
     struct ir_lower_symbol_binding_t *next;
 } ir_lower_symbol_binding_t;
 
+typedef struct ir_lower_skip_frame_t {
+    parse_tree_t *owner;
+    parse_tree_t *reference;
+    struct ir_lower_skip_frame_t *next;
+} ir_lower_skip_frame_t;
+
 struct ir_lowerer_t {
     ir_ctx_t *ctx;
     ir_lower_action_entry_t *actions;
@@ -43,9 +50,14 @@ typedef struct {
     ir_lowerer_t *lowerer;
     ir_lower_context_t *context;
     core_dict_t values;
+    ir_lower_skip_frame_t *skip_values;
     bool failed;
     bool terminated;
 } ir_lower_tree_state_t;
+
+static parse_tree_t *lower_tree_simple_lvalue(parse_tree_t *node);
+static ir_lower_symbol_binding_t *lower_find_binding(
+    ir_lower_context_t *context, parse_sym_entry_t *symbol);
 
 ir_lowerer_t *
 ir_lowerer_new(ir_ctx_t *ctx)
@@ -65,6 +77,41 @@ ir_lower_node_value(ir_lower_context_t *context, parse_tree_t *node)
     return found ? value : nullptr;
 }
 
+bool
+ir_lower_set_node_value(ir_lower_context_t *context, parse_tree_t *node,
+                        ir_value_t *value)
+{
+    if (!context || !context->tree_values || !context->function || !node
+        || !value || value->owner != context->function)
+        return false;
+    core_dict_put(context->tree_values, node, value);
+    return true;
+}
+
+bool
+ir_lower_skip_value(ir_lower_context_t *context, parse_tree_t *owner,
+                    parse_tree_t *node)
+{
+    if (!context || !context->tree_state || !owner || !node) return false;
+    ir_lower_tree_state_t *state = context->tree_state;
+    ir_lower_skip_frame_t *mark = core_alloc(ir_lower_skip_frame_t);
+    if (!mark) return false;
+    *mark = (ir_lower_skip_frame_t){
+        .owner = owner,
+        .reference = node,
+        .next = state->skip_values,
+    };
+    state->skip_values = mark;
+    return true;
+}
+
+bool
+ir_lower_mark_lvalue(ir_lower_context_t *context, parse_tree_t *owner,
+                     parse_tree_t *node)
+{
+    return ir_lower_skip_value(context, owner, node);
+}
+
 ir_value_t *
 ir_lower_child_value(ir_lower_context_t *context, parse_visit_t *visit,
                      parse_child_ref_t child)
@@ -78,16 +125,20 @@ ir_lower_child_value(ir_lower_context_t *context, parse_visit_t *visit,
 
 static bool
 lower_bind_symbol(ir_lower_context_t *context, parse_sym_entry_t *symbol,
-                  ir_value_t *value, ir_local_t *local)
+                  ir_value_t *value, ir_local_t *local, bool scoped)
 {
     if (!context || !context->module || !context->function || !symbol
-        || (!!value == !!local))
+        || (!value && !local))
         return false;
-    for (ir_lower_symbol_binding_t *binding = context->symbol_bindings;
-         binding; binding = binding->next) {
-        if (binding->symbol == symbol) return false;
+    if (!scoped) {
+        for (ir_lower_symbol_binding_t *binding = context->symbol_bindings;
+             binding; binding = binding->next) {
+            if (binding->symbol == symbol) return false;
+        }
     }
     if ((value && value->owner != context->function
+         && !(value->kind == IR_VAL_GLOBAL
+              && ir_global_find(context->module, value->name))
          && !(value->kind == IR_VAL_FUNC && value->owner
               && value->owner->owner == context->module))
         || (local && ir_local_find(context->function, local->name) != local))
@@ -108,14 +159,56 @@ bool
 ir_lower_bind_value(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                     ir_value_t *value)
 {
-    return value && lower_bind_symbol(context, symbol, value, nullptr);
+    return value && lower_bind_symbol(context, symbol, value, nullptr, false);
 }
 
 bool
 ir_lower_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                     ir_local_t *local)
 {
-    return local && lower_bind_symbol(context, symbol, nullptr, local);
+    return local && lower_bind_symbol(context, symbol, nullptr, local, false);
+}
+
+void *
+ir_lower_bindings_checkpoint(ir_lower_context_t *context)
+{
+    return context ? context->symbol_bindings : nullptr;
+}
+
+bool
+ir_lower_bindings_restore(ir_lower_context_t *context, void *checkpoint)
+{
+    if (!context) return false;
+    ir_lower_symbol_binding_t *mark = checkpoint;
+    if (mark) {
+        bool present = false;
+        for (ir_lower_symbol_binding_t *binding = context->symbol_bindings;
+             binding; binding = binding->next) {
+            if (binding == mark) {
+                present = true;
+                break;
+            }
+        }
+        if (!present) return false;
+    }
+    context->symbol_bindings = mark;
+    return true;
+}
+
+bool
+ir_lower_bind_scoped_value(ir_lower_context_t *context,
+                           parse_sym_entry_t *symbol, ir_value_t *value,
+                           ir_local_t *local)
+{
+    return lower_bind_symbol(context, symbol, value, local, true);
+}
+
+ir_local_t *
+ir_lower_bound_local(ir_lower_context_t *context, parse_sym_entry_t *symbol)
+{
+    if (!context || !symbol) return nullptr;
+    ir_lower_symbol_binding_t *binding = lower_find_binding(context, symbol);
+    return binding ? binding->local : nullptr;
 }
 
 bool
@@ -172,6 +265,54 @@ lower_failure(ir_lower_context_t *context, ir_diagcode_t code,
     return (ir_lower_result_t){.status = IR_LOWER_FAILED};
 }
 
+static ir_instr_t *
+lower_append_instruction(ir_lower_context_t *context, ir_op_t op,
+                        ir_span_t span, bool terminator)
+{
+    if (!context || !context->module || !context->function || !context->block
+        || context->function->owner != context->module
+        || context->block->owner != context->function) {
+        lower_failure(context, IR_DIAG_INTERNAL, span,
+                      "lowering context objects do not belong together");
+        return nullptr;
+    }
+    if (!context->reachable || ir_block_terminator(context->block)) {
+        lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
+                      "cannot emit an instruction in an unreachable or terminated block");
+        return nullptr;
+    }
+    if (ir_op_is_terminator(op) != terminator) {
+        lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
+                      terminator
+                          ? "terminator helper requires a terminator operation"
+                          : "instruction helper cannot emit a terminator operation");
+        return nullptr;
+    }
+    ir_instr_t *instruction = ir_instr_add(context->block, op);
+    if (!instruction) {
+        lower_failure(context, IR_DIAG_INTERNAL, span,
+                      "could not append an IR instruction");
+        return nullptr;
+    }
+    instruction->span = span;
+    if (terminator) context->reachable = false;
+    return instruction;
+}
+
+ir_instr_t *
+ir_lower_emit_instruction(ir_lower_context_t *context, ir_op_t op,
+                          ir_span_t span)
+{
+    return lower_append_instruction(context, op, span, false);
+}
+
+ir_instr_t *
+ir_lower_emit_terminator(ir_lower_context_t *context, ir_op_t op,
+                         ir_span_t span)
+{
+    return lower_append_instruction(context, op, span, true);
+}
+
 static ir_lower_symbol_binding_t *
 lower_find_binding(ir_lower_context_t *context, parse_sym_entry_t *symbol)
 {
@@ -187,6 +328,8 @@ lower_value_accessible(ir_lower_context_t *context, ir_value_t *value)
 {
     if (!context || !value) return false;
     if (value->owner == context->function) return true;
+    if (value->kind == IR_VAL_GLOBAL)
+        return ir_global_find(context->module, value->name) != nullptr;
     return value->kind == IR_VAL_FUNC && value->owner
         && value->owner->owner == context->module;
 }
@@ -197,7 +340,7 @@ lower_find_annotation(parse_visit_t *visit, parse_annot_kind_t kind)
     parse_annotation_t *annotation = visit->rule
         ? parse_rule_find_annot(visit->grammar, visit->rule, kind) : nullptr;
     if (!annotation && visit->nt)
-        annotation = parse_nt_find_annot(visit->grammar, visit->nt, kind);
+        annotation = parse_nt_find_direct_annot(visit->nt, kind);
     return annotation;
 }
 
@@ -309,13 +452,15 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
             return lower_failure(context, IR_DIAG_TYPE_LITERAL, span,
                                  "literal metadata or token value is missing");
         core_string_t text = core_option_get(token->value);
-        ir_instr_t *instruction = ir_instr_add(context->block, IR_OP_CONST);
+        ir_instr_t *instruction = ir_lower_emit_instruction(
+            context, IR_OP_CONST, span);
+        if (!instruction) return (ir_lower_result_t){.status = IR_LOWER_FAILED};
         char name[48];
         do {
             snprintf(name, sizeof(name), "__lowered_%llu",
                      (unsigned long long)context->next_value_id++);
         } while (ir_value_find(context->function, name));
-        if (!instruction || !ir_instr_set_dest(instruction, name, result_type))
+        if (!ir_instr_set_dest(instruction, name, result_type))
             return lower_failure(context, IR_DIAG_INTERNAL, span,
                                  "could not emit a literal value");
         bool emitted = false;
@@ -345,7 +490,6 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
         if (!emitted)
             return lower_failure(context, IR_DIAG_TYPE_LITERAL, span,
                                  "literal spelling is not supported by generic scalar lowering");
-        instruction->span = span;
         return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
     }
     return (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -407,20 +551,24 @@ ir_lower_emit(ir_lowerer_t *lowerer, ir_lower_context_t *context,
     for (size_t i = 0; i < operand_count; i++) {
         ir_opdkind_t kind = ir_op_operand_kind(op, (uint32_t)i);
         if (!operands || !lower_value_accessible(context, operands[i])
-            || (kind != IR_OPD_VALUE && kind != IR_OPD_ARG))
+            || (kind != IR_OPD_VALUE && kind != IR_OPD_ARG)) {
+            char message[160];
+            snprintf(message, sizeof(message),
+                     "declarative action '%s' has no accessible value for operand %zu",
+                     action, i);
             return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
-                                 "declarative lowering requires value operands");
+                                 message);
+        }
     }
     bool has_result = ir_op_has_result(op);
     if (has_result && !result_type)
         return lower_failure(context, IR_DIAG_VERIFY_TYPED, span,
                              "lowered operation result type does not match its IR signature");
 
-    ir_instr_t *instruction = ir_instr_add(context->block, op);
-    if (!instruction)
-        return lower_failure(context, IR_DIAG_INTERNAL, span,
-                             "could not append lowered IR operation");
-    instruction->span = span;
+    ir_instr_t *instruction = ir_op_is_terminator(op)
+        ? ir_lower_emit_terminator(context, op, span)
+        : ir_lower_emit_instruction(context, op, span);
+    if (!instruction) return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     for (size_t i = 0; i < operand_count; i++) {
         if (!ir_instr_operand_value(instruction, operands[i]))
             return lower_failure(context, IR_DIAG_INTERNAL, span,
@@ -441,11 +589,40 @@ ir_lower_emit(ir_lowerer_t *lowerer, ir_lower_context_t *context,
         result.value = instruction->dest;
     }
     if (ir_op_is_terminator(op)) {
-        context->reachable = false;
         result.status = IR_LOWER_TERMINATED;
         result.value = nullptr;
     }
     return result;
+}
+
+static bool
+lower_tree_track_assignment(ir_lower_tree_state_t *state,
+                            parse_visit_t *visit,
+                            parse_annotation_t *annotation, bool entering)
+{
+    if (annotation->kind != PARSE_ANNOT_ASSIGNS) return true;
+    if (entering) {
+        parse_tree_t *target = parse_tree_resolve_child_ref(
+            visit->grammar, visit->node, annotation->name_ref);
+        parse_tree_t *reference = lower_tree_simple_lvalue(target);
+        if (!reference) return true;
+        ir_lower_skip_frame_t *frame = core_alloc(ir_lower_skip_frame_t);
+        *frame = (ir_lower_skip_frame_t){
+            .owner = visit->node,
+            .reference = reference,
+            .next = state->skip_values,
+        };
+        state->skip_values = frame;
+        return true;
+    }
+    ir_lower_skip_frame_t **at = &state->skip_values;
+    while (*at && (*at)->owner != visit->node) at = &(*at)->next;
+    if (*at) {
+        ir_lower_skip_frame_t *frame = *at;
+        *at = frame->next;
+        core_free(frame);
+    }
+    return true;
 }
 
 static bool
@@ -461,6 +638,8 @@ lower_tree_hooks(ir_lower_tree_state_t *state, parse_visit_t *visit,
         parse_annotation_t *annotation = annotation_ix < nt_count
             ? parse_nt_annot_at(visit->nt, annotation_ix)
             : parse_rule_annot_at(visit->rule, annotation_ix - nt_count);
+        if (!lower_tree_track_assignment(state, visit, annotation, entering))
+            ok = false;
         for (size_t j = 0; j < state->lowerer->visitor_count; j++) {
             size_t visitor_ix = entering
                 ? j : state->lowerer->visitor_count - 1 - j;
@@ -514,17 +693,43 @@ span_of_tree(ir_lower_context_t *context, parse_tree_t *node)
                         last->endline, last->endcol);
 }
 
-static parse_sym_entry_t *
-lower_tree_symbol(parse_tree_t *node)
+static parse_tree_t *
+lower_tree_simple_lvalue(parse_tree_t *node)
 {
-    if (!node || core_tree_is_leaf(node)) return nullptr;
-    parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
-    if (symbol) return symbol;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        symbol = lower_tree_symbol(core_tree_child(node, i));
-        if (symbol) return symbol;
+    while (node && !core_tree_is_leaf(node)) {
+        parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
+        if (symbol) return node;
+        if (core_tree_num_children(node) != 1) return nullptr;
+        node = core_tree_child(node, 0);
     }
     return nullptr;
+}
+
+static bool
+lower_tree_is_suppressed_value(ir_lower_tree_state_t *state,
+                                parse_tree_t *node)
+{
+    for (ir_lower_skip_frame_t *target = state->skip_values;
+         target; target = target->next)
+        for (parse_tree_t *ancestor = node; ancestor;
+             ancestor = core_tree_node_value(ancestor).parent)
+            if (target->reference == ancestor) return true;
+    return false;
+}
+
+static void
+lower_tree_clear_lvalues(ir_lower_tree_state_t *state, parse_tree_t *owner)
+{
+    ir_lower_skip_frame_t **at = &state->skip_values;
+    while (*at) {
+        if ((*at)->owner != owner) {
+            at = &(*at)->next;
+            continue;
+        }
+        ir_lower_skip_frame_t *mark = *at;
+        *at = mark->next;
+        core_free(mark);
+    }
 }
 
 static ir_lower_result_t
@@ -535,24 +740,51 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
         visit->grammar, visit->node, annotation->name_ref);
     parse_tree_t *source = parse_tree_resolve_child_ref(
         visit->grammar, visit->node, annotation->value_ref);
-    parse_sym_entry_t *symbol = lower_tree_symbol(target);
+    parse_sym_entry_t *symbol = nullptr;
+    if (core_string_eq(parse_tree_nt_name(visit->grammar, visit->node),
+                       CORE_STRING_STATIC("sym-decl")))
+        symbol = core_tree_node_value(visit->node).sym;
+    else {
+        parse_tree_t *lvalue = lower_tree_simple_lvalue(target);
+        symbol = lvalue ? core_tree_node_value(lvalue).sym : nullptr;
+        if (!symbol && visit->pn) symbol = visit->pn->sym;
+    }
     ir_lower_symbol_binding_t *binding =
         lower_find_binding(state->context, symbol);
     bool found = false;
     ir_value_t *value = source
         ? core_dict_get(&state->values, source, &found) : nullptr;
-    if (!binding || !binding->local || !found || !value)
+    if (!binding || !found || !value)
         return lower_failure(state->context, IR_DIAG_VERIFY_PARSED, span,
-                             "assignment needs a bound local and lowered value");
-    if (!ir_type_eq(state->context->module, binding->local->type, value->type))
-        return lower_failure(state->context, IR_DIAG_TYPE_MISMATCH, span,
-                             "assigned value does not match the local type");
-    ir_instr_t *instruction = ir_instr_add(state->context->block, IR_OP_COPY);
-    if (!instruction || !ir_instr_set_dest_local(instruction, binding->local)
-        || !ir_instr_operand_value(instruction, value))
-        return lower_failure(state->context, IR_DIAG_INTERNAL, span,
-                             "could not emit a local assignment");
-    instruction->span = span;
+                             "assignment needs a bound destination and value");
+    if (binding->local) {
+        if (!ir_type_eq(state->context->module, binding->local->type,
+                        value->type))
+            return lower_failure(state->context, IR_DIAG_TYPE_MISMATCH, span,
+                                 "assigned value does not match the local type");
+        ir_instr_t *instruction = ir_instr_add(state->context->block,
+                                               IR_OP_COPY);
+        if (!instruction
+            || !ir_instr_set_dest_local(instruction, binding->local)
+            || !ir_instr_operand_value(instruction, value))
+            return lower_failure(state->context, IR_DIAG_INTERNAL, span,
+                                 "could not emit a local assignment");
+        instruction->span = span;
+    }
+    else if (binding->value && binding->value->kind == IR_VAL_GLOBAL) {
+        ir_instr_t *instruction = ir_instr_add(state->context->block,
+                                               IR_OP_GLOBAL_STORE);
+        if (!instruction || !ir_instr_operand_value(instruction,
+                                                     binding->value)
+            || !ir_instr_operand_value(instruction, value))
+            return lower_failure(state->context, IR_DIAG_INTERNAL, span,
+                                 "could not emit a global assignment");
+        instruction->span = span;
+    }
+    else {
+        return lower_failure(state->context, IR_DIAG_VERIFY_PARSED, span,
+                             "assignment destination is not writable storage");
+    }
     return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
 }
 
@@ -561,17 +793,30 @@ lower_tree_node(parse_visit_t *visit)
 {
     ir_lower_tree_state_t *state = visit->user;
     bool hooks_ok = lower_tree_hooks(state, visit, false);
+    lower_tree_clear_lvalues(state, visit->node);
     if (state->failed || !hooks_ok) return false;
+    if (ir_lower_node_value(state->context, visit->node)) return true;
     parse_annotation_t *annotation = visit->rule
         ? parse_rule_find_annot(visit->grammar, visit->rule,
                                 PARSE_ANNOT_EMIT)
         : nullptr;
     if (!annotation && visit->nt)
-        annotation = parse_nt_find_annot(visit->grammar, visit->nt,
-                                         PARSE_ANNOT_EMIT);
+        annotation = parse_nt_find_direct_annot(visit->nt,
+                                                PARSE_ANNOT_EMIT);
 
     parse_annotation_t *assignment = annotation ? nullptr
         : lower_find_annotation(visit, PARSE_ANNOT_ASSIGNS);
+
+    if (annotation && core_string_eq(annotation->emit_action,
+                                      CORE_STRING_STATIC("reference"))
+        && lower_tree_is_suppressed_value(state, visit->node)) {
+        _core_dict_put(&state->values, visit->node, nullptr);
+        return true;
+    }
+
+    if (!annotation && !assignment && state->context->reachable
+        && ir_lower_node_value(state->context, visit->node))
+        return true;
 
     if ((!annotation && !assignment) || !state->context->reachable) {
         _core_dict_put(&state->values, visit->node, nullptr);
@@ -626,11 +871,148 @@ lower_tree_node(parse_visit_t *visit)
     return true;
 }
 
+static bool
+lower_rule_has_named_child(parse_grammar_t *grammar, const parse_rule_t *rule,
+                           int64_t wanted, bool *visited)
+{
+    for (size_t i = 0; rule && i < core_list_len(rule->contents); i++) {
+        const parse_match_t *match = &rule->contents.data[i];
+        if (match->kind == PARSE_MATCH_NT && match->nt_id == wanted)
+            return true;
+        if (match->kind != PARSE_MATCH_GROUP) continue;
+
+        parse_rule_group_t *group = match->group;
+        if (!group || group->contents_id < 0
+            || (size_t)group->contents_id >= core_list_len(grammar->nt_list)
+            || visited[group->contents_id])
+            continue;
+        visited[group->contents_id] = true;
+        parse_nonterm_t *group_nt = parse_get_nonterm(
+            grammar, group->contents_id);
+        for (size_t j = 0; group_nt && j < core_list_len(group_nt->rule_ids);
+             j++) {
+            if (lower_rule_has_named_child(grammar,
+                    parse_get_rule(grammar, group_nt->rule_ids.data[j]),
+                    wanted, visited))
+                return true;
+        }
+    }
+    return false;
+}
+
+static bool
+lower_ref_valid_for_rule(parse_grammar_t *grammar, const parse_rule_t *rule,
+                         parse_child_ref_t ref)
+{
+    if (!parse_child_ref_is_set(ref)) return false;
+    if (ref.kind == PARSE_ROLE_BY_INDEX) {
+        size_t child_count = 0;
+        for (size_t i = 0; rule && i < core_list_len(rule->contents); i++)
+            child_count += rule->contents.data[i].kind != PARSE_MATCH_EMPTY;
+        return (size_t)ref.index < child_count;
+    }
+    if (ref.kind != PARSE_ROLE_BY_NAME) return false;
+
+    parse_nonterm_t *target = parse_find_nonterm(grammar, ref.name);
+    if (!target) return false;
+    size_t count = core_list_len(grammar->nt_list);
+    bool *visited = core_alloc_array(bool, count);
+    memset(visited, 0, count * sizeof(*visited));
+    bool found = lower_rule_has_named_child(grammar, rule, target->id,
+                                            visited);
+    core_free(visited);
+    return found;
+}
+
+static bool
+lower_has_action(const ir_lowerer_t *lowerer, const char *action)
+{
+    for (size_t i = 0; i < lowerer->action_count; i++)
+        if (!strcmp(lowerer->actions[i].name, action)) return true;
+    return false;
+}
+
+static bool
+lower_validate_emit(ir_lowerer_t *lowerer, ir_lower_context_t *context,
+                    parse_grammar_t *grammar, const parse_rule_t *rule,
+                    const parse_annotation_t *annotation)
+{
+    if (!annotation || annotation->kind != PARSE_ANNOT_EMIT) return true;
+    const char *action = annotation->emit_action.data;
+    size_t operand_count = core_list_len(annotation->emit_operands);
+    for (size_t i = 0; i < operand_count; i++) {
+        if (!lower_ref_valid_for_rule(grammar, rule,
+                                      annotation->emit_operands.data[i])) {
+            lower_failure(context, IR_DIAG_VERIFY_PARSED, IR_SPAN_UNKNOWN,
+                          "emit annotation has a child reference that does not exist in its production");
+            return false;
+        }
+    }
+    if (!action) {
+        lower_failure(context, IR_DIAG_VERIFY_PARSED, IR_SPAN_UNKNOWN,
+                      "emit annotation has no action name");
+        return false;
+    }
+
+    if (lower_has_action(lowerer, action)) return true;
+    if (!strcmp(action, "identity")) {
+        if (operand_count == 1) return true;
+    }
+    else if (!strcmp(action, "reference") || !strcmp(action, "literal")) {
+        if (!operand_count) return true;
+    }
+    else {
+        ir_op_t op;
+        if (ir_op_lookup(action, &op)
+            && operand_count <= UINT32_MAX
+            && ir_op_accepts_operands(op, (uint32_t)operand_count))
+            return true;
+    }
+
+    lower_failure(context, IR_DIAG_VERIFY_PARSED, IR_SPAN_UNKNOWN,
+                  "emit annotation has an unknown action or invalid operand count");
+    return false;
+}
+
+static bool
+lower_validate_grammar(ir_lowerer_t *lowerer, ir_lower_context_t *context,
+                       parse_grammar_t *grammar)
+{
+    parse_grammar_finalize(grammar);
+    for (size_t i = 0; i < core_list_len(grammar->rules); i++) {
+        parse_rule_t *rule = &grammar->rules.data[i];
+        for (size_t j = 0; j < parse_rule_annot_count(rule); j++) {
+            parse_annotation_t *annotation = parse_rule_annot_at(rule, j);
+            if (!lower_validate_emit(lowerer, context, grammar, rule,
+                                     annotation))
+                return false;
+        }
+    }
+
+    for (size_t i = 0; i < core_list_len(grammar->nt_list); i++) {
+        parse_nonterm_t *nt = grammar->nt_list.data[i];
+        for (size_t j = 0; j < parse_nt_annot_count(nt); j++) {
+            parse_annotation_t *annotation = parse_nt_annot_at(nt, j);
+            if (!annotation || annotation->kind != PARSE_ANNOT_EMIT) continue;
+            for (size_t k = 0; k < core_list_len(nt->rule_ids); k++) {
+                parse_rule_t *rule = parse_get_rule(grammar,
+                                                     nt->rule_ids.data[k]);
+                if (!lower_validate_emit(lowerer, context, grammar, rule,
+                                         annotation))
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
 ir_lower_result_t
 ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
               parse_grammar_t *grammar, parse_tree_t *root)
 {
     if (!lowerer || !context || !grammar || !root)
+        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    if (!lower_validate_grammar(lowerer, context, grammar))
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     ir_lower_tree_state_t state = {
         .lowerer = lowerer,
@@ -638,6 +1020,7 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
     };
     core_dict_init(&state.values, nullptr, nullptr);
     context->tree_values = &state.values;
+    context->tree_state = &state;
     parse_tree_walk_t *walk = parse_tree_walk_new(grammar, &state);
     parse_walk_on_node(walk, lower_tree_enter, lower_tree_node, nullptr);
     parse_tree_walk_run(walk, root);
@@ -645,7 +1028,13 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
     ir_value_t *value = core_dict_get(&state.values, root, &found);
     parse_tree_walk_free(walk);
     context->tree_values = nullptr;
+    context->tree_state = nullptr;
     core_dict_free(&state.values);
+    while (state.skip_values) {
+        ir_lower_skip_frame_t *target = state.skip_values;
+        state.skip_values = target->next;
+        core_free(target);
+    }
     if (state.failed || !found)
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     if (state.terminated || !context->reachable)

@@ -631,6 +631,41 @@ static void test_methods_are_attached_to_receiver_types(void)
     th_ctx_free(ctx);
 }
 
+static void test_function_error_channels_unify_and_generalize(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_type *error = th_var(ctx);
+    th_type *fallible = th_func_with_error(
+        ctx, th_name(ctx, "int"), error, nullptr, 0, nullptr, nullptr, 0);
+    th_type *string_failure = th_func_with_error(
+        ctx, th_name(ctx, "int"), th_name(ctx, "string"), nullptr, 0,
+        nullptr, nullptr, 0);
+
+    check("function unification includes its failure channel",
+          th_unify(ctx, fallible, string_failure) != nullptr &&
+          th_unify(ctx, error, th_name(ctx, "string")) != nullptr);
+
+    th_type *generic_error = th_var(ctx);
+    th_type *generic = th_func_with_error(
+        ctx, th_name(ctx, "int"), generic_error, nullptr, 0, nullptr,
+        nullptr, 0);
+    th_type *scheme = th_generalize(ctx, generic);
+    th_type *instance = scheme ? th_instantiate(ctx, scheme) : nullptr;
+    th_type *instance_error = instance ? th_func_error(instance) : nullptr;
+
+    check("function generalization includes variables in the failure channel",
+          scheme && instance_error && instance_error != generic_error &&
+          th_kind_of(th_resolve(instance_error)) == TH_VAR &&
+          th_unify(ctx, instance_error, th_name(ctx, "bool")) != nullptr);
+    check("a function without a failure channel remains distinct",
+          th_func_error(th_func(ctx, th_name(ctx, "int"), nullptr, 0,
+                                nullptr, nullptr, 0)) == nullptr &&
+          th_unify(ctx, fallible,
+              th_func(ctx, th_name(ctx, "int"), nullptr, 0, nullptr,
+                      nullptr, 0)) == nullptr);
+    th_ctx_free(ctx);
+}
+
 int main(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -658,6 +693,7 @@ int main(void)
     test_failures_name_what_went_wrong();
     test_a_constrained_var_prints_its_bound();
     test_methods_are_attached_to_receiver_types();
+    test_function_error_channels_unify_and_generalize();
 
     return report("th constraints");
 }

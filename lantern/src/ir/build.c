@@ -751,7 +751,12 @@ static void *r_type_decl(parse_reduce_t *r)
         return nullptr;
     }
 
-    th_type *named = ir_type_parse(b->m, name->text);
+    parse_tree_t *kind = core_tree_num_children(r->node) > 1
+        ? core_tree_child(r->node, 1) : nullptr;
+    th_type *named = parse_tree_leaf_is(kind,
+                                         CORE_STRING_STATIC("variant"))
+        ? th_variant(ir_module_types(b->m), name->text, nullptr, 0)
+        : ir_type_parse(b->m, name->text);
 
     if (!named || !ir_type_define(b->m, named, def)) {
         bfail(b, cover(r), "this type is already defined");
@@ -2053,6 +2058,12 @@ static void *r_func(parse_reduce_t *r)
     parse_reduce_list_t *ps   = rep(r, CORE_STRING_STATIC("params"));
     th_type             *ret =
         type_of(b, raw_at(r, CORE_STRING_STATIC("typelang-type")), cover(r));
+    parse_reduce_list_t *failure_nodes = rep(
+        r, CORE_STRING_STATIC("function-failure"));
+    void *failure_node = failure_nodes && failure_nodes->n
+        ? failure_nodes->v[0] : nullptr;
+    th_type *failure = failure_node
+        ? type_of(b, failure_node, cover(r)) : nullptr;
 
     if (!name || !name->text || !ret) {
         return nullptr;
@@ -2098,8 +2109,9 @@ static void *r_func(parse_reduce_t *r)
         }
     }
 
-    th_type *ft = th_func(ir_ctx_types(b->ctx), ret, params.data, params.len,
-                          has_rest ? &rest : nullptr, kws.data, kws.len);
+    th_type *ft = th_func_with_error(ir_ctx_types(b->ctx), ret, failure,
+        params.data, params.len, has_rest ? &rest : nullptr, kws.data,
+        kws.len);
 
     core_list_free(params);
     core_list_free(kws);
@@ -2282,6 +2294,11 @@ static void *r_func(parse_reduce_t *r)
     return nullptr;
 }
 
+static void *r_function_failure(parse_reduce_t *r)
+{
+    return kid(r, 2);
+}
+
 static void reg(B *b, parse_tree_walk_t *w, core_string_t nt,
                 parse_reduce_fn fn)
 {
@@ -2425,6 +2442,8 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
     reg(&b, w, CORE_STRING_STATIC("func-param-pos"), r_param);
     reg(&b, w, CORE_STRING_STATIC("func-param-kw"), r_param);
     reg(&b, w, CORE_STRING_STATIC("func-param-rest"), r_param);
+    reg(&b, w, CORE_STRING_STATIC("function-failure"),
+        r_function_failure);
     reg(&b, w, CORE_STRING_STATIC("params"), r_operands);
     reg(&b, w, CORE_STRING_STATIC("dest-value"), r_dest);
     reg(&b, w, CORE_STRING_STATIC("dest-local"), r_dest);

@@ -5,6 +5,8 @@
 #include "parse/symtab.h"
 
 th_type *ir_typelang_parse(th_ctx *ctx, const char *src, char **err);
+/* The returned function type owns the failure channel; `failure` mirrors it
+ * for callers that need to inspect the channels separately. */
 th_type *ir_typelang_parse_function(th_ctx *ctx, const char *src,
                                     th_type **failure, char **err);
 

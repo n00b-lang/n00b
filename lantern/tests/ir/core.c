@@ -7,13 +7,15 @@
 
 static void test_ops(void)
 {
-    check("op table is populated", IR_OP_COUNT == 61);
+    check("op table is populated", IR_OP_COUNT == 67);
 
     ir_op_t op;
 
     check("lookup finds add", ir_op_lookup("add", &op) && op == IR_OP_ADD);
     check("lookup finds a dotted mnemonic",
           ir_op_lookup("variant.make", &op) && op == IR_OP_VARIANT_MAKE);
+    check("lookup finds runtime type testing",
+          ir_op_lookup("type.test", &op) && op == IR_OP_TYPE_TEST);
     check("lookup rejects an unknown mnemonic",
           !ir_op_lookup("frobnicate", &op));
 

@@ -1,4 +1,5 @@
 #include "parse/symtab.h"
+#include "parse/tree_util.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/hash.h"
@@ -320,6 +321,29 @@ parse_symtab_lookup_scoped(parse_symtab_t *st, parse_scope_t *scope,
     parse_namespace_t *ns = find_ns(st, ns_name);
 
     return ns ? parse_symtab_lookup_in(ns->root, name) : nullptr;
+}
+
+parse_sym_entry_t *
+parse_symtab_resolve_node(parse_symtab_t *st, parse_tree_t *node,
+                          core_string_t ns_name)
+{
+    if (!st || !node || core_tree_is_leaf(node)) return nullptr;
+
+    parse_nt_node_t *pn = &core_tree_node_value(node);
+    if (pn->sym) return pn->sym;
+
+    core_string_t name = parse_tree_extract_first_identifier(node);
+    if (!name.data || !name.u8_bytes) return nullptr;
+
+    parse_scope_t *scope = pn->scope;
+    if (!scope) scope = parse_symtab_scope_for_node(st, node);
+    parse_sym_entry_t *symbol = parse_symtab_lookup_scoped(
+        st, scope, ns_name, name);
+    if (symbol) {
+        pn->scope = scope;
+        pn->sym = symbol;
+    }
+    return symbol;
 }
 
 void

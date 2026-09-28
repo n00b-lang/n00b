@@ -29,8 +29,8 @@ parse_tree_t *parse_tree_resolve_child_ref(parse_grammar_t    *g,
 
 core_string_t parse_tree_nt_name(parse_grammar_t *g, parse_tree_t *n);
 bool parse_tree_is_nt(parse_grammar_t *g, parse_tree_t *n, core_string_t name);
+const parse_rule_t *parse_tree_rule(parse_grammar_t *g, parse_tree_t *n);
 
 core_string_t parse_tree_leaf_text(parse_tree_t *n);
 int64_t      parse_tree_leaf_tid(parse_tree_t *n);
 bool         parse_tree_leaf_is(parse_tree_t *n, core_string_t text);
-

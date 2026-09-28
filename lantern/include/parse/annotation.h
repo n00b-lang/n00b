@@ -188,8 +188,7 @@ parse_annotation_t *parse_grammar_annot_at(const parse_grammar_t *g, size_t i);
 parse_annotation_t *parse_rule_find_annot(parse_grammar_t    *g,
                                       const parse_rule_t *rule,
                                       parse_annot_kind_t  kind);
-parse_annotation_t *parse_nt_find_annot(parse_grammar_t       *g,
-                                    const parse_nonterm_t *nt,
-                                    parse_annot_kind_t     kind);
+parse_annotation_t *parse_nt_find_direct_annot(
+    const parse_nonterm_t *nt, parse_annot_kind_t kind);
 parse_annotation_t *parse_grammar_find_annot(parse_grammar_t   *g,
                                          parse_annot_kind_t kind);

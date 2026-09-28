@@ -158,6 +158,47 @@ static void test_graded(void)
     done(nonssa);
 }
 
+static void test_failure_channel_ops(void)
+{
+    run_t *valid = verify(MOD(
+        "  func @f(%e: i32) -> i32 fail: i32 {\n"
+        "    block entry:\n      fail %e\n  }\n"),
+        IR_PROP_PARSED | IR_PROP_TYPED);
+    check("a failure terminator matches the function failure channel",
+          parsed(valid) && typed(valid) && !strstr(valid->report, "error"));
+    done(valid);
+
+    run_t *wrong_type = verify(MOD(
+        "  func @f(%e: i32) -> i32 fail: bool {\n"
+        "    block entry:\n      fail %e\n  }\n"),
+        IR_PROP_PARSED | IR_PROP_TYPED);
+    check("a failure terminator rejects a mismatched failure value",
+          parsed(wrong_type) && !typed(wrong_type)
+              && said(wrong_type, "failure value"));
+    done(wrong_type);
+
+    run_t *no_channel = verify(MOD(
+        "  func @f(%e: i32) -> i32 {\n"
+        "    block entry:\n      fail %e\n  }\n"),
+        IR_PROP_PARSED | IR_PROP_TYPED);
+    check("a failure terminator requires a function failure channel",
+          parsed(no_channel) && !typed(no_channel)
+              && said(no_channel, "failure exit"));
+    done(no_channel);
+
+    run_t *unhandled_call = verify(MOD(
+        "  func @callee(%e: i32) -> i32 fail: i32 {\n"
+        "    block entry:\n      fail %e\n  }\n"
+        "  func @caller() -> i32 {\n"
+        "    block entry:\n      %r: i32 = call @callee\n"
+        "      return %r\n  }\n"),
+        IR_PROP_PARSED | IR_PROP_TYPED);
+    check("a call must represent the callee error channel",
+          parsed(unhandled_call) && !typed(unhandled_call)
+              && said(unhandled_call, "error channel"));
+    done(unhandled_call);
+}
+
 static void test_parsed_rules(void)
 {
     struct {
@@ -1073,6 +1114,7 @@ static void test_a_phase_can_be_asked_for_on_its_own(void)
 int main(void)
 {
     test_graded();
+    test_failure_channel_ops();
     test_parsed_rules();
     test_typed_rules();
     test_ssa_rules();

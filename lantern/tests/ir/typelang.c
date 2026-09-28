@@ -136,11 +136,21 @@ static void test_n00b_function_failure_channel(void)
     char     *err     = nullptr;
     th_type  *fn = ir_typelang_parse_function(th, "(`a, `a) -> `a fail: `e",
                                               &failure, &err);
-    bool shared  = fn && th_func_nparams(fn) == 2 &&
+    bool shared  = fn && th_func_error(fn) == failure &&
+                  th_func_nparams(fn) == 2 &&
                   th_func_param(fn, 0)->type == th_func_param(fn, 1)->type &&
                   th_func_param(fn, 0)->type == th_func_ret(fn);
     if (!fn || !failure || !shared) {
         printf("FAIL  typelang fail channel: %s\n", err ? err : "missing type");
+        fails++;
+    }
+    const char *printed = fn ? th_print(th, fn) : nullptr;
+    th_type *roundtrip = printed ? ir_typelang_parse(th, printed, &err)
+                                 : nullptr;
+    if (!printed || !strstr(printed, "fail:") || !roundtrip ||
+        th_unify(th, fn, roundtrip) == nullptr) {
+        printf("FAIL  printed function types retain their failure channel: %s\n",
+               err ? err : (printed ? printed : "no printed type"));
         fails++;
     }
     free(err);
@@ -168,7 +178,9 @@ static void test_n00b_function_failure_channel(void)
         retained = true;
     else
         retained = false;
-    if (!scheme || !strstr(th_print(th, scheme), "where `a: Copy + != string"))
+    if (!scheme || !th_func_error(instantiated) ||
+        !strstr(th_print(th, scheme), "where `a: Copy + != string") ||
+        !strstr(th_print(th, scheme), "fail:"))
         retained = false;
     if (!retained) {
         printf("FAIL  generalization dropped a function where constraint\n");

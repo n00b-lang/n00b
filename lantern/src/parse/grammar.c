@@ -40,14 +40,18 @@ is_nullable_rule(parse_grammar_t *g, parse_rule_t *rule, core_list_t(int) *stack
 static bool
 is_nullable_nt(parse_grammar_t *g, int64_t nt_id, core_list_t(int) *stack)
 {
+    parse_nonterm_t *nt = parse_get_nonterm(g, nt_id);
+
+    if (nt->group_nt) {
+        return false;
+    }
+
     if (stack && check_stack_for_nt(stack, nt_id)) {
         return true;
     }
     else {
         core_list_push(*stack, (int)nt_id);
     }
-
-    parse_nonterm_t *nt = parse_get_nonterm(g, nt_id);
 
     if (nt->finalized) {
         return nt->nullable;
@@ -64,7 +68,8 @@ is_nullable_nt(parse_grammar_t *g, int64_t nt_id, core_list_t(int) *stack)
         parse_rule_t *cur_rule = parse_get_rule(g, nt->rule_ids.data[i]);
         found_any_rule              = true;
 
-        if (is_nullable_rule(g, cur_rule, stack)) {
+        cur_rule->nullable = is_nullable_rule(g, cur_rule, stack);
+        if (cur_rule->nullable) {
             finalize_nullable(nt, true);
             (void)core_list_pop(int, *stack);
             return true;
@@ -113,7 +118,7 @@ is_nullable_rule(parse_grammar_t *g, parse_rule_t *rule, core_list_t(int) *stack
         }
     }
 
-    return false;
+    return true;
 }
 
 static bool

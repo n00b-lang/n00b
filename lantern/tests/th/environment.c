@@ -7,7 +7,7 @@
 #include "th/environment.h"
 
 #define TEST_ENV_ROOT_TYPE UINT64_C(0x7468656e762e726f)
-#define TEST_ENV_ARCHIVE_ABI UINT64_C(0x7468656e76617201)
+#define TEST_ENV_ARCHIVE_ABI UINT64_C(0x7468656e76617202)
 
 typedef struct {
   uint64_t id;
@@ -477,6 +477,34 @@ int main(void) {
                 env, "base.reads.correlated_wrong", "correlated", "reads",
                 "base", TH_ENV_PUBLIC, wrong_correlated_contract));
 
+  th_type *iter_source = th_var(types);
+  th_type *iter_cursor = th_var(types);
+  th_type *iter_error = th_var(types);
+  th_param iter_receiver = {.mode = TH_IN, .type = iter_source};
+  th_type *iter_signature = th_func_with_error(
+      types, iter_cursor, iter_error, &iter_receiver, 1, nullptr, nullptr, 0);
+  th_member iter_method = {
+      .name = "iter",
+      .type = th_generalize(types, iter_signature),
+  };
+  th_type *iter_contracts = th_record(types, &iter_method, 1);
+  th_arg optional_int_arg = {.kind = TH_ARG_TYPE, .type = integer};
+  th_type *optional_int = th_apply(types, "option", &optional_int_arg, 1);
+  th_param iter_impl_receiver = {.mode = TH_IN, .type = optional_int};
+  th_type *iter_impl_signature = th_func_with_error(
+      types, optional_int, th_name(types, "nil"), &iter_impl_receiver, 1,
+      nullptr, nullptr, 0);
+  th_type *iter_impl_contract = th_env_signature_contract(
+      types, iter_impl_signature, th_name(types, "nil"));
+  check("register iterable trait with an independent cursor and failure type",
+        iter_contracts && th_env_register_trait_contracts(
+            env, "IterableTest", "builtins", "base", TH_ENV_PUBLIC,
+            iter_contracts));
+  check("register a concrete iterable method candidate",
+        iter_impl_contract && th_env_register_function_contract(
+            env, "base.iterables.option_int", "iter", "iterables", "base",
+            TH_ENV_PUBLIC, iter_impl_contract));
+
   th_type *private_get_receiver = th_var(types);
   check("register private trait method for requirement visibility",
         th_env_register_trait(
@@ -510,6 +538,20 @@ int main(void) {
 
   th_type *consumer_int = th_name(inside, "int");
   th_env_method_t selected = {0};
+  th_arg optional_consumer_int_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = consumer_int,
+  };
+  th_type *optional_consumer_int =
+      th_apply(inside, "option", &optional_consumer_int_arg, 1);
+  th_env_method_t iterator_method = {0};
+  check("independent trait result and generic failure channels resolve",
+        th_env_method_candidates(inside, "IterableTest", "iter", nullptr,
+                                 0) == 1 &&
+            th_env_method_lookup(inside, optional_consumer_int,
+                                 "IterableTest", "iter", &iterator_method) &&
+            !strcmp(iterator_method.qualified_name,
+                    "base.iterables.option_int"));
   th_type *readable_variable = th_var(inside);
   check("record generic trait obligation on an unresolved variable",
         th_var_constrain(

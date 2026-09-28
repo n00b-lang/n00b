@@ -16,7 +16,8 @@
 <profile-decl> ::= %"profile" <name> <nl>
 <target-decl>  ::= %"target" <dotted-name> <nl>
 <meta-decl>    ::= %"meta" <annot> <nl>
-<type-decl>    ::= %"type" <name> %"=" <typelang-type> <nl>
+<type-decl>    ::= %"type" %"variant" <name> %"=" <typelang-type> <nl>
+                | %"type" <name> %"=" <typelang-type> <nl>
 
 <layout-decl> @hardline($5) @indent($5) @hardline($6) ::=
 %"layout" <typelang-type> <layout-target>? %"{" <nl> <layout-item>* %"}" <nl>
@@ -48,8 +49,10 @@
 <global-decl> @nospace($4) ::=
 <linkage>? <mutability>? %"global" <global> %":" <typelang-type> <global-init>? <meta>* <nl>
 
-<func> @nospace($3) @nospace($4) @nospace($5) @hardline($11) @indent($11) @blankline($12) @indent($12) @hardline($13) ::=
-<linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> <meta>* %"{" <nl> <local>* <block>+ %"}" <nl>
+<func> @nospace($3) @nospace($4) @nospace($5) @hardline($12) @indent($12) @blankline($13) @indent($13) @hardline($14) ::=
+<linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> <function-failure>? <meta>* %"{" <nl> <local>* <block>+ %"}" <nl>
+
+<function-failure> ::= %"fail" %":" <typelang-type>
 
 <params>     @nospace($1) ::= <func-param> (%"," <func-param>)*
 <func-param> ::= <func-param-pos> | <func-param-kw> | <func-param-rest>
@@ -77,7 +80,8 @@
 
 <instr> ::= <dest>? <opcode> <modifier>* <operands>? <meta>* %NEWLINE+
 
-<opcode> @nospace ::= <name> (%"." <name>)*
+<opcode> @nospace ::= <opcode-name> (%"." <name>)*
+<opcode-name> ::= <name> | %"fail"
 
 <dest> ::= <dest-value> | <dest-local>
 

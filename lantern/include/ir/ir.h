@@ -414,6 +414,10 @@ void         ir_module_set_target(ir_module_t *m, const char *target);
 
 th_type *ir_type_intern(ir_module_t *m, th_type *t);
 th_type *ir_type_parse(ir_module_t *m, const char *text);
+/* Returns the return type for an infallible callable, or a module-local
+ * tagged outcome type with `ok` and `error` arms for a callable with a
+ * non-void error channel. */
+th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable);
 uint64_t ir_type_id(ir_module_t *m, th_type *t);
 bool     ir_type_eq(ir_module_t *m, th_type *a, th_type *b);
 size_t   ir_type_count(const ir_module_t *m);

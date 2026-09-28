@@ -481,6 +481,35 @@ test_adjacency_annotation(void)
     printf("PASS: grammar adjacency assertion\n");
 }
 
+static void
+test_nullable_nonterminal_before_following_token(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+    assert(parse_bnf_load(
+        CORE_STRING_STATIC("<S> ::= %\"a\" %\"b\" <tail> %\"c\"\n"
+                           "<tail> ::= <clause>* <otherwise>?\n"
+                           "<clause> ::= %\"d\" %\"b\"\n"
+                           "<otherwise> ::= %\"e\" %\"c\"\n"),
+        CORE_STRING_STATIC("S"), g));
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(g, CORE_STRING_STATIC("S"))));
+    assert(p);
+
+    parse_token_info_t tokens[3] = {
+        {.tid = 'a', .index = 0},
+        {.tid = 'b', .index = 1},
+        {.tid = 'c', .index = 2},
+    };
+    parse_token_info_t *ptrs[3] = {&tokens[0], &tokens[1], &tokens[2]};
+    parse_token_stream_t *ts = scan_token_stream_from_array(ptrs, 3);
+    assert(ts && parse_pwz_parse(p, ts));
+
+    scan_token_stream_free(ts);
+    parse_pwz_free(p);
+    parse_grammar_free(g);
+    printf("PASS: nullable nonterminal before following token\n");
+}
+
 int
 main(void)
 {
@@ -492,6 +521,7 @@ main(void)
     test_parallel_starts();
     test_memoized_disambiguation();
     test_adjacency_annotation();
+    test_nullable_nonterminal_before_following_token();
 
     printf("\nAll PWZ smoke tests passed.\n");
     return 0;

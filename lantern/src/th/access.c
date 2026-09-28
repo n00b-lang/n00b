@@ -152,6 +152,12 @@ th_type *th_func_ret(const th_type *t)
     return n ? n->fn.ret : nullptr;
 }
 
+th_type *th_func_error(const th_type *t)
+{
+    const th_type *n = as(t, TH_FUNCTION);
+    return n ? n->fn.error : nullptr;
+}
+
 size_t th_func_nparams(const th_type *t)
 {
     const th_type *n = as(t, TH_FUNCTION);

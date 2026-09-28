@@ -457,23 +457,9 @@ reset_memos(parse_pwz_parser_t *p)
 #define TERM_TO_PTR(id) ((void *)(uintptr_t)((uint64_t)(id) + 0x100))
 
 static inline bool
-nt_first_matches(parse_nonterm_t *nt, int64_t token_id)
-{
-    if (nt->first_has_any) {
-        return true;
-    }
-
-    if (!nt->first_set || nt->first_set->count == 0) {
-        return true;
-    }
-
-    return core_dict_contains(nt->first_set, TERM_TO_PTR(token_id));
-}
-
-static inline bool
 rule_first_matches(parse_rule_t *rule, int64_t token_id)
 {
-    if (rule->first_has_any) {
+    if (rule->nullable || rule->first_has_any) {
         return true;
     }
 
@@ -680,14 +666,6 @@ run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
         break;
 
     case PWZ_ALT: {
-        if (tok && exp->nt_id >= 0) {
-            parse_nonterm_t *nt = parse_get_nonterm(p->grammar, exp->nt_id);
-
-            if (nt && !nt->group_nt && !nt_first_matches(nt, tok->tid)) {
-                break;
-            }
-        }
-
         bool can_filter_alts = false;
 
         if (tok && exp->nt_id >= 0) {

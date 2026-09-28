@@ -356,6 +356,66 @@ static void test_types_are_typelang(void)
     ir_ctx_free(ctx);
 }
 
+static void test_function_failure_channel_round_trips(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    const char *src =
+        "module m {\n"
+        "  profile bce\n"
+        "  target t\n\n"
+        "  func @fails() -> i32 fail: str {\n"
+        "    block entry:\n"
+        "      return 0\n"
+        "  }\n"
+        "}\n";
+    ir_diags_t *diagnostics = ir_diags_new(ctx, nullptr);
+    ir_module_t *module = ir_module_parse(ctx, src, 0, PROFILES,
+        sizeof(PROFILES) / sizeof(PROFILES[0]), diagnostics);
+    ir_func_t *function = module ? ir_func_find(module, "fails") : nullptr;
+    check("text IR retains a function failure channel",
+          function && th_func_error(function->type)
+              && ir_type_eq(module, th_func_error(function->type),
+                            ir_type_parse(module, "str")));
+
+    char *printed = module ? ir_module_print(module) : nullptr;
+    check("text IR prints the function failure channel",
+          printed && strstr(printed, "-> i32 fail: str"));
+    ir_diags_t *roundtrip_diagnostics = ir_diags_new(ctx, nullptr);
+    ir_module_t *roundtrip = printed
+        ? ir_module_parse(ctx, printed, 0, PROFILES,
+            sizeof(PROFILES) / sizeof(PROFILES[0]), roundtrip_diagnostics)
+        : nullptr;
+    ir_func_t *roundtrip_function = roundtrip
+        ? ir_func_find(roundtrip, "fails") : nullptr;
+    check("the printed failure channel reparses in the same type universe",
+          roundtrip_function && th_func_error(roundtrip_function->type)
+              && ir_type_eq(roundtrip,
+                  th_func_error(roundtrip_function->type),
+                  th_func_error(function->type)));
+
+    free(printed);
+    ir_ctx_free(ctx);
+}
+
+static void test_variant_type_definition_round_trips(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    const char *src =
+        "module m {\n"
+        "  profile bce\n"
+        "  target t\n\n"
+        "  type variant call_outcome = (ok: i32, error: str)\n"
+        "}\n";
+    char *printed = nullptr;
+    check("a named variant type definition round-trips",
+          round_trips(ctx, src, &printed));
+    check("the variant kind is retained in canonical text",
+          printed && strstr(printed,
+              "type variant call_outcome = (ok: i32, error: str)"));
+    free(printed);
+    ir_ctx_free(ctx);
+}
+
 static void test_mutability_round_trips(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -1497,6 +1557,8 @@ int main(int argc, char **argv)
     test_lexis();
     test_whitespace_and_comments();
     test_types_are_typelang();
+    test_function_failure_channel_round_trips();
+    test_variant_type_definition_round_trips();
     test_mutability_round_trips();
     test_meta_round_trip();
     test_both_forms();

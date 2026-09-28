@@ -270,6 +270,10 @@ static void plan_function(pctx *c, core_buffer_t *b, core_list_t(witem) *w, cons
 
     core_buffer_puts(b, "(");
 
+    if (t->fn.error) {
+        wtype(w, t->fn.error);
+        wlit(w, " fail: ");
+    }
     wtype(w, t->fn.ret);
     wlit(w, ") -> ");
 

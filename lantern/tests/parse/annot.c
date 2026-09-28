@@ -163,6 +163,23 @@ find_node(parse_grammar_t *g, parse_tree_t *node, const char *name)
     return nullptr;
 }
 
+static parse_annotation_t *
+find_unique_rule_annot(parse_grammar_t *g, const parse_nonterm_t *nt,
+                       parse_annot_kind_t kind)
+{
+    parse_annotation_t *found = nullptr;
+
+    for (size_t i = 0; g && nt && i < core_list_len(nt->rule_ids); i++) {
+        parse_annotation_t *candidate = parse_rule_find_annot(
+            g, parse_get_rule(g, nt->rule_ids.data[i]), kind);
+        if (!candidate) continue;
+        if (found) return nullptr;
+        found = candidate;
+    }
+
+    return found;
+}
+
 static void
 test_annotations_are_retained_on_the_grammar(parse_grammar_t *g)
 {
@@ -186,10 +203,11 @@ test_annotations_are_retained_on_the_grammar(parse_grammar_t *g)
 
     if (prog) {
         check("and carries its @scope annotation",
-              parse_nt_find_annot(g, prog, PARSE_ANNOT_SCOPE_OPEN) != nullptr);
+              find_unique_rule_annot(g, prog, PARSE_ANNOT_SCOPE_OPEN) != nullptr);
     }
 
-    parse_annotation_t *a = parse_nt_find_annot(g, prog, PARSE_ANNOT_SCOPE_OPEN);
+    parse_annotation_t *a
+        = find_unique_rule_annot(g, prog, PARSE_ANNOT_SCOPE_OPEN);
 
     if (a) {
         check("with the tag it was written with",
@@ -199,7 +217,7 @@ test_annotations_are_retained_on_the_grammar(parse_grammar_t *g)
 
 typedef struct {
     parse_grammar_t *grammar;
-    parse_nonterm_t *nonterm;
+    parse_rule_t    *rule;
     bool             ok;
 } annot_lookup_run_t;
 
@@ -213,8 +231,8 @@ lookup_annotations_concurrently(void *arg)
         parse_annotation_t *file
             = parse_grammar_find_annot(run->grammar, PARSE_ANNOT_TOKENIZER);
         parse_annotation_t *scope
-            = parse_nt_find_annot(run->grammar, run->nonterm,
-                                  PARSE_ANNOT_SCOPE_OPEN);
+            = parse_rule_find_annot(run->grammar, run->rule,
+                                    PARSE_ANNOT_SCOPE_OPEN);
 
         if (!file || !scope) {
             run->ok = false;
@@ -236,8 +254,12 @@ test_annotation_cache_is_thread_safe(parse_grammar_t *g)
 
     parse_grammar_finalize(g);
 
+    parse_rule_t *prog_rule
+        = prog && core_list_len(prog->rule_ids)
+              ? parse_get_rule(g, prog->rule_ids.data[0]) : nullptr;
+
     for (int i = 0; i < N_THREADS; i++) {
-        runs[i] = (annot_lookup_run_t){.grammar = g, .nonterm = prog};
+        runs[i] = (annot_lookup_run_t){.grammar = g, .rule = prog_rule};
         created[i] = pthread_create(&threads[i], nullptr,
                                     lookup_annotations_concurrently,
                                     &runs[i]) == 0;
@@ -333,6 +355,19 @@ test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
     check("but is visible from inside the block", b_from_block != nullptr);
     check("and the enclosing scope is still reachable from the block",
           a_from_block == a);
+    parse_tree_t *decl = find_node(g, tree, "decl");
+    parse_tree_t *name_node = decl ? find_node(g, decl, "name") : nullptr;
+    if (name_node && !core_tree_is_leaf(name_node))
+        core_tree_node_value(name_node).scope = probe.module_scope;
+    check("a reference test has a nonterminal name node",
+          name_node && !core_tree_is_leaf(name_node));
+    check("a reference test uses the declared name",
+          name_node && core_string_eq(
+              parse_tree_extract_first_identifier(name_node), S("a")));
+    check("a reference node resolves and retains its symbol",
+          name_node && parse_symtab_resolve_node(
+              st, name_node, core_string_empty()) == a
+              && core_tree_node_value(name_node).sym == a);
     check("a scope is still searchable after the walk popped it",
           b_from_block != nullptr && b_from_block->scope == probe.block_scope);
     check("every declaration was recorded", c != nullptr);
@@ -442,7 +477,8 @@ test_annotation_arguments_only_need_balanced_parens(void)
     check("the annotated non-terminal is there", top != nullptr);
 
     if (top) {
-        parse_annotation_t *d = parse_nt_find_annot(g, top, PARSE_ANNOT_DECLARES);
+        parse_annotation_t *d
+            = find_unique_rule_annot(g, top, PARSE_ANNOT_DECLARES);
 
         check("@declares still reads its child references",
               d != nullptr && d->name_ref.kind == PARSE_ROLE_BY_INDEX
@@ -451,7 +487,7 @@ test_annotation_arguments_only_need_balanced_parens(void)
                   && core_string_eq(d->sym_kind, S("var")));
 
         check("the annotation that nests parentheses survives the load",
-              parse_nt_find_annot(g, top, PARSE_ANNOT_DISAMBIG) != nullptr);
+              find_unique_rule_annot(g, top, PARSE_ANNOT_DISAMBIG) != nullptr);
     }
 
     parse_grammar_free(g);
@@ -467,7 +503,7 @@ test_annotation_arguments_only_need_balanced_parens(void)
           parse_bnf_load(S(by_name), S("top"), g2));
 
     parse_nonterm_t    *t2 = nt_named(g2, "top");
-    parse_annotation_t *l  = t2 ? parse_nt_find_annot(g2, t2, PARSE_ANNOT_LITERAL)
+    parse_annotation_t *l  = t2 ? find_unique_rule_annot(g2, t2, PARSE_ANNOT_LITERAL)
                               : nullptr;
 
     check("and $name carries the name, not an index",
@@ -505,13 +541,13 @@ test_annotation_arguments_carry_integers(void)
     parse_nonterm_t *top = nt_named(g, "top");
     parse_nonterm_t *mid = nt_named(g, "mid");
 
-    parse_annotation_t *p = top ? parse_nt_find_annot(g, top, PARSE_ANNOT_PENALTY)
+    parse_annotation_t *p = top ? find_unique_rule_annot(g, top, PARSE_ANNOT_PENALTY)
                               : nullptr;
 
     check("@penalty reads the number it was written with",
           p != nullptr && p->penalty_cost == 7);
 
-    parse_annotation_t *d = mid ? parse_nt_find_annot(g, mid, PARSE_ANNOT_DISAMBIG)
+    parse_annotation_t *d = mid ? find_unique_rule_annot(g, mid, PARSE_ANNOT_DISAMBIG)
                               : nullptr;
 
     check("@disambig reads its predicate and its cost",
@@ -559,7 +595,7 @@ test_emit_annotations_retain_action_and_operands(void)
     bool loaded = parse_bnf_load(S(G), S("top"), g);
     parse_nonterm_t *top = loaded ? nt_named(g, "top") : nullptr;
     parse_annotation_t *emit = top
-        ? parse_nt_find_annot(g, top, PARSE_ANNOT_EMIT) : nullptr;
+        ? find_unique_rule_annot(g, top, PARSE_ANNOT_EMIT) : nullptr;
 
     check("an emit annotation accepts an action and child references",
           emit && core_string_eq(emit->emit_action, S("add"))
@@ -607,7 +643,7 @@ test_annotation_argument_lists_are_growable(void)
         core_string_borrow(src.data, src.byte_len), S("top"), g);
     parse_nonterm_t *top = loaded ? nt_named(g, "top") : nullptr;
     parse_annotation_t *annotation = top
-        ? parse_nt_find_annot(g, top, PARSE_ANNOT_CONSTRAIN) : nullptr;
+        ? find_unique_rule_annot(g, top, PARSE_ANNOT_CONSTRAIN) : nullptr;
 
     check("annotation argument lists accept more than 32 entries",
           annotation && core_list_len(annotation->constraints) == 40);
@@ -672,6 +708,26 @@ test_implements_is_checked_not_carried(void)
     parse_annot_result_free(r);
     parse_pwz_free(p);
     scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_direct_nonterminal_annotation_lookup(void)
+{
+    static const char *const G
+        = "<top> ::= <choice>\n"
+          "<choice> @emit(\"identity\", $0) ::= <name>\n"
+          "<name> ::= __LOWER\n";
+    parse_grammar_t *g = parse_grammar_new();
+    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    parse_nonterm_t *choice = loaded ? nt_named(g, "choice") : nullptr;
+    parse_rule_t *choice_rule = choice
+        ? parse_get_rule(g, choice->rule_ids.data[0]) : nullptr;
+    check("an exact production query finds its annotation",
+          choice_rule
+              && parse_rule_find_annot(g, choice_rule, PARSE_ANNOT_EMIT));
+    check("a direct nonterminal query does not inherit a production annotation",
+          choice && !parse_nt_find_direct_annot(choice, PARSE_ANNOT_EMIT));
     parse_grammar_free(g);
 }
 
@@ -1575,6 +1631,54 @@ test_symbol_lookup_instantiates_schemes(void)
 }
 
 static void
+test_error_propagation_preserves_return_type(void)
+{
+    static const char *const G =
+        "@tokenizer(\"toy\")\n"
+        "<top> ::= <postfix>\n"
+        "<postfix> ::= <inner> \"!\"\n"
+        "<inner> ::= \"x\"\n";
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    check("error propagation test grammar loads",
+          parse_bnf_load(S(G), S("top"), g));
+    parse_pwz_parser_t *p;
+    parse_token_stream_t *ts;
+    parse_tree_t *tree = parse_toy(g, "top", "x!", &p, &ts);
+    check("error propagation sample parses", tree != nullptr);
+    if (!tree) {
+        parse_grammar_free(g);
+        return;
+    }
+
+    th_ctx *tc = th_ctx_new();
+    parse_tree_t *postfix = find_node(g, tree, "postfix");
+    parse_tree_t *inner = postfix && core_tree_num_children(postfix)
+        ? core_tree_child(postfix, 0) : nullptr;
+    if (inner && !core_tree_is_leaf(inner))
+        core_tree_node_value(inner).type = th_name(tc, "i32");
+    parse_visit_t visit = {
+        .grammar = g,
+        .node = postfix,
+        .pn = postfix ? &core_tree_node_value(postfix) : nullptr,
+    };
+    parse_infer_expr_t *projection = parse_infer_parse(
+        S("unwrap_result($0)"));
+    bool ok = false;
+    th_type *result = projection && postfix
+        ? parse_infer_eval(projection, &visit, tc, nullptr, &ok) : nullptr;
+    check("postfix error propagation preserves the ordinary return type",
+          ok && result && th_hash(tc, result)
+              == th_hash(tc, th_name(tc, "i32")));
+
+    parse_infer_free(projection);
+    th_ctx_free(tc);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
 test_function_visibility_does_not_leak_to_parameters(void)
 {
     static const char *const G =
@@ -1750,6 +1854,7 @@ main(void)
     test_annotation_arguments_only_need_balanced_parens();
     test_annotation_arguments_carry_integers();
     test_emit_annotations_retain_action_and_operands();
+    test_direct_nonterminal_annotation_lookup();
     test_annotation_argument_lists_are_growable();
     test_the_representation_and_declaration_annotations();
     test_initial_symbol_walk_callback(g);
@@ -1757,6 +1862,7 @@ main(void)
     test_selected_type_annotations_per_node(g);
     test_inference_result_is_propagated();
     test_symbol_lookup_instantiates_schemes();
+    test_error_propagation_preserves_return_type();
     test_function_visibility_does_not_leak_to_parameters();
     test_visibility_prefix_binds_to_non_function_declaration();
     test_scoped_declaration_is_bound_outside_its_body();
