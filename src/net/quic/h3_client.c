@@ -869,7 +869,7 @@ process_request_frame(n00b_h3_request_t      *req,
                  * check relies on -- an unrepresentable length saturates
                  * rather than erroring, so it is still refused below. */
                 uint64_t declared
-                    = n00b_parse_byte_count_span(fields[i].value,
+                    = n00b_parse_byte_count_span((const char *)fields[i].value,
                                                  fields[i].value_len);
                 if (declared > req->max_body_size) {
                     req_trip_body_cap(req);
