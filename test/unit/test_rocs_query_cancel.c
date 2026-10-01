@@ -470,7 +470,17 @@ test_streaming_preflight_passes_cancel(void)
 {
     const uint64_t shards = 12;
     n00b_store_t  *store  = open_store(nullptr);
-    fill_sealed(store, shards, 10, r"info");
+    // Each shard's level bounds must span "error" without holding one
+    // ("debug" < "error" < "info"). A shard whose bounds exclude "error" is
+    // pruned before the fan-out reaches it, and with every shard pruned the
+    // collect pass makes no polls for this test to observe.
+    int64_t id = 0;
+    for (uint64_t s = 0; s < shards; s++) {
+        for (uint64_t i = 0; i < 10; i++) {
+            ingest(store, id++, (i & 1) ? r"info" : r"debug");
+        }
+        seal(store, 1000 + s);
+    }
 
     auto view_r = n00b_query_view(store, level_is(r"error"), .limit = 0);
     CHECK(n00b_result_is_ok(view_r));
