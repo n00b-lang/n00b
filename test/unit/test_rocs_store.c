@@ -2,10 +2,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "n00b.h"
 #include "core/runtime.h"
 #include "core/time.h"
+#include "text/strings/format.h"
 #include "text/strings/string_ops.h"
 #include "util/assert.h"
 #include "vfs/backend_memory.h"
@@ -16,6 +18,7 @@
 
 #include "internal/rocs/filter.h"
 #include "internal/rocs/store.h"
+#include "rocs/index.h"
 #include "test_check.h"
 
 static n00b_store_schema_t *
@@ -1108,6 +1111,170 @@ test_record_stream_reads_hot_tail_without_seal(void)
     CHECK(n00b_result_is_ok(n00b_store_close(store)));
 }
 
+static n00b_buffer_t *
+read_vfs_file(n00b_vfs_t *vfs, n00b_string_t *path)
+{
+    auto open_r = n00b_vfs_open(vfs, path, N00B_VFS_O_R);
+    CHECK(n00b_result_is_ok(open_r));
+    n00b_buffer_t *image = n00b_buffer_new(0);
+    for (;;) {
+        auto read_r = n00b_vfs_read(vfs, n00b_result_get(open_r), UINT64_C(1) << 20);
+        CHECK(n00b_result_is_ok(read_r));
+        if (n00b_buffer_len(n00b_result_get(read_r)) == 0) {
+            break;
+        }
+        n00b_buffer_concat(image, n00b_result_get(read_r));
+    }
+    CHECK(n00b_result_is_ok(n00b_vfs_close(vfs, n00b_result_get(open_r))));
+    return image;
+}
+
+static uint64_t
+image_u64_le(n00b_buffer_t *image, uint64_t at)
+{
+    CHECK(at + 8 <= (uint64_t)n00b_buffer_len(image));
+    const uint8_t *b = (const uint8_t *)image->data + at;
+    uint64_t       v = 0;
+    for (uint8_t i = 0; i < 8; i++) {
+        v |= ((uint64_t)b[i]) << (i * 8);
+    }
+    return v;
+}
+
+typedef struct {
+    uint64_t       shard_id;
+    uint64_t       generation;
+    uint64_t       byte_len;
+    uint64_t       record_count;
+    uint64_t       schema_generation;
+    uint64_t       seal_ts;
+    n00b_string_t *object_path;
+    n00b_string_t *partition_key;
+} sealed_facts_t;
+
+static sealed_facts_t
+facts_of(n00b_store_catalog_entry_t *entry)
+{
+    sealed_facts_t f = {};
+    f.shard_id       = n00b_result_get(n00b_store_catalog_entry_get_shard_id(entry));
+    f.generation     = n00b_result_get(n00b_store_catalog_entry_get_generation(entry));
+    f.byte_len       = n00b_result_get(n00b_store_catalog_entry_get_byte_len(entry));
+    f.record_count   = n00b_result_get(n00b_store_catalog_entry_get_record_count(entry));
+    f.schema_generation =
+        n00b_result_get(n00b_store_catalog_entry_get_schema_generation(entry));
+    f.seal_ts       = n00b_result_get(n00b_store_catalog_entry_get_seal_ts(entry));
+    // Copies: the originals belong to the store and die with its close.
+    f.object_path = n00b_cformat(
+        "«#»",
+        n00b_result_get(n00b_store_catalog_entry_get_object_path(entry)));
+    f.partition_key = n00b_cformat(
+        "«#»",
+        n00b_result_get(n00b_store_catalog_entry_get_partition_key(entry)));
+    return f;
+}
+
+// The catalog is little-endian u64 fields in a fixed order, with strings as a
+// u64 length then the bytes. Pin the header and first entry byte for byte, and
+// prove the whole image (bloom trailers, zone bounds included) reads back as
+// the same entries.
+static void
+test_catalog_image_layout_and_round_trip(void)
+{
+    n00b_store_schema_t *schema = new_schema();
+    CHECK(n00b_result_is_ok(n00b_store_schema_add_field(schema, r"level")));
+    CHECK(n00b_result_is_ok(n00b_store_schema_add_field(schema, r"score")));
+    CHECK(n00b_result_is_ok(n00b_store_schema_add_field(
+        schema,
+        r"name",
+        .index_kind = N00B_STORE_INDEX_TERM)));
+
+    n00b_vfs_t   *vfs   = nullptr;
+    n00b_store_t *store = open_store_with_vfs(schema, &vfs);
+
+    const uint64_t shards = 3;
+    sealed_facts_t before[3];
+    for (uint64_t sh = 0; sh < shards; sh++) {
+        for (uint64_t r = 0; r < 4; r++) {
+            n00b_json_node_t *record = n00b_json_object_new();
+            n00b_json_object_put(record,
+                                 "level",
+                                 n00b_json_int_new((int64_t)(sh * 10 + r)));
+            n00b_json_object_put(record,
+                                 "score",
+                                 n00b_json_double_new(0.5 + (double)r));
+            n00b_json_object_put(record,
+                                 "name",
+                                 n00b_json_string_new_from_n00b(
+                                     n00b_cformat("name-«#»", (int64_t)r)));
+            CHECK(n00b_result_is_ok(n00b_store_ingest(store, record)));
+        }
+        auto seal_r = n00b_store_seal_hot_shard(store, .seal_ts = 1000 + sh);
+        CHECK(n00b_result_is_ok(seal_r));
+        before[sh] = facts_of(n00b_result_get(seal_r));
+    }
+    CHECK(n00b_result_is_ok(n00b_store_close(store)));
+
+    n00b_buffer_t *image = read_vfs_file(vfs, r"/rocs/catalog.rocs");
+    CHECK(n00b_buffer_len(image) > 8 + 8 * 8);
+    CHECK(memcmp(image->data, "ROCSCAT1", 8) == 0);
+
+    // Header: version, generation, next open shard id, schema generation,
+    // oldest (generation, shard id, ordinal), entry count.
+    uint64_t at = 8;
+    CHECK(image_u64_le(image, at) >= 1);
+    at += 8 * 7;
+    CHECK(image_u64_le(image, at) == shards);
+    at += 8;
+
+    // First entry: state, then the six u64 facts in order, then object_path.
+    CHECK(image_u64_le(image, at) == N00B_STORE_CATALOG_ENTRY_STATE_SEALED);
+    at += 8;
+    CHECK(image_u64_le(image, at) == before[0].shard_id);
+    at += 8;
+    CHECK(image_u64_le(image, at) == before[0].generation);
+    at += 8;
+    CHECK(image_u64_le(image, at) == before[0].byte_len);
+    at += 8;
+    CHECK(image_u64_le(image, at) == before[0].record_count);
+    at += 8;
+    CHECK(image_u64_le(image, at) == before[0].schema_generation);
+    at += 8;
+    CHECK(image_u64_le(image, at) == before[0].seal_ts);
+    at += 8;
+    uint64_t path_len = image_u64_le(image, at);
+    at += 8;
+    CHECK(path_len == (uint64_t)before[0].object_path->u8_bytes);
+    CHECK(at + path_len <= (uint64_t)n00b_buffer_len(image));
+    CHECK(memcmp(image->data + at, before[0].object_path->data, path_len) == 0);
+
+    // Reopen on the same image and compare every entry's facts.
+    n00b_store_schema_t *schema2 = new_schema();
+    CHECK(n00b_result_is_ok(n00b_store_schema_add_field(schema2, r"level")));
+    CHECK(n00b_result_is_ok(n00b_store_schema_add_field(schema2, r"score")));
+    CHECK(n00b_result_is_ok(n00b_store_schema_add_field(
+        schema2,
+        r"name",
+        .index_kind = N00B_STORE_INDEX_TERM)));
+    auto reopen_r = n00b_store_open_vfs(vfs, r"/rocs", schema2);
+    CHECK(n00b_result_is_ok(reopen_r));
+    n00b_store_t *reopened = n00b_result_get(reopen_r);
+
+    for (uint64_t sh = 0; sh < shards; sh++) {
+        auto find_r = n00b_store_catalog_find_shard(reopened, before[sh].shard_id);
+        CHECK(n00b_result_is_ok(find_r));
+        CHECK(n00b_option_is_set(n00b_result_get(find_r)));
+        sealed_facts_t after = facts_of(n00b_option_get(n00b_result_get(find_r)));
+        CHECK(after.generation == before[sh].generation);
+        CHECK(after.byte_len == before[sh].byte_len);
+        CHECK(after.record_count == before[sh].record_count);
+        CHECK(after.schema_generation == before[sh].schema_generation);
+        CHECK(after.seal_ts == before[sh].seal_ts);
+        CHECK(n00b_unicode_str_eq(after.object_path, before[sh].object_path));
+        CHECK(n00b_unicode_str_eq(after.partition_key, before[sh].partition_key));
+    }
+    CHECK(n00b_result_is_ok(n00b_store_close(reopened)));
+}
+
 static void
 test_partition_constructors_and_routes(void)
 {
@@ -1212,6 +1379,7 @@ main(int argc, char **argv)
     test_record_stream_blocks_only_snapshot_shards();
     test_retention_prunes_unpinned_shards_around_stream_pin();
     test_record_stream_reads_hot_tail_without_seal();
+    test_catalog_image_layout_and_round_trip();
     test_partition_constructors_and_routes();
     test_policy_constructors();
 

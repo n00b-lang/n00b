@@ -2493,40 +2493,44 @@ rocs_store_catalog_buffer_new() _kargs
     return n00b_result_ok(n00b_buffer_t *, buf);
 }
 
+// The catalog is rewritten whole under the store's commit lock, so every
+// append below takes the buffer lock once per value, never once per byte: a
+// multi-megabyte catalog written bytewise holds the commit lock for minutes.
 static n00b_result_t(bool)
-rocs_store_catalog_append_u8(n00b_buffer_t *buf, uint8_t byte)
+rocs_store_catalog_append_raw(n00b_buffer_t *buf,
+                              const void    *data,
+                              uint64_t       len)
 {
     if (buf == nullptr) {
         return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
     }
-
-    uint64_t pos = (uint64_t)n00b_buffer_len(buf);
-    if (pos >= (uint64_t)INT64_MAX) {
+    if (len == 0) {
+        return n00b_result_ok(bool, true);
+    }
+    if (data == nullptr || len > (uint64_t)INT64_MAX
+        || (uint64_t)n00b_buffer_len(buf) > (uint64_t)INT64_MAX - len) {
         return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
     }
 
-    n00b_buffer_resize(buf, pos + 1);
-    auto set_r = n00b_buffer_set_index(buf, (int64_t)pos, byte);
-    if (n00b_result_is_err(set_r)) {
-        return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
-    }
-
+    n00b_buffer_append_bytes(buf, data, len);
     return n00b_result_ok(bool, true);
 }
 
 static n00b_result_t(bool)
+rocs_store_catalog_append_u8(n00b_buffer_t *buf, uint8_t byte)
+{
+    return rocs_store_catalog_append_raw(buf, &byte, 1);
+}
+
+// Little-endian, the catalog's one integer encoding.
+static n00b_result_t(bool)
 rocs_store_catalog_append_u64(n00b_buffer_t *buf, uint64_t value)
 {
+    uint8_t bytes[8];
     for (uint8_t i = 0; i < 8; i++) {
-        auto append_r = rocs_store_catalog_append_u8(
-            buf,
-            (uint8_t)((value >> (i * 8)) & 0xff));
-        if (n00b_result_is_err(append_r)) {
-            return append_r;
-        }
+        bytes[i] = (uint8_t)((value >> (i * 8)) & 0xff);
     }
-
-    return n00b_result_ok(bool, true);
+    return rocs_store_catalog_append_raw(buf, bytes, sizeof(bytes));
 }
 
 // A u64 length, then that many bytes.
@@ -2542,24 +2546,13 @@ rocs_store_catalog_append_bytes(n00b_buffer_t *buf,
         return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
     }
 
+    (void)allocator;
+
     auto len_r = rocs_store_catalog_append_u64(buf, len);
     if (n00b_result_is_err(len_r)) {
         return len_r;
     }
-    if (len == 0) {
-        return n00b_result_ok(bool, true);
-    }
-
-    n00b_buffer_t *piece = n00b_buffer_from_bytes((char *)data,
-                                                  (int64_t)len,
-                                                  .allocator = allocator);
-    if (piece == nullptr) {
-        return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
-    }
-    n00b_buffer_concat(buf, piece);
-    n00b_buffer_free(piece);
-    n00b_free(piece);
-    return n00b_result_ok(bool, true);
+    return rocs_store_catalog_append_raw(buf, data, len);
 }
 
 static n00b_result_t(bool)

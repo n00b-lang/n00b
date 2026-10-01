@@ -2237,6 +2237,19 @@ test('rocs_zone_map_bench',
     },
 )
 
+bench_rocs_catalog = executable('bench_rocs_catalog',
+    ['test/unit/bench_rocs_catalog.c'],
+    kwargs: test_common_kwargs,
+)
+
+# Registered so the catalog write it times keeps working end to end. Sized
+# down here; run the binary directly (see its header) for timings.
+test('rocs_catalog_bench',
+    bench_rocs_catalog,
+    suite: 'unit',
+    env: {'ROCS_BENCH_SHARDS': '8'},
+)
+
 bench_rocs_prims = executable('bench_rocs_prims',
     ['test/unit/bench_rocs_prims.c'],
     kwargs: test_common_kwargs,
