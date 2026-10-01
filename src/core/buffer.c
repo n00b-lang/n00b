@@ -820,11 +820,7 @@ n00b_buffer_free(n00b_buffer_t *buf)
 
     if (buf->data) {
         if (buf->flags & N00B_BUF_F_MMAP) {
-#ifdef _WIN32
-            UnmapViewOfFile(buf->data);
-#else
-            munmap(buf->data, buf->byte_len);
-#endif
+            n00b_buffer_mmap_release(buf);
         }
         else if (buf->flags & N00B_BUF_F_BORROWED) {
             // Borrowed pointer — owner frees, we don't touch it.
@@ -856,9 +852,10 @@ n00b_buffer_free_with_allocator_hint(n00b_buffer_t *buf,
 
     if (buf->data) {
         if (buf->flags & N00B_BUF_F_MMAP) {
-#ifndef _WIN32
-            munmap(buf->data, buf->byte_len);
-#endif
+            // This was `#ifndef _WIN32 munmap(...)`, so on Windows it did
+            // nothing: the view leaked, and the file stayed locked against
+            // truncation and deletion for the life of the process (n00b#472).
+            n00b_buffer_mmap_release(buf);
         }
         else if (buf->flags & N00B_BUF_F_BORROWED) {
             // Borrowed pointer — owner frees, we don't touch it.
