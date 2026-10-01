@@ -3529,6 +3529,17 @@ gc_test = executable('test_gc',
 test('gc', gc_test, suite: 'unit')
 test('gc_pin_all', gc_test, suite: 'unit', env: ['N00B_GC_PIN_ALL=1'])
 
+# crashappsec/wax#946: a pin-all heap's retained-segment chain grows with
+# uptime, and the collector resolves every pinned object against it. Builds a
+# chain of a few thousand runs and times a collection at each checkpoint; the
+# GC_RETAINED_* env knobs scale it up for a manual benchmark run.
+gc_retained_segments_test = executable('test_gc_retained_segments',
+    ['test/unit/test_gc_retained_segments.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_retained_segments', gc_retained_segments_test, suite: 'unit',
+     timeout: 300)
+
 # Verifies availability reporting in default builds and attribution when
 # debug_live_census is enabled.
 pool_audit_test = executable('test_pool_audit',
