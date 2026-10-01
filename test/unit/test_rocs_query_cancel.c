@@ -481,6 +481,13 @@ test_streaming_preflight_passes_cancel(void)
         }
         seal(store, 1000 + s);
     }
+    auto kept_r = n00b_plan_store_sealed(store,
+                                         lowered(level_is(r"error")),
+                                         nullptr);
+    CHECK(n00b_result_is_ok(kept_r));
+    CHECK(n00b_result_get(n00b_plan_shard_result_count(
+              n00b_result_get(kept_r)))
+          == shards);
 
     auto view_r = n00b_query_view(store, level_is(r"error"), .limit = 0);
     CHECK(n00b_result_is_ok(view_r));
