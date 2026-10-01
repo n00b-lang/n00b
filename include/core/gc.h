@@ -347,6 +347,14 @@ typedef struct {
      * after every collect and the guard scan would fall back to the global
      * all-time high-water mark. */
     uint64_t                          to_space_max_alloc_len;
+    /* The from-space segment descriptors sorted by data address, so a pinned
+     * object resolves to its segment by binary search instead of a chain walk
+     * (a pin-all heap carries tens of thousands of retained runs). Built in
+     * n00b_collect_setup once the chain is final; lives in work_pool. Nulled at
+     * the segment swap in n00b_collection_cleanup, since the chain it indexes
+     * is freed right after. */
+    n00b_segment_t                  **from_segments;
+    uint64_t                          from_segment_count;
 } n00b_collect_t;
 
 // ============================================================================

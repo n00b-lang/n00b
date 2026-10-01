@@ -320,7 +320,6 @@ static void n00b_add_described_scan_range_to_worklist(n00b_collect_t     *ctx,
                                                       n00b_gc_scan_cb_t   scan_cb,
                                                       void               *scan_user,
                                                       n00b_alloc_info_t   origin);
-static inline bool n00b_addr_in_arena(void *addr, n00b_arena_t *arena);
 // Mostly-copying pin support (ambiguous-root pinning).
 static void        n00b_pin_bitmaps_alloc(n00b_collect_t *ctx);
 static void        n00b_pin_candidate(n00b_collect_t *ctx, void *candidate);
@@ -2962,23 +2961,6 @@ _n00b_gc_unregister_root(void *addr)
 // Finalizer processing
 // ============================================================================
 
-static inline bool
-n00b_addr_in_arena(void *addr, n00b_arena_t *arena)
-{
-    n00b_segment_t *seg = arena->current_segment;
-
-    while (seg) {
-        char *start = seg->data;
-        char *end   = start + seg->size;
-
-        if ((char *)addr >= start && (char *)addr < end) {
-            return true;
-        }
-        seg = seg->next_segment;
-    }
-    return false;
-}
-
 // ============================================================================
 // Mostly-copying pin support (ambiguous-root pinning)
 //
@@ -2997,14 +2979,25 @@ n00b_addr_in_arena(void *addr, n00b_arena_t *arena)
 // phase and the page-reclaim pass consume the bitmap.
 // ============================================================================
 
+static int
+n00b_segment_data_cmp(const void *a, const void *b)
+{
+    const n00b_segment_t *sa = *(n00b_segment_t *const *)a;
+    const n00b_segment_t *sb = *(n00b_segment_t *const *)b;
+    return (sa->data > sb->data) - (sa->data < sb->data);
+}
+
 // Allocate a zeroed page-pin bitmap (one bit per n00b_page_size of `data`) for
-// every from-space segment.  Descriptors live in system_pool (non-moving), so
-// the bitmap pointer parked on the descriptor is stable across the collect.
+// every from-space segment, and index the segments by address for
+// n00b_from_segment_for.  Descriptors live in system_pool (non-moving), so the
+// bitmap pointer parked on the descriptor and the index entries are stable
+// across the collect.
 static void
 n00b_pin_bitmaps_alloc(n00b_collect_t *ctx)
 {
     n00b_allocator_t *scratch = (n00b_allocator_t *)&ctx->work_pool;
-    n00b_segment_t   *seg = ctx->from_space->current_segment;
+    n00b_segment_t   *seg     = ctx->from_space->current_segment;
+    uint64_t          count   = 0;
 
     while (seg) {
         uint64_t npages = (seg->size + n00b_page_size - 1) / n00b_page_size;
@@ -3014,7 +3007,19 @@ n00b_pin_bitmaps_alloc(n00b_collect_t *ctx)
                                                      &(n00b_alloc_opts_t){.allocator = scratch});
         seg->pin_max_alloc_len = 0;
         seg                    = seg->next_segment;
+        count++;
     }
+
+    n00b_segment_t **index = n00b_alloc_array_with_opts(n00b_segment_t *,
+                                                        count ? count : 1,
+                                                        &(n00b_alloc_opts_t){.allocator = scratch});
+    uint64_t i = 0;
+    for (seg = ctx->from_space->current_segment; seg; seg = seg->next_segment) {
+        index[i++] = seg;
+    }
+    qsort(index, count, sizeof(n00b_segment_t *), n00b_segment_data_cmp);
+    ctx->from_segments      = index;
+    ctx->from_segment_count = count;
 }
 
 // In-arena footprint [*start, *start + *len) of an allocation: for an inline
@@ -3033,16 +3038,29 @@ n00b_alloc_footprint(n00b_alloc_info_t ainfo, char **start, uint64_t *len)
     }
 }
 
-// The from-space segment whose data region contains `addr`, or null.
+// The from-space segment whose data region contains `addr`, or null.  Segment
+// data regions never overlap, so the sorted index has at most one candidate.
 static inline n00b_segment_t *
 n00b_from_segment_for(n00b_collect_t *ctx, char *addr)
 {
-    n00b_segment_t *seg = ctx->from_space->current_segment;
-    while (seg) {
-        if (addr >= seg->data && addr < seg->data + seg->size) {
+    // Null once n00b_collection_cleanup has swapped the chain out from under
+    // the index; a lookup after that point would read freed descriptors.
+    assert(ctx->from_segments != nullptr);
+
+    uint64_t lo = 0;
+    uint64_t hi = ctx->from_segment_count;
+    while (lo < hi) {
+        uint64_t        mid = lo + (hi - lo) / 2;
+        n00b_segment_t *seg = ctx->from_segments[mid];
+        if (addr < seg->data) {
+            hi = mid;
+        }
+        else if (addr >= seg->data + seg->size) {
+            lo = mid + 1;
+        }
+        else {
             return seg;
         }
-        seg = seg->next_segment;
     }
     return nullptr;
 }
@@ -3300,10 +3318,10 @@ n00b_finalizer_in_from_space(n00b_finalizer_info_t *entry, n00b_collect_t *ctx)
     if (ctx->from_space->vtable.metadata_pool) {
         // OOB arena: alloc_info is n00b_oob_hdr_t*, check user_ptr.
         n00b_oob_hdr_t *oob = (n00b_oob_hdr_t *)entry->alloc_info;
-        return n00b_addr_in_arena(oob->user_ptr, ctx->from_space);
+        return n00b_from_segment_for(ctx, (char *)oob->user_ptr) != nullptr;
     }
     // Inline-only: alloc_info is the inline header in the segment.
-    return n00b_addr_in_arena(entry->alloc_info, ctx->from_space);
+    return n00b_from_segment_for(ctx, (char *)entry->alloc_info) != nullptr;
 }
 
 // ============================================================================
@@ -3820,6 +3838,10 @@ n00b_collection_cleanup(n00b_collect_t *ctx)
 
     n00b_segment_t *new_segment  = ctx->to_space->current_segment;
     void           *old_segments = (void *)ctx->from_space->current_segment;
+
+    // The reclaim below frees the descriptors the index points at.
+    ctx->from_segments      = nullptr;
+    ctx->from_segment_count = 0;
 
     ctx->from_space->current_segment = new_segment;
     ctx->from_space->next_alloc      = ctx->to_space->next_alloc;
