@@ -25,6 +25,7 @@ static th_type *opd_type(ir_instr_t *in, uint32_t i)
     switch (o->kind) {
     case IR_OPD_VALUE:
     case IR_OPD_SPREAD:
+    case IR_OPD_FRESH:
         return o->value ? o->value->type : nullptr;
     case IR_OPD_NAMED_ARG:
         return o->named.value ? o->named.value->type : nullptr;
@@ -101,6 +102,7 @@ static void blame(ir_diags_t *d, ir_diag_t *dg, ir_instr_t *in, uint32_t i,
     const ir_operand_t *o = &in->operands[i];
     const ir_value_t   *v = o->kind == IR_OPD_VALUE      ? o->value
                           : o->kind == IR_OPD_SPREAD    ? o->value
+                          : o->kind == IR_OPD_FRESH     ? o->value
                           : o->kind == IR_OPD_NAMED_ARG  ? o->named.value
                           : o->kind == IR_OPD_PHI_ARM    ? o->phi.value
                                                          : nullptr;
@@ -725,6 +727,42 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
     }
 
     return ACCEPT(t);
+}
+
+static ir_rule_result_t rule_rest_collect(ir_module_t *m, ir_instr_t *in,
+                                          ir_diags_t *d, void *state)
+{
+    (void)state;
+    ir_value_t *rest = in->n_operands == 1
+        && in->operands[0].kind == IR_OPD_VALUE
+            ? in->operands[0].value : nullptr;
+    th_type *result = declared(in);
+    th_type *sequence = th_resolve(result);
+    th_type *element = sequence && th_kind_of(sequence) == TH_SEQUENCE
+        ? th_seq_elem(sequence) : nullptr;
+    if (!rest || !rest->is_rest || !element
+        || !same(m, ir_type_intern(m, element), opd_type(in, 0))) {
+        complain(m, d, IR_DIAG_TYPE_ARGS, in, "this rest collection",
+                 "rest.collect needs a rest parameter and a sequence result "
+                 "with the same element type");
+        return REJECT;
+    }
+    return ACCEPT(result);
+}
+
+static ir_rule_result_t rule_param_present(ir_module_t *m, ir_instr_t *in,
+                                           ir_diags_t *d, void *state)
+{
+    (void)state;
+    ir_value_t *parameter = in->n_operands == 1
+        && in->operands[0].kind == IR_OPD_VALUE
+            ? in->operands[0].value : nullptr;
+    if (!ir_param_is_optional(parameter)) {
+        complain(m, d, IR_DIAG_TYPE_ARGS, in, "this parameter presence test",
+                 "param.present requires an optional function parameter");
+        return REJECT;
+    }
+    return ACCEPT(ir_type_parse(m, "bool"));
 }
 
 static uint32_t sequence_rank(th_type *type)
@@ -2011,10 +2049,7 @@ static bool call_arg_matches(ir_module_t *m, th_mode mode, th_type *want,
                              th_type *got, bool instantiate)
 {
     if (!want || !got) return false;
-    if (mode != TH_IN) {
-        got = th_ind_referent(got);
-        if (!got) return false;
-    }
+    (void)mode;
     return same(m, ir_type_intern(m, want), ir_type_intern(m, got))
         || (instantiate
             ? th_unify_in_place(ir_ctx_types(m->ctx), want, got)
@@ -2082,9 +2117,57 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
     size_t          np    = th_func_nparams(callee);
     size_t          given = 0;
     const th_param *rest  = th_func_rest(callee);
+    ir_func_t      *callee_function = in->n_operands
+        && in->operands[0].kind == IR_OPD_VALUE
+        && in->operands[0].value
+        && in->operands[0].value->kind == IR_VAL_FUNC
+            ? in->operands[0].value->owner : nullptr;
     bool spread_seen = false;
 
     for (uint32_t i = 1; i < in->n_operands; i++) {
+        if (in->operands[i].kind == IR_OPD_MISSING) {
+            const th_param *parameter = given < np
+                ? th_func_param(callee, given) : nullptr;
+            bool optional = callee_function
+                && ir_func_parameter_is_optional(callee_function, given);
+            if (!parameter || parameter->mode != TH_IN || !optional) {
+                complain(m, d, IR_DIAG_TYPE_ARGS, in,
+                         "this omitted argument",
+                         "an omitted call argument must match an optional "
+                         "input parameter on a directly known function");
+                return REJECT;
+            }
+            given++;
+            continue;
+        }
+        if (in->operands[i].kind == IR_OPD_OUT) {
+            const th_param *parameter = given < np
+                ? th_func_param(callee, given) : nullptr;
+            if (!parameter || parameter->mode != TH_OUT) {
+                complain(m, d, IR_DIAG_TYPE_ARGS, in, "this out argument",
+                         "an out placeholder must match an out parameter");
+                return REJECT;
+            }
+            given++;
+            continue;
+        }
+        if (in->operands[i].kind == IR_OPD_FRESH) {
+            const th_param *parameter = given < np
+                ? th_func_param(callee, given) : nullptr;
+            th_type *storage_type = opd_type(in, i);
+            th_type *referent = storage_type
+                ? th_ind_referent(storage_type) : nullptr;
+            if (!parameter || parameter->mode != TH_INOUT || !referent
+                || !same(m, ir_type_intern(m, parameter->type),
+                         ir_type_intern(m, referent))) {
+                complain(m, d, IR_DIAG_TYPE_ARGS, in,
+                         "this fresh construction target",
+                         "fresh storage must match a modify parameter");
+                return REJECT;
+            }
+            given++;
+            continue;
+        }
         if (in->operands[i].kind == IR_OPD_SPREAD) {
             ir_value_t *spread = in->operands[i].value;
             if (!rest || !spread || !spread->is_rest || given < np ||
@@ -2127,16 +2210,21 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
                 return REJECT;
             }
 
+            bool is_out = in->operands[i].named.value == nullptr;
+            if (is_out != (k->mode == TH_OUT)) {
+                complain(m, d, IR_DIAG_TYPE_ARGS, in, "this keyword argument",
+                         "keyword parameter %s must be supplied as %s",
+                         name, k->mode == TH_OUT ? "out" : "a value");
+                return REJECT;
+            }
+            if (is_out) continue;
+
             if (!call_arg_matches(m, k->mode, k->type, opd_type(in, i),
                                   generic_contract)) {
                 blame(d,
                       complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
-                               k->mode == TH_IN
-                                   ? "keyword parameter %s is %s, and the "
-                                     "argument is %s"
-                                   : "keyword parameter %s is %s out or "
-                                     "inout, so the argument must be a "
-                                     "pointer to it, not %s",
+                               "keyword parameter %s is %s, and the "
+                               "argument is %s",
                                in->operands[i].named.name,
                                typed(m, ir_type_intern(m, k->type)),
                                typed(m, opd_type(in, i))),
@@ -2155,16 +2243,18 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
 
         const th_param *p = given < np ? th_func_param(callee, given) : rest;
 
+        if (p && p->mode == TH_OUT) {
+            complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
+                     "out parameter %zu needs an out placeholder, not an input value",
+                     given);
+            return REJECT;
+        }
         if (p && !call_arg_matches(m, p->mode, p->type, opd_type(in, i),
                                    generic_contract)) {
             blame(d,
                   complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
-                           p->mode != TH_IN
-                               ? "%s parameter %zu is %s out or inout, so "
-                                 "the argument must be a pointer to it, not "
-                                 "%s"
-                               : "%s parameter %zu is %s, and the argument "
-                                 "is %s",
+                           "%s parameter %zu is %s, and the argument "
+                           "is %s",
                            given < np ? "positional" : "rest",
                            given, typed(m, ir_type_intern(m, p->type)),
                            typed(m, opd_type(in, i))),
@@ -2208,6 +2298,65 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
     return ACCEPT(outcome_type);
+}
+
+static ir_rule_result_t rule_call_output(ir_module_t *m, ir_instr_t *in,
+                                         ir_diags_t *d, void *state)
+{
+    (void)state;
+    ir_value_t *source = in->n_operands > 0
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    if (!source || !source->def || in->n_operands != 2
+        || in->operands[1].kind != IR_OPD_CONST
+        || in->operands[1].lit.is_float) return DECLINE;
+
+    ir_instr_t *call = source->def;
+    if (call->op == IR_OP_VARIANT_PAYLOAD) {
+        if (call->n_operands != 2
+            || call->operands[1].kind != IR_OPD_NAME
+            || strcmp(call->operands[1].name, "ok")) {
+            complain(m, d, IR_DIAG_TYPE_ARGS, in, "this value",
+                     "copy-out values are available only from a successful call result");
+            return REJECT;
+        }
+        ir_value_t *outcome = ir_operand_value(&call->operands[0]);
+        call = outcome ? outcome->def : nullptr;
+        if (!call || call->op != IR_OP_CALL) return DECLINE;
+    }
+    else if (call->op != IR_OP_CALL) {
+        return DECLINE;
+    }
+
+    th_type *signature = ir_instr_call_signature(call);
+    if (!signature) signature = opd_type(call, 0);
+    signature = signature ? th_resolve(signature) : nullptr;
+    if (signature && th_kind_of(signature) == TH_INDIRECTION)
+        signature = th_ind_referent(signature);
+    if (signature && th_kind_of(signature) == TH_BINDER)
+        signature = th_binder_body(signature);
+    if (!signature || th_kind_of(signature) != TH_FUNCTION) return DECLINE;
+    if (call->op == IR_OP_CALL) {
+        th_type *error = th_func_error(signature);
+        bool fallible = error
+            && ir_machine_of(m, error).class != IR_CLASS_VOID;
+        if (fallible && source->def->op != IR_OP_VARIANT_PAYLOAD) {
+            complain(m, d, IR_DIAG_TYPE_ARGS, in, "this call result",
+                     "a fallible call's copy-out values are available only on its successful path");
+            return REJECT;
+        }
+    }
+
+    ir_lit_t literal = in->operands[1].lit.i;
+    if (literal.neg || literal.mag > SIZE_MAX) return DECLINE;
+    th_type *output = ir_call_output_type(signature,
+                                           (size_t)literal.mag);
+    if (!output) {
+        complain(m, d, IR_DIAG_TYPE_ARGS, in, "this output index",
+                 "the call has no copy-out parameter at index %llu",
+                 (unsigned long long)literal.mag);
+        return REJECT;
+    }
+    return ACCEPT(ir_type_intern(m, output));
 }
 
 static ir_rule_result_t rule_size_like(ir_module_t *m, ir_instr_t *in,
@@ -2452,30 +2601,69 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
 
     bool is_void = ir_machine_of(m, ret).class == IR_CLASS_VOID;
 
-    if (is_void && in->n_operands) {
+    size_t output_count = 0;
+    for (size_t i = 0; i < th_func_nparams(f->type); i++) {
+        const th_param *parameter = th_func_param(f->type, i);
+        if (parameter && parameter->mode != TH_IN) output_count++;
+    }
+    for (size_t i = 0; i < th_func_nkw(f->type); i++) {
+        const th_kwparam *parameter = th_func_kw(f->type, i);
+        if (parameter && parameter->mode != TH_IN) output_count++;
+    }
+    const th_param *rest = th_func_rest(f->type);
+    if (rest && rest->mode != TH_IN) output_count++;
+    uint32_t result_offset = is_void ? 0 : 1;
+    if (in->n_operands != result_offset + output_count) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this return",
-                 "%s returns %s, so return takes no value", f->name,
-                 typed(m, ir_type_intern(m, ret)));
-
+                 "%s returns one value for each out or modify parameter",
+                 f->name);
         return REJECT;
     }
 
-    if (!is_void && !in->n_operands) {
-        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this return",
-                 "%s returns %s, so return takes a value", f->name,
-                 typed(m, ir_type_intern(m, ret)));
-
-        return REJECT;
-    }
-
-    if (in->n_operands
-        && !same(m, ir_type_intern(m, ret), opd_type(in, 0))) {
+    if (!is_void && !same(m, ir_type_intern(m, ret), opd_type(in, 0))) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
                            "%s returns %s, and this value is %s", f->name,
                            typed(m, ir_type_intern(m, ret)),
                            typed(m, opd_type(in, 0))),
               in, 0, "the value is defined here");
 
+        return REJECT;
+    }
+
+    uint32_t output_index = result_offset;
+    for (size_t i = 0; i < th_func_nparams(f->type); i++) {
+        const th_param *parameter = th_func_param(f->type, i);
+        if (!parameter || parameter->mode == TH_IN) continue;
+        if (!same(m, ir_type_intern(m, parameter->type),
+                  opd_type(in, output_index))) {
+            complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this copy-out value",
+                     "copy-out value %u has type %s, expected %s",
+                     output_index - result_offset,
+                     typed(m, opd_type(in, output_index)),
+                     typed(m, ir_type_intern(m, parameter->type)));
+            return REJECT;
+        }
+        output_index++;
+    }
+    for (size_t i = 0; i < th_func_nkw(f->type); i++) {
+        const th_kwparam *parameter = th_func_kw(f->type, i);
+        if (!parameter || parameter->mode == TH_IN) continue;
+        if (!same(m, ir_type_intern(m, parameter->type),
+                  opd_type(in, output_index))) {
+            complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this copy-out value",
+                     "copy-out value %u has type %s, expected %s",
+                     output_index - result_offset,
+                     typed(m, opd_type(in, output_index)),
+                     typed(m, ir_type_intern(m, parameter->type)));
+            return REJECT;
+        }
+        output_index++;
+    }
+    if (rest && rest->mode != TH_IN
+        && !same(m, ir_type_intern(m, rest->type),
+                 opd_type(in, output_index))) {
+        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this copy-out value",
+                 "the rest copy-out value has the wrong type");
         return REJECT;
     }
 
@@ -2525,6 +2713,8 @@ typedef struct {
 static const entry DEFAULTS[] = {
     {IR_OP_CONST, "ir.const", rule_annotated},
     {IR_OP_AGGREGATE, "ir.aggregate", rule_annotated},
+    {IR_OP_REST_COLLECT, "ir.rest.collect", rule_rest_collect},
+    {IR_OP_PARAM_PRESENT, "ir.param.present", rule_param_present},
     {IR_OP_ARRAY_NEW, "ir.array.new", rule_annotated},
     {IR_OP_ARRAY_NEW_USING, "ir.array.new.using", rule_annotated},
     {IR_OP_SEQUENCE_SHAPE_CHECK, "ir.sequence.shape.check",
@@ -2594,6 +2784,7 @@ static const entry DEFAULTS[] = {
     {IR_OP_SELECT, "ir.select", rule_select},
     {IR_OP_PHI, "ir.phi", rule_phi},
     {IR_OP_CALL, "ir.call", rule_call},
+    {IR_OP_CALL_OUTPUT, "ir.call-output", rule_call_output},
     {IR_OP_SIZEOF, "ir.sizeof", rule_size_like},
     {IR_OP_ALIGNOF, "ir.alignof", rule_size_like},
     {IR_OP_OFFSETOF, "ir.offsetof", rule_offsetof},

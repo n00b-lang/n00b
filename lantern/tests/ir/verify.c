@@ -564,8 +564,8 @@ static void test_entry_block_rules(void)
 {
     run_t *r = verify(MOD("  func @f(%c: bool) -> void {\n"
                           "    block entry:\n"
-                          "      branch %c, entry, out\n"
-                          "    block out:\n      unreachable\n  }\n"),
+                          "      branch %c, entry, exit\n"
+                          "    block exit:\n      unreachable\n  }\n"),
                       IR_PROP_PARSED);
 
     check("a branch back to entry gives it a predecessor, which is caught",
@@ -1512,6 +1512,33 @@ static void test_store_target_visitor(void)
           complete && capture.count == 1
               && capture.targets[0]->kind == IR_VAL_GLOBAL
               && capture.targets[0]->global == shared);
+
+    run_t *allocated = verify(MOD(
+        "  func @f(%allocator: Allocator, %input: i32) -> void {\n"
+        "    block entry:\n"
+        "      %storage: ptr[i32] = alloc.using i32, %allocator\n"
+        "      store %storage, %input\n"
+        "      return\n"
+        "    }\n"
+        ), IR_PROP_PARSED);
+    ir_func_t *allocated_function = allocated->m
+        ? ir_func_find(allocated->m, "f") : nullptr;
+    ir_block_t *allocated_entry = allocated_function
+        ? ir_block_entry(allocated_function) : nullptr;
+    ir_instr_t *allocated_store = nullptr;
+    for (uint32_t i = 0; allocated_entry
+         && i < allocated_entry->n_instrs; i++)
+        if (allocated_entry->instrs[i]->op == IR_OP_STORE)
+            allocated_store = allocated_entry->instrs[i];
+    capture = (store_target_capture_t){0};
+    complete = allocated_store && ir_value_visit_store_targets(
+        ir_operand_value(&allocated_store->operands[0]),
+        capture_store_target, &capture);
+    check("allocator-backed storage is a known store target",
+          complete && capture.count == 1
+              && capture.targets[0] == allocated_store->operands[0].value);
+    done(allocated);
+
     ir_local_t *returned = ir_local_add(function, "returned",
                                         ir_type_parse(r->m, "ref[i32]"));
     ir_value_t *returned_value = returned

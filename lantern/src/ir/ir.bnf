@@ -107,6 +107,8 @@
 
 <operand> @nospace($1) ::= <ref>
             | <spread-arg>
+            | %"out"
+            | <fresh-arg>
             | <number>
             | %"-" <number>
             | %STRING_LIT
@@ -118,8 +120,9 @@
             | <name>
 
 <spread-arg> ::= %"*" <value>
+<fresh-arg> ::= %"fresh" <value>
 
-<named-arg>     ::= <name> %"=" <ref>
+<named-arg>     ::= <name> %"=" (<ref> | %"out")
 <phi-arm>       @nospace @space($3) ::= %"[" <name> %":" <ref> %"]"
 <switch-arm>    @nospace @space($4) ::= %"[" %"-"? <number> %":" <name> %"]"
 <default-block> @nospace($1) ::= %"default" %":" <name>
@@ -175,6 +178,7 @@
          | %"true" | %"false"
          | %"set" | %"dict"
          | %"in" | %"out" | %"inout"
+         | %"fresh"
          | %"array" | %"bitint" | %"ubitint" | %"exclusive" | %"forall"
          | %"i" | %"u"
          | %"gcref" | %"indexable" | %"literal" | %"mutref" | %"nullable"

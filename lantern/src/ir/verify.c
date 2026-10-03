@@ -325,7 +325,10 @@ static bool parsed_operand(ir_visit_t *vi)
                          || (want == IR_OPD_ARG
                              && (got == IR_OPD_VALUE
                                  || got == IR_OPD_SPREAD
-                                 || got == IR_OPD_NAMED_ARG));
+                                 || got == IR_OPD_NAMED_ARG
+                                 || got == IR_OPD_OUT
+                                 || got == IR_OPD_FRESH
+                                 || got == IR_OPD_MISSING));
 
         if (!fits) {
             broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.operand",
@@ -348,6 +351,7 @@ static bool parsed_operand(ir_visit_t *vi)
 
     ir_value_t *val = od->kind == IR_OPD_VALUE     ? od->value
                     : od->kind == IR_OPD_SPREAD   ? od->value
+                    : od->kind == IR_OPD_FRESH    ? od->value
                     : od->kind == IR_OPD_NAMED_ARG ? od->named.value
                     : od->kind == IR_OPD_PHI_ARM   ? od->phi.value
                                                    : nullptr;
@@ -625,6 +629,7 @@ static bool store_target_collect(store_target_set_t *set,
         ir_instr_t *definition = value->def;
         switch (definition->op) {
         case IR_OP_ALLOC:
+        case IR_OP_ALLOC_USING:
         case IR_OP_ALLOCA:
             set->complete = store_target_finish(set, value);
             break;
@@ -1025,7 +1030,8 @@ static bool typed_operand(ir_visit_t *vi)
 {
     V          *v   = vi->user;
     ir_value_t *val = vi->operand->kind == IR_OPD_VALUE ||
-                      vi->operand->kind == IR_OPD_SPREAD
+                      vi->operand->kind == IR_OPD_SPREAD ||
+                      vi->operand->kind == IR_OPD_FRESH
                           ? vi->operand->value : nullptr;
 
     if (val && !val->type) {
@@ -1259,6 +1265,7 @@ static bool ssa_operand(ir_visit_t *vi)
     ir_operand_t *od  = vi->operand;
     ir_value_t   *val = od->kind == IR_OPD_VALUE     ? od->value
                       : od->kind == IR_OPD_SPREAD   ? od->value
+                      : od->kind == IR_OPD_FRESH    ? od->value
                       : od->kind == IR_OPD_NAMED_ARG ? od->named.value
                       : od->kind == IR_OPD_PHI_ARM   ? od->phi.value
                                                       : nullptr;
@@ -1425,7 +1432,8 @@ static bool laid_out_operand(ir_visit_t *vi)
         check_laid_out_type(vi->user, od->type, vi->instr, vi->block);
     }
 
-    if ((od->kind == IR_OPD_VALUE || od->kind == IR_OPD_SPREAD) && od->value) {
+    if ((od->kind == IR_OPD_VALUE || od->kind == IR_OPD_SPREAD
+         || od->kind == IR_OPD_FRESH) && od->value) {
         check_laid_out_type(vi->user, od->value->type, vi->instr, vi->block);
     }
 

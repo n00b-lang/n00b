@@ -190,6 +190,22 @@ ir_func_callable_contract(const ir_func_t *function)
         ? annotation->t : nullptr;
 }
 
+bool ir_func_set_parameter_optional(ir_func_t *function, uint32_t index,
+                                    bool optional)
+{
+    if (!function || index >= function->n_optional_parameters) return false;
+    const th_param *parameter = th_func_param(function->type, index);
+    if (!parameter || (optional && parameter->mode != TH_IN)) return false;
+    function->optional_parameters[index] = optional;
+    return true;
+}
+
+bool ir_func_parameter_is_optional(const ir_func_t *function, uint32_t index)
+{
+    return function && index < function->n_optional_parameters
+        && function->optional_parameters[index];
+}
+
 static bool global_init_integer_fits(ir_lit_t value, ir_machine_t machine)
 {
     uint32_t width = machine.width;
@@ -500,6 +516,11 @@ ir_func_t *ir_func_add(ir_module_t *m, const char *name, th_type *type,
     f->linkage = linkage;
     f->span    = IR_SPAN_UNKNOWN;
     f->owner   = m;
+    f->n_optional_parameters = (uint32_t)th_func_nparams(f->type);
+    f->optional_parameters = f->n_optional_parameters
+        ? ir_alloc(m->ctx, f->n_optional_parameters
+                            * sizeof(*f->optional_parameters)) : nullptr;
+    if (f->n_optional_parameters && !f->optional_parameters) return nullptr;
 
     m->funcs = ir_grow(m->ctx, m->funcs, &m->cap_funcs, m->n_funcs + 1,
                        sizeof(ir_func_t *));
@@ -552,6 +573,32 @@ ir_value_t *ir_param_add(ir_func_t *f, const char *name, th_type *type)
     ir_index_add(ctx, &f->value_index, v->name, v);
 
     return v;
+}
+
+bool ir_param_set_optional(ir_value_t *parameter, bool optional)
+{
+    if (!parameter || parameter->kind != IR_VAL_PARAM || !parameter->owner
+        || parameter->index >= parameter->owner->n_params
+        || parameter->owner->params[parameter->index] != parameter
+        || (optional && (parameter->is_rest || parameter->is_keyword)))
+        return false;
+    if (!ir_func_set_parameter_optional(parameter->owner, parameter->index,
+                                        optional)) return false;
+    parameter->is_optional = optional;
+    return ir_annot_set(parameter->owner->owner->ctx, &parameter->annots,
+        (ir_annot_t){.key = "ir.optional_parameter",
+                     .kind = IR_ANNOT_BOOL, .b = optional});
+}
+
+bool ir_param_is_optional(const ir_value_t *parameter)
+{
+    if (!parameter || parameter->kind != IR_VAL_PARAM) return false;
+    ir_annot_t *annotation = ir_annot_get(
+        (ir_annots_t *)&parameter->annots, "ir.optional_parameter");
+    return parameter->is_optional
+        || ir_func_parameter_is_optional(parameter->owner, parameter->index)
+        || (annotation && annotation->kind == IR_ANNOT_BOOL
+            && annotation->b);
 }
 
 ir_value_t *ir_kwparam_add(ir_func_t *f, const char *name, th_type *type)
@@ -983,6 +1030,7 @@ ir_value_t *ir_operand_value(const ir_operand_t *od)
     switch (od->kind) {
     case IR_OPD_VALUE:
     case IR_OPD_SPREAD:
+    case IR_OPD_FRESH:
         return od->value;
     case IR_OPD_NAMED_ARG:
         return od->named.value;
@@ -1366,7 +1414,8 @@ static ir_operand_t *push(ir_instr_t *in, ir_opdkind_t kind)
     if (want != kind
         && !(want == IR_OPD_ARG
              && (kind == IR_OPD_VALUE || kind == IR_OPD_SPREAD ||
-                 kind == IR_OPD_NAMED_ARG))) {
+                 kind == IR_OPD_NAMED_ARG || kind == IR_OPD_OUT ||
+                 kind == IR_OPD_FRESH || kind == IR_OPD_MISSING))) {
         return nullptr;
     }
 
@@ -1422,6 +1471,35 @@ bool ir_instr_operand_named(ir_instr_t *in, const char *name, ir_value_t *v)
     }
 
     return o != nullptr;
+}
+
+bool ir_instr_operand_named_out(ir_instr_t *in, const char *name)
+{
+    ir_operand_t *operand = name ? push(in, IR_OPD_NAMED_ARG) : nullptr;
+    if (!operand) return false;
+    operand->named.name = ir_strdup(in->block->owner->owner->ctx, name);
+    return operand->named.name != nullptr;
+}
+
+bool ir_instr_operand_out(ir_instr_t *in)
+{
+    return in && in->op == IR_OP_CALL && push(in, IR_OPD_OUT) != nullptr;
+}
+
+bool ir_instr_operand_missing(ir_instr_t *in)
+{
+    return in && in->op == IR_OP_CALL
+        && push(in, IR_OPD_MISSING) != nullptr;
+}
+
+bool ir_instr_operand_fresh(ir_instr_t *in, ir_value_t *storage)
+{
+    if (!in || in->op != IR_OP_CALL || !storage || !storage->def
+        || (storage->def->op != IR_OP_ALLOC
+            && storage->def->op != IR_OP_ALLOC_USING)) return false;
+    ir_operand_t *operand = push(in, IR_OPD_FRESH);
+    if (operand) operand->value = storage;
+    return operand != nullptr;
 }
 
 bool ir_instr_operand_local(ir_instr_t *in, ir_local_t *l)

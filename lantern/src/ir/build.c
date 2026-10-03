@@ -32,6 +32,7 @@ typedef enum : uint8_t {
 typedef enum : uint8_t {
     OP_REF,
     OP_SPREAD,
+    OP_FRESH,
     OP_NUM,
     OP_STR,
     OP_NAMED,
@@ -1898,16 +1899,30 @@ static void *r_spread_arg(parse_reduce_t *r)
     return n;
 }
 
+static void *r_fresh_arg(parse_reduce_t *r)
+{
+    B       *b = r->thunk;
+    ib_node *value = at(r, CORE_STRING_STATIC("value"));
+    ib_node *n = nd(b, IB_OPERAND, cover(r));
+    if (!value || !value->text) return nullptr;
+    n->how = OP_FRESH;
+    n->refname = value->text;
+    return n;
+}
+
 static void *r_named_arg(parse_reduce_t *r)
 {
     B       *b   = r->thunk;
     ib_node *nm  = kid(r, 0);
     ib_node *ref = at(r, CORE_STRING_STATIC("ref"));
+    ib_node *out = kid(r, 2);
     ib_node *n   = nd(b, IB_OPERAND, cover(r));
 
     n->how     = OP_NAMED;
     n->text    = nm ? nm->text : nullptr;
-    n->refname = ref ? ref->text : nullptr;
+    n->refname = ref ? ref->text
+        : out && out->text && !strcmp(out->text, "out") ? out->text
+        : nullptr;
     n->refkind = ref ? ref->refkind : IR_VAL_INSTR;
 
     return n;
@@ -2063,7 +2078,19 @@ static void push_operand(B *b, ir_func_t *f, ir_instr_t *in, ib_node *o)
             bfail(b, o->span, "spread operand must name a rest parameter");
         return;
     }
+    case OP_FRESH: {
+        ir_value_t *value = ir_value_find(f, o->refname);
+        if (!value || !ir_instr_operand_fresh(in, value))
+            bfail(b, o->span,
+                  "fresh construction target must name allocated storage");
+        return;
+    }
     case OP_NAMED: {
+        if (o->refname && !strcmp(o->refname, "out")) {
+            if (!ir_instr_operand_named_out(in, o->text))
+                bfail(b, o->span, "invalid named out argument");
+            return;
+        }
         ir_value_t *v = o->refkind == IR_VAL_GLOBAL
                             ? global_value(b, o->refname)
                             : ir_value_find(f, o->refname);
@@ -2150,6 +2177,16 @@ static void push_operand(B *b, ir_func_t *f, ir_instr_t *in, ib_node *o)
         return;
 
     case OP_WORD:
+        if (o->text && !strcmp(o->text, "missing")) {
+            if (!ir_instr_operand_missing(in))
+                bfail(b, o->span, "missing is only valid as an optional call argument");
+            return;
+        }
+        if (o->text && !strcmp(o->text, "out")) {
+            if (!ir_instr_operand_out(in))
+                bfail(b, o->span, "out is only valid as a call argument");
+            return;
+        }
         if (want == IR_OPD_BLOCK || want == IR_OPD_DEFAULT_BLOCK) {
             ir_instr_operand_block(in, block_named(f, o->text));
 
@@ -2336,6 +2373,13 @@ static void *r_func(parse_reduce_t *r)
             return nullptr;
         }
         apply_metas(b, p->l1, f, nullptr, nullptr, &value->annots);
+        ir_annot_t *optional = ir_annot_get(&value->annots,
+                                             "ir.optional_parameter");
+        if (optional && optional->kind == IR_ANNOT_BOOL && optional->b
+            && !ir_param_set_optional(value, true)) {
+            bfail(b, p->span, "invalid optional parameter metadata");
+            return nullptr;
+        }
         if (b->failed) return nullptr;
     }
 
@@ -2682,6 +2726,7 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
     reg(&b, w, CORE_STRING_STATIC("dest-local"), r_dest);
     reg(&b, w, CORE_STRING_STATIC("operand"), r_operand);
     reg(&b, w, CORE_STRING_STATIC("spread-arg"), r_spread_arg);
+    reg(&b, w, CORE_STRING_STATIC("fresh-arg"), r_fresh_arg);
     reg(&b, w, CORE_STRING_STATIC("operands"), r_operands);
     reg(&b, w, CORE_STRING_STATIC("named-arg"), r_named_arg);
     reg(&b, w, CORE_STRING_STATIC("phi-arm"), r_phi_arm);

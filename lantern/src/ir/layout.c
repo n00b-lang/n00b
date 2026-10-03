@@ -777,7 +777,8 @@ static bool reach_operand(ir_visit_t *vi)
         reach(vi->user, od->type);
     }
 
-    if ((od->kind == IR_OPD_VALUE || od->kind == IR_OPD_SPREAD) && od->value) {
+    if ((od->kind == IR_OPD_VALUE || od->kind == IR_OPD_SPREAD
+         || od->kind == IR_OPD_FRESH) && od->value) {
         reach(vi->user, od->value->type);
     }
 

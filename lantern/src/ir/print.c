@@ -232,6 +232,11 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
     case IR_OPD_NAMED_ARG:
         core_buffer_printf(b, "%s = ", o->named.name ? o->named.name : "?");
 
+        if (!o->named.value) {
+            core_buffer_puts(b, "out");
+            break;
+        }
+
         if (o->named.value && o->named.value->kind == IR_VAL_LOCAL) {
             core_buffer_printf(b, "$%s", o->named.value->name);
         }
@@ -254,6 +259,19 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
         break;
 
     case IR_OPD_ARG:
+        break;
+
+    case IR_OPD_OUT:
+        core_buffer_puts(b, "out");
+        break;
+
+    case IR_OPD_FRESH:
+        core_buffer_printf(b, "fresh %%%s",
+            o->value ? o->value->name : "?");
+        break;
+
+    case IR_OPD_MISSING:
+        core_buffer_puts(b, "missing");
         break;
     }
 }
@@ -609,6 +627,8 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
             const th_param *parameter = th_func_param(f->type, i);
             core_buffer_printf(b, "%s%%arg%zu: ", first ? "" : ", ", i);
             put_type(b, m, parameter->type);
+            if (ir_func_parameter_is_optional(f, (uint32_t)i))
+                core_buffer_puts(b, " !ir.optional_parameter(true)");
             first = false;
         }
     }

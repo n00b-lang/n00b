@@ -1,5 +1,7 @@
 IR_OP(CONST,           "const",           0, 1,  ANNOTATED,   "c",   0,                              HASRESULT)
 IR_OP(AGGREGATE,       "aggregate",       0, VAR, ANNOTATED,   "v*",  0,                              HASRESULT)
+IR_OP(REST_COLLECT,    "rest.collect",    1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
+IR_OP(PARAM_PRESENT,   "param.present",   1, 1,  BOOL,        "v",   0,                              HASRESULT)
 IR_OP(ARRAY_NEW,       "array.new",       0, VAR, ANNOTATED,   "v*",  0,                              HASRESULT | SIDEEFFECT)
 IR_OP(ARRAY_NEW_USING, "array.new.using", 1, VAR, ANNOTATED,   "v*",  0,                              HASRESULT | SIDEEFFECT)
 IR_OP(SEQUENCE_SHAPE_CHECK, "sequence.shape.check", 1, 1, NONE, "v", 0, SIDEEFFECT)
@@ -78,6 +80,7 @@ IR_OP(SELECT,          "select",          3, 3,  OPERAND1,    "vvv", 0,         
 IR_OP(PHI,             "phi",             1, VAR, ANNOTATED,   "a*",  0,                              HASRESULT)
 
 IR_OP(CALL,            "call",            1, VAR, CALLEE_RET,  "vk*", 0,                              HASRESULT | SIDEEFFECT)
+IR_OP(CALL_OUTPUT,     "call.output",     2, 2,   CALL_OUTPUT, "vc", 0,                              HASRESULT)
 
 IR_OP(SIZEOF,          "sizeof",          1, 1,  U64,         "t",   0,                              HASRESULT | COMPTIME)
 IR_OP(ALIGNOF,         "alignof",         1, 1,  U64,         "t",   0,                              HASRESULT | COMPTIME)
@@ -90,7 +93,7 @@ IR_OP(PHASE_RESULT,    "phase.result",    0, 0,  ANNOTATED,   "",    0,         
 IR_OP(JUMP,            "jump",            1, 1,  NONE,        "b",   0,                              TERMINATOR)
 IR_OP(BRANCH,          "branch",          3, 3,  NONE,        "vbb", 0,                              TERMINATOR)
 IR_OP(SWITCH,          "switch",          2, VAR, NONE,        "vds*", 0,                             TERMINATOR)
-IR_OP(RETURN,          "return",          0, 1,  NONE,        "v",   0,                              TERMINATOR)
+IR_OP(RETURN,          "return",          0, VAR, NONE,        "v*",  0,                              TERMINATOR)
 IR_OP(FAIL,            "fail",            1, 1,  NONE,        "v",   0,                              TERMINATOR)
 IR_OP(TRAP,            "trap",            0, 0,  NONE,        "",    0,                              TERMINATOR | SIDEEFFECT)
 IR_OP(UNREACHABLE,     "unreachable",     0, 0,  NONE,        "",    0,                              TERMINATOR)

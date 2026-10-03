@@ -44,6 +44,7 @@ typedef enum : uint8_t {
     IR_RES_ELEM_PTR,
     IR_RES_VARIANT_ARM,
     IR_RES_CALLEE_RET,
+    IR_RES_CALL_OUTPUT,
 } ir_resrule_t;
 
 typedef enum : uint8_t {
@@ -58,6 +59,9 @@ typedef enum : uint8_t {
     IR_OPD_SWITCH_ARM,
     IR_OPD_NAMED_ARG,
     IR_OPD_ARG,
+    IR_OPD_OUT,
+    IR_OPD_FRESH,
+    IR_OPD_MISSING,
 } ir_opdkind_t;
 
 #define IR_OP(id, spelling, lo, hi, res, pat, mods, flags) IR_OP_##id,
@@ -237,6 +241,7 @@ struct ir_value_t {
     uint32_t     index;
     bool         is_keyword;
     bool         is_rest;
+    bool         is_optional;
     ir_shape_t  *shape;
     ir_annots_t  annots;
 };
@@ -481,6 +486,8 @@ struct ir_func_t {
     ir_value_t  **params;
     uint32_t      n_params;
     uint32_t      cap_params;
+    bool         *optional_parameters;
+    uint32_t      n_optional_parameters;
     ir_local_t  **locals;
     uint32_t      n_locals;
     uint32_t      cap_locals;
@@ -526,6 +533,8 @@ th_type *ir_type_parse(ir_module_t *m, const char *text);
  * tagged outcome type with `ok` and `error` arms for a callable with a
  * non-void error channel. */
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable);
+size_t   ir_call_output_count(th_type *callable);
+th_type *ir_call_output_type(th_type *callable, size_t output_index);
 uint64_t ir_type_id(ir_module_t *m, th_type *t);
 bool     ir_type_eq(ir_module_t *m, th_type *a, th_type *b);
 size_t   ir_type_count(const ir_module_t *m);
@@ -590,9 +599,15 @@ ir_func_t   *ir_func_find(ir_module_t *m, const char *name);
 bool         ir_func_set_callable_contract(ir_func_t *function,
                                            th_type *contract);
 th_type     *ir_func_callable_contract(const ir_func_t *function);
+bool         ir_func_set_parameter_optional(ir_func_t *function,
+                                            uint32_t index, bool optional);
+bool         ir_func_parameter_is_optional(const ir_func_t *function,
+                                           uint32_t index);
 size_t       ir_func_count(const ir_module_t *m);
 ir_func_t   *ir_func_at(ir_module_t *m, size_t i);
 ir_value_t  *ir_param_add(ir_func_t *f, const char *name, th_type *type);
+bool         ir_param_set_optional(ir_value_t *parameter, bool optional);
+bool         ir_param_is_optional(const ir_value_t *parameter);
 ir_value_t  *ir_kwparam_add(ir_func_t *f, const char *name, th_type *type);
 ir_value_t  *ir_restparam_add(ir_func_t *f, const char *name, th_type *type);
 ir_local_t  *ir_local_add(ir_func_t *f, const char *name, th_type *type);
@@ -724,6 +739,10 @@ bool        ir_instr_operand_spread(ir_instr_t *in, ir_value_t *v);
 bool        ir_instr_operand_local(ir_instr_t *in, ir_local_t *l);
 bool        ir_instr_operand_named(ir_instr_t *in, const char *name,
                                    ir_value_t *v);
+bool        ir_instr_operand_named_out(ir_instr_t *in, const char *name);
+bool        ir_instr_operand_out(ir_instr_t *in);
+bool        ir_instr_operand_fresh(ir_instr_t *in, ir_value_t *storage);
+bool        ir_instr_operand_missing(ir_instr_t *in);
 bool        ir_instr_operand_type(ir_instr_t *in, th_type *t);
 bool        ir_instr_operand_name(ir_instr_t *in, const char *n);
 bool        ir_instr_operand_block(ir_instr_t *in, ir_block_t *b);

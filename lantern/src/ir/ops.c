@@ -95,6 +95,12 @@ const char *ir_opdkind_name(ir_opdkind_t k)
         return "switch arm";
     case IR_OPD_NAMED_ARG:
         return "named argument";
+    case IR_OPD_OUT:
+        return "out argument";
+    case IR_OPD_FRESH:
+        return "fresh construction target";
+    case IR_OPD_MISSING:
+        return "omitted optional argument";
     default:
         return "argument";
     }
@@ -115,6 +121,8 @@ static ir_opdkind_t kind_of_char(char c)
         return IR_OPD_DEFAULT_BLOCK;
     case 'k':
         return IR_OPD_ARG;
+    case 'o':
+        return IR_OPD_OUT;
     case 'c':
         return IR_OPD_CONST;
     case 'a':

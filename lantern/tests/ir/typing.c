@@ -1687,6 +1687,68 @@ static void test_select_phi_call(void)
     check("but a rest argument of the wrong element type is rejected",
           apply(e, restbad) == IR_RULE_REJECT);
 
+    ir_func_t *optional_target = ir_func_add(e->m, "optional_target",
+        ir_type_parse(e->m, "(i32, i64) -> i32"), IR_LINK_INTERNAL);
+    ir_value_t *optional_first = optional_target
+        ? ir_param_add(optional_target, "first", ir_type_parse(e->m, "i32"))
+        : nullptr;
+    ir_value_t *optional_second = optional_target
+        ? ir_param_add(optional_target, "second", ir_type_parse(e->m, "i64"))
+        : nullptr;
+    bool optional_params = optional_first && optional_second
+        && ir_param_set_optional(optional_second, true);
+    ir_instr_t *omitted = op(e, IR_OP_CALL);
+    bool omitted_built = optional_params
+        && ir_instr_operand_value(omitted,
+                                 ir_func_address(e->m, optional_target))
+        && ir_instr_operand_value(omitted, val(e, "i32"))
+        && ir_instr_operand_missing(omitted)
+        && ir_instr_set_dest(omitted, "optional_call", ir_type_parse(e->m,
+                                                       "i32"));
+    check("a call may omit a defaultable parameter without a value wrapper",
+          omitted_built && apply(e, omitted) == IR_RULE_ACCEPT);
+
+    ir_instr_t *present = op(e, IR_OP_PARAM_PRESENT);
+    bool present_built = optional_params
+        && ir_instr_operand_value(present, optional_second)
+        && ir_instr_set_dest(present, "second_present",
+                             ir_type_parse(e->m, "bool"));
+    check("the callee can query whether an optional parameter was supplied",
+          present_built && apply(e, present) == IR_RULE_ACCEPT);
+
+    ir_instr_t *required_missing = op(e, IR_OP_CALL);
+    bool required_missing_built = optional_params
+        && ir_instr_operand_value(required_missing,
+                                  ir_func_address(e->m, optional_target))
+        && ir_instr_operand_missing(required_missing)
+        && ir_instr_set_dest(required_missing, "required_missing",
+                             ir_type_parse(e->m, "i32"));
+    check("a call cannot omit a required parameter",
+          required_missing_built
+              && apply(e, required_missing) == IR_RULE_REJECT);
+
+    ir_func_t *rest_owner = ir_func_add(e->m, "rest_owner",
+        ir_type_parse(e->m, "(*u64) -> void"), IR_LINK_INTERNAL);
+    ir_value_t *rest_value = rest_owner
+        ? ir_restparam_add(rest_owner, "values", ir_type_parse(e->m, "u64"))
+        : nullptr;
+    ir_instr_t *collect_rest = op(e, IR_OP_REST_COLLECT);
+    bool collect_rest_built = rest_value && collect_rest
+        && ir_instr_operand_value(collect_rest, rest_value)
+        && ir_instr_set_dest(collect_rest, "collected_values",
+                             ir_type_parse(e->m, "array[u64]"));
+    check("rest collection yields an array of the variadic element type",
+          collect_rest_built && apply(e, collect_rest) == IR_RULE_ACCEPT);
+
+    ir_instr_t *collect_non_rest = op(e, IR_OP_REST_COLLECT);
+    bool collect_non_rest_built = collect_non_rest
+        && ir_instr_operand_value(collect_non_rest, val(e, "u64"))
+        && ir_instr_set_dest(collect_non_rest, "not_a_rest_collection",
+                             ir_type_parse(e->m, "array[u64]"));
+    check("rest collection rejects an ordinary value",
+          collect_non_rest_built
+              && apply(e, collect_non_rest) == IR_RULE_REJECT);
+
     ir_value_t *ov = ir_alloc(e->ctx, sizeof(ir_value_t));
 
     ov->kind = IR_VAL_FUNC;
@@ -1696,18 +1758,73 @@ static void test_select_phi_call(void)
     ir_instr_t *outc = op(e, IR_OP_CALL);
 
     ir_instr_operand_value(outc, ov);
-    ir_instr_operand_value(outc, val(e, "ptr[i32]"));
-    ir_instr_operand_value(outc, val(e, "ptr[u64]"));
-    check("out and inout arguments are passed by reference",
-          accepts_as(e, outc, "void"));
+    ir_instr_operand_out(outc);
+    ir_instr_operand_value(outc, val(e, "u64"));
+    ir_instr_set_dest(outc, "out_result", ir_type_parse(e->m, "void"));
+    check("out is an output slot and modify passes a value",
+          ir_call_output_count(ov->type) == 2
+              && ir_call_output_type(ov->type, 0)
+              && ir_type_eq(e->m, ir_call_output_type(ov->type, 0),
+                            ir_type_parse(e->m, "i32"))
+              && apply(e, outc) == IR_RULE_ACCEPT);
+
+    ir_instr_t *first_output = op(e, IR_OP_CALL_OUTPUT);
+    ir_instr_operand_value(first_output, outc->dest);
+    ir_instr_operand_uint(first_output, 0);
+    ir_instr_set_dest(first_output, "copied_out", ir_type_parse(e->m,
+                                                                 "i32"));
+    check("a copy-out is an independent typed call result",
+          apply(e, first_output) == IR_RULE_ACCEPT);
 
     ir_instr_t *outbad = op(e, IR_OP_CALL);
 
     ir_instr_operand_value(outbad, ov);
     ir_instr_operand_value(outbad, val(e, "i32"));
-    ir_instr_operand_value(outbad, val(e, "ptr[u64]"));
-    check("passing an out parameter by value is rejected",
+    ir_instr_operand_value(outbad, val(e, "u64"));
+    check("an out parameter cannot be supplied as an input value",
           apply(e, outbad) == IR_RULE_REJECT);
+
+    ir_instr_t *modify_bad = op(e, IR_OP_CALL);
+    ir_instr_operand_value(modify_bad, ov);
+    ir_instr_operand_out(modify_bad);
+    ir_instr_operand_out(modify_bad);
+    check("modify still requires its copy-in value",
+          apply(e, modify_bad) == IR_RULE_REJECT);
+
+    ir_value_t *initializer = ir_alloc(e->ctx, sizeof(ir_value_t));
+    initializer->kind = IR_VAL_FUNC;
+    initializer->name = "initializer";
+    initializer->type = ir_type_parse(e->m, "(inout i32) -> void");
+    ir_instr_t *fresh_storage = op(e, IR_OP_ALLOC);
+    ir_instr_operand_type(fresh_storage, ir_type_parse(e->m, "i32"));
+    ir_instr_set_dest(fresh_storage, "fresh_storage",
+                      ir_type_parse(e->m, "ptr[i32]"));
+    ir_instr_t *initialize = op(e, IR_OP_CALL);
+    ir_instr_operand_value(initialize, initializer);
+    ir_instr_operand_fresh(initialize, fresh_storage->dest);
+    ir_instr_set_dest(initialize, "initialized", ir_type_parse(e->m,
+                                                                "void"));
+    check("fresh allocated storage can initialize a modify parameter",
+          apply(e, initialize) == IR_RULE_ACCEPT);
+
+    ir_instr_t *not_fresh = op(e, IR_OP_CALL);
+    ir_instr_operand_value(not_fresh, initializer);
+    check("fresh construction operands must refer to allocation results",
+          !ir_instr_operand_fresh(not_fresh, val(e, "ptr[i32]")));
+
+    ir_func_t *copyout = ir_func_add(e->m, "copyout",
+        ir_type_parse(e->m, "(out i32, inout u64) -> void"),
+        IR_LINK_INTERNAL);
+    ir_block_t *copyout_entry = ir_block_add(copyout, "entry");
+    ir_instr_t *ret = ir_instr_add(copyout_entry, IR_OP_RETURN);
+    ir_instr_operand_value(ret, val(e, "i32"));
+    ir_instr_operand_value(ret, val(e, "u64"));
+    check("successful return carries separate copy-out values",
+          apply(e, ret) == IR_RULE_ACCEPT);
+    ir_instr_t *incomplete_ret = ir_instr_add(copyout_entry, IR_OP_RETURN);
+    ir_instr_operand_value(incomplete_ret, val(e, "i32"));
+    check("successful return must provide every copy-out value",
+          apply(e, incomplete_ret) == IR_RULE_REJECT);
 
     close_env(e);
 }

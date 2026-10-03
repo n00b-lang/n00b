@@ -1124,6 +1124,10 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
         case IR_OPD_SPREAD:
             break;
 
+        case IR_OPD_MISSING:
+            ir_instr_operand_missing(in);
+            break;
+
         case IR_OPD_TYPE:
             ir_instr_operand_type(in, ir_type_parse(m, TYPES[rnd(9)]));
             break;
@@ -1176,6 +1180,13 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
                 ir_instr_operand_value(in, vals->v[rnd(vals->n)]);
             }
             break;
+
+        case IR_OPD_OUT:
+            ir_instr_operand_out(in);
+            break;
+
+        case IR_OPD_FRESH:
+            return;
         }
     }
 }
@@ -1386,6 +1397,18 @@ static void test_named_args(void)
           in->operands[2].named.value != nullptr
               && !strcmp(in->operands[2].named.value->name, "n"));
     check("keyword arguments round-trip", round_trips(ctx, src, nullptr));
+
+    const char *fresh_src =
+        "module fresh_target {\n  profile bce\n\n"
+        "  func @init(inout %self: i32) -> void {\n"
+        "    block e:\n      return\n  }\n\n"
+        "  func @make() -> ptr[i32] {\n"
+        "    block e:\n"
+        "      %storage: ptr[i32] = alloc i32\n"
+        "      %done: void = call @init, fresh %storage\n"
+        "      return %storage\n  }\n}\n";
+    check("fresh construction targets round-trip in call text",
+          round_trips(ctx, fresh_src, nullptr));
 
     ir_ctx_free(ctx);
 }
