@@ -1,0 +1,10 @@
+var default_seed: int = 7
+
+func default_from_declaration(result: int = default_seed) -> int {
+    return result
+}
+
+func caller_shadows_default_seed() -> int {
+    var default_seed: int = 91
+    return default_from_declaration()
+}

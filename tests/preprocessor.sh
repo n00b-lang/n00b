@@ -365,6 +365,21 @@ grep -Fq 'func @shape_return() -> array[int]' \
 grep -q 'warning\[N00BB-W0004\].*mixes explicit array syntax with dimension shorthand' \
     "$tmp/array_shape_types.err"
 
+"$compiler" lower --dump-symbols --dump-link-unit \
+    "$script_dir/programs/preprocessor/grouped_array_declarations.n00b" \
+    >"$tmp/grouped_array_declarations.out" \
+    2>"$tmp/grouped_array_declarations.err" || {
+    cat "$tmp/grouped_array_declarations.err"
+    cat "$tmp/grouped_array_declarations.out"
+    exit 1
+}
+grep -Eq 'first: variable, .*array-shape=rank:1, dim0=comptime' \
+    "$tmp/grouped_array_declarations.out"
+grep -Eq 'second: variable, .*array-shape=rank:1, dim0=comptime' \
+    "$tmp/grouped_array_declarations.out"
+! grep -Eq 'first: variable, .*array-shape=rank:1, dim0=unresolved|second: variable, .*array-shape=rank:1, dim0=unresolved' \
+    "$tmp/grouped_array_declarations.out"
+
 "$compiler" lower --dump-symbols --dump-link-unit --dump-ir \
     "$script_dir/programs/array_inferred_declaration.n00b" \
     >"$tmp/array_inferred_declaration.out" \
@@ -3647,6 +3662,21 @@ if grep -Eq '__n00bb_default_arg_|extract .*"present"' \
     exit 1
 fi
 grep -q 'add trap' "$tmp/lower_default_arguments.ir"
+"$compiler" lower --dump-ir \
+    "$program_dir/lower_default_declaration_scope.n00b" \
+    >"$tmp/lower_default_declaration_scope.ir" \
+    2>"$tmp/lower_default_declaration_scope.err" || {
+    cat "$tmp/lower_default_declaration_scope.err"
+    exit 1
+}
+awk '
+    /^  func @default_from_declaration\(/ { in_default = 1 }
+    /^  func @/ && !/default_from_declaration/ && in_default { exit }
+    in_default && /copy @lower_default_declaration_scope\.default_seed/ {
+        found = 1
+    }
+    END { exit !found }
+' "$tmp/lower_default_declaration_scope.ir"
 awk '
     /^  (static )?func @use_named_evaluation_order/ { in_call = 1 }
     /^  (static )?func @/ && !/use_named_evaluation_order/ && in_call { exit }

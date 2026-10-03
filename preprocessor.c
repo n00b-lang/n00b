@@ -212,18 +212,6 @@ child_named(parse_grammar_t *g, parse_tree_t *node, const char *name)
 }
 
 static parse_tree_t *
-find_named(parse_grammar_t *g, parse_tree_t *node, const char *name)
-{
-    if (!node || core_tree_is_leaf(node)) return nullptr;
-    if (is_name(g, node, name)) return node;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *found = find_named(g, core_tree_child(node, i), name);
-        if (found) return found;
-    }
-    return nullptr;
-}
-
-static parse_tree_t *
 first_node(parse_tree_t *node)
 {
     if (!node) return nullptr;
@@ -1547,26 +1535,29 @@ selected_when_body(pp_context_t *ctx, parse_tree_t *when)
     if (!evaluate_when_condition(ctx, condition, &selected)) return nullptr;
     if (selected) return body;
 
-    for (size_t i = 0; i < core_tree_num_children(when); i++) {
-        parse_tree_t *clause = core_tree_child(when, i);
-        parse_tree_t *else_when = find_named(ctx->grammar, clause,
-                                             "else-when-clause");
-        parse_tree_t *else_clause = find_named(ctx->grammar, clause,
-                                               "ctime-else");
-        if (else_when) {
-            parse_tree_t *clause_condition = find_named(ctx->grammar, else_when,
-                                                        "expression");
-            parse_tree_t *clause_body = find_named(ctx->grammar, else_when,
-                                                   "body");
-            if (!clause_condition || !clause_body) continue;
-            if (!evaluate_when_condition(ctx, clause_condition, &selected))
-                return nullptr;
-            if (selected) return clause_body;
-        }
-        else if (else_clause) {
-            return find_named(ctx->grammar, else_clause, "body");
-        }
+    parse_tree_t *else_when_group = core_tree_num_children(when) > 3
+        ? core_tree_child(when, 3) : nullptr;
+    for (size_t i = 0; else_when_group
+            && i < core_tree_num_children(else_when_group); i++) {
+        parse_tree_t *clause = core_tree_child(else_when_group, i);
+        if (!is_name(ctx->grammar, clause, "else-when-clause")) continue;
+        parse_tree_t *clause_condition = child_named(ctx->grammar, clause,
+                                                      "expression");
+        parse_tree_t *clause_body = child_named(ctx->grammar, clause,
+                                                 "body");
+        if (!clause_condition || !clause_body) continue;
+        if (!evaluate_when_condition(ctx, clause_condition, &selected))
+            return nullptr;
+        if (selected) return clause_body;
     }
+
+    parse_tree_t *else_group = core_tree_num_children(when) > 4
+        ? core_tree_child(when, 4) : nullptr;
+    parse_tree_t *else_clause = else_group
+        && core_tree_num_children(else_group) == 1
+            ? core_tree_child(else_group, 0) : nullptr;
+    if (is_name(ctx->grammar, else_clause, "ctime-else"))
+        return child_named(ctx->grammar, else_clause, "body");
     return nullptr;
 }
 
