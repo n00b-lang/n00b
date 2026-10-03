@@ -25,9 +25,6 @@ th_type *ir_typelang_type_of(void *reduced);
 void ir_typelang_lower_free(ir_typelang_lower_t *l);
 
 th_type *ir_type_from_text(th_ctx *types, core_string_t spec);
-th_type *ir_type_from_node(th_ctx           *types,
-                           parse_grammar_t    *g,
-                           parse_tree_t *node);
 
 void ir_module_set_tree(ir_module_t      *m,
                         parse_grammar_t    *g,

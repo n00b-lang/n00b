@@ -1434,68 +1434,6 @@ th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
     return t;
 }
 
-typedef struct {
-    core_buffer_t text;
-    size_t last_end;
-    bool has_token;
-} type_text_t;
-
-static bool append_type_token(parse_tree_t *leaf, void *raw)
-{
-    type_text_t *text = raw;
-    core_string_t token_text = parse_tree_leaf_text(leaf);
-    parse_token_info_t *token = core_tree_leaf_value(leaf);
-    if (!token || !token_text.data) return true;
-    if (text->has_token && token->start_byte > text->last_end)
-        core_buffer_putc(&text->text, ' ');
-    core_buffer_append(&text->text, token_text.data, token_text.u8_bytes);
-    text->last_end = token->end_byte;
-    text->has_token = true;
-    return false;
-}
-
-static bool has_nested_nonterminal(parse_tree_t *node)
-{
-    if (!node || parse_node_is_token(node)) return false;
-    core_tree_foreach_child(node, child) {
-        if (!parse_node_is_token(child) || has_nested_nonterminal(child))
-            return true;
-    }
-    return false;
-}
-
-th_type *ir_type_from_node(th_ctx *types, parse_grammar_t *g,
-                           parse_tree_t *node)
-{
-    if (!types || !g || !node) {
-        return nullptr;
-    }
-
-    ir_typelang_lower_t *l = ir_typelang_lower_new(types);
-    parse_tree_walk_t   *w = parse_tree_walk_new(g, nullptr);
-
-    if (!ir_typelang_install(w, g, l)) {
-        parse_tree_walk_free(w);
-        ir_typelang_lower_free(l);
-        return nullptr;
-    }
-
-    th_type *t = ir_typelang_type_of(parse_tree_walk_reduce(w, node));
-
-    parse_tree_walk_free(w);
-    ir_typelang_lower_free(l);
-    if (!t && has_nested_nonterminal(node)) {
-        type_text_t text = {0};
-        parse_tree_scan_leaves(node, false, append_type_token, &text);
-        if (text.text.data)
-            t = ir_type_from_text(types, core_string_borrow(
-                text.text.data, text.text.byte_len));
-        core_buffer_release(&text.text);
-    }
-
-    return t;
-}
-
 th_type *ir_typelang_parse_prefix(th_ctx *ctx, const char *src, size_t len,
                                   size_t *consumed, char **err)
 {

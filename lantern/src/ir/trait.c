@@ -167,6 +167,22 @@ static const char *adapter_param_name(ir_func_t *function, const char *stem) {
   }
 }
 
+static ir_value_t *adapter_call_output(ir_module_t *module,
+                                       ir_block_t *block,
+                                       ir_value_t *call_result,
+                                       th_type *type, size_t index,
+                                       const char *name) {
+  if (!module || !block || !call_result || !type || !name ||
+      index > INT64_MAX)
+    return nullptr;
+  ir_instr_t *output = ir_instr_add(block, IR_OP_CALL_OUTPUT);
+  if (!output || !ir_instr_set_dest(output, name, type) ||
+      !ir_instr_operand_value(output, call_result) ||
+      !ir_instr_operand_uint(output, (ir_uint_t)index))
+    return nullptr;
+  return output->dest;
+}
+
 ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
                                         const char *adapter_name,
                                         ir_func_t *implementation,
@@ -228,11 +244,17 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
   for (size_t i = 1; arguments[0] && i < count; i++) {
     char name[32];
     snprintf(name, sizeof(name), "trait_arg_%zu", i - 1);
-    arguments[i] = ir_param_add(adapter, adapter_param_name(adapter, name),
-                                th_func_param(slot_signature, i)->type);
+    const th_param *parameter = th_func_param(slot_signature, i);
+    arguments[i] = parameter && parameter->mode != TH_OUT
+        ? ir_param_add(adapter, adapter_param_name(adapter, name),
+                       parameter->type) : nullptr;
   }
-  for (size_t i = 0; i < count; i++)
-    if (!arguments[i]) return nullptr;
+  if (!arguments[0]) return nullptr;
+  for (size_t i = 1; i < count; i++) {
+    const th_param *parameter = th_func_param(slot_signature, i);
+    if (!parameter || (parameter->mode != TH_OUT && !arguments[i]))
+      return nullptr;
+  }
   ir_value_t *rest_value = slot_rest
       ? ir_restparam_add(adapter, adapter_param_name(adapter, "trait_rest"),
                          slot_rest->type)
@@ -240,8 +262,8 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
   if (slot_rest && !rest_value) return nullptr;
   for (size_t i = 0; i < th_func_nkw(slot_signature); i++) {
     const th_kwparam *keyword = th_func_kw(slot_signature, i);
-    if (!keyword ||
-        !ir_kwparam_add(adapter, keyword->name, keyword->type))
+    if (!keyword || (keyword->mode != TH_OUT
+        && !ir_kwparam_add(adapter, keyword->name, keyword->type)))
       return nullptr;
   }
 
@@ -254,7 +276,7 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
     return nullptr;
 
   ir_value_t *receiver = cast->dest;
-  if (concrete_receiver->mode == TH_IN) {
+  if (concrete_receiver->mode != TH_OUT) {
     ir_instr_t *load = ir_instr_add(entry, IR_OP_LOAD);
     if (!load || !ir_instr_set_dest(load, "receiver",
                                     concrete_receiver->type) ||
@@ -271,25 +293,90 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
   ir_instr_t *call = ir_instr_add(entry, IR_OP_CALL);
   th_type *result_type = th_func_ret(implementation->type);
   bool returns_void = ir_machine_of(module, result_type).class == IR_CLASS_VOID;
-  if (!call || (!returns_void &&
-                !ir_instr_set_dest(call, "result", result_type)) ||
+  size_t output_count = 0;
+  for (size_t i = 0; i < count; i++) {
+    const th_param *parameter = th_func_param(implementation->type, i);
+    if (parameter && parameter->mode != TH_IN) output_count++;
+  }
+  for (size_t i = 0; i < th_func_nkw(implementation->type); i++) {
+    const th_kwparam *parameter = th_func_kw(implementation->type, i);
+    if (parameter && parameter->mode != TH_IN) output_count++;
+  }
+  const th_param *implementation_rest = th_func_rest(implementation->type);
+  if (implementation_rest && implementation_rest->mode != TH_IN)
+    output_count++;
+  bool carries_result = !returns_void || output_count;
+  if (!call || (carries_result &&
+                !ir_instr_set_dest(call, "call_result", result_type)) ||
       !ir_instr_operand_value(call, function) ||
-      !ir_instr_operand_value(call, receiver))
+      (concrete_receiver->mode == TH_OUT
+          ? !ir_instr_operand_out(call)
+          : !ir_instr_operand_value(call, receiver)))
     return nullptr;
-  for (size_t i = 1; i < count; i++)
-    if (!ir_instr_operand_value(call, arguments[i])) return nullptr;
+  for (size_t i = 1; i < count; i++) {
+    const th_param *parameter = th_func_param(implementation->type, i);
+    bool passed = parameter->mode == TH_OUT
+        ? ir_instr_operand_out(call)
+        : ir_instr_operand_value(call, arguments[i]);
+    if (!passed) return nullptr;
+  }
   if (rest_value && !ir_instr_operand_spread(call, rest_value)) return nullptr;
   for (size_t i = 0; i < th_func_nkw(slot_signature); i++) {
     const th_kwparam *keyword = th_func_kw(slot_signature, i);
     ir_value_t *value = ir_value_find(adapter, keyword->name);
-    if (!value || !ir_instr_operand_named(call, keyword->name, value))
+    bool passed = keyword->mode == TH_OUT
+        ? ir_instr_operand_named_out(call, keyword->name)
+        : value && ir_instr_operand_named(call, keyword->name, value);
+    if (!passed)
       return nullptr;
+  }
+
+  ir_value_t **return_outputs = output_count
+      ? ir_alloc(module->ctx, output_count * sizeof(*return_outputs))
+      : nullptr;
+  if (output_count && !return_outputs) return nullptr;
+  size_t return_output_count = 0;
+  size_t output_index = 0;
+  for (size_t i = 0; i < count; i++) {
+    const th_param *parameter = th_func_param(implementation->type, i);
+    if (!parameter || parameter->mode == TH_IN) continue;
+    char output_name[48];
+    snprintf(output_name, sizeof(output_name), "trait_output_%zu", i);
+    ir_value_t *output = adapter_call_output(module, entry, call->dest,
+        parameter->type, output_index++, output_name);
+    if (!output) return nullptr;
+    if (i == 0) {
+      ir_instr_t *store = ir_instr_add(entry, IR_OP_STORE);
+      if (!store || !ir_instr_operand_value(store, cast->dest) ||
+          !ir_instr_operand_value(store, output))
+        return nullptr;
+    }
+    else return_outputs[return_output_count++] = output;
+  }
+  for (size_t i = 0; i < th_func_nkw(implementation->type); i++) {
+    const th_kwparam *parameter = th_func_kw(implementation->type, i);
+    if (!parameter || parameter->mode == TH_IN) continue;
+    char output_name[48];
+    snprintf(output_name, sizeof(output_name), "trait_keyword_output_%zu", i);
+    ir_value_t *output = adapter_call_output(module, entry, call->dest,
+        parameter->type, output_index++, output_name);
+    if (!output) return nullptr;
+    return_outputs[return_output_count++] = output;
+  }
+  if (implementation_rest && implementation_rest->mode != TH_IN) {
+    ir_value_t *output = adapter_call_output(module, entry, call->dest,
+        implementation_rest->type, output_index, "trait_rest_output");
+    if (!output) return nullptr;
+    return_outputs[return_output_count++] = output;
   }
 
   ir_instr_t *ret = ir_instr_add(entry, IR_OP_RETURN);
   if (!ret || (!returns_void &&
                !ir_instr_operand_value(ret, call->dest)))
     return nullptr;
+  for (size_t i = 0; i < return_output_count; i++)
+    if (!ir_instr_operand_value(ret, return_outputs[i])) return nullptr;
+
   return adapter;
 }
 

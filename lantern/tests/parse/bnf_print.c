@@ -15,8 +15,8 @@ S(const char *s)
 }
 
 static const char *const EXTRA_TOKENS[] = {
-    "CHAR_LIT",  "EMBED",      "FLOAT_LIT", "HEX_LIT",
-    "INT_LIT",   "LITERAL_PREFIX", "NEWLINE", "STRING_LIT",
+    "CHAR_LIT",  "EMBED",      "FLOAT_LIT", "HEX_LIT", "i", "u",
+    "bits",      "INT_LIT",    "LITERAL_PREFIX", "NEWLINE", "STRING_LIT",
     "INDENT",    "DEDENT",
 };
 

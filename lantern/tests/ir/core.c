@@ -76,10 +76,11 @@ static void test_ops(void)
               && ir_op_accepts_operands(IR_OP_ARRAY_NEW_USING, 1)
               && ir_op_operand_kind(IR_OP_ARRAY_NEW_USING, 0)
                   == IR_OPD_VALUE);
-    check("return accepts zero or one",
+    check("return accepts a value and semantic copy-out values",
           ir_op_accepts_operands(IR_OP_RETURN, 0)
               && ir_op_accepts_operands(IR_OP_RETURN, 1)
-              && !ir_op_accepts_operands(IR_OP_RETURN, 2));
+              && ir_op_accepts_operands(IR_OP_RETURN, 2)
+              && ir_op_accepts_operands(IR_OP_RETURN, 8));
 
     check("branch operand kinds come from the pattern",
           ir_op_operand_kind(IR_OP_BRANCH, 0) == IR_OPD_VALUE

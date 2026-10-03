@@ -375,6 +375,17 @@ int main(void) {
                           TH_ENV_PACKAGE,
                           fn1(types, concrete_box, concrete_box)));
 
+  th_type *echo_receiver = th_var(types);
+  check("register a self-returning method trait",
+        th_env_register_trait(
+            env, "SelfEcho", "traits", "base", TH_ENV_PUBLIC,
+            method_record(types, "echo",
+                          fn1(types, echo_receiver, echo_receiver))));
+  check("register a concrete self-returning method",
+        register_function(env, "base.box.self_echo", "echo", "box-int",
+                          "base", TH_ENV_PACKAGE,
+                          fn1(types, concrete_box, concrete_box)));
+
   th_type *pair_trait_receiver = th_var(types);
   check("register trait used to test overlapping receiver patterns",
         th_env_register_trait(
@@ -749,6 +760,17 @@ int main(void) {
   check("concrete receiver resolves the deferred method and its result",
         th_unify_in_place(inside, deferred_receiver, box_int) &&
             th_unify(inside, deferred_result, box_int));
+  th_type *self_echo_receiver = th_var(inside);
+  check("self-returning method constraints bind without recursive checking",
+        th_var_constrain(
+            inside, self_echo_receiver,
+            (th_constraint){.kind = TH_CON_METHOD,
+                            .method = {
+                                .name = "echo",
+                                .result = self_echo_receiver,
+                                .call = fn0(inside, self_echo_receiver),
+                            }}) &&
+            th_unify_in_place(inside, self_echo_receiver, box_int));
   th_type *ambiguous_call = th_instantiate(inside, deferred_scheme);
   th_type *ambiguous_receiver =
       (th_type *)th_func_param(ambiguous_call, 0)->type;

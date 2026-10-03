@@ -762,7 +762,7 @@ static ir_rule_result_t rule_param_present(ir_module_t *m, ir_instr_t *in,
                  "param.present requires an optional function parameter");
         return REJECT;
     }
-    return ACCEPT(ir_type_parse(m, "bool"));
+    return ACCEPT(ir_type_intern(m, th_name(m->ctx->types, "bool")));
 }
 
 static uint32_t sequence_rank(th_type *type)

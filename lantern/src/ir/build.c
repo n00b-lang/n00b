@@ -2177,22 +2177,22 @@ static void push_operand(B *b, ir_func_t *f, ir_instr_t *in, ib_node *o)
         return;
 
     case OP_WORD:
-        if (o->text && !strcmp(o->text, "missing")) {
+        if ((want == IR_OPD_BLOCK || want == IR_OPD_DEFAULT_BLOCK)
+            && o->text) {
+            ir_instr_operand_block(in, block_named(f, o->text));
+            return;
+        }
+        if (want == IR_OPD_ARG && o->text
+            && !strcmp(o->text, "missing")) {
             if (!ir_instr_operand_missing(in))
                 bfail(b, o->span, "missing is only valid as an optional call argument");
             return;
         }
-        if (o->text && !strcmp(o->text, "out")) {
+        if (want == IR_OPD_ARG && o->text && !strcmp(o->text, "out")) {
             if (!ir_instr_operand_out(in))
                 bfail(b, o->span, "out is only valid as a call argument");
             return;
         }
-        if (want == IR_OPD_BLOCK || want == IR_OPD_DEFAULT_BLOCK) {
-            ir_instr_operand_block(in, block_named(f, o->text));
-
-            return;
-        }
-
         if (want == IR_OPD_TYPE) {
             th_type *t = ir_type_parse(b->m, o->text);
 

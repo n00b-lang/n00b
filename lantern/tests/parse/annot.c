@@ -1702,7 +1702,7 @@ test_ordering_inference_uses_comparable_trait(void)
         {.mode = TH_IN, .type = self},
         {.mode = TH_IN, .type = self},
     };
-    th_type *compare_code = ir_type_from_text(definitions, S("i:2"));
+    th_type *compare_code = th_bitint(definitions, 2, true);
     th_member requirement = {
         .name = "cmp",
         .type = th_func(definitions,
@@ -2180,6 +2180,16 @@ test_frontend_type_node_resolver(void)
           type_node && resolver_calls == 1);
     check("frontend type-node resolver supplies the annotation type",
           resolver_type);
+    th_type *cached_type = th_name(tc, "cached_type");
+    if (type_node) core_tree_node_value(type_node).type = cached_type;
+    parse_annot_result_set_type_node_resolver(result, nullptr, nullptr);
+    resolved = parse_annot_resolve_type_node(result, tc, grammar, type_node);
+    check("frontend type-node resolution uses the node's cached type",
+          resolved && th_hash(tc, resolved) == th_hash(tc, cached_type));
+    if (type_node) core_tree_node_value(type_node).type = nullptr;
+    resolved = parse_annot_resolve_type_node(result, tc, grammar, type_node);
+    check("frontend type-node resolution does not re-walk uncached syntax",
+          resolved == nullptr);
     parse_annot_result_free(result);
     th_ctx_free(tc);
     parse_pwz_free(parser);

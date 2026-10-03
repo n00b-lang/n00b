@@ -182,7 +182,11 @@ static void test_trait_receiver_adapters(void) {
     ir_func_t *mutator = ir_func_add(module, "meter_update",
         th_func(types, th_name(types, "void"), &mutable_receiver, 1,
                 nullptr, nullptr, 0), IR_LINK_EXTERNAL);
-    ir_instr_add(ir_block_add(mutator, "entry"), IR_OP_RETURN);
+    ir_value_t *mutator_self = ir_param_add(mutator, "self", meter);
+    ir_instr_t *mutator_return =
+        ir_instr_add(ir_block_add(mutator, "entry"), IR_OP_RETURN);
+    if (mutator_return && mutator_self)
+        ir_instr_operand_value(mutator_return, mutator_self);
     th_param mutable_slot = {.mode = TH_IN, .type = data};
     ir_func_t *mutable_adapter = ir_trait_receiver_adapter_add(
         module, "meter_update_adapter", mutator,
@@ -190,14 +194,17 @@ static void test_trait_receiver_adapters(void) {
                 nullptr, nullptr, 0));
     ir_block_t *mutable_entry = mutable_adapter
         ? ir_block_entry(mutable_adapter) : nullptr;
-    ir_instr_t *mutable_call = mutable_entry && mutable_entry->n_instrs > 1
-        ? mutable_entry->instrs[1] : nullptr;
+    ir_instr_t *mutable_call = mutable_entry && mutable_entry->n_instrs > 2
+        ? mutable_entry->instrs[2] : nullptr;
     bool mutable_receiver_is_storage = mutable_entry &&
-        mutable_entry->n_instrs == 3 &&
+        mutable_entry->n_instrs == 6 &&
         mutable_entry->instrs[0]->op == IR_OP_BITCAST &&
+        mutable_entry->instrs[1]->op == IR_OP_LOAD &&
         mutable_call->op == IR_OP_CALL &&
-        mutable_call->operands[1].value == mutable_entry->instrs[0]->dest &&
-        mutable_entry->instrs[2]->op == IR_OP_RETURN;
+        mutable_call->operands[1].value == mutable_entry->instrs[1]->dest &&
+        mutable_entry->instrs[3]->op == IR_OP_CALL_OUTPUT &&
+        mutable_entry->instrs[4]->op == IR_OP_STORE &&
+        mutable_entry->instrs[5]->op == IR_OP_RETURN;
 
     th_kwparam implementation_keyword = {
         .name = "format", .mode = TH_IN, .type = string,
@@ -205,7 +212,12 @@ static void test_trait_receiver_adapters(void) {
     ir_func_t *keyword_impl = ir_func_add(module, "meter_format",
         th_func(types, th_name(types, "void"), &mutable_receiver, 1,
                 nullptr, &implementation_keyword, 1), IR_LINK_EXTERNAL);
-    ir_instr_add(ir_block_add(keyword_impl, "entry"), IR_OP_RETURN);
+    ir_value_t *keyword_self = ir_param_add(keyword_impl, "self", meter);
+    ir_kwparam_add(keyword_impl, "format", string);
+    ir_instr_t *keyword_return =
+        ir_instr_add(ir_block_add(keyword_impl, "entry"), IR_OP_RETURN);
+    if (keyword_return && keyword_self)
+        ir_instr_operand_value(keyword_return, keyword_self);
     th_kwparam slot_keyword = {
         .name = "format", .mode = TH_IN, .type = string,
     };
@@ -215,8 +227,8 @@ static void test_trait_receiver_adapters(void) {
                 nullptr, &slot_keyword, 1));
     ir_block_t *keyword_entry = keyword_adapter
         ? ir_block_entry(keyword_adapter) : nullptr;
-    ir_instr_t *keyword_call = keyword_entry && keyword_entry->n_instrs > 1
-        ? keyword_entry->instrs[1] : nullptr;
+    ir_instr_t *keyword_call = keyword_entry && keyword_entry->n_instrs > 2
+        ? keyword_entry->instrs[2] : nullptr;
     bool keyword_forwarded = keyword_adapter && keyword_entry &&
         keyword_adapter->n_params == 2 &&
         keyword_adapter->params[1]->is_keyword && keyword_call &&
@@ -229,6 +241,7 @@ static void test_trait_receiver_adapters(void) {
     ir_func_t *variadic_impl = ir_func_add(module, "meter_sum",
         th_func(types, th_name(types, "void"), &variadic_receiver, 1,
                 &implementation_rest, nullptr, 0), IR_LINK_EXTERNAL);
+    ir_param_add(variadic_impl, "self", meter);
     ir_restparam_add(variadic_impl, "extras", integer);
     ir_instr_add(ir_block_add(variadic_impl, "entry"), IR_OP_RETURN);
     th_param erased_receiver = {.mode = TH_IN, .type = data};

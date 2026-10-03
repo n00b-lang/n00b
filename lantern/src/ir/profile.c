@@ -247,7 +247,7 @@ static ir_rule_result_t synth_concat(ir_module_t *m, ir_instr_t *in,
 
     return (ir_rule_result_t){
         .verdict = IR_RULE_ACCEPT,
-        .result  = ir_type_parse(m, "str"),
+        .result  = ir_type_intern(m, th_name(m->ctx->types, "str")),
     };
 }
 
@@ -260,7 +260,7 @@ static ir_rule_result_t synth_seq_len(ir_module_t *m, ir_instr_t *in,
 
     return (ir_rule_result_t){
         .verdict = IR_RULE_ACCEPT,
-        .result  = ir_type_parse(m, "word"),
+        .result  = ir_type_intern(m, th_name(m->ctx->types, "word")),
     };
 }
 
@@ -295,7 +295,7 @@ static ir_rule_result_t synth_ext_concat(ir_module_t *m, ir_instr_t *in,
 
     return (ir_rule_result_t){
         .verdict = IR_RULE_ACCEPT,
-        .result  = ir_type_parse(m, "str"),
+        .result  = ir_type_intern(m, th_name(m->ctx->types, "str")),
     };
 }
 

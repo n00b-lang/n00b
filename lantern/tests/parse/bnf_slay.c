@@ -8,8 +8,8 @@
 #include "harness.h"
 
 static const char *const N00B_TOKENS[] = {
-    "CHAR_LIT", "EMBED",   "FLOAT_LIT", "HEX_LIT",
-    "INT_LIT",  "LITERAL_PREFIX", "NEWLINE", "STRING_LIT",
+    "CHAR_LIT", "EMBED",   "FLOAT_LIT", "HEX_LIT", "i", "u",
+    "bits",     "INT_LIT", "LITERAL_PREFIX", "NEWLINE", "STRING_LIT",
     "INDENT",   "DEDENT",
 };
 

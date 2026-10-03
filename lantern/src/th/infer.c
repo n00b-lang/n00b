@@ -289,7 +289,9 @@ bool th_type_promotes_to(th_ctx *ctx, const th_type *from, const th_type *to)
            th_promotes_to(ctx, from_name, to_name);
 }
 
+static bool uni(th_ctx *ctx, th_type *a, th_type *b, core_dict_t *seen);
 static bool uni_in_place(th_ctx *ctx, th_type *a, th_type *b);
+static void uni_seen_free(core_dict_t *seen);
 
 void th_register_iface(th_ctx *ctx, const char *name, th_type *methods)
 {
@@ -627,7 +629,8 @@ static bool nullary_name(const th_type *t, const char **name)
     return true;
 }
 
-static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
+static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
+                      core_dict_t *seen)
 {
     th_type *bt = th_resolve(bound_to);
 
@@ -646,7 +649,7 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
 
         switch (c->kind) {
         case TH_CON_UNIFIES:
-            if (!uni_in_place(ctx, bound_to, c->target)) {
+            if (!uni(ctx, bound_to, c->target, seen)) {
                 th_err(ctx, TH_ERR_CONSTRAINT, "unifies", c->target,
                        bound_to, "constraint unifies failed");
 
@@ -725,7 +728,7 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
                 return false;
             }
 
-            if (c->field.type && !uni_in_place(ctx, m, c->field.type)) {
+            if (c->field.type && !uni(ctx, m, c->field.type, seen)) {
                 th_err(ctx, TH_ERR_CONSTRAINT, "has_field", c->field.type,
                        m, "constraint has_field: field type does not unify");
 
@@ -755,7 +758,7 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
                 return false;
             }
 
-            if (c->param.type && !uni_in_place(ctx, a->type, c->param.type)) {
+            if (c->param.type && !uni(ctx, a->type, c->param.type, seen)) {
                 th_err(ctx, TH_ERR_CONSTRAINT, "has_param", c->param.type,
                        a->type,
                        "constraint has_param: parameter does not unify");
@@ -797,9 +800,8 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
                 signature ? th_func_param(signature, 0) : nullptr;
             bool matches = receiver && th_func_ret(signature);
             if (matches) {
-                matches = uni_in_place(ctx, receiver->type, bound_to) &&
-                    uni_in_place(ctx, c->method.result,
-                                 th_func_ret(signature));
+                matches = uni(ctx, receiver->type, bound_to, seen) &&
+                    uni(ctx, c->method.result, th_func_ret(signature), seen);
             }
             th_type *call = c->method.call;
             size_t call_nparams = call ? th_func_nparams(call) : 0;
@@ -814,14 +816,14 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to)
                     ? th_func_param(signature, i + 1)
                     : th_func_rest(signature);
                 matches = actual && formal &&
-                    uni_in_place(ctx, actual->type, formal->type);
+                    uni(ctx, actual->type, formal->type, seen);
             }
             for (size_t i = 0; matches && call && i < th_func_nkw(call); i++) {
                 const th_kwparam *actual = th_func_kw(call, i);
                 const th_kwparam *formal = actual
                     ? th_func_kw_lookup(signature, actual->name) : nullptr;
                 matches = actual && formal &&
-                    uni_in_place(ctx, actual->type, formal->type);
+                    uni(ctx, actual->type, formal->type, seen);
             }
             if (!matches) {
                 th_err(ctx, TH_ERR_CONSTRAINT, c->method.name,
@@ -850,7 +852,11 @@ bool th_ctx_validate_constraints(th_ctx *ctx)
             ctx->pending_environment_constraints.data[pending++] = variable;
             continue;
         }
-        if (!con_check(ctx, variable, bound_to)) return false;
+        core_dict_t seen;
+        core_dict_init(&seen, nullptr, nullptr);
+        bool valid = con_check(ctx, variable, bound_to, &seen);
+        uni_seen_free(&seen);
+        if (!valid) return false;
     }
     ctx->pending_environment_constraints.len = pending;
     return true;
@@ -1721,7 +1727,7 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
                 break;
             }
 
-            if (!con_check(ctx, a, b)) {
+            if (!con_check(ctx, a, b, seen)) {
                 ok = false;
                 break;
             }
@@ -1752,13 +1758,18 @@ static bool uni_in_place(th_ctx *ctx, th_type *a, th_type *b)
 
     bool ok = uni(ctx, a, b, &seen);
 
-    core_dict_foreach (&seen, e) {
+    uni_seen_free(&seen);
+
+    return ok;
+}
+
+static void uni_seen_free(core_dict_t *seen)
+{
+    core_dict_foreach (seen, e) {
         core_dict_free((core_dict_t *)e->value);
         core_free(e->value);
     }
-    core_dict_free(&seen);
-
-    return ok;
+    core_dict_free(seen);
 }
 
 th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)

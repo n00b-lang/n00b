@@ -53,7 +53,7 @@ parse_annot_result_t *parse_annot_result_new(parse_symtab_t *borrowed);
 void parse_annot_result_set_node_callback(
     parse_annot_result_t *result, parse_annot_node_callback_fn callback,
     void *context);
-/* A null result from the resolver delegates to ir_type_from_node(). */
+/* A null result uses the type already attached to the node, if any. */
 void parse_annot_result_set_type_node_resolver(
     parse_annot_result_t *result,
     parse_infer_type_node_resolver_fn resolver,

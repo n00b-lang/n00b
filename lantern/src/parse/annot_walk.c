@@ -1463,7 +1463,7 @@ parse_annot_resolve_type_node(parse_annot_result_t *result, th_ctx *types,
     th_type *resolved = result && result->type_node_resolver
         ? result->type_node_resolver(types, grammar, node,
               result->type_node_resolver_context) : nullptr;
-    return resolved ? resolved : ir_type_from_node(types, grammar, node);
+    return resolved ? resolved : core_tree_node_value(node).type;
 }
 
 void

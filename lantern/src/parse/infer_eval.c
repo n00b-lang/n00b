@@ -853,12 +853,14 @@ spread_args(ictx *c, int32_t ix, core_list_t(th_arg) * out)
             ? c->type_node_resolver(c->tc, c->v->grammar, k,
                                     c->type_node_resolver_context)
             : nullptr;
-        if (!t) t = ir_type_from_node(c->tc, c->v->grammar, k);
+        if (!t) t = core_tree_node_value(k).type;
 
-        if (t) {
-            core_list_push(*out,
-                           ((th_arg){.kind = TH_ARG_TYPE, .type = t}));
+        if (!t) {
+            c->failed = true;
+            return;
         }
+        core_list_push(*out,
+                       ((th_arg){.kind = TH_ARG_TYPE, .type = t}));
     }
 }
 
@@ -992,8 +994,7 @@ eval(ictx *c, const parse_infer_expr_t *e)
             if (!th_unify_in_place(c->tc, left, right)) c->failed = true;
             return th_name(c->tc, "bool");
         }
-        th_type *comparison = ir_type_from_text(c->tc,
-            CORE_STRING_STATIC("i:2"));
+        th_type *comparison = th_bitint(c->tc, 2, true);
         th_param parameter = {.mode = TH_IN, .type = right};
         th_type *call_shape = th_func(c->tc, comparison, &parameter, 1,
                                       nullptr, nullptr, 0);
