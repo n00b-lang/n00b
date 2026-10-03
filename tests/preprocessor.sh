@@ -2122,11 +2122,15 @@ grep -q 'link_nested_declarations:2:Render kind=2 binding n00bb.semantic.type' \
     cat "$tmp/lower_out_parameter.ir"
     exit 1
 }
-grep -q '%result: ptr\[int\]' "$tmp/lower_out_parameter.ir" || {
+grep -q '%arg0: int' "$tmp/lower_out_parameter.ir" || {
     cat "$tmp/lower_out_parameter.ir"
     exit 1
 }
-grep -q 'store' "$tmp/lower_out_parameter.ir" || {
+grep -q 'copy \$__n00bb_param_' "$tmp/lower_out_parameter.ir" || {
+    cat "$tmp/lower_out_parameter.ir"
+    exit 1
+}
+grep -q 'return %' "$tmp/lower_out_parameter.ir" || {
     cat "$tmp/lower_out_parameter.ir"
     exit 1
 }
@@ -2445,7 +2449,7 @@ test "$(grep -c 'variant.make' "$tmp/lower_variant_arm_assignment.ir")" -eq 3
     exit 1
 }
 grep -q 'alloc.using .*%__lowered_' "$tmp/allocator_constructor.ir"
-grep -q 'call @__init, %__n00bb_construct_storage_' \
+grep -q 'call @__init, fresh %__n00bb_construct_storage_' \
     "$tmp/allocator_constructor.ir"
 
 "$compiler" lower --dump-ir "$program_dir/allocator_array.n00b" \
@@ -2619,10 +2623,11 @@ grep -q 'identity: function, .*node-targets=\[2:47->self\]' \
     cat "$tmp/lower_variadic.ir"
     exit 1
 }
-grep -E -q 'func @collect\(%prefix: int .*%values: array\[int\].*\) -> array\[int\]' \
+grep -E -q 'func @collect\(%prefix: int .*\*%values: int\).*-> array\[int\]' \
     "$tmp/lower_variadic.ir"
-grep -q '= aggregate' "$tmp/lower_variadic.ir"
-test "$(grep -c '= aggregate' "$tmp/lower_variadic.ir")" -eq 3
+grep -q '= rest.collect %values' "$tmp/lower_variadic.ir"
+test "$(grep -c '= rest.collect %values' "$tmp/lower_variadic.ir")" -eq 2
+grep -q 'call @collect, .*,' "$tmp/lower_variadic.ir"
 grep -q 'call @collect' "$tmp/lower_variadic.ir"
 
 "$compiler" lower --dump-ir "$program_dir/lower_array_literals.n00b" \
@@ -3289,10 +3294,12 @@ grep -q 'N00BB-T0022.*variant types cannot define __init' \
     cat "$tmp/generic_modify_parameter.err"
     exit 1
 }
-grep -Fq 'func @assign_same(%item: ptr[`' \
+grep -Fq 'func @assign_same(%item: `a) -> nil fail: nil !ir.callable_contract(forall[`a] (inout `a)' \
     "$tmp/generic_modify_parameter.ir"
 grep -q 'call @assign_same' "$tmp/generic_modify_parameter.ir"
-grep -q '!ir.call_signature((ptr\[int\]) -> nil fail: nil)' \
+grep -q '!ir.call_signature((inout int) -> nil fail: nil)' \
+    "$tmp/generic_modify_parameter.ir"
+grep -q '= call.output .* 0' \
     "$tmp/generic_modify_parameter.ir"
 
 N00B_PATH="$program_dir" "$compiler" lower --dump-ir "$program_dir/init_root.n00b" \
@@ -3623,11 +3630,22 @@ grep -q 'this binding is not available during compile-time evaluation because it
     cat "$tmp/lower_default_arguments.err"
     exit 1
 }
-grep -q 'call @defaulted, %__n00bb_default_arg_' \
+test "$(grep -c 'call @defaulted,' "$tmp/lower_default_arguments.ir")" -eq 2
+grep -Fq 'call @defaulted, missing, missing,' \
     "$tmp/lower_default_arguments.ir"
-grep -Eq 'call @named, %__lowered_[0-9]+, %__n00bb_default_arg_' \
+grep -Eq 'call @defaulted, %__lowered_[0-9]+, missing,' \
     "$tmp/lower_default_arguments.ir"
-grep -q 'extract .*"present"' "$tmp/lower_default_arguments.ir"
+grep -Eq '= param\.present %__n00bb_default_param_[0-9]+' \
+    "$tmp/lower_default_arguments.ir"
+grep -Eq 'call @defaulted, .*!ir.call_signature\(\(int, int, int\)' \
+    "$tmp/lower_default_arguments.ir"
+grep -Eq 'call @named, %__lowered_[0-9]+, %__lowered_[0-9]+' \
+    "$tmp/lower_default_arguments.ir"
+if grep -Eq '__n00bb_default_arg_|extract .*"present"' \
+    "$tmp/lower_default_arguments.ir"; then
+    echo 'default arguments retained a presence/value wrapper' >&2
+    exit 1
+fi
 grep -q 'add trap' "$tmp/lower_default_arguments.ir"
 awk '
     /^  (static )?func @use_named_evaluation_order/ { in_call = 1 }
@@ -3659,11 +3677,12 @@ grep -q 'default parameter dependencies are cyclic' \
     cat "$tmp/lower_parameter_modes.err"
     exit 1
 }
-grep -q '%target: ptr\[int\]' \
+grep -q '!ir.call_signature((out int, int) -> nil fail: nil)' \
     "$tmp/lower_parameter_modes.ir"
-grep -q 'alloca int' "$tmp/lower_parameter_modes.ir"
-grep -q 'store %__n00bb_arg_' "$tmp/lower_parameter_modes.ir"
-grep -q 'load %__n00bb_arg_' "$tmp/lower_parameter_modes.ir"
+grep -q '!ir.call_signature((inout int, int) -> nil fail: nil)' \
+    "$tmp/lower_parameter_modes.ir"
+grep -q 'call.output .* 0' "$tmp/lower_parameter_modes.ir"
+test "$(grep -c 'call.output .* 0' "$tmp/lower_parameter_modes.ir")" -eq 2
 grep -q '= call @copy_modify' "$tmp/lower_parameter_modes.ir"
 grep -q '= call @write_out' "$tmp/lower_parameter_modes.ir"
 
@@ -3770,10 +3789,12 @@ test "$(grep -c '= call @store,' "$tmp/array_ragged.ir")" -eq 2
     cat "$tmp/array_slice.err"
     exit 1
 }
-grep -Eq 'call @slice, %__lowered_[0-9]+, %__n00bb_default_arg_' \
+grep -Eq 'call @slice, %__lowered_[0-9]+, %__lowered_[0-9]+, %' \
     "$tmp/array_slice.ir"
-grep -Eq 'call @slice, %__lowered_[0-9]+, %__n00bb_default_arg_[0-9]+, %__n00bb_default_arg_[0-9]+' \
-    "$tmp/array_slice.ir"
+if grep -q '__n00bb_default_arg_' "$tmp/array_slice.ir"; then
+    echo 'slice defaults retained a presence/value wrapper' >&2
+    exit 1
+fi
 grep -q 'func @full_view(%items: array\[int\]) -> view\[int\]' \
     "$tmp/array_slice.ir"
 grep -q 'neg trap' "$tmp/array_slice.ir"
@@ -5629,7 +5650,12 @@ grep -q 'required link-unit analysis contribution is not complete' \
     exit 1
 }
 grep -q 'call @archived_add' "$tmp/function_archive_user.out"
-grep -q '__n00bb_default_present' "$tmp/function_archive_user.out"
+grep -Eq 'call @archived_add, %[^,]+, missing' \
+    "$tmp/function_archive_user.out"
+if grep -q '__n00bb_default_present' "$tmp/function_archive_user.out"; then
+    echo 'an archived default argument retained a presence/value wrapper' >&2
+    exit 1
+fi
 grep -q 'call @archived_update' "$tmp/function_archive_user.out"
 grep -q 'call @archived_variadic' "$tmp/function_archive_user.out"
 grep -q 'function-global-unknown\[unavailable\] function_archive_dep:1:archived_add -> <unresolved>' \
