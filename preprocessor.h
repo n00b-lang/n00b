@@ -33,6 +33,7 @@ typedef struct {
 typedef struct {
     const char *const *definitions;
     size_t definition_count;
+    bool release_mode;
     n00bb_preprocessor_import_fn load_import;
     void *import_context;
     n00bb_preprocessor_prepare_import_fn prepare_import;

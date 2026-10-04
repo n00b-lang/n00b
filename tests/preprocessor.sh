@@ -4340,6 +4340,19 @@ N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-symbols \
 }
 grep -q '^    result: variable, mutable, type=ref\[int\], .*aliases=1' \
     "$tmp/return_alias_recursive.out"
+
+"$compiler" preprocess --dump-symbols \
+    "$program_dir/return_alias_deep_chain.n00b" \
+    >"$tmp/return_alias_deep_chain.out" \
+    2>"$tmp/return_alias_deep_chain.err" || {
+    cat "$tmp/return_alias_deep_chain.err"
+    exit 1
+}
+grep -q '^    result: variable, mutable, type=ref\[int\], .*aliases=1' \
+    "$tmp/return_alias_deep_chain.out"
+grep -q '^    target: variable, mutable, type=int, .*storage-duration=dynamic' \
+    "$tmp/return_alias_deep_chain.out"
+
 grep -Eq '= call @from_a, .* !ir.alias_count\(1\)' \
     "$tmp/return_alias_recursive.out"
 grep -Eq '= call @from_b, .* !ir.alias_count\(1\)' \
@@ -4361,10 +4374,39 @@ grep -q '^    result: variable, mutable, type=ref\[int\], .*aliases=0, .*alias-a
     cat "$tmp/lower_require_assert.err"
     exit 1
 }
-grep -q '= debug.enabled' "$tmp/lower_require_assert.ir"
 grep -q 'branch %x, __n00bb_require_join_' "$tmp/lower_require_assert.ir"
-grep -q 'branch %__n00bb_debug_' "$tmp/lower_require_assert.ir"
 test "$(grep -c '^[[:space:]]*trap ' "$tmp/lower_require_assert.ir")" -eq 3
+
+"$compiler" --release lower --dump-ir \
+    "$program_dir/lower_require_assert.n00b" \
+    >"$tmp/lower_require_assert_release.ir" \
+    2>"$tmp/lower_require_assert_release.err" || {
+    cat "$tmp/lower_require_assert_release.err"
+    exit 1
+}
+test "$(grep -c '^[[:space:]]*trap ' "$tmp/lower_require_assert_release.ir")" -eq 1
+
+"$compiler" preprocess --dump-preprocessed "$program_dir/debug_mode.n00b" \
+    >"$tmp/debug_mode.out" 2>"$tmp/debug_mode.err" || {
+    cat "$tmp/debug_mode.err"
+    exit 1
+}
+grep -q 'debug_branch' "$tmp/debug_mode.out"
+if grep -q 'release_branch' "$tmp/debug_mode.out"; then
+    echo 'release-only branch survived debug preprocessing' >&2
+    exit 1
+fi
+"$compiler" --release preprocess --dump-preprocessed \
+    "$program_dir/debug_mode.n00b" \
+    >"$tmp/release_mode.out" 2>"$tmp/release_mode.err" || {
+    cat "$tmp/release_mode.err"
+    exit 1
+}
+grep -q 'release_branch' "$tmp/release_mode.out"
+if grep -q 'debug_branch' "$tmp/release_mode.out"; then
+    echo 'debug-only branch survived release preprocessing' >&2
+    exit 1
+fi
 
 if "$compiler" lower "$program_dir/lower_require_nonbool.n00b" \
     >"$tmp/lower_require_nonbool.out" \

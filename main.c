@@ -716,7 +716,7 @@ static parse_sym_entry_t *resolve_linked_method(
 static bool function_lifetime_effects_for_symbol(
     n00bb_link_analysis_t *analysis, parse_sym_entry_t *function,
     n00bb_function_lifetime_effects_t *out);
-static bool type_may_contain_reference_alias(th_type *type, size_t depth);
+static bool type_may_contain_reference_alias(th_type *type);
 
 typedef struct {
     parse_tree_t *condition;
@@ -959,12 +959,6 @@ typedef struct {
 } n00bb_tuple_parts_t;
 core_list_decl(n00bb_tuple_parts_t);
 
-typedef struct {
-    parse_tree_t *node;
-    ir_block_t *join;
-    bool active;
-} n00bb_assert_frame_t;
-core_list_decl(n00bb_assert_frame_t);
 
 typedef struct {
     parse_grammar_t *grammar;
@@ -987,7 +981,6 @@ typedef struct {
     core_list_t(n00bb_default_param_t) default_params;
     n00bb_default_param_t *active_default_param;
     core_list_t(n00bb_tuple_parts_t) tuple_parts;
-    core_list_t(n00bb_assert_frame_t) asserts;
     uint64_t next_block_id;
     uint64_t next_control_order;
     bool comptime_phase;
@@ -11823,7 +11816,7 @@ n00bb_attach_call_return_alias(ir_lower_context_t *context,
         && th_kind_of(signature) == TH_FUNCTION
             ? th_func_ret(signature) : nullptr;
     if (!source_result) return false;
-    if (!type_may_contain_reference_alias(source_result, 0)) return true;
+    if (!type_may_contain_reference_alias(source_result)) return true;
     n00bb_function_lifetime_effects_t effects = {0};
     if (!function_lifetime_effects_for_symbol(analysis, function, &effects)
         || (effects.return_kind != N00BB_RETURN_ALIAS_PARAMETER
@@ -16539,7 +16532,6 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .parameters_to_copy_out = core_list_new(n00bb_copyout_t),
         .pending_call_copyouts = core_list_new(n00bb_pending_copyouts_t),
         .default_params = core_list_new(n00bb_default_param_t),
-        .asserts = core_list_new(n00bb_assert_frame_t),
         .comptime_phase = comptime_phase,
     };
     ir_lower_context_t context = {
@@ -16925,7 +16917,6 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         core_list_free(lower_data.tuple_parts.data[i].values);
     }
     core_list_free(lower_data.tuple_parts);
-    core_list_free(lower_data.asserts);
     if (lowered.status == IR_LOWER_FAILED || ir_diags_failed(diagnostics)) {
         return false;
     }
@@ -17861,59 +17852,12 @@ n00bb_lower_assert_statement(ir_lower_context_t *context,
     ir_span_t span = lower_span_for_tree(context, node);
     bool debug_only = core_string_eq(first_token_text(node),
                                      CORE_STRING_STATIC("assert"));
-    if (entering) {
-        if (!debug_only) return true;
-        n00bb_assert_frame_t frame = {
-            .node = node,
-            .active = context->reachable,
-        };
-        if (frame.active) {
-            th_type *bool_type = n00bb_ir_builtin_type(context->module,
-                                                       "bool");
-            frame.join = n00bb_branch_block(context, lower, "assert_join");
-            ir_block_t *check = n00bb_branch_block(context, lower,
-                                                    "assert_check");
-            char name[48];
-            snprintf(name, sizeof(name), "__n00bb_debug_%llu",
-                     (unsigned long long)context->next_value_id++);
-            ir_instr_t *enabled = bool_type
-                ? ir_instr_add(context->block, IR_OP_DEBUG_ENABLED) : nullptr;
-            ir_instr_t *branch = enabled
-                && ir_instr_set_dest(enabled, name, bool_type)
-                ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
-            if (!frame.join || !check || !branch
-                || !ir_instr_operand_value(branch, enabled->dest)
-                || !ir_instr_operand_block(branch, check)
-                || !ir_instr_operand_block(branch, frame.join)) {
-                lower_error(context, IR_DIAG_INTERNAL, span,
-                    "could not lower debug-only assertion entry");
-                return false;
-            }
-            enabled->span = branch->span = span;
-            context->block = check;
-        }
-        core_list_push(lower->asserts, frame);
-        return true;
+    if (entering || !context->reachable) return true;
+    if (debug_only && n00bb_assert_has_known_side_effect(lower, node)) {
+        lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+            "assert expression has a side effect");
+        return false;
     }
-
-    ir_block_t *join = nullptr;
-    if (debug_only) {
-        if (!lower->asserts.len
-            || lower->asserts.data[lower->asserts.len - 1].node != node) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
-                "assertion lowering frame is missing");
-            return false;
-        }
-        n00bb_assert_frame_t frame = lower->asserts.data[--lower->asserts.len];
-        if (!frame.active) return true;
-        join = frame.join;
-        if (n00bb_assert_has_known_side_effect(lower, node)) {
-            lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                "assert expression has a side effect");
-            return false;
-        }
-    }
-    else if (!context->reachable) return true;
 
     parse_tree_t *expression = child_nt(visit->grammar, node, "expression");
     ir_value_t *condition = expression
@@ -17925,7 +17869,7 @@ n00bb_lower_assert_statement(ir_lower_context_t *context,
             "assert and require conditions must be bool");
         return false;
     }
-    if (!join) join = n00bb_branch_block(context, lower, "require_join");
+    ir_block_t *join = n00bb_branch_block(context, lower, "require_join");
     ir_block_t *failure = n00bb_branch_block(context, lower,
                                               "condition_failed");
     ir_instr_t *branch = ir_instr_add(context->block, IR_OP_BRANCH);
@@ -24002,7 +23946,7 @@ static parse_tree_t *call_argument_for_parameter(parse_grammar_t *grammar,
 static bool simple_returned_global(parse_grammar_t *grammar,
     n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
     parse_tree_t *expression,
-    core_list_t(parse_sym_entry_ptr_t) *visited, size_t depth,
+    core_list_t(parse_sym_entry_ptr_t) *visited,
     core_buffer_t *global_name);
 
 static parse_sym_entry_t *
@@ -24040,9 +23984,9 @@ returned_source_matches_formal(parse_grammar_t *grammar,
     n00bb_link_analysis_t *analysis,
     core_list_t(n00bb_return_candidate_t) *candidates,
     n00bb_return_candidate_t *owner, parse_tree_t *expression,
-    size_t formal_index, size_t depth)
+    size_t formal_index)
 {
-    if (!expression || depth > 32 || formal_index >= owner->formal_count)
+    if (!expression || formal_index >= owner->formal_count)
         return false;
     n00bb_tu_state_t *state = tu_state(owner->unit);
     n00bb_return_source_t *source = state
@@ -24060,7 +24004,7 @@ returned_source_matches_formal(parse_grammar_t *grammar,
         return core_string_eq(index_trait,
                 CORE_STRING_STATIC("Index_Slice"))
             && returned_source_matches_formal(grammar, analysis, candidates,
-                owner, core_tree_child(call, 0), formal_index, depth + 1);
+                owner, core_tree_child(call, 0), formal_index);
     }
 
     parse_tree_t *member = member_access_node(grammar, call);
@@ -24078,7 +24022,7 @@ returned_source_matches_formal(parse_grammar_t *grammar,
             parse_tree_t *argument = call_argument_for_parameter(grammar,
                 call, callee, i, trait_dispatch);
             if (returned_source_matches_formal(grammar, analysis,
-                    candidates, owner, argument, formal_index, depth + 1))
+                    candidates, owner, argument, formal_index))
                 return true;
         }
         return false;
@@ -24091,7 +24035,7 @@ returned_source_matches_formal(parse_grammar_t *grammar,
     parse_tree_t *argument = call_argument_for_parameter(grammar, call,
         callee, effects.return_parameter, trait_dispatch);
     return returned_source_matches_formal(grammar, analysis, candidates,
-        owner, argument, formal_index, depth + 1);
+        owner, argument, formal_index);
 }
 
 static bool
@@ -24175,7 +24119,7 @@ function_returned_parameter(parse_grammar_t *grammar,
                      r < candidate->facts->return_expression_count; r++) {
                     if (returned_source_matches_formal(grammar, analysis,
                             &candidates, candidate,
-                            candidate->facts->return_expressions[r], i, 0))
+                            candidate->facts->return_expressions[r], i))
                         continue;
                     candidate->possible[i] = false;
                     changed = true;
@@ -25103,38 +25047,56 @@ find_call_expression(parse_grammar_t *grammar, core_translation_unit_t *unit,
 }
 
 static parse_sym_entry_t *
-reference_expression_global(parse_grammar_t *grammar,
-                           core_translation_unit_t *unit,
-                           parse_tree_t *expression, size_t depth,
-                           bool inside_ref)
+alias_global_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
+                    core_list_t(parse_sym_entry_ptr_t) *active)
 {
-    if (!expression || depth > 32) return nullptr;
-    inside_ref = inside_ref
-        || core_string_eq(first_token_text(expression),
-                          CORE_STRING_STATIC("ref"));
-    parse_sym_entry_t *symbol = simple_expression_bound_symbol(grammar,
-        unit, expression);
-    if (symbol && inside_ref && is_module_global_symbol(grammar, symbol))
-        return symbol;
-    if (!symbol || !is_module_global_symbol(grammar, symbol)) {
-        for (size_t i = 0; i < core_tree_num_children(expression); i++) {
-            parse_sym_entry_t *found = reference_expression_global(grammar,
-                unit, core_tree_child(expression, i), depth + 1, inside_ref);
-            if (found) return found;
-        }
-    }
-    if (!symbol)
-        return nullptr;
+    if (!symbol) return nullptr;
+    if (is_module_global_symbol(grammar, symbol)) return symbol;
+    for (size_t i = 0; i < active->len; i++)
+        if (active->data[i] == symbol) return nullptr;
+    core_list_push(*active, symbol);
+    parse_sym_entry_t *found = nullptr;
     for (size_t i = 0; i < parse_sym_alias_count(symbol); i++) {
         const parse_sym_alias_t *alias = parse_sym_alias_at(symbol, i);
-        parse_sym_entry_t *target = alias ? alias->other : nullptr;
-        if (!target) continue;
-        if (is_module_global_symbol(grammar, target)) return target;
-        parse_sym_entry_t *found = reference_expression_global(grammar,
-            unit, target->decl_node, depth + 1, inside_ref);
-        if (found) return found;
+        parse_sym_entry_t *candidate = alias_global_symbol(grammar,
+            alias ? alias->other : nullptr, active);
+        if (!candidate) continue;
+        if (found && found != candidate) {
+            found = nullptr;
+            break;
+        }
+        found = candidate;
     }
-    return nullptr;
+    active->len--;
+    return found;
+}
+
+static parse_sym_entry_t *
+reference_expression_global(parse_grammar_t *grammar,
+                            core_translation_unit_t *unit,
+                            parse_tree_t *expression)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    n00bb_alias_edges_t *facts = state && expression
+        ? core_dict_get(&state->alias_edges, expression, nullptr) : nullptr;
+    if (!facts) return nullptr;
+    core_list_t(parse_sym_entry_ptr_t) active =
+        core_list_new(parse_sym_entry_ptr_t);
+    parse_sym_entry_t *found = nullptr;
+    for (size_t i = 0; i < facts->count; i++) {
+        n00bb_alias_edge_t *edge = &facts->edges[i];
+        if (edge->kind == N00BB_ALIAS_CALL) continue;
+        parse_sym_entry_t *candidate = alias_global_symbol(grammar,
+            edge->symbol, &active);
+        if (!candidate) continue;
+        if (found && found != candidate) {
+            found = nullptr;
+            break;
+        }
+        found = candidate;
+    }
+    core_list_free(active);
+    return found;
 }
 
 static bool
@@ -25162,7 +25124,7 @@ publish_returned_parameter_aliases(core_link_unit_t *link,
             call.kind == N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH);
         if (!argument) continue;
         parse_sym_entry_t *global = reference_expression_global(
-            analysis->grammar, call.source_unit, argument, 0, false);
+            analysis->grammar, call.source_unit, argument);
         if (!global) continue;
         core_link_declaration_t *target = link_declaration_for_symbol(
             analysis, global);
@@ -25320,7 +25282,7 @@ publish_builtin_reference_global_effects(
         core_list_t(parse_sym_entry_ptr_t) visited =
             core_list_new(parse_sym_entry_ptr_t);
         bool found = simple_returned_global(analysis->grammar, analysis,
-            call.source_unit, argument, &visited, 0, &global_name);
+            call.source_unit, argument, &visited, &global_name);
         core_list_free(visited);
         if (!found) {
             core_buffer_release(&global_name);
@@ -26487,7 +26449,7 @@ static bool
 append_static_value(core_buffer_t *buffer,
                     const n00bb_static_value_t *value, size_t depth)
 {
-    if (!buffer || !value || depth > 64) return false;
+    if (!buffer || !value) return false;
     core_buffer_putc(buffer, (char)value->kind);
     switch (value->kind) {
     case N00BB_STATIC_VALUE_BOOL:
@@ -27471,30 +27433,41 @@ interface_type_member_array_shape_metadata(locate_worker_context_t *loader,
 }
 
 static th_type *
-interface_array_shape_type(locate_worker_context_t *loader, th_type *type,
-                           size_t depth)
+interface_array_shape_type(locate_worker_context_t *loader, th_type *type)
 {
-    if (!type || depth > 64) return nullptr;
-    type = th_resolve(type);
-    if (th_kind_of(type) != TH_NAMED || th_named_nargs(type)) return type;
-    const char *name = nullptr;
-    size_t name_size = 0;
-    if (!th_named_info(type, &name, &name_size, nullptr, nullptr))
-        return type;
-    for (size_t e = 0; loader && e < loader->linked_interface_count; e++) {
-        const th_env *environment = loader->linked_interfaces[e];
-        for (size_t i = 0; i < th_env_declaration_count(environment); i++) {
-            th_env_declaration_view_t declaration = {0};
-            if (!th_env_declaration_at(environment, i, &declaration)
-                || declaration.kind != TH_ENV_DECLARATION_TYPE
-                || declaration.type_shape_kind != TH_ENV_TYPE_SHAPE_ALIAS
-                || strlen(declaration.qualified_name) != name_size
-                || memcmp(declaration.qualified_name, name, name_size))
-                continue;
-            return interface_array_shape_type(loader,
-                declaration.type_shape, depth + 1);
+    core_list_t(th_type_ptr_t) seen = core_list_new(th_type_ptr_t);
+    while (type) {
+        type = th_resolve(type);
+        if (!type) break;
+        if (th_kind_of(type) != TH_NAMED || th_named_nargs(type)) break;
+        bool cycle = false;
+        for (size_t i = 0; i < seen.len; i++)
+            if (seen.data[i] == type) { cycle = true; break; }
+        if (cycle) { type = nullptr; break; }
+        core_list_push(seen, type);
+        const char *name = nullptr;
+        size_t name_size = 0;
+        if (!th_named_info(type, &name, &name_size, nullptr, nullptr)) break;
+        th_type *next = nullptr;
+        for (size_t e = 0;
+             loader && e < loader->linked_interface_count && !next; e++) {
+            const th_env *environment = loader->linked_interfaces[e];
+            for (size_t i = 0; i < th_env_declaration_count(environment); i++) {
+                th_env_declaration_view_t declaration = {0};
+                if (!th_env_declaration_at(environment, i, &declaration)
+                    || declaration.kind != TH_ENV_DECLARATION_TYPE
+                    || declaration.type_shape_kind != TH_ENV_TYPE_SHAPE_ALIAS
+                    || strlen(declaration.qualified_name) != name_size
+                    || memcmp(declaration.qualified_name, name, name_size))
+                    continue;
+                next = declaration.type_shape;
+                break;
+            }
         }
+        if (!next) break;
+        type = next;
     }
+    core_list_free(seen);
     return type;
 }
 
@@ -27506,7 +27479,7 @@ decode_interface_array_shape(locate_worker_context_t *loader,
 {
     if (shape_out) *shape_out = nullptr;
     if (!data) return true;
-    type = interface_array_shape_type(loader, type, 0);
+    type = interface_array_shape_type(loader, type);
     if (!loader->ir_context || !state || !type || !shape_out || size < 20
         || memcmp(data, "N0AS", 4) != 0) return false;
     size_t offset = 4;
@@ -28146,7 +28119,7 @@ static bool
 static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
                           n00bb_tu_state_t *state, size_t depth)
 {
-    if (!value || !type || !state || !state->types || depth > 64)
+    if (!value || !type || !state || !state->types)
         return false;
     type = th_resolve(type);
     if (!type) return false;
@@ -28238,7 +28211,7 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
                     th_type *type, n00bb_tu_state_t *state,
                     n00bb_static_value_t *out, size_t depth)
 {
-    if (!data || !offset || !type || !state || !out || depth > 64
+    if (!data || !offset || !type || !state || !out
         || *offset >= size) return false;
     type = th_resolve(type);
     n00bb_static_value_kind_t kind =
@@ -29440,7 +29413,7 @@ local_alias_component_is_closed(parse_grammar_t *grammar,
     return true;
 }
 
-static bool type_may_contain_reference_alias(th_type *type, size_t depth);
+static bool type_may_contain_reference_alias(th_type *type);
 
 static bool
 finalize_alias_free_local_summaries(parse_grammar_t *grammar,
@@ -29459,7 +29432,7 @@ finalize_alias_free_local_summaries(parse_grammar_t *grammar,
                                 || symbol->kind == PARSE_SYM_PARAM)
                 && symbol->type;
             if (!local_value) continue;
-            if (!type_may_contain_reference_alias(symbol->type, 0)) {
+            if (!type_may_contain_reference_alias(symbol->type)) {
                 parse_sym_set_alias_analysis_complete(symbol, true);
                 continue;
             }
@@ -29701,7 +29674,7 @@ static void
 mark_alias_symbol_may_escape(parse_sym_entry_t *symbol)
 {
     if (!symbol || (!is_reference_symbol(symbol) && !symbol->alias_count
-        && !type_may_contain_reference_alias(symbol->type, 0)))
+        && !type_may_contain_reference_alias(symbol->type)))
         return;
     core_list_t(parse_sym_entry_ptr_t) work =
         core_list_new(parse_sym_entry_ptr_t);
@@ -29753,7 +29726,7 @@ mark_expression_aliases_may_escape(core_translation_unit_t *unit,
         }
         th_type *type = symbol->type ? th_resolve(symbol->type) : nullptr;
         if (type && (th_kind_of(type) == TH_VAR
-                     || type_may_contain_reference_alias(type, 0)))
+                     || type_may_contain_reference_alias(type)))
             symbol->lifetime.escapes = true;
         mark_alias_symbol_may_escape(symbol);
     }
@@ -29782,20 +29755,27 @@ aggregate_literal_root(parse_grammar_t *grammar, parse_tree_t *expression)
 }
 
 static bool
-type_may_contain_reference_alias(th_type *type, size_t depth)
+type_may_contain_reference_alias_inner(th_type *type,
+                                      core_list_t(th_type_ptr_t) *active)
 {
-    if (!type || depth > 32) return true;
+    if (!type) return true;
     type = th_resolve(type);
     if (!type) return true;
+    for (size_t i = 0; i < active->len; i++)
+        if (active->data[i] == type) return true;
     switch (th_kind_of(type)) {
     case TH_INDIRECTION:
     case TH_RECORD:
     case TH_SUM:
     case TH_VAR:
         return true;
-    case TH_SEQUENCE:
-        return type_may_contain_reference_alias(th_seq_elem(type),
-                                                depth + 1);
+    case TH_SEQUENCE: {
+        core_list_push(*active, type);
+        bool result = type_may_contain_reference_alias_inner(
+            th_seq_elem(type), active);
+        active->len--;
+        return result;
+    }
     case TH_NAMED: {
         const char *name = nullptr;
         size_t name_len = 0;
@@ -29806,14 +29786,19 @@ type_may_contain_reference_alias(th_type *type, size_t depth)
         if (!is_variant && name_len == 4 && !memcmp(name, "view", 4))
             return true;
         if (argument_count) {
+            core_list_push(*active, type);
+            bool result = false;
             for (size_t i = 0; i < argument_count; i++) {
                 const th_arg *argument = th_named_arg(type, i);
                 if (!argument || argument->kind != TH_ARG_TYPE
-                    || type_may_contain_reference_alias(argument->type,
-                                                        depth + 1))
-                    return true;
+                    || type_may_contain_reference_alias_inner(argument->type,
+                                                              active)) {
+                    result = true;
+                    break;
+                }
             }
-            return false;
+            active->len--;
+            return result;
         }
         static const char *const scalar_names[] = {
             "bool", "char", "float", "f32", "f64", "int", "string",
@@ -29837,14 +29822,25 @@ type_may_contain_reference_alias(th_type *type, size_t depth)
     }
 }
 
+static bool
+type_may_contain_reference_alias(th_type *type)
+{
+    core_list_t(th_type_ptr_t) active = core_list_new(th_type_ptr_t);
+    bool result = type_may_contain_reference_alias_inner(type, &active);
+    core_list_free(active);
+    return result;
+}
+
 static parse_tree_t *find_call_expression(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *expression);
 static bool record_returned_call_alias(parse_grammar_t *grammar,
     n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
-    parse_sym_entry_t *holder, parse_tree_t *expression, size_t depth);
+    parse_sym_entry_t *holder, parse_tree_t *expression,
+    core_list_t(parse_tree_ptr_t) *active);
 static bool record_call_aggregate_aliases(parse_grammar_t *grammar,
     n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
-    parse_sym_entry_t *holder, parse_tree_t *expression, size_t depth);
+    parse_sym_entry_t *holder, parse_tree_t *expression,
+    core_list_t(parse_tree_ptr_t) *active);
 
 static bool
 record_aggregate_aliases(parse_grammar_t *grammar,
@@ -29953,12 +29949,6 @@ call_argument_aliases(parse_grammar_t *grammar,
                                                    holder);
 }
 
-static bool record_returned_call_alias(parse_grammar_t *grammar,
-    n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
-    parse_sym_entry_t *holder, parse_tree_t *expression, size_t depth);
-static parse_tree_t *find_call_expression(parse_grammar_t *grammar,
-    core_translation_unit_t *unit, parse_tree_t *expression);
-
 static bool
 record_function_aggregate_aliases(parse_grammar_t *grammar,
                                   n00bb_link_analysis_t *analysis,
@@ -29968,7 +29958,7 @@ record_function_aggregate_aliases(parse_grammar_t *grammar,
                                   parse_sym_entry_t *function,
                                   core_translation_unit_t *call_unit,
                                   parse_tree_t *call,
-                                  size_t depth)
+                                  core_list_t(parse_tree_ptr_t) *active)
 {
     n00bb_tu_state_t *state = tu_state(source_unit);
     n00bb_alias_edges_t *facts = state
@@ -29992,9 +29982,9 @@ record_function_aggregate_aliases(parse_grammar_t *grammar,
         n00bb_alias_edge_t *edge = &facts->edges[i];
         if (edge->kind == N00BB_ALIAS_CALL) {
             th_type *result_type = core_tree_node_value(edge->node).type;
-            if (type_may_contain_reference_alias(result_type, 0)
+            if (type_may_contain_reference_alias(result_type)
                 && !record_returned_call_alias(grammar, analysis, source_unit,
-                    holder, edge->node, depth + 1)) {
+                    holder, edge->node, active)) {
                 holder->lifetime.escapes = true;
                 complete = false;
             }
@@ -30216,7 +30206,7 @@ record_returned_call_alias(parse_grammar_t *grammar,
                            core_translation_unit_t *unit,
                            parse_sym_entry_t *holder,
                            parse_tree_t *expression,
-                           size_t depth);
+                           core_list_t(parse_tree_ptr_t) *active);
 
 static bool
 record_function_return_aliases(parse_grammar_t *grammar,
@@ -30225,7 +30215,7 @@ record_function_return_aliases(parse_grammar_t *grammar,
                                parse_sym_entry_t *function,
                                core_translation_unit_t *call_unit,
                                parse_tree_t *call,
-                               size_t depth);
+                               core_list_t(parse_tree_ptr_t) *active);
 
 static bool
 record_function_return_aliases(parse_grammar_t *grammar,
@@ -30234,9 +30224,9 @@ record_function_return_aliases(parse_grammar_t *grammar,
                                parse_sym_entry_t *function,
                                core_translation_unit_t *call_unit,
                                parse_tree_t *call,
-                               size_t depth)
+                               core_list_t(parse_tree_ptr_t) *active)
 {
-    if (depth > 32 || !function || !function->decl_node
+    if (!function || !function->decl_node
         || !nt_is(grammar, function->decl_node, "func-def")) return false;
     core_translation_unit_t *owner = unit_for_symbol(grammar,
         &analysis->units, function);
@@ -30251,10 +30241,10 @@ record_function_return_aliases(parse_grammar_t *grammar,
         if (aggregate_literal_root(grammar, expression))
             complete &= record_function_aggregate_aliases(grammar, analysis,
                 owner, expression, holder, function, call_unit, call,
-                depth + 1);
+                active);
         else
             complete &= record_returned_call_alias(grammar, analysis, owner,
-                holder, expression, depth + 1);
+                holder, expression, active);
     }
     return complete;
 }
@@ -30288,14 +30278,14 @@ global_symbol_from_qualified_name(parse_grammar_t *grammar,
 }
 
 static bool
-record_returned_call_alias(parse_grammar_t *grammar,
+record_returned_call_alias_body(parse_grammar_t *grammar,
                           n00bb_link_analysis_t *analysis,
                           core_translation_unit_t *unit,
                           parse_sym_entry_t *holder,
                           parse_tree_t *expression,
-                          size_t depth)
+                          core_list_t(parse_tree_ptr_t) *active)
 {
-    if (!holder || !expression || depth > 32) return false;
+    if (!holder || !expression) return false;
     if (core_string_eq(first_token_text(expression),
                        CORE_STRING_STATIC("ref"))) {
         parse_sym_entry_t *referent = direct_ref_target(grammar, expression);
@@ -30311,7 +30301,7 @@ record_returned_call_alias(parse_grammar_t *grammar,
     parse_tree_t *aggregate = aggregate_literal_root(grammar, expression);
     if (aggregate)
         return record_call_aggregate_aliases(grammar, analysis, unit, holder,
-                                               aggregate, depth + 1);
+                                               aggregate, active);
 
     parse_tree_t *call = find_call_expression(grammar, unit, expression);
     if (call) {
@@ -30369,20 +30359,20 @@ record_returned_call_alias(parse_grammar_t *grammar,
             parse_tree_t *argument = call_argument_for_parameter(grammar,
                 call, callee, effects.return_parameter, trait_dispatch);
             return argument && record_returned_call_alias(grammar, analysis,
-                unit, holder, argument, depth + 1);
+                unit, holder, argument, active);
         }
         size_t parameter_index = 0;
         if (!function_returned_parameter(grammar, analysis, callee,
                                          &parameter_index))
             return record_function_return_aliases(grammar, analysis, holder,
-                callee, unit, call, depth + 1);
+                callee, unit, call, active);
         parse_tree_t *argument = call_argument_for_parameter(grammar, call,
             callee, parameter_index, trait_dispatch);
         if (argument && call_argument_aliases(grammar, unit, argument,
                                                holder))
             return true;
         return record_returned_call_alias(grammar, analysis, unit, holder,
-                                          argument, depth + 1);
+                                          argument, active);
     }
 
     parse_sym_entry_t *source = simple_expression_symbol(expression);
@@ -30419,11 +30409,30 @@ record_returned_call_alias(parse_grammar_t *grammar,
 }
 
 static bool
+record_returned_call_alias(parse_grammar_t *grammar,
+                           n00bb_link_analysis_t *analysis,
+                           core_translation_unit_t *unit,
+                           parse_sym_entry_t *holder,
+                           parse_tree_t *expression,
+                           core_list_t(parse_tree_ptr_t) *active)
+{
+    if (!expression || !active) return false;
+    for (size_t i = 0; i < active->len; i++)
+        if (active->data[i] == expression) return false;
+    core_list_push(*active, expression);
+    bool complete = record_returned_call_alias_body(grammar, analysis,
+        unit, holder, expression, active);
+    active->len--;
+    return complete;
+}
+
+static bool
 record_call_aggregate_aliases(parse_grammar_t *grammar,
     n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
-    parse_sym_entry_t *holder, parse_tree_t *expression, size_t depth)
+    parse_sym_entry_t *holder, parse_tree_t *expression,
+    core_list_t(parse_tree_ptr_t) *active)
 {
-    if (!expression || depth > 32) return false;
+    if (!expression) return false;
     n00bb_tu_state_t *state = tu_state(unit);
     n00bb_alias_edges_t *facts = state
         ? core_dict_get(&state->alias_edges, expression, nullptr) : nullptr;
@@ -30433,9 +30442,9 @@ record_call_aggregate_aliases(parse_grammar_t *grammar,
         n00bb_alias_edge_t *edge = &facts->edges[i];
         if (edge->kind == N00BB_ALIAS_CALL) {
             th_type *result_type = core_tree_node_value(edge->node).type;
-            if (type_may_contain_reference_alias(result_type, 0))
+            if (type_may_contain_reference_alias(result_type))
                 complete &= record_returned_call_alias(grammar, analysis,
-                    unit, holder, edge->node, depth + 1);
+                    unit, holder, edge->node, active);
         }
         else
             complete &= record_aggregate_aliases(grammar, unit,
@@ -30473,14 +30482,17 @@ record_link_unit_call_result_aliases(n00bb_link_analysis_t *analysis)
                     if (!expression
                         || !find_call_expression(analysis->grammar, unit,
                                                  expression)) continue;
+                    core_list_t(parse_tree_ptr_t) active =
+                        core_list_new(parse_tree_ptr_t);
                     bool summarized = record_returned_call_alias(
                         analysis->grammar, analysis, unit, holder,
-                        expression, 0);
+                        expression, &active);
+                    core_list_free(active);
                     if (summarized && holder->type
-                        && type_may_contain_reference_alias(holder->type, 0))
+                        && type_may_contain_reference_alias(holder->type))
                         parse_sym_set_alias_analysis_complete(holder, true);
                     if (!summarized && holder->type
-                        && type_may_contain_reference_alias(holder->type, 0))
+                        && type_may_contain_reference_alias(holder->type))
                         parse_sym_set_alias_analysis_complete(holder, false);
                     if (!summarized && is_reference_symbol(holder))
                         holder->lifetime.escapes = true;
@@ -30534,21 +30546,10 @@ source_parameter_may_escape(n00bb_link_analysis_t *analysis,
     return false;
 }
 
-typedef struct {
-    parse_grammar_t *grammar;
-    n00bb_link_analysis_t *analysis;
-    core_translation_unit_t *unit;
-    core_list_t(parse_sym_entry_ptr_t) *visited;
-    size_t depth;
-    core_buffer_t global_name;
-    bool saw_return;
-    bool valid;
-} returned_global_scan_t;
-
 static bool function_returned_global_inner(
     parse_grammar_t *grammar, n00bb_link_analysis_t *analysis,
     core_translation_unit_t *unit, parse_sym_entry_t *function,
-    core_list_t(parse_sym_entry_ptr_t) *visited, size_t depth,
+    core_list_t(parse_sym_entry_ptr_t) *visited,
     core_buffer_t *global_name);
 
 static bool
@@ -30574,9 +30575,9 @@ simple_returned_global(parse_grammar_t *grammar,
                       core_translation_unit_t *unit,
                       parse_tree_t *expression,
                       core_list_t(parse_sym_entry_ptr_t) *visited,
-                      size_t depth, core_buffer_t *global_name)
+                      core_buffer_t *global_name)
 {
-    if (!expression || !global_name || depth > 32) return false;
+    if (!expression || !global_name) return false;
     if (core_string_eq(first_token_text(expression),
                        CORE_STRING_STATIC("ref"))) {
         parse_sym_entry_t *target = direct_ref_target(grammar, expression);
@@ -30630,53 +30631,19 @@ simple_returned_global(parse_grammar_t *grammar,
         parse_tree_t *argument = call_argument_for_parameter(grammar, call,
             callee, effects.return_parameter, trait_dispatch);
         return simple_returned_global(grammar, analysis, unit, argument,
-            visited, depth + 1, global_name);
+            visited, global_name);
     }
 
     if (function_returned_global_inner(grammar, analysis,
             unit_for_symbol(grammar, &analysis->units, callee), callee,
-            visited, depth + 1, global_name)) return true;
+            visited, global_name)) return true;
     size_t parameter_index = 0;
     if (!function_returned_parameter(grammar, analysis, callee,
                                      &parameter_index)) return false;
     parse_tree_t *argument = call_argument_for_parameter(grammar, call,
         callee, parameter_index, trait_dispatch);
     return simple_returned_global(grammar, analysis, unit, argument,
-                                  visited, depth + 1, global_name);
-}
-
-static void
-scan_returned_global(parse_tree_t *node, returned_global_scan_t *scan)
-{
-    if (!node || core_tree_is_leaf(node) || !scan->valid) return;
-    if (nt_is(scan->grammar, node, "return-stmt")) {
-        parse_tree_t *expression = child_nt(scan->grammar, node,
-                                            "expression");
-        core_buffer_t global_name = {0};
-        bool found = simple_returned_global(scan->grammar, scan->analysis,
-            scan->unit, expression, scan->visited, scan->depth + 1,
-            &global_name);
-        bool matches = !scan->global_name.byte_len
-            || (scan->global_name.byte_len == global_name.byte_len
-                && !memcmp(scan->global_name.data, global_name.data,
-                           global_name.byte_len));
-        if (!found || !matches) {
-            core_buffer_release(&global_name);
-            scan->valid = false;
-            return;
-        }
-        if (!scan->global_name.byte_len) {
-            scan->global_name = global_name;
-            global_name = (core_buffer_t){0};
-        }
-        core_buffer_release(&global_name);
-        scan->saw_return = true;
-        return;
-    }
-    if (nt_is(scan->grammar, node, "func-def")
-        || nt_is(scan->grammar, node, "context-def")) return;
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        scan_returned_global(core_tree_child(node, i), scan);
+                                  visited, global_name);
 }
 
 static bool
@@ -30685,31 +30652,35 @@ function_returned_global_inner(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
                                parse_sym_entry_t *function,
                                core_list_t(parse_sym_entry_ptr_t) *visited,
-                               size_t depth, core_buffer_t *global_name)
+                               core_buffer_t *global_name)
 {
-    if (!grammar || !analysis || !unit || !function || depth > 32
+    if (!grammar || !analysis || !unit || !function
         || !function->decl_node
         || !nt_is(grammar, function->decl_node, "func-def")) return false;
     for (size_t i = 0; i < visited->len; i++)
         if (visited->data[i] == function) return false;
     core_list_push(*visited, function);
-    returned_global_scan_t scan = {
-        .grammar = grammar,
-        .analysis = analysis,
-        .unit = unit,
-        .visited = visited,
-        .depth = depth,
-        .valid = true,
-    };
-    scan_returned_global(child_nt(grammar, function->decl_node, "body"),
-                         &scan);
+    n00bb_function_return_facts_t *facts = parse_sym_binding(function,
+        CORE_STRING_STATIC("n00bb.function.return-facts"));
+    core_buffer_t expected = {0};
+    bool found = facts && facts->return_expression_count != 0;
+    for (size_t i = 0; found && i < facts->return_expression_count; i++) {
+        core_buffer_t current = {0};
+        found = simple_returned_global(grammar, analysis, unit,
+            facts->return_expressions[i], visited, &current)
+            && (!expected.byte_len
+                || (expected.byte_len == current.byte_len
+                    && !memcmp(expected.data, current.data,
+                               current.byte_len)));
+        if (found && !expected.byte_len)
+            core_buffer_append(&expected, current.data, current.byte_len);
+        core_buffer_release(&current);
+    }
     visited->len--;
-    bool found = scan.valid && scan.saw_return
-        && scan.global_name.byte_len != 0;
-    if (found)
-        core_buffer_append(global_name, scan.global_name.data,
-                           scan.global_name.byte_len);
-    core_buffer_release(&scan.global_name);
+    found = found && expected.byte_len != 0;
+    if (found) core_buffer_append(global_name, expected.data,
+                                  expected.byte_len);
+    core_buffer_release(&expected);
     return found;
 }
 
@@ -30723,7 +30694,7 @@ function_returned_global(parse_grammar_t *grammar,
     core_list_t(parse_sym_entry_ptr_t) visited =
         core_list_new(parse_sym_entry_ptr_t);
     bool found = function_returned_global_inner(grammar, analysis, unit,
-        function, &visited, 0, global_name);
+        function, &visited, global_name);
     core_list_free(visited);
     return found;
 }
@@ -30767,7 +30738,7 @@ append_function_lifetime_effects(n00bb_link_analysis_t *analysis,
         }
         bool escapes = source_parameter_may_escape(analysis, grammar,
                                                     function, i);
-        bool aliasable = type_may_contain_reference_alias(parameter->type, 0);
+        bool aliasable = type_may_contain_reference_alias(parameter->type);
         bool empty_alias_effects = !parameter->alias_count
             && !parameter->aliased_by_count && !parameter->lifetime.escapes;
         bool complete = !aliasable || parameter->alias_analysis_complete
@@ -30790,7 +30761,7 @@ append_function_lifetime_effects(n00bb_link_analysis_t *analysis,
             return_parameter = (uint32_t)returned_parameter;
         }
     }
-    else if (ok && type_may_contain_reference_alias(th_func_ret(signature), 0)) {
+    else if (ok && type_may_contain_reference_alias(th_func_ret(signature))) {
         core_buffer_t global_name = {0};
         bool has_global = function_returned_global(grammar, analysis, unit,
             function, &global_name);
@@ -31451,7 +31422,7 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
                                       n00bb_static_value_t *out,
                                       size_t depth)
 {
-    if (!grammar || !expression || !type || !state || !out || depth > 64)
+    if (!grammar || !expression || !type || !state || !out)
         return false;
     type = th_resolve(type);
     n00bb_static_literal_probe_t probe = find_static_literal(grammar,
@@ -31625,7 +31596,7 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
                                     ir_global_init_value_t *out,
                                     size_t depth)
 {
-    if (!value || !type || !state || !out || depth > 64) return false;
+    if (!value || !type || !state || !out) return false;
     type = th_resolve(type);
     if (!type) return false;
     *out = (ir_global_init_value_t){0};
@@ -32728,6 +32699,8 @@ static const parse_cmdr_flag_t FLAGS[] = {
      CORE_STRING_STATIC("dump target layouts for named types")},
     {CORE_STRING_STATIC("--define"), CORE_STRING_STATIC("-D"),
      PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("preprocessor definition")},
+    {CORE_STRING_STATIC("--release"), {0}, PARSE_CMDR_TYPE_BOOL, false,
+     CORE_STRING_STATIC("disable debug assertions")},
     {{0}, {0}, 0, false, {0}},
 };
 
@@ -32953,7 +32926,7 @@ static_value_kind_name(n00bb_static_value_kind_t kind)
 static void
 dump_static_value_contents(const n00bb_static_value_t *value, size_t depth)
 {
-    if (!value || depth > 64) return;
+    if (!value) return;
     switch (value->kind) {
     case N00BB_STATIC_VALUE_BOOL:
         printf("%s", value->as.boolean ? "true" : "false");
@@ -35620,7 +35593,7 @@ storage_lifetime_symbol_is_complete(n00bb_link_analysis_t *analysis,
     if (!(symbol->phases & PARSE_SYM_PHASE_RUNTIME)) return true;
     if (!symbol->type || !symbol->lifetime.has_region
         || symbol->storage_duration == PARSE_SYM_STORAGE_UNSPECIFIED
-        || (type_may_contain_reference_alias(symbol->type, 0)
+        || (type_may_contain_reference_alias(symbol->type)
             && !symbol->alias_analysis_complete)) return false;
 
     if (symbol->storage_duration == PARSE_SYM_STORAGE_COMPTIME)
@@ -36185,6 +36158,8 @@ main(int argc, char **argv)
     n00bb_preprocessor_options_t preprocessor_options = {
         .definitions = definitions,
         .definition_count = (size_t)define_count,
+        .release_mode = parse_cmdr_flag_present(
+            args, CORE_STRING_STATIC("--release")),
     };
     parse_grammar_t *grammar = nullptr;
     th_env *environment = nullptr;

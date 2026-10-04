@@ -1044,6 +1044,7 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
             || core_string_eq(name, CORE_STRING_STATIC("preproc_env")))
             kind = PP_STRING;
         else if (core_string_eq(name, CORE_STRING_STATIC("target_is_little_endian"))
+                 || core_string_eq(name, CORE_STRING_STATIC("debug_enabled"))
                  || core_string_eq(name, CORE_STRING_STATIC("preproc_env_defines"))
                  || core_string_eq(name, CORE_STRING_STATIC("preproc_defines")))
             kind = PP_BOOL;
@@ -1125,6 +1126,11 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
 #else
         *out = (pp_value_t){.kind = PP_BOOL, .as.boolean = true};
 #endif
+        return true;
+    }
+    if (core_string_eq(name, CORE_STRING_STATIC("debug_enabled"))) {
+        *out = (pp_value_t){.kind = PP_BOOL,
+            .as.boolean = !ctx->options || !ctx->options->release_mode};
         return true;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("preproc_utc_year"))) PP_INT(ctx->utc_time.tm_year + 1900);
@@ -1567,6 +1573,7 @@ n00bb_preprocessor_builtin_name(core_string_t name)
     static const char *names[] = {
         "target_os", "target_os_major", "target_os_minor", "target_os_patch",
         "target_arch", "target_alu", "target_is_little_endian",
+        "debug_enabled",
         "preproc_utc_year", "preproc_utc_month", "preproc_utc_day",
         "preproc_utc_hour", "preproc_utc_minute", "preproc_utc_second",
         "n00b_major", "n00b_minor", "n00b_patch", "n00b_impl",
@@ -2021,6 +2028,14 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
 
     if (is_name(ctx->grammar, node, "import-stmt")) {
         process_import(ctx, node);
+        return;
+    }
+
+    if (is_name(ctx->grammar, node, "assert-stmt")
+        && core_string_eq(first_leaf_text(ctx, node),
+                          CORE_STRING_STATIC("assert"))
+        && ctx->options && ctx->options->release_mode) {
+        *slot = nullptr;
         return;
     }
 
