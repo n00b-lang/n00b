@@ -4346,8 +4346,8 @@ record_context_signature(parse_grammar_t *grammar,
             constructor_params.data, constructor_params.len,
             constructor_has_rest ? &constructor_rest : nullptr, nullptr, 0)
         : nullptr;
-    core_list_free(constructor_params);
     if (!signature) {
+        core_list_free(constructor_params);
         core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0003"),
             CORE_STRING_STATIC("could not form context constructor signature from its declaration"));
@@ -4362,11 +4362,13 @@ record_context_signature(parse_grammar_t *grammar,
             core_string_borrow(hook_role, strlen(hook_role))) : nullptr;
         if (!hook) continue;
         core_list_t(th_param) hook_signature_params = core_list_new(th_param);
-        th_param hook_rest = {0};
-        bool hook_has_rest = false;
-        bool hook_params_ok = collect_signature_params(grammar, unit, params,
-            state->types, &hook_signature_params, &hook_rest,
-            &hook_has_rest, nullptr);
+        for (size_t parameter_ix = 0;
+             parameter_ix < constructor_params.len; parameter_ix++)
+            core_list_push(hook_signature_params,
+                constructor_params.data[parameter_ix]);
+        th_param hook_rest = constructor_rest;
+        bool hook_has_rest = constructor_has_rest;
+        bool hook_params_ok = params_ok;
         parse_tree_t *hook_param_list = child_nt(grammar, hook,
                                                   "context-hook-params");
         parse_tree_t *hook_param = child_nt(grammar, hook_param_list,
@@ -4401,6 +4403,7 @@ record_context_signature(parse_grammar_t *grammar,
         }
         core_tree_node_value(hook).type = hook_type;
     }
+    core_list_free(constructor_params);
 }
 
 static bool
