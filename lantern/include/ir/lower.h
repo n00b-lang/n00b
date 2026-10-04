@@ -69,6 +69,9 @@ bool ir_lower_bind_value(ir_lower_context_t *context,
                          parse_sym_entry_t *symbol, ir_value_t *value);
 bool ir_lower_bind_local(ir_lower_context_t *context,
                          parse_sym_entry_t *symbol, ir_local_t *local);
+/* Replace the active binding for a symbol after a staged lowering step. */
+bool ir_lower_rebind_local(ir_lower_context_t *context,
+                           parse_sym_entry_t *symbol, ir_local_t *local);
 /* Bind a source local to an explicit address-backed storage value. */
 bool ir_lower_bind_local_storage(ir_lower_context_t *context,
                                  parse_sym_entry_t *symbol,

@@ -149,11 +149,14 @@ static void test_the_tree_macros_all_expand_and_work(void)
 
     check("a node is a node", core_tree_is_node(root));
 
-    core_tree_t(int, int) *kid = core_tree_add_node(root, int, int, 2);
-
+    core_tree_t(int, int) *kid = core_tree_node(int, int, 2);
+    core_tree_add_leaf(kid, int, int, 6);
+    core_tree_add_child(root, kid);
     core_tree_add_leaf(root, int, int, 3);
 
     check("children accumulate", core_tree_num_children(root) == 2);
+    check("first leaf is cached", core_tree_first_leaf_node(root)
+          && core_tree_leaf_value(core_tree_first_leaf_node(root)) == 6);
 
     int seen = 0;
 
@@ -164,17 +167,51 @@ static void test_the_tree_macros_all_expand_and_work(void)
     check("foreach_child visits each one", seen == 1);
 
     core_tree_t(int, int) *spare = core_tree_node(int, int, 4);
+    core_tree_add_leaf(spare, int, int, 5);
 
     check("insert_child_at places a child",
           core_tree_insert_child_at(root, 0, spare));
     check("and counts it", core_tree_num_children(root) == 3);
+    check("inserted descendant becomes first leaf",
+          core_tree_leaf_value(core_tree_first_leaf_node(root)) == 5);
     check("remove_child drops one", core_tree_remove_child(root, 0));
     check("and counts down", core_tree_num_children(root) == 2);
+    check("removal restores the next first leaf",
+          core_tree_leaf_value(core_tree_first_leaf_node(root)) == 6);
+
+    core_tree_t(int, int) *shared_parent = core_tree_node(int, int, 7);
+    core_tree_add_child(shared_parent, kid);
+    check("shared parent inherits first leaf",
+          core_tree_leaf_value(core_tree_first_leaf_node(shared_parent)) == 6);
+    core_tree_t(int, int) *replacement = core_tree_leaf(int, int, 8);
+    check("nested child can be replaced", core_tree_set_child(kid, 0,
+                                                               replacement));
+    check("nested mutation refreshes first parent",
+          core_tree_leaf_value(core_tree_first_leaf_node(root)) == 8);
+    check("nested mutation refreshes every shared parent",
+          core_tree_leaf_value(core_tree_first_leaf_node(shared_parent)) == 8);
+    check("nested child removal updates first parent",
+          core_tree_remove_child(kid, 0) == replacement
+          && core_tree_leaf_value(core_tree_first_leaf_node(root)) == 3);
+    check("nested child removal updates shared parent",
+          core_tree_first_leaf_node(shared_parent) == nullptr);
+    check("nested child insertion restores shared first leaf",
+          core_tree_insert_child_at(kid, 0, replacement)
+          && core_tree_leaf_value(core_tree_first_leaf_node(shared_parent))
+              == 8);
+    core_tree_t(int, int) *discard = core_tree_leaf(int, int, 9);
+    core_tree_set_child(kid, 0, discard);
+    core_tree_free_node(discard);
+    check("freeing an attached leaf refreshes all ancestors",
+          core_tree_leaf_value(core_tree_first_leaf_node(root)) == 3
+          && core_tree_first_leaf_node(shared_parent) == nullptr);
 
     core_tree_replace_children(root, nullptr, 0);
 
     check("replace_children can empty a node",
           core_tree_num_children(root) == 0);
+    check("empty node has no first leaf",
+          core_tree_first_leaf_node(root) == nullptr);
 
     (void)kid;
 }

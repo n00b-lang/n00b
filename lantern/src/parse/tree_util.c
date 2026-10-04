@@ -158,9 +158,7 @@ parse_tree_extract_first_identifier(parse_tree_t *node)
 parse_token_info_t *
 parse_tree_find_first_terminal(parse_tree_t *node)
 {
-    parse_tree_t *hit = parse_tree_scan_leaves(node, false, nullptr,
-                                                 nullptr);
-
+    parse_tree_t *hit = node ? core_tree_first_leaf_node(node) : nullptr;
     return hit ? core_tree_leaf_value(hit) : nullptr;
 }
 

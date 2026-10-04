@@ -1047,13 +1047,11 @@ add_child_flattening_same_group(parse_tree_t *parent,
 
     if (same_group_node(parent, child)) {
         if (parent->node.num_children == 0) {
+            parse_tree_t **children = child->node.children;
+            size_t count = child->node.num_children;
             core_free(parent->node.children);
-            parent->node.children     = child->node.children;
-            parent->node.num_children = child->node.num_children;
-            parent->node.capacity     = child->node.capacity;
-            child->node.children      = nullptr;
-            child->node.num_children  = 0;
-            child->node.capacity      = 0;
+            core_tree_replace_children(child, nullptr, 0);
+            core_tree_replace_children(parent, children, count);
             core_free(child);
             return;
         }

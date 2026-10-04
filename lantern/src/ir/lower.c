@@ -417,6 +417,43 @@ ir_lower_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
 }
 
 bool
+ir_lower_rebind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
+                      ir_local_t *local)
+{
+    if (!context || !symbol || !local
+        || ir_local_find(context->function, local->name) != local)
+        return false;
+    ir_lower_symbol_binding_t *binding = lower_find_binding(context, symbol);
+    if (!binding) return ir_lower_bind_local(context, symbol, local);
+    if (symbol->kind == PARSE_SYM_VARIABLE
+        || symbol->kind == PARSE_SYM_PARAM) {
+        parse_sym_phase_t phase = ir_func_execution_phase(context->function)
+                == IR_PHASE_COMPTIME
+            ? PARSE_SYM_PHASE_COMPTIME : PARSE_SYM_PHASE_RUNTIME;
+        ir_value_t *phase_binding = ir_local_value(context->function, local);
+        if (!phase_binding
+            || !parse_sym_set_phase_binding(symbol, phase, phase_binding)
+            || !parse_sym_set_function_binding(symbol, phase,
+                                               context->function,
+                                               phase_binding)) return false;
+    }
+    binding->value = nullptr;
+    binding->local = local;
+    binding->address = nullptr;
+    if (!lower_project_symbol_facts(context, binding)) return false;
+    for (ir_lower_symbol_binding_t *at = binding->next; at; at = at->next) {
+        bool refers_to_symbol = false;
+        for (size_t i = 0; i < at->symbol->alias_count; i++)
+            refers_to_symbol |= at->symbol->aliases[i].other == symbol;
+        for (size_t i = 0; i < at->symbol->aliased_by_count; i++)
+            refers_to_symbol |= at->symbol->aliased_by[i].other == symbol;
+        if (refers_to_symbol && !lower_project_symbol_facts(context, at))
+            return false;
+    }
+    return true;
+}
+
+bool
 ir_lower_bind_local_storage(ir_lower_context_t *context,
                             parse_sym_entry_t *symbol, ir_local_t *local,
                             ir_value_t *address)

@@ -2034,6 +2034,10 @@ test_initial_symbol_walk_callback(parse_grammar_t *g)
           probe.enters > 0 && probe.enters == probe.exits);
     check("initial-symbol pass creates its module scope",
           core_tree_node_value(tree).scope != nullptr);
+    parse_tree_t *decl = find_node(g, tree, "decl");
+    check("ordinary nodes retain their enclosing lexical scope",
+          decl && core_tree_node_value(decl).scope
+              == core_tree_node_value(tree).scope);
     check("initial-symbol pass records the declared name",
           parse_symtab_lookup_scoped(result->symtab,
               core_tree_node_value(tree).scope, S(""), S("a")) != nullptr);

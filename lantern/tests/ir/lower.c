@@ -330,6 +330,10 @@ main(void)
     parse_sym_entry_t local_symbol = {
         .name = CORE_STRING_STATIC("local"), .type = i32,
     };
+    parse_sym_entry_t rebound_symbol = {
+        .name = CORE_STRING_STATIC("rebound_symbol"), .type = i32,
+    };
+    ir_local_t *rebound_local = ir_local_add(function, "rebound", i32);
     parse_sym_entry_t callee_symbol = {
         .name = CORE_STRING_STATIC("callee"),
         .kind = PARSE_SYM_FUNCTION,
@@ -358,11 +362,20 @@ main(void)
               && ir_lower_bind_value(&lower, &global_symbol, global_value)
               && ir_lower_bind_local(&lower, &local_symbol, local)
               && ir_lower_bound_local(&lower, &local_symbol) == local
+              && ir_lower_bind_local(&lower, &rebound_symbol, local)
+              && rebound_local
+              && ir_lower_rebind_local(&lower, &rebound_symbol,
+                                       rebound_local)
+              && ir_lower_bound_local(&lower, &rebound_symbol)
+                    == rebound_local
               && parse_sym_phase_binding(
                      &left_symbol, PARSE_SYM_PHASE_RUNTIME) == left
               && parse_sym_phase_binding(
                      &local_symbol, PARSE_SYM_PHASE_RUNTIME)
                      == ir_local_value(function, local)
+              && parse_sym_phase_binding(
+                     &rebound_symbol, PARSE_SYM_PHASE_RUNTIME)
+                     == ir_local_value(function, rebound_local)
               && ir_lowerer_register_visit(lowerer,
                   PARSE_ANNOT_SCOPE_OPEN, count_lower_visit, &visit_counts)
               && ir_lowerer_register_visit(lowerer,

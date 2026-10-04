@@ -165,6 +165,12 @@ node_enter(parse_visit_t *v)
     actx_t *a = (actx_t *)v->thunk;
     a->last_sym = nullptr;
 
+    if (v->pn && !v->pn->scope) {
+        parse_scope_t *scope = parse_symtab_current_scope(a->out->symtab,
+                                                          ns_default());
+        if (scope) v->pn->scope = scope;
+    }
+
     if (a->out->on_node) {
         a->out->on_node(v, true, a->out->on_node_context);
     }
