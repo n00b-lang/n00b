@@ -8,6 +8,7 @@
 #include "conduit/print.h"
 #include "conduit/write.h"
 #include "core/alloc.h"
+#include "core/syscall.h" // n00b_raw_write -- libc-free last-resort fallback
 #include "core/runtime.h"
 #include "core/type_info.h"
 #include "core/string.h"
@@ -86,6 +87,50 @@ get_print_topic(int fd)
 // Shared write helper
 // ============================================================================
 
+// n00b#490: a print must not vanish.
+//
+// Every error return in the write path (include/conduit/rw.h) happens BEFORE
+// the deliver step -- once the publisher claim succeeds, that path always
+// returns Ok. So an Err from n00b_write means the payload was never
+// delivered, and writing the bytes directly cannot double-print them.
+//
+// ALREADY_CLAIMED is the transient case: another thread holds the topic's
+// publisher for the length of its own deliver. Retry it a few times rather
+// than going straight to the fd, because the fallback bypasses the topic --
+// anything subscribed to stdout/stderr (a tee, a log capture) does not
+// observe bytes written directly to the descriptor. The other codes
+// (CLOSED, SHUTDOWN, ALLOC) do not improve by retrying.
+//
+// The retry is a bare spin: the publisher is held only for a deliver, and a
+// portable yield is not available here (sched_yield is POSIX-only).
+#define PRINT_CLAIM_RETRIES 4
+
+// Fall back only when the topic was resolved from `fd`. A caller-supplied
+// .topic says nothing about which descriptor it drains to -- `fd` is still
+// its default of 1 -- so writing there would misdirect the line to stdout.
+static void
+print_write(n00b_conduit_topic_t(n00b_buffer_t *) *topic,
+            n00b_buffer_t                         *buf,
+            bool                                   sync,
+            bool                                   fd_is_topics,
+            int                                    fd,
+            n00b_string_t                         *s)
+{
+    for (int attempt = 0; attempt <= PRINT_CLAIM_RETRIES; attempt++) {
+        auto wr = n00b_write(n00b_buffer_t *, topic, buf, .sync = sync);
+        if (n00b_result_is_ok(wr)) {
+            return;
+        }
+        if (n00b_result_get_err(wr) != N00B_CONDUIT_ERR_ALREADY_CLAIMED) {
+            break;
+        }
+    }
+
+    if (fd_is_topics) {
+        n00b_raw_write(fd, s->data, (unsigned long)s->u8_bytes);
+    }
+}
+
 static void
 do_print_string(n00b_string_t *s, n00b_option_t(n00b_string_t *) end, int fd,
                 n00b_conduit_topic_t(n00b_buffer_t *) *topic, bool sync)
@@ -96,11 +141,18 @@ do_print_string(n00b_string_t *s, n00b_option_t(n00b_string_t *) end, int fd,
 
     s = n00b_unicode_str_cat(s, end_str);
 
+    // Whether `fd` describes where `topic` ends up, and so whether it is a
+    // sound target if publishing fails.
+    bool fd_is_topics = (topic == nullptr);
+
     if (!topic) {
         topic = get_print_topic(fd);
     }
 
     if (!topic) {
+        // No runtime yet, or fd is neither 1 nor 2. Before #490 this
+        // dropped the line outright.
+        n00b_raw_write(fd, s->data, (unsigned long)s->u8_bytes);
         return;
     }
 
@@ -111,7 +163,7 @@ do_print_string(n00b_string_t *s, n00b_option_t(n00b_string_t *) end, int fd,
     n00b_buffer_t *buf = n00b_buffer_from_bytes(s->data,
                                                 (int64_t)s->u8_bytes,
                                                 .allocator = alloc);
-    n00b_write(n00b_buffer_t *, topic, buf, .sync = sync);
+    print_write(topic, buf, sync, fd_is_topics, fd, s);
 }
 
 // ============================================================================

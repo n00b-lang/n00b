@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <stdatomic.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -32,6 +34,7 @@
 #include "core/alloc.h"
 #include "adt/dict_untyped.h"
 #include "core/runtime.h"
+#include "core/thread.h"
 #include "core/type_info.h"
 #include "core/string.h"
 #include "core/buffer.h"
@@ -75,6 +78,26 @@ test_fd_read(int fd, char *buf, int len)
     return _read(fd, buf, (unsigned int)len);
 #else
     return (int)read(fd, buf, (size_t)len);
+#endif
+}
+
+static int
+test_fd_dup(int fd)
+{
+#ifdef _WIN32
+    return _dup(fd);
+#else
+    return dup(fd);
+#endif
+}
+
+static int
+test_fd_dup2(int oldfd, int newfd)
+{
+#ifdef _WIN32
+    return _dup2(oldfd, newfd);
+#else
+    return dup2(oldfd, newfd);
 #endif
 }
 
@@ -483,6 +506,98 @@ test_printf_topic(void)
 // 17. n00b_eprintf macro (writes to fd 2 via macro, redirected by dup2)
 //
 // ============================================================================
+// 18. n00b#490: a print survives a contended publisher claim.
+//
+// n00b_write pins .timeout_ms = 0, which selects publish_TRY_claim. When
+// another thread holds the stdout topic's publisher, that try fails with
+// ALREADY_CLAIMED and the write returns Err having delivered nothing. print
+// used to discard that result, so the whole line vanished -- no error, no
+// partial output. Observed as an intermittent Windows CI flake where a help
+// line or one of two consecutive eprintfs simply did not arrive.
+//
+// The claim is re-entrant for the claiming thread, so the contention has to
+// come from a second thread.
+// ============================================================================
+
+static _Atomic(int) claim_held   = 0;
+static _Atomic(int) claim_release = 0;
+
+static void *
+stdout_claim_holder(void *arg)
+{
+    n00b_conduit_topic_base_t *topic = arg;
+
+    auto pub_r = n00b_conduit_publish_claim(topic);
+    if (n00b_result_is_err(pub_r)) {
+        atomic_store(&claim_held, -1);
+        return nullptr;
+    }
+    n00b_conduit_publisher_t *pub = n00b_result_get(pub_r);
+
+    atomic_store(&claim_held, 1);
+    while (atomic_load(&claim_release) == 0) {
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000}; // 1ms
+        nanosleep(&ts, nullptr);
+    }
+
+    n00b_conduit_publish_yield(pub);
+    return nullptr;
+}
+
+static void
+test_print_survives_contended_publisher(void)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    assert(rt && rt->stdout_topic);
+
+    int fds[2];
+    assert(test_pipe_create(fds) == 0);
+
+    atomic_store(&claim_held, 0);
+    atomic_store(&claim_release, 0);
+
+    auto tr = n00b_thread_spawn(stdout_claim_holder, rt->stdout_topic);
+    assert(n00b_result_is_ok(tr));
+    n00b_thread_t *holder = n00b_result_get(tr);
+
+    // Wait for the other thread to actually own the publisher, so the
+    // print below is guaranteed to hit the contended path rather than
+    // racing it.
+    while (atomic_load(&claim_held) == 0) {
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};
+        nanosleep(&ts, nullptr);
+    }
+    assert(atomic_load(&claim_held) == 1);
+
+    // Point fd 1 at the pipe for the duration of the print. The fallback
+    // writes to the descriptor, so this is what captures it.
+    int saved_stdout = test_fd_dup(1);
+    assert(saved_stdout >= 0);
+    assert(test_fd_dup2(fds[1], 1) >= 0);
+
+    n00b_printf("contended-«#»", 490);
+
+    // Restore before asserting, so a failure can still report.
+    test_fd_dup2(saved_stdout, 1);
+    test_fd_close(saved_stdout);
+
+    atomic_store(&claim_release, 1);
+    n00b_thread_join(holder);
+
+    test_fd_close(fds[1]);
+
+    char buf[256];
+    int n = read_pipe(fds[0], buf, 255);
+    test_fd_close(fds[0]);
+
+    // Before #490 this read 0 bytes: the line was dropped on the floor.
+    assert(n > 0);
+    assert(strstr(buf, "contended-490") != nullptr);
+
+    printf("  [PASS] print survives a contended publisher claim\n");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -517,6 +632,9 @@ main(int argc, char **argv)
     test_printf_basic();
     test_printf_no_newline();
     test_printf_topic();
+
+    // n00b#490
+    test_print_survives_contended_publisher();
     printf("All print tests passed.\n");
     n00b_shutdown();
     return 0;
