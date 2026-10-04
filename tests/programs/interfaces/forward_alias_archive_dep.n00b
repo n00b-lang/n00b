@@ -1,0 +1,6 @@
+public alias Forward = Concrete
+public alias Concrete = int
+
+public func forward_alias(input: Forward) -> Concrete {
+    return input
+}

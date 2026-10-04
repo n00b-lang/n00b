@@ -1080,6 +1080,38 @@ grep -E -q 'borrowed: variable, mutable, .*aliases=1, aliased-by=0, .*alias-anal
 grep -E -q 'local_alias kind=.*cfg-liveness\[symbols=2,ranges=2,complete-ranges=2,starts=2,end-points=[0-9][0-9]*,end-edges=[0-9][0-9]*,missing-starts=0,.*alias-dead=[1-9][0-9]*,alias-unknown=0,' \
     "$tmp/lower_local_alias.out"
 
+"$compiler" lower --dump-symbols \
+    "$program_dir/forward_type_alias.n00b" \
+    >"$tmp/forward_type_alias.out" 2>"$tmp/forward_type_alias.err" || {
+    cat "$tmp/forward_type_alias.err"
+    cat "$tmp/forward_type_alias.out"
+    exit 1
+}
+grep -E -q 'First: type, .*type=int' "$tmp/forward_type_alias.out"
+grep -E -q 'Later: type, .*type=int' "$tmp/forward_type_alias.out"
+grep -E -q 'input: parameter, .*type=int' "$tmp/forward_type_alias.out"
+
+"$compiler" lower --dump-symbols \
+    "$program_dir/deferred_type_shapes.n00b" \
+    >"$tmp/deferred_type_shapes.out" 2>"$tmp/deferred_type_shapes.err" || {
+    cat "$tmp/deferred_type_shapes.err"
+    cat "$tmp/deferred_type_shapes.out"
+    exit 1
+}
+grep -E -q 'item: variable, .*type=int' "$tmp/deferred_type_shapes.out"
+grep -E -q 'LaterList: type, .*type=list\[int\]' \
+    "$tmp/deferred_type_shapes.out"
+grep -E -q 'input: parameter, .*type=list\[int\]' \
+    "$tmp/deferred_type_shapes.out"
+
+if "$compiler" lower "$program_dir/unknown_type_reference.n00b" \
+    >"$tmp/unknown_type_reference.out" 2>&1; then
+    echo 'unknown local type name unexpectedly lowered' >&2
+    exit 1
+fi
+grep -Fq "error[N00BB-T0007]: no visible type named 'DoesNotExist'" \
+    "$tmp/unknown_type_reference.out"
+
 awk '
     /^  func @context_enter_failure/ { in_enter_failure = 1 }
     /^  static func @__n00bb_context_/ { in_enter_failure = 0 }
@@ -2521,40 +2553,6 @@ grep -q 'switch_unreachable' "$tmp/lower_variant_exhaustive.ir"
 grep -q 'variant.make' "$tmp/lower_variant_arm_assignment.ir"
 grep -q 'number' "$tmp/lower_variant_arm_assignment.ir"
 test "$(grep -c 'variant.make' "$tmp/lower_variant_arm_assignment.ir")" -eq 3
-
-"$compiler" lower --dump-ir \
-    "$program_dir/allocator_constructor.n00b" \
-    >"$tmp/allocator_constructor.ir" \
-    2>"$tmp/allocator_constructor.err" || {
-    cat "$tmp/allocator_constructor.err"
-    exit 1
-}
-grep -q 'alloc.using .*%__lowered_' "$tmp/allocator_constructor.ir"
-grep -q 'call @__init, fresh %__n00bb_construct_storage_' \
-    "$tmp/allocator_constructor.ir"
-
-"$compiler" lower --dump-ir "$program_dir/allocator_array.n00b" \
-    >"$tmp/allocator_array.ir" 2>"$tmp/allocator_array.err" || {
-    cat "$tmp/allocator_array.err"
-    exit 1
-}
-grep -q 'array.new.using %__lowered_' "$tmp/allocator_array.ir"
-
-"$compiler" lower --dump-ir "$program_dir/allocator_variant.n00b" \
-    >"$tmp/allocator_variant.ir" 2>"$tmp/allocator_variant.err" || {
-    cat "$tmp/allocator_variant.err"
-    exit 1
-}
-grep -q 'variant.new.using %__lowered_' "$tmp/allocator_variant.ir"
-
-if "$compiler" lower \
-    "$program_dir/allocator_constructor_wrong_type.n00b" \
-    >"$tmp/allocator_constructor_wrong_type.out" 2>&1; then
-    echo 'non-Allocator value unexpectedly accepted by new_using_allocator' >&2
-    exit 1
-fi
-grep -q 'N00BB-T0011.*new_using_allocator requires an Allocator first argument' \
-    "$tmp/allocator_constructor_wrong_type.out"
 
 N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-link-unit \
     "$program_dir/lower_variant_payload_specificity.n00b" \
@@ -4981,6 +4979,26 @@ grep -q 'array_shape_archive_dep:0:grid .*array-shape\[rank=1,flat-prefix=1,dim0
 grep -q 'sequence.shape.check.*dim0=comptime:producer=__n00bb_array_extent_' \
     "$tmp/array_shape_archive_user.out"
 
+"$compiler" library --emit-interface "$tmp/forward_alias_archive.n00bi" \
+    "$interface_programs/forward_alias_archive_dep.n00b" \
+    >"$tmp/forward_alias_archive_library.out" \
+    2>"$tmp/forward_alias_archive_library.err" || {
+    cat "$tmp/forward_alias_archive_library.err"
+    exit 1
+}
+"$compiler" lower --link-interface "$tmp/forward_alias_archive.n00bi" \
+    --dump-symbols "$interface_programs/forward_alias_archive_user.n00b" \
+    >"$tmp/forward_alias_archive_user.out" \
+    2>"$tmp/forward_alias_archive_user.err" || {
+    cat "$tmp/forward_alias_archive_user.err"
+    cat "$tmp/forward_alias_archive_user.out"
+    exit 1
+}
+grep -q 'Forward: type, .*type=int' "$tmp/forward_alias_archive_user.out"
+grep -q 'Concrete: type, .*type=int' "$tmp/forward_alias_archive_user.out"
+grep -q 'call @forward_alias' \
+    "$tmp/forward_alias_archive_user.out"
+
 "$compiler" library --emit-interface "$tmp/array_alias_archive.n00bi" \
     "$interface_programs/array_alias_archive_dep.n00b" \
     >"$tmp/array_alias_archive_library.out" \
@@ -5026,6 +5044,15 @@ grep -q 'error\[N00BB-T0012\].*cyclic type alias definition' \
     "$tmp/cyclic_type_alias.out"
 [ "$(grep -c 'error\[N00BB-T0012\]' "$tmp/cyclic_type_alias.out")" -eq 1 ]
 [ "$(grep -c 'fatal\[N00BB-L0006\]' "$tmp/cyclic_type_alias.out")" -eq 1 ]
+
+if N00B_PATH="$program_dir" "$compiler" lower \
+    "$program_dir/cyclic_alias_import_a.n00b" \
+    >"$tmp/cyclic_alias_import.out" 2>&1; then
+    echo 'cyclic imported transparent aliases unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'error\[N00BB-T0012\].*cyclic type alias definition' \
+    "$tmp/cyclic_alias_import.out"
 
 "$compiler" library --emit-interface \
     "$tmp/array_shape_chain_dep.n00bi" \

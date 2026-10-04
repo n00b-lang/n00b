@@ -1,0 +1,14 @@
+type Holder {
+    item: Later
+}
+
+alias LaterList = list[Later]
+alias Later = int
+
+func read_later(item: Holder) -> int {
+    return item.item
+}
+
+func pass_later_list(input: LaterList) -> LaterList {
+    return input
+}

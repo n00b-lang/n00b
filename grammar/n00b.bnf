@@ -426,7 +426,6 @@
             | <try-value-expr>
             | <comptime-value-expr>
             | <new-expr>
-            | <allocator-new-expr>
             | <typeof-expr>
             | <tuple-or-paren>
 
@@ -444,8 +443,6 @@
 <typeof-expr> @infer("typespec") ::= %"typeof" %"(" <expression> %")"
 
 <new-expr> @infer("`t") @emit("array_new") ::= %"new" (%"[" <type-spec> %"]")? %"(" <call-args>? %")"
-
-<allocator-new-expr> @infer("`t") @emit("allocator_new") ::= %"new_using_allocator" %"[" <type-spec> %"]" %"(" <call-args> %")"
 
 <block-value-expr> @scope("block") @infer("$1") ::= <block-start> <value-body-stmts> <block-end>
 

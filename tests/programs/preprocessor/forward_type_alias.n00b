@@ -1,0 +1,6 @@
+alias First = Later
+alias Later = int
+
+public func pass_through(input: First) -> Later {
+    return input
+}
