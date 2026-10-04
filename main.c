@@ -194,6 +194,17 @@ typedef struct {
     th_type *failure;
     bool conflict;
 } n00bb_function_return_facts_t;
+typedef struct {
+    parse_tree_t *node;
+    parse_sym_entry_t *symbol;
+    bool variadic;
+    bool has_type_node;
+} n00bb_function_parameter_ref_t;
+typedef struct {
+    n00bb_function_parameter_ref_t *params;
+    size_t param_count;
+    bool has_inferred_parameter;
+} n00bb_function_parameter_facts_t;
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
@@ -1480,68 +1491,50 @@ propagate_symbol_type(parse_sym_entry_t *symbol, th_ctx *types,
     symbol->type = type;
 }
 
-static void
-collect_function_params(parse_grammar_t *grammar, parse_tree_t *node,
-                        core_translation_unit_t *unit, th_ctx *types,
-                        core_list_t(th_param) *params,
-                        th_param *rest, bool *has_rest)
+static n00bb_function_parameter_facts_t *
+function_parameter_facts(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    if (!node || core_tree_is_leaf(node)) return;
-    bool positional = nt_is(grammar, node, "pos-param")
-        || nt_is(grammar, node, "default-param");
+    parse_tree_t *function = core_tree_node_value(node).parent;
+    while (function && !nt_is(grammar, function, "func-def"))
+        function = core_tree_node_value(function).parent;
+    parse_sym_entry_t *symbol = function
+        ? core_tree_node_value(function).sym : nullptr;
+    return symbol ? parse_sym_binding(symbol,
+        CORE_STRING_STATIC("n00bb.function.parameter-facts")) : nullptr;
+}
+
+static bool
+record_function_parameter_fact(parse_grammar_t *grammar,
+                               core_translation_unit_t *unit,
+                               parse_tree_t *node, n00bb_tu_state_t *state)
+{
     bool variadic = nt_is(grammar, node, "vargs-param");
-    if (positional || variadic) {
-        parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
-        parse_nt_node_t *parameter = &core_tree_node_value(node);
-        parse_tree_t *owner = parameter->parent;
-        while (owner && !nt_is(grammar, owner, "func-def"))
-            owner = core_tree_node_value(owner).parent;
-        parse_sym_entry_t *function = owner
-            ? core_tree_node_value(owner).sym : nullptr;
-        bool body_local = function && parameter->type
-            && parse_sym_binding(function,
-                CORE_STRING_STATIC("n00bb.body-function-signature"));
-        parse_tree_t *type_node = child_nt(grammar, node, "type-spec");
-        th_type *type = body_local ? parameter->type
-            : symbol ? symbol->type : nullptr;
-        if (!type) type = parameter->type;
-        if (!type && symbol) type = symbol->type;
-        if (!type) type = th_var(types);
-        if (!type) return;
-        if (variadic && symbol && symbol->type) {
-            th_type *resolved = th_resolve(symbol->type);
-            if (th_kind_of(resolved) == TH_SEQUENCE)
-                type = th_seq_elem(resolved);
-        }
-        if (!body_local && !variadic && parameter->type
-            && parameter->type != type) {
-            th_type *unified = th_unify_in_place(types, type,
-                                                 parameter->type);
-            if (unified) type = unified;
-        }
-        if (variadic) {
-            th_type *binding = symbol && symbol->type
-                ? th_resolve(symbol->type) : nullptr;
-            if (symbol && (type_node || th_kind_of(binding) != TH_SEQUENCE))
-                symbol->type = th_array(types, type);
-            parameter->type = symbol ? symbol->type : th_array(types, type);
-            *rest = (th_param){.mode = TH_IN, .type = type};
-            *has_rest = true;
-        }
-        else {
-            parameter->type = type;
-            if (symbol) propagate_symbol_type(symbol, types,
-                symbol->type, type);
-            core_list_push(*params, ((th_param){
-                .mode = TH_IN,
-                .type = type,
-            }));
-        }
-        return;
-    }
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        collect_function_params(grammar, core_tree_child(node, i), unit,
-                                types, params, rest, has_rest);
+    if (!variadic && !nt_is(grammar, node, "pos-param")
+        && !nt_is(grammar, node, "default-param")) return true;
+    n00bb_function_parameter_facts_t *facts =
+        function_parameter_facts(grammar, node);
+    parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
+    parse_tree_t *type_node = child_nt(grammar, node, "type-spec");
+    if (!facts) return true;
+    n00bb_function_parameter_ref_t *grown = core_arena_alloc(
+        &state->semantic_values,
+        (facts->param_count + 1) * sizeof(*facts->params));
+    if (!grown) return false;
+    if (facts->param_count)
+        memcpy(grown, facts->params,
+               facts->param_count * sizeof(*facts->params));
+    grown[facts->param_count++] = (n00bb_function_parameter_ref_t){
+        .node = node,
+        .symbol = symbol,
+        .variadic = variadic,
+        .has_type_node = type_node != nullptr,
+    };
+    facts->params = grown;
+    facts->has_inferred_parameter = facts->has_inferred_parameter
+        || type_node == nullptr;
+    (void)unit;
+    (void)state;
+    return true;
 }
 
 static void
@@ -3945,21 +3938,6 @@ parameter_index_in(parse_grammar_t *grammar, parse_tree_t *node,
 
 static bool is_scheme(th_type *type);
 
-static bool
-function_has_inferred_parameter(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    if (!node || core_tree_is_leaf(node)) return false;
-    if (nt_is(grammar, node, "pos-param")
-        || nt_is(grammar, node, "default-param")
-        || nt_is(grammar, node, "vargs-param"))
-        return child_nt(grammar, node, "type-spec") == nullptr;
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        if (function_has_inferred_parameter(grammar,
-                                            core_tree_child(node, i)))
-            return true;
-    return false;
-}
-
 static void
 bind_declared_parameter(parse_grammar_t *grammar,
                         core_translation_unit_t *unit, parse_tree_t *node,
@@ -4020,6 +3998,68 @@ bind_declared_parameter(parse_grammar_t *grammar,
     core_tree_node_value(node).type = parameter->type;
 }
 
+static bool
+resolve_function_parameter_facts(parse_grammar_t *grammar,
+                                 n00bb_tu_state_t *state,
+                                 n00bb_function_parameter_facts_t *facts,
+                                 core_list_t(th_param) *params,
+                                 th_param *rest, bool *has_rest)
+{
+    for (size_t i = 0; facts && i < facts->param_count; i++) {
+        n00bb_function_parameter_ref_t *fact = &facts->params[i];
+        parse_tree_t *node = fact->node;
+        parse_sym_entry_t *symbol = fact->symbol;
+        if (!node) return false;
+        parse_nt_node_t *parameter = &core_tree_node_value(node);
+        parse_tree_t *owner = parameter->parent;
+        while (owner && !nt_is(grammar, owner, "func-def"))
+            owner = core_tree_node_value(owner).parent;
+        parse_sym_entry_t *function = owner
+            ? core_tree_node_value(owner).sym : nullptr;
+        bool body_local = function && parameter->type
+            && parse_sym_binding(function,
+                CORE_STRING_STATIC("n00bb.body-function-signature"));
+        th_type *type = body_local ? parameter->type
+            : symbol ? symbol->type : nullptr;
+        if (!type) type = parameter->type;
+        if (!type && symbol) type = symbol->type;
+        if (!type) type = th_var(state->types);
+        if (!type) return false;
+        if (fact->variadic && symbol && symbol->type) {
+            th_type *resolved = th_resolve(symbol->type);
+            if (th_kind_of(resolved) == TH_SEQUENCE)
+                type = th_seq_elem(resolved);
+        }
+        if (!body_local && !fact->variadic && parameter->type
+            && parameter->type != type) {
+            th_type *unified = th_unify_in_place(state->types, type,
+                                                 parameter->type);
+            if (unified) type = unified;
+        }
+        if (fact->variadic) {
+            th_type *binding = symbol && symbol->type
+                ? th_resolve(symbol->type) : nullptr;
+            if (symbol && (fact->has_type_node
+                           || th_kind_of(binding) != TH_SEQUENCE))
+                symbol->type = th_array(state->types, type);
+            parameter->type = symbol ? symbol->type
+                                     : th_array(state->types, type);
+            *rest = (th_param){.mode = TH_IN, .type = type};
+            *has_rest = true;
+        }
+        else {
+            parameter->type = type;
+            if (symbol) propagate_symbol_type(symbol, state->types,
+                symbol->type, type);
+            core_list_push(*params, ((th_param){
+                .mode = TH_IN,
+                .type = type,
+            }));
+        }
+    }
+    return true;
+}
+
 static void
 record_function_signature(parse_grammar_t *grammar,
                            core_translation_unit_t *unit, parse_tree_t *func,
@@ -4037,11 +4077,22 @@ record_function_signature(parse_grammar_t *grammar,
     if (!parsed_declared)
         parsed_declared = explicit_function_signature(grammar, unit, func,
             state->types, &declared_failure);
+    n00bb_function_parameter_facts_t *parameter_facts = parse_sym_binding(
+        symbol, CORE_STRING_STATIC("n00bb.function.parameter-facts"));
     core_list_t(th_param) params = core_list_new(th_param);
     th_param rest = {0};
     bool has_rest = false;
-    collect_function_params(grammar, params_node, unit, state->types,
-                            &params, &rest, &has_rest);
+    if (!resolve_function_parameter_facts(grammar, state, parameter_facts,
+            &params, &rest, &has_rest)) {
+        core_diagnostics_report_at(
+            core_translation_unit_diagnostics(unit), unit,
+            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+            CORE_STRING_STATIC(
+                "could not resolve the cached function parameter facts"),
+            link_source_location(func));
+        core_list_free(params);
+        return;
+    }
 
     th_type *success = nullptr;
     th_type *failure = nullptr;
@@ -4064,7 +4115,8 @@ record_function_signature(parse_grammar_t *grammar,
     if (!failure) failure = th_name(state->types, "nil");
 
     bool refine_symbol_type = parsed_declared
-        && function_has_inferred_parameter(grammar, params_node)
+        && parameter_facts
+        && parameter_facts->has_inferred_parameter
         && symbol->type
         && !is_scheme(symbol->type)
         && th_kind_of(symbol->type) == TH_FUNCTION;
@@ -4151,6 +4203,7 @@ record_function_signature(parse_grammar_t *grammar,
         else symbol->error_type = failure;
     }
 
+    core_list_free(params);
     if (core_string_eq(symbol->name, CORE_STRING_STATIC("__init"))) {
         th_type *constructor_type = symbol->type;
         if (is_scheme(constructor_type))
@@ -4207,7 +4260,6 @@ record_function_signature(parse_grammar_t *grammar,
                 link_source_location(func));
         }
     }
-    core_list_free(params);
     (void)unit;
 }
 
@@ -31964,10 +32016,36 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
         if (symbol) validate_builtin_generic_type_arity(grammar, node, unit,
                                                        symbol->type);
+        if (!record_function_parameter_fact(grammar, unit, node, state)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+                CORE_STRING_STATIC(
+                    "could not retain the function parameter type fact"),
+                link_source_location(node));
+            return;
+        }
     }
     if (entering && nt_is(grammar, node, "func-def")) {
         parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
         if (symbol) {
+            n00bb_function_parameter_facts_t *parameter_facts =
+                core_arena_alloc(&state->semantic_values,
+                                 sizeof(*parameter_facts));
+            if (!parameter_facts
+                || !parse_sym_set_binding(symbol,
+                    CORE_STRING_STATIC(
+                        "n00bb.function.parameter-facts"),
+                    parameter_facts)) {
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+                    CORE_STRING_STATIC(
+                        "could not initialize function parameter facts"),
+                    link_source_location(node));
+                return;
+            }
+            memset(parameter_facts, 0, sizeof(*parameter_facts));
             th_type *declared_failure = nullptr;
             th_type *declared = explicit_function_signature(
                 grammar, unit, node, state->types, &declared_failure);
