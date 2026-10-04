@@ -8,7 +8,8 @@
 #include "conduit/print.h"
 #include "conduit/write.h"
 #include "core/alloc.h"
-#include "core/syscall.h" // n00b_raw_write -- libc-free last-resort fallback
+#include "core/syscall.h" // n00b_raw_write_all -- libc-free last-resort write
+#include "core/platform.h" // base_nanosleep_ns
 #include "core/runtime.h"
 #include "core/type_info.h"
 #include "core/string.h"
@@ -95,15 +96,20 @@ get_print_topic(int fd)
 // delivered, and writing the bytes directly cannot double-print them.
 //
 // ALREADY_CLAIMED is the transient case: another thread holds the topic's
-// publisher for the length of its own deliver. Retry it a few times rather
-// than going straight to the fd, because the fallback bypasses the topic --
-// anything subscribed to stdout/stderr (a tee, a log capture) does not
-// observe bytes written directly to the descriptor. The other codes
-// (CLOSED, SHUTDOWN, ALLOC) do not improve by retrying.
+// publisher for the length of its own deliver. Retry it rather than going
+// straight to the fd, because the fallback bypasses the topic -- anything
+// subscribed to stdout/stderr (a tee, a log capture) does not observe bytes
+// written directly to the descriptor. The other codes (CLOSED, SHUTDOWN,
+// ALLOC) do not improve by retrying.
 //
-// The retry is a bare spin: the publisher is held only for a deliver, and a
-// portable yield is not available here (sched_yield is POSIX-only).
-#define PRINT_CLAIM_RETRIES 4
+// The retry has to outlast a deliver, which includes a write syscall. A bare
+// spin of a few try_claims is a sub-microsecond window against a holder that
+// runs for microseconds to milliseconds, so it would lose nearly every race
+// it exists to win and leave the fallback as the common path -- defeating the
+// point of retrying at all. Back off instead, starting at 50us and doubling,
+// for a total ceiling near 1.5ms.
+#define PRINT_CLAIM_RETRIES   5
+#define PRINT_CLAIM_BACKOFF_NS 50000ULL
 
 // Fall back only when the topic was resolved from `fd`. A caller-supplied
 // .topic says nothing about which descriptor it drains to -- `fd` is still
@@ -116,6 +122,8 @@ print_write(n00b_conduit_topic_t(n00b_buffer_t *) *topic,
             int                                    fd,
             n00b_string_t                         *s)
 {
+    uint64_t backoff = PRINT_CLAIM_BACKOFF_NS;
+
     for (int attempt = 0; attempt <= PRINT_CLAIM_RETRIES; attempt++) {
         auto wr = n00b_write(n00b_buffer_t *, topic, buf, .sync = sync);
         if (n00b_result_is_ok(wr)) {
@@ -124,10 +132,14 @@ print_write(n00b_conduit_topic_t(n00b_buffer_t *) *topic,
         if (n00b_result_get_err(wr) != N00B_CONDUIT_ERR_ALREADY_CLAIMED) {
             break;
         }
+        if (attempt < PRINT_CLAIM_RETRIES) {
+            base_nanosleep_ns(backoff);
+            backoff *= 2;
+        }
     }
 
     if (fd_is_topics) {
-        n00b_raw_write(fd, s->data, (unsigned long)s->u8_bytes);
+        n00b_raw_write_all(fd, s->data, (unsigned long)s->u8_bytes);
     }
 }
 
@@ -152,7 +164,11 @@ do_print_string(n00b_string_t *s, n00b_option_t(n00b_string_t *) end, int fd,
     if (!topic) {
         // No runtime yet, or fd is neither 1 nor 2. Before #490 this
         // dropped the line outright.
-        n00b_raw_write(fd, s->data, (unsigned long)s->u8_bytes);
+        //
+        // Still does on Windows for an fd outside {1, 2}: resolving an
+        // arbitrary descriptor there needs _get_osfhandle, i.e. the CRT,
+        // which n00b_raw_write_all must not touch. POSIX writes to any fd.
+        n00b_raw_write_all(fd, s->data, (unsigned long)s->u8_bytes);
         return;
     }
 

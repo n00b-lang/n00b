@@ -17,6 +17,7 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#include <windows.h>
 #else
 #include <unistd.h>
 #include <fcntl.h>
@@ -99,6 +100,58 @@ test_fd_dup2(int oldfd, int newfd)
 #else
     return dup2(oldfd, newfd);
 #endif
+}
+
+// Redirecting fd 1 for a test that asserts on print's RAW fallback needs both
+// mechanisms on Windows, because the two paths resolve the descriptor
+// differently:
+//
+//   - the conduit path goes through the CRT fd table
+//     (_get_osfhandle((int)owner->fd), src/conduit/fd_managed.c), so _dup2
+//     is what redirects it;
+//   - the fallback is n00b_raw_write_all, which resolves fd 1/2 via
+//     GetStdHandle -- a Win32 standard handle that _dup2 does not touch.
+//
+// Redirect only with _dup2 and the fallback writes to the real stdout while
+// the test reads an empty pipe. Every other dup2 test in this file asserts on
+// the conduit path, which is why this only bites here.
+//
+// Nothing is lost in the real scenario: when a shell or CreateProcess
+// redirects the child, the Win32 standard handle IS the pipe.
+typedef struct {
+    int   saved_fd;
+#ifdef _WIN32
+    void *saved_handle;
+#endif
+} test_stdout_redirect_t;
+
+static test_stdout_redirect_t
+test_redirect_stdout(int to_fd)
+{
+    test_stdout_redirect_t r = {0};
+
+    r.saved_fd = test_fd_dup(1);
+    assert(r.saved_fd >= 0);
+    assert(test_fd_dup2(to_fd, 1) >= 0);
+
+#ifdef _WIN32
+    r.saved_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE h       = (HANDLE)_get_osfhandle(to_fd);
+    assert(h != INVALID_HANDLE_VALUE);
+    assert(SetStdHandle(STD_OUTPUT_HANDLE, h));
+#endif
+
+    return r;
+}
+
+static void
+test_restore_stdout(test_stdout_redirect_t *r)
+{
+#ifdef _WIN32
+    SetStdHandle(STD_OUTPUT_HANDLE, r->saved_handle);
+#endif
+    test_fd_dup2(r->saved_fd, 1);
+    test_fd_close(r->saved_fd);
 }
 
 static test_pipe_t
@@ -571,15 +624,12 @@ test_print_survives_contended_publisher(void)
 
     // Point fd 1 at the pipe for the duration of the print. The fallback
     // writes to the descriptor, so this is what captures it.
-    int saved_stdout = test_fd_dup(1);
-    assert(saved_stdout >= 0);
-    assert(test_fd_dup2(fds[1], 1) >= 0);
+    test_stdout_redirect_t redir = test_redirect_stdout(fds[1]);
 
     n00b_printf("contended-«#»", 490);
 
     // Restore before asserting, so a failure can still report.
-    test_fd_dup2(saved_stdout, 1);
-    test_fd_close(saved_stdout);
+    test_restore_stdout(&redir);
 
     atomic_store(&claim_release, 1);
     n00b_thread_join(holder);
@@ -595,6 +645,99 @@ test_print_survives_contended_publisher(void)
     assert(strstr(buf, "contended-490") != nullptr);
 
     printf("  [PASS] print survives a contended publisher claim\n");
+}
+
+// ============================================================================
+// 19. n00b#490: a BRIEFLY contended print still goes out over the topic.
+//
+// Test 18 above holds the claim for the whole print, so every attempt fails
+// and the fd fallback is what saves the line -- which means deleting the
+// retry loop entirely would not fail it. This case covers the other half:
+// the holder lets go while the retry is still running, so the write should
+// succeed through the CONDUIT, not the descriptor.
+//
+// Asserting on a subscriber rather than on fd 1 is the point. The fallback
+// bypasses the topic, so a subscriber (a tee, a log capture) sees the bytes
+// only if the retry actually won. Reverting the backoff to a bare spin makes
+// this fail while test 18 keeps passing.
+// ============================================================================
+
+static _Atomic(int) brief_held = 0;
+
+static void *
+brief_claim_holder(void *arg)
+{
+    n00b_conduit_topic_base_t *topic = arg;
+
+    auto pub_r = n00b_conduit_publish_claim(topic);
+    if (n00b_result_is_err(pub_r)) {
+        atomic_store(&brief_held, -1);
+        return nullptr;
+    }
+    n00b_conduit_publisher_t *pub = n00b_result_get(pub_r);
+    atomic_store(&brief_held, 1);
+
+    // Shorter than the retry budget (50us doubling over 5 attempts, ~1.5ms
+    // total), long enough that the claim is genuinely held when the print
+    // starts.
+    base_nanosleep_ns(200ULL * 1000); // 200us
+
+    n00b_conduit_publish_yield(pub);
+    return nullptr;
+}
+
+static void
+test_print_retry_keeps_the_topic_path(void)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    assert(rt && rt->stdout_topic);
+
+    // Subscribe to the stdout topic: this is what the fd fallback would
+    // bypass, so receiving here proves the retry path carried the line.
+    n00b_conduit_inbox_t(n00b_buffer_t *) inbox;
+    n00b_conduit_inbox_init(n00b_buffer_t *, &inbox, rt->default_conduit,
+                            N00B_CONDUIT_BP_UNBOUNDED, 8);
+    n00b_conduit_sub_handle_t sub = n00b_conduit_subscribe(
+        n00b_buffer_t *,
+        (n00b_conduit_topic_t(n00b_buffer_t *) *)rt->stdout_topic,
+        &inbox);
+    assert(sub != N00B_CONDUIT_INVALID_SUB_HANDLE);
+
+    atomic_store(&brief_held, 0);
+    auto tr = n00b_thread_spawn(brief_claim_holder, rt->stdout_topic);
+    assert(n00b_result_is_ok(tr));
+    n00b_thread_t *holder = n00b_result_get(tr);
+
+    while (atomic_load(&brief_held) == 0) {
+        base_nanosleep_ns(100ULL * 1000);
+    }
+    assert(atomic_load(&brief_held) == 1);
+
+    // Contended at entry; the holder releases mid-retry.
+    n00b_printf("retried-«#»", 490);
+
+    n00b_thread_join(holder);
+
+    bool saw = false;
+    while (n00b_conduit_inbox_has_msg(n00b_buffer_t *, &inbox)) {
+        auto m = n00b_conduit_inbox_pop_msg(n00b_buffer_t *, &inbox);
+        if (!m) {
+            break;
+        }
+        int64_t len  = 0;
+        char   *data = n00b_buffer_to_c(m->payload, &len);
+        if (data && len > 0 && strstr(data, "retried-490") != nullptr) {
+            saw = true;
+        }
+    }
+
+    n00b_conduit_sub_cancel(sub);
+
+    // Fails if the retry never wins -- the line would have gone to fd 1
+    // through the fallback, which no subscriber observes.
+    assert(saw);
+
+    printf("  [PASS] print retry keeps the topic path\n");
 }
 
 // ============================================================================
@@ -635,6 +778,7 @@ main(int argc, char **argv)
 
     // n00b#490
     test_print_survives_contended_publisher();
+    test_print_retry_keeps_the_topic_path();
     printf("All print tests passed.\n");
     n00b_shutdown();
     return 0;
