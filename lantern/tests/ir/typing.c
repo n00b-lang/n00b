@@ -2195,6 +2195,15 @@ static void test_phase_result_type(void)
     close_env(e);
 }
 
+static void test_debug_enabled_type(void)
+{
+    env *e = open_env(&ir_profile_bce, "bool");
+    ir_instr_t *enabled = op(e, IR_OP_DEBUG_ENABLED);
+    check("debug.enabled produces a boolean build-mode value",
+          accepts_as(e, enabled, "bool"));
+    close_env(e);
+}
+
 static void test_constants_and_copy(void)
 {
     env *e = open_env(&ir_profile_bce, "i32");
@@ -2973,6 +2982,7 @@ int main(void)
     test_conversion();
     test_select_phi_call();
     test_phase_result_type();
+    test_debug_enabled_type();
     test_generic_callable_contracts();
     test_comptime_and_terminators();
     test_second_profile();

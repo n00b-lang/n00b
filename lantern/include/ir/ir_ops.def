@@ -89,6 +89,7 @@ IR_OP(TYPEHASH,        "typehash",        1, 1,  U64,         "t",   0,         
 IR_OP(TYPENAME,        "typename",        1, 1,  STR,         "t",   0,                              HASRESULT | COMPTIME)
 IR_OP(ARMTAG,          "armtag",          1, 1,  U64,         "n",   0,                              HASRESULT | COMPTIME)
 IR_OP(PHASE_RESULT,    "phase.result",    0, 0,  ANNOTATED,   "",    0,                              HASRESULT)
+IR_OP(DEBUG_ENABLED,   "debug.enabled",   0, 0,  BOOL,        "",    0,                              HASRESULT)
 
 IR_OP(JUMP,            "jump",            1, 1,  NONE,        "b",   0,                              TERMINATOR)
 IR_OP(BRANCH,          "branch",          3, 3,  NONE,        "vbb", 0,                              TERMINATOR)
