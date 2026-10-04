@@ -1,6 +1,6 @@
-trait Index_Store {
-    func store(self: `T, index: int, item: int) -> int
+trait Index_Write {
+    func __write(self: `T, index: int, item: int) -> int
 }
 
-func store(self: array[int], index: int, item: int) -> int { return item }
+func __write(self: array[int], index: int, item: int) -> int { return item }
 func set_item(items: array[int]) { items [0] = 1 }

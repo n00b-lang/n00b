@@ -1,0 +1,10 @@
+enum Comparison {
+    less,
+    equal,
+    greater,
+    unordered
+}
+
+func selected() -> Comparison {
+    return Comparison.equal
+}

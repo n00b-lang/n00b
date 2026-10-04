@@ -1,1 +1,1 @@
-func value_return() -> int { value 42 }
+func value_return() -> int { = 42 }

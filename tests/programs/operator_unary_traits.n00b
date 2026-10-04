@@ -1,0 +1,19 @@
+type Box {
+    value: int
+}
+
+func __negate(item: Box) -> string {
+    return "negative"
+}
+
+func __not(item: Box) -> bool {
+    return false
+}
+
+func negate_box(item: Box) -> string {
+    return -item
+}
+
+func not_box(item: Box) -> bool {
+    return !item
+}

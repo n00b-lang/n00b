@@ -6,10 +6,8 @@ func render(self: int) -> int {
     return self
 }
 
-func compile_value() -> int {
-    return comptime {
-        var item = 7
-        item = 8
-        value item.render()
-    }
+comptime {
+    var item = 7
+    item = 8
+    var rendered: int = item.render()
 }

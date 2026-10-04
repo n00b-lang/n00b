@@ -1,6 +1,6 @@
-trait Index_Load {
-    func load(self: `T, index: int) -> int
+trait Index_Read {
+    func __read(self: `T, index: int) -> int
 }
 
-func load(self: array[int], index: int) -> int { return index }
+func __read(self: array[int], index: int) -> int { return index }
 func get_item(items: array[int]) -> int { return items [0] }

@@ -1,0 +1,11 @@
+trait Add_Amount {
+    func add_amount(self: `T, amount: int = 1) -> int
+}
+
+func add_amount(self: int, amount: int = 1) -> int {
+    return self + amount
+}
+
+func add_default(item: `T) -> int where `T: Add_Amount {
+    return item.add_amount()
+}

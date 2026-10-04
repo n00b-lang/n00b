@@ -1,4 +1,4 @@
 func value_block() -> int {
-    let result = { value 42 }
+    let result = { = 42 }
     return result
 }

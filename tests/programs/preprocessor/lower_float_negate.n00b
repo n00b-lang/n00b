@@ -1,0 +1,7 @@
+func negate_float(value: float) -> float {
+    return -value
+}
+
+func negate_integer(value: int) -> int {
+    return -value
+}

@@ -1137,9 +1137,9 @@ awk '
     cat "$tmp/lower_context_hook_failures.err"
     exit 1
 }
-grep -q 'n00bb.finalization v1 unavailable' \
+grep -q 'n00bb.finalization v1 complete' \
     "$tmp/lower_context_hook_failures.ir"
-grep -Eq 'cleanup\[.*unknown-exits=[1-9][0-9]*,.*incomplete\]' \
+grep -Eq 'cleanup\[.*unknown-exits=0,.*complete\]' \
     "$tmp/lower_context_hook_failures.ir"
 awk '
     /^  func @recover_exit_error/ { in_recover = 1 }
@@ -1198,7 +1198,16 @@ grep -q 'fail statement requires a non-nil function failure type' \
 }
 grep -q '@add' "$tmp/lower_arithmetic.ir"
 grep -q '= add trap' "$tmp/lower_arithmetic.ir"
+grep -q '= div trap trap' "$tmp/lower_arithmetic.ir"
+grep -q '= rem trap trap' "$tmp/lower_arithmetic.ir"
 grep -q 'return %' "$tmp/lower_arithmetic.ir"
+"$compiler" lower "$program_dir/lower_float_negate.n00b" \
+    >"$tmp/lower_float_negate.ir" 2>"$tmp/lower_float_negate.err" || {
+    cat "$tmp/lower_float_negate.err"
+    exit 1
+}
+grep -q ': int = neg trap ' "$tmp/lower_float_negate.ir"
+grep -q ': f64 = neg %' "$tmp/lower_float_negate.ir"
 "$compiler" lower --dump-control-flow --dump-pdg \
     "$program_dir/lower_arithmetic.n00b" >"$tmp/lower_arithmetic.analysis"
 grep -q '^control-flow @add$' "$tmp/lower_arithmetic.analysis"
@@ -1268,6 +1277,13 @@ done
     exit 1
 }
 grep -q 'return %' "$tmp/lower_value_return.ir"
+
+if "$compiler" parse "$program_dir/lower_value_keyword_rejected.n00b" \
+    >"$tmp/lower_value_keyword_rejected.out" \
+    2>"$tmp/lower_value_keyword_rejected.err"; then
+    echo 'retired value statement unexpectedly parsed' >&2
+    exit 1
+fi
 
 "$compiler" lower "$program_dir/lower_failure_exit.n00b" \
     >"$tmp/lower_failure_exit.ir" 2>"$tmp/lower_failure_exit.err" || {
@@ -1378,6 +1394,33 @@ grep -q 'mul trap' "$tmp/lower_compound_assignment.ir"
 grep -Eq 'div trap trap ' "$tmp/lower_compound_assignment.ir"
 grep -Eq 'rem trap trap ' "$tmp/lower_compound_assignment.ir"
 grep -q 'shl' "$tmp/lower_compound_assignment.ir"
+
+"$compiler" lower "$program_dir/lower_bitwise_shifts.n00b" \
+    >"$tmp/lower_bitwise_shifts.ir" \
+    2>"$tmp/lower_bitwise_shifts.err" || {
+    cat "$tmp/lower_bitwise_shifts.err"
+    exit 1
+}
+grep -q ' and ' "$tmp/lower_bitwise_shifts.ir"
+grep -q ' or ' "$tmp/lower_bitwise_shifts.ir"
+grep -q ' xor ' "$tmp/lower_bitwise_shifts.ir"
+grep -q ' shl trap ' "$tmp/lower_bitwise_shifts.ir"
+grep -q ' shr trap ' "$tmp/lower_bitwise_shifts.ir"
+
+"$compiler" lower "$program_dir/lower_bool_not.n00b" \
+    >"$tmp/lower_bool_not.ir" 2>"$tmp/lower_bool_not.err" || {
+    cat "$tmp/lower_bool_not.err"
+    exit 1
+}
+grep -q ' eq %value, %' "$tmp/lower_bool_not.ir"
+
+"$compiler" lower "$program_dir/lower_numeric_cast.n00b" \
+    >"$tmp/lower_numeric_cast.ir" 2>"$tmp/lower_numeric_cast.err" || {
+    cat "$tmp/lower_numeric_cast.err"
+    exit 1
+}
+grep -q ': i128 = cast %value' "$tmp/lower_numeric_cast.ir"
+grep -q ': i64 = cast trap %value' "$tmp/lower_numeric_cast.ir"
 grep -q 'shr' "$tmp/lower_compound_assignment.ir"
 grep -q 'and' "$tmp/lower_compound_assignment.ir"
 grep -q 'or' "$tmp/lower_compound_assignment.ir"
@@ -2207,7 +2250,7 @@ grep -q 'variant_dep:0:RemoteValue.text kind=' \
 }
 test "$(grep -c 'N00BB-W0001.*field '\''x'\'' is never set' \
     "$tmp/link_nested_declarations.err")" -eq 1
-grep -q 'link_nested_declarations:0:Color.red kind=' \
+grep -q 'link_nested_declarations:4:Color.red kind=' \
     "$tmp/link_nested_declarations.out"
 grep -q 'link_nested_declarations:0:Value.some kind=' \
     "$tmp/link_nested_declarations.out"
@@ -2217,9 +2260,9 @@ grep -q 'link_nested_declarations:0:Point.x kind=' \
     "$tmp/link_nested_declarations.out"
 grep -q 'link_nested_declarations:2:Color kind=2 binding n00bb.semantic.type' \
     "$tmp/link_nested_declarations.out"
-grep -q 'link_nested_declarations:0:Color.red kind=0 binding n00bb.semantic.type' \
+grep -q 'link_nested_declarations:4:Color.red kind=4 binding n00bb.semantic.type' \
     "$tmp/link_nested_declarations.out"
-grep -q 'link_nested_declarations:0:Color.green kind=0 binding n00bb.semantic.type' \
+grep -q 'link_nested_declarations:4:Color.green kind=4 binding n00bb.semantic.type' \
     "$tmp/link_nested_declarations.out"
 grep -q 'link_nested_declarations:2:Value kind=2 binding n00bb.semantic.type' \
     "$tmp/link_nested_declarations.out"
@@ -2996,6 +3039,15 @@ fi
 grep -q 'this binding is not available during compile-time evaluation' \
     "$tmp/lower_comptime_runtime_dependency.out"
 
+for fixture in lower_nested_comptime lower_comptime_value_body; do
+    if "$compiler" parse "$program_dir/$fixture.n00b" \
+        >"$tmp/$fixture.rejected" 2>&1; then
+        echo "comptime expression unexpectedly parsed: $fixture" >&2
+        exit 1
+    fi
+    grep -q 'syntax error.*near comptime' "$tmp/$fixture.rejected"
+done
+
 N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-control-flow \
     "$program_dir/lower_comptime_import_root.n00b" \
     >"$tmp/lower_comptime_import_root.out" \
@@ -3003,15 +3055,9 @@ N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-control-flow \
     cat "$tmp/lower_comptime_import_root.err"
     exit 1
 }
-grep -q 'module lower_comptime_import_leaf\$comptime {' \
+grep -q 'call @__n00bb_comptime_compile_value' \
     "$tmp/lower_comptime_import_root.out"
-grep -q 'module lower_comptime_import_middle\$comptime {' \
-    "$tmp/lower_comptime_import_root.out"
-grep -Eq 'call @__n00bb_comptime_compile_value' \
-    "$tmp/lower_comptime_import_root.out"
-grep -Eq 'call @__n00bb_comptime_compile_constant' \
-    "$tmp/lower_comptime_import_root.out"
-grep -q 'phase-result "default:lower_comptime_import_root:comptime-value:' \
+grep -q 'call @__n00bb_comptime_compile_constant' \
     "$tmp/lower_comptime_import_root.out"
 leaf_exit=$(sed -n \
     's/^  node #\([0-9][0-9]*\) function-exit phase="comptime" function=lower_comptime_import_leaf\$comptime\.__n00bb_comptime_init .*outcome=success/\1/p' \
@@ -3022,55 +3068,15 @@ middle_entry=$(sed -n \
 middle_exit=$(sed -n \
     's/^  node #\([0-9][0-9]*\) function-exit phase="comptime" function=lower_comptime_import_middle\$comptime\.__n00bb_comptime_init .*outcome=success/\1/p' \
     "$tmp/lower_comptime_import_root.out")
-producer_entry=$(sed -n \
-    's/^  node #\([0-9][0-9]*\) function-entry phase="comptime" function=lower_comptime_import_root\$comptime\.__n00bb_comptime_value_[0-9][0-9]* .*/\1/p' \
+root_entry=$(sed -n \
+    's/^  node #\([0-9][0-9]*\) function-entry phase="comptime" function=lower_comptime_import_root\$comptime\.__n00bb_comptime_init .*/\1/p' \
     "$tmp/lower_comptime_import_root.out")
 test -n "$leaf_exit" && test -n "$middle_entry" \
-    && test -n "$middle_exit" && test -n "$producer_entry"
+    && test -n "$middle_exit" && test -n "$root_entry"
 grep -q "edge sequence #$leaf_exit -> #$middle_entry" \
     "$tmp/lower_comptime_import_root.out"
-grep -q "edge sequence #$middle_exit -> #$producer_entry" \
+grep -q "edge sequence #$middle_exit -> #$root_entry" \
     "$tmp/lower_comptime_import_root.out"
-
-N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_comptime_failure_root.n00b" \
-    >"$tmp/lower_comptime_failure_root.out" \
-    2>"$tmp/lower_comptime_failure_root.err" || {
-    cat "$tmp/lower_comptime_failure_root.err"
-    exit 1
-}
-awk '
-    /^module / { module = $0; in_comptime = /\$comptime/ }
-    in_comptime && index(module, "lower_comptime_failure_root") \
-        && /call @__n00bb_comptime_fail_value/ { root_call = 1 }
-    in_comptime && index(module, "lower_comptime_failure_middle") \
-        && /call @__n00bb_comptime_fail_value/ { middle_call = 1 }
-    in_comptime && index(module, "lower_comptime_failure_leaf") \
-        && /fail %/ { leaf_failure = 1 }
-    !in_comptime && /call @__n00bb_comptime_fail_value/ { runtime_leak = 1 }
-    END { exit !(root_call && middle_call && leaf_failure && !runtime_leak) }
-' "$tmp/lower_comptime_failure_root.out"
-grep -Eq 'static func @__n00bb_comptime_value_[0-9]+\(\) -> int fail: int !ir.execution_phase\(1\)' \
-    "$tmp/lower_comptime_failure_root.out"
-success_exit=$(sed -n \
-    's/^  node #\([0-9][0-9]*\) function-exit phase="comptime" function=lower_comptime_failure_root\$comptime\.__n00bb_comptime_value_[0-9][0-9]* .*outcome=success/\1/p' \
-    "$tmp/lower_comptime_failure_root.out")
-failure_exit=$(sed -n \
-    's/^  node #\([0-9][0-9]*\) function-exit phase="comptime" function=lower_comptime_failure_root\$comptime\.__n00bb_comptime_value_[0-9][0-9]* .*outcome=failure/\1/p' \
-    "$tmp/lower_comptime_failure_root.out")
-consumer_entry=$(sed -n \
-    's/^  node #\([0-9][0-9]*\) function-entry phase="runtime" function=lower_comptime_failure_root.runtime_value .*/\1/p' \
-    "$tmp/lower_comptime_failure_root.out")
-test -n "$success_exit" && test -n "$failure_exit" \
-    && test -n "$consumer_entry"
-grep -q "edge requires #$consumer_entry -> #$success_exit" \
-    "$tmp/lower_comptime_failure_root.out"
-grep -q "edge requires #1 -> #$success_exit" \
-    "$tmp/lower_comptime_failure_root.out"
-! grep -q "edge requires #$consumer_entry -> #$failure_exit" \
-    "$tmp/lower_comptime_failure_root.out"
-! grep -q "edge requires #1 -> #$failure_exit" \
-    "$tmp/lower_comptime_failure_root.out"
 
 "$compiler" lower --dump-ir --dump-link-unit \
     "$program_dir/lower_comptime_trait_call.n00b" \
@@ -3079,162 +3085,26 @@ grep -q "edge requires #1 -> #$success_exit" \
     cat "$tmp/lower_comptime_trait_call.err"
     exit 1
 }
-awk '
-    /^module / { in_comptime = /\$comptime/ }
-    in_comptime && /call @__n00bb_comptime_render/ { implementation = 1 }
-    in_comptime && /call @__trait_req_Render_render/ { abstract = 1 }
-    !in_comptime && /call @__n00bb_comptime_render/ { runtime_call = 1 }
-    END { exit !(implementation && !abstract && !runtime_call) }
-' "$tmp/lower_comptime_trait_call.out"
+grep -q 'call @__n00bb_comptime_render' \
+    "$tmp/lower_comptime_trait_call.out"
 grep -q 'trait-dispatch\[resolved\].*-> lower_comptime_trait_call:1:render' \
     "$tmp/lower_comptime_trait_call.out"
 
-"$compiler" lower --dump-ir --dump-link-unit \
-    "$program_dir/lower_comptime_generic_trait_call.n00b" \
-    >"$tmp/lower_comptime_generic_trait_call.out" \
-    2>"$tmp/lower_comptime_generic_trait_call.err" || {
-    cat "$tmp/lower_comptime_generic_trait_call.err"
-    exit 1
-}
-awk '
-    /^module / { in_comptime = /\$comptime/ }
-    in_comptime && /call @__trait_req_Render_render/ { requirement_call = 1 }
-    END { exit !requirement_call }
-' "$tmp/lower_comptime_generic_trait_call.out"
-grep -q 'func @__n00bb_comptime_generic_render(%item:' \
-    "$tmp/lower_comptime_generic_trait_call.out"
-grep -q 'trait-dispatch\[resolved\].*Render.render' \
-    "$tmp/lower_comptime_generic_trait_call.out"
-
-"$compiler" lower --dump-ir --dump-control-flow \
+"$compiler" lower --dump-ir \
     "$program_dir/lower_comptime_context_hooks.n00b" \
     >"$tmp/lower_comptime_context_hooks.out" \
     2>"$tmp/lower_comptime_context_hooks.err" || {
     cat "$tmp/lower_comptime_context_hooks.err"
     exit 1
 }
-awk '
-    /^module / { in_comptime = /\$comptime/ }
-    !in_comptime && /call @__n00bb_context_ValueContext_/ { runtime_hook = 1 }
-    END { exit runtime_hook }
-' "$tmp/lower_comptime_context_hooks.out"
 enter_line=$(grep -n 'call @__n00bb_context_ValueContext_enter' \
     "$tmp/lower_comptime_context_hooks.out" | head -1 | cut -d: -f1)
-leave_line=$(grep -n 'call @__n00bb_context_ValueContext_exit' \
+exit_line=$(grep -n 'call @__n00bb_context_ValueContext_exit' \
     "$tmp/lower_comptime_context_hooks.out" | head -1 | cut -d: -f1)
 ensure_line=$(grep -n 'call @__n00bb_context_ValueContext_ensure' \
     "$tmp/lower_comptime_context_hooks.out" | head -1 | cut -d: -f1)
-test -n "$enter_line" && test -n "$leave_line" && test -n "$ensure_line"
-test "$enter_line" -lt "$leave_line" && test "$leave_line" -lt "$ensure_line"
-grep -q 'phase-result "default:lower_comptime_context_hooks:comptime-value:' \
-    "$tmp/lower_comptime_context_hooks.out"
-
-"$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_comptime_context_body_failure.n00b" \
-    >"$tmp/lower_comptime_context_body_failure.out" \
-    2>"$tmp/lower_comptime_context_body_failure.err" || {
-    cat "$tmp/lower_comptime_context_body_failure.err"
-    exit 1
-}
-awk '
-    /^  static func @__n00bb_comptime_value_/ { in_producer = 1 }
-    in_producer && /^    block __n00bb_unwrap_error_/ { in_body_failure = 1 }
-    in_body_failure && /^    block / && !/__n00bb_unwrap_error_/ {
-        in_body_failure = 0
-    }
-    in_body_failure && /call @__n00bb_context_BodyFailure_ensure/ { ensured = 1 }
-    in_body_failure && /call @__n00bb_context_BodyFailure_error/ { handled = 1 }
-    in_body_failure && /fail %/ { propagated = 1 }
-    END { exit !(ensured && !handled && propagated) }
-' "$tmp/lower_comptime_context_body_failure.out"
-awk '
-    /^module / { in_comptime = /\$comptime/ }
-    !in_comptime && /call @__n00bb_context_BodyFailure_/ { leaked = 1 }
-    END { exit leaked }
-' "$tmp/lower_comptime_context_body_failure.out"
-grep -Eq 'function-exit phase="comptime" function=lower_comptime_context_body_failure\$comptime\.__n00bb_comptime_value_[0-9]+ .*outcome=failure' \
-    "$tmp/lower_comptime_context_body_failure.out"
-
-"$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_comptime_context_enter_failure.n00b" \
-    >"$tmp/lower_comptime_context_enter_failure.out" \
-    2>"$tmp/lower_comptime_context_enter_failure.err" || {
-    cat "$tmp/lower_comptime_context_enter_failure.err"
-    exit 1
-}
-awk '
-    /^  static func @__n00bb_comptime_value_/ { in_producer = 1 }
-    in_producer && /^    block __n00bb_enter_error_/ { in_enter_failure = 1 }
-    in_enter_failure && /^    block / && !/__n00bb_enter_error_/ {
-        in_enter_failure = 0
-    }
-    in_enter_failure && /call @__n00bb_context_QuietRecorder_ensure/ { prior_ensure = 1 }
-    in_enter_failure && /call @__n00bb_context_QuietRecorder_exit/ { prior_exit = 1 }
-    in_enter_failure && /call @__n00bb_context_FailingEnter_(error|ensure)/ {
-        failed_manager_hook = 1
-    }
-    in_enter_failure && /fail %/ { propagated = 1 }
-    END { exit !(prior_ensure && !prior_exit && !failed_manager_hook && propagated) }
-' "$tmp/lower_comptime_context_enter_failure.out"
-awk '
-    /^module / { in_comptime = /\$comptime/ }
-    !in_comptime && /call @__n00bb_context_(QuietRecorder|FailingEnter)_/ { leaked = 1 }
-    END { exit leaked }
-' "$tmp/lower_comptime_context_enter_failure.out"
-
-"$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_comptime_context_exit_failure.n00b" \
-    >"$tmp/lower_comptime_context_exit_failure.out" \
-    2>"$tmp/lower_comptime_context_exit_failure.err" || {
-    cat "$tmp/lower_comptime_context_exit_failure.err"
-    exit 1
-}
-awk '
-    /^  static func @__n00bb_comptime_value_/ { in_producer = 1 }
-    in_producer && /call @__n00bb_context_RecoverExit_error/ { error_hook = 1 }
-    in_producer && /call @__n00bb_context_RecoverExit_ensure/ { ensures++ }
-    END { exit !(error_hook && ensures == 3) }
-' "$tmp/lower_comptime_context_exit_failure.out"
-grep -Eq 'function-exit phase="comptime" function=lower_comptime_context_exit_failure\$comptime\.__n00bb_comptime_value_[0-9]+ .*outcome=failure' \
-    "$tmp/lower_comptime_context_exit_failure.out"
-awk '
-    /^module / { in_comptime = /\$comptime/ }
-    !in_comptime && /call @__n00bb_context_RecoverExit_/ { leaked = 1 }
-    END { exit leaked }
-' "$tmp/lower_comptime_context_exit_failure.out"
-
-"$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_comptime_context_error_failure.n00b" \
-    >"$tmp/lower_comptime_context_error_failure.out" \
-    2>"$tmp/lower_comptime_context_error_failure.err" || {
-    cat "$tmp/lower_comptime_context_error_failure.err"
-    exit 1
-}
-awk '
-    /^  static func @__n00bb_comptime_value_/ { in_producer = 1 }
-    in_producer && /call @__n00bb_context_PropagatingExit_error/ { error_hook = 1 }
-    in_producer && /^    block __n00bb_hook_error_/ { in_error_failure = 1 }
-    in_error_failure && /^    block / && !/__n00bb_hook_error_/ {
-        in_error_failure = 0
-    }
-    in_error_failure && /call @__n00bb_context_PropagatingExit_ensure/ { ensured = 1 }
-    in_error_failure && /fail %/ { propagated = 1 }
-    END { exit !(error_hook && ensured && propagated) }
-' "$tmp/lower_comptime_context_error_failure.out"
-awk '
-    /^module / { in_comptime = /\$comptime/ }
-    !in_comptime && /call @__n00bb_context_PropagatingExit_/ { leaked = 1 }
-    END { exit leaked }
-' "$tmp/lower_comptime_context_error_failure.out"
-
-if "$compiler" lower --dump-ir \
-    "$program_dir/lower_comptime_context_ensure_failure.n00b" \
-    >"$tmp/lower_comptime_context_ensure_failure.out" 2>&1; then
-    echo 'a failing ensure hook in a comptime value unexpectedly lowered' >&2
-    exit 1
-fi
-grep -q 'fail statement requires a non-nil function failure type' \
-    "$tmp/lower_comptime_context_ensure_failure.out"
+test -n "$enter_line" && test -n "$exit_line" && test -n "$ensure_line"
+test "$enter_line" -lt "$exit_line" && test "$exit_line" -lt "$ensure_line"
 
 "$compiler" lower --dump-control-flow "$program_dir/lower_global.n00b" \
     >"$tmp/lower_global.graph" 2>"$tmp/lower_global.graph.err" || {
@@ -3479,127 +3349,13 @@ grep -q "edge sequence #$cycle_runtime_a_exit -> #$cycle_runtime_b_entry" \
 grep -q "edge requires #1 -> #$cycle_comptime_b_exit" \
     "$tmp/init_cycle_order.graph"
 
-"$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_nested_comptime.n00b" \
-    >"$tmp/lower_comptime_value_expression.out" \
-    2>"$tmp/lower_comptime_value_expression.err" || {
-    cat "$tmp/lower_comptime_value_expression.err"
+if "$compiler" parse "$program_dir/lower_function_comptime_block.n00b" \
+    >"$tmp/lower_function_comptime_block.out" 2>&1; then
+    echo 'comptime block inside a function unexpectedly parsed' >&2
     exit 1
-}
-grep -q 'func @__n00bb_comptime_value_43() -> int fail: nil !ir.execution_phase(1)' \
-    "$tmp/lower_comptime_value_expression.out"
-grep -q '= phase.result .*ir.phase_result("default:lower_nested_comptime:comptime-value:43")' \
-    "$tmp/lower_comptime_value_expression.out"
-grep -q 'phase-result "default:lower_nested_comptime:comptime-value:43" producer=@lower_nested_comptime\$comptime.__n00bb_comptime_value_43 consumer=@lower_nested_comptime.nested_compile_time' \
-    "$tmp/lower_comptime_value_expression.out"
-producer_exit=$(sed -E -n \
-    's/^  node #([0-9]+) function-exit phase="comptime" function=lower_nested_comptime\$comptime\.__n00bb_comptime_value_43 .*outcome=success/\1/p' \
-    "$tmp/lower_comptime_value_expression.out")
-consumer_entry=$(sed -E -n \
-    's/^  node #([0-9]+) function-entry phase="runtime" function=lower_nested_comptime\.nested_compile_time .*/\1/p' \
-    "$tmp/lower_comptime_value_expression.out")
-test -n "$producer_exit" && test -n "$consumer_entry"
-grep -q "edge requires #$consumer_entry -> #$producer_exit" \
-    "$tmp/lower_comptime_value_expression.out"
-grep -q "edge requires #1 -> #$producer_exit" \
-    "$tmp/lower_comptime_value_expression.out"
-awk '
-    /^module / { in_runtime = $0 !~ /\$comptime/ }
-    in_runtime && /const 4/ { runtime_literal = 1 }
-    END { exit runtime_literal }
-' "$tmp/lower_comptime_value_expression.out"
-
-"$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_comptime_value_body.n00b" \
-    >"$tmp/lower_comptime_value_body.out" \
-    2>"$tmp/lower_comptime_value_body.err" || {
-    cat "$tmp/lower_comptime_value_body.err"
-    exit 1
-}
-grep -q 'func @__n00bb_comptime_value_' "$tmp/lower_comptime_value_body.out"
-grep -q '= phase.result .*ir.phase_result("default:lower_comptime_value_body:comptime-value:' \
-    "$tmp/lower_comptime_value_body.out"
-grep -q 'phase-result "default:lower_comptime_value_body:comptime-value:' \
-    "$tmp/lower_comptime_value_body.out"
-
-"$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_function_comptime_block.n00b" \
-    >"$tmp/lower_function_comptime_block.out" \
-    2>"$tmp/lower_function_comptime_block.err" || {
-    cat "$tmp/lower_function_comptime_block.err"
-    exit 1
-}
-awk '
-    /^module / {
-        in_comptime = /\$comptime/
-    }
-    /^  func @/ {
-        in_compiletime_function = in_comptime \
-            && /__n00bb_comptime_phase_local_work/
-    }
-    in_compiletime_function && /const 12/ { nested_value = 1 }
-    in_compiletime_function && /fail / { compiletime_failure = 1 }
-    !in_comptime && /const 12|fail %/ { runtime_leak = 1 }
-    END { exit !(nested_value && compiletime_failure && !runtime_leak) }
-' "$tmp/lower_function_comptime_block.out"
-grep -q 'function-exit phase="comptime".*outcome=failure' \
+fi
+grep -q 'syntax error.*near comptime' \
     "$tmp/lower_function_comptime_block.out"
-
-"$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_comptime_value_global_state.n00b" \
-    >"$tmp/lower_comptime_value_global_state.out" \
-    2>"$tmp/lower_comptime_value_global_state.err" || {
-    cat "$tmp/lower_comptime_value_global_state.err"
-    exit 1
-}
-grep -q 'global.store @lower_comptime_value_global_state.phase_state' \
-    "$tmp/lower_comptime_value_global_state.out"
-grep -q '= phase.result .*ir.phase_result("default:lower_comptime_value_global_state:comptime-value:' \
-    "$tmp/lower_comptime_value_global_state.out"
-comptime_initializer_exit=$(sed -E -n \
-    's/^  node #([0-9]+) function-exit phase="comptime" function=lower_comptime_value_global_state\$comptime\.__n00bb_comptime_init .*outcome=success/\1/p' \
-    "$tmp/lower_comptime_value_global_state.out")
-value_producer_entry=$(sed -E -n \
-    's/^  node #([0-9]+) function-entry phase="comptime" function=lower_comptime_value_global_state\$comptime\.__n00bb_comptime_value_[0-9]+ .*/\1/p' \
-    "$tmp/lower_comptime_value_global_state.out")
-test -n "$comptime_initializer_exit" && test -n "$value_producer_entry"
-grep -q "edge sequence #$comptime_initializer_exit -> #$value_producer_entry" \
-    "$tmp/lower_comptime_value_global_state.out"
-
-"$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_comptime_value_global_write.n00b" \
-    >"$tmp/lower_comptime_value_global_write.out" \
-    2>"$tmp/lower_comptime_value_global_write.err" || {
-    cat "$tmp/lower_comptime_value_global_write.err"
-    exit 1
-}
-awk '
-    /^module / { in_comptime = $0 ~ /\$comptime/ }
-    in_comptime && /global.store @lower_comptime_value_global_write.produced_value/ {
-        compile_time_store = 1
-    }
-    !in_comptime && /global.store @lower_comptime_value_global_write.produced_value/ {
-        runtime_store = 1
-    }
-    END { exit !(compile_time_store && !runtime_store) }
-' "$tmp/lower_comptime_value_global_write.out"
-grep -q '= phase.result .*ir.phase_result("default:lower_comptime_value_global_write:comptime-value:' \
-    "$tmp/lower_comptime_value_global_write.out"
-grep -q 'phase-result "default:lower_comptime_value_global_write:comptime-value:' \
-    "$tmp/lower_comptime_value_global_write.out"
-grep -Fq 'static global @lower_comptime_value_global_write.produced_value: int = $"default:lower_comptime_value_global_write:global-state:produced_value"' \
-    "$tmp/lower_comptime_value_global_write.out"
-grep -Fq 'global-result "default:lower_comptime_value_global_write:global-state:produced_value" phase="comptime" source=@lower_comptime_value_global_write$comptime.lower_comptime_value_global_write.produced_value target=@lower_comptime_value_global_write.lower_comptime_value_global_write.produced_value type=int' \
-    "$tmp/lower_comptime_value_global_write.out"
-comptime_phase_exit=$(sed -E -n \
-    's/^  node #([0-9]+) phase-exit phase="comptime" label="empty-initialization-phase" outcome=success/\1/p' \
-    "$tmp/lower_comptime_value_global_write.out")
-value_producer_entry=$(sed -E -n \
-    's/^  node #([0-9]+) function-entry phase="comptime" function=lower_comptime_value_global_write\$comptime\.__n00bb_comptime_value_[0-9]+ .*/\1/p' \
-    "$tmp/lower_comptime_value_global_write.out")
-test -n "$comptime_phase_exit" && test -n "$value_producer_entry"
-grep -q "edge sequence #$comptime_phase_exit -> #$value_producer_entry" \
-    "$tmp/lower_comptime_value_global_write.out"
 
 "$compiler" lower --dump-ir --dump-control-flow \
     "$program_dir/lower_comptime_global_final_state.n00b" \
@@ -3655,53 +3411,6 @@ if grep -Fq 'global-result "default:lower_comptime_unreachable_global_write:glob
     cat "$tmp/lower_comptime_unreachable_global_write.out"
     exit 1
 fi
-
-"$compiler" lower --dump-ir --dump-control-flow \
-    "$program_dir/lower_comptime_value_failure.n00b" \
-    >"$tmp/lower_comptime_value_failure.out" \
-    2>"$tmp/lower_comptime_value_failure.err" || {
-    cat "$tmp/lower_comptime_value_failure.err"
-    exit 1
-}
-grep -Eq 'func @__n00bb_comptime_value_[0-9]+\(\) -> int fail: int !ir.execution_phase\(1\)' \
-    "$tmp/lower_comptime_value_failure.out"
-grep -Eq 'function-exit phase="comptime" function=lower_comptime_value_failure\$comptime\.__n00bb_comptime_value_[0-9]+ .*outcome=failure' \
-    "$tmp/lower_comptime_value_failure.out"
-grep -Eq 'function-exit phase="comptime" function=lower_comptime_value_failure\$comptime\.__n00bb_comptime_value_[0-9]+ .*outcome=success' \
-    "$tmp/lower_comptime_value_failure.out"
-failure_exit=$(sed -E -n \
-    's/^  node #([0-9]+) function-exit phase="comptime" function=lower_comptime_value_failure\$comptime\.__n00bb_comptime_value_[0-9]+ .*outcome=failure/\1/p' \
-    "$tmp/lower_comptime_value_failure.out")
-test -n "$failure_exit"
-if grep -Eq "edge requires #[0-9]+ -> #$failure_exit$" \
-    "$tmp/lower_comptime_value_failure.out"; then
-    echo 'a failing compile-time exit unexpectedly gates runtime work' >&2
-    exit 1
-fi
-
-if "$compiler" lower --dump-ir \
-    "$program_dir/lower_comptime_value_runtime_dependency.n00b" \
-    >"$tmp/lower_comptime_value_runtime_dependency.out" 2>&1; then
-    echo 'runtime-only data unexpectedly entered a compile-time value producer' >&2
-    exit 1
-fi
-grep -q 'this binding is not available during compile-time evaluation' \
-    "$tmp/lower_comptime_value_runtime_dependency.out" || {
-    cat "$tmp/lower_comptime_value_runtime_dependency.out"
-    exit 1
-}
-
-if "$compiler" lower --dump-ir \
-    "$program_dir/lower_comptime_value_parameter_dependency.n00b" \
-    >"$tmp/lower_comptime_value_parameter_dependency.out" 2>&1; then
-    echo 'a runtime function parameter unexpectedly entered a compile-time producer' >&2
-    exit 1
-fi
-grep -q 'this binding is not available during compile-time evaluation because it belongs to the enclosing runtime function' \
-    "$tmp/lower_comptime_value_parameter_dependency.out" || {
-    cat "$tmp/lower_comptime_value_parameter_dependency.out"
-    exit 1
-}
 
 "$compiler" lower --dump-ir "$program_dir/lower_default_arguments.n00b" \
     >"$tmp/lower_default_arguments.ir" \
@@ -3850,12 +3559,12 @@ grep -q 'Brace_Literal' "$tmp/wrong_literal_shape.out"
 }
 grep 'get_item: function' "$tmp/index_load.out" | grep -q 'type=(array\[int\]) -> string' || {
     cat "$tmp/index_load.out"
-    echo 'index load result was not inferred from the Index_Load contract' >&2
+    echo 'index load result was not inferred from the Index_Read contract' >&2
     exit 1
 }
-grep -q 'resolved index_load_dispatch -> index_load_dispatch:1:load' \
+grep -q 'resolved index_load_dispatch -> index_load_dispatch:1:__read' \
     "$tmp/index_load.out"
-grep -q 'trait-dispatch\[resolved\] index_load_dispatch:1:get_item -> index_load_dispatch:1:load' \
+grep -q 'trait-dispatch\[resolved\] index_load_dispatch:1:get_item -> index_load_dispatch:1:__read' \
     "$tmp/index_load.out"
 
 "$compiler" lower --dump-ir "$script_dir/programs/array_index_read_lowering.n00b" \
@@ -3863,7 +3572,7 @@ grep -q 'trait-dispatch\[resolved\] index_load_dispatch:1:get_item -> index_load
     cat "$tmp/array_index_read.err"
     exit 1
 }
-grep -q '= call @load, %__lowered_[0-9]*, %__lowered_[0-9]*' \
+grep -q '= call @__read, %__lowered_[0-9]*, %__lowered_[0-9]*' \
     "$tmp/array_index_read.ir"
 
 "$compiler" lower --dump-ir \
@@ -3873,10 +3582,10 @@ grep -q '= call @load, %__lowered_[0-9]*, %__lowered_[0-9]*' \
     cat "$tmp/array_index_nested_read.err"
     exit 1
 }
-grep -q '= call @load, %__lowered_[0-9]*, %__lowered_[0-9]*' \
+grep -q '= call @__read, %__lowered_[0-9]*, %__lowered_[0-9]*' \
     "$tmp/array_index_nested_read.ir"
 grep -q 'variant.payload .*"ok"' "$tmp/array_index_nested_read.ir"
-grep -Eq '= call @load, .*!ir.alias_count\(1\).*ir.alias0\(%__lowered_[0-9]+\)' \
+grep -Eq '= call @__read, .*!ir.alias_count\(1\).*ir.alias0\(%__lowered_[0-9]+\)' \
     "$tmp/array_index_nested_read.ir"
 grep -Eq '= variant.payload .*"ok" .*!ir.alias_count\(1\).*ir.alias0\(%__lowered_[0-9]+\)' \
     "$tmp/array_index_nested_read.ir"
@@ -3886,9 +3595,9 @@ grep -Eq '= variant.payload .*"ok" .*!ir.alias_count\(1\).*ir.alias0\(%__lowered
     cat "$tmp/array_index_store.err"
     exit 1
 }
-grep -q '= call @store, %__lowered_[0-9]*, %__lowered_[0-9]*, %__lowered_[0-9]*' \
+grep -q '= call @__write, %__lowered_[0-9]*, %__lowered_[0-9]*, %__lowered_[0-9]*' \
     "$tmp/array_index_store.ir"
-if grep -q '= call @load,' "$tmp/array_index_store.ir"; then
+if grep -q '= call @__read,' "$tmp/array_index_store.ir"; then
     echo 'indexed assignment unexpectedly emitted a read before its store' >&2
     exit 1
 fi
@@ -3901,14 +3610,14 @@ fi
 test "$(grep -c '= array.new ' "$tmp/array_ragged.ir")" -eq 3
 test "$(grep -c '!ir.array.element_initialization("language_zero")' \
     "$tmp/array_ragged.ir")" -eq 3
-test "$(grep -c '= call @store,' "$tmp/array_ragged.ir")" -eq 2
+test "$(grep -c '= call @__write,' "$tmp/array_ragged.ir")" -eq 2
 
 "$compiler" lower --dump-ir "$script_dir/programs/array_slice_lowering.n00b" \
     >"$tmp/array_slice.ir" 2>"$tmp/array_slice.err" || {
     cat "$tmp/array_slice.err"
     exit 1
 }
-grep -Eq 'call @slice, %__lowered_[0-9]+, %__lowered_[0-9]+, %' \
+grep -Eq 'call @__slice, %__lowered_[0-9]+, %__lowered_[0-9]+, %' \
     "$tmp/array_slice.ir"
 if grep -q '__n00bb_default_arg_' "$tmp/array_slice.ir"; then
     echo 'slice defaults retained a presence/value wrapper' >&2
@@ -3919,7 +3628,7 @@ grep -q 'func @full_view(%items: array\[int\]) -> view\[int\]' \
 grep -q 'neg trap' "$tmp/array_slice.ir"
 test "$(grep -c 'variant.tag %__n00bb_' "$tmp/array_slice.ir")" -eq 3
 test "$(grep -c 'fail %__n00bb_outcome_' "$tmp/array_slice.ir")" -eq 3
-test "$(grep -Ec '= call @slice, .*!ir.alias_count\(1\).*!ir.alias0\(' \
+test "$(grep -Ec '= call @__slice, .*!ir.alias_count\(1\).*!ir.alias0\(' \
     "$tmp/array_slice.ir")" -eq 3
 test "$(grep -Ec ': view\[int\] = variant.payload .*"ok" .*!ir.alias_count\(1\).*!ir.alias0\(' \
     "$tmp/array_slice.ir")" -eq 3
@@ -3936,9 +3645,9 @@ grep -Eq 'local_view: variable, .*type=view\[int\].*aliases=1, aliased-by=0,.*al
     "$tmp/array_view_lifetime.out"
 grep -Eq 'local_view: variable, .*type=view\[int\].*aliases=1, aliased-by=0,.*escaping-aliases=1,.*may-escape' \
     "$tmp/array_view_lifetime.out"
-grep -Eq '= call @slice, .*!ir.alias0_escapes\(false\).*!ir.lifetime_escapes\(false\)' \
+grep -Eq '= call @__slice, .*!ir.alias0_escapes\(false\).*!ir.lifetime_escapes\(false\)' \
     "$tmp/array_view_lifetime.out"
-grep -Eq '= call @slice, .*!ir.alias0_escapes\(true\).*!ir.lifetime_escapes\(true\)' \
+grep -Eq '= call @__slice, .*!ir.alias0_escapes\(true\).*!ir.lifetime_escapes\(true\)' \
     "$tmp/array_view_lifetime.out"
 grep -Eq 'cleanup-range\[local_view,.*evidence=incomplete' \
     "$tmp/array_view_lifetime.out"
@@ -3954,13 +3663,13 @@ N00B_PATH="$script_dir/programs" "$compiler" lower --dump-symbols \
 }
 grep -Eq 'first_view: variable, .*type=view\[int\].*aliases=1, aliased-by=0,.*alias-analysis=complete, escaping-aliases=0' \
     "$tmp/array_nested_slice_lifetime.out"
-grep -q 'trait-dispatch\[resolved\] array_nested_slice_lifetime:1:nested_view -> array_nested_slice_array_impl:1:slice' \
+grep -q 'trait-dispatch\[resolved\] array_nested_slice_lifetime:1:nested_view -> array_nested_slice_array_impl:1:__slice' \
     "$tmp/array_nested_slice_lifetime.out"
-grep -q 'trait-dispatch\[resolved\] array_nested_slice_lifetime:1:nested_view -> array_nested_slice_view_impl:1:slice' \
+grep -q 'trait-dispatch\[resolved\] array_nested_slice_lifetime:1:nested_view -> array_nested_slice_view_impl:1:__slice' \
     "$tmp/array_nested_slice_lifetime.out"
-grep -Eq '= call @slice, .*!ir.alias0_escapes\(false\)' \
+grep -Eq '= call @__slice, .*!ir.alias0_escapes\(false\)' \
     "$tmp/array_nested_slice_lifetime.out"
-grep -Eq '= call @slice, .*!ir.alias0_escapes\(true\)' \
+grep -Eq '= call @__slice, .*!ir.alias0_escapes\(true\)' \
     "$tmp/array_nested_slice_lifetime.out"
 grep -Eq 'cleanup-range\[first_view,.*evidence=incomplete' \
     "$tmp/array_nested_slice_lifetime.out"
@@ -3972,13 +3681,13 @@ grep -Eq 'cleanup-range\[first_view,.*evidence=incomplete' \
     cat "$tmp/array_slice_failure.out"
     exit 1
 }
-grep -q 'func @slice(.*-> view\[int\] fail: int' \
+grep -q 'func @__slice(.*-> view\[int\] fail: int' \
     "$tmp/array_slice_failure.out"
 grep -q 'func @propagate_slice(.*-> view\[int\] fail: int' \
     "$tmp/array_slice_failure.out"
 grep -q 'func @catch_slice(.*-> int fail: nil' \
     "$tmp/array_slice_failure.out"
-test "$(grep -c ': variant __lantern_call_outcome_.*= call @slice,' \
+test "$(grep -c ': variant __lantern_call_outcome_.*= call @__slice,' \
     "$tmp/array_slice_failure.out")" -eq 3
 test "$(grep -c 'variant.payload .*"error"' \
     "$tmp/array_slice_failure.out")" -eq 3
@@ -3991,13 +3700,13 @@ grep -q 'jump __n00bb_try_handler_' "$tmp/array_slice_failure.out"
     cat "$tmp/index_write_slice.out"
     exit 1
 }
-grep -q 'resolved index_write_slice_dispatch -> index_write_slice_dispatch:1:store' \
+grep -q 'resolved index_write_slice_dispatch -> index_write_slice_dispatch:1:__write' \
     "$tmp/index_write_slice.out"
-grep -q 'resolved index_write_slice_dispatch -> index_write_slice_dispatch:1:slice' \
+grep -q 'resolved index_write_slice_dispatch -> index_write_slice_dispatch:1:__slice' \
     "$tmp/index_write_slice.out"
-grep -q 'trait-dispatch\[resolved\] index_write_slice_dispatch:1:set_item -> index_write_slice_dispatch:1:store' \
+grep -q 'trait-dispatch\[resolved\] index_write_slice_dispatch:1:set_item -> index_write_slice_dispatch:1:__write' \
     "$tmp/index_write_slice.out"
-grep -q 'trait-dispatch\[resolved\] index_write_slice_dispatch:1:get_view -> index_write_slice_dispatch:1:slice' \
+grep -q 'trait-dispatch\[resolved\] index_write_slice_dispatch:1:get_view -> index_write_slice_dispatch:1:__slice' \
     "$tmp/index_write_slice.out"
 
 "$compiler" preprocess --dump-symbols --dump-link-unit \
@@ -4006,11 +3715,11 @@ grep -q 'trait-dispatch\[resolved\] index_write_slice_dispatch:1:get_view -> ind
     cat "$tmp/generic_index.out"
     exit 1
 }
-grep -q 'deferred generic_index_dispatch -> <pending>:<pending>.*generic index dispatch awaits specialization' \
+grep -q 'deferred generic_index_dispatch -> <pending>:<pending>.*generic trait dispatch awaits specialization' \
     "$tmp/generic_index.out"
-grep -q 'resolved generic_index_dispatch -> generic_index_dispatch:2:Index_Load' \
+grep -q 'resolved generic_index_dispatch -> generic_index_dispatch:2:Index_Read' \
     "$tmp/generic_index.out"
-grep -q 'Index_Load: type, .*uses=1, declaration=1:1, definitions=\[\], use-sites=\[7:61\]' \
+grep -q 'Index_Read: type, .*uses=1, declaration=1:1, definitions=\[\], use-sites=\[7:61\]' \
     "$tmp/generic_index.out"
 grep -q 'trait-dispatch\[deferred\] generic_index_dispatch:1:generic_get' \
     "$tmp/generic_index.out"
@@ -4062,7 +3771,8 @@ if "$compiler" preprocess "$program_dir/index_slice_bad_bound.n00b" \
 fi
 grep -q 'LANTERN-T0001' "$tmp/index_slice_bad_bound.out"
 
-"$compiler" preprocess --dump-symbols "$program_dir/ordering_trait.n00b" \
+"$compiler" preprocess --dump-symbols --dump-link-unit \
+    "$program_dir/ordering_trait.n00b" \
     >"$tmp/ordering_trait.out" 2>&1 || {
     cat "$tmp/ordering_trait.out"
     exit 1
@@ -4075,10 +3785,74 @@ grep 'less: function' "$tmp/ordering_trait.out" | grep -q -- '-> bool' || {
 for operation in less_equal greater greater_equal; do
     grep "$operation: function" "$tmp/ordering_trait.out" | grep -q -- '-> bool' || {
         cat "$tmp/ordering_trait.out"
-        echo "$operation did not infer bool through Comparable.cmp" >&2
+        echo "$operation did not infer bool through Comparable.__cmp" >&2
         exit 1
     }
 done
+test "$(grep -c 'trait-dispatch\[resolved\] ordering_trait:1:.* -> ordering_trait:1:__cmp' \
+    "$tmp/ordering_trait.out")" -eq 4
+"$compiler" lower --dump-ir "$program_dir/ordering_trait.n00b" \
+    >"$tmp/ordering_trait.ir" 2>"$tmp/ordering_trait.err" || {
+    cat "$tmp/ordering_trait.err"
+    exit 1
+}
+test "$(grep -c '= call @__cmp,' "$tmp/ordering_trait.ir")" -eq 4
+grep -q 'enum.const "less", 0' "$tmp/ordering_trait.ir"
+grep -q 'enum.const "equal", 1' "$tmp/ordering_trait.ir"
+grep -q 'enum.const "greater", 2' "$tmp/ordering_trait.ir"
+
+"$compiler" preprocess --dump-link-unit "$program_dir/equality_trait.n00b" \
+    >"$tmp/equality_trait.link" 2>"$tmp/equality_trait.err" || {
+    cat "$tmp/equality_trait.err"
+    exit 1
+}
+test "$(grep -c 'trait-dispatch\[resolved\] equality_trait:1:.* -> equality_trait:1:__equal' \
+    "$tmp/equality_trait.link")" -eq 2
+test "$(grep -c 'trait-dispatch\[resolved\] equality_trait:1:.* -> equality_trait:1:__cmp' \
+    "$tmp/equality_trait.link")" -eq 2
+"$compiler" lower --dump-ir "$program_dir/equality_trait.n00b" \
+    >"$tmp/equality_trait.ir" 2>"$tmp/equality_trait.err" || {
+    cat "$tmp/equality_trait.err"
+    exit 1
+}
+test "$(grep -c '= call @__equal,' "$tmp/equality_trait.ir")" -eq 2
+test "$(grep -c '= call @__cmp,' "$tmp/equality_trait.ir")" -eq 2
+grep -q 'enum.const "equal", 1' "$tmp/equality_trait.ir"
+"$compiler" lower --dump-ir "$program_dir/equality_trait_failure.n00b" \
+    >"$tmp/equality_trait_failure.ir" \
+    2>"$tmp/equality_trait_failure.err" || {
+    cat "$tmp/equality_trait_failure.err"
+    exit 1
+}
+grep -q '= call @__cmp,' "$tmp/equality_trait_failure.ir"
+grep -q 'variant.tag ' "$tmp/equality_trait_failure.ir"
+grep -q 'enum.const "equal", 1' "$tmp/equality_trait_failure.ir"
+grep -q 'fail %__n00bb_' "$tmp/equality_trait_failure.ir"
+
+"$compiler" lower --dump-ir "$program_dir/ordering_trait_failure.n00b" \
+    >"$tmp/ordering_trait_failure.ir" \
+    2>"$tmp/ordering_trait_failure.err" || {
+    cat "$tmp/ordering_trait_failure.err"
+    exit 1
+}
+grep -q '= call @__cmp,' "$tmp/ordering_trait_failure.ir"
+grep -q 'variant.tag ' "$tmp/ordering_trait_failure.ir"
+grep -q 'fail %__n00bb_' "$tmp/ordering_trait_failure.ir"
+if "$compiler" lower "$program_dir/ordering_trait_failure_unhandled.n00b" \
+    >"$tmp/ordering_trait_failure_unhandled.out" \
+    2>"$tmp/ordering_trait_failure_unhandled.err"; then
+    echo 'unhandled comparison failure unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'uncaught call error must match' \
+    "$tmp/ordering_trait_failure_unhandled.err"
+
+"$compiler" lower --dump-ir "$program_dir/enum_constant_lower.n00b" \
+    >"$tmp/enum_constant_lower.ir" 2>"$tmp/enum_constant_lower.err" || {
+    cat "$tmp/enum_constant_lower.err"
+    exit 1
+}
+grep -q 'enum.const "equal", 1' "$tmp/enum_constant_lower.ir"
 
 "$compiler" preprocess --dump-symbols "$program_dir/sized_integer_types.n00b" \
     >"$tmp/sized_integer_types.out" 2>&1 || {
@@ -4727,11 +4501,151 @@ grep -q 'trait-dispatch\[resolved\] generic_trait_dispatch:1:generic_render -> g
     echo 'constrained generic trait dispatch did not lower to its method requirement' >&2
     exit 1
 }
-grep -q 'call @__trait_req_Render_render' "$tmp/generic_trait_dispatch.ir"
+grep -q 'trait.method .*@__trait_req_Render_render' "$tmp/generic_trait_dispatch.ir"
 grep -q 'func @generic_render(%item: `a where' \
     "$tmp/generic_trait_dispatch.ir"
 grep -q 'trait-dispatch\[resolved\].*Render.render' \
     "$tmp/generic_trait_dispatch.ir"
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/generic_trait_default_call.n00b" \
+    >"$tmp/generic_trait_default_call.ir" 2>&1 || {
+    cat "$tmp/generic_trait_default_call.ir"
+    echo 'generic trait call with a defaulted parameter did not lower' >&2
+    exit 1
+}
+grep -q 'trait.method .*@__trait_req_Add_Amount_add_amount' \
+    "$tmp/generic_trait_default_call.ir"
+grep -q 'call %.*, .*missing' \
+    "$tmp/generic_trait_default_call.ir"
+grep -q '__trait_req_Add_Amount_add_amount.*!ir.optional_parameter(true)' \
+    "$tmp/generic_trait_default_call.ir"
+"$compiler" library --dump-ir --dump-link-unit \
+    "$script_dir/programs/trait_dispatch_single.n00b" \
+    >"$tmp/linkable_trait_dispatch.ir" 2>&1 || :
+grep -q 'trait.method .*@__trait_req_Render_render' \
+    "$tmp/linkable_trait_dispatch.ir"
+grep -q 'trait-dispatch\[resolved\].*-> trait_dispatch_single:1:Render.render' \
+    "$tmp/linkable_trait_dispatch.ir"
+grep -q 'function-global-unknown\[unavailable\].*use_render' \
+    "$tmp/linkable_trait_dispatch.ir"
+if grep -q 'call @render,' "$tmp/linkable_trait_dispatch.ir" \
+    || grep -q 'trait-dispatch\[resolved\].*-> trait_dispatch_single:1:render at' \
+        "$tmp/linkable_trait_dispatch.ir" \
+    || grep -q '^error\[' "$tmp/linkable_trait_dispatch.ir"; then
+    cat "$tmp/linkable_trait_dispatch.ir"
+    echo 'linkable trait call lowered to a fixed implementation' >&2
+    exit 1
+fi
+"$compiler" library --dump-ir \
+    "$script_dir/programs/index_load_dispatch.n00b" \
+    >"$tmp/linkable_index_read.ir" 2>&1 || :
+grep -q 'trait.method .*@__trait_req_Index_Read___read' \
+    "$tmp/linkable_index_read.ir"
+"$compiler" library --dump-ir \
+    "$script_dir/programs/array_index_store_lowering.n00b" \
+    >"$tmp/linkable_index_write.ir" 2>&1 || :
+grep -q 'trait.method .*@__trait_req_Index_Write___write' \
+    "$tmp/linkable_index_write.ir"
+if grep -q 'call @__write,' "$tmp/linkable_index_write.ir" \
+    || grep -q '^error\[' "$tmp/linkable_index_write.ir"; then
+    cat "$tmp/linkable_index_write.ir"
+    echo 'linkable indexed write lowered to a fixed implementation' >&2
+    exit 1
+fi
+"$compiler" library --dump-ir \
+    "$script_dir/programs/preprocessor/equality_trait.n00b" \
+    >"$tmp/linkable_equality.ir" 2>&1 || :
+grep -q 'trait.method .*@__trait_req_Equal___equal' \
+    "$tmp/linkable_equality.ir"
+grep -q 'trait.method .*@__trait_req_Comparable___cmp' \
+    "$tmp/linkable_equality.ir"
+if grep -q 'call @__equal,' "$tmp/linkable_equality.ir" \
+    || grep -q 'call @__cmp,' "$tmp/linkable_equality.ir" \
+    || grep -q '^error\[' "$tmp/linkable_equality.ir"; then
+    cat "$tmp/linkable_equality.ir"
+    echo 'linkable comparison lowered to a fixed implementation' >&2
+    exit 1
+fi
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_add_result.n00b" \
+    >"$tmp/operator_add_result.ir" 2>&1 || {
+    cat "$tmp/operator_add_result.ir"
+    echo 'operator method result type did not lower' >&2
+    exit 1
+}
+grep -q ': string = call @__add, %left, %right' \
+    "$tmp/operator_add_result.ir"
+"$compiler" library --dump-ir \
+    "$script_dir/programs/operator_add_result.n00b" \
+    >"$tmp/linkable_operator_add.ir" 2>&1 || :
+grep -q 'trait.method .*@__trait_req_Add___add' \
+    "$tmp/linkable_operator_add.ir"
+if grep -q 'call @__add,' "$tmp/linkable_operator_add.ir" \
+    || grep -q '^error\[' "$tmp/linkable_operator_add.ir"; then
+    cat "$tmp/linkable_operator_add.ir"
+    echo 'linkable arithmetic operator lowered to a fixed implementation' >&2
+    exit 1
+fi
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_add_failure.n00b" \
+    >"$tmp/operator_add_failure.ir" 2>&1 || {
+    cat "$tmp/operator_add_failure.ir"
+    echo 'failing operator method did not lower' >&2
+    exit 1
+}
+grep -q 'variant.payload .*"error"' "$tmp/operator_add_failure.ir"
+grep -q 'fail %' "$tmp/operator_add_failure.ir"
+if "$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_add_wrong_argument.n00b" \
+    >"$tmp/operator_add_wrong_argument.ir" 2>&1; then
+    echo 'operator method accepted an incompatible right argument' >&2
+    exit 1
+fi
+grep -q 'error\[N00BB-T0003\].*__add' \
+    "$tmp/operator_add_wrong_argument.ir"
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_unary_traits.n00b" \
+    >"$tmp/operator_unary_traits.ir" 2>&1 || {
+    cat "$tmp/operator_unary_traits.ir"
+    echo 'unary trait methods did not lower' >&2
+    exit 1
+}
+grep -q ': string = call @__negate, %item' \
+    "$tmp/operator_unary_traits.ir"
+grep -q ': bool = call @__not, %item' \
+    "$tmp/operator_unary_traits.ir"
+"$compiler" library --dump-ir \
+    "$script_dir/programs/operator_unary_traits.n00b" \
+    >"$tmp/linkable_operator_unary_traits.ir" 2>&1 || :
+grep -q 'trait.method "Negate", "__negate".*@__trait_req_Negate___negate' \
+    "$tmp/linkable_operator_unary_traits.ir"
+grep -q 'trait.method "Not", "__not".*@__trait_req_Not___not' \
+    "$tmp/linkable_operator_unary_traits.ir"
+if grep -q 'call @__negate,' "$tmp/linkable_operator_unary_traits.ir" \
+    || grep -q 'call @__not,' "$tmp/linkable_operator_unary_traits.ir" \
+    || grep -q '^error\[' "$tmp/linkable_operator_unary_traits.ir"; then
+    cat "$tmp/linkable_operator_unary_traits.ir"
+    echo 'linkable unary operator lowered to a fixed implementation' >&2
+    exit 1
+fi
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_string_add.n00b" \
+    >"$tmp/operator_string_add.ir" 2>&1 || {
+    cat "$tmp/operator_string_add.ir"
+    exit 1
+}
+grep -q 'extern func @__string_add' "$tmp/operator_string_add.ir"
+grep -q ': string = call @__string_add,' "$tmp/operator_string_add.ir"
+"$compiler" library --dump-ir \
+    "$script_dir/programs/operator_string_add.n00b" \
+    >"$tmp/linkable_operator_string_add.ir" 2>&1 || :
+grep -q 'trait.method "Add", "__add".*@__trait_req_Add___add' \
+    "$tmp/linkable_operator_string_add.ir"
+if grep -q 'call @__string_add,' \
+    "$tmp/linkable_operator_string_add.ir"; then
+    cat "$tmp/linkable_operator_string_add.ir"
+    exit 1
+fi
 "$compiler" lower --dump-ir --dump-link-unit \
     "$script_dir/programs/generic_trait_correlated_result.n00b" \
     >"$tmp/generic_trait_correlated_result.ir" 2>&1 || {
@@ -4741,7 +4655,7 @@ grep -q 'trait-dispatch\[resolved\].*Render.render' \
 }
 grep -q 'func @generic_echo(%item: `a' \
     "$tmp/generic_trait_correlated_result.ir"
-grep -q 'call @__trait_req_Echo_echo' \
+grep -q 'trait.method .*@__trait_req_Echo_echo' \
     "$tmp/generic_trait_correlated_result.ir"
 grep -Fq 'call_signature((`a) -> `a fail: nil)' \
     "$tmp/generic_trait_correlated_result.ir"
@@ -4786,7 +4700,7 @@ grep -q 'N00BB-T0003.*generic call argument 2 has type' \
 }
 grep -q 'func @generic_read_failure(%item: `a' \
     "$tmp/generic_trait_failure_channel.ir"
-grep -Fq 'call @__trait_req_ReadFailure_read_failure' \
+grep -Fq '@__trait_req_ReadFailure_read_failure' \
     "$tmp/generic_trait_failure_channel.ir"
 grep -Fq 'call_signature((`a) -> int fail: string)' \
     "$tmp/generic_trait_failure_channel.ir"
@@ -4806,9 +4720,9 @@ grep -q 'trait-specialization\[resolved\] root:1:generic_render -> label_impl:1:
     "$tmp/generic_trait_specialization.out"
 grep -q 'func @generic_render(%item: `a where' \
     "$tmp/generic_trait_specialization.out"
-grep -q 'call @__trait_req_Render_render' \
+grep -q 'trait.method .*@__trait_req_Render_render' \
     "$tmp/generic_trait_specialization.out"
-grep -q 'call @__trait_req_Render_measure' \
+grep -q 'trait.method .*@__trait_req_Render_measure' \
     "$tmp/generic_trait_specialization.out"
 generic_specialization_count=$(grep -c \
     'trait-specialization\[resolved\] root:1:generic_render' \
@@ -6260,7 +6174,7 @@ grep -q 'warning\[N00BB-PPW0001\]: line 1, column 1: heads up' \
 "$compiler" preprocess "$program_dir/nested_warnings.n00b" \
     >"$tmp/nested_warnings.out" 2>&1
 grep -q 'line 1, column 1: first' "$tmp/nested_warnings.out"
-grep -q 'line 1, column 28: second' "$tmp/nested_warnings.out"
+grep -q 'line 1, column 27: second' "$tmp/nested_warnings.out"
 [ "$(grep -c 'N00BB-PPW0001' "$tmp/nested_warnings.out")" -eq 2 ]
 
 if "$compiler" preprocess "$program_dir/error.n00b" >"$tmp/error.out" 2>&1; then

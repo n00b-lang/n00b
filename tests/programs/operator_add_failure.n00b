@@ -1,0 +1,11 @@
+type Box {
+    value: int
+}
+
+func __add(left: Box, right: int) -> string fail: int {
+    fail 7
+}
+
+func combine(left: Box, right: int) -> string fail: int {
+    return left + right
+}

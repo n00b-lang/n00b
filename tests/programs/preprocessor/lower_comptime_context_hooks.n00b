@@ -4,12 +4,9 @@ context ValueContext(seed: int) provides: int {
     ensure(guard) {}
 }
 
-func compile_value() -> int {
-    return comptime {
-        var result: int
-        with entered = ValueContext(7) {
-            result = entered
-        }
-        value result
+comptime {
+    var result: int
+    with entered = ValueContext(7) {
+        result = entered
     }
 }

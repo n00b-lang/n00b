@@ -1,0 +1,3 @@
+func old_value_syntax() -> int {
+    value 42
+}

@@ -1,8 +1,8 @@
-trait Index_Load {
-    func load(self: `T, index: int) -> array[int] fail: int
+trait Index_Read {
+    func __read(self: `T, index: int) -> array[int] fail: int
 }
 
-func load(self: array[array[int]], index: int) -> array[int] fail: int {
+func __read(self: array[array[int]], index: int) -> array[int] fail: int {
     return new[array[int]](2)
 }
 

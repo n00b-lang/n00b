@@ -1,1 +1,1 @@
-compile_warning("first") + compile_warning("second")
+compile_warning("first"); compile_warning("second")

@@ -1,0 +1,3 @@
+func invert(value: bool) -> bool {
+    return !value
+}

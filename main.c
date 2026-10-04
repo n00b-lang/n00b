@@ -274,10 +274,12 @@ typedef struct {
     parse_sym_entry_t *initializer_owner;
     core_string_t dispatch_trait;
     core_string_t dispatch_method;
+    const char *resolved_trait_name;
     bool dotted_path;
     bool trait_reference;
     bool variant_case_candidate;
     bool constructor_call;
+    bool operator_dispatch;
     bool in_module_initializer;
 } n00bb_link_use_site_t;
 core_list_decl(n00bb_link_use_site_t);
@@ -394,6 +396,7 @@ typedef struct {
     th_env *interface_environment;
     const th_env *const *linked_interfaces;
     size_t linked_interface_count;
+    bool may_link_further;
 } n00bb_link_analysis_t;
 
 typedef enum {
@@ -432,6 +435,7 @@ static parse_sym_entry_t *initializer_declaration_symbol(
 static parse_tree_t *link_initializer_value(parse_grammar_t *grammar,
                                             parse_tree_t *definition,
                                             parse_sym_entry_t *symbol);
+static bool primitive_operator_site(n00bb_link_use_site_t *site);
 
 static bool
 diag_location_precedes(core_diag_location_t left,
@@ -522,6 +526,10 @@ static ir_value_t *n00bb_emit_outcome_payload(ir_lower_context_t *context,
                                                const char *arm,
                                                th_type *type,
                                                ir_span_t span);
+static bool n00bb_unwrap_call_outcome(ir_lower_context_t *context,
+                                      parse_visit_t *visit,
+                                      ir_value_t *outcome, ir_span_t span,
+                                      ir_value_t **success);
 static parse_sym_entry_t *formal_symbol_at(parse_grammar_t *grammar,
                                             parse_tree_t *node,
                                             size_t target, size_t *index);
@@ -548,6 +556,7 @@ static core_link_declaration_t *link_declaration_for_symbol(
 static bool n00bb_builtin_function(parse_sym_entry_t *symbol);
 static bool n00bb_builtin_reference_function(parse_sym_entry_t *symbol);
 static bool n00bb_builtin_option_function(parse_sym_entry_t *symbol);
+static bool n00bb_builtin_string_operator(parse_sym_entry_t *symbol);
 static th_type *n00bb_atomic_element_type(th_type *type);
 static parse_sym_entry_t *n00bb_atomic_member_lvalue_root(
     parse_grammar_t *grammar, core_translation_unit_t *unit,
@@ -713,6 +722,18 @@ static bool n00bb_reference_target(parse_grammar_t *grammar,
 static parse_sym_entry_t *resolve_linked_method(
     core_link_unit_t *link, n00bb_link_use_site_t *site,
     core_translation_unit_t *unit, const th_env_method_t *method);
+static parse_sym_entry_t *trait_method_requirement_symbol(
+    parse_grammar_t *grammar, n00bb_link_analysis_t *analysis,
+    core_translation_unit_t *caller, core_string_t qualified_trait,
+    core_string_t method_name);
+static parse_sym_entry_t *linkable_trait_requirement(
+    n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
+    n00bb_link_use_site_t *site, parse_sym_entry_t *symbol);
+static ir_value_t *n00bb_select_trait_method(
+    ir_lower_context_t *context, parse_grammar_t *grammar,
+    core_translation_unit_t *owner, parse_sym_entry_t *requirement,
+    th_type *signature, ir_value_t *receiver, ir_value_t *contract,
+    ir_span_t span);
 static bool function_lifetime_effects_for_symbol(
     n00bb_link_analysis_t *analysis, parse_sym_entry_t *function,
     n00bb_function_lifetime_effects_t *out);
@@ -1194,8 +1215,7 @@ declared_in_comptime(parse_grammar_t *grammar, parse_tree_t *node)
 {
     for (parse_tree_t *at = node; at;
          at = core_tree_node_value(at).parent) {
-        if (nt_is(grammar, at, "comptime-stmt")
-            || nt_is(grammar, at, "comptime-value-expr"))
+        if (nt_is(grammar, at, "comptime-stmt"))
             return true;
     }
     return false;
@@ -1970,6 +1990,34 @@ finalize_variant_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
     if (!type) return false;
     symbol->type = type;
     core_tree_node_value(node).type = type;
+    return true;
+}
+
+static bool
+finalize_enum_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
+                          core_translation_unit_t *unit,
+                          n00bb_tu_state_t *state)
+{
+    parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
+    if (!symbol || !unit || !state || !state->types) return false;
+    core_buffer_t qualified = {0};
+    append_module_type_name(unit, symbol->name, &qualified);
+    th_type *type = qualified.data
+        ? th_name(state->types, qualified.data) : nullptr;
+    core_buffer_release(&qualified);
+    if (!type) return false;
+    symbol->type = type;
+    core_tree_node_value(node).type = type;
+    for (parse_sym_entry_t *item = symbol->member_scope
+            ? symbol->member_scope->first_in_scope : nullptr;
+         item; item = item->next_in_scope) {
+        if (!item->decl_node
+            || !nt_is(grammar, item->decl_node, "enum-item"))
+            continue;
+        item->kind = PARSE_SYM_ENUM_CONST;
+        item->type = type;
+        core_tree_node_value(item->decl_node).type = type;
+    }
     return true;
 }
 
@@ -4039,9 +4087,22 @@ record_context_hook_signature(parse_grammar_t *grammar,
             ? core_tree_node_value(hook_type_node).type
             : hook_index == 2 ? failure_type : provided_type;
         if (!parameter_type) valid = false;
-        else core_list_push(hook_params, ((th_param){
-            .mode = TH_IN, .type = parameter_type,
-        }));
+        else {
+            parse_sym_entry_t *parameter_symbol =
+                core_tree_node_value(hook_param).sym;
+            if (parameter_symbol) {
+                th_type *previous = parameter_symbol->type;
+                if (previous && !th_unify_in_place(state->types, previous,
+                                                    parameter_type))
+                    valid = false;
+                else propagate_symbol_type(parameter_symbol, state->types,
+                                           previous, parameter_type);
+            }
+            core_tree_node_value(hook_param).type = parameter_type;
+            core_list_push(hook_params, ((th_param){
+                .mode = TH_IN, .type = parameter_type,
+            }));
+        }
     }
     th_type *hook_return = hook_index == 0 ? provided_type
         : th_name(state->types, "nil");
@@ -4430,6 +4491,14 @@ is_named_type_declaration(parse_grammar_t *grammar,
             || nt_is(grammar, symbol->decl_node, "trait-decl"));
 }
 
+static bool
+is_named_type_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
+{
+    return is_named_type_declaration(grammar, symbol)
+        || (symbol && parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.builtin-type")));
+}
+
 static parse_sym_entry_t *
 lookup_named_type_reference(parse_grammar_t *grammar,
                            n00bb_tu_state_t *state,
@@ -4440,13 +4509,13 @@ lookup_named_type_reference(parse_grammar_t *grammar,
     parse_sym_entry_t *symbol = scope
         ? parse_symtab_lookup_scoped(symtab, scope,
             CORE_STRING_STATIC("type"), name) : nullptr;
-    if (!is_named_type_declaration(grammar, symbol)) {
+    if (!is_named_type_symbol(grammar, symbol)) {
         parse_scope_t *module_types = type_module_scope(state);
         symbol = module_types
             ? parse_symtab_lookup_scoped(symtab, module_types,
                 CORE_STRING_STATIC("type"), name) : nullptr;
     }
-    return is_named_type_declaration(grammar, symbol) ? symbol : nullptr;
+    return is_named_type_symbol(grammar, symbol) ? symbol : nullptr;
 }
 
 static bool
@@ -5298,6 +5367,41 @@ reference_is_simple_assignment_target(parse_grammar_t *grammar,
 }
 
 static bool
+resolve_local_enum_constant(parse_grammar_t *grammar,
+                            n00bb_tu_state_t *state,
+                            n00bb_link_use_site_t *site)
+{
+    if (!state || !state->annotations || !site || site->dotted_path
+        || !site->node || !site->member_name.data) return false;
+    parse_tree_t *receiver = site->node;
+    parse_tree_t *parent = core_tree_node_value(receiver).parent;
+    while (parent && !dotted_symbol_path_node(grammar, parent)
+           && !core_tree_is_leaf(parent)
+           && core_tree_num_children(parent) == 1
+           && core_tree_child(parent, 0) == receiver) {
+        receiver = parent;
+        parent = core_tree_node_value(parent).parent;
+    }
+    if (!dotted_symbol_path_node(grammar, parent)
+        || core_tree_child(parent, 0) != receiver) return false;
+    parse_sym_entry_t *type = parse_symtab_lookup_scoped(
+        state->annotations->symtab, site->scope,
+        CORE_STRING_STATIC("type"), site->member_name);
+    if (!type || !type->member_scope
+        || !core_string_eq(type->member_scope->scope_tag,
+                           CORE_STRING_STATIC("enum"))) return false;
+    core_string_t name = first_token_text(core_tree_child(parent, 2));
+    parse_sym_entry_t *item = parse_symtab_lookup_in(type->member_scope, name);
+    if (!item || item->kind != PARSE_SYM_ENUM_CONST || !item->type
+        || !parse_tree_set_resolution_symbol(site->node, type)
+        || !parse_tree_set_resolution_symbol(parent, item)) return false;
+    site->symbol = type;
+    core_tree_node_value(site->node).type = type->type;
+    core_tree_node_value(parent).type = item->type;
+    return true;
+}
+
+static bool
 resolve_imported_module_symbols(parse_grammar_t *grammar,
     core_list_t(core_translation_unit_ptr_t) *units)
 {
@@ -5379,6 +5483,8 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                     }
                     else site->symbol = nullptr;
                 }
+                if (!site->symbol)
+                    resolve_local_enum_constant(grammar, state, site);
             }
             if (site->symbol && reference_is_simple_assignment_target(
                     grammar, unit, site->node, site->symbol)) {
@@ -5798,6 +5904,11 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 signature = matched != SIZE_MAX
                     ? requirements[matched].signature : nullptr;
                 signature_instantiated = signature != nullptr;
+                n00bb_link_use_site_t *site = link_use_site_for_node(
+                    state, member);
+                if (site && matched != SIZE_MAX)
+                    site->resolved_trait_name =
+                        requirements[matched].trait_name;
                 core_free(requirements);
                 core_free(method_name);
             }
@@ -5805,13 +5916,15 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 char *method_name = core_strndup(method_text.data,
                                                  method_text.u8_bytes);
                 th_env_method_t method = {0};
+                const char *trait_name = nullptr;
                 th_env_method_status_t method_status =
                     th_env_method_resolve_by_name(state->types,
-                        receiver_type, method_name, &method, nullptr);
+                        receiver_type, method_name, &method, &trait_name);
                 if (method_status == TH_ENV_METHOD_FOUND) {
                     signature = method.signature;
                     n00bb_link_use_site_t *site = link_use_site_for_node(
                         state, member);
+                    if (site) site->resolved_trait_name = trait_name;
                     callee_symbol = resolve_linked_method(link, site, unit,
                                                           &method);
                     th_type *target_contract = callee_symbol
@@ -6539,6 +6652,11 @@ n00bb_emit_binary_ir(ir_lower_context_t *context, ir_op_t op,
             && result_class == IR_CLASS_SINT
             && !ir_instr_add_mod(instruction, "trap")) return nullptr;
     }
+    ir_class_t operand_class = ir_machine_of(context->module, left->type).class;
+    if (operand_class == IR_CLASS_FLOAT
+        && (op == IR_OP_EQ || op == IR_OP_NE || op == IR_OP_LT
+            || op == IR_OP_LE || op == IR_OP_GT || op == IR_OP_GE)
+        && !ir_instr_add_mod(instruction, "ordered")) return nullptr;
     instruction->span = span;
     return instruction->dest;
 }
@@ -9031,6 +9149,327 @@ n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
 }
 
 static ir_lower_result_t
+n00bb_emit_comparison_test(ir_lower_context_t *context, ir_value_t *value,
+                           parse_sym_entry_t *member, ir_span_t span)
+{
+    n00bb_enum_value_t *ordinal = member && member->has_comptime_value
+        ? member->comptime_value : nullptr;
+    if (!ordinal || !member->type
+        || !ir_type_eq(context->module, member->type, value->type))
+        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+            "comparison member has no matching enum value and type");
+    ir_instr_t *constant = ir_instr_add(context->block, IR_OP_ENUM_CONST);
+    ir_instr_t *test = ir_instr_add(context->block, IR_OP_EQ);
+    char constant_name[48], test_name[48];
+    snprintf(constant_name, sizeof(constant_name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    snprintf(test_name, sizeof(test_name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    if (!constant || !test || !bool_type
+        || !ir_instr_set_dest(constant, constant_name, member->type)
+        || !ir_instr_operand_name(constant, member->name.data)
+        || !ir_instr_operand_uint(constant, ordinal->magnitude)
+        || !ir_instr_set_dest(test, test_name, bool_type)
+        || !ir_instr_operand_value(test, value)
+        || !ir_instr_operand_value(test, constant->dest))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not test the comparison result");
+    constant->span = test->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, test->dest};
+}
+
+static parse_sym_entry_t *
+n00bb_comparison_member(n00bb_link_analysis_t *analysis, th_type *type,
+                        const char *name)
+{
+    if (!analysis || !type || !name) return nullptr;
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        parse_namespace_t *type_ns = symtab
+            ? parse_symtab_ns(symtab, CORE_STRING_STATIC("type")) : nullptr;
+        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+             scope; scope = scope->all_next) {
+            if (!type_ns || scope->ns != type_ns) continue;
+            for (parse_sym_entry_t *symbol = scope->first_in_scope;
+                 symbol; symbol = symbol->next_in_scope) {
+                if (!symbol->type || !symbol->member_scope
+                    || !core_string_eq(symbol->member_scope->scope_tag,
+                                       CORE_STRING_STATIC("enum"))
+                    || th_hash(state->types, symbol->type)
+                        != th_hash(state->types, type)) continue;
+                parse_sym_entry_t *member = parse_symtab_lookup_in(
+                    symbol->member_scope, core_string_from_cstr(name));
+                if (member && member->kind == PARSE_SYM_ENUM_CONST)
+                    return member;
+            }
+        }
+    }
+    return nullptr;
+}
+
+static ir_lower_result_t n00bb_lower_operator_method(
+    ir_lower_context_t *context, parse_visit_t *visit,
+    ir_value_t *const *operands, size_t operand_count,
+    th_type *result_type, ir_span_t span);
+
+static ir_lower_result_t
+n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
+                       ir_value_t *const *operands, th_type *result_type,
+                       ir_span_t span, core_string_t spelling)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_use_site_t *site = caller
+        ? link_use_site_for_node(caller, visit->node) : nullptr;
+    bool equality = core_string_eq(spelling, CORE_STRING_STATIC("=="))
+        || core_string_eq(spelling, CORE_STRING_STATIC("!="));
+    bool direct_equal = equality && site
+        && core_string_eq(site->dispatch_method,
+                          CORE_STRING_STATIC("__equal"));
+    n00bb_link_analysis_t *analysis = caller
+        ? caller->link_analysis : nullptr;
+    th_type *comparison_type = direct_equal ? result_type
+        : th_name(ir_module_types(context->module), "Comparison");
+    if (!comparison_type || !ir_type_eq(context->module, result_type,
+            n00bb_ir_builtin_type(context->module, "bool")))
+        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            "comparison expression must yield bool");
+    ir_lower_result_t called = n00bb_lower_operator_method(context, visit,
+        operands, 2, comparison_type, span);
+    if (called.status != IR_LOWER_VALUE) return called;
+    ir_value_t *comparison = called.value;
+
+    if (equality) {
+        ir_lower_result_t equal = {IR_LOWER_VALUE, comparison};
+        if (!direct_equal) {
+            parse_sym_entry_t *member = n00bb_comparison_member(
+                analysis, comparison_type, "equal");
+            equal = member
+                ? n00bb_emit_comparison_test(context, comparison, member, span)
+                : lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+                    "Comparison is missing the equal member");
+        }
+        if (equal.status != IR_LOWER_VALUE
+            || core_string_eq(spelling, CORE_STRING_STATIC("==")))
+            return equal;
+        ir_instr_t *false_value = ir_instr_add(context->block, IR_OP_CONST);
+        char false_name[48];
+        snprintf(false_name, sizeof(false_name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        if (!false_value
+            || !ir_instr_set_dest(false_value, false_name, result_type)
+            || !ir_instr_operand_int(false_value, 0))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not emit inequality's false value");
+        false_value->span = span;
+        ir_instr_t *not_equal = ir_instr_add(context->block, IR_OP_EQ);
+        char not_name[48];
+        snprintf(not_name, sizeof(not_name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        if (!not_equal
+            || !ir_instr_set_dest(not_equal, not_name, result_type)
+            || !ir_instr_operand_value(not_equal, equal.value)
+            || !ir_instr_operand_value(not_equal, false_value->dest))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not negate the equality result");
+        not_equal->span = span;
+        return (ir_lower_result_t){IR_LOWER_VALUE, not_equal->dest};
+    }
+
+    const char *first = core_string_eq(spelling, CORE_STRING_STATIC("<"))
+        || core_string_eq(spelling, CORE_STRING_STATIC("<="))
+            ? "less" : "greater";
+    parse_sym_entry_t *first_member = n00bb_comparison_member(
+        analysis, comparison_type, first);
+    ir_lower_result_t test = first_member
+        ? n00bb_emit_comparison_test(context, comparison, first_member, span)
+        : lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+            "Comparison is missing the required ordering member");
+    if (test.status != IR_LOWER_VALUE) return test;
+    if (!core_string_eq(spelling, CORE_STRING_STATIC("<="))
+        && !core_string_eq(spelling, CORE_STRING_STATIC(">=")))
+        return test;
+    parse_sym_entry_t *equal_member = n00bb_comparison_member(
+        analysis, comparison_type, "equal");
+    ir_lower_result_t equal = equal_member
+        ? n00bb_emit_comparison_test(context, comparison, equal_member, span)
+        : lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+            "Comparison is missing the equal member");
+    if (equal.status != IR_LOWER_VALUE) return equal;
+    ir_instr_t *truth = ir_instr_add(context->block, IR_OP_CONST);
+    ir_instr_t *either = ir_instr_add(context->block, IR_OP_SELECT);
+    char truth_name[48], name[48];
+    snprintf(truth_name, sizeof(truth_name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    snprintf(name, sizeof(name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    if (!truth || !either
+        || !ir_instr_set_dest(truth, truth_name, result_type)
+        || !ir_instr_operand_int(truth, 1)
+        || !ir_instr_set_dest(either, name, result_type)
+        || !ir_instr_operand_value(either, test.value)
+        || !ir_instr_operand_value(either, truth->dest)
+        || !ir_instr_operand_value(either, equal.value))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not combine comparison outcomes");
+    truth->span = either->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, either->dest};
+}
+
+static bool n00bb_attach_call_return_alias(ir_lower_context_t *context,
+    n00bb_lower_context_t *lower, n00bb_link_analysis_t *analysis,
+    parse_sym_entry_t *function, ir_value_t *const *arguments,
+    size_t argument_count, bool escapes, ir_value_t *result);
+static bool n00bb_tree_returns_value(parse_grammar_t *grammar,
+                                     parse_tree_t *node);
+
+static ir_lower_result_t
+n00bb_lower_operator_method(ir_lower_context_t *context,
+                          parse_visit_t *visit,
+                          ir_value_t *const *operands,
+                          size_t operand_count, th_type *result_type,
+                          ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_use_site_t *site = caller
+        ? link_use_site_for_node(caller, visit->node) : nullptr;
+    n00bb_link_analysis_t *analysis = caller
+        ? caller->link_analysis : nullptr;
+    parse_sym_entry_t *symbol = site ? site->symbol : nullptr;
+    bool builtin_string_add = n00bb_builtin_string_operator(symbol);
+    bool builtin_operator_trait = site && site->resolved_trait_name
+        && site->dispatch_trait.data
+        && !strcmp(site->resolved_trait_name, site->dispatch_trait.data);
+    if (!builtin_string_add) {
+        parse_sym_entry_t *requirement = linkable_trait_requirement(analysis,
+            lower->unit, site, symbol);
+        symbol = requirement ? requirement
+            : builtin_operator_trait ? symbol : nullptr;
+    }
+    core_translation_unit_t *owner = symbol
+        ? unit_for_symbol(visit->grammar, lower->units, symbol) : nullptr;
+    n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;
+    ir_func_t *function = owner_state
+        ? link_ir_function_for_phase(analysis, symbol,
+                                    lower->comptime_phase) : nullptr;
+    ir_module_t *module = owner_state
+        ? module_for_phase(owner_state, lower->comptime_phase) : nullptr;
+    ir_value_t *callee = module && function
+        ? ir_func_address(module, function) : nullptr;
+    if (!callee && builtin_string_add && !analysis->may_link_further) {
+        th_ctx *builtin_types = ir_module_types(context->module);
+        th_type *string = th_name(builtin_types, "string");
+        th_param builtin_params[] = {
+            {.mode = TH_IN, .type = string},
+            {.mode = TH_IN, .type = string},
+        };
+        th_type *builtin_signature = th_func_with_error(builtin_types,
+            string, th_name(builtin_types, "nil"), builtin_params, 2,
+            nullptr, nullptr, 0);
+        ir_func_t *builtin = ir_func_find(context->module, "__string_add");
+        if (!builtin && builtin_signature)
+            builtin = ir_func_add(context->module, "__string_add",
+                                  builtin_signature, IR_LINK_EXTERN);
+        callee = builtin ? ir_func_address(context->module, builtin) : nullptr;
+    }
+    if (!callee && !(builtin_operator_trait && analysis->may_link_further))
+        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+            "operator has no resolved trait method in this execution phase");
+    th_ctx *types = ir_module_types(context->module);
+    th_type *contract = symbol->callable_contract
+        ? symbol->callable_contract : symbol->type;
+    th_type *callable = is_scheme(contract)
+        ? th_instantiate(types, contract) : th_resolve(contract);
+    th_param parameters[2] = {
+        {.mode = TH_IN, .type = operands[0]->type},
+        {.mode = TH_IN, .type = operand_count == 2
+            ? operands[1]->type : nullptr},
+    };
+    th_type *shape = callable
+        ? th_func_with_error(types, result_type, th_func_error(callable),
+            parameters, operand_count, nullptr, nullptr, 0) : nullptr;
+    th_type *signature = shape ? th_unify(types, callable, shape) : nullptr;
+    if (!signature || th_func_nparams(signature) != operand_count
+        || th_func_rest(signature))
+        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            "operator operands or result do not match its trait method");
+    bool semantic_trait_call = symbol->scope
+        && core_string_eq(symbol->scope->scope_tag,
+                          CORE_STRING_STATIC("trait"));
+    if (builtin_operator_trait && analysis->may_link_further) {
+        core_buffer_t requirement_name = {0};
+        core_buffer_printf(&requirement_name, "__trait_req_%s_%.*s",
+            site->resolved_trait_name,
+            (int)site->dispatch_method.u8_bytes,
+            site->dispatch_method.data);
+        ir_func_t *requirement = requirement_name.data
+            ? ir_func_find(context->module, requirement_name.data) : nullptr;
+        if (!requirement && requirement_name.data)
+            requirement = ir_func_add(context->module,
+                requirement_name.data, signature, IR_LINK_EXTERN);
+        core_buffer_release(&requirement_name);
+        ir_value_t *requirement_address = requirement
+            ? ir_func_address(context->module, requirement) : nullptr;
+        char selected_name[48];
+        snprintf(selected_name, sizeof(selected_name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        ir_instr_t *selection = requirement_address
+            ? ir_instr_add(context->block, IR_OP_TRAIT_METHOD) : nullptr;
+        if (!selection || !ir_instr_set_dest(selection, selected_name,
+                                            signature)
+            || !ir_instr_operand_name(selection,
+                                      site->resolved_trait_name)
+            || !ir_instr_operand_name(selection,
+                                      site->dispatch_method.data)
+            || !ir_instr_operand_value(selection, operands[0])
+            || !ir_instr_operand_value(selection, requirement_address))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not retain the builtin operator trait selection");
+        selection->span = span;
+        callee = selection->dest;
+    }
+    if (semantic_trait_call) {
+        callee = n00bb_select_trait_method(context, visit->grammar,
+            owner, symbol, signature, operands[0], callee, span);
+        if (!callee)
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not select the operator trait requirement");
+    }
+    th_type *failure = th_func_error(signature);
+    bool can_fail = failure && !n00bb_nil_type(types, failure);
+    th_type *call_type = can_fail
+        ? ir_call_outcome_type(context->module, signature)
+        : th_func_ret(signature);
+    ir_instr_t *call = call_type
+        ? ir_instr_add(context->block, IR_OP_CALL) : nullptr;
+    char name[48];
+    snprintf(name, sizeof(name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    bool call_ok = call && ir_instr_set_dest(call, name, call_type)
+        && ir_instr_operand_value(call, callee);
+    for (size_t i = 0; call_ok && i < operand_count; i++)
+        call_ok = ir_instr_operand_value(call, operands[i]);
+    if (!call_ok || !ir_instr_set_call_signature(call, signature))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not emit the operator trait method call");
+    call->span = span;
+    if (!n00bb_attach_call_return_alias(context, lower, analysis, symbol,
+            operands, operand_count, n00bb_tree_returns_value(visit->grammar,
+                visit->node), call->dest))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not retain the operator result alias provenance");
+    ir_value_t *result = call->dest;
+    if (can_fail && !n00bb_unwrap_call_outcome(context, visit, result,
+                                               span, &result))
+        return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+    return (ir_lower_result_t){IR_LOWER_VALUE, result};
+}
+
+static ir_lower_result_t
 n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
                    ir_value_t *const *operands, size_t operand_count,
                    th_type *result_type, ir_span_t span, void *state)
@@ -9049,6 +9488,11 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
     else if (core_string_eq(spelling, CORE_STRING_STATIC("*"))) op = IR_OP_MUL;
     else if (core_string_eq(spelling, CORE_STRING_STATIC("/"))) op = IR_OP_DIV;
     else if (core_string_eq(spelling, CORE_STRING_STATIC("%"))) op = IR_OP_REM;
+    else if (core_string_eq(spelling, CORE_STRING_STATIC("&"))) op = IR_OP_AND;
+    else if (core_string_eq(spelling, CORE_STRING_STATIC("|"))) op = IR_OP_OR;
+    else if (core_string_eq(spelling, CORE_STRING_STATIC("^"))) op = IR_OP_XOR;
+    else if (core_string_eq(spelling, CORE_STRING_STATIC("<<"))) op = IR_OP_SHL;
+    else if (core_string_eq(spelling, CORE_STRING_STATIC(">>"))) op = IR_OP_SHR;
     else if (core_string_eq(spelling, CORE_STRING_STATIC("==")))
         op = IR_OP_EQ;
     else if (core_string_eq(spelling, CORE_STRING_STATIC("!=")))
@@ -9129,35 +9573,23 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
         same->span = span;
         return (ir_lower_result_t){IR_LOWER_VALUE, same->dest};
     }
-    ir_machine_t operand_machine = ir_machine_of(context->module,
-                                                  operands[0]->type);
-    if (comparison && !equality
-        && operand_machine.class != IR_CLASS_SINT
-        && operand_machine.class != IR_CLASS_UINT
-        && operand_machine.class != IR_CLASS_FLOAT)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "ordering comparisons require primitive numeric operands");
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_use_site_t *site = caller
+        ? link_use_site_for_node(caller, visit->node) : nullptr;
+    if (site && site->operator_dispatch && !primitive_operator_site(site))
+        return comparison
+            ? n00bb_lower_comparison(context, visit, operands,
+                                     result_type, span, spelling)
+            : n00bb_lower_operator_method(context, visit, operands, 2,
+                                          result_type, span);
 
-    ir_instr_t *instruction = ir_instr_add(context->block, op);
-    char name[48];
-    snprintf(name, sizeof(name), "__n00bb_%llu",
-             (unsigned long long)context->next_value_id++);
-    if (!instruction || !ir_instr_set_dest(instruction, name, result_type)
-        || !ir_instr_operand_value(instruction, operands[0])
-        || !ir_instr_operand_value(instruction, operands[1])
-        || (comparison && operand_machine.class == IR_CLASS_FLOAT
-            && !ir_instr_add_mod(instruction, "ordered")))
+    ir_value_t *value = n00bb_emit_binary_ir(context, op, result_type,
+                                              operands[0], operands[1], span);
+    if (!value)
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit a binary IR operation");
-    ir_machine_t result_machine = ir_machine_of(context->module,
-                                                result_type);
-    if (result_machine.class != IR_CLASS_FLOAT
-        && ir_op_accepts_mod(op, "trap")
-        && !ir_instr_add_mod(instruction, "trap"))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
-                           "could not set checked arithmetic semantics");
-    instruction->span = span;
-    return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
+    return (ir_lower_result_t){IR_LOWER_VALUE, value};
 }
 
 static ir_lower_result_t
@@ -9184,6 +9616,92 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
 }
 
 static ir_lower_result_t
+n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
+                 ir_value_t *const *operands, size_t operand_count,
+                 th_type *result_type, ir_span_t span, void *state)
+{
+    (void)state;
+    parse_tree_t *spec = child_nt(visit->grammar, visit->node, "type-spec");
+    th_type *target = spec ? core_tree_node_value(spec).type : nullptr;
+    if (operand_count != 1 || !operands || !operands[0] || !result_type
+        || !target || !ir_type_eq(context->module, target, result_type))
+        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                           "cast target and expression type are incomplete");
+    if (ir_type_eq(context->module, operands[0]->type, target))
+        return (ir_lower_result_t){IR_LOWER_VALUE, operands[0]};
+    ir_machine_t source = ir_machine_of(context->module, operands[0]->type);
+    ir_machine_t destination = ir_machine_of(context->module, target);
+    bool source_integer = source.class == IR_CLASS_SINT
+        || source.class == IR_CLASS_UINT;
+    bool target_integer = destination.class == IR_CLASS_SINT
+        || destination.class == IR_CLASS_UINT;
+    if (!source_integer || !target_integer)
+        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+                           "this cast has no defined conversion");
+    bool signedness_change = source.class != destination.class;
+    bool needs_check = destination.width < source.width
+        || signedness_change;
+    ir_instr_t *cast = ir_instr_add(context->block, IR_OP_CAST);
+    char name[48];
+    snprintf(name, sizeof(name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    if (!cast || !ir_instr_set_dest(cast, name, target)
+        || !ir_instr_operand_value(cast, operands[0])
+        || (needs_check && !ir_instr_add_mod(cast, "trap")))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not emit a checked cast");
+    cast->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};
+}
+
+static ir_lower_result_t
+n00bb_lower_bool_not(ir_lower_context_t *context, parse_visit_t *visit,
+                     ir_value_t *const *operands, size_t operand_count,
+                     th_type *result_type, ir_span_t span, void *state)
+{
+    (void)state;
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_use_site_t *site = caller
+        ? link_use_site_for_node(caller, visit->node) : nullptr;
+    if (site && site->operator_dispatch && !primitive_operator_site(site)) {
+        if (operand_count != 1 || !operands || !operands[0] || !result_type)
+            return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                               "logical negation has incomplete operands or type");
+        return n00bb_lower_operator_method(context, visit, operands, 1,
+                                           result_type, span);
+    }
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    if (operand_count != 1 || !operands || !operands[0] || !result_type
+        || !bool_type
+        || !ir_type_eq(context->module, operands[0]->type, bool_type)
+        || !ir_type_eq(context->module, result_type, bool_type))
+        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+                           "logical negation requires a bool operand");
+    ir_instr_t *false_value = ir_instr_add(context->block, IR_OP_CONST);
+    char false_name[48];
+    snprintf(false_name, sizeof(false_name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    if (!false_value
+        || !ir_instr_set_dest(false_value, false_name, bool_type)
+        || !ir_instr_operand_int(false_value, 0))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not emit false for logical negation");
+    false_value->span = span;
+    ir_instr_t *equal = ir_instr_add(context->block, IR_OP_EQ);
+    char name[48];
+    snprintf(name, sizeof(name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    if (!equal || !ir_instr_set_dest(equal, name, bool_type)
+        || !ir_instr_operand_value(equal, operands[0])
+        || !ir_instr_operand_value(equal, false_value->dest))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not emit logical negation");
+    equal->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, equal->dest};
+}
+
+static ir_lower_result_t
 n00bb_lower_negate(ir_lower_context_t *context, parse_visit_t *visit,
                    ir_value_t *const *operands, size_t operand_count,
                    th_type *result_type, ir_span_t span, void *state)
@@ -9206,15 +9724,25 @@ n00bb_lower_negate(ir_lower_context_t *context, parse_visit_t *visit,
     if (operand_count != 1 || !operands || !operands[0] || !result_type)
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                            "unary negation has incomplete operands or type");
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_use_site_t *site = caller
+        ? link_use_site_for_node(caller, visit->node) : nullptr;
+    if (site && site->operator_dispatch && !primitive_operator_site(site))
+        return n00bb_lower_operator_method(context, visit, operands, 1,
+                                           result_type, span);
     ir_instr_t *instruction = ir_instr_add(context->block, IR_OP_NEG);
     char name[48];
     snprintf(name, sizeof(name), "__n00bb_%llu",
              (unsigned long long)context->next_value_id++);
+    ir_class_t operand_class = ir_machine_of(context->module,
+                                             operands[0]->type).class;
+    bool checked_integer = operand_class == IR_CLASS_SINT
+        || operand_class == IR_CLASS_UINT;
     if (!instruction || !ir_instr_set_dest(instruction, name, result_type)
         || !ir_instr_operand_value(instruction, operands[0])
-        || !ir_instr_add_mod(instruction, "trap"))
+        || (checked_integer && !ir_instr_add_mod(instruction, "trap")))
         return lower_error(context, IR_DIAG_INTERNAL, span,
-                           "could not emit checked unary negation");
+                           "could not emit unary negation");
     instruction->span = span;
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
@@ -11717,6 +12245,29 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                            "module member lowering expects a typed reference");
     parse_node_resolution_t resolution = parse_tree_resolution(visit->node);
+    if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        && resolution.target.symbol
+        && resolution.target.symbol->kind == PARSE_SYM_ENUM_CONST) {
+        parse_sym_entry_t *member = resolution.target.symbol;
+        n00bb_enum_value_t *value = member->has_comptime_value
+            ? member->comptime_value : nullptr;
+        if (!value || !member->type
+            || !ir_type_eq(context->module, result_type, member->type))
+            return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                "enum constant has no matching resolved value and type");
+        ir_instr_t *constant = ir_instr_add(context->block,
+                                             IR_OP_ENUM_CONST);
+        char name[48];
+        snprintf(name, sizeof(name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        if (!constant || !ir_instr_set_dest(constant, name, result_type)
+            || !ir_instr_operand_name(constant, member->name.data)
+            || !ir_instr_operand_uint(constant, value->magnitude))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not emit the enum constant");
+        constant->span = span;
+        return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
+    }
     if (resolution.kind != PARSE_NODE_RESOLUTION_SYMBOL
         || !resolution.target.symbol
         || resolution.target.symbol->kind != PARSE_SYM_VARIABLE)
@@ -11897,6 +12448,50 @@ n00bb_is_nil_literal(parse_grammar_t *grammar, parse_tree_t *node)
     }
     return nt_is(grammar, node, "simple-lit")
         && core_string_eq(first_token_text(node), CORE_STRING_STATIC("nil"));
+}
+
+static th_type *trait_method_semantic_shape(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_sym_entry_t *symbol,
+    th_type *source);
+
+static ir_value_t *
+n00bb_select_trait_method(ir_lower_context_t *context,
+                          parse_grammar_t *grammar,
+                          core_translation_unit_t *owner,
+                          parse_sym_entry_t *requirement,
+                          th_type *signature, ir_value_t *receiver,
+                          ir_value_t *contract, ir_span_t span)
+{
+    if (!context || !owner || !requirement || !requirement->scope
+        || !receiver || !contract) return nullptr;
+    th_type *method_type = trait_method_semantic_shape(grammar, owner,
+                                                        requirement, signature);
+    if (!method_type) return nullptr;
+    core_buffer_t trait_name = {0};
+    core_buffer_printf(&trait_name, "%.*s.%.*s",
+        (int)owner->module.identifier.u8_bytes,
+        owner->module.identifier.data,
+        (int)requirement->scope->name.u8_bytes,
+        requirement->scope->name.data);
+    char *method_name = core_strndup(requirement->name.data,
+                                     requirement->name.u8_bytes);
+    char selected_name[48];
+    do {
+        snprintf(selected_name, sizeof(selected_name), "__n00bb_%llu",
+            (unsigned long long)context->next_value_id++);
+    } while (ir_value_find(context->function, selected_name));
+    ir_instr_t *selection = ir_instr_add(context->block, IR_OP_TRAIT_METHOD);
+    bool selected = selection && method_name
+        && ir_instr_set_dest(selection, selected_name, method_type)
+        && ir_instr_operand_name(selection, trait_name.data)
+        && ir_instr_operand_name(selection, method_name)
+        && ir_instr_operand_value(selection, receiver)
+        && ir_instr_operand_value(selection, contract);
+    core_buffer_release(&trait_name);
+    core_free(method_name);
+    if (!selected) return nullptr;
+    selection->span = span;
+    return selection->dest;
 }
 
 static bool
@@ -12080,7 +12675,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool index_call = index_dispatch_for_node(visit->grammar, call_node,
                                                &index_trait, &index_method);
     if (index_call
-        && core_string_eq(index_trait, CORE_STRING_STATIC("Index_Store")))
+        && core_string_eq(index_trait, CORE_STRING_STATIC("Index_Write")))
         return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
     n00bb_link_use_site_t *index_site = index_call && caller_state
         ? link_use_site_for_node(caller_state, call_node) : nullptr;
@@ -12124,6 +12719,20 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     bool reference_builtin = n00bb_builtin_reference_function(symbol);
     bool option_builtin = n00bb_builtin_option_function(symbol);
+    n00bb_link_analysis_t *analysis = caller_state
+        ? caller_state->link_analysis : nullptr;
+    if (trait_call && !reference_builtin && !option_builtin) {
+        n00bb_link_use_site_t *site = index_call ? index_site
+            : member ? link_use_site_for_node(caller_state, member) : nullptr;
+        symbol = linkable_trait_requirement(analysis, lower->unit,
+                                            site, symbol);
+        if (!symbol)
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "linkable trait call has no accessible method requirement");
+    }
+    bool semantic_trait_call = trait_call && symbol->scope
+        && core_string_eq(symbol->scope->scope_tag,
+                          CORE_STRING_STATIC("trait"));
     if (option_builtin
         && core_string_eq(symbol->name, CORE_STRING_STATIC("__option_get"))
         && !parse_sym_binding(receiver_symbol,
@@ -12254,7 +12863,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                     core_list_push(positional_nodes, child);
             }
         }
-        if (core_string_eq(index_trait, CORE_STRING_STATIC("Index_Store"))) {
+        if (core_string_eq(index_trait, CORE_STRING_STATIC("Index_Write"))) {
             parse_tree_t *parent = core_tree_node_value(call_node).parent;
             while (parent && !nt_is(visit->grammar, parent, "assign-stmt"))
                 parent = core_tree_node_value(parent).parent;
@@ -12561,6 +13170,19 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 "call arguments could not be lowered for their parameter modes");
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     }
+    if (semantic_trait_call) {
+        ir_value_t *receiver_value = values.len ? values.data[0] : nullptr;
+        ir_value_t *selection = n00bb_select_trait_method(context,
+            visit->grammar, callee_unit, symbol, signature, receiver_value,
+            callee_value, span);
+        if (!selection) {
+            core_list_free(values);
+            core_list_free(copyouts);
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not select the semantic trait method requirement");
+        }
+        callee_value = selection;
+    }
     if (option_builtin) {
         ir_op_t option_op = core_string_eq(symbol->name,
                 CORE_STRING_STATIC("__option_is_nil"))
@@ -12724,7 +13346,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             "could not attach the resolved return alias");
     }
     if (index_call
-        && core_string_eq(index_trait, CORE_STRING_STATIC("Index_Load"))
+        && core_string_eq(index_trait, CORE_STRING_STATIC("Index_Read"))
         && values.len) {
         if (!n00bb_attach_expression_shape(context, visit->grammar,
                 receiver_node, values.data[0])
@@ -13157,6 +13779,109 @@ n00bb_operator_error(ir_lower_context_t *context, ir_diagcode_t code,
 }
 
 static bool
+n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
+                          ir_value_t *outcome, ir_span_t span,
+                          ir_value_t **success)
+{
+    if (success) *success = nullptr;
+    bool variant = false;
+    th_type *definition = outcome
+        ? ir_type_definition(context->module, outcome->type) : nullptr;
+    if (!outcome || !th_named_info(outcome->type, nullptr, nullptr, &variant,
+                                   nullptr) || !variant
+        || !definition || th_kind_of(definition) != TH_RECORD)
+        return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS, span,
+            "failure propagation requires a complete call outcome");
+    th_type *ok_type = th_record_lookup(definition, "ok");
+    th_type *error_type = th_record_lookup(definition, "error");
+    if (!ok_type || !error_type
+        || n00bb_nil_type(ir_module_types(context->module), ok_type))
+        return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS, span,
+            "failure propagation requires a value-producing call outcome");
+
+    uint64_t block_id = context->next_value_id++;
+    char ok_block_name[48], error_block_name[48];
+    snprintf(ok_block_name, sizeof(ok_block_name),
+             "__n00bb_unwrap_ok_%llu", (unsigned long long)block_id);
+    snprintf(error_block_name, sizeof(error_block_name),
+             "__n00bb_unwrap_error_%llu", (unsigned long long)block_id);
+    ir_block_t *ok_block = ir_block_add(context->function, ok_block_name);
+    ir_block_t *error_block = ir_block_add(context->function,
+                                           error_block_name);
+    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    char tag_name[48], literal_name[48], test_name[48];
+    ir_instr_t *tag = ir_instr_add(context->block, IR_OP_VARIANT_TAG);
+    do {
+        snprintf(tag_name, sizeof(tag_name), "__n00bb_tag_%llu",
+                 (unsigned long long)context->next_value_id++);
+    } while (ir_value_find(context->function, tag_name));
+    ir_instr_t *literal = ir_instr_add(context->block, IR_OP_CONST);
+    do {
+        snprintf(literal_name, sizeof(literal_name), "__n00bb_tag_lit_%llu",
+                 (unsigned long long)context->next_value_id++);
+    } while (ir_value_find(context->function, literal_name));
+    ir_instr_t *test = ir_instr_add(context->block, IR_OP_EQ);
+    do {
+        snprintf(test_name, sizeof(test_name), "__n00bb_is_ok_%llu",
+                 (unsigned long long)context->next_value_id++);
+    } while (ir_value_find(context->function, test_name));
+    bool emitted = ok_block && error_block && uint_type && bool_type
+        && tag && ir_instr_set_dest(tag, tag_name, uint_type)
+        && ir_instr_operand_value(tag, outcome)
+        && literal && ir_instr_set_dest(literal, literal_name, uint_type)
+        && ir_instr_operand_uint(literal, th_arm_tag("ok"))
+        && test && ir_instr_set_dest(test, test_name, bool_type)
+        && ir_instr_operand_value(test, tag->dest)
+        && ir_instr_operand_value(test, literal->dest);
+    ir_instr_t *branch = emitted
+        ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
+    emitted = emitted && branch
+        && ir_instr_operand_value(branch, test->dest)
+        && ir_instr_operand_block(branch, ok_block)
+        && ir_instr_operand_block(branch, error_block);
+    if (!emitted)
+        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+            "could not branch on the call outcome");
+    tag->span = literal->span = test->span = branch->span = span;
+
+    context->block = error_block;
+    ir_value_t *error = n00bb_emit_outcome_payload(
+        context, outcome, "error", error_type, span);
+    if (!error || !n00bb_emit_with_failure(context, visit->node))
+        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+            "could not unwind active context managers");
+    int routed = n00bb_route_try_error(context, visit->node, error, span);
+    if (routed < 0)
+        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+            "could not route the call error");
+    if (!routed) {
+        if (!n00bb_failure_channel_accepts(context, error_type)) {
+            if (n00bb_reject_runtime_initializer_failure(context, span))
+                return false;
+            return n00bb_operator_error(context, IR_DIAG_TYPE_MISMATCH, span,
+                "an uncaught call error must match the enclosing function's failure channel");
+        }
+        ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
+        if (!fail || !ir_instr_operand_value(fail, error))
+            return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                "could not propagate the call error");
+        fail->span = span;
+        context->reachable = false;
+    }
+
+    context->block = ok_block;
+    context->reachable = true;
+    ir_value_t *value = n00bb_emit_outcome_payload(
+        context, outcome, "ok", ok_type, span);
+    if (!value)
+        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+            "could not extract the successful call value");
+    if (success) *success = value;
+    return true;
+}
+
+static bool
 n00bb_lower_operator_annotation(ir_lower_context_t *context,
                                 parse_visit_t *visit, bool entering,
                                 void *state)
@@ -13250,101 +13975,9 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
         ? core_tree_child(visit->node, 0) : nullptr;
     ir_value_t *outcome = operand_node
         ? ir_lower_node_value(context, operand_node) : nullptr;
-    bool variant = false;
-    th_type *definition = outcome
-        ? ir_type_definition(context->module, outcome->type) : nullptr;
-    if (!outcome || !th_named_info(outcome->type, nullptr, nullptr, &variant,
-                                   nullptr) || !variant
-        || !definition || th_kind_of(definition) != TH_RECORD)
-        return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS, span,
-                                    "postfix ! requires a call with a failure channel");
-
-    th_type *ok_type = th_record_lookup(definition, "ok");
-    th_type *error_type = th_record_lookup(definition, "error");
-    if (!ok_type || !error_type)
-        return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS, span,
-                                    "postfix ! requires a complete call outcome type");
-    if (n00bb_nil_type(ir_module_types(context->module), ok_type))
-        return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS, span,
-                                    "postfix ! cannot be used as a value when the call returns no value");
-
-    char ok_block_name[48], error_block_name[48];
-    uint64_t block_id = context->next_value_id++;
-    snprintf(ok_block_name, sizeof(ok_block_name),
-             "__n00bb_unwrap_ok_%llu", (unsigned long long)block_id);
-    snprintf(error_block_name, sizeof(error_block_name),
-             "__n00bb_unwrap_error_%llu", (unsigned long long)block_id);
-    ir_block_t *ok_block = ir_block_add(context->function, ok_block_name);
-    ir_block_t *error_block = ir_block_add(context->function,
-                                           error_block_name);
-    th_type *uint_type = n00bb_ir_builtin_type(context->module, "uint");
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
-    char tag_name[48], literal_name[48], test_name[48];
-    ir_instr_t *tag = ir_instr_add(context->block, IR_OP_VARIANT_TAG);
-    do {
-        snprintf(tag_name, sizeof(tag_name), "__n00bb_tag_%llu",
-                 (unsigned long long)context->next_value_id++);
-    } while (ir_value_find(context->function, tag_name));
-    ir_instr_t *literal = ir_instr_add(context->block, IR_OP_CONST);
-    do {
-        snprintf(literal_name, sizeof(literal_name), "__n00bb_tag_lit_%llu",
-                 (unsigned long long)context->next_value_id++);
-    } while (ir_value_find(context->function, literal_name));
-    ir_instr_t *test = ir_instr_add(context->block, IR_OP_EQ);
-    do {
-        snprintf(test_name, sizeof(test_name), "__n00bb_is_ok_%llu",
-                 (unsigned long long)context->next_value_id++);
-    } while (ir_value_find(context->function, test_name));
-    bool emitted = ok_block && error_block && uint_type && bool_type
-        && tag && ir_instr_set_dest(tag, tag_name, uint_type)
-        && ir_instr_operand_value(tag, outcome)
-        && literal && ir_instr_set_dest(literal, literal_name, uint_type)
-        && ir_instr_operand_uint(literal, th_arm_tag("ok"))
-        && test && ir_instr_set_dest(test, test_name, bool_type)
-        && ir_instr_operand_value(test, tag->dest)
-        && ir_instr_operand_value(test, literal->dest);
-    ir_instr_t *branch = emitted
-        ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
-    emitted = emitted && branch
-        && ir_instr_operand_value(branch, test->dest)
-        && ir_instr_operand_block(branch, ok_block)
-        && ir_instr_operand_block(branch, error_block);
-    if (!emitted)
-        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                                    "could not branch on the call outcome");
-    tag->span = literal->span = test->span = branch->span = span;
-
-    context->block = error_block;
-    ir_value_t *error = n00bb_emit_outcome_payload(
-        context, outcome, "error", error_type, span);
-    if (!error || !n00bb_emit_with_failure(context, visit->node))
-        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                                    "could not unwind active context managers");
-    int routed = error
-        ? n00bb_route_try_error(context, visit->node, error, span) : -1;
-    if (routed < 0)
-        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                                    "could not route the call error");
-    if (!routed) {
-        if (!n00bb_failure_channel_accepts(context, error_type)) {
-            if (n00bb_reject_runtime_initializer_failure(context, span))
-                return false;
-            return n00bb_operator_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "an uncaught call error must match the enclosing function's failure channel");
-        }
-        ir_instr_t *fail = error
-            ? ir_instr_add(context->block, IR_OP_FAIL) : nullptr;
-        if (!fail || !ir_instr_operand_value(fail, error))
-            return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                                        "could not propagate the call error");
-        fail->span = span;
-        context->reachable = false;
-    }
-
-    context->block = ok_block;
-    context->reachable = true;
-    ir_value_t *value = n00bb_emit_outcome_payload(
-        context, outcome, "ok", ok_type, span);
+    ir_value_t *value = nullptr;
+    if (!n00bb_unwrap_call_outcome(context, visit, outcome, span, &value))
+        return false;
     n00bb_lower_context_t *lower = context->user;
     parse_tree_t *callee = operand_node
         && core_tree_num_children(operand_node)
@@ -13487,7 +14120,7 @@ n00bb_has_index_store_target(parse_grammar_t *grammar, parse_tree_t *node)
 {
     core_string_t trait = {0}, method = {0};
     if (index_dispatch_for_node(grammar, node, &trait, &method)
-        && core_string_eq(trait, CORE_STRING_STATIC("Index_Store")))
+        && core_string_eq(trait, CORE_STRING_STATIC("Index_Write")))
         return true;
     for (size_t i = 0; node && !core_tree_is_leaf(node)
             && i < core_tree_num_children(node); i++)
@@ -13502,7 +14135,7 @@ n00bb_index_store_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
     core_string_t trait = {0}, method = {0};
     if (index_dispatch_for_node(grammar, node, &trait, &method)
-        && core_string_eq(trait, CORE_STRING_STATIC("Index_Store")))
+        && core_string_eq(trait, CORE_STRING_STATIC("Index_Write")))
         return node;
     for (size_t i = 0; node && !core_tree_is_leaf(node)
             && i < core_tree_num_children(node); i++) {
@@ -13541,9 +14174,20 @@ n00bb_lower_index_store(ir_lower_context_t *context, parse_visit_t *visit,
         || !arguments[0] || !arguments[1] || !arguments[2]) {
         lower_error(context, IR_DIAG_VERIFY_PARSED,
             lower_span_for_tree(context, visit->node),
-            "indexed assignment has no resolved Index_Store call operands");
+            "indexed assignment has no resolved Index_Write call operands");
         return false;
     }
+    symbol = linkable_trait_requirement(caller->link_analysis, lower->unit,
+                                        site, symbol);
+    if (!symbol) {
+        lower_error(context, IR_DIAG_INTERNAL,
+            lower_span_for_tree(context, visit->node),
+            "linkable indexed write has no resolved trait requirement");
+        return false;
+    }
+    bool semantic_trait_call = symbol->scope
+        && core_string_eq(symbol->scope->scope_tag,
+                          CORE_STRING_STATIC("trait"));
 
     core_translation_unit_t *callee_unit = unit_for_symbol(
         visit->grammar, lower->units, symbol);
@@ -13566,7 +14210,7 @@ n00bb_lower_index_store(ir_lower_context_t *context, parse_visit_t *visit,
         || th_func_nparams(signature) != 3 || th_func_rest(signature)) {
         lower_error(context, IR_DIAG_TYPE_ARGS,
             lower_span_for_tree(context, visit->node),
-            "Index_Store must resolve to a three-parameter function");
+            "Index_Write must resolve to a three-parameter function");
         return false;
     }
     th_type *failure = th_func_error(signature);
@@ -13639,6 +14283,18 @@ n00bb_lower_index_store(ir_lower_context_t *context, parse_visit_t *visit,
     char name[48];
     snprintf(name, sizeof(name), "__n00bb_index_store_%llu",
              (unsigned long long)context->next_value_id++);
+    if (semantic_trait_call) {
+        ir_value_t *selection = n00bb_select_trait_method(context,
+            visit->grammar, callee_unit, symbol, signature, arguments[0],
+            callee, lower_span_for_tree(context, index_node));
+        if (!selection) {
+            lower_error(context, IR_DIAG_INTERNAL,
+                lower_span_for_tree(context, visit->node),
+                "could not select the indexed write trait requirement");
+            return false;
+        }
+        callee = selection;
+    }
     ir_instr_t *call = ir_instr_add(context->block, IR_OP_CALL);
     th_type *return_type = th_func_ret(signature);
     th_type *call_result_type = has_failure
@@ -13667,7 +14323,7 @@ n00bb_lower_index_store(ir_lower_context_t *context, parse_visit_t *visit,
             call->dest)) {
         lower_error(context, IR_DIAG_INTERNAL,
             lower_span_for_tree(context, visit->node),
-            "could not emit the resolved Index_Store call");
+            "could not emit the resolved Index_Write call");
         return false;
     }
     if (has_failure) {
@@ -13712,7 +14368,7 @@ n00bb_lower_index_store(ir_lower_context_t *context, parse_visit_t *visit,
         if (!branched) {
             lower_error(context, IR_DIAG_INTERNAL,
                 lower_span_for_tree(context, visit->node),
-                "could not branch on the Index_Store outcome");
+                "could not branch on the Index_Write outcome");
             return false;
         }
         ir_span_t span = lower_span_for_tree(context, index_node);
@@ -13724,13 +14380,13 @@ n00bb_lower_index_store(ir_lower_context_t *context, parse_visit_t *visit,
             "error", failure, span);
         if (!error || !n00bb_emit_with_failure(context, visit->node)) {
             lower_error(context, IR_DIAG_INTERNAL, span,
-                        "could not unwind contexts for Index_Store failure");
+                        "could not unwind contexts for Index_Write failure");
             return false;
         }
         int routed = n00bb_route_try_error(context, visit->node, error, span);
         if (routed < 0) {
             lower_error(context, IR_DIAG_INTERNAL, span,
-                        "could not route the Index_Store failure");
+                        "could not route the Index_Write failure");
             return false;
         }
         if (!routed) {
@@ -13738,13 +14394,13 @@ n00bb_lower_index_store(ir_lower_context_t *context, parse_visit_t *visit,
                 if (!n00bb_reject_runtime_initializer_failure(context,
                                                                span))
                     lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                        "an uncaught Index_Store failure must match the enclosing function's failure channel");
+                        "an uncaught Index_Write failure must match the enclosing function's failure channel");
                 return false;
             }
             ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
             if (!fail || !ir_instr_operand_value(fail, error)) {
                 lower_error(context, IR_DIAG_INTERNAL, span,
-                            "could not propagate the Index_Store failure");
+                            "could not propagate the Index_Write failure");
                 return false;
             }
             fail->span = span;
@@ -15788,7 +16444,7 @@ function_semantic_contract(parse_grammar_t *grammar,
 }
 
 static th_type *
-trait_method_abi_shape(parse_grammar_t *grammar,
+trait_method_semantic_shape(parse_grammar_t *grammar,
                        core_translation_unit_t *unit,
                        parse_sym_entry_t *symbol, th_type *source)
 {
@@ -15839,7 +16495,7 @@ trait_method_abi_shape(parse_grammar_t *grammar,
 }
 
 static th_type *
-trait_method_abi_type(parse_grammar_t *grammar,
+trait_method_semantic_type(parse_grammar_t *grammar,
                       core_translation_unit_t *unit,
                       parse_sym_entry_t *symbol,
                       th_type **callable_contract)
@@ -15852,15 +16508,15 @@ trait_method_abi_type(parse_grammar_t *grammar,
     th_type *source = is_scheme(scheme)
         ? th_instantiate(state->types, scheme)
         : symbol ? th_resolve(symbol->type) : nullptr;
-    th_type *abi = source
-        ? trait_method_abi_shape(grammar, unit, symbol, source) : nullptr;
-    if (!abi || !callable_contract || !is_scheme(scheme)) return abi;
-    th_type *body = trait_method_abi_shape(grammar, unit, symbol,
+    th_type *semantic = source
+        ? trait_method_semantic_shape(grammar, unit, symbol, source) : nullptr;
+    if (!semantic || !callable_contract || !is_scheme(scheme)) return semantic;
+    th_type *body = trait_method_semantic_shape(grammar, unit, symbol,
                                             th_binder_body(scheme));
     uint64_t arity = 0;
     if (!body || !th_binder_arity(scheme, &arity)) return nullptr;
     *callable_contract = th_binder(state->types, arity, body);
-    return *callable_contract ? abi : nullptr;
+    return *callable_contract ? semantic : nullptr;
 }
 
 static th_type *
@@ -15936,6 +16592,8 @@ register_optional_parameter_metadata(parse_grammar_t *grammar,
         signature = child_nt(grammar, symbol->decl_node,
                              "trait-func-type-signature");
     parse_tree_t *formals = child_nt(grammar, signature, "param-decl");
+    if (!formals)
+        formals = child_nt(grammar, signature, "trait-param-decl");
     for (size_t i = 0; i < th_func_nparams(function->type); i++) {
         uint8_t flags = 0;
         if (!function_parameter_info(grammar, symbol, formals, i,
@@ -16052,7 +16710,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 ir_linkage_t linkage = !definition ? IR_LINK_EXTERN
                     : symbol_visibility(symbol) == TH_ENV_PRIVATE
                         ? IR_LINK_INTERNAL : IR_LINK_EXTERNAL;
-                th_type *abi_type = state->interface_module
+                th_type *semantic_type = state->interface_module
                     ? symbol->user_data
                         ? interface_function_semantic_type(state->types,
                                                            symbol)
@@ -16061,18 +16719,18 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                                 ? th_binder_body(symbol->type) : symbol->type)
                             : nullptr
                     : function_semantic_type(grammar, unit, symbol);
-                ir_func_t *function = abi_type
+                ir_func_t *function = semantic_type
                     ? ir_func_add(state->ir_module, symbol->name.data,
-                                  abi_type, linkage) : nullptr;
+                                  semantic_type, linkage) : nullptr;
                 core_buffer_t comptime_name = {0};
-                if (abi_type && ((definition && !state->interface_module)
+                if (semantic_type && ((definition && !state->interface_module)
                                  || state->interface_module))
                     core_buffer_printf(&comptime_name,
                         "__n00bb_comptime_%.*s",
                         (int)symbol->name.u8_bytes, symbol->name.data);
                 ir_func_t *comptime_function = comptime_name.data
                     ? ir_func_add(state->comptime_ir_module,
-                                  comptime_name.data, abi_type,
+                                  comptime_name.data, semantic_type,
                                   state->interface_module
                                       ? IR_LINK_EXTERN : linkage)
                     : nullptr;
@@ -16153,14 +16811,14 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                     (int)scope->name.u8_bytes, scope->name.data,
                     (int)symbol->name.u8_bytes, symbol->name.data);
                 th_type *contract = nullptr;
-                th_type *abi_type = trait_method_abi_type(grammar, unit,
+                th_type *semantic_type = trait_method_semantic_type(grammar, unit,
                                                            symbol, &contract);
-                ir_func_t *function = abi_type
-                    ? ir_func_add(state->ir_module, name.data, abi_type,
+                ir_func_t *function = semantic_type
+                    ? ir_func_add(state->ir_module, name.data, semantic_type,
                                   IR_LINK_EXTERN) : nullptr;
-                ir_func_t *comptime_function = abi_type
+                ir_func_t *comptime_function = semantic_type
                     ? ir_func_add(state->comptime_ir_module, name.data,
-                                  abi_type, IR_LINK_EXTERN) : nullptr;
+                                  semantic_type, IR_LINK_EXTERN) : nullptr;
                 uint64_t contract_arity = 0;
                 bool polymorphic_contract = contract
                     && th_binder_arity(contract, &contract_arity)
@@ -16174,6 +16832,12 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                         || (polymorphic_contract
                             && !ir_func_set_callable_contract(
                                 comptime_function, contract))))
+                    comptime_function = nullptr;
+                if (function && !register_optional_parameter_metadata(
+                        grammar, symbol, function)) function = nullptr;
+                if (comptime_function
+                    && !register_optional_parameter_metadata(grammar,
+                        symbol, comptime_function))
                     comptime_function = nullptr;
                 core_link_declaration_t *declaration =
                     link_declaration_for_symbol(analysis, symbol);
@@ -17595,186 +18259,6 @@ lower_array_shape_product_producers(
         core_list_free(scopes);
     }
     (void)grammar;
-    return true;
-}
-
-static parse_tree_t *
-comptime_value_payload_group(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    if (!node || core_tree_is_leaf(node)) return nullptr;
-    if (nt_is(grammar, node, "expression")
-        || nt_is(grammar, node, "value-body")) return node;
-    parse_nt_node_t *value = &core_tree_node_value(node);
-    core_string_t name = parse_tree_nt_name(grammar, node);
-    bool generated_wrapper = name.data && name.u8_bytes >= 11
-        && !memcmp(name.data, "$$bnf_anon_", 11);
-    if (!value->group_top && !generated_wrapper) return nullptr;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *payload = comptime_value_payload_group(grammar,
-            core_tree_child(node, i));
-        if (payload) return payload;
-    }
-    return nullptr;
-}
-
-static parse_tree_t *
-comptime_value_payload(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *payload = comptime_value_payload_group(grammar,
-            core_tree_child(node, i));
-        if (payload) return payload;
-    }
-    return nullptr;
-}
-
-static bool
-n00bb_lower_comptime_value(ir_lower_context_t *context,
-                           parse_visit_t *visit, bool entering, void *state)
-{
-    (void)state;
-    n00bb_lower_context_t *lower = context ? context->user : nullptr;
-    if (!context || !visit || !lower || !lower->unit
-        || !nt_is(visit->grammar, visit->node, "comptime-value-expr"))
-        return false;
-
-    if (lower->comptime_phase) {
-        if (entering) return true;
-        parse_tree_t *payload = comptime_value_payload(visit->grammar,
-                                                        visit->node);
-        if (!payload) {
-            lower_error(context, IR_DIAG_VERIFY_PARSED,
-                lower_span_for_tree(context, visit->node),
-                "compile-time value expression has no expression or value body");
-            return false;
-        }
-        ir_value_t *value = ir_lower_node_value(context, payload);
-        if (!value || !ir_lower_set_node_value(context, visit->node, value)) {
-            lower_error(context, IR_DIAG_VERIFY_TYPED,
-                lower_span_for_tree(context, visit->node),
-                "compile-time value expression did not produce a typed value");
-            return false;
-        }
-        return true;
-    }
-
-    if (!entering) return true;
-    if (!ir_lower_prune_node(context, visit->node)) {
-        lower_error(context, IR_DIAG_INTERNAL,
-            lower_span_for_tree(context, visit->node),
-            "could not isolate a compile-time value expression");
-        return false;
-    }
-    if (!context->reachable) return true;
-    parse_tree_t *payload = comptime_value_payload(visit->grammar,
-                                                    visit->node);
-    if (!payload) {
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-            lower_span_for_tree(context, visit->node),
-            "compile-time value expression has no expression or value body");
-        return false;
-    }
-
-    n00bb_tu_state_t *tu = tu_state(lower->unit);
-    ir_module_t *comptime_module = tu ? tu->comptime_ir_module : nullptr;
-    th_type *result_type = core_tree_node_value(visit->node).type;
-    th_type *payload_type = core_tree_node_value(payload).type;
-    if (tu && result_type && payload_type)
-        result_type = th_unify_in_place(tu->types, result_type, payload_type);
-    result_type = result_type ? th_resolve(result_type) : nullptr;
-    parse_token_info_t *first = parse_tree_find_first_terminal(visit->node);
-    if (!tu || !comptime_module || !result_type || !first) {
-        lower_error(context, IR_DIAG_VERIFY_TYPED,
-            lower_span_for_tree(context, visit->node),
-            "compile-time value expression is missing its module or inferred type");
-        return false;
-    }
-
-    char function_name[80];
-    snprintf(function_name, sizeof(function_name),
-        "__n00bb_comptime_value_%llu",
-        (unsigned long long)first->start_byte);
-    if (ir_func_find(comptime_module, function_name)) {
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-            lower_span_for_tree(context, visit->node),
-            "compile-time value expression collides with a reserved IR function name");
-        return false;
-    }
-
-    th_type *nil_type = n00bb_ir_builtin_type(comptime_module, "nil");
-    th_type *failure_type = th_var(tu->types);
-    th_type *producer_type = nil_type && failure_type
-        ? th_func_with_error(tu->types, result_type, failure_type,
-                             nullptr, 0, nullptr, nullptr, 0)
-        : nullptr;
-    ir_func_t *producer = producer_type
-        ? ir_func_add(comptime_module, function_name, producer_type,
-                      IR_LINK_INTERNAL) : nullptr;
-    if (!producer
-        || !ir_func_set_execution_phase(lower->ir_context, producer,
-                                        IR_PHASE_COMPTIME)) {
-        lower_error(context, IR_DIAG_INTERNAL,
-            lower_span_for_tree(context, visit->node),
-            "could not create the compile-time value producer");
-        return false;
-    }
-
-    parse_sym_entry_t producer_symbol = {
-        .name = core_string_from_cstr(function_name),
-        .kind = PARSE_SYM_FUNCTION,
-        .type = producer_type,
-    };
-    core_list_t(parse_sym_entry_ptr_t) parameters =
-        core_list_new(parse_sym_entry_ptr_t);
-    bool lowered = lower_ir_body(lower->lowerer, visit->grammar,
-        lower->unit, &producer_symbol, payload, producer, &parameters,
-        nullptr, nullptr, true, true, visit->node, lower->ir_context,
-        lower->units, nullptr, nullptr);
-    core_list_free(parameters);
-    if (lowered) {
-        th_type *inferred_failure = th_func_error(producer->type);
-        if (inferred_failure
-            && th_kind_of(th_resolve(inferred_failure)) == TH_VAR)
-            lowered = th_unify_in_place(tu->types, inferred_failure,
-                                        nil_type) != nullptr;
-    }
-    if (!lowered) return false;
-
-    ir_instr_t *phase_result = ir_lower_emit_instruction(context,
-        IR_OP_PHASE_RESULT, lower_span_for_tree(context, visit->node));
-    char result_name[80];
-    snprintf(result_name, sizeof(result_name), "__n00bb_phase_result_%llu",
-        (unsigned long long)first->start_byte);
-    core_buffer_t identifier = {0};
-    core_string_t package = n00bb_package_id(lower->unit);
-    core_buffer_printf(&identifier, "%.*s:%.*s:comptime-value:%llu",
-        (int)package.u8_bytes, package.data,
-        (int)lower->unit->module.identifier.u8_bytes,
-        lower->unit->module.identifier.data,
-        (unsigned long long)first->start_byte);
-    bool emitted = phase_result && identifier.data
-        && ir_instr_set_dest(phase_result, result_name, result_type)
-        && ir_instr_set_phase_result(lower->ir_context, phase_result,
-                                     identifier.data)
-        && ir_lower_set_node_value(context, visit->node,
-                                   phase_result->dest);
-    core_buffer_release(&identifier);
-    if (!emitted) {
-        lower_error(context, IR_DIAG_INTERNAL,
-            lower_span_for_tree(context, visit->node),
-            "could not emit the runtime compile-time result reference");
-        return false;
-    }
-
-    n00bb_link_analysis_t *analysis = tu->link_analysis;
-    if (!analysis) return false;
-    core_list_push(analysis->phase_results,
-        ((n00bb_phase_result_binding_t){
-            .identifier = ir_instr_phase_result(phase_result),
-            .producer = producer,
-            .consumer = context->function,
-            .instruction = phase_result,
-        }));
     return true;
 }
 
@@ -19233,11 +19717,15 @@ dump_layout_for_unit(parse_grammar_t *grammar, core_translation_unit_t *unit)
 static bool
 linkable_module_symbol(parse_sym_entry_t *symbol)
 {
-    return symbol && (symbol->kind == PARSE_SYM_FUNCTION
+    if (!symbol || parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.builtin-type"))
+        || (symbol->owner_type && parse_sym_binding(symbol->owner_type,
+            CORE_STRING_STATIC("n00bb.builtin-type")))) return false;
+    return symbol->kind == PARSE_SYM_FUNCTION
         || symbol->kind == PARSE_SYM_VARIABLE
         || symbol->kind == PARSE_SYM_TYPEDEF
         || symbol->kind == PARSE_SYM_TAG
-        || symbol->kind == PARSE_SYM_ENUM_CONST);
+        || symbol->kind == PARSE_SYM_ENUM_CONST;
 }
 
 static parse_tree_t *
@@ -19373,11 +19861,11 @@ index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                                CORE_STRING_STATIC("["))) return false;
     if (nt_is(grammar, core_tree_child(node, 2), "slice-contents")) {
         *trait = CORE_STRING_STATIC("Index_Slice");
-        *method = CORE_STRING_STATIC("slice");
+        *method = CORE_STRING_STATIC("__slice");
     }
     else {
-        *trait = CORE_STRING_STATIC("Index_Load");
-        *method = CORE_STRING_STATIC("load");
+        *trait = CORE_STRING_STATIC("Index_Read");
+        *method = CORE_STRING_STATIC("__read");
     }
 
     for (parse_tree_t *at = node; at; at = core_tree_node_value(at).parent) {
@@ -19389,11 +19877,287 @@ index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
         parse_tree_t *target = core_tree_num_children(parent)
             ? core_tree_child(parent, 0) : nullptr;
         if (!node_is_within(node, target)) break;
-        *trait = CORE_STRING_STATIC("Index_Store");
-        *method = CORE_STRING_STATIC("store");
+        *trait = CORE_STRING_STATIC("Index_Write");
+        *method = CORE_STRING_STATIC("__write");
         return true;
     }
     return true;
+}
+
+static bool
+binary_operator_dispatch_for_node(parse_grammar_t *grammar,
+                                  parse_tree_t *node,
+                                  core_string_t *trait,
+                                  core_string_t *method)
+{
+    if (core_tree_num_children(node) != 3)
+        return false;
+    if (nt_is(grammar, node, "equality-expr")
+        && nt_is(grammar, core_tree_child(node, 1), "equality-op")) {
+        *trait = CORE_STRING_STATIC("Equal");
+        *method = CORE_STRING_STATIC("__equal");
+        return true;
+    }
+    if (nt_is(grammar, node, "compare-expr")
+        && nt_is(grammar, core_tree_child(node, 1), "compare-op")) {
+        *trait = CORE_STRING_STATIC("Comparable");
+        *method = CORE_STRING_STATIC("__cmp");
+        return true;
+    }
+    core_string_t spelling = first_token_text(core_tree_child(node, 1));
+    if (nt_is(grammar, node, "add-expr")) {
+        if (core_string_eq(spelling, CORE_STRING_STATIC("+"))) {
+            *trait = CORE_STRING_STATIC("Add");
+            *method = CORE_STRING_STATIC("__add");
+            return true;
+        }
+        if (core_string_eq(spelling, CORE_STRING_STATIC("-"))) {
+            *trait = CORE_STRING_STATIC("Subtract");
+            *method = CORE_STRING_STATIC("__subtract");
+            return true;
+        }
+    }
+    if (nt_is(grammar, node, "mul-expr")) {
+        if (core_string_eq(spelling, CORE_STRING_STATIC("*"))) {
+            *trait = CORE_STRING_STATIC("Multiply");
+            *method = CORE_STRING_STATIC("__multiply");
+            return true;
+        }
+        if (core_string_eq(spelling, CORE_STRING_STATIC("/"))) {
+            *trait = CORE_STRING_STATIC("Divide");
+            *method = CORE_STRING_STATIC("__divide");
+            return true;
+        }
+        if (core_string_eq(spelling, CORE_STRING_STATIC("%"))) {
+            *trait = CORE_STRING_STATIC("Remainder");
+            *method = CORE_STRING_STATIC("__remainder");
+            return true;
+        }
+    }
+    if (nt_is(grammar, node, "shift-expr")) {
+        if (core_string_eq(spelling, CORE_STRING_STATIC("<<"))) {
+            *trait = CORE_STRING_STATIC("Shift_Left");
+            *method = CORE_STRING_STATIC("__shift_left");
+            return true;
+        }
+        if (core_string_eq(spelling, CORE_STRING_STATIC(">>"))) {
+            *trait = CORE_STRING_STATIC("Shift_Right");
+            *method = CORE_STRING_STATIC("__shift_right");
+            return true;
+        }
+    }
+    if (nt_is(grammar, node, "bitand-expr")
+        && core_string_eq(spelling, CORE_STRING_STATIC("&"))) {
+        *trait = CORE_STRING_STATIC("Bit_And");
+        *method = CORE_STRING_STATIC("__bit_and");
+        return true;
+    }
+    if (nt_is(grammar, node, "bitxor-expr")
+        && core_string_eq(spelling, CORE_STRING_STATIC("^"))) {
+        *trait = CORE_STRING_STATIC("Bit_Xor");
+        *method = CORE_STRING_STATIC("__bit_xor");
+        return true;
+    }
+    if (nt_is(grammar, node, "bitor-expr")
+        && core_string_eq(spelling, CORE_STRING_STATIC("|"))) {
+        *trait = CORE_STRING_STATIC("Bit_Or");
+        *method = CORE_STRING_STATIC("__bit_or");
+        return true;
+    }
+    return false;
+}
+
+static bool
+unary_operator_dispatch_for_node(parse_grammar_t *grammar,
+                                 parse_tree_t *node,
+                                 core_string_t *trait,
+                                 core_string_t *method)
+{
+    if (!nt_is(grammar, node, "unary-expr")
+        || core_tree_num_children(node) != 2) return false;
+    core_string_t spelling = first_token_text(core_tree_child(node, 0));
+    if (core_string_eq(spelling, CORE_STRING_STATIC("-"))) {
+        *trait = CORE_STRING_STATIC("Negate");
+        *method = CORE_STRING_STATIC("__negate");
+        return true;
+    }
+    if (core_string_eq(spelling, CORE_STRING_STATIC("!"))) {
+        *trait = CORE_STRING_STATIC("Not");
+        *method = CORE_STRING_STATIC("__not");
+        return true;
+    }
+    return false;
+}
+
+static parse_tree_t *
+operator_receiver_node(n00bb_link_use_site_t *site)
+{
+    if (!site || !site->node || !core_tree_num_children(site->node))
+        return nullptr;
+    bool unary = core_tree_num_children(site->node) == 2
+        && (core_string_eq(site->dispatch_trait,
+                           CORE_STRING_STATIC("Negate"))
+            || core_string_eq(site->dispatch_trait,
+                              CORE_STRING_STATIC("Not")));
+    return core_tree_child(site->node, unary ? 1 : 0);
+}
+
+static bool
+primitive_ordering_type(th_type *type)
+{
+    if (is_integer_type(type)) return true;
+    type = type ? th_resolve(type) : nullptr;
+    const char *name = nullptr;
+    size_t length = 0;
+    size_t arguments = 0;
+    if (!type || !th_named_info(type, &name, &length, nullptr, &arguments)
+        || arguments) return false;
+    core_string_t type_name = core_string_borrow(name, length);
+    return core_string_eq(type_name, CORE_STRING_STATIC("float"))
+        || core_string_eq(type_name, CORE_STRING_STATIC("f64"))
+        || core_string_eq(type_name, CORE_STRING_STATIC("string"));
+}
+
+static bool
+named_type_is(th_type *type, const char *wanted)
+{
+    type = type ? th_resolve(type) : nullptr;
+    const char *name = nullptr;
+    size_t length = 0, arguments = 0;
+    return type && th_named_info(type, &name, &length, nullptr, &arguments)
+        && !arguments && strlen(wanted) == length
+        && !memcmp(name, wanted, length);
+}
+
+static bool
+primitive_operator_site(n00bb_link_use_site_t *site)
+{
+    if (!site || !site->operator_dispatch
+        || core_tree_num_children(site->node) == 0) return false;
+    parse_tree_t *receiver = operator_receiver_node(site);
+    if (core_tree_is_leaf(receiver)) return false;
+    th_type *receiver_type = core_tree_node_value(receiver).type;
+    if (core_string_eq(site->dispatch_trait,
+                       CORE_STRING_STATIC("Not")))
+        return named_type_is(receiver_type, "bool");
+    if (core_string_eq(site->dispatch_trait,
+                       CORE_STRING_STATIC("Negate")))
+        return is_integer_type(receiver_type)
+            || named_type_is(receiver_type, "float")
+            || named_type_is(receiver_type, "f32")
+            || named_type_is(receiver_type, "f64");
+    bool equality = core_string_eq(site->dispatch_trait,
+                                   CORE_STRING_STATIC("Equal"));
+    bool ordering = core_string_eq(site->dispatch_trait,
+                                   CORE_STRING_STATIC("Comparable"));
+    if (equality || ordering) {
+        if (primitive_ordering_type(receiver_type)) return true;
+        if (!equality) return false;
+        if (named_type_is(receiver_type, "bool")
+            || named_type_is(receiver_type, "nil")) return true;
+        parse_tree_t *other = core_tree_child(site->node, 2);
+        return !core_tree_is_leaf(other)
+            && named_type_is(core_tree_node_value(other).type, "nil");
+    }
+    if (core_string_eq(site->dispatch_trait,
+                       CORE_STRING_STATIC("Bit_And"))
+        || core_string_eq(site->dispatch_trait,
+                          CORE_STRING_STATIC("Bit_Or"))
+        || core_string_eq(site->dispatch_trait,
+                          CORE_STRING_STATIC("Bit_Xor"))
+        || core_string_eq(site->dispatch_trait,
+                          CORE_STRING_STATIC("Shift_Left"))
+        || core_string_eq(site->dispatch_trait,
+                          CORE_STRING_STATIC("Shift_Right")))
+        return is_integer_type(receiver_type);
+    if (core_string_eq(site->dispatch_trait, CORE_STRING_STATIC("Add"))
+        || core_string_eq(site->dispatch_trait,
+                          CORE_STRING_STATIC("Subtract"))
+        || core_string_eq(site->dispatch_trait,
+                          CORE_STRING_STATIC("Multiply"))
+        || core_string_eq(site->dispatch_trait,
+                          CORE_STRING_STATIC("Divide"))
+        || core_string_eq(site->dispatch_trait,
+                          CORE_STRING_STATIC("Remainder")))
+        return is_integer_type(receiver_type)
+            || named_type_is(receiver_type, "float")
+            || named_type_is(receiver_type, "f32")
+            || named_type_is(receiver_type, "f64");
+    return false;
+}
+
+static bool
+refine_intrinsic_binary_result(parse_grammar_t *grammar,
+                               core_translation_unit_t *unit,
+                               n00bb_tu_state_t *state, parse_tree_t *node)
+{
+    core_string_t trait = {0}, method = {0};
+    if (!binary_operator_dispatch_for_node(grammar, node,
+                                           &trait, &method)) return true;
+    n00bb_link_use_site_t site = {
+        .node = node,
+        .dispatch_trait = trait,
+        .dispatch_method = method,
+        .operator_dispatch = true,
+    };
+    if (!primitive_operator_site(&site)
+        || core_string_eq(trait, CORE_STRING_STATIC("Equal"))
+        || core_string_eq(trait, CORE_STRING_STATIC("Comparable")))
+        return true;
+    parse_tree_t *left = core_tree_child(node, 0);
+    parse_tree_t *right = core_tree_child(node, 2);
+    th_type *left_type = core_tree_node_value(left).type;
+    th_type *right_type = core_tree_node_value(right).type;
+    th_type *result = core_tree_node_value(node).type;
+    if (!result || th_is_bottom(result)) {
+        core_tree_node_value(node).type = left_type;
+        result = left_type;
+    }
+    bool shift = core_string_eq(trait, CORE_STRING_STATIC("Shift_Left"))
+        || core_string_eq(trait, CORE_STRING_STATIC("Shift_Right"));
+    bool valid = left_type && right_type && result
+        && (shift || th_unify_in_place(state->types, left_type, right_type))
+        && th_unify_in_place(state->types, result, left_type);
+    if (valid) return true;
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+        unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+        CORE_STRING_STATIC(
+            "built-in operator operands and result have incompatible types"),
+        link_source_location(node));
+    return false;
+}
+
+static bool
+refine_intrinsic_unary_result(parse_grammar_t *grammar,
+                              core_translation_unit_t *unit,
+                              n00bb_tu_state_t *state, parse_tree_t *node)
+{
+    core_string_t trait = {0}, method = {0};
+    if (!unary_operator_dispatch_for_node(grammar, node,
+                                          &trait, &method)) return true;
+    n00bb_link_use_site_t site = {
+        .node = node,
+        .dispatch_trait = trait,
+        .dispatch_method = method,
+        .operator_dispatch = true,
+    };
+    if (!primitive_operator_site(&site)) return true;
+    th_type *operand = core_tree_node_value(core_tree_child(node, 1)).type;
+    th_type *expected = core_string_eq(trait, CORE_STRING_STATIC("Not"))
+        ? th_name(state->types, "bool") : operand;
+    th_type *result = core_tree_node_value(node).type;
+    if (!result || th_is_bottom(result)) {
+        core_tree_node_value(node).type = expected;
+        result = expected;
+    }
+    if (operand && expected && result
+        && th_unify_in_place(state->types, result, expected)) return true;
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+        unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+        CORE_STRING_STATIC(
+            "built-in unary operator operand and result have incompatible types"),
+        link_source_location(node));
+    return false;
 }
 
 static void
@@ -19494,9 +20258,15 @@ remember_link_use_site(parse_grammar_t *grammar,
     core_string_t dispatch_trait = {0}, dispatch_method = {0};
     bool index_dispatch = index_dispatch_for_node(
         grammar, node, &dispatch_trait, &dispatch_method);
+    bool operator_dispatch = binary_operator_dispatch_for_node(
+        grammar, node, &dispatch_trait, &dispatch_method)
+        || unary_operator_dispatch_for_node(grammar, node,
+                                            &dispatch_trait,
+                                            &dispatch_method);
     if (!varref && !trait_reference && !variant_case_candidate
         && !constructor_call
-        && !dotted_path && !type_reference && !index_dispatch) return;
+        && !dotted_path && !type_reference && !index_dispatch
+        && !operator_dispatch) return;
     for (size_t i = 0; i < state->link_use_sites.len; i++)
         if (state->link_use_sites.data[i].node == node) return;
     core_string_t member_name = dotted_path
@@ -19544,6 +20314,7 @@ remember_link_use_site(parse_grammar_t *grammar,
                                  .variant_case_candidate =
                                      variant_case_candidate,
                                  .constructor_call = constructor_call,
+                                 .operator_dispatch = operator_dispatch,
                                  .in_module_initializer =
                                      is_module_initializer_use(grammar, node,
                                                                initializer_owner)}));
@@ -19635,7 +20406,8 @@ resolve_linked_method(core_link_unit_t *link, n00bb_link_use_site_t *site,
         if (internal_name && builtins && builtins->root)
             builtin_symbol = parse_symtab_lookup_in(builtins->root,
                 core_string_borrow(internal_name, strlen(internal_name)));
-        if (!n00bb_builtin_option_function(builtin_symbol))
+        if (!n00bb_builtin_option_function(builtin_symbol)
+            && !n00bb_builtin_string_operator(builtin_symbol))
             builtin_symbol = nullptr;
         if (builtin_symbol) {
             core_link_declaration_metadata_t metadata = {
@@ -19882,7 +20654,20 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
                           CORE_STRING_STATIC("builtin"))
         && (core_string_eq(symbol->name, CORE_STRING_STATIC("has_type"))
             || n00bb_builtin_option_function(symbol)
+            || n00bb_builtin_string_operator(symbol)
             || n00bb_builtin_reference_function(symbol));
+}
+
+static bool
+n00bb_builtin_string_operator(parse_sym_entry_t *symbol)
+{
+    return symbol && symbol->kind == PARSE_SYM_FUNCTION
+        && !symbol->decl_node && symbol->scope && !symbol->scope->parent
+        && symbol->scope->ns
+        && core_string_eq(symbol->scope->ns->ns_name,
+                          CORE_STRING_STATIC("builtin"))
+        && core_string_eq(symbol->name,
+                          CORE_STRING_STATIC("__string_add"));
 }
 
 static bool
@@ -19940,7 +20725,7 @@ register_link_use_sites(core_link_unit_t *link,
             if (site->variant_case_candidate) continue;
             parse_tree_t *node = site->node;
             parse_sym_entry_t *symbol = site->symbol;
-            if (site->constructor_call) continue;
+            if (site->constructor_call || site->operator_dispatch) continue;
             if (n00bb_builtin_function(symbol)) {
                 core_link_reference_t *reference = nullptr;
                 bool ok = core_link_unit_reference_at_scoped_kind(link, unit,
@@ -20107,6 +20892,24 @@ trait_method_requirement_symbol(parse_grammar_t *grammar,
         found = method;
     }
     return found;
+}
+
+static parse_sym_entry_t *
+linkable_trait_requirement(n00bb_link_analysis_t *analysis,
+                           core_translation_unit_t *unit,
+                           n00bb_link_use_site_t *site,
+                           parse_sym_entry_t *symbol)
+{
+    if (!analysis || !unit || !symbol) return nullptr;
+    if (!analysis->may_link_further || (symbol->scope
+        && core_string_eq(symbol->scope->scope_tag,
+                          CORE_STRING_STATIC("trait")))) return symbol;
+    if (!site || !site->resolved_trait_name) return nullptr;
+    core_string_t method = site->dispatch_method.data
+        ? site->dispatch_method : site->member_name.data
+            ? site->member_name : symbol->name;
+    return trait_method_requirement_symbol(analysis->grammar, analysis,
+        unit, core_string_from_cstr(site->resolved_trait_name), method);
 }
 
 static parse_sym_entry_t *
@@ -20722,9 +21525,9 @@ validate_index_dispatch_result(parse_grammar_t *grammar,
 {
             bool result_dispatch = site->dispatch_trait.data
                 && (core_string_eq(site->dispatch_method,
-                                   CORE_STRING_STATIC("load"))
+                                   CORE_STRING_STATIC("__read"))
                     || core_string_eq(site->dispatch_method,
-                                      CORE_STRING_STATIC("slice")));
+                                      CORE_STRING_STATIC("__slice")));
     if (!result_dispatch || !symbol || symbol->kind != PARSE_SYM_FUNCTION
         || !symbol->type) return true;
     th_type *signature = symbol->callable_contract
@@ -20746,6 +21549,63 @@ validate_index_dispatch_result(parse_grammar_t *grammar,
             "index expression type does not match the resolved trait method result"),
         link_source_location(site->node));
     return false;
+}
+
+static bool
+validate_operator_dispatch_result(parse_grammar_t *grammar,
+                                  core_translation_unit_t *unit,
+                                  n00bb_tu_state_t *state,
+                                  n00bb_link_use_site_t *site,
+                                  parse_sym_entry_t *symbol)
+{
+    if (!site->operator_dispatch
+        || core_string_eq(site->dispatch_trait,
+                          CORE_STRING_STATIC("Equal"))
+        || core_string_eq(site->dispatch_trait,
+                          CORE_STRING_STATIC("Comparable"))) return true;
+    th_type *contract = symbol && symbol->callable_contract
+        ? symbol->callable_contract : symbol ? symbol->type : nullptr;
+    th_type *signature = contract
+        ? th_instantiate(state->types,
+            th_generalize(state->types, contract)) : nullptr;
+    parse_tree_t *left = operator_receiver_node(site);
+    bool unary = core_tree_num_children(site->node) == 2;
+    parse_tree_t *right = unary ? nullptr : core_tree_child(site->node, 2);
+    th_type *receiver = core_tree_node_value(left).type;
+    th_type *argument = right ? core_tree_node_value(right).type : nullptr;
+    th_type *result = core_tree_node_value(site->node).type;
+    const th_param *self = signature && th_kind_of(signature) == TH_FUNCTION
+        ? th_func_param(signature, 0) : nullptr;
+    const th_param *other = signature && th_kind_of(signature) == TH_FUNCTION
+        ? th_func_param(signature, 1) : nullptr;
+    bool valid = self && (unary || other)
+        && th_func_nparams(signature) == (unary ? 1 : 2)
+        && !th_func_rest(signature)
+        && self->mode == TH_IN && (unary || other->mode == TH_IN)
+        && receiver && (unary || argument) && result
+        && th_unify_in_place(state->types, self->type, receiver)
+        && (unary || th_unify_in_place(state->types, other->type, argument))
+        && th_unify_in_place(state->types, th_func_ret(signature), result);
+    if (valid)
+        return validate_enclosing_return_type(grammar, unit, state, site);
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+        unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+        CORE_STRING_STATIC(
+            "operator operands or result do not match the resolved trait method"),
+        link_source_location(site->node));
+    return false;
+}
+
+static bool
+validate_trait_dispatch_result(parse_grammar_t *grammar,
+                               core_translation_unit_t *unit,
+                               n00bb_tu_state_t *state,
+                               n00bb_link_use_site_t *site,
+                               parse_sym_entry_t *symbol)
+{
+    return validate_index_dispatch_result(grammar, unit, state, site, symbol)
+        && validate_operator_dispatch_result(grammar, unit, state, site,
+                                             symbol);
 }
 
 typedef struct {
@@ -21015,6 +21875,19 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
             }
             core_link_reference_t *reference = link_reference_for_site(
                 link, unit, site);
+            if (!reference && site->operator_dispatch) {
+                if (primitive_operator_site(site)) continue;
+                if (!core_link_unit_defer_reference_at_scoped_kind(
+                        link, unit, site->node, site->scope,
+                        PARSE_SYM_FUNCTION,
+                        CORE_STRING_STATIC(
+                            "operator dispatch awaits semantic resolution"),
+                        N00BB_LINK_STAGE_SEMANTICS, &reference)
+                    || !core_link_reference_set_source_info(link, reference,
+                        link_source_location(site->node),
+                        core_source_file_path(&unit->source)))
+                    return false;
+            }
             parse_sym_entry_t *dispatch_symbol = site->symbol;
             if (reference && !core_link_reference_is_deferred(reference)) {
                 core_link_declaration_t *declaration =
@@ -21027,14 +21900,16 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
             if (!reference)
                 continue;
             if (!core_link_reference_is_deferred(reference)) {
-                if (!validate_index_dispatch_result(grammar, unit, state, site,
-                                                    dispatch_symbol))
+                if (!validate_trait_dispatch_result(grammar, unit, state,
+                                                    site, dispatch_symbol))
                     return false;
                 continue;
             }
             if (site->dispatch_trait.data) {
-                parse_tree_t *receiver = core_tree_num_children(site->node)
-                    ? core_tree_child(site->node, 0) : nullptr;
+                parse_tree_t *receiver = site->operator_dispatch
+                    ? operator_receiver_node(site)
+                    : core_tree_num_children(site->node)
+                        ? core_tree_child(site->node, 0) : nullptr;
                 th_type *receiver_type = receiver && !core_tree_is_leaf(receiver)
                     ? core_tree_node_value(receiver).type : nullptr;
                 const char *trait_name = state->types
@@ -21045,6 +21920,23 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     ? th_env_method_resolve(state->types, receiver_type,
                         trait_name, site->dispatch_method.data, &method)
                     : TH_ENV_METHOD_NOT_FOUND;
+                if (status == TH_ENV_METHOD_NOT_FOUND
+                    && core_string_eq(site->dispatch_trait,
+                                      CORE_STRING_STATIC("Equal"))) {
+                    const char *fallback = trait_requirement_name(
+                        state->types, CORE_STRING_STATIC("Comparable"),
+                        CORE_STRING_STATIC("__cmp"));
+                    if (fallback && receiver_type) {
+                        status = th_env_method_resolve(state->types,
+                            receiver_type, fallback, "__cmp", &method);
+                        if (status == TH_ENV_METHOD_FOUND) {
+                            site->dispatch_trait = CORE_STRING_STATIC("Comparable");
+                            site->dispatch_method = CORE_STRING_STATIC("__cmp");
+                            trait_name = fallback;
+                        }
+                    }
+                }
+                site->resolved_trait_name = trait_name;
                 parse_sym_entry_t *implementation =
                     status == TH_ENV_METHOD_FOUND
                         ? resolve_linked_method(link, site, unit, &method)
@@ -21078,13 +21970,12 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     if (!parse_tree_set_resolution_symbol(site->node,
                                                            requirement))
                         return false;
-                    if (!validate_index_dispatch_result(grammar, unit, state,
-                                                        site,
-                                                        requirement))
+                    if (!validate_trait_dispatch_result(grammar, unit, state,
+                                                        site, requirement))
                         return false;
                     if (!core_link_unit_defer_reference(link, reference,
                             CORE_STRING_STATIC(
-                                "generic index dispatch awaits specialization"),
+                                "generic trait dispatch awaits specialization"),
                             N00BB_LINK_STAGE_IR_BINDINGS)) return false;
                     continue;
                 }
@@ -21093,13 +21984,12 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                         core_translation_unit_diagnostics(unit), unit,
                         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0011"),
                         CORE_STRING_STATIC(
-                            "indexing operation did not resolve to a linked trait implementation"),
+                            "operator or indexing operation did not resolve to a linked trait implementation"),
                         link_source_location(site->node));
                     return false;
                 }
-                if (!validate_index_dispatch_result(grammar, unit, state,
-                                                    site,
-                                                    implementation))
+                if (!validate_trait_dispatch_result(grammar, unit, state,
+                                                    site, implementation))
                     return false;
             }
             parse_node_resolution_t resolution =
@@ -21108,6 +21998,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                 resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
                     ? resolution.target.symbol
                     : core_tree_node_value(site->node).sym;
+            if (n00bb_builtin_string_operator(symbol)) continue;
             core_translation_unit_t *owner = symbol
                 ? unit_for_symbol(analysis->grammar, &analysis->units, symbol)
                 : nullptr;
@@ -23511,6 +24402,7 @@ publish_link_initializer_uses(core_link_unit_t *link,
         for (size_t s = 0; s < state->link_use_sites.len; s++) {
             n00bb_link_use_site_t *site = &state->link_use_sites.data[s];
             if (!site->in_module_initializer) continue;
+            if (primitive_operator_site(site)) continue;
             if (n00bb_assignment_target(analysis->grammar, site->node,
                                        nullptr)) continue;
             if (declared_in_comptime(analysis->grammar, site->node)
@@ -23660,6 +24552,12 @@ publish_link_call_dependencies(core_link_unit_t *link,
                 analysis->grammar, unit, label->cond, trait_dispatch);
             if (trait_dispatch && n00bb_builtin_option_function(callee))
                 continue;
+            if (trait_dispatch && callee && analysis->may_link_further) {
+                n00bb_link_use_site_t *site = link_use_site_for_node(
+                    state, member);
+                callee = linkable_trait_requirement(analysis, unit,
+                                                     site, callee);
+            }
             parse_sym_entry_t *context = attached_symbol(
                 analysis->grammar, unit, label->cond);
             bool context_call = !callee
@@ -23728,10 +24626,14 @@ publish_link_call_dependencies(core_link_unit_t *link,
                 analysis->grammar, site->node);
             core_link_declaration_t *source = caller
                 ? link_declaration_for_symbol(analysis, caller) : nullptr;
-            core_link_declaration_t *target = site->symbol
-                ? link_declaration_for_symbol(analysis, site->symbol) : nullptr;
+            parse_sym_entry_t *callee = site->symbol
+                ? linkable_trait_requirement(analysis, unit,
+                    site, site->symbol) : nullptr;
+            core_link_declaration_t *target = callee
+                ? link_declaration_for_symbol(analysis, callee) : nullptr;
             core_link_reference_t *reference = link_reference_for_site(
                 link, unit, site);
+            if (!reference && primitive_operator_site(site)) continue;
             bool resolved = target && (!caller || source)
                 && reference && !core_link_reference_is_deferred(reference);
             bool deferred = reference
@@ -25112,6 +26014,9 @@ publish_returned_parameter_aliases(core_link_unit_t *link,
                 && call.kind != N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
                 && call.kind != N00BB_LINK_DEPENDENCY_CONTEXT_CALL)
             || !call.to || !call.source_unit || !call.source_site) continue;
+        if (analysis->may_link_further
+            && call.kind == N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH)
+            continue;
         n00bb_link_payload_t *payload = core_link_declaration_payload(call.to);
         parse_sym_entry_t *callee = payload ? payload->symbol : nullptr;
         size_t parameter_index = 0;
@@ -25364,7 +26269,10 @@ publish_function_effect_summaries(core_link_unit_t *link,
         bool reference_forwarder = call.state == CORE_LINK_DEPENDENCY_RESOLVED
             && function_is_reference_forwarder(analysis->grammar, analysis,
                                                 callee);
-        if ((call.state == CORE_LINK_DEPENDENCY_EXTERNAL
+        if (analysis->may_link_further
+            && call.kind == N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH)
+            unknown_owner = call.from ? call.from : call.to;
+        else if ((call.state == CORE_LINK_DEPENDENCY_EXTERNAL
              || (call.to
                  && link_declaration_has_only_interface_definition(call.to)))
             && !known_reference_builtin && !archived_context_effects)
@@ -25472,6 +26380,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                                nullptr)
         && ir_lowerer_register(lowerer, "nil_literal",
                                n00bb_lower_nil_literal, nullptr)
+        && ir_lowerer_register(lowerer, "cast", n00bb_lower_cast, nullptr)
+        && ir_lowerer_register(lowerer, "bool_not", n00bb_lower_bool_not,
+                               nullptr)
         && ir_lowerer_register(lowerer, "negate", n00bb_lower_negate,
                                nullptr)
         && ir_lowerer_register(lowerer, "string_literal",
@@ -25522,8 +26433,6 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                                      n00bb_lower_typecase_scope, nullptr)
         && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
                                      n00bb_lower_try_scope, nullptr);
-    ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        "comptime-value-expr", n00bb_lower_comptime_value, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "comptime-stmt", n00bb_lower_comptime_statement, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
@@ -28453,6 +29362,185 @@ restore_interface_context_semantics(locate_worker_context_t *loader,
 }
 
 static bool
+register_builtin_binary_operators(th_env *environment, th_ctx *types)
+{
+    static const struct {
+        const char *trait;
+        const char *method;
+        bool integer_only;
+        bool shift;
+    } operators[] = {
+        {"Add", "__add", false, false},
+        {"Subtract", "__subtract", false, false},
+        {"Multiply", "__multiply", false, false},
+        {"Divide", "__divide", false, false},
+        {"Remainder", "__remainder", false, false},
+        {"Bit_And", "__bit_and", true, false},
+        {"Bit_Or", "__bit_or", true, false},
+        {"Bit_Xor", "__bit_xor", true, false},
+        {"Shift_Left", "__shift_left", true, true},
+        {"Shift_Right", "__shift_right", true, true},
+    };
+    static const char *const numeric_types[] = {
+        "int", "uint", "i8", "i16", "i32", "i64", "i128",
+        "u8", "u16", "u32", "u64", "u128", "float", "f32", "f64",
+    };
+    for (size_t o = 0; o < sizeof(operators) / sizeof(operators[0]); o++) {
+        th_type *receiver = th_var(types);
+        th_type *argument = th_var(types);
+        th_type *result = th_var(types);
+        th_param contract_params[] = {
+            {.mode = TH_IN, .type = receiver},
+            {.mode = TH_IN, .type = argument},
+        };
+        th_type *contract = th_func_with_error(types, result,
+            th_var(types), contract_params, 2, nullptr, nullptr, 0);
+        th_member method = {
+            .name = operators[o].method,
+            .type = contract ? th_generalize(types, contract) : nullptr,
+        };
+        th_type *methods = method.type ? th_record(types, &method, 1) : nullptr;
+        if (!methods || !th_env_register_trait_contracts(environment,
+                operators[o].trait, "builtins", "default", TH_ENV_PUBLIC,
+                methods)) return false;
+        for (size_t n = 0; n < sizeof(numeric_types) / sizeof(numeric_types[0]); n++) {
+            const char *name = numeric_types[n];
+            if (operators[o].integer_only && (name[0] == 'f')) continue;
+            th_type *self = th_name(types, name);
+            th_type *other = operators[o].shift ? th_name(types, "int") : self;
+            th_param parameters[] = {
+                {.mode = TH_IN, .type = self},
+                {.mode = TH_IN, .type = other},
+            };
+            th_type *signature = th_func(types, self, parameters, 2,
+                                         nullptr, nullptr, 0);
+            core_buffer_t qualified = {0};
+            core_buffer_printf(&qualified, "builtins.%s.%s.%s",
+                               operators[o].trait, name, operators[o].method);
+            bool registered = signature && qualified.data
+                && th_env_register_function(environment, qualified.data,
+                    operators[o].method, "builtins", "default",
+                    TH_ENV_PUBLIC, signature);
+            core_buffer_release(&qualified);
+            if (!registered) return false;
+        }
+        if (!strcmp(operators[o].trait, "Add")) {
+            th_type *string = th_name(types, "string");
+            th_param parameters[] = {
+                {.mode = TH_IN, .type = string},
+                {.mode = TH_IN, .type = string},
+            };
+            th_type *signature = th_func_with_error(types, string,
+                th_name(types, "nil"), parameters, 2, nullptr, nullptr, 0);
+            if (!signature || !th_env_register_function(environment,
+                    "builtins.__string_add", "__add", "builtins",
+                    "default", TH_ENV_PUBLIC, signature)) return false;
+        }
+    }
+    return true;
+}
+
+static bool
+register_builtin_unary_operators(th_env *environment, th_ctx *types)
+{
+    static const char *const numeric_types[] = {
+        "int", "uint", "i8", "i16", "i32", "i64", "i128",
+        "u8", "u16", "u32", "u64", "u128", "float", "f32", "f64",
+    };
+    static const struct {
+        const char *trait;
+        const char *method;
+        bool boolean;
+    } operators[] = {
+        {"Negate", "__negate", false},
+        {"Not", "__not", true},
+    };
+    for (size_t o = 0; o < sizeof(operators) / sizeof(operators[0]); o++) {
+        th_type *receiver = th_var(types);
+        th_type *result = operators[o].boolean
+            ? th_name(types, "bool") : th_var(types);
+        th_param contract_param = {.mode = TH_IN, .type = receiver};
+        th_type *contract = th_func_with_error(types, result,
+            th_var(types), &contract_param, 1, nullptr, nullptr, 0);
+        th_member method = {
+            .name = operators[o].method,
+            .type = contract ? th_generalize(types, contract) : nullptr,
+        };
+        th_type *methods = method.type ? th_record(types, &method, 1) : nullptr;
+        if (!methods || !th_env_register_trait_contracts(environment,
+                operators[o].trait, "builtins", "default", TH_ENV_PUBLIC,
+                methods)) return false;
+        size_t count = operators[o].boolean ? 1
+            : sizeof(numeric_types) / sizeof(numeric_types[0]);
+        for (size_t n = 0; n < count; n++) {
+            const char *name = operators[o].boolean
+                ? "bool" : numeric_types[n];
+            th_type *self = th_name(types, name);
+            th_param parameter = {.mode = TH_IN, .type = self};
+            th_type *signature = th_func(types, self, &parameter, 1,
+                                         nullptr, nullptr, 0);
+            core_buffer_t qualified = {0};
+            core_buffer_printf(&qualified, "builtins.%s.%s.%s",
+                               operators[o].trait, name,
+                               operators[o].method);
+            bool registered = signature && qualified.data
+                && th_env_register_function(environment, qualified.data,
+                    operators[o].method, "builtins", "default",
+                    TH_ENV_PUBLIC, signature);
+            core_buffer_release(&qualified);
+            if (!registered) return false;
+        }
+    }
+    return true;
+}
+
+static bool
+register_builtin_comparison_operators(th_env *environment, th_ctx *types)
+{
+    static const struct {
+        const char *trait;
+        const char *method;
+        const char *result;
+    } operators[] = {
+        {"Equal", "__equal", "bool"},
+        {"Comparable", "__cmp", "Comparison"},
+    };
+    th_type *comparison = th_name(types, "Comparison");
+    th_member members[] = {
+        {.name = "less", .type = comparison},
+        {.name = "equal", .type = comparison},
+        {.name = "greater", .type = comparison},
+        {.name = "unordered", .type = comparison},
+    };
+    th_type *shape = comparison ? th_record(types, members,
+        sizeof(members) / sizeof(members[0])) : nullptr;
+    if (!shape || !th_env_register_type(environment, "Comparison",
+            "builtins", "default", TH_ENV_PUBLIC)
+        || !th_env_register_type_shape(environment, "Comparison",
+            TH_ENV_TYPE_SHAPE_ENUM, shape)) return false;
+    for (size_t o = 0; o < sizeof(operators) / sizeof(operators[0]); o++) {
+        th_type *receiver = th_var(types);
+        th_type *argument = th_var(types);
+        th_type *result = th_name(types, operators[o].result);
+        th_param parameters[] = {
+            {.mode = TH_IN, .type = receiver},
+            {.mode = TH_IN, .type = argument},
+        };
+        th_type *contract = th_func_with_error(types, result,
+            th_var(types), parameters, 2, nullptr, nullptr, 0);
+        th_member method = {
+            .name = operators[o].method,
+            .type = contract ? th_generalize(types, contract) : nullptr,
+        };
+        th_type *methods = method.type ? th_record(types, &method, 1) : nullptr;
+        if (!methods || !th_env_register_trait_contracts(environment,
+                operators[o].trait, "builtins", "default", TH_ENV_PUBLIC,
+                methods)) return false;
+    }
+    return true;
+}
+
+static bool
 register_builtin_traits(th_env *environment, th_ctx *types)
 {
     th_type *methods = th_record(types, nullptr, 0);
@@ -28462,6 +29550,9 @@ register_builtin_traits(th_env *environment, th_ctx *types)
         !th_env_register_trait_contracts(environment, "Brace_Literal",
             "builtins", "default", TH_ENV_PUBLIC, methods))
         return false;
+    if (!register_builtin_binary_operators(environment, types)) return false;
+    if (!register_builtin_unary_operators(environment, types)) return false;
+    if (!register_builtin_comparison_operators(environment, types)) return false;
 
     th_type *source = th_var(types);
     th_type *cursor = th_var(types);
@@ -28690,9 +29781,9 @@ build_import_environment(parse_grammar_t *grammar,
                     n00bb_link_use_site_t *site =
                         &state->link_use_sites.data[s];
                     if (core_string_eq(site->dispatch_trait,
-                                       CORE_STRING_STATIC("Index_Load"))
+                                       CORE_STRING_STATIC("Index_Read"))
                         && core_string_eq(site->dispatch_method,
-                                          CORE_STRING_STATIC("load"))) {
+                                          CORE_STRING_STATIC("__read"))) {
                         index_result_mismatch = site->node;
                         break;
                     }
@@ -28758,7 +29849,62 @@ build_import_environment(parse_grammar_t *grammar,
 }
 
 static bool
-register_builtin_symbols(parse_annot_result_t *annotations, th_ctx *types)
+register_builtin_comparison_symbols(parse_symtab_t *symtab,
+                                    n00bb_tu_state_t *state,
+                                    th_ctx *types)
+{
+    static const char *const names[] = {
+        "less", "equal", "greater", "unordered",
+    };
+    parse_namespace_t *type_ns = parse_symtab_ns(
+        symtab, CORE_STRING_STATIC("type"));
+    if (!type_ns || !type_ns->root) return false;
+    parse_symtab_enter_scope_all(symtab, type_ns->root);
+    parse_sym_entry_t *symbol = parse_symtab_add(symtab,
+        CORE_STRING_STATIC("type"), CORE_STRING_STATIC("Comparison"),
+        PARSE_SYM_TYPEDEF, nullptr);
+    if (!symbol || !parse_sym_set_binding(symbol,
+            CORE_STRING_STATIC("n00bb.builtin-type"), symbol)) return false;
+    symbol->type = th_name(types, "Comparison");
+    symbol->visibility = CORE_STRING_STATIC("public");
+    symbol->adt_kind = CORE_STRING_STATIC("enum");
+    parse_symtab_push_scope_all(symtab,
+                                CORE_STRING_STATIC("Comparison"));
+    parse_scope_t *members = parse_symtab_current_scope(
+        symtab, CORE_STRING_STATIC(""));
+    bool ok = members && symbol->type;
+    if (ok) {
+        members->scope_tag = CORE_STRING_STATIC("enum");
+        members->adt_kind = CORE_STRING_STATIC("enum");
+        symbol->member_scope = members;
+    }
+    for (size_t i = 0; ok && i < sizeof(names) / sizeof(names[0]); i++) {
+        parse_sym_entry_t *member = parse_symtab_add(symtab,
+            CORE_STRING_STATIC(""), core_string_from_cstr(names[i]),
+            PARSE_SYM_ENUM_CONST, nullptr);
+        n00bb_enum_value_t *value = core_arena_alloc(
+            &state->semantic_values, sizeof(*value));
+        ok = member && value;
+        if (!ok) break;
+        value->magnitude = i;
+        member->type = symbol->type;
+        member->owner_type = symbol;
+        member->mutability = PARSE_SYM_CONST;
+        member->visibility = CORE_STRING_STATIC("public");
+        member->comptime_value = value;
+        member->has_comptime_value = true;
+        parse_sym_set_phases(member, PARSE_SYM_PHASE_BOTH,
+            PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_COMPTIME);
+        parse_sym_set_storage_duration(member,
+                                       PARSE_SYM_STORAGE_COMPTIME);
+    }
+    parse_symtab_pop_scope_all(symtab);
+    return ok;
+}
+
+static bool
+register_builtin_symbols(parse_annot_result_t *annotations,
+                         n00bb_tu_state_t *state, th_ctx *types)
 {
     parse_symtab_t *symtab = annotations ? annotations->symtab : nullptr;
     if (!symtab || !types) return false;
@@ -28852,11 +29998,22 @@ register_builtin_symbols(parse_annot_result_t *annotations, th_ctx *types)
     th_type *option_get_or_else_contract = option_get_or_else_signature
         ? th_env_signature_contract(types, option_get_or_else_signature,
                                     nil_type) : nullptr;
+    th_type *string_type = th_name(types, "string");
+    th_param string_add_parameters[] = {
+        {.mode = TH_IN, .type = string_type},
+        {.mode = TH_IN, .type = string_type},
+    };
+    th_type *string_add_signature = string_type
+        ? th_func_with_error(types, string_type, nil_type,
+            string_add_parameters, 2, nullptr, nullptr, 0) : nullptr;
+    th_type *string_add_contract = string_add_signature
+        ? th_env_signature_contract(types, string_add_signature, nil_type)
+        : nullptr;
     if (!scheme || !contract || !read_scheme || !read_contract
         || !write_scheme || !write_contract || !option_is_nil_scheme
         || !option_get_scheme || !option_get_or_else_scheme
         || !option_is_nil_contract || !option_get_contract
-        || !option_get_or_else_contract) return false;
+        || !option_get_or_else_contract || !string_add_contract) return false;
 
     parse_scope_t *saved = parse_symtab_current_scope(
         symtab, CORE_STRING_STATIC("builtin"));
@@ -28881,11 +30038,15 @@ register_builtin_symbols(parse_annot_result_t *annotations, th_ctx *types)
         CORE_STRING_STATIC("builtin"),
         CORE_STRING_STATIC("__option_get_or_else"), PARSE_SYM_FUNCTION,
         nullptr);
+    parse_sym_entry_t *string_add_symbol = parse_symtab_add(symtab,
+        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__string_add"),
+        PARSE_SYM_FUNCTION, nullptr);
     if (saved)
         parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                                  saved);
     if (!symbol || !read_symbol || !write_symbol || !option_is_nil_symbol
-        || !option_get_symbol || !option_get_or_else_symbol) return false;
+        || !option_get_symbol || !option_get_or_else_symbol
+        || !string_add_symbol) return false;
     symbol->type = scheme;
     symbol->error_type = nil_type;
     symbol->callable_contract = th_generalize(types, contract);
@@ -28907,11 +30068,16 @@ register_builtin_symbols(parse_annot_result_t *annotations, th_ctx *types)
     option_get_or_else_symbol->error_type = nil_type;
     option_get_or_else_symbol->callable_contract = th_generalize(types,
         option_get_or_else_contract);
-    return symbol->callable_contract && read_symbol->callable_contract
+    string_add_symbol->type = string_add_signature;
+    string_add_symbol->error_type = nil_type;
+    string_add_symbol->callable_contract = string_add_contract;
+    return register_builtin_comparison_symbols(symtab, state, types)
+        && symbol->callable_contract && read_symbol->callable_contract
         && write_symbol->callable_contract
         && option_is_nil_symbol->callable_contract
         && option_get_symbol->callable_contract
-        && option_get_or_else_symbol->callable_contract;
+        && option_get_or_else_symbol->callable_contract
+        && string_add_symbol->callable_contract;
 }
 
 static bool
@@ -28926,7 +30092,7 @@ prepare_initial_symbols(parse_grammar_t *grammar,
     state->annotations = parse_annot_result_new(nullptr);
     parse_annot_result_set_type_node_resolver(state->annotations,
         n00bb_resolve_type_node, unit);
-    if (!register_builtin_symbols(state->annotations, types)) return false;
+    if (!register_builtin_symbols(state->annotations, state, types)) return false;
     parse_annot_result_set_diagnostics(state->annotations,
         core_translation_unit_diagnostics(unit), unit);
     parse_annot_result_set_node_callback(state->annotations,
@@ -30319,6 +31485,7 @@ record_returned_call_alias_body(parse_grammar_t *grammar,
             ? core_tree_child(member, 0) : nullptr;
         bool trait_dispatch = member
             && !call_receiver_is_module(grammar, unit, receiver);
+        if (trait_dispatch && analysis->may_link_further) return false;
         parse_sym_entry_t *callee = trait_dispatch
             ? call_function_symbol(grammar, unit, call, true)
             : call_function_symbol(grammar, unit,
@@ -30611,6 +31778,7 @@ simple_returned_global(parse_grammar_t *grammar,
         ? core_tree_child(member, 0) : nullptr;
     bool trait_dispatch = member
         && !call_receiver_is_module(grammar, unit, receiver);
+    if (trait_dispatch && analysis->may_link_further) return false;
     parse_sym_entry_t *callee = trait_dispatch
         ? call_function_symbol(grammar, unit, call, true)
         : call_function_symbol(grammar, unit, core_tree_child(call, 0),
@@ -30865,6 +32033,13 @@ record_call_argument_escape_facts_once(n00bb_link_analysis_t *analysis)
             bool module_call = member
                 && call_receiver_is_module(grammar, unit, receiver);
             bool trait_dispatch = member && !module_call;
+            if (trait_dispatch && analysis->may_link_further) {
+                if (receiver)
+                    mark_expression_aliases_may_escape(unit, receiver);
+                parse_tree_t *args = call_arguments_node(grammar, label->self);
+                mark_expression_aliases_may_escape(unit, args);
+                continue;
+            }
             parse_sym_entry_t *function = call_function_symbol(grammar, unit,
                 label->cond, member != nullptr);
             bool source_function = function && function->decl_node
@@ -31089,7 +32264,23 @@ bind_for_item_type(parse_grammar_t *grammar,
         for (size_t i = 0; i < bindings.len; i++) {
             parse_tree_t *binding = bindings.data[i];
             parse_sym_entry_t *symbol = core_tree_node_value(binding).sym;
-            const th_member *member = th_record_member(resolved, i);
+            const th_member *member = nullptr;
+            for (size_t f = 0; symbol && f < th_record_len(resolved); f++) {
+                const th_member *candidate = th_record_member(resolved, f);
+                if (candidate && core_string_eq(symbol->name,
+                        core_string_from_cstr(candidate->name))) {
+                    member = candidate;
+                    break;
+                }
+            }
+            for (size_t prior = 0; symbol && prior < i; prior++) {
+                parse_sym_entry_t *earlier =
+                    core_tree_node_value(bindings.data[prior]).sym;
+                if (earlier && core_string_eq(symbol->name, earlier->name)) {
+                    member = nullptr;
+                    break;
+                }
+            }
             th_type *unified = symbol && member
                 ? th_unify_in_place(tu_state(unit)->types, symbol->type,
                                     member->type) : nullptr;
@@ -32051,16 +33242,39 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     bool variant_payload = !entering
         && prepare_variant_payload_type(grammar, unit, node);
     bool type_reference = is_type_reference_node_at(grammar, node, parent);
+    core_string_t operator_trait = {0}, operator_method = {0};
+    n00bb_link_use_site_t operator_site = {
+        .node = node,
+        .operator_dispatch = true,
+    };
+    bool intrinsic_binary = !entering
+        && binary_operator_dispatch_for_node(grammar, node,
+            &operator_trait, &operator_method);
+    bool intrinsic_unary = !entering
+        && unary_operator_dispatch_for_node(grammar, node,
+            &operator_trait, &operator_method);
+    operator_site.dispatch_trait = operator_trait;
+    operator_site.dispatch_method = operator_method;
+    intrinsic_binary = intrinsic_binary
+        && !core_string_eq(operator_trait, CORE_STRING_STATIC("Equal"))
+        && !core_string_eq(operator_trait, CORE_STRING_STATIC("Comparable"))
+        && primitive_operator_site(&operator_site);
+    intrinsic_unary = intrinsic_unary
+        && primitive_operator_site(&operator_site);
     parse_annot_kind_t filtered_kinds[
         sizeof(kinds) / sizeof(kinds[0])];
     size_t filtered_count = 0;
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
         if ((!variant_payload || kinds[i] != PARSE_ANNOT_INFER)
-            && (!type_reference || kinds[i] != PARSE_ANNOT_INFER))
+            && (!type_reference || kinds[i] != PARSE_ANNOT_INFER)
+            && (!(intrinsic_binary || intrinsic_unary)
+                || kinds[i] != PARSE_ANNOT_INFER))
             filtered_kinds[filtered_count++] = kinds[i];
     const parse_annot_kind_t *node_kinds = variant_payload || type_reference
+        || intrinsic_binary || intrinsic_unary
         ? filtered_kinds : kinds;
     size_t node_kind_count = variant_payload || type_reference
+        || intrinsic_binary || intrinsic_unary
         ? filtered_count : sizeof(kinds) / sizeof(kinds[0]);
     parse_annot_kind_t filtered_reference_kinds[
         sizeof(reference_kinds) / sizeof(reference_kinds[0])];
@@ -32144,6 +33358,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         bind_declared_type_from_node(grammar, node);
         parse_tree_walk_apply_node(state->annotation_walk, node, parent,
             depth, child_index, node_kinds, node_kind_count, false);
+        if (!refine_intrinsic_binary_result(grammar, unit, state, node)
+            || !refine_intrinsic_unary_result(grammar, unit, state, node))
+            return;
         if (nt_is(grammar, node, "alias-stmt")
             && alias_declaration_is_transparent(node)) {
             parse_sym_entry_t *alias = core_tree_node_value(node).sym;
@@ -32151,10 +33368,12 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (alias) core_tree_node_value(node).type = alias->type;
         }
         record_function_exit_fact(grammar, unit, node, state);
-        if (type_reference)
+        if (type_reference || dotted_symbol_path_node(grammar, node))
             remember_link_use_site(grammar, unit, state, node);
+        if (dotted_symbol_path_node(grammar, node)
+            && !n00bb_assignment_target(grammar, node, nullptr)
+            && !resolve_module_member_site(grammar, unit, node)) return;
         if (type_reference && dotted_symbol_path_node(grammar, node)) {
-            if (!resolve_module_member_site(grammar, unit, node)) return;
             parse_node_resolution_t resolution = parse_tree_resolution(node);
             if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
                 && resolution.target.symbol->type) {
@@ -32513,6 +33732,16 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0012"),
                 CORE_STRING_STATIC(
                     "could not resolve the declared variant type"),
+                link_source_location(node));
+            return;
+        }
+        if (nt_is(grammar, node, "enum-stmt")
+            && !finalize_enum_symbol_type(grammar, node, unit, state)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0012"),
+                CORE_STRING_STATIC(
+                    "could not resolve the declared enum type"),
                 link_source_location(node));
             return;
         }
@@ -35712,7 +36941,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 parse_grammar_t *grammar, bool lex, bool show_tokens,
                 bool parse, bool show_tree, bool preprocess,
                 bool show_preprocessed, bool show_symbols,
-                bool defer_diagnostics,
+                bool defer_diagnostics, bool may_link_further,
                 const th_env *const *linked_interfaces,
                 size_t linked_interface_count,
                 const n00bb_preprocessor_options_t *preprocessor_options,
@@ -35899,6 +37128,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                     core_list_new(n00bb_global_result_binding_t),
                 .linked_interfaces = linked_interfaces,
                 .linked_interface_count = linked_interface_count,
+                .may_link_further = may_link_further,
             };
             core_dict_init(&analysis->declarations_by_symbol, nullptr,
                            nullptr);
@@ -36193,6 +37423,7 @@ main(int argc, char **argv)
             || (!locate_only && !lex_command && !parse_command),
         show_preprocessed, show_symbols,
         lower_command || build_command || library_command || compile_command,
+        library_command || compile_command,
         linked_interfaces, (size_t)interface_count,
         &preprocessor_options,
         ir_context, types, (size_t)requested_jobs, &environment, &link,

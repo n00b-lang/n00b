@@ -1,1 +1,3 @@
 func add(left: int, right: int) -> int { return left + right }
+func divide(left: int, right: int) -> int { return left / right }
+func remainder(left: int, right: int) -> int { return left % right }

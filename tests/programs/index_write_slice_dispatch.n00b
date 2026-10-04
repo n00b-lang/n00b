@@ -1,15 +1,15 @@
-trait Index_Store {
-    func store(self: `T, index: int, item: string) -> int
+trait Index_Write {
+    func __write(self: `T, index: int, item: string) -> int
 }
 
-func store(self: array[int], index: int, item: string) -> int { return 1 }
+func __write(self: array[int], index: int, item: string) -> int { return 1 }
 func set_item(items: array[int]) { items [0] = "stored" }
 
 trait Index_Slice {
-    func slice(self: `T, start_ix: int = 0, end_ix: int = -1) -> view[`E]
+    func __slice(self: `T, start_ix: int = 0, end_ix: int = -1) -> view[`E]
 }
 
-func slice(self: array[int], start_ix: int = 0, end_ix: int = -1) -> view[int] {
+func __slice(self: array[int], start_ix: int = 0, end_ix: int = -1) -> view[int] {
     return self [:]
 }
 

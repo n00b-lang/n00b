@@ -14,6 +14,6 @@ func enter_failure_value() -> int {
     return comptime {
         var result: int = 5
         with QuietRecorder(), FailingEnter() { result = 8 }
-        value result
+        = result
     }
 }

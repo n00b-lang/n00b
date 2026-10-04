@@ -9,6 +9,6 @@ func error_failure_value() -> int {
     return comptime {
         var result: int = 1
         with PropagatingExit() { result = 2 }
-        value result
+        = result
     }
 }

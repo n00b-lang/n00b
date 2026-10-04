@@ -1,8 +1,8 @@
-trait Index_Store {
-    func store(self: `T, index: int, item: array[int]) -> nil fail: int
+trait Index_Write {
+    func __write(self: `T, index: int, item: array[int]) -> nil fail: int
 }
 
-func store(self: array[array[int]], index: int, item: array[int]) -> nil fail: int {}
+func __write(self: array[array[int]], index: int, item: array[int]) -> nil fail: int {}
 
 var global_target: int[4]
 

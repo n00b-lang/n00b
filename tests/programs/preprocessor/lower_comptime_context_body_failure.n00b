@@ -13,6 +13,6 @@ func body_failure_value() -> int fail: int {
         with BodyFailure() {
             result = fail_body()!
         }
-        value result
+        = result
     }
 }

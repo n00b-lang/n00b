@@ -54,5 +54,5 @@ test(
            n00bb_exe.full_path(), storage_interface_writer.full_path()],
     env: ['N00BB_STACK_OBJECT_LIMIT_BYTES='
         + get_option('stack_object_limit_bytes').to_string()],
-    timeout: 45,
+    timeout: 60,
 )

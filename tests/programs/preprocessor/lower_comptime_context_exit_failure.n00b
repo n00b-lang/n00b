@@ -9,6 +9,6 @@ func exit_failure_value() -> int {
     return comptime {
         var result: int = 1
         with RecoverExit() { result = 2 }
-        value result
+        = result
     }
 }

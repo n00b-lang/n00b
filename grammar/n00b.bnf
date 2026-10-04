@@ -54,7 +54,6 @@
                          | <switch-stmt>
                          | <try-stmt>
                          | <with-stmt>
-                         | <comptime-stmt>
                          | <continue-stmt>
                          | <break-stmt>
                          | <return-stmt>
@@ -152,7 +151,6 @@
 <alias-stmt> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
        <member-visibility>? %"alias" %IDENTIFIER %"=" <type-spec>
      | <member-visibility>? %"type" %IDENTIFIER %"=" <type-spec>
-               | %"alias" %IDENTIFIER %"=" <type-spec>
 
 <context-def> @scope("context", $1) @declares($1) ::=
        %"context" %IDENTIFIER <param-decl> <context-spec> <context-body>
@@ -233,7 +231,7 @@
 <return-stmt> @jump("return") @emit("return", $1) @infer("$1") ::= %"return" <expression>
 <return-stmt> @jump("return") @emit("return") ::= %"return"
 <fail-stmt> @jump("fail") @infer("$1") ::= %"fail" <expression>
-<value-stmt> @jump("value") @infer("$1") ::= %"value" <expression>
+<value-stmt> @jump("value") @infer("$1") ::= %"=" <expression>
 
 <assert-stmt> ::= (%"assert"|%"require") <expression>
 
@@ -359,42 +357,43 @@
 <equality-expr> @emit("identity", $0) ::= <compare-expr>
 <equality-op> ::= %"==" | %"!="
 
-<compare-expr> @emit("binary", $0, $2) @infer("compare($0, $2)") ::=
+<compare-expr> @emit("binary", $0, $2) @infer("compare($0, $2, __cmp, Comparison)") ::=
     <bitor-expr> <compare-op> <bitor-expr>
 <compare-expr> @emit("identity", $0) ::= <bitor-expr>
 <compare-op> ::= %"<" | %"<=" | %">" | %">="
 
-<bitor-expr> @infer("$0 unify $2") ::= <bitor-expr> %"|" <bitxor-expr>
+<bitor-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __bit_or)") ::= <bitor-expr> %"|" <bitxor-expr>
 <bitor-expr> @emit("identity", $0) ::= <bitxor-expr>
 
-<bitxor-expr> @infer("$0 unify $2") ::= <bitxor-expr> %"^" <bitand-expr>
+<bitxor-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __bit_xor)") ::= <bitxor-expr> %"^" <bitand-expr>
 <bitxor-expr> @emit("identity", $0) ::= <bitand-expr>
 
-<bitand-expr> @infer("$0 unify $2") ::= <bitand-expr> %"&" <shift-expr>
+<bitand-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __bit_and)") ::= <bitand-expr> %"&" <shift-expr>
 <bitand-expr> @emit("identity", $0) ::= <shift-expr>
 
-<shift-expr> @infer("$0") ::= <shift-expr> <shift-op> <add-expr>
+<shift-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __shift_left)") ::= <shift-expr> %"<<" <add-expr>
+<shift-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __shift_right)") ::= <shift-expr> %">>" <add-expr>
 <shift-expr> @emit("identity", $0) ::= <add-expr>
-<shift-op> ::= %"<<" | %">>"
 
-<add-expr> @emit("binary", $0, $2) @infer("$0 unify $2") ::= <add-expr> <add-op> <mul-expr>
+<add-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __add)") ::= <add-expr> %"+" <mul-expr>
+<add-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __subtract)") ::= <add-expr> %"-" <mul-expr>
 <add-expr> @emit("identity", $0) ::= <mul-expr>
-<add-op> ::= %"+" | %"-"
 
-<mul-expr> @emit("binary", $0, $2) @infer("$0 unify $2") ::= <mul-expr> <mul-op> <unary-expr>
+<mul-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __multiply)") ::= <mul-expr> %"*" <unary-expr>
+<mul-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __divide)") ::= <mul-expr> %"/" <unary-expr>
+<mul-expr> @emit("binary", $0, $2) @infer("method_result($0, $2, __remainder)") ::= <mul-expr> %"%" <unary-expr>
 <mul-expr> @emit("identity", $0) ::= <unary-expr>
-<mul-op> ::= %"*" | %"/" | %"%"
 
-<unary-expr> @infer("bool")     ::= %"!" <unary-expr>
-<unary-expr> @emit("negate", $1) @infer("$1") ::= %"-" <unary-expr>
+<unary-expr> @emit("bool_not", $1) @infer("bool unify method_return($1, __not)") ::= %"!" <unary-expr>
+<unary-expr> @emit("negate", $1) @infer("method_return($1, __negate)") ::= %"-" <unary-expr>
 <unary-expr> @emit("identity", $1) @infer("$1") ::= %"+" <unary-expr>
 <unary-expr> @operator("ref") @infer("ref[$1]") ::= %"ref" <unary-expr>
-<unary-expr> @operator("cast") @infer("$0") ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
+<unary-expr> @emit("cast", $4) @infer("$2") ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> @emit("identity", $0) ::= <postfix-expr>
 
 <postfix-expr> @emit("module_member") @infer("field_return($0)") ::= <postfix-expr> %"." %IDENTIFIER
-<postfix-expr> @emit("call") @infer("element_of($0)") ::= <postfix-expr> %"[" <index-contents> %"]"
-<postfix-expr> @emit("call") @infer("slice_of($0)") ::= <postfix-expr> %"[" <slice-contents> %"]"
+<postfix-expr> @emit("call") @infer("element_of($0, __read, __write)") ::= <postfix-expr> %"[" <index-contents> %"]"
+<postfix-expr> @emit("call") @infer("slice_of($0, __slice)") ::= <postfix-expr> %"[" <slice-contents> %"]"
 <postfix-expr> @operator("unwrap_result") @infer("unwrap_result($0)") ::= <postfix-expr> %"!"
 <postfix-expr> @emit("call") @infer("return_of($0)") @call($0) ::= <postfix-expr> %"(" %")"
 <postfix-expr> @emit("call") @infer("return_of($0)") @call($0, $2) ::= <postfix-expr> %"(" <call-args> %")"
@@ -424,7 +423,6 @@
             | <if-value-expr>
             | <switch-value-expr>
             | <try-value-expr>
-            | <comptime-value-expr>
             | <new-expr>
             | <typeof-expr>
             | <tuple-or-paren>
@@ -445,9 +443,6 @@
 <new-expr> @infer("`t") @emit("array_new") ::= %"new" (%"[" <type-spec> %"]")? %"(" <call-args>? %")"
 
 <block-value-expr> @scope("block") @infer("$1") ::= <block-start> <value-body-stmts> <block-end>
-
-<comptime-value-expr> @scope("comptime") @infer("$2") ::=
-       %"comptime" (<expression> | <value-body>)
 
 # Literal modifiers are uniformly adjacent identifier-plus-literal syntax. A
 # modifier names a compile-time handler; it is not a runtime call or a value
