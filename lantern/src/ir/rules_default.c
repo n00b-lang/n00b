@@ -2704,14 +2704,6 @@ static ir_rule_result_t rule_none(ir_module_t *m, ir_instr_t *in,
     return ACCEPT(nullptr);
 }
 
-static ir_rule_result_t rule_debug_enabled(ir_module_t *m, ir_instr_t *in,
-                                           ir_diags_t *d, void *state)
-{
-    (void)in;
-    (void)d;
-    (void)state;
-    return ACCEPT(ir_type_intern(m, th_name(m->ctx->types, "bool")));
-}
 
 typedef struct {
     ir_op_t         op;
@@ -2801,7 +2793,6 @@ static const entry DEFAULTS[] = {
     {IR_OP_TYPENAME, "ir.typename", rule_typename},
     {IR_OP_ARMTAG, "ir.armtag", rule_armtag},
     {IR_OP_PHASE_RESULT, "ir.phase_result", rule_annotated},
-    {IR_OP_DEBUG_ENABLED, "ir.debug_enabled", rule_debug_enabled},
     {IR_OP_JUMP, "ir.jump", rule_none},
     {IR_OP_BRANCH, "ir.branch", rule_branch},
     {IR_OP_SWITCH, "ir.switch", rule_switch},
