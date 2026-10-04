@@ -1492,14 +1492,19 @@ th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
     return TH_ENV_METHOD_AMBIGUOUS;
   if (!best)
     return TH_ENV_METHOD_NOT_FOUND;
+  th_type *signature = nullptr;
+  th_type *error_type = nullptr;
+  if (!th_env_signature_channels(ctx, best->contract, &signature,
+                                 &error_type))
+    return TH_ENV_METHOD_NOT_FOUND;
   if (out)
     *out = (th_env_method_t){
         .qualified_name = best->qualified_name,
         .root_name = best->root_name,
         .module = best->module,
         .package = best->package,
-        .signature = best->scheme,
-        .error_type = best->error_type,
+        .signature = signature,
+        .error_type = error_type,
         .contract = best->contract,
     };
   return TH_ENV_METHOD_FOUND;
@@ -1564,16 +1569,21 @@ size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,
   size_t count = 0;
   for (size_t i = 0; i < candidates.len; i++) {
     const th_env_function_t *function = candidates.data[i];
-    if (out && count < max_methods)
+    if (out && count < max_methods) {
+      th_type *signature = nullptr, *error_type = nullptr;
+      if (!th_env_signature_channels(ctx, function->contract, &signature,
+                                     &error_type))
+        continue;
       out[count] = (th_env_method_t){
           .qualified_name = function->qualified_name,
           .root_name = function->root_name,
           .module = function->module,
           .package = function->package,
-          .signature = function->scheme,
-          .error_type = function->error_type,
+          .signature = signature,
+          .error_type = error_type,
           .contract = function->contract,
       };
+    }
     count++;
   }
   core_list_free(candidates);

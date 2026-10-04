@@ -1045,6 +1045,7 @@ add_child_flattening_same_group(parse_tree_t *parent,
         return;
     }
 
+
     if (same_group_node(parent, child)) {
         if (parent->node.num_children == 0) {
             parse_tree_t **children = child->node.children;

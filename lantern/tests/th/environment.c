@@ -386,6 +386,20 @@ int main(void) {
                           "base", TH_ENV_PACKAGE,
                           fn1(types, concrete_box, concrete_box)));
 
+  th_type *returns_argument_receiver = th_var(types);
+  th_type *returns_argument_value = th_var(types);
+  check("register trait with an independent generic argument and result",
+        th_env_register_trait(
+            env, "ReturnsArgument", "traits", "base", TH_ENV_PUBLIC,
+            method_record(types, "echo",
+                fn2(types, returns_argument_receiver, returns_argument_value,
+                    returns_argument_value))));
+  th_type *echo_value = th_var(types);
+  check("register generic method implementation",
+        register_function(env, "base.ints.echo", "echo", "ints", "base",
+                          TH_ENV_PACKAGE,
+                          fn2(types, integer, echo_value, echo_value)));
+
   th_type *pair_trait_receiver = th_var(types);
   check("register trait used to test overlapping receiver patterns",
         th_env_register_trait(
@@ -569,6 +583,24 @@ int main(void) {
             th_ctx_set_environment(inside, env, "consumer", "base") &&
             th_ctx_set_environment(outside, env, "consumer", "other") &&
             !th_ctx_set_environment(inside, env, "other", "base"));
+  th_env_method_t first_echo = {0}, second_echo = {0};
+  const th_param *first_echo_arg = nullptr, *second_echo_arg = nullptr;
+  bool independent_echo_signatures =
+      th_env_method_resolve(inside, integer, "ReturnsArgument", "echo",
+                            &first_echo) == TH_ENV_METHOD_FOUND &&
+      th_env_method_resolve(inside, integer, "ReturnsArgument", "echo",
+                            &second_echo) == TH_ENV_METHOD_FOUND;
+  first_echo_arg = independent_echo_signatures
+      ? th_func_param(first_echo.signature, 1) : nullptr;
+  second_echo_arg = independent_echo_signatures
+      ? th_func_param(second_echo.signature, 1) : nullptr;
+  check("each method resolution owns a fresh generic signature instance",
+        independent_echo_signatures && first_echo_arg && second_echo_arg &&
+            first_echo.signature != second_echo.signature &&
+            th_unify_in_place(inside, first_echo_arg->type,
+                              th_ind(inside, 0, integer)) &&
+            th_unify_in_place(inside, second_echo_arg->type,
+                              th_ind(inside, 0, string)));
   th_ctx *secret_context = th_ctx_new();
   check("private type remains visible in its defining module",
         th_ctx_set_environment(secret_context, env, "secrets", "base") &&

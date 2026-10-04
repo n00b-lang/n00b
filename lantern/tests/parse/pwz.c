@@ -56,6 +56,7 @@ first_leaf_text(parse_tree_t *node)
     return nullptr;
 }
 
+
 static void
 test_basic_parse(void)
 {
