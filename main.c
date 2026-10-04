@@ -638,9 +638,6 @@ static bool resolve_function_parameter_facts(
 static bool semantic_static_value_from_expression(
     parse_grammar_t *grammar, parse_tree_t *expression, th_type *type,
     n00bb_tu_state_t *state, n00bb_static_value_t *out, size_t depth);
-static th_type *type_from_syntax(parse_grammar_t *grammar,
-                                 core_translation_unit_t *unit,
-                                 parse_tree_t *node);
 static int builtin_generic_type_arity(const char *name);
 static bool static_value_matches_type(const n00bb_static_value_t *value,
     th_type *type, n00bb_tu_state_t *state, size_t depth);
@@ -1502,14 +1499,18 @@ function_parameter_facts(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_tree_t *function = core_tree_node_value(node).parent;
     while (function && !nt_is(grammar, function, "func-def")
-           && !nt_is(grammar, function, "trait-spec"))
+           && !nt_is(grammar, function, "trait-spec")
+           && !nt_is(grammar, function, "context-def"))
         function = core_tree_node_value(function).parent;
     parse_sym_entry_t *symbol = function
         ? core_tree_node_value(function).sym : nullptr;
     if (!symbol) return nullptr;
-    return parse_sym_binding(symbol, nt_is(grammar, function, "trait-spec")
+    core_string_t binding_key = nt_is(grammar, function, "trait-spec")
         ? CORE_STRING_STATIC("n00bb.trait.parameter-facts")
-        : CORE_STRING_STATIC("n00bb.function.parameter-facts"));
+        : nt_is(grammar, function, "context-def")
+            ? CORE_STRING_STATIC("n00bb.context.parameter-facts")
+            : CORE_STRING_STATIC("n00bb.function.parameter-facts");
+    return parse_sym_binding(symbol, binding_key);
 }
 
 static bool
@@ -1525,6 +1526,18 @@ record_function_parameter_fact(parse_grammar_t *grammar,
     parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
     parse_tree_t *type_node = child_nt(grammar, node, "type-spec");
     if (!facts) return true;
+    parse_tree_t *owner = core_tree_node_value(node).parent;
+    while (owner && !nt_is(grammar, owner, "func-def")
+           && !nt_is(grammar, owner, "trait-spec")
+           && !nt_is(grammar, owner, "context-def"))
+        owner = core_tree_node_value(owner).parent;
+    if (owner && nt_is(grammar, owner, "context-def")) {
+        parse_tree_t *context_child = node;
+        while (context_child
+               && core_tree_node_value(context_child).parent != owner)
+            context_child = core_tree_node_value(context_child).parent;
+        if (!nt_is(grammar, context_child, "param-decl")) return true;
+    }
     n00bb_function_parameter_ref_t *grown = core_arena_alloc(
         &state->semantic_values,
         (facts->param_count + 1) * sizeof(*facts->params));
@@ -2922,13 +2935,6 @@ type_variable_for_signature(th_ctx *types,
 }
 
 static th_type *
-type_from_syntax(parse_grammar_t *grammar, core_translation_unit_t *unit,
-                parse_tree_t *node)
-{
-    return type_from_syntax_with_variables(grammar, unit, node, nullptr);
-}
-
-static th_type *
 type_from_syntax_with_variables(parse_grammar_t *grammar,
                 core_translation_unit_t *unit, parse_tree_t *node,
                 core_list_t(n00bb_typevar_binding_t) *variables)
@@ -4022,7 +4028,8 @@ resolve_function_parameter_facts(parse_grammar_t *grammar,
         parse_nt_node_t *parameter = &core_tree_node_value(node);
         parse_tree_t *owner = parameter->parent;
         while (owner && !nt_is(grammar, owner, "func-def")
-               && !nt_is(grammar, owner, "trait-spec"))
+               && !nt_is(grammar, owner, "trait-spec")
+               && !nt_is(grammar, owner, "context-def"))
             owner = core_tree_node_value(owner).parent;
         parse_sym_entry_t *function = owner
             ? core_tree_node_value(owner).sym : nullptr;
@@ -4286,7 +4293,6 @@ record_context_signature(parse_grammar_t *grammar,
 {
     parse_sym_entry_t *symbol = core_tree_node_value(context).sym;
     if (!symbol || !state || !state->types) return;
-    parse_tree_t *params = child_nt(grammar, context, "param-decl");
     parse_tree_t *spec = child_nt(grammar, context, "context-spec");
     parse_tree_t *context_body = child_nt(grammar, context, "context-body");
     parse_tree_t *context_hooks = child_nt(grammar, context_body,
@@ -4330,16 +4336,17 @@ record_context_signature(parse_grammar_t *grammar,
     core_list_t(th_param) constructor_params = core_list_new(th_param);
     th_param constructor_rest = {0};
     bool constructor_has_rest = false;
-    bool params_ok = collect_signature_params(grammar, unit, params,
-        state->types, &constructor_params, &constructor_rest,
-        &constructor_has_rest, nullptr);
+    n00bb_function_parameter_facts_t *parameter_facts = parse_sym_binding(
+        symbol, CORE_STRING_STATIC("n00bb.context.parameter-facts"));
+    bool params_ok = resolve_function_parameter_facts(grammar, state,
+        parameter_facts, &constructor_params, &constructor_rest,
+        &constructor_has_rest);
     th_type *provided_type = provides
-        ? type_from_syntax(grammar, unit,
-                           child_nt(grammar, provides, "type-spec"))
+        ? core_tree_node_value(child_nt(grammar, provides,
+            "type-spec")).type
         : th_name(state->types, "nil");
     th_type *failure_type = error
-        ? type_from_syntax(grammar, unit,
-                           child_nt(grammar, error, "one-tspec"))
+        ? core_tree_node_value(child_nt(grammar, error, "one-tspec")).type
         : th_name(state->types, "nil");
     th_type *signature = params_ok && provided_type && failure_type
         ? th_func_with_error(state->types, provided_type, failure_type,
@@ -4355,55 +4362,70 @@ record_context_signature(parse_grammar_t *grammar,
     }
     symbol->type = signature;
     symbol->error_type = failure_type;
-
-    for (size_t i = 0; i < sizeof(hook_names) / sizeof(hook_names[0]); i++) {
-        const char *hook_role = n00bb_context_hook_role(hook_names[i]);
-        parse_tree_t *hook = hook_role ? parse_sym_binding(symbol,
-            core_string_borrow(hook_role, strlen(hook_role))) : nullptr;
-        if (!hook) continue;
-        core_list_t(th_param) hook_signature_params = core_list_new(th_param);
-        for (size_t parameter_ix = 0;
-             parameter_ix < constructor_params.len; parameter_ix++)
-            core_list_push(hook_signature_params,
-                constructor_params.data[parameter_ix]);
-        th_param hook_rest = constructor_rest;
-        bool hook_has_rest = constructor_has_rest;
-        bool hook_params_ok = params_ok;
-        parse_tree_t *hook_param_list = child_nt(grammar, hook,
-                                                  "context-hook-params");
-        parse_tree_t *hook_param = child_nt(grammar, hook_param_list,
-                                             "pos-param");
-        if (hook_param) {
-            parse_tree_t *hook_type_node = child_nt(grammar, hook_param,
-                                                     "type-spec");
-            th_type *parameter_type = hook_type_node
-                ? type_from_syntax(grammar, unit, hook_type_node)
-                : i == 2 ? failure_type
-                : provided_type;
-            if (!parameter_type) hook_params_ok = false;
-            else core_list_push(hook_signature_params, ((th_param){
-                .mode = TH_IN, .type = parameter_type,
-            }));
-        }
-        th_type *hook_return = i == 0 ? provided_type
-                                      : th_name(state->types, "nil");
-        th_type *hook_failure = i == 3 ? th_name(state->types, "nil")
-                                       : failure_type;
-        th_type *hook_type = hook_params_ok && hook_return && hook_failure
-            ? th_func_with_error(state->types, hook_return, hook_failure,
-                hook_signature_params.data, hook_signature_params.len,
-                hook_has_rest ? &hook_rest : nullptr, nullptr, 0)
-            : nullptr;
-        core_list_free(hook_signature_params);
-        if (!hook_type) {
-            core_diagnostics_report(core_translation_unit_diagnostics(unit),
-                unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0004"),
-                CORE_STRING_STATIC("could not form context hook signature from its declaration"));
-            continue;
-        }
-        core_tree_node_value(hook).type = hook_type;
-    }
     core_list_free(constructor_params);
+}
+
+static void
+record_context_hook_signature(parse_grammar_t *grammar,
+                               core_translation_unit_t *unit,
+                               parse_tree_t *hook, n00bb_tu_state_t *state)
+{
+    if (!hook || !state || !state->types) return;
+    int hook_index = nt_is(grammar, hook, "context-enter") ? 0
+        : nt_is(grammar, hook, "context-exit") ? 1
+        : nt_is(grammar, hook, "context-error") ? 2
+        : nt_is(grammar, hook, "context-ensure") ? 3 : -1;
+    if (hook_index < 0) return;
+    parse_tree_t *context = core_tree_node_value(hook).parent;
+    while (context && !nt_is(grammar, context, "context-def"))
+        context = core_tree_node_value(context).parent;
+    parse_sym_entry_t *symbol = context
+        ? core_tree_node_value(context).sym : nullptr;
+    th_type *context_type = symbol && symbol->type
+        ? th_resolve(symbol->type) : nullptr;
+    if (!symbol || !context_type || th_kind_of(context_type) != TH_FUNCTION)
+        return;
+    th_type *provided_type = th_func_ret(context_type);
+    th_type *failure_type = symbol->error_type;
+    n00bb_function_parameter_facts_t *parameter_facts = parse_sym_binding(
+        symbol, CORE_STRING_STATIC("n00bb.context.parameter-facts"));
+    core_list_t(th_param) hook_params = core_list_new(th_param);
+    th_param rest = {0};
+    bool has_rest = false;
+    bool valid = resolve_function_parameter_facts(grammar, state,
+        parameter_facts, &hook_params, &rest, &has_rest);
+
+    parse_tree_t *hook_param_list = child_nt(grammar, hook,
+                                              "context-hook-params");
+    parse_tree_t *hook_param = child_nt(grammar, hook_param_list, "pos-param");
+    if (hook_param) {
+        parse_tree_t *hook_type_node = child_nt(grammar, hook_param,
+                                                 "type-spec");
+        th_type *parameter_type = hook_type_node
+            ? core_tree_node_value(hook_type_node).type
+            : hook_index == 2 ? failure_type : provided_type;
+        if (!parameter_type) valid = false;
+        else core_list_push(hook_params, ((th_param){
+            .mode = TH_IN, .type = parameter_type,
+        }));
+    }
+    th_type *hook_return = hook_index == 0 ? provided_type
+        : th_name(state->types, "nil");
+    th_type *hook_failure = hook_index == 3
+        ? th_name(state->types, "nil") : failure_type;
+    th_type *hook_type = valid && hook_return && hook_failure
+        ? th_func_with_error(state->types, hook_return, hook_failure,
+            hook_params.data, hook_params.len,
+            has_rest ? &rest : nullptr, nullptr, 0) : nullptr;
+    core_list_free(hook_params);
+    if (!hook_type) {
+        core_diagnostics_report(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0004"),
+            CORE_STRING_STATIC(
+                "could not form context hook signature from its declaration"));
+        return;
+    }
+    core_tree_node_value(hook).type = hook_type;
 }
 
 static bool
@@ -32138,8 +32160,29 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
 
     if (!entering && nt_is(grammar, node, "func-def"))
         record_function_signature(grammar, unit, node, state, true);
-    if (entering && nt_is(grammar, node, "context-def"))
-        record_context_signature(grammar, unit, node, state);
+    if (entering && nt_is(grammar, node, "context-def")) {
+        parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
+        if (symbol) {
+            n00bb_function_parameter_facts_t *parameter_facts =
+                core_arena_alloc(&state->semantic_values,
+                                 sizeof(*parameter_facts));
+            if (!parameter_facts
+                || !parse_sym_set_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.context.parameter-facts"),
+                    parameter_facts)) {
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+                    CORE_STRING_STATIC(
+                        "could not initialize context parameter facts"),
+                    link_source_location(node));
+                return;
+            }
+            memset(parameter_facts, 0, sizeof(*parameter_facts));
+        }
+    }
+    if (entering && nt_is(grammar, node, "context-enter"))
+        record_context_hook_signature(grammar, unit, node, state);
 
     if (!entering) {
         if (nt_is(grammar, node, "sym-decl")) {
@@ -32290,9 +32333,21 @@ semantic_annotate_tree(annotation_context_t *context,
     if (!node || core_tree_is_leaf(node)) return;
     semantic_annotation_node(context, unit, node, parent, depth, child_index,
                              true);
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        semantic_annotate_tree(context, unit, core_tree_child(node, i), node,
-                               depth + 1, (int32_t)i);
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        semantic_annotate_tree(context, unit, child, node, depth + 1,
+                               (int32_t)i);
+        if (nt_is(context->grammar, node, "context-def")
+            && nt_is(context->grammar, child, "context-spec"))
+            record_context_signature(context->grammar, unit, node,
+                                     tu_state(unit));
+        if ((nt_is(context->grammar, node, "context-exit")
+             || nt_is(context->grammar, node, "context-error")
+             || nt_is(context->grammar, node, "context-ensure"))
+            && nt_is(context->grammar, child, "context-hook-params"))
+            record_context_hook_signature(context->grammar, unit, node,
+                                            tu_state(unit));
+    }
     semantic_annotation_node(context, unit, node, parent, depth, child_index,
                              false);
 }
