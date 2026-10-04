@@ -4673,7 +4673,7 @@ if "$compiler" lower --dump-ir \
     echo 'generic trait specialization accepted an incompatible method argument' >&2
     exit 1
 fi
-grep -q 'N00BB-T0002.*call type does not match its function' \
+grep -q 'N00BB-T0003.*generic call argument 2 has type' \
     "$tmp/generic_trait_resolved_argument_mismatch.out"
 "$compiler" lower --dump-ir --dump-link-unit \
     "$script_dir/programs/generic_trait_failure_channel.n00b" \
