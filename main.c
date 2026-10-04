@@ -527,6 +527,7 @@ static parse_sym_entry_t *n00bb_atomic_member_lvalue_root(
     parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_tree_t *target);
 static bool is_scheme(th_type *type);
+
 static ir_shape_t *function_parameter_shape(parse_sym_entry_t *symbol,
                                              size_t index);
 static bool link_dependency_reference_builtin(
@@ -628,6 +629,11 @@ typedef struct {
     bool semantic_annotation_started;
     bool semantic_annotation_complete;
 } n00bb_tu_state_t;
+
+static bool resolve_function_parameter_facts(
+    parse_grammar_t *grammar, n00bb_tu_state_t *state,
+    n00bb_function_parameter_facts_t *facts,
+    core_list_t(th_param) *params, th_param *rest, bool *has_rest);
 
 static bool semantic_static_value_from_expression(
     parse_grammar_t *grammar, parse_tree_t *expression, th_type *type,
@@ -1495,12 +1501,15 @@ static n00bb_function_parameter_facts_t *
 function_parameter_facts(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_tree_t *function = core_tree_node_value(node).parent;
-    while (function && !nt_is(grammar, function, "func-def"))
+    while (function && !nt_is(grammar, function, "func-def")
+           && !nt_is(grammar, function, "trait-spec"))
         function = core_tree_node_value(function).parent;
     parse_sym_entry_t *symbol = function
         ? core_tree_node_value(function).sym : nullptr;
-    return symbol ? parse_sym_binding(symbol,
-        CORE_STRING_STATIC("n00bb.function.parameter-facts")) : nullptr;
+    if (!symbol) return nullptr;
+    return parse_sym_binding(symbol, nt_is(grammar, function, "trait-spec")
+        ? CORE_STRING_STATIC("n00bb.trait.parameter-facts")
+        : CORE_STRING_STATIC("n00bb.function.parameter-facts"));
 }
 
 static bool
@@ -3883,11 +3892,11 @@ explicit_trait_method_signature(parse_grammar_t *grammar,
     parse_tree_t *success = child_nt(grammar, result, "return-type");
     parse_tree_t *error = child_nt(grammar, result, "error-type");
     if (!params || !receiver) return nullptr;
-    core_list_t(n00bb_typevar_binding_t) variables =
-        core_list_new(n00bb_typevar_binding_t);
     core_list_t(th_param) parameters = core_list_new(th_param);
-    th_type *receiver_type = type_from_syntax_with_variables(grammar, unit,
-        child_nt(grammar, receiver, "tspec-tvar"), &variables);
+    parse_tree_t *receiver_type_node = child_nt(grammar, receiver,
+                                                 "tspec-tvar");
+    th_type *receiver_type = receiver_type_node
+        ? core_tree_node_value(receiver_type_node).type : nullptr;
     bool collected = receiver_type != nullptr;
     if (collected)
         core_list_push(parameters, ((th_param){
@@ -3896,24 +3905,24 @@ explicit_trait_method_signature(parse_grammar_t *grammar,
         }));
     th_param rest = {0};
     bool has_rest = false;
-    parse_tree_t *formals = child_nt(grammar, params, "formals");
-    if (formals)
-        collected = collected && collect_signature_params(grammar, unit,
-            formals, types, &parameters, &rest, &has_rest, &variables);
+    parse_sym_entry_t *method_symbol = core_tree_node_value(method).sym;
+    n00bb_function_parameter_facts_t *parameter_facts = method_symbol
+        ? parse_sym_binding(method_symbol,
+            CORE_STRING_STATIC("n00bb.trait.parameter-facts")) : nullptr;
+    collected = collected && resolve_function_parameter_facts(grammar,
+        tu_state(unit), parameter_facts, &parameters, &rest, &has_rest);
     th_type *return_type = success
-        ? type_from_syntax_with_variables(grammar, unit,
-            child_nt(grammar, success, "union-tspec"), &variables)
+        ? core_tree_node_value(child_nt(grammar, success,
+            "union-tspec")).type
         : th_name(types, "nil");
     th_type *failure_type = error
-        ? type_from_syntax_with_variables(grammar, unit,
-            child_nt(grammar, error, "one-tspec"), &variables)
+        ? core_tree_node_value(child_nt(grammar, error, "one-tspec")).type
         : th_name(types, "nil");
     th_type *method_type = collected && return_type && failure_type
         ? th_func_with_error(types, return_type, failure_type,
             parameters.data, parameters.len, has_rest ? &rest : nullptr,
             nullptr, 0) : nullptr;
     core_list_free(parameters);
-    core_list_free(variables);
     if (failure) *failure = failure_type;
     return method_type;
 }
@@ -4012,11 +4021,13 @@ resolve_function_parameter_facts(parse_grammar_t *grammar,
         if (!node) return false;
         parse_nt_node_t *parameter = &core_tree_node_value(node);
         parse_tree_t *owner = parameter->parent;
-        while (owner && !nt_is(grammar, owner, "func-def"))
+        while (owner && !nt_is(grammar, owner, "func-def")
+               && !nt_is(grammar, owner, "trait-spec"))
             owner = core_tree_node_value(owner).parent;
         parse_sym_entry_t *function = owner
             ? core_tree_node_value(owner).sym : nullptr;
-        bool body_local = function && parameter->type
+        bool body_local = function && nt_is(grammar, owner, "func-def")
+            && parameter->type
             && parse_sym_binding(function,
                 CORE_STRING_STATIC("n00bb.body-function-signature"));
         th_type *type = body_local ? parameter->type
@@ -32082,6 +32093,27 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
     }
 
+    if (entering && nt_is(grammar, node, "trait-spec")) {
+        parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
+        if (symbol) {
+            n00bb_function_parameter_facts_t *parameter_facts =
+                core_arena_alloc(&state->semantic_values,
+                                 sizeof(*parameter_facts));
+            if (!parameter_facts
+                || !parse_sym_set_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.trait.parameter-facts"),
+                    parameter_facts)) {
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+                    CORE_STRING_STATIC(
+                        "could not initialize trait method parameter facts"),
+                    link_source_location(node));
+                return;
+            }
+            memset(parameter_facts, 0, sizeof(*parameter_facts));
+        }
+    }
     if (!entering && nt_is(grammar, node, "trait-spec")) {
         parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
         if (symbol) {
