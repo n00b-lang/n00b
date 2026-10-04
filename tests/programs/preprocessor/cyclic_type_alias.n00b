@@ -1,0 +1,2 @@
+alias FirstAlias = SecondAlias
+alias SecondAlias = FirstAlias

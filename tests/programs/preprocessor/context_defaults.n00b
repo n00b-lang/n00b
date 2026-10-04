@@ -15,3 +15,19 @@ func context_default_override() -> int {
         return result_value
     }
 }
+
+func context_default_a(item: int) -> int { return item }
+func context_default_b() -> int { return 2 }
+func context_default_c() -> int { return 3 }
+
+context OrderedContext(a: int = context_default_a(b),
+                       b: int = context_default_b(),
+                       c: int = context_default_c()) provides: int {
+    enter() { return a + b + c }
+}
+
+func context_default_order() -> int {
+    with result_value = OrderedContext() {
+        return result_value
+    }
+}

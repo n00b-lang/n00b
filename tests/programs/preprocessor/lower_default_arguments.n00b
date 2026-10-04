@@ -11,3 +11,12 @@ func use_named_arguments() -> int { return named(second = 9, first = 2) }
 func use_named_evaluation_order() -> int {
     return named(second = second_value(), first = first_value())
 }
+
+func default_a(item: int) -> int { return item }
+func default_b() -> int { return 2 }
+func default_c() -> int { return 3 }
+func dependency_order(a: int = default_a(b), b: int = default_b(),
+                      c: int = default_c()) -> int {
+    return a + b + c
+}
+func use_dependency_order() -> int { return dependency_order() }

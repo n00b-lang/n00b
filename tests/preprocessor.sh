@@ -821,6 +821,40 @@ grep -q 'add trap %__n00bb_narrow_' "$tmp/typecase_narrowing.ir"
 grep -q 'type.test %item, (int | string)' \
     "$tmp/typecase_multiple_types.ir"
 
+"$compiler" lower --dump-ir "$program_dir/typecase_compound_types.n00b" \
+    >"$tmp/typecase_compound_types.ir" \
+    2>"$tmp/typecase_compound_types.err" || {
+    cat "$tmp/typecase_compound_types.err"
+    cat "$tmp/typecase_compound_types.ir"
+    exit 1
+}
+grep -q 'type.test .*atomic\[int\]' \
+    "$tmp/typecase_compound_types.ir"
+grep -q 'type.test .*array\[int\]' \
+    "$tmp/typecase_compound_types.ir"
+
+"$compiler" lower --dump-ir "$program_dir/typecase_function_type.n00b" \
+    >"$tmp/typecase_function_type.ir" \
+    2>"$tmp/typecase_function_type.err" || {
+    cat "$tmp/typecase_function_type.err"
+    cat "$tmp/typecase_function_type.ir"
+    exit 1
+}
+grep -q 'type.test .*[(]int, string[)] -> bool fail: string' \
+    "$tmp/typecase_function_type.ir"
+
+"$compiler" lower --dump-ir "$program_dir/typecase_function_params.n00b" \
+    >"$tmp/typecase_function_params.ir" \
+    2>"$tmp/typecase_function_params.err" || {
+    cat "$tmp/typecase_function_params.err"
+    cat "$tmp/typecase_function_params.ir"
+    exit 1
+}
+grep -Fq '(int, *string, flags: array[int], options: bool) -> nil' \
+    "$tmp/typecase_function_params.ir"
+grep -Fq '() -> bool' \
+    "$tmp/typecase_function_params.ir"
+
 N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-control-flow \
     "$program_dir/typecase_else_and_break.n00b" \
     >"$tmp/typecase_else_and_break.out" \
@@ -900,9 +934,41 @@ grep -q 'call @__n00bb_context_Recorder_ensure' \
 }
 grep -q 'call @__n00bb_context_DefaultedContext_enter' \
     "$tmp/context_defaults.ir"
-test "$(grep -c '= add trap' "$tmp/context_defaults.ir")" -eq 2
+awk '
+    /^  (static )?func @__n00bb_context_DefaultedContext_default_[12]\(/ {
+        in_default = 1
+    }
+    /^  (static )?func @/ && in_default \
+        && !/DefaultedContext_default_[12]\(/ { in_default = 0 }
+    in_default && /= add trap/ { adds++ }
+    END { exit adds != 2 }
+' "$tmp/context_defaults.ir"
 test "$(grep -c 'call @__n00bb_context_DefaultedContext_enter' \
     "$tmp/context_defaults.ir")" -eq 2
+awk '
+    /^  (static )?func @context_default_order\(/ { in_call = 1; next }
+    /^  (static )?func @/ && in_call { exit }
+    in_call && /call @__n00bb_context_OrderedContext_default_0/ { a = NR }
+    in_call && /call @__n00bb_context_OrderedContext_default_1/ { b = NR }
+    in_call && /call @__n00bb_context_OrderedContext_default_2/ { c = NR }
+    END { exit !(b && a && c && b < a && a < c) }
+' "$tmp/context_defaults.ir"
+"$compiler" lower --dump-ir \
+    "$program_dir/context_default_depth_first.n00b" \
+    >"$tmp/context_default_depth_first.ir" \
+    2>"$tmp/context_default_depth_first.err" || {
+    cat "$tmp/context_default_depth_first.err"
+    exit 1
+}
+awk '
+    /^  (static )?func @context_default_depth_first\(/ { in_call = 1; next }
+    /^  (static )?func @/ && in_call { exit }
+    in_call && /call @__n00bb_context_DepthFirstContext_default_3/ && !d { d = NR }
+    in_call && /call @__n00bb_context_DepthFirstContext_default_2/ && !c { c = NR }
+    in_call && /call @__n00bb_context_DepthFirstContext_default_0/ && !a { a = NR }
+    in_call && /call @__n00bb_context_DepthFirstContext_default_1/ && !b { b = NR }
+    END { exit !(d && c && a && b && d < c && c < a && a < b) }
+' "$tmp/context_default_depth_first.ir"
 grep -q 'call @__n00bb_context_QuietRecorder_ensure' \
     "$tmp/lower_context_with.ir"
 ! grep -q '@__n00bb_context_QuietRecorder_error' \
@@ -3684,6 +3750,31 @@ awk '
     in_call && /call @first_value/ { first = NR }
     END { exit !(second && first && second < first) }
 ' "$tmp/lower_default_arguments.ir"
+awk '
+    /^  (static )?func @dependency_order\(/ { in_default = 1; next }
+    /^  (static )?func @/ && in_default { exit }
+    in_default && /call @default_a/ && !a { a = NR }
+    in_default && /call @default_b/ && !b { b = NR }
+    in_default && /call @default_c/ && !c { c = NR }
+    END { exit !(b && a && c && b < a && a < c) }
+' "$tmp/lower_default_arguments.ir"
+
+"$compiler" lower --dump-ir \
+    "$program_dir/lower_default_depth_first.n00b" \
+    >"$tmp/lower_default_depth_first.ir" \
+    2>"$tmp/lower_default_depth_first.err" || {
+    cat "$tmp/lower_default_depth_first.err"
+    exit 1
+}
+awk '
+    /^  func @depth_first_defaults\(/ { in_default = 1 }
+    /^  func @/ && !/depth_first_defaults/ && in_default { exit }
+    in_default && /call @default_order_d/ && !d { d = NR }
+    in_default && /call @default_order_c/ && !c { c = NR }
+    in_default && /call @default_order_pair/ && !a { a = NR }
+    in_default && /call @default_order_independent/ && !b { b = NR }
+    END { exit !(d && c && a && b && d < c && c < a && a < b) }
+' "$tmp/lower_default_depth_first.ir"
 
 if "$compiler" lower "$program_dir/lower_missing_required_argument.n00b" \
     >"$tmp/lower_missing_required_argument.out" 2>&1; then
@@ -4925,6 +5016,17 @@ grep -q 'array_alias_archive_dep:2:FixedRow kind=2 binding n00bb.semantic.type b
 grep -q 'sequence.shape.check.*dim0=comptime:producer=__n00bb_array_extent_' \
     "$tmp/array_alias_archive_user.out"
 
+if "$compiler" lower --dump-symbols \
+    "$program_dir/cyclic_type_alias.n00b" \
+    >"$tmp/cyclic_type_alias.out" 2>&1; then
+    echo 'cyclic transparent type aliases unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'error\[N00BB-T0012\].*cyclic type alias definition' \
+    "$tmp/cyclic_type_alias.out"
+[ "$(grep -c 'error\[N00BB-T0012\]' "$tmp/cyclic_type_alias.out")" -eq 1 ]
+[ "$(grep -c 'fatal\[N00BB-L0006\]' "$tmp/cyclic_type_alias.out")" -eq 1 ]
+
 "$compiler" library --emit-interface \
     "$tmp/array_shape_chain_dep.n00bi" \
     "$interface_programs/array_shape_chain_dep.n00b" \
@@ -6112,6 +6214,18 @@ else
     echo 'independent imported generic uses unexpectedly failed' >&2
     exit 1
 fi
+
+"$compiler" lower --dump-symbols \
+    "$program_dir/generic_signature_multiple_instantiations.n00b" \
+    >"$tmp/generic_signature_multiple_instantiations.out" 2>&1 || {
+    cat "$tmp/generic_signature_multiple_instantiations.out"
+    echo 'one explicit generic signature did not support independent call instantiations' >&2
+    exit 1
+}
+grep -q 'first: variable, mutable, type=int' \
+    "$tmp/generic_signature_multiple_instantiations.out"
+grep -q 'second: variable, mutable, type=string' \
+    "$tmp/generic_signature_multiple_instantiations.out"
 
 if N00B_PATH="$program_dir" "$compiler" preprocess --dump-symbols \
     "$program_dir/recursive_a.n00b" --jobs 4 >"$tmp/recursive_modules.out" 2>&1; then

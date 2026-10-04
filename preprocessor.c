@@ -1890,7 +1890,8 @@ make_value_literal(pp_context_t *ctx, pp_value_t value)
 }
 
 static bool
-replace_builtin(pp_context_t *ctx, parse_tree_t **slot)
+replace_builtin(pp_context_t *ctx, parse_tree_t **slot,
+                parse_tree_t *parent, int32_t child_index)
 {
     parse_tree_t *node = *slot;
     core_string_t name = builtin_name(ctx, node);
@@ -1941,8 +1942,14 @@ replace_builtin(pp_context_t *ctx, parse_tree_t **slot)
         pp_error(ctx, node, "cannot rewrite processor-time literal");
         return false;
     }
-    parse_tree_free(node);
+    if (parent && child_index >= 0
+        && !core_tree_set_child(parent, (size_t)child_index, postfix)) {
+        parse_tree_free(postfix);
+        pp_error(ctx, node, "cannot attach processor-time result to its parent");
+        return false;
+    }
     *slot = postfix;
+    parse_tree_free(node);
     return true;
 }
 
@@ -2051,8 +2058,19 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
         if (ctx->failed) return;
         if (body) {
             parse_tree_t *replacement = parse_tree_clone(body);
-            parse_tree_free(node);
+            if (!replacement) {
+                pp_error(ctx, node, "cannot copy the selected when body");
+                return;
+            }
+            if (parent && child_index >= 0
+                && !core_tree_set_child(parent, (size_t)child_index,
+                                        replacement)) {
+                parse_tree_free(replacement);
+                pp_error(ctx, node, "cannot attach the selected when body");
+                return;
+            }
             *slot = replacement;
+            parse_tree_free(node);
             process_node(ctx, slot, parent, depth, child_index);
         }
         else {
@@ -2071,7 +2089,7 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
         eval_builtin(ctx, node, &ignored);
         if (ctx->failed) return;
     }
-    if (replace_builtin(ctx, slot)) node = *slot;
+    if (replace_builtin(ctx, slot, parent, child_index)) node = *slot;
     if (ctx->failed || !node) return;
     for (size_t i = 0; i < core_tree_num_children(node);) {
         parse_tree_t *child = core_tree_child(node, i);

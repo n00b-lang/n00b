@@ -1,0 +1,15 @@
+func typecase_generic(item: atomic[int]) -> int {
+    typecase(item) {
+        case atomic[int] {
+            return 1
+        }
+    }
+}
+
+func typecase_array(item: int[4]) -> int {
+    typecase(item) {
+        case int[4] {
+            return 2
+        }
+    }
+}

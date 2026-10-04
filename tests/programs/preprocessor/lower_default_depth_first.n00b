@@ -1,0 +1,23 @@
+func default_order_pair(first: int, second: int) -> int {
+    return first * 10 + second
+}
+
+func default_order_independent() -> int { return 2 }
+func default_order_c(later: int) -> int { return later + 1 }
+func default_order_d() -> int { return 4 }
+
+func depth_first_defaults(
+    first: int = default_order_pair(c, d),
+    independent: int = default_order_independent(),
+    c: int = default_order_c(d),
+    d: int = default_order_d()) -> int {
+    return first + independent + c + d
+}
+
+func use_depth_first_defaults() -> int {
+    return depth_first_defaults()
+}
+
+func use_supplied_early_default() -> int {
+    return depth_first_defaults(first = 1)
+}

@@ -1,0 +1,15 @@
+func typecase_function_params(input: (int, *string, **options: bool, flags: array[int]) -> nil) -> int {
+    typecase(input) {
+        case (int, *string, **options: bool, flags: array[int]) -> nil {
+            return 1
+        }
+    }
+}
+
+func typecase_empty_function(input: () -> bool) -> int {
+    typecase(input) {
+        case () -> bool {
+            return 1
+        }
+    }
+}
