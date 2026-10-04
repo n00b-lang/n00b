@@ -4074,7 +4074,12 @@ record_function_signature(parse_grammar_t *grammar,
         CORE_STRING_STATIC("n00bb.declared-function-signature"));
     th_type *declared_failure = parse_sym_binding(symbol,
         CORE_STRING_STATIC("n00bb.declared-function-failure"));
-    if (!parsed_declared)
+    parse_tree_t *declared_result = child_nt(grammar, signature,
+                                              "function-result");
+    bool has_declared_channel = child_nt(grammar, declared_result,
+                                           "return-type")
+        || child_nt(grammar, declared_result, "error-type");
+    if (!parsed_declared && has_declared_channel)
         parsed_declared = explicit_function_signature(grammar, unit, func,
             state->types, &declared_failure);
     n00bb_function_parameter_facts_t *parameter_facts = parse_sym_binding(
