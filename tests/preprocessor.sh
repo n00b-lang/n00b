@@ -4331,6 +4331,30 @@ grep -E -q 'imported_global_ref: variable, mutable, type=ref\[int\], .*aliases=1
 grep -E -q 'imported_global: variable, .*may-escape' \
     "$tmp/alias_imported_client.out"
 
+N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-symbols \
+    "$program_dir/return_alias_recursive_a.n00b" \
+    >"$tmp/return_alias_recursive.out" \
+    2>"$tmp/return_alias_recursive.err" || {
+    cat "$tmp/return_alias_recursive.err"
+    exit 1
+}
+grep -q '^    result: variable, mutable, type=ref\[int\], .*aliases=1' \
+    "$tmp/return_alias_recursive.out"
+grep -Eq '= call @from_a, .* !ir.alias_count\(1\)' \
+    "$tmp/return_alias_recursive.out"
+grep -Eq '= call @from_b, .* !ir.alias_count\(1\)' \
+    "$tmp/return_alias_recursive.out"
+
+N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-symbols \
+    "$program_dir/return_alias_mismatch_a.n00b" \
+    >"$tmp/return_alias_mismatch.out" \
+    2>"$tmp/return_alias_mismatch.err" || {
+    cat "$tmp/return_alias_mismatch.err"
+    exit 1
+}
+grep -q '^    result: variable, mutable, type=ref\[int\], .*aliases=0, .*alias-analysis=incomplete' \
+    "$tmp/return_alias_mismatch.out"
+
 "$compiler" lower --dump-ir "$program_dir/lower_reference_values.n00b" \
     >"$tmp/lower_reference_values.ir" \
     2>"$tmp/lower_reference_values.err" || {

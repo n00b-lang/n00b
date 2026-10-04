@@ -1,0 +1,11 @@
+import return_alias_recursive_b
+
+public func from_a(item_ref, again: bool) {
+    if again { return return_alias_recursive_b.from_b(item_ref, false) }
+    else { return item_ref }
+}
+
+func use_return_alias() {
+    var target: int = 1
+    var result = from_a(ref target, true)
+}
