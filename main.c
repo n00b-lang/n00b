@@ -587,6 +587,7 @@ static bool simple_identifier_expression(parse_grammar_t *grammar,
                                          core_string_t *name);
 static parse_sym_entry_t *direct_ref_target(parse_grammar_t *grammar,
                                              parse_tree_t *node);
+static bool tree_is_within(parse_tree_t *root, parse_tree_t *node);
 
 typedef struct {
     parse_token_stream_t *tokens;
@@ -959,6 +960,13 @@ typedef struct {
 core_list_decl(n00bb_tuple_parts_t);
 
 typedef struct {
+    parse_tree_t *node;
+    ir_block_t *join;
+    bool active;
+} n00bb_assert_frame_t;
+core_list_decl(n00bb_assert_frame_t);
+
+typedef struct {
     parse_grammar_t *grammar;
     ir_lowerer_t *lowerer;
     ir_ctx_t *ir_context;
@@ -979,6 +987,7 @@ typedef struct {
     core_list_t(n00bb_default_param_t) default_params;
     n00bb_default_param_t *active_default_param;
     core_list_t(n00bb_tuple_parts_t) tuple_parts;
+    core_list_t(n00bb_assert_frame_t) asserts;
     uint64_t next_block_id;
     uint64_t next_control_order;
     bool comptime_phase;
@@ -16530,6 +16539,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .parameters_to_copy_out = core_list_new(n00bb_copyout_t),
         .pending_call_copyouts = core_list_new(n00bb_pending_copyouts_t),
         .default_params = core_list_new(n00bb_default_param_t),
+        .asserts = core_list_new(n00bb_assert_frame_t),
         .comptime_phase = comptime_phase,
     };
     ir_lower_context_t context = {
@@ -16915,6 +16925,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         core_list_free(lower_data.tuple_parts.data[i].values);
     }
     core_list_free(lower_data.tuple_parts);
+    core_list_free(lower_data.asserts);
     if (lowered.status == IR_LOWER_FAILED || ir_diags_failed(diagnostics)) {
         return false;
     }
@@ -17792,6 +17803,147 @@ n00bb_lower_comptime_statement(ir_lower_context_t *context,
         lower_span_for_tree(context, visit->node),
         "could not omit a compile-time block from runtime IR");
     return false;
+}
+
+static bool
+n00bb_assert_has_known_side_effect(n00bb_lower_context_t *lower,
+                                   parse_tree_t *node)
+{
+    n00bb_tu_state_t *state = tu_state(lower->unit);
+    core_link_unit_t *link = state ? state->link : nullptr;
+    if (!link) return false;
+    size_t count = core_link_unit_dependency_count(link);
+    for (size_t i = 0; i < count; i++) {
+        core_link_dependency_view_t call;
+        if (!core_link_unit_dependency_at(link, i, &call)
+            || (call.kind != N00BB_LINK_DEPENDENCY_CALL
+                && call.kind != N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
+                && call.kind != N00BB_LINK_DEPENDENCY_CONTEXT_CALL)
+            || call.source_unit != lower->unit || !call.to
+            || !tree_is_within(node, (parse_tree_t *)call.source_site))
+            continue;
+        ir_func_t *callee = core_link_declaration_binding(call.to,
+            CORE_STRING_STATIC("n00bb.ir.function"));
+        th_type *signature = callee ? th_resolve(callee->type) : nullptr;
+        for (size_t p = 0; signature && p < th_func_nparams(signature); p++) {
+            const th_param *parameter = th_func_param(signature, p);
+            if (parameter && (parameter->mode == TH_OUT
+                              || parameter->mode == TH_INOUT)) return true;
+        }
+        const th_param *rest = signature ? th_func_rest(signature) : nullptr;
+        if (rest && (rest->mode == TH_OUT || rest->mode == TH_INOUT))
+            return true;
+        for (size_t j = 0; j < count; j++) {
+            core_link_dependency_view_t effect;
+            if (!core_link_unit_dependency_at(link, j, &effect)
+                || effect.from != call.to) continue;
+            if (effect.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE
+                || effect.kind
+                    == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE
+                || effect.kind
+                    == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE_SUMMARY
+                || effect.kind
+                    == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE_SUMMARY)
+                return true;
+        }
+    }
+    return false;
+}
+
+static bool
+n00bb_lower_assert_statement(ir_lower_context_t *context,
+                             parse_visit_t *visit, bool entering,
+                             void *state)
+{
+    (void)state;
+    n00bb_lower_context_t *lower = context->user;
+    parse_tree_t *node = visit->node;
+    ir_span_t span = lower_span_for_tree(context, node);
+    bool debug_only = core_string_eq(first_token_text(node),
+                                     CORE_STRING_STATIC("assert"));
+    if (entering) {
+        if (!debug_only) return true;
+        n00bb_assert_frame_t frame = {
+            .node = node,
+            .active = context->reachable,
+        };
+        if (frame.active) {
+            th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                                       "bool");
+            frame.join = n00bb_branch_block(context, lower, "assert_join");
+            ir_block_t *check = n00bb_branch_block(context, lower,
+                                                    "assert_check");
+            char name[48];
+            snprintf(name, sizeof(name), "__n00bb_debug_%llu",
+                     (unsigned long long)context->next_value_id++);
+            ir_instr_t *enabled = bool_type
+                ? ir_instr_add(context->block, IR_OP_DEBUG_ENABLED) : nullptr;
+            ir_instr_t *branch = enabled
+                && ir_instr_set_dest(enabled, name, bool_type)
+                ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
+            if (!frame.join || !check || !branch
+                || !ir_instr_operand_value(branch, enabled->dest)
+                || !ir_instr_operand_block(branch, check)
+                || !ir_instr_operand_block(branch, frame.join)) {
+                lower_error(context, IR_DIAG_INTERNAL, span,
+                    "could not lower debug-only assertion entry");
+                return false;
+            }
+            enabled->span = branch->span = span;
+            context->block = check;
+        }
+        core_list_push(lower->asserts, frame);
+        return true;
+    }
+
+    ir_block_t *join = nullptr;
+    if (debug_only) {
+        if (!lower->asserts.len
+            || lower->asserts.data[lower->asserts.len - 1].node != node) {
+            lower_error(context, IR_DIAG_INTERNAL, span,
+                "assertion lowering frame is missing");
+            return false;
+        }
+        n00bb_assert_frame_t frame = lower->asserts.data[--lower->asserts.len];
+        if (!frame.active) return true;
+        join = frame.join;
+        if (n00bb_assert_has_known_side_effect(lower, node)) {
+            lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                "assert expression has a side effect");
+            return false;
+        }
+    }
+    else if (!context->reachable) return true;
+
+    parse_tree_t *expression = child_nt(visit->grammar, node, "expression");
+    ir_value_t *condition = expression
+        ? ir_lower_node_value(context, expression) : nullptr;
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    if (!condition || !bool_type
+        || !ir_type_eq(context->module, condition->type, bool_type)) {
+        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            "assert and require conditions must be bool");
+        return false;
+    }
+    if (!join) join = n00bb_branch_block(context, lower, "require_join");
+    ir_block_t *failure = n00bb_branch_block(context, lower,
+                                              "condition_failed");
+    ir_instr_t *branch = ir_instr_add(context->block, IR_OP_BRANCH);
+    if (!join || !failure || !branch
+        || !ir_instr_operand_value(branch, condition)
+        || !ir_instr_operand_block(branch, join)
+        || !ir_instr_operand_block(branch, failure)) {
+        lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not lower assertion condition");
+        return false;
+    }
+    branch->span = span;
+    ir_instr_t *trap = ir_instr_add(failure, IR_OP_TRAP);
+    if (!trap) return false;
+    trap->span = span;
+    context->block = join;
+    context->reachable = true;
+    return true;
 }
 
 static bool
@@ -25412,6 +25564,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         "comptime-value-expr", n00bb_lower_comptime_value, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "comptime-stmt", n00bb_lower_comptime_statement, nullptr);
+    ok = ok && ir_lowerer_register_nt_visit(lowerer,
+        "assert-stmt", n00bb_lower_assert_statement, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "expr-comma-list", n00bb_lower_tuple_parts, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,

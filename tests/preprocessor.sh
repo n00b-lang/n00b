@@ -4355,6 +4355,44 @@ N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-symbols \
 grep -q '^    result: variable, mutable, type=ref\[int\], .*aliases=0, .*alias-analysis=incomplete' \
     "$tmp/return_alias_mismatch.out"
 
+"$compiler" lower --dump-ir "$program_dir/lower_require_assert.n00b" \
+    >"$tmp/lower_require_assert.ir" \
+    2>"$tmp/lower_require_assert.err" || {
+    cat "$tmp/lower_require_assert.err"
+    exit 1
+}
+grep -q '= debug.enabled' "$tmp/lower_require_assert.ir"
+grep -q 'branch %x, __n00bb_require_join_' "$tmp/lower_require_assert.ir"
+grep -q 'branch %__n00bb_debug_' "$tmp/lower_require_assert.ir"
+test "$(grep -c '^[[:space:]]*trap ' "$tmp/lower_require_assert.ir")" -eq 3
+
+if "$compiler" lower "$program_dir/lower_require_nonbool.n00b" \
+    >"$tmp/lower_require_nonbool.out" \
+    2>"$tmp/lower_require_nonbool.err"; then
+    echo 'non-boolean require condition was accepted' >&2
+    exit 1
+fi
+grep -q 'assert and require conditions must be bool' \
+    "$tmp/lower_require_nonbool.err"
+
+if "$compiler" lower "$program_dir/lower_assert_side_effect.n00b" \
+    >"$tmp/lower_assert_side_effect.out" \
+    2>"$tmp/lower_assert_side_effect.err"; then
+    echo 'assertion with a known global write was accepted' >&2
+    exit 1
+fi
+grep -q 'assert expression has a side effect' \
+    "$tmp/lower_assert_side_effect.err"
+
+if "$compiler" lower "$program_dir/lower_assert_modify_effect.n00b" \
+    >"$tmp/lower_assert_modify_effect.out" \
+    2>"$tmp/lower_assert_modify_effect.err"; then
+    echo 'assertion with a modify argument was accepted' >&2
+    exit 1
+fi
+grep -q 'assert expression has a side effect' \
+    "$tmp/lower_assert_modify_effect.err"
+
 "$compiler" lower --dump-ir "$program_dir/lower_reference_values.n00b" \
     >"$tmp/lower_reference_values.ir" \
     2>"$tmp/lower_reference_values.err" || {

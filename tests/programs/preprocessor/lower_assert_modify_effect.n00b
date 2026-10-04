@@ -1,0 +1,9 @@
+func change(modify target: int) -> bool {
+    target = 1
+    return true
+}
+
+func bad_assertion() {
+    var target: int = 0
+    assert change(target)
+}

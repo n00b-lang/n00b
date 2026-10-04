@@ -1,0 +1,10 @@
+var changed: int = 0
+
+func change() -> bool {
+    changed = 1
+    return true
+}
+
+func bad_assertion() {
+    assert change()
+}
