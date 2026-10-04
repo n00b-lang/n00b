@@ -1360,7 +1360,7 @@ parse_symtab_resolve_node(parse_symtab_t *st, parse_tree_t *node,
         return pn->sym;
     }
 
-    core_string_t name = parse_tree_extract_first_identifier(node);
+    core_string_t name = pn->unresolved_name;
     if (!name.data || !name.u8_bytes) return nullptr;
 
     parse_scope_t *scope = resolution.kind == PARSE_NODE_RESOLUTION_SCOPE

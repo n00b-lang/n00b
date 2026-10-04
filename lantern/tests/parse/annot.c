@@ -963,6 +963,8 @@ test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
         core_tree_node_value(name_node).scope = probe.module_scope;
     check("a reference test has a nonterminal name node",
           name_node && !core_tree_is_leaf(name_node));
+    if (name_node)
+        core_tree_node_value(name_node).unresolved_name = S("a");
     check("a reference test uses the declared name",
           name_node && core_string_eq(
               parse_tree_extract_first_identifier(name_node), S("a")));

@@ -71,6 +71,21 @@ static th_type *node_type(ictx *c, parse_tree_t *node)
     return pn->type;
 }
 
+static core_string_t
+node_identifier_name(parse_tree_t *node)
+{
+    if (!node) return (core_string_t){0};
+    if (core_tree_is_leaf(node)) return parse_tree_leaf_text(node);
+    parse_nt_node_t *pn = &core_tree_node_value(node);
+    if (pn->unresolved_name.data) return pn->unresolved_name;
+    if (pn->sym && pn->sym->name.data) return pn->sym->name;
+    if (core_tree_num_children(node) == 1) {
+        parse_tree_t *child = core_tree_child(node, 0);
+        if (core_tree_is_leaf(child)) return parse_tree_leaf_text(child);
+    }
+    return (core_string_t){0};
+}
+
 static th_type *transparent_expression_type(ictx *c, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return nullptr;
@@ -146,7 +161,9 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
             parse_tree_t *arg = core_tree_child(keywords, i);
             if (!node_is(c->v->grammar, arg, "call-kw-arg")) continue;
             parse_tree_t *value = child_named(c->v->grammar, arg, "expression");
-            core_string_t name = parse_tree_extract_first_identifier(arg);
+            parse_tree_t *name_node = core_tree_num_children(arg)
+                ? core_tree_child(arg, 0) : nullptr;
+            core_string_t name = node_identifier_name(name_node);
             if (!name.data || !value) {
                 c->failed = true;
                 continue;
@@ -471,8 +488,7 @@ static th_type *
 symbol_type(ictx *c, int32_t ix)
 {
     parse_tree_t *k = child(c, ix);
-    core_string_t      nm = k ? parse_tree_extract_first_identifier(k)
-                             : (core_string_t){0};
+    core_string_t nm = node_identifier_name(k);
 
     if (!nm.u8_bytes || !c->st) {
         return nullptr;
@@ -947,8 +963,7 @@ eval(ictx *c, const parse_infer_expr_t *e)
 
     case PARSE_INFER_CHILD_APP: {
         parse_tree_t *k  = child(c, e->index);
-        core_string_t      nm = k ? parse_tree_extract_first_identifier(k)
-                                 : (core_string_t){0};
+        core_string_t nm = node_identifier_name(k);
 
         if (!nm.u8_bytes) {
             c->failed = true;

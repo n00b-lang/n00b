@@ -693,6 +693,19 @@ static parse_tree_t *nt_child(parse_grammar_t *g, parse_tree_t *n,
     return parse_tree_find_child_by_nt_name(g, n, name);
 }
 
+static core_string_t direct_name(parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node)
+        || core_tree_num_children(node) != 1) {
+        return (core_string_t){0};
+    }
+
+    parse_tree_t *token = core_tree_child(node, 0);
+
+    return core_tree_is_leaf(token) ? parse_tree_leaf_text(token)
+                                    : (core_string_t){0};
+}
+
 static parse_tree_t *find_profile(parse_grammar_t *g, parse_tree_t *mod)
 {
     for (size_t i = 0; i < core_tree_num_children(mod); i++) {
@@ -718,7 +731,7 @@ static parse_tree_t *find_profile(parse_grammar_t *g, parse_tree_t *mod)
 static bool open_module(parse_visit_t *v)
 {
     B            *b    = v->thunk;
-    core_string_t name = parse_tree_extract_first_identifier(
+    core_string_t name = direct_name(
         nt_child(v->grammar, v->node, CORE_STRING_STATIC("name")));
     parse_tree_t *pd = find_profile(v->grammar, v->node);
 
@@ -729,7 +742,7 @@ static bool open_module(parse_visit_t *v)
         return false;
     }
 
-    core_string_t want = parse_tree_extract_first_identifier(
+    core_string_t want = direct_name(
         nt_child(v->grammar, pd, CORE_STRING_STATIC("name")));
 
     for (size_t i = 0; want.data && i < b->n_profiles; i++) {

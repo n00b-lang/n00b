@@ -87,13 +87,18 @@ symcheck(ir_module_t *m, ir_diags_t *d, void *state)
 
     for (size_t i = 0; r && i < core_list_len(r->undefined); i++) {
         parse_tree_t *use = r->undefined.data[i];
+        parse_nt_node_t *node = use && !core_tree_is_leaf(use)
+            ? &core_tree_node_value(use) : nullptr;
+        core_string_t name = node && node->unresolved_name.data
+            ? node->unresolved_name
+            : node && node->sym ? node->sym->name : (core_string_t){0};
 
         say(d,
             IR_DIAG_UNDEFINED_SYMBOL,
             span_of(use),
             "used here",
             "%s is used but never declared",
-            parse_tree_extract_first_identifier(use));
+            name.data ? name : CORE_STRING_STATIC("<unknown>"));
     }
 
     return true;

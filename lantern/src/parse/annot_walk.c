@@ -50,12 +50,25 @@ name_is(core_string_t s, const char *want)
 }
 
 static core_string_t
+cached_or_leaf_name(parse_tree_t *node)
+{
+    while (node) {
+        if (core_tree_is_leaf(node)) return parse_tree_leaf_text(node);
+        parse_nt_node_t *pn = &core_tree_node_value(node);
+        if (pn->unresolved_name.data) return pn->unresolved_name;
+        if (pn->sym && pn->sym->name.data) return pn->sym->name;
+        if (core_tree_num_children(node) != 1) break;
+        node = core_tree_child(node, 0);
+    }
+    return (core_string_t){0};
+}
+
+static core_string_t
 ref_name(parse_visit_t *v, parse_child_ref_t ref)
 {
     parse_tree_t *node = parse_tree_resolve_child_ref(v->grammar, v->node,
-                                                        ref);
-
-    return node ? parse_tree_extract_first_identifier(node) : (core_string_t){0};
+                                                       ref);
+    return cached_or_leaf_name(node);
 }
 
 static th_type *
@@ -1071,10 +1084,6 @@ cf_jump(parse_visit_t *v)
 
     l->jump_kind = v->annot->scope_tag;
 
-    if (!l->jump_kind.data) {
-        l->jump_kind = parse_tree_extract_first_identifier(v->node);
-    }
-
     return true;
 }
 
@@ -1110,12 +1119,12 @@ cf_varref(parse_visit_t *v)
 
     cf_label(v, PARSE_CF_VARREF)->cond = k;
 
-    core_string_t nm = k ? parse_tree_extract_first_identifier(k)
-                        : (core_string_t){0};
+    core_string_t nm = cached_or_leaf_name(k);
 
     if (!nm.u8_bytes) {
         return true;
     }
+    if (v->pn) v->pn->unresolved_name = nm;
 
     parse_scope_t *scope = v->pn->scope
                            ? v->pn->scope
