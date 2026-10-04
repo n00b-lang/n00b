@@ -1835,7 +1835,9 @@ static void *r_operand(parse_reduce_t *r)
     ib_node *n = nd(b, IB_OPERAND, cover(r));
 
     if (t) {
-        core_string_t word = parse_tree_extract_first_identifier(r->node);
+        parse_token_info_t *first = parse_tree_find_first_terminal(r->node);
+        core_string_t word = first && core_option_is_set(first->value)
+            ? core_option_get(first->value) : (core_string_t){0};
 
         n->how  = OP_TYPE;
         n->type = ir_type_intern(b->m, t);
