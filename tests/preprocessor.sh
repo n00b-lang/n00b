@@ -6740,6 +6740,25 @@ for invalid_import in import_in_if import_in_nested_if; do
         "$tmp/$invalid_import.out"
 done
 
+if N00B_PATH="$program_dir/imports" "$compiler" preprocess \
+    "$program_dir/imports/unsupported_locator.n00b" \
+    >"$tmp/unsupported_import_locator.out" 2>&1; then
+    echo 'an unsupported import locator unexpectedly passed' >&2
+    exit 1
+fi
+grep -q "unsupported source locator scheme 'https'.*line 1, column 1" \
+    "$tmp/unsupported_import_locator.out"
+
+if "$compiler" locate-tu 'https://example.com/root.n00b' \
+    >"$tmp/unsupported_root_locator.out" 2>&1; then
+    echo 'an unsupported root locator unexpectedly passed' >&2
+    exit 1
+fi
+grep -q "cannot read 'https://example.com/root.n00b'" \
+    "$tmp/unsupported_root_locator.out"
+grep -q 'unsupported source locator scheme: https' \
+    "$tmp/unsupported_root_locator.out"
+
 N00B_PATH="$program_dir/imports" "$compiler" preprocess --dump-symbols \
     --dump-link-unit \
     "$program_dir/imports/importer.n00b" >"$tmp/imported_signatures.out"

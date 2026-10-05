@@ -19,4 +19,7 @@ void n00bb_source_file_set_package(core_source_file_t *source,
                                   const char *package_id);
 core_string_t n00bb_resolver_search_description(
     n00bb_resolver_t *resolver, const char *operand);
+bool n00bb_resolver_supports_locator(n00bb_resolver_t *resolver,
+                                     const char *operand,
+                                     core_string_t *unsupported_scheme);
 char *n00bb_grammar_path(const char *argv0);

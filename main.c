@@ -38191,6 +38191,24 @@ import_error(core_translation_unit_t *unit, parse_tree_t *statement,
 }
 
 static bool
+reject_unsupported_import_locator(n00bb_resolver_t *resolver,
+                                  core_translation_unit_t *unit,
+                                  parse_tree_t *statement,
+                                  const char *operand)
+{
+    core_string_t scheme = {0};
+    if (n00bb_resolver_supports_locator(resolver, operand, &scheme))
+        return false;
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "unsupported source locator scheme '%.*s'",
+        (int)scheme.u8_bytes, scheme.data);
+    import_error(unit, statement, message.data);
+    core_buffer_release(&message);
+    return true;
+}
+
+static bool
 import_request_details(parse_grammar_t *grammar, parse_tree_t *statement,
                       core_translation_unit_t *importer,
                       core_module_spec_t *module, char **operand_out)
@@ -38238,6 +38256,12 @@ prepare_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
     char *operand = nullptr;
     if (!import_request_details(grammar, statement, importer, &module,
                                 &operand)) return false;
+    if (reject_unsupported_import_locator(driver->resolver, importer,
+                                          statement, operand)) {
+        core_free(operand);
+        core_module_spec_release(&module);
+        return false;
+    }
     core_work_job_t *job = nullptr;
     bool scheduled = add_locate_request_for_module(driver->queue,
         driver->requests, driver->requests_lock, &module, operand, false,
@@ -38659,6 +38683,12 @@ load_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
     char *operand_copy = nullptr;
     if (!import_request_details(grammar, statement, importer, &module,
                                 &operand_copy)) return false;
+    if (reject_unsupported_import_locator(driver->resolver, importer,
+                                          statement, operand_copy)) {
+        core_free(operand_copy);
+        core_module_spec_release(&module);
+        return false;
+    }
     core_work_job_t *locate_job = nullptr;
     bool scheduled = add_locate_request_for_module(driver->queue,
         driver->requests, driver->requests_lock, &module, operand_copy,

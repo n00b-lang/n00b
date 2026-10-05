@@ -377,6 +377,36 @@ has_n00b_suffix(const char *path)
     return len >= 5 && !strcmp(path + len - 5, ".n00b");
 }
 
+static core_string_t
+locator_scheme(const char *operand)
+{
+    if (!operand || (!(operand[0] >= 'A' && operand[0] <= 'Z')
+            && !(operand[0] >= 'a' && operand[0] <= 'z')))
+        return (core_string_t){0};
+    size_t i = 1;
+    while ((operand[i] >= 'A' && operand[i] <= 'Z')
+           || (operand[i] >= 'a' && operand[i] <= 'z')
+           || (operand[i] >= '0' && operand[i] <= '9')
+           || operand[i] == '+' || operand[i] == '-'
+           || operand[i] == '.') i++;
+    return operand[i] == ':' && operand[i + 1] == '/'
+            && operand[i + 2] == '/'
+        ? core_string_borrow(operand, i) : (core_string_t){0};
+}
+
+bool
+n00bb_resolver_supports_locator(n00bb_resolver_t *resolver,
+                                const char *operand,
+                                core_string_t *unsupported_scheme)
+{
+    if (unsupported_scheme) *unsupported_scheme = (core_string_t){0};
+    if (!resolver || !operand) return false;
+    core_string_t scheme = locator_scheme(operand);
+    if (!scheme.data) return true;
+    if (unsupported_scheme) *unsupported_scheme = scheme;
+    return false;
+}
+
 static bool
 is_file_operand(const char *operand)
 {
@@ -524,6 +554,8 @@ n00bb_locate_operand(n00bb_resolver_t *resolver, const char *operand,
                     core_module_spec_t *module_out,
                     core_source_file_t *source_out)
 {
+    if (!n00bb_resolver_supports_locator(resolver, operand, nullptr))
+        return CORE_MODULE_RESOLVE_ERROR;
     if (!resolver || !module_out || !source_out
         || !n00bb_operand_module_spec(operand, module_out))
         return CORE_MODULE_RESOLVE_ERROR;
@@ -545,6 +577,14 @@ n00bb_resolver_search_description(n00bb_resolver_t *resolver,
 {
     core_buffer_t description = {0};
     if (!resolver || !operand) return (core_string_t){0};
+    core_string_t scheme = {0};
+    if (!n00bb_resolver_supports_locator(resolver, operand, &scheme)) {
+        core_buffer_printf(&description,
+            "  unsupported source locator scheme: %.*s",
+            (int)scheme.u8_bytes, scheme.data);
+        return core_string_from_raw(description.data,
+                                    (int64_t)description.byte_len);
+    }
     if (is_file_operand(operand)) {
         core_buffer_printf(&description, "  checked: %s", operand);
     }
