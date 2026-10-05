@@ -2586,9 +2586,9 @@ grep -q 'item: variable, .*type=(answer: int)' \
     cat "$tmp/multi_name_loop.out"
     exit 1
 }
-grep -q 'number: variable, .*type=int.*declaration=11:9, definitions=\[11:9\], use-sites=\[12:9\]' \
+grep -Eq 'number: variable, .*type=int.*declaration=[0-9]+:9, definitions=\[[0-9]+:9\], use-sites=\[[0-9]+:9\]' \
     "$tmp/multi_name_loop.out"
-grep -q 'label: variable, .*type=string.*declaration=11:17, definitions=\[11:17\], use-sites=\[13:9\]' \
+grep -Eq 'label: variable, .*type=string.*declaration=[0-9]+:17, definitions=\[[0-9]+:17\], use-sites=\[[0-9]+:9\]' \
     "$tmp/multi_name_loop.out"
 
 if "$compiler" preprocess \
@@ -6806,9 +6806,99 @@ grep -q '<for-stmt>' "$tmp/for_in_expression.out" || {
     cat "$tmp/for_in_trait_inference.err"
     exit 1
 }
-grep -q 'item: variable, mutable, type=int' \
+grep -q 'item: variable, immutable, type=int' \
     "$tmp/for_in_trait_inference.out" || {
     cat "$tmp/for_in_trait_inference.out"
     echo 'for-in item type was not inferred from Iterator.next' >&2
     exit 1
 }
+
+"$compiler" lower --dump-ir \
+    "$program_dir/for_binding_forms.n00b" \
+    >"$tmp/for_binding_forms.ir" \
+    2>"$tmp/for_binding_forms.err" || {
+    cat "$tmp/for_binding_forms.err"
+    exit 1
+}
+grep -q 'extract.index .* 0' "$tmp/for_binding_forms.ir"
+grep -q 'extract.index .* 1' "$tmp/for_binding_forms.ir"
+grep -q 'extract .* "number"' "$tmp/for_binding_forms.ir"
+grep -q 'extract .* "label"' "$tmp/for_binding_forms.ir"
+test "$(grep -c 'N00BB-W0005' "$tmp/for_binding_forms.err")" -eq 1
+"$compiler" library --dump-ir "$program_dir/for_binding_forms.n00b" \
+    >"$tmp/linkable_for_binding_forms.ir" 2>&1 || :
+grep -q 'trait.method "Iterable", "iter".*@__trait_req_Iterable_iter' \
+    "$tmp/linkable_for_binding_forms.ir"
+grep -q 'trait.method "Iterator", "next".*@__trait_req_Iterator_next' \
+    "$tmp/linkable_for_binding_forms.ir"
+grep -q 'trait.method "Iterator", "cleanup".*@__trait_req_Iterator_cleanup' \
+    "$tmp/linkable_for_binding_forms.ir"
+grep -q 'call.output .* 0' "$tmp/linkable_for_binding_forms.ir"
+if grep -q '^error\[' "$tmp/linkable_for_binding_forms.ir"; then
+    cat "$tmp/linkable_for_binding_forms.ir"
+    echo 'linkable iteration produced an IR diagnostic' >&2
+    exit 1
+fi
+
+if "$compiler" preprocess "$program_dir/for_binding_type_mismatch.n00b" \
+    >"$tmp/for_binding_type_mismatch.out" 2>&1; then
+    echo 'typed loop binding unexpectedly accepted the wrong item type' >&2
+    exit 1
+fi
+grep -q 'loop bindings do not match' \
+    "$tmp/for_binding_type_mismatch.out"
+
+"$compiler" lower --dump-ir \
+    "$program_dir/for_cleanup_edges.n00b" \
+    >"$tmp/for_cleanup_edges.ir" \
+    2>"$tmp/for_cleanup_edges.err" || {
+    cat "$tmp/for_cleanup_edges.err"
+    exit 1
+}
+count_cleanup_calls() {
+    awk -v function_name="$1" '
+        $0 ~ "^  func @" function_name "\\(" { active = 1; next }
+        active && /^  func @/ { exit }
+        active && /call @cleanup/ { count++ }
+        END { print count + 0 }
+    ' "$tmp/for_cleanup_edges.ir"
+}
+test "$(count_cleanup_calls break_loop)" -eq 2
+test "$(count_cleanup_calls continue_loop)" -eq 1
+test "$(count_cleanup_calls return_loop)" -eq 2
+test "$(count_cleanup_calls body_failure)" -eq 2
+test "$(count_cleanup_calls next_failure)" -eq 2
+test "$(count_cleanup_calls iter_failure)" -eq 1
+test "$(count_cleanup_calls nested_break)" -eq 4
+test "$(count_cleanup_calls nested_continue)" -eq 3
+grep -q 'call.output .* 0' "$tmp/for_cleanup_edges.ir"
+assert_call_order() {
+    awk -v function_name="$1" -v first="$2" -v second="$3" '
+        $0 ~ "^  func @" function_name "\\(" { active = 1; next }
+        active && /^  func @/ { exit }
+        active && !first_line && $0 ~ first { first_line = NR }
+        active && !second_line && $0 ~ second { second_line = NR }
+        END { exit !(first_line && second_line && first_line < second_line) }
+    ' "$tmp/for_cleanup_edges.ir"
+}
+assert_call_order context_inside_loop \
+    '__n00bb_context_LoopRecorder_exit' 'call @cleanup'
+assert_call_order loop_inside_context \
+    'call @cleanup' '__n00bb_context_LoopRecorder_exit'
+awk '
+    /^  func @context_inside_loop_failure\(/ { function_active = 1; next }
+    function_active && /^  func @/ { exit 1 }
+    function_active && /^    block __n00bb_unwrap_error_/ {
+        error_block = 1
+        next
+    }
+    error_block && /^    block / { exit !(ensure_line && cleanup_line) }
+    error_block && !ensure_line && /__n00bb_context_LoopRecorder_ensure/ {
+        ensure_line = NR
+    }
+    error_block && !cleanup_line && /call @cleanup/ {
+        cleanup_line = NR
+        exit !(ensure_line < cleanup_line)
+    }
+    END { if (!cleanup_line) exit 1 }
+' "$tmp/for_cleanup_edges.ir"

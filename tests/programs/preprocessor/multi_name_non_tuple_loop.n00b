@@ -1,5 +1,11 @@
-func multi_name_non_tuple_loop() {
-    for first, second in [0, 1] {
+var next_item: int?
+
+public func iter(self: int) -> string { return "cursor" }
+public func next(modify self: string) -> int? { return next_item }
+public func cleanup(self: string) { }
+
+func multi_name_non_tuple_loop(items: int) {
+    for first, second in items {
         first
         second
     }

@@ -103,9 +103,16 @@
 <for-stmt> @scope("for") @loop($3, $4) @infer("$1 unify $3") ::=
        %"for" <for-range-var> %"from" <range-loop> <body>
 
-<for-range-var> @declares($0) @infer("`t") ::= %IDENTIFIER
-<for-var-list> @declares($0) @infer("`t") ::= %IDENTIFIER
-<for-var-list> @declares($0) @infer("`t") ::= %IDENTIFIER %"," <for-var-list>
+<for-range-var> ::= <for-binding>
+<for-var-list> ::= <for-binding>
+<for-var-list> ::= <for-binding> %"," <for-var-list>
+
+<for-binding> @declares($0) @infer("`t") ::= %IDENTIFIER
+<for-binding> @declares($1) @infer("`t") ::= %"let" %IDENTIFIER
+<for-binding> @declares($0, $2) @infer("$0 unify $2") ::=
+       %IDENTIFIER %":" <type-spec>
+<for-binding> @declares($1, $3) @infer("$1 unify $3") ::=
+       %"let" %IDENTIFIER %":" <type-spec>
 
 <for-in-target-list> ::= <expression>
 
