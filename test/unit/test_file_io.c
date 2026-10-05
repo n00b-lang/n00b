@@ -7,9 +7,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#ifndef _WIN32
+// Only the pipe/SIGPIPE tests below need these, and they are already guarded.
+// The MSVC target has neither header.
 #include <signal.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#endif
 
 #include "n00b.h"
 #include "core/alloc.h"
@@ -40,24 +44,38 @@
 // Fixture helpers
 // ----------------------------------------------------------------------
 
+// Built on n00b's own temp-path and file APIs rather than mkstemp + a
+// hardcoded /tmp. Those are POSIX-only, and this file aborted at its first
+// fixture on Windows -- which is why the suite could not run there, and why
+// the mapping-blocks-truncation defect (n00b#472) went unseen until a rocs
+// test tripped over it.
+//
+// Declared before fresh_libn00b_temp_path's definition below, which this
+// uses; the forward declaration keeps the fixtures together up here.
+static n00b_string_t *fresh_libn00b_temp_path(void);
+
 static n00b_string_t *
 write_temp_file(const char *contents, size_t n)
 {
-    char path[] = "/tmp/n00b_file_test_XXXXXX";
-    int  fd     = mkstemp(path);
-    assert(fd >= 0);
+    n00b_string_t *path = fresh_libn00b_temp_path();
+
+    auto open_r = n00b_file_open(path, .mode = N00B_FILE_W);
+    assert(n00b_result_is_ok(open_r));
+    n00b_file_t *f = n00b_result_get(open_r);
     if (n > 0) {
-        ssize_t w = write(fd, contents, n);
-        assert(w == (ssize_t)n);
+        assert(n00b_result_is_ok(
+            n00b_file_write_all(f, n00b_buffer_from_bytes((char *)contents,
+                                                          (int64_t)n))));
     }
-    close(fd);
-    return n00b_string_from_cstr(path);
+    assert(n00b_result_is_ok(n00b_file_close_result(f)));
+
+    return path;
 }
 
 static void
 unlink_path(n00b_string_t *p)
 {
-    unlink((const char *)p->data);
+    (void)n00b_file_unlink(p, .ignore_missing = true);
 }
 
 static n00b_string_t *
@@ -192,7 +210,9 @@ test_file_map_zero_byte(void)
 static void
 test_file_map_missing(void)
 {
-    n00b_string_t *p = n00b_string_from_cstr("/tmp/n00b_file_test_does_not_exist_xyz");
+    // A path under the platform's temp root that is guaranteed not to exist,
+    // rather than a hardcoded /tmp name that has no meaning on Windows.
+    n00b_string_t *p = fresh_libn00b_temp_path();
     auto r           = n00b_file_mmap(p);
     assert(n00b_result_is_err(r));
     assert(n00b_result_get_err(r) == ENOENT);
@@ -332,6 +352,129 @@ test_file_auto_resolution(void)
     unlink_path(p);
     unlink_path(wp);
     fflush(stdout); printf("  [PASS] file_auto_resolution\n");
+}
+
+// ----------------------------------------------------------------------
+// Releasing a mapping lets the same path be truncated again (n00b#472)
+// ----------------------------------------------------------------------
+
+static void
+test_mmap_release_allows_rewrite(void)
+{
+    // A read-only open of a regular file resolves to MMAP, and the mapping
+    // outlives the close on purpose: n00b_file_read hands out borrowed slices
+    // that alias it. On Windows that has a consequence POSIX does not share --
+    // the kernel refuses to truncate a file that still has a live section, so
+    // an N00B_FILE_W open (which implies O_TRUNC) of the same path fails with
+    // EINVAL until the GC gets to the buffer.
+    //
+    //   O_WRONLY|O_CREAT|O_TRUNC  -> EINVAL   mapping live
+    //   O_WRONLY|O_CREAT          -> OK       no truncation requested
+    //   O_WRONLY|O_CREAT|O_TRUNC  -> OK       after the view is released
+    //
+    // measured on Windows Server 2022 x86_64. n00b_buffer_mmap_release is how
+    // a caller that knows its slices are dead says "I am done with this now".
+    const char     original[] = "original contents";
+    n00b_string_t *p          = write_temp_file(original, strlen(original));
+
+    auto br = n00b_file_mmap(p);
+    assert(n00b_result_is_ok(br));
+    n00b_buffer_t *mapped = n00b_result_get(br);
+    assert(n00b_buffer_len(mapped) == (int64_t)strlen(original));
+    assert(memcmp(mapped->data, original, strlen(original)) == 0);
+
+    n00b_buffer_mmap_release(mapped);
+    // Releasing clears the mapping so the GC finalizer cannot unmap twice.
+    assert(mapped->data == nullptr);
+    assert(n00b_buffer_len(mapped) == 0);
+    // And it is safe to call again on an already-released buffer.
+    n00b_buffer_mmap_release(mapped);
+
+    const char replacement[] = "rewritten";
+    auto       wr            = n00b_file_open(p, .mode = N00B_FILE_W);
+    if (n00b_result_is_err(wr)) {
+        fprintf(stderr,
+                "rewrite after releasing the mapping failed: errno=%d (%s)\n",
+                (int)n00b_result_get_err(wr),
+                strerror((int)n00b_result_get_err(wr)));
+    }
+    assert(n00b_result_is_ok(wr));
+    n00b_file_t *w = n00b_result_get(wr);
+    assert(n00b_result_is_ok(
+        n00b_file_write_all(w, n00b_buffer_from_cstr(replacement))));
+    assert(n00b_result_is_ok(n00b_file_close_result(w)));
+
+    // O_TRUNC must have taken effect: a short write over a longer file leaves
+    // the tail behind if the truncation was silently skipped.
+    auto vr = n00b_file_open(p, .kind = N00B_FILE_KIND_STREAM);
+    assert(n00b_result_is_ok(vr));
+    n00b_file_t *v   = n00b_result_get(vr);
+    auto         vrr = n00b_file_read(v, 1024);
+    assert(n00b_result_is_ok(vrr));
+    n00b_buffer_t *got = n00b_result_get(vrr);
+    assert(n00b_buffer_len(got) == (int64_t)strlen(replacement));
+    assert(memcmp(got->data, replacement, strlen(replacement)) == 0);
+    assert(n00b_result_is_ok(n00b_file_close_result(v)));
+
+    unlink_path(p);
+    fflush(stdout);
+    printf("  [PASS] mmap_release_allows_rewrite\n");
+}
+
+// ----------------------------------------------------------------------
+// Freeing a mapped buffer by either path releases the view (n00b#472)
+// ----------------------------------------------------------------------
+
+static void
+test_free_with_allocator_hint_releases_mapping(void)
+{
+    // n00b_buffer_free_with_allocator_hint unmapped under `#ifndef _WIN32`
+    // only, so on Windows freeing a mapped buffer through that path did
+    // nothing at all: the view leaked for the life of the process, and the
+    // file stayed locked against truncation and deletion. n00b_buffer_free
+    // (the other path) did handle both platforms, which is what made the
+    // inconsistency easy to miss.
+    //
+    // Truncation is the observable consequence, so that is what this checks:
+    // with a view still live, O_TRUNC fails with EINVAL on Windows.
+    const char     original[] = "original contents";
+    n00b_string_t *p          = write_temp_file(original, strlen(original));
+
+    auto br = n00b_file_mmap(p);
+    assert(n00b_result_is_ok(br));
+    n00b_buffer_t *mapped = n00b_result_get(br);
+    assert(n00b_buffer_len(mapped) == (int64_t)strlen(original));
+
+    n00b_buffer_free_with_allocator_hint(mapped, nullptr);
+    assert(mapped->data == nullptr);
+
+    const char replacement[] = "short";
+    auto       wr            = n00b_file_open(p, .mode = N00B_FILE_W);
+    if (n00b_result_is_err(wr)) {
+        fprintf(stderr,
+                "rewrite after free_with_allocator_hint failed: errno=%d (%s)\n",
+                (int)n00b_result_get_err(wr),
+                strerror((int)n00b_result_get_err(wr)));
+    }
+    assert(n00b_result_is_ok(wr));
+    n00b_file_t *w = n00b_result_get(wr);
+    assert(n00b_result_is_ok(
+        n00b_file_write_all(w, n00b_buffer_from_cstr(replacement))));
+    assert(n00b_result_is_ok(n00b_file_close_result(w)));
+
+    // And the truncation really happened, rather than being skipped.
+    auto vr = n00b_file_open(p, .kind = N00B_FILE_KIND_STREAM);
+    assert(n00b_result_is_ok(vr));
+    n00b_file_t *v   = n00b_result_get(vr);
+    auto         vrr = n00b_file_read(v, 1024);
+    assert(n00b_result_is_ok(vrr));
+    assert(n00b_buffer_len(n00b_result_get(vrr))
+           == (int64_t)strlen(replacement));
+    assert(n00b_result_is_ok(n00b_file_close_result(v)));
+
+    unlink_path(p);
+    fflush(stdout);
+    printf("  [PASS] free_with_allocator_hint_releases_mapping\n");
 }
 
 // ----------------------------------------------------------------------
@@ -538,6 +681,12 @@ test_file_open_exclusive_collision(void)
     N00B_TEST_REQUIRE(memcmp(buf->data, "first", 5) == 0);
     n00b_file_close(rf);
 
+    // The mapping outlives the close by design -- n00b_file_as_buffer handed
+    // it to us and we own it now -- and Windows will not delete a file that
+    // still has a live section. Release it before unlinking. On POSIX this
+    // only returns the address space sooner.
+    n00b_buffer_mmap_release(buf);
+
     auto unlink_r = n00b_file_unlink(p, .ignore_missing = true);
     N00B_TEST_REQUIRE(n00b_result_is_ok(unlink_r));
 }
@@ -581,6 +730,11 @@ test_file_write_all_buffer(void)
     N00B_TEST_REQUIRE(memcmp(mapped->data, payload, n) == 0);
     n00b_file_close(rf);
 
+    // Windows will not delete a file that still has a live section, and
+    // n00b_file_as_buffer handed this mapping to us, so close does not
+    // release it. On POSIX this only frees the address space sooner.
+    n00b_buffer_mmap_release(mapped);
+
     auto unlink_r = n00b_file_unlink(p, .ignore_missing = true);
     N00B_TEST_REQUIRE(n00b_result_is_ok(unlink_r));
 }
@@ -612,6 +766,11 @@ test_file_write_attempt_helper(void)
     N00B_TEST_REQUIRE(mapped->byte_len == 7);
     N00B_TEST_REQUIRE(memcmp(mapped->data, "attempt", 7) == 0);
     n00b_file_close(rf);
+
+    // Windows will not delete a file that still has a live section, and
+    // n00b_file_as_buffer handed this mapping to us, so close does not
+    // release it. On POSIX this only frees the address space sooner.
+    n00b_buffer_mmap_release(mapped);
 
     auto unlink_r = n00b_file_unlink(p, .ignore_missing = true);
     N00B_TEST_REQUIRE(n00b_result_is_ok(unlink_r));
@@ -732,20 +891,27 @@ test_path_stat_and_proc_liveness(void)
     N00B_TEST_REQUIRE(n00b_result_is_ok(mr));
     N00B_TEST_REQUIRE(!n00b_result_get(mr).exists);
 
-    // Directory: exists + is_dir.
-    n00b_result_t(n00b_path_info_t) dr
-        = n00b_path_stat(n00b_string_from_cstr("/tmp"));
+    // Directory: exists + is_dir. A directory this test creates, rather than
+    // "/tmp", which does not exist on Windows.
+    auto tmpdir_r = n00b_new_temp_dir(n00b_string_from_cstr("n00b_file_io_d_"),
+                                      nullptr);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(tmpdir_r));
+    n00b_string_t *tmpdir = n00b_result_get(tmpdir_r);
+
+    n00b_result_t(n00b_path_info_t) dr = n00b_path_stat(tmpdir);
     N00B_TEST_REQUIRE(n00b_result_is_ok(dr));
     n00b_path_info_t dinfo = n00b_result_get(dr);
     N00B_TEST_REQUIRE(dinfo.exists);
     N00B_TEST_REQUIRE(dinfo.is_dir);
+
+    (void)n00b_path_remove_tree(tmpdir, .ignore_missing = true);
 
     // Null path → Err(EINVAL).
     n00b_result_t(n00b_path_info_t) er = n00b_path_stat(nullptr);
     N00B_TEST_REQUIRE(n00b_result_is_err(er));
 
     // Process liveness: self is alive; <=0 and an unused high pid are not.
-    N00B_TEST_REQUIRE(n00b_proc_is_alive((int64_t)getpid()));
+    N00B_TEST_REQUIRE(n00b_proc_is_alive(n00b_proc_self_pid()));
     N00B_TEST_REQUIRE(!n00b_proc_is_alive(0));
     N00B_TEST_REQUIRE(!n00b_proc_is_alive(-1));
     N00B_TEST_REQUIRE(!n00b_proc_is_alive((int64_t)0x3fffffff));
@@ -771,6 +937,8 @@ main(int argc, char **argv)
     test_file_mmap_read_and_seek();
     test_file_stream_read_and_seek();
     test_file_auto_resolution();
+    test_mmap_release_allows_rewrite();
+    test_free_with_allocator_hint_releases_mapping();
     test_hash_stream_vs_mmap();
     test_async_read_mmap_inline();
     test_async_read_stream_regular_inline();
