@@ -76,6 +76,9 @@ IR_OP(GE,              "ge",              2, 2,  BOOL,        "vv",  IR_MOD_CMPO
 
 IR_OP(CAST,            "cast",            1, 1,  ANNOTATED,   "v",   IR_MOD_FIT | IR_MOD_ROUND,      HASRESULT)
 IR_OP(BITCAST,         "bitcast",         1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
+/* Preserve nominal identity or dynamic source type without prescribing storage. */
+IR_OP(NOMINAL_CAST,    "nominal.cast",    1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
+IR_OP(BOX,             "box",             1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
 
 IR_OP(SELECT,          "select",          3, 3,  OPERAND1,    "vvv", 0,                              HASRESULT)
 IR_OP(PHI,             "phi",             1, VAR, ANNOTATED,   "a*",  0,                              HASRESULT)

@@ -706,6 +706,13 @@ static void test_named_type_record_definitions(void)
           && th_record_lookup(named, "amount") == nullptr);
     check("a named type definition cannot be silently replaced",
           !th_type_define(ctx, named, different));
+    th_type *nominal = th_name(ctx, "Amount");
+    th_type *integer = th_name(ctx, "int");
+    check("named types can retain non-record representations",
+          th_type_define(ctx, nominal, integer)
+              && th_type_definition(ctx, nominal) == integer
+              && !th_unify(ctx, nominal, integer)
+              && !th_record_lookup_in(ctx, nominal, "amount"));
     th_ctx_free(ctx);
 }
 

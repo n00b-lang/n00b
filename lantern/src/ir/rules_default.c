@@ -1935,6 +1935,42 @@ static ir_rule_result_t rule_type_narrow(ir_module_t *m, ir_instr_t *in,
     return ACCEPT(target);
 }
 
+static ir_rule_result_t rule_box(ir_module_t *m, ir_instr_t *in,
+                                ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *from = opd_type(in, 0);
+    th_type *to = declared(in);
+    if (!from || !to) {
+        complain(m, d, IR_DIAG_TYPE_DEST, in, "this box",
+                 "boxing requires source and destination types");
+        return REJECT;
+    }
+    return mods_exact(m, in, d, nullptr, 0) ? ACCEPT(to) : REJECT;
+}
+
+static ir_rule_result_t rule_nominal_cast(ir_module_t *m, ir_instr_t *in,
+                                         ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *from = opd_type(in, 0);
+    th_type *to = declared(in);
+    th_type *from_definition = from ? th_type_definition(
+        m->ctx->types, from) : nullptr;
+    th_type *to_definition = to ? th_type_definition(
+        m->ctx->types, to) : nullptr;
+    if (!from_definition && from) from_definition = ir_type_definition(m, from);
+    if (!to_definition && to) to_definition = ir_type_definition(m, to);
+    if (!from || !to
+        || !((from_definition && ir_type_eq(m, from_definition, to))
+             || (to_definition && ir_type_eq(m, to_definition, from)))) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this nominal cast",
+                 "conversion requires a type and its declared representation");
+        return REJECT;
+    }
+    return mods_exact(m, in, d, nullptr, 0) ? ACCEPT(to) : REJECT;
+}
+
 static ir_rule_result_t rule_cast(ir_module_t *m, ir_instr_t *in,
                                   ir_diags_t *d, void *state)
 {
@@ -2835,6 +2871,8 @@ static const entry DEFAULTS[] = {
     {IR_OP_GE, "ir.ge", rule_compare},
     {IR_OP_CAST, "ir.cast", rule_cast},
     {IR_OP_BITCAST, "ir.bitcast", rule_cast},
+    {IR_OP_NOMINAL_CAST, "ir.nominal.cast", rule_nominal_cast},
+    {IR_OP_BOX, "ir.box", rule_box},
     {IR_OP_SELECT, "ir.select", rule_select},
     {IR_OP_PHI, "ir.phi", rule_phi},
     {IR_OP_TRAIT_METHOD, "ir.trait.method", rule_trait_method},

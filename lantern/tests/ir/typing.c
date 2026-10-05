@@ -1549,6 +1549,37 @@ static void test_conversion(void)
     check("and bitcast takes no modifiers",
           !ir_instr_add_mod(bcm, "sat"));
 
+    th_type *amount = ir_type_parse(e->m, "Amount");
+    th_type *other = ir_type_parse(e->m, "OtherAmount");
+    check("nominal cast types retain their declared representation",
+          ir_type_define(e->m, amount, ir_type_parse(e->m, "i32"))
+              && ir_type_define(e->m, other, ir_type_parse(e->m, "i32")));
+    ir_instr_t *nominal = op(e, IR_OP_NOMINAL_CAST);
+    ir_instr_set_dest(nominal, "amount", amount);
+    ir_instr_operand_value(nominal, val(e, "i32"));
+    check("explicit nominal conversion accepts the declared representation",
+          accepts_as(e, nominal, "Amount"));
+    ir_instr_t *representation = op(e, IR_OP_NOMINAL_CAST);
+    ir_instr_set_dest(representation, "representation", ir_type_parse(e->m, "i32"));
+    ir_instr_operand_value(representation, val(e, "Amount"));
+    check("explicit nominal conversion can expose the representation",
+          accepts_as(e, representation, "i32"));
+    ir_instr_t *unrelated = op(e, IR_OP_NOMINAL_CAST);
+    ir_instr_set_dest(unrelated, "unrelated", other);
+    ir_instr_operand_value(unrelated, val(e, "Amount"));
+    check("equal representation does not permit unrelated nominal conversions",
+          apply(e, unrelated) == IR_RULE_REJECT);
+    ir_instr_t *box = op(e, IR_OP_BOX);
+    ir_instr_set_dest(box, "boxed", ir_type_parse(e->m, "Erased"));
+    ir_value_t *source = val(e, "(x: i32)");
+    ir_instr_operand_value(box, source);
+    check("semantic boxing retains the source's type without an ABI",
+          accepts_as(e, box, "Erased")
+              && ir_operand_value(&box->operands[0]) == source);
+    check("complete empty alias facts can be copied to a boxed value",
+          ir_value_set_alias_targets(e->ctx, source, nullptr, 0, true)
+              && ir_value_copy_alias_targets(e->ctx, box->dest, source));
+
     close_env(e);
 }
 

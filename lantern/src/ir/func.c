@@ -692,7 +692,7 @@ bool ir_value_set_alias_targets(ir_ctx_t *ctx, ir_value_t *value,
 {
     ir_annots_t *annots = ir_value_annots(value);
     if (!ctx || !value || !value->type || !annots
-        || (complete && !target_count) || (target_count && !targets)
+        || (target_count && !targets)
         || target_count > UINT32_MAX) return false;
 
     uint32_t existing = 0;
@@ -716,8 +716,6 @@ bool ir_value_set_alias_targets(ir_ctx_t *ctx, ir_value_t *value,
         unique_count++;
         escapes |= targets[i].escapes;
     }
-    if (complete && !unique_count) return false;
-
     for (size_t i = 0; i < target_count; i++) {
         ir_value_t *target = targets[i].value;
         bool duplicate = false;

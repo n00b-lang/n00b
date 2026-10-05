@@ -561,7 +561,7 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         visibility > TH_ENV_PUBLIC ||
         (env->archive_schema_version >= 7 &&
          (!core_object_reader_u32(reader, &shape_kind) ||
-          shape_kind > TH_ENV_TYPE_SHAPE_ALIAS ||
+          shape_kind > TH_ENV_TYPE_SHAPE_NOMINAL ||
           !read_type_ref(reader, &origin.shape))) ||
         ((shape_kind == TH_ENV_TYPE_SHAPE_NONE) != (origin.shape == nullptr)))
       return false;

@@ -587,7 +587,7 @@ bool th_env_register_type_shape(th_env *env, const char *name,
                                 th_type *shape) {
   if (!env || env->frozen || !name || !*name || !shape ||
       shape_kind <= TH_ENV_TYPE_SHAPE_NONE ||
-      shape_kind > TH_ENV_TYPE_SHAPE_ALIAS)
+      shape_kind > TH_ENV_TYPE_SHAPE_NOMINAL)
     return false;
   for (size_t i = 0; i < env->type_origins.len; i++) {
     th_env_type_origin_t *origin = &env->type_origins.data[i];

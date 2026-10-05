@@ -157,8 +157,8 @@ static bool same_named_type(const th_type *left, const th_type *right)
 
 bool th_type_define(th_ctx *ctx, th_type *type, th_type *definition)
 {
-    if (!ctx || !type || !definition || th_kind_of(th_resolve(type)) != TH_NAMED
-        || th_kind_of(th_resolve(definition)) != TH_RECORD) return false;
+    if (!ctx || !type || !definition || th_kind_of(th_resolve(type)) != TH_NAMED)
+        return false;
     for (size_t i = 0; i < ctx->type_definitions.len; i++) {
         th_type_definition_t *entry = &ctx->type_definitions.data[i];
         if (!same_named_type(entry->type, type)) continue;

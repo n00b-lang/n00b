@@ -474,6 +474,35 @@ static void test_variant_type_definition_round_trips(void)
     ir_ctx_free(ctx);
 }
 
+static void test_semantic_cast_round_trip(void)
+{
+    const char *source =
+        "module m {\n"
+        "  profile bce\n"
+        "  target host\n"
+        "  type Amount = i32\n"
+        "  func @f(%value: i32) -> Erased {\n"
+        "    block entry:\n"
+        "      %amount: Amount = nominal.cast %value\n"
+        "      %raw: i32 = nominal.cast %amount\n"
+        "      %boxed: Erased = box %raw\n"
+        "      return %boxed\n"
+        "  }\n"
+        "}\n";
+    ir_ctx_t *context = ir_ctx_new();
+    ir_diags_t *diags = nullptr;
+    ir_module_t *module = parse(context, source, &diags);
+    bool verified = false;
+    if (module) {
+        ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
+        verified = (ir_verify(module, diags) & IR_PROP_TYPED)
+            && !ir_diags_failed(diags);
+    }
+    check("semantic cast text carries its representation and verifies independently",
+          verified && round_trips(context, source, nullptr));
+    ir_ctx_free(context);
+}
+
 static void test_mutability_round_trips(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -2018,6 +2047,7 @@ int main(int argc, char **argv)
     test_phase_mutability_round_trips();
     test_meta_round_trip();
     test_binding_facts_round_trip();
+    test_semantic_cast_round_trip();
     test_both_forms();
     test_cross_profile();
     test_named_args();

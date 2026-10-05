@@ -469,6 +469,8 @@ forwarding_alias_input(const ir_instr_t *instruction, uint32_t operand)
     case IR_OP_COPY:
     case IR_OP_CAST:
     case IR_OP_BITCAST:
+    case IR_OP_NOMINAL_CAST:
+    case IR_OP_BOX:
         return operand == 0;
     case IR_OP_FIELD:
     case IR_OP_INDEX:
@@ -542,6 +544,8 @@ collect_structural_aliases(const ir_value_t *value, value_set_t *work)
                 break;
             case IR_OP_CAST:
             case IR_OP_BITCAST:
+            case IR_OP_NOMINAL_CAST:
+            case IR_OP_BOX:
                 limit = instruction->n_operands;
                 break;
             case IR_OP_FIELD:
