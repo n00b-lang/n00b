@@ -816,6 +816,7 @@ test_link_unit_deferred_references(void)
     int use_site = 0;
     int source_scope = 0;
     core_link_reference_t *reference = nullptr;
+    core_link_reference_t *second_reference = nullptr;
     deferred_reference_probe_t resolver = {
         .reference = nullptr,
         .module = CORE_STRING_STATIC("pkg.actual"),
@@ -837,6 +838,16 @@ test_link_unit_deferred_references(void)
                   CORE_STRING_STATIC("member resolution awaits import closure"))
               && core_link_reference_deferral_prerequisite(reference,
                                                             nullptr)
+              && core_link_unit_add_deferred_reference_at_scoped_kind(
+                  link, &root, &use_site, &source_scope, 12,
+                  CORE_STRING_STATIC("second operation at the same node"),
+                  80, &second_reference)
+              && second_reference != reference
+              && core_link_unit_reference_count_at(
+                  link, &root, &use_site) == 2
+              && core_link_unit_resolve_reference(
+                  link, second_reference, CORE_STRING_STATIC("pkg.actual"),
+                  CORE_STRING_STATIC("function.go"))
               && core_link_unit_register_stage(link, 80, nullptr, 0,
                   CORE_STRING_STATIC("frontend.deferred-name-resolution"),
                   true, resolve_deferred_reference_stage, &resolver)

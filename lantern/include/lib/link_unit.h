@@ -253,6 +253,13 @@ bool core_link_unit_defer_reference_at_scoped_kind(
     const void *use_site, const void *source_scope, uint32_t expected_kind,
     core_string_t reason, uint32_t prerequisite_stage,
     core_link_reference_t **out);
+/* Add a distinct deferred reference even when another unresolved operation
+ * originates at the same syntax node. */
+bool core_link_unit_add_deferred_reference_at_scoped_kind(
+    core_link_unit_t *link, core_translation_unit_t *referrer,
+    const void *use_site, const void *source_scope, uint32_t expected_kind,
+    core_string_t reason, uint32_t prerequisite_stage,
+    core_link_reference_t **out);
 bool core_link_unit_resolve_reference(
     core_link_unit_t *link, core_link_reference_t *reference,
     core_string_t target_module, core_string_t declaration_key);

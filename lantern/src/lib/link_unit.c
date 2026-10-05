@@ -1270,7 +1270,7 @@ static bool reference_at_internal(
     const void *use_site, const void *source_scope,
     core_string_t target_module,
     core_string_t declaration_key, bool has_expected_kind,
-    uint32_t expected_kind, bool allow_unresolved_target,
+    uint32_t expected_kind, bool allow_unresolved_target, bool add_distinct,
     core_link_reference_t **out);
 
 bool
@@ -1294,7 +1294,7 @@ core_link_unit_reference_at(core_link_unit_t *link,
 {
     return reference_at_internal(link, referrer, use_site, nullptr,
                                  target_module, declaration_key, false, 0,
-                                 false,
+                                 false, false,
                                  out);
 }
 
@@ -1309,7 +1309,7 @@ core_link_unit_reference_at_kind(core_link_unit_t *link,
 {
     return reference_at_internal(link, referrer, use_site, nullptr,
                                  target_module, declaration_key, true,
-                                 expected_kind, false, out);
+                                 expected_kind, false, false, out);
 }
 
 bool
@@ -1321,7 +1321,27 @@ core_link_unit_reference_at_scoped_kind(
 {
     return reference_at_internal(link, referrer, use_site, source_scope,
                                  target_module, declaration_key, true,
-                                 expected_kind, false, out);
+                                 expected_kind, false, false, out);
+}
+
+static bool
+defer_reference_at_scoped_kind_internal(
+    core_link_unit_t *link, core_translation_unit_t *referrer,
+    const void *use_site, const void *source_scope, uint32_t expected_kind,
+    core_string_t reason, uint32_t prerequisite_stage,
+    bool add_distinct, core_link_reference_t **out)
+{
+    if (out) *out = nullptr;
+    if (!use_site || !reason.data || !reason.u8_bytes) return false;
+    core_link_reference_t *reference = nullptr;
+    if (!reference_at_internal(link, referrer, use_site, source_scope,
+            (core_string_t){0}, (core_string_t){0}, true, expected_kind,
+            true, add_distinct, &reference)
+        || !core_link_unit_defer_reference(link, reference, reason,
+                                           prerequisite_stage))
+        return false;
+    if (out) *out = reference;
+    return true;
 }
 
 bool
@@ -1331,17 +1351,21 @@ core_link_unit_defer_reference_at_scoped_kind(
     core_string_t reason, uint32_t prerequisite_stage,
     core_link_reference_t **out)
 {
-    if (out) *out = nullptr;
-    if (!use_site || !reason.data || !reason.u8_bytes) return false;
-    core_link_reference_t *reference = nullptr;
-    if (!reference_at_internal(link, referrer, use_site, source_scope,
-            (core_string_t){0}, (core_string_t){0}, true, expected_kind,
-            true, &reference)
-        || !core_link_unit_defer_reference(link, reference, reason,
-                                           prerequisite_stage))
-        return false;
-    if (out) *out = reference;
-    return true;
+    return defer_reference_at_scoped_kind_internal(
+        link, referrer, use_site, source_scope, expected_kind, reason,
+        prerequisite_stage, false, out);
+}
+
+bool
+core_link_unit_add_deferred_reference_at_scoped_kind(
+    core_link_unit_t *link, core_translation_unit_t *referrer,
+    const void *use_site, const void *source_scope, uint32_t expected_kind,
+    core_string_t reason, uint32_t prerequisite_stage,
+    core_link_reference_t **out)
+{
+    return defer_reference_at_scoped_kind_internal(
+        link, referrer, use_site, source_scope, expected_kind, reason,
+        prerequisite_stage, true, out);
 }
 
 static bool
@@ -1351,6 +1375,7 @@ reference_at_internal(core_link_unit_t *link,
                       core_string_t target_module,
                       core_string_t declaration_key, bool has_expected_kind,
                       uint32_t expected_kind, bool allow_unresolved_target,
+                      bool add_distinct,
                       core_link_reference_t **out)
 {
     if (out) *out = nullptr;
@@ -1359,7 +1384,7 @@ reference_at_internal(core_link_unit_t *link,
             && (!target_module.data || !target_module.u8_bytes
                 || !declaration_key.data || !declaration_key.u8_bytes)))
         return false;
-    for (size_t i = 0; i < link->reference_count; i++) {
+    for (size_t i = 0; !add_distinct && i < link->reference_count; i++) {
         core_link_reference_t *prior = link->references[i];
         if (prior->referrer == referrer
             && prior->use_site == use_site
