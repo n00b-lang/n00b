@@ -1,0 +1,5 @@
+func touch(modify *items: int) {}
+
+func reject_temporary(input: int) {
+    touch(input + 1)
+}

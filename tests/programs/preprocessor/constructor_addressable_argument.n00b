@@ -1,0 +1,16 @@
+type Built {
+    value: int
+}
+
+type Cell {
+    value: int
+}
+
+func __init(modify self: Built, modify target: int) {
+    self.value = target
+    target = 1
+}
+
+func construct_with_field(modify cell: Cell) -> Built {
+    return new[Built](cell.value)
+}

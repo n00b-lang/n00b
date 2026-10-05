@@ -1,0 +1,6 @@
+func write_out(out target: int, input: int) { target = input }
+
+func reject_immutable(input: int) {
+    let fixed: int = 0
+    write_out(fixed, input)
+}

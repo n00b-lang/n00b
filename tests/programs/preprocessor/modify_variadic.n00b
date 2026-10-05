@@ -1,0 +1,14 @@
+type Cell {
+    value: int
+}
+
+func touch(modify *items: int) {}
+
+func exercise_modify_variadic(
+    modify first: int,
+    modify second: int,
+    modify cell: Cell
+) {
+    touch(first, second, cell.value)
+    touch()
+}

@@ -336,6 +336,10 @@
     %"*" %IDENTIFIER %":" <type-spec>
 <vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
     %"*" %IDENTIFIER
+<vargs-param> @declares($2, $4, "param") @direction($2, "modify") @pass_by("inout") ::=
+    %"modify" %"*" %IDENTIFIER %":" <type-spec>
+<vargs-param> @declares($2, "param") @direction($2, "modify") @pass_by("inout") ::=
+    %"modify" %"*" %IDENTIFIER
 
 <function-result> ::= <return-type>? <error-type>?
 
@@ -602,6 +606,7 @@
 <base-tspec-core> ::= <tspec-tvar>
                     | %"nil"
                     | <sized-int-tspec>
+                    | <reference-tspec>
                     | <member-chain> <tspec-application>?
                     | <tspec-func>
                     | %"(" <union-tspec> %")"
@@ -613,6 +618,8 @@
 <array-dimension> ::= %"[" <expression>? %"]"
 
 <tspec-tvar> ::= %"`" %IDENTIFIER
+
+<reference-tspec> @infer("ref[$2]") ::= %"ref" %"[" <union-tspec> %"]"
 
 <sized-int-tspec> @adjacent("prefix") ::= %i %":" <integer-size>
                                           | %u %":" <integer-size>

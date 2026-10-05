@@ -6932,3 +6932,102 @@ awk '
     }
     END { if (!cleanup_line) exit 1 }
 ' "$tmp/for_cleanup_edges.ir"
+
+"$compiler" lower --dump-ir \
+    "$program_dir/addressable_arguments.n00b" \
+    >"$tmp/addressable_arguments.ir" 2>&1 || {
+    cat "$tmp/addressable_arguments.ir"
+    exit 1
+}
+grep -q 'func @use_reference(%value: ref\[int\]' \
+    "$tmp/addressable_arguments.ir"
+grep -q 'ref\[int\] = field .* "value"' \
+    "$tmp/addressable_arguments.ir"
+grep -q 'ref\[int\] = index ' "$tmp/addressable_arguments.ir"
+test "$(grep -c 'call @__write' "$tmp/addressable_arguments.ir")" -eq 2
+test "$(grep -c 'call @__read' "$tmp/addressable_arguments.ir")" -eq 1
+test "$(grep -c 'call.output' "$tmp/addressable_arguments.ir")" -eq 4
+
+if "$compiler" lower \
+    "$program_dir/addressable_argument_temporary.n00b" \
+    >"$tmp/addressable_argument_temporary.out" 2>&1; then
+    echo 'a temporary unexpectedly satisfied an out parameter' >&2
+    exit 1
+fi
+grep -q 'out and modify arguments must be writable storage locations' \
+    "$tmp/addressable_argument_temporary.out"
+
+if "$compiler" lower \
+    "$program_dir/addressable_argument_immutable.n00b" \
+    >"$tmp/addressable_argument_immutable.out" 2>&1; then
+    echo 'immutable storage unexpectedly satisfied an out parameter' >&2
+    exit 1
+fi
+grep -q 'out and modify arguments must be writable storage locations' \
+    "$tmp/addressable_argument_immutable.out"
+
+"$compiler" lower --dump-symbols --dump-ir \
+    "$program_dir/modify_variadic.n00b" \
+    >"$tmp/modify_variadic.out" 2>&1 || {
+    cat "$tmp/modify_variadic.out"
+    exit 1
+}
+grep -q 'items: parameter, mutable, type=array\[ref\[int\]\].*variadic' \
+    "$tmp/modify_variadic.out"
+grep -q 'func @touch(\*%items: ref\[int\])' \
+    "$tmp/modify_variadic.out"
+grep -q 'array\[ref\[int\]\] = rest.collect %items' \
+    "$tmp/modify_variadic.out"
+grep -q 'call @touch, %__n00bb_local_address_.*%__n00bb_field_address_' \
+    "$tmp/modify_variadic.out"
+grep -q 'call @touch !' "$tmp/modify_variadic.out"
+
+if "$compiler" lower \
+    "$program_dir/modify_variadic_temporary.n00b" \
+    >"$tmp/modify_variadic_temporary.out" 2>&1; then
+    echo 'a temporary unexpectedly satisfied a modify variadic parameter' >&2
+    exit 1
+fi
+grep -q 'modify variadic arguments must be writable storage locations' \
+    "$tmp/modify_variadic_temporary.out"
+
+"$compiler" lower --dump-ir \
+    "$program_dir/constructor_addressable_argument.n00b" \
+    >"$tmp/constructor_addressable_argument.ir" 2>&1 || {
+    cat "$tmp/constructor_addressable_argument.ir"
+    exit 1
+}
+grep -q 'call @__init, fresh .*call_signature((inout .*Built, inout int)' \
+    "$tmp/constructor_addressable_argument.ir"
+grep -q 'call.output .* 1' "$tmp/constructor_addressable_argument.ir"
+grep -q 'store %__n00bb_field_address_.*%__n00bb_copyout_' \
+    "$tmp/constructor_addressable_argument.ir"
+
+"$compiler" lower --dump-ir \
+    "$program_dir/callback_reference.n00b" \
+    >"$tmp/callback_reference.ir" 2>&1 || {
+    cat "$tmp/callback_reference.ir"
+    exit 1
+}
+grep -q 'local .*: ref\[(int) -> int fail: nil\]' \
+    "$tmp/callback_reference.ir"
+grep -q 'copy @increment' "$tmp/callback_reference.ir"
+test "$(grep -c 'call %.*%value.*call_signature((int) -> int fail: nil)' \
+    "$tmp/callback_reference.ir")" -eq 2
+
+"$compiler" lower --dump-ir \
+    "$program_dir/init_existing.n00b" \
+    >"$tmp/init_existing.ir" 2>&1 || {
+    cat "$tmp/init_existing.ir"
+    exit 1
+}
+grep -q 'call @__init, %__n00bb_.*, %value.*call_signature((inout .*Initialized, int)' \
+    "$tmp/init_existing.ir"
+grep -q 'call.output .* 0' "$tmp/init_existing.ir"
+grep -q 'store %__n00bb_storage_.*%__n00bb_copyout_' \
+    "$tmp/init_existing.ir"
+if grep 'call @__init' "$tmp/init_existing.ir" | grep -q 'fresh'; then
+    cat "$tmp/init_existing.ir"
+    echo 'init(existing, ...) unexpectedly used fresh constructor storage' >&2
+    exit 1
+fi
