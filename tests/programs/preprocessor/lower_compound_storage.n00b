@@ -1,0 +1,22 @@
+type Counter {
+    value: int
+}
+
+trait Index_Read {
+    func __read(self: `T, index: int) -> int
+}
+
+trait Index_Write {
+    func __write(self: `T, index: int, item: int) -> int
+}
+
+func __read(self: array[int], index: int) -> int { return 1 }
+func __write(self: array[int], index: int, item: int) -> int { return item }
+
+func update_field(modify item: Counter) {
+    item.value += 2
+}
+
+func update_index(items: array[int]) {
+    items [0] += 2
+}

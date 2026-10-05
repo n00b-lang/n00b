@@ -268,6 +268,7 @@ typedef struct {
     parse_tree_t *receiver_node;
     parse_scope_t *scope;
     parse_sym_entry_t *symbol;
+    core_link_reference_t *reference;
     core_string_t member_name;
     core_string_t *trait_path_parts;
     size_t trait_path_part_count;
@@ -281,6 +282,7 @@ typedef struct {
     bool variant_case_candidate;
     bool constructor_call;
     bool operator_dispatch;
+    bool secondary_dispatch;
     bool in_module_initializer;
 } n00bb_link_use_site_t;
 core_list_decl(n00bb_link_use_site_t);
@@ -740,6 +742,8 @@ static bool index_dispatch_for_node(parse_grammar_t *grammar,
                                     parse_tree_t *node,
                                     core_string_t *trait,
                                     core_string_t *method);
+static bool index_is_compound_target(parse_grammar_t *grammar,
+                                     parse_tree_t *node);
 static bool initializer_node_is_out_argument(parse_grammar_t *grammar,
                                               core_translation_unit_t *unit,
                                               parse_tree_t *node);
@@ -5736,6 +5740,19 @@ link_use_site_for_node(n00bb_tu_state_t *state, parse_tree_t *node)
     if (!state || !node) return nullptr;
     for (size_t i = 0; i < state->link_use_sites.len; i++)
         if (state->link_use_sites.data[i].node == node)
+            return &state->link_use_sites.data[i];
+    return nullptr;
+}
+
+static n00bb_link_use_site_t *
+link_use_site_for_dispatch(n00bb_tu_state_t *state, parse_tree_t *node,
+                           core_string_t trait)
+{
+    if (!state || !node) return nullptr;
+    for (size_t i = 0; i < state->link_use_sites.len; i++)
+        if (state->link_use_sites.data[i].node == node
+            && core_string_eq(state->link_use_sites.data[i].dispatch_trait,
+                              trait))
             return &state->link_use_sites.data[i];
     return nullptr;
 }
@@ -14320,7 +14337,8 @@ n00bb_has_index_store_target(parse_grammar_t *grammar, parse_tree_t *node)
 {
     core_string_t trait = {0}, method = {0};
     if (index_dispatch_for_node(grammar, node, &trait, &method)
-        && core_string_eq(trait, CORE_STRING_STATIC("Index_Write")))
+        && (core_string_eq(trait, CORE_STRING_STATIC("Index_Write"))
+            || index_is_compound_target(grammar, node)))
         return true;
     for (size_t i = 0; node && !core_tree_is_leaf(node)
             && i < core_tree_num_children(node); i++)
@@ -14335,7 +14353,8 @@ n00bb_index_store_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
     core_string_t trait = {0}, method = {0};
     if (index_dispatch_for_node(grammar, node, &trait, &method)
-        && core_string_eq(trait, CORE_STRING_STATIC("Index_Write")))
+        && (core_string_eq(trait, CORE_STRING_STATIC("Index_Write"))
+            || index_is_compound_target(grammar, node)))
         return node;
     for (size_t i = 0; node && !core_tree_is_leaf(node)
             && i < core_tree_num_children(node); i++) {
@@ -14348,13 +14367,16 @@ n00bb_index_store_node(parse_grammar_t *grammar, parse_tree_t *node)
 
 static bool
 n00bb_lower_index_store(ir_lower_context_t *context, parse_visit_t *visit,
-                        parse_tree_t *target, parse_tree_t *source)
+                        parse_tree_t *target, parse_tree_t *source,
+                        ir_value_t *source_value)
 {
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     parse_tree_t *index_node = n00bb_index_store_node(visit->grammar, target);
     n00bb_link_use_site_t *site = caller
-        ? link_use_site_for_node(caller, index_node) : nullptr;
+        ? link_use_site_for_dispatch(caller, index_node,
+                                     CORE_STRING_STATIC("Index_Write"))
+        : nullptr;
     parse_tree_t *contents = index_node
         && core_tree_num_children(index_node) > 2
             ? core_tree_child(index_node, 2) : nullptr;
@@ -14366,7 +14388,8 @@ n00bb_lower_index_store(ir_lower_context_t *context, parse_visit_t *visit,
     ir_value_t *arguments[] = {
         receiver_node ? ir_lower_node_value(context, receiver_node) : nullptr,
         index_arg ? ir_lower_node_value(context, index_arg) : nullptr,
-        source ? ir_lower_node_value(context, source) : nullptr,
+        source_value ? source_value
+                     : source ? ir_lower_node_value(context, source) : nullptr,
     };
     parse_sym_entry_t *symbol = site ? site->symbol : nullptr;
     if (!lower || !caller || !site || !symbol
@@ -15077,7 +15100,8 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         if (!compound && n00bb_has_index_store_target(visit->grammar, target)) {
             parse_tree_t *source = parse_tree_resolve_child_ref(
                 visit->grammar, visit->node, visit->annot->value_ref);
-            return n00bb_lower_index_store(context, visit, target, source);
+            return n00bb_lower_index_store(context, visit, target, source,
+                                           nullptr);
         }
         parse_tree_t *source = parse_tree_resolve_child_ref(
             visit->grammar, visit->node, visit->annot->value_ref);
@@ -15139,17 +15163,33 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
     }
     parse_sym_phase_t phase = lower && lower->comptime_phase
         ? PARSE_SYM_PHASE_COMPTIME : PARSE_SYM_PHASE_RUNTIME;
-    bool writable = !symbol || parse_sym_can_write(symbol, phase);
-    if (symbol && lower && lower->comptime_phase
-        && !compound && symbol->mutability == PARSE_SYM_MUTABLE
-        && parse_sym_can_initialize(symbol, phase))
+    bool field_compound = compound && field && field->is_field;
+    parse_sym_entry_t *write_owner = field_compound
+        ? n00bb_assignment_root_symbol(visit->grammar,
+              lower ? lower->unit : nullptr, target)
+        : symbol;
+    bool writable = !write_owner || parse_sym_can_write(write_owner, phase);
+    if (write_owner && lower && lower->comptime_phase
+        && !compound && write_owner->mutability == PARSE_SYM_MUTABLE
+        && parse_sym_can_initialize(write_owner, phase))
         writable = true;
-    if (symbol && !writable) {
+    if (field_compound && field->mutability != PARSE_SYM_MUTABLE)
+        writable = false;
+    bool indexed_compound = compound
+        && n00bb_has_index_store_target(visit->grammar, target);
+    if (write_owner && !writable && !indexed_compound) {
         lower_error(context, IR_DIAG_TYPE_ARGS,
             lower_span_for_tree(context, visit->node),
             lower && lower->comptime_phase
                 ? "cannot assign to this binding during compile-time evaluation"
                 : "cannot assign to this binding during runtime execution");
+        return false;
+    }
+    if (compound && entering
+        && !ir_lower_evaluate_assignment_target(context, visit->node)) {
+        lower_error(context, IR_DIAG_INTERNAL,
+            lower_span_for_tree(context, visit->node),
+            "could not evaluate compound assignment target");
         return false;
     }
     ir_local_t *target_local = symbol
@@ -15305,13 +15345,18 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
         ? parse_tree_resolve_child_ref(visit->grammar, visit->node,
                                        assigns->name_ref) : nullptr;
     parse_sym_entry_t *symbol = n00bb_compound_target_symbol(context, target);
+    n00bb_lower_context_t *lower = context->user;
+    bool field_target = member_access_node(visit->grammar, target) != nullptr;
+    bool index_target = n00bb_has_index_store_target(visit->grammar, target);
     ir_local_t *local = ir_lower_bound_local(context, symbol);
     ir_value_t *address = ir_lower_bound_address(context, symbol);
     ir_value_t *binding = ir_lower_bound_value(context, symbol);
     bool global = binding && binding->kind == IR_VAL_GLOBAL;
-    th_type *target_type = local ? local->type
+    th_type *target_type = !core_tree_is_leaf(target)
+        ? core_tree_node_value(target).type
+        : local ? local->type
         : binding ? binding->type : symbol ? symbol->type : nullptr;
-    if (!local && !address && !global)
+    if (!local && !address && !global && !field_target && !index_target)
         return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
                            "compound assignment target has no writable storage");
     if (!target_type)
@@ -15335,7 +15380,6 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     else return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                             "this compound assignment operator is not lowered");
 
-    n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     n00bb_link_use_site_t *site = caller
         ? link_use_site_for_node(caller, visit->node) : nullptr;
@@ -15365,6 +15409,17 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
             && ir_instr_operand_value(store, updated);
         if (store) store->span = span;
     }
+    else if (updated && index_target)
+        stored = n00bb_lower_index_store(context, visit, target,
+                                         core_tree_child(visit->node, 2),
+                                         updated);
+    else if (updated && field_target) {
+        ir_value_t *field_address = n00bb_record_field_address(context,
+            visit->grammar, lower ? lower->unit : nullptr, target, span);
+        stored = field_address
+            && n00bb_emit_indirect_write(context, field_address, updated,
+                                         span);
+    }
     else if (updated)
         stored = n00bb_emit_indirect_write(context, address, updated, span);
     if (!stored)
@@ -15387,7 +15442,14 @@ n00bb_capture_compound_target(ir_lower_context_t *context,
     ir_value_t *address = ir_lower_bound_address(context, symbol);
     ir_value_t *binding = ir_lower_bound_value(context, symbol);
     ir_span_t span = lower_span_for_tree(context, visit->node);
-    ir_value_t *value = local ? n00bb_emit_local_read(context, local, span)
+    ir_value_t *value = ir_lower_node_value(context, visit->node);
+    if (!value && core_tree_num_children(visit->node) == 1)
+        value = ir_lower_node_value(context,
+                                    core_tree_child(visit->node, 0));
+    if (value && value->kind != IR_VAL_GLOBAL) return true;
+    if (value && value->kind == IR_VAL_GLOBAL) binding = value;
+    value = nullptr;
+    value = local ? n00bb_emit_local_read(context, local, span)
         : address && symbol
             ? n00bb_emit_indirect_read(context, address, symbol->type, span)
             : nullptr;
@@ -20164,6 +20226,21 @@ index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
 }
 
 static bool
+index_is_compound_target(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at;
+         at = core_tree_node_value(at).parent) {
+        parse_tree_t *parent = core_tree_node_value(at).parent;
+        if (!parent) return false;
+        if (!nt_is(grammar, parent, "binop-assign-stmt")) continue;
+        parse_tree_t *target = core_tree_num_children(parent)
+            ? core_tree_child(parent, 0) : nullptr;
+        return target && node_is_within(node, target);
+    }
+    return false;
+}
+
+static bool
 binary_operator_dispatch_for_node(parse_grammar_t *grammar,
                                   parse_tree_t *node,
                                   core_string_t *trait,
@@ -20680,8 +20757,8 @@ remember_link_use_site(parse_grammar_t *grammar,
     size_t trait_path_part_count = 0;
     core_string_t *trait_path_parts = trait_reference
         ? cache_trait_name_parts(node, &trait_path_part_count) : nullptr;
-    core_list_push(state->link_use_sites,
-        ((n00bb_link_use_site_t){.node = node,
+    n00bb_link_use_site_t use_site = {
+                                 .node = node,
                                  .receiver_node = receiver_node,
                                  .scope = scope,
                                  .symbol = symbol,
@@ -20702,7 +20779,19 @@ remember_link_use_site(parse_grammar_t *grammar,
                                  .operator_dispatch = operator_dispatch,
                                  .in_module_initializer =
                                      is_module_initializer_use(grammar, node,
-                                                               initializer_owner)}));
+                                                               initializer_owner)};
+    core_list_push(state->link_use_sites, use_site);
+    if (index_dispatch && index_is_compound_target(grammar, node)
+        && core_string_eq(dispatch_trait,
+                          CORE_STRING_STATIC("Index_Read"))) {
+        use_site.symbol = nullptr;
+        use_site.reference = nullptr;
+        use_site.dispatch_trait = CORE_STRING_STATIC("Index_Write");
+        use_site.dispatch_method = CORE_STRING_STATIC("__write");
+        use_site.resolved_trait_name = nullptr;
+        use_site.secondary_dispatch = true;
+        core_list_push(state->link_use_sites, use_site);
+    }
 }
 
 typedef struct {
@@ -20765,6 +20854,7 @@ link_reference_for_site(core_link_unit_t *link,
                        core_translation_unit_t *unit,
                        n00bb_link_use_site_t *site)
 {
+    if (site && site->reference) return site->reference;
     if (!link || !unit || !site
         || core_link_unit_reference_count_at(link, unit, site->node) != 1)
         return nullptr;
@@ -21122,6 +21212,7 @@ register_link_use_sites(core_link_unit_t *link,
                 if (!ok || !core_link_reference_set_source_info(link,
                         reference, link_source_location(node), provenance))
                     return false;
+                site->reference = reference;
                 continue;
             }
             core_translation_unit_t *owner = linkable_module_symbol(symbol)
@@ -21137,7 +21228,8 @@ register_link_use_sites(core_link_unit_t *link,
                     : CORE_STRING_STATIC(
                         "trait dispatch awaits joint source inference");
                 core_link_reference_t *reference = nullptr;
-                bool deferred = core_link_unit_defer_reference_at_scoped_kind(
+                bool deferred =
+                    core_link_unit_add_deferred_reference_at_scoped_kind(
                     link, unit, node, site->scope,
                     PARSE_SYM_FUNCTION,
                     reason,
@@ -21147,6 +21239,7 @@ register_link_use_sites(core_link_unit_t *link,
                     || !core_link_reference_set_source_info(link,
                         reference, link_source_location(node),
                         provenance)) return false;
+                site->reference = reference;
                 continue;
             }
             core_buffer_t key = {0};
@@ -21161,6 +21254,7 @@ register_link_use_sites(core_link_unit_t *link,
             if (!ok || !core_link_reference_set_source_info(link, reference,
                     link_source_location(node), provenance))
                 return false;
+            site->reference = reference;
         }
     }
     return true;
@@ -22406,8 +22500,9 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                 if (implementation) {
                     site->symbol = implementation;
                     parse_sym_add_use(implementation, site->node);
-                    if (!parse_tree_set_resolution_symbol(site->node,
-                                                           implementation))
+                    if (!site->secondary_dispatch
+                        && !parse_tree_set_resolution_symbol(site->node,
+                                                             implementation))
                         return false;
                 }
                 else if (trait_name && receiver_type
@@ -22429,8 +22524,9 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     }
                     site->symbol = requirement;
                     parse_sym_add_use(requirement, site->node);
-                    if (!parse_tree_set_resolution_symbol(site->node,
-                                                           requirement))
+                    if (!site->secondary_dispatch
+                        && !parse_tree_set_resolution_symbol(site->node,
+                                                             requirement))
                         return false;
                     if (!validate_trait_dispatch_result(grammar, unit, state,
                                                         site, requirement))

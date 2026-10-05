@@ -1449,6 +1449,17 @@ grep -q 'add trap %' \
 grep -q 'global.store @lower_global_compound_assignment.total' \
     "$tmp/lower_global_compound_assignment.ir"
 
+"$compiler" lower --dump-ir "$program_dir/lower_compound_storage.n00b" \
+    >"$tmp/lower_compound_storage.ir" \
+    2>"$tmp/lower_compound_storage.err" || {
+    cat "$tmp/lower_compound_storage.err"
+    exit 1
+}
+grep -q 'field .*"value"' "$tmp/lower_compound_storage.ir"
+grep -q 'add trap ' "$tmp/lower_compound_storage.ir"
+grep -q '= call @__read,' "$tmp/lower_compound_storage.ir"
+grep -q '= call @__write,' "$tmp/lower_compound_storage.ir"
+
 "$compiler" lower --dump-ir "$program_dir/lower_tuple_assignment.n00b" \
     >"$tmp/lower_tuple_assignment.ir" \
     2>"$tmp/lower_tuple_assignment.err" || {
