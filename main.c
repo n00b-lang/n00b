@@ -74,6 +74,7 @@ static const ir_scalar_t N00BB_SCALARS[] = {
     {"int", IR_CLASS_SINT, 64, IR_ROLE_NONE},
     {"uint", IR_CLASS_UINT, 64, IR_ROLE_NONE},
     {"bool", IR_CLASS_BOOL, 1, IR_ROLE_NONE},
+    {"byte", IR_CLASS_UINT, 8, IR_ROLE_NONE},
     {"f64", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
     {"float", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
     {"nil", IR_CLASS_VOID, 0, IR_ROLE_NONE},
@@ -9724,6 +9725,10 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         || source.class == IR_CLASS_UINT;
     bool target_integer = destination.class == IR_CLASS_SINT
         || destination.class == IR_CLASS_UINT;
+    if (ir_type_eq(context->module, from, th_name(types, "byte")))
+        target_integer = is_integer_type(target);
+    if (ir_type_eq(context->module, target, th_name(types, "byte")))
+        target_integer = false;
     if (!source_integer || !target_integer)
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                            "this cast has no defined conversion");

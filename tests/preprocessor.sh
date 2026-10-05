@@ -4694,6 +4694,31 @@ grep -q 'this cast has no defined conversion' \
 }
 grep -q ': int = nominal.cast ' "$tmp/operator_nominal_archive_user.ir"
 "$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_byte_cast.n00b" \
+    >"$tmp/operator_byte_cast.ir" 2>&1 || {
+    cat "$tmp/operator_byte_cast.ir"
+    echo 'explicit byte-to-integer casts did not lower' >&2
+    exit 1
+}
+grep -q ': int = cast trap %value' "$tmp/operator_byte_cast.ir"
+grep -q ': u8 = cast %value' "$tmp/operator_byte_cast.ir"
+grep -q ': i8 = cast trap %value' "$tmp/operator_byte_cast.ir"
+grep -q ': ubitint\[3\] = cast trap %value' "$tmp/operator_byte_cast.ir"
+if "$compiler" lower \
+    "$script_dir/programs/operator_byte_arithmetic_rejected.n00b" \
+    >"$tmp/operator_byte_arithmetic_rejected.out" 2>&1; then
+    echo 'byte arithmetic accepted without an explicit integer cast' >&2
+    exit 1
+fi
+if "$compiler" lower \
+    "$script_dir/programs/operator_integer_to_byte_rejected.n00b" \
+    >"$tmp/operator_integer_to_byte_rejected.out" 2>&1; then
+    echo 'integer converted to byte without a defined conversion' >&2
+    exit 1
+fi
+grep -q 'this cast has no defined conversion' \
+    "$tmp/operator_integer_to_byte_rejected.out"
+"$compiler" lower --dump-ir \
     "$script_dir/programs/operator_unary_traits.n00b" \
     >"$tmp/operator_unary_traits.ir" 2>&1 || {
     cat "$tmp/operator_unary_traits.ir"

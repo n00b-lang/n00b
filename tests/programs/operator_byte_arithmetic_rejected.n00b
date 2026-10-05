@@ -1,0 +1,3 @@
+func add(left: byte, right: byte) -> byte {
+    return left + right
+}
