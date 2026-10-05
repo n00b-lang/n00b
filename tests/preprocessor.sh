@@ -3594,6 +3594,84 @@ grep -q 'func @take(consume %item: int.*consume %__n00bb_default_param_.*consume
 grep -Fq '!ir.call_signature((consume int, consume int, consume *int) -> nil fail: nil)' \
     "$tmp/consume_parameter_modes.out"
 ! grep -q 'call.output' "$tmp/consume_parameter_modes.out"
+test "$(grep -c '= consume ' "$tmp/consume_parameter_modes.out")" -eq 5
+
+for fixture in consume_use_after consume_double consume_branch_join \
+               consume_loop consume_alias consume_global; do
+    if "$compiler" lower --dump-ir "$program_dir/$fixture.n00b" \
+        >"$tmp/$fixture.out" 2>&1; then
+        echo "$fixture unexpectedly accepted an unavailable consumed binding" >&2
+        exit 1
+    fi
+    grep -Eq 'used after consume|consumed more than once' \
+        "$tmp/$fixture.out" || {
+        cat "$tmp/$fixture.out"
+        exit 1
+    }
+done
+
+if "$compiler" lower --dump-ir \
+    "$program_dir/consume_escaping_alias.n00b" \
+    >"$tmp/consume_escaping_alias.out" 2>&1; then
+    echo 'consume unexpectedly accepted an escaping alias' >&2
+    exit 1
+fi
+grep -q 'aliases to this binding are tracked and non-escaping' \
+    "$tmp/consume_escaping_alias.out"
+
+if "$compiler" lower --dump-ir \
+    "$program_dir/consume_old_value_alias.n00b" \
+    >"$tmp/consume_old_value_alias.out" 2>&1; then
+    echo 'consume unexpectedly revived an alias into the old value' >&2
+    exit 1
+fi
+grep -q "binding 'local' is used after consume" \
+    "$tmp/consume_old_value_alias.out"
+
+for fixture in consume_subobject consume_index_subobject; do
+    if "$compiler" lower --dump-ir "$program_dir/$fixture.n00b" \
+        >"$tmp/$fixture.out" 2>&1; then
+        echo "$fixture unexpectedly consumed a subobject" >&2
+        exit 1
+    fi
+    grep -q 'consume requires a whole binding or a temporary value' \
+        "$tmp/$fixture.out" || {
+        cat "$tmp/$fixture.out"
+        exit 1
+    }
+done
+
+"$compiler" lower --dump-ir "$program_dir/consume_reassigned.n00b" \
+    >"$tmp/consume_reassigned.out" 2>&1 || {
+    cat "$tmp/consume_reassigned.out"
+    exit 1
+}
+test "$(grep -c '= consume ' "$tmp/consume_reassigned.out")" -eq 2
+
+"$compiler" lower --dump-ir "$program_dir/consume_alias_reassigned.n00b" \
+    >"$tmp/consume_alias_reassigned.out" 2>&1 || {
+    cat "$tmp/consume_alias_reassigned.out"
+    exit 1
+}
+grep -q '= consume ' "$tmp/consume_alias_reassigned.out"
+grep -q '= load ' "$tmp/consume_alias_reassigned.out"
+
+"$compiler" lower --dump-ir "$program_dir/consume_call_forms.n00b" \
+    >"$tmp/consume_call_forms.out" 2>&1 || {
+    cat "$tmp/consume_call_forms.out"
+    exit 1
+}
+grep -q 'call @generic_take' "$tmp/consume_call_forms.out"
+grep -q 'call @recursive_take' "$tmp/consume_call_forms.out"
+grep -q 'call @failing_take' "$tmp/consume_call_forms.out"
+grep -q '!ir.call_signature((consume int) -> nil fail: int)' \
+    "$tmp/consume_call_forms.out"
+awk '
+    /= consume %failed_value/ { consume_line = NR }
+    /call @failing_take/ { call_line = NR }
+    /branch .*__n00bb_unwrap_ok_/ { branch_line = NR }
+    END { exit !(consume_line < call_line && call_line < branch_line) }
+' "$tmp/consume_call_forms.out"
 
 "$compiler" lower --dump-ir --dump-link-unit \
     "$script_dir/programs/trait_dispatch_single.n00b" \
@@ -6986,6 +7064,10 @@ test "$(count_cleanup_calls iter_failure)" -eq 1
 test "$(count_cleanup_calls nested_break)" -eq 4
 test "$(count_cleanup_calls nested_continue)" -eq 3
 grep -q 'call.output .* 0' "$tmp/for_cleanup_edges.ir"
+grep -q '= consume .*__n00bb_iteration_cursor_' \
+    "$tmp/for_cleanup_edges.ir"
+grep -q '!ir.call_signature((consume string) -> nil fail: nil)' \
+    "$tmp/for_cleanup_edges.ir"
 assert_call_order() {
     awk -v function_name="$1" -v first="$2" -v second="$3" '
         $0 ~ "^  func @" function_name "\\(" { active = 1; next }

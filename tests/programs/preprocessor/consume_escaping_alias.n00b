@@ -1,0 +1,9 @@
+var target: int = 0
+var escaped = ref target
+
+func take(consume item: int) {}
+
+func consume_with_escaping_alias(value: int) {
+    escaped = ref value
+    take(value)
+}

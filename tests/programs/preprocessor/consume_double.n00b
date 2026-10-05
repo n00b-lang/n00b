@@ -1,0 +1,6 @@
+func take(consume item: int) {}
+
+func consume_twice(value: int) {
+    take(value)
+    take(value)
+}

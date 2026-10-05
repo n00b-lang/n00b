@@ -1133,6 +1133,9 @@ static ir_value_t *n00bb_emit_iteration_trait_call(
 static bool n00bb_emit_iteration_cleanup(ir_lower_context_t *context,
                                           n00bb_loop_frame_t *frame,
                                           parse_tree_t *source);
+static ir_value_t *n00bb_emit_consume_value(
+    ir_lower_context_t *context, ir_value_t *value, ir_value_t *binding,
+    ir_span_t span);
 static bool n00bb_lower_container_body_enter(
     ir_lower_context_t *context, n00bb_lower_context_t *lower,
     n00bb_loop_frame_t *frame);
@@ -13778,6 +13781,11 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
     bool can_fail = failure && !n00bb_nil_type(types, failure);
     th_type *call_type = can_fail
         ? ir_call_outcome_type(context->module, signature) : return_type;
+    if (receiver_mode == TH_CONSUME) {
+        receiver = n00bb_emit_consume_value(context, receiver, nullptr,
+                                             span);
+        if (!receiver) return nullptr;
+    }
     char name[64];
     snprintf(name, sizeof(name), "__n00bb_iteration_call_%llu",
              (unsigned long long)context->next_value_id++);
@@ -13833,7 +13841,7 @@ n00bb_emit_iteration_cleanup(ir_lower_context_t *context,
     return nil_type
         && n00bb_emit_iteration_trait_call(context, frame,
             frame->iteration_plan->cleanup_site,
-            frame->iteration_cursor_value, TH_IN, nil_type,
+            frame->iteration_cursor_value, TH_CONSUME, nil_type,
             nullptr, source) != nullptr;
 }
 
@@ -13988,6 +13996,87 @@ n00bb_apply_option_branch_shadow(parse_grammar_t *grammar,
         || !parse_sym_add_use(shadow, node)) return false;
     core_tree_node_value(node).type = shadow->type;
     return true;
+}
+
+static bool
+n00bb_aliases_are_sound_for_consume(parse_sym_entry_t *symbol)
+{
+    if (!symbol) return true;
+    if (!symbol->alias_analysis_complete
+        && (symbol->alias_count || symbol->aliased_by_count
+            || symbol->lifetime.escapes)) return false;
+    for (size_t i = 0; i < symbol->alias_count; i++)
+        if (symbol->aliases[i].escapes) return false;
+    for (size_t i = 0; i < symbol->aliased_by_count; i++)
+        if (symbol->aliased_by[i].escapes) return false;
+    return true;
+}
+
+static ir_value_t *
+n00bb_emit_consume_value(ir_lower_context_t *context, ir_value_t *value,
+                         ir_value_t *binding, ir_span_t span)
+{
+    if (!context || !value) return nullptr;
+    char name[48];
+    snprintf(name, sizeof(name), "__n00bb_consumed_%llu",
+             (unsigned long long)context->next_value_id++);
+    ir_instr_t *consume = ir_instr_add(context->block, IR_OP_CONSUME);
+    if (!consume || !ir_instr_set_dest(consume, name, value->type)
+        || !ir_instr_operand_value(consume, value)
+        || (binding && binding != value
+            && !ir_instr_operand_value(consume, binding))) {
+        lower_error(context, IR_DIAG_INTERNAL, span,
+            "could not emit the semantic ownership transfer");
+        return nullptr;
+    }
+    consume->span = span;
+    return consume->dest;
+}
+
+static ir_value_t *
+n00bb_emit_consume(ir_lower_context_t *context, parse_grammar_t *grammar,
+                   core_translation_unit_t *unit, parse_tree_t *argument,
+                   ir_value_t *value)
+{
+    if (!context || !argument || !value) return nullptr;
+    parse_tree_t *index = n00bb_index_expression_node(grammar, argument);
+    parse_tree_t *member = index ? nullptr
+        : member_access_node(grammar, argument);
+    if (index || member) {
+        lower_error(context, IR_DIAG_TYPE_ARGS,
+            lower_span_for_tree(context, argument),
+            "consume requires a whole binding or a temporary value, not a field or indexed subobject");
+        return nullptr;
+    }
+
+    parse_tree_t *lvalue = n00bb_simple_lvalue(argument);
+    parse_sym_entry_t *symbol = lvalue
+        ? attached_symbol(grammar, unit, lvalue) : nullptr;
+    ir_value_t *binding = nullptr;
+    if (symbol && (symbol->kind == PARSE_SYM_VARIABLE
+                   || symbol->kind == PARSE_SYM_PARAM)) {
+        if (!n00bb_aliases_are_sound_for_consume(symbol)) {
+            lower_error(context, IR_DIAG_TYPE_ARGS,
+                lower_span_for_tree(context, argument),
+                "consume cannot prove that all aliases to this binding are tracked and non-escaping");
+            return nullptr;
+        }
+        binding = ir_lower_bound_address(context, symbol);
+        if (!binding) {
+            ir_local_t *local = ir_lower_bound_local(context, symbol);
+            binding = local ? ir_local_value(context->function, local)
+                            : ir_lower_bound_value(context, symbol);
+        }
+        if (!binding) {
+            lower_error(context, IR_DIAG_INTERNAL,
+                lower_span_for_tree(context, argument),
+                "consumed binding has no lowered semantic identity");
+            return nullptr;
+        }
+    }
+
+    return n00bb_emit_consume_value(context, value, binding,
+                                    lower_span_for_tree(context, argument));
 }
 
 static ir_lower_result_t
@@ -14376,6 +14465,14 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 collected = false;
                 break;
             }
+            if (rest->mode == TH_CONSUME) {
+                value = n00bb_emit_consume(context, visit->grammar,
+                    lower ? lower->unit : nullptr, argument, value);
+                if (!value) {
+                    collected = false;
+                    break;
+                }
+            }
             core_list_push(rest_values, value);
             continue;
         }
@@ -14406,6 +14503,14 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                         "argument type does not match its parameter");
                 collected = false;
                 break;
+            }
+            if (mode == TH_CONSUME) {
+                value = n00bb_emit_consume(context, visit->grammar,
+                    lower ? lower->unit : nullptr, argument, value);
+                if (!value) {
+                    collected = false;
+                    break;
+                }
             }
             value_by_parameter[index] = value;
             continue;
@@ -15054,6 +15159,14 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
                 collected = false;
                 break;
             }
+            if (mode == TH_CONSUME) {
+                value = n00bb_emit_consume(context, visit->grammar,
+                    lower->unit, argument, value);
+                if (!value) {
+                    collected = false;
+                    break;
+                }
+            }
             value_by_parameter[i] = value;
             continue;
         }
@@ -15234,6 +15347,11 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
                 value = ir_lower_node_value(context, argument);
                 collected = value && th_unify_in_place(types, rest->type,
                                                         value->type);
+            }
+            if (collected && rest->mode == TH_CONSUME) {
+                value = n00bb_emit_consume(context, visit->grammar,
+                    lower->unit, argument, value);
+                collected = value != nullptr;
             }
             if (collected) core_list_push(values, value);
         }
@@ -29143,6 +29261,280 @@ publish_function_effect_summaries(core_link_unit_t *link,
     return true;
 }
 
+enum {
+    N00BB_BINDING_AVAILABLE = 1u << 0,
+    N00BB_BINDING_MOVED = 1u << 1,
+    N00BB_OLD_ALIAS_STALE = 1u << 2,
+};
+
+#define N00BB_BINDING_STATE_MASK \
+    (N00BB_BINDING_AVAILABLE | N00BB_BINDING_MOVED)
+
+static ir_value_t *
+n00bb_consume_identity(ir_instr_t *instruction)
+{
+    if (!instruction || instruction->op != IR_OP_CONSUME
+        || !instruction->n_operands) return nullptr;
+    return ir_operand_value(&instruction->operands[
+        instruction->n_operands > 1 ? 1 : 0]);
+}
+
+static bool
+n00bb_instruction_initializes_binding(ir_instr_t *instruction,
+                                      ir_value_t *binding)
+{
+    if (!instruction || !binding) return false;
+    if (binding->kind == IR_VAL_LOCAL && binding->local
+        && instruction->dest_kind == IR_DEST_LOCAL
+        && instruction->dest_local == binding->local)
+        return true;
+    if ((instruction->op == IR_OP_STORE
+            || instruction->op == IR_OP_GLOBAL_STORE)
+        && instruction->n_operands
+        && ir_operand_value(&instruction->operands[0]) == binding)
+        return true;
+    return false;
+}
+
+static bool
+n00bb_instruction_reads_binding(ir_instr_t *instruction,
+                                ir_value_t *binding)
+{
+    if (!instruction || !binding) return false;
+    bool address_binding = binding->kind == IR_VAL_INSTR
+        && th_ind_referent(binding->type);
+    if (address_binding)
+        return instruction->op == IR_OP_LOAD && instruction->n_operands
+            && ir_operand_value(&instruction->operands[0]) == binding;
+    for (uint32_t i = 0; i < instruction->n_operands; i++) {
+        if (ir_operand_value(&instruction->operands[i]) != binding) continue;
+        if (instruction->op == IR_OP_CONSUME
+            && i + 1 == instruction->n_operands) continue;
+        if ((instruction->op == IR_OP_STORE
+                || instruction->op == IR_OP_GLOBAL_STORE)
+            && i == 0) continue;
+        if (instruction->op == IR_OP_ADDRESS_OF) continue;
+        return true;
+    }
+    return false;
+}
+
+static ir_value_t *
+n00bb_symbol_binding_in_function(parse_sym_entry_t *symbol,
+                                 ir_func_t *function)
+{
+    if (!symbol || !function) return nullptr;
+    for (size_t i = 0; i < symbol->function_binding_count; i++) {
+        const parse_sym_function_binding_t *binding =
+            &symbol->function_bindings[i];
+        if (binding->phase == PARSE_SYM_PHASE_RUNTIME
+            && binding->function == function) return binding->binding;
+    }
+    return nullptr;
+}
+
+enum {
+    N00BB_ALIAS_READ_STORAGE = 1u << 0,
+    N00BB_ALIAS_READ_OLD_VALUE = 1u << 1,
+};
+
+static bool
+n00bb_alias_targets_whole_binding(ir_value_t *alias_binding,
+                                  ir_value_t *binding,
+                                  ir_func_t *function)
+{
+    if (!alias_binding || !binding || !function
+        || alias_binding->kind != IR_VAL_LOCAL || !alias_binding->local)
+        return false;
+    bool saw_assignment = false;
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; block && i < block->n_instrs; i++) {
+            ir_instr_t *instruction = block->instrs[i];
+            if (!instruction || instruction->dest_kind != IR_DEST_LOCAL
+                || instruction->dest_local != alias_binding->local
+                || !instruction->n_operands) continue;
+            saw_assignment = true;
+            ir_value_t *source = ir_operand_value(&instruction->operands[0]);
+            ir_instr_t *definition = source && source->kind == IR_VAL_INSTR
+                ? source->def : nullptr;
+            if (!definition || definition->op != IR_OP_ADDRESS_OF
+                || !definition->n_operands
+                || ir_operand_value(&definition->operands[0]) != binding)
+                return false;
+        }
+    }
+    return saw_assignment;
+}
+
+static uint8_t
+n00bb_instruction_binding_alias_reads(ir_instr_t *instruction,
+                                      parse_sym_entry_t *symbol,
+                                      ir_value_t *binding,
+                                      ir_func_t *function)
+{
+    if (!instruction || !symbol || !binding || !function) return 0;
+    uint8_t reads = 0;
+    for (size_t i = 0; i < symbol->aliased_by_count; i++) {
+        parse_sym_entry_t *alias = symbol->aliased_by[i].other;
+        ir_value_t *alias_binding = n00bb_symbol_binding_in_function(
+            alias, function);
+        if (alias_binding
+            && n00bb_instruction_reads_binding(instruction, alias_binding)) {
+            reads |= n00bb_alias_targets_whole_binding(
+                alias_binding, binding, function)
+                ? N00BB_ALIAS_READ_STORAGE : N00BB_ALIAS_READ_OLD_VALUE;
+        }
+    }
+    return reads;
+}
+
+static uint8_t
+n00bb_binding_transfer(ir_block_t *block, uint8_t state,
+                       ir_value_t *binding, parse_sym_entry_t *symbol,
+                       ir_instr_t **bad,
+                       bool *bad_consume)
+{
+    if (bad) *bad = nullptr;
+    if (bad_consume) *bad_consume = false;
+    for (uint32_t i = 0; block && i < block->n_instrs; i++) {
+        ir_instr_t *instruction = block->instrs[i];
+        bool consumes = n00bb_consume_identity(instruction) == binding;
+        uint8_t alias_reads = n00bb_instruction_binding_alias_reads(
+            instruction, symbol, binding, block->owner);
+        bool unavailable = (state & N00BB_BINDING_STATE_MASK)
+            != N00BB_BINDING_AVAILABLE;
+        if ((n00bb_instruction_reads_binding(instruction, binding)
+             || (alias_reads & N00BB_ALIAS_READ_STORAGE))
+            && unavailable && bad && !*bad)
+            *bad = instruction;
+        if ((alias_reads & N00BB_ALIAS_READ_OLD_VALUE)
+            && (state & N00BB_OLD_ALIAS_STALE) && bad && !*bad)
+            *bad = instruction;
+        if (consumes) {
+            if (unavailable && bad && !*bad) {
+                *bad = instruction;
+                if (bad_consume) *bad_consume = true;
+            }
+            state = N00BB_BINDING_MOVED | N00BB_OLD_ALIAS_STALE;
+        }
+        if (n00bb_instruction_initializes_binding(instruction, binding))
+            state = (state & N00BB_OLD_ALIAS_STALE)
+                | N00BB_BINDING_AVAILABLE;
+    }
+    return state;
+}
+
+static bool
+n00bb_validate_consumed_binding(parse_sym_entry_t *symbol,
+                                ir_func_t *function, ir_value_t *binding,
+                                ir_diags_t *diagnostics,
+                                const char *binding_name)
+{
+    if (!function || !binding || !diagnostics || !function->n_blocks)
+        return false;
+    bool has_consume = false;
+    for (uint32_t b = 0; b < function->n_blocks && !has_consume; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++)
+            has_consume |= n00bb_consume_identity(
+                function->blocks[b]->instrs[i]) == binding;
+    if (!has_consume) return true;
+
+    ir_block_t *entry = ir_block_entry(function);
+    ir_doms_t *doms = ir_doms_of(function);
+    uint8_t *incoming = calloc(function->n_blocks, sizeof(*incoming));
+    if (!entry || !doms || !incoming || entry->index >= function->n_blocks) {
+        free(incoming);
+        return false;
+    }
+    incoming[entry->index] = binding->kind == IR_VAL_LOCAL
+        ? N00BB_BINDING_MOVED : N00BB_BINDING_AVAILABLE;
+    bool changed;
+    do {
+        changed = false;
+        for (uint32_t b = 0; b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            if (!block || !ir_block_reachable(doms, block)
+                || !incoming[block->index]) continue;
+            uint8_t outgoing = n00bb_binding_transfer(
+                block, incoming[block->index], binding, symbol, nullptr,
+                nullptr);
+            ir_instr_t *terminator = ir_block_terminator(block);
+            for (uint32_t s = 0; terminator
+                 && s < ir_succ_count(terminator); s++) {
+                ir_block_t *successor = ir_succ_at(terminator, s);
+                if (!successor || successor->index >= function->n_blocks)
+                    continue;
+                uint8_t next = incoming[successor->index] | outgoing;
+                changed |= next != incoming[successor->index];
+                incoming[successor->index] = next;
+            }
+        }
+    } while (changed);
+
+    bool ok = true;
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        if (!block || !ir_block_reachable(doms, block)
+            || !incoming[block->index]) continue;
+        ir_instr_t *bad = nullptr;
+        bool bad_consume = false;
+        (void)n00bb_binding_transfer(block, incoming[block->index], binding,
+                                     symbol, &bad, &bad_consume);
+        if (!bad) continue;
+        ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
+            IR_DIAG_TYPE_ARGS, bad->span,
+            bad_consume ? "this consume" : "this use");
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            bad_consume
+                ? "binding '%s' is consumed more than once or is not available on every incoming path"
+                : "binding '%s' is used after consume or is not available on every incoming path",
+            binding_name ? binding_name : binding->name);
+        ir_diag_message(diagnostic, diagnostics, message.data);
+        core_buffer_release(&message);
+        ok = false;
+    }
+    free(incoming);
+    return ok;
+}
+
+static bool
+n00bb_validate_consume_states(n00bb_link_analysis_t *analysis,
+                              core_list_t(core_translation_unit_ptr_t) *units)
+{
+    bool ok = analysis && units;
+    for (size_t u = 0; ok && u < units->len; u++) {
+        core_translation_unit_t *unit = units->data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        ir_diags_t *diagnostics = ir_diags_new_attached(
+            analysis->ir_context, nullptr,
+            core_translation_unit_diagnostics(unit), unit);
+        if (!symtab || !diagnostics) return false;
+        for (parse_scope_t *scope = symtab->all_scopes; scope;
+             scope = scope->all_next) {
+            if (!scope_in_value_namespace(scope)) continue;
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                if (symbol->kind != PARSE_SYM_VARIABLE
+                    && symbol->kind != PARSE_SYM_PARAM) continue;
+                for (size_t i = 0; i < symbol->function_binding_count; i++) {
+                    const parse_sym_function_binding_t *binding =
+                        &symbol->function_bindings[i];
+                    if (!n00bb_validate_consumed_binding(
+                            symbol, binding->function, binding->binding,
+                            diagnostics,
+                            symbol->name.data)) ok = false;
+                }
+            }
+        }
+        if (ir_diags_failed(diagnostics)) ok = false;
+    }
+    return ok;
+}
+
 static bool
 lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                      n00bb_link_analysis_t *analysis,
@@ -29380,6 +29772,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                 && (properties & verified) == verified;
         }
     }
+    if (ok && !interface_closure_only)
+        ok = n00bb_validate_consume_states(analysis, &units);
     if (ok && !interface_closure_only)
         ok = core_link_unit_run_stage(link,
                                      N00BB_LINK_STAGE_CFG_LIVENESS)
@@ -32431,7 +32825,7 @@ register_builtin_traits(th_env *environment, th_ctx *types)
         .name = "next",
         .type = next_signature,
     };
-    th_param cleanup_param = {.mode = TH_IN, .type = iterator};
+    th_param cleanup_param = {.mode = TH_CONSUME, .type = iterator};
     th_type *cleanup_signature = th_func_with_error(types,
         th_name(types, "nil"), th_name(types, "nil"), &cleanup_param, 1,
         nullptr, nullptr, 0);

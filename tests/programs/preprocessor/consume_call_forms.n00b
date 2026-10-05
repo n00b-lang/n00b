@@ -1,0 +1,18 @@
+func generic_take(consume item: `T) {}
+
+func recursive_take(consume item: int, again: bool) {
+    if again {
+        recursive_take(item, false)
+    }
+}
+
+func failing_take(consume item: int) -> nil fail: int {
+    fail 7
+}
+
+func exercise_call_forms(generic_value: int, recursive_value: int,
+                         failed_value: int) -> nil fail: int {
+    generic_take(generic_value)
+    recursive_take(recursive_value, true)
+    failing_take(failed_value)!
+}

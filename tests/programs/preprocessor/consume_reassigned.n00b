@@ -1,0 +1,17 @@
+func take(consume item: int) {}
+
+func reassigned(value: int) -> int {
+    var local: int = value
+    take(local)
+    local = 4
+    return local
+}
+
+func reassigned_on_consumed_branch(value: int, flag: bool) -> int {
+    var local: int = value
+    if flag {
+        take(local)
+        local = 5
+    }
+    return local
+}

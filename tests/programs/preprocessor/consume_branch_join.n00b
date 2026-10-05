@@ -1,0 +1,8 @@
+func take(consume item: int) {}
+
+func use_after_one_branch(value: int, flag: bool) -> int {
+    if flag {
+        take(value)
+    }
+    return value
+}

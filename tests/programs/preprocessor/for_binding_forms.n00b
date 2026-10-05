@@ -8,11 +8,11 @@ var next_ordered: tuple[int, string]?
 
 public func iter(self: int) -> string { return "named" }
 public func next(modify self: string) -> NamedItem? { return next_named }
-public func cleanup(self: string) { }
+public func cleanup(consume self: string) { }
 
 public func iter(self: bool) -> bool { return self }
 public func next(modify self: bool) -> tuple[int, string]? { return next_ordered }
-public func cleanup(self: bool) { }
+public func cleanup(consume self: bool) { }
 
 func named_subset(items: int) {
     for number in items { number + 1 }

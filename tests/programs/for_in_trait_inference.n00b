@@ -1,7 +1,7 @@
 var next_item: int?
 public func iter(self: int) -> string { return "cursor" }
 public func next(modify self: string) -> int? { return next_item }
-public func cleanup(self: string) { }
+public func cleanup(consume self: string) { }
 func call_iter(items: int) -> string { return items.iter() }
 func call_next(modify cursor: string) -> int? { return cursor.next() }
 func accept(items: int) {

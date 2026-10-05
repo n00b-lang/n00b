@@ -1,0 +1,13 @@
+type Pair {
+    first: int
+}
+
+func take_pair(consume item: Pair) {}
+
+func read_old_alias(input: Pair, replacement: Pair) -> int {
+    var local: Pair = input
+    var old_field = ref local.first
+    take_pair(local)
+    local = replacement
+    return ref_read(old_field)
+}

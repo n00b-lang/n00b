@@ -1,0 +1,11 @@
+trait Index_Read {
+    func __read(self: `T, index: int) -> int
+}
+
+func __read(self: array[int], index: int) -> int { return 1 }
+
+func take(consume item: int) {}
+
+func consume_index(values: array[int]) {
+    take(values [0])
+}
