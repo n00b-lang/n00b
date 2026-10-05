@@ -1,0 +1,5 @@
+import operator_numeric_identity_dep
+
+func text(value: string) -> string {
+    return operator_numeric_identity_dep.identity(value)
+}

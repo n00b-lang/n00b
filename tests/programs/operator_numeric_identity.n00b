@@ -1,0 +1,7 @@
+func integer(value: int) -> int { return +value }
+func floating(value: float) -> float { return +value }
+func sized(value: u:37) -> u:37 { return +value }
+func inferred(value) { return +value }
+func use_integer(value: int) -> int { return inferred(value) }
+func use_float(value: float) -> float { return inferred(value) }
+func use_sized(value: u:37) -> u:37 { return inferred(value) }

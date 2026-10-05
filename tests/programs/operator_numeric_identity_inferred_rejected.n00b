@@ -1,0 +1,2 @@
+func identity(value) { return +value }
+func text(value: string) -> string { return identity(value) }

@@ -4768,6 +4768,50 @@ fi
 grep -q 'this cast has no defined conversion' \
     "$tmp/operator_integer_to_byte_rejected.out"
 "$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_numeric_identity.n00b" \
+    >"$tmp/operator_numeric_identity.ir" 2>&1 || {
+    cat "$tmp/operator_numeric_identity.ir"
+    echo 'primitive numeric identity did not lower' >&2
+    exit 1
+}
+grep -q ': int = call @inferred, %value' "$tmp/operator_numeric_identity.ir"
+grep -q ': f64 = call @inferred, %value' "$tmp/operator_numeric_identity.ir"
+grep -q ': ubitint\[37\] = call @inferred, %value' \
+    "$tmp/operator_numeric_identity.ir"
+for kind in byte string inferred; do
+    if "$compiler" lower \
+        "$script_dir/programs/operator_numeric_identity_${kind}_rejected.n00b" \
+        >"$tmp/operator_numeric_identity_${kind}_rejected.out" 2>&1; then
+        echo "numeric identity accepted a nonnumeric ${kind} operand" >&2
+        exit 1
+    fi
+    grep -q 'error\[N00BB-T000[12]\]' \
+        "$tmp/operator_numeric_identity_${kind}_rejected.out"
+done
+"$compiler" library --emit-interface "$tmp/operator_numeric_identity.n00bi" \
+    "$script_dir/programs/interfaces/operator_numeric_identity_dep.n00b" \
+    >"$tmp/operator_numeric_identity_archive.out" 2>&1 || {
+    cat "$tmp/operator_numeric_identity_archive.out"
+    exit 1
+}
+"$compiler" lower --dump-ir \
+    --link-interface "$tmp/operator_numeric_identity.n00bi" \
+    "$script_dir/programs/interfaces/operator_numeric_identity_user.n00b" \
+    >"$tmp/operator_numeric_identity_user.ir" 2>&1 || {
+    cat "$tmp/operator_numeric_identity_user.ir"
+    exit 1
+}
+grep -q 'ir.call_signature((ubitint\[37\]) -> ubitint\[37\]' \
+    "$tmp/operator_numeric_identity_user.ir"
+if "$compiler" lower --link-interface "$tmp/operator_numeric_identity.n00bi" \
+    "$script_dir/programs/interfaces/operator_numeric_identity_rejected.n00b" \
+    >"$tmp/operator_numeric_identity_archive_rejected.out" 2>&1; then
+    echo 'frozen numeric identity contract accepted a string' >&2
+    exit 1
+fi
+grep -q 'error\[N00BB-T000[12]\]' \
+    "$tmp/operator_numeric_identity_archive_rejected.out"
+"$compiler" lower --dump-ir \
     "$script_dir/programs/operator_unary_traits.n00b" \
     >"$tmp/operator_unary_traits.ir" 2>&1 || {
     cat "$tmp/operator_unary_traits.ir"

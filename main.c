@@ -20292,10 +20292,50 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
 }
 
 static bool
+constrain_primitive_numeric(n00bb_tu_state_t *state, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!type) return false;
+    if (th_kind_of(type) != TH_VAR)
+        return is_integer_type(type) || named_type_is(type, "float")
+            || named_type_is(type, "f32") || named_type_is(type, "f64");
+    size_t capacity = sizeof(N00BB_SCALARS) / sizeof(N00BB_SCALARS[0]) + 1;
+    th_type **alternatives = core_arena_alloc(&state->semantic_values,
+        capacity * sizeof(*alternatives));
+    if (!alternatives) return false;
+    size_t count = 0;
+    for (size_t i = 0; i + 1 < capacity; i++) {
+        th_type *candidate = th_name(state->types, N00BB_SCALARS[i].type_text);
+        if (is_integer_type(candidate)
+            || N00BB_SCALARS[i].class == IR_CLASS_FLOAT)
+            alternatives[count++] = candidate;
+    }
+    th_type *sized_integer = th_var(state->types);
+    if (!sized_integer || !th_var_constrain(state->types, sized_integer,
+            (th_constraint){.kind = TH_CON_KIND, .type_kind = TH_BITINT}))
+        return false;
+    alternatives[count++] = sized_integer;
+    return th_var_constrain(state->types, type,
+        (th_constraint){.kind = TH_CON_ONE_OF,
+            .one_of = {.types = alternatives, .n = count}});
+}
+
+static bool
 refine_intrinsic_unary_result(parse_grammar_t *grammar,
                               core_translation_unit_t *unit,
                               n00bb_tu_state_t *state, parse_tree_t *node)
 {
+    if (nt_is(grammar, node, "unary-expr")
+        && core_tree_num_children(node) == 2
+        && parse_tree_leaf_is(core_tree_child(node, 0), CORE_STRING_STATIC("+"))) {
+        th_type *operand = core_tree_node_value(core_tree_child(node, 1)).type;
+        if (constrain_primitive_numeric(state, operand)) return true;
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+            CORE_STRING_STATIC("unary + requires a primitive numeric operand"),
+            link_source_location(node));
+        return false;
+    }
     core_string_t trait = {0}, method = {0};
     if (!unary_operator_dispatch_for_node(grammar, node,
                                           &trait, &method)) return true;
