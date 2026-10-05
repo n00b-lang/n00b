@@ -136,7 +136,10 @@ static bool accepts_as(env *e, ir_instr_t *in, const char *want)
         return r.result == nullptr;
     }
 
-    return r.result && ir_type_eq(e->m, r.result, ir_type_parse(e->m, want));
+    th_type *expected = ir_type_parse(e->m, want);
+    return r.result && expected
+        && th_hash(ir_ctx_types(e->ctx), r.result)
+            == th_hash(ir_ctx_types(e->ctx), expected);
 }
 
 static void test_arithmetic(void)
@@ -1612,6 +1615,18 @@ static void test_select_phi_call(void)
     check("the selected semantic trait method can be called",
           accepts_as(e, method_call, "i32"));
 
+    ir_value_t *open_receiver = val(e, "`receiver");
+    ir_instr_t *open_method = op(e, IR_OP_TRAIT_METHOD);
+    ir_instr_set_dest(open_method, "open_receiver_method", method->dest->type);
+    ir_instr_operand_name(open_method, "Add");
+    ir_instr_operand_name(open_method, "__add");
+    ir_instr_operand_value(open_method, open_receiver);
+    ir_instr_operand_value(open_method,
+                           ir_func_address(e->m, add_requirement));
+    check("trait method checking uses copying unification",
+          apply(e, open_method) == IR_RULE_ACCEPT
+              && th_kind_of(th_resolve(open_receiver->type)) == TH_VAR);
+
     ir_func_t *optional_requirement = ir_func_add(e->m,
         "optional_requirement", ir_type_parse(e->m, "(i32, i32) -> i32"),
         IR_LINK_EXTERN);
@@ -1976,6 +1991,16 @@ static void test_generic_callable_contracts(void)
           identity_contract
               && th_hash(ir_ctx_types(e->ctx), identity_contract)
                     == frozen_hash);
+
+    th_type *open_signature = ir_type_parse(e->m, "(`call) -> `call");
+    ir_instr_t *open_call = op(e, IR_OP_CALL);
+    ir_instr_set_dest(open_call, "open_call_result", ir_type_parse(e->m, "i32"));
+    ir_instr_operand_value(open_call, identity_value);
+    ir_instr_operand_value(open_call, val(e, "i32"));
+    ir_instr_set_call_signature(open_call, open_signature);
+    check("generic call checking does not refine the caller signature",
+          apply(e, open_call) == IR_RULE_ACCEPT
+              && th_kind_of(th_resolve(th_func_ret(open_signature))) == TH_VAR);
 
     th_type *pair_body = ir_type_parse(e->m, "(`a, `a) -> `a");
     th_type *pair_contract = pair_body
@@ -2832,8 +2857,10 @@ static void test_boxing(void)
 
     ir_instr_t *mix2 = op(e, IR_OP_STORE);
 
-    ir_instr_operand_value(mix2, val(e, "ptr[`a]"));
-    ir_instr_operand_value(mix2, val(e, "`a"));
+    ir_value_t *pointer = val(e, "ptr[`a]");
+    ir_instr_operand_value(mix2, pointer);
+    ir_instr_operand_value(mix2, ir_param_add(e->f, "generic_stored",
+        th_ind_referent(pointer->type)));
     apply(e, mix2);
 
     ir_annot_t *bx2 = ir_annot_get(&mix2->annots, "ir.boxed");
@@ -2855,7 +2882,7 @@ static void test_boxing(void)
         snprintf(mname[i], sizeof mname[i], "m%u", i);
         mem[i].name = mname[i];
         mem[i].type = ir_type_parse(e->m, spelling);
-        ir_instr_operand_value(wide, val(e, spelling));
+        ir_instr_operand_value(wide, ir_param_add(e->f, mname[i], mem[i].type));
     }
 
     th_type *rec = th_record(ir_ctx_types(e->ctx), mem, 200);

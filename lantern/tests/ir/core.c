@@ -166,7 +166,35 @@ static void test_types(void)
     th_type *v1 = ir_type_parse(m, "Vec[`a]");
     th_type *v2 = ir_type_parse(m, "Vec[`b]");
 
-    check("alpha-equivalent types are one type", v1 == v2);
+    check("independent open types remain separate", v1 != v2);
+    check("independent open types have distinct identities",
+          !ir_type_eq(m, v1, v2));
+    th_type *scheme1 = ir_type_parse(m, "forall[`a] Vec[`a]");
+    th_type *scheme2 = ir_type_parse(m, "forall[`b] Vec[`b]");
+    check("alpha-equivalent closed schemes are one type", scheme1 == scheme2);
+
+    th_type *left = th_var(types);
+    th_type *right = th_var(types);
+    check("interning does not join independent inference variables",
+          ir_type_intern(m, left) != ir_type_intern(m, right));
+    check("refining one variable leaves the other open",
+          th_unify_in_place(types, left, a)
+              && th_kind_of(th_resolve(right)) == TH_VAR);
+    th_type *parts[] = {right, a};
+    th_type *pair1 = th_tuple(types, parts, 2);
+    th_type *pair2 = th_tuple(types, parts, 2);
+    check("open shapes sharing their variables can be interned",
+          ir_type_intern(m, pair1) == ir_type_intern(m, pair2));
+    th_type *error1 = th_var(types);
+    th_type *error2 = th_var(types);
+    th_type *call1 = th_func_with_error(types, a, error1, nullptr, 0,
+                                       nullptr, nullptr, 0);
+    th_type *call2 = th_func_with_error(types, a, error2, nullptr, 0,
+                                       nullptr, nullptr, 0);
+    th_type *outcome1 = ir_call_outcome_type(m, call1);
+    th_type *outcome2 = ir_call_outcome_type(m, call2);
+    check("independent open failure channels have separate outcomes",
+          outcome1 && outcome2 && !ir_type_eq(m, outcome1, outcome2));
 
     bool found_a = false;
     bool found_c = false;
@@ -238,7 +266,8 @@ static void test_a_type_has_no_size_limit(void)
         const char *back  = th_print(ir_ctx_types(ctx), t);
         th_type    *again = back ? ir_type_parse(m, back) : nullptr;
 
-        if (again != t) {
+        if (!again || th_hash(ir_ctx_types(ctx), again)
+                          != th_hash(ir_ctx_types(ctx), t)) {
             printf("FAIL  a type of 300 %s does not survive printing\n",
                    shape[i].what);
             fails++;

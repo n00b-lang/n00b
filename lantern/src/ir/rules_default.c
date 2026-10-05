@@ -2060,14 +2060,12 @@ static ir_rule_result_t rule_phi(ir_module_t *m, ir_instr_t *in,
 }
 
 static bool call_arg_matches(ir_module_t *m, th_mode mode, th_type *want,
-                             th_type *got, bool instantiate)
+                             th_type *got)
 {
     if (!want || !got) return false;
     (void)mode;
     return same(m, ir_type_intern(m, want), ir_type_intern(m, got))
-        || (instantiate
-            ? th_unify_in_place(ir_ctx_types(m->ctx), want, got)
-            : th_unify(ir_ctx_types(m->ctx), want, got)) != nullptr;
+        || th_unify(ir_ctx_types(m->ctx), want, got) != nullptr;
 }
 
 static ir_rule_result_t rule_trait_method(ir_module_t *m, ir_instr_t *in,
@@ -2096,7 +2094,7 @@ static ir_rule_result_t rule_trait_method(ir_module_t *m, ir_instr_t *in,
                  typed(m, signature), typed(m, contract));
         return REJECT;
     }
-    if (!call_arg_matches(m, self->mode, self->type, receiver, false)) {
+    if (!call_arg_matches(m, self->mode, self->type, receiver)) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this receiver",
                  "trait method receiver %s does not match self parameter %s",
                  typed(m, receiver), typed(m, self->type));
@@ -2230,8 +2228,7 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
             ir_value_t *spread = in->operands[i].value;
             if (!rest || !spread || !spread->is_rest || given < np ||
                 spread_seen || !call_arg_matches(m, rest->mode, rest->type,
-                                                 opd_type(in, i),
-                                                 generic_contract)) {
+                                                 opd_type(in, i))) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in, "this spread argument",
                          "a spread argument must match the callee's rest "
                          "parameter and follow all fixed positional arguments");
@@ -2277,8 +2274,7 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
             }
             if (is_out) continue;
 
-            if (!call_arg_matches(m, k->mode, k->type, opd_type(in, i),
-                                  generic_contract)) {
+            if (!call_arg_matches(m, k->mode, k->type, opd_type(in, i))) {
                 blame(d,
                       complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
                                "keyword parameter %s is %s, and the "
@@ -2307,8 +2303,7 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
                      given);
             return REJECT;
         }
-        if (p && !call_arg_matches(m, p->mode, p->type, opd_type(in, i),
-                                   generic_contract)) {
+        if (p && !call_arg_matches(m, p->mode, p->type, opd_type(in, i))) {
             blame(d,
                   complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
                            "%s parameter %zu is %s, and the argument "
@@ -2340,8 +2335,7 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
     }
 
     if (generic_contract && !same(m, declared(in), outcome_type)) {
-        if (!th_unify_in_place(ir_ctx_types(m->ctx), outcome_type,
-                               declared(in))) {
+        if (!th_unify(ir_ctx_types(m->ctx), outcome_type, declared(in))) {
             complain(m, d, IR_DIAG_VERIFY_TYPED, in, "this call",
                      "the call result does not match the instantiated return type %s",
                      typed(m, outcome_type));

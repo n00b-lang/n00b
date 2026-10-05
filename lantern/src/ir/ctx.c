@@ -872,14 +872,13 @@ th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)
     if (!key) return nullptr;
     char name[64];
     snprintf(name, sizeof(name), "__lantern_call_outcome_%016llx",
-             (unsigned long long)th_hash(m->ctx->types, key));
+             (unsigned long long)ir_type_id(m, key));
     th_type *outcome = th_variant(m->ctx->types, name, nullptr, 0);
     th_member arms[] = {{"ok", ret}, {"error", error}};
     th_type *definition = th_record(m->ctx->types, arms, 2);
     th_type *existing = ir_type_definition(m, outcome);
     if (!existing && !ir_type_define(m, outcome, definition)) return nullptr;
-    if (existing && th_hash(m->ctx->types, existing)
-                        != th_hash(m->ctx->types, definition))
+    if (existing && !ir_type_eq(m, existing, definition))
         return nullptr;
     return ir_type_intern(m, outcome);
 }
@@ -904,10 +903,17 @@ uint64_t ir_type_id(ir_module_t *m, th_type *t)
         return 0;
     }
 
-    // Inference variables can change their resolved shape after unification.
-    // Their identities are therefore live hashes, not cacheable IDs.
+    // Open types retain their free-variable identities, not just their
+    // alpha-equivalent shape. Recompute after variables are unified.
     if (!th_is_closed(m->ctx->types, t)) {
-        return th_hash(m->ctx->types, t);
+        uint64_t h = th_hash(m->ctx->types, t);
+        th_type **vars = nullptr;
+        size_t n = th_free_vars(m->ctx->types, t, &vars);
+        for (size_t i = 0; i < n; i++) {
+            uintptr_t key[] = {(uintptr_t)h, (uintptr_t)vars[i]};
+            h = core_xxh3_64bits_raw(key, sizeof(key));
+        }
+        return h;
     }
 
     core_dict_t *ix = index_of(m->ctx, &m->id_index, core_hash_word, nullptr);

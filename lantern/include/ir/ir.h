@@ -535,6 +535,8 @@ th_type *ir_type_parse(ir_module_t *m, const char *text);
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable);
 size_t   ir_call_output_count(th_type *callable);
 th_type *ir_call_output_type(th_type *callable, size_t output_index);
+/* Closed types use structural hashes; open types also retain context-local
+ * free-variable identities and may change after unification. */
 uint64_t ir_type_id(ir_module_t *m, th_type *t);
 bool     ir_type_eq(ir_module_t *m, th_type *a, th_type *b);
 size_t   ir_type_count(const ir_module_t *m);
