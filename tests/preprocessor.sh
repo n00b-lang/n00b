@@ -4661,6 +4661,39 @@ fi
 grep -q 'logical operands must be bool' \
     "$tmp/operator_boolean_wrong_argument.out"
 "$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_nominal_cast.n00b" \
+    >"$tmp/operator_nominal_cast.ir" 2>&1 || {
+    cat "$tmp/operator_nominal_cast.ir"
+    echo 'nominal conversions and any boxing did not lower' >&2
+    exit 1
+}
+grep -q ': operator_nominal_cast.Amount = nominal.cast ' \
+    "$tmp/operator_nominal_cast.ir"
+grep -q ': int = nominal.cast ' "$tmp/operator_nominal_cast.ir"
+grep -q ': any = box .*ir.alias0_escapes(true)' \
+    "$tmp/operator_nominal_cast.ir"
+if "$compiler" lower \
+    "$script_dir/programs/operator_nominal_cast_unrelated.n00b" \
+    >"$tmp/operator_nominal_cast_unrelated.out" 2>&1; then
+    echo 'unrelated nominal types converted without a language rule' >&2
+    exit 1
+fi
+grep -q 'this cast has no defined conversion' \
+    "$tmp/operator_nominal_cast_unrelated.out"
+"$compiler" library --emit-interface "$tmp/operator_nominal.n00bi" \
+    "$script_dir/programs/interfaces/operator_nominal_archive_dep.n00b" \
+    >"$tmp/operator_nominal_archive.out" 2>&1 || {
+    cat "$tmp/operator_nominal_archive.out"
+    exit 1
+}
+"$compiler" lower --dump-ir --link-interface "$tmp/operator_nominal.n00bi" \
+    "$script_dir/programs/interfaces/operator_nominal_archive_user.n00b" \
+    >"$tmp/operator_nominal_archive_user.ir" 2>&1 || {
+    cat "$tmp/operator_nominal_archive_user.ir"
+    exit 1
+}
+grep -q ': int = nominal.cast ' "$tmp/operator_nominal_archive_user.ir"
+"$compiler" lower --dump-ir \
     "$script_dir/programs/operator_unary_traits.n00b" \
     >"$tmp/operator_unary_traits.ir" 2>&1 || {
     cat "$tmp/operator_unary_traits.ir"

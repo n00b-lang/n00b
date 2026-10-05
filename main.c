@@ -6427,14 +6427,13 @@ n00bb_attach_expression_shape(ir_lower_context_t *context,
 {
     if (!context || !value || ir_value_shape(value)) return true;
     n00bb_lower_context_t *lower = context->user;
-    parse_tree_t *node = expression;
-    parse_sym_entry_t *symbol = nullptr;
-    while (node && !core_tree_is_leaf(node)) {
-        symbol = attached_symbol(grammar, lower ? lower->unit : nullptr,
-                                 node);
-        if (symbol || core_tree_num_children(node) != 1) break;
-        node = core_tree_child(node, 0);
-    }
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_return_source_t *source = state
+        ? core_dict_get(&state->return_sources, expression, nullptr) : nullptr;
+    parse_sym_entry_t *symbol = source
+        && source->kind == N00BB_RETURN_SOURCE_SYMBOL
+        ? source->symbol : attached_symbol(grammar,
+            lower ? lower->unit : nullptr, expression);
     if (!symbol) return true;
     ir_local_t *local = ir_lower_bound_local(context, symbol);
     ir_value_t *binding = ir_lower_bound_value(context, symbol);
@@ -9675,6 +9674,50 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                            "cast target and expression type are incomplete");
     if (ir_type_eq(context->module, operands[0]->type, target))
         return (ir_lower_result_t){IR_LOWER_VALUE, operands[0]};
+    th_ctx *types = ir_module_types(context->module);
+    th_type *from = operands[0]->type;
+    th_type *from_definition = th_type_definition(types, from);
+    th_type *to_definition = th_type_definition(types, target);
+    bool boxing = ir_type_eq(context->module, target, th_name(types, "any"));
+    bool nominal = (from_definition
+            && ir_type_eq(context->module, from_definition, target))
+        || (to_definition
+            && ir_type_eq(context->module, to_definition, from));
+    if (boxing || nominal) {
+        n00bb_lower_context_t *lower = context->user;
+        parse_tree_t *operand_node = core_tree_child(visit->node, 4);
+        if (!n00bb_attach_expression_shape(context, visit->grammar,
+                                          operand_node, operands[0]))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                               "could not retain the cast operand shape");
+        ir_instr_t *conversion = ir_instr_add(context->block,
+            boxing ? IR_OP_BOX : IR_OP_NOMINAL_CAST);
+        char name[48];
+        snprintf(name, sizeof(name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        if (!conversion || !ir_instr_set_dest(conversion, name, target)
+            || !ir_instr_operand_value(conversion, operands[0])
+            || !ir_value_copy_alias_targets(lower->ir_context,
+                conversion->dest, operands[0]))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                               "could not retain semantic cast information");
+        if (boxing && th_kind_of(th_resolve(from)) == TH_INDIRECTION
+            && !ir_value_add_alias_target(lower->ir_context, conversion->dest,
+                (ir_alias_target_t){.value = operands[0],
+                    .escapes = n00bb_tree_returns_value(visit->grammar,
+                                                        visit->node)}))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                               "could not retain boxed reference storage");
+        if (ir_value_shape(operands[0])
+            && !ir_value_set_shape(conversion->dest, ir_value_shape(operands[0])))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                               "could not retain cast array shape");
+        conversion->span = span;
+        return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
+    }
+    if (from_definition || to_definition)
+        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+                           "this cast has no defined conversion");
     ir_machine_t source = ir_machine_of(context->module, operands[0]->type);
     ir_machine_t destination = ir_machine_of(context->module, target);
     bool source_integer = source.class == IR_CLASS_SINT
@@ -15801,6 +15844,31 @@ n00bb_reject_runtime_initializer_failure(ir_lower_context_t *context,
 }
 
 static bool
+register_nominal_types(parse_grammar_t *grammar,
+                       core_translation_unit_t *unit, ir_module_t *module)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state || !state->annotations || !state->annotations->symtab)
+        return false;
+    for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
+         scope; scope = scope->all_next) {
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type) continue;
+            bool nominal = symbol->decl_node
+                ? nt_is(grammar, symbol->decl_node, "alias-stmt")
+                    && !alias_declaration_is_transparent(symbol->decl_node)
+                : core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("nominal"));
+            if (!nominal) continue;
+            th_type *representation = th_type_definition(state->types, symbol->type);
+            if (!representation || !ir_type_define(module, symbol->type,
+                                                    representation)) return false;
+        }
+    }
+    return true;
+}
+
+static bool
 register_variant_types(parse_grammar_t *grammar,
                        core_translation_unit_t *unit,
                        ir_module_t *destination)
@@ -16702,6 +16770,9 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
             state->comptime_ir_module, state->ir_module,
         };
         for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]); m++) {
+            if (!register_nominal_types(grammar, unit, modules[m]))
+                return ir_initialization_error(unit, "N00BB-L0026",
+                    "could not retain nominal representations in Lantern IR");
             if (!register_variant_types(grammar, unit, modules[m]))
                 return ir_initialization_error(unit, "N00BB-L0025",
                     "could not register variant definitions in Lantern IR");
@@ -22525,6 +22596,20 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                         link_source_location(symbol->decl_node));
                     return false;
                 }
+                if (nt_is(grammar, symbol->decl_node, "alias-stmt")
+                    && !alias_declaration_is_transparent(symbol->decl_node)) {
+                    th_type *representation = declared_type_from_node(
+                        grammar, unit, symbol->decl_node);
+                    if (!representation || !th_type_define(state->types,
+                            symbol->type, representation)) {
+                        core_diagnostics_report_at(
+                            core_translation_unit_diagnostics(unit), unit,
+                            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0012"),
+                            CORE_STRING_STATIC("nominal type has no canonical representation"),
+                            link_source_location(symbol->decl_node));
+                        return false;
+                    }
+                }
             }
         }
         for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
@@ -28048,7 +28133,8 @@ exported_type_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
 
     parse_tree_t *declaration = symbol->decl_node;
     if (nt_is(grammar, declaration, "alias-stmt")) {
-        *shape_kind = TH_ENV_TYPE_SHAPE_ALIAS;
+        *shape_kind = alias_declaration_is_transparent(declaration)
+            ? TH_ENV_TYPE_SHAPE_ALIAS : TH_ENV_TYPE_SHAPE_NOMINAL;
         *shape = declared_type_from_node(grammar, unit, declaration);
         return *shape != nullptr;
     }
@@ -35459,7 +35545,8 @@ materialize_interface_type_members(locate_worker_context_t *loader,
     if (!state || !symtab || !module_type_scope || !type_symbol ||
         !declaration || !declaration->type_shape ||
         declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_NONE ||
-        declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_ALIAS) return true;
+        declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_ALIAS ||
+        declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_NOMINAL) return true;
     parse_scope_t *type_namespace_scope = parse_symtab_scope_in_namespace(
         symtab, module_type_scope, CORE_STRING_STATIC("type"));
     if (!type_namespace_scope) return false;
@@ -35754,6 +35841,8 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
                         ? CORE_STRING_STATIC("enum")
                     : declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_ALIAS
                         ? CORE_STRING_STATIC("alias")
+                    : declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_NOMINAL
+                        ? CORE_STRING_STATIC("nominal")
                         : CORE_STRING_STATIC("type");
                 if (declaration.type_shape &&
                     declaration.type_shape_kind !=

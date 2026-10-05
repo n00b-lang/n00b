@@ -1,0 +1,6 @@
+type Amount = int
+type Other = int
+
+func unrelated(value: Amount) -> Other {
+    return cast[Other] value
+}

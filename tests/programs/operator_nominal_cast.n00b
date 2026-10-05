@@ -1,0 +1,26 @@
+type Amount = int
+alias Integer = int
+
+func make_amount(value: int) -> Amount {
+    return cast[Amount] value
+}
+
+func representation(value: Amount) -> int {
+    return cast[int] value
+}
+
+func alias_identity(value: Integer) -> int {
+    return cast[int] value
+}
+
+func box_integer(value: int) -> any {
+    return cast[any] value
+}
+
+func box_reference(value: int) -> any {
+    return cast[any] ref value
+}
+
+func box_array(value: int[4]) -> any {
+    return cast[any] value
+}
