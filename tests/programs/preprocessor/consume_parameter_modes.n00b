@@ -1,0 +1,14 @@
+trait Drop {
+    func drop(consume self: `T) -> nil
+}
+
+func drop(consume self: int) {}
+
+func take(consume item: int, consume fallback: int = 7,
+          consume *items: int) {}
+
+func exercise_consume(first: int, second: int) {
+    take(first)
+    take(1, second, 3)
+    4.drop()
+}

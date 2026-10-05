@@ -6,10 +6,10 @@ func __write(self: array[array[int]], index: int, item: array[int]) -> nil fail:
 
 var global_target: int[4]
 
-func consume(input: int[4]) {}
+func accept(input: int[4]) {}
 
 func forward(input: int[]) {
-    consume(input)
+    accept(input)
 }
 
 func assign(input: int[]) {

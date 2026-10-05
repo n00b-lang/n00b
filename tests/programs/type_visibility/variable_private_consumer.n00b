@@ -1,2 +1,2 @@
 import functions_dep
-func consume() -> int { return functions_dep.default_private_global }
+func accept() -> int { return functions_dep.default_private_global }

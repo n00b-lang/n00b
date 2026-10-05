@@ -3302,7 +3302,7 @@ grep -q 'N00BB-T0022.*variant types cannot define __init' \
     cat "$tmp/generic_modify_parameter.err"
     exit 1
 }
-grep -Fq 'func @assign_same(%item: `a) -> nil fail: nil' \
+grep -Fq 'func @assign_same(inout %item: `a) -> nil fail: nil' \
     "$tmp/generic_modify_parameter.ir"
 if grep -Fq 'forall[' "$tmp/generic_modify_parameter.ir"; then
     echo 'generic function lowering retained a forall binder' >&2
@@ -3576,6 +3576,24 @@ grep -q 'call.output .* 0' "$tmp/lower_parameter_modes.ir"
 test "$(grep -c 'call.output .* 0' "$tmp/lower_parameter_modes.ir")" -eq 2
 grep -q '= call @copy_modify' "$tmp/lower_parameter_modes.ir"
 grep -q '= call @write_out' "$tmp/lower_parameter_modes.ir"
+
+"$compiler" lower --dump-ir --dump-symbols \
+    "$program_dir/consume_parameter_modes.n00b" \
+    >"$tmp/consume_parameter_modes.out" \
+    2>"$tmp/consume_parameter_modes.err" || {
+    cat "$tmp/consume_parameter_modes.err"
+    exit 1
+}
+grep -q 'item: parameter.*direction=consume' "$tmp/consume_parameter_modes.out"
+grep -q 'fallback: parameter.*optional.*direction=consume' \
+    "$tmp/consume_parameter_modes.out"
+grep -q 'items: parameter.*direction=consume.*variadic' \
+    "$tmp/consume_parameter_modes.out"
+grep -q 'func @take(consume %item: int.*consume %__n00bb_default_param_.*consume \*%items: int)' \
+    "$tmp/consume_parameter_modes.out"
+grep -Fq '!ir.call_signature((consume int, consume int, consume *int) -> nil fail: nil)' \
+    "$tmp/consume_parameter_modes.out"
+! grep -q 'call.output' "$tmp/consume_parameter_modes.out"
 
 "$compiler" lower --dump-ir --dump-link-unit \
     "$script_dir/programs/trait_dispatch_single.n00b" \

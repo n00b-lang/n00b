@@ -1,4 +1,4 @@
 import public_dep
-func consume(item: public_dep.PublicRecord) -> public_dep.PublicRecord {
+func accept(item: public_dep.PublicRecord) -> public_dep.PublicRecord {
     return item
 }

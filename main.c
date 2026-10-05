@@ -1528,7 +1528,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
             visit->pn->sym->is_variadic = nt_is(visit->grammar, visit->node,
                                                 "vargs-param");
             if (visit->pn->sym->has_mode
-                && visit->pn->sym->mode != TH_IN)
+                && th_mode_produces_output(visit->pn->sym->mode))
                 visit->pn->sym->mutability = PARSE_SYM_MUTABLE;
             parse_sym_set_phases(visit->pn->sym, PARSE_SYM_PHASE_BOTH,
                 visit->pn->sym->mutability == PARSE_SYM_MUTABLE
@@ -13095,7 +13095,7 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
         }
         if (!function_parameter_info(visit->grammar, symbol, formals,
                 index, nullptr, nullptr, nullptr, &flags, &mode)
-            || mode == TH_IN) continue;
+            || !th_mode_produces_output(mode)) continue;
         ok = n00bb_mark_addressable_argument(context, visit->grammar,
             visit->node, actuals.data[i], mode);
         if (!ok)
@@ -13116,7 +13116,7 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
                                       name, &index)
             || !function_parameter_info(visit->grammar, symbol, formals,
                 index, nullptr, nullptr, nullptr, &flags, &mode)
-            || mode == TH_IN) continue;
+            || !th_mode_produces_output(mode)) continue;
         parse_tree_t *argument = child_nt(visit->grammar, named.data[i],
                                            "expression");
         ok = n00bb_mark_addressable_argument(context, visit->grammar,
@@ -13181,8 +13181,8 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
         if (site->init_call && index == 0) mode = TH_INOUT;
         else if (function_parameter_info(visit->grammar, symbol, formals,
                 index, nullptr, nullptr, nullptr, nullptr, &mode)
-            && mode == TH_IN) continue;
-        if (mode != TH_IN) {
+            && !th_mode_produces_output(mode)) continue;
+        if (th_mode_produces_output(mode)) {
             ok = n00bb_mark_addressable_argument(context, visit->grammar,
                 visit->node, positional.data[i], mode);
             if (!ok)
@@ -13205,7 +13205,7 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
                                       name, &index)
             || !function_parameter_info(visit->grammar, symbol, formals,
                 index, nullptr, nullptr, nullptr, nullptr, &mode)
-            || mode == TH_IN) continue;
+            || !th_mode_produces_output(mode)) continue;
         parse_tree_t *argument = child_nt(visit->grammar, keywords.data[i],
                                            "expression");
         ok = argument && n00bb_mark_addressable_argument(context,
@@ -13544,7 +13544,7 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
                 && function_parameter_info(grammar, requirement,
                     formal_params, p, nullptr, nullptr, nullptr, &flags,
                     &mode);
-            emitted = known && (flags & 1u) && mode == TH_IN
+            emitted = known && (flags & 1u) && th_mode_is_input_only(mode)
                 ? ir_instr_operand_missing(call)
                 : known && mode == TH_OUT
                     ? ir_instr_operand_out(call) : false;
@@ -13633,7 +13633,7 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
                 && function_parameter_info(grammar, requirement,
                     formal_params, p, nullptr, nullptr, nullptr, &flags,
                     &mode);
-            emitted = known && (flags & 1u) && mode == TH_IN
+            emitted = known && (flags & 1u) && th_mode_is_input_only(mode)
                 ? ir_instr_operand_missing(call)
                 : known && mode == TH_OUT
                     ? ir_instr_operand_out(call) : false;
@@ -14395,7 +14395,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             ? parse_sym_binding(formal,
                 CORE_STRING_STATIC("ir.array-shape"))
             : function_parameter_shape(symbol, index);
-        if (mode == TH_IN) {
+        if (th_mode_is_input_only(mode)) {
             ir_value_t *value = ir_lower_node_value(context, argument);
             if (!value || !th_unify_in_place(
                     ir_module_types(context->module), parameter->type,
@@ -14506,7 +14506,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         size_t output_index = 0;
         for (size_t previous = 0; previous < index; previous++) {
             const th_param *prior = th_func_param(signature, previous);
-            if (prior && prior->mode != TH_IN) output_index++;
+            if (prior && th_mode_produces_output(prior->mode)) output_index++;
         }
         core_list_push(copyouts,
             ((n00bb_copyout_t){.symbol = arg_symbol,
@@ -14533,7 +14533,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             break;
         }
         if (flags & 1u) {
-            if (parameter->mode != TH_IN) {
+            if (!th_mode_is_input_only(parameter->mode)) {
                 collected = false;
                 break;
             }
@@ -14554,7 +14554,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 ? argument_by_parameter[i]
                 : formal ? child_nt(visit->grammar, formal->decl_node,
                                     "expression") : nullptr;
-            if (parameter->mode == TH_IN
+            if (th_mode_is_input_only(parameter->mode)
                 && ((!n00bb_attach_expression_shape(context,
                         visit->grammar, shape_source, value)
                         && shape_source)
@@ -14575,7 +14575,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 ? parse_sym_binding(formal,
                     CORE_STRING_STATIC("ir.array-shape"))
                 : function_parameter_shape(symbol, i);
-            if (mode == TH_IN
+            if (th_mode_is_input_only(mode)
                 && (!n00bb_attach_expression_shape(context,
                         visit->grammar, argument_by_parameter[i],
                         value_by_parameter[i])
@@ -14775,7 +14775,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         bool known = i < parameter_count
             && function_parameter_info(visit->grammar, symbol,
                 formal_params, i, nullptr, nullptr, nullptr, &flags, &mode);
-        emitted = known && (flags & 1u) && mode == TH_IN
+        emitted = known && (flags & 1u) && th_mode_is_input_only(mode)
             ? ir_instr_operand_missing(instruction)
             : known && mode == TH_OUT
                 ? ir_instr_operand_out(instruction) : false;
@@ -14793,7 +14793,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 signature_ok = false;
                 break;
             }
-            if (!parameter || mode > TH_INOUT) {
+            if (!parameter || !th_mode_is_valid(mode)) {
                 signature_ok = false;
                 break;
             }
@@ -15043,7 +15043,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         if (!argument) continue;
         ir_shape_t *required_shape = parse_sym_binding(formal,
             CORE_STRING_STATIC("ir.array-shape"));
-        if (mode == TH_IN) {
+        if (th_mode_is_input_only(mode)) {
             ir_value_t *value = ir_lower_node_value(context, argument);
             if (!value || !th_unify_in_place(types, parameter->type,
                                              value->type)
@@ -15142,7 +15142,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
                 collected = false;
                 break;
             }
-            if (previous_mode != TH_IN) output_index++;
+            if (th_mode_produces_output(previous_mode)) output_index++;
         }
         if (!collected) break;
         core_list_push(copyouts,
@@ -15164,7 +15164,10 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
             break;
         }
         if (flags & 1u) {
-            if (mode != TH_IN) { collected = false; break; }
+            if (!th_mode_is_input_only(mode)) {
+                collected = false;
+                break;
+            }
             if (!provided[i]) {
                 value_by_parameter[i] = nullptr;
                 continue;
@@ -15258,7 +15261,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
             && function_parameter_info(visit->grammar, symbol,
                 formal_params, parameter_index, nullptr, nullptr, nullptr,
                 &flags, &mode);
-        collected = known && (flags & 1u) && mode == TH_IN
+        collected = known && (flags & 1u) && th_mode_is_input_only(mode)
             ? ir_instr_operand_missing(call)
             : known && mode == TH_OUT ? ir_instr_operand_out(call) : false;
     }
@@ -15821,7 +15824,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
                                      "trait-param-decl");
         function_parameter_info(grammar, symbol, formal_params, i,
                                 nullptr, nullptr, nullptr, nullptr, &mode);
-        if (!parameter || mode != TH_IN
+        if (!parameter || !th_mode_is_input_only(mode)
             || !th_unify_in_place(ir_module_types(context->module),
                                   parameter->type, arguments[i]->type)) {
             lower_error(context, IR_DIAG_TYPE_ARGS,
@@ -18167,11 +18170,15 @@ static th_type *
 lowered_rest_type(th_ctx *types, const th_param *source, th_mode mode,
                   th_param *lowered)
 {
-    if (!types || !source || !lowered || mode > TH_INOUT) return nullptr;
+    if (!types || !source || !lowered || !th_mode_is_valid(mode))
+        return nullptr;
     th_type *type = mode == TH_INOUT
         ? th_ind(types, 0, source->type) : source->type;
     if (!type) return nullptr;
-    *lowered = (th_param){.mode = TH_IN, .type = type};
+    *lowered = (th_param){
+        .mode = mode == TH_CONSUME ? TH_CONSUME : TH_IN,
+        .type = type,
+    };
     return type;
 }
 
@@ -18202,7 +18209,7 @@ function_semantic_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
         const th_param *source = th_func_param(source_type, i);
         parse_sym_entry_t *formal = formals.data[i];
         th_mode mode = formal && formal->has_mode ? formal->mode : TH_IN;
-        if (!source || !formal || mode > TH_INOUT) {
+        if (!source || !formal || !th_mode_is_valid(mode)) {
             ok = false;
             break;
         }
@@ -18296,7 +18303,7 @@ trait_method_semantic_shape(parse_grammar_t *grammar,
         const th_param *input = th_func_param(source, i);
         parse_sym_entry_t *formal = formals.data[i];
         th_mode mode = formal && formal->has_mode ? formal->mode : TH_IN;
-        if (!input || !formal || mode > TH_INOUT) ok = false;
+        if (!input || !formal || !th_mode_is_valid(mode)) ok = false;
         else core_list_push(parameters, ((th_param){
             .mode = mode, .type = input->type,
         }));
@@ -18364,7 +18371,8 @@ interface_function_semantic_type(th_ctx *types, parse_sym_entry_t *symbol)
         uint8_t flags = 0, mode = 0;
         if (!source || !function_interface_parameter(symbol, i, nullptr,
                 nullptr, &flags, &mode) || (flags & ~1u)
-            || mode > TH_INOUT || ((flags & 1u) && mode != TH_IN)) {
+            || !th_mode_is_valid((th_mode)mode)
+            || ((flags & 1u) && !th_mode_is_input_only((th_mode)mode))) {
             ok = false;
             break;
         }
@@ -18379,7 +18387,7 @@ interface_function_semantic_type(th_ctx *types, parse_sym_entry_t *symbol)
         uint8_t flags = 0, mode = 0;
         if (!function_interface_parameter(symbol,
                 th_func_nparams(signature), nullptr, nullptr, &flags, &mode)
-            || flags != 2u || mode > TH_INOUT) ok = false;
+            || flags != 2u || !th_mode_is_valid((th_mode)mode)) ok = false;
         else {
             rest = lowered_rest_type(types, source_rest, (th_mode)mode,
                                      &rest_value) ? &rest_value : nullptr;
@@ -19052,13 +19060,13 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         th_mode mode = parameter && parameter->has_mode
             ? parameter->mode : TH_IN;
         if (!parameter || !type_param || !parameter->name.data
-            || (parameter->is_optional && mode != TH_IN)
-            || (mode != TH_IN && mode != TH_OUT && mode != TH_INOUT)) {
+            || (parameter->is_optional && !th_mode_is_input_only(mode))
+            || !th_mode_is_valid(mode)) {
             ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                 IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, "this parameter");
             ir_diag_message(diagnostic, diagnostics,
-                "only in, out, and modify parameters are lowered; defaults "
-                "are allowed only for in parameters");
+                "the parameter has an invalid passing mode, or a copy-out "
+                "parameter has a default");
             core_list_free(lower_data.default_params);
             return false;
         }
@@ -19075,7 +19083,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         parameter->type = parameter_type;
         if (parameter->decl_node)
             core_tree_node_value(parameter->decl_node).type = parameter_type;
-        if (mode == TH_IN) {
+        if (th_mode_is_input_only(mode)) {
             if (ir_func_parameter_is_optional(function, (uint32_t)i)) {
                 char argument_name[48], local_name[48];
                 snprintf(argument_name, sizeof(argument_name),
@@ -19223,7 +19231,8 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         size_t output_index = 0;
         for (size_t previous = 0; previous < i; previous++) {
             parse_sym_entry_t *prior = parameters->data[previous];
-            if (prior && prior->has_mode && prior->mode != TH_IN)
+            if (prior && prior->has_mode
+                && th_mode_produces_output(prior->mode))
                 output_index++;
         }
         core_list_push(lower_data.parameters_to_copy_out,
@@ -24167,7 +24176,8 @@ validate_operator_dispatch_result(parse_grammar_t *grammar,
     bool valid = self && (unary || other)
         && th_func_nparams(signature) == (unary ? 1 : 2)
         && !th_func_rest(signature)
-        && self->mode == TH_IN && (unary || other->mode == TH_IN)
+        && th_mode_is_input_only(self->mode)
+        && (unary || th_mode_is_input_only(other->mode))
         && receiver && (unary || argument) && result
         && th_unify_in_place(state->types, self->type, receiver)
         && (unary || th_unify_in_place(state->types, other->type, argument))
@@ -30250,8 +30260,8 @@ register_function_parameter_metadata(parse_grammar_t *grammar,
         th_mode mode = parameter && parameter->has_mode
             ? parameter->mode : TH_IN;
         ok = parameter && name_size > 0 && name_size <= UINT16_MAX
-            && mode <= TH_INOUT
-            && (!parameter->is_optional || mode == TH_IN);
+            && th_mode_is_valid(mode)
+            && (!parameter->is_optional || th_mode_is_input_only(mode));
         if (!ok) break;
         core_buffer_putc(&metadata, (char)(name_size & 0xff));
         core_buffer_putc(&metadata, (char)(name_size >> 8));
@@ -31702,12 +31712,15 @@ restore_interface_function_semantics(locate_worker_context_t *loader,
         uint8_t flags = data[offset + 2];
         uint8_t mode = data[offset + 3];
         offset += 4;
-        if (!name_size || (flags & ~3u) || mode > TH_INOUT
+        if (!name_size || (flags & ~3u)
+            || !th_mode_is_valid((th_mode)mode)
             || name_size > size - offset) return false;
         bool is_rest = (flags & 2u) != 0;
         if (is_rest != (i + 1 == count
                 && th_func_rest(signature) != nullptr)
-            || ((flags & 1u) && (is_rest || mode != TH_IN))) return false;
+            || ((flags & 1u)
+                && (is_rest || !th_mode_is_input_only((th_mode)mode))))
+            return false;
         size_t previous_offset = 9;
         for (uint32_t previous = 0; previous < i; previous++) {
             uint16_t previous_size = (uint16_t)data[previous_offset]
@@ -32088,7 +32101,7 @@ restore_interface_context_semantics(locate_worker_context_t *loader,
         offset += 4;
         if (!name_size || (flags & ~(extended ? 7u : 3u))
             || ((flags & 4u) && (!(flags & 1u) || !extended))
-            || mode > TH_INOUT
+            || !th_mode_is_valid((th_mode)mode)
             || name_size > size - offset) return false;
         offset += name_size;
         if (extended && (flags & 4u)) {

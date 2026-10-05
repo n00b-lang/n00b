@@ -328,11 +328,19 @@
     %"modify" %IDENTIFIER
 <pos-param> @declares($1, $3, "param") @direction($1, "modify") @pass_by("inout") ::=
     %"modify" %IDENTIFIER %":" <type-spec>
+<pos-param> @declares($1, "param") @direction($1, "consume") @pass_by("consume") ::=
+    %"consume" %IDENTIFIER
+<pos-param> @declares($1, $3, "param") @direction($1, "consume") @pass_by("consume") ::=
+    %"consume" %IDENTIFIER %":" <type-spec>
 
 <default-param> @declares($0, "param") @direction($0, "in") @pass_by("in") @infer("$0 unify $2") ::=
                 %IDENTIFIER %"=" <expression>
 <default-param> @declares($0, $2, "param") @direction($0, "in") @pass_by("in") @infer("$0 unify $4") ::=
                 %IDENTIFIER %":" <type-spec> %"=" <expression>
+<default-param> @declares($1, "param") @direction($1, "consume") @pass_by("consume") @infer("$1 unify $3") ::=
+                %"consume" %IDENTIFIER %"=" <expression>
+<default-param> @declares($1, $3, "param") @direction($1, "consume") @pass_by("consume") @infer("$1 unify $5") ::=
+                %"consume" %IDENTIFIER %":" <type-spec> %"=" <expression>
 
 <vargs-param> @declares($1, $3, "param") @direction($1, "in") @pass_by("in") ::=
     %"*" %IDENTIFIER %":" <type-spec>
@@ -342,6 +350,10 @@
     %"modify" %"*" %IDENTIFIER %":" <type-spec>
 <vargs-param> @declares($2, "param") @direction($2, "modify") @pass_by("inout") ::=
     %"modify" %"*" %IDENTIFIER
+<vargs-param> @declares($2, $4, "param") @direction($2, "consume") @pass_by("consume") ::=
+    %"consume" %"*" %IDENTIFIER %":" <type-spec>
+<vargs-param> @declares($2, "param") @direction($2, "consume") @pass_by("consume") ::=
+    %"consume" %"*" %IDENTIFIER
 
 <function-result> ::= <return-type>? <error-type>?
 
@@ -687,4 +699,5 @@
 <trait-obj-tref> @declares($1, $3, "param") @direction($1, "in") @pass_by("in") ::= %"in" %IDENTIFIER %":" <tspec-tvar>
 <trait-obj-tref> @declares($1, $3, "param") @direction($1, "out") @pass_by("out") ::= %"out" %IDENTIFIER %":" <tspec-tvar>
 <trait-obj-tref> @declares($1, $3, "param") @direction($1, "modify") @pass_by("inout") ::= %"modify" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, $3, "param") @direction($1, "consume") @pass_by("consume") ::= %"consume" %IDENTIFIER %":" <tspec-tvar>
 <trait-obj-tref> @declares($0, $2, "param") @direction($0, "in") @pass_by("in") ::= %IDENTIFIER %":" <tspec-tvar>

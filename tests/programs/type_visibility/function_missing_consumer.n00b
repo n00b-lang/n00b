@@ -1,2 +1,2 @@
 import functions_dep
-func consume() { functions_dep.missing_function() }
+func accept() { functions_dep.missing_function() }

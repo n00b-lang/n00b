@@ -1,4 +1,4 @@
 import private_dep
-func consume(item: private_dep.PrivateRecord) -> private_dep.PrivateRecord {
+func accept(item: private_dep.PrivateRecord) -> private_dep.PrivateRecord {
     return item
 }

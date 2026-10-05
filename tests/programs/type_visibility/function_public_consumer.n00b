@@ -1,2 +1,2 @@
 import functions_dep
-func consume() { functions_dep.public_function() }
+func accept() { functions_dep.public_function() }

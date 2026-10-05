@@ -4,6 +4,6 @@ public func next(modify self: string) -> int? { return next_item }
 public func cleanup(self: string) { }
 func call_iter(items: int) -> string { return items.iter() }
 func call_next(modify cursor: string) -> int? { return cursor.next() }
-func consume(items: int) {
+func accept(items: int) {
     for item in items { let checked = item + 1 }
 }
