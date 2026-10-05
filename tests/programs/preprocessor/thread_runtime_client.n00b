@@ -1,6 +1,11 @@
 import thread_runtime_dep
 
-var initial_worker_state: int = thread_runtime_dep.worker_state
+var initial_worker_state: int
+
+comptime {
+} else {
+    initial_worker_state = thread_runtime_dep.worker_state
+}
 
 func read_worker_state_after_initialization() -> int {
     return thread_runtime_dep.worker_state

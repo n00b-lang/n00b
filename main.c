@@ -419,6 +419,8 @@ typedef struct {
     core_list_t(core_translation_unit_ptr_t) units;
     core_list_t(n00bb_trait_specialization_ptr_t) trait_specializations;
     core_list_t(parse_sym_entry_ptr_t) comptime_functions;
+    core_list_t(n00bb_ir_func_ptr_t) comptime_reachable_functions;
+    core_list_t(n00bb_ir_func_ptr_t) runtime_reachable_functions;
     core_list_t(n00bb_array_bound_work_t) array_bound_work;
     core_list_t(n00bb_phase_result_binding_t) phase_results;
     core_list_t(n00bb_global_result_binding_t) global_results;
@@ -1438,8 +1440,8 @@ apply_decl_binding(parse_grammar_t *grammar, parse_tree_t *node,
             else {
                 parse_sym_phase_t mutable_in =
                     mutability == PARSE_SYM_MUTABLE
-                        ? PARSE_SYM_PHASE_RUNTIME : PARSE_SYM_PHASE_NONE;
-                parse_sym_set_phases(symbol, PARSE_SYM_PHASE_RUNTIME,
+                        ? PARSE_SYM_PHASE_BOTH : PARSE_SYM_PHASE_NONE;
+                parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
                     mutable_in,
                     PARSE_SYM_PHASE_COMPTIME | PARSE_SYM_PHASE_RUNTIME);
             }
@@ -20381,9 +20383,12 @@ collect_one_module_initializer_root(parse_grammar_t *grammar,
             || child_nt(grammar, prefix, "storage-class"))
             return true;
         collect_dynamic_global_initializers(grammar, unit, statement,
+                                             comptime);
+        collect_dynamic_global_initializers(grammar, unit, statement,
                                              runtime);
         return true;
     }
+    core_list_push(*comptime, statement);
     core_list_push(*runtime, statement);
     return true;
 }
@@ -20750,6 +20755,52 @@ comptime_function_list_build(
     for (size_t i = 0; i < roots->len; i++)
         if (!comptime_summary_add(summaries, roots->data[i])) return false;
     return comptime_function_summaries_expand_calls(summaries);
+}
+
+static bool
+collect_phase_reachable_function(ir_func_t *function, void *raw)
+{
+    core_list_t(n00bb_ir_func_ptr_t) *functions = raw;
+    core_list_push(*functions, function);
+    return true;
+}
+
+static bool
+build_phase_reachable_functions(
+    n00bb_link_analysis_t *analysis,
+    core_list_t(core_translation_unit_ptr_t) *initializer_order,
+    bool comptime)
+{
+    core_list_t(n00bb_ir_func_ptr_t) roots =
+        core_list_new(n00bb_ir_func_ptr_t);
+    for (size_t i = 0; i < initializer_order->len; i++) {
+        n00bb_tu_state_t *state = tu_state(initializer_order->data[i]);
+        ir_module_t *module = module_for_phase(state, comptime);
+        ir_func_t *initializer = module ? ir_func_find(module,
+            comptime ? "__n00bb_comptime_init"
+                     : "__n00bb_runtime_init") : nullptr;
+        if (initializer) core_list_push(roots, initializer);
+    }
+    if (comptime) {
+        for (size_t i = 0; i < analysis->array_bound_work.len; i++) {
+            n00bb_array_bound_work_t *work = &analysis->array_bound_work.data[i];
+            if (work->producer) core_list_push(roots, work->producer);
+            if (work->product_producer)
+                core_list_push(roots, work->product_producer);
+        }
+        for (size_t i = 0; i < analysis->phase_results.len; i++)
+            if (analysis->phase_results.data[i].producer)
+                core_list_push(roots,
+                    analysis->phase_results.data[i].producer);
+    }
+    core_list_t(n00bb_ir_func_ptr_t) *reachable = comptime
+        ? &analysis->comptime_reachable_functions
+        : &analysis->runtime_reachable_functions;
+    reachable->len = 0;
+    bool ok = ir_walk_reachable_functions(roots.data, roots.len,
+        collect_phase_reachable_function, reachable);
+    core_list_free(roots);
+    return ok;
 }
 
 static ir_instr_t *
@@ -29275,6 +29326,11 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         ok = unit && lower_function_body(lowerer, grammar, unit, symbol,
             true, ir_context, &units);
     }
+    if (ok) ok = build_phase_reachable_functions(
+        analysis, &comptime_init_order, true);
+    if (ok && !interface_closure_only)
+        ok = build_phase_reachable_functions(
+            analysis, &runtime_init_order, false);
 
     bool comptime_phase_succeeds = true;
     if (ok && !interface_closure_only) ok = bind_comptime_global_results(link, analysis,
@@ -29441,6 +29497,18 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             else {
                 fputs(text, stdout);
                 core_free(text);
+                core_list_t(n00bb_ir_func_ptr_t) *phase_functions[] = {
+                    &analysis->comptime_reachable_functions,
+                    &analysis->runtime_reachable_functions,
+                };
+                const char *phase_names[] = {"comptime", "runtime"};
+                for (size_t p = 0; p < 2; p++)
+                    for (size_t f = 0; f < phase_functions[p]->len; f++) {
+                        ir_func_t *function = phase_functions[p]->data[f];
+                        printf("phase-reachable %s @%s.%s\n",
+                            phase_names[p], ir_module_name(function->owner),
+                            function->name);
+                    }
             }
         }
     }
@@ -40157,6 +40225,10 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                     core_list_new(n00bb_trait_specialization_ptr_t),
                 .comptime_functions =
                     core_list_new(parse_sym_entry_ptr_t),
+                .comptime_reachable_functions =
+                    core_list_new(n00bb_ir_func_ptr_t),
+                .runtime_reachable_functions =
+                    core_list_new(n00bb_ir_func_ptr_t),
                 .array_bound_work =
                     core_list_new(n00bb_array_bound_work_t),
                 .phase_results =
@@ -40553,6 +40625,8 @@ main(int argc, char **argv)
             core_free(link_analysis->trait_specializations.data[i]);
         core_list_free(link_analysis->trait_specializations);
         core_list_free(link_analysis->comptime_functions);
+        core_list_free(link_analysis->comptime_reachable_functions);
+        core_list_free(link_analysis->runtime_reachable_functions);
         for (size_t i = 0; i < link_analysis->array_bound_work.len; i++)
             core_list_free(link_analysis->array_bound_work.data[i]
                 .initializer_extents);

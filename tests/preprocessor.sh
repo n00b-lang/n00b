@@ -677,9 +677,14 @@ grep -Eq 'array.new %__n00bb_array_bound_result_[0-9]+, %__n00bb_array_extent_[0
     "$tmp/array_new_sized.out"
 grep -Eq 'array.new %__n00bb_array_extent_[0-9]+, %__n00bb_array_extent_[0-9]+' \
     "$tmp/array_new_sized.out"
-[ "$(grep -c '= array.new' "$tmp/array_new_sized.out")" -eq 5 ]
+awk '
+    /^module array_new_sized\$comptime \{/ { phase = "comptime"; next }
+    /^module array_new_sized \{/ { phase = "runtime"; next }
+    /= array.new/ { count[phase]++ }
+    END { exit !(count["comptime"] == 5 && count["runtime"] == 4) }
+' "$tmp/array_new_sized.out"
 test "$(grep -c '!ir.array.element_initialization("language_zero")' \
-    "$tmp/array_new_sized.out")" -eq 5
+    "$tmp/array_new_sized.out")" -eq 9
 grep -A80 'module array_new_sized\$comptime' \
     "$tmp/array_new_sized.out" | grep -q '= array.new'
 grep -Eq 'fixed .*array-shape\[rank=1,flat-prefix=1,dim0=comptime:producer=' \
@@ -3082,13 +3087,15 @@ awk '
     END { exit !(compile_call && !leaked_call) }
 ' "$tmp/lower_comptime_function_call.ir"
 
-if "$compiler" lower --dump-ir \
+"$compiler" lower --dump-ir \
     "$program_dir/lower_comptime_runtime_dependency.n00b" \
-    >"$tmp/lower_comptime_runtime_dependency.out" 2>&1; then
-    echo 'compile-time call reading runtime state unexpectedly lowered' >&2
+    >"$tmp/lower_comptime_runtime_dependency.out" 2>&1 || {
+    cat "$tmp/lower_comptime_runtime_dependency.out"
     exit 1
-fi
-grep -q 'this binding is not available during compile-time evaluation' \
+}
+grep -q 'call @__n00bb_comptime_compile_value' \
+    "$tmp/lower_comptime_runtime_dependency.out"
+grep -q 'return @lower_comptime_runtime_dependency.runtime_value' \
     "$tmp/lower_comptime_runtime_dependency.out"
 
 for fixture in lower_nested_comptime lower_comptime_value_body; do
@@ -4419,7 +4426,7 @@ awk '
     current == "client" && /__n00bb_runtime_init/ && /initializer_order\(1\)/ { client_order = 1 }
     END { exit !(dep_order && client_order) }
 ' "$tmp/thread_runtime_client.out"
-grep -Fq 'runtime-initializer-use[resolved] thread_runtime_client:0:initial_worker_state -> thread_runtime_dep:0:worker_state' \
+grep -Fq 'runtime-initializer-use[resolved] <initializer>: -> thread_runtime_dep:0:worker_state' \
     "$tmp/thread_runtime_client.out"
 grep -q 'global.store @thread_runtime_dep.worker_state' \
     "$tmp/thread_runtime_client.out"
@@ -4462,7 +4469,7 @@ if "$compiler" lower --dump-ir \
     echo 'a thread-local read before its runtime definition unexpectedly lowered' >&2
     exit 1
 fi
-grep -q 'N00BB-L0043.*initializer reads a global before its initializer runs' \
+grep -q 'N00BB-L0044.*thread-local global before a guaranteed runtime initialization' \
     "$tmp/thread_runtime_before_definition.out"
 
 if "$compiler" lower --dump-ir \
@@ -4492,7 +4499,7 @@ grep -q 'x: parameter, .*storage-duration=automatic' \
     "$tmp/branches.symbols"
 grep -q 'local_value: variable, mutable, .*storage-duration=automatic' \
     "$tmp/branches.symbols"
-grep -q 'selected: variable, mutable, .*phases=runtime, mutable-in=runtime, initializer-in=comptime+runtime' \
+grep -q 'selected: variable, mutable, .*phases=comptime+runtime, mutable-in=comptime+runtime, initializer-in=comptime+runtime' \
     "$tmp/branches.symbols"
 grep -q 'visible: function' "$tmp/branches.symbols"
 grep -q 'identity: function, mutable, type=(`a) -> `a fail: nil' \
@@ -7051,3 +7058,43 @@ awk '
     phase == "runtime" && /call @compile_branch/ { exit 1 }
     END { exit !(compile_call && runtime_call) }
 ' "$tmp/comptime_else.ir"
+
+"$compiler" lower --dump-ir --dump-control-flow --dump-link-unit \
+    "$program_dir/top_level_phase_order.n00b" \
+    >"$tmp/top_level_phase_order.ir" 2>&1 || {
+    cat "$tmp/top_level_phase_order.ir"
+    exit 1
+}
+awk '
+    /static func @__n00bb_comptime_init/ { phase = "comptime"; next }
+    /static func @__n00bb_runtime_init/ { phase = "runtime"; next }
+    phase == "comptime" && /call @__n00bb_comptime_first/ { compile_first = NR }
+    phase == "comptime" && /call @__n00bb_comptime_compile_only/ { compile_middle = NR }
+    phase == "comptime" && /call @__n00bb_comptime_last/ { compile_last = NR }
+    phase == "runtime" && /call @first/ { runtime_first = NR }
+    phase == "runtime" && /call @runtime_only/ { runtime_middle = NR }
+    phase == "runtime" && /call @last/ { runtime_last = NR }
+    END {
+        ordered_compile = compile_first < compile_middle && compile_middle < compile_last
+        ordered_runtime = runtime_first < runtime_middle && runtime_middle < runtime_last
+        exit !(ordered_compile && ordered_runtime)
+    }
+' "$tmp/top_level_phase_order.ir"
+for reachable in \
+    '__n00bb_comptime_init' \
+    '__n00bb_comptime_first' \
+    '__n00bb_comptime_compile_only' \
+    '__n00bb_comptime_last'; do
+    grep -q "phase-reachable comptime @top_level_phase_order\\\$comptime.$reachable" \
+        "$tmp/top_level_phase_order.ir"
+done
+for reachable in '__n00bb_runtime_init' first runtime_only last; do
+    grep -q "phase-reachable runtime @top_level_phase_order.$reachable" \
+        "$tmp/top_level_phase_order.ir"
+done
+! grep -q 'phase-reachable comptime .*runtime_only' \
+    "$tmp/top_level_phase_order.ir"
+! grep -q 'phase-reachable runtime .*compile_only' \
+    "$tmp/top_level_phase_order.ir"
+grep -q 'edge requires #1 -> #[0-9][0-9]*' \
+    "$tmp/top_level_phase_order.ir"

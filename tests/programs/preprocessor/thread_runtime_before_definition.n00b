@@ -1,3 +1,8 @@
-var copied_state: int = worker_state
+var copied_state: int
 thread var worker_state: int
-worker_state = 42
+
+comptime {
+} else {
+    copied_state = worker_state
+    worker_state = 42
+}

@@ -1,6 +1,11 @@
 thread var worker_state: int
 var should_initialize: bool = false
-if should_initialize {
-    worker_state = 42
+var observed_state: int
+
+comptime {
+} else {
+    if should_initialize {
+        worker_state = 42
+    }
+    observed_state = worker_state
 }
-var observed_state: int = worker_state

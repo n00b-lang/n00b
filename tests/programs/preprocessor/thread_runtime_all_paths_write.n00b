@@ -1,7 +1,12 @@
 thread var worker_state: int
-if true {
-    worker_state = 42
+var observed_state: int
+
+comptime {
 } else {
-    worker_state = 43
+    if true {
+        worker_state = 42
+    } else {
+        worker_state = 43
+    }
+    observed_state = worker_state
 }
-var observed_state: int = worker_state

@@ -1,3 +1,8 @@
 thread var worker_state: int
-worker_state = 42
-var observed_state: int = worker_state
+var observed_state: int
+
+comptime {
+} else {
+    worker_state = 42
+    observed_state = worker_state
+}
