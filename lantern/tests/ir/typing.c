@@ -1970,6 +1970,12 @@ static void test_select_phi_call(void)
           ir_call_output_count(consume->type) == 0
               && apply(e, consume_call) == IR_RULE_ACCEPT);
 
+    ir_instr_t *transfer = op(e, IR_OP_CONSUME);
+    ir_instr_operand_value(transfer, val(e, "u64"));
+    ir_instr_set_dest(transfer, "transferred", ir_type_parse(e->m, "u64"));
+    check("consume transfers a typed value without selecting representation",
+          apply(e, transfer) == IR_RULE_ACCEPT);
+
     ir_instr_t *first_output = op(e, IR_OP_CALL_OUTPUT);
     ir_instr_operand_value(first_output, outc->dest);
     ir_instr_operand_uint(first_output, 0);

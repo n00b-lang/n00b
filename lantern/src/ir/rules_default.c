@@ -2870,6 +2870,7 @@ static const entry DEFAULTS[] = {
      rule_sequence_shape_check},
     {IR_OP_UNDEF, "ir.undef", rule_annotated},
     {IR_OP_COPY, "ir.copy", rule_copy},
+    {IR_OP_CONSUME, "ir.consume", rule_copy},
     {IR_OP_ADDRESS_OF, "ir.address.of", rule_address_of},
     {IR_OP_ALLOCA, "ir.alloca", rule_alloca},
     {IR_OP_ALLOC, "ir.alloc", rule_alloca},

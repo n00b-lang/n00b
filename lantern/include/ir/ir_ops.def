@@ -10,6 +10,7 @@ IR_OP(SEQUENCE_SHAPE_CHECK, "sequence.shape.check", 1, 1, NONE, "v", 0, SIDEEFFE
 IR_OP(UNDEF,           "undef",           0, 0,  ANNOTATED,   "",    0,                              HASRESULT)
 
 IR_OP(COPY,            "copy",            1, 1,  OPERAND0,    "v",   0,                              HASRESULT)
+IR_OP(CONSUME,         "consume",         1, 2,  OPERAND0,    "vv",  0,                              HASRESULT | SIDEEFFECT)
 
 IR_OP(ADDRESS_OF,      "address.of",      1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
 IR_OP(ALLOCA,          "alloca",          1, 2,  PTR_TO_ARG0, "tv",  0,                              HASRESULT | SIDEEFFECT)

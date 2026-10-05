@@ -229,6 +229,7 @@ static void test_the_grammar_defines_the_whole_surface(void)
          "!origin(lowered, \"p\", 0, 1, 2, 3, 4, 5, 6)"},
         {"an inout mode", "func-param", "inout %a: i32"},
         {"a consume mode", "func-param", "consume %a: i32"},
+        {"an ownership transfer", "instr", "%a: i32 = consume %value, $source\n"},
         {"a keyword parameter", "func-param", "k: i32"},
         {"a rest parameter", "func-param", "*i32"},
         {"a consume rest parameter", "func-param", "consume *%a: i32"},
