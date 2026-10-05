@@ -4693,7 +4693,7 @@ grep -q 'this cast has no defined conversion' \
     exit 1
 }
 grep -q ': int = nominal.cast ' "$tmp/operator_nominal_archive_user.ir"
-"$compiler" lower --dump-ir \
+"$compiler" lower --dump-ir --dump-symbols \
     "$script_dir/programs/operator_enum_signed.n00b" \
     >"$tmp/operator_enum_signed.ir" 2>&1 || {
     cat "$tmp/operator_enum_signed.ir"
@@ -4706,6 +4706,18 @@ grep -q 'enum.const "zero", 0' "$tmp/operator_enum_signed.ir"
 grep -q 'enum.const "positive", 7' "$tmp/operator_enum_signed.ir"
 grep -q 'enum.const "across_zero", 0' "$tmp/operator_enum_signed.ir"
 grep -q 'enum.const "after_zero", 1' "$tmp/operator_enum_signed.ir"
+grep -q 'Signed: type.*enum-value-range=i:4' "$tmp/operator_enum_signed.ir"
+"$compiler" lower --dump-symbols \
+    "$script_dir/programs/operator_enum_ranges.n00b" \
+    >"$tmp/operator_enum_ranges.out" 2>&1 || {
+    cat "$tmp/operator_enum_ranges.out"
+    exit 1
+}
+grep -q 'Zero: type.*enum-value-range=zero-only' "$tmp/operator_enum_ranges.out"
+grep -q 'Unsigned: type.*enum-value-range=u:8' "$tmp/operator_enum_ranges.out"
+grep -q 'Signed: type.*enum-value-range=i:5' "$tmp/operator_enum_ranges.out"
+grep -q 'Wider: type.*enum-value-range=u:12' "$tmp/operator_enum_ranges.out"
+grep -q 'Wide: type.*enum-value-range=u:128' "$tmp/operator_enum_ranges.out"
 if "$compiler" lower \
     "$script_dir/programs/operator_enum_noninteger_rejected.n00b" \
     >"$tmp/operator_enum_noninteger_rejected.out" 2>&1; then
@@ -4720,7 +4732,7 @@ grep -q 'enum item value must be an integer literal' \
     cat "$tmp/operator_enum_signed_archive.out"
     exit 1
 }
-"$compiler" lower --dump-ir \
+"$compiler" lower --dump-ir --dump-symbols \
     --link-interface "$tmp/operator_enum_signed.n00bi" \
     "$script_dir/programs/interfaces/operator_enum_signed_user.n00b" \
     >"$tmp/operator_enum_signed_user.ir" 2>&1 || {
@@ -4729,6 +4741,7 @@ grep -q 'enum item value must be an integer literal' \
 }
 grep -q 'enum.const "negative", -7' "$tmp/operator_enum_signed_user.ir"
 grep -q 'enum.const "following", -6' "$tmp/operator_enum_signed_user.ir"
+grep -q 'Signed: type.*enum-value-range=i:4' "$tmp/operator_enum_signed_user.ir"
 "$compiler" lower --dump-ir \
     "$script_dir/programs/operator_byte_cast.n00b" \
     >"$tmp/operator_byte_cast.ir" 2>&1 || {

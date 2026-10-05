@@ -609,6 +609,32 @@ typedef struct {
     bool negative;
 } n00bb_enum_value_t;
 
+typedef struct {
+    uint64_t magnitude_bits;
+    bool is_signed;
+} n00bb_enum_range_t;
+
+static void
+enum_range_include(n00bb_enum_range_t *range, n00bb_enum_value_t value)
+{
+    uint64_t bits = 0;
+    for (ir_uint_t magnitude = value.magnitude; magnitude; magnitude >>= 1)
+        bits++;
+    if (bits > range->magnitude_bits) range->magnitude_bits = bits;
+    range->is_signed |= value.negative;
+}
+
+static bool
+bind_enum_range(core_arena_t *arena, parse_sym_entry_t *symbol,
+                 n00bb_enum_range_t range)
+{
+    n00bb_enum_range_t *stored = core_arena_alloc(arena, sizeof(*stored));
+    if (!stored) return false;
+    *stored = range;
+    return parse_sym_set_binding(symbol, CORE_STRING_STATIC("n00bb.enum-range"),
+                                 stored);
+}
+
 typedef enum {
     N00BB_STATIC_VALUE_BOOL,
     N00BB_STATIC_VALUE_INT,
@@ -28070,6 +28096,7 @@ register_enum_values_metadata(parse_grammar_t *grammar,
     core_buffer_append(&data, "N0EV", 4);
     bool ok = append_u32_le(&data, (uint32_t)count);
     n00bb_enum_value_t previous = {0};
+    n00bb_enum_range_t range = {0};
     bool have_previous = false;
     for (size_t index = items.len; ok && index > 0; index--) {
         parse_sym_entry_t *item = items.data[index - 1];
@@ -28108,7 +28135,9 @@ register_enum_values_metadata(parse_grammar_t *grammar,
         }
         previous = value;
         have_previous = true;
+        enum_range_include(&range, value);
     }
+    if (ok) ok = bind_enum_range(&state->semantic_values, type_symbol, range);
     if (ok)
         ok = th_env_register_metadata(environment, TH_ENV_METADATA_TYPE,
             qualified_name, "n00b.enum-values", 1, data.data,
@@ -30231,6 +30260,7 @@ register_builtin_comparison_symbols(parse_symtab_t *symtab,
     parse_scope_t *members = parse_symtab_current_scope(
         symtab, CORE_STRING_STATIC(""));
     bool ok = members && symbol->type;
+    n00bb_enum_range_t range = {0};
     if (ok) {
         members->scope_tag = CORE_STRING_STATIC("enum");
         members->adt_kind = CORE_STRING_STATIC("enum");
@@ -30246,6 +30276,7 @@ register_builtin_comparison_symbols(parse_symtab_t *symtab,
         if (!ok) break;
         value->magnitude = i;
         value->negative = false;
+        enum_range_include(&range, *value);
         member->type = symbol->type;
         member->owner_type = symbol;
         member->mutability = PARSE_SYM_CONST;
@@ -30257,6 +30288,7 @@ register_builtin_comparison_symbols(parse_symtab_t *symtab,
         parse_sym_set_storage_duration(member,
                                        PARSE_SYM_STORAGE_COMPTIME);
     }
+    if (ok) ok = bind_enum_range(&state->semantic_values, symbol, range);
     parse_symtab_pop_scope_all(symtab);
     return ok;
 }
@@ -34671,6 +34703,17 @@ dump_symbols(core_translation_unit_t *unit)
             }
             if (symbol->type_is_inferred)
                 printf(", type-source=inferred");
+            const n00bb_enum_range_t *enum_range = parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.enum-range"));
+            if (enum_range) {
+                if (!enum_range->magnitude_bits)
+                    printf(", enum-value-range=zero-only");
+                else
+                    printf(", enum-value-range=%s:%llu",
+                        enum_range->is_signed ? "i" : "u",
+                        (unsigned long long)(enum_range->magnitude_bits
+                            + enum_range->is_signed));
+            }
             if (symbol->visibility.data)
                 printf(", visibility=%.*s", (int)symbol->visibility.u8_bytes,
                        symbol->visibility.data);
@@ -35633,6 +35676,7 @@ materialize_interface_type_members(locate_worker_context_t *loader,
     }
 
     bool ok = true;
+    n00bb_enum_range_t range = {0};
     for (size_t i = 0; i < th_record_len(declaration->type_shape); i++) {
         const th_member *member = th_record_member(declaration->type_shape, i);
         if (!member || !member->name || !member->type) {
@@ -35692,6 +35736,7 @@ materialize_interface_type_members(locate_worker_context_t *loader,
                 break;
             }
             *stored = value;
+            enum_range_include(&range, value);
             entry->comptime_value = stored;
             entry->has_comptime_value = true;
         }
@@ -35713,6 +35758,8 @@ materialize_interface_type_members(locate_worker_context_t *loader,
             entry->bit_width = bit_width;
         }
     }
+    if (ok && declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_ENUM)
+        ok = bind_enum_range(&state->semantic_values, type_symbol, range);
     parse_symtab_pop_scope_all(symtab);
     return ok;
 }
