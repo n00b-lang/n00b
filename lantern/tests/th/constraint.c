@@ -652,6 +652,29 @@ static void test_a_constrained_var_prints_its_bound(void)
     th_ctx_free(ctx);
 }
 
+static void test_open_function_prints_free_variable_constraints_once(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_type *v = th_var_named(ctx, "item");
+    th_constraint copy = {.kind = TH_CON_IMPLEMENTS, .iface = "Copy"};
+
+    check("a trait obligation can be added to an open variable",
+          th_var_constrain(ctx, v, copy));
+    check("repeating a trait obligation is idempotent",
+          th_var_constrain(ctx, v, copy) &&
+          th_var_constraint_count(v) == 1);
+
+    th_param param = {.mode = TH_IN, .type = v};
+    const char *got = th_print(ctx, th_func(ctx, v, &param, 1,
+                                           nullptr, nullptr, 0));
+    check("an open function prints its free-variable constraint",
+          strstr(got, "(`a) -> `a where `a: Copy") != nullptr);
+    check("an open function prints the obligation only once",
+          strstr(got, "Copy + Copy") == nullptr);
+
+    th_ctx_free(ctx);
+}
+
 static void test_methods_are_attached_to_receiver_types(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -738,6 +761,24 @@ static void test_named_type_record_definitions(void)
     th_ctx_free(ctx);
 }
 
+static void test_unification_probe(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_type *variable = th_var(ctx);
+    th_type *integer = th_name(ctx, "int");
+    th_type *string = th_name(ctx, "string");
+    th_type *specialized = th_unify_probe(ctx, variable, integer);
+    check("a unification probe returns a specialized copy",
+          specialized
+              && th_hash(ctx, specialized) == th_hash(ctx, integer)
+              && th_kind_of(th_resolve(variable)) == TH_VAR);
+    size_t errors = th_error_count(ctx);
+    check("a failed unification probe retains no diagnostic",
+          !th_unify_probe(ctx, integer, string)
+              && th_error_count(ctx) == errors);
+    th_ctx_free(ctx);
+}
+
 int main(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -765,9 +806,11 @@ int main(void)
     test_errors_accumulate_with_their_own_spans();
     test_failures_name_what_went_wrong();
     test_a_constrained_var_prints_its_bound();
+    test_open_function_prints_free_variable_constraints_once();
     test_methods_are_attached_to_receiver_types();
     test_function_error_channels_unify_and_generalize();
     test_named_type_record_definitions();
+    test_unification_probe();
 
     return report("th constraints");
 }

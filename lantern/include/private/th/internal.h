@@ -180,6 +180,15 @@ core_list_decl(th_coercion_t);
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
 
+typedef struct {
+  th_con_kind kind;
+  const char *name;
+  const char *module;
+  const char *package;
+  uint64_t receiver_hash;
+} th_active_constraint_t;
+core_list_decl(th_active_constraint_t);
+
 struct th_ctx {
   core_arena_t arena;
   core_buffer_t scratch;
@@ -196,6 +205,7 @@ struct th_ctx {
   core_list_t(th_error_t) errors;
   core_list_t(th_coercion_t) coercions;
   core_list_t(th_type_ptr_t) pending_environment_constraints;
+  core_list_t(th_active_constraint_t) active_environment_constraints;
   th_coerce_fn custom;
   void *custom_user;
   th_span_t span;

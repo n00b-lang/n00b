@@ -897,6 +897,29 @@ int main(void) {
                                 .call = fn0(inside, self_echo_receiver),
                             }}) &&
             th_unify_in_place(inside, self_echo_receiver, box_int));
+  th_type *open_echo_receiver = th_var(inside);
+  th_constraint open_echo_obligation = {
+      .kind = TH_CON_METHOD,
+      .method = {
+          .name = "echo",
+          .result = open_echo_receiver,
+          .call = fn1(inside, open_echo_receiver, open_echo_receiver),
+      },
+  };
+  bool open_echo_constrained =
+      th_var_constrain(inside, open_echo_receiver, open_echo_obligation) &&
+      th_var_constrain(inside, open_echo_receiver, open_echo_obligation);
+  th_type *open_echo_call = th_type_clone(
+      inside, fn1(inside, open_echo_receiver, open_echo_receiver));
+  const th_param *open_echo_parameter = open_echo_call
+      ? th_func_param(open_echo_call, 0) : nullptr;
+  check("equivalent method obligations occupy one constraint slot",
+        open_echo_constrained &&
+            th_var_constraint_count(open_echo_receiver) == 1);
+  check("cloned open method graph resolves repeated receiver occurrences",
+        open_echo_parameter &&
+            th_unify_in_place(inside, open_echo_parameter->type,
+                              consumer_int));
   th_type *ambiguous_call = th_instantiate(inside, deferred_scheme);
   th_type *ambiguous_receiver =
       (th_type *)th_func_param(ambiguous_call, 0)->type;
@@ -1680,6 +1703,103 @@ int main(void) {
             !th_unify_in_place(bad_method_call_context,
                                bad_method_receiver, persisted_box_int));
   th_ctx_free(bad_method_call_context);
+  th_ctx *method_error_context = th_ctx_new();
+  th_ctx_set_environment(method_error_context, persisted_library, "client",
+                         "base");
+  th_type *method_error_receiver = th_var(method_error_context);
+  th_type *method_error_result = th_var(method_error_context);
+  th_type *method_error = th_var(method_error_context);
+  th_param method_error_argument = {
+      .mode = TH_IN, .type = th_name(method_error_context, "int"),
+  };
+  th_type *method_error_call = th_func(method_error_context,
+      method_error_result, &method_error_argument, 1, nullptr, nullptr, 0);
+  bool method_error_required = th_require_method(method_error_context,
+      method_error_receiver, "fetch", method_error_result, method_error_call);
+  bool method_error_connected = th_method_obligation_set_error(
+      method_error_context, method_error_receiver, "fetch",
+      method_error_result, method_error);
+  th_param method_error_parameter = {
+      .mode = TH_IN, .type = method_error_receiver,
+  };
+  th_type *method_error_function = th_func_with_error(method_error_context,
+      method_error_result, method_error, &method_error_parameter, 1,
+      nullptr, nullptr, 0);
+  th_param concrete_method_parameter = {
+      .mode = TH_IN,
+  };
+  th_arg method_error_box_argument = {
+      .kind = TH_ARG_TYPE, .type = th_name(method_error_context, "int"),
+  };
+  th_type *method_error_box = th_apply(method_error_context, "Box",
+                                       &method_error_box_argument, 1);
+  concrete_method_parameter.type = method_error_box;
+  th_type *concrete_method_function = th_func_with_error(method_error_context,
+      th_name(method_error_context, "string"),
+      th_name(method_error_context, "FetchError"),
+      &concrete_method_parameter, 1, nullptr, nullptr, 0);
+  check("copying method obligations connects the failure channel without refining the contract",
+        method_error_required && method_error_connected
+        && th_var_constraint_count(method_error_receiver) == 1
+        && th_unify(method_error_context,
+            method_error_function, concrete_method_function) &&
+        th_kind_of(th_resolve(method_error_receiver)) == TH_VAR &&
+        th_kind_of(th_resolve(method_error_result)) == TH_VAR &&
+        th_kind_of(th_resolve(method_error)) == TH_VAR);
+  th_type *method_error_scheme = th_generalize(method_error_context,
+                                               method_error_function);
+  th_type *method_error_receiver_alias = th_var(method_error_context);
+  th_type *method_error_result_alias = th_var(method_error_context);
+  th_type *method_error_failure_alias = th_var(method_error_context);
+  bool method_error_scheme_aliased = method_error_scheme
+      && th_unify_in_place(method_error_context, method_error_receiver,
+                           method_error_receiver_alias)
+      && th_unify_in_place(method_error_context, method_error_result,
+                           method_error_result_alias)
+      && th_unify_in_place(method_error_context, method_error,
+                           method_error_failure_alias);
+  th_type *method_error_instance = th_instantiate(method_error_context,
+                                                  method_error_scheme);
+  check("instantiated method obligations infer the selected failure channel",
+        method_error_instance && th_unify_in_place(method_error_context,
+            (th_type *)th_func_param(method_error_instance, 0)->type,
+            method_error_box) &&
+        th_unify(method_error_context, th_func_error(method_error_instance),
+                 th_name(method_error_context, "FetchError")) &&
+        !th_unify(method_error_context, th_func_error(method_error_instance),
+                  th_name(method_error_context, "nil")));
+  th_type *independent_method_error_instance = th_instantiate(
+      method_error_context, method_error_scheme);
+  check("quantified method obligations remain independent through variable aliases",
+        method_error_scheme_aliased && independent_method_error_instance
+        && th_kind_of(th_resolve((th_type *)th_func_param(
+               independent_method_error_instance, 0)->type)) == TH_VAR
+        && th_kind_of(th_resolve(th_func_ret(
+               independent_method_error_instance))) == TH_VAR
+        && th_kind_of(th_resolve(th_func_error(
+               independent_method_error_instance))) == TH_VAR);
+  th_type *bad_method_error = th_func_with_error(method_error_context,
+      th_name(method_error_context, "string"),
+      th_name(method_error_context, "int"),
+      &concrete_method_parameter, 1, nullptr, nullptr, 0);
+  check("method obligations reject an incompatible failure channel",
+        !th_unify(method_error_context, method_error_function, bad_method_error));
+  th_type *unary_receiver = th_var(method_error_context);
+  th_type *unary_result = th_var(method_error_context);
+  th_type *unary_error = th_var(method_error_context);
+  th_constraint unary_constraint = {0};
+  bool unary_required = th_require_method(method_error_context,
+      unary_receiver, "negate", unary_result, nullptr);
+  bool unary_connected = th_method_obligation_set_error(method_error_context,
+      unary_receiver, "negate", unary_result, unary_error);
+  check("unary method obligations retain a zero-argument failure channel",
+        unary_required && unary_connected
+        && th_var_constraint_at(unary_receiver, 0, &unary_constraint)
+        && unary_constraint.kind == TH_CON_METHOD
+        && unary_constraint.method.call
+        && th_func_nparams(unary_constraint.method.call) == 0
+        && th_func_error(unary_constraint.method.call) == unary_error);
+  th_ctx_free(method_error_context);
   th_ctx_free(wrong_shape_types);
   check("loaded image preserves type layout and function ABI metadata",
         persisted_library &&

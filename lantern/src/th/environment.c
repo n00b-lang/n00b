@@ -613,6 +613,13 @@ bool th_env_register_trait(th_env *env, const char *name, const char *module,
                                         visibility, methods, nullptr);
 }
 
+static th_type *fresh_pattern(th_ctx *ctx, th_type *type) {
+  if (!ctx || !type) return nullptr;
+  return th_kind_of(th_resolve(type)) == TH_BINDER
+      ? th_instantiate(ctx, type)
+      : th_type_clone(ctx, type);
+}
+
 th_type *th_env_signature_contract(th_ctx *ctx, th_type *signature,
                                    th_type *error_type) {
   if (!ctx || !signature || !error_type) return nullptr;
@@ -629,7 +636,7 @@ th_type *th_env_signature_contract(th_ctx *ctx, th_type *signature,
       ctx, signature->fn.ret, failure, signature->fn.params,
       signature->fn.np, signature->fn.rest, signature->fn.kw,
       signature->fn.nkw);
-  return paired ? th_generalize(ctx, paired) : nullptr;
+  return paired;
 }
 
 static bool signature_channels_raw(th_ctx *ctx, th_type *contract,
@@ -653,7 +660,7 @@ bool th_env_signature_channels(th_ctx *ctx, th_type *contract,
   if (signature) *signature = nullptr;
   if (error_type) *error_type = nullptr;
   return ctx && contract && signature_channels_raw(
-      ctx, th_instantiate(ctx, contract), signature, error_type);
+      ctx, fresh_pattern(ctx, contract), signature, error_type);
 }
 
 bool th_env_register_trait_channels(th_env *env, const char *name,
@@ -1022,7 +1029,7 @@ bool th_env_freeze(th_env *env) {
     th_env_trait_t *trait = &env->traits.data[ti];
     trait->logic_symbol = core_datalog_constant(
         env->logic, core_string_borrow(trait->name, strlen(trait->name)));
-    th_type *methods = th_instantiate(probe, trait->contracts);
+    th_type *methods = fresh_pattern(probe, trait->contracts);
     for (size_t mi = 0; mi < th_record_len(methods); mi++) {
       const th_member *method = th_record_member(methods, mi);
       const th_member *stable_method = th_record_member(trait->contracts, mi);
@@ -1180,12 +1187,12 @@ static bool function_matches(th_ctx *ctx, th_type *receiver,
                              const th_env_trait_t *trait,
                              const th_env_function_t *function,
                              const char *method_name) {
-  th_type *trait_contracts = th_instantiate(ctx, trait->contracts);
-  th_type *function_contract = th_instantiate(ctx, function->contract);
+  th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
+  th_type *function_contract = fresh_pattern(ctx, function->contract);
   th_type *required_contract =
       th_record_lookup(trait_contracts, method_name);
   required_contract = required_contract
-      ? th_instantiate(ctx, required_contract) : nullptr;
+      ? fresh_pattern(ctx, required_contract) : nullptr;
   th_type *provided = nullptr, *provided_error = nullptr;
   th_type *required = nullptr, *required_error = nullptr;
   signature_channels_raw(ctx, required_contract, &required,
@@ -1209,7 +1216,7 @@ static bool function_matches_with_promotion(
   if (function_matches(ctx, receiver, trait, function, method_name))
     return true;
   th_type *signature = nullptr;
-  th_env_signature_channels(ctx, th_instantiate(ctx, function->contract),
+  th_env_signature_channels(ctx, fresh_pattern(ctx, function->contract),
                             &signature, nullptr);
   th_type *promoted_receiver = first_parameter(signature);
   bool promoted = promoted_receiver &&
@@ -1222,12 +1229,12 @@ static bool function_matches_with_promotion(
 static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
                                const th_env_function_t *function,
                                const char *method_name) {
-  th_type *trait_contracts = th_instantiate(ctx, trait->contracts);
-  th_type *function_contract = th_instantiate(ctx, function->contract);
+  th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
+  th_type *function_contract = fresh_pattern(ctx, function->contract);
   th_type *required_contract =
       th_record_lookup(trait_contracts, method_name);
   required_contract = required_contract
-      ? th_instantiate(ctx, required_contract) : nullptr;
+      ? fresh_pattern(ctx, required_contract) : nullptr;
   th_type *required = nullptr, *required_error = nullptr;
   th_type *provided = nullptr, *provided_error = nullptr;
   signature_channels_raw(ctx, required_contract, &required,
@@ -1383,7 +1390,7 @@ bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   if (!trait)
     return false;
-  th_type *methods = th_instantiate(ctx, trait->contracts);
+  th_type *methods = fresh_pattern(ctx, trait->contracts);
   if (!th_record_len(methods))
     return intrinsic_type_matches(ctx, trait, receiver);
   for (size_t m = 0; m < th_record_len(methods); m++) {
@@ -1414,7 +1421,7 @@ th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
       !th_env_implements(ctx, receiver, trait_name))
     return TH_ENV_METHOD_NOT_FOUND;
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
-  th_type *trait_methods = trait ? th_instantiate(ctx, trait->contracts) : nullptr;
+  th_type *trait_methods = trait ? fresh_pattern(ctx, trait->contracts) : nullptr;
   if (!trait_methods || !th_record_lookup(trait_methods, method_name))
     return TH_ENV_METHOD_NOT_FOUND;
   th_env_type_origin_t *origin = receiver_origin(ctx->environment, receiver);
@@ -1432,7 +1439,7 @@ th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
                                          method_name))
       continue;
     th_type *signature = nullptr;
-    th_env_signature_channels(ctx, th_instantiate(ctx, function->contract),
+    th_env_signature_channels(ctx, fresh_pattern(ctx, function->contract),
                               &signature, nullptr);
     th_type *pattern = first_parameter(signature);
     if (pattern)
@@ -1561,7 +1568,7 @@ size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,
   if (!ctx || !ctx->environment || !trait_name || !method_name)
     return 0;
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
-  th_type *methods = trait ? th_instantiate(ctx, trait->contracts) : nullptr;
+  th_type *methods = trait ? fresh_pattern(ctx, trait->contracts) : nullptr;
   if (!methods || !th_record_lookup(methods, method_name))
     return 0;
   core_list_t(th_env_function_ptr_t) candidates =
@@ -1691,8 +1698,7 @@ size_t th_env_method_requirements(
         !th_record_lookup(trait->contracts, method_name))
       continue;
     if (requirements && count < max_requirements) {
-      th_type *scheme = th_generalize(ctx, trait->contracts);
-      th_type *methods = th_instantiate(ctx, scheme);
+      th_type *methods = fresh_pattern(ctx, trait->contracts);
       th_type *contract = th_record_lookup(methods, method_name);
       th_type *signature = nullptr, *error_type = nullptr;
       if (th_env_signature_channels(ctx, contract, &signature, &error_type))

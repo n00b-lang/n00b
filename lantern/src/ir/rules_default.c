@@ -2155,12 +2155,17 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
     }
 
     uint64_t contract_arity = 0;
-    bool generic_contract = callee && th_kind_of(callee) == TH_BINDER
+    bool quantified_contract = callee && th_kind_of(callee) == TH_BINDER
         && th_binder_arity(callee, &contract_arity) && contract_arity > 0;
-    if (callee && th_kind_of(callee) == TH_BINDER && !generic_contract)
-        callee = th_binder_body(callee);
+    if (callee && th_kind_of(callee) == TH_BINDER)
+        callee = quantified_contract
+            ? th_instantiate(ir_ctx_types(m->ctx), callee)
+            : th_binder_body(callee);
+    bool generic_contract = quantified_contract
+        || (callee && !th_is_closed(ir_ctx_types(m->ctx), callee));
     if (generic_contract) {
-        th_type *instance = th_instantiate(ir_ctx_types(m->ctx), callee);
+        th_type *instance = quantified_contract
+            ? callee : th_type_clone(ir_ctx_types(m->ctx), callee);
         th_type *call_signature = ir_instr_call_signature(in);
         if (!instance) return DECLINE;
         if (!call_signature) {

@@ -2154,6 +2154,48 @@ static void test_generic_callable_contracts(void)
     close_env(e);
 }
 
+static void test_open_callable_contracts(void)
+{
+    env *e = open_env(&ir_profile_bce, "i32");
+    th_ctx *types = ir_ctx_types(e->ctx);
+    th_type *value_type = th_var(types);
+    th_type *failure_type = th_var(types);
+    th_param parameter = {.mode = TH_IN, .type = value_type};
+    th_type *open_body = th_func_with_error(types, value_type, failure_type,
+                                            &parameter, 1, nullptr, nullptr, 0);
+    ir_func_t *open_function = open_body
+        ? ir_func_add(e->m, "open_identity", open_body, IR_LINK_EXTERNAL)
+        : nullptr;
+    bool contract_set = open_function
+        && ir_func_set_callable_contract(open_function, open_body);
+    ir_value_t *open_function_value = open_function
+        ? ir_func_address(e->m, open_function) : nullptr;
+    ir_instr_t *call = op(e, IR_OP_CALL);
+    if (call) {
+        ir_instr_set_dest(call, "open_identity_integer",
+                          ir_type_parse(e->m, "i32"));
+        ir_instr_operand_value(call, open_function_value);
+        ir_instr_operand_value(call, val(e, "i32"));
+        ir_instr_set_call_signature(call,
+            ir_type_parse(e->m, "(i32) -> i32 fail: void"));
+    }
+    ir_verdict_t verdict = open_function_value && call
+        ? apply(e, call) : IR_RULE_REJECT;
+    check("an open callable contract specializes from its call signature",
+          contract_set
+              && ir_func_callable_contract(open_function) == open_body
+              && open_function_value->type == open_body
+              && verdict == IR_RULE_ACCEPT);
+    if (verdict != IR_RULE_ACCEPT) {
+        char *errors = ir_diags_render_text(e->d, nullptr);
+        if (errors) { printf("  %s", errors); free(errors); }
+    }
+    check("open call specialization does not refine the callable contract",
+          th_kind_of(th_resolve(value_type)) == TH_VAR
+              && th_kind_of(th_resolve(failure_type)) == TH_VAR);
+    close_env(e);
+}
+
 static void test_comptime_and_terminators(void)
 {
     env *e = open_env(&ir_profile_bce, "i32");
@@ -3139,6 +3181,7 @@ int main(void)
     test_select_phi_call();
     test_phase_result_type();
     test_generic_callable_contracts();
+    test_open_callable_contracts();
     test_comptime_and_terminators();
     test_second_profile();
     test_constants_are_target_independent();

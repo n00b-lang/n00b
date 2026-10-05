@@ -287,6 +287,11 @@ bool   th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c);
  * receiver; `result` is unified with the selected method's return type. */
 bool   th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
                          th_type *result, th_type *call);
+/* Connect an existing deferred method-call obligation to its enclosing
+ * failure channel without adding a second method constraint. */
+bool   th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
+                                      const char *name, th_type *result,
+                                      th_type *error);
 size_t th_var_constraint_count(const th_type *var);
 bool   th_var_constraint_at(const th_type *var, size_t i, th_constraint *out);
 /* Recheck method obligations deferred until an environment is attached.
@@ -348,6 +353,8 @@ bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);
 th_type *th_apply_subst(th_ctx *ctx, th_type *type);
 /* Unifies fresh copies of both inputs; neither input is constrained. */
 th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b);
+/* Probes unification on fresh copies without retaining failure diagnostics. */
+th_type *th_unify_probe(th_ctx *ctx, th_type *a, th_type *b);
 /* Constrains the original monomorphic variables; failure may leave bindings. */
 th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b);
 th_type *th_instantiate(th_ctx *ctx, th_type *type);

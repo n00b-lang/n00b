@@ -41,6 +41,40 @@ static void leave_constraint_scope(th_ctx *ctx, constraint_scope_t previous)
     ctx->package = previous.package;
 }
 
+static bool same_text(const char *a, const char *b)
+{
+    return !strcmp(a ? a : "", b ? b : "");
+}
+
+static bool environment_constraint_active(th_ctx *ctx, th_con_kind kind,
+                                          const char *name,
+                                          th_type *receiver)
+{
+    uint64_t receiver_hash = th_hash(ctx, receiver);
+    for (size_t i = 0; i < ctx->active_environment_constraints.len; i++) {
+        const th_active_constraint_t *active =
+            &ctx->active_environment_constraints.data[i];
+        if (active->kind == kind && active->receiver_hash == receiver_hash
+            && same_text(active->name, name)
+            && same_text(active->module, ctx->module)
+            && same_text(active->package, ctx->package)) return true;
+    }
+    return false;
+}
+
+static void push_environment_constraint(th_ctx *ctx, th_con_kind kind,
+                                        const char *name, th_type *receiver)
+{
+    core_list_push(ctx->active_environment_constraints,
+        ((th_active_constraint_t){
+            .kind = kind,
+            .name = name,
+            .module = ctx->module,
+            .package = ctx->package,
+            .receiver_hash = th_hash(ctx, receiver),
+        }));
+}
+
 static bool iface_name_seen(core_list_t(iface_name_ptr) *names,
                             const char *name)
 {
@@ -51,6 +85,17 @@ static bool iface_name_seen(core_list_t(iface_name_ptr) *names,
     }
     core_list_push(*names, name);
     return false;
+}
+
+static bool same_constraint_scope(const th_constraint *a,
+                                  const th_constraint *b)
+{
+    if (a->has_scope != b->has_scope) return false;
+    return !a->has_scope
+        || (!strcmp(a->scope_module ? a->scope_module : "",
+                    b->scope_module ? b->scope_module : "")
+            && !strcmp(a->scope_package ? a->scope_package : "",
+                       b->scope_package ? b->scope_package : ""));
 }
 
 static th_constraint *con_same_slot(th_type *var, th_constraint c)
@@ -71,9 +116,70 @@ static th_constraint *con_same_slot(th_type *var, th_constraint c)
             return e;
         }
 
+        if (c.kind == TH_CON_IMPLEMENTS && e->iface && c.iface &&
+            !strcmp(e->iface, c.iface) && same_constraint_scope(e, &c)) {
+            return e;
+        }
+
+        if (c.kind == TH_CON_METHOD && e->method.name && c.method.name &&
+            !strcmp(e->method.name, c.method.name)
+            && same_constraint_scope(e, &c)) {
+            return e;
+        }
+
     }
 
     return nullptr;
+}
+
+static bool same_method_type_ref(th_ctx *ctx, th_type *a, th_type *a_owner,
+                                 th_type *b, th_type *b_owner)
+{
+    th_type *resolved_a = th_resolve(a);
+    th_type *resolved_b = th_resolve(b);
+    return resolved_a == resolved_b
+        || (resolved_a == th_resolve(a_owner)
+            && resolved_b == th_resolve(b_owner))
+        || (th_is_closed(ctx, resolved_a) && th_is_closed(ctx, resolved_b)
+            && th_hash(ctx, resolved_a) == th_hash(ctx, resolved_b));
+}
+
+static bool same_method_obligation(th_ctx *ctx, const th_constraint *a,
+                                   th_type *a_owner,
+                                   const th_constraint *b, th_type *b_owner)
+{
+    if (!same_method_type_ref(ctx, a->method.result, a_owner,
+                              b->method.result, b_owner)) return false;
+    th_type *a_call = th_resolve(a->method.call);
+    th_type *b_call = th_resolve(b->method.call);
+    if (!a_call || !b_call) return a_call == b_call;
+    if (a_call->kind != TH_FUNCTION || b_call->kind != TH_FUNCTION
+        || a_call->fn.np != b_call->fn.np
+        || a_call->fn.nkw != b_call->fn.nkw
+        || !!a_call->fn.rest != !!b_call->fn.rest
+        || !!a_call->fn.error != !!b_call->fn.error
+        || !same_method_type_ref(ctx, a_call->fn.ret, a_owner,
+                                 b_call->fn.ret, b_owner)) return false;
+    if (a_call->fn.error
+        && !same_method_type_ref(ctx, a_call->fn.error, a_owner,
+                                 b_call->fn.error, b_owner)) return false;
+    for (size_t i = 0; i < a_call->fn.np; i++)
+        if (a_call->fn.params[i].mode != b_call->fn.params[i].mode
+            || !same_method_type_ref(ctx, a_call->fn.params[i].type, a_owner,
+                                     b_call->fn.params[i].type, b_owner))
+            return false;
+    if (a_call->fn.rest
+        && (a_call->fn.rest->mode != b_call->fn.rest->mode
+            || !same_method_type_ref(ctx, a_call->fn.rest->type, a_owner,
+                                     b_call->fn.rest->type, b_owner)))
+        return false;
+    for (size_t i = 0; i < a_call->fn.nkw; i++)
+        if (strcmp(a_call->fn.kw[i].name, b_call->fn.kw[i].name)
+            || a_call->fn.kw[i].mode != b_call->fn.kw[i].mode
+            || !same_method_type_ref(ctx, a_call->fn.kw[i].type, a_owner,
+                                     b_call->fn.kw[i].type, b_owner))
+            return false;
+    return true;
 }
 
 bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
@@ -96,6 +202,8 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
             c.has_scope = true;
         }
         c.method.name = th_strdup(ctx, c.method.name, strlen(c.method.name));
+        th_constraint *slot = con_same_slot(var, c);
+        if (slot && same_method_obligation(ctx, slot, var, &c, var)) return true;
         core_list_push(var->var.cons, c);
         return true;
     }
@@ -103,6 +211,8 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
     th_constraint *slot = con_same_slot(var, c);
 
     if (slot) {
+        if (c.kind == TH_CON_IMPLEMENTS) return true;
+
         th_type *have = c.kind == TH_CON_HAS_FIELD ? slot->field.type
                                                    : slot->param.type;
         th_type *want = c.kind == TH_CON_HAS_FIELD ? c.field.type
@@ -161,6 +271,56 @@ bool th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
         return false;
     return is_variable ||
            th_unify_in_place(ctx, obligation, receiver) != nullptr;
+}
+
+bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
+                                    const char *name, th_type *result,
+                                    th_type *error)
+{
+    if (!ctx || !receiver || !name || !*name || !result || !error)
+        return false;
+    th_type *variable = th_resolve(receiver);
+    if (th_kind_of(variable) != TH_VAR) return false;
+    th_constraint *match = nullptr;
+    size_t named_count = 0;
+    for (size_t i = 0; i < variable->var.cons.len; i++) {
+        th_constraint *constraint = &variable->var.cons.data[i];
+        if (constraint->kind != TH_CON_METHOD
+            || strcmp(constraint->method.name, name)) continue;
+        named_count++;
+        if (th_resolve(constraint->method.result) == th_resolve(result)) {
+            match = constraint;
+            break;
+        }
+    }
+    if (!match && named_count == 1)
+        for (size_t i = 0; i < variable->var.cons.len; i++) {
+            th_constraint *constraint = &variable->var.cons.data[i];
+            if (constraint->kind == TH_CON_METHOD
+                && !strcmp(constraint->method.name, name)) {
+                match = constraint;
+                break;
+            }
+        }
+    if (!match) return false;
+    th_type *call = th_resolve(match->method.call);
+    if (!call) {
+        call = th_func_with_error(ctx, match->method.result, error, nullptr, 0,
+                                  nullptr, nullptr, 0);
+        if (!call) return false;
+        match->method.call = call;
+        return true;
+    }
+    if (th_kind_of(call) != TH_FUNCTION) return false;
+    th_type *existing = th_func_error(call);
+    if (existing)
+        return th_unify_in_place(ctx, existing, error) != nullptr;
+    th_type *connected = th_func_with_error(ctx, th_func_ret(call), error,
+        call->fn.params, call->fn.np, call->fn.rest,
+        call->fn.kw, call->fn.nkw);
+    if (!connected) return false;
+    match->method.call = connected;
+    return true;
 }
 
 size_t th_var_constraint_count(const th_type *var)
@@ -637,7 +797,13 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
 
     if (bt && bt->kind == TH_VAR) {
         for (size_t i = 0; i < var->var.cons.len; i++) {
-            if (!th_var_constrain(ctx, bt, var->var.cons.data[i])) {
+            th_constraint constraint = var->var.cons.data[i];
+            th_constraint *slot = con_same_slot(bt, constraint);
+            if (constraint.kind == TH_CON_METHOD && slot) {
+                if (same_method_obligation(ctx, slot, bt, &constraint,
+                                           (th_type *)var)) continue;
+            }
+            if (!th_var_constrain(ctx, bt, constraint)) {
                 return false;
             }
         }
@@ -794,7 +960,15 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                 break;
             }
             constraint_scope_t previous = enter_constraint_scope(ctx, c);
+            if (environment_constraint_active(ctx, TH_CON_IMPLEMENTS,
+                                              c->iface, bound_to)) {
+                leave_constraint_scope(ctx, previous);
+                break;
+            }
+            push_environment_constraint(ctx, TH_CON_IMPLEMENTS, c->iface,
+                                        bound_to);
             bool implements = th_implements(ctx, bound_to, c->iface);
+            ctx->active_environment_constraints.len--;
             leave_constraint_scope(ctx, previous);
             if (!implements) {
                 th_err(ctx, TH_ERR_CONSTRAINT, c->iface, nullptr, bound_to,
@@ -810,20 +984,37 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                 break;
             }
             constraint_scope_t previous = enter_constraint_scope(ctx, c);
+            if (environment_constraint_active(ctx, TH_CON_METHOD,
+                                              c->method.name, bound_to)) {
+                leave_constraint_scope(ctx, previous);
+                break;
+            }
+            push_environment_constraint(ctx, TH_CON_METHOD, c->method.name,
+                                        bound_to);
             th_env_method_t method = {0};
             th_env_method_status_t status = th_env_method_resolve_by_name(
                 ctx, bound_to, c->method.name, &method, nullptr);
-            leave_constraint_scope(ctx, previous);
             th_type *signature = status == TH_ENV_METHOD_FOUND
-                ? th_instantiate(ctx, method.signature) : nullptr;
+                ? method.signature : nullptr;
             const th_param *receiver =
                 signature ? th_func_param(signature, 0) : nullptr;
-            bool matches = receiver && th_func_ret(signature);
+            th_type *method_result = signature ? th_func_ret(signature)
+                                               : nullptr;
+            bool matches = receiver && method_result;
             if (matches) {
-                matches = uni(ctx, receiver->type, bound_to, seen) &&
-                    uni(ctx, c->method.result, th_func_ret(signature), seen);
+                matches = uni(ctx, receiver->type, bound_to, seen);
+                bool self_result = c->method.result == var
+                    && method_result == receiver->type;
+                if (matches && !self_result)
+                    matches = uni(ctx, c->method.result, method_result, seen);
             }
             th_type *call = c->method.call;
+            th_type *call_error = call ? th_func_error(call) : nullptr;
+            if (matches && call_error) {
+                th_type *target_error = th_func_error(signature);
+                if (!target_error) target_error = th_name(ctx, "nil");
+                matches = uni(ctx, call_error, target_error, seen);
+            }
             size_t call_nparams = call ? th_func_nparams(call) : 0;
             size_t target_nparams = signature
                 ? th_func_nparams(signature) : 0;
@@ -845,6 +1036,8 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                 matches = actual && formal &&
                     uni(ctx, actual->type, formal->type, seen);
             }
+            ctx->active_environment_constraints.len--;
+            leave_constraint_scope(ctx, previous);
             if (!matches) {
                 th_err(ctx, TH_ERR_CONSTRAINT, c->method.name,
                        c->method.result, bound_to,
@@ -1796,9 +1989,12 @@ static void uni_seen_free(core_dict_t *seen)
 
 th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)
 {
-    th_type *ia     = th_instantiate(ctx, th_generalize(ctx, a));
-    th_type *ib     = th_instantiate(ctx, th_generalize(ctx, b));
+    if (!ctx || !a || !b) return nullptr;
+    th_type *ia     = th_type_clone(ctx, a);
+    th_type *ib     = th_type_clone(ctx, b);
     size_t   before = th_error_count(ctx);
+
+    if (!ia || !ib) return nullptr;
 
     if (!uni_in_place(ctx, ia, ib)) {
         if (th_error_count(ctx) == before) {
@@ -1814,6 +2010,15 @@ th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)
     th_normalize(r);
 
     return r;
+}
+
+th_type *th_unify_probe(th_ctx *ctx, th_type *a, th_type *b)
+{
+    if (!ctx || !a || !b) return nullptr;
+    size_t before = th_error_count(ctx);
+    th_type *result = th_unify(ctx, a, b);
+    if (!result) ctx->errors.len = before;
+    return result;
 }
 
 th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b)
@@ -1877,7 +2082,8 @@ static bool inst_constraint_subst(th_ctx *ctx, th_type *t, uint64_t depth,
     (void)memo;
     if (t->kind != TH_VAR) return false;
     for (uint64_t i = 0; i < s->arity; i++) {
-        if (s->qvars && s->qvars[i] == t) {
+        if (s->qvars && (s->qvars[i] == t
+            || th_resolve(s->qvars[i]) == t)) {
             *out = s->fresh[i];
             return true;
         }

@@ -182,6 +182,19 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
     return shape;
 }
 
+static bool
+call_has_member_callee(ictx *c, parse_tree_t *call)
+{
+    if (!node_is(c->v->grammar, call, "postfix-expr")
+        || !core_tree_num_children(call)) return false;
+    parse_tree_t *callee = core_tree_child(call, 0);
+    return node_is(c->v->grammar, callee, "postfix-expr")
+        && core_tree_num_children(callee) >= 3
+        && core_tree_is_leaf(core_tree_child(callee, 1))
+        && parse_tree_leaf_is(core_tree_child(callee, 1),
+                              CORE_STRING_STATIC("."));
+}
+
 static th_type *method_call_shape(ictx *c, th_type *result)
 {
     parse_tree_t *parent = method_call_parent(c);
@@ -366,6 +379,34 @@ static bool unify_method_call_shape(ictx *c, th_type *signature,
             ? th_func_kw_lookup(signature, actual->name) : nullptr;
         if (!actual || !formal ||
             !th_unify_in_place(c->tc, actual->type, formal->type))
+            return false;
+    }
+    return true;
+}
+
+static bool
+unify_function_call_shape(ictx *c, th_type *signature, th_type *call_shape)
+{
+    size_t actual_count = th_func_nparams(call_shape);
+    size_t formal_count = th_func_nparams(signature);
+    const th_param *rest = th_func_rest(signature);
+    if (actual_count > formal_count && !rest) return false;
+    for (size_t i = 0; i < actual_count; i++) {
+        const th_param *actual = th_func_param(call_shape, i);
+        const th_param *formal = i < formal_count
+            ? th_func_param(signature, i) : rest;
+        if (!actual || !formal || !th_unify_probe(
+                c->tc, formal->type, actual->type)
+            || !th_unify_in_place(c->tc, formal->type, actual->type))
+            return false;
+    }
+    for (size_t i = 0; i < th_func_nkw(call_shape); i++) {
+        const th_kwparam *actual = th_func_kw(call_shape, i);
+        const th_kwparam *formal = actual
+            ? th_func_kw_lookup(signature, actual->name) : nullptr;
+        if (!actual || !formal || !th_unify_probe(
+                c->tc, formal->type, actual->type)
+            || !th_unify_in_place(c->tc, formal->type, actual->type))
             return false;
     }
     return true;
@@ -636,6 +677,25 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
     case PARSE_INFER_RETURN_OF: {
         th_type *result = fresh(c);
         th_type *shape = call_shape(c, c->v->node, result);
+        th_type *resolved = th_resolve(t);
+        if (resolved && th_kind_of(resolved) == TH_FUNCTION
+            && call_has_member_callee(c, c->v->node)) {
+            th_type *ret = th_func_ret(resolved);
+            return ret ? ret : result;
+        }
+        th_type *instance = resolved && th_kind_of(resolved) == TH_BINDER
+            ? th_instantiate(c->tc, resolved)
+            : resolved && th_kind_of(resolved) == TH_FUNCTION
+                ? th_type_clone(c->tc, resolved) : nullptr;
+        if (instance && th_kind_of(instance) == TH_FUNCTION) {
+            th_type *isolated_shape = shape
+                ? th_type_clone(c->tc, shape) : nullptr;
+            if (isolated_shape)
+                (void)unify_function_call_shape(c, instance,
+                                                isolated_shape);
+            th_type *ret = th_func_ret(instance);
+            return ret ? ret : result;
+        }
         if (!shape) {
             th_type *r = th_func_ret(t);
             if (r) return r;
@@ -643,11 +703,6 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             return kind == TH_NAMED || kind == TH_RECORD ? t : fresh(c);
         }
 
-        th_type *resolved = th_resolve(t);
-        if (resolved && th_kind_of(resolved) == TH_FUNCTION) {
-            th_type *ret = th_func_ret(resolved);
-            return ret ? ret : result;
-        }
         if (!resolved || th_kind_of(resolved) != TH_VAR ||
             !th_unify_in_place(c->tc, t, shape)) {
             c->failed = true;

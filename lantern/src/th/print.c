@@ -576,6 +576,35 @@ static void emit_where(pctx *c, core_buffer_t *b, th_type *type)
     }
 }
 
+static void emit_free_where(pctx *c, core_buffer_t *b, th_type *type)
+{
+    const th_type *root = th_resolve_c(type);
+    if (!root || root->kind == TH_BINDER) return;
+    if (root->kind == TH_VAR) {
+        emit_where(c, b, type);
+        return;
+    }
+
+    th_type **vars = nullptr;
+    size_t nvars = th_free_vars(c->ctx, type, &vars);
+    bool started = false;
+
+    for (size_t i = 0; i < nvars; i++) {
+        const th_type *var = th_resolve_c(vars[i]);
+        if (!var || var->kind != TH_VAR || !var->var.cons.len) continue;
+
+        core_buffer_puts(b, started ? ", `" : " where `");
+        if (var->var.has_index) varname(b, 0, var->var.index);
+        else core_buffer_puts(b, var->var.name ? var->var.name : "t");
+        core_buffer_puts(b, ": ");
+        for (size_t j = 0; j < var->var.cons.len; j++) {
+            if (j) core_buffer_puts(b, " + ");
+            emit_constraint(c, b, &var->var.cons.data[j]);
+        }
+        started = true;
+    }
+}
+
 static void emit_binder_where(pctx *c, core_buffer_t *b, th_type *type)
 {
     const th_type *scheme = th_resolve_c(type);
@@ -613,7 +642,7 @@ const char *th_print(th_ctx *ctx, th_type *type)
     core_buffer_t b = {0};
 
     emit(&c, &b, type);
-    emit_where(&c, &b, type);
+    emit_free_where(&c, &b, type);
     emit_binder_where(&c, &b, type);
 
     if (!b.data) {

@@ -163,13 +163,18 @@ ir_value_t *ir_func_address(ir_module_t *m, ir_func_t *function)
 bool
 ir_func_set_callable_contract(ir_func_t *function, th_type *contract)
 {
-    if (!function || !function->owner || !function->owner->ctx || !contract
-        || th_kind_of(contract) != TH_BINDER)
+    if (!function || !function->owner || !function->owner->ctx || !contract)
         return false;
-    th_type *instance = th_instantiate(function->owner->ctx->types,
-                                       contract);
+    th_ctx *types = function->owner->ctx->types;
+    th_type *resolved = th_resolve(contract);
+    if (!resolved || (th_kind_of(resolved) != TH_BINDER
+                      && th_kind_of(resolved) != TH_FUNCTION))
+        return false;
+    th_type *instance = th_kind_of(resolved) == TH_BINDER
+        ? th_instantiate(types, resolved)
+        : th_type_clone(types, resolved);
     if (!instance || th_kind_of(instance) != TH_FUNCTION
-        || !th_unify(function->owner->ctx->types, instance, function->type))
+        || !th_unify_probe(types, instance, function->type))
         return false;
     return ir_annot_set(function->owner->ctx, &function->annots,
         (ir_annot_t){
@@ -186,7 +191,9 @@ ir_func_callable_contract(const ir_func_t *function)
         ? ir_annot_get((ir_annots_t *)&function->annots,
                        "ir.callable_contract") : nullptr;
     return annotation && annotation->kind == IR_ANNOT_TYPE
-        && annotation->t && th_kind_of(annotation->t) == TH_BINDER
+        && annotation->t
+        && (th_kind_of(th_resolve(annotation->t)) == TH_BINDER
+            || th_kind_of(th_resolve(annotation->t)) == TH_FUNCTION)
         ? annotation->t : nullptr;
 }
 

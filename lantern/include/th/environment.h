@@ -193,14 +193,16 @@ bool th_env_register_trait(th_env *environment, const char *qualified_name,
                            const char *module, const char *package,
                            th_env_visibility_t visibility, th_type *methods);
 /* `methods` and `errors` are records with the same method names. The error
- * entries are attached to each function type before the methods are
- * generalized together. */
+ * entries are attached to each function type before the reusable method
+ * patterns are registered together. */
 bool th_env_register_trait_channels(
     th_env *environment, const char *qualified_name, const char *module,
     const char *package, th_env_visibility_t visibility, th_type *methods,
     th_type *errors);
-/* The method map holds jointly quantified function types, including their
- * failure channels, with each value built by th_env_signature_contract(). */
+/* The method map holds reusable function-type patterns, including their
+ * failure channels, with each value built by th_env_signature_contract().
+ * Matching clones open graphs; explicit binders remain supported for
+ * frontends that choose to provide them. */
 bool th_env_register_trait_contracts(
     th_env *environment, const char *qualified_name, const char *module,
     const char *package, th_env_visibility_t visibility,
