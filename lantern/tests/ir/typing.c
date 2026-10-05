@@ -961,6 +961,22 @@ static void test_aggregates_and_variants(void)
     check("type.narrow extracts the requested union member",
           accepts_as(e, tn, "i32"));
 
+    th_type *dynamic_type = th_var(ir_ctx_types(e->ctx));
+    ir_value_t *dynamic_value = ir_param_add(e->f, "dynamic", dynamic_type);
+    ir_instr_t *dynamic_test = op(e, IR_OP_TYPE_TEST);
+    ir_instr_operand_value(dynamic_test, dynamic_value);
+    ir_instr_operand_type(dynamic_test, ir_type_parse(e->m, "string"));
+    check("type.test accepts a concrete member of a constrained value",
+          accepts_as(e, dynamic_test, "bool"));
+
+    ir_instr_t *dynamic_narrow = op(e, IR_OP_TYPE_NARROW);
+    ir_instr_set_dest(dynamic_narrow, "dynamic_narrowed",
+                      ir_type_parse(e->m, "string"));
+    ir_instr_operand_value(dynamic_narrow, dynamic_value);
+    ir_instr_operand_type(dynamic_narrow, ir_type_parse(e->m, "string"));
+    check("type.narrow extracts a concrete constrained value",
+          accepts_as(e, dynamic_narrow, "string"));
+
     ir_instr_t *tnbad = op(e, IR_OP_TYPE_NARROW);
     ir_instr_set_dest(tnbad, "bad_narrow", ir_type_parse(e->m, "u64"));
     ir_instr_operand_value(tnbad, val(e, "i32 | string"));
@@ -2357,6 +2373,15 @@ static void test_comptime_and_terminators(void)
     check("returning nothing from a non-void function is rejected",
           apply(e, rnone) == IR_RULE_REJECT);
 
+    env *generic = open_env(&ir_profile_bce, "i32");
+    generic->f->type = ir_type_parse(generic->m, "() -> `a");
+    ir_instr_t *generic_return = op(generic, IR_OP_RETURN);
+    ir_instr_operand_value(generic_return, val(generic, "i32"));
+    check("return copy-unifies a generic result without refining it",
+          accepts_as(generic, generic_return, nullptr)
+              && th_kind_of(th_resolve(th_func_ret(generic->f->type)))
+                  == TH_VAR);
+
     env *v = open_env(&ir_profile_bce, "void");
 
     ir_instr_t *rv = op(v, IR_OP_RETURN);
@@ -2382,8 +2407,20 @@ static void test_comptime_and_terminators(void)
     check("fail rejects a value with the wrong failure type",
           apply(failing, wrong_failure) == IR_RULE_REJECT);
 
+    env *generic_failure = open_env(&ir_profile_bce, "i32");
+    generic_failure->f->type = ir_type_parse(generic_failure->m,
+                                             "() -> i32 fail: `e");
+    ir_instr_t *generic_fail = op(generic_failure, IR_OP_FAIL);
+    ir_instr_operand_value(generic_fail, val(generic_failure, "string"));
+    check("fail copy-unifies a generic failure channel without refining it",
+          accepts_as(generic_failure, generic_fail, nullptr)
+              && th_kind_of(th_resolve(
+                    th_func_error(generic_failure->f->type))) == TH_VAR);
+
     close_env(v);
+    close_env(generic);
     close_env(failing);
+    close_env(generic_failure);
     close_env(e);
 }
 

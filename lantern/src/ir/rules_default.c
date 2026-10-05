@@ -1871,6 +1871,8 @@ static bool type_test_source(ir_module_t *m, th_type *source,
 {
     if (!source || !target) return false;
     if (ir_type_eq(m, source, target)) return true;
+    if (th_kind_of(th_resolve(source)) == TH_VAR)
+        return th_unify(ir_ctx_types(m->ctx), source, target) != nullptr;
     th_comb target_comb;
     if (th_sum_comb(target, &target_comb) && target_comb == TH_UNION) {
         for (size_t i = 0; i < th_sum_len(target); i++)
@@ -2730,7 +2732,8 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
 
-    if (!is_void && !same(m, ir_type_intern(m, ret), opd_type(in, 0))) {
+    if (!is_void
+        && !call_arg_matches(m, TH_IN, ret, opd_type(in, 0))) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
                            "%s returns %s, and this value is %s", f->name,
                            typed(m, ir_type_intern(m, ret)),
@@ -2793,7 +2796,7 @@ static ir_rule_result_t rule_fail(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
     if (in->n_operands != 1
-        || !same(m, ir_type_intern(m, error), opd_type(in, 0))) {
+        || !call_arg_matches(m, TH_IN, error, opd_type(in, 0))) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this failure value",
                  "%s fails with %s, but this value is %s",
                  function->name, typed(m, ir_type_intern(m, error)),
