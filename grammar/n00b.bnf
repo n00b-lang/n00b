@@ -346,11 +346,13 @@
 
 <expression> @emit("identity", $0) ::= <or-expr>
 
-<or-expr> @infer("bool") ::= <or-expr> %"or" <and-expr>
+<or-expr> @branch($0, $2) @infer("bool") ::= <or-expr> %"or" <or-rhs>
 <or-expr> @emit("identity", $0) ::= <and-expr>
+<or-rhs> @emit("identity", $0) ::= <and-expr>
 
-<and-expr> @infer("bool") ::= <and-expr> %"and" <equality-expr>
+<and-expr> @branch($0, $2) @infer("bool") ::= <and-expr> %"and" <and-rhs>
 <and-expr> @emit("identity", $0) ::= <equality-expr>
+<and-rhs> @emit("identity", $0) ::= <equality-expr>
 
 <equality-expr> @emit("binary", $0, $2) @infer("bool") ::=
     <compare-expr> <equality-op> <compare-expr>

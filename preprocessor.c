@@ -1615,7 +1615,7 @@ static bool
 validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
 {
     static const char *allowed[] = {
-        "expression", "or-expr", "and-expr", "equality-expr",
+        "expression", "or-expr", "and-expr", "or-rhs", "and-rhs", "equality-expr",
         "compare-expr", "bitor-expr", "bitxor-expr", "bitand-expr",
         "shift-expr", "add-expr", "mul-expr", "unary-expr",
         "postfix-expr", "primary", "literal-expr", "tuple-or-paren",

@@ -1,0 +1,31 @@
+func generic_equal(left: `T, right: `T) -> bool where `T: Equal {
+    return left == right
+}
+
+func generic_less(left: `T, right: `T) -> bool where `T: Comparable {
+    return left < right
+}
+
+func compare_int(left: int, right: int) -> bool {
+    return generic_equal(left, right) and generic_less(left, right)
+}
+
+func compare_bool(left: bool, right: bool) -> bool {
+    return generic_equal(left, right)
+}
+
+func compare_string(left: string, right: string) -> bool {
+    return generic_equal(left, right) and generic_less(left, right)
+}
+
+func compare_float(left: float, right: float) -> bool {
+    return generic_equal(left, right) and generic_less(left, right)
+}
+
+func compare_sized(left: i:7, right: i:7) -> bool {
+    return generic_equal(left, right) and generic_less(left, right)
+}
+
+func compare_bits(left: bits:513, right: bits:513) -> bool {
+    return generic_equal(left, right) and generic_less(left, right)
+}

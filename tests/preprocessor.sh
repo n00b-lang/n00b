@@ -4619,6 +4619,48 @@ grep -Fq 'call_signature((`b, `c) -> `a fail: `d)' \
 grep -Fq 'call_signature((`b) -> `a fail: `c)' \
     "$tmp/operator_generic_builtin.ir"
 "$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_primitive_comparison_traits.n00b" \
+    >"$tmp/operator_primitive_comparison_traits.ir" 2>&1 || {
+    cat "$tmp/operator_primitive_comparison_traits.ir"
+    echo 'primitive comparison traits did not satisfy generic calls' >&2
+    exit 1
+}
+for type in int bool string f64 'bitint[7]' 'ubitint[513]'; do
+    grep -Fq "call_signature(($type, $type) -> bool fail: nil)" \
+        "$tmp/operator_primitive_comparison_traits.ir"
+done
+grep -q 'trait.method "Comparable", "__cmp"' \
+    "$tmp/operator_primitive_comparison_traits.ir"
+grep -q 'trait.method "Equal", "__equal"' \
+    "$tmp/operator_primitive_comparison_traits.ir"
+if "$compiler" lower \
+    "$script_dir/programs/operator_primitive_bool_order_rejected.n00b" \
+    >"$tmp/operator_primitive_bool_order_rejected.out" 2>&1; then
+    echo 'bool unexpectedly satisfied Comparable' >&2
+    exit 1
+fi
+grep -q 'constraint implements: interface not satisfied' \
+    "$tmp/operator_primitive_bool_order_rejected.out"
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_boolean_short_circuit.n00b" \
+    >"$tmp/operator_boolean_short_circuit.ir" 2>&1 || {
+    cat "$tmp/operator_boolean_short_circuit.ir"
+    echo 'short-circuit boolean operators did not lower' >&2
+    exit 1
+}
+grep -q 'branch %left, __n00bb_if_then_1, __n00bb_if_join_0' \
+    "$tmp/operator_boolean_short_circuit.ir"
+grep -q 'branch %left, __n00bb_if_join_0, __n00bb_if_then_1' \
+    "$tmp/operator_boolean_short_circuit.ir"
+if "$compiler" lower \
+    "$script_dir/programs/operator_boolean_wrong_argument.n00b" \
+    >"$tmp/operator_boolean_wrong_argument.out" 2>&1; then
+    echo 'logical operator accepted an integer operand' >&2
+    exit 1
+fi
+grep -q 'logical operands must be bool' \
+    "$tmp/operator_boolean_wrong_argument.out"
+"$compiler" lower --dump-ir \
     "$script_dir/programs/operator_unary_traits.n00b" \
     >"$tmp/operator_unary_traits.ir" 2>&1 || {
     cat "$tmp/operator_unary_traits.ir"
