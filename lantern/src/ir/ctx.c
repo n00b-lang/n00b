@@ -824,14 +824,14 @@ size_t ir_call_output_count(th_type *callable)
     size_t output_count = 0;
     for (size_t i = 0; i < th_func_nparams(callable); i++) {
         const th_param *parameter = th_func_param(callable, i);
-        if (parameter && parameter->mode != TH_IN) output_count++;
+        if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
     }
     for (size_t i = 0; i < th_func_nkw(callable); i++) {
         const th_kwparam *parameter = th_func_kw(callable, i);
-        if (parameter && parameter->mode != TH_IN) output_count++;
+        if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
     }
     const th_param *rest = th_func_rest(callable);
-    if (rest && rest->mode != TH_IN) output_count++;
+    if (rest && th_mode_produces_output(rest->mode)) output_count++;
     return output_count;
 }
 
@@ -841,18 +841,19 @@ th_type *ir_call_output_type(th_type *callable, size_t output_index)
     if (!callable || th_kind_of(callable) != TH_FUNCTION) return nullptr;
     for (size_t i = 0; i < th_func_nparams(callable); i++) {
         const th_param *parameter = th_func_param(callable, i);
-        if (parameter && parameter->mode != TH_IN) {
+        if (parameter && th_mode_produces_output(parameter->mode)) {
             if (!output_index--) return parameter->type;
         }
     }
     for (size_t i = 0; i < th_func_nkw(callable); i++) {
         const th_kwparam *parameter = th_func_kw(callable, i);
-        if (parameter && parameter->mode != TH_IN) {
+        if (parameter && th_mode_produces_output(parameter->mode)) {
             if (!output_index--) return parameter->type;
         }
     }
     const th_param *rest = th_func_rest(callable);
-    return rest && rest->mode != TH_IN && !output_index ? rest->type : nullptr;
+    return rest && th_mode_produces_output(rest->mode) && !output_index
+        ? rest->type : nullptr;
 }
 
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)

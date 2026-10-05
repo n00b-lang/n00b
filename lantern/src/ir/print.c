@@ -616,7 +616,12 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
 
     for (uint32_t i = 0; i < f->n_params; i++) {
         if (f->params[i]->is_keyword || f->params[i]->is_rest) continue;
-        core_buffer_printf(b, "%s%%%s: ", first ? "" : ", ", f->params[i]->name);
+        const th_param *parameter = th_func_param(f->type, i);
+        core_buffer_printf(b, "%s", first ? "" : ", ");
+        if (parameter && parameter->mode != TH_IN)
+            core_buffer_printf(b, "%s ", parameter->mode == TH_OUT ? "out"
+                : parameter->mode == TH_INOUT ? "inout" : "consume");
+        core_buffer_printf(b, "%%%s: ", f->params[i]->name);
         put_type(b, m, f->params[i]->type);
         put_annots(b, m, ir_value_annots(f->params[i]));
         first = false;
@@ -625,7 +630,11 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
     if (!f->n_params) {
         for (size_t i = 0; i < th_func_nparams(f->type); i++) {
             const th_param *parameter = th_func_param(f->type, i);
-            core_buffer_printf(b, "%s%%arg%zu: ", first ? "" : ", ", i);
+            core_buffer_printf(b, "%s", first ? "" : ", ");
+            if (parameter->mode != TH_IN)
+                core_buffer_printf(b, "%s ", parameter->mode == TH_OUT ? "out"
+                    : parameter->mode == TH_INOUT ? "inout" : "consume");
+            core_buffer_printf(b, "%%arg%zu: ", i);
             put_type(b, m, parameter->type);
             if (ir_func_parameter_is_optional(f, (uint32_t)i))
                 core_buffer_puts(b, " !ir.optional_parameter(true)");
@@ -636,7 +645,11 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
     const th_param *rest = th_func_rest(f->type);
 
     if (rest) {
-        core_buffer_printf(b, "%s*", first ? "" : ", ");
+        core_buffer_printf(b, "%s", first ? "" : ", ");
+        if (rest->mode != TH_IN)
+            core_buffer_printf(b, "%s ", rest->mode == TH_OUT ? "out"
+                : rest->mode == TH_INOUT ? "inout" : "consume");
+        core_buffer_puts(b, "*");
         ir_value_t *rest_value = nullptr;
         for (uint32_t i = 0; i < f->n_params; i++)
             if (f->params[i]->is_rest) rest_value = f->params[i];

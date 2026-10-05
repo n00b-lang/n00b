@@ -210,7 +210,8 @@ bool ir_func_set_parameter_optional(ir_func_t *function, uint32_t index,
 {
     if (!function || index >= function->n_optional_parameters) return false;
     const th_param *parameter = th_func_param(function->type, index);
-    if (!parameter || (optional && parameter->mode != TH_IN)) return false;
+    if (!parameter || (optional && !th_mode_is_input_only(parameter->mode)))
+        return false;
     function->optional_parameters[index] = optional;
     return true;
 }

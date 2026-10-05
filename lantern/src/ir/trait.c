@@ -296,14 +296,14 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
   size_t output_count = 0;
   for (size_t i = 0; i < count; i++) {
     const th_param *parameter = th_func_param(implementation->type, i);
-    if (parameter && parameter->mode != TH_IN) output_count++;
+    if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
   }
   for (size_t i = 0; i < th_func_nkw(implementation->type); i++) {
     const th_kwparam *parameter = th_func_kw(implementation->type, i);
-    if (parameter && parameter->mode != TH_IN) output_count++;
+    if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
   }
   const th_param *implementation_rest = th_func_rest(implementation->type);
-  if (implementation_rest && implementation_rest->mode != TH_IN)
+  if (implementation_rest && th_mode_produces_output(implementation_rest->mode))
     output_count++;
   bool carries_result = !returns_void || output_count;
   if (!call || (carries_result &&
@@ -339,7 +339,7 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
   size_t output_index = 0;
   for (size_t i = 0; i < count; i++) {
     const th_param *parameter = th_func_param(implementation->type, i);
-    if (!parameter || parameter->mode == TH_IN) continue;
+    if (!parameter || !th_mode_produces_output(parameter->mode)) continue;
     char output_name[48];
     snprintf(output_name, sizeof(output_name), "trait_output_%zu", i);
     ir_value_t *output = adapter_call_output(module, entry, call->dest,
@@ -355,7 +355,7 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
   }
   for (size_t i = 0; i < th_func_nkw(implementation->type); i++) {
     const th_kwparam *parameter = th_func_kw(implementation->type, i);
-    if (!parameter || parameter->mode == TH_IN) continue;
+    if (!parameter || !th_mode_produces_output(parameter->mode)) continue;
     char output_name[48];
     snprintf(output_name, sizeof(output_name), "trait_keyword_output_%zu", i);
     ir_value_t *output = adapter_call_output(module, entry, call->dest,
@@ -363,7 +363,8 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
     if (!output) return nullptr;
     return_outputs[return_output_count++] = output;
   }
-  if (implementation_rest && implementation_rest->mode != TH_IN) {
+  if (implementation_rest
+      && th_mode_produces_output(implementation_rest->mode)) {
     ir_value_t *output = adapter_call_output(module, entry, call->dest,
         implementation_rest->type, output_index, "trait_rest_output");
     if (!output) return nullptr;

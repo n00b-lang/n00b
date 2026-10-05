@@ -59,10 +59,10 @@
 
 <func-param-pos>  @nospace($2) ::= <param-mode>? <value> %":" <typelang-type> <meta>*
 <func-param-kw>   @nospace($1) ::= <name> %":" <typelang-type> <meta>*
-<func-param-rest> @nospace($1) ::= %"*" <value> %":" <typelang-type> <meta>*
-                                    | %"*" <typelang-type>
+<func-param-rest> @nospace($2) ::= <param-mode>? %"*" <value> %":" <typelang-type> <meta>*
+                                    | <param-mode>? %"*" <typelang-type>
 
-<param-mode> ::= %"in" | %"out" | %"inout"
+<param-mode> ::= %"in" | %"out" | %"inout" | %"consume"
 
 <local> @nospace($3) ::=
 <mutability>? %"local" <local-ref> %":" <typelang-type> <init>? <meta>* <nl>
@@ -177,7 +177,7 @@
          | %"source" | %"inlined" | %"expanded" | %"lowered" | %"generated"
          | %"true" | %"false"
          | %"set" | %"dict"
-         | %"in" | %"out" | %"inout"
+         | %"in" | %"out" | %"inout" | %"consume"
          | %"fresh"
          | %"array" | %"bitint" | %"ubitint" | %"exclusive" | %"forall"
          | %"i" | %"u"

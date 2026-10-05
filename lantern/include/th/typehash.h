@@ -38,7 +38,28 @@ typedef enum : uint8_t {
     TH_IN = 0,
     TH_OUT,
     TH_INOUT,
+    TH_CONSUME,
 } th_mode;
+
+static inline bool th_mode_is_valid(th_mode mode)
+{
+    return mode <= TH_CONSUME;
+}
+
+static inline bool th_mode_accepts_input(th_mode mode)
+{
+    return mode == TH_IN || mode == TH_INOUT || mode == TH_CONSUME;
+}
+
+static inline bool th_mode_produces_output(th_mode mode)
+{
+    return mode == TH_OUT || mode == TH_INOUT;
+}
+
+static inline bool th_mode_is_input_only(th_mode mode)
+{
+    return mode == TH_IN || mode == TH_CONSUME;
+}
 
 typedef enum : uint8_t {
     TH_UNION = 0,

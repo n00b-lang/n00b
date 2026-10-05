@@ -2666,7 +2666,9 @@ test_part_two_rejections(void)
 static void
 test_pass_by_modes(void)
 {
-    static const char *const MODES[] = {"in", "out", "inout", "ref"};
+    static const char *const MODES[] = {
+        "in", "out", "inout", "ref", "consume"
+    };
     bool all_load = true;
     for (size_t i = 0; i < sizeof(MODES) / sizeof(MODES[0]); i++) {
         core_buffer_t grammar_text = {0};
@@ -2682,7 +2684,7 @@ test_pass_by_modes(void)
         parse_grammar_free(g);
         core_buffer_release(&grammar_text);
     }
-    check("pass_by accepts in, out, inout, and ref values", all_load);
+    check("pass_by accepts all parameter passing modes", all_load);
 }
 
 int

@@ -495,6 +495,7 @@ annot_direction(parse_visit_t *v)
         {CORE_STRING_STATIC("out"),   TH_OUT  },
         {CORE_STRING_STATIC("inout"), TH_INOUT},
         {CORE_STRING_STATIC("modify"), TH_INOUT},
+        {CORE_STRING_STATIC("consume"), TH_CONSUME},
     };
 
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
@@ -515,7 +516,9 @@ annot_pass_by(parse_visit_t *v)
     actx_t *a = v->thunk;
     parse_sym_entry_t *sym = subject(a, v);
     core_string_t mode = v->annot->pass_by;
-    static const char *const allowed[] = {"in", "out", "inout", "ref"};
+    static const char *const allowed[] = {
+        "in", "out", "inout", "ref", "consume"
+    };
 
     if (!sym || !mode.data) return true;
     for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {

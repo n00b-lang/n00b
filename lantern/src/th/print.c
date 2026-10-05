@@ -50,7 +50,13 @@ static const struct {
 
 static const char *mode_name(th_mode m)
 {
-    return m == TH_OUT ? "out " : m == TH_INOUT ? "inout " : "";
+    switch (m) {
+    case TH_OUT:     return "out ";
+    case TH_INOUT:   return "inout ";
+    case TH_CONSUME: return "consume ";
+    case TH_IN:      return "";
+    }
+    return "";
 }
 
 typedef struct {

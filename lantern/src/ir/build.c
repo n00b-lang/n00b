@@ -890,7 +890,10 @@ static void *r_mode(parse_reduce_t *r)
     ib_node *n = kid(r, 0);
 
     if (n) {
-        n->uval = rule_of(r) == 1 ? TH_OUT : rule_of(r) == 2 ? TH_INOUT : TH_IN;
+        n->uval = rule_of(r) == 1 ? TH_OUT
+            : rule_of(r) == 2 ? TH_INOUT
+            : rule_of(r) == 3 ? TH_CONSUME
+            : TH_IN;
     }
 
     return n;
@@ -1778,6 +1781,12 @@ static void *r_param(parse_reduce_t *r)
     B       *b = r->thunk;
     ib_node *n = nd(b, IB_PARAM, cover(r));
     n->l1 = rep(r, CORE_STRING_STATIC("meta"));
+    parse_reduce_list_t *mode = rep(r, CORE_STRING_STATIC("param-mode"));
+    n->uval = TH_IN;
+    if (mode && mode->n) {
+        ib_node *md = unwrap(mode->v[0]);
+        n->uval = md ? md->uval : TH_IN;
+    }
 
     if (parse_tree_is_nt(r->grammar, r->node,
                          CORE_STRING_STATIC("func-param-rest"))) {
@@ -1790,7 +1799,6 @@ static void *r_param(parse_reduce_t *r)
         return n;
     }
 
-    parse_reduce_list_t *mode = rep(r, CORE_STRING_STATIC("param-mode"));
     ib_node             *who  = at(r, CORE_STRING_STATIC("value"))
                                     ? at(r, CORE_STRING_STATIC("value"))
                                     : at(r, CORE_STRING_STATIC("name"));
@@ -1799,14 +1807,6 @@ static void *r_param(parse_reduce_t *r)
     n->refkind = who && who->kind == IB_REF ? IR_VAL_INSTR : IR_VAL_GLOBAL;
     n->type =
         type_of(b, raw_at(r, CORE_STRING_STATIC("typelang-type")), n->span);
-    n->uval = TH_IN;
-
-    if (mode && mode->n) {
-        ib_node *md = unwrap(mode->v[0]);
-
-        n->uval = md ? md->uval : TH_IN;
-    }
-
     return n;
 }
 
@@ -2326,7 +2326,7 @@ static void *r_func(parse_reduce_t *r)
         }
 
         if (p->neg) {
-            rest     = (th_param){.mode = TH_IN, .type = p->type};
+            rest     = (th_param){.mode = (th_mode)p->uval, .type = p->type};
             has_rest = true;
         } else if (p->refkind == IR_VAL_GLOBAL) {
             core_list_push(kws, ((th_kwparam){.name = p->text,

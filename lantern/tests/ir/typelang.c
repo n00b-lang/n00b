@@ -189,6 +189,28 @@ static void test_n00b_function_failure_channel(void)
     ir_ctx_free(ctx);
 }
 
+static void test_consume_parameter_mode(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    th_ctx *th = ir_ctx_types(ctx);
+    char *err = nullptr;
+    th_type *fn = ir_typelang_parse(th, "(consume int) -> void", &err);
+    const th_param *parameter = fn ? th_func_param(fn, 0) : nullptr;
+    const char *printed = fn ? th_print(th, fn) : nullptr;
+    th_type *roundtrip = printed ? ir_typelang_parse(th, printed, &err)
+                                 : nullptr;
+
+    if (!parameter || parameter->mode != TH_CONSUME || !printed
+        || strcmp(printed, "(consume int) -> void") != 0 || !roundtrip
+        || th_unify(th, fn, roundtrip) == nullptr) {
+        printf("FAIL  consume parameter mode round-trip: %s\n",
+               err ? err : (printed ? printed : "missing type"));
+        fails++;
+    }
+    free(err);
+    ir_ctx_free(ctx);
+}
+
 static void test_plain_function_type(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -348,6 +370,7 @@ int main(int argc, char **argv)
     test_large_binder_is_not_truncated();
     test_bitslice_prefix_types();
     test_n00b_function_failure_channel();
+    test_consume_parameter_mode();
     test_nonsense_is_refused();
     ir_typelang_shutdown();
 

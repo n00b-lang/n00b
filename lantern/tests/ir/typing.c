@@ -1957,6 +1957,19 @@ static void test_select_phi_call(void)
                             ir_type_parse(e->m, "i32"))
               && apply(e, outc) == IR_RULE_ACCEPT);
 
+    ir_value_t *consume = ir_alloc(e->ctx, sizeof(ir_value_t));
+    consume->kind = IR_VAL_FUNC;
+    consume->name = "consume";
+    consume->type = ir_type_parse(e->m, "(consume u64) -> void");
+    ir_instr_t *consume_call = op(e, IR_OP_CALL);
+    ir_instr_operand_value(consume_call, consume);
+    ir_instr_operand_value(consume_call, val(e, "u64"));
+    ir_instr_set_dest(consume_call, "consume_result",
+                      ir_type_parse(e->m, "void"));
+    check("consume accepts an input without creating a copy-out",
+          ir_call_output_count(consume->type) == 0
+              && apply(e, consume_call) == IR_RULE_ACCEPT);
+
     ir_instr_t *first_output = op(e, IR_OP_CALL_OUTPUT);
     ir_instr_operand_value(first_output, outc->dest);
     ir_instr_operand_uint(first_output, 0);

@@ -2278,7 +2278,8 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
             }
             bool optional = callee_function
                 && ir_func_parameter_is_optional(callee_function, given);
-            if (!parameter || parameter->mode != TH_IN || !optional) {
+            if (!parameter || !th_mode_is_input_only(parameter->mode)
+                || !optional) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in,
                          "this omitted argument",
                          "an omitted call argument must match an optional "
@@ -2748,14 +2749,14 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
     size_t output_count = 0;
     for (size_t i = 0; i < th_func_nparams(f->type); i++) {
         const th_param *parameter = th_func_param(f->type, i);
-        if (parameter && parameter->mode != TH_IN) output_count++;
+        if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
     }
     for (size_t i = 0; i < th_func_nkw(f->type); i++) {
         const th_kwparam *parameter = th_func_kw(f->type, i);
-        if (parameter && parameter->mode != TH_IN) output_count++;
+        if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
     }
     const th_param *rest = th_func_rest(f->type);
-    if (rest && rest->mode != TH_IN) output_count++;
+    if (rest && th_mode_produces_output(rest->mode)) output_count++;
     uint32_t result_offset = is_void ? 0 : 1;
     if (in->n_operands != result_offset + output_count) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this return",
@@ -2778,7 +2779,7 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
     uint32_t output_index = result_offset;
     for (size_t i = 0; i < th_func_nparams(f->type); i++) {
         const th_param *parameter = th_func_param(f->type, i);
-        if (!parameter || parameter->mode == TH_IN) continue;
+        if (!parameter || !th_mode_produces_output(parameter->mode)) continue;
         if (!same(m, ir_type_intern(m, parameter->type),
                   opd_type(in, output_index))) {
             complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this copy-out value",
@@ -2792,7 +2793,7 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
     }
     for (size_t i = 0; i < th_func_nkw(f->type); i++) {
         const th_kwparam *parameter = th_func_kw(f->type, i);
-        if (!parameter || parameter->mode == TH_IN) continue;
+        if (!parameter || !th_mode_produces_output(parameter->mode)) continue;
         if (!same(m, ir_type_intern(m, parameter->type),
                   opd_type(in, output_index))) {
             complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this copy-out value",
@@ -2804,7 +2805,7 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
         }
         output_index++;
     }
-    if (rest && rest->mode != TH_IN
+    if (rest && th_mode_produces_output(rest->mode)
         && !same(m, ir_type_intern(m, rest->type),
                  opd_type(in, output_index))) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this copy-out value",

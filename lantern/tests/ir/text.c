@@ -425,6 +425,27 @@ static void test_function_failure_channel_round_trips(void)
     ir_ctx_free(ctx);
 }
 
+static void test_consume_parameters_round_trip(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    const char *src =
+        "module consume_params {\n"
+        "  profile bce\n"
+        "  func @take(consume %first: i32, consume *%rest: i32) -> void {\n"
+        "    block entry:\n"
+        "      return\n"
+        "  }\n"
+        "}\n";
+    char *printed = nullptr;
+    bool ok = round_trips(ctx, src, &printed);
+    check("consume positional and rest modes round-trip in IR text",
+          ok && printed
+              && strstr(printed, "consume %first: i32")
+              && strstr(printed, "consume *%rest: i32"));
+    free(printed);
+    ir_ctx_free(ctx);
+}
+
 static void test_phase_result_text_round_trips(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -2039,6 +2060,7 @@ int main(int argc, char **argv)
     test_types_are_typelang();
     test_trait_method_round_trips();
     test_function_failure_channel_round_trips();
+    test_consume_parameters_round_trip();
     test_phase_result_text_round_trips();
     test_variant_type_definition_round_trips();
     test_mutability_round_trips();

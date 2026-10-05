@@ -295,7 +295,8 @@ static void *read_array(core_object_reader_t *reader, size_t count,
 
 static bool read_mode(core_object_reader_t *reader, th_mode *mode) {
   uint32_t value;
-  if (!core_object_reader_u32(reader, &value) || value > TH_INOUT)
+  if (!core_object_reader_u32(reader, &value) ||
+      !th_mode_is_valid((th_mode)value))
     return false;
   *mode = (th_mode)value;
   return true;

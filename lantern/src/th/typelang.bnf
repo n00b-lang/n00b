@@ -97,6 +97,6 @@
           | <mode>? %IDENTIFIER %":" <mode>? <union-type>
           | <mode>? <union-type>
 
-<mode> ::= %"in" | %"out" | %"inout"
+<mode> ::= %"in" | %"out" | %"inout" | %"consume"
 
 <rest-param> @nospace($1) ::= %"*" <union-type>
