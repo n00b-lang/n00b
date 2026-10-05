@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
+#include "ir/doms.h"
 #include "ir/walk.h"
 
 #include "lib/list.h"
@@ -13,6 +14,8 @@ typedef struct {
 } slot_t;
 
 core_list_decl(slot_t);
+typedef ir_func_t *ir_walk_func_ptr_t;
+core_list_decl(ir_walk_func_ptr_t);
 
 typedef core_list_t(slot_t) chain_t;
 
@@ -128,6 +131,58 @@ void ir_walk_stop(ir_walk_t *w)
 bool ir_walk_stopped(ir_walk_t *w)
 {
     return w && w->stopped;
+}
+
+bool
+ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
+                            ir_reachable_func_fn visit, void *user)
+{
+    if ((!roots && root_count) || !visit) return false;
+    core_list_t(ir_walk_func_ptr_t) functions =
+        core_list_new(ir_walk_func_ptr_t);
+    for (size_t i = 0; i < root_count; i++) {
+        if (!roots[i]) {
+            core_list_free(functions);
+            return false;
+        }
+        bool seen = false;
+        for (size_t j = 0; j < functions.len; j++)
+            seen |= functions.data[j] == roots[i];
+        if (!seen) core_list_push(functions, roots[i]);
+    }
+    for (size_t i = 0; i < functions.len; i++) {
+        ir_func_t *function = functions.data[i];
+        if (!visit(function, user)) {
+            core_list_free(functions);
+            return false;
+        }
+        ir_doms_t *doms = function->n_blocks ? ir_doms_of(function) : nullptr;
+        if (function->n_blocks && !doms) {
+            core_list_free(functions);
+            return false;
+        }
+        for (size_t b = 0; b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            if (!ir_block_reachable(doms, block)) continue;
+            for (size_t n = 0; n < block->n_instrs; n++) {
+                ir_instr_t *instruction = block->instrs[n];
+                if (!instruction || instruction->op != IR_OP_CALL
+                    || !instruction->n_operands
+                    || instruction->operands[0].kind != IR_OPD_VALUE)
+                    continue;
+                ir_value_t *callee = instruction->operands[0].value;
+                ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
+                    ? callee->owner : nullptr;
+                if (!target) continue;
+                bool seen = false;
+                for (size_t j = 0; j < functions.len; j++)
+                    seen |= functions.data[j] == target;
+                if (!seen) core_list_push(functions, target);
+            }
+        }
+    }
+    core_list_free(functions);
+    return true;
 }
 
 static void run_into(chain_t *c, ir_visit_t *v, bool pre, bool reverse,

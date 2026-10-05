@@ -355,6 +355,61 @@ static void test_an_instruction_visitor_can_skip_operands(void)
     ir_ctx_free(ctx);
 }
 
+typedef struct {
+    ir_func_t *functions[4];
+    size_t count;
+} closure_t;
+
+static bool collect_reachable_function(ir_func_t *function, void *user)
+{
+    closure_t *closure = user;
+    if (closure->count == 4) return false;
+    closure->functions[closure->count++] = function;
+    return true;
+}
+
+static void test_reachable_function_walk_follows_only_live_direct_calls(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *module = ir_module_new(ctx, "closure", &ir_profile_bce,
+                                        "host");
+    th_type *signature = ir_type_parse(module, "() -> void");
+    ir_func_t *root = ir_func_add(module, "root", signature,
+                                  IR_LINK_EXTERNAL);
+    ir_func_t *middle = ir_func_add(module, "middle", signature,
+                                    IR_LINK_INTERNAL);
+    ir_func_t *leaf = ir_func_add(module, "leaf", signature,
+                                  IR_LINK_INTERNAL);
+    ir_func_t *dead = ir_func_add(module, "dead", signature,
+                                  IR_LINK_INTERNAL);
+    ir_block_t *root_entry = ir_block_add(root, "entry");
+    ir_block_t *root_dead = ir_block_add(root, "dead");
+    ir_block_t *middle_entry = ir_block_add(middle, "entry");
+    ir_block_t *leaf_entry = ir_block_add(leaf, "entry");
+    ir_block_t *dead_entry = ir_block_add(dead, "entry");
+    ir_instr_t *root_call = ir_instr_add(root_entry, IR_OP_CALL);
+    ir_instr_t *dead_call = ir_instr_add(root_dead, IR_OP_CALL);
+    ir_instr_t *middle_call = ir_instr_add(middle_entry, IR_OP_CALL);
+    bool built = root_call && dead_call && middle_call
+        && ir_instr_operand_value(root_call, ir_func_address(module, middle))
+        && ir_instr_operand_value(dead_call, ir_func_address(module, dead))
+        && ir_instr_operand_value(middle_call, ir_func_address(module, leaf))
+        && ir_instr_add(root_entry, IR_OP_RETURN)
+        && ir_instr_add(root_dead, IR_OP_RETURN)
+        && ir_instr_add(middle_entry, IR_OP_RETURN)
+        && ir_instr_add(leaf_entry, IR_OP_RETURN)
+        && ir_instr_add(dead_entry, IR_OP_RETURN);
+    closure_t closure = {0};
+    check("reachable-function walking follows live direct calls transitively",
+          built && ir_walk_reachable_functions(&root, 1,
+              collect_reachable_function, &closure)
+              && closure.count == 3
+              && closure.functions[0] == root
+              && closure.functions[1] == middle
+              && closure.functions[2] == leaf);
+    ir_ctx_free(ctx);
+}
+
 int main(void)
 {
     test_the_walk_reaches_every_node();
@@ -364,6 +419,7 @@ int main(void)
     test_visitors_stack_in_one_pass();
     test_one_visitor_refusing_children_affects_all();
     test_an_instruction_visitor_can_skip_operands();
+    test_reachable_function_walk_follows_only_live_direct_calls();
 
     return report("ir walk");
 }
