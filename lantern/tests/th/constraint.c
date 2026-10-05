@@ -37,6 +37,28 @@ static void test_one_of(th_ctx *ctx)
 
     check("one_of accepts a listed type", binds(ctx, c, b));
     check("one_of rejects an unlisted type", !binds(ctx, c, s));
+
+    th_type *integers = th_var(ctx);
+    check("one_of alternative can describe a structural family",
+          th_var_constrain(ctx, integers,
+              (th_constraint){.kind = TH_CON_KIND, .type_kind = TH_BITINT}));
+    th_type *families[] = {integers, b};
+    th_constraint family = {.kind = TH_CON_ONE_OF,
+        .one_of = {.types = families, .n = 2}};
+    size_t errors = th_error_count(ctx);
+    check("one_of matches arbitrary members of a structural family",
+          binds(ctx, family, th_bitint(ctx, 7, true))
+              && binds(ctx, family, th_bitint(ctx, 513, false)));
+    check("one_of failed alternatives do not produce diagnostics",
+          binds(ctx, family, b) && th_error_count(ctx) == errors);
+    check("one_of probes do not refine the alternative",
+          th_kind_of(th_resolve(integers)) == TH_VAR);
+    check("one_of family rejects unrelated types", !binds(ctx, family, s));
+    th_type *variable = th_var(ctx);
+    check("one_of family survives generalization and copying",
+          th_var_constrain(ctx, variable, family)
+              && th_unify(ctx, th_instantiate(ctx, th_generalize(ctx, variable)),
+                          th_bitint(ctx, 257, false)));
 }
 
 static void test_excludes(th_ctx *ctx)

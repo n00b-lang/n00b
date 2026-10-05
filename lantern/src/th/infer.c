@@ -678,6 +678,18 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                 }
                 else {
                     matched = bt == cand;
+                    if (!matched) {
+                        size_t error_count = ctx->errors.len;
+                        size_t pending_count =
+                            ctx->pending_environment_constraints.len;
+                        const char *previous_error = ctx->err;
+                        matched = th_unify(ctx, (th_type *)bt,
+                                            (th_type *)cand) != nullptr;
+                        ctx->errors.len = error_count;
+                        if (!matched)
+                            ctx->pending_environment_constraints.len = pending_count;
+                        ctx->err = previous_error;
+                    }
                 }
             }
 
