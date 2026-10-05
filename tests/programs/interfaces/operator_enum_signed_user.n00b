@@ -1,0 +1,9 @@
+import operator_enum_signed_dep
+
+func negative() -> operator_enum_signed_dep.Signed {
+    return operator_enum_signed_dep.Signed.negative
+}
+
+func following() -> operator_enum_signed_dep.Signed {
+    return operator_enum_signed_dep.Signed.following
+}

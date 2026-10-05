@@ -4694,6 +4694,42 @@ grep -q 'this cast has no defined conversion' \
 }
 grep -q ': int = nominal.cast ' "$tmp/operator_nominal_archive_user.ir"
 "$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_enum_signed.n00b" \
+    >"$tmp/operator_enum_signed.ir" 2>&1 || {
+    cat "$tmp/operator_enum_signed.ir"
+    echo 'signed enum constants did not lower' >&2
+    exit 1
+}
+grep -q 'enum.const "negative", -7' "$tmp/operator_enum_signed.ir"
+grep -q 'enum.const "following", -6' "$tmp/operator_enum_signed.ir"
+grep -q 'enum.const "zero", 0' "$tmp/operator_enum_signed.ir"
+grep -q 'enum.const "positive", 7' "$tmp/operator_enum_signed.ir"
+grep -q 'enum.const "across_zero", 0' "$tmp/operator_enum_signed.ir"
+grep -q 'enum.const "after_zero", 1' "$tmp/operator_enum_signed.ir"
+if "$compiler" lower \
+    "$script_dir/programs/operator_enum_noninteger_rejected.n00b" \
+    >"$tmp/operator_enum_noninteger_rejected.out" 2>&1; then
+    echo 'enum accepted a noninteger item value' >&2
+    exit 1
+fi
+grep -q 'enum item value must be an integer literal' \
+    "$tmp/operator_enum_noninteger_rejected.out"
+"$compiler" library --emit-interface "$tmp/operator_enum_signed.n00bi" \
+    "$script_dir/programs/interfaces/operator_enum_signed_dep.n00b" \
+    >"$tmp/operator_enum_signed_archive.out" 2>&1 || {
+    cat "$tmp/operator_enum_signed_archive.out"
+    exit 1
+}
+"$compiler" lower --dump-ir \
+    --link-interface "$tmp/operator_enum_signed.n00bi" \
+    "$script_dir/programs/interfaces/operator_enum_signed_user.n00b" \
+    >"$tmp/operator_enum_signed_user.ir" 2>&1 || {
+    cat "$tmp/operator_enum_signed_user.ir"
+    exit 1
+}
+grep -q 'enum.const "negative", -7' "$tmp/operator_enum_signed_user.ir"
+grep -q 'enum.const "following", -6' "$tmp/operator_enum_signed_user.ir"
+"$compiler" lower --dump-ir \
     "$script_dir/programs/operator_byte_cast.n00b" \
     >"$tmp/operator_byte_cast.ir" 2>&1 || {
     cat "$tmp/operator_byte_cast.ir"

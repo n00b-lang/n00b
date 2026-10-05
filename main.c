@@ -606,6 +606,7 @@ typedef struct {
 
 typedef struct {
     ir_uint_t magnitude;
+    bool negative;
 } n00bb_enum_value_t;
 
 typedef enum {
@@ -9190,7 +9191,8 @@ n00bb_emit_comparison_test(ir_lower_context_t *context, ir_value_t *value,
     if (!constant || !test || !bool_type
         || !ir_instr_set_dest(constant, constant_name, member->type)
         || !ir_instr_operand_name(constant, member->name.data)
-        || !ir_instr_operand_uint(constant, ordinal->magnitude)
+        || !ir_instr_operand_int_lit(constant,
+            (ir_lit_t){.mag = ordinal->magnitude, .neg = ordinal->negative})
         || !ir_instr_set_dest(test, test_name, bool_type)
         || !ir_instr_operand_value(test, value)
         || !ir_instr_operand_value(test, constant->dest))
@@ -12356,7 +12358,8 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                  (unsigned long long)context->next_value_id++);
         if (!constant || !ir_instr_set_dest(constant, name, result_type)
             || !ir_instr_operand_name(constant, member->name.data)
-            || !ir_instr_operand_uint(constant, value->magnitude))
+            || !ir_instr_operand_int_lit(constant,
+                (ir_lit_t){.mag = value->magnitude, .neg = value->negative}))
             return lower_error(context, IR_DIAG_INTERNAL, span,
                 "could not emit the enum constant");
         constant->span = span;
@@ -21516,7 +21519,8 @@ diagnose_known_missing_record_fields(n00bb_link_analysis_t *analysis)
             if (!scope || !owner) continue;
             core_string_t member = first_token_text(core_tree_child(node, 2));
             parse_sym_entry_t *field = parse_symtab_lookup_in(scope, member);
-            if (field && field->is_field) continue;
+            if (field && (field->is_field
+                          || field->kind == PARSE_SYM_ENUM_CONST)) continue;
             core_buffer_t message = {0};
             core_buffer_printf(&message,
                 "record type has no field named '%.*s'",
@@ -21638,7 +21642,8 @@ resolve_inferred_field_references(core_link_unit_t *link,
                                                                member);
             bool external_field = field && field->owner_type
                 && tu_state(owner)->interface_module;
-            if (!field || !field->is_field
+            bool enum_constant = field && field->kind == PARSE_SYM_ENUM_CONST;
+            if (!field || (!field->is_field && !enum_constant)
                 || (!field->decl_node && !external_field)) {
                 core_buffer_t message = {0};
                 core_buffer_printf(&message,
@@ -21664,7 +21669,8 @@ resolve_inferred_field_references(core_link_unit_t *link,
                 return false;
             }
 
-            th_type *member_type = th_record_lookup_in(state->types,
+            th_type *member_type = enum_constant ? field->type
+                : th_record_lookup_in(state->types,
                                                        receiver_type,
                                                         member.data);
             if (!member_type) {
@@ -27907,7 +27913,7 @@ interface_enum_values_metadata(locate_worker_context_t *loader,
 
 static bool
 decode_interface_enum_value(const uint8_t *data, size_t size,
-                            const char *member_name, ir_uint_t *value)
+                            const char *member_name, n00bb_enum_value_t *value)
 {
     if (!data || size < 8 || memcmp(data, "N0EV", 4)) return false;
     size_t offset = 4;
@@ -27921,16 +27927,18 @@ decode_interface_enum_value(const uint8_t *data, size_t size,
         if (name_size > size - offset) return false;
         const uint8_t *name = data + offset;
         offset += name_size;
-        if (offset > size || size - offset < 16) return false;
+        if (offset > size || size - offset < 17) return false;
         ir_uint_t decoded = read_u64_le(data + offset);
         offset += 8;
         decoded |= (ir_uint_t)read_u64_le(data + offset) << 64;
         offset += 8;
+        uint8_t negative = data[offset++];
+        if (negative > 1 || (negative && !decoded)) return false;
         if (strlen(member_name) == name_size &&
             !memcmp(name, member_name, name_size)) {
             if (found) return false;
             found = true;
-            if (value) *value = decoded;
+            if (value) *value = (n00bb_enum_value_t){decoded, negative != 0};
         }
     }
     return offset == size && found;
@@ -28061,41 +28069,23 @@ register_enum_values_metadata(parse_grammar_t *grammar,
     core_buffer_t data = {0};
     core_buffer_append(&data, "N0EV", 4);
     bool ok = append_u32_le(&data, (uint32_t)count);
-    ir_uint_t previous = 0;
+    n00bb_enum_value_t previous = {0};
     bool have_previous = false;
     for (size_t index = items.len; ok && index > 0; index--) {
         parse_sym_entry_t *item = items.data[index - 1];
-        ir_uint_t value = 0;
-        parse_tree_t *explicit_value = child_nt(grammar, item->decl_node,
-                                                 "enum-value");
-        if (explicit_value) {
-            parse_tree_t *literal = child_nt(grammar, explicit_value,
-                                              "simple-lit");
-            parse_token_info_t *token = literal
-                ? parse_tree_find_first_terminal(literal) : nullptr;
-            core_string_t terminal = token
-                ? parse_terminal_name(grammar, token->tid) : (core_string_t){0};
-            if (!literal || (!core_string_eq(terminal,
-                    CORE_STRING_STATIC("INT_LIT"))
-                    && !core_string_eq(terminal,
-                    CORE_STRING_STATIC("HEX_LIT")))) {
-                ok = false;
-                break;
-            }
-            ir_lit_t parsed = {0};
-            if (!n00bb_parse_switch_integer(first_token_text(literal),
-                                             &parsed) || parsed.neg) {
-                ok = false;
-                break;
-            }
-            value = parsed.mag;
-        }
+        n00bb_enum_value_t value = {0};
+        if (item->has_comptime_value && item->comptime_value)
+            value = *(n00bb_enum_value_t *)item->comptime_value;
         else if (have_previous) {
-            if (previous == ~(ir_uint_t)0) {
+            if (previous.negative) {
+                value.magnitude = previous.magnitude - 1;
+                value.negative = value.magnitude != 0;
+            }
+            else if (previous.magnitude == ~(ir_uint_t)0) {
                 ok = false;
                 break;
             }
-            value = previous + 1;
+            else value.magnitude = previous.magnitude + 1;
         }
         n00bb_enum_value_t *stored = core_arena_alloc(
             &state->semantic_values, sizeof(*stored));
@@ -28103,15 +28093,19 @@ register_enum_values_metadata(parse_grammar_t *grammar,
             ok = false;
             break;
         }
-        stored->magnitude = value;
+        *stored = value;
         item->comptime_value = stored;
         item->has_comptime_value = true;
         size_t name_size = item->name.u8_bytes;
         ok = name_size <= UINT32_MAX && append_u32_le(&data,
             (uint32_t)name_size);
         if (ok) core_buffer_append(&data, item->name.data, name_size);
-        ok = ok && append_u64_le(&data, (uint64_t)value)
-                && append_u64_le(&data, (uint64_t)(value >> 64));
+        ok = ok && append_u64_le(&data, (uint64_t)value.magnitude)
+                && append_u64_le(&data, (uint64_t)(value.magnitude >> 64));
+        if (ok) {
+            char negative = value.negative;
+            core_buffer_append(&data, &negative, 1);
+        }
         previous = value;
         have_previous = true;
     }
@@ -30251,6 +30245,7 @@ register_builtin_comparison_symbols(parse_symtab_t *symtab,
         ok = member && value;
         if (!ok) break;
         value->magnitude = i;
+        value->negative = false;
         member->type = symbol->type;
         member->owner_type = symbol;
         member->mutability = PARSE_SYM_CONST;
@@ -32845,7 +32840,8 @@ check_local_record_field_reference(parse_grammar_t *grammar,
     }
     core_string_t name = first_token_text(core_tree_child(node, 2));
     parse_sym_entry_t *field = parse_symtab_lookup_in(members, name);
-    if (field && field->is_field) return;
+    if (field && (field->is_field || field->kind == PARSE_SYM_ENUM_CONST))
+        return;
 
     core_buffer_t message = {0};
     core_buffer_printf(&message, "record type has no field named '%.*s'",
@@ -33529,6 +33525,34 @@ top_level_statement_child(parse_grammar_t *grammar, parse_tree_t *wrapper)
     return nullptr;
 }
 
+static bool
+cache_enum_item_value(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                      parse_tree_t *node)
+{
+    parse_tree_t *explicit_value = child_nt(grammar, node, "enum-value");
+    if (!explicit_value) return true;
+    parse_tree_t *literal = child_nt(grammar, explicit_value, "simple-lit");
+    parse_tree_t *terminal_node = literal ? core_tree_child(literal, 0) : nullptr;
+    parse_token_info_t *token = terminal_node && core_tree_is_leaf(terminal_node)
+        ? core_tree_leaf_value(terminal_node) : nullptr;
+    core_string_t terminal = token
+        ? parse_terminal_name(grammar, token->tid) : (core_string_t){0};
+    parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
+    ir_lit_t value = {0};
+    if (!symbol || (!core_string_eq(terminal, CORE_STRING_STATIC("INT_LIT"))
+            && !core_string_eq(terminal, CORE_STRING_STATIC("HEX_LIT")))
+        || !n00bb_parse_switch_integer(parse_tree_leaf_text(terminal_node),
+                                       &value)) return false;
+    bool negative = core_tree_num_children(explicit_value) == 3;
+    n00bb_enum_value_t *stored = core_arena_alloc(
+        &state->semantic_values, sizeof(*stored));
+    if (!stored) return false;
+    *stored = (n00bb_enum_value_t){value.mag, negative && value.mag != 0};
+    symbol->comptime_value = stored;
+    symbol->has_comptime_value = true;
+    return true;
+}
+
 static void
 semantic_annotation_node(void *context, core_translation_unit_t *unit,
                          parse_tree_t *node, parse_tree_t *parent,
@@ -33770,6 +33794,14 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 propagate_resolved_type_reference(grammar, unit, node,
                     core_tree_node_value(node).type);
         }
+    }
+    if (!entering && nt_is(grammar, node, "enum-item")
+        && !cache_enum_item_value(grammar, state, node)) {
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0018"),
+            CORE_STRING_STATIC("enum item value must be an integer literal"),
+            link_source_location(node));
+        return;
     }
     if (!entering && nt_is(grammar, node, "simple-lit")
         && !refine_integer_literal_type(grammar, unit, node, state))
@@ -34632,7 +34664,8 @@ dump_symbols(core_translation_unit_t *unit)
                 symbol->has_comptime_value && symbol->comptime_value) {
                 const n00bb_enum_value_t *enum_value =
                     symbol->comptime_value;
-                printf(", value=0x%016llx%016llx",
+                printf(", value=%s0x%016llx%016llx",
+                    enum_value->negative ? "-" : "",
                     (unsigned long long)(enum_value->magnitude >> 64),
                     (unsigned long long)enum_value->magnitude);
             }
@@ -35646,7 +35679,7 @@ materialize_interface_type_members(locate_worker_context_t *loader,
                 PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_COMPTIME);
             parse_sym_set_storage_duration(entry,
                 PARSE_SYM_STORAGE_COMPTIME);
-            ir_uint_t value = 0;
+            n00bb_enum_value_t value = {0};
             if (!decode_interface_enum_value(enum_values,
                     enum_values_size, member->name, &value)) {
                 ok = false;
@@ -35658,7 +35691,7 @@ materialize_interface_type_members(locate_worker_context_t *loader,
                 ok = false;
                 break;
             }
-            stored->magnitude = value;
+            *stored = value;
             entry->comptime_value = stored;
             entry->has_comptime_value = true;
         }

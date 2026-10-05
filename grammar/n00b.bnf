@@ -332,6 +332,8 @@
 
 <enum-value> ::= %":" <simple-lit>
                | %"=" <simple-lit>
+               | %":" %"-" <simple-lit>
+               | %"=" %"-" <simple-lit>
 
 <assign-stmt> @assigns($0, $2) ::= <expression> <assign-op> <expression>
 
