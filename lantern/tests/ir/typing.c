@@ -1460,6 +1460,20 @@ static void test_conversion(void)
 {
     env *e = open_env(&ir_profile_bce, "i32");
 
+    ir_instr_t *enum_value = op(e, IR_OP_ENUM_VALUE);
+    ir_instr_set_dest(enum_value, "enum_value", ir_type_parse(e->m, "i32"));
+    ir_instr_operand_value(enum_value, val(e, "Color"));
+    check("enum.value preserves a semantic enum-to-integer conversion",
+          accepts_as(e, enum_value, "i32"));
+
+    ir_instr_t *checked_enum_value = op(e, IR_OP_ENUM_VALUE);
+    ir_instr_set_dest(checked_enum_value, "checked_enum_value",
+                      ir_type_parse(e->m, "u8"));
+    ir_instr_operand_value(checked_enum_value, val(e, "Color"));
+    ir_instr_add_mod(checked_enum_value, "trap");
+    check("enum.value accepts an explicit fit policy",
+          accepts_as(e, checked_enum_value, "u8"));
+
     for (size_t i = 0; i < sizeof(CONVERSIONS) / sizeof(CONVERSIONS[0]); i++) {
         const conv_t *c   = &CONVERSIONS[i];
         const char   *fit = c->fit ? "sat" : nullptr;

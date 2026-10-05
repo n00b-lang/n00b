@@ -2032,6 +2032,23 @@ static ir_rule_result_t rule_cast(ir_module_t *m, ir_instr_t *in,
     return ACCEPT(to);
 }
 
+static ir_rule_result_t rule_enum_value(ir_module_t *m, ir_instr_t *in,
+                                        ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *from = opd_type(in, 0);
+    th_type *to = declared(in);
+    if (!from || th_kind_of(th_resolve(from)) != TH_NAMED
+        || !to || !is_int(ir_machine_of(m, to).class)) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this enum conversion",
+                 "enum.value requires a named source and integer result");
+        return REJECT;
+    }
+    if (!in->n_mods) return ACCEPT(to);
+    const axis_t *axes[] = {&AX_FIT};
+    return mods_exact(m, in, d, axes, 1) ? ACCEPT(to) : REJECT;
+}
+
 static ir_rule_result_t rule_select(ir_module_t *m, ir_instr_t *in,
                                     ir_diags_t *d, void *state)
 {
@@ -2807,6 +2824,7 @@ typedef struct {
 static const entry DEFAULTS[] = {
     {IR_OP_CONST, "ir.const", rule_annotated},
     {IR_OP_ENUM_CONST, "ir.enum.const", rule_annotated},
+    {IR_OP_ENUM_VALUE, "ir.enum.value", rule_enum_value},
     {IR_OP_AGGREGATE, "ir.aggregate", rule_annotated},
     {IR_OP_REST_COLLECT, "ir.rest.collect", rule_rest_collect},
     {IR_OP_PARAM_PRESENT, "ir.param.present", rule_param_present},
