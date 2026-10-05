@@ -2098,6 +2098,12 @@ rocs_index_test = executable('test_rocs_index',
 )
 test('rocs_index', rocs_index_test, suite: 'unit')
 
+print_contention_test = executable('test_print_contention',
+    ['test/unit/test_print_contention.c'],
+    kwargs: test_common_kwargs,
+)
+test('print_contention', print_contention_test, suite: 'unit', timeout: 300)
+
 rocs_fulltext_index_test = executable('test_rocs_fulltext_index',
     ['test/unit/test_rocs_fulltext_index.c'],
     kwargs: test_common_kwargs,
