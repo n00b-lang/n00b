@@ -958,6 +958,20 @@ static ir_rule_result_t rule_annotated(ir_module_t *m, ir_instr_t *in,
         return rule_const(m, in, d, t);
     }
 
+    if (in->op == IR_OP_ENUM_CONST) {
+        if (th_kind_of(th_resolve(t)) != TH_NAMED
+            || ir_machine_of(m, t).class != IR_CLASS_OPAQUE
+            || in->n_operands != 2
+            || in->operands[0].kind != IR_OPD_NAME
+            || in->operands[1].kind != IR_OPD_CONST
+            || in->operands[1].lit.is_float) {
+            complain(m, d, IR_DIAG_TYPE_LITERAL, in, "this enum constant",
+                     "enum.const needs a named result type, member name, and integer value");
+            return REJECT;
+        }
+        return ACCEPT(t);
+    }
+
     if (in->op == IR_OP_AGGREGATE) {
         return rule_aggregate(m, in, d, t);
     }
@@ -2056,6 +2070,41 @@ static bool call_arg_matches(ir_module_t *m, th_mode mode, th_type *want,
             : th_unify(ir_ctx_types(m->ctx), want, got)) != nullptr;
 }
 
+static ir_rule_result_t rule_trait_method(ir_module_t *m, ir_instr_t *in,
+                                          ir_diags_t *d, void *state)
+{
+    (void)state;
+    if (in->n_operands != 4) return DECLINE;
+    th_type *receiver = opd_type(in, 2);
+    th_type *signature = declared(in);
+    ir_value_t *requirement = ir_operand_value(&in->operands[3]);
+    th_type *contract = requirement ? requirement->type : nullptr;
+    if (!receiver || !signature || !contract) return DECLINE;
+    const th_param *self = th_kind_of(signature) == TH_FUNCTION
+        ? th_func_param(signature, 0) : nullptr;
+    if (!self || requirement->kind != IR_VAL_FUNC
+        || !requirement->owner
+        || !in->operands[0].name || !*in->operands[0].name
+        || !in->operands[1].name || !*in->operands[1].name) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this trait method",
+                 "trait.method needs names, a receiver, and a function requirement with a self parameter");
+        return REJECT;
+    }
+    if (!th_unify(ir_ctx_types(m->ctx), signature, contract)) {
+        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this trait method",
+                 "selected method type %s does not match its requirement %s",
+                 typed(m, signature), typed(m, contract));
+        return REJECT;
+    }
+    if (!call_arg_matches(m, self->mode, self->type, receiver, false)) {
+        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this receiver",
+                 "trait method receiver %s does not match self parameter %s",
+                 typed(m, receiver), typed(m, self->type));
+        return REJECT;
+    }
+    return ACCEPT(signature);
+}
+
 static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
                                   ir_diags_t *d, void *state)
 {
@@ -2128,13 +2177,22 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
         if (in->operands[i].kind == IR_OPD_MISSING) {
             const th_param *parameter = given < np
                 ? th_func_param(callee, given) : nullptr;
+            if (!callee_function && in->operands[0].kind == IR_OPD_VALUE
+                && in->operands[0].value
+                && in->operands[0].value->def
+                && in->operands[0].value->def->op == IR_OP_TRAIT_METHOD) {
+                ir_instr_t *selection = in->operands[0].value->def;
+                ir_value_t *requirement = ir_operand_value(
+                    &selection->operands[3]);
+                callee_function = requirement ? requirement->owner : nullptr;
+            }
             bool optional = callee_function
                 && ir_func_parameter_is_optional(callee_function, given);
             if (!parameter || parameter->mode != TH_IN || !optional) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in,
                          "this omitted argument",
                          "an omitted call argument must match an optional "
-                         "input parameter on a directly known function");
+                     "input parameter on a known function requirement");
                 return REJECT;
             }
             given++;
@@ -2713,6 +2771,7 @@ typedef struct {
 
 static const entry DEFAULTS[] = {
     {IR_OP_CONST, "ir.const", rule_annotated},
+    {IR_OP_ENUM_CONST, "ir.enum.const", rule_annotated},
     {IR_OP_AGGREGATE, "ir.aggregate", rule_annotated},
     {IR_OP_REST_COLLECT, "ir.rest.collect", rule_rest_collect},
     {IR_OP_PARAM_PRESENT, "ir.param.present", rule_param_present},
@@ -2784,6 +2843,7 @@ static const entry DEFAULTS[] = {
     {IR_OP_BITCAST, "ir.bitcast", rule_cast},
     {IR_OP_SELECT, "ir.select", rule_select},
     {IR_OP_PHI, "ir.phi", rule_phi},
+    {IR_OP_TRAIT_METHOD, "ir.trait.method", rule_trait_method},
     {IR_OP_CALL, "ir.call", rule_call},
     {IR_OP_CALL_OUTPUT, "ir.call-output", rule_call_output},
     {IR_OP_SIZEOF, "ir.sizeof", rule_size_like},

@@ -347,8 +347,12 @@ static void test_bitwise_and_shifts(void)
 
     ir_instr_t *wrongmod = op(e, IR_OP_SHL);
 
-    check("a shift does not take an overflow modifier",
-          !ir_instr_add_mod(wrongmod, "sat"));
+    check("a shift accepts a checked overflow modifier",
+          ir_instr_add_mod(wrongmod, "trap"));
+    ir_instr_operand_value(wrongmod, val(e, "u32"));
+    ir_instr_operand_value(wrongmod, val(e, "u8"));
+    check("a checked shift remains well typed",
+          accepts_as(e, wrongmod, "u32"));
 
     const ir_op_t counts[] = {IR_OP_CLZ, IR_OP_CTZ, IR_OP_POPCOUNT};
 
@@ -1587,6 +1591,94 @@ static void test_select_phi_call(void)
     check("a phi arm of the wrong type is rejected",
           apply(e, pbad) == IR_RULE_REJECT);
 
+    ir_func_t *add_requirement = ir_func_add(e->m, "add_requirement",
+        ir_type_parse(e->m, "(i32, i32) -> i32"), IR_LINK_EXTERN);
+    ir_instr_t *method = op(e, IR_OP_TRAIT_METHOD);
+    ir_instr_set_dest(method, "selected_method",
+                      ir_type_parse(e->m, "(i32, i32) -> i32"));
+    ir_instr_operand_name(method, "Add");
+    ir_instr_operand_name(method, "__add");
+    ir_value_t *receiver = val(e, "i32");
+    ir_instr_operand_value(method, receiver);
+    ir_instr_operand_value(method,
+                           ir_func_address(e->m, add_requirement));
+    check("a semantic trait method retains its callable type",
+          accepts_as(e, method, "(i32, i32) -> i32"));
+
+    ir_instr_t *method_call = op(e, IR_OP_CALL);
+    ir_instr_operand_value(method_call, method->dest);
+    ir_instr_operand_value(method_call, receiver);
+    ir_instr_operand_value(method_call, val(e, "i32"));
+    check("the selected semantic trait method can be called",
+          accepts_as(e, method_call, "i32"));
+
+    ir_func_t *optional_requirement = ir_func_add(e->m,
+        "optional_requirement", ir_type_parse(e->m, "(i32, i32) -> i32"),
+        IR_LINK_EXTERN);
+    ir_func_set_parameter_optional(optional_requirement, 1, true);
+    ir_instr_t *optional_method = op(e, IR_OP_TRAIT_METHOD);
+    ir_instr_set_dest(optional_method, "optional_method",
+                      ir_type_parse(e->m, "(i32, i32) -> i32"));
+    ir_instr_operand_name(optional_method, "Add");
+    ir_instr_operand_name(optional_method, "__add");
+    ir_instr_operand_value(optional_method, receiver);
+    ir_instr_operand_value(optional_method,
+                           ir_func_address(e->m, optional_requirement));
+    ir_instr_t *optional_method_call = op(e, IR_OP_CALL);
+    ir_instr_operand_value(optional_method_call, optional_method->dest);
+    ir_instr_operand_value(optional_method_call, receiver);
+    ir_instr_operand_missing(optional_method_call);
+    check("semantic trait calls retain requirement defaults",
+          apply(e, optional_method) == IR_RULE_ACCEPT
+              && accepts_as(e, optional_method_call, "i32"));
+
+    th_type *fallible_method_type = ir_type_parse(e->m,
+        "(i32, inout u64) -> i32 fail: string");
+    ir_func_t *update_requirement = ir_func_add(e->m,
+        "update_requirement", fallible_method_type, IR_LINK_EXTERN);
+    ir_instr_t *fallible_method = op(e, IR_OP_TRAIT_METHOD);
+    ir_instr_set_dest(fallible_method, "fallible_method",
+                      fallible_method_type);
+    ir_instr_operand_name(fallible_method, "Update");
+    ir_instr_operand_name(fallible_method, "__update");
+    ir_instr_operand_value(fallible_method, receiver);
+    ir_instr_operand_value(fallible_method,
+                           ir_func_address(e->m, update_requirement));
+    th_type *method_outcome = ir_call_outcome_type(e->m,
+                                                   fallible_method_type);
+    ir_instr_t *fallible_method_call = op(e, IR_OP_CALL);
+    ir_instr_set_dest(fallible_method_call, "fallible_method_outcome",
+                      method_outcome);
+    ir_instr_operand_value(fallible_method_call, fallible_method->dest);
+    ir_instr_operand_value(fallible_method_call, receiver);
+    ir_instr_operand_value(fallible_method_call, val(e, "u64"));
+    ir_instr_t *method_success = op(e, IR_OP_VARIANT_PAYLOAD);
+    ir_instr_set_dest(method_success, "fallible_method_success",
+                      ir_type_parse(e->m, "i32"));
+    ir_instr_operand_value(method_success, fallible_method_call->dest);
+    ir_instr_operand_name(method_success, "ok");
+    ir_instr_t *method_copyout = op(e, IR_OP_CALL_OUTPUT);
+    ir_instr_operand_value(method_copyout, method_success->dest);
+    ir_instr_operand_uint(method_copyout, 0);
+    ir_instr_set_dest(method_copyout, "method_copyout",
+                      ir_type_parse(e->m, "u64"));
+    check("semantic trait methods retain failure and copy-out channels",
+          apply(e, fallible_method) == IR_RULE_ACCEPT
+              && apply(e, fallible_method_call) == IR_RULE_ACCEPT
+              && apply(e, method_success) == IR_RULE_ACCEPT
+              && apply(e, method_copyout) == IR_RULE_ACCEPT);
+
+    ir_instr_t *wrong_receiver = op(e, IR_OP_TRAIT_METHOD);
+    ir_instr_set_dest(wrong_receiver, "wrong_method",
+                      ir_type_parse(e->m, "(i32, i32) -> i32"));
+    ir_instr_operand_name(wrong_receiver, "Add");
+    ir_instr_operand_name(wrong_receiver, "__add");
+    ir_instr_operand_value(wrong_receiver, val(e, "u64"));
+    ir_instr_operand_value(wrong_receiver,
+                           ir_func_address(e->m, add_requirement));
+    check("trait method selection rejects an incompatible receiver",
+          apply(e, wrong_receiver) == IR_RULE_REJECT);
+
     ir_func_t *g = ir_func_add(e->m, "g",
                                ir_type_parse(e->m, "(i32, x: u64) -> i64"),
                                IR_LINK_EXTERNAL);
@@ -2206,6 +2298,20 @@ static void test_constants_and_copy(void)
     ir_instr_operand_int(c, 7);
     check("const takes its type from its destination",
           accepts_as(e, c, "i32"));
+
+    ir_instr_t *enum_value = op(e, IR_OP_ENUM_CONST);
+    ir_instr_set_dest(enum_value, "enum_value", ir_type_parse(e->m, "Widget"));
+    ir_instr_operand_name(enum_value, "equal");
+    ir_instr_operand_uint(enum_value, 1);
+    check("an enum constant preserves its named type and member",
+          accepts_as(e, enum_value, "Widget"));
+
+    ir_instr_t *enum_scalar = op(e, IR_OP_ENUM_CONST);
+    ir_instr_set_dest(enum_scalar, "enum_scalar", ir_type_parse(e->m, "i32"));
+    ir_instr_operand_name(enum_scalar, "equal");
+    ir_instr_operand_uint(enum_scalar, 1);
+    check("an enum constant rejects a scalar result type",
+          apply(e, enum_scalar) == IR_RULE_REJECT);
 
     ir_instr_t *empty = op(e, IR_OP_CONST);
     ir_instr_set_dest(empty, "empty", ir_type_parse(e->m, "i32"));

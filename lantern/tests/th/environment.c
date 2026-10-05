@@ -325,6 +325,25 @@ int main(void) {
             method_record(types, "bad", fn1(types, integer, integer))));
 
   th_type *read_int = fn1(types, integer, integer);
+
+  th_type *nested_add_receiver = th_var(types);
+  th_type *nested_add_argument = th_var(types);
+  th_type *nested_add_result = th_var(types);
+  check("register nested-result operator contract",
+        th_env_register_trait(env, "NestedAdd", "traits", "base",
+            TH_ENV_PUBLIC, method_record(types, "__add_nested",
+                fn2(types, nested_add_receiver, nested_add_argument,
+                    nested_add_result))) &&
+        register_function(env, "base.ints.add_nested", "__add_nested",
+            "ints", "base", TH_ENV_PUBLIC,
+            fn2(types, integer, integer, integer)));
+  th_type *nested_probe_receiver = th_var(types);
+  check("register nested-result producer contract",
+        th_env_register_trait(env, "NestedProbe", "traits", "base",
+            TH_ENV_PUBLIC, method_record(types, "probe_nested",
+                fn1(types, nested_probe_receiver, integer))) &&
+        register_function(env, "base.ints.probe_nested", "probe_nested",
+            "ints", "base", TH_ENV_PUBLIC, fn1(types, integer, integer)));
   check("register first package method candidate",
         register_function(env, "base.ints.read_first", "read", "ints", "base",
                           TH_ENV_PACKAGE, read_int));
@@ -583,6 +602,29 @@ int main(void) {
             th_ctx_set_environment(inside, env, "consumer", "base") &&
             th_ctx_set_environment(outside, env, "consumer", "other") &&
             !th_ctx_set_environment(inside, env, "other", "base"));
+  th_env_method_t nested_add = {0};
+  check("primitive nested-result operator resolves directly",
+        th_env_method_resolve(inside, integer, "NestedAdd", "__add_nested",
+                              &nested_add) == TH_ENV_METHOD_FOUND);
+  th_ctx *nested_context = th_ctx_new();
+  th_type *nested_return = th_var(nested_context);
+  th_type *nested_right = th_var(nested_context);
+  th_type *nested_sum = th_var(nested_context);
+  th_type *nested_integer = th_name(nested_context, "int");
+  bool nested_obligations = th_require_method(nested_context, nested_return,
+      "__add_nested", nested_sum,
+      fn1(nested_context, nested_right, nested_sum)) &&
+      th_require_method(nested_context, nested_integer, "probe_nested",
+          nested_return, fn0(nested_context, nested_return)) &&
+      th_require_method(nested_context, nested_integer, "probe_nested",
+          nested_right, fn0(nested_context, nested_right));
+  check("nested method-result constraints resolve on environment attach",
+        nested_obligations &&
+        th_ctx_set_environment(nested_context, env, "consumer", "base") &&
+        th_unify(nested_context, nested_return, nested_integer) &&
+        th_unify(nested_context, nested_right, nested_integer) &&
+        th_unify(nested_context, nested_sum, nested_integer));
+  th_ctx_free(nested_context);
   th_env_method_t first_echo = {0}, second_echo = {0};
   const th_param *first_echo_arg = nullptr, *second_echo_arg = nullptr;
   bool independent_echo_signatures =

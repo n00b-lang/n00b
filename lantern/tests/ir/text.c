@@ -356,6 +356,34 @@ static void test_types_are_typelang(void)
     ir_ctx_free(ctx);
 }
 
+static void test_trait_method_round_trips(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    const char *source =
+        "module trait_dispatch {\n"
+        "  profile bce\n"
+        "  target test\n"
+        "  extern func @add_requirement(%left: i32, %right: i32) -> i32 {\n"
+        "    block entry:\n"
+        "      unreachable\n"
+        "  }\n"
+        "  func @use(%left: i32, %right: i32) -> i32 {\n"
+        "    block entry:\n"
+        "      %method: (i32, i32) -> i32 = trait.method \"Add\", \"__add\", %left, @add_requirement\n"
+        "      %value: i32 = call %method, %left, %right\n"
+        "      return %value\n"
+        "  }\n"
+        "}\n";
+    char *printed = nullptr;
+    check("semantic trait method calls round-trip without a dispatch ABI",
+          round_trips(ctx, source, &printed));
+    check("trait and method identity survive IR text",
+          printed && strstr(printed,
+              "trait.method \"Add\", \"__add\", %left, @add_requirement"));
+    free(printed);
+    ir_ctx_free(ctx);
+}
+
 static void test_function_failure_channel_round_trips(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -1980,6 +2008,7 @@ int main(int argc, char **argv)
     test_lexis();
     test_whitespace_and_comments();
     test_types_are_typelang();
+    test_trait_method_round_trips();
     test_function_failure_channel_round_trips();
     test_phase_result_text_round_trips();
     test_variant_type_definition_round_trips();

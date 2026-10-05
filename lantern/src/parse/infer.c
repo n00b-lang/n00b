@@ -442,12 +442,19 @@ r_project(parse_reduce_t *r)
     }
 
     e->lhs = kid_expr(r, 2);
-    if (r->n_kids == 6) {
+    if (r->n_kids == 6 || r->n_kids == 8) {
         e->name = dup_text(kid_text(r, 4));
         if ((e->proj != PARSE_INFER_METHOD_RETURN
-             && e->proj != PARSE_INFER_FIELD_RETURN) || !e->lhs
+             && e->proj != PARSE_INFER_FIELD_RETURN
+             && e->proj != PARSE_INFER_ELEMENT_OF
+             && e->proj != PARSE_INFER_SLICE_OF) || !e->lhs
             || !e->name.data) {
             fail(r);
+        }
+        if (r->n_kids == 8) {
+            e->other_name = dup_text(kid_text(r, 6));
+            if (e->proj != PARSE_INFER_ELEMENT_OF || !e->other_name.data)
+                fail(r);
         }
     }
     else if (!e->lhs) {
@@ -464,6 +471,22 @@ r_compare(parse_reduce_t *r)
     e->lhs = kid_expr(r, 2);
     e->rhs = kid_expr(r, 4);
     if (!e->lhs || !e->rhs) fail(r);
+    if (r->n_kids == 10) {
+        e->name = dup_text(kid_text(r, 6));
+        e->other_name = dup_text(kid_text(r, 8));
+        if (!e->name.data || !e->other_name.data) fail(r);
+    }
+    return wrap(r->thunk, e);
+}
+
+static void *
+r_method_result(parse_reduce_t *r)
+{
+    parse_infer_expr_t *e = expr_new(PARSE_INFER_METHOD_RESULT);
+    e->lhs = kid_expr(r, 2);
+    e->rhs = kid_expr(r, 4);
+    e->name = dup_text(kid_text(r, 6));
+    if (!e->lhs || !e->rhs || !e->name.data) fail(r);
     return wrap(r->thunk, e);
 }
 
@@ -493,6 +516,7 @@ install(parse_tree_walk_t *w, in_ctx *c)
     REG(CORE_STRING_STATIC("fetch"), r_fetch);
     REG(CORE_STRING_STATIC("project"), r_project);
     REG(CORE_STRING_STATIC("compare"), r_compare);
+    REG(CORE_STRING_STATIC("method-result"), r_method_result);
     REG(CORE_STRING_STATIC("project-op"), r_op);
     REG(CORE_STRING_STATIC("named-app"), r_named_app);
     REG(CORE_STRING_STATIC("named-args"), r_args);
@@ -600,6 +624,10 @@ parse_infer_clone(const parse_infer_expr_t *e)
     c->name = e->name.data
                 ? core_string_from_raw(e->name.data, (int64_t)e->name.u8_bytes)
                 : e->name;
+    c->other_name = e->other_name.data
+                ? core_string_from_raw(e->other_name.data,
+                                       (int64_t)e->other_name.u8_bytes)
+                : e->other_name;
 
     c->lhs = parse_infer_clone(e->lhs);
     c->rhs = parse_infer_clone(e->rhs);
@@ -634,6 +662,7 @@ parse_infer_free(parse_infer_expr_t *e)
     }
 
     core_free(e->name.data);
+    core_free(e->other_name.data);
 
     core_free(e);
 }
@@ -653,6 +682,7 @@ parse_infer_kind_name(parse_infer_kind_t k)
     case PARSE_INFER_LOOKUP:    return "lookup";
     case PARSE_INFER_PROJECT:   return "project";
     case PARSE_INFER_COMPARE:   return "compare";
+    case PARSE_INFER_METHOD_RESULT: return "method-result";
     case PARSE_INFER_UNIFY:     return "unify";
     case PARSE_INFER_SUM:       return "sum";
     }
@@ -752,6 +782,11 @@ print_one(sbuf *b, const parse_infer_expr_t *e)
             emit(b, ", ");
             core_buffer_append(b, e->name.data, e->name.u8_bytes);
         }
+        if (e->other_name.data) {
+            emit(b, ", ");
+            core_buffer_append(b, e->other_name.data,
+                               e->other_name.u8_bytes);
+        }
         emit(b, ")");
         break;
 
@@ -760,6 +795,23 @@ print_one(sbuf *b, const parse_infer_expr_t *e)
         print_one(b, e->lhs);
         emit(b, ", ");
         print_one(b, e->rhs);
+        if (e->name.data) {
+            emit(b, ", ");
+            core_buffer_append(b, e->name.data, e->name.u8_bytes);
+            emit(b, ", ");
+            core_buffer_append(b, e->other_name.data,
+                               e->other_name.u8_bytes);
+        }
+        emit(b, ")");
+        break;
+
+    case PARSE_INFER_METHOD_RESULT:
+        emit(b, "method_result(");
+        print_one(b, e->lhs);
+        emit(b, ", ");
+        print_one(b, e->rhs);
+        emit(b, ", ");
+        core_buffer_append(b, e->name.data, e->name.u8_bytes);
         emit(b, ")");
         break;
 

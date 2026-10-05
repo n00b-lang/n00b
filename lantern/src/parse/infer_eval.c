@@ -625,7 +625,8 @@ text_is(core_string_t text, const char *want)
 }
 
 static th_type *
-project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
+project(ictx *c, parse_infer_proj_t op, th_type *t,
+        core_string_t explicit_name, core_string_t other_name)
 {
     if (!t) {
         return fresh(c);
@@ -661,15 +662,20 @@ project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
         th_type *result = node_type(c, result_node);
         if (index_is_assignment_target(c->v, result_node)) {
             th_type *call_shape = index_store_call_shape(c, result);
-            if (call_shape)
-                return infer_method_obligation(c, t, "store", result,
+            if (call_shape && other_name.data)
+                return infer_method_obligation(c, t, other_name.data, result,
                                                call_shape);
             c->failed = true;
             return result;
         }
         th_type *call_shape = index_call_shape(c, result);
-        if (call_shape)
-            return infer_method_obligation(c, t, "load", result, call_shape);
+        if (call_shape && explicit_name.data)
+            return infer_method_obligation(c, t, explicit_name.data, result,
+                                           call_shape);
+        if (call_shape) {
+            c->failed = true;
+            return result;
+        }
 
         th_type *e = th_seq_elem(t);
 
@@ -694,11 +700,12 @@ project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
         parse_tree_t *slice_node = c->v->node;
         th_type *result = node_type(c, slice_node);
         th_type *call_shape = slice_call_shape(c, result);
-        if (!call_shape) {
+        if (!call_shape || !explicit_name.data) {
             c->failed = true;
             return result;
         }
-        return infer_method_obligation(c, t, "slice", result, call_shape);
+        return infer_method_obligation(c, t, explicit_name.data, result,
+                                       call_shape);
     }
 
     case PARSE_INFER_UNWRAP_RESULT: {
@@ -839,7 +846,8 @@ project(ictx *c, parse_infer_proj_t op, th_type *t, core_string_t explicit_name)
     case PARSE_INFER_FIELD_RETURN:
         if (method_call_parent(c))
             return project(c, PARSE_INFER_METHOD_RETURN, t,
-                explicit_name.data ? explicit_name : last_text(c->v->node));
+                explicit_name.data ? explicit_name : last_text(c->v->node),
+                (core_string_t){0});
         return field_projection(c, t,
             explicit_name.data ? explicit_name : last_text(c->v->node));
     }
@@ -995,7 +1003,7 @@ eval(ictx *c, const parse_infer_expr_t *e)
 
     case PARSE_INFER_PROJECT: {
         th_type *input = e->lhs ? eval(c, e->lhs) : type_of(c, e->index);
-        return project(c, e->proj, input, e->name);
+        return project(c, e->proj, input, e->name, e->other_name);
     }
 
     case PARSE_INFER_COMPARE: {
@@ -1009,12 +1017,46 @@ eval(ictx *c, const parse_infer_expr_t *e)
             if (!th_unify_in_place(c->tc, left, right)) c->failed = true;
             return th_name(c->tc, "bool");
         }
-        th_type *comparison = th_bitint(c->tc, 2, true);
+        th_type *comparison = nullptr;
+        if (e->other_name.data) {
+            parse_scope_t *scope = c->v->pn->scope
+                ? c->v->pn->scope
+                : c->st
+                    ? parse_symtab_current_scope(c->st, core_string_empty())
+                    : nullptr;
+            parse_sym_entry_t *type = c->st
+                ? parse_symtab_lookup_scoped(c->st, scope,
+                    CORE_STRING_STATIC("type"), e->other_name)
+                : nullptr;
+            comparison = type && type->type
+                ? type->type : th_name(c->tc, e->other_name.data);
+        }
+        else comparison = th_bitint(c->tc, 2, true);
         th_param parameter = {.mode = TH_IN, .type = right};
         th_type *call_shape = th_func(c->tc, comparison, &parameter, 1,
                                       nullptr, nullptr, 0);
-        infer_method_obligation(c, left, "cmp", comparison, call_shape);
+        infer_method_obligation(c, left,
+            e->name.data ? e->name.data : "cmp", comparison, call_shape);
         return th_name(c->tc, "bool");
+    }
+
+    case PARSE_INFER_METHOD_RESULT: {
+        th_type *receiver = eval(c, e->lhs);
+        th_type *argument = eval(c, e->rhs);
+        th_type *result = fresh(c);
+        if (!receiver || !argument || !e->name.data) {
+            c->failed = true;
+            return result;
+        }
+        th_param parameter = {.mode = TH_IN, .type = argument};
+        th_type *call = th_func(c->tc, result, &parameter, 1,
+                                nullptr, nullptr, 0);
+        if (!call) {
+            c->failed = true;
+            return result;
+        }
+        return infer_method_obligation(c, receiver, e->name.data,
+                                       result, call);
     }
 
     case PARSE_INFER_UNIFY: {

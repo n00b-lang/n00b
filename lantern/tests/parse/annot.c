@@ -1763,7 +1763,7 @@ test_index_inference_uses_index_load_trait(void)
 {
     static const char *const G =
         "<top> @tokenizer(\"toy\") ::= <access>\n"
-        "<access> @infer(\"element_of($0)\") ::= <receiver> %\"[\" <index-contents> %\"]\"\n"
+        "<access> @infer(\"element_of($0, load, store)\") ::= <receiver> %\"[\" <index-contents> %\"]\"\n"
         "<index-contents> ::= <expression>\n"
         "<receiver> @infer(\"OpaqueBox[int]\") ::= __LOWER\n"
         "<expression> @infer(\"int\") ::= __LOWER\n";
@@ -1849,7 +1849,7 @@ test_slice_inference_uses_index_slice_trait(void)
 {
     static const char *const G =
         "<top> @tokenizer(\"toy\") ::= <access>\n"
-        "<access> @infer(\"slice_of($0)\") ::= <receiver> %\"[\" <index-contents> %\"]\"\n"
+        "<access> @infer(\"slice_of($0, slice)\") ::= <receiver> %\"[\" <index-contents> %\"]\"\n"
         "<index-contents> ::= <expression> %\":\" <expression>\n"
         "                   | <expression> %\":\"\n"
         "                   | %\":\" <expression>\n"
@@ -2469,6 +2469,59 @@ test_indirection_inference_constructors(void)
 }
 
 static void
+test_binary_method_result_inference(void)
+{
+    static const char *const G =
+        "@tokenizer(\"toy\")\n"
+        "<top> ::= <left> \"+\" <right>\n"
+        "<left> ::= \"x\"\n"
+        "<right> ::= \"y\"\n";
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    parse_pwz_parser_t *p = nullptr;
+    parse_token_stream_t *ts = nullptr;
+    parse_tree_t *tree = loaded ? parse_toy(g, "top", "x+y", &p, &ts)
+                                : nullptr;
+    th_ctx *tc = th_ctx_new();
+    th_type *receiver = th_var(tc);
+    parse_tree_t *left = tree ? core_tree_child(tree, 0) : nullptr;
+    parse_tree_t *right = tree ? core_tree_child(tree, 2) : nullptr;
+    if (left && !core_tree_is_leaf(left))
+        core_tree_node_value(left).type = receiver;
+    if (right && !core_tree_is_leaf(right))
+        core_tree_node_value(right).type = th_name(tc, "string");
+    parse_visit_t visit = {
+        .grammar = g,
+        .node = tree,
+        .pn = tree ? &core_tree_node_value(tree) : nullptr,
+    };
+    parse_infer_expr_t *expr = parse_infer_parse(
+        S("method_result($0, $2, __add)"));
+    bool ok = false;
+    th_type *result = expr && tree
+        ? parse_infer_eval(expr, &visit, tc, nullptr, &ok) : nullptr;
+    th_constraint constraint = {0};
+    const th_param *argument = th_var_constraint_at(receiver, 0,
+            &constraint) && constraint.kind == TH_CON_METHOD
+        ? th_func_param(constraint.method.call, 0) : nullptr;
+    check("binary method inference constrains the receiver and leaves its result open",
+          ok && result && th_kind_of(result) == TH_VAR
+              && result != receiver
+              && th_var_constraint_count(receiver) == 1
+              && constraint.method.name
+              && !strcmp(constraint.method.name, "__add")
+              && constraint.method.result == result
+              && argument && th_hash(tc, argument->type)
+                  == th_hash(tc, th_name(tc, "string")));
+    parse_infer_free(expr);
+    th_ctx_free(tc);
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
 test_function_visibility_does_not_leak_to_parameters(void)
 {
     static const char *const G =
@@ -2656,6 +2709,7 @@ main(void)
     test_symbol_lookup_instantiates_schemes();
     test_error_propagation_preserves_return_type();
     test_indirection_inference_constructors();
+    test_binary_method_result_inference();
     test_function_visibility_does_not_leak_to_parameters();
     test_visibility_prefix_binds_to_non_function_declaration();
     test_scoped_declaration_is_bound_outside_its_body();

@@ -13,6 +13,7 @@
                | <fetch>
                | <project>
                | <compare>
+               | <method-result>
                | <named-app>
                | <named>
 
@@ -38,6 +39,7 @@
 
 <project> ::= <project-op> %"(" <infer-expr> %")"
             | <project-op> %"(" <infer-expr> %"," %IDENTIFIER %")"
+            | <project-op> %"(" <infer-expr> %"," %IDENTIFIER %"," %IDENTIFIER %")"
 
 <project-op> ::= %"return_of"
                | %"element_of"
@@ -47,6 +49,9 @@
                | %"field_return"
 
 <compare> ::= %"compare" %"(" <child-ref> %"," <child-ref> %")"
+            | %"compare" %"(" <child-ref> %"," <child-ref> %"," %IDENTIFIER %"," %IDENTIFIER %")"
+
+<method-result> ::= %"method_result" %"(" <child-ref> %"," <child-ref> %"," %IDENTIFIER %")"
 
 <named-app> ::= %IDENTIFIER %"[" <named-args> %"]"
 

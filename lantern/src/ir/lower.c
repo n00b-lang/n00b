@@ -790,7 +790,9 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
             : visit && visit->pn ? visit->pn->sym : nullptr;
         ir_lower_symbol_binding_t *binding =
             lower_find_binding(context, symbol);
-        if (!binding && symbol && symbol->kind == PARSE_SYM_MODULE)
+        if (!binding && symbol
+            && (symbol->kind == PARSE_SYM_MODULE
+                || symbol->kind == PARSE_SYM_TYPEDEF))
             return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
         if (!binding)
             return lower_failure(context, IR_DIAG_UNDEFINED_SYMBOL, span,

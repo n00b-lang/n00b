@@ -17,6 +17,7 @@ typedef enum : uint8_t {
     PARSE_INFER_LOOKUP,
     PARSE_INFER_PROJECT,
     PARSE_INFER_COMPARE,
+    PARSE_INFER_METHOD_RESULT,
     PARSE_INFER_UNIFY,
     PARSE_INFER_SUM,
 } parse_infer_kind_t;
@@ -40,6 +41,7 @@ struct parse_infer_expr_t {
     parse_infer_proj_t   proj;
     int32_t            index;
     core_string_t       name;
+    core_string_t       other_name;
     parse_infer_expr_t  *lhs;
     parse_infer_expr_t  *rhs;
     parse_infer_expr_t **args;

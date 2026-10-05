@@ -30,8 +30,12 @@ static const char *const CORPUS[] = {
     "$3 unify (list[$1] | array[$1])",
     "bool",
     "compare($0, $2)",
+    "compare($0, $2, __cmp, Comparison)",
+    "method_result($0, $2, __add)",
     "dict[$0, $1]",
     "element_of($0)",
+    "element_of($0, read, write)",
+    "slice_of($0, slice)",
     "list[`e]",
     "list[$0]",
     "list[$0] unify $1",
@@ -188,6 +192,34 @@ test_shapes(void)
     }
     else {
         check("compare($0, $2) parses", false);
+    }
+
+    e = parse_infer_parse(S("compare($0, $2, __cmp, Comparison)"));
+
+    if (e) {
+        check("comparison inference retains method and result type names",
+              e->kind == PARSE_INFER_COMPARE
+                  && core_string_eq(e->name, S("__cmp"))
+                  && core_string_eq(e->other_name, S("Comparison")));
+        parse_infer_free(e);
+    }
+    else {
+        check("named comparison inference parses", false);
+    }
+
+    e = parse_infer_parse(S("method_result($0, $2, __add)"));
+    if (e) {
+        check("method-result inference retains operands and method name",
+              e->kind == PARSE_INFER_METHOD_RESULT
+                  && e->lhs && e->lhs->kind == PARSE_INFER_CHILD
+                  && e->lhs->index == 0
+                  && e->rhs && e->rhs->kind == PARSE_INFER_CHILD
+                  && e->rhs->index == 2
+                  && core_string_eq(e->name, S("__add")));
+        parse_infer_free(e);
+    }
+    else {
+        check("method-result inference parses", false);
     }
 
     e = parse_infer_parse(S("$$"));
