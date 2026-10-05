@@ -883,6 +883,28 @@ fi
 grep -q 'typecase without else must cover every subject type' \
     "$tmp/typecase_nonexhaustive.out"
 
+"$compiler" lower --dump-ir "$program_dir/typecase_value.n00b" \
+    >"$tmp/typecase_value.ir" 2>"$tmp/typecase_value.err" || {
+    cat "$tmp/typecase_value.err"
+    exit 1
+}
+grep -q 'func @bare_typecase' "$tmp/typecase_value.ir"
+grep -q 'type.narrow %item, int' "$tmp/typecase_value.ir"
+grep -q '__n00bb_typecase_value_' "$tmp/typecase_value.ir"
+grep -q '__n00bb_typecase_else_' "$tmp/typecase_value.ir"
+
+if "$compiler" lower "$program_dir/typecase_value_nonexhaustive.n00b" \
+    >"$tmp/typecase_value_nonexhaustive.out" 2>&1; then
+    echo 'non-exhaustive value typecase unexpectedly succeeded' >&2
+    exit 1
+fi
+grep -q 'typecase without else must cover every subject type' \
+    "$tmp/typecase_value_nonexhaustive.out"
+
+"$compiler" lower "$program_dir/typecase_redundant.n00b" \
+    >"$tmp/typecase_redundant.out" 2>&1
+test "$(grep -c 'N00BB-W0006' "$tmp/typecase_redundant.out")" -eq 1
+
 "$compiler" parse --dump-symbols "$program_dir/context_signature.n00b" \
     >"$tmp/context_signature.symbols" 2>"$tmp/context_signature.err" || {
     cat "$tmp/context_signature.err"

@@ -906,6 +906,7 @@ typedef struct {
 core_list_decl(n00bb_switch_frame_t);
 
 typedef struct {
+    parse_tree_t *node;
     parse_tree_t *body;
     th_type *type;
     parse_sym_entry_t *subject_shadow;
@@ -924,8 +925,10 @@ typedef struct {
     ir_block_t *else_block;
     ir_block_t *unmatched_block;
     ir_block_t *join;
+    ir_local_t *result_local;
     void *binding_checkpoint;
     uint64_t order;
+    bool expression;
     bool emitted;
     bool join_reachable;
     bool active;
@@ -2666,6 +2669,7 @@ n00bb_range_in_active_branch(parse_grammar_t *grammar,
             || nt_is(grammar, at, "labeled-for")
             || nt_is(grammar, at, "switch-stmt")
             || nt_is(grammar, at, "typecase-stmt")
+            || nt_is(grammar, at, "typecase-value-expr")
             || nt_is(grammar, at, "try-stmt")
             || nt_is(grammar, at, "with-stmt")
             || nt_is(grammar, at, "if-value-expr")) return false;
@@ -2684,7 +2688,8 @@ n00bb_range_control_node(parse_grammar_t *grammar, parse_tree_t *node)
     static const char *const controls[] = {
         "if-stmt", "if-value-expr", "elif-clause", "else-clause",
         "while-stmt", "for-stmt", "labeled-while", "labeled-for",
-        "switch-stmt", "typecase-stmt", "try-stmt", "with-stmt",
+        "switch-stmt", "typecase-stmt", "typecase-value-expr",
+        "try-stmt", "with-stmt",
     };
     for (size_t i = 0; i < sizeof(controls) / sizeof(controls[0]); i++)
         if (nt_is(grammar, node, controls[i])) return true;
@@ -8460,9 +8465,19 @@ n00bb_typecase_collect(parse_grammar_t *grammar, parse_tree_t *node,
                        n00bb_typecase_frame_t *frame,
                        ir_lower_context_t *context)
 {
-    if (nt_is(grammar, node, "typecase-case-block")) {
-        th_type *type = core_tree_node_value(node).type;
+    if (nt_is(grammar, node, "typecase-case-block")
+        || nt_is(grammar, node, "typecase-value-case-block")) {
+        n00bb_lower_context_t *lower = context->user;
+        n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+        n00bb_typecase_arm_types_t *types = state
+            ? core_dict_get(&state->typecase_arm_types, node, nullptr)
+            : nullptr;
+        th_type *type = types && types->count
+            ? types->count == 1 ? types->types[0]
+                : th_sum(state->types, TH_UNION, types->types, types->count)
+            : nullptr;
         parse_tree_t *body = child_nt(grammar, node, "body");
+        if (!body) body = child_nt(grammar, node, "value-body");
         ir_block_t *block = frame->active
             ? n00bb_branch_block(context, context->user, "typecase_arm")
             : nullptr;
@@ -8473,6 +8488,7 @@ n00bb_typecase_collect(parse_grammar_t *grammar, parse_tree_t *node,
             return false;
         }
         core_list_push(frame->arms, ((n00bb_typecase_arm_t){
+            .node = node,
             .body = body,
             .type = type,
             .subject_shadow = parse_tree_resolution(node).kind
@@ -8482,8 +8498,11 @@ n00bb_typecase_collect(parse_grammar_t *grammar, parse_tree_t *node,
         }));
         return true;
     }
-    if (nt_is(grammar, node, "case-else")) {
+    if (nt_is(grammar, node, "case-else")
+        || nt_is(grammar, node, "typecase-value-else")) {
         frame->else_body = child_nt(grammar, node, "body");
+        if (!frame->else_body)
+            frame->else_body = child_nt(grammar, node, "value-body");
         return frame->else_body != nullptr;
     }
     if (!node || core_tree_is_leaf(node)) return true;
@@ -8523,6 +8542,50 @@ n00bb_typecase_exhaustive(ir_module_t *module, th_type *subject,
     for (size_t c = 0; c < arms.len; c++)
         if (n00bb_typecase_case_contains(module, arms.data[c].type, subject))
             return true;
+    return false;
+}
+
+static bool
+n00bb_typecase_arm_has_fresh_match(ir_module_t *module, th_type *subject,
+                                   core_list_t(n00bb_typecase_arm_t) arms,
+                                   size_t arm_index)
+{
+    th_comb subject_comb;
+    if (th_sum_comb(subject, &subject_comb) && subject_comb == TH_UNION) {
+        for (size_t i = 0; i < th_sum_len(subject); i++) {
+            th_type *candidate = th_sum_arm(subject, i);
+            if (!n00bb_typecase_case_contains(
+                    module, arms.data[arm_index].type, candidate))
+                continue;
+            bool prior = false;
+            for (size_t p = 0; p < arm_index; p++)
+                prior |= n00bb_typecase_case_contains(
+                    module, arms.data[p].type, candidate);
+            if (!prior) return true;
+        }
+        return false;
+    }
+    if (n00bb_typecase_case_contains(
+            module, arms.data[arm_index].type, subject)) {
+        for (size_t p = 0; p < arm_index; p++)
+            if (n00bb_typecase_case_contains(module, arms.data[p].type,
+                                             subject)) return false;
+        return true;
+    }
+    th_type *current = th_resolve(arms.data[arm_index].type);
+    size_t current_count = 1;
+    th_comb current_comb;
+    if (th_sum_comb(current, &current_comb) && current_comb == TH_UNION)
+        current_count = th_sum_len(current);
+    for (size_t i = 0; i < current_count; i++) {
+        th_type *candidate = current_count == 1 ? current
+                                                : th_sum_arm(current, i);
+        bool prior = false;
+        for (size_t p = 0; p < arm_index; p++)
+            prior |= n00bb_typecase_case_contains(
+                module, arms.data[p].type, candidate);
+        if (!prior) return true;
+    }
     return false;
 }
 
@@ -8631,6 +8694,25 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
             context->reachable = true;
             return true;
         }
+        if (frame->expression && context->reachable) {
+            parse_tree_t *expression = value_body_expression(
+                visit->grammar, visit->node);
+            ir_value_t *value = expression
+                ? ir_lower_node_value(context, expression) : nullptr;
+            ir_instr_t *store = value
+                ? ir_instr_add(context->block, IR_OP_COPY) : nullptr;
+            if (!store || !frame->result_local
+                || !ir_type_eq(context->module, value->type,
+                               frame->result_local->type)
+                || !ir_instr_set_dest_local(store, frame->result_local)
+                || !ir_instr_operand_value(store, value)) {
+                lower_error(context, IR_DIAG_TYPE_MISMATCH,
+                    lower_span_for_tree(context, visit->node),
+                    "typecase value arm does not match its result type");
+                return false;
+            }
+            store->span = lower_span_for_tree(context, visit->node);
+        }
         if (!is_else
             && !ir_lower_bindings_restore(context,
                                             frame->binding_checkpoint)) {
@@ -8661,6 +8743,8 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
 {
     n00bb_lower_context_t *lower = context->user;
     if (entering) {
+        bool expression = nt_is(visit->grammar, visit->node,
+                                "typecase-value-expr");
         parse_cf_label_t *label = parse_cf_label_lookup(
             tu_state(lower->unit)->annotations, visit->node);
         parse_tree_t *subject_node = label
@@ -8683,6 +8767,7 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
             .subject_symbol = symbol,
             .arms = core_list_new(n00bb_typecase_arm_t),
             .order = ++lower->next_control_order,
+            .expression = expression,
             .active = context->reachable,
         };
         if (!n00bb_typecase_collect(visit->grammar, label->then_body,
@@ -8698,6 +8783,17 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
             return false;
         }
         th_type *subject_type = th_resolve(symbol->type);
+        for (size_t i = 0; i < frame.arms.len; i++) {
+            if (n00bb_typecase_arm_has_fresh_match(
+                    context->module, subject_type, frame.arms, i))
+                continue;
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(lower->unit), lower->unit,
+                CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0006"),
+                CORE_STRING_STATIC(
+                    "typecase case cannot match an unhandled subject type"),
+                link_source_location(frame.arms.data[i].node));
+        }
         if (!frame.else_body
             && !n00bb_typecase_exhaustive(context->module, subject_type,
                                            frame.arms)) {
@@ -8709,6 +8805,23 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
         }
         if (frame.active) {
             frame.join = n00bb_branch_block(context, lower, "typecase_join");
+            if (expression) {
+                th_type *result_type = core_tree_node_value(visit->node).type;
+                char local_name[64];
+                snprintf(local_name, sizeof(local_name),
+                         "__n00bb_typecase_result_%llu",
+                         (unsigned long long)context->next_value_id++);
+                frame.result_local = result_type
+                    ? ir_local_add(context->function, local_name, result_type)
+                    : nullptr;
+                if (!frame.result_local) {
+                    core_list_free(frame.arms);
+                    lower_error(context, IR_DIAG_VERIFY_TYPED,
+                        lower_span_for_tree(context, visit->node),
+                        "typecase expression has no inferred result type");
+                    return false;
+                }
+            }
             frame.else_block = frame.else_body
                 ? n00bb_branch_block(context, lower, "typecase_else") : nullptr;
             frame.unmatched_block = frame.else_body ? frame.else_block
@@ -8737,6 +8850,23 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
         if (!unreachable) return false;
         unreachable->span = lower_span_for_tree(context, frame.node);
     }
+    if (frame.expression && frame.join_reachable) {
+        char value_name[64];
+        snprintf(value_name, sizeof(value_name),
+                 "__n00bb_typecase_value_%llu",
+                 (unsigned long long)context->next_value_id++);
+        ir_instr_t *read = ir_instr_add(frame.join, IR_OP_COPY);
+        if (!read || !ir_instr_set_dest(read, value_name,
+                                        frame.result_local->type)
+            || !ir_instr_operand_local(read, frame.result_local)
+            || !ir_lower_set_node_value(context, frame.node, read->dest)) {
+            lower_error(context, IR_DIAG_INTERNAL,
+                lower_span_for_tree(context, frame.node),
+                "could not read the typecase expression result");
+            return false;
+        }
+        read->span = lower_span_for_tree(context, frame.node);
+    }
     context->block = frame.join;
     context->reachable = frame.join_reachable;
     return true;
@@ -8749,7 +8879,8 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
     (void)state;
     n00bb_lower_context_t *lower = context->user;
     if (!lower) return false;
-    if (nt_is(visit->grammar, visit->node, "typecase-stmt"))
+    if (nt_is(visit->grammar, visit->node, "typecase-stmt")
+        || nt_is(visit->grammar, visit->node, "typecase-value-expr"))
         return n00bb_lower_typecase_annotation(context, visit, entering);
     if (!entering) {
         if (!lower->switches.len
@@ -9331,6 +9462,15 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                 if (!frame->active || !frame->expression) continue;
                 for (size_t arm = 0; arm < frame->cases.len; arm++)
                     if (frame->cases.data[arm].body == ancestor)
+                        handled_by_value_expression = true;
+                if (frame->else_body == ancestor)
+                    handled_by_value_expression = true;
+            }
+            for (size_t i = 0; i < lower->typecases.len; i++) {
+                n00bb_typecase_frame_t *frame = &lower->typecases.data[i];
+                if (!frame->active || !frame->expression) continue;
+                for (size_t arm = 0; arm < frame->arms.len; arm++)
+                    if (frame->arms.data[arm].body == ancestor)
                         handled_by_value_expression = true;
                 if (frame->else_body == ancestor)
                     handled_by_value_expression = true;
@@ -31931,11 +32071,14 @@ typecase_subject_symbol(parse_grammar_t *grammar,
                         parse_tree_t *case_block)
 {
     parse_tree_t *typecase = core_tree_node_value(case_block).parent;
-    while (typecase && !nt_is(grammar, typecase, "typecase-stmt"))
+    while (typecase && !nt_is(grammar, typecase, "typecase-stmt")
+           && !nt_is(grammar, typecase, "typecase-value-expr"))
         typecase = core_tree_node_value(typecase).parent;
     parse_tree_t *expression = typecase
         ? child_nt(grammar, typecase, "expression") : nullptr;
-    parse_sym_entry_t *symbol = attached_symbol(grammar, unit, expression);
+    parse_tree_t *subject = n00bb_simple_lvalue(expression);
+    parse_sym_entry_t *symbol = subject
+        ? attached_symbol(grammar, unit, subject) : nullptr;
     return symbol && (symbol->kind == PARSE_SYM_VARIABLE
                       || symbol->kind == PARSE_SYM_PARAM)
         ? symbol : nullptr;
@@ -31947,7 +32090,9 @@ cache_typecase_arm_types(parse_grammar_t *grammar,
 {
     if (!nt_is(grammar, node, "type-spec-list")) return true;
     parse_tree_t *arm = core_tree_node_value(node).parent;
-    if (!arm || !nt_is(grammar, arm, "typecase-case-block")) return true;
+    if (!arm || (!nt_is(grammar, arm, "typecase-case-block")
+                 && !nt_is(grammar, arm,
+                           "typecase-value-case-block"))) return true;
     core_list_t(th_type_ptr_t) types = core_list_new(th_type_ptr_t);
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *child = core_tree_child(node, i);
@@ -32016,6 +32161,7 @@ prepare_typecase_arm(parse_grammar_t *grammar, core_translation_unit_t *unit,
     }
     parse_symtab_t *symtab = state->annotations->symtab;
     parse_tree_t *body = child_nt(grammar, case_block, "body");
+    if (!body) body = child_nt(grammar, case_block, "value-body");
     parse_scope_t *lexical_scope = body
         ? parse_symtab_scope_for_node(symtab, body) : nullptr;
     parse_scope_t *scope = parse_symtab_scope_in_namespace(
@@ -32064,7 +32210,8 @@ prepare_typecase_arm(parse_grammar_t *grammar, core_translation_unit_t *unit,
     }
     shadow->type = narrowed;
     parse_tree_set_resolution_symbol(case_block, shadow);
-    core_tree_node_value(case_block).type = narrowed;
+    if (nt_is(grammar, case_block, "typecase-case-block"))
+        core_tree_node_value(case_block).type = narrowed;
 }
 
 static bool
@@ -32078,7 +32225,9 @@ apply_typecase_narrowing(parse_grammar_t *grammar, parse_tree_t *node)
     if (!symbol) return true;
     for (parse_tree_t *parent = core_tree_node_value(node).parent; parent;
          parent = core_tree_node_value(parent).parent) {
-        if (!nt_is(grammar, parent, "typecase-case-block")) continue;
+        if (!nt_is(grammar, parent, "typecase-case-block")
+            && !nt_is(grammar, parent,
+                      "typecase-value-case-block")) continue;
         parse_sym_entry_t *shadow = core_tree_node_value(parent).sym;
         if (!shadow || shadow == symbol || shadow->shadowed != symbol
             || !parse_sym_binding(shadow,
@@ -35307,6 +35456,20 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         parse_tree_walk_apply_node(state->reference_walk, node, parent,
             depth, child_index, node_reference_kinds,
             node_reference_kind_count, false);
+        if (nt_is(grammar, node, "tuple-or-paren")
+            && core_tree_num_children(node) == 3) {
+            parse_tree_t *inner = core_tree_child(node, 1);
+            parse_sym_entry_t *symbol = attached_symbol(grammar, unit, inner);
+            if (symbol && !parse_tree_set_resolution_symbol(node, symbol)) {
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0013"),
+                    CORE_STRING_STATIC(
+                        "could not retain parenthesized symbol resolution"),
+                    link_source_location(node));
+                return;
+            }
+        }
         if (!n00bb_apply_option_branch_shadow(grammar, unit, node)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
@@ -35430,8 +35593,11 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             CORE_STRING_STATIC(
                 "array type mixes explicit array syntax with dimension shorthand"),
             link_source_location(node));
-    if (entering && nt_is(grammar, node, "body") && parent
-        && nt_is(grammar, parent, "typecase-case-block"))
+    if (entering
+        && (nt_is(grammar, node, "body")
+            || nt_is(grammar, node, "value-body")) && parent
+        && (nt_is(grammar, parent, "typecase-case-block")
+            || nt_is(grammar, parent, "typecase-value-case-block")))
         prepare_typecase_arm(grammar, unit, parent);
     if (!entering) {
         cache_type_syntax_node(grammar, node);

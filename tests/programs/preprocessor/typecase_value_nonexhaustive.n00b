@@ -1,0 +1,5 @@
+func value_typecase_nonexhaustive(item: (int | string)) -> int {
+    return typecase item {
+        case int { = item }
+    }
+}

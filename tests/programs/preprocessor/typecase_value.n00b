@@ -1,0 +1,20 @@
+func bare_typecase(item: (int | string)) -> int {
+    typecase item {
+        case int { return item + 1 }
+        case string { return 0 }
+    }
+}
+
+func value_typecase(item: (int | string)) -> int {
+    return typecase item {
+        case int { = item + 1 }
+        case string { = 0 }
+    }
+}
+
+func value_typecase_else(item: any) -> int {
+    return typecase (item) {
+        case int { = 1 }
+        else { = 0 }
+    }
+}
