@@ -1349,15 +1349,26 @@ n00bb_control_label(parse_grammar_t *grammar, parse_tree_t *node,
     return first_token_text(child_nt(grammar, parent, "label"));
 }
 
+static parse_sym_phase_t
+lexical_execution_phase(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at;) {
+        parse_tree_t *parent = core_tree_node_value(at).parent;
+        if (nt_is(grammar, parent, "comptime-stmt")) {
+            return core_tree_num_children(parent) > 1
+                && at == core_tree_child(parent, 1)
+                ? PARSE_SYM_PHASE_COMPTIME : PARSE_SYM_PHASE_RUNTIME;
+        }
+        at = parent;
+    }
+    return PARSE_SYM_PHASE_RUNTIME;
+}
+
 static bool
 declared_in_comptime(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    for (parse_tree_t *at = node; at;
-         at = core_tree_node_value(at).parent) {
-        if (nt_is(grammar, at, "comptime-stmt"))
-            return true;
-    }
-    return false;
+    return lexical_execution_phase(grammar, node)
+        == PARSE_SYM_PHASE_COMPTIME;
 }
 
 static bool
@@ -2754,11 +2765,7 @@ n00bb_range_inside_function(parse_grammar_t *grammar, parse_tree_t *node)
 static parse_sym_phase_t
 n00bb_range_execution_phase(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    for (parse_tree_t *at = node; at;
-         at = core_tree_node_value(at).parent)
-        if (nt_is(grammar, at, "comptime-stmt"))
-            return PARSE_SYM_PHASE_COMPTIME;
-    return PARSE_SYM_PHASE_RUNTIME;
+    return lexical_execution_phase(grammar, node);
 }
 
 static bool
@@ -20352,12 +20359,16 @@ collect_one_module_initializer_root(parse_grammar_t *grammar,
                                     core_translation_unit_t *unit,
                                     parse_tree_t *statement,
                                     core_list_t(n00bb_tree_ptr_t) *runtime,
-                                    core_list_t(n00bb_tree_ptr_t) *comptime)
+    core_list_t(n00bb_tree_ptr_t) *comptime)
 {
     if (nt_is(grammar, statement, "comptime-stmt")) {
-        parse_tree_t *body = child_nt(grammar, statement, "body");
-        if (!body) return false;
-        core_list_push(*comptime, body);
+        parse_tree_t *comptime_body = child_nt(grammar, statement, "body");
+        parse_tree_t *else_clause = child_nt(grammar, statement,
+                                             "comptime-else");
+        parse_tree_t *runtime_body = child_nt(grammar, else_clause, "body");
+        if (!comptime_body) return false;
+        core_list_push(*comptime, comptime_body);
+        if (runtime_body) core_list_push(*runtime, runtime_body);
         return true;
     }
     if (!statement || module_initializer_declaration(grammar, statement))

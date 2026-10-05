@@ -7031,3 +7031,23 @@ if grep 'call @__init' "$tmp/init_existing.ir" | grep -q 'fresh'; then
     echo 'init(existing, ...) unexpectedly used fresh constructor storage' >&2
     exit 1
 fi
+
+"$compiler" lower --dump-ir \
+    "$program_dir/comptime_else.n00b" \
+    >"$tmp/comptime_else.ir" 2>&1 || {
+    cat "$tmp/comptime_else.ir"
+    exit 1
+}
+awk '
+    /static func @__n00bb_comptime_init/ { phase = "comptime"; next }
+    /static func @__n00bb_runtime_init/ { phase = "runtime"; next }
+    phase == "comptime" && /call @__n00bb_comptime_compile_branch/ {
+        compile_call = 1
+    }
+    phase == "comptime" && /call @__n00bb_comptime_runtime_branch/ {
+        exit 1
+    }
+    phase == "runtime" && /call @runtime_branch/ { runtime_call = 1 }
+    phase == "runtime" && /call @compile_branch/ { exit 1 }
+    END { exit !(compile_call && runtime_call) }
+' "$tmp/comptime_else.ir"

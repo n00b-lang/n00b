@@ -287,7 +287,8 @@
 
 <assign-op> ::= %"="
 
-<comptime-stmt> ::= %"comptime" <body>
+<comptime-stmt> ::= %"comptime" <body> <comptime-else>?
+<comptime-else> ::= <eos>* %"else" <body>
 
 <func-def> @scope("function", $1) @declares($1, "function") ::=
     <func-prelude> %IDENTIFIER <func-type-signature> <body>
