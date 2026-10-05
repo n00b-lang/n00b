@@ -1518,14 +1518,17 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
 
 static void
 propagate_tree_type_to_wrappers(parse_tree_t *node, th_ctx *types,
-                                uint64_t previous_hash, th_type *type)
+                                th_type *previous, th_type *type)
 {
     for (parse_tree_t *parent = node
              ? core_tree_node_value(node).parent : nullptr;
          parent; parent = core_tree_node_value(parent).parent) {
         th_type *parent_type = core_tree_node_value(parent).type;
-        if (!parent_type
-            || th_hash(types, th_resolve(parent_type)) != previous_hash)
+        if (!parent_type || !previous
+            || (th_resolve(parent_type) != th_resolve(previous)
+                && (!th_is_closed(types, parent_type)
+                    || !th_is_closed(types, previous)
+                    || th_hash(types, parent_type) != th_hash(types, previous))))
             break;
         parse_tree_t *typed_child = nullptr;
         for (size_t i = 0; i < core_tree_num_children(parent); i++) {
@@ -1536,11 +1539,10 @@ propagate_tree_type_to_wrappers(parse_tree_t *node, th_ctx *types,
                 typed_child = child;
             }
         }
-        if (!typed_child
-            || th_hash(types, th_resolve(
-                    core_tree_node_value(typed_child).type)) != previous_hash)
+        if (!typed_child || typed_child != node)
             break;
         core_tree_node_value(parent).type = type;
+        node = parent;
     }
 }
 
@@ -1549,8 +1551,6 @@ propagate_symbol_type(parse_sym_entry_t *symbol, th_ctx *types,
                       th_type *previous, th_type *type)
 {
     if (!symbol || !types || !type) return;
-    uint64_t previous_hash = previous
-        ? th_hash(types, th_resolve(previous)) : 0;
     for (size_t i = 0; previous && i < symbol->use_count; i++) {
         parse_tree_t *use = symbol->use_nodes[i];
         if (!use || core_tree_is_leaf(use)) continue;
@@ -1558,9 +1558,11 @@ propagate_symbol_type(parse_sym_entry_t *symbol, th_ctx *types,
         if (resolution.kind != PARSE_NODE_RESOLUTION_SYMBOL
             || resolution.target.symbol != symbol) continue;
         th_type *use_type = core_tree_node_value(use).type;
-        if (use_type && th_hash(types, th_resolve(use_type)) == previous_hash) {
+        if (use_type && (th_resolve(use_type) == th_resolve(previous)
+            || (th_is_closed(types, use_type) && th_is_closed(types, previous)
+                && th_hash(types, use_type) == th_hash(types, previous)))) {
             core_tree_node_value(use).type = type;
-            propagate_tree_type_to_wrappers(use, types, previous_hash, type);
+            propagate_tree_type_to_wrappers(use, types, previous, type);
         }
     }
     symbol->type = type;
@@ -1872,7 +1874,9 @@ record_function_exit_fact(parse_grammar_t *grammar,
 
         if (!observed) return;
 
-        th_type *signature = symbol->type;
+        th_type *signature = parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.body-function-signature"));
+        if (!signature) signature = symbol->type;
         if (signature && is_scheme(signature))
             signature = th_instantiate(state->types, signature);
         th_type *expected = signature ? th_func_ret(signature) : nullptr;
@@ -1882,7 +1886,7 @@ record_function_exit_fact(parse_grammar_t *grammar,
         bool wrap_atomic = expected_element && !actual_element;
         th_type *actual = unwrap_atomic ? actual_element : observed;
         th_type *wanted = wrap_atomic ? expected_element : expected;
-        if (wanted && (unwrap_atomic || wrap_atomic)) {
+        if (wanted) {
             th_type *unified = th_unify_in_place(state->types, actual,
                                                   wanted);
             if (!unified) facts->conflict = true;
@@ -4347,7 +4351,6 @@ unify_call_node_type(core_translation_unit_t *unit,
     th_type *unification_actual = unwrap_actual ? actual_element : actual;
     th_type *unification_expected = wrap_expected
         ? expected_element : expected;
-    uint64_t previous_hash = th_hash(state->types, th_resolve(actual));
     th_type *unified = th_unify_in_place(state->types, unification_actual,
                                          unification_expected);
     if (!unified) {
@@ -4359,7 +4362,7 @@ unify_call_node_type(core_translation_unit_t *unit,
         th_type *contextual_type = wrap_expected ? expected : unified;
         core_tree_node_value(typed_node).type = contextual_type;
         propagate_tree_type_to_wrappers(typed_node, state->types,
-                                        previous_hash, contextual_type);
+                                        actual, contextual_type);
     }
     return true;
 }
@@ -9350,6 +9353,8 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
         symbol = requirement ? requirement
             : builtin_operator_trait ? symbol : nullptr;
     }
+    bool builtin_requirement = symbol && parse_sym_binding(symbol,
+        CORE_STRING_STATIC("n00bb.builtin-trait-method"));
     core_translation_unit_t *owner = symbol
         ? unit_for_symbol(visit->grammar, lower->units, symbol) : nullptr;
     n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;
@@ -9376,14 +9381,22 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
                                   builtin_signature, IR_LINK_EXTERN);
         callee = builtin ? ir_func_address(context->module, builtin) : nullptr;
     }
-    if (!callee && !(builtin_operator_trait && analysis->may_link_further))
+    bool abstract_builtin = builtin_operator_trait
+        && (analysis->may_link_further || builtin_requirement);
+    if (!callee && !abstract_builtin)
         return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
             "operator has no resolved trait method in this execution phase");
     th_ctx *types = ir_module_types(context->module);
-    th_type *contract = symbol->callable_contract
+    th_type *requirement_contract = symbol->callable_contract
         ? symbol->callable_contract : symbol->type;
+    parse_sym_entry_t *implementation = builtin_requirement && site->symbol
+        && !parse_sym_binding(site->symbol,
+            CORE_STRING_STATIC("n00bb.builtin-trait-method"))
+            ? site->symbol : symbol;
+    th_type *contract = implementation->callable_contract
+        ? implementation->callable_contract : implementation->type;
     th_type *callable = is_scheme(contract)
-        ? th_instantiate(types, contract) : th_resolve(contract);
+        ? th_instantiate(types, contract) : th_type_clone(types, contract);
     th_param parameters[2] = {
         {.mode = TH_IN, .type = operands[0]->type},
         {.mode = TH_IN, .type = operand_count == 2
@@ -9393,14 +9406,16 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
         ? th_func_with_error(types, result_type, th_func_error(callable),
             parameters, operand_count, nullptr, nullptr, 0) : nullptr;
     th_type *signature = shape ? th_unify(types, callable, shape) : nullptr;
+    // Bind the copied call instance to caller nodes, never to the contract.
+    if (signature) signature = th_unify_in_place(types, signature, shape);
     if (!signature || th_func_nparams(signature) != operand_count
         || th_func_rest(signature))
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
             "operator operands or result do not match its trait method");
-    bool semantic_trait_call = symbol->scope
+    bool semantic_trait_call = !builtin_requirement && symbol->scope
         && core_string_eq(symbol->scope->scope_tag,
                           CORE_STRING_STATIC("trait"));
-    if (builtin_operator_trait && analysis->may_link_further) {
+    if (abstract_builtin) {
         core_buffer_t requirement_name = {0};
         core_buffer_printf(&requirement_name, "__trait_req_%s_%.*s",
             site->resolved_trait_name,
@@ -9408,9 +9423,17 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
             site->dispatch_method.data);
         ir_func_t *requirement = requirement_name.data
             ? ir_func_find(context->module, requirement_name.data) : nullptr;
-        if (!requirement && requirement_name.data)
+        if (!requirement && requirement_name.data) {
+            th_type *requirement_type = is_scheme(requirement_contract)
+                ? th_instantiate(types, requirement_contract)
+                : th_type_clone(types, requirement_contract);
             requirement = ir_func_add(context->module,
-                requirement_name.data, signature, IR_LINK_EXTERN);
+                requirement_name.data, requirement_type, IR_LINK_EXTERN);
+            if (requirement && is_scheme(requirement_contract)
+                && !ir_func_set_callable_contract(requirement,
+                                                 requirement_contract))
+                requirement = nullptr;
+        }
         core_buffer_release(&requirement_name);
         ir_value_t *requirement_address = requirement
             ? ir_func_address(context->module, requirement) : nullptr;
@@ -12781,7 +12804,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ? symbol->callable_contract : symbol->type;
     th_type *signature = is_scheme(callable)
         ? th_instantiate(ir_module_types(context->module), callable)
-        : th_resolve(callable);
+        : th_type_clone(ir_module_types(context->module), callable);
     if (!signature || th_kind_of(signature) != TH_FUNCTION)
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                            "call target does not have a function type");
@@ -12795,6 +12818,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     signature = call_constraint
         ? th_unify(ir_module_types(context->module), signature,
                    call_constraint) : nullptr;
+    if (signature)
+        signature = th_unify_in_place(ir_module_types(context->module),
+                                      signature, call_constraint);
     signature_return = signature ? th_func_ret(signature) : nullptr;
     if (!signature || !signature_return)
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
@@ -14205,7 +14231,7 @@ n00bb_lower_index_store(ir_lower_context_t *context, parse_visit_t *visit,
         ? symbol->callable_contract : symbol->type;
     th_type *signature = is_scheme(callable)
         ? th_instantiate(ir_module_types(context->module), callable)
-        : th_resolve(callable);
+        : th_type_clone(ir_module_types(context->module), callable);
     if (!callee || !signature || th_kind_of(signature) != TH_FUNCTION
         || th_func_nparams(signature) != 3 || th_func_rest(signature)) {
         lower_error(context, IR_DIAG_TYPE_ARGS,
@@ -15733,8 +15759,8 @@ n00bb_failure_channel_accepts(ir_lower_context_t *context,
     th_ctx *types = context ? ir_module_types(context->module) : nullptr;
     if (!types || !caller_error || !failure
         || n00bb_nil_type(types, caller_error)) return false;
-    if (ir_func_execution_phase(context->function) == IR_PHASE_COMPTIME
-        && th_kind_of(th_resolve(caller_error)) == TH_VAR)
+    if (th_kind_of(th_resolve(caller_error)) == TH_VAR
+        || th_kind_of(th_resolve(failure)) == TH_VAR)
         return th_unify_in_place(types, caller_error, failure);
     return ir_type_eq(context->module, caller_error, failure);
 }
@@ -16421,9 +16447,13 @@ function_semantic_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !symbol || !symbol->type) return nullptr;
+    th_type *body_type = parse_sym_binding(symbol,
+        CORE_STRING_STATIC("n00bb.body-function-signature"));
     th_type *source_type = is_scheme(symbol->type)
         ? th_instantiate(state->types, symbol->type)
         : th_resolve(symbol->type);
+    if (body_type && source_type)
+        source_type = th_unify_in_place(state->types, body_type, source_type);
     return function_semantic_shape(grammar, unit, symbol, source_type);
 }
 
@@ -16801,7 +16831,8 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
             "translation unit has no symbol table for trait requirements");
         for (parse_scope_t *scope = symtab->all_scopes; scope;
              scope = scope->all_next) {
-            if (!core_string_eq(scope->scope_tag,
+            if (!scope_in_value_namespace(scope)
+                || !core_string_eq(scope->scope_tag,
                                 CORE_STRING_STATIC("trait"))) continue;
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
@@ -20852,6 +20883,82 @@ trait_requirement_name(th_ctx *types, core_string_t trait_name,
 }
 
 static parse_sym_entry_t *
+builtin_trait_requirement_symbol(core_translation_unit_t *unit,
+                                  core_string_t trait_name,
+                                  core_string_t method_name)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    if (!symtab || !state->types || !trait_name.data || !method_name.data)
+        return nullptr;
+    for (size_t i = 0; i < trait_name.u8_bytes; i++)
+        if (trait_name.data[i] == '.') return nullptr;
+    parse_namespace_t *builtins = parse_symtab_ns(
+        symtab, CORE_STRING_STATIC("builtin"));
+    parse_sym_entry_t *trait = builtins
+        ? parse_symtab_lookup_in(builtins->root, trait_name) : nullptr;
+    parse_sym_entry_t *cached = trait && trait->member_scope
+        ? parse_symtab_lookup_in(trait->member_scope, method_name) : nullptr;
+    if (cached) return cached;
+
+    char *method_text = core_strndup(method_name.data, method_name.u8_bytes);
+    size_t count = th_env_method_requirements(state->types, method_text,
+                                               nullptr, 0);
+    th_env_method_requirement_t *requirements = count
+        ? core_alloc_array(th_env_method_requirement_t, count) : nullptr;
+    if (count) th_env_method_requirements(state->types, method_text,
+                                           requirements, count);
+    th_type *contract = nullptr;
+    for (size_t i = 0; i < count; i++)
+        if (requirements[i].trait_name
+            && core_string_eq(core_string_from_cstr(
+                requirements[i].trait_name), trait_name)) {
+            contract = th_generalize(state->types, requirements[i].contract);
+            break;
+        }
+    core_free(requirements);
+    core_free(method_text);
+    if (!contract || !builtins || !builtins->root) return nullptr;
+    parse_scope_t *saved = builtins->current;
+    parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
+                             builtins->root);
+    if (!trait) {
+        trait = parse_symtab_add(symtab, CORE_STRING_STATIC("builtin"),
+                                 trait_name, PARSE_SYM_TYPEDEF, nullptr);
+        if (trait) {
+            trait->type = th_name(state->types, trait->name.data);
+            trait->adt_kind = CORE_STRING_STATIC("trait");
+            trait->visibility = CORE_STRING_STATIC("public");
+            parse_sym_set_binding(trait,
+                CORE_STRING_STATIC("n00bb.builtin-type"), trait);
+            parse_symtab_push_scope(symtab, CORE_STRING_STATIC("builtin"),
+                                    trait_name);
+            trait->member_scope = builtins->current;
+            trait->member_scope->scope_tag = CORE_STRING_STATIC("trait");
+        }
+    }
+    else if (trait->member_scope)
+        parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
+                                 trait->member_scope);
+    parse_sym_entry_t *method = trait && trait->member_scope
+        ? parse_symtab_add(symtab, CORE_STRING_STATIC("builtin"),
+                            method_name, PARSE_SYM_FUNCTION, nullptr) : nullptr;
+    if (method) {
+        method->owner_type = trait;
+        method->type = contract;
+        method->callable_contract = contract;
+        method->visibility = CORE_STRING_STATIC("public");
+        parse_sym_set_binding(method,
+            CORE_STRING_STATIC("n00bb.builtin-trait-method"), trait);
+        parse_sym_set_phases(method, PARSE_SYM_PHASE_BOTH,
+            PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
+    }
+    parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"), saved);
+    return method;
+}
+
+static parse_sym_entry_t *
 trait_method_requirement_symbol(parse_grammar_t *grammar,
                                 n00bb_link_analysis_t *analysis,
                                 core_translation_unit_t *caller,
@@ -20891,7 +20998,8 @@ trait_method_requirement_symbol(parse_grammar_t *grammar,
         if (found && found != method) return nullptr;
         found = method;
     }
-    return found;
+    return found ? found : builtin_trait_requirement_symbol(caller,
+        qualified_trait, method_name);
 }
 
 static parse_sym_entry_t *

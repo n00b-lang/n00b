@@ -4604,6 +4604,21 @@ fi
 grep -q 'error\[N00BB-T0003\].*__add' \
     "$tmp/operator_add_wrong_argument.ir"
 "$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_generic_builtin.n00b" \
+    >"$tmp/operator_generic_builtin.ir" 2>&1 || {
+    cat "$tmp/operator_generic_builtin.ir"
+    echo 'generic builtin operator requirements did not lower' >&2
+    exit 1
+}
+for method in Add___add Negate___negate Not___not Comparable___cmp; do
+    grep -q "trait.method .*@__trait_req_$method" \
+        "$tmp/operator_generic_builtin.ir"
+done
+grep -Fq 'call_signature((`b, `c) -> `a fail: `d)' \
+    "$tmp/operator_generic_builtin.ir"
+grep -Fq 'call_signature((`b) -> `a fail: `c)' \
+    "$tmp/operator_generic_builtin.ir"
+"$compiler" lower --dump-ir \
     "$script_dir/programs/operator_unary_traits.n00b" \
     >"$tmp/operator_unary_traits.ir" 2>&1 || {
     cat "$tmp/operator_unary_traits.ir"

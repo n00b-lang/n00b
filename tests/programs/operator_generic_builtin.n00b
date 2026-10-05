@@ -1,0 +1,15 @@
+func generic_add(left: `T, right: `A) -> `R fail: `E where `T: Add {
+    return left + right
+}
+
+func generic_negate(item: `T) -> `R fail: `E where `T: Negate {
+    return -item
+}
+
+func generic_not(item: `T) -> bool fail: `E where `T: Not {
+    return !item
+}
+
+func generic_compare(left: `T, right: `A) -> bool fail: `E where `T: Comparable {
+    return left < right
+}
