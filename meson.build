@@ -2098,6 +2098,13 @@ rocs_index_test = executable('test_rocs_index',
 )
 test('rocs_index', rocs_index_test, suite: 'unit')
 
+# n00b#403 probe: not registered as a test(), so it never gates CI. Build it
+# with `ninja probe_rocs_403_cardinality` and run it by hand.
+probe_rocs_403 = executable('probe_rocs_403_cardinality',
+    ['test/unit/probe_rocs_403_cardinality.c'],
+    kwargs: test_common_kwargs,
+)
+
 rocs_fulltext_index_test = executable('test_rocs_fulltext_index',
     ['test/unit/test_rocs_fulltext_index.c'],
     kwargs: test_common_kwargs,
