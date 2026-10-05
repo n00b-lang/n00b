@@ -1421,6 +1421,15 @@ grep -q ' eq %value, %' "$tmp/lower_bool_not.ir"
 }
 grep -q ': i128 = cast %value' "$tmp/lower_numeric_cast.ir"
 grep -q ': i64 = cast trap %value' "$tmp/lower_numeric_cast.ir"
+
+"$compiler" lower --dump-ir "$program_dir/lower_enum_cast.n00b" \
+    >"$tmp/lower_enum_cast.ir" 2>"$tmp/lower_enum_cast.err" || {
+    cat "$tmp/lower_enum_cast.err"
+    exit 1
+}
+grep -q ': u8 = enum.value %' "$tmp/lower_enum_cast.ir"
+grep -q ': ubitint\[1\] = enum.value trap %' "$tmp/lower_enum_cast.ir"
+grep -q ': u8 = enum.value trap %' "$tmp/lower_enum_cast.ir"
 grep -q 'shr' "$tmp/lower_compound_assignment.ir"
 grep -q 'and' "$tmp/lower_compound_assignment.ir"
 grep -q 'or' "$tmp/lower_compound_assignment.ir"

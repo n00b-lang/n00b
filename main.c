@@ -9231,6 +9231,32 @@ n00bb_comparison_member(n00bb_link_analysis_t *analysis, th_type *type,
     return nullptr;
 }
 
+static parse_sym_entry_t *
+n00bb_enum_type_symbol(n00bb_link_analysis_t *analysis, th_type *type)
+{
+    if (!analysis || !type) return nullptr;
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        parse_namespace_t *type_ns = symtab
+            ? parse_symtab_ns(symtab, CORE_STRING_STATIC("type")) : nullptr;
+        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+             scope; scope = scope->all_next) {
+            if (!type_ns || scope->ns != type_ns) continue;
+            for (parse_sym_entry_t *symbol = scope->first_in_scope;
+                 symbol; symbol = symbol->next_in_scope)
+                if (symbol->type && symbol->member_scope
+                    && core_string_eq(symbol->member_scope->scope_tag,
+                                      CORE_STRING_STATIC("enum"))
+                    && th_hash(state->types, symbol->type)
+                        == th_hash(state->types, type))
+                    return symbol;
+        }
+    }
+    return nullptr;
+}
+
 static ir_lower_result_t n00bb_lower_operator_method(
     ir_lower_context_t *context, parse_visit_t *visit,
     ir_value_t *const *operands, size_t operand_count,
@@ -9683,6 +9709,35 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         return (ir_lower_result_t){IR_LOWER_VALUE, operands[0]};
     th_ctx *types = ir_module_types(context->module);
     th_type *from = operands[0]->type;
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    parse_sym_entry_t *enum_symbol = caller
+        ? n00bb_enum_type_symbol(caller->link_analysis, from) : nullptr;
+    if (enum_symbol && is_integer_type(target)) {
+        const n00bb_enum_range_t *range = parse_sym_binding(enum_symbol,
+            CORE_STRING_STATIC("n00bb.enum-range"));
+        ir_machine_t destination = ir_machine_of(context->module, target);
+        bool represents_range = range && (range->is_signed
+            ? destination.class == IR_CLASS_SINT
+                && destination.width >= range->magnitude_bits + 1
+            : (destination.class == IR_CLASS_UINT
+                    && destination.width >= range->magnitude_bits)
+                || (destination.class == IR_CLASS_SINT
+                    && destination.width > range->magnitude_bits));
+        ir_instr_t *conversion = ir_instr_add(context->block,
+                                               IR_OP_ENUM_VALUE);
+        char name[48];
+        snprintf(name, sizeof(name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        if (!range || !conversion
+            || !ir_instr_set_dest(conversion, name, target)
+            || !ir_instr_operand_value(conversion, operands[0])
+            || (!represents_range && !ir_instr_add_mod(conversion, "trap")))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not emit the semantic enum-to-integer conversion");
+        conversion->span = span;
+        return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
+    }
     th_type *from_definition = th_type_definition(types, from);
     th_type *to_definition = th_type_definition(types, target);
     bool boxing = ir_type_eq(context->module, target, th_name(types, "any"));
@@ -9691,7 +9746,6 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         || (to_definition
             && ir_type_eq(context->module, to_definition, from));
     if (boxing || nominal) {
-        n00bb_lower_context_t *lower = context->user;
         parse_tree_t *operand_node = core_tree_child(visit->node, 4);
         if (!n00bb_attach_expression_shape(context, visit->grammar,
                                           operand_node, operands[0]))
