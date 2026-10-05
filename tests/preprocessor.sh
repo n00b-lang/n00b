@@ -4844,6 +4844,35 @@ for location in evaluation global; do
     }
 done
 "$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_compound_traits.n00b" \
+    >"$tmp/operator_compound_traits.ir" 2>&1 || {
+    cat "$tmp/operator_compound_traits.ir"
+    exit 1
+}
+grep -q '= call @__add,' "$tmp/operator_compound_traits.ir"
+grep -q '= call @__string_add,' "$tmp/operator_compound_traits.ir"
+grep -q ': ubitint\[37\] = shl trap .*%count' "$tmp/operator_compound_traits.ir"
+grep -q ': ubitint\[37\] = shr trap .*%count' "$tmp/operator_compound_traits.ir"
+"$compiler" library --dump-ir \
+    "$script_dir/programs/operator_compound_traits.n00b" \
+    >"$tmp/operator_compound_traits_linkable.ir" 2>&1 || :
+test "$(grep -c 'trait.method "Add", "__add".*@__trait_req_Add___add' \
+    "$tmp/operator_compound_traits_linkable.ir")" -eq 2
+if grep -q '^error\[' "$tmp/operator_compound_traits_linkable.ir"; then
+    cat "$tmp/operator_compound_traits_linkable.ir"
+    exit 1
+fi
+for kind in byte result; do
+    if "$compiler" lower \
+        "$script_dir/programs/operator_compound_${kind}_rejected.n00b" \
+        >"$tmp/operator_compound_${kind}_rejected.out" 2>&1; then
+        echo "compound operator accepted an invalid ${kind} contract" >&2
+        exit 1
+    fi
+    grep -q 'trait constraint.*__add.*not satisfied' \
+        "$tmp/operator_compound_${kind}_rejected.out"
+done
+"$compiler" lower --dump-ir \
     "$script_dir/programs/operator_unary_traits.n00b" \
     >"$tmp/operator_unary_traits.ir" 2>&1 || {
     cat "$tmp/operator_unary_traits.ir"

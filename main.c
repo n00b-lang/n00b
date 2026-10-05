@@ -9393,7 +9393,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     bool builtin_operator_trait = site && site->resolved_trait_name
         && site->dispatch_trait.data
         && !strcmp(site->resolved_trait_name, site->dispatch_trait.data);
-    if (!builtin_string_add) {
+    if (!builtin_string_add || analysis->may_link_further) {
         parse_sym_entry_t *requirement = linkable_trait_requirement(analysis,
             lower->unit, site, symbol);
         symbol = requirement ? requirement
@@ -15241,10 +15241,9 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     if (!local && !address && !global)
         return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
                            "compound assignment target has no writable storage");
-    if (!target_type
-        || !ir_type_eq(context->module, target_type, operands[1]->type))
+    if (!target_type)
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                           "compound assignment value does not match the target type");
+                           "compound assignment target has no resolved type");
 
     parse_tree_t *operator = core_tree_num_children(visit->node) > 1
         ? core_tree_child(visit->node, 1) : nullptr;
@@ -15263,8 +15262,27 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     else return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                             "this compound assignment operator is not lowered");
 
-    ir_value_t *updated = n00bb_emit_binary_ir(context, op, target_type,
-        operands[0], operands[1], span);
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_use_site_t *site = caller
+        ? link_use_site_for_node(caller, visit->node) : nullptr;
+    ir_value_t *updated = nullptr;
+    if (site && site->operator_dispatch && !primitive_operator_site(site)) {
+        ir_lower_result_t result = n00bb_lower_operator_method(context, visit,
+            operands, operand_count, target_type, span);
+        if (result.status != IR_LOWER_VALUE) return result;
+        updated = result.value;
+    }
+    else {
+        bool shift = op == IR_OP_SHL || op == IR_OP_SHR;
+        if ((!shift && !ir_type_eq(context->module, target_type,
+                                   operands[1]->type))
+            || (shift && !is_integer_type(operands[1]->type)))
+            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+                "compound assignment operands do not match its operator");
+        updated = n00bb_emit_binary_ir(context, op, target_type,
+            operands[0], operands[1], span);
+    }
     bool stored = false;
     if (updated && local)
         stored = n00bb_emit_local_write(context, local, updated, span);
@@ -20108,6 +20126,32 @@ binary_operator_dispatch_for_node(parse_grammar_t *grammar,
         return true;
     }
     core_string_t spelling = first_token_text(core_tree_child(node, 1));
+    if (nt_is(grammar, node, "binop-assign-stmt")) {
+        static const struct {
+            const char *token;
+            const char *trait;
+            const char *method;
+        } operators[] = {
+            {"+=", "Add", "__add"},
+            {"-=", "Subtract", "__subtract"},
+            {"*=", "Multiply", "__multiply"},
+            {"/=", "Divide", "__divide"},
+            {"%=", "Remainder", "__remainder"},
+            {"&=", "Bit_And", "__bit_and"},
+            {"|=", "Bit_Or", "__bit_or"},
+            {"^=", "Bit_Xor", "__bit_xor"},
+            {"<<=", "Shift_Left", "__shift_left"},
+            {">>=", "Shift_Right", "__shift_right"},
+        };
+        for (size_t i = 0; i < sizeof(operators) / sizeof(operators[0]); i++) {
+            if (!core_string_eq(spelling,
+                    core_string_from_cstr(operators[i].token))) continue;
+            *trait = core_string_from_cstr(operators[i].trait);
+            *method = core_string_from_cstr(operators[i].method);
+            return true;
+        }
+        return false;
+    }
     if (nt_is(grammar, node, "add-expr")) {
         if (core_string_eq(spelling, CORE_STRING_STATIC("+"))) {
             *trait = CORE_STRING_STATIC("Add");

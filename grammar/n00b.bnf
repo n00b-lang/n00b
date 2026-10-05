@@ -337,12 +337,16 @@
 
 <assign-stmt> @assigns($0, $2) ::= <expression> <assign-op> <expression>
 
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) ::=
-       <expression> <binop-assign-op> <expression>
-
-<binop-assign-op> ::= %"+=" | %"-=" | %"*=" | %"/=" | %"%="
-                    | %"&=" | %"|=" | %"^="
-                    | %"<<=" | %">>="
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __add)") ::= <expression> %"+=" <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __subtract)") ::= <expression> %"-=" <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __multiply)") ::= <expression> %"*=" <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __divide)") ::= <expression> %"/=" <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __remainder)") ::= <expression> %"%=" <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __bit_and)") ::= <expression> %"&=" <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __bit_or)") ::= <expression> %"|=" <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __bit_xor)") ::= <expression> %"^=" <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __shift_left)") ::= <expression> %"<<=" <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __shift_right)") ::= <expression> %">>=" <expression>
 
 <expression-stmt> ::= <expression>
 
