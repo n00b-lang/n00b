@@ -1244,10 +1244,11 @@ static ir_rule_result_t rule_field(ir_module_t *m, ir_instr_t *in,
         return DECLINE;
     }
 
+    uint8_t attrs = 0;
     th_type *to = th_ind_referent(p);
     th_type *rc = record_of(m, to);
 
-    if (!rc) {
+    if (!rc || !th_ind_attrs(p, &attrs)) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
                  "field needs a pointer to a record, and this one is %s",
                  typed(m, p));
@@ -1264,8 +1265,7 @@ static ir_rule_result_t rule_field(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
 
-    th_type *out = th_ind(ir_ctx_types(m->ctx),
-                          TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE, mt);
+    th_type *out = th_ind(ir_ctx_types(m->ctx), attrs, mt);
 
     return ACCEPT(ir_type_intern(m, out));
 }
@@ -1427,8 +1427,7 @@ static ir_rule_result_t rule_index(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
 
-    th_type *out = th_ind(ir_ctx_types(m->ctx),
-                           TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE, elem);
+    th_type *out = th_ind(ir_ctx_types(m->ctx), attrs, elem);
 
     return ACCEPT(ir_type_intern(m, out));
 }

@@ -64,6 +64,7 @@ void th_ctx_free(th_ctx *ctx)
     core_list_free(ctx->ifaces);
     core_list_free(ctx->type_definitions);
     core_list_free(ctx->methods);
+    core_list_free(ctx->method_resolvers);
     core_list_free(ctx->errors);
     core_list_free(ctx->coercions);
     core_list_free(ctx->pending_environment_constraints);

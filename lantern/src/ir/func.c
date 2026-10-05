@@ -160,6 +160,14 @@ ir_value_t *ir_func_address(ir_module_t *m, ir_func_t *function)
     return value;
 }
 
+ir_value_t *ir_func_reference(ir_module_t *m, ir_func_t *function)
+{
+    ir_value_t *value = ir_func_address(m, function);
+    if (!value) return nullptr;
+    value->type = th_ind(ir_ctx_types(m->ctx), 0, value->type);
+    return value->type ? value : nullptr;
+}
+
 bool
 ir_func_set_callable_contract(ir_func_t *function, th_type *contract)
 {

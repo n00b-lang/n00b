@@ -571,6 +571,7 @@ bool ir_global_set_string_initializer(ir_module_t *m, ir_global_t *global,
  * may be used when this module declares a same-name, same-type extern. */
 ir_value_t  *ir_global_address(ir_module_t *m, ir_global_t *global);
 ir_value_t  *ir_func_address(ir_module_t *m, ir_func_t *function);
+ir_value_t  *ir_func_reference(ir_module_t *m, ir_func_t *function);
 /* Set a constant record initializer by member name. Symbol values
  * must name a function/global whose address type matches the corresponding
  * indirection member. */

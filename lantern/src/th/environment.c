@@ -1362,8 +1362,10 @@ static bool collect_intrinsic_type(const core_datalog_symbol_t *tuple,
       &query->environment->intrinsic_types.data[index.result.value];
   if (!same_intrinsic_head(fact->receiver_pattern, query->receiver))
     return true;
-  query->matched = th_unify(query->context, fact->receiver_pattern,
-                            query->receiver) != nullptr;
+  th_type *pattern = fresh_pattern(query->context,
+                                   fact->receiver_pattern);
+  query->matched = pattern && th_unify_probe(query->context, pattern,
+                                             query->receiver) != nullptr;
   return true;
 }
 

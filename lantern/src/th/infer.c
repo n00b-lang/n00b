@@ -502,6 +502,20 @@ bool th_register_method(th_ctx *ctx, th_type *receiver, const char *name,
     return true;
 }
 
+bool th_register_method_resolver(th_ctx *ctx,
+                                 th_method_resolver_fn resolver,
+                                 void *user)
+{
+    if (!ctx || !resolver) return false;
+    for (size_t i = 0; i < ctx->method_resolvers.len; i++) {
+        th_method_resolver *entry = &ctx->method_resolvers.data[i];
+        if (entry->resolver == resolver && entry->user == user) return true;
+    }
+    core_list_push(ctx->method_resolvers,
+                   ((th_method_resolver){resolver, user}));
+    return true;
+}
+
 th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name)
 {
     if (!ctx || !receiver || !name || !*name) {
@@ -528,6 +542,18 @@ th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name)
             return method->signature;
         }
     }
+
+    th_type *derived = nullptr;
+    for (size_t i = 0; i < ctx->method_resolvers.len; i++) {
+        th_method_resolver *entry = &ctx->method_resolvers.data[i];
+        th_type *candidate = entry->resolver(ctx, receiver, name,
+                                             entry->user);
+        if (!candidate) continue;
+        if (derived && !th_unify_probe(ctx, derived, candidate))
+            return nullptr;
+        if (!derived) derived = candidate;
+    }
+    if (derived) return derived;
 
     return nullptr;
 }
@@ -991,11 +1017,16 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
             }
             push_environment_constraint(ctx, TH_CON_METHOD, c->method.name,
                                         bound_to);
-            th_env_method_t method = {0};
-            th_env_method_status_t status = th_env_method_resolve_by_name(
-                ctx, bound_to, c->method.name, &method, nullptr);
-            th_type *signature = status == TH_ENV_METHOD_FOUND
-                ? method.signature : nullptr;
+            th_env_method_status_t status = TH_ENV_METHOD_NOT_FOUND;
+            th_type *signature = th_method_lookup(ctx, bound_to,
+                                                  c->method.name);
+            if (!signature) {
+                th_env_method_t method = {0};
+                status = th_env_method_resolve_by_name(
+                    ctx, bound_to, c->method.name, &method, nullptr);
+                signature = status == TH_ENV_METHOD_FOUND
+                    ? method.signature : nullptr;
+            }
             const th_param *receiver =
                 signature ? th_func_param(signature, 0) : nullptr;
             th_type *method_result = signature ? th_func_ret(signature)

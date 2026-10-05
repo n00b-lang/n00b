@@ -633,6 +633,13 @@ static void test_memory(void)
     check("field resolves the member through typehash",
           accepts_as(e, fd, "ptr[u64]"));
 
+    ir_instr_t *fdref = op(e, IR_OP_FIELD);
+
+    ir_instr_operand_value(fdref, val(e, "ref[(x: i32, y: u64)]"));
+    ir_instr_operand_name(fdref, "y");
+    check("field preserves the base reference kind",
+          accepts_as(e, fdref, "ref[u64]"));
+
     ir_instr_t *fdbad = op(e, IR_OP_FIELD);
 
     ir_instr_operand_value(fdbad, val(e, "ptr[(x: i32)]"));
@@ -774,7 +781,7 @@ static void test_memory(void)
     ir_instr_operand_value(ixseq, val(e, "ref[array[i32; 4]]"));
     ir_instr_operand_value(ixseq, val(e, "u32"));
     check("a sequence is indexable however it is referenced",
-          accepts_as(e, ixseq, "ptr[i32]"));
+          accepts_as(e, ixseq, "ref[i32]"));
 
     ir_instr_t *ixref = op(e, IR_OP_INDEX);
 
@@ -2031,6 +2038,15 @@ static void test_generic_callable_contracts(void)
     check("a function address exposes its callable contract",
           identity_set && identity_value
               && identity_value->type == identity_contract);
+    ir_value_t *identity_reference = identity
+        ? ir_func_reference(e->m, identity) : nullptr;
+    check("a function reference preserves the callable behind an indirection",
+          identity_reference
+              && identity_reference->kind == IR_VAL_FUNC
+              && th_kind_of(th_resolve(identity_reference->type))
+                    == TH_INDIRECTION
+              && th_ind_referent(identity_reference->type)
+                    == identity_contract);
     uint64_t frozen_hash = identity_contract
         ? th_hash(ir_ctx_types(e->ctx), identity_contract) : 0;
 

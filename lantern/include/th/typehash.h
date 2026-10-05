@@ -56,6 +56,9 @@ typedef struct th_ctx  th_ctx;
 typedef struct th_type th_type;
 typedef struct th_env  th_env;
 
+typedef th_type *(*th_method_resolver_fn)(th_ctx *ctx, th_type *receiver,
+                                          const char *name, void *user);
+
 typedef struct {
     const char *file;
     uint32_t    start_line;
@@ -336,6 +339,9 @@ void   th_coercions_clear(th_ctx *ctx);
 void   th_register_iface(th_ctx *ctx, const char *name, th_type *methods);
 bool   th_register_method(th_ctx *ctx, th_type *receiver, const char *name,
                           th_type *signature);
+bool   th_register_method_resolver(th_ctx *ctx,
+                                   th_method_resolver_fn resolver,
+                                   void *user);
 th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name);
 /* For an unresolved constrained type variable, true means the trait is a
  * retained obligation, not proof of a concrete implementation or dispatch. */

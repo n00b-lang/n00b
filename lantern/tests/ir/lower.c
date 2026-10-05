@@ -44,6 +44,17 @@ publish_child_value(ir_lower_context_t *context, parse_visit_t *visit,
     return value && ir_lower_set_node_value(context, visit->node, value);
 }
 
+static bool
+publish_external_value(ir_lower_context_t *context, parse_visit_t *visit,
+                       bool entering, void *state)
+{
+    if (!visit->annot || visit->annot->kind != PARSE_ANNOT_SCOPE_OPEN
+        || !core_string_eq(visit->annot->scope_tag,
+                           CORE_STRING_STATIC("external_value"))
+        || entering) return true;
+    return ir_lower_set_node_value(context, visit->node, state);
+}
+
 static ir_lower_result_t
 lower_identity(ir_lower_context_t *context, parse_visit_t *visit,
                ir_value_t *const *operands, size_t operand_count,
@@ -108,6 +119,20 @@ publish_nonterminal_value(ir_lower_context_t *context, parse_visit_t *visit,
 }
 
 static bool
+suppress_nonterminal_emit(ir_lower_context_t *context, parse_visit_t *visit,
+                          bool entering, void *opaque)
+{
+    nt_visit_state_t *state = opaque;
+    if (entering) return ir_lower_suppress_emit(context, visit->node);
+    parse_tree_t *child = core_tree_num_children(visit->node)
+        ? core_tree_child(visit->node, 0) : nullptr;
+    ir_value_t *value = ir_lower_node_value(context, child);
+    state->child_value_seen = value && value->def
+        && value->def->op == IR_OP_CONST;
+    return state->child_value_seen;
+}
+
+static bool
 parse_lowering_fixture(parse_grammar_t *grammar, const char *start,
                        const char *source, parse_pwz_parser_t **parser_out,
                        parse_token_stream_t **tokens_out,
@@ -131,6 +156,7 @@ test_nonterminal_lowering_callbacks(void)
         "<prune_root> ::= <pruned>\n"
         "<pruned> @literal(\"int\") @emit(\"literal\") ::= \"7\"\n"
         "<published> @emit(\"identity\", $0) ::= <literal>\n"
+        "<suppressed> @emit(\"identity\", $0) ::= <literal>\n"
         "<literal> @literal(\"int\") @emit(\"literal\") ::= \"7\"\n";
     ir_ctx_t *ctx = ir_ctx_new();
     ir_module_t *module = ir_module_new(ctx, "nt-lower-test",
@@ -210,6 +236,42 @@ test_nonterminal_lowering_callbacks(void)
               && value_block->n_instrs == 1);
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
+
+    ir_func_t *suppressed_function = void_signature
+        ? ir_func_add(module, "suppressed", void_signature, IR_LINK_INTERNAL)
+        : nullptr;
+    ir_block_t *suppressed_block = suppressed_function
+        ? ir_block_add(suppressed_function, "entry") : nullptr;
+    ir_lower_context_t suppressed_context = {
+        .module = module, .function = suppressed_function,
+        .block = suppressed_block, .diagnostics = diagnostics,
+        .file_id = -1, .reachable = true,
+    };
+    parser = nullptr;
+    tokens = nullptr;
+    tree = nullptr;
+    parsed = suppressed_block
+        && parse_lowering_fixture(grammar, "suppressed", "7", &parser,
+                                  &tokens, &tree);
+    literal = parsed ? core_tree_child(tree, 0) : nullptr;
+    if (parsed) {
+        core_tree_node_value(tree).type = i32;
+        core_tree_node_value(literal).type = i32;
+    }
+    nt_visit_state_t suppressed_state = {0};
+    bool suppressed_registered = parsed
+        && ir_lowerer_register_nt_visit(lowerer, "suppressed",
+            suppress_nonterminal_emit, &suppressed_state);
+    ir_lower_result_t suppressed = parsed
+        ? ir_lower_tree(lowerer, &suppressed_context, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    check("an exact emit suppression still lowers and exposes child values",
+          suppressed_registered
+              && suppressed.status == IR_LOWER_NO_VALUE
+              && suppressed_state.child_value_seen
+              && suppressed_block->n_instrs == 1);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
     parse_grammar_free(grammar);
     ir_ctx_free(ctx);
 }
@@ -281,6 +343,7 @@ main(void)
           "<left> @emit(\"reference\") ::= \"a\"\n"
           "<right> @emit(\"reference\") ::= \"b\"\n"
           "<literal> @literal(\"int\") @emit(\"literal\") ::= \"7\"\n"
+          "<external_value> @scope(\"external_value\") ::= \"f\"\n"
           "<set> @assigns($0, $2) ::= <target> \"=\" <literal>\n"
           "<owner_set> @assigns($0, $2) ::= \"x\" \"=\" <literal>\n"
           "<target> @emit(\"reference\") ::= \"x\"\n"
@@ -379,7 +442,10 @@ main(void)
               && ir_lowerer_register_visit(lowerer,
                   PARSE_ANNOT_SCOPE_OPEN, count_lower_visit, &visit_counts)
               && ir_lowerer_register_visit(lowerer,
-                  PARSE_ANNOT_SCOPE_OPEN, publish_child_value, nullptr));
+                  PARSE_ANNOT_SCOPE_OPEN, publish_child_value, nullptr)
+              && ir_lowerer_register_visit(lowerer,
+                  PARSE_ANNOT_SCOPE_OPEN, publish_external_value,
+                  callee_value));
     th_type *comptime_signature = ir_type_parse(module, "() -> void");
     ir_func_t *comptime_function = comptime_signature
         ? ir_func_add(module, "comptime_binding", comptime_signature,
@@ -612,6 +678,17 @@ main(void)
               && tree_sum.value->def->span.end_byte == 3);
     check("lowering hooks run on scope entry and exit",
           visit_counts.enters == 1 && visit_counts.exits == 1);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+
+    bool parsed_external = parse_lowering_fixture(
+        grammar, "external_value", "f", &parser, &tokens, &tree);
+    ir_lower_result_t external_result = parsed_external
+        ? ir_lower_tree(lowerer, &lower, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    check("tree nodes may retain an accessible function value",
+          external_result.status == IR_LOWER_VALUE
+              && external_result.value == callee_value);
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
 

@@ -50,6 +50,9 @@ bool ir_lower_set_node_value(ir_lower_context_t *context,
                              parse_tree_t *node, ir_value_t *value);
 bool ir_lower_mark_lvalue(ir_lower_context_t *context, parse_tree_t *owner,
                           parse_tree_t *node);
+/* Suppress only this node's annotation-driven emit action. Children are
+ * still lowered and remain available to visit callbacks. */
+bool ir_lower_suppress_emit(ir_lower_context_t *context, parse_tree_t *node);
 /* Claim a custom assignment on node entry; its lowering callback must emit
  * the assignment operation before the node exits. */
 bool ir_lower_handle_assignment(ir_lower_context_t *context,

@@ -1645,6 +1645,15 @@ int main(void) {
             th_env_implements(literal_composed_types,
                 th_apply(literal_composed_types, "dict", literal_dict_args, 2),
                 "Brace_Literal"));
+  th_arg second_vector_arg = {
+      .kind = TH_ARG_TYPE,
+      .type = th_name(literal_composed_types, "int"),
+  };
+  check("intrinsic trait matching does not specialize its stored pattern",
+        literal_context_ready &&
+            th_env_implements(literal_composed_types,
+                th_apply(literal_composed_types, "Vector", &second_vector_arg,
+                         1), "Bracket_Literal"));
   check("loader retains binders without an optional quantified-variable list",
         persisted_library &&
             th_env_method_lookup(persisted_check_types, persisted_int,

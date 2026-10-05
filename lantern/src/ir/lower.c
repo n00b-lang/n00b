@@ -63,6 +63,7 @@ typedef struct {
     core_dict_t pruned_nodes;
     core_dict_t custom_assignments;
     core_dict_t handled_assignments;
+    core_dict_t suppressed_emits;
     ir_lower_skip_frame_t *skip_values;
     parse_tree_t *active_node;
     bool active_entering;
@@ -267,12 +268,15 @@ ir_lower_node_value(ir_lower_context_t *context, parse_tree_t *node)
     return found ? value : nullptr;
 }
 
+static bool lower_value_accessible(ir_lower_context_t *context,
+                                   ir_value_t *value);
+
 bool
 ir_lower_set_node_value(ir_lower_context_t *context, parse_tree_t *node,
                         ir_value_t *value)
 {
     if (!context || !context->tree_values || !context->function || !node
-        || !value || value->owner != context->function)
+        || !lower_value_accessible(context, value))
         return false;
     core_dict_put(context->tree_values, node, value);
     return true;
@@ -335,6 +339,15 @@ ir_lower_mark_lvalue(ir_lower_context_t *context, parse_tree_t *owner,
                      parse_tree_t *node)
 {
     return ir_lower_skip_value(context, owner, node);
+}
+
+bool
+ir_lower_suppress_emit(ir_lower_context_t *context, parse_tree_t *node)
+{
+    if (!context || !context->tree_state || !node) return false;
+    ir_lower_tree_state_t *state = context->tree_state;
+    core_dict_put(&state->suppressed_emits, node, (void *)1);
+    return true;
 }
 
 ir_value_t *
@@ -1284,6 +1297,10 @@ lower_tree_node(parse_visit_t *visit)
         core_dict_put(&state->values, visit->node, (void *)0);
         return true;
     }
+    if (core_dict_contains(&state->suppressed_emits, visit->node)) {
+        core_dict_put(&state->values, visit->node, (void *)0);
+        return true;
+    }
     if (ir_lower_node_value(state->context, visit->node)) return true;
     parse_annotation_t *annotation = visit->rule
         ? parse_rule_find_annot(visit->grammar, visit->rule,
@@ -1513,6 +1530,7 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
     core_dict_init(&state.pruned_nodes, nullptr, nullptr);
     core_dict_init(&state.custom_assignments, nullptr, nullptr);
     core_dict_init(&state.handled_assignments, nullptr, nullptr);
+    core_dict_init(&state.suppressed_emits, nullptr, nullptr);
     context->tree_values = &state.values;
     context->tree_state = &state;
     parse_tree_walk_t *walk = parse_tree_walk_new(grammar, &state);
@@ -1546,6 +1564,7 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
     core_dict_free(&state.pruned_nodes);
     core_dict_free(&state.custom_assignments);
     core_dict_free(&state.handled_assignments);
+    core_dict_free(&state.suppressed_emits);
     while (state.skip_values) {
         ir_lower_skip_frame_t *target = state.skip_values;
         state.skip_values = target->next;

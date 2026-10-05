@@ -40,6 +40,11 @@ typedef struct {
 } th_method;
 
 typedef struct {
+  th_method_resolver_fn resolver;
+  void *user;
+} th_method_resolver;
+
+typedef struct {
   const char *name;
   const char *module;
   const char *package;
@@ -107,6 +112,7 @@ core_list_decl(th_promo);
 core_list_decl(th_iface);
 core_list_decl(th_type_definition_t);
 core_list_decl(th_method);
+core_list_decl(th_method_resolver);
 core_list_decl(th_env_trait_t);
 core_list_decl(th_env_function_t);
 core_list_decl(th_env_value_t);
@@ -200,6 +206,7 @@ struct th_ctx {
   core_list_t(th_iface) ifaces;
   core_list_t(th_type_definition_t) type_definitions;
   core_list_t(th_method) methods;
+  core_list_t(th_method_resolver) method_resolvers;
   core_dict_t *promo_index;
   core_dict_t *iface_index;
   core_list_t(th_error_t) errors;

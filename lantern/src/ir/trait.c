@@ -447,9 +447,7 @@ ir_value_t *ir_trait_method_call_with_rest(
       : nullptr;
   if (!cast || !ir_instr_operand_value(cast, raw_vtable)) return nullptr;
 
-  th_type *field_pointer = th_ind(
-      types, TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE,
-      (th_type *)slot_type);
+  th_type *field_pointer = th_ind(types, 0, (th_type *)slot_type);
   ir_instr_t *field =
       trait_named_instruction(block, IR_OP_FIELD, suffix + 2, field_pointer);
   if (!field || !ir_instr_operand_value(field, cast->dest) ||

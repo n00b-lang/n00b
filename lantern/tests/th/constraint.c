@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "th/environment.h"
 #include "th/typehash.h"
 #include "harness.h"
 
@@ -699,6 +700,48 @@ static void test_methods_are_attached_to_receiver_types(void)
     th_ctx_free(ctx);
 }
 
+static th_type *derived_method(th_ctx *ctx, th_type *receiver,
+                               const char *name, void *user)
+{
+    (void)user;
+    if (strcmp(name, "invoke")) return nullptr;
+    th_param parameter = {.mode = TH_IN, .type = receiver};
+    return th_func(ctx, th_name(ctx, "bool"), &parameter, 1,
+                   nullptr, nullptr, 0);
+}
+
+static void test_method_resolvers_derive_signatures(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_type *receiver = th_name(ctx, "Callable");
+    th_env *environment = th_env_new();
+    check("a derived method resolver registers",
+          th_register_method_resolver(ctx, derived_method, nullptr));
+    check("derived method resolver registration is idempotent",
+          th_register_method_resolver(ctx, derived_method, nullptr));
+    th_type *signature = th_method_lookup(ctx, receiver, "invoke");
+    check("a method resolver derives a signature for a receiver",
+          signature && th_kind_of(signature) == TH_FUNCTION
+              && th_func_nparams(signature) == 1
+              && th_func_ret(signature)
+              && th_hash(ctx, th_func_ret(signature))
+                    == th_hash(ctx, th_name(ctx, "bool")));
+    check("a method resolver may decline an unrelated method",
+          th_method_lookup(ctx, receiver, "missing") == nullptr);
+    th_type *deferred_receiver = th_var(ctx);
+    th_type *result = th_var(ctx);
+    th_type *call = th_func(ctx, result, nullptr, 0, nullptr, nullptr, 0);
+    check("a derived method resolver satisfies deferred method constraints",
+          environment && th_env_freeze(environment)
+              && th_ctx_set_environment(ctx, environment, "test", "test")
+              && th_require_method(ctx, deferred_receiver, "invoke", result,
+                                   call)
+              && th_unify_in_place(ctx, deferred_receiver, receiver)
+              && th_unify_probe(ctx, result, th_name(ctx, "bool")));
+    th_ctx_free(ctx);
+    th_env_free(environment);
+}
+
 static void test_function_error_channels_unify_and_generalize(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -808,6 +851,7 @@ int main(void)
     test_a_constrained_var_prints_its_bound();
     test_open_function_prints_free_variable_constraints_once();
     test_methods_are_attached_to_receiver_types();
+    test_method_resolvers_derive_signatures();
     test_function_error_channels_unify_and_generalize();
     test_named_type_record_definitions();
     test_unification_probe();
