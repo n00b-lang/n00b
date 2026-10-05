@@ -5,9 +5,9 @@ func accumulate(left: `T, right: `A) -> `T fail: `E where `T: Add {
 }
 
 func integers(left: int, right: int) -> int {
-    return accumulate(left, right)!
+    return accumulate(left, right)
 }
 
 func strings(left: string, right: string) -> string {
-    return accumulate(left, right)!
+    return accumulate(left, right)
 }

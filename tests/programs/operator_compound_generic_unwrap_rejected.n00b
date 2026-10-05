@@ -1,0 +1,9 @@
+func accumulate(left: `T, right: `A) -> `T fail: `E where `T: Add {
+    var value = left
+    value += right
+    return value
+}
+
+func integers(left: int, right: int) -> int {
+    return accumulate(left, right)!
+}

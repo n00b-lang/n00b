@@ -3245,8 +3245,12 @@ grep -q 'N00BB-T0022.*variant types cannot define __init' \
     cat "$tmp/generic_modify_parameter.err"
     exit 1
 }
-grep -Fq 'func @assign_same(%item: `a) -> nil fail: nil !ir.callable_contract(forall[`a] (inout `a)' \
+grep -Fq 'func @assign_same(%item: `a) -> nil fail: nil' \
     "$tmp/generic_modify_parameter.ir"
+if grep -Fq 'forall[' "$tmp/generic_modify_parameter.ir"; then
+    echo 'generic function lowering retained a forall binder' >&2
+    exit 1
+fi
 grep -q 'call @assign_same' "$tmp/generic_modify_parameter.ir"
 grep -q '!ir.call_signature((inout int) -> nil fail: nil)' \
     "$tmp/generic_modify_parameter.ir"
@@ -4441,7 +4445,7 @@ grep -q 'local_value: variable, mutable, .*storage-duration=automatic' \
 grep -q 'selected: variable, mutable, .*phases=runtime, mutable-in=runtime, initializer-in=comptime+runtime' \
     "$tmp/branches.symbols"
 grep -q 'visible: function' "$tmp/branches.symbols"
-grep -q 'identity: function, mutable, type=forall\[`a\] (`a) -> `a' \
+grep -q 'identity: function, mutable, type=(`a) -> `a fail: nil' \
     "$tmp/branches.symbols"
 grep -q 'identity: function, mutable, .*uses=1' "$tmp/branches.symbols"
 grep -q 'identity_call: function, mutable, type=() -> int' \
@@ -4449,8 +4453,9 @@ grep -q 'identity_call: function, mutable, type=() -> int' \
     cat "$tmp/branches.symbols"
     exit 1
 }
-grep -q 'inferred_identity: function, mutable, type=forall\[`a\] (`a) -> `a' \
+grep -q 'inferred_identity: function, mutable, type=(`a) -> `a fail: nil' \
     "$tmp/branches.symbols"
+! grep -Fq 'forall[' "$tmp/branches.symbols"
 grep -q 'calls_later: function, mutable, type=() -> int' \
     "$tmp/branches.symbols" || {
     cat "$tmp/branches.symbols"
@@ -4616,9 +4621,9 @@ for method in Add___add Negate___negate Not___not Comparable___cmp; do
     grep -q "trait.method .*@__trait_req_$method" \
         "$tmp/operator_generic_builtin.ir"
 done
-grep -Fq 'call_signature((`b, `c) -> `a fail: `d)' \
+grep -Fq 'call_signature((`b, `c) -> `a fail: `d where' \
     "$tmp/operator_generic_builtin.ir"
-grep -Fq 'call_signature((`b) -> `a fail: `c)' \
+grep -Fq 'call_signature((`b) -> `a fail: `c where' \
     "$tmp/operator_generic_builtin.ir"
 "$compiler" lower --dump-ir \
     "$script_dir/programs/operator_primitive_comparison_traits.n00b" \
@@ -4873,6 +4878,40 @@ for kind in byte result; do
         "$tmp/operator_compound_${kind}_rejected.out"
 done
 "$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_compound_generic.n00b" \
+    >"$tmp/operator_compound_generic.ir" 2>&1 || {
+    cat "$tmp/operator_compound_generic.ir"
+    exit 1
+}
+grep -Fq 'call_signature((int, int) -> int fail: nil)' \
+    "$tmp/operator_compound_generic.ir"
+grep -Fq 'call_signature((string, string) -> string fail: nil)' \
+    "$tmp/operator_compound_generic.ir"
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_compound_generic_failure.n00b" \
+    >"$tmp/operator_compound_generic_failure.ir" 2>&1 || {
+    cat "$tmp/operator_compound_generic_failure.ir"
+    exit 1
+}
+grep -Fq 'call_signature((operator_compound_generic_failure.Box, int) -> operator_compound_generic_failure.Box fail: int)' \
+    "$tmp/operator_compound_generic_failure.ir"
+grep -q 'trait.method "Add", "__add"' \
+    "$tmp/operator_compound_generic_failure.ir"
+grep -q 'variant.payload .*"error"' \
+    "$tmp/operator_compound_generic_failure.ir"
+grep -q 'store .*__n00bb_outcome_' \
+    "$tmp/operator_compound_generic_failure.ir"
+if "$compiler" lower \
+    "$script_dir/programs/operator_compound_generic_unwrap_rejected.n00b" \
+    >"$tmp/operator_compound_generic_unwrap_rejected.out" 2>&1; then
+    echo 'postfix ! accepted an infallible generic specialization' >&2
+    exit 1
+fi
+grep -q 'postfix ! requires a failable expression; this call is infallible' \
+    "$tmp/operator_compound_generic_unwrap_rejected.out"
+test "$(grep -c '^error\[' \
+    "$tmp/operator_compound_generic_unwrap_rejected.out")" -eq 1
+"$compiler" lower --dump-ir \
     "$script_dir/programs/operator_unary_traits.n00b" \
     >"$tmp/operator_unary_traits.ir" 2>&1 || {
     cat "$tmp/operator_unary_traits.ir"
@@ -4926,7 +4965,7 @@ grep -q 'func @generic_echo(%item: `a' \
     "$tmp/generic_trait_correlated_result.ir"
 grep -q 'trait.method .*@__trait_req_Echo_echo' \
     "$tmp/generic_trait_correlated_result.ir"
-grep -Fq 'call_signature((`a) -> `a fail: nil)' \
+grep -Fq 'call_signature((`a) -> `a fail: nil where' \
     "$tmp/generic_trait_correlated_result.ir"
 "$compiler" lower --dump-ir \
     "$script_dir/programs/generic_trait_result_propagation.n00b" \
@@ -4971,7 +5010,7 @@ grep -q 'func @generic_read_failure(%item: `a' \
     "$tmp/generic_trait_failure_channel.ir"
 grep -Fq '@__trait_req_ReadFailure_read_failure' \
     "$tmp/generic_trait_failure_channel.ir"
-grep -Fq 'call_signature((`a) -> int fail: string)' \
+grep -Fq 'call_signature((`a) -> int fail: string where' \
     "$tmp/generic_trait_failure_channel.ir"
 N00B_PATH="$script_dir/programs/generic_trait_specialization" \
     "$compiler" lower --dump-ir --dump-link-unit \
@@ -5013,13 +5052,13 @@ if N00B_PATH="$script_dir/programs/generic_trait_specialization" "$compiler" pre
     echo 'generic trait call without a concrete implementation unexpectedly passed' >&2
     exit 1
 fi
-grep -q 'N00BB-T0002.*constraint implements: interface not satisfied' "$tmp/generic_trait_specialization_missing.out"
+grep -q 'N00BB-T0003.*trait constraint.*is not satisfied for bool' "$tmp/generic_trait_specialization_missing.out"
 if N00B_PATH="$script_dir/programs/generic_trait_specialization" "$compiler" preprocess --dump-link-unit "$script_dir/programs/generic_trait_specialization/ambiguous.n00b" >"$tmp/generic_trait_specialization_ambiguous.out" 2>&1; then
     cat "$tmp/generic_trait_specialization_ambiguous.out"
     echo 'ambiguous generic trait specialization unexpectedly passed' >&2
     exit 1
 fi
-grep -q 'N00BB-T0003.*generic instantiation has ambiguous trait dispatch' "$tmp/generic_trait_specialization_ambiguous.out"
+grep -q 'N00BB-T0003.*trait constraint.*method dispatch is ambiguous' "$tmp/generic_trait_specialization_ambiguous.out"
 
 "$compiler" library --emit-interface "$tmp/generic_trait_archive.n00bi" \
     "$script_dir/programs/interfaces/generic_trait_archive_dep.n00b" \
@@ -5040,8 +5079,9 @@ grep -q 'extern func @archived_render' "$tmp/generic_trait_archive_user.out"
 grep -q 'call @archived_render' "$tmp/generic_trait_archive_user.out"
 grep -q 'call_signature((generic_trait_archive_user.ArchiveWidget) -> int fail: nil)' \
     "$tmp/generic_trait_archive_user.out"
-grep -q 'callable_contract(forall\[`a\].*ArchiveRender' \
+grep -q 'extern func @archived_render.*ArchiveRender.*callable_contract((`a) -> int fail: nil where' \
     "$tmp/generic_trait_archive_user.out"
+! grep -Fq 'forall[' "$tmp/generic_trait_archive_user.out"
 if "$compiler" lower --link-interface "$tmp/generic_trait_archive.n00bi" \
     "$script_dir/programs/interfaces/generic_trait_archive_missing_impl.n00b" \
     >"$tmp/generic_trait_archive_missing_impl.out" 2>&1; then
@@ -5080,10 +5120,11 @@ grep -q 'extern func @archived_render.*ArchiveRender' \
     "$tmp/trait_archive_multi_user.out"
 grep -q 'extern func @archived_measure.*ArchiveMeasure.*fail: string' \
     "$tmp/trait_archive_multi_user.out"
-grep -q 'callable_contract(forall\[`a\].*-> int fail: nil where `a: trait_archive_render_dep.ArchiveRender)' \
+grep -q 'extern func @archived_render.*trait_archive_render_dep.ArchiveRender.*callable_contract((`a) -> int fail: nil where' \
     "$tmp/trait_archive_multi_user.out"
-grep -q 'callable_contract(forall\[`a\].*-> int fail: string where `a: trait_archive_measure_dep.ArchiveMeasure)' \
+grep -q 'extern func @archived_measure.*trait_archive_measure_dep.ArchiveMeasure.*callable_contract((`a) -> int fail: string where' \
     "$tmp/trait_archive_multi_user.out"
+! grep -Fq 'forall[' "$tmp/trait_archive_multi_user.out"
 test "$(grep -c 'call @archived_render' "$tmp/trait_archive_multi_user.out")" -eq 2
 test "$(grep -c 'call @archived_measure' "$tmp/trait_archive_multi_user.out")" -eq 2
 grep -q 'trait-dispatch\[resolved\] trait_archive_multi_user:1:dispatch_archive_render -> trait_archive_multi_user:1:render' \
@@ -6507,8 +6548,9 @@ grep -q '"imported_short_name"' "$tmp/import.out"
 N00B_PATH="$program_dir/imports" "$compiler" preprocess --dump-symbols \
     --dump-link-unit \
     "$program_dir/imports/importer.n00b" >"$tmp/imported_signatures.out"
-grep -q 'imported_identity: function, mutable, type=forall\[`a\] (`a) -> `a' \
+grep -q 'imported_identity: function, mutable, type=(`a) -> `a fail: nil' \
     "$tmp/imported_signatures.out"
+! grep -Fq 'forall[' "$tmp/imported_signatures.out"
 grep -q 'dep:0:enabled .*static-value=bool:true' \
     "$tmp/imported_signatures.out"
 
@@ -6521,8 +6563,9 @@ if N00B_PATH="$program_dir/imports" "$compiler" preprocess --dump-symbols \
         "$tmp/imported_generic_use.out"
     grep -q 'second: variable, mutable, type=string' \
         "$tmp/imported_generic_use.out"
-    grep -q 'imported_identity: function, mutable, type=forall\[`a\] (`a) -> `a' \
+    grep -q 'imported_identity: function, mutable, type=(`a) -> `a fail: nil' \
         "$tmp/imported_generic_use.out"
+    ! grep -Fq 'forall[' "$tmp/imported_generic_use.out"
 else
     cat "$tmp/imported_generic_use.out"
     echo 'independent imported generic uses unexpectedly failed' >&2
