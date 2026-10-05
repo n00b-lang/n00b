@@ -290,7 +290,59 @@ static void *query_frozen_environment(void *raw) {
   return nullptr;
 }
 
+static void test_kind_constraint_archive(void) {
+  th_ctx *types = th_ctx_new();
+  th_env *env = th_env_new();
+  th_type *boolean = th_name(types, "bool");
+  th_type *receiver = th_var(types);
+  check("register kind-constrained trait contract",
+        th_env_register_trait(env, "SizedEqual", "traits", "base",
+            TH_ENV_PUBLIC, method_record(types, "equal",
+                fn2(types, receiver, receiver, boolean))));
+  th_type *sized = th_var(types);
+  th_constraint kind = {.kind = TH_CON_KIND, .type_kind = TH_BITINT};
+  check("register width-independent integer method",
+        th_var_constrain(types, sized, kind)
+        && register_function(env, "base.sized.equal", "equal", "sized",
+            "base", TH_ENV_PUBLIC,
+            th_generalize(types, fn2(types, sized, sized, boolean)))
+        && th_env_freeze(env));
+  char path[] = "/tmp/lantern-kind-env-XXXXXX";
+  int fd = mkstemp(path);
+  if (fd >= 0) { close(fd); unlink(path); }
+  core_object_archive_error_t error;
+  bool saved = fd >= 0 && th_env_save(env, path, 0, &error);
+  check("save structural kind constraints", saved);
+  th_env *loaded = saved ? th_env_load(path, &error) : nullptr;
+  const th_env *sources[] = {loaded};
+  th_env *composed = loaded ? th_env_compose(sources, 1) : nullptr;
+  check("compose restored kind constraints",
+        composed && th_env_freeze(composed));
+  const th_env *checks[] = {loaded, composed};
+  for (size_t i = 0; i < sizeof(checks) / sizeof(checks[0]); i++) {
+    th_ctx *query = th_ctx_new();
+    bool ready = checks[i]
+        && th_ctx_set_environment(query, checks[i], "consumer", "base");
+    check("restored integer family accepts arbitrary signed widths",
+          ready && th_env_implements(query, th_bitint(query, 7, true),
+                                      "SizedEqual"));
+    check("restored integer family accepts arbitrary unsigned widths",
+          ready && th_env_implements(query, th_bitint(query, 513, false),
+                                      "SizedEqual"));
+    check("restored integer family rejects other type kinds",
+          ready && !th_env_implements(query, th_name(query, "string"),
+                                       "SizedEqual"));
+    th_ctx_free(query);
+  }
+  th_env_free(composed);
+  th_env_free(loaded);
+  if (fd >= 0) unlink(path);
+  th_env_free(env);
+  th_ctx_free(types);
+}
+
 int main(void) {
+  test_kind_constraint_archive();
   th_env *env = th_env_new();
   th_ctx *types = th_ctx_new();
   th_type *integer = th_name(types, "int");

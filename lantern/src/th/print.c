@@ -497,6 +497,9 @@ static void emit(pctx *c, core_buffer_t *b, const th_type *root)
 static void emit_constraint(pctx *c, core_buffer_t *b, const th_constraint *k)
 {
     switch (k->kind) {
+    case TH_CON_KIND:
+        core_buffer_printf(b, "kind(%u)", (unsigned)k->type_kind);
+        break;
     case TH_CON_IMPLEMENTS:
         core_buffer_puts(b, k->iface);
         break;

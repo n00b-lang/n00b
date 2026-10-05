@@ -50,6 +50,29 @@ static void test_excludes(th_ctx *ctx)
     check("excludes rejects the excluded type", !binds(ctx, c, i));
 }
 
+static void test_kind(th_ctx *ctx)
+{
+    th_constraint constraint = {.kind = TH_CON_KIND, .type_kind = TH_BITINT};
+    check("kind accepts unrelated sized integers",
+          binds(ctx, constraint, th_bitint(ctx, 7, true))
+              && binds(ctx, constraint, th_bitint(ctx, 513, false)));
+    check("kind rejects a different structural family",
+          !binds(ctx, constraint, th_name(ctx, "string")));
+    th_type *variable = th_var(ctx);
+    check("kind constrains a fresh variable",
+          th_var_constrain(ctx, variable, constraint));
+    th_type *scheme = th_generalize(ctx, variable);
+    th_type *instance = th_instantiate(ctx, scheme);
+    th_ctx *copy_ctx = th_ctx_new();
+    th_type *copy = th_type_clone(copy_ctx, scheme);
+    check("kind survives generalization, instantiation, and cloning",
+          instance && copy
+              && !th_unify(ctx, instance, th_name(ctx, "string"))
+              && !th_unify(copy_ctx, th_instantiate(copy_ctx, copy),
+                            th_name(copy_ctx, "string")));
+    th_ctx_free(copy_ctx);
+}
+
 static void test_promotes(th_ctx *ctx)
 {
     th_type *i32 = th_name(ctx, "i32");
@@ -693,6 +716,7 @@ int main(void)
     test_unifies(ctx);
     test_one_of(ctx);
     test_excludes(ctx);
+    test_kind(ctx);
     test_promotes(ctx);
     test_has_field(ctx);
     test_has_param(ctx);

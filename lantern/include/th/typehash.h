@@ -105,6 +105,9 @@ typedef enum : uint8_t {
      * `call`, when present, is the positional/keyword call shape without the
      * receiver; its return type is `result`. */
     TH_CON_METHOD,
+    /* Restrict a variable to a structural type family without fixing its
+     * parameters, such as the width and signedness of a bit integer. */
+    TH_CON_KIND,
 } th_con_kind;
 
 typedef struct {
@@ -115,6 +118,7 @@ typedef struct {
     const char *scope_package;
     bool has_scope;
     union {
+        th_kind type_kind;
         th_type    *target;
         const char *iface;
         struct {

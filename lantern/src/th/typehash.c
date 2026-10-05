@@ -113,6 +113,8 @@ clone_constraint_graph(th_ctx *destination, const th_constraint *source,
     case TH_CON_IMPLEMENTS:
         copy->iface = clone_string(destination, source->iface);
         return !source->iface || copy->iface;
+    case TH_CON_KIND:
+        return true;
     case TH_CON_HAS_FIELD:
         copy->field.name = clone_string(destination, source->field.name);
         copy->field.type = clone_type_graph(destination, source->field.type,

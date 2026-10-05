@@ -92,6 +92,8 @@ static bool save_constraint(core_object_writer_t *writer,
   if (!core_object_writer_u32(writer, constraint->kind))
     return false;
   switch (constraint->kind) {
+  case TH_CON_KIND:
+    return core_object_writer_u32(writer, constraint->type_kind);
   case TH_CON_UNIFIES:
   case TH_CON_PROMOTES:
   case TH_CON_EXCLUDES:
@@ -124,10 +126,17 @@ static bool read_constraint(core_object_reader_t *reader,
   memset(constraint, 0, sizeof(*constraint));
   uint32_t kind;
   if (!core_object_reader_u32(reader, &kind) ||
-      kind > (version >= 2 ? TH_CON_METHOD : TH_CON_EXCLUDES))
+      kind > (version >= 2 ? TH_CON_KIND : TH_CON_EXCLUDES))
     return false;
   constraint->kind = (th_con_kind)kind;
   switch (constraint->kind) {
+  case TH_CON_KIND: {
+    uint32_t type_kind;
+    if (!core_object_reader_u32(reader, &type_kind) || type_kind > TH_VAR)
+      return false;
+    constraint->type_kind = (th_kind)type_kind;
+    return true;
+  }
   case TH_CON_UNIFIES:
   case TH_CON_PROMOTES:
   case TH_CON_EXCLUDES:

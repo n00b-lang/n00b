@@ -81,6 +81,7 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
     if (!var || var->kind != TH_VAR) {
         return false;
     }
+    if (c.kind == TH_CON_KIND && c.type_kind > TH_VAR) return false;
 
     if (c.kind == TH_CON_METHOD) {
         if (!ctx || !c.method.name || !*c.method.name || !c.method.result ||
@@ -648,6 +649,13 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
         const th_constraint *c = &var->var.cons.data[i];
 
         switch (c->kind) {
+        case TH_CON_KIND:
+            if (th_kind_of(th_resolve(bound_to)) != c->type_kind) {
+                th_err(ctx, TH_ERR_CONSTRAINT, "kind", nullptr, bound_to,
+                       "constraint kind does not match the type family");
+                return false;
+            }
+            break;
         case TH_CON_UNIFIES:
             if (!uni(ctx, bound_to, c->target, seen)) {
                 th_err(ctx, TH_ERR_CONSTRAINT, "unifies", c->target,
@@ -931,6 +939,7 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
                 n += c->method.call != nullptr;
                 break;
             case TH_CON_IMPLEMENTS:
+            case TH_CON_KIND:
                 break;
             }
         }
@@ -960,6 +969,7 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
                 if (c->method.call) kids[n++] = c->method.call;
                 break;
             case TH_CON_IMPLEMENTS:
+            case TH_CON_KIND:
                 break;
             }
         }
@@ -1897,6 +1907,7 @@ static th_constraint instantiate_constraint(th_ctx *ctx, th_constraint c,
                                 inst_constraint_subst, s);
         break;
     case TH_CON_IMPLEMENTS:
+    case TH_CON_KIND:
         break;
     }
     return c;
