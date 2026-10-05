@@ -30,6 +30,7 @@ IR_OP(MEMSET,          "memset",          3, 3,  NONE,        "vvv", IR_MOD_ACCE
 IR_OP(MEMCMP,          "memcmp",          3, 3,  SINT32,      "vvv", 0,                              HASRESULT)
 
 IR_OP(EXTRACT,         "extract",         2, 2,  MEMBER,      "vn",  0,                              HASRESULT)
+IR_OP(EXTRACT_INDEX,   "extract.index",   2, 2,  ANNOTATED,   "vc",  0,                              HASRESULT)
 IR_OP(INSERT,          "insert",          3, 3,  OPERAND0,    "vnv", 0,                              HASRESULT)
 
 IR_OP(VARIANT_NEW,     "variant.new",     0, 0,  ANNOTATED,   "",    0,                              HASRESULT | SIDEEFFECT)

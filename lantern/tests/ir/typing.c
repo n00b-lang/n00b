@@ -796,6 +796,20 @@ static void test_aggregates_and_variants(void)
     ir_instr_operand_name(ex, "x");
     check("extract yields the member type", accepts_as(e, ex, "i32"));
 
+    ir_instr_t *pos = op(e, IR_OP_EXTRACT_INDEX);
+
+    ir_instr_operand_value(pos, val(e, "t(i32, u64)"));
+    ir_instr_operand_uint(pos, 1);
+    check("extract.index yields an ordered tuple element",
+          accepts_as(e, pos, "u64"));
+
+    ir_instr_t *posbad = op(e, IR_OP_EXTRACT_INDEX);
+
+    ir_instr_operand_value(posbad, val(e, "t(i32, u64)"));
+    ir_instr_operand_uint(posbad, 2);
+    check("extract.index rejects an out-of-range tuple element",
+          apply(e, posbad) == IR_RULE_REJECT);
+
     ir_instr_t *ins = op(e, IR_OP_INSERT);
 
     ir_instr_operand_value(ins, val(e, "(x: i32)"));

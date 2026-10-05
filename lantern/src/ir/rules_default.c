@@ -1303,6 +1303,39 @@ static ir_rule_result_t rule_extract(ir_module_t *m, ir_instr_t *in,
     return ACCEPT(ir_type_intern(m, mt));
 }
 
+static ir_rule_result_t rule_extract_index(ir_module_t *m, ir_instr_t *in,
+                                           ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *source = opd_type(in, 0);
+    if (!source || in->n_operands != 2
+        || in->operands[1].kind != IR_OPD_CONST
+        || in->operands[1].lit.is_float) return DECLINE;
+    ir_lit_t literal = in->operands[1].lit.i;
+    const char *name = nullptr;
+    size_t count = 0;
+    bool variant = true;
+    if (literal.neg || literal.mag > SIZE_MAX
+        || !th_named_info(th_resolve(source), &name, nullptr, &variant,
+                          &count)
+        || variant || !name || strcmp(name, TH_TUPLE)) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
+                 "extract.index needs an ordered tuple value, and this one is %s",
+                 typed(m, source));
+        return REJECT;
+    }
+    size_t index = (size_t)literal.mag;
+    const th_arg *element = index < count
+        ? th_named_arg(th_resolve(source), index) : nullptr;
+    if (!element || element->kind != TH_ARG_TYPE) {
+        complain(m, d, IR_DIAG_TYPE_MEMBER, in, "this index",
+                 "ordered tuple %s has no element %zu", typed(m, source),
+                 index);
+        return REJECT;
+    }
+    return ACCEPT(ir_type_intern(m, element->type));
+}
+
 static ir_rule_result_t rule_insert(ir_module_t *m, ir_instr_t *in,
                                     ir_diags_t *d, void *state)
 {
@@ -2855,6 +2888,7 @@ static const entry DEFAULTS[] = {
     {IR_OP_MEMSET, "ir.memset", rule_mem},
     {IR_OP_MEMCMP, "ir.memcmp", rule_mem},
     {IR_OP_EXTRACT, "ir.extract", rule_extract},
+    {IR_OP_EXTRACT_INDEX, "ir.extract.index", rule_extract_index},
     {IR_OP_INSERT, "ir.insert", rule_insert},
     {IR_OP_VARIANT_NEW, "ir.variant.new", rule_variant_new},
     {IR_OP_VARIANT_NEW_USING, "ir.variant.new.using", rule_variant_new},
