@@ -15194,6 +15194,21 @@ n00bb_check_phase_read(ir_lower_context_t *context, parse_visit_t *visit,
     return false;
 }
 
+static parse_sym_entry_t *
+n00bb_compound_target_symbol(ir_lower_context_t *context, parse_tree_t *target)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *unit = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_return_source_t *source = unit
+        ? core_dict_get(&unit->return_sources, target, nullptr) : nullptr;
+    if (source && source->kind == N00BB_RETURN_SOURCE_SYMBOL)
+        return source->symbol;
+    parse_node_resolution_t resolution = parse_tree_resolution(target);
+    return resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol
+        : target ? core_tree_node_value(target).sym : nullptr;
+}
+
 static ir_lower_result_t
 n00bb_lower_compound_assignment(ir_lower_context_t *context,
                                 parse_visit_t *visit,
@@ -15204,9 +15219,9 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
 {
     (void)result_type;
     (void)state;
-    if (operand_count != 1 || !operands || !operands[0])
+    if (operand_count != 2 || !operands || !operands[0] || !operands[1])
         return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
-                           "compound assignment needs one lowered value");
+                           "compound assignment needs its captured target and right operand");
     parse_annotation_t *assigns = visit->rule
         ? parse_rule_find_annot(visit->grammar, visit->rule,
                                 PARSE_ANNOT_ASSIGNS) : nullptr;
@@ -15216,9 +15231,7 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     parse_tree_t *target = assigns
         ? parse_tree_resolve_child_ref(visit->grammar, visit->node,
                                        assigns->name_ref) : nullptr;
-    parse_tree_t *lvalue = n00bb_simple_lvalue(target);
-    parse_sym_entry_t *symbol = lvalue
-        ? core_tree_node_value(lvalue).sym : nullptr;
+    parse_sym_entry_t *symbol = n00bb_compound_target_symbol(context, target);
     ir_local_t *local = ir_lower_bound_local(context, symbol);
     ir_value_t *address = ir_lower_bound_address(context, symbol);
     ir_value_t *binding = ir_lower_bound_value(context, symbol);
@@ -15229,7 +15242,7 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
         return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
                            "compound assignment target has no writable storage");
     if (!target_type
-        || !ir_type_eq(context->module, target_type, operands[0]->type))
+        || !ir_type_eq(context->module, target_type, operands[1]->type))
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                            "compound assignment value does not match the target type");
 
@@ -15250,13 +15263,8 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     else return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                             "this compound assignment operator is not lowered");
 
-    ir_value_t *old_value = local
-        ? n00bb_emit_local_read(context, local, span)
-        : global ? binding
-        : n00bb_emit_indirect_read(context, address, target_type, span);
-    ir_value_t *updated = old_value
-        ? n00bb_emit_binary_ir(context, op, target_type, old_value,
-                               operands[0], span) : nullptr;
+    ir_value_t *updated = n00bb_emit_binary_ir(context, op, target_type,
+        operands[0], operands[1], span);
     bool stored = false;
     if (updated && local)
         stored = n00bb_emit_local_write(context, local, updated, span);
@@ -15272,6 +15280,42 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit compound assignment store");
     return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
+}
+
+static bool
+n00bb_capture_compound_target(ir_lower_context_t *context,
+                              parse_visit_t *visit, bool entering, void *state)
+{
+    (void)state;
+    parse_tree_t *parent = core_tree_node_value(visit->node).parent;
+    if (entering || !context->reachable || !parent
+        || !nt_is(visit->grammar, parent, "binop-assign-stmt")
+        || core_tree_child(parent, 0) != visit->node) return true;
+    parse_sym_entry_t *symbol = n00bb_compound_target_symbol(context, visit->node);
+    ir_local_t *local = ir_lower_bound_local(context, symbol);
+    ir_value_t *address = ir_lower_bound_address(context, symbol);
+    ir_value_t *binding = ir_lower_bound_value(context, symbol);
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    ir_value_t *value = local ? n00bb_emit_local_read(context, local, span)
+        : address && symbol
+            ? n00bb_emit_indirect_read(context, address, symbol->type, span)
+            : nullptr;
+    if (!value && binding && binding->kind == IR_VAL_GLOBAL) {
+        ir_instr_t *snapshot = ir_instr_add(context->block, IR_OP_COPY);
+        char name[48];
+        snprintf(name, sizeof(name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        if (snapshot && ir_instr_set_dest(snapshot, name, binding->type)
+            && ir_instr_operand_value(snapshot, binding)) {
+            snapshot->span = span;
+            value = snapshot->dest;
+        }
+    }
+    if (value && ir_lower_set_node_value(context, visit->node, value))
+        return true;
+    lower_error(context, IR_DIAG_VERIFY_PARSED, span,
+                "compound assignment target has no writable storage");
+    return false;
 }
 
 static const parse_sym_entry_t *
@@ -26830,6 +26874,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         "comptime-stmt", n00bb_lower_comptime_statement, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "assert-stmt", n00bb_lower_assert_statement, nullptr);
+    ok = ok && ir_lowerer_register_nt_visit(lowerer,
+        "expression", n00bb_capture_compound_target, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "and-rhs", n00bb_lower_branch_body, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,

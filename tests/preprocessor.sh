@@ -1433,7 +1433,9 @@ grep -q 'xor' "$tmp/lower_compound_assignment.ir"
     cat "$tmp/lower_global_compound_assignment.err"
     exit 1
 }
-grep -q 'add trap @lower_global_compound_assignment.total' \
+grep -q 'copy @lower_global_compound_assignment.total' \
+    "$tmp/lower_global_compound_assignment.ir"
+grep -q 'add trap %' \
     "$tmp/lower_global_compound_assignment.ir"
 grep -q 'global.store @lower_global_compound_assignment.total' \
     "$tmp/lower_global_compound_assignment.ir"
@@ -4811,6 +4813,36 @@ if "$compiler" lower --link-interface "$tmp/operator_numeric_identity.n00bi" \
 fi
 grep -q 'error\[N00BB-T000[12]\]' \
     "$tmp/operator_numeric_identity_archive_rejected.out"
+for location in evaluation global; do
+    "$compiler" lower --dump-ir \
+        "$script_dir/programs/operator_compound_${location}_order.n00b" \
+        >"$tmp/operator_compound_${location}_order.ir" 2>&1 || {
+        cat "$tmp/operator_compound_${location}_order.ir"
+        exit 1
+    }
+    awk '
+        / = copy [$@]/ {
+            name = $1
+            sub(/:$/, "", name)
+            captured[name] = NR
+        }
+        / = call @change/ { call_line = NR }
+        / = add trap / {
+            for (i = 1; i <= NF; i++) {
+                if ($i != "trap") continue
+                operand = $(i + 1)
+                sub(/,$/, "", operand)
+                snapshot_line = captured[operand]
+                break
+            }
+        }
+        END { exit !(snapshot_line && call_line && snapshot_line < call_line) }
+    ' "$tmp/operator_compound_${location}_order.ir" || {
+        cat "$tmp/operator_compound_${location}_order.ir"
+        echo 'compound assignment read its target after the RHS call' >&2
+        exit 1
+    }
+done
 "$compiler" lower --dump-ir \
     "$script_dir/programs/operator_unary_traits.n00b" \
     >"$tmp/operator_unary_traits.ir" 2>&1 || {

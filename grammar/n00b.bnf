@@ -337,7 +337,7 @@
 
 <assign-stmt> @assigns($0, $2) ::= <expression> <assign-op> <expression>
 
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $2) ::=
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) ::=
        <expression> <binop-assign-op> <expression>
 
 <binop-assign-op> ::= %"+=" | %"-=" | %"*=" | %"/=" | %"%="

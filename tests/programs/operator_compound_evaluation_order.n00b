@@ -1,0 +1,10 @@
+func change(modify target: int) -> int {
+    target = 10
+    return 2
+}
+
+func compound() -> int {
+    var value = 1
+    value += change(value)
+    return value
+}
