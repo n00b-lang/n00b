@@ -549,6 +549,9 @@ static bool n00bb_emit_with_success(ir_lower_context_t *context,
                                     parse_tree_t *exit_node);
 static bool n00bb_emit_with_failure(ir_lower_context_t *context,
                                     parse_tree_t *exit_node);
+static bool n00bb_emit_with_failure_before(ir_lower_context_t *context,
+                                           parse_tree_t *exit_node,
+                                           uint64_t before_order);
 static parse_tree_t *n00bb_simple_lvalue(parse_tree_t *node);
 static bool identifier_is_variant_case_expression(
     parse_grammar_t *grammar, core_translation_unit_t *unit,
@@ -966,6 +969,7 @@ typedef struct {
     parse_tree_t *call_node;
     core_list_t(n00bb_ir_value_ptr_t) captures;
     ir_value_t *provided_value;
+    uint64_t order;
     bool active;
 } n00bb_with_item_t;
 core_list_decl(n00bb_with_item_t);
@@ -974,7 +978,6 @@ typedef struct {
     parse_tree_t *node;
     parse_tree_t *body;
     core_list_t(n00bb_with_item_t) items;
-    uint64_t order;
     bool active;
 } n00bb_with_frame_t;
 core_list_decl(n00bb_with_frame_t);
@@ -11716,9 +11719,11 @@ n00bb_emit_context_hook_outcome_branch(ir_lower_context_t *context,
 static bool
 n00bb_propagate_context_hook_failure(ir_lower_context_t *context,
                                      parse_tree_t *source,
-                                     ir_value_t *error, ir_span_t span)
+                                     ir_value_t *error, ir_span_t span,
+                                     uint64_t before_order)
 {
-    if (!n00bb_emit_with_failure(context, source)) return false;
+    if (!n00bb_emit_with_failure_before(context, source, before_order))
+        return false;
     int routed = n00bb_route_try_error(context, source, error, span);
     if (routed < 0) return false;
     if (routed) return true;
@@ -11743,13 +11748,13 @@ static bool
 n00bb_emit_context_error_handler(ir_lower_context_t *context,
                                  n00bb_with_item_t *item,
                                  parse_tree_t *source, ir_value_t *error,
-                                 ir_span_t span, ir_block_t *continuation)
+                                 ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
     if (!lower || !n00bb_context_has_hook(lower->grammar,
             item->context_symbol, "context-error"))
         return n00bb_propagate_context_hook_failure(context, source, error,
-                                                    span);
+                                                    span, item->order);
 
     ir_value_t *outcome = nullptr;
     th_type *failure = nullptr;
@@ -11765,19 +11770,20 @@ n00bb_emit_context_error_handler(ir_lower_context_t *context,
     context->block = failed;
     ir_value_t *handler_error = n00bb_emit_outcome_payload(context, outcome,
         "error", failure, span);
-    if (!handler_error
+    if (!handler_error || !n00bb_emit_context_hook(context, item,
+            "context-ensure", item->provided_value, span)
         || !n00bb_propagate_context_hook_failure(context, source,
-                                                  handler_error, span))
+                                                  handler_error, span,
+                                                  item->order))
         return false;
 
     context->block = handled;
     context->reachable = true;
     if (!n00bb_emit_context_hook(context, item, "context-ensure",
                                  item->provided_value, span)
-        || !n00bb_emit_jump(context, continuation, span))
+        || !n00bb_propagate_context_hook_failure(context, source, error,
+                                                  span, item->order))
         return false;
-    context->block = continuation;
-    context->reachable = true;
     return true;
 }
 
@@ -11823,11 +11829,14 @@ n00bb_emit_context_exit(ir_lower_context_t *context,
     if (!error) return false;
     if (!n00bb_context_has_hook(lower->grammar, item->context_symbol,
                                 "context-error")) {
-        if (!n00bb_propagate_context_hook_failure(context, source, error,
-                                                   span)) return false;
+        if (!n00bb_emit_context_hook(context, item, "context-ensure",
+                                     item->provided_value, span)
+            || !n00bb_propagate_context_hook_failure(context, source, error,
+                                                      span, item->order))
+            return false;
     }
     else if (!n00bb_emit_context_error_handler(context, item, source, error,
-                                                span, join)) return false;
+                                                span)) return false;
 
     context->block = join;
     context->reachable = true;
@@ -11838,15 +11847,17 @@ static bool
 n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
                            parse_tree_t *exit_node,
                            n00bb_loop_frame_t *stop_before,
-                           n00bb_try_frame_t *handler, bool success)
+                           n00bb_try_frame_t *handler, bool success,
+                           uint64_t before_order)
 {
     n00bb_lower_context_t *lower = context->user;
     ir_span_t span = lower_span_for_tree(context, exit_node);
     uint64_t stop_order = stop_before ? stop_before->order : 0;
-    uint64_t before = UINT64_MAX;
+    uint64_t before = before_order;
     for (;;) {
         n00bb_loop_frame_t *loop = nullptr;
-        n00bb_with_frame_t *with = nullptr;
+        n00bb_with_item_t *with_item = nullptr;
+        uint64_t with_order = 0;
         for (size_t i = lower->loops.len; i > 0; i--) {
             n00bb_loop_frame_t *candidate = &lower->loops.data[i - 1];
             if (!candidate->active || !candidate->is_container
@@ -11861,32 +11872,36 @@ n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
         }
         for (size_t i = lower->withs.len; i > 0; i--) {
             n00bb_with_frame_t *candidate = &lower->withs.data[i - 1];
-            if (!candidate->active || candidate->order <= stop_order
-                || candidate->order >= before
+            if (!candidate->active
                 || !n00bb_tree_contains(candidate->node, exit_node)
                 || (handler && n00bb_tree_contains(candidate->node,
                                                     handler->node)))
                 continue;
-            if (!with || candidate->order > with->order) with = candidate;
+            for (size_t j = candidate->items.len; j > 0; j--) {
+                n00bb_with_item_t *item = &candidate->items.data[j - 1];
+                if (!item->active || item->order <= stop_order
+                    || item->order >= before
+                    || (with_item && item->order <= with_order))
+                    continue;
+                with_item = item;
+                with_order = item->order;
+            }
         }
-        if (!loop && !with) break;
-        if (loop && (!with || loop->order > with->order)) {
+        if (!loop && !with_item) break;
+        if (loop && (!with_item || loop->order > with_order)) {
             before = loop->order;
             if (!n00bb_emit_iteration_cleanup(context, loop, exit_node))
                 return false;
             continue;
         }
-        before = with->order;
-        for (size_t i = with->items.len; i > 0; i--) {
-            n00bb_with_item_t *item = &with->items.data[i - 1];
-            if (success) {
-                if (!n00bb_emit_context_exit(context, item, exit_node, span))
-                    return false;
-            }
-            else if (!n00bb_emit_context_hook(context, item,
-                    "context-ensure", item->provided_value, span))
+        before = with_order;
+        if (success) {
+            if (!n00bb_emit_context_exit(context, with_item, exit_node, span))
                 return false;
         }
+        else if (!n00bb_emit_context_hook(context, with_item,
+                "context-ensure", with_item->provided_value, span))
+            return false;
     }
     return true;
 }
@@ -11897,7 +11912,7 @@ n00bb_emit_scoped_success(ir_lower_context_t *context,
                           n00bb_loop_frame_t *stop_before)
 {
     return n00bb_emit_scoped_cleanups(context, exit_node, stop_before,
-                                      nullptr, true);
+                                      nullptr, true, UINT64_MAX);
 }
 
 static bool
@@ -11908,6 +11923,14 @@ n00bb_emit_with_success(ir_lower_context_t *context, parse_tree_t *exit_node)
 
 static bool
 n00bb_emit_with_failure(ir_lower_context_t *context, parse_tree_t *exit_node)
+{
+    return n00bb_emit_with_failure_before(context, exit_node, UINT64_MAX);
+}
+
+static bool
+n00bb_emit_with_failure_before(ir_lower_context_t *context,
+                               parse_tree_t *exit_node,
+                               uint64_t before_order)
 {
     n00bb_lower_context_t *lower = context->user;
     n00bb_try_frame_t *handler = nullptr;
@@ -11920,7 +11943,7 @@ n00bb_emit_with_failure(ir_lower_context_t *context, parse_tree_t *exit_node)
         }
     }
     return n00bb_emit_scoped_cleanups(context, exit_node, nullptr, handler,
-                                      false);
+                                      false, before_order);
 }
 
 static bool
@@ -12636,6 +12659,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         .call_node = visit->node,
         .captures = captures,
         .provided_value = provided,
+        .order = ++lower->next_control_order,
         .active = true,
     };
     core_list_push(frame->items, item);
@@ -12708,7 +12732,6 @@ n00bb_lower_with_scope(ir_lower_context_t *context, parse_visit_t *visit,
             .node = visit->node,
             .body = child_nt(visit->grammar, visit->node, "body"),
             .items = core_list_new(n00bb_with_item_t),
-            .order = ++lower->next_control_order,
             .active = context->reachable,
         };
         if (frame.active && !n00bb_bind_with_managers(

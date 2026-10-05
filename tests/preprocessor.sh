@@ -1169,7 +1169,7 @@ awk '
     in_recover && /call @__n00bb_context_RecoverExit_error/ { handled++ }
     in_recover && /call @__n00bb_context_RecoverExit_ensure/ { ensured++ }
     in_recover && /fail %/ { propagated++ }
-    END { exit !(handled == 1 && ensured == 3 && propagated == 2) }
+    END { exit !(handled == 1 && ensured == 3 && propagated == 3) }
 ' "$tmp/lower_context_hook_failures.ir" || {
     cat "$tmp/lower_context_hook_failures.ir"
     exit 1
@@ -1180,7 +1180,15 @@ awk '
     in_handler && /call @__n00bb_context_PropagatingExit_error/ { handled++ }
     in_handler && /call @__n00bb_context_PropagatingExit_ensure/ { ensured++ }
     in_handler && /fail %/ { propagated++ }
-    END { exit !(handled == 1 && ensured == 3 && propagated == 2) }
+    END { exit !(handled == 1 && ensured == 3 && propagated == 3) }
+' "$tmp/lower_context_hook_failures.ir"
+awk '
+    /^  func @unwind_outer_after_inner_exit_failure/ { in_nested = 1 }
+    /^  func @propagate_unhandled_exit_failure/ { in_nested = 0 }
+    in_nested && /call @__n00bb_context_RecoverExit_ensure/ { inner_ensures++ }
+    in_nested && /call @__n00bb_context_OuterObserver_ensure/ { outer_ensures++ }
+    in_nested && /call @__n00bb_context_OuterObserver_exit/ { outer_exits++ }
+    END { exit !(inner_ensures == 3 && outer_ensures == 4 && outer_exits == 1) }
 ' "$tmp/lower_context_hook_failures.ir"
 awk '
     /^  func @propagate_unhandled_exit_failure/ { in_unhandled = 1 }

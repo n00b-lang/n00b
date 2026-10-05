@@ -15,6 +15,11 @@ context UnhandledExit() fail: int {
     exit() { fail 19 }
     ensure() {}
 }
+context OuterObserver() {
+    enter() {}
+    exit() {}
+    ensure() {}
+}
 func recover_exit_error() -> nil fail: int {
     with RecoverExit() {}
 }
@@ -23,4 +28,7 @@ func propagate_error_hook_failure() -> nil fail: int {
 }
 func propagate_unhandled_exit_failure() -> nil fail: int {
     with UnhandledExit() {}
+}
+func unwind_outer_after_inner_exit_failure() -> nil fail: int {
+    with OuterObserver(), RecoverExit() {}
 }
