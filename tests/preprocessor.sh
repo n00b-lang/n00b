@@ -4519,7 +4519,7 @@ grep -q 'call_generic_render: function, mutable, type=() -> string' \
     "$tmp/generic_trait_dispatch.out"
 grep -q 'deferred generic_trait_dispatch -> .*generic trait dispatch awaits specialization' \
     "$tmp/generic_trait_dispatch.out"
-grep -q 'trait-dispatch\[resolved\] generic_trait_dispatch:1:generic_render -> generic_trait_dispatch:1:Render.render' \
+grep -q 'trait-dispatch\[resolved\] generic_trait_dispatch:1:generic_render -> generic_trait_dispatch:1:render' \
     "$tmp/generic_trait_dispatch.out"
 "$compiler" lower --dump-ir --dump-link-unit \
     "$script_dir/programs/generic_trait_dispatch_lower.n00b" \
@@ -4528,10 +4528,14 @@ grep -q 'trait-dispatch\[resolved\] generic_trait_dispatch:1:generic_render -> g
     echo 'constrained generic trait dispatch did not lower to its method requirement' >&2
     exit 1
 }
-grep -q 'trait.method .*@__trait_req_Render_render' "$tmp/generic_trait_dispatch.ir"
+grep -q 'call @render' "$tmp/generic_trait_dispatch.ir"
+if grep -q 'trait.method\|type.test' "$tmp/generic_trait_dispatch.ir"; then
+    echo 'single-target closed trait dispatch was not lowered to a direct call' >&2
+    exit 1
+fi
 grep -q 'func @generic_render(%item: `a where' \
     "$tmp/generic_trait_dispatch.ir"
-grep -q 'trait-dispatch\[resolved\].*Render.render' \
+grep -q 'trait-dispatch\[resolved\].*:render' \
     "$tmp/generic_trait_dispatch.ir"
 "$compiler" lower --dump-ir \
     "$script_dir/programs/generic_trait_default_call.n00b" \
@@ -4540,9 +4544,7 @@ grep -q 'trait-dispatch\[resolved\].*Render.render' \
     echo 'generic trait call with a defaulted parameter did not lower' >&2
     exit 1
 }
-grep -q 'trait.method .*@__trait_req_Add_Amount_add_amount' \
-    "$tmp/generic_trait_default_call.ir"
-grep -q 'call %.*, .*missing' \
+grep -q 'call @add_amount, .*missing' \
     "$tmp/generic_trait_default_call.ir"
 grep -q '__trait_req_Add_Amount_add_amount.*!ir.optional_parameter(true)' \
     "$tmp/generic_trait_default_call.ir"
@@ -4957,6 +4959,83 @@ if grep -q 'call @__negate,' "$tmp/linkable_operator_unary_traits.ir" \
     exit 1
 fi
 "$compiler" lower --dump-ir \
+    "$script_dir/programs/operator_failure_coverage.n00b" \
+    >"$tmp/operator_failure_coverage.ir" 2>&1 || {
+    cat "$tmp/operator_failure_coverage.ir"
+    echo 'operator failure coverage did not lower' >&2
+    exit 1
+}
+for method in subtract multiply divide remainder bit_and bit_or bit_xor \
+        shift_left shift_right negate not cmp write; do
+    grep -q "= call @__$method," "$tmp/operator_failure_coverage.ir"
+done
+grep -q 'variant.payload .*"error"' "$tmp/operator_failure_coverage.ir"
+grep -q 'fail %__n00bb_' "$tmp/operator_failure_coverage.ir"
+"$compiler" preprocess --dump-link-unit \
+    "$script_dir/programs/operator_failure_coverage.n00b" \
+    >"$tmp/operator_failure_coverage.effects" 2>&1 || {
+    cat "$tmp/operator_failure_coverage.effects"
+    echo 'operator call effects were not analyzed' >&2
+    exit 1
+}
+grep -q 'function-global-write-summary\[resolved\] operator_failure_coverage:1:subtract -> operator_failure_coverage:0:operator_state' \
+    "$tmp/operator_failure_coverage.effects"
+"$compiler" library --dump-ir \
+    "$script_dir/programs/operator_failure_coverage.n00b" \
+    >"$tmp/operator_failure_coverage_linkable.ir" 2>&1 || :
+for dispatch in \
+        'Subtract __subtract' \
+        'Multiply __multiply' \
+        'Divide __divide' \
+        'Remainder __remainder' \
+        'Bit_And __bit_and' \
+        'Bit_Or __bit_or' \
+        'Bit_Xor __bit_xor' \
+        'Shift_Left __shift_left' \
+        'Shift_Right __shift_right' \
+        'Negate __negate' \
+        'Not __not' \
+        'Comparable __cmp' \
+        'operator_failure_coverage.Index_Write __write'; do
+    trait=${dispatch% *}
+    method=${dispatch#* }
+    grep -q "trait.method \"$trait\", \"$method\"" \
+        "$tmp/operator_failure_coverage_linkable.ir"
+done
+if grep -Eq '= call @__(subtract|multiply|divide|remainder|bit_and|bit_or|bit_xor|shift_left|shift_right|negate|not|cmp|write),' \
+        "$tmp/operator_failure_coverage_linkable.ir" \
+    || grep -q '^error\[' "$tmp/operator_failure_coverage_linkable.ir"; then
+    cat "$tmp/operator_failure_coverage_linkable.ir"
+    echo 'linkable operator failure path lowered to a fixed implementation' >&2
+    exit 1
+fi
+"$compiler" lower --dump-ir --dump-link-unit \
+    "$script_dir/programs/trait_dispatch_multiple.n00b" \
+    >"$tmp/trait_dispatch_multiple.ir" 2>&1 || {
+    cat "$tmp/trait_dispatch_multiple.ir"
+    exit 1
+}
+test "$(grep -c 'type.test' "$tmp/trait_dispatch_multiple.ir")" -eq 2
+test "$(grep -c 'type.narrow' "$tmp/trait_dispatch_multiple.ir")" -eq 2
+test "$(grep -c 'trait-dispatch\[resolved\]' \
+    "$tmp/trait_dispatch_multiple.ir")" -eq 2
+if grep -q 'trait.method' "$tmp/trait_dispatch_multiple.ir"; then
+    cat "$tmp/trait_dispatch_multiple.ir"
+    echo 'closed trait-valued call retained dynamic dispatch' >&2
+    exit 1
+fi
+"$compiler" library --dump-ir \
+    "$script_dir/programs/trait_dispatch_multiple.n00b" \
+    >"$tmp/trait_dispatch_multiple_linkable.ir" 2>&1 || :
+grep -q 'trait.method "trait_dispatch_multiple.Render", "render"' \
+    "$tmp/trait_dispatch_multiple_linkable.ir"
+if grep -q 'type.test' "$tmp/trait_dispatch_multiple_linkable.ir" \
+    || grep -q '^fatal\[' "$tmp/trait_dispatch_multiple_linkable.ir"; then
+    cat "$tmp/trait_dispatch_multiple_linkable.ir"
+    echo 'linkable trait-valued call was prematurely specialized' >&2
+    exit 1
+fi
+"$compiler" lower --dump-ir \
     "$script_dir/programs/operator_string_add.n00b" \
     >"$tmp/operator_string_add.ir" 2>&1 || {
     cat "$tmp/operator_string_add.ir"
@@ -4983,10 +5062,15 @@ fi
 }
 grep -q 'func @generic_echo(%item: `a' \
     "$tmp/generic_trait_correlated_result.ir"
-grep -q 'trait.method .*@__trait_req_Echo_echo' \
+grep -q ': int = call @echo,' \
     "$tmp/generic_trait_correlated_result.ir"
-grep -Fq 'call_signature((`a) -> `a fail: nil where' \
+grep -Fq 'call_signature((int) -> int fail: nil)' \
     "$tmp/generic_trait_correlated_result.ir"
+if grep -q 'trait.method\|type.test' \
+        "$tmp/generic_trait_correlated_result.ir"; then
+    echo 'single-target correlated trait result retained dynamic dispatch' >&2
+    exit 1
+fi
 "$compiler" lower --dump-ir \
     "$script_dir/programs/generic_trait_result_propagation.n00b" \
     >"$tmp/generic_trait_result_propagation.ir" 2>&1 || {
@@ -5030,8 +5114,16 @@ grep -q 'func @generic_read_failure(%item: `a' \
     "$tmp/generic_trait_failure_channel.ir"
 grep -Fq '@__trait_req_ReadFailure_read_failure' \
     "$tmp/generic_trait_failure_channel.ir"
-grep -Fq 'call_signature((`a) -> int fail: string where' \
+grep -Fq 'call_signature((int) -> int fail: string)' \
     "$tmp/generic_trait_failure_channel.ir"
+grep -q 'variant.payload .*"error"' \
+    "$tmp/generic_trait_failure_channel.ir"
+grep -q 'fail %__n00bb_' "$tmp/generic_trait_failure_channel.ir"
+if grep -q 'trait.method\|type.test' \
+        "$tmp/generic_trait_failure_channel.ir"; then
+    echo 'single-target trait failure channel retained dynamic dispatch' >&2
+    exit 1
+fi
 N00B_PATH="$script_dir/programs/generic_trait_specialization" \
     "$compiler" lower --dump-ir --dump-link-unit \
     "$script_dir/programs/generic_trait_specialization/root.n00b" \
@@ -5048,10 +5140,16 @@ grep -q 'trait-specialization\[resolved\] root:1:generic_render -> label_impl:1:
     "$tmp/generic_trait_specialization.out"
 grep -q 'func @generic_render(%item: `a where' \
     "$tmp/generic_trait_specialization.out"
-grep -q 'trait.method .*@__trait_req_Render_render' \
-    "$tmp/generic_trait_specialization.out"
-grep -q 'trait.method .*@__trait_req_Render_measure' \
-    "$tmp/generic_trait_specialization.out"
+test "$(grep -c 'type.test' "$tmp/generic_trait_specialization.out")" -eq 4
+test "$(grep -c 'type.narrow' "$tmp/generic_trait_specialization.out")" -eq 4
+test "$(grep -c '= call @render' \
+    "$tmp/generic_trait_specialization.out")" -eq 2
+test "$(grep -c '= call @measure' \
+    "$tmp/generic_trait_specialization.out")" -eq 2
+if grep -q 'trait.method' "$tmp/generic_trait_specialization.out"; then
+    echo 'closed cross-module trait specialization retained dynamic dispatch' >&2
+    exit 1
+fi
 generic_specialization_count=$(grep -c \
     'trait-specialization\[resolved\] root:1:generic_render' \
     "$tmp/generic_trait_specialization.out")
