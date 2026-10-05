@@ -1,0 +1,9 @@
+when false {
+    import missing_unselected_import
+} else when true {
+    import selected_when_dep
+} else {
+    import missing_else_import
+}
+
+var selected_import_value: bool = selected_when_dep.enabled

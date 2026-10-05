@@ -64,6 +64,7 @@
                          | <labeled-typecase>
                          | <labeled-switch>
                          | <assert-stmt>
+                         | <import-stmt>
                          | <assign-stmt>
                          | <binop-assign-stmt>
                          | <expression-stmt>

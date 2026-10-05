@@ -6701,6 +6701,46 @@ grep -q '"imported_short_name"' "$tmp/import.out"
 ! grep -q '"imported_short_name_removed"' "$tmp/import.out"
 
 N00B_PATH="$program_dir/imports" "$compiler" preprocess --dump-symbols \
+    --dump-link-unit "$program_dir/imports/selected_when_import.n00b" \
+    >"$tmp/selected_when_import.out" 2>&1 || {
+    cat "$tmp/selected_when_import.out"
+    exit 1
+}
+grep -q '^  imports: selected_when_dep$' "$tmp/selected_when_import.out"
+grep -q 'resolved selected_when_import -> selected_when_dep:0:enabled' \
+    "$tmp/selected_when_import.out"
+! grep -q 'missing_unselected_import' "$tmp/selected_when_import.out"
+! grep -q 'missing_else_import' "$tmp/selected_when_import.out"
+
+N00B_PATH="$program_dir/imports" "$compiler" preprocess --dump-symbols \
+    "$program_dir/imports/platform_selected_import.n00b" \
+    >"$tmp/platform_selected_import.out" 2>&1 || {
+    cat "$tmp/platform_selected_import.out"
+    exit 1
+}
+test "$(grep -Ec '^symbols platform_(macos|linux):$' \
+    "$tmp/platform_selected_import.out")" -eq 1
+case "$(uname -s)" in
+    Darwin) selected_platform=platform_macos ;;
+    Linux) selected_platform=platform_linux ;;
+    *) selected_platform= ;;
+esac
+test -n "$selected_platform"
+grep -q "^symbols $selected_platform:$" "$tmp/platform_selected_import.out"
+! grep -q 'missing_unsupported_platform' "$tmp/platform_selected_import.out"
+
+for invalid_import in import_in_if import_in_nested_if; do
+    if N00B_PATH="$program_dir/imports" "$compiler" preprocess \
+        "$program_dir/imports/$invalid_import.n00b" \
+        >"$tmp/$invalid_import.out" 2>&1; then
+        echo "an import nested in ordinary control flow unexpectedly passed" >&2
+        exit 1
+    fi
+    grep -q 'imports are only allowed at module level or directly in a selected when branch' \
+        "$tmp/$invalid_import.out"
+done
+
+N00B_PATH="$program_dir/imports" "$compiler" preprocess --dump-symbols \
     --dump-link-unit \
     "$program_dir/imports/importer.n00b" >"$tmp/imported_signatures.out"
 grep -q 'imported_identity: function, mutable, type=(`a) -> `a fail: nil' \

@@ -2016,10 +2016,13 @@ process_import(pp_context_t *ctx, parse_tree_t *statement)
 
 static void
 process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
-             int32_t depth, int32_t child_index)
+             int32_t depth, int32_t child_index,
+             parse_tree_t *selected_import_body,
+             parse_tree_t *current_body)
 {
     parse_tree_t *node = *slot;
     if (!node || core_tree_is_leaf(node) || ctx->failed) return;
+    if (is_name(ctx->grammar, node, "body")) current_body = node;
 
     bool scoped_body = is_name(ctx->grammar, node, "body")
         || is_name(ctx->grammar, node, "value-body")
@@ -2027,6 +2030,11 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
     size_t binding_mark = ctx->bindings.len;
 
     if (is_name(ctx->grammar, node, "import-stmt")) {
+        if (current_body && current_body != selected_import_body) {
+            pp_error(ctx, node,
+                "imports are only allowed at module level or directly in a selected when branch");
+            return;
+        }
         process_import(ctx, node);
         return;
     }
@@ -2086,7 +2094,8 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
             }
             *slot = replacement;
             parse_tree_free(node);
-            process_node(ctx, slot, parent, depth, child_index);
+            process_node(ctx, slot, parent, depth, child_index, replacement,
+                         replacement);
         }
         else {
             *slot = nullptr;
@@ -2108,7 +2117,8 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
     if (ctx->failed || !node) return;
     for (size_t i = 0; i < core_tree_num_children(node);) {
         parse_tree_t *child = core_tree_child(node, i);
-        process_node(ctx, &child, node, depth + 1, (int32_t)i);
+        process_node(ctx, &child, node, depth + 1, (int32_t)i,
+                     selected_import_body, current_body);
         if (!child) {
             parse_tree_t *removed = core_tree_remove_child(node, i);
             parse_tree_free(removed);
@@ -2171,7 +2181,7 @@ process_deferred_statement(pp_context_t *ctx, pp_deferred_stmt_t deferred)
         if (core_tree_child(deferred.parent, i) != deferred.statement) continue;
         parse_tree_t *statement = deferred.statement;
         process_node(ctx, &statement, deferred.parent, deferred.depth,
-                     (int32_t)i);
+                     (int32_t)i, nullptr, nullptr);
         if (!statement) {
             parse_tree_free(core_tree_remove_child(deferred.parent, i));
         }

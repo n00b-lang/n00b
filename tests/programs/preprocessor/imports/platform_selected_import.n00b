@@ -1,0 +1,7 @@
+when target_os() == "macos" {
+    import platform_macos
+} else when target_os() == "linux" {
+    import platform_linux
+} else {
+    import missing_unsupported_platform
+}

@@ -3529,6 +3529,8 @@ site_is_resolved_module_prefix(parse_grammar_t *grammar,
                                n00bb_tu_state_t *state,
                                n00bb_link_use_site_t *site)
 {
+    if (site && site->member_name.data
+        && find_direct_import(unit, site->member_name)) return true;
     parse_tree_t *node = site ? site->node : nullptr;
     for (parse_tree_t *parent = node
              ? core_tree_node_value(node).parent : nullptr;
@@ -22464,6 +22466,14 @@ remember_link_use_site(parse_grammar_t *grammar,
     parse_sym_entry_t *symbol = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
         ? resolution.target.symbol : core_tree_node_value(node).sym;
     if (!symbol) symbol = attached_symbol(grammar, unit, node);
+    if (!symbol && !dotted_path && member_name.data) {
+        core_translation_unit_t *imported = find_direct_import(unit,
+                                                               member_name);
+        parse_scope_t *imported_scope = imported
+            ? module_scope(tu_state(imported)) : nullptr;
+        if (imported_scope)
+            parse_tree_set_resolution_scope(node, imported_scope);
+    }
     if (symbol) parse_sym_add_use(symbol, node);
     parse_scope_t *scope = state->annotations
         ? parse_symtab_scope_for_node(state->annotations->symtab, node)
