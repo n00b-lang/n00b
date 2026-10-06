@@ -1,0 +1,5 @@
+import zeta
+
+func total() -> int {
+    return zeta.value + zeta.tools.value + zeta.tools.deep.value + zeta.marker
+}

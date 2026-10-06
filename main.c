@@ -5987,7 +5987,9 @@ resolve_module_member_site(parse_grammar_t *grammar,
             || !prefix->exposed_scope) {
             return true;
         }
-        imported = find_direct_import(unit, prefix->name);
+        imported = parse_sym_binding(
+            prefix, CORE_STRING_STATIC("n00bb.package-unit"));
+        if (!imported) imported = find_direct_import(unit, prefix->name);
         exposed_scope = prefix->exposed_scope;
     }
     if (!imported || !exposed_scope) return true;
@@ -6189,6 +6191,44 @@ package_name_owned_by_unit(core_string_t package,
 }
 
 static bool
+connect_package_subpackage(core_translation_unit_t *parent_unit,
+                           n00bb_package_declaration_t *parent,
+                           core_translation_unit_t *child_unit,
+                           n00bb_package_declaration_t *child,
+                           core_string_t member_name)
+{
+    n00bb_tu_state_t *parent_state = tu_state(parent_unit);
+    parse_symtab_t *symtab = parent_state && parent_state->annotations
+        ? parent_state->annotations->symtab : nullptr;
+    if (!parent || !parent->scope || !child || !child->scope || !symtab)
+        return false;
+    parse_scope_t *types = parse_symtab_scope_in_namespace(
+        symtab, parent->scope, CORE_STRING_STATIC("type"));
+    parse_sym_entry_t *existing = parse_symtab_lookup_in(parent->scope,
+                                                         member_name);
+    if (existing && existing->kind == PARSE_SYM_MODULE
+        && existing->exposed_scope == child->scope
+        && parse_sym_binding(existing,
+            CORE_STRING_STATIC("n00bb.package-unit")) == child_unit)
+        return true;
+    if (existing || parse_symtab_lookup_in(types, member_name)) {
+        package_diagnostic(child_unit, child->node, "N00BB-M0006",
+            "subpackage name conflicts with another package binding");
+        return false;
+    }
+    parse_symtab_enter_scope_all(symtab, parent->scope);
+    parse_sym_entry_t *binding = parse_symtab_add(symtab,
+        CORE_STRING_STATIC(""), member_name, PARSE_SYM_MODULE, child->node);
+    parse_symtab_leave_scope_all(symtab);
+    if (!binding || !parse_sym_set_binding(binding,
+            CORE_STRING_STATIC("n00bb.package-unit"), child_unit))
+        return false;
+    binding->exposed_scope = child->scope;
+    binding->visibility = CORE_STRING_STATIC("public");
+    return true;
+}
+
+static bool
 initialize_unit_package_interfaces(core_translation_unit_t *unit)
 {
     n00bb_tu_state_t *state = tu_state(unit);
@@ -6215,6 +6255,24 @@ initialize_unit_package_interfaces(core_translation_unit_t *unit)
             parse_symtab_pop_scope_all(symtab);
             parse_symtab_leave_scope_all(symtab);
         }
+    }
+    for (size_t child_ix = 0; child_ix < state->package_declarations.len;
+         child_ix++) {
+        n00bb_package_declaration_t *child =
+            &state->package_declarations.data[child_ix];
+        size_t split = child->name.u8_bytes;
+        while (split && child->name.data[split - 1] != '.') split--;
+        if (!split) continue;
+        core_string_t parent_name = core_string_borrow(child->name.data,
+                                                       split - 1);
+        n00bb_package_declaration_t *parent =
+            find_package_declaration(unit, parent_name);
+        if (!parent) continue;
+        core_string_t member_name = core_string_borrow(
+            child->name.data + split, child->name.u8_bytes - split);
+        if (!connect_package_subpackage(unit, parent, unit, child,
+                                        member_name))
+            return false;
     }
     return true;
 }
@@ -6250,6 +6308,52 @@ validate_package_interfaces(n00bb_link_analysis_t *analysis)
                     "a filesystem module and package interface cannot have the same name");
                 return false;
             }
+        }
+    }
+    return true;
+}
+
+static n00bb_package_declaration_t *
+find_link_package_declaration(n00bb_link_analysis_t *analysis,
+                              core_string_t name,
+                              core_translation_unit_t **unit_out)
+{
+    for (size_t u = 0; analysis && u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_package_declaration_t *package =
+            find_package_declaration(unit, name);
+        if (!package) continue;
+        if (unit_out) *unit_out = unit;
+        return package;
+    }
+    return nullptr;
+}
+
+static bool
+connect_package_subpackages(n00bb_link_analysis_t *analysis)
+{
+    for (size_t u = 0; analysis && u < analysis->units.len; u++) {
+        core_translation_unit_t *child_unit = analysis->units.data[u];
+        n00bb_tu_state_t *child_state = tu_state(child_unit);
+        for (size_t p = 0; child_state
+                && p < child_state->package_declarations.len; p++) {
+            n00bb_package_declaration_t *child =
+                &child_state->package_declarations.data[p];
+            size_t split = child->name.u8_bytes;
+            while (split && child->name.data[split - 1] != '.') split--;
+            if (!split) continue;
+            core_string_t parent_name = core_string_borrow(child->name.data,
+                                                           split - 1);
+            core_string_t member_name = core_string_borrow(
+                child->name.data + split, child->name.u8_bytes - split);
+            core_translation_unit_t *parent_unit = nullptr;
+            n00bb_package_declaration_t *parent =
+                find_link_package_declaration(analysis, parent_name,
+                                              &parent_unit);
+            if (!parent) continue;
+            if (!connect_package_subpackage(parent_unit, parent, child_unit,
+                                            child, member_name))
+                return false;
         }
     }
     return true;
@@ -6457,10 +6561,8 @@ populate_package_interfaces(n00bb_link_analysis_t *analysis)
 }
 
 static bool
-resolve_imported_module_symbols(parse_grammar_t *grammar,
-    core_list_t(core_translation_unit_ptr_t) *units)
+bind_imported_module_scopes(core_list_t(core_translation_unit_ptr_t) *units)
 {
-    bool all_resolved = true;
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
         n00bb_tu_state_t *state = tu_state(unit);
@@ -6481,6 +6583,15 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
         }
         core_list_free(scopes);
     }
+    return true;
+}
+
+static bool
+resolve_imported_module_symbols(parse_grammar_t *grammar,
+    core_list_t(core_translation_unit_ptr_t) *units)
+{
+    if (!bind_imported_module_scopes(units)) return false;
+    bool all_resolved = true;
 
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
@@ -37326,7 +37437,8 @@ register_package_interfaces(n00bb_link_analysis_t *analysis,
                 for (parse_sym_entry_t *binding = scopes[s]
                          ? scopes[s]->first_in_scope : nullptr;
                      binding; binding = binding->next_in_scope)
-                    if (!register_package_export_declaration(analysis,
+                    if (binding->kind != PARSE_SYM_MODULE
+                        && !register_package_export_declaration(analysis,
                             environment, unit, package, binding)) return false;
         }
     }
@@ -41782,8 +41894,8 @@ n00bb_link_stage_symbols(core_link_unit_t *link, uint32_t stage_kind,
         if (!validate_type_value_namespaces(analysis->units.data[i]))
             return CORE_LINK_STAGE_RESULT_FAILED;
     if (!validate_package_interfaces(analysis)
-        || !resolve_imported_module_symbols(analysis->grammar,
-                                            &analysis->units)
+        || !connect_package_subpackages(analysis)
+        || !bind_imported_module_scopes(&analysis->units)
         || !populate_package_interfaces(analysis)
         || !resolve_imported_module_symbols(analysis->grammar,
                                         &analysis->units))

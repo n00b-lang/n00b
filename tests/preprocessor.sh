@@ -7470,6 +7470,23 @@ N00B_PATH="$package_programs" "$compiler" lower --dump-ir \
 grep -q 'const global @epsilon.impl.answer: int = 23' \
     "$tmp/package_nested_selected.out"
 
+N00B_PATH="$package_programs" "$compiler" lower --dump-ir \
+    --dump-control-flow "$package_programs/subpackage_consumer.n00b" \
+    >"$tmp/package_subpackages.out" \
+    2>"$tmp/package_subpackages.err" || {
+    cat "$tmp/package_subpackages.err"
+    exit 1
+}
+for value in root tool deep; do
+    grep -q "copy @zeta.impl.$value" \
+        "$tmp/package_subpackages.out"
+done
+grep -q 'copy @zeta.facade.marker' "$tmp/package_subpackages.out"
+test "$(grep -c 'function-entry phase="comptime" function=zeta.facade\$comptime.__n00bb_comptime_init' \
+    "$tmp/package_subpackages.out")" -eq 1
+test "$(grep -c 'function-entry phase="runtime" function=zeta.facade.__n00bb_runtime_init' \
+    "$tmp/package_subpackages.out")" -eq 1
+
 package_negative="$script_dir/programs/package_negative"
 for case_spec in \
     'invalid_body.facade:N00BB-M0010' \
@@ -7480,6 +7497,7 @@ for case_spec in \
     'wrong_owner.facade:N00BB-M0004' \
     'interface_collision.facade:N00BB-M0005' \
     'private_export.facade:N00BB-M0008' \
+    'subpackage_collision.facade:N00BB-M0006' \
     'duplicate_declaration.facade:N00BB-M0001'; do
     case_module=${case_spec%%:*}
     diagnostic=${case_spec##*:}

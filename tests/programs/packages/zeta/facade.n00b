@@ -1,0 +1,20 @@
+import zeta.impl
+
+func initialize_marker() -> int {
+    return 4
+}
+
+public var marker: int = initialize_marker()
+
+package zeta {
+    export zeta.impl.root as value
+    export marker
+}
+
+package zeta.tools {
+    export zeta.impl.tool as value
+}
+
+package zeta.tools.deep {
+    export zeta.impl.deep as value
+}
