@@ -9,8 +9,9 @@
 #include "lib/option.h"
 
 typedef struct {
-    th_ctx *ctx;
-    size_t  depth;
+    th_ctx                   *ctx;
+    size_t                    depth;
+    const th_print_options_t *options;
 } pctx;
 
 static void varname(core_buffer_t *b, size_t depth, uint64_t pos)
@@ -355,7 +356,12 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
         if (t->named.is_variant) {
             core_buffer_puts(b, "variant ");
         }
-        core_buffer_append(b, t->named.name, t->named.nlen);
+        const char *mapped = c->options && c->options->named
+            ? c->options->named(t->named.name, t->named.nlen,
+                                c->options->context)
+            : nullptr;
+        if (mapped) core_buffer_puts(b, mapped);
+        else core_buffer_append(b, t->named.name, t->named.nlen);
 
         if (!t->named.nargs) {
             return;
@@ -383,21 +389,28 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
     case TH_INDIRECTION:
         for (size_t i = 0; i < sizeof(sugar) / sizeof(sugar[0]); i++) {
             if (sugar[i].attrs == t->ind.attrs) {
-                core_buffer_printf(b, "%s[", sugar[i].name);
+                const char *name = !t->ind.attrs && c->options
+                    && c->options->reference
+                    ? c->options->reference : sugar[i].name;
+                core_buffer_printf(b, "%s[", name);
                 wlit(w, "]");
                 wtype(w, t->ind.referent);
 
                 return;
             }
         }
-        core_buffer_puts(b, "ref[");
+        core_buffer_printf(b, "%s[",
+            c->options && c->options->reference
+                ? c->options->reference : "ref");
         wpush(w, (witem){.kind = W_ATTRS, .t = t});
         wtype(w, t->ind.referent);
 
         return;
 
     case TH_SEQUENCE:
-        core_buffer_puts(b, "array[");
+        core_buffer_printf(b, "%s[",
+            c->options && c->options->sequence
+                ? c->options->sequence : "array");
         wpush(w, (witem){.kind = W_SEQTAIL, .t = t});
         wtype(w, t->seq.elem);
 
@@ -637,14 +650,16 @@ static void emit_binder_where(pctx *c, core_buffer_t *b, th_type *type)
     }
 }
 
-const char *th_print(th_ctx *ctx, th_type *type)
+const char *
+th_print_with_options(th_ctx *ctx, th_type *type,
+                      const th_print_options_t *options)
 {
     if (!ctx || !type) {
         return nullptr;
     }
     th_normalize(type);
 
-    pctx  c = {.ctx = ctx};
+    pctx  c = {.ctx = ctx, .options = options};
     core_buffer_t b = {0};
 
     emit(&c, &b, type);
@@ -660,4 +675,9 @@ const char *th_print(th_ctx *ctx, th_type *type)
     core_buffer_release(&b);
 
     return out;
+}
+
+const char *th_print(th_ctx *ctx, th_type *type)
+{
+    return th_print_with_options(ctx, type, nullptr);
 }

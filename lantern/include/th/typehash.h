@@ -77,6 +77,16 @@ typedef struct th_ctx  th_ctx;
 typedef struct th_type th_type;
 typedef struct th_env  th_env;
 
+typedef const char *(*th_print_name_fn)(const char *name, size_t length,
+                                        void *context);
+
+typedef struct {
+    th_print_name_fn named;
+    void            *context;
+    const char      *sequence;
+    const char      *reference;
+} th_print_options_t;
+
 typedef th_type *(*th_method_resolver_fn)(th_ctx *ctx, th_type *receiver,
                                           const char *name, void *user);
 
@@ -248,6 +258,8 @@ bool     th_encode(th_ctx *ctx, th_type *type, const uint8_t **out,
                    size_t *len);
 uint64_t th_hash(th_ctx *ctx, th_type *type);
 const char *th_print(th_ctx *ctx, th_type *type);
+const char *th_print_with_options(th_ctx *ctx, th_type *type,
+                                  const th_print_options_t *options);
 uint64_t th_arm_tag(const char *name);
 const char *th_anon_name(th_ctx *ctx, const char *path, uint64_t line,
                          uint64_t col);

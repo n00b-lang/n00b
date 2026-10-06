@@ -822,6 +822,34 @@ static void test_unification_probe(void)
     th_ctx_free(ctx);
 }
 
+static const char *
+display_type_name(const char *name, size_t length, void *context)
+{
+    (void)context;
+    return length == 4 && !memcmp(name, "list", 4) ? "List" : nullptr;
+}
+
+static void test_configurable_type_printing(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_type *item = th_name(ctx, "int");
+    th_arg argument = {.kind = TH_ARG_TYPE, .type = item};
+    th_type *list = th_apply(ctx, "list", &argument, 1);
+    th_type *reference = th_ind(ctx, 0, list);
+    th_type *sequence = th_array(ctx, reference);
+    th_print_options_t options = {
+        .named = display_type_name,
+        .sequence = "Array",
+        .reference = "Ref",
+    };
+    check("type printing accepts language-specific display spellings",
+          !strcmp(th_print_with_options(ctx, sequence, &options),
+                  "Array[Ref[List[int]]]")
+              && !strcmp(th_print(ctx, sequence),
+                         "array[ref[list[int]]]") );
+    th_ctx_free(ctx);
+}
+
 int main(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -855,6 +883,7 @@ int main(void)
     test_function_error_channels_unify_and_generalize();
     test_named_type_record_definitions();
     test_unification_probe();
+    test_configurable_type_printing();
 
     return report("th constraints");
 }
