@@ -1,9 +1,9 @@
 import contract
 
-public func render(self: dict[int, `V]) -> int {
+public func render(self: Dict[int, `V]) -> int {
     return 1
 }
 
-public func measure(self: dict[int, `V]) -> int {
+public func measure(self: Dict[int, `V]) -> int {
     return 1
 }

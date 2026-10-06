@@ -4,6 +4,6 @@ type Blob {
     c: int
 }
 
-func use_blob(blob_value: atomic[Blob]) -> atomic[Blob] {
+func use_blob(blob_value: Atomic[Blob]) -> Atomic[Blob] {
     return blob_value
 }

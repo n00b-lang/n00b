@@ -1,14 +1,14 @@
-func lower_list_values() -> list[int] {
-    var values: list[int] = [10, 20]
+func lower_list_values() -> List[int] {
+    var values: List[int] = [10, 20]
     return values
 }
 
-func lower_tagged_list_values() -> list[int] {
-    var values: list[int] = list[30, 40]
+func lower_tagged_list_values() -> List[int] {
+    var values: List[int] = list[30, 40]
     return values
 }
 
-func lower_short_tagged_list_values() -> list[int] {
-    var values: list[int] = l[50, 60]
+func lower_short_tagged_list_values() -> List[int] {
+    var values: List[int] = l[50, 60]
     return values
 }

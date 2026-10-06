@@ -1,3 +1,3 @@
-func invalid_dict_locking_type(item: dict_locking[int]) -> int {
+func invalid_dict_locking_type(item: Dict_Locking[int]) -> int {
     return 0
 }

@@ -2,11 +2,11 @@ import constructor_general
 import constructor_specific
 
 variant SpecializedPayloadValue {
-    payload: option[int]
+    payload: Option[int]
 }
 
 func payload_constructor_specificity() -> SpecializedPayloadValue {
     var item: SpecializedPayloadValue = new[SpecializedPayloadValue]()
-    item.payload = new[option[int]]()
+    item.payload = new[Option[int]]()
     return item
 }

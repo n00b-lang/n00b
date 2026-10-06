@@ -2,7 +2,7 @@ import array_nested_slice_contract
 import array_nested_slice_array_impl
 import array_nested_slice_view_impl
 
-func nested_view(items: array[int]) -> view[int] {
-    var first_view: view[int] = items [:]
+func nested_view(items: Array[int]) -> View[int] {
+    var first_view: View[int] = items [:]
     return first_view [:]
 }

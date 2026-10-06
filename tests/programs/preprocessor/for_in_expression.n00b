@@ -1,3 +1,3 @@
-func accept(items: list[int]) {
+func accept(items: List[int]) {
     for item in items { }
 }

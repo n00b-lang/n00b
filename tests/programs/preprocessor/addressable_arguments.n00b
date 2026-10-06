@@ -10,25 +10,25 @@ trait Index_Write {
     func __write(self: `T, index: int, item: int) -> int
 }
 
-func __read(self: array[int], index: int) -> int { return 1 }
-func __write(self: array[int], index: int, item: int) -> int { return item }
+func __read(self: Array[int], index: int) -> int { return 1 }
+func __write(self: Array[int], index: int, item: int) -> int { return item }
 
 func write_out(out target: int, input: int) { target = input }
 func copy_modify(modify target: int, input: int) { target = input }
 
-func use_reference(value: ref[int]) -> int { return ref_read(value) }
+func use_reference(value: Ref[int]) -> int { return ref_read(value) }
 
 func exercise_addressable(
     modify cell: Cell,
-    modify values: array[int],
+    modify values: Array[int],
     input: int
 ) -> int {
     write_out(cell.value, input)
     copy_modify(cell.value, input)
     write_out(values [0], input)
     copy_modify(values [1], input)
-    var field_reference: ref[int] = ref cell.value
-    var index_reference: ref[int] = ref values [2]
+    var field_reference: Ref[int] = ref cell.value
+    var index_reference: Ref[int] = ref values [2]
     ref_write(field_reference, input)
     ref_write(index_reference, input)
     return use_reference(field_reference)

@@ -1,2 +1,2 @@
-public func __init(modify self: option[`T]) {
+public func __init(modify self: Option[`T]) {
 }

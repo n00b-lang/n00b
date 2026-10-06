@@ -1,5 +1,5 @@
-var matrix: array[array[int]]
-const values: array[int] = [1, 2]
+var matrix: Array[Array[int]]
+const values: Array[int] = [1, 2]
 const limit: int = 41
 const label: string = "archive\nvalue"
 const empty_label: string = ""

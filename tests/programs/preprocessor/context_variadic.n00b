@@ -1,4 +1,4 @@
-context Batch(*values: int) provides: array[int] {
+context Batch(*values: int) provides: Array[int] {
     enter() { return values }
     exit(result) {}
 }

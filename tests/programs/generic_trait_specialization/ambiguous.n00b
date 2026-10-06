@@ -6,6 +6,6 @@ func generic_render(item: `T) -> int where `T: contract.Render {
     return item.render()
 }
 
-func render_dict(item: dict[int, string]) -> int {
+func render_dict(item: Dict[int, string]) -> int {
     return generic_render(item)
 }

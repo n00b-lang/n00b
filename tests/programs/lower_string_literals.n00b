@@ -38,6 +38,6 @@ func lower_rich_crossing_spans() -> string {
     return rich"«u»a«b»b«/u»c«/b»"
 }
 
-func lower_u32_string() -> array[codepoint] {
+func lower_u32_string() -> Array[codepoint] {
     return u32"A\u03bb\0"
 }

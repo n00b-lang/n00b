@@ -1,6 +1,6 @@
-func typecase_function_params(input: (int, *string, **options: bool, flags: array[int]) -> nil) -> int {
+func typecase_function_params(input: (int, *string, **options: bool, flags: Array[int]) -> nil) -> int {
     typecase(input) {
-        case (int, *string, **options: bool, flags: array[int]) -> nil {
+        case (int, *string, **options: bool, flags: Array[int]) -> nil {
             return 1
         }
     }

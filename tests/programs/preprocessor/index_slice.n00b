@@ -1,10 +1,10 @@
 trait Index_Slice {
-    func __slice(self: `Container, start_ix: int = 0, end_ix: int = -1) -> view[`Element]
+    func __slice(self: `Container, start_ix: int = 0, end_ix: int = -1) -> View[`Element]
 }
-func __slice(self: array[int], start_ix: int = 0, end_ix: int = -1) -> view[int] {
+func __slice(self: Array[int], start_ix: int = 0, end_ix: int = -1) -> View[int] {
     return self[:]
 }
-func full(items: array[int]) { return items[:] }
-func bounded(items: array[int]) { return items[2:4] }
-func no_start(items: array[int]) { return items[:4] }
-func no_end(items: array[int]) { return items[2:] }
+func full(items: Array[int]) { return items[:] }
+func bounded(items: Array[int]) { return items[2:4] }
+func no_start(items: Array[int]) { return items[:4] }
+func no_end(items: Array[int]) { return items[2:] }

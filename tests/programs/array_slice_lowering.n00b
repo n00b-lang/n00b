@@ -1,10 +1,10 @@
 trait Index_Slice {
-    func __slice(self: `T, start_ix: int = 0, end_ix: int = -1) -> view[int] fail: int
+    func __slice(self: `T, start_ix: int = 0, end_ix: int = -1) -> View[int] fail: int
 }
 
-func __slice(self: array[int], start_ix: int = 0, end_ix: int = -1) -> view[int] fail: int {
+func __slice(self: Array[int], start_ix: int = 0, end_ix: int = -1) -> View[int] fail: int {
     return self [:]!
 }
 
-func full_view(items: array[int]) -> view[int] fail: int { return items [:]! }
-func bounded_view(items: array[int]) -> view[int] fail: int { return items [1:2]! }
+func full_view(items: Array[int]) -> View[int] fail: int { return items [:]! }
+func bounded_view(items: Array[int]) -> View[int] fail: int { return items [1:2]! }

@@ -818,6 +818,8 @@ static bool semantic_static_value_from_expression(
     parse_grammar_t *grammar, parse_tree_t *expression, th_type *type,
     n00bb_tu_state_t *state, n00bb_static_value_t *out, size_t depth);
 static int builtin_generic_type_arity(const char *name);
+static const char *source_builtin_type_name(const char *name);
+static const char *n00bb_print_type(th_ctx *types, th_type *type);
 static bool static_value_matches_type(const n00bb_static_value_t *value,
     th_type *type, n00bb_tu_state_t *state, size_t depth);
 static bool n00bb_static_value_to_ir_initializer(
@@ -1519,7 +1521,8 @@ validate_builtin_generic_type_arity(parse_grammar_t *grammar,
     core_buffer_t message = {0};
     core_buffer_printf(&message,
         "built-in type '%s' requires %d type argument%s, but %zu provided",
-        name, expected, expected == 1 ? "" : "s", argument_count);
+        source_builtin_type_name(name), expected,
+        expected == 1 ? "" : "s", argument_count);
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_FATAL,
         CORE_STRING_STATIC("N00BB-T0016"),
@@ -2514,7 +2517,7 @@ array_type_uses_mixed_syntax(parse_grammar_t *grammar,
     parse_tree_t *name_node = child_nt(grammar, core, "member-chain");
     parse_tree_t *application = child_nt(grammar, core, "tspec-application");
     if (!name_node || !application) return false;
-    bool is_array = member_chain_is_name(grammar, name_node, "array");
+    bool is_array = member_chain_is_name(grammar, name_node, "Array");
     size_t dimensions = 0;
     return is_array && array_dimension_count(state, node, &dimensions)
         && dimensions != 0;
@@ -3430,13 +3433,92 @@ alias_declaration_is_transparent(parse_tree_t *declaration)
 static const char *
 canonical_builtin_type_name(const char *name)
 {
-    return name && !strcmp(name, "float") ? "f64" : name;
+    if (!name) return nullptr;
+    if (!strcmp(name, "float")) return "f64";
+    if (!strcmp(name, "Array")) return "array";
+    if (!strcmp(name, "Array_Locking")) return "array_locking";
+    if (!strcmp(name, "List")) return "list";
+    if (!strcmp(name, "List_Locking")) return "list_locking";
+    if (!strcmp(name, "Set")) return "set";
+    if (!strcmp(name, "Set_Locking")) return "set_locking";
+    if (!strcmp(name, "Dict")) return "dict";
+    if (!strcmp(name, "Dict_Locking")) return "dict_locking";
+    if (!strcmp(name, "Option")) return "option";
+    if (!strcmp(name, "View")) return "view";
+    if (!strcmp(name, "Atomic")) return "atomic";
+    if (!strcmp(name, "Ref")) return "ref";
+    if (!strcmp(name, "Tuple")) return "tuple";
+    return name;
+}
+
+static int
+source_builtin_generic_type_arity(const char *name)
+{
+    if (!name) return -1;
+    if (!strcmp(name, "Array") || !strcmp(name, "Array_Locking")
+        || !strcmp(name, "List") || !strcmp(name, "List_Locking")
+        || !strcmp(name, "Set") || !strcmp(name, "Set_Locking")
+        || !strcmp(name, "Option") || !strcmp(name, "View")
+        || !strcmp(name, "Atomic") || !strcmp(name, "Ref")) return 1;
+    if (!strcmp(name, "Dict") || !strcmp(name, "Dict_Locking")) return 2;
+    if (!strcmp(name, "Tuple")) return -2;
+    return -1;
+}
+
+static const char *
+source_builtin_type_name(const char *name)
+{
+    if (!name) return nullptr;
+    if (!strcmp(name, "array")) return "Array";
+    if (!strcmp(name, "array_locking")) return "Array_Locking";
+    if (!strcmp(name, "list")) return "List";
+    if (!strcmp(name, "list_locking")) return "List_Locking";
+    if (!strcmp(name, "set")) return "Set";
+    if (!strcmp(name, "set_locking")) return "Set_Locking";
+    if (!strcmp(name, "dict")) return "Dict";
+    if (!strcmp(name, "dict_locking")) return "Dict_Locking";
+    if (!strcmp(name, "option")) return "Option";
+    if (!strcmp(name, "view")) return "View";
+    if (!strcmp(name, "atomic")) return "Atomic";
+    if (!strcmp(name, "ref")) return "Ref";
+    if (!strcmp(name, "tuple")) return "Tuple";
+    return name;
+}
+
+static const char *
+n00bb_display_type_name(const char *name, size_t length, void *context)
+{
+    (void)context;
+    static const char *const names[] = {
+        "array_locking", "list", "list_locking", "set", "set_locking",
+        "dict", "dict_locking", "option", "view", "atomic", "ref",
+        "tuple",
+    };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        size_t candidate_length = strlen(names[i]);
+        if (length == candidate_length
+            && !memcmp(name, names[i], length))
+            return source_builtin_type_name(names[i]);
+    }
+    return nullptr;
+}
+
+static const char *
+n00bb_print_type(th_ctx *types, th_type *type)
+{
+    static const th_print_options_t options = {
+        .named = n00bb_display_type_name,
+        .sequence = "Array",
+        .reference = "Ref",
+    };
+    return th_print_with_options(types, type, &options);
 }
 
 static int
 builtin_generic_type_arity(const char *name)
 {
     if (!name) return -1;
+    name = canonical_builtin_type_name(name);
     if (!strcmp(name, "array") || !strcmp(name, "array_locking")
         || !strcmp(name, "list") || !strcmp(name, "list_locking")
         || !strcmp(name, "set") || !strcmp(name, "set_locking")
@@ -3451,8 +3533,8 @@ static bool
 builtin_type_name(const char *name)
 {
     if (!name) return false;
-    if (builtin_generic_type_arity(name) != -1
-        || !strcmp(name, "ref") || !strcmp(name, "any")
+    if (source_builtin_generic_type_arity(name) != -1
+        || !strcmp(name, "Allocator") || !strcmp(name, "any")
         || !strcmp(name, "byte") || !strcmp(name, "char")
         || !strcmp(name, "string") || !strcmp(name, "typespec"))
         return true;
@@ -3474,9 +3556,13 @@ apply_type_arguments(th_ctx *types, const char *name,
         return nullptr;
     for (size_t i = 0; expected != -1 && i < count; i++)
         if (arguments[i].kind != TH_ARG_TYPE) return nullptr;
-    if (!strcmp(name, "array") && count == 1
+    const char *canonical = canonical_builtin_type_name(name);
+    if (!strcmp(canonical, "array") && count == 1
         && arguments[0].kind == TH_ARG_TYPE)
         return th_array(types, arguments[0].type);
+    if (!strcmp(canonical, "ref") && count == 1
+        && arguments[0].kind == TH_ARG_TYPE)
+        return th_ind(types, 0, arguments[0].type);
     if (!strcmp(name, "tuple")) {
         th_type **elements = count
             ? core_alloc_array(th_type *, count) : nullptr;
@@ -3489,8 +3575,7 @@ apply_type_arguments(th_ctx *types, const char *name,
         core_free(elements);
         return tuple;
     }
-    return th_apply(types, canonical_builtin_type_name(name), arguments,
-                    count);
+    return th_apply(types, canonical, arguments, count);
 }
 
 static th_type *
@@ -4311,8 +4396,8 @@ record_function_signature(parse_grammar_t *grammar,
             core_buffer_t message = {0};
             core_buffer_printf(&message,
                 "function body type '%s' does not match declared signature '%s'",
-                th_print(state->types, inferred),
-                th_print(state->types, declared));
+                n00bb_print_type(state->types, inferred),
+                n00bb_print_type(state->types, declared));
             parse_token_info_t *site = parse_tree_find_first_terminal(func);
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit),
@@ -4727,8 +4812,8 @@ report_call_type_error(core_translation_unit_t *unit, parse_tree_t *call,
     const char *detail = th_last_error(types);
     core_buffer_printf(&message,
                        "call type does not match its function (%s vs %s)%s%s",
-                       actual ? th_print(types, actual) : "unknown",
-                       expected ? th_print(types, expected) : "unknown",
+                       actual ? n00bb_print_type(types, actual) : "unknown",
+                       expected ? n00bb_print_type(types, expected) : "unknown",
                        detail && *detail ? ": " : "",
                        detail && *detail ? detail : "");
     parse_token_info_t *site = parse_tree_find_first_terminal(call);
@@ -5345,7 +5430,7 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
     }
     th_type *base = core_tree_node_value(type_node).type;
     if (!application && nt_is(grammar, type_node, "member-chain")
-        && member_chain_is_name(grammar, type_node, "tuple"))
+        && member_chain_is_name(grammar, type_node, "Tuple"))
         return th_tuple(state->types, nullptr, 0);
     if (nt_is(grammar, type_node, "sized-int-tspec")) {
         parse_tree_t *size = child_nt(grammar, type_node, "integer-size");
@@ -6495,7 +6580,7 @@ call_type_snapshot(core_translation_unit_t *const *units,
                 th_type *type = node && !core_tree_is_leaf(node)
                     ? core_tree_node_value(node).type : nullptr;
                 core_buffer_printf(&snapshot, "%s\n",
-                    type ? th_print(state->types, type) : "-");
+                    type ? n00bb_print_type(state->types, type) : "-");
             }
         }
         core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
@@ -6504,7 +6589,7 @@ call_type_snapshot(core_translation_unit_t *const *units,
                  symbol; symbol = symbol->next_in_scope) {
                 if (symbol->kind != PARSE_SYM_FUNCTION) continue;
                 core_buffer_printf(&snapshot, "%s\n",
-                    symbol->type ? th_print(state->types, symbol->type) : "-");
+                    symbol->type ? n00bb_print_type(state->types, symbol->type) : "-");
             }
         }
         core_list_free(scopes);
@@ -13061,7 +13146,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         th_ctx *types = ir_module_types(context->module);
         core_buffer_printf(&message,
             "context enter result type %s does not match inferred context-call type %s",
-            th_print(types, provided_type), th_print(types, result_type));
+            n00bb_print_type(types, provided_type), n00bb_print_type(types, result_type));
         ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics,
             IR_DIAG_TYPE_MISMATCH, span, nullptr);
         ir_diag_message(diagnostic, context->diagnostics, message.data);
@@ -17150,8 +17235,8 @@ n00bb_lower_variant_arm_assignment(ir_lower_context_t *context,
         core_buffer_t message = {0};
         core_buffer_printf(&message,
             "variant arm assignment requires payload type %s, but got %s",
-            th_print(types, arm->type),
-            payload ? th_print(types, payload->type) : "no value");
+            n00bb_print_type(types, arm->type),
+            payload ? n00bb_print_type(types, payload->type) : "no value");
         lower_error(context, IR_DIAG_TYPE_MISMATCH, span, message.data);
         core_buffer_release(&message);
         return false;
@@ -22289,7 +22374,7 @@ dump_layout_for_unit(parse_grammar_t *grammar, core_translation_unit_t *unit)
             ir_descriptor_t *descriptor = ir_layout_of(state->ir_module,
                 symbol->type, target);
             if (!descriptor) continue;
-            printf("layout %s target=%s size=", th_print(state->types,
+            printf("layout %s target=%s size=", n00bb_print_type(state->types,
                 symbol->type), target ? target : "<none>");
             if (ir_layout_is_settled(&descriptor->size))
                 printf("%llu", (unsigned long long)descriptor->size.value);
@@ -29237,8 +29322,8 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                         core_buffer_printf(&message,
                             "generic call argument %zu has type '%s', which does not satisfy parameter type '%s'%s%s",
                             failed_argument_index + 1,
-                            th_print(types, failed_argument_type),
-                            th_print(types, failed_parameter_type),
+                            n00bb_print_type(types, failed_argument_type),
+                            n00bb_print_type(types, failed_parameter_type),
                             failed_unification_reason ? ": " : "",
                             failed_unification_reason
                                 ? failed_unification_reason : "");
@@ -33906,13 +33991,13 @@ build_import_environment(parse_grammar_t *grammar,
                     core_buffer_printf(&message,
                         "trait constraint '%s' is not satisfied for %s: %s",
                         detail.constraint,
-                        detail.got ? th_print(state->types, detail.got)
+                        detail.got ? n00bb_print_type(state->types, detail.got)
                                    : "this type",
                         detail.message ? detail.message
                                        : "constraint failure");
                     if (detail.expected)
                         core_buffer_printf(&message, " (expected %s)",
-                            th_print(state->types, detail.expected));
+                            n00bb_print_type(state->types, detail.expected));
                     th_env_method_requirement_t requirements[16] = {0};
                     size_t requirement_count = th_env_method_requirements(
                         state->types, detail.constraint, requirements, 16);
@@ -36542,7 +36627,7 @@ bind_for_item_type(parse_grammar_t *grammar,
         core_buffer_t message = {0};
         core_buffer_printf(&message,
             "loop bindings do not match a named-field tuple item (got %s with %zu names)",
-            resolved ? th_print(tu_state(unit)->types, resolved) : "<unset>",
+            resolved ? n00bb_print_type(tu_state(unit)->types, resolved) : "<unset>",
             bindings.len);
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit, CORE_DIAG_ERROR,
@@ -38658,7 +38743,7 @@ dump_symbols(core_translation_unit_t *unit)
                    symbol->name.data, symbol_kind_name(symbol->kind),
                    symbol_mutability_name(symbol->mutability));
             if (symbol->type && state->types)
-                printf(", type=%s", th_print(state->types, symbol->type));
+                printf(", type=%s", n00bb_print_type(state->types, symbol->type));
             else if (symbol->type)
                 printf(", type=<known>");
             else
@@ -38731,7 +38816,7 @@ dump_symbols(core_translation_unit_t *unit)
                 printf(", visibility=%.*s", (int)symbol->visibility.u8_bytes,
                        symbol->visibility.data);
             if (symbol->error_type && state->types)
-                printf(", error=%s", th_print(state->types,
+                printf(", error=%s", n00bb_print_type(state->types,
                                                symbol->error_type));
             if (symbol->direction.data)
                 printf(", direction=%.*s", (int)symbol->direction.u8_bytes,
@@ -38742,7 +38827,7 @@ dump_symbols(core_translation_unit_t *unit)
             if (symbol->is_optional) printf(", optional");
             if (symbol->is_variadic) printf(", variadic");
             if (symbol->error_type && state->types)
-                printf(", error=%s", th_print(state->types,
+                printf(", error=%s", n00bb_print_type(state->types,
                                                symbol->error_type));
             if (symbol->direction.data)
                 printf(", direction=%.*s", (int)symbol->direction.u8_bytes,
@@ -39196,7 +39281,7 @@ dump_link_unit(core_link_unit_t *link)
             n00bb_tu_state_t *state = tu_state(edge.source_unit);
             if (fact->receiver_type && state && state->types)
                 printf(" (receiver=%s",
-                       th_print(state->types, fact->receiver_type));
+                       n00bb_print_type(state->types, fact->receiver_type));
             else printf(" (");
             if (fact->trait_site) {
                 core_diag_location_t trait_location =
@@ -39276,10 +39361,9 @@ static bool
 n00bb_generic_type_name(core_string_t name)
 {
     static const char *const names[] = {
-        "array", "array_locking", "list", "list_locking", "set",
-        "set_locking", "dict", "dict_locking", "option", "view",
-        "atomic", "Array", "List", "Set", "Dict", "Option", "View",
-        "Lock", "Result",
+        "Array", "Array_Locking", "List", "List_Locking", "Set",
+        "Set_Locking", "Dict", "Dict_Locking", "Option", "View",
+        "Atomic", "Ref", "Tuple", "Lock", "Result",
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
         if (name.u8_bytes == strlen(names[i])

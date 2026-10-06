@@ -1,5 +1,5 @@
 import computed_const_archive_dep
 
-func read_values() -> array[int] {
+func read_values() -> Array[int] {
     return computed_const_archive_dep.values
 }

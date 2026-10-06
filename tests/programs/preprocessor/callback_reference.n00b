@@ -2,11 +2,11 @@ func increment(value: int) -> int {
     return value + 1
 }
 
-func invoke(callback: ref[(int) -> int], value: int) -> int {
+func invoke(callback: Ref[(int) -> int], value: int) -> int {
     return callback.call(value)
 }
 
 func exercise_callback(value: int) -> int {
-    let callback: ref[(int) -> int] = ref increment
+    let callback: Ref[(int) -> int] = ref increment
     return callback.call(value)
 }

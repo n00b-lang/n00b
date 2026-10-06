@@ -3,7 +3,7 @@ var one_dimensional: int[4]
 var rectangular: int[4][5]
 var mixed_shape: int[4][]
 var unsized_shape: int[][]
-var explicit_array_shape: array[int][]
+var explicit_array_shape: Array[int][]
 var named_extent_shape: int[extent]
 
 type ShapeHolder {

@@ -1,9 +1,9 @@
 func preserve_concurrent_types(
-    atomic_value: atomic[int],
-    arrays: array_locking[int],
-    lists: list_locking[int],
-    sets: set_locking[string],
-    dicts: dict_locking[string, int]
-) -> atomic[int] {
+    atomic_value: Atomic[int],
+    arrays: Array_Locking[int],
+    lists: List_Locking[int],
+    sets: Set_Locking[string],
+    dicts: Dict_Locking[string, int]
+) -> Atomic[int] {
     return atomic_value
 }

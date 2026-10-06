@@ -1,14 +1,14 @@
-func lower_dict_values() -> dict[string, int] {
-    var values: dict[string, int] = {"one": 1}
+func lower_dict_values() -> Dict[string, int] {
+    var values: Dict[string, int] = {"one": 1}
     return values
 }
 
-func lower_tagged_dict_values() -> dict[string, int] {
-    var values: dict[string, int] = dict{"two": 2}
+func lower_tagged_dict_values() -> Dict[string, int] {
+    var values: Dict[string, int] = dict{"two": 2}
     return values
 }
 
-func lower_empty_tagged_dict() -> dict[string, int] {
-    var values: dict[string, int] = d{}
+func lower_empty_tagged_dict() -> Dict[string, int] {
+    var values: Dict[string, int] = d{}
     return values
 }

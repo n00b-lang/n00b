@@ -1,6 +1,6 @@
 import constructor_specific
 import constructor_other_specific
 
-func construct_ambiguous() -> option[int] {
-    return new[option[int]]()
+func construct_ambiguous() -> Option[int] {
+    return new[Option[int]]()
 }

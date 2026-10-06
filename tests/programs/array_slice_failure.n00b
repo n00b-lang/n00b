@@ -1,19 +1,19 @@
 trait Index_Slice {
-    func __slice(self: `T, start_ix: int = 0, end_ix: int = -1) -> view[`E] fail: int
+    func __slice(self: `T, start_ix: int = 0, end_ix: int = -1) -> View[`E] fail: int
 }
 
-func __slice(self: array[int], start_ix: int = 0, end_ix: int = -1) -> view[int] fail: int {
+func __slice(self: Array[int], start_ix: int = 0, end_ix: int = -1) -> View[int] fail: int {
     if start_ix > end_ix { fail 7 }
     return self [:]!
 }
 
-func propagate_slice(items: array[int]) -> view[int] fail: int {
+func propagate_slice(items: Array[int]) -> View[int] fail: int {
     return items [:]!
 }
 
-func catch_slice(items: array[int]) -> int {
+func catch_slice(items: Array[int]) -> int {
     try {
-        var local_view: view[int] = items [:]!
+        var local_view: View[int] = items [:]!
     } else err {
         return err
     }

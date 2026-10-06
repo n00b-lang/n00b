@@ -11,16 +11,16 @@ trait InspectDict {
     func inspect_dict(self: `T) -> int
 }
 
-func inspect_array(self: array_locking[int]) -> int { return 1 }
-func inspect_list(self: list_locking[int]) -> int { return 2 }
-func inspect_set(self: set_locking[string]) -> int { return 3 }
-func inspect_dict(self: dict_locking[string, int]) -> int { return 4 }
+func inspect_array(self: Array_Locking[int]) -> int { return 1 }
+func inspect_list(self: List_Locking[int]) -> int { return 2 }
+func inspect_set(self: Set_Locking[string]) -> int { return 3 }
+func inspect_dict(self: Dict_Locking[string, int]) -> int { return 4 }
 
 func use_locking_collections(
-    values: array_locking[int],
-    items: list_locking[int],
-    keys: set_locking[string],
-    entries: dict_locking[string, int]
+    values: Array_Locking[int],
+    items: List_Locking[int],
+    keys: Set_Locking[string],
+    entries: Dict_Locking[string, int]
 ) -> int {
     return values.inspect_array() + items.inspect_list() + keys.inspect_set() + entries.inspect_dict()
 }

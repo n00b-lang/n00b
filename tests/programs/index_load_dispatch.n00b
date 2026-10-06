@@ -2,5 +2,5 @@ trait Index_Read {
     func __read(self: `T, index: int) -> string
 }
 
-func __read(self: array[int], index: int) -> string { return "loaded" }
-func get_item(items: array[int]) -> string { return items [0] }
+func __read(self: Array[int], index: int) -> string { return "loaded" }
+func get_item(items: Array[int]) -> string { return items [0] }

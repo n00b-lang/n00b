@@ -1,6 +1,6 @@
-func typecase_generic(item: atomic[int]) -> int {
+func typecase_generic(item: Atomic[int]) -> int {
     typecase(item) {
-        case atomic[int] {
+        case Atomic[int] {
             return 1
         }
     }

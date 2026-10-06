@@ -1,7 +1,7 @@
 trait Index_Slice {
-    func __slice(self: `Container, start_ix: int = 0, end_ix: int = -1) -> view[`Element]
+    func __slice(self: `Container, start_ix: int = 0, end_ix: int = -1) -> View[`Element]
 }
-func __slice(self: array[int], start_ix: int = 0, end_ix: int = -1) -> view[int] {
+func __slice(self: Array[int], start_ix: int = 0, end_ix: int = -1) -> View[int] {
     return self[:]
 }
-func invalid(items: array[int]) { return items["wrong":] }
+func invalid(items: Array[int]) { return items["wrong":] }

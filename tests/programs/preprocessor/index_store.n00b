@@ -1,5 +1,5 @@
 trait Index_Write {
     func __write(self: `T, index: int, item: string) -> int
 }
-func __write(self: array[int], index: int, item: string) -> int { return 1 }
-func set_item(items: array[int]) { items [0] = "stored" }
+func __write(self: Array[int], index: int, item: string) -> int { return 1 }
+func set_item(items: Array[int]) { items [0] = "stored" }

@@ -1,4 +1,4 @@
-var counter: atomic[int] = 0
+var counter: Atomic[int] = 0
 
 func update_counter(input: int) -> int {
     counter = input

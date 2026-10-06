@@ -646,7 +646,6 @@
 <base-tspec-core> ::= <tspec-tvar>
                     | %"nil"
                     | <sized-int-tspec>
-                    | <reference-tspec>
                     | <member-chain> <tspec-application>?
                     | <tspec-func>
                     | %"(" <union-tspec> %")"
@@ -658,8 +657,6 @@
 <array-dimension> ::= %"[" <expression>? %"]"
 
 <tspec-tvar> ::= %"`" %IDENTIFIER
-
-<reference-tspec> @infer("ref[$2]") ::= %"ref" %"[" <union-tspec> %"]"
 
 <sized-int-tspec> @adjacent("prefix") ::= %i %":" <integer-size>
                                           | %u %":" <integer-size>

@@ -1,1 +1,1 @@
-public const values: array[int] = [1 + 2]
+public const values: Array[int] = [1 + 2]

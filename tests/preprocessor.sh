@@ -198,7 +198,7 @@ if "$compiler" lower --dump-ir \
     echo 'atomic type with the wrong number of arguments unexpectedly passed' >&2
     exit 1
 fi
-grep -q 'fatal\[N00BB-T0016\].*atomic.*requires 1 type argument' \
+grep -q 'fatal\[N00BB-T0016\].*Atomic.*requires 1 type argument' \
     "$tmp/builtin_atomic_bad_arity.err"
 
 for type in array_locking list_locking set_locking dict_locking; do
@@ -211,8 +211,23 @@ for type in array_locking list_locking set_locking dict_locking; do
     fi
     expected_arity=1
     test "$type" = dict_locking && expected_arity=2
-    grep -q "fatal\\[N00BB-T0016\\].*${type}.*requires ${expected_arity} type argument" \
+    case "$type" in
+        array_locking) display_type=Array_Locking ;;
+        list_locking) display_type=List_Locking ;;
+        set_locking) display_type=Set_Locking ;;
+        dict_locking) display_type=Dict_Locking ;;
+    esac
+    grep -q "fatal\\[N00BB-T0016\\].*${display_type}.*requires ${expected_arity} type argument" \
         "$tmp/builtin_${type}_bad_arity.err"
+done
+
+for fixture in lowercase_builtin_type_rejected lowercase_ref_type_rejected; do
+    if "$compiler" preprocess "$program_dir/${fixture}.n00b" \
+        >"$tmp/${fixture}.out" 2>"$tmp/${fixture}.err"; then
+        echo "$fixture unexpectedly accepted an obsolete lowercase type" >&2
+        exit 1
+    fi
+    grep -Eq 'N00BB-(P0001|L0014|T0007)' "$tmp/${fixture}.err"
 done
 
 "$compiler" lower --dump-ir --dump-control-flow --dump-symbols \
@@ -335,9 +350,9 @@ grep -q 'shape_return' "$tmp/array_shape_types.tree"
     cat "$tmp/array_shape_types.lower"
     exit 1
 }
-grep -Fq 'rectangular: variable, mutable, type=array[array[int]]' \
+grep -Fq 'rectangular: variable, mutable, type=Array[Array[int]]' \
     "$tmp/array_shape_types.lower"
-grep -Fq 'rectangular_field: variable, mutable, type=array[array[int]]' \
+grep -Fq 'rectangular_field: variable, mutable, type=Array[Array[int]]' \
     "$tmp/array_shape_types.lower"
 grep -Eq 'rectangular_field:.*array-shape=rank:2' \
     "$tmp/array_shape_types.lower"
@@ -388,7 +403,7 @@ grep -Eq 'second: variable, .*array-shape=rank:1, dim0=comptime' \
     cat "$tmp/array_inferred_declaration.out"
     exit 1
 }
-grep -Eq 'inferred_values: variable, mutable, type=array\[int\], array-shape=rank:1, dim0=unresolved' \
+grep -Eq 'inferred_values: variable, mutable, type=Array\[int\], array-shape=rank:1, dim0=unresolved' \
     "$tmp/array_inferred_declaration.out"
 grep -Eq 'static global @array_inferred_declaration.inferred_values: array\[int\]' \
     "$tmp/array_inferred_declaration.out"
@@ -1126,9 +1141,9 @@ grep -E -q 'input: parameter, .*type=int' "$tmp/forward_type_alias.out"
     exit 1
 }
 grep -E -q 'item: variable, .*type=int' "$tmp/deferred_type_shapes.out"
-grep -E -q 'LaterList: type, .*type=list\[int\]' \
+grep -E -q 'LaterList: type, .*type=List\[int\]' \
     "$tmp/deferred_type_shapes.out"
-grep -E -q 'input: parameter, .*type=list\[int\]' \
+grep -E -q 'input: parameter, .*type=List\[int\]' \
     "$tmp/deferred_type_shapes.out"
 
 if "$compiler" lower "$program_dir/unknown_type_reference.n00b" \
@@ -3716,7 +3731,7 @@ grep -q 'Brace_Literal' "$tmp/wrong_literal_shape.out"
     cat "$tmp/index_load.out"
     exit 1
 }
-grep 'get_item: function' "$tmp/index_load.out" | grep -q 'type=(array\[int\]) -> string' || {
+grep 'get_item: function' "$tmp/index_load.out" | grep -q 'type=(Array\[int\]) -> string' || {
     cat "$tmp/index_load.out"
     echo 'index load result was not inferred from the Index_Read contract' >&2
     exit 1
@@ -3800,9 +3815,9 @@ test "$(grep -Ec ': view\[int\] = variant.payload .*"ok" .*!ir.alias_count\(1\).
     cat "$tmp/array_view_lifetime.out"
     exit 1
 }
-grep -Eq 'local_view: variable, .*type=view\[int\].*aliases=1, aliased-by=0,.*alias-analysis=complete, escaping-aliases=0' \
+grep -Eq 'local_view: variable, .*type=View\[int\].*aliases=1, aliased-by=0,.*alias-analysis=complete, escaping-aliases=0' \
     "$tmp/array_view_lifetime.out"
-grep -Eq 'local_view: variable, .*type=view\[int\].*aliases=1, aliased-by=0,.*escaping-aliases=1,.*may-escape' \
+grep -Eq 'local_view: variable, .*type=View\[int\].*aliases=1, aliased-by=0,.*escaping-aliases=1,.*may-escape' \
     "$tmp/array_view_lifetime.out"
 grep -Eq '= call @__slice, .*!ir.alias0_escapes\(false\).*!ir.lifetime_escapes\(false\)' \
     "$tmp/array_view_lifetime.out"
@@ -3820,7 +3835,7 @@ N00B_PATH="$script_dir/programs" "$compiler" lower --dump-symbols \
     cat "$tmp/array_nested_slice_lifetime.out"
     exit 1
 }
-grep -Eq 'first_view: variable, .*type=view\[int\].*aliases=1, aliased-by=0,.*alias-analysis=complete, escaping-aliases=0' \
+grep -Eq 'first_view: variable, .*type=View\[int\].*aliases=1, aliased-by=0,.*alias-analysis=complete, escaping-aliases=0' \
     "$tmp/array_nested_slice_lifetime.out"
 grep -q 'trait-dispatch\[resolved\] array_nested_slice_lifetime:1:nested_view -> array_nested_slice_array_impl:1:__slice' \
     "$tmp/array_nested_slice_lifetime.out"
@@ -3915,7 +3930,7 @@ grep -q 'N00BB-T0003' "$tmp/index_store_bad_value.out"
 }
 for function in full bounded no_start no_end; do
     grep "$function: function" "$tmp/index_slice.out" | \
-        grep -q -- '-> view\[int\]' || {
+        grep -q -- '-> View\[int\]' || {
         cat "$tmp/index_slice.out"
         echo "$function did not infer the Index_Slice view result" >&2
         exit 1
@@ -4106,7 +4121,7 @@ grep -q '^    generic_trait_target: variable, mutable, .*storage-duration=dynami
     echo 'unresolved generic trait dispatch did not conservatively escape its reference argument' >&2
     exit 1
 }
-grep -q '^    generic_trait_result: variable, mutable, type=ref\[int\], .*alias-analysis=incomplete' \
+grep -q '^    generic_trait_result: variable, mutable, type=Ref\[int\], .*alias-analysis=incomplete' \
     "$tmp/reference_alias.out" || {
     cat "$tmp/reference_alias.out"
     echo 'generic trait result did not retain its concrete reference type' >&2
@@ -4242,9 +4257,9 @@ grep -q 'initializer-use\[resolved\] parameter_alias:0:stored_reference -> param
     cat "$tmp/parameter_alias_symbols.out"
     exit 1
 }
-grep -E -q 'call_ref: variable, mutable, type=ref\[int\], .*aliases=1, aliased-by=0' \
+grep -E -q 'call_ref: variable, mutable, type=Ref\[int\], .*aliases=1, aliased-by=0' \
     "$tmp/parameter_alias_symbols.out"
-grep -E -q 'produced_ref: variable, mutable, type=ref\[int\], .*aliases=1, aliased-by=0' \
+grep -E -q 'produced_ref: variable, mutable, type=Ref\[int\], .*aliases=1, aliased-by=0' \
     "$tmp/parameter_alias_symbols.out"
 grep -E -q 'aliased_global: variable, .*escaping-aliased-by=[1-9]' \
     "$tmp/parameter_alias_symbols.out"
@@ -4257,9 +4272,9 @@ N00B_PATH="$program_dir" "$compiler" preprocess --dump-symbols \
     cat "$tmp/alias_imported_client.out"
     exit 1
 }
-grep -E -q 'imported_ref: variable, mutable, type=ref\[int\], .*aliases=1, aliased-by=0' \
+grep -E -q 'imported_ref: variable, mutable, type=Ref\[int\], .*aliases=1, aliased-by=0' \
     "$tmp/alias_imported_client.out"
-grep -E -q 'imported_global_ref: variable, mutable, type=ref\[int\], .*aliases=1, aliased-by=0' \
+grep -E -q 'imported_global_ref: variable, mutable, type=Ref\[int\], .*aliases=1, aliased-by=0' \
     "$tmp/alias_imported_client.out"
 grep -E -q 'imported_global: variable, .*may-escape' \
     "$tmp/alias_imported_client.out"
@@ -4271,7 +4286,7 @@ N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-symbols \
     cat "$tmp/return_alias_recursive.err"
     exit 1
 }
-grep -q '^    result: variable, mutable, type=ref\[int\], .*aliases=1' \
+grep -q '^    result: variable, mutable, type=Ref\[int\], .*aliases=1' \
     "$tmp/return_alias_recursive.out"
 
 "$compiler" preprocess --dump-symbols \
@@ -4281,7 +4296,7 @@ grep -q '^    result: variable, mutable, type=ref\[int\], .*aliases=1' \
     cat "$tmp/return_alias_deep_chain.err"
     exit 1
 }
-grep -q '^    result: variable, mutable, type=ref\[int\], .*aliases=1' \
+grep -q '^    result: variable, mutable, type=Ref\[int\], .*aliases=1' \
     "$tmp/return_alias_deep_chain.out"
 grep -q '^    target: variable, mutable, type=int, .*storage-duration=dynamic' \
     "$tmp/return_alias_deep_chain.out"
@@ -4298,7 +4313,7 @@ N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-symbols \
     cat "$tmp/return_alias_mismatch.err"
     exit 1
 }
-grep -q '^    result: variable, mutable, type=ref\[int\], .*aliases=0, .*alias-analysis=incomplete' \
+grep -q '^    result: variable, mutable, type=Ref\[int\], .*aliases=0, .*alias-analysis=incomplete' \
     "$tmp/return_alias_mismatch.out"
 
 "$compiler" lower --dump-ir "$program_dir/lower_require_assert.n00b" \
@@ -5600,9 +5615,9 @@ strings "$tmp/array_alias_archive.n00bi" | grep -q 'n00b.function-array-shapes'
     cat "$tmp/array_alias_archive_source.out"
     exit 1
 }
-grep -q 'FixedRow: type, .*type=array\[int\], array-shape=rank:1, dim0=comptime' \
+grep -q 'FixedRow: type, .*type=Array\[int\], array-shape=rank:1, dim0=comptime' \
     "$tmp/array_alias_archive_source.out"
-grep -q 'input: parameter, .*type=array\[int\], array-shape=rank:1, dim0=comptime' \
+grep -q 'input: parameter, .*type=Array\[int\], array-shape=rank:1, dim0=comptime' \
     "$tmp/array_alias_archive_source.out"
 "$compiler" lower --link-interface "$tmp/array_alias_archive.n00bi" \
     --dump-link-unit --dump-symbols \
@@ -5613,7 +5628,7 @@ grep -q 'input: parameter, .*type=array\[int\], array-shape=rank:1, dim0=comptim
     cat "$tmp/array_alias_archive_user.out"
     exit 1
 }
-grep -q 'FixedRow: type, .*type=array\[int\], array-shape=rank:1, dim0=comptime(producer=__n00bb_array_extent_' \
+grep -q 'FixedRow: type, .*type=Array\[int\], array-shape=rank:1, dim0=comptime(producer=__n00bb_array_extent_' \
     "$tmp/array_alias_archive_user.out"
 grep -q 'array_alias_archive_dep:2:FixedRow kind=2 binding n00bb.semantic.type binding ir.array-shape' \
     "$tmp/array_alias_archive_user.out"
@@ -6427,7 +6442,7 @@ grep -q 'cycle_target: variable, mutable, type=int, .*storage-duration=automatic
     "$tmp/function_archive_symbols.out"
 grep -q 'return_target: variable, mutable, type=int, .*storage-duration=dynamic, .*may-escape' \
     "$tmp/function_archive_symbols.out"
-grep -q 'imported_global_ref: variable, mutable, type=ref\[int\], .*aliases=1' \
+grep -q 'imported_global_ref: variable, mutable, type=Ref\[int\], .*aliases=1' \
     "$tmp/function_archive_symbols.out"
 grep -q 'function-global-unknown\[unavailable\] function_archive_dep:1:archived_keep -> <unresolved>' \
     "$tmp/function_archive_symbols.out"
@@ -7145,7 +7160,7 @@ grep -q 'out and modify arguments must be writable storage locations' \
     cat "$tmp/modify_variadic.out"
     exit 1
 }
-grep -q 'items: parameter, mutable, type=array\[ref\[int\]\].*variadic' \
+grep -q 'items: parameter, mutable, type=Array\[Ref\[int\]\].*variadic' \
     "$tmp/modify_variadic.out"
 grep -q 'func @touch(\*%items: ref\[int\])' \
     "$tmp/modify_variadic.out"

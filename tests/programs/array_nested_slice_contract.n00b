@@ -1,3 +1,3 @@
 public trait Index_Slice {
-    func __slice(self: `T, start_ix: int = 0, end_ix: int = -1) -> view[`E]
+    func __slice(self: `T, start_ix: int = 0, end_ix: int = -1) -> View[`E]
 }
