@@ -48,8 +48,19 @@ typedef enum {
 typedef core_module_resolve_status_t (*core_module_resolve_fn)(
     void *context, const core_module_spec_t *module, core_source_file_t *out);
 
+/* Discovery enumerates source-module candidates for a logical module that
+ * could not be resolved directly. Candidate specs are borrowed for the
+ * duration of emit. Language frontends decide whether a candidate actually
+ * declares the requested logical module. */
+typedef bool (*core_module_discovery_emit_fn)(
+    void *context, const core_module_spec_t *candidate);
+typedef core_module_resolve_status_t (*core_module_discover_fn)(
+    void *context, const core_module_spec_t *module,
+    core_module_discovery_emit_fn emit, void *emit_context);
+
 typedef struct {
     core_module_resolve_fn resolve;
+    core_module_discover_fn discover;
     void *context;
 } core_module_resolver_t;
 
@@ -114,3 +125,6 @@ bool core_translation_units_visit_sccs(
 core_module_resolve_status_t core_module_resolve(
     const core_module_resolver_t *resolver, const core_module_spec_t *module,
     core_source_file_t *out);
+core_module_resolve_status_t core_module_discover(
+    const core_module_resolver_t *resolver, const core_module_spec_t *module,
+    core_module_discovery_emit_fn emit, void *emit_context);

@@ -376,3 +376,15 @@ core_module_resolve(const core_module_resolver_t *resolver,
     if (status != CORE_MODULE_RESOLVED) core_source_file_release(out);
     return status;
 }
+
+core_module_resolve_status_t
+core_module_discover(const core_module_resolver_t *resolver,
+                     const core_module_spec_t *module,
+                     core_module_discovery_emit_fn emit,
+                     void *emit_context)
+{
+    if (!resolver || !resolver->discover || !module || !module->identifier.data
+        || !module->identifier.u8_bytes || !emit)
+        return CORE_MODULE_NOT_FOUND;
+    return resolver->discover(resolver->context, module, emit, emit_context);
+}

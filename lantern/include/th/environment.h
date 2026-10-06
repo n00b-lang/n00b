@@ -63,6 +63,7 @@ typedef enum {
   TH_ENV_METADATA_TRAIT,
   TH_ENV_METADATA_FUNCTION,
   TH_ENV_METADATA_VALUE,
+  TH_ENV_METADATA_ENVIRONMENT,
 } th_env_metadata_owner_t;
 
 typedef enum {
@@ -240,8 +241,9 @@ th_type *th_env_signature_contract(th_ctx *context, th_type *signature,
 bool th_env_signature_channels(th_ctx *context, th_type *contract,
                                th_type **signature, th_type **error_type);
 /* Metadata keys are producer-namespaced; each key has its own schema version.
- * Payloads are opaque copied bytes and must not contain process-local pointers.
- * Views borrow storage owned by the environment. */
+ * Environment metadata names a logical manifest or contribution rather than
+ * a declaration. Payloads are opaque copied bytes and must not contain
+ * process-local pointers. Views borrow storage owned by the environment. */
 bool th_env_register_metadata(th_env *environment,
                               th_env_metadata_owner_t owner_kind,
                               const char *owner_name, const char *key,

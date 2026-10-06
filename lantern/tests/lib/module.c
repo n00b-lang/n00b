@@ -34,6 +34,38 @@ resolve_incomplete(void *context, const core_module_spec_t *module,
 }
 
 typedef struct {
+    size_t count;
+    bool matched;
+} discovery_trace_t;
+
+static bool
+record_candidate(void *context, const core_module_spec_t *candidate)
+{
+    discovery_trace_t *trace = context;
+    trace->count++;
+    trace->matched = core_string_eq(candidate->identifier,
+                                    CORE_STRING_STATIC("pkg.facade"));
+    return true;
+}
+
+static core_module_resolve_status_t
+discover_memory(void *context, const core_module_spec_t *module,
+                core_module_discovery_emit_fn emit, void *emit_context)
+{
+    (void)context;
+    if (!core_string_eq(module->identifier,
+                        CORE_STRING_STATIC("pkg.interface")))
+        return CORE_MODULE_NOT_FOUND;
+    core_module_spec_t candidate = {0};
+    if (!core_module_spec_init(&candidate,
+                               CORE_STRING_STATIC("pkg.facade")))
+        return CORE_MODULE_RESOLVE_ERROR;
+    bool accepted = emit(emit_context, &candidate);
+    core_module_spec_release(&candidate);
+    return accepted ? CORE_MODULE_RESOLVED : CORE_MODULE_RESOLVE_ERROR;
+}
+
+typedef struct {
     size_t calls;
     bool dependency_first;
     bool cycle_grouped;
@@ -76,6 +108,7 @@ main(void)
     core_string_t wanted = CORE_STRING_STATIC("pkg.math");
     core_module_resolver_t resolver = {
         .resolve = resolve_memory,
+        .discover = discover_memory,
         .context = &wanted,
     };
     core_source_file_t source = {0};
@@ -156,6 +189,16 @@ main(void)
           core_module_resolve(&resolver, &other, &missing)
                   == CORE_MODULE_NOT_FOUND
               && !missing.path.data && !missing.contents);
+
+    core_module_spec_t logical = {0};
+    core_module_spec_init(&logical, CORE_STRING_STATIC("pkg.interface"));
+    discovery_trace_t discovery = {0};
+    check("resolvers can enumerate candidate source modules",
+          core_module_discover(&resolver, &logical, record_candidate,
+                               &discovery) == CORE_MODULE_RESOLVED
+              && discovery.count == 1
+              && discovery.matched);
+    core_module_spec_release(&logical);
 
     core_module_resolver_t broken = {.resolve = resolve_incomplete};
     core_source_file_t invalid = {0};

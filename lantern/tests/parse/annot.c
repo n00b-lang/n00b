@@ -2592,6 +2592,49 @@ test_visibility_prefix_binds_to_non_function_declaration(void)
 }
 
 static void
+test_field_visibility_in_non_type_tagged_scope(void)
+{
+    static const char *const G =
+        "@tokenizer(\"toy\")\n"
+        "<top> @scope(\"module\") ::= <record>\n"
+        "<record> @namespace(\"type\") @scope(\"record\", $1) "
+        "@type($1) @exposes ::= "
+        "<public> <name> \"{\" <field> \"}\"\n"
+        "<field> @field($1) ::= <private> <name>\n"
+        "<public> @visibility(\"public\") ::= \"P\"\n"
+        "<private> @visibility(\"private\") ::= \"p\"\n"
+        "<name> ::= __LOWER\n";
+    parse_grammar_t *grammar = parse_grammar_new();
+    parse_grammar_set_error_recovery(grammar, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), grammar);
+    parse_pwz_parser_t *parser = nullptr;
+    parse_token_stream_t *tokens = nullptr;
+    parse_tree_t *tree = loaded
+        ? parse_toy(grammar, "top", "Pr{pf}", &parser, &tokens) : nullptr;
+    th_ctx *types = th_ctx_new();
+    parse_annot_result_t *result = tree
+        ? parse_annot_walk_tree(grammar, tree, types, nullptr) : nullptr;
+    parse_scope_t *module_scope = tree
+        ? core_tree_node_value(tree).scope : nullptr;
+    parse_sym_entry_t *record = result && module_scope
+        ? parse_symtab_lookup_scoped(result->symtab, module_scope, S("type"),
+                                     S("r")) : nullptr;
+    parse_sym_entry_t *field = record && record->member_scope
+        ? parse_symtab_lookup_in(record->member_scope, S("f")) : nullptr;
+    check("non-type-tagged member visibility grammar loads", loaded);
+    check("non-type-tagged member visibility sample parses", tree != nullptr);
+    check("record keeps its own visibility",
+          record && core_string_eq(record->visibility, S("public")));
+    check("field receives its own visibility",
+          field && core_string_eq(field->visibility, S("private")));
+    parse_annot_result_free(result);
+    th_ctx_free(types);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+    parse_grammar_free(grammar);
+}
+
+static void
 test_scoped_declaration_is_bound_outside_its_body(void)
 {
     static const char *const G
@@ -2714,6 +2757,7 @@ main(void)
     test_binary_method_result_inference();
     test_function_visibility_does_not_leak_to_parameters();
     test_visibility_prefix_binds_to_non_function_declaration();
+    test_field_visibility_in_non_type_tagged_scope();
     test_scoped_declaration_is_bound_outside_its_body();
     test_the_repr_annotations_reach_the_layout_descriptor();
     test_trait_method_inference_uses_visible_requirement();

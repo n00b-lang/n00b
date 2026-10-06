@@ -673,7 +673,7 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         !core_object_reader_u32(reader, &metadata.version) ||
         !read_count(reader, &metadata.size) ||
         owner_kind < TH_ENV_METADATA_TYPE ||
-        owner_kind > TH_ENV_METADATA_VALUE || !metadata.version)
+        owner_kind > TH_ENV_METADATA_ENVIRONMENT || !metadata.version)
       return false;
     metadata.owner_kind = (th_env_metadata_owner_t)owner_kind;
     if (metadata.size) {

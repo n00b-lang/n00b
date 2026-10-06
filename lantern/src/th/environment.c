@@ -880,6 +880,8 @@ static bool metadata_owner_exists(const th_env *env,
       if (!strcmp(env->values.data[i].qualified_name, owner_name))
         return true;
     return false;
+  case TH_ENV_METADATA_ENVIRONMENT:
+    return true;
   }
   return false;
 }
@@ -889,7 +891,7 @@ bool th_env_register_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
                               uint32_t version, const void *data,
                               size_t size) {
   if (!env || env->frozen || owner_kind < TH_ENV_METADATA_TYPE ||
-      owner_kind > TH_ENV_METADATA_VALUE ||
+      owner_kind > TH_ENV_METADATA_ENVIRONMENT ||
       !owner_name || !*owner_name || !key || !*key || !version ||
       (size && !data) || !metadata_owner_exists(env, owner_kind, owner_name))
     return false;

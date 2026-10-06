@@ -967,8 +967,6 @@ annot_visibility(parse_visit_t *v)
         parse_scope_t *scope = ns ? ns->current : nullptr;
         parse_sym_entry_t *field = nullptr;
         bool type_member = scope && scope->node
-            && core_string_eq(scope->scope_tag,
-                              CORE_STRING_STATIC("type"))
             && field_symbol_for_node(scope->node, v->node, nullptr, &field)
             && field;
         if ((!parent_declaration ||

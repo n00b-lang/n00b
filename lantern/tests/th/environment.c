@@ -1354,6 +1354,9 @@ int main(void) {
         th_env_register_metadata(base_library, TH_ENV_METADATA_VALUE,
             "base.counter", "n00b.global", 1, global_semantics,
             sizeof(global_semantics)));
+  check("register environment manifest metadata",
+        th_env_register_metadata(base_library, TH_ENV_METADATA_ENVIRONMENT,
+            "base.manifest", "language.package", 1, "base", 5));
   check("freeze base library for later linking", th_env_freeze(base_library));
 
   th_arg live_array_arg = {
@@ -1489,6 +1492,7 @@ int main(void) {
   th_env_metadata_view_t persisted_layout = {0};
   th_env_metadata_view_t persisted_function_abi = {0};
   th_env_metadata_view_t persisted_value_metadata = {0};
+  th_env_metadata_view_t persisted_environment_metadata = {0};
   bool persisted_environment_attached = persisted_library &&
       th_ctx_set_environment(persisted_check_types, persisted_library,
                              "client", "base");
@@ -1836,7 +1840,7 @@ int main(void) {
   th_ctx_free(wrong_shape_types);
   check("loaded image preserves type layout and function ABI metadata",
         persisted_library &&
-            th_env_metadata_count(persisted_library) == 4 &&
+            th_env_metadata_count(persisted_library) == 5 &&
             th_env_metadata_at(persisted_library, 0, &persisted_layout) &&
             persisted_layout.owner_kind == TH_ENV_METADATA_TYPE &&
             !strcmp(persisted_layout.owner_name, "Box") &&
@@ -1855,7 +1859,15 @@ int main(void) {
             persisted_value_metadata.owner_kind == TH_ENV_METADATA_VALUE &&
             !strcmp(persisted_value_metadata.owner_name, "base.counter") &&
             !memcmp(persisted_value_metadata.data, global_semantics,
-                    sizeof(global_semantics)));
+                    sizeof(global_semantics)) &&
+            th_env_metadata_at(persisted_library, 4,
+                               &persisted_environment_metadata) &&
+            persisted_environment_metadata.owner_kind ==
+                TH_ENV_METADATA_ENVIRONMENT &&
+            !strcmp(persisted_environment_metadata.owner_name,
+                    "base.manifest") &&
+            !strcmp(persisted_environment_metadata.key,
+                    "language.package"));
 
   th_env *conflicting_library = th_env_new();
   check("build library with a duplicate function identity",
@@ -1964,7 +1976,7 @@ int main(void) {
   th_env_metadata_view_t layout_metadata = {0};
   th_env_metadata_view_t function_metadata = {0};
   check("type, function, and value metadata survive environment composition",
-        th_env_metadata_count(linked_library) == 5 &&
+        th_env_metadata_count(linked_library) == 6 &&
             th_env_metadata_at(linked_library, 0, &layout_metadata) &&
             layout_metadata.owner_kind == TH_ENV_METADATA_TYPE &&
             !strcmp(layout_metadata.owner_name, "Box") &&
@@ -1988,6 +2000,10 @@ int main(void) {
             !strcmp(function_metadata.owner_name, "base.counter") &&
             !strcmp(function_metadata.key, "n00b.global") &&
             th_env_metadata_at(linked_library, 4, &function_metadata) &&
+            function_metadata.owner_kind == TH_ENV_METADATA_ENVIRONMENT &&
+            !strcmp(function_metadata.owner_name, "base.manifest") &&
+            !strcmp(function_metadata.key, "language.package") &&
+            th_env_metadata_at(linked_library, 5, &function_metadata) &&
             function_metadata.owner_kind == TH_ENV_METADATA_FUNCTION &&
             !strcmp(function_metadata.owner_name, "plugin.int_box.fetch") &&
             !strcmp(function_metadata.key, "abi"));
