@@ -1,3 +1,2 @@
 import link_render_contract
-import link_render_plugin
 func use_plugin(item: int) -> int { return item.render() }

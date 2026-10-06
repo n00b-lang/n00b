@@ -1,0 +1,3 @@
+import cyclic_alias_import.a
+
+public alias SecondAlias = cyclic_alias_import.a.FirstAlias

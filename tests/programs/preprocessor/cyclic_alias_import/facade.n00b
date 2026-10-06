@@ -1,0 +1,7 @@
+import cyclic_alias_import.a
+import cyclic_alias_import.b
+
+package cyclic_alias_import {
+    export cyclic_alias_import.a.FirstAlias
+    export cyclic_alias_import.b.SecondAlias
+}

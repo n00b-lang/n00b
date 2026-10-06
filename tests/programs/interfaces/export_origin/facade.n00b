@@ -1,0 +1,9 @@
+import export_origin.impl
+
+package export_origin.left {
+    export export_origin.impl.Token
+}
+
+package export_origin.right {
+    export export_origin.impl.Token
+}

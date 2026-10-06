@@ -1,8 +1,6 @@
-import contract
-import int_impl
-import label_impl
+import generic_trait_specialization
 
-func generic_render(item: `T) -> int where `T: contract.Render {
+func generic_render(item: `T) -> int where `T: generic_trait_specialization.Render {
     var measured = item.measure()
     return item.render()
 }
@@ -11,6 +9,6 @@ func render_int(item: int) -> int {
     return generic_render(item)
 }
 
-func render_label(item: label_impl.Label) -> int {
+func render_label(item: generic_trait_specialization.Label) -> int {
     return generic_render(item)
 }

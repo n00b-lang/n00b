@@ -1,3 +1,2 @@
 import render_contract
-import render_plugin
 func use_plugin(item: int) -> string { return item.render() }

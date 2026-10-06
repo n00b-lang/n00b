@@ -1,0 +1,6 @@
+import render_contract.contract
+import render_contract.plugin
+
+package render_contract {
+    export render_contract.contract.Render
+}

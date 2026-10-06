@@ -1,6 +1,0 @@
-import cycle_trait_a
-import cycle_trait_contract
-
-public func dispatch(item: cycle_trait_a.CycleWidget) -> cycle_trait_a.CycleWidget {
-    return item.echo()
-}

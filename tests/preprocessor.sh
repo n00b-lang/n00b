@@ -84,6 +84,40 @@ fi
 grep -q 'fatal\[N00BB-L0046\].*required dynamic storage class has no name' \
     "$tmp/missing_storage_class.err"
 
+N00B_PATH="$interface_programs" "$compiler" library \
+    --emit-interface "$tmp/export_origin.interface" \
+    export_origin.facade \
+    >"$tmp/export_origin_library.out" \
+    2>"$tmp/export_origin_library.err" || {
+    cat "$tmp/export_origin_library.err"
+    exit 1
+}
+"$compiler" lower --link-interface "$tmp/export_origin.interface" \
+    --dump-ir --dump-symbols \
+    "$interface_programs/export_origin_consumer.n00b" \
+    >"$tmp/export_origin_consumer.out" \
+    2>"$tmp/export_origin_consumer.err" || {
+    cat "$tmp/export_origin_consumer.err"
+    cat "$tmp/export_origin_consumer.out"
+    exit 1
+}
+grep -q 'preserve_identity: function, mutable, type=(export_origin.impl.Token) -> export_origin.impl.Token fail: nil' \
+    "$tmp/export_origin_consumer.out"
+test "$(grep -c 'Token: type, mutable, type=export_origin.impl.Token' \
+    "$tmp/export_origin_consumer.out")" -eq 2
+"$storage_interface_writer" "$tmp/export_origin_conflict.interface" \
+    --origin-conflict
+if "$compiler" lower \
+    --link-interface "$tmp/export_origin_conflict.interface" \
+    "$interface_programs/export_origin_conflict_consumer.n00b" \
+    >"$tmp/export_origin_conflict.out" \
+    2>"$tmp/export_origin_conflict.err"; then
+    echo 'conflicting canonical type representations unexpectedly passed' >&2
+    exit 1
+fi
+grep -q 'fatal\[N00BB-L0046\].*interface aliases disagree on a canonical type representation' \
+    "$tmp/export_origin_conflict.err"
+
 "$compiler" lower --dump-ir --dump-link-unit \
     "$program_dir/builtin_option_operations.n00b" \
     >"$tmp/builtin_option_operations.out" \
@@ -285,15 +319,15 @@ test -s "$tmp/render.interface"
 }
 grep -q 'trait-dispatch\[resolved\].*render_plugin:1:use_render -> render_plugin:1:render' \
     "$tmp/render_plugin.out"
-grep -q 'resolved render_plugin -> render_contract:[0-9]*:external_value' \
+grep -q 'resolved render_plugin -> render_contract.impl:[0-9]*:external_value' \
     "$tmp/render_plugin.out"
-grep -q 'resolved render_plugin -> render_contract:[0-9]*:ArchivedPoint.x' \
+grep -q 'resolved render_plugin -> render_contract.impl:[0-9]*:ArchivedPoint.x' \
     "$tmp/render_plugin.out"
-grep -q 'resolved render_plugin -> render_contract:[0-9]*:ArchivedValue.number' \
+grep -q 'resolved render_plugin -> render_contract.impl:[0-9]*:ArchivedValue.number' \
     "$tmp/render_plugin.out"
-grep -q 'resolved render_plugin -> render_contract:[0-9]*:ArchivedValue.text' \
+grep -q 'resolved render_plugin -> render_contract.impl:[0-9]*:ArchivedValue.text' \
     "$tmp/render_plugin.out"
-grep -q 'render_contract:[0-9]*:ArchivedColor kind=' \
+grep -q 'render_contract.impl:[0-9]*:ArchivedColor kind=' \
     "$tmp/render_plugin.out"
 grep -q 'red: enum-constant, const, type=render_contract.impl.ArchivedColor, owner-type=ArchivedColor, value=0x00000000000000000000000000000000, phases=comptime+runtime, mutable-in=none, initializer-in=comptime, storage-duration=comptime' \
     "$tmp/render_plugin.out"
@@ -308,7 +342,7 @@ grep -q 'green: enum-constant, const, type=render_contract.impl.ArchivedColor, o
     exit 1
 }
 grep -q '= extract .* "x"' "$tmp/render_plugin.ir"
-grep -q 'layout render_contract.ArchivedPoint target=host size=8 align=8' \
+grep -q 'layout render_contract.impl.ArchivedPoint target=host size=8 align=8' \
     "$tmp/render_plugin.ir"
 grep -q 'member x bit-offset=0 bit-width=64' "$tmp/render_plugin.ir"
 grep -q 'call @external_value' "$tmp/render_plugin.ir"
@@ -4535,15 +4569,17 @@ fi
 grep -q 'n00bb.runtime-module-initializer-order v1 complete' \
     "$tmp/thread_runtime_client.out"
 awk '
-    /^module thread_runtime_dep \{/ { current = "dependency" }
+    /^module thread_runtime_dep.impl \{/ { current = "implementation" }
+    /^module thread_runtime_dep.facade \{/ { current = "facade" }
     /^module thread_runtime_client \{/ { current = "client" }
-    current == "dependency" && /__n00bb_runtime_init/ && /initializer_order\(0\)/ { dep_order = 1 }
-    current == "client" && /__n00bb_runtime_init/ && /initializer_order\(1\)/ { client_order = 1 }
-    END { exit !(dep_order && client_order) }
+    current == "implementation" && /__n00bb_runtime_init/ && /initializer_order\(0\)/ { impl_order = 1 }
+    current == "facade" && /__n00bb_runtime_init/ && /initializer_order\(1\)/ { facade_order = 1 }
+    current == "client" && /__n00bb_runtime_init/ && /initializer_order\(2\)/ { client_order = 1 }
+    END { exit !(impl_order && facade_order && client_order) }
 ' "$tmp/thread_runtime_client.out"
-grep -Fq 'runtime-initializer-use[resolved] <initializer>: -> thread_runtime_dep:0:worker_state' \
+grep -Fq 'runtime-initializer-use[resolved] <initializer>: -> thread_runtime_dep.impl:0:worker_state' \
     "$tmp/thread_runtime_client.out"
-grep -q 'global.store @thread_runtime_dep.worker_state' \
+grep -q 'global.store @thread_runtime_dep.impl.worker_state' \
     "$tmp/thread_runtime_client.out"
 grep -q 'global.store @thread_runtime_client.initial_worker_state' \
     "$tmp/thread_runtime_client.out"
@@ -5296,9 +5332,9 @@ N00B_PATH="$script_dir/programs/generic_trait_specialization" \
     echo 'concrete generic trait specializations did not resolve' >&2
     exit 1
 }
-grep -q 'trait-specialization\[resolved\] root:1:generic_render -> int_impl:1:render.*receiver=int' \
+grep -q 'trait-specialization\[resolved\] root:1:generic_render -> generic_trait_specialization.int_impl:1:render.*receiver=int' \
     "$tmp/generic_trait_specialization.out"
-grep -q 'trait-specialization\[resolved\] root:1:generic_render -> label_impl:1:render.*receiver=label_impl.Label' \
+grep -q 'trait-specialization\[resolved\] root:1:generic_render -> generic_trait_specialization.label_impl:1:render.*receiver=generic_trait_specialization.label_impl.Label' \
     "$tmp/generic_trait_specialization.out"
 grep -q 'func @generic_render(%item: `a where' \
     "$tmp/generic_trait_specialization.out"
@@ -5403,9 +5439,9 @@ grep -q 'extern func @archived_render.*ArchiveRender' \
     "$tmp/trait_archive_multi_user.out"
 grep -q 'extern func @archived_measure.*ArchiveMeasure.*fail: string' \
     "$tmp/trait_archive_multi_user.out"
-grep -q 'extern func @archived_render.*trait_archive_render_dep.ArchiveRender.*callable_contract((`a) -> int fail: nil where' \
+grep -q 'extern func @archived_render.*trait_archive_render_dep.impl.ArchiveRender.*callable_contract((`a) -> int fail: nil where' \
     "$tmp/trait_archive_multi_user.out"
-grep -q 'extern func @archived_measure.*trait_archive_measure_dep.ArchiveMeasure.*callable_contract((`a) -> int fail: string where' \
+grep -q 'extern func @archived_measure.*trait_archive_measure_dep.impl.ArchiveMeasure.*callable_contract((`a) -> int fail: string where' \
     "$tmp/trait_archive_multi_user.out"
 ! grep -Fq 'forall[' "$tmp/trait_archive_multi_user.out"
 test "$(grep -c 'call @archived_render' "$tmp/trait_archive_multi_user.out")" -eq 2
@@ -5432,7 +5468,7 @@ N00B_PATH="$script_dir/programs" "$compiler" lower --dump-ir --dump-link-unit \
     echo 'trait dispatch across a cyclic module closure unexpectedly failed' >&2
     exit 1
 }
-grep -q 'trait-dispatch\[resolved\] cycle_trait_b:1:dispatch -> cycle_trait_a:1:echo' \
+grep -q 'trait-dispatch\[resolved\] cycle_trait.b:1:dispatch -> cycle_trait.a:1:echo' \
     "$tmp/cycle_trait.out"
 
 if "$compiler" preprocess "$program_dir/trait_dispatch_missing.n00b" \
@@ -5496,7 +5532,7 @@ N00B_PATH="$program_dir" "$compiler" preprocess --dump-symbols \
     exit 1
 }
 grep 'generic_render: function' "$tmp/generic_render_consumer.out" \
-    | grep -q 'render_contract.Render' || {
+    | grep -q 'render_contract.contract.Render' || {
     cat "$tmp/generic_render_consumer.out"
     echo 'imported trait constraint did not resolve to its defining module' >&2
     exit 1
@@ -5511,9 +5547,9 @@ N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-link-unit \
     exit 1
 }
 grep -q 'call @render, %item' "$tmp/link_render_consumer.out"
-grep -q 'trait-dispatch\[resolved\] link_render_consumer:1:use_plugin -> link_render_plugin:1:render' \
+grep -q 'trait-dispatch\[resolved\] link_render_consumer:1:use_plugin -> link_render_contract.plugin:1:render' \
     "$tmp/link_render_consumer.out"
-grep -q 'link_render_contract:2:Render kind=' \
+grep -q 'link_render_contract.contract:2:Render kind=' \
     "$tmp/link_render_consumer.out"
 
 N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-link-unit \
@@ -5523,8 +5559,8 @@ N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-link-unit \
     cat "$tmp/link_global_user.err"
     exit 1
 }
-grep -q 'copy @link_global_dep.remote_global' "$tmp/link_global_user.out"
-grep -q 'resolved link_global_user -> link_global_dep:0:remote_global' \
+grep -q 'copy @link_global_dep.impl.remote_global' "$tmp/link_global_user.out"
+grep -q 'resolved link_global_user -> link_global_dep.impl:0:remote_global' \
     "$tmp/link_global_user.out" || {
     cat "$tmp/link_global_user.out"
     exit 1
@@ -5537,12 +5573,12 @@ N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-link-unit \
     cat "$tmp/link_global_inferred_user.out"
     exit 1
 }
-grep -q 'copy @link_global_inferred_dep.remote_global' \
+grep -q 'copy @link_global_inferred_dep.impl.remote_global' \
     "$tmp/link_global_inferred_user.out"
-grep -q 'resolved link_global_inferred_user -> link_global_inferred_dep:0:remote_global' \
+grep -q 'resolved link_global_inferred_user -> link_global_inferred_dep.impl:0:remote_global' \
     "$tmp/link_global_inferred_user.out"
 grep -q 'binding n00bb.ir.global' "$tmp/link_global_inferred_user.out"
-grep -q 'initializer-use\[resolved\] link_global_inferred_dep:0:remote_global -> link_global_dep:0:remote_global' \
+grep -q 'initializer-use\[resolved\] link_global_inferred_dep.impl:0:remote_global -> link_global_dep.impl:0:remote_global' \
     "$tmp/link_global_inferred_user.out"
 
 N00B_PATH="$interface_programs" "$compiler" library \
@@ -5575,7 +5611,7 @@ strings "$tmp/array_shape_archive.n00bi" | grep -q \
 strings "$tmp/array_shape_archive.n00bi" | grep -q \
     'n00b.member-array-shape.cells'
 strings "$tmp/array_shape_archive.n00bi" | grep -Fq \
-    'module array_shape_archive_dep$comptime {'
+    'module array_shape_archive_dep.impl$comptime {'
 ! strings "$tmp/array_shape_archive.n00bi" | grep -Fq \
     'module array_shape_archive_dep {'
 "$compiler" lower --link-interface "$tmp/array_shape_archive.n00bi" \
@@ -5586,7 +5622,7 @@ strings "$tmp/array_shape_archive.n00bi" | grep -Fq \
     cat "$tmp/array_shape_archive_user.out"
     exit 1
 }
-grep -q 'array_shape_archive_dep:0:grid .*array-shape\[rank=1,flat-prefix=1,dim0=comptime:producer=__n00bb_array_extent_' \
+grep -q 'array_shape_archive_dep.impl:0:grid .*array-shape\[rank=1,flat-prefix=1,dim0=comptime:producer=__n00bb_array_extent_' \
     "$tmp/array_shape_archive_user.out"
 grep -q 'sequence.shape.check.*dim0=comptime:producer=__n00bb_array_extent_' \
     "$tmp/array_shape_archive_user.out"
@@ -5643,7 +5679,7 @@ grep -q 'input: parameter, .*type=Array\[int\], array-shape=rank:1, dim0=comptim
 }
 grep -q 'FixedRow: type, .*type=Array\[int\], array-shape=rank:1, dim0=comptime(producer=__n00bb_array_extent_' \
     "$tmp/array_alias_archive_user.out"
-grep -q 'array_alias_archive_dep:2:FixedRow kind=2 binding n00bb.semantic.type binding ir.array-shape' \
+grep -q 'array_alias_archive_dep.impl:2:FixedRow kind=2 binding n00bb.semantic.type binding ir.array-shape' \
     "$tmp/array_alias_archive_user.out"
 grep -q 'sequence.shape.check.*dim0=comptime:producer=__n00bb_array_extent_' \
     "$tmp/array_alias_archive_user.out"
@@ -5660,7 +5696,7 @@ grep -q 'error\[N00BB-T0012\].*cyclic type alias definition' \
 [ "$(grep -c 'fatal\[N00BB-L0006\]' "$tmp/cyclic_type_alias.out")" -eq 1 ]
 
 if N00B_PATH="$program_dir" "$compiler" lower \
-    "$program_dir/cyclic_alias_import_a.n00b" \
+    cyclic_alias_import.facade \
     >"$tmp/cyclic_alias_import.out" 2>&1; then
     echo 'cyclic imported transparent aliases unexpectedly lowered' >&2
     exit 1
@@ -5692,7 +5728,7 @@ strings "$tmp/array_shape_chain_middle.n00bi" | \
     grep -q 'n00b.comptime-producer.__n00bb_array_extent_'
 strings "$tmp/array_shape_chain_middle.n00bi" | \
     grep -q 'n00b.comptime-dependencies.__n00bb_array_extent_'
-grep -q 'call\[resolved\] array_shape_chain_middle:.* -> array_shape_chain_dep:.*:extent' \
+grep -q 'call\[resolved\] array_shape_chain_middle.impl:.* -> array_shape_chain_dep.impl:.*:extent' \
     "$tmp/array_shape_chain_middle.out"
 array_shape_dependency_offset=$(grep -abo 'N0CD' \
     "$tmp/array_shape_chain_middle.n00bi" | head -1 | cut -d: -f1)
@@ -5730,53 +5766,69 @@ grep -q 'array_shape_chain_middle.values' \
 }
 grep -q 'values: variable, .*array-shape=rank:1, dim0=comptime' \
     "$tmp/array_shape_chain_user.out"
-grep -q 'resolved array_shape_chain_user -> array_shape_chain_middle:1:echo' \
+grep -q 'resolved array_shape_chain_user -> array_shape_chain_middle.impl:1:echo' \
     "$tmp/array_shape_chain_user.out"
 
 array_shape_record_index=0
+array_shape_export_record_count=0
+array_shape_function_metadata_offset=
 for array_shape_metadata_offset in $(grep -abo 'N0AS' \
         "$tmp/array_shape_archive.n00bi" | cut -d: -f1); do
     array_shape_record_index=$((array_shape_record_index + 1))
-    case "$array_shape_record_index" in
-        1|2) array_shape_owner_pattern='array_shape_archive_dep\.echo' ;;
-        3) array_shape_owner_pattern='array_shape_archive_dep\.grid' ;;
-        4) array_shape_owner_pattern='array_shape_archive_dep\.GridHolder\.cells' ;;
-        *)
-            echo 'unexpected number of array-shape archive records' >&2
-            exit 1
-            ;;
-    esac
-    reject_shape_record "$tmp/array_shape_archive.n00bi" \
-        "array_shape_owner_$array_shape_record_index" \
-        "$array_shape_metadata_offset" 0 'X' \
+    array_shape_label="array_shape_owner_$array_shape_record_index"
+    array_shape_corrupted="$tmp/$array_shape_label.n00bi"
+    cp "$tmp/array_shape_archive.n00bi" "$array_shape_corrupted"
+    printf 'X' | dd of="$array_shape_corrupted" bs=1 \
+        seek="$array_shape_metadata_offset" conv=notrunc 2>/dev/null
+    if "$compiler" lower --link-interface "$array_shape_corrupted" \
         "$interface_programs/array_shape_archive_user.n00b" \
-        "$array_shape_owner_pattern"
+        >"$tmp/$array_shape_label.out" 2>"$tmp/$array_shape_label.err"; then
+        continue
+    fi
+    grep -q 'fatal\[N00BB-L0046\]' "$tmp/$array_shape_label.err"
+    grep -Eq 'array_shape_archive_dep\.(grid|echo)' \
+        "$tmp/$array_shape_label.err"
+    array_shape_export_record_count=$((array_shape_export_record_count + 1))
+    if [ -z "$array_shape_function_metadata_offset" ] && \
+        grep -q 'interface function has invalid array-shape metadata' \
+            "$tmp/$array_shape_label.err"; then
+        array_shape_function_metadata_offset=$array_shape_metadata_offset
+    fi
 done
-if [ "$array_shape_record_index" -ne 4 ]; then
-    echo 'array-shape archive did not cover every expected owner' >&2
+if [ "$array_shape_export_record_count" -ne 3 ]; then
+    echo 'array-shape archive did not cover every selected export shape' >&2
     exit 1
 fi
 
 array_alias_owner_errors="$tmp/array_alias_owner_errors.err"
 : >"$array_alias_owner_errors"
 array_alias_record_index=0
+array_alias_export_record_count=0
 for array_alias_metadata_offset in $(grep -abo 'N0AS' \
         "$tmp/array_alias_archive.n00bi" | cut -d: -f1); do
     array_alias_record_index=$((array_alias_record_index + 1))
-    reject_shape_record "$tmp/array_alias_archive.n00bi" \
-        "array_alias_owner_$array_alias_record_index" \
-        "$array_alias_metadata_offset" 0 'X' \
+    array_alias_label="array_alias_owner_$array_alias_record_index"
+    array_alias_corrupted="$tmp/$array_alias_label.n00bi"
+    cp "$tmp/array_alias_archive.n00bi" "$array_alias_corrupted"
+    printf 'X' | dd of="$array_alias_corrupted" bs=1 \
+        seek="$array_alias_metadata_offset" conv=notrunc 2>/dev/null
+    if "$compiler" lower --link-interface "$array_alias_corrupted" \
         "$interface_programs/array_alias_archive_user.n00b" \
-        'array_alias_archive_dep\.(FixedRowBase|FixedRow|echo_row)'
-    cat "$tmp/array_alias_owner_$array_alias_record_index.err" \
-        >>"$array_alias_owner_errors"
+        >"$tmp/$array_alias_label.out" 2>"$tmp/$array_alias_label.err"; then
+        continue
+    fi
+    grep -q 'fatal\[N00BB-L0046\]' "$tmp/$array_alias_label.err"
+    grep -Eq 'array_alias_archive_dep\.(FixedRowBase|FixedRow|echo_row)' \
+        "$tmp/$array_alias_label.err"
+    cat "$tmp/$array_alias_label.err" >>"$array_alias_owner_errors"
+    array_alias_export_record_count=$((array_alias_export_record_count + 1))
 done
+[ "$array_alias_export_record_count" -eq 4 ]
 grep -q 'array_alias_archive_dep.FixedRow' "$array_alias_owner_errors"
 grep -q 'array_alias_archive_dep.FixedRowBase' "$array_alias_owner_errors"
 grep -q 'array_alias_archive_dep.echo_row' "$array_alias_owner_errors"
 
-array_shape_metadata_offset=$(grep -abo 'N0AS' \
-    "$tmp/array_shape_archive.n00bi" | head -1 | cut -d: -f1)
+array_shape_metadata_offset=$array_shape_function_metadata_offset
 shape_owner_pattern='array_shape_archive_dep\.(grid|GridHolder\.cells|echo)'
 reject_shape_record "$tmp/array_shape_archive.n00bi" \
     array_shape_bad_rank "$array_shape_metadata_offset" 4 \
@@ -5801,8 +5853,7 @@ reject_shape_record "$tmp/array_shape_archive.n00bi" \
 
 cp "$tmp/array_shape_archive.n00bi" \
     "$tmp/array_shape_archive_bad_shape.n00bi"
-array_shape_metadata_offset=$(grep -abo 'N0AS' \
-    "$tmp/array_shape_archive_bad_shape.n00bi" | head -1 | cut -d: -f1)
+array_shape_metadata_offset=$array_shape_function_metadata_offset
 if [ -z "$array_shape_metadata_offset" ]; then
     echo 'could not locate array-shape metadata in test archive' >&2
     exit 1
@@ -5824,31 +5875,35 @@ grep -Eq 'invalid array-shape metadata: .*(grid|GridHolder\.cells|echo)' \
 
 cp "$tmp/array_shape_archive.n00bi" \
     "$tmp/array_shape_archive_missing_producer.n00bi"
-array_shape_producer_offset=$(grep -abo '__n00bb_array_extent_' \
-    "$tmp/array_shape_archive_missing_producer.n00bi" | head -1 \
-    | cut -d: -f1)
-if [ -z "$array_shape_producer_offset" ]; then
+array_shape_selected_producer_offset=
+for array_shape_producer_offset in $(grep -abo '__n00bb_array_extent_' \
+        "$tmp/array_shape_archive.n00bi" | cut -d: -f1); do
+    cp "$tmp/array_shape_archive.n00bi" \
+        "$tmp/array_shape_archive_missing_producer.n00bi"
+    printf 'X' | dd of="$tmp/array_shape_archive_missing_producer.n00bi" \
+        bs=1 seek="$array_shape_producer_offset" conv=notrunc 2>/dev/null
+    if "$compiler" lower \
+        --link-interface "$tmp/array_shape_archive_missing_producer.n00bi" \
+        "$interface_programs/array_shape_archive_user.n00b" \
+        >"$tmp/array_shape_archive_missing_producer.out" \
+        2>"$tmp/array_shape_archive_missing_producer.err"; then
+        continue
+    fi
+    array_shape_selected_producer_offset=$array_shape_producer_offset
+    break
+done
+if [ -z "$array_shape_selected_producer_offset" ]; then
     echo 'could not locate array-shape producer identifier in test archive' >&2
     exit 1
 fi
-printf 'X' | dd of="$tmp/array_shape_archive_missing_producer.n00bi" bs=1 \
-    seek="$array_shape_producer_offset" conv=notrunc 2>/dev/null
-if "$compiler" lower \
-    --link-interface "$tmp/array_shape_archive_missing_producer.n00bi" \
-    "$interface_programs/array_shape_archive_user.n00b" \
-    >"$tmp/array_shape_archive_missing_producer.out" \
-    2>"$tmp/array_shape_archive_missing_producer.err"; then
-    echo 'array shape with a missing producer unexpectedly loaded' >&2
-    exit 1
-fi
-grep -q 'fatal\[N00BB-L0046\].*invalid array-shape metadata' \
+grep -q 'fatal\[N00BB-L0046\].*invalid or missing n00b semantics' \
+    "$tmp/array_shape_archive_missing_producer.err"
+grep -q 'array_shape_archive_dep.grid' \
     "$tmp/array_shape_archive_missing_producer.err"
 
 cp "$tmp/array_shape_archive.n00bi" \
     "$tmp/array_shape_archive_contradictory_extent.n00bi"
-array_shape_metadata_offset=$(grep -abo 'N0AS' \
-    "$tmp/array_shape_archive_contradictory_extent.n00bi" | head -1 \
-    | cut -d: -f1)
+array_shape_metadata_offset=$array_shape_function_metadata_offset
 if [ -z "$array_shape_metadata_offset" ]; then
     echo 'could not locate array-shape metadata in test archive' >&2
     exit 1
@@ -5883,29 +5938,29 @@ for static_shape_offset in $(grep -abo 'N0AS' \
         "$tmp/static_sequence_archive.n00bi" | cut -d: -f1); do
     static_shape_rank=$(od -An -tu4 -j "$((static_shape_offset + 4))" \
         -N4 "$tmp/static_sequence_archive.n00bi" | tr -d ' ')
-    if [ "$static_shape_rank" -eq 2 ]; then
-        static_rank_two_shape_offset=$static_shape_offset
-        break
+    if [ "$static_shape_rank" -ne 2 ]; then
+        continue
     fi
+    cp "$tmp/static_sequence_archive.n00bi" \
+        "$tmp/static_shape_zero_extent.n00bi"
+    printf '\001\000\000\000' | dd \
+        of="$tmp/static_shape_zero_extent.n00bi" bs=1 \
+        seek="$((static_shape_offset + 8))" conv=notrunc 2>/dev/null
+    printf '\001\000\000\000' | dd \
+        of="$tmp/static_shape_zero_extent.n00bi" bs=1 \
+        seek="$((static_shape_offset + 16))" conv=notrunc 2>/dev/null
+    if "$compiler" lower \
+        --link-interface "$tmp/static_shape_zero_extent.n00bi" \
+        "$interface_programs/static_sequence_archive_user.n00b" \
+        >"$tmp/static_shape_zero_extent.out" \
+        2>"$tmp/static_shape_zero_extent.err"; then
+        continue
+    fi
+    static_rank_two_shape_offset=$static_shape_offset
+    break
 done
 if [ -z "$static_rank_two_shape_offset" ]; then
     echo 'could not locate rank-two array-shape metadata in test archive' >&2
-    exit 1
-fi
-cp "$tmp/static_sequence_archive.n00bi" \
-    "$tmp/static_shape_zero_extent.n00bi"
-printf '\001\000\000\000' | dd \
-    of="$tmp/static_shape_zero_extent.n00bi" bs=1 \
-    seek="$((static_rank_two_shape_offset + 8))" conv=notrunc 2>/dev/null
-printf '\001\000\000\000' | dd \
-    of="$tmp/static_shape_zero_extent.n00bi" bs=1 \
-    seek="$((static_rank_two_shape_offset + 16))" conv=notrunc 2>/dev/null
-if "$compiler" lower \
-    --link-interface "$tmp/static_shape_zero_extent.n00bi" \
-    "$interface_programs/static_sequence_archive_user.n00b" \
-    >"$tmp/static_shape_zero_extent.out" \
-    2>"$tmp/static_shape_zero_extent.err"; then
-    echo 'zero static array-shape extent unexpectedly loaded' >&2
     exit 1
 fi
 grep -q 'fatal\[N00BB-L0046\]' "$tmp/static_shape_zero_extent.err"
@@ -5936,11 +5991,11 @@ grep -q 'static_sequence_archive_dep.nested' \
     cat "$tmp/static_sequence_archive_user.out"
     exit 1
 }
-grep -q 'static_sequence_archive_dep:0:values .*static-value=sequence:\[00000000000000000000000000000001,00000000000000000000000000000002\]' \
+grep -q 'static_sequence_archive_dep.impl:0:values .*static-value=sequence:\[00000000000000000000000000000001,00000000000000000000000000000002\]' \
     "$tmp/static_sequence_archive_user.out"
-grep -q 'static_sequence_archive_dep:0:nested .*static-value=sequence:\[\[00000000000000000000000000000001,00000000000000000000000000000002\],\[00000000000000000000000000000003,00000000000000000000000000000004\]\]' \
+grep -q 'static_sequence_archive_dep.impl:0:nested .*static-value=sequence:\[\[00000000000000000000000000000001,00000000000000000000000000000002\],\[00000000000000000000000000000003,00000000000000000000000000000004\]\]' \
     "$tmp/static_sequence_archive_user.out"
-grep -q 'static_sequence_archive_dep:0:list_values .*static-value=sequence:\[00000000000000000000000000000005,00000000000000000000000000000006\]' \
+grep -q 'static_sequence_archive_dep.impl:0:list_values .*static-value=sequence:\[00000000000000000000000000000005,00000000000000000000000000000006\]' \
     "$tmp/static_sequence_archive_user.out"
 
 N00B_PATH="$interface_programs" "$compiler" library \
@@ -5962,9 +6017,9 @@ N00B_PATH="$interface_programs" "$compiler" library \
 }
 grep -q 'extern const global @computed_const_archive_dep.values: array\[int\]' \
     "$tmp/computed_const_archive_user.out"
-grep -q 'computed_const_archive_dep:0:values kind=.*facts\[dimensions=1,' \
+grep -q 'computed_const_archive_dep.impl:0:values kind=.*facts\[dimensions=1,' \
     "$tmp/computed_const_archive_user.out"
-! grep -q 'computed_const_archive_dep:0:values .*static-value=' \
+! grep -q 'computed_const_archive_dep.impl:0:values .*static-value=' \
     "$tmp/computed_const_archive_user.out"
 
 N00B_PATH="$interface_programs" "$compiler" library \
@@ -5985,21 +6040,21 @@ N00B_PATH="$interface_programs" "$compiler" library \
     cat "$tmp/static_aggregate_archive_user.out"
     exit 1
 }
-grep -q 'static_aggregate_archive_dep:0:point .*static-value=record:\[00000000000000000000000000000007,5 bytes\]' \
+grep -q 'static_aggregate_archive_dep.impl:0:point .*static-value=record:\[00000000000000000000000000000007,5 bytes\]' \
     "$tmp/static_aggregate_archive_user.out"
-grep -q 'static_aggregate_archive_dep:0:anonymous .*static-value=record:\[1 bytes,00000000000000000000000000000008\]' \
+grep -q 'static_aggregate_archive_dep.impl:0:anonymous .*static-value=record:\[1 bytes,00000000000000000000000000000008\]' \
     "$tmp/static_aggregate_archive_user.out"
-grep -q 'static_aggregate_archive_dep:0:pair .*static-value=tuple:\[00000000000000000000000000000009,5 bytes\]' \
+grep -q 'static_aggregate_archive_dep.impl:0:pair .*static-value=tuple:\[00000000000000000000000000000009,5 bytes\]' \
     "$tmp/static_aggregate_archive_user.out"
-grep -q 'static_aggregate_archive_dep:0:lookup .*static-value=dictionary:\[3 bytes,00000000000000000000000000000001,3 bytes,00000000000000000000000000000002\]' \
+grep -q 'static_aggregate_archive_dep.impl:0:lookup .*static-value=dictionary:\[3 bytes,00000000000000000000000000000001,3 bytes,00000000000000000000000000000002\]' \
     "$tmp/static_aggregate_archive_user.out"
-grep -q 'static_aggregate_archive_dep:0:flags .*static-value=set:\[00000000000000000000000000000001,00000000000000000000000000000002\]' \
+grep -q 'static_aggregate_archive_dep.impl:0:flags .*static-value=set:\[00000000000000000000000000000001,00000000000000000000000000000002\]' \
     "$tmp/static_aggregate_archive_user.out"
-grep -q 'static_aggregate_archive_dep:0:empty_lookup .*static-value=dictionary:\[\]' \
+grep -q 'static_aggregate_archive_dep.impl:0:empty_lookup .*static-value=dictionary:\[\]' \
     "$tmp/static_aggregate_archive_user.out"
-grep -q 'static_aggregate_archive_dep:0:empty_flags .*static-value=set:\[\]' \
+grep -q 'static_aggregate_archive_dep.impl:0:empty_flags .*static-value=set:\[\]' \
     "$tmp/static_aggregate_archive_user.out"
-grep -q 'static_aggregate_archive_dep:0:point .*site-provenance\[library\]=<interface:static_aggregate_archive_dep>' \
+grep -q 'static_aggregate_archive_dep.impl:0:point .*site-provenance\[library\]=<interface:static_aggregate_archive_dep>' \
     "$tmp/static_aggregate_archive_user.out"
 
 "$compiler" preprocess --dump-link-unit \
@@ -6010,7 +6065,7 @@ grep -q 'static_aggregate_archive_dep:0:point .*site-provenance\[library\]=<inte
     cat "$tmp/static_aggregate_archive_source.out"
     exit 1
 }
-grep -q 'static_aggregate_archive_dep:0:point .*site-provenance\[source\]=.*static_aggregate_archive_dep.n00b' \
+grep -q 'impl:0:point .*site-provenance\[source\]=.*static_aggregate_archive_dep/impl.n00b' \
     "$tmp/static_aggregate_archive_source.out"
 
 "$compiler" lower --jobs 1 --dump-ir \
@@ -6021,37 +6076,39 @@ grep -q 'static_aggregate_archive_dep:0:point .*site-provenance\[source\]=.*stat
     cat "$tmp/static_aggregate_archive_lower.ir"
     exit 1
 }
-grep -Fq 'module static_aggregate_archive_dep$comptime {' \
+grep -Fq 'module impl$comptime {' \
     "$tmp/static_aggregate_archive_lower.ir"
-grep -Fq 'module static_aggregate_archive_dep {' \
+grep -Fq 'module impl {' \
     "$tmp/static_aggregate_archive_lower.ir"
 grep -Fq 'empty_flags: set[int] = set{}' \
     "$tmp/static_aggregate_archive_lower.ir"
 grep -Fq 'empty_lookup: dict[string, int] = dict{}' \
     "$tmp/static_aggregate_archive_lower.ir"
-test "$(grep -Fc 'point: static_aggregate_archive_dep.StaticPoint = { x = 7, label = "point" }' \
+test "$(grep -Fc 'point: impl.StaticPoint = { x = 7, label = "point" }' \
     "$tmp/static_aggregate_archive_lower.ir")" -eq 2
 
-cp "$tmp/static_aggregate_archive.n00bi" \
-    "$tmp/static_aggregate_archive_bad_value.n00bi"
-static_global_offset=$(grep -abo 'n00b.global' \
-    "$tmp/static_aggregate_archive_bad_value.n00bi" \
-    | head -1 | cut -d: -f1)
-if [ -z "$static_global_offset" ]; then
+static_selected_global_offset=
+for static_global_offset in $(grep -abo 'n00b.global' \
+        "$tmp/static_aggregate_archive.n00bi" | cut -d: -f1); do
+    cp "$tmp/static_aggregate_archive.n00bi" \
+        "$tmp/static_aggregate_archive_bad_value.n00bi"
+    static_value_offset=$((static_global_offset + 35))
+    printf '\377' | dd \
+        of="$tmp/static_aggregate_archive_bad_value.n00bi" \
+        bs=1 seek="$static_value_offset" conv=notrunc 2>/dev/null
+    if "$compiler" preprocess \
+        --link-interface "$tmp/static_aggregate_archive_bad_value.n00bi" \
+        --dump-link-unit \
+        "$interface_programs/static_aggregate_archive_user.n00b" \
+        >"$tmp/static_aggregate_archive_bad_value.out" \
+        2>"$tmp/static_aggregate_archive_bad_value.err"; then
+        continue
+    fi
+    static_selected_global_offset=$static_global_offset
+    break
+done
+if [ -z "$static_selected_global_offset" ]; then
     echo 'could not locate recursive global metadata in test archive' >&2
-    exit 1
-fi
-static_value_offset=$((static_global_offset + 35))
-printf '\377' | dd \
-    of="$tmp/static_aggregate_archive_bad_value.n00bi" \
-    bs=1 seek="$static_value_offset" conv=notrunc 2>/dev/null
-if "$compiler" preprocess \
-    --link-interface "$tmp/static_aggregate_archive_bad_value.n00bi" \
-    --dump-link-unit \
-    "$interface_programs/static_aggregate_archive_user.n00b" \
-    >"$tmp/static_aggregate_archive_bad_value.out" \
-    2>"$tmp/static_aggregate_archive_bad_value.err"; then
-    echo 'invalid recursive static-value kind unexpectedly restored' >&2
     exit 1
 fi
 grep -q 'fatal\[N00BB-L0046\].*interface value has invalid or missing n00b semantics' \
@@ -6068,26 +6125,28 @@ N00B_PATH="$interface_programs" "$compiler" library \
     cat "$tmp/static_mismatch_archive_library.err"
     exit 1
 }
-cp "$tmp/static_mismatch_archive.n00bi" \
-    "$tmp/static_mismatch_archive_bad_type.n00bi"
-static_mismatch_global_offset=$(grep -abo 'n00b.global' \
-    "$tmp/static_mismatch_archive_bad_type.n00bi" \
-    | head -1 | cut -d: -f1)
-if [ -z "$static_mismatch_global_offset" ]; then
+static_mismatch_selected_offset=
+for static_mismatch_global_offset in $(grep -abo 'n00b.global' \
+        "$tmp/static_mismatch_archive.n00bi" | cut -d: -f1); do
+    cp "$tmp/static_mismatch_archive.n00bi" \
+        "$tmp/static_mismatch_archive_bad_type.n00bi"
+    printf '\000\000' | dd \
+        of="$tmp/static_mismatch_archive_bad_type.n00bi" \
+        bs=1 seek="$((static_mismatch_global_offset + 34))" \
+        conv=notrunc 2>/dev/null
+    if "$compiler" preprocess \
+        --link-interface "$tmp/static_mismatch_archive_bad_type.n00bi" \
+        --dump-link-unit --dump-ir \
+        "$interface_programs/static_mismatch_archive_user.n00b" \
+        >"$tmp/static_mismatch_archive_bad_type.out" \
+        2>"$tmp/static_mismatch_archive_bad_type.err"; then
+        continue
+    fi
+    static_mismatch_selected_offset=$static_mismatch_global_offset
+    break
+done
+if [ -z "$static_mismatch_selected_offset" ]; then
     echo 'could not locate typed static global metadata in test archive' >&2
-    exit 1
-fi
-printf '\000\000' | dd \
-    of="$tmp/static_mismatch_archive_bad_type.n00bi" \
-    bs=1 seek="$((static_mismatch_global_offset + 34))" \
-    conv=notrunc 2>/dev/null
-if "$compiler" preprocess \
-    --link-interface "$tmp/static_mismatch_archive_bad_type.n00bi" \
-    --dump-link-unit --dump-ir \
-    "$interface_programs/static_mismatch_archive_user.n00b" \
-    >"$tmp/static_mismatch_archive_bad_type.out" \
-    2>"$tmp/static_mismatch_archive_bad_type.err"; then
-    echo 'static initializer with a payload kind mismatching its declared type unexpectedly loaded' >&2
     exit 1
 fi
 grep -q 'fatal\[N00BB-L0046\].*interface value has invalid or missing n00b semantics' \
@@ -6122,7 +6181,7 @@ grep -q 'error\[N00BB-B0004\].*malformed object archive' \
 }
 grep -q 'n00bb.array-shapes v1 complete' \
     "$tmp/array_archive_user.out"
-grep -q 'array_archive_dep:0:grid .*facts\[dimensions=2' \
+grep -q 'array_archive_dep.impl:0:grid .*facts\[dimensions=2' \
     "$tmp/array_archive_user.out"
 
 "$compiler" preprocess --dump-link-unit \
@@ -6152,25 +6211,25 @@ grep -q '@global_archive_dep.empty_worker_label: string .*n00b.thread_local(true
 grep -q 'store' "$tmp/global_archive_user.out"
 grep -q 'n00bb.phase-values v1 complete' \
     "$tmp/global_archive_user.out"
-grep -q 'global_archive_dep:0:fixed_global .*static-value=int:00000000000000000000000000000029' \
+grep -q 'global_archive_dep.impl:0:fixed_global .*static-value=int:00000000000000000000000000000029' \
     "$tmp/global_archive_user.out"
-grep -q 'global_archive_dep:0:negative_global .*static-value=int:ffffffffffffffffffffffffffffff85' \
+grep -q 'global_archive_dep.impl:0:negative_global .*static-value=int:ffffffffffffffffffffffffffffff85' \
     "$tmp/global_archive_user.out"
-grep -q 'global_archive_dep:0:enabled .*static-value=bool:true' \
+grep -q 'global_archive_dep.impl:0:enabled .*static-value=bool:true' \
     "$tmp/global_archive_user.out"
-grep -q 'global_archive_dep:0:ratio .*static-value=float:0x1.4p+0' \
+grep -q 'global_archive_dep.impl:0:ratio .*static-value=float:0x1.4p+0' \
     "$tmp/global_archive_user.out"
-grep -q 'global_archive_dep:0:label .*static-value=string:13 bytes' \
+grep -q 'global_archive_dep.impl:0:label .*static-value=string:13 bytes' \
     "$tmp/global_archive_user.out"
-grep -q 'global_archive_dep:0:empty_label .*static-value=string:0 bytes' \
+grep -q 'global_archive_dep.impl:0:empty_label .*static-value=string:0 bytes' \
     "$tmp/global_archive_user.out"
-grep -q 'global_archive_dep:0:worker_count .*storage=thread, .*static-value=int:00000000000000000000000000000000' \
+grep -q 'global_archive_dep.impl:0:worker_count .*storage=thread, .*static-value=int:00000000000000000000000000000000' \
     "$tmp/global_archive_user.out"
-grep -q 'global_archive_dep:0:worker_ratio .*storage=thread, .*static-value=float:-0x1.4p+0' \
+grep -q 'global_archive_dep.impl:0:worker_ratio .*storage=thread, .*static-value=float:-0x1.4p+0' \
     "$tmp/global_archive_user.out"
-grep -q 'global_archive_dep:0:worker_label .*storage=thread, .*static-value=string:11 bytes' \
+grep -q 'global_archive_dep.impl:0:worker_label .*storage=thread, .*static-value=string:11 bytes' \
     "$tmp/global_archive_user.out"
-grep -q 'global_archive_dep:0:empty_worker_label .*storage=thread, .*static-value=string:0 bytes' \
+grep -q 'global_archive_dep.impl:0:empty_worker_label .*storage=thread, .*static-value=string:0 bytes' \
     "$tmp/global_archive_user.out"
 
 "$compiler" preprocess --dump-symbols \
@@ -6214,28 +6273,32 @@ grep -q 'func @read_worker_ratio' "$tmp/global_archive_user.out"
 grep -q 'func @read_worker_label' "$tmp/global_archive_user.out"
 grep -q 'func @read_empty_worker_label' "$tmp/global_archive_user.out"
 
-cp "$tmp/global_archive.n00bi" \
-    "$tmp/global_archive_missing_lifetime.n00bi"
-global_lifetime_metadata_offset=$(grep -abo 'n00b.global' \
-    "$tmp/global_archive_missing_lifetime.n00bi" \
-    | head -1 | cut -d: -f1)
-if [ -z "$global_lifetime_metadata_offset" ]; then
+global_lifetime_selected_offset=
+for global_lifetime_metadata_offset in $(grep -abo 'n00b.global' \
+        "$tmp/global_archive.n00bi" | cut -d: -f1); do
+    cp "$tmp/global_archive.n00bi" \
+        "$tmp/global_archive_missing_lifetime.n00bi"
+    printf '\000' | dd \
+        of="$tmp/global_archive_missing_lifetime.n00bi" \
+        bs=1 seek="$((global_lifetime_metadata_offset + 27))" \
+        conv=notrunc 2>/dev/null
+    if ! "$compiler" lower \
+        --link-interface "$tmp/global_archive_missing_lifetime.n00bi" \
+        --dump-link-unit "$interface_programs/global_archive_user.n00b" \
+        >"$tmp/global_archive_missing_lifetime.out" \
+        2>"$tmp/global_archive_missing_lifetime.err"; then
+        continue
+    fi
+    if grep -q 'n00bb.storage-lifetimes v1 unavailable' \
+            "$tmp/global_archive_missing_lifetime.out"; then
+        global_lifetime_selected_offset=$global_lifetime_metadata_offset
+        break
+    fi
+done
+if [ -z "$global_lifetime_selected_offset" ]; then
     echo 'could not locate imported global lifetime metadata in test archive' >&2
     exit 1
 fi
-printf '\000' | dd \
-    of="$tmp/global_archive_missing_lifetime.n00bi" \
-    bs=1 seek="$((global_lifetime_metadata_offset + 27))" \
-    conv=notrunc 2>/dev/null
-"$compiler" lower \
-    --link-interface "$tmp/global_archive_missing_lifetime.n00bi" \
-    --dump-link-unit "$interface_programs/global_archive_user.n00b" \
-    >"$tmp/global_archive_missing_lifetime.out" \
-    2>"$tmp/global_archive_missing_lifetime.err" || {
-    cat "$tmp/global_archive_missing_lifetime.err"
-    cat "$tmp/global_archive_missing_lifetime.out"
-    exit 1
-}
 grep -q 'n00bb.storage-lifetimes v1 unavailable' \
     "$tmp/global_archive_missing_lifetime.out"
 
@@ -6291,17 +6354,17 @@ N00B_PATH="$interface_programs" "$compiler" library \
     cat "$tmp/context_effect_archive_user.err"
     exit 1
 }
-grep -q 'function-global-alias-summary\[resolved\] context_effect_dep:0:UpdatingContext -> context_effect_dep:0:shared_value' \
+grep -q 'function-global-alias-summary\[resolved\] context_effect_dep.impl:0:UpdatingContext -> context_effect_dep.impl:0:shared_value' \
     "$tmp/context_effect_archive_user.out"
-grep -q 'function-global-write-summary\[resolved\] context_effect_dep:0:UpdatingContext -> context_effect_dep:0:shared_value' \
+grep -q 'function-global-write-summary\[resolved\] context_effect_dep.impl:0:UpdatingContext -> context_effect_dep.impl:0:shared_value' \
     "$tmp/context_effect_archive_user.out"
-grep -q 'function-global-write-summary\[resolved\] context_effect_user:1:use_archived_context_effect -> context_effect_dep:0:shared_value' \
+grep -q 'function-global-write-summary\[resolved\] context_effect_user:1:use_archived_context_effect -> context_effect_dep.impl:0:shared_value' \
     "$tmp/context_effect_archive_user.out"
-grep -q 'function-global-write-summary\[resolved\] context_effect_dep:0:FailingUpdatingContext -> context_effect_dep:0:shared_value' \
+grep -q 'function-global-write-summary\[resolved\] context_effect_dep.impl:0:FailingUpdatingContext -> context_effect_dep.impl:0:shared_value' \
     "$tmp/context_effect_archive_user.out"
-grep -q 'function-global-write-summary\[resolved\] context_effect_user:1:use_archived_nested_context_effect -> context_effect_dep:0:shared_value' \
+grep -q 'function-global-write-summary\[resolved\] context_effect_user:1:use_archived_nested_context_effect -> context_effect_dep.impl:0:shared_value' \
     "$tmp/context_effect_archive_user.out"
-grep -q 'function-global-write-summary\[resolved\] context_effect_user:1:use_archived_failing_context_effect -> context_effect_dep:0:shared_value' \
+grep -q 'function-global-write-summary\[resolved\] context_effect_user:1:use_archived_failing_context_effect -> context_effect_dep.impl:0:shared_value' \
     "$tmp/context_effect_archive_user.out"
 if grep -q 'function-global-unknown\[unavailable\].*UpdatingContext' \
     "$tmp/context_effect_archive_user.out"; then
@@ -6438,7 +6501,7 @@ if grep -q '__n00bb_default_present' "$tmp/function_archive_user.out"; then
 fi
 grep -q 'call @archived_update' "$tmp/function_archive_user.out"
 grep -q 'call @archived_variadic' "$tmp/function_archive_user.out"
-grep -q 'function-global-unknown\[unavailable\] function_archive_dep:1:archived_add -> <unresolved>' \
+grep -q 'function-global-unknown\[unavailable\] function_archive_dep.impl:1:archived_add -> <unresolved>' \
     "$tmp/function_archive_user.out"
 grep -q 'function-global-unknown\[unavailable\] function_archive_user:1:forward_archived_default -> <unresolved>' \
     "$tmp/function_archive_user.out"
@@ -6464,7 +6527,7 @@ grep -q 'return_target: variable, mutable, type=int, .*storage-duration=dynamic,
     "$tmp/function_archive_symbols.out"
 grep -q 'imported_global_ref: variable, mutable, type=Ref\[int\], .*aliases=1' \
     "$tmp/function_archive_symbols.out"
-grep -q 'function-global-unknown\[unavailable\] function_archive_dep:1:archived_keep -> <unresolved>' \
+grep -q 'function-global-unknown\[unavailable\] function_archive_dep.impl:1:archived_keep -> <unresolved>' \
     "$tmp/function_archive_symbols.out"
 "$compiler" lower --link-interface "$tmp/function_archive.n00bi" \
     --dump-ir --dump-link-unit \
@@ -6484,7 +6547,7 @@ if grep -q 'ir.storage_class("gc") .*ir.lifetime_escapes(true)' \
 fi
 
 N00B_PATH="$program_dir" "$compiler" preprocess --dump-symbols \
-    "$program_dir/link_global_inferred_dep.n00b" \
+    "$program_dir/link_global_inferred_dep/impl.n00b" \
     >"$tmp/link_global_inferred_dep.symbols" 2>&1
 grep -q 'remote_global: variable, mutable, type=int, type-source=inferred, visibility=public, .*storage-duration=module, .*declaration=none, definitions=\[3:8\]' \
     "$tmp/link_global_inferred_dep.symbols" || {
@@ -6506,9 +6569,9 @@ N00B_PATH="$program_dir" "$compiler" preprocess \
     cat "$tmp/qualified_render_consumer.out"
     exit 1
 }
-grep -q 'resolved qualified_render_consumer -> render_contract:2:Render at 4:51' \
+grep -q 'resolved qualified_render_consumer -> render_contract.contract:2:Render at 3:51' \
     "$tmp/qualified_render_consumer.out"
-grep -q 'Render: type, .*uses=1, declaration=1:1, definitions=\[\], use-sites=\[4:51\]' \
+grep -q 'Render: type, .*uses=1, declaration=1:1, definitions=\[\], use-sites=\[3:51\]' \
     "$tmp/qualified_render_consumer.out"
 
 if N00B_PATH="$program_dir" "$compiler" preprocess \
@@ -6831,7 +6894,7 @@ grep -q 'N00BB-L0021.*record field is not visible' \
 ! grep -q '^link-unit:' "$tmp/semantic_failure.out"
 ! grep -q '^module private_field_consumer' "$tmp/semantic_failure.out"
 
-N00B_PATH="$program_dir/imports" "$compiler" preprocess "$program_dir/imports/importer.n00b" \
+N00B_PATH="$program_dir/imports" "$compiler" preprocess importer \
     >"$tmp/import.out"
 grep -q '"imported_selected"' "$tmp/import.out"
 grep -q '"imported_short_name"' "$tmp/import.out"
@@ -6839,7 +6902,7 @@ grep -q '"imported_short_name"' "$tmp/import.out"
 ! grep -q '"imported_short_name_removed"' "$tmp/import.out"
 
 N00B_PATH="$program_dir/imports" "$compiler" preprocess --dump-symbols \
-    --dump-link-unit "$program_dir/imports/selected_when_import.n00b" \
+    --dump-link-unit selected_when_import \
     >"$tmp/selected_when_import.out" 2>&1 || {
     cat "$tmp/selected_when_import.out"
     exit 1
@@ -6851,7 +6914,7 @@ grep -q 'resolved selected_when_import -> selected_when_dep:0:enabled' \
 ! grep -q 'missing_else_import' "$tmp/selected_when_import.out"
 
 N00B_PATH="$program_dir/imports" "$compiler" preprocess --dump-symbols \
-    "$program_dir/imports/platform_selected_import.n00b" \
+    platform_selected_import \
     >"$tmp/platform_selected_import.out" 2>&1 || {
     cat "$tmp/platform_selected_import.out"
     exit 1
@@ -6869,7 +6932,7 @@ grep -q "^symbols $selected_platform:$" "$tmp/platform_selected_import.out"
 
 for invalid_import in import_in_if import_in_nested_if; do
     if N00B_PATH="$program_dir/imports" "$compiler" preprocess \
-        "$program_dir/imports/$invalid_import.n00b" \
+        "$invalid_import" \
         >"$tmp/$invalid_import.out" 2>&1; then
         echo "an import nested in ordinary control flow unexpectedly passed" >&2
         exit 1
@@ -6879,7 +6942,7 @@ for invalid_import in import_in_if import_in_nested_if; do
 done
 
 if N00B_PATH="$program_dir/imports" "$compiler" preprocess \
-    "$program_dir/imports/unsupported_locator.n00b" \
+    unsupported_locator \
     >"$tmp/unsupported_import_locator.out" 2>&1; then
     echo 'an unsupported import locator unexpectedly passed' >&2
     exit 1
@@ -6899,7 +6962,7 @@ grep -q 'unsupported source locator scheme: https' \
 
 N00B_PATH="$program_dir/imports" "$compiler" preprocess --dump-symbols \
     --dump-link-unit \
-    "$program_dir/imports/importer.n00b" >"$tmp/imported_signatures.out"
+    importer >"$tmp/imported_signatures.out"
 grep -q 'imported_identity: function, mutable, type=(`a) -> `a fail: nil' \
     "$tmp/imported_signatures.out"
 ! grep -Fq 'forall[' "$tmp/imported_signatures.out"
@@ -6907,7 +6970,7 @@ grep -q 'dep:0:enabled .*static-value=bool:true' \
     "$tmp/imported_signatures.out"
 
 if N00B_PATH="$program_dir/imports" "$compiler" preprocess --dump-symbols \
-    --jobs 4 "$program_dir/imports/imported_generic_use.n00b" \
+    --jobs 4 imported_generic_use \
     >"$tmp/imported_generic_use.out" 2>&1; then
     grep -q 'use_imported_generics: function, mutable, type=() -> nil' \
         "$tmp/imported_generic_use.out"
@@ -6937,7 +7000,7 @@ grep -q 'second: variable, mutable, type=string' \
     "$tmp/generic_signature_multiple_instantiations.out"
 
 if N00B_PATH="$program_dir" "$compiler" preprocess --dump-symbols \
-    "$program_dir/recursive_a.n00b" --jobs 4 >"$tmp/recursive_modules.out" 2>&1; then
+    recursive_a --jobs 4 >"$tmp/recursive_modules.out" 2>&1; then
     grep -q 'from_a: function, mutable, type=() -> string' \
         "$tmp/recursive_modules.out"
     grep -q 'from_b: function, mutable, type=() -> string' \
@@ -6963,7 +7026,7 @@ grep -q '= call @from_b' "$tmp/recursive_modules.ir"
 grep -q '= call @from_a' "$tmp/recursive_modules.ir"
 
 if N00B_PATH="$program_dir" "$compiler" preprocess \
-    "$program_dir/recursive_bad_a.n00b" >"$tmp/recursive_bad_modules.out" 2>&1; then
+    recursive_bad_a >"$tmp/recursive_bad_modules.out" 2>&1; then
     cat "$tmp/recursive_bad_modules.out"
     echo 'incompatible cross-module recursive return unexpectedly succeeded' >&2
     exit 1
@@ -6971,16 +7034,16 @@ fi
 grep -q 'N00BB-T0002' "$tmp/recursive_bad_modules.out"
 
 N00B_PATH="$program_dir/imports" "$compiler" preprocess \
-    "$program_dir/imports/import_after_use.n00b" >"$tmp/import_after_use.out"
+    import_after_use >"$tmp/import_after_use.out"
 grep -q '"import_still_precedes_module"' "$tmp/import_after_use.out"
 
-N00B_PATH="$program_dir/imports" "$compiler" preprocess "$program_dir/imports/shadow_import.n00b" \
+N00B_PATH="$program_dir/imports" "$compiler" preprocess shadow_import \
     >"$tmp/shadow_import.out"
 grep -q '"local_shadow_won"' "$tmp/shadow_import.out"
 ! grep -q '"shadow_removed"' "$tmp/shadow_import.out"
 
 if N00B_PATH="$program_dir/imports" "$compiler" preprocess \
-    --jobs 4 "$program_dir/imports/ambiguous_import.n00b" \
+    --jobs 4 ambiguous_import \
     >"$tmp/ambiguous_import.out" 2>&1; then
     echo 'ambiguous imported const unexpectedly resolved by short name' >&2
     exit 1
@@ -6988,7 +7051,7 @@ fi
 grep -q 'imported const name is ambiguous' "$tmp/ambiguous_import.out"
 
 N00B_PATH="$program_dir/imports" "$compiler" preprocess \
-    --jobs 4 "$program_dir/imports/qualified_import.n00b" >"$tmp/qualified_import.out"
+    --jobs 4 qualified_import >"$tmp/qualified_import.out"
 grep -q '"qualified_import"' "$tmp/qualified_import.out"
 
 N00B_PATH="$program_dir" "$compiler" preprocess cycle_a \

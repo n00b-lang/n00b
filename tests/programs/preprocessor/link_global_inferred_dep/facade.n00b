@@ -1,0 +1,5 @@
+import link_global_inferred_dep.impl
+
+package link_global_inferred_dep {
+    export link_global_inferred_dep.impl.remote_global
+}

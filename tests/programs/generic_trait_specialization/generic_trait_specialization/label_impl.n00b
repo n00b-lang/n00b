@@ -1,4 +1,4 @@
-import contract
+import generic_trait_specialization.contract
 
 public type Label {
     payload: int

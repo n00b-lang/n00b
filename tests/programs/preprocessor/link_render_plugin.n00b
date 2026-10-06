@@ -1,2 +1,0 @@
-import link_render_contract
-public func render(self: int) -> int { return 7 }

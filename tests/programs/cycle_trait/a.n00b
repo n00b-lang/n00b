@@ -1,5 +1,5 @@
-import cycle_trait_b
-import cycle_trait_contract
+import cycle_trait.b
+import cycle_trait.contract
 
 public type CycleWidget {
 }

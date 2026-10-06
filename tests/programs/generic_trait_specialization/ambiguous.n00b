@@ -1,8 +1,6 @@
-import contract
-import ambiguous_left
-import ambiguous_right
+import generic_trait_specialization
 
-func generic_render(item: `T) -> int where `T: contract.Render {
+func generic_render(item: `T) -> int where `T: generic_trait_specialization.Render {
     return item.render()
 }
 

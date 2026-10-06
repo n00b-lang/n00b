@@ -1,6 +1,6 @@
 import trait_archive_render_dep
 import trait_archive_measure_dep
-import trait_archive_other_impl
+import trait_archive_other
 
 type ArchiveWidget {
 }
@@ -17,7 +17,7 @@ func use_archived_render(item: ArchiveWidget) -> int {
     return trait_archive_render_dep.archived_render(item)
 }
 
-func use_archived_render_again(item: trait_archive_other_impl.ArchiveOther) -> int {
+func use_archived_render_again(item: trait_archive_other.ArchiveOther) -> int {
     return trait_archive_render_dep.archived_render(item)
 }
 
@@ -25,7 +25,7 @@ func use_archived_measure(item: ArchiveWidget) -> int fail: string {
     return trait_archive_measure_dep.archived_measure(item)!
 }
 
-func use_archived_measure_again(item: trait_archive_other_impl.ArchiveOther) -> int fail: string {
+func use_archived_measure_again(item: trait_archive_other.ArchiveOther) -> int fail: string {
     return trait_archive_measure_dep.archived_measure(item)!
 }
 

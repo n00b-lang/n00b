@@ -1,4 +1,4 @@
-import contract
+import generic_trait_specialization.contract
 
 public func render(self: Dict[int, `V]) -> int {
     return 1

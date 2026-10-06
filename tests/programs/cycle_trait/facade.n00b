@@ -1,0 +1,8 @@
+import cycle_trait.a
+import cycle_trait.b
+import cycle_trait.contract
+
+package cycle_trait {
+    export cycle_trait.a.CycleWidget
+    export cycle_trait.b.dispatch
+}
