@@ -37,8 +37,10 @@
                    | <expression-stmt>
                    | <alias-stmt>
                    | <type-decl>
+                   | <record-decl>
                    | <variant-decl>
                    | <trait-decl>
+                   | <package-decl>
 
 <body> @scope("block") ::= <block-start> <body-stmts>? <block-end>
 <block> ::= <body>
@@ -66,6 +68,7 @@
                          | <labeled-switch>
                          | <assert-stmt>
                          | <import-stmt>
+                         | <export-stmt>
                          | <assign-stmt>
                          | <binop-assign-stmt>
                          | <expression-stmt>
@@ -178,9 +181,10 @@
 <alias-stmt> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
        <member-visibility>? %"alias" %IDENTIFIER %"=" <type-spec>
      | <member-visibility>? %"type" %IDENTIFIER %"=" <type-spec>
+     | <member-visibility>? %"record" %IDENTIFIER %"=" <type-spec>
 
-<context-def> @scope("context", $1) @declares($1) ::=
-       %"context" %IDENTIFIER <param-decl> <context-spec> <context-body>
+<context-def> @scope("context", $2) @declares($2) ::=
+       <member-visibility>? %"context" %IDENTIFIER <param-decl> <context-spec> <context-body>
 
 <context-spec> ::= <provides-clause>? <error-type>?
 <provides-clause> ::= %"provides" %":" <type-spec>
@@ -264,15 +268,21 @@
 
 <import-stmt> @declares($1, "module") ::= %"import" <member-chain> (%"from" %STRING_LIT)?
 
+<package-decl> ::= %"package" <dotted-name> <package-body>
+<package-body> ::= <block-start> <package-items>? <block-end>
+<package-items> ::= <package-item> (<eos>+ <package-item>)*
+<package-item> ::= <export-stmt> | <when-stmt>
+<export-stmt> ::= %"export" <dotted-name> (<export-alias>)?
+<export-alias> ::= %"as" %IDENTIFIER
+<dotted-name> ::= <dotted-name> %"." %IDENTIFIER | %IDENTIFIER
+
 <variable-decl> ::= <variable-visibility>? <declaration-prefix> <sym-decl-list>
 
 <variable-visibility> @visibility("public") ::= %"public"
 <variable-visibility> @visibility("private") ::= %"private"
-<variable-visibility> @visibility("package") ::= %"package"
 
 <visible-inferred-assign> @visibility("public") ::= %"public" <assign-stmt>
 <visible-inferred-assign> @visibility("private") ::= %"private" <assign-stmt>
-<visible-inferred-assign> @visibility("package") ::= %"package" <assign-stmt>
 
 <declaration-prefix> ::= <storage-class>? <binding-kind>
 <storage-class> ::= %"thread"
@@ -297,14 +307,11 @@
 
 <member-visibility> @visibility("public") ::= %"public"
 <member-visibility> @visibility("private") ::= %"private"
-<member-visibility> @visibility("package") ::= %"package"
-<member-visibility> @visibility("opaque") ::= %"opaque"
 
 <func-visibility> @visibility("public") ::= %"public"
 <func-visibility> @visibility("private") ::= %"private"
-<func-visibility> @visibility("package") ::= %"package"
 
-<func-prelude> @visibility("protected") ::= %"func"
+<func-prelude> ::= %"func"
 <func-prelude> ::= <func-visibility> %"func"
 <func-type-signature> ::= <param-decl> <function-result>? <where-clause>?
 
@@ -692,6 +699,9 @@
 
 <type-decl> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
        <member-visibility>? %"type" %IDENTIFIER <type-body>
+
+<record-decl> @namespace("type") @scope("record", $2) @type($2) @exposes ::=
+       <member-visibility>? %"record" %IDENTIFIER <type-body>
 
 <type-body> ::= <block-start> <type-decl-spec-list> <block-end>
 <type-decl-spec-list> ::= (<type-decl-one> (<eos>+ <type-decl-one>)*)?

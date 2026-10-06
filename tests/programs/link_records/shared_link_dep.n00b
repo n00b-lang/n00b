@@ -1,7 +1,0 @@
-var shared_link_global: int = 7
-var shared_context_global: int = 11
-public func shared_link_value() -> int { return shared_link_global }
-context SharedLinkContext() provides: int {
-    enter() { return shared_context_global }
-    ensure(guard) { shared_context_global = 0 }
-}

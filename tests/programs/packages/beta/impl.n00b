@@ -1,0 +1,5 @@
+public const answer: int = 7
+
+public func read() -> int {
+    return answer
+}

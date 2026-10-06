@@ -1,0 +1,6 @@
+import return_alias_recursive
+
+func use_return_alias() {
+    var target: int = 1
+    var result = return_alias_recursive.from_a(ref target, true)
+}

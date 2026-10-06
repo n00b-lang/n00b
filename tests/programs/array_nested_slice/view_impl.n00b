@@ -1,0 +1,5 @@
+import array_nested_slice.contract
+
+public func __slice(self: View[int], start_ix: int = 0, end_ix: int = -1) -> View[int] {
+    return self
+}

@@ -1,0 +1,5 @@
+import shape
+
+func identity(point: shape.Point) -> shape.Point {
+    return point
+}

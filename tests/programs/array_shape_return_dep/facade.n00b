@@ -1,0 +1,5 @@
+import array_shape_return_dep.impl
+
+package array_shape_return_dep {
+    export array_shape_return_dep.impl.remote_return
+}

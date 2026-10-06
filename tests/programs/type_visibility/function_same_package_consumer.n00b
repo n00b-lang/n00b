@@ -1,2 +1,2 @@
-import functions_dep
-func accept() { functions_dep.package_function() }
+import functions_dep.impl
+func accept() { functions_dep.impl.package_function() }

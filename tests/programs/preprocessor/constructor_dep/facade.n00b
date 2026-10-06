@@ -1,0 +1,5 @@
+import constructor_dep.impl
+
+package constructor_dep {
+    export constructor_dep.impl.ImportedRecord
+}

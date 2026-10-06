@@ -1,6 +1,4 @@
-import array_nested_slice_contract
-import array_nested_slice_array_impl
-import array_nested_slice_view_impl
+import array_nested_slice
 
 func nested_view(items: Array[int]) -> View[int] {
     var first_view: View[int] = items [:]

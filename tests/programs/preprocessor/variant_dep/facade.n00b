@@ -1,0 +1,3 @@
+import variant_dep.impl
+
+package variant_dep { export variant_dep.impl }

@@ -1,0 +1,3 @@
+import public_dep.impl
+
+package public_dep { export public_dep.impl }

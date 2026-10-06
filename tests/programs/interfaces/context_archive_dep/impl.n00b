@@ -1,0 +1,6 @@
+public context ArchiveContext(id: int, derived: int = id + 1) provides: int fail: int {
+    enter() { return derived }
+    exit(guard) { fail guard }
+    error(problem) {}
+    ensure(guard) {}
+}

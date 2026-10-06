@@ -1,0 +1,5 @@
+import alpha.impl
+
+package alpha {
+    export alpha.impl.answer
+}

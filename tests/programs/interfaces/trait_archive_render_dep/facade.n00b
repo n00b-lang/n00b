@@ -1,0 +1,3 @@
+import trait_archive_render_dep.impl
+
+package trait_archive_render_dep { export trait_archive_render_dep.impl }

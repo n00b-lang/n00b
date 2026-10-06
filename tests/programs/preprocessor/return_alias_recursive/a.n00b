@@ -1,0 +1,6 @@
+import return_alias_recursive.b
+
+public func from_a(item_ref, again: bool) {
+    if again { return return_alias_recursive.b.from_b(item_ref, false) }
+    else { return item_ref }
+}

@@ -15,6 +15,7 @@
 #define N00BB_PATH_SEP '\\'
 #define N00BB_LIST_SEP ';'
 #else
+#include <dirent.h>
 #include <unistd.h>
 #define N00BB_PATH_SEP '/'
 #define N00BB_LIST_SEP ':'
@@ -42,6 +43,107 @@ typedef struct {
 struct n00bb_resolver_t {
     core_list_t(n00bb_root_t) roots;
 };
+
+static char *join_path(const char *a, const char *b);
+#ifdef _WIN32
+static char *wide_to_utf8(const wchar_t *wide, int length);
+static wchar_t *utf8_to_wide(const char *utf8);
+#endif
+
+static bool
+emit_discovered_module(const char *relative,
+                       core_module_discovery_emit_fn emit,
+                       void *emit_context)
+{
+    size_t length = strlen(relative);
+    if (length <= 5 || strcmp(relative + length - 5, ".n00b")) return true;
+    core_buffer_t identifier = {0};
+    for (size_t i = 0; i < length - 5; i++) {
+        char c = relative[i];
+        core_buffer_putc(&identifier,
+            c == '/' || c == '\\' ? '.' : c);
+    }
+    core_module_spec_t candidate = {0};
+    bool ok = identifier.byte_len
+        && core_module_spec_init(&candidate,
+            core_string_borrow(identifier.data, identifier.byte_len))
+        && emit(emit_context, &candidate);
+    core_module_spec_release(&candidate);
+    core_buffer_release(&identifier);
+    return ok;
+}
+
+#ifdef _WIN32
+static bool
+discover_directory(const char *root, const char *relative,
+                   core_module_discovery_emit_fn emit,
+                   void *emit_context, bool *found)
+{
+    char *directory = *relative ? join_path(root, relative) : core_strdup(root);
+    char *pattern = join_path(directory, "*");
+    wchar_t *wide = utf8_to_wide(pattern);
+    WIN32_FIND_DATAW data;
+    HANDLE search = wide ? FindFirstFileW(wide, &data) : INVALID_HANDLE_VALUE;
+    core_free(wide);
+    core_free(pattern);
+    core_free(directory);
+    if (search == INVALID_HANDLE_VALUE) return true;
+    bool ok = true;
+    do {
+        if (!wcscmp(data.cFileName, L".") || !wcscmp(data.cFileName, L".."))
+            continue;
+        char *name = wide_to_utf8(data.cFileName, -1);
+        if (!name) { ok = false; break; }
+        char *child = *relative ? join_path(relative, name) : core_strdup(name);
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            ok = !(data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+                && discover_directory(root, child, emit, emit_context, found);
+        else if (!(data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+                 && strlen(child) > 5
+                 && !strcmp(child + strlen(child) - 5, ".n00b")) {
+            *found = true;
+            ok = emit_discovered_module(child, emit, emit_context);
+        }
+        core_free(child);
+        core_free(name);
+    } while (ok && FindNextFileW(search, &data));
+    FindClose(search);
+    return ok;
+}
+#else
+static bool
+discover_directory(const char *root, const char *relative,
+                   core_module_discovery_emit_fn emit,
+                   void *emit_context, bool *found)
+{
+    char *directory = *relative ? join_path(root, relative) : core_strdup(root);
+    DIR *dir = opendir(directory);
+    if (!dir) { core_free(directory); return true; }
+    bool ok = true;
+    struct dirent *entry;
+    while (ok && (entry = readdir(dir))) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        char *child = *relative
+            ? join_path(relative, entry->d_name) : core_strdup(entry->d_name);
+        char *path = join_path(root, child);
+        struct stat info;
+        if (lstat(path, &info) == 0 && S_ISDIR(info.st_mode))
+            ok = discover_directory(root, child, emit, emit_context, found);
+        else if (lstat(path, &info) == 0 && S_ISREG(info.st_mode)
+                 && strlen(child) > 5
+                 && !strcmp(child + strlen(child) - 5, ".n00b")) {
+            *found = true;
+            ok = emit_discovered_module(child, emit, emit_context);
+        }
+        core_free(path);
+        core_free(child);
+    }
+    closedir(dir);
+    core_free(directory);
+    return ok;
+}
+#endif
 
 #ifdef _WIN32
 static char *
@@ -549,6 +651,43 @@ resolve_file(void *context, const core_module_spec_t *module,
     return CORE_MODULE_NOT_FOUND;
 }
 
+static core_module_resolve_status_t
+discover_files(void *context, const core_module_spec_t *module,
+               core_module_discovery_emit_fn emit, void *emit_context)
+{
+    n00bb_resolver_t *resolver = context;
+    if (!resolver || !module || !emit) return CORE_MODULE_RESOLVE_ERROR;
+    size_t root_len = 0;
+    while (root_len < module->identifier.u8_bytes
+           && module->identifier.data[root_len] != '.') root_len++;
+    if (!root_len) return CORE_MODULE_RESOLVE_ERROR;
+    char *package_root = core_strndup(module->identifier.data, root_len);
+    bool found = false;
+    for (size_t i = 0; i < resolver->roots.len; i++)
+        if (!discover_directory(resolver->roots.data[i].path.data,
+                                package_root, emit,
+                                emit_context, &found))
+            {
+                core_free(package_root);
+                return CORE_MODULE_RESOLVE_ERROR;
+            }
+    core_free(package_root);
+    return found ? CORE_MODULE_RESOLVED : CORE_MODULE_NOT_FOUND;
+}
+
+bool
+n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
+                                 core_string_t identifier)
+{
+    core_module_spec_t module = {0};
+    core_source_file_t source = {0};
+    bool found = core_module_spec_init(&module, identifier)
+        && resolve_file(resolver, &module, &source) == CORE_MODULE_RESOLVED;
+    core_source_file_release(&source);
+    core_module_spec_release(&module);
+    return found;
+}
+
 core_module_resolve_status_t
 n00bb_locate_operand(n00bb_resolver_t *resolver, const char *operand,
                     core_module_spec_t *module_out,
@@ -640,5 +779,6 @@ core_module_resolver_t
 n00bb_resolver_interface(n00bb_resolver_t *resolver)
 {
     return (core_module_resolver_t){.resolve = resolve_file,
+                                    .discover = discover_files,
                                     .context = resolver};
 }

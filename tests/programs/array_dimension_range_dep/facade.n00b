@@ -1,0 +1,5 @@
+import array_dimension_range_dep.impl
+
+package array_dimension_range_dep {
+    export array_dimension_range_dep.impl.extent
+}

@@ -1,0 +1,3 @@
+import array_shape_chain_middle.impl
+
+package array_shape_chain_middle { export array_shape_chain_middle.impl }

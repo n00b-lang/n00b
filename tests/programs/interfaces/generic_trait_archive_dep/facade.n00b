@@ -1,0 +1,3 @@
+import generic_trait_archive_dep.impl
+
+package generic_trait_archive_dep { export generic_trait_archive_dep.impl }

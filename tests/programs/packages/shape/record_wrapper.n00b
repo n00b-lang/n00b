@@ -1,0 +1,1 @@
+record Point_Copy = shape.impl.Point

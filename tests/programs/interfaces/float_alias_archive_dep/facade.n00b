@@ -1,0 +1,5 @@
+import float_alias_archive_dep.impl
+
+package float_alias_archive_dep {
+    export float_alias_archive_dep.impl
+}

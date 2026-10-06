@@ -37,9 +37,14 @@ main(int argc, char **argv)
         && th_env_register_value(environment,
             "required_storage_dep.slot", "slot", "required_storage_dep",
             "default", TH_ENV_PUBLIC, integer)
-        && th_env_register_metadata(environment, TH_ENV_METADATA_VALUE,
+        && th_env_register_metadata(environment,
+            TH_ENV_METADATA_VALUE,
             "required_storage_dep.slot", "n00b.global", 1,
             payload.data, payload.byte_len)
+        && th_env_register_metadata(environment,
+            TH_ENV_METADATA_ENVIRONMENT,
+            "required_storage_dep", "n00b.package-interface", 1,
+            "default", sizeof("default"))
         && th_env_freeze(environment)
         && th_env_save(environment, argv[1], 0, &error)
         && error == CORE_OBJECT_ARCHIVE_OK;

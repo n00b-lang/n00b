@@ -1,2 +1,2 @@
-import functions_dep
-func accept() { functions_dep.private_function() }
+import functions_dep.impl
+func accept() { functions_dep.impl.private_function() }

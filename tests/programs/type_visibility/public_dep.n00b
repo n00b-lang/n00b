@@ -1,4 +1,0 @@
-public type PublicRecord {
-    field: int
-    private secret: int
-}

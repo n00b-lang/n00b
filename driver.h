@@ -22,4 +22,6 @@ core_string_t n00bb_resolver_search_description(
 bool n00bb_resolver_supports_locator(n00bb_resolver_t *resolver,
                                      const char *operand,
                                      core_string_t *unsupported_scheme);
+bool n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
+                                      core_string_t identifier);
 char *n00bb_grammar_path(const char *argv0);

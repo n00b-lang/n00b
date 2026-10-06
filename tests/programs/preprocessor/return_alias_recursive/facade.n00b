@@ -1,0 +1,7 @@
+import return_alias_recursive.a
+import return_alias_recursive.b
+
+package return_alias_recursive {
+    export return_alias_recursive.a.from_a
+    export return_alias_recursive.b.from_b
+}

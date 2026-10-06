@@ -1,0 +1,3 @@
+import function_archive_wrapper.impl
+
+package function_archive_wrapper { export function_archive_wrapper.impl }

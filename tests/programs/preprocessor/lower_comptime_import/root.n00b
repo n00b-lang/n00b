@@ -1,0 +1,6 @@
+import lower_comptime_import.leaf
+import lower_comptime_import.middle
+
+comptime {
+    var imported_value: int = lower_comptime_import.middle.compile_value(3)
+}

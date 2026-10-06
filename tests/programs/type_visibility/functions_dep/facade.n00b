@@ -1,0 +1,3 @@
+import functions_dep.impl
+
+package functions_dep { export functions_dep.impl }

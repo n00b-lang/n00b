@@ -4,11 +4,11 @@ type CompletePayload {
 }
 
 variant IncompletePayloadValue {
-    record: CompletePayload
+    payload: CompletePayload
 }
 
 func incomplete_payload() -> IncompletePayloadValue {
     var item: IncompletePayloadValue = new[IncompletePayloadValue]()
-    item.record = (first = 1)
+    item.payload = (first = 1)
     return item
 }

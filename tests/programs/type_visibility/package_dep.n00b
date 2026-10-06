@@ -1,1 +1,1 @@
-package type PackageRecord { field: int }
+public type PackageRecord { field: int }

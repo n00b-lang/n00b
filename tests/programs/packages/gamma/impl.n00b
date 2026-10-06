@@ -1,0 +1,3 @@
+public func original() -> int {
+    return 9
+}

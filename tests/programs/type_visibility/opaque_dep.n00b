@@ -1,3 +1,0 @@
-opaque type OpaqueRecord {
-    hidden: int
-}

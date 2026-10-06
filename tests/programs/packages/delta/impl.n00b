@@ -1,0 +1,2 @@
+public const selected: int = 11
+public const rejected: int = 12

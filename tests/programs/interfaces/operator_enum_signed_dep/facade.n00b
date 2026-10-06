@@ -1,0 +1,3 @@
+import operator_enum_signed_dep.impl
+
+package operator_enum_signed_dep { export operator_enum_signed_dep.impl }

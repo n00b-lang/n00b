@@ -1,0 +1,5 @@
+import render_contract.impl
+
+package render_contract {
+    export render_contract.impl
+}

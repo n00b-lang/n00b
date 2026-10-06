@@ -1,0 +1,3 @@
+import static_sequence_archive_dep.impl
+
+package static_sequence_archive_dep { export static_sequence_archive_dep.impl }

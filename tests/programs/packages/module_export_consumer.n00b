@@ -1,0 +1,5 @@
+import beta
+
+func read_answer() -> int {
+    return beta.read()
+}
