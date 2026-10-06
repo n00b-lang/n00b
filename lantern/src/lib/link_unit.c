@@ -962,10 +962,11 @@ core_link_unit_scc_member(core_link_unit_t *link, size_t scc_index,
     return link->sccs[scc_index].members[member_index];
 }
 
-static core_link_declaration_t *
-find_declaration(const core_link_unit_t *link, core_string_t module,
-                core_string_t key)
+core_link_declaration_t *
+core_link_unit_find_declaration(const core_link_unit_t *link,
+                                core_string_t module, core_string_t key)
 {
+    if (!link) return nullptr;
     for (size_t i = 0; i < link->declaration_count; i++) {
         core_link_declaration_t *decl = link->declarations[i];
         if (core_string_eq(decl->module, module)
@@ -1037,7 +1038,8 @@ register_declaration(core_link_unit_t *link, core_string_t module,
     if (!link || !module.data || !module.u8_bytes || !key.data || !key.u8_bytes
         || !metadata || !payload_args_valid(ownership, free_fn)) return false;
 
-    core_link_declaration_t *decl = find_declaration(link, module, key);
+    core_link_declaration_t *decl = core_link_unit_find_declaration(
+        link, module, key);
     if (!decl) {
         decl = core_alloc(core_link_declaration_t);
         *decl = (core_link_declaration_t){
@@ -1207,6 +1209,20 @@ core_link_unit_define_external_typed(
 {
     return register_declaration(link, module, nullptr, true, declaration_key,
         metadata, true, false, payload, ownership, free_fn, out);
+}
+
+bool
+core_link_unit_redeclare_external_typed(
+    core_link_unit_t *link, core_string_t module,
+    core_string_t declaration_key,
+    const core_link_declaration_metadata_t *metadata,
+    core_link_declaration_t **out)
+{
+    if (!core_link_unit_find_declaration(link, module, declaration_key))
+        return false;
+    return register_declaration(link, module, nullptr, true, declaration_key,
+        metadata, false, false, nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr,
+        out);
 }
 
 bool
@@ -1563,7 +1579,7 @@ core_link_unit_validate(core_link_unit_t *link)
             ref->target = nullptr;
             continue;
         }
-        ref->target = find_declaration(link, ref->target_module,
+        ref->target = core_link_unit_find_declaration(link, ref->target_module,
                                        ref->declaration_key);
         if (!ref->target) {
             link_report_at(link, ref->referrer, ref->source_location,

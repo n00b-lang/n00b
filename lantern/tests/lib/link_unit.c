@@ -160,6 +160,20 @@ test_link_unit_closure_and_linkage(void)
               CORE_LINK_PAYLOAD_BORROWED, nullptr, &external)
               && external && core_link_declaration_is_external(external)
               && !core_link_declaration_owner(external));
+    core_link_declaration_metadata_t external_alias_metadata = {
+        .contract = &library_trait,
+    };
+    core_link_declaration_t *external_alias = nullptr;
+    check("compatible external aliases retain one declaration handle",
+          core_link_unit_find_declaration(link,
+              CORE_STRING_STATIC("pkg.library"),
+              CORE_STRING_STATIC("trait.Format")) == external
+              && core_link_unit_redeclare_external_typed(link,
+                  CORE_STRING_STATIC("pkg.library"),
+                  CORE_STRING_STATIC("trait.Format"),
+                  &external_alias_metadata, &external_alias)
+              && external_alias == external
+              && core_link_declaration_is_defined(external_alias));
     core_link_reference_t *to_library = nullptr;
     check("references resolve against linked library contributions",
           core_link_unit_reference(link, &root_a,

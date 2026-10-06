@@ -202,6 +202,16 @@ bool core_link_unit_define_external_typed(
     const core_link_declaration_metadata_t *metadata, void *payload,
     core_link_payload_ownership_t ownership,
     core_link_payload_free_fn free_fn, core_link_declaration_t **out);
+/* Add a compatible declaration site for an external identity already known
+ * to the link unit without supplying another definition. */
+bool core_link_unit_redeclare_external_typed(
+    core_link_unit_t *link, core_string_t module,
+    core_string_t declaration_key,
+    const core_link_declaration_metadata_t *metadata,
+    core_link_declaration_t **out);
+core_link_declaration_t *core_link_unit_find_declaration(
+    const core_link_unit_t *link, core_string_t module,
+    core_string_t declaration_key);
 /* Records an unresolved external symbol requirement. It is valid at link-unit
  * validation, but remains distinguishable from a supplied definition. */
 bool core_link_unit_require_external(
