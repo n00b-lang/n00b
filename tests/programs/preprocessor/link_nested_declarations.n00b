@@ -1,6 +1,6 @@
 public enum Color {
     red,
-    green: 2
+    green = 2
 }
 public variant Value {
     some: int

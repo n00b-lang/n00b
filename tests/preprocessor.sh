@@ -4888,6 +4888,13 @@ if "$compiler" lower \
 fi
 grep -q 'enum item value must be an integer literal' \
     "$tmp/operator_enum_noninteger_rejected.out"
+if "$compiler" parse \
+    "$script_dir/programs/enum_colon_rejected.n00b" \
+    >"$tmp/enum_colon_rejected.out" 2>&1; then
+    echo 'enum accepted a colon initializer' >&2
+    exit 1
+fi
+grep -q 'N00BB-P0001.*syntax error' "$tmp/enum_colon_rejected.out"
 "$compiler" library --emit-interface "$tmp/operator_enum_signed.n00bi" \
     "$script_dir/programs/interfaces/operator_enum_signed_dep.n00b" \
     >"$tmp/operator_enum_signed_archive.out" 2>&1 || {

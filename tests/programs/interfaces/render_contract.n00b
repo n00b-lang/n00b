@@ -17,7 +17,7 @@ public variant ArchivedValue {
 
 public enum ArchivedColor {
     red,
-    green: 2
+    green = 2
 }
 
 public type RestrictedPoint {

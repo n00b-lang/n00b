@@ -1,1 +1,1 @@
-enum Invalid { item: -1.5 }
+enum Invalid { item = -1.5 }

@@ -1,0 +1,3 @@
+enum Invalid {
+    item: 1
+}

@@ -1,6 +1,6 @@
 enum Signed {
-    negative: -7, following, zero: -0, positive: 7,
-    before_zero: -1, across_zero, after_zero
+    negative = -7, following, zero = -0, positive = 7,
+    before_zero = -1, across_zero, after_zero
 }
 
 func negative() -> Signed {

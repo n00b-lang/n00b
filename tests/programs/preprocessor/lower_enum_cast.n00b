@@ -1,5 +1,5 @@
-enum Small { zero, two: 2 }
-enum Signed { negative: -2, positive: 2 }
+enum Small { zero, two = 2 }
+enum Signed { negative = -2, positive = 2 }
 
 func widen(value: Small) -> u8 {
     return cast[u8] value

@@ -374,9 +374,7 @@
 <enum-item> @declares($0) ::= %IDENTIFIER <enum-value>
 <enum-item> @declares($0) ::= %IDENTIFIER
 
-<enum-value> ::= %":" <simple-lit>
-               | %"=" <simple-lit>
-               | %":" %"-" <simple-lit>
+<enum-value> ::= %"=" <simple-lit>
                | %"=" %"-" <simple-lit>
 
 <flagset-stmt> @namespace("type") @scope("flagset", $1) @type($1) @exposes ::=
