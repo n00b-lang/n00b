@@ -1,0 +1,4 @@
+flagset DuplicateFlags {
+    first,
+    same = first,
+}

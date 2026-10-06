@@ -7280,3 +7280,51 @@ if "$compiler" parse "$script_dir/programs/comment_region_not_standalone.n00b" \
 fi
 grep -q 'region anchor must be the only non-whitespace text on its line' \
     "$tmp/comment_region_not_standalone.err"
+
+"$compiler" lower --dump-ir "$script_dir/programs/flagset_operators.n00b" \
+    >"$tmp/flagset_operators.ir" 2>"$tmp/flagset_operators.err" || {
+    cat "$tmp/flagset_operators.err"
+    exit 1
+}
+for operation in union difference intersection xor complement is_empty; do
+    grep -q "= bitset.$operation" "$tmp/flagset_operators.ir"
+done
+grep -q 'bitset.const "nil", 0' "$tmp/flagset_operators.ir"
+grep -q 'N00BB-FLAGSET-OR' "$tmp/flagset_operators.err"
+
+"$compiler" lower --dump-ir "$script_dir/programs/flagset_fields.n00b" \
+    >"$tmp/flagset_fields.ir" 2>"$tmp/flagset_fields.err" || {
+    cat "$tmp/flagset_fields.err"
+    exit 1
+}
+grep -q 'bitset.contains' "$tmp/flagset_fields.ir"
+grep -q 'bitset.set' "$tmp/flagset_fields.ir"
+grep -q 'bitset.value trap' "$tmp/flagset_fields.ir"
+grep -q 'bitset.from_value trap' "$tmp/flagset_fields.ir"
+grep -q 'N00BB-FLAGSET-COMPOSITE-WRITE' "$tmp/flagset_fields.err"
+
+for invalid in flagset_duplicate_mask flagset_forward_reference \
+    flagset_too_many; do
+    if "$compiler" lower "$script_dir/programs/$invalid.n00b" \
+        >"$tmp/$invalid.out" 2>"$tmp/$invalid.err"; then
+        echo "$invalid unexpectedly compiled" >&2
+        exit 1
+    fi
+    grep -q 'invalid flagset declaration' "$tmp/$invalid.err"
+done
+
+"$compiler" library --emit-interface "$tmp/flagset_archive.n00bi" \
+    "$interface_programs/flagset_archive_dep.n00b" \
+    >"$tmp/flagset_archive.out" 2>"$tmp/flagset_archive.err" || {
+    cat "$tmp/flagset_archive.err"
+    exit 1
+}
+"$compiler" lower --link-interface "$tmp/flagset_archive.n00bi" --dump-ir \
+    "$interface_programs/flagset_archive_user.n00b" \
+    >"$tmp/flagset_archive_user.ir" \
+    2>"$tmp/flagset_archive_user.err" || {
+    cat "$tmp/flagset_archive_user.err"
+    exit 1
+}
+grep -q 'bitset.const "read_write", 3' "$tmp/flagset_archive_user.ir"
+grep -q 'bitset.contains' "$tmp/flagset_archive_user.ir"

@@ -1,0 +1,14 @@
+flagset FilePerms {
+    read,
+    write,
+    read_write = read + write,
+}
+
+var permissions: FilePerms = FilePerms.read_write
+permissions.read = false
+permissions.read_write = true
+var can_read: bool = permissions.read
+var can_write_both: bool = permissions.read_write
+var bits: u8 = cast[u8] permissions
+var restored: FilePerms = cast[FilePerms] bits
+var defaulted: FilePerms = new[FilePerms]()

@@ -12,6 +12,7 @@
 <other-top-stmts> ::= <eos>* <top-level-stmt> (<eos>+ <top-level-stmt>)*
 
 <top-level-stmt> ::=  <enum-stmt>
+                   | <flagset-stmt>
                    | <if-stmt>
                    | <for-stmt>
                    | <while-stmt>
@@ -378,6 +379,32 @@
                | %":" %"-" <simple-lit>
                | %"=" %"-" <simple-lit>
 
+<flagset-stmt> @namespace("type") @scope("flagset", $1) @type($1) @exposes ::=
+    <flagset-prefix> %IDENTIFIER <block-start> <flagset-items> <block-end>
+
+<flagset-prefix> ::= <member-visibility>? %"flagset"
+
+<flagset-items> ::= <flagset-item> (<eos>* %"," <eos>* <flagset-item>)* (<eos>* %",")?
+
+<flagset-item> @declares($0) ::= %IDENTIFIER
+<flagset-item> @declares($0) ::= %IDENTIFIER %"=" <flagset-value>
+
+<flagset-value> ::= <flagset-union>
+<flagset-union> ::= <flagset-union> %"+" <flagset-xor>
+                  | <flagset-union> %"-" <flagset-xor>
+                  | <flagset-union> %"|" <flagset-xor>
+                  | <flagset-xor>
+<flagset-xor> ::= <flagset-xor> %"^" <flagset-intersection>
+                | <flagset-intersection>
+<flagset-intersection> ::= <flagset-intersection> %"&" <flagset-unary>
+                         | <flagset-unary>
+<flagset-unary> ::= %"~" <flagset-unary>
+                  | <flagset-primary>
+<flagset-primary> ::= %"nil"
+                    | <flagset-name>
+                    | %"(" <flagset-value> %")"
+<flagset-name> @varref($0) ::= %IDENTIFIER
+
 <assign-stmt> @assigns($0, $2) ::= <expression> <assign-op> <expression>
 
 <binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __add)") ::= <expression> %"+=" <expression>
@@ -436,6 +463,7 @@
 <mul-expr> @emit("identity", $0) ::= <unary-expr>
 
 <unary-expr> @emit("bool_not", $1) @infer("bool unify method_return($1, __not)") ::= %"!" <unary-expr>
+<unary-expr> @emit("flagset_complement", $1) @infer("$1") ::= %"~" <unary-expr>
 <unary-expr> @emit("negate", $1) @infer("method_return($1, __negate)") ::= %"-" <unary-expr>
 <unary-expr> @emit("identity", $1) @infer("$1") ::= %"+" <unary-expr>
 <unary-expr> @operator("ref") @infer("ref[$1]") ::= %"ref" <unary-expr>

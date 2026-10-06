@@ -662,7 +662,14 @@ static bool simple_identifier_expression(parse_grammar_t *grammar,
                                          core_string_t *name);
 static parse_sym_entry_t *direct_ref_target(parse_grammar_t *grammar,
                                              parse_tree_t *node);
+static parse_sym_entry_t *attached_symbol(parse_grammar_t *grammar,
+                                          core_translation_unit_t *unit,
+                                          parse_tree_t *node);
 static bool tree_is_within(parse_tree_t *root, parse_tree_t *node);
+static parse_scope_t *record_scope_in_loaded_imports(
+    core_translation_unit_t *root, th_ctx *types, th_type *wanted,
+    parse_sym_entry_t **owner_symbol_out,
+    core_translation_unit_t **owner_unit_out);
 
 typedef struct {
     parse_token_stream_t *tokens;
@@ -678,6 +685,21 @@ typedef struct {
     uint64_t magnitude_bits;
     bool is_signed;
 } n00bb_enum_range_t;
+
+typedef struct {
+    ir_uint_t mask;
+    uint32_t declaration_order;
+    bool atomic;
+} n00bb_flagset_value_t;
+
+typedef struct {
+    ir_uint_t all_mask;
+    uint32_t atomic_count;
+} n00bb_flagset_info_t;
+
+typedef struct {
+    ir_uint_t mask;
+} n00bb_flagset_eval_t;
 
 static void
 enum_range_include(n00bb_enum_range_t *range, n00bb_enum_value_t value)
@@ -759,6 +781,7 @@ typedef struct {
     core_dict_t escape_edges;
     core_dict_t typecase_arm_types;
     core_dict_t iteration_plans;
+    core_dict_t flagset_values;
     core_link_unit_t *link;
     n00bb_link_analysis_t *link_analysis;
     th_ctx *types;
@@ -777,6 +800,14 @@ typedef struct {
     bool semantic_annotation_started;
     bool semantic_annotation_complete;
 } n00bb_tu_state_t;
+
+static bool n00bb_flagset_type(core_translation_unit_t *unit,
+                               n00bb_tu_state_t *state, th_type *type,
+                               parse_sym_entry_t **symbol_out);
+static bool n00bb_flagset_operator_site(parse_grammar_t *grammar,
+                                         core_translation_unit_t *unit,
+                                         n00bb_tu_state_t *state,
+                                         parse_tree_t *node);
 
 static bool resolve_function_parameter_facts(
     parse_grammar_t *grammar, n00bb_tu_state_t *state,
@@ -1216,6 +1247,7 @@ free_tu_state(void *data)
         core_dict_free(&state->escape_edges);
         core_dict_free(&state->typecase_arm_types);
         core_dict_free(&state->iteration_plans);
+        core_dict_free(&state->flagset_values);
         core_list_free(state->integer_symbol_ranges);
         core_list_free(state->integer_range_invalidated_symbols);
         for (size_t i = 0; i < state->integer_range_branches.len; i++) {
@@ -2170,6 +2202,260 @@ finalize_enum_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
         item->kind = PARSE_SYM_ENUM_CONST;
         item->type = type;
         core_tree_node_value(item->decl_node).type = type;
+    }
+    return true;
+}
+
+static parse_tree_t *
+flagset_declaration_ancestor(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at && !core_tree_is_leaf(at);
+         at = core_tree_node_value(at).parent) {
+        if (nt_is(grammar, at, "flagset-stmt")) return at;
+    }
+    return nullptr;
+}
+
+static bool
+finalize_flagset_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
+                             core_translation_unit_t *unit,
+                             n00bb_tu_state_t *state)
+{
+    parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
+    if (!symbol || !unit || !state || !state->types) return false;
+    if (!symbol->type) {
+        core_buffer_t qualified = {0};
+        append_module_type_name(unit, symbol->name, &qualified);
+        symbol->type = qualified.data
+            ? th_name(state->types, qualified.data) : nullptr;
+        core_buffer_release(&qualified);
+    }
+    if (!symbol->type) return false;
+    core_tree_node_value(node).type = symbol->type;
+
+    for (parse_sym_entry_t *item = symbol->member_scope
+            ? symbol->member_scope->first_in_scope : nullptr;
+         item; item = item->next_in_scope) {
+        if (!item->decl_node
+            || !nt_is(grammar, item->decl_node, "flagset-item")) continue;
+        item->kind = PARSE_SYM_ENUM_CONST;
+        item->type = symbol->type;
+        item->mutability = PARSE_SYM_CONST;
+        parse_sym_set_phases(item, PARSE_SYM_PHASE_BOTH,
+                             PARSE_SYM_PHASE_NONE,
+                             PARSE_SYM_PHASE_COMPTIME);
+        parse_sym_set_storage_duration(item, PARSE_SYM_STORAGE_COMPTIME);
+        core_tree_node_value(item->decl_node).type = symbol->type;
+    }
+    n00bb_flagset_info_t *info = parse_sym_binding(symbol,
+        CORE_STRING_STATIC("n00bb.flagset-info"));
+    if (!info) {
+        info = core_arena_alloc(&state->semantic_values, sizeof(*info));
+        if (!info) return false;
+        *info = (n00bb_flagset_info_t){0};
+        if (!parse_sym_set_binding(symbol,
+                CORE_STRING_STATIC("n00bb.flagset-info"), info)) return false;
+    }
+    return true;
+}
+
+static bool
+n00bb_flagset_member(parse_sym_entry_t *symbol)
+{
+    return symbol && symbol->kind == PARSE_SYM_ENUM_CONST
+        && symbol->owner_type && symbol->owner_type->member_scope
+        && core_string_eq(symbol->owner_type->member_scope->scope_tag,
+                          CORE_STRING_STATIC("flagset"));
+}
+
+static bool
+n00bb_flagset_instance_access(parse_grammar_t *grammar,
+                              core_translation_unit_t *unit,
+                              parse_tree_t *node,
+                              parse_sym_entry_t *member)
+{
+    if (!n00bb_flagset_member(member) || !node
+        || core_tree_num_children(node) < 3) return false;
+    parse_tree_t *receiver = core_tree_child(node, 0);
+    parse_node_resolution_t resolution = parse_tree_resolution(receiver);
+    if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        && resolution.target.symbol == member->owner_type) return false;
+    n00bb_tu_state_t *state = tu_state(unit);
+    n00bb_link_use_site_t *receiver_site = state
+        ? link_use_site_for_node(state, receiver) : nullptr;
+    if (receiver_site && receiver_site->symbol == member->owner_type)
+        return false;
+    if (!core_tree_is_leaf(receiver)
+        && core_string_eq(core_tree_node_value(receiver).unresolved_name,
+                          member->owner_type->name)) return false;
+    parse_sym_entry_t *receiver_symbol = attached_symbol(grammar, unit,
+                                                          receiver);
+    if (receiver_symbol == member->owner_type) return false;
+    th_type *receiver_type = receiver && !core_tree_is_leaf(receiver)
+        ? core_tree_node_value(receiver).type : nullptr;
+    if ((!receiver_type || th_kind_of(th_resolve(receiver_type)) == TH_VAR)
+        && receiver_symbol) receiver_type = receiver_symbol->type;
+    return state && receiver_type && member->owner_type->type
+        && th_hash(state->types, th_resolve(receiver_type))
+            == th_hash(state->types, th_resolve(member->owner_type->type));
+}
+
+static bool
+flagset_node_mask(n00bb_tu_state_t *state, parse_tree_t *node,
+                  ir_uint_t *mask)
+{
+    n00bb_flagset_eval_t *value = state && node
+        ? core_dict_get(&state->flagset_values, node, nullptr) : nullptr;
+    if (!value) return false;
+    if (mask) *mask = value->mask;
+    return true;
+}
+
+static bool
+cache_flagset_node_mask(n00bb_tu_state_t *state, parse_tree_t *node,
+                        ir_uint_t mask)
+{
+    n00bb_flagset_eval_t *value = core_arena_alloc(
+        &state->semantic_values, sizeof(*value));
+    if (!value) return false;
+    *value = (n00bb_flagset_eval_t){.mask = mask};
+    core_dict_put(&state->flagset_values, node, value);
+    return true;
+}
+
+static core_string_t
+flagset_direct_operator(parse_tree_t *node)
+{
+    if (!node) return (core_string_t){0};
+    if (core_tree_is_leaf(node)) return parse_tree_leaf_text(node);
+    if (core_tree_num_children(node) != 1) return (core_string_t){0};
+    parse_tree_t *child = core_tree_child(node, 0);
+    return core_tree_is_leaf(child) ? parse_tree_leaf_text(child)
+                                    : (core_string_t){0};
+}
+
+static bool
+cache_flagset_semantics(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit,
+                        n00bb_tu_state_t *state, parse_tree_t *node)
+{
+    parse_tree_t *declaration = flagset_declaration_ancestor(grammar, node);
+    if (!declaration) return true;
+    if (!finalize_flagset_symbol_type(grammar, declaration, unit, state))
+        return false;
+    parse_sym_entry_t *owner = core_tree_node_value(declaration).sym;
+    n00bb_flagset_info_t *info = owner ? parse_sym_binding(owner,
+        CORE_STRING_STATIC("n00bb.flagset-info")) : nullptr;
+    if (!owner || !info) return false;
+
+    if (nt_is(grammar, node, "flagset-name")) {
+        parse_tree_t *name_node = core_tree_num_children(node) == 1
+            ? core_tree_child(node, 0) : nullptr;
+        parse_sym_entry_t *symbol = name_node && core_tree_is_leaf(name_node)
+            ? parse_symtab_lookup_in(owner->member_scope,
+                                     parse_tree_leaf_text(name_node))
+            : nullptr;
+        n00bb_flagset_value_t *value = symbol && symbol->has_comptime_value
+            ? symbol->comptime_value : nullptr;
+        if (!value || !symbol->type
+            || !parse_tree_set_resolution_symbol(node, symbol)) return false;
+        core_tree_node_value(node).type = owner->type;
+        return cache_flagset_node_mask(state, node, value->mask);
+    }
+    if (nt_is(grammar, node, "flagset-primary")) {
+        ir_uint_t mask = 0;
+        if (core_tree_num_children(node) == 1) {
+            parse_tree_t *child = core_tree_child(node, 0);
+            if (!core_tree_is_leaf(child)
+                && !flagset_node_mask(state, child, &mask)) return false;
+        }
+        else if (core_tree_num_children(node) == 3
+                 && !flagset_node_mask(state, core_tree_child(node, 1),
+                                       &mask)) return false;
+        core_tree_node_value(node).type = owner->type;
+        return cache_flagset_node_mask(state, node, mask);
+    }
+    if (nt_is(grammar, node, "flagset-unary")) {
+        size_t count = core_tree_num_children(node);
+        parse_tree_t *operand = core_tree_child(node, count - 1);
+        ir_uint_t mask = 0;
+        if (!flagset_node_mask(state, operand, &mask)) return false;
+        if (count == 2) mask = info->all_mask ^ mask;
+        core_tree_node_value(node).type = owner->type;
+        return cache_flagset_node_mask(state, node, mask);
+    }
+    bool operation = nt_is(grammar, node, "flagset-union")
+        || nt_is(grammar, node, "flagset-xor")
+        || nt_is(grammar, node, "flagset-intersection");
+    if (operation) {
+        size_t count = core_tree_num_children(node);
+        ir_uint_t mask = 0;
+        if (!count || !flagset_node_mask(state, core_tree_child(node, 0),
+                                         &mask)) return false;
+        for (size_t i = 1; i + 1 < count; i += 2) {
+            ir_uint_t right = 0;
+            core_string_t op = flagset_direct_operator(
+                core_tree_child(node, i));
+            if (!flagset_node_mask(state, core_tree_child(node, i + 1),
+                                   &right)) return false;
+            if (core_string_eq(op, CORE_STRING_STATIC("+"))
+                || core_string_eq(op, CORE_STRING_STATIC("|"))) mask |= right;
+            else if (core_string_eq(op, CORE_STRING_STATIC("-")))
+                mask &= ~right;
+            else if (core_string_eq(op, CORE_STRING_STATIC("^"))) mask ^= right;
+            else if (core_string_eq(op, CORE_STRING_STATIC("&"))) mask &= right;
+            else return false;
+        }
+        mask &= info->all_mask;
+        core_tree_node_value(node).type = owner->type;
+        return cache_flagset_node_mask(state, node, mask);
+    }
+    if (nt_is(grammar, node, "flagset-value")) {
+        ir_uint_t mask = 0;
+        if (core_tree_num_children(node) != 1
+            || !flagset_node_mask(state, core_tree_child(node, 0), &mask))
+            return false;
+        core_tree_node_value(node).type = owner->type;
+        return cache_flagset_node_mask(state, node, mask);
+    }
+    if (nt_is(grammar, node, "flagset-item")) {
+        parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
+        if (!symbol) return false;
+        bool atomic = core_tree_num_children(node) == 1;
+        ir_uint_t mask = 0;
+        uint32_t order = info->atomic_count;
+        int32_t declaration_start = core_tree_node_value(node).start;
+        if (atomic) {
+            if (order >= 128) return false;
+            mask = (ir_uint_t)1 << order;
+        }
+        else if (!flagset_node_mask(state,
+                     core_tree_child(node, 2), &mask)) return false;
+        for (parse_sym_entry_t *item = owner->member_scope->first_in_scope;
+             item; item = item->next_in_scope) {
+            if (!item->decl_node || item->decl_node == node
+                || core_tree_node_value(item->decl_node).start
+                       >= declaration_start) continue;
+            n00bb_flagset_value_t *prior = item->has_comptime_value
+                ? item->comptime_value : nullptr;
+            if (prior && prior->mask == mask) return false;
+        }
+        n00bb_flagset_value_t *value = core_arena_alloc(
+            &state->semantic_values, sizeof(*value));
+        if (!value) return false;
+        *value = (n00bb_flagset_value_t){
+            .mask = mask,
+            .declaration_order = order,
+            .atomic = atomic,
+        };
+        symbol->comptime_value = value;
+        symbol->has_comptime_value = true;
+        if (atomic) {
+            info->all_mask |= mask;
+            info->atomic_count++;
+        }
+        core_tree_node_value(node).type = owner->type;
+        return cache_flagset_node_mask(state, node, mask);
     }
     return true;
 }
@@ -4625,6 +4911,7 @@ is_named_type_declaration(parse_grammar_t *grammar,
         && (nt_is(grammar, symbol->decl_node, "type-decl")
             || nt_is(grammar, symbol->decl_node, "alias-stmt")
             || nt_is(grammar, symbol->decl_node, "enum-stmt")
+            || nt_is(grammar, symbol->decl_node, "flagset-stmt")
             || nt_is(grammar, symbol->decl_node, "variant-decl")
             || nt_is(grammar, symbol->decl_node, "trait-decl"));
 }
@@ -5551,8 +5838,10 @@ resolve_local_enum_constant(parse_grammar_t *grammar,
         state->annotations->symtab, site->scope,
         CORE_STRING_STATIC("type"), site->member_name);
     if (!type || !type->member_scope
-        || !core_string_eq(type->member_scope->scope_tag,
-                           CORE_STRING_STATIC("enum"))) return false;
+        || (!core_string_eq(type->member_scope->scope_tag,
+                            CORE_STRING_STATIC("enum"))
+            && !core_string_eq(type->member_scope->scope_tag,
+                               CORE_STRING_STATIC("flagset")))) return false;
     core_string_t name = first_token_text(core_tree_child(parent, 2));
     parse_sym_entry_t *item = parse_symtab_lookup_in(type->member_scope, name);
     if (!item || item->kind != PARSE_SYM_ENUM_CONST || !item->type
@@ -5592,6 +5881,18 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
         if (!state || !state->annotations) continue;
         for (size_t s = 0; s < state->link_use_sites.len; s++) {
             n00bb_link_use_site_t *site = &state->link_use_sites.data[s];
+            if (site->operator_dispatch
+                && n00bb_flagset_operator_site(grammar, unit, state,
+                                                site->node)) {
+                if (site->symbol) parse_sym_remove_use(site->symbol,
+                                                       site->node);
+                site->symbol = nullptr;
+                site->reference = nullptr;
+                site->dispatch_trait = (core_string_t){0};
+                site->dispatch_method = (core_string_t){0};
+                site->operator_dispatch = false;
+                continue;
+            }
             if (site->variant_case_candidate) continue;
             if (site->constructor_call) continue;
             if (site->trait_reference && !site->symbol) {
@@ -10135,8 +10436,22 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
     core_string_t spelling = core_tree_num_children(visit->node) > 1
         ? first_token_text(core_tree_child(visit->node, 1))
         : (core_string_t){0};
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    bool flagset = caller && n00bb_flagset_type(lower->unit, caller,
+                                                operands[0]->type, nullptr);
     ir_op_t op;
-    if (core_string_eq(spelling, CORE_STRING_STATIC("+"))) op = IR_OP_ADD;
+    if (flagset && core_string_eq(spelling, CORE_STRING_STATIC("+")))
+        op = IR_OP_BITSET_UNION;
+    else if (flagset && core_string_eq(spelling, CORE_STRING_STATIC("-")))
+        op = IR_OP_BITSET_DIFFERENCE;
+    else if (flagset && core_string_eq(spelling, CORE_STRING_STATIC("&")))
+        op = IR_OP_BITSET_INTERSECTION;
+    else if (flagset && core_string_eq(spelling, CORE_STRING_STATIC("|")))
+        op = IR_OP_BITSET_UNION;
+    else if (flagset && core_string_eq(spelling, CORE_STRING_STATIC("^")))
+        op = IR_OP_BITSET_XOR;
+    else if (core_string_eq(spelling, CORE_STRING_STATIC("+"))) op = IR_OP_ADD;
     else if (core_string_eq(spelling, CORE_STRING_STATIC("-"))) op = IR_OP_SUB;
     else if (core_string_eq(spelling, CORE_STRING_STATIC("*"))) op = IR_OP_MUL;
     else if (core_string_eq(spelling, CORE_STRING_STATIC("/"))) op = IR_OP_DIV;
@@ -10226,8 +10541,6 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
         same->span = span;
         return (ir_lower_result_t){IR_LOWER_VALUE, same->dest};
     }
-    n00bb_lower_context_t *lower = context->user;
-    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     n00bb_link_use_site_t *site = caller
         ? link_use_site_for_node(caller, visit->node) : nullptr;
     if (site && site->operator_dispatch && !primitive_operator_site(site))
@@ -10261,6 +10574,50 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
     (void)visit;
     (void)operands;
     (void)state;
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    th_type *flagset_type = nullptr;
+    for (parse_tree_t *parent = visit && visit->node
+            ? core_tree_node_value(visit->node).parent : nullptr;
+         lower && parent; parent = core_tree_node_value(parent).parent) {
+        if (!nt_is(visit->grammar, parent, "sym-decl")
+            && !nt_is(visit->grammar, parent, "assign-stmt")) continue;
+        const parse_rule_t *rule = parse_tree_rule(visit->grammar, parent);
+        parse_annotation_t *assignment = rule
+            ? parse_rule_find_annot(visit->grammar, rule,
+                                    PARSE_ANNOT_ASSIGNS) : nullptr;
+        parse_tree_t *target = assignment
+            ? parse_tree_resolve_child_ref(visit->grammar, parent,
+                                           assignment->name_ref) : nullptr;
+        parse_tree_t *source = assignment
+            ? parse_tree_resolve_child_ref(visit->grammar, parent,
+                                           assignment->value_ref) : nullptr;
+        if (!target || !source || !node_is_within(visit->node, source))
+            continue;
+        parse_sym_entry_t *symbol = attached_symbol(visit->grammar,
+                                                     lower->unit, target);
+        if (!symbol) symbol = core_tree_node_value(parent).sym;
+        th_type *expected = symbol && symbol->type ? symbol->type
+            : core_tree_is_leaf(target) ? nullptr
+            : core_tree_node_value(target).type;
+        n00bb_tu_state_t *caller = tu_state(lower->unit);
+        if (caller && n00bb_flagset_type(lower->unit, caller, expected,
+                                         nullptr)) flagset_type = expected;
+        break;
+    }
+    if (flagset_type) {
+        ir_instr_t *constant = ir_instr_add(context->block,
+                                             IR_OP_BITSET_CONST);
+        char name[48];
+        snprintf(name, sizeof(name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        if (!constant || !ir_instr_set_dest(constant, name, flagset_type)
+            || !ir_instr_operand_name(constant, "nil")
+            || !ir_instr_operand_uint(constant, 0))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                               "could not emit an empty flagset value");
+        constant->span = span;
+        return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
+    }
     if (operand_count || !result_type
         || !n00bb_nil_type(ir_module_types(context->module), result_type))
         return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
@@ -10294,6 +10651,43 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *from = operands[0]->type;
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    parse_sym_entry_t *from_flagset = nullptr;
+    parse_sym_entry_t *to_flagset = nullptr;
+    bool source_flagset = caller && n00bb_flagset_type(lower->unit, caller,
+        from, &from_flagset);
+    bool target_flagset = caller && n00bb_flagset_type(lower->unit, caller,
+        target, &to_flagset);
+    parse_sym_entry_t *flagset_symbol = source_flagset
+        ? from_flagset : target_flagset ? to_flagset : nullptr;
+    if (flagset_symbol
+        && ((source_flagset && is_integer_type(target))
+            || (target_flagset && is_integer_type(from)))) {
+        const n00bb_flagset_info_t *info = parse_sym_binding(flagset_symbol,
+            CORE_STRING_STATIC("n00bb.flagset-info"));
+        th_type *integer_type = source_flagset ? target : from;
+        ir_machine_t integer = ir_machine_of(context->module, integer_type);
+        bool sufficient = info
+            && ((integer.class == IR_CLASS_UINT
+                    && integer.width >= info->atomic_count)
+                || (integer.class == IR_CLASS_SINT
+                    && integer.width > info->atomic_count));
+        if (!sufficient)
+            return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+                "integer type is too narrow to represent every flagset value");
+        ir_instr_t *conversion = ir_instr_add(context->block,
+            source_flagset ? IR_OP_BITSET_VALUE
+                           : IR_OP_BITSET_FROM_VALUE);
+        char name[48];
+        snprintf(name, sizeof(name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        if (!conversion || !ir_instr_set_dest(conversion, name, target)
+            || !ir_instr_operand_value(conversion, operands[0])
+            || !ir_instr_add_mod(conversion, "trap"))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                               "could not emit the flagset integer conversion");
+        conversion->span = span;
+        return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
+    }
     parse_sym_entry_t *enum_symbol = caller
         ? n00bb_enum_type_symbol(caller->link_analysis, from) : nullptr;
     if (enum_symbol && is_integer_type(target)) {
@@ -10399,6 +10793,24 @@ n00bb_lower_bool_not(ir_lower_context_t *context, parse_visit_t *visit,
     (void)state;
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    if (caller && operand_count == 1 && operands && operands[0]
+        && result_type && n00bb_flagset_type(lower->unit, caller,
+                                             operands[0]->type, nullptr)) {
+        th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+        ir_instr_t *test = bool_type
+            && ir_type_eq(context->module, result_type, bool_type)
+                ? ir_instr_add(context->block, IR_OP_BITSET_IS_EMPTY)
+                : nullptr;
+        char name[48];
+        snprintf(name, sizeof(name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        if (!test || !ir_instr_set_dest(test, name, result_type)
+            || !ir_instr_operand_value(test, operands[0]))
+            return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+                               "flagset ! requires a flagset operand and bool result");
+        test->span = span;
+        return (ir_lower_result_t){IR_LOWER_VALUE, test->dest};
+    }
     n00bb_link_use_site_t *site = caller
         ? link_use_site_for_node(caller, visit->node) : nullptr;
     if (site && site->operator_dispatch && !primitive_operator_site(site)) {
@@ -10436,6 +10848,37 @@ n00bb_lower_bool_not(ir_lower_context_t *context, parse_visit_t *visit,
                            "could not emit logical negation");
     equal->span = span;
     return (ir_lower_result_t){IR_LOWER_VALUE, equal->dest};
+}
+
+static ir_lower_result_t
+n00bb_lower_flagset_complement(ir_lower_context_t *context,
+                               parse_visit_t *visit,
+                               ir_value_t *const *operands,
+                               size_t operand_count, th_type *result_type,
+                               ir_span_t span, void *state)
+{
+    (void)visit;
+    (void)state;
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    if (!caller || operand_count != 1 || !operands || !operands[0]
+        || !result_type
+        || !n00bb_flagset_type(lower->unit, caller, operands[0]->type,
+                               nullptr)
+        || !ir_type_eq(context->module, operands[0]->type, result_type))
+        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+                           "~ requires a flagset operand");
+    ir_instr_t *instruction = ir_instr_add(context->block,
+                                            IR_OP_BITSET_COMPLEMENT);
+    char name[48];
+    snprintf(name, sizeof(name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    if (!instruction || !ir_instr_set_dest(instruction, name, result_type)
+        || !ir_instr_operand_value(instruction, operands[0]))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not emit flagset complement");
+    instruction->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
 
 static ir_lower_result_t
@@ -11226,10 +11669,29 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
         instruction->span = span;
         return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
     }
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_use_site_t *constructor_site = caller
+        ? link_use_site_for_node(caller, visit->node) : nullptr;
+    if (caller && (!constructor_site || !constructor_site->symbol
+            || constructor_site->symbol->kind != PARSE_SYM_FUNCTION)
+        && n00bb_flagset_type(lower->unit, caller, resolved_type, nullptr)) {
+        ir_instr_t *constant = ir_instr_add(context->block,
+                                             IR_OP_BITSET_CONST);
+        char name[48];
+        snprintf(name, sizeof(name), "__n00bb_%llu",
+                 (unsigned long long)context->next_value_id++);
+        if (!constant || !ir_instr_set_dest(constant, name, result_type)
+            || !ir_instr_operand_name(constant, "nil")
+            || !ir_instr_operand_uint(constant, 0))
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                               "could not emit default flagset construction");
+        constant->span = span;
+        return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
+    }
     if (th_kind_of(resolved_type) != TH_SEQUENCE)
         return n00bb_lower_constructor_new(context, visit, result_type, span);
 
-    n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_link_analysis_t *analysis = tu ? tu->link_analysis : nullptr;
     if (!lower || !tu || !analysis)
@@ -13242,6 +13704,57 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
         && resolution.target.symbol
         && resolution.target.symbol->kind == PARSE_SYM_ENUM_CONST) {
         parse_sym_entry_t *member = resolution.target.symbol;
+        n00bb_lower_context_t *lower = context->user;
+        if (lower && n00bb_flagset_instance_access(visit->grammar,
+                lower->unit, visit->node, member)) {
+            parse_tree_t *base_node = core_tree_child(visit->node, 0);
+            ir_value_t *base = ir_lower_node_value(context, base_node);
+            parse_sym_entry_t *base_symbol = attached_symbol(
+                visit->grammar, lower->unit, base_node);
+            if (!base && base_symbol)
+                base = ir_lower_bound_value(context, base_symbol);
+            n00bb_flagset_value_t *value = member->has_comptime_value
+                ? member->comptime_value : nullptr;
+            ir_instr_t *mask = value
+                ? ir_instr_add(context->block, IR_OP_BITSET_CONST) : nullptr;
+            ir_instr_t *test = mask
+                ? ir_instr_add(context->block, IR_OP_BITSET_CONTAINS) : nullptr;
+            char mask_name[48], test_name[48];
+            snprintf(mask_name, sizeof(mask_name), "__n00bb_%llu",
+                     (unsigned long long)context->next_value_id++);
+            snprintf(test_name, sizeof(test_name), "__n00bb_%llu",
+                     (unsigned long long)context->next_value_id++);
+            if (!base || !value || !mask || !test
+                || !ir_instr_set_dest(mask, mask_name, member->type)
+                || !ir_instr_operand_name(mask, member->name.data)
+                || !ir_instr_operand_uint(mask, value->mask)
+                || !ir_instr_set_dest(test, test_name, result_type)
+                || !ir_instr_operand_value(test, base)
+                || !ir_instr_operand_value(test, mask->dest))
+                return lower_error(context, IR_DIAG_INTERNAL, span,
+                                   "could not emit a flagset member test");
+            mask->span = test->span = span;
+            return (ir_lower_result_t){IR_LOWER_VALUE, test->dest};
+        }
+        if (n00bb_flagset_member(member)) {
+            n00bb_flagset_value_t *value = member->has_comptime_value
+                ? member->comptime_value : nullptr;
+            if (!value || !member->type)
+                return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                    "flagset constant has no matching resolved mask and type");
+            ir_instr_t *constant = ir_instr_add(context->block,
+                                                 IR_OP_BITSET_CONST);
+            char name[48];
+            snprintf(name, sizeof(name), "__n00bb_%llu",
+                     (unsigned long long)context->next_value_id++);
+            if (!constant || !ir_instr_set_dest(constant, name, result_type)
+                || !ir_instr_operand_name(constant, member->name.data)
+                || !ir_instr_operand_uint(constant, value->mask))
+                return lower_error(context, IR_DIAG_INTERNAL, span,
+                    "could not emit the flagset constant");
+            constant->span = span;
+            return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
+        }
         n00bb_enum_value_t *value = member->has_comptime_value
             ? member->comptime_value : nullptr;
         if (!value || !member->type
@@ -16455,6 +16968,76 @@ n00bb_addressable_expression_address(ir_lower_context_t *context,
 }
 
 static bool
+n00bb_lower_flagset_field_assignment(ir_lower_context_t *context,
+                                     parse_visit_t *visit,
+                                     parse_tree_t *target,
+                                     parse_tree_t *source,
+                                     bool entering)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    parse_tree_t *member = member_access_node(visit->grammar, target);
+    parse_sym_entry_t *flag = member && lower
+        ? attached_symbol(visit->grammar, lower->unit, member) : nullptr;
+    if (!lower || !n00bb_flagset_member(flag)
+        || !n00bb_flagset_instance_access(visit->grammar, lower->unit,
+                                           member, flag)) return true;
+    parse_tree_t *receiver = core_tree_child(member, 0);
+    parse_sym_entry_t *root = n00bb_assignment_root_symbol(
+        visit->grammar, lower->unit, receiver);
+    parse_sym_phase_t phase = lower->comptime_phase
+        ? PARSE_SYM_PHASE_COMPTIME : PARSE_SYM_PHASE_RUNTIME;
+    if (entering) {
+        if (!root || !parse_sym_can_write(root, phase)) {
+            lower_error(context, IR_DIAG_TYPE_ARGS,
+                lower_span_for_tree(context, visit->node),
+                "flagset member assignment requires a writable flagset value");
+            return false;
+        }
+        return ir_lower_handle_assignment(context, visit->node)
+            && ir_lower_skip_value(context, visit->node, target);
+    }
+
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    ir_value_t *assigned = source
+        ? ir_lower_node_value(context, source) : nullptr;
+    ir_value_t *address = n00bb_addressable_expression_address(
+        context, visit->grammar, lower->unit, receiver, span);
+    th_type *flagset_type = address ? th_ind_referent(address->type) : nullptr;
+    ir_value_t *current = address && flagset_type
+        ? n00bb_emit_indirect_read(context, address, flagset_type, span)
+        : nullptr;
+    n00bb_flagset_value_t *value = flag->has_comptime_value
+        ? flag->comptime_value : nullptr;
+    ir_instr_t *mask = current && value
+        ? ir_instr_add(context->block, IR_OP_BITSET_CONST) : nullptr;
+    ir_instr_t *updated = mask
+        ? ir_instr_add(context->block, IR_OP_BITSET_SET) : nullptr;
+    char mask_name[48], updated_name[48];
+    snprintf(mask_name, sizeof(mask_name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    snprintf(updated_name, sizeof(updated_name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    th_type *bool_type = n00bb_ir_builtin_type(context->module, "bool");
+    if (!assigned || !bool_type
+        || !ir_type_eq(context->module, assigned->type, bool_type)
+        || !mask || !updated
+        || !ir_instr_set_dest(mask, mask_name, flagset_type)
+        || !ir_instr_operand_name(mask, flag->name.data)
+        || !ir_instr_operand_uint(mask, value->mask)
+        || !ir_instr_set_dest(updated, updated_name, flagset_type)
+        || !ir_instr_operand_value(updated, current)
+        || !ir_instr_operand_value(updated, mask->dest)
+        || !ir_instr_operand_value(updated, assigned)
+        || !n00bb_emit_indirect_write(context, address, updated->dest, span)) {
+        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+                    "could not update this flagset member");
+        return false;
+    }
+    mask->span = updated->span = span;
+    return true;
+}
+
+static bool
 n00bb_lower_record_field_assignment(ir_lower_context_t *context,
                                     parse_visit_t *visit,
                                     parse_tree_t *target,
@@ -16649,6 +17232,9 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
     parse_tree_t *field_access = member_access_node(visit->grammar, target);
     parse_sym_entry_t *field = field_access && lower
         ? attached_symbol(visit->grammar, lower->unit, field_access) : nullptr;
+    if (!compound && field && n00bb_flagset_member(field))
+        return n00bb_lower_flagset_field_assignment(context, visit, target,
+                                                     source, entering);
     if (!compound && field
         && n00bb_variant_arm_symbol(visit->grammar, field))
         return n00bb_lower_variant_arm_assignment(context, visit, target,
@@ -21758,6 +22344,7 @@ nested_module_declaration_owner(parse_grammar_t *grammar,
             || nt_is(grammar, parent, "context-def")) return nullptr;
         if (nt_is(grammar, parent, "type-decl")
             || nt_is(grammar, parent, "enum-stmt")
+            || nt_is(grammar, parent, "flagset-stmt")
             || nt_is(grammar, parent, "variant-decl")
             || nt_is(grammar, parent, "trait-decl")) return parent;
     }
@@ -22232,6 +22819,111 @@ primitive_operator_site(n00bb_link_use_site_t *site)
 }
 
 static bool
+n00bb_flagset_type(core_translation_unit_t *unit, n00bb_tu_state_t *state,
+                   th_type *type, parse_sym_entry_t **symbol_out)
+{
+    parse_sym_entry_t *symbol = nullptr;
+    parse_scope_t *scope = unit && state && state->types && type
+        ? record_scope_in_loaded_imports(unit, state->types,
+                                         th_resolve(type), &symbol, nullptr)
+        : nullptr;
+    if (symbol_out) *symbol_out = symbol;
+    return scope && core_string_eq(scope->scope_tag,
+                                   CORE_STRING_STATIC("flagset"));
+}
+
+static bool
+n00bb_flagset_operator_site(parse_grammar_t *grammar,
+                            core_translation_unit_t *unit,
+                            n00bb_tu_state_t *state,
+                            parse_tree_t *node)
+{
+    core_string_t trait = {0}, method = {0};
+    bool binary = binary_operator_dispatch_for_node(grammar, node,
+                                                     &trait, &method);
+    bool unary = !binary && unary_operator_dispatch_for_node(grammar, node,
+                                                             &trait, &method);
+    if (!binary && !unary) return false;
+    parse_tree_t *receiver = core_tree_child(node, unary ? 1 : 0);
+    th_type *type = receiver && !core_tree_is_leaf(receiver)
+        ? core_tree_node_value(receiver).type : nullptr;
+    parse_sym_entry_t *receiver_symbol = attached_symbol(grammar, unit,
+                                                          receiver);
+    bool receiver_is_flagset = n00bb_flagset_member(receiver_symbol)
+        || (receiver_symbol && n00bb_flagset_type(unit, state,
+                                                  receiver_symbol->type,
+                                                  nullptr))
+        || n00bb_flagset_type(unit, state, type, nullptr);
+    if (!receiver_is_flagset) return false;
+    return core_string_eq(trait, CORE_STRING_STATIC("Add"))
+        || core_string_eq(trait, CORE_STRING_STATIC("Subtract"))
+        || core_string_eq(trait, CORE_STRING_STATIC("Bit_And"))
+        || core_string_eq(trait, CORE_STRING_STATIC("Bit_Or"))
+        || core_string_eq(trait, CORE_STRING_STATIC("Bit_Xor"))
+        || core_string_eq(trait, CORE_STRING_STATIC("Equal"))
+        || core_string_eq(trait, CORE_STRING_STATIC("Not"));
+}
+
+static bool
+refine_flagset_operator_result(parse_grammar_t *grammar,
+                               core_translation_unit_t *unit,
+                               n00bb_tu_state_t *state,
+                               parse_tree_t *node)
+{
+    if (nt_is(grammar, node, "unary-expr")
+        && core_tree_num_children(node) == 2
+        && parse_tree_leaf_is(core_tree_child(node, 0),
+                              CORE_STRING_STATIC("~"))) {
+        th_type *operand = core_tree_node_value(core_tree_child(node, 1)).type;
+        th_type *result = core_tree_node_value(node).type;
+        if (operand && result && n00bb_flagset_type(unit, state, operand,
+                                                    nullptr)
+            && th_unify_in_place(state->types, operand, result)) return true;
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+            CORE_STRING_STATIC("~ requires a flagset operand"),
+            link_source_location(node));
+        return false;
+    }
+    if (!n00bb_flagset_operator_site(grammar, unit, state, node)) return true;
+    bool unary = core_tree_num_children(node) == 2;
+    parse_tree_t *left = core_tree_child(node, unary ? 1 : 0);
+    th_type *left_type = core_tree_node_value(left).type;
+    th_type *right_type = unary ? nullptr
+        : core_tree_node_value(core_tree_child(node, 2)).type;
+    core_string_t spelling = first_token_text(
+        core_tree_child(node, unary ? 0 : 1));
+    bool boolean = core_string_eq(spelling, CORE_STRING_STATIC("!"))
+        || core_string_eq(spelling, CORE_STRING_STATIC("=="))
+        || core_string_eq(spelling, CORE_STRING_STATIC("!="));
+    th_type *expected = boolean ? th_name(state->types, "bool") : left_type;
+    th_type *result = core_tree_node_value(node).type;
+    if (!result || th_is_bottom(result)) {
+        core_tree_node_value(node).type = expected;
+        result = expected;
+    }
+    bool valid = left_type && expected && result
+        && (unary || (right_type
+            && th_unify_in_place(state->types, left_type, right_type)))
+        && th_unify_in_place(state->types, result, expected);
+    if (!valid) {
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+            CORE_STRING_STATIC(
+                "flagset operator operands and result have incompatible types"),
+            link_source_location(node));
+        return false;
+    }
+    if (core_string_eq(spelling, CORE_STRING_STATIC("|")))
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-FLAGSET-OR"),
+            CORE_STRING_STATIC(
+                "use + for flagset union; | is accepted for migration"),
+            link_source_location(node));
+    return true;
+}
+
+static bool
 refine_intrinsic_binary_result(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
                                n00bb_tu_state_t *state, parse_tree_t *node)
@@ -22575,6 +23267,12 @@ remember_link_use_site(parse_grammar_t *grammar,
         || unary_operator_dispatch_for_node(grammar, node,
                                             &dispatch_trait,
                                             &dispatch_method);
+    if (operator_dispatch
+        && n00bb_flagset_operator_site(grammar, unit, state, node)) {
+        operator_dispatch = false;
+        dispatch_trait = (core_string_t){0};
+        dispatch_method = (core_string_t){0};
+    }
     if (!varref && !trait_reference && !variant_case_candidate
         && !constructor_call
         && !dotted_path && !type_reference && !index_dispatch
@@ -24164,7 +24862,14 @@ resolve_inferred_field_references(core_link_unit_t *link,
                 return false;
             }
 
-            th_type *member_type = enum_constant ? field->type
+            bool flagset_member = enum_constant
+                && core_string_eq(record_scope->scope_tag,
+                                  CORE_STRING_STATIC("flagset"))
+                && n00bb_flagset_instance_access(analysis->grammar, unit,
+                                                  node, field);
+            th_type *member_type = flagset_member
+                ? th_name(state->types, "bool")
+                : enum_constant ? field->type
                 : th_record_lookup_in(state->types,
                                                        receiver_type,
                                                         member.data);
@@ -24497,6 +25202,24 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
     }
 
     if (!candidates.len) {
+        core_list_t(n00bb_tree_ptr_t) arguments =
+            core_list_new(n00bb_tree_ptr_t);
+        parse_tree_t *call_args = child_nt(grammar, site->node, "call-args");
+        collect_positional_nodes(grammar,
+            child_nt(grammar, call_args, "positional-args"), &arguments);
+        parse_sym_entry_t *flagset_symbol = nullptr;
+        bool default_flagset = n00bb_flagset_type(unit, state, target,
+                                                  &flagset_symbol)
+            && !arguments.len
+            && !child_nt(grammar, call_args, "keyword-args");
+        core_list_free(arguments);
+        if (default_flagset) {
+            site->constructor_call = false;
+            site->symbol = flagset_symbol;
+            parse_tree_set_resolution_symbol(site->node, flagset_symbol);
+            core_list_free(candidates);
+            return true;
+        }
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0020"),
@@ -29580,6 +30303,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register(lowerer, "cast", n00bb_lower_cast, nullptr)
         && ir_lowerer_register(lowerer, "bool_not", n00bb_lower_bool_not,
                                nullptr)
+        && ir_lowerer_register(lowerer, "flagset_complement",
+                               n00bb_lower_flagset_complement, nullptr)
         && ir_lowerer_register(lowerer, "negate", n00bb_lower_negate,
                                nullptr)
         && ir_lowerer_register(lowerer, "string_literal",
@@ -30801,6 +31526,27 @@ interface_enum_values_metadata(locate_worker_context_t *loader,
     return nullptr;
 }
 
+static const uint8_t *
+interface_flagset_values_metadata(locate_worker_context_t *loader,
+                                  const char *qualified_name, size_t *size)
+{
+    if (size) *size = 0;
+    for (size_t e = 0; loader && e < loader->linked_interface_count; e++) {
+        const th_env *environment = loader->linked_interfaces[e];
+        for (size_t i = 0; i < th_env_metadata_count(environment); i++) {
+            th_env_metadata_view_t metadata = {0};
+            if (!th_env_metadata_at(environment, i, &metadata)
+                || metadata.owner_kind != TH_ENV_METADATA_TYPE
+                || strcmp(metadata.owner_name, qualified_name)
+                || strcmp(metadata.key, "n00b.flagset-values")
+                || metadata.version != 1) continue;
+            if (size) *size = metadata.size;
+            return metadata.data;
+        }
+    }
+    return nullptr;
+}
+
 static bool
 decode_interface_enum_value(const uint8_t *data, size_t size,
                             const char *member_name, n00bb_enum_value_t *value)
@@ -30831,6 +31577,50 @@ decode_interface_enum_value(const uint8_t *data, size_t size,
             if (value) *value = (n00bb_enum_value_t){decoded, negative != 0};
         }
     }
+    return offset == size && found;
+}
+
+static bool
+decode_interface_flagset_value(const uint8_t *data, size_t size,
+                               const char *member_name,
+                               n00bb_flagset_value_t *value,
+                               n00bb_flagset_info_t *info)
+{
+    if (!data || size < 28 || memcmp(data, "N0FV", 4)) return false;
+    size_t offset = 4;
+    n00bb_flagset_info_t decoded_info = {
+        .all_mask = read_u128_le(data + offset),
+    };
+    offset += 16;
+    decoded_info.atomic_count = read_u32_le(data + offset);
+    offset += 4;
+    uint32_t count = read_u32_le(data + offset);
+    offset += 4;
+    if (decoded_info.atomic_count > 128) return false;
+    bool found = false;
+    for (uint32_t i = 0; i < count; i++) {
+        if (offset > size || size - offset < 4) return false;
+        uint32_t name_size = read_u32_le(data + offset);
+        offset += 4;
+        if (name_size > size - offset) return false;
+        const uint8_t *name = data + offset;
+        offset += name_size;
+        if (offset > size || size - offset < 21) return false;
+        n00bb_flagset_value_t decoded = {
+            .mask = read_u128_le(data + offset),
+        };
+        offset += 16;
+        decoded.declaration_order = read_u32_le(data + offset);
+        offset += 4;
+        decoded.atomic = data[offset++] != 0;
+        if (strlen(member_name) == name_size
+            && !memcmp(name, member_name, name_size)) {
+            if (found) return false;
+            found = true;
+            if (value) *value = decoded;
+        }
+    }
+    if (info) *info = decoded_info;
     return offset == size && found;
 }
 
@@ -30893,7 +31683,9 @@ register_type_member_metadata(parse_grammar_t *grammar,
             (member->decl_node && nt_is(grammar, member->decl_node,
                                        "variant-decl-one")) ||
             (member->decl_node && nt_is(grammar, member->decl_node,
-                                       "enum-item"));
+                                       "enum-item")) ||
+            (member->decl_node && nt_is(grammar, member->decl_node,
+                                       "flagset-item"));
         if (relevant) count++;
     }
     if (count > UINT32_MAX) return false;
@@ -30906,7 +31698,9 @@ register_type_member_metadata(parse_grammar_t *grammar,
             (member->decl_node && nt_is(grammar, member->decl_node,
                                        "variant-decl-one")) ||
             (member->decl_node && nt_is(grammar, member->decl_node,
-                                       "enum-item"));
+                                       "enum-item")) ||
+            (member->decl_node && nt_is(grammar, member->decl_node,
+                                       "flagset-item"));
         if (!relevant) continue;
         uint32_t name_size = (uint32_t)member->name.u8_bytes;
         uint32_t flags = (member->has_bit_offset ? 1u : 0u) |
@@ -31012,6 +31806,53 @@ register_enum_values_metadata(parse_grammar_t *grammar,
 }
 
 static bool
+register_flagset_values_metadata(parse_grammar_t *grammar,
+                                 core_translation_unit_t *unit,
+                                 th_env *environment,
+                                 parse_sym_entry_t *type_symbol,
+                                 const char *qualified_name)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_scope_t *members = type_symbol ? type_symbol->member_scope : nullptr;
+    if (!state || !members || !type_symbol->decl_node
+        || !nt_is(grammar, type_symbol->decl_node, "flagset-stmt"))
+        return true;
+    n00bb_flagset_info_t *info = parse_sym_binding(type_symbol,
+        CORE_STRING_STATIC("n00bb.flagset-info"));
+    size_t count = 0;
+    for (parse_sym_entry_t *item = members->first_in_scope; item;
+         item = item->next_in_scope)
+        if (item->decl_node
+            && nt_is(grammar, item->decl_node, "flagset-item")) count++;
+    if (!info || count > UINT32_MAX) return false;
+    core_buffer_t data = {0};
+    core_buffer_append(&data, "N0FV", 4);
+    bool ok = append_u128_le(&data, info->all_mask)
+        && append_u32_le(&data, info->atomic_count)
+        && append_u32_le(&data, (uint32_t)count);
+    for (parse_sym_entry_t *item = members->first_in_scope;
+         ok && item; item = item->next_in_scope) {
+        if (!item->decl_node
+            || !nt_is(grammar, item->decl_node, "flagset-item")) continue;
+        n00bb_flagset_value_t *value = item->has_comptime_value
+            ? item->comptime_value : nullptr;
+        ok = value && item->name.u8_bytes <= UINT32_MAX
+            && append_u32_le(&data, (uint32_t)item->name.u8_bytes);
+        if (!ok) break;
+        core_buffer_append(&data, item->name.data, item->name.u8_bytes);
+        ok = append_u128_le(&data, value->mask)
+            && append_u32_le(&data, value->declaration_order);
+        if (ok) core_buffer_putc(&data, value->atomic ? 1 : 0);
+    }
+    if (ok)
+        ok = th_env_register_metadata(environment, TH_ENV_METADATA_TYPE,
+            qualified_name, "n00b.flagset-values", 1,
+            data.data, data.byte_len);
+    core_buffer_release(&data);
+    return ok;
+}
+
+static bool
 exported_type_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     parse_sym_entry_t *symbol,
                     th_env_type_shape_kind_t *shape_kind,
@@ -31107,6 +31948,22 @@ exported_type_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
         core_list_free(items);
         return *shape != nullptr;
     }
+    if (nt_is(grammar, declaration, "flagset-stmt") && members) {
+        core_list_t(th_member) items = core_list_new(th_member);
+        for (parse_sym_entry_t *item = members->first_in_scope; item;
+             item = item->next_in_scope) {
+            if (!item->decl_node || !item->type
+                || !nt_is(grammar, item->decl_node, "flagset-item")) continue;
+            core_list_push(items, ((th_member){
+                .name = item->name.data,
+                .type = item->type,
+            }));
+        }
+        *shape_kind = TH_ENV_TYPE_SHAPE_BITSET;
+        *shape = th_record(state->types, items.data, items.len);
+        core_list_free(items);
+        return *shape != nullptr;
+    }
     return true;
 }
 
@@ -31149,6 +32006,9 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     environment, symbol, qualified.data);
             if (ok && shape_kind == TH_ENV_TYPE_SHAPE_ENUM)
                 ok = register_enum_values_metadata(grammar, unit,
+                    environment, symbol, qualified.data);
+            if (ok && shape_kind == TH_ENV_TYPE_SHAPE_BITSET)
+                ok = register_flagset_values_metadata(grammar, unit,
                     environment, symbol, qualified.data);
             core_buffer_release(&qualified);
         }
@@ -35918,6 +36778,35 @@ check_local_record_field_reference(parse_grammar_t *grammar,
     }
     core_string_t name = first_token_text(core_tree_child(node, 2));
     parse_sym_entry_t *field = parse_symtab_lookup_in(members, name);
+    if (field && n00bb_flagset_member(field)) {
+        parse_node_resolution_t receiver_resolution =
+            parse_tree_resolution(receiver_node);
+        n00bb_link_use_site_t *receiver_site =
+            link_use_site_for_node(state, receiver_node);
+        if ((receiver_resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+                && receiver_resolution.target.symbol == owner_type)
+            || (receiver_site && receiver_site->symbol == owner_type)
+            || (!core_tree_is_leaf(receiver_node)
+                && core_string_eq(
+                    core_tree_node_value(receiver_node).unresolved_name,
+                    owner_type->name))
+            || attached_symbol(grammar, unit, receiver_node) == owner_type)
+            return;
+        core_tree_node_value(node).type = th_name(state->types, "bool");
+        parse_tree_set_resolution_symbol(node, field);
+        n00bb_flagset_value_t *value = field->has_comptime_value
+            ? field->comptime_value : nullptr;
+        if (value && !value->atomic
+            && n00bb_assignment_target(grammar, node, nullptr))
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_WARNING,
+                CORE_STRING_STATIC("N00BB-FLAGSET-COMPOSITE-WRITE"),
+                CORE_STRING_STATIC(
+                    "assigning a boolean to a composite flagset member updates every flag in the combination"),
+                link_source_location(node));
+        return;
+    }
     if (field && (field->is_field || field->kind == PARSE_SYM_ENUM_CONST))
         return;
 
@@ -36707,6 +37596,11 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     };
     bool variant_payload = !entering
         && prepare_variant_payload_type(grammar, unit, node);
+    parse_node_resolution_t member_resolution = parse_tree_resolution(node);
+    bool flagset_field = !entering
+        && member_resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        && n00bb_flagset_instance_access(grammar, unit, node,
+                                          member_resolution.target.symbol);
     bool type_reference = is_type_reference_node_at(grammar, node, parent);
     core_string_t operator_trait = {0}, operator_method = {0};
     n00bb_link_use_site_t operator_site = {
@@ -36722,24 +37616,29 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     operator_site.dispatch_trait = operator_trait;
     operator_site.dispatch_method = operator_method;
     intrinsic_binary = intrinsic_binary
-        && !core_string_eq(operator_trait, CORE_STRING_STATIC("Equal"))
-        && !core_string_eq(operator_trait, CORE_STRING_STATIC("Comparable"))
-        && primitive_operator_site(&operator_site);
+        && ((!core_string_eq(operator_trait, CORE_STRING_STATIC("Equal"))
+             && !core_string_eq(operator_trait,
+                                CORE_STRING_STATIC("Comparable"))
+             && primitive_operator_site(&operator_site))
+            || n00bb_flagset_operator_site(grammar, unit, state, node));
     intrinsic_unary = intrinsic_unary
-        && primitive_operator_site(&operator_site);
+        && (primitive_operator_site(&operator_site)
+            || n00bb_flagset_operator_site(grammar, unit, state, node));
     parse_annot_kind_t filtered_kinds[
         sizeof(kinds) / sizeof(kinds[0])];
     size_t filtered_count = 0;
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
         if ((!variant_payload || kinds[i] != PARSE_ANNOT_INFER)
+            && (!flagset_field || kinds[i] != PARSE_ANNOT_INFER)
             && (!type_reference || kinds[i] != PARSE_ANNOT_INFER)
             && (!(intrinsic_binary || intrinsic_unary)
                 || kinds[i] != PARSE_ANNOT_INFER))
             filtered_kinds[filtered_count++] = kinds[i];
-    const parse_annot_kind_t *node_kinds = variant_payload || type_reference
+    const parse_annot_kind_t *node_kinds = variant_payload || flagset_field
+        || type_reference
         || intrinsic_binary || intrinsic_unary
         ? filtered_kinds : kinds;
-    size_t node_kind_count = variant_payload || type_reference
+    size_t node_kind_count = variant_payload || flagset_field || type_reference
         || intrinsic_binary || intrinsic_unary
         ? filtered_count : sizeof(kinds) / sizeof(kinds[0]);
     parse_annot_kind_t filtered_reference_kinds[
@@ -36838,7 +37737,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         bind_declared_type_from_node(grammar, node);
         parse_tree_walk_apply_node(state->annotation_walk, node, parent,
             depth, child_index, node_kinds, node_kind_count, false);
-        if (!refine_intrinsic_binary_result(grammar, unit, state, node)
+        if (!refine_flagset_operator_result(grammar, unit, state, node)
+            || !refine_intrinsic_binary_result(grammar, unit, state, node)
             || !refine_intrinsic_unary_result(grammar, unit, state, node))
             return;
         if (nt_is(grammar, node, "alias-stmt")
@@ -36893,6 +37793,25 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0018"),
             CORE_STRING_STATIC("enum item value must be an integer literal"),
             link_source_location(node));
+        return;
+    }
+    if (!entering && flagset_declaration_ancestor(grammar, node)
+        && !cache_flagset_semantics(grammar, unit, state, node)) {
+        parse_tree_t *declaration = flagset_declaration_ancestor(grammar,
+                                                                  node);
+        parse_sym_entry_t *owner = declaration
+            ? core_tree_node_value(declaration).sym : nullptr;
+        if (owner && !parse_sym_binding(owner,
+                CORE_STRING_STATIC("n00bb.flagset-invalid"))) {
+            parse_sym_set_binding(owner,
+                CORE_STRING_STATIC("n00bb.flagset-invalid"), owner);
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0019"),
+                CORE_STRING_STATIC(
+                    "invalid flagset declaration; values must be unique combinations of earlier flags and no more than 128 atomic flags are allowed"),
+                link_source_location(node));
+        }
         return;
     }
     if (!entering && nt_is(grammar, node, "simple-lit")
@@ -37232,6 +38151,15 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0012"),
                 CORE_STRING_STATIC(
                     "could not resolve the declared enum type"),
+                link_source_location(node));
+            return;
+        }
+        if (nt_is(grammar, node, "flagset-stmt")
+            && !finalize_flagset_symbol_type(grammar, node, unit, state)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0019"),
+                CORE_STRING_STATIC("could not resolve the declared flagset type"),
                 link_source_location(node));
             return;
         }
@@ -37764,12 +38692,27 @@ dump_symbols(core_translation_unit_t *unit)
                        symbol->owner_type->name.data);
             if (symbol->kind == PARSE_SYM_ENUM_CONST &&
                 symbol->has_comptime_value && symbol->comptime_value) {
-                const n00bb_enum_value_t *enum_value =
-                    symbol->comptime_value;
-                printf(", value=%s0x%016llx%016llx",
-                    enum_value->negative ? "-" : "",
-                    (unsigned long long)(enum_value->magnitude >> 64),
-                    (unsigned long long)enum_value->magnitude);
+                bool flagset = symbol->owner_type
+                    && symbol->owner_type->member_scope
+                    && core_string_eq(
+                        symbol->owner_type->member_scope->scope_tag,
+                        CORE_STRING_STATIC("flagset"));
+                if (flagset) {
+                    const n00bb_flagset_value_t *flag =
+                        symbol->comptime_value;
+                    printf(", mask=0x%016llx%016llx, flag-kind=%s",
+                        (unsigned long long)(flag->mask >> 64),
+                        (unsigned long long)flag->mask,
+                        flag->atomic ? "atomic" : "composite");
+                }
+                else {
+                    const n00bb_enum_value_t *enum_value =
+                        symbol->comptime_value;
+                    printf(", value=%s0x%016llx%016llx",
+                        enum_value->negative ? "-" : "",
+                        (unsigned long long)(enum_value->magnitude >> 64),
+                        (unsigned long long)enum_value->magnitude);
+                }
             }
             if (symbol->type_is_inferred)
                 printf(", type-source=inferred");
@@ -38452,6 +39395,7 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
             core_dict_init(&state->escape_edges, nullptr, nullptr);
             core_dict_init(&state->typecase_arm_types, nullptr, nullptr);
             core_dict_init(&state->iteration_plans, nullptr, nullptr);
+            core_dict_init(&state->flagset_values, nullptr, nullptr);
             state->lex = result;
             state->types = context->types;
             core_string_t source_path = core_source_file_path(&unit->source);
@@ -38730,6 +39674,7 @@ materialize_interface_type_members(locate_worker_context_t *loader,
     const char *scope_tag = declaration->type_shape_kind ==
             TH_ENV_TYPE_SHAPE_VARIANT ? "variant"
         : declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_ENUM ? "enum"
+        : declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_BITSET ? "flagset"
         : "type";
     parse_symtab_push_scope_all(symtab,
                                 core_string_from_cstr(type_symbol->name.data));
@@ -38756,8 +39701,19 @@ materialize_interface_type_members(locate_worker_context_t *loader,
         ? interface_enum_values_metadata(loader, declaration->qualified_name,
                                          &enum_values_size)
         : nullptr;
+    size_t flagset_values_size = 0;
+    const uint8_t *flagset_values = declaration->type_shape_kind ==
+            TH_ENV_TYPE_SHAPE_BITSET
+        ? interface_flagset_values_metadata(loader,
+            declaration->qualified_name, &flagset_values_size)
+        : nullptr;
     if (declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_ENUM &&
         !enum_values) {
+        parse_symtab_pop_scope_all(symtab);
+        return false;
+    }
+    if (declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_BITSET
+        && !flagset_values) {
         parse_symtab_pop_scope_all(symtab);
         return false;
     }
@@ -38781,6 +39737,7 @@ materialize_interface_type_members(locate_worker_context_t *loader,
         parse_sym_kind_t kind = declaration->type_shape_kind ==
                 TH_ENV_TYPE_SHAPE_VARIANT ? PARSE_SYM_TAG
             : declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_ENUM
+                || declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_BITSET
                 ? PARSE_SYM_ENUM_CONST : PARSE_SYM_VARIABLE;
         parse_sym_entry_t *entry = parse_symtab_add(symtab,
             CORE_STRING_STATIC(""), core_string_from_cstr(member->name),
@@ -38818,21 +39775,44 @@ materialize_interface_type_members(locate_worker_context_t *loader,
                 PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_COMPTIME);
             parse_sym_set_storage_duration(entry,
                 PARSE_SYM_STORAGE_COMPTIME);
-            n00bb_enum_value_t value = {0};
-            if (!decode_interface_enum_value(enum_values,
-                    enum_values_size, member->name, &value)) {
-                ok = false;
-                break;
+            if (declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_BITSET) {
+                n00bb_flagset_value_t value = {0};
+                n00bb_flagset_info_t info = {0};
+                if (!decode_interface_flagset_value(flagset_values,
+                        flagset_values_size, member->name, &value, &info)) {
+                    ok = false;
+                    break;
+                }
+                n00bb_flagset_value_t *stored = core_arena_alloc(
+                    &state->semantic_values, sizeof(*stored));
+                n00bb_flagset_info_t *stored_info = parse_sym_binding(
+                    type_symbol, CORE_STRING_STATIC("n00bb.flagset-info"));
+                if (!stored) { ok = false; break; }
+                *stored = value;
+                if (!stored_info) {
+                    stored_info = core_arena_alloc(&state->semantic_values,
+                                                   sizeof(*stored_info));
+                    if (!stored_info || !parse_sym_set_binding(type_symbol,
+                            CORE_STRING_STATIC("n00bb.flagset-info"),
+                            stored_info)) { ok = false; break; }
+                    *stored_info = info;
+                }
+                entry->comptime_value = stored;
             }
-            n00bb_enum_value_t *stored = core_arena_alloc(
-                &state->semantic_values, sizeof(*stored));
-            if (!stored) {
-                ok = false;
-                break;
+            else {
+                n00bb_enum_value_t value = {0};
+                if (!decode_interface_enum_value(enum_values,
+                        enum_values_size, member->name, &value)) {
+                    ok = false;
+                    break;
+                }
+                n00bb_enum_value_t *stored = core_arena_alloc(
+                    &state->semantic_values, sizeof(*stored));
+                if (!stored) { ok = false; break; }
+                *stored = value;
+                enum_range_include(&range, value);
+                entry->comptime_value = stored;
             }
-            *stored = value;
-            enum_range_include(&range, value);
-            entry->comptime_value = stored;
             entry->has_comptime_value = true;
         }
         if (declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_RECORD)
@@ -39019,6 +39999,8 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
                         ? CORE_STRING_STATIC("variant")
                     : declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_ENUM
                         ? CORE_STRING_STATIC("enum")
+                    : declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_BITSET
+                        ? CORE_STRING_STATIC("flagset")
                     : declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_ALIAS
                         ? CORE_STRING_STATIC("alias")
                     : declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_NOMINAL

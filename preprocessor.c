@@ -1711,8 +1711,15 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
         }
     }
     if (is_name(ctx->grammar, node, "unary-expr")) {
-        int32_t rule = core_tree_node_value(node).rule_index;
-        if (rule < 0 || (rule > 2 && rule != 5)) {
+        size_t count = core_tree_num_children(node);
+        bool allowed = count == 1;
+        if (count == 2 && core_tree_is_leaf(core_tree_child(node, 0))) {
+            core_string_t op = parse_tree_leaf_text(core_tree_child(node, 0));
+            allowed = core_string_eq(op, CORE_STRING_STATIC("!"))
+                || core_string_eq(op, CORE_STRING_STATIC("-"))
+                || core_string_eq(op, CORE_STRING_STATIC("+"));
+        }
+        if (!allowed) {
             pp_error(ctx, node,
                      "casts and reference operators are not allowed in a preprocessor condition");
             return false;

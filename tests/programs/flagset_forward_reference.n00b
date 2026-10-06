@@ -1,0 +1,5 @@
+flagset ForwardFlags {
+    both = first + second,
+    first,
+    second,
+}

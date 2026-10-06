@@ -1,0 +1,5 @@
+import flagset_archive_dep
+
+var permissions: flagset_archive_dep.FilePerms = flagset_archive_dep.FilePerms.read_write
+var can_read: bool = permissions.read
+var empty: flagset_archive_dep.FilePerms = nil

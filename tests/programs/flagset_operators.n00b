@@ -1,0 +1,20 @@
+flagset FilePerms {
+    read,
+    write,
+    execute,
+    read_write = read + write,
+    none = nil,
+}
+
+var read: FilePerms = FilePerms.read
+var write: FilePerms = FilePerms.write
+var nil_value: FilePerms = nil
+var combined: FilePerms = read + write
+var removed: FilePerms = combined - write
+var intersected: FilePerms = combined & read
+var toggled: FilePerms = combined ^ write
+var migrated_union: FilePerms = read | write
+var complemented: FilePerms = ~removed
+var empty: bool = !FilePerms.none
+var same: bool = combined == FilePerms.read_write
+var different: bool = removed != combined

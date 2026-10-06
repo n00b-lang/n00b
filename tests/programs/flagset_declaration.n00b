@@ -1,0 +1,10 @@
+flagset FilePerms {
+    read,
+    write,
+    execute,
+    read_write = read + write,
+    none = nil,
+    all = ~none,
+}
+
+var permissions: FilePerms = FilePerms.read_write
