@@ -1,0 +1,10 @@
+# overview
+#[outer#
+# belongs to outer
+#[inner#
+# belongs to both regions
+#]outer#
+# belongs to inner
+#]inner#
+
+const answer: int = 42

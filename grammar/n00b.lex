@@ -1,3 +1,4 @@
+@lex-region("#[", "#]", "#")
 @lex-comment("#")
 @lex-comment("//")
 @lex-comment("/", "/", fill("*"))

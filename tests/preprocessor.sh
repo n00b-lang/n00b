@@ -7257,3 +7257,26 @@ done
     "$tmp/top_level_phase_order.ir"
 grep -q 'edge requires #1 -> #[0-9][0-9]*' \
     "$tmp/top_level_phase_order.ir"
+
+"$compiler" parse "$script_dir/programs/comment_regions.n00b" \
+    >"$tmp/comment_regions.out" 2>"$tmp/comment_regions.err" || {
+    cat "$tmp/comment_regions.err"
+    cat "$tmp/comment_regions.out"
+    exit 1
+}
+if "$compiler" parse "$script_dir/programs/comment_region_unmatched.n00b" \
+    >"$tmp/comment_region_unmatched.out" \
+    2>"$tmp/comment_region_unmatched.err"; then
+    echo 'unmatched comment-region close unexpectedly parsed' >&2
+    exit 1
+fi
+grep -q 'unmatched comment-region close' \
+    "$tmp/comment_region_unmatched.err"
+if "$compiler" parse "$script_dir/programs/comment_region_not_standalone.n00b" \
+    >"$tmp/comment_region_not_standalone.out" \
+    2>"$tmp/comment_region_not_standalone.err"; then
+    echo 'non-standalone comment-region anchor unexpectedly parsed' >&2
+    exit 1
+fi
+grep -q 'region anchor must be the only non-whitespace text on its line' \
+    "$tmp/comment_region_not_standalone.err"
