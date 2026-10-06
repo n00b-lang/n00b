@@ -13,12 +13,269 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <utf8proc.h>
 
 static pthread_mutex_t lex_compile_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local char lex_compile_error[256];
 
 static bool is_line_terminator(core_codepoint_t cp) {
   return cp == '\n' || cp == 0x2028;
+}
+
+static bool is_line_whitespace(core_codepoint_t cp) {
+  return cp == ' ' || cp == '\t' || cp == '\r' || cp == '\f'
+      || cp == '\v' || cp == 0x85 || cp == 0xa0 || cp == 0x1680
+      || (cp >= 0x2000 && cp <= 0x200a) || cp == 0x202f
+      || cp == 0x205f || cp == 0x3000;
+}
+
+typedef struct {
+  parse_trivia_t *open;
+  parse_trivia_t *close;
+} lex_region_pair_t;
+
+bool scan_lex_finalize_regions(parse_scanner_t *s);
+
+static void clear_region_links(parse_trivia_t *trivia) {
+  parse_trivia_region_link_t *link = trivia->regions;
+  while (link) {
+    parse_trivia_region_link_t *next = link->next;
+    core_free(link);
+    link = next;
+  }
+  trivia->regions = nullptr;
+}
+
+static bool normalize_region_name(parse_scanner_t *s, parse_trivia_t *trivia) {
+  utf8proc_uint8_t *normalized = nullptr;
+  utf8proc_ssize_t len = utf8proc_map(
+      (const utf8proc_uint8_t *)trivia->region_name.data,
+      (utf8proc_ssize_t)trivia->region_name.u8_bytes, &normalized,
+      UTF8PROC_STABLE | UTF8PROC_COMPOSE);
+  if (len < 0) {
+    scan_set_invalid(s, CORE_STRING_STATIC("invalid comment-region name"),
+                     trivia->start_byte - s->source_base);
+    return false;
+  }
+  if (trivia->owns_region_name) core_free(trivia->region_name.data);
+  trivia->region_name = core_string_borrow((const char *)normalized, (size_t)len);
+  trivia->owns_region_name = true;
+  return true;
+}
+
+static void add_region_link(parse_trivia_t *trivia, uint64_t region_id) {
+  parse_trivia_region_link_t **tail = &trivia->regions;
+  while (*tail) {
+    if ((*tail)->region_id == region_id) return;
+    tail = &(*tail)->next;
+  }
+  *tail = core_alloc(parse_trivia_region_link_t);
+  **tail = (parse_trivia_region_link_t){.region_id = region_id};
+}
+
+static int compare_trivia_span(const void *left, const void *right) {
+  const parse_trivia_t *a = *(parse_trivia_t *const *)left;
+  const parse_trivia_t *b = *(parse_trivia_t *const *)right;
+  if (a->start_byte < b->start_byte) return -1;
+  if (a->start_byte > b->start_byte) return 1;
+  if (a->end_byte < b->end_byte) return -1;
+  if (a->end_byte > b->end_byte) return 1;
+  return 0;
+}
+
+static size_t append_trivia_ptrs(parse_trivia_t *trivia,
+                                 parse_trivia_t **items, size_t at) {
+  for (; trivia; trivia = trivia->next) items[at++] = trivia;
+  return at;
+}
+
+static bool token_overlaps_line(const parse_token_stream_t *stream,
+                                uint32_t line) {
+  for (int32_t i = 0; i < stream->token_count; i++) {
+    const parse_token_info_t *token = stream->tokens[i];
+    if (token->tid != PARSE_TOK_EOF
+        && token->line <= line && token->endline >= line) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool token_between(const parse_token_stream_t *stream,
+                          size_t start_byte, size_t end_byte) {
+  for (int32_t i = 0; i < stream->token_count; i++) {
+    const parse_token_info_t *token = stream->tokens[i];
+    if (token->tid != PARSE_TOK_EOF && token->end_byte > start_byte
+        && token->start_byte < end_byte) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void group_anchor_comments(parse_token_stream_t *stream,
+                                  parse_trivia_t **items, size_t count) {
+  for (size_t i = 0; i < count; i++) {
+    parse_trivia_t *anchor = items[i];
+    if (anchor->kind != PARSE_TRIVIA_REGION_OPEN
+        && anchor->kind != PARSE_TRIVIA_REGION_CLOSE) {
+      continue;
+    }
+    uint64_t group = anchor->anchor_order;
+    anchor->anchor_group = group;
+
+    size_t boundary = anchor->start_byte;
+    for (size_t j = i; j-- > 0;) {
+      parse_trivia_t *candidate = items[j];
+      if (candidate->kind == PARSE_TRIVIA_REGION_OPEN
+          || candidate->kind == PARSE_TRIVIA_REGION_CLOSE) {
+        break;
+      }
+      if (candidate->kind == PARSE_TRIVIA_SPACE) continue;
+      if (candidate->kind != PARSE_TRIVIA_COMMENT
+          || (candidate->anchor_group && candidate->anchor_group != group)
+          || token_overlaps_line(stream, candidate->line)
+          || token_between(stream, candidate->end_byte, boundary)) {
+        break;
+      }
+      candidate->anchor_group = group;
+      boundary = candidate->start_byte;
+    }
+
+    boundary = anchor->end_byte;
+    for (size_t j = i + 1; j < count; j++) {
+      parse_trivia_t *candidate = items[j];
+      if (candidate->kind == PARSE_TRIVIA_REGION_OPEN
+          || candidate->kind == PARSE_TRIVIA_REGION_CLOSE) {
+        break;
+      }
+      if (candidate->kind == PARSE_TRIVIA_SPACE) continue;
+      if (candidate->kind != PARSE_TRIVIA_COMMENT
+          || (candidate->anchor_group && candidate->anchor_group != group)
+          || token_overlaps_line(stream, candidate->line)
+          || token_between(stream, boundary, candidate->start_byte)) {
+        break;
+      }
+      candidate->anchor_group = group;
+      boundary = candidate->end_byte;
+    }
+  }
+}
+
+bool scan_lex_finalize_regions(parse_scanner_t *s) {
+  parse_token_stream_t *stream = s ? s->stream : nullptr;
+  scan_lex_t *program = s ? scan_grammar_lex_compiled(s->grammar) : nullptr;
+  if (!program || !stream || !program->spec->regions) return true;
+
+  size_t count = 0;
+  for (int32_t i = 0; i < stream->token_count; i++) {
+    for (parse_trivia_t *t = stream->tokens[i]->leading_trivia; t; t = t->next)
+      count++;
+    for (parse_trivia_t *t = stream->tokens[i]->trailing_trivia; t; t = t->next)
+      count++;
+  }
+  for (parse_trivia_t *t = s->pending_leading; t; t = t->next) count++;
+  for (parse_trivia_t *t = s->pending_trailing; t; t = t->next) count++;
+  if (!count) return true;
+
+  parse_trivia_t **items = core_alloc_array(parse_trivia_t *, count);
+  size_t at = 0;
+  for (int32_t i = 0; i < stream->token_count; i++) {
+    at = append_trivia_ptrs(stream->tokens[i]->leading_trivia, items, at);
+    at = append_trivia_ptrs(stream->tokens[i]->trailing_trivia, items, at);
+  }
+  at = append_trivia_ptrs(s->pending_leading, items, at);
+  at = append_trivia_ptrs(s->pending_trailing, items, at);
+  qsort(items, count, sizeof(*items), compare_trivia_span);
+
+  size_t anchor_count = 0;
+  for (size_t i = 0; i < count; i++) {
+    clear_region_links(items[i]);
+    items[i]->region_id = 0;
+    items[i]->anchor_order = 0;
+    items[i]->anchor_group = 0;
+    if (items[i]->kind == PARSE_TRIVIA_REGION_OPEN
+        || items[i]->kind == PARSE_TRIVIA_REGION_CLOSE) {
+      anchor_count++;
+      items[i]->anchor_order = anchor_count;
+      if (!normalize_region_name(s, items[i])) {
+        core_free(items);
+        return false;
+      }
+    }
+  }
+
+  lex_region_pair_t *pairs = core_alloc_array(lex_region_pair_t, anchor_count);
+  parse_trivia_t **opens = core_alloc_array(parse_trivia_t *, anchor_count);
+  size_t pair_count = 0;
+  size_t open_count = 0;
+  uint64_t next_id = 1;
+
+  for (size_t i = 0; i < count; i++) {
+    parse_trivia_t *anchor = items[i];
+    if (anchor->kind == PARSE_TRIVIA_REGION_OPEN) {
+      anchor->region_id = next_id++;
+      opens[open_count++] = anchor;
+      continue;
+    }
+    if (anchor->kind != PARSE_TRIVIA_REGION_CLOSE) continue;
+
+    size_t match = open_count;
+    while (match && !core_string_eq(opens[match - 1]->region_name,
+                                    anchor->region_name)) {
+      match--;
+    }
+    if (!match) {
+      scan_set_invalid(s, CORE_STRING_STATIC("unmatched comment-region close"),
+                       anchor->start_byte - s->source_base);
+      core_free(opens);
+      core_free(pairs);
+      core_free(items);
+      return false;
+    }
+    parse_trivia_t *open = opens[match - 1];
+    memmove(opens + match - 1, opens + match,
+            (open_count - match) * sizeof(*opens));
+    open_count--;
+    anchor->region_id = open->region_id;
+    pairs[pair_count++] = (lex_region_pair_t){.open = open, .close = anchor};
+  }
+
+  if (open_count) {
+    parse_trivia_t *open = opens[open_count - 1];
+    scan_set_invalid(s, CORE_STRING_STATIC("unclosed comment region"),
+                     open->start_byte - s->source_base);
+    core_free(opens);
+    core_free(pairs);
+    core_free(items);
+    return false;
+  }
+
+  for (size_t i = 0; i < count; i++) {
+    if (items[i]->kind != PARSE_TRIVIA_COMMENT) continue;
+    for (size_t j = 0; j < pair_count; j++) {
+      if (items[i]->start_byte >= pairs[j].open->end_byte
+          && items[i]->end_byte <= pairs[j].close->start_byte) {
+        add_region_link(items[i], pairs[j].open->region_id);
+      }
+    }
+  }
+  for (size_t i = 0; i < pair_count; i++) {
+    for (size_t j = 0; j < pair_count; j++) {
+      if (i == j) continue;
+      if (pairs[i].open->start_byte >= pairs[j].open->end_byte
+          && pairs[i].close->end_byte <= pairs[j].close->start_byte) {
+        add_region_link(pairs[i].open, pairs[j].open->region_id);
+        add_region_link(pairs[i].close, pairs[j].open->region_id);
+      }
+    }
+  }
+  group_anchor_comments(stream, items, count);
+
+  core_free(opens);
+  core_free(pairs);
+  core_free(items);
+  return true;
 }
 
 typedef struct {
@@ -1366,7 +1623,19 @@ clone_pending_recovery_token(const parse_token_info_t *source) {
     *leading = core_alloc(parse_trivia_t);
     **leading = *item;
     (*leading)->text = core_string_dup(item->text);
+    (*leading)->region_name = item->region_name.data
+        ? core_string_dup(item->region_name) : (core_string_t){0};
+    (*leading)->regions = nullptr;
+    parse_trivia_region_link_t **leading_region = &(*leading)->regions;
+    for (const parse_trivia_region_link_t *link = item->regions;
+         link; link = link->next) {
+      *leading_region = core_alloc(parse_trivia_region_link_t);
+      **leading_region = *link;
+      (*leading_region)->next = nullptr;
+      leading_region = &(*leading_region)->next;
+    }
     (*leading)->owns_text = true;
+    (*leading)->owns_region_name = (*leading)->region_name.data != nullptr;
     (*leading)->next = nullptr;
     leading = &(*leading)->next;
   }
@@ -1376,7 +1645,19 @@ clone_pending_recovery_token(const parse_token_info_t *source) {
     *trailing = core_alloc(parse_trivia_t);
     **trailing = *item;
     (*trailing)->text = core_string_dup(item->text);
+    (*trailing)->region_name = item->region_name.data
+        ? core_string_dup(item->region_name) : (core_string_t){0};
+    (*trailing)->regions = nullptr;
+    parse_trivia_region_link_t **trailing_region = &(*trailing)->regions;
+    for (const parse_trivia_region_link_t *link = item->regions;
+         link; link = link->next) {
+      *trailing_region = core_alloc(parse_trivia_region_link_t);
+      **trailing_region = *link;
+      (*trailing_region)->next = nullptr;
+      trailing_region = &(*trailing_region)->next;
+    }
     (*trailing)->owns_text = true;
+    (*trailing)->owns_region_name = (*trailing)->region_name.data != nullptr;
     (*trailing)->next = nullptr;
     trailing = &(*trailing)->next;
   }
@@ -2711,6 +2992,9 @@ static bool validate_embedded_body(parse_scanner_t *outer,
 
   scan_scanner_take_state(scanner, scan_lex_session_free);
   scan_scanner_set_compact_callback(scanner, scan_lex_compact_state);
+  if (program->spec->regions) {
+    scan_scanner_set_finalize_callback(scanner, scan_lex_finalize_regions);
+  }
   scan_lex_reset_state(scanner);
 
   parse_token_stream_t *stream = scan_token_stream_new(scanner);
@@ -3479,6 +3763,82 @@ static bool resume_pending_string(parse_scanner_t *s) {
   }
 
   return true;
+}
+
+typedef enum : uint8_t {
+  REGION_NONE,
+  REGION_CONSUMED,
+  REGION_STOP,
+} region_result_t;
+
+static region_result_t try_region(parse_scanner_t *s) {
+  scan_lex_session_t *run = s->user_state;
+  const scan_lex_region_t *matched = nullptr;
+  bool opening = false;
+  size_t prefix_bytes = 0;
+  for (const scan_lex_region_t *region = run->program->spec->regions;
+       region && region->opener.data; region++) {
+    core_string_t prefixes[] = {region->opener, region->closer};
+    for (size_t i = 0; i < 2; i++) {
+      if (at_str(s, prefixes[i]) && prefixes[i].u8_bytes > prefix_bytes) {
+        matched = region;
+        opening = i == 0;
+        prefix_bytes = prefixes[i].u8_bytes;
+      }
+      else if (!s->source_final && partial_at_end(s, prefixes[i])) {
+        scan_set_incomplete(s,
+            CORE_STRING_STATIC("region anchor may continue"), s->cursor);
+        return REGION_STOP;
+      }
+    }
+  }
+  if (!matched) return REGION_NONE;
+  if (run->line_has_token) {
+    scan_set_invalid(s,
+        CORE_STRING_STATIC("region anchor must be the only non-whitespace text on its line"),
+        s->cursor);
+    return REGION_STOP;
+  }
+
+  scan_mark(s);
+  scan_advance_bytes(s, prefix_bytes);
+  size_t name_start = s->cursor;
+  while (!scan_at_eof(s)
+         && !is_line_terminator(scan_peek(s, 0))
+         && !at_str(s, matched->terminator)) {
+    scan_advance(s);
+  }
+  if (scan_at_eof(s) && !s->source_final) {
+    scan_set_incomplete(s,
+        CORE_STRING_STATIC("region anchor may continue"), s->mark);
+    return REGION_STOP;
+  }
+  if (scan_at_eof(s) || is_line_terminator(scan_peek(s, 0))) {
+    scan_set_invalid(s, CORE_STRING_STATIC("malformed region anchor"),
+                     s->mark);
+    return REGION_STOP;
+  }
+  size_t name_end = s->cursor;
+  scan_advance_bytes(s, matched->terminator.u8_bytes);
+  while (!scan_at_eof(s) && !is_line_terminator(scan_peek(s, 0))) {
+    if (!is_line_whitespace(scan_peek(s, 0))) {
+      scan_set_invalid(s,
+          CORE_STRING_STATIC("region anchor must be the only non-whitespace text on its line"),
+          s->mark);
+      return REGION_STOP;
+    }
+    scan_advance(s);
+  }
+
+  core_string_t name = core_string_borrow(
+      s->input + name_start, name_end - name_start);
+  parse_trivia_t *trivia = scan_add_trivia(
+      s, scan_extract(s), opening ? PARSE_TRIVIA_REGION_OPEN
+                                  : PARSE_TRIVIA_REGION_CLOSE);
+  if (!trivia) return REGION_STOP;
+  trivia->region_name = core_string_dup(name);
+  trivia->owns_region_name = true;
+  return REGION_CONSUMED;
 }
 
 static bool try_comment(parse_scanner_t *s) {
@@ -5708,6 +6068,10 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     if (recipe_opener_may_continue(s, false)) {
       return false;
     }
+
+    region_result_t region = try_region(s);
+    if (region == REGION_STOP) return false;
+    if (region == REGION_CONSUMED) continue;
 
     if (try_comment(s)) {
       if (s->pending_leading || s->pending_trailing) {

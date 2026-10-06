@@ -35,7 +35,19 @@ clone_trivia(const parse_trivia_t *source)
         parse_trivia_t *copy = core_alloc(parse_trivia_t);
         *copy = *at;
         copy->text = core_string_dup(at->text);
+        copy->region_name = at->region_name.data
+            ? core_string_dup(at->region_name) : (core_string_t){0};
+        copy->regions = nullptr;
+        parse_trivia_region_link_t **region_tail = &copy->regions;
+        for (const parse_trivia_region_link_t *link = at->regions;
+             link; link = link->next) {
+            *region_tail = core_alloc(parse_trivia_region_link_t);
+            **region_tail = *link;
+            (*region_tail)->next = nullptr;
+            region_tail = &(*region_tail)->next;
+        }
         copy->owns_text = true;
+        copy->owns_region_name = copy->region_name.data != nullptr;
         copy->next = nullptr;
         *tail = copy;
         tail = &copy->next;
@@ -156,7 +168,8 @@ static bool
 trivia_eq(const parse_trivia_t *a, const parse_trivia_t *b)
 {
     while (a && b) {
-        if (a->kind != b->kind || !core_string_eq(a->text, b->text)) {
+        if (a->kind != b->kind || !core_string_eq(a->text, b->text)
+            || !core_string_eq(a->region_name, b->region_name)) {
             return false;
         }
         a = a->next;
@@ -280,10 +293,34 @@ shift_u32(uint32_t value, int64_t delta)
 }
 
 static void
+shift_trivia(parse_trivia_t *trivia,
+             const scan_stream_checkpoint_t *checkpoint,
+             const parse_scanner_t *scanner, ptrdiff_t byte_delta)
+{
+    int64_t line_delta = (int64_t)scanner->line - checkpoint->line;
+    int64_t column_delta = (int64_t)scanner->column - checkpoint->column;
+
+    for (; trivia; trivia = trivia->next) {
+        trivia->start_byte = shift_byte(trivia->start_byte, byte_delta);
+        trivia->end_byte = shift_byte(trivia->end_byte, byte_delta);
+        if (trivia->line == checkpoint->line) {
+            trivia->column = shift_u32(trivia->column, column_delta);
+        }
+        if (trivia->endline == checkpoint->line) {
+            trivia->endcol = shift_u32(trivia->endcol, column_delta);
+        }
+        trivia->line = shift_u32(trivia->line, line_delta);
+        trivia->endline = shift_u32(trivia->endline, line_delta);
+    }
+}
+
+static void
 shift_reused_token(parse_token_info_t *token,
                    const scan_stream_checkpoint_t *checkpoint,
                    const parse_scanner_t *scanner, ptrdiff_t byte_delta)
 {
+    shift_trivia(token->leading_trivia, checkpoint, scanner, byte_delta);
+    shift_trivia(token->trailing_trivia, checkpoint, scanner, byte_delta);
     token->start_byte = shift_byte(token->start_byte, byte_delta);
     token->end_byte = shift_byte(token->end_byte, byte_delta);
     if (token->has_content_span) {
@@ -437,14 +474,25 @@ append_pending_eof_trivia(parse_token_stream_t *ts)
     scanner->pending_trailing = nullptr;
 }
 
+static void
+finalize_metadata(parse_token_stream_t *ts)
+{
+    if (!ts->metadata_finalized && ts->scanner->finalize_cb
+        && ts->scanner->status != SCAN_STATUS_INVALID) {
+        ts->metadata_finalized = ts->scanner->finalize_cb(ts->scanner);
+    }
+}
+
 static bool
 ensure_filled(parse_token_stream_t *ts, int32_t target)
 {
     while (ts->token_count <= target) {
         if (try_converge(ts)) {
+            finalize_metadata(ts);
             return ts->token_count > target;
         }
         if (ts->scanner->at_eof) {
+            finalize_metadata(ts);
             return false;
         }
 
@@ -466,6 +514,7 @@ ensure_filled(parse_token_stream_t *ts, int32_t target)
             if (ts->stale_count) {
                 reconcile_stale_suffix(ts);
             }
+            finalize_metadata(ts);
             return ts->token_count > target;
         }
     }
@@ -487,6 +536,7 @@ scan_token_stream_new(parse_scanner_t *scanner)
     ts->pos         = 0;
     ts->next_index  = 0;
     ts->exhausted   = false;
+    ts->metadata_finalized = false;
 
     scanner->stream = ts;
 
@@ -671,6 +721,12 @@ scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos)
     *trivia = (parse_trivia_t){
         .text = core_string_dup(text),
         .kind = PARSE_TRIVIA_SPACE,
+        .line = token->line,
+        .column = token->column,
+        .endline = token->endline,
+        .endcol = token->endcol,
+        .start_byte = token->start_byte,
+        .end_byte = token->end_byte,
         .owns_text = true,
     };
 
@@ -757,6 +813,7 @@ scan_stream_reset(parse_token_stream_t *ts)
     ts->pos         = 0;
     ts->next_index  = 0;
     ts->exhausted   = false;
+    ts->metadata_finalized = false;
 
     truncate_checkpoints(ts, 0);
     clear_stale_tokens(ts);
@@ -774,13 +831,18 @@ scan_stream_append(parse_token_stream_t *ts, const char *data, size_t len)
     }
 
     ts->exhausted = false;
+    ts->metadata_finalized = false;
     return true;
 }
 
 bool
 scan_stream_finish(parse_token_stream_t *ts)
 {
-    return ts && scan_scanner_finish(ts->scanner);
+    if (!ts || !scan_scanner_finish(ts->scanner)) {
+        return false;
+    }
+    ts->metadata_finalized = false;
+    return true;
 }
 
 bool
@@ -942,6 +1004,7 @@ scan_stream_replace(parse_token_stream_t *ts,
     s->source_final = true;
     s->append_closed = true;
     ts->exhausted = false;
+    ts->metadata_finalized = false;
     return true;
 }
 

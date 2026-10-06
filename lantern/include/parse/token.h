@@ -32,7 +32,14 @@
 typedef enum : uint8_t {
     PARSE_TRIVIA_SPACE,
     PARSE_TRIVIA_COMMENT,
+    PARSE_TRIVIA_REGION_OPEN,
+    PARSE_TRIVIA_REGION_CLOSE,
 } parse_trivia_kind_t;
+
+typedef struct parse_trivia_region_link_t {
+    uint64_t                           region_id;
+    struct parse_trivia_region_link_t *next;
+} parse_trivia_region_link_t;
 
 typedef enum : uint8_t {
     PARSE_TOKEN_SOURCE,
@@ -41,9 +48,21 @@ typedef enum : uint8_t {
 
 typedef struct parse_trivia_t {
     core_string_t         text;
+    core_string_t         region_name;
     struct parse_trivia_t *next;
+    parse_trivia_region_link_t *regions;
     parse_trivia_kind_t    kind;
+    uint32_t               line;
+    uint32_t               column;
+    uint32_t               endline;
+    uint32_t               endcol;
+    size_t                 start_byte;
+    size_t                 end_byte;
+    uint64_t               region_id;
+    uint64_t               anchor_order;
+    uint64_t               anchor_group;
     bool                   owns_text;
+    bool                   owns_region_name;
 } parse_trivia_t;
 
 core_option_decl(core_string_t);
@@ -97,5 +116,8 @@ typedef struct parse_parser_t parse_parser_t;
 typedef int64_t (*parse_tokenizer_fn)(parse_parser_t *, void **);
 
 void parse_trivia_free(parse_trivia_t *t);
+size_t parse_trivia_region_count(const parse_trivia_t *trivia);
+uint64_t parse_trivia_region_at(const parse_trivia_t *trivia, size_t index);
+bool parse_trivia_in_region(const parse_trivia_t *trivia, uint64_t region_id);
 parse_token_info_t *parse_token_clone_for_tree(const parse_token_info_t *token);
 void                parse_token_free_from_tree(parse_token_info_t *token);

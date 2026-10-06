@@ -18,6 +18,7 @@ struct parse_token_stream_t {
 
     bool               exhausted;
     bool               edits_enabled;
+    bool               metadata_finalized;
 
     scan_stream_checkpoint_t *checkpoints;
     size_t                    checkpoint_count;

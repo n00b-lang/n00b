@@ -56,6 +56,7 @@
     X(OFFSET, "offset") \
     X(WIDTH, "width") \
     X(LEX_COMMENT, "lex-comment") \
+    X(LEX_REGION, "lex-region") \
     X(LEX_STRING, "lex-string") \
     X(LEX_STRING_FAMILY, "lex-string-family") \
     X(LEX_STRING_ESCAPES, "lex-string-escapes") \

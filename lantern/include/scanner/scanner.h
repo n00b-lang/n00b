@@ -14,6 +14,7 @@ typedef struct parse_scanner_t      parse_scanner_t;
 typedef struct parse_token_stream_t parse_token_stream_t;
 
 typedef bool (*parse_scan_cb_t)(parse_scanner_t *s);
+typedef bool (*scan_finalize_cb_t)(parse_scanner_t *s);
 
 typedef void (*scan_reset_cb_t)(parse_scanner_t *s);
 typedef void (*scan_compact_cb_t)(parse_scanner_t *s, size_t removed_bytes);
@@ -58,6 +59,7 @@ struct parse_scanner_t {
     uint32_t          mark_col;
 
     parse_scan_cb_t        cb;
+    scan_finalize_cb_t     finalize_cb;
     scan_reset_cb_t  reset_cb;
     scan_compact_cb_t compact_cb;
     scan_state_free_cb_t state_free_cb;
@@ -119,6 +121,9 @@ extern void scan_scanner_take_buffer(parse_scanner_t *s);
 
 extern void scan_scanner_set_compact_callback(parse_scanner_t *s,
                                                scan_compact_cb_t compact_cb);
+
+extern void scan_scanner_set_finalize_callback(parse_scanner_t *s,
+                                                scan_finalize_cb_t finalize_cb);
 
 extern bool scan_scanner_discard_consumed(parse_scanner_t *s);
 
@@ -207,9 +212,9 @@ extern void scan_set_trivia_attach(parse_scanner_t       *s,
 
 extern scan_trivia_attach_t scan_trivia_attach(const parse_scanner_t *s);
 
-extern void scan_add_trivia(parse_scanner_t     *s,
-                                core_string_t       text,
-                                parse_trivia_kind_t  kind);
+extern parse_trivia_t *scan_add_trivia(parse_scanner_t    *s,
+                                       core_string_t       text,
+                                       parse_trivia_kind_t kind);
 
 extern void scan_add_trailing_trivia(parse_scanner_t *s,
                                            core_string_t text);

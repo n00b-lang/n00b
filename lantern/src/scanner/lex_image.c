@@ -350,6 +350,21 @@ static size_t snapshot_comments(lex_image_build_t *build,
   return offset;
 }
 
+static size_t snapshot_regions(lex_image_build_t *build,
+                               const scan_lex_region_t *items) {
+  size_t count = COUNT_RECIPES(items, opener);
+  size_t offset = snapshot_array(build, items, count, sizeof(*items),
+                                 _Alignof(scan_lex_region_t));
+  for (size_t i = 0; i + 1 < count; i++) {
+    const scan_lex_region_t *item = &items[i];
+    size_t item_offset = offset + i * sizeof(*items);
+    SNAP_STRING(scan_lex_region_t, opener);
+    SNAP_STRING(scan_lex_region_t, closer);
+    SNAP_STRING(scan_lex_region_t, terminator);
+  }
+  return offset;
+}
+
 static size_t snapshot_escapes(lex_image_build_t *build,
                                const scan_lex_escape_t *items) {
   size_t count = COUNT_RECIPES(items, prefix);
@@ -619,6 +634,7 @@ static size_t snapshot_spec(lex_image_build_t *build,
 
   SPEC_STRING(name);
   SPEC_ARRAY(comments, snapshot_comments);
+  SPEC_ARRAY(regions, snapshot_regions);
   SPEC_ARRAY(strings, snapshot_strings);
   SPEC_ARRAY(sigils, snapshot_sigils);
   SPEC_ARRAY(regexes, snapshot_regexes);

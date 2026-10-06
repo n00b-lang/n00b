@@ -11,6 +11,7 @@
 #include <string.h>
 
 core_list_decl(scan_lex_comment_t);
+core_list_decl(scan_lex_region_t);
 core_list_decl(scan_lex_string_t);
 core_list_decl(scan_lex_escape_t);
 core_list_decl(scan_lex_sigil_t);
@@ -64,6 +65,7 @@ core_list_decl(lex_string_escape_set_t);
 typedef struct {
     scan_lex_spec_t                    spec;
     core_list_t(scan_lex_comment_t)    comments;
+    core_list_t(scan_lex_region_t)     regions;
     core_list_t(scan_lex_string_t)     strings;
     core_list_t(scan_lex_sigil_t)      sigils;
     core_list_t(scan_lex_regex_t)      regexes;
@@ -196,6 +198,7 @@ lex_build_free(lex_build_t *b)
     }
 
     core_list_free(b->comments);
+    core_list_free(b->regions);
     core_list_free(b->strings);
     core_list_free(b->sigils);
     core_list_free(b->regexes);
@@ -488,6 +491,31 @@ build_comment(lex_build_t *b, const parse_annotation_t *a)
     }
 
     core_list_push(b->comments, item);
+}
+
+static void
+build_region(lex_build_t *b, const parse_annotation_t *a)
+{
+    scan_lex_region_t region = {
+        .opener = positional(&a->lex_opts, 0),
+        .closer = positional(&a->lex_opts, 1),
+        .terminator = positional(&a->lex_opts, 2),
+    };
+    if (!region.opener.data || !region.closer.data
+        || !region.terminator.data) {
+        if (!b->err[0])
+            snprintf(b->err, sizeof(b->err),
+                     "@lex-region expects open, close, and terminator strings");
+        return;
+    }
+    if (!region.opener.u8_bytes || !region.closer.u8_bytes
+        || !region.terminator.u8_bytes) {
+        if (!b->err[0])
+            snprintf(b->err, sizeof(b->err),
+                     "@lex-region delimiters cannot be empty");
+        return;
+    }
+    core_list_push(b->regions, region);
 }
 
 static lex_string_escape_set_t *
@@ -2841,6 +2869,7 @@ scan_lex_spec_from_grammar(parse_grammar_t *g)
 
         switch (a->kind) {
         case PARSE_ANNOT_LEX_COMMENT: build_comment(b, a); break;
+        case PARSE_ANNOT_LEX_REGION: build_region(b, a); break;
         case PARSE_ANNOT_LEX_STRING:  build_string(b, a);  break;
         case PARSE_ANNOT_LEX_STRING_FAMILY:
             build_string_family(b, a);
@@ -2976,6 +3005,10 @@ scan_lex_spec_from_grammar(parse_grammar_t *g)
     if (core_list_len(b->comments)) {
         core_list_push(b->comments, ((scan_lex_comment_t){0}));
         b->spec.comments = b->comments.data;
+    }
+    if (core_list_len(b->regions)) {
+        core_list_push(b->regions, ((scan_lex_region_t){0}));
+        b->spec.regions = b->regions.data;
     }
     if (core_list_len(b->strings)) {
         core_list_push(b->strings, ((scan_lex_string_t){0}));

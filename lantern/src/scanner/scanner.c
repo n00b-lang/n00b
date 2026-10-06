@@ -115,13 +115,20 @@ cc_match(parse_char_class_t cc, core_codepoint_t cp)
 }
 
 static parse_trivia_t *
-make_trivia(core_string_t text)
+make_trivia(parse_scanner_t *s, core_string_t text)
 {
     parse_trivia_t *t = core_alloc(parse_trivia_t);
 
-    t->text      = text;
-    t->next      = nullptr;
-    t->owns_text = true;
+    *t = (parse_trivia_t){
+        .text = text,
+        .line = s ? s->mark_line : 0,
+        .column = s ? s->mark_col : 0,
+        .endline = s ? s->line : 0,
+        .endcol = s ? s->column : 0,
+        .start_byte = s ? s->source_base + s->mark : 0,
+        .end_byte = s ? s->source_base + s->cursor : 0,
+        .owns_text = true,
+    };
     return t;
 }
 
@@ -202,6 +209,15 @@ scan_scanner_take_state(parse_scanner_t *s, scan_state_free_cb_t free_cb)
 {
     if (s) {
         s->state_free_cb = free_cb;
+    }
+}
+
+void
+scan_scanner_set_finalize_callback(parse_scanner_t *s,
+                                   scan_finalize_cb_t finalize_cb)
+{
+    if (s) {
+        s->finalize_cb = finalize_cb;
     }
 }
 
@@ -902,7 +918,7 @@ scan_add_leading_trivia_kind(parse_scanner_t    *s,
                                  core_string_t      text,
                                  parse_trivia_kind_t kind)
 {
-    parse_trivia_t *t = make_trivia(text);
+    parse_trivia_t *t = make_trivia(s, text);
 
     t->kind = kind;
 
@@ -931,17 +947,17 @@ scan_trivia_attach(const parse_scanner_t *s)
              : SCAN_TRIVIA_ATTACH_RIGHT;
 }
 
-void
+parse_trivia_t *
 scan_add_trivia(parse_scanner_t *s, core_string_t text,
                     parse_trivia_kind_t kind)
 {
     if (!s) {
-        return;
+        return nullptr;
     }
 
     if (s->trivia_attach == (uint8_t)SCAN_TRIVIA_ATTACH_LEFT) {
         parse_token_info_t *prev = scan_prev_token(s);
-        parse_trivia_t     *t    = make_trivia(text);
+        parse_trivia_t     *t    = make_trivia(s, text);
 
         t->kind = kind;
 
@@ -967,18 +983,20 @@ scan_add_trivia(parse_scanner_t *s, core_string_t text,
         }
         else {
             parse_trivia_free(t);
+            t = nullptr;
         }
 
-        return;
+        return t;
     }
 
     scan_add_leading_trivia_kind(s, text, kind);
+    return s->pending_leading_tail;
 }
 
 void
 scan_add_trailing_trivia(parse_scanner_t *s, core_string_t text)
 {
-    parse_trivia_t *t = make_trivia(text);
+    parse_trivia_t *t = make_trivia(s, text);
 
     t->kind = PARSE_TRIVIA_COMMENT;
 

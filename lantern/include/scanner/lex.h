@@ -55,6 +55,12 @@ typedef struct {
     bool                   nested;
 } scan_lex_comment_t;
 
+typedef struct {
+    core_string_t opener;
+    core_string_t closer;
+    core_string_t terminator;
+} scan_lex_region_t;
+
 typedef enum : uint8_t {
     SCAN_LEX_STR_RAW         = 1 << 0,
     SCAN_LEX_STR_MULTILINE   = 1 << 1,
@@ -300,6 +306,7 @@ typedef struct {
     core_string_t name;
 
     const scan_lex_comment_t *comments;
+    const scan_lex_region_t  *regions;
     const scan_lex_string_t  *strings;
     const scan_lex_sigil_t   *sigils;
     const scan_lex_regex_t   *regexes;
@@ -393,6 +400,7 @@ extern void        scan_lex_session_shift(void *session, size_t edit_start,
 extern void        scan_lex_session_free(void *session);
 
 extern bool scan_lex_scan(parse_scanner_t *s);
+extern bool scan_lex_finalize_regions(parse_scanner_t *s);
 extern void scan_lex_reset_state(parse_scanner_t *s);
 extern void scan_lex_compact_state(parse_scanner_t *s, size_t removed_bytes);
 

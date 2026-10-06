@@ -11,9 +11,22 @@ clone_trivia(const parse_trivia_t *source)
     for (const parse_trivia_t *item = source; item; item = item->next) {
         parse_trivia_t *copy = core_alloc(parse_trivia_t);
 
-        copy->text      = core_string_dup(item->text);
-        copy->kind      = item->kind;
+        *copy = *item;
+        copy->text = core_string_dup(item->text);
+        copy->region_name = item->region_name.data
+            ? core_string_dup(item->region_name) : (core_string_t){0};
+        copy->regions = nullptr;
+        parse_trivia_region_link_t **region_tail = &copy->regions;
+        for (const parse_trivia_region_link_t *link = item->regions;
+             link; link = link->next) {
+            *region_tail = core_alloc(parse_trivia_region_link_t);
+            **region_tail = *link;
+            (*region_tail)->next = nullptr;
+            region_tail = &(*region_tail)->next;
+        }
         copy->owns_text = true;
+        copy->owns_region_name = copy->region_name.data != nullptr;
+        copy->next = nullptr;
         *next           = copy;
         next            = &copy->next;
     }
@@ -30,10 +43,52 @@ parse_trivia_free(parse_trivia_t *t)
         if (t->owns_text) {
             core_free(t->text.data);
         }
+        if (t->owns_region_name) {
+            core_free(t->region_name.data);
+        }
+        while (t->regions) {
+            parse_trivia_region_link_t *next_region = t->regions->next;
+            core_free(t->regions);
+            t->regions = next_region;
+        }
 
         core_free(t);
         t = next;
     }
+}
+
+size_t
+parse_trivia_region_count(const parse_trivia_t *trivia)
+{
+    size_t result = 0;
+    for (const parse_trivia_region_link_t *link = trivia ? trivia->regions : nullptr;
+         link; link = link->next) {
+        result++;
+    }
+    return result;
+}
+
+uint64_t
+parse_trivia_region_at(const parse_trivia_t *trivia, size_t index)
+{
+    const parse_trivia_region_link_t *link = trivia ? trivia->regions : nullptr;
+    while (link && index) {
+        link = link->next;
+        index--;
+    }
+    return link ? link->region_id : 0;
+}
+
+bool
+parse_trivia_in_region(const parse_trivia_t *trivia, uint64_t region_id)
+{
+    for (const parse_trivia_region_link_t *link = trivia ? trivia->regions : nullptr;
+         link; link = link->next) {
+        if (link->region_id == region_id) {
+            return true;
+        }
+    }
+    return false;
 }
 
 parse_token_info_t *

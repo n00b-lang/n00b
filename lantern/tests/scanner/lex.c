@@ -1507,6 +1507,154 @@ static void test_a_grammar_declares_its_own_lexis(void) {
   core_free(text.data);
 }
 
+static parse_grammar_t *region_grammar(void) {
+  static const char *const G =
+      "@lex-region(\"#[\", \"#]\", \"#\")\n"
+      "@lex-comment(\"#\")\n"
+      "@lex-ident(as(\"IDENTIFIER\"))\n"
+      "<file> ::= %IDENTIFIER*\n";
+  parse_grammar_t *g = parse_grammar_new();
+  core_string_t text = core_string_from_cstr(G);
+  parse_bnf_declare_terminals(g, text);
+  bool loaded = parse_bnf_load(text, S("region.lex"), g);
+  if (!loaded)
+    fprintf(stderr, "region grammar load failed: %s\n", parse_bnf_error());
+  core_free(text.data);
+  if (!loaded) {
+    parse_grammar_free(g);
+    return nullptr;
+  }
+  return g;
+}
+
+static void test_comment_region_anchors_are_trivia(void) {
+  parse_grammar_t *g = region_grammar();
+  check("a comment-region lexer declaration loads", g != nullptr);
+  if (!g) return;
+
+  const char *source = "#[outer#\n# note\n#]outer#\nname";
+  core_buffer_t *buffer = nullptr;
+  parse_scanner_t *scanner = nullptr;
+  parse_token_stream_t *stream = scan_tokenize(
+      g, source, strlen(source), &buffer, &scanner);
+  parse_token_info_t *name = scan_stream_next(stream);
+  while (scan_stream_next(stream)) {
+  }
+  parse_trivia_t *open = name ? name->leading_trivia : nullptr;
+  parse_trivia_t *comment = open ? open->next : nullptr;
+  parse_trivia_t *close = comment ? comment->next : nullptr;
+  check("region anchors remain trivia ahead of ordinary comments",
+        name && open && open->kind == PARSE_TRIVIA_REGION_OPEN
+            && comment && comment->kind == PARSE_TRIVIA_COMMENT
+            && close && close->kind == PARSE_TRIVIA_REGION_CLOSE);
+  check("region anchor names and source spans are retained",
+        open && close && core_string_eq(open->region_name, S("outer"))
+            && core_string_eq(close->region_name, S("outer"))
+            && open->start_byte == 0 && open->end_byte == 8
+            && close->start_byte == 16 && close->end_byte == 24);
+  check("ordinary comment trivia also retains its source span",
+        comment && comment->start_byte == 9 && comment->end_byte == 15);
+  check("matched anchors receive one stable region identity",
+        open && close && open->region_id != 0
+            && open->region_id == close->region_id);
+  check("comments expose membership in every containing region",
+        comment && parse_trivia_region_count(comment) == 1
+            && parse_trivia_in_region(comment, open->region_id));
+  parse_token_info_t *tree_token = parse_token_clone_for_tree(name);
+  parse_trivia_t *tree_comment = tree_token->leading_trivia->next;
+  check("parse-tree token clones preserve comment-region metadata",
+        tree_comment && parse_trivia_in_region(tree_comment, open->region_id));
+  parse_token_free_from_tree(tree_token);
+  scan_token_stream_free(stream);
+  scan_scanner_free(scanner);
+  core_buffer_free(buffer);
+
+  check("code before an anchor is rejected",
+        source_status(g, "name #[#\n") == SCAN_STATUS_INVALID);
+  check("code after an anchor is rejected",
+        source_status(g, "#[# extra\n") == SCAN_STATUS_INVALID);
+  check("an unterminated anchor is rejected",
+        source_status(g, "#[name\n") == SCAN_STATUS_INVALID);
+  check("an unmatched named close is rejected",
+        source_status(g, "#]missing#\nname") == SCAN_STATUS_INVALID);
+  check("an open region at EOF is rejected",
+        source_status(g, "#[open#\nname") == SCAN_STATUS_INVALID);
+
+  const char *crossing =
+      "#[a#\n#[b#\n# both\n#]a#\n# b-only\n#]b#\nname";
+  stream = scan_tokenize_owned(g, crossing, strlen(crossing));
+  while (scan_stream_next(stream)) {
+  }
+  name = scan_stream_get(stream, 0);
+  open = name->leading_trivia;
+  parse_trivia_t *open_b = open->next;
+  comment = open_b->next;
+  parse_trivia_t *close_a = comment->next;
+  parse_trivia_t *comment_b = close_a->next;
+  parse_trivia_t *close_b = comment_b->next;
+  check("named comment regions may cross and match by name",
+        scan_status(stream->scanner) == SCAN_STATUS_COMPLETE
+            && open->region_id == close_a->region_id
+            && open_b->region_id == close_b->region_id
+            && open->region_id != open_b->region_id);
+  check("crossing-region comments retain exact memberships",
+        parse_trivia_region_count(comment) == 2
+            && parse_trivia_in_region(comment, open->region_id)
+            && parse_trivia_in_region(comment, open_b->region_id)
+            && parse_trivia_region_count(comment_b) == 1
+            && parse_trivia_in_region(comment_b, open_b->region_id));
+  scan_token_stream_free(stream);
+
+  const char *normalized = "#[e\xCC\x81#\n# note\n#]\xC3\xA9#\nname";
+  check("comment-region names match after NFC normalization",
+        source_status(g, normalized) == SCAN_STATUS_COMPLETE);
+
+  const char *grouped =
+      "# before\n#[r#\n# content\n#]r#\n# after\n\nname";
+  stream = scan_tokenize_owned(g, grouped, strlen(grouped));
+  while (scan_stream_next(stream)) {
+  }
+  name = scan_stream_get(stream, 0);
+  parse_trivia_t *before = name->leading_trivia;
+  open = before->next;
+  comment = open->next;
+  close = comment->next;
+  parse_trivia_t *after = close->next;
+  check("comment-only lines group with anchors across blank lines",
+        before->anchor_group == open->anchor_group
+            && comment->anchor_group == open->anchor_group
+            && after->anchor_group == close->anchor_group
+            && open->anchor_group != close->anchor_group);
+  check("anchor grouping does not expand region membership",
+        parse_trivia_region_count(before) == 0
+            && parse_trivia_region_count(comment) == 1
+            && parse_trivia_region_count(after) == 0);
+  scan_token_stream_free(stream);
+
+  check("U+2028 separates standalone comment-region anchors",
+        source_status(g, "#[r#\xE2\x80\xA8# note\xE2\x80\xA8#]r#\xE2\x80\xA8name")
+            == SCAN_STATUS_COMPLETE);
+
+  const char *editable = "#[old#\n# note\n#]old#\nname";
+  stream = scan_tokenize_owned(g, editable, strlen(editable));
+  check("comment-region streams support incremental edits",
+        scan_stream_enable_edits(stream));
+  while (scan_stream_next(stream)) {
+  }
+  check("incremental edits recompute region pairing",
+        scan_stream_replace(stream, 2, 19, "new#\n# note\n#]new", 17)
+            && scan_stream_get(stream, 100) == nullptr
+            && scan_status(stream->scanner) == SCAN_STATUS_COMPLETE);
+  name = scan_stream_get(stream, 0);
+  open = name->leading_trivia;
+  close = open->next->next;
+  check("incremental recomputation retains membership metadata",
+        open->region_id != 0 && open->region_id == close->region_id
+            && parse_trivia_in_region(open->next, open->region_id));
+  scan_token_stream_free(stream);
+  parse_grammar_free(g);
+}
+
 static void test_string_families_expand_once(void) {
   static const char *const G =
       "@lex-string-family(plain, prefixes(\"r\", \"R\"), "
@@ -4789,6 +4937,7 @@ int main(void) {
   test_literal_postprocessing_hooks();
   test_a_spec_is_reusable_across_runs();
   test_a_grammar_declares_its_own_lexis();
+  test_comment_region_anchors_are_trivia();
   test_string_families_expand_once();
   test_string_families_reject_duplicate_openers();
   test_string_families_diagnose_invalid_declarations();
