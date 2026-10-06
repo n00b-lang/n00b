@@ -1,0 +1,25 @@
+public type Archived_State {
+    count: int
+}
+
+public callback Archived_Callback {
+    call(value: int) -> int fail: string
+    handler(modify state: Archived_State, value: int) -> int fail: string
+    setup(handler: Ref[(modify state: Archived_State, value: int) -> int fail: string],
+          state: Ref[Archived_State], priority: int = 1) -> nil
+}
+
+public callback Archived_Event {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+
+public callback Archived_Transform {
+    call(value: `T) -> `U fail: `E
+    handler(value: `T) -> `U fail: `E
+}
+
+public func setup(
+    handler: Ref[(modify state: Archived_State, value: int) -> int fail: string],
+    state: Ref[Archived_State], priority: int = 1) -> nil {
+}

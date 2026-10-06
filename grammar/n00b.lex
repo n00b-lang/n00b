@@ -21,7 +21,7 @@
 	    int("INT_LIT"),
 	    float("FLOAT_LIT"))
 @lex-number(prefix("0x"), digits("0123456789abcdefABCDEF"), int("HEX_LIT"))
-@lex-soft-keywords("i", "u", "bits")
+@lex-soft-keywords("i", "u", "bits", "call", "handler", "setup")
 @lex-ident-profile("n00b-identifiers",
 		   normalize("nfc"),
 		   mixed_scripts("diagnose"),

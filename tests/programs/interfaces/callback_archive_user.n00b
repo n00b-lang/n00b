@@ -1,0 +1,42 @@
+import callback_archive_dep
+
+func archived_handler(
+    modify state: callback_archive_dep.Archived_State,
+    value: int) -> int fail: string {
+    return value
+}
+
+func archived_event(value: int) -> int {
+    return value
+}
+
+func archived_transform(value: string) -> bool fail: string {
+    return true
+}
+
+func use_archived(
+    modify state: callback_archive_dep.Archived_State,
+    value: int) -> int fail: string {
+    cb = callback[callback_archive_dep.Archived_Callback](
+        ref archived_handler, ref state)
+    copy = cb
+    return copy.call(value)!
+}
+
+func use_archived_keyword(
+    modify state: callback_archive_dep.Archived_State
+) -> callback_archive_dep.Archived_Callback {
+    return callback[callback_archive_dep.Archived_Callback](
+        ref archived_handler, ref state, priority = 2)
+}
+
+func use_archived_event(value: int) -> int {
+    cb = callback[callback_archive_dep.Archived_Event](ref archived_event)
+    return cb.call(value)
+}
+
+func use_archived_transform(value: string) -> bool fail: string {
+    cb = callback[callback_archive_dep.Archived_Transform](
+        ref archived_transform)
+    return cb.call(value)!
+}

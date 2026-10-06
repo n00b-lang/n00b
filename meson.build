@@ -27,7 +27,8 @@ install_data(
 
 n00bb_exe = executable(
     'n00bb',
-    ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'global_metadata.c',
+    ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
+     'global_metadata.c',
      'storage_selection.c'],
     dependencies: lantern,
     install: true,
@@ -46,6 +47,21 @@ storage_selection_test = executable(
 )
 
 test('storage-selection', storage_selection_test)
+
+typehash_abi_test = executable(
+    'typehash-abi-test',
+    'tests/typehash_abi.c',
+    dependencies: lantern,
+)
+
+test('typehash-abi', typehash_abi_test)
+
+abi_string_value_test = executable(
+    'abi-string-value-test',
+    ['tests/abi_string_value.c', 'abi_string.c'],
+)
+
+test('abi-string-value', abi_string_value_test)
 
 test(
     'preprocessor',

@@ -1,0 +1,19 @@
+type State {
+    count: int
+}
+
+callback Stateful {
+    call(value: int) -> int
+    handler(modify state: State, value: int) -> int
+    setup(handler: Ref[(modify state: State, value: int) -> int],
+          state: Ref[State]) -> nil
+}
+
+func handle(modify state: State, value: int) -> int { return value }
+func setup(handler: Ref[(modify state: State, value: int) -> int],
+           state: Ref[State]) -> nil { }
+
+func invalid() -> Stateful {
+    var state: State
+    return callback[Stateful](ref handle, ref state)
+}

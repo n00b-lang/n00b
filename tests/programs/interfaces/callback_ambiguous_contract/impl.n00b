@@ -1,0 +1,14 @@
+public type Shared_State {
+    count: int
+}
+
+public callback Shared_Callback {
+    call(value: int) -> int
+    handler(modify state: Shared_State, value: int) -> int
+    setup(handler: Ref[(modify state: Shared_State, value: int) -> int],
+          state: Ref[Shared_State]) -> nil
+}
+
+public func handle(modify state: Shared_State, value: int) -> int {
+    return value
+}

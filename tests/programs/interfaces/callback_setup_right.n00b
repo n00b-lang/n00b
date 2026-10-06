@@ -1,0 +1,10 @@
+import callback_ambiguous_contract
+
+public func setup(
+    handler: Ref[(
+        modify state: callback_ambiguous_contract.Shared_State,
+        value: int
+    ) -> int],
+    state: Ref[callback_ambiguous_contract.Shared_State]
+) -> nil {
+}

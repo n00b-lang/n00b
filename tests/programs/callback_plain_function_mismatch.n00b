@@ -1,0 +1,12 @@
+callback Event_Callback {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+
+func takes_function(function_ref: Ref[(value: int) -> int], value: int) -> int {
+    return function_ref.call(value)
+}
+
+func misuse(callback_value: Event_Callback, value: int) -> int {
+    return takes_function(callback_value, value)
+}

@@ -1,0 +1,26 @@
+type State {
+    count: int
+}
+
+callback Configured_Callback {
+    call(value: int) -> int
+    handler(modify state: State, value: int) -> int
+    setup(handler: Ref[(modify state: State, value: int) -> int],
+          state: Ref[State], priority: int = 1) -> nil
+}
+
+func handle(modify state: State, value: int) -> int {
+    return value
+}
+
+func setup(handler: Ref[(modify state: State, value: int) -> int],
+           state: Ref[State], priority: int = 1) -> nil {
+}
+
+func with_default(modify state: State) -> Configured_Callback {
+    return callback[Configured_Callback](ref handle, ref state)
+}
+
+func with_keyword(modify state: State) -> Configured_Callback {
+    return callback[Configured_Callback](ref handle, ref state, priority = 2)
+}

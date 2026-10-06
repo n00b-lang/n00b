@@ -1,0 +1,22 @@
+type State {
+    count: int
+}
+
+callback Private_Setup {
+    call(value: int) -> int
+    handler(modify state: State, value: int) -> int
+    setup(handler: Ref[(modify state: State, value: int) -> int],
+          state: Ref[State]) -> nil
+}
+
+func handle(modify state: State, value: int) -> int {
+    return value
+}
+
+private func setup(handler: Ref[(modify state: State, value: int) -> int],
+                   state: Ref[State]) -> nil {
+}
+
+func make(modify state: State) -> Private_Setup {
+    return callback[Private_Setup](ref handle, ref state)
+}

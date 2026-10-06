@@ -1,0 +1,5 @@
+import callback_archive_dep.impl
+
+package callback_archive_dep {
+    export callback_archive_dep.impl
+}

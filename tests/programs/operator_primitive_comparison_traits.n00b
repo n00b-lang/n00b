@@ -26,6 +26,6 @@ func compare_sized(left: i:7, right: i:7) -> bool {
     return generic_equal(left, right) and generic_less(left, right)
 }
 
-func compare_bits(left: bits:513, right: bits:513) -> bool {
+func compare_bits(left: bits:127, right: bits:127) -> bool {
     return generic_equal(left, right) and generic_less(left, right)
 }

@@ -4,5 +4,5 @@ func small_storage() -> int {
 }
 
 func large_storage() {
-    var large: i:65536
+    var large: i:128
 }

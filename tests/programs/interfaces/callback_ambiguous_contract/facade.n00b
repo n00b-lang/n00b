@@ -1,0 +1,5 @@
+import callback_ambiguous_contract.impl
+
+package callback_ambiguous_contract {
+    export callback_ambiguous_contract.impl
+}

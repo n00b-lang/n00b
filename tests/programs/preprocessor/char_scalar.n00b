@@ -1,0 +1,15 @@
+func char_scalar() -> char {
+    return 'A'
+}
+
+func char_newline() -> char {
+    return '\n'
+}
+
+func char_nul() -> char {
+    return '\x00'
+}
+
+func char_unicode() -> char {
+    return '\u03bb'
+}

@@ -1,0 +1,10 @@
+import callback_ambiguous_contract
+import callback_setup_left
+import callback_setup_right
+
+func make_ambiguous(
+    modify state: callback_ambiguous_contract.Shared_State
+) -> callback_ambiguous_contract.Shared_Callback {
+    return callback[callback_ambiguous_contract.Shared_Callback](
+        ref callback_ambiguous_contract.handle, ref state)
+}

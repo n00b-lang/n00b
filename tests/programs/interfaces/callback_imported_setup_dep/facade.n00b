@@ -1,0 +1,5 @@
+import callback_imported_setup_dep.impl
+
+package callback_imported_setup_dep {
+    export callback_imported_setup_dep.impl
+}

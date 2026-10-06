@@ -1,0 +1,6 @@
+callback Wrong_State_Mode {
+    call(value: int) -> int
+    handler(state: string, value: int) -> int
+    setup(handler: Ref[(state: string, value: int) -> int],
+          state: Ref[string]) -> nil
+}

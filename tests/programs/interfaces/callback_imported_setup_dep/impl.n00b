@@ -1,0 +1,19 @@
+public type Imported_State {
+    count: int
+}
+
+public callback Imported_Callback {
+    call(value: int) -> int
+    handler(modify state: Imported_State, value: int) -> int
+    setup(handler: Ref[(modify state: Imported_State, value: int) -> int],
+          state: Ref[Imported_State]) -> nil
+}
+
+public func handle(modify state: Imported_State, value: int) -> int {
+    return value
+}
+
+public func setup(
+    handler: Ref[(modify state: Imported_State, value: int) -> int],
+    state: Ref[Imported_State]) -> nil {
+}

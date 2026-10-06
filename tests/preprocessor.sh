@@ -2967,14 +2967,40 @@ grep -Fq '!ir.const.bytes("c2ab6c69746572616cc2bb205b7c74657874")' \
     "$tmp/lower_string_literals.ir"
 grep -Fq '\"tag\":\"bold\",\"start\":0,\"end\":null' \
     "$tmp/lower_string_literals.ir"
-grep -Fq 'func @lower_u32_string() -> array[codepoint]' \
+grep -Fq 'func @lower_u32_string() -> array[char]' \
     "$tmp/lower_string_literals.ir"
-grep -Fq 'codepoint = const 65' "$tmp/lower_string_literals.ir"
-grep -Fq 'codepoint = const 955' "$tmp/lower_string_literals.ir"
-grep -Fq 'codepoint = const 0' "$tmp/lower_string_literals.ir"
-grep -Fq 'array[codepoint] = aggregate' "$tmp/lower_string_literals.ir"
+grep -Fq 'char = const 65' "$tmp/lower_string_literals.ir"
+grep -Fq 'char = const 955' "$tmp/lower_string_literals.ir"
+grep -Fq 'char = const 0' "$tmp/lower_string_literals.ir"
+grep -Fq 'array[char] = aggregate' "$tmp/lower_string_literals.ir"
 grep -Fq '!n00bb.literal.modifier("u32")' \
     "$tmp/lower_string_literals.ir"
+
+for legacy in codepoint f32; do
+    if "$compiler" lower "$program_dir/legacy_${legacy}_type.n00b" \
+        >"$tmp/legacy_${legacy}.out" 2>"$tmp/legacy_${legacy}.err"; then
+        echo "legacy type '$legacy' unexpectedly compiled" >&2
+        exit 1
+    fi
+    grep -Fq "no visible type named '$legacy'" \
+        "$tmp/legacy_${legacy}.err"
+done
+
+"$compiler" lower --dump-ir "$program_dir/char_scalar.n00b" \
+    >"$tmp/char_scalar.ir" 2>"$tmp/char_scalar.err" || {
+    cat "$tmp/char_scalar.err"
+    exit 1
+}
+for value in 65 10 0 955; do
+    grep -Fq "char = const $value" "$tmp/char_scalar.ir"
+done
+if "$compiler" lower "$program_dir/empty_char_literal.n00b" \
+    >"$tmp/empty_char.out" 2>"$tmp/empty_char.err"; then
+    echo 'empty character literal unexpectedly compiled' >&2
+    exit 1
+fi
+grep -Fq 'character literal must contain exactly one scalar' \
+    "$tmp/empty_char.err"
 
 if "$compiler" lower --dump-ir \
     "$script_dir/programs/lower_rich_mixed_substitutions.n00b" \
@@ -3247,6 +3273,16 @@ grep -q 'alloc lower_record_new.ConstructedRecord' \
     "$tmp/lower_record_new.ir"
 grep -q 'call @__init' "$tmp/lower_record_new.ir"
 grep -q 'field .*"payload"' "$tmp/lower_record_new.ir"
+
+"$compiler" lower --dump-ir "$program_dir/unicode_type_nfc.n00b" \
+    >"$tmp/unicode_type_nfc.ir" 2>"$tmp/unicode_type_nfc.err" || {
+    cat "$tmp/unicode_type_nfc.err"
+    exit 1
+}
+grep -q 'type unicode_type_nfc.Café = (value: int)' \
+    "$tmp/unicode_type_nfc.ir"
+grep -q 'func @read_cafe(%value: unicode_type_nfc.Café' \
+    "$tmp/unicode_type_nfc.ir"
 
 N00B_PATH="$program_dir" "$compiler" lower --dump-ir --dump-link-unit \
     "$program_dir/constructor_imported.n00b" \
@@ -4072,6 +4108,19 @@ grep -q 'enum.const "equal", 1' "$tmp/enum_constant_lower.ir"
     exit 1
 }
 grep -q 'widths: function' "$tmp/sized_integer_types.out"
+grep -q 'widths: function.*bits:4' "$tmp/sized_integer_types.out"
+for invalid_width in sized_integer_zero_width sized_unsigned_too_wide \
+    sized_bits_too_wide; do
+    if "$compiler" lower "$program_dir/$invalid_width.n00b" \
+        >"$tmp/$invalid_width.out" 2>&1; then
+        echo "$invalid_width unexpectedly lowered" >&2
+        exit 1
+    fi
+    grep -q 'N00BB-T0028' "$tmp/$invalid_width.out" || {
+        cat "$tmp/$invalid_width.out"
+        exit 1
+    }
+done
 
 if "$compiler" parse "$program_dir/spaced_integer_type.n00b" \
     >"$tmp/spaced_integer_type.out" 2>&1; then
@@ -4455,7 +4504,7 @@ fi
     cat "$tmp/storage_size.err"
     exit 1
 }
-stack_limit=${N00BB_STACK_OBJECT_LIMIT_BYTES:?}
+stack_limit=${N00BB_STACK_OBJECT_LIMIT_BYTES:-4096}
 grep -q 'n00bb.finalization v1 complete' "$tmp/storage_size.out"
 if grep -E -q '^[[:space:]]*(finalize|dealloc) ' \
     "$tmp/storage_size.out"; then
@@ -4468,15 +4517,15 @@ else
     grep -Eq 'local \$__n00bb_local_0: int .*ir.storage_duration\(2\)' \
         "$tmp/storage_size.out"
 fi
-if [ 8192 -gt "$stack_limit" ]; then
+if [ 16 -gt "$stack_limit" ]; then
     grep -q 'cleanup-range\[large,phase=runtime,storage=dynamic,release=runtime-managed,.*finalizer=unspecified\]' \
         "$tmp/storage_size.out"
-    grep -q '= alloc bitint\[65536\]' "$tmp/storage_size.out"
+    grep -q '= alloc bitint\[128\]' "$tmp/storage_size.out"
     grep -q 'ir.storage_duration(5)' "$tmp/storage_size.out"
 else
     grep -q 'cleanup-range\[large,phase=runtime,storage=automatic,release=none,.*evidence=complete,finalizer=unspecified\]' \
         "$tmp/storage_size.out"
-    grep -Eq 'local \$__n00bb_local_0: bitint\[65536\].*ir.storage_duration\(2\)' \
+    grep -Eq 'local \$__n00bb_local_0: bitint\[128\].*ir.storage_duration\(2\)' \
         "$tmp/storage_size.out"
 fi
 if grep -q '= copy \$__n00bb_local_0' "$tmp/lower_reference_values.ir"; then
@@ -4701,6 +4750,23 @@ grep 'combine: function, mutable, type=(`a, `a) -> `a' \
     echo 'constrained generic trait dispatch unexpectedly failed' >&2
     exit 1
 }
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/trait_where_excludes_string.n00b" \
+    >"$tmp/trait_where_excludes_string.out" 2>&1 || {
+    cat "$tmp/trait_where_excludes_string.out"
+    echo 'trait-level exclusion rejected a permitted receiver' >&2
+    exit 1
+}
+grep -q 'extern func @__trait_req_NonString_check.*!= string' \
+    "$tmp/trait_where_excludes_string.out"
+if "$compiler" lower \
+    "$script_dir/programs/trait_where_rejects_string.n00b" \
+    >"$tmp/trait_where_rejects_string.out" 2>&1; then
+    echo 'trait-level exclusion accepted a string receiver' >&2
+    exit 1
+fi
+grep -q "trait constraint 'trait_where_rejects_string.NonString' is not satisfied for string" \
+    "$tmp/trait_where_rejects_string.out"
 grep 'generic_render: function' "$tmp/generic_trait_dispatch.out" \
     | grep -q 'Render'
 grep -q 'call_generic_render: function, mutable, type=() -> string' \
@@ -4842,7 +4908,7 @@ grep -Fq 'call_signature((`b) -> `a fail: `c where' \
     echo 'primitive comparison traits did not satisfy generic calls' >&2
     exit 1
 }
-for type in int bool string f64 'bitint[7]' 'ubitint[513]'; do
+for type in int bool string f64 'bitint[7]' 'bits:127'; do
     grep -Fq "call_signature(($type, $type) -> bool fail: nil)" \
         "$tmp/operator_primitive_comparison_traits.ir"
 done
@@ -7578,3 +7644,136 @@ for case_spec in \
     fi
     grep -q "$diagnostic" "$tmp/$case_name.err"
 done
+
+callback_programs="$script_dir/programs"
+"$compiler" lower --dump-ir "$callback_programs/callback_contracts.n00b" \
+    >"$tmp/callback_contracts.out" 2>"$tmp/callback_contracts.err" || {
+    cat "$tmp/callback_contracts.err"
+    exit 1
+}
+grep -q 'callback.create @setup' "$tmp/callback_contracts.out"
+grep -q 'callback.create %' "$tmp/callback_contracts.out"
+grep -q 'callback.invoke' "$tmp/callback_contracts.out"
+grep -q 'retain.ref' "$tmp/callback_contracts.out"
+
+"$compiler" lower --dump-ir \
+    "$callback_programs/callback_setup_defaults.n00b" \
+    >"$tmp/callback_setup_defaults.out" \
+    2>"$tmp/callback_setup_defaults.err" || {
+    cat "$tmp/callback_setup_defaults.err"
+    exit 1
+}
+grep -q 'callback.create @setup' "$tmp/callback_setup_defaults.out"
+grep -q 'priority = ' "$tmp/callback_setup_defaults.out"
+
+"$compiler" lower --dump-ir \
+    "$callback_programs/callback_generic_construction.n00b" \
+    >"$tmp/callback_generic.out" 2>"$tmp/callback_generic.err" || {
+    cat "$tmp/callback_generic.err"
+    exit 1
+}
+grep -q 'callback.create @setup' "$tmp/callback_generic.out"
+grep -q 'ir.call_signature((string) -> bool fail: string)' \
+    "$tmp/callback_generic.out"
+
+N00B_PATH="$interface_programs" "$compiler" lower --dump-ir \
+    "$interface_programs/callback_imported_setup_user.n00b" \
+    >"$tmp/callback_imported.out" 2>"$tmp/callback_imported.err" || {
+    cat "$tmp/callback_imported.err"
+    exit 1
+}
+grep -q 'callback.create @setup' "$tmp/callback_imported.out"
+
+N00B_PATH="$interface_programs" "$compiler" library \
+    --emit-interface "$tmp/callback_archive.n00bi" \
+    callback_archive_dep.facade \
+    >"$tmp/callback_archive_library.out" \
+    2>"$tmp/callback_archive_library.err" || {
+    cat "$tmp/callback_archive_library.err"
+    exit 1
+}
+"$compiler" lower --link-interface "$tmp/callback_archive.n00bi" \
+    --dump-ir --dump-symbols \
+    "$interface_programs/callback_archive_user.n00b" \
+    >"$tmp/callback_archive_user.out" \
+    2>"$tmp/callback_archive_user.err" || {
+    cat "$tmp/callback_archive_user.err"
+    exit 1
+}
+test "$(grep -c 'callback.create @setup' \
+    "$tmp/callback_archive_user.out")" -eq 2
+grep -q 'callback.create @setup.*priority = ' \
+    "$tmp/callback_archive_user.out"
+grep -q 'callback_archive_dep.impl.Archived_Callback = callback.create' \
+    "$tmp/callback_archive_user.out"
+grep -q 'callback_archive_dep.impl.Archived_Event = callback.create' \
+    "$tmp/callback_archive_user.out"
+grep -q 'callback_archive_dep.impl.Archived_Transform = callback.create' \
+    "$tmp/callback_archive_user.out"
+grep -q 'callback.invoke' "$tmp/callback_archive_user.out"
+grep -q 'variant.tag ' "$tmp/callback_archive_user.out"
+grep -q 'callback.create @setup.*!ir.alias_count(1)' \
+    "$tmp/callback_archive_user.out"
+
+for case_spec in \
+    'callback_archive_plain_mismatch:N00BB-T0024' \
+    'callback_archive_uninitialized:N00BB-T0027'; do
+    case_name=${case_spec%%:*}
+    diagnostic=${case_spec##*:}
+    if "$compiler" lower --link-interface "$tmp/callback_archive.n00bi" \
+        "$interface_programs/$case_name.n00b" \
+        >"$tmp/$case_name.out" 2>"$tmp/$case_name.err"; then
+        echo "$case_name unexpectedly passed archived callback validation" >&2
+        exit 1
+    fi
+    grep -q "$diagnostic" "$tmp/$case_name.err"
+done
+
+for case_spec in \
+    'callback_missing_role:N00BB-T0023' \
+    'callback_wrong_state_mode:N00BB-T0023' \
+    'callback_state_mismatch:N00BB-T0023' \
+    'callback_signature_mismatch:N00BB-T0023' \
+    'callback_missing_setup:N00BB-T0025' \
+    'callback_private_setup:N00BB-T0025' \
+    'callback_incompatible_setup:N00BB-T0025' \
+    'callback_immutable_state:N00BB-T0026' \
+    'callback_uninitialized_state:N00BB-T0027' \
+    'callback_plain_function_mismatch:N00BB-T0002'; do
+    case_name=${case_spec%%:*}
+    diagnostic=${case_spec##*:}
+    if "$compiler" lower "$callback_programs/$case_name.n00b" \
+        >"$tmp/$case_name.out" 2>"$tmp/$case_name.err"; then
+        echo "$case_name unexpectedly passed callback validation" >&2
+        exit 1
+    fi
+    grep -q "$diagnostic" "$tmp/$case_name.err"
+done
+
+if N00B_PATH="$interface_programs" "$compiler" lower \
+    "$interface_programs/callback_ambiguous_setup_user.n00b" \
+    >"$tmp/callback_ambiguous.out" 2>"$tmp/callback_ambiguous.err"; then
+    echo 'ambiguous callback setup unexpectedly resolved' >&2
+    exit 1
+fi
+grep -q 'callback setup is ambiguous' "$tmp/callback_ambiguous.err"
+
+"$compiler" lower --dump-symbols --dump-ir \
+    "$callback_programs/callback_state_lifetime.n00b" \
+    >"$tmp/callback_state_lifetime.out" \
+    2>"$tmp/callback_state_lifetime.err" || {
+    cat "$tmp/callback_state_lifetime.err"
+    exit 1
+}
+test "$(grep -c 'callback.create @setup' \
+    "$tmp/callback_state_lifetime.out")" -eq 1
+grep -q 'callback.invoke' "$tmp/callback_state_lifetime.out"
+grep -q 'variant.tag ' "$tmp/callback_state_lifetime.out"
+grep -q 'callback.create .* !ir.alias_count(1)' \
+    "$tmp/callback_state_lifetime.out"
+grep -q '^    original: variable, mutable, .*aliases=[1-9]' \
+    "$tmp/callback_state_lifetime.out"
+grep -q '^    copied: variable, mutable, .*aliases=[1-9]' \
+    "$tmp/callback_state_lifetime.out"
+grep -q '^    state: variable, mutable, .*storage-duration=dynamic, .*may-escape' \
+    "$tmp/callback_state_lifetime.out"

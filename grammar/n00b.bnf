@@ -40,6 +40,7 @@
                    | <record-decl>
                    | <variant-decl>
                    | <trait-decl>
+                   | <callback-decl>
                    | <package-decl>
 
 <body> @scope("block") ::= <block-start> <body-stmts>? <block-end>
@@ -509,6 +510,7 @@
             | <typecase-value-expr>
             | <try-value-expr>
             | <new-expr>
+            | <callback-expr>
             | <typeof-expr>
             | <tuple-or-paren>
 
@@ -526,6 +528,8 @@
 <typeof-expr> @infer("typespec") ::= %"typeof" %"(" <expression> %")"
 
 <new-expr> @infer("`t") @emit("array_new") ::= %"new" (%"[" <type-spec> %"]")? %"(" <call-args>? %")"
+
+<callback-expr> @infer("`t") @emit("callback_create") ::= %"callback" %"[" <type-spec> %"]" %"(" <call-args>? %")"
 
 <block-value-expr> @scope("block") @infer("$1") ::= <block-start> <value-body-stmts> <block-end>
 
@@ -583,7 +587,7 @@
 <simple-lit> @literal("int") @emit("literal") ::= %HEX_LIT
 <simple-lit> @literal("f64") @emit("literal") ::= %FLOAT_LIT
 <simple-lit> @literal("string") @infer("string") @emit("string_literal") ::= %STRING_LIT
-<simple-lit> @literal("char")   ::= %CHAR_LIT
+<simple-lit> @literal("char") @emit("char_literal") ::= %CHAR_LIT
 <simple-lit> @literal("bool") @emit("literal") ::= <bool-lit>
 <simple-lit> @literal("nil") @infer("nil") @emit("nil_literal") ::= %"nil"
 
@@ -674,12 +678,23 @@
               | <union-tspec>
               | <union-tspec> %","
 
-<tspec-func> ::= %"(" <tspec-func-params> %")" <function-result>
-               | %"(" %")" <function-result>
+<tspec-func> ::= %"(" <tspec-func-params> %")" <tspec-function-result>
+               | %"(" %")" <tspec-function-result>
 
-<tspec-func-params> ::= <union-tspec> (%"," <tspec-func-params>)* (%"," <tspec-vargs>)? (%"," <tspec-kargs>)?
+<tspec-function-result> ::= <return-type> <error-type>?
+                          | <error-type>
+
+<tspec-func-params> ::= <tspec-func-param> (%"," <tspec-func-params>)* (%"," <tspec-vargs>)? (%"," <tspec-kargs>)?
                        | <tspec-vargs> (%"," <tspec-kargs>)?
                        | <tspec-kargs>
+
+<tspec-func-param> @infer("$0") ::= <union-tspec>
+<tspec-func-param> @infer("$3") ::=
+       <tspec-param-mode> %IDENTIFIER %":" <union-tspec>
+<tspec-func-param> @infer("$1") ::= <tspec-param-mode> <union-tspec>
+<tspec-func-param> @infer("$2") ::= %IDENTIFIER %":" <union-tspec>
+
+<tspec-param-mode> ::= %"in" | %"out" | %"modify" | %"consume"
 
 <tspec-field> ::= %IDENTIFIER %":" <union-tspec>
 
@@ -734,3 +749,16 @@
 <trait-obj-tref> @declares($1, $3, "param") @direction($1, "modify") @pass_by("inout") ::= %"modify" %IDENTIFIER %":" <tspec-tvar>
 <trait-obj-tref> @declares($1, $3, "param") @direction($1, "consume") @pass_by("consume") ::= %"consume" %IDENTIFIER %":" <tspec-tvar>
 <trait-obj-tref> @declares($0, $2, "param") @direction($0, "in") @pass_by("in") ::= %IDENTIFIER %":" <tspec-tvar>
+
+<callback-decl> @namespace("type") @scope("callback", $2) @type($2) @exposes ::=
+       <member-visibility>? %"callback" %IDENTIFIER <callback-body>
+
+<callback-body> ::= <block-start> <callback-role-list> <block-end>
+<callback-role-list> ::= <callback-role> (<eos>+ <callback-role>)*
+
+<callback-role> @declares($0, "function") @scope("callback-role") ::=
+       %"call" <func-type-signature>
+<callback-role> @declares($0, "function") @scope("callback-role") ::=
+       %"handler" <func-type-signature>
+<callback-role> @declares($0, "function") @scope("callback-role") ::=
+       %"setup" <func-type-signature>

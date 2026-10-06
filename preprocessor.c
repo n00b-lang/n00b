@@ -120,11 +120,11 @@ hex_digit(unsigned char c)
     return -1;
 }
 
-bool
-n00bb_decode_string_literal(core_string_t raw, core_buffer_t *buffer)
+static bool
+decode_quoted_literal(core_string_t raw, char quote, core_buffer_t *buffer)
 {
-    if (!buffer || !raw.data || raw.u8_bytes < 2 || raw.data[0] != '"'
-        || raw.data[raw.u8_bytes - 1] != '"') return false;
+    if (!buffer || !raw.data || raw.u8_bytes < 2 || raw.data[0] != quote
+        || raw.data[raw.u8_bytes - 1] != quote) return false;
     for (size_t i = 1; i + 1 < raw.u8_bytes; i++) {
         unsigned char c = raw.data[i];
         if (c != '\\') {
@@ -169,6 +169,29 @@ n00bb_decode_string_literal(core_string_t raw, core_buffer_t *buffer)
     return true;
 invalid:
     return false;
+}
+
+bool
+n00bb_decode_string_literal(core_string_t raw, core_buffer_t *buffer)
+{
+    return decode_quoted_literal(raw, '"', buffer);
+}
+
+bool
+n00bb_decode_char_literal(core_string_t raw, uint32_t *scalar)
+{
+    if (!scalar) return false;
+    core_buffer_t *decoded = core_buffer_empty();
+    if (!decoded) return false;
+    bool valid = decode_quoted_literal(raw, '\'', decoded)
+        && decoded->byte_len > 0 && decoded->byte_len <= UINT32_MAX;
+    uint32_t position = 0;
+    int32_t value = valid ? unicode_utf8_decode(decoded->data,
+        (uint32_t)decoded->byte_len, &position) : -1;
+    valid = value >= 0 && position == decoded->byte_len;
+    if (valid) *scalar = (uint32_t)value;
+    core_buffer_free(decoded);
+    return valid;
 }
 
 static bool

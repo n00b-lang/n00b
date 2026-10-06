@@ -1,0 +1,11 @@
+trait NonString where `T: != string {
+    func check(self: `T) -> bool
+}
+
+func check(self: string) -> bool { return false }
+
+func check_non_string(item: `T) -> bool where `T: NonString {
+    return item.check()
+}
+
+func rejected() -> bool { return check_non_string("bad") }

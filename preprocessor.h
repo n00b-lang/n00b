@@ -52,6 +52,7 @@ bool n00bb_preprocessor_run(n00bb_preprocessor_t *preprocessor,
                            parse_grammar_t *grammar, parse_tree_t *tree,
                            core_translation_unit_t *unit);
 bool n00bb_decode_string_literal(core_string_t raw, core_buffer_t *decoded);
+bool n00bb_decode_char_literal(core_string_t raw, uint32_t *scalar);
 
 bool n00bb_preprocess(parse_grammar_t *grammar, parse_tree_t *tree,
                       core_translation_unit_t *unit,

@@ -1,0 +1,2 @@
+func legacy_codepoint(x: codepoint) -> nil {
+}
