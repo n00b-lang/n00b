@@ -7487,6 +7487,74 @@ test "$(grep -c 'function-entry phase="comptime" function=zeta.facade\$comptime.
 test "$(grep -c 'function-entry phase="runtime" function=zeta.facade.__n00bb_runtime_init' \
     "$tmp/package_subpackages.out")" -eq 1
 
+N00B_PATH="$package_programs" "$compiler" library \
+    --emit-interface "$tmp/package_interfaces.n00bi" \
+    delta.facade beta.facade gamma.facade zeta.facade \
+    >"$tmp/package_interfaces.out" \
+    2>"$tmp/package_interfaces.err" || {
+    cat "$tmp/package_interfaces.err"
+    exit 1
+}
+for exported in delta.selected beta.read gamma.renamed \
+    zeta.value zeta.tools.value zeta.tools.deep.value; do
+    strings "$tmp/package_interfaces.n00bi" | grep -q "$exported"
+done
+! strings "$tmp/package_interfaces.n00bi" | grep -q 'delta.rejected'
+
+"$compiler" lower --link-interface "$tmp/package_interfaces.n00bi" \
+    --dump-ir --dump-link-unit \
+    "$package_programs/selected_export_consumer.n00b" \
+    >"$tmp/package_selected_archive.out" \
+    2>"$tmp/package_selected_archive.err" || {
+    cat "$tmp/package_selected_archive.err"
+    exit 1
+}
+grep -q 'copy @delta.selected' "$tmp/package_selected_archive.out"
+grep -q 'resolved selected_export_consumer -> delta.impl:0:selected' \
+    "$tmp/package_selected_archive.out"
+! grep -q 'delta.impl.rejected' "$tmp/package_selected_archive.out"
+
+"$compiler" lower --link-interface "$tmp/package_interfaces.n00bi" \
+    --dump-ir --dump-link-unit \
+    "$package_programs/module_export_consumer.n00b" \
+    >"$tmp/package_module_archive.out" \
+    2>"$tmp/package_module_archive.err" || {
+    cat "$tmp/package_module_archive.err"
+    exit 1
+}
+grep -q 'call @read' "$tmp/package_module_archive.out"
+grep -q 'resolved module_export_consumer -> beta.impl:1:read' \
+    "$tmp/package_module_archive.out"
+
+"$compiler" lower --link-interface "$tmp/package_interfaces.n00bi" \
+    --dump-ir --dump-link-unit "$package_programs/rename_consumer.n00b" \
+    >"$tmp/package_rename_archive.out" \
+    2>"$tmp/package_rename_archive.err" || {
+    cat "$tmp/package_rename_archive.err"
+    exit 1
+}
+grep -q 'call @renamed' "$tmp/package_rename_archive.out"
+grep -q 'resolved rename_consumer -> gamma.impl:1:original' \
+    "$tmp/package_rename_archive.out"
+
+"$compiler" lower --link-interface "$tmp/package_interfaces.n00bi" \
+    --dump-ir --dump-control-flow --dump-link-unit \
+    "$package_programs/subpackage_consumer.n00b" \
+    >"$tmp/package_subpackages_archive.out" \
+    2>"$tmp/package_subpackages_archive.err" || {
+    cat "$tmp/package_subpackages_archive.err"
+    exit 1
+}
+grep -q 'copy @zeta.value' "$tmp/package_subpackages_archive.out"
+grep -q 'copy @zeta.tools.value' "$tmp/package_subpackages_archive.out"
+grep -q 'copy @zeta.tools.deep.value' \
+    "$tmp/package_subpackages_archive.out"
+grep -q 'copy @zeta.marker' "$tmp/package_subpackages_archive.out"
+for value in root tool deep; do
+    grep -q "resolved subpackage_consumer -> zeta.impl:0:$value" \
+        "$tmp/package_subpackages_archive.out"
+done
+
 package_negative="$script_dir/programs/package_negative"
 for case_spec in \
     'invalid_body.facade:N00BB-M0010' \

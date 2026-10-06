@@ -2483,8 +2483,14 @@ static void
 append_module_symbol_name(core_translation_unit_t *unit,
                           parse_sym_entry_t *symbol, core_buffer_t *buffer)
 {
+    core_string_t module = unit->module.identifier;
+    if (symbol && symbol->scope
+        && core_string_eq(symbol->scope->scope_tag,
+                          CORE_STRING_STATIC("package-interface"))
+        && symbol->scope->name.data)
+        module = symbol->scope->name;
     core_buffer_printf(buffer, "%.*s.%.*s",
-        (int)unit->module.identifier.u8_bytes, unit->module.identifier.data,
+        (int)module.u8_bytes, module.data,
         (int)symbol->name.u8_bytes, symbol->name.data);
 }
 
@@ -5078,6 +5084,31 @@ module_scopes(n00bb_tu_state_t *state)
     return module_scopes_in_namespace(state, CORE_STRING_STATIC(""));
 }
 
+static core_list_t(parse_scope_ptr_t)
+link_declaration_scopes(n00bb_tu_state_t *state,
+                        core_string_t namespace_name)
+{
+    core_list_t(parse_scope_ptr_t) scopes =
+        module_scopes_in_namespace(state, namespace_name);
+    if (!state || !state->interface_module || !state->annotations
+        || !state->annotations->symtab) return scopes;
+
+    parse_symtab_t *symtab = state->annotations->symtab;
+    for (parse_scope_t *scope = symtab->all_scopes; scope;
+         scope = scope->all_next) {
+        if (!scope->ns
+            || !core_string_eq(scope->ns->ns_name, CORE_STRING_STATIC(""))
+            || !core_string_eq(scope->scope_tag,
+                               CORE_STRING_STATIC("package-interface")))
+            continue;
+        parse_scope_t *candidate = namespace_name.u8_bytes
+            ? parse_symtab_scope_in_namespace(symtab, scope, namespace_name)
+            : scope;
+        if (candidate) core_list_push(scopes, candidate);
+    }
+    return scopes;
+}
+
 static bool
 scope_in_value_namespace(parse_scope_t *scope)
 {
@@ -6813,6 +6844,8 @@ unit_for_symbol(parse_grammar_t *grammar,
         || (!symbol->scope
             || (!core_string_eq(symbol->scope->scope_tag,
                                 CORE_STRING_STATIC("module"))
+                && !core_string_eq(symbol->scope->scope_tag,
+                                   CORE_STRING_STATIC("package-interface"))
                 && !(symbol->owner_type && symbol->owner_type->scope
                     && core_string_eq(symbol->owner_type->scope->scope_tag,
                                       CORE_STRING_STATIC("module")))
@@ -18722,7 +18755,8 @@ add_context_hook_functions(parse_grammar_t *grammar,
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->ir_module) return false;
-    core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
+    core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
+        state, CORE_STRING_STATIC(""));
     bool ok = true;
     for (size_t s = 0; ok && s < scopes.len; s++) {
         for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
@@ -19064,7 +19098,7 @@ register_record_types(parse_grammar_t *grammar,
     if (!state || !destination || !state->types || !state->annotations
         || !state->annotations->symtab) return false;
     if (state->interface_module) {
-        core_list_t(parse_scope_ptr_t) types = module_scopes_in_namespace(
+        core_list_t(parse_scope_ptr_t) types = link_declaration_scopes(
             state, CORE_STRING_STATIC("type"));
         bool valid = true;
         for (size_t s = 0; valid && s < types.len; s++) {
@@ -19217,7 +19251,7 @@ register_imported_record_layouts(parse_grammar_t *grammar,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !destination || !state->types || !state->annotations
         || !state->annotations->symtab) return false;
-    core_list_t(parse_scope_ptr_t) scopes = module_scopes_in_namespace(
+    core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
         state, CORE_STRING_STATIC("type"));
     for (size_t s = 0; s < scopes.len; s++) {
         for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
@@ -19410,7 +19444,8 @@ register_module_globals(parse_grammar_t *grammar,
     if (!diagnostics) return false;
     int32_t source_file = source_state->ir_module
         ? ir_file_count(source_state->ir_module) - 1 : -1;
-    core_list_t(parse_scope_ptr_t) scopes = module_scopes(source_state);
+    core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
+        source_state, CORE_STRING_STATIC(""));
     bool ok = true;
     for (size_t s = 0; ok && s < scopes.len; s++) {
         for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
@@ -19558,7 +19593,8 @@ bind_module_global_identities(ir_ctx_t *ir_context,
         core_translation_unit_t *source = analysis->units.data[i];
         n00bb_tu_state_t *source_state = tu_state(source);
         if (!source_state || !source_state->annotations) return false;
-        core_list_t(parse_scope_ptr_t) scopes = module_scopes(source_state);
+        core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
+            source_state, CORE_STRING_STATIC(""));
         bool ok = true;
         for (size_t s = 0; ok && s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
@@ -19965,7 +20001,8 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
         n00bb_tu_state_t *state = tu_state(unit);
-        core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
+        core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
+            state, CORE_STRING_STATIC(""));
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  symbol; symbol = symbol->next_in_scope) {
@@ -20725,7 +20762,8 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         }
     }
 
-    core_list_t(parse_scope_ptr_t) function_scopes = module_scopes(state);
+    core_list_t(parse_scope_ptr_t) function_scopes = link_declaration_scopes(
+        state, CORE_STRING_STATIC(""));
     for (size_t s = 0; s < function_scopes.len; s++) {
         for (parse_sym_entry_t *candidate = function_scopes.data[s]->first_in_scope;
              candidate; candidate = candidate->next_in_scope) {
@@ -20752,7 +20790,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     for (size_t u = 0; u < units->len; u++) {
         n00bb_tu_state_t *global_state = tu_state(units->data[u]);
         core_list_t(parse_scope_ptr_t) global_scopes =
-            module_scopes(global_state);
+            link_declaration_scopes(global_state, CORE_STRING_STATIC(""));
         for (size_t s = 0; s < global_scopes.len; s++) {
             for (parse_sym_entry_t *global_symbol =
                     global_scopes.data[s]->first_in_scope;
@@ -24602,7 +24640,8 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->annotations || !state->annotations->symtab)
             return false;
-        core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
+        core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
+            state, CORE_STRING_STATIC(""));
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  symbol; symbol = symbol->next_in_scope) {
@@ -24617,8 +24656,7 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
             }
         }
         core_list_free(scopes);
-        scopes = module_scopes_in_namespace(state,
-                                             CORE_STRING_STATIC("type"));
+        scopes = link_declaration_scopes(state, CORE_STRING_STATIC("type"));
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  symbol; symbol = symbol->next_in_scope) {
@@ -27107,8 +27145,10 @@ is_module_global_symbol(parse_grammar_t *grammar,
 {
     return symbol && symbol->kind == PARSE_SYM_VARIABLE && symbol->scope
         && !context_symbol(grammar, symbol)
-        && core_string_eq(symbol->scope->scope_tag,
-                          CORE_STRING_STATIC("module"));
+        && (core_string_eq(symbol->scope->scope_tag,
+                           CORE_STRING_STATIC("module"))
+            || core_string_eq(symbol->scope->scope_tag,
+                              CORE_STRING_STATIC("package-interface")));
 }
 
 static uint32_t
@@ -41217,6 +41257,54 @@ interface_metadata_failure(n00bb_tu_state_t *state, const char *owner,
     return message;
 }
 
+static parse_scope_t *
+ensure_interface_package_scope(locate_worker_context_t *loader,
+                               n00bb_tu_state_t *state,
+                               parse_symtab_t *symtab,
+                               core_translation_unit_t *unit,
+                               core_string_t package)
+{
+    core_string_t root = unit->module.identifier;
+    if (core_string_eq(package, root)) return module_scope(state);
+    if (package.u8_bytes <= root.u8_bytes
+        || memcmp(package.data, root.data, root.u8_bytes)
+        || package.data[root.u8_bytes] != '.'
+        || !interface_package_for_module(loader, package))
+        return nullptr;
+    size_t split = package.u8_bytes;
+    while (split && package.data[split - 1] != '.') split--;
+    if (!split) return nullptr;
+    core_string_t parent_name = core_string_borrow(package.data, split - 1);
+    core_string_t member_name = core_string_borrow(
+        package.data + split, package.u8_bytes - split);
+    parse_scope_t *parent = ensure_interface_package_scope(
+        loader, state, symtab, unit, parent_name);
+    if (!parent) return nullptr;
+    parse_sym_entry_t *existing = parse_symtab_lookup_in(parent, member_name);
+    if (existing)
+        return existing->kind == PARSE_SYM_MODULE ? existing->exposed_scope
+                                                  : nullptr;
+    parse_symtab_enter_scope_all(symtab, parent);
+    parse_symtab_push_scope_all(symtab, package);
+    parse_scope_t *scope = parse_symtab_current_scope(
+        symtab, CORE_STRING_STATIC(""));
+    if (scope) {
+        scope->scope_tag = CORE_STRING_STATIC("package-interface");
+        parse_symtab_pop_scope_all(symtab);
+    }
+    parse_symtab_leave_scope_all(symtab);
+    if (!scope) return nullptr;
+    parse_symtab_enter_scope_all(symtab, parent);
+    parse_sym_entry_t *binding = parse_symtab_add(symtab,
+        CORE_STRING_STATIC(""), member_name, PARSE_SYM_MODULE, nullptr);
+    parse_symtab_leave_scope_all(symtab);
+    if (!binding || !parse_sym_set_binding(binding,
+            CORE_STRING_STATIC("n00bb.package-unit"), unit)) return nullptr;
+    binding->exposed_scope = scope;
+    binding->visibility = CORE_STRING_STATIC("public");
+    return scope;
+}
+
 static bool
 materialize_interface_type_members(locate_worker_context_t *loader,
                                    n00bb_tu_state_t *state,
@@ -41428,15 +41516,47 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
     }
     for (size_t e = 0; e < loader->linked_interface_count; e++) {
         const th_env *environment = loader->linked_interfaces[e];
+        for (size_t m = 0; m < th_env_metadata_count(environment); m++) {
+            th_env_metadata_view_t metadata = {0};
+            if (!th_env_metadata_at(environment, m, &metadata)
+                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+                || strcmp(metadata.key, "n00b.package-interface")
+                || metadata.version != 1)
+                continue;
+            core_string_t package = core_string_from_cstr(metadata.owner_name);
+            if (package.u8_bytes <= unit->module.identifier.u8_bytes
+                || memcmp(package.data, unit->module.identifier.data,
+                          unit->module.identifier.u8_bytes)
+                || package.data[unit->module.identifier.u8_bytes] != '.')
+                continue;
+            if (!ensure_interface_package_scope(loader, state, symtab, unit,
+                                                package)) {
+                if (failure) *failure =
+                    "could not reconstruct an archived subpackage scope";
+                return false;
+            }
+        }
         for (size_t i = 0; i < th_env_declaration_count(environment); i++) {
             th_env_declaration_view_t declaration = {0};
             if (!th_env_declaration_at(environment, i, &declaration)
-                || !declaration.module
-                || strcmp(declaration.module, unit->module.identifier.data))
+                || !declaration.module)
                 continue;
+            core_string_t declaration_module = core_string_from_cstr(
+                declaration.module);
+            parse_scope_t *package_values = ensure_interface_package_scope(
+                loader, state, symtab, unit, declaration_module);
+            if (!package_values) continue;
+            parse_scope_t *package_types = parse_symtab_scope_in_namespace(
+                symtab, package_values, CORE_STRING_STATIC("type"));
+            if (!package_types) {
+                if (failure) *failure =
+                    "interface package has no type namespace scope";
+                return false;
+            }
             bool is_value = declaration.kind == TH_ENV_DECLARATION_VALUE;
             bool is_function = declaration.kind == TH_ENV_DECLARATION_FUNCTION;
-            parse_scope_t *scope = is_function || is_value ? values : types;
+            parse_scope_t *scope = is_function || is_value
+                ? package_values : package_types;
             core_string_t namespace_name = is_function || is_value
                 ? CORE_STRING_STATIC("") : CORE_STRING_STATIC("type");
             const char *name = is_function || is_value
@@ -41447,9 +41567,8 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
                 if (failure) *failure = "interface declaration has no local name";
                 return false;
             }
-            parse_sym_entry_t *existing = parse_symtab_lookup_scoped(
-                symtab, scope, namespace_name,
-                core_string_borrow(name, strlen(name)));
+            parse_sym_entry_t *existing = parse_symtab_lookup_in(
+                scope, core_string_borrow(name, strlen(name)));
             if (existing) continue;
             parse_scope_t *saved = parse_symtab_current_scope(symtab,
                                                                namespace_name);
@@ -41513,25 +41632,17 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
             }
             else if (is_value) {
                 symbol->type = declaration.value_type;
-                core_string_t module_name = core_string_borrow(
-                    unit->module.identifier.data,
-                    unit->module.identifier.u8_bytes);
-                core_buffer_t qualified = {0};
-                core_buffer_printf(&qualified, "%.*s.%s",
-                    (int)module_name.u8_bytes, module_name.data,
-                    declaration.root_name);
                 size_t context_metadata_size = 0;
                 bool is_context = interface_value_metadata(loader,
-                    qualified.data, "n00b.context",
+                    declaration.qualified_name, "n00b.context",
                     1, &context_metadata_size) != nullptr;
                 bool restored = is_context
                     ? restore_interface_context_semantics(loader, symbol,
-                                                          qualified.data)
+                        declaration.qualified_name)
                     : restore_interface_value_semantics(loader, unit, symbol,
-                                                         qualified.data)
+                        declaration.qualified_name)
                         && restore_interface_array_shape(loader, state,
-                            symbol, qualified.data);
-                core_buffer_release(&qualified);
+                            symbol, declaration.qualified_name);
                 if (!restored) {
                     if (failure) *failure =
                         interface_metadata_failure(state,
