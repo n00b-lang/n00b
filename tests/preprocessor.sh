@@ -5609,13 +5609,16 @@ strings "$tmp/array_shape_archive.n00bi" | grep -q 'n00b.comptime-ir'
 strings "$tmp/array_shape_archive.n00bi" | grep -q \
     'n00b.function-array-shapes'
 strings "$tmp/array_shape_archive.n00bi" | grep -q \
+    'array_shape_archive_dep.renamed_echo'
+strings "$tmp/array_shape_archive.n00bi" | grep -q \
     'n00b.member-array-shape.cells'
 strings "$tmp/array_shape_archive.n00bi" | grep -Fq \
     'module array_shape_archive_dep.impl$comptime {'
 ! strings "$tmp/array_shape_archive.n00bi" | grep -Fq \
     'module array_shape_archive_dep {'
 "$compiler" lower --link-interface "$tmp/array_shape_archive.n00bi" \
-    --dump-link-unit "$interface_programs/array_shape_archive_user.n00b" \
+    --dump-symbols --dump-link-unit \
+    "$interface_programs/array_shape_archive_user.n00b" \
     >"$tmp/array_shape_archive_user.out" \
     2>"$tmp/array_shape_archive_user.err" || {
     cat "$tmp/array_shape_archive_user.err"
@@ -5625,6 +5628,8 @@ strings "$tmp/array_shape_archive.n00bi" | grep -Fq \
 grep -q 'array_shape_archive_dep.impl:0:grid .*array-shape\[rank=1,flat-prefix=1,dim0=comptime:producer=__n00bb_array_extent_' \
     "$tmp/array_shape_archive_user.out"
 grep -q 'sequence.shape.check.*dim0=comptime:producer=__n00bb_array_extent_' \
+    "$tmp/array_shape_archive_user.out"
+grep -q 'renamed_echo: function, mutable, type=(Array\[int\]) -> Array\[int\] fail: nil, visibility=public.*phases=comptime+runtime' \
     "$tmp/array_shape_archive_user.out"
 
 N00B_PATH="$interface_programs" "$compiler" library \
@@ -5770,8 +5775,9 @@ grep -q 'resolved array_shape_chain_user -> array_shape_chain_middle.impl:1:echo
     "$tmp/array_shape_chain_user.out"
 
 array_shape_record_index=0
-array_shape_export_record_count=0
 array_shape_function_metadata_offset=
+array_shape_owner_errors="$tmp/array_shape_owner_errors.err"
+: >"$array_shape_owner_errors"
 for array_shape_metadata_offset in $(grep -abo 'N0AS' \
         "$tmp/array_shape_archive.n00bi" | cut -d: -f1); do
     array_shape_record_index=$((array_shape_record_index + 1))
@@ -5786,19 +5792,18 @@ for array_shape_metadata_offset in $(grep -abo 'N0AS' \
         continue
     fi
     grep -q 'fatal\[N00BB-L0046\]' "$tmp/$array_shape_label.err"
-    grep -Eq 'array_shape_archive_dep\.(grid|echo)' \
+    grep -Eq 'array_shape_archive_dep\.(grid|echo|renamed_echo)' \
         "$tmp/$array_shape_label.err"
-    array_shape_export_record_count=$((array_shape_export_record_count + 1))
+    cat "$tmp/$array_shape_label.err" >>"$array_shape_owner_errors"
     if [ -z "$array_shape_function_metadata_offset" ] && \
         grep -q 'interface function has invalid array-shape metadata' \
             "$tmp/$array_shape_label.err"; then
         array_shape_function_metadata_offset=$array_shape_metadata_offset
     fi
 done
-if [ "$array_shape_export_record_count" -ne 3 ]; then
-    echo 'array-shape archive did not cover every selected export shape' >&2
-    exit 1
-fi
+grep -q 'array_shape_archive_dep.grid' "$array_shape_owner_errors"
+grep -q 'array_shape_archive_dep.echo' "$array_shape_owner_errors"
+grep -q 'array_shape_archive_dep.renamed_echo' "$array_shape_owner_errors"
 
 array_alias_owner_errors="$tmp/array_alias_owner_errors.err"
 : >"$array_alias_owner_errors"
@@ -5829,7 +5834,7 @@ grep -q 'array_alias_archive_dep.FixedRowBase' "$array_alias_owner_errors"
 grep -q 'array_alias_archive_dep.echo_row' "$array_alias_owner_errors"
 
 array_shape_metadata_offset=$array_shape_function_metadata_offset
-shape_owner_pattern='array_shape_archive_dep\.(grid|GridHolder\.cells|echo)'
+shape_owner_pattern='array_shape_archive_dep\.(grid|GridHolder\.cells|echo|renamed_echo)'
 reject_shape_record "$tmp/array_shape_archive.n00bi" \
     array_shape_bad_rank "$array_shape_metadata_offset" 4 \
     '\002\000\000\000' \
@@ -5870,7 +5875,7 @@ if "$compiler" lower \
 fi
 grep -q 'fatal\[N00BB-L0046\].*invalid array-shape metadata' \
     "$tmp/array_shape_archive_bad_shape.err"
-grep -Eq 'invalid array-shape metadata: .*(grid|GridHolder\.cells|echo)' \
+grep -Eq 'invalid array-shape metadata: .*(grid|GridHolder\.cells|echo|renamed_echo)' \
     "$tmp/array_shape_archive_bad_shape.err"
 
 cp "$tmp/array_shape_archive.n00bi" \
@@ -5896,9 +5901,9 @@ if [ -z "$array_shape_selected_producer_offset" ]; then
     echo 'could not locate array-shape producer identifier in test archive' >&2
     exit 1
 fi
-grep -q 'fatal\[N00BB-L0046\].*invalid or missing n00b semantics' \
+grep -Eq 'fatal\[N00BB-L0046\].*(invalid or missing n00b semantics|invalid array-shape metadata)' \
     "$tmp/array_shape_archive_missing_producer.err"
-grep -q 'array_shape_archive_dep.grid' \
+grep -Eq "$shape_owner_pattern" \
     "$tmp/array_shape_archive_missing_producer.err"
 
 cp "$tmp/array_shape_archive.n00bi" \
@@ -5922,7 +5927,7 @@ if "$compiler" lower \
 fi
 grep -q 'fatal\[N00BB-L0046\].*invalid array-shape metadata' \
     "$tmp/array_shape_archive_contradictory_extent.err"
-grep -Eq 'invalid array-shape metadata: .*(grid|GridHolder\.cells|echo)' \
+grep -Eq 'invalid array-shape metadata: .*(grid|GridHolder\.cells|echo|renamed_echo)' \
     "$tmp/array_shape_archive_contradictory_extent.err"
 
 N00B_PATH="$interface_programs" "$compiler" library \
@@ -6318,25 +6323,31 @@ N00B_PATH="$interface_programs" "$compiler" library \
     exit 1
 }
 "$compiler" lower --link-interface "$tmp/context_archive.n00bi" \
-    --dump-ir --dump-link-unit \
+    --dump-symbols --dump-ir --dump-link-unit \
     "$interface_programs/context_archive_user.n00b" \
     >"$tmp/context_archive_user.out" 2>"$tmp/context_archive_user.err" || {
     cat "$tmp/context_archive_user.err"
     exit 1
 }
-grep -q 'call @__n00bb_context_ArchiveContext_enter' \
+grep -q 'call @__n00bb_context_RenamedArchiveContext_enter' \
     "$tmp/context_archive_user.out"
-grep -q 'call @__n00bb_context_ArchiveContext_exit' \
+grep -q 'call @__n00bb_context_RenamedArchiveContext_exit' \
     "$tmp/context_archive_user.out"
-grep -q 'call @__n00bb_context_ArchiveContext_ensure' \
+grep -q 'call @__n00bb_context_RenamedArchiveContext_ensure' \
     "$tmp/context_archive_user.out"
-grep -q 'call @__n00bb_context_ArchiveContext_error' \
+grep -q 'call @__n00bb_context_RenamedArchiveContext_error' \
     "$tmp/context_archive_user.out"
-grep -q 'call @__n00bb_context_ArchiveContext_default_1, %id' \
+grep -q 'call @__n00bb_context_RenamedArchiveContext_default_1, %id' \
     "$tmp/context_archive_user.out"
-test "$(grep -c 'call @__n00bb_context_ArchiveContext_default_1' \
+test "$(grep -c 'call @__n00bb_context_RenamedArchiveContext_default_1' \
     "$tmp/context_archive_user.out")" -eq 1
-grep -q 'extern func @__n00bb_context_ArchiveContext_default_1(%arg0: int) -> int fail: int' \
+grep -q 'extern func @__n00bb_context_RenamedArchiveContext_default_1(%arg0: int) -> int fail: int' \
+    "$tmp/context_archive_user.out"
+grep -q 'RenamedArchiveContext: variable, mutable, type=(int, int) -> int fail: int, visibility=public, phases=comptime+runtime' \
+    "$tmp/context_archive_user.out"
+grep -q '__n00bb_context_RenamedArchiveContext_exit: function, mutable, type=(int, int, int) -> nil fail: int' \
+    "$tmp/context_archive_user.out"
+grep -q '__n00bb_context_RenamedArchiveContext_ensure: function, mutable, type=(int, int, int) -> nil fail: nil' \
     "$tmp/context_archive_user.out"
 
 N00B_PATH="$interface_programs" "$compiler" library \
@@ -6379,6 +6390,12 @@ N00B_PATH="$interface_programs" "$compiler" library \
     cat "$tmp/function_archive_library.err"
     exit 1
 }
+strings "$tmp/function_archive.n00bi" | grep -q \
+    'function_archive_dep.renamed_add'
+strings "$tmp/function_archive.n00bi" | grep -q \
+    'function_archive_dep.renamed_update'
+strings "$tmp/function_archive.n00bi" | grep -q \
+    'function_archive_dep.renamed_keep'
 cp "$tmp/function_archive.n00bi" \
     "$tmp/function_archive_before_wrapper.n00bi"
 N00B_PATH="$interface_programs" "$compiler" library \
@@ -6485,7 +6502,7 @@ grep -q 'required link-unit analysis contribution is not complete' \
     exit 1
 }
 "$compiler" lower --link-interface "$tmp/function_archive.n00bi" \
-    --dump-ir --dump-link-unit \
+    --dump-symbols --dump-ir --dump-link-unit \
     "$interface_programs/function_archive_user.n00b" \
     >"$tmp/function_archive_user.out" \
     2>"$tmp/function_archive_user.err" || {
@@ -6501,6 +6518,14 @@ if grep -q '__n00bb_default_present' "$tmp/function_archive_user.out"; then
 fi
 grep -q 'call @archived_update' "$tmp/function_archive_user.out"
 grep -q 'call @archived_variadic' "$tmp/function_archive_user.out"
+grep -q 'renamed_add: function, mutable, type=(int, int) -> int fail: nil, visibility=public.*phases=comptime+runtime' \
+    "$tmp/function_archive_user.out"
+grep -q 'renamed_update: function, mutable, type=(out int, inout int) -> nil fail: nil' \
+    "$tmp/function_archive_user.out"
+grep -q 'renamed_variadic: function, mutable, type=(int, \*int) -> int fail: nil' \
+    "$tmp/function_archive_user.out"
+grep -q 'extern func @archived_add(%arg0: int, %arg1: int !ir.optional_parameter(true)) -> int fail: nil' \
+    "$tmp/function_archive_user.out"
 grep -q 'function-global-unknown\[unavailable\] function_archive_dep.impl:1:archived_add -> <unresolved>' \
     "$tmp/function_archive_user.out"
 grep -q 'function-global-unknown\[unavailable\] function_archive_user:1:forward_archived_default -> <unresolved>' \

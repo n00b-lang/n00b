@@ -19888,24 +19888,34 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                                                    declaration_key.u8_bytes);
                     if (separator) semantic_name = separator + 1;
                 }
-                ir_func_t *function = semantic_type
-                    ? ir_func_add(state->ir_module, semantic_name,
-                                  semantic_type, linkage) : nullptr;
+                ir_func_t *function = declaration
+                    ? core_link_declaration_binding(declaration,
+                        CORE_STRING_STATIC("n00bb.ir.function"))
+                    : nullptr;
+                bool new_function = function == nullptr;
+                if (new_function && semantic_type)
+                    function = ir_func_add(state->ir_module, semantic_name,
+                                           semantic_type, linkage);
                 core_buffer_t comptime_name = {0};
                 if (semantic_type && ((definition && !state->interface_module)
                                  || state->interface_module))
                     core_buffer_printf(&comptime_name,
                         "__n00bb_comptime_%s", semantic_name);
-                ir_func_t *comptime_function = comptime_name.data
-                    ? ir_func_add(state->comptime_ir_module,
-                                  comptime_name.data, semantic_type,
-                                  state->interface_module
-                                      ? IR_LINK_EXTERN : linkage)
+                ir_func_t *comptime_function = declaration
+                    ? core_link_declaration_binding(declaration,
+                        CORE_STRING_STATIC("n00bb.ir.comptime.function"))
                     : nullptr;
+                bool new_comptime_function = comptime_function == nullptr;
+                if (new_comptime_function && comptime_name.data)
+                    comptime_function = ir_func_add(
+                        state->comptime_ir_module, comptime_name.data,
+                        semantic_type, state->interface_module
+                            ? IR_LINK_EXTERN : linkage);
                 core_buffer_release(&comptime_name);
-                if ((function && !register_optional_parameter_metadata(
+                if ((new_function && function
+                        && !register_optional_parameter_metadata(
                         grammar, symbol, function))
-                    || (comptime_function
+                    || (new_comptime_function && comptime_function
                         && !register_optional_parameter_metadata(
                             grammar, symbol, comptime_function))) {
                     core_list_free(scopes);
@@ -19919,7 +19929,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                     polymorphic_contract && !state->interface_module
                         ? function_semantic_contract(grammar, unit, symbol)
                         : symbol->callable_contract;
-                if (function && polymorphic_contract
+                if (new_function && function && polymorphic_contract
                     && (!ir_callable_contract
                         || !ir_func_set_callable_contract(
                             function, ir_callable_contract))) {
@@ -19927,7 +19937,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                     return ir_initialization_error(unit, "N00BB-L0029",
                         "could not attach a callable contract to a function declaration");
                 }
-                if (comptime_function
+                if (new_comptime_function && comptime_function
                     && ((!ir_func_set_execution_phase(ir_context,
                             comptime_function, IR_PHASE_COMPTIME))
                         || (polymorphic_contract

@@ -1,13 +1,14 @@
 import context_archive_dep
 
 func use_archived_context(id: int) -> int fail: int {
-    with result = context_archive_dep.ArchiveContext(id = id) {
+    with result = context_archive_dep.RenamedArchiveContext(id = id) {
         return result
     }
 }
 
 func use_archived_context_explicit(id: int) -> int fail: int {
-    with result = context_archive_dep.ArchiveContext(id = id, derived = 20) {
+    with result = context_archive_dep.RenamedArchiveContext(
+        id = id, derived = 20) {
         return result
     }
 }

@@ -1,3 +1,12 @@
 import function_archive_dep.impl
 
-package function_archive_dep { export function_archive_dep.impl }
+package function_archive_dep {
+    export function_archive_dep.impl
+    export function_archive_dep.impl.archived_add as renamed_add
+    export function_archive_dep.impl.archived_update as renamed_update
+    export function_archive_dep.impl.archived_variadic as renamed_variadic
+    export function_archive_dep.impl.archived_keep as renamed_keep
+    export function_archive_dep.impl.archived_return as renamed_return
+    export function_archive_dep.impl.archived_global_reference as renamed_global_reference
+    export function_archive_dep.impl.archived_cycle_a as renamed_cycle_a
+}

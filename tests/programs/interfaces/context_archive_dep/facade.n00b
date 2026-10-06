@@ -1,3 +1,5 @@
 import context_archive_dep.impl
 
-package context_archive_dep { export context_archive_dep.impl }
+package context_archive_dep {
+    export context_archive_dep.impl.ArchiveContext as RenamedArchiveContext
+}

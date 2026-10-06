@@ -3,7 +3,7 @@ import function_archive_dep
 var archive_initialized: int = 1
 
 func use_archived_default() -> int {
-    return function_archive_dep.archived_add(1)
+    return function_archive_dep.renamed_add(1)
 }
 
 func forward_archived_default() -> int {
@@ -11,16 +11,16 @@ func forward_archived_default() -> int {
 }
 
 func use_archived_named() -> int {
-    return function_archive_dep.archived_add(second = 4, first = 1)
+    return function_archive_dep.renamed_add(second = 4, first = 1)
 }
 
 func use_archived_modes(input: int) -> int {
     var result: int
     var counter: int = input
-    function_archive_dep.archived_update(result, counter)
+    function_archive_dep.renamed_update(result, counter)
     return result
 }
 
 func use_archived_variadic() -> int {
-    return function_archive_dep.archived_variadic(1, 2, 3)
+    return function_archive_dep.renamed_variadic(1, 2, 3)
 }

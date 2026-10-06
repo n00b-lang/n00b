@@ -5,5 +5,5 @@ func get_grid() -> int[4] {
 }
 
 func echo_grid(input: int[]) -> int[] {
-    return array_shape_archive_dep.echo(input)
+    return array_shape_archive_dep.renamed_echo(input)
 }

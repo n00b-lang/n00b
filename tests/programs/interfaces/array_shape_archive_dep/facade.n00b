@@ -1,3 +1,6 @@
 import array_shape_archive_dep.impl
 
-package array_shape_archive_dep { export array_shape_archive_dep.impl }
+package array_shape_archive_dep {
+    export array_shape_archive_dep.impl
+    export array_shape_archive_dep.impl.echo as renamed_echo
+}
