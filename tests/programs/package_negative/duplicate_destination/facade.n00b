@@ -1,0 +1,6 @@
+import duplicate_destination.impl
+
+package duplicate_destination {
+    export duplicate_destination.impl.first as value
+    export duplicate_destination.impl.second as value
+}

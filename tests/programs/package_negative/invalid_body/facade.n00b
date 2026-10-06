@@ -1,0 +1,5 @@
+package invalid_body {
+    when true {
+        invalid = 1
+    }
+}

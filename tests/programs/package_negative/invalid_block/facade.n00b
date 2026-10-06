@@ -1,0 +1,7 @@
+package invalid_block {
+    when true {
+        {
+            invalid = 1
+        }
+    }
+}

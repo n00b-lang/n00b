@@ -1,0 +1,5 @@
+import epsilon
+
+func read_answer() -> int {
+    return epsilon.answer
+}

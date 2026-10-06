@@ -1,0 +1,3 @@
+func invalid() {
+    export export_outside.invalid
+}

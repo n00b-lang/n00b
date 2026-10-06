@@ -1,0 +1,2 @@
+public const first: int = 1
+public const second: int = 2

@@ -2092,6 +2092,14 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
                 pp_error(ctx, node, "cannot copy the selected when body");
                 return;
             }
+            if (ctx->options && ctx->options->selected_body
+                && !ctx->options->selected_body(
+                    ctx->options->selected_body_context, ctx->unit,
+                    replacement)) {
+                parse_tree_free(replacement);
+                pp_error(ctx, node, "cannot retain the selected when body");
+                return;
+            }
             if (parent && child_index >= 0
                 && !core_tree_set_child(parent, (size_t)child_index,
                                         replacement)) {

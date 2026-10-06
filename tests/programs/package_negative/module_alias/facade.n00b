@@ -1,0 +1,5 @@
+import module_alias.impl
+
+package module_alias {
+    export module_alias.impl as renamed
+}

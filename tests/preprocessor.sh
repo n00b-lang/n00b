@@ -7458,3 +7458,37 @@ N00B_PATH="$interface_programs" "$compiler" library \
 }
 grep -q 'bitset.const "read_write", 3' "$tmp/flagset_archive_user.ir"
 grep -q 'bitset.contains' "$tmp/flagset_archive_user.ir"
+
+package_programs="$script_dir/programs/packages"
+N00B_PATH="$package_programs" "$compiler" lower --dump-ir \
+    "$package_programs/nested_selected_consumer.n00b" \
+    >"$tmp/package_nested_selected.out" \
+    2>"$tmp/package_nested_selected.err" || {
+    cat "$tmp/package_nested_selected.err"
+    exit 1
+}
+grep -q 'const global @epsilon.impl.answer: int = 23' \
+    "$tmp/package_nested_selected.out"
+
+package_negative="$script_dir/programs/package_negative"
+for case_spec in \
+    'invalid_body.facade:N00BB-M0010' \
+    'invalid_block.facade:N00BB-M0010' \
+    'export_outside:N00BB-M0003' \
+    'module_alias.facade:N00BB-M0007' \
+    'duplicate_destination.facade:N00BB-M0006' \
+    'wrong_owner.facade:N00BB-M0004' \
+    'interface_collision.facade:N00BB-M0005' \
+    'private_export.facade:N00BB-M0008' \
+    'duplicate_declaration.facade:N00BB-M0001'; do
+    case_module=${case_spec%%:*}
+    diagnostic=${case_spec##*:}
+    case_name=$(printf '%s' "$case_module" | tr '.' '_')
+    if N00B_PATH="$package_negative" "$compiler" preprocess \
+        "$case_module" >"$tmp/$case_name.out" \
+        2>"$tmp/$case_name.err"; then
+        echo "$case_module unexpectedly passed package validation" >&2
+        exit 1
+    fi
+    grep -q "$diagnostic" "$tmp/$case_name.err"
+done

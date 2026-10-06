@@ -1,0 +1,5 @@
+package private_export {
+    export hidden
+}
+
+private const hidden: int = 1

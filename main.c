@@ -809,6 +809,7 @@ typedef struct {
     parse_tree_t *annotation_root;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
+    core_list_t(parse_tree_ptr_t) selected_when_bodies;
     core_list_t(n00bb_package_declaration_t) package_declarations;
     core_list_t(n00bb_import_alias_t) import_aliases;
     core_list_t(n00bb_link_use_site_t) link_use_sites;
@@ -1292,6 +1293,7 @@ free_tu_state(void *data)
         core_list_free(state->link_use_sites);
         core_list_free(state->module_top_level_statements);
         core_list_free(state->array_type_nodes);
+        core_list_free(state->selected_when_bodies);
         for (size_t i = 0; i < state->package_declarations.len; i++)
             core_list_free(state->package_declarations.data[i].exports);
         core_list_free(state->package_declarations);
@@ -38742,6 +38744,27 @@ cache_enum_item_value(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     return true;
 }
 
+static bool
+validate_package_body_statement(parse_grammar_t *grammar,
+                                core_translation_unit_t *unit,
+                                parse_tree_t *node, parse_tree_t *parent)
+{
+    if (!nt_is(grammar, node, "body-stmt")) return true;
+    parse_tree_t *ancestor = parent;
+    while (ancestor && !nt_is(grammar, ancestor, "package-decl"))
+        ancestor = core_tree_node_value(ancestor).parent;
+    if (!ancestor || child_nt(grammar, node, "import-stmt")
+        || child_nt(grammar, node, "export-stmt")) return true;
+    parse_tree_t *body = child_nt(grammar, node, "body");
+    n00bb_tu_state_t *state = tu_state(unit);
+    for (size_t i = 0; body && state
+            && i < state->selected_when_bodies.len; i++)
+        if (state->selected_when_bodies.data[i] == body) return true;
+    package_diagnostic(unit, node, "N00BB-M0010",
+        "a selected package branch may contain only imports, exports, and nested when statements");
+    return false;
+}
+
 static void
 semantic_annotation_node(void *context, core_translation_unit_t *unit,
                          parse_tree_t *node, parse_tree_t *parent,
@@ -38757,6 +38780,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     }
     if (!state || !node || !prepare_initial_symbols(
             grammar, unit, annotation_context->types)) return;
+    if (entering && !validate_package_body_statement(
+            grammar, unit, node, parent))
+        return;
     if (entering && (nt_is(grammar, node, "func-def")
                      || nt_is(grammar, node, "context-def")))
         state->integer_symbol_ranges.len = 0;
@@ -40802,6 +40828,7 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
             state->module_top_level_statements =
                 core_list_new(parse_tree_ptr_t);
             state->array_type_nodes = core_list_new(parse_tree_ptr_t);
+            state->selected_when_bodies = core_list_new(parse_tree_ptr_t);
             state->package_declarations =
                 core_list_new(n00bb_package_declaration_t);
             state->import_aliases = core_list_new(n00bb_import_alias_t);
@@ -41704,6 +41731,17 @@ load_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
 
     *imported_out = imported;
     *tree_out = tree;
+    return true;
+}
+
+static bool
+remember_selected_when_body(void *opaque, core_translation_unit_t *unit,
+                            parse_tree_t *body)
+{
+    (void)opaque;
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state || !body) return false;
+    core_list_push(state->selected_when_bodies, body);
     return true;
 }
 
@@ -43097,6 +43135,8 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     active_options.load_import = load_import;
     active_options.import_context = &import_driver;
     active_options.prepare_import = prepare_import;
+    active_options.selected_body = remember_selected_when_body;
+    active_options.selected_body_context = nullptr;
     n00bb_preprocessor_t *preprocessor =
         n00bb_preprocessor_new(&active_options);
     import_driver.preprocessor = preprocessor;
