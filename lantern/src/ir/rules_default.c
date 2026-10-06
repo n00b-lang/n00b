@@ -972,6 +972,20 @@ static ir_rule_result_t rule_annotated(ir_module_t *m, ir_instr_t *in,
         return ACCEPT(t);
     }
 
+    if (in->op == IR_OP_BITSET_CONST) {
+        if (th_kind_of(th_resolve(t)) != TH_NAMED
+            || ir_machine_of(m, t).class != IR_CLASS_OPAQUE
+            || in->n_operands != 2
+            || in->operands[0].kind != IR_OPD_NAME
+            || in->operands[1].kind != IR_OPD_CONST
+            || in->operands[1].lit.is_float) {
+            complain(m, d, IR_DIAG_TYPE_LITERAL, in, "this bitset constant",
+                     "bitset.const needs a named result type, member name, and unsigned mask");
+            return REJECT;
+        }
+        return ACCEPT(t);
+    }
+
     if (in->op == IR_OP_AGGREGATE) {
         return rule_aggregate(m, in, d, t);
     }
@@ -2083,6 +2097,76 @@ static ir_rule_result_t rule_enum_value(ir_module_t *m, ir_instr_t *in,
     return mods_exact(m, in, d, axes, 1) ? ACCEPT(to) : REJECT;
 }
 
+static ir_rule_result_t rule_bitset(ir_module_t *m, ir_instr_t *in,
+                                    ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *set = opd_type(in, 0);
+    if (!set) return DECLINE;
+    if (th_kind_of(th_resolve(set)) != TH_NAMED
+        || ir_machine_of(m, set).class != IR_CLASS_OPAQUE) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this bitset operand",
+                 "bitset operations require an opaque named bitset type");
+        return REJECT;
+    }
+    bool binary = in->op == IR_OP_BITSET_UNION
+        || in->op == IR_OP_BITSET_DIFFERENCE
+        || in->op == IR_OP_BITSET_INTERSECTION
+        || in->op == IR_OP_BITSET_XOR
+        || in->op == IR_OP_BITSET_CONTAINS
+        || in->op == IR_OP_BITSET_SET;
+    if (binary && !same(m, set, opd_type(in, 1))) {
+        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "these bitset operands",
+                 "bitset operands must have the same named type");
+        return REJECT;
+    }
+    if (in->op == IR_OP_BITSET_SET) {
+        th_type *boolean = opd_type(in, 2);
+        if (!boolean || ir_machine_of(m, boolean).class != IR_CLASS_BOOL) {
+            complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "the assigned flag value",
+                     "bitset.set requires a boolean third operand");
+            return REJECT;
+        }
+    }
+    if (in->op == IR_OP_BITSET_CONTAINS
+        || in->op == IR_OP_BITSET_IS_EMPTY)
+        return ACCEPT(ir_profile_scalar(m, IR_CLASS_BOOL, 0));
+    return ACCEPT(set);
+}
+
+static ir_rule_result_t rule_bitset_value(ir_module_t *m, ir_instr_t *in,
+                                          ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *from = opd_type(in, 0);
+    th_type *to = declared(in);
+    bool from_set = from && th_kind_of(th_resolve(from)) == TH_NAMED
+        && ir_machine_of(m, from).class == IR_CLASS_OPAQUE;
+    bool to_set = to && th_kind_of(th_resolve(to)) == TH_NAMED
+        && ir_machine_of(m, to).class == IR_CLASS_OPAQUE;
+    bool from_int = from && is_int(ir_machine_of(m, from).class);
+    bool to_int = to && is_int(ir_machine_of(m, to).class);
+    if (in->op == IR_OP_BITSET_VALUE && (!from_set || !to_int)) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this bitset conversion",
+                 "bitset.value requires a named bitset source and integer result");
+        return REJECT;
+    }
+    if (in->op == IR_OP_BITSET_FROM_VALUE && (!from_int || !to_set)) {
+        complain(m, d, IR_DIAG_TYPE_CLASS, in, "this bitset conversion",
+                 "bitset.from-value requires an integer source and named bitset result");
+        return REJECT;
+    }
+    const axis_t *axes[] = {&AX_FIT};
+    if (!mods_exact(m, in, d, axes, 1)) return REJECT;
+    if (in->op == IR_OP_BITSET_FROM_VALUE
+        && !ir_instr_has_mod(in, "trap")) {
+        complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this bitset conversion",
+                 "bitset.from-value must trap when the integer contains invalid bits");
+        return REJECT;
+    }
+    return ACCEPT(to);
+}
+
 static ir_rule_result_t rule_select(ir_module_t *m, ir_instr_t *in,
                                     ir_diags_t *d, void *state)
 {
@@ -2861,6 +2945,17 @@ static const entry DEFAULTS[] = {
     {IR_OP_CONST, "ir.const", rule_annotated},
     {IR_OP_ENUM_CONST, "ir.enum.const", rule_annotated},
     {IR_OP_ENUM_VALUE, "ir.enum.value", rule_enum_value},
+    {IR_OP_BITSET_CONST, "ir.bitset.const", rule_annotated},
+    {IR_OP_BITSET_UNION, "ir.bitset.union", rule_bitset},
+    {IR_OP_BITSET_DIFFERENCE, "ir.bitset.difference", rule_bitset},
+    {IR_OP_BITSET_INTERSECTION, "ir.bitset.intersection", rule_bitset},
+    {IR_OP_BITSET_XOR, "ir.bitset.xor", rule_bitset},
+    {IR_OP_BITSET_COMPLEMENT, "ir.bitset.complement", rule_bitset},
+    {IR_OP_BITSET_CONTAINS, "ir.bitset.contains", rule_bitset},
+    {IR_OP_BITSET_SET, "ir.bitset.set", rule_bitset},
+    {IR_OP_BITSET_IS_EMPTY, "ir.bitset.is-empty", rule_bitset},
+    {IR_OP_BITSET_VALUE, "ir.bitset.value", rule_bitset_value},
+    {IR_OP_BITSET_FROM_VALUE, "ir.bitset.from-value", rule_bitset_value},
     {IR_OP_AGGREGATE, "ir.aggregate", rule_annotated},
     {IR_OP_REST_COLLECT, "ir.rest.collect", rule_rest_collect},
     {IR_OP_PARAM_PRESENT, "ir.param.present", rule_param_present},

@@ -104,6 +104,7 @@ typedef enum {
   TH_ENV_TYPE_SHAPE_ENUM,
   TH_ENV_TYPE_SHAPE_ALIAS,
   TH_ENV_TYPE_SHAPE_NOMINAL,
+  TH_ENV_TYPE_SHAPE_BITSET,
 } th_env_type_shape_kind_t;
 
 /* Stable declaration metadata exposed to language frontends when constructing

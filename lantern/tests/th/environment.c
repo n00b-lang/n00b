@@ -1272,6 +1272,19 @@ int main(void) {
   check("register a structural definition for a named type",
         box_shape && th_env_register_type_shape(
             base_library, "Box", TH_ENV_TYPE_SHAPE_RECORD, box_shape));
+  check("register persisted flagset-shaped type",
+        th_env_register_type(base_library, "FlagBits", "types", "base",
+                             TH_ENV_PUBLIC));
+  th_member flag_bits_member = {
+      .name = "enabled",
+      .type = th_name(base_library_types, "bool"),
+  };
+  th_type *flag_bits_shape =
+      th_record(base_library_types, &flag_bits_member, 1);
+  check("register a bitset definition for a named type",
+        flag_bits_shape && th_env_register_type_shape(
+            base_library, "FlagBits", TH_ENV_TYPE_SHAPE_BITSET,
+            flag_bits_shape));
   check("register persisted PrivateBox type",
         th_env_register_type(base_library, "PrivateBox", "private_types",
                              "base", TH_ENV_PRIVATE));
@@ -1483,6 +1496,11 @@ int main(void) {
   th_type *persisted_box_shape = persisted_environment_attached
       ? th_env_type_shape(persisted_check_types, "Box", &persisted_shape_kind)
       : nullptr;
+  th_env_type_shape_kind_t persisted_flag_bits_kind = TH_ENV_TYPE_SHAPE_NONE;
+  th_type *persisted_flag_bits_shape = persisted_environment_attached
+      ? th_env_type_shape(persisted_check_types, "FlagBits",
+                          &persisted_flag_bits_kind)
+      : nullptr;
   check("loaded library rebuilds trait facts and keeps generic dispatch",
         persisted_library &&
             persisted_environment_attached &&
@@ -1509,6 +1527,12 @@ int main(void) {
                                  "Same", "same", &persisted_identity) &&
             !strcmp(persisted_identity.qualified_name,
                     "base.generic.identity"));
+  check("archive preserves bitset type shapes",
+        persisted_flag_bits_shape &&
+            persisted_flag_bits_kind == TH_ENV_TYPE_SHAPE_BITSET &&
+            th_record_len(persisted_flag_bits_shape) == 1 &&
+            !strcmp(th_record_member(persisted_flag_bits_shape, 0)->name,
+                    "enabled"));
   bool loaded_type_view = false, loaded_trait_view = false;
   bool loaded_function_view = false, loaded_value_view = false;
   for (size_t i = 0; persisted_library &&

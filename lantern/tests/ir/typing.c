@@ -2511,6 +2511,88 @@ static void test_constants_and_copy(void)
     check("an enum constant rejects a scalar result type",
           apply(e, enum_scalar) == IR_RULE_REJECT);
 
+    ir_instr_t *flag_value = op(e, IR_OP_BITSET_CONST);
+    ir_instr_set_dest(flag_value, "flag_value",
+                      ir_type_parse(e->m, "FilePerms"));
+    ir_instr_operand_name(flag_value, "read_write");
+    ir_instr_operand_uint(flag_value, 3);
+    check("a bitset constant preserves its named type and mask",
+          accepts_as(e, flag_value, "FilePerms"));
+
+    ir_instr_t *flag_union = op(e, IR_OP_BITSET_UNION);
+    ir_instr_set_dest(flag_union, "flag_union",
+                      ir_type_parse(e->m, "FilePerms"));
+    ir_instr_operand_value(flag_union, val(e, "FilePerms"));
+    ir_instr_operand_value(flag_union, val(e, "FilePerms"));
+    check("bitset union preserves the flagset type",
+          accepts_as(e, flag_union, "FilePerms"));
+
+    const ir_op_t more_binary_bitsets[] = {
+        IR_OP_BITSET_DIFFERENCE, IR_OP_BITSET_XOR,
+    };
+    for (size_t i = 0; i < sizeof(more_binary_bitsets)
+                           / sizeof(more_binary_bitsets[0]); i++) {
+        ir_instr_t *binary = op(e, more_binary_bitsets[i]);
+        ir_instr_set_dest(binary, "binary_flags",
+                          ir_type_parse(e->m, "FilePerms"));
+        ir_instr_operand_value(binary, val(e, "FilePerms"));
+        ir_instr_operand_value(binary, val(e, "FilePerms"));
+        check("another binary bitset operation preserves its type",
+              accepts_as(e, binary, "FilePerms"));
+    }
+
+    ir_instr_t *complement = op(e, IR_OP_BITSET_COMPLEMENT);
+    ir_instr_set_dest(complement, "complement",
+                      ir_type_parse(e->m, "FilePerms"));
+    ir_instr_operand_value(complement, val(e, "FilePerms"));
+    check("bitset complement preserves its type",
+          accepts_as(e, complement, "FilePerms"));
+
+    ir_instr_t *mixed_flags = op(e, IR_OP_BITSET_INTERSECTION);
+    ir_instr_set_dest(mixed_flags, "mixed_flags",
+                      ir_type_parse(e->m, "FilePerms"));
+    ir_instr_operand_value(mixed_flags, val(e, "FilePerms"));
+    ir_instr_operand_value(mixed_flags, val(e, "SocketFlags"));
+    check("bitset operations reject different named flagset types",
+          apply(e, mixed_flags) == IR_RULE_REJECT);
+
+    ir_instr_t *flag_test = op(e, IR_OP_BITSET_CONTAINS);
+    ir_instr_set_dest(flag_test, "flag_test", ir_type_parse(e->m, "bool"));
+    ir_instr_operand_value(flag_test, val(e, "FilePerms"));
+    ir_instr_operand_value(flag_test, val(e, "FilePerms"));
+    check("bitset membership yields bool", accepts_as(e, flag_test, "bool"));
+
+    ir_instr_t *flag_set = op(e, IR_OP_BITSET_SET);
+    ir_instr_set_dest(flag_set, "flag_set",
+                      ir_type_parse(e->m, "FilePerms"));
+    ir_instr_operand_value(flag_set, val(e, "FilePerms"));
+    ir_instr_operand_value(flag_set, val(e, "FilePerms"));
+    ir_instr_operand_value(flag_set, val(e, "bool"));
+    check("bitset pseudo-field assignment yields the updated set",
+          accepts_as(e, flag_set, "FilePerms"));
+
+    ir_instr_t *is_empty = op(e, IR_OP_BITSET_IS_EMPTY);
+    ir_instr_set_dest(is_empty, "is_empty", ir_type_parse(e->m, "bool"));
+    ir_instr_operand_value(is_empty, val(e, "FilePerms"));
+    check("bitset empty testing yields bool", accepts_as(e, is_empty, "bool"));
+
+    ir_instr_t *to_bits = op(e, IR_OP_BITSET_VALUE);
+    ir_instr_set_dest(to_bits, "to_bits", ir_type_parse(e->m, "u32"));
+    ir_instr_operand_value(to_bits, val(e, "FilePerms"));
+    ir_instr_add_mod(to_bits, "trap");
+    check("bitset-to-integer conversion accepts a fit policy",
+          accepts_as(e, to_bits, "u32"));
+
+    ir_instr_t *from_bits = op(e, IR_OP_BITSET_FROM_VALUE);
+    ir_instr_set_dest(from_bits, "from_bits",
+                      ir_type_parse(e->m, "FilePerms"));
+    ir_instr_operand_value(from_bits, val(e, "u32"));
+    check("integer-to-bitset conversion requires invalid-bit trapping",
+          apply(e, from_bits) == IR_RULE_REJECT);
+    ir_instr_add_mod(from_bits, "trap");
+    check("a checked integer-to-bitset conversion is accepted",
+          accepts_as(e, from_bits, "FilePerms"));
+
     ir_instr_t *empty = op(e, IR_OP_CONST);
     ir_instr_set_dest(empty, "empty", ir_type_parse(e->m, "i32"));
     check("a scalar const without a payload is rejected",
