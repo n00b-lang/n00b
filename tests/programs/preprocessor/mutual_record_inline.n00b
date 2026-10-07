@@ -1,0 +1,9 @@
+type Left {
+    right: Right
+}
+
+type Right {
+    left: Left
+}
+
+func identity(value: Left) -> Left { return value }

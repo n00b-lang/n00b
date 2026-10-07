@@ -6348,6 +6348,13 @@ resolve_module_member_site(parse_grammar_t *grammar,
         if (visible) {
             return parse_tree_set_resolution_symbol(node, type);
         }
+        if (!type && type_reference
+            && imported_state->semantic_annotation_started
+            && !imported_state->semantic_annotation_complete) {
+            if (!core_tree_node_value(node).type)
+                core_tree_node_value(node).type = th_var(state->types);
+            return core_tree_node_value(node).type != nullptr;
+        }
         core_buffer_t message = {0};
         core_buffer_printf(&message,
             "module '%.*s' has no visible type named '%.*s'",
@@ -6972,10 +6979,25 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 if (type_resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
                     && type_resolution.target.symbol
                     && type_resolution.target.symbol->type) {
-                    core_tree_node_value(site->node).type =
-                        type_resolution.target.symbol->type;
+                    th_type *previous =
+                        core_tree_node_value(site->node).type;
+                    th_type *resolved = previous
+                        ? th_unify_in_place(state->types, previous,
+                            type_resolution.target.symbol->type)
+                        : type_resolution.target.symbol->type;
+                    if (!resolved) {
+                        core_diagnostics_report_at(
+                            core_translation_unit_diagnostics(unit), unit,
+                            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
+                            CORE_STRING_STATIC(
+                                "imported type reference conflicts with its inferred type"),
+                            link_source_location(site->node));
+                        all_resolved = false;
+                        continue;
+                    }
+                    core_tree_node_value(site->node).type = resolved;
                     propagate_resolved_type_reference(grammar, unit,
-                        site->node, type_resolution.target.symbol->type);
+                        site->node, resolved);
                 }
             }
             if (site->dotted_path

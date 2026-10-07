@@ -1,0 +1,9 @@
+type Left {
+    right: Ref[Right]
+}
+
+type Right {
+    left: Ref[Left]
+}
+
+func identity(value: Left) -> Left { return value }

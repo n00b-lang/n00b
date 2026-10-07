@@ -1,0 +1,5 @@
+import record_cycle_missing.a
+
+public type Right {
+    left: Ref[record_cycle_missing.a.Left]
+}

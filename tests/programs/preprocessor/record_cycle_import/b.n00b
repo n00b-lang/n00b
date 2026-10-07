@@ -1,0 +1,5 @@
+import record_cycle_import.a
+
+public type Right {
+    left: Ref[record_cycle_import.a.Left]
+}

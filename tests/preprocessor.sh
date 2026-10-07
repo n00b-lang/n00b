@@ -4161,6 +4161,34 @@ grep -q 'inline layout cycle: recursive_record_layout.Node.next -> recursive_rec
     cat "$tmp/recursive_record_ref.out"
     exit 1
 }
+if "$compiler" lower "$program_dir/mutual_record_inline.n00b" \
+    >"$tmp/mutual_record_inline.out" 2>&1; then
+    echo 'mutually recursive inline records unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'inline layout cycle: mutual_record_inline.Left.right -> mutual_record_inline.Right.left -> mutual_record_inline.Left' \
+    "$tmp/mutual_record_inline.out"
+"$compiler" lower "$program_dir/mutual_record_refs.n00b" \
+    >"$tmp/mutual_record_refs.out" 2>&1 || {
+    cat "$tmp/mutual_record_refs.out"
+    exit 1
+}
+N00B_PATH="$program_dir" "$compiler" lower --dump-link-unit \
+    record_cycle_import.a >"$tmp/record_cycle_import.out" 2>&1 || {
+    cat "$tmp/record_cycle_import.out"
+    exit 1
+}
+grep -q 'resolved record_cycle_import.a -> record_cycle_import.b:.*:Right' \
+    "$tmp/record_cycle_import.out"
+grep -q 'resolved record_cycle_import.b -> record_cycle_import.a:.*:Left' \
+    "$tmp/record_cycle_import.out"
+if N00B_PATH="$program_dir" "$compiler" lower \
+    record_cycle_missing.a >"$tmp/record_cycle_missing.out" 2>&1; then
+    echo 'missing type in recursive import unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q "module 'record_cycle_missing.b' has no visible type named 'Absent'" \
+    "$tmp/record_cycle_missing.out"
 "$compiler" lower --dump-layout "$program_dir/fixed_value_layouts.n00b" \
     >"$tmp/fixed_value_layouts.out" 2>"$tmp/fixed_value_layouts.err" || {
     cat "$tmp/fixed_value_layouts.err"
