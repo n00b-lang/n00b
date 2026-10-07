@@ -19,21 +19,122 @@ host_triple(void)
 #endif
 }
 
-int
-main(int argc, char **argv)
+static uint8_t *
+read_object(const char *path, size_t *object_bytes)
 {
-    assert(argc == 2);
-    FILE *file = fopen(argv[1], "rb");
+    FILE *file = fopen(path, "rb");
     assert(file && !fseek(file, 0, SEEK_END));
     long length = ftell(file);
     assert(length > 0 && !fseek(file, 0, SEEK_SET));
     uint8_t *object = malloc((size_t)length);
     assert(object && fread(object, 1, (size_t)length, file)
         == (size_t)length && !fclose(file));
+    *object_bytes = (size_t)length;
+    return object;
+}
+
+static bool
+init_unit(core_translation_unit_t *unit, const char *name)
+{
+    core_module_spec_t spec = {0};
+    core_source_file_t source = {0};
+    bool valid = core_module_spec_init(&spec, core_string_from_cstr(name))
+        && core_source_file_init(&source, core_string_from_cstr(name), "", 0)
+        && core_translation_unit_init(unit, &spec, &source);
+    core_module_spec_release(&spec);
+    core_source_file_release(&source);
+    return valid;
+}
+
+static void
+test_cycle_selection(char **paths)
+{
+    const char *names[] = {"cycle_long_a", "cycle_long_b", "cycle_long_c"};
+    core_translation_unit_t units[3] = {0};
+    n00bb_abi_object_input_t inputs[4] = {0};
+    uint8_t *objects[3];
+    for (size_t i = 0; i < 3; i++) {
+        assert(init_unit(&units[i], names[i]));
+        size_t bytes;
+        objects[i] = read_object(paths[i], &bytes);
+        inputs[2 - i] = (n00bb_abi_object_input_t){
+            .module = core_string_from_cstr(names[i]),
+            .object = objects[i], .object_bytes = bytes,
+        };
+    }
+    inputs[3].module = CORE_STRING_STATIC("unrelated");
+    assert(core_translation_unit_add_import(&units[0], &units[1])
+        && core_translation_unit_add_import(&units[1], &units[2])
+        && core_translation_unit_add_import(&units[2], &units[0]));
+    core_link_unit_t *link = core_link_unit_new();
+    assert(link && core_link_unit_add_root(link, &units[0])
+        && core_link_unit_finalize_graph(link));
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_selected_objects_t selected = {0};
+    assert(n00bb_abi_select_objects(link, &target, inputs, 4, &selected)
+        && selected.count == 3);
+    for (size_t i = 0; i < selected.count; i++)
+        assert(selected.views[i].object);
+    n00bb_abi_selected_objects_release(&selected);
+    assert(!selected.views && !selected.count);
+    assert(!n00bb_abi_select_objects(link, &target, inputs, 2, &selected)
+        && !selected.views);
+    inputs[3] = inputs[0];
+    assert(!n00bb_abi_select_objects(link, &target, inputs, 4, &selected)
+        && !selected.views);
+    core_link_unit_free(link);
+    for (size_t i = 0; i < 3; i++) {
+        core_translation_unit_release(&units[i]);
+        free(objects[i]);
+    }
+}
+
+static void
+test_self_import_selection(const char *path)
+{
+    core_translation_unit_t unit = {0};
+    assert(init_unit(&unit, "cycle_self")
+        && core_translation_unit_add_import(&unit, &unit));
+    core_link_unit_t *link = core_link_unit_new();
+    assert(link && core_link_unit_add_root(link, &unit)
+        && core_link_unit_finalize_graph(link));
+    size_t object_bytes;
+    uint8_t *object = read_object(path, &object_bytes);
+    n00bb_abi_object_input_t input = {
+        .module = unit.module.identifier,
+        .object = object, .object_bytes = object_bytes,
+    };
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_selected_objects_t selected = {0};
+    assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected)
+        && selected.count == 1);
+    n00bb_abi_selected_objects_release(&selected);
+    core_link_unit_free(link);
+    core_translation_unit_release(&unit);
+    free(object);
+}
+
+int
+main(int argc, char **argv)
+{
+    assert(argc == 2 || argc == 3 || argc == 4);
+    if (argc == 4) {
+        test_cycle_selection(argv + 1);
+        return 0;
+    }
+    if (argc == 3) {
+        assert(!strcmp(argv[1], "--self"));
+        test_self_import_selection(argv[2]);
+        return 0;
+    }
+    size_t length;
+    uint8_t *object = read_object(argv[1], &length);
     core_target_desc_t target;
     assert(core_target_profile(host_triple(), 0, &target));
     n00bb_abi_object_view_t view = {0};
-    assert(n00bb_abi_object_open(&target, object, (size_t)length, &view));
+    assert(n00bb_abi_object_open(&target, object, length, &view));
     const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
         &view, N00B_ABI_TABLE_TYPE);
     const n00bb_abi_directory_entry_t *modules = n00bb_abi_object_table(
@@ -71,6 +172,21 @@ main(int argc, char **argv)
     assert(!n00bb_abi_object_string(&view,
         (const n00b_abi_string_v1 *)object, &unchanged_name)
         && unchanged_name.bytes == object && unchanged_name.length == 1);
+    core_translation_unit_t unit = {0};
+    assert(init_unit(&unit, "array_storage"));
+    core_link_unit_t *link = core_link_unit_new();
+    assert(link && core_link_unit_add_root(link, &unit)
+        && core_link_unit_finalize_graph(link));
+    n00bb_abi_object_input_t input = {
+        .module = unit.module.identifier,
+        .object = object, .object_bytes = length,
+    };
+    n00bb_abi_selected_objects_t selected = {0};
+    assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected)
+        && selected.count == 1 && selected.views[0].object == object);
+    n00bb_abi_selected_objects_release(&selected);
+    core_link_unit_free(link);
+    core_translation_unit_release(&unit);
     size_t metadata_offset = (size_t)(view.metadata.bytes - object);
     size_t checksum_byte = metadata_offset + view.header.total_extent - 1;
     n00bb_abi_object_close(&view);
@@ -81,15 +197,15 @@ main(int argc, char **argv)
         !strcmp(host_triple(), "arm64-macos") ? "x86_64-linux"
         : "arm64-macos", 0, &wrong_target));
     n00bb_abi_object_view_t unchanged = {.object = object};
-    assert(!n00bb_abi_object_open(&wrong_target, object, (size_t)length,
+    assert(!n00bb_abi_object_open(&wrong_target, object, length,
                                   &unchanged)
         && unchanged.object == object && !unchanged.directory);
     object[checksum_byte] ^= 1;
-    assert(!n00bb_abi_object_open(&target, object, (size_t)length,
+    assert(!n00bb_abi_object_open(&target, object, length,
                                   &unchanged)
         && unchanged.object == object && !unchanged.directory);
     object[checksum_byte] ^= 1;
-    assert(n00bb_abi_object_open(&target, object, (size_t)length,
+    assert(n00bb_abi_object_open(&target, object, length,
                                   &view));
     n00bb_abi_object_close(&view);
     free(object);

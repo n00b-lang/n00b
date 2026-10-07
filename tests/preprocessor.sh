@@ -1465,9 +1465,12 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/cycle_long_c.o" cycle_long_c
 "$abi_record_object_test" "$tmp/cycle_long_a.o" cycle \
     "$tmp/cycle_long_b.o" "$tmp/cycle_long_c.o"
+"$abi_link_input_test" "$tmp/cycle_long_a.o" \
+    "$tmp/cycle_long_b.o" "$tmp/cycle_long_c.o"
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/cycle_self.o" cycle_self
 "$abi_record_object_test" "$tmp/cycle_self.o" cycle
+"$abi_link_input_test" --self "$tmp/cycle_self.o"
 for command in build library; do
     if "$compiler" "$command" --dump-ir --dump-control-flow --dump-pdg \
         "$program_dir/lower_arithmetic.n00b" >"$tmp/$command.dumps" 2>&1; then
