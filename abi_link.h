@@ -2,6 +2,7 @@
 
 #include "abi_container.h"
 #include "n00b-abi-v1.h"
+#include "lib/indexed_table.h"
 #include "lib/link_unit.h"
 #include "lib/object_section.h"
 
@@ -58,3 +59,17 @@ bool n00bb_abi_select_objects(core_link_unit_t *link,
                               size_t candidate_count,
                               n00bb_abi_selected_objects_t *out);
 void n00bb_abi_selected_objects_release(n00bb_abi_selected_objects_t *selected);
+
+typedef struct n00bb_abi_index_plan_t n00bb_abi_index_plan_t;
+
+/* Assigns one final index to each pre-remap identity and retains a checked
+ * local-to-final map for every input table. Rows whose identity depends on
+ * remapped references are kept distinct until the remap/merge stage. */
+n00bb_abi_index_plan_t *n00bb_abi_index_plan_build(
+    const n00bb_abi_selected_objects_t *selected);
+void n00bb_abi_index_plan_free(n00bb_abi_index_plan_t *plan);
+bool n00bb_abi_index_plan_count(const n00bb_abi_index_plan_t *plan,
+                                uint32_t kind, uint32_t *out_count);
+bool n00bb_abi_index_plan_map(const n00bb_abi_index_plan_t *plan,
+                              size_t input_index, uint32_t kind,
+                              uint32_t local_index, uint32_t *out_index);

@@ -76,6 +76,62 @@ test_cycle_selection(char **paths)
         && selected.count == 3);
     for (size_t i = 0; i < selected.count; i++)
         assert(selected.views[i].object);
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    uint32_t packages, modules, sccs, types;
+    assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_PACKAGE,
+        &packages) && packages == 2);
+    assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_MODULE,
+        &modules) && modules == 4);
+    assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_SCC,
+        &sccs) && sccs == 2);
+    assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_TYPE,
+        &types) && types > 1);
+    uint32_t stream_base = 0;
+    for (size_t i = 0; i < selected.count; i++) {
+        uint32_t mapped = UINT32_MAX;
+        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_TYPE,
+            0, &mapped) && mapped == 0);
+        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_PACKAGE,
+            1, &mapped) && mapped == 1);
+        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_MODULE,
+            1, &mapped) && mapped == i + 1);
+        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_SCC,
+            1, &mapped) && mapped == 1);
+        const n00bb_abi_directory_entry_t *stream =
+            n00bb_abi_object_table(&selected.views[i],
+                N00B_ABI_TABLE_U32_STREAM);
+        assert(stream && n00bb_abi_index_plan_map(plan, i,
+            N00B_ABI_TABLE_U32_STREAM, 0, &mapped)
+            && mapped == stream_base);
+        stream_base += stream->record_count;
+    }
+    bool shared_primitive = false;
+    const n00bb_abi_object_view_t *first = &selected.views[0];
+    const n00bb_abi_object_view_t *second = &selected.views[1];
+    const n00bb_abi_directory_entry_t *first_types =
+        n00bb_abi_object_table(first, N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *second_types =
+        n00bb_abi_object_table(second, N00B_ABI_TABLE_TYPE);
+    assert(first_types && second_types);
+    for (uint32_t i = 1; i < first_types->record_count; i++) {
+        const n00b_abi_type_v1 *a = n00bb_abi_object_row(first,
+            N00B_ABI_TABLE_TYPE, i);
+        if (a->kind != N00B_ABI_TYPE_PRIMITIVE) continue;
+        for (uint32_t j = 1; j < second_types->record_count; j++) {
+            const n00b_abi_type_v1 *b = n00bb_abi_object_row(second,
+                N00B_ABI_TABLE_TYPE, j);
+            if (b->kind != N00B_ABI_TYPE_PRIMITIVE
+                || b->typehash != a->typehash) continue;
+            uint32_t left, right;
+            assert(n00bb_abi_index_plan_map(plan, 0, N00B_ABI_TABLE_TYPE,
+                i, &left) && n00bb_abi_index_plan_map(plan, 1,
+                N00B_ABI_TABLE_TYPE, j, &right) && left == right);
+            shared_primitive = true;
+        }
+    }
+    assert(shared_primitive);
+    n00bb_abi_index_plan_free(plan);
     n00bb_abi_selected_objects_release(&selected);
     assert(!selected.views && !selected.count);
     assert(!n00bb_abi_select_objects(link, &target, inputs, 2, &selected)
@@ -184,6 +240,13 @@ main(int argc, char **argv)
     n00bb_abi_selected_objects_t selected = {0};
     assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected)
         && selected.count == 1 && selected.views[0].object == object);
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    uint32_t mapped;
+    assert(plan && n00bb_abi_index_plan_map(plan, 0,
+        N00B_ABI_TABLE_MODULE, 1, &mapped) && mapped == 1
+        && !n00bb_abi_index_plan_map(plan, 0,
+            N00B_ABI_TABLE_MODULE, 2, &mapped));
+    n00bb_abi_index_plan_free(plan);
     n00bb_abi_selected_objects_release(&selected);
     core_link_unit_free(link);
     core_translation_unit_release(&unit);
