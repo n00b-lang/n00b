@@ -6,6 +6,7 @@
 #include "abi_link.h"
 #include "abi_string.h"
 #include "n00b-abi-v1.h"
+#include "lib/alloc.h"
 #include "lib/byteorder.h"
 
 static const char *
@@ -719,10 +720,110 @@ test_duplicate_signature(const char *path)
     free(right_object);
 }
 
+static void
+test_native_relocation_transfer(void)
+{
+    const char *triples[] = {
+        "x86_64-linux", "arm64-macos", "x86_64-windows",
+    };
+    for (size_t target_index = 0;
+         target_index < sizeof(triples) / sizeof(*triples);
+         target_index++) {
+        core_target_desc_t target;
+        assert(core_target_profile(triples[target_index], 0, &target));
+        bool mach = target.object_format == CORE_TARGET_OBJECT_MACH_O;
+        uint8_t metadata[8] = {0}, data[24] = {0}, pool[8] = {0};
+        core_object_emit_section_t inputs[] = {
+            {.name = mach ? "__meta" : ".meta",
+             .segment = mach ? "__DATA_CONST" : nullptr,
+             .bytes = metadata, .size = sizeof(metadata), .alignment = 8},
+            {.name = mach ? "__data" : ".data",
+             .segment = mach ? "__DATA" : nullptr,
+             .bytes = data, .size = sizeof(data), .alignment = 8,
+             .writable = true},
+            {.name = mach ? "__pool" : ".rodata",
+             .segment = mach ? "__DATA_CONST" : nullptr,
+             .bytes = pool, .size = sizeof(pool), .alignment = 8},
+        };
+        core_object_emit_symbol_t symbols[] = {
+            {.name = "external", .exported = true},
+            {.name = "local_pool", .section_index = 3},
+            {.name = "public_data", .section_index = 2,
+             .exported = true},
+        };
+        core_object_emit_absolute64_t relocations[] = {
+            {.section_index = 2, .symbol_index = 0, .addend_bits = 5},
+            {.section_index = 2, .section_offset = 8,
+             .symbol_index = 1, .addend_bits = 3},
+            {.section_index = 2, .section_offset = 16,
+             .symbol_index = 1, .addend_bits = 7},
+        };
+        uint8_t *object = nullptr;
+        size_t object_bytes = 0;
+        assert(core_object_emit(&target, inputs,
+            sizeof(inputs) / sizeof(*inputs), symbols,
+            sizeof(symbols) / sizeof(*symbols), relocations,
+            sizeof(relocations) / sizeof(*relocations),
+            &object, &object_bytes));
+        uint32_t metadata_index;
+        assert(core_object_emit_native_section_index(&target,
+            sizeof(inputs) / sizeof(*inputs), 1, &metadata_index));
+        n00bb_abi_object_view_t view = {
+            .object = object, .object_bytes = object_bytes,
+            .format = target.object_format,
+            .metadata.native_index = metadata_index,
+        };
+        n00bb_abi_selected_objects_t selected = {
+            .views = &view, .count = 1,
+        };
+        n00bb_abi_native_sections_t native = {0};
+        n00bb_abi_native_relocations_t transferred = {0};
+        assert(n00bb_abi_collect_native_sections(&selected, &target,
+            &native) && native.count == 2
+            && n00bb_abi_collect_native_relocations(&selected, &native,
+                &transferred)
+            && transferred.symbol_count == 2
+            && transferred.relocation_count == 3);
+        assert(transferred.relocations[0].symbol_index !=
+            transferred.relocations[1].symbol_index
+            && transferred.relocations[1].symbol_index ==
+                transferred.relocations[2].symbol_index
+            && transferred.relocations[0].addend_bits == 5
+            && transferred.relocations[1].addend_bits == 3
+            && transferred.relocations[2].addend_bits == 7);
+        core_object_emit_section_t output_sections[] = {
+            inputs[0], native.sections[0], native.sections[1],
+        };
+        uint8_t *linked = nullptr;
+        size_t linked_bytes = 0;
+        assert(core_object_emit(&target, output_sections,
+            sizeof(output_sections) / sizeof(*output_sections),
+            transferred.symbols, transferred.symbol_count,
+            transferred.relocations, transferred.relocation_count,
+            &linked, &linked_bytes));
+        core_object_section_t output_data;
+        assert(core_object_section_find(linked, linked_bytes,
+            target.object_format, mach ? "__DATA" : nullptr,
+            mach ? "__data" : ".data", &output_data)
+            && output_data.relocation_count == 3);
+        for (uint32_t i = 0; i < output_data.relocation_count; i++) {
+            core_object_absolute64_relocation_t decoded;
+            assert(core_object_absolute64_relocation_at(&output_data,
+                target.object_format, i, &decoded)
+                && decoded.section_offset == relocations[i].section_offset);
+        }
+        core_free(linked);
+        n00bb_abi_native_relocations_release(&transferred);
+        n00bb_abi_native_sections_release(&native);
+        core_free(object);
+    }
+}
+
 int
 main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3 || argc == 4);
+    test_native_relocation_transfer();
     test_static_string_identity();
     if (argc == 2 && !strcmp(argv[1], "--strings")) return 0;
     if (argc == 4) {
@@ -893,6 +994,25 @@ main(int argc, char **argv)
     n00bb_abi_native_sections_t native_sections = {0};
     assert(n00bb_abi_collect_native_sections(&selected, &target,
         &native_sections) && native_sections.count > 0);
+    n00bb_abi_native_relocations_t native_relocations = {0};
+    assert(n00bb_abi_collect_native_relocations(&selected, &native_sections,
+        &native_relocations) && native_relocations.relocation_count > 0);
+    size_t source_relocation_count = 0;
+    for (size_t i = 0; i < native_sections.count; i++) {
+        core_object_section_t source;
+        assert(core_object_section_at(object, length, target.object_format,
+            native_sections.maps[i].local_section_index, &source));
+        source_relocation_count += source.relocation_count;
+    }
+    assert(native_relocations.relocation_count == source_relocation_count);
+    for (size_t i = 0; i < native_relocations.relocation_count; i++) {
+        const core_object_emit_absolute64_t *rel =
+            &native_relocations.relocations[i];
+        assert(rel->section_index >= 2
+            && rel->section_index <= native_sections.count + 1
+            && rel->symbol_index < native_relocations.symbol_count);
+    }
+    n00bb_abi_native_relocations_release(&native_relocations);
     size_t map_count = native_sections.count;
     n00bb_abi_native_section_map_t *maps = calloc(
         map_count + 1, sizeof(*maps));

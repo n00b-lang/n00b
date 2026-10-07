@@ -172,6 +172,24 @@ bool n00bb_abi_collect_native_sections(
     n00bb_abi_native_sections_t *out);
 void n00bb_abi_native_sections_release(n00bb_abi_native_sections_t *sections);
 
+typedef struct {
+    core_object_emit_symbol_t *symbols;
+    size_t symbol_count;
+    core_object_emit_absolute64_t *relocations;
+    size_t relocation_count;
+} n00bb_abi_native_relocations_t;
+
+/* Transfers supported native absolute-64 relocations from collected sections.
+ * Defined targets are relocated through their input's section map; undefined
+ * targets retain their native name. Metadata relocations are rebuilt from the
+ * merged table pool separately. Failure leaves `out` unchanged. */
+bool n00bb_abi_collect_native_relocations(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_native_sections_t *sections,
+    n00bb_abi_native_relocations_t *out);
+void n00bb_abi_native_relocations_release(
+    n00bb_abi_native_relocations_t *relocations);
+
 /* Rebases native-section references after the final sections are placed.
  * `base_offset` is the input section's byte offset within its final section.
  * Every non-reserved STORAGE and NATIVE_BINDING row must have exactly one

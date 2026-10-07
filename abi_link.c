@@ -5,6 +5,7 @@
 #include "lib/byteorder.h"
 #include "lib/hash.h"
 #include "lib/indexed_table.h"
+#include <stdio.h>
 #include <string.h>
 
 bool
@@ -1762,6 +1763,205 @@ n00bb_abi_collect_native_sections(
     }
     if (!valid) {
         n00bb_abi_native_sections_release(&built);
+        return false;
+    }
+    *out = built;
+    return true;
+}
+
+void
+n00bb_abi_native_relocations_release(
+    n00bb_abi_native_relocations_t *relocations)
+{
+    if (!relocations) return;
+    for (size_t i = 0; i < relocations->symbol_count; i++)
+        core_free((void *)relocations->symbols[i].name);
+    core_free(relocations->symbols);
+    core_free(relocations->relocations);
+    *relocations = (n00bb_abi_native_relocations_t){0};
+}
+
+typedef struct {
+    size_t input;
+    uint32_t native_index;
+    uint32_t symbol_table_index;
+    bool is_section;
+} abi_native_symbol_key_t;
+
+static core_hash_value_t
+native_symbol_hash(void *value)
+{
+    const abi_native_symbol_key_t *key = value;
+    uint64_t parts[] = {
+        key->input,
+        ((uint64_t)key->native_index << 32) | key->symbol_table_index,
+        key->is_section,
+    };
+    return core_hash_raw(parts, sizeof(parts));
+}
+
+static bool
+native_symbol_eq(const void *left, const void *right)
+{
+    const abi_native_symbol_key_t *a = left, *b = right;
+    return a->input == b->input
+        && a->native_index == b->native_index
+        && a->symbol_table_index == b->symbol_table_index
+        && a->is_section == b->is_section;
+}
+
+static bool
+native_section_ordinal(const n00bb_abi_native_sections_t *sections,
+                       size_t input, uint32_t local_index,
+                       uint32_t *out_ordinal)
+{
+    bool found = false;
+    for (size_t i = 0; i < sections->count; i++) {
+        if (sections->maps[i].input != input
+            || sections->maps[i].local_section_index != local_index)
+            continue;
+        if (found || i > UINT32_MAX - 2) return false;
+        *out_ordinal = (uint32_t)(i + 2);
+        found = true;
+    }
+    return found;
+}
+
+bool
+n00bb_abi_collect_native_relocations(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_native_sections_t *sections,
+    n00bb_abi_native_relocations_t *out)
+{
+    if (!selected || !selected->views || !selected->count || !sections
+        || (sections->count && (!sections->sections || !sections->maps))
+        || !out) return false;
+    size_t capacity = 0;
+    for (size_t i = 0; i < sections->count; i++) {
+        const n00bb_abi_native_section_map_t *map = &sections->maps[i];
+        if (map->input >= selected->count) return false;
+        const n00bb_abi_object_view_t *view = &selected->views[map->input];
+        core_object_section_t source;
+        if (!core_object_section_at(view->object, view->object_bytes,
+                                    view->format, map->local_section_index,
+                                    &source)
+            || source.relocation_count > UINT32_MAX - capacity)
+            return false;
+        capacity += source.relocation_count;
+    }
+    n00bb_abi_native_relocations_t built = {
+        .symbols = core_alloc_array(core_object_emit_symbol_t, capacity),
+        .relocations = core_alloc_array(core_object_emit_absolute64_t,
+                                        capacity),
+    };
+    abi_native_symbol_key_t *keys = core_alloc_array(
+        abi_native_symbol_key_t, capacity);
+    core_indexed_table_t *seen = core_indexed_table_new(0, UINT32_MAX,
+        native_symbol_hash, native_symbol_eq);
+    bool valid = seen != nullptr;
+    for (size_t i = 0; valid && i < sections->count; i++) {
+        const n00bb_abi_native_section_map_t *map = &sections->maps[i];
+        const n00bb_abi_object_view_t *view = &selected->views[map->input];
+        core_object_section_t source;
+        valid = core_object_section_at(view->object, view->object_bytes,
+            view->format, map->local_section_index, &source);
+        for (uint32_t j = 0; valid && j < source.relocation_count; j++) {
+            core_object_absolute64_relocation_t relocation;
+            valid = core_object_absolute64_relocation_at(&source,
+                view->format, j, &relocation);
+            if (!valid) break;
+            abi_native_symbol_key_t key = {
+                .input = map->input,
+                .native_index = relocation.native_symbol_index,
+                .symbol_table_index = view->format == CORE_TARGET_OBJECT_ELF
+                    ? source.native_symbol_table_index : 0,
+                .is_section = relocation.target_is_section,
+            };
+            if (key.is_section) {
+                core_object_section_t target;
+                valid = core_object_section_at(view->object,
+                    view->object_bytes, view->format, key.native_index,
+                    &target);
+                if (!valid) break;
+                relocation.addend_bits -= target.virtual_address;
+            }
+            const core_indexed_entry_t *entry =
+                core_indexed_table_find(seen, &key);
+            uint32_t symbol_index;
+            if (entry) symbol_index = entry->index;
+            else {
+                core_object_emit_symbol_t symbol = {0};
+                if (key.is_section) {
+                    char name[sizeof(size_t) * 3 + sizeof(uint32_t) * 3
+                              + sizeof("__n00bb_section__")];
+                    int length = snprintf(name, sizeof(name),
+                        "__n00bb_section_%zu_%u", key.input,
+                        key.native_index);
+                    valid = length > 0 && (size_t)length < sizeof(name)
+                        && native_section_ordinal(sections, key.input,
+                            key.native_index, &symbol.section_index);
+                    if (valid) {
+                        symbol.name = copy_native_name(
+                            (const uint8_t *)name, (size_t)length);
+                    }
+                }
+                else {
+                    core_object_symbol_t source_symbol;
+                    valid = core_object_symbol_at(view->object,
+                        view->object_bytes, view->format, &source,
+                        key.native_index, &source_symbol)
+                        && source_symbol.name.length;
+                    if (valid && source_symbol.native_section_index) {
+                        core_object_section_t target;
+                        valid = core_object_section_at(view->object,
+                            view->object_bytes, view->format,
+                            source_symbol.native_section_index, &target)
+                            && source_symbol.section_offset <= target.size
+                            && native_section_ordinal(sections, key.input,
+                                source_symbol.native_section_index,
+                                &symbol.section_index);
+                    }
+                    if (valid) {
+                        symbol.name = copy_native_name(
+                            source_symbol.name.bytes,
+                            source_symbol.name.length);
+                        symbol.section_offset = source_symbol.section_offset;
+                        symbol.exported = source_symbol.exported;
+                        valid = symbol.section_index || symbol.exported;
+                    }
+                }
+                if (!valid || !symbol.name) {
+                    core_free((void *)symbol.name);
+                    break;
+                }
+                symbol_index = (uint32_t)built.symbol_count;
+                keys[symbol_index] = key;
+                entry = core_indexed_table_intern(seen, &keys[symbol_index],
+                    &built.symbols[symbol_index], nullptr);
+                if (!entry || entry->index != symbol_index) {
+                    core_free((void *)symbol.name);
+                    valid = false;
+                    break;
+                }
+                built.symbols[built.symbol_count++] = symbol;
+            }
+            if (built.relocation_count == capacity) {
+                valid = false;
+                break;
+            }
+            built.relocations[built.relocation_count++] =
+                (core_object_emit_absolute64_t){
+                    .section_index = (uint32_t)(i + 2),
+                    .section_offset = relocation.section_offset,
+                    .symbol_index = symbol_index,
+                    .addend_bits = relocation.addend_bits,
+                };
+        }
+    }
+    core_indexed_table_free(seen);
+    core_free(keys);
+    if (!valid) {
+        n00bb_abi_native_relocations_release(&built);
         return false;
     }
     *out = built;
