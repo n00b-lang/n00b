@@ -4196,6 +4196,36 @@ if N00B_PATH="$program_dir" "$compiler" lower \
 fi
 grep -q 'inline layout cycle: record_cycle_inline.b.Right.left -> record_cycle_inline.a.Left.right -> record_cycle_inline.b.Right' \
     "$tmp/record_cycle_inline.out"
+"$compiler" parse "$program_dir/record_layout_modifiers.n00b" \
+    >"$tmp/record_layout_modifiers.parse" 2>&1 || {
+    cat "$tmp/record_layout_modifiers.parse"
+    exit 1
+}
+test "$(grep -c '<type-layout> rule=' \
+    "$tmp/record_layout_modifiers.parse")" -eq 2
+test "$(grep -c '<type-align> rule=' \
+    "$tmp/record_layout_modifiers.parse")" -eq 2
+if "$compiler" lower "$program_dir/record_layout_modifiers.n00b" \
+    >"$tmp/record_layout_modifiers.out" 2>&1; then
+    echo 'unfinalized record layout modifiers unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'N00BB-L0069.*record layout modifiers are not finalized' \
+    "$tmp/record_layout_modifiers.out"
+if "$compiler" lower "$program_dir/record_layout_invalid_policy.n00b" \
+    >"$tmp/record_layout_invalid_policy.out" 2>&1; then
+    echo 'unknown record layout policy unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'N00BB-L0069.*unknown record layout policy' \
+    "$tmp/record_layout_invalid_policy.out"
+if "$compiler" lower "$program_dir/record_layout_duplicate.n00b" \
+    >"$tmp/record_layout_duplicate.out" 2>&1; then
+    echo 'duplicate record layout policy unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'N00BB-L0069.*duplicate record layout policy' \
+    "$tmp/record_layout_duplicate.out"
 "$compiler" lower --dump-layout "$program_dir/fixed_value_layouts.n00b" \
     >"$tmp/fixed_value_layouts.out" 2>"$tmp/fixed_value_layouts.err" || {
     cat "$tmp/fixed_value_layouts.err"

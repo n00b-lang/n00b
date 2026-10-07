@@ -1,0 +1,11 @@
+type Header layout(c) align(64) {
+    count: u32
+}
+
+record Ordered align(16) layout(ordered) {
+    ready: bool
+}
+
+func modifier_names_are_identifiers(layout: int, align: int) -> int {
+    return layout + align
+}

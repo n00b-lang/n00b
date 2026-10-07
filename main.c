@@ -5,6 +5,7 @@
 
 #include "driver.h"
 #include "abi_layout.h"
+#include "abi_record_layout.h"
 #include "global_metadata.h"
 #include "storage_selection.h"
 #include "lib/alloc.h"
@@ -726,6 +727,13 @@ typedef struct {
     uint64_t magnitude_bits;
     bool is_signed;
 } n00bb_enum_range_t;
+
+typedef struct {
+    n00bb_record_policy_t policy;
+    parse_tree_t *policy_node;
+    parse_tree_t *alignment_expression;
+    parse_tree_t *alignment_node;
+} n00bb_record_layout_request_t;
 
 typedef struct {
     ir_uint_t mask;
@@ -19738,6 +19746,83 @@ register_record_types(parse_grammar_t *grammar,
 }
 
 static bool
+cache_record_layout_request(parse_grammar_t *grammar,
+                            core_translation_unit_t *unit,
+                            parse_tree_t *declaration)
+{
+    if (!field_record_declaration(grammar, declaration)) return true;
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_sym_entry_t *symbol = core_tree_node_value(declaration).sym;
+    if (!state || !symbol) return false;
+    n00bb_record_layout_request_t request = {0};
+    bool found = false;
+    for (size_t i = 0; i < core_tree_num_children(declaration); i++) {
+        parse_tree_t *child = core_tree_child(declaration, i);
+        size_t count = core_tree_node_value(child).group_top
+            ? core_tree_num_children(child) : 1;
+        for (size_t j = 0; j < count; j++) {
+            parse_tree_t *modifier = core_tree_node_value(child).group_top
+                ? core_tree_child(child, j) : child;
+            if (!nt_is(grammar, modifier, "type-layout-modifier")) continue;
+            found = true;
+            parse_tree_t *layout = child_nt(grammar, modifier,
+                                            "type-layout");
+            parse_tree_t *alignment = child_nt(grammar, modifier,
+                                               "type-align");
+            if (layout) {
+                core_string_t mode = core_tree_num_children(layout) == 4
+                    ? first_token_text(core_tree_child(layout, 2))
+                    : (core_string_t){0};
+                bool c_mode = core_string_eq(mode, CORE_STRING_STATIC("c"));
+                bool ordered_mode = core_string_eq(mode,
+                    CORE_STRING_STATIC("ordered"));
+                if (!c_mode && !ordered_mode) {
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0069"),
+                        CORE_STRING_STATIC("unknown record layout policy"),
+                        link_source_location(modifier));
+                    return false;
+                }
+                if (request.policy_node) {
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0069"),
+                        CORE_STRING_STATIC("duplicate record layout policy"),
+                        link_source_location(modifier));
+                    return false;
+                }
+                request.policy = c_mode ? N00BB_RECORD_C
+                                        : N00BB_RECORD_ORDERED;
+                request.policy_node = modifier;
+            }
+            else if (alignment) {
+                if (request.alignment_node) {
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0069"),
+                        CORE_STRING_STATIC("duplicate record alignment"),
+                        link_source_location(modifier));
+                    return false;
+                }
+                request.alignment_expression = child_nt(grammar, alignment,
+                                                        "expression");
+                request.alignment_node = modifier;
+                if (!request.alignment_expression) return false;
+            }
+            else return false;
+        }
+    }
+    if (!found) return true;
+    n00bb_record_layout_request_t *stored = core_arena_alloc(
+        &state->semantic_values, sizeof(*stored));
+    if (!stored) return false;
+    *stored = request;
+    return parse_sym_set_binding(symbol,
+        CORE_STRING_STATIC("n00bb.record-layout-request"), stored);
+}
+
+static bool
 register_record_semantic_shape(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
                                parse_tree_t *declaration)
@@ -36989,9 +37074,41 @@ validate_inline_layout_cycles(n00bb_link_analysis_t *analysis)
 }
 
 static bool
+reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
+{
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        if (!symtab) return false;
+        for (parse_scope_t *scope = symtab->all_scopes; scope;
+             scope = scope->all_next) {
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                n00bb_record_layout_request_t *request = parse_sym_binding(
+                    symbol, CORE_STRING_STATIC(
+                        "n00bb.record-layout-request"));
+                if (!request) continue;
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0069"),
+                    CORE_STRING_STATIC(
+                        "record layout modifiers are not finalized for this target"),
+                    link_source_location(request->policy_node
+                        ? request->policy_node : request->alignment_node));
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool
 select_storage_placement(n00bb_link_analysis_t *analysis)
 {
-    if (!analysis || !validate_inline_layout_cycles(analysis)
+    if (!analysis || !reject_unlowered_record_layout_requests(analysis)
+        || !validate_inline_layout_cycles(analysis)
         || !publish_known_scalar_layouts(analysis)) return false;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
@@ -41054,16 +41171,28 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
             return;
         }
-        if (field_record_declaration(grammar, node)
-            && !register_record_semantic_shape(grammar, unit, node)) {
-            if (!core_translation_unit_has_fatal_diagnostics(unit))
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0005"),
-                    CORE_STRING_STATIC(
-                        "could not register the record shape for semantic analysis"),
-                    link_source_location(node));
-            return;
+        if (field_record_declaration(grammar, node)) {
+            if (!cache_record_layout_request(grammar, unit, node)) {
+                if (!core_diagnostics_failed(
+                        core_translation_unit_diagnostics(unit)))
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0069"),
+                        CORE_STRING_STATIC(
+                            "could not retain the record layout request"),
+                        link_source_location(node));
+                return;
+            }
+            if (!register_record_semantic_shape(grammar, unit, node)) {
+                if (!core_translation_unit_has_fatal_diagnostics(unit))
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0005"),
+                        CORE_STRING_STATIC(
+                            "could not register the record shape for semantic analysis"),
+                        link_source_location(node));
+                return;
+            }
         }
         if (nt_is(grammar, node, "variant-decl")
             && !finalize_variant_symbol_type(grammar, node, unit, state)) {

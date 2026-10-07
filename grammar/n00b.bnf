@@ -713,10 +713,15 @@
 <trait-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
 <type-decl> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
-       <member-visibility>? %"type" %IDENTIFIER <type-body>
+       <member-visibility>? %"type" %IDENTIFIER <type-layout-modifier>* <type-body>
 
 <record-decl> @namespace("type") @scope("record", $2) @type($2) @exposes ::=
-       <member-visibility>? %"record" %IDENTIFIER <type-body>
+       <member-visibility>? %"record" %IDENTIFIER <type-layout-modifier>* <type-body>
+
+<type-layout-modifier> ::= <type-layout>
+                         | <type-align>
+<type-layout> ::= %"layout" %"(" %IDENTIFIER %")"
+<type-align> ::= %"align" %"(" <expression> %")"
 
 <type-body> ::= <block-start> <type-decl-spec-list> <block-end>
 <type-decl-spec-list> ::= (<type-decl-one> (<eos>+ <type-decl-one>)*)?
