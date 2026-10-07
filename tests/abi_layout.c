@@ -83,6 +83,18 @@ int main(void)
         ok = ok && n00bb_abi_publish_scalar_layout(module, record, &target,
                                                     &handled)
             && !handled;
+        th_type *ir_only = th_bits(types, 73);
+        th_type *failed_type = nullptr;
+        ok = ok && ir_type_intern(module, ir_only)
+            && n00bb_abi_publish_interned_scalar_layouts(
+                module, &target, &failed_type)
+            && !failed_type;
+        const ir_final_layout_t *ir_only_layout = ir_layout_final(
+            module, ir_only, target.triple);
+        ok = ok && ir_only_layout && ir_only_layout->intrinsic_bits == 128
+            && ir_only_layout->alignment_bytes == 16
+            && ir_only_layout->n_occupied == 1
+            && ir_only_layout->occupied[0].width == 73;
         handled = false;
         ok = ok && !n00bb_abi_publish_scalar_layout(module,
                    th_bits(types, 129), &target, &handled) && handled;

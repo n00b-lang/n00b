@@ -36809,6 +36809,23 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
                 }
             }
         }
+        for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]); m++) {
+            th_type *failed_type = nullptr;
+            if (n00bb_abi_publish_interned_scalar_layouts(
+                    modules[m], &analysis->target, &failed_type)) continue;
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "could not finalize ABI layout for IR type '%s'",
+                failed_type ? n00bb_print_type(ir_module_types(modules[m]),
+                                                failed_type) : "unknown");
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
+                core_string_from_cstr(message.data),
+                (core_diag_location_t){0});
+            core_buffer_release(&message);
+            return false;
+        }
     }
     return true;
 }

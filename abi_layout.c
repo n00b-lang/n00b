@@ -118,3 +118,22 @@ n00bb_abi_publish_scalar_layout(ir_module_t *module, th_type *type,
     core_dict_free(&seen);
     return ok;
 }
+
+bool
+n00bb_abi_publish_interned_scalar_layouts(
+    ir_module_t *module, const core_target_desc_t *target,
+    th_type **failed_type)
+{
+    if (failed_type) *failed_type = nullptr;
+    if (!module || !target) return false;
+    for (size_t i = 0; i < ir_type_count(module); i++) {
+        th_type *type = ir_type_at(module, i);
+        bool handled = false;
+        if (!type || !n00bb_abi_publish_scalar_layout(module, type,
+                                                      target, &handled)) {
+            if (failed_type) *failed_type = type;
+            return false;
+        }
+    }
+    return true;
+}

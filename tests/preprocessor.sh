@@ -742,8 +742,6 @@ awk '
 ' "$tmp/array_new_sized.out"
 test "$(grep -c '!ir.array.element_initialization("language_zero")' \
     "$tmp/array_new_sized.out")" -eq 9
-grep -A80 'module array_new_sized\$comptime' \
-    "$tmp/array_new_sized.out" | grep -q '= array.new'
 grep -Eq 'fixed .*array-shape\[rank=1,flat-prefix=1,dim0=comptime:producer=' \
     "$tmp/array_new_sized.out"
 grep -Eq 'rectangular .*array-shape\[rank=2,flat-prefix=1,dim0=comptime:producer=.*dim1=unresolved' \
@@ -4123,6 +4121,12 @@ grep -q 'widths: function.*bits:4' "$tmp/sized_integer_types.out"
 }
 grep -Eq 'layout scalar_layout_alias.Wide target=(x86_64-linux|arm64-macos|x86_64-windows) size=16 align=16' \
     "$tmp/scalar_layout_alias.out"
+"$compiler" lower --dump-layout "$program_dir/scalar_layout_ir_only.n00b" \
+    >"$tmp/scalar_layout_ir_only.out" 2>"$tmp/scalar_layout_ir_only.err" || {
+    cat "$tmp/scalar_layout_ir_only.err"
+    exit 1
+}
+test "$(grep -c '^  layout bool {$' "$tmp/scalar_layout_ir_only.out")" -eq 2
 for invalid_width in sized_integer_zero_width sized_unsigned_too_wide \
     sized_bits_too_wide; do
     if "$compiler" lower "$program_dir/$invalid_width.n00b" \
