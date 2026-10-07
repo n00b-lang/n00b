@@ -70,10 +70,73 @@ check_enum_item(const core_object_section_t *metadata,
     assert(location->file_index == 1 && location->start_line > 0);
 }
 
+static void
+check_function(const core_object_section_t *metadata,
+               const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *functions = entry_for(entries,
+        count, N00B_ABI_TABLE_FUNCTION);
+    const n00bb_abi_directory_entry_t *types = entry_for(entries,
+        count, N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *signatures = entry_for(entries,
+        count, N00B_ABI_TABLE_CALL_SIGNATURE);
+    const n00bb_abi_directory_entry_t *parameters = entry_for(entries,
+        count, N00B_ABI_TABLE_PARAMETER);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries,
+        count, N00B_ABI_TABLE_SYMBOL);
+    const n00bb_abi_directory_entry_t *locations = entry_for(entries,
+        count, N00B_ABI_TABLE_SOURCE_LOCATION);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries,
+        count, N00B_ABI_TABLE_U32_STREAM);
+    assert(functions && functions->record_count == 2 && types
+        && signatures && parameters && symbols && locations && stream);
+    const n00b_abi_function_v1 *function = row_at(metadata, functions, 1);
+    assert(short_name_is(&function->name, "add"));
+    assert(function->module_index == 1 && function->scope_index
+        && function->symbol_index && function->symbol_index
+            < symbols->record_count);
+    const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,
+        function->symbol_index);
+    assert(symbol->kind == N00B_ABI_SYMBOL_FUNCTION
+        && short_name_is(&symbol->name, "add")
+        && symbol->declaration_location_index
+        && symbol->declaration_location_index < locations->record_count);
+    const n00b_abi_source_location_v1 *location = row_at(metadata, locations,
+        symbol->declaration_location_index);
+    assert(location->file_index == 1 && location->start_line == 1);
+    assert(symbol->type_index && symbol->type_index < types->record_count);
+    const n00b_abi_type_v1 *type = row_at(metadata, types,
+        symbol->type_index);
+    assert(type->kind == N00B_ABI_TYPE_FUNCTION
+        && type->call_signature_index
+        && type->call_signature_index < signatures->record_count);
+    const n00b_abi_call_signature_v1 *signature = row_at(metadata,
+        signatures, type->call_signature_index);
+    assert(signature->type_index == symbol->type_index
+        && function->success_type_index == signature->success_type_index
+        && function->failure_type_index == signature->failure_type_index
+        && function->parameters.count == 2
+        && !function->keywords.count && !function->variadic_type_index
+        && !function->code_ranges.count && !function->frame_layouts.count);
+    assert(function->parameters.first + function->parameters.count
+        <= stream->record_count);
+    for (uint32_t i = 0; i < function->parameters.count; i++) {
+        uint32_t index = *(const uint32_t *)row_at(metadata, stream,
+            function->parameters.first + i);
+        assert(index && index < parameters->record_count);
+        const n00b_abi_parameter_v1 *parameter = row_at(metadata,
+            parameters, index);
+        assert(parameter->passing_mode == N00B_ABI_PASS_IN
+            && parameter->declaration_ordinal == i
+            && parameter->type_index < types->record_count);
+    }
+}
+
 int
 main(int argc, char **argv)
 {
-    assert(argc == 2 || (argc == 3 && !strcmp(argv[2], "enum")));
+    assert(argc == 2 || (argc == 3
+        && (!strcmp(argv[2], "enum") || !strcmp(argv[2], "function"))));
     FILE *file = fopen(argv[1], "rb");
     assert(file);
     assert(!fseek(file, 0, SEEK_END));
@@ -113,11 +176,13 @@ main(int argc, char **argv)
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);
-    n00bb_abi_directory_entry_t entries[16];
+    n00bb_abi_directory_entry_t *entries = calloc(schema_count,
+        sizeof(*entries));
+    assert(entries);
     n00bb_abi_image_header_t header;
     assert(n00bb_abi_container_read(metadata.bytes, metadata.size, &key,
         schemas, schema_count, false, &header, entries,
-        sizeof(entries) / sizeof(*entries)));
+        schema_count));
     const n00bb_abi_directory_entry_t *types = entry_for(entries,
         header.directory_count, N00B_ABI_TABLE_TYPE);
     const n00bb_abi_directory_entry_t *fields = entry_for(entries,
@@ -134,6 +199,13 @@ main(int argc, char **argv)
         header.directory_count, N00B_ABI_TABLE_U32_STREAM);
     assert(types && fields && symbols && layouts && runs && locations_table
         && stream);
+
+    if (argc == 3 && !strcmp(argv[2], "function")) {
+        check_function(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
 
     if (argc == 3) {
         const n00bb_abi_directory_entry_t *items = entry_for(entries,
@@ -175,6 +247,7 @@ main(int argc, char **argv)
             UINT64_MAX);
         check_enum_item(&metadata, stream, items, symbols, locations_table,
             signed_type, signed_index, 2, "positive", 7, 0);
+        free(entries);
         free(object);
         return 0;
     }
@@ -224,6 +297,7 @@ main(int argc, char **argv)
         locations_table, field_symbol->declaration_location_index);
     assert(location->file_index == 1 && location->start_line > 0);
 
+    free(entries);
     free(object);
     return 0;
 }

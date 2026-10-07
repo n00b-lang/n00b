@@ -8,6 +8,7 @@ main(void)
     parse_symtab_t *symbols = parse_symtab_new();
     parse_tree_t type_declaration = {0};
     parse_tree_t field_declaration = {0};
+    parse_tree_t synthetic_node = {0};
     assert(symbols);
     parse_sym_entry_t *builtin = parse_symtab_add(symbols,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("helper"),
@@ -32,16 +33,23 @@ main(void)
         PARSE_SYM_VARIABLE, &field_declaration);
     assert(record && field);
     field->owner_type = type;
+    parse_sym_entry_t *synthetic = parse_symtab_add(symbols,
+        CORE_STRING_STATIC("type"), CORE_STRING_STATIC("$return"),
+        PARSE_SYM_VARIABLE, &synthetic_node);
+    assert(synthetic);
+    synthetic->is_synthetic = true;
     n00bb_abi_decl_index_t *index = n00bb_abi_decl_index_new(symbols);
     assert(index && n00bb_abi_decl_scope_count(index) == 3
         && n00bb_abi_decl_symbol_count(index) == 3);
     uint32_t module_row = 0, record_row = 0;
     uint32_t type_row = 0, field_row = 0, builtin_row = 0;
+    uint32_t synthetic_row = 0;
     assert(n00bb_abi_decl_find_scope(index, module, &module_row)
         && n00bb_abi_decl_find_scope(index, record, &record_row)
         && n00bb_abi_decl_find_symbol(index, type, &type_row)
         && n00bb_abi_decl_find_symbol(index, field, &field_row)
-        && !n00bb_abi_decl_find_symbol(index, builtin, &builtin_row));
+        && !n00bb_abi_decl_find_symbol(index, builtin, &builtin_row)
+        && !n00bb_abi_decl_find_symbol(index, synthetic, &synthetic_row));
     assert(module_row == 1 && record_row == 2
         && type_row && field_row && type_row != field_row
         && n00bb_abi_decl_scope_at(index, module_row) == module

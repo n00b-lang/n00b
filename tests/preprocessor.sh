@@ -1385,7 +1385,11 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/enum.n00b"
 [ -s "$tmp/enum_abi.o" ]
 "$abi_record_object_test" "$tmp/enum_abi.o" enum
-for command in build library compile; do
+"$compiler" compile --output "$tmp/function_abi.o" \
+    "$program_dir/../abi/function.n00b"
+[ -s "$tmp/function_abi.o" ]
+"$abi_record_object_test" "$tmp/function_abi.o" function
+for command in build library; do
     if "$compiler" "$command" --dump-ir --dump-control-flow --dump-pdg \
         "$program_dir/lower_arithmetic.n00b" >"$tmp/$command.dumps" 2>&1; then
         echo "$command unexpectedly completed its unimplemented backend stage" >&2
@@ -1395,14 +1399,18 @@ for command in build library compile; do
     grep -q '^control-flow @add$' "$tmp/$command.dumps"
     grep -q '^execution-graph:$' "$tmp/$command.dumps"
     grep -q '^pdg @add ' "$tmp/$command.dumps"
-    if [ "$command" = compile ]; then
-        grep -q 'this ABI emitter path supports only record and enum declarations' \
-            "$tmp/$command.dumps"
-    else
-        grep -q "'$command' processing is not implemented yet" \
-            "$tmp/$command.dumps"
-    fi
+    grep -q "'$command' processing is not implemented yet" \
+        "$tmp/$command.dumps"
 done
+"$compiler" compile --output "$tmp/lower_arithmetic.o" \
+    --dump-ir --dump-control-flow --dump-pdg \
+    "$program_dir/lower_arithmetic.n00b" \
+    >"$tmp/compile.dumps" 2>&1
+[ -s "$tmp/lower_arithmetic.o" ]
+grep -q '^module lower_arithmetic' "$tmp/compile.dumps"
+grep -q '^control-flow @add$' "$tmp/compile.dumps"
+grep -q '^execution-graph:$' "$tmp/compile.dumps"
+grep -q '^pdg @add ' "$tmp/compile.dumps"
 
 "$compiler" lower "$program_dir/lower_value_return.n00b" \
     >"$tmp/lower_value_return.ir" 2>"$tmp/lower_value_return.err" || {

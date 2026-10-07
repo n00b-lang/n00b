@@ -7,6 +7,7 @@
 #include "abi_decl_index.h"
 #include "abi_declarations.h"
 #include "abi_enum_rows.h"
+#include "abi_function_rows.h"
 #include "abi_emit_strings.h"
 #include "abi_type_index.h"
 #include "abi_type_layout_rows.h"
@@ -245,17 +246,19 @@ abi_unit_error(core_translation_unit_t *unit, const char *message)
 static bool
 phase_has_only_trivial_initializer(const ir_module_t *module)
 {
-    if (ir_global_count(module) || ir_func_count(module) > 1)
-        return false;
-    if (!ir_func_count(module)) return true;
-    ir_func_t *function = ir_func_at((ir_module_t *)module, 0);
-    if (!function || !ir_func_is_initializer(function)
-        || function->n_params || function->n_locals
-        || function->n_blocks != 1 || !function->blocks[0]
-        || function->blocks[0]->n_instrs != 1) return false;
-    ir_instr_t *instruction = function->blocks[0]->instrs[0];
-    return instruction && instruction->op == IR_OP_RETURN
-        && !instruction->n_operands;
+    if (ir_global_count(module)) return false;
+    for (size_t i = 0; i < ir_func_count(module); i++) {
+        ir_func_t *function = ir_func_at((ir_module_t *)module, i);
+        if (!function) return false;
+        if (!ir_func_is_initializer(function)) continue;
+        if (function->n_params || function->n_locals
+            || function->n_blocks != 1 || !function->blocks[0]
+            || function->blocks[0]->n_instrs != 1) return false;
+        ir_instr_t *instruction = function->blocks[0]->instrs[0];
+        if (!instruction || instruction->op != IR_OP_RETURN
+            || instruction->n_operands) return false;
+    }
+    return true;
 }
 
 bool
@@ -264,6 +267,7 @@ n00bb_abi_emit_unit(
     const parse_symtab_t *symbols, parse_token_stream_t *tokens,
     const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
     const core_target_desc_t *target, uint64_t artifact_capabilities,
+    n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_packed_tables_t *out_tables,
     uint8_t **out_object, size_t *out_object_bytes)
 {
@@ -292,10 +296,15 @@ n00bb_abi_emit_unit(
             && symbol->owner_type
             && core_string_eq(symbol->owner_type->adt_kind,
                               CORE_STRING_STATIC("enum"));
-        if (!record && !field && !enumeration && !enum_item) {
+        bool function = symbol && symbol->kind == PARSE_SYM_FUNCTION;
+        bool parameter = symbol && symbol->kind == PARSE_SYM_PARAM;
+        bool local = symbol && symbol->kind == PARSE_SYM_VARIABLE
+            && !symbol->is_field;
+        if (!record && !field && !enumeration && !enum_item
+            && !function && !parameter && !local) {
             n00bb_abi_decl_index_free(declarations);
             return abi_unit_error(unit,
-                "this ABI emitter path supports only record and enum declarations");
+                "this ABI emitter path supports only record, enum, and function declarations");
         }
     }
     if (!core_translation_unit_imports_finalized(unit)
@@ -342,6 +351,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_enum_rows_t enum_rows = {0};
     n00bb_abi_type_signatures_t signature_rows = {0};
     n00bb_abi_declarations_t declaration_rows = {0};
+    n00bb_abi_function_rows_t function_rows = {0};
     bool valid = pool && type_index
         && n00bb_abi_type_index_collect_symbols(type_index, symbols)
         && n00bb_abi_type_identity_rows_build(type_index,
@@ -368,7 +378,19 @@ n00bb_abi_emit_unit(
                 + (uint32_t)layout_rows.stream_index_count
                 + (uint32_t)enum_rows.stream_index_count
                 + (uint32_t)signature_rows.parameter_index_count,
-            &declaration_rows);
+            &declaration_rows)
+        && n00bb_abi_function_rows_build(type_index, declarations,
+            &type_rows, &signature_rows,
+            1 + (uint32_t)components.count
+                + (uint32_t)layout_rows.stream_index_count
+                + (uint32_t)enum_rows.stream_index_count,
+            1 + (uint32_t)components.count
+                + (uint32_t)layout_rows.stream_index_count
+                + (uint32_t)enum_rows.stream_index_count
+                + (uint32_t)signature_rows.parameter_index_count
+                + (uint32_t)declaration_rows.stream_index_count,
+            (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
+            pool, lookup, lookup_context, &function_rows);
     n00bb_abi_type_index_free(type_index);
     valid = valid && n00bb_abi_name_pool_encode(pool, package_id,
         N00B_ABI_TABLE_PACKAGE, 1, offsetof(n00b_abi_package_v1, name),
@@ -381,6 +403,7 @@ n00bb_abi_emit_unit(
             N00B_ABI_TABLE_SOURCE_FILE, 1,
             offsetof(n00b_abi_source_file_v1, path), &sources[1].path);
     if (!valid) {
+        n00bb_abi_function_rows_release(&function_rows);
         n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
         n00bb_abi_enum_rows_release(&enum_rows);
@@ -395,7 +418,8 @@ n00bb_abi_emit_unit(
     size_t stream_count = 1 + components.count + layout_rows.stream_index_count
         + enum_rows.stream_index_count
         + signature_rows.parameter_index_count
-        + declaration_rows.stream_index_count;
+        + declaration_rows.stream_index_count
+        + function_rows.stream_index_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
     stream[0] = package_modules[0];
     if (components.count)
@@ -419,6 +443,13 @@ n00bb_abi_emit_unit(
                    + signature_rows.parameter_index_count,
                declaration_rows.stream_indexes,
                declaration_rows.stream_index_count * sizeof(*stream));
+    if (function_rows.stream_index_count)
+        memcpy(stream + 1 + components.count + layout_rows.stream_index_count
+                   + enum_rows.stream_index_count
+                   + signature_rows.parameter_index_count
+                   + declaration_rows.stream_index_count,
+               function_rows.stream_indexes,
+               function_rows.stream_index_count * sizeof(*stream));
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
         {N00B_ABI_TABLE_MODULE, modules, 2},
@@ -433,6 +464,8 @@ n00bb_abi_emit_unit(
          layout_rows.field_count},
         {N00B_ABI_TABLE_ENUM_ITEM, enum_rows.items,
          enum_rows.item_count},
+        {N00B_ABI_TABLE_FUNCTION, function_rows.functions,
+         function_rows.function_count},
         {N00B_ABI_TABLE_CALL_SIGNATURE, signature_rows.signatures,
          signature_rows.signature_count},
         {N00B_ABI_TABLE_PARAMETER, signature_rows.parameters,
@@ -452,6 +485,7 @@ n00bb_abi_emit_unit(
         rows, sizeof(rows) / sizeof(*rows), &packed);
     core_free(stream);
     if (!valid) {
+        n00bb_abi_function_rows_release(&function_rows);
         n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
         n00bb_abi_enum_rows_release(&enum_rows);
@@ -507,6 +541,7 @@ n00bb_abi_emit_unit(
             relocations, relocation_count,
             &object, &object_bytes);
     core_free(relocations);
+    n00bb_abi_function_rows_release(&function_rows);
     n00bb_abi_declarations_release(&declaration_rows);
     n00bb_abi_type_signatures_release(&signature_rows);
     n00bb_abi_enum_rows_release(&enum_rows);

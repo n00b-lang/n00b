@@ -58,7 +58,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     size_t object_bytes = 0;
     assert(n00bb_abi_emit_unit(&unit, CORE_STRING_STATIC("default"),
         symbols, tokens, comptime, runtime,
-        &target, N00B_ABI_CAP_DEBUG,
+        &target, N00B_ABI_CAP_DEBUG, nullptr, nullptr,
         &packed, &object, &object_bytes));
     assert(!core_translation_unit_has_fatal_diagnostics(&unit));
 
@@ -73,12 +73,12 @@ check_empty_unit(const char *triple, uint32_t target_id,
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);
-    n00bb_abi_directory_entry_t entries[16];
-    size_t entry_count = sizeof(entries) / sizeof(*entries);
+    n00bb_abi_directory_entry_t *entries = core_alloc_array(
+        n00bb_abi_directory_entry_t, schema_count);
     n00bb_abi_image_header_t header;
     assert(n00bb_abi_container_read(metadata.bytes, metadata.size,
-        &key, schemas, schema_count, false, &header, entries, entry_count));
-    assert(header.directory_count == entry_count);
+        &key, schemas, schema_count, false, &header, entries, schema_count));
+    size_t entry_count = header.directory_count;
     const n00bb_abi_directory_entry_t *package_entry = find_entry(
         entries, entry_count, N00B_ABI_TABLE_PACKAGE);
     const n00bb_abi_directory_entry_t *module_entry = find_entry(
@@ -99,6 +99,8 @@ check_empty_unit(const char *triple, uint32_t target_id,
         entries, entry_count, N00B_ABI_TABLE_ENUM_ITEM);
     const n00bb_abi_directory_entry_t *signature_entry = find_entry(
         entries, entry_count, N00B_ABI_TABLE_CALL_SIGNATURE);
+    const n00bb_abi_directory_entry_t *function_entry = find_entry(
+        entries, entry_count, N00B_ABI_TABLE_FUNCTION);
     const n00bb_abi_directory_entry_t *parameter_entry = find_entry(
         entries, entry_count, N00B_ABI_TABLE_PARAMETER);
     const n00bb_abi_directory_entry_t *scope_entry = find_entry(
@@ -112,13 +114,14 @@ check_empty_unit(const char *triple, uint32_t target_id,
     assert(package_entry && module_entry && source_entry && type_entry
         && layout_entry && run_entry && packed_entry && field_entry
         && enum_entry
-        && signature_entry
+        && signature_entry && function_entry
         && parameter_entry && scope_entry && symbol_entry
         && location_entry && config_entry);
     assert(layout_entry->record_count == 1 && run_entry->record_count == 1
         && packed_entry->record_count == 1 && field_entry->record_count == 1
         && enum_entry->record_count == 1
         && signature_entry->record_count == 1
+        && function_entry->record_count == 1
         && parameter_entry->record_count == 1
         && scope_entry->record_count == 1
         && symbol_entry->record_count == 1
@@ -189,10 +192,12 @@ check_empty_unit(const char *triple, uint32_t target_id,
     size_t rejected_bytes = 0;
     assert(!n00bb_abi_emit_unit(&unit, CORE_STRING_STATIC("default"),
         symbols, tokens, comptime, runtime, &target, N00B_ABI_CAP_DEBUG,
+        nullptr, nullptr,
         &rejected, &rejected_object, &rejected_bytes));
     assert(!rejected.bytes && !rejected_object && !rejected_bytes);
     assert(core_translation_unit_has_fatal_diagnostics(&unit));
 
+    core_free(entries);
     n00bb_abi_packed_tables_release(&packed);
     core_free(object);
     parse_symtab_free(symbols);

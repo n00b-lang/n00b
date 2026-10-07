@@ -45707,6 +45707,12 @@ n00bb_prepare_codegen(n00bb_link_analysis_t *analysis, bool debug_enabled,
     return true;
 }
 
+static core_link_declaration_t *
+abi_declaration_for_symbol(void *context, parse_sym_entry_t *symbol)
+{
+    return link_declaration_for_symbol(context, symbol);
+}
+
 static bool
 n00bb_emit_abi_artifact(core_link_unit_t *link,
                               n00bb_link_analysis_t *analysis,
@@ -45728,6 +45734,7 @@ n00bb_emit_abi_artifact(core_link_unit_t *link,
         state->comptime_ir_module,
         state->ir_module, &analysis->target,
         debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
+        abi_declaration_for_symbol, analysis,
         &packed, &object, &object_bytes);
     n00bb_abi_packed_tables_release(&packed);
     if (!emitted) return false;

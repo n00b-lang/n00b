@@ -67,7 +67,9 @@ n00bb_abi_decl_index_new(const parse_symtab_t *symbols)
          scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
-            if (!symbol->decl_node && !symbol->definition_count) continue;
+            if (symbol->is_synthetic
+                || (!symbol->decl_node && !symbol->definition_count))
+                continue;
             if (symbol->scope != scope || !add_scope_chain(index, scope)
                 || !core_indexed_table_intern(index->symbols, symbol,
                                                symbol, nullptr)) {
