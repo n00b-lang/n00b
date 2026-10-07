@@ -10,6 +10,13 @@ trap 'rm -rf "$tmp"' EXIT
 
 interface_programs="$script_dir/programs/interfaces"
 
+if "$compiler" lower "$program_dir/invalid-module-name.n00b" \
+    >"$tmp/invalid_module_name.out" 2>"$tmp/invalid_module_name.err"; then
+    echo 'invalid module filename unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'invalid module or file name' "$tmp/invalid_module_name.err"
+
 reject_shape_record() {
     archive=$1
     label=$2

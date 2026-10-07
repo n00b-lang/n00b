@@ -28,6 +28,7 @@
 #include "lib/alloc.h"
 #include "lib/buffer.h"
 #include "lib/list.h"
+#include "th/typehash.h"
 
 typedef struct {
     core_string_t path;
@@ -531,11 +532,12 @@ n00bb_operand_module_spec(const char *operand, core_module_spec_t *out)
         name = slash ? slash + 1 : name;
         size_t len = strlen(name);
         if (len >= 5 && !strcmp(name + len - 5, ".n00b")) len -= 5;
-        if (!len) return false;
+        if (!th_name_syntax_valid(name, len)) return false;
         return core_module_spec_init(out, core_string_borrow(name, len));
     }
-    return core_module_spec_init(out,
-                                 core_string_borrow(operand, strlen(operand)));
+    size_t len = strlen(operand);
+    return th_name_syntax_valid(operand, len)
+        && core_module_spec_init(out, core_string_borrow(operand, len));
 }
 
 static core_module_resolve_status_t
