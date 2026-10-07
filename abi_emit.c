@@ -4,16 +4,15 @@
 #include <string.h>
 
 #include "abi_container.h"
-#include "abi_string.h"
+#include "abi_emit_strings.h"
 #include "abi_type_index.h"
+#include "abi_type_rows.h"
 #include "n00b-abi-v1.h"
 #include "lib/alloc.h"
 #include "lib/byteorder.h"
 #include "lib/diagnostic.h"
 #include "lib/hash.h"
-#include "lib/list.h"
 #include "lib/object_section.h"
-#include "ir/typelang.h"
 
 static bool
 align_up(size_t value, size_t alignment, size_t *out)
@@ -229,72 +228,6 @@ n00bb_abi_write_object(
     return written;
 }
 
-typedef struct {
-    uint32_t table_kind;
-    size_t field_offset;
-    size_t pool_offset;
-} pending_name_relocation_t;
-
-typedef struct {
-    core_string_t text;
-    size_t offset;
-} pooled_name_t;
-
-core_list_decl(pending_name_relocation_t);
-core_list_decl(pooled_name_t);
-
-typedef struct {
-    core_buffer_t bytes;
-    core_list_t(pooled_name_t) names;
-    core_list_t(pending_name_relocation_t) pending;
-} name_pool_t;
-
-static void
-name_pool_release(name_pool_t *pool)
-{
-    core_buffer_release(&pool->bytes);
-    core_list_free(pool->names);
-    core_list_free(pool->pending);
-}
-
-static bool
-set_name(core_string_t text, uint32_t table_kind, size_t field_offset,
-         n00b_abi_string_v1 *out, name_pool_t *pool)
-{
-    if (!out || !pool || (text.u8_bytes && !text.data)) return false;
-    *out = (n00b_abi_string_v1){0};
-    if (text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY) {
-        if (text.u8_bytes)
-            memcpy(out->short_value.bytes, text.data, text.u8_bytes);
-        out->short_value.selector = (uint8_t)text.u8_bytes
-            | (N00B_ABI_STRING_UTF8 << 4);
-        return true;
-    }
-    if (text.u8_bytes > N00B_ABI_STRING_LONG_LENGTH_MASK
-        || pool->pending.len == SIZE_MAX) return false;
-    size_t offset = SIZE_MAX;
-    for (size_t i = 0; i < pool->names.len; i++)
-        if (core_string_eq(pool->names.data[i].text, text)) {
-            offset = pool->names.data[i].offset;
-            break;
-        }
-    if (offset == SIZE_MAX) {
-        if (pool->bytes.byte_len > SIZE_MAX - 2
-            || text.u8_bytes > SIZE_MAX - pool->bytes.byte_len - 2)
-            return false;
-        offset = pool->bytes.byte_len;
-        core_buffer_append(&pool->bytes, text.data, text.u8_bytes);
-        core_list_push(pool->names, ((pooled_name_t){text, offset}));
-    }
-    out->long_value.selector = (uint64_t)text.u8_bytes
-        | ((uint64_t)N00B_ABI_STRING_UTF8 << N00B_ABI_STRING_ENCODING_SHIFT)
-        | ((uint64_t)N00B_ABI_STRING_LONG << N00B_ABI_STRING_TAG_SHIFT);
-    core_list_push(pool->pending, ((pending_name_relocation_t){
-        table_kind, field_offset, offset,
-    }));
-    return true;
-}
-
 static bool
 empty_unit_error(core_translation_unit_t *unit, const char *message)
 {
@@ -359,22 +292,9 @@ n00bb_abi_emit_empty_unit(
 
     n00b_abi_package_v1 packages[2] = {0};
     n00b_abi_module_v1 modules[2] = {0};
-    n00b_abi_type_v1 types[1] = {0};
     n00b_abi_source_file_v1 sources[2] = {0};
     n00b_abi_runtime_config_v1 runtime_configs[2] = {0};
     uint32_t package_modules[1] = {1};
-    n00bb_abi_type_index_t *type_index = n00bb_abi_type_index_new(
-        (ir_module_t *)runtime_ir);
-    th_type *nil_type = n00bb_abi_type_index_at(type_index, 0);
-    if (!nil_type) {
-        n00bb_abi_type_index_free(type_index);
-        return empty_unit_error(unit, "could not resolve the builtin nil type");
-    }
-    types[0].typehash = th_hash(ir_module_types((ir_module_t *)runtime_ir),
-                                nil_type);
-    n00bb_abi_type_index_free(type_index);
-    types[0].kind = N00B_ABI_TYPE_NIL;
-    types[0].alignment_bytes = 1;
     packages[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     packages[1].modules = (n00b_abi_range_v1){.first = 0, .count = 1};
     modules[1].package_index = 1;
@@ -385,29 +305,36 @@ n00bb_abi_emit_empty_unit(
     sources[1].source_identity = core_xxh3_64bits_raw(
         source_bytes ? source_bytes : "", source_size);
 
-    name_pool_t pool = {0};
-    bool valid = set_name(package_id, N00B_ABI_TABLE_PACKAGE,
-        offsetof(n00b_abi_package_v1, name), &packages[1].name,
-        &pool)
-        && set_name(CORE_STRING_STATIC("nil"), N00B_ABI_TABLE_TYPE,
-            offsetof(n00b_abi_type_v1, canonical_name),
-            &types[0].canonical_name, &pool)
-        && set_name(unit->module.identifier, N00B_ABI_TABLE_MODULE,
-            offsetof(n00b_abi_module_v1, full_path), &modules[1].full_path,
-            &pool)
-        && set_name(core_source_file_path(&unit->source),
-            N00B_ABI_TABLE_SOURCE_FILE,
-            offsetof(n00b_abi_source_file_v1, path), &sources[1].path,
-            &pool);
+    n00bb_abi_name_pool_t *pool = n00bb_abi_name_pool_new();
+    n00bb_abi_type_index_t *type_index = n00bb_abi_type_index_new(
+        (ir_module_t *)runtime_ir);
+    n00bb_abi_type_identity_rows_t type_rows = {0};
+    bool valid = pool && type_index
+        && n00bb_abi_type_identity_rows_build(type_index,
+            (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
+            symbols, pool, &type_rows)
+        && type_rows.count == 1;
+    n00bb_abi_type_index_free(type_index);
+    valid = valid && n00bb_abi_name_pool_encode(pool, package_id,
+        N00B_ABI_TABLE_PACKAGE, 1, offsetof(n00b_abi_package_v1, name),
+        &packages[1].name)
+        && n00bb_abi_name_pool_encode(pool, unit->module.identifier,
+            N00B_ABI_TABLE_MODULE, 1,
+            offsetof(n00b_abi_module_v1, full_path), &modules[1].full_path)
+        && n00bb_abi_name_pool_encode(pool,
+            core_source_file_path(&unit->source),
+            N00B_ABI_TABLE_SOURCE_FILE, 1,
+            offsetof(n00b_abi_source_file_v1, path), &sources[1].path);
     if (!valid) {
-        name_pool_release(&pool);
+        n00bb_abi_type_identity_rows_release(&type_rows);
+        n00bb_abi_name_pool_free(pool);
         return empty_unit_error(unit, "could not encode ABI identity strings");
     }
 
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
         {N00B_ABI_TABLE_MODULE, modules, 2},
-        {N00B_ABI_TABLE_TYPE, types, 1},
+        {N00B_ABI_TABLE_TYPE, type_rows.rows, type_rows.count},
         {N00B_ABI_TABLE_SOURCE_FILE, sources, 2},
         {N00B_ABI_TABLE_RUNTIME_CONFIG, runtime_configs, 2},
         {N00B_ABI_TABLE_U32_STREAM, package_modules, 1},
@@ -416,7 +343,8 @@ n00bb_abi_emit_empty_unit(
     valid = n00bb_abi_pack_tables(target, artifact_capabilities,
         rows, sizeof(rows) / sizeof(*rows), &packed);
     if (!valid) {
-        name_pool_release(&pool);
+        n00bb_abi_type_identity_rows_release(&type_rows);
+        n00bb_abi_name_pool_free(pool);
         return empty_unit_error(unit, "could not pack ABI identity tables");
     }
 
@@ -430,41 +358,23 @@ n00bb_abi_emit_empty_unit(
         && n00bb_abi_container_read(packed.bytes, packed.byte_count,
             &key, schemas, schema_count, false, &header, entries,
             sizeof(entries) / sizeof(*entries));
-    core_object_emit_absolute64_t *relocations = pool.pending.len
-        ? core_alloc_array(core_object_emit_absolute64_t, pool.pending.len)
-        : nullptr;
-    for (size_t i = 0; valid && i < pool.pending.len; i++) {
-        const n00bb_abi_directory_entry_t *entry = nullptr;
-        for (size_t j = 0; j < sizeof(entries) / sizeof(*entries); j++)
-            if (entries[j].kind == pool.pending.data[i].table_kind) {
-                entry = &entries[j];
-                break;
-            }
-        if (!entry || entry->record_count != 2
-            || pool.pending.data[i].field_offset + sizeof(void *)
-                > entry->record_bytes) {
-            valid = false;
-            break;
-        }
-        relocations[i] = (core_object_emit_absolute64_t){
-            .section_index = 1,
-            .section_offset = entry->file_offset + entry->record_bytes
-                              + pool.pending.data[i].field_offset,
-            .symbol_index = 0,
-            .addend_bits = pool.pending.data[i].pool_offset,
-        };
-    }
+    core_object_emit_absolute64_t *relocations = nullptr;
+    size_t relocation_count = 0;
+    if (valid)
+        valid = n00bb_abi_name_pool_relocations(pool, entries,
+            sizeof(entries) / sizeof(*entries), &relocations,
+            &relocation_count);
     core_object_emit_section_t string_section = {0};
     core_object_emit_symbol_t string_symbol = {0};
-    if (pool.bytes.byte_len) {
+    if (n00bb_abi_name_pool_size(pool)) {
         string_section = (core_object_emit_section_t){
             .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
                 ? "__n00b_strings" : target->object_format == CORE_TARGET_OBJECT_COFF
                     ? ".rdata$S" : ".rodata.n00b_strings",
             .segment = target->object_format == CORE_TARGET_OBJECT_MACH_O
                 ? "__TEXT" : nullptr,
-            .bytes = (const uint8_t *)pool.bytes.data,
-            .size = pool.bytes.byte_len,
+            .bytes = n00bb_abi_name_pool_bytes(pool),
+            .size = n00bb_abi_name_pool_size(pool),
             .alignment = 1,
         };
         string_symbol = (core_object_emit_symbol_t){
@@ -475,14 +385,15 @@ n00bb_abi_emit_empty_unit(
     size_t object_bytes = 0;
     if (valid)
         valid = n00bb_abi_write_object(target, &packed,
-            pool.bytes.byte_len ? &string_section : nullptr,
-            pool.bytes.byte_len ? 1 : 0,
-            pool.bytes.byte_len ? &string_symbol : nullptr,
-            pool.bytes.byte_len ? 1 : 0,
-            relocations, pool.pending.len,
+            n00bb_abi_name_pool_size(pool) ? &string_section : nullptr,
+            n00bb_abi_name_pool_size(pool) ? 1 : 0,
+            n00bb_abi_name_pool_size(pool) ? &string_symbol : nullptr,
+            n00bb_abi_name_pool_size(pool) ? 1 : 0,
+            relocations, relocation_count,
             &object, &object_bytes);
     core_free(relocations);
-    name_pool_release(&pool);
+    n00bb_abi_type_identity_rows_release(&type_rows);
+    n00bb_abi_name_pool_free(pool);
     if (!valid) {
         n00bb_abi_packed_tables_release(&packed);
         return empty_unit_error(unit, "could not write ABI identity object");
