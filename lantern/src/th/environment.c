@@ -60,6 +60,60 @@ typedef struct {
 } type_binding_t;
 core_list_decl(type_binding_t);
 
+typedef const th_type *type_ptr_t;
+core_list_decl(type_ptr_t);
+
+static bool type_is_concrete(const th_type *type,
+                             core_list_t(type_ptr_t) * seen) {
+  type = th_resolve_c(type);
+  if (!type || type->kind == TH_VAR || type->kind == TH_BOUND ||
+      type->kind == TH_BINDER)
+    return false;
+  for (size_t i = 0; i < seen->len; i++)
+    if (seen->data[i] == type) return true;
+  core_list_push(*seen, type);
+  switch (type->kind) {
+  case TH_NAMED:
+    for (size_t i = 0; i < type->named.nargs; i++)
+      if (type->named.args[i].kind == TH_ARG_TYPE &&
+          !type_is_concrete(type->named.args[i].type, seen)) return false;
+    return true;
+  case TH_INDIRECTION:
+    return type_is_concrete(type->ind.referent, seen);
+  case TH_SEQUENCE:
+    return type_is_concrete(type->seq.elem, seen);
+  case TH_RECORD:
+    for (size_t i = 0; i < type->record.n; i++)
+      if (!type_is_concrete(type->record.members[i].type, seen)) return false;
+    return true;
+  case TH_TRAIT:
+    for (size_t i = 0; i < type->trait.n; i++)
+      if (!type_is_concrete(type->trait.methods[i].type, seen)) return false;
+    return true;
+  case TH_FUNCTION:
+    if (!type_is_concrete(type->fn.ret, seen) ||
+        (type->fn.error && !type_is_concrete(type->fn.error, seen))) return false;
+    for (size_t i = 0; i < type->fn.np; i++)
+      if (!type_is_concrete(type->fn.params[i].type, seen)) return false;
+    if (type->fn.rest && !type_is_concrete(type->fn.rest->type, seen))
+      return false;
+    for (size_t i = 0; i < type->fn.nkw; i++)
+      if (!type_is_concrete(type->fn.kw[i].type, seen)) return false;
+    return true;
+  case TH_SUM:
+    for (size_t i = 0; i < type->sum.n; i++)
+      if (!type_is_concrete(type->sum.arms[i], seen)) return false;
+    return true;
+  case TH_BITINT:
+    return true;
+  case TH_VAR:
+  case TH_BINDER:
+  case TH_BOUND:
+    return false;
+  }
+  return false;
+}
+
 static bool pair_seen(core_list_t(type_pair_t) * seen, const th_type *a,
                       const th_type *b) {
   for (size_t i = 0; i < seen->len; i++)
@@ -318,6 +372,26 @@ bool th_env_type_pattern_subsumes(const th_type *general,
                                   const th_type *specific) {
   return general && specific && receiver_subsumes((th_type *)general,
                                                    (th_type *)specific);
+}
+
+bool th_env_type_pattern_accepts(th_ctx *context, const th_type *pattern,
+                                 const th_type *candidate) {
+  if (!context || !pattern || !candidate) return false;
+  core_list_t(type_ptr_t) seen = core_list_new(type_ptr_t);
+  bool concrete = type_is_concrete(candidate, &seen);
+  core_list_free(seen);
+  if (!concrete || !th_env_type_pattern_subsumes(pattern, candidate))
+    return false;
+  size_t error_count = context->errors.len;
+  size_t pending_count = context->pending_environment_constraints.len;
+  const char *previous_error = context->err;
+  bool accepted = th_unify_probe(context, (th_type *)pattern,
+                                 (th_type *)candidate) != nullptr &&
+                  context->pending_environment_constraints.len == pending_count;
+  context->errors.len = error_count;
+  context->pending_environment_constraints.len = pending_count;
+  context->err = previous_error;
+  return accepted;
 }
 
 th_env *th_env_new(void) {

@@ -14,6 +14,18 @@ enum {
     ELF_RESERVED_SECTION_START = 0xff00,
 };
 
+bool core_object_emit_elf_native_section_index(size_t section_count,
+                                               uint32_t input_section_index,
+                                               uint32_t *native_section_index)
+{
+    if (!native_section_index || !input_section_index ||
+        input_section_index > section_count ||
+        section_count > ELF_RESERVED_SECTION_START - ELF_USER_SECTION_BASE)
+        return false;
+    *native_section_index = ELF_USER_SECTION_BASE + input_section_index - 1;
+    return true;
+}
+
 static bool add_cstring(size_t *size, const char *value)
 {
     size_t length = strlen(value);

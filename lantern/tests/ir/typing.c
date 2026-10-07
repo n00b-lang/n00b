@@ -975,6 +975,13 @@ static void test_aggregates_and_variants(void)
     check("type.test accepts a member type of a union",
           accepts_as(e, tt, "bool"));
 
+    ir_instr_t *union_target_test = op(e, IR_OP_TYPE_TEST);
+    ir_instr_operand_value(union_target_test, val(e, "i32"));
+    ir_instr_operand_type(union_target_test,
+                          ir_type_parse(e->m, "i32 | string"));
+    check("type.test accepts a union case with one matching arm",
+          accepts_as(e, union_target_test, "bool"));
+
     ir_instr_t *tn = op(e, IR_OP_TYPE_NARROW);
     ir_instr_set_dest(tn, "narrowed", ir_type_parse(e->m, "i32"));
     ir_instr_operand_value(tn, val(e, "i32 | string"));
@@ -997,6 +1004,35 @@ static void test_aggregates_and_variants(void)
     ir_instr_operand_type(dynamic_narrow, ir_type_parse(e->m, "string"));
     check("type.narrow extracts a concrete constrained value",
           accepts_as(e, dynamic_narrow, "string"));
+
+    th_type *array_item = th_var(ir_ctx_types(e->ctx));
+    th_arg array_pattern_arg = {.kind = TH_ARG_TYPE, .type = array_item};
+    th_type *array_pattern = th_apply(ir_ctx_types(e->ctx), "Array",
+                                      &array_pattern_arg, 1);
+    th_type *array_integer = ir_type_parse(e->m, "Array[i32]");
+    ir_value_t *array_value = ir_param_add(e->f, "array_value", array_integer);
+    ir_instr_t *generic_test = op(e, IR_OP_TYPE_TEST);
+    ir_instr_operand_value(generic_test, array_value);
+    ir_instr_operand_type(generic_test, array_pattern);
+    check("type.test accepts a generic case for a concrete source",
+          accepts_as(e, generic_test, "bool"));
+    ir_instr_t *generic_narrow = op(e, IR_OP_TYPE_NARROW);
+    ir_instr_set_dest(generic_narrow, "generic_narrow", array_pattern);
+    ir_instr_operand_value(generic_narrow, array_value);
+    ir_instr_operand_type(generic_narrow, array_pattern);
+    check("type.narrow accepts a generic case for a concrete source",
+          apply(e, generic_narrow) == IR_RULE_ACCEPT);
+    th_constraint array_item_kind = {.kind = TH_CON_KIND,
+                                     .type_kind = TH_BITINT};
+    ir_value_t *string_array = ir_param_add(
+        e->f, "string_array", ir_type_parse(e->m, "Array[string]"));
+    ir_instr_t *constrained_test = op(e, IR_OP_TYPE_TEST);
+    ir_instr_operand_value(constrained_test, string_array);
+    ir_instr_operand_type(constrained_test, array_pattern);
+    check("type.test rejects a generic case whose constraint fails",
+          th_var_constrain(ir_ctx_types(e->ctx), array_item,
+                           array_item_kind) &&
+              apply(e, constrained_test) == IR_RULE_REJECT);
 
     ir_instr_t *tnbad = op(e, IR_OP_TYPE_NARROW);
     ir_instr_set_dest(tnbad, "bad_narrow", ir_type_parse(e->m, "u64"));

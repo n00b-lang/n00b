@@ -43,3 +43,10 @@ bool core_object_emit(const core_target_desc_t *target,
                       const core_object_emit_absolute64_t *relocations,
                       size_t relocation_count,
                       uint8_t **out_image, size_t *out_size);
+
+/* Map an emitter input section ordinal to the native section index written
+ * into the object. A caller can use this while constructing metadata that
+ * refers to sections in the same object. */
+bool core_object_emit_native_section_index(
+    const core_target_desc_t *target, size_t section_count,
+    uint32_t input_section_index, uint32_t *native_section_index);

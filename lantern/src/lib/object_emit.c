@@ -136,3 +136,32 @@ bool core_object_emit(const core_target_desc_t *target,
         return false;
     }
 }
+
+bool core_object_emit_native_section_index(
+    const core_target_desc_t *target, size_t section_count,
+    uint32_t input_section_index, uint32_t *native_section_index)
+{
+    if (!native_section_index || !core_target_validate(target) ||
+        target->endian != CORE_TARGET_LITTLE_ENDIAN ||
+        target->pointer_bits != 64 ||
+        !input_section_index || input_section_index > section_count)
+        return false;
+    switch (target->object_format) {
+    case CORE_TARGET_OBJECT_ELF:
+        if (target->call_abi != CORE_TARGET_CALL_SYSV_AMD64) return false;
+        return core_object_emit_elf_native_section_index(
+            section_count, input_section_index, native_section_index);
+    case CORE_TARGET_OBJECT_MACH_O:
+        if (target->call_abi != CORE_TARGET_CALL_DARWIN_AARCH64 ||
+            section_count > UINT8_MAX) return false;
+        break;
+    case CORE_TARGET_OBJECT_COFF:
+        if (target->call_abi != CORE_TARGET_CALL_WINDOWS_X64 ||
+            section_count > INT16_MAX) return false;
+        break;
+    default:
+        return false;
+    }
+    *native_section_index = input_section_index;
+    return true;
+}

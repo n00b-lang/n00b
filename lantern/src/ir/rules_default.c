@@ -9,6 +9,7 @@
 #include "ir/layout.h"
 #include "ir/shape.h"
 #include "ir/text.h"
+#include "th/environment.h"
 
 #define ACCEPT(t)  ((ir_rule_result_t){.verdict = IR_RULE_ACCEPT, .result = (t)})
 #define REJECT     ((ir_rule_result_t){.verdict = IR_RULE_REJECT})
@@ -1922,16 +1923,18 @@ static bool type_test_source(ir_module_t *m, th_type *source,
     th_comb target_comb;
     if (th_sum_comb(target, &target_comb) && target_comb == TH_UNION) {
         for (size_t i = 0; i < th_sum_len(target); i++)
-            if (!type_test_source(m, source, th_sum_arm(target, i)))
-                return false;
-        return true;
+            if (type_test_source(m, source, th_sum_arm(target, i)))
+                return true;
+        return false;
     }
     th_comb comb;
     if (th_sum_comb(source, &comb) && comb == TH_UNION) {
         for (size_t i = 0; i < th_sum_len(source); i++)
-            if (ir_type_eq(m, th_sum_arm(source, i), target)) return true;
+            if (type_test_source(m, th_sum_arm(source, i), target)) return true;
         return false;
     }
+    if (th_env_type_pattern_accepts(ir_ctx_types(m->ctx), target, source))
+        return true;
     const char *name = nullptr;
     size_t length = 0;
     return th_named_info(source, &name, &length, nullptr, nullptr)

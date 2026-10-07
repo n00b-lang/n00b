@@ -10,6 +10,9 @@ bool core_object_emit_elf(const core_target_desc_t *target,
                           const core_object_emit_absolute64_t *relocations,
                           size_t relocation_count,
                           uint8_t **out_image, size_t *out_size);
+bool core_object_emit_elf_native_section_index(size_t section_count,
+                                               uint32_t input_section_index,
+                                               uint32_t *native_section_index);
 bool core_object_emit_macho(const core_target_desc_t *target,
                             const core_object_emit_section_t *sections,
                             size_t section_count,

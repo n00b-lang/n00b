@@ -42,6 +42,10 @@ static void mach_test(const char *output_path)
     core_object_section_t section;
     assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_MACH_O,
                                     "__DATA_CONST", "__n00b_meta", &section));
+    uint32_t native_index = 0;
+    assert(core_object_emit_native_section_index(&target, 2, 1,
+                                                  &native_index));
+    assert(native_index == section.native_index);
     assert(section.native_index == 1 && section.size == 16 &&
            section.alignment == 8 && section.relocation_count == 1);
     core_object_absolute64_relocation_t relocation;
@@ -57,7 +61,12 @@ static void mach_test(const char *output_path)
            !memcmp(name.bytes, "_external_symbol", name.length));
     assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_MACH_O,
                                     "__DATA", "__data", &section));
+    assert(core_object_emit_native_section_index(&target, 2, 2,
+                                                  &native_index));
+    assert(native_index == section.native_index);
     assert(section.native_index == 2 && section.alignment == 16);
+    assert(!core_object_emit_native_section_index(&target,
+        (size_t)UINT8_MAX + 1, 1, &native_index));
     assert(core_object_absolute64_relocation_at(
         &section, CORE_TARGET_OBJECT_MACH_O, 0, &relocation));
     assert(relocation.target_is_section &&
@@ -93,6 +102,10 @@ static void coff_test(const char *output_path)
     core_object_section_t section;
     assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_COFF,
                                     NULL, ".n00b$M", &section));
+    uint32_t native_index = 0;
+    assert(core_object_emit_native_section_index(&target, 2, 1,
+                                                  &native_index));
+    assert(native_index == section.native_index);
     assert(section.native_index == 1 && section.size == 16 &&
            section.alignment == 8 && section.relocation_count == 1);
     assert(!(section.flags & 0x80000000u));
@@ -110,8 +123,13 @@ static void coff_test(const char *output_path)
            !memcmp(name.bytes, "external_symbol", name.length));
     assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_COFF,
                                     NULL, ".long_section_name", &section));
+    assert(core_object_emit_native_section_index(&target, 2, 2,
+                                                  &native_index));
+    assert(native_index == section.native_index);
     assert(section.native_index == 2 && section.alignment == 16 &&
            section.relocation_count == 1);
+    assert(!core_object_emit_native_section_index(&target,
+        (size_t)INT16_MAX + 1, 1, &native_index));
     assert(core_object_absolute64_relocation_at(
         &section, CORE_TARGET_OBJECT_COFF, 0, &relocation));
     assert(relocation.native_symbol_index == 1);
@@ -200,6 +218,10 @@ int main(int argc, char **argv)
     core_object_section_t section;
     assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_ELF,
                                     NULL, ".n00b.meta", &section));
+    uint32_t native_index = 0;
+    assert(core_object_emit_native_section_index(&target, 2, 1,
+                                                  &native_index));
+    assert(native_index == section.native_index);
     assert(section.native_index == 4 && section.size == 16 &&
            section.alignment == 8 && section.flags == 2);
     core_object_absolute64_relocation_t relocation;
@@ -218,8 +240,26 @@ int main(int argc, char **argv)
                                        &section, UINT32_MAX, &name));
     assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_ELF,
                                     NULL, ".text", &section));
+    assert(core_object_emit_native_section_index(&target, 2, 2,
+                                                  &native_index));
+    assert(native_index == section.native_index);
     assert(section.native_index == 5 && section.alignment == 16 &&
            section.flags == 6);
+    native_index = UINT32_MAX;
+    assert(!core_object_emit_native_section_index(&target, 2, 0,
+                                                   &native_index)
+           && native_index == UINT32_MAX);
+    assert(!core_object_emit_native_section_index(&target, 2, 3,
+                                                   &native_index)
+           && native_index == UINT32_MAX);
+    assert(!core_object_emit_native_section_index(&target, UINT16_MAX, 1,
+                                                   &native_index)
+           && native_index == UINT32_MAX);
+    core_target_desc_t unsupported_target = target;
+    unsupported_target.pointer_bits = 32;
+    assert(!core_object_emit_native_section_index(&unsupported_target, 2, 1,
+                                                   &native_index)
+           && native_index == UINT32_MAX);
     assert(core_object_absolute64_relocation_at(
         &section, CORE_TARGET_OBJECT_ELF, 0, &relocation));
     assert(relocation.native_symbol_index == 1);

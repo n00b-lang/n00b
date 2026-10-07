@@ -289,10 +289,14 @@ th_env_method_status_t th_env_method_resolve(th_ctx *context, th_type *receiver,
 th_env_method_status_t th_env_method_resolve_by_name(
     th_ctx *context, th_type *receiver, const char *method_name,
     th_env_method_t *method, const char **trait_name);
-/* True when every type matched by `specific` is also matched by `general`.
- * This compares structural type patterns without binding either type. */
+/* Structural pattern subsumption; constraints on variables are not checked.
+ * Neither input is bound. */
 bool th_env_type_pattern_subsumes(const th_type *general,
                                   const th_type *specific);
+/* Test a pattern against a fully concrete candidate, including the pattern's
+ * variable constraints. Neither input is bound. */
+bool th_env_type_pattern_accepts(th_ctx *context, const th_type *pattern,
+                                 const th_type *candidate);
 /* Enumerate every visible signature-compatible implementation of a trait
  * method. The logic relation indexes declarations; generic instantiation,
  * concrete receiver matching, constraints, and specificity remain in the type

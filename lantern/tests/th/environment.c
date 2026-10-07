@@ -1071,6 +1071,18 @@ int main(void) {
         box_pattern && th_env_type_pattern_subsumes(box_pattern, box_int) &&
             !th_env_type_pattern_subsumes(box_int, box_pattern) &&
             th_env_type_pattern_subsumes(box_int, box_int));
+  th_type *bit_pattern_item = th_var(inside);
+  th_constraint bit_kind = {.kind = TH_CON_KIND, .type_kind = TH_BITINT};
+  th_arg bit_pattern_arg = {.kind = TH_ARG_TYPE, .type = bit_pattern_item};
+  th_type *bit_pattern = th_apply(inside, "Box", &bit_pattern_arg, 1);
+  th_arg bit_arg = {.kind = TH_ARG_TYPE,
+                    .type = th_bitint(inside, 32, true)};
+  th_type *box_bit = th_apply(inside, "Box", &bit_arg, 1);
+  check("concrete pattern matching enforces variable constraints",
+        th_var_constrain(inside, bit_pattern_item, bit_kind) &&
+            th_env_type_pattern_accepts(inside, bit_pattern, box_bit) &&
+            !th_env_type_pattern_accepts(inside, bit_pattern, box_int) &&
+            !th_env_type_pattern_accepts(inside, bit_pattern, box_pattern));
   const char *selected_trait = nullptr;
   check("method-name lookup selects the applicable visible trait contract",
         th_env_method_resolve_by_name(inside, box_int, "get", &selected,
