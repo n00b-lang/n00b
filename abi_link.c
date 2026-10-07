@@ -453,17 +453,93 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
 }
 
 static bool
+compatible_physical_runs(const n00bb_abi_object_view_t *a_view,
+                         n00b_abi_range_v1 a_range,
+                         const n00bb_abi_object_view_t *b_view,
+                         n00b_abi_range_v1 b_range)
+{
+    if (a_range.count != b_range.count) return false;
+    if (!a_range.count) return !a_range.first && !b_range.first;
+    const n00bb_abi_directory_entry_t *a_stream = n00bb_abi_object_table(
+        a_view, N00B_ABI_TABLE_U32_STREAM);
+    const n00bb_abi_directory_entry_t *b_stream = n00bb_abi_object_table(
+        b_view, N00B_ABI_TABLE_U32_STREAM);
+    if (!a_stream || !b_stream
+        || a_range.first >= a_stream->record_count
+        || b_range.first >= b_stream->record_count
+        || a_range.count > a_stream->record_count - a_range.first
+        || b_range.count > b_stream->record_count - b_range.first)
+        return false;
+    for (uint32_t i = 0; i < a_range.count; i++) {
+        const uint8_t *a_index = n00bb_abi_object_row(a_view,
+            N00B_ABI_TABLE_U32_STREAM, a_range.first + i);
+        const uint8_t *b_index = n00bb_abi_object_row(b_view,
+            N00B_ABI_TABLE_U32_STREAM, b_range.first + i);
+        const n00b_abi_physical_run_v1 *a_run = n00bb_abi_object_row(
+            a_view, N00B_ABI_TABLE_PHYSICAL_RUN,
+            core_le_load_u32(a_index));
+        const n00b_abi_physical_run_v1 *b_run = n00bb_abi_object_row(
+            b_view, N00B_ABI_TABLE_PHYSICAL_RUN,
+            core_le_load_u32(b_index));
+        if (!a_run || !b_run || memcmp(a_run, b_run, sizeof(*a_run)))
+            return false;
+    }
+    return true;
+}
+
+static bool
+compatible_type_layout(const abi_link_key_t *first,
+                       const abi_link_key_t *candidate)
+{
+    const n00b_abi_type_v1 *a_type = first->row, *b_type = candidate->row;
+    if (!a_type->layout_index || !b_type->layout_index) return true;
+    const n00b_abi_layout_v1 *a = n00bb_abi_object_row(first->view,
+        N00B_ABI_TABLE_LAYOUT, a_type->layout_index);
+    const n00b_abi_layout_v1 *b = n00bb_abi_object_row(candidate->view,
+        N00B_ABI_TABLE_LAYOUT, b_type->layout_index);
+    if (!a || !b || a->type_index != first->local_index
+        || b->type_index != candidate->local_index
+        || a->policy != b->policy) return false;
+    if (!!a->tag_extractor_index != !!b->tag_extractor_index)
+        return false;
+    if (a->tag_extractor_index) {
+        const n00b_abi_tag_extractor_v1 *a_tag = n00bb_abi_object_row(
+            first->view, N00B_ABI_TABLE_TAG_EXTRACTOR,
+            a->tag_extractor_index);
+        const n00b_abi_tag_extractor_v1 *b_tag = n00bb_abi_object_row(
+            candidate->view, N00B_ABI_TABLE_TAG_EXTRACTOR,
+            b->tag_extractor_index);
+        if (!a_tag || !b_tag || memcmp(a_tag, b_tag, sizeof(*a_tag)))
+            return false;
+    }
+    return compatible_physical_runs(first->view, a->occupied_runs,
+            candidate->view, b->occupied_runs)
+        && compatible_physical_runs(first->view, a->reserved_runs,
+            candidate->view, b->reserved_runs);
+}
+
+static bool
 compatible_type_identity(const abi_link_key_t *first,
                          const abi_link_key_t *candidate)
 {
     const n00b_abi_type_v1 *a = first->row, *b = candidate->row;
     n00bb_abi_string_view_t a_name, b_name;
     return a->kind == b->kind
+        && a->typehash == b->typehash && a->flags == b->flags
+        && (!a->size_bits || !b->size_bits
+            || a->size_bits == b->size_bits)
+        && (!a->alignment_bytes || !b->alignment_bytes
+            || a->alignment_bytes == b->alignment_bytes)
+        && (!a->semantic_width_bits || !b->semantic_width_bits
+            || a->semantic_width_bits == b->semantic_width_bits)
+        && (!a->unpacked_storage_bits || !b->unpacked_storage_bits
+            || a->unpacked_storage_bits == b->unpacked_storage_bits)
         && n00bb_abi_object_string(first->view, &a->canonical_name, &a_name)
         && n00bb_abi_object_string(candidate->view, &b->canonical_name,
                                    &b_name)
         && a_name.length == b_name.length
-        && !memcmp(a_name.bytes, b_name.bytes, a_name.length);
+        && !memcmp(a_name.bytes, b_name.bytes, a_name.length)
+        && compatible_type_layout(first, candidate);
 }
 
 static bool

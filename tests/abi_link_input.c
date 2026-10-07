@@ -179,6 +179,7 @@ test_cycle_selection(char **paths)
     const n00bb_abi_directory_entry_t *second_types =
         n00bb_abi_object_table(second, N00B_ABI_TABLE_TYPE);
     assert(first_types && second_types);
+    n00b_abi_physical_run_v1 *layout_probe = nullptr;
     for (uint32_t i = 1; i < first_types->record_count; i++) {
         const n00b_abi_type_v1 *a = n00bb_abi_object_row(first,
             N00B_ABI_TABLE_TYPE, i);
@@ -193,9 +194,21 @@ test_cycle_selection(char **paths)
                 i, &left) && n00bb_abi_index_plan_map(plan, 1,
                 N00B_ABI_TABLE_TYPE, j, &right) && left == right);
             shared_primitive = true;
+            const n00b_abi_layout_v1 *layout = n00bb_abi_object_row(second,
+                N00B_ABI_TABLE_LAYOUT, b->layout_index);
+            if (!layout_probe && layout && layout->occupied_runs.count) {
+                const uint8_t *slot = n00bb_abi_object_row(second,
+                    N00B_ABI_TABLE_U32_STREAM,
+                    layout->occupied_runs.first);
+                if (slot) layout_probe = (void *)n00bb_abi_object_row(second,
+                    N00B_ABI_TABLE_PHYSICAL_RUN, core_le_load_u32(slot));
+            }
         }
     }
-    assert(shared_primitive);
+    assert(shared_primitive && layout_probe);
+    layout_probe->width_bits ^= 1;
+    assert(!n00bb_abi_index_plan_build(&selected));
+    layout_probe->width_bits ^= 1;
     check_remapped_rows(&selected, plan);
     n00bb_abi_manifest_rows_t manifests = {0};
     assert(n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
@@ -336,11 +349,102 @@ test_self_import_selection(const char *path)
     free(object);
 }
 
+static uint32_t
+find_named_type(const n00bb_abi_object_view_t *view, const char *spelling)
+{
+    const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(
+        view, N00B_ABI_TABLE_TYPE);
+    assert(table);
+    for (uint32_t i = 1; i < table->record_count; i++) {
+        const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_TYPE, i);
+        n00bb_abi_string_view_t name;
+        if (n00bb_abi_object_string(view, &type->canonical_name, &name)
+            && name.length == strlen(spelling)
+            && !memcmp(name.bytes, spelling, name.length)) return i;
+    }
+    return 0;
+}
+
+static void
+test_imported_record_selection(const char *root_path, const char *dep_path)
+{
+    core_translation_unit_t root = {0}, dep = {0};
+    assert(init_unit(&root, "record_root")
+        && init_unit(&dep, "record_dep")
+        && core_translation_unit_add_import(&root, &dep));
+    core_link_unit_t *link = core_link_unit_new();
+    assert(link && core_link_unit_add_root(link, &root)
+        && core_link_unit_finalize_graph(link));
+    size_t root_bytes, dep_bytes;
+    uint8_t *root_object = read_object(root_path, &root_bytes);
+    uint8_t *dep_object = read_object(dep_path, &dep_bytes);
+    n00bb_abi_object_input_t inputs[2] = {
+        {.module = dep.module.identifier, .object = dep_object,
+         .object_bytes = dep_bytes},
+        {.module = root.module.identifier, .object = root_object,
+         .object_bytes = root_bytes},
+    };
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_selected_objects_t selected = {0};
+    assert(n00bb_abi_select_objects(link, &target, inputs, 2, &selected)
+        && selected.count == 2);
+    size_t root_input = SIZE_MAX, dep_input = SIZE_MAX;
+    for (size_t i = 0; i < selected.count; i++) {
+        if (selected.views[i].object == root_object) root_input = i;
+        if (selected.views[i].object == dep_object) dep_input = i;
+    }
+    assert(root_input < 2 && dep_input < 2);
+    const n00bb_abi_object_view_t *root_view = &selected.views[root_input];
+    const n00bb_abi_object_view_t *dep_view = &selected.views[dep_input];
+    uint32_t root_type = find_named_type(root_view,
+        "record_dep.SharedRecord");
+    uint32_t dep_type = find_named_type(dep_view,
+        "record_dep.SharedRecord");
+    const n00b_abi_type_v1 *reference = n00bb_abi_object_row(root_view,
+        N00B_ABI_TABLE_TYPE, root_type);
+    const n00b_abi_type_v1 *definition = n00bb_abi_object_row(dep_view,
+        N00B_ABI_TABLE_TYPE, dep_type);
+    assert(root_type && dep_type && reference && definition
+        && !reference->owner_module_index && !reference->layout_index
+        && definition->owner_module_index == 1
+        && definition->layout_index);
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    uint32_t from_root, from_dep, dep_module;
+    assert(plan && n00bb_abi_index_plan_map(plan, root_input,
+        N00B_ABI_TABLE_TYPE, root_type, &from_root)
+        && n00bb_abi_index_plan_map(plan, dep_input,
+            N00B_ABI_TABLE_TYPE, dep_type, &from_dep)
+        && from_root == from_dep
+        && n00bb_abi_index_plan_map(plan, dep_input,
+            N00B_ABI_TABLE_MODULE, 1, &dep_module));
+    n00bb_abi_merged_rows_t merged = {0};
+    assert(n00bb_abi_merge_rows(&selected, plan, &merged));
+    const n00b_abi_type_v1 *final_type = n00bb_abi_merged_row(&merged,
+        N00B_ABI_TABLE_TYPE, from_root);
+    assert(final_type && final_type->layout_index
+        && final_type->owner_module_index == dep_module
+        && final_type->fields_or_arms.count == 1);
+    n00bb_abi_merged_rows_release(&merged);
+    n00bb_abi_index_plan_free(plan);
+    n00bb_abi_selected_objects_release(&selected);
+    core_link_unit_free(link);
+    core_translation_unit_release(&root);
+    core_translation_unit_release(&dep);
+    free(root_object);
+    free(dep_object);
+}
+
 int
 main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3 || argc == 4);
     if (argc == 4) {
+        if (!strcmp(argv[1], "--records")) {
+            test_imported_record_selection(argv[2], argv[3]);
+            return 0;
+        }
         test_cycle_selection(argv + 1);
         return 0;
     }

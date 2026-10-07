@@ -1439,6 +1439,11 @@ N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
     --output "$tmp/import_record_abi.o" record_root
 [ -s "$tmp/import_record_abi.o" ]
 "$abi_record_object_test" "$tmp/import_record_abi.o" import-record
+N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
+    --output "$tmp/record_dep_abi.o" record_dep
+[ -s "$tmp/record_dep_abi.o" ]
+"$abi_link_input_test" --records "$tmp/import_record_abi.o" \
+    "$tmp/record_dep_abi.o"
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_enum_abi.o" foreign_enum_user
 [ -s "$tmp/import_enum_abi.o" ]
