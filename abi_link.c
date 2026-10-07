@@ -453,36 +453,44 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
 }
 
 static bool
-compatible_physical_runs(const n00bb_abi_object_view_t *a_view,
-                         n00b_abi_range_v1 a_range,
-                         const n00bb_abi_object_view_t *b_view,
-                         n00b_abi_range_v1 b_range)
+valid_index_range(const n00bb_abi_object_view_t *view,
+                  n00b_abi_range_v1 range)
 {
-    if (a_range.count != b_range.count) return false;
-    if (!a_range.count) return !a_range.first && !b_range.first;
-    const n00bb_abi_directory_entry_t *a_stream = n00bb_abi_object_table(
-        a_view, N00B_ABI_TABLE_U32_STREAM);
-    const n00bb_abi_directory_entry_t *b_stream = n00bb_abi_object_table(
-        b_view, N00B_ABI_TABLE_U32_STREAM);
-    if (!a_stream || !b_stream
-        || a_range.first >= a_stream->record_count
-        || b_range.first >= b_stream->record_count
-        || a_range.count > a_stream->record_count - a_range.first
-        || b_range.count > b_stream->record_count - b_range.first)
-        return false;
+    if (!range.count) return !range.first;
+    const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(
+        view, N00B_ABI_TABLE_U32_STREAM);
+    return table && range.first < table->record_count
+        && range.count <= table->record_count - range.first;
+}
+
+static const void *
+indexed_range_row(const n00bb_abi_object_view_t *view,
+                  n00b_abi_range_v1 range, uint32_t ordinal,
+                  uint32_t target_kind)
+{
+    if (ordinal >= range.count || !valid_index_range(view, range))
+        return nullptr;
+    const uint8_t *slot = n00bb_abi_object_row(view,
+        N00B_ABI_TABLE_U32_STREAM, range.first + ordinal);
+    uint32_t index = core_le_load_u32(slot);
+    if (!index && target_kind != N00B_ABI_TABLE_TYPE) return nullptr;
+    return n00bb_abi_object_row(view, target_kind, index);
+}
+
+static bool
+compatible_record_runs(const n00bb_abi_object_view_t *a_view,
+                       n00b_abi_range_v1 a_range,
+                       const n00bb_abi_object_view_t *b_view,
+                       n00b_abi_range_v1 b_range, uint32_t target_kind,
+                       size_t row_bytes)
+{
+    if (a_range.count != b_range.count
+        || !valid_index_range(a_view, a_range)
+        || !valid_index_range(b_view, b_range)) return false;
     for (uint32_t i = 0; i < a_range.count; i++) {
-        const uint8_t *a_index = n00bb_abi_object_row(a_view,
-            N00B_ABI_TABLE_U32_STREAM, a_range.first + i);
-        const uint8_t *b_index = n00bb_abi_object_row(b_view,
-            N00B_ABI_TABLE_U32_STREAM, b_range.first + i);
-        const n00b_abi_physical_run_v1 *a_run = n00bb_abi_object_row(
-            a_view, N00B_ABI_TABLE_PHYSICAL_RUN,
-            core_le_load_u32(a_index));
-        const n00b_abi_physical_run_v1 *b_run = n00bb_abi_object_row(
-            b_view, N00B_ABI_TABLE_PHYSICAL_RUN,
-            core_le_load_u32(b_index));
-        if (!a_run || !b_run || memcmp(a_run, b_run, sizeof(*a_run)))
-            return false;
+        const void *a = indexed_range_row(a_view, a_range, i, target_kind);
+        const void *b = indexed_range_row(b_view, b_range, i, target_kind);
+        if (!a || !b || memcmp(a, b, row_bytes)) return false;
     }
     return true;
 }
@@ -512,10 +520,142 @@ compatible_type_layout(const abi_link_key_t *first,
         if (!a_tag || !b_tag || memcmp(a_tag, b_tag, sizeof(*a_tag)))
             return false;
     }
-    return compatible_physical_runs(first->view, a->occupied_runs,
-            candidate->view, b->occupied_runs)
-        && compatible_physical_runs(first->view, a->reserved_runs,
-            candidate->view, b->reserved_runs);
+    return compatible_record_runs(first->view, a->occupied_runs,
+            candidate->view, b->occupied_runs,
+            N00B_ABI_TABLE_PHYSICAL_RUN, sizeof(n00b_abi_physical_run_v1))
+        && compatible_record_runs(first->view, a->reserved_runs,
+            candidate->view, b->reserved_runs,
+            N00B_ABI_TABLE_PHYSICAL_RUN, sizeof(n00b_abi_physical_run_v1));
+}
+
+static bool
+compatible_string_values(const n00bb_abi_object_view_t *a_view,
+                         const n00b_abi_string_v1 *a,
+                         const n00bb_abi_object_view_t *b_view,
+                         const n00b_abi_string_v1 *b)
+{
+    n00bb_abi_string_view_t a_text, b_text;
+    return n00bb_abi_object_string(a_view, a, &a_text)
+        && n00bb_abi_object_string(b_view, b, &b_text)
+        && a_text.length == b_text.length
+        && !memcmp(a_text.bytes, b_text.bytes, a_text.length);
+}
+
+static bool
+compatible_child_type(const n00bb_abi_object_view_t *a_view,
+                      uint32_t a_index,
+                      const n00bb_abi_object_view_t *b_view,
+                      uint32_t b_index)
+{
+    const n00b_abi_type_v1 *a = n00bb_abi_object_row(a_view,
+        N00B_ABI_TABLE_TYPE, a_index);
+    const n00b_abi_type_v1 *b = n00bb_abi_object_row(b_view,
+        N00B_ABI_TABLE_TYPE, b_index);
+    if (!a || !b || a->kind != b->kind) return false;
+    if (a->typehash || b->typehash)
+        return a->typehash && a->typehash == b->typehash;
+    return a->kind == N00B_ABI_TYPE_VARIABLE
+        && a->typevar_ordinal == b->typevar_ordinal;
+}
+
+static bool
+type_is_import_reference(const n00b_abi_type_v1 *type)
+{
+    return !type->owner_module_index && !type->layout_index
+        && (type->kind == N00B_ABI_TYPE_RECORD
+            || type->kind == N00B_ABI_TYPE_VARIANT
+            || type->kind == N00B_ABI_TYPE_ENUM
+            || type->kind == N00B_ABI_TYPE_FLAGSET
+            || type->kind == N00B_ABI_TYPE_CALLBACK
+            || type->kind == N00B_ABI_TYPE_TRAIT
+            || type->kind == N00B_ABI_TYPE_WRAPPER);
+}
+
+static bool
+compatible_type_components(const abi_link_key_t *first,
+                           const abi_link_key_t *candidate)
+{
+    const n00b_abi_type_v1 *a = first->row, *b = candidate->row;
+    if (a->components.count != b->components.count)
+        return (!a->components.count && type_is_import_reference(a))
+            || (!b->components.count && type_is_import_reference(b));
+    if (!valid_index_range(first->view, a->components)
+        || !valid_index_range(candidate->view, b->components)) return false;
+    for (uint32_t i = 0; i < a->components.count; i++) {
+        const uint8_t *a_slot = n00bb_abi_object_row(first->view,
+            N00B_ABI_TABLE_U32_STREAM, a->components.first + i);
+        const uint8_t *b_slot = n00bb_abi_object_row(candidate->view,
+            N00B_ABI_TABLE_U32_STREAM, b->components.first + i);
+        if (!compatible_child_type(first->view, core_le_load_u32(a_slot),
+                candidate->view, core_le_load_u32(b_slot))) return false;
+    }
+    return true;
+}
+
+static bool
+compatible_type_members(const abi_link_key_t *first,
+                        const abi_link_key_t *candidate)
+{
+    const n00b_abi_type_v1 *a = first->row, *b = candidate->row;
+    n00b_abi_range_v1 a_range = a->fields_or_arms;
+    n00b_abi_range_v1 b_range = b->fields_or_arms;
+    if (a_range.count != b_range.count)
+        return (!a_range.count && type_is_import_reference(a))
+            || (!b_range.count && type_is_import_reference(b));
+    if (!valid_index_range(first->view, a_range)
+        || !valid_index_range(candidate->view, b_range)) return false;
+    uint32_t member_kind = a->kind == N00B_ABI_TYPE_RECORD
+        ? N00B_ABI_TABLE_FIELD
+        : a->kind == N00B_ABI_TYPE_VARIANT ? N00B_ABI_TABLE_ARM
+        : a->kind == N00B_ABI_TYPE_ENUM
+            || a->kind == N00B_ABI_TYPE_FLAGSET
+            ? N00B_ABI_TABLE_ENUM_ITEM : 0;
+    if (!member_kind) return !a_range.count;
+    for (uint32_t i = 0; i < a_range.count; i++) {
+        const void *a_row = indexed_range_row(first->view, a_range, i,
+                                               member_kind);
+        const void *b_row = indexed_range_row(candidate->view, b_range, i,
+                                               member_kind);
+        if (!a_row || !b_row) return false;
+        if (member_kind == N00B_ABI_TABLE_ENUM_ITEM) {
+            const n00b_abi_enum_item_v1 *a_item = a_row, *b_item = b_row;
+            if (a_item->parent_type_index != first->local_index
+                || b_item->parent_type_index != candidate->local_index
+                || a_item->declaration_ordinal
+                    != b_item->declaration_ordinal
+                || a_item->value_low != b_item->value_low
+                || a_item->value_high != b_item->value_high
+                || a_item->flags != b_item->flags
+                || !compatible_string_values(first->view, &a_item->name,
+                    candidate->view, &b_item->name)) return false;
+            continue;
+        }
+        const n00b_abi_field_v1 *a_field = a_row, *b_field = b_row;
+        if (a_field->parent_type_index != first->local_index
+            || b_field->parent_type_index != candidate->local_index
+            || a_field->visibility != b_field->visibility
+            || a_field->logical_bit_offset != b_field->logical_bit_offset
+            || ((a->owner_module_index || b->owner_module_index)
+                && a_field->declaration_ordinal
+                    != b_field->declaration_ordinal)
+            || !compatible_string_values(first->view, &a_field->name,
+                candidate->view, &b_field->name)
+            || !compatible_child_type(first->view,
+                a_field->child_type_index, candidate->view,
+                b_field->child_type_index)
+            || !compatible_record_runs(first->view, a_field->packed_runs,
+                candidate->view, b_field->packed_runs,
+                N00B_ABI_TABLE_PACKED_RUN, sizeof(n00b_abi_packed_run_v1))
+            || !compatible_record_runs(first->view, a_field->physical_runs,
+                candidate->view, b_field->physical_runs,
+                N00B_ABI_TABLE_PHYSICAL_RUN,
+                sizeof(n00b_abi_physical_run_v1))) return false;
+        if (member_kind == N00B_ABI_TABLE_ARM
+            && ((const n00b_abi_arm_v1 *)a_row)->tag_value
+                != ((const n00b_abi_arm_v1 *)b_row)->tag_value)
+            return false;
+    }
+    return true;
 }
 
 static bool
@@ -539,7 +679,9 @@ compatible_type_identity(const abi_link_key_t *first,
                                    &b_name)
         && a_name.length == b_name.length
         && !memcmp(a_name.bytes, b_name.bytes, a_name.length)
-        && compatible_type_layout(first, candidate);
+        && compatible_type_layout(first, candidate)
+        && compatible_type_components(first, candidate)
+        && compatible_type_members(first, candidate);
 }
 
 static bool

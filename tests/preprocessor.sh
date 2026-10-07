@@ -1386,10 +1386,12 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/enum.n00b"
 [ -s "$tmp/enum_abi.o" ]
 "$abi_record_object_test" "$tmp/enum_abi.o" enum
+"$abi_link_input_test" --enum "$tmp/enum_abi.o"
 "$compiler" compile --output "$tmp/variant_abi.o" \
     "$program_dir/../abi/variant.n00b"
 [ -s "$tmp/variant_abi.o" ]
 "$abi_record_object_test" "$tmp/variant_abi.o" variant
+"$abi_link_input_test" --variant "$tmp/variant_abi.o"
 "$compiler" compile --output "$tmp/function_abi.o" \
     "$program_dir/../abi/function.n00b"
 [ -s "$tmp/function_abi.o" ]
@@ -1406,6 +1408,7 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/callback.n00b"
 [ -s "$tmp/callback_abi.o" ]
 "$abi_record_object_test" "$tmp/callback_abi.o" callback
+"$abi_link_input_test" --callback "$tmp/callback_abi.o"
 "$compiler" compile --output "$tmp/storage_abi.o" \
     "$program_dir/../abi/storage.n00b"
 [ -s "$tmp/storage_abi.o" ]
