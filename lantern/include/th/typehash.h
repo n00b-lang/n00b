@@ -226,6 +226,7 @@ void th_install_nfc(th_ctx *ctx);
 bool th_ctx_set_scope(th_ctx *ctx, const char *module, const char *package);
 
 th_type *th_name(th_ctx *ctx, const char *name);
+bool th_name_syntax_valid(const char *name, size_t length);
 th_type *th_apply(th_ctx *ctx, const char *name, const th_arg *args, size_t n);
 th_type *th_variant(th_ctx *ctx, const char *name, const th_arg *args,
                     size_t n);

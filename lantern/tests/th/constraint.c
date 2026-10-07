@@ -899,6 +899,20 @@ static void test_configurable_type_printing(void)
     th_ctx_free(ctx);
 }
 
+static void test_name_syntax(void)
+{
+    check("typehash names accept qualified identifiers",
+          th_name_syntax_valid("package.module.Type", 19));
+    check("typehash names reject punctuation in a component",
+          !th_name_syntax_valid("my-module.Type", 14));
+    check("typehash names reject empty components",
+          !th_name_syntax_valid("package..Type", 13));
+    check("typehash names reject missing and numeric starts",
+          !th_name_syntax_valid(nullptr, 1)
+              && !th_name_syntax_valid("", 0)
+              && !th_name_syntax_valid("1Type", 5));
+}
+
 int main(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -934,6 +948,7 @@ int main(void)
     test_named_type_record_definitions();
     test_unification_probe();
     test_configurable_type_printing();
+    test_name_syntax();
 
     return report("th constraints");
 }

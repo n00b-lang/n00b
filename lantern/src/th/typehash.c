@@ -343,9 +343,9 @@ static bool is_cont(unsigned char c)
     return is_start(c) || (c >= '0' && c <= '9');
 }
 
-static bool valid_name(const char *s, size_t n)
+bool th_name_syntax_valid(const char *s, size_t n)
 {
-    if (!n) {
+    if (!s || !n) {
         return false;
     }
 
@@ -372,7 +372,7 @@ static bool valid_name(const char *s, size_t n)
 
 static bool name(th_ctx *ctx, core_buffer_t *b, const char *s, size_t n)
 {
-    if (!valid_name(s, n)) {
+    if (!th_name_syntax_valid(s, n)) {
         th_err(ctx, TH_ERR_BAD_NAME, nullptr, nullptr, nullptr,
                "not a valid type name");
 
