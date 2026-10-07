@@ -36,13 +36,9 @@ check_scalar(ir_module_t *module, const core_target_desc_t *target,
         || !ir_layout_is_settled(&descriptor->align)
         || descriptor->align.value != alignment_bytes
         || final->n_occupied != (semantic_bits != 0)
-        || final->n_reserved != (storage_bits > semantic_bits)) return 0;
+        || final->n_reserved) return 0;
     if (semantic_bits && (final->occupied[0].offset != 0
                           || final->occupied[0].width != semantic_bits))
-        return 0;
-    if (storage_bits > semantic_bits
-        && (final->reserved[0].offset != semantic_bits
-            || final->reserved[0].width != storage_bits - semantic_bits))
         return 0;
     return 1;
 }

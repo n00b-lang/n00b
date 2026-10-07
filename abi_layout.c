@@ -12,13 +12,11 @@ same_final_layout(const ir_final_layout_t *layout, uint32_t storage_bits,
         || layout->alignment_bytes != alignment_bytes
         || layout->n_members || layout->has_discriminant
         || layout->n_occupied != (semantic_bits != 0)
-        || layout->n_reserved != (storage_bits > semantic_bits)) return false;
+        || layout->n_reserved) return false;
     if (semantic_bits && (layout->occupied[0].offset != 0
                           || layout->occupied[0].width != semantic_bits))
         return false;
-    return storage_bits == semantic_bits
-        || (layout->reserved[0].offset == semantic_bits
-            && layout->reserved[0].width == storage_bits - semantic_bits);
+    return true;
 }
 
 static bool
@@ -33,16 +31,11 @@ publish_layout(ir_module_t *module, th_type *type,
                                  alignment_bytes);
 
     ir_layout_bit_run_t occupied = {.offset = 0, .width = semantic_bits};
-    ir_layout_bit_run_t reserved = {
-        .offset = semantic_bits, .width = storage_bits - semantic_bits,
-    };
     ir_final_layout_t final = {
         .intrinsic_bits = storage_bits,
         .alignment_bytes = alignment_bytes,
         .occupied = semantic_bits ? &occupied : nullptr,
         .n_occupied = semantic_bits != 0,
-        .reserved = storage_bits > semantic_bits ? &reserved : nullptr,
-        .n_reserved = storage_bits > semantic_bits,
     };
     return ir_layout_pin_size(module, type, storage_bits / 8)
         && ir_layout_pin_align(module, type, alignment_bytes)
