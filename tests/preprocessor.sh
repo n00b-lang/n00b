@@ -4,6 +4,7 @@ compiler_dir="$(CDPATH= cd -- "$(dirname -- "$1")" && pwd)"
 compiler="$compiler_dir/$(basename -- "$1")"
 storage_interface_writer="$2"
 abi_record_object_test="$3"
+abi_link_input_test="$4"
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 program_dir="$script_dir/programs/preprocessor"
 tmp="$(mktemp -d)"
@@ -1417,6 +1418,7 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/array_storage.n00b"
 [ -s "$tmp/array_storage_abi.o" ]
 "$abi_record_object_test" "$tmp/array_storage_abi.o" array-storage
+"$abi_link_input_test" "$tmp/array_storage_abi.o"
 "$compiler" compile --output "$tmp/nested_array_storage_abi.o" \
     "$program_dir/../abi/nested_array_storage.n00b"
 [ -s "$tmp/nested_array_storage_abi.o" ]

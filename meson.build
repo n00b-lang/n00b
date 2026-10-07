@@ -31,7 +31,7 @@ n00bb_exe = executable(
     'n00bb',
     ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
      'abi_layout.c', 'abi_record_layout.c', 'abi_directory.c',
-     'abi_container.c', 'abi_index_patch.c', 'abi_emit.c',
+     'abi_container.c', 'abi_index_patch.c', 'abi_emit.c', 'abi_link.c',
      'abi_emit_strings.c',
      'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
      'abi_enum_rows.c',
@@ -154,6 +154,13 @@ abi_record_object_test = executable(
     dependencies: lantern,
 )
 
+abi_link_input_test = executable(
+    'abi-link-input-test',
+    ['tests/abi_link_input.c', 'abi_link.c',
+     'abi_container.c', 'abi_directory.c'],
+    dependencies: lantern,
+)
+
 abi_emit_strings_test = executable(
     'abi-emit-strings-test',
     ['tests/abi_emit_strings.c', 'abi_emit_strings.c', 'abi_string.c'],
@@ -230,7 +237,8 @@ test(
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'preprocessor.sh',
            n00bb_exe.full_path(), storage_interface_writer.full_path(),
-           abi_record_object_test.full_path()],
+           abi_record_object_test.full_path(),
+           abi_link_input_test.full_path()],
     env: ['N00BB_STACK_OBJECT_LIMIT_BYTES='
         + get_option('stack_object_limit_bytes').to_string()],
     timeout: 120,

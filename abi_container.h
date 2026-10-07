@@ -1,6 +1,7 @@
 #pragma once
 
 #include "abi_directory.h"
+#include "lib/target.h"
 
 #define N00BB_ABI_HEADER_BYTES 88u
 #define N00BB_ABI_PROFILE_ID 1u
@@ -37,6 +38,9 @@ typedef struct {
     uint64_t total_extent;
     uint64_t payload_checksum;
 } n00bb_abi_image_header_t;
+
+bool n00bb_abi_image_key_for_target(const core_target_desc_t *target,
+                                    n00bb_abi_image_key_t *out);
 
 /* Table bytes must already be present. The checksum covers the current
  * serialized bytes; final images call this after static-link rewrites and

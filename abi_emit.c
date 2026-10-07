@@ -37,35 +37,6 @@ align_up(size_t value, size_t alignment, size_t *out)
     return true;
 }
 
-static bool
-image_key(const core_target_desc_t *target, n00bb_abi_image_key_t *out)
-{
-    if (!target || !out || !core_target_validate(target)
-        || target->endian != CORE_TARGET_LITTLE_ENDIAN
-        || target->pointer_bits != 64
-        || (target->enabled_features
-            & ~CORE_TARGET_FEATURE_NATIVE_ATOMIC128)) return false;
-    uint32_t id;
-    if (target->object_format == CORE_TARGET_OBJECT_ELF
-        && target->call_abi == CORE_TARGET_CALL_SYSV_AMD64)
-        id = N00BB_ABI_TARGET_X86_64_LINUX;
-    else if (target->object_format == CORE_TARGET_OBJECT_MACH_O
-             && target->call_abi == CORE_TARGET_CALL_DARWIN_AARCH64)
-        id = N00BB_ABI_TARGET_ARM64_MACOS;
-    else if (target->object_format == CORE_TARGET_OBJECT_COFF
-             && target->call_abi == CORE_TARGET_CALL_WINDOWS_X64)
-        id = N00BB_ABI_TARGET_X86_64_WINDOWS;
-    else return false;
-    *out = (n00bb_abi_image_key_t){
-        .target_id = id,
-        .abi_profile_id = N00BB_ABI_PROFILE_ID,
-        .cpu_profile = target->enabled_features
-            & CORE_TARGET_FEATURE_NATIVE_ATOMIC128,
-        .data_layout_profile = N00BB_ABI_DATA_LAYOUT_PROFILE,
-    };
-    return true;
-}
-
 bool
 n00bb_abi_pack_tables(const core_target_desc_t *target,
                       uint64_t artifact_capabilities,
@@ -79,7 +50,7 @@ n00bb_abi_pack_tables(const core_target_desc_t *target,
         || table_count > (SIZE_MAX - N00BB_ABI_HEADER_BYTES)
                          / N00BB_ABI_DIRECTORY_BYTES
         || *(const uint8_t *)&one != 1
-        || !image_key(target, &key)) return false;
+        || !n00bb_abi_image_key_for_target(target, &key)) return false;
 
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
@@ -176,7 +147,7 @@ n00bb_abi_write_object(
         || extra_count > SIZE_MAX / sizeof(core_object_emit_section_t) - 1
         || (extra_count && !extra_sections)) return false;
     n00bb_abi_image_key_t key;
-    if (!image_key(target, &key)) return false;
+    if (!n00bb_abi_image_key_for_target(target, &key)) return false;
     uint32_t entry_count = core_le_load_u32(packed->bytes + 60);
     if (entry_count > (packed->byte_count - N00BB_ABI_HEADER_BYTES)
                       / N00BB_ABI_DIRECTORY_BYTES) return false;
@@ -1039,7 +1010,7 @@ n00bb_abi_emit_unit(
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);
-    valid = image_key(target, &key)
+    valid = n00bb_abi_image_key_for_target(target, &key)
         && n00bb_abi_container_read(packed.bytes, packed.byte_count,
             &key, schemas, schema_count, false, &header, entries,
             sizeof(entries) / sizeof(*entries));

@@ -17,6 +17,36 @@
 
 #define N00BB_ABI_CONTAINER_VERSION 1u
 
+bool
+n00bb_abi_image_key_for_target(const core_target_desc_t *target,
+                               n00bb_abi_image_key_t *out)
+{
+    if (!target || !out || !core_target_validate(target)
+        || target->endian != CORE_TARGET_LITTLE_ENDIAN
+        || target->pointer_bits != 64
+        || (target->enabled_features
+            & ~CORE_TARGET_FEATURE_NATIVE_ATOMIC128)) return false;
+    uint32_t id;
+    if (target->object_format == CORE_TARGET_OBJECT_ELF
+        && target->call_abi == CORE_TARGET_CALL_SYSV_AMD64)
+        id = N00BB_ABI_TARGET_X86_64_LINUX;
+    else if (target->object_format == CORE_TARGET_OBJECT_MACH_O
+             && target->call_abi == CORE_TARGET_CALL_DARWIN_AARCH64)
+        id = N00BB_ABI_TARGET_ARM64_MACOS;
+    else if (target->object_format == CORE_TARGET_OBJECT_COFF
+             && target->call_abi == CORE_TARGET_CALL_WINDOWS_X64)
+        id = N00BB_ABI_TARGET_X86_64_WINDOWS;
+    else return false;
+    *out = (n00bb_abi_image_key_t){
+        .target_id = id,
+        .abi_profile_id = N00BB_ABI_PROFILE_ID,
+        .cpu_profile = target->enabled_features
+            & CORE_TARGET_FEATURE_NATIVE_ATOMIC128,
+        .data_layout_profile = N00BB_ABI_DATA_LAYOUT_PROFILE,
+    };
+    return true;
+}
+
 static bool
 valid_key(const n00bb_abi_image_key_t *key)
 {
