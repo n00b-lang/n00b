@@ -12,6 +12,7 @@
 #include "lib/dict.h"
 #include "lib/list.h"
 #include "lib/link_unit.h"
+#include "lib/target.h"
 #include "lib/work_queue.h"
 #include "lib/diagnostic.h"
 #include "logic/clpfd_store.h"
@@ -98,6 +99,21 @@ static const ir_profile_t N00BB_PROFILE = {
     .n_scalars = sizeof(N00BB_SCALARS) / sizeof(N00BB_SCALARS[0]),
     .scalars = N00BB_SCALARS,
 };
+
+static bool
+host_target_profile(core_target_desc_t *target)
+{
+#if defined(__APPLE__) && defined(__aarch64__)
+    return core_target_profile("arm64-macos", 0, target);
+#elif defined(__linux__) && defined(__x86_64__)
+    return core_target_profile("x86_64-linux", 0, target);
+#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    return core_target_profile("x86_64-windows", 0, target);
+#else
+    (void)target;
+    return false;
+#endif
+}
 
 typedef enum {
     N00BB_LITERAL_STRING_SHAPE,
@@ -20431,6 +20447,13 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                       uint32_t producer_stage)
 {
     core_list_t(core_translation_unit_ptr_t) *units = &analysis->units;
+    core_target_desc_t target;
+    if (!host_target_profile(&target)) {
+        if (units->len)
+            ir_initialization_error(units->data[0], "N00BB-L0024",
+                "the host is not an ABI v0.1 target");
+        return false;
+    }
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
         n00bb_tu_state_t *state = tu_state(unit);
@@ -20438,13 +20461,13 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
             return ir_initialization_error(unit, "N00BB-L0024",
                 "translation unit has no annotated tree for Lantern IR");
         state->ir_module = ir_module_new(ir_context,
-            unit->module.identifier.data, &N00BB_PROFILE, "host");
+            unit->module.identifier.data, &N00BB_PROFILE, target.triple);
         core_buffer_t comptime_name = {0};
         core_buffer_printf(&comptime_name, "%.*s$comptime",
             (int)unit->module.identifier.u8_bytes,
             unit->module.identifier.data);
         state->comptime_ir_module = ir_module_new(ir_context,
-            comptime_name.data, &N00BB_PROFILE, "host");
+            comptime_name.data, &N00BB_PROFILE, target.triple);
         core_buffer_release(&comptime_name);
         if (!state->ir_module || !state->comptime_ir_module)
             return ir_initialization_error(unit, "N00BB-L0024",

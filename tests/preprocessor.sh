@@ -342,7 +342,7 @@ grep -q 'green: enum-constant, const, type=render_contract.impl.ArchivedColor, o
     exit 1
 }
 grep -q '= extract .* "x"' "$tmp/render_plugin.ir"
-grep -q 'layout render_contract.impl.ArchivedPoint target=host size=8 align=8' \
+grep -Eq 'layout render_contract.impl.ArchivedPoint target=(x86_64-linux|arm64-macos|x86_64-windows) size=8 align=8' \
     "$tmp/render_plugin.ir"
 grep -q 'member x bit-offset=0 bit-width=64' "$tmp/render_plugin.ir"
 grep -q 'call @external_value' "$tmp/render_plugin.ir"
@@ -4504,6 +4504,12 @@ fi
     cat "$tmp/storage_size.err"
     exit 1
 }
+target_count=$(grep -Ec '^[[:space:]]+target (x86_64-linux|arm64-macos|x86_64-windows)$' \
+    "$tmp/storage_size.out")
+if [ "$target_count" -ne 2 ]; then
+    echo 'phase IR modules did not retain the native ABI target' >&2
+    exit 1
+fi
 stack_limit=${N00BB_STACK_OBJECT_LIMIT_BYTES:-4096}
 grep -q 'n00bb.finalization v1 complete' "$tmp/storage_size.out"
 if grep -E -q '^[[:space:]]*(finalize|dealloc) ' \
