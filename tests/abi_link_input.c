@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "abi_link.h"
+#include "abi_index_patch.h"
 #include "abi_string.h"
 #include "n00b-abi-v1.h"
 #include "lib/alloc.h"
@@ -758,6 +759,81 @@ test_duplicate_signature(const char *path)
 }
 
 static void
+test_link_index_patch(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[2];
+        n00b_abi_index_patch_v1 patches[2];
+    } patch_fixture_t;
+    patch_fixture_t metadata[2] = {0};
+    n00bb_abi_directory_entry_t directories[2][2] = {0};
+    n00bb_abi_object_view_t views[2] = {0};
+    for (size_t i = 0; i < 2; i++) {
+        metadata[i].types[0].kind = N00B_ABI_TYPE_NIL;
+        metadata[i].types[0].typehash = 1;
+        metadata[i].types[1].kind = N00B_ABI_TYPE_PRIMITIVE;
+        metadata[i].types[1].typehash = 100 + i;
+        directories[i][0] = (n00bb_abi_directory_entry_t){
+            .kind = N00B_ABI_TABLE_TYPE,
+            .record_bytes = sizeof(n00b_abi_type_v1),
+            .record_count = 2,
+            .file_offset = offsetof(patch_fixture_t, types),
+        };
+        directories[i][1] = (n00bb_abi_directory_entry_t){
+            .kind = N00B_ABI_TABLE_INDEX_PATCH,
+            .record_bytes = sizeof(n00b_abi_index_patch_v1),
+            .record_count = i ? 2 : 1,
+            .file_offset = offsetof(patch_fixture_t, patches),
+            .byte_length = (i ? 2 : 1)
+                * sizeof(n00b_abi_index_patch_v1),
+        };
+        views[i].metadata.bytes = (const uint8_t *)&metadata[i];
+        views[i].metadata.size = sizeof(metadata[i]);
+        views[i].directory = directories[i];
+        views[i].directory_count = 2;
+    }
+    metadata[1].patches[1] = (n00b_abi_index_patch_v1){
+        .target_section_index = 7,
+        .referenced_table_kind = N00B_ABI_TABLE_TYPE,
+        .local_index = 1,
+        .patch_kind = N00BB_ABI_PATCH_INDEX,
+    };
+    n00bb_abi_selected_objects_t selected = {.views = views, .count = 2};
+    n00bb_abi_index_plan_t *plan =
+        n00bb_abi_index_plan_build(&selected);
+    uint32_t final_index = 0;
+    assert(plan && n00bb_abi_index_plan_map(plan, 1,
+        N00B_ABI_TABLE_TYPE, 1, &final_index) && final_index == 2);
+    n00bb_abi_merged_table_t type_table = {
+        .kind = N00B_ABI_TABLE_TYPE,
+        .record_count = 3,
+    };
+    n00bb_abi_merged_rows_t merged = {
+        .tables = &type_table, .table_count = 1,
+    };
+    uint8_t copied_bytes[4];
+    core_le_store_u32(copied_bytes, 1);
+    core_object_emit_section_t section = {
+        .name = ".data", .bytes = copied_bytes, .size = sizeof(copied_bytes),
+        .alignment = 4,
+    };
+    n00bb_abi_native_section_map_t map = {
+        .input = 1, .local_section_index = 7,
+    };
+    n00bb_abi_native_sections_t copied = {
+        .sections = &section, .maps = &map, .count = 1,
+    };
+    assert(n00bb_abi_apply_link_patches(&selected, plan, &merged, &copied)
+        && core_le_load_u32(copied_bytes) == 2
+        && metadata[1].patches[1].local_index == 1);
+    core_le_store_u32(copied_bytes, 1);
+    metadata[1].patches[1].local_index = 2;
+    assert(!n00bb_abi_apply_link_patches(&selected, plan, &merged, &copied)
+        && core_le_load_u32(copied_bytes) == 1);
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_metadata_string_uses_relocation_pool(void)
 {
     const char *triples[] = {
@@ -953,6 +1029,7 @@ int
 main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3 || argc == 4);
+    test_link_index_patch();
     test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();
     test_static_string_identity();

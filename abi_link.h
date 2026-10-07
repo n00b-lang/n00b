@@ -75,6 +75,8 @@ bool n00bb_abi_index_plan_count(const n00bb_abi_index_plan_t *plan,
 bool n00bb_abi_index_plan_map(const n00bb_abi_index_plan_t *plan,
                               size_t input_index, uint32_t kind,
                               uint32_t local_index, uint32_t *out_index);
+const core_index_remap_t *n00bb_abi_index_plan_remap(
+    const n00bb_abi_index_plan_t *plan, size_t input_index, uint32_t kind);
 
 /* `values` is the merged U32 stream; `kinds` is a same-length zeroed build
  * buffer that detects conflicting interpretations of a source slot. Neither
@@ -206,6 +208,15 @@ bool n00bb_abi_add_native_bindings(
     const n00bb_abi_merged_rows_t *merged,
     const n00bb_abi_native_sections_t *sections,
     n00bb_abi_native_relocations_t *symbols);
+
+/* Patches copied native section bytes using each input's local-to-final
+ * table maps. Inputs remain unchanged. On failure the copied sections must
+ * be discarded; no output object has been published. */
+bool n00bb_abi_apply_link_patches(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_index_plan_t *plan,
+    const n00bb_abi_merged_rows_t *merged,
+    n00bb_abi_native_sections_t *sections);
 
 /* Consolidates selected TU objects into one relocatable object. Link-only
  * requirements are removed only after resolution; unsupported patch and

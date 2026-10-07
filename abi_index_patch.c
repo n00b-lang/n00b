@@ -85,7 +85,7 @@ n00bb_abi_index_patches_apply(
             || (patch.patch_kind != N00BB_ABI_PATCH_INDEX
                 && patch.patch_kind != N00BB_ABI_PATCH_BOX_TYPE)
             || (patch.patch_kind == N00BB_ABI_PATCH_BOX_TYPE
-                && patch.referenced_table_kind != N00BB_ABI_TYPE_TABLE_KIND)) {
+                && patch.referenced_table_kind != N00B_ABI_TABLE_TYPE)) {
             status = fail(N00BB_ABI_PATCH_INVALID_RECORD, i, failed_patch);
             break;
         }

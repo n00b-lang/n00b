@@ -821,6 +821,15 @@ n00bb_abi_index_plan_map(const n00bb_abi_index_plan_t *plan,
         local_index, out_index);
 }
 
+const core_index_remap_t *
+n00bb_abi_index_plan_remap(const n00bb_abi_index_plan_t *plan,
+                           size_t input_index, uint32_t kind)
+{
+    if (!plan || input_index >= plan->input_count || !kind
+        || kind >= plan->kind_count) return nullptr;
+    return plan->maps[input_index * plan->kind_count + kind];
+}
+
 n00bb_abi_index_plan_t *
 n00bb_abi_index_plan_build(const n00bb_abi_selected_objects_t *selected)
 {

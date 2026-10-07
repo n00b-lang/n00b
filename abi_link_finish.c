@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "abi_emit.h"
+#include "abi_index_patch.h"
 #include "lib/alloc.h"
 
 static bool
@@ -38,7 +39,6 @@ link_only_inputs_resolved(const n00bb_abi_selected_objects_t *selected,
             }
         }
         const uint32_t pending[] = {
-            N00B_ABI_TABLE_INDEX_PATCH,
             N00B_ABI_TABLE_CONSTRAINT,
             N00B_ABI_TABLE_SPECIALIZATION_LINK,
             N00B_ABI_TABLE_TRAIT_METHOD,
@@ -51,6 +51,77 @@ link_only_inputs_resolved(const n00bb_abi_selected_objects_t *selected,
                 n00bb_abi_object_table(view, pending[i]);
             if (table && table->record_count > 1) return false;
         }
+    }
+    return true;
+}
+
+bool
+n00bb_abi_apply_link_patches(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_index_plan_t *plan,
+    const n00bb_abi_merged_rows_t *merged,
+    n00bb_abi_native_sections_t *sections)
+{
+    if (!selected || !selected->views || !plan || !merged
+        || !merged->tables || !sections
+        || (sections->count && (!sections->sections || !sections->maps)))
+        return false;
+    for (size_t input = 0; input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00bb_abi_directory_entry_t *patch_table =
+            n00bb_abi_object_table(view, N00B_ABI_TABLE_INDEX_PATCH);
+        if (!patch_table || patch_table->record_count <= 1) continue;
+        if (patch_table->record_bytes != N00BB_ABI_INDEX_PATCH_BYTES
+            || patch_table->byte_length !=
+                (uint64_t)patch_table->record_count
+                    * N00BB_ABI_INDEX_PATCH_BYTES
+            || patch_table->file_offset > view->metadata.size
+            || patch_table->byte_length
+                > view->metadata.size - patch_table->file_offset
+            || !view->metadata.bytes) return false;
+        n00bb_abi_patch_section_t *patch_sections = core_alloc_array(
+            n00bb_abi_patch_section_t, sections->count);
+        n00bb_abi_patch_table_t *patch_tables = core_alloc_array(
+            n00bb_abi_patch_table_t, merged->table_count);
+        size_t patch_section_count = 0, patch_table_count = 0;
+        for (size_t i = 0; i < sections->count; i++) {
+            if (sections->maps[i].input != input) continue;
+            patch_sections[patch_section_count++] =
+                (n00bb_abi_patch_section_t){
+                    .native_index = sections->maps[i].local_section_index,
+                    .bytes = (uint8_t *)sections->sections[i].bytes,
+                    .byte_length = sections->sections[i].size,
+                };
+        }
+        for (size_t i = 0; i < merged->table_count; i++) {
+            const n00bb_abi_merged_table_t *table = &merged->tables[i];
+            if (table->kind == N00B_ABI_TABLE_U32_STREAM
+                || table->kind == N00B_ABI_TABLE_U64_STREAM
+                || table->kind == N00B_ABI_TABLE_BYTE_STREAM
+                || table->kind == N00B_ABI_TABLE_REQUIREMENT
+                || table->kind == N00B_ABI_TABLE_INDEX_PATCH
+                || table->kind == N00B_ABI_TABLE_CONSTRAINT) continue;
+            const core_index_remap_t *remap =
+                n00bb_abi_index_plan_remap(plan, input, table->kind);
+            if (!remap) continue;
+            patch_tables[patch_table_count++] =
+                (n00bb_abi_patch_table_t){
+                    .kind = table->kind,
+                    .remap = remap,
+                    .final_row_count = table->record_count,
+                };
+        }
+        const uint8_t *patch_bytes = view->metadata.bytes
+            + patch_table->file_offset + patch_table->record_bytes;
+        size_t patch_byte_count = (size_t)(patch_table->record_count - 1)
+            * patch_table->record_bytes;
+        bool valid = n00bb_abi_index_patches_apply(patch_bytes,
+            patch_byte_count, patch_sections, patch_section_count,
+            patch_tables, patch_table_count, nullptr) ==
+                N00BB_ABI_PATCH_OK;
+        core_free(patch_sections);
+        core_free(patch_tables);
+        if (!valid) return false;
     }
     return true;
 }
@@ -86,6 +157,7 @@ n00bb_abi_link_selected_objects(
     bool valid = plan
         && n00bb_abi_merge_rows(selected, plan, &merged)
         && n00bb_abi_collect_native_sections(selected, target, &sections)
+        && n00bb_abi_apply_link_patches(selected, plan, &merged, &sections)
         && n00bb_abi_collect_native_relocations(selected, &sections,
                                                 &native)
         && n00bb_abi_rebase_native_references(&merged, sections.maps,

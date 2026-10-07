@@ -32,7 +32,7 @@ main(void)
         ok &= expect("assign remap", core_index_remap_set(
             type_remap, i, final_indexes[i]));
     const n00bb_abi_patch_table_t table = {
-        .kind = N00BB_ABI_TYPE_TABLE_KIND,
+        .kind = N00B_ABI_TABLE_TYPE,
         .remap = type_remap,
         .final_row_count = 4,
     };
@@ -44,7 +44,7 @@ main(void)
     };
     n00bb_abi_index_patch_t first = {
         .target_section_index = 7,
-        .referenced_table_kind = N00BB_ABI_TYPE_TABLE_KIND,
+        .referenced_table_kind = N00B_ABI_TABLE_TYPE,
         .target_byte_offset = 0x20,
         .local_index = 1,
         .patch_kind = N00BB_ABI_PATCH_INDEX,
@@ -63,7 +63,7 @@ main(void)
     n00bb_abi_index_patch_t decoded = {0};
     n00bb_abi_index_patch_decode(patches, &decoded);
     ok &= expect("patch record decoded", decoded.target_section_index == 7
-        && decoded.referenced_table_kind == N00BB_ABI_TYPE_TABLE_KIND
+        && decoded.referenced_table_kind == N00B_ABI_TABLE_TYPE
         && decoded.target_byte_offset == 0x20
         && decoded.local_index == 1 && decoded.patch_kind == 1);
 
@@ -123,7 +123,7 @@ main(void)
             &section, 1, &table, 1, &failed)
                 == N00BB_ABI_PATCH_UNKNOWN_TABLE
         && core_le_load_u32(section_bytes + 0x20) == 1);
-    second.referenced_table_kind = N00BB_ABI_TYPE_TABLE_KIND;
+    second.referenced_table_kind = N00B_ABI_TABLE_TYPE;
     second.patch_kind = N00BB_ABI_PATCH_BOX_TYPE;
 
     second.local_index = 4;

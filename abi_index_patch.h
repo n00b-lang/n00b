@@ -4,9 +4,9 @@
 #include <stdint.h>
 
 #include "lib/indexed_table.h"
+#include "n00b-abi-v1.h"
 
 #define N00BB_ABI_INDEX_PATCH_BYTES 32u
-#define N00BB_ABI_TYPE_TABLE_KIND 4u
 
 typedef enum {
     N00BB_ABI_PATCH_INDEX = 1,
