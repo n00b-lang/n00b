@@ -260,7 +260,7 @@ check_imported_record(const core_object_section_t *metadata,
         count, N00B_ABI_TABLE_TYPE);
     const n00bb_abi_directory_entry_t *requirements = entry_for(entries,
         count, N00B_ABI_TABLE_REQUIREMENT);
-    assert(types && requirements && requirements->record_count == 2);
+    assert(types && requirements && requirements->record_count == 3);
     const n00b_abi_requirement_v1 *import = row_at(metadata,
         requirements, 1);
     assert(short_name_is(&import->full_path, "record_dep")
@@ -272,6 +272,7 @@ check_imported_record(const core_object_section_t *metadata,
     uint64_t imported_hash = th_hash(type_context,
         th_name(type_context, "record_dep.SharedRecord"));
     uint32_t local_records = 0, imported_records = 0;
+    uint32_t imported_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
         if (type->typehash == local_hash) {
@@ -285,9 +286,16 @@ check_imported_record(const core_object_section_t *metadata,
             assert(!type->owner_module_index && !type->layout_index
                 && !type->fields_or_arms.count);
             imported_records++;
+            imported_index = i;
         }
     }
     assert(local_records == 1 && imported_records == 1);
+    const n00b_abi_requirement_v1 *type_requirement = row_at(metadata,
+        requirements, 2);
+    assert(type_requirement->symbol_kind == N00B_ABI_SYMBOL_TYPE
+        && type_requirement->contract_type_index == imported_index
+        && type_requirement->required_phase_mask
+        && type_requirement->requesting_module_index == 1);
     th_ctx_free(type_context);
 }
 
@@ -302,7 +310,7 @@ check_imported_enum(const core_object_section_t *metadata,
         count, N00B_ABI_TABLE_REQUIREMENT);
     const n00bb_abi_directory_entry_t *items = entry_for(entries,
         count, N00B_ABI_TABLE_ENUM_ITEM);
-    assert(types && requirements && items && requirements->record_count == 2
+    assert(types && requirements && items && requirements->record_count == 3
         && items->record_count == 1);
     const n00b_abi_requirement_v1 *import = row_at(metadata,
         requirements, 1);
@@ -315,6 +323,7 @@ check_imported_enum(const core_object_section_t *metadata,
     uint64_t comparison_hash = th_hash(type_context,
         th_name(type_context, "Comparison"));
     uint32_t imported_enums = 0, builtin_enums = 0;
+    uint32_t imported_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
         assert(type->kind != N00B_ABI_TYPE_VARIABLE);
@@ -331,8 +340,15 @@ check_imported_enum(const core_object_section_t *metadata,
             && type->semantic_width_bits == 3
             && (type->flags & N00B_ABI_TYPE_FLAG_SIGNED));
         imported_enums++;
+        imported_index = i;
     }
     assert(imported_enums == 1 && builtin_enums == 1);
+    const n00b_abi_requirement_v1 *type_requirement = row_at(metadata,
+        requirements, 2);
+    assert(type_requirement->symbol_kind == N00B_ABI_SYMBOL_TYPE
+        && type_requirement->contract_type_index == imported_index
+        && type_requirement->required_phase_mask
+        && type_requirement->requesting_module_index == 1);
     th_ctx_free(type_context);
 }
 

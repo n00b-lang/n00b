@@ -2556,7 +2556,9 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
 
     for (size_t ti = 0; valid && ti < schema_count; ti++) {
         n00bb_abi_merged_table_t *table = &built.tables[ti];
-        if (link_kind_is_stream(table->kind)) continue;
+        if (link_kind_is_stream(table->kind)
+            || table->kind == N00B_ABI_TABLE_REQUIREMENT
+            || table->kind == N00B_ABI_TABLE_INDEX_PATCH) continue;
         for (uint32_t final = 0; valid && final < table->record_count;
              final++) {
             n00bb_abi_row_origin_t origin = origins[ti][final];

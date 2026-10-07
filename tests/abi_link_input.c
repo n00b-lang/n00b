@@ -558,6 +558,23 @@ test_imported_record_selection(const char *root_path, const char *dep_path)
         && !reference->owner_module_index && !reference->layout_index
         && definition->owner_module_index == 1
         && definition->layout_index);
+    const n00bb_abi_directory_entry_t *requirements =
+        n00bb_abi_object_table(root_view, N00B_ABI_TABLE_REQUIREMENT);
+    const n00b_abi_requirement_v1 *type_requirement = requirements
+        && requirements->record_count == 3
+        ? n00bb_abi_object_row(root_view, N00B_ABI_TABLE_REQUIREMENT, 2)
+        : nullptr;
+    n00bb_abi_string_view_t required_name;
+    assert(type_requirement
+        && type_requirement->symbol_kind == N00B_ABI_SYMBOL_TYPE
+        && type_requirement->contract_type_index == root_type
+        && type_requirement->requesting_module_index == 1
+        && type_requirement->required_phase_mask
+        && n00bb_abi_object_string(root_view,
+            &type_requirement->full_path, &required_name)
+        && required_name.length == strlen("record_dep.SharedRecord")
+        && !memcmp(required_name.bytes, "record_dep.SharedRecord",
+            required_name.length));
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
     uint32_t from_root, from_dep, dep_module;
     assert(plan && n00bb_abi_index_plan_map(plan, root_input,
@@ -575,6 +592,27 @@ test_imported_record_selection(const char *root_path, const char *dep_path)
         && final_type->owner_module_index == dep_module
         && final_type->fields_or_arms.count == 1);
     n00bb_abi_merged_rows_release(&merged);
+    uint8_t *linked = nullptr;
+    size_t linked_bytes = 0;
+    assert(n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes));
+    core_free(linked);
+    n00b_abi_requirement_v1 *mutable_requirement = (void *)type_requirement;
+    uint64_t saved_capabilities = mutable_requirement->required_capabilities;
+    mutable_requirement->required_capabilities = UINT64_MAX;
+    linked = nullptr;
+    linked_bytes = 0;
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes) && !linked && !linked_bytes);
+    mutable_requirement->required_capabilities = saved_capabilities;
+    uint32_t saved_contract = mutable_requirement->contract_type_index;
+    mutable_requirement->contract_type_index = find_named_type(root_view,
+        "record_root.SharedRecord");
+    assert(mutable_requirement->contract_type_index
+        && mutable_requirement->contract_type_index != saved_contract);
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes) && !linked && !linked_bytes);
+    mutable_requirement->contract_type_index = saved_contract;
     size_t duplicate_bytes;
     uint8_t *duplicate_object = read_object(dep_path, &duplicate_bytes);
     n00bb_abi_object_view_t duplicate_views[2] = {0};

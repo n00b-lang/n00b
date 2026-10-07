@@ -403,6 +403,62 @@ publish_catalog_direct_layouts(n00bb_abi_type_index_t *index,
     return true;
 }
 
+static bool
+append_imported_type_requirements(
+    n00bb_abi_type_index_t *index,
+    const n00bb_abi_type_identity_rows_t *types,
+    const core_translation_unit_t *unit,
+    n00bb_abi_node_source_fn node_source, void *source_context,
+    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
+    n00bb_abi_name_pool_t *pool, n00b_abi_requirement_v1 *requirements,
+    size_t *count)
+{
+    if (!type_owner || !node_source) return true;
+    for (uint32_t i = 1; i < types->count; i++) {
+        const n00b_abi_type_v1 *type = &types->rows[i];
+        if (type->owner_module_index) continue;
+        if (type->kind != N00B_ABI_TYPE_RECORD
+            && type->kind != N00B_ABI_TYPE_VARIANT
+            && type->kind != N00B_ABI_TYPE_ENUM
+            && type->kind != N00B_ABI_TYPE_FLAGSET
+            && type->kind != N00B_ABI_TYPE_CALLBACK
+            && type->kind != N00B_ABI_TYPE_TRAIT
+            && type->kind != N00B_ABI_TYPE_WRAPPER) continue;
+        th_type *graph_type = n00bb_abi_type_index_at(index, i);
+        parse_sym_entry_t *owner = graph_type
+            ? type_owner(type_owner_context, graph_type) : nullptr;
+        if (!owner || !owner->decl_node) continue;
+        const core_translation_unit_t *declaring_unit = nullptr;
+        parse_token_stream_t *declaring_tokens = nullptr;
+        if (!node_source(source_context, owner->decl_node,
+                &declaring_unit, &declaring_tokens)
+            || !declaring_unit || !declaring_tokens
+            || declaring_unit == unit || !owner->name.data
+            || !owner->name.u8_bytes || !owner->phases) return false;
+        core_buffer_t path = {0};
+        core_buffer_append(&path, declaring_unit->module.identifier.data,
+            declaring_unit->module.identifier.u8_bytes);
+        core_buffer_putc(&path, '.');
+        core_buffer_append(&path, owner->name.data, owner->name.u8_bytes);
+        size_t next = ++*count;
+        requirements[next] = (n00b_abi_requirement_v1){
+            .symbol_kind = N00B_ABI_SYMBOL_TYPE,
+            .contract_type_index = i,
+            .required_layout_index = type->layout_index,
+            .required_phase_mask = (uint32_t)owner->phases,
+            .requesting_module_index = 1,
+        };
+        bool valid = n00bb_abi_name_pool_encode(pool,
+            core_string_borrow(path.data, path.byte_len),
+            N00B_ABI_TABLE_REQUIREMENT, (uint32_t)next,
+            offsetof(n00b_abi_requirement_v1, full_path),
+            &requirements[next].full_path);
+        core_buffer_release(&path);
+        if (!valid) return false;
+    }
+    return true;
+}
+
 typedef struct {
     core_translation_unit_t **members;
     size_t count;
@@ -671,6 +727,7 @@ n00bb_abi_emit_unit(
     n00b_abi_runtime_config_v1 runtime_configs[2] = {0};
     n00b_abi_requirement_v1 *requirements = core_alloc_array(
         n00b_abi_requirement_v1, import_count + 1);
+    size_t requirement_count = import_count;
     for (size_t i = 0; i < import_count; i++) {
         requirements[i + 1].symbol_kind = N00B_ABI_SYMBOL_MODULE;
         requirements[i + 1].requesting_module_index = 1;
@@ -785,6 +842,20 @@ n00bb_abi_emit_unit(
         valid = method_stream_base <= UINT32_MAX
             && n00bb_abi_trait_method_rows_attach(&type_rows,
                 &trait_method_rows, (uint32_t)method_stream_base);
+    }
+    if (valid) {
+        valid = type_rows.count <= UINT32_MAX - import_count - 1
+            && type_rows.count <= (SIZE_MAX / sizeof(*requirements))
+                - import_count - 1;
+        if (valid) {
+            requirements = core_realloc(requirements,
+                (import_count + type_rows.count + 1)
+                    * sizeof(*requirements));
+            valid = append_imported_type_requirements(type_index,
+                &type_rows, unit, node_source, source_context,
+                type_owner, type_owner_context, pool, requirements,
+                &requirement_count);
+        }
     }
     n00bb_abi_type_index_free(type_index);
     if (valid) {
@@ -991,7 +1062,7 @@ n00bb_abi_emit_unit(
         {N00B_ABI_TABLE_SOURCE_FILE, declaration_rows.source_files,
          declaration_rows.source_file_count},
         {N00B_ABI_TABLE_RUNTIME_CONFIG, runtime_configs, 2},
-        {N00B_ABI_TABLE_REQUIREMENT, requirements, import_count + 1},
+        {N00B_ABI_TABLE_REQUIREMENT, requirements, requirement_count + 1},
         {N00B_ABI_TABLE_STORAGE, storage_rows.rows,
          storage_rows.row_count},
         {N00B_ABI_TABLE_SHAPE, storage_rows.shapes,

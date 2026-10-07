@@ -1623,6 +1623,10 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
     if (entering) return;
     parse_annot_result_t *annotations = context;
     if (!visit->pn) return;
+    if (visit->pn->sym && visit->pn->sym->kind == PARSE_SYM_TYPEDEF
+        && visit->pn->sym->decl_node == visit->node)
+        parse_sym_set_phases(visit->pn->sym, PARSE_SYM_PHASE_BOTH,
+            PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
 
     if (nt_is(visit->grammar, visit->node, "variable-decl")) {
         parse_tree_t *prefix = child_nt(visit->grammar, visit->node,
