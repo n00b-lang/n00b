@@ -1397,6 +1397,10 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/where_excludes.n00b"
 [ -s "$tmp/constraint_abi.o" ]
 "$abi_record_object_test" "$tmp/constraint_abi.o" constraint
+"$compiler" compile --output "$tmp/trait_methods_abi.o" \
+    "$program_dir/../abi/trait_methods.n00b"
+[ -s "$tmp/trait_methods_abi.o" ]
+"$abi_record_object_test" "$tmp/trait_methods_abi.o" trait-methods
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_abi.o" import_root
 [ -s "$tmp/import_abi.o" ]

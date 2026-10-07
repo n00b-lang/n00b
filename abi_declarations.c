@@ -341,9 +341,12 @@ n00bb_abi_declarations_build(
             if (symbol->kind == PARSE_SYM_TYPEDEF
                 && (symbol->adt_kind.u8_bytes
                     || (symbol->member_scope
-                        && core_string_eq(
-                            symbol->member_scope->scope_tag,
-                            CORE_STRING_STATIC("variant")))))
+                        && (core_string_eq(
+                                symbol->member_scope->scope_tag,
+                                CORE_STRING_STATIC("variant"))
+                            || core_string_eq(
+                                symbol->member_scope->scope_tag,
+                                CORE_STRING_STATIC("trait"))))))
                 type_rows->rows[symbols[i].type_index].owner_module_index = 1;
         }
         *out = (n00bb_abi_declarations_t){

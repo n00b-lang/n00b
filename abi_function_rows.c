@@ -60,6 +60,13 @@ n00bb_abi_function_rows_build(
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
                                                               (uint32_t)i);
         if (!symbol || symbol->kind != PARSE_SYM_FUNCTION) continue;
+        if (symbol->owner_type
+            && (core_string_eq(symbol->owner_type->adt_kind,
+                               CORE_STRING_STATIC("trait"))
+                || (symbol->owner_type->member_scope
+                    && core_string_eq(
+                        symbol->owner_type->member_scope->scope_tag,
+                        CORE_STRING_STATIC("trait"))))) continue;
         core_link_declaration_t *declaration = lookup
             ? lookup(lookup_context, symbol) : nullptr;
         ir_func_t *function = declaration ? core_link_declaration_binding(

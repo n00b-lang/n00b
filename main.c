@@ -4359,6 +4359,15 @@ explicit_trait_method_signature(parse_grammar_t *grammar,
     th_type *receiver_type = receiver_type_node
         ? core_tree_node_value(receiver_type_node).type : nullptr;
     parse_sym_entry_t *receiver_symbol = core_tree_node_value(receiver).sym;
+    if (receiver_symbol && receiver_type) {
+        th_type *bound = receiver_symbol->type
+            ? th_unify_in_place(types, receiver_symbol->type, receiver_type)
+            : receiver_type;
+        if (!bound) return nullptr;
+        receiver_symbol->type = bound;
+        core_tree_node_value(receiver).type = bound;
+        receiver_type = bound;
+    }
     th_mode receiver_mode = receiver_symbol && receiver_symbol->has_mode
         ? receiver_symbol->mode : TH_IN;
     bool collected = receiver_type != nullptr;

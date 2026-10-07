@@ -14,6 +14,7 @@
 #include "abi_type_layout_rows.h"
 #include "abi_type_rows.h"
 #include "abi_type_signatures.h"
+#include "abi_trait_method_rows.h"
 #include "n00b-abi-v1.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
@@ -442,6 +443,12 @@ n00bb_abi_emit_unit(
         bool enumeration = symbol && symbol->kind == PARSE_SYM_TYPEDEF
             && core_string_eq(symbol->adt_kind,
                               CORE_STRING_STATIC("enum"));
+        bool trait = symbol && symbol->kind == PARSE_SYM_TYPEDEF
+            && (core_string_eq(symbol->adt_kind,
+                               CORE_STRING_STATIC("trait"))
+                || (symbol->member_scope
+                    && core_string_eq(symbol->member_scope->scope_tag,
+                                      CORE_STRING_STATIC("trait"))));
         bool variant = symbol && symbol->kind == PARSE_SYM_TYPEDEF
             && ((symbol->member_scope
                  && core_string_eq(symbol->member_scope->scope_tag,
@@ -468,12 +475,17 @@ n00bb_abi_emit_unit(
         bool parameter = symbol && symbol->kind == PARSE_SYM_PARAM;
         bool local = symbol && symbol->kind == PARSE_SYM_VARIABLE
             && !symbol->is_field;
-        if (!record && !field && !enumeration && !enum_item
+        if (!record && !field && !enumeration && !enum_item && !trait
             && !variant && !arm
             && !function && !parameter && !local) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "ABI emission does not support declaration '%.*s'",
+                (int)symbol->name.u8_bytes, symbol->name.data);
             n00bb_abi_decl_index_free(declarations);
-            return abi_unit_error(unit,
-                "this ABI emitter path supports only record, enum, variant, and function declarations");
+            bool result = abi_unit_error(unit, message.data);
+            core_buffer_release(&message);
+            return result;
         }
     }
     if (!core_translation_unit_imports_finalized(unit)
@@ -543,6 +555,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_type_signatures_t signature_rows = {0};
     n00bb_abi_declarations_t declaration_rows = {0};
     n00bb_abi_function_rows_t function_rows = {0};
+    n00bb_abi_trait_method_rows_t trait_method_rows = {0};
     n00bb_abi_constraint_rows_t constraint_rows = {0};
     bool valid = pool && type_index
         && n00bb_abi_type_index_collect_module_types(type_index,
@@ -591,6 +604,8 @@ n00bb_abi_emit_unit(
                 + (uint32_t)declaration_rows.stream_index_count,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
             pool, lookup, lookup_context, &function_rows)
+        && n00bb_abi_trait_method_rows_build(type_index, &type_rows,
+            declarations, &trait_method_rows)
         && n00bb_abi_constraint_rows_build(type_index, &type_rows,
             declarations, &function_rows, pool,
             prefix_stream_count + (uint32_t)components.count
@@ -619,6 +634,7 @@ n00bb_abi_emit_unit(
     }
     if (!valid) {
         core_free(requirements);
+        n00bb_abi_trait_method_rows_release(&trait_method_rows);
         n00bb_abi_constraint_rows_release(&constraint_rows);
         n00bb_abi_function_rows_release(&function_rows);
         n00bb_abi_declarations_release(&declaration_rows);
@@ -708,6 +724,8 @@ n00bb_abi_emit_unit(
          enum_rows.item_count},
         {N00B_ABI_TABLE_FUNCTION, function_rows.functions,
          function_rows.function_count},
+        {N00B_ABI_TABLE_TRAIT_METHOD, trait_method_rows.rows,
+         trait_method_rows.count},
         {N00B_ABI_TABLE_CONSTRAINT, constraint_rows.rows,
          constraint_rows.count},
         {N00B_ABI_TABLE_CALL_SIGNATURE, signature_rows.signatures,
@@ -732,6 +750,7 @@ n00bb_abi_emit_unit(
     core_free(stream);
     if (!valid) {
         core_free(requirements);
+        n00bb_abi_trait_method_rows_release(&trait_method_rows);
         n00bb_abi_constraint_rows_release(&constraint_rows);
         n00bb_abi_function_rows_release(&function_rows);
         n00bb_abi_declarations_release(&declaration_rows);
@@ -790,6 +809,7 @@ n00bb_abi_emit_unit(
             &object, &object_bytes);
     core_free(relocations);
     core_free(requirements);
+    n00bb_abi_trait_method_rows_release(&trait_method_rows);
     n00bb_abi_constraint_rows_release(&constraint_rows);
     n00bb_abi_function_rows_release(&function_rows);
     n00bb_abi_declarations_release(&declaration_rows);

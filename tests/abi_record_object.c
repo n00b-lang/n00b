@@ -523,6 +523,64 @@ check_constraint(const core_object_section_t *metadata,
     assert(variable_count == 1);
 }
 
+static void
+check_trait_methods(const core_object_section_t *metadata,
+                    const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries,
+        count, N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *methods = entry_for(entries,
+        count, N00B_ABI_TABLE_TRAIT_METHOD);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries,
+        count, N00B_ABI_TABLE_SYMBOL);
+    const n00bb_abi_directory_entry_t *signatures = entry_for(entries,
+        count, N00B_ABI_TABLE_CALL_SIGNATURE);
+    const n00bb_abi_directory_entry_t *functions = entry_for(entries,
+        count, N00B_ABI_TABLE_FUNCTION);
+    assert(types && methods && methods->record_count == 3 && symbols
+        && signatures && functions && functions->record_count == 1);
+    uint32_t trait_index = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        if (type->kind == N00B_ABI_TYPE_TRAIT
+            && type->owner_module_index == 1) {
+            assert(!trait_index);
+            trait_index = i;
+        }
+    }
+    assert(trait_index);
+    bool found_owner = false;
+    for (uint32_t i = 1; i < symbols->record_count; i++) {
+        const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
+        if (symbol->type_index == trait_index
+            && short_name_is(&symbol->name, "Readable")) {
+            assert(symbol->kind == N00B_ABI_SYMBOL_TYPE);
+            found_owner = true;
+        }
+    }
+    assert(found_owner);
+    const char *names[] = {"read", "reset"};
+    for (uint32_t i = 0; i < 2; i++) {
+        const n00b_abi_trait_method_v1 *method = row_at(metadata, methods,
+            i + 1);
+        assert(method->trait_type_index == trait_index
+            && method->declaration_ordinal == i
+            && method->signature_type_index < types->record_count
+            && method->symbol_index && method->symbol_index
+                < symbols->record_count);
+        const n00b_abi_type_v1 *type = row_at(metadata, types,
+            method->signature_type_index);
+        assert(type->kind == N00B_ABI_TYPE_FUNCTION
+            && type->call_signature_index
+            && type->call_signature_index < signatures->record_count);
+        const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,
+            method->symbol_index);
+        assert(symbol->kind == N00B_ABI_SYMBOL_FUNCTION
+            && symbol->type_index == method->signature_type_index
+            && short_name_is(&symbol->name, names[i]));
+    }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -534,6 +592,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "import-enum")
             || !strcmp(argv[2], "variant")
             || !strcmp(argv[2], "constraint")
+            || !strcmp(argv[2], "trait-methods")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -614,6 +673,12 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "constraint")) {
         check_constraint(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "trait-methods")) {
+        check_trait_methods(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
