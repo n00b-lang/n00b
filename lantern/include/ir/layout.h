@@ -77,6 +77,7 @@ typedef struct {
     size_t n_reserved;
     const ir_final_member_layout_t *members;
     size_t n_members;
+    ir_layout_bit_run_t member_overlap_region;
     bool has_discriminant;
     bool discriminant_is_niche;
     ir_layout_access_t discriminant;

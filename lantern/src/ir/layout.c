@@ -201,6 +201,26 @@ static bool disjoint_runs(const ir_layout_bit_run_t *a, size_t na,
     return true;
 }
 
+static bool member_overlaps_only_within(
+    const ir_final_member_layout_t *a, const ir_final_member_layout_t *b,
+    ir_layout_bit_run_t region)
+{
+    size_t i = 0, j = 0;
+    while (i < a->n_occupied && j < b->n_occupied) {
+        uint64_t ae = a->occupied[i].offset + a->occupied[i].width;
+        uint64_t be = b->occupied[j].offset + b->occupied[j].width;
+        uint64_t start = a->occupied[i].offset > b->occupied[j].offset
+                       ? a->occupied[i].offset : b->occupied[j].offset;
+        uint64_t end = ae < be ? ae : be;
+        if (start < end
+            && (!region.width || start < region.offset
+                || end > region.offset + region.width)) return false;
+        if (ae <= be) i++;
+        else j++;
+    }
+    return true;
+}
+
 static bool runs_within(const ir_layout_bit_run_t *child, size_t nc,
                         const ir_layout_bit_run_t *parent, size_t np)
 {
@@ -265,6 +285,13 @@ bool ir_layout_publish_final(ir_module_t *m, th_type *t, const char *target,
                           layout->reserved, layout->n_reserved)
         || (layout->n_members && !layout->members)
         || layout->n_members > SIZE_MAX / sizeof(*layout->members)
+        || (!layout->member_overlap_region.width
+            && layout->member_overlap_region.offset)
+        || (layout->member_overlap_region.width
+            && (layout->member_overlap_region.offset > layout->intrinsic_bits
+                || layout->member_overlap_region.width
+                    > layout->intrinsic_bits
+                      - layout->member_overlap_region.offset))
         || (layout->discriminant_is_niche && !layout->has_discriminant)
         || (layout->has_discriminant
             && !valid_access(layout->discriminant, layout->intrinsic_bits)))
@@ -281,8 +308,12 @@ bool ir_layout_publish_final(ir_module_t *m, th_type *t, const char *target,
             || (member->n_accesses && !member->accesses)
             || member->n_accesses > SIZE_MAX / sizeof(*member->accesses))
             return false;
-        for (size_t j = 0; j < i; j++)
-            if (layout->members[j].ordinal == member->ordinal) return false;
+        for (size_t j = 0; j < i; j++) {
+            if (layout->members[j].ordinal == member->ordinal
+                || !member_overlaps_only_within(
+                    &layout->members[j], member,
+                    layout->member_overlap_region)) return false;
+        }
         for (size_t j = 0; j < member->n_accesses; j++)
             if (!valid_access(member->accesses[j], layout->intrinsic_bits))
                 return false;

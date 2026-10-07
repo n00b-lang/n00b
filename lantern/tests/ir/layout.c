@@ -673,8 +673,23 @@ static void test_final_layout_is_bit_precise_and_owned(void)
     layout.n_members = 2;
     layout.has_discriminant = true;
     layout.discriminant_is_niche = false;
+    check("record members cannot overlap",
+          !ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    layout.member_overlap_region.offset = 3;
+    check("empty shared payload region must be canonical",
+          !ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    layout.member_overlap_region = (ir_layout_bit_run_t){.offset = 4,
+                                                          .width = 7};
+    check("member overlap must stay inside the shared payload",
+          !ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    layout.member_overlap_region = (ir_layout_bit_run_t){.offset = 3,
+                                                          .width = 8};
     check("distinct variant arms may occupy the same storage",
           ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    check("published layout retains its shared payload region",
+          ir_layout_final(e->m, t, "wasm32")
+          && ir_layout_final(e->m, t, "wasm32")
+                 ->member_overlap_region.offset == 3);
     ir_final_layout_t empty = {.alignment_bytes = 1};
     uint64_t empty_stride = 1;
     check("zero-sized values have zero array stride",
