@@ -16,6 +16,28 @@ static void save_object(const char *path, const uint8_t *image, size_t size)
     assert(!fclose(file));
 }
 
+static void check_native_section(const uint8_t *image, size_t size,
+                                 core_target_object_format_t format,
+                                 uint32_t index, const char *name,
+                                 const char *segment)
+{
+    uint32_t count = 0;
+    core_object_section_t view = {0};
+    assert(core_object_section_count(image, size, format, &count)
+        && index <= count
+        && core_object_section_at(image, size, format, index, &view)
+        && view.native_index == index
+        && view.name_length == strlen(name)
+        && !memcmp(view.name, name, view.name_length));
+    if (segment)
+        assert(view.segment_length == strlen(segment)
+            && !memcmp(view.segment, segment, view.segment_length));
+    assert(!core_object_section_at(image, size, format, 0, &view)
+        && view.native_index == index
+        && !core_object_section_at(image, size, format, count + 1, &view)
+        && view.native_index == index);
+}
+
 static void mach_test(const char *output_path)
 {
     core_target_desc_t target;
@@ -46,6 +68,8 @@ static void mach_test(const char *output_path)
     assert(core_object_emit_native_section_index(&target, 2, 1,
                                                   &native_index));
     assert(native_index == section.native_index);
+    check_native_section(image, size, CORE_TARGET_OBJECT_MACH_O,
+                         native_index, "__n00b_meta", "__DATA_CONST");
     assert(section.native_index == 1 && section.size == 16 &&
            section.alignment == 8 && section.relocation_count == 1);
     core_object_absolute64_relocation_t relocation;
@@ -64,6 +88,8 @@ static void mach_test(const char *output_path)
     assert(core_object_emit_native_section_index(&target, 2, 2,
                                                   &native_index));
     assert(native_index == section.native_index);
+    check_native_section(image, size, CORE_TARGET_OBJECT_MACH_O,
+                         native_index, "__data", "__DATA");
     assert(section.native_index == 2 && section.alignment == 16);
     assert(!core_object_emit_native_section_index(&target,
         (size_t)UINT8_MAX + 1, 1, &native_index));
@@ -106,6 +132,8 @@ static void coff_test(const char *output_path)
     assert(core_object_emit_native_section_index(&target, 2, 1,
                                                   &native_index));
     assert(native_index == section.native_index);
+    check_native_section(image, size, CORE_TARGET_OBJECT_COFF,
+                         native_index, ".n00b$M", NULL);
     assert(section.native_index == 1 && section.size == 16 &&
            section.alignment == 8 && section.relocation_count == 1);
     assert(!(section.flags & 0x80000000u));
@@ -126,6 +154,8 @@ static void coff_test(const char *output_path)
     assert(core_object_emit_native_section_index(&target, 2, 2,
                                                   &native_index));
     assert(native_index == section.native_index);
+    check_native_section(image, size, CORE_TARGET_OBJECT_COFF,
+                         native_index, ".long_section_name", NULL);
     assert(section.native_index == 2 && section.alignment == 16 &&
            section.relocation_count == 1);
     assert(!core_object_emit_native_section_index(&target,
@@ -273,6 +303,8 @@ int main(int argc, char **argv)
     assert(core_object_emit_native_section_index(&target, 2, 1,
                                                   &native_index));
     assert(native_index == section.native_index);
+    check_native_section(image, size, CORE_TARGET_OBJECT_ELF,
+                         native_index, ".n00b.meta", NULL);
     assert(section.native_index == 4 && section.size == 16 &&
            section.alignment == 8 && section.flags == 2);
     core_object_absolute64_relocation_t relocation;
@@ -294,6 +326,8 @@ int main(int argc, char **argv)
     assert(core_object_emit_native_section_index(&target, 2, 2,
                                                   &native_index));
     assert(native_index == section.native_index);
+    check_native_section(image, size, CORE_TARGET_OBJECT_ELF,
+                         native_index, ".text", NULL);
     assert(section.native_index == 5 && section.alignment == 16 &&
            section.flags == 6);
     native_index = UINT32_MAX;

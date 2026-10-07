@@ -9,6 +9,10 @@
 typedef struct {
     const uint8_t *bytes;
     size_t size;
+    const uint8_t *name;
+    size_t name_length;
+    const uint8_t *segment;
+    size_t segment_length;
     uint32_t native_index;
     uint64_t virtual_address; /* Section address before final linking. */
     uint64_t alignment;
@@ -40,6 +44,18 @@ bool core_object_section_find(const void *image, size_t image_size,
                               core_target_object_format_t format,
                               const char *segment, const char *name,
                               core_object_section_t *out);
+
+/* Native section indexes are one-based. `count` is the largest native
+ * section index; ELF's null section is excluded. `at` returns a borrowed
+ * view and rejects sections without file-backed bytes. Both leave outputs
+ * unchanged on failure. */
+bool core_object_section_count(const void *image, size_t image_size,
+                               core_target_object_format_t format,
+                               uint32_t *out_count);
+bool core_object_section_at(const void *image, size_t image_size,
+                            core_target_object_format_t format,
+                            uint32_t native_index,
+                            core_object_section_t *out);
 
 /* Decodes an absolute 64-bit pointer relocation. `native_symbol_index` is
  * the format's symbol-table index, except for a local Mach-O relocation,

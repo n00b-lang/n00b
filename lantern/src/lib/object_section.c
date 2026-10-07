@@ -16,14 +16,6 @@ static bool table_span(size_t total, uint64_t offset, uint64_t count,
            span(total, offset, count * width);
 }
 
-static bool bounded_name(const uint8_t *base, size_t size, uint64_t offset,
-                         const char *name)
-{
-    size_t length = strlen(name);
-    return span(size, offset, length + 1) &&
-           !memcmp(base + offset, name, length) && !base[offset + length];
-}
-
 static bool fixed_name(const uint8_t *base, size_t width, const char *name)
 {
     size_t length = strlen(name);
@@ -34,10 +26,16 @@ static bool fixed_name(const uint8_t *base, size_t width, const char *name)
     return true;
 }
 
-static bool coff_name(const uint8_t *image, size_t size,
-                      const uint8_t *header, const char *name)
+static bool coff_name_view(const uint8_t *image, size_t size,
+                           const uint8_t *header,
+                           const uint8_t **name, size_t *length)
 {
-    if (header[0] != '/') return fixed_name(header, 8, name);
+    if (header[0] != '/') {
+        const uint8_t *end = memchr(header, 0, 8);
+        *name = header;
+        *length = end ? (size_t)(end - header) : 8;
+        return true;
+    }
     uint32_t string_index = 0;
     size_t cursor = 1;
     for (; cursor < 8 && header[cursor]; cursor++) {
@@ -54,12 +52,18 @@ static bool coff_name(const uint8_t *image, size_t size,
     uint64_t strings = (uint64_t)symbol_offset + (uint64_t)symbol_count * 18;
     if (!span(size, strings, 4)) return false;
     uint32_t string_bytes = core_le_load_u32(image + strings);
-    return string_index < string_bytes &&
-           span(size, strings, string_bytes) &&
-           bounded_name(image + strings, string_bytes, string_index, name);
+    if (string_index >= string_bytes ||
+        !span(size, strings, string_bytes)) return false;
+    const uint8_t *start = image + strings + string_index;
+    const uint8_t *end = memchr(start, 0, string_bytes - string_index);
+    if (!end) return false;
+    *name = start;
+    *length = (size_t)(end - start);
+    return true;
 }
 
 static bool find_elf(const uint8_t *image, size_t size, const char *name,
+                     uint32_t wanted_index,
                      core_object_section_t *out)
 {
     if (!span(size, 0, 64) || memcmp(image, "\x7f" "ELF", 4) ||
@@ -86,9 +90,13 @@ static bool find_elf(const uint8_t *image, size_t size, const char *name,
     for (uint64_t i = 1; i < count; i++) {
         const uint8_t *header = image + headers + i * width;
         uint32_t name_offset = core_le_load_u32(header);
-        if (name_offset >= names_size ||
-            !bounded_name(image + names_offset, (size_t)names_size,
-                          name_offset, name)) continue;
+        if (wanted_index && i != wanted_index) continue;
+        if (name_offset >= names_size) return false;
+        const uint8_t *start = image + names_offset + name_offset;
+        const uint8_t *end = memchr(start, 0, names_size - name_offset);
+        if (!end) return false;
+        if (name && ((size_t)(end - start) != strlen(name)
+            || memcmp(start, name, (size_t)(end - start)))) continue;
         uint32_t type = core_le_load_u32(header + 4);
         uint64_t offset = core_le_load_u64(header + 24);
         uint64_t length = core_le_load_u64(header + 32);
@@ -97,6 +105,8 @@ static bool find_elf(const uint8_t *image, size_t size, const char *name,
         core_object_section_t result = {
             .bytes = image + offset,
             .size = (size_t)length,
+            .name = start,
+            .name_length = (size_t)(end - start),
             .native_index = (uint32_t)i,
             .virtual_address = core_le_load_u64(header + 16),
             .alignment = core_le_load_u64(header + 48),
@@ -131,10 +141,11 @@ static bool find_elf(const uint8_t *image, size_t size, const char *name,
 
 static bool find_macho(const uint8_t *image, size_t size,
                        const char *segment, const char *name,
+                       uint32_t wanted_index,
                        core_object_section_t *out)
 {
     if (!span(size, 0, 32) || core_le_load_u32(image) != 0xfeedfacf ||
-        core_le_load_u32(image + 12) != 1 || !segment) return false;
+        core_le_load_u32(image + 12) != 1 || (name && !segment)) return false;
     uint32_t command_count = core_le_load_u32(image + 16);
     uint32_t command_bytes = core_le_load_u32(image + 20);
     if (!span(size, 32, command_bytes)) return false;
@@ -153,8 +164,11 @@ static bool find_macho(const uint8_t *image, size_t size,
             for (uint32_t j = 0; j < nsections; j++) {
                 section_index++;
                 const uint8_t *section = image + cursor + 72 + j * 80;
-                if (!fixed_name(section, 16, name) ||
-                    !fixed_name(section + 16, 16, segment)) continue;
+                if (wanted_index && section_index != wanted_index) continue;
+                if (name && (!fixed_name(section, 16, name) ||
+                    !fixed_name(section + 16, 16, segment))) continue;
+                const uint8_t *name_end = memchr(section, 0, 16);
+                const uint8_t *segment_end = memchr(section + 16, 0, 16);
                 uint64_t length = core_le_load_u64(section + 40);
                 uint32_t offset = core_le_load_u32(section + 48);
                 uint32_t alignment_power = core_le_load_u32(section + 52);
@@ -166,6 +180,12 @@ static bool find_macho(const uint8_t *image, size_t size,
                 core_object_section_t result = {
                     .bytes = image + offset,
                     .size = (size_t)length,
+                    .name = section,
+                    .name_length = name_end ? (size_t)(name_end - section)
+                                            : 16,
+                    .segment = section + 16,
+                    .segment_length = segment_end
+                        ? (size_t)(segment_end - (section + 16)) : 16,
                     .native_index = (uint32_t)section_index,
                     .virtual_address = core_le_load_u64(section + 32),
                     .alignment = UINT64_C(1) << alignment_power,
@@ -185,6 +205,7 @@ static bool find_macho(const uint8_t *image, size_t size,
 }
 
 static bool find_coff(const uint8_t *image, size_t size, const char *name,
+                      uint32_t wanted_index,
                       core_object_section_t *out)
 {
     if (!span(size, 0, 20)) return false;
@@ -195,7 +216,13 @@ static bool find_coff(const uint8_t *image, size_t size, const char *name,
     if (optional_size || !table_span(size, 20, count, 40)) return false;
     for (uint32_t i = 0; i < count; i++) {
         const uint8_t *header = image + 20 + i * 40;
-        if (!coff_name(image, size, header, name)) continue;
+        if (wanted_index && i + 1 != wanted_index) continue;
+        const uint8_t *section_name;
+        size_t name_length;
+        if (!coff_name_view(image, size, header, &section_name,
+                            &name_length)) return false;
+        if (name && (name_length != strlen(name)
+            || memcmp(section_name, name, name_length))) continue;
         uint32_t length = core_le_load_u32(header + 16);
         uint32_t offset = core_le_load_u32(header + 20);
         uint32_t rel_offset = core_le_load_u32(header + 24);
@@ -220,6 +247,8 @@ static bool find_coff(const uint8_t *image, size_t size, const char *name,
         core_object_section_t result = {
             .bytes = image + offset,
             .size = length,
+            .name = section_name,
+            .name_length = name_length,
             .native_index = i + 1,
             .virtual_address = core_le_load_u32(header + 12),
             .alignment = alignment_power ? UINT64_C(1) << (alignment_power - 1) : 1,
@@ -299,11 +328,97 @@ bool core_object_section_find(const void *image, size_t image_size,
     const uint8_t *bytes = image;
     switch (format) {
     case CORE_TARGET_OBJECT_ELF:
-        return find_elf(bytes, image_size, name, out);
+        return find_elf(bytes, image_size, name, 0, out);
     case CORE_TARGET_OBJECT_MACH_O:
-        return find_macho(bytes, image_size, segment, name, out);
+        return find_macho(bytes, image_size, segment, name, 0, out);
     case CORE_TARGET_OBJECT_COFF:
-        return find_coff(bytes, image_size, name, out);
+        return find_coff(bytes, image_size, name, 0, out);
+    default:
+        return false;
+    }
+}
+
+bool core_object_section_count(const void *image, size_t image_size,
+                               core_target_object_format_t format,
+                               uint32_t *out_count)
+{
+    if (!image || !out_count) return false;
+    const uint8_t *bytes = image;
+    uint32_t count;
+    switch (format) {
+    case CORE_TARGET_OBJECT_ELF: {
+        if (!span(image_size, 0, 64) ||
+            memcmp(bytes, "\x7f" "ELF", 4) || bytes[4] != 2 ||
+            bytes[5] != 1 || bytes[6] != 1 ||
+            core_le_load_u16(bytes + 16) != 1) return false;
+        uint64_t headers = core_le_load_u64(bytes + 40);
+        uint16_t width = core_le_load_u16(bytes + 58);
+        uint64_t sections = core_le_load_u16(bytes + 60);
+        if (width < 64 || !span(image_size, headers, width)) return false;
+        if (!sections) sections = core_le_load_u64(bytes + headers + 32);
+        if (!sections || sections > UINT32_MAX + UINT64_C(1) ||
+            !table_span(image_size, headers, sections, width)) return false;
+        count = (uint32_t)(sections - 1);
+        break;
+    }
+    case CORE_TARGET_OBJECT_MACH_O: {
+        if (!span(image_size, 0, 32) ||
+            core_le_load_u32(bytes) != 0xfeedfacf ||
+            core_le_load_u32(bytes + 12) != 1) return false;
+        uint32_t command_count = core_le_load_u32(bytes + 16);
+        uint32_t command_bytes = core_le_load_u32(bytes + 20);
+        if (!span(image_size, 32, command_bytes)) return false;
+        size_t cursor = 32, end = 32 + command_bytes;
+        count = 0;
+        for (uint32_t i = 0; i < command_count; i++) {
+            if (!span(end, cursor, 8)) return false;
+            uint32_t command = core_le_load_u32(bytes + cursor);
+            uint32_t size = core_le_load_u32(bytes + cursor + 4);
+            if (size < 8 || !span(end, cursor, size)) return false;
+            if (command == 0x19) {
+                if (size < 72) return false;
+                uint32_t sections = core_le_load_u32(bytes + cursor + 64);
+                if (!table_span(size, 72, sections, 80)
+                    || sections > UINT32_MAX - count) return false;
+                count += sections;
+            }
+            cursor += size;
+        }
+        break;
+    }
+    case CORE_TARGET_OBJECT_COFF:
+        if (!span(image_size, 0, 20) ||
+            (core_le_load_u16(bytes) != 0x8664
+                && core_le_load_u16(bytes) != 0xaa64) ||
+            core_le_load_u16(bytes + 16) != 0) return false;
+        count = core_le_load_u16(bytes + 2);
+        if (!table_span(image_size, 20, count, 40)) return false;
+        break;
+    default:
+        return false;
+    }
+    *out_count = count;
+    return true;
+}
+
+bool core_object_section_at(const void *image, size_t image_size,
+                            core_target_object_format_t format,
+                            uint32_t native_index,
+                            core_object_section_t *out)
+{
+    if (!image || !out || !native_index) return false;
+    uint32_t count;
+    if (!core_object_section_count(image, image_size, format, &count)
+        || native_index > count) return false;
+    const uint8_t *bytes = image;
+    switch (format) {
+    case CORE_TARGET_OBJECT_ELF:
+        return find_elf(bytes, image_size, nullptr, native_index, out);
+    case CORE_TARGET_OBJECT_MACH_O:
+        return find_macho(bytes, image_size, nullptr, nullptr, native_index,
+                          out);
+    case CORE_TARGET_OBJECT_COFF:
+        return find_coff(bytes, image_size, nullptr, native_index, out);
     default:
         return false;
     }
