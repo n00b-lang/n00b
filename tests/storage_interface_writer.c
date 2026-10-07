@@ -76,6 +76,40 @@ write_origin_conflict(const char *path, th_ctx *types, th_env *environment)
     return ok ? 0 : 1;
 }
 
+static int
+write_absent_failure(const char *path, th_ctx *types, th_env *environment)
+{
+    static const char name[] = "generic_absent.answer";
+    static const uint8_t parameters[] = {
+        'N', '0', 'F', 'P', 1, 0, 0, 0, 0,
+    };
+    th_type *result = th_name(types, "int");
+    th_type *signature = result
+        ? th_func(types, result, NULL, 0, NULL, NULL, 0) : NULL;
+    core_buffer_t origin = {0};
+    append_export_origin(&origin, "generic_absent", name);
+    core_object_archive_error_t error = CORE_OBJECT_ARCHIVE_OK;
+    bool ok = signature
+        && th_env_register_function_contract(environment, name, "answer",
+            "generic_absent", "default", TH_ENV_PUBLIC, signature)
+        && th_env_register_metadata(environment, TH_ENV_METADATA_FUNCTION,
+            name, "n00b.export-origin", 1, origin.data, origin.byte_len)
+        && th_env_register_metadata(environment, TH_ENV_METADATA_FUNCTION,
+            name, "n00b.function-params", 1, parameters,
+            sizeof(parameters))
+        && th_env_register_metadata(environment,
+            TH_ENV_METADATA_ENVIRONMENT, "generic_absent",
+            "n00b.package-interface", 1, "default", sizeof("default"))
+        && th_env_freeze(environment)
+        && th_env_save(environment, path, 0, &error)
+        && error == CORE_OBJECT_ARCHIVE_OK;
+    core_buffer_release(&origin);
+    if (!ok)
+        fprintf(stderr, "could not write absent-failure interface: %d\n",
+                (int)error);
+    return ok ? 0 : 1;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -84,13 +118,23 @@ main(int argc, char **argv)
         && strcmp(argv[2], "--missing-class") == 0;
     bool origin_conflict = argc == 3
         && strcmp(argv[2], "--origin-conflict") == 0;
-    if (argc == 3 && !missing_class && !origin_conflict) return 2;
+    bool absent_failure = argc == 3
+        && strcmp(argv[2], "--absent-failure") == 0;
+    if (argc == 3 && !missing_class && !origin_conflict
+        && !absent_failure) return 2;
 
     th_ctx *types = th_ctx_new();
     th_env *environment = th_env_new();
     if (origin_conflict) {
         int result = types && environment
             ? write_origin_conflict(argv[1], types, environment) : 1;
+        th_env_free(environment);
+        th_ctx_free(types);
+        return result;
+    }
+    if (absent_failure) {
+        int result = types && environment
+            ? write_absent_failure(argv[1], types, environment) : 1;
         th_env_free(environment);
         th_ctx_free(types);
         return result;

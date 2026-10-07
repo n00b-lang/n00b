@@ -38,6 +38,19 @@ reject_shape_record() {
     grep -Eq "$owner_pattern" "$tmp/$label.err"
 }
 
+"$storage_interface_writer" "$tmp/absent_failure.interface" \
+    --absent-failure
+"$compiler" preprocess --link-interface "$tmp/absent_failure.interface" \
+    --dump-symbols "$interface_programs/generic_absent_user.n00b" \
+    >"$tmp/generic_absent_user.out" \
+    2>"$tmp/generic_absent_user.err" || {
+    cat "$tmp/generic_absent_user.err"
+    cat "$tmp/generic_absent_user.out"
+    exit 1
+}
+grep -q 'answer: function, mutable, type=() -> int fail: nil' \
+    "$tmp/generic_absent_user.out"
+
 "$storage_interface_writer" "$tmp/required_storage.interface"
 "$compiler" lower --link-interface "$tmp/required_storage.interface" \
     --dump-ir --dump-link-unit --dump-symbols \

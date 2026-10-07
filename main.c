@@ -43558,9 +43558,17 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
                     if (failure) *failure = "interface function has invalid contract";
                     return false;
                 }
+                if (!th_func_error(signature))
+                    signature = function_with_error_channel(state->types,
+                        signature, error_type);
+                if (!signature || !th_func_error(signature)) {
+                    if (failure) *failure =
+                        "interface function has no canonical failure channel";
+                    return false;
+                }
                 symbol->type = signature;
-                symbol->error_type = error_type;
-                symbol->callable_contract = declaration.contract;
+                symbol->error_type = th_func_error(signature);
+                symbol->callable_contract = signature;
                 bool has_function_metadata = interface_function_metadata(
                     loader, declaration.qualified_name, nullptr) != nullptr;
                 if ((has_function_metadata
