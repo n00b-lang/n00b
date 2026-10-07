@@ -1,0 +1,3 @@
+flagset Empty {
+    none = nil,
+}

@@ -2405,6 +2405,7 @@ cache_flagset_semantics(parse_grammar_t *grammar,
     n00bb_flagset_info_t *info = owner ? parse_sym_binding(owner,
         CORE_STRING_STATIC("n00bb.flagset-info")) : nullptr;
     if (!owner || !info) return false;
+    if (node == declaration && !info->atomic_count) return false;
 
     if (nt_is(grammar, node, "flagset-name")) {
         parse_tree_t *name_node = core_tree_num_children(node) == 1
@@ -36792,6 +36793,8 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
                             - (uint32_t)enum_range->is_signed
                         ? UINT64_MAX
                         : enum_range->magnitude_bits + enum_range->is_signed;
+                const n00bb_flagset_info_t *flagset_info = parse_sym_binding(
+                    symbol, CORE_STRING_STATIC("n00bb.flagset-info"));
                 for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]);
                      m++) {
                     th_type *type = th_apply_subst(
@@ -36804,6 +36807,10 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
                             && n00bb_abi_publish_integer_like_layout(
                                 modules[m], type, &analysis->target,
                                 (uint32_t)enum_bits);
+                    if (layout_ok && flagset_info && flagset_info->atomic_count)
+                        layout_ok = n00bb_abi_publish_integer_like_layout(
+                            modules[m], type, &analysis->target,
+                            flagset_info->atomic_count);
                     if (layout_ok) continue;
                     core_buffer_t message = {0};
                     core_buffer_printf(&message,
@@ -40530,11 +40537,18 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 CORE_STRING_STATIC("n00bb.flagset-invalid"))) {
             parse_sym_set_binding(owner,
                 CORE_STRING_STATIC("n00bb.flagset-invalid"), owner);
+            n00bb_flagset_info_t *info = parse_sym_binding(owner,
+                CORE_STRING_STATIC("n00bb.flagset-info"));
+            bool missing_primitive = node == declaration && info
+                && !info->atomic_count;
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0019"),
-                CORE_STRING_STATIC(
-                    "invalid flagset declaration; values must be unique combinations of earlier flags and no more than 128 atomic flags are allowed"),
+                missing_primitive
+                    ? CORE_STRING_STATIC(
+                        "flagset requires at least one primitive flag")
+                    : CORE_STRING_STATIC(
+                        "invalid flagset declaration; values must be unique combinations of earlier flags and no more than 128 atomic flags are allowed"),
                 link_source_location(node));
         }
         return;

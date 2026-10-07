@@ -4142,6 +4142,20 @@ grep -Eq 'layout lower_enum_cast.Signed target=(x86_64-linux|arm64-macos|x86_64-
     "$tmp/lower_enum_layout.out"
 grep -Eq 'layout lower_enum_cast.Small target=(x86_64-linux|arm64-macos|x86_64-windows) size=1 align=1' \
     "$tmp/lower_enum_layout.out"
+"$compiler" lower --dump-layout "$script_dir/programs/flagset_operators.n00b" \
+    >"$tmp/flagset_layout.out" 2>"$tmp/flagset_layout.err" || {
+    cat "$tmp/flagset_layout.err"
+    exit 1
+}
+grep -Eq 'layout flagset_operators.FilePerms target=(x86_64-linux|arm64-macos|x86_64-windows) size=1 align=1' \
+    "$tmp/flagset_layout.out"
+if "$compiler" lower "$program_dir/flagset_no_primitive.n00b" \
+    >"$tmp/flagset_no_primitive.out" 2>&1; then
+    echo 'flagset without a primitive flag unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'N00BB-T0019.*flagset requires at least one primitive flag' \
+    "$tmp/flagset_no_primitive.out"
 for invalid_width in sized_integer_zero_width sized_unsigned_too_wide \
     sized_bits_too_wide; do
     if "$compiler" lower "$program_dir/$invalid_width.n00b" \
