@@ -1,0 +1,12 @@
+type Base layout(c) {
+    count: u32
+    active: bool
+}
+
+type Distinct = Base
+alias Synonym = Base
+
+type Outer layout(c) {
+    distinct: Distinct
+    synonym: Synonym
+}

@@ -4262,6 +4262,28 @@ grep -Eq 'layout c_record_nested.Wrapped target=(x86_64-linux|arm64-macos|x86_64
     "$tmp/c_record_nested.out"
 grep -q 'member header bit-offset=32 bit-width=64' \
     "$tmp/c_record_nested.out"
+"$compiler" lower --dump-layout "$program_dir/c_record_alias.n00b" \
+    >"$tmp/c_record_alias.out" 2>&1 || {
+    cat "$tmp/c_record_alias.out"
+    exit 1
+}
+grep -Eq 'layout c_record_alias.Distinct target=(x86_64-linux|arm64-macos|x86_64-windows) size=8 align=4' \
+    "$tmp/c_record_alias.out"
+grep -q 'member count bit-offset=0 bit-width=32' \
+    "$tmp/c_record_alias.out"
+grep -q 'member active bit-offset=32 bit-width=8' \
+    "$tmp/c_record_alias.out"
+grep -Eq 'layout c_record_alias.Outer target=(x86_64-linux|arm64-macos|x86_64-windows) size=16 align=4' \
+    "$tmp/c_record_alias.out"
+grep -q 'member synonym bit-offset=64 bit-width=64' \
+    "$tmp/c_record_alias.out"
+N00B_PATH="$program_dir" "$compiler" lower --dump-layout \
+    c_record_alias_import >"$tmp/c_record_alias_import.out" 2>&1 || {
+    cat "$tmp/c_record_alias_import.out"
+    exit 1
+}
+grep -Eq 'layout c_record_alias_import.ImportedOuter target=(x86_64-linux|arm64-macos|x86_64-windows) size=8 align=4' \
+    "$tmp/c_record_alias_import.out"
 if "$compiler" lower "$program_dir/c_record_default_child.n00b" \
     >"$tmp/c_record_default_child.out" 2>&1; then
     echo 'default-layout record used as C field unexpectedly lowered' >&2

@@ -37110,6 +37110,61 @@ record_field_has_c_scalar_representation(ir_module_t *module, th_type *type)
 static bool
 publish_c_record_symbol(n00bb_link_analysis_t *analysis,
                         core_translation_unit_t *owner,
+                        parse_sym_entry_t *symbol, ir_module_t *module);
+
+static parse_sym_entry_t *
+c_record_symbol_for_type(n00bb_link_analysis_t *analysis, th_type *type,
+                         core_translation_unit_t **owner_out)
+{
+    if (!analysis || !analysis->units.len || !type) return nullptr;
+    th_ctx *types = tu_state(analysis->units.data[0])->types;
+    uint64_t wanted = th_hash(types, th_resolve(type));
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+             scope; scope = scope->all_next) {
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                n00bb_record_layout_request_t *request = parse_sym_binding(
+                    symbol, CORE_STRING_STATIC(
+                        "n00bb.record-layout-request"));
+                if (!request || request->policy != N00BB_RECORD_C
+                    || request->alignment_expression || !symbol->type
+                    || th_hash(types, th_resolve(symbol->type)) != wanted)
+                    continue;
+                if (owner_out) *owner_out = unit;
+                return symbol;
+            }
+        }
+    }
+    return nullptr;
+}
+
+static bool
+publish_c_record_representation(n00bb_link_analysis_t *analysis,
+                                ir_module_t *module, th_type *type)
+{
+    type = th_resolve(type);
+    if (!type || th_kind_of(type) != TH_NAMED) return false;
+    core_translation_unit_t *owner = nullptr;
+    parse_sym_entry_t *record = c_record_symbol_for_type(analysis, type,
+                                                          &owner);
+    if (record) return publish_c_record_symbol(analysis, owner, record, module);
+    th_type *base = ir_type_definition(module, type);
+    base = base ? th_resolve(base) : nullptr;
+    if (!base || base == type || th_kind_of(base) != TH_NAMED
+        || !publish_c_record_representation(analysis, module, base))
+        return false;
+    return ir_layout_final(module, type, analysis->target.triple)
+        || ir_layout_copy_final(module, type, base, analysis->target.triple);
+}
+
+static bool
+publish_c_record_symbol(n00bb_link_analysis_t *analysis,
+                        core_translation_unit_t *owner,
                         parse_sym_entry_t *symbol, ir_module_t *module)
 {
     th_type *record = symbol->type ? th_apply_subst(
@@ -37137,24 +37192,12 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
             && record_field_has_c_scalar_representation(module, type);
         if (direct && !compatible && type && th_kind_of(th_resolve(type))
                 == TH_NAMED) {
-            core_translation_unit_t *child_owner = nullptr;
-            parse_sym_entry_t *child = type_symbol_in_loaded_imports(
-                owner, ir_module_types(module), type, &child_owner);
-            n00bb_record_layout_request_t *request = child
-                ? parse_sym_binding(child, CORE_STRING_STATIC(
-                    "n00bb.record-layout-request")) : nullptr;
-            if (child && child_owner && child != symbol && request
-                && request->policy == N00BB_RECORD_C
-                && !request->alignment_expression
-                && field_record_declaration(analysis->grammar,
-                                            child->decl_node)) {
-                compatible = publish_c_record_symbol(analysis, child_owner,
-                    child, module);
-                if (!compatible && call_units_failed(analysis->units.data,
-                                                      analysis->units.len)) {
-                    valid = false;
-                    break;
-                }
+            compatible = publish_c_record_representation(analysis, module,
+                                                          type);
+            if (!compatible && call_units_failed(analysis->units.data,
+                                                  analysis->units.len)) {
+                valid = false;
+                break;
             }
         }
         if (!compatible) {
