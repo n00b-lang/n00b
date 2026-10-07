@@ -145,6 +145,40 @@ main(void)
         N00B_ABI_STRING_SPAN, &empty_span, &pool_offset)
         && pool_offset == 3 && n00bb_abi_name_pool_size(span_pool) == 4);
     n00bb_abi_name_pool_free(span_pool);
+    n00bb_abi_name_pool_t *tagged_pool = n00bb_abi_name_pool_new();
+    n00b_abi_static_string_v1 tagged_rows[3] = {0};
+    assert(tagged_pool && n00bb_abi_name_pool_encode_tagged(tagged_pool,
+        CORE_STRING_STATIC("abc"), N00B_ABI_STRING_ASCII,
+        N00B_ABI_STRING_LONG, N00B_ABI_TABLE_STATIC_STRING, 0,
+        offsetof(n00b_abi_static_string_v1, value), &tagged_rows[0].value));
+    assert(n00bb_abi_name_pool_encode_tagged(tagged_pool,
+        CORE_STRING_STATIC(""), N00B_ABI_STRING_ASCII,
+        N00B_ABI_STRING_LONG, N00B_ABI_TABLE_STATIC_STRING, 1,
+        offsetof(n00b_abi_static_string_v1, value), &tagged_rows[1].value));
+    assert(n00bb_abi_name_pool_encode_tagged(tagged_pool,
+        CORE_STRING_STATIC("abc"), N00B_ABI_STRING_ASCII,
+        N00B_ABI_STRING_SHORT, N00B_ABI_TABLE_STATIC_STRING, 2,
+        offsetof(n00b_abi_static_string_v1, value), &tagged_rows[2].value));
+    assert(!n00bb_abi_name_pool_value_tagged(tagged_pool,
+        CORE_STRING_STATIC(first), N00B_ABI_STRING_ASCII,
+        N00B_ABI_STRING_SHORT, &value, &pool_offset));
+    assert(n00bb_abi_string_decode((const uint8_t *)&tagged_rows[0].value,
+        sizeof(tagged_rows[0].value), &header)
+        && header.tag == N00BB_ABI_STRING_LONG && header.length == 3);
+    assert(n00bb_abi_string_decode((const uint8_t *)&tagged_rows[1].value,
+        sizeof(tagged_rows[1].value), &header)
+        && header.tag == N00BB_ABI_STRING_LONG && header.length == 0);
+    assert(n00bb_abi_string_decode((const uint8_t *)&tagged_rows[2].value,
+        sizeof(tagged_rows[2].value), &header)
+        && header.tag == N00BB_ABI_STRING_SHORT && header.length == 3);
+    assert(n00bb_abi_name_pool_size(tagged_pool) == 4);
+    binary_entry.record_count = 3;
+    assert(n00bb_abi_name_pool_relocations(tagged_pool, &binary_entry, 1,
+        &relocations, &count) && count == 2
+        && relocations[0].addend_bits == 0
+        && relocations[1].addend_bits == 3);
+    core_free(relocations);
+    n00bb_abi_name_pool_free(tagged_pool);
     n00bb_abi_name_pool_free(pool);
     return 0;
 }

@@ -22,6 +22,32 @@ host_triple(void)
 #endif
 }
 
+static size_t
+count_string_pool_sections(const uint8_t *object, size_t object_bytes,
+                           const core_target_desc_t *target)
+{
+    const char *name = target->object_format == CORE_TARGET_OBJECT_MACH_O
+        ? "__n00b_strings"
+        : target->object_format == CORE_TARGET_OBJECT_COFF
+            ? ".rdata$S" : ".rodata.n00b_strings";
+    uint32_t section_count = 0;
+    assert(core_object_section_count(object, object_bytes,
+        target->object_format, &section_count));
+    size_t matches = 0;
+    for (uint32_t i = 1; i <= section_count; i++) {
+        core_object_section_t section;
+        if (!core_object_section_at(object, object_bytes,
+            target->object_format, i, &section)) continue;
+        matches += section.name_length == strlen(name)
+            && !memcmp(section.name, name, section.name_length)
+            && (target->object_format != CORE_TARGET_OBJECT_MACH_O
+                || (section.segment_length == strlen("__TEXT")
+                    && !memcmp(section.segment, "__TEXT",
+                        section.segment_length)));
+    }
+    return matches;
+}
+
 static uint8_t *
 read_object(const char *path, size_t *object_bytes)
 {
@@ -343,7 +369,8 @@ test_cycle_selection(char **paths)
     uint8_t *linked = nullptr;
     size_t linked_bytes = 0;
     assert(n00bb_abi_link_selected_objects(&selected, &target,
-        &linked, &linked_bytes));
+        &linked, &linked_bytes)
+        && count_string_pool_sections(linked, linked_bytes, &target) == 1);
     n00bb_abi_object_view_t final_view = {0};
     assert(n00bb_abi_object_open(&target, linked, linked_bytes,
         &final_view));
@@ -759,6 +786,111 @@ test_duplicate_signature(const char *path)
 }
 
 static void
+test_native_string_pool_consolidation(void)
+{
+    const char *triples[] = {
+        "x86_64-linux", "arm64-macos", "x86_64-windows",
+    };
+    const core_string_t value =
+        CORE_STRING_STATIC("the same complete immutable string");
+    for (size_t target_index = 0;
+         target_index < sizeof(triples) / sizeof(*triples);
+         target_index++) {
+        core_target_desc_t target;
+        assert(core_target_profile(triples[target_index], 0, &target));
+        bool mach = target.object_format == CORE_TARGET_OBJECT_MACH_O;
+        const char *pool_name = mach ? "__n00b_strings"
+            : target.object_format == CORE_TARGET_OBJECT_COFF
+                ? ".rdata$S" : ".rodata.n00b_strings";
+        n00bb_abi_name_pool_t *source_pool = n00bb_abi_name_pool_new();
+        n00bb_abi_name_pool_t *merged_pool = n00bb_abi_name_pool_new();
+        n00b_abi_string_v1 encoded;
+        size_t source_offset;
+        assert(source_pool && merged_pool
+            && n00bb_abi_name_pool_value(source_pool, value,
+                N00B_ABI_STRING_ASCII, &encoded, &source_offset)
+            && source_offset == 0);
+        n00bb_abi_native_sections_t sections = {
+            .sections = core_alloc_array(core_object_emit_section_t, 4),
+            .maps = core_alloc_array(n00bb_abi_native_section_map_t, 4),
+            .count = 4,
+        };
+        n00bb_abi_native_relocations_t native = {
+            .symbols = core_alloc_array(core_object_emit_symbol_t, 2),
+            .symbol_count = 2,
+            .relocations = core_alloc_array(core_object_emit_absolute64_t, 2),
+            .relocation_count = 2,
+        };
+        assert(sections.sections && sections.maps
+            && native.symbols && native.relocations);
+        for (size_t input = 0; input < 2; input++) {
+            size_t data_index = 2 * input, pool_index = data_index + 1;
+            uint8_t *data = core_alloc_array(uint8_t,
+                sizeof(n00b_abi_string_v1));
+            uint8_t *bytes = core_alloc_array(uint8_t, value.u8_bytes);
+            memcpy(data, &encoded, sizeof(encoded));
+            memcpy(bytes, value.data, value.u8_bytes);
+            sections.sections[data_index] =
+                (core_object_emit_section_t){
+                    .name = core_strndup(input ? ".data_b" : ".data_a", 7),
+                    .segment = mach ? core_strndup("__DATA", 6) : nullptr,
+                    .bytes = data, .size = sizeof(encoded), .alignment = 8,
+                    .writable = true,
+                };
+            sections.sections[pool_index] =
+                (core_object_emit_section_t){
+                    .name = core_strndup(pool_name, strlen(pool_name)),
+                    .segment = mach ? core_strndup("__TEXT", 6) : nullptr,
+                    .bytes = bytes, .size = value.u8_bytes, .alignment = 1,
+                };
+            sections.maps[data_index] =
+                (n00bb_abi_native_section_map_t){
+                    .input = input, .local_section_index = 2,
+                };
+            sections.maps[pool_index] =
+                (n00bb_abi_native_section_map_t){
+                    .input = input, .local_section_index = 3,
+                };
+            native.symbols[input] = (core_object_emit_symbol_t){
+                .name = core_strndup("n00b_string_pool", 16),
+                .section_index = (uint32_t)(3 + 2 * input),
+            };
+            native.relocations[input] =
+                (core_object_emit_absolute64_t){
+                    .section_index = (uint32_t)(2 + 2 * input),
+                    .symbol_index = (uint32_t)input,
+                };
+        }
+        uint8_t *first_data = (uint8_t *)sections.sections[0].bytes;
+        uint8_t selector = first_data[15];
+        first_data[15] = 0xff;
+        assert(!n00bb_abi_consolidate_native_strings(&target,
+            merged_pool, &sections, &native)
+            && sections.count == 4 && native.symbol_count == 2);
+        first_data[15] = selector;
+        assert(n00bb_abi_consolidate_native_strings(&target,
+            merged_pool, &sections, &native)
+            && sections.count == 2 && native.symbol_count == 0
+            && native.relocation_count == 2
+            && native.relocations[0].section_index == 2
+            && native.relocations[1].section_index == 3
+            && native.relocations[0].symbol_index == 0
+            && native.relocations[1].symbol_index == 0
+            && native.relocations[0].addend_bits == 0
+            && native.relocations[1].addend_bits == 0
+            && n00bb_abi_name_pool_size(merged_pool) == value.u8_bytes
+            && !memcmp(n00bb_abi_name_pool_bytes(merged_pool),
+                value.data, value.u8_bytes)
+            && !memcmp(sections.sections[0].bytes, &encoded,
+                sizeof(encoded)));
+        n00bb_abi_native_relocations_release(&native);
+        n00bb_abi_native_sections_release(&sections);
+        n00bb_abi_name_pool_free(merged_pool);
+        n00bb_abi_name_pool_free(source_pool);
+    }
+}
+
+static void
 test_link_index_patch(void)
 {
     typedef struct {
@@ -1025,10 +1157,121 @@ test_native_relocation_transfer(void)
     }
 }
 
+static void
+test_string_storage_link(const char *path)
+{
+    size_t source_bytes;
+    uint8_t *source = read_object(path, &source_bytes);
+    core_translation_unit_t unit = {0};
+    core_target_desc_t target;
+    assert(init_unit(&unit, "string_storage")
+        && core_target_profile(host_triple(), 0, &target));
+    core_link_unit_t *link = core_link_unit_new();
+    assert(link && core_link_unit_add_root(link, &unit)
+        && core_link_unit_finalize_graph(link));
+    n00bb_abi_object_input_t input = {
+        .module = unit.module.identifier,
+        .object = source, .object_bytes = source_bytes,
+    };
+    n00bb_abi_selected_objects_t selected = {0};
+    assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected));
+    uint8_t *linked = nullptr;
+    size_t linked_bytes = 0;
+    assert(n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes)
+        && count_string_pool_sections(linked, linked_bytes, &target) == 1);
+    n00bb_abi_object_view_t view = {0};
+    assert(n00bb_abi_object_open(&target, linked, linked_bytes, &view));
+    bool mach = target.object_format == CORE_TARGET_OBJECT_MACH_O;
+    const char *pool_name = mach ? "__n00b_strings"
+        : target.object_format == CORE_TARGET_OBJECT_COFF
+            ? ".rdata$S" : ".rodata.n00b_strings";
+    core_object_section_t pool;
+    assert(core_object_section_find(linked, linked_bytes,
+        target.object_format, mach ? "__TEXT" : nullptr,
+        pool_name, &pool));
+    const char *literal = "a longer immutable string value";
+    size_t offsets[2] = {0};
+    bool found[2] = {false, false};
+    const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(
+        &view, N00B_ABI_TABLE_STORAGE);
+    assert(table);
+    for (uint32_t i = 1; i < table->record_count; i++) {
+        const n00b_abi_storage_v1 *storage = n00bb_abi_object_row(
+            &view, N00B_ABI_TABLE_STORAGE, i);
+        const n00b_abi_symbol_v1 *symbol = storage
+            ? n00bb_abi_object_row(&view, N00B_ABI_TABLE_SYMBOL,
+                storage->symbol_index) : nullptr;
+        n00bb_abi_string_view_t name;
+        assert(symbol && n00bb_abi_object_string(&view,
+            &symbol->name, &name));
+        int which = name.length == strlen("long_label")
+            && !memcmp(name.bytes, "long_label", name.length) ? 0
+            : name.length == strlen("repeated_label")
+                && !memcmp(name.bytes, "repeated_label", name.length)
+                ? 1 : -1;
+        if (which < 0) continue;
+        core_object_section_t section;
+        assert(!found[which] && storage->segment_index
+            && core_object_section_at(linked, linked_bytes,
+                target.object_format, storage->segment_index, &section)
+            && storage->byte_offset <= section.size
+            && sizeof(n00b_abi_string_v1)
+                <= section.size - storage->byte_offset);
+        n00bb_abi_string_header_t header;
+        assert(n00bb_abi_string_decode(
+            section.bytes + storage->byte_offset,
+            sizeof(n00b_abi_string_v1), &header)
+            && header.tag == N00BB_ABI_STRING_LONG
+            && header.length == strlen(literal));
+        bool relocated = false;
+        for (uint32_t j = 0; j < section.relocation_count; j++) {
+            core_object_absolute64_relocation_t relocation;
+            assert(core_object_absolute64_relocation_at(&section,
+                target.object_format, j, &relocation));
+            if (relocation.section_offset != storage->byte_offset)
+                continue;
+            assert(!relocated);
+            uint64_t offset;
+            if (relocation.target_is_section) {
+                assert(relocation.native_symbol_index == pool.native_index
+                    && relocation.addend_bits >= pool.virtual_address);
+                offset = relocation.addend_bits - pool.virtual_address;
+            }
+            else {
+                core_object_symbol_t target_symbol;
+                assert(core_object_symbol_at(linked, linked_bytes,
+                    target.object_format, &section,
+                    relocation.native_symbol_index, &target_symbol)
+                    && target_symbol.native_section_index
+                        == pool.native_index);
+                offset = target_symbol.section_offset
+                    + relocation.addend_bits;
+            }
+            assert(offset <= pool.size
+                && strlen(literal) <= pool.size - offset
+                && !memcmp(pool.bytes + offset, literal,
+                    strlen(literal)));
+            offsets[which] = (size_t)offset;
+            relocated = true;
+        }
+        assert(relocated);
+        found[which] = true;
+    }
+    assert(found[0] && found[1] && offsets[0] == offsets[1]);
+    n00bb_abi_object_close(&view);
+    core_free(linked);
+    n00bb_abi_selected_objects_release(&selected);
+    core_link_unit_free(link);
+    core_translation_unit_release(&unit);
+    free(source);
+}
+
 int
 main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3 || argc == 4);
+    test_native_string_pool_consolidation();
     test_link_index_patch();
     test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();
@@ -1045,6 +1288,8 @@ main(int argc, char **argv)
     if (argc == 3) {
         if (!strcmp(argv[1], "--self"))
             test_self_import_selection(argv[2]);
+        else if (!strcmp(argv[1], "--string-storage"))
+            test_string_storage_link(argv[2]);
         else if (!strcmp(argv[1], "--variant"))
             test_duplicate_member(argv[2], true);
         else if (!strcmp(argv[1], "--enum"))
@@ -1167,7 +1412,9 @@ main(int argc, char **argv)
     uint8_t *combined = nullptr;
     size_t combined_bytes = 0;
     assert(n00bb_abi_link_selected_objects(&selected, &target,
-        &combined, &combined_bytes));
+        &combined, &combined_bytes)
+        && count_string_pool_sections(combined, combined_bytes,
+            &target) == 1);
     n00bb_abi_object_view_t combined_view = {0};
     assert(n00bb_abi_object_open(&target, combined, combined_bytes,
         &combined_view)

@@ -218,6 +218,15 @@ bool n00bb_abi_apply_link_patches(
     const n00bb_abi_merged_rows_t *merged,
     n00bb_abi_native_sections_t *sections);
 
+/* Moves compiler-emitted long string payloads into the merged pool and
+ * removes the source TU pools. Native section indexes, symbols, and pointer
+ * relocations are rebased together; on failure discard all staged values. */
+bool n00bb_abi_consolidate_native_strings(
+    const core_target_desc_t *target,
+    n00bb_abi_name_pool_t *pool,
+    n00bb_abi_native_sections_t *sections,
+    n00bb_abi_native_relocations_t *native);
+
 /* Consolidates selected TU objects into one relocatable object. Link-only
  * requirements are removed only after resolution; unsupported patch and
  * dispatch records fail without changing the output. The object is owned

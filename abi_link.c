@@ -1511,8 +1511,7 @@ n00bb_abi_repool_row_strings(
             || !n00bb_abi_name_pool_encode_tagged(pool,
                 core_string_borrow((char *)decoded.bytes, decoded.length),
                 (n00b_abi_string_encoding_v1)header.encoding,
-                header.tag == N00BB_ABI_STRING_SPAN
-                    ? N00B_ABI_STRING_SPAN : N00B_ABI_STRING_LONG,
+                (n00b_abi_string_tag_v1)header.tag,
                 kind, final_index, field->offset,
                 (void *)(destination + field->offset))) return false;
     }

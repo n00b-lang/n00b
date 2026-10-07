@@ -74,7 +74,9 @@ n00bb_abi_name_pool_value(n00bb_abi_name_pool_t *pool,
     n00b_abi_string_v1 *out, size_t *pool_offset)
 {
     return n00bb_abi_name_pool_value_tagged(pool, text, encoding,
-        N00B_ABI_STRING_LONG, out, pool_offset);
+        text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY
+            ? N00B_ABI_STRING_SHORT : N00B_ABI_STRING_LONG,
+        out, pool_offset);
 }
 
 bool
@@ -86,12 +88,13 @@ n00bb_abi_name_pool_value_tagged(n00bb_abi_name_pool_t *pool,
     if (!pool || !out || !pool_offset
         || (text.u8_bytes && !text.data)
         || encoding > N00B_ABI_STRING_UTF8
-        || (tag != N00B_ABI_STRING_LONG
+        || (tag != N00B_ABI_STRING_SHORT
+            && tag != N00B_ABI_STRING_LONG
             && tag != N00B_ABI_STRING_SPAN)) return false;
     *out = (n00b_abi_string_v1){0};
     *pool_offset = 0;
-    if (tag != N00B_ABI_STRING_SPAN
-        && text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY) {
+    if (tag == N00B_ABI_STRING_SHORT) {
+        if (text.u8_bytes > N00BB_ABI_STRING_SHORT_CAPACITY) return false;
         if (text.u8_bytes)
             memcpy(out->short_value.bytes, text.data, text.u8_bytes);
         out->short_value.selector = (uint8_t)text.u8_bytes
@@ -106,13 +109,13 @@ n00bb_abi_name_pool_value_tagged(n00bb_abi_name_pool_t *pool,
     size_t offset;
     if (found) offset = name->offset;
     else {
-        bool empty_span = tag == N00B_ABI_STRING_SPAN && !text.u8_bytes;
-        size_t backing_bytes = text.u8_bytes + (size_t)empty_span;
+        bool empty = !text.u8_bytes;
+        size_t backing_bytes = text.u8_bytes + (size_t)empty;
         if (pool->bytes.byte_len > SIZE_MAX - 2
             || backing_bytes > SIZE_MAX - pool->bytes.byte_len - 2)
             return false;
         offset = pool->bytes.byte_len;
-        if (empty_span) {
+        if (empty) {
             const char zero = 0;
             core_buffer_append(&pool->bytes, &zero, 1);
         }
@@ -146,7 +149,9 @@ n00bb_abi_name_pool_encode_with_encoding(
     uint32_t record_index, size_t field_offset, n00b_abi_string_v1 *out)
 {
     return n00bb_abi_name_pool_encode_tagged(pool, text, encoding,
-        N00B_ABI_STRING_LONG, table_kind, record_index, field_offset, out);
+        text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY
+            ? N00B_ABI_STRING_SHORT : N00B_ABI_STRING_LONG,
+        table_kind, record_index, field_offset, out);
 }
 
 bool
@@ -160,8 +165,7 @@ n00bb_abi_name_pool_encode_tagged(
     size_t offset = 0;
     if (!n00bb_abi_name_pool_value_tagged(pool, text, encoding, tag,
                                    out, &offset)) return false;
-    if (tag != N00B_ABI_STRING_SPAN
-        && text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY) return true;
+    if (tag == N00B_ABI_STRING_SHORT) return true;
     core_list_push(pool->pending, ((pending_name_relocation_t){
         .table_kind = table_kind,
         .record_index = record_index,

@@ -160,10 +160,20 @@ n00bb_abi_link_selected_objects(
         && n00bb_abi_apply_link_patches(selected, plan, &merged, &sections)
         && n00bb_abi_collect_native_relocations(selected, &sections,
                                                 &native)
+        && n00bb_abi_consolidate_native_strings(target, merged.strings,
+                                                &sections, &native);
+    uint32_t pending_pool_symbol = valid
+        ? (uint32_t)native.symbol_count : 0;
+    valid = valid
         && n00bb_abi_rebase_native_references(&merged, sections.maps,
                                               sections.count)
         && n00bb_abi_add_native_bindings(selected, &merged, &sections,
                                          &native);
+    if (valid)
+        for (size_t i = 0; i < native.relocation_count; i++)
+            if (native.relocations[i].symbol_index == pending_pool_symbol)
+                native.relocations[i].symbol_index =
+                    (uint32_t)native.symbol_count;
 
     size_t row_count = 0;
     if (valid) {
