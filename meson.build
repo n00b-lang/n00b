@@ -156,7 +156,7 @@ abi_record_object_test = executable(
 
 abi_link_input_test = executable(
     'abi-link-input-test',
-    ['tests/abi_link_input.c', 'abi_link.c',
+    ['tests/abi_link_input.c', 'abi_link.c', 'abi_string.c',
      'abi_container.c', 'abi_directory.c'],
     dependencies: lantern,
 )

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "abi_link.h"
+#include "abi_string.h"
 #include "n00b-abi-v1.h"
 
 static const char *
@@ -49,11 +50,27 @@ main(int argc, char **argv)
         N00B_ABI_TABLE_MODULE, 1);
     const n00b_abi_shape_v1 *shape = n00bb_abi_object_row(&view,
         N00B_ABI_TABLE_SHAPE, 1);
+    const n00b_abi_native_binding_v1 *binding = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_NATIVE_BINDING, 1);
+    n00bb_abi_string_view_t name = {0};
     assert(nil && nil->kind == N00B_ABI_TYPE_NIL
         && module && module->package_index == 1
         && shape && shape->rank == 1 && shape->total_count == 2
         && !n00bb_abi_object_row(&view, N00B_ABI_TABLE_TYPE,
                                  types->record_count));
+    assert(n00bb_abi_object_string(&view, &module->full_path, &name)
+        && name.length == strlen("array_storage")
+        && !memcmp(name.bytes, "array_storage", name.length));
+    assert(binding && n00bb_abi_object_string(&view,
+        &binding->native_name, &name)
+        && name.length > N00BB_ABI_STRING_SHORT_CAPACITY
+        && name.length >= strlen("values")
+        && !memcmp(name.bytes + name.length - strlen("values"),
+                   "values", strlen("values")));
+    n00bb_abi_string_view_t unchanged_name = {.bytes = object, .length = 1};
+    assert(!n00bb_abi_object_string(&view,
+        (const n00b_abi_string_v1 *)object, &unchanged_name)
+        && unchanged_name.bytes == object && unchanged_name.length == 1);
     size_t metadata_offset = (size_t)(view.metadata.bytes - object);
     size_t checksum_byte = metadata_offset + view.header.total_extent - 1;
     n00bb_abi_object_close(&view);
