@@ -1211,6 +1211,126 @@ typedef struct {
     bool present;
 } abi_row_origin_t;
 
+typedef struct {
+    n00bb_abi_string_view_t name;
+    uint32_t final_index;
+} abi_module_target_t;
+
+static core_hash_value_t
+module_target_hash(void *value)
+{
+    const abi_module_target_t *target = value;
+    return core_hash_raw(target->name.bytes, target->name.length);
+}
+
+static bool
+module_target_eq(const void *left, const void *right)
+{
+    const abi_module_target_t *a = left, *b = right;
+    return a->name.length == b->name.length
+        && !memcmp(a->name.bytes, b->name.bytes, a->name.length);
+}
+
+static bool
+module_import_count(const n00bb_abi_selected_objects_t *selected,
+                    uint32_t *out_count)
+{
+    uint32_t count = 0;
+    for (size_t input = 0; input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(
+            view, N00B_ABI_TABLE_REQUIREMENT);
+        if (!table || !table->record_count) return false;
+        for (uint32_t local = 1; local < table->record_count; local++) {
+            const n00b_abi_requirement_v1 *row = n00bb_abi_object_row(
+                view, N00B_ABI_TABLE_REQUIREMENT, local);
+            if (row->symbol_kind != N00B_ABI_SYMBOL_MODULE) continue;
+            if (row->requesting_module_index != 1 || count == UINT32_MAX)
+                return false;
+            count++;
+        }
+    }
+    *out_count = count;
+    return true;
+}
+
+static bool
+resolve_module_imports(const n00bb_abi_selected_objects_t *selected,
+                       const n00bb_abi_index_plan_t *plan,
+                       n00bb_abi_merged_rows_t *merged,
+                       uint32_t first_import)
+{
+    n00bb_abi_merged_table_t *modules = nullptr, *stream = nullptr;
+    for (size_t i = 0; i < merged->table_count; i++) {
+        if (merged->tables[i].kind == N00B_ABI_TABLE_MODULE)
+            modules = &merged->tables[i];
+        else if (merged->tables[i].kind == N00B_ABI_TABLE_U32_STREAM)
+            stream = &merged->tables[i];
+    }
+    if (!modules || !stream || stream->record_bytes != sizeof(uint32_t))
+        return false;
+
+    abi_module_target_t *targets = core_alloc_array(
+        abi_module_target_t, selected->count);
+    core_indexed_table_t *by_name = core_indexed_table_new(0, UINT32_MAX,
+        module_target_hash, module_target_eq);
+    bool valid = by_name != nullptr;
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00b_abi_module_v1 *source = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_MODULE, 1);
+        uint32_t final;
+        valid = source && n00bb_abi_object_string(view,
+            &source->full_path, &targets[input].name)
+            && n00bb_abi_index_plan_map(plan, input,
+                N00B_ABI_TABLE_MODULE, 1, &final)
+            && final && final < modules->record_count;
+        if (!valid) break;
+        targets[input].final_index = final;
+        bool inserted = false;
+        valid = core_indexed_table_intern(by_name, &targets[input],
+            &targets[input], &inserted) && inserted;
+    }
+    uint32_t cursor = first_import;
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(
+            view, N00B_ABI_TABLE_REQUIREMENT);
+        n00b_abi_module_v1 *module = (void *)(modules->records
+            + (size_t)targets[input].final_index * modules->record_bytes);
+        uint32_t start = cursor;
+        for (uint32_t local = 1; valid && local < table->record_count;
+             local++) {
+            const n00b_abi_requirement_v1 *row = n00bb_abi_object_row(
+                view, N00B_ABI_TABLE_REQUIREMENT, local);
+            if (row->symbol_kind != N00B_ABI_SYMBOL_MODULE) continue;
+            n00bb_abi_string_view_t path;
+            valid = n00bb_abi_object_string(view, &row->full_path, &path);
+            if (!valid) break;
+            abi_module_target_t lookup = {.name = path};
+            const core_indexed_entry_t *found = core_indexed_table_find(
+                by_name, &lookup);
+            valid = found && cursor < stream->record_count;
+            if (!valid) break;
+            const abi_module_target_t *target = found->value;
+            core_le_store_u32(stream->records
+                + (size_t)cursor * sizeof(uint32_t), target->final_index);
+            cursor++;
+        }
+        if (!valid) break;
+        if (cursor != start) {
+            valid = !module->imports.first && !module->imports.count;
+            module->imports = (n00b_abi_range_v1){
+                .first = start, .count = cursor - start,
+            };
+        }
+    }
+    valid = valid && cursor == stream->record_count;
+    core_indexed_table_free(by_name);
+    core_free(targets);
+    return valid;
+}
+
 const n00bb_abi_merged_table_t *
 n00bb_abi_merged_table(const n00bb_abi_merged_rows_t *merged, uint32_t kind)
 {
@@ -1264,9 +1384,12 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
         abi_row_origin_t *, schema_count);
     size_t max_width = 0;
     uint32_t base_u32_count = 0;
+    uint32_t import_count = 0;
     bool valid = schemas && schema_count && built.strings
         && n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_U32_STREAM,
-                                      &base_u32_count);
+                                      &base_u32_count)
+        && module_import_count(selected, &import_count)
+        && import_count <= UINT32_MAX - manifests.u32_count;
     for (size_t i = 0; valid && i < schema_count; i++) {
         const n00bb_abi_table_schema_t *schema = &schemas[i];
         uint32_t count = 0;
@@ -1283,7 +1406,7 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
             break;
         }
         if (schema->kind == N00B_ABI_TABLE_U32_STREAM)
-            count = manifests.u32_count;
+            count = manifests.u32_count + import_count;
         if ((schema->kind == N00B_ABI_TABLE_PACKAGE
                 && count != manifests.package_count)
             || (schema->kind == N00B_ABI_TABLE_SCC
@@ -1310,7 +1433,7 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                    (size_t)count * schema->record_bytes);
         else if (schema->kind == N00B_ABI_TABLE_U32_STREAM)
             memcpy(built.tables[i].records, manifests.u32_stream,
-                   (size_t)count * schema->record_bytes);
+                   (size_t)manifests.u32_count * schema->record_bytes);
     }
 
     uint8_t *scratch = valid ? core_alloc_size(1, max_width) : nullptr;
@@ -1392,7 +1515,7 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
     const n00bb_abi_merged_table_t *u32_table =
         n00bb_abi_merged_table(&built, N00B_ABI_TABLE_U32_STREAM);
     valid = valid && u32_table && u32_table->record_bytes == sizeof(uint32_t)
-        && u32_table->record_count == manifests.u32_count;
+        && u32_table->record_count == manifests.u32_count + import_count;
     for (size_t input = 0; valid && input < selected->count; input++) {
         const n00bb_abi_object_view_t *view = &selected->views[input];
         const n00bb_abi_directory_entry_t *source = n00bb_abi_object_table(
@@ -1412,6 +1535,8 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
     }
     if (valid) memcpy(u32_table->records, manifests.u32_stream,
                       (size_t)manifests.u32_count * sizeof(uint32_t));
+    if (valid) valid = resolve_module_imports(selected, plan, &built,
+                                               manifests.u32_count);
 
     for (size_t ti = 0; valid && ti < schema_count; ti++) {
         n00bb_abi_merged_table_t *table = &built.tables[ti];

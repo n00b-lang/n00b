@@ -249,15 +249,23 @@ test_cycle_selection(char **paths)
             n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_REQUIREMENT,
                                   (uint32_t)i + 1);
         assert(row && row->package_index == 1 && row->scc_index == 1
-            && !row->imports.count && requirement
+            && row->imports.count == 1 && requirement
             && requirement->requesting_module_index == i + 1);
         const uint32_t *values = (const void *)merged_u32->records;
         assert(values[merged_package->modules.first + i] == i + 1
-            && values[merged_scc->members.first + i] == i + 1);
+            && values[merged_scc->members.first + i] == i + 1
+            && values[row->imports.first] == (i + 1) % 3 + 1);
     }
     assert(n00bb_abi_name_pool_size(merged.strings) > 0);
     n00bb_abi_merged_rows_release(&merged);
     assert(!merged.tables && !merged.strings);
+    n00b_abi_requirement_v1 *bad_import = (void *)n00bb_abi_object_row(
+        &selected.views[0], N00B_ABI_TABLE_REQUIREMENT, 1);
+    n00b_abi_string_v1 saved_import = bad_import->full_path;
+    bad_import->full_path = (n00b_abi_string_v1){0};
+    assert(!n00bb_abi_merge_rows(&selected, plan, &merged)
+        && !merged.tables && !merged.strings);
+    bad_import->full_path = saved_import;
     n00b_abi_package_v1 *conflicting_package = (void *)
         n00bb_abi_object_row(&selected.views[1], N00B_ABI_TABLE_PACKAGE, 1);
     uint32_t saved_visibility = conflicting_package->visibility;
@@ -309,6 +317,18 @@ test_self_import_selection(const char *path)
         && manifests.u32_stream[manifests.sccs[1].members.first] == 1
         && manifests.u32_stream[manifests.sccs[1].lexical_order.first] == 1);
     n00bb_abi_manifest_rows_release(&manifests);
+    n00bb_abi_merged_rows_t merged = {0};
+    assert(n00bb_abi_merge_rows(&selected, plan, &merged));
+    const n00b_abi_module_v1 *merged_module = n00bb_abi_merged_row(
+        &merged, N00B_ABI_TABLE_MODULE, 1);
+    const n00bb_abi_merged_table_t *stream = n00bb_abi_merged_table(
+        &merged, N00B_ABI_TABLE_U32_STREAM);
+    assert(merged_module && merged_module->imports.count == 1
+        && stream && merged_module->imports.first < stream->record_count
+        && core_le_load_u32(stream->records
+            + (size_t)merged_module->imports.first * stream->record_bytes)
+               == 1);
+    n00bb_abi_merged_rows_release(&merged);
     n00bb_abi_index_plan_free(plan);
     n00bb_abi_selected_objects_release(&selected);
     core_link_unit_free(link);
