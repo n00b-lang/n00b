@@ -1409,6 +1409,71 @@ test_semantic_rows_link(const char *path, bool trait)
     free(source);
 }
 
+static uint32_t
+generic_function_type(const n00bb_abi_object_view_t *view, const char *name)
+{
+    const n00bb_abi_directory_entry_t *functions = n00bb_abi_object_table(
+        view, N00B_ABI_TABLE_FUNCTION);
+    assert(functions);
+    for (uint32_t i = 1; i < functions->record_count; i++) {
+        const n00b_abi_function_v1 *function = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_FUNCTION, i);
+        const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_SYMBOL, function->symbol_index);
+        n00bb_abi_string_view_t text;
+        assert(symbol && n00bb_abi_object_string(view, &symbol->name, &text));
+        if (text.length == strlen(name)
+            && !memcmp(text.bytes, name, text.length))
+            return symbol->type_index;
+    }
+    assert(false);
+    return 0;
+}
+
+static void
+test_generic_type_identity(const char *path)
+{
+    size_t source_bytes;
+    uint8_t *source = read_object(path, &source_bytes);
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_object_view_t original = {0};
+    assert(n00bb_abi_object_open(&target, source, source_bytes, &original));
+    uint32_t first = generic_function_type(&original, "first");
+    uint32_t second = generic_function_type(&original, "second");
+    const n00b_abi_type_v1 *a = n00bb_abi_object_row(&original,
+        N00B_ABI_TABLE_TYPE, first);
+    const n00b_abi_type_v1 *b = n00bb_abi_object_row(&original,
+        N00B_ABI_TABLE_TYPE, second);
+    assert(first != second && a && b && a->typehash == b->typehash
+        && (a->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+        && (b->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE));
+
+    core_translation_unit_t unit = {0};
+    assert(init_unit(&unit, "generic_collision"));
+    core_link_unit_t *link = core_link_unit_new();
+    assert(link && core_link_unit_add_root(link, &unit)
+        && core_link_unit_finalize_graph(link));
+    n00bb_abi_object_input_t input = {
+        .module = unit.module.identifier,
+        .object = source, .object_bytes = source_bytes,
+    };
+    uint8_t *linked = nullptr;
+    size_t linked_bytes = 0;
+    assert(n00bb_abi_link_objects(link, &target, &input, 1,
+        &linked, &linked_bytes));
+    n00bb_abi_object_view_t final = {0};
+    assert(n00bb_abi_object_open(&target, linked, linked_bytes, &final));
+    assert(generic_function_type(&final, "first")
+        != generic_function_type(&final, "second"));
+    n00bb_abi_object_close(&final);
+    core_free(linked);
+    core_link_unit_free(link);
+    core_translation_unit_release(&unit);
+    n00bb_abi_object_close(&original);
+    free(source);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1436,6 +1501,8 @@ main(int argc, char **argv)
             test_semantic_rows_link(argv[2], false);
         else if (!strcmp(argv[1], "--trait-methods"))
             test_semantic_rows_link(argv[2], true);
+        else if (!strcmp(argv[1], "--generic-collision"))
+            test_generic_type_identity(argv[2]);
         else if (!strcmp(argv[1], "--variant"))
             test_duplicate_member(argv[2], true);
         else if (!strcmp(argv[1], "--enum"))

@@ -2,6 +2,7 @@
 
 #include "abi_string.h"
 #include "lib/alloc.h"
+#include "lib/buffer.h"
 #include "lib/byteorder.h"
 #include "lib/hash.h"
 #include "lib/indexed_table.h"
@@ -374,8 +375,11 @@ typedef struct {
     uint64_t auxiliary;
     size_t input_index;
     uint32_t local_index;
+    core_buffer_t *owned_bytes;
     bool unique;
 } abi_link_key_t;
+
+static bool nonconcrete_key_init(abi_link_key_t *key);
 
 static core_hash_value_t
 link_key_hash(void *value)
@@ -420,12 +424,12 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
         if (type->kind == N00B_ABI_TYPE_VARIABLE) {
             if (type->typehash || !type->typevar_owner_scope_index)
                 return false;
-            key->scalar = ((uint64_t)type->typevar_owner_scope_index << 32)
-                | type->typevar_ordinal;
-            key->auxiliary = key->input_index + 1;
+            return nonconcrete_key_init(key);
         }
         else {
             if (!type->typehash) return false;
+            if (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+                return nonconcrete_key_init(key);
             key->scalar = type->typehash;
         }
         key->bytes = (const uint8_t *)&key->scalar;
@@ -489,6 +493,166 @@ indexed_range_row(const n00bb_abi_object_view_t *view,
     uint32_t index = core_le_load_u32(slot);
     if (!index && target_kind != N00B_ABI_TABLE_TYPE) return nullptr;
     return n00bb_abi_object_row(view, target_kind, index);
+}
+
+static void
+key_append_u64(core_buffer_t *out, uint64_t value)
+{
+    core_buffer_append(out, (const char *)&value, sizeof(value));
+}
+
+static bool
+key_append_string(const n00bb_abi_object_view_t *view,
+                  const n00b_abi_string_v1 *value, core_buffer_t *out)
+{
+    n00bb_abi_string_view_t string;
+    if (!n00bb_abi_object_string(view, value, &string)) return false;
+    key_append_u64(out, string.length);
+    core_buffer_append(out, (const char *)string.bytes, string.length);
+    return true;
+}
+
+static bool
+key_append_variable(const n00bb_abi_object_view_t *view,
+                    size_t input_index, const n00b_abi_type_v1 *type,
+                    core_buffer_t *out)
+{
+    const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(view,
+        N00B_ABI_TABLE_SCOPE, type->typevar_owner_scope_index);
+    if (!scope || !type->typevar_owner_scope_index) return false;
+    core_buffer_putc(out, 'V');
+    if (scope->source_location_index && scope->module_index) {
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_MODULE, scope->module_index);
+        const n00b_abi_source_location_v1 *location =
+            n00bb_abi_object_row(view, N00B_ABI_TABLE_SOURCE_LOCATION,
+                scope->source_location_index);
+        const n00b_abi_source_file_v1 *file = location
+            ? n00bb_abi_object_row(view, N00B_ABI_TABLE_SOURCE_FILE,
+                location->file_index) : nullptr;
+        if (!module || !location || !file) return false;
+        core_buffer_putc(out, 'S');
+        if (!key_append_string(view, &module->full_path, out)
+            || !key_append_string(view, &file->path, out)
+            || !key_append_string(view, &scope->kind_name, out)) return false;
+        key_append_u64(out, file->source_identity);
+        key_append_u64(out, location->start_byte_offset);
+        key_append_u64(out, location->end_byte_offset);
+    }
+    else {
+        core_buffer_putc(out, 'L');
+        key_append_u64(out, input_index);
+        key_append_u64(out, type->typevar_owner_scope_index);
+    }
+    key_append_u64(out, type->typevar_ordinal);
+    return true;
+}
+
+static bool
+key_append_type_variables(const n00bb_abi_object_view_t *view,
+                          size_t input_index, uint32_t type_index,
+                          uint8_t *active, core_buffer_t *out);
+
+static bool
+key_append_parameters(const n00bb_abi_object_view_t *view,
+                      size_t input_index, n00b_abi_range_v1 range,
+                      uint8_t *active, core_buffer_t *out)
+{
+    if (!valid_index_range(view, range)) return false;
+    for (uint32_t i = 0; i < range.count; i++) {
+        const n00b_abi_parameter_v1 *parameter = indexed_range_row(view,
+            range, i, N00B_ABI_TABLE_PARAMETER);
+        if (!parameter || !key_append_type_variables(view, input_index,
+                parameter->type_index, active, out)) return false;
+    }
+    return true;
+}
+
+static bool
+key_append_type_variables(const n00bb_abi_object_view_t *view,
+                          size_t input_index, uint32_t type_index,
+                          uint8_t *active, core_buffer_t *out)
+{
+    const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
+        N00B_ABI_TABLE_TYPE, type_index);
+    if (!type) return false;
+    if (type->kind == N00B_ABI_TYPE_VARIABLE)
+        return key_append_variable(view, input_index, type, out);
+    if (!(type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)) return true;
+    if (active[type_index]) return true;
+    active[type_index] = 1;
+    bool valid = valid_index_range(view, type->components)
+        && valid_index_range(view, type->fields_or_arms);
+    for (uint32_t i = 0; valid && i < type->components.count; i++) {
+        const uint8_t *slot = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_U32_STREAM, type->components.first + i);
+        valid = slot && key_append_type_variables(view, input_index,
+            core_le_load_u32(slot), active, out);
+    }
+    if (valid && type->call_signature_index) {
+        const n00b_abi_call_signature_v1 *signature =
+            n00bb_abi_object_row(view, N00B_ABI_TABLE_CALL_SIGNATURE,
+                type->call_signature_index);
+        valid = signature && key_append_type_variables(view, input_index,
+                signature->success_type_index, active, out)
+            && key_append_type_variables(view, input_index,
+                signature->failure_type_index, active, out)
+            && key_append_parameters(view, input_index,
+                signature->positional_parameters, active, out)
+            && key_append_parameters(view, input_index,
+                signature->keyword_parameters, active, out);
+        if (valid && signature->rest_parameter_index) {
+            const n00b_abi_parameter_v1 *rest = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_PARAMETER, signature->rest_parameter_index);
+            valid = rest && key_append_type_variables(view, input_index,
+                rest->type_index, active, out);
+        }
+    }
+    uint32_t member_kind = type->kind == N00B_ABI_TYPE_RECORD
+        ? N00B_ABI_TABLE_FIELD
+        : type->kind == N00B_ABI_TYPE_VARIANT ? N00B_ABI_TABLE_ARM
+        : type->kind == N00B_ABI_TYPE_TRAIT ? N00B_ABI_TABLE_TRAIT_METHOD
+        : 0;
+    for (uint32_t i = 0; valid && member_kind
+         && i < type->fields_or_arms.count; i++) {
+        const void *member = indexed_range_row(view, type->fields_or_arms,
+            i, member_kind);
+        if (!member) { valid = false; break; }
+        uint32_t child = member_kind == N00B_ABI_TABLE_TRAIT_METHOD
+            ? ((const n00b_abi_trait_method_v1 *)member)->signature_type_index
+            : ((const n00b_abi_field_v1 *)member)->child_type_index;
+        valid = key_append_type_variables(view, input_index, child,
+            active, out);
+    }
+    active[type_index] = 0;
+    return valid;
+}
+
+static bool
+nonconcrete_key_init(abi_link_key_t *key)
+{
+    const n00b_abi_type_v1 *type = key->row;
+    key->owned_bytes = core_buffer_empty();
+    core_buffer_putc(key->owned_bytes,
+        type->kind == N00B_ABI_TYPE_VARIABLE ? 'V' : 'N');
+    if (type->kind == N00B_ABI_TYPE_VARIABLE) {
+        if (!key_append_variable(key->view, key->input_index, type,
+                key->owned_bytes)) return false;
+    }
+    else {
+        const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
+            key->view, N00B_ABI_TABLE_TYPE);
+        if (!types) return false;
+        key_append_u64(key->owned_bytes, type->typehash);
+        uint8_t *active = core_alloc_array(uint8_t, types->record_count);
+        bool valid = key_append_type_variables(key->view, key->input_index,
+            key->local_index, active, key->owned_bytes);
+        core_free(active);
+        if (!valid) return false;
+    }
+    key->bytes = (const uint8_t *)key->owned_bytes->data;
+    key->length = key->owned_bytes->byte_len;
+    return true;
 }
 
 static bool
@@ -964,6 +1128,8 @@ n00bb_abi_index_plan_build(const n00bb_abi_selected_objects_t *selected)
     for (size_t i = 0; i < kind_count; i++)
         core_indexed_table_free(tables[i]);
     core_free(tables);
+    for (size_t i = 0; i < next_key; i++)
+        core_buffer_free(keys[i].owned_bytes);
     core_free(keys);
     if (!valid) {
         n00bb_abi_index_plan_free(plan);
