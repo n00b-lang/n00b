@@ -1396,6 +1396,7 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/function.n00b"
 [ -s "$tmp/function_abi.o" ]
 "$abi_record_object_test" "$tmp/function_abi.o" function
+"$abi_link_input_test" --signature "$tmp/function_abi.o"
 "$compiler" compile --output "$tmp/constraint_abi.o" \
     "$program_dir/../abi/where_excludes.n00b"
 [ -s "$tmp/constraint_abi.o" ]

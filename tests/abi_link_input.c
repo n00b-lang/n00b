@@ -34,6 +34,52 @@ read_object(const char *path, size_t *object_bytes)
     return object;
 }
 
+static void
+test_static_string_identity(void)
+{
+    n00b_abi_static_string_v1 rows[2][2] = {0};
+    n00bb_abi_name_pool_t *pool = n00bb_abi_name_pool_new();
+    assert(pool);
+    assert(n00bb_abi_name_pool_encode_with_encoding(pool,
+        CORE_STRING_STATIC("same"), N00B_ABI_STRING_BINARY,
+        N00B_ABI_TABLE_STATIC_STRING, 1, 0, &rows[0][1].value)
+        && n00bb_abi_name_pool_encode_with_encoding(pool,
+            CORE_STRING_STATIC("same"), N00B_ABI_STRING_ASCII,
+            N00B_ABI_TABLE_STATIC_STRING, 1, 0, &rows[1][1].value));
+    n00bb_abi_directory_entry_t directories[2] = {0};
+    n00bb_abi_object_view_t views[2] = {0};
+    for (size_t i = 0; i < 2; i++) {
+        directories[i] = (n00bb_abi_directory_entry_t){
+            .kind = N00B_ABI_TABLE_STATIC_STRING,
+            .record_count = 2,
+            .record_bytes = sizeof(n00b_abi_static_string_v1),
+        };
+        views[i].metadata.bytes = (const uint8_t *)rows[i];
+        views[i].metadata.size = sizeof(rows[i]);
+        views[i].directory = &directories[i];
+        views[i].directory_count = 1;
+    }
+    n00bb_abi_selected_objects_t selected = {.views = views, .count = 2};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    uint32_t count, left, right;
+    assert(plan && n00bb_abi_index_plan_count(plan,
+        N00B_ABI_TABLE_STATIC_STRING, &count) && count == 3
+        && n00bb_abi_index_plan_map(plan, 0,
+            N00B_ABI_TABLE_STATIC_STRING, 1, &left)
+        && n00bb_abi_index_plan_map(plan, 1,
+            N00B_ABI_TABLE_STATIC_STRING, 1, &right)
+        && left != right);
+    n00bb_abi_index_plan_free(plan);
+    assert(n00bb_abi_name_pool_encode_with_encoding(pool,
+        CORE_STRING_STATIC("same"), N00B_ABI_STRING_BINARY,
+        N00B_ABI_TABLE_STATIC_STRING, 1, 0, &rows[1][1].value));
+    plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan && n00bb_abi_index_plan_count(plan,
+        N00B_ABI_TABLE_STATIC_STRING, &count) && count == 2);
+    n00bb_abi_index_plan_free(plan);
+    n00bb_abi_name_pool_free(pool);
+}
+
 static bool
 init_unit(core_translation_unit_t *unit, const char *name)
 {
@@ -598,10 +644,67 @@ test_imported_callback_reference(const char *path)
     free(right_object);
 }
 
+static void
+test_duplicate_signature(const char *path)
+{
+    size_t left_bytes, right_bytes;
+    uint8_t *left_object = read_object(path, &left_bytes);
+    uint8_t *right_object = read_object(path, &right_bytes);
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_object_view_t views[2] = {0};
+    assert(n00bb_abi_object_open(&target, left_object, left_bytes, &views[0])
+        && n00bb_abi_object_open(&target, right_object, right_bytes,
+                                  &views[1]));
+    n00bb_abi_selected_objects_t duplicated = {.views = views, .count = 2};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&duplicated);
+    assert(plan);
+    n00bb_abi_index_plan_free(plan);
+    const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
+        &views[1], N00B_ABI_TABLE_TYPE);
+    n00b_abi_call_signature_v1 *signature = nullptr;
+    for (uint32_t i = 1; i < types->record_count && !signature; i++) {
+        const n00b_abi_type_v1 *type = n00bb_abi_object_row(&views[1],
+            N00B_ABI_TABLE_TYPE, i);
+        if (type->kind != N00B_ABI_TYPE_FUNCTION
+            || !type->call_signature_index) continue;
+        n00b_abi_call_signature_v1 *candidate = (void *)n00bb_abi_object_row(
+            &views[1], N00B_ABI_TABLE_CALL_SIGNATURE,
+            type->call_signature_index);
+        if (candidate && candidate->positional_parameters.count
+            && candidate->success_type_index
+                != candidate->failure_type_index)
+            signature = candidate;
+    }
+    assert(signature);
+    const uint8_t *slot = n00bb_abi_object_row(&views[1],
+        N00B_ABI_TABLE_U32_STREAM,
+        signature->positional_parameters.first);
+    assert(slot);
+    n00b_abi_parameter_v1 *parameter = (void *)n00bb_abi_object_row(
+        &views[1], N00B_ABI_TABLE_PARAMETER, core_le_load_u32(slot));
+    assert(parameter);
+    uint32_t saved_mode = parameter->passing_mode;
+    parameter->passing_mode = saved_mode == N00B_ABI_PASS_IN
+        ? N00B_ABI_PASS_MODIFY : N00B_ABI_PASS_IN;
+    assert(!n00bb_abi_index_plan_build(&duplicated));
+    parameter->passing_mode = saved_mode;
+    uint32_t saved_failure = signature->failure_type_index;
+    signature->failure_type_index = signature->success_type_index;
+    assert(!n00bb_abi_index_plan_build(&duplicated));
+    signature->failure_type_index = saved_failure;
+    n00bb_abi_object_close(&views[0]);
+    n00bb_abi_object_close(&views[1]);
+    free(left_object);
+    free(right_object);
+}
+
 int
 main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3 || argc == 4);
+    test_static_string_identity();
+    if (argc == 2 && !strcmp(argv[1], "--strings")) return 0;
     if (argc == 4) {
         if (!strcmp(argv[1], "--records")) {
             test_imported_record_selection(argv[2], argv[3]);
@@ -619,6 +722,8 @@ main(int argc, char **argv)
             test_duplicate_member(argv[2], false);
         else if (!strcmp(argv[1], "--callback"))
             test_imported_callback_reference(argv[2]);
+        else if (!strcmp(argv[1], "--signature"))
+            test_duplicate_signature(argv[2]);
         else assert(false);
         return 0;
     }

@@ -443,9 +443,15 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
         return link_key_string(key,
             &((const n00b_abi_runtime_config_v1 *)key->row)
                 ->memory_manager_name);
-    case N00B_ABI_TABLE_STATIC_STRING:
-        return link_key_string(key,
-            &((const n00b_abi_static_string_v1 *)key->row)->value);
+    case N00B_ABI_TABLE_STATIC_STRING: {
+        const n00b_abi_string_v1 *value =
+            &((const n00b_abi_static_string_v1 *)key->row)->value;
+        n00bb_abi_string_header_t header;
+        if (!n00bb_abi_string_decode((const uint8_t *)value,
+                sizeof(*value), &header)) return false;
+        key->auxiliary = ((uint64_t)header.tag << 32) | header.encoding;
+        return link_key_string(key, value);
+    }
     default:
         key->unique = true;
         return true;
@@ -659,6 +665,78 @@ compatible_type_members(const abi_link_key_t *first,
 }
 
 static bool
+compatible_parameter(const n00bb_abi_object_view_t *a_view,
+                     const n00b_abi_parameter_v1 *a,
+                     const n00bb_abi_object_view_t *b_view,
+                     const n00b_abi_parameter_v1 *b)
+{
+    return a && b && a->passing_mode == b->passing_mode
+        && a->declaration_ordinal == b->declaration_ordinal
+        && a->flags == b->flags
+        && a->keyword_block_bit_offset == b->keyword_block_bit_offset
+        && compatible_child_type(a_view, a->type_index,
+                                 b_view, b->type_index)
+        && compatible_string_values(a_view, &a->name, b_view, &b->name);
+}
+
+static bool
+compatible_parameter_range(const n00bb_abi_object_view_t *a_view,
+                           n00b_abi_range_v1 a_range,
+                           const n00bb_abi_object_view_t *b_view,
+                           n00b_abi_range_v1 b_range)
+{
+    if (a_range.count != b_range.count
+        || !valid_index_range(a_view, a_range)
+        || !valid_index_range(b_view, b_range)) return false;
+    for (uint32_t i = 0; i < a_range.count; i++) {
+        const n00b_abi_parameter_v1 *a = indexed_range_row(a_view,
+            a_range, i, N00B_ABI_TABLE_PARAMETER);
+        const n00b_abi_parameter_v1 *b = indexed_range_row(b_view,
+            b_range, i, N00B_ABI_TABLE_PARAMETER);
+        if (!compatible_parameter(a_view, a, b_view, b)) return false;
+    }
+    return true;
+}
+
+static bool
+compatible_call_signature(const abi_link_key_t *first,
+                          const abi_link_key_t *candidate)
+{
+    const n00b_abi_type_v1 *a_type = first->row, *b_type = candidate->row;
+    if (a_type->kind != N00B_ABI_TYPE_FUNCTION)
+        return !a_type->call_signature_index
+            && !b_type->call_signature_index;
+    if (!a_type->call_signature_index || !b_type->call_signature_index)
+        return false;
+    const n00b_abi_call_signature_v1 *a = n00bb_abi_object_row(first->view,
+        N00B_ABI_TABLE_CALL_SIGNATURE, a_type->call_signature_index);
+    const n00b_abi_call_signature_v1 *b = n00bb_abi_object_row(
+        candidate->view, N00B_ABI_TABLE_CALL_SIGNATURE,
+        b_type->call_signature_index);
+    if (!a || !b || a->type_index != first->local_index
+        || b->type_index != candidate->local_index
+        || !compatible_child_type(first->view, a->success_type_index,
+            candidate->view, b->success_type_index)
+        || !compatible_child_type(first->view, a->failure_type_index,
+            candidate->view, b->failure_type_index)
+        || !!a->rest_parameter_index != !!b->rest_parameter_index
+        || !compatible_parameter_range(first->view,
+            a->positional_parameters, candidate->view,
+            b->positional_parameters)
+        || !compatible_parameter_range(first->view,
+            a->keyword_parameters, candidate->view,
+            b->keyword_parameters)) return false;
+    if (!a->rest_parameter_index) return true;
+    const n00b_abi_parameter_v1 *a_rest = n00bb_abi_object_row(first->view,
+        N00B_ABI_TABLE_PARAMETER, a->rest_parameter_index);
+    const n00b_abi_parameter_v1 *b_rest = n00bb_abi_object_row(
+        candidate->view, N00B_ABI_TABLE_PARAMETER,
+        b->rest_parameter_index);
+    return compatible_parameter(first->view, a_rest,
+                                candidate->view, b_rest);
+}
+
+static bool
 compatible_type_identity(const abi_link_key_t *first,
                          const abi_link_key_t *candidate)
 {
@@ -681,7 +759,8 @@ compatible_type_identity(const abi_link_key_t *first,
         && !memcmp(a_name.bytes, b_name.bytes, a_name.length)
         && compatible_type_layout(first, candidate)
         && compatible_type_components(first, candidate)
-        && compatible_type_members(first, candidate);
+        && compatible_type_members(first, candidate)
+        && compatible_call_signature(first, candidate);
 }
 
 static bool
