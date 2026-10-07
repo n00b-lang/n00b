@@ -25792,6 +25792,39 @@ has_deferred_method_constraint(th_type *receiver, core_string_t method_name)
 }
 
 static bool
+bind_deferred_method_failure(core_translation_unit_t *unit,
+                             n00bb_tu_state_t *state, parse_tree_t *site,
+                             th_type *receiver, core_string_t method_name,
+                             parse_sym_entry_t *requirement)
+{
+    th_type *variable = receiver ? th_resolve(receiver) : nullptr;
+    if (!variable || th_kind_of(variable) != TH_VAR) return true;
+    th_type *failure = requirement->error_type
+        ? requirement->error_type
+        : requirement->type ? th_func_error(requirement->type) : nullptr;
+    for (size_t i = 0; i < th_var_constraint_count(variable); i++) {
+        th_constraint constraint;
+        if (!th_var_constraint_at(variable, i, &constraint)
+            || constraint.kind != TH_CON_METHOD
+            || !constraint.method.name
+            || strlen(constraint.method.name) != method_name.u8_bytes
+            || memcmp(constraint.method.name, method_name.data,
+                      method_name.u8_bytes)) continue;
+        if (failure && th_method_obligation_set_error(state->types,
+                variable, constraint.method.name,
+                constraint.method.result, failure)) continue;
+        core_diagnostics_report_at(
+            core_translation_unit_diagnostics(unit), unit,
+            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+            CORE_STRING_STATIC(
+                "could not bind the trait method failure channel"),
+            link_source_location(site));
+        return false;
+    }
+    return true;
+}
+
+static bool
 trait_name_matches(const char *qualified, core_string_t short_name)
 {
     if (!qualified) return false;
@@ -27205,6 +27238,9 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                             link_source_location(site->node));
                         return false;
                     }
+                    if (!bind_deferred_method_failure(unit, state,
+                            site->node, receiver_type,
+                            site->dispatch_method, requirement)) return false;
                     site->symbol = requirement;
                     parse_sym_add_use(requirement, site->node);
                     if (!site->secondary_dispatch
@@ -27268,6 +27304,9 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                             link_source_location(site->node));
                         return false;
                     }
+                    if (!bind_deferred_method_failure(unit, state,
+                            site->node, receiver_type, method_name,
+                            requirement)) return false;
                     site->symbol = requirement;
                     parse_sym_add_use(requirement, site->node);
                     if (!parse_tree_set_resolution_symbol(site->node,

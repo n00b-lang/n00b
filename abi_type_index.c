@@ -268,8 +268,14 @@ n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
     th_ctx *types = ir_module_types(module);
     for (size_t i = 0; i < ir_type_count(module); i++) {
         th_type *type = ir_type_at(module, i);
-        if (!type || (th_is_closed(types, type)
-            && !add_type(index, type, nullptr))) return false;
+        if (!type) return false;
+        th_type *resolved = th_resolve(type);
+        /* Inference-only call shapes remain interned; symbol closure still
+         * collects and rejects any incomplete shape that is reachable. */
+        if (th_kind_of(resolved) == TH_FUNCTION
+            && !th_func_error(resolved)) continue;
+        if (th_is_closed(types, type)
+            && !add_type(index, type, nullptr)) return false;
     }
     return true;
 }

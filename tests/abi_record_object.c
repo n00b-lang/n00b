@@ -581,6 +581,38 @@ check_trait_methods(const core_object_section_t *metadata,
     }
 }
 
+static void
+check_trait_dispatch(const core_object_section_t *metadata,
+                     const n00bb_abi_directory_entry_t *entries,
+                     size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *constraints = entry_for(entries,
+        count, N00B_ABI_TABLE_CONSTRAINT);
+    const n00bb_abi_directory_entry_t *signatures = entry_for(entries,
+        count, N00B_ABI_TABLE_CALL_SIGNATURE);
+    assert(types && constraints && signatures);
+    bool found = false;
+    for (uint32_t i = 1; i < constraints->record_count; i++) {
+        const n00b_abi_constraint_v1 *constraint = row_at(metadata,
+            constraints, i);
+        if (constraint->kind != N00B_ABI_CONSTRAINT_METHOD) continue;
+        assert(constraint->call_type_index
+            && constraint->call_type_index < types->record_count);
+        const n00b_abi_type_v1 *call = row_at(metadata, types,
+            constraint->call_type_index);
+        assert(call->kind == N00B_ABI_TYPE_FUNCTION
+            && call->call_signature_index
+            && call->call_signature_index < signatures->record_count);
+        const n00b_abi_call_signature_v1 *signature = row_at(metadata,
+            signatures, call->call_signature_index);
+        assert(signature->failure_type_index < types->record_count);
+        found = true;
+    }
+    assert(found);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -593,6 +625,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "variant")
             || !strcmp(argv[2], "constraint")
             || !strcmp(argv[2], "trait-methods")
+            || !strcmp(argv[2], "trait-dispatch")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -679,6 +712,12 @@ main(int argc, char **argv)
     }
     if (argc == 3 && !strcmp(argv[2], "trait-methods")) {
         check_trait_methods(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "trait-dispatch")) {
+        check_trait_dispatch(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
