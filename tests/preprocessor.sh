@@ -1401,10 +1401,12 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/where_excludes.n00b"
 [ -s "$tmp/constraint_abi.o" ]
 "$abi_record_object_test" "$tmp/constraint_abi.o" constraint
+"$abi_link_input_test" --constraint "$tmp/constraint_abi.o"
 "$compiler" compile --output "$tmp/trait_methods_abi.o" \
     "$program_dir/../abi/trait_methods.n00b"
 [ -s "$tmp/trait_methods_abi.o" ]
 "$abi_record_object_test" "$tmp/trait_methods_abi.o" trait-methods
+"$abi_link_input_test" --trait-methods "$tmp/trait_methods_abi.o"
 "$compiler" compile --output "$tmp/callback_abi.o" \
     "$program_dir/../abi/callback.n00b"
 [ -s "$tmp/callback_abi.o" ]

@@ -1267,6 +1267,132 @@ test_string_storage_link(const char *path)
     free(source);
 }
 
+static void
+test_semantic_rows_link(const char *path, bool trait)
+{
+    size_t source_bytes;
+    uint8_t *source = read_object(path, &source_bytes);
+    core_translation_unit_t unit = {0};
+    core_target_desc_t target;
+    const char *name = trait ? "trait_methods" : "where_excludes";
+    assert(init_unit(&unit, name)
+        && core_target_profile(host_triple(), 0, &target));
+    core_link_unit_t *link = core_link_unit_new();
+    assert(link && core_link_unit_add_root(link, &unit)
+        && core_link_unit_finalize_graph(link));
+    n00bb_abi_object_input_t input = {
+        .module = unit.module.identifier,
+        .object = source, .object_bytes = source_bytes,
+    };
+    n00bb_abi_selected_objects_t selected = {0};
+    assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected));
+    uint8_t *linked = nullptr;
+    size_t linked_bytes = 0;
+    assert(n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes));
+    n00bb_abi_object_view_t view = {0};
+    assert(n00bb_abi_object_open(&target, linked, linked_bytes, &view));
+    const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
+        &view, N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *stream = n00bb_abi_object_table(
+        &view, N00B_ABI_TABLE_U32_STREAM);
+    assert(types && stream);
+    if (trait) {
+        const n00bb_abi_directory_entry_t *methods =
+            n00bb_abi_object_table(&view, N00B_ABI_TABLE_TRAIT_METHOD);
+        assert(methods && methods->record_count == 3);
+        const n00b_abi_type_v1 *owner = nullptr;
+        uint32_t owner_index = 0;
+        for (uint32_t i = 1; i < types->record_count; i++) {
+            const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
+                N00B_ABI_TABLE_TYPE, i);
+            if (type->kind != N00B_ABI_TYPE_TRAIT
+                || !type->owner_module_index) continue;
+            assert(!owner);
+            owner = type;
+            owner_index = i;
+        }
+        assert(owner && owner->fields_or_arms.count == 2
+            && owner->fields_or_arms.first < stream->record_count
+            && owner->fields_or_arms.count <= stream->record_count
+                - owner->fields_or_arms.first);
+        const char *names[] = {"read", "reset"};
+        for (uint32_t ordinal = 0; ordinal < 2; ordinal++) {
+            const uint8_t *slot = n00bb_abi_object_row(&view,
+                N00B_ABI_TABLE_U32_STREAM,
+                owner->fields_or_arms.first + ordinal);
+            uint32_t index = core_le_load_u32(slot);
+            assert(index && index < methods->record_count);
+            const n00b_abi_trait_method_v1 *method =
+                n00bb_abi_object_row(&view,
+                    N00B_ABI_TABLE_TRAIT_METHOD, index);
+            const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(
+                &view, N00B_ABI_TABLE_SYMBOL, method->symbol_index);
+            n00bb_abi_string_view_t text;
+            assert(method->trait_type_index == owner_index
+                && method->declaration_ordinal == ordinal
+                && method->signature_type_index < types->record_count
+                && symbol && symbol->type_index
+                    == method->signature_type_index
+                && n00bb_abi_object_string(&view, &symbol->name, &text)
+                && text.length == strlen(names[ordinal])
+                && !memcmp(text.bytes, names[ordinal], text.length));
+        }
+        uint8_t *changed = malloc(source_bytes);
+        assert(changed);
+        memcpy(changed, source, source_bytes);
+        n00bb_abi_object_view_t changed_view = {0};
+        assert(n00bb_abi_object_open(&target, changed, source_bytes,
+            &changed_view));
+        n00bb_abi_object_view_t duplicate_views[] = {
+            selected.views[0], changed_view,
+        };
+        n00bb_abi_selected_objects_t duplicates = {
+            .views = duplicate_views, .count = 2,
+        };
+        n00bb_abi_index_plan_t *plan =
+            n00bb_abi_index_plan_build(&duplicates);
+        assert(plan);
+        n00bb_abi_index_plan_free(plan);
+        n00b_abi_trait_method_v1 *changed_method = (void *)
+            n00bb_abi_object_row(&changed_view,
+                N00B_ABI_TABLE_TRAIT_METHOD, 1);
+        assert(changed_method);
+        changed_method->declaration_ordinal++;
+        assert(!n00bb_abi_index_plan_build(&duplicates));
+        n00bb_abi_object_close(&changed_view);
+        free(changed);
+    }
+    else {
+        const n00bb_abi_directory_entry_t *constraints =
+            n00bb_abi_object_table(&view, N00B_ABI_TABLE_CONSTRAINT);
+        const n00b_abi_function_v1 *function = n00bb_abi_object_row(
+            &view, N00B_ABI_TABLE_FUNCTION, 1);
+        assert(constraints && constraints->record_count > 1
+            && function && function->constraints.count == 1
+            && function->constraints.first < stream->record_count);
+        const uint8_t *slot = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_U32_STREAM, function->constraints.first);
+        uint32_t index = core_le_load_u32(slot);
+        assert(index && index < constraints->record_count);
+        const n00b_abi_constraint_v1 *constraint = n00bb_abi_object_row(
+            &view, N00B_ABI_TABLE_CONSTRAINT, index);
+        assert(constraint && constraint->kind
+            == N00B_ABI_CONSTRAINT_EXCLUDES
+            && constraint->target_type_index < types->record_count);
+        const n00b_abi_type_v1 *excluded = n00bb_abi_object_row(
+            &view, N00B_ABI_TABLE_TYPE,
+            constraint->target_type_index);
+        assert(excluded && excluded->kind == N00B_ABI_TYPE_STRING);
+    }
+    n00bb_abi_object_close(&view);
+    core_free(linked);
+    n00bb_abi_selected_objects_release(&selected);
+    core_link_unit_free(link);
+    core_translation_unit_release(&unit);
+    free(source);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1290,6 +1416,10 @@ main(int argc, char **argv)
             test_self_import_selection(argv[2]);
         else if (!strcmp(argv[1], "--string-storage"))
             test_string_storage_link(argv[2]);
+        else if (!strcmp(argv[1], "--constraint"))
+            test_semantic_rows_link(argv[2], false);
+        else if (!strcmp(argv[1], "--trait-methods"))
+            test_semantic_rows_link(argv[2], true);
         else if (!strcmp(argv[1], "--variant"))
             test_duplicate_member(argv[2], true);
         else if (!strcmp(argv[1], "--enum"))

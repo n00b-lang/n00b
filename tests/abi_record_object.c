@@ -212,7 +212,8 @@ check_function(const core_object_section_t *metadata,
         && function->success_type_index == signature->success_type_index
         && function->failure_type_index == signature->failure_type_index
         && function->parameters.count == 2
-        && !function->keywords.count && !function->variadic_type_index
+        && !function->keywords.count
+        && function->variadic_type_index == N00B_ABI_V1_NO_TYPE_INDEX
         && !function->code_ranges.count && !function->frame_layouts.count);
     assert(function->parameters.first + function->parameters.count
         <= stream->record_count);

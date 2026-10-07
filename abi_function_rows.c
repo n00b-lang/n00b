@@ -108,6 +108,7 @@ n00bb_abi_function_rows_build(
             .symbol_index = (uint32_t)i,
             .success_type_index = signature->success_type_index,
             .failure_type_index = signature->failure_type_index,
+            .variadic_type_index = N00B_ABI_V1_NO_TYPE_INDEX,
         };
         valid = n00bb_abi_name_pool_encode(names, symbol->name,
             N00B_ABI_TABLE_FUNCTION, (uint32_t)rows.len,

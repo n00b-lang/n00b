@@ -39,9 +39,7 @@ link_only_inputs_resolved(const n00bb_abi_selected_objects_t *selected,
             }
         }
         const uint32_t pending[] = {
-            N00B_ABI_TABLE_CONSTRAINT,
             N00B_ABI_TABLE_SPECIALIZATION_LINK,
-            N00B_ABI_TABLE_TRAIT_METHOD,
             N00B_ABI_TABLE_DISPATCH,
             N00B_ABI_TABLE_DISPATCH_ENTRY,
             N00B_ABI_TABLE_NAME_SLOT,
@@ -99,8 +97,7 @@ n00bb_abi_apply_link_patches(
                 || table->kind == N00B_ABI_TABLE_U64_STREAM
                 || table->kind == N00B_ABI_TABLE_BYTE_STREAM
                 || table->kind == N00B_ABI_TABLE_REQUIREMENT
-                || table->kind == N00B_ABI_TABLE_INDEX_PATCH
-                || table->kind == N00B_ABI_TABLE_CONSTRAINT) continue;
+                || table->kind == N00B_ABI_TABLE_INDEX_PATCH) continue;
             const core_index_remap_t *remap =
                 n00bb_abi_index_plan_remap(plan, input, table->kind);
             if (!remap) continue;
@@ -182,8 +179,7 @@ n00bb_abi_link_selected_objects(
         for (size_t i = 0; i < merged.table_count; i++) {
             const n00bb_abi_merged_table_t *table = &merged.tables[i];
             if (table->kind == N00B_ABI_TABLE_REQUIREMENT
-                || table->kind == N00B_ABI_TABLE_INDEX_PATCH
-                || table->kind == N00B_ABI_TABLE_CONSTRAINT) continue;
+                || table->kind == N00B_ABI_TABLE_INDEX_PATCH) continue;
             rows[row_count++] = (n00bb_abi_table_rows_t){
                 .kind = table->kind,
                 .records = table->records,

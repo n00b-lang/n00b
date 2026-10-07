@@ -674,6 +674,8 @@ n00bb_abi_emit_unit(
     for (size_t i = 0; i < import_count; i++) {
         requirements[i + 1].symbol_kind = N00B_ABI_SYMBOL_MODULE;
         requirements[i + 1].requesting_module_index = 1;
+        requirements[i + 1].contract_type_index =
+            N00B_ABI_V1_NO_TYPE_INDEX;
     }
     uint32_t package_modules[1] = {1};
     uint32_t prefix_stream_count = 1 + (recursive ? 2 : 0);
@@ -772,6 +774,18 @@ n00bb_abi_emit_unit(
                 + (uint32_t)function_rows.stream_index_count
                 + (uint32_t)constraint_rows.stream_index_count,
             lookup, lookup_context, &storage_rows);
+    if (valid) {
+        size_t method_stream_base = prefix_stream_count + components.count
+            + layout_rows.stream_index_count + enum_rows.stream_index_count
+            + signature_rows.parameter_index_count
+            + declaration_rows.stream_index_count
+            + function_rows.stream_index_count
+            + constraint_rows.stream_index_count
+            + storage_rows.stream_count;
+        valid = method_stream_base <= UINT32_MAX
+            && n00bb_abi_trait_method_rows_attach(&type_rows,
+                &trait_method_rows, (uint32_t)method_stream_base);
+    }
     n00bb_abi_type_index_free(type_index);
     if (valid) {
         modules[1].static_storage = storage_rows.static_range;
@@ -823,7 +837,8 @@ n00bb_abi_emit_unit(
         + declaration_rows.stream_index_count
         + function_rows.stream_index_count
         + constraint_rows.stream_index_count
-        + storage_rows.stream_count;
+        + storage_rows.stream_count
+        + trait_method_rows.stream_index_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
     stream[0] = package_modules[0];
     if (recursive) {
@@ -873,9 +888,15 @@ n00bb_abi_emit_unit(
                constraint_rows.stream_indexes,
                constraint_rows.stream_index_count * sizeof(*stream));
     if (storage_rows.stream_count)
-        memcpy(stream + stream_count - storage_rows.stream_count,
+        memcpy(stream + stream_count - storage_rows.stream_count
+                   - trait_method_rows.stream_index_count,
                storage_rows.stream_indexes,
                storage_rows.stream_count * sizeof(*stream));
+    if (trait_method_rows.stream_index_count)
+        memcpy(stream + stream_count
+                   - trait_method_rows.stream_index_count,
+               trait_method_rows.stream_indexes,
+               trait_method_rows.stream_index_count * sizeof(*stream));
     core_list_t(core_object_emit_section_t) extra_sections = {0};
     uint32_t storage_input_indexes[4] = {0};
     uint32_t aggregate_input_index = 0;

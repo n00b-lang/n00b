@@ -623,7 +623,9 @@ compatible_type_members(const abi_link_key_t *first,
         : a->kind == N00B_ABI_TYPE_VARIANT ? N00B_ABI_TABLE_ARM
         : a->kind == N00B_ABI_TYPE_ENUM
             || a->kind == N00B_ABI_TYPE_FLAGSET
-            ? N00B_ABI_TABLE_ENUM_ITEM : 0;
+            ? N00B_ABI_TABLE_ENUM_ITEM
+        : a->kind == N00B_ABI_TYPE_TRAIT
+            ? N00B_ABI_TABLE_TRAIT_METHOD : 0;
     if (!member_kind) return !a_range.count;
     for (uint32_t i = 0; i < a_range.count; i++) {
         const void *a_row = indexed_range_row(first->view, a_range, i,
@@ -631,6 +633,27 @@ compatible_type_members(const abi_link_key_t *first,
         const void *b_row = indexed_range_row(candidate->view, b_range, i,
                                                member_kind);
         if (!a_row || !b_row) return false;
+        if (member_kind == N00B_ABI_TABLE_TRAIT_METHOD) {
+            const n00b_abi_trait_method_v1 *a_method = a_row;
+            const n00b_abi_trait_method_v1 *b_method = b_row;
+            const n00b_abi_symbol_v1 *a_symbol = n00bb_abi_object_row(
+                first->view, N00B_ABI_TABLE_SYMBOL,
+                a_method->symbol_index);
+            const n00b_abi_symbol_v1 *b_symbol = n00bb_abi_object_row(
+                candidate->view, N00B_ABI_TABLE_SYMBOL,
+                b_method->symbol_index);
+            if (a_method->trait_type_index != first->local_index
+                || b_method->trait_type_index != candidate->local_index
+                || a_method->declaration_ordinal
+                    != b_method->declaration_ordinal
+                || !compatible_child_type(first->view,
+                    a_method->signature_type_index, candidate->view,
+                    b_method->signature_type_index)
+                || !a_symbol || !b_symbol
+                || !compatible_string_values(first->view, &a_symbol->name,
+                    candidate->view, &b_symbol->name)) return false;
+            continue;
+        }
         if (member_kind == N00B_ABI_TABLE_ENUM_ITEM) {
             const n00b_abi_enum_item_v1 *a_item = a_row, *b_item = b_row;
             if (a_item->parent_type_index != first->local_index
@@ -953,11 +976,15 @@ typedef struct {
     uint32_t row_kind;
     size_t offset;
     uint32_t target_kind;
+    bool optional_type;
 } abi_ref_column_t;
 
 #define ABI_REF(K, T, F, TARGET) \
     {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F), \
-     N00B_ABI_TABLE_##TARGET}
+     N00B_ABI_TABLE_##TARGET, false}
+#define ABI_OPTIONAL_TYPE(K, T, F) \
+    {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F), \
+     N00B_ABI_TABLE_TYPE, true}
 
 static const abi_ref_column_t abi_index_columns[] = {
     ABI_REF(PACKAGE, package, parent_package_index, PACKAGE),
@@ -974,9 +1001,9 @@ static const abi_ref_column_t abi_index_columns[] = {
     ABI_REF(TYPE, type, typevar_owner_scope_index, SCOPE),
     ABI_REF(ENUM_ITEM, enum_item, parent_type_index, TYPE),
     ABI_REF(ENUM_ITEM, enum_item, symbol_index, SYMBOL),
-    ABI_REF(CONSTRAINT, constraint, target_type_index, TYPE),
-    ABI_REF(CONSTRAINT, constraint, result_type_index, TYPE),
-    ABI_REF(CONSTRAINT, constraint, call_type_index, TYPE),
+    ABI_OPTIONAL_TYPE(CONSTRAINT, constraint, target_type_index),
+    ABI_OPTIONAL_TYPE(CONSTRAINT, constraint, result_type_index),
+    ABI_OPTIONAL_TYPE(CONSTRAINT, constraint, call_type_index),
     ABI_REF(LAYOUT, layout, type_index, TYPE),
     ABI_REF(LAYOUT, layout, tag_extractor_index, TAG_EXTRACTOR),
     ABI_REF(FIELD, field, parent_type_index, TYPE),
@@ -995,7 +1022,7 @@ static const abi_ref_column_t abi_index_columns[] = {
     ABI_REF(FUNCTION, function, symbol_index, SYMBOL),
     ABI_REF(FUNCTION, function, success_type_index, TYPE),
     ABI_REF(FUNCTION, function, failure_type_index, TYPE),
-    ABI_REF(FUNCTION, function, variadic_type_index, TYPE),
+    ABI_OPTIONAL_TYPE(FUNCTION, function, variadic_type_index),
     ABI_REF(CALL_SIGNATURE, call_signature, type_index, TYPE),
     ABI_REF(CALL_SIGNATURE, call_signature, success_type_index, TYPE),
     ABI_REF(CALL_SIGNATURE, call_signature, failure_type_index, TYPE),
@@ -1027,12 +1054,13 @@ static const abi_ref_column_t abi_index_columns[] = {
     ABI_REF(TLS_RELOCATION, tls_relocation, template_storage_index, STORAGE),
     ABI_REF(TLS_RELOCATION, tls_relocation, referenced_storage_index, STORAGE),
     ABI_REF(NAME_SLOT, name_slot, symbol_index, SYMBOL),
-    ABI_REF(REQUIREMENT, requirement, contract_type_index, TYPE),
+    ABI_OPTIONAL_TYPE(REQUIREMENT, requirement, contract_type_index),
     ABI_REF(REQUIREMENT, requirement, required_layout_index, LAYOUT),
     ABI_REF(REQUIREMENT, requirement, requesting_module_index, MODULE),
 };
 
 #undef ABI_REF
+#undef ABI_OPTIONAL_TYPE
 
 typedef struct {
     uint32_t row_kind;
@@ -1110,6 +1138,7 @@ type_member_kind(const n00b_abi_type_v1 *type)
     case N00B_ABI_TYPE_VARIANT: return N00B_ABI_TABLE_ARM;
     case N00B_ABI_TYPE_ENUM:
     case N00B_ABI_TYPE_FLAGSET: return N00B_ABI_TABLE_ENUM_ITEM;
+    case N00B_ABI_TYPE_TRAIT: return N00B_ABI_TABLE_TRAIT_METHOD;
     default: return 0;
     }
 }
@@ -1182,8 +1211,10 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
             || sizeof(uint32_t) > table->record_bytes - field->offset)
             return false;
         uint32_t local = core_le_load_u32(bytes + field->offset), mapped;
-        if (!remap_index(plan, input_index, field->target_kind,
-                local, &mapped)) return false;
+        if (field->optional_type
+            && local == N00B_ABI_V1_NO_TYPE_INDEX) mapped = local;
+        else if (!remap_index(plan, input_index, field->target_kind,
+                     local, &mapped)) return false;
         core_le_store_u32(bytes + field->offset, mapped);
     }
     if (kind == N00B_ABI_TABLE_SPECIALIZATION_LINK) {

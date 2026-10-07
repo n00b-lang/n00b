@@ -126,5 +126,47 @@ n00bb_abi_trait_method_rows_release(n00bb_abi_trait_method_rows_t *rows)
 {
     if (!rows) return;
     core_free(rows->rows);
+    core_free(rows->stream_indexes);
     *rows = (n00bb_abi_trait_method_rows_t){0};
+}
+
+bool
+n00bb_abi_trait_method_rows_attach(
+    n00bb_abi_type_identity_rows_t *types,
+    n00bb_abi_trait_method_rows_t *methods, uint32_t stream_base)
+{
+    if (!types || !types->rows || !methods || !methods->rows
+        || methods->stream_indexes || !methods->count
+        || methods->count - 1 > UINT32_MAX - stream_base) return false;
+    size_t count = methods->count - 1;
+    uint32_t *indexes = core_alloc_array(uint32_t, count);
+    if (!indexes) return false;
+    uint32_t previous = 0;
+    for (size_t i = 1; i < methods->count;) {
+        uint32_t owner = methods->rows[i].trait_type_index;
+        if (!owner || owner <= previous || owner >= types->count
+            || types->rows[owner].kind != N00B_ABI_TYPE_TRAIT
+            || types->rows[owner].fields_or_arms.count) {
+            core_free(indexes);
+            return false;
+        }
+        size_t first = i;
+        do {
+            if (methods->rows[i].declaration_ordinal != i - first) {
+                core_free(indexes);
+                return false;
+            }
+            indexes[i - 1] = (uint32_t)i;
+            i++;
+        } while (i < methods->count
+                 && methods->rows[i].trait_type_index == owner);
+        types->rows[owner].fields_or_arms = (n00b_abi_range_v1){
+            .first = stream_base + (uint32_t)(first - 1),
+            .count = (uint32_t)(i - first),
+        };
+        previous = owner;
+    }
+    methods->stream_indexes = indexes;
+    methods->stream_index_count = count;
+    return true;
 }
