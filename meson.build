@@ -28,6 +28,7 @@ install_data(
 n00bb_exe = executable(
     'n00bb',
     ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
+     'abi_layout.c',
      'global_metadata.c',
      'storage_selection.c'],
     dependencies: lantern,
@@ -62,6 +63,14 @@ abi_string_value_test = executable(
 )
 
 test('abi-string-value', abi_string_value_test)
+
+abi_layout_test = executable(
+    'abi-layout-test',
+    ['tests/abi_layout.c', 'abi_layout.c'],
+    dependencies: lantern,
+)
+
+test('abi-layout', abi_layout_test)
 
 test(
     'preprocessor',

@@ -4116,6 +4116,13 @@ grep -q 'enum.const "equal", 1' "$tmp/enum_constant_lower.ir"
 }
 grep -q 'widths: function' "$tmp/sized_integer_types.out"
 grep -q 'widths: function.*bits:4' "$tmp/sized_integer_types.out"
+"$compiler" lower --dump-layout "$program_dir/scalar_layout_alias.n00b" \
+    >"$tmp/scalar_layout_alias.out" 2>"$tmp/scalar_layout_alias.err" || {
+    cat "$tmp/scalar_layout_alias.err"
+    exit 1
+}
+grep -Eq 'layout scalar_layout_alias.Wide target=(x86_64-linux|arm64-macos|x86_64-windows) size=16 align=16' \
+    "$tmp/scalar_layout_alias.out"
 for invalid_width in sized_integer_zero_width sized_unsigned_too_wide \
     sized_bits_too_wide; do
     if "$compiler" lower "$program_dir/$invalid_width.n00b" \

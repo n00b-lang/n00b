@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "driver.h"
+#include "abi_layout.h"
 #include "global_metadata.h"
 #include "storage_selection.h"
 #include "lib/alloc.h"
@@ -442,6 +443,7 @@ enum {
 typedef struct {
     parse_grammar_t *grammar;
     ir_ctx_t *ir_context;
+    core_target_desc_t target;
     core_list_t(core_translation_unit_ptr_t) units;
     core_list_t(n00bb_trait_specialization_ptr_t) trait_specializations;
     core_list_t(parse_sym_entry_ptr_t) comptime_functions;
@@ -20454,6 +20456,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 "the host is not an ABI v0.1 target");
         return false;
     }
+    analysis->target = target;
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
         n00bb_tu_state_t *state = tu_state(unit);
@@ -36770,9 +36773,50 @@ select_storage_classes(core_list_t(core_translation_unit_ptr_t) *units)
 }
 
 static bool
+publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
+{
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        core_translation_unit_t *unit = analysis->units.data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        ir_module_t *modules[] = {
+            state ? state->comptime_ir_module : nullptr,
+            state ? state->ir_module : nullptr,
+        };
+        if (!symtab || !modules[0] || !modules[1]) return false;
+        for (parse_scope_t *scope = symtab->all_scopes; scope;
+             scope = scope->all_next) {
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                if (!symbol->type) continue;
+                for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]);
+                     m++) {
+                    th_type *type = th_apply_subst(
+                        ir_module_types(modules[m]), symbol->type);
+                    bool handled = false;
+                    if (type && n00bb_abi_publish_scalar_layout(modules[m],
+                                type, &analysis->target, &handled)) continue;
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
+                        CORE_STRING_STATIC(
+                            "could not finalize the scalar ABI layout"),
+                        symbol->decl_node
+                            ? link_source_location(symbol->decl_node)
+                            : (core_diag_location_t){0});
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static bool
 select_storage_placement(n00bb_link_analysis_t *analysis)
 {
-    if (!analysis) return false;
+    if (!analysis || !publish_known_scalar_layouts(analysis)) return false;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
