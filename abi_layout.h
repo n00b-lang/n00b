@@ -9,6 +9,7 @@ typedef struct {
     th_type *type;
     uint32_t ordinal;
     bool c_compatible;
+    bool packed;
 } n00bb_abi_record_member_t;
 
 bool n00bb_abi_publish_direct_layout(ir_module_t *module, th_type *type,
@@ -20,6 +21,10 @@ bool n00bb_abi_publish_interned_direct_layouts(
 bool n00bb_abi_publish_integer_like_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
     uint32_t semantic_bits);
+bool n00bb_abi_publish_record_layout(
+    ir_module_t *module, th_type *type, const core_target_desc_t *target,
+    n00bb_record_policy_t policy, bool structural,
+    const n00bb_abi_record_member_t *members, size_t count);
 bool n00bb_abi_publish_c_record_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
     const n00bb_abi_record_member_t *members, size_t count);

@@ -237,6 +237,102 @@ int main(void)
         ok = ok && !n00bb_abi_publish_c_record_layout(module,
             rejected_record, &target, c_members,
             sizeof(c_members) / sizeof(c_members[0]));
+        th_type *bits3 = th_bits(types, 3);
+        th_type *default_record = th_name(types, "DefaultRecord");
+        th_type *ordered_record = th_name(types, "OrderedRecord");
+        n00bb_abi_record_member_t packed_members[] = {
+            {.name = "tag", .type = bool_type, .ordinal = 0,
+             .packed = true},
+            {.name = "count", .type = u32, .ordinal = 1},
+            {.name = "bits", .type = bits3, .ordinal = 2,
+             .packed = true},
+        };
+        handled = false;
+        ok = ok && n00bb_abi_publish_direct_layout(module, bits3,
+                                                     &target, &handled)
+            && handled
+            && n00bb_abi_publish_record_layout(module, default_record,
+                &target, N00BB_RECORD_DEFAULT, false, packed_members, 3)
+            && n00bb_abi_publish_record_layout(module, ordered_record,
+                &target, N00BB_RECORD_ORDERED, false, packed_members, 3);
+        const ir_final_layout_t *default_layout = ir_layout_final(
+            module, default_record, target.triple);
+        const ir_final_layout_t *ordered_layout = ir_layout_final(
+            module, ordered_record, target.triple);
+        ir_descriptor_t *default_descriptor = ir_layout_of(
+            module, default_record, target.triple);
+        ir_descriptor_t *ordered_descriptor = ir_layout_of(
+            module, ordered_record, target.triple);
+        ok = ok && default_layout
+            && default_layout->intrinsic_bits == 36
+            && default_layout->alignment_bytes == 4
+            && default_layout->n_occupied == 3
+            && default_layout->occupied[0].offset == 0
+            && default_layout->occupied[0].width == 32
+            && default_layout->occupied[1].offset == 32
+            && default_layout->occupied[1].width == 3
+            && default_layout->occupied[2].offset == 35
+            && default_layout->occupied[2].width == 1
+            && default_layout->members[0].bit_offset == 35
+            && default_layout->members[0].occupied[0].offset == 35
+            && default_layout->members[1].bit_offset == 0
+            && default_layout->members[1].occupied[0].offset == 0
+            && default_layout->members[2].bit_offset == 32
+            && default_descriptor && default_descriptor->size.value == 5
+            && ordered_layout && ordered_layout->intrinsic_bits == 67
+            && ordered_layout->alignment_bytes == 4
+            && ordered_layout->n_occupied == 3
+            && ordered_layout->occupied[0].offset == 0
+            && ordered_layout->occupied[1].offset == 32
+            && ordered_layout->occupied[2].offset == 64
+            && ordered_layout->members[0].bit_offset == 0
+            && ordered_layout->members[1].bit_offset == 32
+            && ordered_layout->members[2].bit_offset == 64
+            && ordered_descriptor && ordered_descriptor->size.value == 9;
+        th_type *empty_record = th_name(types, "EmptyRecord");
+        ok = ok && n00bb_abi_publish_record_layout(module, empty_record,
+                &target, N00BB_RECORD_DEFAULT, false, nullptr, 0);
+        const ir_final_layout_t *empty_layout = ir_layout_final(
+            module, empty_record, target.triple);
+        ok = ok && empty_layout && !empty_layout->intrinsic_bits
+            && empty_layout->alignment_bytes == 1
+            && !empty_layout->n_members;
+        th_type *aligned_empty = th_name(types, "AlignedEmpty");
+        ir_final_layout_t aligned_empty_layout = {
+            .intrinsic_bits = 0, .alignment_bytes = 8,
+        };
+        ok = ok && ir_layout_pin_size(module, aligned_empty, 0)
+            && ir_layout_pin_align(module, aligned_empty, 8)
+            && ir_layout_publish_final(module, aligned_empty,
+                                       target.triple, &aligned_empty_layout);
+        n00bb_abi_record_member_t zero_members[] = {
+            {.name = "flag", .type = bool_type, .ordinal = 0,
+             .packed = true},
+            {.name = "empty", .type = aligned_empty, .ordinal = 1},
+        };
+        th_type *zero_record = th_name(types, "ZeroMemberRecord");
+        ok = ok && n00bb_abi_publish_record_layout(module, zero_record,
+            &target, N00BB_RECORD_ORDERED, false, zero_members, 2);
+        const ir_final_layout_t *zero_layout = ir_layout_final(module,
+                                                               zero_record,
+                                                               target.triple);
+        ok = ok && zero_layout && zero_layout->intrinsic_bits == 1
+            && zero_layout->alignment_bytes == 8
+            && zero_layout->n_members == 2
+            && zero_layout->members[1].bit_offset == 64
+            && !zero_layout->members[1].n_occupied;
+        th_type *rejected_packed_c = th_name(types, "RejectedPackedC");
+        packed_members[0].c_compatible = true;
+        ok = ok && !n00bb_abi_publish_c_record_layout(module,
+            rejected_packed_c, &target, packed_members, 3);
+        ok = ok && !n00bb_abi_publish_c_record_layout(module,
+            th_name(types, "EmptyCRecord"), &target, nullptr, 0);
+        th_type *rejected_packed_atomic = th_name(types,
+                                                   "RejectedPackedAtomic");
+        packed_members[0].type = atomic;
+        ok = ok && !n00bb_abi_publish_record_layout(module,
+            rejected_packed_atomic, &target, N00BB_RECORD_DEFAULT,
+            false, packed_members, 3);
         handled = false;
         ok = ok && !n00bb_abi_publish_direct_layout(module,
                    th_bits(types, 129), &target, &handled) && handled;

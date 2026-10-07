@@ -1,5 +1,6 @@
 #include "abi_layout.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "lib/alloc.h"
@@ -227,32 +228,50 @@ n00bb_abi_publish_integer_like_layout(
                           false);
 }
 
+static int
+compare_layout_runs(const void *left, const void *right)
+{
+    const ir_layout_bit_run_t *a = left;
+    const ir_layout_bit_run_t *b = right;
+    if (a->offset != b->offset) return a->offset < b->offset ? -1 : 1;
+    if (a->width != b->width) return a->width < b->width ? -1 : 1;
+    return 0;
+}
+
 bool
-n00bb_abi_publish_c_record_layout(
+n00bb_abi_publish_record_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
+    n00bb_record_policy_t policy, bool structural,
     const n00bb_abi_record_member_t *members, size_t count)
 {
-    if (!module || !type || !target || !target->triple || !members || !count
+    if (!module || !type || !target || !target->triple
+        || (count && !members)
         || strcmp(ir_module_target(module), target->triple)
         || ir_layout_final(module, type, target->triple)) return false;
 
-    n00bb_record_field_t *fields = core_alloc_array(n00bb_record_field_t,
-                                                    count);
-    n00bb_record_placement_t *placements = core_alloc_array(
-        n00bb_record_placement_t, count);
-    const ir_final_layout_t **children = core_alloc_array(
-        const ir_final_layout_t *, count);
-    ir_final_member_layout_t *final_members = core_alloc_array(
-        ir_final_member_layout_t, count);
-    bool ok = fields && placements && children && final_members;
+    n00bb_record_field_t *fields = count
+        ? core_alloc_array(n00bb_record_field_t, count) : nullptr;
+    n00bb_record_placement_t *placements = count
+        ? core_alloc_array(n00bb_record_placement_t, count) : nullptr;
+    const ir_final_layout_t **children = count
+        ? core_alloc_array(const ir_final_layout_t *, count) : nullptr;
+    ir_final_member_layout_t *final_members = count
+        ? core_alloc_array(ir_final_member_layout_t, count) : nullptr;
+    bool ok = !count || (fields && placements && children && final_members);
     size_t occupied_count = 0, reserved_count = 0;
     for (size_t i = 0; ok && i < count; i++) {
         children[i] = ir_layout_final(module, members[i].type,
                                       target->triple);
         const ir_final_layout_t *child = children[i];
+        bool packed = members[i].packed;
         if (!members[i].name || !members[i].type || !child
-            || !members[i].c_compatible
-            || child->intrinsic_bits % 8
+            || (policy == N00BB_RECORD_C
+                && (!members[i].c_compatible || packed
+                    || child->intrinsic_bits % 8))
+            || (packed && (child->n_occupied != 1
+                           || child->occupied[0].offset
+                           || child->n_reserved
+                           || !child->occupied[0].width))
             || child->n_occupied > SIZE_MAX - occupied_count
             || child->n_reserved > SIZE_MAX - reserved_count) {
             ok = false;
@@ -274,29 +293,34 @@ n00bb_abi_publish_c_record_layout(
             .child_typehash = th_hash(ir_module_types(module),
                                       members[i].type),
             .declaration_ordinal = members[i].ordinal,
-            .extent_bits = child->intrinsic_bits,
+            .extent_bits = packed ? child->occupied[0].width
+                                  : child->intrinsic_bits,
             .occupied_bits = value_bits,
-            .alignment_bits = (uint64_t)child->alignment_bytes * 8,
-            .c_compatible = true,
+            .alignment_bits = packed ? 1
+                                     : (uint64_t)child->alignment_bytes * 8,
+            .c_compatible = members[i].c_compatible,
         };
     }
 
     n00bb_record_layout_t placement = {0};
-    if (ok) ok = n00bb_abi_place_record(fields, count, N00BB_RECORD_C,
-                                       false, placements, &placement);
+    if (ok) ok = n00bb_abi_place_record(fields, count, policy,
+                                       structural, placements, &placement);
     ir_layout_bit_run_t *occupied = ok && occupied_count
+        ? core_alloc_array(ir_layout_bit_run_t, occupied_count) : nullptr;
+    ir_layout_bit_run_t *member_occupied = ok && occupied_count
         ? core_alloc_array(ir_layout_bit_run_t, occupied_count) : nullptr;
     ir_layout_bit_run_t *reserved = ok && reserved_count
         ? core_alloc_array(ir_layout_bit_run_t, reserved_count) : nullptr;
-    if (ok && ((occupied_count && !occupied)
+    if (ok && ((occupied_count && (!occupied || !member_occupied))
                || (reserved_count && !reserved))) ok = false;
 
     size_t occupied_at = 0, reserved_at = 0;
     for (size_t i = 0; ok && i < count; i++) {
         const ir_final_layout_t *child = children[i];
         uint64_t base = placements[i].bit_offset;
-        if (base > placement.intrinsic_bits
-            || child->intrinsic_bits > placement.intrinsic_bits - base) {
+        if (fields[i].extent_bits
+            && (base > placement.intrinsic_bits
+                || fields[i].extent_bits > placement.intrinsic_bits - base)) {
             ok = false;
             break;
         }
@@ -305,14 +329,17 @@ n00bb_abi_publish_c_record_layout(
             .type = members[i].type,
             .ordinal = members[i].ordinal,
             .bit_offset = base,
-            .occupied = occupied ? occupied + occupied_at : nullptr,
+            .occupied = member_occupied
+                ? member_occupied + occupied_at : nullptr,
             .n_occupied = child->n_occupied,
         };
         for (size_t j = 0; j < child->n_occupied; j++) {
-            occupied[occupied_at++] = (ir_layout_bit_run_t){
+            ir_layout_bit_run_t run = {
                 .offset = base + child->occupied[j].offset,
                 .width = child->occupied[j].width,
             };
+            member_occupied[occupied_at] = run;
+            occupied[occupied_at++] = run;
         }
         for (size_t j = 0; j < child->n_reserved; j++) {
             reserved[reserved_at++] = (ir_layout_bit_run_t){
@@ -321,6 +348,12 @@ n00bb_abi_publish_c_record_layout(
             };
         }
     }
+    if (ok && occupied_count)
+        qsort(occupied, occupied_count, sizeof(*occupied),
+              compare_layout_runs);
+    if (ok && reserved_count)
+        qsort(reserved, reserved_count, sizeof(*reserved),
+              compare_layout_runs);
     ir_final_layout_t final = {
         .intrinsic_bits = placement.intrinsic_bits,
         .alignment_bytes = (uint32_t)(placement.alignment_bits / 8),
@@ -334,7 +367,8 @@ n00bb_abi_publish_c_record_layout(
     if (ok && (placement.alignment_bits % 8
                || placement.alignment_bits / 8 > UINT32_MAX)) ok = false;
     if (ok) ok = ir_layout_pin_size(module, type,
-                                    placement.intrinsic_bits / 8)
+                                    placement.intrinsic_bits / 8
+                                    + (placement.intrinsic_bits % 8 != 0))
         && ir_layout_pin_align(module, type, final.alignment_bytes);
     for (size_t i = 0; ok && i < count; i++)
         ok = ir_layout_pin_member(module, type, members[i].name,
@@ -342,10 +376,21 @@ n00bb_abi_publish_c_record_layout(
     if (ok) ok = ir_layout_publish_final(module, type, target->triple, &final);
 
     core_free(reserved);
+    core_free(member_occupied);
     core_free(occupied);
     core_free(final_members);
     core_free(children);
     core_free(placements);
     core_free(fields);
     return ok;
+}
+
+bool
+n00bb_abi_publish_c_record_layout(
+    ir_module_t *module, th_type *type, const core_target_desc_t *target,
+    const n00bb_abi_record_member_t *members, size_t count)
+{
+    if (!count) return false;
+    return n00bb_abi_publish_record_layout(module, type, target,
+        N00BB_RECORD_C, false, members, count);
 }
