@@ -30,57 +30,60 @@ expect(const char *label, const n00bb_record_field_t *fields, size_t count,
 int main(void)
 {
     static const n00bb_record_field_t first[] = {
-        {"a", 1, 0, 64, 64, 64},
-        {"b", 2, 1, 24, 24, 32},
-        {"c", 3, 2, 8, 8, 8},
-        {"d", 4, 3, 3, 3, 1},
-        {"e", 5, 4, 1, 1, 1},
+        {"a", 1, 0, 64, 64, 64, false},
+        {"b", 2, 1, 24, 24, 32, false},
+        {"c", 3, 2, 8, 8, 8, false},
+        {"d", 4, 3, 3, 3, 1, false},
+        {"e", 5, 4, 1, 1, 1, false},
     };
     static const uint64_t first_offsets[] = {0, 64, 88, 96, 99};
     static const n00bb_record_field_t second[] = {
-        {"a", 1, 0, 40, 40, 64},
-        {"b", 2, 1, 16, 16, 16},
-        {"c", 3, 2, 8, 8, 8},
-        {"d", 4, 3, 5, 5, 1},
-        {"e", 5, 4, 1, 1, 1},
+        {"a", 1, 0, 40, 40, 64, false},
+        {"b", 2, 1, 16, 16, 16, false},
+        {"c", 3, 2, 8, 8, 8, false},
+        {"d", 4, 3, 5, 5, 1, false},
+        {"e", 5, 4, 1, 1, 1, false},
     };
     static const uint64_t second_offsets[] = {0, 48, 64, 40, 45};
     static const n00bb_record_field_t zero[] = {
-        {"z", 1, 0, 0, 0, 64},
-        {"b", 2, 1, 8, 8, 8},
+        {"z", 1, 0, 0, 0, 64, false},
+        {"b", 2, 1, 8, 8, 8, false},
     };
     static const uint64_t zero_offsets[] = {0, 0};
     static const n00bb_record_field_t tail[] = {
-        {"a", 1, 0, 40, 40, 64},
+        {"a", 1, 0, 40, 40, 64, false},
     };
     static const uint64_t tail_offsets[] = {0};
     static const n00bb_record_field_t ties[] = {
-        {"z", 1, 0, 8, 8, 8},
-        {"a", 2, 1, 8, 8, 8},
+        {"z", 1, 0, 8, 8, 8, false},
+        {"a", 2, 1, 8, 8, 8, false},
     };
     static const uint64_t named_offsets[] = {0, 8};
     static const uint64_t structural_offsets[] = {8, 0};
     static const n00bb_record_field_t ordered[] = {
-        {"a", 1, 0, 8, 8, 8},
-        {"b", 2, 1, 40, 40, 64},
-        {"c", 3, 2, 3, 3, 1},
+        {"a", 1, 0, 8, 8, 8, false},
+        {"b", 2, 1, 40, 40, 64, false},
+        {"c", 3, 2, 3, 3, 1, false},
     };
     static const uint64_t ordered_offsets[] = {0, 64, 104};
     static const n00bb_record_field_t c_fields[] = {
-        {"a", 1, 0, 8, 8, 8},
-        {"b", 2, 1, 64, 64, 64},
+        {"a", 1, 0, 8, 8, 8, true},
+        {"b", 2, 1, 64, 64, 64, true},
     };
     static const uint64_t c_offsets[] = {0, 64};
     static const n00bb_record_field_t c_tail[] = {
-        {"a", 1, 0, 64, 64, 64},
-        {"b", 2, 1, 8, 8, 8},
+        {"a", 1, 0, 64, 64, 64, true},
+        {"b", 2, 1, 8, 8, 8, true},
+    };
+    static const n00bb_record_field_t non_c_field[] = {
+        {"value", 1, 0, 128, 128, 64, false},
     };
     static const n00bb_record_field_t overflow[] = {
-        {"huge", 1, 0, UINT64_MAX, UINT64_MAX, 1},
+        {"huge", 1, 0, UINT64_MAX, UINT64_MAX, 1, false},
     };
     static const n00bb_record_field_t duplicate[] = {
-        {"x", 1, 0, 8, 8, 8},
-        {"x", 2, 1, 8, 8, 8},
+        {"x", 1, 0, 8, 8, 8, false},
+        {"x", 2, 1, 8, 8, 8, false},
     };
     n00bb_record_layout_t result = {0};
     n00bb_record_placement_t placed[8] = {0};
@@ -107,6 +110,8 @@ int main(void)
         && !n00bb_abi_place_record(overflow, 1, N00BB_RECORD_DEFAULT,
                                    false, placed, &result)
         && !n00bb_abi_place_record(duplicate, 2, N00BB_RECORD_DEFAULT,
+                                   false, placed, &result)
+        && !n00bb_abi_place_record(non_c_field, 1, N00BB_RECORD_C,
                                    false, placed, &result)
         && !n00bb_abi_place_record(ordered, 3, N00BB_RECORD_C,
                                    false, placed, &result));

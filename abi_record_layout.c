@@ -191,7 +191,7 @@ n00bb_abi_place_record(const n00bb_record_field_t *fields, size_t count,
             || (field->alignment_bits != 1 && field->alignment_bits < 8)
             || field->occupied_bits > field->extent_bits
             || (policy == N00BB_RECORD_C
-                && (!field->extent_bits
+                && (!field->c_compatible || !field->extent_bits
                     || field->extent_bits % 8
                     || field->alignment_bits < 8))) return false;
         if (field->alignment_bits > alignment)
