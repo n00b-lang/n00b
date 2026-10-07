@@ -6,6 +6,7 @@
 
 #include "lib/alloc.h"
 #include "lib/buffer.h"
+#include "lib/byteorder.h"
 #include "lib/list.h"
 
 #define CORE_OBJECT_ARCHIVE_MAGIC UINT64_C(0x434f424a41524348)
@@ -171,13 +172,13 @@ bool core_object_writer_bytes(core_object_writer_t *writer, const void *data,
 
 bool core_object_writer_u32(core_object_writer_t *writer, uint32_t value) {
   uint8_t bytes[4];
-  for (unsigned i = 0; i < 4; i++) bytes[i] = (uint8_t)(value >> (i * 8));
+  core_le_store_u32(bytes, value);
   return core_object_writer_bytes(writer, bytes, sizeof(bytes));
 }
 
 bool core_object_writer_u64(core_object_writer_t *writer, uint64_t value) {
   uint8_t bytes[8];
-  for (unsigned i = 0; i < 8; i++) bytes[i] = (uint8_t)(value >> (i * 8));
+  core_le_store_u64(bytes, value);
   return core_object_writer_bytes(writer, bytes, sizeof(bytes));
 }
 
@@ -249,8 +250,7 @@ bool core_object_reader_u32(core_object_reader_t *reader, uint32_t *out) {
   uint8_t bytes[4];
   if (!out || !core_object_reader_bytes(reader, bytes, sizeof(bytes)))
     return false;
-  *out = 0;
-  for (unsigned i = 0; i < 4; i++) *out |= (uint32_t)bytes[i] << (i * 8);
+  *out = core_le_load_u32(bytes);
   return true;
 }
 
@@ -258,8 +258,7 @@ bool core_object_reader_u64(core_object_reader_t *reader, uint64_t *out) {
   uint8_t bytes[8];
   if (!out || !core_object_reader_bytes(reader, bytes, sizeof(bytes)))
     return false;
-  *out = 0;
-  for (unsigned i = 0; i < 8; i++) *out |= (uint64_t)bytes[i] << (i * 8);
+  *out = core_le_load_u64(bytes);
   return true;
 }
 

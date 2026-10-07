@@ -36,6 +36,7 @@ suites = [
      {'args': [golden / 'canonical.ir']}],
 
     ['lib-macros',          'lib/macros.c',          {}],
+    ['lib-byteorder',       'lib/byteorder.c',       {}],
     ['lib-cache',           'lib/cache.c',           {}],
     ['lib-diagnostics',     'lib/diagnostic.c',      {}],
     ['lib-module',          'lib/module.c',          {}],
