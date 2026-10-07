@@ -13,6 +13,11 @@ typedef struct {
     size_t count;
 } n00bb_abi_type_identity_rows_t;
 
+typedef struct {
+    uint32_t *indexes;
+    size_t count;
+} n00bb_abi_type_components_t;
+
 /* Populates identity, category and finalized extent facts. Relationship
  * tables (fields, constraints, signatures and layout runs) are deliberately
  * left for the complete type emitter; these rows are not standalone output. */
@@ -23,3 +28,10 @@ bool n00bb_abi_type_identity_rows_build(
     n00bb_abi_type_identity_rows_t *out);
 void n00bb_abi_type_identity_rows_release(
     n00bb_abi_type_identity_rows_t *rows);
+
+/* Adds TYPE component ranges to the shared U32 stream at stream_base. */
+bool n00bb_abi_type_components_build(
+    n00bb_abi_type_index_t *index, ir_module_t *module,
+    uint32_t stream_base, n00bb_abi_type_identity_rows_t *types,
+    n00bb_abi_type_components_t *out);
+void n00bb_abi_type_components_release(n00bb_abi_type_components_t *rows);

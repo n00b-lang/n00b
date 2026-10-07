@@ -104,6 +104,15 @@ main(void)
     };
     assert(bits3 && n00bb_abi_type_index_add(handles, bits3,
                                               &bits3_index));
+    th_type *structural_ref = th_ind(types, 0, string);
+    th_type *fixed_array = th_array_n(types, string, 4);
+    th_type *arms[] = {string, bits3};
+    th_type *alternatives = th_sum(types, TH_UNION, arms, 2);
+    uint32_t ref_index = 0, array_index = 0, union_index = 0;
+    assert(structural_ref && fixed_array && alternatives
+        && n00bb_abi_type_index_add(handles, structural_ref, &ref_index)
+        && n00bb_abi_type_index_add(handles, fixed_array, &array_index)
+        && n00bb_abi_type_index_add(handles, alternatives, &union_index));
     assert(ir_layout_publish_final(runtime, bits3, "x86_64-linux",
                                    &bits3_layout));
     n00bb_abi_type_identity_rows_t handle_rows = {0};
@@ -118,6 +127,36 @@ main(void)
         && handle_rows.rows[bits3_index].unpacked_storage_bits == 8
         && (handle_rows.rows[bits3_index].flags
             & N00B_ABI_TYPE_FLAG_SIGNED));
+    n00bb_abi_type_components_t components = {0};
+    assert(n00bb_abi_type_components_build(handles, runtime, 3,
+                                            &handle_rows, &components));
+    uint32_t string_component_index = 0;
+    assert(n00bb_abi_type_index_find(handles, string,
+                                      &string_component_index));
+    for (size_t i = 0; i < sizeof(handle_kinds) / sizeof(*handle_kinds); i++) {
+        n00b_abi_range_v1 range = handle_rows.rows[handle_indexes[i]].components;
+        assert(range.count == 1 && range.first >= 3
+            && components.indexes[range.first - 3]
+                == string_component_index);
+    }
+    uint32_t unary_indexes[] = {ref_index, array_index};
+    for (size_t i = 0; i < sizeof(unary_indexes) / sizeof(*unary_indexes); i++) {
+        n00b_abi_range_v1 range = handle_rows.rows[unary_indexes[i]].components;
+        assert(range.count == 1 && range.first >= 3
+            && components.indexes[range.first - 3]
+                == string_component_index);
+    }
+    n00b_abi_range_v1 union_range = handle_rows.rows[union_index].components;
+    assert(union_range.count == th_sum_len(alternatives));
+    for (size_t i = 0; i < union_range.count; i++) {
+        uint32_t arm_index = 0;
+        assert(n00bb_abi_type_index_find(handles,
+            th_sum_arm(alternatives, i), &arm_index));
+        assert(components.indexes[union_range.first - 3 + i] == arm_index);
+    }
+    assert(handle_rows.rows[0].components.count == 0
+        && handle_rows.rows[bits3_index].components.count == 0);
+    n00bb_abi_type_components_release(&components);
     n00bb_abi_type_identity_rows_release(&handle_rows);
     n00bb_abi_name_pool_free(handle_names);
     n00bb_abi_type_index_free(handles);

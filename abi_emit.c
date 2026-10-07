@@ -310,14 +310,18 @@ n00bb_abi_emit_empty_unit(
     n00bb_abi_type_index_t *type_index = n00bb_abi_type_index_new(
         (ir_module_t *)runtime_ir);
     n00bb_abi_type_identity_rows_t type_rows = {0};
+    n00bb_abi_type_components_t components = {0};
     n00bb_abi_type_layout_rows_t layout_rows = {0};
     bool valid = pool && type_index
         && n00bb_abi_type_identity_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
             symbols, pool, &type_rows)
         && type_rows.count == 1
+        && n00bb_abi_type_components_build(type_index,
+            (ir_module_t *)runtime_ir, 1, &type_rows, &components)
         && n00bb_abi_type_layout_rows_build(type_index,
-            (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir, 1,
+            (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
+            1 + (uint32_t)components.count,
             &type_rows, &layout_rows);
     n00bb_abi_type_index_free(type_index);
     valid = valid && n00bb_abi_name_pool_encode(pool, package_id,
@@ -332,16 +336,20 @@ n00bb_abi_emit_empty_unit(
             offsetof(n00b_abi_source_file_v1, path), &sources[1].path);
     if (!valid) {
         n00bb_abi_type_layout_rows_release(&layout_rows);
+        n00bb_abi_type_components_release(&components);
         n00bb_abi_type_identity_rows_release(&type_rows);
         n00bb_abi_name_pool_free(pool);
         return empty_unit_error(unit, "could not build ABI identity and layout rows");
     }
 
-    size_t stream_count = layout_rows.run_index_count + 1;
+    size_t stream_count = 1 + components.count + layout_rows.run_index_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
     stream[0] = package_modules[0];
+    if (components.count)
+        memcpy(stream + 1, components.indexes,
+               components.count * sizeof(*stream));
     if (layout_rows.run_index_count)
-        memcpy(stream + 1, layout_rows.run_indexes,
+        memcpy(stream + 1 + components.count, layout_rows.run_indexes,
                layout_rows.run_index_count * sizeof(*stream));
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
@@ -361,6 +369,7 @@ n00bb_abi_emit_empty_unit(
     core_free(stream);
     if (!valid) {
         n00bb_abi_type_layout_rows_release(&layout_rows);
+        n00bb_abi_type_components_release(&components);
         n00bb_abi_type_identity_rows_release(&type_rows);
         n00bb_abi_name_pool_free(pool);
         return empty_unit_error(unit, "could not pack ABI identity tables");
@@ -411,6 +420,7 @@ n00bb_abi_emit_empty_unit(
             &object, &object_bytes);
     core_free(relocations);
     n00bb_abi_type_layout_rows_release(&layout_rows);
+    n00bb_abi_type_components_release(&components);
     n00bb_abi_type_identity_rows_release(&type_rows);
     n00bb_abi_name_pool_free(pool);
     if (!valid) {

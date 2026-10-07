@@ -6,6 +6,9 @@
 #include "ir/layout.h"
 #include "ir/typelang.h"
 #include "lib/alloc.h"
+#include "lib/list.h"
+
+core_list_decl(uint32_t);
 
 static bool
 name_is(const char *name, size_t length, const char *expected)
@@ -226,4 +229,105 @@ n00bb_abi_type_identity_rows_release(
     if (!rows) return;
     core_free(rows->rows);
     *rows = (n00bb_abi_type_identity_rows_t){0};
+}
+
+static bool
+append_component(n00bb_abi_type_index_t *index, th_type *component,
+                 core_list_t(uint32_t) *indexes)
+{
+    uint32_t child = 0;
+    if (!component || !n00bb_abi_type_index_find(index, component, &child))
+        return false;
+    core_list_push(*indexes, child);
+    return true;
+}
+
+static bool
+append_type_components(n00bb_abi_type_index_t *index, ir_module_t *module,
+                       th_type *type, uint32_t kind,
+                       core_list_t(uint32_t) *indexes)
+{
+    th_kind source_kind = th_kind_of(type);
+    if (kind == N00B_ABI_TYPE_UNION) {
+        if (source_kind != TH_SUM) return false;
+        th_comb combination;
+        if (!th_sum_comb(type, &combination) || combination != TH_UNION)
+            return false;
+        for (size_t i = 0; i < th_sum_len(type); i++)
+            if (!append_component(index, th_sum_arm(type, i), indexes))
+                return false;
+        return true;
+    }
+    if (kind == N00B_ABI_TYPE_REFERENCE
+        || kind == N00B_ABI_TYPE_OPTION
+        || kind == N00B_ABI_TYPE_ARRAY
+        || kind == N00B_ABI_TYPE_VIEW
+        || kind == N00B_ABI_TYPE_WRAPPER
+        || kind == N00B_ABI_TYPE_ATOMIC) {
+        th_type *component = nullptr;
+        if (source_kind == TH_NAMED && kind == N00B_ABI_TYPE_WRAPPER)
+            component = ir_type_definition(module, type);
+        else if (source_kind == TH_NAMED) {
+            const th_arg *arg = th_named_nargs(type) == 1
+                ? th_named_arg(type, 0) : nullptr;
+            if (arg && arg->kind == TH_ARG_TYPE) component = arg->type;
+        }
+        else if (source_kind == TH_INDIRECTION
+                 && kind == N00B_ABI_TYPE_REFERENCE)
+            component = th_ind_referent(type);
+        else if (source_kind == TH_SEQUENCE
+                 && kind == N00B_ABI_TYPE_ARRAY)
+            component = th_seq_elem(type);
+        return append_component(index, component, indexes);
+    }
+    if (source_kind == TH_NAMED && th_named_nargs(type)) return false;
+    return kind != N00B_ABI_TYPE_CALLBACK;
+}
+
+bool
+n00bb_abi_type_components_build(
+    n00bb_abi_type_index_t *index, ir_module_t *module,
+    uint32_t stream_base, n00bb_abi_type_identity_rows_t *types,
+    n00bb_abi_type_components_t *out)
+{
+    if (!index || !module || !types || !types->rows || !out
+        || types->count != n00bb_abi_type_index_count(index)) return false;
+    core_list_t(uint32_t) indexes = {0};
+    n00b_abi_range_v1 *ranges = core_alloc_array(n00b_abi_range_v1,
+                                                  types->count);
+    bool valid = true;
+    for (size_t i = 0; valid && i < types->count; i++) {
+        th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
+        if (!type || indexes.len > UINT32_MAX - stream_base) {
+            valid = false;
+            break;
+        }
+        size_t first = indexes.len;
+        valid = append_type_components(index, module, type,
+            types->rows[i].kind, &indexes)
+            && indexes.len <= UINT32_MAX - stream_base;
+        if (valid && indexes.len != first)
+            ranges[i] = (n00b_abi_range_v1){
+                .first = stream_base + (uint32_t)first,
+                .count = (uint32_t)(indexes.len - first),
+            };
+    }
+    if (valid) {
+        for (size_t i = 0; i < types->count; i++)
+            types->rows[i].components = ranges[i];
+        *out = (n00bb_abi_type_components_t){
+            .indexes = indexes.data, .count = indexes.len,
+        };
+    }
+    else core_list_free(indexes);
+    core_free(ranges);
+    return valid;
+}
+
+void
+n00bb_abi_type_components_release(n00bb_abi_type_components_t *rows)
+{
+    if (!rows) return;
+    core_free(rows->indexes);
+    *rows = (n00bb_abi_type_components_t){0};
 }
