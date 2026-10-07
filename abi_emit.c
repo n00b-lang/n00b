@@ -6,6 +6,7 @@
 #include "abi_container.h"
 #include "abi_emit_strings.h"
 #include "abi_type_index.h"
+#include "abi_type_layout_rows.h"
 #include "abi_type_rows.h"
 #include "n00b-abi-v1.h"
 #include "lib/alloc.h"
@@ -309,11 +310,15 @@ n00bb_abi_emit_empty_unit(
     n00bb_abi_type_index_t *type_index = n00bb_abi_type_index_new(
         (ir_module_t *)runtime_ir);
     n00bb_abi_type_identity_rows_t type_rows = {0};
+    n00bb_abi_type_layout_rows_t layout_rows = {0};
     bool valid = pool && type_index
         && n00bb_abi_type_identity_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
             symbols, pool, &type_rows)
-        && type_rows.count == 1;
+        && type_rows.count == 1
+        && n00bb_abi_type_layout_rows_build(type_index,
+            (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir, 1,
+            &type_rows, &layout_rows);
     n00bb_abi_type_index_free(type_index);
     valid = valid && n00bb_abi_name_pool_encode(pool, package_id,
         N00B_ABI_TABLE_PACKAGE, 1, offsetof(n00b_abi_package_v1, name),
@@ -326,23 +331,36 @@ n00bb_abi_emit_empty_unit(
             N00B_ABI_TABLE_SOURCE_FILE, 1,
             offsetof(n00b_abi_source_file_v1, path), &sources[1].path);
     if (!valid) {
+        n00bb_abi_type_layout_rows_release(&layout_rows);
         n00bb_abi_type_identity_rows_release(&type_rows);
         n00bb_abi_name_pool_free(pool);
-        return empty_unit_error(unit, "could not encode ABI identity strings");
+        return empty_unit_error(unit, "could not build ABI identity and layout rows");
     }
 
+    size_t stream_count = layout_rows.run_index_count + 1;
+    uint32_t *stream = core_alloc_array(uint32_t, stream_count);
+    stream[0] = package_modules[0];
+    if (layout_rows.run_index_count)
+        memcpy(stream + 1, layout_rows.run_indexes,
+               layout_rows.run_index_count * sizeof(*stream));
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
         {N00B_ABI_TABLE_MODULE, modules, 2},
         {N00B_ABI_TABLE_TYPE, type_rows.rows, type_rows.count},
+        {N00B_ABI_TABLE_LAYOUT, layout_rows.layouts,
+         layout_rows.layout_count},
+        {N00B_ABI_TABLE_PHYSICAL_RUN, layout_rows.runs,
+         layout_rows.run_count},
         {N00B_ABI_TABLE_SOURCE_FILE, sources, 2},
         {N00B_ABI_TABLE_RUNTIME_CONFIG, runtime_configs, 2},
-        {N00B_ABI_TABLE_U32_STREAM, package_modules, 1},
+        {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
     };
     n00bb_abi_packed_tables_t packed = {0};
     valid = n00bb_abi_pack_tables(target, artifact_capabilities,
         rows, sizeof(rows) / sizeof(*rows), &packed);
+    core_free(stream);
     if (!valid) {
+        n00bb_abi_type_layout_rows_release(&layout_rows);
         n00bb_abi_type_identity_rows_release(&type_rows);
         n00bb_abi_name_pool_free(pool);
         return empty_unit_error(unit, "could not pack ABI identity tables");
@@ -392,6 +410,7 @@ n00bb_abi_emit_empty_unit(
             relocations, relocation_count,
             &object, &object_bytes);
     core_free(relocations);
+    n00bb_abi_type_layout_rows_release(&layout_rows);
     n00bb_abi_type_identity_rows_release(&type_rows);
     n00bb_abi_name_pool_free(pool);
     if (!valid) {

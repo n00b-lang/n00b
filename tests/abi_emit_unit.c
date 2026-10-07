@@ -71,23 +71,29 @@ check_empty_unit(const char *triple, uint32_t target_id,
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);
-    n00bb_abi_directory_entry_t entries[6];
+    n00bb_abi_directory_entry_t entries[8];
+    size_t entry_count = sizeof(entries) / sizeof(*entries);
     n00bb_abi_image_header_t header;
     assert(n00bb_abi_container_read(metadata.bytes, metadata.size,
-        &key, schemas, schema_count, false, &header, entries, 6));
-    assert(header.directory_count == 6);
+        &key, schemas, schema_count, false, &header, entries, entry_count));
+    assert(header.directory_count == entry_count);
     const n00bb_abi_directory_entry_t *package_entry = find_entry(
-        entries, 6, N00B_ABI_TABLE_PACKAGE);
+        entries, entry_count, N00B_ABI_TABLE_PACKAGE);
     const n00bb_abi_directory_entry_t *module_entry = find_entry(
-        entries, 6, N00B_ABI_TABLE_MODULE);
+        entries, entry_count, N00B_ABI_TABLE_MODULE);
     const n00bb_abi_directory_entry_t *source_entry = find_entry(
-        entries, 6, N00B_ABI_TABLE_SOURCE_FILE);
+        entries, entry_count, N00B_ABI_TABLE_SOURCE_FILE);
     const n00bb_abi_directory_entry_t *type_entry = find_entry(
-        entries, 6, N00B_ABI_TABLE_TYPE);
+        entries, entry_count, N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *layout_entry = find_entry(
+        entries, entry_count, N00B_ABI_TABLE_LAYOUT);
+    const n00bb_abi_directory_entry_t *run_entry = find_entry(
+        entries, entry_count, N00B_ABI_TABLE_PHYSICAL_RUN);
     const n00bb_abi_directory_entry_t *config_entry = find_entry(
-        entries, 6, N00B_ABI_TABLE_RUNTIME_CONFIG);
+        entries, entry_count, N00B_ABI_TABLE_RUNTIME_CONFIG);
     assert(package_entry && module_entry && source_entry && type_entry
-        && config_entry);
+        && layout_entry && run_entry && config_entry);
+    assert(layout_entry->record_count == 1 && run_entry->record_count == 1);
     const n00b_abi_package_v1 *package = (const void *)(metadata.bytes
         + package_entry->file_offset + package_entry->record_bytes);
     const n00b_abi_module_v1 *module = (const void *)(metadata.bytes

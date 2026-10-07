@@ -33,7 +33,7 @@ n00bb_exe = executable(
      'abi_layout.c', 'abi_record_layout.c', 'abi_directory.c',
      'abi_container.c', 'abi_index_patch.c', 'abi_emit.c',
      'abi_emit_strings.c',
-     'abi_type_index.c', 'abi_type_rows.c',
+     'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
      'llvm_backend.c',
      'global_metadata.c',
      'storage_selection.c'],
@@ -113,7 +113,8 @@ test('abi-index-patch', abi_index_patch_test)
 abi_emit_test = executable(
     'abi-emit-test',
     ['tests/abi_emit.c', 'abi_emit.c', 'abi_emit_strings.c',
-     'abi_type_index.c', 'abi_type_rows.c', 'abi_container.c',
+     'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
+     'abi_container.c',
      'abi_directory.c'],
     dependencies: lantern,
 )
@@ -123,7 +124,7 @@ test('abi-emit', abi_emit_test)
 abi_emit_unit_test = executable(
     'abi-emit-unit-test',
     ['tests/abi_emit_unit.c', 'abi_emit.c', 'abi_emit_strings.c',
-     'abi_type_index.c', 'abi_type_rows.c',
+     'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
      'abi_container.c',
      'abi_directory.c', 'abi_string.c'],
     dependencies: lantern,
@@ -147,6 +148,15 @@ abi_type_rows_test = executable(
 )
 
 test('abi-type-rows', abi_type_rows_test)
+
+abi_type_layout_rows_test = executable(
+    'abi-type-layout-rows-test',
+    ['tests/abi_type_layout_rows.c', 'abi_type_layout_rows.c',
+     'abi_type_rows.c', 'abi_type_index.c', 'abi_emit_strings.c'],
+    dependencies: lantern,
+)
+
+test('abi-type-layout-rows', abi_type_layout_rows_test)
 
 abi_type_index_test = executable(
     'abi-type-index-test',
