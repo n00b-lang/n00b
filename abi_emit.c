@@ -385,6 +385,10 @@ n00bb_abi_emit_unit(
     n00bb_abi_declarations_t declaration_rows = {0};
     n00bb_abi_function_rows_t function_rows = {0};
     bool valid = pool && type_index
+        && n00bb_abi_type_index_collect_ir(type_index,
+            (ir_module_t *)comptime_ir)
+        && n00bb_abi_type_index_collect_ir(type_index,
+            (ir_module_t *)runtime_ir)
         && n00bb_abi_type_index_collect_symbols(type_index, symbols)
         && n00bb_abi_type_identity_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,

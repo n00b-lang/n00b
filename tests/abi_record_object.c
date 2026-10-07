@@ -5,6 +5,7 @@
 
 #include "abi_container.h"
 #include "n00b-abi-v1.h"
+#include "th/typehash.h"
 #include "lib/byteorder.h"
 #include "lib/object_section.h"
 
@@ -168,21 +169,30 @@ check_imported_record(const core_object_section_t *metadata,
         requirements, 1);
     assert(short_name_is(&import->full_path, "record_dep")
         && import->symbol_kind == N00B_ABI_SYMBOL_MODULE);
+    th_ctx *type_context = th_ctx_new();
+    assert(type_context);
+    uint64_t local_hash = th_hash(type_context,
+        th_name(type_context, "record_root.SharedRecord"));
+    uint64_t imported_hash = th_hash(type_context,
+        th_name(type_context, "record_dep.SharedRecord"));
     uint32_t local_records = 0, imported_records = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
-        if (type->kind != N00B_ABI_TYPE_RECORD) continue;
-        if (type->owner_module_index == 1) {
+        if (type->typehash == local_hash) {
+            assert(type->kind == N00B_ABI_TYPE_RECORD
+                && type->owner_module_index == 1);
             assert(type->layout_index && type->fields_or_arms.count == 1);
             local_records++;
         }
-        else {
+        else if (type->typehash == imported_hash) {
+            assert(type->kind == N00B_ABI_TYPE_RECORD);
             assert(!type->owner_module_index && !type->layout_index
                 && !type->fields_or_arms.count);
             imported_records++;
         }
     }
     assert(local_records == 1 && imported_records == 1);
+    th_ctx_free(type_context);
 }
 
 static void
@@ -202,17 +212,31 @@ check_imported_enum(const core_object_section_t *metadata,
         requirements, 1);
     assert(short_name_is(&import->full_path, "foreign_enum")
         && import->symbol_kind == N00B_ABI_SYMBOL_MODULE);
-    uint32_t imported_enums = 0;
+    th_ctx *type_context = th_ctx_new();
+    assert(type_context);
+    uint64_t choice_hash = th_hash(type_context,
+        th_name(type_context, "foreign_enum.Choice"));
+    uint64_t comparison_hash = th_hash(type_context,
+        th_name(type_context, "Comparison"));
+    uint32_t imported_enums = 0, builtin_enums = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
-        if (type->kind != N00B_ABI_TYPE_ENUM) continue;
+        if (type->typehash == comparison_hash) {
+            assert(type->kind == N00B_ABI_TYPE_ENUM
+                && !type->owner_module_index && !type->fields_or_arms.count
+                && type->semantic_width_bits == 2);
+            builtin_enums++;
+        }
+        if (type->typehash != choice_hash) continue;
+        assert(type->kind == N00B_ABI_TYPE_ENUM);
         assert(!type->owner_module_index && !type->layout_index
             && !type->fields_or_arms.count
             && type->semantic_width_bits == 3
             && (type->flags & N00B_ABI_TYPE_FLAG_SIGNED));
         imported_enums++;
     }
-    assert(imported_enums == 1);
+    assert(imported_enums == 1 && builtin_enums == 1);
+    th_ctx_free(type_context);
 }
 
 int
@@ -362,8 +386,6 @@ main(int argc, char **argv)
     uint32_t record_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(&metadata, types, i);
-        assert(type->kind != N00B_ABI_TYPE_RECORD
-            || type->owner_module_index == 1);
         if (type->kind == N00B_ABI_TYPE_RECORD
             && type->owner_module_index == 1
             && type->fields_or_arms.count == 1) {
