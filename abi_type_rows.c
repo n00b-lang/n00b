@@ -149,6 +149,7 @@ bool
 n00bb_abi_type_identity_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *comptime,
     ir_module_t *runtime, const parse_symtab_t *symbols,
+    n00bb_abi_type_owner_lookup_fn lookup, void *lookup_context,
     n00bb_abi_name_pool_t *names, n00bb_abi_type_identity_rows_t *out)
 {
     if (!index || !runtime || !ir_module_target(runtime) || !names || !out
@@ -178,10 +179,12 @@ n00bb_abi_type_identity_rows_build(
     for (size_t i = 0; valid && i < count; i++) {
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
         parse_sym_entry_t *owner = owners[i];
+        parse_sym_entry_t *category_owner = owner ? owner
+            : lookup ? lookup(lookup_context, type) : nullptr;
         n00b_abi_type_v1 *row = &rows[i];
         const char *spelling = type ? th_print(types, type) : nullptr;
         valid = type && spelling
-            && type_category(runtime, type, owner, row)
+            && type_category(runtime, type, category_owner, row)
             && n00bb_abi_name_pool_encode(names,
                 core_string_borrow(spelling, strlen(spelling)),
                 N00B_ABI_TABLE_TYPE,
@@ -189,8 +192,8 @@ n00bb_abi_type_identity_rows_build(
                 &row->canonical_name);
         if (!valid) break;
         row->typehash = th_hash(types, type);
-        if (owner && row->kind == N00B_ABI_TYPE_ENUM) {
-            const n00bb_enum_range_t *range = parse_sym_binding(owner,
+        if (category_owner && row->kind == N00B_ABI_TYPE_ENUM) {
+            const n00bb_enum_range_t *range = parse_sym_binding(category_owner,
                 CORE_STRING_STATIC("n00bb.enum-range"));
             uint64_t width = range
                 ? range->magnitude_bits + (uint64_t)range->is_signed : 0;

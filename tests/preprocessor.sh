@@ -1397,6 +1397,10 @@ N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
     --output "$tmp/import_record_abi.o" record_root
 [ -s "$tmp/import_record_abi.o" ]
 "$abi_record_object_test" "$tmp/import_record_abi.o" import-record
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/import_enum_abi.o" foreign_enum_user
+[ -s "$tmp/import_enum_abi.o" ]
+"$abi_record_object_test" "$tmp/import_enum_abi.o" import-enum
 if N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/cycle_abi.o" cycle_first \
     >"$tmp/cycle_abi.out" 2>&1; then

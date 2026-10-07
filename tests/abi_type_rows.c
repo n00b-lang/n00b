@@ -44,7 +44,8 @@ main(void)
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t rows = {0};
     assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
-                                               symbols, names, &rows));
+                                               symbols, nullptr, nullptr,
+                                               names, &rows));
     assert(rows.count == 3 && string_index != record_index);
     assert(rows.rows[0].kind == N00B_ABI_TYPE_NIL
         && rows.rows[0].alignment_bytes == 1);
@@ -117,7 +118,8 @@ main(void)
                                    &bits3_layout));
     n00bb_abi_type_identity_rows_t handle_rows = {0};
     assert(n00bb_abi_type_identity_rows_build(handles, comptime, runtime,
-                                               nullptr, handle_names,
+                                               nullptr, nullptr, nullptr,
+                                               handle_names,
                                                &handle_rows));
     for (size_t i = 0; i < sizeof(handle_kinds) / sizeof(*handle_kinds); i++)
         assert(handle_rows.rows[handle_indexes[i]].kind == handle_kinds[i]);
@@ -169,7 +171,8 @@ main(void)
                                    &conflicting));
     n00bb_abi_type_identity_rows_t rejected = {0};
     assert(!n00bb_abi_type_identity_rows_build(index, comptime, runtime,
-                                                symbols, names, &rejected));
+                                                symbols, nullptr, nullptr,
+                                                names, &rejected));
     assert(!rejected.rows && !rejected.count);
 
     n00bb_abi_type_identity_rows_release(&rows);

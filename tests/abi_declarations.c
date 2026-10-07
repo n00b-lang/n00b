@@ -123,7 +123,7 @@ main(void)
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t type_rows = {0};
     assert(n00bb_abi_type_identity_rows_build(type_index, nullptr,
-        module, symtab, names, &type_rows));
+        module, symtab, nullptr, nullptr, names, &type_rows));
     n00bb_abi_decl_index_t *declarations = n00bb_abi_decl_index_new(symtab);
     n00bb_abi_declarations_t rows = {0};
     assert(declarations && n00bb_abi_declarations_build(declarations,

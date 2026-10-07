@@ -45721,8 +45721,28 @@ typedef struct {
 } n00bb_abi_artifact_t;
 
 typedef struct {
+    uint64_t typehash;
+    parse_sym_entry_t *symbol;
+} n00bb_abi_type_owner_t;
+core_list_decl(n00bb_abi_type_owner_t);
+
+typedef struct {
     core_indexed_table_t *scopes;
+    th_ctx *types;
+    core_list_t(n00bb_abi_type_owner_t) type_owners;
 } n00bb_abi_source_context_t;
+
+static parse_sym_entry_t *
+abi_type_owner(void *context, th_type *type)
+{
+    n00bb_abi_source_context_t *sources = context;
+    if (!sources || !sources->types || !type) return nullptr;
+    uint64_t typehash = th_hash(sources->types, th_resolve(type));
+    for (size_t i = 0; i < sources->type_owners.len; i++)
+        if (sources->type_owners.data[i].typehash == typehash)
+            return sources->type_owners.data[i].symbol;
+    return nullptr;
+}
 
 static core_hash_value_t
 abi_scope_hash(void *value)
@@ -45792,15 +45812,31 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             i);
         n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
         if (!state || !state->annotations || !state->annotations->symtab
-            || !state->lex || !state->lex->tokens) {
+            || !state->lex || !state->lex->tokens || !state->ir_module) {
             valid = false;
             break;
         }
+        th_ctx *types = ir_module_types(state->ir_module);
+        if (!types || (sources.types && sources.types != types)) {
+            valid = false;
+            break;
+        }
+        sources.types = types;
         for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
              valid && scope; scope = scope->all_next) {
             const core_indexed_entry_t *entry = core_indexed_table_intern(
                 sources.scopes, scope, state, nullptr);
             valid = entry && entry->value == state;
+            for (parse_sym_entry_t *symbol = scope->first_in_scope;
+                 valid && symbol; symbol = symbol->next_in_scope) {
+                if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
+                    || !symbol->adt_kind.u8_bytes) continue;
+                core_list_push(sources.type_owners,
+                    ((n00bb_abi_type_owner_t){
+                        .typehash = th_hash(types, th_resolve(symbol->type)),
+                        .symbol = symbol,
+                    }));
+            }
         }
     }
     for (size_t i = 0; valid && i < count; i++) {
@@ -45818,7 +45854,8 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             state->comptime_ir_module, state->ir_module, &analysis->target,
             debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
             abi_declaration_for_symbol, analysis,
-            abi_source_of_node, &sources, &artifact->packed,
+            abi_source_of_node, &sources, abi_type_owner, &sources,
+            &artifact->packed,
             &artifact->object, &artifact->object_bytes);
         if (!emitted) {
             free_abi_artifact(artifact);
@@ -45834,6 +45871,7 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
         }
     }
     core_indexed_table_free(sources.scopes);
+    core_list_free(sources.type_owners);
     return valid;
 }
 

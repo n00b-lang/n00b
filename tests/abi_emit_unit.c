@@ -70,6 +70,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
         CORE_STRING_STATIC("default"),
         symbols, tokens, comptime, runtime,
         &target, N00B_ABI_CAP_DEBUG, nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr,
         &packed, &object, &object_bytes));
     assert(!core_translation_unit_has_fatal_diagnostics(&unit));
 
@@ -205,7 +206,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     assert(!n00bb_abi_emit_unit(nullptr, &unit,
         CORE_STRING_STATIC("default"),
         symbols, tokens, comptime, runtime, &target, N00B_ABI_CAP_DEBUG,
-        nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
         &rejected, &rejected_object, &rejected_bytes));
     assert(!rejected.bytes && !rejected_object && !rejected_bytes);
     assert(core_translation_unit_has_fatal_diagnostics(&unit));

@@ -1,0 +1,4 @@
+import foreign_enum
+public func keep(value: foreign_enum.Choice) -> foreign_enum.Choice {
+    return value
+}

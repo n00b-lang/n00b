@@ -57,5 +57,6 @@ bool n00bb_abi_emit_unit(
     const core_target_desc_t *target, uint64_t artifact_capabilities,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_node_source_fn node_source, void *source_context,
+    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
     n00bb_abi_packed_tables_t *out_tables,
     uint8_t **out_object, size_t *out_object_bytes);

@@ -29,7 +29,8 @@ n00bb_abi_enum_rows_build(n00bb_abi_type_index_t *index,
     for (size_t i = 1; valid && i < types->count; i++) {
         if (types->rows[i].kind != N00B_ABI_TYPE_ENUM) continue;
         parse_sym_entry_t *owner = types->owners[i];
-        if (!owner || !owner->member_scope || !owner->decl_node) {
+        if (!owner) continue;
+        if (!owner->member_scope || !owner->decl_node) {
             valid = false;
             break;
         }
@@ -90,7 +91,8 @@ n00bb_abi_enum_rows_build(n00bb_abi_type_index_t *index,
     }
     if (valid) {
         for (size_t i = 1; i < types->count; i++)
-            if (types->rows[i].kind == N00B_ABI_TYPE_ENUM)
+            if (types->rows[i].kind == N00B_ABI_TYPE_ENUM
+                && types->owners[i])
                 types->rows[i].fields_or_arms = ranges[i];
         *out = (n00bb_abi_enum_rows_t){
             .items = rows.data, .item_count = rows.len,

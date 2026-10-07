@@ -34,7 +34,8 @@ main(void)
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t identities = {0};
     assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
-                                               nullptr, names, &identities));
+                                               nullptr, nullptr, nullptr,
+                                               names, &identities));
     n00bb_abi_type_layout_rows_t layouts = {0};
     assert(n00bb_abi_type_layout_rows_build(index, comptime, runtime, 1,
                                              nullptr, names, &identities,
@@ -74,7 +75,8 @@ main(void)
     names = n00bb_abi_name_pool_new();
     identities = (n00bb_abi_type_identity_rows_t){0};
     assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
-                                               nullptr, names, &identities));
+                                               nullptr, nullptr, nullptr,
+                                               names, &identities));
     layouts = (n00bb_abi_type_layout_rows_t){0};
     assert(!n00bb_abi_type_layout_rows_build(index, comptime, runtime, 1,
                                               nullptr, names, &identities,
@@ -101,7 +103,8 @@ main(void)
     names = n00bb_abi_name_pool_new();
     identities = (n00bb_abi_type_identity_rows_t){0};
     assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
-                                               nullptr, names, &identities));
+                                               nullptr, nullptr, nullptr,
+                                               names, &identities));
     layouts = (n00bb_abi_type_layout_rows_t){0};
     assert(n00bb_abi_type_layout_rows_build(index, comptime, runtime, 1,
                                              nullptr, names, &identities,
@@ -168,7 +171,7 @@ main(void)
     names = n00bb_abi_name_pool_new();
     identities = (n00bb_abi_type_identity_rows_t){0};
     assert(n00bb_abi_type_identity_rows_build(index, comptime, runtime,
-        symbols, names, &identities));
+        symbols, nullptr, nullptr, names, &identities));
     n00bb_abi_decl_index_t *declarations =
         n00bb_abi_decl_index_new(symbols);
     layouts = (n00bb_abi_type_layout_rows_t){0};

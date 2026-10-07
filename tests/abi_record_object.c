@@ -185,13 +185,44 @@ check_imported_record(const core_object_section_t *metadata,
     assert(local_records == 1 && imported_records == 1);
 }
 
+static void
+check_imported_enum(const core_object_section_t *metadata,
+                    const n00bb_abi_directory_entry_t *entries,
+                    size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries,
+        count, N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *requirements = entry_for(entries,
+        count, N00B_ABI_TABLE_REQUIREMENT);
+    const n00bb_abi_directory_entry_t *items = entry_for(entries,
+        count, N00B_ABI_TABLE_ENUM_ITEM);
+    assert(types && requirements && items && requirements->record_count == 2
+        && items->record_count == 1);
+    const n00b_abi_requirement_v1 *import = row_at(metadata,
+        requirements, 1);
+    assert(short_name_is(&import->full_path, "foreign_enum")
+        && import->symbol_kind == N00B_ABI_SYMBOL_MODULE);
+    uint32_t imported_enums = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        if (type->kind != N00B_ABI_TYPE_ENUM) continue;
+        assert(!type->owner_module_index && !type->layout_index
+            && !type->fields_or_arms.count
+            && type->semantic_width_bits == 3
+            && (type->flags & N00B_ABI_TYPE_FLAG_SIGNED));
+        imported_enums++;
+    }
+    assert(imported_enums == 1);
+}
+
 int
 main(int argc, char **argv)
 {
     assert(argc == 2 || (argc == 3
         && (!strcmp(argv[2], "enum") || !strcmp(argv[2], "function")
             || !strcmp(argv[2], "import")
-            || !strcmp(argv[2], "import-record"))));
+            || !strcmp(argv[2], "import-record")
+            || !strcmp(argv[2], "import-enum"))));
     FILE *file = fopen(argv[1], "rb");
     assert(file);
     assert(!fseek(file, 0, SEEK_END));
@@ -271,6 +302,13 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "import-record")) {
         check_imported_record(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "import-enum")) {
+        check_imported_enum(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

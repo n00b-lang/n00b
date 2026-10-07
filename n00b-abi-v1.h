@@ -792,10 +792,10 @@ const n00b_abi_storage_v1 *n00b_abi_v1_storage(
 int32_t n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,
                                   uint64_t typehash, uint32_t *type_index);
 int32_t n00b_abi_v1_find_module(const n00b_abi_snapshot_v1 *snapshot,
-                                const uint8_t *full_path, uint64_t byte_count,
+                                n00b_abi_string_v1 full_path,
                                 uint32_t *module_index);
 int32_t n00b_abi_v1_find_symbol(const n00b_abi_snapshot_v1 *snapshot,
-                                const uint8_t *full_path, uint64_t byte_count,
+                                n00b_abi_string_v1 full_path,
                                 uint32_t *symbol_index);
 int32_t n00b_abi_v1_code_ranges_at_pc(
     const n00b_abi_snapshot_v1 *snapshot, const void *pc,
