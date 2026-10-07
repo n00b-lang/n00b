@@ -5,8 +5,11 @@
 
 #include "driver.h"
 #include "abi_layout.h"
+#include "abi_emit.h"
 #include "abi_record_layout.h"
 #include "global_metadata.h"
+#include "llvm_backend.h"
+#include "n00b-abi-v1.h"
 #include "storage_selection.h"
 #include "lib/alloc.h"
 #include "lib/arena.h"
@@ -10013,11 +10016,14 @@ static bool
 n00bb_typecase_case_contains(ir_module_t *module, th_type *case_type,
                              th_type *wanted)
 {
-    if (ir_type_eq(module, case_type, wanted)) return true;
+    if (ir_type_eq(module, case_type, wanted)
+        || th_env_type_pattern_accepts(ir_module_types(module), case_type,
+                                       wanted)) return true;
     th_comb comb;
     if (!th_sum_comb(case_type, &comb) || comb != TH_UNION) return false;
     for (size_t i = 0; i < th_sum_len(case_type); i++)
-        if (ir_type_eq(module, th_sum_arm(case_type, i), wanted)) return true;
+        if (n00bb_typecase_case_contains(module, th_sum_arm(case_type, i),
+                                         wanted)) return true;
     return false;
 }
 
@@ -45608,6 +45614,74 @@ release_requests(core_work_queue_t *queue,
     core_list_free(*requests);
 }
 
+static bool
+n00bb_prepare_codegen(n00bb_link_analysis_t *analysis, bool debug_enabled,
+                      core_diagnostics_t *diagnostics)
+{
+    if (!analysis) return false;
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
+        n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
+            state ? state->comptime_ir_module : nullptr,
+            state ? state->ir_module : nullptr,
+            debug_enabled, diagnostics);
+        if (!backend) return false;
+        n00bb_llvm_backend_free(backend);
+    }
+    return true;
+}
+
+static bool
+n00bb_emit_empty_abi_artifact(core_link_unit_t *link,
+                              n00bb_link_analysis_t *analysis,
+                              parse_cmdr_result_t *args, bool debug_enabled,
+                              core_diagnostics_t *diagnostics)
+{
+    core_translation_unit_t *unit = link && core_link_unit_root_count(link) == 1
+        ? core_link_unit_root(link, 0) : nullptr;
+    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+    if (!analysis || !state || !state->annotations
+        || !state->ir_module || !state->comptime_ir_module)
+        return false;
+    n00bb_abi_packed_tables_t packed = {0};
+    uint8_t *object = nullptr;
+    size_t object_bytes = 0;
+    bool emitted = n00bb_abi_emit_empty_unit(unit, n00bb_package_id(unit),
+        state->annotations->symtab, state->comptime_ir_module,
+        state->ir_module, &analysis->target,
+        debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
+        &packed, &object, &object_bytes);
+    n00bb_abi_packed_tables_release(&packed);
+    if (!emitted) return false;
+
+    core_string_t requested = parse_cmdr_flag_str(args,
+        CORE_STRING_STATIC("--output"));
+    core_buffer_t default_name = {0};
+    if (!requested.data) {
+        core_buffer_printf(&default_name, "%.*s.o",
+            (int)unit->module.identifier.u8_bytes,
+            unit->module.identifier.data);
+        requested = core_string_borrow(default_name.data,
+                                       default_name.byte_len);
+    }
+    char *path = core_strndup(requested.data, requested.u8_bytes);
+    FILE *file = fopen(path, "wb");
+    bool saved = file && fwrite(object, 1, object_bytes, file) == object_bytes;
+    if (file && fclose(file)) saved = false;
+    if (!saved) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, "could not write ABI object '%s'", path);
+        core_diagnostics_report(diagnostics, unit, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0008"),
+            core_string_borrow(message.data, message.byte_len));
+        core_buffer_release(&message);
+    }
+    core_free(path);
+    core_buffer_release(&default_name);
+    core_free(object);
+    return saved;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -45786,6 +45860,10 @@ main(int argc, char **argv)
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-pdg")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")),
             interface_closure_only);
+    if (located && (build_command || compile_command
+                    || (library_command && !emit_interface)))
+        located = n00bb_prepare_codegen(link_analysis,
+            !preprocessor_options.release_mode, cli_diagnostics);
     if (located && library_command && emit_interface && link_analysis) {
         th_env *interface_environment = link_analysis->interface_environment;
         located = register_unit_comptime_ir_metadata(link_analysis, link)
@@ -45818,12 +45896,17 @@ main(int argc, char **argv)
         }
         core_free(path);
     }
+    bool compile_emitted = false;
+    if (located && compile_command)
+        compile_emitted = located = n00bb_emit_empty_abi_artifact(
+            link, link_analysis, args, !preprocessor_options.release_mode,
+            cli_diagnostics);
     if (located && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--dump-link-unit")))
         dump_link_unit(link);
     if (located && !locate_only && !lex_command && !parse_command
         && !preprocess_command && !lower_command
-        && !(library_command && emit_interface)) {
+        && !(library_command && emit_interface) && !compile_emitted) {
         fprintf(stderr,
                 "n00bb: translation units are located; '%.*s' processing is not implemented yet\n",
                 (int)command.u8_bytes, command.data);

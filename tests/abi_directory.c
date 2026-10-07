@@ -1,4 +1,5 @@
 #include "abi_directory.h"
+#include "n00b-abi-v1.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +13,34 @@ expect(const char *label, bool condition)
 
 int main(void)
 {
+    size_t schema_count = 0;
+    const n00bb_abi_table_schema_t *official =
+        n00bb_abi_v1_table_schemas(&schema_count);
+    bool ok = expect("every v1 table kind has one schema",
+        schema_count == N00B_ABI_TABLE_SPECIALIZATION_LINK);
+    for (uint32_t kind = N00B_ABI_TABLE_PACKAGE;
+         kind <= N00B_ABI_TABLE_SPECIALIZATION_LINK; kind++) {
+        size_t matches = 0;
+        for (size_t i = 0; i < schema_count; i++) {
+            if (official[i].kind != kind) continue;
+            matches++;
+            ok &= expect("v1 schema has a valid width and alignment",
+                official[i].schema_version == N00B_ABI_V1_TABLE_SCHEMA_VERSION
+                && official[i].record_bytes
+                && official[i].alignment_bytes
+                && !(official[i].alignment_bytes
+                     & (official[i].alignment_bytes - 1)));
+        }
+        ok &= expect("v1 table kind appears exactly once", matches == 1);
+    }
+    ok &= expect("type and stream schemas use reviewed C widths",
+        official[N00B_ABI_TABLE_TYPE - 1].record_bytes
+            == sizeof(n00b_abi_type_v1)
+        && official[N00B_ABI_TABLE_INDEX_PATCH - 1].record_bytes
+            == sizeof(n00b_abi_index_patch_v1)
+        && official[N00B_ABI_TABLE_U32_STREAM - 1].record_bytes == 4
+        && official[N00B_ABI_TABLE_BYTE_STREAM - 1].record_bytes == 1
+        && official[N00B_ABI_TABLE_U64_STREAM - 1].record_bytes == 8);
     uint8_t image[192] = {0};
     n00bb_abi_directory_entry_t first = {
         .kind = 4, .schema_version = 1, .record_bytes = 8,
@@ -34,7 +63,6 @@ int main(void)
     n00bb_abi_directory_encode_entry(image + 88, &first);
     n00bb_abi_directory_encode_entry(image + 120, &second);
     n00bb_abi_directory_entry_t decoded[2] = {0};
-    bool ok = true;
     ok &= expect("byte-exact directory record",
                  !memcmp(image + 88, first_bytes, sizeof(first_bytes)));
     n00bb_abi_directory_decode_entry(image + 88, &decoded[0]);

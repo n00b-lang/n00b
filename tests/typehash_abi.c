@@ -80,6 +80,25 @@ int main(void)
             && th_hash(ctx, unsigned8) != th_hash(ctx, bits8);
         if (!ok) fprintf(stderr, "distinct ABI type identities collapsed\n");
     }
+    th_type *left_var = th_var(ctx);
+    th_type *right_var = th_var(ctx);
+    th_arg left_arg = {.kind = TH_ARG_TYPE, .type = left_var};
+    th_arg right_arg = {.kind = TH_ARG_TYPE, .type = right_var};
+    th_type *left_array = th_apply(ctx, "array", &left_arg, 1);
+    th_type *right_array = th_apply(ctx, "array", &right_arg, 1);
+    th_param left_param = {.mode = TH_IN, .type = left_array};
+    th_param right_param = {.mode = TH_IN, .type = right_array};
+    th_type *left_function = th_func_with_error(
+        ctx, left_array, nil, &left_param, 1, nullptr, nullptr, 0);
+    th_type *right_function = th_func_with_error(
+        ctx, right_array, nil, &right_param, 1, nullptr, nullptr, 0);
+    if (ok) {
+        ok = left_var != right_var
+            && th_hash(ctx, left_array) == th_hash(ctx, right_array)
+            && th_hash(ctx, left_function) == th_hash(ctx, right_function);
+        if (!ok) fprintf(stderr,
+            "independent generic declarations should share shape hashes\n");
+    }
     th_ctx_free(ctx);
     return ok ? 0 : 1;
 }

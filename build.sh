@@ -6,6 +6,16 @@ BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 LANTERN_BUILD_DIR="${LANTERN_BUILD_DIR:-$ROOT/../lantern/build}"
 MESON_PKG_CONFIG_PATH=""
 
+if [ -z "${LLVM_CONFIG:-}" ] && [ "$(uname -s)" = Darwin ] \
+    && command -v brew >/dev/null 2>&1; then
+    LLVM_PREFIX="$(brew --prefix llvm 2>/dev/null)" || LLVM_PREFIX=""
+    if [ -x "$LLVM_PREFIX/bin/llvm-config" ] \
+        && "$LLVM_PREFIX/bin/llvm-config" --libfiles core bitwriter bitreader \
+            >/dev/null 2>&1; then
+        export LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config"
+    fi
+fi
+
 if [ "$(uname -s)" = Darwin ] && [ -z "${SDKROOT:-}" ]; then
     if command -v xcrun >/dev/null 2>&1; then
         SDKROOT="$(xcrun --show-sdk-path)"

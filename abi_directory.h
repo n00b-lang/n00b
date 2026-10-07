@@ -22,6 +22,9 @@ typedef struct {
     uint32_t alignment_bytes;
 } n00bb_abi_table_schema_t;
 
+/* Record widths and alignments from the reviewed v1 C ABI. */
+const n00bb_abi_table_schema_t *n00bb_abi_v1_table_schemas(size_t *count);
+
 void n00bb_abi_directory_encode_entry(
     uint8_t out[N00BB_ABI_DIRECTORY_BYTES],
     const n00bb_abi_directory_entry_t *entry);

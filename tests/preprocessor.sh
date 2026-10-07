@@ -906,6 +906,16 @@ grep -q 'type.test .*atomic\[int\]' \
 grep -q 'type.test .*array\[int\]' \
     "$tmp/typecase_compound_types.ir"
 
+"$compiler" lower --dump-ir "$program_dir/typecase_generic_case.n00b" \
+    >"$tmp/typecase_generic_case.ir" \
+    2>"$tmp/typecase_generic_case.err" || {
+    cat "$tmp/typecase_generic_case.err"
+    cat "$tmp/typecase_generic_case.ir"
+    exit 1
+}
+grep -q 'type.test %item, array\[`' "$tmp/typecase_generic_case.ir"
+grep -q 'type.narrow %item, array\[`' "$tmp/typecase_generic_case.ir"
+
 "$compiler" lower --dump-ir "$program_dir/typecase_function_type.n00b" \
     >"$tmp/typecase_function_type.ir" \
     2>"$tmp/typecase_function_type.err" || {
@@ -1361,6 +1371,10 @@ grep -q 'call @archive_add' "$tmp/float_alias_archive_user.out"
     "$program_dir/lower_arithmetic.n00b" >"$tmp/lower_arithmetic.ir_and_pdg"
 grep -q '^module lower_arithmetic' "$tmp/lower_arithmetic.ir_and_pdg"
 grep -q '^pdg @add ' "$tmp/lower_arithmetic.ir_and_pdg"
+"$compiler" compile --output "$tmp/empty_abi.o" \
+    "$program_dir/../abi/empty.n00b"
+[ -s "$tmp/empty_abi.o" ]
+LC_ALL=C grep -q 'N00BMETA' "$tmp/empty_abi.o"
 for command in build library compile; do
     if "$compiler" "$command" --dump-ir --dump-control-flow --dump-pdg \
         "$program_dir/lower_arithmetic.n00b" >"$tmp/$command.dumps" 2>&1; then
@@ -1371,8 +1385,13 @@ for command in build library compile; do
     grep -q '^control-flow @add$' "$tmp/$command.dumps"
     grep -q '^execution-graph:$' "$tmp/$command.dumps"
     grep -q '^pdg @add ' "$tmp/$command.dumps"
-    grep -q "'$command' processing is not implemented yet" \
-        "$tmp/$command.dumps"
+    if [ "$command" = compile ]; then
+        grep -q 'this ABI emitter path cannot omit local declarations' \
+            "$tmp/$command.dumps"
+    else
+        grep -q "'$command' processing is not implemented yet" \
+            "$tmp/$command.dumps"
+    fi
 done
 
 "$compiler" lower "$program_dir/lower_value_return.n00b" \

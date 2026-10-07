@@ -2,23 +2,17 @@
 
 typedef struct {
     unsigned char bytes[15];
-    unsigned char len : 4;
-    unsigned char encoding : 2;
-    unsigned char tag : 2;
+    unsigned char selector;
 } short_string;
 
 typedef struct {
     const unsigned char *data;
-    unsigned long long len : 60;
-    unsigned long long encoding : 2;
-    unsigned long long tag : 2;
+    uint64_t selector;
 } long_string;
 
 typedef struct {
     const unsigned char *body;
-    unsigned long long reserved : 60;
-    unsigned long long encoding : 2;
-    unsigned long long tag : 2;
+    uint64_t selector;
 } rich_string;
 
 typedef union {
@@ -32,23 +26,32 @@ _Static_assert(sizeof(string_value) == 16, "string width");
 _Static_assert(_Alignof(string_value) == 8, "string alignment");
 
 const string_value short_abc = {
-    .short_value = {.bytes = {'a', 'b', 'c'}, .len = 3,
-                    .encoding = 1, .tag = 0},
+    .short_value = {.bytes = {'a', 'b', 'c'}, .selector =
+        (N00BB_ABI_STRING_ASCII << N00BB_ABI_STRING_SHORT_LENGTH_BITS) | 3},
 };
 
 const string_value long_ascii_16 = {
     .long_value = {.data = (const unsigned char *)"abcdefghijklmnop",
-                   .len = 16, .encoding = 1, .tag = 1},
+                   .selector =
+        ((uint64_t)N00BB_ABI_STRING_LONG << N00BB_ABI_STRING_TAG_SHIFT)
+        | ((uint64_t)N00BB_ABI_STRING_ASCII
+           << N00BB_ABI_STRING_ENCODING_SHIFT) | 16},
 };
 
 const string_value span_ascii_5 = {
     .long_value = {.data = (const unsigned char *)"abcdefghij" + 2,
-                   .len = 5, .encoding = 1, .tag = 2},
+                   .selector =
+        ((uint64_t)N00BB_ABI_STRING_SPAN << N00BB_ABI_STRING_TAG_SHIFT)
+        | ((uint64_t)N00BB_ABI_STRING_ASCII
+           << N00BB_ABI_STRING_ENCODING_SHIFT) | 5},
 };
 
 const string_value rich_utf8 = {
     .rich_value = {.body = (const unsigned char *)"rich",
-                   .reserved = 0, .encoding = 2, .tag = 3},
+                   .selector =
+        ((uint64_t)N00BB_ABI_STRING_RICH << N00BB_ABI_STRING_TAG_SHIFT)
+        | ((uint64_t)N00BB_ABI_STRING_UTF8
+           << N00BB_ABI_STRING_ENCODING_SHIFT)},
 };
 
 static int match_bytes(const unsigned char *actual,
