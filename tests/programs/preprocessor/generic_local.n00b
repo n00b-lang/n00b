@@ -1,0 +1,9 @@
+func hold_same(item: `T) -> `T {
+    var saved: `T = item
+    return saved
+}
+
+func use_hold_same() {
+    var number: int = 1
+    var kept: int = hold_same(number)
+}

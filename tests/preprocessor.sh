@@ -1401,6 +1401,14 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_enum_abi.o" foreign_enum_user
 [ -s "$tmp/import_enum_abi.o" ]
 "$abi_record_object_test" "$tmp/import_enum_abi.o" import-enum
+"$compiler" compile --output "$tmp/generic_abi.o" \
+    "$program_dir/generic_modify_parameter.n00b"
+[ -s "$tmp/generic_abi.o" ]
+"$abi_record_object_test" "$tmp/generic_abi.o" generic
+"$compiler" compile --output "$tmp/generic_local_abi.o" \
+    "$program_dir/generic_local.n00b"
+[ -s "$tmp/generic_local_abi.o" ]
+"$abi_record_object_test" "$tmp/generic_local_abi.o" generic-local
 if N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/cycle_abi.o" cycle_first \
     >"$tmp/cycle_abi.out" 2>&1; then

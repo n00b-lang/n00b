@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include "abi_emit_strings.h"
+#include "abi_decl_index.h"
 #include "abi_type_index.h"
 #include "n00b-abi-v1.h"
 #include "parse/symtab.h"
@@ -33,6 +34,13 @@ bool n00bb_abi_type_identity_rows_build(
     n00bb_abi_name_pool_t *names,
     n00bb_abi_type_identity_rows_t *out);
 void n00bb_abi_type_identity_rows_release(
+    n00bb_abi_type_identity_rows_t *rows);
+
+/* Assigns variable identities from cached declaration signature bindings.
+ * Unbound provisional inference variables cannot be persisted. */
+bool n00bb_abi_type_variables_bind(
+    n00bb_abi_type_index_t *index,
+    const n00bb_abi_decl_index_t *declarations,
     n00bb_abi_type_identity_rows_t *rows);
 
 /* Adds TYPE component ranges to the shared U32 stream at stream_base. */

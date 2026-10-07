@@ -1,11 +1,14 @@
 #include "abi_type_index.h"
 
 #include <limits.h>
+#include <string.h>
 
 #include "ir/typelang.h"
 #include "lib/alloc.h"
+#include "lib/dict.h"
 #include "lib/indexed_table.h"
 #include "lib/list.h"
+#include "signature_typevars.h"
 
 typedef struct {
     uint64_t id;
@@ -17,6 +20,7 @@ core_list_decl(type_key_ptr_t);
 struct n00bb_abi_type_index_t {
     ir_module_t *module;
     core_indexed_table_t *table;
+    core_dict_t symbol_types;
     core_list_t(type_key_ptr_t) keys;
     bool failed;
 };
@@ -191,6 +195,7 @@ n00bb_abi_type_index_new(ir_module_t *module)
     index->module = module;
     index->table = core_indexed_table_new(1, UINT32_MAX >> 1,
                                           type_key_hash, type_key_equal);
+    core_dict_init(&index->symbol_types, nullptr, nullptr);
     th_type *nil = th_name(ir_module_types(module), "nil");
     if (!index->table || !nil) {
         n00bb_abi_type_index_free(index);
@@ -211,6 +216,7 @@ void
 n00bb_abi_type_index_free(n00bb_abi_type_index_t *index)
 {
     if (!index) return;
+    core_dict_free(&index->symbol_types);
     core_indexed_table_free(index->table);
     for (size_t i = 0; i < index->keys.len; i++)
         core_free(index->keys.data[i]);
@@ -249,6 +255,22 @@ n00bb_abi_type_index_find(n00bb_abi_type_index_t *index,
         index->table, &probe);
     if (!entry) return false;
     *out_index = entry->index;
+    return true;
+}
+
+bool
+n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
+                                          ir_module_t *module)
+{
+    if (!index || !module || index->failed
+        || ir_module_types(module) != ir_module_types(index->module))
+        return false;
+    th_ctx *types = ir_module_types(module);
+    for (size_t i = 0; i < ir_type_count(module); i++) {
+        th_type *type = ir_type_at(module, i);
+        if (!type || (th_is_closed(types, type)
+            && !add_type(index, type, nullptr))) return false;
+    }
     return true;
 }
 
@@ -309,6 +331,116 @@ n00bb_abi_type_index_collect_ir(n00bb_abi_type_index_t *index,
     return true;
 }
 
+static th_type *
+declaration_type(n00bb_abi_type_index_t *index,
+                 const parse_sym_entry_t *symbol, th_type *type)
+{
+    if (!type) return nullptr;
+    for (parse_scope_t *scope = symbol->scope; scope; scope = scope->parent) {
+        if (!core_string_eq(scope->scope_tag,
+                            CORE_STRING_STATIC("function"))) continue;
+        parse_sym_entry_t *function = scope->node
+            ? core_tree_node_value(scope->node).sym : nullptr;
+        n00bb_body_typevar_map_t *map = function
+            ? parse_sym_binding(function, N00BB_BODY_TYPEVAR_MAP_KEY)
+            : nullptr;
+        if (!map || !map->count) return type;
+        th_type **free_vars = nullptr;
+        size_t free_count = th_free_vars(ir_module_types(index->module), type,
+                                        &free_vars);
+        bool needs_rebase = false;
+        for (size_t i = 0; i < free_count && !needs_rebase; i++)
+            for (size_t j = 0; j < map->count; j++)
+                if (free_vars[i] == th_resolve(map->body[j])) {
+                    needs_rebase = true;
+                    break;
+                }
+        if (!needs_rebase) return type;
+        if (map->count > SIZE_MAX / 2) return nullptr;
+        const th_type **from = core_alloc_array(const th_type *,
+                                               2 * map->count);
+        th_type **to = core_alloc_array(th_type *, 2 * map->count);
+        if (!from || !to) {
+            core_free(from);
+            core_free(to);
+            return nullptr;
+        }
+        for (size_t i = 0; i < map->count; i++) {
+            from[2 * i] = map->body[i];
+            from[2 * i + 1] = th_resolve(map->body[i]);
+            to[2 * i] = map->declaration[i];
+            to[2 * i + 1] = map->declaration[i];
+        }
+        th_type *result = th_type_clone_replacing(
+            ir_module_types(index->module), type, from, to, 2 * map->count);
+        core_free(from);
+        core_free(to);
+        return result;
+    }
+    return type;
+}
+
+static th_type *
+declaration_function_type(n00bb_abi_type_index_t *index,
+                          const parse_sym_entry_t *symbol, th_type *type)
+{
+    if (!type || symbol->kind != PARSE_SYM_FUNCTION || !symbol->type)
+        return type;
+    th_ctx *types = ir_module_types(index->module);
+    th_type **local_vars = nullptr;
+    size_t local_count = th_free_vars(types, type, &local_vars);
+    if (!local_count) return type;
+    th_type **decl_vars = nullptr;
+    size_t decl_count = th_free_vars(types, symbol->type, &decl_vars);
+    const th_type **from = core_alloc_array(const th_type *, local_count);
+    th_type **to = core_alloc_array(th_type *, local_count);
+    if (!from || !to) {
+        core_free(from);
+        core_free(to);
+        return nullptr;
+    }
+    bool changed = false;
+    bool valid = true;
+    for (size_t i = 0; i < local_count && valid; i++) {
+        th_type *variable = local_vars[i];
+        th_type *declared = nullptr;
+        const char *name = th_var_name(variable);
+        for (size_t j = 0; j < decl_count; j++) {
+            const char *decl_name = th_var_name(decl_vars[j]);
+            if (variable == decl_vars[j]
+                || (name && decl_name && !strcmp(name, decl_name))) {
+                if (declared && declared != decl_vars[j]) {
+                    valid = false;
+                    break;
+                }
+                declared = decl_vars[j];
+            }
+        }
+        if (!declared && !name && local_count == decl_count
+            && !th_var_name(decl_vars[i]))
+            declared = decl_vars[i];
+        if (!declared) valid = false;
+        from[i] = variable;
+        to[i] = declared;
+        changed |= variable != declared;
+    }
+    th_type *result = !valid ? nullptr : !changed ? type
+        : th_type_clone_replacing(types, type, from, to, local_count);
+    core_free(from);
+    core_free(to);
+    return result;
+}
+
+th_type *
+n00bb_abi_type_index_symbol_type(n00bb_abi_type_index_t *index,
+                                  const parse_sym_entry_t *symbol)
+{
+    if (!index || !symbol) return nullptr;
+    bool found = false;
+    th_type *type = core_dict_get(&index->symbol_types, symbol, &found);
+    return found ? type : nullptr;
+}
+
 bool
 n00bb_abi_type_index_collect_symbols(n00bb_abi_type_index_t *index,
                                        const parse_symtab_t *symbols)
@@ -318,12 +450,21 @@ n00bb_abi_type_index_collect_symbols(n00bb_abi_type_index_t *index,
          scope; scope = scope->all_next) {
         for (const parse_sym_entry_t *symbol = scope->first_in_scope;
              symbol; symbol = symbol->next_in_scope) {
-            if (!symbol->decl_node && !symbol->definition_count
-                && !symbol->use_count) continue;
-            if (!add_optional(index, symbol->type)
-                || !add_optional(index, symbol->error_type)
-                || !add_optional(index, symbol->callable_contract))
+            if (symbol->is_synthetic || symbol->kind == PARSE_SYM_MODULE)
+                continue;
+            if (!symbol->decl_node && !symbol->definition_count) continue;
+            th_type *type = declaration_type(index, symbol, symbol->type);
+            th_type *error = declaration_function_type(index, symbol,
+                declaration_type(index, symbol, symbol->error_type));
+            th_type *contract = declaration_function_type(index, symbol,
+                declaration_type(index, symbol, symbol->callable_contract));
+            if (!type || (symbol->error_type && !error)
+                || (symbol->callable_contract && !contract)
+                || !add_optional(index, type)
+                || !add_optional(index, error)
+                || !add_optional(index, contract))
                 return false;
+            core_dict_put(&index->symbol_types, (void *)symbol, type);
         }
     }
     return true;

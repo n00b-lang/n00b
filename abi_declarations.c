@@ -290,10 +290,12 @@ n00bb_abi_declarations_build(
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
                                                                (uint32_t)i);
         n00b_abi_symbol_v1 *row = &symbols[i];
-        if (!symbol || !symbol->type
+        th_type *type = n00bb_abi_type_index_symbol_type(type_index,
+                                                         symbol);
+        if (!symbol || !type
             || !n00bb_abi_decl_find_scope(declarations, symbol->scope,
                                             &row->scope_index)
-            || !n00bb_abi_type_index_find(type_index, symbol->type,
+            || !n00bb_abi_type_index_find(type_index, type,
                                             &row->type_index)
             || !symbol_kind(symbol, &row->kind)
             || !symbol_attributes(symbol, row)) {

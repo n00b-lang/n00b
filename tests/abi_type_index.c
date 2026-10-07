@@ -114,16 +114,31 @@ main(void)
     parse_sym_entry_t *unused_builtin = parse_symtab_add(symbols,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("unused"),
         PARSE_SYM_FUNCTION, nullptr);
-    assert(declared && unused_builtin);
+    parse_sym_entry_t *module_alias = parse_symtab_add(symbols,
+        CORE_STRING_STATIC(""), CORE_STRING_STATIC("dependency"),
+        PARSE_SYM_MODULE, &declaration);
+    parse_sym_entry_t *synthetic = parse_symtab_add(symbols,
+        CORE_STRING_STATIC(""), CORE_STRING_STATIC("generated"),
+        PARSE_SYM_VARIABLE, &declaration);
+    assert(declared && unused_builtin && module_alias && synthetic);
     th_type *string = th_name(types, "string");
     th_type *unused = th_name(types, "only_unused_builtin");
+    th_type *module_placeholder = th_var_named(types, "module_placeholder");
+    th_type *synthetic_type = th_name(types, "only_synthetic");
     declared->type = string;
     unused_builtin->type = unused;
+    module_alias->type = module_placeholder;
+    synthetic->type = synthetic_type;
+    synthetic->is_synthetic = true;
     assert(n00bb_abi_type_index_collect_symbols(index, symbols));
     uint32_t string_index = UINT32_MAX;
     uint32_t missing_index = UINT32_MAX;
     assert(n00bb_abi_type_index_find(index, string, &string_index));
     assert(!n00bb_abi_type_index_find(index, unused, &missing_index));
+    assert(!n00bb_abi_type_index_find(index, module_placeholder,
+                                      &missing_index));
+    assert(!n00bb_abi_type_index_find(index, synthetic_type,
+                                      &missing_index));
     parse_symtab_free(symbols);
 
     n00bb_abi_type_index_free(index);

@@ -8,6 +8,7 @@
 #include "lib/alloc.h"
 #include "lib/list.h"
 #include "enum_value.h"
+#include "signature_typevars.h"
 
 core_list_decl(uint32_t);
 
@@ -183,10 +184,11 @@ n00bb_abi_type_identity_rows_build(
         parse_sym_entry_t *category_owner = owner ? owner
             : lookup ? lookup(lookup_context, type) : nullptr;
         n00b_abi_type_v1 *row = &rows[i];
-        const char *spelling = type ? th_print(types, type) : nullptr;
-        valid = type && spelling
-            && type_category(runtime, type, category_owner, row)
-            && n00bb_abi_name_pool_encode(names,
+        valid = type && type_category(runtime, type, category_owner, row);
+        if (!valid) break;
+        if (row->kind == N00B_ABI_TYPE_VARIABLE) continue;
+        const char *spelling = th_print(types, type);
+        valid = spelling && n00bb_abi_name_pool_encode(names,
                 core_string_borrow(spelling, strlen(spelling)),
                 N00B_ABI_TABLE_TYPE,
                 (uint32_t)i, offsetof(n00b_abi_type_v1, canonical_name),
@@ -244,6 +246,49 @@ n00bb_abi_type_identity_rows_build(
     *out = (n00bb_abi_type_identity_rows_t){
         .rows = rows, .owners = owners, .count = count,
     };
+    return true;
+}
+
+bool
+n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index,
+    const n00bb_abi_decl_index_t *declarations,
+    n00bb_abi_type_identity_rows_t *rows)
+{
+    if (!index || !declarations || !rows || !rows->rows
+        || rows->count != n00bb_abi_type_index_count(index)) return false;
+    for (size_t i = 1; i < n00bb_abi_decl_symbol_count(declarations); i++) {
+        parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
+            (uint32_t)i);
+        n00bb_signature_typevars_t *variables = symbol
+            ? parse_sym_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY)
+            : nullptr;
+        if (!variables || !variables->len) continue;
+        if (!symbol->decl_node || !variables->data
+            || variables->len > UINT32_MAX) return false;
+        parse_scope_t *scope = core_tree_node_value(symbol->decl_node).scope;
+        uint32_t scope_index = 0;
+        if (!n00bb_abi_decl_find_scope(declarations, scope, &scope_index)
+            || !scope_index) return false;
+        for (size_t ordinal = 0; ordinal < variables->len; ordinal++) {
+            th_type *variable = variables->data[ordinal].type;
+            if (!variable) return false;
+            variable = th_resolve(variable);
+            if (th_kind_of(variable) != TH_VAR) continue;
+            uint32_t type_index = 0;
+            if (!n00bb_abi_type_index_find(index, variable, &type_index))
+                continue;
+            n00b_abi_type_v1 *row = &rows->rows[type_index];
+            if (row->kind != N00B_ABI_TYPE_VARIABLE
+                || (row->typevar_owner_scope_index
+                    && (row->typevar_owner_scope_index != scope_index
+                        || row->typevar_ordinal != ordinal))) return false;
+            row->typevar_owner_scope_index = scope_index;
+            row->typevar_ordinal = (uint32_t)ordinal;
+        }
+    }
+    for (size_t i = 1; i < rows->count; i++)
+        if (rows->rows[i].kind == N00B_ABI_TYPE_VARIABLE
+            && !rows->rows[i].typevar_owner_scope_index) return false;
     return true;
 }
 

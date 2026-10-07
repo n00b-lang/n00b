@@ -160,7 +160,7 @@ test('abi-emit-strings', abi_emit_strings_test)
 abi_type_rows_test = executable(
     'abi-type-rows-test',
     ['tests/abi_type_rows.c', 'abi_type_rows.c', 'abi_type_index.c',
-     'abi_emit_strings.c', 'abi_string.c'],
+     'abi_emit_strings.c', 'abi_string.c', 'abi_decl_index.c'],
     dependencies: lantern,
 )
 
@@ -180,7 +180,7 @@ abi_type_signatures_test = executable(
     'abi-type-signatures-test',
     ['tests/abi_type_signatures.c', 'abi_type_signatures.c',
      'abi_type_rows.c', 'abi_type_index.c', 'abi_emit_strings.c',
-     'abi_string.c'],
+     'abi_string.c', 'abi_decl_index.c'],
     dependencies: lantern,
 )
 

@@ -45,6 +45,7 @@
 #include "unicode/encoding.h"
 #include "preprocessor.h"
 #include "rich_string.h"
+#include "signature_typevars.h"
 
 enum { N00BB_JOB_LOCATE_TU = 1, N00BB_JOB_PREPROCESS = 2 };
 
@@ -207,15 +208,6 @@ core_list_decl(th_kwparam);
 core_list_decl(th_member);
 core_list_decl(th_trait_requirement);
 core_list_decl(th_arg);
-typedef struct {
-    core_string_t name;
-    th_type *type;
-} n00bb_typevar_binding_t;
-core_list_decl(n00bb_typevar_binding_t);
-typedef struct {
-    n00bb_typevar_binding_t *data;
-    size_t len;
-} n00bb_signature_typevars_t;
 typedef struct {
     th_trait_requirement *data;
     size_t len;
@@ -3725,14 +3717,13 @@ signature_typevar_for_node(parse_grammar_t *grammar,
         ? core_tree_node_value(owner_node).sym : nullptr;
     if (!owner) return nullptr;
 
-    static const core_string_t binding_key =
-        CORE_STRING_STATIC("n00bb.signature.typevars");
     n00bb_signature_typevars_t *variables =
-        parse_sym_binding(owner, binding_key);
+        parse_sym_binding(owner, N00BB_SIGNATURE_TYPEVARS_KEY);
     if (!variables) {
         variables = core_arena_alloc(&state->semantic_values,
                                       sizeof(*variables));
-        if (!variables || !parse_sym_set_binding(owner, binding_key,
+        if (!variables || !parse_sym_set_binding(owner,
+                                                  N00BB_SIGNATURE_TYPEVARS_KEY,
                                                   variables)) return nullptr;
         memset(variables, 0, sizeof(*variables));
     }
@@ -3774,7 +3765,7 @@ signature_typevars_for_symbol(parse_sym_entry_t *symbol,
 {
     if (!symbol || !out) return;
     n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
-        CORE_STRING_STATIC("n00bb.signature.typevars"));
+        N00BB_SIGNATURE_TYPEVARS_KEY);
     for (size_t i = 0; variables && i < variables->len; i++)
         core_list_push(*out, variables->data[i]);
 }
@@ -5220,7 +5211,7 @@ bind_function_body_signature(core_translation_unit_t *unit,
         ? core_tree_node_value(function).sym : nullptr;
     n00bb_signature_typevars_t *variables = symbol
         ? parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.signature.typevars")) : nullptr;
+            N00BB_SIGNATURE_TYPEVARS_KEY) : nullptr;
     if (!symbol || !variables || !variables->len || !symbol->type) return;
 
     th_type *body_type = th_type_clone(state->types, symbol->type);
@@ -5233,6 +5224,42 @@ bind_function_body_signature(core_translation_unit_t *unit,
             link_source_location(signature));
         return;
     }
+
+    th_type **declaration_vars = nullptr;
+    th_type **body_vars = nullptr;
+    size_t declaration_count = th_free_vars(state->types, symbol->type,
+        &declaration_vars);
+    size_t body_count = th_free_vars(state->types, body_type, &body_vars);
+    bool mapped = declaration_count == body_count;
+    for (size_t i = 0; mapped && i < declaration_count; i++) {
+        const char *original = th_var_name(declaration_vars[i]);
+        const char *copy = th_var_name(body_vars[i]);
+        mapped = original ? copy && !strcmp(original, copy) : !copy;
+    }
+    if (!mapped) {
+        core_diagnostics_report_at(
+            core_translation_unit_diagnostics(unit), unit, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-T0004"),
+            CORE_STRING_STATIC("could not map body type variables to their declaration"),
+            link_source_location(signature));
+        return;
+    }
+    n00bb_body_typevar_map_t *typevar_map = core_arena_alloc(
+        &state->semantic_values, sizeof(*typevar_map));
+    if (!typevar_map || !parse_sym_set_binding(symbol,
+            N00BB_BODY_TYPEVAR_MAP_KEY, typevar_map)) {
+        core_diagnostics_report_at(
+            core_translation_unit_diagnostics(unit), unit, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-T0004"),
+            CORE_STRING_STATIC("could not retain the body type-variable map"),
+            link_source_location(signature));
+        return;
+    }
+    *typevar_map = (n00bb_body_typevar_map_t){
+        .declaration = declaration_vars,
+        .body = body_vars,
+        .count = body_count,
+    };
 
     n00bb_function_parameter_facts_t *facts = parse_sym_binding(symbol,
         CORE_STRING_STATIC("n00bb.function.parameter-facts"));

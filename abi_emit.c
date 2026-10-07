@@ -385,14 +385,16 @@ n00bb_abi_emit_unit(
     n00bb_abi_declarations_t declaration_rows = {0};
     n00bb_abi_function_rows_t function_rows = {0};
     bool valid = pool && type_index
-        && n00bb_abi_type_index_collect_ir(type_index,
+        && n00bb_abi_type_index_collect_module_types(type_index,
             (ir_module_t *)comptime_ir)
-        && n00bb_abi_type_index_collect_ir(type_index,
+        && n00bb_abi_type_index_collect_module_types(type_index,
             (ir_module_t *)runtime_ir)
         && n00bb_abi_type_index_collect_symbols(type_index, symbols)
         && n00bb_abi_type_identity_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
             symbols, type_owner, type_owner_context, pool, &type_rows)
+        && n00bb_abi_type_variables_bind(type_index, declarations,
+            &type_rows)
         && n00bb_abi_type_components_build(type_index,
             (ir_module_t *)runtime_ir, 1, &type_rows, &components)
         && n00bb_abi_type_layout_rows_build(type_index,

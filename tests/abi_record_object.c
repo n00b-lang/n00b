@@ -221,6 +221,7 @@ check_imported_enum(const core_object_section_t *metadata,
     uint32_t imported_enums = 0, builtin_enums = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        assert(type->kind != N00B_ABI_TYPE_VARIABLE);
         if (type->typehash == comparison_hash) {
             assert(type->kind == N00B_ABI_TYPE_ENUM
                 && !type->owner_module_index && !type->fields_or_arms.count
@@ -239,6 +240,78 @@ check_imported_enum(const core_object_section_t *metadata,
     th_ctx_free(type_context);
 }
 
+static void
+check_generic(const core_object_section_t *metadata,
+              const n00bb_abi_directory_entry_t *entries, size_t count,
+              const char *function_name, const char *parameter_name,
+              const char *local_name, uint32_t passing_mode)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *scopes = entry_for(entries, count,
+        N00B_ABI_TABLE_SCOPE);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries, count,
+        N00B_ABI_TABLE_SYMBOL);
+    const n00bb_abi_directory_entry_t *functions = entry_for(entries, count,
+        N00B_ABI_TABLE_FUNCTION);
+    const n00bb_abi_directory_entry_t *parameters = entry_for(entries,
+        count, N00B_ABI_TABLE_PARAMETER);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(types && scopes && symbols && functions && parameters && stream);
+    uint32_t variable_index = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        if (type->kind != N00B_ABI_TYPE_VARIABLE) continue;
+        assert(!variable_index);
+        assert(!type->typehash && !type->size_bits && !type->alignment_bytes
+            && !type->layout_index && !type->canonical_name.words[0]
+            && !type->canonical_name.words[1]
+            && (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+            && type->typevar_owner_scope_index
+            && type->typevar_owner_scope_index < scopes->record_count
+            && !type->typevar_ordinal);
+        const n00b_abi_scope_v1 *scope = row_at(metadata, scopes,
+            type->typevar_owner_scope_index);
+        assert(short_name_is(&scope->kind_name, "function"));
+        variable_index = i;
+    }
+    assert(variable_index);
+    uint32_t parameter_symbol = 0;
+    uint32_t local_symbol = 0;
+    for (uint32_t i = 1; i < symbols->record_count; i++) {
+        const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
+        if (local_name && short_name_is(&symbol->name, local_name)) {
+            assert(!local_symbol && symbol->type_index == variable_index);
+            local_symbol = i;
+            continue;
+        }
+        if (!short_name_is(&symbol->name, parameter_name)) continue;
+        assert(!parameter_symbol && symbol->type_index == variable_index);
+        const n00b_abi_type_v1 *type = row_at(metadata, types,
+            variable_index);
+        assert(symbol->scope_index == type->typevar_owner_scope_index);
+        parameter_symbol = i;
+    }
+    assert(parameter_symbol);
+    assert(!local_name || local_symbol);
+    uint32_t generic_function = 0;
+    for (uint32_t i = 1; i < functions->record_count; i++) {
+        const n00b_abi_function_v1 *function = row_at(metadata, functions, i);
+        if (!short_name_is(&function->name, function_name)) continue;
+        assert(!generic_function && function->parameters.count == 1);
+        uint32_t parameter_index = *(const uint32_t *)row_at(metadata,
+            stream, function->parameters.first);
+        assert(parameter_index && parameter_index < parameters->record_count);
+        const n00b_abi_parameter_v1 *parameter = row_at(metadata,
+            parameters, parameter_index);
+        assert(parameter->type_index == variable_index
+            && parameter->passing_mode == passing_mode);
+        generic_function = i;
+    }
+    assert(generic_function);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -246,7 +319,9 @@ main(int argc, char **argv)
         && (!strcmp(argv[2], "enum") || !strcmp(argv[2], "function")
             || !strcmp(argv[2], "import")
             || !strcmp(argv[2], "import-record")
-            || !strcmp(argv[2], "import-enum"))));
+            || !strcmp(argv[2], "import-enum")
+            || !strcmp(argv[2], "generic")
+            || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
     assert(file);
     assert(!fseek(file, 0, SEEK_END));
@@ -333,6 +408,21 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "import-enum")) {
         check_imported_enum(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "generic")) {
+        check_generic(&metadata, entries, header.directory_count,
+            "assign_same", "item", nullptr, N00B_ABI_PASS_MODIFY);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "generic-local")) {
+        check_generic(&metadata, entries, header.directory_count,
+            "hold_same", "item", "saved", N00B_ABI_PASS_IN);
         free(entries);
         free(object);
         return 0;
