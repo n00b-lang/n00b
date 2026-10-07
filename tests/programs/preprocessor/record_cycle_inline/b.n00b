@@ -1,0 +1,5 @@
+import record_cycle_inline.a
+
+public type Right {
+    left: record_cycle_inline.a.Left
+}

@@ -4189,6 +4189,13 @@ if N00B_PATH="$program_dir" "$compiler" lower \
 fi
 grep -q "module 'record_cycle_missing.b' has no visible type named 'Absent'" \
     "$tmp/record_cycle_missing.out"
+if N00B_PATH="$program_dir" "$compiler" lower \
+    record_cycle_inline.a >"$tmp/record_cycle_inline.out" 2>&1; then
+    echo 'cross-module inline record cycle unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'inline layout cycle: record_cycle_inline.b.Right.left -> record_cycle_inline.a.Left.right -> record_cycle_inline.b.Right' \
+    "$tmp/record_cycle_inline.out"
 "$compiler" lower --dump-layout "$program_dir/fixed_value_layouts.n00b" \
     >"$tmp/fixed_value_layouts.out" 2>"$tmp/fixed_value_layouts.err" || {
     cat "$tmp/fixed_value_layouts.err"
