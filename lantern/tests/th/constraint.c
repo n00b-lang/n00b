@@ -918,6 +918,28 @@ static void test_name_syntax(void)
               && !th_name_syntax_valid("1Type", 5));
 }
 
+static void test_clone_replacing(void)
+{
+    th_ctx *ctx = th_ctx_new();
+    th_type *original = th_var_named(ctx, "T");
+    th_type *declared = th_var_named(ctx, "T");
+    th_type *sequence = th_array(ctx, original);
+    const th_type *from[] = {original};
+    th_type *to[] = {declared};
+    th_type *copy = th_type_clone_replacing(ctx, sequence, from, to, 1);
+    check("clone replacement rebases a nested variable without changing source",
+          copy && copy != sequence && th_seq_elem(copy) == declared
+              && th_seq_elem(sequence) == original);
+    check("clone replacement can replace its root",
+          th_type_clone_replacing(ctx, original, from, to, 1) == declared);
+    const th_type *conflicting_from[] = {original, original};
+    th_type *conflicting_to[] = {declared, original};
+    check("clone replacement rejects conflicting mappings",
+          !th_type_clone_replacing(ctx, sequence, conflicting_from,
+                                   conflicting_to, 2));
+    th_ctx_free(ctx);
+}
+
 int main(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -954,6 +976,7 @@ int main(void)
     test_unification_probe();
     test_configurable_type_printing();
     test_name_syntax();
+    test_clone_replacing();
 
     return report("th constraints");
 }

@@ -223,6 +223,11 @@ th_ctx *th_ctx_new(void);
 void    th_ctx_free(th_ctx *ctx);
 /* Deep-copy a type graph into another type context, preserving graph sharing. */
 th_type *th_type_clone(th_ctx *destination, const th_type *source);
+/* Clone a graph while replacing selected source nodes with existing nodes.
+ * Replacements are borrowed and must outlive the result. */
+th_type *th_type_clone_replacing(th_ctx *destination, const th_type *source,
+                                 const th_type *const *from,
+                                 th_type *const *to, size_t count);
 
 typedef bool (*th_normalizer)(void *state, const char *in, size_t inlen,
                               const char **out, size_t *outlen);

@@ -318,8 +318,35 @@ clone_type_graph(th_ctx *destination, const th_type *source,
 th_type *
 th_type_clone(th_ctx *destination, const th_type *source)
 {
+    return th_type_clone_replacing(destination, source, nullptr, nullptr, 0);
+}
+
+th_type *
+th_type_clone_replacing(th_ctx *destination, const th_type *source,
+                        const th_type *const *from, th_type *const *to,
+                        size_t count)
+{
     if (!destination || !source) return nullptr;
+    if (count && (!from || !to)) return nullptr;
     core_list_t(th_clone_entry_t) seen = core_list_new(th_clone_entry_t);
+    for (size_t i = 0; i < count; i++) {
+        if (!from[i] || !to[i]) {
+            core_list_free(seen);
+            return nullptr;
+        }
+        bool duplicate = false;
+        for (size_t j = 0; j < i; j++) {
+            if (from[i] != from[j]) continue;
+            if (to[i] != to[j]) {
+                core_list_free(seen);
+                return nullptr;
+            }
+            duplicate = true;
+            break;
+        }
+        if (!duplicate)
+            core_list_push(seen, ((th_clone_entry_t){from[i], to[i]}));
+    }
     th_type *copy = clone_type_graph(destination, source, &seen);
     core_list_free(seen);
     return copy;
