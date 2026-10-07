@@ -29,6 +29,7 @@ n00bb_exe = executable(
     'n00bb',
     ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
      'abi_layout.c', 'abi_record_layout.c', 'abi_directory.c',
+     'abi_container.c',
      'global_metadata.c',
      'storage_selection.c'],
     dependencies: lantern,
@@ -87,6 +88,14 @@ abi_directory_test = executable(
 )
 
 test('abi-directory', abi_directory_test)
+
+abi_container_test = executable(
+    'abi-container-test',
+    ['tests/abi_container.c', 'abi_container.c', 'abi_directory.c'],
+    dependencies: lantern,
+)
+
+test('abi-container', abi_container_test)
 
 test(
     'preprocessor',
