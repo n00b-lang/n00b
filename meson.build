@@ -34,7 +34,7 @@ n00bb_exe = executable(
      'abi_container.c', 'abi_index_patch.c', 'abi_emit.c',
      'abi_emit_strings.c',
      'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
-     'abi_type_signatures.c',
+     'abi_type_signatures.c', 'abi_decl_index.c', 'abi_declarations.c',
      'llvm_backend.c',
      'global_metadata.c',
      'storage_selection.c'],
@@ -170,6 +170,24 @@ abi_type_signatures_test = executable(
 )
 
 test('abi-type-signatures', abi_type_signatures_test)
+
+abi_decl_index_test = executable(
+    'abi-decl-index-test',
+    ['tests/abi_decl_index.c', 'abi_decl_index.c'],
+    dependencies: lantern,
+)
+
+test('abi-decl-index', abi_decl_index_test)
+
+abi_declarations_test = executable(
+    'abi-declarations-test',
+    ['tests/abi_declarations.c', 'abi_declarations.c',
+     'abi_decl_index.c', 'abi_type_rows.c', 'abi_type_index.c',
+     'abi_emit_strings.c'],
+    dependencies: lantern,
+)
+
+test('abi-declarations', abi_declarations_test)
 
 abi_type_index_test = executable(
     'abi-type-index-test',
