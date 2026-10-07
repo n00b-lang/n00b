@@ -73,3 +73,18 @@ bool n00bb_abi_index_plan_count(const n00bb_abi_index_plan_t *plan,
 bool n00bb_abi_index_plan_map(const n00bb_abi_index_plan_t *plan,
                               size_t input_index, uint32_t kind,
                               uint32_t local_index, uint32_t *out_index);
+
+/* `values` is the merged U32 stream; `kinds` is a same-length zeroed build
+ * buffer that detects conflicting interpretations of a source slot. Neither
+ * buffer is owned by the remapper. On failure, discard the output buffers. */
+typedef struct {
+    uint32_t *values;
+    uint32_t *kinds;
+    size_t count;
+} n00bb_abi_u32_stream_build_t;
+
+bool n00bb_abi_remap_row(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_index_plan_t *plan, size_t input_index,
+    uint32_t kind, uint32_t local_index, void *out, size_t out_bytes,
+    n00bb_abi_u32_stream_build_t *stream);

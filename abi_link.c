@@ -633,3 +633,289 @@ n00bb_abi_index_plan_build(const n00bb_abi_selected_objects_t *selected)
     }
     return plan;
 }
+
+typedef struct {
+    uint32_t row_kind;
+    size_t offset;
+    uint32_t target_kind;
+} abi_ref_column_t;
+
+#define ABI_REF(K, T, F, TARGET) \
+    {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F), \
+     N00B_ABI_TABLE_##TARGET}
+
+static const abi_ref_column_t abi_index_columns[] = {
+    ABI_REF(PACKAGE, package, parent_package_index, PACKAGE),
+    ABI_REF(MODULE, module, package_index, PACKAGE),
+    ABI_REF(MODULE, module, scc_index, SCC),
+    ABI_REF(MODULE, module, comptime_initializer, FUNCTION),
+    ABI_REF(MODULE, module, runtime_initializer, FUNCTION),
+    ABI_REF(MODULE, module, runtime_config_index, RUNTIME_CONFIG),
+    ABI_REF(MODULE, module, source_file_index, SOURCE_FILE),
+    ABI_REF(TYPE, type, layout_index, LAYOUT),
+    ABI_REF(TYPE, type, owner_module_index, MODULE),
+    ABI_REF(TYPE, type, tracing_index, TRACE),
+    ABI_REF(TYPE, type, call_signature_index, CALL_SIGNATURE),
+    ABI_REF(TYPE, type, typevar_owner_scope_index, SCOPE),
+    ABI_REF(ENUM_ITEM, enum_item, parent_type_index, TYPE),
+    ABI_REF(ENUM_ITEM, enum_item, symbol_index, SYMBOL),
+    ABI_REF(CONSTRAINT, constraint, target_type_index, TYPE),
+    ABI_REF(CONSTRAINT, constraint, result_type_index, TYPE),
+    ABI_REF(CONSTRAINT, constraint, call_type_index, TYPE),
+    ABI_REF(LAYOUT, layout, type_index, TYPE),
+    ABI_REF(LAYOUT, layout, tag_extractor_index, TAG_EXTRACTOR),
+    ABI_REF(FIELD, field, parent_type_index, TYPE),
+    ABI_REF(FIELD, field, child_type_index, TYPE),
+    ABI_REF(FIELD, field, symbol_index, SYMBOL),
+    ABI_REF(ARM, arm, field.parent_type_index, TYPE),
+    ABI_REF(ARM, arm, field.child_type_index, TYPE),
+    ABI_REF(ARM, arm, field.symbol_index, SYMBOL),
+    ABI_REF(TRACE, trace, type_index, TYPE),
+    ABI_REF(TRACE, trace, child_trace_index, TRACE),
+    ABI_REF(TRACE, trace, tag_extractor_index, TAG_EXTRACTOR),
+    ABI_REF(TRACE_CHILD, trace_child, child_type_index, TYPE),
+    ABI_REF(TRACE_ARM, trace_arm, child_trace_index, TRACE),
+    ABI_REF(FUNCTION, function, module_index, MODULE),
+    ABI_REF(FUNCTION, function, scope_index, SCOPE),
+    ABI_REF(FUNCTION, function, symbol_index, SYMBOL),
+    ABI_REF(FUNCTION, function, success_type_index, TYPE),
+    ABI_REF(FUNCTION, function, failure_type_index, TYPE),
+    ABI_REF(FUNCTION, function, variadic_type_index, TYPE),
+    ABI_REF(CALL_SIGNATURE, call_signature, type_index, TYPE),
+    ABI_REF(CALL_SIGNATURE, call_signature, success_type_index, TYPE),
+    ABI_REF(CALL_SIGNATURE, call_signature, failure_type_index, TYPE),
+    ABI_REF(CALL_SIGNATURE, call_signature, rest_parameter_index, PARAMETER),
+    ABI_REF(PARAMETER, parameter, type_index, TYPE),
+    ABI_REF(CODE_RANGE, code_range, function_index, FUNCTION),
+    ABI_REF(SCOPE, scope, module_index, MODULE),
+    ABI_REF(SCOPE, scope, function_index, FUNCTION),
+    ABI_REF(SCOPE, scope, parent_scope_index, SCOPE),
+    ABI_REF(SCOPE, scope, source_location_index, SOURCE_LOCATION),
+    ABI_REF(SYMBOL, symbol, type_index, TYPE),
+    ABI_REF(SYMBOL, symbol, module_index, MODULE),
+    ABI_REF(SYMBOL, symbol, scope_index, SCOPE),
+    ABI_REF(SYMBOL, symbol, declaration_location_index, SOURCE_LOCATION),
+    ABI_REF(SYMBOL, symbol, native_binding_index, NATIVE_BINDING),
+    ABI_REF(TRAIT_METHOD, trait_method, trait_type_index, TYPE),
+    ABI_REF(TRAIT_METHOD, trait_method, signature_type_index, TYPE),
+    ABI_REF(TRAIT_METHOD, trait_method, symbol_index, SYMBOL),
+    ABI_REF(DISPATCH, dispatch, trait_type_index, TYPE),
+    ABI_REF(DISPATCH_ENTRY, dispatch_entry, receiver_type_index, TYPE),
+    ABI_REF(DISPATCH_ENTRY, dispatch_entry, function_index, FUNCTION),
+    ABI_REF(FRAME_LAYOUT, frame_layout, function_index, FUNCTION),
+    ABI_REF(FRAME_LAYOUT, frame_layout, shadow_frame_type_index, TYPE),
+    ABI_REF(SOURCE_LOCATION, source_location, file_index, SOURCE_FILE),
+    ABI_REF(STORAGE, storage, module_index, MODULE),
+    ABI_REF(STORAGE, storage, symbol_index, SYMBOL),
+    ABI_REF(STORAGE, storage, type_index, TYPE),
+    ABI_REF(STORAGE, storage, instance_shape_index, SHAPE),
+    ABI_REF(TLS_RELOCATION, tls_relocation, template_storage_index, STORAGE),
+    ABI_REF(TLS_RELOCATION, tls_relocation, referenced_storage_index, STORAGE),
+    ABI_REF(NAME_SLOT, name_slot, symbol_index, SYMBOL),
+    ABI_REF(REQUIREMENT, requirement, contract_type_index, TYPE),
+    ABI_REF(REQUIREMENT, requirement, required_layout_index, LAYOUT),
+    ABI_REF(REQUIREMENT, requirement, requesting_module_index, MODULE),
+};
+
+#undef ABI_REF
+
+typedef struct {
+    uint32_t row_kind;
+    size_t offset;
+    uint32_t stream_kind;
+    uint32_t target_kind;
+} abi_range_column_t;
+
+#define ABI_RANGE(K, T, F, STREAM, TARGET) \
+    {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F), \
+     N00B_ABI_TABLE_##STREAM, N00B_ABI_TABLE_##TARGET}
+#define ABI_RAW_RANGE(K, T, F, STREAM) \
+    {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F), \
+     N00B_ABI_TABLE_##STREAM, 0}
+
+static const abi_range_column_t abi_range_columns[] = {
+    ABI_RANGE(PACKAGE, package, modules, U32_STREAM, MODULE),
+    ABI_RANGE(MODULE, module, imports, U32_STREAM, MODULE),
+    ABI_RANGE(MODULE, module, static_storage, U32_STREAM, STORAGE),
+    ABI_RANGE(MODULE, module, tls_storage, U32_STREAM, STORAGE),
+    ABI_RANGE(SCC, scc, members, U32_STREAM, MODULE),
+    ABI_RAW_RANGE(SCC, scc, lexical_order, U32_STREAM),
+    ABI_RANGE(TYPE, type, components, U32_STREAM, TYPE),
+    ABI_RAW_RANGE(TYPE, type, fields_or_arms, U32_STREAM),
+    ABI_RANGE(TYPE, type, constraints, U32_STREAM, CONSTRAINT),
+    ABI_RANGE(CONSTRAINT, constraint, arguments, U32_STREAM, TYPE),
+    ABI_RAW_RANGE(SHAPE, shape, extents, U64_STREAM),
+    ABI_RANGE(LAYOUT, layout, occupied_runs, U32_STREAM, PHYSICAL_RUN),
+    ABI_RANGE(LAYOUT, layout, reserved_runs, U32_STREAM, PHYSICAL_RUN),
+    ABI_RANGE(FIELD, field, packed_runs, U32_STREAM, PACKED_RUN),
+    ABI_RANGE(FIELD, field, physical_runs, U32_STREAM, PHYSICAL_RUN),
+    ABI_RANGE(ARM, arm, field.packed_runs, U32_STREAM, PACKED_RUN),
+    ABI_RANGE(ARM, arm, field.physical_runs, U32_STREAM, PHYSICAL_RUN),
+    ABI_RANGE(TRACE, trace, fixed_children, U32_STREAM, TRACE_CHILD),
+    ABI_RANGE(TRACE, trace, arms, U32_STREAM, TRACE_ARM),
+    ABI_RANGE(TRACE_ARM, trace_arm, children, U32_STREAM, TRACE_CHILD),
+    ABI_RANGE(FUNCTION, function, parameters, U32_STREAM, PARAMETER),
+    ABI_RANGE(FUNCTION, function, keywords, U32_STREAM, PARAMETER),
+    ABI_RANGE(FUNCTION, function, constraints, U32_STREAM, CONSTRAINT),
+    ABI_RANGE(FUNCTION, function, code_ranges, U32_STREAM, CODE_RANGE),
+    ABI_RANGE(FUNCTION, function, frame_layouts, U32_STREAM, FRAME_LAYOUT),
+    ABI_RANGE(CALL_SIGNATURE, call_signature, positional_parameters,
+        U32_STREAM, PARAMETER),
+    ABI_RANGE(CALL_SIGNATURE, call_signature, keyword_parameters,
+        U32_STREAM, PARAMETER),
+    ABI_RANGE(SCOPE, scope, children, U32_STREAM, SCOPE),
+    ABI_RANGE(SCOPE, scope, symbols, U32_STREAM, SYMBOL),
+    ABI_RANGE(SYMBOL, symbol, definitions, U32_STREAM, SOURCE_LOCATION),
+    ABI_RANGE(SYMBOL, symbol, uses, U32_STREAM, SOURCE_LOCATION),
+    ABI_RANGE(DISPATCH, dispatch, entries, U32_STREAM, DISPATCH_ENTRY),
+    ABI_RAW_RANGE(FRAME_LAYOUT, frame_layout, pointer_bitmap_bytes,
+        BYTE_STREAM),
+    ABI_RANGE(STORAGE, storage, tls_relocations, U32_STREAM, TLS_RELOCATION),
+};
+
+#undef ABI_RANGE
+#undef ABI_RAW_RANGE
+
+static bool
+remap_index(const n00bb_abi_index_plan_t *plan, size_t input_index,
+            uint32_t kind, uint32_t local, uint32_t *out)
+{
+    if (!local && kind != N00B_ABI_TABLE_TYPE) {
+        *out = 0;
+        return true;
+    }
+    return n00bb_abi_index_plan_map(plan, input_index, kind, local, out);
+}
+
+static uint32_t
+type_member_kind(const n00b_abi_type_v1 *type)
+{
+    switch (type->kind) {
+    case N00B_ABI_TYPE_RECORD: return N00B_ABI_TABLE_FIELD;
+    case N00B_ABI_TYPE_VARIANT: return N00B_ABI_TABLE_ARM;
+    case N00B_ABI_TYPE_ENUM:
+    case N00B_ABI_TYPE_FLAGSET: return N00B_ABI_TABLE_ENUM_ITEM;
+    default: return 0;
+    }
+}
+
+static bool
+remap_range(const n00bb_abi_object_view_t *view,
+            const n00bb_abi_index_plan_t *plan, size_t input_index,
+            n00b_abi_range_v1 source, uint32_t stream_kind,
+            uint32_t target_kind, n00bb_abi_u32_stream_build_t *stream,
+            uint32_t *out_first)
+{
+    if (!source.count) {
+        *out_first = 0;
+        return true;
+    }
+    const n00bb_abi_directory_entry_t *table =
+        n00bb_abi_object_table(view, stream_kind);
+    if (!table || source.first >= table->record_count
+        || source.count > table->record_count - source.first) return false;
+    uint32_t first, last;
+    if (!n00bb_abi_index_plan_map(plan, input_index, stream_kind,
+            source.first, &first)
+        || !n00bb_abi_index_plan_map(plan, input_index, stream_kind,
+            source.first + source.count - 1, &last)
+        || last < first || last - first != source.count - 1) return false;
+    if (stream_kind == N00B_ABI_TABLE_U32_STREAM) {
+        if (!stream || !stream->values || !stream->kinds
+            || last >= stream->count || !target_kind) return false;
+        for (uint32_t i = 0; i < source.count; i++) {
+            const uint8_t *slot = n00bb_abi_object_row(view,
+                stream_kind, source.first + i);
+            uint32_t local = core_le_load_u32(slot);
+            uint32_t mapped = local;
+            if (target_kind != UINT32_MAX
+                && !remap_index(plan, input_index, target_kind,
+                    local, &mapped)) return false;
+            size_t at = (size_t)first + i;
+            if (stream->kinds[at]
+                && (stream->kinds[at] != target_kind
+                    || stream->values[at] != mapped)) return false;
+            stream->kinds[at] = target_kind;
+            stream->values[at] = mapped;
+        }
+    }
+    *out_first = first;
+    return true;
+}
+
+bool
+n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
+                    const n00bb_abi_index_plan_t *plan, size_t input_index,
+                    uint32_t kind, uint32_t local_index, void *out,
+                    size_t out_bytes, n00bb_abi_u32_stream_build_t *stream)
+{
+    if (!selected || !plan || !out || input_index >= selected->count)
+        return false;
+    const n00bb_abi_object_view_t *view = &selected->views[input_index];
+    const n00bb_abi_directory_entry_t *table =
+        n00bb_abi_object_table(view, kind);
+    const void *source = n00bb_abi_object_row(view, kind, local_index);
+    if (!table || !source || out_bytes < table->record_bytes
+        || link_kind_is_stream(kind)) return false;
+    memmove(out, source, table->record_bytes);
+    uint8_t *bytes = out;
+    for (size_t i = 0; i < sizeof(abi_index_columns)
+         / sizeof(abi_index_columns[0]); i++) {
+        const abi_ref_column_t *field = &abi_index_columns[i];
+        if (field->row_kind != kind) continue;
+        if (field->offset > table->record_bytes
+            || sizeof(uint32_t) > table->record_bytes - field->offset)
+            return false;
+        uint32_t local = core_le_load_u32(bytes + field->offset), mapped;
+        if (!remap_index(plan, input_index, field->target_kind,
+                local, &mapped)) return false;
+        core_le_store_u32(bytes + field->offset, mapped);
+    }
+    if (kind == N00B_ABI_TABLE_SPECIALIZATION_LINK) {
+        uint32_t local = core_le_load_u32(bytes), mapped;
+        if (!remap_index(plan, input_index, N00B_ABI_TABLE_TYPE,
+                local, &mapped)) return false;
+        core_le_store_u32(bytes, mapped);
+    }
+    for (size_t i = 0; i < sizeof(abi_range_columns)
+         / sizeof(abi_range_columns[0]); i++) {
+        const abi_range_column_t *field = &abi_range_columns[i];
+        if (field->row_kind != kind) continue;
+        if (field->offset > table->record_bytes
+            || sizeof(n00b_abi_range_v1)
+                > table->record_bytes - field->offset) return false;
+        n00b_abi_range_v1 range;
+        memcpy(&range, bytes + field->offset, sizeof(range));
+        uint32_t target = field->target_kind;
+        if (kind == N00B_ABI_TABLE_SCC
+            && field->offset == offsetof(n00b_abi_scc_v1, lexical_order))
+            target = UINT32_MAX;
+        if (kind == N00B_ABI_TABLE_TYPE
+            && field->offset == offsetof(n00b_abi_type_v1, fields_or_arms))
+            target = type_member_kind((const n00b_abi_type_v1 *)source);
+        uint32_t first;
+        if (!remap_range(view, plan, input_index, range,
+                field->stream_kind, target, stream, &first)) return false;
+        core_le_store_u32(bytes + field->offset, first);
+    }
+    if (kind == N00B_ABI_TABLE_TYPE) {
+        n00b_abi_type_v1 *type = out;
+        uint32_t start = type->specialization_start_ix;
+        uint32_t end = type->specialization_end_ix;
+        if (start || end) {
+            uint32_t mapped_start, mapped_last;
+            if (!end || end <= start
+                || !n00bb_abi_index_plan_map(plan, input_index,
+                    N00B_ABI_TABLE_SPECIALIZATION_LINK, start,
+                    &mapped_start)
+                || !n00bb_abi_index_plan_map(plan, input_index,
+                    N00B_ABI_TABLE_SPECIALIZATION_LINK, end - 1,
+                    &mapped_last)
+                || mapped_last - mapped_start != end - start - 1
+                || mapped_last == UINT32_MAX) return false;
+            type->specialization_start_ix = mapped_start;
+            type->specialization_end_ix = mapped_last + 1;
+        }
+    }
+    return true;
+}

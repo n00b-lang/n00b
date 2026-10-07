@@ -6,6 +6,7 @@
 #include "abi_link.h"
 #include "abi_string.h"
 #include "n00b-abi-v1.h"
+#include "lib/byteorder.h"
 
 static const char *
 host_triple(void)
@@ -44,6 +45,60 @@ init_unit(core_translation_unit_t *unit, const char *name)
     core_module_spec_release(&spec);
     core_source_file_release(&source);
     return valid;
+}
+
+static void
+check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
+                    const n00bb_abi_index_plan_t *plan)
+{
+    uint32_t stream_count;
+    assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_U32_STREAM,
+        &stream_count));
+    uint32_t *values = calloc(stream_count ? stream_count : 1,
+                              sizeof(*values));
+    uint32_t *kinds = calloc(stream_count ? stream_count : 1,
+                             sizeof(*kinds));
+    assert(values && kinds);
+    n00bb_abi_u32_stream_build_t stream = {
+        .values = values, .kinds = kinds, .count = stream_count,
+    };
+    for (size_t input = 0; input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        for (size_t table = 0; table < view->directory_count; table++) {
+            const n00bb_abi_directory_entry_t *entry = &view->directory[table];
+            if (entry->kind == N00B_ABI_TABLE_U32_STREAM
+                || entry->kind == N00B_ABI_TABLE_U64_STREAM
+                || entry->kind == N00B_ABI_TABLE_BYTE_STREAM) continue;
+            void *row = malloc(entry->record_bytes);
+            assert(row);
+            for (uint32_t local = 0; local < entry->record_count; local++)
+                assert(n00bb_abi_remap_row(selected, plan, input,
+                    entry->kind, local, row, entry->record_bytes,
+                    &stream));
+            free(row);
+        }
+        n00b_abi_package_v1 package;
+        uint32_t module_index;
+        assert(n00bb_abi_remap_row(selected, plan, input,
+            N00B_ABI_TABLE_PACKAGE, 1, &package, sizeof(package), &stream)
+            && n00bb_abi_index_plan_map(plan, input,
+                N00B_ABI_TABLE_MODULE, 1, &module_index)
+            && package.modules.count == 1
+            && package.modules.first < stream.count
+            && stream.values[package.modules.first] == module_index);
+        const n00bb_abi_directory_entry_t *scc = n00bb_abi_object_table(
+            view, N00B_ABI_TABLE_SCC);
+        if (scc && scc->record_count > 1) {
+            n00b_abi_scc_v1 group;
+            assert(n00bb_abi_remap_row(selected, plan, input,
+                N00B_ABI_TABLE_SCC, 1, &group, sizeof(group), &stream)
+                && group.members.count == 1
+                && group.members.first < stream.count
+                && stream.values[group.members.first] == module_index);
+        }
+    }
+    free(kinds);
+    free(values);
 }
 
 static void
@@ -131,6 +186,7 @@ test_cycle_selection(char **paths)
         }
     }
     assert(shared_primitive);
+    check_remapped_rows(&selected, plan);
     n00bb_abi_index_plan_free(plan);
     n00bb_abi_selected_objects_release(&selected);
     assert(!selected.views && !selected.count);
@@ -246,6 +302,36 @@ main(int argc, char **argv)
         N00B_ABI_TABLE_MODULE, 1, &mapped) && mapped == 1
         && !n00bb_abi_index_plan_map(plan, 0,
             N00B_ABI_TABLE_MODULE, 2, &mapped));
+    check_remapped_rows(&selected, plan);
+    n00b_abi_module_v1 remapped_module;
+    n00b_abi_module_v1 *mutable_module = (void *)
+        n00bb_abi_object_row(&selected.views[0], N00B_ABI_TABLE_MODULE, 1);
+    uint32_t saved_package = mutable_module->package_index;
+    mutable_module->package_index = UINT32_MAX;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_MODULE, 1, &remapped_module,
+        sizeof(remapped_module), nullptr));
+    mutable_module->package_index = saved_package;
+    const n00b_abi_package_v1 *package = n00bb_abi_object_row(
+        &selected.views[0], N00B_ABI_TABLE_PACKAGE, 1);
+    uint8_t *module_slot = (void *)n00bb_abi_object_row(
+        &selected.views[0], N00B_ABI_TABLE_U32_STREAM,
+        package->modules.first);
+    uint32_t saved_module = core_le_load_u32(module_slot);
+    core_le_store_u32(module_slot, UINT32_MAX);
+    uint32_t *stream_values = calloc(1, sizeof(uint32_t));
+    uint32_t *stream_kinds = calloc(1, sizeof(uint32_t));
+    assert(stream_values && stream_kinds);
+    n00bb_abi_u32_stream_build_t stream = {
+        .values = stream_values, .kinds = stream_kinds, .count = 1,
+    };
+    n00b_abi_package_v1 remapped_package;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_PACKAGE, 1, &remapped_package,
+        sizeof(remapped_package), &stream));
+    core_le_store_u32(module_slot, saved_module);
+    free(stream_kinds);
+    free(stream_values);
     n00bb_abi_index_plan_free(plan);
     n00bb_abi_selected_objects_release(&selected);
     core_link_unit_free(link);
