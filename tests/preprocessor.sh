@@ -2235,6 +2235,15 @@ grep -q 'LANTERN-L0003' "$tmp/duplicate_function.err"
 grep -q 'duplicate definitions for one module declaration identity' \
     "$tmp/duplicate_function.err"
 
+if "$compiler" lower \
+    "$program_dir/where_signature_collision.n00b" \
+    >"$tmp/where_signature_collision.out" 2>&1; then
+    echo 'where clauses unexpectedly distinguished identical function signatures' >&2
+    exit 1
+fi
+grep -q 'LANTERN-L0003.*duplicate definitions for one module declaration identity' \
+    "$tmp/where_signature_collision.out"
+
 visibility_dir="$script_dir/programs/type_visibility"
 N00B_PATH="$visibility_dir" "$compiler" preprocess \
     "$visibility_dir/public_consumer.n00b" \

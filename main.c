@@ -16081,11 +16081,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ? function_with_return_type(ir_module_types(context->module),
                                     signature, result_type) : nullptr;
     signature = call_constraint
-        ? th_unify(ir_module_types(context->module), signature,
-                   call_constraint) : nullptr;
-    if (signature)
-        signature = th_unify_in_place(ir_module_types(context->module),
-                                      signature, call_constraint);
+        ? th_unify_in_place(ir_module_types(context->module), signature,
+                            call_constraint) : nullptr;
     signature_return = signature ? th_func_ret(signature) : nullptr;
     if (!signature || !signature_return)
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
