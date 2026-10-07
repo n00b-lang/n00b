@@ -227,6 +227,15 @@ static bool save_type(core_object_writer_t *writer, const void *object,
     for (size_t i = 0; i < type->trait.n; i++)
       if (!core_object_writer_string(writer, type->trait.methods[i].name) ||
           !write_type_ref(writer, type->trait.methods[i].type)) return false;
+    if (!write_count(writer, type->trait.nr)) return false;
+    for (size_t i = 0; i < type->trait.nr; i++) {
+      const th_trait_requirement *requirement =
+          &type->trait.requirements[i];
+      if (!core_object_writer_u32(writer, requirement->kind) ||
+          !write_type_ref(writer, requirement->subject) ||
+          !write_type_ref(writer, requirement->target) ||
+          !core_object_writer_string(writer, requirement->iface)) return false;
+    }
     return true;
   case TH_FUNCTION:
     if (!write_type_ref(writer, type->fn.ret) ||
@@ -400,6 +409,32 @@ static bool restore_type(core_object_reader_t *reader, void *object,
           !type->trait.methods[i].name ||
           !read_type_ref(reader, &type->trait.methods[i].type) ||
           !type->trait.methods[i].type) return false;
+    if (!read_count(reader, &type->trait.nr) ||
+        type->trait.nr > SIZE_MAX / sizeof(th_trait_requirement))
+      return false;
+    type->trait.requirements = read_array(reader, type->trait.nr,
+        sizeof(th_trait_requirement), alignof(th_trait_requirement));
+    if (type->trait.nr && !type->trait.requirements) return false;
+    for (size_t i = 0; i < type->trait.nr; i++) {
+      th_trait_requirement *requirement = &type->trait.requirements[i];
+      uint32_t kind;
+      if (!core_object_reader_u32(reader, &kind) ||
+          !read_type_ref(reader, &requirement->subject) ||
+          !read_type_ref(reader, &requirement->target) ||
+          !core_object_reader_string(reader,
+              (char **)&requirement->iface) ||
+          !requirement->subject) return false;
+      requirement->kind = (th_con_kind)kind;
+      if (kind == TH_CON_EXCLUDES) {
+        if (!requirement->target || requirement->iface) return false;
+      }
+      else if (kind == TH_CON_IMPLEMENTS) {
+        if (requirement->target || !requirement->iface ||
+            !th_name_syntax_valid(requirement->iface,
+                                  strlen(requirement->iface))) return false;
+      }
+      else return false;
+    }
     return true;
   case TH_FUNCTION:
     if (!read_type_ref(reader, &type->fn.ret) || !type->fn.ret ||

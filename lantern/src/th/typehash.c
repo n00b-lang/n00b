@@ -205,8 +205,12 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         copy->trait.name = clone_string(destination, source->trait.name);
         copy->trait.nlen = source->trait.nlen;
         copy->trait.n = source->trait.n;
+        copy->trait.nr = source->trait.nr;
         copy->trait.methods = source->trait.n
             ? core_alloc_array(th_member, source->trait.n) : nullptr;
+        copy->trait.requirements = source->trait.nr
+            ? core_alloc_array(th_trait_requirement, source->trait.nr)
+            : nullptr;
         if (!copy->trait.name) return nullptr;
         for (size_t i = 0; i < source->trait.n; i++) {
             copy->trait.methods[i].name = clone_string(destination,
@@ -215,6 +219,21 @@ clone_type_graph(th_ctx *destination, const th_type *source,
                 source->trait.methods[i].type, seen);
             if (!copy->trait.methods[i].name || !copy->trait.methods[i].type)
                 return nullptr;
+        }
+        for (size_t i = 0; i < source->trait.nr; i++) {
+            const th_trait_requirement *original =
+                &source->trait.requirements[i];
+            th_trait_requirement *requirement = &copy->trait.requirements[i];
+            *requirement = *original;
+            requirement->subject = clone_type_graph(destination,
+                original->subject, seen);
+            requirement->target = original->target
+                ? clone_type_graph(destination, original->target, seen)
+                : nullptr;
+            requirement->iface = clone_string(destination, original->iface);
+            if (!requirement->subject
+                || (original->target && !requirement->target)
+                || (original->iface && !requirement->iface)) return nullptr;
         }
         return copy;
     case TH_FUNCTION:
@@ -626,6 +645,18 @@ static bool enc_plan(th_enc *e, eframe *f)
                 return false;
         }
         f->ninline = f->steps.len;
+        u64(&f->post, t->trait.nr);
+        for (size_t i = 0; i < t->trait.nr; i++) {
+            const th_trait_requirement *requirement =
+                &t->trait.requirements[i];
+            s = step_add(&f->steps, requirement->target);
+            u8(&s->pre, requirement->kind);
+            enc_node(e, &s->pre, requirement->subject);
+            if (!e->ok) return false;
+            if (requirement->iface
+                && !name(e->ctx, &s->pre, requirement->iface,
+                         strlen(requirement->iface))) return false;
+        }
         break;
 
     case TH_FUNCTION: {
@@ -1020,9 +1051,15 @@ static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
     }
 
     case TH_TRAIT:
-        kids = core_alloc_array(th_type *, t->trait.n);
+        kids = core_alloc_array(th_type *,
+            t->trait.n + 2 * t->trait.nr);
         for (size_t i = 0; i < t->trait.n; i++)
             kids[n++] = t->trait.methods[i].type;
+        for (size_t i = 0; i < t->trait.nr; i++) {
+            kids[n++] = t->trait.requirements[i].subject;
+            if (t->trait.requirements[i].target)
+                kids[n++] = t->trait.requirements[i].target;
+        }
         break;
 
     case TH_FUNCTION: {
@@ -1344,11 +1381,43 @@ th_type *th_record(th_ctx *ctx, const th_member *m, size_t n)
     return t;
 }
 
+typedef struct {
+    th_trait_requirement requirement;
+    core_buffer_t key;
+} th_requirement_key;
+
+static int cmp_requirement_key(const void *left, const void *right)
+{
+    const th_requirement_key *a = left, *b = right;
+    th_slice x = {(uint8_t *)a->key.data, a->key.byte_len};
+    th_slice y = {(uint8_t *)b->key.data, b->key.byte_len};
+    return th_cmp_slice(&x, &y);
+}
+
+static bool trait_requirement_key(th_ctx *ctx,
+                                  const th_trait_requirement *requirement,
+                                  core_buffer_t *out)
+{
+    th_enc encoder = {.ctx = ctx, .ok = true};
+    pm_init(&encoder.path);
+    u8(out, requirement->kind);
+    enc_node(&encoder, out, requirement->subject);
+    if (encoder.ok && requirement->target)
+        enc_node(&encoder, out, requirement->target);
+    if (encoder.ok && requirement->iface)
+        encoder.ok = name(ctx, out, requirement->iface,
+                          strlen(requirement->iface));
+    pm_free(&encoder.path);
+    return encoder.ok;
+}
+
 th_type *th_trait(th_ctx *ctx, const char *qualified_name,
-                  const th_member *methods, size_t n)
+                  const th_member *methods, size_t n,
+                  const th_trait_requirement *requirements, size_t nr)
 {
     if (!ctx || !qualified_name || !th_name_syntax_valid(qualified_name,
-            strlen(qualified_name)) || (n && !methods)) return nullptr;
+            strlen(qualified_name)) || (n && !methods)
+        || (nr && !requirements)) return nullptr;
     for (size_t i = 0; i < n; i++) {
         if (!methods[i].name || !methods[i].type ||
             !th_name_syntax_valid(methods[i].name,
@@ -1357,16 +1426,62 @@ th_type *th_trait(th_ctx *ctx, const char *qualified_name,
         for (size_t j = 0; j < i; j++)
             if (!strcmp(methods[j].name, methods[i].name)) return nullptr;
     }
+    for (size_t i = 0; i < nr; i++) {
+        const th_trait_requirement *requirement = &requirements[i];
+        if (!requirement->subject) return nullptr;
+        if (requirement->kind == TH_CON_EXCLUDES) {
+            if (!requirement->target || requirement->iface) return nullptr;
+        }
+        else if (requirement->kind == TH_CON_IMPLEMENTS) {
+            if (requirement->target || !requirement->iface
+                || !th_name_syntax_valid(requirement->iface,
+                                         strlen(requirement->iface)))
+                return nullptr;
+        }
+        else return nullptr;
+    }
     th_type *t = node(ctx, TH_TRAIT);
     if (!t) return nullptr;
     t->trait.name = th_strdup(ctx, qualified_name, strlen(qualified_name));
     t->trait.nlen = strlen(qualified_name);
     t->trait.n = n;
+    t->trait.nr = nr;
     t->trait.methods = n ? th_alloc(ctx, n * sizeof(th_member)) : nullptr;
+    t->trait.requirements = nr
+        ? th_alloc(ctx, nr * sizeof(th_trait_requirement)) : nullptr;
     for (size_t i = 0; i < n; i++) {
         t->trait.methods[i].name = th_strdup(ctx, methods[i].name,
             strlen(methods[i].name));
         t->trait.methods[i].type = methods[i].type;
+    }
+    for (size_t i = 0; i < nr; i++) {
+        t->trait.requirements[i] = requirements[i];
+        if (requirements[i].iface)
+            t->trait.requirements[i].iface = th_strdup(ctx,
+                requirements[i].iface, strlen(requirements[i].iface));
+    }
+    if (nr) {
+        th_normalize(t);
+        th_requirement_key *keys = core_alloc_array(th_requirement_key, nr);
+        bool valid = keys != nullptr;
+        for (size_t i = 0; valid && i < nr; i++) {
+            keys[i].requirement = t->trait.requirements[i];
+            valid = trait_requirement_key(ctx, &keys[i].requirement,
+                                          &keys[i].key);
+        }
+        if (valid) {
+            qsort(keys, nr, sizeof(*keys), cmp_requirement_key);
+            t->trait.nr = 0;
+            for (size_t i = 0; i < nr; i++) {
+                if (i && !cmp_requirement_key(&keys[i - 1], &keys[i]))
+                    continue;
+                t->trait.requirements[t->trait.nr++] = keys[i].requirement;
+            }
+        }
+        for (size_t i = 0; i < nr; i++)
+            core_buffer_release(&keys[i].key);
+        core_free(keys);
+        if (!valid) return nullptr;
     }
     return t;
 }

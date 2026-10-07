@@ -167,6 +167,21 @@ const th_member *th_trait_method(const th_type *t, size_t i)
     return trait && i < trait->trait.n ? &trait->trait.methods[i] : nullptr;
 }
 
+size_t th_trait_requirement_count(const th_type *t)
+{
+    const th_type *trait = as(t, TH_TRAIT);
+    return trait ? trait->trait.nr : 0;
+}
+
+bool th_trait_requirement_at(const th_type *t, size_t i,
+                             th_trait_requirement *out)
+{
+    const th_type *trait = as(t, TH_TRAIT);
+    if (!trait || i >= trait->trait.nr || !out) return false;
+    *out = trait->trait.requirements[i];
+    return true;
+}
+
 static bool same_named_type(const th_type *left, const th_type *right)
 {
     const char *left_name = nullptr, *right_name = nullptr;

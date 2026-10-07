@@ -182,6 +182,14 @@ typedef struct {
     };
 } th_constraint;
 
+/* Declared interface requirements, separate from inference obligations. */
+typedef struct {
+    th_type *subject;
+    th_con_kind kind;
+    th_type *target;
+    const char *iface;
+} th_trait_requirement;
+
 typedef struct {
     th_argkind kind;
     union {
@@ -240,7 +248,8 @@ th_type *th_array_n(th_ctx *ctx, th_type *elem, uint64_t extent);
 th_type *th_record(th_ctx *ctx, const th_member *members, size_t n);
 /* A named interface whose method order is part of its type identity. */
 th_type *th_trait(th_ctx *ctx, const char *qualified_name,
-                  const th_member *methods, size_t n);
+                  const th_member *methods, size_t n,
+                  const th_trait_requirement *requirements, size_t nr);
 th_type *th_record_stub(th_ctx *ctx);
 void     th_record_fill(th_ctx *ctx, th_type *stub, const th_member *members,
                         size_t n);
@@ -311,6 +320,9 @@ th_type *th_record_lookup(const th_type *type, const char *name);
 bool th_trait_name(const th_type *type, const char **name, size_t *nlen);
 size_t th_trait_len(const th_type *type);
 const th_member *th_trait_method(const th_type *type, size_t i);
+size_t th_trait_requirement_count(const th_type *type);
+bool th_trait_requirement_at(const th_type *type, size_t i,
+                             th_trait_requirement *out);
 
 th_type *th_func_ret(const th_type *type);
 th_type *th_func_error(const th_type *type);

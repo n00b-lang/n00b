@@ -1296,9 +1296,15 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
     }
 
     case TH_TRAIT:
-        kids = core_alloc_array(th_type *, t->trait.n);
+        kids = core_alloc_array(th_type *,
+            t->trait.n + 2 * t->trait.nr);
         for (size_t i = 0; i < t->trait.n; i++)
             kids[n++] = t->trait.methods[i].type;
+        for (size_t i = 0; i < t->trait.nr; i++) {
+            kids[n++] = t->trait.requirements[i].subject;
+            if (t->trait.requirements[i].target)
+                kids[n++] = t->trait.requirements[i].target;
+        }
         break;
 
     case TH_FUNCTION: {
@@ -1473,6 +1479,11 @@ bool th_occurs(th_ctx *ctx, th_type *var, th_type *t)
         case TH_TRAIT:
             for (size_t i = 0; i < cur->trait.n; i++)
                 core_list_push(work, cur->trait.methods[i].type);
+            for (size_t i = 0; i < cur->trait.nr; i++) {
+                core_list_push(work, cur->trait.requirements[i].subject);
+                if (cur->trait.requirements[i].target)
+                    core_list_push(work, cur->trait.requirements[i].target);
+            }
             break;
 
         case TH_FUNCTION:
@@ -1590,6 +1601,19 @@ static void plan_kids(th_ctx *ctx, th_type *out, const th_type *t,
             for (size_t i = 0; i < t->trait.n; i++)
                 rpush(w, &out->trait.methods[i].type,
                     t->trait.methods[i].type, depth);
+        }
+        if (t->trait.nr) {
+            out->trait.requirements = th_alloc(ctx,
+                t->trait.nr * sizeof(th_trait_requirement));
+            memcpy(out->trait.requirements, t->trait.requirements,
+                t->trait.nr * sizeof(th_trait_requirement));
+            for (size_t i = 0; i < t->trait.nr; i++) {
+                rpush(w, &out->trait.requirements[i].subject,
+                    t->trait.requirements[i].subject, depth);
+                if (t->trait.requirements[i].target)
+                    rpush(w, &out->trait.requirements[i].target,
+                        t->trait.requirements[i].target, depth);
+            }
         }
         break;
 
@@ -1972,12 +1996,24 @@ static bool uni_step(th_ctx *ctx, th_type *a, th_type *b, core_list_t(tpair) *w)
     case TH_TRAIT:
         if (a->trait.nlen != b->trait.nlen
             || memcmp(a->trait.name, b->trait.name, a->trait.nlen)
-            || a->trait.n != b->trait.n) return false;
+            || a->trait.n != b->trait.n
+            || a->trait.nr != b->trait.nr) return false;
         for (size_t i = a->trait.n; i-- > 0;) {
             if (strcmp(a->trait.methods[i].name,
                        b->trait.methods[i].name)) return false;
             upush(w, a->trait.methods[i].type,
                 b->trait.methods[i].type);
+        }
+        for (size_t i = a->trait.nr; i-- > 0;) {
+            const th_trait_requirement *left = &a->trait.requirements[i];
+            const th_trait_requirement *right = &b->trait.requirements[i];
+            if (left->kind != right->kind
+                || (left->iface && !right->iface)
+                || (!left->iface && right->iface)
+                || (left->iface && strcmp(left->iface, right->iface)))
+                return false;
+            upush(w, left->subject, right->subject);
+            if (left->target) upush(w, left->target, right->target);
         }
         return true;
 

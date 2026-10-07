@@ -362,25 +362,31 @@ static void test_trait_type_identity(void) {
   th_type *receiver = th_var(types);
   th_type *integer = th_name(types, "int");
   th_type *boolean = th_name(types, "bool");
+  th_type *nil = th_name(types, "nil");
+  th_param self = {.mode = TH_IN, .type = receiver};
   th_member methods[] = {
-      {.name = "read", .type = fn1(types, receiver, integer)},
-      {.name = "ready", .type = fn1(types, receiver, boolean)},
+      {.name = "read", .type = th_func_with_error(types, integer, nil,
+          &self, 1, nullptr, nullptr, 0)},
+      {.name = "ready", .type = th_func_with_error(types, boolean, nil,
+          &self, 1, nullptr, nullptr, 0)},
   };
   th_member reordered[] = {methods[1], methods[0]};
-  th_type *trait = th_trait(types, "base.Readable", methods, 2);
-  th_type *other_order = th_trait(types, "base.Readable", reordered, 2);
-  th_type *other_name = th_trait(types, "base.Writable", methods, 2);
+  th_type *trait = th_trait(types, "base.Readable", methods, 2, nullptr, 0);
+  th_type *other_order = th_trait(types, "base.Readable", reordered, 2,
+      nullptr, 0);
+  th_type *other_name = th_trait(types, "base.Writable", methods, 2,
+      nullptr, 0);
   th_type *clone = th_type_clone(copy_types, trait);
   uint64_t hash = th_hash(types, trait);
   const uint8_t *encoded = nullptr;
   size_t encoded_size = 0;
   static const char expected_encoding[] =
-      "0b000000000000000d626173652e5265616461626c650000"
-      "000000000002000000000000000472656164060001000000"
-      "000000000003696e74000000000000000000000000000000"
-      "01000a000000000000000000000000000000057265616479"
-      "060001000000000000000004626f6f6c0000000000000000"
-      "0000000000000001000a0000000000000000";
+      "0b000000000000000d626173652e5265616461626c6500000000000000020000"
+      "00000000000472656164060401000000000000000003696e7400000000000000"
+      "000000000000000001000a0000000000000000010000000000000000036e696c"
+      "0000000000000000000000000000000572656164790604010000000000000000"
+      "04626f6f6c00000000000000000000000000000001000a000000000000000001"
+      "0000000000000000036e696c00000000000000000000000000000000";
   bool vector = th_encode(types, trait, &encoded, &encoded_size) &&
       encoded_size * 2 == strlen(expected_encoding);
   for (size_t i = 0; vector && i < encoded_size; i++) {
@@ -389,8 +395,15 @@ static void test_trait_type_identity(void) {
     vector = pair[0] == expected_encoding[2 * i] &&
         pair[1] == expected_encoding[2 * i + 1];
   }
+  if (!vector) {
+    fprintf(stderr, "trait hash: 0x%016llx\ntrait encoding: ",
+        (unsigned long long)hash);
+    for (size_t i = 0; i < encoded_size; i++)
+      fprintf(stderr, "%02x", encoded[i]);
+    fputc('\n', stderr);
+  }
   check("trait canonical bytes and hash are stable",
-        vector && hash == UINT64_C(0x23b5a89a3b0456b7));
+        vector && hash == UINT64_C(0x7f02b0a21c34459f));
   const char *name = nullptr;
   size_t name_len = 0;
   check("trait node exposes its ordered interface",
@@ -410,10 +423,115 @@ static void test_trait_type_identity(void) {
   th_member duplicate[] = {methods[0], methods[0]};
   th_member malformed = {.name = "bad.method", .type = methods[0].type};
   check("trait builder rejects duplicate and malformed methods",
-        !th_trait(types, "base.Readable", duplicate, 2) &&
-        !th_trait(types, "base.Readable", &malformed, 1));
+        !th_trait(types, "base.Readable", duplicate, 2, nullptr, 0) &&
+        !th_trait(types, "base.Readable", &malformed, 1, nullptr, 0));
   check("trait method order participates in unification",
         !th_unify(types, trait, other_order));
+
+  th_type *string = th_name(types, "string");
+  th_trait_requirement requirements[] = {
+      {.subject = receiver, .kind = TH_CON_EXCLUDES, .target = string},
+      {.subject = receiver, .kind = TH_CON_IMPLEMENTS,
+       .iface = "base.Copy"},
+  };
+  th_trait_requirement reverse_requirements[] = {
+      requirements[1], requirements[0],
+  };
+  th_trait_requirement repeated_requirements[] = {
+      requirements[0], requirements[1], requirements[0],
+  };
+  th_trait_requirement other_requirement = {
+      .subject = receiver, .kind = TH_CON_EXCLUDES, .target = boolean,
+  };
+  th_type *constrained = th_trait(types, "base.Readable", methods, 2,
+      requirements, 2);
+  th_type *reordered_constraints = th_trait(types, "base.Readable",
+      methods, 2, reverse_requirements, 2);
+  th_type *repeated_constraints = th_trait(types, "base.Readable",
+      methods, 2, repeated_requirements, 3);
+  th_type *different_constraint = th_trait(types, "base.Readable",
+      methods, 2, &other_requirement, 1);
+  uint64_t constrained_hash = th_hash(types, constrained);
+  const uint8_t *constrained_encoding = nullptr;
+  size_t constrained_encoding_size = 0;
+  bool constrained_encoded = th_encode(types, constrained,
+      &constrained_encoding, &constrained_encoding_size);
+  static const char expected_constrained_encoding[] =
+      "0b000000000000000d626173652e5265616461626c6500000000000000020000"
+      "00000000000472656164060401000000000000000003696e7400000000000000"
+      "000000000000000001000a0000000000000000010000000000000000036e696c"
+      "0000000000000000000000000000000572656164790604010000000000000000"
+      "04626f6f6c00000000000000000000000000000001000a000000000000000001"
+      "0000000000000000036e696c00000000000000000000000000000002020a0000"
+      "0000000000000000000000000009626173652e436f7079060a00000000000000"
+      "0001000000000000000006737472696e670000000000000000";
+  bool constraint_vector = constrained_encoded &&
+      constrained_encoding_size * 2 ==
+          strlen(expected_constrained_encoding);
+  for (size_t i = 0; i < constrained_encoding_size &&
+       2 * i + 1 < strlen(expected_constrained_encoding);
+       i++) {
+    char pair[3];
+    snprintf(pair, sizeof(pair), "%02x", constrained_encoding[i]);
+    bool same = pair[0] == expected_constrained_encoding[2 * i] &&
+        pair[1] == expected_constrained_encoding[2 * i + 1];
+    if (!same) {
+      fprintf(stderr, "constrained vector differs at byte %zu: %s\n",
+          i, pair);
+      constraint_vector = false;
+      break;
+    }
+  }
+  if (!constraint_vector)
+    fprintf(stderr, "constrained hash: 0x%016llx; vector lengths: actual %zu expected %zu\n",
+        (unsigned long long)constrained_hash,
+        constrained_encoding_size * 2,
+        strlen(expected_constrained_encoding));
+  if (!constraint_vector) {
+    for (size_t i = 0; i < constrained_encoding_size; i++)
+      fprintf(stderr, "%02x", constrained_encoding[i]);
+    fputc('\n', stderr);
+  }
+  check("constrained trait canonical bytes and hash are stable",
+        constraint_vector &&
+        constrained_hash == UINT64_C(0x2bdf055d88ee3f65));
+  th_trait_requirement saved_requirement = {0};
+  check("trait declared constraints affect identity without source-order drift",
+        constrained && reordered_constraints && repeated_constraints &&
+        different_constraint &&
+        constrained_hash && constrained_hash != hash &&
+        constrained_hash == th_hash(types, reordered_constraints) &&
+        constrained_hash == th_hash(types, repeated_constraints) &&
+        constrained_hash != th_hash(types, different_constraint) &&
+        th_trait_requirement_count(constrained) == 2 &&
+        th_trait_requirement_count(repeated_constraints) == 2 &&
+        th_trait_requirement_at(constrained, 0, &saved_requirement) &&
+        saved_requirement.subject == receiver);
+  check("equivalent trait constraints unify regardless of order",
+        th_unify(types, constrained, reordered_constraints) &&
+        th_unify(types, constrained, repeated_constraints));
+
+  th_type *other_variable = th_var(types);
+  th_param pair[] = {
+      {.mode = TH_IN, .type = receiver},
+      {.mode = TH_IN, .type = other_variable},
+  };
+  th_member pair_method = {.name = "pair", .type =
+      th_func_with_error(types, boolean, nil, pair, 2, nullptr, nullptr, 0)};
+  th_trait_requirement on_first = {
+      .subject = receiver, .kind = TH_CON_EXCLUDES, .target = string,
+  };
+  th_trait_requirement on_second = {
+      .subject = other_variable, .kind = TH_CON_EXCLUDES, .target = string,
+  };
+  th_type *first_constrained = th_trait(types, "base.Pair", &pair_method,
+      1, &on_first, 1);
+  th_type *second_constrained = th_trait(types, "base.Pair", &pair_method,
+      1, &on_second, 1);
+  check("trait constraint subject participates in identity",
+        first_constrained && second_constrained &&
+        th_hash(types, first_constrained) !=
+            th_hash(types, second_constrained));
 
   th_env *environment = th_env_new();
   check("register trait type graph for archive roundtrip",
@@ -421,6 +539,9 @@ static void test_trait_type_identity(void) {
             "base", "base", TH_ENV_PUBLIC, trait) &&
         th_env_register_value(environment, "base.trait_type", "trait_type",
                               "base", "base", TH_ENV_PUBLIC, trait) &&
+        th_env_register_value(environment, "base.constrained_type",
+                              "constrained_type", "base", "base",
+                              TH_ENV_PUBLIC, constrained) &&
         th_env_freeze(environment));
   char path[] = "/tmp/lantern-trait-type-XXXXXX";
   int fd = mkstemp(path);
@@ -430,6 +551,7 @@ static void test_trait_type_identity(void) {
   th_env *loaded = saved ? th_env_load(path, &error) : nullptr;
   bool restored = false;
   bool restored_contract = false;
+  bool restored_constraints = false;
   for (size_t i = 0; loaded && i < th_env_declaration_count(loaded); i++) {
     th_env_declaration_view_t view = {0};
     if (!th_env_declaration_at(loaded, i, &view) ||
@@ -443,9 +565,14 @@ static void test_trait_type_identity(void) {
           view.contract && th_kind_of(view.contract) == TH_TRAIT &&
           th_trait_len(view.contract) == 2 &&
           th_hash(types, view.contract) == hash;
+    if (!strcmp(view.qualified_name, "base.constrained_type"))
+      restored_constraints = view.value_type &&
+          th_kind_of(view.value_type) == TH_TRAIT &&
+          th_trait_requirement_count(view.value_type) == 2 &&
+          th_hash(types, view.value_type) == constrained_hash;
   }
   check("trait type and contract survive environment archive",
-        restored && restored_contract);
+        restored && restored_contract && restored_constraints);
   th_env_free(loaded);
   if (fd >= 0) unlink(path);
   th_env_free(environment);

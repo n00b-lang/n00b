@@ -153,6 +153,8 @@ struct th_type {
       size_t nlen;
       th_member *methods;
       size_t n;
+      th_trait_requirement *requirements;
+      size_t nr;
     } trait;
     struct {
       th_type *ret;
