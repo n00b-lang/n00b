@@ -1654,6 +1654,120 @@ n00bb_abi_merged_rows_release(n00bb_abi_merged_rows_t *merged)
     *merged = (n00bb_abi_merged_rows_t){0};
 }
 
+void
+n00bb_abi_native_sections_release(n00bb_abi_native_sections_t *sections)
+{
+    if (!sections) return;
+    for (size_t i = 0; i < sections->count; i++) {
+        core_free((void *)sections->sections[i].name);
+        core_free((void *)sections->sections[i].segment);
+        core_free((void *)sections->sections[i].bytes);
+    }
+    core_free(sections->sections);
+    core_free(sections->maps);
+    *sections = (n00bb_abi_native_sections_t){0};
+}
+
+static char *
+copy_native_name(const uint8_t *data, size_t length)
+{
+    if (!data || !length || length == SIZE_MAX) return nullptr;
+    char *copy = core_alloc_size(1, length + 1);
+    memcpy(copy, data, length);
+    copy[length] = 0;
+    return copy;
+}
+
+bool
+n00bb_abi_collect_native_sections(
+    const n00bb_abi_selected_objects_t *selected,
+    const core_target_desc_t *target,
+    n00bb_abi_native_sections_t *out)
+{
+    n00bb_abi_image_key_t key;
+    if (!selected || !selected->views || !selected->count || !out
+        || !n00bb_abi_image_key_for_target(target, &key)) return false;
+    size_t capacity = 0;
+    for (size_t input = 0; input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        uint32_t count;
+        if (view->format != target->object_format
+            || !core_object_section_count(view->object, view->object_bytes,
+                                          view->format, &count)
+            || count > UINT32_MAX - 1 - capacity) return false;
+        capacity += count;
+    }
+    n00bb_abi_native_sections_t built = {
+        .sections = core_alloc_array(core_object_emit_section_t, capacity),
+        .maps = core_alloc_array(n00bb_abi_native_section_map_t, capacity),
+    };
+    bool valid = true;
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        uint32_t count;
+        valid = core_object_section_count(view->object, view->object_bytes,
+                                          view->format, &count);
+        for (uint32_t native = 1; valid && native <= count; native++) {
+            if (native == view->metadata.native_index) continue;
+            core_object_section_t source;
+            valid = core_object_section_at(view->object, view->object_bytes,
+                                           view->format, native, &source);
+            if (!valid) break;
+            if (view->format == CORE_TARGET_OBJECT_ELF
+                && !(source.flags & UINT64_C(2))) continue;
+            bool mach = view->format == CORE_TARGET_OBJECT_MACH_O;
+            bool coff = view->format == CORE_TARGET_OBJECT_COFF;
+            valid = source.name_length && (!mach || source.segment_length)
+                && source.alignment
+                && source.alignment <= UINT32_MAX
+                && (source.alignment & (source.alignment - 1)) == 0;
+            if (!valid) break;
+            char *name = copy_native_name(source.name, source.name_length);
+            char *segment = source.segment_length
+                ? copy_native_name(source.segment, source.segment_length)
+                : nullptr;
+            uint8_t *bytes = source.size
+                ? core_alloc_size(1, source.size) : nullptr;
+            if (source.size) memcpy(bytes, source.bytes, source.size);
+            bool tls = mach ? (source.flags & 0xff) == 0x11
+                : coff ? source.name_length >= 5
+                    && !memcmp(source.name, ".tls$", 5)
+                : (source.flags & UINT64_C(0x400)) != 0;
+            bool writable = mach
+                ? strcmp(segment, "__TEXT")
+                    && strcmp(segment, "__DATA_CONST")
+                : coff ? (source.flags & UINT64_C(0x80000000)) != 0
+                : (source.flags & UINT64_C(1)) != 0;
+            bool executable = mach ? !strcmp(segment, "__TEXT")
+                : coff ? (source.flags & UINT64_C(0x20000000)) != 0
+                : (source.flags & UINT64_C(4)) != 0;
+            built.sections[built.count] = (core_object_emit_section_t){
+                .name = name, .segment = segment,
+                .bytes = bytes, .size = source.size,
+                .alignment = (uint32_t)source.alignment,
+                .writable = writable, .executable = executable,
+                .is_thread_local = tls,
+            };
+            built.maps[built.count] = (n00bb_abi_native_section_map_t){
+                .input = input, .local_section_index = native,
+            };
+            built.count++;
+            valid = name && (!mach || segment);
+        }
+    }
+    for (size_t i = 0; valid && i < built.count; i++) {
+        valid = core_object_emit_native_section_index(target,
+            1 + built.count, (uint32_t)(2 + i),
+            &built.maps[i].final_section_index);
+    }
+    if (!valid) {
+        n00bb_abi_native_sections_release(&built);
+        return false;
+    }
+    *out = built;
+    return true;
+}
+
 typedef struct {
     void *row;
     uint32_t kind;

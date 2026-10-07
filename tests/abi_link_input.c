@@ -285,6 +285,25 @@ test_cycle_selection(char **paths)
     n00bb_abi_merged_rows_t merged = {0};
     assert(n00bb_abi_merge_rows(&selected, plan, &merged));
     assert(n00bb_abi_rebase_native_references(&merged, nullptr, 0));
+    n00bb_abi_native_sections_t native_sections = {0};
+    assert(n00bb_abi_collect_native_sections(&selected, &target,
+        &native_sections));
+    for (size_t i = 0; i < native_sections.count; i++) {
+        const n00bb_abi_native_section_map_t *map =
+            &native_sections.maps[i];
+        core_object_section_t source;
+        assert(map->input < selected.count
+            && map->local_section_index !=
+                selected.views[map->input].metadata.native_index
+            && core_object_section_at(selected.views[map->input].object,
+                selected.views[map->input].object_bytes, target.object_format,
+                map->local_section_index, &source)
+            && source.name_length ==
+                strlen(native_sections.sections[i].name)
+            && !memcmp(source.name, native_sections.sections[i].name,
+                source.name_length));
+    }
+    n00bb_abi_native_sections_release(&native_sections);
     const n00bb_abi_merged_table_t *merged_modules =
         n00bb_abi_merged_table(&merged, N00B_ABI_TABLE_MODULE);
     const n00bb_abi_merged_table_t *merged_u32 =
@@ -871,12 +890,36 @@ main(int argc, char **argv)
     assert(storage && merged_bindings && storage->record_count > 1
         && merged_bindings->record_count > 1 && storage->origins
         && merged_bindings->origins);
-    size_t map_capacity = storage->record_count
-        + merged_bindings->record_count;
+    n00bb_abi_native_sections_t native_sections = {0};
+    assert(n00bb_abi_collect_native_sections(&selected, &target,
+        &native_sections) && native_sections.count > 0);
+    size_t map_count = native_sections.count;
     n00bb_abi_native_section_map_t *maps = calloc(
-        map_capacity, sizeof(*maps));
+        map_count + 1, sizeof(*maps));
     assert(maps);
-    size_t map_count = 0;
+    for (size_t i = 0; i < map_count; i++) {
+        const n00bb_abi_native_section_map_t *map =
+            &native_sections.maps[i];
+        core_object_section_t source_section;
+        uint32_t expected_index;
+        assert(map->input == 0 && map->base_offset == 0
+            && core_object_section_at(object, length, target.object_format,
+                map->local_section_index, &source_section)
+            && source_section.name_length ==
+                strlen(native_sections.sections[i].name)
+            && !memcmp(source_section.name,
+                native_sections.sections[i].name,
+                source_section.name_length)
+            && source_section.size == native_sections.sections[i].size
+            && (!source_section.size || !memcmp(source_section.bytes,
+                native_sections.sections[i].bytes, source_section.size))
+            && core_object_emit_native_section_index(&target,
+                1 + map_count, (uint32_t)(2 + i), &expected_index)
+            && map->final_section_index == expected_index);
+        maps[i] = *map;
+        maps[i].final_section_index += 17;
+        maps[i].base_offset = 32;
+    }
     const n00bb_abi_merged_table_t *native_tables[] = {
         storage, merged_bindings,
     };
@@ -894,17 +937,23 @@ main(int argc, char **argv)
                 if (maps[j].input == table->origins[i].input
                     && maps[j].local_section_index == local_section)
                     found = true;
-            if (!found) maps[map_count++] = (n00bb_abi_native_section_map_t){
-                .input = table->origins[i].input,
-                .local_section_index = local_section,
-                .final_section_index = local_section + 17,
-                .base_offset = 32,
-            };
+            assert(found);
         }
     }
     assert(map_count && !n00bb_abi_rebase_native_references(
         &merged, nullptr, 0));
-    maps[map_count] = maps[0];
+    const n00b_abi_storage_v1 *first_storage =
+        n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_STORAGE, 1);
+    bool duplicated = false;
+    for (size_t i = 0; i < map_count; i++) {
+        if (maps[i].input != storage->origins[1].input
+            || maps[i].local_section_index != first_storage->segment_index)
+            continue;
+        maps[map_count] = maps[i];
+        duplicated = true;
+        break;
+    }
+    assert(duplicated);
     assert(!n00bb_abi_rebase_native_references(
         &merged, maps, map_count + 1));
     assert(n00bb_abi_rebase_native_references(&merged, maps, map_count));
@@ -920,17 +969,28 @@ main(int argc, char **argv)
             assert(before);
             if (table->kind == N00B_ABI_TABLE_STORAGE) {
                 const n00b_abi_storage_v1 *a = after, *b = before;
-                assert(a->segment_index == b->segment_index + 17
+                uint32_t expected = 0;
+                for (size_t j = 0; j < map_count; j++)
+                    if (maps[j].input == origin->input
+                        && maps[j].local_section_index == b->segment_index)
+                        expected = maps[j].final_section_index;
+                assert(expected && a->segment_index == expected
                     && a->byte_offset == b->byte_offset + 32);
             }
             else {
                 const n00b_abi_native_binding_v1 *a = after, *b = before;
-                assert(a->section_index == b->section_index + 17
+                uint32_t expected = 0;
+                for (size_t j = 0; j < map_count; j++)
+                    if (maps[j].input == origin->input
+                        && maps[j].local_section_index == b->section_index)
+                        expected = maps[j].final_section_index;
+                assert(expected && a->section_index == expected
                     && a->offset == b->offset + 32);
             }
         }
     }
     free(maps);
+    n00bb_abi_native_sections_release(&native_sections);
     n00bb_abi_merged_rows_release(&merged);
     n00b_abi_module_v1 remapped_module;
     n00b_abi_module_v1 *mutable_module = (void *)

@@ -5,6 +5,7 @@
 #include "n00b-abi-v1.h"
 #include "lib/indexed_table.h"
 #include "lib/link_unit.h"
+#include "lib/object_emit.h"
 #include "lib/object_section.h"
 
 typedef struct {
@@ -154,6 +155,22 @@ typedef struct {
     uint32_t final_section_index;
     uint64_t base_offset;
 } n00bb_abi_native_section_map_t;
+
+typedef struct {
+    core_object_emit_section_t *sections;
+    n00bb_abi_native_section_map_t *maps;
+    size_t count;
+} n00bb_abi_native_sections_t;
+
+/* Owns copies of selected, file-backed native sections other than each TU's
+ * metadata container. Index maps name those sections in a final object whose
+ * first section is the rebuilt metadata container. Pointer relocations and
+ * exported symbols are transferred by the final link step, not here. */
+bool n00bb_abi_collect_native_sections(
+    const n00bb_abi_selected_objects_t *selected,
+    const core_target_desc_t *target,
+    n00bb_abi_native_sections_t *out);
+void n00bb_abi_native_sections_release(n00bb_abi_native_sections_t *sections);
 
 /* Rebases native-section references after the final sections are placed.
  * `base_offset` is the input section's byte offset within its final section.
