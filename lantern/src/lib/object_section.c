@@ -75,6 +75,7 @@ static bool find_elf(const uint8_t *image, size_t size, const char *name,
             .native_index = (uint32_t)i,
             .alignment = core_le_load_u64(header + 48),
             .flags = core_le_load_u64(header + 8),
+            .machine = core_le_load_u16(image + 18),
         };
         for (uint64_t j = 1; j < count; j++) {
             const uint8_t *rel = image + headers + j * width;
@@ -93,6 +94,7 @@ static bool find_elf(const uint8_t *image, size_t size, const char *name,
             result.relocations = image + rel_offset;
             result.relocation_count = (uint32_t)(rel_size / entry_size);
             result.relocation_entry_size = (uint32_t)entry_size;
+            result.relocation_has_explicit_addend = rel_type == 4;
         }
         *out = result;
         return true;
@@ -143,6 +145,7 @@ static bool find_macho(const uint8_t *image, size_t size,
                     .relocations = image + rel_offset,
                     .relocation_count = rel_count,
                     .relocation_entry_size = 8,
+                    .machine = core_le_load_u32(image + 4),
                 };
                 *out = result;
                 return true;
@@ -183,11 +186,67 @@ static bool find_coff(const uint8_t *image, size_t size, const char *name,
             .relocations = image + rel_offset,
             .relocation_count = rel_count,
             .relocation_entry_size = 10,
+            .machine = machine,
         };
         *out = result;
         return true;
     }
     return false;
+}
+
+bool core_object_absolute64_relocation_at(
+    const core_object_section_t *section,
+    core_target_object_format_t format, uint32_t index,
+    core_object_absolute64_relocation_t *out)
+{
+    if (!section || !out || !section->relocations ||
+        index >= section->relocation_count) return false;
+    const uint8_t *raw = section->relocations +
+                         (size_t)index * section->relocation_entry_size;
+    core_object_absolute64_relocation_t result = {0};
+    switch (format) {
+    case CORE_TARGET_OBJECT_ELF: {
+        if (section->relocation_entry_size <
+            (section->relocation_has_explicit_addend ? 24u : 16u)) return false;
+        uint64_t info = core_le_load_u64(raw + 8);
+        uint32_t type = (uint32_t)info;
+        if (!((section->machine == 62 && type == 1) ||
+              (section->machine == 183 && type == 257))) return false;
+        result.section_offset = core_le_load_u64(raw);
+        result.native_symbol_index = (uint32_t)(info >> 32);
+        break;
+    }
+    case CORE_TARGET_OBJECT_MACH_O: {
+        if (section->relocation_entry_size != 8) return false;
+        uint32_t address = core_le_load_u32(raw);
+        uint32_t info = core_le_load_u32(raw + 4);
+        if ((address & 0x80000000u) ||
+            !(section->machine == 0x01000007 ||
+              section->machine == 0x0100000c) ||
+            ((info >> 24) & 1) || ((info >> 25) & 3) != 3 ||
+            ((info >> 28) & 15) != 0) return false;
+        result.section_offset = address;
+        result.native_symbol_index = info & 0x00ffffffu;
+        result.target_is_section = !((info >> 27) & 1);
+        break;
+    }
+    case CORE_TARGET_OBJECT_COFF:
+        if (section->relocation_entry_size != 10 ||
+            section->machine != 0x8664 ||
+            core_le_load_u16(raw + 8) != 1) return false;
+        result.section_offset = core_le_load_u32(raw);
+        result.native_symbol_index = core_le_load_u32(raw + 4);
+        break;
+    default:
+        return false;
+    }
+    if (!span(section->size, result.section_offset, 8)) return false;
+    result.addend_bits =
+        format == CORE_TARGET_OBJECT_ELF && section->relocation_has_explicit_addend
+            ? core_le_load_u64(raw + 16)
+            : core_le_load_u64(section->bytes + result.section_offset);
+    *out = result;
+    return true;
 }
 
 bool core_object_section_find(const void *image, size_t image_size,
