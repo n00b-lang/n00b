@@ -928,6 +928,7 @@ n00bb_abi_manifest_rows_release(n00bb_abi_manifest_rows_t *rows)
     core_free(rows->packages);
     core_free(rows->sccs);
     core_free(rows->u32_stream);
+    core_free(rows->u32_kinds);
     *rows = (n00bb_abi_manifest_rows_t){0};
 }
 
@@ -954,8 +955,8 @@ n00bb_abi_rebuild_manifests(
         .sccs = core_alloc_array(n00b_abi_scc_v1, sccs),
         .scc_count = sccs,
         .u32_stream = core_alloc_array(uint32_t, capacity),
+        .u32_kinds = core_alloc_array(uint32_t, capacity),
     };
-    uint32_t *kinds = core_alloc_array(uint32_t, base_stream);
     uint32_t *package_members = core_alloc_array(uint32_t, packages);
     uint32_t *package_written = core_alloc_array(uint32_t, packages);
     uint32_t *scc_members = core_alloc_array(uint32_t, sccs);
@@ -963,7 +964,8 @@ n00bb_abi_rebuild_manifests(
     bool *package_seen = core_alloc_array(bool, packages);
     bool *scc_seen = core_alloc_array(bool, sccs);
     n00bb_abi_u32_stream_build_t stream = {
-        .values = built.u32_stream, .kinds = kinds, .count = base_stream,
+        .values = built.u32_stream, .kinds = built.u32_kinds,
+        .count = base_stream,
     };
     bool valid = true;
     for (size_t input = 0; valid && input < selected->count; input++) {
@@ -1080,6 +1082,8 @@ n00bb_abi_rebuild_manifests(
         n00b_abi_range_v1 range = built.packages[package_index].modules;
         built.u32_stream[range.first + package_written[package_index]++] =
             module_index;
+        built.u32_kinds[range.first + package_written[package_index] - 1] =
+            N00B_ABI_TABLE_MODULE;
         if (!module->scc_index) continue;
         uint32_t scc_index;
         valid = n00bb_abi_index_plan_map(plan, input, N00B_ABI_TABLE_SCC,
@@ -1101,8 +1105,12 @@ n00bb_abi_rebuild_manifests(
         }
         built.u32_stream[range.first + scc_written[scc_index]++] =
             module_index;
+        built.u32_kinds[range.first + scc_written[scc_index] - 1] =
+            N00B_ABI_TABLE_MODULE;
         built.u32_stream[built.sccs[scc_index].lexical_order.first
                           + ordinal] = module_index;
+        built.u32_kinds[built.sccs[scc_index].lexical_order.first
+                         + ordinal] = N00B_ABI_TABLE_MODULE;
     }
     for (uint32_t i = 1; valid && i < packages; i++)
         valid = package_written[i] == package_members[i];
@@ -1119,7 +1127,6 @@ n00bb_abi_rebuild_manifests(
     core_free(scc_members);
     core_free(package_written);
     core_free(package_members);
-    core_free(kinds);
     if (!valid) {
         n00bb_abi_manifest_rows_release(&built);
         return false;
@@ -1195,5 +1202,240 @@ n00bb_abi_repool_row_strings(
                 kind, final_index, field->offset,
                 (void *)(destination + field->offset))) return false;
     }
+    return true;
+}
+
+typedef struct {
+    size_t input;
+    uint32_t local;
+    bool present;
+} abi_row_origin_t;
+
+const n00bb_abi_merged_table_t *
+n00bb_abi_merged_table(const n00bb_abi_merged_rows_t *merged, uint32_t kind)
+{
+    if (!merged || !merged->tables) return nullptr;
+    for (size_t i = 0; i < merged->table_count; i++)
+        if (merged->tables[i].kind == kind) return &merged->tables[i];
+    return nullptr;
+}
+
+const void *
+n00bb_abi_merged_row(const n00bb_abi_merged_rows_t *merged,
+                     uint32_t kind, uint32_t index)
+{
+    const n00bb_abi_merged_table_t *table = n00bb_abi_merged_table(
+        merged, kind);
+    return table && index < table->record_count
+        ? table->records + (size_t)index * table->record_bytes : nullptr;
+}
+
+void
+n00bb_abi_merged_rows_release(n00bb_abi_merged_rows_t *merged)
+{
+    if (!merged) return;
+    for (size_t i = 0; i < merged->table_count; i++)
+        core_free(merged->tables[i].records);
+    core_free(merged->tables);
+    n00bb_abi_name_pool_free(merged->strings);
+    *merged = (n00bb_abi_merged_rows_t){0};
+}
+
+bool
+n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
+                     const n00bb_abi_index_plan_t *plan,
+                     n00bb_abi_merged_rows_t *out)
+{
+    if (!selected || !selected->views || !selected->count || !plan || !out)
+        return false;
+    n00bb_abi_manifest_rows_t manifests = {0};
+    if (!n00bb_abi_rebuild_manifests(selected, plan, &manifests))
+        return false;
+
+    size_t schema_count = 0;
+    const n00bb_abi_table_schema_t *schemas =
+        n00bb_abi_v1_table_schemas(&schema_count);
+    n00bb_abi_merged_rows_t built = {
+        .tables = core_alloc_array(n00bb_abi_merged_table_t, schema_count),
+        .table_count = schema_count,
+        .strings = n00bb_abi_name_pool_new(),
+    };
+    abi_row_origin_t **origins = core_alloc_array(
+        abi_row_origin_t *, schema_count);
+    size_t max_width = 0;
+    uint32_t base_u32_count = 0;
+    bool valid = schemas && schema_count && built.strings
+        && n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_U32_STREAM,
+                                      &base_u32_count);
+    for (size_t i = 0; valid && i < schema_count; i++) {
+        const n00bb_abi_table_schema_t *schema = &schemas[i];
+        uint32_t count = 0;
+        valid = schema->record_bytes
+            && n00bb_abi_index_plan_count(plan, schema->kind, &count);
+        if (!valid) break;
+        if ((schema->kind == N00B_ABI_TABLE_PACKAGE
+                && schema->record_bytes != sizeof(n00b_abi_package_v1))
+            || (schema->kind == N00B_ABI_TABLE_SCC
+                && schema->record_bytes != sizeof(n00b_abi_scc_v1))
+            || (schema->kind == N00B_ABI_TABLE_U32_STREAM
+                && schema->record_bytes != sizeof(uint32_t))) {
+            valid = false;
+            break;
+        }
+        if (schema->kind == N00B_ABI_TABLE_U32_STREAM)
+            count = manifests.u32_count;
+        if ((schema->kind == N00B_ABI_TABLE_PACKAGE
+                && count != manifests.package_count)
+            || (schema->kind == N00B_ABI_TABLE_SCC
+                && count != manifests.scc_count)
+            || count > SIZE_MAX / schema->record_bytes) {
+            valid = false;
+            break;
+        }
+        built.tables[i] = (n00bb_abi_merged_table_t){
+            .kind = schema->kind, .record_count = count,
+            .record_bytes = schema->record_bytes,
+            .records = count ? core_alloc_size(count, schema->record_bytes)
+                             : nullptr,
+        };
+        origins[i] = count ? core_alloc_array(abi_row_origin_t, count)
+                           : nullptr;
+        if (schema->record_bytes > max_width)
+            max_width = schema->record_bytes;
+        if (schema->kind == N00B_ABI_TABLE_PACKAGE)
+            memcpy(built.tables[i].records, manifests.packages,
+                   (size_t)count * schema->record_bytes);
+        else if (schema->kind == N00B_ABI_TABLE_SCC)
+            memcpy(built.tables[i].records, manifests.sccs,
+                   (size_t)count * schema->record_bytes);
+        else if (schema->kind == N00B_ABI_TABLE_U32_STREAM)
+            memcpy(built.tables[i].records, manifests.u32_stream,
+                   (size_t)count * schema->record_bytes);
+    }
+
+    uint8_t *scratch = valid ? core_alloc_size(1, max_width) : nullptr;
+    n00bb_abi_u32_stream_build_t stream = {
+        .values = manifests.u32_stream, .kinds = manifests.u32_kinds,
+        .count = base_u32_count,
+    };
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        for (size_t ti = 0; valid && ti < schema_count; ti++) {
+            n00bb_abi_merged_table_t *table = &built.tables[ti];
+            const n00bb_abi_directory_entry_t *source_table =
+                n00bb_abi_object_table(view, table->kind);
+            if (!source_table) continue;
+            valid = source_table->record_bytes == table->record_bytes;
+            for (uint32_t local = 0; valid
+                 && local < source_table->record_count; local++) {
+                uint32_t final;
+                valid = n00bb_abi_index_plan_map(plan, input,
+                    table->kind, local, &final)
+                    && final < table->record_count;
+                if (!valid) break;
+                abi_row_origin_t *origin = &origins[ti][final];
+                uint8_t *destination = table->records
+                    + (size_t)final * table->record_bytes;
+                if (table->kind == N00B_ABI_TABLE_PACKAGE
+                    || table->kind == N00B_ABI_TABLE_SCC
+                    || table->kind == N00B_ABI_TABLE_U32_STREAM) {
+                    if (!origin->present)
+                        *origin = (abi_row_origin_t){input, local, true};
+                    continue;
+                }
+                if (link_kind_is_stream(table->kind)) {
+                    valid = !origin->present;
+                    if (!valid) break;
+                    memcpy(destination, n00bb_abi_object_row(view,
+                        table->kind, local), table->record_bytes);
+                }
+                else {
+                    valid = n00bb_abi_remap_row(selected, plan, input,
+                        table->kind, local, scratch, table->record_bytes,
+                        &stream);
+                    if (!valid) break;
+                    bool replace = !origin->present;
+                    if (table->kind == N00B_ABI_TABLE_TYPE
+                        && origin->present) {
+                        const n00b_abi_type_v1 *old = (const void *)destination;
+                        const n00b_abi_type_v1 *next = (const void *)scratch;
+                        if (old->owner_module_index
+                            && next->owner_module_index
+                            && old->owner_module_index
+                                != next->owner_module_index) {
+                            valid = false;
+                            break;
+                        }
+                        replace = !old->owner_module_index
+                            && next->owner_module_index;
+                    }
+                    if (replace) memcpy(destination, scratch,
+                                        table->record_bytes);
+                    else continue;
+                }
+                *origin = (abi_row_origin_t){input, local, true};
+            }
+        }
+    }
+
+    for (size_t ti = 0; valid && ti < schema_count; ti++) {
+        const n00bb_abi_merged_table_t *table = &built.tables[ti];
+        if (table->kind != N00B_ABI_TABLE_U64_STREAM
+            && table->kind != N00B_ABI_TABLE_BYTE_STREAM
+            && table->kind != N00B_ABI_TABLE_U32_STREAM) continue;
+        uint32_t count = table->kind == N00B_ABI_TABLE_U32_STREAM
+            ? base_u32_count : table->record_count;
+        for (uint32_t i = 0; valid && i < count; i++)
+            valid = origins[ti][i].present;
+    }
+
+    const n00bb_abi_merged_table_t *u32_table =
+        n00bb_abi_merged_table(&built, N00B_ABI_TABLE_U32_STREAM);
+    valid = valid && u32_table && u32_table->record_bytes == sizeof(uint32_t)
+        && u32_table->record_count == manifests.u32_count;
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00bb_abi_directory_entry_t *source = n00bb_abi_object_table(
+            view, N00B_ABI_TABLE_U32_STREAM);
+        if (!source) continue;
+        for (uint32_t local = 0; valid && local < source->record_count;
+             local++) {
+            uint32_t final;
+            valid = n00bb_abi_index_plan_map(plan, input,
+                N00B_ABI_TABLE_U32_STREAM, local, &final)
+                && final < base_u32_count;
+            if (valid && !manifests.u32_kinds[final])
+                manifests.u32_stream[final] = core_le_load_u32(
+                    n00bb_abi_object_row(view, N00B_ABI_TABLE_U32_STREAM,
+                                         local));
+        }
+    }
+    if (valid) memcpy(u32_table->records, manifests.u32_stream,
+                      (size_t)manifests.u32_count * sizeof(uint32_t));
+
+    for (size_t ti = 0; valid && ti < schema_count; ti++) {
+        n00bb_abi_merged_table_t *table = &built.tables[ti];
+        if (link_kind_is_stream(table->kind)) continue;
+        for (uint32_t final = 0; valid && final < table->record_count;
+             final++) {
+            abi_row_origin_t origin = origins[ti][final];
+            valid = origin.present;
+            if (!valid || (final == 0 && table->kind != N00B_ABI_TABLE_TYPE))
+                continue;
+            valid = n00bb_abi_repool_row_strings(
+                &selected->views[origin.input], table->kind, origin.local,
+                final, table->records + (size_t)final * table->record_bytes,
+                table->record_bytes, built.strings);
+        }
+    }
+    core_free(scratch);
+    for (size_t i = 0; i < schema_count; i++) core_free(origins[i]);
+    core_free(origins);
+    n00bb_abi_manifest_rows_release(&manifests);
+    if (!valid) {
+        n00bb_abi_merged_rows_release(&built);
+        return false;
+    }
+    *out = built;
     return true;
 }

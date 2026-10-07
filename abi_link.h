@@ -98,6 +98,7 @@ typedef struct {
     n00b_abi_scc_v1 *sccs;
     uint32_t scc_count;
     uint32_t *u32_stream;
+    uint32_t *u32_kinds;
     uint32_t u32_count;
 } n00bb_abi_manifest_rows_t;
 
@@ -114,3 +115,28 @@ bool n00bb_abi_repool_row_strings(
     const n00bb_abi_object_view_t *view, uint32_t kind,
     uint32_t local_index, uint32_t final_index,
     void *out_row, size_t out_bytes, n00bb_abi_name_pool_t *pool);
+
+/* A staged, unpublishable table universe. Duplicate identity rows still
+ * require structural compatibility checks, and native sections/index patches
+ * have not yet been linked. All row and pool bytes are owned by this value. */
+typedef struct {
+    uint32_t kind;
+    uint32_t record_count;
+    uint32_t record_bytes;
+    uint8_t *records;
+} n00bb_abi_merged_table_t;
+
+typedef struct {
+    n00bb_abi_merged_table_t *tables;
+    size_t table_count;
+    n00bb_abi_name_pool_t *strings;
+} n00bb_abi_merged_rows_t;
+
+bool n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
+                          const n00bb_abi_index_plan_t *plan,
+                          n00bb_abi_merged_rows_t *out);
+const n00bb_abi_merged_table_t *n00bb_abi_merged_table(
+    const n00bb_abi_merged_rows_t *merged, uint32_t kind);
+const void *n00bb_abi_merged_row(const n00bb_abi_merged_rows_t *merged,
+                                 uint32_t kind, uint32_t index);
+void n00bb_abi_merged_rows_release(n00bb_abi_merged_rows_t *merged);

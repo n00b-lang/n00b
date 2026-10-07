@@ -223,6 +223,41 @@ test_cycle_selection(char **paths)
                 == module_index);
     }
     n00bb_abi_manifest_rows_release(&manifests);
+    n00bb_abi_merged_rows_t merged = {0};
+    assert(n00bb_abi_merge_rows(&selected, plan, &merged));
+    const n00bb_abi_merged_table_t *merged_modules =
+        n00bb_abi_merged_table(&merged, N00B_ABI_TABLE_MODULE);
+    const n00bb_abi_merged_table_t *merged_u32 =
+        n00bb_abi_merged_table(&merged, N00B_ABI_TABLE_U32_STREAM);
+    const n00b_abi_package_v1 *merged_package =
+        n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_PACKAGE, 1);
+    const n00b_abi_scc_v1 *merged_scc =
+        n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_SCC, 1);
+    const n00bb_abi_merged_table_t *merged_requirements =
+        n00bb_abi_merged_table(&merged, N00B_ABI_TABLE_REQUIREMENT);
+    assert(merged_modules && merged_modules->record_count == 4
+        && merged_u32 && merged_u32->record_count > stream_base
+        && merged_package && merged_package->modules.count == 3
+        && merged_scc && merged_scc->members.count == 3
+        && merged_scc->lexical_order.count == 3
+        && merged_requirements && merged_requirements->record_count == 4
+        && n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_TYPE, 0));
+    for (size_t i = 0; i < selected.count; i++) {
+        const n00b_abi_module_v1 *row = n00bb_abi_merged_row(&merged,
+            N00B_ABI_TABLE_MODULE, (uint32_t)i + 1);
+        const n00b_abi_requirement_v1 *requirement =
+            n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_REQUIREMENT,
+                                  (uint32_t)i + 1);
+        assert(row && row->package_index == 1 && row->scc_index == 1
+            && !row->imports.count && requirement
+            && requirement->requesting_module_index == i + 1);
+        const uint32_t *values = (const void *)merged_u32->records;
+        assert(values[merged_package->modules.first + i] == i + 1
+            && values[merged_scc->members.first + i] == i + 1);
+    }
+    assert(n00bb_abi_name_pool_size(merged.strings) > 0);
+    n00bb_abi_merged_rows_release(&merged);
+    assert(!merged.tables && !merged.strings);
     n00b_abi_package_v1 *conflicting_package = (void *)
         n00bb_abi_object_row(&selected.views[1], N00B_ABI_TABLE_PACKAGE, 1);
     uint32_t saved_visibility = conflicting_package->visibility;
@@ -414,6 +449,22 @@ main(int argc, char **argv)
         && manifests.packages[1].modules.count == 1
         && manifests.u32_stream[manifests.packages[1].modules.first] == 1);
     n00bb_abi_manifest_rows_release(&manifests);
+    n00bb_abi_merged_rows_t merged = {0};
+    assert(n00bb_abi_merge_rows(&selected, plan, &merged));
+    const n00b_abi_shape_v1 *merged_shape = n00bb_abi_merged_row(
+        &merged, N00B_ABI_TABLE_SHAPE, 1);
+    const n00bb_abi_merged_table_t *u64 = n00bb_abi_merged_table(
+        &merged, N00B_ABI_TABLE_U64_STREAM);
+    const n00b_abi_module_v1 *merged_module = n00bb_abi_merged_row(
+        &merged, N00B_ABI_TABLE_MODULE, 1);
+    assert(merged_shape && merged_shape->rank == 1
+        && merged_shape->total_count == 2
+        && u64 && merged_shape->extents.count == 1
+        && merged_shape->extents.first < u64->record_count
+        && core_le_load_u64(u64->records
+            + (size_t)merged_shape->extents.first * u64->record_bytes) == 2
+        && merged_module && merged_module->package_index == 1);
+    n00bb_abi_merged_rows_release(&merged);
     n00b_abi_module_v1 remapped_module;
     n00b_abi_module_v1 *mutable_module = (void *)
         n00bb_abi_object_row(&selected.views[0], N00B_ABI_TABLE_MODULE, 1);
