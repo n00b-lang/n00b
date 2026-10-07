@@ -4939,10 +4939,12 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
             &params, &rest, &has_rest);
     core_list_t(n00bb_typevar_binding_t) variables =
         core_list_new(n00bb_typevar_binding_t);
+    core_list_t(th_trait_requirement) declared =
+        core_list_new(th_trait_requirement);
     signature_typevars_for_symbol(symbol, &variables);
     valid = valid && apply_signature_constraints(grammar, unit,
         child_nt(grammar, signature, "where-clause"), state->types,
-        &variables, nullptr);
+        &variables, &declared);
     th_type *signature_type = valid
         ? th_func_with_error(state->types, success, failure, params.data,
             params.len, has_rest ? &rest : nullptr, nullptr, 0)
@@ -4950,6 +4952,7 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
     core_list_free(variables);
     core_list_free(params);
     if (!signature_type) {
+        core_list_free(declared);
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
@@ -4964,6 +4967,7 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
         ? th_unify_in_place(state->types, previous, signature_type)
         : signature_type;
     if (!unified) {
+        core_list_free(declared);
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
@@ -4980,6 +4984,7 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
             || !parse_sym_set_binding(symbol,
                 CORE_STRING_STATIC("n00bb.declared-function-failure"),
                 failure))) {
+        core_list_free(declared);
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(unit), unit,
             CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
@@ -4987,6 +4992,44 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
             link_source_location(signature));
         return;
     }
+    if (declared.len) {
+        if (declared.len > SIZE_MAX / sizeof(th_trait_requirement)) {
+            core_list_free(declared);
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+                CORE_STRING_STATIC("too many declared where constraints"),
+                link_source_location(signature));
+            return;
+        }
+        n00bb_declared_where_t *facts = core_arena_alloc(
+            &state->semantic_values, sizeof(*facts));
+        th_trait_requirement *items = core_arena_alloc(
+            &state->semantic_values, declared.len * sizeof(*items));
+        if (!facts || !items) {
+            core_list_free(declared);
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+                CORE_STRING_STATIC("could not retain declared where constraints"),
+                link_source_location(signature));
+            return;
+        }
+        memcpy(items, declared.data, declared.len * sizeof(*items));
+        *facts = (n00bb_declared_where_t){.data = items,
+                                          .len = declared.len};
+        if (!parse_sym_set_binding(symbol, N00BB_DECLARED_WHERE_KEY,
+                                   facts)) {
+            core_list_free(declared);
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+                CORE_STRING_STATIC("could not bind declared where constraints"),
+                link_source_location(signature));
+            return;
+        }
+    }
+    core_list_free(declared);
     propagate_symbol_type(symbol, state->types, previous, unified);
     symbol->error_type = failure;
 }

@@ -10,6 +10,8 @@
     CORE_STRING_STATIC("n00bb.signature.typevars")
 #define N00BB_BODY_TYPEVAR_MAP_KEY \
     CORE_STRING_STATIC("n00bb.body-typevar-map")
+#define N00BB_DECLARED_WHERE_KEY \
+    CORE_STRING_STATIC("n00bb.declared-where")
 
 typedef struct {
     core_string_t name;
@@ -27,3 +29,8 @@ typedef struct {
     th_type **body;
     size_t count;
 } n00bb_body_typevar_map_t;
+
+typedef struct {
+    th_trait_requirement *data;
+    size_t len;
+} n00bb_declared_where_t;

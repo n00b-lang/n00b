@@ -1393,6 +1393,10 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/function.n00b"
 [ -s "$tmp/function_abi.o" ]
 "$abi_record_object_test" "$tmp/function_abi.o" function
+"$compiler" compile --output "$tmp/constraint_abi.o" \
+    "$program_dir/../abi/where_excludes.n00b"
+[ -s "$tmp/constraint_abi.o" ]
+"$abi_record_object_test" "$tmp/constraint_abi.o" constraint
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_abi.o" import_root
 [ -s "$tmp/import_abi.o" ]

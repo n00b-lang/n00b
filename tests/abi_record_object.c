@@ -473,6 +473,56 @@ check_generic(const core_object_section_t *metadata,
     assert(generic_function);
 }
 
+static void
+check_constraint(const core_object_section_t *metadata,
+                 const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *functions = entry_for(entries,
+        count, N00B_ABI_TABLE_FUNCTION);
+    const n00bb_abi_directory_entry_t *constraints = entry_for(entries,
+        count, N00B_ABI_TABLE_CONSTRAINT);
+    const n00bb_abi_directory_entry_t *types = entry_for(entries,
+        count, N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries,
+        count, N00B_ABI_TABLE_U32_STREAM);
+    assert(functions && functions->record_count == 2 && constraints
+        && constraints->record_count > 1 && types && stream);
+    const n00b_abi_function_v1 *function = row_at(metadata, functions, 1);
+    assert(short_name_is(&function->name, "keep")
+        && function->constraints.count == 1);
+    uint32_t position = function->constraints.first;
+    assert(position < stream->record_count);
+    uint32_t index = *(const uint32_t *)row_at(metadata, stream, position);
+    assert(index && index < constraints->record_count);
+    const n00b_abi_constraint_v1 *constraint = row_at(metadata,
+        constraints, index);
+    assert(constraint->kind == N00B_ABI_CONSTRAINT_EXCLUDES
+        && constraint->variable_ordinal == 0
+        && constraint->target_type_index < types->record_count);
+    const n00b_abi_type_v1 *target = row_at(metadata, types,
+        constraint->target_type_index);
+    assert(target->kind == N00B_ABI_TYPE_STRING);
+    uint32_t variable_count = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        if (type->kind != N00B_ABI_TYPE_VARIABLE) continue;
+        variable_count++;
+        assert(type->typevar_owner_scope_index
+            && type->typevar_ordinal == constraint->variable_ordinal
+            && type->constraints.count >= 1);
+        uint32_t first = type->constraints.first;
+        assert(first < stream->record_count);
+        uint32_t inferred_index = *(const uint32_t *)row_at(metadata,
+            stream, first);
+        assert(inferred_index && inferred_index < constraints->record_count);
+        const n00b_abi_constraint_v1 *inferred = row_at(metadata,
+            constraints, inferred_index);
+        assert(inferred->kind == N00B_ABI_CONSTRAINT_EXCLUDES
+            && inferred->target_type_index == constraint->target_type_index);
+    }
+    assert(variable_count == 1);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -483,6 +533,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "import-record")
             || !strcmp(argv[2], "import-enum")
             || !strcmp(argv[2], "variant")
+            || !strcmp(argv[2], "constraint")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -556,6 +607,13 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "function")) {
         check_function(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "constraint")) {
+        check_constraint(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

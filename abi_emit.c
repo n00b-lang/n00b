@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "abi_container.h"
+#include "abi_constraint_rows.h"
 #include "abi_decl_index.h"
 #include "abi_declarations.h"
 #include "abi_enum_rows.h"
@@ -542,6 +543,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_type_signatures_t signature_rows = {0};
     n00bb_abi_declarations_t declaration_rows = {0};
     n00bb_abi_function_rows_t function_rows = {0};
+    n00bb_abi_constraint_rows_t constraint_rows = {0};
     bool valid = pool && type_index
         && n00bb_abi_type_index_collect_module_types(type_index,
             (ir_module_t *)comptime_ir)
@@ -588,7 +590,16 @@ n00bb_abi_emit_unit(
                 + (uint32_t)signature_rows.parameter_index_count
                 + (uint32_t)declaration_rows.stream_index_count,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-            pool, lookup, lookup_context, &function_rows);
+            pool, lookup, lookup_context, &function_rows)
+        && n00bb_abi_constraint_rows_build(type_index, &type_rows,
+            declarations, &function_rows, pool,
+            prefix_stream_count + (uint32_t)components.count
+                + (uint32_t)layout_rows.stream_index_count
+                + (uint32_t)enum_rows.stream_index_count
+                + (uint32_t)signature_rows.parameter_index_count
+                + (uint32_t)declaration_rows.stream_index_count
+                + (uint32_t)function_rows.stream_index_count,
+            &constraint_rows);
     n00bb_abi_type_index_free(type_index);
     valid = valid && n00bb_abi_name_pool_encode(pool, package_id,
         N00B_ABI_TABLE_PACKAGE, 1, offsetof(n00b_abi_package_v1, name),
@@ -608,6 +619,7 @@ n00bb_abi_emit_unit(
     }
     if (!valid) {
         core_free(requirements);
+        n00bb_abi_constraint_rows_release(&constraint_rows);
         n00bb_abi_function_rows_release(&function_rows);
         n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
@@ -625,7 +637,8 @@ n00bb_abi_emit_unit(
         + enum_rows.stream_index_count
         + signature_rows.parameter_index_count
         + declaration_rows.stream_index_count
-        + function_rows.stream_index_count;
+        + function_rows.stream_index_count
+        + constraint_rows.stream_index_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
     stream[0] = package_modules[0];
     if (recursive) {
@@ -665,6 +678,15 @@ n00bb_abi_emit_unit(
                    + declaration_rows.stream_index_count,
                function_rows.stream_indexes,
                function_rows.stream_index_count * sizeof(*stream));
+    if (constraint_rows.stream_index_count)
+        memcpy(stream + prefix_stream_count + components.count
+                   + layout_rows.stream_index_count
+                   + enum_rows.stream_index_count
+                   + signature_rows.parameter_index_count
+                   + declaration_rows.stream_index_count
+                   + function_rows.stream_index_count,
+               constraint_rows.stream_indexes,
+               constraint_rows.stream_index_count * sizeof(*stream));
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
         {N00B_ABI_TABLE_MODULE, modules, 2},
@@ -686,6 +708,8 @@ n00bb_abi_emit_unit(
          enum_rows.item_count},
         {N00B_ABI_TABLE_FUNCTION, function_rows.functions,
          function_rows.function_count},
+        {N00B_ABI_TABLE_CONSTRAINT, constraint_rows.rows,
+         constraint_rows.count},
         {N00B_ABI_TABLE_CALL_SIGNATURE, signature_rows.signatures,
          signature_rows.signature_count},
         {N00B_ABI_TABLE_PARAMETER, signature_rows.parameters,
@@ -708,6 +732,7 @@ n00bb_abi_emit_unit(
     core_free(stream);
     if (!valid) {
         core_free(requirements);
+        n00bb_abi_constraint_rows_release(&constraint_rows);
         n00bb_abi_function_rows_release(&function_rows);
         n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
@@ -765,6 +790,7 @@ n00bb_abi_emit_unit(
             &object, &object_bytes);
     core_free(relocations);
     core_free(requirements);
+    n00bb_abi_constraint_rows_release(&constraint_rows);
     n00bb_abi_function_rows_release(&function_rows);
     n00bb_abi_declarations_release(&declaration_rows);
     n00bb_abi_type_signatures_release(&signature_rows);
