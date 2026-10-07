@@ -117,12 +117,9 @@ n00bb_abi_object_string(const n00bb_abi_object_view_t *view,
     const char *name = view->format == CORE_TARGET_OBJECT_MACH_O
         ? "__n00b_strings" : view->format == CORE_TARGET_OBJECT_COFF
             ? ".rdata$S" : ".rodata.n00b_strings";
-    core_object_section_t pool;
-    if (!core_object_section_find(view->object, view->object_bytes,
-            view->format, segment, name, &pool)) return false;
-
     bool found = false;
     uint64_t pool_offset = 0;
+    core_object_section_t pool = {0};
     uint64_t field_offset = address - base;
     for (uint32_t i = 0; i < view->metadata.relocation_count; i++) {
         core_object_absolute64_relocation_t relocation;
@@ -132,22 +129,32 @@ n00bb_abi_object_string(const n00bb_abi_object_view_t *view,
         if (found) return false;
         if (view->format == CORE_TARGET_OBJECT_MACH_O) {
             if (!relocation.target_is_section
-                || relocation.native_symbol_index != pool.native_index
+                || !core_object_section_at(view->object, view->object_bytes,
+                    view->format, relocation.native_symbol_index, &pool)
                 || relocation.addend_bits < pool.virtual_address)
                 return false;
             pool_offset = relocation.addend_bits - pool.virtual_address;
         }
         else {
-            core_object_symbol_name_t symbol;
+            core_object_symbol_t symbol;
             if (relocation.target_is_section
-                || !core_object_symbol_name_at(view->object,
+                || !core_object_symbol_at(view->object,
                     view->object_bytes, view->format, &view->metadata,
                     relocation.native_symbol_index, &symbol)
-                || symbol.length != sizeof("n00b_string_pool") - 1
-                || memcmp(symbol.bytes, "n00b_string_pool",
-                          symbol.length)) return false;
+                || symbol.name.length != sizeof("n00b_string_pool") - 1
+                || memcmp(symbol.name.bytes, "n00b_string_pool",
+                          symbol.name.length)
+                || !symbol.native_section_index
+                || !core_object_section_at(view->object, view->object_bytes,
+                    view->format, symbol.native_section_index, &pool))
+                return false;
             pool_offset = relocation.addend_bits;
         }
+        if (pool.name_length != strlen(name)
+            || memcmp(pool.name, name, pool.name_length)
+            || (segment && (pool.segment_length != strlen(segment)
+                || memcmp(pool.segment, segment, pool.segment_length))))
+            return false;
         found = true;
     }
     if (!found || pool_offset > pool.size

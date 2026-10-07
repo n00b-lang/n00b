@@ -721,6 +721,99 @@ test_duplicate_signature(const char *path)
 }
 
 static void
+test_metadata_string_uses_relocation_pool(void)
+{
+    const char *triples[] = {
+        "x86_64-linux", "arm64-macos", "x86_64-windows",
+    };
+    for (size_t i = 0; i < sizeof(triples) / sizeof(*triples); i++) {
+        core_target_desc_t target;
+        assert(core_target_profile(triples[i], 0, &target));
+        n00bb_abi_name_pool_t *pool = n00bb_abi_name_pool_new();
+        n00b_abi_package_v1 packages[2] = {0};
+        const core_string_t wanted =
+            CORE_STRING_STATIC("the-correct-long-package-name");
+        assert(pool && n00bb_abi_name_pool_encode(pool, wanted,
+            N00B_ABI_TABLE_PACKAGE, 1,
+            offsetof(n00b_abi_package_v1, name), &packages[1].name));
+        n00bb_abi_image_key_t key;
+        n00bb_abi_image_header_t header = {0};
+        n00bb_abi_directory_entry_t entry = {
+            .kind = N00B_ABI_TABLE_PACKAGE,
+            .schema_version = 1,
+            .record_bytes = sizeof(n00b_abi_package_v1),
+            .record_count = 2,
+            .file_offset = N00BB_ABI_HEADER_BYTES + N00BB_ABI_DIRECTORY_BYTES,
+            .byte_length = sizeof(packages),
+        };
+        size_t schema_count;
+        const n00bb_abi_table_schema_t *schemas =
+            n00bb_abi_v1_table_schemas(&schema_count);
+        uint8_t metadata[N00BB_ABI_HEADER_BYTES
+            + N00BB_ABI_DIRECTORY_BYTES + sizeof(packages)] = {0};
+        memcpy(metadata + entry.file_offset, packages, sizeof(packages));
+        assert(n00bb_abi_image_key_for_target(&target, &key));
+        header.key = key;
+        header.required_alignment = _Alignof(n00b_abi_package_v1);
+        header.directory_count = 1;
+        header.directory_offset = N00BB_ABI_HEADER_BYTES;
+        header.total_extent = sizeof(metadata);
+        assert(n00bb_abi_container_write(metadata, sizeof(metadata),
+            &header, &entry, schemas, schema_count, false));
+        core_object_emit_absolute64_t *relocations = nullptr;
+        size_t relocation_count = 0;
+        assert(n00bb_abi_name_pool_relocations(pool, &entry, 1,
+            &relocations, &relocation_count) && relocation_count == 1);
+
+        bool mach = target.object_format == CORE_TARGET_OBJECT_MACH_O;
+        const char *section_name = mach ? "__n00b_strings"
+            : target.object_format == CORE_TARGET_OBJECT_COFF
+                ? ".rdata$S" : ".rodata.n00b_strings";
+        core_object_emit_section_t sections[] = {
+            {.name = mach ? "__n00b_meta"
+                    : target.object_format == CORE_TARGET_OBJECT_COFF
+                        ? ".n00b$M" : ".data.rel.ro.n00b_meta",
+             .segment = mach ? "__DATA_CONST" : nullptr,
+             .bytes = metadata, .size = sizeof(metadata),
+             .alignment = header.required_alignment},
+            {.name = section_name, .segment = mach ? "__TEXT" : nullptr,
+             .bytes = (const uint8_t *)"wrong-pool", .size = 10,
+             .alignment = 1},
+            {.name = section_name, .segment = mach ? "__TEXT" : nullptr,
+             .bytes = n00bb_abi_name_pool_bytes(pool),
+             .size = n00bb_abi_name_pool_size(pool), .alignment = 1},
+        };
+        core_object_emit_symbol_t symbol = {
+            .name = "n00b_string_pool", .section_index = 3,
+        };
+        uint8_t *object = nullptr;
+        size_t object_bytes = 0;
+        assert(core_object_emit(&target, sections, 3,
+            &symbol, 1, relocations, relocation_count,
+            &object, &object_bytes));
+        core_object_section_t object_metadata;
+        assert(core_object_section_find(object, object_bytes,
+            target.object_format, mach ? "__DATA_CONST" : nullptr,
+            sections[0].name, &object_metadata)
+            && n00bb_abi_container_write((uint8_t *)object_metadata.bytes,
+                object_metadata.size, &header, &entry, schemas,
+                schema_count, false));
+        n00bb_abi_object_view_t view = {0};
+        n00bb_abi_string_view_t decoded;
+        assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
+        const n00b_abi_package_v1 *package = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_PACKAGE, 1);
+        assert(package && n00bb_abi_object_string(&view, &package->name,
+            &decoded) && decoded.length == wanted.u8_bytes
+            && !memcmp(decoded.bytes, wanted.data, wanted.u8_bytes));
+        n00bb_abi_object_close(&view);
+        core_free(object);
+        core_free(relocations);
+        n00bb_abi_name_pool_free(pool);
+    }
+}
+
+static void
 test_native_relocation_transfer(void)
 {
     const char *triples[] = {
@@ -823,6 +916,7 @@ int
 main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3 || argc == 4);
+    test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();
     test_static_string_identity();
     if (argc == 2 && !strcmp(argv[1], "--strings")) return 0;
