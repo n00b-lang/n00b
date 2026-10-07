@@ -12,6 +12,7 @@
 #include "lib/hash.h"
 #include "lib/list.h"
 #include "lib/object_section.h"
+#include "ir/typelang.h"
 
 static bool
 align_up(size_t value, size_t alignment, size_t *out)
@@ -361,6 +362,13 @@ n00bb_abi_emit_empty_unit(
     n00b_abi_source_file_v1 sources[2] = {0};
     n00b_abi_runtime_config_v1 runtime_configs[2] = {0};
     uint32_t package_modules[1] = {1};
+    th_ctx *type_context = ir_module_types((ir_module_t *)runtime_ir);
+    th_type *nil_type = type_context ? th_name(type_context, "nil") : nullptr;
+    if (!nil_type)
+        return empty_unit_error(unit, "could not resolve the builtin nil type");
+    types[0].typehash = th_hash(type_context, nil_type);
+    types[0].kind = N00B_ABI_TYPE_NIL;
+    types[0].alignment_bytes = 1;
     packages[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     packages[1].modules = (n00b_abi_range_v1){.first = 0, .count = 1};
     modules[1].package_index = 1;
@@ -375,6 +383,9 @@ n00bb_abi_emit_empty_unit(
     bool valid = set_name(package_id, N00B_ABI_TABLE_PACKAGE,
         offsetof(n00b_abi_package_v1, name), &packages[1].name,
         &pool)
+        && set_name(CORE_STRING_STATIC("nil"), N00B_ABI_TABLE_TYPE,
+            offsetof(n00b_abi_type_v1, canonical_name),
+            &types[0].canonical_name, &pool)
         && set_name(unit->module.identifier, N00B_ABI_TABLE_MODULE,
             offsetof(n00b_abi_module_v1, full_path), &modules[1].full_path,
             &pool)

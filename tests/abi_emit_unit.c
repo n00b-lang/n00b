@@ -7,6 +7,7 @@
 #include "abi_string.h"
 #include "n00b-abi-v1.h"
 #include "ir/ir.h"
+#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/hash.h"
 #include "lib/module.h"
@@ -81,21 +82,35 @@ check_empty_unit(const char *triple, uint32_t target_id,
         entries, 6, N00B_ABI_TABLE_MODULE);
     const n00bb_abi_directory_entry_t *source_entry = find_entry(
         entries, 6, N00B_ABI_TABLE_SOURCE_FILE);
+    const n00bb_abi_directory_entry_t *type_entry = find_entry(
+        entries, 6, N00B_ABI_TABLE_TYPE);
     const n00bb_abi_directory_entry_t *config_entry = find_entry(
         entries, 6, N00B_ABI_TABLE_RUNTIME_CONFIG);
-    assert(package_entry && module_entry && source_entry && config_entry);
+    assert(package_entry && module_entry && source_entry && type_entry
+        && config_entry);
     const n00b_abi_package_v1 *package = (const void *)(metadata.bytes
         + package_entry->file_offset + package_entry->record_bytes);
     const n00b_abi_module_v1 *module = (const void *)(metadata.bytes
         + module_entry->file_offset + module_entry->record_bytes);
     const n00b_abi_source_file_v1 *file = (const void *)(metadata.bytes
         + source_entry->file_offset + source_entry->record_bytes);
+    const n00b_abi_type_v1 *nil = (const void *)(metadata.bytes
+        + type_entry->file_offset);
+    n00bb_abi_string_header_t decoded;
+    assert(type_entry->record_count == 1);
+    assert(nil->kind == N00B_ABI_TYPE_NIL && nil->size_bits == 0
+        && nil->alignment_bytes == 1
+        && nil->typehash == th_hash(ir_ctx_types(context),
+                                   th_name(ir_ctx_types(context), "nil")));
+    assert(n00bb_abi_string_decode((const uint8_t *)&nil->canonical_name,
+        sizeof(nil->canonical_name), &decoded));
+    assert(decoded.tag == N00BB_ABI_STRING_SHORT && decoded.length == 3);
+    assert(!memcmp(nil->canonical_name.short_value.bytes, "nil", 3));
     assert(package->modules.first == 0 && package->modules.count == 1);
     assert(module->package_index == 1 && module->source_file_index == 1
         && module->runtime_config_index == 1 && module->scc_index == 0);
     assert(file->source_identity == core_xxh3_64bits_raw(
         source_text, sizeof(source_text) - 1));
-    n00bb_abi_string_header_t decoded;
     assert(n00bb_abi_string_decode((const uint8_t *)&package->name,
         sizeof(package->name), &decoded));
     assert(decoded.tag == N00BB_ABI_STRING_SHORT && decoded.length == 7);
