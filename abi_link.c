@@ -2062,6 +2062,110 @@ n00bb_abi_rebase_native_references(
 }
 
 bool
+n00bb_abi_add_native_bindings(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_merged_rows_t *merged,
+    const n00bb_abi_native_sections_t *sections,
+    n00bb_abi_native_relocations_t *symbols)
+{
+    if (!selected || !selected->views || !merged || !sections || !symbols
+        || symbols->symbol_count > UINT32_MAX
+        || (symbols->symbol_count && !symbols->symbols)
+        || (sections->count && (!sections->sections || !sections->maps)))
+        return false;
+    for (size_t i = 0; i < symbols->symbol_count; i++)
+        if (!symbols->symbols[i].name) return false;
+    const n00bb_abi_merged_table_t *table = n00bb_abi_merged_table(
+        merged, N00B_ABI_TABLE_NATIVE_BINDING);
+    if (!table || table->record_bytes != sizeof(n00b_abi_native_binding_v1)
+        || (table->record_count && (!table->records || !table->origins)))
+        return false;
+    size_t new_capacity = table->record_count
+        ? table->record_count - 1 : 0;
+    if (new_capacity > SIZE_MAX - symbols->symbol_count
+        || new_capacity > UINT32_MAX - symbols->symbol_count) return false;
+    new_capacity += symbols->symbol_count;
+    core_object_emit_symbol_t *updated = core_alloc_array(
+        core_object_emit_symbol_t, new_capacity);
+    if (symbols->symbol_count)
+        memcpy(updated, symbols->symbols,
+               symbols->symbol_count * sizeof(*updated));
+    size_t count = symbols->symbol_count;
+    bool valid = true;
+    for (uint32_t i = 1; valid && i < table->record_count; i++) {
+        const n00bb_abi_row_origin_t *origin = &table->origins[i];
+        const n00b_abi_native_binding_v1 *binding =
+            (const void *)(table->records + (size_t)i * table->record_bytes);
+        if (!origin->present || origin->input >= selected->count
+            || !origin->local
+            || binding->kind != N00B_ABI_NATIVE_SECTION_OFFSET
+            || binding->flags || binding->offset < 0) {
+            valid = false;
+            break;
+        }
+        const n00bb_abi_object_view_t *view =
+            &selected->views[origin->input];
+        const n00b_abi_native_binding_v1 *source = n00bb_abi_object_row(
+            view, N00B_ABI_TABLE_NATIVE_BINDING, origin->local);
+        n00bb_abi_string_view_t name;
+        valid = source && n00bb_abi_object_string(view,
+            &source->native_name, &name) && name.length
+            && name.length < SIZE_MAX
+            && !memchr(name.bytes, 0, name.length);
+        if (!valid) break;
+        uint32_t ordinal = 0;
+        for (size_t j = 0; j < sections->count; j++) {
+            if (sections->maps[j].final_section_index
+                != binding->section_index) continue;
+            if (ordinal || j > UINT32_MAX - 2
+                || (uint64_t)binding->offset > sections->sections[j].size) {
+                valid = false;
+                break;
+            }
+            ordinal = (uint32_t)(j + 2);
+        }
+        if (!valid || !ordinal) {
+            valid = false;
+            break;
+        }
+        bool found = false;
+        for (size_t j = 0; j < count; j++) {
+            if (strlen(updated[j].name) != name.length
+                || memcmp(updated[j].name, name.bytes, name.length))
+                continue;
+            if (updated[j].section_index
+                && (updated[j].section_index != ordinal
+                    || updated[j].section_offset
+                        != (uint64_t)binding->offset)) {
+                valid = false;
+                break;
+            }
+            updated[j].section_index = ordinal;
+            updated[j].section_offset = (uint64_t)binding->offset;
+            updated[j].exported = true;
+            found = true;
+        }
+        if (!valid || found) continue;
+        updated[count++] = (core_object_emit_symbol_t){
+            .name = copy_native_name(name.bytes, name.length),
+            .section_index = ordinal,
+            .section_offset = (uint64_t)binding->offset,
+            .exported = true,
+        };
+    }
+    if (!valid) {
+        for (size_t i = symbols->symbol_count; i < count; i++)
+            core_free((void *)updated[i].name);
+        core_free(updated);
+        return false;
+    }
+    core_free(symbols->symbols);
+    symbols->symbols = updated;
+    symbols->symbol_count = count;
+    return true;
+}
+
+bool
 n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                      const n00bb_abi_index_plan_t *plan,
                      n00bb_abi_merged_rows_t *out)

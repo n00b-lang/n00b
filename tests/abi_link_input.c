@@ -1012,6 +1012,84 @@ main(int argc, char **argv)
             && rel->section_index <= native_sections.count + 1
             && rel->symbol_index < native_relocations.symbol_count);
     }
+    n00bb_abi_merged_rows_t exports_merged = {0};
+    assert(n00bb_abi_merge_rows(&selected, plan, &exports_merged)
+        && n00bb_abi_rebase_native_references(&exports_merged,
+            native_sections.maps, native_sections.count));
+    const n00bb_abi_merged_table_t *export_bindings =
+        n00bb_abi_merged_table(&exports_merged,
+            N00B_ABI_TABLE_NATIVE_BINDING);
+    assert(export_bindings && export_bindings->record_count > 1);
+    const n00bb_abi_row_origin_t *first_origin =
+        &export_bindings->origins[1];
+    const n00b_abi_native_binding_v1 *first_source =
+        n00bb_abi_object_row(&selected.views[first_origin->input],
+            N00B_ABI_TABLE_NATIVE_BINDING, first_origin->local);
+    n00bb_abi_string_view_t first_name;
+    assert(first_source && n00bb_abi_object_string(
+        &selected.views[first_origin->input], &first_source->native_name,
+        &first_name));
+    n00bb_abi_native_relocations_t unresolved = {
+        .symbols = core_alloc_array(core_object_emit_symbol_t, 1),
+        .symbol_count = 1,
+    };
+    unresolved.symbols[0] = (core_object_emit_symbol_t){
+        .name = core_strndup((const char *)first_name.bytes,
+                             first_name.length),
+        .exported = true,
+    };
+    assert(n00bb_abi_add_native_bindings(&selected, &exports_merged,
+        &native_sections, &unresolved)
+        && unresolved.symbols[0].section_index >= 2);
+    n00bb_abi_native_relocations_release(&unresolved);
+    n00bb_abi_native_relocations_t conflicting = {
+        .symbols = core_alloc_array(core_object_emit_symbol_t, 1),
+        .symbol_count = 1,
+    };
+    conflicting.symbols[0] = (core_object_emit_symbol_t){
+        .name = core_strndup((const char *)first_name.bytes,
+                             first_name.length),
+        .section_index = 1, .exported = true,
+    };
+    assert(!n00bb_abi_add_native_bindings(&selected, &exports_merged,
+        &native_sections, &conflicting)
+        && conflicting.symbol_count == 1
+        && conflicting.symbols[0].section_index == 1);
+    n00bb_abi_native_relocations_release(&conflicting);
+    size_t referenced_symbol_count = native_relocations.symbol_count;
+    assert(n00bb_abi_add_native_bindings(&selected, &exports_merged,
+        &native_sections, &native_relocations)
+        && native_relocations.symbol_count > referenced_symbol_count);
+    for (uint32_t i = 1; i < export_bindings->record_count; i++) {
+        const n00bb_abi_row_origin_t *origin = &export_bindings->origins[i];
+        const n00b_abi_native_binding_v1 *row =
+            n00bb_abi_merged_row(&exports_merged,
+                N00B_ABI_TABLE_NATIVE_BINDING, i);
+        const n00b_abi_native_binding_v1 *source = n00bb_abi_object_row(
+            &selected.views[origin->input], N00B_ABI_TABLE_NATIVE_BINDING,
+            origin->local);
+        n00bb_abi_string_view_t name;
+        assert(row && source && n00bb_abi_object_string(
+            &selected.views[origin->input], &source->native_name, &name));
+        bool found = false;
+        for (size_t j = 0; j < native_relocations.symbol_count; j++) {
+            const core_object_emit_symbol_t *symbol =
+                &native_relocations.symbols[j];
+            if (strlen(symbol->name) != name.length
+                || memcmp(symbol->name, name.bytes, name.length)) continue;
+            uint32_t expected_ordinal = 0;
+            for (size_t k = 0; k < native_sections.count; k++)
+                if (native_sections.maps[k].final_section_index
+                    == row->section_index)
+                    expected_ordinal = (uint32_t)(k + 2);
+            assert(expected_ordinal && symbol->exported
+                && symbol->section_index == expected_ordinal
+                && symbol->section_offset == (uint64_t)row->offset);
+            found = true;
+        }
+        assert(found);
+    }
+    n00bb_abi_merged_rows_release(&exports_merged);
     n00bb_abi_native_relocations_release(&native_relocations);
     size_t map_count = native_sections.count;
     n00bb_abi_native_section_map_t *maps = calloc(

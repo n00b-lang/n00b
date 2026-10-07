@@ -197,3 +197,12 @@ void n00bb_abi_native_relocations_release(
 bool n00bb_abi_rebase_native_references(
     n00bb_abi_merged_rows_t *merged,
     const n00bb_abi_native_section_map_t *maps, size_t map_count);
+
+/* Adds merged native bindings after section rebasing. An existing undefined
+ * reference with the same native name becomes defined; a conflicting defined
+ * name fails. On failure `symbols` is unchanged. */
+bool n00bb_abi_add_native_bindings(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_merged_rows_t *merged,
+    const n00bb_abi_native_sections_t *sections,
+    n00bb_abi_native_relocations_t *symbols);
