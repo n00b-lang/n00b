@@ -855,6 +855,111 @@ check_storage(const uint8_t *object, size_t length,
     }
 }
 
+static void
+check_string_storage(const uint8_t *object, size_t length,
+                     const core_object_section_t *metadata,
+                     const n00bb_abi_directory_entry_t *entries,
+                     size_t count, uint32_t target_id)
+{
+    const n00bb_abi_directory_entry_t *storage = entry_for(entries, count,
+        N00B_ABI_TABLE_STORAGE);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries, count,
+        N00B_ABI_TABLE_SYMBOL);
+    assert(storage && storage->record_count == 6 && symbols);
+    core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
+        ? CORE_TARGET_OBJECT_MACH_O
+        : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
+            ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
+    core_object_section_t pool;
+    assert(core_object_section_find(object, length, format,
+        format == CORE_TARGET_OBJECT_MACH_O ? "__TEXT" : NULL,
+        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_strings"
+        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$S"
+        : ".rodata.n00b_strings", &pool));
+    const char *long_text = "a longer immutable string value";
+    size_t long_length = strlen(long_text);
+    size_t backing_matches = 0;
+    for (size_t i = 0; i <= pool.size
+         && long_length <= pool.size - i; i++)
+        backing_matches += !memcmp(pool.bytes + i, long_text, long_length);
+    assert(backing_matches == 1);
+
+    uint64_t long_addends[2] = {0};
+    size_t long_count = 0;
+    bool seen[5] = {0};
+    const char *names[] = {"short_label", "long_label", "repeated_label",
+                           "thread_label", "empty_label"};
+    for (uint32_t i = 1; i < storage->record_count; i++) {
+        const n00b_abi_storage_v1 *row = row_at(metadata, storage, i);
+        assert(row->module_index == 1 && row->symbol_index
+            && row->symbol_index < symbols->record_count
+            && row->byte_length == sizeof(n00b_abi_string_v1));
+        const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,
+            row->symbol_index);
+        size_t kind = 0;
+        while (kind < 5 && !short_name_is(&symbol->name, names[kind]))
+            kind++;
+        assert(kind < 5 && !seen[kind] && symbol->type_index == row->type_index);
+        seen[kind] = true;
+        bool tls = kind == 3;
+        assert(row->segment_kind == (tls ? N00B_ABI_STORAGE_TLS
+            : N00B_ABI_STORAGE_READ_ONLY));
+        core_object_section_t section;
+        assert(core_object_section_find(object, length, format,
+            format == CORE_TARGET_OBJECT_MACH_O
+                ? (tls ? "__DATA" : "__DATA_CONST") : NULL,
+            format == CORE_TARGET_OBJECT_MACH_O
+                ? (tls ? "__n00b_tls" : "__n00b_ro")
+                : format == CORE_TARGET_OBJECT_COFF
+                    ? (tls ? ".tls$N" : ".rdata$N")
+                    : (tls ? ".tdata.n00b_static"
+                           : ".rodata.n00b_static"), &section));
+        assert(row->segment_index == section.native_index
+            && row->byte_offset <= section.size
+            && row->byte_length <= section.size - row->byte_offset);
+        const n00b_abi_string_v1 *value =
+            (const void *)(section.bytes + row->byte_offset);
+        if (kind == 0 || kind == 3 || kind == 4) {
+            const char *text = kind == 0 ? "hello" : kind == 3 ? "worker" : "";
+            size_t text_length = strlen(text);
+            assert(value->short_value.selector ==
+                    (text_length | (N00B_ABI_STRING_ASCII << 4))
+                && !memcmp(value->short_value.bytes, text, text_length));
+            continue;
+        }
+        assert(value->long_value.selector ==
+            ((uint64_t)long_length
+                | ((uint64_t)N00B_ABI_STRING_ASCII
+                    << N00B_ABI_STRING_ENCODING_SHIFT)
+                | ((uint64_t)N00B_ABI_STRING_LONG
+                    << N00B_ABI_STRING_TAG_SHIFT)));
+        bool found_relocation = false;
+        for (uint32_t r = 0; r < section.relocation_count; r++) {
+            core_object_absolute64_relocation_t relocation;
+            assert(core_object_absolute64_relocation_at(&section, format, r,
+                &relocation));
+            if (relocation.section_offset != row->byte_offset) continue;
+            if (format == CORE_TARGET_OBJECT_MACH_O)
+                assert(relocation.target_is_section
+                    && relocation.native_symbol_index == pool.native_index);
+            else {
+                core_object_symbol_name_t target;
+                assert(core_object_symbol_name_at(object, length, format,
+                    &section, relocation.native_symbol_index, &target)
+                    && target.length == strlen("n00b_string_pool")
+                    && !memcmp(target.bytes, "n00b_string_pool",
+                               target.length));
+            }
+            assert(long_count < 2);
+            long_addends[long_count++] = relocation.addend_bits;
+            found_relocation = true;
+        }
+        assert(found_relocation);
+    }
+    for (size_t i = 0; i < 5; i++) assert(seen[i]);
+    assert(long_count == 2 && long_addends[0] == long_addends[1]);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -870,6 +975,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "trait-dispatch")
             || !strcmp(argv[2], "callback")
             || !strcmp(argv[2], "storage")
+            || !strcmp(argv[2], "string-storage")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -974,6 +1080,13 @@ main(int argc, char **argv)
     }
     if (argc == 3 && !strcmp(argv[2], "storage")) {
         check_storage(object, (size_t)length, &metadata, entries,
+            header.directory_count, header.key.target_id);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "string-storage")) {
+        check_string_storage(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id);
         free(entries);
         free(object);

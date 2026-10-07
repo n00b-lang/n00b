@@ -1,4 +1,5 @@
 #include "abi_storage.h"
+#include "abi_string.h"
 
 #include <limits.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 
 core_list_decl(n00b_abi_storage_v1);
 core_list_decl(uint32_t);
+core_list_decl(n00bb_abi_storage_relocation_t);
 
 static bool
 append_padding(core_buffer_t *buffer, size_t alignment)
@@ -86,19 +88,43 @@ encode_scalar(ir_module_t *module, const ir_global_t *global,
     }
 }
 
+static bool
+encode_string(n00bb_abi_name_pool_t *pool, const ir_global_t *global,
+              uint8_t bytes[16], size_t *pool_offset)
+{
+    if (!global->has_static_initializer) return true;
+    const ir_global_init_value_t *value = global->static_initializer;
+    if (!value || value->kind != IR_GLOBAL_INIT_STRING
+        || (value->string.length && !value->string.bytes)) return false;
+    n00b_abi_string_encoding_v1 encoding = N00B_ABI_STRING_ASCII;
+    for (size_t i = 0; i < value->string.length; i++)
+        if ((uint8_t)value->string.bytes[i] >= 0x80) {
+            encoding = N00B_ABI_STRING_UTF8;
+            break;
+        }
+    n00b_abi_string_v1 encoded = {0};
+    if (!n00bb_abi_name_pool_value(pool,
+        core_string_borrow(value->string.bytes, value->string.length),
+        encoding, &encoded, pool_offset)) return false;
+    memcpy(bytes, &encoded, sizeof encoded);
+    return true;
+}
+
 bool
 n00bb_abi_storage_rows_build(
     n00bb_abi_type_index_t *index,
     const n00bb_abi_decl_index_t *declarations,
     const n00bb_abi_type_identity_rows_t *types,
-    ir_module_t *runtime, uint32_t stream_base,
+    ir_module_t *runtime, n00bb_abi_name_pool_t *pool,
+    uint32_t stream_base,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_storage_rows_t *out)
 {
-    if (!index || !declarations || !types || !types->rows || !runtime
+    if (!index || !declarations || !types || !types->rows || !runtime || !pool
         || !out) return false;
     core_list_t(n00b_abi_storage_v1) rows = {0};
     core_list_t(uint32_t) statics = {0}, locals = {0};
+    core_list_t(n00bb_abi_storage_relocation_t) relocations = {0};
     n00bb_abi_storage_rows_t built = {0};
     core_list_push(rows, ((n00b_abi_storage_v1){0}));
     size_t matched_globals = 0;
@@ -141,8 +167,13 @@ n00bb_abi_storage_rows_build(
         uint32_t alignment = type_row->alignment_bytes;
         uint64_t bits = type_row->size_bits;
         uint8_t bytes[16] = {0};
+        size_t pool_offset = 0;
+        bool is_string = type_row->kind == N00B_ABI_TYPE_STRING;
         if (!alignment || (alignment & (alignment - 1))
-            || !encode_scalar(runtime, global, bits, bytes)) {
+            || (is_string
+                ? (bits != 128 || alignment != 8
+                    || !encode_string(pool, global, bytes, &pool_offset))
+                : !encode_scalar(runtime, global, bits, bytes))) {
             valid = false;
             break;
         }
@@ -151,6 +182,13 @@ n00bb_abi_storage_rows_build(
             : global->mutability == IR_MUT_CONST
                 ? N00B_ABI_STORAGE_READ_ONLY
                 : N00B_ABI_STORAGE_WRITABLE;
+        bool long_string = is_string && global->has_static_initializer
+            && global->static_initializer->string.length
+                > N00BB_ABI_STRING_SHORT_CAPACITY;
+        if (long_string && kind == N00B_ABI_STORAGE_TLS) {
+            valid = false;
+            break;
+        }
         core_buffer_t *buffer = kind == N00B_ABI_STORAGE_TLS
             ? &built.tls : kind == N00B_ABI_STORAGE_READ_ONLY
                 ? &built.read_only : &built.writable;
@@ -169,6 +207,13 @@ n00bb_abi_storage_rows_build(
             .byte_length = bits / 8,
         };
         core_buffer_append(buffer, (const char *)bytes, (size_t)row.byte_length);
+        if (long_string)
+            core_list_push(relocations,
+                ((n00bb_abi_storage_relocation_t){
+                    .segment_kind = kind,
+                    .byte_offset = row.byte_offset,
+                    .pool_offset = pool_offset,
+                }));
         if (*section_alignment < alignment) *section_alignment = alignment;
         if (kind == N00B_ABI_STORAGE_TLS)
             core_list_push(locals, (uint32_t)rows.len);
@@ -206,10 +251,13 @@ n00bb_abi_storage_rows_build(
         };
         built.rows = rows.data;
         built.row_count = rows.len;
+        built.relocations = relocations.data;
+        built.relocation_count = relocations.len;
         *out = built;
     }
     else {
         core_list_free(rows);
+        core_list_free(relocations);
         n00bb_abi_storage_rows_release(&built);
     }
     core_list_free(statics);
@@ -223,6 +271,7 @@ n00bb_abi_storage_rows_release(n00bb_abi_storage_rows_t *rows)
     if (!rows) return;
     core_free(rows->rows);
     core_free(rows->stream_indexes);
+    core_free(rows->relocations);
     core_buffer_release(&rows->read_only);
     core_buffer_release(&rows->writable);
     core_buffer_release(&rows->tls);

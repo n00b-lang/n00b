@@ -33,6 +33,22 @@ main(void)
     assert(n00bb_abi_name_pool_size(pool) == sizeof(first) - 1
         + sizeof(second) - 1 + sizeof(third) - 1);
     assert(!memcmp(n00bb_abi_name_pool_bytes(pool), first, sizeof(first) - 1));
+    n00b_abi_string_v1 value = {0};
+    size_t pool_offset = SIZE_MAX;
+    assert(n00bb_abi_name_pool_value(pool, CORE_STRING_STATIC(first),
+        N00B_ABI_STRING_ASCII, &value, &pool_offset));
+    assert(pool_offset == 0 && value.long_value.selector
+        == ((uint64_t)(sizeof(first) - 1)
+            | ((uint64_t)N00B_ABI_STRING_ASCII
+                << N00B_ABI_STRING_ENCODING_SHIFT)
+            | ((uint64_t)N00B_ABI_STRING_LONG
+                << N00B_ABI_STRING_TAG_SHIFT)));
+    assert(n00bb_abi_name_pool_value(pool, CORE_STRING_STATIC("abc"),
+        N00B_ABI_STRING_ASCII, &value, &pool_offset));
+    assert(value.short_value.selector
+        == (3 | (N00B_ABI_STRING_ASCII << 4)) && pool_offset == 0);
+    assert(n00bb_abi_name_pool_size(pool) == sizeof(first) - 1
+        + sizeof(second) - 1 + sizeof(third) - 1);
     n00bb_abi_string_header_t header;
     assert(n00bb_abi_string_decode(
         (const uint8_t *)&types[0].canonical_name,

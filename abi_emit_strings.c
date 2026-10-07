@@ -69,21 +69,24 @@ n00bb_abi_name_pool_free(n00bb_abi_name_pool_t *pool)
 }
 
 bool
-n00bb_abi_name_pool_encode(n00bb_abi_name_pool_t *pool,
-    core_string_t text, uint32_t table_kind, uint32_t record_index,
-    size_t field_offset, n00b_abi_string_v1 *out)
+n00bb_abi_name_pool_value(n00bb_abi_name_pool_t *pool,
+    core_string_t text, n00b_abi_string_encoding_v1 encoding,
+    n00b_abi_string_v1 *out, size_t *pool_offset)
 {
-    if (!pool || !out || (text.u8_bytes && !text.data)) return false;
+    if (!pool || !out || !pool_offset
+        || (text.u8_bytes && !text.data)
+        || encoding > N00B_ABI_STRING_UTF8) return false;
     *out = (n00b_abi_string_v1){0};
+    *pool_offset = 0;
     if (text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY) {
         if (text.u8_bytes)
             memcpy(out->short_value.bytes, text.data, text.u8_bytes);
         out->short_value.selector = (uint8_t)text.u8_bytes
-            | (N00B_ABI_STRING_UTF8 << 4);
+            | (encoding << 4);
         return true;
     }
     if (text.u8_bytes > N00B_ABI_STRING_LONG_LENGTH_MASK
-        || pool->pending.len == SIZE_MAX) return false;
+        || pool->owned_names.len == SIZE_MAX) return false;
     pooled_name_t probe = {.text = text};
     bool found = false;
     pooled_name_t *name = core_dict_get(&pool->names, &probe, &found);
@@ -102,8 +105,22 @@ n00bb_abi_name_pool_encode(n00bb_abi_name_pool_t *pool,
         core_list_push(pool->owned_names, name);
     }
     out->long_value.selector = (uint64_t)text.u8_bytes
-        | ((uint64_t)N00B_ABI_STRING_UTF8 << N00B_ABI_STRING_ENCODING_SHIFT)
+        | ((uint64_t)encoding << N00B_ABI_STRING_ENCODING_SHIFT)
         | ((uint64_t)N00B_ABI_STRING_LONG << N00B_ABI_STRING_TAG_SHIFT);
+    *pool_offset = offset;
+    return true;
+}
+
+bool
+n00bb_abi_name_pool_encode(n00bb_abi_name_pool_t *pool,
+    core_string_t text, uint32_t table_kind, uint32_t record_index,
+    size_t field_offset, n00b_abi_string_v1 *out)
+{
+    if (!pool || pool->pending.len == SIZE_MAX) return false;
+    size_t offset = 0;
+    if (!n00bb_abi_name_pool_value(pool, text, N00B_ABI_STRING_UTF8,
+                                   out, &offset)) return false;
+    if (text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY) return true;
     core_list_push(pool->pending, ((pending_name_relocation_t){
         .table_kind = table_kind,
         .record_index = record_index,

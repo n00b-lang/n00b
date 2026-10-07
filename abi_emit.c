@@ -769,7 +769,7 @@ n00bb_abi_emit_unit(
                 + (uint32_t)function_rows.stream_index_count,
             &constraint_rows)
         && n00bb_abi_storage_rows_build(type_index, declarations,
-            &type_rows, (ir_module_t *)runtime_ir,
+            &type_rows, (ir_module_t *)runtime_ir, pool,
             prefix_stream_count + (uint32_t)components.count
                 + (uint32_t)layout_rows.stream_index_count
                 + (uint32_t)enum_rows.stream_index_count
@@ -1002,6 +1002,41 @@ n00bb_abi_emit_unit(
         valid = n00bb_abi_name_pool_relocations(pool, entries,
             sizeof(entries) / sizeof(*entries), &relocations,
             &relocation_count);
+    if (valid && storage_rows.relocation_count) {
+        if (!n00bb_abi_name_pool_size(pool)
+            || storage_rows.relocation_count > SIZE_MAX - relocation_count)
+            valid = false;
+        else {
+            size_t total = relocation_count + storage_rows.relocation_count;
+            core_object_emit_absolute64_t *combined = core_alloc_array(
+                core_object_emit_absolute64_t, total);
+            if (relocation_count)
+                memcpy(combined, relocations,
+                       relocation_count * sizeof(*combined));
+            for (size_t i = 0; i < storage_rows.relocation_count; i++) {
+                const n00bb_abi_storage_relocation_t *source =
+                    &storage_rows.relocations[i];
+                uint32_t section = source->segment_kind
+                    <= N00B_ABI_STORAGE_TLS
+                    ? storage_input_indexes[source->segment_kind] : 0;
+                if (!section
+                    || source->pool_offset >= n00bb_abi_name_pool_size(pool)) {
+                    valid = false;
+                    break;
+                }
+                combined[relocation_count + i] =
+                    (core_object_emit_absolute64_t){
+                        .section_index = section,
+                        .section_offset = source->byte_offset,
+                        .symbol_index = 0,
+                        .addend_bits = source->pool_offset,
+                    };
+            }
+            core_free(relocations);
+            relocations = combined;
+            relocation_count = total;
+        }
+    }
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
     bool has_pool = n00bb_abi_name_pool_size(pool) != 0;
