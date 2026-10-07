@@ -10,6 +10,7 @@ typedef struct {
     const uint8_t *bytes;
     size_t size;
     uint32_t native_index;
+    uint64_t virtual_address; /* Section address before final linking. */
     uint64_t alignment;
     uint64_t flags;
     const uint8_t *relocations;

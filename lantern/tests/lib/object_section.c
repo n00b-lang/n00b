@@ -31,6 +31,7 @@ static void elf_test(void)
     core_le_store_u32(image + meta, 11);
     core_le_store_u32(image + meta + 4, 1);
     core_le_store_u64(image + meta + 8, 2);
+    core_le_store_u64(image + meta + 16, 0x1234);
     core_le_store_u64(image + meta + 24, 104);
     core_le_store_u64(image + meta + 32, 8);
     core_le_store_u64(image + meta + 48, 8);
@@ -47,7 +48,8 @@ static void elf_test(void)
     core_object_section_t section = {0};
     assert(core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_ELF,
                                     NULL, ".n00b.meta", &section));
-    assert(section.native_index == 2 && section.size == 8);
+    assert(section.native_index == 2 && section.size == 8
+        && section.virtual_address == 0x1234);
     assert(section.bytes == image + 104 && section.alignment == 8);
     assert(section.relocations == image + 112 && section.relocation_count == 1);
     assert(section.relocation_entry_size == 24);
@@ -87,6 +89,7 @@ static void macho_test(void)
     core_le_store_u32(image + 96, 1);
     memcpy(image + 104, "__n00b_meta", sizeof "__n00b_meta" - 1);
     memcpy(image + 120, "__DATA_CONST", sizeof "__DATA_CONST" - 1);
+    core_le_store_u64(image + 136, 0x5678);
     core_le_store_u64(image + 144, 8);
     core_le_store_u32(image + 152, 184);
     core_le_store_u32(image + 156, 3);
@@ -98,7 +101,8 @@ static void macho_test(void)
     core_object_section_t section = {0};
     assert(core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_MACH_O,
                                     "__DATA_CONST", "__n00b_meta", &section));
-    assert(section.native_index == 1 && section.size == 8);
+    assert(section.native_index == 1 && section.size == 8
+        && section.virtual_address == 0x5678);
     assert(section.bytes == image + 184 && section.alignment == 8);
     assert(section.relocations == image + 192 && section.relocation_count == 1);
     core_object_absolute64_relocation_t relocation = {0};
@@ -118,6 +122,7 @@ static void coff_test(void)
     core_le_store_u16(image, 0x8664);
     core_le_store_u16(image + 2, 1);
     memcpy(image + 20, ".n00b$M", 7);
+    core_le_store_u32(image + 32, 0x9abc);
     core_le_store_u32(image + 36, 8);
     core_le_store_u32(image + 40, 64);
     core_le_store_u32(image + 44, 72);
@@ -129,7 +134,8 @@ static void coff_test(void)
     core_object_section_t section = {0};
     assert(core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_COFF,
                                     NULL, ".n00b$M", &section));
-    assert(section.native_index == 1 && section.size == 8);
+    assert(section.native_index == 1 && section.size == 8
+        && section.virtual_address == 0x9abc);
     assert(section.bytes == image + 64 && section.alignment == 16);
     assert(section.relocations == image + 72 && section.relocation_count == 1);
     core_object_absolute64_relocation_t relocation = {0};
