@@ -200,10 +200,9 @@ static bool same_method_obligation(th_ctx *ctx, const th_constraint *a,
         || a_call->fn.np != b_call->fn.np
         || a_call->fn.nkw != b_call->fn.nkw
         || !!a_call->fn.rest != !!b_call->fn.rest
-        || !!a_call->fn.error != !!b_call->fn.error
         || !same_method_type_ref(ctx, a_call->fn.ret, a_owner,
                                  b_call->fn.ret, b_owner)) return false;
-    if (a_call->fn.error
+    if (a_call->fn.error && b_call->fn.error
         && !same_method_type_ref(ctx, a_call->fn.error, a_owner,
                                  b_call->fn.error, b_owner)) return false;
     for (size_t i = 0; i < a_call->fn.np; i++)
@@ -223,6 +222,35 @@ static bool same_method_obligation(th_ctx *ctx, const th_constraint *a,
                                      b_call->fn.kw[i].type, b_owner))
             return false;
     return true;
+}
+
+static bool set_method_failure(th_ctx *ctx, th_constraint *constraint,
+                               th_type *error)
+{
+    th_type *call = th_resolve(constraint->method.call);
+    if (!call) {
+        constraint->method.call = th_func_with_error(ctx,
+            constraint->method.result, error, nullptr, 0,
+            nullptr, nullptr, 0);
+        return constraint->method.call != nullptr;
+    }
+    if (th_kind_of(call) != TH_FUNCTION) return false;
+    th_type *existing = th_func_error(call);
+    if (existing)
+        return th_unify_in_place(ctx, existing, error) != nullptr;
+    constraint->method.call = th_func_with_error(ctx, th_func_ret(call),
+        error, call->fn.params, call->fn.np, call->fn.rest,
+        call->fn.kw, call->fn.nkw);
+    return constraint->method.call != nullptr;
+}
+
+static bool complete_method_failure(th_ctx *ctx, th_constraint *slot,
+                                    const th_constraint *incoming)
+{
+    th_type *have = th_resolve(slot->method.call);
+    th_type *want = th_resolve(incoming->method.call);
+    if (!have || !want || have->fn.error || !want->fn.error) return true;
+    return set_method_failure(ctx, slot, want->fn.error);
 }
 
 bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
@@ -247,7 +275,8 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
         }
         c.method.name = th_strdup(ctx, c.method.name, strlen(c.method.name));
         th_constraint *slot = con_same_slot(var, c);
-        if (slot && same_method_obligation(ctx, slot, var, &c, var)) return true;
+        if (slot && same_method_obligation(ctx, slot, var, &c, var))
+            return complete_method_failure(ctx, slot, &c);
         core_list_push(var->var.cons, c);
         return true;
     }
@@ -346,25 +375,7 @@ bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
                 break;
             }
         }
-    if (!match) return false;
-    th_type *call = th_resolve(match->method.call);
-    if (!call) {
-        call = th_func_with_error(ctx, match->method.result, error, nullptr, 0,
-                                  nullptr, nullptr, 0);
-        if (!call) return false;
-        match->method.call = call;
-        return true;
-    }
-    if (th_kind_of(call) != TH_FUNCTION) return false;
-    th_type *existing = th_func_error(call);
-    if (existing)
-        return th_unify_in_place(ctx, existing, error) != nullptr;
-    th_type *connected = th_func_with_error(ctx, th_func_ret(call), error,
-        call->fn.params, call->fn.np, call->fn.rest,
-        call->fn.kw, call->fn.nkw);
-    if (!connected) return false;
-    match->method.call = connected;
-    return true;
+    return match && set_method_failure(ctx, match, error);
 }
 
 size_t th_var_constraint_count(const th_type *var)
@@ -874,7 +885,11 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
             th_constraint *slot = con_same_slot(bt, constraint);
             if (constraint.kind == TH_CON_METHOD && slot) {
                 if (same_method_obligation(ctx, slot, bt, &constraint,
-                                           (th_type *)var)) continue;
+                                           (th_type *)var)) {
+                    if (!complete_method_failure(ctx, slot, &constraint))
+                        return false;
+                    continue;
+                }
             }
             if (!th_var_constrain(ctx, bt, constraint)) {
                 return false;

@@ -2088,6 +2088,50 @@ int main(void) {
         && unary_constraint.method.call
         && th_func_nparams(unary_constraint.method.call) == 0
         && th_func_error(unary_constraint.method.call) == unary_error);
+  th_type *repeated_method_receiver = th_var(method_error_context);
+  th_type *repeated_result = th_var(method_error_context);
+  th_type *repeated_error = th_name(method_error_context, "nil");
+  th_type *partial_call = th_func(method_error_context, repeated_result,
+                                  nullptr, 0, nullptr, nullptr, 0);
+  th_type *complete_call = th_func_with_error(method_error_context,
+      repeated_result, repeated_error, nullptr, 0, nullptr, nullptr, 0);
+  bool repeated_required = th_require_method(method_error_context,
+      repeated_method_receiver, "render", repeated_result, partial_call)
+      && th_require_method(method_error_context, repeated_method_receiver,
+                           "render", repeated_result, complete_call);
+  bool repeated_connected = th_method_obligation_set_error(
+      method_error_context, repeated_method_receiver, "render", repeated_result,
+      repeated_error);
+  bool repeated_complete = repeated_required && repeated_connected
+      && th_var_constraint_count(repeated_method_receiver) == 1;
+  for (size_t i = 0; repeated_complete && i < 1; i++) {
+      th_constraint constraint;
+      repeated_complete = th_var_constraint_at(repeated_method_receiver, i,
+          &constraint) && constraint.kind == TH_CON_METHOD
+          && th_func_error(constraint.method.call) == repeated_error;
+  }
+  check("matching partial and complete method obligations share one slot",
+        repeated_complete);
+  th_type *merge_partial = th_var(method_error_context);
+  th_type *merge_complete = th_var(method_error_context);
+  th_type *merge_result = th_name(method_error_context, "string");
+  th_type *merge_partial_call = th_func(method_error_context, merge_result,
+                                        nullptr, 0, nullptr, nullptr, 0);
+  th_type *merge_complete_call = th_func_with_error(method_error_context,
+      merge_result, repeated_error, nullptr, 0, nullptr, nullptr, 0);
+  bool merge_required = th_require_method(method_error_context, merge_partial,
+      "render", merge_result, merge_partial_call)
+      && th_require_method(method_error_context, merge_complete, "render",
+                           merge_result, merge_complete_call);
+  th_constraint merged_constraint = {0};
+  check("unifying method obligations completes the failure channel",
+        merge_required
+        && th_unify_in_place(method_error_context, merge_partial,
+                             merge_complete)
+        && th_var_constraint_count(th_resolve(merge_partial)) == 1
+        && th_var_constraint_at(th_resolve(merge_partial), 0,
+                                &merged_constraint)
+        && th_func_error(merged_constraint.method.call) == repeated_error);
   th_ctx_free(method_error_context);
   th_ctx_free(wrong_shape_types);
   check("loaded image preserves type layout and function ABI metadata",
