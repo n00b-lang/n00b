@@ -36784,21 +36784,40 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
                 if (!symbol->type) continue;
+                const n00bb_enum_range_t *enum_range = parse_sym_binding(
+                    symbol, CORE_STRING_STATIC("n00bb.enum-range"));
+                uint64_t enum_bits = 0;
+                if (enum_range)
+                    enum_bits = enum_range->magnitude_bits > UINT32_MAX
+                            - (uint32_t)enum_range->is_signed
+                        ? UINT64_MAX
+                        : enum_range->magnitude_bits + enum_range->is_signed;
                 for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]);
                      m++) {
                     th_type *type = th_apply_subst(
                         ir_module_types(modules[m]), symbol->type);
                     bool handled = false;
-                    if (type && n00bb_abi_publish_scalar_layout(modules[m],
-                                type, &analysis->target, &handled)) continue;
+                    bool layout_ok = type && n00bb_abi_publish_scalar_layout(
+                        modules[m], type, &analysis->target, &handled);
+                    if (layout_ok && enum_bits)
+                        layout_ok = enum_bits <= UINT32_MAX
+                            && n00bb_abi_publish_integer_like_layout(
+                                modules[m], type, &analysis->target,
+                                (uint32_t)enum_bits);
+                    if (layout_ok) continue;
+                    core_buffer_t message = {0};
+                    core_buffer_printf(&message,
+                        "could not finalize ABI layout for type '%s'",
+                        n00bb_print_type(ir_module_types(modules[m]),
+                                         type ? type : symbol->type));
                     core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
                         CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
-                        CORE_STRING_STATIC(
-                            "could not finalize the scalar ABI layout"),
+                        core_string_from_cstr(message.data),
                         symbol->decl_node
                             ? link_source_location(symbol->decl_node)
                             : (core_diag_location_t){0});
+                    core_buffer_release(&message);
                     return false;
                 }
             }

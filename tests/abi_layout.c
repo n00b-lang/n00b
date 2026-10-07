@@ -129,6 +129,28 @@ int main(void)
             && alias_layout->n_reserved == 1
             && alias_layout->reserved[0].offset == 17
             && alias_layout->reserved[0].width == 15;
+        th_type *unsigned_enum = th_name(types, "UnsignedEnum");
+        th_type *signed_enum = th_name(types, "SignedEnum");
+        th_type *wide_enum = th_name(types, "WideEnum");
+        ok = ok && n00bb_abi_publish_integer_like_layout(
+                module, unsigned_enum, &target, 2)
+            && n00bb_abi_publish_integer_like_layout(
+                module, signed_enum, &target, 3)
+            && n00bb_abi_publish_integer_like_layout(
+                module, wide_enum, &target, 9);
+        const ir_final_layout_t *unsigned_layout = ir_layout_final(
+            module, unsigned_enum, target.triple);
+        const ir_final_layout_t *signed_layout = ir_layout_final(
+            module, signed_enum, target.triple);
+        const ir_final_layout_t *wide_layout = ir_layout_final(
+            module, wide_enum, target.triple);
+        ok = ok && unsigned_layout && unsigned_layout->intrinsic_bits == 8
+            && unsigned_layout->occupied[0].width == 2
+            && signed_layout && signed_layout->intrinsic_bits == 8
+            && signed_layout->occupied[0].width == 3
+            && wide_layout && wide_layout->intrinsic_bits == 16
+            && wide_layout->alignment_bytes == 2
+            && wide_layout->occupied[0].width == 9;
         handled = false;
         ok = ok && !n00bb_abi_publish_scalar_layout(module,
                    th_bits(types, 129), &target, &handled) && handled;

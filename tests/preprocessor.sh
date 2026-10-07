@@ -4133,6 +4133,15 @@ test "$(grep -c '^  layout bool {$' "$tmp/scalar_layout_ir_only.out")" -eq 2
     exit 1
 }
 test "$(grep -Fc '  layout atomic[bits:17] {' "$tmp/atomic_layout.out")" -eq 2
+"$compiler" lower --dump-layout "$program_dir/lower_enum_cast.n00b" \
+    >"$tmp/lower_enum_layout.out" 2>"$tmp/lower_enum_layout.err" || {
+    cat "$tmp/lower_enum_layout.err"
+    exit 1
+}
+grep -Eq 'layout lower_enum_cast.Signed target=(x86_64-linux|arm64-macos|x86_64-windows) size=1 align=1' \
+    "$tmp/lower_enum_layout.out"
+grep -Eq 'layout lower_enum_cast.Small target=(x86_64-linux|arm64-macos|x86_64-windows) size=1 align=1' \
+    "$tmp/lower_enum_layout.out"
 for invalid_width in sized_integer_zero_width sized_unsigned_too_wide \
     sized_bits_too_wide; do
     if "$compiler" lower "$program_dir/$invalid_width.n00b" \

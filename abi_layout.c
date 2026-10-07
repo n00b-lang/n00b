@@ -171,3 +171,18 @@ n00bb_abi_publish_interned_scalar_layouts(
     }
     return true;
 }
+
+bool
+n00bb_abi_publish_integer_like_layout(
+    ir_module_t *module, th_type *type, const core_target_desc_t *target,
+    uint32_t semantic_bits)
+{
+    if (!module || !type || !target || !target->triple || !semantic_bits
+        || strcmp(ir_module_target(module), target->triple)) return false;
+    const core_target_scalar_t *storage =
+        core_target_integer_for_bits(target, semantic_bits);
+    return storage
+        && publish_layout(module, type, target, semantic_bits,
+                          storage->width_bits, storage->alignment_bytes,
+                          false);
+}
