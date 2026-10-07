@@ -555,3 +555,109 @@ bool core_object_symbol_name_at(const void *image, size_t image_size,
         return false;
     }
 }
+
+bool core_object_symbol_at(const void *image, size_t image_size,
+                           core_target_object_format_t format,
+                           const core_object_section_t *section,
+                           uint32_t native_symbol_index,
+                           core_object_symbol_t *out)
+{
+    if (!image || !section || !out) return false;
+    core_object_symbol_t result = {0};
+    if (!core_object_symbol_name_at(image, image_size, format, section,
+                                    native_symbol_index, &result.name))
+        return false;
+    const uint8_t *bytes = image;
+    uint32_t section_count;
+    if (!core_object_section_count(image, image_size, format,
+                                   &section_count)) return false;
+    switch (format) {
+    case CORE_TARGET_OBJECT_ELF: {
+        uint64_t headers = core_le_load_u64(bytes + 40);
+        uint16_t width = core_le_load_u16(bytes + 58);
+        uint32_t table_index = section->native_symbol_table_index;
+        if (!table_index || table_index > section_count) return false;
+        const uint8_t *table = bytes + headers + (uint64_t)table_index * width;
+        uint64_t offset = core_le_load_u64(table + 24);
+        uint64_t length = core_le_load_u64(table + 32);
+        uint64_t entry_size = core_le_load_u64(table + 56);
+        if (entry_size < 24 || native_symbol_index >= length / entry_size)
+            return false;
+        const uint8_t *entry = bytes + offset
+            + (uint64_t)native_symbol_index * entry_size;
+        uint8_t binding = entry[4] >> 4;
+        uint16_t section_index = core_le_load_u16(entry + 6);
+        if (binding > 1 || (entry[4] & 0x0f) || entry[5]
+            || section_index >= 0xff00
+            || section_index > section_count) return false;
+        result.exported = binding == 1;
+        result.native_section_index = section_index;
+        result.section_offset = section_index
+            ? core_le_load_u64(entry + 8) : 0;
+        break;
+    }
+    case CORE_TARGET_OBJECT_MACH_O: {
+        uint32_t command_count = core_le_load_u32(bytes + 16);
+        uint32_t command_bytes = core_le_load_u32(bytes + 20);
+        size_t cursor = 32, end = 32 + command_bytes;
+        bool found = false;
+        for (uint32_t i = 0; i < command_count; i++) {
+            uint32_t command = core_le_load_u32(bytes + cursor);
+            uint32_t size = core_le_load_u32(bytes + cursor + 4);
+            if (command == 2) {
+                uint32_t offset = core_le_load_u32(bytes + cursor + 8);
+                const uint8_t *entry = bytes + offset
+                    + (uint64_t)native_symbol_index * 16;
+                uint8_t kind = entry[4] & 0x0e;
+                uint8_t section_index = entry[5];
+                if ((entry[4] & 0xf0) || core_le_load_u16(entry + 6)
+                    || (kind != 0 && kind != 0x0e)
+                    || (kind == 0 && section_index)
+                    || (kind == 0x0e
+                        && (!section_index || section_index > section_count)))
+                    return false;
+                result.exported = (entry[4] & 1) != 0;
+                result.native_section_index = section_index;
+                if (section_index) {
+                    core_object_section_t target;
+                    if (!core_object_section_at(image, image_size, format,
+                                                section_index, &target))
+                        return false;
+                    uint64_t address = core_le_load_u64(entry + 8);
+                    if (address < target.virtual_address
+                        || address - target.virtual_address > target.size)
+                        return false;
+                    result.section_offset = address
+                        - target.virtual_address;
+                }
+                found = true;
+                break;
+            }
+            cursor += size;
+            if (cursor > end) return false;
+        }
+        if (!found) return false;
+        break;
+    }
+    case CORE_TARGET_OBJECT_COFF: {
+        uint32_t offset = core_le_load_u32(bytes + 8);
+        const uint8_t *entry = bytes + offset
+            + (uint64_t)native_symbol_index * 18;
+        int16_t section_index = (int16_t)core_le_load_u16(entry + 12);
+        uint8_t storage_class = entry[16];
+        if (section_index < 0
+            || (uint32_t)section_index > section_count
+            || (storage_class != 2 && storage_class != 3)
+            || core_le_load_u16(entry + 14) || entry[17]) return false;
+        result.exported = storage_class == 2;
+        result.native_section_index = (uint32_t)section_index;
+        result.section_offset = section_index
+            ? core_le_load_u32(entry + 8) : 0;
+        break;
+    }
+    default:
+        return false;
+    }
+    *out = result;
+    return true;
+}

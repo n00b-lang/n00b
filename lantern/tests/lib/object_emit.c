@@ -38,6 +38,39 @@ static void check_native_section(const uint8_t *image, size_t size,
         && view.native_index == index);
 }
 
+static void check_native_symbols(const uint8_t *image, size_t size,
+                                 const core_target_desc_t *target,
+                                 const core_object_section_t *section,
+                                 size_t section_count,
+                                 const core_object_emit_symbol_t *expected,
+                                 size_t expected_count)
+{
+    uint32_t first = target->object_format == CORE_TARGET_OBJECT_ELF ? 1 : 0;
+    for (size_t i = 0; i < expected_count; i++) {
+        bool found = false;
+        for (size_t native = first; native < first + expected_count;
+             native++) {
+            core_object_symbol_t symbol;
+            assert(core_object_symbol_at(image, size,
+                target->object_format, section, (uint32_t)native, &symbol));
+            size_t length = strlen(expected[i].name);
+            if (symbol.name.length != length
+                || memcmp(symbol.name.bytes, expected[i].name, length))
+                continue;
+            uint32_t expected_section = 0;
+            if (expected[i].section_index)
+                assert(core_object_emit_native_section_index(target,
+                    section_count, expected[i].section_index,
+                    &expected_section));
+            assert(!found && symbol.exported == expected[i].exported
+                && symbol.native_section_index == expected_section
+                && symbol.section_offset == expected[i].section_offset);
+            found = true;
+        }
+        assert(found);
+    }
+}
+
 static void mach_test(const char *output_path)
 {
     core_target_desc_t target;
@@ -83,6 +116,9 @@ static void mach_test(const char *output_path)
                                       relocation.native_symbol_index, &name));
     assert(name.length == strlen("_external_symbol") &&
            !memcmp(name.bytes, "_external_symbol", name.length));
+    check_native_symbols(image, size, &target, &section,
+        sizeof(sections) / sizeof(*sections), symbols,
+        sizeof(symbols) / sizeof(*symbols));
     assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_MACH_O,
                                     "__DATA", "__data", &section));
     assert(core_object_emit_native_section_index(&target, 2, 2,
@@ -149,6 +185,9 @@ static void coff_test(const char *output_path)
                                       &name));
     assert(name.length == strlen("external_symbol") &&
            !memcmp(name.bytes, "external_symbol", name.length));
+    check_native_symbols(image, size, &target, &section,
+        sizeof(sections) / sizeof(*sections), symbols,
+        sizeof(symbols) / sizeof(*symbols));
     assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_COFF,
                                     NULL, ".long_section_name", &section));
     assert(core_object_emit_native_section_index(&target, 2, 2,
@@ -319,6 +358,9 @@ int main(int argc, char **argv)
                                       &name));
     assert(name.length == strlen("external_symbol") &&
            !memcmp(name.bytes, "external_symbol", name.length));
+    check_native_symbols(image, size, &target, &section,
+        sizeof(sections) / sizeof(*sections), symbols,
+        sizeof(symbols) / sizeof(*symbols));
     assert(!core_object_symbol_name_at(image, size, CORE_TARGET_OBJECT_ELF,
                                        &section, UINT32_MAX, &name));
     assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_ELF,

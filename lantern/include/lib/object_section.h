@@ -31,6 +31,13 @@ typedef struct {
 } core_object_symbol_name_t;
 
 typedef struct {
+    core_object_symbol_name_t name;
+    uint32_t native_section_index; /* Zero for an undefined symbol. */
+    uint64_t section_offset;
+    bool exported;
+} core_object_symbol_t;
+
+typedef struct {
     uint64_t section_offset;
     uint32_t native_symbol_index;
     uint64_t addend_bits;
@@ -74,3 +81,15 @@ bool core_object_symbol_name_at(const void *image, size_t image_size,
                                 const core_object_section_t *section,
                                 uint32_t native_symbol_index,
                                 core_object_symbol_name_t *out);
+
+/* Resolves a relocation's native symbol-table index to its definition.
+ * `section` identifies the ELF relocation's symbol table; it is ignored
+ * for Mach-O and COFF. Undefined symbols have section index and offset zero.
+ * Only local/global section or undefined symbols representable by
+ * core_object_emit() are accepted. The name borrows the image; failure leaves
+ * `out` unchanged. */
+bool core_object_symbol_at(const void *image, size_t image_size,
+                           core_target_object_format_t format,
+                           const core_object_section_t *section,
+                           uint32_t native_symbol_index,
+                           core_object_symbol_t *out);
