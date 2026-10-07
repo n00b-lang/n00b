@@ -44,6 +44,78 @@ check_scalar(ir_module_t *module, const core_target_desc_t *target,
     return 1;
 }
 
+static int
+check_variant(const core_target_desc_t *target)
+{
+    ir_ctx_t *context = ir_ctx_new();
+    ir_module_t *module = ir_module_new(context, "variant", &PROFILE,
+                                        target->triple);
+    th_ctx *types = ir_ctx_types(context);
+    th_type *wide = th_bitint(types, 64, false);
+    th_type *small = th_bitint(types, 8, false);
+    th_arg args[] = {
+        {.kind = TH_ARG_TYPE, .type = wide},
+        {.kind = TH_ARG_TYPE, .type = small},
+    };
+    th_type *variant = th_variant(types, "variant.Value", args, 2);
+    th_member members[] = {
+        {.name = "number", .type = wide},
+        {.name = "small", .type = small},
+    };
+    n00bb_abi_variant_arm_t arms[] = {
+        {.name = "number", .type = wide, .ordinal = 0},
+        {.name = "small", .type = small, .ordinal = 1},
+    };
+    bool handled = false;
+    int ok = module && variant
+        && n00bb_abi_publish_direct_layout(module, wide, target, &handled)
+        && handled
+        && n00bb_abi_publish_direct_layout(module, small, target, &handled)
+        && handled
+        && ir_type_define(module, variant, th_record(types, members, 2))
+        && n00bb_abi_publish_variant_layout(module, variant, target, arms, 2);
+    const ir_final_layout_t *final = ok
+        ? ir_layout_final(module, variant, target->triple) : nullptr;
+    ok = ok && final && final->intrinsic_bits == 66
+        && final->alignment_bytes == 8 && final->n_members == 2
+        && final->has_discriminant && !final->discriminant_is_niche
+        && final->discriminant.unit_bit_offset == 64
+        && final->discriminant.unit_width_bits == 8
+        && final->discriminant.lsb == 0
+        && final->discriminant.value_width_bits == 2
+        && final->members[0].bit_offset == 0
+        && final->members[1].bit_offset == 0;
+
+    th_type *bit1 = th_bitint(types, 1, false);
+    th_type *bit2 = th_bitint(types, 2, false);
+    th_arg small_args[] = {
+        {.kind = TH_ARG_TYPE, .type = bit1},
+        {.kind = TH_ARG_TYPE, .type = bit2},
+    };
+    th_type *padded = th_variant(types, "variant.Padded", small_args, 2);
+    th_member small_members[] = {
+        {.name = "first", .type = bit1},
+        {.name = "second", .type = bit2},
+    };
+    n00bb_abi_variant_arm_t small_arms[] = {
+        {.name = "first", .type = bit1, .ordinal = 0},
+        {.name = "second", .type = bit2, .ordinal = 1},
+    };
+    ok = ok && n00bb_abi_publish_direct_layout(module, bit1, target,
+                                                  &handled)
+        && n00bb_abi_publish_direct_layout(module, bit2, target, &handled)
+        && ir_type_define(module, padded, th_record(types, small_members, 2))
+        && n00bb_abi_publish_variant_layout(module, padded, target,
+                                            small_arms, 2);
+    final = ok ? ir_layout_final(module, padded, target->triple) : nullptr;
+    ok = ok && final && final->intrinsic_bits == 8
+        && final->discriminant.unit_bit_offset == 0
+        && final->discriminant.lsb == 2
+        && final->discriminant.value_width_bits == 2;
+    ir_ctx_free(context);
+    return ok;
+}
+
 int main(void)
 {
     static const char *triples[] = {
@@ -59,6 +131,7 @@ int main(void)
         th_type *wide = th_name(types, "Wide");
         th_type *wider = th_name(types, "Wider");
         int ok = module && types
+            && check_variant(&target)
             && check_scalar(module, &target, th_bitint(types, 1, true),
                             1, 8, 1)
             && check_scalar(module, &target, th_bitint(types, 9, false),

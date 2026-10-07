@@ -1,0 +1,4 @@
+variant Packet {
+    number: u64
+    small: byte
+}

@@ -170,8 +170,15 @@ symbol_kind(const parse_sym_entry_t *symbol, uint32_t *out)
 {
     switch (symbol->kind) {
     case PARSE_SYM_VARIABLE:
-        *out = symbol->is_field ? N00B_ABI_SYMBOL_FIELD
-                                : N00B_ABI_SYMBOL_VARIABLE;
+        *out = symbol->owner_type
+            && ((symbol->owner_type->member_scope
+                 && core_string_eq(symbol->owner_type->member_scope->scope_tag,
+                                   CORE_STRING_STATIC("variant")))
+                || core_string_eq(symbol->owner_type->adt_kind,
+                                  CORE_STRING_STATIC("variant")))
+            ? N00B_ABI_SYMBOL_VARIANT_ARM
+            : symbol->is_field ? N00B_ABI_SYMBOL_FIELD
+                               : N00B_ABI_SYMBOL_VARIABLE;
         return true;
     case PARSE_SYM_FUNCTION: *out = N00B_ABI_SYMBOL_FUNCTION; return true;
     case PARSE_SYM_TYPEDEF: *out = N00B_ABI_SYMBOL_TYPE; return true;
@@ -332,7 +339,11 @@ n00bb_abi_declarations_build(
             parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(
                 declarations, (uint32_t)i);
             if (symbol->kind == PARSE_SYM_TYPEDEF
-                && symbol->adt_kind.u8_bytes)
+                && (symbol->adt_kind.u8_bytes
+                    || (symbol->member_scope
+                        && core_string_eq(
+                            symbol->member_scope->scope_tag,
+                            CORE_STRING_STATIC("variant")))))
                 type_rows->rows[symbols[i].type_index].owner_module_index = 1;
         }
         *out = (n00bb_abi_declarations_t){

@@ -241,6 +241,72 @@ check_imported_enum(const core_object_section_t *metadata,
 }
 
 static void
+check_variant(const core_object_section_t *metadata,
+              const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    const n00bb_abi_directory_entry_t *extractors = entry_for(entries, count,
+        N00B_ABI_TABLE_TAG_EXTRACTOR);
+    const n00bb_abi_directory_entry_t *arms = entry_for(entries, count,
+        N00B_ABI_TABLE_ARM);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries, count,
+        N00B_ABI_TABLE_SYMBOL);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(types && layouts && extractors && arms && symbols && stream
+        && arms->record_count == 3 && extractors->record_count == 2);
+    uint32_t variant_index = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        if (type->kind != N00B_ABI_TYPE_VARIANT
+            || !type->owner_module_index) continue;
+        assert(!variant_index);
+        variant_index = i;
+    }
+    assert(variant_index);
+    const n00b_abi_type_v1 *variant = row_at(metadata, types,
+                                             variant_index);
+    assert(variant->size_bits == 66 && variant->alignment_bytes == 8
+        && variant->fields_or_arms.count == 2
+        && variant->layout_index && variant->layout_index < layouts->record_count);
+    const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
+                                               variant->layout_index);
+    assert(layout->type_index == variant_index
+        && layout->tag_extractor_index == 1);
+    const n00b_abi_tag_extractor_v1 *tag = row_at(metadata, extractors,
+        layout->tag_extractor_index);
+    assert(tag->kind == N00B_ABI_TAG_DIRECT_BITS
+        && tag->unit_byte_offset == 8 && tag->unit_width_bits == 8
+        && tag->lsb_position == 0 && tag->tag_width_bits == 2
+        && tag->mask == 3);
+    const char *names[] = {"number", "small"};
+    for (uint32_t i = 0; i < 2; i++) {
+        uint32_t position = variant->fields_or_arms.first + i;
+        assert(position < stream->record_count);
+        uint32_t arm_index = *(const uint32_t *)row_at(metadata, stream,
+                                                       position);
+        assert(arm_index == i + 1);
+        const n00b_abi_arm_v1 *arm = row_at(metadata, arms, arm_index);
+        assert(short_name_is(&arm->field.name, names[i])
+            && arm->field.parent_type_index == variant_index
+            && arm->field.declaration_ordinal == i
+            && arm->field.logical_bit_offset == 0
+            && arm->field.child_type_index < types->record_count
+            && arm->tag_value == i + 1
+            && arm->field.symbol_index
+            && arm->field.symbol_index < symbols->record_count);
+        const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,
+            arm->field.symbol_index);
+        assert(symbol->kind == N00B_ABI_SYMBOL_VARIANT_ARM
+            && short_name_is(&symbol->name, names[i])
+            && symbol->type_index == arm->field.child_type_index);
+    }
+}
+
+static void
 check_generic(const core_object_section_t *metadata,
               const n00bb_abi_directory_entry_t *entries, size_t count,
               const char *function_name, const char *parameter_name,
@@ -320,6 +386,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "import")
             || !strcmp(argv[2], "import-record")
             || !strcmp(argv[2], "import-enum")
+            || !strcmp(argv[2], "variant")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -408,6 +475,12 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "import-enum")) {
         check_imported_enum(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "variant")) {
+        check_variant(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

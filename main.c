@@ -2193,6 +2193,9 @@ append_module_type_name(core_translation_unit_t *unit, core_string_t name,
         (int)name.u8_bytes, name.data);
 }
 
+static core_list_t(parse_sym_entry_ptr_t)
+variant_arms_in_source_order(parse_grammar_t *grammar, parse_scope_t *scope);
+
 static bool
 finalize_variant_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
                              core_translation_unit_t *unit,
@@ -2203,11 +2206,12 @@ finalize_variant_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
     if (!symbol || !members || !state || !state->types) return false;
 
     core_list_t(th_arg) arguments = core_list_new(th_arg);
-    for (parse_sym_entry_t *arm = members->first_in_scope; arm;
-         arm = arm->next_in_scope) {
-        if (!arm->decl_node
-            || !nt_is(grammar, arm->decl_node, "variant-decl-one")) continue;
+    core_list_t(parse_sym_entry_ptr_t) ordered =
+        variant_arms_in_source_order(grammar, members);
+    for (size_t i = 0; i < ordered.len; i++) {
+        parse_sym_entry_t *arm = ordered.data[i];
         if (!arm->type) {
+            core_list_free(ordered);
             core_list_free(arguments);
             return false;
         }
@@ -2216,6 +2220,7 @@ finalize_variant_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
             .type = arm->type,
         }));
     }
+    core_list_free(ordered);
 
     core_buffer_t qualified = {0};
     append_module_type_name(unit, symbol->name, &qualified);
@@ -9775,6 +9780,26 @@ n00bb_variant_arm_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
     return symbol->kind == PARSE_SYM_TAG && symbol->scope
         && core_string_eq(symbol->scope->scope_tag,
                           CORE_STRING_STATIC("variant"));
+}
+
+static core_list_t(parse_sym_entry_ptr_t)
+variant_arms_in_source_order(parse_grammar_t *grammar, parse_scope_t *scope)
+{
+    core_list_t(parse_sym_entry_ptr_t) ordered =
+        core_list_new(parse_sym_entry_ptr_t);
+    core_list_t(int32_t) starts = core_list_new(int32_t);
+    for (parse_sym_entry_t *arm = scope ? scope->first_in_scope : nullptr;
+         arm; arm = arm->next_in_scope) {
+        if (!n00bb_variant_arm_symbol(grammar, arm)) continue;
+        int32_t start = arm->decl_node
+            ? core_tree_node_value(arm->decl_node).start : INT32_MAX;
+        size_t at = ordered.len;
+        while (at && starts.data[at - 1] > start) at--;
+        core_list_insert(ordered, at, arm);
+        core_list_insert(starts, at, start);
+    }
+    core_list_free(starts);
+    return ordered;
 }
 
 static bool
@@ -19641,9 +19666,10 @@ register_variant_types(parse_grammar_t *grammar,
                             CORE_STRING_STATIC("variant"))) continue;
         core_list_t(th_member) members = core_list_new(th_member);
         core_list_t(th_arg) args = core_list_new(th_arg);
-        for (parse_sym_entry_t *arm = scope->first_in_scope; arm;
-             arm = arm->next_in_scope) {
-            if (!n00bb_variant_arm_symbol(grammar, arm)) continue;
+        core_list_t(parse_sym_entry_ptr_t) ordered =
+            variant_arms_in_source_order(grammar, scope);
+        for (size_t i = 0; ok && i < ordered.len; i++) {
+            parse_sym_entry_t *arm = ordered.data[i];
             th_type *payload = arm->decl_node
                 ? declared_type_from_node(grammar, unit, arm->decl_node)
                 : arm->type;
@@ -19669,6 +19695,7 @@ register_variant_types(parse_grammar_t *grammar,
         core_buffer_release(&qualified);
         core_list_free(args);
         core_list_free(members);
+        core_list_free(ordered);
     }
     return ok;
 }
@@ -27305,15 +27332,15 @@ link_semantic_type_for_symbol(parse_grammar_t *grammar,
             }
         }
         core_list_t(th_arg) args = core_list_new(th_arg);
-        for (parse_sym_entry_t *arm = variant_scope
-                ? variant_scope->first_in_scope : nullptr;
-             arm; arm = arm->next_in_scope) {
-            if (!arm->decl_node
-                || !nt_is(grammar, arm->decl_node, "variant-decl-one"))
-                continue;
+        core_list_t(parse_sym_entry_ptr_t) ordered =
+            variant_arms_in_source_order(grammar, variant_scope);
+        for (size_t i = 0; i < ordered.len; i++) {
+            parse_sym_entry_t *arm = ordered.data[i];
+            if (!arm->decl_node) continue;
             th_type *payload = declared_type_from_node(grammar, owner,
                                                         arm->decl_node);
             if (!payload) {
+                core_list_free(ordered);
                 core_list_free(args);
                 core_buffer_release(&qualified);
                 return nullptr;
@@ -27321,6 +27348,7 @@ link_semantic_type_for_symbol(parse_grammar_t *grammar,
             core_list_push(args, ((th_arg){.kind = TH_ARG_TYPE,
                                            .type = payload}));
         }
+        core_list_free(ordered);
         type = variant_scope
             ? th_variant(state->types, qualified.data, args.data, args.len)
             : nullptr;
@@ -37396,7 +37424,7 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
 }
 
 static bool
-publish_declared_record_layouts(n00bb_link_analysis_t *analysis)
+publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
 {
     core_list_t(parse_sym_entry_ptr_t) records =
         core_list_new(parse_sym_entry_ptr_t);
@@ -37410,8 +37438,14 @@ publish_declared_record_layouts(n00bb_link_analysis_t *analysis)
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope)
                 if (symbol->kind == PARSE_SYM_TYPEDEF && symbol->type
-                    && core_string_eq(symbol->adt_kind,
-                                      CORE_STRING_STATIC("record")))
+                    && (core_string_eq(symbol->adt_kind,
+                                        CORE_STRING_STATIC("record"))
+                        || core_string_eq(symbol->adt_kind,
+                                        CORE_STRING_STATIC("variant"))
+                        || (symbol->member_scope
+                            && core_string_eq(
+                                symbol->member_scope->scope_tag,
+                                CORE_STRING_STATIC("variant")))))
                     core_list_push(records, symbol);
     }
 
@@ -37439,10 +37473,20 @@ publish_declared_record_layouts(n00bb_link_analysis_t *analysis)
                         continue;
                     size_t count = th_record_len(definition);
                     if (count > UINT32_MAX) { valid = false; break; }
+                    bool variant = core_string_eq(symbol->adt_kind,
+                        CORE_STRING_STATIC("variant"))
+                        || (symbol->member_scope
+                            && core_string_eq(
+                                symbol->member_scope->scope_tag,
+                                CORE_STRING_STATIC("variant")));
                     n00bb_abi_record_member_t *members = count
                         ? core_alloc_array(n00bb_abi_record_member_t, count)
                         : nullptr;
-                    bool ready = !count || members != nullptr;
+                    n00bb_abi_variant_arm_t *arms = variant && count
+                        ? core_alloc_array(n00bb_abi_variant_arm_t, count)
+                        : nullptr;
+                    bool ready = (!count || members != nullptr)
+                        && (!variant || !count || arms != nullptr);
                     for (size_t j = 0; ready && j < count; j++) {
                         const th_member *member = th_record_member(definition,
                                                                     j);
@@ -37466,13 +37510,22 @@ publish_declared_record_layouts(n00bb_link_analysis_t *analysis)
                             .ordinal = (uint32_t)j,
                             .packed = packable,
                         };
+                        if (variant) arms[j] = (n00bb_abi_variant_arm_t){
+                            .name = member->name,
+                            .type = child_type,
+                            .ordinal = (uint32_t)j,
+                        };
                     }
                     if (ready) {
-                        valid = n00bb_abi_publish_record_layout(module,
-                            type, &analysis->target, N00BB_RECORD_DEFAULT,
-                            false, members, count);
+                        valid = variant
+                            ? n00bb_abi_publish_variant_layout(module, type,
+                                &analysis->target, arms, count)
+                            : n00bb_abi_publish_record_layout(module,
+                                type, &analysis->target, N00BB_RECORD_DEFAULT,
+                                false, members, count);
                         progress = valid;
                     }
+                    core_free(arms);
                     core_free(members);
                 }
             } while (valid && progress);
@@ -37488,7 +37541,7 @@ select_storage_placement(n00bb_link_analysis_t *analysis)
     if (!analysis || !validate_inline_layout_cycles(analysis)
         || !publish_known_scalar_layouts(analysis)
         || !publish_requested_c_record_layouts(analysis)
-        || !publish_declared_record_layouts(analysis)
+        || !publish_declared_aggregate_layouts(analysis)
         || !reject_unlowered_record_layout_requests(analysis)) return false;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];

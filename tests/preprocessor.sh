@@ -1385,6 +1385,10 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/enum.n00b"
 [ -s "$tmp/enum_abi.o" ]
 "$abi_record_object_test" "$tmp/enum_abi.o" enum
+"$compiler" compile --output "$tmp/variant_abi.o" \
+    "$program_dir/../abi/variant.n00b"
+[ -s "$tmp/variant_abi.o" ]
+"$abi_record_object_test" "$tmp/variant_abi.o" variant
 "$compiler" compile --output "$tmp/function_abi.o" \
     "$program_dir/../abi/function.n00b"
 [ -s "$tmp/function_abi.o" ]

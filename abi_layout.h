@@ -12,6 +12,12 @@ typedef struct {
     bool packed;
 } n00bb_abi_record_member_t;
 
+typedef struct {
+    const char *name;
+    th_type *type;
+    uint32_t ordinal;
+} n00bb_abi_variant_arm_t;
+
 bool n00bb_abi_publish_direct_layout(ir_module_t *module, th_type *type,
                                      const core_target_desc_t *target,
                                      bool *handled);
@@ -28,3 +34,6 @@ bool n00bb_abi_publish_record_layout(
 bool n00bb_abi_publish_c_record_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
     const n00bb_abi_record_member_t *members, size_t count);
+bool n00bb_abi_publish_variant_layout(
+    ir_module_t *module, th_type *type, const core_target_desc_t *target,
+    const n00bb_abi_variant_arm_t *arms, size_t count);

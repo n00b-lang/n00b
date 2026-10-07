@@ -5,7 +5,10 @@
 
 #include "lib/alloc.h"
 #include "lib/dict.h"
+#include "lib/list.h"
 #include "ir/typelang.h"
+
+core_list_decl(ir_layout_bit_run_t);
 
 static bool
 same_final_layout(const ir_final_layout_t *layout, uint32_t storage_bits,
@@ -393,4 +396,224 @@ n00bb_abi_publish_c_record_layout(
     if (!count) return false;
     return n00bb_abi_publish_record_layout(module, type, target,
         N00BB_RECORD_C, false, members, count);
+}
+
+static void
+merge_bit_runs(core_list_t(ir_layout_bit_run_t) *runs)
+{
+    if (!runs->len) return;
+    qsort(runs->data, runs->len, sizeof(*runs->data), compare_layout_runs);
+    size_t out = 0;
+    for (size_t i = 0; i < runs->len; i++) {
+        ir_layout_bit_run_t run = runs->data[i];
+        if (out && run.offset <= runs->data[out - 1].offset
+                                + runs->data[out - 1].width) {
+            uint64_t end = run.offset + run.width;
+            uint64_t prior_end = runs->data[out - 1].offset
+                + runs->data[out - 1].width;
+            if (end > prior_end)
+                runs->data[out - 1].width = end - runs->data[out - 1].offset;
+        }
+        else runs->data[out++] = run;
+    }
+    runs->len = out;
+}
+
+static bool
+tag_in_gap(const core_target_desc_t *target, uint64_t start, uint64_t end,
+           uint64_t payload_byte_bits, uint32_t tag_bits,
+           uint64_t *bit, const core_target_scalar_t **unit)
+{
+    bool found = false;
+    for (size_t i = 0; i < target->integer_storage_count; i++) {
+        const core_target_scalar_t *storage = &target->integer_storage[i];
+        if (storage->width_bits < tag_bits || !storage->alignment_bytes)
+            continue;
+        uint64_t alignment = (uint64_t)storage->alignment_bytes * 8;
+        uint64_t candidate = start;
+        uint64_t base = candidate / alignment * alignment;
+        if (base > UINT64_MAX - storage->width_bits
+            || candidate > UINT64_MAX - tag_bits
+            || candidate + tag_bits > base + storage->width_bits) {
+            if (base > UINT64_MAX - alignment) continue;
+            candidate = base + alignment;
+            base = candidate;
+        }
+        if (candidate > end || tag_bits > end - candidate
+            || base > payload_byte_bits
+            || storage->width_bits > payload_byte_bits - base) continue;
+        if (!found || candidate < *bit
+            || (candidate == *bit
+                && storage->width_bits < (*unit)->width_bits)) {
+            *bit = candidate;
+            *unit = storage;
+            found = true;
+        }
+    }
+    return found;
+}
+
+static void
+subtract_occupied(const core_list_t(ir_layout_bit_run_t) *reserved,
+                  const core_list_t(ir_layout_bit_run_t) *occupied,
+                  core_list_t(ir_layout_bit_run_t) *out)
+{
+    for (size_t i = 0; i < reserved->len; i++) {
+        uint64_t at = reserved->data[i].offset;
+        uint64_t end = at + reserved->data[i].width;
+        for (size_t j = 0; j < occupied->len && at < end; j++) {
+            uint64_t occupied_start = occupied->data[j].offset;
+            uint64_t occupied_end = occupied_start + occupied->data[j].width;
+            if (occupied_end <= at) continue;
+            if (occupied_start >= end) break;
+            if (occupied_start > at)
+                core_list_push(*out, ((ir_layout_bit_run_t){
+                    .offset = at, .width = occupied_start - at,
+                }));
+            if (occupied_end > at) at = occupied_end;
+        }
+        if (at < end)
+            core_list_push(*out, ((ir_layout_bit_run_t){
+                .offset = at, .width = end - at,
+            }));
+    }
+}
+
+bool
+n00bb_abi_publish_variant_layout(
+    ir_module_t *module, th_type *type, const core_target_desc_t *target,
+    const n00bb_abi_variant_arm_t *arms, size_t count)
+{
+    if (!module || !type || !target || !target->triple || !arms || !count
+        || count >= UINT32_MAX || !core_target_validate(target)
+        || target->endian != CORE_TARGET_LITTLE_ENDIAN
+        || strcmp(ir_module_target(module), target->triple)
+        || ir_layout_final(module, type, target->triple)) return false;
+
+    ir_final_member_layout_t *members = core_alloc_array(
+        ir_final_member_layout_t, count);
+    const ir_final_layout_t **children = core_alloc_array(
+        const ir_final_layout_t *, count);
+    if (!members || !children) {
+        core_free(members);
+        core_free(children);
+        return false;
+    }
+    core_list_t(ir_layout_bit_run_t) occupied = {0};
+    core_list_t(ir_layout_bit_run_t) blocked = {0};
+    core_list_t(ir_layout_bit_run_t) child_reserved = {0};
+    core_list_t(ir_layout_bit_run_t) reserved = {0};
+    uint64_t payload_bits = 0;
+    uint32_t alignment_bytes = 1;
+    bool valid = true;
+    for (size_t i = 0; valid && i < count; i++) {
+        children[i] = ir_layout_final(module, arms[i].type, target->triple);
+        const ir_final_layout_t *child = children[i];
+        if (!arms[i].name || !arms[i].type || arms[i].ordinal != i
+            || !child || !child->alignment_bytes
+            || child->intrinsic_bits > UINT64_MAX - 7) {
+            valid = false;
+            break;
+        }
+        if (child->intrinsic_bits > payload_bits)
+            payload_bits = child->intrinsic_bits;
+        if (child->alignment_bytes > alignment_bytes)
+            alignment_bytes = child->alignment_bytes;
+        members[i] = (ir_final_member_layout_t){
+            .name = arms[i].name, .type = arms[i].type,
+            .ordinal = arms[i].ordinal, .bit_offset = 0,
+            .occupied = child->occupied, .n_occupied = child->n_occupied,
+        };
+        for (size_t j = 0; j < child->n_occupied; j++) {
+            core_list_push(occupied, child->occupied[j]);
+            core_list_push(blocked, child->occupied[j]);
+        }
+        for (size_t j = 0; j < child->n_reserved; j++) {
+            core_list_push(child_reserved, child->reserved[j]);
+            core_list_push(blocked, child->reserved[j]);
+        }
+    }
+    if (valid && payload_bits > UINT64_MAX - 7) valid = false;
+    uint64_t payload_byte_bits = valid
+        ? (payload_bits + 7) & ~UINT64_C(7) : 0;
+    if (valid) {
+        merge_bit_runs(&blocked);
+        merge_bit_runs(&occupied);
+        merge_bit_runs(&child_reserved);
+    }
+    uint32_t tag_bits = 0;
+    for (size_t n = count; n; n >>= 1) tag_bits++;
+    uint64_t tag_bit = UINT64_MAX;
+    const core_target_scalar_t *tag_unit = nullptr;
+    for (size_t i = 0; valid && i <= blocked.len && !tag_unit; i++) {
+        uint64_t gap_start = i ? blocked.data[i - 1].offset
+            + blocked.data[i - 1].width : 0;
+        uint64_t gap_end = i < blocked.len
+            ? blocked.data[i].offset : payload_bits;
+        if (gap_start < gap_end)
+            tag_in_gap(target, gap_start, gap_end, payload_byte_bits,
+                       tag_bits, &tag_bit, &tag_unit);
+    }
+    uint64_t unit_bit = 0;
+    if (valid && !tag_unit) {
+        tag_unit = core_target_integer_for_bits(target, tag_bits);
+        if (!tag_unit || !tag_unit->alignment_bytes)
+            valid = false;
+        else {
+            uint64_t alignment = (uint64_t)tag_unit->alignment_bytes * 8;
+            uint64_t remainder = payload_bits % alignment;
+            uint64_t padding = remainder ? alignment - remainder : 0;
+            if (payload_bits > UINT64_MAX - padding - tag_bits)
+                valid = false;
+            else tag_bit = payload_bits + padding;
+        }
+    }
+    if (valid) {
+        uint64_t alignment = (uint64_t)tag_unit->alignment_bytes * 8;
+        unit_bit = tag_bit / alignment * alignment;
+        if (tag_unit->alignment_bytes > alignment_bytes)
+            alignment_bytes = tag_unit->alignment_bytes;
+        core_list_push(occupied, ((ir_layout_bit_run_t){
+            .offset = tag_bit, .width = tag_bits,
+        }));
+        merge_bit_runs(&occupied);
+        subtract_occupied(&child_reserved, &occupied, &reserved);
+        merge_bit_runs(&reserved);
+    }
+    uint64_t intrinsic_bits = valid && tag_bit + tag_bits > payload_bits
+        ? tag_bit + tag_bits : payload_bits;
+    ir_final_layout_t final = {
+        .intrinsic_bits = intrinsic_bits,
+        .alignment_bytes = alignment_bytes,
+        .occupied = occupied.data, .n_occupied = occupied.len,
+        .reserved = reserved.data, .n_reserved = reserved.len,
+        .members = members, .n_members = count,
+        .member_overlap_region = {.offset = 0, .width = payload_bits},
+        .has_discriminant = true,
+        .discriminant = {
+            .unit_bit_offset = unit_bit,
+            .unit_width_bits = tag_unit ? tag_unit->width_bits : 0,
+            .lsb = (uint32_t)(tag_bit - unit_bit),
+            .value_width_bits = tag_bits,
+        },
+    };
+    if (valid) valid = ir_layout_pin_size(module, type,
+            intrinsic_bits / 8 + (intrinsic_bits % 8 != 0))
+        && ir_layout_pin_align(module, type, alignment_bytes)
+        && ir_layout_pin_variant(module, type, (ir_variant_repr_t){
+            .tag_bit_offset = {.value = tag_bit},
+            .tag_bit_width = {.value = tag_bits},
+        });
+    for (size_t i = 0; valid && i < count; i++)
+        valid = ir_layout_pin_member(module, type, arms[i].name, 0,
+                                     children[i]->intrinsic_bits);
+    if (valid)
+        valid = ir_layout_publish_final(module, type, target->triple, &final);
+    core_list_free(occupied);
+    core_list_free(blocked);
+    core_list_free(child_reserved);
+    core_list_free(reserved);
+    core_free(children);
+    core_free(members);
+    return valid;
 }

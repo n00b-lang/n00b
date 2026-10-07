@@ -17,6 +17,10 @@ typedef struct {
     size_t packed_run_count;
     n00b_abi_field_v1 *fields;
     size_t field_count;
+    n00b_abi_arm_v1 *arms;
+    size_t arm_count;
+    n00b_abi_tag_extractor_v1 *tag_extractors;
+    size_t tag_extractor_count;
     uint32_t *stream_indexes;
     size_t stream_index_count;
 } n00bb_abi_type_layout_rows_t;

@@ -308,6 +308,20 @@ n00bb_abi_emit_unit(
         bool enumeration = symbol && symbol->kind == PARSE_SYM_TYPEDEF
             && core_string_eq(symbol->adt_kind,
                               CORE_STRING_STATIC("enum"));
+        bool variant = symbol && symbol->kind == PARSE_SYM_TYPEDEF
+            && ((symbol->member_scope
+                 && core_string_eq(symbol->member_scope->scope_tag,
+                                   CORE_STRING_STATIC("variant")))
+                || core_string_eq(symbol->adt_kind,
+                                  CORE_STRING_STATIC("variant")));
+        bool arm = symbol && (symbol->kind == PARSE_SYM_TAG
+                || symbol->kind == PARSE_SYM_VARIABLE)
+            && symbol->owner_type
+            && ((symbol->owner_type->member_scope
+                 && core_string_eq(symbol->owner_type->member_scope->scope_tag,
+                                   CORE_STRING_STATIC("variant")))
+                || core_string_eq(symbol->owner_type->adt_kind,
+                                  CORE_STRING_STATIC("variant")));
         bool field = symbol && symbol->kind == PARSE_SYM_VARIABLE
             && symbol->is_field && symbol->owner_type
             && core_string_eq(symbol->owner_type->adt_kind,
@@ -321,10 +335,11 @@ n00bb_abi_emit_unit(
         bool local = symbol && symbol->kind == PARSE_SYM_VARIABLE
             && !symbol->is_field;
         if (!record && !field && !enumeration && !enum_item
+            && !variant && !arm
             && !function && !parameter && !local) {
             n00bb_abi_decl_index_free(declarations);
             return abi_unit_error(unit,
-                "this ABI emitter path supports only record, enum, and function declarations");
+                "this ABI emitter path supports only record, enum, variant, and function declarations");
         }
     }
     if (!core_translation_unit_imports_finalized(unit)
@@ -507,6 +522,10 @@ n00bb_abi_emit_unit(
          layout_rows.packed_run_count},
         {N00B_ABI_TABLE_FIELD, layout_rows.fields,
          layout_rows.field_count},
+        {N00B_ABI_TABLE_ARM, layout_rows.arms,
+         layout_rows.arm_count},
+        {N00B_ABI_TABLE_TAG_EXTRACTOR, layout_rows.tag_extractors,
+         layout_rows.tag_extractor_count},
         {N00B_ABI_TABLE_ENUM_ITEM, enum_rows.items,
          enum_rows.item_count},
         {N00B_ABI_TABLE_FUNCTION, function_rows.functions,

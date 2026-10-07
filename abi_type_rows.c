@@ -329,6 +329,14 @@ append_type_components(n00bb_abi_type_index_t *index, ir_module_t *module,
                 return false;
         return true;
     }
+    if (kind == N00B_ABI_TYPE_VARIANT && source_kind == TH_NAMED) {
+        for (size_t i = 0; i < th_named_nargs(type); i++) {
+            const th_arg *arg = th_named_arg(type, i);
+            if (!arg || arg->kind != TH_ARG_TYPE
+                || !append_component(index, arg->type, indexes)) return false;
+        }
+        return true;
+    }
     if (kind == N00B_ABI_TYPE_REFERENCE
         || kind == N00B_ABI_TYPE_OPTION
         || kind == N00B_ABI_TYPE_ARRAY
