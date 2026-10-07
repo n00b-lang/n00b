@@ -209,6 +209,29 @@ int main(void)
             && ir_layout_compute(module, c_record, nullptr)
             && c_descriptor->size.value == 8
             && c_descriptor->align.value == 4;
+        th_type *nested_record = th_name(types, "NestedCRecord");
+        n00bb_abi_record_member_t nested_members[] = {
+            {.name = "tag", .type = bool_type, .ordinal = 0,
+             .c_compatible = true},
+            {.name = "payload", .type = c_record, .ordinal = 1,
+             .c_compatible = true},
+        };
+        ok = ok && n00bb_abi_publish_c_record_layout(module,
+            nested_record, &target, nested_members,
+            sizeof(nested_members) / sizeof(nested_members[0]));
+        const ir_final_layout_t *nested_layout = ir_layout_final(
+            module, nested_record, target.triple);
+        ok = ok && nested_layout && nested_layout->intrinsic_bits == 96
+            && nested_layout->alignment_bytes == 4
+            && nested_layout->n_members == 2
+            && nested_layout->members[0].bit_offset == 0
+            && nested_layout->members[1].bit_offset == 32
+            && nested_layout->n_occupied == 3
+            && nested_layout->occupied[0].width == 1
+            && nested_layout->occupied[1].offset == 32
+            && nested_layout->occupied[1].width == 32
+            && nested_layout->occupied[2].offset == 64
+            && nested_layout->occupied[2].width == 1;
         th_type *rejected_record = th_name(types, "RejectedCRecord");
         c_members[1].c_compatible = false;
         ok = ok && !n00bb_abi_publish_c_record_layout(module,

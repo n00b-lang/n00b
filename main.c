@@ -37108,6 +37108,90 @@ record_field_has_c_scalar_representation(ir_module_t *module, th_type *type)
 }
 
 static bool
+publish_c_record_symbol(n00bb_link_analysis_t *analysis,
+                        core_translation_unit_t *owner,
+                        parse_sym_entry_t *symbol, ir_module_t *module)
+{
+    th_type *record = symbol->type ? th_apply_subst(
+        ir_module_types(module), symbol->type) : nullptr;
+    if (!record) return false;
+    if (ir_layout_final(module, record, analysis->target.triple)) return true;
+
+    core_list_t(parse_sym_entry_ptr_t) fields =
+        core_list_new(parse_sym_entry_ptr_t);
+    bool valid = record_fields_in_source_order(symbol->member_scope, &fields)
+        && fields.len && fields.len <= UINT32_MAX;
+    n00bb_abi_record_member_t *members = valid
+        ? core_alloc_array(n00bb_abi_record_member_t, fields.len) : nullptr;
+    valid = valid && members;
+    for (size_t i = 0; valid && i < fields.len; i++) {
+        parse_sym_entry_t *field = fields.data[i];
+        th_type *declared = declared_type_from_node(
+            analysis->grammar, owner, field->decl_node);
+        th_type *type = declared ? th_apply_subst(
+            ir_module_types(module), declared) : nullptr;
+        bool handled = false;
+        bool direct = type && n00bb_abi_publish_direct_layout(
+            module, type, &analysis->target, &handled);
+        bool compatible = direct && handled
+            && record_field_has_c_scalar_representation(module, type);
+        if (direct && !compatible && type && th_kind_of(th_resolve(type))
+                == TH_NAMED) {
+            core_translation_unit_t *child_owner = nullptr;
+            parse_sym_entry_t *child = type_symbol_in_loaded_imports(
+                owner, ir_module_types(module), type, &child_owner);
+            n00bb_record_layout_request_t *request = child
+                ? parse_sym_binding(child, CORE_STRING_STATIC(
+                    "n00bb.record-layout-request")) : nullptr;
+            if (child && child_owner && child != symbol && request
+                && request->policy == N00BB_RECORD_C
+                && !request->alignment_expression
+                && field_record_declaration(analysis->grammar,
+                                            child->decl_node)) {
+                compatible = publish_c_record_symbol(analysis, child_owner,
+                    child, module);
+                if (!compatible && call_units_failed(analysis->units.data,
+                                                      analysis->units.len)) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+        if (!compatible) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "field '%.*s' has no C-compatible finalized ABI representation",
+                (int)field->name.u8_bytes, field->name.data);
+            core_diagnostics_report_at(core_translation_unit_diagnostics(
+                owner), owner, CORE_DIAG_FATAL,
+                CORE_STRING_STATIC("N00BB-L0069"),
+                core_string_from_cstr(message.data),
+                link_source_location(field->decl_node));
+            core_buffer_release(&message);
+            valid = false;
+            break;
+        }
+        members[i] = (n00bb_abi_record_member_t){
+            .name = field->name.data,
+            .type = type,
+            .ordinal = (uint32_t)i,
+            .c_compatible = true,
+        };
+    }
+    if (valid) valid = n00bb_abi_publish_c_record_layout(module,
+        record, &analysis->target, members, fields.len);
+    core_free(members);
+    core_list_free(fields);
+    if (!valid && !call_units_failed(analysis->units.data,
+                                     analysis->units.len))
+        core_diagnostics_report_at(core_translation_unit_diagnostics(owner),
+            owner, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0069"),
+            CORE_STRING_STATIC("could not finalize C record layout"),
+            link_source_location(symbol->decl_node));
+    return valid;
+}
+
+static bool
 publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
@@ -37125,81 +37209,18 @@ publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
                         "n00bb.record-layout-request"));
                 if (!request || request->policy != N00BB_RECORD_C
                     || request->alignment_expression) continue;
-                core_list_t(parse_sym_entry_ptr_t) fields =
-                    core_list_new(parse_sym_entry_ptr_t);
-                if (!record_fields_in_source_order(symbol->member_scope,
-                                                    &fields)) {
-                    core_list_free(fields);
-                    return false;
-                }
-                bool valid = fields.len && fields.len <= UINT32_MAX;
-                for (size_t d = 0; valid && d < analysis->units.len; d++) {
+                for (size_t d = 0; d < analysis->units.len; d++) {
                     n00bb_tu_state_t *destination = tu_state(
                         analysis->units.data[d]);
                     ir_module_t *modules[] = {
                         destination->comptime_ir_module,
                         destination->ir_module,
                     };
-                    for (size_t m = 0; valid
-                         && m < sizeof(modules) / sizeof(modules[0]); m++) {
-                        ir_module_t *module = modules[m];
-                        n00bb_abi_record_member_t *members = core_alloc_array(
-                            n00bb_abi_record_member_t, fields.len);
-                        valid = module && members;
-                        for (size_t i = 0; valid && i < fields.len; i++) {
-                            parse_sym_entry_t *field = fields.data[i];
-                            th_type *declared = declared_type_from_node(
-                                analysis->grammar, owner, field->decl_node);
-                            th_type *type = declared ? th_apply_subst(
-                                ir_module_types(module), declared) : nullptr;
-                            bool handled = false;
-                            valid = type && n00bb_abi_publish_direct_layout(
-                                module, type, &analysis->target, &handled)
-                                && handled
-                                && record_field_has_c_scalar_representation(
-                                    module, type);
-                            if (!valid) {
-                                core_buffer_t message = {0};
-                                core_buffer_printf(&message,
-                                    "field '%.*s' has no C-compatible finalized ABI representation",
-                                    (int)field->name.u8_bytes,
-                                    field->name.data);
-                                core_diagnostics_report_at(
-                                    core_translation_unit_diagnostics(owner),
-                                    owner, CORE_DIAG_FATAL,
-                                    CORE_STRING_STATIC("N00BB-L0069"),
-                                    core_string_from_cstr(message.data),
-                                    link_source_location(field->decl_node));
-                                core_buffer_release(&message);
-                                break;
-                            }
-                            members[i] = (n00bb_abi_record_member_t){
-                                .name = field->name.data,
-                                .type = type,
-                                .ordinal = (uint32_t)i,
-                                .c_compatible = true,
-                            };
-                        }
-                        th_type *record = symbol->type ? th_apply_subst(
-                            ir_module_types(module), symbol->type) : nullptr;
-                        if (valid) valid = record
-                            && n00bb_abi_publish_c_record_layout(module,
-                                record, &analysis->target, members,
-                                fields.len);
-                        core_free(members);
+                    for (size_t m = 0;
+                         m < sizeof(modules) / sizeof(modules[0]); m++) {
+                        if (!modules[m] || !publish_c_record_symbol(analysis,
+                                owner, symbol, modules[m])) return false;
                     }
-                }
-                core_list_free(fields);
-                if (!valid) {
-                    if (!core_diagnostics_failed(
-                            core_translation_unit_diagnostics(owner)))
-                        core_diagnostics_report_at(
-                            core_translation_unit_diagnostics(owner), owner,
-                            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0069"),
-                            CORE_STRING_STATIC(
-                                "could not finalize C record layout"),
-                            link_source_location(symbol->decl_node));
-                    return false;
                 }
             }
         }

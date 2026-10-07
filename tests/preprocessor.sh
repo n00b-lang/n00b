@@ -4244,6 +4244,31 @@ N00B_PATH="$program_dir" "$compiler" lower --dump-layout \
 }
 grep -Eq 'layout c_record_layout.Header target=(x86_64-linux|arm64-macos|x86_64-windows) size=8 align=4' \
     "$tmp/c_record_import.out"
+"$compiler" lower --dump-layout "$program_dir/c_record_nested_local.n00b" \
+    >"$tmp/c_record_nested_local.out" 2>&1 || {
+    cat "$tmp/c_record_nested_local.out"
+    exit 1
+}
+grep -Eq 'layout c_record_nested_local.Outer target=(x86_64-linux|arm64-macos|x86_64-windows) size=12 align=4' \
+    "$tmp/c_record_nested_local.out"
+grep -q 'member inner bit-offset=32 bit-width=64' \
+    "$tmp/c_record_nested_local.out"
+N00B_PATH="$program_dir" "$compiler" lower --dump-layout \
+    c_record_nested >"$tmp/c_record_nested.out" 2>&1 || {
+    cat "$tmp/c_record_nested.out"
+    exit 1
+}
+grep -Eq 'layout c_record_nested.Wrapped target=(x86_64-linux|arm64-macos|x86_64-windows) size=12 align=4' \
+    "$tmp/c_record_nested.out"
+grep -q 'member header bit-offset=32 bit-width=64' \
+    "$tmp/c_record_nested.out"
+if "$compiler" lower "$program_dir/c_record_default_child.n00b" \
+    >"$tmp/c_record_default_child.out" 2>&1; then
+    echo 'default-layout record used as C field unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q "field 'inner' has no C-compatible finalized ABI representation" \
+    "$tmp/c_record_default_child.out"
 if "$compiler" lower "$program_dir/c_record_invalid_field.n00b" \
     >"$tmp/c_record_invalid_field.out" 2>&1; then
     echo 'non-C-compatible record field unexpectedly lowered' >&2

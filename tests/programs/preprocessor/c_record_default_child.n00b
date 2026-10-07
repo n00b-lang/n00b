@@ -1,0 +1,7 @@
+type Inner {
+    value: u32
+}
+
+type Outer layout(c) {
+    inner: Inner
+}

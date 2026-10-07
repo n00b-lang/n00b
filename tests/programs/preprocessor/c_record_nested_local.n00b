@@ -1,0 +1,9 @@
+type Outer layout(c) {
+    tag: byte
+    inner: Inner
+}
+
+type Inner layout(c) {
+    count: u32
+    active: bool
+}

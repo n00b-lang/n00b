@@ -1,0 +1,6 @@
+import c_record_layout
+
+type Wrapped layout(c) {
+    tag: byte
+    header: c_record_layout.Header
+}
