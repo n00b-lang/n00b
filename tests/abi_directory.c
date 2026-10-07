@@ -1,0 +1,124 @@
+#include "abi_directory.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static bool
+expect(const char *label, bool condition)
+{
+    if (!condition) fprintf(stderr, "%s failed\n", label);
+    return condition;
+}
+
+int main(void)
+{
+    uint8_t image[192] = {0};
+    n00bb_abi_directory_entry_t first = {
+        .kind = 4, .schema_version = 1, .record_bytes = 8,
+        .record_count = 1, .file_offset = 152, .byte_length = 8,
+    };
+    n00bb_abi_directory_entry_t second = {
+        .kind = 5, .schema_version = 1, .record_bytes = 8,
+        .record_count = 1, .file_offset = 160, .byte_length = 8,
+    };
+    const n00bb_abi_table_schema_t schemas[] = {
+        {.kind = 4, .schema_version = 1, .record_bytes = 8,
+         .alignment_bytes = 8},
+        {.kind = 5, .schema_version = 1, .record_bytes = 8,
+         .alignment_bytes = 8},
+    };
+    const uint8_t first_bytes[N00BB_ABI_DIRECTORY_BYTES] = {
+        4, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0,
+        152, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0,
+    };
+    n00bb_abi_directory_encode_entry(image + 88, &first);
+    n00bb_abi_directory_encode_entry(image + 120, &second);
+    n00bb_abi_directory_entry_t decoded[2] = {0};
+    bool ok = true;
+    ok &= expect("byte-exact directory record",
+                 !memcmp(image + 88, first_bytes, sizeof(first_bytes)));
+    n00bb_abi_directory_decode_entry(image + 88, &decoded[0]);
+    ok &= expect("decode all directory fields",
+        decoded[0].kind == first.kind
+        && decoded[0].schema_version == first.schema_version
+        && decoded[0].record_bytes == first.record_bytes
+        && decoded[0].record_count == first.record_count
+        && decoded[0].file_offset == first.file_offset
+        && decoded[0].byte_length == first.byte_length);
+    n00bb_abi_directory_entry_t wide = first;
+    wide.file_offset = UINT64_C(0x1122334455667788);
+    wide.byte_length = UINT64_C(0x99aabbccddeeff00);
+    uint8_t wide_bytes[N00BB_ABI_DIRECTORY_BYTES];
+    n00bb_abi_directory_encode_entry(wide_bytes, &wide);
+    n00bb_abi_directory_decode_entry(wide_bytes, &decoded[0]);
+    ok &= expect("directory offsets and extents retain all 64 bits",
+        decoded[0].file_offset == wide.file_offset
+        && decoded[0].byte_length == wide.byte_length);
+    ok &= expect("valid adjacent table extents",
+        n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                      168, schemas, 2, false, decoded));
+    ok &= expect("directory count cannot exceed image",
+        !n00bb_abi_directory_validate(image, sizeof(image), 88, 88,
+                                       UINT32_MAX, 168, schemas, 2,
+                                       false, decoded));
+    ok &= expect("truncated image rejected",
+        !n00bb_abi_directory_validate(image, 167, 88, 88, 2,
+                                       168, schemas, 2, false, decoded));
+
+    second.kind = first.kind;
+    n00bb_abi_directory_encode_entry(image + 120, &second);
+    ok &= expect("duplicate table kind rejected",
+        !n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                       168, schemas, 2, false, decoded));
+    second.kind = 5;
+    second.file_offset = 152;
+    n00bb_abi_directory_encode_entry(image + 120, &second);
+    ok &= expect("overlapping table extents rejected",
+        !n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                       168, schemas, 2, false, decoded));
+    second.file_offset = 160;
+    second.byte_length = 9;
+    n00bb_abi_directory_encode_entry(image + 120, &second);
+    ok &= expect("record count and length must agree",
+        !n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                       168, schemas, 2, false, decoded));
+    second.byte_length = 8;
+    second.file_offset = 161;
+    n00bb_abi_directory_encode_entry(image + 120, &second);
+    ok &= expect("table alignment enforced",
+        !n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                       169, schemas, 2, false, decoded));
+    second.file_offset = 160;
+    second.schema_version = 2;
+    n00bb_abi_directory_encode_entry(image + 120, &second);
+    ok &= expect("known schema version enforced",
+        !n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                       168, schemas, 2, false, decoded));
+    second.schema_version = 1;
+    second.record_bytes = 4;
+    second.record_count = 2;
+    n00bb_abi_directory_encode_entry(image + 120, &second);
+    ok &= expect("known record width enforced",
+        !n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                       168, schemas, 2, false, decoded));
+    second.record_bytes = 8;
+    second.record_count = 1;
+    second.kind = 99;
+    n00bb_abi_directory_encode_entry(image + 120, &second);
+    ok &= expect("unknown table requires caller permission",
+        !n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                       168, schemas, 2, false, decoded)
+        && n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                         168, schemas, 2, true, decoded));
+    second.file_offset = 120;
+    n00bb_abi_directory_encode_entry(image + 120, &second);
+    ok &= expect("unknown table still cannot overlap directory",
+        !n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                       168, schemas, 2, true, decoded));
+    second.file_offset = 0;
+    n00bb_abi_directory_encode_entry(image + 120, &second);
+    ok &= expect("unknown table still cannot overlap header",
+        !n00bb_abi_directory_validate(image, sizeof(image), 88, 88, 2,
+                                       168, schemas, 2, true, decoded));
+    return ok ? 0 : 1;
+}

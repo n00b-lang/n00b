@@ -28,7 +28,7 @@ install_data(
 n00bb_exe = executable(
     'n00bb',
     ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
-     'abi_layout.c', 'abi_record_layout.c',
+     'abi_layout.c', 'abi_record_layout.c', 'abi_directory.c',
      'global_metadata.c',
      'storage_selection.c'],
     dependencies: lantern,
@@ -79,6 +79,14 @@ abi_record_layout_test = executable(
 )
 
 test('abi-record-layout', abi_record_layout_test)
+
+abi_directory_test = executable(
+    'abi-directory-test',
+    ['tests/abi_directory.c', 'abi_directory.c'],
+    dependencies: lantern,
+)
+
+test('abi-directory', abi_directory_test)
 
 test(
     'preprocessor',
