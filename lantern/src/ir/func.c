@@ -1297,7 +1297,8 @@ const char *ir_instr_const_bytes_hex(const ir_instr_t *instruction,
 
 bool ir_instr_set_call_signature(ir_instr_t *call, th_type *signature)
 {
-    if (!call || call->op != IR_OP_CALL || !signature
+    if (!call || (call->op != IR_OP_CALL
+                  && call->op != IR_OP_CALLBACK_INVOKE) || !signature
         || th_kind_of(th_resolve(signature)) != TH_FUNCTION)
         return false;
     ir_ctx_t *ctx = call->block && call->block->owner
@@ -1308,6 +1309,62 @@ bool ir_instr_set_call_signature(ir_instr_t *call, th_type *signature)
         .kind = IR_ANNOT_TYPE,
         .t = signature,
     });
+}
+
+bool
+ir_instr_set_callback_contract(ir_instr_t *construction,
+                               th_type *call_signature,
+                               th_type *handler_signature,
+                               th_type *setup_signature)
+{
+    if (!construction || construction->op != IR_OP_CALLBACK_CREATE
+        || !call_signature || !handler_signature
+        || th_kind_of(th_resolve(call_signature)) != TH_FUNCTION
+        || th_kind_of(th_resolve(handler_signature)) != TH_FUNCTION
+        || (setup_signature
+            && th_kind_of(th_resolve(setup_signature)) != TH_FUNCTION))
+        return false;
+    ir_ctx_t *ctx = construction->block && construction->block->owner
+        && construction->block->owner->owner
+        ? construction->block->owner->owner->ctx : nullptr;
+    return ctx
+        && ir_annot_set(ctx, &construction->annots, (ir_annot_t){
+            .key = "ir.callback.call", .kind = IR_ANNOT_TYPE,
+            .t = call_signature})
+        && ir_annot_set(ctx, &construction->annots, (ir_annot_t){
+            .key = "ir.callback.handler", .kind = IR_ANNOT_TYPE,
+            .t = handler_signature})
+        && (!setup_signature
+            || ir_annot_set(ctx, &construction->annots, (ir_annot_t){
+                .key = "ir.callback.setup", .kind = IR_ANNOT_TYPE,
+                .t = setup_signature}));
+}
+
+bool
+ir_instr_callback_contract(const ir_instr_t *construction,
+                           th_type **call_signature,
+                           th_type **handler_signature,
+                           th_type **setup_signature)
+{
+    if (call_signature) *call_signature = nullptr;
+    if (handler_signature) *handler_signature = nullptr;
+    if (setup_signature) *setup_signature = nullptr;
+    if (!construction || construction->op != IR_OP_CALLBACK_CREATE)
+        return false;
+    ir_annot_t *call = ir_annot_get(
+        (ir_annots_t *)&construction->annots, "ir.callback.call");
+    ir_annot_t *handler = ir_annot_get(
+        (ir_annots_t *)&construction->annots, "ir.callback.handler");
+    ir_annot_t *setup = ir_annot_get(
+        (ir_annots_t *)&construction->annots, "ir.callback.setup");
+    if (!call || call->kind != IR_ANNOT_TYPE || !call->t
+        || !handler || handler->kind != IR_ANNOT_TYPE || !handler->t
+        || (setup && (setup->kind != IR_ANNOT_TYPE || !setup->t)))
+        return false;
+    if (call_signature) *call_signature = call->t;
+    if (handler_signature) *handler_signature = handler->t;
+    if (setup_signature) *setup_signature = setup ? setup->t : nullptr;
+    return true;
 }
 
 th_type *ir_instr_call_signature(const ir_instr_t *call)
@@ -1469,7 +1526,9 @@ bool ir_instr_operand_value(ir_instr_t *in, ir_value_t *v)
 
 bool ir_instr_operand_spread(ir_instr_t *in, ir_value_t *v)
 {
-    ir_operand_t *o = in && in->op == IR_OP_CALL && v && v->is_rest
+    ir_operand_t *o = in
+        && (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
+        && v && v->is_rest
         ? push(in, IR_OPD_SPREAD) : nullptr;
     if (o) o->value = v;
     return o != nullptr;
@@ -1497,18 +1556,23 @@ bool ir_instr_operand_named_out(ir_instr_t *in, const char *name)
 
 bool ir_instr_operand_out(ir_instr_t *in)
 {
-    return in && in->op == IR_OP_CALL && push(in, IR_OPD_OUT) != nullptr;
+    return in && (in->op == IR_OP_CALL
+                  || in->op == IR_OP_CALLBACK_INVOKE)
+        && push(in, IR_OPD_OUT) != nullptr;
 }
 
 bool ir_instr_operand_missing(ir_instr_t *in)
 {
-    return in && in->op == IR_OP_CALL
+    return in && (in->op == IR_OP_CALL
+                  || in->op == IR_OP_CALLBACK_INVOKE)
         && push(in, IR_OPD_MISSING) != nullptr;
 }
 
 bool ir_instr_operand_fresh(ir_instr_t *in, ir_value_t *storage)
 {
-    if (!in || in->op != IR_OP_CALL || !storage || !storage->def
+    if (!in || (in->op != IR_OP_CALL
+                && in->op != IR_OP_CALLBACK_INVOKE)
+        || !storage || !storage->def
         || (storage->def->op != IR_OP_ALLOC
             && storage->def->op != IR_OP_ALLOC_USING)) return false;
     ir_operand_t *operand = push(in, IR_OPD_FRESH);

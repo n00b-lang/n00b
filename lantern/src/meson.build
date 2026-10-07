@@ -53,11 +53,14 @@ lib_sources = files(
     'lib/cache.c',
     'lib/diagnostic.c',
     'lib/hash.c',
+    'lib/indexed_table.c',
     'lib/link_unit.c',
     'lib/module.c',
     'lib/object_archive.c',
     'lib/persist_arena.c',
     'lib/string.c',
+    'lib/target.c',
+    'lib/target_call.c',
     'lib/work_queue.c',
 )
 

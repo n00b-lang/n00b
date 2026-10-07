@@ -1139,6 +1139,7 @@ cf_varref(parse_visit_t *v)
     if (sym) {
         if (!parse_sym_add_use(sym, v->node)) return false;
         if (!parse_tree_set_resolution_symbol(v->node, sym)) return false;
+        if (!parse_tree_mark_direct_symbol_reference(v->node)) return false;
     }
     else {
         core_list_push(a->out->undefined, v->node);
@@ -1523,6 +1524,11 @@ parse_annot_resolve_undefined(parse_annot_result_t *result)
                 }
             }
             if (!parse_sym_add_use(symbol, node)) {
+                result->inference_failed = true;
+                result->undefined.data[retained++] = node;
+                continue;
+            }
+            if (!parse_tree_mark_direct_symbol_reference(node)) {
                 result->inference_failed = true;
                 result->undefined.data[retained++] = node;
                 continue;

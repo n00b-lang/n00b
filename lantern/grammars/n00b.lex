@@ -1,3 +1,4 @@
+@lex-region("#[", "#]", "#")
 @lex-comment("#")
 @lex-comment("//")
 @lex-comment("/", "/", fill("*"))
@@ -20,6 +21,7 @@
 	    int("INT_LIT"),
 	    float("FLOAT_LIT"))
 @lex-number(prefix("0x"), digits("0123456789abcdefABCDEF"), int("HEX_LIT"))
+@lex-soft-keywords("i", "u", "bits", "call", "handler", "setup")
 @lex-ident-profile("n00b-identifiers",
 		   normalize("nfc"),
 		   mixed_scripts("diagnose"),
@@ -34,3 +36,4 @@
 @lex-layout(indent("INDENT", "DEDENT"), newline("NEWLINE"),
 	    tabs("reject"), mixed_indent("reject"), brackets("()[]"))
 @lex-fallback("reject")
+@lex-operators(add(".."))

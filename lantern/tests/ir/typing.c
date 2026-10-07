@@ -3327,6 +3327,44 @@ static void test_annotation_of_results(void)
     close_env(e);
 }
 
+static void test_callback_semantics(void)
+{
+    env *e = open_env(&ir_profile_bce, "i32");
+    th_type *signature = ir_type_parse(e->m, "(i32) -> i32");
+    th_type *callback_type = ir_type_parse(e->m, "pkg.Callback");
+    ir_value_t *handler = val(e, "ptr[(i32) -> i32]");
+
+    ir_instr_t *retained = op(e, IR_OP_RETAIN_REF);
+    ir_instr_operand_value(retained, handler);
+    check("retaining a reference preserves its semantic type",
+          accepts_as(e, retained, "ptr[(i32) -> i32]"));
+
+    ir_instr_t *construction = op(e, IR_OP_CALLBACK_CREATE);
+    ir_instr_operand_value(construction, handler);
+    ir_instr_set_dest(construction, "callback", callback_type);
+    check("callback construction retains its abstract result type",
+          ir_instr_set_callback_contract(construction, signature, signature,
+                                         nullptr)
+              && accepts_as(e, construction, "pkg.Callback"));
+    th_type *call = nullptr, *handler_contract = nullptr, *setup = nullptr;
+    check("callback construction exposes its semantic contracts",
+          ir_instr_callback_contract(construction, &call,
+                                     &handler_contract, &setup)
+              && call == signature && handler_contract == signature
+              && setup == nullptr);
+
+    ir_instr_t *invocation = op(e, IR_OP_CALLBACK_INVOKE);
+    ir_instr_operand_value(invocation, val(e, "pkg.Callback"));
+    ir_instr_operand_value(invocation, val(e, "i32"));
+    ir_instr_set_dest(invocation, "callback_result",
+                      ir_type_parse(e->m, "i32"));
+    check("callback invocation is checked by its call-site signature",
+          ir_instr_set_call_signature(invocation, signature)
+              && accepts_as(e, invocation, "i32"));
+
+    close_env(e);
+}
+
 
 static void report_coverage(void)
 {
@@ -3375,6 +3413,7 @@ int main(void)
     test_every_opcode_on_generics();
     test_opaque_named();
     test_annotation_of_results();
+    test_callback_semantics();
     report_coverage();
 
     dump_produced_codes("produced-codes-typing.txt", produced);

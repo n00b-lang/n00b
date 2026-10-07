@@ -51,7 +51,8 @@ const th_arg *th_named_arg(const th_type *t, size_t i)
     return n && i < n->named.nargs ? &n->named.args[i] : nullptr;
 }
 
-bool th_bitint_info(const th_type *t, uint64_t *width, bool *is_signed)
+bool th_bitint_info(const th_type *t, uint64_t *width,
+                    th_bitint_flavor *flavor)
 {
     const th_type *n = as(t, TH_BITINT);
 
@@ -63,8 +64,8 @@ bool th_bitint_info(const th_type *t, uint64_t *width, bool *is_signed)
         *width = n->bitint.width;
     }
 
-    if (is_signed) {
-        *is_signed = n->bitint.is_signed;
+    if (flavor) {
+        *flavor = n->bitint.flavor;
     }
 
     return true;

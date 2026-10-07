@@ -73,6 +73,42 @@ static void test_excludes(th_ctx *ctx)
     check("excludes rejects the excluded type", !binds(ctx, c, i));
 }
 
+static void test_repeated_constraints(th_ctx *ctx)
+{
+    th_type *variable = th_var(ctx);
+    th_constraint excluded = {.kind = TH_CON_EXCLUDES,
+                              .target = th_name(ctx, "string")};
+    check("first exclusion is attached",
+          th_var_constrain(ctx, variable, excluded)
+              && th_var_constraint_count(variable) == 1);
+    for (size_t i = 0; i < 4; i++) {
+        excluded.target = th_name(ctx, "string");
+        check("equal exclusions from distinct type nodes stay one constraint",
+              th_var_constrain(ctx, variable, excluded)
+                  && th_var_constraint_count(variable) == 1);
+    }
+    excluded.target = th_name(ctx, "bool");
+    check("distinct exclusion remains distinct",
+          th_var_constrain(ctx, variable, excluded)
+              && th_var_constraint_count(variable) == 2);
+    th_constraint kind = {.kind = TH_CON_KIND,
+                          .type_kind = TH_NAMED};
+    check("same structural-family constraint is idempotent",
+          th_var_constrain(ctx, variable, kind)
+              && th_var_constrain(ctx, variable, kind)
+              && th_var_constraint_count(variable) == 3);
+    th_type *choices[] = {th_name(ctx, "int"), th_name(ctx, "bool")};
+    th_constraint one_of = {.kind = TH_CON_ONE_OF,
+                            .one_of = {.types = choices, .n = 2}};
+    th_type *equal_choices[] = {th_name(ctx, "int"), th_name(ctx, "bool")};
+    th_constraint equal_one_of = {.kind = TH_CON_ONE_OF,
+                                  .one_of = {.types = equal_choices, .n = 2}};
+    check("same alternative list is idempotent",
+          th_var_constrain(ctx, variable, one_of)
+              && th_var_constrain(ctx, variable, equal_one_of)
+              && th_var_constraint_count(variable) == 4);
+}
+
 static void test_kind(th_ctx *ctx)
 {
     th_constraint constraint = {.kind = TH_CON_KIND, .type_kind = TH_BITINT};
@@ -124,6 +160,7 @@ static void test_promotes(th_ctx *ctx)
     th_type *i16 = th_bitint(ctx, 16, true);
     th_type *u8 = th_bitint(ctx, 8, false);
     th_type *u16 = th_bitint(ctx, 16, false);
+    th_type *bits8 = th_bits(ctx, 8);
     th_type *i8_signed = th_bitint(ctx, 8, true);
     check("signed bit integers promote only to wider signed widths",
           th_type_promotes_to(ctx, i8, i16) &&
@@ -136,6 +173,18 @@ static void test_promotes(th_ctx *ctx)
     check("bit-integer promotions participate in coercion constraints",
           binds(ctx, (th_constraint){.kind = TH_CON_PROMOTES, .target = i16},
                 i8));
+    check("bits and unsigned integers have distinct type identities",
+          th_hash(ctx, bits8) != th_hash(ctx, u8)
+              && th_unify(ctx, bits8, u8) == nullptr
+              && !th_type_promotes_to(ctx, bits8, u16)
+              && !th_type_promotes_to(ctx, u8, bits8));
+    check("bits type prints with its distinct spelling",
+          !strcmp(th_print(ctx, bits8), "bits:8"));
+    th_ctx *copy_ctx = th_ctx_new();
+    th_type *bits_copy = th_type_clone(copy_ctx, bits8);
+    check("bits flavor survives type-graph cloning",
+          bits_copy && th_hash(copy_ctx, bits_copy) == th_hash(ctx, bits8));
+    th_ctx_free(copy_ctx);
 
     (void)i64;
 }
@@ -857,6 +906,7 @@ int main(void)
     test_unifies(ctx);
     test_one_of(ctx);
     test_excludes(ctx);
+    test_repeated_constraints(ctx);
     test_kind(ctx);
     test_promotes(ctx);
     test_has_field(ctx);

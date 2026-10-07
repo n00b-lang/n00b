@@ -306,6 +306,8 @@ static void test_kind_constraint_archive(void) {
         && register_function(env, "base.sized.equal", "equal", "sized",
             "base", TH_ENV_PUBLIC,
             th_generalize(types, fn2(types, sized, sized, boolean)))
+        && th_env_register_value(env, "base.sized.mask", "mask", "sized",
+                                 "base", TH_ENV_PUBLIC, th_bits(types, 8))
         && th_env_freeze(env));
   char path[] = "/tmp/lantern-kind-env-XXXXXX";
   int fd = mkstemp(path);
@@ -323,6 +325,19 @@ static void test_kind_constraint_archive(void) {
     th_ctx *query = th_ctx_new();
     bool ready = checks[i]
         && th_ctx_set_environment(query, checks[i], "consumer", "base");
+    bool retained_bits = false;
+    for (size_t j = 0; checks[i] && j < th_env_declaration_count(checks[i]);
+         j++) {
+      th_env_declaration_view_t view = {0};
+      uint64_t width = 0;
+      th_bitint_flavor flavor = TH_BITINT_UNSIGNED;
+      if (th_env_declaration_at(checks[i], j, &view)
+          && view.qualified_name
+          && !strcmp(view.qualified_name, "base.sized.mask"))
+        retained_bits = th_bitint_info(view.value_type, &width, &flavor)
+            && width == 8 && flavor == TH_BITINT_BITS;
+    }
+    check("bits flavor survives archive and composition", retained_bits);
     check("restored integer family accepts arbitrary signed widths",
           ready && th_env_implements(query, th_bitint(query, 7, true),
                                       "SizedEqual"));

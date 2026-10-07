@@ -701,7 +701,8 @@ lower_value_accessible(ir_lower_context_t *context, ir_value_t *value)
     if (value->kind == IR_VAL_GLOBAL)
         return ir_global_find(context->module, value->name) != nullptr;
     return value->kind == IR_VAL_FUNC && value->owner
-        && value->owner->owner == context->module;
+        && value->owner->owner
+        && value->owner->owner->ctx == context->module->ctx;
 }
 
 static parse_annotation_t *

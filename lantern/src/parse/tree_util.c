@@ -38,6 +38,53 @@ parse_tree_resolution(const parse_tree_t *node)
 }
 
 bool
+parse_tree_set_reference_target(parse_tree_t *node,
+                                parse_sym_entry_t *symbol)
+{
+    if (!node || core_tree_is_leaf(node) || !symbol) return false;
+    core_tree_node_value(node).reference_target = symbol;
+    return true;
+}
+
+parse_sym_entry_t *
+parse_tree_reference_target(const parse_tree_t *node)
+{
+    return node && !core_tree_is_leaf((parse_tree_t *)node)
+        ? core_tree_node_value((parse_tree_t *)node).reference_target
+        : nullptr;
+}
+
+bool
+parse_tree_set_error_type(parse_tree_t *node, th_type *error_type)
+{
+    if (!node || core_tree_is_leaf(node)) return false;
+    core_tree_node_value(node).error_type = error_type;
+    return true;
+}
+
+th_type *
+parse_tree_error_type(const parse_tree_t *node)
+{
+    return node && !core_tree_is_leaf((parse_tree_t *)node)
+        ? core_tree_node_value((parse_tree_t *)node).error_type : nullptr;
+}
+
+bool
+parse_tree_mark_direct_symbol_reference(parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node)) return false;
+    core_tree_node_value(node).direct_symbol_reference = true;
+    return true;
+}
+
+bool
+parse_tree_is_direct_symbol_reference(const parse_tree_t *node)
+{
+    return node && !core_tree_is_leaf((parse_tree_t *)node)
+        && core_tree_node_value((parse_tree_t *)node).direct_symbol_reference;
+}
+
+bool
 parse_tree_set_integer_range(parse_tree_t *node, int64_t minimum,
                              int64_t maximum)
 {

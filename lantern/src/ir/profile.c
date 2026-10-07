@@ -119,14 +119,15 @@ ir_machine_t ir_machine_of(ir_module_t *m, th_type *t)
     switch (th_kind_of(t)) {
     case TH_BITINT: {
         uint64_t w  = 0;
-        bool     sg = false;
+        th_bitint_flavor flavor = TH_BITINT_UNSIGNED;
 
-        if (!th_bitint_info(t, &w, &sg)) {
+        if (!th_bitint_info(t, &w, &flavor)) {
             return opaque();
         }
 
         return (ir_machine_t){
-            .class = sg ? IR_CLASS_SINT : IR_CLASS_UINT,
+            .class = flavor == TH_BITINT_SIGNED
+                ? IR_CLASS_SINT : IR_CLASS_UINT,
             .width = (uint32_t)w,
         };
     }

@@ -132,6 +132,49 @@ static th_constraint *con_same_slot(th_type *var, th_constraint c)
     return nullptr;
 }
 
+static bool same_constraint_type(th_ctx *ctx, th_type *a, th_type *b)
+{
+    a = th_resolve(a);
+    b = th_resolve(b);
+    if (a == b) return true;
+    if (!ctx || !a || !b || !th_is_closed(ctx, a)
+        || !th_is_closed(ctx, b)) return false;
+    uint64_t left = th_hash(ctx, a);
+    return left && left == th_hash(ctx, b);
+}
+
+static bool same_repeated_constraint(th_ctx *ctx, th_type *var,
+                                     const th_constraint *candidate)
+{
+    for (size_t i = 0; i < var->var.cons.len; i++) {
+        const th_constraint *have = &var->var.cons.data[i];
+        if (have->kind != candidate->kind
+            || !same_constraint_scope(have, candidate)) continue;
+        switch (candidate->kind) {
+        case TH_CON_UNIFIES:
+        case TH_CON_PROMOTES:
+        case TH_CON_EXCLUDES:
+            if (same_constraint_type(ctx, have->target, candidate->target))
+                return true;
+            break;
+        case TH_CON_KIND:
+            if (have->type_kind == candidate->type_kind) return true;
+            break;
+        case TH_CON_ONE_OF:
+            if (have->one_of.n != candidate->one_of.n) break;
+            for (size_t j = 0; j < have->one_of.n; j++)
+                if (!same_constraint_type(ctx, have->one_of.types[j],
+                                          candidate->one_of.types[j]))
+                    goto next_constraint;
+            return true;
+        default:
+            break;
+        }
+next_constraint:;
+    }
+    return false;
+}
+
 static bool same_method_type_ref(th_ctx *ctx, th_type *a, th_type *a_owner,
                                  th_type *b, th_type *b_owner)
 {
@@ -188,6 +231,7 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
         return false;
     }
     if (c.kind == TH_CON_KIND && c.type_kind > TH_VAR) return false;
+    if (same_repeated_constraint(ctx, var, &c)) return true;
 
     if (c.kind == TH_CON_METHOD) {
         if (!ctx || !c.method.name || !*c.method.name || !c.method.result ||
@@ -435,13 +479,16 @@ bool th_type_promotes_to(th_ctx *ctx, const th_type *from, const th_type *to)
         return true;
     if (from->kind == TH_BITINT && to->kind == TH_BITINT) {
         if (from->bitint.width == to->bitint.width &&
-            from->bitint.is_signed == to->bitint.is_signed)
+            from->bitint.flavor == to->bitint.flavor)
             return true;
+        if (from->bitint.flavor == TH_BITINT_BITS
+            || to->bitint.flavor == TH_BITINT_BITS)
+            return false;
         if (from->bitint.width >= to->bitint.width)
             return false;
-        if (from->bitint.is_signed)
-            return to->bitint.is_signed;
-        return !to->bitint.is_signed ||
+        if (from->bitint.flavor == TH_BITINT_SIGNED)
+            return to->bitint.flavor == TH_BITINT_SIGNED;
+        return to->bitint.flavor == TH_BITINT_UNSIGNED ||
                from->bitint.width < to->bitint.width;
     }
     const char *from_name = nullptr, *to_name = nullptr;
@@ -1873,7 +1920,7 @@ static bool uni_step(th_ctx *ctx, th_type *a, th_type *b, core_list_t(tpair) *w)
 
     case TH_BITINT:
         return a->bitint.width == b->bitint.width
-            && a->bitint.is_signed == b->bitint.is_signed;
+            && a->bitint.flavor == b->bitint.flavor;
 
     case TH_INDIRECTION:
         if (a->ind.attrs != b->ind.attrs) {

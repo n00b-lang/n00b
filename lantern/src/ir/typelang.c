@@ -592,7 +592,10 @@ static void *r_bitint(parse_reduce_t *r)
                      core_string_eq(prefix, CORE_STRING_STATIC("i"));
     tl_node *width = kid(r, 2);
 
-    return node_type(c, th_bitint(c->th, width ? width->u : 0, is_signed));
+    th_type *type = core_string_eq(prefix, CORE_STRING_STATIC("bits"))
+        ? th_bits(c->th, width ? width->u : 0)
+        : th_bitint(c->th, width ? width->u : 0, is_signed);
+    return node_type(c, type);
 }
 
 static void *r_ind_attr(parse_reduce_t *r)

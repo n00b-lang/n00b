@@ -2279,13 +2279,15 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
 {
     (void)state;
 
-    th_type *callee = opd_type(in, 0);
+    bool callback_invoke = in->op == IR_OP_CALLBACK_INVOKE;
+    th_type *callee = callback_invoke
+        ? ir_instr_call_signature(in) : opd_type(in, 0);
 
     if (!callee) {
         return DECLINE;
     }
 
-    if (th_kind_of(callee) == TH_INDIRECTION) {
+    if (!callback_invoke && th_kind_of(callee) == TH_INDIRECTION) {
         callee = th_ind_referent(callee);
     }
 
@@ -2550,9 +2552,11 @@ static ir_rule_result_t rule_call_output(ir_module_t *m, ir_instr_t *in,
         }
         ir_value_t *outcome = ir_operand_value(&call->operands[0]);
         call = outcome ? outcome->def : nullptr;
-        if (!call || call->op != IR_OP_CALL) return DECLINE;
+        if (!call || (call->op != IR_OP_CALL
+                      && call->op != IR_OP_CALLBACK_INVOKE)) return DECLINE;
     }
-    else if (call->op != IR_OP_CALL) {
+    else if (call->op != IR_OP_CALL
+             && call->op != IR_OP_CALLBACK_INVOKE) {
         return DECLINE;
     }
 
@@ -2564,7 +2568,7 @@ static ir_rule_result_t rule_call_output(ir_module_t *m, ir_instr_t *in,
     if (signature && th_kind_of(signature) == TH_BINDER)
         signature = th_binder_body(signature);
     if (!signature || th_kind_of(signature) != TH_FUNCTION) return DECLINE;
-    if (call->op == IR_OP_CALL) {
+    if (call->op == IR_OP_CALL || call->op == IR_OP_CALLBACK_INVOKE) {
         th_type *error = th_func_error(signature);
         bool fallible = error
             && ir_machine_of(m, error).class != IR_CLASS_VOID;
@@ -2966,6 +2970,7 @@ static const entry DEFAULTS[] = {
     {IR_OP_UNDEF, "ir.undef", rule_annotated},
     {IR_OP_COPY, "ir.copy", rule_copy},
     {IR_OP_CONSUME, "ir.consume", rule_copy},
+    {IR_OP_RETAIN_REF, "ir.retain-ref", rule_copy},
     {IR_OP_ADDRESS_OF, "ir.address.of", rule_address_of},
     {IR_OP_ALLOCA, "ir.alloca", rule_alloca},
     {IR_OP_ALLOC, "ir.alloc", rule_alloca},
@@ -3033,6 +3038,8 @@ static const entry DEFAULTS[] = {
     {IR_OP_PHI, "ir.phi", rule_phi},
     {IR_OP_TRAIT_METHOD, "ir.trait.method", rule_trait_method},
     {IR_OP_CALL, "ir.call", rule_call},
+    {IR_OP_CALLBACK_CREATE, "ir.callback-create", rule_annotated},
+    {IR_OP_CALLBACK_INVOKE, "ir.callback-invoke", rule_call},
     {IR_OP_CALL_OUTPUT, "ir.call-output", rule_call_output},
     {IR_OP_SIZEOF, "ir.sizeof", rule_size_like},
     {IR_OP_ALIGNOF, "ir.alignof", rule_size_like},

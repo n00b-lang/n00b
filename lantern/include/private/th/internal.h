@@ -133,7 +133,7 @@ struct th_type {
     } named;
     struct {
       uint64_t width;
-      bool is_signed;
+      th_bitint_flavor flavor;
     } bitint;
     struct {
       uint8_t attrs;

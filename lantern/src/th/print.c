@@ -381,8 +381,12 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
     }
 
     case TH_BITINT:
-        core_buffer_printf(b, "%s[%" PRIu64 "]",
-               t->bitint.is_signed ? "bitint" : "ubitint", t->bitint.width);
+        if (t->bitint.flavor == TH_BITINT_BITS)
+            core_buffer_printf(b, "bits:%" PRIu64, t->bitint.width);
+        else
+            core_buffer_printf(b, "%s[%" PRIu64 "]",
+                t->bitint.flavor == TH_BITINT_SIGNED ? "bitint" : "ubitint",
+                t->bitint.width);
 
         return;
 

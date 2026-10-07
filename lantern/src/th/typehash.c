@@ -561,7 +561,7 @@ static bool enc_plan(th_enc *e, eframe *f)
 
     case TH_BITINT:
         u64(&s->pre, t->bitint.width);
-        u8(&s->pre, t->bitint.is_signed ? 1 : 0);
+        u8(&s->pre, t->bitint.flavor);
         break;
 
     case TH_INDIRECTION:
@@ -1229,8 +1229,18 @@ th_type *th_bitint(th_ctx *ctx, uint64_t w, bool sg)
 {
     th_type *t = node(ctx, TH_BITINT);
 
-    t->bitint.width     = w;
-    t->bitint.is_signed = sg;
+    t->bitint.width  = w;
+    t->bitint.flavor = sg ? TH_BITINT_SIGNED : TH_BITINT_UNSIGNED;
+
+    return t;
+}
+
+th_type *th_bits(th_ctx *ctx, uint64_t w)
+{
+    th_type *t = node(ctx, TH_BITINT);
+
+    t->bitint.width  = w;
+    t->bitint.flavor = TH_BITINT_BITS;
 
     return t;
 }

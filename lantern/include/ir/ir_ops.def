@@ -22,6 +22,7 @@ IR_OP(UNDEF,           "undef",           0, 0,  ANNOTATED,   "",    0,         
 
 IR_OP(COPY,            "copy",            1, 1,  OPERAND0,    "v",   0,                              HASRESULT)
 IR_OP(CONSUME,         "consume",         1, 2,  OPERAND0,    "vv",  0,                              HASRESULT | SIDEEFFECT)
+IR_OP(RETAIN_REF,      "retain.ref",       1, 1,  OPERAND0,    "v",   0,                              HASRESULT | SIDEEFFECT)
 
 IR_OP(ADDRESS_OF,      "address.of",      1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
 IR_OP(ALLOCA,          "alloca",          1, 2,  PTR_TO_ARG0, "tv",  0,                              HASRESULT | SIDEEFFECT)
@@ -99,6 +100,8 @@ IR_OP(PHI,             "phi",             1, VAR, ANNOTATED,   "a*",  0,        
 
 IR_OP(TRAIT_METHOD,    "trait.method",    4, 4,   ANNOTATED,   "nnvv", 0,                             HASRESULT)
 IR_OP(CALL,            "call",            1, VAR, CALLEE_RET,  "vk*", 0,                              HASRESULT | SIDEEFFECT)
+IR_OP(CALLBACK_CREATE, "callback.create", 1, VAR, ANNOTATED,   "vk*", 0,                              HASRESULT | SIDEEFFECT)
+IR_OP(CALLBACK_INVOKE, "callback.invoke", 1, VAR, ANNOTATED,   "vk*", 0,                              HASRESULT | SIDEEFFECT)
 IR_OP(CALL_OUTPUT,     "call.output",     2, 2,   CALL_OUTPUT, "vc", 0,                              HASRESULT)
 
 IR_OP(SIZEOF,          "sizeof",          1, 1,  U64,         "t",   0,                              HASRESULT | COMPTIME)

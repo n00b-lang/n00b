@@ -207,7 +207,7 @@ static bool save_type(core_object_writer_t *writer, const void *object,
     return true;
   case TH_BITINT:
     return core_object_writer_u64(writer, type->bitint.width) &&
-           core_object_writer_u32(writer, type->bitint.is_signed);
+           core_object_writer_u32(writer, type->bitint.flavor);
   case TH_INDIRECTION:
     return core_object_writer_u32(writer, type->ind.attrs) &&
            write_type_ref(writer, type->ind.referent);
@@ -348,8 +348,9 @@ static bool restore_type(core_object_reader_t *reader, void *object,
     return true;
   case TH_BITINT:
     if (!core_object_reader_u64(reader, &type->bitint.width) ||
-        !core_object_reader_u32(reader, &flag) || flag > 1) return false;
-    type->bitint.is_signed = flag;
+        !core_object_reader_u32(reader, &flag) || flag > TH_BITINT_BITS)
+        return false;
+    type->bitint.flavor = (th_bitint_flavor)flag;
     return true;
   case TH_INDIRECTION:
     if (!core_object_reader_u32(reader, &value) || value > UINT8_MAX ||

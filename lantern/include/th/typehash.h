@@ -26,6 +26,12 @@ typedef enum : uint8_t {
 } th_kind;
 
 typedef enum : uint8_t {
+    TH_BITINT_UNSIGNED = 0,
+    TH_BITINT_SIGNED = 1,
+    TH_BITINT_BITS = 2,
+} th_bitint_flavor;
+
+typedef enum : uint8_t {
     TH_NULLABLE   = 0x01,
     TH_RESEATABLE = 0x02,
     TH_INDEXABLE  = 0x04,
@@ -224,6 +230,7 @@ th_type *th_apply(th_ctx *ctx, const char *name, const th_arg *args, size_t n);
 th_type *th_variant(th_ctx *ctx, const char *name, const th_arg *args,
                     size_t n);
 th_type *th_bitint(th_ctx *ctx, uint64_t width, bool is_signed);
+th_type *th_bits(th_ctx *ctx, uint64_t width);
 th_type *th_ind(th_ctx *ctx, uint8_t attrs, th_type *referent);
 bool     th_indirection_attrs(const char *name, uint8_t *attrs);
 th_type *th_array(th_ctx *ctx, th_type *elem);
@@ -283,7 +290,8 @@ bool   th_named_info(const th_type *type, const char **name, size_t *nlen,
 size_t th_named_nargs(const th_type *type);
 const th_arg *th_named_arg(const th_type *type, size_t i);
 
-bool th_bitint_info(const th_type *type, uint64_t *width, bool *is_signed);
+bool th_bitint_info(const th_type *type, uint64_t *width,
+                    th_bitint_flavor *flavor);
 
 th_type *th_ind_referent(const th_type *type);
 bool     th_ind_attrs(const th_type *type, uint8_t *attrs);

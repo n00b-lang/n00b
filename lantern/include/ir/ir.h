@@ -732,6 +732,14 @@ const char *ir_instr_const_bytes_hex(const ir_instr_t *instruction,
  * universal declaration independently at each operand. */
 bool ir_instr_set_call_signature(ir_instr_t *call, th_type *signature);
 th_type *ir_instr_call_signature(const ir_instr_t *call);
+bool ir_instr_set_callback_contract(ir_instr_t *construction,
+                                    th_type *call_signature,
+                                    th_type *handler_signature,
+                                    th_type *setup_signature);
+bool ir_instr_callback_contract(const ir_instr_t *construction,
+                                th_type **call_signature,
+                                th_type **handler_signature,
+                                th_type **setup_signature);
 bool ir_instr_set_phase_result(ir_ctx_t *ctx, ir_instr_t *instruction,
                                const char *identifier);
 const char *ir_instr_phase_result(const ir_instr_t *instruction);

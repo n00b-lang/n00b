@@ -7,10 +7,13 @@ typedef struct {
     utf8proc_uint8_t *buf;
 } nfc_state;
 
+static _Thread_local nfc_state g_nfc;
+
 static bool nfc(void *state, const char *in, size_t inlen, const char **out,
                 size_t *outlen)
 {
-    nfc_state        *st = state;
+    (void)state;
+    nfc_state        *st = &g_nfc;
     utf8proc_uint8_t *r  = nullptr;
     utf8proc_ssize_t  n  = utf8proc_map((const utf8proc_uint8_t *)in,
                                         (utf8proc_ssize_t)inlen, &r,
@@ -28,9 +31,7 @@ static bool nfc(void *state, const char *in, size_t inlen, const char **out,
     return true;
 }
 
-static _Thread_local nfc_state g_nfc;
-
 void th_install_nfc(th_ctx *ctx)
 {
-    th_ctx_set_normalizer(ctx, nfc, &g_nfc);
+    th_ctx_set_normalizer(ctx, nfc, nullptr);
 }

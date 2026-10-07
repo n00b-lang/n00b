@@ -140,8 +140,11 @@ typedef struct parse_nt_node_t {
     parse_scope_t     *scope;
     parse_sym_entry_t *sym;
     th_type         *type;
+    th_type         *error_type;
     core_string_t unresolved_name;
     parse_node_resolution_t resolution;
+    parse_sym_entry_t *reference_target;
+    bool direct_symbol_reference;
     bool integer_range_known;
     int64_t integer_range_minimum;
     int64_t integer_range_maximum;

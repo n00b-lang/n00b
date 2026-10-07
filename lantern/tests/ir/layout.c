@@ -575,6 +575,120 @@ static void test_descriptors_are_keyed_and_scoped(void)
     close_env(e);
 }
 
+static void test_final_layout_is_bit_precise_and_owned(void)
+{
+    env *e = open_env("x86_64");
+    th_type *t = ty(e, "i64");
+    ir_layout_bit_run_t occupied[] = {{.offset = 0, .width = 67}};
+    ir_layout_bit_run_t reserved[] = {{.offset = 67, .width = 1}};
+    ir_layout_bit_run_t child_runs[] = {{.offset = 3, .width = 8}};
+    ir_layout_access_t accesses[] = {{.unit_bit_offset = 0,
+                                     .unit_width_bits = 16,
+                                     .lsb = 3,
+                                     .value_width_bits = 8}};
+    char name[] = "field";
+    ir_final_member_layout_t member = {
+        .name = name, .type = ty(e, "u8"), .ordinal = 0,
+        .bit_offset = 3, .occupied = child_runs, .n_occupied = 1,
+        .accesses = accesses, .n_accesses = 1,
+    };
+    ir_final_layout_t layout = {
+        .intrinsic_bits = 68, .alignment_bytes = 8,
+        .occupied = occupied, .n_occupied = 1,
+        .reserved = reserved, .n_reserved = 1,
+        .members = &member, .n_members = 1,
+        .has_discriminant = true,
+        .discriminant = {.unit_bit_offset = 64, .unit_width_bits = 8,
+                         .lsb = 2, .value_width_bits = 1},
+    };
+    check("bit-precise final layout can be published",
+          ir_layout_publish_final(e->m, t, "x86_64", &layout));
+    const ir_final_layout_t *saved = ir_layout_final(e->m, t, "x86_64");
+    occupied[0].width = 1;
+    reserved[0].offset = 1;
+    child_runs[0].width = 1;
+    accesses[0].lsb = 0;
+    name[0] = 'X';
+    check("published final layout owns ranges and member names",
+          saved && saved->occupied[0].width == 67
+          && saved->reserved[0].offset == 67
+          && saved->members[0].occupied[0].width == 8
+          && saved->members[0].accesses[0].lsb == 3
+          && saved->discriminant.lsb == 2
+          && !strcmp(saved->members[0].name, "field"));
+    uint64_t extent = 0, stride = 0;
+    check("intrinsic bit size yields byte extent and aligned array stride",
+          ir_layout_final_byte_extent(saved, &extent) && extent == 9
+          && ir_layout_final_stride_bits(saved, &stride) && stride == 128);
+    check("another target does not inherit a final layout",
+          ir_layout_final(e->m, t, "wasm32") == nullptr);
+    check("published final layout is not silently replaced",
+          !ir_layout_publish_final(e->m, t, "x86_64", &layout));
+    ir_layout_bit_run_t overlap[] = {{.offset = 2, .width = 4}};
+    layout.occupied = overlap;
+    layout.n_occupied = 1;
+    layout.reserved = overlap;
+    layout.n_reserved = 1;
+    layout.n_members = 0;
+    check("overlapping occupied and reserved bits are rejected",
+          !ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    check("invalid publication leaves no final descriptor",
+          ir_layout_final(e->m, t, "wasm32") == nullptr);
+    ir_layout_bit_run_t unsorted[] = {
+        {.offset = 8, .width = 1}, {.offset = 0, .width = 1},
+    };
+    layout.occupied = unsorted;
+    layout.n_occupied = 2;
+    layout.n_reserved = 0;
+    check("unsorted bit runs are rejected",
+          !ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    layout.occupied = child_runs;
+    layout.n_occupied = 1;
+    layout.discriminant.unit_width_bits = 16;
+    check("a discriminant cannot read beyond its object byte extent",
+          !ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    ir_layout_bit_run_t narrow[] = {{.offset = 0, .width = 2}};
+    layout.occupied = narrow;
+    layout.discriminant.unit_width_bits = 8;
+    layout.members = &member;
+    layout.n_members = 1;
+    check("member bits must be occupied by the parent",
+          !ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    ir_layout_bit_run_t wide[] = {{.offset = 0, .width = 67}};
+    ir_final_member_layout_t duplicates[] = {member, member};
+    layout.occupied = wide;
+    layout.members = duplicates;
+    layout.n_members = 2;
+    check("member ordinals are unique",
+          !ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    layout.n_members = 0;
+    layout.has_discriminant = false;
+    layout.discriminant_is_niche = true;
+    check("a niche requires a discriminant extractor",
+          !ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    child_runs[0].width = 8;
+    accesses[0].lsb = 3;
+    duplicates[1].ordinal = 1;
+    layout.members = duplicates;
+    layout.n_members = 2;
+    layout.has_discriminant = true;
+    layout.discriminant_is_niche = false;
+    check("distinct variant arms may occupy the same storage",
+          ir_layout_publish_final(e->m, t, "wasm32", &layout));
+    ir_final_layout_t empty = {.alignment_bytes = 1};
+    uint64_t empty_stride = 1;
+    check("zero-sized values have zero array stride",
+          ir_layout_final_stride_bits(&empty, &empty_stride)
+          && empty_stride == 0);
+    empty.alignment_bytes = 0;
+    check("stride rejects an invalid alignment",
+          !ir_layout_final_stride_bits(&empty, &empty_stride));
+    ir_layout_invalidate_type(e->m, t);
+    check("invalidation drops final layout",
+          ir_layout_final(e->m, t, "x86_64") == nullptr);
+    close_env(e);
+}
+
 static void test_the_pass_computes_around_pins(void)
 {
     const char *types[] = {"i32", "u8", "f64", "bool", "(x: i32, y: u64)",
@@ -1226,6 +1340,7 @@ int main(void)
     test_trait_receiver_adapters();
     test_trait_value_abi_keeps_data_and_vtable_indirect();
     test_descriptors_are_keyed_and_scoped();
+    test_final_layout_is_bit_precise_and_owned();
     test_the_pass_computes_around_pins();
     test_pins_are_honored();
     test_explicitly_computes_unreachable_type();

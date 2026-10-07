@@ -40,6 +40,13 @@ bool parse_tree_set_resolution_scope(parse_tree_t *node,
 bool parse_tree_set_resolution_symbol(parse_tree_t *node,
                                       parse_sym_entry_t *symbol);
 parse_node_resolution_t parse_tree_resolution(const parse_tree_t *node);
+bool parse_tree_set_reference_target(parse_tree_t *node,
+                                     parse_sym_entry_t *symbol);
+parse_sym_entry_t *parse_tree_reference_target(const parse_tree_t *node);
+bool parse_tree_set_error_type(parse_tree_t *node, th_type *error_type);
+th_type *parse_tree_error_type(const parse_tree_t *node);
+bool parse_tree_mark_direct_symbol_reference(parse_tree_t *node);
+bool parse_tree_is_direct_symbol_reference(const parse_tree_t *node);
 /* Attach an analysis result to a typed expression without changing its type. */
 bool parse_tree_set_integer_range(parse_tree_t *node, int64_t minimum,
                                   int64_t maximum);

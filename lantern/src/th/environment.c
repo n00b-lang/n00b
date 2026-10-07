@@ -86,7 +86,7 @@ static bool pattern_equal(const th_type *a, const th_type *b,
     return true;
   case TH_BITINT:
     return a->bitint.width == b->bitint.width &&
-           a->bitint.is_signed == b->bitint.is_signed;
+           a->bitint.flavor == b->bitint.flavor;
   case TH_INDIRECTION:
     return a->ind.attrs == b->ind.attrs &&
            pattern_equal(a->ind.referent, b->ind.referent, seen);
@@ -191,7 +191,7 @@ static bool pattern_subsumes(const th_type *general, const th_type *specific,
     return true;
   case TH_BITINT:
     return general->bitint.width == specific->bitint.width &&
-           general->bitint.is_signed == specific->bitint.is_signed;
+           general->bitint.flavor == specific->bitint.flavor;
   case TH_INDIRECTION:
     return general->ind.attrs == specific->ind.attrs &&
            pattern_subsumes(general->ind.referent, specific->ind.referent,
@@ -1173,18 +1173,6 @@ static int function_origin_rank(const th_env_type_origin_t *origin,
   return 0;
 }
 
-static bool function_precedes(const th_env_function_t *candidate,
-                              const th_env_function_t *current,
-                              const th_env_type_origin_t *origin) {
-  if (!current)
-    return true;
-  int candidate_origin = function_origin_rank(origin, candidate);
-  int current_origin = function_origin_rank(origin, current);
-  if (candidate_origin != current_origin)
-    return candidate_origin > current_origin;
-  return candidate->order < current->order;
-}
-
 static bool function_matches(th_ctx *ctx, th_type *receiver,
                              const th_env_trait_t *trait,
                              const th_env_function_t *function,
@@ -1473,12 +1461,16 @@ th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
     }
   }
   const th_env_function_t *best = nullptr;
+  int best_origin_rank = -1;
+  size_t best_origin_count = 0;
   bool ambiguous = false;
   for (size_t i = 0; i < matches.len; i++) {
     if (!maximal[i])
       continue;
     if (!best) {
       best = matches.data[i].function;
+      best_origin_rank = function_origin_rank(origin, best);
+      best_origin_count = 1;
       continue;
     }
     bool equivalent = true;
@@ -1494,12 +1486,21 @@ th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
       ambiguous = true;
       break;
     }
-    if (function_precedes(matches.data[i].function, best, origin))
+    int origin_rank = function_origin_rank(origin,
+                                           matches.data[i].function);
+    if (origin_rank > best_origin_rank) {
       best = matches.data[i].function;
+      best_origin_rank = origin_rank;
+      best_origin_count = 1;
+    }
+    else if (origin_rank == best_origin_rank) {
+      if (strcmp(matches.data[i].function->module, best->module))
+        best_origin_count++;
+    }
   }
   core_free(maximal);
   core_list_free(matches);
-  if (ambiguous)
+  if (ambiguous || best_origin_count > 1)
     return TH_ENV_METHOD_AMBIGUOUS;
   if (!best)
     return TH_ENV_METHOD_NOT_FOUND;

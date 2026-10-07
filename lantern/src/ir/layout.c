@@ -109,6 +109,7 @@ void ir_layout_invalidate_type(ir_module_t *m, th_type *t)
     for (size_t i = 0; i < slot->n_descs; i++) {
         ir_descriptor_t *d = &slot->descs[i].d;
         d->done = false;
+        d->final = nullptr;
         invalidate_value(&d->size);
         invalidate_value(&d->align);
         invalidate_value(&d->stride);
@@ -172,6 +173,191 @@ size_t ir_layout_count(ir_module_t *m, th_type *t)
     return s ? s->n_descs : 0;
 }
 
+static bool valid_runs(const ir_layout_bit_run_t *runs, size_t count,
+                       uint64_t extent)
+{
+    if (count && !runs) return false;
+    uint64_t end = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (!runs[i].width || runs[i].offset < end
+            || runs[i].offset > extent
+            || runs[i].width > extent - runs[i].offset) return false;
+        end = runs[i].offset + runs[i].width;
+    }
+    return true;
+}
+
+static bool disjoint_runs(const ir_layout_bit_run_t *a, size_t na,
+                          const ir_layout_bit_run_t *b, size_t nb)
+{
+    size_t i = 0, j = 0;
+    while (i < na && j < nb) {
+        uint64_t ae = a[i].offset + a[i].width;
+        uint64_t be = b[j].offset + b[j].width;
+        if (a[i].offset < be && b[j].offset < ae) return false;
+        if (ae <= be) i++;
+        else j++;
+    }
+    return true;
+}
+
+static bool runs_within(const ir_layout_bit_run_t *child, size_t nc,
+                        const ir_layout_bit_run_t *parent, size_t np)
+{
+    size_t j = 0;
+    for (size_t i = 0; i < nc; i++) {
+        uint64_t at = child[i].offset;
+        uint64_t end = at + child[i].width;
+        while (at < end) {
+            while (j < np && parent[j].offset + parent[j].width <= at) j++;
+            if (j == np || parent[j].offset > at) return false;
+            uint64_t parent_end = parent[j].offset + parent[j].width;
+            at = parent_end < end ? parent_end : end;
+        }
+    }
+    return true;
+}
+
+static ir_layout_bit_run_t *copy_runs(ir_ctx_t *ctx,
+                                      const ir_layout_bit_run_t *runs,
+                                      size_t count)
+{
+    if (!count) return nullptr;
+    if (count > SIZE_MAX / sizeof(*runs)) return nullptr;
+    ir_layout_bit_run_t *copy = ir_alloc(ctx, count * sizeof(*runs));
+    if (copy) memcpy(copy, runs, count * sizeof(*runs));
+    return copy;
+}
+
+static bool valid_access(ir_layout_access_t access, uint64_t intrinsic_bits)
+{
+    if (!access.unit_width_bits || access.unit_width_bits % 8
+        || access.unit_bit_offset % 8 || !access.value_width_bits
+        || access.lsb >= access.unit_width_bits
+        || access.value_width_bits > access.unit_width_bits - access.lsb
+        || intrinsic_bits > UINT64_MAX - 7) return false;
+    uint64_t extent = (intrinsic_bits + 7) & ~UINT64_C(7);
+    return access.unit_bit_offset <= extent
+        && access.unit_width_bits <= extent - access.unit_bit_offset;
+}
+
+static ir_layout_access_t *copy_accesses(ir_ctx_t *ctx,
+                                         const ir_layout_access_t *accesses,
+                                         size_t count)
+{
+    if (!count) return nullptr;
+    if (count > SIZE_MAX / sizeof(*accesses)) return nullptr;
+    ir_layout_access_t *copy = ir_alloc(ctx, count * sizeof(*accesses));
+    if (copy) memcpy(copy, accesses, count * sizeof(*accesses));
+    return copy;
+}
+
+bool ir_layout_publish_final(ir_module_t *m, th_type *t, const char *target,
+                             const ir_final_layout_t *layout)
+{
+    if (!m || !t || !layout || !layout->alignment_bytes
+        || (layout->alignment_bytes & (layout->alignment_bytes - 1))
+        || !valid_runs(layout->occupied, layout->n_occupied,
+                       layout->intrinsic_bits)
+        || !valid_runs(layout->reserved, layout->n_reserved,
+                       layout->intrinsic_bits)
+        || !disjoint_runs(layout->occupied, layout->n_occupied,
+                          layout->reserved, layout->n_reserved)
+        || (layout->n_members && !layout->members)
+        || layout->n_members > SIZE_MAX / sizeof(*layout->members)
+        || (layout->discriminant_is_niche && !layout->has_discriminant)
+        || (layout->has_discriminant
+            && !valid_access(layout->discriminant, layout->intrinsic_bits)))
+        return false;
+
+    for (size_t i = 0; i < layout->n_members; i++) {
+        const ir_final_member_layout_t *member = &layout->members[i];
+        if (!member->name || !member->type
+            || member->bit_offset > layout->intrinsic_bits
+            || !valid_runs(member->occupied, member->n_occupied,
+                           layout->intrinsic_bits)
+            || !runs_within(member->occupied, member->n_occupied,
+                            layout->occupied, layout->n_occupied)
+            || (member->n_accesses && !member->accesses)
+            || member->n_accesses > SIZE_MAX / sizeof(*member->accesses))
+            return false;
+        for (size_t j = 0; j < i; j++)
+            if (layout->members[j].ordinal == member->ordinal) return false;
+        for (size_t j = 0; j < member->n_accesses; j++)
+            if (!valid_access(member->accesses[j], layout->intrinsic_bits))
+                return false;
+    }
+
+    ir_descriptor_t *descriptor = ir_layout_ensure(m, t, target);
+    if (!descriptor || descriptor->final) return false;
+
+    ir_ctx_t *ctx = m->ctx;
+    ir_final_layout_t *copy = ir_alloc(ctx, sizeof(*copy));
+    if (!copy) return false;
+    *copy = *layout;
+    copy->occupied = copy_runs(ctx, layout->occupied, layout->n_occupied);
+    copy->reserved = copy_runs(ctx, layout->reserved, layout->n_reserved);
+    if ((layout->n_occupied && !copy->occupied)
+        || (layout->n_reserved && !copy->reserved)) return false;
+
+    if (layout->n_members) {
+        ir_final_member_layout_t *members = ir_alloc(
+            ctx, layout->n_members * sizeof(*members));
+        if (!members) return false;
+        for (size_t i = 0; i < layout->n_members; i++) {
+            members[i] = layout->members[i];
+            members[i].name = ir_strdup(ctx, layout->members[i].name);
+            members[i].occupied = copy_runs(ctx,
+                layout->members[i].occupied, layout->members[i].n_occupied);
+            members[i].accesses = copy_accesses(ctx,
+                layout->members[i].accesses, layout->members[i].n_accesses);
+            if (!members[i].name
+                || (layout->members[i].n_occupied
+                    && !members[i].occupied)
+                || (layout->members[i].n_accesses
+                    && !members[i].accesses)) return false;
+        }
+        copy->members = members;
+    }
+    descriptor->final = copy;
+    return true;
+}
+
+const ir_final_layout_t *ir_layout_final(ir_module_t *m, th_type *t,
+                                        const char *target)
+{
+    ir_descriptor_t *d = m && t ? ir_layout_of(m, t, target) : nullptr;
+    return d ? d->final : nullptr;
+}
+
+bool ir_layout_final_byte_extent(const ir_final_layout_t *layout,
+                                 uint64_t *bytes)
+{
+    if (!layout || !bytes) return false;
+    *bytes = layout->intrinsic_bits / 8 + (layout->intrinsic_bits % 8 != 0);
+    return true;
+}
+
+bool ir_layout_final_stride_bits(const ir_final_layout_t *layout,
+                                 uint64_t *bits)
+{
+    uint64_t bytes;
+    if (!layout || !bits || !layout->alignment_bytes
+        || (layout->alignment_bytes & (layout->alignment_bytes - 1))
+        || !ir_layout_final_byte_extent(layout, &bytes))
+        return false;
+    if (!bytes) {
+        *bits = 0;
+        return true;
+    }
+    uint64_t align = layout->alignment_bytes;
+    if (bytes > UINT64_MAX - (align - 1)) return false;
+    uint64_t aligned = (bytes + align - 1) & ~(align - 1);
+    if (aligned > UINT64_MAX / 8) return false;
+    *bits = aligned * 8;
+    return true;
+}
+
 static bool pin(ir_layout_val_t *v, uint64_t value)
 {
     if (v->state == IR_LAYOUT_PINNED && v->value != value) {
@@ -188,15 +374,18 @@ static bool pin(ir_layout_val_t *v, uint64_t value)
 bool ir_layout_pin_size(ir_module_t *m, th_type *t, uint64_t bytes)
 {
     ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
-
-    return d && pin(&d->size, bytes);
+    if (!d || !pin(&d->size, bytes)) return false;
+    d->final = nullptr;
+    return true;
 }
 
 bool ir_layout_pin_stride(ir_module_t *m, th_type *t, uint64_t bytes)
 {
     ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
 
-    return d && pin(&d->stride, bytes);
+    if (!d || !pin(&d->stride, bytes)) return false;
+    d->final = nullptr;
+    return true;
 }
 
 bool ir_layout_pin_align(ir_module_t *m, th_type *t, uint64_t bytes)
@@ -207,7 +396,9 @@ bool ir_layout_pin_align(ir_module_t *m, th_type *t, uint64_t bytes)
         return false;
     }
 
-    return pin(&d->align, bytes);
+    if (!pin(&d->align, bytes)) return false;
+    d->final = nullptr;
+    return true;
 }
 
 static void drop_members(void *p)
@@ -274,8 +465,10 @@ bool ir_layout_descriptor_pin_member(ir_module_t *m, ir_descriptor_t *d,
 
     ir_member_layout_t *slot = member_slot(m, d, field);
 
-    return slot && pin(&slot->bit_offset, bit_offset)
-        && pin(&slot->bit_width, bit_width);
+    if (!slot || !pin(&slot->bit_offset, bit_offset)
+        || !pin(&slot->bit_width, bit_width)) return false;
+    d->final = nullptr;
+    return true;
 }
 
 bool ir_layout_pin_variant(ir_module_t *m, th_type *t, ir_variant_repr_t r)
@@ -291,6 +484,7 @@ bool ir_layout_pin_variant(ir_module_t *m, th_type *t, ir_variant_repr_t r)
     r.tag_bit_width.authored  = true;
     r.authored                = true;
     d->variant             = r;
+    d->final               = nullptr;
 
     return true;
 }
@@ -307,6 +501,7 @@ bool ir_layout_pin_indirect(ir_module_t *m, th_type *t, ir_indirect_repr_t r)
     r.words.authored = true;
     r.authored       = true;
     d->indirect      = r;
+    d->final         = nullptr;
 
     return true;
 }

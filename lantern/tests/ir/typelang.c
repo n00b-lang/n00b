@@ -30,14 +30,9 @@ static void check_line(char *line, int lineno)
     const char *want_enc = tab1 + 1;
     const char *want     = tab2 + 1;
 
-    for (const char *p = type; *p; p++) {
-        if ((unsigned char)*p >= 0x80) {
-            return;
-        }
-    }
-
     ir_ctx_t *ctx = ir_ctx_new();
     th_ctx   *th  = ir_ctx_types(ctx);
+    th_install_nfc(th);
     char     *err = nullptr;
     th_type  *t   = ir_typelang_parse(th, type, &err);
 
@@ -282,15 +277,17 @@ static void test_bitslice_prefix_types(void)
     th_ctx   *th  = ir_ctx_types(ctx);
     static const struct {
         const char *text;
-        bool        is_signed;
-    } valid[] = {{"i:32", true}, {"u:32", false}};
+        th_bitint_flavor flavor;
+    } valid[] = {{"i:32", TH_BITINT_SIGNED},
+                 {"u:32", TH_BITINT_UNSIGNED},
+                 {"bits:32", TH_BITINT_BITS}};
     for (size_t i = 0; i < sizeof(valid) / sizeof(valid[0]); i++) {
         char    *err       = nullptr;
         th_type *type      = ir_typelang_parse(th, valid[i].text, &err);
         uint64_t width     = 0;
-        bool     is_signed = false;
-        if (!type || !th_bitint_info(type, &width, &is_signed) || width != 32 ||
-            is_signed != valid[i].is_signed) {
+        th_bitint_flavor flavor = TH_BITINT_UNSIGNED;
+        if (!type || !th_bitint_info(type, &width, &flavor) || width != 32 ||
+            flavor != valid[i].flavor) {
             printf("FAIL  bitslice type %s: %s\n", valid[i].text,
                    err ? err : "wrong bit integer type");
             fails++;
