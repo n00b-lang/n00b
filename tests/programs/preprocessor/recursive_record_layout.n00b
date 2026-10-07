@@ -1,0 +1,5 @@
+type Node {
+    next: Node
+}
+
+func identity(value: Node) -> Node { return value }

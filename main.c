@@ -19759,7 +19759,19 @@ register_record_semantic_shape(parse_grammar_t *grammar,
         ? th_record(state->types, members.data, members.len) : nullptr;
     valid = named && record;
     if (valid) {
-        (void)th_type_define(state->types, named, record);
+        valid = th_type_define(state->types, named, record);
+        if (!valid) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "conflicting record definitions for '%.*s'",
+                (int)scope->name.u8_bytes, scope->name.data);
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0005"),
+                core_string_borrow(message.data, message.byte_len),
+                link_source_location(declaration));
+            core_buffer_release(&message);
+        }
         parse_sym_entry_t *symbol = core_tree_node_value(declaration).sym;
         if (!symbol || symbol->kind != PARSE_SYM_TYPEDEF) valid = false;
         else {
@@ -36851,9 +36863,114 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
 }
 
 static bool
+inline_layout_cycle(ir_module_t *module, th_type *type, const char *via,
+                    core_list_t(th_type_ptr_t) *active,
+                    core_list_t(core_string_t) *edges,
+                    core_buffer_t *message)
+{
+    type = th_resolve(type);
+    if (!type) return false;
+    if (th_kind_of(type) == TH_NAMED) {
+        th_type *definition = ir_type_definition(module, type);
+        const char *name = nullptr;
+        size_t name_len = 0, argument_count = 0;
+        th_named_info(type, &name, &name_len, nullptr, &argument_count);
+        bool inline_wrapper = name
+            && ((name_len == 6 && !memcmp(name, "Option", 6))
+                || (name_len == 6 && !memcmp(name, "atomic", 6)));
+        if (!definition && !inline_wrapper) return false;
+        for (size_t i = 0; i < active->len; i++) {
+            if (active->data[i] != type) continue;
+            core_buffer_puts(message, "inline layout cycle: ");
+            core_buffer_puts(message, n00bb_print_type(
+                ir_module_types(module), type));
+            for (size_t j = i + 1; j < active->len; j++) {
+                core_buffer_printf(message, ".%.*s -> %s",
+                    (int)edges->data[j].u8_bytes, edges->data[j].data,
+                    n00bb_print_type(ir_module_types(module),
+                                     active->data[j]));
+            }
+            core_buffer_printf(message, ".%s -> %s", via ? via : "value",
+                n00bb_print_type(ir_module_types(module), type));
+            return true;
+        }
+        core_list_push(*active, type);
+        core_list_push(*edges, core_string_from_cstr(via ? via : "value"));
+        bool cycle = definition
+            ? inline_layout_cycle(module, definition, nullptr, active,
+                                  edges, message) : false;
+        for (size_t i = 0; inline_wrapper && !cycle
+             && i < argument_count; i++) {
+            const th_arg *argument = th_named_arg(type, i);
+            if (argument && argument->kind == TH_ARG_TYPE)
+                cycle = inline_layout_cycle(module, argument->type,
+                    "value", active, edges, message);
+        }
+        active->len--;
+        edges->len--;
+        return cycle;
+    }
+    if (th_kind_of(type) == TH_RECORD) {
+        for (size_t i = 0; i < th_record_len(type); i++) {
+            const th_member *member = th_record_member(type, i);
+            if (member && inline_layout_cycle(module, member->type,
+                    member->name, active, edges, message)) return true;
+        }
+    }
+    else if (th_kind_of(type) == TH_SUM) {
+        for (size_t i = 0; i < th_sum_len(type); i++)
+            if (inline_layout_cycle(module, th_sum_arm(type, i), "arm",
+                                    active, edges, message)) return true;
+    }
+    return false;
+}
+
+static bool
+validate_inline_layout_cycles(n00bb_link_analysis_t *analysis)
+{
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        ir_module_t *module = state ? state->ir_module : nullptr;
+        if (!symtab || !module) return false;
+        for (parse_scope_t *scope = symtab->all_scopes; scope;
+             scope = scope->all_next) {
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
+                    || !ir_type_definition(module, symbol->type)) continue;
+                core_list_t(th_type_ptr_t) active =
+                    core_list_new(th_type_ptr_t);
+                core_list_t(core_string_t) edges =
+                    core_list_new(core_string_t);
+                core_buffer_t message = {0};
+                bool cycle = inline_layout_cycle(module, symbol->type,
+                    nullptr, &active, &edges, &message);
+                core_list_free(active);
+                core_list_free(edges);
+                if (cycle)
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0068"),
+                        core_string_borrow(message.data, message.byte_len),
+                        symbol->decl_node
+                            ? link_source_location(symbol->decl_node)
+                            : (core_diag_location_t){0});
+                core_buffer_release(&message);
+                if (cycle) return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool
 select_storage_placement(n00bb_link_analysis_t *analysis)
 {
-    if (!analysis || !publish_known_scalar_layouts(analysis)) return false;
+    if (!analysis || !validate_inline_layout_cycles(analysis)
+        || !publish_known_scalar_layouts(analysis)) return false;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
@@ -40373,6 +40490,32 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         parse_tree_walk_apply_node(state->reference_walk, node, parent,
             depth, child_index, node_reference_kinds,
             node_reference_kind_count, true);
+        if (field_record_declaration(grammar, node)) {
+            parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
+            if (!symbol || symbol->kind != PARSE_SYM_TYPEDEF) {
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0005"),
+                    CORE_STRING_STATIC("record declaration has no type symbol"),
+                    link_source_location(node));
+                return;
+            }
+            core_buffer_t qualified = {0};
+            append_module_type_name(unit, symbol->name, &qualified);
+            th_type *named = th_name(state->types, qualified.data);
+            core_buffer_release(&qualified);
+            if (!named || (symbol->type
+                           && th_resolve(symbol->type) != named)) {
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0005"),
+                    CORE_STRING_STATIC("record type name conflicts with its symbol"),
+                    link_source_location(node));
+                return;
+            }
+            symbol->type = named;
+            core_tree_node_value(node).type = named;
+        }
         if (nt_is(grammar, node, "body")
             && !n00bb_bind_option_branch_shadow(grammar, unit, node, parent))
             core_diagnostics_report_at(
@@ -40891,12 +41034,13 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
         if (field_record_declaration(grammar, node)
             && !register_record_semantic_shape(grammar, unit, node)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0005"),
-                CORE_STRING_STATIC(
-                    "could not register the record shape for semantic analysis"),
-                link_source_location(node));
+            if (!core_translation_unit_has_fatal_diagnostics(unit))
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0005"),
+                    CORE_STRING_STATIC(
+                        "could not register the record shape for semantic analysis"),
+                    link_source_location(node));
             return;
         }
         if (nt_is(grammar, node, "variant-decl")

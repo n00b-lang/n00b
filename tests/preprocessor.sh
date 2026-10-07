@@ -2208,8 +2208,8 @@ if "$compiler" preprocess \
     echo "duplicate type definition unexpectedly compiled"
     exit 1
 fi
-grep -q 'LANTERN-L0003' "$tmp/duplicate_type.err"
-grep -q 'duplicate definitions for one module declaration identity' \
+grep -q 'N00BB-T0005' "$tmp/duplicate_type.err"
+grep -q "conflicting record definitions for 'DuplicateType'" \
     "$tmp/duplicate_type.err"
 
 if "$compiler" preprocess \
@@ -4149,6 +4149,18 @@ grep -Eq 'layout lower_enum_cast.Small target=(x86_64-linux|arm64-macos|x86_64-w
 }
 grep -Eq 'layout flagset_operators.FilePerms target=(x86_64-linux|arm64-macos|x86_64-windows) size=1 align=1' \
     "$tmp/flagset_layout.out"
+if "$compiler" lower "$program_dir/recursive_record_layout.n00b" \
+    >"$tmp/recursive_record_layout.out" 2>&1; then
+    echo 'inline recursive record unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'inline layout cycle: recursive_record_layout.Node.next -> recursive_record_layout.Node' \
+    "$tmp/recursive_record_layout.out"
+"$compiler" lower "$program_dir/recursive_record_ref.n00b" \
+    >"$tmp/recursive_record_ref.out" 2>&1 || {
+    cat "$tmp/recursive_record_ref.out"
+    exit 1
+}
 "$compiler" lower --dump-layout "$program_dir/fixed_value_layouts.n00b" \
     >"$tmp/fixed_value_layouts.out" 2>"$tmp/fixed_value_layouts.err" || {
     cat "$tmp/fixed_value_layouts.err"
