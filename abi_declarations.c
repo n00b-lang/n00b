@@ -205,6 +205,8 @@ symbol_attributes(const parse_sym_entry_t *symbol, n00b_abi_symbol_v1 *row)
     row->visibility = core_string_eq(visibility,
         CORE_STRING_STATIC("public")) ? N00B_ABI_VISIBILITY_PUBLIC
                                       : N00B_ABI_VISIBILITY_PRIVATE;
+    if (core_string_eq(symbol->visibility, CORE_STRING_STATIC("public")))
+        row->flags |= N00B_ABI_SYMBOL_FLAG_EXPORTED;
     row->phase_mask = (uint32_t)symbol->phases;
     row->mutable_phase_mask = (uint32_t)symbol->mutable_phases;
     row->initializer_phase_mask = (uint32_t)symbol->initializer_phases;

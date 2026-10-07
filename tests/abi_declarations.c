@@ -162,10 +162,14 @@ main(void)
             == module_scope_index
         && rows.symbols[type_symbol_index].visibility
             == N00B_ABI_VISIBILITY_PUBLIC
+        && (rows.symbols[type_symbol_index].flags
+            & N00B_ABI_SYMBOL_FLAG_EXPORTED)
         && rows.symbols[field_symbol_index].kind == N00B_ABI_SYMBOL_FIELD
         && rows.symbols[field_symbol_index].type_index == field_type_index
         && rows.symbols[field_symbol_index].visibility
             == N00B_ABI_VISIBILITY_PUBLIC
+        && !(rows.symbols[field_symbol_index].flags
+            & N00B_ABI_SYMBOL_FLAG_EXPORTED)
         && type_rows.rows[type_index_value].owner_module_index == 1);
     const n00b_abi_source_location_v1 *type_location =
         &rows.locations[rows.symbols[type_symbol_index]

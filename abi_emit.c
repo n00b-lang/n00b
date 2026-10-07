@@ -247,6 +247,111 @@ abi_unit_error(core_translation_unit_t *unit, const char *message)
     return false;
 }
 
+typedef struct {
+    n00b_abi_native_binding_v1 *rows;
+    char **names;
+    size_t count;
+} abi_native_bindings_t;
+
+static void
+native_bindings_release(abi_native_bindings_t *bindings)
+{
+    if (!bindings) return;
+    for (size_t i = 0; i < bindings->count; i++)
+        core_free(bindings->names[i]);
+    core_free(bindings->names);
+    core_free(bindings->rows);
+    *bindings = (abi_native_bindings_t){0};
+}
+
+static char *
+native_global_name(core_string_t package, core_string_t module,
+                   core_string_t symbol, bool exported,
+                   core_target_object_format_t format)
+{
+    if (!package.data || !module.data || !symbol.data
+        || !module.u8_bytes || !symbol.u8_bytes
+        || memchr(module.data, 0, module.u8_bytes)
+        || memchr(symbol.data, 0, symbol.u8_bytes)) return nullptr;
+    bool default_package = core_string_eq(package,
+        CORE_STRING_STATIC("default"));
+    bool builtin_package = core_string_eq(package,
+        CORE_STRING_STATIC("builtin"));
+    size_t prefix = !exported + (format == CORE_TARGET_OBJECT_MACH_O)
+        + (default_package ? 1 : builtin_package ? 2 : 0);
+    if (module.u8_bytes > SIZE_MAX - prefix - 2
+        || symbol.u8_bytes > SIZE_MAX - prefix - module.u8_bytes - 2)
+        return nullptr;
+    size_t size = prefix + module.u8_bytes + 1 + symbol.u8_bytes;
+    char *name = core_alloc_array(char, size + 1);
+    size_t at = 0;
+    if (format == CORE_TARGET_OBJECT_MACH_O) name[at++] = '_';
+    if (!exported) name[at++] = '_';
+    if (default_package || builtin_package) name[at++] = '$';
+    if (builtin_package) name[at++] = '$';
+    for (size_t i = 0; i < module.u8_bytes; i++)
+        name[at++] = module.data[i] == '.' ? '$' : module.data[i];
+    name[at++] = '$';
+    memcpy(name + at, symbol.data, symbol.u8_bytes);
+    name[size] = 0;
+    return name;
+}
+
+static bool
+build_native_bindings(const n00bb_abi_storage_rows_t *storage,
+                      const n00bb_abi_decl_index_t *declarations,
+                      n00bb_abi_declarations_t *rows,
+                      n00bb_abi_name_pool_t *pool, core_string_t package,
+                      core_string_t module,
+                      core_target_object_format_t format,
+                      abi_native_bindings_t *out)
+{
+    if (!storage || !storage->rows || !declarations || !rows
+        || !rows->symbols || !pool || !out) return false;
+    abi_native_bindings_t built = {
+        .rows = core_alloc_array(n00b_abi_native_binding_v1,
+                                 storage->row_count),
+        .names = core_alloc_array(char *, storage->row_count),
+        .count = storage->row_count,
+    };
+    memset(built.rows, 0, built.count * sizeof(*built.rows));
+    memset(built.names, 0, built.count * sizeof(*built.names));
+    bool valid = true;
+    for (size_t i = 1; valid && i < built.count; i++) {
+        const n00b_abi_storage_v1 *value = &storage->rows[i];
+        if (!value->symbol_index || value->symbol_index >= rows->symbol_count
+            || value->byte_offset > INT64_MAX) {
+            valid = false;
+            break;
+        }
+        n00b_abi_symbol_v1 *symbol_row =
+            &rows->symbols[value->symbol_index];
+        parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
+            value->symbol_index);
+        if (!symbol || symbol_row->native_binding_index) {
+            valid = false;
+            break;
+        }
+        built.names[i] = native_global_name(package, module, symbol->name,
+            symbol_row->flags & N00B_ABI_SYMBOL_FLAG_EXPORTED, format);
+        if (!built.names[i]) { valid = false; break; }
+        built.rows[i].kind = N00B_ABI_NATIVE_SECTION_OFFSET;
+        built.rows[i].offset = (int64_t)value->byte_offset;
+        valid = n00bb_abi_name_pool_encode(pool,
+            core_string_from_cstr(built.names[i]),
+            N00B_ABI_TABLE_NATIVE_BINDING, (uint32_t)i,
+            offsetof(n00b_abi_native_binding_v1, native_name),
+            &built.rows[i].native_name);
+        if (valid) symbol_row->native_binding_index = (uint32_t)i;
+    }
+    if (!valid) {
+        native_bindings_release(&built);
+        return false;
+    }
+    *out = built;
+    return true;
+}
+
 static bool
 append_storage_section(const core_target_desc_t *target, uint32_t kind,
                        const core_buffer_t *bytes, uint32_t alignment,
@@ -604,6 +709,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_trait_method_rows_t trait_method_rows = {0};
     n00bb_abi_constraint_rows_t constraint_rows = {0};
     n00bb_abi_storage_rows_t storage_rows = {0};
+    abi_native_bindings_t native_bindings = {0};
     bool valid = pool && type_index
         && n00bb_abi_type_index_collect_module_types(type_index,
             (ir_module_t *)comptime_ir)
@@ -693,8 +799,13 @@ n00bb_abi_emit_unit(
                 offsetof(n00b_abi_requirement_v1, full_path),
                 &requirements[i + 1].full_path);
     }
+    if (valid)
+        valid = build_native_bindings(&storage_rows, declarations,
+            &declaration_rows, pool, package_id, unit->module.identifier,
+            target->object_format, &native_bindings);
     if (!valid) {
         core_free(requirements);
+        native_bindings_release(&native_bindings);
         n00bb_abi_storage_rows_release(&storage_rows);
         n00bb_abi_trait_method_rows_release(&trait_method_rows);
         n00bb_abi_constraint_rows_release(&constraint_rows);
@@ -806,6 +917,7 @@ n00bb_abi_emit_unit(
             ? storage_input_indexes[row->segment_kind] : 0;
         valid = input && core_object_emit_native_section_index(target,
             1 + extra_count, input, &row->segment_index);
+        if (valid) native_bindings.rows[i].section_index = row->segment_index;
     }
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
@@ -848,6 +960,8 @@ n00bb_abi_emit_unit(
         {N00B_ABI_TABLE_REQUIREMENT, requirements, import_count + 1},
         {N00B_ABI_TABLE_STORAGE, storage_rows.rows,
          storage_rows.row_count},
+        {N00B_ABI_TABLE_NATIVE_BINDING, native_bindings.rows,
+         native_bindings.count},
         {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
     };
     n00bb_abi_packed_tables_t packed = {0};
@@ -856,6 +970,7 @@ n00bb_abi_emit_unit(
     core_free(stream);
     if (!valid) {
         core_free(requirements);
+        native_bindings_release(&native_bindings);
         n00bb_abi_storage_rows_release(&storage_rows);
         n00bb_abi_trait_method_rows_release(&trait_method_rows);
         n00bb_abi_constraint_rows_release(&constraint_rows);
@@ -889,15 +1004,33 @@ n00bb_abi_emit_unit(
             &relocation_count);
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
+    bool has_pool = n00bb_abi_name_pool_size(pool) != 0;
+    size_t symbol_count = (has_pool ? 1 : 0)
+        + native_bindings.count - 1;
+    core_object_emit_symbol_t *object_symbols = symbol_count
+        ? core_alloc_array(core_object_emit_symbol_t, symbol_count)
+        : nullptr;
+    if (has_pool) object_symbols[0] = string_symbol;
+    for (size_t i = 1; i < native_bindings.count; i++) {
+        const n00b_abi_storage_v1 *row = &storage_rows.rows[i];
+        object_symbols[(has_pool ? 1 : 0) + i - 1] =
+            (core_object_emit_symbol_t){
+                .name = native_bindings.names[i],
+                .section_index = storage_input_indexes[row->segment_kind],
+                .section_offset = row->byte_offset,
+                .exported = true,
+            };
+    }
     if (valid)
         valid = n00bb_abi_write_object(target, &packed,
             extra_count ? extra_sections : nullptr, extra_count,
-            n00bb_abi_name_pool_size(pool) ? &string_symbol : nullptr,
-            n00bb_abi_name_pool_size(pool) ? 1 : 0,
+            object_symbols, symbol_count,
             relocations, relocation_count,
             &object, &object_bytes);
+    core_free(object_symbols);
     core_free(relocations);
     core_free(requirements);
+    native_bindings_release(&native_bindings);
     n00bb_abi_storage_rows_release(&storage_rows);
     n00bb_abi_trait_method_rows_release(&trait_method_rows);
     n00bb_abi_constraint_rows_release(&constraint_rows);

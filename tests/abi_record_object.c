@@ -731,10 +731,13 @@ check_storage(const uint8_t *object, size_t length,
         N00B_ABI_TABLE_STORAGE);
     const n00bb_abi_directory_entry_t *symbols = entry_for(entries, count,
         N00B_ABI_TABLE_SYMBOL);
+    const n00bb_abi_directory_entry_t *bindings = entry_for(entries, count,
+        N00B_ABI_TABLE_NATIVE_BINDING);
     const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
         N00B_ABI_TABLE_U32_STREAM);
     assert(modules && modules->record_count == 2 && storage
-        && storage->record_count == 4 && symbols && stream);
+        && storage->record_count == 4 && symbols && bindings
+        && bindings->record_count == 4 && stream);
     core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
         ? CORE_TARGET_OBJECT_MACH_O
         : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
@@ -747,6 +750,16 @@ check_storage(const uint8_t *object, size_t length,
         ".tdata.n00b_static"};
     const char *mach_names[] = {"__n00b_ro", "__n00b_data", "__n00b_tls"};
     const char *coff_names[] = {".rdata$N", ".data$N", ".tls$N"};
+    const char *native_names[] = {"$storage$fixed_value",
+        "_$storage$shared_value", "_$storage$thread_seed"};
+    const char *mach_native_names[] = {"_$storage$fixed_value",
+        "__$storage$shared_value", "__$storage$thread_seed"};
+    core_object_section_t pool;
+    assert(core_object_section_find(object, length, format,
+        format == CORE_TARGET_OBJECT_MACH_O ? "__TEXT" : NULL,
+        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_strings"
+        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$S"
+        : ".rodata.n00b_strings", &pool));
     bool row_seen[4] = {0}, name_seen[3] = {0};
     for (uint32_t i = 1; i < storage->record_count; i++) {
         const n00b_abi_storage_v1 *row = row_at(metadata, storage, i);
@@ -762,6 +775,46 @@ check_storage(const uint8_t *object, size_t length,
             expected++;
         assert(expected < 3 && row->segment_kind == kinds[expected]
             && !name_seen[expected]);
+        assert(symbol->native_binding_index == i
+            && !!(symbol->flags & N00B_ABI_SYMBOL_FLAG_EXPORTED)
+                == (expected == 0));
+        const n00b_abi_native_binding_v1 *binding = row_at(metadata,
+            bindings, symbol->native_binding_index);
+        const char *expected_native = format == CORE_TARGET_OBJECT_MACH_O
+            ? mach_native_names[expected] : native_names[expected];
+        size_t native_length = strlen(expected_native);
+        size_t pool_offset = 0;
+        while (pool_offset <= pool.size
+            && native_length <= pool.size - pool_offset
+            && memcmp(pool.bytes + pool_offset, expected_native,
+                      native_length)) pool_offset++;
+        assert(pool_offset <= pool.size
+            && native_length <= pool.size - pool_offset);
+        assert(binding->kind == N00B_ABI_NATIVE_SECTION_OFFSET
+            && binding->section_index == row->segment_index
+            && binding->offset == (int64_t)row->byte_offset
+            && binding->native_name.long_value.selector
+                == ((uint64_t)native_length
+                    | ((uint64_t)N00B_ABI_STRING_UTF8
+                        << N00B_ABI_STRING_ENCODING_SHIFT)
+                    | ((uint64_t)N00B_ABI_STRING_LONG
+                        << N00B_ABI_STRING_TAG_SHIFT)));
+        uint64_t pointer_offset = bindings->file_offset
+            + (uint64_t)symbol->native_binding_index * bindings->record_bytes
+            + offsetof(n00b_abi_native_binding_v1, native_name);
+        bool found_name = false;
+        for (uint32_t r = 0; r < metadata->relocation_count; r++) {
+            core_object_absolute64_relocation_t relocation;
+            assert(core_object_absolute64_relocation_at(metadata, format,
+                r, &relocation));
+            if (relocation.section_offset != pointer_offset) continue;
+            if (format == CORE_TARGET_OBJECT_MACH_O)
+                assert(relocation.target_is_section
+                    && relocation.native_symbol_index == pool.native_index);
+            else assert(relocation.addend_bits == pool_offset);
+            found_name = true;
+        }
+        assert(found_name);
         name_seen[expected] = true;
         row_seen[i] = true;
         const char *name = format == CORE_TARGET_OBJECT_MACH_O
