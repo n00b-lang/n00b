@@ -361,6 +361,34 @@ const ir_final_layout_t *ir_layout_final(ir_module_t *m, th_type *t,
     return d ? d->final : nullptr;
 }
 
+static bool pin(ir_layout_val_t *v, uint64_t value);
+
+bool ir_layout_copy_final(ir_module_t *m, th_type *destination,
+                          th_type *source, const char *target)
+{
+    if (!m || !destination || !source || destination == source
+        || ir_layout_final(m, destination, target)) return false;
+    const ir_final_layout_t *final = ir_layout_final(m, source, target);
+    ir_descriptor_t *source_descriptor = ir_layout_of(m, source, target);
+    ir_descriptor_t *destination_descriptor = ir_layout_ensure(m, destination,
+                                                                target);
+    uint64_t extent;
+    if (!final || !source_descriptor || !destination_descriptor
+        || !ir_layout_final_byte_extent(final, &extent)
+        || !pin(&destination_descriptor->size, extent)
+        || !pin(&destination_descriptor->align, final->alignment_bytes))
+        return false;
+    for (size_t i = 0; i < source_descriptor->n_members; i++) {
+        const ir_member_layout_t *member = &source_descriptor->members[i];
+        if (!ir_layout_is_settled(&member->bit_offset)
+            || !ir_layout_is_settled(&member->bit_width)) continue;
+        if (!ir_layout_descriptor_pin_member(m, destination_descriptor,
+                member->name, member->bit_offset.value,
+                member->bit_width.value)) return false;
+    }
+    return ir_layout_publish_final(m, destination, target, final);
+}
+
 bool ir_layout_final_byte_extent(const ir_final_layout_t *layout,
                                  uint64_t *bytes)
 {

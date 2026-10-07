@@ -704,6 +704,53 @@ static void test_final_layout_is_bit_precise_and_owned(void)
     close_env(e);
 }
 
+static void test_final_layout_copy_preserves_representation(void)
+{
+    env *e = open_env("x86_64");
+    th_ctx *types = ir_ctx_types(e->ctx);
+    th_type *source = th_name(types, "SourceRecord");
+    th_type *alias = th_name(types, "AliasRecord");
+    th_type *other_target = th_name(types, "OtherTargetRecord");
+    ir_layout_bit_run_t occupied = {.offset = 0, .width = 32};
+    ir_final_member_layout_t member = {
+        .name = "value", .type = th_name(types, "u32"), .ordinal = 0,
+        .occupied = &occupied, .n_occupied = 1,
+    };
+    ir_final_layout_t layout = {
+        .intrinsic_bits = 64, .alignment_bytes = 4,
+        .occupied = &occupied, .n_occupied = 1,
+        .members = &member, .n_members = 1,
+    };
+    check("source record has complete final layout and descriptor pins",
+          ir_layout_pin_size(e->m, source, 8)
+          && ir_layout_pin_align(e->m, source, 4)
+          && ir_layout_pin_member(e->m, source, "value", 0, 32)
+          && ir_layout_publish_final(e->m, source, "x86_64", &layout));
+    check("final layout copies onto a distinct representation type",
+          ir_layout_copy_final(e->m, alias, source, "x86_64"));
+    const ir_final_layout_t *copied = ir_layout_final(e->m, alias, "x86_64");
+    ir_descriptor_t *descriptor = ir_layout_of(e->m, alias, "x86_64");
+    check("copied layout retains bits, members, size, and alignment",
+          copied && copied->intrinsic_bits == 64
+          && copied->alignment_bytes == 4
+          && copied->n_members == 1
+          && copied->members[0].occupied[0].width == 32
+          && descriptor && descriptor->size.value == 8
+          && descriptor->align.value == 4
+          && descriptor->n_members == 1
+          && descriptor->members[0].bit_offset.value == 0
+          && descriptor->members[0].bit_width.value == 32);
+    check("final layout copy refuses to overwrite an existing target",
+          !ir_layout_copy_final(e->m, alias, source, "x86_64"));
+    check("source final layout can be published for another target",
+          ir_layout_publish_final(e->m, source, "wasm32", &layout));
+    check("copy uses the requested target instead of the module default",
+          ir_layout_copy_final(e->m, other_target, source, "wasm32")
+          && ir_layout_final(e->m, other_target, "wasm32")
+          && !ir_layout_final(e->m, other_target, "x86_64"));
+    close_env(e);
+}
+
 static void test_the_pass_computes_around_pins(void)
 {
     const char *types[] = {"i32", "u8", "f64", "bool", "(x: i32, y: u64)",
@@ -1356,6 +1403,7 @@ int main(void)
     test_trait_value_abi_keeps_data_and_vtable_indirect();
     test_descriptors_are_keyed_and_scoped();
     test_final_layout_is_bit_precise_and_owned();
+    test_final_layout_copy_preserves_representation();
     test_the_pass_computes_around_pins();
     test_pins_are_honored();
     test_explicitly_computes_unreachable_type();

@@ -132,6 +132,8 @@ bool ir_layout_is_settled(const ir_layout_val_t *v);
  * immutable until the type's layout is invalidated. */
 bool ir_layout_publish_final(ir_module_t *m, th_type *t, const char *target,
                              const ir_final_layout_t *layout);
+bool ir_layout_copy_final(ir_module_t *m, th_type *destination,
+                          th_type *source, const char *target);
 const ir_final_layout_t *ir_layout_final(ir_module_t *m, th_type *t,
                                         const char *target);
 bool ir_layout_final_byte_extent(const ir_final_layout_t *layout,
