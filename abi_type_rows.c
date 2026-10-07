@@ -213,12 +213,14 @@ n00bb_abi_type_identity_rows_build(
         else if (row->kind == N00B_ABI_TYPE_NIL)
             row->alignment_bytes = 1;
     }
-    core_free(owners);
     if (!valid || rows[0].kind != N00B_ABI_TYPE_NIL) {
+        core_free(owners);
         core_free(rows);
         return false;
     }
-    *out = (n00bb_abi_type_identity_rows_t){.rows = rows, .count = count};
+    *out = (n00bb_abi_type_identity_rows_t){
+        .rows = rows, .owners = owners, .count = count,
+    };
     return true;
 }
 
@@ -228,6 +230,7 @@ n00bb_abi_type_identity_rows_release(
 {
     if (!rows) return;
     core_free(rows->rows);
+    core_free(rows->owners);
     *rows = (n00bb_abi_type_identity_rows_t){0};
 }
 

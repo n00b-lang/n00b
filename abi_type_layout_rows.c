@@ -7,9 +7,12 @@
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
+#include "record_layout_request.h"
 
 core_list_decl(n00b_abi_layout_v1);
 core_list_decl(n00b_abi_physical_run_v1);
+core_list_decl(n00b_abi_packed_run_v1);
+core_list_decl(n00b_abi_field_v1);
 core_list_decl(uint32_t);
 
 static bool
@@ -116,10 +119,144 @@ append_runs(const ir_layout_bit_run_t *source, size_t count,
     return true;
 }
 
+static bool
+append_accesses(const ir_layout_access_t *source, size_t count,
+                uint64_t extent_bits, uint32_t stream_base,
+                core_list_t(n00b_abi_packed_run_v1) *runs,
+                core_list_t(uint32_t) *indexes, n00b_abi_range_v1 *range)
+{
+    *range = (n00b_abi_range_v1){0};
+    if (!count) return true;
+    if (!source || indexes->len > UINT32_MAX - stream_base) return false;
+    range->first = stream_base + (uint32_t)indexes->len;
+    for (size_t i = 0; i < count; i++) {
+        const ir_layout_access_t *access = &source[i];
+        if (!access->unit_width_bits || !access->value_width_bits
+            || access->unit_bit_offset % 8
+            || access->lsb >= access->unit_width_bits
+            || access->value_width_bits
+                > access->unit_width_bits - access->lsb
+            || access->unit_bit_offset > extent_bits
+            || access->lsb > extent_bits - access->unit_bit_offset
+            || access->value_width_bits
+                > extent_bits - access->unit_bit_offset - access->lsb
+            || runs->len >= UINT32_MAX
+            || indexes->len >= UINT32_MAX - stream_base) return false;
+        uint32_t run_index = (uint32_t)runs->len;
+        core_list_push(*runs, ((n00b_abi_packed_run_v1){
+            .unit_byte_offset = access->unit_bit_offset / 8,
+            .unit_width_bits = access->unit_width_bits,
+            .lsb_position = access->lsb,
+            .width_bits = access->value_width_bits,
+        }));
+        core_list_push(*indexes, run_index);
+    }
+    range->count = (uint32_t)(stream_base + indexes->len - range->first);
+    return true;
+}
+
+static bool
+record_policy(const parse_sym_entry_t *owner, uint32_t *out)
+{
+    *out = N00B_ABI_LAYOUT_DEFAULT;
+    if (!owner) return true;
+    n00bb_record_layout_request_t *request = parse_sym_binding(owner,
+        CORE_STRING_STATIC("n00bb.record-layout-request"));
+    if (!request || !request->policy_node) return true;
+    switch (request->policy) {
+    case N00BB_RECORD_DEFAULT: *out = N00B_ABI_LAYOUT_DEFAULT; return true;
+    case N00BB_RECORD_ORDERED: *out = N00B_ABI_LAYOUT_ORDERED; return true;
+    case N00BB_RECORD_C: *out = N00B_ABI_LAYOUT_C; return true;
+    }
+    return false;
+}
+
+static bool
+append_fields(n00bb_abi_type_index_t *index,
+              const n00bb_abi_decl_index_t *declarations,
+              n00bb_abi_name_pool_t *names,
+              const parse_sym_entry_t *owner,
+              const ir_final_layout_t *final, uint32_t parent_type_index,
+              uint32_t stream_base,
+              core_list_t(n00b_abi_field_v1) *fields,
+              core_list_t(n00b_abi_packed_run_v1) *packed,
+              core_list_t(n00b_abi_physical_run_v1) *physical,
+              core_list_t(uint32_t) *indexes,
+              n00b_abi_range_v1 *field_range)
+{
+    *field_range = (n00b_abi_range_v1){0};
+    if (!final->n_members) return true;
+    if (!final->members || !names || final->n_members > UINT32_MAX
+        || fields->len > UINT32_MAX - final->n_members)
+        return false;
+    uint32_t *member_indexes = core_alloc_array(uint32_t, final->n_members);
+    bool valid = true;
+    for (size_t i = 0; valid && i < final->n_members; i++) {
+        const ir_final_member_layout_t *member = &final->members[i];
+        n00b_abi_field_v1 row = {
+            .parent_type_index = parent_type_index,
+            .declaration_ordinal = member->ordinal,
+            .logical_bit_offset = member->bit_offset,
+            .visibility = N00B_ABI_VISIBILITY_PRIVATE,
+        };
+        parse_sym_entry_t *field = owner && owner->member_scope
+            && member->name ? parse_symtab_lookup_in(owner->member_scope,
+                core_string_borrow(member->name, strlen(member->name)))
+            : nullptr;
+        if (owner && member->name
+            && (!field || !field->is_field || field->owner_type != owner
+                || !declarations
+                || !n00bb_abi_decl_find_symbol(declarations, field,
+                                                &row.symbol_index))) {
+            valid = false;
+            break;
+        }
+        core_string_t visibility = field && field->visibility.u8_bytes
+            ? field->visibility : owner ? owner->visibility
+                                      : (core_string_t){0};
+        if (core_string_eq(visibility, CORE_STRING_STATIC("public")))
+            row.visibility = N00B_ABI_VISIBILITY_PUBLIC;
+        if (!member->type || !n00bb_abi_type_index_find(index, member->type,
+                                                         &row.child_type_index)
+            || (member->name && !n00bb_abi_name_pool_encode(names,
+                core_string_borrow(member->name, strlen(member->name)),
+                N00B_ABI_TABLE_FIELD, (uint32_t)fields->len,
+                offsetof(n00b_abi_field_v1, name), &row.name))
+            || !append_accesses(member->accesses, member->n_accesses,
+                final->intrinsic_bits, stream_base, packed, indexes,
+                &row.packed_runs)
+            || !append_runs(member->occupied, member->n_occupied,
+                final->intrinsic_bits, stream_base, physical, indexes,
+                &row.physical_runs)) {
+            valid = false;
+            break;
+        }
+        member_indexes[i] = (uint32_t)fields->len;
+        core_list_push(*fields, row);
+    }
+    if (valid) {
+        if (indexes->len > UINT32_MAX - stream_base
+            || final->n_members > UINT32_MAX - stream_base - indexes->len)
+            valid = false;
+        else {
+            *field_range = (n00b_abi_range_v1){
+                .first = stream_base + (uint32_t)indexes->len,
+                .count = (uint32_t)final->n_members,
+            };
+            for (size_t i = 0; i < final->n_members; i++)
+                core_list_push(*indexes, member_indexes[i]);
+        }
+    }
+    core_free(member_indexes);
+    return valid;
+}
+
 bool
 n00bb_abi_type_layout_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *comptime,
     ir_module_t *runtime, uint32_t stream_base,
+    const n00bb_abi_decl_index_t *declarations,
+    n00bb_abi_name_pool_t *names,
     n00bb_abi_type_identity_rows_t *types,
     n00bb_abi_type_layout_rows_t *out)
 {
@@ -133,10 +270,16 @@ n00bb_abi_type_layout_rows_build(
         return false;
     core_list_t(n00b_abi_layout_v1) layouts = {0};
     core_list_t(n00b_abi_physical_run_v1) runs = {0};
+    core_list_t(n00b_abi_packed_run_v1) packed = {0};
+    core_list_t(n00b_abi_field_v1) fields = {0};
     core_list_t(uint32_t) indexes = {0};
     uint32_t *type_layout_indexes = core_alloc_array(uint32_t, types->count);
+    n00b_abi_range_v1 *type_field_ranges = core_alloc_array(
+        n00b_abi_range_v1, types->count);
     core_list_push(layouts, ((n00b_abi_layout_v1){0}));
     core_list_push(runs, ((n00b_abi_physical_run_v1){0}));
+    core_list_push(packed, ((n00b_abi_packed_run_v1){0}));
+    core_list_push(fields, ((n00b_abi_field_v1){0}));
     bool valid = true;
     for (size_t i = 0; valid && i < types->count; i++) {
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
@@ -151,9 +294,17 @@ n00bb_abi_type_layout_rows_build(
             break;
         }
         if (!final) final = compile_layout;
-        if (!final) continue;
+        if (!final) {
+            if (types->owners && types->owners[i]
+                && core_string_eq(types->owners[i]->adt_kind,
+                                  CORE_STRING_STATIC("record")))
+                valid = false;
+            continue;
+        }
         if (!final->alignment_bytes || final->has_discriminant
-            || final->n_members || layouts.len >= UINT32_MAX
+            || (final->n_members
+                && types->rows[i].kind != N00B_ABI_TYPE_RECORD)
+            || layouts.len >= UINT32_MAX
             || types->rows[i].size_bits != final->intrinsic_bits
             || types->rows[i].alignment_bytes != final->alignment_bytes) {
             valid = false;
@@ -163,31 +314,44 @@ n00bb_abi_type_layout_rows_build(
             .type_index = (uint32_t)i,
             .policy = N00B_ABI_LAYOUT_DEFAULT,
         };
-        valid = append_runs(final->occupied, final->n_occupied,
+        const parse_sym_entry_t *owner = types->owners
+            ? types->owners[i] : nullptr;
+        valid = record_policy(owner, &row.policy)
+            && append_runs(final->occupied, final->n_occupied,
             final->intrinsic_bits, stream_base, &runs, &indexes,
             &row.occupied_runs)
             && append_runs(final->reserved, final->n_reserved,
                 final->intrinsic_bits, stream_base, &runs, &indexes,
-                &row.reserved_runs);
+                &row.reserved_runs)
+            && append_fields(index, declarations, names, owner, final,
+                (uint32_t)i, stream_base, &fields, &packed, &runs,
+                &indexes, &type_field_ranges[i]);
         if (!valid) break;
         type_layout_indexes[i] = (uint32_t)layouts.len;
         core_list_push(layouts, row);
     }
     if (valid) {
-        for (size_t i = 0; i < types->count; i++)
+        for (size_t i = 0; i < types->count; i++) {
             types->rows[i].layout_index = type_layout_indexes[i];
+            types->rows[i].fields_or_arms = type_field_ranges[i];
+        }
         *out = (n00bb_abi_type_layout_rows_t){
             .layouts = layouts.data, .layout_count = layouts.len,
             .runs = runs.data, .run_count = runs.len,
-            .run_indexes = indexes.data, .run_index_count = indexes.len,
+            .packed_runs = packed.data, .packed_run_count = packed.len,
+            .fields = fields.data, .field_count = fields.len,
+            .stream_indexes = indexes.data, .stream_index_count = indexes.len,
         };
     }
     else {
         core_list_free(layouts);
         core_list_free(runs);
+        core_list_free(packed);
+        core_list_free(fields);
         core_list_free(indexes);
     }
     core_free(type_layout_indexes);
+    core_free(type_field_ranges);
     return valid;
 }
 
@@ -197,6 +361,8 @@ n00bb_abi_type_layout_rows_release(n00bb_abi_type_layout_rows_t *rows)
     if (!rows) return;
     core_free(rows->layouts);
     core_free(rows->runs);
-    core_free(rows->run_indexes);
+    core_free(rows->packed_runs);
+    core_free(rows->fields);
+    core_free(rows->stream_indexes);
     *rows = (n00bb_abi_type_layout_rows_t){0};
 }

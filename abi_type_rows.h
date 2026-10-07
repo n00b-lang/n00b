@@ -10,6 +10,7 @@
 
 typedef struct {
     n00b_abi_type_v1 *rows;
+    parse_sym_entry_t **owners;
     size_t count;
 } n00bb_abi_type_identity_rows_t;
 

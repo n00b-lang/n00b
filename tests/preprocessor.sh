@@ -3,6 +3,7 @@ set -eu
 compiler_dir="$(CDPATH= cd -- "$(dirname -- "$1")" && pwd)"
 compiler="$compiler_dir/$(basename -- "$1")"
 storage_interface_writer="$2"
+abi_record_object_test="$3"
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 program_dir="$script_dir/programs/preprocessor"
 tmp="$(mktemp -d)"
@@ -1375,6 +1376,11 @@ grep -q '^pdg @add ' "$tmp/lower_arithmetic.ir_and_pdg"
     "$program_dir/../abi/empty.n00b"
 [ -s "$tmp/empty_abi.o" ]
 LC_ALL=C grep -q 'N00BMETA' "$tmp/empty_abi.o"
+"$compiler" compile --output "$tmp/record_abi.o" \
+    "$program_dir/../abi/record.n00b"
+[ -s "$tmp/record_abi.o" ]
+LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
+"$abi_record_object_test" "$tmp/record_abi.o"
 for command in build library compile; do
     if "$compiler" "$command" --dump-ir --dump-control-flow --dump-pdg \
         "$program_dir/lower_arithmetic.n00b" >"$tmp/$command.dumps" 2>&1; then
@@ -1386,7 +1392,7 @@ for command in build library compile; do
     grep -q '^execution-graph:$' "$tmp/$command.dumps"
     grep -q '^pdg @add ' "$tmp/$command.dumps"
     if [ "$command" = compile ]; then
-        grep -q 'this ABI emitter path cannot omit local declarations' \
+        grep -q 'this ABI emitter path supports only record types and fields' \
             "$tmp/$command.dumps"
     else
         grep -q "'$command' processing is not implemented yet" \

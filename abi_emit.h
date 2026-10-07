@@ -9,6 +9,7 @@
 #include "lib/module.h"
 #include "ir/ir.h"
 #include "parse/symtab.h"
+#include "scanner/token_stream.h"
 
 typedef struct {
     uint32_t kind;
@@ -42,13 +43,12 @@ bool n00bb_abi_write_object(
     const core_object_emit_absolute64_t *relocations,
     size_t relocation_count, uint8_t **out_image, size_t *out_size);
 
-/* The first supported TU case: a finalized, acyclic unit with no local
- * declarations, globals, or executable initializer body. Builtin types and
- * no-op synthesized initializers are allowed. Other units fail rather than
- * emitting incomplete metadata. The caller owns both outputs. */
-bool n00bb_abi_emit_empty_unit(
+/* Emits a finalized acyclic TU with no executable code or global storage.
+ * Record declarations and fields are supported; unsupported declarations
+ * fail instead of producing incomplete metadata. The caller owns outputs. */
+bool n00bb_abi_emit_unit(
     core_translation_unit_t *unit, core_string_t package_id,
-    const parse_symtab_t *symbols,
+    const parse_symtab_t *symbols, parse_token_stream_t *tokens,
     const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
     const core_target_desc_t *target, uint64_t artifact_capabilities,
     n00bb_abi_packed_tables_t *out_tables,

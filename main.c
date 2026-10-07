@@ -7,6 +7,7 @@
 #include "abi_layout.h"
 #include "abi_emit.h"
 #include "abi_record_layout.h"
+#include "record_layout_request.h"
 #include "global_metadata.h"
 #include "llvm_backend.h"
 #include "n00b-abi-v1.h"
@@ -735,13 +736,6 @@ typedef struct {
     uint64_t magnitude_bits;
     bool is_signed;
 } n00bb_enum_range_t;
-
-typedef struct {
-    n00bb_record_policy_t policy;
-    parse_tree_t *policy_node;
-    parse_tree_t *alignment_expression;
-    parse_tree_t *alignment_node;
-} n00bb_record_layout_request_t;
 
 typedef struct {
     ir_uint_t mask;
@@ -19912,6 +19906,7 @@ register_record_semantic_shape(parse_grammar_t *grammar,
         if (!symbol || symbol->kind != PARSE_SYM_TYPEDEF) valid = false;
         else {
             symbol->type = named;
+            symbol->adt_kind = CORE_STRING_STATIC("record");
             core_tree_node_value(declaration).type = named;
         }
     }
@@ -37380,11 +37375,99 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
 }
 
 static bool
+publish_declared_record_layouts(n00bb_link_analysis_t *analysis)
+{
+    core_list_t(parse_sym_entry_ptr_t) records =
+        core_list_new(parse_sym_entry_ptr_t);
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        parse_symtab_t *symbols = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        if (!symbols) { core_list_free(records); return false; }
+        for (parse_scope_t *scope = symbols->all_scopes; scope;
+             scope = scope->all_next)
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope)
+                if (symbol->kind == PARSE_SYM_TYPEDEF && symbol->type
+                    && core_string_eq(symbol->adt_kind,
+                                      CORE_STRING_STATIC("record")))
+                    core_list_push(records, symbol);
+    }
+
+    bool valid = true;
+    for (size_t u = 0; valid && u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        ir_module_t *modules[] = {state->comptime_ir_module,
+                                  state->ir_module};
+        for (size_t m = 0; valid && m < sizeof(modules) / sizeof(*modules);
+             m++) {
+            ir_module_t *module = modules[m];
+            if (!module) { valid = false; break; }
+            bool progress;
+            do {
+                progress = false;
+                for (size_t i = 0; valid && i < records.len; i++) {
+                    parse_sym_entry_t *symbol = records.data[i];
+                    th_type *type = th_apply_subst(ir_module_types(module),
+                                                   symbol->type);
+                    if (!type) { valid = false; break; }
+                    if (ir_layout_final(module, type, analysis->target.triple))
+                        continue;
+                    th_type *definition = ir_type_definition(module, type);
+                    if (!definition || th_kind_of(definition) != TH_RECORD)
+                        continue;
+                    size_t count = th_record_len(definition);
+                    if (count > UINT32_MAX) { valid = false; break; }
+                    n00bb_abi_record_member_t *members = count
+                        ? core_alloc_array(n00bb_abi_record_member_t, count)
+                        : nullptr;
+                    bool ready = !count || members != nullptr;
+                    for (size_t j = 0; ready && j < count; j++) {
+                        const th_member *member = th_record_member(definition,
+                                                                    j);
+                        th_type *child_type = member && member->type
+                            ? th_apply_subst(ir_module_types(module),
+                                             member->type) : nullptr;
+                        const ir_final_layout_t *child = child_type
+                            ? ir_layout_final(module, child_type,
+                                              analysis->target.triple) : nullptr;
+                        if (!member || !member->name || !child) {
+                            ready = false;
+                            break;
+                        }
+                        bool packable = child->n_occupied == 1
+                            && child->occupied[0].offset == 0
+                            && child->occupied[0].width < child->intrinsic_bits
+                            && !child->n_reserved;
+                        members[j] = (n00bb_abi_record_member_t){
+                            .name = member->name,
+                            .type = child_type,
+                            .ordinal = (uint32_t)j,
+                            .packed = packable,
+                        };
+                    }
+                    if (ready) {
+                        valid = n00bb_abi_publish_record_layout(module,
+                            type, &analysis->target, N00BB_RECORD_DEFAULT,
+                            false, members, count);
+                        progress = valid;
+                    }
+                    core_free(members);
+                }
+            } while (valid && progress);
+        }
+    }
+    core_list_free(records);
+    return valid;
+}
+
+static bool
 select_storage_placement(n00bb_link_analysis_t *analysis)
 {
     if (!analysis || !validate_inline_layout_cycles(analysis)
         || !publish_known_scalar_layouts(analysis)
         || !publish_requested_c_record_layouts(analysis)
+        || !publish_declared_record_layouts(analysis)
         || !reject_unlowered_record_layout_requests(analysis)) return false;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
@@ -45632,7 +45715,7 @@ n00bb_prepare_codegen(n00bb_link_analysis_t *analysis, bool debug_enabled,
 }
 
 static bool
-n00bb_emit_empty_abi_artifact(core_link_unit_t *link,
+n00bb_emit_abi_artifact(core_link_unit_t *link,
                               n00bb_link_analysis_t *analysis,
                               parse_cmdr_result_t *args, bool debug_enabled,
                               core_diagnostics_t *diagnostics)
@@ -45640,14 +45723,16 @@ n00bb_emit_empty_abi_artifact(core_link_unit_t *link,
     core_translation_unit_t *unit = link && core_link_unit_root_count(link) == 1
         ? core_link_unit_root(link, 0) : nullptr;
     n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-    if (!analysis || !state || !state->annotations
+    if (!analysis || !state || !state->lex || !state->lex->tokens
+        || !state->annotations
         || !state->ir_module || !state->comptime_ir_module)
         return false;
     n00bb_abi_packed_tables_t packed = {0};
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
-    bool emitted = n00bb_abi_emit_empty_unit(unit, n00bb_package_id(unit),
-        state->annotations->symtab, state->comptime_ir_module,
+    bool emitted = n00bb_abi_emit_unit(unit, n00bb_package_id(unit),
+        state->annotations->symtab, state->lex->tokens,
+        state->comptime_ir_module,
         state->ir_module, &analysis->target,
         debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
         &packed, &object, &object_bytes);
@@ -45898,7 +45983,7 @@ main(int argc, char **argv)
     }
     bool compile_emitted = false;
     if (located && compile_command)
-        compile_emitted = located = n00bb_emit_empty_abi_artifact(
+        compile_emitted = located = n00bb_emit_abi_artifact(
             link, link_analysis, args, !preprocessor_options.release_mode,
             cli_diagnostics);
     if (located && parse_cmdr_flag_present(args,

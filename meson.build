@@ -115,7 +115,8 @@ abi_emit_test = executable(
     'abi-emit-test',
     ['tests/abi_emit.c', 'abi_emit.c', 'abi_emit_strings.c',
      'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
-     'abi_type_signatures.c',
+     'abi_type_signatures.c', 'abi_decl_index.c',
+     'abi_declarations.c',
      'abi_container.c',
      'abi_directory.c'],
     dependencies: lantern,
@@ -127,13 +128,20 @@ abi_emit_unit_test = executable(
     'abi-emit-unit-test',
     ['tests/abi_emit_unit.c', 'abi_emit.c', 'abi_emit_strings.c',
      'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
-     'abi_type_signatures.c',
+     'abi_type_signatures.c', 'abi_decl_index.c',
+     'abi_declarations.c',
      'abi_container.c',
      'abi_directory.c', 'abi_string.c'],
     dependencies: lantern,
 )
 
 test('abi-emit-unit', abi_emit_unit_test)
+
+abi_record_object_test = executable(
+    'abi-record-object-test',
+    ['tests/abi_record_object.c', 'abi_container.c', 'abi_directory.c'],
+    dependencies: lantern,
+)
 
 abi_emit_strings_test = executable(
     'abi-emit-strings-test',
@@ -155,7 +163,8 @@ test('abi-type-rows', abi_type_rows_test)
 abi_type_layout_rows_test = executable(
     'abi-type-layout-rows-test',
     ['tests/abi_type_layout_rows.c', 'abi_type_layout_rows.c',
-     'abi_type_rows.c', 'abi_type_index.c', 'abi_emit_strings.c'],
+     'abi_type_rows.c', 'abi_type_index.c', 'abi_emit_strings.c',
+     'abi_decl_index.c'],
     dependencies: lantern,
 )
 
@@ -209,7 +218,8 @@ test(
     'preprocessor',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'preprocessor.sh',
-           n00bb_exe.full_path(), storage_interface_writer.full_path()],
+           n00bb_exe.full_path(), storage_interface_writer.full_path(),
+           abi_record_object_test.full_path()],
     env: ['N00BB_STACK_OBJECT_LIMIT_BYTES='
         + get_option('stack_object_limit_bytes').to_string()],
     timeout: 120,

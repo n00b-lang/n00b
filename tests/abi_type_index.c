@@ -38,8 +38,9 @@ main(void)
     assert(node_index != 0);
     uint32_t record_index = UINT32_MAX;
     uint32_t ref_index = UINT32_MAX;
-    assert(n00bb_abi_type_index_find(index, record, &record_index));
+    assert(!n00bb_abi_type_index_find(index, record, &record_index));
     assert(n00bb_abi_type_index_find(index, node_ref, &ref_index));
+    assert(n00bb_abi_type_index_add(index, record, &record_index));
     assert(record_index != node_index && ref_index != node_index);
     size_t recursive_count = n00bb_abi_type_index_count(index);
     assert(n00bb_abi_type_index_add(index, node, &node_index));

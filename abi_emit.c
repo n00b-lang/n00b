@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include "abi_container.h"
+#include "abi_decl_index.h"
+#include "abi_declarations.h"
 #include "abi_emit_strings.h"
 #include "abi_type_index.h"
 #include "abi_type_layout_rows.h"
@@ -231,7 +233,7 @@ n00bb_abi_write_object(
 }
 
 static bool
-empty_unit_error(core_translation_unit_t *unit, const char *message)
+abi_unit_error(core_translation_unit_t *unit, const char *message)
 {
     core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
@@ -256,41 +258,57 @@ phase_has_only_trivial_initializer(const ir_module_t *module)
 }
 
 bool
-n00bb_abi_emit_empty_unit(
+n00bb_abi_emit_unit(
     core_translation_unit_t *unit, core_string_t package_id,
-    const parse_symtab_t *symbols,
+    const parse_symtab_t *symbols, parse_token_stream_t *tokens,
     const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
     const core_target_desc_t *target, uint64_t artifact_capabilities,
     n00bb_abi_packed_tables_t *out_tables,
     uint8_t **out_object, size_t *out_object_bytes)
 {
-    if (!unit || !symbols || !comptime_ir || !runtime_ir || !target
+    if (!unit || !symbols || !tokens || !comptime_ir || !runtime_ir || !target
         || !target->triple || !unit->module.identifier.data
         || !out_tables || !out_object || !out_object_bytes
         || !package_id.data || core_translation_unit_has_fatal_diagnostics(unit))
         return false;
-    for (const parse_scope_t *scope = symbols->all_scopes;
-         scope; scope = scope->all_next)
-        for (const parse_sym_entry_t *symbol = scope->first_in_scope;
-             symbol; symbol = symbol->next_in_scope)
-            if (symbol->decl_node || symbol->definition_count)
-                return empty_unit_error(unit,
-                    "this ABI emitter path cannot omit local declarations");
+    n00bb_abi_decl_index_t *declarations = n00bb_abi_decl_index_new(symbols);
+    if (!declarations)
+        return abi_unit_error(unit, "could not index local ABI declarations");
+    for (size_t i = 1; i < n00bb_abi_decl_symbol_count(declarations); i++) {
+        parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
+                                                               (uint32_t)i);
+        bool record = symbol && symbol->kind == PARSE_SYM_TYPEDEF
+            && core_string_eq(symbol->adt_kind,
+                              CORE_STRING_STATIC("record"));
+        bool field = symbol && symbol->kind == PARSE_SYM_VARIABLE
+            && symbol->is_field && symbol->owner_type
+            && core_string_eq(symbol->owner_type->adt_kind,
+                              CORE_STRING_STATIC("record"));
+        if (!record && !field) {
+            n00bb_abi_decl_index_free(declarations);
+            return abi_unit_error(unit,
+                "this ABI emitter path supports only record types and fields");
+        }
+    }
     if (!core_translation_unit_imports_finalized(unit)
         || core_translation_unit_import_count(unit)
         || !phase_has_only_trivial_initializer(comptime_ir)
-        || !phase_has_only_trivial_initializer(runtime_ir))
-        return empty_unit_error(unit,
-            "this ABI emitter path requires no imports, declarations, globals, or executable initializer body");
+        || !phase_has_only_trivial_initializer(runtime_ir)) {
+        n00bb_abi_decl_index_free(declarations);
+        return abi_unit_error(unit,
+            "this ABI emitter path requires no imports, globals, or executable initializer body");
+    }
     const char *runtime_name = ir_module_name(runtime_ir);
     if (!runtime_name || strlen(runtime_name) != unit->module.identifier.u8_bytes
         || memcmp(runtime_name, unit->module.identifier.data,
                   unit->module.identifier.u8_bytes)
         || !ir_module_target(runtime_ir) || !ir_module_target(comptime_ir)
         || strcmp(ir_module_target(runtime_ir), target->triple)
-        || strcmp(ir_module_target(comptime_ir), target->triple))
-        return empty_unit_error(unit,
+        || strcmp(ir_module_target(comptime_ir), target->triple)) {
+        n00bb_abi_decl_index_free(declarations);
+        return abi_unit_error(unit,
             "ABI unit identity or target does not match its IR modules");
+    }
 
     n00b_abi_package_v1 packages[2] = {0};
     n00b_abi_module_v1 modules[2] = {0};
@@ -314,21 +332,28 @@ n00bb_abi_emit_empty_unit(
     n00bb_abi_type_components_t components = {0};
     n00bb_abi_type_layout_rows_t layout_rows = {0};
     n00bb_abi_type_signatures_t signature_rows = {0};
+    n00bb_abi_declarations_t declaration_rows = {0};
     bool valid = pool && type_index
+        && n00bb_abi_type_index_collect_symbols(type_index, symbols)
         && n00bb_abi_type_identity_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
             symbols, pool, &type_rows)
-        && type_rows.count == 1
         && n00bb_abi_type_components_build(type_index,
             (ir_module_t *)runtime_ir, 1, &type_rows, &components)
         && n00bb_abi_type_layout_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-            1 + (uint32_t)components.count,
+            1 + (uint32_t)components.count, declarations, pool,
             &type_rows, &layout_rows)
         && n00bb_abi_type_signatures_build(type_index, &type_rows, pool,
             1 + (uint32_t)components.count
-                + (uint32_t)layout_rows.run_index_count,
-            &signature_rows);
+                + (uint32_t)layout_rows.stream_index_count,
+            &signature_rows)
+        && n00bb_abi_declarations_build(declarations, type_index,
+            &type_rows, unit, tokens, pool,
+            1 + (uint32_t)components.count
+                + (uint32_t)layout_rows.stream_index_count
+                + (uint32_t)signature_rows.parameter_index_count,
+            &declaration_rows);
     n00bb_abi_type_index_free(type_index);
     valid = valid && n00bb_abi_name_pool_encode(pool, package_id,
         N00B_ABI_TABLE_PACKAGE, 1, offsetof(n00b_abi_package_v1, name),
@@ -341,28 +366,36 @@ n00bb_abi_emit_empty_unit(
             N00B_ABI_TABLE_SOURCE_FILE, 1,
             offsetof(n00b_abi_source_file_v1, path), &sources[1].path);
     if (!valid) {
+        n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
         n00bb_abi_type_layout_rows_release(&layout_rows);
         n00bb_abi_type_components_release(&components);
         n00bb_abi_type_identity_rows_release(&type_rows);
         n00bb_abi_name_pool_free(pool);
-        return empty_unit_error(unit, "could not build ABI identity and layout rows");
+        n00bb_abi_decl_index_free(declarations);
+        return abi_unit_error(unit, "could not build ABI type and declaration rows");
     }
 
-    size_t stream_count = 1 + components.count + layout_rows.run_index_count
-        + signature_rows.parameter_index_count;
+    size_t stream_count = 1 + components.count + layout_rows.stream_index_count
+        + signature_rows.parameter_index_count
+        + declaration_rows.stream_index_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
     stream[0] = package_modules[0];
     if (components.count)
         memcpy(stream + 1, components.indexes,
                components.count * sizeof(*stream));
-    if (layout_rows.run_index_count)
-        memcpy(stream + 1 + components.count, layout_rows.run_indexes,
-               layout_rows.run_index_count * sizeof(*stream));
+    if (layout_rows.stream_index_count)
+        memcpy(stream + 1 + components.count, layout_rows.stream_indexes,
+               layout_rows.stream_index_count * sizeof(*stream));
     if (signature_rows.parameter_index_count)
-        memcpy(stream + 1 + components.count + layout_rows.run_index_count,
+        memcpy(stream + 1 + components.count + layout_rows.stream_index_count,
                signature_rows.parameter_indexes,
                signature_rows.parameter_index_count * sizeof(*stream));
+    if (declaration_rows.stream_index_count)
+        memcpy(stream + 1 + components.count + layout_rows.stream_index_count
+                   + signature_rows.parameter_index_count,
+               declaration_rows.stream_indexes,
+               declaration_rows.stream_index_count * sizeof(*stream));
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
         {N00B_ABI_TABLE_MODULE, modules, 2},
@@ -371,10 +404,20 @@ n00bb_abi_emit_empty_unit(
          layout_rows.layout_count},
         {N00B_ABI_TABLE_PHYSICAL_RUN, layout_rows.runs,
          layout_rows.run_count},
+        {N00B_ABI_TABLE_PACKED_RUN, layout_rows.packed_runs,
+         layout_rows.packed_run_count},
+        {N00B_ABI_TABLE_FIELD, layout_rows.fields,
+         layout_rows.field_count},
         {N00B_ABI_TABLE_CALL_SIGNATURE, signature_rows.signatures,
          signature_rows.signature_count},
         {N00B_ABI_TABLE_PARAMETER, signature_rows.parameters,
          signature_rows.parameter_count},
+        {N00B_ABI_TABLE_SCOPE, declaration_rows.scopes,
+         declaration_rows.scope_count},
+        {N00B_ABI_TABLE_SYMBOL, declaration_rows.symbols,
+         declaration_rows.symbol_count},
+        {N00B_ABI_TABLE_SOURCE_LOCATION, declaration_rows.locations,
+         declaration_rows.location_count},
         {N00B_ABI_TABLE_SOURCE_FILE, sources, 2},
         {N00B_ABI_TABLE_RUNTIME_CONFIG, runtime_configs, 2},
         {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
@@ -384,12 +427,14 @@ n00bb_abi_emit_empty_unit(
         rows, sizeof(rows) / sizeof(*rows), &packed);
     core_free(stream);
     if (!valid) {
+        n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
         n00bb_abi_type_layout_rows_release(&layout_rows);
         n00bb_abi_type_components_release(&components);
         n00bb_abi_type_identity_rows_release(&type_rows);
         n00bb_abi_name_pool_free(pool);
-        return empty_unit_error(unit, "could not pack ABI identity tables");
+        n00bb_abi_decl_index_free(declarations);
+        return abi_unit_error(unit, "could not pack ABI tables");
     }
 
     n00bb_abi_image_key_t key;
@@ -436,14 +481,16 @@ n00bb_abi_emit_empty_unit(
             relocations, relocation_count,
             &object, &object_bytes);
     core_free(relocations);
+    n00bb_abi_declarations_release(&declaration_rows);
     n00bb_abi_type_signatures_release(&signature_rows);
     n00bb_abi_type_layout_rows_release(&layout_rows);
     n00bb_abi_type_components_release(&components);
     n00bb_abi_type_identity_rows_release(&type_rows);
     n00bb_abi_name_pool_free(pool);
+    n00bb_abi_decl_index_free(declarations);
     if (!valid) {
         n00bb_abi_packed_tables_release(&packed);
-        return empty_unit_error(unit, "could not write ABI identity object");
+        return abi_unit_error(unit, "could not write ABI object");
     }
     *out_tables = packed;
     *out_object = object;

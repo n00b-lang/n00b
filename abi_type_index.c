@@ -93,7 +93,10 @@ add_children(n00bb_abi_type_index_t *index, th_type *type)
             if (!arg || (arg->kind == TH_ARG_TYPE
                          && !add_optional(index, arg->type))) return false;
         }
-        return add_optional(index, ir_type_definition(index->module, type));
+        th_type *definition = ir_type_definition(index->module, type);
+        return definition && th_kind_of(definition) == TH_RECORD
+            ? add_children(index, definition)
+            : add_optional(index, definition);
     case TH_BITINT:
     case TH_BOUND:
         return true;

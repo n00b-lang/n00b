@@ -6,22 +6,29 @@
 
 #include "abi_type_index.h"
 #include "abi_type_rows.h"
+#include "abi_decl_index.h"
 
 typedef struct {
     n00b_abi_layout_v1 *layouts;
     size_t layout_count;
     n00b_abi_physical_run_v1 *runs;
     size_t run_count;
-    uint32_t *run_indexes;
-    size_t run_index_count;
+    n00b_abi_packed_run_v1 *packed_runs;
+    size_t packed_run_count;
+    n00b_abi_field_v1 *fields;
+    size_t field_count;
+    uint32_t *stream_indexes;
+    size_t stream_index_count;
 } n00bb_abi_type_layout_rows_t;
 
 /* Appends finalized physical layouts to type identity rows. `stream_base`
- * reserves earlier U32-stream entries such as package membership. Field,
- * tag, and tracing tables are supplied by the complete emitter. */
+ * reserves earlier U32-stream entries. Record fields use the same finalized
+ * layout and the TU's indexed symbol declarations. */
 bool n00bb_abi_type_layout_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *comptime,
     ir_module_t *runtime, uint32_t stream_base,
+    const n00bb_abi_decl_index_t *declarations,
+    n00bb_abi_name_pool_t *names,
     n00bb_abi_type_identity_rows_t *types,
     n00bb_abi_type_layout_rows_t *out);
 void n00bb_abi_type_layout_rows_release(
