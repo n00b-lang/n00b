@@ -22,6 +22,16 @@ find_entry(const n00bb_abi_directory_entry_t *entries, size_t count,
     return nullptr;
 }
 
+static bool
+contains_bytes(const uint8_t *haystack, size_t haystack_size,
+               const char *needle, size_t needle_size)
+{
+    if (needle_size > haystack_size) return false;
+    for (size_t i = 0; i <= haystack_size - needle_size; i++)
+        if (!memcmp(haystack + i, needle, needle_size)) return true;
+    return false;
+}
+
 static void
 check_empty_unit(const char *triple, uint32_t target_id,
                  const char *metadata_segment, const char *metadata_name,
@@ -56,9 +66,10 @@ check_empty_unit(const char *triple, uint32_t target_id,
     n00bb_abi_packed_tables_t packed = {0};
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
-    assert(n00bb_abi_emit_unit(&unit, CORE_STRING_STATIC("default"),
+    assert(n00bb_abi_emit_unit(nullptr, &unit,
+        CORE_STRING_STATIC("default"),
         symbols, tokens, comptime, runtime,
-        &target, N00B_ABI_CAP_DEBUG, nullptr, nullptr,
+        &target, N00B_ABI_CAP_DEBUG, nullptr, nullptr, nullptr, nullptr,
         &packed, &object, &object_bytes));
     assert(!core_translation_unit_has_fatal_diagnostics(&unit));
 
@@ -166,9 +177,10 @@ check_empty_unit(const char *triple, uint32_t target_id,
     assert(core_object_section_find(object, object_bytes,
         target.object_format, pool_segment, pool_name, &pool));
     assert(pool.size == sizeof(module_name) - 1 + sizeof(source_path) - 1);
-    assert(!memcmp(pool.bytes, module_name, sizeof(module_name) - 1));
-    assert(!memcmp(pool.bytes + sizeof(module_name) - 1,
-                   source_path, sizeof(source_path) - 1));
+    assert(contains_bytes(pool.bytes, pool.size,
+        module_name, sizeof(module_name) - 1));
+    assert(contains_bytes(pool.bytes, pool.size,
+        source_path, sizeof(source_path) - 1));
     uint64_t module_pointer = module_entry->file_offset
         + module_entry->record_bytes + offsetof(n00b_abi_module_v1, full_path);
     uint64_t source_pointer = source_entry->file_offset
@@ -190,9 +202,10 @@ check_empty_unit(const char *triple, uint32_t target_id,
     n00bb_abi_packed_tables_t rejected = {0};
     uint8_t *rejected_object = nullptr;
     size_t rejected_bytes = 0;
-    assert(!n00bb_abi_emit_unit(&unit, CORE_STRING_STATIC("default"),
+    assert(!n00bb_abi_emit_unit(nullptr, &unit,
+        CORE_STRING_STATIC("default"),
         symbols, tokens, comptime, runtime, &target, N00B_ABI_CAP_DEBUG,
-        nullptr, nullptr,
+        nullptr, nullptr, nullptr, nullptr,
         &rejected, &rejected_object, &rejected_bytes));
     assert(!rejected.bytes && !rejected_object && !rejected_bytes);
     assert(core_translation_unit_has_fatal_diagnostics(&unit));

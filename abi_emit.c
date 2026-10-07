@@ -17,7 +17,6 @@
 #include "lib/alloc.h"
 #include "lib/byteorder.h"
 #include "lib/diagnostic.h"
-#include "lib/hash.h"
 #include "lib/object_section.h"
 
 static bool
@@ -261,13 +260,30 @@ phase_has_only_trivial_initializer(const ir_module_t *module)
     return true;
 }
 
+static bool
+unit_has_recursive_imports(core_link_unit_t *link,
+                           core_translation_unit_t *unit)
+{
+    for (size_t i = 0; i < core_translation_unit_import_count(unit); i++)
+        if (core_translation_unit_import(unit, i) == unit) return true;
+    for (size_t i = 0; i < core_link_unit_scc_count(link); i++) {
+        size_t members = core_link_unit_scc_member_count(link, i);
+        if (members < 2) continue;
+        for (size_t j = 0; j < members; j++)
+            if (core_link_unit_scc_member(link, i, j) == unit) return true;
+    }
+    return false;
+}
+
 bool
 n00bb_abi_emit_unit(
-    core_translation_unit_t *unit, core_string_t package_id,
+    core_link_unit_t *link, core_translation_unit_t *unit,
+    core_string_t package_id,
     const parse_symtab_t *symbols, parse_token_stream_t *tokens,
     const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
     const core_target_desc_t *target, uint64_t artifact_capabilities,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
+    n00bb_abi_node_source_fn node_source, void *source_context,
     n00bb_abi_packed_tables_t *out_tables,
     uint8_t **out_object, size_t *out_object_bytes)
 {
@@ -276,6 +292,9 @@ n00bb_abi_emit_unit(
         || !out_tables || !out_object || !out_object_bytes
         || !package_id.data || core_translation_unit_has_fatal_diagnostics(unit))
         return false;
+    if (link && !node_source)
+        return abi_unit_error(unit,
+            "linked ABI emission requires source ownership for syntax nodes");
     n00bb_abi_decl_index_t *declarations = n00bb_abi_decl_index_new(symbols);
     if (!declarations)
         return abi_unit_error(unit, "could not index local ABI declarations");
@@ -308,12 +327,23 @@ n00bb_abi_emit_unit(
         }
     }
     if (!core_translation_unit_imports_finalized(unit)
-        || core_translation_unit_import_count(unit)
         || !phase_has_only_trivial_initializer(comptime_ir)
         || !phase_has_only_trivial_initializer(runtime_ir)) {
         n00bb_abi_decl_index_free(declarations);
         return abi_unit_error(unit,
-            "this ABI emitter path requires no imports, globals, or executable initializer body");
+            "this ABI emitter path requires no globals or executable initializer body");
+    }
+    size_t import_count = core_translation_unit_import_count(unit);
+    if (import_count && (!link || !core_link_unit_graph_is_finalized(link)
+        || import_count >= UINT32_MAX)) {
+        n00bb_abi_decl_index_free(declarations);
+        return abi_unit_error(unit,
+            "ABI emission for imports requires a finalized link graph");
+    }
+    if (import_count && unit_has_recursive_imports(link, unit)) {
+        n00bb_abi_decl_index_free(declarations);
+        return abi_unit_error(unit,
+            "ABI emission for recursive imports requires SCC metadata");
     }
     const char *runtime_name = ir_module_name(runtime_ir);
     if (!runtime_name || strlen(runtime_name) != unit->module.identifier.u8_bytes
@@ -329,18 +359,19 @@ n00bb_abi_emit_unit(
 
     n00b_abi_package_v1 packages[2] = {0};
     n00b_abi_module_v1 modules[2] = {0};
-    n00b_abi_source_file_v1 sources[2] = {0};
     n00b_abi_runtime_config_v1 runtime_configs[2] = {0};
+    n00b_abi_requirement_v1 *requirements = core_alloc_array(
+        n00b_abi_requirement_v1, import_count + 1);
+    for (size_t i = 0; i < import_count; i++) {
+        requirements[i + 1].symbol_kind = N00B_ABI_SYMBOL_MODULE;
+        requirements[i + 1].requesting_module_index = 1;
+    }
     uint32_t package_modules[1] = {1};
     packages[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     packages[1].modules = (n00b_abi_range_v1){.first = 0, .count = 1};
     modules[1].package_index = 1;
     modules[1].runtime_config_index = 1;
     modules[1].source_file_index = 1;
-    const char *source_bytes = core_source_file_contents(&unit->source);
-    size_t source_size = core_source_file_size(&unit->source);
-    sources[1].source_identity = core_xxh3_64bits_raw(
-        source_bytes ? source_bytes : "", source_size);
 
     n00bb_abi_name_pool_t *pool = n00bb_abi_name_pool_new();
     n00bb_abi_type_index_t *type_index = n00bb_abi_type_index_new(
@@ -373,7 +404,7 @@ n00bb_abi_emit_unit(
                 + (uint32_t)enum_rows.stream_index_count,
             &signature_rows)
         && n00bb_abi_declarations_build(declarations, type_index,
-            &type_rows, unit, tokens, pool,
+            &type_rows, unit, tokens, pool, node_source, source_context,
             1 + (uint32_t)components.count
                 + (uint32_t)layout_rows.stream_index_count
                 + (uint32_t)enum_rows.stream_index_count
@@ -397,12 +428,19 @@ n00bb_abi_emit_unit(
         &packages[1].name)
         && n00bb_abi_name_pool_encode(pool, unit->module.identifier,
             N00B_ABI_TABLE_MODULE, 1,
-            offsetof(n00b_abi_module_v1, full_path), &modules[1].full_path)
-        && n00bb_abi_name_pool_encode(pool,
-            core_source_file_path(&unit->source),
-            N00B_ABI_TABLE_SOURCE_FILE, 1,
-            offsetof(n00b_abi_source_file_v1, path), &sources[1].path);
+            offsetof(n00b_abi_module_v1, full_path), &modules[1].full_path);
+    for (size_t i = 0; valid && i < import_count; i++) {
+        core_translation_unit_t *imported = core_translation_unit_import(
+            unit, i);
+        valid = imported && imported->module.identifier.data
+            && n00bb_abi_name_pool_encode(pool,
+                imported->module.identifier, N00B_ABI_TABLE_REQUIREMENT,
+                (uint32_t)i + 1,
+                offsetof(n00b_abi_requirement_v1, full_path),
+                &requirements[i + 1].full_path);
+    }
     if (!valid) {
+        core_free(requirements);
         n00bb_abi_function_rows_release(&function_rows);
         n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
@@ -476,8 +514,10 @@ n00bb_abi_emit_unit(
          declaration_rows.symbol_count},
         {N00B_ABI_TABLE_SOURCE_LOCATION, declaration_rows.locations,
          declaration_rows.location_count},
-        {N00B_ABI_TABLE_SOURCE_FILE, sources, 2},
+        {N00B_ABI_TABLE_SOURCE_FILE, declaration_rows.source_files,
+         declaration_rows.source_file_count},
         {N00B_ABI_TABLE_RUNTIME_CONFIG, runtime_configs, 2},
+        {N00B_ABI_TABLE_REQUIREMENT, requirements, import_count + 1},
         {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
     };
     n00bb_abi_packed_tables_t packed = {0};
@@ -485,6 +525,7 @@ n00bb_abi_emit_unit(
         rows, sizeof(rows) / sizeof(*rows), &packed);
     core_free(stream);
     if (!valid) {
+        core_free(requirements);
         n00bb_abi_function_rows_release(&function_rows);
         n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
@@ -541,6 +582,7 @@ n00bb_abi_emit_unit(
             relocations, relocation_count,
             &object, &object_bytes);
     core_free(relocations);
+    core_free(requirements);
     n00bb_abi_function_rows_release(&function_rows);
     n00bb_abi_declarations_release(&declaration_rows);
     n00bb_abi_type_signatures_release(&signature_rows);

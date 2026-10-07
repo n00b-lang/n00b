@@ -5,6 +5,26 @@
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 
+typedef struct {
+    parse_tree_t *foreign_node;
+    const core_translation_unit_t *foreign_unit;
+    parse_token_stream_t *foreign_tokens;
+    const core_translation_unit_t *local_unit;
+    parse_token_stream_t *local_tokens;
+} test_sources_t;
+
+static bool
+source_of_node(void *context, parse_tree_t *node,
+               const core_translation_unit_t **unit,
+               parse_token_stream_t **tokens)
+{
+    test_sources_t *sources = context;
+    bool foreign = node == sources->foreign_node;
+    *unit = foreign ? sources->foreign_unit : sources->local_unit;
+    *tokens = foreign ? sources->foreign_tokens : sources->local_tokens;
+    return true;
+}
+
 int
 main(void)
 {
@@ -32,10 +52,40 @@ main(void)
         tokens_array, 2);
     assert(tokens);
     parse_tree_t type_declaration = {0}, field_declaration = {0};
+    parse_tree_t foreign_use = {0};
     core_tree_node_value(&type_declaration).start = 0;
     core_tree_node_value(&type_declaration).end = 2;
     core_tree_node_value(&field_declaration).start = 1;
     core_tree_node_value(&field_declaration).end = 2;
+    core_tree_node_value(&foreign_use).start = 0;
+    core_tree_node_value(&foreign_use).end = 1;
+
+    const char foreign_text[] = "value";
+    core_module_spec_t foreign_spec = {0};
+    core_source_file_t foreign_file = {0};
+    core_translation_unit_t foreign_unit = {0};
+    assert(core_module_spec_init(&foreign_spec,
+        CORE_STRING_STATIC("consumer"))
+        && core_source_file_init(&foreign_file,
+            CORE_STRING_STATIC("consumer.n00b"), foreign_text,
+            sizeof(foreign_text) - 1)
+        && core_translation_unit_init(&foreign_unit, &foreign_spec,
+            &foreign_file));
+    core_module_spec_release(&foreign_spec);
+    parse_token_info_t *foreign_token = core_alloc(parse_token_info_t);
+    *foreign_token = (parse_token_info_t){
+        .origin = PARSE_TOKEN_SOURCE, .line = 1, .column = 1,
+        .endline = 1, .endcol = 6, .start_byte = 0, .end_byte = 5,
+    };
+    parse_token_info_t *foreign_tokens_array[] = {foreign_token};
+    parse_token_stream_t *foreign_tokens = scan_token_stream_from_array(
+        foreign_tokens_array, 1);
+    assert(foreign_tokens);
+    test_sources_t sources = {
+        .foreign_node = &foreign_use, .foreign_unit = &foreign_unit,
+        .foreign_tokens = foreign_tokens, .local_unit = &unit,
+        .local_tokens = tokens,
+    };
 
     parse_symtab_t *symtab = parse_symtab_new();
     parse_symtab_push_scope(symtab, CORE_STRING_STATIC("type"),
@@ -58,6 +108,7 @@ main(void)
         PARSE_SYM_VARIABLE, &field_declaration);
     field_symbol->is_field = true;
     field_symbol->owner_type = type_symbol;
+    assert(parse_sym_add_use(field_symbol, &foreign_use));
     ir_ctx_t *context = ir_ctx_new();
     const ir_profile_t profile = {.name = "n00b"};
     ir_module_t *module = ir_module_new(context, "example", &profile,
@@ -76,9 +127,10 @@ main(void)
     n00bb_abi_decl_index_t *declarations = n00bb_abi_decl_index_new(symtab);
     n00bb_abi_declarations_t rows = {0};
     assert(declarations && n00bb_abi_declarations_build(declarations,
-        type_index, &type_rows, &unit, tokens, names, 5, &rows));
+        type_index, &type_rows, &unit, tokens, names,
+        source_of_node, &sources, 5, &rows));
     assert(rows.scope_count == 3 && rows.symbol_count == 3
-        && rows.location_count == 3);
+        && rows.location_count == 4 && rows.source_file_count == 3);
     uint32_t module_scope_index = 0, record_scope_index = 0;
     uint32_t type_symbol_index = 0, field_symbol_index = 0;
     uint32_t type_index_value = 0, field_type_index = 0;
@@ -127,6 +179,19 @@ main(void)
         && field_location->start_byte_offset == 12
         && field_location->end_byte_offset == 17
         && field_location->start_column == 13);
+    n00b_abi_range_v1 uses = rows.symbols[field_symbol_index].uses;
+    assert(uses.count == 1 && uses.first >= 5
+        && uses.first - 5 < rows.stream_index_count);
+    uint32_t use_location_index = rows.stream_indexes[uses.first - 5];
+    assert(use_location_index && use_location_index < rows.location_count);
+    const n00b_abi_source_location_v1 *use_location =
+        &rows.locations[use_location_index];
+    assert(use_location->file_index == 2
+        && use_location->start_byte_offset == 0
+        && use_location->end_byte_offset == 5);
+    assert((rows.source_files[2].path.short_value.selector & 15u) == 13
+        && !memcmp(rows.source_files[2].path.short_value.bytes,
+                   "consumer.n00b", 13));
     n00bb_abi_declarations_release(&rows);
     n00bb_abi_decl_index_free(declarations);
     n00bb_abi_type_identity_rows_release(&type_rows);
@@ -135,6 +200,8 @@ main(void)
     ir_ctx_free(context);
     parse_symtab_free(symtab);
     scan_token_stream_free(tokens);
+    scan_token_stream_free(foreign_tokens);
     core_translation_unit_release(&unit);
+    core_translation_unit_release(&foreign_unit);
     return 0;
 }

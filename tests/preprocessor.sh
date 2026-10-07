@@ -1389,6 +1389,23 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/function.n00b"
 [ -s "$tmp/function_abi.o" ]
 "$abi_record_object_test" "$tmp/function_abi.o" function
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/import_abi.o" import_root
+[ -s "$tmp/import_abi.o" ]
+"$abi_record_object_test" "$tmp/import_abi.o" import
+N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
+    --output "$tmp/import_record_abi.o" record_root
+[ -s "$tmp/import_record_abi.o" ]
+"$abi_record_object_test" "$tmp/import_record_abi.o" import-record
+if N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/cycle_abi.o" cycle_first \
+    >"$tmp/cycle_abi.out" 2>&1; then
+    echo 'recursive imports emitted ABI without SCC metadata' >&2
+    exit 1
+fi
+grep -q 'ABI emission for recursive imports requires SCC metadata' \
+    "$tmp/cycle_abi.out"
+[ ! -e "$tmp/cycle_abi.o" ]
 for command in build library; do
     if "$compiler" "$command" --dump-ir --dump-control-flow --dump-pdg \
         "$program_dir/lower_arithmetic.n00b" >"$tmp/$command.dumps" 2>&1; then

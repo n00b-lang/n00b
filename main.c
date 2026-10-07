@@ -19,6 +19,7 @@
 #include "lib/dict.h"
 #include "lib/list.h"
 #include "lib/link_unit.h"
+#include "lib/indexed_table.h"
 #include "lib/target.h"
 #include "lib/work_queue.h"
 #include "lib/diagnostic.h"
@@ -45719,6 +45720,48 @@ typedef struct {
     size_t object_bytes;
 } n00bb_abi_artifact_t;
 
+typedef struct {
+    core_indexed_table_t *scopes;
+} n00bb_abi_source_context_t;
+
+static core_hash_value_t
+abi_scope_hash(void *value)
+{
+    return (core_hash_value_t)(uintptr_t)value;
+}
+
+static bool
+abi_scope_equal(const void *left, const void *right)
+{
+    return left == right;
+}
+
+static bool
+abi_source_of_node(void *context, parse_tree_t *node,
+                   const core_translation_unit_t **unit,
+                   parse_token_stream_t **tokens)
+{
+    n00bb_abi_source_context_t *sources = context;
+    if (!sources || !sources->scopes || !node || !unit || !tokens)
+        return false;
+    parse_scope_t *scope = parse_node_is_token(node)
+        ? node->num_parents && !parse_node_is_token(node->parents[0])
+            ? core_tree_node_value(node->parents[0]).scope : nullptr
+        : core_tree_node_value(node).scope;
+    for (; scope; scope = scope->parent) {
+        const core_indexed_entry_t *entry = core_indexed_table_find(
+            sources->scopes, scope);
+        if (!entry) continue;
+        n00bb_tu_state_t *state = entry->value;
+        if (!state || !state->unit || !state->lex || !state->lex->tokens)
+            return false;
+        *unit = state->unit;
+        *tokens = state->lex->tokens;
+        return true;
+    }
+    return false;
+}
+
 static void
 free_abi_artifact(void *payload)
 {
@@ -45738,32 +45781,60 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
         || core_link_unit_stage_state(link,
             N00BB_LINK_STAGE_STORAGE_LIFETIMES) != CORE_LINK_STAGE_COMPLETE)
         return false;
-    for (size_t i = 0; i < core_link_unit_translation_unit_count(link); i++) {
+    n00bb_abi_source_context_t sources = {
+        .scopes = core_indexed_table_new(1, UINT32_MAX,
+            abi_scope_hash, abi_scope_equal),
+    };
+    bool valid = sources.scopes != nullptr;
+    size_t count = core_link_unit_translation_unit_count(link);
+    for (size_t i = 0; valid && i < count; i++) {
         core_translation_unit_t *unit = core_link_unit_translation_unit(link,
             i);
         n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-        if (!state || !state->lex || !state->lex->tokens
-            || !state->annotations || !state->ir_module
-            || !state->comptime_ir_module) return false;
+        if (!state || !state->annotations || !state->annotations->symtab
+            || !state->lex || !state->lex->tokens) {
+            valid = false;
+            break;
+        }
+        for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
+             valid && scope; scope = scope->all_next) {
+            const core_indexed_entry_t *entry = core_indexed_table_intern(
+                sources.scopes, scope, state, nullptr);
+            valid = entry && entry->value == state;
+        }
+    }
+    for (size_t i = 0; valid && i < count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+        if (!state || !state->ir_module || !state->comptime_ir_module) {
+            valid = false;
+            break;
+        }
         n00bb_abi_artifact_t *artifact = core_alloc(n00bb_abi_artifact_t);
-        bool emitted = n00bb_abi_emit_unit(unit, n00bb_package_id(unit),
+        bool emitted = n00bb_abi_emit_unit(link, unit,
+            n00bb_package_id(unit),
             state->annotations->symtab, state->lex->tokens,
             state->comptime_ir_module, state->ir_module, &analysis->target,
             debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
-            abi_declaration_for_symbol, analysis, &artifact->packed,
+            abi_declaration_for_symbol, analysis,
+            abi_source_of_node, &sources, &artifact->packed,
             &artifact->object, &artifact->object_bytes);
         if (!emitted) {
             free_abi_artifact(artifact);
-            return false;
+            valid = false;
+            break;
         }
         if (!core_link_unit_add_artifact(link, unit->module.identifier,
                 CORE_STRING_STATIC("n00bb.abi.object"), 1, artifact,
                 CORE_LINK_PAYLOAD_OWNED, free_abi_artifact)) {
             free_abi_artifact(artifact);
-            return false;
+            valid = false;
+            break;
         }
     }
-    return true;
+    core_indexed_table_free(sources.scopes);
+    return valid;
 }
 
 static bool

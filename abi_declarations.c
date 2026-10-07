@@ -4,11 +4,25 @@
 #include <string.h>
 
 #include "lib/alloc.h"
+#include "lib/hash.h"
 #include "lib/indexed_table.h"
 #include "lib/list.h"
 
 core_list_decl(n00b_abi_source_location_v1);
+core_list_decl(n00b_abi_source_file_v1);
 core_list_decl(uint32_t);
+typedef const core_translation_unit_t *abi_source_unit_t;
+core_list_decl(abi_source_unit_t);
+
+typedef struct {
+    const core_translation_unit_t *unit;
+    parse_token_stream_t *tokens;
+    n00bb_abi_name_pool_t *names;
+    n00bb_abi_node_source_fn node_source;
+    void *source_context;
+    core_list_t(n00b_abi_source_file_v1) files;
+    core_list_t(abi_source_unit_t) owners;
+} location_context_t;
 
 static core_hash_value_t
 pointer_hash(void *value)
@@ -23,10 +37,42 @@ pointer_equal(const void *left, const void *right)
 }
 
 static bool
-node_location(const core_translation_unit_t *unit,
-              parse_token_stream_t *tokens, parse_tree_t *node,
+source_index(location_context_t *context,
+             const core_translation_unit_t *unit, uint32_t *out)
+{
+    if (!unit || !out) return false;
+    for (size_t i = 1; i < context->owners.len; i++)
+        if (context->owners.data[i] == unit) {
+            *out = (uint32_t)i;
+            return true;
+        }
+    if (context->files.len >= UINT32_MAX) return false;
+    uint32_t index = (uint32_t)context->files.len;
+    n00b_abi_source_file_v1 row = {0};
+    const char *bytes = core_source_file_contents(&unit->source);
+    size_t size = core_source_file_size(&unit->source);
+    row.source_identity = core_xxh3_64bits_raw(bytes ? bytes : "", size);
+    if (!n00bb_abi_name_pool_encode(context->names,
+            core_source_file_path(&unit->source), N00B_ABI_TABLE_SOURCE_FILE,
+            index, offsetof(n00b_abi_source_file_v1, path), &row.path))
+        return false;
+    core_list_push(context->files, row);
+    core_list_push(context->owners, unit);
+    *out = index;
+    return true;
+}
+
+static bool
+node_location(location_context_t *context, parse_tree_t *node,
               n00b_abi_source_location_v1 *out)
 {
+    const core_translation_unit_t *unit = context->unit;
+    parse_token_stream_t *tokens = context->tokens;
+    if (context->node_source
+        && !context->node_source(context->source_context, node,
+                                 &unit, &tokens)) return false;
+    uint32_t file_index = 0;
+    if (!tokens || !source_index(context, unit, &file_index)) return false;
     parse_token_info_t *first = nullptr, *last = nullptr;
     if (parse_node_is_token(node)) first = last = parse_node_token(node);
     else {
@@ -41,7 +87,7 @@ node_location(const core_translation_unit_t *unit,
         || !last->endcol || first->start_byte > last->end_byte
         || last->end_byte > core_source_file_size(&unit->source)) return false;
     *out = (n00b_abi_source_location_v1){
-        .file_index = 1,
+        .file_index = file_index,
         .start_line = first->line, .start_column = first->column,
         .end_line = last->endline, .end_column = last->endcol,
         .start_byte_offset = first->start_byte,
@@ -53,8 +99,7 @@ node_location(const core_translation_unit_t *unit,
 static bool
 add_location(core_indexed_table_t *lookup,
              core_list_t(n00b_abi_source_location_v1) *locations,
-             const core_translation_unit_t *unit,
-             parse_token_stream_t *tokens, parse_tree_t *node,
+             location_context_t *context, parse_tree_t *node,
              uint32_t *out_index)
 {
     if (!node) { *out_index = 0; return true; }
@@ -63,7 +108,7 @@ add_location(core_indexed_table_t *lookup,
     if (existing) { *out_index = existing->index; return true; }
     if (locations->len >= UINT32_MAX) return false;
     n00b_abi_source_location_v1 row = {0};
-    if (!node_location(unit, tokens, node, &row)) return false;
+    if (!node_location(context, node, &row)) return false;
     existing = core_indexed_table_intern(lookup, node, node, nullptr);
     if (!existing || existing->index != locations->len) return false;
     *out_index = existing->index;
@@ -82,8 +127,8 @@ append_index(core_list_t(uint32_t) *stream, uint32_t base, uint32_t index)
 static bool
 append_node_range(core_indexed_table_t *lookup,
                   core_list_t(n00b_abi_source_location_v1) *locations,
-                  const core_translation_unit_t *unit,
-                  parse_token_stream_t *tokens, parse_tree_t *const *nodes,
+                  location_context_t *context,
+                  parse_tree_t *const *nodes,
                   size_t count, uint32_t stream_base,
                   core_list_t(uint32_t) *stream, n00b_abi_range_v1 *range)
 {
@@ -92,7 +137,7 @@ append_node_range(core_indexed_table_t *lookup,
     size_t first = stream->len;
     for (size_t i = 0; i < count; i++) {
         uint32_t index = 0;
-        if (!nodes[i] || !add_location(lookup, locations, unit, tokens,
+        if (!nodes[i] || !add_location(lookup, locations, context,
                                        nodes[i], &index)
             || !index || !append_index(stream, stream_base, index))
             return false;
@@ -185,6 +230,7 @@ n00bb_abi_declarations_build(
     n00bb_abi_type_identity_rows_t *type_rows,
     const core_translation_unit_t *unit,
     parse_token_stream_t *tokens, n00bb_abi_name_pool_t *names,
+    n00bb_abi_node_source_fn node_source, void *source_context,
     uint32_t stream_base, n00bb_abi_declarations_t *out)
 {
     if (!declarations || !type_index || !type_rows || !type_rows->rows
@@ -197,6 +243,10 @@ n00bb_abi_declarations_build(
     n00b_abi_symbol_v1 *symbols = core_alloc_array(n00b_abi_symbol_v1,
                                                     symbol_count);
     core_list_t(n00b_abi_source_location_v1) locations = {0};
+    location_context_t sources = {
+        .unit = unit, .tokens = tokens, .names = names,
+        .node_source = node_source, .source_context = source_context,
+    };
     core_list_t(uint32_t) stream = {0};
     core_list_t(uint32_t) *children = core_alloc_array(
         core_list_t(uint32_t), scope_count);
@@ -205,7 +255,12 @@ n00bb_abi_declarations_build(
     core_indexed_table_t *location_index = core_indexed_table_new(
         1, UINT32_MAX, pointer_hash, pointer_equal);
     core_list_push(locations, ((n00b_abi_source_location_v1){0}));
-    bool valid = location_index != nullptr;
+    core_list_push(sources.files, ((n00b_abi_source_file_v1){0}));
+    core_list_push(sources.owners, ((abi_source_unit_t)nullptr));
+    uint32_t local_source_index = 0;
+    bool valid = location_index != nullptr
+        && source_index(&sources, unit, &local_source_index)
+        && local_source_index == 1;
     for (size_t i = 1; valid && i < scope_count; i++) {
         parse_scope_t *scope = n00bb_abi_decl_scope_at(declarations,
                                                         (uint32_t)i);
@@ -228,7 +283,7 @@ n00bb_abi_declarations_build(
         valid = n00bb_abi_name_pool_encode(names, kind,
             N00B_ABI_TABLE_SCOPE, (uint32_t)i,
             offsetof(n00b_abi_scope_v1, kind_name), &row->kind_name)
-            && add_location(location_index, &locations, unit, tokens,
+            && add_location(location_index, &locations, &sources,
                             scope->node, &row->source_location_index);
     }
     for (size_t i = 1; valid && i < symbol_count; i++) {
@@ -250,12 +305,12 @@ n00bb_abi_declarations_build(
         valid = n00bb_abi_name_pool_encode(names, symbol->name,
             N00B_ABI_TABLE_SYMBOL, (uint32_t)i,
             offsetof(n00b_abi_symbol_v1, name), &row->name)
-            && add_location(location_index, &locations, unit, tokens,
+            && add_location(location_index, &locations, &sources,
                 symbol->decl_node, &row->declaration_location_index)
-            && append_node_range(location_index, &locations, unit, tokens,
+            && append_node_range(location_index, &locations, &sources,
                 symbol->definition_nodes, symbol->definition_count,
                 stream_base, &stream, &row->definitions)
-            && append_node_range(location_index, &locations, unit, tokens,
+            && append_node_range(location_index, &locations, &sources,
                 symbol->use_nodes, symbol->use_count,
                 stream_base, &stream, &row->uses);
         if (valid && symbol->selected_storage_class.u8_bytes)
@@ -282,6 +337,8 @@ n00bb_abi_declarations_build(
             .scopes = scopes, .scope_count = scope_count,
             .symbols = symbols, .symbol_count = symbol_count,
             .locations = locations.data, .location_count = locations.len,
+            .source_files = sources.files.data,
+            .source_file_count = sources.files.len,
             .stream_indexes = stream.data, .stream_index_count = stream.len,
         };
     }
@@ -289,9 +346,11 @@ n00bb_abi_declarations_build(
         core_free(scopes);
         core_free(symbols);
         core_list_free(locations);
+        core_list_free(sources.files);
         core_list_free(stream);
     }
     core_indexed_table_free(location_index);
+    core_list_free(sources.owners);
     for (size_t i = 0; i < scope_count; i++) {
         core_list_free(children[i]);
         core_list_free(members[i]);
@@ -308,6 +367,7 @@ n00bb_abi_declarations_release(n00bb_abi_declarations_t *rows)
     core_free(rows->scopes);
     core_free(rows->symbols);
     core_free(rows->locations);
+    core_free(rows->source_files);
     core_free(rows->stream_indexes);
     *rows = (n00bb_abi_declarations_t){0};
 }

@@ -283,6 +283,11 @@ n00bb_abi_type_layout_rows_build(
     bool valid = true;
     for (size_t i = 0; valid && i < types->count; i++) {
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
+        ir_module_t *definition_owner = ir_type_definition_owner(runtime,
+            type);
+        if ((!types->owners || !types->owners[i])
+            && definition_owner && definition_owner != runtime
+            && definition_owner != comptime) continue;
         const ir_final_layout_t *final = ir_layout_final(
             runtime, type, ir_module_target(runtime));
         const ir_final_layout_t *compile_layout = comptime

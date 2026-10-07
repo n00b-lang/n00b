@@ -93,6 +93,11 @@ type_category(ir_module_t *module, th_type *type,
         }
         else if (variant) row->kind = N00B_ABI_TYPE_VARIANT;
         else {
+            th_type *definition = ir_type_definition(module, type);
+            if (definition && th_kind_of(definition) == TH_RECORD) {
+                row->kind = N00B_ABI_TYPE_RECORD;
+                return true;
+            }
             ir_machine_t machine = ir_machine_of(module, type);
             if (machine.class != IR_CLASS_BOOL
                 && machine.class != IR_CLASS_SINT

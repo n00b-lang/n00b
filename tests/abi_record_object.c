@@ -132,11 +132,66 @@ check_function(const core_object_section_t *metadata,
     }
 }
 
+static void
+check_import(const core_object_section_t *metadata,
+             const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *modules = entry_for(entries,
+        count, N00B_ABI_TABLE_MODULE);
+    const n00bb_abi_directory_entry_t *requirements = entry_for(entries,
+        count, N00B_ABI_TABLE_REQUIREMENT);
+    assert(modules && modules->record_count == 2
+        && requirements && requirements->record_count == 2);
+    const n00b_abi_module_v1 *module = row_at(metadata, modules, 1);
+    const n00b_abi_requirement_v1 *import = row_at(metadata,
+        requirements, 1);
+    assert(short_name_is(&module->full_path, "import_root")
+        && !module->imports.count
+        && short_name_is(&import->full_path, "import_dep")
+        && import->symbol_kind == N00B_ABI_SYMBOL_MODULE
+        && import->requesting_module_index == 1
+        && !import->required_layout_index
+        && !import->required_capabilities);
+}
+
+static void
+check_imported_record(const core_object_section_t *metadata,
+                      const n00bb_abi_directory_entry_t *entries,
+                      size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries,
+        count, N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *requirements = entry_for(entries,
+        count, N00B_ABI_TABLE_REQUIREMENT);
+    assert(types && requirements && requirements->record_count == 2);
+    const n00b_abi_requirement_v1 *import = row_at(metadata,
+        requirements, 1);
+    assert(short_name_is(&import->full_path, "record_dep")
+        && import->symbol_kind == N00B_ABI_SYMBOL_MODULE);
+    uint32_t local_records = 0, imported_records = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        if (type->kind != N00B_ABI_TYPE_RECORD) continue;
+        if (type->owner_module_index == 1) {
+            assert(type->layout_index && type->fields_or_arms.count == 1);
+            local_records++;
+        }
+        else {
+            assert(!type->owner_module_index && !type->layout_index
+                && !type->fields_or_arms.count);
+            imported_records++;
+        }
+    }
+    assert(local_records == 1 && imported_records == 1);
+}
+
 int
 main(int argc, char **argv)
 {
     assert(argc == 2 || (argc == 3
-        && (!strcmp(argv[2], "enum") || !strcmp(argv[2], "function"))));
+        && (!strcmp(argv[2], "enum") || !strcmp(argv[2], "function")
+            || !strcmp(argv[2], "import")
+            || !strcmp(argv[2], "import-record"))));
     FILE *file = fopen(argv[1], "rb");
     assert(file);
     assert(!fseek(file, 0, SEEK_END));
@@ -202,6 +257,20 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "function")) {
         check_function(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "import")) {
+        check_import(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "import-record")) {
+        check_imported_record(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

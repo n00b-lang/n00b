@@ -8,9 +8,11 @@
 #include "lib/target.h"
 #include "lib/module.h"
 #include "ir/ir.h"
+#include "lib/link_unit.h"
 #include "parse/symtab.h"
 #include "scanner/token_stream.h"
 #include "abi_function_rows.h"
+#include "abi_declarations.h"
 
 typedef struct {
     uint32_t kind;
@@ -48,10 +50,12 @@ bool n00bb_abi_write_object(
  * Record, enum, and function declarations are supported; other declarations
  * fail instead of producing incomplete metadata. The caller owns outputs. */
 bool n00bb_abi_emit_unit(
-    core_translation_unit_t *unit, core_string_t package_id,
+    core_link_unit_t *link, core_translation_unit_t *unit,
+    core_string_t package_id,
     const parse_symtab_t *symbols, parse_token_stream_t *tokens,
     const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
     const core_target_desc_t *target, uint64_t artifact_capabilities,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
+    n00bb_abi_node_source_fn node_source, void *source_context,
     n00bb_abi_packed_tables_t *out_tables,
     uint8_t **out_object, size_t *out_object_bytes);
