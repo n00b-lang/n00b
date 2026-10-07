@@ -36800,7 +36800,7 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
                     th_type *type = th_apply_subst(
                         ir_module_types(modules[m]), symbol->type);
                     bool handled = false;
-                    bool layout_ok = type && n00bb_abi_publish_scalar_layout(
+                    bool layout_ok = type && n00bb_abi_publish_direct_layout(
                         modules[m], type, &analysis->target, &handled);
                     if (layout_ok && enum_bits)
                         layout_ok = enum_bits <= UINT32_MAX
@@ -36831,7 +36831,7 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
         }
         for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]); m++) {
             th_type *failed_type = nullptr;
-            if (n00bb_abi_publish_interned_scalar_layouts(
+            if (n00bb_abi_publish_interned_direct_layouts(
                     modules[m], &analysis->target, &failed_type)) continue;
             core_buffer_t message = {0};
             core_buffer_printf(&message,
@@ -37096,13 +37096,8 @@ type_may_contain_reference_alias_inner(th_type *type,
     case TH_SUM:
     case TH_VAR:
         return true;
-    case TH_SEQUENCE: {
-        core_list_push(*active, type);
-        bool result = type_may_contain_reference_alias_inner(
-            th_seq_elem(type), active);
-        active->len--;
-        return result;
-    }
+    case TH_SEQUENCE:
+        return true;
     case TH_NAMED: {
         const char *name = nullptr;
         size_t name_len = 0;
@@ -37111,6 +37106,10 @@ type_may_contain_reference_alias_inner(th_type *type,
         if (!th_named_info(type, &name, &name_len, &is_variant,
                            &argument_count)) return true;
         if (!is_variant && name_len == 4 && !memcmp(name, "view", 4))
+            return true;
+        if (!is_variant && name_len == 5 && !memcmp(name, "array", 5))
+            return true;
+        if (!is_variant && name_len == 6 && !memcmp(name, "string", 6))
             return true;
         if (argument_count) {
             core_list_push(*active, type);
@@ -37128,7 +37127,7 @@ type_may_contain_reference_alias_inner(th_type *type,
             return result;
         }
         static const char *const scalar_names[] = {
-            "bool", "char", "float", "f64", "int", "string",
+            "bool", "char", "float", "f64", "int",
             "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32",
             "u64", "u128",
         };
@@ -44553,9 +44552,8 @@ storage_lifetime_symbol_is_complete(n00bb_link_analysis_t *analysis,
             && symbol->kind != PARSE_SYM_PARAM)) return false;
     if (!(symbol->phases & PARSE_SYM_PHASE_RUNTIME)) return true;
     if (!symbol->type || !symbol->lifetime.has_region
-        || symbol->storage_duration == PARSE_SYM_STORAGE_UNSPECIFIED
-        || (type_may_contain_reference_alias(symbol->type)
-            && !symbol->alias_analysis_complete)) return false;
+        || symbol->storage_duration == PARSE_SYM_STORAGE_UNSPECIFIED)
+        return false;
 
     if (symbol->storage_duration == PARSE_SYM_STORAGE_COMPTIME)
         return symbol->has_comptime_value;
@@ -44576,7 +44574,9 @@ storage_lifetime_symbol_is_complete(n00bb_link_analysis_t *analysis,
             && facts->storage_duration == symbol->storage_duration;
     }
 
-    if (!scope_has_lexical_lifetime(symbol->scope)) return false;
+    if (!scope_has_lexical_lifetime(symbol->scope)
+        || (type_may_contain_reference_alias(symbol->type)
+            && !symbol->alias_analysis_complete)) return false;
     parse_sym_entry_t *owner_symbol = lifetime_function_owner(
         analysis->grammar, symbol);
     core_link_declaration_t *owner_declaration = owner_symbol

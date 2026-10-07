@@ -415,7 +415,7 @@ grep -Eq 'control-flow @__n00bb_array_product_' \
     "$tmp/array_shape_types.lower"
 grep -Eq 'array_shape_types:0:ShapeHolder\.rectangular_field .*array-element-count=comptime:producer=__n00bb_array_product_' \
     "$tmp/array_shape_types.lower"
-grep -Fq 'func @shape_parameter(%input: array[array[int]]) -> array[array[int]]' \
+grep -Eq 'func @shape_parameter\(%input: array\[array\[int\]\].*\) -> array\[array\[int\]\]' \
     "$tmp/array_shape_types.lower"
 grep -Fq 'func @shape_return() -> array[int]' \
     "$tmp/array_shape_types.lower"
@@ -466,7 +466,7 @@ test "$(grep -c 'sequence.shape.check' \
     "$tmp/array_runtime_shape_checks.out")" -ge 17
 grep -q '!ir.shape_constraint(rank=1,dim0=comptime:producer=' \
     "$tmp/array_runtime_shape_checks.out"
-grep -Eq 'array\[array\[int\]\] = load .*!ir.alias_count\(1\).*ir.alias0\(%__lowered_[0-9]+\).*ir.alias0_escapes\(true\)' \
+grep -Eq 'func @store_shaped_row\(%matrix: array\[array\[int\]\].*!ir.alias_count\(1\).*ir.alias0\(%__lowered_[0-9]+\).*ir.alias0_escapes\(true\)' \
     "$tmp/array_runtime_shape_checks.out"
 grep -q '__n00bb_index_store_is_ok_' \
     "$tmp/array_runtime_shape_checks.out"
@@ -3825,7 +3825,7 @@ grep -q 'trait-dispatch\[resolved\] index_load_dispatch:1:get_item -> index_load
     cat "$tmp/array_index_read.err"
     exit 1
 }
-grep -q '= call @__read, %__lowered_[0-9]*, %__lowered_[0-9]*' \
+grep -Eq '= call @__read, %items, %__lowered_[0-9]+ .*ir.call_signature\(\(array\[int\], int\) -> int fail: nil\)' \
     "$tmp/array_index_read.ir"
 
 "$compiler" lower --dump-ir \
@@ -3835,12 +3835,12 @@ grep -q '= call @__read, %__lowered_[0-9]*, %__lowered_[0-9]*' \
     cat "$tmp/array_index_nested_read.err"
     exit 1
 }
-grep -q '= call @__read, %__lowered_[0-9]*, %__lowered_[0-9]*' \
+grep -Eq '= call @__read, %rows, %__lowered_[0-9]+ .*ir.call_signature\(\(array\[array\[int\]\], int\) -> array\[int\] fail: int\)' \
     "$tmp/array_index_nested_read.ir"
 grep -q 'variant.payload .*"ok"' "$tmp/array_index_nested_read.ir"
-grep -Eq '= call @__read, .*!ir.alias_count\(1\).*ir.alias0\(%__lowered_[0-9]+\)' \
+grep -Eq '= call @__read, .*!ir.alias_count\(1\).*ir.alias0\(%rows\)' \
     "$tmp/array_index_nested_read.ir"
-grep -Eq '= variant.payload .*"ok" .*!ir.alias_count\(1\).*ir.alias0\(%__lowered_[0-9]+\)' \
+grep -Eq '= variant.payload .*"ok" .*!ir.alias_count\(1\).*ir.alias0\(%rows\)' \
     "$tmp/array_index_nested_read.ir"
 
 "$compiler" lower --dump-ir "$script_dir/programs/array_index_store_lowering.n00b" \
@@ -3848,7 +3848,7 @@ grep -Eq '= variant.payload .*"ok" .*!ir.alias_count\(1\).*ir.alias0\(%__lowered
     cat "$tmp/array_index_store.err"
     exit 1
 }
-grep -q '= call @__write, %__lowered_[0-9]*, %__lowered_[0-9]*, %__lowered_[0-9]*' \
+grep -Eq '= call @__write, %items, %__lowered_[0-9]+, %__lowered_[0-9]+' \
     "$tmp/array_index_store.ir"
 if grep -q '= call @__read,' "$tmp/array_index_store.ir"; then
     echo 'indexed assignment unexpectedly emitted a read before its store' >&2
@@ -3870,13 +3870,13 @@ test "$(grep -c '= call @__write,' "$tmp/array_ragged.ir")" -eq 2
     cat "$tmp/array_slice.err"
     exit 1
 }
-grep -Eq 'call @__slice, %__lowered_[0-9]+, %__lowered_[0-9]+, %' \
+grep -Eq 'call @__slice, %items, %__lowered_[0-9]+, %' \
     "$tmp/array_slice.ir"
 if grep -q '__n00bb_default_arg_' "$tmp/array_slice.ir"; then
     echo 'slice defaults retained a presence/value wrapper' >&2
     exit 1
 fi
-grep -q 'func @full_view(%items: array\[int\]) -> view\[int\]' \
+grep -Eq 'func @full_view\(%items: array\[int\].*\) -> view\[int\] fail: int' \
     "$tmp/array_slice.ir"
 grep -q 'neg trap' "$tmp/array_slice.ir"
 test "$(grep -c 'variant.tag %__n00bb_' "$tmp/array_slice.ir")" -eq 3
@@ -3924,7 +3924,7 @@ grep -Eq '= call @__slice, .*!ir.alias0_escapes\(false\)' \
     "$tmp/array_nested_slice_lifetime.out"
 grep -Eq '= call @__slice, .*!ir.alias0_escapes\(true\)' \
     "$tmp/array_nested_slice_lifetime.out"
-grep -Eq 'cleanup-range\[first_view,.*evidence=incomplete' \
+grep -Eq 'cleanup-range\[first_view,.*safe-exits=1,live-exits=0,unknown-exits=0,evidence=complete' \
     "$tmp/array_nested_slice_lifetime.out"
 
 "$compiler" lower --dump-ir --dump-control-flow --dump-link-unit \
@@ -4149,6 +4149,15 @@ grep -Eq 'layout lower_enum_cast.Small target=(x86_64-linux|arm64-macos|x86_64-w
 }
 grep -Eq 'layout flagset_operators.FilePerms target=(x86_64-linux|arm64-macos|x86_64-windows) size=1 align=1' \
     "$tmp/flagset_layout.out"
+"$compiler" lower --dump-layout "$program_dir/fixed_value_layouts.n00b" \
+    >"$tmp/fixed_value_layouts.out" 2>"$tmp/fixed_value_layouts.err" || {
+    cat "$tmp/fixed_value_layouts.err"
+    exit 1
+}
+for fixed_type in string 'array[int]' 'view[int]' any; do
+    test "$(grep -Fc "  layout $fixed_type {" "$tmp/fixed_value_layouts.out")" -eq 2
+done
+test "$(grep -Fc '  layout Allocator {' "$tmp/fixed_value_layouts.out")" -eq 2
 if "$compiler" lower "$program_dir/flagset_no_primitive.n00b" \
     >"$tmp/flagset_no_primitive.out" 2>&1; then
     echo 'flagset without a primitive flag unexpectedly lowered' >&2

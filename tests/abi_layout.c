@@ -21,8 +21,8 @@ check_scalar(ir_module_t *module, const core_target_desc_t *target,
              uint32_t alignment_bytes)
 {
     bool handled = false;
-    if (!n00bb_abi_publish_scalar_layout(module, type, target, &handled)
-        || !handled || !n00bb_abi_publish_scalar_layout(module, type,
+    if (!n00bb_abi_publish_direct_layout(module, type, target, &handled)
+        || !handled || !n00bb_abi_publish_direct_layout(module, type,
                                                         target, &handled))
         return 0;
     const ir_final_layout_t *final = ir_layout_final(module, type,
@@ -74,19 +74,42 @@ int main(void)
                             64, 64, 8)
             && check_scalar(module, &target, th_name(types, "nil"),
                             0, 0, 1)
+            && check_scalar(module, &target, th_name(types, "string"),
+                            128, 128, 8)
+            && check_scalar(module, &target, th_name(types, "Allocator"),
+                            32, 32, 4)
+            && check_scalar(module, &target, th_name(types, "any"),
+                            128, 128, 8)
             && ir_type_define(module, wide, th_bitint(types, 65, true))
             && ir_type_define(module, wider, wide)
             && check_scalar(module, &target, wider, 65, 128, 16)
             && check_scalar(module, &target, wide, 65, 128, 16);
+        th_arg handle_element = {
+            .kind = TH_ARG_TYPE, .type = th_name(types, "int"),
+        };
+        ok = ok && check_scalar(module, &target,
+                th_array(types, handle_element.type),
+                128, 128, 8)
+            && check_scalar(module, &target,
+                th_apply(types, "view", &handle_element, 1),
+                128, 128, 8);
         bool handled = false;
+        ok = ok && n00bb_abi_publish_direct_layout(module,
+                th_name(types, "user.string"), &target, &handled)
+            && !handled;
+        handled = false;
+        ok = ok && !n00bb_abi_publish_direct_layout(module,
+                th_name(types, "array"), &target, &handled)
+            && handled;
+        handled = false;
         th_type *record = th_record(types, nullptr, 0);
-        ok = ok && n00bb_abi_publish_scalar_layout(module, record, &target,
+        ok = ok && n00bb_abi_publish_direct_layout(module, record, &target,
                                                     &handled)
             && !handled;
         th_type *ir_only = th_bits(types, 73);
         th_type *failed_type = nullptr;
         ok = ok && ir_type_intern(module, ir_only)
-            && n00bb_abi_publish_interned_scalar_layouts(
+            && n00bb_abi_publish_interned_direct_layouts(
                 module, &target, &failed_type)
             && !failed_type;
         const ir_final_layout_t *ir_only_layout = ir_layout_final(
@@ -102,7 +125,7 @@ int main(void)
         handled = false;
         ok = ok && atomic
             && ir_type_define(module, atomic, atomic_element.type)
-            && n00bb_abi_publish_scalar_layout(module, atomic, &target,
+            && n00bb_abi_publish_direct_layout(module, atomic, &target,
                                                &handled)
             && handled;
         const ir_final_layout_t *atomic_layout = ir_layout_final(
@@ -118,7 +141,7 @@ int main(void)
         th_type *atomic_alias = th_name(types, "AtomicAlias");
         handled = false;
         ok = ok && ir_type_define(module, atomic_alias, atomic)
-            && n00bb_abi_publish_scalar_layout(module, atomic_alias,
+            && n00bb_abi_publish_direct_layout(module, atomic_alias,
                                                &target, &handled)
             && handled;
         const ir_final_layout_t *alias_layout = ir_layout_final(
@@ -152,7 +175,7 @@ int main(void)
             && wide_layout->alignment_bytes == 2
             && wide_layout->occupied[0].width == 9;
         handled = false;
-        ok = ok && !n00bb_abi_publish_scalar_layout(module,
+        ok = ok && !n00bb_abi_publish_direct_layout(module,
                    th_bits(types, 129), &target, &handled) && handled;
         ir_ctx_free(context);
         if (!ok) {

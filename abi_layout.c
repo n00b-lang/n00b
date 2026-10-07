@@ -55,7 +55,7 @@ publish_layout(ir_module_t *module, th_type *type,
 }
 
 static bool
-publish_scalar_or_alias(ir_module_t *module, th_type *type,
+publish_direct_or_alias(ir_module_t *module, th_type *type,
                         const core_target_desc_t *target, core_dict_t *seen,
                         bool *handled)
 {
@@ -92,9 +92,47 @@ publish_scalar_or_alias(ir_module_t *module, th_type *type,
         storage_bits = storage->width_bits;
         alignment_bytes = storage->alignment_bytes;
     }
+    else if (th_kind_of(type) == TH_SEQUENCE) {
+        *handled = true;
+        if (target->pointer_bits != 64
+            || target->pointer_alignment_bytes != 8) return false;
+        storage_bits = semantic_bits = 128;
+        alignment_bytes = 8;
+    }
     else if (th_kind_of(type) == TH_NAMED) {
         const char *name = nullptr;
-        th_named_info(type, &name, nullptr, nullptr, nullptr);
+        size_t arguments = 0;
+        th_named_info(type, &name, nullptr, nullptr, &arguments);
+        bool fixed_handle = name && (!strcmp(name, "string")
+            || !strcmp(name, "any") || !strcmp(name, "array")
+            || !strcmp(name, "view"));
+        bool allocator = name && !strcmp(name, "Allocator");
+        if (fixed_handle || allocator) {
+            *handled = true;
+            bool generic_handle = !strcmp(name, "array")
+                || !strcmp(name, "view");
+            const th_arg *argument = generic_handle
+                ? th_named_arg(type, 0) : nullptr;
+            if (arguments != (size_t)generic_handle
+                || (generic_handle
+                    && (!argument || argument->kind != TH_ARG_TYPE)))
+                return false;
+            if (allocator) {
+                const core_target_scalar_t *storage =
+                    core_target_integer_for_bits(target, 32);
+                if (!storage || storage->width_bits != 32) return false;
+                storage_bits = semantic_bits = storage->width_bits;
+                alignment_bytes = storage->alignment_bytes;
+            }
+            else {
+                if (target->pointer_bits != 64
+                    || target->pointer_alignment_bytes != 8) return false;
+                storage_bits = semantic_bits = 128;
+                alignment_bytes = 8;
+            }
+            return publish_layout(module, type, target, semantic_bits,
+                                  storage_bits, alignment_bytes, false);
+        }
         bool atomic = name && !strcmp(name, "atomic");
         th_type *definition = ir_type_definition(module, type);
         if (!definition) return true;
@@ -103,7 +141,7 @@ publish_scalar_or_alias(ir_module_t *module, th_type *type,
         if (found) return false;
         core_dict_put(seen, type, type);
         bool definition_handled = false;
-        if (!publish_scalar_or_alias(module, definition, target, seen,
+        if (!publish_direct_or_alias(module, definition, target, seen,
                                      &definition_handled)) return false;
         if (!definition_handled) return true;
         const ir_final_layout_t *base = ir_layout_final(module, definition,
@@ -139,7 +177,7 @@ publish_scalar_or_alias(ir_module_t *module, th_type *type,
 }
 
 bool
-n00bb_abi_publish_scalar_layout(ir_module_t *module, th_type *type,
+n00bb_abi_publish_direct_layout(ir_module_t *module, th_type *type,
                                 const core_target_desc_t *target,
                                 bool *handled)
 {
@@ -148,13 +186,13 @@ n00bb_abi_publish_scalar_layout(ir_module_t *module, th_type *type,
         || strcmp(ir_module_target(module), target->triple)) return false;
     core_dict_t seen;
     core_dict_init(&seen, nullptr, nullptr);
-    bool ok = publish_scalar_or_alias(module, type, target, &seen, handled);
+    bool ok = publish_direct_or_alias(module, type, target, &seen, handled);
     core_dict_free(&seen);
     return ok;
 }
 
 bool
-n00bb_abi_publish_interned_scalar_layouts(
+n00bb_abi_publish_interned_direct_layouts(
     ir_module_t *module, const core_target_desc_t *target,
     th_type **failed_type)
 {
@@ -163,7 +201,7 @@ n00bb_abi_publish_interned_scalar_layouts(
     for (size_t i = 0; i < ir_type_count(module); i++) {
         th_type *type = ir_type_at(module, i);
         bool handled = false;
-        if (!type || !n00bb_abi_publish_scalar_layout(module, type,
+        if (!type || !n00bb_abi_publish_direct_layout(module, type,
                                                       target, &handled)) {
             if (failed_type) *failed_type = type;
             return false;
