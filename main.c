@@ -45713,31 +45713,73 @@ abi_declaration_for_symbol(void *context, parse_sym_entry_t *symbol)
     return link_declaration_for_symbol(context, symbol);
 }
 
+typedef struct {
+    n00bb_abi_packed_tables_t packed;
+    uint8_t *object;
+    size_t object_bytes;
+} n00bb_abi_artifact_t;
+
+static void
+free_abi_artifact(void *payload)
+{
+    n00bb_abi_artifact_t *artifact = payload;
+    if (!artifact) return;
+    n00bb_abi_packed_tables_release(&artifact->packed);
+    core_free(artifact->object);
+    core_free(artifact);
+}
+
 static bool
-n00bb_emit_abi_artifact(core_link_unit_t *link,
-                              n00bb_link_analysis_t *analysis,
-                              parse_cmdr_result_t *args, bool debug_enabled,
-                              core_diagnostics_t *diagnostics)
+n00bb_emit_abi_artifacts(core_link_unit_t *link,
+                         n00bb_link_analysis_t *analysis,
+                         bool debug_enabled)
+{
+    if (!link || !analysis || !core_link_unit_graph_is_finalized(link)
+        || core_link_unit_stage_state(link,
+            N00BB_LINK_STAGE_STORAGE_LIFETIMES) != CORE_LINK_STAGE_COMPLETE)
+        return false;
+    for (size_t i = 0; i < core_link_unit_translation_unit_count(link); i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+        if (!state || !state->lex || !state->lex->tokens
+            || !state->annotations || !state->ir_module
+            || !state->comptime_ir_module) return false;
+        n00bb_abi_artifact_t *artifact = core_alloc(n00bb_abi_artifact_t);
+        bool emitted = n00bb_abi_emit_unit(unit, n00bb_package_id(unit),
+            state->annotations->symtab, state->lex->tokens,
+            state->comptime_ir_module, state->ir_module, &analysis->target,
+            debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
+            abi_declaration_for_symbol, analysis, &artifact->packed,
+            &artifact->object, &artifact->object_bytes);
+        if (!emitted) {
+            free_abi_artifact(artifact);
+            return false;
+        }
+        if (!core_link_unit_add_artifact(link, unit->module.identifier,
+                CORE_STRING_STATIC("n00bb.abi.object"), 1, artifact,
+                CORE_LINK_PAYLOAD_OWNED, free_abi_artifact)) {
+            free_abi_artifact(artifact);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool
+n00bb_write_compile_abi_artifact(core_link_unit_t *link,
+                                 parse_cmdr_result_t *args,
+                                 core_diagnostics_t *diagnostics)
 {
     core_translation_unit_t *unit = link && core_link_unit_root_count(link) == 1
         ? core_link_unit_root(link, 0) : nullptr;
-    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-    if (!analysis || !state || !state->lex || !state->lex->tokens
-        || !state->annotations
-        || !state->ir_module || !state->comptime_ir_module)
+    core_link_artifact_view_t view = {0};
+    if (!unit || !core_link_unit_require_artifact(link,
+            unit->module.identifier, CORE_STRING_STATIC("n00bb.abi.object"),
+            1, &view)) return false;
+    const n00bb_abi_artifact_t *artifact = view.payload;
+    if (!artifact || !artifact->object || !artifact->object_bytes)
         return false;
-    n00bb_abi_packed_tables_t packed = {0};
-    uint8_t *object = nullptr;
-    size_t object_bytes = 0;
-    bool emitted = n00bb_abi_emit_unit(unit, n00bb_package_id(unit),
-        state->annotations->symtab, state->lex->tokens,
-        state->comptime_ir_module,
-        state->ir_module, &analysis->target,
-        debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
-        abi_declaration_for_symbol, analysis,
-        &packed, &object, &object_bytes);
-    n00bb_abi_packed_tables_release(&packed);
-    if (!emitted) return false;
 
     core_string_t requested = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
@@ -45751,7 +45793,8 @@ n00bb_emit_abi_artifact(core_link_unit_t *link,
     }
     char *path = core_strndup(requested.data, requested.u8_bytes);
     FILE *file = fopen(path, "wb");
-    bool saved = file && fwrite(object, 1, object_bytes, file) == object_bytes;
+    bool saved = file && fwrite(artifact->object, 1,
+        artifact->object_bytes, file) == artifact->object_bytes;
     if (file && fclose(file)) saved = false;
     if (!saved) {
         core_buffer_t message = {0};
@@ -45763,7 +45806,6 @@ n00bb_emit_abi_artifact(core_link_unit_t *link,
     }
     core_free(path);
     core_buffer_release(&default_name);
-    core_free(object);
     return saved;
 }
 
@@ -45982,10 +46024,13 @@ main(int argc, char **argv)
         core_free(path);
     }
     bool compile_emitted = false;
-    if (located && compile_command)
-        compile_emitted = located = n00bb_emit_abi_artifact(
-            link, link_analysis, args, !preprocessor_options.release_mode,
-            cli_diagnostics);
+    if (located && compile_command) {
+        located = n00bb_emit_abi_artifacts(link, link_analysis,
+            !preprocessor_options.release_mode);
+        if (located)
+            compile_emitted = located = n00bb_write_compile_abi_artifact(
+                link, args, cli_diagnostics);
+    }
     if (located && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--dump-link-unit")))
         dump_link_unit(link);
