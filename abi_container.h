@@ -38,8 +38,9 @@ typedef struct {
     uint64_t payload_checksum;
 } n00bb_abi_image_header_t;
 
-/* Table bytes must already be present. The checksum is written last, over
- * the serialized payload before native relocations are applied. */
+/* Table bytes must already be present. The checksum covers the current
+ * serialized bytes; final images call this after static-link rewrites and
+ * before loader relocations. */
 bool n00bb_abi_container_write(
     uint8_t *image, size_t image_bytes,
     const n00bb_abi_image_header_t *header,

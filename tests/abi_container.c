@@ -80,7 +80,18 @@ int main(void)
     ok &= expect("payload corruption rejected by checksum",
         !n00bb_abi_container_read(image, sizeof(image), &authored.key,
             &schema, 1, false, &decoded, &decoded_entry, 1));
+    uint64_t before_relink = core_le_load_u64(image + 80);
+    ok &= expect("producer finalizes changed payload with a new checksum",
+        n00bb_abi_container_write(image, sizeof(image), &authored,
+            &entry, &schema, 1, false)
+        && core_le_load_u64(image + 80) != before_relink
+        && n00bb_abi_container_read(image, sizeof(image), &authored.key,
+            &schema, 1, false, &decoded, &decoded_entry, 1));
     image[120] ^= 1;
+    ok &= expect("finalizing restored payload restores its checksum",
+        n00bb_abi_container_write(image, sizeof(image), &authored,
+            &entry, &schema, 1, false)
+        && core_le_load_u64(image + 80) == before_relink);
     image[0] ^= 1;
     ok &= expect("magic rejected before directory access",
         !n00bb_abi_container_read(image, sizeof(image), &authored.key,
