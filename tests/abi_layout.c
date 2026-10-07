@@ -7,6 +7,7 @@ static const ir_scalar_t SCALARS[] = {
     {"char", IR_CLASS_UINT, 24, IR_ROLE_CHAR},
     {"f64", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
     {"nil", IR_CLASS_VOID, 0, IR_ROLE_NONE},
+    {"u32", IR_CLASS_UINT, 32, IR_ROLE_NONE},
 };
 
 static const ir_profile_t PROFILE = {
@@ -174,6 +175,45 @@ int main(void)
             && wide_layout && wide_layout->intrinsic_bits == 16
             && wide_layout->alignment_bytes == 2
             && wide_layout->occupied[0].width == 9;
+        th_type *u32 = th_name(types, "u32");
+        th_type *bool_type = th_name(types, "bool");
+        th_type *c_record = th_name(types, "CRecord");
+        n00bb_abi_record_member_t c_members[] = {
+            {.name = "count", .type = u32, .ordinal = 0,
+             .c_compatible = true},
+            {.name = "active", .type = bool_type, .ordinal = 1,
+             .c_compatible = true},
+        };
+        handled = false;
+        ok = ok && check_scalar(module, &target, u32, 32, 32, 4)
+            && n00bb_abi_publish_c_record_layout(module, c_record, &target,
+                c_members, sizeof(c_members) / sizeof(c_members[0]));
+        const ir_final_layout_t *c_layout = ir_layout_final(
+            module, c_record, target.triple);
+        ir_descriptor_t *c_descriptor = ir_layout_of(module, c_record,
+                                                      target.triple);
+        ok = ok && c_layout && c_layout->intrinsic_bits == 64
+            && c_layout->alignment_bytes == 4
+            && c_layout->n_occupied == 2
+            && c_layout->occupied[0].offset == 0
+            && c_layout->occupied[0].width == 32
+            && c_layout->occupied[1].offset == 32
+            && c_layout->occupied[1].width == 1
+            && c_layout->n_members == 2
+            && c_layout->members[0].bit_offset == 0
+            && c_layout->members[1].bit_offset == 32
+            && c_layout->members[1].n_occupied == 1
+            && c_layout->members[1].occupied[0].offset == 32
+            && c_layout->members[1].occupied[0].width == 1
+            && c_descriptor
+            && ir_layout_compute(module, c_record, nullptr)
+            && c_descriptor->size.value == 8
+            && c_descriptor->align.value == 4;
+        th_type *rejected_record = th_name(types, "RejectedCRecord");
+        c_members[1].c_compatible = false;
+        ok = ok && !n00bb_abi_publish_c_record_layout(module,
+            rejected_record, &target, c_members,
+            sizeof(c_members) / sizeof(c_members[0]));
         handled = false;
         ok = ok && !n00bb_abi_publish_direct_layout(module,
                    th_bits(types, 129), &target, &handled) && handled;

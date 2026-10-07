@@ -1,0 +1,3 @@
+type Bad layout(c) {
+    value: string
+}

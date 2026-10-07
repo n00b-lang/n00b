@@ -4226,6 +4226,31 @@ if "$compiler" lower "$program_dir/record_layout_duplicate.n00b" \
 fi
 grep -q 'N00BB-L0069.*duplicate record layout policy' \
     "$tmp/record_layout_duplicate.out"
+"$compiler" lower --dump-layout "$program_dir/c_record_layout.n00b" \
+    >"$tmp/c_record_layout.out" 2>&1 || {
+    cat "$tmp/c_record_layout.out"
+    exit 1
+}
+grep -Eq 'layout c_record_layout.Header target=(x86_64-linux|arm64-macos|x86_64-windows) size=8 align=4' \
+    "$tmp/c_record_layout.out"
+grep -q 'member count bit-offset=0 bit-width=32' \
+    "$tmp/c_record_layout.out"
+grep -q 'member active bit-offset=32 bit-width=8' \
+    "$tmp/c_record_layout.out"
+N00B_PATH="$program_dir" "$compiler" lower --dump-layout \
+    c_record_import >"$tmp/c_record_import.out" 2>&1 || {
+    cat "$tmp/c_record_import.out"
+    exit 1
+}
+grep -Eq 'layout c_record_layout.Header target=(x86_64-linux|arm64-macos|x86_64-windows) size=8 align=4' \
+    "$tmp/c_record_import.out"
+if "$compiler" lower "$program_dir/c_record_invalid_field.n00b" \
+    >"$tmp/c_record_invalid_field.out" 2>&1; then
+    echo 'non-C-compatible record field unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q "field 'value' has no C-compatible finalized ABI representation" \
+    "$tmp/c_record_invalid_field.out"
 "$compiler" lower --dump-layout "$program_dir/fixed_value_layouts.n00b" \
     >"$tmp/fixed_value_layouts.out" 2>"$tmp/fixed_value_layouts.err" || {
     cat "$tmp/fixed_value_layouts.err"

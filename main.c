@@ -37074,6 +37074,140 @@ validate_inline_layout_cycles(n00bb_link_analysis_t *analysis)
 }
 
 static bool
+record_field_has_c_scalar_representation(ir_module_t *module, th_type *type)
+{
+    type = th_resolve(type);
+    core_list_t(th_type_ptr_t) seen = core_list_new(th_type_ptr_t);
+    bool compatible = false;
+    while (type && th_kind_of(type) == TH_NAMED) {
+        const char *name = nullptr;
+        size_t argument_count = 0;
+        th_named_info(type, &name, nullptr, nullptr, &argument_count);
+        if (argument_count) break;
+        th_type *definition = ir_type_definition(module, type);
+        if (definition) {
+            bool repeated = false;
+            for (size_t i = 0; i < seen.len; i++)
+                if (seen.data[i] == type) repeated = true;
+            if (repeated) break;
+            core_list_push(seen, type);
+            type = th_resolve(definition);
+            continue;
+        }
+        if (!builtin_type_name(name)) break;
+        ir_machine_t machine = ir_machine_of(module, type);
+        compatible = (machine.class == IR_CLASS_BOOL && machine.width == 1)
+            || (machine.class == IR_CLASS_FLOAT && machine.width == 64)
+            || ((machine.class == IR_CLASS_SINT
+                 || machine.class == IR_CLASS_UINT)
+                && machine.width && machine.width <= 64);
+        break;
+    }
+    core_list_free(seen);
+    return compatible;
+}
+
+static bool
+publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
+{
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *owner = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(owner);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        if (!symtab) return false;
+        for (parse_scope_t *scope = symtab->all_scopes; scope;
+             scope = scope->all_next) {
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                n00bb_record_layout_request_t *request = parse_sym_binding(
+                    symbol, CORE_STRING_STATIC(
+                        "n00bb.record-layout-request"));
+                if (!request || request->policy != N00BB_RECORD_C
+                    || request->alignment_expression) continue;
+                core_list_t(parse_sym_entry_ptr_t) fields =
+                    core_list_new(parse_sym_entry_ptr_t);
+                if (!record_fields_in_source_order(symbol->member_scope,
+                                                    &fields)) {
+                    core_list_free(fields);
+                    return false;
+                }
+                bool valid = fields.len && fields.len <= UINT32_MAX;
+                for (size_t d = 0; valid && d < analysis->units.len; d++) {
+                    n00bb_tu_state_t *destination = tu_state(
+                        analysis->units.data[d]);
+                    ir_module_t *modules[] = {
+                        destination->comptime_ir_module,
+                        destination->ir_module,
+                    };
+                    for (size_t m = 0; valid
+                         && m < sizeof(modules) / sizeof(modules[0]); m++) {
+                        ir_module_t *module = modules[m];
+                        n00bb_abi_record_member_t *members = core_alloc_array(
+                            n00bb_abi_record_member_t, fields.len);
+                        valid = module && members;
+                        for (size_t i = 0; valid && i < fields.len; i++) {
+                            parse_sym_entry_t *field = fields.data[i];
+                            th_type *declared = declared_type_from_node(
+                                analysis->grammar, owner, field->decl_node);
+                            th_type *type = declared ? th_apply_subst(
+                                ir_module_types(module), declared) : nullptr;
+                            bool handled = false;
+                            valid = type && n00bb_abi_publish_direct_layout(
+                                module, type, &analysis->target, &handled)
+                                && handled
+                                && record_field_has_c_scalar_representation(
+                                    module, type);
+                            if (!valid) {
+                                core_buffer_t message = {0};
+                                core_buffer_printf(&message,
+                                    "field '%.*s' has no C-compatible finalized ABI representation",
+                                    (int)field->name.u8_bytes,
+                                    field->name.data);
+                                core_diagnostics_report_at(
+                                    core_translation_unit_diagnostics(owner),
+                                    owner, CORE_DIAG_FATAL,
+                                    CORE_STRING_STATIC("N00BB-L0069"),
+                                    core_string_from_cstr(message.data),
+                                    link_source_location(field->decl_node));
+                                core_buffer_release(&message);
+                                break;
+                            }
+                            members[i] = (n00bb_abi_record_member_t){
+                                .name = field->name.data,
+                                .type = type,
+                                .ordinal = (uint32_t)i,
+                                .c_compatible = true,
+                            };
+                        }
+                        th_type *record = symbol->type ? th_apply_subst(
+                            ir_module_types(module), symbol->type) : nullptr;
+                        if (valid) valid = record
+                            && n00bb_abi_publish_c_record_layout(module,
+                                record, &analysis->target, members,
+                                fields.len);
+                        core_free(members);
+                    }
+                }
+                core_list_free(fields);
+                if (!valid) {
+                    if (!core_diagnostics_failed(
+                            core_translation_unit_diagnostics(owner)))
+                        core_diagnostics_report_at(
+                            core_translation_unit_diagnostics(owner), owner,
+                            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0069"),
+                            CORE_STRING_STATIC(
+                                "could not finalize C record layout"),
+                            link_source_location(symbol->decl_node));
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static bool
 reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
@@ -37089,7 +37223,8 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
                 n00bb_record_layout_request_t *request = parse_sym_binding(
                     symbol, CORE_STRING_STATIC(
                         "n00bb.record-layout-request"));
-                if (!request) continue;
+                if (!request || (request->policy == N00BB_RECORD_C
+                                 && !request->alignment_expression)) continue;
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
                     CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0069"),
@@ -37107,9 +37242,10 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
 static bool
 select_storage_placement(n00bb_link_analysis_t *analysis)
 {
-    if (!analysis || !reject_unlowered_record_layout_requests(analysis)
-        || !validate_inline_layout_cycles(analysis)
-        || !publish_known_scalar_layouts(analysis)) return false;
+    if (!analysis || !validate_inline_layout_cycles(analysis)
+        || !publish_known_scalar_layouts(analysis)
+        || !publish_requested_c_record_layouts(analysis)
+        || !reject_unlowered_record_layout_requests(analysis)) return false;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);

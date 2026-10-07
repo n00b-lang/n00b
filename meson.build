@@ -66,7 +66,7 @@ test('abi-string-value', abi_string_value_test)
 
 abi_layout_test = executable(
     'abi-layout-test',
-    ['tests/abi_layout.c', 'abi_layout.c'],
+    ['tests/abi_layout.c', 'abi_layout.c', 'abi_record_layout.c'],
     dependencies: lantern,
 )
 
