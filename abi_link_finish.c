@@ -36,7 +36,8 @@ link_only_inputs_resolved(const n00bb_abi_selected_objects_t *selected,
                         N00B_ABI_TABLE_REQUIREMENT, i);
                 if (!row || (row->symbol_kind != N00B_ABI_SYMBOL_MODULE
                         && row->symbol_kind != N00B_ABI_SYMBOL_TYPE
-                        && row->symbol_kind != N00B_ABI_SYMBOL_FUNCTION))
+                        && row->symbol_kind != N00B_ABI_SYMBOL_FUNCTION
+                        && row->symbol_kind != N00B_ABI_SYMBOL_VARIABLE))
                     return false;
             }
         }
@@ -71,7 +72,8 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
             if (!request) return false;
             if (request->symbol_kind == N00B_ABI_SYMBOL_MODULE) continue;
             if ((request->symbol_kind != N00B_ABI_SYMBOL_TYPE
-                    && request->symbol_kind != N00B_ABI_SYMBOL_FUNCTION)
+                    && request->symbol_kind != N00B_ABI_SYMBOL_FUNCTION
+                    && request->symbol_kind != N00B_ABI_SYMBOL_VARIABLE)
                 || request->requesting_module_index != 1
                 || !request->required_phase_mask
                 || (request->required_phase_mask
@@ -161,18 +163,29 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                         }
                         if (!defined) continue;
                     }
+                    if (request->symbol_kind == N00B_ABI_SYMBOL_VARIABLE
+                        && (request->required_phase_mask
+                            & N00B_ABI_PHASE_RUNTIME)) {
+                        const n00bb_abi_directory_entry_t *storages =
+                            n00bb_abi_object_table(provider,
+                                N00B_ABI_TABLE_STORAGE);
+                        bool defined = false;
+                        if (!storages) return false;
+                        for (uint32_t k = 1; k < storages->record_count; k++) {
+                            const n00b_abi_storage_v1 *storage =
+                                n00bb_abi_object_row(provider,
+                                    N00B_ABI_TABLE_STORAGE, k);
+                            if (storage && storage->symbol_index == j
+                                && storage->module_index == 1
+                                && storage->type_index == symbol->type_index)
+                                defined = true;
+                        }
+                        if (!defined) continue;
+                    }
                     if (request->required_layout_index) {
-                        uint32_t required_layout, provided_layout;
-                        if (!definition->layout_index
-                            || !n00bb_abi_index_plan_map(plan, input,
-                                N00B_ABI_TABLE_LAYOUT,
-                                request->required_layout_index,
-                                &required_layout)
-                            || !n00bb_abi_index_plan_map(plan,
-                                provider_input, N00B_ABI_TABLE_LAYOUT,
-                                definition->layout_index,
-                                &provided_layout)
-                            || required_layout != provided_layout)
+                        if (request->required_layout_index
+                                != contract->layout_index
+                            || !definition->layout_index)
                             return false;
                     }
                     matches++;

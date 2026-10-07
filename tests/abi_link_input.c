@@ -751,6 +751,96 @@ test_imported_function_requirement(const char *root_path,
 }
 
 static void
+test_imported_value_requirement(const char *root_path, const char *dep_path)
+{
+    core_translation_unit_t root = {0}, dep = {0};
+    assert(init_unit(&root, "abi_value_root")
+        && init_unit(&dep, "abi_value_dep")
+        && core_translation_unit_add_import(&root, &dep));
+    core_link_unit_t *link = core_link_unit_new();
+    assert(link && core_link_unit_add_root(link, &root)
+        && core_link_unit_finalize_graph(link));
+    size_t root_bytes, dep_bytes;
+    uint8_t *root_object = read_object(root_path, &root_bytes);
+    uint8_t *dep_object = read_object(dep_path, &dep_bytes);
+    n00bb_abi_object_input_t inputs[] = {
+        {.module = root.module.identifier, .object = root_object,
+            .object_bytes = root_bytes},
+        {.module = dep.module.identifier, .object = dep_object,
+            .object_bytes = dep_bytes},
+    };
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_selected_objects_t selected = {0};
+    assert(n00bb_abi_select_objects(link, &target, inputs, 2, &selected)
+        && selected.count == 2);
+    const n00bb_abi_object_view_t *root_view = nullptr, *dep_view = nullptr;
+    for (size_t i = 0; i < selected.count; i++) {
+        if (selected.views[i].object == root_object)
+            root_view = &selected.views[i];
+        if (selected.views[i].object == dep_object)
+            dep_view = &selected.views[i];
+    }
+    assert(root_view && dep_view);
+    const n00bb_abi_directory_entry_t *requirements =
+        n00bb_abi_object_table(root_view, N00B_ABI_TABLE_REQUIREMENT);
+    assert(requirements && requirements->record_count == 3);
+    n00b_abi_requirement_v1 *value_requirement = (void *)
+        n00bb_abi_object_row(root_view, N00B_ABI_TABLE_REQUIREMENT, 2);
+    n00bb_abi_string_view_t path;
+    assert(value_requirement
+        && value_requirement->symbol_kind == N00B_ABI_SYMBOL_VARIABLE
+        && value_requirement->requesting_module_index == 1
+        && value_requirement->required_layout_index
+        && value_requirement->required_phase_mask & N00B_ABI_PHASE_RUNTIME
+        && n00bb_abi_object_string(root_view,
+            &value_requirement->full_path, &path)
+        && path.length == strlen("abi_value_dep.value")
+        && !memcmp(path.bytes, "abi_value_dep.value", path.length));
+    const n00b_abi_symbol_v1 *symbol = find_symbol(dep_view, "value",
+        N00B_ABI_SYMBOL_VARIABLE);
+    assert(symbol && symbol->type_index
+        && symbol->flags & N00B_ABI_SYMBOL_FLAG_EXPORTED);
+    const n00bb_abi_directory_entry_t *storages =
+        n00bb_abi_object_table(dep_view, N00B_ABI_TABLE_STORAGE);
+    assert(storages && storages->record_count == 2);
+    n00b_abi_storage_v1 *storage = (void *)n00bb_abi_object_row(dep_view,
+        N00B_ABI_TABLE_STORAGE, 1);
+    assert(storage && storage->symbol_index
+        && n00bb_abi_object_row(dep_view, N00B_ABI_TABLE_SYMBOL,
+            storage->symbol_index) == symbol
+        && storage->type_index == symbol->type_index);
+    uint8_t *linked = nullptr;
+    size_t linked_bytes = 0;
+    assert(n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes));
+    core_free(linked);
+    linked = nullptr;
+    linked_bytes = 0;
+    uint32_t saved_symbol = storage->symbol_index;
+    storage->symbol_index = 0;
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes) && !linked && !linked_bytes);
+    storage->symbol_index = saved_symbol;
+    uint32_t saved_contract = value_requirement->contract_type_index;
+    value_requirement->contract_type_index = 0;
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes) && !linked && !linked_bytes);
+    value_requirement->contract_type_index = saved_contract;
+    uint32_t saved_layout = value_requirement->required_layout_index;
+    value_requirement->required_layout_index = UINT32_MAX;
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes) && !linked && !linked_bytes);
+    value_requirement->required_layout_index = saved_layout;
+    n00bb_abi_selected_objects_release(&selected);
+    core_link_unit_free(link);
+    core_translation_unit_release(&root);
+    core_translation_unit_release(&dep);
+    free(root_object);
+    free(dep_object);
+}
+
+static void
 test_duplicate_component(const core_target_desc_t *target,
                          const char *path, const uint8_t *object,
                          size_t object_bytes)
@@ -1623,6 +1713,10 @@ main(int argc, char **argv)
         return 0;
     }
     if (argc == 4) {
+        if (!strcmp(argv[1], "--value-import")) {
+            test_imported_value_requirement(argv[2], argv[3]);
+            return 0;
+        }
         if (!strcmp(argv[1], "--records")) {
             test_imported_record_selection(argv[2], argv[3]);
             return 0;
