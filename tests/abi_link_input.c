@@ -62,6 +62,8 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
     n00bb_abi_u32_stream_build_t stream = {
         .values = values, .kinds = kinds, .count = stream_count,
     };
+    n00bb_abi_name_pool_t *pool = n00bb_abi_name_pool_new();
+    assert(pool);
     for (size_t input = 0; input < selected->count; input++) {
         const n00bb_abi_object_view_t *view = &selected->views[input];
         for (size_t table = 0; table < view->directory_count; table++) {
@@ -71,10 +73,17 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
                 || entry->kind == N00B_ABI_TABLE_BYTE_STREAM) continue;
             void *row = malloc(entry->record_bytes);
             assert(row);
-            for (uint32_t local = 0; local < entry->record_count; local++)
+            for (uint32_t local = 0; local < entry->record_count; local++) {
+                uint32_t final_index;
                 assert(n00bb_abi_remap_row(selected, plan, input,
                     entry->kind, local, row, entry->record_bytes,
-                    &stream));
+                    &stream)
+                    && n00bb_abi_index_plan_map(plan, input,
+                        entry->kind, local, &final_index)
+                    && n00bb_abi_repool_row_strings(view, entry->kind,
+                        local, final_index, row, entry->record_bytes,
+                        pool));
+            }
             free(row);
         }
         n00b_abi_package_v1 package;
@@ -97,6 +106,7 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
                 && stream.values[group.members.first] == module_index);
         }
     }
+    n00bb_abi_name_pool_free(pool);
     free(kinds);
     free(values);
 }
@@ -323,6 +333,58 @@ main(int argc, char **argv)
         && name.length >= strlen("values")
         && !memcmp(name.bytes + name.length - strlen("values"),
                    "values", strlen("values")));
+    n00bb_abi_name_pool_t *pool = n00bb_abi_name_pool_new();
+    assert(pool);
+    n00b_abi_module_v1 pooled_module = *module;
+    n00b_abi_native_binding_v1 pooled_binding = *binding;
+    assert(n00bb_abi_repool_row_strings(&view, N00B_ABI_TABLE_MODULE,
+        1, 1, &pooled_module, sizeof(pooled_module), pool)
+        && n00bb_abi_repool_row_strings(&view,
+            N00B_ABI_TABLE_NATIVE_BINDING, 1, 1,
+            &pooled_binding, sizeof(pooled_binding), pool));
+    n00bb_abi_string_header_t pooled_header;
+    assert(n00bb_abi_string_decode((const uint8_t *)&pooled_module.full_path,
+        sizeof(pooled_module.full_path), &pooled_header)
+        && pooled_header.tag == N00BB_ABI_STRING_SHORT
+        && pooled_header.length == strlen("array_storage"));
+    assert(n00bb_abi_string_decode(
+        (const uint8_t *)&pooled_binding.native_name,
+        sizeof(pooled_binding.native_name), &pooled_header)
+        && pooled_header.tag == N00BB_ABI_STRING_LONG
+        && pooled_header.length == name.length
+        && n00bb_abi_name_pool_size(pool) == name.length
+        && !memcmp(n00bb_abi_name_pool_bytes(pool), name.bytes, name.length));
+    core_object_emit_absolute64_t *relocations = nullptr;
+    size_t relocation_count = 0;
+    assert(n00bb_abi_name_pool_relocations(pool, view.directory,
+        view.directory_count, &relocations, &relocation_count)
+        && relocation_count == 1);
+    const n00bb_abi_directory_entry_t *bindings =
+        n00bb_abi_object_table(&view, N00B_ABI_TABLE_NATIVE_BINDING);
+    assert(relocations[0].section_offset == bindings->file_offset
+        + bindings->record_bytes
+        + offsetof(n00b_abi_native_binding_v1, native_name)
+        && relocations[0].addend_bits == 0);
+    free(relocations);
+    n00bb_abi_name_pool_free(pool);
+    n00b_abi_native_binding_v1 *mutable_binding = (void *)binding;
+    uint64_t saved_selector = mutable_binding->native_name.long_value.selector;
+    mutable_binding->native_name.long_value.selector =
+        (saved_selector & ~(UINT64_C(3) << N00B_ABI_STRING_TAG_SHIFT))
+        | ((uint64_t)N00B_ABI_STRING_SPAN << N00B_ABI_STRING_TAG_SHIFT);
+    assert(n00bb_abi_object_string(&view, &binding->native_name, &name));
+    pool = n00bb_abi_name_pool_new();
+    pooled_binding = *binding;
+    assert(pool && n00bb_abi_repool_row_strings(&view,
+        N00B_ABI_TABLE_NATIVE_BINDING, 1, 1, &pooled_binding,
+        sizeof(pooled_binding), pool)
+        && n00bb_abi_string_decode(
+            (const uint8_t *)&pooled_binding.native_name,
+            sizeof(pooled_binding.native_name), &pooled_header)
+        && pooled_header.tag == N00BB_ABI_STRING_SPAN
+        && pooled_header.length == name.length);
+    mutable_binding->native_name.long_value.selector = saved_selector;
+    n00bb_abi_name_pool_free(pool);
     n00bb_abi_string_view_t unchanged_name = {.bytes = object, .length = 1};
     assert(!n00bb_abi_object_string(&view,
         (const n00b_abi_string_v1 *)object, &unchanged_name)

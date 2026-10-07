@@ -108,7 +108,8 @@ n00bb_abi_object_string(const n00bb_abi_object_view_t *view,
         };
         return true;
     }
-    if (header.tag != N00BB_ABI_STRING_LONG) return false;
+    if (header.tag != N00BB_ABI_STRING_LONG
+        && header.tag != N00BB_ABI_STRING_SPAN) return false;
 
     const char *segment = view->format == CORE_TARGET_OBJECT_MACH_O
         ? "__TEXT" : nullptr;
@@ -1124,5 +1125,75 @@ n00bb_abi_rebuild_manifests(
         return false;
     }
     *out = built;
+    return true;
+}
+
+typedef struct {
+    uint32_t kind;
+    size_t offset;
+} abi_string_column_t;
+
+#define ABI_STRING_FIELD(K, T, F) \
+    {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F)}
+
+static const abi_string_column_t abi_string_columns[] = {
+    ABI_STRING_FIELD(PACKAGE, package, name),
+    ABI_STRING_FIELD(MODULE, module, full_path),
+    ABI_STRING_FIELD(TYPE, type, canonical_name),
+    ABI_STRING_FIELD(ENUM_ITEM, enum_item, name),
+    ABI_STRING_FIELD(CONSTRAINT, constraint, name),
+    ABI_STRING_FIELD(CONSTRAINT, constraint, scope_module_name),
+    ABI_STRING_FIELD(CONSTRAINT, constraint, scope_package_name),
+    ABI_STRING_FIELD(FIELD, field, name),
+    ABI_STRING_FIELD(ARM, arm, field.name),
+    ABI_STRING_FIELD(FUNCTION, function, name),
+    ABI_STRING_FIELD(PARAMETER, parameter, name),
+    ABI_STRING_FIELD(SCOPE, scope, kind_name),
+    ABI_STRING_FIELD(SYMBOL, symbol, name),
+    ABI_STRING_FIELD(SYMBOL, symbol, storage_class_name),
+    ABI_STRING_FIELD(NATIVE_BINDING, native_binding, native_name),
+    ABI_STRING_FIELD(SOURCE_FILE, source_file, path),
+    ABI_STRING_FIELD(STATIC_STRING, static_string, value),
+    ABI_STRING_FIELD(RUNTIME_CONFIG, runtime_config, memory_manager_name),
+    ABI_STRING_FIELD(REQUIREMENT, requirement, full_path),
+};
+
+#undef ABI_STRING_FIELD
+
+bool
+n00bb_abi_repool_row_strings(
+    const n00bb_abi_object_view_t *view, uint32_t kind,
+    uint32_t local_index, uint32_t final_index,
+    void *out_row, size_t out_bytes, n00bb_abi_name_pool_t *pool)
+{
+    if (!view || !out_row || !pool) return false;
+    const n00bb_abi_directory_entry_t *table =
+        n00bb_abi_object_table(view, kind);
+    const uint8_t *source = n00bb_abi_object_row(view, kind, local_index);
+    if (!table || !source || out_row == (const void *)source
+        || out_bytes < table->record_bytes) return false;
+    uint8_t *destination = out_row;
+    for (size_t i = 0; i < sizeof(abi_string_columns)
+         / sizeof(abi_string_columns[0]); i++) {
+        const abi_string_column_t *field = &abi_string_columns[i];
+        if (field->kind != kind) continue;
+        if (field->offset > table->record_bytes
+            || sizeof(n00b_abi_string_v1)
+                > table->record_bytes - field->offset) return false;
+        const n00b_abi_string_v1 *value =
+            (const void *)(source + field->offset);
+        n00bb_abi_string_header_t header;
+        n00bb_abi_string_view_t decoded;
+        if (!n00bb_abi_string_decode((const uint8_t *)value,
+                sizeof(*value), &header)
+            || !n00bb_abi_object_string(view, value, &decoded)
+            || !n00bb_abi_name_pool_encode_tagged(pool,
+                core_string_borrow((char *)decoded.bytes, decoded.length),
+                (n00b_abi_string_encoding_v1)header.encoding,
+                header.tag == N00BB_ABI_STRING_SPAN
+                    ? N00B_ABI_STRING_SPAN : N00B_ABI_STRING_LONG,
+                kind, final_index, field->offset,
+                (void *)(destination + field->offset))) return false;
+    }
     return true;
 }

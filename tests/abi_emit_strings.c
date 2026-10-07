@@ -98,6 +98,53 @@ main(void)
     assert(!n00bb_abi_name_pool_relocations(pool, entries, 2,
                                             &relocations, &count));
     assert(!relocations && !count);
+    n00bb_abi_name_pool_t *binary_pool = n00bb_abi_name_pool_new();
+    static const char binary[] = "\0binary_payload";
+    n00b_abi_static_string_v1 binary_row = {0};
+    assert(binary_pool && n00bb_abi_name_pool_encode_with_encoding(
+        binary_pool, core_string_borrow(binary, sizeof(binary) - 1),
+        N00B_ABI_STRING_BINARY, N00B_ABI_TABLE_STATIC_STRING, 1,
+        offsetof(n00b_abi_static_string_v1, value), &binary_row.value));
+    assert(n00bb_abi_string_decode((const uint8_t *)&binary_row.value,
+        sizeof(binary_row.value), &header)
+        && header.tag == N00BB_ABI_STRING_LONG
+        && header.encoding == N00BB_ABI_STRING_BINARY
+        && header.length == sizeof(binary) - 1
+        && n00bb_abi_name_pool_size(binary_pool) == sizeof(binary) - 1
+        && !memcmp(n00bb_abi_name_pool_bytes(binary_pool), binary,
+                   sizeof(binary) - 1));
+    n00bb_abi_directory_entry_t binary_entry = {
+        .kind = N00B_ABI_TABLE_STATIC_STRING,
+        .record_bytes = sizeof(n00b_abi_static_string_v1),
+        .record_count = 2, .file_offset = 32,
+    };
+    assert(n00bb_abi_name_pool_relocations(binary_pool, &binary_entry, 1,
+        &relocations, &count) && count == 1
+        && relocations[0].section_offset
+            == 32 + sizeof(n00b_abi_static_string_v1));
+    core_free(relocations);
+    n00bb_abi_name_pool_free(binary_pool);
+    n00bb_abi_name_pool_t *span_pool = n00bb_abi_name_pool_new();
+    n00b_abi_static_string_v1 span_row = {0};
+    assert(span_pool && n00bb_abi_name_pool_encode_tagged(span_pool,
+        CORE_STRING_STATIC("abc"), N00B_ABI_STRING_ASCII,
+        N00B_ABI_STRING_SPAN, N00B_ABI_TABLE_STATIC_STRING, 1,
+        offsetof(n00b_abi_static_string_v1, value), &span_row.value));
+    assert(n00bb_abi_string_decode((const uint8_t *)&span_row.value,
+        sizeof(span_row.value), &header)
+        && header.tag == N00BB_ABI_STRING_SPAN
+        && header.encoding == N00BB_ABI_STRING_ASCII
+        && header.length == 3
+        && n00bb_abi_name_pool_size(span_pool) == 3);
+    assert(n00bb_abi_name_pool_relocations(span_pool, &binary_entry, 1,
+        &relocations, &count) && count == 1);
+    core_free(relocations);
+    n00b_abi_string_v1 empty_span = {0};
+    assert(n00bb_abi_name_pool_value_tagged(span_pool,
+        CORE_STRING_STATIC(""), N00B_ABI_STRING_ASCII,
+        N00B_ABI_STRING_SPAN, &empty_span, &pool_offset)
+        && pool_offset == 3 && n00bb_abi_name_pool_size(span_pool) == 4);
+    n00bb_abi_name_pool_free(span_pool);
     n00bb_abi_name_pool_free(pool);
     return 0;
 }

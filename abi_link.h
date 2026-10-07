@@ -1,6 +1,7 @@
 #pragma once
 
 #include "abi_container.h"
+#include "abi_emit_strings.h"
 #include "n00b-abi-v1.h"
 #include "lib/indexed_table.h"
 #include "lib/link_unit.h"
@@ -105,3 +106,11 @@ bool n00bb_abi_rebuild_manifests(
     const n00bb_abi_index_plan_t *plan,
     n00bb_abi_manifest_rows_t *out);
 void n00bb_abi_manifest_rows_release(n00bb_abi_manifest_rows_t *rows);
+
+/* Re-encodes every string-shaped column from an input row into a copied
+ * final row, retaining its binary/ASCII/UTF-8 encoding. Long values gain
+ * relocations addressed by final table kind and row index. */
+bool n00bb_abi_repool_row_strings(
+    const n00bb_abi_object_view_t *view, uint32_t kind,
+    uint32_t local_index, uint32_t final_index,
+    void *out_row, size_t out_bytes, n00bb_abi_name_pool_t *pool);

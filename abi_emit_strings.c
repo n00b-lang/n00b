@@ -73,12 +73,25 @@ n00bb_abi_name_pool_value(n00bb_abi_name_pool_t *pool,
     core_string_t text, n00b_abi_string_encoding_v1 encoding,
     n00b_abi_string_v1 *out, size_t *pool_offset)
 {
+    return n00bb_abi_name_pool_value_tagged(pool, text, encoding,
+        N00B_ABI_STRING_LONG, out, pool_offset);
+}
+
+bool
+n00bb_abi_name_pool_value_tagged(n00bb_abi_name_pool_t *pool,
+    core_string_t text, n00b_abi_string_encoding_v1 encoding,
+    n00b_abi_string_tag_v1 tag, n00b_abi_string_v1 *out,
+    size_t *pool_offset)
+{
     if (!pool || !out || !pool_offset
         || (text.u8_bytes && !text.data)
-        || encoding > N00B_ABI_STRING_UTF8) return false;
+        || encoding > N00B_ABI_STRING_UTF8
+        || (tag != N00B_ABI_STRING_LONG
+            && tag != N00B_ABI_STRING_SPAN)) return false;
     *out = (n00b_abi_string_v1){0};
     *pool_offset = 0;
-    if (text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY) {
+    if (tag != N00B_ABI_STRING_SPAN
+        && text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY) {
         if (text.u8_bytes)
             memcpy(out->short_value.bytes, text.data, text.u8_bytes);
         out->short_value.selector = (uint8_t)text.u8_bytes
@@ -93,11 +106,17 @@ n00bb_abi_name_pool_value(n00bb_abi_name_pool_t *pool,
     size_t offset;
     if (found) offset = name->offset;
     else {
+        bool empty_span = tag == N00B_ABI_STRING_SPAN && !text.u8_bytes;
+        size_t backing_bytes = text.u8_bytes + (size_t)empty_span;
         if (pool->bytes.byte_len > SIZE_MAX - 2
-            || text.u8_bytes > SIZE_MAX - pool->bytes.byte_len - 2)
+            || backing_bytes > SIZE_MAX - pool->bytes.byte_len - 2)
             return false;
         offset = pool->bytes.byte_len;
-        core_buffer_append(&pool->bytes, text.data, text.u8_bytes);
+        if (empty_span) {
+            const char zero = 0;
+            core_buffer_append(&pool->bytes, &zero, 1);
+        }
+        else core_buffer_append(&pool->bytes, text.data, text.u8_bytes);
         name = core_alloc(pooled_name_t);
         *name = (pooled_name_t){.text = core_string_dup(text),
                                 .offset = offset};
@@ -106,7 +125,7 @@ n00bb_abi_name_pool_value(n00bb_abi_name_pool_t *pool,
     }
     out->long_value.selector = (uint64_t)text.u8_bytes
         | ((uint64_t)encoding << N00B_ABI_STRING_ENCODING_SHIFT)
-        | ((uint64_t)N00B_ABI_STRING_LONG << N00B_ABI_STRING_TAG_SHIFT);
+        | ((uint64_t)tag << N00B_ABI_STRING_TAG_SHIFT);
     *pool_offset = offset;
     return true;
 }
@@ -116,11 +135,33 @@ n00bb_abi_name_pool_encode(n00bb_abi_name_pool_t *pool,
     core_string_t text, uint32_t table_kind, uint32_t record_index,
     size_t field_offset, n00b_abi_string_v1 *out)
 {
+    return n00bb_abi_name_pool_encode_with_encoding(pool, text,
+        N00B_ABI_STRING_UTF8, table_kind, record_index, field_offset, out);
+}
+
+bool
+n00bb_abi_name_pool_encode_with_encoding(
+    n00bb_abi_name_pool_t *pool, core_string_t text,
+    n00b_abi_string_encoding_v1 encoding, uint32_t table_kind,
+    uint32_t record_index, size_t field_offset, n00b_abi_string_v1 *out)
+{
+    return n00bb_abi_name_pool_encode_tagged(pool, text, encoding,
+        N00B_ABI_STRING_LONG, table_kind, record_index, field_offset, out);
+}
+
+bool
+n00bb_abi_name_pool_encode_tagged(
+    n00bb_abi_name_pool_t *pool, core_string_t text,
+    n00b_abi_string_encoding_v1 encoding, n00b_abi_string_tag_v1 tag,
+    uint32_t table_kind, uint32_t record_index, size_t field_offset,
+    n00b_abi_string_v1 *out)
+{
     if (!pool || pool->pending.len == SIZE_MAX) return false;
     size_t offset = 0;
-    if (!n00bb_abi_name_pool_value(pool, text, N00B_ABI_STRING_UTF8,
+    if (!n00bb_abi_name_pool_value_tagged(pool, text, encoding, tag,
                                    out, &offset)) return false;
-    if (text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY) return true;
+    if (tag != N00B_ABI_STRING_SPAN
+        && text.u8_bytes <= N00BB_ABI_STRING_SHORT_CAPACITY) return true;
     core_list_push(pool->pending, ((pending_name_relocation_t){
         .table_kind = table_kind,
         .record_index = record_index,

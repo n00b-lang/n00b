@@ -19,12 +19,25 @@ void n00bb_abi_name_pool_free(n00bb_abi_name_pool_t *pool);
 bool n00bb_abi_name_pool_encode(n00bb_abi_name_pool_t *pool,
     core_string_t text, uint32_t table_kind, uint32_t record_index,
     size_t field_offset, n00b_abi_string_v1 *out);
+bool n00bb_abi_name_pool_encode_with_encoding(
+    n00bb_abi_name_pool_t *pool, core_string_t text,
+    n00b_abi_string_encoding_v1 encoding, uint32_t table_kind,
+    uint32_t record_index, size_t field_offset, n00b_abi_string_v1 *out);
+bool n00bb_abi_name_pool_encode_tagged(
+    n00bb_abi_name_pool_t *pool, core_string_t text,
+    n00b_abi_string_encoding_v1 encoding, n00b_abi_string_tag_v1 tag,
+    uint32_t table_kind, uint32_t record_index, size_t field_offset,
+    n00b_abi_string_v1 *out);
 /* Encode a value outside a metadata row. A long value returns its backing
  * offset for the caller's native pointer relocation; short values do not
  * need a relocation. */
 bool n00bb_abi_name_pool_value(n00bb_abi_name_pool_t *pool,
     core_string_t text, n00b_abi_string_encoding_v1 encoding,
     n00b_abi_string_v1 *out, size_t *pool_offset);
+bool n00bb_abi_name_pool_value_tagged(n00bb_abi_name_pool_t *pool,
+    core_string_t text, n00b_abi_string_encoding_v1 encoding,
+    n00b_abi_string_tag_v1 tag, n00b_abi_string_v1 *out,
+    size_t *pool_offset);
 const uint8_t *n00bb_abi_name_pool_bytes(const n00bb_abi_name_pool_t *pool);
 size_t n00bb_abi_name_pool_size(const n00bb_abi_name_pool_t *pool);
 
