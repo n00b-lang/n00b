@@ -284,6 +284,7 @@ test_cycle_selection(char **paths)
     n00bb_abi_manifest_rows_release(&manifests);
     n00bb_abi_merged_rows_t merged = {0};
     assert(n00bb_abi_merge_rows(&selected, plan, &merged));
+    assert(n00bb_abi_rebase_native_references(&merged, nullptr, 0));
     const n00bb_abi_merged_table_t *merged_modules =
         n00bb_abi_merged_table(&merged, N00B_ABI_TABLE_MODULE);
     const n00bb_abi_merged_table_t *merged_u32 =
@@ -863,6 +864,73 @@ main(int argc, char **argv)
         && core_le_load_u64(u64->records
             + (size_t)merged_shape->extents.first * u64->record_bytes) == 2
         && merged_module && merged_module->package_index == 1);
+    const n00bb_abi_merged_table_t *storage = n00bb_abi_merged_table(
+        &merged, N00B_ABI_TABLE_STORAGE);
+    const n00bb_abi_merged_table_t *merged_bindings = n00bb_abi_merged_table(
+        &merged, N00B_ABI_TABLE_NATIVE_BINDING);
+    assert(storage && merged_bindings && storage->record_count > 1
+        && merged_bindings->record_count > 1 && storage->origins
+        && merged_bindings->origins);
+    size_t map_capacity = storage->record_count
+        + merged_bindings->record_count;
+    n00bb_abi_native_section_map_t *maps = calloc(
+        map_capacity, sizeof(*maps));
+    assert(maps);
+    size_t map_count = 0;
+    const n00bb_abi_merged_table_t *native_tables[] = {
+        storage, merged_bindings,
+    };
+    for (size_t ti = 0; ti < sizeof(native_tables) / sizeof(*native_tables);
+         ti++) {
+        const n00bb_abi_merged_table_t *table = native_tables[ti];
+        for (uint32_t i = 1; i < table->record_count; i++) {
+            const void *row = table->records + (size_t)i * table->record_bytes;
+            uint32_t local_section = table->kind == N00B_ABI_TABLE_STORAGE
+                ? ((const n00b_abi_storage_v1 *)row)->segment_index
+                : ((const n00b_abi_native_binding_v1 *)row)->section_index;
+            assert(local_section && table->origins[i].present);
+            bool found = false;
+            for (size_t j = 0; j < map_count; j++)
+                if (maps[j].input == table->origins[i].input
+                    && maps[j].local_section_index == local_section)
+                    found = true;
+            if (!found) maps[map_count++] = (n00bb_abi_native_section_map_t){
+                .input = table->origins[i].input,
+                .local_section_index = local_section,
+                .final_section_index = local_section + 17,
+                .base_offset = 32,
+            };
+        }
+    }
+    assert(map_count && !n00bb_abi_rebase_native_references(
+        &merged, nullptr, 0));
+    maps[map_count] = maps[0];
+    assert(!n00bb_abi_rebase_native_references(
+        &merged, maps, map_count + 1));
+    assert(n00bb_abi_rebase_native_references(&merged, maps, map_count));
+    for (size_t ti = 0; ti < sizeof(native_tables) / sizeof(*native_tables);
+         ti++) {
+        const n00bb_abi_merged_table_t *table = native_tables[ti];
+        for (uint32_t i = 1; i < table->record_count; i++) {
+            const n00bb_abi_row_origin_t *origin = &table->origins[i];
+            const void *before = n00bb_abi_object_row(
+                &selected.views[origin->input], table->kind, origin->local);
+            const void *after = table->records
+                + (size_t)i * table->record_bytes;
+            assert(before);
+            if (table->kind == N00B_ABI_TABLE_STORAGE) {
+                const n00b_abi_storage_v1 *a = after, *b = before;
+                assert(a->segment_index == b->segment_index + 17
+                    && a->byte_offset == b->byte_offset + 32);
+            }
+            else {
+                const n00b_abi_native_binding_v1 *a = after, *b = before;
+                assert(a->section_index == b->section_index + 17
+                    && a->offset == b->offset + 32);
+            }
+        }
+    }
+    free(maps);
     n00bb_abi_merged_rows_release(&merged);
     n00b_abi_module_v1 remapped_module;
     n00b_abi_module_v1 *mutable_module = (void *)

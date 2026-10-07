@@ -120,10 +120,17 @@ bool n00bb_abi_repool_row_strings(
  * require structural compatibility checks, and native sections/index patches
  * have not yet been linked. All row and pool bytes are owned by this value. */
 typedef struct {
+    size_t input;
+    uint32_t local;
+    bool present;
+} n00bb_abi_row_origin_t;
+
+typedef struct {
     uint32_t kind;
     uint32_t record_count;
     uint32_t record_bytes;
     uint8_t *records;
+    n00bb_abi_row_origin_t *origins;
 } n00bb_abi_merged_table_t;
 
 typedef struct {
@@ -140,3 +147,18 @@ const n00bb_abi_merged_table_t *n00bb_abi_merged_table(
 const void *n00bb_abi_merged_row(const n00bb_abi_merged_rows_t *merged,
                                  uint32_t kind, uint32_t index);
 void n00bb_abi_merged_rows_release(n00bb_abi_merged_rows_t *merged);
+
+typedef struct {
+    size_t input;
+    uint32_t local_section_index;
+    uint32_t final_section_index;
+    uint64_t base_offset;
+} n00bb_abi_native_section_map_t;
+
+/* Rebases native-section references after the final sections are placed.
+ * `base_offset` is the input section's byte offset within its final section.
+ * Every non-reserved STORAGE and NATIVE_BINDING row must have exactly one
+ * matching map. A failure leaves all merged rows unchanged. */
+bool n00bb_abi_rebase_native_references(
+    n00bb_abi_merged_rows_t *merged,
+    const n00bb_abi_native_section_map_t *maps, size_t map_count);

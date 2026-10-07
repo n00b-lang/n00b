@@ -1503,12 +1503,6 @@ n00bb_abi_repool_row_strings(
 }
 
 typedef struct {
-    size_t input;
-    uint32_t local;
-    bool present;
-} abi_row_origin_t;
-
-typedef struct {
     n00bb_abi_string_view_t name;
     uint32_t final_index;
 } abi_module_target_t;
@@ -1651,11 +1645,106 @@ void
 n00bb_abi_merged_rows_release(n00bb_abi_merged_rows_t *merged)
 {
     if (!merged) return;
-    for (size_t i = 0; i < merged->table_count; i++)
+    for (size_t i = 0; i < merged->table_count; i++) {
         core_free(merged->tables[i].records);
+        core_free(merged->tables[i].origins);
+    }
     core_free(merged->tables);
     n00bb_abi_name_pool_free(merged->strings);
     *merged = (n00bb_abi_merged_rows_t){0};
+}
+
+typedef struct {
+    void *row;
+    uint32_t kind;
+    uint32_t section_index;
+    uint64_t storage_offset;
+    int64_t binding_offset;
+} abi_native_rebase_t;
+
+bool
+n00bb_abi_rebase_native_references(
+    n00bb_abi_merged_rows_t *merged,
+    const n00bb_abi_native_section_map_t *maps, size_t map_count)
+{
+    if (!merged || !merged->tables || (map_count && !maps)) return false;
+    size_t capacity = 0;
+    for (size_t ti = 0; ti < merged->table_count; ti++) {
+        const n00bb_abi_merged_table_t *table = &merged->tables[ti];
+        if (table->kind != N00B_ABI_TABLE_STORAGE
+            && table->kind != N00B_ABI_TABLE_NATIVE_BINDING) continue;
+        if ((table->record_count && (!table->records || !table->origins))
+            || table->record_bytes != (table->kind == N00B_ABI_TABLE_STORAGE
+                ? sizeof(n00b_abi_storage_v1)
+                : sizeof(n00b_abi_native_binding_v1))
+            || table->record_count > SIZE_MAX - capacity) return false;
+        capacity += table->record_count;
+    }
+    abi_native_rebase_t *changes = core_alloc_array(
+        abi_native_rebase_t, capacity);
+    size_t change_count = 0;
+    bool valid = true;
+    for (size_t ti = 0; valid && ti < merged->table_count; ti++) {
+        n00bb_abi_merged_table_t *table = &merged->tables[ti];
+        if (table->kind != N00B_ABI_TABLE_STORAGE
+            && table->kind != N00B_ABI_TABLE_NATIVE_BINDING) continue;
+        for (uint32_t row_index = 1; valid
+             && row_index < table->record_count; row_index++) {
+            void *row = table->records
+                + (size_t)row_index * table->record_bytes;
+            const n00bb_abi_row_origin_t *origin =
+                &table->origins[row_index];
+            uint32_t local_section = table->kind == N00B_ABI_TABLE_STORAGE
+                ? ((n00b_abi_storage_v1 *)row)->segment_index
+                : ((n00b_abi_native_binding_v1 *)row)->section_index;
+            const n00bb_abi_native_section_map_t *match = nullptr;
+            valid = origin->present && local_section != 0;
+            for (size_t i = 0; valid && i < map_count; i++) {
+                if (maps[i].input != origin->input
+                    || maps[i].local_section_index != local_section)
+                    continue;
+                if (match) valid = false;
+                else match = &maps[i];
+            }
+            valid = valid && match && match->final_section_index;
+            if (!valid) break;
+            abi_native_rebase_t change = {
+                .row = row, .kind = table->kind,
+                .section_index = match->final_section_index,
+            };
+            if (table->kind == N00B_ABI_TABLE_STORAGE) {
+                uint64_t offset = ((n00b_abi_storage_v1 *)row)->byte_offset;
+                valid = match->base_offset <= UINT64_MAX - offset;
+                if (valid) change.storage_offset = offset + match->base_offset;
+            }
+            else {
+                int64_t offset =
+                    ((n00b_abi_native_binding_v1 *)row)->offset;
+                valid = match->base_offset <= INT64_MAX
+                    && offset <= INT64_MAX - (int64_t)match->base_offset;
+                if (valid) change.binding_offset = offset
+                    + (int64_t)match->base_offset;
+            }
+            if (valid) changes[change_count++] = change;
+        }
+    }
+    if (valid) {
+        for (size_t i = 0; i < change_count; i++) {
+            const abi_native_rebase_t *change = &changes[i];
+            if (change->kind == N00B_ABI_TABLE_STORAGE) {
+                n00b_abi_storage_v1 *row = change->row;
+                row->segment_index = change->section_index;
+                row->byte_offset = change->storage_offset;
+            }
+            else {
+                n00b_abi_native_binding_v1 *row = change->row;
+                row->section_index = change->section_index;
+                row->offset = change->binding_offset;
+            }
+        }
+    }
+    core_free(changes);
+    return valid;
 }
 
 bool
@@ -1677,8 +1766,8 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
         .table_count = schema_count,
         .strings = n00bb_abi_name_pool_new(),
     };
-    abi_row_origin_t **origins = core_alloc_array(
-        abi_row_origin_t *, schema_count);
+    n00bb_abi_row_origin_t **origins = core_alloc_array(
+        n00bb_abi_row_origin_t *, schema_count);
     size_t max_width = 0;
     uint32_t base_u32_count = 0;
     uint32_t import_count = 0;
@@ -1718,7 +1807,7 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
             .records = count ? core_alloc_size(count, schema->record_bytes)
                              : nullptr,
         };
-        origins[i] = count ? core_alloc_array(abi_row_origin_t, count)
+        origins[i] = count ? core_alloc_array(n00bb_abi_row_origin_t, count)
                            : nullptr;
         if (schema->record_bytes > max_width)
             max_width = schema->record_bytes;
@@ -1753,14 +1842,14 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                     table->kind, local, &final)
                     && final < table->record_count;
                 if (!valid) break;
-                abi_row_origin_t *origin = &origins[ti][final];
+                n00bb_abi_row_origin_t *origin = &origins[ti][final];
                 uint8_t *destination = table->records
                     + (size_t)final * table->record_bytes;
                 if (table->kind == N00B_ABI_TABLE_PACKAGE
                     || table->kind == N00B_ABI_TABLE_SCC
                     || table->kind == N00B_ABI_TABLE_U32_STREAM) {
                     if (!origin->present)
-                        *origin = (abi_row_origin_t){input, local, true};
+                        *origin = (n00bb_abi_row_origin_t){input, local, true};
                     continue;
                 }
                 if (link_kind_is_stream(table->kind)) {
@@ -1793,7 +1882,7 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                                         table->record_bytes);
                     else continue;
                 }
-                *origin = (abi_row_origin_t){input, local, true};
+                *origin = (n00bb_abi_row_origin_t){input, local, true};
             }
         }
     }
@@ -1840,7 +1929,7 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
         if (link_kind_is_stream(table->kind)) continue;
         for (uint32_t final = 0; valid && final < table->record_count;
              final++) {
-            abi_row_origin_t origin = origins[ti][final];
+            n00bb_abi_row_origin_t origin = origins[ti][final];
             valid = origin.present;
             if (!valid || (final == 0 && table->kind != N00B_ABI_TABLE_TYPE))
                 continue;
@@ -1851,7 +1940,12 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
         }
     }
     core_free(scratch);
-    for (size_t i = 0; i < schema_count; i++) core_free(origins[i]);
+    for (size_t i = 0; i < schema_count; i++) {
+        if (built.tables[i].kind == N00B_ABI_TABLE_STORAGE
+            || built.tables[i].kind == N00B_ABI_TABLE_NATIVE_BINDING)
+            built.tables[i].origins = origins[i];
+        else core_free(origins[i]);
+    }
     core_free(origins);
     n00bb_abi_manifest_rows_release(&manifests);
     if (!valid) {
