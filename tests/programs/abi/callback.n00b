@@ -1,0 +1,20 @@
+record Callback_State {
+    value: int
+}
+
+callback Event_Call {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+
+callback State_Call {
+    call(value: int) -> int
+    handler(modify state: Callback_State, value: int) -> int
+    setup(handler: Ref[(modify state: Callback_State, value: int) -> int],
+          state: Ref[Callback_State]) -> nil
+}
+
+callback Transform_Call {
+    call(value: `T) -> `U fail: `E
+    handler(value: `T) -> `U fail: `E
+}

@@ -613,6 +613,112 @@ check_trait_dispatch(const core_object_section_t *metadata,
     assert(found);
 }
 
+static void
+check_callbacks(const core_object_section_t *metadata,
+                const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries, count,
+        N00B_ABI_TABLE_SYMBOL);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    const n00bb_abi_directory_entry_t *signatures = entry_for(entries, count,
+        N00B_ABI_TABLE_CALL_SIGNATURE);
+    const n00bb_abi_directory_entry_t *parameters = entry_for(entries, count,
+        N00B_ABI_TABLE_PARAMETER);
+    const n00bb_abi_directory_entry_t *functions = entry_for(entries, count,
+        N00B_ABI_TABLE_FUNCTION);
+    assert(types && symbols && stream && signatures && parameters
+        && functions && functions->record_count == 1);
+    const char *names[] = {"Event_Call", "State_Call", "Transform_Call"};
+    const uint32_t role_counts[] = {2, 3, 2};
+    const uint32_t arg_counts[][3] = {
+        {1, 1, 0}, {1, 2, 2}, {1, 1, 0},
+    };
+    for (size_t kind = 0; kind < 3; kind++) {
+        const n00b_abi_type_v1 *callback = nullptr;
+        uint32_t generic_argument = 0, generic_success = 0,
+                 generic_failure = 0;
+        for (uint32_t i = 1; i < symbols->record_count; i++) {
+            const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
+            if (symbol->kind == N00B_ABI_SYMBOL_TYPE
+                && short_name_is(&symbol->name, names[kind])) {
+                assert(!callback && symbol->type_index < types->record_count);
+                callback = row_at(metadata, types, symbol->type_index);
+            }
+        }
+        assert(callback && callback->kind == N00B_ABI_TYPE_CALLBACK
+            && callback->components.count == role_counts[kind]
+            && callback->components.first < stream->record_count
+            && callback->components.count <= stream->record_count
+                - callback->components.first);
+        for (uint32_t role = 0; role < role_counts[kind]; role++) {
+            uint32_t type_index = *(const uint32_t *)row_at(metadata, stream,
+                callback->components.first + role);
+            assert(type_index && type_index < types->record_count);
+            const n00b_abi_type_v1 *type = row_at(metadata, types, type_index);
+            assert(type->kind == N00B_ABI_TYPE_FUNCTION
+                && type->call_signature_index
+                && type->call_signature_index < signatures->record_count);
+            const n00b_abi_call_signature_v1 *signature = row_at(metadata,
+                signatures, type->call_signature_index);
+            assert(signature->positional_parameters.count
+                    == arg_counts[kind][role]);
+            if (kind != 2) assert(signature->failure_type_index == 0);
+            if (kind == 1 && role == 1) {
+                assert(signature->positional_parameters.first
+                    < stream->record_count);
+                uint32_t parameter_index = *(const uint32_t *)row_at(metadata,
+                    stream, signature->positional_parameters.first);
+                assert(parameter_index && parameter_index
+                    < parameters->record_count);
+                const n00b_abi_parameter_v1 *parameter = row_at(metadata,
+                    parameters, parameter_index);
+                assert(parameter->passing_mode == N00B_ABI_PASS_MODIFY);
+            }
+            if (kind == 2) {
+                assert(signature->failure_type_index
+                    && signature->failure_type_index < types->record_count
+                    && signature->success_type_index
+                    && signature->success_type_index < types->record_count
+                    && signature->positional_parameters.first
+                        < stream->record_count);
+                uint32_t parameter_index = *(const uint32_t *)row_at(metadata,
+                    stream, signature->positional_parameters.first);
+                assert(parameter_index && parameter_index
+                    < parameters->record_count);
+                const n00b_abi_parameter_v1 *parameter = row_at(metadata,
+                    parameters, parameter_index);
+                assert(parameter->type_index
+                    && parameter->type_index < types->record_count);
+                if (!role) {
+                    generic_argument = parameter->type_index;
+                    generic_success = signature->success_type_index;
+                    generic_failure = signature->failure_type_index;
+                }
+                else assert(parameter->type_index == generic_argument
+                    && signature->success_type_index == generic_success
+                    && signature->failure_type_index == generic_failure);
+            }
+        }
+        if (kind == 2) {
+            uint32_t variables[] = {
+                generic_argument, generic_success, generic_failure,
+            };
+            for (size_t i = 0; i < 3; i++) {
+                const n00b_abi_type_v1 *variable = row_at(metadata, types,
+                    variables[i]);
+                assert(variable->kind == N00B_ABI_TYPE_VARIABLE
+                    && variable->typevar_owner_scope_index);
+            }
+            assert(generic_argument != generic_success
+                && generic_argument != generic_failure
+                && generic_success != generic_failure);
+        }
+    }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -626,6 +732,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "constraint")
             || !strcmp(argv[2], "trait-methods")
             || !strcmp(argv[2], "trait-dispatch")
+            || !strcmp(argv[2], "callback")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -718,6 +825,12 @@ main(int argc, char **argv)
     }
     if (argc == 3 && !strcmp(argv[2], "trait-dispatch")) {
         check_trait_dispatch(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "callback")) {
+        check_callbacks(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

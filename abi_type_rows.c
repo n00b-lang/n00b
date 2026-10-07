@@ -315,10 +315,29 @@ append_component(n00bb_abi_type_index_t *index, th_type *component,
 
 static bool
 append_type_components(n00bb_abi_type_index_t *index, ir_module_t *module,
-                       th_type *type, uint32_t kind,
+                       th_type *type, const parse_sym_entry_t *owner,
+                       uint32_t kind,
                        core_list_t(uint32_t) *indexes)
 {
     th_kind source_kind = th_kind_of(type);
+    if (kind == N00B_ABI_TYPE_CALLBACK) {
+        if (!owner) return true;
+        if (!owner->member_scope) return false;
+        const char *roles[] = {"call", "handler", "setup"};
+        for (size_t i = 0; i < 3; i++) {
+            parse_sym_entry_t *role = parse_symtab_lookup_in(
+                owner->member_scope, core_string_from_cstr(roles[i]));
+            if (!role) {
+                if (i == 2) break;
+                return false;
+            }
+            th_type *signature = n00bb_abi_type_index_symbol_type(index, role);
+            if (!signature || th_kind_of(th_resolve(signature)) != TH_FUNCTION
+                || !th_func_error(th_resolve(signature))
+                || !append_component(index, signature, indexes)) return false;
+        }
+        return true;
+    }
     if (kind == N00B_ABI_TYPE_UNION) {
         if (source_kind != TH_SUM) return false;
         th_comb combination;
@@ -383,6 +402,7 @@ n00bb_abi_type_components_build(
         }
         size_t first = indexes.len;
         valid = append_type_components(index, module, type,
+            types->owners ? types->owners[i] : nullptr,
             types->rows[i].kind, &indexes)
             && indexes.len <= UINT32_MAX - stream_base;
         if (valid && indexes.len != first)

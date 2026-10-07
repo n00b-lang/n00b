@@ -63,6 +63,8 @@ n00bb_abi_function_rows_build(
         if (symbol->owner_type
             && (core_string_eq(symbol->owner_type->adt_kind,
                                CORE_STRING_STATIC("trait"))
+                || core_string_eq(symbol->owner_type->adt_kind,
+                                  CORE_STRING_STATIC("callback"))
                 || (symbol->owner_type->member_scope
                     && core_string_eq(
                         symbol->owner_type->member_scope->scope_tag,
