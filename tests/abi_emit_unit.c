@@ -71,7 +71,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);
-    n00bb_abi_directory_entry_t entries[8];
+    n00bb_abi_directory_entry_t entries[10];
     size_t entry_count = sizeof(entries) / sizeof(*entries);
     n00bb_abi_image_header_t header;
     assert(n00bb_abi_container_read(metadata.bytes, metadata.size,
@@ -89,11 +89,18 @@ check_empty_unit(const char *triple, uint32_t target_id,
         entries, entry_count, N00B_ABI_TABLE_LAYOUT);
     const n00bb_abi_directory_entry_t *run_entry = find_entry(
         entries, entry_count, N00B_ABI_TABLE_PHYSICAL_RUN);
+    const n00bb_abi_directory_entry_t *signature_entry = find_entry(
+        entries, entry_count, N00B_ABI_TABLE_CALL_SIGNATURE);
+    const n00bb_abi_directory_entry_t *parameter_entry = find_entry(
+        entries, entry_count, N00B_ABI_TABLE_PARAMETER);
     const n00bb_abi_directory_entry_t *config_entry = find_entry(
         entries, entry_count, N00B_ABI_TABLE_RUNTIME_CONFIG);
     assert(package_entry && module_entry && source_entry && type_entry
-        && layout_entry && run_entry && config_entry);
-    assert(layout_entry->record_count == 1 && run_entry->record_count == 1);
+        && layout_entry && run_entry && signature_entry
+        && parameter_entry && config_entry);
+    assert(layout_entry->record_count == 1 && run_entry->record_count == 1
+        && signature_entry->record_count == 1
+        && parameter_entry->record_count == 1);
     const n00b_abi_package_v1 *package = (const void *)(metadata.bytes
         + package_entry->file_offset + package_entry->record_bytes);
     const n00b_abi_module_v1 *module = (const void *)(metadata.bytes

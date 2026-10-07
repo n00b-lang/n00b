@@ -8,6 +8,7 @@
 #include "abi_type_index.h"
 #include "abi_type_layout_rows.h"
 #include "abi_type_rows.h"
+#include "abi_type_signatures.h"
 #include "n00b-abi-v1.h"
 #include "lib/alloc.h"
 #include "lib/byteorder.h"
@@ -312,6 +313,7 @@ n00bb_abi_emit_empty_unit(
     n00bb_abi_type_identity_rows_t type_rows = {0};
     n00bb_abi_type_components_t components = {0};
     n00bb_abi_type_layout_rows_t layout_rows = {0};
+    n00bb_abi_type_signatures_t signature_rows = {0};
     bool valid = pool && type_index
         && n00bb_abi_type_identity_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
@@ -322,7 +324,11 @@ n00bb_abi_emit_empty_unit(
         && n00bb_abi_type_layout_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
             1 + (uint32_t)components.count,
-            &type_rows, &layout_rows);
+            &type_rows, &layout_rows)
+        && n00bb_abi_type_signatures_build(type_index, &type_rows, pool,
+            1 + (uint32_t)components.count
+                + (uint32_t)layout_rows.run_index_count,
+            &signature_rows);
     n00bb_abi_type_index_free(type_index);
     valid = valid && n00bb_abi_name_pool_encode(pool, package_id,
         N00B_ABI_TABLE_PACKAGE, 1, offsetof(n00b_abi_package_v1, name),
@@ -335,6 +341,7 @@ n00bb_abi_emit_empty_unit(
             N00B_ABI_TABLE_SOURCE_FILE, 1,
             offsetof(n00b_abi_source_file_v1, path), &sources[1].path);
     if (!valid) {
+        n00bb_abi_type_signatures_release(&signature_rows);
         n00bb_abi_type_layout_rows_release(&layout_rows);
         n00bb_abi_type_components_release(&components);
         n00bb_abi_type_identity_rows_release(&type_rows);
@@ -342,7 +349,8 @@ n00bb_abi_emit_empty_unit(
         return empty_unit_error(unit, "could not build ABI identity and layout rows");
     }
 
-    size_t stream_count = 1 + components.count + layout_rows.run_index_count;
+    size_t stream_count = 1 + components.count + layout_rows.run_index_count
+        + signature_rows.parameter_index_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
     stream[0] = package_modules[0];
     if (components.count)
@@ -351,6 +359,10 @@ n00bb_abi_emit_empty_unit(
     if (layout_rows.run_index_count)
         memcpy(stream + 1 + components.count, layout_rows.run_indexes,
                layout_rows.run_index_count * sizeof(*stream));
+    if (signature_rows.parameter_index_count)
+        memcpy(stream + 1 + components.count + layout_rows.run_index_count,
+               signature_rows.parameter_indexes,
+               signature_rows.parameter_index_count * sizeof(*stream));
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
         {N00B_ABI_TABLE_MODULE, modules, 2},
@@ -359,6 +371,10 @@ n00bb_abi_emit_empty_unit(
          layout_rows.layout_count},
         {N00B_ABI_TABLE_PHYSICAL_RUN, layout_rows.runs,
          layout_rows.run_count},
+        {N00B_ABI_TABLE_CALL_SIGNATURE, signature_rows.signatures,
+         signature_rows.signature_count},
+        {N00B_ABI_TABLE_PARAMETER, signature_rows.parameters,
+         signature_rows.parameter_count},
         {N00B_ABI_TABLE_SOURCE_FILE, sources, 2},
         {N00B_ABI_TABLE_RUNTIME_CONFIG, runtime_configs, 2},
         {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
@@ -368,6 +384,7 @@ n00bb_abi_emit_empty_unit(
         rows, sizeof(rows) / sizeof(*rows), &packed);
     core_free(stream);
     if (!valid) {
+        n00bb_abi_type_signatures_release(&signature_rows);
         n00bb_abi_type_layout_rows_release(&layout_rows);
         n00bb_abi_type_components_release(&components);
         n00bb_abi_type_identity_rows_release(&type_rows);
@@ -419,6 +436,7 @@ n00bb_abi_emit_empty_unit(
             relocations, relocation_count,
             &object, &object_bytes);
     core_free(relocations);
+    n00bb_abi_type_signatures_release(&signature_rows);
     n00bb_abi_type_layout_rows_release(&layout_rows);
     n00bb_abi_type_components_release(&components);
     n00bb_abi_type_identity_rows_release(&type_rows);

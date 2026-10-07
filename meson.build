@@ -34,6 +34,7 @@ n00bb_exe = executable(
      'abi_container.c', 'abi_index_patch.c', 'abi_emit.c',
      'abi_emit_strings.c',
      'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
+     'abi_type_signatures.c',
      'llvm_backend.c',
      'global_metadata.c',
      'storage_selection.c'],
@@ -114,6 +115,7 @@ abi_emit_test = executable(
     'abi-emit-test',
     ['tests/abi_emit.c', 'abi_emit.c', 'abi_emit_strings.c',
      'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
+     'abi_type_signatures.c',
      'abi_container.c',
      'abi_directory.c'],
     dependencies: lantern,
@@ -125,6 +127,7 @@ abi_emit_unit_test = executable(
     'abi-emit-unit-test',
     ['tests/abi_emit_unit.c', 'abi_emit.c', 'abi_emit_strings.c',
      'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
+     'abi_type_signatures.c',
      'abi_container.c',
      'abi_directory.c', 'abi_string.c'],
     dependencies: lantern,
@@ -157,6 +160,16 @@ abi_type_layout_rows_test = executable(
 )
 
 test('abi-type-layout-rows', abi_type_layout_rows_test)
+
+abi_type_signatures_test = executable(
+    'abi-type-signatures-test',
+    ['tests/abi_type_signatures.c', 'abi_type_signatures.c',
+     'abi_type_rows.c', 'abi_type_index.c', 'abi_emit_strings.c',
+     'abi_string.c'],
+    dependencies: lantern,
+)
+
+test('abi-type-signatures', abi_type_signatures_test)
 
 abi_type_index_test = executable(
     'abi-type-index-test',
