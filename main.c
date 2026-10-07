@@ -40561,7 +40561,9 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
     out->aggregate.count = count;
 
     if (value->kind == N00BB_STATIC_VALUE_SEQUENCE) {
-        if (!static_named_arguments(type, "list", 1)) return false;
+        if (th_kind_of(type) != TH_SEQUENCE
+            && !static_named_arguments(type, "list", 1)
+            && !static_named_arguments(type, "array", 1)) return false;
         th_type *element = static_sequence_element_type(type);
         if (!element) return false;
         out->kind = IR_GLOBAL_INIT_SEQUENCE;

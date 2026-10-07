@@ -960,6 +960,85 @@ check_string_storage(const uint8_t *object, size_t length,
     assert(long_count == 2 && long_addends[0] == long_addends[1]);
 }
 
+static void
+check_array_storage(const uint8_t *object, size_t length,
+                    const core_object_section_t *metadata,
+                    const n00bb_abi_directory_entry_t *entries,
+                    size_t count, uint32_t target_id)
+{
+    const n00bb_abi_directory_entry_t *storage = entry_for(entries, count,
+        N00B_ABI_TABLE_STORAGE);
+    const n00bb_abi_directory_entry_t *shapes = entry_for(entries, count,
+        N00B_ABI_TABLE_SHAPE);
+    const n00bb_abi_directory_entry_t *extents = entry_for(entries, count,
+        N00B_ABI_TABLE_U64_STREAM);
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    assert(storage && storage->record_count == 2
+        && shapes && shapes->record_count == 2
+        && extents && extents->record_count == 1 && types);
+    const n00b_abi_storage_v1 *row = row_at(metadata, storage, 1);
+    const n00b_abi_shape_v1 *shape = row_at(metadata, shapes,
+        row->instance_shape_index);
+    const n00b_abi_type_v1 *type = row_at(metadata, types,
+        row->type_index);
+    assert(row->instance_shape_index == 1 && row->byte_length == 16
+        && row->segment_kind == N00B_ABI_STORAGE_READ_ONLY
+        && type->kind == N00B_ABI_TYPE_ARRAY
+        && shape->rank == 1 && shape->flat_rank == 1
+        && shape->total_count == 2
+        && shape->extents.first == 0 && shape->extents.count == 1
+        && *(const uint64_t *)row_at(metadata, extents, 0) == 2);
+    core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
+        ? CORE_TARGET_OBJECT_MACH_O
+        : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
+            ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
+    const char *segment = format == CORE_TARGET_OBJECT_MACH_O
+        ? "__DATA_CONST" : nullptr;
+    core_object_section_t backing, value;
+    assert(core_object_section_find(object, length, format, segment,
+        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_aggregate"
+        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$A"
+        : ".rodata.n00b_aggregate", &backing));
+    assert(core_object_section_find(object, length, format, segment,
+        format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_ro"
+        : format == CORE_TARGET_OBJECT_COFF ? ".rdata$N"
+        : ".rodata.n00b_static", &value));
+    assert(backing.size == 48 && value.size == 16
+        && row->segment_index == value.native_index
+        && core_le_load_u64(backing.bytes) == 1
+        && core_le_load_u64(backing.bytes + 8) == 2
+        && core_le_load_u64(backing.bytes + 16) == 2
+        && core_le_load_u32(backing.bytes + 24) == 1
+        && core_le_load_u32(backing.bytes + 28) == 1
+        && core_le_load_u64(backing.bytes + 40) == 2
+        && value.relocation_count == 2);
+    core_object_absolute64_relocation_t pointers[2];
+    for (uint32_t i = 0; i < 2; i++) {
+        assert(core_object_absolute64_relocation_at(&value, format, i,
+            &pointers[i]));
+        if (format == CORE_TARGET_OBJECT_MACH_O)
+            assert(pointers[i].target_is_section
+                && pointers[i].native_symbol_index == backing.native_index);
+        else {
+            core_object_symbol_name_t target;
+            assert(core_object_symbol_name_at(object, length, format,
+                &value, pointers[i].native_symbol_index, &target)
+                && target.length == strlen("n00b_aggregate_pool")
+                && !memcmp(target.bytes, "n00b_aggregate_pool",
+                           target.length));
+        }
+    }
+    if (pointers[0].section_offset > pointers[1].section_offset) {
+        core_object_absolute64_relocation_t swap = pointers[0];
+        pointers[0] = pointers[1];
+        pointers[1] = swap;
+    }
+    assert(pointers[0].section_offset == 0
+        && pointers[1].section_offset == 8
+        && pointers[1].addend_bits - pointers[0].addend_bits == 16);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -976,6 +1055,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "callback")
             || !strcmp(argv[2], "storage")
             || !strcmp(argv[2], "string-storage")
+            || !strcmp(argv[2], "array-storage")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -1087,6 +1167,13 @@ main(int argc, char **argv)
     }
     if (argc == 3 && !strcmp(argv[2], "string-storage")) {
         check_string_storage(object, (size_t)length, &metadata, entries,
+            header.directory_count, header.key.target_id);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "array-storage")) {
+        check_array_storage(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id);
         free(entries);
         free(object);

@@ -9,10 +9,16 @@
 #include "lib/buffer.h"
 
 typedef struct {
-    uint32_t segment_kind;
+    uint32_t source_kind;
     uint64_t byte_offset;
-    uint64_t pool_offset;
+    uint32_t target_kind;
+    uint64_t target_offset;
 } n00bb_abi_storage_relocation_t;
+
+enum {
+    N00BB_ABI_RELOC_AGGREGATE = 3,
+    N00BB_ABI_RELOC_STRING_POOL = 4,
+};
 
 typedef struct {
     n00b_abi_storage_v1 *rows;
@@ -24,9 +30,15 @@ typedef struct {
     core_buffer_t read_only;
     core_buffer_t writable;
     core_buffer_t tls;
+    core_buffer_t aggregates;
     uint32_t read_only_alignment;
     uint32_t writable_alignment;
     uint32_t tls_alignment;
+    uint32_t aggregate_alignment;
+    n00b_abi_shape_v1 *shapes;
+    size_t shape_count;
+    uint64_t *extents;
+    size_t extent_count;
     n00bb_abi_storage_relocation_t *relocations;
     size_t relocation_count;
 } n00bb_abi_storage_rows_t;

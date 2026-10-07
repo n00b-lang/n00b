@@ -22,7 +22,10 @@
 #include "lib/byteorder.h"
 #include "lib/diagnostic.h"
 #include "lib/hash.h"
+#include "lib/list.h"
 #include "lib/object_section.h"
+
+core_list_decl(core_object_emit_section_t);
 
 static bool
 align_up(size_t value, size_t alignment, size_t *out)
@@ -355,11 +358,12 @@ build_native_bindings(const n00bb_abi_storage_rows_t *storage,
 static bool
 append_storage_section(const core_target_desc_t *target, uint32_t kind,
                        const core_buffer_t *bytes, uint32_t alignment,
-                       core_object_emit_section_t sections[4],
-                       size_t *count, uint32_t input_indexes[4])
+                       core_list_t(core_object_emit_section_t) *sections,
+                       uint32_t input_indexes[4])
 {
     if (!bytes->byte_len) return true;
-    if (!alignment || !bytes->data || *count >= 4) return false;
+    if (!alignment || !bytes->data || sections->len >= UINT32_MAX - 2)
+        return false;
     const char *name = nullptr, *segment = nullptr;
     switch (target->object_format) {
     case CORE_TARGET_OBJECT_ELF:
@@ -383,14 +387,14 @@ append_storage_section(const core_target_desc_t *target, uint32_t kind,
     default:
         return false;
     }
-    input_indexes[kind] = (uint32_t)(2 + *count);
-    sections[(*count)++] = (core_object_emit_section_t){
+    input_indexes[kind] = (uint32_t)(2 + sections->len);
+    core_list_push(*sections, ((core_object_emit_section_t){
         .name = name, .segment = segment,
         .bytes = (const uint8_t *)bytes->data, .size = bytes->byte_len,
         .alignment = alignment,
         .writable = kind != N00B_ABI_STORAGE_READ_ONLY,
         .is_thread_local = kind == N00B_ABI_STORAGE_TLS,
-    };
+    }));
     return true;
 }
 
@@ -882,12 +886,13 @@ n00bb_abi_emit_unit(
         memcpy(stream + stream_count - storage_rows.stream_count,
                storage_rows.stream_indexes,
                storage_rows.stream_count * sizeof(*stream));
-    core_object_emit_section_t extra_sections[4] = {0};
-    size_t extra_count = 0;
+    core_list_t(core_object_emit_section_t) extra_sections = {0};
     uint32_t storage_input_indexes[4] = {0};
+    uint32_t aggregate_input_index = 0;
     core_object_emit_symbol_t string_symbol = {0};
+    core_object_emit_symbol_t aggregate_symbol = {0};
     if (n00bb_abi_name_pool_size(pool)) {
-        extra_sections[extra_count++] = (core_object_emit_section_t){
+        core_list_push(extra_sections, ((core_object_emit_section_t){
             .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
                 ? "__n00b_strings"
                 : target->object_format == CORE_TARGET_OBJECT_COFF
@@ -897,26 +902,44 @@ n00bb_abi_emit_unit(
             .bytes = n00bb_abi_name_pool_bytes(pool),
             .size = n00bb_abi_name_pool_size(pool),
             .alignment = 1,
-        };
+        }));
         string_symbol = (core_object_emit_symbol_t){
             .name = "n00b_string_pool", .section_index = 2,
         };
     }
-    valid = append_storage_section(target, N00B_ABI_STORAGE_READ_ONLY,
+    if (storage_rows.aggregates.byte_len) {
+        aggregate_input_index = (uint32_t)(2 + extra_sections.len);
+        core_list_push(extra_sections, ((core_object_emit_section_t){
+            .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
+                ? "__n00b_aggregate"
+                : target->object_format == CORE_TARGET_OBJECT_COFF
+                    ? ".rdata$A" : ".rodata.n00b_aggregate",
+            .segment = target->object_format == CORE_TARGET_OBJECT_MACH_O
+                ? "__DATA_CONST" : nullptr,
+            .bytes = (const uint8_t *)storage_rows.aggregates.data,
+            .size = storage_rows.aggregates.byte_len,
+            .alignment = storage_rows.aggregate_alignment,
+        }));
+        aggregate_symbol = (core_object_emit_symbol_t){
+            .name = "n00b_aggregate_pool",
+            .section_index = aggregate_input_index,
+        };
+    }
+        valid = append_storage_section(target, N00B_ABI_STORAGE_READ_ONLY,
             &storage_rows.read_only, storage_rows.read_only_alignment,
-            extra_sections, &extra_count, storage_input_indexes)
+            &extra_sections, storage_input_indexes)
         && append_storage_section(target, N00B_ABI_STORAGE_WRITABLE,
             &storage_rows.writable, storage_rows.writable_alignment,
-            extra_sections, &extra_count, storage_input_indexes)
+            &extra_sections, storage_input_indexes)
         && append_storage_section(target, N00B_ABI_STORAGE_TLS,
             &storage_rows.tls, storage_rows.tls_alignment,
-            extra_sections, &extra_count, storage_input_indexes);
+            &extra_sections, storage_input_indexes);
     for (size_t i = 1; valid && i < storage_rows.row_count; i++) {
         n00b_abi_storage_v1 *row = &storage_rows.rows[i];
         uint32_t input = row->segment_kind <= N00B_ABI_STORAGE_TLS
             ? storage_input_indexes[row->segment_kind] : 0;
         valid = input && core_object_emit_native_section_index(target,
-            1 + extra_count, input, &row->segment_index);
+            1 + extra_sections.len, input, &row->segment_index);
         if (valid) native_bindings.rows[i].section_index = row->segment_index;
     }
     n00bb_abi_table_rows_t rows[] = {
@@ -960,6 +983,10 @@ n00bb_abi_emit_unit(
         {N00B_ABI_TABLE_REQUIREMENT, requirements, import_count + 1},
         {N00B_ABI_TABLE_STORAGE, storage_rows.rows,
          storage_rows.row_count},
+        {N00B_ABI_TABLE_SHAPE, storage_rows.shapes,
+         storage_rows.shape_count},
+        {N00B_ABI_TABLE_U64_STREAM, storage_rows.extents,
+         storage_rows.extent_count},
         {N00B_ABI_TABLE_NATIVE_BINDING, native_bindings.rows,
          native_bindings.count},
         {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
@@ -969,6 +996,7 @@ n00bb_abi_emit_unit(
         rows, sizeof(rows) / sizeof(*rows), &packed);
     core_free(stream);
     if (!valid) {
+        core_list_free(extra_sections);
         core_free(requirements);
         native_bindings_release(&native_bindings);
         n00bb_abi_storage_rows_release(&storage_rows);
@@ -1002,9 +1030,10 @@ n00bb_abi_emit_unit(
         valid = n00bb_abi_name_pool_relocations(pool, entries,
             sizeof(entries) / sizeof(*entries), &relocations,
             &relocation_count);
+    bool has_pool = n00bb_abi_name_pool_size(pool) != 0;
+    bool has_aggregates = storage_rows.aggregates.byte_len != 0;
     if (valid && storage_rows.relocation_count) {
-        if (!n00bb_abi_name_pool_size(pool)
-            || storage_rows.relocation_count > SIZE_MAX - relocation_count)
+        if (storage_rows.relocation_count > SIZE_MAX - relocation_count)
             valid = false;
         else {
             size_t total = relocation_count + storage_rows.relocation_count;
@@ -1016,11 +1045,22 @@ n00bb_abi_emit_unit(
             for (size_t i = 0; i < storage_rows.relocation_count; i++) {
                 const n00bb_abi_storage_relocation_t *source =
                     &storage_rows.relocations[i];
-                uint32_t section = source->segment_kind
+                uint32_t section = source->source_kind
                     <= N00B_ABI_STORAGE_TLS
-                    ? storage_input_indexes[source->segment_kind] : 0;
-                if (!section
-                    || source->pool_offset >= n00bb_abi_name_pool_size(pool)) {
+                    ? storage_input_indexes[source->source_kind]
+                    : source->source_kind == N00BB_ABI_RELOC_AGGREGATE
+                        ? aggregate_input_index : 0;
+                uint32_t target_symbol = source->target_kind
+                    == N00BB_ABI_RELOC_STRING_POOL && has_pool ? 0
+                    : source->target_kind == N00BB_ABI_RELOC_AGGREGATE
+                        && has_aggregates ? (has_pool ? 1 : 0)
+                        : UINT32_MAX;
+                size_t target_size = source->target_kind
+                    == N00BB_ABI_RELOC_STRING_POOL
+                    ? n00bb_abi_name_pool_size(pool)
+                    : storage_rows.aggregates.byte_len;
+                if (!section || target_symbol == UINT32_MAX
+                    || source->target_offset >= target_size) {
                     valid = false;
                     break;
                 }
@@ -1028,8 +1068,8 @@ n00bb_abi_emit_unit(
                     (core_object_emit_absolute64_t){
                         .section_index = section,
                         .section_offset = source->byte_offset,
-                        .symbol_index = 0,
-                        .addend_bits = source->pool_offset,
+                        .symbol_index = target_symbol,
+                        .addend_bits = source->target_offset,
                     };
             }
             core_free(relocations);
@@ -1039,16 +1079,18 @@ n00bb_abi_emit_unit(
     }
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
-    bool has_pool = n00bb_abi_name_pool_size(pool) != 0;
     size_t symbol_count = (has_pool ? 1 : 0)
+        + (has_aggregates ? 1 : 0)
         + native_bindings.count - 1;
     core_object_emit_symbol_t *object_symbols = symbol_count
         ? core_alloc_array(core_object_emit_symbol_t, symbol_count)
         : nullptr;
     if (has_pool) object_symbols[0] = string_symbol;
+    if (has_aggregates) object_symbols[has_pool ? 1 : 0]
+        = aggregate_symbol;
     for (size_t i = 1; i < native_bindings.count; i++) {
         const n00b_abi_storage_v1 *row = &storage_rows.rows[i];
-        object_symbols[(has_pool ? 1 : 0) + i - 1] =
+        object_symbols[(has_pool ? 1 : 0) + (has_aggregates ? 1 : 0) + i - 1] =
             (core_object_emit_symbol_t){
                 .name = native_bindings.names[i],
                 .section_index = storage_input_indexes[row->segment_kind],
@@ -1058,10 +1100,11 @@ n00bb_abi_emit_unit(
     }
     if (valid)
         valid = n00bb_abi_write_object(target, &packed,
-            extra_count ? extra_sections : nullptr, extra_count,
+            extra_sections.data, extra_sections.len,
             object_symbols, symbol_count,
             relocations, relocation_count,
             &object, &object_bytes);
+    core_list_free(extra_sections);
     core_free(object_symbols);
     core_free(relocations);
     core_free(requirements);
