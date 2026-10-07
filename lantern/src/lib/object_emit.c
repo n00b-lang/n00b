@@ -6,23 +6,9 @@
 #include "lib/alloc.h"
 
 typedef struct {
-    const char *name;
-    const char *segment;
-} section_key_t;
-
-typedef struct {
     uint32_t section_index;
     uint64_t section_offset;
 } relocation_key_t;
-
-static int compare_sections(const void *left, const void *right)
-{
-    const section_key_t *a = left, *b = right;
-    int result = strcmp(a->name, b->name);
-    if (result) return result;
-    return strcmp(a->segment ? a->segment : "",
-                  b->segment ? b->segment : "");
-}
 
 static int compare_relocations(const void *left, const void *right)
 {
@@ -83,34 +69,20 @@ static bool valid_inputs(const core_target_desc_t *target,
         if (relocation->section_offset > size ||
             size - relocation->section_offset < 8) return false;
     }
-    section_key_t *section_keys = core_alloc_array(section_key_t, section_count);
     relocation_key_t *relocation_keys =
         core_alloc_array(relocation_key_t, relocation_count);
-    for (size_t i = 0; i < section_count; i++) {
-        section_keys[i].name = sections[i].name;
-        section_keys[i].segment = target->object_format == CORE_TARGET_OBJECT_MACH_O
-                                      ? sections[i].segment : NULL;
-    }
     for (size_t i = 0; i < relocation_count; i++) {
         relocation_keys[i].section_index = relocations[i].section_index;
         relocation_keys[i].section_offset = relocations[i].section_offset;
     }
-    qsort(section_keys, section_count, sizeof *section_keys, compare_sections);
     qsort(relocation_keys, relocation_count, sizeof *relocation_keys,
           compare_relocations);
     bool valid = true;
-    for (size_t i = 1; i < section_count; i++) {
-        if (!compare_sections(&section_keys[i - 1], &section_keys[i])) {
-            valid = false;
-            break;
-        }
-    }
     for (size_t i = 1; valid && i < relocation_count; i++) {
         if (!compare_relocations(&relocation_keys[i - 1],
                                  &relocation_keys[i])) valid = false;
     }
     core_free(relocation_keys);
-    core_free(section_keys);
     return valid;
 }
 

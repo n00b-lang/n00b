@@ -310,6 +310,64 @@ static void thread_local_section_test(void)
     }
 }
 
+static void duplicate_section_names_test(void)
+{
+    const char *triples[] = {
+        "x86_64-linux", "arm64-macos", "x86_64-windows",
+    };
+    for (size_t i = 0; i < sizeof(triples) / sizeof(*triples); i++) {
+        core_target_desc_t target;
+        assert(core_target_profile(triples[i], 0, &target));
+        bool mach = target.object_format == CORE_TARGET_OBJECT_MACH_O;
+        uint8_t first[16] = {1}, second[8] = {2};
+        core_object_emit_section_t sections[] = {
+            {.name = mach ? "__same" : ".same",
+             .segment = mach ? "__DATA_CONST" : NULL,
+             .bytes = first, .size = sizeof(first), .alignment = 8},
+            {.name = mach ? "__same" : ".same",
+             .segment = mach ? "__DATA_CONST" : NULL,
+             .bytes = second, .size = sizeof(second), .alignment = 8},
+        };
+        core_object_emit_symbol_t symbol = {
+            .name = "second", .section_index = 2,
+        };
+        core_object_emit_absolute64_t relocation = {
+            .section_index = 1, .section_offset = 8, .symbol_index = 0,
+        };
+        uint8_t *image = NULL;
+        size_t image_size = 0;
+        assert(core_object_emit(&target, sections, 2, &symbol, 1,
+            &relocation, 1, &image, &image_size));
+        uint32_t first_index, second_index;
+        core_object_section_t first_section, second_section;
+        assert(core_object_emit_native_section_index(&target, 2, 1,
+            &first_index));
+        assert(core_object_emit_native_section_index(&target, 2, 2,
+            &second_index));
+        assert(first_index != second_index);
+        assert(core_object_section_at(image, image_size,
+            target.object_format, first_index, &first_section));
+        assert(core_object_section_at(image, image_size,
+            target.object_format, second_index, &second_section));
+        assert(first_section.bytes[0] == 1);
+        assert(second_section.bytes[0] == 2);
+        core_object_absolute64_relocation_t decoded;
+        assert(core_object_absolute64_relocation_at(&first_section,
+            target.object_format, 0, &decoded));
+        if (mach) assert(decoded.target_is_section
+            && decoded.native_symbol_index == second_index);
+        else {
+            core_object_symbol_t resolved;
+            assert(!decoded.target_is_section
+                && core_object_symbol_at(image, image_size,
+                    target.object_format, &first_section,
+                    decoded.native_symbol_index, &resolved)
+                && resolved.native_section_index == second_index);
+        }
+        core_free(image);
+    }
+}
+
 int main(int argc, char **argv)
 {
     core_target_desc_t target;
@@ -406,6 +464,7 @@ int main(int argc, char **argv)
 
     if (argc >= 2) save_object(argv[1], image, size);
     core_free(image);
+    duplicate_section_names_test();
     thread_local_section_test();
     mach_test(argc >= 3 ? argv[2] : NULL);
     coff_test(argc >= 4 ? argv[3] : NULL);
