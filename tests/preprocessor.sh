@@ -181,7 +181,7 @@ done
 }
 grep -q 'type atomic\[int\] = int' "$tmp/builtin_atomic_access.out"
 test "$(grep -c '= load atomic ' "$tmp/builtin_atomic_access.out")" -eq 3
-test "$(grep -c 'store atomic ' "$tmp/builtin_atomic_access.out")" -eq 3
+test "$(grep -c 'store atomic ' "$tmp/builtin_atomic_access.out")" -eq 2
 ! grep -Eq '= load %__n00bb_storage_' "$tmp/builtin_atomic_access.out"
 
 "$compiler" lower --dump-ir \
@@ -4127,6 +4127,12 @@ grep -Eq 'layout scalar_layout_alias.Wide target=(x86_64-linux|arm64-macos|x86_6
     exit 1
 }
 test "$(grep -c '^  layout bool {$' "$tmp/scalar_layout_ir_only.out")" -eq 2
+"$compiler" lower --dump-layout "$program_dir/atomic_layout.n00b" \
+    >"$tmp/atomic_layout.out" 2>"$tmp/atomic_layout.err" || {
+    cat "$tmp/atomic_layout.err"
+    exit 1
+}
+test "$(grep -Fc '  layout atomic[bits:17] {' "$tmp/atomic_layout.out")" -eq 2
 for invalid_width in sized_integer_zero_width sized_unsigned_too_wide \
     sized_bits_too_wide; do
     if "$compiler" lower "$program_dir/$invalid_width.n00b" \

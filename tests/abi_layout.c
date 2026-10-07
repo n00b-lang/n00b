@@ -95,6 +95,40 @@ int main(void)
             && ir_only_layout->alignment_bytes == 16
             && ir_only_layout->n_occupied == 1
             && ir_only_layout->occupied[0].width == 73;
+        th_arg atomic_element = {
+            .kind = TH_ARG_TYPE, .type = th_bits(types, 17),
+        };
+        th_type *atomic = th_apply(types, "atomic", &atomic_element, 1);
+        handled = false;
+        ok = ok && atomic
+            && ir_type_define(module, atomic, atomic_element.type)
+            && n00bb_abi_publish_scalar_layout(module, atomic, &target,
+                                               &handled)
+            && handled;
+        const ir_final_layout_t *atomic_layout = ir_layout_final(
+            module, atomic, target.triple);
+        ok = ok && atomic_layout && atomic_layout->intrinsic_bits == 32
+            && atomic_layout->alignment_bytes == 4
+            && atomic_layout->n_occupied == 1
+            && atomic_layout->occupied[0].offset == 0
+            && atomic_layout->occupied[0].width == 17
+            && atomic_layout->n_reserved == 1
+            && atomic_layout->reserved[0].offset == 17
+            && atomic_layout->reserved[0].width == 15;
+        th_type *atomic_alias = th_name(types, "AtomicAlias");
+        handled = false;
+        ok = ok && ir_type_define(module, atomic_alias, atomic)
+            && n00bb_abi_publish_scalar_layout(module, atomic_alias,
+                                               &target, &handled)
+            && handled;
+        const ir_final_layout_t *alias_layout = ir_layout_final(
+            module, atomic_alias, target.triple);
+        ok = ok && alias_layout && alias_layout->intrinsic_bits == 32
+            && alias_layout->n_occupied == 1
+            && alias_layout->occupied[0].width == 17
+            && alias_layout->n_reserved == 1
+            && alias_layout->reserved[0].offset == 17
+            && alias_layout->reserved[0].width == 15;
         handled = false;
         ok = ok && !n00bb_abi_publish_scalar_layout(module,
                    th_bits(types, 129), &target, &handled) && handled;

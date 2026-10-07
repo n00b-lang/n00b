@@ -6,15 +6,21 @@
 
 static bool
 same_final_layout(const ir_final_layout_t *layout, uint32_t storage_bits,
-                  uint32_t semantic_bits, uint32_t alignment_bytes)
+                  uint32_t semantic_bits, uint32_t alignment_bytes,
+                  bool reserve_unused)
 {
     if (layout->intrinsic_bits != storage_bits
         || layout->alignment_bytes != alignment_bytes
         || layout->n_members || layout->has_discriminant
         || layout->n_occupied != (semantic_bits != 0)
-        || layout->n_reserved) return false;
+        || layout->n_reserved != (reserve_unused
+                                 && storage_bits > semantic_bits)) return false;
     if (semantic_bits && (layout->occupied[0].offset != 0
                           || layout->occupied[0].width != semantic_bits))
+        return false;
+    if (layout->n_reserved
+        && (layout->reserved[0].offset != semantic_bits
+            || layout->reserved[0].width != storage_bits - semantic_bits))
         return false;
     return true;
 }
@@ -22,20 +28,26 @@ same_final_layout(const ir_final_layout_t *layout, uint32_t storage_bits,
 static bool
 publish_layout(ir_module_t *module, th_type *type,
                const core_target_desc_t *target, uint32_t semantic_bits,
-               uint32_t storage_bits, uint32_t alignment_bytes)
+               uint32_t storage_bits, uint32_t alignment_bytes,
+               bool reserve_unused)
 {
+    if (semantic_bits > storage_bits) return false;
     const ir_final_layout_t *existing = ir_layout_final(
         module, type, target->triple);
     if (existing)
         return same_final_layout(existing, storage_bits, semantic_bits,
-                                 alignment_bytes);
+                                 alignment_bytes, reserve_unused);
 
     ir_layout_bit_run_t occupied = {.offset = 0, .width = semantic_bits};
+    ir_layout_bit_run_t reserved = {.offset = semantic_bits,
+                                    .width = storage_bits - semantic_bits};
     ir_final_layout_t final = {
         .intrinsic_bits = storage_bits,
         .alignment_bytes = alignment_bytes,
         .occupied = semantic_bits ? &occupied : nullptr,
         .n_occupied = semantic_bits != 0,
+        .reserved = reserve_unused && reserved.width ? &reserved : nullptr,
+        .n_reserved = reserve_unused && reserved.width ? 1 : 0,
     };
     return ir_layout_pin_size(module, type, storage_bits / 8)
         && ir_layout_pin_align(module, type, alignment_bytes)
@@ -53,6 +65,7 @@ publish_scalar_or_alias(ir_module_t *module, th_type *type,
     uint32_t semantic_bits = machine.width;
     uint32_t storage_bits = 0;
     uint32_t alignment_bytes = 1;
+    bool reserve_unused = false;
     if (machine.class == IR_CLASS_VOID) {
         *handled = true;
         if (semantic_bits) return false;
@@ -80,6 +93,9 @@ publish_scalar_or_alias(ir_module_t *module, th_type *type,
         alignment_bytes = storage->alignment_bytes;
     }
     else if (th_kind_of(type) == TH_NAMED) {
+        const char *name = nullptr;
+        th_named_info(type, &name, nullptr, nullptr, nullptr);
+        bool atomic = name && !strcmp(name, "atomic");
         th_type *definition = ir_type_definition(module, type);
         if (!definition) return true;
         bool found = false;
@@ -93,15 +109,33 @@ publish_scalar_or_alias(ir_module_t *module, th_type *type,
         const ir_final_layout_t *base = ir_layout_final(module, definition,
                                                         target->triple);
         if (!base || base->intrinsic_bits > UINT32_MAX) return false;
+        if (base->n_occupied > 1 || base->n_reserved > 1
+            || (base->n_occupied && base->occupied[0].offset)) return false;
         semantic_bits = base->n_occupied
             ? (uint32_t)base->occupied[0].width : 0;
-        storage_bits = (uint32_t)base->intrinsic_bits;
-        alignment_bytes = base->alignment_bytes;
+        if (base->n_reserved
+            && (base->reserved[0].offset != semantic_bits
+                || base->reserved[0].width
+                    != base->intrinsic_bits - semantic_bits)) return false;
+        if (atomic) {
+            *handled = true;
+            const core_target_atomic_t *storage =
+                core_target_atomic_for_bits(target, semantic_bits);
+            if (!semantic_bits || !storage) return false;
+            storage_bits = storage->width_bits;
+            alignment_bytes = storage->alignment_bytes;
+            reserve_unused = true;
+        }
+        else {
+            storage_bits = (uint32_t)base->intrinsic_bits;
+            alignment_bytes = base->alignment_bytes;
+            reserve_unused = base->n_reserved != 0;
+        }
         *handled = true;
     }
     else return true;
     return publish_layout(module, type, target, semantic_bits, storage_bits,
-                          alignment_bytes);
+                          alignment_bytes, reserve_unused);
 }
 
 bool

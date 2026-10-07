@@ -7844,27 +7844,18 @@ n00bb_atomic_type(th_type *type)
 }
 
 static bool
-n00bb_atomic_native_size(uint64_t size)
+n00bb_atomic_native_support(ir_module_t *module, th_type *atomic_type,
+                            const core_target_desc_t *target)
 {
-    switch (size) {
-    case 1: return __atomic_always_lock_free(1, nullptr);
-    case 2: return __atomic_always_lock_free(2, nullptr);
-    case 4: return __atomic_always_lock_free(4, nullptr);
-    case 8: return __atomic_always_lock_free(8, nullptr);
-    case 16: return __atomic_always_lock_free(16, nullptr);
-    default: return false;
-    }
-}
-
-static bool
-n00bb_atomic_native_support(ir_module_t *module, th_type *atomic_type)
-{
-    if (!module || !n00bb_atomic_type(atomic_type)
+    if (!module || !target || !n00bb_atomic_type(atomic_type)
         || !ir_layout_compute(module, atomic_type, nullptr)) return false;
     ir_descriptor_t *layout = ir_layout_of(module, atomic_type, nullptr);
     return layout && ir_layout_is_settled(&layout->size)
         && ir_layout_is_settled(&layout->align)
-        && n00bb_atomic_native_size(layout->size.value);
+        && layout->size.value > 0
+        && layout->size.value <= UINT32_MAX / 8
+        && core_target_atomic_for_bits(
+            target, (uint32_t)(layout->size.value * 8));
 }
 
 static ir_value_t *
@@ -27477,6 +27468,7 @@ static bool
 prepare_ir_type_layouts(parse_grammar_t *grammar,
                         core_translation_unit_t *unit, parse_tree_t *owner,
                         ir_module_t *module, th_type *type,
+                        const core_target_desc_t *target,
                         core_list_t(th_type_ptr_t) *visited)
 {
     type = type ? th_resolve(type) : nullptr;
@@ -27518,10 +27510,10 @@ prepare_ir_type_layouts(parse_grammar_t *grammar,
             const th_arg *argument = th_named_arg(type, i);
             if (argument && argument->kind == TH_ARG_TYPE)
                 ok = prepare_ir_type_layouts(grammar, unit, owner, module,
-                                              argument->type, visited);
+                                              argument->type, target, visited);
         }
         if (ok && name && !strcmp(name, "atomic")
-            && !n00bb_atomic_native_support(module, type)) {
+            && !n00bb_atomic_native_support(module, type, target)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0018"),
@@ -27534,46 +27526,46 @@ prepare_ir_type_layouts(parse_grammar_t *grammar,
     }
     case TH_INDIRECTION:
         ok = prepare_ir_type_layouts(grammar, unit, owner, module,
-            th_ind_referent(type), visited);
+            th_ind_referent(type), target, visited);
         break;
     case TH_SEQUENCE:
         ok = prepare_ir_type_layouts(grammar, unit, owner, module,
-            th_seq_elem(type), visited);
+            th_seq_elem(type), target, visited);
         break;
     case TH_RECORD:
         for (size_t i = 0; ok && i < th_record_len(type); i++) {
             const th_member *member = th_record_member(type, i);
             ok = member && prepare_ir_type_layouts(grammar, unit, owner,
-                module, member->type, visited);
+                module, member->type, target, visited);
         }
         break;
     case TH_FUNCTION:
         ok = prepare_ir_type_layouts(grammar, unit, owner, module,
-            th_func_ret(type), visited)
+            th_func_ret(type), target, visited)
             && prepare_ir_type_layouts(grammar, unit, owner, module,
-                th_func_error(type), visited);
+                th_func_error(type), target, visited);
         for (size_t i = 0; ok && i < th_func_nparams(type); i++) {
             const th_param *parameter = th_func_param(type, i);
             ok = parameter && prepare_ir_type_layouts(grammar, unit, owner,
-                module, parameter->type, visited);
+                module, parameter->type, target, visited);
         }
         if (ok && th_func_rest(type))
             ok = prepare_ir_type_layouts(grammar, unit, owner, module,
-                th_func_rest(type)->type, visited);
+                th_func_rest(type)->type, target, visited);
         for (size_t i = 0; ok && i < th_func_nkw(type); i++) {
             const th_kwparam *parameter = th_func_kw(type, i);
             ok = parameter && prepare_ir_type_layouts(grammar, unit, owner,
-                module, parameter->type, visited);
+                module, parameter->type, target, visited);
         }
         break;
     case TH_SUM:
         for (size_t i = 0; ok && i < th_sum_len(type); i++)
             ok = prepare_ir_type_layouts(grammar, unit, owner, module,
-                th_sum_arm(type, i), visited);
+                th_sum_arm(type, i), target, visited);
         break;
     case TH_BINDER:
         ok = prepare_ir_type_layouts(grammar, unit, owner, module,
-            th_binder_body(type), visited);
+            th_binder_body(type), target, visited);
         break;
     default:
         break;
@@ -27585,13 +27577,14 @@ static bool
 prepare_ir_type_layouts_for_symbol(parse_grammar_t *grammar,
                                    core_translation_unit_t *unit,
                                    parse_sym_entry_t *symbol,
-                                   ir_module_t *module)
+                                   ir_module_t *module,
+                                   const core_target_desc_t *target)
 {
     core_list_t(th_type_ptr_t) visited = core_list_new(th_type_ptr_t);
     bool ok = prepare_ir_type_layouts(grammar, unit, symbol->decl_node,
-        module, symbol->type, &visited)
+        module, symbol->type, target, &visited)
         && prepare_ir_type_layouts(grammar, unit, symbol->decl_node, module,
-            symbol->callable_contract, &visited);
+            symbol->callable_contract, target, &visited);
     core_list_free(visited);
     return ok;
 }
@@ -27634,7 +27627,8 @@ bind_link_declarations_to_ir(parse_grammar_t *grammar,
             return false;
         }
         if (!prepare_ir_type_layouts_for_symbol(grammar, owner, symbol,
-                                                 state->ir_module))
+                                                 state->ir_module,
+                                                 &analysis->target))
             return false;
         bool module_scope = symbol->scope
             && core_string_eq(symbol->scope->scope_tag,
@@ -43819,8 +43813,6 @@ n00bb_link_stage_ir_bindings(core_link_unit_t *link, uint32_t stage_kind,
     if (!initialize_ir_modules(analysis->ir_context, analysis->grammar,
                                link, analysis, stage_kind))
         return CORE_LINK_STAGE_RESULT_FAILED;
-    if (!select_storage_placement(analysis))
-        return CORE_LINK_STAGE_RESULT_FAILED;
     if (!bind_link_declarations_to_ir(analysis->grammar, link, analysis,
                                       stage_kind)) {
         if (!core_link_unit_has_fatal_diagnostics(link))
@@ -43830,6 +43822,8 @@ n00bb_link_stage_ir_bindings(core_link_unit_t *link, uint32_t stage_kind,
                 CORE_STRING_STATIC("could not bind link declarations to Lantern IR"));
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    if (!select_storage_placement(analysis))
+        return CORE_LINK_STAGE_RESULT_FAILED;
     if (!core_link_unit_validate(link)) {
         core_diagnostics_merge(core_translation_unit_diagnostics(
             analysis->units.data[0]), core_link_unit_diagnostics(link));
