@@ -27210,6 +27210,36 @@ link_semantic_type_for_symbol(parse_grammar_t *grammar,
         return nominal;
     }
 
+    if (nt_is(grammar, declaration, "trait-decl")) {
+        if (!symbol->member_scope) return nullptr;
+        if (symbol->type && th_kind_of(th_resolve(symbol->type)) == TH_TRAIT)
+            return symbol->type;
+        core_buffer_t qualified = {0};
+        append_module_type_name(owner, symbol->name, &qualified);
+        core_list_t(th_member) methods = core_list_new(th_member);
+        bool valid = qualified.data != nullptr;
+        for (parse_sym_entry_t *method = symbol->member_scope->first_in_scope;
+             valid && method; method = method->next_in_scope) {
+            if (method->kind != PARSE_SYM_FUNCTION) continue;
+            if (!method->type) { valid = false; break; }
+            th_type *contract = method->callable_contract
+                ? method->callable_contract
+                : th_env_signature_contract(state->types, method->type,
+                    method->error_type ? method->error_type
+                                       : th_name(state->types, "nil"));
+            if (!contract) { valid = false; break; }
+            core_list_push(methods, ((th_member){
+                .name = method->name.data,
+                .type = contract,
+            }));
+        }
+        th_type *trait = valid ? th_trait(state->types, qualified.data,
+            methods.data, methods.len) : nullptr;
+        core_list_free(methods);
+        core_buffer_release(&qualified);
+        return trait;
+    }
+
     core_buffer_t qualified = {0};
     append_module_type_name(owner, symbol->name, &qualified);
     th_type *type = nullptr;
@@ -30544,19 +30574,17 @@ diagnose_ambiguous_generic_trait_call(parse_grammar_t *grammar,
 
         const char *trait_name = nullptr;
         size_t trait_name_length = 0;
-        char trait_name_buffer[256];
-        if (!th_named_info(requirement->owner_type->type, &trait_name,
-                           &trait_name_length, nullptr, nullptr)
-            || !trait_name || !trait_name_length
-            || trait_name_length >= sizeof(trait_name_buffer)) continue;
-        memcpy(trait_name_buffer, trait_name, trait_name_length);
-        trait_name_buffer[trait_name_length] = '\0';
+        if (!(th_trait_name(requirement->owner_type->type, &trait_name,
+                            &trait_name_length)
+              || th_named_info(requirement->owner_type->type, &trait_name,
+                               &trait_name_length, nullptr, nullptr))
+            || !trait_name || !trait_name_length) continue;
         if (!th_ctx_set_environment_scope(types,
                 call_unit->module.identifier.data,
                 n00bb_package_id(call_unit).data)) continue;
         th_env_method_t method = {0};
         th_env_method_status_t status = th_env_method_resolve(types,
-            argument_type, trait_name_buffer, requirement->name.data,
+            argument_type, trait_name, requirement->name.data,
             &method);
         if (status != TH_ENV_METHOD_AMBIGUOUS) continue;
         core_diagnostics_report_at(
@@ -30960,17 +30988,15 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                         link_source_location(call_node));
                     continue;
                 }
-                char trait_name_buffer[256];
                 const char *trait_name = nullptr;
                 size_t trait_name_length = 0;
-                if (th_named_info(requirement->owner_type->type, &trait_name,
-                                  &trait_name_length, nullptr, nullptr)
-                    && trait_name && trait_name_length
-                    && trait_name_length < sizeof(trait_name_buffer)) {
-                    memcpy(trait_name_buffer, trait_name, trait_name_length);
-                    trait_name_buffer[trait_name_length] = '\0';
-                    trait_name = trait_name_buffer;
-                }
+                if (!(th_trait_name(requirement->owner_type->type,
+                                    &trait_name, &trait_name_length)
+                      || th_named_info(requirement->owner_type->type,
+                                       &trait_name, &trait_name_length,
+                                       nullptr, nullptr))
+                    || !trait_name_length)
+                    trait_name = nullptr;
                 th_type *receiver_type = th_resolve(
                     th_record_lookup(copy, "receiver"));
                 if (!trait_name || !receiver_type) {
@@ -33936,6 +33962,22 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
         bool callback_contract = nt_is(grammar, scope->node,
                                        "callback-decl");
         if (!trait_contract && !callback_contract) continue;
+        if (trait_contract) {
+            parse_sym_entry_t *trait_symbol =
+                core_tree_node_value(scope->node).sym;
+            if (trait_symbol && scope != trait_symbol->member_scope)
+                continue;
+            core_buffer_t qualified = {0};
+            core_buffer_printf(&qualified, "%s.%.*s", module_text,
+                (int)scope->name.u8_bytes, scope->name.data);
+            ok = trait_symbol && trait_symbol->type && qualified.data
+                && th_kind_of(th_resolve(trait_symbol->type)) == TH_TRAIT
+                && th_env_register_trait_contracts(environment,
+                    qualified.data, module_text, package_text,
+                    symbol_visibility(trait_symbol), trait_symbol->type);
+            core_buffer_release(&qualified);
+            continue;
+        }
         core_list_t(th_member) methods = core_list_new(th_member);
         core_list_t(th_member) callback_roles = core_list_new(th_member);
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -38821,30 +38863,17 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
     if (ok && source->kind == PARSE_SYM_TYPEDEF) {
         if (source->decl_node && nt_is(analysis->grammar, source->decl_node,
                                       "trait-decl")) {
-            core_list_t(th_member) methods = core_list_new(th_member);
-            for (parse_sym_entry_t *method = source->member_scope
-                     ? source->member_scope->first_in_scope : nullptr;
-                 method; method = method->next_in_scope) {
-                if (method->kind != PARSE_SYM_FUNCTION || !method->type)
-                    continue;
-                th_type *contract = method->callable_contract
-                    ? method->callable_contract
-                    : th_env_signature_contract(source_state->types,
-                        method->type, method->error_type
-                            ? method->error_type
-                            : th_name(source_state->types, "nil"));
-                core_list_push(methods, ((th_member){
-                    .name = method->name.data,
-                    .type = contract,
-                }));
-            }
-            th_type *contracts = th_record(source_state->types,
-                                           methods.data, methods.len);
-            ok = contracts && th_env_register_trait_contracts(environment,
+            size_t method_count = th_trait_len(source->type);
+            const th_member *methods = method_count
+                ? th_trait_method(source->type, 0) : nullptr;
+            th_type *public_trait = th_kind_of(th_resolve(source->type))
+                    == TH_TRAIT
+                ? th_trait(source_state->types, external.data, methods,
+                           method_count) : nullptr;
+            ok = public_trait && th_env_register_trait_contracts(environment,
                 external.data, package->name.data,
                 n00bb_package_id(interface_unit).data, TH_ENV_PUBLIC,
-                contracts);
-            core_list_free(methods);
+                public_trait);
         }
         else {
             ok = th_env_register_type(environment, external.data,
@@ -43533,6 +43562,11 @@ materialize_interface_module_symbols(locate_worker_context_t *loader,
                 else if (declaration.type_shape_kind ==
                          TH_ENV_TYPE_SHAPE_ALIAS)
                     symbol->type = declaration.type_shape;
+                else if (declaration.kind == TH_ENV_DECLARATION_TRAIT)
+                    symbol->type = declaration.contract &&
+                            th_kind_of(th_resolve(declaration.contract))
+                                == TH_TRAIT
+                        ? declaration.contract : nullptr;
                 else
                     symbol->type = th_name(state->types,
                                            origin->declaration.data);
