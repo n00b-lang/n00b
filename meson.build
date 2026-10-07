@@ -32,6 +32,7 @@ n00bb_exe = executable(
     ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
      'abi_layout.c', 'abi_record_layout.c', 'abi_directory.c',
      'abi_container.c', 'abi_index_patch.c', 'abi_emit.c',
+     'abi_type_index.c',
      'llvm_backend.c',
      'global_metadata.c',
      'storage_selection.c'],
@@ -110,7 +111,7 @@ test('abi-index-patch', abi_index_patch_test)
 
 abi_emit_test = executable(
     'abi-emit-test',
-    ['tests/abi_emit.c', 'abi_emit.c', 'abi_container.c',
+    ['tests/abi_emit.c', 'abi_emit.c', 'abi_type_index.c', 'abi_container.c',
      'abi_directory.c'],
     dependencies: lantern,
 )
@@ -119,12 +120,21 @@ test('abi-emit', abi_emit_test)
 
 abi_emit_unit_test = executable(
     'abi-emit-unit-test',
-    ['tests/abi_emit_unit.c', 'abi_emit.c', 'abi_container.c',
+    ['tests/abi_emit_unit.c', 'abi_emit.c', 'abi_type_index.c',
+     'abi_container.c',
      'abi_directory.c', 'abi_string.c'],
     dependencies: lantern,
 )
 
 test('abi-emit-unit', abi_emit_unit_test)
+
+abi_type_index_test = executable(
+    'abi-type-index-test',
+    ['tests/abi_type_index.c', 'abi_type_index.c'],
+    dependencies: lantern,
+)
+
+test('abi-type-index', abi_type_index_test)
 
 llvm_backend_test = executable(
     'llvm-backend-test',

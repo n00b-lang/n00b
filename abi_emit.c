@@ -5,6 +5,7 @@
 
 #include "abi_container.h"
 #include "abi_string.h"
+#include "abi_type_index.h"
 #include "n00b-abi-v1.h"
 #include "lib/alloc.h"
 #include "lib/byteorder.h"
@@ -362,11 +363,16 @@ n00bb_abi_emit_empty_unit(
     n00b_abi_source_file_v1 sources[2] = {0};
     n00b_abi_runtime_config_v1 runtime_configs[2] = {0};
     uint32_t package_modules[1] = {1};
-    th_ctx *type_context = ir_module_types((ir_module_t *)runtime_ir);
-    th_type *nil_type = type_context ? th_name(type_context, "nil") : nullptr;
-    if (!nil_type)
+    n00bb_abi_type_index_t *type_index = n00bb_abi_type_index_new(
+        (ir_module_t *)runtime_ir);
+    th_type *nil_type = n00bb_abi_type_index_at(type_index, 0);
+    if (!nil_type) {
+        n00bb_abi_type_index_free(type_index);
         return empty_unit_error(unit, "could not resolve the builtin nil type");
-    types[0].typehash = th_hash(type_context, nil_type);
+    }
+    types[0].typehash = th_hash(ir_module_types((ir_module_t *)runtime_ir),
+                                nil_type);
+    n00bb_abi_type_index_free(type_index);
     types[0].kind = N00B_ABI_TYPE_NIL;
     types[0].alignment_bytes = 1;
     packages[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
