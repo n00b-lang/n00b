@@ -120,6 +120,7 @@ static bool find_elf(const uint8_t *image, size_t size, const char *name,
             result.relocation_count = (uint32_t)(rel_size / entry_size);
             result.relocation_entry_size = (uint32_t)entry_size;
             result.relocation_has_explicit_addend = rel_type == 4;
+            result.native_symbol_table_index = core_le_load_u32(rel + 40);
         }
         *out = result;
         return true;
@@ -300,6 +301,138 @@ bool core_object_section_find(const void *image, size_t image_size,
         return find_macho(bytes, image_size, segment, name, out);
     case CORE_TARGET_OBJECT_COFF:
         return find_coff(bytes, image_size, name, out);
+    default:
+        return false;
+    }
+}
+
+static bool string_name(const uint8_t *data, size_t size, uint32_t offset,
+                        core_object_symbol_name_t *out)
+{
+    if (offset >= size) return false;
+    const uint8_t *end = memchr(data + offset, 0, size - offset);
+    if (!end) return false;
+    *out = (core_object_symbol_name_t){data + offset,
+                                       (size_t)(end - (data + offset))};
+    return true;
+}
+
+static bool elf_symbol_name(const uint8_t *image, size_t size,
+                            uint32_t table_index, uint32_t symbol_index,
+                            core_object_symbol_name_t *out)
+{
+    if (!span(size, 0, 64) || memcmp(image, "\x7f" "ELF", 4) ||
+        image[4] != 2 || image[5] != 1) return false;
+    uint64_t headers = core_le_load_u64(image + 40);
+    uint16_t width = core_le_load_u16(image + 58);
+    uint64_t count = core_le_load_u16(image + 60);
+    if (width < 64 || !span(size, headers, width)) return false;
+    if (!count) count = core_le_load_u64(image + headers + 32);
+    if (!table_index || table_index >= count ||
+        !table_span(size, headers, count, width)) return false;
+    const uint8_t *table = image + headers + table_index * width;
+    uint32_t kind = core_le_load_u32(table + 4);
+    if (kind != 2 && kind != 11) return false;
+    uint64_t offset = core_le_load_u64(table + 24);
+    uint64_t length = core_le_load_u64(table + 32);
+    uint64_t entry_size = core_le_load_u64(table + 56);
+    uint32_t strings_index = core_le_load_u32(table + 40);
+    if (entry_size < 24 || !entry_size || length % entry_size ||
+        symbol_index >= length / entry_size ||
+        strings_index >= count || !span(size, offset, length)) return false;
+    const uint8_t *strings = image + headers + strings_index * width;
+    uint64_t string_offset = core_le_load_u64(strings + 24);
+    uint64_t string_length = core_le_load_u64(strings + 32);
+    if (core_le_load_u32(strings + 4) != 3 ||
+        !span(size, string_offset, string_length)) return false;
+    uint32_t name_offset =
+        core_le_load_u32(image + offset + (uint64_t)symbol_index * entry_size);
+    return string_name(image + string_offset, (size_t)string_length,
+                       name_offset, out);
+}
+
+static bool macho_symbol_name(const uint8_t *image, size_t size,
+                              uint32_t symbol_index,
+                              core_object_symbol_name_t *out)
+{
+    if (!span(size, 0, 32) || core_le_load_u32(image) != 0xfeedfacf ||
+        core_le_load_u32(image + 12) != 1) return false;
+    uint32_t count = core_le_load_u32(image + 16);
+    uint32_t command_bytes = core_le_load_u32(image + 20);
+    if (!span(size, 32, command_bytes)) return false;
+    size_t cursor = 32, end = 32 + command_bytes;
+    for (uint32_t i = 0; i < count; i++) {
+        if (!span(end, cursor, 8)) return false;
+        uint32_t command = core_le_load_u32(image + cursor);
+        uint32_t length = core_le_load_u32(image + cursor + 4);
+        if (length < 8 || !span(end, cursor, length)) return false;
+        if (command == 2) {
+            if (length < 24) return false;
+            uint32_t symbol_offset = core_le_load_u32(image + cursor + 8);
+            uint32_t symbol_count = core_le_load_u32(image + cursor + 12);
+            uint32_t string_offset = core_le_load_u32(image + cursor + 16);
+            uint32_t string_bytes = core_le_load_u32(image + cursor + 20);
+            if (symbol_index >= symbol_count ||
+                !table_span(size, symbol_offset, symbol_count, 16) ||
+                !span(size, string_offset, string_bytes)) return false;
+            uint32_t name_offset = core_le_load_u32(
+                image + symbol_offset + (uint64_t)symbol_index * 16);
+            return string_name(image + string_offset, string_bytes,
+                               name_offset, out);
+        }
+        cursor += length;
+    }
+    return false;
+}
+
+static bool coff_symbol_name(const uint8_t *image, size_t size,
+                             uint32_t symbol_index,
+                             core_object_symbol_name_t *out)
+{
+    if (!span(size, 0, 20) || core_le_load_u16(image + 16)) return false;
+    uint32_t symbol_offset = core_le_load_u32(image + 8);
+    uint32_t count = core_le_load_u32(image + 12);
+    if (!symbol_offset || symbol_index >= count ||
+        !table_span(size, symbol_offset, count, 18)) return false;
+    for (uint32_t i = 0; i < symbol_index;) {
+        uint8_t auxiliary = image[symbol_offset + (uint64_t)i * 18 + 17];
+        if ((uint64_t)i + 1 + auxiliary > symbol_index) return false;
+        i += 1 + auxiliary;
+    }
+    const uint8_t *entry = image + symbol_offset +
+                           (uint64_t)symbol_index * 18;
+    if (core_le_load_u32(entry)) {
+        size_t length = 0;
+        while (length < 8 && entry[length]) length++;
+        *out = (core_object_symbol_name_t){entry, length};
+        return true;
+    }
+    uint64_t strings = (uint64_t)symbol_offset + (uint64_t)count * 18;
+    if (!span(size, strings, 4)) return false;
+    uint32_t string_bytes = core_le_load_u32(image + strings);
+    uint32_t name_offset = core_le_load_u32(entry + 4);
+    if (string_bytes < 4 || !span(size, strings, string_bytes) ||
+        name_offset < 4) return false;
+    return string_name(image + strings, string_bytes, name_offset, out);
+}
+
+bool core_object_symbol_name_at(const void *image, size_t image_size,
+                                core_target_object_format_t format,
+                                const core_object_section_t *section,
+                                uint32_t native_symbol_index,
+                                core_object_symbol_name_t *out)
+{
+    if (!image || !section || !out) return false;
+    const uint8_t *bytes = image;
+    switch (format) {
+    case CORE_TARGET_OBJECT_ELF:
+        return elf_symbol_name(bytes, image_size,
+                               section->native_symbol_table_index,
+                               native_symbol_index, out);
+    case CORE_TARGET_OBJECT_MACH_O:
+        return macho_symbol_name(bytes, image_size, native_symbol_index, out);
+    case CORE_TARGET_OBJECT_COFF:
+        return coff_symbol_name(bytes, image_size, native_symbol_index, out);
     default:
         return false;
     }
