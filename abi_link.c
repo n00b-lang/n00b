@@ -919,3 +919,210 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
     }
     return true;
 }
+
+void
+n00bb_abi_manifest_rows_release(n00bb_abi_manifest_rows_t *rows)
+{
+    if (!rows) return;
+    core_free(rows->packages);
+    core_free(rows->sccs);
+    core_free(rows->u32_stream);
+    *rows = (n00bb_abi_manifest_rows_t){0};
+}
+
+bool
+n00bb_abi_rebuild_manifests(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_index_plan_t *plan,
+    n00bb_abi_manifest_rows_t *out)
+{
+    if (!selected || !selected->views || !selected->count || !plan || !out)
+        return false;
+    uint32_t packages, sccs, base_stream;
+    if (!n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_PACKAGE, &packages)
+        || !n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_SCC, &sccs)
+        || !n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_U32_STREAM,
+            &base_stream)
+        || packages < 2 || !sccs
+        || selected->count > (UINT32_MAX - base_stream) / 3)
+        return false;
+    uint32_t capacity = base_stream + 3 * (uint32_t)selected->count;
+    n00bb_abi_manifest_rows_t built = {
+        .packages = core_alloc_array(n00b_abi_package_v1, packages),
+        .package_count = packages,
+        .sccs = core_alloc_array(n00b_abi_scc_v1, sccs),
+        .scc_count = sccs,
+        .u32_stream = core_alloc_array(uint32_t, capacity),
+    };
+    uint32_t *kinds = core_alloc_array(uint32_t, base_stream);
+    uint32_t *package_members = core_alloc_array(uint32_t, packages);
+    uint32_t *package_written = core_alloc_array(uint32_t, packages);
+    uint32_t *scc_members = core_alloc_array(uint32_t, sccs);
+    uint32_t *scc_written = core_alloc_array(uint32_t, sccs);
+    bool *package_seen = core_alloc_array(bool, packages);
+    bool *scc_seen = core_alloc_array(bool, sccs);
+    n00bb_abi_u32_stream_build_t stream = {
+        .values = built.u32_stream, .kinds = kinds, .count = base_stream,
+    };
+    bool valid = true;
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00bb_abi_directory_entry_t *package_table =
+            n00bb_abi_object_table(view, N00B_ABI_TABLE_PACKAGE);
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_MODULE, 1);
+        if (!package_table || !module || !module->package_index) {
+            valid = false;
+            break;
+        }
+        uint32_t package_index, module_index;
+        valid = n00bb_abi_index_plan_map(plan, input,
+            N00B_ABI_TABLE_PACKAGE, module->package_index, &package_index)
+            && n00bb_abi_index_plan_map(plan, input,
+                N00B_ABI_TABLE_MODULE, 1, &module_index)
+            && package_index && package_index < packages && module_index;
+        for (uint32_t local = 1; valid
+             && local < package_table->record_count; local++) {
+            uint32_t final;
+            n00b_abi_package_v1 row;
+            valid = n00bb_abi_index_plan_map(plan, input,
+                N00B_ABI_TABLE_PACKAGE, local, &final)
+                && final && final < packages
+                && n00bb_abi_remap_row(selected, plan, input,
+                    N00B_ABI_TABLE_PACKAGE, local, &row, sizeof(row),
+                    &stream) && !row.reserved_zero;
+            if (!valid) break;
+            if (package_seen[final]) {
+                const n00b_abi_package_v1 *first =
+                    &built.packages[final];
+                valid = first->parent_package_index
+                            == row.parent_package_index
+                    && first->visibility == row.visibility
+                    && first->generation == row.generation;
+            }
+            else {
+                row.modules = (n00b_abi_range_v1){0};
+                built.packages[final] = row;
+                package_seen[final] = true;
+            }
+        }
+        if (!valid) break;
+        const n00b_abi_package_v1 *original = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_PACKAGE, module->package_index);
+        n00b_abi_package_v1 active;
+        valid = original && original->modules.count == 1
+            && n00bb_abi_remap_row(selected, plan, input,
+                N00B_ABI_TABLE_PACKAGE, module->package_index, &active,
+                sizeof(active), &stream)
+            && active.modules.first < base_stream
+            && built.u32_stream[active.modules.first] == module_index;
+        if (!valid) break;
+        package_members[package_index]++;
+
+        if (!module->scc_index) continue;
+        uint32_t scc_index;
+        n00b_abi_scc_v1 row;
+        valid = n00bb_abi_index_plan_map(plan, input, N00B_ABI_TABLE_SCC,
+            module->scc_index, &scc_index)
+            && scc_index && scc_index < sccs
+            && n00bb_abi_remap_row(selected, plan, input,
+                N00B_ABI_TABLE_SCC, module->scc_index, &row, sizeof(row),
+                &stream)
+            && row.members.count == 1 && row.lexical_order.count == 1
+            && row.members.first < base_stream
+            && row.lexical_order.first < base_stream
+            && built.u32_stream[row.members.first] == module_index;
+        if (!valid) break;
+        if (scc_seen[scc_index]) {
+            const n00b_abi_scc_v1 *first = &built.sccs[scc_index];
+            valid = first->interface_identity == row.interface_identity
+                && first->freshness_identity == row.freshness_identity;
+        }
+        else {
+            row.members = (n00b_abi_range_v1){0};
+            row.lexical_order = (n00b_abi_range_v1){0};
+            built.sccs[scc_index] = row;
+            scc_seen[scc_index] = true;
+        }
+        if (valid) scc_members[scc_index]++;
+    }
+    uint32_t cursor = base_stream;
+    for (uint32_t i = 1; valid && i < packages; i++) {
+        if (!package_seen[i]) { valid = false; break; }
+        built.packages[i].modules = (n00b_abi_range_v1){
+            .first = cursor, .count = package_members[i],
+        };
+        cursor += package_members[i];
+    }
+    for (uint32_t i = 1; valid && i < sccs; i++) {
+        if (!scc_seen[i] || !scc_members[i]) { valid = false; break; }
+        built.sccs[i].members = (n00b_abi_range_v1){
+            .first = cursor, .count = scc_members[i],
+        };
+        cursor += scc_members[i];
+        built.sccs[i].lexical_order = (n00b_abi_range_v1){
+            .first = cursor, .count = scc_members[i],
+        };
+        cursor += scc_members[i];
+    }
+    valid = valid && cursor <= capacity;
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_MODULE, 1);
+        uint32_t package_index, module_index;
+        valid = module && n00bb_abi_index_plan_map(plan, input,
+            N00B_ABI_TABLE_PACKAGE, module->package_index, &package_index)
+            && n00bb_abi_index_plan_map(plan, input,
+                N00B_ABI_TABLE_MODULE, 1, &module_index);
+        if (!valid) break;
+        n00b_abi_range_v1 range = built.packages[package_index].modules;
+        built.u32_stream[range.first + package_written[package_index]++] =
+            module_index;
+        if (!module->scc_index) continue;
+        uint32_t scc_index;
+        valid = n00bb_abi_index_plan_map(plan, input, N00B_ABI_TABLE_SCC,
+            module->scc_index, &scc_index);
+        if (!valid) break;
+        const n00b_abi_scc_v1 *source_scc = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_SCC, module->scc_index);
+        const uint8_t *ordinal_slot = source_scc
+            ? n00bb_abi_object_row(view, N00B_ABI_TABLE_U32_STREAM,
+                source_scc->lexical_order.first) : nullptr;
+        if (!ordinal_slot) { valid = false; break; }
+        uint32_t ordinal = core_le_load_u32(ordinal_slot);
+        range = built.sccs[scc_index].members;
+        if (ordinal >= range.count || scc_written[scc_index] >= range.count
+            || built.u32_stream[built.sccs[scc_index].lexical_order.first
+                                    + ordinal]) {
+            valid = false;
+            break;
+        }
+        built.u32_stream[range.first + scc_written[scc_index]++] =
+            module_index;
+        built.u32_stream[built.sccs[scc_index].lexical_order.first
+                          + ordinal] = module_index;
+    }
+    for (uint32_t i = 1; valid && i < packages; i++)
+        valid = package_written[i] == package_members[i];
+    for (uint32_t i = 1; valid && i < sccs; i++) {
+        valid = scc_written[i] == scc_members[i];
+        n00b_abi_range_v1 order = built.sccs[i].lexical_order;
+        for (uint32_t j = 0; valid && j < order.count; j++)
+            valid = built.u32_stream[order.first + j] != 0;
+    }
+    built.u32_count = cursor;
+    core_free(scc_seen);
+    core_free(package_seen);
+    core_free(scc_written);
+    core_free(scc_members);
+    core_free(package_written);
+    core_free(package_members);
+    core_free(kinds);
+    if (!valid) {
+        n00bb_abi_manifest_rows_release(&built);
+        return false;
+    }
+    *out = built;
+    return true;
+}

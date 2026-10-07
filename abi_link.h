@@ -88,3 +88,20 @@ bool n00bb_abi_remap_row(
     const n00bb_abi_index_plan_t *plan, size_t input_index,
     uint32_t kind, uint32_t local_index, void *out, size_t out_bytes,
     n00bb_abi_u32_stream_build_t *stream);
+
+/* Pre-pooling manifest rows. String values still borrow the selected input
+ * object and must be relocated into the final shared string pool. */
+typedef struct {
+    n00b_abi_package_v1 *packages;
+    uint32_t package_count;
+    n00b_abi_scc_v1 *sccs;
+    uint32_t scc_count;
+    uint32_t *u32_stream;
+    uint32_t u32_count;
+} n00bb_abi_manifest_rows_t;
+
+bool n00bb_abi_rebuild_manifests(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_index_plan_t *plan,
+    n00bb_abi_manifest_rows_t *out);
+void n00bb_abi_manifest_rows_release(n00bb_abi_manifest_rows_t *rows);

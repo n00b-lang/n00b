@@ -187,6 +187,39 @@ test_cycle_selection(char **paths)
     }
     assert(shared_primitive);
     check_remapped_rows(&selected, plan);
+    n00bb_abi_manifest_rows_t manifests = {0};
+    assert(n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
+        && manifests.package_count == 2 && manifests.scc_count == 2
+        && manifests.packages[1].modules.count == 3
+        && manifests.sccs[1].members.count == 3
+        && manifests.sccs[1].lexical_order.count == 3);
+    for (size_t i = 0; i < selected.count; i++) {
+        uint32_t module_index;
+        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_MODULE,
+            1, &module_index));
+        assert(manifests.u32_stream[manifests.packages[1].modules.first + i]
+            == module_index);
+        assert(manifests.u32_stream[manifests.sccs[1].members.first + i]
+            == module_index);
+        const n00b_abi_scc_v1 *fragment = n00bb_abi_object_row(
+            &selected.views[i], N00B_ABI_TABLE_SCC, 1);
+        const uint8_t *ordinal_slot = n00bb_abi_object_row(
+            &selected.views[i], N00B_ABI_TABLE_U32_STREAM,
+            fragment->lexical_order.first);
+        uint32_t ordinal = core_le_load_u32(ordinal_slot);
+        assert(ordinal < 3
+            && manifests.u32_stream[
+                manifests.sccs[1].lexical_order.first + ordinal]
+                == module_index);
+    }
+    n00bb_abi_manifest_rows_release(&manifests);
+    n00b_abi_package_v1 *conflicting_package = (void *)
+        n00bb_abi_object_row(&selected.views[1], N00B_ABI_TABLE_PACKAGE, 1);
+    uint32_t saved_visibility = conflicting_package->visibility;
+    conflicting_package->visibility = UINT32_MAX;
+    assert(!n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
+        && !manifests.packages && !manifests.u32_stream);
+    conflicting_package->visibility = saved_visibility;
     n00bb_abi_index_plan_free(plan);
     n00bb_abi_selected_objects_release(&selected);
     assert(!selected.views && !selected.count);
@@ -222,6 +255,16 @@ test_self_import_selection(const char *path)
     n00bb_abi_selected_objects_t selected = {0};
     assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected)
         && selected.count == 1);
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    n00bb_abi_manifest_rows_t manifests = {0};
+    assert(plan && n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
+        && manifests.package_count == 2 && manifests.scc_count == 2
+        && manifests.sccs[1].members.count == 1
+        && manifests.sccs[1].lexical_order.count == 1
+        && manifests.u32_stream[manifests.sccs[1].members.first] == 1
+        && manifests.u32_stream[manifests.sccs[1].lexical_order.first] == 1);
+    n00bb_abi_manifest_rows_release(&manifests);
+    n00bb_abi_index_plan_free(plan);
     n00bb_abi_selected_objects_release(&selected);
     core_link_unit_free(link);
     core_translation_unit_release(&unit);
@@ -303,6 +346,12 @@ main(int argc, char **argv)
         && !n00bb_abi_index_plan_map(plan, 0,
             N00B_ABI_TABLE_MODULE, 2, &mapped));
     check_remapped_rows(&selected, plan);
+    n00bb_abi_manifest_rows_t manifests = {0};
+    assert(n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
+        && manifests.package_count == 2 && manifests.scc_count == 1
+        && manifests.packages[1].modules.count == 1
+        && manifests.u32_stream[manifests.packages[1].modules.first] == 1);
+    n00bb_abi_manifest_rows_release(&manifests);
     n00b_abi_module_v1 remapped_module;
     n00b_abi_module_v1 *mutable_module = (void *)
         n00bb_abi_object_row(&selected.views[0], N00B_ABI_TABLE_MODULE, 1);
