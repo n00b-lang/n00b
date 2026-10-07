@@ -205,7 +205,8 @@ bool core_object_emit_elf(const core_target_desc_t *target,
         if (section->size)
             memcpy(image + data_offsets[i], section->bytes, section->size);
         uint64_t flags = 2 | (section->writable ? 1 : 0) |
-                         (section->executable ? 4 : 0);
+                         (section->executable ? 4 : 0) |
+                         (section->is_thread_local ? 0x400 : 0);
         write_section_header(image + shdr_offset +
                                  (ELF_USER_SECTION_BASE + i) * ELF_SECTION_BYTES,
                              section_names[i], 1, flags, data_offsets[i],

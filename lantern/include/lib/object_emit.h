@@ -15,6 +15,7 @@ typedef struct {
     /* Mach-O final protection follows `segment`, not this flag. */
     bool writable;
     bool executable;
+    bool is_thread_local;
 } core_object_emit_section_t;
 
 typedef struct {

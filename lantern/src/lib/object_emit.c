@@ -54,6 +54,13 @@ static bool valid_inputs(const core_target_desc_t *target,
             (section->size && !section->bytes) ||
             !section->alignment ||
             (section->alignment & (section->alignment - 1))) return false;
+        if (section->is_thread_local
+            && (!section->writable || section->executable
+                || (target->object_format == CORE_TARGET_OBJECT_MACH_O
+                    && strcmp(section->segment ? section->segment : "",
+                              "__DATA"))
+                || (target->object_format == CORE_TARGET_OBJECT_COFF
+                    && strncmp(section->name, ".tls$", 5)))) return false;
         if (target->object_format == CORE_TARGET_OBJECT_MACH_O &&
             (!section->segment || !section->segment[0])) return false;
     }

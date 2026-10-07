@@ -142,7 +142,8 @@ bool core_object_emit_macho(const core_target_desc_t *target,
             core_le_store_u32(header + 60, rel_counts[i]);
         }
         core_le_store_u32(header + 64,
-                          section->executable ? 0x800000 : 0);
+                          section->is_thread_local ? 0x11
+                          : section->executable ? 0x800000 : 0);
         if (section->size)
             memcpy(image + section_file_offsets[i], section->bytes,
                    section->size);
