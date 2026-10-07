@@ -1,0 +1,2 @@
+private enum Zero { only = 0 }
+private enum Signed { negative = -7, following, positive = 7 }

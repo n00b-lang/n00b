@@ -73,7 +73,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);
-    n00bb_abi_directory_entry_t entries[15];
+    n00bb_abi_directory_entry_t entries[16];
     size_t entry_count = sizeof(entries) / sizeof(*entries);
     n00bb_abi_image_header_t header;
     assert(n00bb_abi_container_read(metadata.bytes, metadata.size,
@@ -95,6 +95,8 @@ check_empty_unit(const char *triple, uint32_t target_id,
         entries, entry_count, N00B_ABI_TABLE_PACKED_RUN);
     const n00bb_abi_directory_entry_t *field_entry = find_entry(
         entries, entry_count, N00B_ABI_TABLE_FIELD);
+    const n00bb_abi_directory_entry_t *enum_entry = find_entry(
+        entries, entry_count, N00B_ABI_TABLE_ENUM_ITEM);
     const n00bb_abi_directory_entry_t *signature_entry = find_entry(
         entries, entry_count, N00B_ABI_TABLE_CALL_SIGNATURE);
     const n00bb_abi_directory_entry_t *parameter_entry = find_entry(
@@ -109,11 +111,13 @@ check_empty_unit(const char *triple, uint32_t target_id,
         entries, entry_count, N00B_ABI_TABLE_RUNTIME_CONFIG);
     assert(package_entry && module_entry && source_entry && type_entry
         && layout_entry && run_entry && packed_entry && field_entry
+        && enum_entry
         && signature_entry
         && parameter_entry && scope_entry && symbol_entry
         && location_entry && config_entry);
     assert(layout_entry->record_count == 1 && run_entry->record_count == 1
         && packed_entry->record_count == 1 && field_entry->record_count == 1
+        && enum_entry->record_count == 1
         && signature_entry->record_count == 1
         && parameter_entry->record_count == 1
         && scope_entry->record_count == 1

@@ -8,6 +8,7 @@
 #include "abi_emit.h"
 #include "abi_record_layout.h"
 #include "record_layout_request.h"
+#include "enum_value.h"
 #include "global_metadata.h"
 #include "llvm_backend.h"
 #include "n00b-abi-v1.h"
@@ -726,16 +727,6 @@ typedef struct {
     parse_token_stream_t *tokens;
     parse_pwz_parser_t *parser;
 } n00bb_lex_result_t;
-
-typedef struct {
-    ir_uint_t magnitude;
-    bool negative;
-} n00bb_enum_value_t;
-
-typedef struct {
-    uint64_t magnitude_bits;
-    bool is_signed;
-} n00bb_enum_range_t;
 
 typedef struct {
     ir_uint_t mask;
@@ -2260,6 +2251,7 @@ finalize_enum_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
     core_buffer_release(&qualified);
     if (!type) return false;
     symbol->type = type;
+    symbol->adt_kind = CORE_STRING_STATIC("enum");
     core_tree_node_value(node).type = type;
     for (parse_sym_entry_t *item = symbol->member_scope
             ? symbol->member_scope->first_in_scope : nullptr;
@@ -36983,6 +36975,7 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
                             - (uint32_t)enum_range->is_signed
                         ? UINT64_MAX
                         : enum_range->magnitude_bits + enum_range->is_signed;
+                if (enum_range && !enum_bits) enum_bits = 1;
                 const n00bb_flagset_info_t *flagset_info = parse_sym_binding(
                     symbol, CORE_STRING_STATIC("n00bb.flagset-info"));
                 for (size_t m = 0; m < sizeof(modules) / sizeof(modules[0]);

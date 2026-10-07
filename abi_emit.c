@@ -6,6 +6,7 @@
 #include "abi_container.h"
 #include "abi_decl_index.h"
 #include "abi_declarations.h"
+#include "abi_enum_rows.h"
 #include "abi_emit_strings.h"
 #include "abi_type_index.h"
 #include "abi_type_layout_rows.h"
@@ -280,14 +281,21 @@ n00bb_abi_emit_unit(
         bool record = symbol && symbol->kind == PARSE_SYM_TYPEDEF
             && core_string_eq(symbol->adt_kind,
                               CORE_STRING_STATIC("record"));
+        bool enumeration = symbol && symbol->kind == PARSE_SYM_TYPEDEF
+            && core_string_eq(symbol->adt_kind,
+                              CORE_STRING_STATIC("enum"));
         bool field = symbol && symbol->kind == PARSE_SYM_VARIABLE
             && symbol->is_field && symbol->owner_type
             && core_string_eq(symbol->owner_type->adt_kind,
                               CORE_STRING_STATIC("record"));
-        if (!record && !field) {
+        bool enum_item = symbol && symbol->kind == PARSE_SYM_ENUM_CONST
+            && symbol->owner_type
+            && core_string_eq(symbol->owner_type->adt_kind,
+                              CORE_STRING_STATIC("enum"));
+        if (!record && !field && !enumeration && !enum_item) {
             n00bb_abi_decl_index_free(declarations);
             return abi_unit_error(unit,
-                "this ABI emitter path supports only record types and fields");
+                "this ABI emitter path supports only record and enum declarations");
         }
     }
     if (!core_translation_unit_imports_finalized(unit)
@@ -331,6 +339,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_type_identity_rows_t type_rows = {0};
     n00bb_abi_type_components_t components = {0};
     n00bb_abi_type_layout_rows_t layout_rows = {0};
+    n00bb_abi_enum_rows_t enum_rows = {0};
     n00bb_abi_type_signatures_t signature_rows = {0};
     n00bb_abi_declarations_t declaration_rows = {0};
     bool valid = pool && type_index
@@ -344,14 +353,20 @@ n00bb_abi_emit_unit(
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
             1 + (uint32_t)components.count, declarations, pool,
             &type_rows, &layout_rows)
-        && n00bb_abi_type_signatures_build(type_index, &type_rows, pool,
+        && n00bb_abi_enum_rows_build(type_index, declarations, pool,
             1 + (uint32_t)components.count
                 + (uint32_t)layout_rows.stream_index_count,
+            &type_rows, &enum_rows)
+        && n00bb_abi_type_signatures_build(type_index, &type_rows, pool,
+            1 + (uint32_t)components.count
+                + (uint32_t)layout_rows.stream_index_count
+                + (uint32_t)enum_rows.stream_index_count,
             &signature_rows)
         && n00bb_abi_declarations_build(declarations, type_index,
             &type_rows, unit, tokens, pool,
             1 + (uint32_t)components.count
                 + (uint32_t)layout_rows.stream_index_count
+                + (uint32_t)enum_rows.stream_index_count
                 + (uint32_t)signature_rows.parameter_index_count,
             &declaration_rows);
     n00bb_abi_type_index_free(type_index);
@@ -368,6 +383,7 @@ n00bb_abi_emit_unit(
     if (!valid) {
         n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
+        n00bb_abi_enum_rows_release(&enum_rows);
         n00bb_abi_type_layout_rows_release(&layout_rows);
         n00bb_abi_type_components_release(&components);
         n00bb_abi_type_identity_rows_release(&type_rows);
@@ -377,6 +393,7 @@ n00bb_abi_emit_unit(
     }
 
     size_t stream_count = 1 + components.count + layout_rows.stream_index_count
+        + enum_rows.stream_index_count
         + signature_rows.parameter_index_count
         + declaration_rows.stream_index_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
@@ -387,12 +404,18 @@ n00bb_abi_emit_unit(
     if (layout_rows.stream_index_count)
         memcpy(stream + 1 + components.count, layout_rows.stream_indexes,
                layout_rows.stream_index_count * sizeof(*stream));
-    if (signature_rows.parameter_index_count)
+    if (enum_rows.stream_index_count)
         memcpy(stream + 1 + components.count + layout_rows.stream_index_count,
+               enum_rows.stream_indexes,
+               enum_rows.stream_index_count * sizeof(*stream));
+    if (signature_rows.parameter_index_count)
+        memcpy(stream + 1 + components.count + layout_rows.stream_index_count
+                   + enum_rows.stream_index_count,
                signature_rows.parameter_indexes,
                signature_rows.parameter_index_count * sizeof(*stream));
     if (declaration_rows.stream_index_count)
         memcpy(stream + 1 + components.count + layout_rows.stream_index_count
+                   + enum_rows.stream_index_count
                    + signature_rows.parameter_index_count,
                declaration_rows.stream_indexes,
                declaration_rows.stream_index_count * sizeof(*stream));
@@ -408,6 +431,8 @@ n00bb_abi_emit_unit(
          layout_rows.packed_run_count},
         {N00B_ABI_TABLE_FIELD, layout_rows.fields,
          layout_rows.field_count},
+        {N00B_ABI_TABLE_ENUM_ITEM, enum_rows.items,
+         enum_rows.item_count},
         {N00B_ABI_TABLE_CALL_SIGNATURE, signature_rows.signatures,
          signature_rows.signature_count},
         {N00B_ABI_TABLE_PARAMETER, signature_rows.parameters,
@@ -429,6 +454,7 @@ n00bb_abi_emit_unit(
     if (!valid) {
         n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
+        n00bb_abi_enum_rows_release(&enum_rows);
         n00bb_abi_type_layout_rows_release(&layout_rows);
         n00bb_abi_type_components_release(&components);
         n00bb_abi_type_identity_rows_release(&type_rows);
@@ -483,6 +509,7 @@ n00bb_abi_emit_unit(
     core_free(relocations);
     n00bb_abi_declarations_release(&declaration_rows);
     n00bb_abi_type_signatures_release(&signature_rows);
+    n00bb_abi_enum_rows_release(&enum_rows);
     n00bb_abi_type_layout_rows_release(&layout_rows);
     n00bb_abi_type_components_release(&components);
     n00bb_abi_type_identity_rows_release(&type_rows);

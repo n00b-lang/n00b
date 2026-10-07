@@ -7,6 +7,7 @@
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
+#include "enum_value.h"
 
 core_list_decl(uint32_t);
 
@@ -183,6 +184,19 @@ n00bb_abi_type_identity_rows_build(
                 &row->canonical_name);
         if (!valid) break;
         row->typehash = th_hash(types, type);
+        if (owner && row->kind == N00B_ABI_TYPE_ENUM) {
+            const n00bb_enum_range_t *range = parse_sym_binding(owner,
+                CORE_STRING_STATIC("n00bb.enum-range"));
+            uint64_t width = range
+                ? range->magnitude_bits + (uint64_t)range->is_signed : 0;
+            if (!range || width > UINT32_MAX) {
+                valid = false;
+                break;
+            }
+            row->semantic_width_bits = width ? (uint32_t)width : 1;
+            if (range->is_signed)
+                row->flags |= N00B_ABI_TYPE_FLAG_SIGNED;
+        }
         if (!th_is_closed(types, type))
             row->flags |= N00B_ABI_TYPE_FLAG_NON_CONCRETE;
         const ir_final_layout_t *final = ir_layout_final(

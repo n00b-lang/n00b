@@ -36,10 +36,44 @@ short_name_is(const n00b_abi_string_v1 *value, const char *name)
         && !memcmp(value->short_value.bytes, name, length);
 }
 
+static void
+check_enum_item(const core_object_section_t *metadata,
+                const n00bb_abi_directory_entry_t *stream,
+                const n00bb_abi_directory_entry_t *items,
+                const n00bb_abi_directory_entry_t *symbols,
+                const n00bb_abi_directory_entry_t *locations,
+                const n00b_abi_type_v1 *type, uint32_t type_index,
+                uint32_t ordinal, const char *name,
+                uint64_t low, uint64_t high)
+{
+    assert(ordinal < type->fields_or_arms.count);
+    uint32_t position = type->fields_or_arms.first + ordinal;
+    assert(position < stream->record_count);
+    uint32_t item_index = *(const uint32_t *)row_at(metadata, stream,
+                                                    position);
+    assert(item_index && item_index < items->record_count);
+    const n00b_abi_enum_item_v1 *item = row_at(metadata, items, item_index);
+    assert(item->parent_type_index == type_index);
+    assert(item->declaration_ordinal == ordinal);
+    assert(item->value_low == low && item->value_high == high);
+    assert(short_name_is(&item->name, name));
+    assert(item->symbol_index && item->symbol_index < symbols->record_count);
+    const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,
+                                               item->symbol_index);
+    assert(short_name_is(&symbol->name, name));
+    assert(symbol->kind == N00B_ABI_SYMBOL_ENUM_ITEM);
+    assert(symbol->type_index == type_index);
+    assert(symbol->declaration_location_index
+        && symbol->declaration_location_index < locations->record_count);
+    const n00b_abi_source_location_v1 *location = row_at(metadata, locations,
+        symbol->declaration_location_index);
+    assert(location->file_index == 1 && location->start_line > 0);
+}
+
 int
 main(int argc, char **argv)
 {
-    assert(argc == 2);
+    assert(argc == 2 || (argc == 3 && !strcmp(argv[2], "enum")));
     FILE *file = fopen(argv[1], "rb");
     assert(file);
     assert(!fseek(file, 0, SEEK_END));
@@ -100,6 +134,50 @@ main(int argc, char **argv)
         header.directory_count, N00B_ABI_TABLE_U32_STREAM);
     assert(types && fields && symbols && layouts && runs && locations_table
         && stream);
+
+    if (argc == 3) {
+        const n00bb_abi_directory_entry_t *items = entry_for(entries,
+            header.directory_count, N00B_ABI_TABLE_ENUM_ITEM);
+        assert(items && items->record_count == 5);
+        uint32_t zero_index = 0, signed_index = 0;
+        for (uint32_t i = 1; i < types->record_count; i++) {
+            const n00b_abi_type_v1 *type = row_at(&metadata, types, i);
+            if (short_name_is(&type->canonical_name, "enum.Zero"))
+                zero_index = i;
+            if (short_name_is(&type->canonical_name, "enum.Signed"))
+                signed_index = i;
+        }
+        assert(zero_index && signed_index && zero_index != signed_index);
+        const n00b_abi_type_v1 *zero = row_at(&metadata, types, zero_index);
+        const n00b_abi_type_v1 *signed_type = row_at(&metadata, types,
+                                                     signed_index);
+        assert(zero->kind == N00B_ABI_TYPE_ENUM
+            && zero->owner_module_index == 1
+            && zero->semantic_width_bits == 1
+            && zero->unpacked_storage_bits == 8
+            && zero->fields_or_arms.count == 1
+            && zero->layout_index < layouts->record_count
+            && !(zero->flags & N00B_ABI_TYPE_FLAG_SIGNED));
+        assert(signed_type->kind == N00B_ABI_TYPE_ENUM
+            && signed_type->owner_module_index == 1
+            && signed_type->semantic_width_bits == 4
+            && signed_type->unpacked_storage_bits == 8
+            && signed_type->fields_or_arms.count == 3
+            && signed_type->layout_index < layouts->record_count
+            && (signed_type->flags & N00B_ABI_TYPE_FLAG_SIGNED));
+        check_enum_item(&metadata, stream, items, symbols, locations_table,
+            zero, zero_index, 0, "only", 0, 0);
+        check_enum_item(&metadata, stream, items, symbols, locations_table,
+            signed_type, signed_index, 0, "negative", UINT64_MAX - 6,
+            UINT64_MAX);
+        check_enum_item(&metadata, stream, items, symbols, locations_table,
+            signed_type, signed_index, 1, "following", UINT64_MAX - 5,
+            UINT64_MAX);
+        check_enum_item(&metadata, stream, items, symbols, locations_table,
+            signed_type, signed_index, 2, "positive", 7, 0);
+        free(object);
+        return 0;
+    }
 
     uint32_t record_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {

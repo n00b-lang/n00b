@@ -1381,6 +1381,10 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/empty_abi.o"
 [ -s "$tmp/record_abi.o" ]
 LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
 "$abi_record_object_test" "$tmp/record_abi.o"
+"$compiler" compile --output "$tmp/enum_abi.o" \
+    "$program_dir/../abi/enum.n00b"
+[ -s "$tmp/enum_abi.o" ]
+"$abi_record_object_test" "$tmp/enum_abi.o" enum
 for command in build library compile; do
     if "$compiler" "$command" --dump-ir --dump-control-flow --dump-pdg \
         "$program_dir/lower_arithmetic.n00b" >"$tmp/$command.dumps" 2>&1; then
@@ -1392,7 +1396,7 @@ for command in build library compile; do
     grep -q '^execution-graph:$' "$tmp/$command.dumps"
     grep -q '^pdg @add ' "$tmp/$command.dumps"
     if [ "$command" = compile ]; then
-        grep -q 'this ABI emitter path supports only record types and fields' \
+        grep -q 'this ABI emitter path supports only record and enum declarations' \
             "$tmp/$command.dumps"
     else
         grep -q "'$command' processing is not implemented yet" \
