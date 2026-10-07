@@ -171,6 +171,7 @@ struct parse_sym_entry_t {
     bool                     is_abstract;
     bool                     is_optional;
     bool                     is_variadic;
+    bool                     is_synthetic;
     uint32_t                 uses;
     th_mode                  mode;
     bool                     has_mode;

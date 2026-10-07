@@ -113,9 +113,10 @@ scope_open(parse_visit_t *v)
     parse_symtab_set_scope_node_all(a->out->symtab, v->node);
 
     if (name_is(an->scope_tag, "function")) {
-        parse_symtab_add(a->out->symtab, ns_default(),
-                       CORE_STRING_STATIC("$return"), PARSE_SYM_VARIABLE,
-                       v->node);
+        parse_sym_entry_t *result = parse_symtab_add(a->out->symtab,
+            ns_default(), CORE_STRING_STATIC("$return"),
+            PARSE_SYM_VARIABLE, v->node);
+        if (result) result->is_synthetic = true;
     }
 
     return true;
