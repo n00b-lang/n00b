@@ -23,6 +23,7 @@ typedef enum : uint8_t {
     TH_BOUND,
     TH_SUM,
     TH_VAR,
+    TH_TRAIT,
 } th_kind;
 
 typedef enum : uint8_t {
@@ -237,6 +238,9 @@ bool     th_indirection_attrs(const char *name, uint8_t *attrs);
 th_type *th_array(th_ctx *ctx, th_type *elem);
 th_type *th_array_n(th_ctx *ctx, th_type *elem, uint64_t extent);
 th_type *th_record(th_ctx *ctx, const th_member *members, size_t n);
+/* A named interface whose method order is part of its type identity. */
+th_type *th_trait(th_ctx *ctx, const char *qualified_name,
+                  const th_member *methods, size_t n);
 th_type *th_record_stub(th_ctx *ctx);
 void     th_record_fill(th_ctx *ctx, th_type *stub, const th_member *members,
                         size_t n);
@@ -303,6 +307,10 @@ bool     th_seq_extent(const th_type *type, uint64_t *extent);
 size_t th_record_len(const th_type *type);
 const th_member *th_record_member(const th_type *type, size_t i);
 th_type *th_record_lookup(const th_type *type, const char *name);
+
+bool th_trait_name(const th_type *type, const char **name, size_t *nlen);
+size_t th_trait_len(const th_type *type);
+const th_member *th_trait_method(const th_type *type, size_t i);
 
 th_type *th_func_ret(const th_type *type);
 th_type *th_func_error(const th_type *type);

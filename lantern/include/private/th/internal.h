@@ -149,6 +149,12 @@ struct th_type {
       size_t n;
     } record;
     struct {
+      const char *name;
+      size_t nlen;
+      th_member *methods;
+      size_t n;
+    } trait;
+    struct {
       th_type *ret;
       th_type *error;
       th_param *params;

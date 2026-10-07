@@ -201,6 +201,22 @@ clone_type_graph(th_ctx *destination, const th_type *source,
                 || !copy->record.members[i].type) return nullptr;
         }
         return copy;
+    case TH_TRAIT:
+        copy->trait.name = clone_string(destination, source->trait.name);
+        copy->trait.nlen = source->trait.nlen;
+        copy->trait.n = source->trait.n;
+        copy->trait.methods = source->trait.n
+            ? core_alloc_array(th_member, source->trait.n) : nullptr;
+        if (!copy->trait.name) return nullptr;
+        for (size_t i = 0; i < source->trait.n; i++) {
+            copy->trait.methods[i].name = clone_string(destination,
+                source->trait.methods[i].name);
+            copy->trait.methods[i].type = clone_type_graph(destination,
+                source->trait.methods[i].type, seen);
+            if (!copy->trait.methods[i].name || !copy->trait.methods[i].type)
+                return nullptr;
+        }
+        return copy;
     case TH_FUNCTION:
         copy->fn.ret = clone_type_graph(destination, source->fn.ret, seen);
         copy->fn.error = clone_type_graph(destination, source->fn.error, seen);
@@ -599,6 +615,19 @@ static bool enc_plan(th_enc *e, eframe *f)
         u64(&f->post, t->record.n);
         break;
 
+    case TH_TRAIT:
+        if (!name(e->ctx, &s->pre, t->trait.name, t->trait.nlen))
+            return false;
+        u64(&s->pre, t->trait.n);
+        for (size_t i = 0; i < t->trait.n; i++) {
+            const th_member *m = &t->trait.methods[i];
+            s = step_add(&f->steps, m->type);
+            if (!name(e->ctx, &s->pre, m->name, strlen(m->name)))
+                return false;
+        }
+        f->ninline = f->steps.len;
+        break;
+
     case TH_FUNCTION: {
         uint8_t flags = (uint8_t)((t->fn.rest ? 1 : 0) |
                                   (t->fn.nkw ? 2 : 0) |
@@ -990,6 +1019,12 @@ static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
         break;
     }
 
+    case TH_TRAIT:
+        kids = core_alloc_array(th_type *, t->trait.n);
+        for (size_t i = 0; i < t->trait.n; i++)
+            kids[n++] = t->trait.methods[i].type;
+        break;
+
     case TH_FUNCTION: {
         size_t want = t->fn.np + t->fn.nkw + 3;
 
@@ -1306,6 +1341,33 @@ th_type *th_record(th_ctx *ctx, const th_member *m, size_t n)
         }
     }
 
+    return t;
+}
+
+th_type *th_trait(th_ctx *ctx, const char *qualified_name,
+                  const th_member *methods, size_t n)
+{
+    if (!ctx || !qualified_name || !th_name_syntax_valid(qualified_name,
+            strlen(qualified_name)) || (n && !methods)) return nullptr;
+    for (size_t i = 0; i < n; i++) {
+        if (!methods[i].name || !methods[i].type ||
+            !th_name_syntax_valid(methods[i].name,
+                                  strlen(methods[i].name)) ||
+            strchr(methods[i].name, '.')) return nullptr;
+        for (size_t j = 0; j < i; j++)
+            if (!strcmp(methods[j].name, methods[i].name)) return nullptr;
+    }
+    th_type *t = node(ctx, TH_TRAIT);
+    if (!t) return nullptr;
+    t->trait.name = th_strdup(ctx, qualified_name, strlen(qualified_name));
+    t->trait.nlen = strlen(qualified_name);
+    t->trait.n = n;
+    t->trait.methods = n ? th_alloc(ctx, n * sizeof(th_member)) : nullptr;
+    for (size_t i = 0; i < n; i++) {
+        t->trait.methods[i].name = th_strdup(ctx, methods[i].name,
+            strlen(methods[i].name));
+        t->trait.methods[i].type = methods[i].type;
+    }
     return t;
 }
 

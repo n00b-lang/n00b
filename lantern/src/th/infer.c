@@ -230,7 +230,7 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
     if (!var || var->kind != TH_VAR) {
         return false;
     }
-    if (c.kind == TH_CON_KIND && c.type_kind > TH_VAR) return false;
+    if (c.kind == TH_CON_KIND && c.type_kind > TH_TRAIT) return false;
     if (same_repeated_constraint(ctx, var, &c)) return true;
 
     if (c.kind == TH_CON_METHOD) {
@@ -1295,6 +1295,12 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
         break;
     }
 
+    case TH_TRAIT:
+        kids = core_alloc_array(th_type *, t->trait.n);
+        for (size_t i = 0; i < t->trait.n; i++)
+            kids[n++] = t->trait.methods[i].type;
+        break;
+
     case TH_FUNCTION: {
         kids      = core_alloc_array(th_type *, t->fn.np + t->fn.nkw + 3);
         kids[n++] = t->fn.ret;
@@ -1464,6 +1470,11 @@ bool th_occurs(th_ctx *ctx, th_type *var, th_type *t)
             }
             break;
 
+        case TH_TRAIT:
+            for (size_t i = 0; i < cur->trait.n; i++)
+                core_list_push(work, cur->trait.methods[i].type);
+            break;
+
         case TH_FUNCTION:
             core_list_push(work, cur->fn.ret);
             if (cur->fn.error) core_list_push(work, cur->fn.error);
@@ -1567,6 +1578,18 @@ static void plan_kids(th_ctx *ctx, th_type *out, const th_type *t,
                 rpush(w, &out->record.members[i].type,
                       out->record.members[i].type, depth);
             }
+        }
+        break;
+
+    case TH_TRAIT:
+        if (t->trait.n) {
+            out->trait.methods = th_alloc(ctx,
+                t->trait.n * sizeof(th_member));
+            memcpy(out->trait.methods, t->trait.methods,
+                t->trait.n * sizeof(th_member));
+            for (size_t i = 0; i < t->trait.n; i++)
+                rpush(w, &out->trait.methods[i].type,
+                    t->trait.methods[i].type, depth);
         }
         break;
 
@@ -1945,6 +1968,18 @@ static bool uni_step(th_ctx *ctx, th_type *a, th_type *b, core_list_t(tpair) *w)
 
     case TH_RECORD:
         return uni_record(ctx, a, b, w);
+
+    case TH_TRAIT:
+        if (a->trait.nlen != b->trait.nlen
+            || memcmp(a->trait.name, b->trait.name, a->trait.nlen)
+            || a->trait.n != b->trait.n) return false;
+        for (size_t i = a->trait.n; i-- > 0;) {
+            if (strcmp(a->trait.methods[i].name,
+                       b->trait.methods[i].name)) return false;
+            upush(w, a->trait.methods[i].type,
+                b->trait.methods[i].type);
+        }
+        return true;
 
     case TH_FUNCTION:
         return uni_func(ctx, a, b, w);

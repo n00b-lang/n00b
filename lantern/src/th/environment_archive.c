@@ -132,7 +132,7 @@ static bool read_constraint(core_object_reader_t *reader,
   switch (constraint->kind) {
   case TH_CON_KIND: {
     uint32_t type_kind;
-    if (!core_object_reader_u32(reader, &type_kind) || type_kind > TH_VAR)
+    if (!core_object_reader_u32(reader, &type_kind) || type_kind > TH_TRAIT)
       return false;
     constraint->type_kind = (th_kind)type_kind;
     return true;
@@ -221,6 +221,13 @@ static bool save_type(core_object_writer_t *writer, const void *object,
       if (!core_object_writer_string(writer, type->record.members[i].name) ||
           !write_type_ref(writer, type->record.members[i].type)) return false;
     return true;
+  case TH_TRAIT:
+    if (!core_object_writer_string(writer, type->trait.name) ||
+        !write_count(writer, type->trait.n)) return false;
+    for (size_t i = 0; i < type->trait.n; i++)
+      if (!core_object_writer_string(writer, type->trait.methods[i].name) ||
+          !write_type_ref(writer, type->trait.methods[i].type)) return false;
+    return true;
   case TH_FUNCTION:
     if (!write_type_ref(writer, type->fn.ret) ||
         !write_type_ref(writer, type->fn.error) ||
@@ -306,7 +313,7 @@ static bool restore_type(core_object_reader_t *reader, void *object,
                          void *user_data) {
   th_type *type = object;
   th_kind kind = (th_kind)(uintptr_t)user_data;
-  if (!type || kind >= TH_VAR + 1 || type->kind != kind)
+  if (!type || kind > TH_TRAIT || type->kind != kind)
     return false;
   uint32_t flag, value;
   size_t count;
@@ -375,6 +382,24 @@ static bool restore_type(core_object_reader_t *reader, void *object,
           !type->record.members[i].name ||
           !read_type_ref(reader, &type->record.members[i].type) ||
           !type->record.members[i].type) return false;
+    return true;
+  case TH_TRAIT:
+    if (!core_object_reader_string(reader, (char **)&type->trait.name) ||
+        !type->trait.name ||
+        !read_count(reader, &type->trait.n) ||
+        type->trait.n > SIZE_MAX / sizeof(th_member)) return false;
+    type->trait.nlen = strlen(type->trait.name);
+    if (!th_name_syntax_valid(type->trait.name, type->trait.nlen))
+      return false;
+    type->trait.methods = read_array(reader, type->trait.n,
+        sizeof(th_member), alignof(th_member));
+    if (type->trait.n && !type->trait.methods) return false;
+    for (size_t i = 0; i < type->trait.n; i++)
+      if (!core_object_reader_string(reader,
+              (char **)&type->trait.methods[i].name) ||
+          !type->trait.methods[i].name ||
+          !read_type_ref(reader, &type->trait.methods[i].type) ||
+          !type->trait.methods[i].type) return false;
     return true;
   case TH_FUNCTION:
     if (!read_type_ref(reader, &type->fn.ret) || !type->fn.ret ||
@@ -776,7 +801,7 @@ static bool register_environment_codecs(
           .restore = restore_environment,
           .finalize = finalize_environment,
           .destroy = destroy_environment})) return false;
-  for (uint32_t kind = 0; kind <= TH_VAR; kind++)
+  for (uint32_t kind = 0; kind <= TH_TRAIT; kind++)
     if (!core_object_archive_register(registry, (core_object_archive_type_t){
             .type_id = type_archive_id((th_kind)kind),
             .current_version = 5,

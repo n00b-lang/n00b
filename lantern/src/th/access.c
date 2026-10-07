@@ -146,6 +146,27 @@ th_type *th_record_lookup(const th_type *t, const char *name)
     return nullptr;
 }
 
+bool th_trait_name(const th_type *t, const char **name, size_t *nlen)
+{
+    const th_type *trait = as(t, TH_TRAIT);
+    if (!trait) return false;
+    if (name) *name = trait->trait.name;
+    if (nlen) *nlen = trait->trait.nlen;
+    return true;
+}
+
+size_t th_trait_len(const th_type *t)
+{
+    const th_type *trait = as(t, TH_TRAIT);
+    return trait ? trait->trait.n : 0;
+}
+
+const th_member *th_trait_method(const th_type *t, size_t i)
+{
+    const th_type *trait = as(t, TH_TRAIT);
+    return trait && i < trait->trait.n ? &trait->trait.methods[i] : nullptr;
+}
+
 static bool same_named_type(const th_type *left, const th_type *right)
 {
     const char *left_name = nullptr, *right_name = nullptr;

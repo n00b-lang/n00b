@@ -356,8 +356,106 @@ static void test_kind_constraint_archive(void) {
   th_ctx_free(types);
 }
 
+static void test_trait_type_identity(void) {
+  th_ctx *types = th_ctx_new();
+  th_ctx *copy_types = th_ctx_new();
+  th_type *receiver = th_var(types);
+  th_type *integer = th_name(types, "int");
+  th_type *boolean = th_name(types, "bool");
+  th_member methods[] = {
+      {.name = "read", .type = fn1(types, receiver, integer)},
+      {.name = "ready", .type = fn1(types, receiver, boolean)},
+  };
+  th_member reordered[] = {methods[1], methods[0]};
+  th_type *trait = th_trait(types, "base.Readable", methods, 2);
+  th_type *other_order = th_trait(types, "base.Readable", reordered, 2);
+  th_type *other_name = th_trait(types, "base.Writable", methods, 2);
+  th_type *clone = th_type_clone(copy_types, trait);
+  uint64_t hash = th_hash(types, trait);
+  const uint8_t *encoded = nullptr;
+  size_t encoded_size = 0;
+  static const char expected_encoding[] =
+      "0b000000000000000d626173652e5265616461626c650000"
+      "000000000002000000000000000472656164060001000000"
+      "000000000003696e74000000000000000000000000000000"
+      "01000a000000000000000000000000000000057265616479"
+      "060001000000000000000004626f6f6c0000000000000000"
+      "0000000000000001000a0000000000000000";
+  bool vector = th_encode(types, trait, &encoded, &encoded_size) &&
+      encoded_size * 2 == strlen(expected_encoding);
+  for (size_t i = 0; vector && i < encoded_size; i++) {
+    char pair[3];
+    snprintf(pair, sizeof(pair), "%02x", encoded[i]);
+    vector = pair[0] == expected_encoding[2 * i] &&
+        pair[1] == expected_encoding[2 * i + 1];
+  }
+  check("trait canonical bytes and hash are stable",
+        vector && hash == UINT64_C(0x23b5a89a3b0456b7));
+  const char *name = nullptr;
+  size_t name_len = 0;
+  check("trait node exposes its ordered interface",
+        th_trait_name(trait, &name, &name_len) &&
+        name_len == strlen("base.Readable") &&
+        !strcmp(name, "base.Readable") && th_trait_len(trait) == 2 &&
+        th_trait_method(trait, 0) &&
+        !strcmp(th_trait_method(trait, 0)->name, "read") &&
+        th_trait_method(trait, 1) &&
+        !strcmp(th_trait_method(trait, 1)->name, "ready"));
+  check("trait identity includes ordered methods and qualified name",
+        trait && other_order && other_name && hash &&
+        hash != th_hash(types, other_order) &&
+        hash != th_hash(types, other_name) &&
+        hash != th_hash(types, th_name(types, "base.Readable")) &&
+        clone && hash == th_hash(copy_types, clone));
+  th_member duplicate[] = {methods[0], methods[0]};
+  th_member malformed = {.name = "bad.method", .type = methods[0].type};
+  check("trait builder rejects duplicate and malformed methods",
+        !th_trait(types, "base.Readable", duplicate, 2) &&
+        !th_trait(types, "base.Readable", &malformed, 1));
+  check("trait method order participates in unification",
+        !th_unify(types, trait, other_order));
+
+  th_env *environment = th_env_new();
+  check("register trait type graph for archive roundtrip",
+        th_env_register_trait_contracts(environment, "base.Readable",
+            "base", "base", TH_ENV_PUBLIC, trait) &&
+        th_env_register_value(environment, "base.trait_type", "trait_type",
+                              "base", "base", TH_ENV_PUBLIC, trait) &&
+        th_env_freeze(environment));
+  char path[] = "/tmp/lantern-trait-type-XXXXXX";
+  int fd = mkstemp(path);
+  if (fd >= 0) { close(fd); unlink(path); }
+  core_object_archive_error_t error;
+  bool saved = fd >= 0 && th_env_save(environment, path, 0, &error);
+  th_env *loaded = saved ? th_env_load(path, &error) : nullptr;
+  bool restored = false;
+  bool restored_contract = false;
+  for (size_t i = 0; loaded && i < th_env_declaration_count(loaded); i++) {
+    th_env_declaration_view_t view = {0};
+    if (!th_env_declaration_at(loaded, i, &view) ||
+        !view.qualified_name) continue;
+    if (!strcmp(view.qualified_name, "base.trait_type"))
+      restored = view.value_type &&
+          th_kind_of(view.value_type) == TH_TRAIT &&
+          th_hash(types, view.value_type) == hash;
+    if (!strcmp(view.qualified_name, "base.Readable"))
+      restored_contract = view.kind == TH_ENV_DECLARATION_TRAIT &&
+          view.contract && th_kind_of(view.contract) == TH_TRAIT &&
+          th_trait_len(view.contract) == 2 &&
+          th_hash(types, view.contract) == hash;
+  }
+  check("trait type and contract survive environment archive",
+        restored && restored_contract);
+  th_env_free(loaded);
+  if (fd >= 0) unlink(path);
+  th_env_free(environment);
+  th_ctx_free(copy_types);
+  th_ctx_free(types);
+}
+
 int main(void) {
   test_kind_constraint_archive();
+  test_trait_type_identity();
   th_env *env = th_env_new();
   th_ctx *types = th_ctx_new();
   th_type *integer = th_name(types, "int");

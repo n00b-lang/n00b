@@ -12,6 +12,26 @@ static th_env_trait_t *trait_named(const th_env *env, const char *name) {
   return nullptr;
 }
 
+static size_t contract_len(const th_type *contracts) {
+  return th_kind_of(th_resolve_c(contracts)) == TH_TRAIT
+      ? th_trait_len(contracts) : th_record_len(contracts);
+}
+
+static const th_member *contract_method(const th_type *contracts, size_t i) {
+  return th_kind_of(th_resolve_c(contracts)) == TH_TRAIT
+      ? th_trait_method(contracts, i) : th_record_member(contracts, i);
+}
+
+static th_type *contract_lookup(const th_type *contracts, const char *name) {
+  if (th_kind_of(th_resolve_c(contracts)) != TH_TRAIT)
+    return th_record_lookup(contracts, name);
+  for (size_t i = 0; i < th_trait_len(contracts); i++) {
+    const th_member *method = th_trait_method(contracts, i);
+    if (!strcmp(method->name, name)) return method->type;
+  }
+  return nullptr;
+}
+
 static th_type *first_parameter(th_type *signature) {
   signature = th_resolve(signature);
   if (!signature || th_kind_of(signature) != TH_FUNCTION ||
@@ -99,6 +119,17 @@ static bool pattern_equal(const th_type *a, const th_type *b,
       return false;
     for (size_t i = 0; i < a->record.n; i++) {
       const th_member *x = &a->record.members[i], *y = &b->record.members[i];
+      if (strcmp(x->name, y->name) || !pattern_equal(x->type, y->type, seen))
+        return false;
+    }
+    return true;
+  case TH_TRAIT:
+    if (a->trait.nlen != b->trait.nlen ||
+        memcmp(a->trait.name, b->trait.name, a->trait.nlen) ||
+        a->trait.n != b->trait.n)
+      return false;
+    for (size_t i = 0; i < a->trait.n; i++) {
+      const th_member *x = &a->trait.methods[i], *y = &b->trait.methods[i];
       if (strcmp(x->name, y->name) || !pattern_equal(x->type, y->type, seen))
         return false;
     }
@@ -211,6 +242,20 @@ static bool pattern_subsumes(const th_type *general, const th_type *specific,
           !pattern_subsumes(general->record.members[i].type,
                             specific->record.members[i].type, bindings, seen))
         return false;
+    return true;
+  case TH_TRAIT:
+    if (general->trait.nlen != specific->trait.nlen ||
+        memcmp(general->trait.name, specific->trait.name,
+               general->trait.nlen) ||
+        general->trait.n != specific->trait.n)
+      return false;
+    for (size_t i = 0; i < general->trait.n; i++) {
+      const th_member *x = &general->trait.methods[i];
+      const th_member *y = &specific->trait.methods[i];
+      if (strcmp(x->name, y->name) ||
+          !pattern_subsumes(x->type, y->type, bindings, seen))
+        return false;
+    }
     return true;
   case TH_FUNCTION:
     if (general->fn.np != specific->fn.np ||
@@ -441,7 +486,7 @@ th_env_compose_diagnose_in_context(const th_env *const *environments,
       th_env_trait_t *existing = trait_named(composed, trait->name);
       bool merge_marker = existing &&
           th_record_len(existing->contracts) == 0 &&
-          th_record_len(trait->contracts) == 0 &&
+          contract_len(trait->contracts) == 0 &&
           existing->visibility == trait->visibility &&
           !strcmp(existing->module, trait->module) &&
           !strcmp(existing->package, trait->package);
@@ -724,12 +769,17 @@ bool th_env_register_trait_contracts(th_env *env, const char *name,
                                      th_type *method_contracts) {
   if (!env || env->frozen || !name || !*name || !module || !package ||
       !method_contracts || visibility > TH_ENV_PUBLIC ||
-      th_kind_of(method_contracts) != TH_RECORD || trait_named(env, name))
+      (th_kind_of(method_contracts) != TH_RECORD &&
+       th_kind_of(method_contracts) != TH_TRAIT) || trait_named(env, name))
     return false;
+  const char *contract_name = nullptr;
+  if (th_kind_of(method_contracts) == TH_TRAIT &&
+      (!th_trait_name(method_contracts, &contract_name, nullptr) ||
+       strcmp(contract_name, name))) return false;
   core_list_t(th_member) methods = core_list_new(th_member);
   core_list_t(th_member) errors = core_list_new(th_member);
-  for (size_t i = 0; i < th_record_len(method_contracts); i++) {
-    const th_member *member = th_record_member(method_contracts, i);
+  for (size_t i = 0; i < contract_len(method_contracts); i++) {
+    const th_member *member = contract_method(method_contracts, i);
     th_type *signature = nullptr, *error = nullptr;
     bool valid = member && th_env_signature_channels(
         env->types, member->type, &signature, &error);
@@ -765,7 +815,7 @@ bool th_env_register_intrinsic_type_pattern(th_env *env,
   th_env_trait_t *trait = env && trait_name
       ? trait_named(env, trait_name) : nullptr;
   if (!env || env->frozen || !trait || !receiver_pattern ||
-      th_record_len(trait->contracts) != 0)
+      contract_len(trait->contracts) != 0)
     return false;
   for (size_t i = 0; i < env->intrinsic_types.len; i++) {
     const th_env_intrinsic_type_t *fact = &env->intrinsic_types.data[i];
@@ -1032,9 +1082,9 @@ bool th_env_freeze(th_env *env) {
     trait->logic_symbol = core_datalog_constant(
         env->logic, core_string_borrow(trait->name, strlen(trait->name)));
     th_type *methods = fresh_pattern(probe, trait->contracts);
-    for (size_t mi = 0; mi < th_record_len(methods); mi++) {
-      const th_member *method = th_record_member(methods, mi);
-      const th_member *stable_method = th_record_member(trait->contracts, mi);
+    for (size_t mi = 0; mi < contract_len(methods); mi++) {
+      const th_member *method = contract_method(methods, mi);
+      const th_member *stable_method = contract_method(trait->contracts, mi);
       core_datalog_symbol_t method_symbol = core_datalog_constant(
           env->logic, core_string_borrow(method->name, strlen(method->name)));
       core_list_push(
@@ -1180,7 +1230,7 @@ static bool function_matches(th_ctx *ctx, th_type *receiver,
   th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
   th_type *function_contract = fresh_pattern(ctx, function->contract);
   th_type *required_contract =
-      th_record_lookup(trait_contracts, method_name);
+      contract_lookup(trait_contracts, method_name);
   required_contract = required_contract
       ? fresh_pattern(ctx, required_contract) : nullptr;
   th_type *provided = nullptr, *provided_error = nullptr;
@@ -1222,7 +1272,7 @@ static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
   th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
   th_type *function_contract = fresh_pattern(ctx, function->contract);
   th_type *required_contract =
-      th_record_lookup(trait_contracts, method_name);
+      contract_lookup(trait_contracts, method_name);
   required_contract = required_contract
       ? fresh_pattern(ctx, required_contract) : nullptr;
   th_type *required = nullptr, *required_error = nullptr;
@@ -1383,10 +1433,10 @@ bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
   if (!trait)
     return false;
   th_type *methods = fresh_pattern(ctx, trait->contracts);
-  if (!th_record_len(methods))
+  if (!contract_len(methods))
     return intrinsic_type_matches(ctx, trait, receiver);
-  for (size_t m = 0; m < th_record_len(methods); m++) {
-    const th_member *required = th_record_member(methods, m);
+  for (size_t m = 0; m < contract_len(methods); m++) {
+    const th_member *required = contract_method(methods, m);
     core_list_t(th_env_function_ptr_t) candidates =
         candidate_functions(ctx, trait, required->name);
     bool found = false;
@@ -1414,7 +1464,7 @@ th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
     return TH_ENV_METHOD_NOT_FOUND;
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   th_type *trait_methods = trait ? fresh_pattern(ctx, trait->contracts) : nullptr;
-  if (!trait_methods || !th_record_lookup(trait_methods, method_name))
+  if (!trait_methods || !contract_lookup(trait_methods, method_name))
     return TH_ENV_METHOD_NOT_FOUND;
   th_env_type_origin_t *origin = receiver_origin(ctx->environment, receiver);
   typedef struct {
@@ -1574,7 +1624,7 @@ size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,
     return 0;
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   th_type *methods = trait ? fresh_pattern(ctx, trait->contracts) : nullptr;
-  if (!methods || !th_record_lookup(methods, method_name))
+  if (!methods || !contract_lookup(methods, method_name))
     return 0;
   core_list_t(th_env_function_ptr_t) candidates =
       candidate_functions(ctx, trait, method_name);
@@ -1655,11 +1705,11 @@ th_env_method_status_t th_env_trait_vtable_plan(
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   if (!trait)
     return TH_ENV_METHOD_NOT_FOUND;
-  size_t count = th_record_len(trait->contracts);
+  size_t count = contract_len(trait->contracts);
   th_env_vtable_slot_t *plan =
       core_alloc_array(th_env_vtable_slot_t, count);
   for (size_t i = 0; i < count; i++) {
-    const th_member *requirement = th_record_member(trait->contracts, i);
+    const th_member *requirement = contract_method(trait->contracts, i);
     th_env_method_status_t status = th_env_method_resolve(
         ctx, concrete_type, trait_name, requirement->name,
         &plan[i].implementation);
@@ -1700,11 +1750,11 @@ size_t th_env_method_requirements(
   for (size_t i = 0; i < env->traits.len; i++) {
     const th_env_trait_t *trait = &env->traits.data[i];
     if (!visible_to(ctx, trait->visibility, trait->module, trait->package) ||
-        !th_record_lookup(trait->contracts, method_name))
+        !contract_lookup(trait->contracts, method_name))
       continue;
     if (requirements && count < max_requirements) {
       th_type *methods = fresh_pattern(ctx, trait->contracts);
-      th_type *contract = th_record_lookup(methods, method_name);
+      th_type *contract = contract_lookup(methods, method_name);
       th_type *signature = nullptr, *error_type = nullptr;
       if (th_env_signature_channels(ctx, contract, &signature, &error_type))
         requirements[count] = (th_env_method_requirement_t){

@@ -425,6 +425,10 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
 
         return;
 
+    case TH_TRAIT:
+        core_buffer_printf(b, "trait %s", t->trait.name);
+        return;
+
     case TH_FUNCTION:
         plan_function(c, b, w, t);
 
