@@ -199,6 +199,7 @@ core_list_decl(size_t);
 core_list_decl(th_param);
 core_list_decl(th_kwparam);
 core_list_decl(th_member);
+core_list_decl(th_trait_requirement);
 core_list_decl(th_arg);
 typedef struct {
     core_string_t name;
@@ -209,6 +210,10 @@ typedef struct {
     n00bb_typevar_binding_t *data;
     size_t len;
 } n00bb_signature_typevars_t;
+typedef struct {
+    th_trait_requirement *data;
+    size_t len;
+} n00bb_declared_trait_requirements_t;
 typedef struct {
     parse_sym_entry_t *call;
     parse_sym_entry_t *handler;
@@ -4264,7 +4269,8 @@ static bool
 apply_signature_constraints(parse_grammar_t *grammar,
                             core_translation_unit_t *unit,
                             parse_tree_t *where, th_ctx *types,
-                            core_list_t(n00bb_typevar_binding_t) *variables)
+                            core_list_t(n00bb_typevar_binding_t) *variables,
+                            core_list_t(th_trait_requirement) *declared)
 {
     if (!where) return true;
     for (size_t i = 0; i < core_tree_num_children(where); i++) {
@@ -4318,10 +4324,30 @@ apply_signature_constraints(parse_grammar_t *grammar,
                     core_buffer_release(&name);
                     return false;
                 }
+                if (declared) {
+                    n00bb_tu_state_t *state = tu_state(unit);
+                    size_t bytes = strlen(name.data) + 1;
+                    char *copy = state ? core_arena_alloc(
+                        &state->semantic_values, bytes) : nullptr;
+                    if (!copy) {
+                        core_buffer_release(&name);
+                        return false;
+                    }
+                    memcpy(copy, name.data, bytes);
+                    core_list_push(*declared, ((th_trait_requirement){
+                        .subject = variable, .kind = TH_CON_IMPLEMENTS,
+                        .iface = copy,
+                    }));
+                }
                 core_buffer_release(&name);
                 continue;
             }
             if (!th_var_constrain(types, variable, constraint)) return false;
+            if (declared)
+                core_list_push(*declared, ((th_trait_requirement){
+                    .subject = variable, .kind = TH_CON_EXCLUDES,
+                    .target = constraint.target,
+                }));
         }
     }
     return true;
@@ -4930,7 +4956,7 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
     signature_typevars_for_symbol(symbol, &variables);
     valid = valid && apply_signature_constraints(grammar, unit,
         child_nt(grammar, signature, "where-clause"), state->types,
-        &variables);
+        &variables, nullptr);
     th_type *signature_type = valid
         ? th_func_with_error(state->types, success, failure, params.data,
             params.len, has_rest ? &rest : nullptr, nullptr, 0)
@@ -27233,8 +27259,13 @@ link_semantic_type_for_symbol(parse_grammar_t *grammar,
                 .type = contract,
             }));
         }
-        th_type *trait = valid ? th_trait(state->types, qualified.data,
-            methods.data, methods.len) : nullptr;
+        n00bb_declared_trait_requirements_t *requirements =
+            parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.trait.requirements"));
+        th_type *trait = valid && requirements
+            ? th_trait(state->types, qualified.data, methods.data,
+                methods.len, requirements->data, requirements->len)
+            : nullptr;
         core_list_free(methods);
         core_buffer_release(&qualified);
         return trait;
@@ -38866,10 +38897,24 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
             size_t method_count = th_trait_len(source->type);
             const th_member *methods = method_count
                 ? th_trait_method(source->type, 0) : nullptr;
+            size_t requirement_count =
+                th_trait_requirement_count(source->type);
+            core_list_t(th_trait_requirement) requirements =
+                core_list_new(th_trait_requirement);
+            for (size_t i = 0; i < requirement_count; i++) {
+                th_trait_requirement item;
+                if (!th_trait_requirement_at(source->type, i, &item)) {
+                    ok = false;
+                    break;
+                }
+                core_list_push(requirements, item);
+            }
             th_type *public_trait = th_kind_of(th_resolve(source->type))
-                    == TH_TRAIT
+                    == TH_TRAIT && ok
                 ? th_trait(source_state->types, external.data, methods,
-                           method_count) : nullptr;
+                           method_count, requirements.data,
+                           requirements.len) : nullptr;
+            core_list_free(requirements);
             ok = public_trait && th_env_register_trait_contracts(environment,
                 external.data, package->name.data,
                 n00bb_package_id(interface_unit).data, TH_ENV_PUBLIC,
@@ -41270,11 +41315,32 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         parse_sym_entry_t *symbol = core_tree_node_value(node).sym;
         core_list_t(n00bb_typevar_binding_t) variables =
             core_list_new(n00bb_typevar_binding_t);
+        core_list_t(th_trait_requirement) declared =
+            core_list_new(th_trait_requirement);
         signature_typevars_for_symbol(symbol, &variables);
         bool valid = apply_signature_constraints(grammar, unit,
             child_nt(grammar, node, "where-clause"), state->types,
-            &variables);
+            &variables, &declared);
         core_list_free(variables);
+        if (valid && symbol) {
+            n00bb_declared_trait_requirements_t *facts = core_arena_alloc(
+                &state->semantic_values, sizeof(*facts));
+            th_trait_requirement *items = declared.len
+                ? core_arena_alloc(&state->semantic_values,
+                    declared.len * sizeof(*items)) : nullptr;
+            valid = facts && (!declared.len || items);
+            if (valid) {
+                if (declared.len)
+                    memcpy(items, declared.data,
+                        declared.len * sizeof(*items));
+                *facts = (n00bb_declared_trait_requirements_t){
+                    .data = items, .len = declared.len,
+                };
+                valid = parse_sym_set_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.trait.requirements"), facts);
+            }
+        }
+        core_list_free(declared);
         if (!valid) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
