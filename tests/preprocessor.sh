@@ -1413,15 +1413,23 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     "$program_dir/generic_local.n00b"
 [ -s "$tmp/generic_local_abi.o" ]
 "$abi_record_object_test" "$tmp/generic_local_abi.o" generic-local
-if N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
-    --output "$tmp/cycle_abi.o" cycle_first \
-    >"$tmp/cycle_abi.out" 2>&1; then
-    echo 'recursive imports emitted ABI without SCC metadata' >&2
-    exit 1
-fi
-grep -q 'ABI emission for recursive imports requires SCC metadata' \
-    "$tmp/cycle_abi.out"
-[ ! -e "$tmp/cycle_abi.o" ]
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/cycle_first.o" cycle_first
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/cycle_second.o" cycle_second
+"$abi_record_object_test" "$tmp/cycle_first.o" cycle \
+    "$tmp/cycle_second.o"
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/cycle_long_a.o" cycle_long_a
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/cycle_long_b.o" cycle_long_b
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/cycle_long_c.o" cycle_long_c
+"$abi_record_object_test" "$tmp/cycle_long_a.o" cycle \
+    "$tmp/cycle_long_b.o" "$tmp/cycle_long_c.o"
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/cycle_self.o" cycle_self
+"$abi_record_object_test" "$tmp/cycle_self.o" cycle
 for command in build library; do
     if "$compiler" "$command" --dump-ir --dump-control-flow --dump-pdg \
         "$program_dir/lower_arithmetic.n00b" >"$tmp/$command.dumps" 2>&1; then

@@ -37,6 +37,101 @@ short_name_is(const n00b_abi_string_v1 *value, const char *name)
         && !memcmp(value->short_value.bytes, name, length);
 }
 
+static bool
+find_metadata(const uint8_t *object, size_t length,
+              core_object_section_t *metadata)
+{
+    struct {
+        core_target_object_format_t format;
+        const char *segment;
+        const char *name;
+    } locations[] = {
+        {CORE_TARGET_OBJECT_ELF, nullptr, ".data.rel.ro.n00b_meta"},
+        {CORE_TARGET_OBJECT_MACH_O, "__DATA_CONST", "__n00b_meta"},
+        {CORE_TARGET_OBJECT_COFF, nullptr, ".n00b$M"},
+    };
+    for (size_t i = 0; i < sizeof(locations) / sizeof(*locations); i++)
+        if (core_object_section_find(object, length, locations[i].format,
+            locations[i].segment, locations[i].name, metadata)) return true;
+    return false;
+}
+
+typedef struct {
+    uint64_t interface_identity;
+    uint64_t freshness_identity;
+    uint32_t ordinal;
+} cycle_fact_t;
+
+static cycle_fact_t
+cycle_fact(const core_object_section_t *metadata,
+           const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *modules = entry_for(entries, count,
+        N00B_ABI_TABLE_MODULE);
+    const n00bb_abi_directory_entry_t *sccs = entry_for(entries, count,
+        N00B_ABI_TABLE_SCC);
+    const n00bb_abi_directory_entry_t *requirements = entry_for(entries,
+        count, N00B_ABI_TABLE_REQUIREMENT);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(modules && modules->record_count == 2
+        && sccs && sccs->record_count == 2
+        && requirements && requirements->record_count == 2 && stream);
+    const n00b_abi_module_v1 *module = row_at(metadata, modules, 1);
+    const n00b_abi_scc_v1 *group = row_at(metadata, sccs, 1);
+    const n00b_abi_requirement_v1 *import = row_at(metadata,
+        requirements, 1);
+    assert(module->scc_index == 1 && !module->imports.count
+        && group->interface_identity && group->freshness_identity
+        && group->members.count == 1 && group->lexical_order.count == 1
+        && group->members.first < stream->record_count
+        && group->lexical_order.first < stream->record_count
+        && *(const uint32_t *)row_at(metadata, stream,
+            group->members.first) == 1
+        && import->symbol_kind == N00B_ABI_SYMBOL_MODULE
+        && import->requesting_module_index == 1);
+    return (cycle_fact_t){
+        .interface_identity = group->interface_identity,
+        .freshness_identity = group->freshness_identity,
+        .ordinal = *(const uint32_t *)row_at(metadata, stream,
+            group->lexical_order.first),
+    };
+}
+
+static cycle_fact_t
+cycle_fact_from_file(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    assert(file && !fseek(file, 0, SEEK_END));
+    long length = ftell(file);
+    assert(length > 0 && !fseek(file, 0, SEEK_SET));
+    uint8_t *object = malloc((size_t)length);
+    assert(object && fread(object, 1, (size_t)length, file)
+        == (size_t)length && !fclose(file));
+    core_object_section_t metadata = {0};
+    assert(find_metadata(object, (size_t)length, &metadata));
+    n00bb_abi_image_key_t key = {
+        .target_id = core_le_load_u32(metadata.bytes + 16),
+        .abi_profile_id = N00BB_ABI_PROFILE_ID,
+        .cpu_profile = core_le_load_u64(metadata.bytes + 40),
+        .data_layout_profile = N00BB_ABI_DATA_LAYOUT_PROFILE,
+    };
+    size_t schema_count = 0;
+    const n00bb_abi_table_schema_t *schemas =
+        n00bb_abi_v1_table_schemas(&schema_count);
+    n00bb_abi_directory_entry_t *entries = calloc(schema_count,
+        sizeof(*entries));
+    assert(entries);
+    n00bb_abi_image_header_t header;
+    assert(n00bb_abi_container_read(metadata.bytes, metadata.size, &key,
+        schemas, schema_count, false, &header, entries, schema_count));
+    cycle_fact_t result = cycle_fact(&metadata, entries,
+                                      header.directory_count);
+    free(entries);
+    free(object);
+    return result;
+}
+
 static void
 check_enum_item(const core_object_section_t *metadata,
                 const n00bb_abi_directory_entry_t *stream,
@@ -381,7 +476,8 @@ check_generic(const core_object_section_t *metadata,
 int
 main(int argc, char **argv)
 {
-    assert(argc == 2 || (argc == 3
+    bool cycle_mode = argc >= 3 && !strcmp(argv[2], "cycle");
+    assert(argc == 2 || cycle_mode || (argc == 3
         && (!strcmp(argv[2], "enum") || !strcmp(argv[2], "function")
             || !strcmp(argv[2], "import")
             || !strcmp(argv[2], "import-record")
@@ -400,25 +496,9 @@ main(int argc, char **argv)
     assert(fread(object, 1, (size_t)length, file) == (size_t)length);
     assert(!fclose(file));
 
-    struct {
-        core_target_object_format_t format;
-        const char *segment;
-        const char *name;
-    } locations[] = {
-        {CORE_TARGET_OBJECT_ELF, nullptr, ".data.rel.ro.n00b_meta"},
-        {CORE_TARGET_OBJECT_MACH_O, "__DATA_CONST", "__n00b_meta"},
-        {CORE_TARGET_OBJECT_COFF, nullptr, ".n00b$M"},
-    };
     core_object_section_t metadata = {0};
-    bool found = false;
-    for (size_t i = 0; i < sizeof(locations) / sizeof(*locations); i++)
-        if (core_object_section_find(object, (size_t)length,
-            locations[i].format, locations[i].segment, locations[i].name,
-            &metadata)) {
-            found = true;
-            break;
-        }
-    assert(found && metadata.size >= N00BB_ABI_HEADER_BYTES);
+    assert(find_metadata(object, (size_t)length, &metadata)
+        && metadata.size >= N00BB_ABI_HEADER_BYTES);
     n00bb_abi_image_key_t key = {
         .target_id = core_le_load_u32(metadata.bytes + 16),
         .abi_profile_id = N00BB_ABI_PROFILE_ID,
@@ -451,6 +531,28 @@ main(int argc, char **argv)
         header.directory_count, N00B_ABI_TABLE_U32_STREAM);
     assert(types && fields && symbols && layouts && runs && locations_table
         && stream);
+
+    if (cycle_mode) {
+        size_t member_count = (size_t)argc - 2;
+        bool *seen = calloc(member_count, sizeof(*seen));
+        assert(seen);
+        cycle_fact_t first = cycle_fact(&metadata, entries,
+                                        header.directory_count);
+        assert(first.ordinal < member_count);
+        seen[first.ordinal] = true;
+        for (int i = 3; i < argc; i++) {
+            cycle_fact_t member = cycle_fact_from_file(argv[i]);
+            assert(member.interface_identity == first.interface_identity
+                && member.freshness_identity == first.freshness_identity
+                && member.ordinal < member_count && !seen[member.ordinal]);
+            seen[member.ordinal] = true;
+        }
+        for (size_t i = 0; i < member_count; i++) assert(seen[i]);
+        free(seen);
+        free(entries);
+        free(object);
+        return 0;
+    }
 
     if (argc == 3 && !strcmp(argv[2], "function")) {
         check_function(&metadata, entries, header.directory_count);

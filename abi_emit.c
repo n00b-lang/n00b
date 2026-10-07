@@ -15,8 +15,10 @@
 #include "abi_type_signatures.h"
 #include "n00b-abi-v1.h"
 #include "lib/alloc.h"
+#include "lib/buffer.h"
 #include "lib/byteorder.h"
 #include "lib/diagnostic.h"
+#include "lib/hash.h"
 #include "lib/object_section.h"
 
 static bool
@@ -260,19 +262,150 @@ phase_has_only_trivial_initializer(const ir_module_t *module)
     return true;
 }
 
+typedef struct {
+    core_translation_unit_t **members;
+    size_t count;
+    bool *visited;
+    size_t *order;
+    size_t ordered;
+} abi_scc_order_t;
+
 static bool
-unit_has_recursive_imports(core_link_unit_t *link,
-                           core_translation_unit_t *unit)
+module_name_less(core_string_t left, core_string_t right)
 {
-    for (size_t i = 0; i < core_translation_unit_import_count(unit); i++)
-        if (core_translation_unit_import(unit, i) == unit) return true;
-    for (size_t i = 0; i < core_link_unit_scc_count(link); i++) {
-        size_t members = core_link_unit_scc_member_count(link, i);
-        if (members < 2) continue;
-        for (size_t j = 0; j < members; j++)
-            if (core_link_unit_scc_member(link, i, j) == unit) return true;
+    size_t common = left.u8_bytes < right.u8_bytes
+        ? left.u8_bytes : right.u8_bytes;
+    int comparison = memcmp(left.data, right.data, common);
+    return comparison < 0 || (!comparison && left.u8_bytes < right.u8_bytes);
+}
+
+static bool
+append_scc_input(core_buffer_t *buffer, const char *bytes, size_t count)
+{
+    if (count && !bytes) return false;
+    uint8_t length[8];
+    core_le_store_u64(length, (uint64_t)count);
+    core_buffer_append(buffer, (const char *)length, sizeof(length));
+    core_buffer_append(buffer, bytes, count);
+    return true;
+}
+
+static bool
+append_scc_source(core_buffer_t *buffer, const core_source_file_t *source)
+{
+    const char *contents = core_source_file_contents(source);
+    size_t size = core_source_file_size(source);
+    if (size && !contents) return false;
+    uint8_t digest[8];
+    core_le_store_u64(digest, core_hash_raw(contents ? contents : "", size));
+    core_buffer_append(buffer, (const char *)digest, sizeof(digest));
+    return true;
+}
+
+static bool
+visit_scc_member(abi_scc_order_t *group, size_t at)
+{
+    group->visited[at] = true;
+    group->order[group->ordered++] = at;
+    core_translation_unit_t *unit = group->members[at];
+    for (size_t i = 0; i < core_translation_unit_import_count(unit); i++) {
+        core_translation_unit_t *imported = core_translation_unit_import(
+            unit, i);
+        for (size_t j = 0; j < group->count; j++) {
+            if (group->members[j] != imported) continue;
+            if (!group->visited[j] && !visit_scc_member(group, j))
+                return false;
+            break;
+        }
     }
-    return false;
+    return true;
+}
+
+static bool
+recursive_scc_fragment(core_link_unit_t *link,
+                       core_translation_unit_t *unit,
+                       n00b_abi_scc_v1 *manifest, uint32_t *ordinal,
+                       bool *recursive)
+{
+    *recursive = false;
+    if (!link) return true;
+    size_t group_index = core_link_unit_scc_count(link);
+    size_t count = 0;
+    for (size_t i = 0; i < group_index; i++) {
+        size_t members = core_link_unit_scc_member_count(link, i);
+        for (size_t j = 0; j < members; j++) {
+            if (core_link_unit_scc_member(link, i, j) != unit) continue;
+            group_index = i;
+            count = members;
+            break;
+        }
+        if (count) break;
+    }
+    if (!count || count >= UINT32_MAX) return false;
+    if (count == 1) {
+        bool self_import = false;
+        for (size_t i = 0; i < core_translation_unit_import_count(unit); i++)
+            self_import |= core_translation_unit_import(unit, i) == unit;
+        if (!self_import) return true;
+    }
+    core_translation_unit_t **members = core_alloc_array(
+        core_translation_unit_t *, count);
+    bool *visited = core_alloc_array(bool, count);
+    size_t *order = core_alloc_array(size_t, count);
+    bool valid = members && visited && order;
+    size_t first = 0;
+    for (size_t i = 0; valid && i < count; i++) {
+        members[i] = core_link_unit_scc_member(link, group_index, i);
+        if (!members[i] || !members[i]->module.identifier.data
+            || !core_translation_unit_imports_finalized(members[i])) {
+            valid = false;
+            break;
+        }
+        if (module_name_less(members[i]->module.identifier,
+                             members[first]->module.identifier)) first = i;
+    }
+    abi_scc_order_t group = {
+        .members = members, .count = count,
+        .visited = visited, .order = order,
+    };
+    if (valid) valid = visit_scc_member(&group, first)
+        && group.ordered == count;
+    core_buffer_t input = {0};
+    for (size_t i = 0; valid && i < count; i++) {
+        core_translation_unit_t *member = members[order[i]];
+        core_string_t name = member->module.identifier;
+        /* A source edit conservatively invalidates the entire cycle. */
+        valid = append_scc_input(&input, name.data, name.u8_bytes)
+            && append_scc_source(&input, &member->source);
+        for (size_t j = 0; valid
+             && j < core_translation_unit_import_count(member); j++) {
+            core_translation_unit_t *imported = core_translation_unit_import(
+                member, j);
+            core_string_t import_name = imported->module.identifier;
+            valid = append_scc_input(&input, import_name.data,
+                                     import_name.u8_bytes);
+        }
+        if (member == unit) *ordinal = (uint32_t)i;
+    }
+    if (valid) {
+        core_buffer_t identity = {0};
+        core_buffer_puts(&identity, "n00b.scc.interface.v1");
+        core_buffer_append(&identity, input.data, input.byte_len);
+        manifest->interface_identity = core_hash_raw(identity.data,
+                                                     identity.byte_len);
+        core_buffer_release(&identity);
+        core_buffer_puts(&identity, "n00b.scc.freshness.v1");
+        core_buffer_append(&identity, input.data, input.byte_len);
+        manifest->freshness_identity = core_hash_raw(identity.data,
+                                                     identity.byte_len);
+        core_buffer_release(&identity);
+        *recursive = true;
+    }
+    core_buffer_release(&input);
+    core_free(order);
+    core_free(visited);
+    core_free(members);
+    return valid;
 }
 
 bool
@@ -356,10 +489,14 @@ n00bb_abi_emit_unit(
         return abi_unit_error(unit,
             "ABI emission for imports requires a finalized link graph");
     }
-    if (import_count && unit_has_recursive_imports(link, unit)) {
+    n00b_abi_scc_v1 sccs[2] = {0};
+    uint32_t scc_ordinal = 0;
+    bool recursive = false;
+    if (link && !recursive_scc_fragment(link, unit, &sccs[1],
+                                        &scc_ordinal, &recursive)) {
         n00bb_abi_decl_index_free(declarations);
         return abi_unit_error(unit,
-            "ABI emission for recursive imports requires SCC metadata");
+            "could not establish recursive import group identity");
     }
     const char *runtime_name = ir_module_name(runtime_ir);
     if (!runtime_name || strlen(runtime_name) != unit->module.identifier.u8_bytes
@@ -383,9 +520,15 @@ n00bb_abi_emit_unit(
         requirements[i + 1].requesting_module_index = 1;
     }
     uint32_t package_modules[1] = {1};
+    uint32_t prefix_stream_count = 1 + (recursive ? 2 : 0);
+    if (recursive) {
+        sccs[1].members = (n00b_abi_range_v1){.first = 1, .count = 1};
+        sccs[1].lexical_order = (n00b_abi_range_v1){.first = 2, .count = 1};
+    }
     packages[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     packages[1].modules = (n00b_abi_range_v1){.first = 0, .count = 1};
     modules[1].package_index = 1;
+    modules[1].scc_index = recursive ? 1 : 0;
     modules[1].runtime_config_index = 1;
     modules[1].source_file_index = 1;
 
@@ -411,33 +554,35 @@ n00bb_abi_emit_unit(
         && n00bb_abi_type_variables_bind(type_index, declarations,
             &type_rows)
         && n00bb_abi_type_components_build(type_index,
-            (ir_module_t *)runtime_ir, 1, &type_rows, &components)
+            (ir_module_t *)runtime_ir, prefix_stream_count,
+            &type_rows, &components)
         && n00bb_abi_type_layout_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-            1 + (uint32_t)components.count, declarations, pool,
+            prefix_stream_count + (uint32_t)components.count,
+            declarations, pool,
             &type_rows, &layout_rows)
         && n00bb_abi_enum_rows_build(type_index, declarations, pool,
-            1 + (uint32_t)components.count
+            prefix_stream_count + (uint32_t)components.count
                 + (uint32_t)layout_rows.stream_index_count,
             &type_rows, &enum_rows)
         && n00bb_abi_type_signatures_build(type_index, &type_rows, pool,
-            1 + (uint32_t)components.count
+            prefix_stream_count + (uint32_t)components.count
                 + (uint32_t)layout_rows.stream_index_count
                 + (uint32_t)enum_rows.stream_index_count,
             &signature_rows)
         && n00bb_abi_declarations_build(declarations, type_index,
             &type_rows, unit, tokens, pool, node_source, source_context,
-            1 + (uint32_t)components.count
+            prefix_stream_count + (uint32_t)components.count
                 + (uint32_t)layout_rows.stream_index_count
                 + (uint32_t)enum_rows.stream_index_count
                 + (uint32_t)signature_rows.parameter_index_count,
             &declaration_rows)
         && n00bb_abi_function_rows_build(type_index, declarations,
             &type_rows, &signature_rows,
-            1 + (uint32_t)components.count
+            prefix_stream_count + (uint32_t)components.count
                 + (uint32_t)layout_rows.stream_index_count
                 + (uint32_t)enum_rows.stream_index_count,
-            1 + (uint32_t)components.count
+            prefix_stream_count + (uint32_t)components.count
                 + (uint32_t)layout_rows.stream_index_count
                 + (uint32_t)enum_rows.stream_index_count
                 + (uint32_t)signature_rows.parameter_index_count
@@ -475,36 +620,46 @@ n00bb_abi_emit_unit(
         return abi_unit_error(unit, "could not build ABI type and declaration rows");
     }
 
-    size_t stream_count = 1 + components.count + layout_rows.stream_index_count
+    size_t stream_count = prefix_stream_count + components.count
+        + layout_rows.stream_index_count
         + enum_rows.stream_index_count
         + signature_rows.parameter_index_count
         + declaration_rows.stream_index_count
         + function_rows.stream_index_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
     stream[0] = package_modules[0];
+    if (recursive) {
+        stream[1] = 1;
+        stream[2] = scc_ordinal;
+    }
     if (components.count)
-        memcpy(stream + 1, components.indexes,
+        memcpy(stream + prefix_stream_count, components.indexes,
                components.count * sizeof(*stream));
     if (layout_rows.stream_index_count)
-        memcpy(stream + 1 + components.count, layout_rows.stream_indexes,
+        memcpy(stream + prefix_stream_count + components.count,
+               layout_rows.stream_indexes,
                layout_rows.stream_index_count * sizeof(*stream));
     if (enum_rows.stream_index_count)
-        memcpy(stream + 1 + components.count + layout_rows.stream_index_count,
+        memcpy(stream + prefix_stream_count + components.count
+                   + layout_rows.stream_index_count,
                enum_rows.stream_indexes,
                enum_rows.stream_index_count * sizeof(*stream));
     if (signature_rows.parameter_index_count)
-        memcpy(stream + 1 + components.count + layout_rows.stream_index_count
+        memcpy(stream + prefix_stream_count + components.count
+                   + layout_rows.stream_index_count
                    + enum_rows.stream_index_count,
                signature_rows.parameter_indexes,
                signature_rows.parameter_index_count * sizeof(*stream));
     if (declaration_rows.stream_index_count)
-        memcpy(stream + 1 + components.count + layout_rows.stream_index_count
+        memcpy(stream + prefix_stream_count + components.count
+                   + layout_rows.stream_index_count
                    + enum_rows.stream_index_count
                    + signature_rows.parameter_index_count,
                declaration_rows.stream_indexes,
                declaration_rows.stream_index_count * sizeof(*stream));
     if (function_rows.stream_index_count)
-        memcpy(stream + 1 + components.count + layout_rows.stream_index_count
+        memcpy(stream + prefix_stream_count + components.count
+                   + layout_rows.stream_index_count
                    + enum_rows.stream_index_count
                    + signature_rows.parameter_index_count
                    + declaration_rows.stream_index_count,
@@ -513,6 +668,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
         {N00B_ABI_TABLE_MODULE, modules, 2},
+        {N00B_ABI_TABLE_SCC, sccs, recursive ? 2 : 1},
         {N00B_ABI_TABLE_TYPE, type_rows.rows, type_rows.count},
         {N00B_ABI_TABLE_LAYOUT, layout_rows.layouts,
          layout_rows.layout_count},
