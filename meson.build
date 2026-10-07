@@ -32,6 +32,7 @@ n00bb_exe = executable(
     ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
      'abi_layout.c', 'abi_record_layout.c', 'abi_directory.c',
      'abi_container.c', 'abi_index_patch.c', 'abi_emit.c', 'abi_link.c',
+     'abi_link_finish.c',
      'abi_emit_strings.c',
      'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
      'abi_enum_rows.c',
@@ -157,7 +158,12 @@ abi_record_object_test = executable(
 abi_link_input_test = executable(
     'abi-link-input-test',
     ['tests/abi_link_input.c', 'abi_link.c', 'abi_string.c',
-     'abi_emit_strings.c',
+     'abi_link_finish.c', 'abi_emit.c', 'abi_emit_strings.c',
+     'abi_layout.c', 'abi_record_layout.c',
+     'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
+     'abi_enum_rows.c', 'abi_function_rows.c', 'abi_constraint_rows.c',
+     'abi_storage.c', 'abi_trait_method_rows.c',
+     'abi_type_signatures.c', 'abi_decl_index.c', 'abi_declarations.c',
      'abi_container.c', 'abi_directory.c'],
     dependencies: lantern,
 )

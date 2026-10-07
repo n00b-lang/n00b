@@ -339,6 +339,36 @@ test_cycle_selection(char **paths)
     assert(n00bb_abi_name_pool_size(merged.strings) > 0);
     n00bb_abi_merged_rows_release(&merged);
     assert(!merged.tables && !merged.strings);
+    uint8_t *linked = nullptr;
+    size_t linked_bytes = 0;
+    assert(n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes));
+    n00bb_abi_object_view_t final_view = {0};
+    assert(n00bb_abi_object_open(&target, linked, linked_bytes,
+        &final_view));
+    const n00bb_abi_directory_entry_t *final_modules =
+        n00bb_abi_object_table(&final_view, N00B_ABI_TABLE_MODULE);
+    const n00bb_abi_directory_entry_t *final_sccs =
+        n00bb_abi_object_table(&final_view, N00B_ABI_TABLE_SCC);
+    const n00b_abi_module_v1 *first_module = n00bb_abi_object_row(
+        &final_view, N00B_ABI_TABLE_MODULE, 1);
+    n00bb_abi_string_view_t first_name;
+    core_translation_unit_t *first_unit =
+        core_link_unit_translation_unit(link, 0);
+    assert(final_modules && final_modules->record_count == 4
+        && final_sccs && final_sccs->record_count == 2
+        && !n00bb_abi_object_table(&final_view,
+            N00B_ABI_TABLE_REQUIREMENT)
+        && !n00bb_abi_object_table(&final_view,
+            N00B_ABI_TABLE_INDEX_PATCH)
+        && first_module && first_unit
+        && n00bb_abi_object_string(&final_view,
+            &first_module->full_path, &first_name)
+        && first_name.length == first_unit->module.identifier.u8_bytes
+        && !memcmp(first_name.bytes, first_unit->module.identifier.data,
+            first_name.length));
+    n00bb_abi_object_close(&final_view);
+    core_free(linked);
     n00b_abi_requirement_v1 *bad_import = (void *)n00bb_abi_object_row(
         &selected.views[0], N00B_ABI_TABLE_REQUIREMENT, 1);
     n00b_abi_string_v1 saved_import = bad_import->full_path;
@@ -346,6 +376,13 @@ test_cycle_selection(char **paths)
     assert(!n00bb_abi_merge_rows(&selected, plan, &merged)
         && !merged.tables && !merged.strings);
     bad_import->full_path = saved_import;
+    uint32_t saved_kind = bad_import->symbol_kind;
+    bad_import->symbol_kind = N00B_ABI_SYMBOL_FUNCTION;
+    linked = nullptr;
+    linked_bytes = 0;
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes) && !linked && !linked_bytes);
+    bad_import->symbol_kind = saved_kind;
     n00b_abi_package_v1 *conflicting_package = (void *)
         n00bb_abi_object_row(&selected.views[1], N00B_ABI_TABLE_PACKAGE, 1);
     uint32_t saved_visibility = conflicting_package->visibility;
@@ -1050,6 +1087,44 @@ main(int argc, char **argv)
     n00bb_abi_selected_objects_t selected = {0};
     assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected)
         && selected.count == 1 && selected.views[0].object == object);
+    uint8_t *combined = nullptr;
+    size_t combined_bytes = 0;
+    assert(n00bb_abi_link_selected_objects(&selected, &target,
+        &combined, &combined_bytes));
+    n00bb_abi_object_view_t combined_view = {0};
+    assert(n00bb_abi_object_open(&target, combined, combined_bytes,
+        &combined_view)
+        && !n00bb_abi_object_table(&combined_view,
+            N00B_ABI_TABLE_REQUIREMENT));
+    const n00b_abi_storage_v1 *combined_storage =
+        n00bb_abi_object_row(&combined_view, N00B_ABI_TABLE_STORAGE, 1);
+    const n00b_abi_native_binding_v1 *combined_binding =
+        n00bb_abi_object_row(&combined_view,
+            N00B_ABI_TABLE_NATIVE_BINDING, 1);
+    core_object_section_t combined_section;
+    assert(combined_storage && combined_storage->segment_index
+        && core_object_section_at(combined, combined_bytes,
+            target.object_format, combined_storage->segment_index,
+            &combined_section)
+        && combined_storage->byte_offset < combined_section.size
+        && combined_binding
+        && n00bb_abi_object_string(&combined_view,
+            &combined_binding->native_name, &name)
+        && name.length > N00BB_ABI_STRING_SHORT_CAPACITY);
+    uint32_t combined_section_count = 0;
+    assert(core_object_section_count(combined, combined_bytes,
+        target.object_format, &combined_section_count));
+    bool has_native_relocations = false;
+    for (uint32_t i = 1; i <= combined_section_count; i++) {
+        if (i == combined_view.metadata.native_index) continue;
+        core_object_section_t section;
+        if (core_object_section_at(combined, combined_bytes,
+            target.object_format, i, &section))
+            has_native_relocations |= section.relocation_count != 0;
+    }
+    assert(has_native_relocations);
+    n00bb_abi_object_close(&combined_view);
+    core_free(combined);
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
     uint32_t mapped;
     assert(plan && n00bb_abi_index_plan_map(plan, 0,

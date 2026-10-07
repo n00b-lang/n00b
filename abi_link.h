@@ -206,3 +206,12 @@ bool n00bb_abi_add_native_bindings(
     const n00bb_abi_merged_rows_t *merged,
     const n00bb_abi_native_sections_t *sections,
     n00bb_abi_native_relocations_t *symbols);
+
+/* Consolidates selected TU objects into one relocatable object. Link-only
+ * requirements are removed only after resolution; unsupported patch and
+ * dispatch records fail without changing the output. The object is owned
+ * by the caller and is not an executable. */
+bool n00bb_abi_link_selected_objects(
+    const n00bb_abi_selected_objects_t *selected,
+    const core_target_desc_t *target,
+    uint8_t **out_object, size_t *out_object_bytes);
