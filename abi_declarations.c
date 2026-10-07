@@ -194,6 +194,9 @@ symbol_kind(const parse_sym_entry_t *symbol, uint32_t *out)
 static bool
 symbol_attributes(const parse_sym_entry_t *symbol, n00b_abi_symbol_v1 *row)
 {
+    bool exported = core_string_eq(symbol->visibility,
+        CORE_STRING_STATIC("public")) || parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.external-export")) != nullptr;
     core_string_t visibility = symbol->visibility;
     if (!visibility.u8_bytes && symbol->owner_type)
         visibility = symbol->owner_type->visibility;
@@ -202,10 +205,10 @@ symbol_attributes(const parse_sym_entry_t *symbol, n00b_abi_symbol_v1 *row)
         && !core_string_eq(visibility, CORE_STRING_STATIC("private"))
         && !core_string_eq(visibility, CORE_STRING_STATIC("protected")))
         return false;
-    row->visibility = core_string_eq(visibility,
+    row->visibility = exported || core_string_eq(visibility,
         CORE_STRING_STATIC("public")) ? N00B_ABI_VISIBILITY_PUBLIC
-                                      : N00B_ABI_VISIBILITY_PRIVATE;
-    if (core_string_eq(symbol->visibility, CORE_STRING_STATIC("public")))
+                                       : N00B_ABI_VISIBILITY_PRIVATE;
+    if (exported)
         row->flags |= N00B_ABI_SYMBOL_FLAG_EXPORTED;
     row->phase_mask = (uint32_t)symbol->phases;
     row->mutable_phase_mask = (uint32_t)symbol->mutable_phases;

@@ -654,6 +654,102 @@ test_imported_record_selection(const char *root_path, const char *dep_path)
     free(dep_object);
 }
 
+static const n00b_abi_symbol_v1 *
+find_symbol(const n00bb_abi_object_view_t *view, const char *wanted,
+            uint32_t kind)
+{
+    const n00bb_abi_directory_entry_t *symbols = n00bb_abi_object_table(
+        view, N00B_ABI_TABLE_SYMBOL);
+    assert(symbols);
+    for (uint32_t i = 1; i < symbols->record_count; i++) {
+        const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_SYMBOL, i);
+        n00bb_abi_string_view_t name;
+        assert(symbol && n00bb_abi_object_string(view, &symbol->name, &name));
+        if (symbol->kind == kind && name.length == strlen(wanted)
+            && !memcmp(name.bytes, wanted, name.length)) return symbol;
+    }
+    return nullptr;
+}
+
+static void
+test_imported_function_requirement(const char *root_path,
+    const char *facade_path, const char *impl_path)
+{
+    const char *names[] = {"shared_link_first", "shared_link_dep.facade",
+                           "shared_link_dep.impl"};
+    const char *paths[] = {root_path, facade_path, impl_path};
+    core_translation_unit_t units[3] = {0};
+    uint8_t *objects[3];
+    size_t object_bytes[3];
+    n00bb_abi_object_input_t inputs[3];
+    for (size_t i = 0; i < 3; i++) {
+        assert(init_unit(&units[i], names[i]));
+        objects[i] = read_object(paths[i], &object_bytes[i]);
+        inputs[i] = (n00bb_abi_object_input_t){
+            .module = units[i].module.identifier,
+            .object = objects[i], .object_bytes = object_bytes[i],
+        };
+    }
+    assert(core_translation_unit_add_import(&units[0], &units[1])
+        && core_translation_unit_add_import(&units[1], &units[2]));
+    core_link_unit_t *link = core_link_unit_new();
+    assert(link && core_link_unit_add_root(link, &units[0])
+        && core_link_unit_finalize_graph(link));
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_selected_objects_t selected = {0};
+    assert(n00bb_abi_select_objects(link, &target, inputs, 3, &selected)
+        && selected.count == 3);
+    const n00bb_abi_object_view_t *views[3] = {0};
+    for (size_t i = 0; i < selected.count; i++)
+        for (size_t j = 0; j < 3; j++)
+            if (selected.views[i].object == objects[j])
+                views[j] = &selected.views[i];
+    assert(views[0] && views[1] && views[2]);
+    const n00bb_abi_directory_entry_t *requirements =
+        n00bb_abi_object_table(views[0], N00B_ABI_TABLE_REQUIREMENT);
+    assert(requirements && requirements->record_count == 3);
+    n00b_abi_requirement_v1 *function_requirement = (void *)
+        n00bb_abi_object_row(views[0], N00B_ABI_TABLE_REQUIREMENT, 2);
+    n00bb_abi_string_view_t path;
+    assert(function_requirement
+        && function_requirement->symbol_kind == N00B_ABI_SYMBOL_FUNCTION
+        && function_requirement->requesting_module_index == 1
+        && function_requirement->required_phase_mask
+        && n00bb_abi_object_string(views[0],
+            &function_requirement->full_path, &path)
+        && path.length == strlen("shared_link_dep.impl.shared_link_value")
+        && !memcmp(path.bytes, "shared_link_dep.impl.shared_link_value",
+            path.length));
+    const n00b_abi_type_v1 *contract = n00bb_abi_object_row(views[0],
+        N00B_ABI_TABLE_TYPE, function_requirement->contract_type_index);
+    assert(contract && contract->kind == N00B_ABI_TYPE_FUNCTION);
+    assert(!find_symbol(views[1], "shared_link_value",
+        N00B_ABI_SYMBOL_FUNCTION));
+    const n00b_abi_symbol_v1 *definition = find_symbol(views[2],
+        "shared_link_value", N00B_ABI_SYMBOL_FUNCTION);
+    assert(definition && definition->flags & N00B_ABI_SYMBOL_FLAG_EXPORTED);
+    uint8_t *linked = nullptr;
+    size_t linked_bytes = 0;
+    assert(n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes));
+    core_free(linked);
+    linked = nullptr;
+    linked_bytes = 0;
+    uint32_t saved_type = function_requirement->contract_type_index;
+    function_requirement->contract_type_index = 0;
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes) && !linked && !linked_bytes);
+    function_requirement->contract_type_index = saved_type;
+    n00bb_abi_selected_objects_release(&selected);
+    core_link_unit_free(link);
+    for (size_t i = 0; i < 3; i++) {
+        core_translation_unit_release(&units[i]);
+        free(objects[i]);
+    }
+}
+
 static void
 test_duplicate_component(const core_target_desc_t *target,
                          const char *path, const uint8_t *object,
@@ -1515,13 +1611,17 @@ test_generic_type_identity(const char *path)
 int
 main(int argc, char **argv)
 {
-    assert(argc == 2 || argc == 3 || argc == 4);
+    assert(argc == 2 || argc == 3 || argc == 4 || argc == 5);
     test_native_string_pool_consolidation();
     test_link_index_patch();
     test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();
     test_static_string_identity();
     if (argc == 2 && !strcmp(argv[1], "--strings")) return 0;
+    if (argc == 5 && !strcmp(argv[1], "--function-import")) {
+        test_imported_function_requirement(argv[2], argv[3], argv[4]);
+        return 0;
+    }
     if (argc == 4) {
         if (!strcmp(argv[1], "--records")) {
             test_imported_record_selection(argv[2], argv[3]);

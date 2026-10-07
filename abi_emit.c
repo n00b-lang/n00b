@@ -23,8 +23,10 @@
 #include "lib/byteorder.h"
 #include "lib/diagnostic.h"
 #include "lib/hash.h"
+#include "lib/indexed_table.h"
 #include "lib/list.h"
 #include "lib/object_section.h"
+#include "parse/tree_util.h"
 
 core_list_decl(core_object_emit_section_t);
 
@@ -459,6 +461,109 @@ append_imported_type_requirements(
     return true;
 }
 
+static core_hash_value_t
+declaration_pointer_hash(void *value)
+{
+    return (core_hash_value_t)(uintptr_t)value;
+}
+
+static bool
+declaration_pointer_equal(const void *left, const void *right)
+{
+    return left == right;
+}
+
+static bool
+collect_imported_function_types(core_link_unit_t *link,
+    const core_translation_unit_t *unit, n00bb_abi_type_index_t *index)
+{
+    if (!link) return true;
+    for (size_t i = 0; i < core_link_unit_reference_count(link); i++) {
+        core_link_reference_t *reference = core_link_unit_reference_at_index(
+            link, i);
+        core_link_declaration_t *target = reference
+            ? core_link_reference_target(reference) : nullptr;
+        if (!reference || core_link_reference_referrer(reference) != unit
+            || !target || core_link_declaration_owner(target) == unit
+            || core_link_declaration_kind(target) != PARSE_SYM_FUNCTION)
+            continue;
+        th_type *type = core_link_declaration_binding(target,
+            CORE_STRING_STATIC("n00bb.semantic.type"));
+        if (!type || !n00bb_abi_type_index_add(index, type, nullptr))
+            return false;
+    }
+    return true;
+}
+
+static bool
+append_imported_function_requirements(core_link_unit_t *link,
+    const core_translation_unit_t *unit, n00bb_abi_type_index_t *index,
+    const n00bb_abi_type_identity_rows_t *types,
+    n00bb_abi_name_pool_t *pool, n00b_abi_requirement_v1 *requirements,
+    size_t *count)
+{
+    if (!link) return true;
+    core_indexed_table_t *seen = core_indexed_table_new(0, UINT32_MAX,
+        declaration_pointer_hash, declaration_pointer_equal);
+    if (!seen) return false;
+    bool valid = true;
+    for (size_t i = 0; valid && i < core_link_unit_reference_count(link);
+         i++) {
+        core_link_reference_t *reference = core_link_unit_reference_at_index(
+            link, i);
+        core_link_declaration_t *target = reference
+            ? core_link_reference_target(reference) : nullptr;
+        if (!reference || core_link_reference_referrer(reference) != unit
+            || !target || core_link_declaration_owner(target) == unit
+            || core_link_declaration_kind(target) != PARSE_SYM_FUNCTION)
+            continue;
+        bool inserted = false;
+        if (!core_indexed_table_intern(seen, target, target, &inserted)) {
+            valid = false;
+            break;
+        }
+        if (!inserted) continue;
+        const parse_tree_t *site = core_link_reference_use_site(reference);
+        parse_node_resolution_t resolution = parse_tree_resolution(site);
+        parse_sym_entry_t *symbol = resolution.kind
+            == PARSE_NODE_RESOLUTION_SYMBOL ? resolution.target.symbol
+                                           : nullptr;
+        th_type *type = core_link_declaration_binding(target,
+            CORE_STRING_STATIC("n00bb.semantic.type"));
+        uint32_t type_index;
+        core_string_t module = core_link_declaration_module(target);
+        if (!symbol || symbol->kind != PARSE_SYM_FUNCTION || !type
+            || !symbol->name.data || !symbol->name.u8_bytes
+            || !symbol->phases || !module.data || !module.u8_bytes
+            || !n00bb_abi_type_index_find(index, type, &type_index)
+            || type_index >= types->count
+            || types->rows[type_index].kind != N00B_ABI_TYPE_FUNCTION) {
+            valid = false;
+            break;
+        }
+        core_buffer_t path = {0};
+        core_buffer_append(&path, module.data, module.u8_bytes);
+        core_buffer_putc(&path, '.');
+        core_buffer_append(&path, symbol->name.data,
+            symbol->name.u8_bytes);
+        size_t next = ++*count;
+        requirements[next] = (n00b_abi_requirement_v1){
+            .symbol_kind = N00B_ABI_SYMBOL_FUNCTION,
+            .contract_type_index = type_index,
+            .required_phase_mask = (uint32_t)symbol->phases,
+            .requesting_module_index = 1,
+        };
+        valid = n00bb_abi_name_pool_encode(pool,
+            core_string_borrow(path.data, path.byte_len),
+            N00B_ABI_TABLE_REQUIREMENT, (uint32_t)next,
+            offsetof(n00b_abi_requirement_v1, full_path),
+            &requirements[next].full_path);
+        core_buffer_release(&path);
+    }
+    core_indexed_table_free(seen);
+    return valid;
+}
+
 typedef struct {
     core_translation_unit_t **members;
     size_t count;
@@ -767,6 +872,7 @@ n00bb_abi_emit_unit(
         && n00bb_abi_type_index_collect_module_types(type_index,
             (ir_module_t *)runtime_ir)
         && n00bb_abi_type_index_collect_symbols(type_index, symbols)
+        && collect_imported_function_types(link, unit, type_index)
         && publish_catalog_direct_layouts(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir, target)
         && n00bb_abi_type_identity_rows_build(type_index,
@@ -844,17 +950,24 @@ n00bb_abi_emit_unit(
                 &trait_method_rows, (uint32_t)method_stream_base);
     }
     if (valid) {
+        size_t references = link ? core_link_unit_reference_count(link) : 0;
         valid = type_rows.count <= UINT32_MAX - import_count - 1
+            && references <= UINT32_MAX - import_count - type_rows.count - 1
             && type_rows.count <= (SIZE_MAX / sizeof(*requirements))
-                - import_count - 1;
+                - import_count - 1
+            && references <= (SIZE_MAX / sizeof(*requirements))
+                - import_count - type_rows.count - 1;
         if (valid) {
             requirements = core_realloc(requirements,
-                (import_count + type_rows.count + 1)
+                (import_count + type_rows.count + references + 1)
                     * sizeof(*requirements));
             valid = append_imported_type_requirements(type_index,
                 &type_rows, unit, node_source, source_context,
                 type_owner, type_owner_context, pool, requirements,
-                &requirement_count);
+                &requirement_count)
+                && append_imported_function_requirements(link, unit,
+                    type_index, &type_rows, pool, requirements,
+                    &requirement_count);
         }
     }
     n00bb_abi_type_index_free(type_index);

@@ -35,7 +35,8 @@ link_only_inputs_resolved(const n00bb_abi_selected_objects_t *selected,
                     n00bb_abi_object_row(view,
                         N00B_ABI_TABLE_REQUIREMENT, i);
                 if (!row || (row->symbol_kind != N00B_ABI_SYMBOL_MODULE
-                        && row->symbol_kind != N00B_ABI_SYMBOL_TYPE))
+                        && row->symbol_kind != N00B_ABI_SYMBOL_TYPE
+                        && row->symbol_kind != N00B_ABI_SYMBOL_FUNCTION))
                     return false;
             }
         }
@@ -55,8 +56,8 @@ link_only_inputs_resolved(const n00bb_abi_selected_objects_t *selected,
 }
 
 static bool
-type_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
-                           const n00bb_abi_index_plan_t *plan)
+typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
+                            const n00bb_abi_index_plan_t *plan)
 {
     for (size_t input = 0; input < selected->count; input++) {
         const n00bb_abi_object_view_t *requester = &selected->views[input];
@@ -69,14 +70,17 @@ type_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                     N00B_ABI_TABLE_REQUIREMENT, i);
             if (!request) return false;
             if (request->symbol_kind == N00B_ABI_SYMBOL_MODULE) continue;
-            if (request->symbol_kind != N00B_ABI_SYMBOL_TYPE
+            if ((request->symbol_kind != N00B_ABI_SYMBOL_TYPE
+                    && request->symbol_kind != N00B_ABI_SYMBOL_FUNCTION)
                 || request->requesting_module_index != 1
                 || !request->required_phase_mask
                 || (request->required_phase_mask
                     & ~(N00B_ABI_PHASE_COMPTIME | N00B_ABI_PHASE_RUNTIME))
                 || request->contract_type_index
                     == N00B_ABI_V1_NO_TYPE_INDEX
-                || request->reserved_zero) return false;
+                || request->reserved_zero
+                || (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION
+                    && request->required_layout_index)) return false;
             n00bb_abi_string_view_t wanted;
             if (!n00bb_abi_object_string(requester, &request->full_path,
                     &wanted)) return false;
@@ -110,7 +114,7 @@ type_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                     const n00b_abi_symbol_v1 *symbol =
                         n00bb_abi_object_row(provider,
                             N00B_ABI_TABLE_SYMBOL, j);
-                    if (!symbol || symbol->kind != N00B_ABI_SYMBOL_TYPE
+                    if (!symbol || symbol->kind != request->symbol_kind
                         || symbol->module_index != 1) continue;
                     n00bb_abi_string_view_t name;
                     if (!n00bb_abi_object_string(provider, &symbol->name,
@@ -123,19 +127,40 @@ type_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                         n00bb_abi_object_row(provider,
                             N00B_ABI_TABLE_TYPE, symbol->type_index);
                     uint32_t definition_index;
-                    if (!definition || definition->owner_module_index != 1
-                        || definition->kind != contract->kind
+                    if (!definition
+                        || (request->symbol_kind == N00B_ABI_SYMBOL_TYPE
+                            && definition->owner_module_index != 1)
+                        || (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION
+                            && definition->kind != N00B_ABI_TYPE_FUNCTION))
+                        return false;
+                    if (definition->kind != contract->kind
                         || definition->typehash != contract->typehash
                         || (symbol->phase_mask
                             & request->required_phase_mask)
                             != request->required_phase_mask
                         || (provider->header.artifact_capabilities
                             & request->required_capabilities)
-                            != request->required_capabilities
-                        || !n00bb_abi_index_plan_map(plan, provider_input,
+                            != request->required_capabilities)
+                        continue;
+                    if (!n00bb_abi_index_plan_map(plan, provider_input,
                             N00B_ABI_TABLE_TYPE, symbol->type_index,
-                            &definition_index)
-                        || definition_index != contract_index) return false;
+                            &definition_index)) return false;
+                    if (definition_index != contract_index) continue;
+                    if (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION) {
+                        const n00bb_abi_directory_entry_t *functions =
+                            n00bb_abi_object_table(provider,
+                                N00B_ABI_TABLE_FUNCTION);
+                        bool defined = false;
+                        if (!functions) return false;
+                        for (uint32_t k = 1; k < functions->record_count; k++) {
+                            const n00b_abi_function_v1 *function =
+                                n00bb_abi_object_row(provider,
+                                    N00B_ABI_TABLE_FUNCTION, k);
+                            if (function && function->symbol_index == j)
+                                defined = true;
+                        }
+                        if (!defined) continue;
+                    }
                     if (request->required_layout_index) {
                         uint32_t required_layout, provided_layout;
                         if (!definition->layout_index
@@ -258,7 +283,7 @@ n00bb_abi_link_selected_objects(
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
     bool valid = plan
-        && type_requirements_resolved(selected, plan)
+        && typed_requirements_resolved(selected, plan)
         && n00bb_abi_merge_rows(selected, plan, &merged)
         && n00bb_abi_collect_native_sections(selected, target, &sections)
         && n00bb_abi_apply_link_patches(selected, plan, &merged, &sections)

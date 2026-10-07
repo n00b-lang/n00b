@@ -1455,6 +1455,14 @@ N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
 [ -s "$tmp/record_dep_abi.o" ]
 "$abi_link_input_test" --records "$tmp/import_record_abi.o" \
     "$tmp/record_dep_abi.o"
+N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
+    --output "$tmp/shared_link_first_abi.o" shared_link_first
+N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
+    --output "$tmp/shared_link_facade_abi.o" shared_link_dep.facade
+N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
+    --output "$tmp/shared_link_impl_abi.o" shared_link_dep.impl
+"$abi_link_input_test" --function-import "$tmp/shared_link_first_abi.o" \
+    "$tmp/shared_link_facade_abi.o" "$tmp/shared_link_impl_abi.o"
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_enum_abi.o" foreign_enum_user
 [ -s "$tmp/import_enum_abi.o" ]
