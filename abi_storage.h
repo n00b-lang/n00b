@@ -16,8 +16,8 @@ typedef struct {
 } n00bb_abi_storage_relocation_t;
 
 enum {
-    N00BB_ABI_RELOC_AGGREGATE = 3,
-    N00BB_ABI_RELOC_STRING_POOL = 4,
+    N00BB_ABI_RELOC_AGGREGATE = N00B_ABI_STORAGE_TLS + 1,
+    N00BB_ABI_RELOC_STRING_POOL,
 };
 
 typedef struct {

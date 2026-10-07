@@ -9,6 +9,7 @@
 #include "abi_declarations.h"
 #include "abi_enum_rows.h"
 #include "abi_function_rows.h"
+#include "abi_layout.h"
 #include "abi_storage.h"
 #include "abi_emit_strings.h"
 #include "abi_type_index.h"
@@ -415,6 +416,22 @@ phase_has_only_trivial_initializer(const ir_module_t *module)
     return true;
 }
 
+static bool
+publish_catalog_direct_layouts(n00bb_abi_type_index_t *index,
+                               ir_module_t *comptime, ir_module_t *runtime,
+                               const core_target_desc_t *target)
+{
+    ir_module_t *modules[] = {comptime, runtime};
+    for (size_t m = 0; m < sizeof(modules) / sizeof(*modules); m++)
+        for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++) {
+            th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
+            bool handled = false;
+            if (!type || !n00bb_abi_publish_direct_layout(modules[m], type,
+                    target, &handled)) return false;
+        }
+    return true;
+}
+
 typedef struct {
     core_translation_unit_t **members;
     size_t count;
@@ -720,6 +737,8 @@ n00bb_abi_emit_unit(
         && n00bb_abi_type_index_collect_module_types(type_index,
             (ir_module_t *)runtime_ir)
         && n00bb_abi_type_index_collect_symbols(type_index, symbols)
+        && publish_catalog_direct_layouts(type_index,
+            (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir, target)
         && n00bb_abi_type_identity_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
             symbols, type_owner, type_owner_context, pool, &type_rows)

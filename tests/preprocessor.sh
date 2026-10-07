@@ -1417,6 +1417,14 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/array_storage.n00b"
 [ -s "$tmp/array_storage_abi.o" ]
 "$abi_record_object_test" "$tmp/array_storage_abi.o" array-storage
+"$compiler" compile --output "$tmp/nested_array_storage_abi.o" \
+    "$program_dir/../abi/nested_array_storage.n00b"
+[ -s "$tmp/nested_array_storage_abi.o" ]
+"$abi_record_object_test" "$tmp/nested_array_storage_abi.o" nested-array-storage
+"$compiler" compile --output "$tmp/ragged_array_storage_abi.o" \
+    "$program_dir/../abi/ragged_array_storage.n00b"
+[ -s "$tmp/ragged_array_storage_abi.o" ]
+"$abi_record_object_test" "$tmp/ragged_array_storage_abi.o" ragged-array-storage
 "$compiler" compile --output "$tmp/trait_dispatch_abi.o" \
     "$program_dir/../generic_trait_dispatch.n00b"
 [ -s "$tmp/trait_dispatch_abi.o" ]
