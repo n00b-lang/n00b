@@ -235,3 +235,10 @@ bool n00bb_abi_link_selected_objects(
     const n00bb_abi_selected_objects_t *selected,
     const core_target_desc_t *target,
     uint8_t **out_object, size_t *out_object_bytes);
+
+/* Selects objects for the finalized link unit, then consolidates them.
+ * Candidate bytes are borrowed; the completed object is caller-owned. */
+bool n00bb_abi_link_objects(
+    core_link_unit_t *link, const core_target_desc_t *target,
+    const n00bb_abi_object_input_t *candidates, size_t candidate_count,
+    uint8_t **out_object, size_t *out_object_bytes);

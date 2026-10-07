@@ -396,6 +396,18 @@ test_cycle_selection(char **paths)
         && !memcmp(first_name.bytes, first_unit->module.identifier.data,
             first_name.length));
     n00bb_abi_object_close(&final_view);
+    uint8_t *wrapped = nullptr;
+    size_t wrapped_bytes = 0;
+    assert(n00bb_abi_link_objects(link, &target, inputs, 4,
+        &wrapped, &wrapped_bytes));
+    n00bb_abi_object_view_t wrapped_view = {0};
+    assert(n00bb_abi_object_open(&target, wrapped, wrapped_bytes,
+        &wrapped_view));
+    const n00bb_abi_directory_entry_t *wrapped_modules =
+        n00bb_abi_object_table(&wrapped_view, N00B_ABI_TABLE_MODULE);
+    assert(wrapped_modules && wrapped_modules->record_count == 4);
+    n00bb_abi_object_close(&wrapped_view);
+    core_free(wrapped);
     core_free(linked);
     n00b_abi_requirement_v1 *bad_import = (void *)n00bb_abi_object_row(
         &selected.views[0], N00B_ABI_TABLE_REQUIREMENT, 1);
@@ -423,6 +435,10 @@ test_cycle_selection(char **paths)
     assert(!selected.views && !selected.count);
     assert(!n00bb_abi_select_objects(link, &target, inputs, 2, &selected)
         && !selected.views);
+    wrapped = nullptr;
+    wrapped_bytes = 0;
+    assert(!n00bb_abi_link_objects(link, &target, inputs, 2,
+        &wrapped, &wrapped_bytes) && !wrapped && !wrapped_bytes);
     inputs[3] = inputs[0];
     assert(!n00bb_abi_select_objects(link, &target, inputs, 4, &selected)
         && !selected.views);

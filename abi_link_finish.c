@@ -278,3 +278,19 @@ n00bb_abi_link_selected_objects(
     *out_object_bytes = object_bytes;
     return true;
 }
+
+bool
+n00bb_abi_link_objects(
+    core_link_unit_t *link, const core_target_desc_t *target,
+    const n00bb_abi_object_input_t *candidates, size_t candidate_count,
+    uint8_t **out_object, size_t *out_object_bytes)
+{
+    if (!out_object || !out_object_bytes) return false;
+    n00bb_abi_selected_objects_t selected = {0};
+    if (!n00bb_abi_select_objects(link, target, candidates,
+                                  candidate_count, &selected)) return false;
+    bool valid = n00bb_abi_link_selected_objects(&selected, target,
+                                                 out_object, out_object_bytes);
+    n00bb_abi_selected_objects_release(&selected);
+    return valid;
+}
