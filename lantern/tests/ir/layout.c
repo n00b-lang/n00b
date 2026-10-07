@@ -751,6 +751,40 @@ static void test_final_layout_copy_preserves_representation(void)
     close_env(e);
 }
 
+static void test_zero_sized_member_keeps_logical_offset(void)
+{
+    env *e = open_env("x86_64");
+    th_ctx *types = ir_ctx_types(e->ctx);
+    th_type *record = th_name(types, "ZeroSizedMemberRecord");
+    ir_layout_bit_run_t occupied = {.offset = 0, .width = 1};
+    ir_final_member_layout_t members[] = {
+        {.name = "flag", .type = th_name(types, "bool"), .ordinal = 0,
+         .bit_offset = 0, .occupied = &occupied, .n_occupied = 1},
+        {.name = "empty", .type = th_name(types, "Empty"), .ordinal = 1,
+         .bit_offset = 64},
+    };
+    ir_final_layout_t layout = {
+        .intrinsic_bits = 1, .alignment_bytes = 8,
+        .occupied = &occupied, .n_occupied = 1,
+        .members = members, .n_members = 2,
+    };
+    check("zero-sized member has a settled symbolic offset and width",
+          ir_layout_pin_member(e->m, record, "empty", 64, 0));
+    ir_descriptor_t *descriptor = ir_layout_of(e->m, record, "x86_64");
+    check("zero-width pin is not an unset value",
+          descriptor && descriptor->n_members == 1
+          && ir_layout_is_settled(&descriptor->members[0].bit_width)
+          && descriptor->members[0].bit_width.value == 0);
+    check("zero-sized member may have aligned logical offset after intrinsic end",
+          ir_layout_publish_final(e->m, record, "x86_64", &layout));
+    th_type *invalid = th_name(types, "NonemptyOutOfBoundsRecord");
+    members[1].occupied = &occupied;
+    members[1].n_occupied = 1;
+    check("nonempty member cannot start after intrinsic end",
+          !ir_layout_publish_final(e->m, invalid, "x86_64", &layout));
+    close_env(e);
+}
+
 static void test_the_pass_computes_around_pins(void)
 {
     const char *types[] = {"i32", "u8", "f64", "bool", "(x: i32, y: u64)",
@@ -1404,6 +1438,7 @@ int main(void)
     test_descriptors_are_keyed_and_scoped();
     test_final_layout_is_bit_precise_and_owned();
     test_final_layout_copy_preserves_representation();
+    test_zero_sized_member_keeps_logical_offset();
     test_the_pass_computes_around_pins();
     test_pins_are_honored();
     test_explicitly_computes_unreachable_type();

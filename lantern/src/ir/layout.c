@@ -300,7 +300,8 @@ bool ir_layout_publish_final(ir_module_t *m, th_type *t, const char *target,
     for (size_t i = 0; i < layout->n_members; i++) {
         const ir_final_member_layout_t *member = &layout->members[i];
         if (!member->name || !member->type
-            || member->bit_offset > layout->intrinsic_bits
+            || (member->bit_offset > layout->intrinsic_bits
+                && (member->n_occupied || member->n_accesses))
             || !valid_runs(member->occupied, member->n_occupied,
                            layout->intrinsic_bits)
             || !runs_within(member->occupied, member->n_occupied,
@@ -518,7 +519,7 @@ bool ir_layout_descriptor_pin_member(ir_module_t *m, ir_descriptor_t *d,
                                      uint64_t bit_width)
 {
 
-    if (!d || !field || !bit_width) {
+    if (!d || !field) {
         return false;
     }
 
