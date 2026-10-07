@@ -901,10 +901,15 @@ static void test_configurable_type_printing(void)
 
 static void test_name_syntax(void)
 {
+    const char invalid_utf8[] = {'x', (char)0xc0, (char)0xaf};
     check("typehash names accept qualified identifiers",
           th_name_syntax_valid("package.module.Type", 19));
+    check("typehash names accept well-formed Unicode spelling",
+          th_name_syntax_valid("caf\xc3\xa9", 5));
     check("typehash names reject punctuation in a component",
           !th_name_syntax_valid("my-module.Type", 14));
+    check("typehash names reject malformed UTF-8",
+          !th_name_syntax_valid(invalid_utf8, sizeof(invalid_utf8)));
     check("typehash names reject empty components",
           !th_name_syntax_valid("package..Type", 13));
     check("typehash names reject missing and numeric starts",

@@ -10,6 +10,7 @@
 #include "lib/dict.h"
 #include "lib/list.h"
 #include "lib/option.h"
+#include "unicode/encoding.h"
 
 void *th_alloc(th_ctx *ctx, size_t n)
 {
@@ -345,7 +346,8 @@ static bool is_cont(unsigned char c)
 
 bool th_name_syntax_valid(const char *s, size_t n)
 {
-    if (!s || !n) {
+    if (!s || !n || n > UINT32_MAX
+        || !unicode_utf8_validate(s, (uint32_t)n)) {
         return false;
     }
 
