@@ -48,6 +48,7 @@ suites = [
     ['lib-arena',           'lib/arena.c',           {}],
     ['lib-persist-arena',   'lib/persist_arena.c',   {}],
     ['lib-object-archive',  'lib/object_archive.c',  {}],
+    ['lib-object-emit',     'lib/object_emit.c',     {}],
     ['lib-object-section',  'lib/object_section.c',  {}],
     ['lib-variant',         'lib/variant.c',         {}],
     ['lib-result',          'lib/result.c',          {}],

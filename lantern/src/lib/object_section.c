@@ -34,6 +34,31 @@ static bool fixed_name(const uint8_t *base, size_t width, const char *name)
     return true;
 }
 
+static bool coff_name(const uint8_t *image, size_t size,
+                      const uint8_t *header, const char *name)
+{
+    if (header[0] != '/') return fixed_name(header, 8, name);
+    uint32_t string_index = 0;
+    size_t cursor = 1;
+    for (; cursor < 8 && header[cursor]; cursor++) {
+        if (header[cursor] < '0' || header[cursor] > '9' ||
+            string_index > (UINT32_MAX - (header[cursor] - '0')) / 10)
+            return false;
+        string_index = string_index * 10 + (header[cursor] - '0');
+    }
+    if (cursor == 1 || cursor == 8 || string_index < 4) return false;
+    uint32_t symbol_offset = core_le_load_u32(image + 8);
+    uint32_t symbol_count = core_le_load_u32(image + 12);
+    if (!symbol_offset ||
+        !table_span(size, symbol_offset, symbol_count, 18)) return false;
+    uint64_t strings = (uint64_t)symbol_offset + (uint64_t)symbol_count * 18;
+    if (!span(size, strings, 4)) return false;
+    uint32_t string_bytes = core_le_load_u32(image + strings);
+    return string_index < string_bytes &&
+           span(size, strings, string_bytes) &&
+           bounded_name(image + strings, string_bytes, string_index, name);
+}
+
 static bool find_elf(const uint8_t *image, size_t size, const char *name,
                      core_object_section_t *out)
 {
@@ -167,15 +192,27 @@ static bool find_coff(const uint8_t *image, size_t size, const char *name,
     if (optional_size || !table_span(size, 20, count, 40)) return false;
     for (uint32_t i = 0; i < count; i++) {
         const uint8_t *header = image + 20 + i * 40;
-        if (!fixed_name(header, 8, name)) continue;
+        if (!coff_name(image, size, header, name)) continue;
         uint32_t length = core_le_load_u32(header + 16);
         uint32_t offset = core_le_load_u32(header + 20);
         uint32_t rel_offset = core_le_load_u32(header + 24);
         uint16_t rel_count = core_le_load_u16(header + 32);
         uint32_t flags = core_le_load_u32(header + 36);
-        if (!span(size, offset, length) ||
-            !table_span(size, rel_offset, rel_count, 10) ||
-            (flags & 0x01000000)) return false;
+        if (!span(size, offset, length)) return false;
+        uint32_t actual_rel_count = rel_count;
+        uint64_t actual_rel_offset = rel_offset;
+        if (flags & 0x01000000) {
+            if (rel_count != UINT16_MAX || !span(size, rel_offset, 10))
+                return false;
+            uint32_t wire_count = core_le_load_u32(image + rel_offset);
+            if (wire_count <= UINT16_MAX ||
+                core_le_load_u32(image + rel_offset + 4) ||
+                core_le_load_u16(image + rel_offset + 8) ||
+                !table_span(size, rel_offset, wire_count, 10)) return false;
+            actual_rel_count = wire_count - 1;
+            actual_rel_offset += 10;
+        }
+        else if (!table_span(size, rel_offset, rel_count, 10)) return false;
         uint32_t alignment_power = (flags >> 20) & 15;
         core_object_section_t result = {
             .bytes = image + offset,
@@ -183,8 +220,8 @@ static bool find_coff(const uint8_t *image, size_t size, const char *name,
             .native_index = i + 1,
             .alignment = alignment_power ? UINT64_C(1) << (alignment_power - 1) : 1,
             .flags = flags,
-            .relocations = image + rel_offset,
-            .relocation_count = rel_count,
+            .relocations = image + actual_rel_offset,
+            .relocation_count = actual_rel_count,
             .relocation_entry_size = 10,
             .machine = machine,
         };
