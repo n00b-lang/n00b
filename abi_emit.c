@@ -9,6 +9,7 @@
 #include "abi_declarations.h"
 #include "abi_enum_rows.h"
 #include "abi_function_rows.h"
+#include "abi_storage.h"
 #include "abi_emit_strings.h"
 #include "abi_type_index.h"
 #include "abi_type_layout_rows.h"
@@ -247,9 +248,50 @@ abi_unit_error(core_translation_unit_t *unit, const char *message)
 }
 
 static bool
+append_storage_section(const core_target_desc_t *target, uint32_t kind,
+                       const core_buffer_t *bytes, uint32_t alignment,
+                       core_object_emit_section_t sections[4],
+                       size_t *count, uint32_t input_indexes[4])
+{
+    if (!bytes->byte_len) return true;
+    if (!alignment || !bytes->data || *count >= 4) return false;
+    const char *name = nullptr, *segment = nullptr;
+    switch (target->object_format) {
+    case CORE_TARGET_OBJECT_ELF:
+        name = kind == N00B_ABI_STORAGE_READ_ONLY
+            ? ".rodata.n00b_static"
+            : kind == N00B_ABI_STORAGE_WRITABLE
+                ? ".data.n00b_static" : ".tdata.n00b_static";
+        break;
+    case CORE_TARGET_OBJECT_MACH_O:
+        name = kind == N00B_ABI_STORAGE_READ_ONLY
+            ? "__n00b_ro" : kind == N00B_ABI_STORAGE_WRITABLE
+                ? "__n00b_data" : "__n00b_tls";
+        segment = kind == N00B_ABI_STORAGE_READ_ONLY
+            ? "__DATA_CONST" : "__DATA";
+        break;
+    case CORE_TARGET_OBJECT_COFF:
+        name = kind == N00B_ABI_STORAGE_READ_ONLY
+            ? ".rdata$N" : kind == N00B_ABI_STORAGE_WRITABLE
+                ? ".data$N" : ".tls$N";
+        break;
+    default:
+        return false;
+    }
+    input_indexes[kind] = (uint32_t)(2 + *count);
+    sections[(*count)++] = (core_object_emit_section_t){
+        .name = name, .segment = segment,
+        .bytes = (const uint8_t *)bytes->data, .size = bytes->byte_len,
+        .alignment = alignment,
+        .writable = kind != N00B_ABI_STORAGE_READ_ONLY,
+        .is_thread_local = kind == N00B_ABI_STORAGE_TLS,
+    };
+    return true;
+}
+
+static bool
 phase_has_only_trivial_initializer(const ir_module_t *module)
 {
-    if (ir_global_count(module)) return false;
     for (size_t i = 0; i < ir_func_count(module); i++) {
         ir_func_t *function = ir_func_at((ir_module_t *)module, i);
         if (!function) return false;
@@ -497,7 +539,7 @@ n00bb_abi_emit_unit(
         || !phase_has_only_trivial_initializer(runtime_ir)) {
         n00bb_abi_decl_index_free(declarations);
         return abi_unit_error(unit,
-            "this ABI emitter path requires no globals or executable initializer body");
+            "this ABI emitter path requires no executable initializer body");
     }
     size_t import_count = core_translation_unit_import_count(unit);
     if (import_count && (!link || !core_link_unit_graph_is_finalized(link)
@@ -561,6 +603,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_function_rows_t function_rows = {0};
     n00bb_abi_trait_method_rows_t trait_method_rows = {0};
     n00bb_abi_constraint_rows_t constraint_rows = {0};
+    n00bb_abi_storage_rows_t storage_rows = {0};
     bool valid = pool && type_index
         && n00bb_abi_type_index_collect_module_types(type_index,
             (ir_module_t *)comptime_ir)
@@ -618,8 +661,22 @@ n00bb_abi_emit_unit(
                 + (uint32_t)signature_rows.parameter_index_count
                 + (uint32_t)declaration_rows.stream_index_count
                 + (uint32_t)function_rows.stream_index_count,
-            &constraint_rows);
+            &constraint_rows)
+        && n00bb_abi_storage_rows_build(type_index, declarations,
+            &type_rows, (ir_module_t *)runtime_ir,
+            prefix_stream_count + (uint32_t)components.count
+                + (uint32_t)layout_rows.stream_index_count
+                + (uint32_t)enum_rows.stream_index_count
+                + (uint32_t)signature_rows.parameter_index_count
+                + (uint32_t)declaration_rows.stream_index_count
+                + (uint32_t)function_rows.stream_index_count
+                + (uint32_t)constraint_rows.stream_index_count,
+            lookup, lookup_context, &storage_rows);
     n00bb_abi_type_index_free(type_index);
+    if (valid) {
+        modules[1].static_storage = storage_rows.static_range;
+        modules[1].tls_storage = storage_rows.tls_range;
+    }
     valid = valid && n00bb_abi_name_pool_encode(pool, package_id,
         N00B_ABI_TABLE_PACKAGE, 1, offsetof(n00b_abi_package_v1, name),
         &packages[1].name)
@@ -638,6 +695,7 @@ n00bb_abi_emit_unit(
     }
     if (!valid) {
         core_free(requirements);
+        n00bb_abi_storage_rows_release(&storage_rows);
         n00bb_abi_trait_method_rows_release(&trait_method_rows);
         n00bb_abi_constraint_rows_release(&constraint_rows);
         n00bb_abi_function_rows_release(&function_rows);
@@ -649,7 +707,8 @@ n00bb_abi_emit_unit(
         n00bb_abi_type_identity_rows_release(&type_rows);
         n00bb_abi_name_pool_free(pool);
         n00bb_abi_decl_index_free(declarations);
-        return abi_unit_error(unit, "could not build ABI type and declaration rows");
+        return abi_unit_error(unit,
+            "could not build ABI type, declaration, or storage rows");
     }
 
     size_t stream_count = prefix_stream_count + components.count
@@ -658,7 +717,8 @@ n00bb_abi_emit_unit(
         + signature_rows.parameter_index_count
         + declaration_rows.stream_index_count
         + function_rows.stream_index_count
-        + constraint_rows.stream_index_count;
+        + constraint_rows.stream_index_count
+        + storage_rows.stream_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
     stream[0] = package_modules[0];
     if (recursive) {
@@ -707,6 +767,46 @@ n00bb_abi_emit_unit(
                    + function_rows.stream_index_count,
                constraint_rows.stream_indexes,
                constraint_rows.stream_index_count * sizeof(*stream));
+    if (storage_rows.stream_count)
+        memcpy(stream + stream_count - storage_rows.stream_count,
+               storage_rows.stream_indexes,
+               storage_rows.stream_count * sizeof(*stream));
+    core_object_emit_section_t extra_sections[4] = {0};
+    size_t extra_count = 0;
+    uint32_t storage_input_indexes[4] = {0};
+    core_object_emit_symbol_t string_symbol = {0};
+    if (n00bb_abi_name_pool_size(pool)) {
+        extra_sections[extra_count++] = (core_object_emit_section_t){
+            .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
+                ? "__n00b_strings"
+                : target->object_format == CORE_TARGET_OBJECT_COFF
+                    ? ".rdata$S" : ".rodata.n00b_strings",
+            .segment = target->object_format == CORE_TARGET_OBJECT_MACH_O
+                ? "__TEXT" : nullptr,
+            .bytes = n00bb_abi_name_pool_bytes(pool),
+            .size = n00bb_abi_name_pool_size(pool),
+            .alignment = 1,
+        };
+        string_symbol = (core_object_emit_symbol_t){
+            .name = "n00b_string_pool", .section_index = 2,
+        };
+    }
+    valid = append_storage_section(target, N00B_ABI_STORAGE_READ_ONLY,
+            &storage_rows.read_only, storage_rows.read_only_alignment,
+            extra_sections, &extra_count, storage_input_indexes)
+        && append_storage_section(target, N00B_ABI_STORAGE_WRITABLE,
+            &storage_rows.writable, storage_rows.writable_alignment,
+            extra_sections, &extra_count, storage_input_indexes)
+        && append_storage_section(target, N00B_ABI_STORAGE_TLS,
+            &storage_rows.tls, storage_rows.tls_alignment,
+            extra_sections, &extra_count, storage_input_indexes);
+    for (size_t i = 1; valid && i < storage_rows.row_count; i++) {
+        n00b_abi_storage_v1 *row = &storage_rows.rows[i];
+        uint32_t input = row->segment_kind <= N00B_ABI_STORAGE_TLS
+            ? storage_input_indexes[row->segment_kind] : 0;
+        valid = input && core_object_emit_native_section_index(target,
+            1 + extra_count, input, &row->segment_index);
+    }
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
         {N00B_ABI_TABLE_MODULE, modules, 2},
@@ -746,14 +846,17 @@ n00bb_abi_emit_unit(
          declaration_rows.source_file_count},
         {N00B_ABI_TABLE_RUNTIME_CONFIG, runtime_configs, 2},
         {N00B_ABI_TABLE_REQUIREMENT, requirements, import_count + 1},
+        {N00B_ABI_TABLE_STORAGE, storage_rows.rows,
+         storage_rows.row_count},
         {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
     };
     n00bb_abi_packed_tables_t packed = {0};
-    valid = n00bb_abi_pack_tables(target, artifact_capabilities,
+    valid = valid && n00bb_abi_pack_tables(target, artifact_capabilities,
         rows, sizeof(rows) / sizeof(*rows), &packed);
     core_free(stream);
     if (!valid) {
         core_free(requirements);
+        n00bb_abi_storage_rows_release(&storage_rows);
         n00bb_abi_trait_method_rows_release(&trait_method_rows);
         n00bb_abi_constraint_rows_release(&constraint_rows);
         n00bb_abi_function_rows_release(&function_rows);
@@ -784,35 +887,18 @@ n00bb_abi_emit_unit(
         valid = n00bb_abi_name_pool_relocations(pool, entries,
             sizeof(entries) / sizeof(*entries), &relocations,
             &relocation_count);
-    core_object_emit_section_t string_section = {0};
-    core_object_emit_symbol_t string_symbol = {0};
-    if (n00bb_abi_name_pool_size(pool)) {
-        string_section = (core_object_emit_section_t){
-            .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
-                ? "__n00b_strings" : target->object_format == CORE_TARGET_OBJECT_COFF
-                    ? ".rdata$S" : ".rodata.n00b_strings",
-            .segment = target->object_format == CORE_TARGET_OBJECT_MACH_O
-                ? "__TEXT" : nullptr,
-            .bytes = n00bb_abi_name_pool_bytes(pool),
-            .size = n00bb_abi_name_pool_size(pool),
-            .alignment = 1,
-        };
-        string_symbol = (core_object_emit_symbol_t){
-            .name = "n00b_string_pool", .section_index = 2,
-        };
-    }
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
     if (valid)
         valid = n00bb_abi_write_object(target, &packed,
-            n00bb_abi_name_pool_size(pool) ? &string_section : nullptr,
-            n00bb_abi_name_pool_size(pool) ? 1 : 0,
+            extra_count ? extra_sections : nullptr, extra_count,
             n00bb_abi_name_pool_size(pool) ? &string_symbol : nullptr,
             n00bb_abi_name_pool_size(pool) ? 1 : 0,
             relocations, relocation_count,
             &object, &object_bytes);
     core_free(relocations);
     core_free(requirements);
+    n00bb_abi_storage_rows_release(&storage_rows);
     n00bb_abi_trait_method_rows_release(&trait_method_rows);
     n00bb_abi_constraint_rows_release(&constraint_rows);
     n00bb_abi_function_rows_release(&function_rows);

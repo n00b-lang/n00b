@@ -1405,6 +1405,10 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
     "$program_dir/../abi/callback.n00b"
 [ -s "$tmp/callback_abi.o" ]
 "$abi_record_object_test" "$tmp/callback_abi.o" callback
+"$compiler" compile --output "$tmp/storage_abi.o" \
+    "$program_dir/../abi/storage.n00b"
+[ -s "$tmp/storage_abi.o" ]
+"$abi_record_object_test" "$tmp/storage_abi.o" storage
 "$compiler" compile --output "$tmp/trait_dispatch_abi.o" \
     "$program_dir/../generic_trait_dispatch.n00b"
 [ -s "$tmp/trait_dispatch_abi.o" ]

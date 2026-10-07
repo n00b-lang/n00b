@@ -719,6 +719,89 @@ check_callbacks(const core_object_section_t *metadata,
     }
 }
 
+static void
+check_storage(const uint8_t *object, size_t length,
+              const core_object_section_t *metadata,
+              const n00bb_abi_directory_entry_t *entries, size_t count,
+              uint32_t target_id)
+{
+    const n00bb_abi_directory_entry_t *modules = entry_for(entries, count,
+        N00B_ABI_TABLE_MODULE);
+    const n00bb_abi_directory_entry_t *storage = entry_for(entries, count,
+        N00B_ABI_TABLE_STORAGE);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries, count,
+        N00B_ABI_TABLE_SYMBOL);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(modules && modules->record_count == 2 && storage
+        && storage->record_count == 4 && symbols && stream);
+    core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
+        ? CORE_TARGET_OBJECT_MACH_O
+        : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
+            ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
+    const char *names[] = {"fixed_value", "shared_value", "thread_seed"};
+    const uint32_t kinds[] = {N00B_ABI_STORAGE_READ_ONLY,
+        N00B_ABI_STORAGE_WRITABLE, N00B_ABI_STORAGE_TLS};
+    const uint64_t values[] = {42, 3, 7};
+    const char *elf_names[] = {".rodata.n00b_static", ".data.n00b_static",
+        ".tdata.n00b_static"};
+    const char *mach_names[] = {"__n00b_ro", "__n00b_data", "__n00b_tls"};
+    const char *coff_names[] = {".rdata$N", ".data$N", ".tls$N"};
+    bool row_seen[4] = {0}, name_seen[3] = {0};
+    for (uint32_t i = 1; i < storage->record_count; i++) {
+        const n00b_abi_storage_v1 *row = row_at(metadata, storage, i);
+        assert(row->module_index == 1 && row->symbol_index
+            && row->symbol_index < symbols->record_count
+            && row->byte_length == 8 && row->segment_kind >= 1
+            && row->segment_kind <= 3);
+        const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,
+            row->symbol_index);
+        assert(symbol->type_index == row->type_index);
+        size_t expected = 0;
+        while (expected < 3 && !short_name_is(&symbol->name, names[expected]))
+            expected++;
+        assert(expected < 3 && row->segment_kind == kinds[expected]
+            && !name_seen[expected]);
+        name_seen[expected] = true;
+        row_seen[i] = true;
+        const char *name = format == CORE_TARGET_OBJECT_MACH_O
+            ? mach_names[expected] : format == CORE_TARGET_OBJECT_COFF
+                ? coff_names[expected] : elf_names[expected];
+        const char *segment = format != CORE_TARGET_OBJECT_MACH_O
+            ? NULL : expected ? "__DATA" : "__DATA_CONST";
+        core_object_section_t section;
+        assert(core_object_section_find(object, length, format, segment,
+            name, &section));
+        assert(row->segment_index == section.native_index
+            && row->byte_offset <= section.size
+            && row->byte_length <= section.size - row->byte_offset
+            && core_le_load_u64(section.bytes + row->byte_offset)
+                == values[expected]);
+        if (expected == 2 && format == CORE_TARGET_OBJECT_MACH_O)
+            assert((section.flags & 0xff) == 0x11);
+        if (expected == 2 && format == CORE_TARGET_OBJECT_ELF)
+            assert(section.flags & 0x400);
+    }
+    assert(name_seen[0] && name_seen[1] && name_seen[2]);
+    const n00b_abi_module_v1 *module = row_at(metadata, modules, 1);
+    assert(module->static_storage.count == 2
+        && module->tls_storage.count == 1);
+    n00b_abi_range_v1 ranges[] = {
+        module->static_storage, module->tls_storage,
+    };
+    for (size_t r = 0; r < 2; r++) {
+        assert(ranges[r].first < stream->record_count
+            && ranges[r].count <= stream->record_count - ranges[r].first);
+        for (uint32_t j = 0; j < ranges[r].count; j++) {
+            uint32_t index = *(const uint32_t *)row_at(metadata, stream,
+                ranges[r].first + j);
+            assert(index && index < storage->record_count && row_seen[index]);
+            const n00b_abi_storage_v1 *row = row_at(metadata, storage, index);
+            assert((row->segment_kind == N00B_ABI_STORAGE_TLS) == (r == 1));
+        }
+    }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -733,6 +816,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "trait-methods")
             || !strcmp(argv[2], "trait-dispatch")
             || !strcmp(argv[2], "callback")
+            || !strcmp(argv[2], "storage")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -831,6 +915,13 @@ main(int argc, char **argv)
     }
     if (argc == 3 && !strcmp(argv[2], "callback")) {
         check_callbacks(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "storage")) {
+        check_storage(object, (size_t)length, &metadata, entries,
+            header.directory_count, header.key.target_id);
         free(entries);
         free(object);
         return 0;

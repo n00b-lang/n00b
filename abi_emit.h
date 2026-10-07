@@ -46,9 +46,9 @@ bool n00bb_abi_write_object(
     const core_object_emit_absolute64_t *relocations,
     size_t relocation_count, uint8_t **out_image, size_t *out_size);
 
-/* Emits one finalized TU with no executable initializer or global storage.
- * Record, enum, variant, and function declarations are supported; other
- * declarations fail instead of producing incomplete metadata. The caller
+/* Emits one finalized TU with no executable initializer body. Static scalar
+ * globals and their storage sections are supported; unsupported initializer
+ * representations fail instead of producing incomplete metadata. The caller
  * owns outputs. */
 bool n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
