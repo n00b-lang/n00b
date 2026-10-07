@@ -22,7 +22,7 @@ static void mach_test(const char *output_path)
     assert(core_target_profile("arm64-macos", 0, &target));
     uint8_t data[16] = {0}, mutable_data[8] = {0};
     core_object_emit_section_t sections[] = {
-        {"__meta", "__N00B", data, sizeof data, 8, false, false},
+        {"__n00b_meta", "__DATA_CONST", data, sizeof data, 8, false, false},
         {"__data", "__DATA", mutable_data, sizeof mutable_data, 16, true, false},
     };
     core_object_emit_symbol_t symbols[] = {
@@ -41,7 +41,7 @@ static void mach_test(const char *output_path)
     assert(core_le_load_u32(image) == 0xfeedfacf);
     core_object_section_t section;
     assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_MACH_O,
-                                    "__N00B", "__meta", &section));
+                                    "__DATA_CONST", "__n00b_meta", &section));
     assert(section.native_index == 1 && section.size == 16 &&
            section.alignment == 8 && section.relocation_count == 1);
     core_object_absolute64_relocation_t relocation;

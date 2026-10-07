@@ -85,8 +85,8 @@ static void macho_test(void)
     core_le_store_u32(image + 32, 0x19);
     core_le_store_u32(image + 36, 152);
     core_le_store_u32(image + 96, 1);
-    memcpy(image + 104, "__meta", 6);
-    memcpy(image + 120, "__N00B", 6);
+    memcpy(image + 104, "__n00b_meta", sizeof "__n00b_meta" - 1);
+    memcpy(image + 120, "__DATA_CONST", sizeof "__DATA_CONST" - 1);
     core_le_store_u64(image + 144, 8);
     core_le_store_u32(image + 152, 184);
     core_le_store_u32(image + 156, 3);
@@ -97,7 +97,7 @@ static void macho_test(void)
     memcpy(image + 184, "n00b", 4);
     core_object_section_t section = {0};
     assert(core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_MACH_O,
-                                    "__N00B", "__meta", &section));
+                                    "__DATA_CONST", "__n00b_meta", &section));
     assert(section.native_index == 1 && section.size == 8);
     assert(section.bytes == image + 184 && section.alignment == 8);
     assert(section.relocations == image + 192 && section.relocation_count == 1);
@@ -107,9 +107,9 @@ static void macho_test(void)
     assert(relocation.native_symbol_index == 5 &&
            relocation.addend_bits == core_le_load_u64(image + 184));
     assert(!core_object_section_find(image, 187, CORE_TARGET_OBJECT_MACH_O,
-                                     "__N00B", "__meta", &section));
+                                     "__DATA_CONST", "__n00b_meta", &section));
     assert(!core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_MACH_O,
-                                     "__OTHER", "__meta", &section));
+                                     "__OTHER", "__n00b_meta", &section));
 }
 
 static void coff_test(void)
@@ -181,7 +181,8 @@ int main(int argc, char **argv)
     coff_test();
     if (argc == 4) {
         real_object_test(argv[1], CORE_TARGET_OBJECT_ELF, NULL, ".n00b.meta");
-        real_object_test(argv[2], CORE_TARGET_OBJECT_MACH_O, "__N00B", "__meta");
+        real_object_test(argv[2], CORE_TARGET_OBJECT_MACH_O,
+                         "__DATA_CONST", "__n00b_meta");
         real_object_test(argv[3], CORE_TARGET_OBJECT_COFF, NULL, ".n00b$M");
     }
     return 0;

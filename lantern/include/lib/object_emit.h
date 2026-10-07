@@ -12,6 +12,7 @@ typedef struct {
     const uint8_t *bytes;
     size_t size;
     uint32_t alignment;
+    /* Mach-O final protection follows `segment`, not this flag. */
     bool writable;
     bool executable;
 } core_object_emit_section_t;
