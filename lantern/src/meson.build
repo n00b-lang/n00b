@@ -57,6 +57,7 @@ lib_sources = files(
     'lib/link_unit.c',
     'lib/module.c',
     'lib/object_archive.c',
+    'lib/object_section.c',
     'lib/persist_arena.c',
     'lib/string.c',
     'lib/target.c',
