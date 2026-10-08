@@ -305,6 +305,18 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_TYPE
         && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
     image.types[3] = original_type;
+    image.signatures[1].type_index = 4;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && error.record_index == 5 && !n00b_abi_v1_current_snapshot());
+    image.signatures[1].type_index = 5;
+    image.types[5].call_signature_index = 0;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_CALL_SIGNATURE
+        && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+    image.types[5].call_signature_index = 1;
     image.methods[1].symbol_index = 1;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA

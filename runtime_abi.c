@@ -342,6 +342,13 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
             if (!trace || trace->type_index != i)
                 return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
         }
+        if (type->call_signature_index) {
+            const n00b_abi_call_signature_v1 *signature = n00b_abi_v1_record(
+                snapshot, N00B_ABI_TABLE_CALL_SIGNATURE,
+                type->call_signature_index, nullptr);
+            if (!signature || signature->type_index != i)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+        }
         uint32_t member_kind = member_table_kind(type->kind);
         for (uint32_t j = 0; j < type->fields_or_arms.count; j++) {
             uint32_t member_index;
@@ -388,6 +395,7 @@ metadata_owned_rows_valid(const n00b_abi_snapshot_v1 *snapshot,
 {
     const uint32_t owned_kinds[] = {
         N00B_ABI_TABLE_LAYOUT, N00B_ABI_TABLE_TRACE,
+        N00B_ABI_TABLE_CALL_SIGNATURE,
         N00B_ABI_TABLE_FIELD, N00B_ABI_TABLE_ARM,
         N00B_ABI_TABLE_ENUM_ITEM, N00B_ABI_TABLE_TRAIT_METHOD,
     };
@@ -402,14 +410,19 @@ metadata_owned_rows_valid(const n00b_abi_snapshot_v1 *snapshot,
                 ? ((const n00b_abi_layout_v1 *)value)->type_index
                 : kind == N00B_ABI_TABLE_TRACE
                     ? ((const n00b_abi_trace_v1 *)value)->type_index
-                    : n00bb_abi_member_facts(kind, value).parent;
+                    : kind == N00B_ABI_TABLE_CALL_SIGNATURE
+                        ? ((const n00b_abi_call_signature_v1 *)value)->type_index
+                        : n00bb_abi_member_facts(kind, value).parent;
             const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot,
                                                               parent);
             if (!type) return invalid_record(error, kind, row, 0);
             if (kind == N00B_ABI_TABLE_LAYOUT
-                || kind == N00B_ABI_TABLE_TRACE) {
+                || kind == N00B_ABI_TABLE_TRACE
+                || kind == N00B_ABI_TABLE_CALL_SIGNATURE) {
                 if ((kind == N00B_ABI_TABLE_LAYOUT
-                     ? type->layout_index : type->tracing_index) != row)
+                     ? type->layout_index : kind == N00B_ABI_TABLE_TRACE
+                         ? type->tracing_index : type->call_signature_index)
+                    != row)
                     return invalid_record(error, kind, row, 0);
                 continue;
             }

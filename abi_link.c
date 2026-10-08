@@ -450,6 +450,10 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
         const n00b_abi_trace_v1 *trace = key->row;
         return link_key_from_owner_type(key, trace->type_index, kind);
     }
+    case N00B_ABI_TABLE_CALL_SIGNATURE: {
+        const n00b_abi_call_signature_v1 *signature = key->row;
+        return link_key_from_owner_type(key, signature->type_index, kind);
+    }
     case N00B_ABI_TABLE_PACKAGE:
         return link_key_string(key,
             &((const n00b_abi_package_v1 *)key->row)->name);
@@ -490,9 +494,11 @@ link_key_from_owner_type(abi_link_key_t *key, uint32_t type_index,
 {
     const n00b_abi_type_v1 *type = n00bb_abi_object_row(key->view,
         N00B_ABI_TABLE_TYPE, type_index);
-    if (!type || (kind == N00B_ABI_TABLE_LAYOUT
-                  ? type->layout_index : type->tracing_index)
-                 != key->local_index) return false;
+    if (!type) return false;
+    uint32_t owner_index = kind == N00B_ABI_TABLE_LAYOUT
+        ? type->layout_index : kind == N00B_ABI_TABLE_TRACE
+            ? type->tracing_index : type->call_signature_index;
+    if (owner_index != key->local_index) return false;
     abi_link_key_t owner = *key;
     owner.row = type;
     owner.local_index = type_index;
@@ -1556,14 +1562,19 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
                 uint32_t local_index, const void *row)
 {
     if (!local_index) return true;
-    if (kind == N00B_ABI_TABLE_LAYOUT || kind == N00B_ABI_TABLE_TRACE) {
+    if (kind == N00B_ABI_TABLE_LAYOUT || kind == N00B_ABI_TABLE_TRACE
+        || kind == N00B_ABI_TABLE_CALL_SIGNATURE) {
         uint32_t parent = kind == N00B_ABI_TABLE_LAYOUT
             ? ((const n00b_abi_layout_v1 *)row)->type_index
-            : ((const n00b_abi_trace_v1 *)row)->type_index;
+            : kind == N00B_ABI_TABLE_TRACE
+                ? ((const n00b_abi_trace_v1 *)row)->type_index
+                : ((const n00b_abi_call_signature_v1 *)row)->type_index;
         const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_TYPE, parent);
         return type && (kind == N00B_ABI_TABLE_LAYOUT
-            ? type->layout_index : type->tracing_index) == local_index;
+            ? type->layout_index : kind == N00B_ABI_TABLE_TRACE
+                ? type->tracing_index : type->call_signature_index)
+            == local_index;
     }
     if (kind == N00B_ABI_TABLE_CODE_RANGE
         || kind == N00B_ABI_TABLE_FRAME_LAYOUT) {

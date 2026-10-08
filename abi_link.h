@@ -65,8 +65,9 @@ void n00bb_abi_selected_objects_release(n00bb_abi_selected_objects_t *selected);
 typedef struct n00bb_abi_index_plan_t n00bb_abi_index_plan_t;
 
 /* Assigns one final index to each pre-remap identity and retains a checked
- * local-to-final map for every input table. Rows whose identity depends on
- * remapped references are kept distinct until the remap/merge stage. */
+ * local-to-final map for every input table. Type-owned layout, trace, and
+ * signature rows share their owner's identity; other reference-dependent
+ * rows remain distinct until the remap/merge stage. */
 n00bb_abi_index_plan_t *n00bb_abi_index_plan_build(
     const n00bb_abi_selected_objects_t *selected);
 void n00bb_abi_index_plan_free(n00bb_abi_index_plan_t *plan);
