@@ -768,6 +768,8 @@ typedef enum {
     N00BB_STATIC_VALUE_RECORD,
     N00BB_STATIC_VALUE_SET,
     N00BB_STATIC_VALUE_DICTIONARY,
+    N00BB_STATIC_VALUE_NIL,
+    N00BB_STATIC_VALUE_VARIANT,
 } n00bb_static_value_kind_t;
 
 typedef struct n00bb_static_value n00bb_static_value_t;
@@ -783,6 +785,10 @@ struct n00bb_static_value {
             n00bb_static_value_t *items;
             size_t count;
         } aggregate;
+        struct {
+            core_string_t arm;
+            n00bb_static_value_t *payload;
+        } variant;
     } as;
 };
 
@@ -33206,6 +33212,18 @@ append_static_value(core_buffer_t *buffer,
             && (value->as.string.u8_bytes == 0
                 || (core_buffer_append(buffer, value->as.string.data,
                                        value->as.string.u8_bytes), true));
+    case N00BB_STATIC_VALUE_NIL:
+        return true;
+    case N00BB_STATIC_VALUE_VARIANT:
+        if (!value->as.variant.arm.data || !value->as.variant.arm.u8_bytes
+            || value->as.variant.arm.u8_bytes > UINT32_MAX
+            || !value->as.variant.payload
+            || !append_u32_le(buffer,
+                (uint32_t)value->as.variant.arm.u8_bytes)) return false;
+        core_buffer_append(buffer, value->as.variant.arm.data,
+                           value->as.variant.arm.u8_bytes);
+        return append_static_value(buffer, value->as.variant.payload,
+                                   depth + 1);
     case N00BB_STATIC_VALUE_SEQUENCE:
     case N00BB_STATIC_VALUE_TUPLE:
     case N00BB_STATIC_VALUE_RECORD:
@@ -35242,10 +35260,15 @@ static_record_shape(n00bb_tu_state_t *state, th_type *type)
                 && !memcmp(short_name, symbol->name.data, short_name_len);
             if (!same_type) continue;
             core_list_t(th_member) members = core_list_new(th_member);
+            bool variant_scope = core_string_eq(
+                symbol->member_scope->scope_tag,
+                CORE_STRING_STATIC("variant"));
             for (parse_sym_entry_t *field =
                     symbol->member_scope->first_in_scope;
                  field; field = field->next_in_scope)
-                if (field->is_field && field->type)
+                if ((field->is_field || (variant_scope
+                        && field->kind == PARSE_SYM_VARIABLE))
+                    && field->type)
                     core_list_push(members, ((th_member){
                         .name = field->name.data,
                         .type = field->type,
@@ -35364,6 +35387,26 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
         }
         return true;
     }
+    if (value->kind == N00BB_STATIC_VALUE_VARIANT) {
+        bool variant = false;
+        th_type *shape = static_record_shape(state, type);
+        if (!th_named_info(type, nullptr, nullptr, &variant, nullptr)
+            || !variant || !shape || th_kind_of(shape) != TH_RECORD
+            || !value->as.variant.payload) return false;
+        for (size_t i = 0; i < th_record_len(shape); i++) {
+            const th_member *arm = th_record_member(shape, i);
+            if (arm && core_string_eq(value->as.variant.arm,
+                                      core_string_from_cstr(arm->name)))
+                return value->as.variant.payload->kind
+                    == N00BB_STATIC_VALUE_NIL
+                    ? n00bb_nil_type(state->types, arm->type)
+                    : static_value_matches_type(value->as.variant.payload,
+                        arm->type, state, depth + 1);
+        }
+        return false;
+    }
+    if (value->kind == N00BB_STATIC_VALUE_NIL)
+        return false;
     if (value->kind == N00BB_STATIC_VALUE_DICTIONARY) {
         if ((value->as.aggregate.count & 1u)
             || !static_named_arguments(type, "dict", 2)) return false;
@@ -35445,6 +35488,38 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
         if (length) memcpy(copy, data + *offset, length);
         out->as.string = core_string_borrow(copy, length);
         *offset += length;
+        return true;
+    }
+    case N00BB_STATIC_VALUE_NIL:
+        return n00bb_nil_type(state->types, type);
+    case N00BB_STATIC_VALUE_VARIANT: {
+        bool variant = false;
+        th_type *shape = interface_static_record_shape(loader, state, type,
+                                                       preferred_module);
+        if (!th_named_info(type, nullptr, nullptr, &variant, nullptr)
+            || !variant || !shape || th_kind_of(shape) != TH_RECORD
+            || size - *offset < 4) return false;
+        uint32_t length = read_u32_le(data + *offset);
+        *offset += 4;
+        if (!length || length > size - *offset) return false;
+        const th_member *arm = nullptr;
+        for (size_t i = 0; i < th_record_len(shape); i++) {
+            const th_member *candidate = th_record_member(shape, i);
+            if (candidate && strlen(candidate->name) == length
+                && !memcmp(candidate->name, data + *offset, length)) {
+                arm = candidate;
+                break;
+            }
+        }
+        if (!arm) return false;
+        *offset += length;
+        n00bb_static_value_t *payload = core_arena_alloc(
+            &state->semantic_values, sizeof(*payload));
+        if (!payload || !decode_static_value(data, size, offset, arm->type,
+                state, loader, preferred_module, payload, depth + 1))
+            return false;
+        out->as.variant.arm = core_string_from_cstr(arm->name);
+        out->as.variant.payload = payload;
         return true;
     }
     case N00BB_STATIC_VALUE_SEQUENCE:
@@ -35547,7 +35622,7 @@ restore_interface_value_semantics(locate_worker_context_t *loader,
     symbol->is_thread_local = data[5] != 0;
     parse_sym_set_storage_class(symbol, requested, storage_required,
                                 (core_string_t){0});
-    if (data[10] > 1 || data[11] > N00BB_STATIC_VALUE_DICTIONARY)
+    if (data[10] > 1 || data[11] > N00BB_STATIC_VALUE_VARIANT)
         return false;
     bool has_value = data[10] != 0;
     if (!has_value && (data[11] != 0 || offset != size)) return false;
@@ -40298,6 +40373,10 @@ semantic_static_scalar_value(parse_grammar_t *grammar, parse_tree_t *literal,
         };
         return true;
     }
+    if (core_string_eq(spelling, CORE_STRING_STATIC("nil"))) {
+        *out = (n00bb_static_value_t){.kind = N00BB_STATIC_VALUE_NIL};
+        return true;
+    }
     return false;
 }
 
@@ -40435,8 +40514,41 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
             core_list_t(parse_tree_ptr_t) source_fields =
                 core_list_new(parse_tree_ptr_t);
             bool ok = collect_static_named_fields(state, fields,
-                                                   &source_fields)
-                && source_fields.len == th_record_len(shape);
+                                                   &source_fields);
+            bool variant = false;
+            (void)th_named_info(type, nullptr, nullptr, &variant, nullptr);
+            if (variant) {
+                parse_tree_t *field = ok && source_fields.len == 1
+                    ? source_fields.data[0] : nullptr;
+                core_string_t name = named_field_identifier(grammar, field);
+                const th_member *arm = nullptr;
+                for (size_t i = 0; i < th_record_len(shape); i++) {
+                    const th_member *candidate = th_record_member(shape, i);
+                    if (candidate && core_string_eq(name,
+                            core_string_from_cstr(candidate->name))) {
+                        arm = candidate;
+                        break;
+                    }
+                }
+                parse_tree_t *payload_node = field
+                    ? child_nt(grammar, field, "expression") : nullptr;
+                n00bb_static_value_t *payload = arm && payload_node
+                    ? core_arena_alloc(&state->semantic_values,
+                                       sizeof(*payload)) : nullptr;
+                ok = payload && semantic_static_value_from_expression(
+                    grammar, payload_node, arm->type, state, payload,
+                    depth + 1);
+                if (ok) *out = (n00bb_static_value_t){
+                    .kind = N00BB_STATIC_VALUE_VARIANT,
+                    .as.variant = {
+                        .arm = core_string_from_cstr(arm->name),
+                        .payload = payload,
+                    },
+                };
+                core_list_free(source_fields);
+                return ok;
+            }
+            ok = ok && source_fields.len == th_record_len(shape);
             size_t count = th_record_len(shape);
             n00bb_static_value_t *items = ok && count
                 ? core_arena_alloc(&state->semantic_values,
@@ -40547,6 +40659,34 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
         out->string.bytes = value->as.string.data;
         out->string.length = value->as.string.u8_bytes;
         return true;
+    case N00BB_STATIC_VALUE_NIL:
+        if (!n00bb_nil_type(state->types, type)) return false;
+        out->kind = IR_GLOBAL_INIT_NIL;
+        return true;
+    case N00BB_STATIC_VALUE_VARIANT: {
+        bool variant = false;
+        th_type *shape = static_record_shape(state, type);
+        if (!th_named_info(type, nullptr, nullptr, &variant, nullptr)
+            || !variant || !shape || th_kind_of(shape) != TH_RECORD
+            || !value->as.variant.payload) return false;
+        for (size_t i = 0; i < th_record_len(shape); i++) {
+            const th_member *arm = th_record_member(shape, i);
+            if (!arm || !core_string_eq(value->as.variant.arm,
+                                        core_string_from_cstr(arm->name)))
+                continue;
+            ir_global_init_value_t *payload = core_arena_alloc(
+                &state->semantic_values, sizeof(*payload));
+            if (!payload || !n00bb_static_value_to_ir_initializer(
+                    value->as.variant.payload, arm->type, state, payload,
+                    depth + 1)) return false;
+            payload->member = arm->name;
+            out->kind = IR_GLOBAL_INIT_VARIANT;
+            out->aggregate.items = payload;
+            out->aggregate.count = 1;
+            return true;
+        }
+        return false;
+    }
     case N00BB_STATIC_VALUE_SEQUENCE:
     case N00BB_STATIC_VALUE_TUPLE:
     case N00BB_STATIC_VALUE_RECORD:
@@ -42189,7 +42329,7 @@ static_value_kind_name(n00bb_static_value_kind_t kind)
 {
     static const char *names[] = {
         "bool", "int", "float", "string", "sequence", "tuple",
-        "record", "set", "dictionary"};
+        "record", "set", "dictionary", "nil", "variant"};
     return (size_t)kind < sizeof(names) / sizeof(names[0])
         ? names[kind] : "invalid";
 }
@@ -42214,6 +42354,14 @@ dump_static_value_contents(const n00bb_static_value_t *value, size_t depth)
         break;
     case N00BB_STATIC_VALUE_STRING:
         printf("%zu bytes", value->as.string.u8_bytes);
+        break;
+    case N00BB_STATIC_VALUE_NIL:
+        printf("nil");
+        break;
+    case N00BB_STATIC_VALUE_VARIANT:
+        printf("%.*s=", (int)value->as.variant.arm.u8_bytes,
+               value->as.variant.arm.data);
+        dump_static_value_contents(value->as.variant.payload, depth + 1);
         break;
     case N00BB_STATIC_VALUE_SEQUENCE:
     case N00BB_STATIC_VALUE_TUPLE:

@@ -1394,6 +1394,126 @@ check_record_aggregate_storage(const uint8_t *object, size_t length,
         storage->byte_offset + label->logical_bit_offset / 8, expected);
 }
 
+static void
+check_variant_storage(const uint8_t *object, size_t length,
+    const core_object_section_t *metadata,
+    const n00bb_abi_directory_entry_t *entries, size_t count,
+    uint32_t target_id)
+{
+    core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
+        ? CORE_TARGET_OBJECT_MACH_O
+        : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
+            ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    const n00bb_abi_directory_entry_t *extractors = entry_for(entries, count,
+        N00B_ABI_TABLE_TAG_EXTRACTOR);
+    const n00b_abi_storage_v1 *number = storage_named(metadata, entries,
+        count, "number_choice");
+    const n00b_abi_storage_v1 *text = storage_named(metadata, entries,
+        count, "text_choice");
+    const n00b_abi_storage_v1 *empty = storage_named(metadata, entries,
+        count, "empty_choice");
+    const n00b_abi_storage_v1 *choices = storage_named(metadata, entries,
+        count, "choices");
+    assert(types && layouts && extractors
+        && number->type_index < types->record_count
+        && text->type_index == number->type_index
+        && empty->type_index == number->type_index);
+    const n00b_abi_type_v1 *type = row_at(metadata, types, number->type_index);
+    assert(type->kind == N00B_ABI_TYPE_VARIANT
+        && type->layout_index < layouts->record_count);
+    const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
+        type->layout_index);
+    assert(layout->tag_extractor_index < extractors->record_count);
+    const n00b_abi_tag_extractor_v1 *tag = row_at(metadata, extractors,
+        layout->tag_extractor_index);
+    assert(tag->kind == N00B_ABI_TAG_DIRECT_BITS
+        && tag->tag_width_bits == 2
+        && tag->unit_byte_offset == 16);
+    const n00b_abi_storage_v1 *globals[] = {number, text, empty};
+    for (size_t i = 0; i < 3; i++) {
+        const n00b_abi_storage_v1 *global = globals[i];
+        core_object_section_t section;
+        assert(global->segment_kind == N00B_ABI_STORAGE_READ_ONLY
+            && core_object_section_at(object, length, format,
+                global->segment_index, &section)
+            && global->byte_length >= 17
+            && global->byte_offset <= section.size
+            && global->byte_length <= section.size - global->byte_offset);
+        const uint8_t *bytes = section.bytes + global->byte_offset;
+        assert(record_bits(bytes, tag->unit_byte_offset * 8
+            + tag->lsb_position, tag->tag_width_bits) == i + 1);
+        if (i == 0) assert(core_le_load_u64(bytes) == 7);
+        if (i == 1) {
+            const char *expected = "a long variant string value";
+            const n00b_abi_string_v1 *value = (const void *)bytes;
+            assert(value->long_value.selector ==
+                ((uint64_t)strlen(expected)
+                    | ((uint64_t)N00B_ABI_STRING_ASCII
+                        << N00B_ABI_STRING_ENCODING_SHIFT)
+                    | ((uint64_t)N00B_ABI_STRING_LONG
+                        << N00B_ABI_STRING_TAG_SHIFT)));
+            check_record_string_relocation(object, length, format, &section,
+                global->byte_offset, expected);
+        }
+        if (i == 2)
+            for (size_t j = 0; j < tag->unit_byte_offset; j++)
+                assert(bytes[j] == 0);
+    }
+    const n00b_abi_storage_v1 *holder = storage_named(metadata, entries,
+        count, "holder");
+    const n00b_abi_field_v1 *field = record_field_named(metadata, entries,
+        count, holder->type_index, "choice");
+    core_object_section_t holder_section;
+    assert(field->child_type_index == number->type_index
+        && field->logical_bit_offset % 8 == 0
+        && holder->byte_length >= field->logical_bit_offset / 8 + 17
+        && core_object_section_at(object, length, format,
+            holder->segment_index, &holder_section));
+    const uint8_t *nested = holder_section.bytes + holder->byte_offset
+        + field->logical_bit_offset / 8;
+    assert(record_bits(nested, tag->unit_byte_offset * 8
+        + tag->lsb_position, tag->tag_width_bits) == 2);
+    check_record_string_relocation(object, length, format, &holder_section,
+        holder->byte_offset + field->logical_bit_offset / 8,
+        "a long variant string value");
+    core_object_section_t source, backing;
+    assert(core_object_section_at(object, length, format,
+        choices->segment_index, &source)
+        && core_object_section_find(object, length, format,
+            format == CORE_TARGET_OBJECT_MACH_O ? "__DATA_CONST" : nullptr,
+            format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_aggregate"
+            : format == CORE_TARGET_OBJECT_COFF ? ".rdata$A"
+            : ".rodata.n00b_aggregate", &backing));
+    uint64_t data_offset = aggregate_pointer_addend(object, length, format,
+        &source, &backing, choices->byte_offset);
+    uint64_t descriptor_offset = aggregate_pointer_addend(object, length,
+        format, &source, &backing, choices->byte_offset + 8);
+    uint64_t extent = (type->size_bits + 7) / 8;
+    uint64_t stride = (extent + type->alignment_bytes - 1)
+        & ~(uint64_t)(type->alignment_bytes - 1);
+    assert(data_offset <= backing.size
+        && stride <= (backing.size - data_offset) / 3
+        && descriptor_offset <= backing.size - 32
+        && core_le_load_u64(backing.bytes + descriptor_offset) == 3
+        && core_le_load_u64(backing.bytes + descriptor_offset + 24) == 3);
+    const uint8_t *first = backing.bytes + data_offset;
+    const uint8_t *second = first + stride;
+    const uint8_t *third = second + stride;
+    assert(core_le_load_u64(first) == 1
+        && record_bits(first, tag->unit_byte_offset * 8
+            + tag->lsb_position, tag->tag_width_bits) == 1
+        && record_bits(second, tag->unit_byte_offset * 8
+            + tag->lsb_position, tag->tag_width_bits) == 3
+        && record_bits(third, tag->unit_byte_offset * 8
+            + tag->lsb_position, tag->tag_width_bits) == 2);
+    check_record_string_relocation(object, length, format, &backing,
+        data_offset + 2 * stride, "a long variant string value");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1416,6 +1536,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "record-storage")
             || !strcmp(argv[2], "record-bits-storage")
             || !strcmp(argv[2], "record-nested-storage")
+            || !strcmp(argv[2], "variant-storage")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -1553,6 +1674,13 @@ main(int argc, char **argv)
                     || !strcmp(argv[2], "record-nested-storage"))) {
         check_record_aggregate_storage(object, (size_t)length, &metadata,
             entries, header.directory_count, header.key.target_id, argv[2]);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "variant-storage")) {
+        check_variant_storage(object, (size_t)length, &metadata,
+            entries, header.directory_count, header.key.target_id);
         free(entries);
         free(object);
         return 0;

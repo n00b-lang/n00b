@@ -225,20 +225,104 @@ encode_array(array_writer_t *writer, th_type *type,
              uint32_t *shape_index);
 
 static bool
-encode_record(array_writer_t *writer, th_type *type,
-              const ir_global_init_value_t *value,
-              uint32_t source_kind, uint64_t source_bit_offset,
-              uint8_t *bytes, size_t byte_count, size_t depth)
+encode_aggregate(array_writer_t *writer, th_type *type,
+                 const ir_global_init_value_t *value,
+                 uint32_t source_kind, uint64_t source_bit_offset,
+                 uint8_t *bytes, size_t byte_count, size_t depth);
+
+static bool
+encode_aggregate_member(array_writer_t *writer,
+                        const ir_final_layout_t *layout,
+                        const ir_final_member_layout_t *member,
+                        const ir_global_init_value_t *item,
+                        uint32_t source_kind, uint64_t source_bit_offset,
+                        uint8_t *bytes, size_t depth)
+{
+    uint32_t child_index;
+    if (!member->type || !n00bb_abi_type_index_find(writer->index,
+            member->type, &child_index)
+        || child_index >= writer->types->count
+        || member->bit_offset > UINT64_MAX - source_bit_offset)
+        return false;
+    const n00b_abi_type_v1 *child_type = &writer->types->rows[child_index];
+    uint64_t child_bits = child_type->size_bits;
+    if (child_bits > SIZE_MAX - 7) return false;
+    size_t child_bytes = (size_t)((child_bits + 7) / 8);
+    uint8_t *child = core_alloc_array(uint8_t, child_bytes ? child_bytes : 1);
+    memset(child, 0, child_bytes ? child_bytes : 1);
+    uint64_t child_source = source_bit_offset + member->bit_offset;
+    size_t pool_offset = 0;
+    bool valid;
+    if (child_type->kind == N00B_ABI_TYPE_RECORD
+        || child_type->kind == N00B_ABI_TYPE_VARIANT)
+        valid = encode_aggregate(writer, member->type, item, source_kind,
+            child_source, child, child_bytes, depth + 1);
+    else if (child_type->kind == N00B_ABI_TYPE_ARRAY)
+        valid = child_source % 8 == 0
+            && source_kind != N00B_ABI_STORAGE_TLS
+            && encode_array(writer, member->type, item, nullptr,
+                source_kind, child_source / 8, nullptr);
+    else if (child_type->kind == N00B_ABI_TYPE_STRING) {
+        valid = child_bytes == sizeof(n00b_abi_string_v1)
+            && encode_string(writer->pool, item, child, &pool_offset);
+        if (valid && item->string.length
+            > N00BB_ABI_STRING_SHORT_CAPACITY) {
+            valid = child_source % 8 == 0
+                && source_kind != N00B_ABI_STORAGE_TLS;
+            if (valid)
+                core_list_push(*writer->relocations,
+                    ((n00bb_abi_storage_relocation_t){
+                        .source_kind = source_kind,
+                        .byte_offset = child_source / 8,
+                        .target_kind = N00BB_ABI_RELOC_STRING_POOL,
+                        .target_offset = pool_offset,
+                    }));
+        }
+    }
+    else if (item->kind == IR_GLOBAL_INIT_NIL)
+        valid = child_bits == 0;
+    else valid = encode_scalar(writer->runtime, member->type, item,
+        child_bits, child);
+    for (size_t r = 0; valid && r < member->n_occupied; r++) {
+        ir_layout_bit_run_t run = member->occupied[r];
+        if (run.offset < member->bit_offset
+            || run.offset > layout->intrinsic_bits
+            || run.width > layout->intrinsic_bits - run.offset
+            || run.offset - member->bit_offset > child_bits
+            || run.width > child_bits - (run.offset - member->bit_offset)) {
+            valid = false;
+            break;
+        }
+        for (uint64_t bit = 0; bit < run.width; bit++) {
+            uint64_t from = run.offset - member->bit_offset + bit;
+            uint64_t to = run.offset + bit;
+            if (child[from / 8] & (1u << (from % 8)))
+                bytes[to / 8] |= (uint8_t)(1u << (to % 8));
+        }
+    }
+    core_free(child);
+    return valid;
+}
+
+static bool
+encode_aggregate(array_writer_t *writer, th_type *type,
+                 const ir_global_init_value_t *value,
+                 uint32_t source_kind, uint64_t source_bit_offset,
+                 uint8_t *bytes, size_t byte_count, size_t depth)
 {
     const ir_final_layout_t *layout = ir_layout_final(writer->runtime, type,
         ir_module_target(writer->runtime));
-    if (!layout || !value || value->kind != IR_GLOBAL_INIT_RECORD
-        || depth > 64 || value->aggregate.count != layout->n_members
-        || (layout->n_members && (!layout->members
-            || !value->aggregate.items))
-        || byte_count > SIZE_MAX / 8
-        || layout->intrinsic_bits > byte_count * 8) return false;
-    bool *seen = core_alloc_array(bool, layout->n_members);
+    if (!layout || !value || depth > 64 || byte_count > SIZE_MAX / 8
+        || layout->intrinsic_bits > byte_count * 8 || !layout->members)
+        return false;
+    bool variant = layout->has_discriminant;
+    if (variant ? value->kind != IR_GLOBAL_INIT_VARIANT
+                || value->aggregate.count != 1 || !value->aggregate.items
+                : value->kind != IR_GLOBAL_INIT_RECORD
+                || value->aggregate.count != layout->n_members
+                || (layout->n_members && !value->aggregate.items))
+        return false;
+    bool *seen = variant ? nullptr : core_alloc_array(bool, layout->n_members);
     bool valid = true;
     for (size_t i = 0; valid && i < value->aggregate.count; i++) {
         const ir_global_init_value_t *item = &value->aggregate.items[i];
@@ -247,82 +331,34 @@ encode_record(array_writer_t *writer, th_type *type,
             && (!item->member || !layout->members[slot].name
                 || strcmp(item->member, layout->members[slot].name)))
             slot++;
-        if (slot == layout->n_members || seen[slot]) {
+        if (slot == layout->n_members || (!variant && seen[slot])) {
             valid = false;
             break;
         }
-        seen[slot] = true;
+        if (!variant) seen[slot] = true;
         const ir_final_member_layout_t *member = &layout->members[slot];
-        uint32_t child_index;
-        if (!member->type || !n00bb_abi_type_index_find(writer->index,
-                member->type, &child_index)
-            || child_index >= writer->types->count
-            || member->bit_offset > UINT64_MAX - source_bit_offset) {
-            valid = false;
-            break;
+        valid = encode_aggregate_member(writer, layout, member, item,
+            source_kind, source_bit_offset, bytes, depth);
+        if (valid && variant) {
+            const ir_layout_access_t *tag = &layout->discriminant;
+            uint64_t bit_offset = tag->unit_bit_offset + tag->lsb;
+            uint64_t value_bits = (uint64_t)member->ordinal + 1;
+            valid = !layout->discriminant_is_niche
+                && tag->value_width_bits && tag->value_width_bits <= 32
+                && tag->unit_bit_offset <= UINT64_MAX - tag->lsb
+                && bit_offset <= layout->intrinsic_bits
+                && tag->value_width_bits
+                    <= layout->intrinsic_bits - bit_offset
+                && value_bits < (UINT64_C(1) << tag->value_width_bits);
+            for (uint32_t bit = 0; valid && bit < tag->value_width_bits;
+                 bit++)
+                if (value_bits & (UINT64_C(1) << bit))
+                    bytes[(bit_offset + bit) / 8] |=
+                        (uint8_t)(1u << ((bit_offset + bit) % 8));
         }
-        const n00b_abi_type_v1 *child_type =
-            &writer->types->rows[child_index];
-        uint64_t child_bits = child_type->size_bits;
-        if (child_bits > SIZE_MAX - 7) {
-            valid = false;
-            break;
-        }
-        size_t child_bytes = (size_t)((child_bits + 7) / 8);
-        uint8_t *child = core_alloc_array(uint8_t,
-            child_bytes ? child_bytes : 1);
-        memset(child, 0, child_bytes ? child_bytes : 1);
-        uint64_t child_source = source_bit_offset + member->bit_offset;
-        size_t pool_offset = 0;
-        if (child_type->kind == N00B_ABI_TYPE_RECORD)
-            valid = encode_record(writer, member->type, item, source_kind,
-                child_source, child, child_bytes, depth + 1);
-        else if (child_type->kind == N00B_ABI_TYPE_ARRAY)
-            valid = child_source % 8 == 0
-                && source_kind != N00B_ABI_STORAGE_TLS
-                && encode_array(writer, member->type, item, nullptr,
-                    source_kind, child_source / 8, nullptr);
-        else if (child_type->kind == N00B_ABI_TYPE_STRING) {
-            valid = child_bytes == sizeof(n00b_abi_string_v1)
-                && encode_string(writer->pool, item, child, &pool_offset);
-            if (valid && item->string.length
-                > N00BB_ABI_STRING_SHORT_CAPACITY) {
-                valid = child_source % 8 == 0
-                    && source_kind != N00B_ABI_STORAGE_TLS;
-                if (valid)
-                    core_list_push(*writer->relocations,
-                        ((n00bb_abi_storage_relocation_t){
-                            .source_kind = source_kind,
-                            .byte_offset = child_source / 8,
-                            .target_kind = N00BB_ABI_RELOC_STRING_POOL,
-                            .target_offset = pool_offset,
-                        }));
-            }
-        }
-        else valid = encode_scalar(writer->runtime, member->type, item,
-            child_bits, child);
-        for (size_t r = 0; valid && r < member->n_occupied; r++) {
-            ir_layout_bit_run_t run = member->occupied[r];
-            if (run.offset < member->bit_offset
-                || run.offset > layout->intrinsic_bits
-                || run.width > layout->intrinsic_bits - run.offset
-                || run.offset - member->bit_offset > child_bits
-                || run.width > child_bits
-                    - (run.offset - member->bit_offset)) {
-                valid = false;
-                break;
-            }
-            for (uint64_t bit = 0; bit < run.width; bit++) {
-                uint64_t from = run.offset - member->bit_offset + bit;
-                uint64_t to = run.offset + bit;
-                if (child[from / 8] & (1u << (from % 8)))
-                    bytes[to / 8] |= (uint8_t)(1u << (to % 8));
-            }
-        }
-        core_free(child);
     }
     for (size_t i = 0; valid && i < layout->n_members; i++)
-        if (!seen[i]) valid = false;
+        if (!variant && !seen[i]) valid = false;
     core_free(seen);
     return valid;
 }
@@ -355,22 +391,23 @@ encode_array_items(array_writer_t *writer,
             || type_index >= writer->types->count) return false;
         const n00b_abi_type_v1 *row = &writer->types->rows[type_index];
         uint8_t inline_bytes[16] = {0};
-        bool record = row->kind == N00B_ABI_TYPE_RECORD;
-        if (record && at > UINT64_MAX / 8) return false;
-        uint8_t *bytes = record ? core_alloc_array(uint8_t, stride)
-                                : inline_bytes;
-        if (record) memset(bytes, 0, stride);
+        bool aggregate = row->kind == N00B_ABI_TYPE_RECORD
+            || row->kind == N00B_ABI_TYPE_VARIANT;
+        if (aggregate && at > UINT64_MAX / 8) return false;
+        uint8_t *bytes = aggregate ? core_alloc_array(uint8_t, stride)
+                                   : inline_bytes;
+        if (aggregate) memset(bytes, 0, stride);
         size_t pool_offset = 0;
         bool string = row->kind == N00B_ABI_TYPE_STRING;
         bool valid = string ? (stride == 16
                 && encode_string(writer->pool, value, bytes, &pool_offset))
-            : record ? encode_record(writer, type, value,
+            : aggregate ? encode_aggregate(writer, type, value,
                 N00BB_ABI_RELOC_AGGREGATE, (uint64_t)at * 8,
                 bytes, stride, 0)
             : encode_scalar(writer->runtime, type, value,
                 row->size_bits, bytes);
         if (!valid) {
-            if (record) core_free(bytes);
+            if (aggregate) core_free(bytes);
             return false;
         }
         if (packed) {
@@ -393,7 +430,7 @@ encode_array_items(array_writer_t *writer,
                         .target_offset = pool_offset,
                     }));
         }
-        if (record) core_free(bytes);
+        if (aggregate) core_free(bytes);
     }
     (*next)++;
     return true;
@@ -432,7 +469,8 @@ encode_array(array_writer_t *writer, th_type *type,
             || (row->flags & N00B_ABI_TYPE_FLAG_BITS));
     size_t width = row->semantic_width_bits;
     if (!alignment || (alignment & (alignment - 1))
-        || !stride || (row->kind != N00B_ABI_TYPE_RECORD && stride > 16)
+        || !stride || (row->kind != N00B_ABI_TYPE_RECORD
+            && row->kind != N00B_ABI_TYPE_VARIANT && stride > 16)
         || (packed && (!width || width > 128
             || shape.total_count > (SIZE_MAX - 7) / width))
         || (!packed && shape.total_count > SIZE_MAX / stride)
@@ -581,6 +619,7 @@ n00bb_abi_storage_rows_build(
         bool is_string = type_row->kind == N00B_ABI_TYPE_STRING;
         bool is_array = type_row->kind == N00B_ABI_TYPE_ARRAY;
         bool is_record = type_row->kind == N00B_ABI_TYPE_RECORD;
+        bool is_variant = type_row->kind == N00B_ABI_TYPE_VARIANT;
         const ir_global_init_value_t *initializer =
             global->has_static_initializer ? global->static_initializer
                                            : nullptr;
@@ -590,7 +629,7 @@ n00bb_abi_storage_rows_build(
                 ? (bits != 128 || alignment != 8
                     || !encode_string(pool, initializer, bytes, &pool_offset))
                 : is_array ? (bits != 128 || alignment != 8)
-                    : is_record ? (!bits || !initializer)
+                    : (is_record || is_variant) ? (!bits || !initializer)
                     : !encode_scalar(runtime, global->type, initializer,
                                      bits, bytes))) {
             valid = false;
@@ -631,11 +670,11 @@ n00bb_abi_storage_rows_build(
             .index = index, .types = types, .runtime = runtime,
             .pool = pool, .built = &built, .relocations = &relocations,
         };
-        if (is_record) {
+        if (is_record || is_variant) {
             uint8_t *record = core_alloc_array(uint8_t, byte_length);
             memset(record, 0, byte_length);
             valid = row.byte_offset <= UINT64_MAX / 8
-                && encode_record(&writer, global->type, initializer,
+                && encode_aggregate(&writer, global->type, initializer,
                     kind, row.byte_offset * 8, record, byte_length, 0);
             if (valid)
                 core_buffer_append(buffer, (const char *)record, byte_length);

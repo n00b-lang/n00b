@@ -1440,6 +1440,19 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
 N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/abi_record_nested_linked.o" abi_record_nested_probe
 "$abi_record_object_test" "$tmp/abi_record_nested_linked.o" record-nested-storage
+"$compiler" compile --output "$tmp/abi_variant_storage_probe.o" \
+    "$program_dir/../abi/abi_variant_storage_probe.n00b"
+"$abi_record_object_test" "$tmp/abi_variant_storage_probe.o" variant-storage
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/abi_variant_storage_linked.o" abi_variant_storage_probe
+"$abi_record_object_test" "$tmp/abi_variant_storage_linked.o" variant-storage
+if "$compiler" lower "$program_dir/../abi/abi_nil_standalone_invalid.n00b" \
+    >"$tmp/abi_nil_standalone_invalid.out" 2>&1; then
+    echo 'standalone nil global unexpectedly lowered' >&2
+    exit 1
+fi
+grep -q 'const globals require a supported compile-time static initializer' \
+    "$tmp/abi_nil_standalone_invalid.out"
 "$compiler" compile --output "$tmp/array_storage_abi.o" \
     "$program_dir/../abi/array_storage.n00b"
 [ -s "$tmp/array_storage_abi.o" ]
