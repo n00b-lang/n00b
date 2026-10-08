@@ -2284,6 +2284,19 @@ bench_rocs_prims = executable('bench_rocs_prims',
     kwargs: test_common_kwargs,
 )
 
+bench_rocs_retention_pinned = executable('bench_rocs_retention_pinned',
+    ['test/unit/bench_rocs_retention_pinned.c'],
+    kwargs: test_common_kwargs,
+)
+
+# Registered small so a fully-pinned pass keeps dropping nothing and keeps
+# reporting PINNED; run the binary directly for the N sweep.
+test('rocs_retention_pinned_bench',
+    bench_rocs_retention_pinned,
+    suite: 'unit',
+    env: {'ROCS_BENCH_SIZES': '8,16', 'ROCS_BENCH_RECORDS': '2'},
+)
+
 bench_rocs_catalog_rewrite = executable('bench_rocs_catalog_rewrite',
     ['test/unit/bench_rocs_catalog_rewrite.c'],
     kwargs: test_common_kwargs,

@@ -12927,21 +12927,6 @@ rocs_store_emit_lifecycle_drop(n00b_store_t               *store,
  * `blocked` list in retention, which holds one id per shard that refused to
  * drop this round. Anything sized by the catalog goes through the sorted form
  * below (n00b#400). */
-static bool
-rocs_store_shard_id_list_contains(n00b_store_shard_id_list_t *ids,
-                                  uint64_t                    shard_id)
-{
-    if (ids == nullptr || shard_id == 0) {
-        return false;
-    }
-    size_t len = n00b_list_len(*ids);
-    for (size_t i = 0; i < len; i++) {
-        if (n00b_list_get(*ids, i) == shard_id) {
-            return true;
-        }
-    }
-    return false;
-}
 
 static int
 rocs_store_u64_compare(const void *left, const void *right)
@@ -13238,54 +13223,6 @@ rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
     return n00b_result_ok(bool, true);
 }
 
-static n00b_store_catalog_entry_t *
-rocs_store_oldest_retention_candidate(n00b_store_t                        *store,
-                                      n00b_store_shard_retention_policy_t *policy,
-                                      n00b_store_shard_id_list_t          *blocked)
-{
-    if (store == nullptr || policy == nullptr || store->catalog == nullptr) {
-        return nullptr;
-    }
-    // Total on-disk bytes rule: when the summed sealed byte_len exceeds the
-    // budget, the oldest shard is droppable; apply() loops + recomputes, so it
-    // drops oldest-first until the total fits.
-    uint64_t total_bytes = 0;
-    uint64_t count       = 0;
-    size_t   len         = n00b_list_len(*store->catalog);
-    for (size_t i = 0; i < len; i++) {
-        n00b_store_catalog_entry_t *entry = n00b_list_get(*store->catalog, i);
-        if (rocs_store_catalog_entry_visible_sealed(entry)) {
-            count++;
-            total_bytes += entry->byte_len;
-        }
-    }
-    bool over_count = policy->max_sealed_shards != 0
-                   && count > policy->max_sealed_shards;
-    bool over_bytes = policy->max_total_sealed_bytes != 0
-                   && total_bytes > policy->max_total_sealed_bytes;
-
-    n00b_store_catalog_entry_t *candidate = nullptr;
-    for (size_t i = 0; i < len; i++) {
-        n00b_store_catalog_entry_t *entry = n00b_list_get(*store->catalog, i);
-        if (!rocs_store_catalog_entry_visible_sealed(entry)) {
-            continue;
-        }
-        if (rocs_store_shard_id_list_contains(blocked, entry->shard_id)) {
-            continue;
-        }
-        bool old_by_time = policy->drop_before_seal_ts != 0
-                        && entry->seal_ts >= policy->min_seal_ts
-                        && entry->seal_ts < policy->drop_before_seal_ts;
-        if (!over_count && !over_bytes && !old_by_time) {
-            continue;
-        }
-        if (rocs_store_entry_pos_less(entry, candidate)) {
-            candidate = entry;
-        }
-    }
-
-    return candidate;
-}
 
 n00b_result_t(uint64_t)
 n00b_store_apply_shard_retention(
@@ -13304,15 +13241,8 @@ n00b_store_apply_shard_retention(
         return n00b_result_err(uint64_t, N00B_STORE_ERR_STATE);
     }
 
-    uint64_t dropped = 0;
+    uint64_t dropped              = 0;
     bool     saw_pinned_candidate = false;
-    n00b_store_shard_id_list_t *blocked =
-        rocs_store_shard_id_list_new(.allocator = store->allocator);
-    if (blocked == nullptr) {
-        n00b_mutex_unlock(store->residency_lock);
-        n00b_mutex_unlock(store->commit_lock);
-        return n00b_result_err(uint64_t, N00B_STORE_ERR_INTERNAL);
-    }
     // n00b#517: detach every victim first and write the catalog ONCE, rather
     // than writing the whole catalog per dropped shard. A rewrite is a full
     // serialize plus a whole-image write plus two fsyncs (the file and its
@@ -13340,15 +13270,76 @@ n00b_store_apply_shard_retention(
     bool             old_has_oldest = store->has_oldest_available;
     n00b_err_t       detach_err     = N00B_STORE_OK;
 
-    while (true) {
-        n00b_store_catalog_entry_t *candidate =
-            rocs_store_oldest_retention_candidate(store, policy, blocked);
-        if (candidate == nullptr) {
-            break;
+    // n00b#517: order the candidates ONCE instead of rescanning the catalog
+    // for the oldest on every iteration.
+    //
+    // This loop used to call rocs_store_oldest_retention_candidate per
+    // victim, and that helper walks the whole catalog twice -- once to sum
+    // sealed bytes, once to pick the oldest -- doing a LINEAR scan of the
+    // `blocked` list for every entry it considers. A pinned candidate drops
+    // nothing and just joins `blocked`, so the loop goes round again over a
+    // list that is one longer. Iteration k costs O(N x k), and P pinned
+    // candidates cost O(N x P^2) -- with every shard pinned, O(N^3).
+    //
+    // That is not hypothetical: wax#1229's gateway is at its retention cap
+    // with queries in flight, so candidates ARE pinned. Measured with every
+    // shard pinned (bench_rocs_retention_pinned), one pass that drops
+    // nothing: 0.4 ms at N=50, 3.1 ms at N=100, 20.3 ms at N=200, 159.9 ms
+    // at N=400 -- growth exponents 2.81, 2.70, 2.98. All of it spent holding
+    // commit_lock and residency_lock, which is what stalls ingest and every
+    // reader, and all of it achieving nothing.
+    //
+    // Sorting the visible sealed entries by position once is O(N log N), and
+    // then one forward walk is exactly "oldest first". The running totals are
+    // maintained incrementally rather than recomputed: nothing else can
+    // mutate the catalog while both locks are held, so a detach's effect on
+    // the totals is known without another pass.
+    size_t                       catalog_len = n00b_list_len(*store->catalog);
+    n00b_store_catalog_entry_t **ordered     = n00b_alloc_array_with_opts(
+        n00b_store_catalog_entry_t *,
+        catalog_len == 0 ? 1 : catalog_len,
+        &(n00b_alloc_opts_t){.allocator = store->allocator,
+                             .scan_kind = N00B_GC_SCAN_KIND_ALL});
+
+    uint64_t total_bytes = 0;
+    uint64_t count       = 0;
+    size_t   nordered    = 0;
+    for (size_t i = 0; i < catalog_len; i++) {
+        n00b_store_catalog_entry_t *entry = n00b_list_get(*store->catalog, i);
+        if (!rocs_store_catalog_entry_visible_sealed(entry)) {
+            continue;
+        }
+        count++;
+        total_bytes += entry->byte_len;
+        ordered[nordered++] = entry;
+    }
+    qsort(ordered,
+          nordered,
+          sizeof(n00b_store_catalog_entry_t *),
+          rocs_store_catalog_view_pos_cmp);
+
+    for (size_t i = 0; i < nordered; i++) {
+        n00b_store_catalog_entry_t *candidate = ordered[i];
+
+        // Recomputed from the running totals, exactly as the old helper
+        // recomputed them from a fresh scan. They only ever fall, because
+        // the only mutation here is a detach.
+        bool over_count = policy->max_sealed_shards != 0
+                       && count > policy->max_sealed_shards;
+        bool over_bytes = policy->max_total_sealed_bytes != 0
+                       && total_bytes > policy->max_total_sealed_bytes;
+        bool old_by_time = policy->drop_before_seal_ts != 0
+                        && candidate->seal_ts >= policy->min_seal_ts
+                        && candidate->seal_ts < policy->drop_before_seal_ts;
+
+        if (!over_count && !over_bytes && !old_by_time) {
+            // Under budget: only an explicitly aged-out entry still
+            // qualifies, and that is a per-entry test, so keep walking
+            // rather than stopping.
+            continue;
         }
 
         if (rocs_store_drop_entry_blocked_locked(store, candidate)) {
-            n00b_list_push(*blocked, candidate->shard_id);
             saw_pinned_candidate = true;
             continue;
         }
@@ -13365,6 +13356,8 @@ n00b_store_apply_shard_retention(
         }
         n00b_list_push(*detached, entry);
         n00b_list_push(*detached_at, index);
+        count--;
+        total_bytes -= entry->byte_len;
     }
 
     size_t ndetached = (size_t)n00b_list_len(*detached);
