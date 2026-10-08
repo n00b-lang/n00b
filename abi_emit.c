@@ -654,7 +654,8 @@ imported_module_symbol(const core_link_reference_t *reference,
         || !target || core_link_declaration_owner(target) == unit)
         return true;
     uint32_t kind = core_link_declaration_kind(target);
-    if (kind != PARSE_SYM_FUNCTION && kind != PARSE_SYM_VARIABLE)
+    if (kind != PARSE_SYM_FUNCTION && kind != PARSE_SYM_VARIABLE
+        && kind != PARSE_SYM_TYPEDEF)
         return true;
     parse_node_resolution_t resolution = parse_tree_resolution(
         core_link_reference_use_site(reference));
@@ -667,7 +668,8 @@ imported_module_symbol(const core_link_reference_t *reference,
             CORE_STRING_STATIC("module"))) return true;
     *out_symbol = symbol;
     *out_kind = kind == PARSE_SYM_FUNCTION ? N00B_ABI_SYMBOL_FUNCTION
-                                           : N00B_ABI_SYMBOL_VARIABLE;
+        : kind == PARSE_SYM_TYPEDEF ? N00B_ABI_SYMBOL_TYPE
+        : N00B_ABI_SYMBOL_VARIABLE;
     return true;
 }
 
@@ -687,7 +689,12 @@ collect_imported_symbol_types(core_link_unit_t *link,
         core_link_declaration_t *target = core_link_reference_target(reference);
         th_type *type = core_link_declaration_binding(target,
             CORE_STRING_STATIC("n00bb.semantic.type"));
-        if (!type || !n00bb_abi_type_index_add(index, type, nullptr))
+        if (!type) return false;
+        bool added = kind == N00B_ABI_SYMBOL_TYPE
+            && th_kind_of(th_resolve(type)) == TH_TRAIT
+            ? n00bb_abi_type_index_add_imported_trait(index, type)
+            : n00bb_abi_type_index_add(index, type, nullptr);
+        if (!added)
             return false;
     }
     return true;
@@ -715,7 +722,7 @@ append_imported_symbol_requirements(core_link_unit_t *link,
             valid = false;
             break;
         }
-        if (!symbol) continue;
+        if (!symbol || kind == N00B_ABI_SYMBOL_TYPE) continue;
         core_link_declaration_t *target = core_link_reference_target(reference);
         bool inserted = false;
         if (!core_indexed_table_intern(seen, target, target, &inserted)) {

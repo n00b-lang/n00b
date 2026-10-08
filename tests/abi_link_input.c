@@ -695,6 +695,44 @@ find_symbol(const n00bb_abi_object_view_t *view, const char *wanted,
 }
 
 static void
+test_trait_type_requirement(const char *path)
+{
+    size_t object_bytes;
+    uint8_t *object = read_object(path, &object_bytes);
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_object_view_t view = {0};
+    assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
+    const n00bb_abi_directory_entry_t *requirements =
+        n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT);
+    assert(requirements);
+    bool module = false, trait = false;
+    for (uint32_t i = 1; i < requirements->record_count; i++) {
+        const n00b_abi_requirement_v1 *row = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_REQUIREMENT, i);
+        n00bb_abi_string_view_t path_name;
+        assert(row && n00bb_abi_object_string(&view, &row->full_path,
+            &path_name));
+        if (row->symbol_kind == N00B_ABI_SYMBOL_MODULE) {
+            module |= path_name.length == strlen("trait_methods")
+                && !memcmp(path_name.bytes, "trait_methods", path_name.length);
+        }
+        else if (row->symbol_kind == N00B_ABI_SYMBOL_TYPE) {
+            const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
+                N00B_ABI_TABLE_TYPE, row->contract_type_index);
+            trait |= type && type->kind == N00B_ABI_TYPE_TRAIT
+                && !type->owner_module_index
+                && path_name.length == strlen("trait_methods.Readable")
+                && !memcmp(path_name.bytes, "trait_methods.Readable",
+                    path_name.length);
+        }
+    }
+    assert(module && trait);
+    n00bb_abi_object_close(&view);
+    free(object);
+}
+
+static void
 test_trait_type_import(const char *path)
 {
     size_t object_bytes;
@@ -717,8 +755,19 @@ test_trait_type_import(const char *path)
     const n00b_abi_type_v1 *callable = n00bb_abi_object_row(&view,
         N00B_ABI_TABLE_TYPE, function->type_index);
     assert(trait_type && trait_type->kind == N00B_ABI_TYPE_TRAIT
+        && trait_type->owner_module_index == trait->module_index
+        && trait_type->fields_or_arms.count == 2
         && callable && callable->kind == N00B_ABI_TYPE_FUNCTION
         && callable->call_signature_index);
+    const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
+        &view, N00B_ABI_TABLE_TYPE);
+    size_t trait_rows = 0;
+    for (uint32_t i = 0; types && i < types->record_count; i++) {
+        const n00b_abi_type_v1 *row = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_TYPE, i);
+        if (row && row->typehash == trait_type->typehash) trait_rows++;
+    }
+    assert(trait_rows == 1);
     const n00b_abi_call_signature_v1 *signature = n00bb_abi_object_row(
         &view, N00B_ABI_TABLE_CALL_SIGNATURE,
         callable->call_signature_index);
@@ -2118,6 +2167,8 @@ main(int argc, char **argv)
             test_linked_library_object(argv[2]);
         else if (!strcmp(argv[1], "--trait-type-import"))
             test_trait_type_import(argv[2]);
+        else if (!strcmp(argv[1], "--trait-type-requirement"))
+            test_trait_type_requirement(argv[2]);
         else if (!strcmp(argv[1], "--linked-flagset"))
             test_linked_flagset(argv[2]);
         else if (!strcmp(argv[1], "--string-storage"))

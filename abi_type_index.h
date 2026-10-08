@@ -15,6 +15,10 @@ n00bb_abi_type_index_t *n00bb_abi_type_index_new(ir_module_t *module);
 void n00bb_abi_type_index_free(n00bb_abi_type_index_t *index);
 bool n00bb_abi_type_index_add(n00bb_abi_type_index_t *index,
                               th_type *type, uint32_t *out_index);
+/* Retains an imported trait's identity without copying its provider-owned
+ * method type variables into this TU's declaration universe. */
+bool n00bb_abi_type_index_add_imported_trait(
+    n00bb_abi_type_index_t *index, th_type *type);
 bool n00bb_abi_type_index_collect_ir(n00bb_abi_type_index_t *index,
                                      ir_module_t *module);
 /* Closed registered module types have stable identity. Open body-local copies

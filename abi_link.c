@@ -429,7 +429,8 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
         }
         else {
             if (!type->typehash) return false;
-            if (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+            if ((type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+                && type->kind != N00B_ABI_TYPE_TRAIT)
                 return nonconcrete_key_init(key);
             key->scalar = type->typehash;
         }

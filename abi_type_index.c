@@ -158,8 +158,8 @@ add_children(n00bb_abi_type_index_t *index, th_type *type)
 }
 
 static bool
-add_type(n00bb_abi_type_index_t *index, th_type *type,
-         uint32_t *out_index)
+add_type_with_children(n00bb_abi_type_index_t *index, th_type *type,
+                       uint32_t *out_index, bool collect_children)
 {
     if (!index || index->failed || !type) return false;
     type = th_resolve(type);
@@ -180,11 +180,18 @@ add_type(n00bb_abi_type_index_t *index, th_type *type,
     }
     core_list_push(index->keys, key);
     if (out_index) *out_index = entry->index;
-    if (!add_children(index, type)) {
+    if (collect_children && !add_children(index, type)) {
         index->failed = true;
         return false;
     }
     return true;
+}
+
+static bool
+add_type(n00bb_abi_type_index_t *index, th_type *type,
+         uint32_t *out_index)
+{
+    return add_type_with_children(index, type, out_index, true);
 }
 
 n00bb_abi_type_index_t *
@@ -229,6 +236,14 @@ n00bb_abi_type_index_add(n00bb_abi_type_index_t *index,
                           th_type *type, uint32_t *out_index)
 {
     return add_type(index, type, out_index);
+}
+
+bool
+n00bb_abi_type_index_add_imported_trait(n00bb_abi_type_index_t *index,
+                                         th_type *type)
+{
+    if (!type || th_kind_of(th_resolve(type)) != TH_TRAIT) return false;
+    return add_type_with_children(index, type, nullptr, false);
 }
 
 size_t
