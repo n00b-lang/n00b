@@ -8,6 +8,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#ifndef _WIN32
+#include <pwd.h>
+#include <stdlib.h>
+#endif
 
 #ifndef S_IFMT
 #define S_IFMT _S_IFMT
@@ -757,6 +761,95 @@ test_mkdir_p(void)
 // ============================================================================
 // main
 // ============================================================================
+// n00b#506: the no-$HOME fallback must resolve the INVOKING user
+// ============================================================================
+
+// The reported failure was a daemon with no $HOME landing on
+// /dev/.local/state/crayon -- /dev being the `sys` account's home, whichever
+// row the process-global passwd cursor happened to be sitting on. The fast
+// path ($HOME set) is what every other test here exercises, so it never saw
+// this. Clear HOME to force the fallback, and pin it to the euid's own row.
+#ifndef _WIN32
+static void
+test_user_dir_no_home_fallback(void)
+{
+    struct passwd  pwbuf;
+    struct passwd *pwres = nullptr;
+    char           pwstrs[16384];
+
+    if (getpwuid_r(geteuid(), &pwbuf, pwstrs, sizeof(pwstrs), &pwres) != 0
+        || pwres == nullptr || pwres->pw_dir == nullptr
+        || pwres->pw_dir[0] == '\0') {
+        printf("  [SKIP] user_dir_no_home_fallback (no passwd row for euid)\n");
+        return;
+    }
+
+    char *saved     = getenv("HOME");
+    char *saved_dup = saved ? strdup(saved) : nullptr;
+
+    unsetenv("HOME");
+    n00b_string_t *home = n00b_get_user_dir(nullptr);
+
+    if (saved_dup) {
+        setenv("HOME", saved_dup, 1);
+        free(saved_dup);
+    }
+
+    assert(home != nullptr);
+    // The exact assertion #506 needed: our own home, not another account's.
+    assert(strcmp(home->data, pwres->pw_dir) == 0);
+
+    printf("  [PASS] user_dir_no_home_fallback (%s)\n", home->data);
+}
+
+// ~user for our own name must agree with ~ -- the getpwnam_r arm.
+static void
+test_user_dir_named_user(void)
+{
+    struct passwd  pwbuf;
+    struct passwd *pwres = nullptr;
+    char           pwstrs[16384];
+
+    if (getpwuid_r(geteuid(), &pwbuf, pwstrs, sizeof(pwstrs), &pwres) != 0
+        || pwres == nullptr || pwres->pw_name == nullptr
+        || pwres->pw_dir == nullptr || pwres->pw_dir[0] == '\0') {
+        printf("  [SKIP] user_dir_named_user (no passwd row for euid)\n");
+        return;
+    }
+
+    n00b_string_t *named = n00b_get_user_dir(
+        n00b_string_from_cstr(pwres->pw_name));
+
+    assert(named != nullptr);
+    assert(strcmp(named->data, pwres->pw_dir) == 0);
+
+    printf("  [PASS] user_dir_named_user (~%s -> %s)\n",
+           pwres->pw_name, named->data);
+}
+
+static void
+test_get_user_name(void)
+{
+    struct passwd  pwbuf;
+    struct passwd *pwres = nullptr;
+    char           pwstrs[16384];
+
+    if (getpwuid_r(geteuid(), &pwbuf, pwstrs, sizeof(pwstrs), &pwres) != 0
+        || pwres == nullptr || pwres->pw_name == nullptr) {
+        printf("  [SKIP] get_user_name (no passwd row for euid)\n");
+        return;
+    }
+
+    n00b_string_t *name = n00b_get_user_name();
+
+    assert(name != nullptr);
+    assert(strcmp(name->data, pwres->pw_name) == 0);
+
+    printf("  [PASS] get_user_name (%s)\n", name->data);
+}
+#endif
+
+// ============================================================================
 
 int
 main(int argc, char **argv)
@@ -791,6 +884,11 @@ main(int argc, char **argv)
     test_remove_tree_does_not_follow_symlinked_directory();
     test_path_mode_helpers();
     test_mkdir_p();
+#ifndef _WIN32
+    test_user_dir_no_home_fallback();
+    test_user_dir_named_user();
+    test_get_user_name();
+#endif
 
     printf("All path tests passed.\n");
     n00b_shutdown();

@@ -594,7 +594,6 @@ path_user_dir(n00b_string_t *user, n00b_allocator_t *allocator)
         : remove_extra_slashes(path_windows_api_string(home->data, allocator));
 #else
     n00b_string_t *result;
-    struct passwd *pw;
 
     if (user == nullptr) {
         n00b_string_t *home = path_getenv_alloc(r"HOME", allocator);
@@ -624,10 +623,25 @@ path_user_dir(n00b_string_t *user, n00b_allocator_t *allocator)
         }
     }
     else {
-        pw = getpwnam(user->data);
-        result = pw == nullptr
-            ? path_string_from_bytes(user->data, user->u8_bytes, allocator)
-            : n00b_string_from_cstr(pw->pw_dir, .allocator = allocator);
+        // Same hazard as the getpwuid_r above, and for the same reason: the
+        // struct getpwnam returns lives in a process-global buffer (its own,
+        // distinct from getpwuid's), so it stays valid only until the next
+        // getpwnam on ANY thread. n00b_string_from_cstr is an allocation, so
+        // the read below is not adjacent to the call -- with a peer thread
+        // resolving a different user in that gap, 19917 of 20000 reads came
+        // back as the wrong user on glibc 2.43. getpwnam_r got 0 of 20000.
+        struct passwd  pwbuf;
+        struct passwd *pwres = nullptr;
+        char           buf[16384];
+
+        result = path_string_from_bytes(user->data, user->u8_bytes, allocator);
+        if (getpwnam_r(user->data, &pwbuf, buf, sizeof(buf), &pwres) == 0
+            && pwres != nullptr
+            && pwres->pw_dir != nullptr
+            && pwres->pw_dir[0] != '\0') {
+            result = n00b_string_from_cstr(pwres->pw_dir,
+                                           .allocator = allocator);
+        }
     }
 
     return remove_extra_slashes(result);
@@ -1528,7 +1542,6 @@ n00b_get_user_dir(n00b_string_t *user)
                         : path_windows_api_string(home, nullptr));
 #else
     n00b_string_t *result;
-    struct passwd *pw;
 
     if (user == nullptr) {
         const char *home = getenv("HOME");
@@ -1562,11 +1575,20 @@ n00b_get_user_dir(n00b_string_t *user)
         }
     }
     else {
-        pw = getpwnam(user->data);
-        if (pw == nullptr) {
+        // See path_user_dir: getpwnam's result is a process-global buffer that
+        // the next getpwnam on any thread overwrites, and the allocation in
+        // n00b_string_from_cstr sits in that window.
+        struct passwd  pwbuf;
+        struct passwd *pwres = nullptr;
+        char           buf[16384];
+
+        if (getpwnam_r(user->data, &pwbuf, buf, sizeof(buf), &pwres) != 0
+            || pwres == nullptr
+            || pwres->pw_dir == nullptr
+            || pwres->pw_dir[0] == '\0') {
             return user;
         }
-        result = n00b_string_from_cstr(pw->pw_dir);
+        result = n00b_string_from_cstr(pwres->pw_dir);
     }
 
     return remove_extra_slashes(result);

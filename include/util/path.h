@@ -741,8 +741,38 @@ n00b_get_user_name(void)
     }
     return n00b_string_from_cstr(name == nullptr ? "" : name);
 #else
-    struct passwd *pw = getpwuid(getuid());
-    return n00b_string_from_cstr(pw->pw_name);
+    // Two defects, same shape as n00b_get_user_dir's fallback (n00b#506).
+    //
+    // 1. getpwuid returns a pointer into ONE process-global struct -- measured
+    //    at the same address from every thread, on both glibc 2.43 and macOS.
+    //    glibc locks while it fills that buffer, so the call itself is safe;
+    //    what is not safe is the gap between the call and the use. Here that
+    //    gap is n00b_string_from_cstr, an allocation, which can yield. With a
+    //    peer thread doing its own getpwuid in that window, 19934 of 20000
+    //    reads came back as the WRONG user (glibc 2.43); getpwuid_r, writing
+    //    into the caller's buffer, got 0 of 20000 wrong.
+    //
+    // 2. getpwuid returns nullptr for a uid with no passwd row -- confirmed,
+    //    not theoretical: an ordinary state in a container built from a
+    //    scratch image, or under LDAP/SSSD when the directory is unreachable.
+    //    Dereferencing pw->pw_name there is a SIGSEGV in a function whose
+    //    whole job is to answer a question.
+    //
+    // The EFFECTIVE uid, because a setuid tool asking "who am I" wants the
+    // identity it is acting as. Empty string on failure, matching what the
+    // _WIN32 branch above already returns when neither env var is set, so
+    // both arms fail the same way rather than one faulting.
+    struct passwd  pwbuf;
+    struct passwd *pwres = nullptr;
+    char           buf[16384];
+
+    if (getpwuid_r(geteuid(), &pwbuf, buf, sizeof(buf), &pwres) == 0
+        && pwres != nullptr
+        && pwres->pw_name != nullptr) {
+        return n00b_string_from_cstr(pwres->pw_name);
+    }
+
+    return n00b_string_from_cstr("");
 #endif
 }
 
