@@ -264,12 +264,22 @@ n00bb_abi_type_identity_rows_build(
                 row->unpacked_storage_bits = (uint32_t)final->intrinsic_bits;
             }
             if (row->kind == N00B_ABI_TYPE_ATOMIC) {
-                if (final->n_occupied != 1 || final->occupied[0].offset
-                    || final->occupied[0].width > UINT32_MAX) {
+                uint64_t semantic_bits = 0;
+                for (size_t j = 0; j < final->n_occupied; j++) {
+                    ir_layout_bit_run_t run = final->occupied[j];
+                    if (run.offset > final->intrinsic_bits
+                        || run.width > final->intrinsic_bits - run.offset) {
+                        valid = false;
+                        break;
+                    }
+                    if (run.offset + run.width > semantic_bits)
+                        semantic_bits = run.offset + run.width;
+                }
+                if (!valid || !semantic_bits || semantic_bits > UINT32_MAX) {
                     valid = false;
                     break;
                 }
-                row->semantic_width_bits = (uint32_t)final->occupied[0].width;
+                row->semantic_width_bits = (uint32_t)semantic_bits;
             }
         }
         else if (row->kind == N00B_ABI_TYPE_NIL)

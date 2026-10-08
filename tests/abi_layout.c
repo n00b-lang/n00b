@@ -262,6 +262,36 @@ int main(void)
                 65, 64, 0, false)
             && check_option(module, &target, one_bitptr, 128, 64, 0, true)
             && check_option(module, &target, two_bitptr, 128, 64, 0, true);
+        th_arg atomic_option_arg = {
+            .kind = TH_ARG_TYPE, .type = one_byte,
+        };
+        th_type *atomic_option = th_apply(types, "atomic",
+                                          &atomic_option_arg, 1);
+        bool atomic_handled = false;
+        ok = ok && atomic_option
+            && ir_type_define(module, atomic_option, one_byte)
+            && n00bb_abi_publish_direct_layout(module, atomic_option,
+                                               &target, &atomic_handled)
+            && atomic_handled;
+        const ir_final_layout_t *atomic_option_layout = ok
+            ? ir_layout_final(module, atomic_option, target.triple) : nullptr;
+        ok = ok && atomic_option_layout
+            && atomic_option_layout->intrinsic_bits == 16
+            && atomic_option_layout->alignment_bytes == 2
+            && atomic_option_layout->n_occupied == 2
+            && atomic_option_layout->occupied[0].offset == 0
+            && atomic_option_layout->occupied[0].width == 8
+            && atomic_option_layout->occupied[1].offset == 8
+            && atomic_option_layout->occupied[1].width == 1
+            && atomic_option_layout->n_reserved == 1
+            && atomic_option_layout->reserved[0].offset == 9
+            && atomic_option_layout->reserved[0].width == 7;
+        th_arg option_atomic_arg = {
+            .kind = TH_ARG_TYPE, .type = atomic_option,
+        };
+        ok = ok && check_option(module, &target,
+                th_apply(types, "option", &option_atomic_arg, 1),
+                17, 16, 0, false);
         bool handled = false;
         ok = ok && n00bb_abi_publish_direct_layout(module,
                 th_name(types, "user.string"), &target, &handled)

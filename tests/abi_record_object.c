@@ -2207,6 +2207,76 @@ check_atomic(const core_object_section_t *metadata,
         && padding->width_bits == 15);
 }
 
+static void
+check_atomic_option(const core_object_section_t *metadata,
+                    const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    const n00bb_abi_directory_entry_t *runs = entry_for(entries, count,
+        N00B_ABI_TABLE_PHYSICAL_RUN);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    const n00bb_abi_directory_entry_t *tags = entry_for(entries, count,
+        N00B_ABI_TABLE_TAG_EXTRACTOR);
+    assert(types && layouts && runs && stream && tags);
+    unsigned atomics = 0, outer_options = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        if (type->kind == N00B_ABI_TYPE_ATOMIC) {
+            assert(type->size_bits == 16 && type->alignment_bytes == 2
+                && type->semantic_width_bits == 9
+                && type->unpacked_storage_bits == 16
+                && type->components.count == 1 && type->layout_index
+                && !type->tracing_index);
+            uint32_t child_index = core_le_load_u32(row_at(metadata, stream,
+                type->components.first));
+            const n00b_abi_type_v1 *child = row_at(metadata, types,
+                child_index);
+            assert(child->kind == N00B_ABI_TYPE_OPTION
+                && child->size_bits == 9);
+            const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
+                type->layout_index);
+            assert(layout->type_index == i && !layout->tag_extractor_index
+                && layout->occupied_runs.count == 2
+                && layout->reserved_runs.count == 1);
+            const uint32_t expected_offsets[] = {0, 8, 9};
+            const uint32_t expected_widths[] = {8, 1, 7};
+            for (uint32_t ordinal = 0; ordinal < 3; ordinal++) {
+                n00b_abi_range_v1 range = ordinal == 2
+                    ? layout->reserved_runs : layout->occupied_runs;
+                uint32_t index = core_le_load_u32(row_at(metadata, stream,
+                    range.first + (ordinal == 2 ? 0 : ordinal)));
+                const n00b_abi_physical_run_v1 *run = row_at(metadata, runs,
+                    index);
+                assert(run->byte_offset * 8 + run->bit_offset
+                    == expected_offsets[ordinal]
+                    && run->width_bits == expected_widths[ordinal]);
+            }
+            atomics++;
+        }
+        else if (type->kind == N00B_ABI_TYPE_OPTION
+            && type->size_bits == 17) {
+            assert(type->components.count == 1 && type->layout_index);
+            uint32_t child_index = core_le_load_u32(row_at(metadata, stream,
+                type->components.first));
+            const n00b_abi_type_v1 *child = row_at(metadata, types,
+                child_index);
+            const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
+                type->layout_index);
+            const n00b_abi_tag_extractor_v1 *tag = row_at(metadata, tags,
+                layout->tag_extractor_index);
+            assert(child->kind == N00B_ABI_TYPE_ATOMIC
+                && tag->kind == N00B_ABI_TAG_DIRECT_BITS
+                && tag->unit_byte_offset == 2 && !tag->lsb_position);
+            outer_options++;
+        }
+    }
+    assert(atomics == 1 && outer_options == 1);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2239,6 +2309,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local")
             || !strcmp(argv[2], "atomic")
+            || !strcmp(argv[2], "atomic-option")
             || !strcmp(argv[2], "reference-layout")
             || !strcmp(argv[2], "option-layout")
             || !strcmp(argv[2], "unary-trace"))));
@@ -2488,6 +2559,13 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "atomic")) {
         check_atomic(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "atomic-option")) {
+        check_atomic_option(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
