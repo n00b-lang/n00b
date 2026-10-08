@@ -127,6 +127,14 @@ main(void)
     uint32_t named_index = 0;
     assert(named && n00bb_abi_type_index_add(handles, named,
                                               &named_index));
+    th_type *generic_record = th_apply(types, "example.Box", &item, 1);
+    th_member field = {.name = "value", .type = string};
+    th_type *record_definition = th_record(types, &field, 1);
+    uint32_t generic_record_index = 0;
+    assert(generic_record && record_definition
+        && ir_type_define(runtime, generic_record, record_definition)
+        && n00bb_abi_type_index_add(handles, generic_record,
+                                    &generic_record_index));
     assert(ir_layout_publish_final(runtime, bits3, "x86_64-linux",
                                    &bits3_layout));
     n00bb_abi_type_identity_rows_t handle_rows = {0};
@@ -142,6 +150,8 @@ main(void)
         && handle_rows.rows[bits3_index].unpacked_storage_bits == 8
         && (handle_rows.rows[bits3_index].flags
             & N00B_ABI_TYPE_FLAG_SIGNED));
+    assert(handle_rows.rows[generic_record_index].kind
+        == N00B_ABI_TYPE_RECORD);
     n00bb_abi_type_components_t components = {0};
     assert(n00bb_abi_type_components_build(handles, runtime, 3,
                                             &handle_rows, &components));
@@ -190,6 +200,14 @@ main(void)
         && (int64_t)args[2].scalar_bits == -3
         && args[3].ordinal == 3
         && args[3].kind == N00B_ABI_TYPE_ARG_STRING);
+    const n00b_abi_type_v1 *record_row =
+        &handle_rows.rows[generic_record_index];
+    assert(record_row->named_arguments.count == 1
+        && handle_rows.arguments[record_row->named_arguments.first]
+            .type_index == string_component_index
+        && record_row->components.count == 1
+        && components.indexes[record_row->components.first - 3]
+            == string_component_index);
     n00bb_abi_type_components_release(&components);
     n00bb_abi_type_identity_rows_release(&handle_rows);
     n00bb_abi_name_pool_free(handle_names);
