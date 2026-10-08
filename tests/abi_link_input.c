@@ -2613,6 +2613,33 @@ test_imported_generic_owner(const char *consumer_path,
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
     assert(plan);
     n00bb_abi_index_plan_free(plan);
+    const n00b_abi_function_v1 *provider_function =
+        n00bb_abi_object_row(&views[1], N00B_ABI_TABLE_FUNCTION, 1);
+    assert(provider_function && provider_function->constraints.count == 1);
+    const uint8_t *where_slot = n00bb_abi_object_row(&views[1],
+        N00B_ABI_TABLE_U32_STREAM, provider_function->constraints.first);
+    assert(where_slot);
+    n00b_abi_constraint_v1 *where_constraint = (void *)
+        n00bb_abi_object_row(&views[1], N00B_ABI_TABLE_CONSTRAINT,
+            core_le_load_u32(where_slot));
+    assert(where_constraint);
+    uint32_t original_target = where_constraint->target_type_index;
+    const n00bb_abi_directory_entry_t *provider_types =
+        n00bb_abi_object_table(&views[1], N00B_ABI_TABLE_TYPE);
+    uint32_t replacement_target = 0;
+    for (uint32_t i = 1; i < provider_types->record_count; i++) {
+        const n00b_abi_type_v1 *candidate = n00bb_abi_object_row(&views[1],
+            N00B_ABI_TABLE_TYPE, i);
+        if (candidate && candidate->kind == N00B_ABI_TYPE_PRIMITIVE
+            && i != original_target) {
+            replacement_target = i;
+            break;
+        }
+    }
+    assert(replacement_target);
+    where_constraint->target_type_index = replacement_target;
+    assert(!n00bb_abi_index_plan_build(&selected));
+    where_constraint->target_type_index = original_target;
     selected.count = 1;
     assert(!n00bb_abi_index_plan_build(&selected));
     selected.count = 2;

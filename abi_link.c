@@ -1258,6 +1258,70 @@ compatible_type_constraints(const abi_link_key_t *first,
 }
 
 static bool
+declared_function_constraints_valid(
+    const n00bb_abi_selected_objects_t *selected)
+{
+    for (size_t input = 0; input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00bb_abi_directory_entry_t *functions =
+            n00bb_abi_object_table(view, N00B_ABI_TABLE_FUNCTION);
+        const n00bb_abi_directory_entry_t *types =
+            n00bb_abi_object_table(view, N00B_ABI_TABLE_TYPE);
+        if (!functions) continue;
+        if (!types) return false;
+        abi_link_key_t context = {
+            .selected = selected, .view = view, .input_index = input,
+        };
+        for (uint32_t i = 1; i < functions->record_count; i++) {
+            const n00b_abi_function_v1 *function = n00bb_abi_object_row(
+                view, N00B_ABI_TABLE_FUNCTION, i);
+            if (!function || !function->constraints.count) continue;
+            const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_SYMBOL, function->symbol_index);
+            if (!symbol || symbol->kind != N00B_ABI_SYMBOL_FUNCTION
+                || symbol->module_index != function->module_index
+                || !symbol->declaration_location_index
+                || !valid_index_range(view, function->constraints))
+                return false;
+            for (uint32_t j = 0; j < function->constraints.count; j++) {
+                const n00b_abi_constraint_v1 *declared = indexed_range_row(
+                    view, function->constraints, j,
+                    N00B_ABI_TABLE_CONSTRAINT);
+                if (!declared) return false;
+                bool found = false;
+                for (uint32_t k = 1; k < types->record_count; k++) {
+                    const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
+                        N00B_ABI_TABLE_TYPE, k);
+                    if (!type || type->kind != N00B_ABI_TYPE_VARIABLE
+                        || type->typevar_import_requirement_index
+                        || type->typevar_ordinal != declared->variable_ordinal)
+                        continue;
+                    const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(
+                        view, N00B_ABI_TABLE_SCOPE,
+                        type->typevar_owner_scope_index);
+                    if (!scope || scope->module_index != function->module_index
+                        || scope->parent_scope_index != function->scope_index
+                        || scope->source_location_index
+                            != symbol->declaration_location_index)
+                        continue;
+                    if (!valid_index_range(view, type->constraints))
+                        return false;
+                    for (uint32_t n = 0; n < type->constraints.count; n++) {
+                        const n00b_abi_constraint_v1 *inferred =
+                            indexed_range_row(view, type->constraints, n,
+                                N00B_ABI_TABLE_CONSTRAINT);
+                        if (compatible_constraint_rows(&context, declared,
+                                &context, inferred)) found = true;
+                    }
+                }
+                if (!found) return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool
 compatible_type_identity(const abi_link_key_t *first,
                          const abi_link_key_t *candidate)
 {
@@ -1359,6 +1423,7 @@ n00bb_abi_index_plan_t *
 n00bb_abi_index_plan_build(const n00bb_abi_selected_objects_t *selected)
 {
     if (!selected || !selected->views || !selected->count) return nullptr;
+    if (!declared_function_constraints_valid(selected)) return nullptr;
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);
