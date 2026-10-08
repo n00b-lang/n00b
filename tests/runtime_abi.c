@@ -103,6 +103,8 @@ main(void)
     image.functions[2].module_index = 1;
     image.functions[2].scope_index = 1;
     image.modules[1].package_index = 1;
+    memcpy(image.modules[1].full_path.short_value.bytes, "p.m", 3);
+    image.modules[1].full_path.short_value.selector = 3;
     image.modules[1].runtime_config_index = 1;
     image.modules[1].source_file_index = 1;
     image.modules[1].static_storage = (n00b_abi_range_v1){5, 1};
@@ -314,6 +316,19 @@ main(void)
     assert(n00b_abi_v1_find_typehash(snapshot, 13, &result) == 1
         && result == 3);
     assert(n00b_abi_v1_find_typehash(snapshot, 99, &result) == 0);
+    n00b_abi_string_v1 module_path = {0};
+    memcpy(module_path.short_value.bytes, "p.m", 3);
+    module_path.short_value.selector = 3;
+    assert(n00b_abi_v1_find_module(snapshot, module_path, &result) == 1
+        && result == 1);
+    module_path.short_value.bytes[2] = 'x';
+    result = 42;
+    assert(n00b_abi_v1_find_module(snapshot, module_path, &result) == 0
+        && result == 42);
+    module_path.words[1] = UINT64_C(3) << N00B_ABI_STRING_TAG_SHIFT;
+    assert(n00b_abi_v1_find_module(snapshot, module_path, &result) == -1);
+    assert(n00b_abi_v1_find_module(snapshot, (n00b_abi_string_v1){0},
+        nullptr) == -1);
     assert(n00b_abi_v1_type_specializes(snapshot, 4, 2) == 1);
     assert(n00b_abi_v1_type_specializes(snapshot, 4, 4) == 0);
     assert(n00b_abi_v1_type_specializes(snapshot, 2, 3) == 0);

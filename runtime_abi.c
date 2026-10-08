@@ -789,6 +789,41 @@ n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 int32_t
+n00b_abi_v1_find_module(const n00b_abi_snapshot_v1 *snapshot,
+                        n00b_abi_string_v1 full_path,
+                        uint32_t *module_index)
+{
+    if (!snapshot || !module_index) return -1;
+    const uint8_t *wanted;
+    uint64_t wanted_bytes;
+    if (n00b_abi_v1_string_bytes(snapshot, &full_path, &wanted,
+                                  &wanted_bytes) != 1) return -1;
+    uint32_t found = 0;
+    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_MODULE);
+    for (uint32_t i = 1; i < count; i++) {
+        const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot, i);
+        const uint8_t *path;
+        uint64_t path_bytes;
+        if (!module || n00b_abi_v1_string_bytes(snapshot,
+                &module->full_path, &path, &path_bytes) != 1) return -1;
+        if (path_bytes != wanted_bytes) continue;
+        bool equal = true;
+        for (uint64_t byte = 0; byte < path_bytes; byte++) {
+            if (path[byte] != wanted[byte]) {
+                equal = false;
+                break;
+            }
+        }
+        if (!equal) continue;
+        if (found) return -1;
+        found = i;
+    }
+    if (!found) return 0;
+    *module_index = found;
+    return 1;
+}
+
+int32_t
 n00b_abi_v1_type_specializes(const n00b_abi_snapshot_v1 *snapshot,
                              uint32_t type_index,
                              uint32_t general_type_index)
