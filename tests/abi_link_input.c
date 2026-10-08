@@ -2170,6 +2170,78 @@ test_shared_call_signature_identity(void)
 }
 
 static void
+test_call_signature_parameter_roles(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[2];
+        n00b_abi_call_signature_v1 signatures[2];
+        n00b_abi_parameter_v1 parameters[4];
+        uint32_t indexes[3];
+    } fixture_t;
+    fixture_t metadata = {0};
+    metadata.types[0].kind = N00B_ABI_TYPE_NIL;
+    metadata.types[0].typehash = 1;
+    metadata.types[1].kind = N00B_ABI_TYPE_FUNCTION;
+    metadata.types[1].typehash = 2;
+    metadata.types[1].call_signature_index = 1;
+    metadata.signatures[1] = (n00b_abi_call_signature_v1){
+        .type_index = 1,
+        .positional_parameters = {1, 1},
+        .rest_parameter_index = 2,
+        .keyword_parameters = {2, 1},
+    };
+    metadata.parameters[2].flags = N00B_ABI_PARAMETER_FLAG_VARIADIC;
+    metadata.parameters[2].declaration_ordinal = 1;
+    metadata.parameters[3].declaration_ordinal = 2;
+    metadata.parameters[3].name.short_value.bytes[0] = 'k';
+    metadata.parameters[3].name.short_value.selector = 1;
+    metadata.indexes[1] = 1;
+    metadata.indexes[2] = 3;
+    n00bb_abi_directory_entry_t directory[] = {
+        {.kind = N00B_ABI_TABLE_TYPE,
+         .record_bytes = sizeof(metadata.types[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, types)},
+        {.kind = N00B_ABI_TABLE_CALL_SIGNATURE,
+         .record_bytes = sizeof(metadata.signatures[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, signatures)},
+        {.kind = N00B_ABI_TABLE_PARAMETER,
+         .record_bytes = sizeof(metadata.parameters[0]), .record_count = 4,
+         .file_offset = offsetof(fixture_t, parameters)},
+        {.kind = N00B_ABI_TABLE_U32_STREAM,
+         .record_bytes = sizeof(metadata.indexes[0]), .record_count = 3,
+         .file_offset = offsetof(fixture_t, indexes)},
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {.bytes = (const uint8_t *)&metadata,
+                     .size = sizeof(metadata)},
+        .directory = directory,
+        .directory_count = sizeof(directory) / sizeof(*directory),
+    };
+    n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    uint32_t values[3] = {0}, kinds[3] = {0};
+    n00bb_abi_u32_stream_build_t stream = {
+        .values = values, .kinds = kinds, .count = 3,
+    };
+    n00b_abi_call_signature_v1 result;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_CALL_SIGNATURE, 1, &result, sizeof(result), &stream));
+    metadata.parameters[3].declaration_ordinal = 1;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_CALL_SIGNATURE, 1, &result, sizeof(result), &stream));
+    metadata.parameters[3].declaration_ordinal = 2;
+    metadata.parameters[1].flags = N00B_ABI_PARAMETER_FLAG_VARIADIC;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_CALL_SIGNATURE, 1, &result, sizeof(result), &stream));
+    metadata.parameters[1].flags = 0;
+    metadata.parameters[3].keyword_block_bit_offset = 8;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_CALL_SIGNATURE, 1, &result, sizeof(result), &stream));
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_type_backlinks_remap(void)
 {
     typedef struct {
@@ -3413,6 +3485,7 @@ main(int argc, char **argv)
     test_tls_relocation_ownership_remap();
     test_shared_trace_identity();
     test_shared_call_signature_identity();
+    test_call_signature_parameter_roles();
     test_type_backlinks_remap();
     test_source_location_values();
     test_shape_rows();

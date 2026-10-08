@@ -1,5 +1,6 @@
 #include "abi_link.h"
 #include "abi_member_facts.h"
+#include "abi_parameter_contract.h"
 #include "abi_shape.h"
 #include "abi_value_schema.h"
 #include "abi_type_variable.h"
@@ -1913,12 +1914,61 @@ object_shape_extent(const void *context, n00b_abi_range_v1 extents,
 }
 
 static bool
+object_parameter_index_at(const void *context, n00b_abi_range_v1 range,
+                          uint32_t ordinal, uint32_t *out)
+{
+    const n00bb_abi_object_view_t *view = context;
+    if (ordinal >= range.count || range.first > UINT32_MAX - ordinal)
+        return false;
+    const uint8_t *slot = n00bb_abi_object_row(view,
+        N00B_ABI_TABLE_U32_STREAM, range.first + ordinal);
+    if (!slot) return false;
+    *out = core_le_load_u32(slot);
+    return true;
+}
+
+static const n00b_abi_parameter_v1 *
+object_parameter_at(const void *context, uint32_t index)
+{
+    return n00bb_abi_object_row(context, N00B_ABI_TABLE_PARAMETER, index);
+}
+
+static bool
+object_parameter_name_length(const void *context,
+                             const n00b_abi_string_v1 *name,
+                             uint64_t *length)
+{
+    n00bb_abi_string_view_t value;
+    if (!n00bb_abi_object_string(context, name, &value)) return false;
+    *length = value.length;
+    return true;
+}
+
+static n00bb_abi_parameter_reader_t
+object_parameter_reader(const n00bb_abi_object_view_t *view)
+{
+    return (n00bb_abi_parameter_reader_t){
+        .context = view,
+        .index_at = object_parameter_index_at,
+        .parameter_at = object_parameter_at,
+        .name_length = object_parameter_name_length,
+    };
+}
+
+static bool
 row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
                 uint32_t local_index, const void *row)
 {
     if (!local_index) return true;
     if (kind == N00B_ABI_TABLE_SHAPE)
         return n00bb_abi_shape_valid(row, object_shape_extent, view);
+    if (kind == N00B_ABI_TABLE_CALL_SHAPE) {
+        const n00b_abi_call_shape_v1 *shape = row;
+        n00bb_abi_parameter_reader_t reader = object_parameter_reader(view);
+        return n00bb_abi_parameter_contract_valid(&reader,
+            shape->positional_parameters, shape->rest_parameter_index,
+            shape->keyword_parameters, false);
+    }
     if (kind == N00B_ABI_TABLE_MODULE) {
         const n00b_abi_module_v1 *module = row;
         if (module->comptime_initializer
@@ -2016,10 +2066,17 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
                 : ((const n00b_abi_call_signature_v1 *)row)->type_index;
         const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_TYPE, parent);
-        return type && (kind == N00B_ABI_TABLE_LAYOUT
+        bool owner_valid = type && (kind == N00B_ABI_TABLE_LAYOUT
             ? type->layout_index : kind == N00B_ABI_TABLE_TRACE
                 ? type->tracing_index : type->call_signature_index)
             == local_index;
+        if (!owner_valid || kind != N00B_ABI_TABLE_CALL_SIGNATURE)
+            return owner_valid;
+        const n00b_abi_call_signature_v1 *signature = row;
+        n00bb_abi_parameter_reader_t reader = object_parameter_reader(view);
+        return n00bb_abi_parameter_contract_valid(&reader,
+            signature->positional_parameters, signature->rest_parameter_index,
+            signature->keyword_parameters, true);
     }
     if (kind == N00B_ABI_TABLE_CODE_RANGE
         || kind == N00B_ABI_TABLE_FRAME_LAYOUT) {

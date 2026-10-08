@@ -763,6 +763,23 @@ main(int argc, char **argv)
             && error.table_kind == N00B_ABI_TABLE_CALL_SHAPE
             && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
         image.parameters[1].declaration_ordinal = 0;
+        image.signatures[1].positional_parameters =
+            (n00b_abi_range_v1){16, 1};
+        image.signatures[1].rest_parameter_index = 2;
+        image.signatures[1].keyword_parameters =
+            (n00b_abi_range_v1){17, 1};
+        image.parameters[3].declaration_ordinal = 1;
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_CALL_SIGNATURE
+            && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+        image.parameters[3].declaration_ordinal = 2;
+        image.parameters[1].flags = N00B_ABI_PARAMETER_FLAG_VARIADIC;
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_CALL_SIGNATURE
+            && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+        image.parameters[1].flags = 0;
     }
     if (function_parameters) {
         image.header.directory_count = 23;

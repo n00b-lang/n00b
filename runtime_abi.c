@@ -7,6 +7,7 @@
 
 #include "abi_directory.h"
 #include "abi_member_facts.h"
+#include "abi_parameter_contract.h"
 #include "abi_ref_schema.h"
 #include "abi_shape.h"
 #include "abi_string.h"
@@ -1554,63 +1555,71 @@ metadata_functions_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+runtime_parameter_index_at(const void *context, n00b_abi_range_v1 range,
+                           uint32_t ordinal, uint32_t *out)
+{
+    return n00b_abi_v1_index_at(context, range, ordinal, out) == 1;
+}
+
+static const n00b_abi_parameter_v1 *
+runtime_parameter_at(const void *context, uint32_t index)
+{
+    return n00b_abi_v1_record(context, N00B_ABI_TABLE_PARAMETER, index,
+                              nullptr);
+}
+
+static bool
+runtime_parameter_name_length(const void *context,
+                              const n00b_abi_string_v1 *name,
+                              uint64_t *length)
+{
+    const uint8_t *bytes = nullptr;
+    return n00b_abi_v1_string_bytes(context, name, &bytes, length) == 1;
+}
+
+static n00bb_abi_parameter_reader_t
+runtime_parameter_reader(const n00b_abi_snapshot_v1 *snapshot)
+{
+    return (n00bb_abi_parameter_reader_t){
+        .context = snapshot,
+        .index_at = runtime_parameter_index_at,
+        .parameter_at = runtime_parameter_at,
+        .name_length = runtime_parameter_name_length,
+    };
+}
+
+static bool
+metadata_call_signatures_valid(const n00b_abi_snapshot_v1 *snapshot,
+                               n00b_abi_error_v1 *error)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_CALL_SIGNATURE);
+    n00bb_abi_parameter_reader_t reader = runtime_parameter_reader(snapshot);
+    for (uint32_t i = 1; i < count; i++) {
+        const n00b_abi_call_signature_v1 *signature = n00b_abi_v1_record(
+            snapshot, N00B_ABI_TABLE_CALL_SIGNATURE, i, nullptr);
+        if (!signature || !n00bb_abi_parameter_contract_valid(&reader,
+                signature->positional_parameters,
+                signature->rest_parameter_index,
+                signature->keyword_parameters, true))
+            return invalid_record(error, N00B_ABI_TABLE_CALL_SIGNATURE,
+                                  i, 0);
+    }
+    return true;
+}
+
+static bool
 metadata_call_shape_parameters_valid(const n00b_abi_snapshot_v1 *snapshot,
                                      const n00b_abi_call_shape_v1 *shape,
                                      uint32_t shape_index,
                                      n00b_abi_error_v1 *error)
 {
-    for (uint32_t i = 0; i < shape->positional_parameters.count; i++) {
-        uint32_t parameter_index = 0;
-        if (n00b_abi_v1_index_at(snapshot, shape->positional_parameters,
-                i, &parameter_index) != 1)
-            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
-                                  shape_index, 0);
-        const n00b_abi_parameter_v1 *parameter = n00b_abi_v1_record(
-            snapshot, N00B_ABI_TABLE_PARAMETER, parameter_index, nullptr);
-        const uint8_t *name = nullptr;
-        uint64_t name_bytes = 0;
-        if (!parameter || parameter->flags
-            || parameter->declaration_ordinal != i
-            || parameter->keyword_block_bit_offset
-            || n00b_abi_v1_string_bytes(snapshot, &parameter->name,
-                &name, &name_bytes) != 1 || name_bytes)
-            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
-                                  shape_index, 0);
-    }
-    if (shape->rest_parameter_index) {
-        const n00b_abi_parameter_v1 *rest = n00b_abi_v1_record(snapshot,
-            N00B_ABI_TABLE_PARAMETER, shape->rest_parameter_index, nullptr);
-        const uint8_t *name = nullptr;
-        uint64_t name_bytes = 0;
-        if (!rest || rest->flags != N00B_ABI_PARAMETER_FLAG_VARIADIC
-            || rest->declaration_ordinal != shape->positional_parameters.count
-            || rest->keyword_block_bit_offset
-            || n00b_abi_v1_string_bytes(snapshot, &rest->name,
-                &name, &name_bytes) != 1 || name_bytes)
-            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
-                                  shape_index, 0);
-    }
-    for (uint32_t i = 0; i < shape->keyword_parameters.count; i++) {
-        uint64_t ordinal = (uint64_t)shape->positional_parameters.count
-            + !!shape->rest_parameter_index + i;
-        uint32_t parameter_index = 0;
-        if (ordinal > UINT32_MAX
-            || n00b_abi_v1_index_at(snapshot, shape->keyword_parameters,
-                i, &parameter_index) != 1)
-            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
-                                  shape_index, 0);
-        const n00b_abi_parameter_v1 *parameter = n00b_abi_v1_record(
-            snapshot, N00B_ABI_TABLE_PARAMETER, parameter_index, nullptr);
-        const uint8_t *name = nullptr;
-        uint64_t name_bytes = 0;
-        if (!parameter || parameter->flags
-            || parameter->declaration_ordinal != ordinal
-            || parameter->keyword_block_bit_offset
-            || n00b_abi_v1_string_bytes(snapshot, &parameter->name,
-                &name, &name_bytes) != 1 || !name_bytes)
-            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
-                                  shape_index, 0);
-    }
+    n00bb_abi_parameter_reader_t reader = runtime_parameter_reader(snapshot);
+    if (!n00bb_abi_parameter_contract_valid(&reader,
+            shape->positional_parameters, shape->rest_parameter_index,
+            shape->keyword_parameters, false))
+        return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
+                              shape_index, 0);
     return true;
 }
 
@@ -2243,6 +2252,7 @@ snapshot_contents_valid(n00b_abi_snapshot_v1 *candidate,
         && metadata_code_ranges_valid(candidate, error)
         && metadata_module_initializers_valid(candidate, error)
         && metadata_functions_valid(candidate, error)
+        && metadata_call_signatures_valid(candidate, error)
         && metadata_call_shapes_valid(candidate, error)
         && metadata_frame_layouts_valid(candidate, error)
         && metadata_storage_valid(candidate, error)
