@@ -15,6 +15,12 @@ typedef struct {
     uint64_t target_offset;
 } n00bb_abi_storage_relocation_t;
 
+typedef struct {
+    uint32_t source_kind;
+    uint64_t byte_offset;
+    uint32_t type_index;
+} n00bb_abi_storage_index_patch_t;
+
 enum {
     N00BB_ABI_RELOC_AGGREGATE = N00B_ABI_STORAGE_TLS + 1,
     N00BB_ABI_RELOC_STRING_POOL,
@@ -41,6 +47,8 @@ typedef struct {
     size_t extent_count;
     n00bb_abi_storage_relocation_t *relocations;
     size_t relocation_count;
+    n00bb_abi_storage_index_patch_t *index_patches;
+    size_t index_patch_count;
 } n00bb_abi_storage_rows_t;
 
 bool n00bb_abi_storage_rows_build(

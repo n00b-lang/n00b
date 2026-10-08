@@ -61,6 +61,28 @@ add_annotations(n00bb_abi_type_index_t *index, ir_annots_t *annotations)
 }
 
 static bool
+add_initializer_types(n00bb_abi_type_index_t *index,
+                      const ir_global_init_value_t *value, size_t depth)
+{
+    if (!value) return true;
+    if (depth > 64) return false;
+    if (value->kind == IR_GLOBAL_INIT_TYPE)
+        return value->descriptor_type
+            && add_type(index, value->descriptor_type, nullptr);
+    if (value->kind != IR_GLOBAL_INIT_SEQUENCE
+        && value->kind != IR_GLOBAL_INIT_TUPLE
+        && value->kind != IR_GLOBAL_INIT_RECORD
+        && value->kind != IR_GLOBAL_INIT_VARIANT
+        && value->kind != IR_GLOBAL_INIT_SET
+        && value->kind != IR_GLOBAL_INIT_DICTIONARY) return true;
+    if (value->aggregate.count && !value->aggregate.items) return false;
+    for (size_t i = 0; i < value->aggregate.count; i++)
+        if (!add_initializer_types(index, &value->aggregate.items[i],
+                                   depth + 1)) return false;
+    return true;
+}
+
+static bool
 add_constraint(n00bb_abi_type_index_t *index, th_constraint constraint)
 {
     switch (constraint.kind) {
@@ -310,6 +332,7 @@ n00bb_abi_type_index_collect_ir(n00bb_abi_type_index_t *index,
     for (size_t i = 0; i < ir_global_count(module); i++) {
         ir_global_t *global = ir_global_at(module, i);
         if (!global || !add_optional(index, global->type)
+            || !add_initializer_types(index, global->static_initializer, 0)
             || !add_annotations(index, &global->annots)) return false;
     }
     for (size_t i = 0; i < ir_func_count(module); i++) {

@@ -93,13 +93,25 @@ main(void)
         .kind = IR_ANNOT_TYPE,
         .t = annotation_only,
     }));
+    th_type *descriptor_only = th_name(types, "example.DescriptorOnly");
+    ir_global_t *selected_type = ir_global_add(runtime, "selected_type",
+                                                th_name(types, "typespec"));
+    ir_global_init_value_t descriptor_value = {
+        .kind = IR_GLOBAL_INIT_TYPE,
+        .descriptor_type = descriptor_only,
+    };
+    assert(selected_type && ir_global_set_static_initializer(runtime,
+        selected_type, &descriptor_value));
     assert(n00bb_abi_type_index_collect_ir(index, runtime));
     uint32_t contract_var_index = UINT32_MAX;
     uint32_t annotation_index = UINT32_MAX;
+    uint32_t descriptor_index = UINT32_MAX;
     assert(n00bb_abi_type_index_find(index, contract_var,
                                      &contract_var_index));
     assert(n00bb_abi_type_index_find(index, annotation_only,
                                      &annotation_index));
+    assert(n00bb_abi_type_index_find(index, descriptor_only,
+                                     &descriptor_index));
     assert(contract_var_index != integer_index);
     size_t count = n00bb_abi_type_index_count(index);
     assert(n00bb_abi_type_index_collect_ir(index, comptime));

@@ -4,12 +4,16 @@
 
 #include "abi_container.h"
 #include "abi_emit.h"
+#include "abi_layout.h"
+#include "abi_storage.h"
 #include "abi_string.h"
 #include "n00b-abi-v1.h"
 #include "ir/ir.h"
 #include "ir/typelang.h"
 #include "lib/alloc.h"
+#include "lib/byteorder.h"
 #include "lib/hash.h"
+#include "lib/link_unit.h"
 #include "lib/module.h"
 #include "lib/object_section.h"
 
@@ -30,6 +34,118 @@ contains_bytes(const uint8_t *haystack, size_t haystack_size,
     for (size_t i = 0; i <= haystack_size - needle_size; i++)
         if (!memcmp(haystack + i, needle, needle_size)) return true;
     return false;
+}
+
+static core_link_declaration_t *
+selected_type_declaration(void *context, parse_sym_entry_t *symbol)
+{
+    (void)symbol;
+    return context;
+}
+
+static void
+check_type_descriptor_storage(void)
+{
+    core_module_spec_t spec = {0};
+    core_source_file_t source = {0};
+    core_translation_unit_t unit = {0};
+    assert(core_module_spec_init(&spec, CORE_STRING_STATIC("example"))
+        && core_source_file_init(&source, CORE_STRING_STATIC("example.n00b"),
+                                 "", 0)
+        && core_translation_unit_init(&unit, &spec, &source));
+    core_module_spec_release(&spec);
+    core_link_unit_t *link = core_link_unit_new();
+    assert(link && core_link_unit_add_root(link, &unit)
+        && core_link_unit_collect(link));
+    ir_ctx_t *context = ir_ctx_new();
+    const ir_profile_t profile = {.name = "n00b"};
+    ir_module_t *runtime = ir_module_new(context, "example", &profile,
+                                        "x86_64-linux");
+    assert(runtime);
+    th_ctx *types = ir_ctx_types(context);
+    th_type *typespec = th_name(types, "typespec");
+    th_type *referred = th_bitint(types, 32, true);
+    ir_global_t *global = ir_global_add(runtime, "selected_type", typespec);
+    ir_global_init_value_t value = {
+        .kind = IR_GLOBAL_INIT_TYPE, .descriptor_type = referred,
+    };
+    assert(global && ir_global_set_static_initializer(runtime, global,
+                                                       &value)
+        && ir_global_set_storage_duration(context, global,
+                                         IR_STORAGE_DURATION_MODULE));
+    core_link_declaration_t *declaration = nullptr;
+    assert(core_link_unit_define(link, &unit,
+        CORE_STRING_STATIC("selected_type"), global,
+        CORE_LINK_PAYLOAD_BORROWED, nullptr, &declaration)
+        && core_link_declaration_set_binding(link, declaration,
+            CORE_STRING_STATIC("n00bb.ir.global"), 0, global));
+    parse_symtab_t *symbols = parse_symtab_new();
+    assert(symbols);
+    parse_symtab_push_scope(symbols, CORE_STRING_STATIC("value"),
+                            CORE_STRING_STATIC("module"));
+    parse_scope_t *module_scope = parse_symtab_current_scope(symbols,
+        CORE_STRING_STATIC("value"));
+    assert(module_scope);
+    module_scope->scope_tag = CORE_STRING_STATIC("module");
+    parse_tree_t node = {0};
+    parse_sym_entry_t *symbol = parse_symtab_add(symbols,
+        CORE_STRING_STATIC("value"), CORE_STRING_STATIC("selected_type"),
+        PARSE_SYM_VARIABLE, &node);
+    assert(symbol);
+    symbol->type = typespec;
+    n00bb_abi_type_index_t *index = n00bb_abi_type_index_new(runtime);
+    assert(index && n00bb_abi_type_index_collect_symbols(index, symbols)
+        && n00bb_abi_type_index_collect_ir(index, runtime));
+    uint32_t referred_index = 0;
+    assert(n00bb_abi_type_index_find(index, referred, &referred_index)
+        && referred_index != 0);
+    core_target_desc_t target = {0};
+    assert(core_target_profile("x86_64-linux", 0, &target));
+    for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++) {
+        bool handled = false;
+        assert(n00bb_abi_publish_direct_layout(runtime,
+            n00bb_abi_type_index_at(index, (uint32_t)i), &target, &handled));
+    }
+    n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
+    n00bb_abi_type_identity_rows_t types_rows = {0};
+    assert(names && n00bb_abi_type_identity_rows_build(index, nullptr,
+        runtime, symbols, nullptr, nullptr, names, &types_rows));
+    n00bb_abi_decl_index_t *declarations = n00bb_abi_decl_index_new(symbols);
+    assert(declarations && n00bb_abi_decl_symbol_count(declarations) == 2);
+    assert(n00bb_abi_decl_symbol_at(declarations, 1) == symbol);
+    assert(core_link_declaration_binding(declaration,
+        CORE_STRING_STATIC("n00bb.ir.global")) == global);
+    assert(ir_global_storage_duration(global) == IR_STORAGE_DURATION_MODULE);
+    assert(ir_global_can_read(global, IR_PHASE_RUNTIME));
+    uint32_t type_index = 0;
+    assert(n00bb_abi_type_index_find(index, typespec, &type_index)
+        && type_index < types_rows.count
+        && types_rows.rows[type_index].size_bits == 32
+        && types_rows.rows[type_index].alignment_bytes == 4);
+    n00bb_abi_storage_rows_t rows = {0};
+    assert(n00bb_abi_storage_rows_build(index, declarations, &types_rows,
+        runtime, names, 0, selected_type_declaration, declaration, &rows));
+    assert(rows.row_count == 2 && rows.index_patch_count == 1);
+    const n00bb_abi_storage_index_patch_t *patch = &rows.index_patches[0];
+    const n00b_abi_storage_v1 *storage = &rows.rows[1];
+    assert(patch->type_index == referred_index
+        && patch->source_kind == storage->segment_kind
+        && patch->byte_offset == storage->byte_offset
+        && storage->byte_length == sizeof(uint32_t));
+    const core_buffer_t *buffer = storage->segment_kind
+        == N00B_ABI_STORAGE_READ_ONLY ? &rows.read_only : &rows.writable;
+    assert(buffer->byte_len >= patch->byte_offset + sizeof(uint32_t)
+        && core_le_load_u32((const uint8_t *)buffer->data
+            + patch->byte_offset) == referred_index);
+    n00bb_abi_storage_rows_release(&rows);
+    n00bb_abi_decl_index_free(declarations);
+    n00bb_abi_type_identity_rows_release(&types_rows);
+    n00bb_abi_name_pool_free(names);
+    n00bb_abi_type_index_free(index);
+    parse_symtab_free(symbols);
+    ir_ctx_free(context);
+    core_link_unit_free(link);
+    core_translation_unit_release(&unit);
 }
 
 static void
@@ -223,6 +339,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
 int
 main(void)
 {
+    check_type_descriptor_storage();
     check_empty_unit("x86_64-linux", N00BB_ABI_TARGET_X86_64_LINUX,
         nullptr, ".data.rel.ro.n00b_meta", nullptr,
         ".rodata.n00b_strings");

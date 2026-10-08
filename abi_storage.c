@@ -14,6 +14,7 @@
 core_list_decl(n00b_abi_storage_v1);
 core_list_decl(uint32_t);
 core_list_decl(n00bb_abi_storage_relocation_t);
+core_list_decl(n00bb_abi_storage_index_patch_t);
 
 static bool
 append_padding(core_buffer_t *buffer, size_t alignment)
@@ -31,9 +32,11 @@ append_padding(core_buffer_t *buffer, size_t alignment)
 }
 
 static bool
-encode_scalar(ir_module_t *module, th_type *type,
+encode_scalar(ir_module_t *module, n00bb_abi_type_index_t *index,
+              th_type *type,
               const ir_global_init_value_t *value,
-              uint64_t size_bits, uint8_t bytes[16])
+              uint64_t size_bits, uint8_t bytes[16],
+              uint32_t *descriptor_index)
 {
     const char *name = nullptr;
     size_t name_length = 0, argument_count = 0;
@@ -42,8 +45,19 @@ encode_scalar(ir_module_t *module, th_type *type,
                          &argument_count)
         && name_length == sizeof("typespec") - 1
         && !memcmp(name, "typespec", name_length)
-        && !argument_count)
-        return size_bits == 32 && !value;
+        && !argument_count) {
+        if (size_bits != 32) return false;
+        if (!value) return true;
+        uint32_t local_index = 0;
+        if (value->kind != IR_GLOBAL_INIT_TYPE || !index
+            || !value->descriptor_type
+            || !n00bb_abi_type_index_find(index,
+                value->descriptor_type, &local_index)
+            || local_index > INT32_MAX) return false;
+        core_le_store_u32(bytes, local_index);
+        if (descriptor_index) *descriptor_index = local_index;
+        return true;
+    }
     ir_machine_t machine = ir_machine_of(module, type);
     if (!size_bits || size_bits > 128 || size_bits % 8
         || !machine.width || machine.width > size_bits
@@ -151,7 +165,24 @@ typedef struct {
     n00bb_abi_name_pool_t *pool;
     n00bb_abi_storage_rows_t *built;
     core_list_t(n00bb_abi_storage_relocation_t) *relocations;
+    core_list_t(n00bb_abi_storage_index_patch_t) *index_patches;
 } array_writer_t;
+
+static bool
+record_type_index(array_writer_t *writer, uint32_t source_kind,
+                  uint64_t byte_offset, uint32_t type_index)
+{
+    if (!writer->index_patches || byte_offset % sizeof(uint32_t)
+        || type_index > INT32_MAX
+        || writer->index_patches->len >= UINT32_MAX) return false;
+    core_list_push(*writer->index_patches,
+        ((n00bb_abi_storage_index_patch_t){
+            .source_kind = source_kind,
+            .byte_offset = byte_offset,
+            .type_index = type_index,
+        }));
+    return true;
+}
 
 static bool
 scan_array_shape(const ir_global_init_value_t *value, th_type *type,
@@ -261,6 +292,7 @@ encode_aggregate_member(array_writer_t *writer,
     memset(child, 0, child_bytes ? child_bytes : 1);
     uint64_t child_source = source_bit_offset + member->bit_offset;
     size_t pool_offset = 0;
+    uint32_t descriptor_index = UINT32_MAX;
     bool valid;
     if (child_type->kind == N00B_ABI_TYPE_RECORD
         || child_type->kind == N00B_ABI_TYPE_VARIANT
@@ -291,8 +323,12 @@ encode_aggregate_member(array_writer_t *writer,
     }
     else if (item->kind == IR_GLOBAL_INIT_NIL)
         valid = child_bits == 0;
-    else valid = encode_scalar(writer->runtime, member->type, item,
-        child_bits, child);
+    else valid = encode_scalar(writer->runtime, writer->index,
+        member->type, item, child_bits, child, &descriptor_index);
+    if (valid && descriptor_index != UINT32_MAX)
+        valid = child_source % 8 == 0
+            && record_type_index(writer, source_kind, child_source / 8,
+                                 descriptor_index);
     for (size_t r = 0; valid && r < member->n_occupied; r++) {
         ir_layout_bit_run_t run = member->occupied[r];
         if (run.offset < member->bit_offset
@@ -416,6 +452,7 @@ encode_array_items(array_writer_t *writer,
                                    : inline_bytes;
         if (aggregate) memset(bytes, 0, stride);
         size_t pool_offset = 0;
+        uint32_t descriptor_index = UINT32_MAX;
         bool string = row->kind == N00B_ABI_TYPE_STRING;
         bool valid = string ? (stride == 16
                 && encode_string(writer->pool, value, bytes, &pool_offset))
@@ -424,8 +461,8 @@ encode_array_items(array_writer_t *writer,
                 bytes, stride, 0)
             : row->kind == N00B_ABI_TYPE_NIL && !row->size_bits
                 ? value->kind == IR_GLOBAL_INIT_NIL
-            : encode_scalar(writer->runtime, type, value,
-                row->size_bits, bytes);
+            : encode_scalar(writer->runtime, writer->index, type, value,
+                row->size_bits, bytes, &descriptor_index);
         if (!valid) {
             if (aggregate) core_free(bytes);
             return false;
@@ -451,6 +488,10 @@ encode_array_items(array_writer_t *writer,
                     }));
         }
         if (aggregate) core_free(bytes);
+        if (descriptor_index != UINT32_MAX
+            && (packed || !record_type_index(writer,
+                N00BB_ABI_RELOC_AGGREGATE, at, descriptor_index)))
+            return false;
     }
     (*next)++;
     return true;
@@ -593,6 +634,7 @@ n00bb_abi_storage_rows_build(
     core_list_t(n00b_abi_storage_v1) rows = {0};
     core_list_t(uint32_t) statics = {0}, locals = {0};
     core_list_t(n00bb_abi_storage_relocation_t) relocations = {0};
+    core_list_t(n00bb_abi_storage_index_patch_t) index_patches = {0};
     n00bb_abi_storage_rows_t built = {0};
     built.shapes = core_alloc_array(n00b_abi_shape_v1, 1);
     built.shape_count = 1;
@@ -637,6 +679,7 @@ n00bb_abi_storage_rows_build(
         uint32_t alignment = type_row->alignment_bytes;
         uint64_t bits = type_row->size_bits;
         uint8_t bytes[16] = {0};
+        uint32_t descriptor_index = UINT32_MAX;
         size_t pool_offset = 0;
         bool is_string = type_row->kind == N00B_ABI_TYPE_STRING;
         bool is_array = type_row->kind == N00B_ABI_TYPE_ARRAY;
@@ -653,8 +696,8 @@ n00bb_abi_storage_rows_build(
                     || !encode_string(pool, initializer, bytes, &pool_offset))
                 : is_array ? (bits != 128 || alignment != 8)
                 : (is_record || is_variant || is_tuple) ? !initializer
-                    : !encode_scalar(runtime, global->type, initializer,
-                                     bits, bytes))) {
+                : !encode_scalar(runtime, index, global->type, initializer,
+                                 bits, bytes, &descriptor_index))) {
             valid = false;
             break;
         }
@@ -688,6 +731,7 @@ n00bb_abi_storage_rows_build(
         array_writer_t writer = {
             .index = index, .types = types, .runtime = runtime,
             .pool = pool, .built = &built, .relocations = &relocations,
+            .index_patches = &index_patches,
         };
         if (is_record || is_variant || is_tuple) {
             uint8_t *record = core_alloc_array(uint8_t,
@@ -706,6 +750,12 @@ n00bb_abi_storage_rows_build(
             && !encode_array(&writer, global->type, initializer,
                     global->shape, kind, row.byte_offset,
                     &row.instance_shape_index)) {
+            valid = false;
+            break;
+        }
+        if (descriptor_index != UINT32_MAX
+            && !record_type_index(&writer, kind, row.byte_offset,
+                                  descriptor_index)) {
             valid = false;
             break;
         }
@@ -756,11 +806,14 @@ n00bb_abi_storage_rows_build(
         built.row_count = rows.len;
         built.relocations = relocations.data;
         built.relocation_count = relocations.len;
+        built.index_patches = index_patches.data;
+        built.index_patch_count = index_patches.len;
         *out = built;
     }
     else {
         core_list_free(rows);
         core_list_free(relocations);
+        core_list_free(index_patches);
         n00bb_abi_storage_rows_release(&built);
     }
     core_list_free(statics);
@@ -775,6 +828,7 @@ n00bb_abi_storage_rows_release(n00bb_abi_storage_rows_t *rows)
     core_free(rows->rows);
     core_free(rows->stream_indexes);
     core_free(rows->relocations);
+    core_free(rows->index_patches);
     core_free(rows->shapes);
     core_free(rows->extents);
     core_buffer_release(&rows->read_only);

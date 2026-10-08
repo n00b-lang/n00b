@@ -1379,6 +1379,7 @@ n00bb_abi_emit_unit(
     core_list_t(core_object_emit_section_t) extra_sections = {0};
     uint32_t storage_input_indexes[4] = {0};
     uint32_t aggregate_input_index = 0;
+    n00b_abi_index_patch_v1 *index_patches = nullptr;
     core_object_emit_symbol_t string_symbol = {0};
     core_object_emit_symbol_t aggregate_symbol = {0};
     bool has_pool = n00bb_abi_name_pool_size(pool) != 0;
@@ -1444,6 +1445,28 @@ n00bb_abi_emit_unit(
             target, 1 + extra_sections.len, aggregate_input_index,
             &storage_rows.rows[tls_metadata.aggregate_storage_index]
                 .segment_index);
+    if (valid && storage_rows.index_patch_count) {
+        index_patches = core_alloc_array(n00b_abi_index_patch_v1,
+            storage_rows.index_patch_count + 1);
+        for (size_t i = 0; valid && i < storage_rows.index_patch_count; i++) {
+            const n00bb_abi_storage_index_patch_t *source =
+                &storage_rows.index_patches[i];
+            uint32_t input = source->source_kind == N00BB_ABI_RELOC_AGGREGATE
+                ? aggregate_input_index
+                : source->source_kind <= N00B_ABI_STORAGE_TLS
+                    ? storage_input_indexes[source->source_kind] : 0;
+            uint32_t native = 0;
+            valid = input && core_object_emit_native_section_index(target,
+                1 + extra_sections.len, input, &native);
+            if (valid) index_patches[i + 1] = (n00b_abi_index_patch_v1){
+                .target_section_index = native,
+                .referenced_table_kind = N00B_ABI_TABLE_TYPE,
+                .target_byte_offset = source->byte_offset,
+                .local_index = source->type_index,
+                .patch_kind = N00B_ABI_PATCH_INDEX,
+            };
+        }
+    }
     size_t parameter_count = signature_rows.parameter_count
         + constraint_rows.call_parameter_count;
     n00b_abi_parameter_v1 *parameters = nullptr;
@@ -1524,10 +1547,13 @@ n00bb_abi_emit_unit(
         {N00B_ABI_TABLE_NATIVE_BINDING, native_bindings.rows,
          native_bindings.count},
         {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
+        {N00B_ABI_TABLE_INDEX_PATCH, index_patches,
+         index_patches ? storage_rows.index_patch_count + 1 : 0},
     };
     n00bb_abi_packed_tables_t packed = {0};
     valid = valid && n00bb_abi_pack_tables(target, artifact_capabilities,
-        rows, sizeof(rows) / sizeof(*rows), &packed);
+        rows, sizeof(rows) / sizeof(*rows) - !index_patches, &packed);
+    core_free(index_patches);
     core_free(parameters);
     core_free(stream);
     if (!valid) {
