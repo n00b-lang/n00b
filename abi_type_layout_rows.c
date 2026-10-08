@@ -65,6 +65,10 @@ trace_need(trace_source_t *source, uint32_t type_index)
     trace_need_t cached = source->need[type_index];
     if (cached) return cached == TRACE_ACTIVE ? TRACE_INVALID : cached;
     const n00b_abi_type_v1 *type = &source->types->rows[type_index];
+    if (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE) {
+        source->need[type_index] = TRACE_UNKNOWN;
+        return TRACE_UNKNOWN;
+    }
     trace_need_t result = TRACE_NONE;
     switch (type->kind) {
     case N00B_ABI_TYPE_REFERENCE:
