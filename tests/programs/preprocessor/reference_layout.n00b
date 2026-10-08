@@ -1,0 +1,7 @@
+func addressable(value: Ref[int]) -> Ref[int] {
+    return value
+}
+
+func packed(value: Ref[bool]) -> Ref[bool] {
+    return value
+}

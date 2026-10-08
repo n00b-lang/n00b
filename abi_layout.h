@@ -18,6 +18,15 @@ typedef struct {
     uint32_t ordinal;
 } n00bb_abi_variant_arm_t;
 
+static inline bool
+n00bb_abi_layout_packable(const ir_final_layout_t *layout)
+{
+    return layout && !layout->n_members && !layout->has_discriminant
+        && layout->n_occupied == 1 && layout->occupied
+        && !layout->occupied[0].offset
+        && layout->occupied[0].width < layout->intrinsic_bits;
+}
+
 bool n00bb_abi_publish_direct_layout(ir_module_t *module, th_type *type,
                                      const core_target_desc_t *target,
                                      bool *handled);

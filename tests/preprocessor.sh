@@ -1414,6 +1414,9 @@ N00B_PATH="$interface_programs" "$compiler" compile \
 "$compiler" compile --output "$tmp/atomic_layout_abi.o" \
     "$program_dir/atomic_layout.n00b"
 "$abi_record_object_test" "$tmp/atomic_layout_abi.o" atomic
+"$compiler" compile --output "$tmp/reference_layout_abi.o" \
+    "$program_dir/reference_layout.n00b"
+"$abi_record_object_test" "$tmp/reference_layout_abi.o" reference-layout
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_generic_user.o" import_generic_user
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \

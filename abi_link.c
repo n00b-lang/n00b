@@ -1122,8 +1122,18 @@ compatible_type_identity(const abi_link_key_t *first,
 {
     const n00b_abi_type_v1 *a = first->row, *b = candidate->row;
     n00bb_abi_string_view_t a_name, b_name;
+    bool a_import = type_is_import_reference(a);
+    bool b_import = type_is_import_reference(b);
+    uint32_t a_flags = a->flags, b_flags = b->flags;
+    if (a_import || b_import) {
+        if ((a_import && (a_flags & N00B_ABI_TYPE_FLAG_PACKABLE))
+            || (b_import && (b_flags & N00B_ABI_TYPE_FLAG_PACKABLE)))
+            return false;
+        a_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
+        b_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
+    }
     return a->kind == b->kind
-        && a->typehash == b->typehash && a->flags == b->flags
+        && a->typehash == b->typehash && a_flags == b_flags
         && (!a->size_bits || !b->size_bits
             || a->size_bits == b->size_bits)
         && (!a->alignment_bytes || !b->alignment_bytes

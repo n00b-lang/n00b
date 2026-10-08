@@ -7,6 +7,7 @@
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
+#include "abi_layout.h"
 #include "enum_value.h"
 #include "flagset_value.h"
 #include "signature_typevars.h"
@@ -246,6 +247,12 @@ n00bb_abi_type_identity_rows_build(
         if (final) {
             row->size_bits = final->intrinsic_bits;
             row->alignment_bytes = final->alignment_bytes;
+            if (n00bb_abi_layout_packable(final)
+                && (row->kind == N00B_ABI_TYPE_PRIMITIVE
+                    || row->kind == N00B_ABI_TYPE_ENUM
+                    || row->kind == N00B_ABI_TYPE_FLAGSET
+                    || row->kind == N00B_ABI_TYPE_WRAPPER))
+                row->flags |= N00B_ABI_TYPE_FLAG_PACKABLE;
             if (row->kind == N00B_ABI_TYPE_PRIMITIVE
                 || row->kind == N00B_ABI_TYPE_ENUM
                 || row->kind == N00B_ABI_TYPE_FLAGSET

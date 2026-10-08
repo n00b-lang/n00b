@@ -108,6 +108,43 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         storage_bits = storage->width_bits;
         alignment_bytes = storage->alignment_bytes;
     }
+    else if (th_kind_of(type) == TH_INDIRECTION) {
+        th_type *referent = th_ind_referent(type);
+        if (!referent || target->pointer_bits != 64
+            || target->pointer_alignment_bytes != 8) return false;
+        if (!th_is_closed(ir_module_types(module), type)) return true;
+        const ir_final_layout_t *child = ir_layout_final(
+            module, referent, target->triple);
+        if (!child) {
+            ir_machine_t child_machine = ir_machine_of(module, referent);
+            if (child_machine.class == IR_CLASS_BOOL
+                || child_machine.class == IR_CLASS_SINT
+                || child_machine.class == IR_CLASS_UINT
+                || child_machine.class == IR_CLASS_FLOAT) {
+                bool child_handled = false;
+                if (!publish_direct_or_alias(module, referent, target,
+                        seen, &child_handled)) return false;
+                child = ir_layout_final(module, referent, target->triple);
+            }
+        }
+        if (!child) {
+            th_type *resolved = th_resolve(referent);
+            th_kind kind = th_kind_of(resolved);
+            th_type *definition = kind == TH_NAMED
+                ? ir_type_definition(module, resolved) : nullptr;
+            if (kind != TH_RECORD && kind != TH_FUNCTION
+                && (!definition || th_kind_of(definition) != TH_RECORD))
+                return true;
+        }
+        const char *child_name = nullptr;
+        th_named_info(th_resolve(referent), &child_name, nullptr,
+                      nullptr, nullptr);
+        bool packable = n00bb_abi_layout_packable(child)
+            && (!child_name || strcmp(child_name, "atomic"));
+        *handled = true;
+        storage_bits = semantic_bits = packable ? 128 : 64;
+        alignment_bytes = 8;
+    }
     else if (th_kind_of(type) == TH_SEQUENCE) {
         *handled = true;
         if (target->pointer_bits != 64

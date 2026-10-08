@@ -1982,6 +1982,55 @@ check_anonymous_record_storage(const uint8_t *object, size_t length,
 }
 
 static void
+check_reference_layout(const core_object_section_t *metadata,
+                       const n00bb_abi_directory_entry_t *entries,
+                       size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    const n00bb_abi_directory_entry_t *runs = entry_for(entries, count,
+        N00B_ABI_TABLE_PHYSICAL_RUN);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(types && layouts && runs && stream);
+    unsigned addressable = 0, packed = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *ref = row_at(metadata, types, i);
+        if (ref->kind != N00B_ABI_TYPE_REFERENCE) continue;
+        assert(ref->components.count == 1 && ref->layout_index
+            && !(ref->flags & N00B_ABI_TYPE_FLAG_PACKABLE));
+        uint32_t component = *(const uint32_t *)row_at(metadata, stream,
+            ref->components.first);
+        const n00b_abi_type_v1 *child = row_at(metadata, types, component);
+        const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
+            ref->layout_index);
+        assert(child->kind == N00B_ABI_TYPE_PRIMITIVE
+            && layout->type_index == i && layout->occupied_runs.count == 1
+            && !layout->reserved_runs.count && ref->alignment_bytes == 8);
+        uint32_t run_index = *(const uint32_t *)row_at(metadata, stream,
+            layout->occupied_runs.first);
+        const n00b_abi_physical_run_v1 *run = row_at(metadata, runs,
+            run_index);
+        assert(!run->byte_offset && !run->bit_offset
+            && run->width_bits == ref->size_bits);
+        if (child->semantic_width_bits == 1) {
+            assert(child->flags & N00B_ABI_TYPE_FLAG_PACKABLE);
+            assert(ref->size_bits == 128);
+            packed++;
+        }
+        else {
+            assert(child->semantic_width_bits == 64
+                && !(child->flags & N00B_ABI_TYPE_FLAG_PACKABLE));
+            assert(ref->size_bits == 64);
+            addressable++;
+        }
+    }
+    assert(addressable == 1 && packed == 1);
+}
+
+static void
 check_atomic(const core_object_section_t *metadata,
              const n00bb_abi_directory_entry_t *entries, size_t count)
 {
@@ -2061,7 +2110,8 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "flagset")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local")
-            || !strcmp(argv[2], "atomic"))));
+            || !strcmp(argv[2], "atomic")
+            || !strcmp(argv[2], "reference-layout"))));
     FILE *file = fopen(argv[1], "rb");
     assert(file);
     assert(!fseek(file, 0, SEEK_END));
@@ -2308,6 +2358,13 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "atomic")) {
         check_atomic(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "reference-layout")) {
+        check_reference_layout(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

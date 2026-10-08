@@ -197,6 +197,18 @@ int main(void)
             && check_scalar(module, &target,
                 th_apply(types, "view", &handle_element, 1),
                 128, 128, 8);
+        ok = ok && check_scalar(module, &target,
+                th_ind(types, 0, th_bitint(types, 64, false)), 64, 64, 8)
+            && check_scalar(module, &target,
+                th_ind(types, 0, th_name(types, "bool")), 128, 128, 8);
+        th_type *unresolved_ref = th_ind(types, 0,
+            th_name(types, "foreign.Unknown"));
+        bool unresolved_handled = true;
+        ok = ok && unresolved_ref
+            && n00bb_abi_publish_direct_layout(module, unresolved_ref,
+                &target, &unresolved_handled)
+            && !unresolved_handled
+            && !ir_layout_final(module, unresolved_ref, target.triple);
         bool handled = false;
         ok = ok && n00bb_abi_publish_direct_layout(module,
                 th_name(types, "user.string"), &target, &handled)
