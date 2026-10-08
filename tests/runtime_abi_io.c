@@ -55,6 +55,26 @@ int main(void)
     assert(ReadFile(read_handle, actual, sizeof actual, &read_count, NULL));
     assert(read_count == sizeof actual);
     assert(memcmp(actual, short_bytes, sizeof actual) == 0);
+    HANDLE second_read;
+    HANDLE second_write;
+    assert(CreatePipe(&second_read, &second_write, NULL, 0));
+    int32_t second_fd = n00b_abi_v1_fd_register_handle(second_write);
+    assert(second_fd > fd);
+    n00b_abi_string_v1 long_value =
+        long_string(long_bytes, sizeof long_bytes - 1, N00B_ABI_STRING_LONG);
+    assert(n00b_abi_v1_raw_fd_write(second_fd, long_value) ==
+           sizeof long_bytes - 1);
+    uint8_t long_actual[sizeof long_bytes];
+    assert(ReadFile(second_read, long_actual, sizeof long_bytes - 1,
+                    &read_count, NULL));
+    assert(read_count == sizeof long_bytes - 1);
+    assert(memcmp(long_actual, long_bytes, read_count) == 0);
+    n00b_abi_string_v1 span_value =
+        long_string(long_bytes + 2, 5, N00B_ABI_STRING_SPAN);
+    assert(n00b_abi_v1_raw_fd_write(second_fd, span_value) == 5);
+    assert(ReadFile(second_read, long_actual, 5, &read_count, NULL));
+    assert(read_count == 5);
+    assert(memcmp(long_actual, long_bytes + 2, 5) == 0);
     assert(n00b_abi_v1_fd_unregister_handle(fd) == 1);
     assert(n00b_abi_v1_raw_fd_write(fd, short_value) == -1);
     assert(n00b_abi_v1_fd_unregister_handle(fd) == 0);
@@ -62,8 +82,11 @@ int main(void)
     assert(n00b_abi_v1_fd_register_handle(INVALID_HANDLE_VALUE) == -1);
     assert(n00b_abi_v1_fd_register_handle(write_handle) == fd);
     assert(n00b_abi_v1_fd_unregister_handle(fd) == 1);
+    assert(n00b_abi_v1_fd_unregister_handle(second_fd) == 1);
     assert(CloseHandle(write_handle));
     assert(CloseHandle(read_handle));
+    assert(CloseHandle(second_write));
+    assert(CloseHandle(second_read));
 #else
     int fds[2];
     assert(pipe(fds) == 0);
