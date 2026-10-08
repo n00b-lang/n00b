@@ -2066,6 +2066,50 @@ check_option_layout(const core_object_section_t *metadata,
 }
 
 static void
+check_unary_trace(const core_object_section_t *metadata,
+                    const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    const n00bb_abi_directory_entry_t *traces = entry_for(entries, count,
+        N00B_ABI_TABLE_TRACE);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(types && layouts && traces && stream);
+    unsigned wrappers = 0, atomics = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *wrapper = row_at(metadata, types, i);
+        if (wrapper->kind != N00B_ABI_TYPE_WRAPPER
+            && wrapper->kind != N00B_ABI_TYPE_ATOMIC) continue;
+        assert(wrapper->components.count == 1
+            && wrapper->components.first < stream->record_count
+            && wrapper->layout_index && wrapper->tracing_index
+            && wrapper->size_bits == 64 && wrapper->alignment_bytes == 8);
+        uint32_t child_index = core_le_load_u32(row_at(metadata, stream,
+            wrapper->components.first));
+        const n00b_abi_type_v1 *child = row_at(metadata, types,
+            child_index);
+        const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
+            wrapper->layout_index);
+        const n00b_abi_trace_v1 *trace = trace_for_type(metadata, entries,
+            count, i);
+        assert(child->kind == N00B_ABI_TYPE_REFERENCE
+            && child->size_bits == wrapper->size_bits
+            && child->tracing_index
+            && layout->type_index == i
+            && !layout->tag_extractor_index
+            && trace->child_trace_index == child->tracing_index
+            && !trace->tag_extractor_index && !trace->option_bit_offset
+            && !trace->fixed_children.count && !trace->arms.count);
+        if (wrapper->kind == N00B_ABI_TYPE_WRAPPER) wrappers++;
+        else atomics++;
+    }
+    assert(wrappers == 1 && atomics == 1);
+}
+
+static void
 check_reference_layout(const core_object_section_t *metadata,
                        const n00bb_abi_directory_entry_t *entries,
                        size_t count)
@@ -2196,7 +2240,8 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "generic-local")
             || !strcmp(argv[2], "atomic")
             || !strcmp(argv[2], "reference-layout")
-            || !strcmp(argv[2], "option-layout"))));
+            || !strcmp(argv[2], "option-layout")
+            || !strcmp(argv[2], "unary-trace"))));
     FILE *file = fopen(argv[1], "rb");
     assert(file);
     assert(!fseek(file, 0, SEEK_END));
@@ -2457,6 +2502,13 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "option-layout")) {
         check_option_layout(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "unary-trace")) {
+        check_unary_trace(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

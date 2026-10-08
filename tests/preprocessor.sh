@@ -1420,6 +1420,9 @@ N00B_PATH="$interface_programs" "$compiler" compile \
 "$compiler" compile --output "$tmp/option_layout_abi.o" \
     "$program_dir/option_layout.n00b"
 "$abi_record_object_test" "$tmp/option_layout_abi.o" option-layout
+"$compiler" compile --output "$tmp/wrapper_trace_abi.o" \
+    "$program_dir/wrapper_trace.n00b"
+"$abi_record_object_test" "$tmp/wrapper_trace_abi.o" unary-trace
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_generic_user.o" import_generic_user
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \

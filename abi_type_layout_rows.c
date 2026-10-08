@@ -31,6 +31,7 @@ typedef enum {
 
 typedef struct {
     n00bb_abi_type_index_t *index;
+    ir_module_t *module;
     const n00bb_abi_type_identity_rows_t *types;
     const n00b_abi_range_v1 *members;
     const core_list_t(n00b_abi_field_v1) *fields;
@@ -41,15 +42,22 @@ typedef struct {
 } trace_source_t;
 
 static bool
-trace_option_component(const trace_source_t *source, uint32_t type_index,
-                       uint32_t *component_index)
+trace_unary_component(const trace_source_t *source, uint32_t type_index,
+                      uint32_t *component_index)
 {
     th_type *type = n00bb_abi_type_index_at(source->index, type_index);
-    const th_arg *argument = type ? th_named_arg(type, 0) : nullptr;
-    return type && th_named_nargs(type) == 1 && argument
-        && argument->kind == TH_ARG_TYPE
-        && n00bb_abi_type_index_find(source->index, argument->type,
-                                     component_index);
+    if (!type) return false;
+    th_type *component = nullptr;
+    if (source->types->rows[type_index].kind == N00B_ABI_TYPE_WRAPPER)
+        component = ir_type_definition(source->module, type);
+    else {
+        const th_arg *argument = th_named_nargs(type) == 1
+            ? th_named_arg(type, 0) : nullptr;
+        if (argument && argument->kind == TH_ARG_TYPE)
+            component = argument->type;
+    }
+    return component && n00bb_abi_type_index_find(source->index, component,
+                                                  component_index);
 }
 
 static const n00b_abi_field_v1 *
@@ -119,15 +127,15 @@ trace_need(trace_source_t *source, uint32_t type_index)
         break;
     }
     case N00B_ABI_TYPE_OPTION:
+    case N00B_ABI_TYPE_WRAPPER:
+    case N00B_ABI_TYPE_ATOMIC:
         if (!type->layout_index) result = TRACE_UNKNOWN;
         else {
             uint32_t child_index = 0;
-            result = trace_option_component(source, type_index, &child_index)
+            result = trace_unary_component(source, type_index, &child_index)
                 ? trace_need(source, child_index) : TRACE_INVALID;
         }
         break;
-    case N00B_ABI_TYPE_WRAPPER:
-    case N00B_ABI_TYPE_ATOMIC:
     case N00B_ABI_TYPE_VARIABLE:
         /* These need representation-specific tracing before a parent map
          * can safely include them. */
@@ -208,22 +216,26 @@ append_traces(trace_source_t *source,
         n00b_abi_type_v1 *type = &source->types->rows[type_index];
         if (!type->tracing_index) continue;
         n00b_abi_trace_v1 *trace = &traces->data[type->tracing_index];
-        if (type->kind == N00B_ABI_TYPE_OPTION) {
+        if (type->kind == N00B_ABI_TYPE_OPTION
+            || type->kind == N00B_ABI_TYPE_WRAPPER
+            || type->kind == N00B_ABI_TYPE_ATOMIC) {
             uint32_t child_index = 0;
-            if (!trace_option_component(source, type_index, &child_index)
+            if (!trace_unary_component(source, type_index, &child_index)
                 || !source->types->rows[child_index].tracing_index)
                 return false;
-            const n00b_abi_layout_v1 *layout = &layouts->data[
-                type->layout_index];
-            uint32_t tag_index = layout->tag_extractor_index;
-            if (!tag_index || tag_index >= tags->len) return false;
-            const n00b_abi_tag_extractor_v1 *tag = &tags->data[tag_index];
             trace->child_trace_index = source->types->rows[
                 child_index].tracing_index;
-            trace->tag_extractor_index = tag_index;
-            if (tag->kind == N00B_ABI_TAG_DIRECT_BITS)
-                trace->option_bit_offset = tag->unit_byte_offset * 8
-                    + tag->lsb_position;
+            if (type->kind == N00B_ABI_TYPE_OPTION) {
+                const n00b_abi_layout_v1 *layout = &layouts->data[
+                    type->layout_index];
+                uint32_t tag_index = layout->tag_extractor_index;
+                if (!tag_index || tag_index >= tags->len) return false;
+                const n00b_abi_tag_extractor_v1 *tag = &tags->data[tag_index];
+                trace->tag_extractor_index = tag_index;
+                if (tag->kind == N00B_ABI_TAG_DIRECT_BITS)
+                    trace->option_bit_offset = tag->unit_byte_offset * 8
+                        + tag->lsb_position;
+            }
             continue;
         }
         if (type->kind != N00B_ABI_TYPE_RECORD
@@ -705,6 +717,7 @@ n00bb_abi_type_layout_rows_build(
             memset(need, 0, types->count);
             trace_source_t source = {
                 .index = index,
+                .module = runtime,
                 .types = types, .members = type_field_ranges,
                 .fields = &fields, .arms = &arms, .indexes = &indexes,
                 .stream_base = stream_base, .need = need,

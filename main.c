@@ -8004,7 +8004,11 @@ static bool
 n00bb_atomic_native_support(ir_module_t *module, th_type *atomic_type,
                             const core_target_desc_t *target)
 {
+    bool handled = false;
     if (!module || !target || !n00bb_atomic_type(atomic_type)
+        || !n00bb_abi_publish_direct_layout(module, atomic_type, target,
+                                            &handled)
+        || !handled
         || !ir_layout_compute(module, atomic_type, nullptr)) return false;
     ir_descriptor_t *layout = ir_layout_of(module, atomic_type, nullptr);
     return layout && ir_layout_is_settled(&layout->size)
@@ -27796,6 +27800,8 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     }
                     if (nominal_declaration_is_record(symbol->decl_node))
                         symbol->adt_kind = CORE_STRING_STATIC("record");
+                    else
+                        symbol->adt_kind = CORE_STRING_STATIC("nominal");
                 }
             }
         }
