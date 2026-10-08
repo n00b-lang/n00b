@@ -1419,7 +1419,7 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
         uint32_t end = type->specialization_end_ix;
         if (start || end) {
             uint32_t mapped_start, mapped_last;
-            if (!end || end <= start
+            if (!start || end <= start
                 || !n00bb_abi_index_plan_map(plan, input_index,
                     N00B_ABI_TABLE_SPECIALIZATION_LINK, start,
                     &mapped_start)

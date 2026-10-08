@@ -1251,6 +1251,59 @@ test_link_index_patch(void)
 }
 
 static void
+test_specialization_remap(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[2];
+        n00b_abi_specialization_link_v1 links[2];
+    } specialization_fixture_t;
+    specialization_fixture_t metadata = {0};
+    metadata.types[0].kind = N00B_ABI_TYPE_NIL;
+    metadata.types[0].typehash = 1;
+    metadata.types[1].kind = N00B_ABI_TYPE_PRIMITIVE;
+    metadata.types[1].typehash = 2;
+    metadata.types[1].specialization_start_ix = 1;
+    metadata.types[1].specialization_end_ix = 2;
+    metadata.links[1] = 1;
+    n00bb_abi_directory_entry_t directory[] = {
+        {.kind = N00B_ABI_TABLE_TYPE,
+         .record_bytes = sizeof(n00b_abi_type_v1), .record_count = 2,
+         .file_offset = offsetof(specialization_fixture_t, types)},
+        {.kind = N00B_ABI_TABLE_SPECIALIZATION_LINK,
+         .record_bytes = sizeof(n00b_abi_specialization_link_v1),
+         .record_count = 2,
+         .file_offset = offsetof(specialization_fixture_t, links)},
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {.bytes = (const uint8_t *)&metadata,
+                     .size = sizeof(metadata)},
+        .directory = directory,
+        .directory_count = sizeof(directory) / sizeof(*directory),
+    };
+    n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    n00b_abi_type_v1 type;
+    n00b_abi_specialization_link_v1 link;
+    assert(n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_TYPE,
+        1, &type, sizeof(type), nullptr)
+        && type.specialization_start_ix == 1
+        && type.specialization_end_ix == 2
+        && n00bb_abi_remap_row(&selected, plan, 0,
+            N00B_ABI_TABLE_SPECIALIZATION_LINK, 1, &link, sizeof(link),
+            nullptr) && link == 1);
+    metadata.types[1].specialization_start_ix = 0;
+    metadata.types[1].specialization_end_ix = 1;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_TYPE,
+        1, &type, sizeof(type), nullptr));
+    metadata.links[1] = 0;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_SPECIALIZATION_LINK, 1, &link, sizeof(link),
+        nullptr) && link == 0);
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_metadata_string_uses_relocation_pool(void)
 {
     const char *triples[] = {
@@ -1749,6 +1802,7 @@ main(int argc, char **argv)
     assert(argc == 2 || argc == 3 || argc == 4 || argc == 5);
     test_native_string_pool_consolidation();
     test_link_index_patch();
+    test_specialization_remap();
     test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();
     test_static_string_identity();
