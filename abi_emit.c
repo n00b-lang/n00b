@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "abi_container.h"
+#include "abi_string.h"
 #include "abi_constraint_rows.h"
 #include "abi_decl_index.h"
 #include "abi_declarations.h"
@@ -29,6 +30,173 @@
 #include "parse/tree_util.h"
 
 core_list_decl(core_object_emit_section_t);
+
+typedef struct {
+    n00b_abi_tls_relocation_v1 *rows;
+    size_t row_count;
+    uint32_t *stream_indexes;
+    size_t stream_count;
+    uint32_t string_storage_first_index;
+    uint32_t string_storage_count;
+    uint32_t aggregate_storage_index;
+} abi_tls_metadata_t;
+
+static void
+tls_metadata_release(abi_tls_metadata_t *metadata)
+{
+    core_free(metadata->rows);
+    core_free(metadata->stream_indexes);
+}
+
+static bool
+build_tls_metadata(n00bb_abi_storage_rows_t *storage,
+                   size_t string_pool_bytes, uint32_t stream_base,
+                   n00b_abi_module_v1 *module, abi_tls_metadata_t *out)
+{
+    size_t count = 0;
+    bool aggregate_pool = false;
+    for (size_t i = 0; i < storage->relocation_count; i++) {
+        const n00bb_abi_storage_relocation_t *reloc =
+            &storage->relocations[i];
+        if (reloc->source_kind != N00B_ABI_STORAGE_TLS) continue;
+        if (reloc->target_kind == N00BB_ABI_RELOC_AGGREGATE)
+            aggregate_pool = true;
+        else if (reloc->target_kind != N00BB_ABI_RELOC_STRING_POOL)
+            return false;
+        if (reloc->target_offset > INT64_MAX) return false;
+        count++;
+    }
+    if (!count) {
+        out->rows = core_alloc_array(n00b_abi_tls_relocation_v1, 1);
+        out->row_count = 1;
+        return out->rows != nullptr;
+    }
+    uint64_t *string_offsets = core_alloc_array(uint64_t, count);
+    uint64_t *string_lengths = core_alloc_array(uint64_t, count);
+    size_t string_count = 0;
+    bool valid = string_offsets && string_lengths;
+    for (size_t i = 0; valid && i < storage->relocation_count; i++) {
+        const n00bb_abi_storage_relocation_t *reloc =
+            &storage->relocations[i];
+        if (reloc->source_kind != N00B_ABI_STORAGE_TLS
+            || reloc->target_kind != N00BB_ABI_RELOC_STRING_POOL) continue;
+        size_t j = 0;
+        while (j < string_count
+            && string_offsets[j] != reloc->target_offset) j++;
+        if (j < string_count) continue;
+        n00bb_abi_string_header_t header;
+        valid = reloc->byte_offset <= storage->tls.byte_len
+            && sizeof(n00b_abi_string_v1)
+                <= storage->tls.byte_len - reloc->byte_offset
+            && n00bb_abi_string_decode((const uint8_t *)storage->tls.data
+                + reloc->byte_offset, sizeof(n00b_abi_string_v1), &header)
+            && (header.tag == N00BB_ABI_STRING_LONG
+                || header.tag == N00BB_ABI_STRING_SPAN)
+            && reloc->target_offset <= string_pool_bytes
+            && header.length <= string_pool_bytes - reloc->target_offset;
+        if (valid) {
+            string_offsets[string_count] = reloc->target_offset;
+            string_lengths[string_count++] = header.length;
+        }
+    }
+    size_t backing_count = string_count + (size_t)aggregate_pool;
+    size_t static_count = storage->static_range.count;
+    if (!valid || (string_count && !string_pool_bytes)
+        || (aggregate_pool && !storage->aggregates.byte_len)
+        || count >= UINT32_MAX
+        || storage->row_count > UINT32_MAX - backing_count
+        || static_count > UINT32_MAX - backing_count
+        || count > UINT32_MAX - static_count - backing_count
+        || stream_base > UINT32_MAX - static_count - backing_count - count
+        || static_count > SIZE_MAX - backing_count - count) {
+        core_free(string_offsets);
+        core_free(string_lengths);
+        return false;
+    }
+
+    out->row_count = count + 1;
+    out->rows = core_alloc_array(n00b_abi_tls_relocation_v1,
+                                  out->row_count);
+    out->stream_count = static_count + backing_count + count;
+    out->stream_indexes = core_alloc_array(uint32_t, out->stream_count);
+    if (static_count)
+        memcpy(out->stream_indexes, storage->stream_indexes,
+               static_count * sizeof(uint32_t));
+    storage->rows = core_realloc(storage->rows,
+        (storage->row_count + backing_count) * sizeof(*storage->rows));
+    size_t next = storage->row_count;
+    out->string_storage_first_index = (uint32_t)next;
+    out->string_storage_count = (uint32_t)string_count;
+    for (size_t i = 0; i < string_count; i++) {
+        storage->rows[next++] = (n00b_abi_storage_v1){
+            .module_index = 1,
+            .segment_kind = N00B_ABI_STORAGE_READ_ONLY,
+            .byte_offset = string_offsets[i],
+            .byte_length = string_lengths[i],
+        };
+        out->stream_indexes[static_count++] =
+            out->string_storage_first_index + (uint32_t)i;
+    }
+    if (aggregate_pool) {
+        out->aggregate_storage_index = (uint32_t)next;
+        storage->rows[next++] = (n00b_abi_storage_v1){
+            .module_index = 1,
+            .segment_kind = N00B_ABI_STORAGE_READ_ONLY,
+            .byte_length = storage->aggregates.byte_len,
+        };
+        out->stream_indexes[static_count++] = out->aggregate_storage_index;
+    }
+    size_t original_count = storage->row_count;
+    storage->row_count = next;
+    module->static_storage = (n00b_abi_range_v1){
+        .first = stream_base, .count = (uint32_t)static_count,
+    };
+    size_t relocation_row = 1;
+    size_t stream_position = static_count;
+    for (size_t i = 1; i < original_count; i++) {
+        n00b_abi_storage_v1 *row = &storage->rows[i];
+        if (row->segment_kind != N00B_ABI_STORAGE_TLS) continue;
+        size_t first = stream_position;
+        for (size_t j = 0; j < storage->relocation_count; j++) {
+            const n00bb_abi_storage_relocation_t *source =
+                &storage->relocations[j];
+            if (source->source_kind != N00B_ABI_STORAGE_TLS
+                || source->byte_offset < row->byte_offset
+                || source->byte_offset - row->byte_offset > row->byte_length
+                || sizeof(void *) > row->byte_length
+                    - (source->byte_offset - row->byte_offset)) continue;
+            uint32_t target = out->aggregate_storage_index;
+            if (source->target_kind == N00BB_ABI_RELOC_STRING_POOL) {
+                size_t k = 0;
+                while (k < string_count
+                    && string_offsets[k] != source->target_offset) k++;
+                if (k == string_count) valid = false;
+                else target = out->string_storage_first_index + (uint32_t)k;
+            }
+            if (!valid) break;
+            out->rows[relocation_row] = (n00b_abi_tls_relocation_v1){
+                .template_storage_index = (uint32_t)i,
+                .referenced_storage_index = target,
+                .write_byte_offset = source->byte_offset - row->byte_offset,
+                .addend_bytes = source->target_kind
+                    == N00BB_ABI_RELOC_STRING_POOL
+                    ? 0 : (int64_t)source->target_offset,
+                .target_kind = N00B_ABI_STORAGE_READ_ONLY,
+            };
+            out->stream_indexes[stream_position++] =
+                (uint32_t)relocation_row++;
+        }
+        if (stream_position != first) row->tls_relocations =
+            (n00b_abi_range_v1){
+                .first = stream_base + (uint32_t)first,
+                .count = (uint32_t)(stream_position - first),
+            };
+    }
+    core_free(string_offsets);
+    core_free(string_lengths);
+    return valid && relocation_row == out->row_count
+        && stream_position == out->stream_count;
+}
 
 static bool
 align_up(size_t value, size_t alignment, size_t *out)
@@ -908,6 +1076,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_trait_method_rows_t trait_method_rows = {0};
     n00bb_abi_constraint_rows_t constraint_rows = {0};
     n00bb_abi_storage_rows_t storage_rows = {0};
+    abi_tls_metadata_t tls_metadata = {0};
     abi_native_bindings_t native_bindings = {0};
     bool valid = pool && type_index
         && n00bb_abi_type_index_collect_module_types(type_index,
@@ -1038,9 +1207,22 @@ n00bb_abi_emit_unit(
         valid = build_native_bindings(&storage_rows, declarations,
             &declaration_rows, pool, package_id, unit->module.identifier,
             target->object_format, &native_bindings);
+    if (valid) {
+        size_t base = prefix_stream_count + components.count
+            + layout_rows.stream_index_count + enum_rows.stream_index_count
+            + signature_rows.parameter_index_count
+            + declaration_rows.stream_index_count
+            + function_rows.stream_index_count
+            + constraint_rows.stream_index_count + storage_rows.stream_count
+            + trait_method_rows.stream_index_count;
+        valid = base <= UINT32_MAX && build_tls_metadata(&storage_rows,
+            n00bb_abi_name_pool_size(pool), (uint32_t)base, &modules[1],
+            &tls_metadata);
+    }
     if (!valid) {
         core_free(requirements);
         native_bindings_release(&native_bindings);
+        tls_metadata_release(&tls_metadata);
         n00bb_abi_storage_rows_release(&storage_rows);
         n00bb_abi_trait_method_rows_release(&trait_method_rows);
         n00bb_abi_constraint_rows_release(&constraint_rows);
@@ -1065,7 +1247,8 @@ n00bb_abi_emit_unit(
         + function_rows.stream_index_count
         + constraint_rows.stream_index_count
         + storage_rows.stream_count
-        + trait_method_rows.stream_index_count;
+        + trait_method_rows.stream_index_count
+        + tls_metadata.stream_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
     stream[0] = package_modules[0];
     if (recursive) {
@@ -1115,21 +1298,28 @@ n00bb_abi_emit_unit(
                constraint_rows.stream_indexes,
                constraint_rows.stream_index_count * sizeof(*stream));
     if (storage_rows.stream_count)
-        memcpy(stream + stream_count - storage_rows.stream_count
+        memcpy(stream + stream_count - tls_metadata.stream_count
+                   - storage_rows.stream_count
                    - trait_method_rows.stream_index_count,
                storage_rows.stream_indexes,
                storage_rows.stream_count * sizeof(*stream));
     if (trait_method_rows.stream_index_count)
-        memcpy(stream + stream_count
+        memcpy(stream + stream_count - tls_metadata.stream_count
                    - trait_method_rows.stream_index_count,
                trait_method_rows.stream_indexes,
                trait_method_rows.stream_index_count * sizeof(*stream));
+    if (tls_metadata.stream_count)
+        memcpy(stream + stream_count - tls_metadata.stream_count,
+               tls_metadata.stream_indexes,
+               tls_metadata.stream_count * sizeof(*stream));
     core_list_t(core_object_emit_section_t) extra_sections = {0};
     uint32_t storage_input_indexes[4] = {0};
     uint32_t aggregate_input_index = 0;
     core_object_emit_symbol_t string_symbol = {0};
     core_object_emit_symbol_t aggregate_symbol = {0};
-    if (n00bb_abi_name_pool_size(pool)) {
+    bool has_pool = n00bb_abi_name_pool_size(pool) != 0;
+    bool has_aggregates = storage_rows.aggregates.byte_len != 0;
+    if (has_pool) {
         core_list_push(extra_sections, ((core_object_emit_section_t){
             .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
                 ? "__n00b_strings"
@@ -1145,7 +1335,7 @@ n00bb_abi_emit_unit(
             .name = "n00b_string_pool", .section_index = 2,
         };
     }
-    if (storage_rows.aggregates.byte_len) {
+    if (has_aggregates) {
         aggregate_input_index = (uint32_t)(2 + extra_sections.len);
         core_list_push(extra_sections, ((core_object_emit_section_t){
             .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
@@ -1172,7 +1362,7 @@ n00bb_abi_emit_unit(
         && append_storage_section(target, N00B_ABI_STORAGE_TLS,
             &storage_rows.tls, storage_rows.tls_alignment,
             &extra_sections, storage_input_indexes);
-    for (size_t i = 1; valid && i < storage_rows.row_count; i++) {
+    for (size_t i = 1; valid && i < native_bindings.count; i++) {
         n00b_abi_storage_v1 *row = &storage_rows.rows[i];
         uint32_t input = row->segment_kind <= N00B_ABI_STORAGE_TLS
             ? storage_input_indexes[row->segment_kind] : 0;
@@ -1180,6 +1370,16 @@ n00bb_abi_emit_unit(
             1 + extra_sections.len, input, &row->segment_index);
         if (valid) native_bindings.rows[i].section_index = row->segment_index;
     }
+    for (uint32_t i = 0; valid && i < tls_metadata.string_storage_count; i++)
+        valid = has_pool && core_object_emit_native_section_index(target,
+            1 + extra_sections.len, 2,
+            &storage_rows.rows[tls_metadata.string_storage_first_index + i]
+                .segment_index);
+    if (valid && tls_metadata.aggregate_storage_index)
+        valid = aggregate_input_index && core_object_emit_native_section_index(
+            target, 1 + extra_sections.len, aggregate_input_index,
+            &storage_rows.rows[tls_metadata.aggregate_storage_index]
+                .segment_index);
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
         {N00B_ABI_TABLE_MODULE, modules, 2},
@@ -1221,6 +1421,8 @@ n00bb_abi_emit_unit(
         {N00B_ABI_TABLE_REQUIREMENT, requirements, requirement_count + 1},
         {N00B_ABI_TABLE_STORAGE, storage_rows.rows,
          storage_rows.row_count},
+        {N00B_ABI_TABLE_TLS_RELOCATION, tls_metadata.rows,
+         tls_metadata.row_count},
         {N00B_ABI_TABLE_SHAPE, storage_rows.shapes,
          storage_rows.shape_count},
         {N00B_ABI_TABLE_U64_STREAM, storage_rows.extents,
@@ -1237,6 +1439,7 @@ n00bb_abi_emit_unit(
         core_list_free(extra_sections);
         core_free(requirements);
         native_bindings_release(&native_bindings);
+        tls_metadata_release(&tls_metadata);
         n00bb_abi_storage_rows_release(&storage_rows);
         n00bb_abi_trait_method_rows_release(&trait_method_rows);
         n00bb_abi_constraint_rows_release(&constraint_rows);
@@ -1268,8 +1471,6 @@ n00bb_abi_emit_unit(
         valid = n00bb_abi_name_pool_relocations(pool, entries,
             sizeof(entries) / sizeof(*entries), &relocations,
             &relocation_count);
-    bool has_pool = n00bb_abi_name_pool_size(pool) != 0;
-    bool has_aggregates = storage_rows.aggregates.byte_len != 0;
     if (valid && storage_rows.relocation_count) {
         if (storage_rows.relocation_count > SIZE_MAX - relocation_count)
             valid = false;
@@ -1347,6 +1548,7 @@ n00bb_abi_emit_unit(
     core_free(relocations);
     core_free(requirements);
     native_bindings_release(&native_bindings);
+    tls_metadata_release(&tls_metadata);
     n00bb_abi_storage_rows_release(&storage_rows);
     n00bb_abi_trait_method_rows_release(&trait_method_rows);
     n00bb_abi_constraint_rows_release(&constraint_rows);

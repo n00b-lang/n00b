@@ -435,9 +435,19 @@ n00bb_abi_link_selected_objects(
                                                 &sections, &native);
     uint32_t pending_pool_symbol = valid
         ? (uint32_t)native.symbol_count : 0;
+    n00bb_abi_string_storage_rebase_t string_storage = {
+        .selected = selected,
+        .pool = merged.strings,
+    };
+    bool has_pool = valid && n00bb_abi_name_pool_size(merged.strings) != 0;
+    if (valid && has_pool)
+        valid = sections.count < UINT32_MAX - 2
+            && core_object_emit_native_section_index(target,
+                2 + sections.count, (uint32_t)(2 + sections.count),
+                &string_storage.final_section_index);
     valid = valid
         && n00bb_abi_rebase_native_references(&merged, sections.maps,
-                                              sections.count)
+            sections.count, has_pool ? &string_storage : nullptr)
         && n00bb_abi_add_native_bindings(selected, &merged, &sections,
                                          &native);
     if (valid)
@@ -481,7 +491,6 @@ n00bb_abi_link_selected_objects(
             row_count, &pool_relocations, &pool_relocation_count);
 
     size_t pool_size = n00bb_abi_name_pool_size(merged.strings);
-    bool has_pool = pool_size != 0;
     if (valid) {
         valid = (has_pool || !pool_relocation_count)
             && sections.count < UINT32_MAX - 2

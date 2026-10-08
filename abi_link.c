@@ -2086,7 +2086,8 @@ typedef struct {
 bool
 n00bb_abi_rebase_native_references(
     n00bb_abi_merged_rows_t *merged,
-    const n00bb_abi_native_section_map_t *maps, size_t map_count)
+    const n00bb_abi_native_section_map_t *maps, size_t map_count,
+    const n00bb_abi_string_storage_rebase_t *string_storage)
 {
     if (!merged || !merged->tables || (map_count && !maps)) return false;
     size_t capacity = 0;
@@ -2126,6 +2127,57 @@ n00bb_abi_rebase_native_references(
                     continue;
                 if (match) valid = false;
                 else match = &maps[i];
+            }
+            if (valid && !match && table->kind == N00B_ABI_TABLE_STORAGE
+                && string_storage && string_storage->selected
+                && string_storage->pool
+                && string_storage->final_section_index
+                && origin->input < string_storage->selected->count) {
+                const n00b_abi_storage_v1 *storage = row;
+                const n00bb_abi_object_view_t *view =
+                    &string_storage->selected->views[origin->input];
+                core_object_section_t pool_section;
+                const char *pool_name = view->format
+                    == CORE_TARGET_OBJECT_MACH_O ? "__n00b_strings"
+                    : view->format == CORE_TARGET_OBJECT_COFF
+                        ? ".rdata$S" : ".rodata.n00b_strings";
+                valid = !storage->symbol_index && !storage->type_index
+                    && storage->segment_kind == N00B_ABI_STORAGE_READ_ONLY
+                    && !storage->instance_shape_index
+                    && !storage->tls_relocations.count
+                    && core_object_section_find(view->object,
+                        view->object_bytes, view->format,
+                        view->format == CORE_TARGET_OBJECT_MACH_O
+                            ? "__TEXT" : nullptr,
+                        pool_name, &pool_section)
+                    && pool_section.native_index == local_section
+                    && storage->byte_offset <= pool_section.size
+                    && storage->byte_length <= pool_section.size
+                        - storage->byte_offset;
+                if (valid) {
+                    size_t before = n00bb_abi_name_pool_size(
+                        string_storage->pool);
+                    size_t offset = 0;
+                    n00b_abi_string_v1 ignored;
+                    valid = n00bb_abi_name_pool_value_tagged(
+                        string_storage->pool,
+                        core_string_borrow((const char *)pool_section.bytes
+                            + storage->byte_offset, storage->byte_length),
+                        N00B_ABI_STRING_UTF8, N00B_ABI_STRING_LONG,
+                        &ignored, &offset)
+                        && n00bb_abi_name_pool_size(string_storage->pool)
+                            == before;
+                    if (valid) {
+                        changes[change_count++] = (abi_native_rebase_t){
+                            .row = row,
+                            .kind = N00B_ABI_TABLE_STORAGE,
+                            .section_index =
+                                string_storage->final_section_index,
+                            .storage_offset = offset,
+                        };
+                        continue;
+                    }
+                }
             }
             valid = valid && match && match->final_section_index;
             if (!valid) break;

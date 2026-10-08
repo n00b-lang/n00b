@@ -164,6 +164,12 @@ typedef struct {
     size_t count;
 } n00bb_abi_native_sections_t;
 
+typedef struct {
+    const n00bb_abi_selected_objects_t *selected;
+    n00bb_abi_name_pool_t *pool;
+    uint32_t final_section_index;
+} n00bb_abi_string_storage_rebase_t;
+
 /* Owns copies of selected, file-backed native sections other than each TU's
  * metadata container. Index maps name those sections in a final object whose
  * first section is the rebuilt metadata container. Pointer relocations and
@@ -198,7 +204,8 @@ void n00bb_abi_native_relocations_release(
  * matching map. A failure leaves all merged rows unchanged. */
 bool n00bb_abi_rebase_native_references(
     n00bb_abi_merged_rows_t *merged,
-    const n00bb_abi_native_section_map_t *maps, size_t map_count);
+    const n00bb_abi_native_section_map_t *maps, size_t map_count,
+    const n00bb_abi_string_storage_rebase_t *string_storage);
 
 /* Adds merged native bindings after section rebasing. An existing undefined
  * reference with the same native name becomes defined; a conflicting defined

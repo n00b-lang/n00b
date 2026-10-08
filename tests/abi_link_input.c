@@ -334,7 +334,7 @@ test_cycle_selection(char **paths)
     n00bb_abi_manifest_rows_release(&manifests);
     n00bb_abi_merged_rows_t merged = {0};
     assert(n00bb_abi_merge_rows(&selected, plan, &merged));
-    assert(n00bb_abi_rebase_native_references(&merged, nullptr, 0));
+    assert(n00bb_abi_rebase_native_references(&merged, nullptr, 0, nullptr));
     n00bb_abi_native_sections_t native_sections = {0};
     assert(n00bb_abi_collect_native_sections(&selected, &target,
         &native_sections));
@@ -1712,14 +1712,37 @@ test_string_storage_link(const char *path)
         target.object_format, mach ? "__TEXT" : nullptr,
         pool_name, &pool));
     const char *literal = "a longer immutable string value";
+    const char *other_literal = "a different long TLS string value";
     size_t offsets[2] = {0};
     bool found[2] = {false, false};
     const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(
         &view, N00B_ABI_TABLE_STORAGE);
     assert(table);
+    uint32_t pool_storage_indexes[2] = {0};
+    uint32_t tls_storage_indexes[2] = {0};
     for (uint32_t i = 1; i < table->record_count; i++) {
         const n00b_abi_storage_v1 *storage = n00bb_abi_object_row(
             &view, N00B_ABI_TABLE_STORAGE, i);
+        assert(storage);
+        if (!storage->symbol_index) {
+            bool primary = storage->byte_length == strlen(literal)
+                && storage->byte_offset <= pool.size
+                && storage->byte_length <= pool.size - storage->byte_offset
+                && !memcmp(pool.bytes + storage->byte_offset, literal,
+                    strlen(literal));
+            bool other = storage->byte_length == strlen(other_literal)
+                && storage->byte_offset <= pool.size
+                && storage->byte_length <= pool.size - storage->byte_offset
+                && !memcmp(pool.bytes + storage->byte_offset, other_literal,
+                    strlen(other_literal));
+            assert(primary != other && storage->module_index == 1
+                && storage->segment_kind == N00B_ABI_STORAGE_READ_ONLY
+                && storage->segment_index == pool.native_index);
+            size_t which_pool = other ? 1 : 0;
+            assert(!pool_storage_indexes[which_pool]);
+            pool_storage_indexes[which_pool] = i;
+            continue;
+        }
         const n00b_abi_symbol_v1 *symbol = storage
             ? n00bb_abi_object_row(&view, N00B_ABI_TABLE_SYMBOL,
                 storage->symbol_index) : nullptr;
@@ -1731,6 +1754,12 @@ test_string_storage_link(const char *path)
             : name.length == strlen("repeated_label")
                 && !memcmp(name.bytes, "repeated_label", name.length)
                 ? 1 : -1;
+        if (name.length == strlen("tls_long_label")
+            && !memcmp(name.bytes, "tls_long_label", name.length))
+            tls_storage_indexes[0] = i;
+        if (name.length == strlen("tls_other")
+            && !memcmp(name.bytes, "tls_other", name.length))
+            tls_storage_indexes[1] = i;
         if (which < 0) continue;
         core_object_section_t section;
         assert(!found[which] && storage->segment_index
@@ -1780,6 +1809,27 @@ test_string_storage_link(const char *path)
         found[which] = true;
     }
     assert(found[0] && found[1] && offsets[0] == offsets[1]);
+    for (size_t i = 0; i < 2; i++) {
+        assert(pool_storage_indexes[i] && tls_storage_indexes[i]);
+        const n00b_abi_storage_v1 *tls_storage = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_STORAGE, tls_storage_indexes[i]);
+        assert(tls_storage && tls_storage->tls_relocations.count == 1);
+        const uint32_t *relocation_index = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_U32_STREAM, tls_storage->tls_relocations.first);
+        assert(relocation_index);
+        const n00b_abi_tls_relocation_v1 *tls_relocation =
+            n00bb_abi_object_row(&view, N00B_ABI_TABLE_TLS_RELOCATION,
+                *relocation_index);
+        assert(tls_relocation
+            && tls_relocation->template_storage_index == tls_storage_indexes[i]
+            && tls_relocation->referenced_storage_index
+                == pool_storage_indexes[i]
+            && tls_relocation->addend_bytes == 0
+            && tls_relocation->target_kind == N00B_ABI_STORAGE_READ_ONLY);
+    }
+    const n00b_abi_storage_v1 *pooled_storage = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_STORAGE, pool_storage_indexes[0]);
+    assert(pooled_storage && pooled_storage->byte_offset == offsets[0]);
     n00bb_abi_object_close(&view);
     core_free(linked);
     n00bb_abi_selected_objects_release(&selected);
@@ -2240,7 +2290,7 @@ main(int argc, char **argv)
     n00bb_abi_merged_rows_t exports_merged = {0};
     assert(n00bb_abi_merge_rows(&selected, plan, &exports_merged)
         && n00bb_abi_rebase_native_references(&exports_merged,
-            native_sections.maps, native_sections.count));
+            native_sections.maps, native_sections.count, nullptr));
     const n00bb_abi_merged_table_t *export_bindings =
         n00bb_abi_merged_table(&exports_merged,
             N00B_ABI_TABLE_NATIVE_BINDING);
@@ -2364,7 +2414,7 @@ main(int argc, char **argv)
         }
     }
     assert(map_count && !n00bb_abi_rebase_native_references(
-        &merged, nullptr, 0));
+        &merged, nullptr, 0, nullptr));
     const n00b_abi_storage_v1 *first_storage =
         n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_STORAGE, 1);
     bool duplicated = false;
@@ -2378,8 +2428,9 @@ main(int argc, char **argv)
     }
     assert(duplicated);
     assert(!n00bb_abi_rebase_native_references(
-        &merged, maps, map_count + 1));
-    assert(n00bb_abi_rebase_native_references(&merged, maps, map_count));
+        &merged, maps, map_count + 1, nullptr));
+    assert(n00bb_abi_rebase_native_references(&merged, maps, map_count,
+        nullptr));
     for (size_t ti = 0; ti < sizeof(native_tables) / sizeof(*native_tables);
          ti++) {
         const n00bb_abi_merged_table_t *table = native_tables[ti];

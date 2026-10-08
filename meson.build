@@ -148,7 +148,7 @@ test('abi-index-patch', abi_index_patch_test)
 
 abi_emit_test = executable(
     'abi-emit-test',
-    ['tests/abi_emit.c', 'abi_emit.c', 'abi_emit_strings.c',
+    ['tests/abi_emit.c', 'abi_emit.c', 'abi_emit_strings.c', 'abi_string.c',
      'abi_layout.c', 'abi_record_layout.c',
      'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
      'abi_enum_rows.c',
@@ -165,7 +165,7 @@ test('abi-emit', abi_emit_test)
 
 abi_emit_unit_test = executable(
     'abi-emit-unit-test',
-    ['tests/abi_emit_unit.c', 'abi_emit.c', 'abi_emit_strings.c',
+    ['tests/abi_emit_unit.c', 'abi_emit.c', 'abi_emit_strings.c', 'abi_string.c',
      'abi_layout.c', 'abi_record_layout.c',
      'abi_type_index.c', 'abi_type_rows.c', 'abi_type_layout_rows.c',
      'abi_enum_rows.c',
