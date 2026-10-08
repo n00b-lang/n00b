@@ -1367,6 +1367,42 @@ record_field_named(const core_object_section_t *metadata,
     return nullptr;
 }
 
+static const n00b_abi_trace_v1 *
+trace_for_type(const core_object_section_t *metadata,
+               const n00bb_abi_directory_entry_t *entries, size_t count,
+               uint32_t type_index)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *traces = entry_for(entries, count,
+        N00B_ABI_TABLE_TRACE);
+    assert(types && traces && type_index < types->record_count);
+    const n00b_abi_type_v1 *type = row_at(metadata, types, type_index);
+    assert(type->tracing_index && type->tracing_index < traces->record_count);
+    const n00b_abi_trace_v1 *trace = row_at(metadata, traces,
+        type->tracing_index);
+    assert(trace->type_index == type_index);
+    return trace;
+}
+
+static const n00b_abi_trace_child_v1 *
+trace_child_at(const core_object_section_t *metadata,
+               const n00bb_abi_directory_entry_t *entries, size_t count,
+               n00b_abi_range_v1 range, uint32_t ordinal)
+{
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    const n00bb_abi_directory_entry_t *children = entry_for(entries, count,
+        N00B_ABI_TABLE_TRACE_CHILD);
+    assert(stream && children && ordinal < range.count
+        && range.first < stream->record_count
+        && range.count <= stream->record_count - range.first);
+    uint32_t index = core_le_load_u32(row_at(metadata, stream,
+        range.first + ordinal));
+    assert(index && index < children->record_count);
+    return row_at(metadata, children, index);
+}
+
 static uint64_t
 record_bits(const uint8_t *bytes, uint64_t offset, unsigned width)
 {
@@ -1524,6 +1560,26 @@ check_record_aggregate_storage(const uint8_t *object, size_t length,
             entries, count, lead->child_type_index, "flag");
         const n00b_abi_field_v1 *name = record_field_named(metadata,
             entries, count, lead->child_type_index, "name");
+        const n00b_abi_trace_v1 *group_trace = trace_for_type(metadata,
+            entries, count, storage->type_index);
+        const n00b_abi_trace_v1 *item_trace = trace_for_type(metadata,
+            entries, count, lead->child_type_index);
+        assert(group_trace->fixed_children.count == 2
+            && !group_trace->arms.count
+            && item_trace->fixed_children.count == 1
+            && !item_trace->arms.count);
+        const n00b_abi_trace_child_v1 *group_lead = trace_child_at(
+            metadata, entries, count, group_trace->fixed_children, 0);
+        const n00b_abi_trace_child_v1 *group_members = trace_child_at(
+            metadata, entries, count, group_trace->fixed_children, 1);
+        const n00b_abi_trace_child_v1 *item_name = trace_child_at(
+            metadata, entries, count, item_trace->fixed_children, 0);
+        assert(group_lead->child_type_index == lead->child_type_index
+            && group_lead->byte_offset == lead->logical_bit_offset / 8
+            && group_members->child_type_index == members->child_type_index
+            && group_members->byte_offset == members->logical_bit_offset / 8
+            && item_name->child_type_index == name->child_type_index
+            && item_name->byte_offset == name->logical_bit_offset / 8);
         assert(lead->logical_bit_offset % 8 == 0
             && members->logical_bit_offset % 8 == 0
             && name->logical_bit_offset % 8 == 0
@@ -1641,6 +1697,33 @@ check_variant_storage(const uint8_t *object, size_t length,
     assert(tag->kind == N00B_ABI_TAG_DIRECT_BITS
         && tag->tag_width_bits == 2
         && tag->unit_byte_offset == 16);
+    const n00b_abi_trace_v1 *variant_trace = trace_for_type(metadata,
+        entries, count, number->type_index);
+    const n00bb_abi_directory_entry_t *trace_arms = entry_for(entries,
+        count, N00B_ABI_TABLE_TRACE_ARM);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(trace_arms && stream
+        && variant_trace->tag_extractor_index == layout->tag_extractor_index
+        && !variant_trace->fixed_children.count
+        && variant_trace->arms.count == 3);
+    for (uint32_t i = 0; i < 3; i++) {
+        uint32_t arm_index = core_le_load_u32(row_at(metadata, stream,
+            variant_trace->arms.first + i));
+        assert(arm_index && arm_index < trace_arms->record_count);
+        const n00b_abi_trace_arm_v1 *arm = row_at(metadata, trace_arms,
+            arm_index);
+        assert(arm->tag_value == i + 1
+            && arm->children.count == (i == 1 ? 1u : 0u));
+        if (i == 1) {
+            const n00b_abi_trace_child_v1 *child = trace_child_at(
+                metadata, entries, count, arm->children, 0);
+            const n00b_abi_type_v1 *child_type = row_at(metadata, types,
+                child->child_type_index);
+            assert(child->byte_offset == 0
+                && child_type->kind == N00B_ABI_TYPE_STRING);
+        }
+    }
     const n00b_abi_storage_v1 *globals[] = {number, text, empty};
     for (size_t i = 0; i < 3; i++) {
         const n00b_abi_storage_v1 *global = globals[i];
@@ -1675,6 +1758,14 @@ check_variant_storage(const uint8_t *object, size_t length,
         count, "holder");
     const n00b_abi_field_v1 *field = record_field_named(metadata, entries,
         count, holder->type_index, "choice");
+    const n00b_abi_trace_v1 *holder_trace = trace_for_type(metadata,
+        entries, count, holder->type_index);
+    assert(holder_trace->fixed_children.count == 1
+        && !holder_trace->arms.count);
+    const n00b_abi_trace_child_v1 *holder_child = trace_child_at(
+        metadata, entries, count, holder_trace->fixed_children, 0);
+    assert(holder_child->child_type_index == number->type_index
+        && holder_child->byte_offset == field->logical_bit_offset / 8);
     core_object_section_t holder_section;
     assert(field->child_type_index == number->type_index
         && field->logical_bit_offset % 8 == 0
@@ -1752,6 +1843,14 @@ check_tuple_storage(const uint8_t *object, size_t length,
         count, pair->type_index, "1");
     assert(text->declaration_ordinal == 0 && text->logical_bit_offset == 0
         && flag->declaration_ordinal == 1 && flag->logical_bit_offset == 128);
+    const n00b_abi_trace_v1 *pair_trace = trace_for_type(metadata, entries,
+        count, pair->type_index);
+    assert(pair_trace->fixed_children.count == 1
+        && !pair_trace->arms.count);
+    const n00b_abi_trace_child_v1 *text_trace = trace_child_at(metadata,
+        entries, count, pair_trace->fixed_children, 0);
+    assert(text_trace->byte_offset == 0
+        && text_trace->child_type_index == text->child_type_index);
     core_object_section_t section;
     assert(pair->segment_kind == N00B_ABI_STORAGE_READ_ONLY
         && pair->byte_length == 17

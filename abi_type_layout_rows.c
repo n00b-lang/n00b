@@ -15,7 +15,207 @@ core_list_decl(n00b_abi_packed_run_v1);
 core_list_decl(n00b_abi_field_v1);
 core_list_decl(n00b_abi_arm_v1);
 core_list_decl(n00b_abi_tag_extractor_v1);
+core_list_decl(n00b_abi_trace_v1);
+core_list_decl(n00b_abi_trace_child_v1);
+core_list_decl(n00b_abi_trace_arm_v1);
 core_list_decl(uint32_t);
+
+typedef enum {
+    TRACE_UNSEEN,
+    TRACE_NONE,
+    TRACE_PRESENT,
+    TRACE_UNKNOWN,
+    TRACE_INVALID,
+    TRACE_ACTIVE,
+} trace_need_t;
+
+typedef struct {
+    const n00bb_abi_type_identity_rows_t *types;
+    const n00b_abi_range_v1 *members;
+    const core_list_t(n00b_abi_field_v1) *fields;
+    const core_list_t(n00b_abi_arm_v1) *arms;
+    const core_list_t(uint32_t) *indexes;
+    uint32_t stream_base;
+    uint8_t *need;
+} trace_source_t;
+
+static const n00b_abi_field_v1 *
+trace_member(const trace_source_t *source, uint32_t type_index,
+             uint32_t ordinal)
+{
+    n00b_abi_range_v1 range = source->members[type_index];
+    if (ordinal >= range.count || range.first < source->stream_base)
+        return nullptr;
+    uint32_t first = range.first - source->stream_base;
+    if (first > source->indexes->len
+        || range.count > source->indexes->len - first) return nullptr;
+    uint32_t index = source->indexes->data[first + ordinal];
+    if (!index) return nullptr;
+    if (source->types->rows[type_index].kind == N00B_ABI_TYPE_VARIANT)
+        return index < source->arms->len
+            ? &source->arms->data[index].field : nullptr;
+    return index < source->fields->len
+        ? &source->fields->data[index] : nullptr;
+}
+
+static trace_need_t
+trace_need(trace_source_t *source, uint32_t type_index)
+{
+    if (type_index >= source->types->count) return TRACE_INVALID;
+    trace_need_t cached = source->need[type_index];
+    if (cached) return cached == TRACE_ACTIVE ? TRACE_INVALID : cached;
+    const n00b_abi_type_v1 *type = &source->types->rows[type_index];
+    trace_need_t result = TRACE_NONE;
+    switch (type->kind) {
+    case N00B_ABI_TYPE_REFERENCE:
+    case N00B_ABI_TYPE_ARRAY:
+    case N00B_ABI_TYPE_VIEW:
+    case N00B_ABI_TYPE_STRING:
+    case N00B_ABI_TYPE_BOX:
+    case N00B_ABI_TYPE_CALLBACK:
+    case N00B_ABI_TYPE_TRAIT:
+    case N00B_ABI_TYPE_UNION:
+        result = type->size_bits && type->alignment_bytes
+            ? TRACE_PRESENT : TRACE_UNKNOWN;
+        break;
+    case N00B_ABI_TYPE_RECORD:
+    case N00B_ABI_TYPE_TUPLE:
+    case N00B_ABI_TYPE_VARIANT: {
+        if (!type->layout_index) {
+            result = TRACE_UNKNOWN;
+            break;
+        }
+        source->need[type_index] = TRACE_ACTIVE;
+        n00b_abi_range_v1 members = source->members[type_index];
+        for (uint32_t i = 0; i < members.count; i++) {
+            const n00b_abi_field_v1 *field = trace_member(source,
+                type_index, i);
+            trace_need_t child = field
+                ? trace_need(source, field->child_type_index)
+                : TRACE_INVALID;
+            if (child == TRACE_INVALID || child == TRACE_UNKNOWN) {
+                result = child;
+                break;
+            }
+            if (child == TRACE_PRESENT) result = TRACE_PRESENT;
+        }
+        break;
+    }
+    case N00B_ABI_TYPE_OPTION:
+    case N00B_ABI_TYPE_WRAPPER:
+    case N00B_ABI_TYPE_ATOMIC:
+    case N00B_ABI_TYPE_VARIABLE:
+        /* These need representation-specific tracing before a parent map
+         * can safely include them. */
+        result = TRACE_UNKNOWN;
+        break;
+    default:
+        break;
+    }
+    source->need[type_index] = result;
+    return result;
+}
+
+static bool
+trace_index_append(uint32_t stream_base, core_list_t(uint32_t) *indexes,
+                   uint32_t index, n00b_abi_range_v1 *range)
+{
+    if (indexes->len >= UINT32_MAX - stream_base
+        || range->count == UINT32_MAX) return false;
+    if (!range->count) range->first = stream_base + (uint32_t)indexes->len;
+    core_list_push(*indexes, index);
+    range->count++;
+    return true;
+}
+
+static bool
+trace_child_append(const trace_source_t *source,
+                   uint32_t parent_type_index,
+                   const n00b_abi_field_v1 *field, uint32_t stream_base,
+                   core_list_t(n00b_abi_trace_child_v1) *children,
+                   core_list_t(uint32_t) *indexes,
+                   n00b_abi_range_v1 *range)
+{
+    const n00b_abi_type_v1 *parent = &source->types->rows[parent_type_index];
+    const n00b_abi_type_v1 *child = &source->types->rows[
+        field->child_type_index];
+    uint64_t offset = field->logical_bit_offset;
+    if (offset % 8 || !child->alignment_bytes
+        || (offset / 8) % child->alignment_bytes
+        || offset > parent->size_bits
+        || child->size_bits > parent->size_bits - offset
+        || children->len >= UINT32_MAX) return false;
+    uint32_t index = (uint32_t)children->len;
+    core_list_push(*children, ((n00b_abi_trace_child_v1){
+        .byte_offset = offset / 8,
+        .child_type_index = field->child_type_index,
+    }));
+    return trace_index_append(stream_base, indexes, index, range);
+}
+
+static bool
+append_traces(trace_source_t *source,
+              const core_list_t(n00b_abi_layout_v1) *layouts,
+              uint32_t stream_base,
+              core_list_t(n00b_abi_trace_v1) *traces,
+              core_list_t(n00b_abi_trace_child_v1) *children,
+              core_list_t(n00b_abi_trace_arm_v1) *arms,
+              core_list_t(uint32_t) *indexes)
+{
+    core_list_push(*traces, ((n00b_abi_trace_v1){0}));
+    core_list_push(*children, ((n00b_abi_trace_child_v1){0}));
+    core_list_push(*arms, ((n00b_abi_trace_arm_v1){0}));
+    for (uint32_t type_index = 0; type_index < source->types->count;
+         type_index++) {
+        n00b_abi_type_v1 *type = &source->types->rows[type_index];
+        if (type->kind != N00B_ABI_TYPE_RECORD
+            && type->kind != N00B_ABI_TYPE_TUPLE
+            && type->kind != N00B_ABI_TYPE_VARIANT) continue;
+        trace_need_t need = trace_need(source, type_index);
+        if (need == TRACE_INVALID) return false;
+        if (need != TRACE_PRESENT) continue;
+        if (!type->layout_index || type->layout_index >= layouts->len
+            || traces->len >= UINT32_MAX) return false;
+        n00b_abi_trace_v1 trace = {.type_index = type_index};
+        bool variant = type->kind == N00B_ABI_TYPE_VARIANT;
+        if (variant) {
+            trace.tag_extractor_index = layouts->data[
+                type->layout_index].tag_extractor_index;
+            if (!trace.tag_extractor_index) return false;
+        }
+        for (uint32_t i = 0; i < source->members[type_index].count; i++) {
+            const n00b_abi_field_v1 *field = trace_member(source,
+                type_index, i);
+            if (!field) return false;
+            n00b_abi_range_v1 *range = &trace.fixed_children;
+            n00b_abi_trace_arm_v1 arm = {0};
+            if (variant) range = &arm.children;
+            if (trace_need(source, field->child_type_index)
+                == TRACE_PRESENT
+                && !trace_child_append(source, type_index, field,
+                    stream_base, children, indexes, range)) return false;
+            if (variant) {
+                uint32_t arm_index = source->indexes->data[
+                    source->members[type_index].first
+                    - source->stream_base + i];
+                if (arm_index >= source->arms->len
+                    || arms->len >= UINT32_MAX) return false;
+                arm.tag_value = source->arms->data[arm_index].tag_value;
+                core_list_push(*arms, arm);
+            }
+        }
+        if (variant) {
+            uint32_t first = (uint32_t)(arms->len
+                - source->members[type_index].count);
+            for (uint32_t i = first; i < arms->len; i++)
+                if (!trace_index_append(stream_base, indexes, i,
+                        &trace.arms)) return false;
+        }
+        type->tracing_index = (uint32_t)traces->len;
+        core_list_push(*traces, trace);
+    }
+    return true;
+}
 
 static bool
 same_name(const char *left, const char *right)
@@ -316,6 +516,9 @@ n00bb_abi_type_layout_rows_build(
     core_list_t(n00b_abi_field_v1) fields = {0};
     core_list_t(n00b_abi_arm_v1) arms = {0};
     core_list_t(n00b_abi_tag_extractor_v1) tag_extractors = {0};
+    core_list_t(n00b_abi_trace_v1) traces = {0};
+    core_list_t(n00b_abi_trace_child_v1) trace_children = {0};
+    core_list_t(n00b_abi_trace_arm_v1) trace_arms = {0};
     core_list_t(uint32_t) indexes = {0};
     uint32_t *type_layout_indexes = core_alloc_array(uint32_t, types->count);
     n00b_abi_range_v1 *type_field_ranges = core_alloc_array(
@@ -420,6 +623,21 @@ n00bb_abi_type_layout_rows_build(
             types->rows[i].layout_index = type_layout_indexes[i];
             types->rows[i].fields_or_arms = type_field_ranges[i];
         }
+        uint8_t *need = core_alloc_array(uint8_t, types->count);
+        valid = need != nullptr;
+        if (valid) {
+            memset(need, 0, types->count);
+            trace_source_t source = {
+                .types = types, .members = type_field_ranges,
+                .fields = &fields, .arms = &arms, .indexes = &indexes,
+                .stream_base = stream_base, .need = need,
+            };
+            valid = append_traces(&source, &layouts, stream_base, &traces,
+                &trace_children, &trace_arms, &indexes);
+        }
+        core_free(need);
+    }
+    if (valid) {
         *out = (n00bb_abi_type_layout_rows_t){
             .layouts = layouts.data, .layout_count = layouts.len,
             .runs = runs.data, .run_count = runs.len,
@@ -428,6 +646,11 @@ n00bb_abi_type_layout_rows_build(
             .arms = arms.data, .arm_count = arms.len,
             .tag_extractors = tag_extractors.data,
             .tag_extractor_count = tag_extractors.len,
+            .traces = traces.data, .trace_count = traces.len,
+            .trace_children = trace_children.data,
+            .trace_child_count = trace_children.len,
+            .trace_arms = trace_arms.data,
+            .trace_arm_count = trace_arms.len,
             .stream_indexes = indexes.data, .stream_index_count = indexes.len,
         };
     }
@@ -438,6 +661,9 @@ n00bb_abi_type_layout_rows_build(
         core_list_free(fields);
         core_list_free(arms);
         core_list_free(tag_extractors);
+        core_list_free(traces);
+        core_list_free(trace_children);
+        core_list_free(trace_arms);
         core_list_free(indexes);
     }
     core_free(type_layout_indexes);
@@ -455,6 +681,9 @@ n00bb_abi_type_layout_rows_release(n00bb_abi_type_layout_rows_t *rows)
     core_free(rows->fields);
     core_free(rows->arms);
     core_free(rows->tag_extractors);
+    core_free(rows->traces);
+    core_free(rows->trace_children);
+    core_free(rows->trace_arms);
     core_free(rows->stream_indexes);
     *rows = (n00bb_abi_type_layout_rows_t){0};
 }

@@ -21,6 +21,12 @@ typedef struct {
     size_t arm_count;
     n00b_abi_tag_extractor_v1 *tag_extractors;
     size_t tag_extractor_count;
+    n00b_abi_trace_v1 *traces;
+    size_t trace_count;
+    n00b_abi_trace_child_v1 *trace_children;
+    size_t trace_child_count;
+    n00b_abi_trace_arm_v1 *trace_arms;
+    size_t trace_arm_count;
     uint32_t *stream_indexes;
     size_t stream_index_count;
 } n00bb_abi_type_layout_rows_t;
