@@ -7,6 +7,8 @@
 #include "abi_directory.h"
 #include "abi_string.h"
 
+_Static_assert(sizeof(size_t) >= 8, "runtime ABI targets need 64-bit sizes");
+
 #if defined(__linux__) && defined(__x86_64__)
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -124,6 +126,94 @@ table_for(const n00b_abi_snapshot_v1 *snapshot, uint32_t kind)
     return table->kind ? table : nullptr;
 }
 
+typedef struct {
+    uint32_t type_index;
+    uint32_t next_link;
+} specialization_frame_t;
+
+static bool
+specialization_graph_valid(const n00b_abi_snapshot_v1 *snapshot)
+{
+    uint32_t type_count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
+    uint32_t link_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_SPECIALIZATION_LINK);
+    if (!type_count || (table_for(snapshot, N00B_ABI_TABLE_SPECIALIZATION_LINK)
+                        && !link_count)) return false;
+    size_t frame_bytes = (size_t)type_count * sizeof(specialization_frame_t);
+    size_t scratch_bytes = frame_bytes + type_count + link_count;
+    uint8_t *scratch = snapshot_alloc(scratch_bytes);
+    if (!scratch) return false;
+    specialization_frame_t *frames = (void *)scratch;
+    uint8_t *colors = scratch + frame_bytes;
+    uint8_t *owned_links = colors + type_count;
+    bool valid = true;
+    if (link_count) {
+        const uint32_t *reserved = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_SPECIALIZATION_LINK, 0, nullptr);
+        valid = reserved && !*reserved;
+    }
+    for (uint32_t child = 0; valid && child < type_count; child++) {
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, child);
+        if (!type) { valid = false; break; }
+        uint32_t start = type->specialization_start_ix;
+        uint32_t end = type->specialization_end_ix;
+        if ((!start && end) || (start && (end <= start || end > link_count))) {
+            valid = false;
+            break;
+        }
+        for (uint32_t i = start; valid && i < end; i++) {
+            const uint32_t *parent = n00b_abi_v1_record(snapshot,
+                N00B_ABI_TABLE_SPECIALIZATION_LINK, i, nullptr);
+            if (!parent || *parent >= type_count || *parent == child
+                || owned_links[i]) { valid = false; break; }
+            owned_links[i] = 1;
+            for (uint32_t j = start; j < i; j++) {
+                const uint32_t *previous = n00b_abi_v1_record(snapshot,
+                    N00B_ABI_TABLE_SPECIALIZATION_LINK, j, nullptr);
+                if (!previous || *previous == *parent) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+    }
+    for (uint32_t i = 1; valid && i < link_count; i++)
+        if (!owned_links[i]) valid = false;
+    for (uint32_t root = 0; valid && root < type_count; root++) {
+        if (colors[root]) continue;
+        size_t depth = 0;
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, root);
+        frames[depth++] = (specialization_frame_t){
+            .type_index = root,
+            .next_link = type->specialization_start_ix,
+        };
+        colors[root] = 1;
+        while (depth && valid) {
+            specialization_frame_t *frame = &frames[depth - 1];
+            type = n00b_abi_v1_type(snapshot, frame->type_index);
+            if (frame->next_link == type->specialization_end_ix) {
+                colors[frame->type_index] = 2;
+                depth--;
+                continue;
+            }
+            const uint32_t *parent = n00b_abi_v1_record(snapshot,
+                N00B_ABI_TABLE_SPECIALIZATION_LINK, frame->next_link++,
+                nullptr);
+            if (!parent || colors[*parent] == 1) { valid = false; break; }
+            if (colors[*parent] == 2) continue;
+            const n00b_abi_type_v1 *parent_type =
+                n00b_abi_v1_type(snapshot, *parent);
+            frames[depth++] = (specialization_frame_t){
+                .type_index = *parent,
+                .next_link = parent_type->specialization_start_ix,
+            };
+            colors[*parent] = 1;
+        }
+    }
+    snapshot_free(scratch, scratch_bytes);
+    return valid;
+}
+
 uint32_t
 n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
                            uint64_t *published_generation,
@@ -182,6 +272,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
         valid = nil->kind == N00B_ABI_TYPE_NIL
             && nil->typehash == UINT64_C(0x0ea862bddb8ce94c);
     }
+    if (valid) valid = specialization_graph_valid(candidate);
     if (!valid) {
         snapshot_free(candidate, sizeof(*candidate));
         return registration_error(error, N00B_ABI_BAD_METADATA, 0, 0, 0);
@@ -331,3 +422,131 @@ TYPED_GETTER(trace, TRACE, trace)
 TYPED_GETTER(storage, STORAGE, storage)
 
 #undef TYPED_GETTER
+
+int32_t
+n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,
+                          uint64_t typehash, uint32_t *type_index)
+{
+    if (!snapshot || !type_index) return -1;
+    uint32_t found = UINT32_MAX;
+    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
+    for (uint32_t i = 0; i < count; i++) {
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, i);
+        if (!type || (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+            || type->typehash != typehash) continue;
+        if (found != UINT32_MAX) return -1;
+        found = i;
+    }
+    if (found == UINT32_MAX) return 0;
+    *type_index = found;
+    return 1;
+}
+
+int32_t
+n00b_abi_v1_type_specializes(const n00b_abi_snapshot_v1 *snapshot,
+                             uint32_t type_index,
+                             uint32_t general_type_index)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
+    if (!snapshot || type_index >= count || general_type_index >= count)
+        return -1;
+    if (type_index == general_type_index) return 0;
+    size_t scratch_bytes = (size_t)count * sizeof(uint32_t) + count;
+    uint8_t *scratch = snapshot_alloc(scratch_bytes);
+    if (!scratch) return -1;
+    uint32_t *stack = (void *)scratch;
+    uint8_t *seen = scratch + (size_t)count * sizeof(uint32_t);
+    size_t depth = 0;
+    stack[depth++] = type_index;
+    seen[type_index] = 1;
+    int32_t result = 0;
+    while (depth && !result) {
+        uint32_t child = stack[--depth];
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, child);
+        for (uint32_t i = type->specialization_start_ix;
+             i < type->specialization_end_ix; i++) {
+            const uint32_t *parent = n00b_abi_v1_record(snapshot,
+                N00B_ABI_TABLE_SPECIALIZATION_LINK, i, nullptr);
+            if (*parent == general_type_index) { result = 1; break; }
+            if (!seen[*parent]) {
+                seen[*parent] = 1;
+                stack[depth++] = *parent;
+            }
+        }
+    }
+    snapshot_free(scratch, scratch_bytes);
+    return result;
+}
+
+int32_t
+n00b_abi_v1_resolve_trait_method(const n00b_abi_snapshot_v1 *snapshot,
+                                 uint32_t trait_type_index,
+                                 uint32_t method_ordinal,
+                                 uint32_t receiver_type_index,
+                                 uint32_t *function_index)
+{
+    if (!snapshot || !function_index) return -1;
+    const n00b_abi_type_v1 *trait = n00b_abi_v1_type(snapshot,
+        trait_type_index);
+    const n00b_abi_type_v1 *receiver = n00b_abi_v1_type(snapshot,
+        receiver_type_index);
+    if (!trait || trait->kind != N00B_ABI_TYPE_TRAIT || !receiver
+        || (receiver->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+        || method_ordinal >= trait->fields_or_arms.count) return -1;
+    uint32_t method_index;
+    if (n00b_abi_v1_index_at(snapshot, trait->fields_or_arms,
+            method_ordinal, &method_index) != 1) return -1;
+    const n00b_abi_trait_method_v1 *method = n00b_abi_v1_record(snapshot,
+        N00B_ABI_TABLE_TRAIT_METHOD, method_index, nullptr);
+    if (!method || method->trait_type_index != trait_type_index
+        || method->declaration_ordinal != method_ordinal) return -1;
+    const n00b_abi_dispatch_v1 *dispatch = nullptr;
+    uint32_t dispatch_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_DISPATCH);
+    for (uint32_t i = 1; i < dispatch_count; i++) {
+        const n00b_abi_dispatch_v1 *candidate = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_DISPATCH, i, nullptr);
+        if (candidate->trait_type_index != trait_type_index
+            || candidate->method_ordinal != method_ordinal) continue;
+        if (dispatch) return -1;
+        dispatch = candidate;
+    }
+    if (!dispatch) return 0;
+    uint32_t selected_type = UINT32_MAX, selected_function = 0;
+    for (uint32_t i = 0; i < dispatch->entries.count; i++) {
+        uint32_t entry_index;
+        if (n00b_abi_v1_index_at(snapshot, dispatch->entries, i,
+                                 &entry_index) != 1) return -1;
+        const n00b_abi_dispatch_entry_v1 *entry = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_DISPATCH_ENTRY, entry_index, nullptr);
+        if (!entry || !entry->function_index
+            || !n00b_abi_v1_function(snapshot, entry->function_index)
+            || !n00b_abi_v1_type(snapshot, entry->receiver_type_index))
+            return -1;
+        int32_t matches = receiver_type_index == entry->receiver_type_index
+            ? 1 : n00b_abi_v1_type_specializes(snapshot, receiver_type_index,
+                                                entry->receiver_type_index);
+        if (matches < 0) return -1;
+        if (!matches) continue;
+        if (selected_type == UINT32_MAX) {
+            selected_type = entry->receiver_type_index;
+            selected_function = entry->function_index;
+            continue;
+        }
+        if (selected_type == entry->receiver_type_index) return -1;
+        int32_t more_specific = n00b_abi_v1_type_specializes(snapshot,
+            entry->receiver_type_index, selected_type);
+        if (more_specific < 0) return -1;
+        if (more_specific) {
+            selected_type = entry->receiver_type_index;
+            selected_function = entry->function_index;
+            continue;
+        }
+        int32_t less_specific = n00b_abi_v1_type_specializes(snapshot,
+            selected_type, entry->receiver_type_index);
+        if (less_specific <= 0) return -1;
+    }
+    if (selected_type == UINT32_MAX) return 0;
+    *function_index = selected_function;
+    return 1;
+}
