@@ -283,6 +283,10 @@ main(int argc, char **argv)
         == N00B_ABI_BAD_METADATA && error.status == N00B_ABI_BAD_METADATA
         && !n00b_abi_v1_current_snapshot());
     image.header.target_id = HOST_TARGET;
+    image.header.cpu_profile = UINT64_C(1) << 63;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA && !n00b_abi_v1_current_snapshot());
+    image.header.cpu_profile = 0;
     image.locations[1].end_column = 0;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA

@@ -34,6 +34,15 @@ _Static_assert(sizeof(size_t) >= 8, "runtime ABI targets need 64-bit sizes");
 #include <sys/mman.h>
 #include <sys/syscall.h>
 
+static bool host_native_atomic128(void)
+{
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(1u), "c"(0u));
+    return (ecx & (UINT32_C(1) << 13)) != 0;
+}
+
 static void *snapshot_alloc(size_t bytes)
 {
     register long r10 __asm__("r10") = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -61,6 +70,21 @@ static void snapshot_free(void *address, size_t bytes)
 #define N00B_ABI_HOST_TARGET N00B_ABI_TARGET_X86_64_LINUX
 #elif defined(__APPLE__) && defined(__aarch64__)
 #include <sys/mman.h>
+#include <sys/sysctl.h>
+
+static bool host_feature(const char *name)
+{
+    int present = 0;
+    size_t bytes = sizeof(present);
+    return sysctlbyname(name, &present, &bytes, nullptr, 0) == 0
+        && bytes == sizeof(present) && present != 0;
+}
+
+static bool host_native_atomic128(void)
+{
+    return host_feature("hw.optional.arm.FEAT_LSE2")
+        && host_feature("hw.optional.arm.FEAT_LSE128");
+}
 
 static void *snapshot_alloc(size_t bytes)
 {
@@ -77,6 +101,11 @@ static void snapshot_free(void *address, size_t bytes)
 #elif defined(_WIN32) && defined(_M_X64)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+
+static bool host_native_atomic128(void)
+{
+    return IsProcessorFeaturePresent(PF_COMPARE_EXCHANGE128) != 0;
+}
 
 static void *snapshot_alloc(size_t bytes)
 {
@@ -182,7 +211,10 @@ header_valid(const n00b_abi_header_v1 *header, uint64_t bytes)
         && header->header_bytes == sizeof(*header)
         && header->target_id == N00B_ABI_HOST_TARGET
         && header->abi_profile_id == N00B_ABI_V1_PROFILE_ID
-        && !header->feature_bits && !header->cpu_profile
+        && !header->feature_bits
+        && !(header->cpu_profile & ~N00B_ABI_CPU_NATIVE_ATOMIC128)
+        && (!(header->cpu_profile & N00B_ABI_CPU_NATIVE_ATOMIC128)
+            || host_native_atomic128())
         && header->data_layout_profile == N00B_ABI_DATA_LAYOUT_PROFILE_V1
         && !(header->artifact_capabilities
              & ~(N00B_ABI_CAP_WRAPPING | N00B_ABI_CAP_DEBUG
