@@ -1,0 +1,5 @@
+const stderr_fd: i32 = 2
+
+public func raw_debug(s: string) -> nil {
+    __fd_write(stderr_fd, s)
+}

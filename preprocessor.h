@@ -9,6 +9,8 @@ typedef bool (*n00bb_preprocessor_import_fn)(
     void *context, parse_grammar_t *grammar, parse_tree_t *import_statement,
     core_translation_unit_t *importer, core_translation_unit_t **imported,
     parse_tree_t **imported_tree);
+typedef bool (*n00bb_preprocessor_implicit_import_fn)(
+    void *context, parse_grammar_t *grammar, core_translation_unit_t *importer);
 typedef bool (*n00bb_preprocessor_prepare_import_fn)(
     void *context, parse_grammar_t *grammar, parse_tree_t *import_statement,
     core_translation_unit_t *importer);
@@ -40,6 +42,7 @@ typedef struct {
     size_t definition_count;
     bool release_mode;
     n00bb_preprocessor_import_fn load_import;
+    n00bb_preprocessor_implicit_import_fn load_implicit_import;
     void *import_context;
     n00bb_preprocessor_prepare_import_fn prepare_import;
     n00bb_preprocessor_selected_body_fn selected_body;

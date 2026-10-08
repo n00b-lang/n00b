@@ -2329,6 +2329,13 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     bool previous_cycle_warning = ctx->cycle_warning_emitted;
     ctx->unit = unit;
     ctx->cycle_warning_emitted = false;
+    if (ctx->options && ctx->options->load_implicit_import
+        && !ctx->options->load_implicit_import(
+            ctx->options->import_context, ctx->grammar, unit)) {
+        if (!core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
+            pp_error(ctx, tree, "cannot load an implicit import");
+        ctx->failed = true;
+    }
     core_list_t(pp_deferred_stmt_t) imports =
         core_list_new(pp_deferred_stmt_t);
     core_list_t(pp_deferred_stmt_t) deferred =

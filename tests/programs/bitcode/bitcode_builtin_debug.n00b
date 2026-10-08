@@ -1,0 +1,5 @@
+comptime {
+    builtin.io.debug.raw_debug("compile-debug\n")
+} else {
+    builtin.io.debug.raw_debug("runtime-debug\n")
+}

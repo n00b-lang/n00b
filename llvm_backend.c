@@ -179,6 +179,27 @@ native_result_type(ir_module_t *module, th_type *signature,
 static LLVMTypeRef function_type(LLVMModuleRef target, ir_func_t *function);
 
 static LLVMValueRef
+integer_constant(ir_machine_t machine, LLVMTypeRef type, ir_lit_t literal)
+{
+    if (!type || LLVMGetTypeKind(type) != LLVMIntegerTypeKind
+        || !machine.width || machine.width > 128
+        || (machine.class != IR_CLASS_BOOL && machine.class != IR_CLASS_SINT
+            && machine.class != IR_CLASS_UINT)) return nullptr;
+    ir_uint_t maximum = machine.width == 128 ? ~(ir_uint_t)0
+        : (((ir_uint_t)1 << machine.width) - 1);
+    if (machine.class == IR_CLASS_SINT) {
+        if (literal.mag > (literal.neg ? (maximum >> 1) + 1
+                                       : maximum >> 1)) return nullptr;
+    } else if (literal.neg || literal.mag > maximum) return nullptr;
+    ir_uint_t bits = literal.neg ? (ir_uint_t)0 - literal.mag
+                                 : literal.mag;
+    if (machine.width <= 64)
+        return LLVMConstInt(type, (uint64_t)bits, false);
+    uint64_t words[] = {(uint64_t)bits, (uint64_t)(bits >> 64)};
+    return LLVMConstIntOfArbitraryPrecision(type, 2, words);
+}
+
+static LLVMValueRef
 lowered_value(lower_state_t *state, const ir_value_t *value)
 {
     if (!value) return nullptr;
@@ -200,6 +221,13 @@ lowered_value(lower_state_t *state, const ir_value_t *value)
         }
         core_buffer_release(&symbol);
         return function;
+    }
+    if (value->kind == IR_VAL_GLOBAL && value->global) {
+        LLVMValueRef global = LLVMGetNamedGlobal(state->module,
+                                                value->global->name);
+        if (!global) return nullptr;
+        return LLVMBuildLoad2(state->builder, LLVMGlobalGetValueType(global),
+                              global, "global");
     }
     if (value->kind == IR_VAL_LOCAL && value->local) {
         for (uint32_t i = 0; i < state->function->n_locals; i++)
@@ -1065,6 +1093,49 @@ phase_cache_global(LLVMModuleRef module, const char *identifier,
 }
 
 static bool
+allocation_has_only_local_uses(const ir_func_t *function,
+                               const ir_instr_t *allocation)
+{
+    bool required = false;
+    if (!allocation->dest
+        || allocation->block != ir_block_entry((ir_func_t *)function)
+        || ir_instr_storage_class(allocation, &required) || required)
+        return false;
+    for (uint32_t i = 0; i < function->n_blocks; i++) {
+        const ir_block_t *block = function->blocks[i];
+        for (uint32_t j = 0; j < block->n_instrs; j++) {
+            const ir_instr_t *use = block->instrs[j];
+            for (uint32_t k = 0; k < use->n_operands; k++) {
+                const ir_operand_t *operand = &use->operands[k];
+                const ir_value_t *referenced = nullptr;
+                switch (operand->kind) {
+                case IR_OPD_VALUE:
+                case IR_OPD_SPREAD:
+                case IR_OPD_ARG:
+                case IR_OPD_OUT:
+                case IR_OPD_FRESH:
+                    referenced = operand->value;
+                    break;
+                case IR_OPD_PHI_ARM:
+                    referenced = operand->phi.value;
+                    break;
+                case IR_OPD_NAMED_ARG:
+                    referenced = operand->named.value;
+                    break;
+                default:
+                    break;
+                }
+                if (referenced != allocation->dest) continue;
+                if (k != 0 || (use->op != IR_OP_LOAD
+                               && use->op != IR_OP_STORE)
+                    || operand->kind != IR_OPD_VALUE) return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool
 lower_instruction(lower_state_t *state, ir_instr_t *instruction)
 {
     LLVMValueRef result = nullptr;
@@ -1088,34 +1159,50 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 LLVMGetModuleContext(state->module)), operands[0].lit.f);
             return save_result(state, instruction, result);
         }
-        if (!machine.width || machine.width > 128
-            || (machine.class != IR_CLASS_BOOL
-                && machine.class != IR_CLASS_SINT
-                && machine.class != IR_CLASS_UINT)) break;
         LLVMTypeRef type = scalar_type(state->function->owner,
             instruction->dest->type, LLVMGetModuleContext(state->module));
-        if (!type || LLVMGetTypeKind(type) != LLVMIntegerTypeKind) break;
-        ir_lit_t literal = operands[0].lit.i;
-        ir_uint_t maximum = machine.width == 128 ? ~(ir_uint_t)0
-            : (((ir_uint_t)1 << machine.width) - 1);
-        if (machine.class == IR_CLASS_SINT) {
-            if (literal.mag > (literal.neg ? (maximum >> 1) + 1
-                                           : maximum >> 1)) break;
-        } else if (literal.neg || literal.mag > maximum) break;
-        ir_uint_t bits = literal.neg ? (ir_uint_t)0 - literal.mag
-                                     : literal.mag;
-        if (machine.width <= 64)
-            result = LLVMConstInt(type, (uint64_t)bits, false);
-        else {
-            uint64_t words[] = {(uint64_t)bits, (uint64_t)(bits >> 64)};
-            result = LLVMConstIntOfArbitraryPrecision(type, 2, words);
-        }
-        return save_result(state, instruction, result);
+        result = integer_constant(machine, type, operands[0].lit.i);
+        return result ? save_result(state, instruction, result)
+                      : unsupported(state, instruction);
     }
     case IR_OP_COPY:
         if (count != 1 || operands[0].kind != IR_OPD_VALUE) break;
         result = lowered_value(state, operands[0].value);
         return result && save_result(state, instruction, result);
+    case IR_OP_ALLOCA:
+    case IR_OP_ALLOC: {
+        if (count != 1 || operands[0].kind != IR_OPD_TYPE
+            || !instruction->dest
+            || (instruction->op == IR_OP_ALLOC
+                && !allocation_has_only_local_uses(state->function,
+                                                    instruction))) break;
+        LLVMTypeRef type = value_type(state->function->owner,
+            operands[0].type, LLVMGetModuleContext(state->module));
+        if (!type || LLVMGetTypeKind(type) == LLVMVoidTypeKind) break;
+        result = LLVMBuildAlloca(state->builder, type, "storage");
+        return save_result(state, instruction, result);
+    }
+    case IR_OP_LOAD: {
+        if (count != 1 || operands[0].kind != IR_OPD_VALUE
+            || !instruction->dest || instruction->n_mods) break;
+        LLVMValueRef address = lowered_value(state, operands[0].value);
+        LLVMTypeRef type = value_type(state->function->owner,
+            instruction->dest->type, LLVMGetModuleContext(state->module));
+        if (!address || !type || LLVMGetTypeKind(type) == LLVMVoidTypeKind)
+            break;
+        result = LLVMBuildLoad2(state->builder, type, address, "loaded");
+        return save_result(state, instruction, result);
+    }
+    case IR_OP_STORE: {
+        if (count != 2 || operands[0].kind != IR_OPD_VALUE
+            || operands[1].kind != IR_OPD_VALUE || instruction->n_mods)
+            break;
+        LLVMValueRef address = lowered_value(state, operands[0].value);
+        LLVMValueRef value = lowered_value(state, operands[1].value);
+        if (!address || !value) break;
+        LLVMBuildStore(state->builder, value, address);
+        return true;
+    }
     case IR_OP_AGGREGATE:
         result = tuple_aggregate(state, instruction);
         if (!result) result = constant_array(state, instruction);
@@ -1527,9 +1614,40 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
              size_t type_index_count,
              core_diagnostics_t *diagnostics)
 {
-    if (ir_global_count(source))
-        return backend_error(diagnostics,
-            "LLVM backend cannot lower module globals yet");
+    for (size_t i = 0; i < ir_global_count(source); i++) {
+        ir_global_t *global = ir_global_at((ir_module_t *)source, i);
+        LLVMTypeRef type = value_type((ir_module_t *)source, global->type,
+                                     LLVMGetModuleContext(target));
+        if (!type || LLVMGetTypeKind(type) == LLVMVoidTypeKind)
+            return backend_error(diagnostics,
+                "LLVM backend cannot lower this global type yet");
+        LLVMValueRef declared = LLVMAddGlobal(target, type, global->name);
+        if (!declared)
+            return backend_error(diagnostics,
+                "LLVM backend could not declare global");
+        if (global->is_extern) continue;
+        const ir_global_init_value_t *init = global->static_initializer;
+        ir_machine_t machine = ir_machine_of((ir_module_t *)source,
+                                             global->type);
+        LLVMValueRef value = nullptr;
+        if (global->has_static_initializer && init) {
+            if (init->kind == IR_GLOBAL_INIT_INT)
+                value = integer_constant(machine, type, init->integer);
+            else if (init->kind == IR_GLOBAL_INIT_BOOL)
+                value = integer_constant(machine, type,
+                    (ir_lit_t){.mag = init->boolean});
+            else if (init->kind == IR_GLOBAL_INIT_FLOAT
+                     && machine.class == IR_CLASS_FLOAT && machine.width == 64)
+                value = LLVMConstReal(type, init->floating);
+        }
+        if (!value)
+            return backend_error(diagnostics,
+                "LLVM backend cannot lower this global initializer yet");
+        LLVMSetInitializer(declared, value);
+        LLVMSetGlobalConstant(declared, global->mutability == IR_MUT_CONST);
+        if (global->is_static)
+            LLVMSetLinkage(declared, LLVMInternalLinkage);
+    }
     for (size_t i = 0; i < ir_func_count(source); i++) {
         ir_func_t *function = ir_func_at((ir_module_t *)source, i);
         LLVMTypeRef signature = function_type(target, function);

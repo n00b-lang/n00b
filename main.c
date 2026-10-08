@@ -6531,6 +6531,8 @@ imported_symbol_is_visible(parse_grammar_t *grammar,
 {
     if (!symbol) return false;
     if (context_symbol(grammar, symbol)) return true;
+    if (core_string_eq(symbol->visibility, CORE_STRING_STATIC("public")))
+        return true;
     if (!symbol_is_public_declaration(symbol)) return use_unit == owner;
     n00bb_tu_state_t *owner_state = tu_state(owner);
     return (owner_state && owner_state->interface_module)
@@ -8166,7 +8168,9 @@ symbol_visibility(parse_sym_entry_t *symbol)
 {
     if (!symbol) return TH_ENV_PRIVATE;
     if (parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.external-export")))
+            CORE_STRING_STATIC("n00bb.external-export"))
+        || core_string_eq(symbol->visibility,
+            CORE_STRING_STATIC("public")))
         return TH_ENV_PUBLIC;
     if (symbol_is_public_declaration(symbol))
         return TH_ENV_PACKAGE;
@@ -45667,37 +45671,28 @@ discover_package_import(import_driver_t *driver,
 }
 
 static bool
-load_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
-            core_translation_unit_t *importer,
-            core_translation_unit_t **imported_out,
-            parse_tree_t **tree_out)
+load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
+                   parse_tree_t *statement, core_translation_unit_t *importer,
+                   core_module_spec_t *module, const char *operand,
+                   core_translation_unit_t **imported_out,
+                   parse_tree_t **tree_out)
 {
-    import_driver_t *driver = opaque;
-    core_module_spec_t module = {0};
-    char *operand_copy = nullptr;
-    if (!import_request_details(grammar, statement, importer, &module,
-                                &operand_copy)) return false;
     if (reject_unsupported_import_locator(driver->resolver, importer,
-                                          statement, operand_copy)) {
-        core_free(operand_copy);
-        core_module_spec_release(&module);
+                                          statement, operand)) {
         return false;
     }
     core_work_job_t *locate_job = nullptr;
     bool scheduled = add_locate_request_for_module(driver->queue,
-        driver->requests, driver->requests_lock, &module, operand_copy,
+        driver->requests, driver->requests_lock, module, operand,
         false, true, &locate_job);
-    core_free(operand_copy);
     if (!scheduled) {
-        core_module_spec_release(&module);
         import_error(importer, statement, "cannot schedule imported module");
         return false;
     }
 
-    if (!wait_for_locate_job(driver, locate_job))
+    if (!wait_for_locate_job(driver, locate_job) && statement)
         locate_job = discover_package_import(driver, importer, statement,
-                                             &module);
-    core_module_spec_release(&module);
+                                             module);
     if (!locate_job) {
         import_error(importer, statement, "imported module failed to load");
         return false;
@@ -45743,6 +45738,44 @@ load_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
     *imported_out = imported;
     *tree_out = tree;
     return true;
+}
+
+static bool
+load_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
+            core_translation_unit_t *importer,
+            core_translation_unit_t **imported_out,
+            parse_tree_t **tree_out)
+{
+    import_driver_t *driver = opaque;
+    core_module_spec_t module = {0};
+    char *operand = nullptr;
+    if (!import_request_details(grammar, statement, importer, &module,
+                                &operand)) return false;
+    bool loaded = load_import_module(driver, grammar, statement, importer,
+        &module, operand, imported_out, tree_out);
+    core_free(operand);
+    core_module_spec_release(&module);
+    return loaded;
+}
+
+static bool
+load_implicit_builtin(void *opaque, parse_grammar_t *grammar,
+                      core_translation_unit_t *importer)
+{
+    core_string_t name = importer->module.identifier;
+    if (name.u8_bytes >= sizeof("builtin.") - 1
+        && !memcmp(name.data, "builtin.", sizeof("builtin.") - 1))
+        return true;
+    import_driver_t *driver = opaque;
+    core_module_spec_t module = {0};
+    if (!core_module_spec_init(&module,
+            CORE_STRING_STATIC("builtin.io.debug"))) return false;
+    core_translation_unit_t *imported = nullptr;
+    parse_tree_t *tree = nullptr;
+    bool loaded = load_import_module(driver, grammar, nullptr, importer,
+        &module, "builtin.io.debug", &imported, &tree);
+    core_module_spec_release(&module);
+    return loaded;
 }
 
 static bool
@@ -47228,6 +47261,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     };
     n00bb_preprocessor_options_t active_options = *preprocessor_options;
     active_options.load_import = load_import;
+    active_options.load_implicit_import = load_implicit_builtin;
     active_options.import_context = &import_driver;
     active_options.prepare_import = prepare_import;
     active_options.selected_body = remember_selected_when_body;
