@@ -271,18 +271,18 @@ n00bb_abi_type_identity_rows_build(
 }
 
 bool
-n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index,
+n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
     const n00bb_abi_decl_index_t *declarations,
     n00bb_abi_type_identity_rows_t *rows)
 {
-    if (!index || !declarations || !rows || !rows->rows
+    if (!index || !types || !declarations || !rows || !rows->rows
         || rows->count != n00bb_abi_type_index_count(index)) return false;
     for (size_t i = 1; i < n00bb_abi_decl_symbol_count(declarations); i++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
             (uint32_t)i);
-        n00bb_signature_typevars_t *variables = symbol
-            ? parse_sym_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY)
-            : nullptr;
+        if (!symbol) return false;
+        n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
+            N00BB_SIGNATURE_TYPEVARS_KEY);
         if (!variables || !variables->len) continue;
         if (!symbol->decl_node || !variables->data
             || variables->len > UINT32_MAX) return false;
@@ -305,6 +305,39 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index,
                         || row->typevar_ordinal != ordinal))) return false;
             row->typevar_owner_scope_index = scope_index;
             row->typevar_ordinal = (uint32_t)ordinal;
+        }
+    }
+    for (size_t symbol_index = 1;
+         symbol_index < n00bb_abi_decl_symbol_count(declarations);
+         symbol_index++) {
+        parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
+            (uint32_t)symbol_index);
+        if (!symbol || symbol->kind != PARSE_SYM_FUNCTION
+            || !symbol->decl_node) continue;
+        n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
+            N00BB_SIGNATURE_TYPEVARS_KEY);
+        th_type *signature = n00bb_abi_type_index_symbol_type(index, symbol);
+        if (!signature) return false;
+        th_type **free_vars = nullptr;
+        size_t free_count = th_free_vars(types, signature, &free_vars);
+        size_t next_ordinal = variables ? variables->len : 0;
+        uint32_t scope_index = 0;
+        for (size_t i = 0; i < free_count; i++) {
+            uint32_t type_index = 0;
+            if (!n00bb_abi_type_index_find(index, free_vars[i], &type_index))
+                return false;
+            n00b_abi_type_v1 *row = &rows->rows[type_index];
+            if (row->kind != N00B_ABI_TYPE_VARIABLE) return false;
+            if (row->typevar_owner_scope_index) continue;
+            if (!scope_index) {
+                parse_scope_t *scope = core_tree_node_value(
+                    symbol->decl_node).scope;
+                if (!n00bb_abi_decl_find_scope(declarations, scope,
+                        &scope_index) || !scope_index) return false;
+            }
+            if (next_ordinal > UINT32_MAX) return false;
+            row->typevar_owner_scope_index = scope_index;
+            row->typevar_ordinal = (uint32_t)next_ordinal++;
         }
     }
     for (size_t i = 1; i < rows->count; i++)

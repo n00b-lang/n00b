@@ -5705,7 +5705,7 @@ static th_type *
 trait_type_reference(parse_grammar_t *grammar,
                      core_translation_unit_t *use_unit,
                      core_translation_unit_t *declaration_unit,
-                     parse_sym_entry_t *symbol)
+                     parse_sym_entry_t *symbol, th_type *existing)
 {
     n00bb_tu_state_t *state = tu_state(use_unit);
     if (!state || !state->types || !declaration_unit || !symbol
@@ -5713,8 +5713,20 @@ trait_type_reference(parse_grammar_t *grammar,
         || !nt_is(grammar, symbol->decl_node, "trait-decl")) return nullptr;
     core_buffer_t qualified = {0};
     append_module_type_name(declaration_unit, symbol->name, &qualified);
-    th_type *type = qualified.data ? th_var(state->types) : nullptr;
-    bool constrained = type && th_var_constrain(state->types, type,
+    th_type *type = existing ? th_resolve(existing) : nullptr;
+    if (!type || th_kind_of(type) != TH_VAR)
+        type = qualified.data ? th_var(state->types) : nullptr;
+    bool constrained = type && qualified.data;
+    for (size_t i = 0; constrained && i < th_var_constraint_count(type); i++) {
+        th_constraint constraint;
+        if (th_var_constraint_at(type, i, &constraint)
+            && constraint.kind == TH_CON_IMPLEMENTS
+            && constraint.iface && !strcmp(constraint.iface, qualified.data)) {
+            core_buffer_release(&qualified);
+            return type;
+        }
+    }
+    constrained = constrained && th_var_constrain(state->types, type,
         (th_constraint){.kind = TH_CON_IMPLEMENTS,
                         .iface = qualified.data});
     core_buffer_release(&qualified);
@@ -5772,7 +5784,8 @@ resolve_local_type_reference(parse_grammar_t *grammar,
     }
     if (symbol && symbol->decl_node
         && nt_is(grammar, symbol->decl_node, "trait-decl")) {
-        th_type *type = trait_type_reference(grammar, unit, unit, symbol);
+        th_type *type = trait_type_reference(grammar, unit, unit, symbol,
+                                             nullptr);
         if (type) core_tree_node_value(node).type = type;
     }
     else if (symbol && symbol->decl_node
@@ -7088,12 +7101,24 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 if (type_resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
                     && type_resolution.target.symbol
                     && type_resolution.target.symbol->type) {
+                    parse_sym_entry_t *type_symbol =
+                        type_resolution.target.symbol;
+                    bool trait = type_symbol->decl_node
+                        && nt_is(grammar, type_symbol->decl_node,
+                                 "trait-decl");
+                    core_translation_unit_t *declaration_unit = trait
+                        ? symbol_owner_in_import_graph(unit, type_symbol)
+                        : nullptr;
                     th_type *previous =
                         core_tree_node_value(site->node).type;
-                    th_type *resolved = previous
+                    th_type *target_type = trait
+                        ? trait_type_reference(grammar, unit,
+                            declaration_unit, type_symbol, previous)
+                        : type_symbol->type;
+                    th_type *resolved = !target_type ? nullptr : previous
                         ? th_unify_in_place(state->types, previous,
-                            type_resolution.target.symbol->type)
-                        : type_resolution.target.symbol->type;
+                            target_type)
+                        : target_type;
                     if (!resolved) {
                         core_diagnostics_report_at(
                             core_translation_unit_diagnostics(unit), unit,
@@ -27592,7 +27617,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
             }
             th_type *target_type = symbol->decl_node
                     && nt_is(grammar, symbol->decl_node, "trait-decl")
-                ? trait_type_reference(grammar, unit, unit, symbol)
+                ? trait_type_reference(grammar, unit, unit, symbol, nullptr)
                 : symbol->type;
             th_type *previous_type = core_tree_node_value(reference).type;
             th_type *resolved_type = previous_type && target_type
@@ -27681,7 +27706,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                                     && nt_is(grammar, symbol->decl_node,
                                              "trait-decl")
                                 ? trait_type_reference(grammar, owner, unit,
-                                                       symbol)
+                                                       symbol, nullptr)
                                 : type;
                             if (!reference_type) continue;
                             th_type *previous_reference_type =

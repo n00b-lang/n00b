@@ -1416,6 +1416,9 @@ N00B_PATH="$interface_programs" "$compiler" compile \
 [ -s "$tmp/trait_methods_abi.o" ]
 "$abi_record_object_test" "$tmp/trait_methods_abi.o" trait-methods
 "$abi_link_input_test" --trait-methods "$tmp/trait_methods_abi.o"
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/trait_type_import_abi.o" trait_import_probe
+"$abi_link_input_test" --trait-type-import "$tmp/trait_type_import_abi.o"
 "$compiler" compile --output "$tmp/generic_collision_abi.o" \
     "$program_dir/../abi/generic_collision.n00b"
 [ -s "$tmp/generic_collision_abi.o" ]

@@ -27,6 +27,7 @@
 #include "lib/indexed_table.h"
 #include "lib/list.h"
 #include "lib/object_section.h"
+#include "ir/typelang.h"
 #include "parse/tree_util.h"
 
 core_list_decl(core_object_emit_section_t);
@@ -1090,7 +1091,8 @@ n00bb_abi_emit_unit(
         && n00bb_abi_type_identity_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
             symbols, type_owner, type_owner_context, pool, &type_rows)
-        && n00bb_abi_type_variables_bind(type_index, declarations,
+        && n00bb_abi_type_variables_bind(type_index,
+            ir_module_types((ir_module_t *)runtime_ir), declarations,
             &type_rows)
         && n00bb_abi_type_components_build(type_index,
             (ir_module_t *)runtime_ir, prefix_stream_count,

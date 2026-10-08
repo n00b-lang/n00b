@@ -36,10 +36,10 @@ bool n00bb_abi_type_identity_rows_build(
 void n00bb_abi_type_identity_rows_release(
     n00bb_abi_type_identity_rows_t *rows);
 
-/* Assigns variable identities from cached declaration signature bindings.
- * Unbound provisional inference variables cannot be persisted. */
+/* Assigns variable identities from cached declaration signatures. Unbound
+ * provisional inference variables cannot be persisted. */
 bool n00bb_abi_type_variables_bind(
-    n00bb_abi_type_index_t *index,
+    n00bb_abi_type_index_t *index, th_ctx *types,
     const n00bb_abi_decl_index_t *declarations,
     n00bb_abi_type_identity_rows_t *rows);
 

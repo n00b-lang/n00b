@@ -695,6 +695,60 @@ find_symbol(const n00bb_abi_object_view_t *view, const char *wanted,
 }
 
 static void
+test_trait_type_import(const char *path)
+{
+    size_t object_bytes;
+    uint8_t *object = read_object(path, &object_bytes);
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_object_view_t view = {0};
+    assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
+    const n00bb_abi_directory_entry_t *modules = n00bb_abi_object_table(
+        &view, N00B_ABI_TABLE_MODULE);
+    assert(modules && modules->record_count == 3
+        && !n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT));
+    const n00b_abi_symbol_v1 *trait = find_symbol(&view, "Readable",
+        N00B_ABI_SYMBOL_TYPE);
+    const n00b_abi_symbol_v1 *function = find_symbol(&view, "take",
+        N00B_ABI_SYMBOL_FUNCTION);
+    assert(trait && function && trait->module_index != function->module_index);
+    const n00b_abi_type_v1 *trait_type = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_TYPE, trait->type_index);
+    const n00b_abi_type_v1 *callable = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_TYPE, function->type_index);
+    assert(trait_type && trait_type->kind == N00B_ABI_TYPE_TRAIT
+        && callable && callable->kind == N00B_ABI_TYPE_FUNCTION
+        && callable->call_signature_index);
+    const n00b_abi_call_signature_v1 *signature = n00bb_abi_object_row(
+        &view, N00B_ABI_TABLE_CALL_SIGNATURE,
+        callable->call_signature_index);
+    assert(signature && signature->positional_parameters.count == 1);
+    const uint8_t *slot = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_U32_STREAM, signature->positional_parameters.first);
+    assert(slot);
+    const n00b_abi_parameter_v1 *parameter = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_PARAMETER, core_le_load_u32(slot));
+    assert(parameter);
+    const n00b_abi_type_v1 *variable = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_TYPE, parameter->type_index);
+    assert(variable && variable->kind == N00B_ABI_TYPE_VARIABLE
+        && variable->typevar_owner_scope_index
+        && variable->constraints.count == 1);
+    slot = n00bb_abi_object_row(&view, N00B_ABI_TABLE_U32_STREAM,
+        variable->constraints.first);
+    assert(slot);
+    const n00b_abi_constraint_v1 *constraint = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_CONSTRAINT, core_le_load_u32(slot));
+    n00bb_abi_string_view_t name;
+    assert(constraint && constraint->kind == N00B_ABI_CONSTRAINT_IMPLEMENTS
+        && n00bb_abi_object_string(&view, &constraint->name, &name)
+        && name.length == strlen("trait_methods.Readable")
+        && !memcmp(name.bytes, "trait_methods.Readable", name.length));
+    n00bb_abi_object_close(&view);
+    free(object);
+}
+
+static void
 test_linked_library_object(const char *path)
 {
     size_t object_bytes;
@@ -2062,6 +2116,8 @@ main(int argc, char **argv)
             test_self_import_selection(argv[2]);
         else if (!strcmp(argv[1], "--linked-library"))
             test_linked_library_object(argv[2]);
+        else if (!strcmp(argv[1], "--trait-type-import"))
+            test_trait_type_import(argv[2]);
         else if (!strcmp(argv[1], "--linked-flagset"))
             test_linked_flagset(argv[2]);
         else if (!strcmp(argv[1], "--string-storage"))
