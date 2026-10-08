@@ -271,8 +271,8 @@ cwd_path(void)
 #endif
 }
 
-static char *
-executable_path(const char *argv0)
+char *
+n00bb_executable_path(const char *argv0)
 {
 #ifdef _WIN32
     DWORD cap = 256;
@@ -385,7 +385,7 @@ add_environment_roots(n00bb_resolver_t *resolver, const char *cwd)
 static void
 add_executable_library_roots(n00bb_resolver_t *resolver, const char *argv0)
 {
-    char *exe = executable_path(argv0);
+    char *exe = n00bb_executable_path(argv0);
     if (!exe) return;
     char *dir = parent_path(exe);
     for (;;) {
@@ -760,7 +760,7 @@ n00bb_grammar_path(const char *argv0)
         return core_strdup(N00BB_GRAMMAR_PATH);
     }
 #endif
-    char *exe = executable_path(argv0);
+    char *exe = n00bb_executable_path(argv0);
     if (!exe) return nullptr;
     char *bin_dir = parent_path(exe);
     char *prefix = parent_path(bin_dir);

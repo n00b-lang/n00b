@@ -1,0 +1,4 @@
+comptime {
+} else {
+    require 2 + 3 == 6
+}

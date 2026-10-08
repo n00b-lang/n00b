@@ -923,6 +923,7 @@ n00bb_abi_emit_unit(
     core_string_t package_id,
     const parse_symtab_t *symbols, parse_token_stream_t *tokens,
     const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
+    bool runtime_code_present,
     const core_target_desc_t *target, uint64_t artifact_capabilities,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_node_source_fn node_source, void *source_context,
@@ -1019,10 +1020,11 @@ n00bb_abi_emit_unit(
     }
     if (!core_translation_unit_imports_finalized(unit)
         || !phase_has_only_trivial_initializer(comptime_ir)
-        || !phase_has_only_trivial_initializer(runtime_ir)) {
+        || (!runtime_code_present
+            && !phase_has_only_trivial_initializer(runtime_ir))) {
         n00bb_abi_decl_index_free(declarations);
         return abi_unit_error(unit,
-            "this ABI emitter path requires no executable initializer body");
+            "ABI emission requires code for executable initializer bodies");
     }
     size_t import_count = core_translation_unit_import_count(unit);
     if (import_count && (!link || !core_link_unit_graph_is_finalized(link)

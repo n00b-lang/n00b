@@ -1721,8 +1721,13 @@ for command in build library; do
     grep -q '^control-flow @add$' "$tmp/$command.dumps"
     grep -q '^execution-graph:$' "$tmp/$command.dumps"
     grep -q '^pdg @add ' "$tmp/$command.dumps"
-    grep -q "'$command' processing is not implemented yet" \
-        "$tmp/$command.dumps"
+    if [ "$command" = build ]; then
+        grep -q 'LLVM backend cannot lower function' \
+            "$tmp/$command.dumps"
+    else
+        grep -q "'$command' processing is not implemented yet" \
+            "$tmp/$command.dumps"
+    fi
 done
 "$compiler" compile --output "$tmp/lower_arithmetic.o" \
     --dump-ir --dump-control-flow --dump-pdg \

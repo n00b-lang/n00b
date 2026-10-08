@@ -1,0 +1,6 @@
+import bitcode_dep
+
+comptime {
+} else {
+    require 7 == 7
+}

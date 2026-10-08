@@ -174,7 +174,7 @@ check_type_descriptor_storage(void)
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
     assert(n00bb_abi_emit_unit(link, &unit, CORE_STRING_STATIC("default"),
-        symbols, tokens, comptime, runtime, &target, N00B_ABI_CAP_DEBUG,
+        symbols, tokens, comptime, runtime, false, &target, N00B_ABI_CAP_DEBUG,
         selected_type_declaration, declaration,
         descriptor_node_source, &source_owner, nullptr, nullptr,
         &packed, &object, &object_bytes));
@@ -230,7 +230,7 @@ check_type_descriptor_storage(void)
     assert(prior_symbols && prior_tokens
         && n00bb_abi_emit_unit(nullptr, &prior_unit,
             CORE_STRING_STATIC("default"), prior_symbols, prior_tokens,
-            prior_comptime, prior_runtime, &target, N00B_ABI_CAP_DEBUG,
+            prior_comptime, prior_runtime, false, &target, N00B_ABI_CAP_DEBUG,
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
             &prior_packed, &prior_object, &prior_object_bytes));
     core_link_unit_t *combined = core_link_unit_new();
@@ -330,7 +330,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     size_t object_bytes = 0;
     assert(n00bb_abi_emit_unit(nullptr, &unit,
         CORE_STRING_STATIC("default"),
-        symbols, tokens, comptime, runtime,
+        symbols, tokens, comptime, runtime, false,
         &target, N00B_ABI_CAP_DEBUG, nullptr, nullptr, nullptr, nullptr,
         nullptr, nullptr,
         &packed, &object, &object_bytes));
@@ -467,7 +467,7 @@ check_empty_unit(const char *triple, uint32_t target_id,
     size_t rejected_bytes = 0;
     assert(!n00bb_abi_emit_unit(nullptr, &unit,
         CORE_STRING_STATIC("default"),
-        symbols, tokens, comptime, runtime, &target, N00B_ABI_CAP_DEBUG,
+        symbols, tokens, comptime, runtime, false, &target, N00B_ABI_CAP_DEBUG,
         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
         &rejected, &rejected_object, &rejected_bytes));
     assert(!rejected.bytes && !rejected_object && !rejected_bytes);

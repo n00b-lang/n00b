@@ -2,6 +2,11 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+extern char **environ;
 
 #include "driver.h"
 #include "abi_layout.h"
@@ -24,6 +29,7 @@
 #include "lib/link_unit.h"
 #include "lib/indexed_table.h"
 #include "lib/target.h"
+#include "lib/object_section.h"
 #include "lib/work_queue.h"
 #include "lib/diagnostic.h"
 #include "logic/clpfd_store.h"
@@ -46147,26 +46153,19 @@ release_requests(core_work_queue_t *queue,
 }
 
 static bool
-n00bb_prepare_codegen(n00bb_link_analysis_t *analysis, bool debug_enabled,
-                      core_diagnostics_t *diagnostics)
+n00bb_comptime_is_empty(const ir_module_t *module)
 {
-    if (!analysis) return false;
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
-        n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
-            state ? state->comptime_ir_module : nullptr,
-            state ? state->ir_module : nullptr,
-            debug_enabled, diagnostics);
-        if (!backend) return false;
-        n00bb_llvm_backend_free(backend);
+    for (size_t i = 0; i < ir_func_count(module); i++) {
+        ir_func_t *function = ir_func_at((ir_module_t *)module, i);
+        if (!function || !ir_func_is_initializer(function)) continue;
+        if (function->n_params || function->n_locals
+            || function->n_blocks != 1 || !function->blocks[0]
+            || function->blocks[0]->n_instrs != 1) return false;
+        ir_instr_t *instruction = function->blocks[0]->instrs[0];
+        if (!instruction || instruction->op != IR_OP_RETURN
+            || instruction->n_operands) return false;
     }
     return true;
-}
-
-static core_link_declaration_t *
-abi_declaration_for_symbol(void *context, parse_sym_entry_t *symbol)
-{
-    return link_declaration_for_symbol(context, symbol);
 }
 
 typedef struct {
@@ -46174,6 +46173,203 @@ typedef struct {
     uint8_t *object;
     size_t object_bytes;
 } n00bb_abi_artifact_t;
+
+static bool n00bb_link_abi_artifact(
+    core_link_unit_t *link, n00bb_link_analysis_t *analysis,
+    const core_target_desc_t *target, uint8_t **out_object,
+    size_t *out_object_bytes, core_diagnostics_t *diagnostics);
+
+static char *
+n00bb_write_temporary_object(const void *bytes, size_t length)
+{
+    if (!bytes || !length) return nullptr;
+    char path[] = "/tmp/n00bb-code-XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) return nullptr;
+    bool ok = true;
+    size_t offset = 0;
+    while (offset < length) {
+        ssize_t written = write(fd, (const char *)bytes + offset,
+                                length - offset);
+        if (written <= 0) {
+            ok = false;
+            break;
+        }
+        offset += (size_t)written;
+    }
+    if (close(fd)) ok = false;
+    if (!ok) {
+        unlink(path);
+        return nullptr;
+    }
+    char *result = core_strdup(path);
+    if (!result) unlink(path);
+    return result;
+}
+
+static bool
+n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
+                       parse_cmdr_result_t *args, bool debug_enabled,
+                       const char *compiler_path,
+                       core_diagnostics_t *diagnostics)
+{
+    core_list_t(core_translation_unit_ptr_t) order =
+        core_list_new(core_translation_unit_ptr_t);
+    bool ok = link && analysis
+        && core_link_unit_root_count(link) == 1
+        && collect_link_unit_initializer_order(link,
+            "n00bb.runtime-module-initializer-order", &order);
+    if (!ok) {
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0010"),
+            CORE_STRING_STATIC("runtime initializer order is unavailable"));
+        core_list_free(order);
+        return false;
+    }
+    size_t count = order.len;
+    char **names = calloc(count, sizeof(*names));
+    char **objects = calloc(count + 1, sizeof(*objects));
+    ok = names && objects;
+    uint8_t *linked_abi = nullptr;
+    size_t linked_abi_bytes = 0;
+    if (ok) ok = n00bb_link_abi_artifact(link, analysis, &analysis->target,
+        &linked_abi, &linked_abi_bytes, diagnostics);
+    core_object_section_t metadata = {0};
+    if (ok) ok = core_object_section_find(linked_abi, linked_abi_bytes,
+        analysis->target.object_format,
+        analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O
+            ? "__DATA_CONST" : nullptr,
+        analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O
+            ? "__n00b_meta" : analysis->target.object_format
+                == CORE_TARGET_OBJECT_COFF ? ".n00b$M"
+                                       : ".data.rel.ro.n00b_meta",
+        &metadata);
+    if (ok) objects[count] = n00bb_write_temporary_object(
+        linked_abi, linked_abi_bytes);
+    ok = ok && objects[count];
+    core_free(linked_abi);
+    for (size_t i = 0; ok && i < count; i++) {
+        n00bb_tu_state_t *state = tu_state(order.data[i]);
+        if (!state || !state->comptime_ir_module || !state->ir_module
+            || !n00bb_comptime_is_empty(state->comptime_ir_module)) {
+            core_diagnostics_report(diagnostics, order.data[i],
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0012"),
+                CORE_STRING_STATIC("native build cannot execute comptime statements yet"));
+            ok = false;
+            break;
+        }
+        core_buffer_t name = {0};
+        core_buffer_printf(&name, "%s.__n00bb_runtime_init",
+            ir_module_name(state->ir_module));
+        names[i] = core_strndup(name.data, name.byte_len);
+        core_buffer_release(&name);
+        ok = names[i] != nullptr;
+    }
+    for (size_t i = 0; ok && i < count; i++) {
+        n00bb_tu_state_t *state = tu_state(order.data[i]);
+        n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
+            state->comptime_ir_module, state->ir_module,
+            debug_enabled, diagnostics);
+        if (!backend) {
+            ok = false;
+            break;
+        }
+        core_buffer_t object = {0};
+        bool is_root = order.data[i] == core_link_unit_root(link, 0);
+        ok = n00bb_llvm_backend_emit_object(backend,
+            is_root ? (const char *const *)names : nullptr,
+            is_root ? count : 0, is_root ? metadata.size : 0,
+            &object, diagnostics);
+        n00bb_llvm_backend_free(backend);
+        if (ok) objects[i] = n00bb_write_temporary_object(
+            object.data, object.byte_len);
+        core_buffer_release(&object);
+        ok = ok && objects[i];
+    }
+    core_string_t requested = parse_cmdr_flag_str(args,
+        CORE_STRING_STATIC("--output"));
+    char *output = requested.data
+        ? core_strndup(requested.data, requested.u8_bytes)
+        : core_strdup("a.out");
+    char *staging = output ? malloc(strlen(output) + sizeof(".XXXXXX"))
+                           : nullptr;
+    if (staging) {
+        sprintf(staging, "%s.XXXXXX", output);
+        int staging_fd = mkstemp(staging);
+        if (staging_fd < 0) ok = false;
+        else {
+            close(staging_fd);
+            unlink(staging);
+        }
+    } else ok = false;
+    char *executable = n00bb_executable_path(compiler_path);
+    const char *slash = executable ? strrchr(executable, '/') : nullptr;
+    core_buffer_t archive = {0};
+    if (slash) {
+        core_buffer_printf(&archive, "%.*s/libn00b-abi-runtime.a",
+            (int)(slash - executable), executable);
+        if (access(archive.data, R_OK)) {
+            core_buffer_release(&archive);
+            core_buffer_printf(&archive, "%.*s/../lib/libn00b-abi-runtime.a",
+                (int)(slash - executable), executable);
+        }
+    }
+    if (ok && archive.data && !access(archive.data, R_OK)) {
+#ifdef __APPLE__
+        const char *linker = "/usr/bin/clang";
+#else
+        const char *linker = "clang";
+#endif
+        char **arguments = calloc(count + 6, sizeof(*arguments));
+        ok = arguments != nullptr;
+        if (ok) {
+            arguments[0] = (char *)linker;
+            for (size_t i = 0; i < count + 1; i++)
+                arguments[i + 1] = objects[i];
+            arguments[count + 2] = archive.data;
+            arguments[count + 3] = "-o";
+            arguments[count + 4] = staging;
+            pid_t child = 0;
+            int launched = posix_spawnp(&child, arguments[0], nullptr, nullptr,
+                                        arguments, environ);
+            if (launched) ok = false;
+            else {
+                int status = 0;
+                ok = waitpid(child, &status, 0) == child
+                    && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+            }
+            if (ok) ok = rename(staging, output) == 0;
+        }
+        free(arguments);
+    } else ok = false;
+    if (staging) unlink(staging);
+    free(staging);
+    core_buffer_release(&archive);
+    core_free(executable);
+    for (size_t i = 0; i < count + 1; i++) {
+        if (objects && objects[i]) {
+            unlink(objects[i]);
+            core_free(objects[i]);
+        }
+    }
+    for (size_t i = 0; i < count; i++)
+        if (names) core_free(names[i]);
+    free(objects);
+    free(names);
+    core_list_free(order);
+    if (!ok && !core_diagnostics_failed(diagnostics))
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0011"),
+            CORE_STRING_STATIC("could not write or link native executable"));
+    core_free(output);
+    return ok;
+}
+
+static core_link_declaration_t *
+abi_declaration_for_symbol(void *context, parse_sym_entry_t *symbol)
+{
+    return link_declaration_for_symbol(context, symbol);
+}
 
 typedef struct {
     uint64_t typehash;
@@ -46250,7 +46446,7 @@ free_abi_artifact(void *payload)
 static bool
 n00bb_emit_abi_artifacts(core_link_unit_t *link,
                          n00bb_link_analysis_t *analysis,
-                         bool debug_enabled)
+                         bool debug_enabled, bool runtime_code_present)
 {
     if (!link || !analysis || !core_link_unit_graph_is_finalized(link)
         || core_link_unit_stage_state(link,
@@ -46315,7 +46511,8 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
         bool emitted = n00bb_abi_emit_unit(link, unit,
             n00bb_package_id(unit),
             state->annotations->symtab, state->lex->tokens,
-            state->comptime_ir_module, state->ir_module, &analysis->target,
+            state->comptime_ir_module, state->ir_module,
+            runtime_code_present, &analysis->target,
             debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
             abi_declaration_for_symbol, analysis,
             abi_source_of_node, &sources, abi_type_owner, &sources,
@@ -46394,20 +46591,12 @@ n00bb_write_compile_abi_artifact(core_link_unit_t *link,
 }
 
 static bool
-n00bb_write_library_abi_artifact(core_link_unit_t *link,
-                                 n00bb_link_analysis_t *analysis,
-                                 const core_target_desc_t *target,
-                                 parse_cmdr_result_t *args,
-                                 core_diagnostics_t *diagnostics)
+n00bb_link_abi_artifact(core_link_unit_t *link,
+                        n00bb_link_analysis_t *analysis,
+                        const core_target_desc_t *target,
+                        uint8_t **out_object, size_t *out_object_bytes,
+                        core_diagnostics_t *diagnostics)
 {
-    core_string_t requested = parse_cmdr_flag_str(args,
-        CORE_STRING_STATIC("--output"));
-    if (!requested.data || !requested.u8_bytes) {
-        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0009"),
-            CORE_STRING_STATIC("library ABI output requires --output"));
-        return false;
-    }
     size_t count = core_link_unit_translation_unit_count(link);
     n00bb_abi_object_input_t *inputs = core_alloc_array(
         n00bb_abi_object_input_t, count);
@@ -46466,6 +46655,30 @@ n00bb_write_library_abi_artifact(core_link_unit_t *link,
             CORE_STRING_STATIC("could not link library ABI objects"));
         return false;
     }
+    *out_object = object;
+    *out_object_bytes = object_bytes;
+    return true;
+}
+
+static bool
+n00bb_write_library_abi_artifact(core_link_unit_t *link,
+                                 n00bb_link_analysis_t *analysis,
+                                 const core_target_desc_t *target,
+                                 parse_cmdr_result_t *args,
+                                 core_diagnostics_t *diagnostics)
+{
+    core_string_t requested = parse_cmdr_flag_str(args,
+        CORE_STRING_STATIC("--output"));
+    if (!requested.data || !requested.u8_bytes) {
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0009"),
+            CORE_STRING_STATIC("library ABI output requires --output"));
+        return false;
+    }
+    uint8_t *object = nullptr;
+    size_t object_bytes = 0;
+    if (!n00bb_link_abi_artifact(link, analysis, target, &object,
+                                 &object_bytes, diagnostics)) return false;
     bool saved = n00bb_write_abi_bytes(requested, object, object_bytes,
         nullptr, diagnostics);
     core_free(object);
@@ -46650,10 +46863,6 @@ main(int argc, char **argv)
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-pdg")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")),
             interface_closure_only);
-    if (located && (build_command || compile_command
-                    || (library_command && !emit_interface)))
-        located = n00bb_prepare_codegen(link_analysis,
-            !preprocessor_options.release_mode, cli_diagnostics);
     if (located && library_command && emit_interface && link_analysis) {
         th_env *interface_environment = link_analysis->interface_environment;
         located = register_unit_comptime_ir_metadata(link_analysis, link)
@@ -46687,9 +46896,16 @@ main(int argc, char **argv)
         core_free(path);
     }
     bool abi_emitted = false;
+    if (located && build_command) {
+        located = n00bb_emit_abi_artifacts(link, link_analysis,
+            !preprocessor_options.release_mode, true);
+        if (located)
+            located = n00bb_build_executable(link, link_analysis, args,
+                !preprocessor_options.release_mode, argv[0], cli_diagnostics);
+    }
     if (located && compile_command) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,
-            !preprocessor_options.release_mode);
+            !preprocessor_options.release_mode, false);
         if (located)
             abi_emitted = located = n00bb_write_compile_abi_artifact(
                 link, args, cli_diagnostics);
@@ -46697,7 +46913,7 @@ main(int argc, char **argv)
     if (located && library_command && !emit_interface
         && parse_cmdr_flag_present(args, CORE_STRING_STATIC("--output"))) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,
-            !preprocessor_options.release_mode);
+            !preprocessor_options.release_mode, false);
         if (located)
             abi_emitted = located = n00bb_write_library_abi_artifact(link,
                 link_analysis, &link_analysis->target, args, cli_diagnostics);
@@ -46707,7 +46923,8 @@ main(int argc, char **argv)
         dump_link_unit(link);
     if (located && !locate_only && !lex_command && !parse_command
         && !preprocess_command && !lower_command
-        && !(library_command && emit_interface) && !abi_emitted) {
+        && !(library_command && emit_interface) && !abi_emitted
+        && !build_command) {
         fprintf(stderr,
                 "n00bb: translation units are located; '%.*s' processing is not implemented yet\n",
                 (int)command.u8_bytes, command.data);

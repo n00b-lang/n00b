@@ -4,6 +4,7 @@
 
 typedef struct n00bb_resolver_t n00bb_resolver_t;
 
+char *n00bb_executable_path(const char *argv0);
 n00bb_resolver_t *n00bb_resolver_new(const char *argv0);
 void n00bb_resolver_free(n00bb_resolver_t *resolver);
 core_module_resolver_t n00bb_resolver_interface(n00bb_resolver_t *resolver);

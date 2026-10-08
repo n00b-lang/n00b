@@ -316,6 +316,14 @@ llvm_backend_test = executable(
 test('llvm-backend', llvm_backend_test)
 
 test(
+    'bitcode-native',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'bitcode.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'],
+)
+
+test(
     'preprocessor',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'preprocessor.sh',

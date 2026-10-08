@@ -770,12 +770,12 @@ link_selected_objects(
     if (valid) {
         valid = (has_pool || !pool_relocation_count)
             && sections.count < UINT32_MAX - 2
-            && native.symbol_count < UINT32_MAX - (size_t)has_pool
+            && native.symbol_count < UINT32_MAX - (size_t)has_pool - 1
             && native.relocation_count <= SIZE_MAX - pool_relocation_count;
     }
     if (valid) {
         size_t extra_count = sections.count + (size_t)has_pool;
-        size_t symbol_count = native.symbol_count + (size_t)has_pool;
+        size_t symbol_count = native.symbol_count + (size_t)has_pool + 1;
         size_t relocation_count = native.relocation_count
             + pool_relocation_count;
         extra_sections = core_alloc_array(core_object_emit_section_t,
@@ -811,6 +811,12 @@ link_selected_objects(
                 .section_index = (uint32_t)(2 + sections.count),
             };
         }
+        symbols[symbol_count - 1] = (core_object_emit_symbol_t){
+            .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
+                ? "_n00b_abi_metadata" : "n00b_abi_metadata",
+            .section_index = 1,
+            .exported = true,
+        };
         for (size_t i = 0; i < pool_relocation_count; i++) {
             relocations[native.relocation_count + i] = pool_relocations[i];
             relocations[native.relocation_count + i].symbol_index =

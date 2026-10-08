@@ -13,8 +13,12 @@ n00bb_llvm_backend_t *n00bb_llvm_backend_prepare(
     bool debug_enabled, core_diagnostics_t *diagnostics);
 void n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend);
 
-/* Produces bitcode for a phase module. Until IR translation is installed,
- * this is only a backend-linkage probe and is not a compiled n00b program. */
-bool n00bb_llvm_backend_probe_bitcode(
+/* Produces verified LLVM bitcode for a phase module. */
+bool n00bb_llvm_backend_write_bitcode(
     const n00bb_llvm_backend_t *backend, bool comptime,
+    core_buffer_t *out, core_diagnostics_t *diagnostics);
+bool n00bb_llvm_backend_emit_object(
+    n00bb_llvm_backend_t *backend,
+    const char *const *entry_initializers, size_t initializer_count,
+    size_t metadata_bytes,
     core_buffer_t *out, core_diagnostics_t *diagnostics);
