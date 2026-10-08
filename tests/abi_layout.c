@@ -5,6 +5,7 @@
 
 static const ir_scalar_t SCALARS[] = {
     {"bool", IR_CLASS_BOOL, 1, IR_ROLE_NONE},
+    {"byte", IR_CLASS_UINT, 8, IR_ROLE_NONE},
     {"char", IR_CLASS_UINT, 24, IR_ROLE_CHAR},
     {"f64", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
     {"nil", IR_CLASS_VOID, 0, IR_ROLE_NONE},
@@ -16,6 +17,26 @@ static const ir_profile_t PROFILE = {
     .n_scalars = sizeof(SCALARS) / sizeof(SCALARS[0]),
     .scalars = SCALARS,
 };
+
+static int
+check_option(ir_module_t *module, const core_target_desc_t *target,
+             th_type *type, uint64_t size_bits, uint64_t tag_unit_bit,
+             uint32_t tag_lsb, bool niche)
+{
+    bool handled = false;
+    if (!type || !n00bb_abi_publish_direct_layout(module, type, target,
+                                                   &handled) || !handled)
+        return 0;
+    const ir_final_layout_t *final = ir_layout_final(module, type,
+                                                     target->triple);
+    return final && final->intrinsic_bits == size_bits
+        && final->has_discriminant
+        && final->discriminant_is_niche == niche
+        && final->discriminant.unit_bit_offset == tag_unit_bit
+        && final->discriminant.lsb == tag_lsb
+        && n00bb_abi_publish_direct_layout(module, type, target, &handled)
+        && handled;
+}
 
 static int
 check_scalar(ir_module_t *module, const core_target_desc_t *target,
@@ -209,6 +230,38 @@ int main(void)
                 &target, &unresolved_handled)
             && !unresolved_handled
             && !ir_layout_final(module, unresolved_ref, target.triple);
+        th_arg byte_arg = {
+            .kind = TH_ARG_TYPE, .type = th_name(types, "byte"),
+        };
+        th_type *one_byte = th_apply(types, "option", &byte_arg, 1);
+        th_arg nested_byte_arg = {.kind = TH_ARG_TYPE, .type = one_byte};
+        th_type *two_byte = th_apply(types, "option", &nested_byte_arg, 1);
+        th_arg pointer_arg = {
+            .kind = TH_ARG_TYPE,
+            .type = th_ind(types, 0, th_bitint(types, 64, false)),
+        };
+        th_type *one_pointer = th_apply(types, "option", &pointer_arg, 1);
+        th_arg nested_pointer_arg = {
+            .kind = TH_ARG_TYPE, .type = one_pointer,
+        };
+        th_arg bitptr_arg = {
+            .kind = TH_ARG_TYPE,
+            .type = th_ind(types, 0, th_name(types, "bool")),
+        };
+        th_type *one_bitptr = th_apply(types, "option", &bitptr_arg, 1);
+        th_arg nested_bitptr_arg = {
+            .kind = TH_ARG_TYPE, .type = one_bitptr,
+        };
+        th_type *two_bitptr = th_apply(types, "option", &nested_bitptr_arg,
+                                       1);
+        ok = ok && check_option(module, &target, one_byte, 9, 8, 0, false)
+            && check_option(module, &target, two_byte, 10, 8, 1, false)
+            && check_option(module, &target, one_pointer, 64, 0, 0, true)
+            && check_option(module, &target,
+                th_apply(types, "option", &nested_pointer_arg, 1),
+                65, 64, 0, false)
+            && check_option(module, &target, one_bitptr, 128, 64, 0, true)
+            && check_option(module, &target, two_bitptr, 128, 64, 0, true);
         bool handled = false;
         ok = ok && n00bb_abi_publish_direct_layout(module,
                 th_name(types, "user.string"), &target, &handled)

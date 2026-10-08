@@ -30,6 +30,7 @@ typedef enum {
 } trace_need_t;
 
 typedef struct {
+    n00bb_abi_type_index_t *index;
     const n00bb_abi_type_identity_rows_t *types;
     const n00b_abi_range_v1 *members;
     const core_list_t(n00b_abi_field_v1) *fields;
@@ -38,6 +39,18 @@ typedef struct {
     uint32_t stream_base;
     uint8_t *need;
 } trace_source_t;
+
+static bool
+trace_option_component(const trace_source_t *source, uint32_t type_index,
+                       uint32_t *component_index)
+{
+    th_type *type = n00bb_abi_type_index_at(source->index, type_index);
+    const th_arg *argument = type ? th_named_arg(type, 0) : nullptr;
+    return type && th_named_nargs(type) == 1 && argument
+        && argument->kind == TH_ARG_TYPE
+        && n00bb_abi_type_index_find(source->index, argument->type,
+                                     component_index);
+}
 
 static const n00b_abi_field_v1 *
 trace_member(const trace_source_t *source, uint32_t type_index,
@@ -106,6 +119,13 @@ trace_need(trace_source_t *source, uint32_t type_index)
         break;
     }
     case N00B_ABI_TYPE_OPTION:
+        if (!type->layout_index) result = TRACE_UNKNOWN;
+        else {
+            uint32_t child_index = 0;
+            result = trace_option_component(source, type_index, &child_index)
+                ? trace_need(source, child_index) : TRACE_INVALID;
+        }
+        break;
     case N00B_ABI_TYPE_WRAPPER:
     case N00B_ABI_TYPE_ATOMIC:
     case N00B_ABI_TYPE_VARIABLE:
@@ -160,6 +180,7 @@ trace_child_append(const trace_source_t *source,
 static bool
 append_traces(trace_source_t *source,
               const core_list_t(n00b_abi_layout_v1) *layouts,
+              const core_list_t(n00b_abi_tag_extractor_v1) *tags,
               uint32_t stream_base,
               core_list_t(n00b_abi_trace_v1) *traces,
               core_list_t(n00b_abi_trace_child_v1) *children,
@@ -172,26 +193,53 @@ append_traces(trace_source_t *source,
     for (uint32_t type_index = 0; type_index < source->types->count;
          type_index++) {
         n00b_abi_type_v1 *type = &source->types->rows[type_index];
-        if (type->kind != N00B_ABI_TYPE_RECORD
-            && type->kind != N00B_ABI_TYPE_TUPLE
-            && type->kind != N00B_ABI_TYPE_VARIANT) continue;
         trace_need_t need = trace_need(source, type_index);
         if (need == TRACE_INVALID) return false;
         if (need != TRACE_PRESENT) continue;
         if (!type->layout_index || type->layout_index >= layouts->len
             || traces->len >= UINT32_MAX) return false;
-        n00b_abi_trace_v1 trace = {.type_index = type_index};
+        type->tracing_index = (uint32_t)traces->len;
+        core_list_push(*traces, ((n00b_abi_trace_v1){
+            .type_index = type_index,
+        }));
+    }
+    for (uint32_t type_index = 0; type_index < source->types->count;
+         type_index++) {
+        n00b_abi_type_v1 *type = &source->types->rows[type_index];
+        if (!type->tracing_index) continue;
+        n00b_abi_trace_v1 *trace = &traces->data[type->tracing_index];
+        if (type->kind == N00B_ABI_TYPE_OPTION) {
+            uint32_t child_index = 0;
+            if (!trace_option_component(source, type_index, &child_index)
+                || !source->types->rows[child_index].tracing_index)
+                return false;
+            const n00b_abi_layout_v1 *layout = &layouts->data[
+                type->layout_index];
+            uint32_t tag_index = layout->tag_extractor_index;
+            if (!tag_index || tag_index >= tags->len) return false;
+            const n00b_abi_tag_extractor_v1 *tag = &tags->data[tag_index];
+            trace->child_trace_index = source->types->rows[
+                child_index].tracing_index;
+            trace->tag_extractor_index = tag_index;
+            if (tag->kind == N00B_ABI_TAG_DIRECT_BITS)
+                trace->option_bit_offset = tag->unit_byte_offset * 8
+                    + tag->lsb_position;
+            continue;
+        }
+        if (type->kind != N00B_ABI_TYPE_RECORD
+            && type->kind != N00B_ABI_TYPE_TUPLE
+            && type->kind != N00B_ABI_TYPE_VARIANT) continue;
         bool variant = type->kind == N00B_ABI_TYPE_VARIANT;
         if (variant) {
-            trace.tag_extractor_index = layouts->data[
+            trace->tag_extractor_index = layouts->data[
                 type->layout_index].tag_extractor_index;
-            if (!trace.tag_extractor_index) return false;
+            if (!trace->tag_extractor_index) return false;
         }
         for (uint32_t i = 0; i < source->members[type_index].count; i++) {
             const n00b_abi_field_v1 *field = trace_member(source,
                 type_index, i);
             if (!field) return false;
-            n00b_abi_range_v1 *range = &trace.fixed_children;
+            n00b_abi_range_v1 *range = &trace->fixed_children;
             n00b_abi_trace_arm_v1 arm = {0};
             if (variant) range = &arm.children;
             if (trace_need(source, field->child_type_index)
@@ -213,10 +261,8 @@ append_traces(trace_source_t *source,
                 - source->members[type_index].count);
             for (uint32_t i = first; i < arms->len; i++)
                 if (!trace_index_append(stream_base, indexes, i,
-                        &trace.arms)) return false;
+                        &trace->arms)) return false;
         }
-        type->tracing_index = (uint32_t)traces->len;
-        core_list_push(*traces, trace);
     }
     return true;
 }
@@ -565,9 +611,10 @@ n00bb_abi_type_layout_rows_build(
                 valid = false;
             continue;
         }
+        bool option = types->rows[i].kind == N00B_ABI_TYPE_OPTION;
         if (!final->alignment_bytes
             || final->has_discriminant
-                != (types->rows[i].kind == N00B_ABI_TYPE_VARIANT)
+                != (types->rows[i].kind == N00B_ABI_TYPE_VARIANT || option)
             || (final->n_members
                 && types->rows[i].kind != N00B_ABI_TYPE_RECORD
                 && types->rows[i].kind != N00B_ABI_TYPE_VARIANT
@@ -587,23 +634,48 @@ n00bb_abi_type_layout_rows_build(
         if (final->has_discriminant) {
             const ir_layout_access_t *access = &final->discriminant;
             if (access->unit_bit_offset % 8 || !access->unit_width_bits
-                || !access->value_width_bits || access->value_width_bits > 32
+                || !access->value_width_bits
+                || access->value_width_bits > (option ? 64u : 32u)
                 || access->unit_width_bits > 64
                 || access->lsb >= access->unit_width_bits
                 || access->value_width_bits > access->unit_width_bits - access->lsb
-                || final->discriminant_is_niche
+                || (final->discriminant_is_niche && !option)
                 || tag_extractors.len >= UINT32_MAX) {
+                valid = false;
+                break;
+            }
+            uint32_t tag_kind = N00B_ABI_TAG_DIRECT_BITS;
+            if (option && final->discriminant_is_niche) {
+                if (final->intrinsic_bits == 64
+                    && access->unit_bit_offset == 0
+                    && access->unit_width_bits == 64
+                    && access->value_width_bits == 64 && !access->lsb)
+                    tag_kind = N00B_ABI_TAG_POINTER_NULL;
+                else if (final->intrinsic_bits == 128
+                    && access->unit_bit_offset == 64
+                    && access->unit_width_bits == 64
+                    && access->value_width_bits == 64 && !access->lsb)
+                    tag_kind = N00B_ABI_TAG_BITPTR_DEPTH;
+                else {
+                    valid = false;
+                    break;
+                }
+            }
+            else if (option && (access->value_width_bits != 1
+                || access->unit_width_bits != 8)) {
                 valid = false;
                 break;
             }
             row.tag_extractor_index = (uint32_t)tag_extractors.len;
             core_list_push(tag_extractors, ((n00b_abi_tag_extractor_v1){
                 .unit_byte_offset = access->unit_bit_offset / 8,
-                .mask = (UINT64_C(1) << access->value_width_bits) - 1,
+                .mask = access->value_width_bits == 64 ? UINT64_MAX
+                    : (UINT64_C(1) << access->value_width_bits) - 1,
                 .unit_width_bits = access->unit_width_bits,
                 .lsb_position = access->lsb,
-                .tag_width_bits = access->value_width_bits,
-                .kind = N00B_ABI_TAG_DIRECT_BITS,
+                .tag_width_bits = tag_kind == N00B_ABI_TAG_POINTER_NULL
+                    ? 1 : access->value_width_bits,
+                .kind = tag_kind,
             }));
         }
         valid = record_policy(owner, &row.policy)
@@ -632,11 +704,13 @@ n00bb_abi_type_layout_rows_build(
         if (valid) {
             memset(need, 0, types->count);
             trace_source_t source = {
+                .index = index,
                 .types = types, .members = type_field_ranges,
                 .fields = &fields, .arms = &arms, .indexes = &indexes,
                 .stream_base = stream_base, .need = need,
             };
-            valid = append_traces(&source, &layouts, stream_base, &traces,
+            valid = append_traces(&source, &layouts, &tag_extractors,
+                stream_base, &traces,
                 &trace_children, &trace_arms, &indexes);
         }
         core_free(need);

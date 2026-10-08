@@ -1,0 +1,23 @@
+func one_byte(value: Option[byte]) -> Option[byte] {
+    return value
+}
+
+func two_bytes(value: Option[Option[byte]]) -> Option[Option[byte]] {
+    return value
+}
+
+func pointer_option(value: Option[Ref[int]]) -> Option[Ref[int]] {
+    return value
+}
+
+func nested_pointer_option(
+    value: Option[Option[Ref[int]]]
+) -> Option[Option[Ref[int]]] {
+    return value
+}
+
+func bitptr_options(
+    value: Option[Option[Option[Ref[bool]]]]
+) -> Option[Option[Option[Ref[bool]]]] {
+    return value
+}

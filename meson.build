@@ -86,6 +86,15 @@ runtime_abi_trace_test = executable(
 
 test('runtime-abi-trace', runtime_abi_trace_test)
 
+runtime_abi_option_test = executable(
+    'runtime-abi-option-test',
+    'tests/runtime_abi_option.c',
+    link_with: runtime_abi_support,
+    dependencies: runtime_abi_headers,
+)
+
+test('runtime-abi-option', runtime_abi_option_test)
+
 storage_interface_writer = executable(
     'storage-interface-writer',
     ['tests/storage_interface_writer.c', 'global_metadata.c'],

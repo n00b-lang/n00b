@@ -19,6 +19,10 @@ static bool publish_structural_record_layout(ir_module_t *module,
                                              const core_target_desc_t *target,
                                              core_dict_t *seen,
                                              bool *handled);
+static bool publish_direct_or_alias(ir_module_t *module, th_type *type,
+                                    const core_target_desc_t *target,
+                                    core_dict_t *seen, bool *handled);
+static int compare_layout_runs(const void *left, const void *right);
 
 static bool
 same_final_layout(const ir_final_layout_t *layout, uint32_t storage_bits,
@@ -68,6 +72,135 @@ publish_layout(ir_module_t *module, th_type *type,
     return ir_layout_pin_size(module, type, storage_bits / 8)
         && ir_layout_pin_align(module, type, alignment_bytes)
         && ir_layout_publish_final(module, type, target->triple, &final);
+}
+
+static bool
+option_presence_bit(const ir_final_layout_t *child, uint64_t *bit)
+{
+    core_list_t(ir_layout_bit_run_t) blocked = {0};
+    for (size_t i = 0; i < child->n_occupied; i++)
+        core_list_push(blocked, child->occupied[i]);
+    for (size_t i = 0; i < child->n_reserved; i++)
+        core_list_push(blocked, child->reserved[i]);
+    qsort(blocked.data, blocked.len, sizeof(*blocked.data),
+          compare_layout_runs);
+    uint64_t cursor = child->intrinsic_bits;
+    bool reused = false;
+    for (size_t i = blocked.len; i > 0; i--) {
+        const ir_layout_bit_run_t *run = &blocked.data[i - 1];
+        uint64_t end = run->offset + run->width;
+        if (end < cursor) {
+            *bit = cursor - 1;
+            reused = true;
+            break;
+        }
+        cursor = run->offset;
+    }
+    if (!reused && cursor) {
+        *bit = cursor - 1;
+        reused = true;
+    }
+    if (!reused) *bit = child->intrinsic_bits;
+    core_list_free(blocked);
+    return true;
+}
+
+static bool
+same_option_layout(const ir_final_layout_t *a,
+                   const ir_final_layout_t *b)
+{
+    if (a->intrinsic_bits != b->intrinsic_bits
+        || a->alignment_bytes != b->alignment_bytes
+        || a->n_occupied != b->n_occupied
+        || a->n_reserved != b->n_reserved
+        || a->n_members || !a->has_discriminant
+        || a->discriminant_is_niche != b->discriminant_is_niche
+        || a->discriminant.unit_bit_offset
+            != b->discriminant.unit_bit_offset
+        || a->discriminant.unit_width_bits
+            != b->discriminant.unit_width_bits
+        || a->discriminant.lsb != b->discriminant.lsb
+        || a->discriminant.value_width_bits
+            != b->discriminant.value_width_bits) return false;
+    for (size_t i = 0; i < a->n_occupied; i++)
+        if (a->occupied[i].offset != b->occupied[i].offset
+            || a->occupied[i].width != b->occupied[i].width) return false;
+    for (size_t i = 0; i < a->n_reserved; i++)
+        if (a->reserved[i].offset != b->reserved[i].offset
+            || a->reserved[i].width != b->reserved[i].width) return false;
+    return true;
+}
+
+static bool
+publish_option_layout(ir_module_t *module, th_type *type,
+                      const core_target_desc_t *target, core_dict_t *seen,
+                      bool *handled)
+{
+    const th_arg *argument = th_named_arg(type, 0);
+    if (th_named_nargs(type) != 1 || !argument
+        || argument->kind != TH_ARG_TYPE) return false;
+    if (!th_is_closed(ir_module_types(module), type)) return true;
+    bool child_handled = false;
+    if (!publish_direct_or_alias(module, argument->type, target, seen,
+                                 &child_handled)) return false;
+    const ir_final_layout_t *child = ir_layout_final(module, argument->type,
+                                                    target->triple);
+    if (!child) return true;
+    bool pointer_niche = th_kind_of(th_resolve(argument->type))
+            == TH_INDIRECTION && child->intrinsic_bits == 64;
+    bool bitptr_niche = th_kind_of(th_resolve(argument->type))
+            == TH_INDIRECTION && child->intrinsic_bits == 128;
+    if (!bitptr_niche && child->has_discriminant
+        && child->discriminant_is_niche
+        && child->discriminant.unit_bit_offset == 64)
+        bitptr_niche = true;
+    uint64_t presence_bit = 0;
+    if (!pointer_niche && !bitptr_niche
+        && !option_presence_bit(child, &presence_bit)) return false;
+    if (!pointer_niche && !bitptr_niche
+        && presence_bit == UINT64_MAX) return false;
+    core_list_t(ir_layout_bit_run_t) occupied = {0};
+    for (size_t i = 0; i < child->n_occupied; i++)
+        core_list_push(occupied, child->occupied[i]);
+    if (!pointer_niche && !bitptr_niche) {
+        core_list_push(occupied, ((ir_layout_bit_run_t){presence_bit, 1}));
+        qsort(occupied.data, occupied.len, sizeof(*occupied.data),
+              compare_layout_runs);
+    }
+    uint64_t intrinsic_bits = child->intrinsic_bits;
+    if (!pointer_niche && !bitptr_niche
+        && presence_bit == intrinsic_bits) intrinsic_bits++;
+    ir_layout_access_t access = pointer_niche
+        ? (ir_layout_access_t){.unit_width_bits = 64,
+                               .value_width_bits = 64}
+        : bitptr_niche
+            ? (ir_layout_access_t){.unit_bit_offset = 64,
+                                   .unit_width_bits = 64,
+                                   .value_width_bits = 64}
+            : (ir_layout_access_t){
+                .unit_bit_offset = presence_bit & ~UINT64_C(7),
+                .unit_width_bits = 8, .lsb = presence_bit % 8,
+                .value_width_bits = 1,
+            };
+    ir_final_layout_t final = {
+        .intrinsic_bits = intrinsic_bits,
+        .alignment_bytes = child->alignment_bytes,
+        .occupied = occupied.data, .n_occupied = occupied.len,
+        .reserved = child->reserved, .n_reserved = child->n_reserved,
+        .has_discriminant = true,
+        .discriminant_is_niche = pointer_niche || bitptr_niche,
+        .discriminant = access,
+    };
+    const ir_final_layout_t *existing = ir_layout_final(module, type,
+                                                        target->triple);
+    bool valid = existing ? same_option_layout(existing, &final)
+        : intrinsic_bits <= UINT64_MAX - 7
+            && ir_layout_pin_size(module, type, (intrinsic_bits + 7) / 8)
+            && ir_layout_pin_align(module, type, child->alignment_bytes)
+            && ir_layout_publish_final(module, type, target->triple, &final);
+    core_list_free(occupied);
+    *handled = valid;
+    return valid;
 }
 
 static bool
@@ -162,6 +295,9 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         if (name && !strcmp(name, TH_TUPLE))
             return publish_tuple_layout(module, type, target, seen,
                                         handled);
+        if (name && !strcmp(name, "option"))
+            return publish_option_layout(module, type, target, seen,
+                                         handled);
         bool fixed_handle = name && (!strcmp(name, "string")
             || !strcmp(name, "any") || !strcmp(name, "array")
             || !strcmp(name, "view"));

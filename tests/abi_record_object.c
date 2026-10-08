@@ -1982,6 +1982,90 @@ check_anonymous_record_storage(const uint8_t *object, size_t length,
 }
 
 static void
+check_option_layout(const core_object_section_t *metadata,
+                    const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    const n00bb_abi_directory_entry_t *tags = entry_for(entries, count,
+        N00B_ABI_TABLE_TAG_EXTRACTOR);
+    const n00bb_abi_directory_entry_t *traces = entry_for(entries, count,
+        N00B_ABI_TABLE_TRACE);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(types && layouts && tags && traces && stream);
+    unsigned byte_one = 0, byte_two = 0, pointer = 0;
+    unsigned nested_pointer = 0, bitptr = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *option = row_at(metadata, types, i);
+        if (option->kind != N00B_ABI_TYPE_OPTION
+            || !option->layout_index) continue;
+        assert(option->components.count == 1);
+        uint32_t child_index = *(const uint32_t *)row_at(metadata, stream,
+            option->components.first);
+        const n00b_abi_type_v1 *child = row_at(metadata, types,
+            child_index);
+        const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
+            option->layout_index);
+        const n00b_abi_tag_extractor_v1 *tag = row_at(metadata, tags,
+            layout->tag_extractor_index);
+        assert(layout->type_index == i && tag->mask
+            && layout->occupied_runs.count);
+        if (child->kind == N00B_ABI_TYPE_PRIMITIVE
+            && child->semantic_width_bits == 8) {
+            assert(option->size_bits == 9 && !option->tracing_index
+                && tag->kind == N00B_ABI_TAG_DIRECT_BITS
+                && tag->unit_byte_offset == 1 && !tag->lsb_position);
+            byte_one++;
+        }
+        else if (child->kind == N00B_ABI_TYPE_OPTION
+            && child->size_bits == 9) {
+            assert(option->size_bits == 10 && !option->tracing_index
+                && tag->kind == N00B_ABI_TAG_DIRECT_BITS
+                && tag->unit_byte_offset == 1 && tag->lsb_position == 1);
+            byte_two++;
+        }
+        else {
+            assert(option->tracing_index && child->tracing_index);
+            const n00b_abi_trace_v1 *trace = row_at(metadata, traces,
+                option->tracing_index);
+            assert(trace->type_index == i
+                && trace->child_trace_index == child->tracing_index
+                && trace->tag_extractor_index == layout->tag_extractor_index
+                && !trace->fixed_children.count && !trace->arms.count);
+            if (child->kind == N00B_ABI_TYPE_REFERENCE
+                && child->size_bits == 64) {
+                assert(option->size_bits == 64
+                    && tag->kind == N00B_ABI_TAG_POINTER_NULL
+                    && !trace->option_bit_offset);
+                pointer++;
+            }
+            else if (child->kind == N00B_ABI_TYPE_OPTION
+                && child->size_bits == 64) {
+                assert(option->size_bits == 65
+                    && tag->kind == N00B_ABI_TAG_DIRECT_BITS
+                    && tag->unit_byte_offset == 8
+                    && !tag->lsb_position
+                    && trace->option_bit_offset == 64);
+                nested_pointer++;
+            }
+            else {
+                assert(option->size_bits == 128
+                    && tag->kind == N00B_ABI_TAG_BITPTR_DEPTH
+                    && tag->unit_byte_offset == 8
+                    && !trace->option_bit_offset);
+                bitptr++;
+            }
+        }
+    }
+    assert(byte_one == 1 && byte_two == 1 && pointer == 1
+        && nested_pointer == 1
+        && bitptr == 3);
+}
+
+static void
 check_reference_layout(const core_object_section_t *metadata,
                        const n00bb_abi_directory_entry_t *entries,
                        size_t count)
@@ -2111,7 +2195,8 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local")
             || !strcmp(argv[2], "atomic")
-            || !strcmp(argv[2], "reference-layout"))));
+            || !strcmp(argv[2], "reference-layout")
+            || !strcmp(argv[2], "option-layout"))));
     FILE *file = fopen(argv[1], "rb");
     assert(file);
     assert(!fseek(file, 0, SEEK_END));
@@ -2365,6 +2450,13 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "reference-layout")) {
         check_reference_layout(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "option-layout")) {
+        check_option_layout(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

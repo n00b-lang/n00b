@@ -311,7 +311,7 @@ test "$(grep -c ': option\[int\] = option.none' \
     "$tmp/builtin_option_assignment.out")" -eq 2
 grep -q ': option\[int\] = option.some %input' \
     "$tmp/builtin_option_assignment.out"
-test "$(grep -c 'store .*%__n00bb_[0-9][0-9]* !loc' \
+test "$(grep -Ec '\$__n00bb_local_0 = copy %__n00bb_[0-9]+ !loc' \
     "$tmp/builtin_option_assignment.out")" -eq 3
 
 if "$compiler" lower --dump-ir \
@@ -1417,6 +1417,9 @@ N00B_PATH="$interface_programs" "$compiler" compile \
 "$compiler" compile --output "$tmp/reference_layout_abi.o" \
     "$program_dir/reference_layout.n00b"
 "$abi_record_object_test" "$tmp/reference_layout_abi.o" reference-layout
+"$compiler" compile --output "$tmp/option_layout_abi.o" \
+    "$program_dir/option_layout.n00b"
+"$abi_record_object_test" "$tmp/option_layout_abi.o" option-layout
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_generic_user.o" import_generic_user
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
