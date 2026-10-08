@@ -46,6 +46,22 @@ n00bb_exe = executable(
     install: true,
 )
 
+runtime_abi_support = static_library(
+    'n00b-abi-runtime',
+    ['runtime_abi_io.c', 'abi_string.c'],
+    install: true,
+)
+
+install_headers('n00b-abi-v1.h')
+
+runtime_abi_io_test = executable(
+    'runtime-abi-io-test',
+    'tests/runtime_abi_io.c',
+    link_with: runtime_abi_support,
+)
+
+test('runtime-abi-io', runtime_abi_io_test)
+
 storage_interface_writer = executable(
     'storage-interface-writer',
     ['tests/storage_interface_writer.c', 'global_metadata.c'],
