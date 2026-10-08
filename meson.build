@@ -78,6 +78,8 @@ runtime_abi_test = executable(
 test('runtime-abi', runtime_abi_test)
 test('runtime-abi-partial-dispatch', runtime_abi_test,
     args: ['--partial-dispatch'])
+test('runtime-abi-function-parameters', runtime_abi_test,
+    args: ['--function-parameters'])
 
 runtime_abi_scc_test = executable(
     'runtime-abi-scc-test',

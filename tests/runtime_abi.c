@@ -34,15 +34,16 @@
 
 typedef struct {
     n00b_abi_header_v1 header;
-    uint8_t directory[22 * N00BB_ABI_DIRECTORY_BYTES];
+    uint8_t directory[23 * N00BB_ABI_DIRECTORY_BYTES];
     n00b_abi_type_v1 types[6];
-    uint32_t indexes[16];
+    uint32_t indexes[19];
     uint64_t values[1];
     uint8_t bytes[4];
     n00b_abi_specialization_link_v1 links[3];
     n00b_abi_trait_method_v1 methods[3];
     n00b_abi_function_v1 functions[4];
     n00b_abi_call_signature_v1 signatures[2];
+    n00b_abi_parameter_v1 parameters[4];
     n00b_abi_code_range_v1 code_ranges[3];
     n00b_abi_frame_layout_v1 frame_layouts[2];
     n00b_abi_dispatch_v1 dispatches[2];
@@ -78,8 +79,12 @@ directory_entry(image_t *image, uint32_t ordinal, uint32_t kind,
 int
 main(int argc, char **argv)
 {
-    assert(argc == 1 || (argc == 2 && !strcmp(argv[1], "--partial-dispatch")));
-    bool partial_dispatch = argc == 2;
+    assert(argc == 1 || (argc == 2 && (!strcmp(argv[1],
+        "--partial-dispatch") || !strcmp(argv[1], "--function-parameters"))));
+    bool partial_dispatch = argc == 2
+        && !strcmp(argv[1], "--partial-dispatch");
+    bool function_parameters = argc == 2
+        && !strcmp(argv[1], "--function-parameters");
     assert(!n00b_abi_v1_current_snapshot());
     _Alignas(16) image_t image = {0};
     memcpy(image.header.magic, N00B_ABI_V1_MAGIC, 8);
@@ -605,7 +610,67 @@ main(int argc, char **argv)
         && error.table_kind == N00B_ABI_TABLE_MODULE
         && !n00b_abi_v1_current_snapshot());
     image.modules[1].comptime_initializer = 0;
+    image.functions[3].symbol_index = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FUNCTION
+        && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
+    image.functions[3].symbol_index = 0;
+    image.symbols[1].kind = N00B_ABI_SYMBOL_FUNCTION;
+    image.symbols[1].type_index = 5;
+    image.functions[3].symbol_index = 1;
+    image.functions[3].success_type_index = 2;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FUNCTION
+        && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
+    image.functions[3].success_type_index = 0;
+    image.functions[3].symbol_index = 0;
+    image.symbols[1].type_index = 2;
+    image.symbols[1].kind = N00B_ABI_SYMBOL_VARIABLE;
+    image.functions[3].valid_keyword_bits = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FUNCTION
+        && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
+    image.functions[3].valid_keyword_bits = 0;
     image.types[5].typehash = image.types[1].typehash + 16;
+    if (function_parameters) {
+        image.header.directory_count = 23;
+        directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
+            sizeof(image.indexes[0]), 19, offsetof(image_t, indexes));
+        directory_entry(&image, 22, N00B_ABI_TABLE_PARAMETER,
+            sizeof(image.parameters[0]), 4, offsetof(image_t, parameters));
+        image.indexes[16] = 1;
+        image.indexes[17] = 2;
+        image.indexes[18] = 2;
+        image.parameters[1].type_index = 2;
+        image.parameters[2].type_index = 2;
+        image.parameters[2].declaration_ordinal = 1;
+        image.parameters[3].type_index = 2;
+        image.parameters[3].declaration_ordinal = 2;
+        image.functions[3].parameters = (n00b_abi_range_v1){16, 2};
+        image.functions[3].keywords = (n00b_abi_range_v1){18, 1};
+        image.functions[3].valid_keyword_bits = 1;
+        image.parameters[2].declaration_ordinal = 0;
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_FUNCTION
+            && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
+        image.parameters[2].declaration_ordinal = 1;
+        image.indexes[18] = 3;
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_FUNCTION
+            && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
+        image.indexes[18] = 2;
+        image.functions[3].valid_keyword_bits = 0;
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_FUNCTION
+            && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
+        image.functions[3].valid_keyword_bits = 1;
+    }
     if (partial_dispatch) {
         directory_entry(&image, 8, N00B_ABI_TABLE_DISPATCH_ENTRY,
             sizeof(image.entries[0]), 3, offsetof(image_t, entries));

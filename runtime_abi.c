@@ -1,5 +1,6 @@
 #include "n00b-abi-v1.h"
 
+#include <limits.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -1265,6 +1266,80 @@ metadata_traces_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+metadata_functions_valid(const n00b_abi_snapshot_v1 *snapshot,
+                         n00b_abi_error_v1 *error)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_FUNCTION);
+    for (uint32_t i = 1; i < count; i++) {
+        const n00b_abi_function_v1 *function = n00b_abi_v1_function(snapshot,
+            i);
+        const n00b_abi_scope_v1 *scope = function
+            ? n00b_abi_v1_scope(snapshot, function->scope_index) : nullptr;
+        const n00b_abi_symbol_v1 *symbol = function && function->symbol_index
+            ? n00b_abi_v1_symbol(snapshot, function->symbol_index) : nullptr;
+        if (!function || !scope || !function->module_index
+            || scope->module_index != function->module_index
+            || (function->symbol_index
+                && (!symbol || symbol->kind != N00B_ABI_SYMBOL_FUNCTION
+                    || symbol->module_index != function->module_index
+                    || symbol->scope_index != function->scope_index))
+            || function->keywords.count > sizeof(uint64_t) * CHAR_BIT)
+            return invalid_record(error, N00B_ABI_TABLE_FUNCTION, i, 0);
+        if (symbol) {
+            const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot,
+                symbol->type_index);
+            const n00b_abi_call_signature_v1 *signature = type
+                ? n00b_abi_v1_call_signature(snapshot,
+                    type->call_signature_index) : nullptr;
+            if (!type || type->kind != N00B_ABI_TYPE_FUNCTION
+                || !signature || signature->type_index != symbol->type_index
+                || signature->success_type_index
+                    != function->success_type_index
+                || signature->failure_type_index
+                    != function->failure_type_index)
+                return invalid_record(error, N00B_ABI_TABLE_FUNCTION, i, 0);
+        }
+        uint64_t keyword_bits = function->keywords.count
+            == sizeof(uint64_t) * CHAR_BIT
+            ? UINT64_MAX : (UINT64_C(1) << function->keywords.count) - 1;
+        if (function->valid_keyword_bits != keyword_bits)
+            return invalid_record(error, N00B_ABI_TABLE_FUNCTION, i, 0);
+        uint32_t previous_ordinal = 0;
+        for (uint32_t j = 0; j < function->parameters.count; j++) {
+            uint32_t index;
+            if (n00b_abi_v1_index_at(snapshot, function->parameters,
+                    j, &index) != 1 || !index)
+                return invalid_record(error, N00B_ABI_TABLE_FUNCTION, i, 0);
+            const n00b_abi_parameter_v1 *parameter = n00b_abi_v1_record(
+                snapshot, N00B_ABI_TABLE_PARAMETER, index, nullptr);
+            if (!parameter || (j && parameter->declaration_ordinal
+                    <= previous_ordinal))
+                return invalid_record(error, N00B_ABI_TABLE_FUNCTION, i, 0);
+            previous_ordinal = parameter->declaration_ordinal;
+        }
+        uint32_t next_parameter = 0;
+        for (uint32_t j = 0; j < function->keywords.count; j++) {
+            uint32_t keyword;
+            if (n00b_abi_v1_index_at(snapshot, function->keywords,
+                    j, &keyword) != 1 || !keyword)
+                return invalid_record(error, N00B_ABI_TABLE_FUNCTION, i, 0);
+            uint32_t parameter = 0;
+            do {
+                if (next_parameter == function->parameters.count)
+                    return invalid_record(error, N00B_ABI_TABLE_FUNCTION,
+                                          i, 0);
+                if (n00b_abi_v1_index_at(snapshot, function->parameters,
+                        next_parameter++, &parameter) != 1)
+                    return invalid_record(error, N00B_ABI_TABLE_FUNCTION,
+                                          i, 0);
+            } while (parameter != keyword);
+        }
+    }
+    return true;
+}
+
+static bool
 metadata_code_ranges_valid(const n00b_abi_snapshot_v1 *snapshot,
                            n00b_abi_error_v1 *error)
 {
@@ -1876,6 +1951,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     if (valid) valid = metadata_traces_valid(candidate, error);
     if (valid) valid = metadata_code_ranges_valid(candidate, error);
     if (valid) valid = metadata_module_initializers_valid(candidate, error);
+    if (valid) valid = metadata_functions_valid(candidate, error);
     if (valid) valid = metadata_frame_layouts_valid(candidate, error);
     if (valid) valid = metadata_storage_valid(candidate, error);
     if (valid) valid = metadata_dispatch_valid(candidate, error);
