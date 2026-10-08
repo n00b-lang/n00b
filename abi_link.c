@@ -1,5 +1,6 @@
 #include "abi_link.h"
 #include "abi_member_facts.h"
+#include "abi_shape.h"
 #include "abi_value_schema.h"
 #include "abi_type_variable.h"
 
@@ -1896,10 +1897,26 @@ module_initializer_valid(const n00bb_abi_object_view_t *view,
 }
 
 static bool
+object_shape_extent(const void *context, n00b_abi_range_v1 extents,
+                    uint32_t ordinal, uint64_t *out)
+{
+    const n00bb_abi_object_view_t *view = context;
+    if (ordinal >= extents.count || extents.first > UINT32_MAX - ordinal)
+        return false;
+    const uint8_t *slot = n00bb_abi_object_row(view,
+        N00B_ABI_TABLE_U64_STREAM, extents.first + ordinal);
+    if (!slot) return false;
+    *out = core_le_load_u64(slot);
+    return true;
+}
+
+static bool
 row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
                 uint32_t local_index, const void *row)
 {
     if (!local_index) return true;
+    if (kind == N00B_ABI_TABLE_SHAPE)
+        return n00bb_abi_shape_valid(row, object_shape_extent, view);
     if (kind == N00B_ABI_TABLE_MODULE) {
         const n00b_abi_module_v1 *module = row;
         return !(module->comptime_initializer

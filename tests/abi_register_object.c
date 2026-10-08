@@ -120,7 +120,9 @@ main(int argc, char **argv)
         && !strcmp(argv[3], "--bad-named-argument");
     bool missing_constructor = argc == 4
         && !strcmp(argv[3], "--missing-named-constructor");
-    if (bad_argument || missing_constructor) {
+    bool bad_shape = argc == 4
+        && !strcmp(argv[3], "--bad-shape-total");
+    if (bad_argument || missing_constructor || bad_shape) {
         const uint8_t *base = (const uint8_t *)image.metadata;
         const n00b_abi_header_v1 *header = image.metadata;
         bool changed = false;
@@ -152,12 +154,23 @@ main(int argc, char **argv)
                 }
                 break;
             }
+            if (bad_shape && entry.kind == N00B_ABI_TABLE_SHAPE) {
+                assert(entry.record_count > 1 && entry.record_bytes
+                    == sizeof(n00b_abi_shape_v1));
+                n00b_abi_shape_v1 *shape = (void *)(
+                    loaded[metadata.native_index] + entry.file_offset
+                    + entry.record_bytes);
+                shape->total_count++;
+                changed = true;
+                break;
+            }
         }
         assert(changed);
         n00b_abi_error_v1 bad_error = {0};
         uint64_t bad_generation = 0;
         assert(n00b_abi_v1_register_image(&image, &bad_generation,
             &bad_error) == N00B_ABI_BAD_METADATA);
+        if (bad_shape) assert(bad_error.table_kind == N00B_ABI_TABLE_SHAPE);
         assert(!n00b_abi_v1_current_snapshot());
         free(object);
         return 0;

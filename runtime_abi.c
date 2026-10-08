@@ -8,6 +8,7 @@
 #include "abi_directory.h"
 #include "abi_member_facts.h"
 #include "abi_ref_schema.h"
+#include "abi_shape.h"
 #include "abi_string.h"
 #include "abi_type_variable.h"
 #include "abi_value_schema.h"
@@ -470,6 +471,27 @@ metadata_named_arguments_valid(const n00b_abi_snapshot_v1 *snapshot,
                  || arg->type_index
                  || memcmp(&arg->string_value, &empty, sizeof(empty)))
             return invalid_record(error, N00B_ABI_TABLE_TYPE_ARGUMENT, i, 0);
+    }
+    return true;
+}
+
+static bool
+snapshot_shape_extent(const void *context, n00b_abi_range_v1 extents,
+                      uint32_t ordinal, uint64_t *out)
+{
+    return n00b_abi_v1_u64_at(context, extents, ordinal, out) == 1;
+}
+
+static bool
+metadata_shapes_valid(const n00b_abi_snapshot_v1 *snapshot,
+                      n00b_abi_error_v1 *error)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_SHAPE);
+    for (uint32_t i = 1; i < count; i++) {
+        const n00b_abi_shape_v1 *shape = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_SHAPE, i, nullptr);
+        if (!n00bb_abi_shape_valid(shape, snapshot_shape_extent, snapshot))
+            return invalid_record(error, N00B_ABI_TABLE_SHAPE, i, 0);
     }
     return true;
 }
@@ -2205,6 +2227,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
             && nil->typehash == UINT64_C(0x0ea862bddb8ce94c);
     }
     if (valid) valid = metadata_references_valid(candidate, error);
+    if (valid) valid = metadata_shapes_valid(candidate, error);
     if (valid) valid = metadata_named_arguments_valid(candidate, error);
     if (valid) valid = metadata_scope_symbols_valid(candidate, error);
     if (valid) valid = metadata_packages_valid(candidate, error);

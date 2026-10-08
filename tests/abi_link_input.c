@@ -2328,6 +2328,72 @@ test_source_location_values(void)
 }
 
 static void
+test_shape_rows(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[1];
+        n00b_abi_shape_v1 shapes[2];
+        uint64_t extents[2];
+    } fixture_t;
+    fixture_t metadata = {0};
+    metadata.types[0].kind = N00B_ABI_TYPE_NIL;
+    metadata.types[0].typehash = 1;
+    metadata.shapes[1] = (n00b_abi_shape_v1){
+        .total_count = 6, .rank = 2, .flat_rank = 2,
+        .extents = {0, 2},
+    };
+    metadata.extents[0] = 2;
+    metadata.extents[1] = 3;
+    n00bb_abi_directory_entry_t directory[] = {
+        {.kind = N00B_ABI_TABLE_TYPE,
+         .record_bytes = sizeof(metadata.types[0]), .record_count = 1,
+         .file_offset = offsetof(fixture_t, types)},
+        {.kind = N00B_ABI_TABLE_SHAPE,
+         .record_bytes = sizeof(metadata.shapes[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, shapes)},
+        {.kind = N00B_ABI_TABLE_U64_STREAM,
+         .record_bytes = sizeof(metadata.extents[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, extents)},
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {.bytes = (const uint8_t *)&metadata,
+                     .size = sizeof(metadata)},
+        .directory = directory,
+        .directory_count = sizeof(directory) / sizeof(*directory),
+    };
+    n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    n00b_abi_shape_v1 output;
+#define SHAPE_ACCEPTED() n00bb_abi_remap_row(&selected, plan, 0, \
+    N00B_ABI_TABLE_SHAPE, 1, &output, sizeof(output), nullptr)
+    assert(SHAPE_ACCEPTED());
+    metadata.shapes[1].total_count = 5;
+    assert(!SHAPE_ACCEPTED());
+    metadata.shapes[1].total_count = 6;
+    metadata.shapes[1].flat_rank = 3;
+    assert(!SHAPE_ACCEPTED());
+    metadata.shapes[1].flat_rank = 2;
+    metadata.shapes[1].extents.count = 1;
+    assert(!SHAPE_ACCEPTED());
+    metadata.shapes[1].extents.count = 2;
+    metadata.shapes[1].flat_rank = 1;
+    assert(!SHAPE_ACCEPTED());
+    metadata.extents[1] = 0;
+    metadata.shapes[1].total_count = 2;
+    assert(SHAPE_ACCEPTED());
+    metadata.shapes[1].flat_rank = 2;
+    metadata.shapes[1].total_count = 0;
+    metadata.extents[0] = 0;
+    assert(SHAPE_ACCEPTED());
+    metadata.extents[0] = UINT64_MAX;
+    metadata.extents[1] = 2;
+    assert(!SHAPE_ACCEPTED());
+#undef SHAPE_ACCEPTED
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_metadata_string_uses_relocation_pool(void)
 {
     const char *triples[] = {
@@ -3166,6 +3232,7 @@ main(int argc, char **argv)
     test_shared_call_signature_identity();
     test_type_backlinks_remap();
     test_source_location_values();
+    test_shape_rows();
     test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();
     test_static_string_identity();
