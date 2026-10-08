@@ -20243,10 +20243,11 @@ initialize_static_global(parse_grammar_t *grammar,
 
     if (!initialized) {
         if (symbol->mutability != PARSE_SYM_CONST) return true;
+        if (!n00bb_nil_type(state->types, static_type)) return true;
         ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
             IR_DIAG_TYPE_LITERAL, span, "this global initializer");
         ir_diag_message(diagnostic, diagnostics,
-            "const globals require a supported compile-time static initializer");
+            "nil cannot be stored as an ordinary value");
         return false;
     }
     return true;
@@ -22701,8 +22702,12 @@ collect_one_module_initializer_root(parse_grammar_t *grammar,
         parse_tree_t *prefix = child_nt(grammar, statement,
                                         "declaration-prefix");
         if (core_string_eq(first_token_text(child_nt(grammar, prefix,
-                "binding-kind")), CORE_STRING_STATIC("const"))
-            || child_nt(grammar, prefix, "storage-class"))
+                "binding-kind")), CORE_STRING_STATIC("const"))) {
+            collect_dynamic_global_initializers(grammar, unit, statement,
+                                                 comptime);
+            return true;
+        }
+        if (child_nt(grammar, prefix, "storage-class"))
             return true;
         collect_dynamic_global_initializers(grammar, unit, statement,
                                              comptime);

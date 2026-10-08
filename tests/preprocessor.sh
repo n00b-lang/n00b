@@ -1378,6 +1378,19 @@ grep -q '^pdg @add ' "$tmp/lower_arithmetic.ir_and_pdg"
     "$program_dir/typeof_expression.n00b" >"$tmp/typeof_expression.ir"
 grep -q 'func @type_of_value' "$tmp/typeof_expression.ir"
 grep -q '= type.of ' "$tmp/typeof_expression.ir"
+"$compiler" lower --dump-ir \
+    "$program_dir/const_typeof.n00b" >"$tmp/const_typeof.ir"
+grep -q '__n00bb_comptime_init' "$tmp/const_typeof.ir"
+grep -Fq 'const global @const_typeof.selected_type: typespec = $"' \
+    "$tmp/const_typeof.ir"
+grep -q '= type.of ' "$tmp/const_typeof.ir"
+"$compiler" lower --dump-ir \
+    "$program_dir/const_comptime_call.n00b" \
+    >"$tmp/const_comptime_call.ir"
+grep -q 'call @__n00bb_comptime_compute_seed' \
+    "$tmp/const_comptime_call.ir"
+grep -Fq 'const global @const_comptime_call.seed: int = $"' \
+    "$tmp/const_comptime_call.ir"
 "$compiler" compile --output "$tmp/empty_abi.o" \
     "$program_dir/../abi/empty.n00b"
 [ -s "$tmp/empty_abi.o" ]
@@ -1551,7 +1564,7 @@ if "$compiler" lower "$program_dir/../abi/abi_nil_standalone_invalid.n00b" \
     echo 'standalone nil global unexpectedly lowered' >&2
     exit 1
 fi
-grep -q 'const globals require a supported compile-time static initializer' \
+grep -q 'nil cannot be stored as an ordinary value' \
     "$tmp/abi_nil_standalone_invalid.out"
 "$compiler" compile --output "$tmp/array_storage_abi.o" \
     "$program_dir/../abi/array_storage.n00b"

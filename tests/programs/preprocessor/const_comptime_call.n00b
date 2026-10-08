@@ -1,0 +1,3 @@
+func compute_seed() -> int { return 7 }
+
+public const seed: int = compute_seed()

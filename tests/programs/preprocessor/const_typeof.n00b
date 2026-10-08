@@ -1,0 +1,1 @@
+public const selected_type: typespec = typeof(1)
