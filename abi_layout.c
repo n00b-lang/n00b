@@ -397,17 +397,21 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         bool atomic = name && !strcmp(name, "atomic");
         th_type *definition = ir_type_definition(module, type);
         if (!definition) return true;
-        if (th_kind_of(definition) == TH_RECORD) return true;
+        if (th_kind_of(definition) == TH_RECORD && !atomic) return true;
         bool found = false;
         core_dict_get(seen, type, &found);
         if (found) return false;
         core_dict_put(seen, type, type);
-        bool definition_handled = false;
-        if (!publish_direct_or_alias(module, definition, target, seen,
-                                     &definition_handled)) return false;
-        if (!definition_handled) return true;
-        const ir_final_layout_t *base = ir_layout_final(module, definition,
-                                                        target->triple);
+        const ir_final_layout_t *base = atomic
+            ? ir_layout_final(module, definition, target->triple) : nullptr;
+        if (!base) {
+            if (th_kind_of(definition) == TH_RECORD) return true;
+            bool definition_handled = false;
+            if (!publish_direct_or_alias(module, definition, target, seen,
+                                         &definition_handled)) return false;
+            if (!definition_handled) return true;
+            base = ir_layout_final(module, definition, target->triple);
+        }
         if (!base || base->intrinsic_bits > UINT32_MAX) return false;
         if (atomic) {
             *handled = true;

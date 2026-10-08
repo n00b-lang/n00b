@@ -27829,6 +27829,21 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
 }
 
 static bool
+atomic_aggregate_layout_pending(ir_module_t *module, th_type *atomic_type,
+                                const core_target_desc_t *target)
+{
+    const th_arg *argument = th_named_arg(atomic_type, 0);
+    th_type *child = argument && argument->kind == TH_ARG_TYPE
+        ? th_resolve(argument->type) : nullptr;
+    if (!child || ir_layout_final(module, child, target->triple))
+        return false;
+    if (th_kind_of(child) == TH_RECORD) return true;
+    th_type *definition = th_kind_of(child) == TH_NAMED
+        ? ir_type_definition(module, child) : nullptr;
+    return definition && th_kind_of(definition) == TH_RECORD;
+}
+
+static bool
 prepare_ir_type_layouts(parse_grammar_t *grammar,
                         core_translation_unit_t *unit, parse_tree_t *owner,
                         ir_module_t *module, th_type *type,
@@ -27877,6 +27892,7 @@ prepare_ir_type_layouts(parse_grammar_t *grammar,
                                               argument->type, target, visited);
         }
         if (ok && name && !strcmp(name, "atomic")
+            && !atomic_aggregate_layout_pending(module, type, target)
             && !n00bb_atomic_native_support(module, type, target)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
@@ -37742,12 +37758,59 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
 }
 
 static bool
+finalize_atomic_aggregate_layouts(n00bb_link_analysis_t *analysis)
+{
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        core_translation_unit_t *unit = analysis->units.data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        ir_module_t *modules[] = {
+            state ? state->comptime_ir_module : nullptr,
+            state ? state->ir_module : nullptr,
+        };
+        for (size_t m = 0; m < sizeof(modules) / sizeof(*modules); m++) {
+            ir_module_t *module = modules[m];
+            if (!module) return false;
+            for (size_t j = 0; j < ir_type_count(module); j++) {
+                th_type *type = ir_type_at(module, j);
+                if (!n00bb_atomic_type(type)
+                    || ir_layout_final(module, type,
+                                       analysis->target.triple)) continue;
+                if (n00bb_atomic_native_support(module, type,
+                                                &analysis->target)) continue;
+                core_diag_location_t location = {0};
+                parse_symtab_t *symbols = state->annotations
+                    ? state->annotations->symtab : nullptr;
+                for (parse_scope_t *scope = symbols
+                        ? symbols->all_scopes : nullptr;
+                     scope && !location.line; scope = scope->all_next)
+                    for (parse_sym_entry_t *symbol = scope->first_in_scope;
+                         symbol; symbol = symbol->next_in_scope)
+                        if (symbol->type && symbol->decl_node
+                            && ir_type_eq(module, symbol->type, type)) {
+                            location = link_source_location(symbol->decl_node);
+                            break;
+                        }
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0018"),
+                    CORE_STRING_STATIC(
+                        "atomic type is not supported by the selected target"),
+                    location);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool
 select_storage_placement(n00bb_link_analysis_t *analysis)
 {
     if (!analysis || !validate_inline_layout_cycles(analysis)
         || !publish_known_scalar_layouts(analysis)
         || !publish_requested_c_record_layouts(analysis)
         || !publish_declared_aggregate_layouts(analysis)
+        || !finalize_atomic_aggregate_layouts(analysis)
         || !reject_unlowered_record_layout_requests(analysis)) return false;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];

@@ -1417,6 +1417,9 @@ N00B_PATH="$interface_programs" "$compiler" compile \
 "$compiler" compile --output "$tmp/atomic_option_abi.o" \
     "$program_dir/atomic_option_layout.n00b"
 "$abi_record_object_test" "$tmp/atomic_option_abi.o" atomic-option
+"$compiler" compile --output "$tmp/atomic_aggregate_abi.o" \
+    "$program_dir/atomic_aggregate_layout.n00b"
+"$abi_record_object_test" "$tmp/atomic_aggregate_abi.o" atomic-aggregates
 "$compiler" compile --output "$tmp/reference_layout_abi.o" \
     "$program_dir/reference_layout.n00b"
 "$abi_record_object_test" "$tmp/reference_layout_abi.o" reference-layout
