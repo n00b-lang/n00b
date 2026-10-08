@@ -936,6 +936,103 @@ compatible_call_signature(const abi_link_key_t *first,
 }
 
 static bool
+compatible_constraint_type(const abi_link_key_t *first, uint32_t a_index,
+                           const abi_link_key_t *candidate, uint32_t b_index)
+{
+    if (a_index == N00B_ABI_V1_NO_TYPE_INDEX
+        || b_index == N00B_ABI_V1_NO_TYPE_INDEX)
+        return a_index == b_index;
+    const n00b_abi_type_v1 *a = n00bb_abi_object_row(first->view,
+        N00B_ABI_TABLE_TYPE, a_index);
+    const n00b_abi_type_v1 *b = n00bb_abi_object_row(candidate->view,
+        N00B_ABI_TABLE_TYPE, b_index);
+    if (!a || !b || a->kind != b->kind) return false;
+    abi_link_key_t a_key = {
+        .view = first->view, .row = a,
+        .input_index = first->input_index, .local_index = a_index,
+    };
+    abi_link_key_t b_key = {
+        .view = candidate->view, .row = b,
+        .input_index = candidate->input_index, .local_index = b_index,
+    };
+    bool valid = link_key_init(&a_key, N00B_ABI_TABLE_TYPE)
+        && link_key_init(&b_key, N00B_ABI_TABLE_TYPE)
+        && a_key.length == b_key.length
+        && !memcmp(a_key.bytes, b_key.bytes, a_key.length);
+    core_buffer_free(a_key.owned_bytes);
+    core_buffer_free(b_key.owned_bytes);
+    return valid;
+}
+
+static bool
+compatible_constraint_types(const abi_link_key_t *first,
+                            n00b_abi_range_v1 a_range,
+                            const abi_link_key_t *candidate,
+                            n00b_abi_range_v1 b_range)
+{
+    if (a_range.count != b_range.count
+        || !valid_index_range(first->view, a_range)
+        || !valid_index_range(candidate->view, b_range)) return false;
+    for (uint32_t i = 0; i < a_range.count; i++) {
+        const uint8_t *a = n00bb_abi_object_row(first->view,
+            N00B_ABI_TABLE_U32_STREAM, a_range.first + i);
+        const uint8_t *b = n00bb_abi_object_row(candidate->view,
+            N00B_ABI_TABLE_U32_STREAM, b_range.first + i);
+        if (!a || !b || !compatible_constraint_type(first,
+                core_le_load_u32(a), candidate, core_le_load_u32(b)))
+            return false;
+    }
+    return true;
+}
+
+static bool
+compatible_constraint_rows(const abi_link_key_t *first,
+                           const n00b_abi_constraint_v1 *a,
+                           const abi_link_key_t *candidate,
+                           const n00b_abi_constraint_v1 *b)
+{
+    return a && b && a->kind == b->kind && a->flags == b->flags
+        && a->variable_ordinal == b->variable_ordinal
+        && a->type_family == b->type_family
+        && a->parameter_index == b->parameter_index
+        && !a->reserved_zero && !b->reserved_zero
+        && compatible_string_values(first->view, &a->name,
+                                    candidate->view, &b->name)
+        && compatible_string_values(first->view, &a->scope_module_name,
+                                    candidate->view, &b->scope_module_name)
+        && compatible_string_values(first->view, &a->scope_package_name,
+                                    candidate->view, &b->scope_package_name)
+        && compatible_constraint_type(first, a->target_type_index,
+                                      candidate, b->target_type_index)
+        && compatible_constraint_type(first, a->result_type_index,
+                                      candidate, b->result_type_index)
+        && compatible_constraint_type(first, a->call_type_index,
+                                      candidate, b->call_type_index)
+        && compatible_constraint_types(first, a->arguments,
+                                       candidate, b->arguments);
+}
+
+static bool
+compatible_type_constraints(const abi_link_key_t *first,
+                            const abi_link_key_t *candidate)
+{
+    const n00b_abi_type_v1 *a = first->row, *b = candidate->row;
+    if (a->constraints.count != b->constraints.count
+        || !valid_index_range(first->view, a->constraints)
+        || !valid_index_range(candidate->view, b->constraints)) return false;
+    for (uint32_t i = 0; i < a->constraints.count; i++) {
+        const n00b_abi_constraint_v1 *a_row = indexed_range_row(first->view,
+            a->constraints, i, N00B_ABI_TABLE_CONSTRAINT);
+        const n00b_abi_constraint_v1 *b_row = indexed_range_row(
+            candidate->view, b->constraints, i,
+            N00B_ABI_TABLE_CONSTRAINT);
+        if (!compatible_constraint_rows(first, a_row, candidate, b_row))
+            return false;
+    }
+    return true;
+}
+
+static bool
 compatible_type_identity(const abi_link_key_t *first,
                          const abi_link_key_t *candidate)
 {
@@ -959,7 +1056,8 @@ compatible_type_identity(const abi_link_key_t *first,
         && compatible_type_layout(first, candidate)
         && compatible_type_components(first, candidate)
         && compatible_type_members(first, candidate)
-        && compatible_call_signature(first, candidate);
+        && compatible_call_signature(first, candidate)
+        && compatible_type_constraints(first, candidate);
 }
 
 static bool

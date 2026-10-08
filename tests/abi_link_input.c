@@ -2058,6 +2058,51 @@ test_semantic_rows_link(const char *path, bool trait)
             &view, N00B_ABI_TABLE_TYPE,
             constraint->target_type_index);
         assert(excluded && excluded->kind == N00B_ABI_TYPE_STRING);
+
+        uint8_t *changed = malloc(source_bytes);
+        assert(changed);
+        memcpy(changed, source, source_bytes);
+        n00bb_abi_object_view_t changed_view = {0};
+        assert(n00bb_abi_object_open(&target, changed, source_bytes,
+            &changed_view));
+        n00bb_abi_object_view_t duplicate_views[] = {
+            selected.views[0], changed_view,
+        };
+        n00bb_abi_selected_objects_t duplicates = {
+            .views = duplicate_views, .count = 2,
+        };
+        n00bb_abi_index_plan_t *plan =
+            n00bb_abi_index_plan_build(&duplicates);
+        assert(plan);
+        n00bb_abi_index_plan_free(plan);
+        const n00bb_abi_directory_entry_t *source_types =
+            n00bb_abi_object_table(&changed_view, N00B_ABI_TABLE_TYPE);
+        assert(source_types);
+        n00b_abi_constraint_v1 *changed_constraint = nullptr;
+        for (uint32_t i = 1; i < source_types->record_count; i++) {
+            const n00b_abi_type_v1 *type = n00bb_abi_object_row(
+                &changed_view, N00B_ABI_TABLE_TYPE, i);
+            if (type->kind != N00B_ABI_TYPE_VARIABLE
+                || !type->constraints.count) continue;
+            const uint8_t *constraint_index = n00bb_abi_object_row(
+                &changed_view, N00B_ABI_TABLE_U32_STREAM,
+                type->constraints.first);
+            assert(constraint_index);
+            changed_constraint = (void *)n00bb_abi_object_row(&changed_view,
+                N00B_ABI_TABLE_CONSTRAINT,
+                core_le_load_u32(constraint_index));
+            break;
+        }
+        assert(changed_constraint);
+        changed_constraint->kind = N00B_ABI_CONSTRAINT_PROMOTES;
+        assert(!n00bb_abi_index_plan_build(&duplicates));
+        changed_constraint->kind = N00B_ABI_CONSTRAINT_EXCLUDES;
+        uint32_t target_type_index = changed_constraint->target_type_index;
+        changed_constraint->target_type_index = 0;
+        assert(!n00bb_abi_index_plan_build(&duplicates));
+        changed_constraint->target_type_index = target_type_index;
+        n00bb_abi_object_close(&changed_view);
+        free(changed);
     }
     n00bb_abi_object_close(&view);
     core_free(linked);
