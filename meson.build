@@ -2284,6 +2284,21 @@ bench_rocs_prims = executable('bench_rocs_prims',
     kwargs: test_common_kwargs,
 )
 
+bench_rocs_catalog_rewrite = executable('bench_rocs_catalog_rewrite',
+    ['test/unit/bench_rocs_catalog_rewrite.c'],
+    kwargs: test_common_kwargs,
+)
+
+# Registered small so the drops keep happening and the catalog stays
+# readable; run the binary directly for the timings.
+test('rocs_catalog_rewrite_bench',
+    bench_rocs_catalog_rewrite,
+    suite: 'unit',
+    env: {'ROCS_BENCH_SHARDS': '6',
+          'ROCS_BENCH_RECORDS': '50',
+          'ROCS_BENCH_DROPS': '2'},
+)
+
 bench_rocs_query_ab = executable('bench_rocs_query_ab',
     ['test/unit/bench_rocs_query_ab.c'],
     kwargs: test_common_kwargs,
