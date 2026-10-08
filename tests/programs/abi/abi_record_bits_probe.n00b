@@ -1,0 +1,7 @@
+public type Flags {
+    first: bool
+    second: bool
+    code: u:3
+}
+
+public const flags: Flags = (first = true, second = false, code = 5)

@@ -1425,6 +1425,21 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
 [ -s "$tmp/string_storage_abi.o" ]
 "$abi_record_object_test" "$tmp/string_storage_abi.o" string-storage
 "$abi_link_input_test" --string-storage "$tmp/string_storage_abi.o"
+"$compiler" compile --output "$tmp/abi_record_storage_probe.o" \
+    "$program_dir/../abi/abi_record_storage_probe.n00b"
+"$abi_record_object_test" "$tmp/abi_record_storage_probe.o" record-storage
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/abi_record_storage_linked.o" abi_record_storage_probe
+"$abi_record_object_test" "$tmp/abi_record_storage_linked.o" record-storage
+"$compiler" compile --output "$tmp/abi_record_bits_probe.o" \
+    "$program_dir/../abi/abi_record_bits_probe.n00b"
+"$abi_record_object_test" "$tmp/abi_record_bits_probe.o" record-bits-storage
+"$compiler" compile --output "$tmp/abi_record_nested_probe.o" \
+    "$program_dir/../abi/abi_record_nested_probe.n00b"
+"$abi_record_object_test" "$tmp/abi_record_nested_probe.o" record-nested-storage
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/abi_record_nested_linked.o" abi_record_nested_probe
+"$abi_record_object_test" "$tmp/abi_record_nested_linked.o" record-nested-storage
 "$compiler" compile --output "$tmp/array_storage_abi.o" \
     "$program_dir/../abi/array_storage.n00b"
 [ -s "$tmp/array_storage_abi.o" ]
