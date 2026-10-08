@@ -1411,6 +1411,9 @@ N00B_PATH="$interface_programs" "$compiler" compile \
 [ -s "$tmp/constraint_abi.o" ]
 "$abi_record_object_test" "$tmp/constraint_abi.o" constraint
 "$abi_link_input_test" --constraint "$tmp/constraint_abi.o"
+"$compiler" compile --output "$tmp/atomic_layout_abi.o" \
+    "$program_dir/atomic_layout.n00b"
+"$abi_record_object_test" "$tmp/atomic_layout_abi.o" atomic
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_generic_user.o" import_generic_user
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \

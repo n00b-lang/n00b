@@ -248,12 +248,21 @@ n00bb_abi_type_identity_rows_build(
             row->alignment_bytes = final->alignment_bytes;
             if (row->kind == N00B_ABI_TYPE_PRIMITIVE
                 || row->kind == N00B_ABI_TYPE_ENUM
-                || row->kind == N00B_ABI_TYPE_FLAGSET) {
+                || row->kind == N00B_ABI_TYPE_FLAGSET
+                || row->kind == N00B_ABI_TYPE_ATOMIC) {
                 if (final->intrinsic_bits > UINT32_MAX) {
                     valid = false;
                     break;
                 }
                 row->unpacked_storage_bits = (uint32_t)final->intrinsic_bits;
+            }
+            if (row->kind == N00B_ABI_TYPE_ATOMIC) {
+                if (final->n_occupied != 1 || final->occupied[0].offset
+                    || final->occupied[0].width > UINT32_MAX) {
+                    valid = false;
+                    break;
+                }
+                row->semantic_width_bits = (uint32_t)final->occupied[0].width;
             }
         }
         else if (row->kind == N00B_ABI_TYPE_NIL)

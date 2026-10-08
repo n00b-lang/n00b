@@ -1981,6 +1981,55 @@ check_anonymous_record_storage(const uint8_t *object, size_t length,
         "a nested anonymous record string");
 }
 
+static void
+check_atomic(const core_object_section_t *metadata,
+             const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    const n00bb_abi_directory_entry_t *runs = entry_for(entries, count,
+        N00B_ABI_TABLE_PHYSICAL_RUN);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(types && layouts && runs && stream);
+    uint32_t atomic_index = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        if (type->kind != N00B_ABI_TYPE_ATOMIC) continue;
+        assert(!atomic_index);
+        atomic_index = i;
+    }
+    assert(atomic_index);
+    const n00b_abi_type_v1 *atomic = row_at(metadata, types, atomic_index);
+    assert(atomic->size_bits == 32 && atomic->alignment_bytes == 4
+        && atomic->semantic_width_bits == 17
+        && atomic->unpacked_storage_bits == 32
+        && atomic->components.count == 1 && atomic->layout_index);
+    uint32_t component = *(const uint32_t *)row_at(metadata, stream,
+        atomic->components.first);
+    const n00b_abi_type_v1 *bits = row_at(metadata, types, component);
+    assert(bits->kind == N00B_ABI_TYPE_PRIMITIVE
+        && bits->semantic_width_bits == 17
+        && bits->flags & N00B_ABI_TYPE_FLAG_BITS);
+    const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
+        atomic->layout_index);
+    assert(layout->type_index == atomic_index
+        && layout->occupied_runs.count == 1
+        && layout->reserved_runs.count == 1);
+    uint32_t occupied = *(const uint32_t *)row_at(metadata, stream,
+        layout->occupied_runs.first);
+    uint32_t reserved = *(const uint32_t *)row_at(metadata, stream,
+        layout->reserved_runs.first);
+    const n00b_abi_physical_run_v1 *value = row_at(metadata, runs, occupied);
+    const n00b_abi_physical_run_v1 *padding = row_at(metadata, runs, reserved);
+    assert(!value->byte_offset && !value->bit_offset
+        && value->width_bits == 17
+        && padding->byte_offset == 2 && padding->bit_offset == 1
+        && padding->width_bits == 15);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2011,7 +2060,8 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "alias")
             || !strcmp(argv[2], "flagset")
             || !strcmp(argv[2], "generic")
-            || !strcmp(argv[2], "generic-local"))));
+            || !strcmp(argv[2], "generic-local")
+            || !strcmp(argv[2], "atomic"))));
     FILE *file = fopen(argv[1], "rb");
     assert(file);
     assert(!fseek(file, 0, SEEK_END));
@@ -2251,6 +2301,13 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "flagset")) {
         check_flagset(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "atomic")) {
+        check_atomic(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;
