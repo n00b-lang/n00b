@@ -47346,16 +47346,17 @@ n00bb_execute_comptime(core_link_unit_t *link,
             && !memcmp(result_name, "string", 6) && !result_arity;
         th_type *element = result && th_kind_of(result) == TH_SEQUENCE
             ? th_seq_elem(result) : nullptr;
-        const ir_final_layout_t *layout = element
-            ? ir_layout_final(producer->owner, element,
+        th_type *raw_type = element ? element : result;
+        const ir_final_layout_t *layout = raw_type
+            ? ir_layout_final(producer->owner, raw_type,
                               ir_module_target(producer->owner)) : nullptr;
         uint64_t stride_bits = 0;
         bool has_stride = ir_layout_final_stride_bits(layout, &stride_bits);
         uint64_t stride = has_stride ? stride_bits / 8 : 0;
         if (!effect_only && !is_string
-            && (!element || !has_stride || !stride
+            && (!has_stride || !stride
                 || stride > UINT32_MAX
-                || !n00bb_literal_raw_element(producer->owner, element))) {
+                || !n00bb_literal_raw_element(producer->owner, raw_type))) {
             core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-B0013"),
                 CORE_STRING_STATIC("native build cannot materialize this literal result without relocations"));
@@ -47367,9 +47368,11 @@ n00bb_execute_comptime(core_link_unit_t *link,
             ir_module_name(producer->owner), producer->name);
         producers[i].symbol = core_strndup(symbol.data, symbol.byte_len);
         producers[i].identifier = binding->identifier;
+        producers[i].function = producer;
         producers[i].kind = effect_only ? N00BB_LLVM_LITERAL_EFFECT
             : is_string ? N00BB_LLVM_LITERAL_STRING
-                        : N00BB_LLVM_LITERAL_ARRAY;
+            : element ? N00BB_LLVM_LITERAL_ARRAY
+                      : N00BB_LLVM_LITERAL_RAW_VALUE;
         producers[i].element_stride = effect_only || is_string
             ? 0 : (uint32_t)stride;
         producers[i].comptime_consumer = binding->consumer

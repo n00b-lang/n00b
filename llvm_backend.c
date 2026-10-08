@@ -644,6 +644,44 @@ materialized_string(lower_state_t *state, ir_instr_t *instruction)
 }
 
 static LLVMValueRef
+materialized_raw_value(lower_state_t *state, ir_instr_t *instruction)
+{
+    const char *identifier = ir_instr_phase_result(instruction);
+    th_type *type = instruction->dest
+        ? th_resolve(instruction->dest->type) : nullptr;
+    const ir_final_layout_t *layout = type
+        ? ir_layout_final(state->function->owner, type,
+            ir_module_target(state->function->owner)) : nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef value = type
+        ? value_type(state->function->owner, type, context) : nullptr;
+    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
+    if (!identifier || !layout || !layout->alignment_bytes || !value
+        || !literal_element_layout_matches(state->function->owner, type,
+            value, target)) return nullptr;
+    for (size_t i = 0; i < state->phase_array_count; i++) {
+        const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
+        if (cached->kind != N00BB_LLVM_LITERAL_RAW_VALUE
+            || !cached->identifier
+            || strcmp(identifier, cached->identifier)
+            || cached->count != 1 || !cached->bytes
+            || LLVMABISizeOfType(target, value) != cached->element_stride)
+            continue;
+        LLVMValueRef bytes = LLVMConstStringInContext(context,
+            (const char *)cached->bytes, cached->element_stride, true);
+        LLVMValueRef storage = LLVMAddGlobal(state->module,
+            LLVMTypeOf(bytes), "n00bb.literal.value.cached");
+        LLVMSetInitializer(storage, bytes);
+        LLVMSetAlignment(storage, (unsigned)layout->alignment_bytes);
+        LLVMSetGlobalConstant(storage, true);
+        LLVMSetLinkage(storage, LLVMPrivateLinkage);
+        return LLVMBuildLoad2(state->builder, value, storage,
+                              "literal.cached");
+    }
+    return nullptr;
+}
+
+static LLVMValueRef
 phase_cache_global(LLVMModuleRef module, const char *identifier,
                    LLVMTypeRef type, bool define)
 {
@@ -730,6 +768,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         } else {
             result = materialized_array(state, instruction);
             if (!result) result = materialized_string(state, instruction);
+            if (!result) result = materialized_raw_value(state, instruction);
         }
         return result ? save_result(state, instruction, result)
                       : unsupported(state, instruction);
@@ -1346,19 +1385,37 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                 effect_writer_parameters, 1, false);
             LLVMValueRef effect_writer = LLVMAddFunction(module,
                 "n00bb_comptime_emit_effect", effect_writer_type);
+            LLVMTypeRef value_writer_parameters[] = {result, pointer,
+                                                       result};
+            LLVMTypeRef value_writer_type = LLVMFunctionType(result,
+                value_writer_parameters, 3, false);
+            LLVMValueRef value_writer = LLVMAddFunction(module,
+                "n00bb_comptime_emit_value", value_writer_type);
             for (size_t i = 0; i < array_producer_count; i++) {
                 const n00bb_llvm_array_producer_t *spec = &array_producers[i];
                 LLVMTypeRef expected = spec->kind == N00BB_LLVM_LITERAL_EFFECT
                     ? LLVMVoidTypeInContext(context)
                     : spec->kind == N00BB_LLVM_LITERAL_STRING
-                        ? string_type : array_type;
+                        ? string_type
+                    : spec->kind == N00BB_LLVM_LITERAL_ARRAY
+                        ? array_type
+                    : spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE
+                        && spec->function
+                        ? value_type(spec->function->owner,
+                            th_func_ret(spec->function->type), context)
+                        : nullptr;
                 LLVMValueRef producer = spec->symbol
                     ? LLVMGetNamedFunction(module, spec->symbol) : nullptr;
-                if (!producer && spec->symbol)
+                if (!producer && spec->symbol && expected)
                     producer = LLVMAddFunction(module, spec->symbol,
                         LLVMFunctionType(expected, nullptr, 0, false));
                 if (!producer || (spec->kind == N00BB_LLVM_LITERAL_ARRAY
                         && !spec->element_stride)
+                    || (spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE
+                        && (!spec->element_stride || !expected
+                            || LLVMABISizeOfType(
+                                LLVMGetModuleDataLayout(module), expected)
+                                != spec->element_stride))
                     || LLVMCountParams(producer)
                     || LLVMGetReturnType(LLVMGlobalGetValueType(producer))
                         != expected) {
@@ -1400,6 +1457,18 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                     };
                     status = LLVMBuildCall2(builder, string_writer_type,
                         string_writer, arguments, 3, "literal.write");
+                } else if (spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE) {
+                    LLVMValueRef storage = LLVMBuildAlloca(builder, expected,
+                        "literal.value.storage");
+                    LLVMBuildStore(builder, value, storage);
+                    LLVMValueRef arguments[] = {
+                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
+                                     false),
+                        storage,
+                        LLVMConstInt(result, spec->element_stride, false),
+                    };
+                    status = LLVMBuildCall2(builder, value_writer_type,
+                        value_writer, arguments, 3, "literal.write");
                 } else {
                     LLVMValueRef arguments[] = {
                         LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,

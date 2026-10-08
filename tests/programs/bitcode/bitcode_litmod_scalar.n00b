@@ -1,0 +1,11 @@
+declare_litmod("number", "string", "read_number")
+
+func read_number(raw: string) -> int fail: string {
+    return 7
+}
+
+comptime {
+    require number"seven" == 7
+} else {
+    require number"seven" == 7
+}

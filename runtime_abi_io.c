@@ -169,6 +169,16 @@ int32_t n00bb_comptime_emit_array(
     return 0;
 }
 
+int32_t n00bb_comptime_emit_value(int32_t fd, const void *data,
+                                   uint32_t size)
+{
+    const uint64_t count = 1;
+    if (fd < 0 || !data || !size
+        || !write_all(fd, (const uint8_t *)&count, sizeof(count))
+        || !write_all(fd, data, size)) return -1;
+    return 0;
+}
+
 int32_t n00bb_comptime_emit_string(int32_t fd, uint64_t low, uint64_t high)
 {
     n00b_abi_string_v1 value = {.words = {low, high}};
