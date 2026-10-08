@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "lib/alloc.h"
+#include "lib/hash.h"
 #include "lib/string.h"
 
 struct n00bb_llvm_backend_t {
@@ -642,6 +643,28 @@ materialized_string(lower_state_t *state, ir_instr_t *instruction)
     return nullptr;
 }
 
+static LLVMValueRef
+phase_cache_global(LLVMModuleRef module, const char *identifier,
+                   LLVMTypeRef type, bool define)
+{
+    if (!identifier || !type) return nullptr;
+    uint64_t hash = core_xxh3_64bits_raw(identifier, strlen(identifier));
+    core_buffer_t name = {0};
+    core_buffer_printf(&name, "__n00bb_comptime_literal_%016llx",
+                       (unsigned long long)hash);
+    LLVMValueRef global = name.data
+        ? LLVMGetNamedGlobal(module, name.data) : nullptr;
+    if (!global && name.data)
+        global = LLVMAddGlobal(module, type, name.data);
+    core_buffer_release(&name);
+    if (!global || LLVMGlobalGetValueType(global) != type)
+        return nullptr;
+    LLVMSetVisibility(global, LLVMHiddenVisibility);
+    if (define && !LLVMGetInitializer(global))
+        LLVMSetInitializer(global, LLVMConstNull(type));
+    return global;
+}
+
 static bool
 lower_instruction(lower_state_t *state, ir_instr_t *instruction)
 {
@@ -694,8 +717,20 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         return result ? save_result(state, instruction, result)
                       : unsupported(state, instruction);
     case IR_OP_PHASE_RESULT:
-        result = materialized_array(state, instruction);
-        if (!result) result = materialized_string(state, instruction);
+        if (ir_func_execution_phase(state->function)
+                == IR_PHASE_COMPTIME) {
+            LLVMTypeRef type = instruction->dest
+                ? value_type(state->function->owner,
+                    instruction->dest->type,
+                    LLVMGetModuleContext(state->module)) : nullptr;
+            LLVMValueRef global = phase_cache_global(state->module,
+                ir_instr_phase_result(instruction), type, true);
+            result = global ? LLVMBuildLoad2(state->builder, type, global,
+                                             "literal.cached") : nullptr;
+        } else {
+            result = materialized_array(state, instruction);
+            if (!result) result = materialized_string(state, instruction);
+        }
         return result ? save_result(state, instruction, result)
                       : unsupported(state, instruction);
     case IR_OP_ADD: {
@@ -814,14 +849,16 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 && (arguments[i - 1] = lowered_value(state,
                                              operands[i].value)) != nullptr;
         }
+        bool returns_void = LLVMGetTypeKind(LLVMGetReturnType(
+            LLVMGlobalGetValueType(callee))) == LLVMVoidTypeKind;
         if (valid)
             result = LLVMBuildCall2(state->builder,
                 LLVMGlobalGetValueType(callee), callee, arguments,
-                count - 1, instruction->dest ? "call" : "");
+                count - 1, instruction->dest && !returns_void ? "call" : "");
         free(arguments);
         if (!valid || !result) break;
-        return instruction->dest ? save_result(state, instruction, result)
-                                 : true;
+        return instruction->dest && !returns_void
+            ? save_result(state, instruction, result) : true;
     }
     case IR_OP_BRANCH: {
         if (count != 3 || operands[0].kind != IR_OPD_VALUE
@@ -1333,6 +1370,17 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                     LLVMGlobalGetValueType(producer), producer,
                     nullptr, 0, spec->kind == N00BB_LLVM_LITERAL_EFFECT
                         ? "" : "literal.result");
+                if (spec->comptime_consumer
+                    && spec->kind != N00BB_LLVM_LITERAL_EFFECT) {
+                    LLVMValueRef global = phase_cache_global(module,
+                        spec->identifier, expected, false);
+                    if (!global) {
+                        LLVMDisposeBuilder(builder);
+                        return backend_error(diagnostics,
+                            "compile-time literal cache binding is invalid");
+                    }
+                    LLVMBuildStore(builder, value, global);
+                }
                 LLVMValueRef status = nullptr;
                 if (spec->kind == N00BB_LLVM_LITERAL_EFFECT) {
                     LLVMValueRef arguments[] = {

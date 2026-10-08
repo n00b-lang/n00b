@@ -19,8 +19,10 @@ typedef enum {
 
 typedef struct {
     const char *symbol;
+    const char *identifier;
     n00bb_llvm_literal_kind_t kind;
     uint32_t element_stride;
+    bool comptime_consumer;
 } n00bb_llvm_array_producer_t;
 
 typedef struct {

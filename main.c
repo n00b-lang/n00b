@@ -13210,11 +13210,6 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
         if (lower->has_active_literal) return true;
         if (!core_dict_contains(&tu->static_literal_nodes, visit->node))
             return true;
-        if (lower->comptime_phase)
-            return lower_error(context, IR_DIAG_VERIFY_TYPED,
-                lower_span_for_tree(context, visit->node),
-                "static literal prelude inside comptime code is not lowered yet")
-                .status != IR_LOWER_FAILED;
         th_type *result_type = core_tree_node_value(visit->node).type;
         if (!result_type || !th_is_closed(tu->types, result_type))
             return lower_error(context, IR_DIAG_TYPE_CLASS,
@@ -24264,9 +24259,12 @@ build_n00bb_execution_graph(
             &analysis->phase_results.data[i];
         if (!binding->instruction) continue;
         uint32_t producer_id, consumer_id;
+        bool comptime_consumer = ir_func_execution_phase(binding->consumer)
+            == IR_PHASE_COMPTIME;
         if (!exec_graph_function_id(graph, comptime_phase,
                 binding->producer, &registered_functions, &producer_id)
-            || !exec_graph_function_id(graph, runtime_phase,
+            || !exec_graph_function_id(graph,
+                comptime_consumer ? comptime_phase : runtime_phase,
                 binding->consumer, &registered_functions, &consumer_id)
             || !ir_exec_graph_add_phase_result(graph, binding->identifier,
                 producer_id, consumer_id, binding->instruction)) {
@@ -47368,11 +47366,15 @@ n00bb_execute_comptime(core_link_unit_t *link,
         core_buffer_printf(&symbol, "%s.%s",
             ir_module_name(producer->owner), producer->name);
         producers[i].symbol = core_strndup(symbol.data, symbol.byte_len);
+        producers[i].identifier = binding->identifier;
         producers[i].kind = effect_only ? N00BB_LLVM_LITERAL_EFFECT
             : is_string ? N00BB_LLVM_LITERAL_STRING
                         : N00BB_LLVM_LITERAL_ARRAY;
         producers[i].element_stride = effect_only || is_string
             ? 0 : (uint32_t)stride;
+        producers[i].comptime_consumer = binding->consumer
+            && ir_func_execution_phase(binding->consumer)
+                == IR_PHASE_COMPTIME;
         core_buffer_release(&symbol);
         ok = producers[i].symbol != nullptr;
     }

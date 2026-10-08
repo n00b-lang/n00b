@@ -41,6 +41,18 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/litmod_fence_nil" \
     "$program_dir/bitcode_litmod_fence_nil.n00b"
 "$tmp/litmod_fence_nil"
+"$compiler" build --output "$tmp/litmod_comptime_value" \
+    "$program_dir/bitcode_litmod_comptime_value.n00b"
+"$tmp/litmod_comptime_value"
+if "$compiler" build --output "$tmp/litmod_comptime_fail" \
+    "$program_dir/bitcode_litmod_comptime_fail.n00b" \
+    >"$tmp/litmod_comptime_fail.out" 2>&1; then
+    echo 'failing comptime literal prelude unexpectedly built' >&2
+    exit 1
+fi
+grep -q 'fatal\[N00BB-B0014\]: prelude failed' \
+    "$tmp/litmod_comptime_fail.out"
+test ! -e "$tmp/litmod_comptime_fail"
 if "$compiler" build --output "$tmp/litmod_fence_nil_fail" \
     "$program_dir/bitcode_litmod_fence_nil_fail.n00b" \
     >"$tmp/litmod_fence_nil_fail.out" 2>&1; then
