@@ -754,12 +754,12 @@ bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
     ir_type_intern(m, named);
     ir_type_intern(m, def);
 
-    ir_typeslot_t *slot = type_find(m, th_hash(m->ctx->types, named));
+    uint64_t hash = ir_type_id(m, named);
+    ir_typeslot_t *slot = type_find(m, hash);
 
     if (!slot) {
         return false;
     }
-    uint64_t hash = th_hash(m->ctx->types, named);
     for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
         ir_context_type_definition_t *entry =
             &m->ctx->type_definitions[i];
@@ -795,7 +795,7 @@ th_type *ir_type_definition(ir_module_t *m, th_type *named)
         return nullptr;
     }
 
-    uint64_t hash = th_hash(m->ctx->types, named);
+    uint64_t hash = ir_type_id(m, named);
     for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
         ir_context_type_definition_t *entry =
             &m->ctx->type_definitions[i];
@@ -808,7 +808,7 @@ th_type *ir_type_definition(ir_module_t *m, th_type *named)
 ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named)
 {
     if (!m || !named || th_kind_of(named) != TH_NAMED) return nullptr;
-    uint64_t hash = th_hash(m->ctx->types, named);
+    uint64_t hash = ir_type_id(m, named);
     for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
         ir_context_type_definition_t *entry =
             &m->ctx->type_definitions[i];
@@ -874,7 +874,11 @@ th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)
     char name[64];
     snprintf(name, sizeof(name), "__lantern_call_outcome_%016llx",
              (unsigned long long)ir_type_id(m, key));
-    th_type *outcome = th_variant(m->ctx->types, name, nullptr, 0);
+    th_arg arguments[] = {
+        {.kind = TH_ARG_TYPE, .type = ret},
+        {.kind = TH_ARG_TYPE, .type = error},
+    };
+    th_type *outcome = th_variant(m->ctx->types, name, arguments, 2);
     th_member arms[] = {{"ok", ret}, {"error", error}};
     th_type *definition = th_record(m->ctx->types, arms, 2);
     th_type *existing = ir_type_definition(m, outcome);

@@ -195,6 +195,13 @@ static void test_types(void)
     th_type *outcome2 = ir_call_outcome_type(m, call2);
     check("independent open failure channels have separate outcomes",
           outcome1 && outcome2 && !ir_type_eq(m, outcome1, outcome2));
+    const th_arg *outcome_error = outcome1
+        ? th_named_arg(outcome1, 1) : nullptr;
+    check("call outcomes expose open channels as type arguments",
+          outcome1 && th_named_nargs(outcome1) == 2
+              && outcome_error && outcome_error->kind == TH_ARG_TYPE
+              && outcome_error->type == error1
+              && th_free_vars(types, outcome1, nullptr) == 1);
 
     bool found_a = false;
     bool found_c = false;
