@@ -1521,8 +1521,9 @@ test_type_backlinks_remap(void)
         n00b_abi_type_v1 types[3];
         n00b_abi_layout_v1 layouts[2];
         n00b_abi_trace_v1 traces[2];
-        n00b_abi_field_v1 fields[2];
-        uint32_t members[1];
+        n00b_abi_field_v1 fields[3];
+        n00b_abi_symbol_v1 symbols[2];
+        uint32_t members[2];
     } backlink_fixture_t;
     backlink_fixture_t metadata = {0};
     metadata.types[0].kind = N00B_ABI_TYPE_NIL;
@@ -1537,7 +1538,15 @@ test_type_backlinks_remap(void)
     metadata.layouts[1].type_index = 1;
     metadata.traces[1].type_index = 1;
     metadata.fields[1].parent_type_index = 1;
+    metadata.fields[1].child_type_index = 2;
+    metadata.fields[1].symbol_index = 1;
+    metadata.fields[2].parent_type_index = 1;
+    metadata.fields[2].child_type_index = 2;
+    metadata.fields[2].declaration_ordinal = 1;
+    metadata.symbols[1].kind = N00B_ABI_SYMBOL_FIELD;
+    metadata.symbols[1].type_index = 2;
     metadata.members[0] = 1;
+    metadata.members[1] = 2;
     n00bb_abi_directory_entry_t directory[] = {
         {.kind = N00B_ABI_TABLE_TYPE,
          .record_bytes = sizeof(n00b_abi_type_v1), .record_count = 3,
@@ -1549,10 +1558,13 @@ test_type_backlinks_remap(void)
          .record_bytes = sizeof(n00b_abi_trace_v1), .record_count = 2,
          .file_offset = offsetof(backlink_fixture_t, traces)},
         {.kind = N00B_ABI_TABLE_FIELD,
-         .record_bytes = sizeof(n00b_abi_field_v1), .record_count = 2,
+         .record_bytes = sizeof(n00b_abi_field_v1), .record_count = 3,
          .file_offset = offsetof(backlink_fixture_t, fields)},
+        {.kind = N00B_ABI_TABLE_SYMBOL,
+         .record_bytes = sizeof(n00b_abi_symbol_v1), .record_count = 2,
+         .file_offset = offsetof(backlink_fixture_t, symbols)},
         {.kind = N00B_ABI_TABLE_U32_STREAM,
-         .record_bytes = sizeof(uint32_t), .record_count = 1,
+         .record_bytes = sizeof(uint32_t), .record_count = 2,
          .file_offset = offsetof(backlink_fixture_t, members)},
     };
     n00bb_abi_object_view_t view = {
@@ -1564,9 +1576,9 @@ test_type_backlinks_remap(void)
     n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
     assert(plan);
-    uint32_t values[1] = {0}, kinds[1] = {0};
+    uint32_t values[2] = {0}, kinds[2] = {0};
     n00bb_abi_u32_stream_build_t stream = {
-        .values = values, .kinds = kinds, .count = 1,
+        .values = values, .kinds = kinds, .count = 2,
     };
     n00b_abi_type_v1 type;
     assert(n00bb_abi_remap_row(&selected, plan, 0,
@@ -1583,6 +1595,22 @@ test_type_backlinks_remap(void)
     assert(!n00bb_abi_remap_row(&selected, plan, 0,
         N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
     metadata.fields[1].parent_type_index = 1;
+    metadata.symbols[1].kind = N00B_ABI_SYMBOL_VARIABLE;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.symbols[1].kind = N00B_ABI_SYMBOL_FIELD;
+    metadata.symbols[1].type_index = 1;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.symbols[1].type_index = 2;
+    metadata.types[1].fields_or_arms.count = 2;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.fields[2].declaration_ordinal = 0;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.fields[2].declaration_ordinal = 1;
+    metadata.types[1].fields_or_arms.count = 1;
     metadata.types[1].fields_or_arms = (n00b_abi_range_v1){.first = 1};
     assert(!n00bb_abi_remap_row(&selected, plan, 0,
         N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));

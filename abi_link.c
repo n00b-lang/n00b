@@ -1265,6 +1265,37 @@ type_member_kind(const n00b_abi_type_v1 *type)
     }
 }
 
+typedef struct {
+    uint32_t parent;
+    uint32_t ordinal;
+    uint32_t symbol;
+    uint32_t type;
+    uint32_t symbol_kind;
+} abi_member_facts_t;
+
+static abi_member_facts_t
+member_facts(uint32_t kind, const void *row)
+{
+    if (kind == N00B_ABI_TABLE_ENUM_ITEM) {
+        const n00b_abi_enum_item_v1 *item = row;
+        return (abi_member_facts_t){item->parent_type_index,
+            item->declaration_ordinal, item->symbol_index,
+            item->parent_type_index, N00B_ABI_SYMBOL_ENUM_ITEM};
+    }
+    if (kind == N00B_ABI_TABLE_TRAIT_METHOD) {
+        const n00b_abi_trait_method_v1 *method = row;
+        return (abi_member_facts_t){method->trait_type_index,
+            method->declaration_ordinal, method->symbol_index,
+            method->signature_type_index, N00B_ABI_SYMBOL_FUNCTION};
+    }
+    const n00b_abi_field_v1 *field = kind == N00B_ABI_TABLE_ARM
+        ? &((const n00b_abi_arm_v1 *)row)->field : row;
+    return (abi_member_facts_t){field->parent_type_index,
+        field->declaration_ordinal, field->symbol_index,
+        field->child_type_index, kind == N00B_ABI_TABLE_ARM
+            ? N00B_ABI_SYMBOL_VARIANT_ARM : N00B_ABI_SYMBOL_FIELD};
+}
+
 static bool
 type_backlinks_valid(const n00bb_abi_object_view_t *view,
                      const n00b_abi_type_v1 *type, uint32_t type_index)
@@ -1286,14 +1317,20 @@ type_backlinks_valid(const n00bb_abi_object_view_t *view,
         const void *member = indexed_range_row(view, type->fields_or_arms,
                                                 i, kind);
         if (!member) return false;
-        uint32_t parent = kind == N00B_ABI_TABLE_FIELD
-            ? ((const n00b_abi_field_v1 *)member)->parent_type_index
-            : kind == N00B_ABI_TABLE_ARM
-            ? ((const n00b_abi_arm_v1 *)member)->field.parent_type_index
-            : kind == N00B_ABI_TABLE_ENUM_ITEM
-            ? ((const n00b_abi_enum_item_v1 *)member)->parent_type_index
-            : ((const n00b_abi_trait_method_v1 *)member)->trait_type_index;
-        if (parent != type_index) return false;
+        abi_member_facts_t facts = member_facts(kind, member);
+        if (facts.parent != type_index) return false;
+        if (facts.symbol) {
+            const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_SYMBOL, facts.symbol);
+            if (!symbol || symbol->kind != facts.symbol_kind
+                || symbol->type_index != facts.type) return false;
+        }
+        for (uint32_t j = 0; j < i; j++) {
+            const void *previous = indexed_range_row(view,
+                type->fields_or_arms, j, kind);
+            if (!previous || member_facts(kind, previous).ordinal
+                == facts.ordinal) return false;
+        }
     }
     return true;
 }
