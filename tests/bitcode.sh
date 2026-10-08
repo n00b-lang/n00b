@@ -83,6 +83,9 @@ fi
 "$compiler" build --output "$tmp/litmod_handler_dependency" \
     "$program_dir/bitcode_litmod_handler_dependency.n00b"
 "$tmp/litmod_handler_dependency"
+"$compiler" build --output "$tmp/litmod_forward_type" \
+    "$program_dir/bitcode_litmod_forward_type.n00b"
+"$tmp/litmod_forward_type"
 if "$compiler" build --output "$tmp/litmod_comptime_fail" \
     "$program_dir/bitcode_litmod_comptime_fail.n00b" \
     >"$tmp/litmod_comptime_fail.out" 2>&1; then

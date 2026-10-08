@@ -170,6 +170,7 @@ typedef struct {
     n00bb_user_litmod_t *registration;
     th_type *payload_type;
     th_type *signature;
+    bool deferred;
 } n00bb_litmod_site_t;
 
 static const n00bb_literal_registration_t N00BB_LITERAL_HANDLERS[] = {
@@ -41842,14 +41843,6 @@ infer_user_tagged_literal_type(parse_grammar_t *grammar,
     if (!kind.data) return true;
     n00bb_user_litmod_t *registration = user_litmod(state, modifier, kind);
     if (!registration) return true;
-    parse_scope_t *scope = module_scope(state);
-    parse_sym_entry_t *function = scope
-        ? parse_symtab_lookup_in(scope, registration->function_name)
-        : nullptr;
-    th_type *signature = function && function->type
-        ? th_resolve(function->type) : nullptr;
-    if (!signature || th_kind_of(signature) != TH_FUNCTION)
-        return false;
     th_type *input_type = th_name(state->types, "string");
     if (sequence) {
         parse_tree_t *entries = child_nt(grammar, sequence, "list-elems");
@@ -41919,8 +41912,16 @@ infer_user_tagged_literal_type(parse_grammar_t *grammar,
     th_type *expected = th_func_with_error(state->types,
         th_var(state->types), th_name(state->types, "string"),
         &param, 1, nullptr, nullptr, 0);
-    th_type *specialized = expected
-        ? th_unify(state->types, signature, expected) : nullptr;
+    parse_scope_t *scope = module_scope(state);
+    parse_sym_entry_t *function = scope
+        ? parse_symtab_lookup_in(scope, registration->function_name)
+        : nullptr;
+    th_type *signature = function && function->type
+        ? th_resolve(function->type) : nullptr;
+    bool deferred = !signature;
+    if (signature && th_kind_of(signature) != TH_FUNCTION) return false;
+    th_type *specialized = expected && !deferred
+        ? th_unify(state->types, signature, expected) : expected;
     th_type *result = specialized ? th_func_ret(specialized) : nullptr;
     if (!result) return false;
     const char *required_shape = sequence ? "Bracket_Literal"
@@ -41949,9 +41950,52 @@ infer_user_tagged_literal_type(parse_grammar_t *grammar,
         .registration = registration,
         .payload_type = specialized_param->type,
         .signature = specialized,
+        .deferred = deferred,
     };
     core_dict_put(&state->literal_sites, node, site);
     return true;
+}
+
+static bool
+resolve_forward_literal_sites(core_translation_unit_t *unit,
+                              n00bb_tu_state_t *state)
+{
+    bool valid = true;
+    parse_scope_t *scope = module_scope(state);
+    core_dict_foreach(&state->literal_sites, item) {
+        n00bb_litmod_site_t *site = item->value;
+        if (!site || !site->deferred) continue;
+        parse_tree_t *node = item->key;
+        parse_sym_entry_t *function = scope
+            ? parse_symtab_lookup_in(scope,
+                site->registration->function_name) : nullptr;
+        th_type *signature = function && function->type
+            ? th_resolve(function->type) : nullptr;
+        th_type *specialized = signature
+            && th_kind_of(signature) == TH_FUNCTION
+            ? th_unify(state->types, signature, site->signature) : nullptr;
+        th_type *result = specialized ? th_func_ret(specialized) : nullptr;
+        th_type *unified = result && core_tree_node_value(node).type
+            ? th_unify_in_place(state->types,
+                core_tree_node_value(node).type, result) : nullptr;
+        const th_param *parameter = specialized
+            ? th_func_param(specialized, 0) : nullptr;
+        if (!unified || !parameter) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0030"),
+                CORE_STRING_STATIC(
+                    "literal handler cannot specialize for this payload"),
+                link_source_location(node));
+            valid = false;
+            continue;
+        }
+        core_tree_node_value(node).type = unified;
+        site->signature = specialized;
+        site->payload_type = parameter->type;
+        site->deferred = false;
+    }
+    return valid;
 }
 
 static bool
@@ -43057,6 +43101,7 @@ semantic_annotate_import_closure(annotation_context_t *context,
         ? parse_pwz_get_tree(lex->parser) : nullptr;
     if (!tree) return false;
     semantic_annotate_tree(context, unit, tree, nullptr, 0, -1, false);
+    if (!resolve_forward_literal_sites(unit, state)) return false;
     if (core_translation_unit_has_fatal_diagnostics(unit)
         || core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
         return false;

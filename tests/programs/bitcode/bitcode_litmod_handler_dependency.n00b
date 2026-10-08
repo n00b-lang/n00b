@@ -1,12 +1,12 @@
 declare_litmod("outer", "string", "make_outer")
 declare_litmod("inner", "string", "identity")
 
-func identity(raw: string) -> string fail: string {
-    return raw
-}
-
 func make_outer(raw: string) -> string fail: string {
     return inner"an inner long string payload"
+}
+
+func identity(raw: string) -> string fail: string {
+    return raw
 }
 
 func observe(value: string) {

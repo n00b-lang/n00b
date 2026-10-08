@@ -1,0 +1,15 @@
+declare_litmod("number", "string", "make_number")
+
+func value() -> int {
+    return number"ignored"
+}
+
+func make_number(raw: string) -> int fail: string {
+    return 42
+}
+
+comptime {
+    require value() == 42
+} else {
+    require value() == 42
+}
