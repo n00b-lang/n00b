@@ -1,6 +1,7 @@
 #include "llvm_backend.h"
 
 #include "ir/layout.h"
+#include "ir/shape.h"
 #include "ir/typelang.h"
 #include "abi_string.h"
 #include "n00b-abi-v1.h"
@@ -329,6 +330,15 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
             && LLVMGetIntTypeWidth(native) == machine.width
             && layout->intrinsic_bits == machine.width;
 
+    if (th_kind_of(th_resolve(type)) == TH_SEQUENCE)
+        return layout->intrinsic_bits == sizeof(n00b_abi_array_value_v1) * 8
+            && LLVMGetTypeKind(native) == LLVMStructTypeKind
+            && LLVMCountStructElementTypes(native) == 2
+            && LLVMGetTypeKind(LLVMStructGetTypeAtIndex(native, 0))
+                == LLVMPointerTypeKind
+            && LLVMGetTypeKind(LLVMStructGetTypeAtIndex(native, 1))
+                == LLVMPointerTypeKind;
+
     const char *name = nullptr;
     size_t count = 0;
     if (!th_named_info(th_resolve(type), &name, nullptr, nullptr, &count)
@@ -400,6 +410,22 @@ tuple_aggregate(lower_state_t *state, ir_instr_t *instruction)
     return result;
 }
 
+static bool
+array_requires_flat_storage(const ir_instr_t *instruction)
+{
+    th_type *type = instruction->dest
+        ? th_resolve(instruction->dest->type) : nullptr;
+    th_type *element = type && th_kind_of(type) == TH_SEQUENCE
+        ? th_seq_elem(type) : nullptr;
+    ir_shape_t *shape = instruction->dest
+        ? ir_value_shape(instruction->dest) : nullptr;
+    ir_shape_extent_t extent = {0};
+    return element && th_kind_of(th_resolve(element)) == TH_SEQUENCE
+        && shape && ir_shape_rank(shape) > 1
+        && ir_shape_extent(shape, 1, &extent)
+        && extent.kind == IR_SHAPE_EXTENT_STATIC;
+}
+
 static LLVMValueRef
 constant_array(lower_state_t *state, ir_instr_t *instruction)
 {
@@ -414,7 +440,8 @@ constant_array(lower_state_t *state, ir_instr_t *instruction)
     LLVMTypeRef array_type = type
         ? value_type(state->function->owner, type, context) : nullptr;
     uint32_t count = instruction->n_operands;
-    if ((ir_instr_aggregate_form(instruction, &form)
+    if (array_requires_flat_storage(instruction)
+        || (ir_instr_aggregate_form(instruction, &form)
             && form != IR_AGGREGATE_ELEMENTS)
         || !element_type || !array_type
         || !literal_element_layout_matches(state->function->owner, element,
@@ -474,7 +501,8 @@ materialized_array(lower_state_t *state, ir_instr_t *instruction)
     if (!stride || stride > UINT32_MAX) return nullptr;
     for (size_t i = 0; i < state->phase_array_count; i++) {
         const n00bb_llvm_phase_array_t *array = &state->phase_arrays[i];
-        if (!array->identifier || strcmp(identifier, array->identifier))
+        if (array->kind != N00BB_LLVM_LITERAL_ARRAY
+            || !array->identifier || strcmp(identifier, array->identifier))
             continue;
         if (array->element_stride != stride || array->count > UINT32_MAX
             || array->count > UINT32_MAX / stride || !array->bytes)
@@ -502,7 +530,8 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
         ? th_resolve(instruction->dest->type) : nullptr;
     th_type *element = type && th_kind_of(type) == TH_SEQUENCE
         ? th_seq_elem(type) : nullptr;
-    if (!element || (ir_instr_aggregate_form(instruction, &form)
+    if (!element || array_requires_flat_storage(instruction)
+        || (ir_instr_aggregate_form(instruction, &form)
                      && form != IR_AGGREGATE_ELEMENTS)) return nullptr;
     ir_module_t *source = state->function->owner;
     const ir_final_layout_t *layout = ir_layout_final(source, element,
@@ -766,6 +795,99 @@ materialized_reloc_array(lower_state_t *state, ir_instr_t *instruction)
 }
 
 static LLVMValueRef
+materialized_nested_array(lower_state_t *state, ir_instr_t *instruction)
+{
+    const char *identifier = ir_instr_phase_result(instruction);
+    th_type *type = instruction->dest
+        ? th_resolve(instruction->dest->type) : nullptr;
+    th_type *inner = type && th_kind_of(type) == TH_SEQUENCE
+        ? th_seq_elem(type) : nullptr;
+    th_type *element = inner && th_kind_of(th_resolve(inner)) == TH_SEQUENCE
+        ? th_seq_elem(inner) : nullptr;
+    ir_module_t *source = state->function->owner;
+    const char *target_name = ir_module_target(source);
+    const ir_final_layout_t *outer_layout = inner
+        ? ir_layout_final(source, inner, target_name) : nullptr;
+    const ir_final_layout_t *inner_layout = element
+        ? ir_layout_final(source, element, target_name) : nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
+    LLVMTypeRef outer_native = inner ? value_type(source, inner, context)
+                                     : nullptr;
+    LLVMTypeRef inner_native = element
+        ? value_type(source, element, context) : nullptr;
+    uint64_t inner_stride_bits = 0;
+    if (!identifier || !outer_layout || !outer_layout->alignment_bytes
+        || !inner_layout || !inner_layout->alignment_bytes
+        || !literal_element_layout_matches(source, inner, outer_native,
+                                           target)
+        || !literal_element_layout_matches(source, element, inner_native,
+                                           target)
+        || !ir_layout_final_stride_bits(inner_layout, &inner_stride_bits)
+        || inner_stride_bits % 8 || !inner_stride_bits
+        || inner_stride_bits / 8 > UINT32_MAX) return nullptr;
+    uint32_t inner_stride = (uint32_t)(inner_stride_bits / 8);
+    for (size_t i = 0; i < state->phase_array_count; i++) {
+        const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
+        if (cached->kind != N00BB_LLVM_LITERAL_NESTED_ARRAY
+            || !cached->identifier || strcmp(identifier, cached->identifier)
+            || !cached->bytes || cached->count > UINT32_MAX
+            || cached->element_stride != sizeof(n00b_abi_array_value_v1)
+            || cached->inner_stride != inner_stride) continue;
+        unsigned count = (unsigned)cached->count;
+        LLVMValueRef *items = calloc(count ? count : 1, sizeof(*items));
+        if (!items) return nullptr;
+        size_t position = 0;
+        bool valid = true;
+        for (unsigned j = 0; valid && j < count; j++) {
+            uint64_t child_count;
+            if (position > cached->byte_len
+                || cached->byte_len - position < sizeof(child_count)) {
+                valid = false;
+                break;
+            }
+            memcpy(&child_count, cached->bytes + position,
+                   sizeof(child_count));
+            position += sizeof(child_count);
+            if (child_count > UINT32_MAX / inner_stride
+                || child_count * inner_stride
+                    > cached->byte_len - position) {
+                valid = false;
+                break;
+            }
+            unsigned byte_count = (unsigned)(child_count * inner_stride);
+            LLVMValueRef contents = LLVMConstStringInContext(context,
+                byte_count ? (const char *)cached->bytes + position : "\0",
+                byte_count ? byte_count : 1, true);
+            LLVMValueRef data = LLVMAddGlobal(state->module,
+                LLVMTypeOf(contents), "n00bb.literal.nested.data.cached");
+            LLVMSetInitializer(data, contents);
+            LLVMSetAlignment(data, inner_layout->alignment_bytes);
+            LLVMSetGlobalConstant(data, true);
+            LLVMSetLinkage(data, LLVMPrivateLinkage);
+            items[j] = array_value_with_descriptor(state, data, child_count);
+            valid = items[j] && LLVMTypeOf(items[j]) == outer_native;
+            position += byte_count;
+        }
+        valid = valid && position == cached->byte_len;
+        if (valid && !count) items[0] = LLVMConstNull(outer_native);
+        LLVMValueRef values = valid
+            ? LLVMConstArray(outer_native, items, count ? count : 1)
+            : nullptr;
+        free(items);
+        if (!values) return nullptr;
+        LLVMValueRef data = LLVMAddGlobal(state->module,
+            LLVMTypeOf(values), "n00bb.literal.nested.array.cached");
+        LLVMSetInitializer(data, values);
+        LLVMSetAlignment(data, outer_layout->alignment_bytes);
+        LLVMSetGlobalConstant(data, true);
+        LLVMSetLinkage(data, LLVMPrivateLinkage);
+        return array_value_with_descriptor(state, data, count);
+    }
+    return nullptr;
+}
+
+static LLVMValueRef
 materialized_raw_value(lower_state_t *state, ir_instr_t *instruction)
 {
     const char *identifier = ir_instr_phase_result(instruction);
@@ -895,6 +1017,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             result = materialized_array(state, instruction);
             if (!result) result = materialized_string(state, instruction);
             if (!result) result = materialized_reloc_array(state, instruction);
+            if (!result) result = materialized_nested_array(state, instruction);
             if (!result) result = materialized_raw_value(state, instruction);
         }
         return result ? save_result(state, instruction, result)
@@ -1498,6 +1621,13 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                 writer_parameters, 4, false);
             LLVMValueRef writer = LLVMAddFunction(module,
                 "n00bb_comptime_emit_array", writer_type);
+            LLVMTypeRef nested_writer_parameters[] = {
+                result, pointer, pointer, result, pointer,
+            };
+            LLVMTypeRef nested_writer_type = LLVMFunctionType(result,
+                nested_writer_parameters, 5, false);
+            LLVMValueRef nested_writer = LLVMAddFunction(module,
+                "n00bb_comptime_emit_nested_array", nested_writer_type);
             LLVMTypeRef reloc_writer_parameters[] = {
                 result, pointer, pointer, result, pointer, result, pointer,
             };
@@ -1532,7 +1662,8 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                     : spec->kind == N00BB_LLVM_LITERAL_STRING
                         ? string_type
                     : (spec->kind == N00BB_LLVM_LITERAL_ARRAY
-                        || spec->kind == N00BB_LLVM_LITERAL_RELOC_ARRAY)
+                        || spec->kind == N00BB_LLVM_LITERAL_RELOC_ARRAY
+                        || spec->kind == N00BB_LLVM_LITERAL_NESTED_ARRAY)
                         ? array_type
                     : spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE
                         && spec->function
@@ -1551,6 +1682,10 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                             || !spec->byte_mask
                             || !spec->string_offset_count
                             || spec->string_offset_count > UINT32_MAX))
+                    || (spec->kind == N00BB_LLVM_LITERAL_NESTED_ARRAY
+                        && (spec->element_stride
+                            != sizeof(n00b_abi_array_value_v1)
+                            || !spec->inner_stride || !spec->byte_mask))
                     || (spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE
                         && (!spec->element_stride || !expected
                             || LLVMABISizeOfType(
@@ -1653,6 +1788,27 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                     };
                     status = LLVMBuildCall2(builder, reloc_writer_type,
                         reloc_writer, arguments, 7, "literal.write");
+                } else if (spec->kind == N00BB_LLVM_LITERAL_NESTED_ARRAY) {
+                    LLVMValueRef mask_values = LLVMConstStringInContext(
+                        context, (const char *)spec->byte_mask,
+                        spec->inner_stride, true);
+                    LLVMValueRef mask_data = LLVMAddGlobal(module,
+                        LLVMTypeOf(mask_values), "n00bb.literal.inner.mask");
+                    LLVMSetInitializer(mask_data, mask_values);
+                    LLVMSetGlobalConstant(mask_data, true);
+                    LLVMSetLinkage(mask_data, LLVMPrivateLinkage);
+                    LLVMValueRef arguments[] = {
+                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
+                                     false),
+                        LLVMBuildExtractValue(builder, value, 0,
+                                              "array.data"),
+                        LLVMBuildExtractValue(builder, value, 1,
+                                              "array.descriptor"),
+                        LLVMConstInt(result, spec->inner_stride, false),
+                        mask_data,
+                    };
+                    status = LLVMBuildCall2(builder, nested_writer_type,
+                        nested_writer, arguments, 5, "literal.write");
                 } else {
                     LLVMValueRef arguments[] = {
                         LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,

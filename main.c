@@ -395,6 +395,7 @@ typedef struct {
     size_t materialized_string_offset_count;
     uint64_t materialized_count;
     uint32_t materialized_stride;
+    uint32_t materialized_inner_stride;
     n00bb_llvm_literal_kind_t materialized_kind;
     uint8_t materialized_encoding;
 } n00bb_phase_result_binding_t;
@@ -47182,6 +47183,28 @@ n00bb_literal_string_offsets(ir_module_t *module, th_type *type,
     return true;
 }
 
+static uint8_t *
+n00bb_literal_byte_mask(const ir_final_layout_t *layout,
+                        uint64_t stride_bits)
+{
+    if (!layout || !stride_bits || stride_bits % 8
+        || stride_bits / 8 > SIZE_MAX) return nullptr;
+    uint8_t *mask = calloc((size_t)(stride_bits / 8), 1);
+    if (!mask) return nullptr;
+    for (size_t i = 0; i < layout->n_occupied; i++) {
+        uint64_t first = layout->occupied[i].offset;
+        uint64_t width = layout->occupied[i].width;
+        if (first % 8 || width % 8 || first > stride_bits
+            || width > stride_bits - first) {
+            free(mask);
+            return nullptr;
+        }
+        for (uint64_t byte = first / 8; byte < (first + width) / 8; byte++)
+            mask[byte] = 1;
+    }
+    return mask;
+}
+
 typedef struct {
     n00bb_abi_packed_tables_t packed;
     uint8_t *object;
@@ -47316,6 +47339,51 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
         if (producers[i].kind == N00BB_LLVM_LITERAL_EFFECT) {
             if (count) return false;
             binding->materialized_kind = N00BB_LLVM_LITERAL_EFFECT;
+            *completed = i + 1;
+            continue;
+        }
+        if (producers[i].kind == N00BB_LLVM_LITERAL_NESTED_ARRAY) {
+            uint32_t stride = producers[i].inner_stride;
+            off_t start = lseek(fd, 0, SEEK_CUR);
+            if (!stride || start < 0 || start > info.st_size
+                || count > (uint64_t)(info.st_size - start) / sizeof(uint64_t))
+                return false;
+            core_buffer_t *packed = core_buffer_empty();
+            bool valid = packed != nullptr;
+            for (uint64_t j = 0; valid && j < count; j++) {
+                uint64_t child_count;
+                valid = n00bb_read_exact(fd, &child_count,
+                                          sizeof(child_count));
+                off_t position = valid ? lseek(fd, 0, SEEK_CUR) : -1;
+                valid = valid && position >= 0 && position <= info.st_size
+                    && packed->byte_len <= SIZE_MAX
+                        - sizeof(child_count) - 1
+                    && child_count <= (uint64_t)(info.st_size - position)
+                        / stride
+                    && child_count <= (SIZE_MAX - sizeof(child_count)
+                        - packed->byte_len - 1) / stride;
+                if (!valid) break;
+                size_t bytes = (size_t)child_count * stride;
+                core_buffer_append(packed, (const char *)&child_count,
+                                   sizeof(child_count));
+                core_buffer_ensure(packed, bytes + 1);
+                valid = n00bb_read_exact(fd, packed->data + packed->byte_len,
+                                         bytes);
+                if (valid) {
+                    packed->byte_len += bytes;
+                    packed->data[packed->byte_len] = 0;
+                }
+            }
+            if (!valid) {
+                core_buffer_free(packed);
+                return false;
+            }
+            binding->materialized_byte_len = packed->byte_len;
+            binding->materialized_bytes = (uint8_t *)core_buffer_take(packed);
+            binding->materialized_count = count;
+            binding->materialized_stride = producers[i].element_stride;
+            binding->materialized_inner_stride = stride;
+            binding->materialized_kind = producers[i].kind;
             *completed = i + 1;
             continue;
         }
@@ -47474,6 +47542,17 @@ n00bb_execute_comptime(core_link_unit_t *link,
             && n00bb_literal_string_offsets(producer->owner, element, 0,
                                              &string_offsets)
             && string_offsets.len != 0;
+        th_type *inner_element = element && th_kind_of(th_resolve(element))
+            == TH_SEQUENCE ? th_seq_elem(element) : nullptr;
+        const ir_final_layout_t *inner_layout = inner_element
+            ? ir_layout_final(producer->owner, inner_element,
+                              ir_module_target(producer->owner)) : nullptr;
+        uint64_t inner_stride_bits = 0;
+        bool nested_array = inner_element
+            && n00bb_literal_raw_element(producer->owner, inner_element)
+            && ir_layout_final_stride_bits(inner_layout,
+                                           &inner_stride_bits)
+            && !(inner_stride_bits % 8) && inner_stride_bits / 8 <= UINT32_MAX;
         th_type *raw_type = element ? element : result;
         bool bool_value = !element && !effect_only && !is_string
             && ir_machine_of(producer->owner, result).class == IR_CLASS_BOOL;
@@ -47489,7 +47568,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
                 || (has_stride && stride_bits % 8)
                 || stride > UINT32_MAX
                 || string_offsets.len > UINT32_MAX
-                || (!bool_value && !reloc_array
+                || (!bool_value && !reloc_array && !nested_array
                     && !n00bb_literal_raw_element(
                         producer->owner, raw_type)))) {
             core_list_free(string_offsets);
@@ -47508,32 +47587,30 @@ n00bb_execute_comptime(core_link_unit_t *link,
         producers[i].kind = effect_only ? N00BB_LLVM_LITERAL_EFFECT
             : is_string ? N00BB_LLVM_LITERAL_STRING
             : reloc_array ? N00BB_LLVM_LITERAL_RELOC_ARRAY
+            : nested_array ? N00BB_LLVM_LITERAL_NESTED_ARRAY
             : element ? N00BB_LLVM_LITERAL_ARRAY
                       : N00BB_LLVM_LITERAL_RAW_VALUE;
         producers[i].element_stride = effect_only || is_string
             ? 0 : (uint32_t)stride;
+        if (nested_array)
+            producers[i].inner_stride = (uint32_t)(inner_stride_bits / 8);
         if (reloc_array) {
             producers[i].string_offsets = string_offsets.data;
             producers[i].string_offset_count = string_offsets.len;
-            uint8_t *mask = calloc((size_t)stride, 1);
-            if (!mask) ok = false;
-            for (size_t run = 0; ok && run < layout->n_occupied; run++) {
-                uint64_t first = layout->occupied[run].offset;
-                uint64_t width = layout->occupied[run].width;
-                if (first % 8 || width % 8 || first > stride_bits
-                    || width > stride_bits - first) {
-                    core_diagnostics_report(diagnostics, nullptr,
-                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0013"),
-                        CORE_STRING_STATIC("native build cannot materialize a bit-packed literal result"));
-                    ok = false;
-                    break;
-                }
-                for (uint64_t byte = first / 8;
-                     byte < (first + width) / 8; byte++) mask[byte] = 1;
-            }
-            producers[i].byte_mask = mask;
+            producers[i].byte_mask = n00bb_literal_byte_mask(layout,
+                                                              stride_bits);
+            ok = ok && producers[i].byte_mask != nullptr;
         }
         else core_list_free(string_offsets);
+        if (nested_array) {
+            producers[i].byte_mask = n00bb_literal_byte_mask(inner_layout,
+                                                       inner_stride_bits);
+            ok = ok && producers[i].byte_mask != nullptr;
+        }
+        if ((reloc_array || nested_array) && !producers[i].byte_mask)
+            core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+                CORE_STRING_STATIC("N00BB-B0013"),
+                CORE_STRING_STATIC("native build cannot materialize a bit-packed literal result"));
         producers[i].comptime_consumer = binding->consumer
             && ir_func_execution_phase(binding->consumer)
                 == IR_PHASE_COMPTIME;
@@ -47733,6 +47810,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .kind = binding->materialized_kind,
             .string_encoding = binding->materialized_encoding,
             .element_stride = binding->materialized_stride,
+            .inner_stride = binding->materialized_inner_stride,
             .string_offsets = binding->materialized_string_offsets,
             .string_offset_count = binding->materialized_string_offset_count,
         };

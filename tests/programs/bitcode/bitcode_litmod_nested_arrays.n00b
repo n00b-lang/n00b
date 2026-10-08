@@ -1,0 +1,24 @@
+declare_litmod("bundle", "array", "identity")
+
+func identity(items: Array[Array[int]]) -> Array[Array[int]] fail: string {
+    return items
+}
+
+func values() -> Array[Array[int]] {
+    return bundle[array[1, 2], array[3]]
+}
+
+func dynamic(x: int) -> Array[Array[int]] {
+    return bundle[array[1, x], array[3]]
+}
+
+func observe(items: Array[Array[int]]) {
+    require true
+}
+
+comptime {
+    observe(bundle[array[4, 5], array[6]])
+} else {
+    values()
+    dynamic(6)
+}

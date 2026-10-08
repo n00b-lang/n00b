@@ -9,6 +9,11 @@ int32_t n00bb_comptime_emit_reloc_array(
     uint32_t stride, const uint32_t *string_offsets, uint32_t offset_count,
     const uint8_t *byte_mask);
 
+int32_t n00bb_comptime_emit_nested_array(
+    int32_t fd, const n00b_abi_array_value_v1 *data,
+    const n00b_abi_array_descriptor_header_v1 *descriptor,
+    uint32_t inner_stride, const uint8_t *byte_mask);
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -155,6 +160,29 @@ int main(void)
     assert(length == 5);
     pos += sizeof(length) + 1;
     assert(memcmp(serialized + pos, "right", 5) == 0);
+    struct {
+        n00b_abi_array_descriptor_header_v1 header;
+        uint64_t extent;
+    } shapes[] = {
+        {{.total_count = 2, .rank = 1, .flat_rank = 1}, 2},
+        {{.total_count = 1, .rank = 1, .flat_rank = 1}, 1},
+        {{.total_count = 2, .rank = 1, .flat_rank = 1}, 2},
+    };
+    uint64_t first[] = {11, UINT64_MAX, 12, UINT64_MAX};
+    uint64_t second[] = {13, UINT64_MAX};
+    uint8_t inner_mask[16] = {1, 1, 1, 1, 1, 1, 1, 1};
+    n00b_abi_array_value_v1 children[] = {
+        {first, &shapes[0].header},
+        {second, &shapes[1].header},
+    };
+    assert(n00bb_comptime_emit_nested_array(fds[1], children,
+        &shapes[2].header, sizeof(inner_mask), inner_mask) == 0);
+    uint64_t expected_nested[] = {2, 2, 11, 0, 12, 0, 1, 13, 0};
+    uint64_t actual_nested[sizeof(expected_nested) / sizeof(uint64_t)];
+    assert(read(fds[0], actual_nested, sizeof(actual_nested))
+        == sizeof(actual_nested));
+    assert(memcmp(actual_nested, expected_nested,
+                  sizeof(expected_nested)) == 0);
     close(fds[0]);
     close(fds[1]);
 #endif

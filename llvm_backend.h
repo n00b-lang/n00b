@@ -15,6 +15,7 @@ typedef enum {
     N00BB_LLVM_LITERAL_ARRAY,
     N00BB_LLVM_LITERAL_STRING,
     N00BB_LLVM_LITERAL_RELOC_ARRAY,
+    N00BB_LLVM_LITERAL_NESTED_ARRAY,
     N00BB_LLVM_LITERAL_RAW_VALUE,
     N00BB_LLVM_LITERAL_EFFECT,
 } n00bb_llvm_literal_kind_t;
@@ -25,6 +26,7 @@ typedef struct {
     ir_func_t *function;
     n00bb_llvm_literal_kind_t kind;
     uint32_t element_stride;
+    uint32_t inner_stride;
     const uint32_t *string_offsets;
     size_t string_offset_count;
     const uint8_t *byte_mask;
@@ -39,6 +41,7 @@ typedef struct {
     n00bb_llvm_literal_kind_t kind;
     uint8_t string_encoding;
     uint32_t element_stride;
+    uint32_t inner_stride;
     const uint32_t *string_offsets;
     size_t string_offset_count;
 } n00bb_llvm_phase_array_t;

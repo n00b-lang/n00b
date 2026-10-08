@@ -169,6 +169,42 @@ int32_t n00bb_comptime_emit_array(
     return 0;
 }
 
+static bool write_masked_segment(int32_t fd, const uint8_t *element,
+                                 const uint8_t *mask, uint32_t start,
+                                 uint32_t end);
+
+int32_t n00bb_comptime_emit_nested_array(
+    int32_t fd, const n00b_abi_array_value_v1 *data,
+    const n00b_abi_array_descriptor_header_v1 *descriptor,
+    uint32_t inner_stride, const uint8_t *byte_mask)
+{
+    if (fd < 0 || !data || !descriptor || !inner_stride || !byte_mask
+        || descriptor->rank != 1 || descriptor->flat_rank != 1
+        || descriptor->flags || descriptor->reserved_zero
+        || descriptor->total_count != ((const uint64_t *)(descriptor + 1))[0]
+        || descriptor->total_count > SIZE_MAX / sizeof(*data)) return -1;
+    uint64_t count = descriptor->total_count;
+    if (!write_all(fd, (const uint8_t *)&count, sizeof(count))) return -1;
+    for (uint64_t i = 0; i < count; i++) {
+        const n00b_abi_array_descriptor_header_v1 *child =
+            data[i].descriptor;
+        if (!data[i].data || !child || child->rank != 1
+            || child->flat_rank != 1 || child->flags || child->reserved_zero
+            || child->total_count != ((const uint64_t *)(child + 1))[0]
+            || child->total_count > SIZE_MAX / inner_stride) return -1;
+        uint64_t child_count = child->total_count;
+        if (!write_all(fd, (const uint8_t *)&child_count,
+                       sizeof(child_count))) return -1;
+        for (uint64_t j = 0; j < child_count; j++) {
+            const uint8_t *element = (const uint8_t *)data[i].data
+                + j * inner_stride;
+            if (!write_masked_segment(fd, element, byte_mask, 0,
+                                      inner_stride)) return -1;
+        }
+    }
+    return 0;
+}
+
 int32_t n00bb_comptime_emit_value(int32_t fd, const void *data,
                                    uint32_t size)
 {
