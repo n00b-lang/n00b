@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <assert.h>
+#include <string.h>
 #if defined(__APPLE__) || defined(__linux__)
 #include <fcntl.h>
 #include <pthread.h>
@@ -51,6 +52,81 @@ test_basic_rw(void)
 
     printf("  [PASS] basic rw lock/unlock\n");
 }
+
+// ============================================================================
+// n00b#521: a thread n00b never created may read-lock ANY lock
+// ============================================================================
+//
+// _n00b_rw_read_lock used to assert that a caller with no TCB could only be
+// taking rt->critical_execution:
+//
+//     if (!have_tcb) { assert(lock == &rt->critical_execution); }
+//
+// That holds for threads n00b creates -- their only TCB-less window is their
+// own init/destroy, where the STW gate is the one lock they touch -- and fails
+// for a thread n00b does not create, which has no TCB for its whole life.
+//
+// On Windows that thread is KERNELBASE!CtrlRoutine: a daemon that registers a
+// console control handler and calls into n00b from it aborts on Ctrl-C,
+// console close, logoff or shutdown. A raw pthread here is the same shape --
+// no n00b_thread_launcher, so no thread record -- and it reproduces on POSIX,
+// which is where this can actually be run.
+#if defined(HAVE_PARK_PROBE)
+
+static n00b_rwlock_t foreign_lock;
+static _Atomic(int)  foreign_done;
+
+static void *
+foreign_thread_fn(void *unused)
+{
+    (void)unused;
+
+    // Deliberately NOT a lock a TCB-less thread was ever expected to take.
+    // Before the fix this aborted the process here.
+    n00b_rw_read_lock(&foreign_lock);
+    n00b_rw_unlock(&foreign_lock);
+
+    // Twice, because the second acquire is what a recursive caller does and
+    // a foreign thread gets no read-log nesting: each take is its own futex
+    // unit, and each unlock must drop exactly one. A mismatch here latches
+    // W_LOCK or underflows the count, which the next assertion catches.
+    n00b_rw_read_lock(&foreign_lock);
+    n00b_rw_read_lock(&foreign_lock);
+    n00b_rw_unlock(&foreign_lock);
+    n00b_rw_unlock(&foreign_lock);
+
+    atomic_store(&foreign_done, 1);
+    return nullptr;
+}
+
+static void
+test_foreign_thread_read_lock(void)
+{
+    memset(&foreign_lock, 0, sizeof(foreign_lock));
+    n00b_rw_init(&foreign_lock);
+    atomic_store(&foreign_done, 0);
+
+    pthread_t t;
+    assert(pthread_create(&t, nullptr, foreign_thread_fn, nullptr) == 0);
+    assert(pthread_join(t, nullptr) == 0);
+    assert(atomic_load(&foreign_done) == 1);
+
+    // The reader count must be back to zero and W_LOCK clear, or the foreign
+    // thread leaked (or over-dropped) a futex unit. Checked by taking the
+    // write lock from this thread: it can only succeed on a fully drained
+    // lock, and it would hang rather than fail if a unit were outstanding --
+    // so a regression shows up as a test timeout, not a silent pass.
+    n00b_rw_write_lock(&foreign_lock);
+    n00b_rw_unlock(&foreign_lock);
+
+    // And the lock still works normally afterwards.
+    n00b_rw_read_lock(&foreign_lock);
+    n00b_rw_unlock(&foreign_lock);
+
+    printf("  [PASS] foreign thread read-locks a non-STW lock\n");
+}
+
+#endif // HAVE_PARK_PROBE
 
 static void
 test_expired_futex_wait(void)
@@ -512,6 +588,9 @@ main(int argc, char *argv[])
     test_expired_futex_wait();
 #if defined(HAVE_PARK_PROBE)
     test_late_gate_reader(n00b_get_runtime());
+#endif
+#if defined(HAVE_PARK_PROBE)
+    test_foreign_thread_read_lock();
 #endif
     test_reader_parks_behind_writer();
     test_basic_rw();

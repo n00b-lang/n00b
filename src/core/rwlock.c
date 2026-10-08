@@ -252,9 +252,37 @@ _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
     // already torn down); find_read_lock_record / register_read deref the
     // record, so treat that window like null-self too.
     bool have_tcb = (thread != nullptr && thread->record != nullptr);
-    if (!have_tcb) {
-        assert(lock == &rt->critical_execution);
-    }
+
+    // n00b#521: this used to be
+    //
+    //     if (!have_tcb) { assert(lock == &rt->critical_execution); }
+    //
+    // which encodes "the only TCB-less reader is a thread inside its own init
+    // or destroy". That is true of threads n00b CREATES, and false of a thread
+    // it does not: a foreign thread has no TCB at any point in its life and
+    // can take any lock at all.
+    //
+    // Windows is where this bites. The console-control handler runs on a thread
+    // the OS spawns (KERNELBASE!CtrlRoutine), so a daemon that registers one
+    // with SetConsoleCtrlHandler and calls into n00b from it aborts on Ctrl-C,
+    // console close, logoff or system shutdown -- an abort() where the program
+    // intended an orderly stop. Measured from a waxd crash dump: the assertion
+    // text is recoverable verbatim from the wassert arguments.
+    //
+    // Nothing below this point needed the assertion to hold. Every TCB-deref
+    // is already gated on have_tcb -- find_read_lock_record, register_read,
+    // n00b_lock_acquire_accounting, n00b_register_lock_wait, n00b_wait_done --
+    // and the futex reader count, which is what a draining writer actually
+    // waits on, is taken unconditionally. So a TCB-less reader on any lock
+    // already rides a correct path; the assertion was the only thing turning
+    // it into a crash.
+    //
+    // What is genuinely lost for such a reader is the per-thread read log, so
+    // it gets no reentrancy tracking and no lock accounting. A foreign thread
+    // that recursively read-locks therefore takes a second futex unit rather
+    // than nesting, which is correct but less efficient; both units are
+    // released by the matching unlocks. See the unlock side for how the
+    // "unbalanced unlock" check keeps its teeth without this assertion.
 
     n00b_core_lock_info_t   info    = n00b_atomic_load(&lock->data);
     n00b_thread_read_log_t *record  = have_tcb ? find_read_lock_record(lock, thread)
@@ -406,18 +434,41 @@ _n00b_rw_unlock(n00b_rwlock_t *lock, char *loc)
                                        : nullptr;
 
     if (!log) {
-        // No read record.  For the STW gate this is the record-less reader a
-        // thread took with no TCB (whole init / destroy): drop the raw futex
-        // count it holds.  For any OTHER lock a missing record is an unbalanced
-        // unlock — a bug — so abort.
-        if (lock == &rt->critical_execution) {
+        // No read record. Two very different situations reach here, and
+        // n00b#521 is about telling them apart by the right question.
+        //
+        // 1. The reader had NO TCB when it acquired -- a thread inside its own
+        //    init/destroy, or a foreign thread n00b never created (the Windows
+        //    console-control thread). It holds a raw futex unit and no log,
+        //    by design. Drop the unit.
+        //
+        // 2. A thread WITH a TCB is unlocking something it never locked, or
+        //    unlocking twice. That is a real bug and must still abort.
+        //
+        // The old form asked `lock == &rt->critical_execution` instead, which
+        // conflated "TCB-less reader" with "the STW gate" -- correct only
+        // because the gate was believed to be the only lock a TCB-less thread
+        // could hold. Asking about the THREAD rather than the LOCK keeps the
+        // unbalanced-unlock check exactly as sharp for every TCB-bearing
+        // caller, which is the case that check was written for, while no
+        // longer crashing a foreign thread for existing.
+        //
+        // Note the condition deliberately re-reads the TCB rather than
+        // trusting a flag: a thread can acquire with a TCB and release during
+        // its own teardown after `record` is gone. That direction is also a
+        // record-less drop, not a bug, and it was already reachable for the
+        // gate before this change.
+        bool releaser_has_tcb = (thread != nullptr && thread->record != nullptr);
+
+        if (!releaser_has_tcb) {
             // Drop the raw futex unit this record-less reader holds. The helper
             // guards against underflow (a double-drop would otherwise wrap the
-            // count and latch W_LOCK, wedging the gate) and wakes a draining
+            // count and latch W_LOCK, wedging the lock) and wakes a draining
             // writer once the count reaches zero.
             _n00b_rw_drop_reader_unit(lock);
             return true;
         }
+
         abort();
     }
 
