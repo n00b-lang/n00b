@@ -1,5 +1,6 @@
 #include "llvm_backend.h"
 
+#include "ir/layout.h"
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitWriter.h>
 #include <llvm-c/Core.h>
@@ -83,6 +84,65 @@ scalar_type(ir_module_t *module, th_type *type, LLVMContextRef context)
     return nullptr;
 }
 
+static LLVMTypeRef
+value_type(ir_module_t *module, th_type *type, LLVMContextRef context)
+{
+    LLVMTypeRef scalar = scalar_type(module, type, context);
+    if (scalar) return scalar;
+    if (th_kind_of(th_resolve(type)) == TH_SEQUENCE) {
+        LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+        LLVMTypeRef fields[] = {pointer, pointer};
+        return LLVMStructTypeInContext(context, fields, 2, false);
+    }
+    const char *name = nullptr;
+    size_t arguments = 0;
+    if (!th_named_info(th_resolve(type), &name, nullptr, nullptr,
+                       &arguments) || !name) return nullptr;
+    if (!strcmp(name, "string") && !arguments) {
+        LLVMTypeRef word = LLVMInt64TypeInContext(context);
+        LLVMTypeRef fields[] = {word, word};
+        return LLVMStructTypeInContext(context, fields, 2, false);
+    }
+    return nullptr;
+}
+
+static LLVMTypeRef
+native_result_type(ir_module_t *module, th_type *signature,
+                   LLVMContextRef context)
+{
+    th_type *success = th_func_ret(signature);
+    th_type *failure = th_func_error(signature);
+    LLVMTypeRef result = success
+        ? value_type(module, success, context) : nullptr;
+    if (!result || !failure
+        || ir_machine_of(module, failure).class == IR_CLASS_VOID)
+        return result;
+    if (!value_type(module, failure, context)) return nullptr;
+    const char *target = ir_module_target(module);
+    const ir_final_layout_t *success_layout = ir_layout_final(module,
+        success, target);
+    const ir_final_layout_t *failure_layout = ir_layout_final(module,
+        failure, target);
+    if (!success_layout || !failure_layout) return nullptr;
+    uint64_t bits = success_layout->intrinsic_bits
+        > failure_layout->intrinsic_bits ? success_layout->intrinsic_bits
+                                         : failure_layout->intrinsic_bits;
+    uint32_t alignment = success_layout->alignment_bytes
+        > failure_layout->alignment_bytes ? success_layout->alignment_bytes
+                                          : failure_layout->alignment_bytes;
+    if (!alignment || alignment > 16 || bits > UINT32_MAX * 8ULL)
+        return nullptr;
+    uint64_t bytes = (bits + 7) / 8;
+    uint64_t units = (bytes + alignment - 1) / alignment;
+    if (!units || units > UINT32_MAX) return nullptr;
+    LLVMTypeRef word = LLVMIntTypeInContext(context, alignment * 8);
+    LLVMTypeRef fields[] = {
+        LLVMArrayType(word, (unsigned)units),
+        LLVMInt8TypeInContext(context),
+    };
+    return LLVMStructTypeInContext(context, fields, 2, false);
+}
+
 static LLVMValueRef
 lowered_value(lower_state_t *state, const ir_value_t *value)
 {
@@ -161,6 +221,103 @@ emit_trap(lower_state_t *state)
 }
 
 static bool
+emit_outcome_return(lower_state_t *state, LLVMValueRef value,
+                    bool failure)
+{
+    LLVMTypeRef type = LLVMGetReturnType(
+        LLVMGlobalGetValueType(state->target_function));
+    if (LLVMGetTypeKind(type) != LLVMStructTypeKind
+        || LLVMCountStructElementTypes(type) != 2) return false;
+    LLVMValueRef storage = LLVMBuildAlloca(state->builder, type, "outcome");
+    LLVMBuildStore(state->builder, LLVMConstNull(type), storage);
+    if (value) {
+        LLVMValueRef payload = LLVMBuildStructGEP2(state->builder, type,
+            storage, 0, "outcome.payload");
+        LLVMBuildStore(state->builder, value, payload);
+    }
+    LLVMValueRef tag = LLVMBuildStructGEP2(state->builder, type, storage,
+        1, "outcome.tag");
+    LLVMBuildStore(state->builder,
+        LLVMConstInt(LLVMInt8TypeInContext(
+            LLVMGetModuleContext(state->module)), failure ? 1 : 0, false),
+        tag);
+    LLVMBuildRet(state->builder, LLVMBuildLoad2(state->builder, type,
+        storage, "outcome.value"));
+    return true;
+}
+
+static LLVMValueRef
+constant_array(lower_state_t *state, ir_instr_t *instruction)
+{
+    ir_aggregate_form_t form;
+    th_type *type = instruction->dest
+        ? th_resolve(instruction->dest->type) : nullptr;
+    th_type *element = type && th_kind_of(type) == TH_SEQUENCE
+        ? th_seq_elem(type) : nullptr;
+    ir_machine_t machine = element
+        ? ir_machine_of(state->function->owner, element)
+        : (ir_machine_t){0};
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef element_type = element
+        ? value_type(state->function->owner, element, context) : nullptr;
+    LLVMTypeRef array_type = type
+        ? value_type(state->function->owner, type, context) : nullptr;
+    uint32_t count = instruction->n_operands;
+    if (!ir_instr_aggregate_form(instruction, &form)
+        || form != IR_AGGREGATE_ELEMENTS || !element_type || !array_type
+        || LLVMGetTypeKind(element_type) != LLVMIntegerTypeKind
+        || machine.width < 8 || machine.width % 8
+        || (machine.class != IR_CLASS_SINT
+            && machine.class != IR_CLASS_UINT)
+        || LLVMGetIntTypeWidth(element_type) != machine.width)
+        return nullptr;
+
+    LLVMValueRef *items = calloc(count ? count : 1, sizeof(*items));
+    if (!items) return nullptr;
+    bool valid = true;
+    for (uint32_t i = 0; valid && i < count; i++) {
+        ir_operand_t *operand = &instruction->operands[i];
+        items[i] = operand->kind == IR_OPD_VALUE
+            ? lowered_value(state, operand->value) : nullptr;
+        valid = items[i] && LLVMTypeOf(items[i]) == element_type
+            && LLVMIsConstant(items[i]);
+    }
+    if (!valid) {
+        free(items);
+        return nullptr;
+    }
+
+    LLVMTypeRef data_type = LLVMArrayType(element_type, count ? count : 1);
+    LLVMValueRef data = LLVMAddGlobal(state->module, data_type,
+        "n00bb.literal.array.data");
+    if (!count) items[0] = LLVMConstNull(element_type);
+    LLVMSetInitializer(data, LLVMConstArray(element_type, items,
+        count ? count : 1));
+    LLVMSetGlobalConstant(data, true);
+    LLVMSetLinkage(data, LLVMPrivateLinkage);
+    free(items);
+
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef descriptor_fields[] = {i64, i32, i32, i32, i32, i64};
+    LLVMTypeRef descriptor_type = LLVMStructTypeInContext(context,
+        descriptor_fields, 6, false);
+    LLVMValueRef descriptor_fields_value[] = {
+        LLVMConstInt(i64, count, false), LLVMConstInt(i32, 1, false),
+        LLVMConstInt(i32, 1, false), LLVMConstNull(i32),
+        LLVMConstNull(i32), LLVMConstInt(i64, count, false),
+    };
+    LLVMValueRef descriptor = LLVMAddGlobal(state->module,
+        descriptor_type, "n00bb.literal.array.descriptor");
+    LLVMSetInitializer(descriptor,
+        LLVMConstStructInContext(context, descriptor_fields_value, 6, false));
+    LLVMSetGlobalConstant(descriptor, true);
+    LLVMSetLinkage(descriptor, LLVMPrivateLinkage);
+    LLVMValueRef array_fields[] = {data, descriptor};
+    return LLVMConstStructInContext(context, array_fields, 2, false);
+}
+
+static bool
 lower_instruction(lower_state_t *state, ir_instr_t *instruction)
 {
     LLVMValueRef result = nullptr;
@@ -199,6 +356,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
     case IR_OP_COPY:
         if (count != 1 || operands[0].kind != IR_OPD_VALUE) break;
         result = lowered_value(state, operands[0].value);
+        return result && save_result(state, instruction, result);
+    case IR_OP_AGGREGATE:
+        result = constant_array(state, instruction);
         return result && save_result(state, instruction, result);
     case IR_OP_ADD: {
         if (count != 2 || operands[0].kind != IR_OPD_VALUE
@@ -253,6 +413,51 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         result = LLVMBuildICmp(state->builder, LLVMIntEQ, left, right, "equal");
         return save_result(state, instruction, result);
     }
+    case IR_OP_VARIANT_TAG: {
+        if (count != 1 || operands[0].kind != IR_OPD_VALUE
+            || !operands[0].value || !operands[0].value->def
+            || operands[0].value->def->op != IR_OP_CALL
+            || !instruction->dest) break;
+        LLVMValueRef outcome = lowered_value(state, operands[0].value);
+        LLVMTypeRef type = outcome ? LLVMTypeOf(outcome) : nullptr;
+        LLVMTypeRef dest = value_type(state->function->owner,
+            instruction->dest->type, LLVMGetModuleContext(state->module));
+        if (!type || LLVMGetTypeKind(type) != LLVMStructTypeKind
+            || LLVMCountStructElementTypes(type) != 2 || !dest
+            || LLVMGetTypeKind(dest) != LLVMIntegerTypeKind) break;
+        LLVMValueRef tag = LLVMBuildExtractValue(state->builder, outcome,
+            1, "failure.tag");
+        LLVMValueRef success = LLVMBuildICmp(state->builder, LLVMIntEQ,
+            tag, LLVMConstInt(LLVMTypeOf(tag), 0, false),
+            "variant.is.ok");
+        result = LLVMBuildSelect(state->builder, success,
+            LLVMConstInt(dest, th_arm_tag("ok"), false),
+            LLVMConstInt(dest, th_arm_tag("error"), false),
+            "variant.tag");
+        return save_result(state, instruction, result);
+    }
+    case IR_OP_VARIANT_PAYLOAD: {
+        if (count != 2 || operands[0].kind != IR_OPD_VALUE
+            || operands[1].kind != IR_OPD_NAME
+            || !operands[0].value || !operands[0].value->def
+            || operands[0].value->def->op != IR_OP_CALL
+            || !instruction->dest) break;
+        LLVMValueRef outcome = lowered_value(state, operands[0].value);
+        LLVMTypeRef type = outcome ? LLVMTypeOf(outcome) : nullptr;
+        LLVMTypeRef payload_type = value_type(state->function->owner,
+            instruction->dest->type, LLVMGetModuleContext(state->module));
+        if (!type || LLVMGetTypeKind(type) != LLVMStructTypeKind
+            || LLVMCountStructElementTypes(type) != 2
+            || !payload_type) break;
+        LLVMValueRef storage = LLVMBuildAlloca(state->builder, type,
+            "outcome.storage");
+        LLVMBuildStore(state->builder, outcome, storage);
+        LLVMValueRef payload = LLVMBuildStructGEP2(state->builder, type,
+            storage, 0, "outcome.payload");
+        result = LLVMBuildLoad2(state->builder, payload_type, payload,
+            "selected.payload");
+        return save_result(state, instruction, result);
+    }
     case IR_OP_CALL: {
         if (!count || operands[0].kind != IR_OPD_VALUE
             || !operands[0].value || operands[0].value->kind != IR_VAL_FUNC)
@@ -292,6 +497,16 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         return true;
     }
     case IR_OP_RETURN:
+        if (th_func_error(state->function->type)
+            && ir_machine_of(state->function->owner,
+                th_func_error(state->function->type)).class != IR_CLASS_VOID) {
+            if (count > 1 || (count && operands[0].kind != IR_OPD_VALUE))
+                break;
+            result = count ? lowered_value(state, operands[0].value)
+                           : nullptr;
+            if (count && !result) break;
+            return emit_outcome_return(state, result, false);
+        }
         if (count == 0) {
             LLVMBuildRetVoid(state->builder);
             return true;
@@ -304,6 +519,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             return true;
         }
         break;
+    case IR_OP_FAIL:
+        if (count != 1 || operands[0].kind != IR_OPD_VALUE
+            || !th_func_error(state->function->type)
+            || ir_machine_of(state->function->owner,
+                th_func_error(state->function->type)).class == IR_CLASS_VOID)
+            break;
+        result = lowered_value(state, operands[0].value);
+        return result && emit_outcome_return(state, result, true);
     case IR_OP_TRAP:
         if (count == 0) {
             emit_trap(state);
@@ -320,13 +543,10 @@ static LLVMTypeRef
 function_type(LLVMModuleRef target, ir_func_t *function)
 {
     LLVMContextRef context = LLVMGetModuleContext(target);
-    LLVMTypeRef result = th_func_ret(function->type)
-        ? scalar_type(function->owner, th_func_ret(function->type), context)
-        : nullptr;
-    th_type *error = th_func_error(function->type);
-    if (!result || (error && ir_machine_of(function->owner, error).class
-                         != IR_CLASS_VOID)
-        || th_func_nkw(function->type) || th_func_rest(function->type))
+    LLVMTypeRef result = native_result_type(function->owner, function->type,
+        context);
+    if (!result || th_func_nkw(function->type)
+        || th_func_rest(function->type))
         return nullptr;
     size_t count = th_func_nparams(function->type);
     if (count > UINT32_MAX) return nullptr;
@@ -336,7 +556,7 @@ function_type(LLVMModuleRef target, ir_func_t *function)
     for (size_t i = 0; i < count; i++) {
         const th_param *parameter = th_func_param(function->type, i);
         parameters[i] = parameter
-            ? scalar_type(function->owner, parameter->type, context)
+            ? value_type(function->owner, parameter->type, context)
             : nullptr;
         if (!parameters[i] || LLVMGetTypeKind(parameters[i])
                                 == LLVMVoidTypeKind) {
@@ -397,7 +617,7 @@ lower_function(LLVMModuleRef target, ir_func_t *function,
         LLVMPositionBuilderAtEnd(state.builder, state.blocks[0]);
         for (uint32_t i = 0; i < function->n_locals; i++) {
             ir_local_t *local = function->locals[i];
-            LLVMTypeRef type = scalar_type(function->owner, local->type, context);
+            LLVMTypeRef type = value_type(function->owner, local->type, context);
             if (!type || LLVMGetTypeKind(type) == LLVMVoidTypeKind
                 || local->has_init) {
                 ok = backend_error(diagnostics,
@@ -432,9 +652,15 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     for (size_t i = 0; i < ir_func_count(source); i++) {
         ir_func_t *function = ir_func_at((ir_module_t *)source, i);
         LLVMTypeRef signature = function_type(target, function);
-        if (!signature)
-            return backend_error(diagnostics,
-                "LLVM backend cannot lower this function signature yet");
+        if (!signature) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "LLVM backend cannot lower signature for '%s.%s' yet",
+                ir_module_name(source), function->name);
+            backend_error(diagnostics, message.data);
+            core_buffer_release(&message);
+            return false;
+        }
         core_buffer_t symbol = {0};
         core_buffer_printf(&symbol, "%s.%s", ir_module_name(source),
             function->name);
@@ -616,15 +842,37 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
             if (!initializer)
                 initializer = LLVMAddFunction(module, entry_initializers[i],
                     initializer_type);
+            LLVMTypeRef initializer_result = LLVMGetReturnType(
+                LLVMGlobalGetValueType(initializer));
+            bool failable = comptime
+                && LLVMGetTypeKind(initializer_result)
+                    == LLVMStructTypeKind
+                && LLVMCountStructElementTypes(initializer_result) == 2;
             if (LLVMCountParams(initializer)
-                || LLVMGetReturnType(LLVMGlobalGetValueType(initializer))
-                    != LLVMVoidTypeInContext(context)) {
+                || (!failable && initializer_result
+                    != LLVMVoidTypeInContext(context))) {
                 LLVMDisposeBuilder(builder);
                 return backend_error(diagnostics,
                     "phase initializer signature is invalid");
             }
-            LLVMBuildCall2(builder, LLVMGlobalGetValueType(initializer),
+            LLVMValueRef outcome = LLVMBuildCall2(builder,
+                LLVMGlobalGetValueType(initializer),
                 initializer, nullptr, 0, "");
+            if (failable) {
+                LLVMValueRef tag = LLVMBuildExtractValue(builder, outcome,
+                    1, "initializer.failure.tag");
+                LLVMValueRef failed = LLVMBuildICmp(builder, LLVMIntNE, tag,
+                    LLVMConstInt(LLVMTypeOf(tag), 0, false),
+                    "initializer.failed");
+                LLVMBasicBlockRef failure = LLVMAppendBasicBlockInContext(
+                    context, entry, "initializer.failure");
+                LLVMBasicBlockRef next = LLVMAppendBasicBlockInContext(
+                    context, entry, "initializer.next");
+                LLVMBuildCondBr(builder, failed, failure, next);
+                LLVMPositionBuilderAtEnd(builder, failure);
+                LLVMBuildRet(builder, LLVMConstInt(result, 1, false));
+                LLVMPositionBuilderAtEnd(builder, next);
+            }
         }
         LLVMBuildRet(builder, LLVMConstInt(result, 0, false));
         LLVMDisposeBuilder(builder);

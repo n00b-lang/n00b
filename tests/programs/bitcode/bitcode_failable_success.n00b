@@ -1,0 +1,11 @@
+func always(value: int) -> int fail: string {
+    return value
+}
+
+func caller() -> int fail: string {
+    return always(7)!
+}
+
+comptime {
+    require caller()! == 7
+}

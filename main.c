@@ -659,7 +659,8 @@ static ir_value_t *n00bb_emit_outcome_payload(ir_lower_context_t *context,
 static bool n00bb_unwrap_call_outcome(ir_lower_context_t *context,
                                       parse_visit_t *visit,
                                       ir_value_t *outcome, ir_span_t span,
-                                      ir_value_t **success);
+                                      ir_value_t **success,
+                                      bool trap_unhandled);
 static parse_sym_entry_t *formal_symbol_at(parse_grammar_t *grammar,
                                             parse_tree_t *node,
                                             size_t target, size_t *index);
@@ -11771,7 +11772,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
             "could not retain the operator result alias provenance");
     ir_value_t *result = call->dest;
     if (can_fail && !n00bb_unwrap_call_outcome(context, visit, result,
-                                               span, &result))
+                                               span, &result, false))
         return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
     return (ir_lower_result_t){IR_LOWER_VALUE, result};
 }
@@ -12904,9 +12905,6 @@ n00bb_lower_user_array_literal(ir_lower_context_t *context,
 {
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
-    if (lower && !lower->comptime_phase)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "runtime literal handler failure semantics are not specified");
     parse_sym_entry_t *symbol = site && site->registration
         ? site->registration->function : nullptr;
     n00bb_link_analysis_t *analysis = state ? state->link_analysis : nullptr;
@@ -12948,7 +12946,7 @@ n00bb_lower_user_array_literal(ir_lower_context_t *context,
     }
     ir_value_t *value = nullptr;
     if (!n00bb_unwrap_call_outcome(context, visit, call->dest, span,
-                                   &value))
+                                   &value, true))
         return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
     return (ir_lower_result_t){IR_LOWER_VALUE, value};
 }
@@ -13079,9 +13077,10 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
         char name[96];
         snprintf(name, sizeof(name), "__n00bb_litmod_%llu",
             (unsigned long long)(token ? token->start_byte : 0));
-        th_type *signature = th_func_with_error(tu->types, result_type,
-            th_name(tu->types, "string"), nullptr, 0, nullptr, nullptr, 0);
         ir_module_t *module = tu->comptime_ir_module;
+        th_type *signature = th_func_with_error(tu->types, result_type,
+            n00bb_ir_builtin_type(module, "nil"), nullptr, 0, nullptr,
+            nullptr, 0);
         ir_func_t *producer = signature && module
             ? ir_func_add(module, name, signature, IR_LINK_INTERNAL)
             : nullptr;
@@ -16089,7 +16088,7 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
             .node = source,
         };
         if (!n00bb_unwrap_call_outcome(context, &visit, result, span,
-                                       &result)) return nullptr;
+                                       &result, false)) return nullptr;
     }
     if (copyout_value) {
         char output_name[64];
@@ -17792,7 +17791,7 @@ n00bb_operator_error(ir_lower_context_t *context, ir_diagcode_t code,
 static bool
 n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                           ir_value_t *outcome, ir_span_t span,
-                          ir_value_t **success)
+                          ir_value_t **success, bool trap_unhandled)
 {
     if (success) *success = nullptr;
     if (!outcome && ir_diags_failed(context->diagnostics)) return false;
@@ -17867,18 +17866,31 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "could not route the call error");
     if (!routed) {
-        if (!n00bb_failure_channel_accepts(context, error_type)) {
+        bool comptime_initializer = ir_func_is_initializer(context->function)
+            && ir_func_execution_phase(context->function)
+                == IR_PHASE_COMPTIME;
+        if (trap_unhandled || comptime_initializer) {
+            ir_instr_t *trap = ir_instr_add(context->block, IR_OP_TRAP);
+            if (!trap)
+                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                    "could not lower an unhandled call failure");
+            trap->span = span;
+            context->reachable = false;
+        }
+        else if (!n00bb_failure_channel_accepts(context, error_type)) {
             if (n00bb_reject_runtime_initializer_failure(context, span))
                 return false;
             return n00bb_operator_error(context, IR_DIAG_TYPE_MISMATCH, span,
                 "an uncaught call error must match the enclosing function's failure channel");
         }
-        ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
-        if (!fail || !ir_instr_operand_value(fail, error))
-            return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                "could not propagate the call error");
-        fail->span = span;
-        context->reachable = false;
+        else {
+            ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
+            if (!fail || !ir_instr_operand_value(fail, error))
+                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                    "could not propagate the call error");
+            fail->span = span;
+            context->reachable = false;
+        }
     }
 
     context->block = ok_block;
@@ -17988,7 +18000,8 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
     ir_value_t *outcome = operand_node
         ? ir_lower_node_value(context, operand_node) : nullptr;
     ir_value_t *value = nullptr;
-    if (!n00bb_unwrap_call_outcome(context, visit, outcome, span, &value))
+    if (!n00bb_unwrap_call_outcome(context, visit, outcome, span, &value,
+                                   false))
         return false;
     n00bb_lower_context_t *lower = context->user;
     parse_tree_t *callee = operand_node
@@ -23115,9 +23128,8 @@ lower_module_initializer(ir_lowerer_t *lowerer,
         return false;
     }
     th_type *nil_type = n00bb_ir_builtin_type(module, "nil");
-    th_type *failure_type = comptime ? th_var(state->types) : nil_type;
-    th_type *type = nil_type && failure_type
-        ? th_func_with_error(state->types, nil_type, failure_type,
+    th_type *type = nil_type
+        ? th_func_with_error(state->types, nil_type, nil_type,
                              nullptr, 0, nullptr, nullptr, 0)
         : nullptr;
     ir_func_t *function = type
@@ -23144,12 +23156,6 @@ lower_module_initializer(ir_lowerer_t *lowerer,
     bool ok = lower_ir_body(lowerer, grammar, unit, &symbol,
         state->annotation_root, function, &parameters, roots, nullptr,
         false, comptime, nullptr, ir_context, units, nullptr, nullptr);
-    if (ok && comptime) {
-        th_type *inferred_failure = th_func_error(function->type);
-        if (inferred_failure
-            && th_kind_of(th_resolve(inferred_failure)) == TH_VAR)
-            ok = th_unify_in_place(state->types, inferred_failure, nil_type);
-    }
     core_list_free(parameters);
     return ok;
 }
@@ -38170,6 +38176,22 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                                   state->ir_module};
         for (size_t m = 0; m < sizeof(modules) / sizeof(*modules); m++) {
             ir_module_t *module = modules[m];
+            for (size_t f = 0; f < ir_func_count(module); f++) {
+                ir_func_t *function = ir_func_at(module, f);
+                th_type *channels[] = {
+                    th_func_ret(function->type),
+                    th_func_error(function->type),
+                };
+                for (size_t c = 0; c < sizeof(channels) / sizeof(*channels);
+                     c++) {
+                    if (!channels[c] || !th_is_closed(ir_module_types(module),
+                                                     channels[c])) continue;
+                    bool handled = false;
+                    if (!n00bb_abi_publish_direct_layout(module,
+                            channels[c], &analysis->target, &handled))
+                        return false;
+                }
+            }
             bool progress;
             do {
                 progress = false;

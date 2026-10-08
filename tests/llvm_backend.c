@@ -67,6 +67,25 @@ main(void)
     ir_instr_t *helper_return = ir_instr_add(helper_entry, IR_OP_RETURN);
     assert(parameter && helper_entry && helper_return
         && ir_instr_operand_value(helper_return, parameter));
+    th_type *array_type = ir_type_parse(runtime, "array[uint]");
+    ir_func_t *array_function = ir_func_add(runtime, "array_literal",
+        ir_type_parse(runtime, "() -> array[uint]"), IR_LINK_INTERNAL);
+    ir_block_t *array_entry = array_function
+        ? ir_block_add(array_function, "entry") : nullptr;
+    ir_instr_t *array_item = array_entry
+        ? ir_instr_add(array_entry, IR_OP_CONST) : nullptr;
+    ir_instr_t *array = array_entry
+        ? ir_instr_add(array_entry, IR_OP_AGGREGATE) : nullptr;
+    ir_instr_t *array_return = array_entry
+        ? ir_instr_add(array_entry, IR_OP_RETURN) : nullptr;
+    assert(array_type && th_kind_of(array_type) == TH_SEQUENCE
+        && array_item && ir_instr_set_dest(array_item, "item", unsigned_type)
+        && ir_instr_operand_uint(array_item, 7)
+        && array && ir_instr_set_dest(array, "array", array_type)
+        && ir_instr_set_aggregate_form(array, IR_AGGREGATE_ELEMENTS)
+        && ir_instr_operand_value(array, array_item->dest)
+        && array_return && ir_instr_operand_value(array_return,
+                                                  array->dest));
     core_diagnostics_t *diagnostics = core_diagnostics_new();
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
         comptime, runtime, true, diagnostics);
@@ -97,6 +116,13 @@ main(void)
         if (lowered_helper)
             assert(LLVMCountParams(lowered_helper) == 1
                 && LLVMCountBasicBlocks(lowered_helper) == 1);
+        LLVMValueRef lowered_array = LLVMGetNamedFunction(parsed,
+            "probe.array_literal");
+        assert((!is_comptime && lowered_array)
+            || (is_comptime && !lowered_array));
+        if (lowered_array)
+            assert(LLVMGetNamedGlobal(parsed,
+                "n00bb.literal.array.descriptor"));
         if (lowered) {
             assert(LLVMCountBasicBlocks(lowered) == 3);
             LLVMValueRef terminator = LLVMGetBasicBlockTerminator(

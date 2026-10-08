@@ -3488,6 +3488,17 @@ awk '
     END { exit !(producer && success && initializer && ordered) }
 ' "$tmp/litmod_prelude_order.out"
 
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/litmod_array_runtime.n00b" \
+    >"$tmp/litmod_array_runtime.out" 2>&1 || {
+    cat "$tmp/litmod_array_runtime.out"
+    exit 1
+}
+grep -q ' = aggregate ' "$tmp/litmod_array_runtime.out"
+grep -q 'call @parse_json' "$tmp/litmod_array_runtime.out"
+grep -q 'jump __n00bb_try_handler_' "$tmp/litmod_array_runtime.out"
+grep -q 'trap !loc' "$tmp/litmod_array_runtime.out"
+
 if "$compiler" lower --dump-ir \
     "$script_dir/programs/lower_unsupported_string_shape.n00b" \
     >"$tmp/lower_unsupported_string_shape.out" 2>&1; then
@@ -3584,13 +3595,14 @@ cmp "$tmp/lower_module_initializers.all_dumps" \
     cat "$tmp/lower_comptime_initializer_failure.err"
     exit 1
 }
-grep -Eq '@__n00bb_comptime_init\(\) -> nil fail: int .*ir.execution_phase\(1\)' \
+grep -Eq '@__n00bb_comptime_init\(\) -> nil fail: nil .*ir.execution_phase\(1\)' \
     "$tmp/lower_comptime_initializer_failure.out"
-grep -q 'outcome=failure' "$tmp/lower_comptime_initializer_failure.out"
+grep -q 'outcome=nonreturning' "$tmp/lower_comptime_initializer_failure.out"
+grep -q 'trap ' "$tmp/lower_comptime_initializer_failure.out"
 grep -q 'edge requires #1 -> #3' \
     "$tmp/lower_comptime_initializer_failure.out"
 comptime_initializer_failure_exit=$(sed -E -n \
-    's/^  node #([0-9]+) function-exit phase="comptime" function=lower_comptime_initializer_failure\$comptime\.__n00bb_comptime_init .*outcome=failure/\1/p' \
+    's/^  node #([0-9]+) function-exit phase="comptime" function=lower_comptime_initializer_failure\$comptime\.__n00bb_comptime_init .*outcome=nonreturning/\1/p' \
     "$tmp/lower_comptime_initializer_failure.out")
 test -n "$comptime_initializer_failure_exit"
 if grep -q "edge requires #1 -> #$comptime_initializer_failure_exit" \

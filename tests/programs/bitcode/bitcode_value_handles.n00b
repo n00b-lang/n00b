@@ -1,0 +1,7 @@
+func identity_array(items: Array[int]) -> Array[int] {
+    return items
+}
+
+func identity_string(text: string) -> string {
+    return text
+}
