@@ -798,9 +798,6 @@ int32_t n00b_abi_v1_find_module(const n00b_abi_snapshot_v1 *snapshot,
 int32_t n00b_abi_v1_find_symbol(const n00b_abi_snapshot_v1 *snapshot,
                                 n00b_abi_string_v1 full_path,
                                 uint32_t *symbol_index);
-int32_t n00b_abi_v1_code_ranges_at_pc(
-    const n00b_abi_snapshot_v1 *snapshot, const void *pc,
-    n00b_abi_range_v1 *code_range_indexes);
 int32_t n00b_abi_v1_resolve_trait_method(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t trait_type_index,
     uint32_t method_ordinal, uint32_t receiver_type_index,
