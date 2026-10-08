@@ -2394,6 +2394,71 @@ test_shape_rows(void)
 }
 
 static void
+test_storage_shape_type(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[2];
+        n00b_abi_module_v1 modules[2];
+        n00b_abi_storage_v1 storage[2];
+        n00b_abi_shape_v1 shapes[2];
+        uint64_t extents[1];
+    } fixture_t;
+    fixture_t metadata = {0};
+    metadata.types[0].kind = N00B_ABI_TYPE_NIL;
+    metadata.types[0].typehash = 1;
+    metadata.types[1].kind = N00B_ABI_TYPE_ARRAY;
+    metadata.types[1].typehash = 2;
+    metadata.modules[1].full_path.short_value.bytes[0] = 'm';
+    metadata.modules[1].full_path.short_value.selector = 1;
+    metadata.storage[1] = (n00b_abi_storage_v1){
+        .module_index = 1, .type_index = 1,
+        .segment_kind = N00B_ABI_STORAGE_READ_ONLY,
+        .segment_index = 1, .instance_shape_index = 1,
+    };
+    metadata.shapes[1] = (n00b_abi_shape_v1){
+        .total_count = 1, .rank = 1, .flat_rank = 1,
+        .extents = {0, 1},
+    };
+    metadata.extents[0] = 1;
+    n00bb_abi_directory_entry_t directory[] = {
+        {.kind = N00B_ABI_TABLE_TYPE,
+         .record_bytes = sizeof(metadata.types[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, types)},
+        {.kind = N00B_ABI_TABLE_MODULE,
+         .record_bytes = sizeof(metadata.modules[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, modules)},
+        {.kind = N00B_ABI_TABLE_STORAGE,
+         .record_bytes = sizeof(metadata.storage[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, storage)},
+        {.kind = N00B_ABI_TABLE_SHAPE,
+         .record_bytes = sizeof(metadata.shapes[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, shapes)},
+        {.kind = N00B_ABI_TABLE_U64_STREAM,
+         .record_bytes = sizeof(metadata.extents[0]), .record_count = 1,
+         .file_offset = offsetof(fixture_t, extents)},
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {.bytes = (const uint8_t *)&metadata,
+                     .size = sizeof(metadata)},
+        .directory = directory,
+        .directory_count = sizeof(directory) / sizeof(*directory),
+    };
+    n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    n00b_abi_storage_v1 output;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_STORAGE, 1, &output, sizeof(output), nullptr));
+    metadata.storage[1].type_index = 0;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_STORAGE, 1, &output, sizeof(output), nullptr));
+    metadata.storage[1].instance_shape_index = 0;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_STORAGE, 1, &output, sizeof(output), nullptr));
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_metadata_string_uses_relocation_pool(void)
 {
     const char *triples[] = {
@@ -3233,6 +3298,7 @@ main(int argc, char **argv)
     test_type_backlinks_remap();
     test_source_location_values();
     test_shape_rows();
+    test_storage_shape_type();
     test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();
     test_static_string_identity();

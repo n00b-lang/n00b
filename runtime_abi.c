@@ -1771,6 +1771,11 @@ metadata_storage_valid(const n00b_abi_snapshot_v1 *snapshot,
             && storage->segment_kind >= N00B_ABI_STORAGE_READ_ONLY
             && storage->segment_kind <= N00B_ABI_STORAGE_TLS
             && storage->byte_offset <= UINT64_MAX - storage->byte_length;
+        if (valid && storage->instance_shape_index) {
+            const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot,
+                storage->type_index);
+            valid = type && type->kind == N00B_ABI_TYPE_ARRAY;
+        }
         if (valid && storage->symbol_index) {
             const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(snapshot,
                 storage->symbol_index);

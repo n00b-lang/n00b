@@ -2025,6 +2025,13 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
             && range_owns_row_once(view, storage->tls_relocations,
                                    local_index);
     }
+    if (kind == N00B_ABI_TABLE_STORAGE) {
+        const n00b_abi_storage_v1 *storage = row;
+        if (!storage->instance_shape_index) return true;
+        const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_TYPE, storage->type_index);
+        return type && type->kind == N00B_ABI_TYPE_ARRAY;
+    }
     if (kind != N00B_ABI_TABLE_FIELD && kind != N00B_ABI_TABLE_ARM
         && kind != N00B_ABI_TABLE_ENUM_ITEM
         && kind != N00B_ABI_TABLE_TRAIT_METHOD) return true;

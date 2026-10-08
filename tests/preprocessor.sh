@@ -1559,6 +1559,8 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
 "$abi_register_object_test" "$tmp/abi_zero_element_linked.o" 1
 "$abi_register_object_test" "$tmp/abi_zero_element_linked.o" 1 \
     --bad-shape-total
+"$abi_register_object_test" "$tmp/abi_zero_element_linked.o" 1 \
+    --shape-on-non-array
 "$abi_link_input_test" "$tmp/array_storage_abi.o"
 "$compiler" compile --output "$tmp/nested_array_storage_abi.o" \
     "$program_dir/../abi/nested_array_storage.n00b"
