@@ -1393,6 +1393,10 @@ N00B_PATH="$program_dir/../abi" "$compiler" library \
     --output "$tmp/alias_import_abi.o" alias_import
 "$abi_record_object_test" "$tmp/alias_import_abi.o" alias
 "$abi_register_object_test" "$tmp/alias_import_abi.o" 2
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/ref_layout_linked.o" ref_layout_user
+"$abi_register_object_test" "$tmp/ref_layout_linked.o" 2 \
+    'ref[ref_layout_dep.Item]'
 "$compiler" compile --output "$tmp/enum_abi.o" \
     "$program_dir/../abi/enum.n00b"
 [ -s "$tmp/enum_abi.o" ]

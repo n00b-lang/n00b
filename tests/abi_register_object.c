@@ -37,7 +37,7 @@ read_object(const char *path, size_t *length_out)
 int
 main(int argc, char **argv)
 {
-    assert(argc == 3);
+    assert(argc == 3 || argc == 4);
     size_t object_bytes = 0;
     uint8_t *object = read_object(argv[1], &object_bytes);
     core_target_desc_t target;
@@ -135,6 +135,23 @@ main(int argc, char **argv)
         assert(module && n00b_abi_v1_string_bytes(snapshot,
             &module->full_path, &path, &length) == 1
             && path && length);
+    }
+    if (argc == 4) {
+        uint32_t matches = 0;
+        uint32_t type_count = n00b_abi_v1_table_count(snapshot,
+            N00B_ABI_TABLE_TYPE);
+        for (uint32_t i = 0; i < type_count; i++) {
+            const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, i);
+            const uint8_t *name = nullptr;
+            uint64_t length = 0;
+            assert(type && n00b_abi_v1_string_bytes(snapshot,
+                &type->canonical_name, &name, &length) == 1);
+            if (length != strlen(argv[3])
+                || memcmp(name, argv[3], (size_t)length)) continue;
+            assert(type->layout_index);
+            matches++;
+        }
+        assert(matches == 1);
     }
     /* The published snapshot borrows the relocated sections until exit. */
     free(object);

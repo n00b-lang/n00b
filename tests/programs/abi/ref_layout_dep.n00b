@@ -1,0 +1,7 @@
+type Item {
+    value: int
+}
+
+func inspect_item(value: Ref[Item]) -> int {
+    return 0
+}
