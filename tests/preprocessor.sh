@@ -1471,6 +1471,14 @@ grep -q 'const globals require a supported compile-time static initializer' \
     "$program_dir/../abi/array_storage.n00b"
 [ -s "$tmp/array_storage_abi.o" ]
 "$abi_record_object_test" "$tmp/array_storage_abi.o" array-storage
+"$compiler" compile --output "$tmp/abi_zero_element_probe.o" \
+    "$program_dir/../abi/abi_zero_element_probe.n00b"
+"$abi_record_object_test" "$tmp/abi_zero_element_probe.o" \
+    zero-element-array-storage
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/abi_zero_element_linked.o" abi_zero_element_probe
+"$abi_record_object_test" "$tmp/abi_zero_element_linked.o" \
+    zero-element-array-storage
 "$abi_link_input_test" "$tmp/array_storage_abi.o"
 "$compiler" compile --output "$tmp/nested_array_storage_abi.o" \
     "$program_dir/../abi/nested_array_storage.n00b"

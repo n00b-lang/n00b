@@ -1276,6 +1276,69 @@ check_record_string_relocation(const uint8_t *object, size_t length,
 }
 
 static void
+check_zero_element_arrays(const uint8_t *object, size_t length,
+    const core_object_section_t *metadata,
+    const n00bb_abi_directory_entry_t *entries, size_t count,
+    uint32_t target_id)
+{
+    core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
+        ? CORE_TARGET_OBJECT_MACH_O
+        : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
+            ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *shapes = entry_for(entries, count,
+        N00B_ABI_TABLE_SHAPE);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    const n00bb_abi_directory_entry_t *extents = entry_for(entries, count,
+        N00B_ABI_TABLE_U64_STREAM);
+    core_object_section_t backing;
+    assert(types && shapes && stream && extents
+        && core_object_section_find(object, length, format,
+            format == CORE_TARGET_OBJECT_MACH_O ? "__DATA_CONST" : nullptr,
+            format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_aggregate"
+            : format == CORE_TARGET_OBJECT_COFF ? ".rdata$A"
+            : ".rodata.n00b_aggregate", &backing));
+    const char *names[] = {"elements", "nothing"};
+    for (size_t i = 0; i < sizeof names / sizeof(*names); i++) {
+        const n00b_abi_storage_v1 *storage = storage_named(metadata,
+            entries, count, names[i]);
+        const n00b_abi_type_v1 *type = row_at(metadata, types,
+            storage->type_index);
+        const n00b_abi_shape_v1 *shape = row_at(metadata, shapes,
+            storage->instance_shape_index);
+        assert(storage->segment_kind == N00B_ABI_STORAGE_READ_ONLY
+            && storage->byte_length == 16
+            && type->kind == N00B_ABI_TYPE_ARRAY
+            && type->components.count == 1
+            && type->components.first < stream->record_count
+            && shape->rank == 1 && shape->flat_rank == 1
+            && shape->total_count == 0 && shape->extents.count == 1
+            && shape->extents.first < extents->record_count
+            && core_le_load_u64(row_at(metadata, extents,
+                shape->extents.first)) == 0);
+        uint32_t child_index = core_le_load_u32(row_at(metadata, stream,
+            type->components.first));
+        const n00b_abi_type_v1 *child = row_at(metadata, types,
+            child_index);
+        assert(child->size_bits == 0 && child->alignment_bytes == 1);
+        core_object_section_t source;
+        assert(core_object_section_at(object, length, format,
+            storage->segment_index, &source));
+        uint64_t data = aggregate_pointer_addend(object, length, format,
+            &source, &backing, storage->byte_offset);
+        uint64_t descriptor = aggregate_pointer_addend(object, length,
+            format, &source, &backing, storage->byte_offset + 8);
+        assert(data < backing.size && descriptor <= backing.size - 32
+            && core_le_load_u64(backing.bytes + descriptor) == 0
+            && core_le_load_u32(backing.bytes + descriptor + 8) == 1
+            && core_le_load_u32(backing.bytes + descriptor + 12) == 1
+            && core_le_load_u64(backing.bytes + descriptor + 24) == 0);
+    }
+}
+
+static void
 check_record_aggregate_storage(const uint8_t *object, size_t length,
     const core_object_section_t *metadata,
     const n00bb_abi_directory_entry_t *entries, size_t count,
@@ -1692,6 +1755,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "storage")
             || !strcmp(argv[2], "string-storage")
             || !strcmp(argv[2], "array-storage")
+            || !strcmp(argv[2], "zero-element-array-storage")
             || !strcmp(argv[2], "nested-array-storage")
             || !strcmp(argv[2], "ragged-array-storage")
             || !strcmp(argv[2], "record-storage")
@@ -1818,6 +1882,13 @@ main(int argc, char **argv)
     }
     if (argc == 3 && !strcmp(argv[2], "array-storage")) {
         check_array_storage(object, (size_t)length, &metadata, entries,
+            header.directory_count, header.key.target_id);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "zero-element-array-storage")) {
+        check_zero_element_arrays(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id);
         free(entries);
         free(object);

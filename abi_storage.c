@@ -413,6 +413,8 @@ encode_array_items(array_writer_t *writer,
             : aggregate ? encode_aggregate(writer, type, value,
                 N00BB_ABI_RELOC_AGGREGATE, (uint64_t)at * 8,
                 bytes, stride, 0)
+            : row->kind == N00B_ABI_TYPE_NIL && !row->size_bits
+                ? value->kind == IR_GLOBAL_INIT_NIL
             : encode_scalar(writer->runtime, type, value,
                 row->size_bits, bytes);
         if (!valid) {
@@ -478,7 +480,7 @@ encode_array(array_writer_t *writer, th_type *type,
             || (row->flags & N00B_ABI_TYPE_FLAG_BITS));
     size_t width = row->semantic_width_bits;
     if (!alignment || (alignment & (alignment - 1))
-        || !stride || (row->kind != N00B_ABI_TYPE_RECORD
+        || (!stride && row->size_bits) || (row->kind != N00B_ABI_TYPE_RECORD
             && row->kind != N00B_ABI_TYPE_VARIANT
             && row->kind != N00B_ABI_TYPE_TUPLE && stride > 16)
         || (packed && (!width || width > 128
