@@ -1921,13 +1921,31 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
         return n00bb_abi_shape_valid(row, object_shape_extent, view);
     if (kind == N00B_ABI_TABLE_MODULE) {
         const n00b_abi_module_v1 *module = row;
-        return !(module->comptime_initializer
+        if (module->comptime_initializer
                  && module->comptime_initializer
                     == module->runtime_initializer)
-            && module_initializer_valid(view, local_index,
+            return false;
+        if (!module_initializer_valid(view, local_index,
                 module->comptime_initializer, N00B_ABI_PHASE_COMPTIME)
-            && module_initializer_valid(view, local_index,
-                module->runtime_initializer, N00B_ABI_PHASE_RUNTIME);
+            || !module_initializer_valid(view, local_index,
+                module->runtime_initializer, N00B_ABI_PHASE_RUNTIME))
+            return false;
+        n00b_abi_range_v1 ranges[] = {module->static_storage,
+                                       module->tls_storage};
+        for (size_t slot = 0; slot < 2; slot++) {
+            if (!valid_index_range(view, ranges[slot])) return false;
+            for (uint32_t i = 0; i < ranges[slot].count; i++) {
+                const n00b_abi_storage_v1 *storage = indexed_range_row(view,
+                    ranges[slot], i, N00B_ABI_TABLE_STORAGE);
+                if (!storage || storage->module_index != local_index
+                    || (slot ? storage->segment_kind != N00B_ABI_STORAGE_TLS
+                        : storage->segment_kind != N00B_ABI_STORAGE_READ_ONLY
+                          && storage->segment_kind
+                              != N00B_ABI_STORAGE_WRITABLE))
+                    return false;
+            }
+        }
+        return true;
     }
     if (kind == N00B_ABI_TABLE_SCOPE) {
         const n00b_abi_scope_v1 *scope = row;
@@ -2029,6 +2047,12 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
     }
     if (kind == N00B_ABI_TABLE_STORAGE) {
         const n00b_abi_storage_v1 *storage = row;
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_MODULE, storage->module_index);
+        if (!module || !range_owns_row_once(view,
+                storage->segment_kind == N00B_ABI_STORAGE_TLS
+                    ? module->tls_storage : module->static_storage,
+                local_index)) return false;
         if (storage->symbol_index) {
             const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
                 N00B_ABI_TABLE_SYMBOL, storage->symbol_index);

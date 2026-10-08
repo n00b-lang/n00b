@@ -2444,6 +2444,7 @@ test_storage_shape_type(void)
         n00b_abi_module_v1 modules[2];
         n00b_abi_storage_v1 storage[2];
         n00b_abi_shape_v1 shapes[2];
+        uint32_t members[2];
         uint64_t extents[1];
     } fixture_t;
     fixture_t metadata = {0};
@@ -2453,6 +2454,8 @@ test_storage_shape_type(void)
     metadata.types[1].typehash = 2;
     metadata.modules[1].full_path.short_value.bytes[0] = 'm';
     metadata.modules[1].full_path.short_value.selector = 1;
+    metadata.modules[1].static_storage = (n00b_abi_range_v1){1, 1};
+    metadata.members[1] = 1;
     metadata.storage[1] = (n00b_abi_storage_v1){
         .module_index = 1, .type_index = 1,
         .segment_kind = N00B_ABI_STORAGE_READ_ONLY,
@@ -2476,6 +2479,9 @@ test_storage_shape_type(void)
         {.kind = N00B_ABI_TABLE_SHAPE,
          .record_bytes = sizeof(metadata.shapes[0]), .record_count = 2,
          .file_offset = offsetof(fixture_t, shapes)},
+        {.kind = N00B_ABI_TABLE_U32_STREAM,
+         .record_bytes = sizeof(metadata.members[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, members)},
         {.kind = N00B_ABI_TABLE_U64_STREAM,
          .record_bytes = sizeof(metadata.extents[0]), .record_count = 1,
          .file_offset = offsetof(fixture_t, extents)},
@@ -2855,6 +2861,36 @@ test_string_storage_link(const char *path)
     const n00bb_abi_object_view_t *source_view = &selected.views[0];
     const n00bb_abi_directory_entry_t *source_storage =
         n00bb_abi_object_table(source_view, N00B_ABI_TABLE_STORAGE);
+    const n00b_abi_module_v1 *source_module = n00bb_abi_object_row(
+        source_view, N00B_ABI_TABLE_MODULE, 1);
+    assert(source_module && source_module->static_storage.count >= 2);
+    uint8_t *first_storage_slot = (void *)n00bb_abi_object_row(source_view,
+        N00B_ABI_TABLE_U32_STREAM, source_module->static_storage.first);
+    const uint8_t *second_storage_slot = n00bb_abi_object_row(source_view,
+        N00B_ABI_TABLE_U32_STREAM,
+        source_module->static_storage.first + 1);
+    assert(first_storage_slot && second_storage_slot);
+    uint32_t first_storage_index = core_le_load_u32(first_storage_slot);
+    uint32_t second_storage_index = core_le_load_u32(second_storage_slot);
+    assert(first_storage_index && second_storage_index
+        && first_storage_index != second_storage_index);
+    core_le_store_u32(first_storage_slot, second_storage_index);
+    uint8_t *bad_output = nullptr;
+    size_t bad_bytes = 0;
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &bad_output, &bad_bytes) && !bad_output && !bad_bytes);
+    core_le_store_u32(first_storage_slot, first_storage_index);
+    assert(source_module->tls_storage.count);
+    const uint8_t *tls_storage_slot = n00bb_abi_object_row(source_view,
+        N00B_ABI_TABLE_U32_STREAM, source_module->tls_storage.first);
+    assert(tls_storage_slot);
+    uint32_t tls_storage_index = core_le_load_u32(tls_storage_slot);
+    assert(tls_storage_index && tls_storage_index != first_storage_index);
+    core_le_store_u32(first_storage_slot, tls_storage_index);
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &bad_output, &bad_bytes) && !bad_output && !bad_bytes);
+    core_le_store_u32(first_storage_slot, first_storage_index);
+
     bool rejected_bad_binding = false;
     for (uint32_t i = 1; source_storage && i < source_storage->record_count;
          i++) {
@@ -2875,8 +2911,8 @@ test_string_storage_link(const char *path)
         n00b_abi_native_binding_v1 changed = original;
         changed.offset++;
         memcpy(source + byte_offset, &changed, sizeof(changed));
-        uint8_t *bad_output = nullptr;
-        size_t bad_bytes = 0;
+        bad_output = nullptr;
+        bad_bytes = 0;
         assert(!n00bb_abi_link_selected_objects(&selected, &target,
             &bad_output, &bad_bytes) && !bad_output && !bad_bytes);
         memcpy(source + byte_offset, &original, sizeof(original));
