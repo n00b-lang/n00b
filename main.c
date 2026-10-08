@@ -47347,16 +47347,20 @@ n00bb_execute_comptime(core_link_unit_t *link,
         th_type *element = result && th_kind_of(result) == TH_SEQUENCE
             ? th_seq_elem(result) : nullptr;
         th_type *raw_type = element ? element : result;
+        bool bool_value = !element && !effect_only && !is_string
+            && ir_machine_of(producer->owner, result).class == IR_CLASS_BOOL;
         const ir_final_layout_t *layout = raw_type
             ? ir_layout_final(producer->owner, raw_type,
                               ir_module_target(producer->owner)) : nullptr;
         uint64_t stride_bits = 0;
         bool has_stride = ir_layout_final_stride_bits(layout, &stride_bits);
-        uint64_t stride = has_stride ? stride_bits / 8 : 0;
+        uint64_t stride = bool_value ? 1
+            : has_stride ? stride_bits / 8 : 0;
         if (!effect_only && !is_string
-            && (!has_stride || !stride
+            && ((!has_stride && !bool_value) || !stride
                 || stride > UINT32_MAX
-                || !n00bb_literal_raw_element(producer->owner, raw_type))) {
+                || (!bool_value && !n00bb_literal_raw_element(
+                    producer->owner, raw_type)))) {
             core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-B0013"),
                 CORE_STRING_STATIC("native build cannot materialize this literal result without relocations"));

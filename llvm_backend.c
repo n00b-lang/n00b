@@ -656,9 +656,13 @@ materialized_raw_value(lower_state_t *state, ir_instr_t *instruction)
     LLVMTypeRef value = type
         ? value_type(state->function->owner, type, context) : nullptr;
     LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
+    bool bool_value = type && value
+        && ir_machine_of(state->function->owner, type).class == IR_CLASS_BOOL
+        && LLVMGetTypeKind(value) == LLVMIntegerTypeKind
+        && LLVMGetIntTypeWidth(value) == 1;
     if (!identifier || !layout || !layout->alignment_bytes || !value
-        || !literal_element_layout_matches(state->function->owner, type,
-            value, target)) return nullptr;
+        || (!bool_value && !literal_element_layout_matches(
+            state->function->owner, type, value, target))) return nullptr;
     for (size_t i = 0; i < state->phase_array_count; i++) {
         const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
         if (cached->kind != N00BB_LLVM_LITERAL_RAW_VALUE

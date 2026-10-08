@@ -1,0 +1,18 @@
+declare_litmod("yes", "string", "is_yes")
+declare_litmod("no", "string", "is_no")
+
+func is_yes(raw: string) -> bool fail: string {
+    return true
+}
+
+func is_no(raw: string) -> bool fail: string {
+    return false
+}
+
+comptime {
+    require yes"yes"
+    require no"no" == false
+} else {
+    require yes"yes"
+    require no"no" == false
+}
