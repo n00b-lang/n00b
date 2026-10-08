@@ -1634,6 +1634,73 @@ test_function_range_ownership_remap(void)
 }
 
 static void
+test_tls_relocation_ownership_remap(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[1];
+        n00b_abi_storage_v1 storage[3];
+        n00b_abi_tls_relocation_v1 relocations[2];
+        uint32_t indexes[3];
+    } fixture_t;
+    fixture_t metadata = {0};
+    metadata.types[0].kind = N00B_ABI_TYPE_NIL;
+    metadata.types[0].typehash = 1;
+    metadata.storage[1].segment_kind = N00B_ABI_STORAGE_TLS;
+    metadata.storage[1].tls_relocations = (n00b_abi_range_v1){1, 1};
+    metadata.relocations[1].template_storage_index = 1;
+    metadata.relocations[1].referenced_storage_index = 2;
+    metadata.indexes[1] = 1;
+    n00bb_abi_directory_entry_t directory[] = {
+        {.kind = N00B_ABI_TABLE_TYPE,
+         .record_bytes = sizeof(metadata.types[0]), .record_count = 1,
+         .file_offset = offsetof(fixture_t, types)},
+        {.kind = N00B_ABI_TABLE_STORAGE,
+         .record_bytes = sizeof(metadata.storage[0]), .record_count = 3,
+         .file_offset = offsetof(fixture_t, storage)},
+        {.kind = N00B_ABI_TABLE_TLS_RELOCATION,
+         .record_bytes = sizeof(metadata.relocations[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, relocations)},
+        {.kind = N00B_ABI_TABLE_U32_STREAM,
+         .record_bytes = sizeof(metadata.indexes[0]), .record_count = 3,
+         .file_offset = offsetof(fixture_t, indexes)},
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {.bytes = (const uint8_t *)&metadata,
+                     .size = sizeof(metadata)},
+        .directory = directory,
+        .directory_count = sizeof(directory) / sizeof(*directory),
+    };
+    n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    n00b_abi_tls_relocation_v1 relocation;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TLS_RELOCATION, 1, &relocation,
+        sizeof(relocation), nullptr));
+    metadata.storage[1].tls_relocations = (n00b_abi_range_v1){0};
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TLS_RELOCATION, 1, &relocation,
+        sizeof(relocation), nullptr));
+    metadata.storage[1].tls_relocations = (n00b_abi_range_v1){1, 1};
+    metadata.storage[1].segment_kind = N00B_ABI_STORAGE_WRITABLE;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TLS_RELOCATION, 1, &relocation,
+        sizeof(relocation), nullptr));
+    metadata.storage[1].segment_kind = N00B_ABI_STORAGE_TLS;
+    metadata.storage[1].tls_relocations.count = 2;
+    metadata.indexes[2] = 1;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TLS_RELOCATION, 1, &relocation,
+        sizeof(relocation), nullptr));
+    metadata.storage[1].tls_relocations.count = 1;
+    metadata.relocations[1].template_storage_index = 2;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TLS_RELOCATION, 1, &relocation,
+        sizeof(relocation), nullptr));
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_type_backlinks_remap(void)
 {
     typedef struct {
@@ -2524,6 +2591,7 @@ main(int argc, char **argv)
     test_specialization_remap();
     test_typed_range_rejects_zero();
     test_function_range_ownership_remap();
+    test_tls_relocation_ownership_remap();
     test_type_backlinks_remap();
     test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();

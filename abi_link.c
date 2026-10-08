@@ -1442,6 +1442,17 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
                 ? function->code_ranges : function->frame_layouts,
             local_index);
     }
+    if (kind == N00B_ABI_TABLE_TLS_RELOCATION) {
+        const n00b_abi_tls_relocation_v1 *relocation = row;
+        const n00b_abi_storage_v1 *storage =
+            relocation->template_storage_index
+                ? n00bb_abi_object_row(view, N00B_ABI_TABLE_STORAGE,
+                    relocation->template_storage_index)
+                : nullptr;
+        return storage && storage->segment_kind == N00B_ABI_STORAGE_TLS
+            && range_owns_row_once(view, storage->tls_relocations,
+                                   local_index);
+    }
     if (kind != N00B_ABI_TABLE_FIELD && kind != N00B_ABI_TABLE_ARM
         && kind != N00B_ABI_TABLE_ENUM_ITEM
         && kind != N00B_ABI_TABLE_TRAIT_METHOD) return true;
