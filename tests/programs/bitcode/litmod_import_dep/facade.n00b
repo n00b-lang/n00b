@@ -1,0 +1,5 @@
+import litmod_import_dep.impl
+
+package litmod_import_dep {
+    export litmod_import_dep.impl.value
+}

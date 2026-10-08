@@ -176,6 +176,8 @@ native_result_type(ir_module_t *module, th_type *signature,
     return LLVMStructTypeInContext(context, fields, 2, false);
 }
 
+static LLVMTypeRef function_type(LLVMModuleRef target, ir_func_t *function);
+
 static LLVMValueRef
 lowered_value(lower_state_t *state, const ir_value_t *value)
 {
@@ -189,6 +191,13 @@ lowered_value(lower_state_t *state, const ir_value_t *value)
             ir_module_name(value->owner->owner), value->owner->name);
         LLVMValueRef function = LLVMGetNamedFunction(state->module,
             symbol.data);
+        if (!function && value->owner->owner != state->function->owner) {
+            LLVMTypeRef signature = function_type(state->module,
+                                                  value->owner);
+            if (signature)
+                function = LLVMAddFunction(state->module, symbol.data,
+                                           signature);
+        }
         core_buffer_release(&symbol);
         return function;
     }

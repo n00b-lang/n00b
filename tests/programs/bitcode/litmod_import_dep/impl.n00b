@@ -1,0 +1,14 @@
+declare_litmod("stamp", "string", "make_stamp")
+
+func make_stamp(raw: string) -> int fail: string {
+    return 42
+}
+
+public func value() -> int {
+    return stamp"dependency"
+}
+
+comptime {
+    require value() == 42
+} else {
+}

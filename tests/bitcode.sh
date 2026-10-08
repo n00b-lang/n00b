@@ -83,6 +83,9 @@ fi
 "$compiler" build --output "$tmp/litmod_handler_dependency" \
     "$program_dir/bitcode_litmod_handler_dependency.n00b"
 "$tmp/litmod_handler_dependency"
+N00B_PATH="$program_dir" "$compiler" build --output "$tmp/litmod_import" \
+    "$program_dir/bitcode_litmod_import_root.n00b"
+"$tmp/litmod_import"
 "$compiler" build --output "$tmp/litmod_forward_type" \
     "$program_dir/bitcode_litmod_forward_type.n00b"
 "$tmp/litmod_forward_type"

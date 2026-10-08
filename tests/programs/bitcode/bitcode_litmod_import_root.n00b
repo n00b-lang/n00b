@@ -1,0 +1,19 @@
+import litmod_import_dep
+
+declare_litmod("forwarded", "string", "make_forwarded")
+
+func make_forwarded(raw: string) -> int fail: string {
+    return litmod_import_dep.value()
+}
+
+func forwarded_value() -> int {
+    return forwarded"root"
+}
+
+comptime {
+    require litmod_import_dep.value() == 42
+    require forwarded_value() == 42
+} else {
+    require litmod_import_dep.value() == 42
+    require forwarded_value() == 42
+}

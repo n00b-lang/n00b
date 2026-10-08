@@ -24190,6 +24190,94 @@ bind_comptime_global_results(
     return ok;
 }
 
+typedef struct {
+    n00bb_link_analysis_t *analysis;
+    size_t producer_index;
+    core_list_t(size_t) *dependencies;
+} n00bb_literal_order_context_t;
+
+static bool
+collect_literal_producer_dependencies(ir_func_t *function, void *raw)
+{
+    n00bb_literal_order_context_t *context = raw;
+    for (size_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (size_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *instruction = block->instrs[i];
+            if (!instruction || instruction->op != IR_OP_PHASE_RESULT)
+                continue;
+            for (size_t p = 0; p < context->analysis->phase_results.len; p++) {
+                n00bb_phase_result_binding_t *binding =
+                    &context->analysis->phase_results.data[p];
+                if (binding->instruction != instruction) continue;
+                for (size_t d = 0;
+                     d < context->analysis->literal_producers.len; d++) {
+                    if (context->analysis->literal_producers.data[d]
+                        != binding->producer) continue;
+                    core_list_t(size_t) *dependencies =
+                        &context->dependencies[context->producer_index];
+                    bool seen = false;
+                    for (size_t j = 0; j < dependencies->len; j++)
+                        seen |= dependencies->data[j] == d;
+                    if (!seen) core_list_push(*dependencies, d);
+                    break;
+                }
+                break;
+            }
+        }
+    }
+    return true;
+}
+
+static bool
+order_literal_producers(n00bb_link_analysis_t *analysis,
+                        core_translation_unit_t *unit)
+{
+    size_t count = analysis->literal_producers.len;
+    if (!count) return true;
+    core_list_t(size_t) *dependencies = calloc(count, sizeof(*dependencies));
+    ir_func_t **ordered = calloc(count, sizeof(*ordered));
+    bool *done = calloc(count, sizeof(*done));
+    bool ok = dependencies && ordered && done;
+    for (size_t i = 0; ok && i < count; i++) {
+        dependencies[i] = core_list_new(size_t);
+        n00bb_literal_order_context_t context = {analysis, i, dependencies};
+        ir_func_t *producer = analysis->literal_producers.data[i];
+        ok = ir_walk_reachable_functions(&producer, 1,
+            collect_literal_producer_dependencies, &context);
+    }
+    for (size_t placed = 0; ok && placed < count; placed++) {
+        bool found = false;
+        for (size_t i = 0; i < count; i++) {
+            if (done[i]) continue;
+            bool ready = true;
+            for (size_t d = 0; d < dependencies[i].len; d++)
+                ready &= done[dependencies[i].data[d]];
+            if (!ready) continue;
+            done[i] = true;
+            ordered[placed] = analysis->literal_producers.data[i];
+            found = true;
+            break;
+        }
+        if (!found) {
+            core_diagnostics_report(core_translation_unit_diagnostics(unit),
+                unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0070"),
+                CORE_STRING_STATIC("static literals have a cyclic dependency"));
+            ok = false;
+        }
+    }
+    if (ok)
+        for (size_t i = 0; i < count; i++)
+            analysis->literal_producers.data[i] = ordered[i];
+    if (dependencies)
+        for (size_t i = 0; i < count; i++)
+            core_list_free(dependencies[i]);
+    free(dependencies);
+    free(ordered);
+    free(done);
+    return ok;
+}
+
 static bool
 build_n00bb_execution_graph(
     n00bb_link_analysis_t *analysis,
@@ -33130,6 +33218,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     }
 
     /* The graph borrows block endpoints, so capture the final CFGs. */
+    if (ok && !interface_closure_only
+        && !order_literal_producers(analysis, units.data[0]))
+        ok = false;
     if (ok && !interface_closure_only
         && !build_n00bb_execution_graph(analysis, &comptime_init_order,
                                            &runtime_init_order)) {
@@ -47682,6 +47773,16 @@ n00bb_execute_comptime(core_link_unit_t *link,
     size_t *producer_bindings = binding_count
         ? calloc(binding_count, sizeof(*producer_bindings)) : nullptr;
     size_t producer_count = 0;
+    for (size_t p = 0; producer_bindings
+         && p < analysis->literal_producers.len; p++) {
+        ir_func_t *producer = analysis->literal_producers.data[p];
+        for (size_t i = 0; i < binding_count; i++) {
+            if (analysis->phase_results.data[i].producer != producer)
+                continue;
+            producer_bindings[producer_count++] = i;
+            break;
+        }
+    }
     for (size_t i = 0; producer_bindings && i < binding_count; i++) {
         ir_func_t *producer = analysis->phase_results.data[i].producer;
         bool seen = false;
