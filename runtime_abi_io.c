@@ -194,3 +194,10 @@ int32_t n00bb_comptime_emit_failure(int32_t fd, uint64_t low, uint64_t high)
                             sizeof(marker))) return -1;
     return n00bb_comptime_emit_string(fd, low, high);
 }
+
+int32_t n00bb_comptime_emit_effect(int32_t fd)
+{
+    const uint64_t marker = 0;
+    return fd >= 0 && write_all(fd, (const uint8_t *)&marker,
+                                sizeof(marker)) ? 0 : -1;
+}

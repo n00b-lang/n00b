@@ -1,0 +1,10 @@
+declare_litmod("noop", "fence", "fail_fence")
+
+func fail_fence(contents: string) -> nil fail: string {
+    fail "fence failed"
+}
+
+comptime {
+} else {
+    noop[- body -]
+}

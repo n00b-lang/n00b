@@ -1,0 +1,14 @@
+declare_litmod("raw", "fence", "parse_raw")
+
+func parse_raw(contents: string) -> string fail: string {
+    return contents
+}
+
+func value() -> string {
+    return raw[- body -]
+}
+
+comptime {
+} else {
+    value()
+}

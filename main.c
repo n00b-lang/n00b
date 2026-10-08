@@ -388,6 +388,7 @@ typedef struct {
     ir_func_t *producer;
     ir_func_t *consumer;
     ir_instr_t *instruction;
+    ir_span_t span;
     uint8_t *materialized_bytes;
     uint64_t materialized_count;
     uint32_t materialized_stride;
@@ -12946,6 +12947,39 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
                               site->payload_type))
             payload = (ir_lower_result_t){IR_LOWER_VALUE, raw};
     }
+    else if (core_string_eq(site->registration->kind,
+                            CORE_STRING_STATIC("fence"))) {
+        parse_tree_t *literal_payload = child_nt(visit->grammar, visit->node,
+                                               "literal-payload");
+        parse_tree_t *fence = child_nt(visit->grammar, literal_payload,
+                                      "embed-lit");
+        parse_token_info_t *token = fence
+            ? parse_tree_find_first_terminal(fence) : nullptr;
+        if (token && token->has_content_span
+            && core_option_is_set(token->value)) {
+            core_string_t spelling = core_option_get(token->value);
+            if (token->content_start_byte < token->start_byte
+                || token->content_end_byte < token->content_start_byte
+                || token->content_end_byte - token->start_byte
+                    > spelling.u8_bytes)
+                return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
+                    "fence literal has invalid content offsets");
+            size_t start = token->content_start_byte - token->start_byte;
+            size_t end = token->content_end_byte - token->start_byte;
+            ir_instr_t *constant = ir_instr_add(context->block, IR_OP_CONST);
+            char name[64];
+            snprintf(name, sizeof(name), "__n00bb_fence_%llu",
+                (unsigned long long)context->next_value_id++);
+            if (constant && ir_instr_set_dest(constant, name,
+                                                site->payload_type)
+                && ir_instr_set_const_bytes(constant,
+                    (const uint8_t *)spelling.data + start, end - start)) {
+                constant->span = span;
+                payload = (ir_lower_result_t){IR_LOWER_VALUE,
+                                               constant->dest};
+            }
+        }
+    }
     if (payload.status != IR_LOWER_VALUE || !payload.value)
         return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
     th_type *outcome_type = ir_call_outcome_type(context->module,
@@ -12972,6 +13006,8 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
     if (!n00bb_unwrap_call_outcome(context, visit, call->dest, span,
                                    &value, true))
         return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+    if (ir_machine_of(context->module, result_type).class == IR_CLASS_VOID)
+        return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
     return (ir_lower_result_t){IR_LOWER_VALUE, value};
 }
 
@@ -12995,7 +13031,9 @@ n00bb_lower_tagged_literal(ir_lower_context_t *context,
         if (core_string_eq(user_site->registration->kind,
                            CORE_STRING_STATIC("array"))
             || core_string_eq(user_site->registration->kind,
-                              CORE_STRING_STATIC("string")))
+                              CORE_STRING_STATIC("string"))
+            || core_string_eq(user_site->registration->kind,
+                              CORE_STRING_STATIC("fence")))
             return n00bb_lower_user_literal(context, visit, user_site,
                                             result_type, span);
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
@@ -13084,7 +13122,9 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
     if (!site || (!core_string_eq(site->registration->kind,
                                   CORE_STRING_STATIC("array"))
                   && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("string")))) return true;
+                                     CORE_STRING_STATIC("string"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("fence")))) return true;
     if (entering) {
         if (lower->has_active_literal) return true;
         if (!core_dict_contains(&tu->static_literal_nodes, visit->node))
@@ -13148,12 +13188,27 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
     ir_span_t span = lower_span_for_tree(context, visit->node);
     ir_lower_result_t result = n00bb_lower_tagged_literal(context, visit,
         nullptr, 0, core_tree_node_value(visit->node).type, span, nullptr);
-    ir_instr_t *ret = result.status == IR_LOWER_VALUE && result.value
+    bool effect_only = result.status == IR_LOWER_NO_VALUE;
+    ir_instr_t *ret = (effect_only
+        || (result.status == IR_LOWER_VALUE && result.value))
         ? ir_lower_emit_terminator(context, IR_OP_RETURN, span) : nullptr;
-    bool emitted = ret && ir_instr_operand_value(ret, result.value);
+    bool emitted = ret && (effect_only
+        || ir_instr_operand_value(ret, result.value));
     n00bb_literal_frame_t frame = lower->active_literal;
     n00bb_restore_literal_context(context, lower);
     if (!emitted) return false;
+    if (effect_only) {
+        if (!ir_lower_suppress_emit(context, visit->node)) return false;
+        n00bb_link_analysis_t *analysis = tu->link_analysis;
+        core_list_push(analysis->literal_producers, frame.producer);
+        core_list_push(analysis->phase_results,
+            ((n00bb_phase_result_binding_t){
+                .producer = frame.producer,
+                .consumer = frame.function,
+                .span = span,
+            }));
+        return true;
+    }
     ir_instr_t *cached = ir_lower_emit_instruction(context,
         IR_OP_PHASE_RESULT, span);
     char result_name[64];
@@ -17926,6 +17981,9 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
 
     context->block = ok_block;
     context->reachable = true;
+    if (trap_unhandled
+        && ir_machine_of(context->module, ok_type).class == IR_CLASS_VOID)
+        return true;
     ir_value_t *value = n00bb_emit_outcome_payload(
         context, outcome, "ok", ok_type, span);
     if (!value)
@@ -24123,6 +24181,7 @@ build_n00bb_execution_graph(
     for (size_t i = 0; ok && i < analysis->phase_results.len; i++) {
         n00bb_phase_result_binding_t *binding =
             &analysis->phase_results.data[i];
+        if (!binding->instruction) continue;
         uint32_t producer_id, consumer_id;
         if (!exec_graph_function_id(graph, comptime_phase,
                 binding->producer, &registered_functions, &producer_id)
@@ -46943,6 +47002,12 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
             *failure_length = (size_t)length;
             return false;
         }
+        if (producers[i].kind == N00BB_LLVM_LITERAL_EFFECT) {
+            if (count) return false;
+            binding->materialized_kind = N00BB_LLVM_LITERAL_EFFECT;
+            *completed = i + 1;
+            continue;
+        }
         uint8_t encoding = 0;
         if (producers[i].kind == N00BB_LLVM_LITERAL_STRING
             && (!n00bb_read_exact(fd, &encoding, sizeof(encoding))
@@ -47031,6 +47096,8 @@ n00bb_execute_comptime(core_link_unit_t *link,
         ir_func_t *producer = binding->producer;
         th_type *result = producer ? th_resolve(th_func_ret(producer->type))
                                    : nullptr;
+        bool effect_only = result && ir_machine_of(producer->owner,
+            result).class == IR_CLASS_VOID;
         const char *result_name = nullptr;
         size_t result_name_length = 0;
         size_t result_arity = 0;
@@ -47049,7 +47116,8 @@ n00bb_execute_comptime(core_link_unit_t *link,
         uint64_t align = layout ? layout->alignment_bytes : 0;
         uint64_t stride = align && bytes <= UINT64_MAX - align + 1
             ? ((bytes + align - 1) / align) * align : 0;
-        if (!is_string && (!element || !layout || !align || !stride
+        if (!effect_only && !is_string
+            && (!element || !layout || !align || !stride
             || stride > UINT32_MAX || layout->intrinsic_bits != machine.width
             || machine.width < 8 || machine.width % 8
             || (machine.class != IR_CLASS_SINT
@@ -47064,9 +47132,11 @@ n00bb_execute_comptime(core_link_unit_t *link,
         core_buffer_printf(&symbol, "%s.%s",
             ir_module_name(producer->owner), producer->name);
         producers[i].symbol = core_strndup(symbol.data, symbol.byte_len);
-        producers[i].kind = is_string ? N00BB_LLVM_LITERAL_STRING
-                                      : N00BB_LLVM_LITERAL_ARRAY;
-        producers[i].element_stride = is_string ? 0 : (uint32_t)stride;
+        producers[i].kind = effect_only ? N00BB_LLVM_LITERAL_EFFECT
+            : is_string ? N00BB_LLVM_LITERAL_STRING
+                        : N00BB_LLVM_LITERAL_ARRAY;
+        producers[i].element_stride = effect_only || is_string
+            ? 0 : (uint32_t)stride;
         core_buffer_release(&symbol);
         ok = producers[i].symbol != nullptr;
     }
@@ -47179,8 +47249,8 @@ n00bb_execute_comptime(core_link_unit_t *link,
                     break;
                 }
             }
-        ir_span_t span = binding && binding->instruction
-            ? binding->instruction->span : (ir_span_t){0};
+        ir_span_t span = binding ? (binding->instruction
+            ? binding->instruction->span : binding->span) : (ir_span_t){0};
         core_diagnostics_report_at(diagnostics, unit, CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-B0014"),
             binding && failure_length
@@ -47243,14 +47313,16 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     size_t count = order.len;
     char **names = calloc(count, sizeof(*names));
     char **objects = calloc(count + 1, sizeof(*objects));
-    size_t phase_count = analysis->phase_results.len;
-    n00bb_llvm_phase_array_t *phase_arrays = phase_count
-        ? calloc(phase_count, sizeof(*phase_arrays)) : nullptr;
-    ok = names && objects && (!phase_count || phase_arrays);
-    for (size_t i = 0; ok && i < phase_count; i++) {
+    size_t phase_capacity = analysis->phase_results.len;
+    size_t phase_count = 0;
+    n00bb_llvm_phase_array_t *phase_arrays = phase_capacity
+        ? calloc(phase_capacity, sizeof(*phase_arrays)) : nullptr;
+    ok = names && objects && (!phase_capacity || phase_arrays);
+    for (size_t i = 0; ok && i < phase_capacity; i++) {
         const n00bb_phase_result_binding_t *binding =
             &analysis->phase_results.data[i];
-        phase_arrays[i] = (n00bb_llvm_phase_array_t){
+        if (!binding->instruction) continue;
+        phase_arrays[phase_count] = (n00bb_llvm_phase_array_t){
             .identifier = binding->identifier,
             .bytes = binding->materialized_bytes,
             .count = binding->materialized_count,
@@ -47258,9 +47330,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .string_encoding = binding->materialized_encoding,
             .element_stride = binding->materialized_stride,
         };
-        ok = phase_arrays[i].identifier && phase_arrays[i].bytes
-            && (phase_arrays[i].kind == N00BB_LLVM_LITERAL_STRING
-                || phase_arrays[i].element_stride);
+        ok = phase_arrays[phase_count].identifier
+            && phase_arrays[phase_count].bytes
+            && (phase_arrays[phase_count].kind == N00BB_LLVM_LITERAL_STRING
+                || phase_arrays[phase_count].element_stride);
+        phase_count++;
     }
     uint8_t *linked_abi = nullptr;
     size_t linked_abi_bytes = 0;

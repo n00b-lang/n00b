@@ -1189,10 +1189,17 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                 string_writer_parameters, 3, false);
             LLVMValueRef string_writer = LLVMAddFunction(module,
                 "n00bb_comptime_emit_string", string_writer_type);
+            LLVMTypeRef effect_writer_parameters[] = {result};
+            LLVMTypeRef effect_writer_type = LLVMFunctionType(result,
+                effect_writer_parameters, 1, false);
+            LLVMValueRef effect_writer = LLVMAddFunction(module,
+                "n00bb_comptime_emit_effect", effect_writer_type);
             for (size_t i = 0; i < array_producer_count; i++) {
                 const n00bb_llvm_array_producer_t *spec = &array_producers[i];
-                LLVMTypeRef expected = spec->kind == N00BB_LLVM_LITERAL_STRING
-                    ? string_type : array_type;
+                LLVMTypeRef expected = spec->kind == N00BB_LLVM_LITERAL_EFFECT
+                    ? LLVMVoidTypeInContext(context)
+                    : spec->kind == N00BB_LLVM_LITERAL_STRING
+                        ? string_type : array_type;
                 LLVMValueRef producer = spec->symbol
                     ? LLVMGetNamedFunction(module, spec->symbol) : nullptr;
                 if (!producer && spec->symbol)
@@ -1209,9 +1216,17 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                 }
                 LLVMValueRef value = LLVMBuildCall2(builder,
                     LLVMGlobalGetValueType(producer), producer,
-                    nullptr, 0, "literal.result");
+                    nullptr, 0, spec->kind == N00BB_LLVM_LITERAL_EFFECT
+                        ? "" : "literal.result");
                 LLVMValueRef status = nullptr;
-                if (spec->kind == N00BB_LLVM_LITERAL_STRING) {
+                if (spec->kind == N00BB_LLVM_LITERAL_EFFECT) {
+                    LLVMValueRef arguments[] = {
+                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
+                                     false),
+                    };
+                    status = LLVMBuildCall2(builder, effect_writer_type,
+                        effect_writer, arguments, 1, "literal.write");
+                } else if (spec->kind == N00BB_LLVM_LITERAL_STRING) {
                     LLVMValueRef arguments[] = {
                         LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
                                      false),

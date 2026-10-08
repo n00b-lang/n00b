@@ -26,6 +26,23 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/litmod_string" \
     "$program_dir/bitcode_litmod_string.n00b"
 "$tmp/litmod_string"
+"$compiler" build --output "$tmp/litmod_fence" \
+    "$program_dir/bitcode_litmod_fence.n00b"
+"$tmp/litmod_fence"
+"$compiler" build --output "$tmp/litmod_fence_nil" \
+    "$program_dir/bitcode_litmod_fence_nil.n00b"
+"$tmp/litmod_fence_nil"
+if "$compiler" build --output "$tmp/litmod_fence_nil_fail" \
+    "$program_dir/bitcode_litmod_fence_nil_fail.n00b" \
+    >"$tmp/litmod_fence_nil_fail.out" 2>&1; then
+    echo 'failing effect-only literal handler unexpectedly built' >&2
+    exit 1
+fi
+grep -q 'fatal\[N00BB-B0014\]: fence failed' \
+    "$tmp/litmod_fence_nil_fail.out"
+grep -q 'bitcode_litmod_fence_nil_fail.n00b:9:5' \
+    "$tmp/litmod_fence_nil_fail.out"
+test ! -e "$tmp/litmod_fence_nil_fail"
 if "$compiler" build --output "$tmp/litmod_string_fail" \
     "$program_dir/bitcode_litmod_string_fail.n00b" \
     >"$tmp/litmod_string_fail.out" 2>&1; then
