@@ -673,6 +673,51 @@ find_symbol(const n00bb_abi_object_view_t *view, const char *wanted,
 }
 
 static void
+test_linked_library_object(const char *path)
+{
+    size_t object_bytes;
+    uint8_t *object = read_object(path, &object_bytes);
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_object_view_t view = {0};
+    assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
+    const n00bb_abi_directory_entry_t *modules =
+        n00bb_abi_object_table(&view, N00B_ABI_TABLE_MODULE);
+    assert(modules && modules->record_count == 3
+        && !n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT)
+        && !n00bb_abi_object_table(&view, N00B_ABI_TABLE_INDEX_PATCH));
+    uint32_t root_index = 0, dep_index = 0;
+    for (uint32_t i = 1; i < modules->record_count; i++) {
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_MODULE, i);
+        n00bb_abi_string_view_t name;
+        assert(module && n00bb_abi_object_string(&view,
+            &module->full_path, &name));
+        if (name.length == strlen("abi_value_root")
+            && !memcmp(name.bytes, "abi_value_root", name.length))
+            root_index = i;
+        if (name.length == strlen("abi_value_dep")
+            && !memcmp(name.bytes, "abi_value_dep", name.length))
+            dep_index = i;
+    }
+    assert(root_index && dep_index && root_index != dep_index);
+    const n00b_abi_module_v1 *root = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_MODULE, root_index);
+    assert(root && root->imports.count == 1);
+    const uint8_t *import = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_U32_STREAM, root->imports.first);
+    assert(import && core_le_load_u32(import) == dep_index);
+    const n00b_abi_symbol_v1 *reader = find_symbol(&view, "read_value",
+        N00B_ABI_SYMBOL_FUNCTION);
+    const n00b_abi_symbol_v1 *value = find_symbol(&view, "value",
+        N00B_ABI_SYMBOL_VARIABLE);
+    assert(reader && reader->module_index == root_index
+        && value && value->module_index == dep_index);
+    n00bb_abi_object_close(&view);
+    free(object);
+}
+
+static void
 test_imported_function_requirement(const char *root_path,
     const char *facade_path, const char *impl_path)
 {
@@ -1727,6 +1772,8 @@ main(int argc, char **argv)
     if (argc == 3) {
         if (!strcmp(argv[1], "--self"))
             test_self_import_selection(argv[2]);
+        else if (!strcmp(argv[1], "--linked-library"))
+            test_linked_library_object(argv[2]);
         else if (!strcmp(argv[1], "--string-storage"))
             test_string_storage_link(argv[2]);
         else if (!strcmp(argv[1], "--constraint"))

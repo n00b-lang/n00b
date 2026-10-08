@@ -6,6 +6,7 @@
 #include "driver.h"
 #include "abi_layout.h"
 #include "abi_emit.h"
+#include "abi_link.h"
 #include "abi_record_layout.h"
 #include "record_layout_request.h"
 #include "enum_value.h"
@@ -46053,6 +46054,29 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
 }
 
 static bool
+n00bb_write_abi_bytes(core_string_t requested, const uint8_t *object,
+                      size_t object_bytes, core_translation_unit_t *unit,
+                      core_diagnostics_t *diagnostics)
+{
+    if (!requested.data || !requested.u8_bytes || !object || !object_bytes)
+        return false;
+    char *path = core_strndup(requested.data, requested.u8_bytes);
+    FILE *file = fopen(path, "wb");
+    bool saved = file && fwrite(object, 1, object_bytes, file) == object_bytes;
+    if (file && fclose(file)) saved = false;
+    if (!saved) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, "could not write ABI object '%s'", path);
+        core_diagnostics_report(diagnostics, unit, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0008"),
+            core_string_borrow(message.data, message.byte_len));
+        core_buffer_release(&message);
+    }
+    core_free(path);
+    return saved;
+}
+
+static bool
 n00bb_write_compile_abi_artifact(core_link_unit_t *link,
                                  parse_cmdr_result_t *args,
                                  core_diagnostics_t *diagnostics)
@@ -46077,21 +46101,66 @@ n00bb_write_compile_abi_artifact(core_link_unit_t *link,
         requested = core_string_borrow(default_name.data,
                                        default_name.byte_len);
     }
-    char *path = core_strndup(requested.data, requested.u8_bytes);
-    FILE *file = fopen(path, "wb");
-    bool saved = file && fwrite(artifact->object, 1,
-        artifact->object_bytes, file) == artifact->object_bytes;
-    if (file && fclose(file)) saved = false;
-    if (!saved) {
-        core_buffer_t message = {0};
-        core_buffer_printf(&message, "could not write ABI object '%s'", path);
-        core_diagnostics_report(diagnostics, unit, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0008"),
-            core_string_borrow(message.data, message.byte_len));
-        core_buffer_release(&message);
-    }
-    core_free(path);
+    bool saved = n00bb_write_abi_bytes(requested, artifact->object,
+        artifact->object_bytes, unit, diagnostics);
     core_buffer_release(&default_name);
+    return saved;
+}
+
+static bool
+n00bb_write_library_abi_artifact(core_link_unit_t *link,
+                                 const core_target_desc_t *target,
+                                 parse_cmdr_result_t *args,
+                                 core_diagnostics_t *diagnostics)
+{
+    core_string_t requested = parse_cmdr_flag_str(args,
+        CORE_STRING_STATIC("--output"));
+    if (!requested.data || !requested.u8_bytes) {
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0009"),
+            CORE_STRING_STATIC("library ABI output requires --output"));
+        return false;
+    }
+    size_t count = core_link_unit_translation_unit_count(link);
+    n00bb_abi_object_input_t *inputs = core_alloc_array(
+        n00bb_abi_object_input_t, count);
+    bool valid = count != 0;
+    for (size_t i = 0; valid && i < count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        core_link_artifact_view_t view = {0};
+        if (!unit || !core_link_unit_require_artifact(link,
+                unit->module.identifier,
+                CORE_STRING_STATIC("n00bb.abi.object"), 1, &view)
+            || !view.payload) {
+            valid = false;
+            break;
+        }
+        const n00bb_abi_artifact_t *artifact = view.payload;
+        if (!artifact->object || !artifact->object_bytes) {
+            valid = false;
+            break;
+        }
+        inputs[i] = (n00bb_abi_object_input_t){
+            .module = unit->module.identifier,
+            .object = artifact->object,
+            .object_bytes = artifact->object_bytes,
+        };
+    }
+    uint8_t *object = nullptr;
+    size_t object_bytes = 0;
+    if (valid) valid = n00bb_abi_link_objects(link, target, inputs,
+        count, &object, &object_bytes);
+    core_free(inputs);
+    if (!valid) {
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0010"),
+            CORE_STRING_STATIC("could not link library ABI objects"));
+        return false;
+    }
+    bool saved = n00bb_write_abi_bytes(requested, object, object_bytes,
+        nullptr, diagnostics);
+    core_free(object);
     return saved;
 }
 
@@ -46309,20 +46378,28 @@ main(int argc, char **argv)
         }
         core_free(path);
     }
-    bool compile_emitted = false;
+    bool abi_emitted = false;
     if (located && compile_command) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,
             !preprocessor_options.release_mode);
         if (located)
-            compile_emitted = located = n00bb_write_compile_abi_artifact(
+            abi_emitted = located = n00bb_write_compile_abi_artifact(
                 link, args, cli_diagnostics);
+    }
+    if (located && library_command && !emit_interface
+        && parse_cmdr_flag_present(args, CORE_STRING_STATIC("--output"))) {
+        located = n00bb_emit_abi_artifacts(link, link_analysis,
+            !preprocessor_options.release_mode);
+        if (located)
+            abi_emitted = located = n00bb_write_library_abi_artifact(link,
+                &link_analysis->target, args, cli_diagnostics);
     }
     if (located && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--dump-link-unit")))
         dump_link_unit(link);
     if (located && !locate_only && !lex_command && !parse_command
         && !preprocess_command && !lower_command
-        && !(library_command && emit_interface) && !compile_emitted) {
+        && !(library_command && emit_interface) && !abi_emitted) {
         fprintf(stderr,
                 "n00bb: translation units are located; '%.*s' processing is not implemented yet\n",
                 (int)command.u8_bytes, command.data);

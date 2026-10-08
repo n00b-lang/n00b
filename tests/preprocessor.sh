@@ -1469,6 +1469,12 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/abi_value_dep.o" abi_value_dep
 "$abi_link_input_test" --value-import "$tmp/abi_value_root.o" \
     "$tmp/abi_value_dep.o"
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/abi_value_library.o" abi_value_root
+"$abi_link_input_test" --linked-library "$tmp/abi_value_library.o"
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/abi_value_library_multi.o" abi_value_root abi_value_dep
+"$abi_link_input_test" --linked-library "$tmp/abi_value_library_multi.o"
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_enum_abi.o" foreign_enum_user
 [ -s "$tmp/import_enum_abi.o" ]
