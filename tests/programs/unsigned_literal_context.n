@@ -1,0 +1,12 @@
+func choose(value: uint) -> uint {
+    var selected: uint = value
+    if selected > 0 {
+        selected = 1
+        return selected
+    }
+    return 0
+}
+
+func loaded_is_positive(value: Atomic[uint]) -> bool {
+    return __atomic_load(ref value) > 0
+}

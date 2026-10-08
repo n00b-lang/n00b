@@ -1,0 +1,70 @@
+public const PROT_NONE: u32 = 0
+public const PROT_READ: u32 = 1
+public const PROT_WRITE: u32 = 2
+public const context_registers: uint = 48
+
+public type Thread_Context layout(c) {
+    public sp: Ref[byte]?
+    public fp: Ref[byte]?
+    public nregs: uint
+    public regs: uint[context_registers]
+    public parked: Atomic[u32]
+    public handle: uint
+    public thread_id: u64
+}
+
+public func page_size() -> uint {
+    return __os_page_size()
+}
+
+public func thread_yield() {
+    __os_thread_yield()
+}
+
+public func thread_id() -> uint {
+    return __os_thread_id()
+}
+
+public func thread_stack_high_self() -> Ref[byte]? {
+    return __os_thread_stack_high_self()
+}
+
+public func stack_red_zone_bytes() -> uint {
+    return __os_stack_red_zone_bytes()
+}
+
+public func thread_control_self() -> uint {
+    return __os_thread_control_self()
+}
+
+public func thread_capture_self(snapshot: Ref[Thread_Context]) {
+    __os_thread_capture_self(snapshot)
+}
+
+public func thread_suspend(control: uint, snapshot: Ref[Thread_Context], timeout_ns: u64) -> i32 {
+    return __os_thread_suspend(control, snapshot, timeout_ns)
+}
+
+public func thread_resume(control: uint, snapshot: Ref[Thread_Context]) -> i32 {
+    return __os_thread_resume(control, snapshot)
+}
+
+public func now_ns() -> u64 {
+    return __os_now_ns()
+}
+
+public func cpu_relax() {
+    __os_cpu_relax()
+}
+
+public func map_zeroed(bytes: uint, alignment: uint) -> Ref[byte]? {
+    return __os_map_zeroed(bytes, alignment)
+}
+
+public func unmap(address: Ref[`T], bytes: uint) -> i32 {
+    return __os_unmap(address, bytes)
+}
+
+public func protect(address: Ref[byte], bytes: uint, flags: u32) -> i32 {
+    return __os_protect(address, bytes, flags)
+}

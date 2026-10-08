@@ -58,6 +58,13 @@ encode_scalar(ir_module_t *module, n00bb_abi_type_index_t *index,
         if (descriptor_index) *descriptor_index = local_index;
         return true;
     }
+    if (name && name_length == sizeof("atomic") - 1
+        && !memcmp(name, "atomic", name_length)
+        && argument_count == 1) {
+        const th_arg *item = th_named_arg(type, 0);
+        if (!item || item->kind != TH_ARG_TYPE) return false;
+        type = item->type;
+    }
     ir_machine_t machine = ir_machine_of(module, type);
     if (!size_bits || size_bits > 128 || size_bits % 8
         || !machine.width || machine.width > size_bits
@@ -322,7 +329,7 @@ encode_aggregate_member(array_writer_t *writer,
         }
     }
     else if (item->kind == IR_GLOBAL_INIT_NIL)
-        valid = child_bits == 0;
+        valid = true;
     else valid = encode_scalar(writer->runtime, writer->index,
         member->type, item, child_bits, child, &descriptor_index);
     if (valid && descriptor_index != UINT32_MAX)
@@ -447,10 +454,13 @@ encode_array_items(array_writer_t *writer,
         bool aggregate = row->kind == N00B_ABI_TYPE_RECORD
             || row->kind == N00B_ABI_TYPE_VARIANT
             || row->kind == N00B_ABI_TYPE_TUPLE;
+        bool zero_option = row->kind == N00B_ABI_TYPE_OPTION
+            && value->kind == IR_GLOBAL_INIT_NIL;
+        bool heap_bytes = aggregate || (zero_option && stride > sizeof inline_bytes);
         if (aggregate && at > UINT64_MAX / 8) return false;
-        uint8_t *bytes = aggregate ? core_alloc_array(uint8_t, stride)
+        uint8_t *bytes = heap_bytes ? core_alloc_array(uint8_t, stride)
                                    : inline_bytes;
-        if (aggregate) memset(bytes, 0, stride);
+        if (heap_bytes) memset(bytes, 0, stride);
         size_t pool_offset = 0;
         uint32_t descriptor_index = UINT32_MAX;
         bool string = row->kind == N00B_ABI_TYPE_STRING;
@@ -459,12 +469,13 @@ encode_array_items(array_writer_t *writer,
             : aggregate ? encode_aggregate(writer, type, value,
                 N00BB_ABI_RELOC_AGGREGATE, (uint64_t)at * 8,
                 bytes, stride, 0)
+            : zero_option ? true
             : row->kind == N00B_ABI_TYPE_NIL && !row->size_bits
                 ? value->kind == IR_GLOBAL_INIT_NIL
             : encode_scalar(writer->runtime, writer->index, type, value,
                 row->size_bits, bytes, &descriptor_index);
         if (!valid) {
-            if (aggregate) core_free(bytes);
+            if (heap_bytes) core_free(bytes);
             return false;
         }
         if (packed) {
@@ -487,7 +498,7 @@ encode_array_items(array_writer_t *writer,
                         .target_offset = pool_offset,
                     }));
         }
-        if (aggregate) core_free(bytes);
+        if (heap_bytes) core_free(bytes);
         if (descriptor_index != UINT32_MAX
             && (packed || !record_type_index(writer,
                 N00BB_ABI_RELOC_AGGREGATE, at, descriptor_index)))
@@ -689,13 +700,29 @@ n00bb_abi_storage_rows_build(
         const ir_global_init_value_t *initializer =
             global->has_static_initializer ? global->static_initializer
                                            : nullptr;
+        bool atomic_option = false;
+        if (type_row->kind == N00B_ABI_TYPE_ATOMIC) {
+            const th_arg *wrapped = th_named_arg(global->type, 0);
+            uint32_t wrapped_index = 0;
+            atomic_option = wrapped && wrapped->kind == TH_ARG_TYPE
+                && n00bb_abi_type_index_find(index, wrapped->type,
+                                             &wrapped_index)
+                && wrapped_index < types->count
+                && types->rows[wrapped_index].kind == N00B_ABI_TYPE_OPTION;
+        }
+        bool zero_option = (type_row->kind == N00B_ABI_TYPE_OPTION
+                            || atomic_option)
+            && initializer && initializer->kind == IR_GLOBAL_INIT_NIL;
+        bool uninitialized = !initializer;
         if (!alignment || (alignment & (alignment - 1))
             || bits > SIZE_MAX - 7
             || (is_string
                 ? (bits != 128 || alignment != 8
                     || !encode_string(pool, initializer, bytes, &pool_offset))
                 : is_array ? (bits != 128 || alignment != 8)
-                : (is_record || is_variant || is_tuple) ? !initializer
+                : uninitialized ? false
+                : (is_record || is_variant || is_tuple) ? false
+                : zero_option ? false
                 : !encode_scalar(runtime, index, global->type, initializer,
                                  bits, bytes, &descriptor_index))) {
             valid = false;
@@ -733,7 +760,7 @@ n00bb_abi_storage_rows_build(
             .pool = pool, .built = &built, .relocations = &relocations,
             .index_patches = &index_patches,
         };
-        if (is_record || is_variant || is_tuple) {
+        if ((is_record || is_variant || is_tuple) && initializer) {
             uint8_t *record = core_alloc_array(uint8_t,
                                                 byte_length ? byte_length : 1);
             memset(record, 0, byte_length);
@@ -744,6 +771,14 @@ n00bb_abi_storage_rows_build(
                 core_buffer_append(buffer, (const char *)record, byte_length);
             core_free(record);
             if (!valid) break;
+        }
+        else if (zero_option || uninitialized) {
+            static const char zero[16] = {0};
+            for (size_t left = byte_length; left;) {
+                size_t count = left < sizeof zero ? left : sizeof zero;
+                core_buffer_append(buffer, zero, count);
+                left -= count;
+            }
         }
         else core_buffer_append(buffer, (const char *)bytes, byte_length);
         if (is_array && initializer

@@ -1,0 +1,35 @@
+import builtin.abi
+import builtin.os
+import builtin.gc
+import builtin.gc.registry
+import builtin.gc.los
+import builtin.gc.alloc
+
+comptime {
+} else {
+    let probe: Ref[builtin.gc.Heap]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+    let los_probe: Ref[builtin.gc.Los_Obj]? = nil
+    let los_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(los_probe))
+    assert los_row != nil
+    if row != nil {
+        let bytes: uint = builtin.abi.size_bytes(row.get())
+        let alignment: uint = builtin.abi.alignment_bytes(row.get())
+        let mapped: Ref[byte]? = builtin.os.map_zeroed(bytes, alignment)
+        if mapped != nil {
+            let heap: Ref[builtin.gc.Heap] = unsafe_cast[Ref[builtin.gc.Heap]] mapped.get()
+            builtin.gc.registry.registry_read_lock(heap)
+            assert __atomic_load(ref heap.reg_rw) == 1
+            builtin.gc.registry.registry_read_unlock(heap)
+            assert __atomic_load(ref heap.reg_rw) == 0
+            builtin.gc.los.cache_drain(heap)
+            builtin.gc.los.free_all(heap)
+            builtin.os.unmap(mapped.get(), bytes)
+            __fd_write(2, "ok")
+        } else {
+            assert false
+        }
+    } else {
+        assert false
+    }
+}

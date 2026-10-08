@@ -13,6 +13,7 @@
 #include "abi_string.h"
 #include "abi_type_variable.h"
 #include "abi_value_schema.h"
+#include "builtin_os.h"
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -32,9 +33,6 @@
 _Static_assert(sizeof(size_t) >= 8, "runtime ABI targets need 64-bit sizes");
 
 #if defined(__linux__) && defined(__x86_64__)
-#include <sys/mman.h>
-#include <sys/syscall.h>
-
 static bool host_native_atomic128(void)
 {
     uint32_t eax, ebx, ecx, edx;
@@ -44,33 +42,8 @@ static bool host_native_atomic128(void)
     return (ecx & (UINT32_C(1) << 13)) != 0;
 }
 
-static void *snapshot_alloc(size_t bytes)
-{
-    register long r10 __asm__("r10") = MAP_PRIVATE | MAP_ANONYMOUS;
-    register long r8 __asm__("r8") = -1;
-    register long r9 __asm__("r9") = 0;
-    long result;
-    __asm__ volatile("syscall"
-                     : "=a"(result)
-                     : "a"((long)SYS_mmap), "D"(0L), "S"(bytes),
-                       "d"((long)(PROT_READ | PROT_WRITE)),
-                       "r"(r10), "r"(r8), "r"(r9)
-                     : "rcx", "r11", "memory");
-    return result < 0 ? nullptr : (void *)result;
-}
-
-static void snapshot_free(void *address, size_t bytes)
-{
-    long result;
-    __asm__ volatile("syscall"
-                     : "=a"(result)
-                     : "a"((long)SYS_munmap), "D"(address), "S"(bytes)
-                     : "rcx", "r11", "memory");
-    (void)result;
-}
 #define N00B_ABI_HOST_TARGET N00B_ABI_TARGET_X86_64_LINUX
 #elif defined(__APPLE__) && defined(__aarch64__)
-#include <sys/mman.h>
 #include <sys/sysctl.h>
 
 static bool host_feature(const char *name)
@@ -87,17 +60,6 @@ static bool host_native_atomic128(void)
         && host_feature("hw.optional.armv8_1_atomics");
 }
 
-static void *snapshot_alloc(size_t bytes)
-{
-    void *value = mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON, -1, 0);
-    return value == MAP_FAILED ? nullptr : value;
-}
-
-static void snapshot_free(void *address, size_t bytes)
-{
-    munmap(address, bytes);
-}
 #define N00B_ABI_HOST_TARGET N00B_ABI_TARGET_ARM64_MACOS
 #elif defined(_WIN32) && defined(_M_X64)
 #define WIN32_LEAN_AND_MEAN
@@ -108,38 +70,19 @@ static bool host_native_atomic128(void)
     return IsProcessorFeaturePresent(PF_COMPARE_EXCHANGE128) != 0;
 }
 
-static void *snapshot_alloc(size_t bytes)
-{
-    return VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-}
-
-static void snapshot_free(void *address, size_t bytes)
-{
-    (void)bytes;
-    VirtualFree(address, 0, MEM_RELEASE);
-}
 #define N00B_ABI_HOST_TARGET N00B_ABI_TARGET_X86_64_WINDOWS
 #else
 #error "runtime ABI snapshot allocation needs a supported target"
 #endif
 
-void *n00b_allocate(uint32_t allocator, uint32_t type_index,
-                    uint64_t byte_size, uint32_t alignment,
-                    const void *instance_descriptor)
+static void *snapshot_alloc(size_t bytes)
 {
-    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
-    (void)instance_descriptor;
-    if (allocator || !type_index || !snapshot
-        || !n00b_abi_v1_type(snapshot, type_index)
-        || !alignment || (alignment & (alignment - 1))
-        || byte_size > SIZE_MAX - (size_t)alignment)
-        __builtin_trap();
-    size_t bytes = (size_t)(byte_size ? byte_size : 1);
-    void *base = snapshot_alloc(bytes + alignment - 1);
-    if (!base) __builtin_trap();
-    uintptr_t address = ((uintptr_t)base + alignment - 1)
-        & ~(uintptr_t)(alignment - 1);
-    return (void *)address;
+    return n00b_os_map_zeroed(bytes, 0);
+}
+
+static void snapshot_free(void *address, size_t bytes)
+{
+    (void)n00b_os_unmap(address, bytes);
 }
 
 struct n00b_abi_snapshot_v1 {
@@ -429,6 +372,24 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
                 member_kind, member);
             if (facts.parent != i)
                 return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+            if (member_kind == N00B_ABI_TABLE_FIELD
+                || member_kind == N00B_ABI_TABLE_ARM) {
+                const n00b_abi_field_v1 *field = member_kind
+                    == N00B_ABI_TABLE_FIELD ? member
+                    : &((const n00b_abi_arm_v1 *)member)->field;
+                if (field->inline_reserved_zero
+                    || (!!field->inline_element_count
+                        != !!field->inline_element_type_index)
+                    || (!!field->inline_element_count
+                        != !!field->inline_element_stride_bits)
+                    || (field->inline_element_count
+                        && (field->logical_bit_offset > type->size_bits
+                            || (field->inline_element_count - 1)
+                                > (UINT64_MAX - field->logical_bit_offset)
+                                    / field->inline_element_stride_bits)))
+                    return invalid_record(error, member_kind,
+                                          member_index, 0);
+            }
             if (facts.symbol) {
                 const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(
                     snapshot, facts.symbol);
@@ -1072,6 +1033,26 @@ trace_placement_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+trace_repeated_placement_valid(const n00b_abi_snapshot_v1 *snapshot,
+                               const n00b_abi_type_v1 *parent,
+                               n00b_abi_range_v1 parent_occupied,
+                               const n00b_abi_type_v1 *type,
+                               const n00b_abi_trace_child_v1 *child)
+{
+    if (!child || (!child->repeat_count && child->stride_bits)
+        || (child->repeat_count && (!child->stride_bits
+            || child->stride_bits % 8))) return false;
+    uint64_t count = child->repeat_count ? child->repeat_count : 1;
+    uint64_t stride = child->stride_bits / 8;
+    if (count > 1 && (count - 1)
+        > (UINT64_MAX - child->byte_offset) / stride) return false;
+    for (uint64_t i = 0; i < count; i++)
+        if (!trace_placement_valid(snapshot, parent, parent_occupied,
+            type, child->byte_offset + i * stride)) return false;
+    return true;
+}
+
+static bool
 trace_child_valid(const n00b_abi_snapshot_v1 *snapshot,
                   const n00b_abi_type_v1 *parent,
                   n00b_abi_range_v1 parent_occupied,
@@ -1082,8 +1063,8 @@ trace_child_valid(const n00b_abi_snapshot_v1 *snapshot,
     const n00b_abi_type_v1 *type = child
         ? n00b_abi_v1_type(snapshot, child->child_type_index) : nullptr;
     if (!child || child->reserved_zero
-        || !trace_placement_valid(snapshot, parent, parent_occupied,
-            type, child->byte_offset))
+        || !trace_repeated_placement_valid(snapshot, parent,
+            parent_occupied, type, child))
         return invalid_record(error, N00B_ABI_TABLE_TRACE_CHILD,
                               child_index, 0);
     return true;
@@ -1113,9 +1094,14 @@ trace_fields_complete(const n00b_abi_snapshot_v1 *snapshot,
             const n00b_abi_field_v1 *field = trace_member_at(snapshot,
                 parent, j);
             valid = field != nullptr;
-            if (valid && field->child_type_index == child->child_type_index
+            uint32_t expected_type = valid && field->inline_element_count
+                ? field->inline_element_type_index
+                : valid ? field->child_type_index : 0;
+            if (valid && expected_type == child->child_type_index
                 && field->logical_bit_offset / 8 == child->byte_offset
-                && field->logical_bit_offset % 8 == 0) {
+                && field->logical_bit_offset % 8 == 0
+                && field->inline_element_count == child->repeat_count
+                && field->inline_element_stride_bits == child->stride_bits) {
                 if (match != member_count) valid = false;
                 else match = j;
             }
@@ -1129,7 +1115,9 @@ trace_fields_complete(const n00b_abi_snapshot_v1 *snapshot,
         const n00b_abi_field_v1 *field = trace_member_at(snapshot,
             parent, j);
         const n00b_abi_type_v1 *child = field
-            ? n00b_abi_v1_type(snapshot, field->child_type_index) : nullptr;
+            ? n00b_abi_v1_type(snapshot, field->inline_element_count
+                ? field->inline_element_type_index
+                : field->child_type_index) : nullptr;
         valid = child && seen[j] == type_needs_trace(child);
     }
     snapshot_free(seen, member_count);
@@ -1225,12 +1213,16 @@ variant_trace_arms_valid(const n00b_abi_snapshot_v1 *snapshot,
                 && (end <= tag_start || start >= tag_end);
         }
         const n00b_abi_type_v1 *child_type = valid
-            ? n00b_abi_v1_type(snapshot, arm->field.child_type_index)
+            ? n00b_abi_v1_type(snapshot,
+                arm->field.inline_element_count
+                    ? arm->field.inline_element_type_index
+                    : arm->field.child_type_index)
             : nullptr;
         valid = child_type != nullptr;
         bool needs_trace = valid && type_needs_trace(child_type);
         if (valid && arm_trace->child_trace_index)
-            valid = needs_trace && !arm_trace->children.count
+            valid = needs_trace && !arm->field.inline_element_count
+                && !arm_trace->children.count
                 && arm_trace->child_trace_index
                     == child_type->tracing_index
                 && arm->field.logical_bit_offset % 8 == 0
@@ -1251,7 +1243,12 @@ variant_trace_arms_valid(const n00b_abi_snapshot_v1 *snapshot,
             valid = child && arm->field.logical_bit_offset % 8 == 0
                 && child->byte_offset == arm->field.logical_bit_offset / 8
                 && child->child_type_index
-                    == arm->field.child_type_index;
+                    == (arm->field.inline_element_count
+                        ? arm->field.inline_element_type_index
+                        : arm->field.child_type_index)
+                && child->repeat_count == arm->field.inline_element_count
+                && child->stride_bits
+                    == arm->field.inline_element_stride_bits;
         }
         if (valid) seen[arm_trace->tag_value - 1] = 1;
         else if (!error || error->table_kind != N00B_ABI_TABLE_TRACE_CHILD)
@@ -1411,7 +1408,9 @@ metadata_traces_valid(const n00b_abi_snapshot_v1 *snapshot,
             const n00b_abi_field_v1 *field = trace_member_at(snapshot,
                 type, j);
             const n00b_abi_type_v1 *child = field
-                ? n00b_abi_v1_type(snapshot, field->child_type_index)
+                ? n00b_abi_v1_type(snapshot, field->inline_element_count
+                    ? field->inline_element_type_index
+                    : field->child_type_index)
                 : nullptr;
             if (!child || type_needs_trace(child))
                 return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);

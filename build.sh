@@ -54,15 +54,30 @@ prepare_lantern() {
     BUILD_DIR="$LANTERN_BUILD_DIR" \
         "$ROOT/../lantern/build.sh" compile || return 1
     local lantern_pkg_path="$LANTERN_BUILD_DIR/meson-uninstalled"
-    export PKG_CONFIG_PATH="$lantern_pkg_path${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-    MESON_PKG_CONFIG_PATH="$lantern_pkg_path"
     local -a pkg_paths
+    local -a unique_paths=("$lantern_pkg_path")
     local pkg_path
-    IFS=: read -r -a pkg_paths <<< "$PKG_CONFIG_PATH"
+    local existing
+    local seen
+    IFS=: read -r -a pkg_paths <<< "${PKG_CONFIG_PATH:-}"
     for pkg_path in "${pkg_paths[@]}"; do
-        [ "$pkg_path" = "$lantern_pkg_path" ] && continue
+        [ -n "$pkg_path" ] || continue
+        seen=false
+        for existing in "${unique_paths[@]}"; do
+            if [ "$pkg_path" = "$existing" ]; then
+                seen=true
+                break
+            fi
+        done
+        [ "$seen" = true ] || unique_paths+=("$pkg_path")
+    done
+    PKG_CONFIG_PATH="${unique_paths[0]}"
+    MESON_PKG_CONFIG_PATH="${unique_paths[0]}"
+    for pkg_path in "${unique_paths[@]:1}"; do
+        PKG_CONFIG_PATH+=":$pkg_path"
         MESON_PKG_CONFIG_PATH+=",$pkg_path"
     done
+    export PKG_CONFIG_PATH
     if [ -f "$BUILD_DIR/build.ninja" ]; then
         meson configure "$BUILD_DIR" \
             -Dpkg_config_path="$MESON_PKG_CONFIG_PATH" || return 1

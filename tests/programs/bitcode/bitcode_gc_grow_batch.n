@@ -1,0 +1,37 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.alloc
+import builtin.gc.heap
+import builtin.os
+
+func mutator_record() -> Ref[builtin.abi.Type_Record] {
+    let probe: Ref[builtin.gc.Mutator]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+    if row != nil { return row.get() }
+    require false
+}
+
+comptime {
+} else {
+    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[builtin.gc.Heap] = created.get()
+        let row: Ref[builtin.abi.Type_Record] = mutator_record()
+        let mapped: Ref[byte]? = builtin.os.map_zeroed(
+            builtin.abi.size_bytes(row), builtin.abi.alignment_bytes(row))
+        if mapped != nil {
+            let mutator: Ref[builtin.gc.Mutator] = unsafe_cast[Ref[builtin.gc.Mutator]] mapped.get()
+            mutator.heap = heap
+            let first: Ref[builtin.gc.Block_Metadata]? = builtin.gc.alloc.grow_batch(heap, mutator)
+            assert first != nil
+            assert heap.nblocks > 0
+            assert heap.nfree > 0
+            assert __atomic_load(ref heap.nowned) > 0
+            assert heap.nfree + __atomic_load(ref heap.nowned) == heap.nblocks
+            assert heap.blocks.n == heap.nblocks
+            builtin.gc.heap.destroy(heap)
+            builtin.os.unmap(mutator, builtin.abi.size_bytes(row))
+            __fd_write(2, "ok")
+        } else { require false }
+    } else { require false }
+}

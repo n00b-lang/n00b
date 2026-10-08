@@ -83,6 +83,19 @@ typedef struct n00bb_abi_index_plan_t n00bb_abi_index_plan_t;
  * rows remain distinct until the remap/merge stage. */
 n00bb_abi_index_plan_t *n00bb_abi_index_plan_build(
     const n00bb_abi_selected_objects_t *selected);
+typedef struct {
+    size_t input;
+    uint32_t table_kind;
+    uint32_t row_index;
+    size_t prior_input;
+    uint32_t prior_row_index;
+    n00bb_abi_string_view_t name;
+    n00bb_abi_string_view_t prior_name;
+    const char *reason;
+} n00bb_abi_index_plan_failure_t;
+n00bb_abi_index_plan_t *n00bb_abi_index_plan_build_detailed(
+    const n00bb_abi_selected_objects_t *selected,
+    n00bb_abi_index_plan_failure_t *failure);
 void n00bb_abi_index_plan_free(n00bb_abi_index_plan_t *plan);
 bool n00bb_abi_index_plan_count(const n00bb_abi_index_plan_t *plan,
                                 uint32_t kind, uint32_t *out_count);
@@ -221,10 +234,19 @@ void n00bb_abi_native_relocations_release(
  * `base_offset` is the input section's byte offset within its final section.
  * Every non-reserved STORAGE and NATIVE_BINDING row must have exactly one
  * matching map. A failure leaves all merged rows unchanged. */
+typedef struct {
+    uint32_t table_kind;
+    uint32_t row_index;
+    size_t input;
+    uint32_t local_section;
+    const char *reason;
+} n00bb_abi_native_rebase_failure_t;
+
 bool n00bb_abi_rebase_native_references(
     n00bb_abi_merged_rows_t *merged,
     const n00bb_abi_native_section_map_t *maps, size_t map_count,
-    const n00bb_abi_string_storage_rebase_t *string_storage);
+    const n00bb_abi_string_storage_rebase_t *string_storage,
+    n00bb_abi_native_rebase_failure_t *failure);
 
 /* Adds merged native bindings after section rebasing. An existing undefined
  * reference with the same native name becomes defined; a conflicting defined
@@ -274,7 +296,10 @@ bool n00bb_abi_link_objects_with_semantics(
     core_link_unit_t *link, const core_target_desc_t *target,
     const n00bb_abi_object_input_t *candidates, size_t candidate_count,
     n00bb_abi_link_semantics_fn semantics, void *context,
-    uint8_t **out_object, size_t *out_object_bytes);
+    uint8_t **out_object, size_t *out_object_bytes,
+    const char **failure_stage,
+    n00bb_abi_index_plan_failure_t *plan_failure,
+    n00bb_abi_native_rebase_failure_t *rebase_failure);
 
 /* Selects objects for the finalized link unit, then consolidates them.
  * Candidate bytes are borrowed; the completed object is caller-owned. */

@@ -1,0 +1,77 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.alloc
+import builtin.gc.finalize
+import builtin.gc.heap
+import builtin.gc.mark
+import builtin.gc.mutator
+import builtin.gc.registry
+import builtin.os
+
+comptime {} else {
+    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[builtin.gc.Heap] = created.get()
+        let mapped: Ref[byte]? = builtin.os.map_zeroed(
+            builtin.gc.block_bytes, builtin.gc.block_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let end: Ref[byte] = __gc_byte_offset(base, builtin.gc.block_bytes)
+            let registered: bool = builtin.gc.registry.region_add(heap, base, end)
+            require registered
+            let block: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(base)
+            builtin.gc.block_init(heap, block)
+            let attached: Ref[builtin.gc.Mutator]? = builtin.gc.mutator.create(heap)
+            if attached != nil {
+                let mutator: Ref[builtin.gc.Mutator] = attached.get()
+                var owned: Ref[builtin.gc.Block_Metadata]? = nil
+                builtin.gc.own(heap, mutator, block, ref owned)
+                let assigned: Ref[builtin.gc.Block_Metadata]? = block
+                builtin.gc.bump_attach(mutator, ref mutator.small, assigned)
+                let found: bool = builtin.gc.bump_next_hole(ref mutator.small, 48)
+                require found
+                let sample: byte = 0
+                let type_index: u32 = cast[u32](typeof(sample))
+                let allocated: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, type_index, 8,
+                    builtin.gc.granule_bytes, true)
+                if allocated != nil {
+                    let payload: Ref[byte] = allocated.get()
+                    assert __atomic_load(ref block.nfinal) == 1
+                    let marker_probe: Ref[builtin.gc.Marker]? = nil
+                    let marker_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(
+                        typeof(marker_probe))
+                    if marker_row != nil {
+                        let marker_bytes: uint = builtin.abi.size_bytes(marker_row.get())
+                        let marker_map: Ref[byte]? = builtin.os.map_zeroed(
+                            marker_bytes, builtin.abi.alignment_bytes(marker_row.get()))
+                        if marker_map != nil {
+                            let marker: Ref[builtin.gc.Marker] = unsafe_cast[Ref[builtin.gc.Marker]] marker_map.get()
+                            builtin.gc.mark.marker_init(marker, heap, false)
+                            builtin.gc.finalize.find_dead_locked(marker)
+                            assert heap.finq_n == 1
+                            assert __atomic_load(ref block.nfinal) == 0
+                            assert !__atomic_load(ref block.in_final)
+                            assert (builtin.gc.header_of(payload).meta & builtin.gc.obj_final) == 0
+                            assert builtin.gc.mark.is_marked(heap, payload)
+                            let queue: Ref[byte]? = heap.finq
+                            if queue != nil {
+                                let entry: Ref[builtin.gc.Final_Entry] = unsafe_cast[Ref[builtin.gc.Final_Entry]] queue.get()
+                                assert entry.payload == payload
+                            } else { require false }
+                            marker.bytes = 123
+                            builtin.gc.finalize.mark_locked(marker)
+                            assert marker.bytes == 123
+                            builtin.gc.finalize.find_dead_locked(marker)
+                            assert heap.finq_n == 1
+                            builtin.os.unmap(marker, marker_bytes)
+                        } else { require false }
+                    } else { require false }
+                } else { require false }
+                builtin.gc.mutator.destroy(mutator)
+            } else { require false }
+            builtin.gc.heap.destroy(heap)
+            __fd_write(2, "ok")
+        } else { require false }
+    } else { require false }
+}

@@ -1,0 +1,87 @@
+import builtin.gc
+import builtin.gc.alloc
+import builtin.gc.collect
+import builtin.gc.heap
+import builtin.gc.registry
+import builtin.os
+
+func place_object(base: Ref[byte], offset: uint, payload_bytes: u64,
+                  marked: bool) -> Ref[builtin.gc.Object_Header] {
+    let address: Ref[byte] = __gc_byte_offset(base, offset)
+    let header: Ref[builtin.gc.Object_Header] = unsafe_cast[Ref[builtin.gc.Object_Header]] address
+    header.type_index = 1
+    header.meta = builtin.gc.meta_make(payload_bytes, 0)
+    let granule: uint = offset / builtin.gc.granule_bytes
+    let word: uint = granule / builtin.gc.word_bits
+    let mask: u64 = cast[u64](1) << (granule % builtin.gc.word_bits)
+    __atomic_fetch_or(builtin.gc.start_word_at(base, word), mask)
+    if marked { __atomic_fetch_or(builtin.gc.mark_word_at(base, word), mask) }
+    return header
+}
+
+comptime {
+} else {
+    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[builtin.gc.Heap] = created.get()
+        let mapped: Ref[byte]? = builtin.os.map_zeroed(
+            builtin.gc.block_bytes, builtin.gc.block_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let end: Ref[byte] = __gc_byte_offset(base, builtin.gc.block_bytes)
+            assert builtin.gc.registry.region_add(heap, base, end)
+            let block: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(base)
+            builtin.gc.block_init(heap, block)
+
+            let first: uint = builtin.gc.header_lines() * builtin.gc.line_bytes
+            let dead: uint = first + 64
+            let black: uint = first + 128
+            place_object(base, first, 32, true)
+            place_object(base, dead, 16, false)
+            place_object(base, black, 144, true)
+            let epoch: u32 = heap.epoch
+            __atomic_store(ref block.black_epoch, epoch)
+            block.sweep_epoch = epoch - 1
+            __atomic_store(ref heap.nunswept, 1)
+
+            builtin.gc.collect.sweep_block(heap, block, epoch)
+            assert builtin.gc.object_started(base, first)
+            assert !builtin.gc.object_started(base, dead)
+            assert builtin.gc.object_started(base, black)
+            let usable: uint = builtin.gc.block_bytes / builtin.gc.line_bytes - builtin.gc.header_lines()
+            assert cast[uint](block.free_lines) == usable - 4
+            assert __atomic_load(ref heap.nunswept) == 0
+            assert block.sweep_epoch == epoch
+
+            heap.cfg.poison_free = true
+            heap.epoch = epoch + 1
+            __atomic_store(ref heap.nunswept, 1)
+            builtin.gc.collect.sweep_block(heap, block, heap.epoch)
+            assert !builtin.gc.object_started(base, first)
+            assert !builtin.gc.object_started(base, black)
+            assert cast[uint](block.free_lines) == usable
+            assert __atomic_load(ref heap.nunswept) == 0
+            assert ref_read(__gc_byte_offset(base, first)) == cast[byte](0xdb)
+
+            heap.cfg.poison_free = false
+            heap.epoch += 1
+            heap.sweep_cursor = block
+            heap.keep_bytes = builtin.gc.committed_bytes(heap)
+            __atomic_store(ref heap.nunswept, 1)
+            __atomic_store(ref heap.phase, cast[u32](builtin.gc.Phase.sweeping))
+            assert builtin.gc.collect.sweep_some(heap, 1)
+            assert __atomic_load(ref heap.phase) == cast[u32](builtin.gc.Phase.idle)
+            assert block.state == cast[u8](builtin.gc.Block_State.free)
+            assert heap.nfree == 1
+            assert cast[uint](block.free_lines) == usable
+            assert __atomic_load(ref heap.nunswept) == 0
+            builtin.gc.collect.sweep_all(heap)
+
+            heap.free_blocks = nil
+            heap.nfree = 0
+            builtin.gc.alloc.block_release(heap, block)
+        } else { require false }
+        builtin.gc.heap.destroy(heap)
+        __fd_write(2, "ok")
+    } else { require false }
+}

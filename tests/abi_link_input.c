@@ -409,7 +409,8 @@ test_cycle_selection(char **paths, const char *linked_path)
     n00bb_abi_manifest_rows_release(&manifests);
     n00bb_abi_merged_rows_t merged = {0};
     assert(n00bb_abi_merge_rows(&selected, plan, &merged));
-    assert(n00bb_abi_rebase_native_references(&merged, nullptr, 0, nullptr));
+    assert(n00bb_abi_rebase_native_references(&merged, nullptr, 0,
+                                               nullptr, nullptr));
     n00bb_abi_native_sections_t native_sections = {0};
     assert(n00bb_abi_collect_native_sections(&selected, &target,
         &native_sections));
@@ -3815,7 +3816,7 @@ main(int argc, char **argv)
     n00bb_abi_merged_rows_t exports_merged = {0};
     assert(n00bb_abi_merge_rows(&selected, plan, &exports_merged)
         && n00bb_abi_rebase_native_references(&exports_merged,
-            native_sections.maps, native_sections.count, nullptr));
+            native_sections.maps, native_sections.count, nullptr, nullptr));
     const n00bb_abi_merged_table_t *export_bindings =
         n00bb_abi_merged_table(&exports_merged,
             N00B_ABI_TABLE_NATIVE_BINDING);
@@ -3939,7 +3940,7 @@ main(int argc, char **argv)
         }
     }
     assert(map_count && !n00bb_abi_rebase_native_references(
-        &merged, nullptr, 0, nullptr));
+        &merged, nullptr, 0, nullptr, nullptr));
     const n00b_abi_storage_v1 *first_storage =
         n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_STORAGE, 1);
     bool duplicated = false;
@@ -3953,9 +3954,9 @@ main(int argc, char **argv)
     }
     assert(duplicated);
     assert(!n00bb_abi_rebase_native_references(
-        &merged, maps, map_count + 1, nullptr));
+        &merged, maps, map_count + 1, nullptr, nullptr));
     assert(n00bb_abi_rebase_native_references(&merged, maps, map_count,
-        nullptr));
+        nullptr, nullptr));
     for (size_t ti = 0; ti < sizeof(native_tables) / sizeof(*native_tables);
          ti++) {
         const n00bb_abi_merged_table_t *table = native_tables[ti];

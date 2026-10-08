@@ -1,0 +1,27 @@
+import builtin.abi
+
+comptime {
+} else {
+    let maybe_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(0)
+    if maybe_row != nil {
+        let row: Ref[builtin.abi.Type_Record] = maybe_row.get()
+        assert __abi_ref_address(row) != 0
+        let bits: Ref[u64] = ref row.size_bits
+        assert __abi_ref_address(bits) != 0
+        let zero: u64 = 0
+        assert row.size_bits == zero
+        assert builtin.abi.range_index(row.components, 0) == builtin.abi.range_index(row.components, 1)
+    } else {
+        assert false
+    }
+    let array_probe: Ref[builtin.abi.Array_Descriptor_Header]? = nil
+    let array_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(array_probe))
+    if array_row != nil {
+        let expected_size: uint = 24
+        assert builtin.abi.size_bytes(array_row.get()) == expected_size
+    } else {
+        require false
+    }
+    assert builtin.abi.frame_layout_at(0) == nil
+    assert __abi_bytes(0, 0xffffffff) == nil
+}

@@ -1,0 +1,15 @@
+public trait Raw_Repr {
+    func raw_repr(self: `T, fd: i32) -> i32
+}
+
+public func raw_repr(self: string, fd: i32) -> i32 {
+    return __fd_write(fd, self)
+}
+
+public func raw_repr(self: `T, fd: i32) -> i32 {
+    return __repr_default(self, fd)
+}
+
+func __raw_repr_dispatch(value: Raw_Repr, fd: i32) -> i32 {
+    return value.raw_repr(fd)
+}

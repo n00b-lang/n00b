@@ -142,7 +142,8 @@ main(void)
     module_alias->type = module_placeholder;
     synthetic->type = synthetic_type;
     synthetic->is_synthetic = true;
-    assert(n00bb_abi_type_index_collect_symbols(index, symbols));
+    assert(n00bb_abi_type_index_collect_symbols(index, symbols,
+                                                 nullptr, nullptr));
     uint32_t string_index = UINT32_MAX;
     uint32_t missing_index = UINT32_MAX;
     assert(n00bb_abi_type_index_find(index, string, &string_index));

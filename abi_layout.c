@@ -402,6 +402,12 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         }
         bool atomic = name && !strcmp(name, "atomic");
         th_type *definition = ir_type_definition(module, type);
+        if (atomic && !definition) {
+            const th_arg *element = arguments == 1
+                ? th_named_arg(type, 0) : nullptr;
+            if (!element || element->kind != TH_ARG_TYPE) return false;
+            definition = element->type;
+        }
         if (!definition) return true;
         if (th_kind_of(definition) == TH_RECORD && !atomic) return true;
         bool found = false;
@@ -517,30 +523,85 @@ n00bb_abi_publish_record_layout(
         ? core_alloc_array(n00bb_record_placement_t, count) : nullptr;
     const ir_final_layout_t **children = count
         ? core_alloc_array(const ir_final_layout_t *, count) : nullptr;
+    uint64_t *inline_strides = count
+        ? core_alloc_array(uint64_t, count) : nullptr;
     ir_final_member_layout_t *final_members = count
         ? core_alloc_array(ir_final_member_layout_t, count) : nullptr;
-    bool ok = !count || (fields && placements && children && final_members);
+    bool ok = !count || (fields && placements && children && inline_strides
+                         && final_members);
     size_t occupied_count = 0, reserved_count = 0;
     for (size_t i = 0; ok && i < count; i++) {
-        children[i] = ir_layout_final(module, members[i].type,
-                                      target->triple);
+        bool inline_array = members[i].inline_element_count != 0;
+        th_type *storage_type = inline_array
+            ? members[i].inline_element_type : members[i].type;
+        children[i] = storage_type
+            ? ir_layout_final(module, storage_type, target->triple) : nullptr;
         const ir_final_layout_t *child = children[i];
         bool packed = members[i].packed;
         if (!members[i].name || !members[i].type || !child
+            || (inline_array != (members[i].inline_element_type != nullptr))
+            || (inline_array && packed)
             || (policy == N00BB_RECORD_C
                 && (!members[i].c_compatible || packed
                     || child->intrinsic_bits % 8))
             || (packed && (child->n_occupied != 1
                            || child->occupied[0].offset
                            || child->n_reserved
-                           || !child->occupied[0].width))
-            || child->n_occupied > SIZE_MAX - occupied_count
-            || child->n_reserved > SIZE_MAX - reserved_count) {
+                           || !child->occupied[0].width))) {
             ok = false;
             break;
         }
-        occupied_count += child->n_occupied;
-        reserved_count += child->n_reserved;
+        uint64_t stride = 0;
+        uint64_t child_stride = 0;
+        bool bit_packed = inline_array && policy != N00BB_RECORD_C
+            && n00bb_abi_layout_packable(child);
+        if (bit_packed) {
+            const char *name = nullptr;
+            th_type *resolved = th_resolve(storage_type);
+            if (th_named_info(resolved, &name, nullptr, nullptr, nullptr)
+                && name && !strcmp(name, "atomic")) bit_packed = false;
+        }
+        if (inline_array) {
+            if (bit_packed) stride = child->occupied[0].width;
+            else if (!ir_layout_final_stride_bits(child, &stride)) {
+                ok = false;
+                break;
+            }
+            if (!stride || members[i].inline_element_count
+                > UINT64_MAX / stride) {
+                ok = false;
+                break;
+            }
+        }
+        else if (!packed && !ir_layout_final_stride_bits(child,
+                                                           &child_stride)) {
+            ok = false;
+            break;
+        }
+        inline_strides[i] = stride;
+        uint64_t repetitions = inline_array
+            ? members[i].inline_element_count : 1;
+        bool contiguous = inline_array && child->n_occupied == 1
+            && !child->occupied[0].offset
+            && child->occupied[0].width == stride && !child->n_reserved;
+        size_t member_runs = contiguous ? 1 : child->n_occupied;
+        size_t member_reserved = child->n_reserved;
+        if ((!contiguous && repetitions > SIZE_MAX / (member_runs
+                    ? member_runs : 1))
+            || repetitions > SIZE_MAX / (member_reserved
+                    ? member_reserved : 1)) {
+            ok = false;
+            break;
+        }
+        if (!contiguous) member_runs *= (size_t)repetitions;
+        member_reserved *= (size_t)repetitions;
+        if (member_runs > SIZE_MAX - occupied_count
+            || member_reserved > SIZE_MAX - reserved_count) {
+            ok = false;
+            break;
+        }
+        occupied_count += member_runs;
+        reserved_count += member_reserved;
         uint64_t value_bits = 0;
         for (size_t j = 0; j < child->n_occupied; j++) {
             if (child->occupied[j].width > UINT64_MAX - value_bits) {
@@ -549,16 +610,20 @@ n00bb_abi_publish_record_layout(
             }
             value_bits += child->occupied[j].width;
         }
-        if (!ok) break;
+        if (!ok || value_bits > UINT64_MAX / repetitions) {
+            ok = false;
+            break;
+        }
         fields[i] = (n00bb_record_field_t){
             .normalized_name = members[i].name,
             .child_typehash = th_hash(ir_module_types(module),
                                       members[i].type),
             .declaration_ordinal = members[i].ordinal,
-            .extent_bits = packed ? child->occupied[0].width
-                                  : child->intrinsic_bits,
-            .occupied_bits = value_bits,
-            .alignment_bits = packed ? 1
+            .extent_bits = inline_array ? stride * repetitions
+                         : packed ? child->occupied[0].width
+                                  : child_stride,
+            .occupied_bits = value_bits * repetitions,
+            .alignment_bits = packed || bit_packed ? 1
                                      : (uint64_t)child->alignment_bytes * 8,
             .c_compatible = members[i].c_compatible,
         };
@@ -580,6 +645,14 @@ n00bb_abi_publish_record_layout(
     for (size_t i = 0; ok && i < count; i++) {
         const ir_final_layout_t *child = children[i];
         uint64_t base = placements[i].bit_offset;
+        uint64_t repetitions = members[i].inline_element_count
+            ? members[i].inline_element_count : 1;
+        uint64_t stride = inline_strides[i];
+        bool contiguous = stride && child->n_occupied == 1
+            && !child->occupied[0].offset
+            && child->occupied[0].width == stride && !child->n_reserved;
+        size_t member_runs = contiguous ? 1
+            : child->n_occupied * (size_t)repetitions;
         if (fields[i].extent_bits
             && (base > placement.intrinsic_bits
                 || fields[i].extent_bits > placement.intrinsic_bits - base)) {
@@ -591,23 +664,37 @@ n00bb_abi_publish_record_layout(
             .type = members[i].type,
             .ordinal = members[i].ordinal,
             .bit_offset = base,
+            .inline_element_type = members[i].inline_element_type,
+            .inline_element_count = members[i].inline_element_count,
+            .inline_element_stride_bits = stride,
             .occupied = member_occupied
                 ? member_occupied + occupied_at : nullptr,
-            .n_occupied = child->n_occupied,
+            .n_occupied = member_runs,
         };
-        for (size_t j = 0; j < child->n_occupied; j++) {
+        if (contiguous) {
             ir_layout_bit_run_t run = {
-                .offset = base + child->occupied[j].offset,
-                .width = child->occupied[j].width,
+                .offset = base,
+                .width = fields[i].extent_bits,
             };
             member_occupied[occupied_at] = run;
             occupied[occupied_at++] = run;
         }
-        for (size_t j = 0; j < child->n_reserved; j++) {
-            reserved[reserved_at++] = (ir_layout_bit_run_t){
-                .offset = base + child->reserved[j].offset,
-                .width = child->reserved[j].width,
-            };
+        else for (uint64_t k = 0; k < repetitions; k++) {
+            uint64_t element_base = base + k * stride;
+            for (size_t j = 0; j < child->n_occupied; j++) {
+                ir_layout_bit_run_t run = {
+                    .offset = element_base + child->occupied[j].offset,
+                    .width = child->occupied[j].width,
+                };
+                member_occupied[occupied_at] = run;
+                occupied[occupied_at++] = run;
+            }
+            for (size_t j = 0; j < child->n_reserved; j++) {
+                reserved[reserved_at++] = (ir_layout_bit_run_t){
+                    .offset = element_base + child->reserved[j].offset,
+                    .width = child->reserved[j].width,
+                };
+            }
         }
     }
     if (ok && occupied_count)
@@ -641,6 +728,7 @@ n00bb_abi_publish_record_layout(
     core_free(member_occupied);
     core_free(occupied);
     core_free(final_members);
+    core_free(inline_strides);
     core_free(children);
     core_free(placements);
     core_free(fields);

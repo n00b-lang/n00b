@@ -119,7 +119,7 @@ main(void)
     field_symbol->type = th_bitint(types, 32, true);
     n00bb_abi_type_index_t *type_index = n00bb_abi_type_index_new(module);
     assert(type_index && n00bb_abi_type_index_collect_symbols(type_index,
-                                                                symtab));
+                                             symtab, nullptr, nullptr));
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t type_rows = {0};
     assert(n00bb_abi_type_identity_rows_build(type_index, nullptr,

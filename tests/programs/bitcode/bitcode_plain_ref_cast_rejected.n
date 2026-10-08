@@ -1,0 +1,10 @@
+import builtin.os
+
+comptime {
+} else {
+    let mapped: Ref[byte]? = builtin.os.map_zeroed(64, 0)
+    if mapped != nil {
+        let word: Ref[u64] = cast[Ref[u64]] mapped.get()
+        assert word == word
+    }
+}

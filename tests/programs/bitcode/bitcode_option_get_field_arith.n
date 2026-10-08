@@ -1,0 +1,54 @@
+import builtin.abi
+
+func rounded_bytes(index: u32) -> uint {
+    let found: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(index)
+    if found != nil {
+        return cast[uint]((found.get().size_bits + 7) / 8)
+    }
+    return 0
+}
+
+func combined_bytes(first_index: u32, second_index: u32) -> uint {
+    let first: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(first_index)
+    let second: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(second_index)
+    if first != nil and second != nil {
+        return cast[uint]((first.get().size_bits + second.get().size_bits) / 8)
+    }
+    return 0
+}
+
+func combined_bytes_else(first_index: u32, second_index: u32) -> uint {
+    let first: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(first_index)
+    let second: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(second_index)
+    if first == nil or second == nil {
+        return 0
+    } else {
+        return cast[uint]((first.get().size_bits + second.get().size_bits) / 8)
+    }
+}
+
+func first_bytes_after_elif(first_index: u32, second_index: u32) -> uint {
+    let first: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(first_index)
+    let second: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(second_index)
+    if first == nil {
+        return 0
+    } elif second == nil {
+        return 0
+    } else {
+        return cast[uint](first.get().size_bits / 8)
+    }
+}
+
+comptime {
+} else {
+    let sample: byte = 0
+    assert rounded_bytes(cast[u32](typeof(sample))) == 1
+    let wider: u32 = 0
+    assert combined_bytes(cast[u32](typeof(sample)),
+        cast[u32](typeof(wider))) == 5
+    assert combined_bytes_else(cast[u32](typeof(sample)),
+        cast[u32](typeof(wider))) == 5
+    assert first_bytes_after_elif(cast[u32](typeof(sample)),
+        cast[u32](typeof(wider))) == 1
+    __fd_write(2, "ok")
+}

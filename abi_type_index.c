@@ -438,7 +438,9 @@ n00bb_abi_type_index_symbol_type(n00bb_abi_type_index_t *index,
 
 bool
 n00bb_abi_type_index_collect_symbols(n00bb_abi_type_index_t *index,
-                                       const parse_symtab_t *symbols)
+                                       const parse_symtab_t *symbols,
+                                       n00bb_abi_symbol_selector_fn select,
+                                       void *context)
 {
     if (!index || !symbols || index->failed) return false;
     for (const parse_scope_t *scope = symbols->all_scopes;
@@ -449,6 +451,9 @@ n00bb_abi_type_index_collect_symbols(n00bb_abi_type_index_t *index,
                 || symbol->kind == PARSE_SYM_MODULE)
                 continue;
             if (!symbol->decl_node && !symbol->definition_count) continue;
+            bool include = true;
+            if (select && !select(context, symbol, &include)) return false;
+            if (!include) continue;
             th_type *type = declaration_type(index, symbol, symbol->type);
             if (!type || !add_type(index, type, nullptr)) return false;
             core_dict_put(&index->symbol_types, (void *)symbol, type);

@@ -1,0 +1,102 @@
+import builtin.gc
+import builtin.gc.collect
+import builtin.gc.heap
+import builtin.gc.mutator
+import builtin.gc.registry
+import builtin.os
+
+func add_block(heap: Ref[builtin.gc.Heap]) -> Ref[builtin.gc.Block_Metadata] {
+    let mapped: Ref[byte]? = builtin.os.map_zeroed(
+        builtin.gc.block_bytes, builtin.gc.block_bytes)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let end: Ref[byte] = __gc_byte_offset(base, builtin.gc.block_bytes)
+        let registered: bool = builtin.gc.registry.region_add(heap, base, end)
+        require registered
+        let block: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(base)
+        builtin.gc.block_init(heap, block)
+        return block
+    }
+    require false
+}
+
+comptime {} else {
+    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[builtin.gc.Heap] = created.get()
+        assert heap.epoch == 1
+        assert heap.mark_epoch == 1
+        heap.hs_rounds = 3
+        heap.hs_stragglers = 2
+        __atomic_store(ref heap.cnt_objects, 9)
+        builtin.gc.collect.begin_epoch_locked(heap)
+        assert heap.epoch == 1
+        assert heap.mark_epoch == 2
+        assert __atomic_load(ref heap.cnt_objects) == 0
+        assert heap.cycle.epoch == 2
+        assert heap.cycle.rounds == 3
+        assert heap.cycle.stragglers == 2
+        assert heap.cycle_start != 0
+        let block: Ref[builtin.gc.Block_Metadata] = add_block(heap)
+        let base: Ref[byte] = unsafe_cast[Ref[byte]] block
+        let first: uint = builtin.gc.header_lines()
+        var bump: builtin.gc.Bump
+        bump.cursor = __gc_byte_offset(base,
+            first * builtin.gc.line_bytes + 64)
+        bump.limit = __gc_byte_offset(base,
+            (first + 2) * builtin.gc.line_bytes)
+        var marker: builtin.gc.Marker
+        marker.heap = heap
+        builtin.gc.collect.reserve_bump(ref marker, ref bump, false)
+        assert builtin.gc.line_marked_in(base, first, heap.mark_epoch)
+        assert builtin.gc.line_marked_in(base, first + 1, heap.mark_epoch)
+        assert !builtin.gc.line_marked_in(base, first + 2, heap.mark_epoch)
+        let attached: Ref[builtin.gc.Mutator]? = builtin.gc.mutator.create(heap)
+        if attached != nil {
+            let mutator: Ref[builtin.gc.Mutator] = attached.get()
+            mutator.overflow.blk = block
+            mutator.overflow.cursor = __gc_byte_offset(base,
+                (first + 3) * builtin.gc.line_bytes + 16)
+            mutator.overflow.limit = __gc_byte_offset(base,
+                (first + 5) * builtin.gc.line_bytes)
+            builtin.gc.collect.reserve_bumps(ref marker)
+            assert builtin.gc.line_marked_in(base, first + 4, heap.mark_epoch)
+            assert !builtin.gc.line_marked_in(base, first + 5, heap.mark_epoch)
+            mutator.write_buffer_epoch = heap.mark_epoch
+            ref_write(ref mutator.write_buffer[0], nil)
+            mutator.write_buffer_count = 1
+            builtin.gc.collect.drain_barrier_buffers(ref marker)
+            assert mutator.write_buffer_count == 0
+            builtin.gc.mutator.destroy(mutator)
+        } else { require false }
+
+        __atomic_store(ref heap.marking, true)
+        heap.black_alloc = true
+        __atomic_store(ref heap.cnt_objects, 4)
+        __atomic_store(ref heap.cnt_bytes, 128)
+        heap.alloc_since_gc = 256
+        builtin.gc.collect.end_epoch_locked(heap)
+        assert heap.epoch == 2
+        assert !__atomic_load(ref heap.marking)
+        assert !heap.black_alloc
+        assert heap.collections == 1
+        assert heap.last_marked_objects == 4
+        assert heap.last_marked_bytes == 128
+        assert heap.cycle.marked_objects == 4
+        assert heap.cycle.marked_bytes == 128
+        assert heap.cycle.allocated_bytes == 256
+        assert heap.live_bytes == 128
+        assert heap.alloc_since_gc == 0
+        assert __atomic_load(ref heap.nunswept) == 1
+        let cursor: Ref[builtin.gc.Block_Metadata]? = heap.sweep_cursor
+        if cursor != nil { assert cursor.get() == block }
+        else { require false }
+        assert __atomic_load(ref heap.phase) == cast[u32](builtin.gc.Phase.sweeping)
+        builtin.gc.collect.sweep_all(heap)
+        assert __atomic_load(ref heap.phase) == cast[u32](builtin.gc.Phase.idle)
+        assert __atomic_load(ref heap.nunswept) == 0
+        assert block.sweep_epoch == heap.epoch
+        builtin.gc.heap.destroy(heap)
+        __fd_write(2, "ok")
+    } else { require false }
+}

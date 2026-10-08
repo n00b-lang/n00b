@@ -1,0 +1,6 @@
+import builtin.io.raw
+
+comptime {
+} else {
+    "string\n".raw_repr(2147483648)
+}

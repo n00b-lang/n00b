@@ -1,0 +1,16 @@
+type Pair layout(c) {
+    left: int
+    right: int
+}
+
+func second() -> int {
+    var pair: Pair
+    pair.left = 1
+    pair.right = 3
+    return pair.right
+}
+
+comptime {
+} else {
+    assert second() == 3
+}

@@ -6,6 +6,7 @@
 
 #include "abi_directory.h"
 #include "n00b-abi-v1.h"
+#include "builtin_abi.h"
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -834,6 +835,13 @@ main(int argc, char **argv)
     assert(snapshot && n00b_abi_v1_generation(snapshot) == 1
         && n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE) == 6
         && n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_MODULE) == 2);
+    const n00b_abi_frame_layout_v1 *frame =
+        n00b_builtin_abi_frame_layout(1);
+    const uint8_t *bitmap = n00b_builtin_abi_bytes(3, 1);
+    assert(frame && frame->frame_byte_extent == 16
+        && frame->pointer_bitmap_bytes.first == 3
+        && frame->pointer_bitmap_bytes.count == 1
+        && bitmap && bitmap[0] == 1);
     uint32_t width = 0;
     const n00b_abi_type_v1 *nil = n00b_abi_v1_record(snapshot,
         N00B_ABI_TABLE_TYPE, 0, &width);

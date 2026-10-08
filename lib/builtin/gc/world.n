@@ -1,0 +1,40 @@
+import builtin.gc
+import builtin.os
+
+var world_owner: Atomic[uint] = 0
+
+public func stop(heap: Ref[builtin.gc.Heap]) {
+    let owner: uint = builtin.os.thread_id()
+    require owner != 0
+    while !__atomic_compare_exchange(ref world_owner, 0, owner) {
+        builtin.os.cpu_relax()
+    }
+
+    let timeout_ns: u64 = cast[u64](heap.cfg.world_timeout_ms) * 1000000
+    var current: Ref[builtin.gc.Mutator]? = heap.mutators
+    while current != nil {
+        let mutator: Ref[builtin.gc.Mutator] = current.get()
+        if mutator.thread_primary and mutator.thread_id != owner {
+            require builtin.os.thread_suspend(mutator.thread_control,
+                                              ref mutator.captured,
+                                              timeout_ns) == 0
+            mutator.ctx_valid = true
+        }
+        current = mutator.next
+    }
+}
+
+public func start(heap: Ref[builtin.gc.Heap]) {
+    let owner: uint = builtin.os.thread_id()
+    require __atomic_load(ref world_owner) == owner
+    var current: Ref[builtin.gc.Mutator]? = heap.mutators
+    while current != nil {
+        let mutator: Ref[builtin.gc.Mutator] = current.get()
+        if mutator.ctx_valid {
+            require builtin.os.thread_resume(mutator.thread_control,
+                                             ref mutator.captured) == 0
+        }
+        current = mutator.next
+    }
+    __atomic_store(ref world_owner, 0)
+}

@@ -79,6 +79,13 @@ trace_member(const trace_source_t *source, uint32_t type_index,
         ? &source->fields->data[index] : nullptr;
 }
 
+static uint32_t
+trace_member_type(const n00b_abi_field_v1 *field)
+{
+    return field->inline_element_count
+        ? field->inline_element_type_index : field->child_type_index;
+}
+
 static trace_need_t
 trace_need(trace_source_t *source, uint32_t type_index)
 {
@@ -116,7 +123,7 @@ trace_need(trace_source_t *source, uint32_t type_index)
             const n00b_abi_field_v1 *field = trace_member(source,
                 type_index, i);
             trace_need_t child = field
-                ? trace_need(source, field->child_type_index)
+                ? trace_need(source, trace_member_type(field))
                 : TRACE_INVALID;
             if (child == TRACE_INVALID || child == TRACE_UNKNOWN) {
                 result = child;
@@ -169,18 +176,30 @@ trace_child_append(const trace_source_t *source,
                    n00b_abi_range_v1 *range)
 {
     const n00b_abi_type_v1 *parent = &source->types->rows[parent_type_index];
-    const n00b_abi_type_v1 *child = &source->types->rows[
-        field->child_type_index];
+    uint32_t child_index = trace_member_type(field);
+    if (child_index >= source->types->count) return false;
+    const n00b_abi_type_v1 *child = &source->types->rows[child_index];
     uint64_t offset = field->logical_bit_offset;
+    uint64_t count = field->inline_element_count
+        ? field->inline_element_count : 1;
+    uint64_t stride = field->inline_element_count
+        ? field->inline_element_stride_bits : 0;
+    if (count > 1 && (!stride || (count - 1)
+        > (UINT64_MAX - offset) / stride)) return false;
+    uint64_t last = offset + (count - 1) * stride;
     if (offset % 8 || !child->alignment_bytes
         || (offset / 8) % child->alignment_bytes
-        || offset > parent->size_bits
-        || child->size_bits > parent->size_bits - offset
+        || (stride && (stride % 8
+            || (stride / 8) % child->alignment_bytes))
+        || last > parent->size_bits
+        || child->size_bits > parent->size_bits - last
         || children->len >= UINT32_MAX) return false;
     uint32_t index = (uint32_t)children->len;
     core_list_push(*children, ((n00b_abi_trace_child_v1){
         .byte_offset = offset / 8,
-        .child_type_index = field->child_type_index,
+        .child_type_index = child_index,
+        .repeat_count = field->inline_element_count,
+        .stride_bits = stride,
     }));
     return trace_index_append(stream_base, indexes, index, range);
 }
@@ -254,7 +273,7 @@ append_traces(trace_source_t *source,
             n00b_abi_range_v1 *range = &trace->fixed_children;
             n00b_abi_trace_arm_v1 arm = {0};
             if (variant) range = &arm.children;
-            if (trace_need(source, field->child_type_index)
+            if (trace_need(source, trace_member_type(field))
                 == TRACE_PRESENT
                 && !trace_child_append(source, type_index, field,
                     stream_base, children, indexes, range)) return false;
@@ -336,10 +355,17 @@ same_layout(ir_module_t *module, const ir_final_layout_t *left,
         const ir_final_member_layout_t *b = &right->members[i];
         if (!same_name(a->name, b->name) || a->ordinal != b->ordinal
             || a->bit_offset != b->bit_offset
+            || a->inline_element_count != b->inline_element_count
+            || a->inline_element_stride_bits
+                != b->inline_element_stride_bits
             || a->n_occupied != b->n_occupied
             || a->n_accesses != b->n_accesses
             || !same_runs(a->occupied, b->occupied, a->n_occupied)
             || !same_accesses(a->accesses, b->accesses, a->n_accesses)
+            || (a->inline_element_type != b->inline_element_type
+                && (!a->inline_element_type || !b->inline_element_type
+                    || ir_type_id(module, a->inline_element_type)
+                        != ir_type_id(module, b->inline_element_type)))
             || (a->type != b->type
                 && (!a->type || !b->type
                     || ir_type_id(module, a->type)
@@ -480,6 +506,12 @@ build_member_row(n00bb_abi_type_index_t *index,
             row->visibility = N00B_ABI_VISIBILITY_PACKAGE;
         if (!member->type || !n00bb_abi_type_index_find(index, member->type,
                                                          &row->child_type_index)
+            || (member->inline_element_count
+                && (!member->inline_element_type
+                    || !member->inline_element_stride_bits
+                    || !n00bb_abi_type_index_find(index,
+                        member->inline_element_type,
+                        &row->inline_element_type_index)))
             || (member->name && !n00bb_abi_name_pool_encode(names,
                 core_string_borrow(member->name, strlen(member->name)),
                 table_kind, row_index,
@@ -490,6 +522,8 @@ build_member_row(n00bb_abi_type_index_t *index,
             || !append_runs(member->occupied, member->n_occupied,
                 final->intrinsic_bits, stream_base, physical, indexes,
                 &row->physical_runs)) return false;
+    row->inline_element_count = member->inline_element_count;
+    row->inline_element_stride_bits = member->inline_element_stride_bits;
     return true;
 }
 
@@ -602,7 +636,11 @@ n00bb_abi_type_layout_rows_build(
             type);
         if ((!types->owners || !types->owners[i])
             && definition_owner && definition_owner != runtime
-            && definition_owner != comptime) continue;
+            && definition_owner != comptime
+            && types->rows[i].kind != N00B_ABI_TYPE_ATOMIC) {
+            types->rows[i].flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
+            continue;
+        }
         const ir_final_layout_t *final = ir_layout_final(
             runtime, type, ir_module_target(runtime));
         const ir_final_layout_t *compile_layout = comptime

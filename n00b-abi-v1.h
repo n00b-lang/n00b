@@ -476,6 +476,10 @@ typedef struct {
     uint64_t logical_bit_offset;
     n00b_abi_range_v1 packed_runs;
     n00b_abi_range_v1 physical_runs;
+    uint32_t inline_element_type_index;
+    uint32_t inline_reserved_zero;
+    uint64_t inline_element_count;
+    uint64_t inline_element_stride_bits;
 } n00b_abi_field_v1;
 
 typedef struct {
@@ -513,6 +517,8 @@ typedef struct {
     uint64_t byte_offset;
     uint32_t child_type_index;
     uint32_t reserved_zero;
+    uint64_t repeat_count;
+    uint64_t stride_bits;
 } n00b_abi_trace_child_v1;
 
 typedef struct {
@@ -789,6 +795,12 @@ int32_t n00b_abi_v1_string_bytes(const n00b_abi_snapshot_v1 *snapshot,
  * including a possible short write, or -1 on failure. No libc is required. */
 int32_t n00b_abi_v1_raw_fd_write(int32_t fd, n00b_abi_string_v1 text);
 
+typedef enum {
+    N00B_ABI_ALLOCATOR_NONE = 0,
+    N00B_ABI_ALLOCATOR_GC = 1,
+    N00B_ABI_ALLOCATOR_USER = 2,
+} n00b_abi_allocator_v1;
+
 void *n00b_allocate(uint32_t allocator, uint32_t type_index,
                     uint64_t byte_size, uint32_t alignment,
                     const void *instance_descriptor);
@@ -931,13 +943,13 @@ _Static_assert(sizeof(n00b_abi_packed_run_v1) == 24, "packed run width");
 _Static_assert(offsetof(n00b_abi_packed_run_v1, width_bits) == 16,
                "packed run width offset");
 _Static_assert(sizeof(n00b_abi_physical_run_v1) == 16, "physical run width");
-_Static_assert(sizeof(n00b_abi_field_v1) == 64, "field width");
-_Static_assert(sizeof(n00b_abi_arm_v1) == 72, "arm width");
+_Static_assert(sizeof(n00b_abi_field_v1) == 88, "field width");
+_Static_assert(sizeof(n00b_abi_arm_v1) == 96, "arm width");
 _Static_assert(sizeof(n00b_abi_tag_extractor_v1) == 32, "tag width");
 _Static_assert(offsetof(n00b_abi_tag_extractor_v1, kind) == 28,
                "tag kind offset");
 _Static_assert(sizeof(n00b_abi_trace_v1) == 40, "trace width");
-_Static_assert(sizeof(n00b_abi_trace_child_v1) == 16, "trace child width");
+_Static_assert(sizeof(n00b_abi_trace_child_v1) == 32, "trace child width");
 _Static_assert(sizeof(n00b_abi_trace_arm_v1) == 16, "trace arm width");
 _Static_assert(sizeof(n00b_abi_function_v1) == 96, "function width");
 _Static_assert(sizeof(n00b_abi_parameter_v1) == 40, "parameter width");

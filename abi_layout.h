@@ -10,6 +10,8 @@ typedef struct {
     uint32_t ordinal;
     bool c_compatible;
     bool packed;
+    th_type *inline_element_type;
+    uint64_t inline_element_count;
 } n00bb_abi_record_member_t;
 
 typedef struct {

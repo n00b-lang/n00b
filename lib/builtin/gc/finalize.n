@@ -1,0 +1,164 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.heap
+import builtin.gc.mark
+import builtin.gc.sync
+
+func list_push(heap: Ref[builtin.gc.Heap], block: Ref[builtin.gc.Block_Metadata]) {
+    var head: Ref[builtin.gc.Block_Metadata]? = __atomic_load(ref heap.final_blocks)
+    let item: Ref[builtin.gc.Block_Metadata]? = block
+    while true {
+        block.final_next = head
+        if __atomic_compare_exchange(ref heap.final_blocks, head, item) {
+            return
+        }
+        head = __atomic_load(ref heap.final_blocks)
+    }
+}
+
+public func note_block(heap: Ref[builtin.gc.Heap],
+                       block: Ref[builtin.gc.Block_Metadata]) {
+    if !__atomic_load(ref block.in_final) and
+        __atomic_compare_exchange(ref block.in_final, false, true) {
+        list_push(heap, block)
+    }
+}
+
+func final_entry_record() -> Ref[builtin.abi.Type_Record] {
+    let probe: Ref[builtin.gc.Final_Entry]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+    if row != nil { return row.get() }
+    require false
+}
+
+func final_entry_at(base: Ref[byte], index: uint) -> Ref[builtin.gc.Final_Entry] {
+    let stride: uint = builtin.abi.size_bytes(final_entry_record())
+    return unsafe_cast[Ref[builtin.gc.Final_Entry]] __gc_byte_offset(base, index * stride)
+}
+
+func collector_fin_lock(heap: Ref[builtin.gc.Heap]) -> bool {
+    if heap.fin_held { return false }
+    builtin.gc.sync.ticket_lock(ref heap.fin)
+    return true
+}
+
+func enqueue(heap: Ref[builtin.gc.Heap], payload: Ref[byte]) {
+    let row: Ref[builtin.abi.Type_Record] = final_entry_record()
+    let grown: bool = builtin.gc.heap.grow_array(ref heap.finq, ref heap.finq_cap,
+        builtin.abi.size_bytes(row), builtin.abi.alignment_bytes(row),
+        heap.finq_n, heap.finq_n + 1)
+    require grown
+    let storage: Ref[byte]? = heap.finq
+    if storage != nil {
+        final_entry_at(storage.get(), heap.finq_n).payload = payload
+        heap.finq_n += 1
+        if heap.finq_n == 1 { __atomic_store(ref heap.fin_notify, true) }
+        return
+    }
+    require false
+}
+
+func dead_in_block(marker: Ref[builtin.gc.Marker],
+                   block: Ref[builtin.gc.Block_Metadata]) {
+    let heap: Ref[builtin.gc.Heap] = marker.heap
+    let epoch: u32 = heap.mark_epoch
+    let have_marks: bool = __atomic_load(ref block.mark_epoch) == epoch
+    let first: uint = builtin.gc.header_lines() * builtin.gc.line_bytes / builtin.gc.granule_bytes / builtin.gc.word_bits
+    let words: uint = builtin.gc.block_bytes / builtin.gc.granule_bytes / builtin.gc.word_bits
+    let base: Ref[byte] = builtin.gc.block_base(block)
+    var index: uint = first
+    while index < words {
+        let starts: Ref[Atomic[u64]] = builtin.gc.start_word_at(base, index)
+        var dead: u64 = __atomic_load(starts)
+        if have_marks {
+            let marks: Ref[Atomic[u64]] = builtin.gc.mark_word_at(base, index)
+            dead = dead & ~__atomic_load(marks)
+        }
+        while dead != 0 {
+            let bit: uint = cast[uint](__count_trailing_zeros(cast[uint](dead)))
+            dead = dead & (dead - 1)
+            let offset: uint = (index * builtin.gc.word_bits + bit) * builtin.gc.granule_bytes
+            let header: Ref[builtin.gc.Object_Header] = builtin.gc.block_object_header_at(base, offset)
+            if (header.meta & builtin.gc.obj_final) != 0 {
+                header.meta = header.meta & ~builtin.gc.obj_final
+                __atomic_fetch_sub(ref block.nfinal, 1)
+                enqueue(heap, builtin.gc.payload_of(header))
+            }
+        }
+        index += 1
+    }
+}
+
+public func find_dead_locked(marker: Ref[builtin.gc.Marker]) {
+    let heap: Ref[builtin.gc.Heap] = marker.heap
+    let locked: bool = collector_fin_lock(heap)
+    let empty: Ref[builtin.gc.Block_Metadata]? = nil
+    var blocks: Ref[builtin.gc.Block_Metadata]? = __atomic_exchange(ref heap.final_blocks, empty)
+    let first: uint = heap.finq_n
+    while blocks != nil {
+        let block: Ref[builtin.gc.Block_Metadata] = blocks.get()
+        blocks = block.final_next
+        dead_in_block(marker, block)
+        if __atomic_load(ref block.nfinal) != 0 {
+            list_push(heap, block)
+        } else {
+            __atomic_store(ref block.in_final, false)
+            if __atomic_load(ref block.nfinal) != 0 { note_block(heap, block) }
+        }
+    }
+
+    var link: Ref[Ref[builtin.gc.Los_Obj]?] = ref heap.final_los
+    var candidate: Ref[builtin.gc.Los_Obj]? = ref_read(link)
+    while candidate != nil {
+        let object: Ref[builtin.gc.Los_Obj] = candidate.get()
+        if (object.hdr.meta & builtin.gc.obj_final) == 0 {
+            ref_write(link, object.final_next)
+        } elif __atomic_load(ref object.marked) != heap.mark_epoch {
+            object.hdr.meta = object.hdr.meta & ~builtin.gc.obj_final
+            enqueue(heap, builtin.gc.payload_of(ref object.hdr))
+            ref_write(link, object.final_next)
+        } else {
+            link = ref object.final_next
+        }
+        candidate = ref_read(link)
+    }
+
+    let storage: Ref[byte]? = heap.finq
+    if storage != nil {
+        var index: uint = first
+        while index < heap.finq_n {
+            builtin.gc.mark.mark_object(marker,
+                final_entry_at(storage.get(), index).payload)
+            index += 1
+        }
+    }
+    if locked { builtin.gc.sync.ticket_unlock(ref heap.fin) }
+}
+
+public func mark_locked(marker: Ref[builtin.gc.Marker]) {
+    let heap: Ref[builtin.gc.Heap] = marker.heap
+    let before: uint = marker.bytes
+    let locked: bool = collector_fin_lock(heap)
+    let storage: Ref[byte]? = heap.finq
+    if storage != nil {
+        var index: uint = 0
+        while index < heap.finq_n {
+            builtin.gc.mark.mark_object(marker,
+                final_entry_at(storage.get(), index).payload)
+            index += 1
+        }
+    }
+    var running: Ref[builtin.gc.Final_Batch]? = heap.running
+    while running != nil {
+        let batch: Ref[builtin.gc.Final_Batch] = running.get()
+        var index: uint = 0
+        while index < batch.n {
+            builtin.gc.mark.mark_object(marker,
+                final_entry_at(batch.objects, index).payload)
+            index += 1
+        }
+        running = batch.next
+    }
+    if locked { builtin.gc.sync.ticket_unlock(ref heap.fin) }
+    marker.bytes = before
+}

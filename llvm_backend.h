@@ -32,6 +32,7 @@ typedef struct {
     size_t string_offset_count;
     const uint8_t *byte_mask;
     bool comptime_consumer;
+    bool after_initializers;
 } n00bb_llvm_array_producer_t;
 
 typedef struct {
@@ -52,6 +53,11 @@ typedef struct {
     uint32_t index;
 } n00bb_llvm_type_index_t;
 
+typedef struct {
+    const ir_global_t *global;
+    const char *native_name;
+} n00bb_llvm_global_binding_t;
+
 n00bb_llvm_backend_t *n00bb_llvm_backend_prepare(
     const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
     bool debug_enabled, core_diagnostics_t *diagnostics);
@@ -62,6 +68,12 @@ bool n00bb_llvm_backend_bind_phase_arrays(
 bool n00bb_llvm_backend_bind_type_indices(
     n00bb_llvm_backend_t *backend, const n00bb_llvm_type_index_t *types,
     size_t count);
+bool n00bb_llvm_backend_bind_globals(
+    n00bb_llvm_backend_t *backend,
+    const n00bb_llvm_global_binding_t *globals, size_t count);
+bool n00bb_llvm_backend_bind_reachable_functions(
+    n00bb_llvm_backend_t *backend, bool comptime,
+    ir_func_t *const *functions, size_t count);
 
 /* Produces verified LLVM bitcode for a phase module. */
 bool n00bb_llvm_backend_write_bitcode(

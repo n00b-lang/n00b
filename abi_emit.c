@@ -917,6 +917,32 @@ recursive_scc_fragment(core_link_unit_t *link,
     return valid;
 }
 
+typedef struct {
+    const core_translation_unit_t *unit;
+    n00bb_abi_node_source_fn source;
+    void *context;
+} abi_symbol_owner_t;
+
+static bool
+symbol_in_unit(void *opaque, const parse_sym_entry_t *symbol,
+               bool *include)
+{
+    const abi_symbol_owner_t *owner = opaque;
+    parse_tree_t *node = symbol->decl_node;
+    if (!node && symbol->definition_count)
+        node = symbol->definition_nodes[0];
+    if (!node) {
+        *include = false;
+        return true;
+    }
+    const core_translation_unit_t *source_unit = nullptr;
+    parse_token_stream_t *tokens = nullptr;
+    if (!owner->source(owner->context, node, &source_unit, &tokens))
+        return false;
+    *include = source_unit == owner->unit;
+    return true;
+}
+
 bool
 n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
@@ -1103,6 +1129,9 @@ n00bb_abi_emit_unit(
         requirements = core_realloc(requirements,
             (import_count + reference_count + 1) * sizeof(*requirements));
     const char *failed_stage = "setup";
+    abi_symbol_owner_t symbol_owner = {
+        .unit = unit, .source = node_source, .context = source_context,
+    };
 #define ABI_STAGE(name, call) ((call) || ((failed_stage = name), false))
     bool valid = pool && type_index && requirement_capacity_valid
         && ABI_STAGE("comptime type collection",
@@ -1112,7 +1141,8 @@ n00bb_abi_emit_unit(
             n00bb_abi_type_index_collect_module_types(type_index,
                 (ir_module_t *)runtime_ir))
         && ABI_STAGE("symbol type collection",
-            n00bb_abi_type_index_collect_symbols(type_index, symbols))
+            n00bb_abi_type_index_collect_symbols(type_index, symbols,
+                node_source ? symbol_in_unit : nullptr, &symbol_owner))
         && ABI_STAGE("imported type collection",
             collect_imported_symbol_types(link, unit, type_index))
         && ABI_STAGE("direct type layouts",

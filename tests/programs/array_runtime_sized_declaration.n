@@ -1,0 +1,4 @@
+func allocate(count: uint) -> Array[byte] {
+    var bytes: byte[count] = new[byte[count]]()
+    return bytes
+}

@@ -1,0 +1,32 @@
+var shared: Ref[int]? = nil
+var retained_slot: Ref[Ref[int]?]? = nil
+
+func publish_value(slot: Ref[Ref[int]?]) {
+    ref_write(ref shared, ref_read(slot))
+}
+
+func publish_local() {
+    var target: int = 7
+    var slot: Ref[int]? = ref target
+    publish_value(ref slot)
+}
+
+func return_value(slot: Ref[Ref[int]?]) -> Ref[int]? {
+    return ref_read(slot)
+}
+
+func return_local() -> Ref[int]? {
+    var returned_target: int = 11
+    var returned_slot: Ref[int]? = ref returned_target
+    return return_value(ref returned_slot)
+}
+
+func retain_address(retained_address: Ref[Ref[int]?]) {
+    retained_slot = retained_address
+}
+
+func expose_slot() {
+    var retained_target: int = 13
+    var local_slot: Ref[int]? = ref retained_target
+    retain_address(ref local_slot)
+}

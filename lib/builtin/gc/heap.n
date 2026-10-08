@@ -1,0 +1,180 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.hash
+import builtin.gc.los
+import builtin.gc.mark
+import builtin.gc.registry
+import builtin.gc.roots
+import builtin.gc.sync
+import builtin.os
+
+const initial_heap_bytes: uint = 4 * 1024 * 1024
+const minimum_blocks: uint = 4
+const initial_array_capacity: uint = 256
+const default_handshake_timeout_us: u32 = 1000
+const default_world_timeout_ms: u32 = 10000
+
+public func grow_array(arrp: Ref[Ref[byte]?], cap: Ref[uint],
+                       element_bytes: uint, alignment: uint,
+                       used: uint, need: uint) -> bool {
+    let old_cap: uint = ref_read(cap)
+    if need <= old_cap { return true }
+    if used > old_cap or element_bytes == 0 or alignment == 0 or
+        (alignment & (alignment - 1)) != 0 { return false }
+    let old: Ref[byte]? = ref_read(arrp)
+    if used != 0 and old == nil { return false }
+
+    let maximum: uint = ~cast[uint](0)
+    var next_cap: uint = initial_array_capacity
+    if old_cap != 0 {
+        if old_cap > maximum / 2 { return false }
+        next_cap = old_cap * 2
+    }
+    while next_cap < need {
+        if next_cap > maximum / 2 { return false }
+        next_cap *= 2
+    }
+    if next_cap > maximum / element_bytes { return false }
+    let mapped: Ref[byte]? = builtin.os.map_zeroed(
+        next_cap * element_bytes, alignment)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        if used != 0 {
+            if old != nil {
+                __gc_memcpy(base, old.get(), used * element_bytes)
+            } else { require false }
+        }
+        __gc_signal_fence()
+        ref_write(arrp, base)
+        ref_write(cap, next_cap)
+        __gc_signal_fence()
+        if old != nil { builtin.os.unmap(old.get(), old_cap * element_bytes) }
+        return true
+    }
+    return false
+}
+
+func heap_record() -> Ref[builtin.abi.Type_Record] {
+    let probe: Ref[builtin.gc.Heap]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+    if row != nil { return row.get() }
+    require false
+}
+
+public func config_default(config: Ref[builtin.gc.Config]) {
+    config.initial_heap_bytes = initial_heap_bytes
+    config.growth_factor = 2.0
+    config.max_heap_bytes = 0
+    config.poison_free = false
+    config.handshake_timeout_us = default_handshake_timeout_us
+    config.scan_stacks = false
+    config.world_timeout_ms = default_world_timeout_ms
+}
+
+public func create(config: Ref[builtin.gc.Config]?) -> Ref[builtin.gc.Heap]? {
+    let row: Ref[builtin.abi.Type_Record] = heap_record()
+    let mapped: Ref[byte]? = builtin.os.map_zeroed(
+        builtin.abi.size_bytes(row), builtin.abi.alignment_bytes(row))
+    if mapped != nil {
+        let heap: Ref[builtin.gc.Heap] = unsafe_cast[Ref[builtin.gc.Heap]] mapped.get()
+
+        if config != nil {
+            heap.cfg = ref_read(config.get())
+        } else {
+            config_default(ref heap.cfg)
+        }
+        if !(heap.cfg.growth_factor >= 1.0) { heap.cfg.growth_factor = 1.0 }
+        if heap.cfg.initial_heap_bytes < minimum_blocks * builtin.gc.block_bytes {
+            heap.cfg.initial_heap_bytes = minimum_blocks * builtin.gc.block_bytes
+        }
+        if heap.cfg.max_heap_bytes != 0 and
+            heap.cfg.initial_heap_bytes > heap.cfg.max_heap_bytes {
+            heap.cfg.initial_heap_bytes = heap.cfg.max_heap_bytes
+        }
+        if heap.cfg.handshake_timeout_us == 0 {
+            heap.cfg.handshake_timeout_us = default_handshake_timeout_us
+        }
+        if heap.cfg.world_timeout_ms == 0 {
+            heap.cfg.world_timeout_ms = default_world_timeout_ms
+        }
+
+        heap.target_bytes = heap.cfg.initial_heap_bytes
+        heap.alloc_budget = heap.cfg.initial_heap_bytes
+        heap.epoch = 1
+        heap.mark_epoch = 1
+        heap.los_cursor = ref heap.los
+        heap.sweep_ready = true
+        __atomic_store(ref heap.phase, cast[u32](builtin.gc.Phase.idle))
+        return heap
+    }
+    return nil
+}
+
+public func destroy(heap: Ref[builtin.gc.Heap]) {
+    __atomic_store(ref heap.shutdown, true)
+    while __atomic_load(ref heap.nworkers) != 0 {
+        builtin.gc.sync.event_signal(ref heap.work_progress)
+        builtin.os.thread_yield()
+    }
+    let mutator_probe: Ref[builtin.gc.Mutator]? = nil
+    let mutator_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(
+        typeof(mutator_probe))
+    if mutator_row != nil {
+        var attached: Ref[builtin.gc.Mutator]? = heap.mutators
+        while attached != nil {
+            let mutator: Ref[builtin.gc.Mutator] = attached.get()
+            attached = mutator.next
+            builtin.gc.roots.free(mutator)
+            builtin.os.unmap(mutator, builtin.abi.size_bytes(mutator_row.get()))
+        }
+        heap.mutators = nil
+        heap.nmutators = 0
+    } else { require false }
+    var candidate: Ref[builtin.gc.Block_Metadata]? = heap.all_blocks
+    while candidate != nil {
+        let block: Ref[builtin.gc.Block_Metadata] = candidate.get()
+        let next: Ref[builtin.gc.Block_Metadata]? = block.all_next
+        builtin.os.unmap(block, builtin.gc.block_bytes)
+        candidate = next
+    }
+    builtin.gc.los.free_all(heap)
+    builtin.gc.mark.pool_free_all(heap)
+    builtin.gc.registry.regions_free(heap)
+    let final_queue: Ref[byte]? = heap.finq
+    if final_queue != nil {
+        let probe: Ref[builtin.gc.Final_Entry]? = nil
+        let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+        if row != nil {
+            builtin.os.unmap(final_queue.get(), heap.finq_cap * builtin.abi.size_bytes(row.get()))
+        } else { require false }
+    }
+    let queued: Ref[byte]? = heap.barrier_queue
+    if queued != nil {
+        let probe: Ref[byte]? = nil
+        let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(typeof(probe))
+        if row != nil {
+            builtin.os.unmap(queued.get(), heap.barrier_queue_capacity
+                * builtin.abi.size_bytes(row.get()))
+        } else { require false }
+    }
+    builtin.gc.hash.tab_free(ref heap.threads)
+    let global_storage: Ref[byte]? = heap.globals
+    if global_storage != nil {
+        let probe: Ref[builtin.gc.Global_Root_Entry]? = nil
+        let pointer_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(typeof(probe))
+        let entry_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+        if pointer_row != nil and entry_row != nil {
+            let stride: uint = builtin.abi.size_bytes(pointer_row.get())
+            var index: uint = 0
+            while index < heap.nglobals {
+                let address: Ref[byte] = __gc_byte_offset(global_storage.get(), index * stride)
+                let cell: Ref[Ref[builtin.gc.Global_Root_Entry]] = unsafe_cast[Ref[Ref[builtin.gc.Global_Root_Entry]]] address
+                builtin.os.unmap(ref_read(cell), builtin.abi.size_bytes(entry_row.get()))
+                index += 1
+            }
+            builtin.os.unmap(global_storage.get(), heap.cap_globals * stride)
+        } else { require false }
+    }
+    builtin.gc.hash.tab_free(ref heap.global_index)
+    builtin.os.unmap(heap, builtin.abi.size_bytes(heap_record()))
+}

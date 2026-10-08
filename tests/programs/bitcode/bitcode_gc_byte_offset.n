@@ -1,0 +1,35 @@
+import builtin.os
+
+const stderr_fd: i32 = 2
+
+func offset_round_trip() -> bool {
+    var anchor: byte = 0
+    let base: Ref[byte] = ref anchor
+    let index: uint = 0
+    let cell: Ref[byte] = __gc_byte_offset(base, index)
+    let value: byte = 42
+    ref_write(cell, value)
+    return ref_read(cell) == value
+}
+
+func offset_backwards() -> bool {
+    let mapped: Ref[byte]? = builtin.os.map_zeroed(32, 16)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let tail: Ref[byte] = __gc_byte_offset(base, 16)
+        let head: Ref[byte] = __gc_byte_offset(tail, -16)
+        let same: bool = head == base
+        builtin.os.unmap(base, 32)
+        return same
+    }
+    require false
+}
+
+comptime {
+} else {
+    if offset_round_trip() and offset_backwards() {
+        __fd_write(stderr_fd, "ok\n")
+    } else {
+        __fd_write(stderr_fd, "bad value\n")
+    }
+}

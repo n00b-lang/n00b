@@ -1,0 +1,707 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.alloc
+import builtin.gc.finalize
+import builtin.gc.handshake
+import builtin.gc.los
+import builtin.gc.mark
+import builtin.gc.registry
+import builtin.gc.roots
+import builtin.gc.sync
+import builtin.gc.world
+import builtin.os
+
+const min_budget: uint = 8 * builtin.gc.block_bytes
+const concurrent_start_pct: uint = 70
+const concurrent_force_pct: uint = 200
+const sweep_batch: uint = 16
+
+public func stop_world(heap: Ref[builtin.gc.Heap]) {
+    builtin.gc.sync.event_signal(ref heap.work_progress)
+    builtin.gc.sync.ticket_lock(ref heap.fin)
+    heap.fin_held = true
+    __atomic_store(ref heap.stw, true)
+    heap.pause_start = builtin.os.now_ns()
+    builtin.gc.world.stop(heap)
+}
+
+public func start_world(heap: Ref[builtin.gc.Heap]) {
+    builtin.gc.world.start(heap)
+    var current: Ref[builtin.gc.Mutator]? = heap.mutators
+    while current != nil {
+        let mutator: Ref[builtin.gc.Mutator] = current.get()
+        mutator.ctx_valid = false
+        current = mutator.next
+    }
+    __atomic_store(ref heap.stw, false)
+    heap.fin_held = false
+    builtin.gc.sync.ticket_unlock(ref heap.fin)
+    heap.last_pause_ns = builtin.os.now_ns() - heap.pause_start
+    heap.pauses += 1
+}
+
+public func scan_words(marker: Ref[builtin.gc.Marker], low: Ref[byte],
+                       high: Ref[byte]) {
+    let probe: uint = 0
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(typeof(probe))
+    if row != nil {
+        let width: uint = builtin.abi.size_bytes(row.get())
+        require width != 0
+        let start: uint = __abi_ref_address(low)
+        let end: uint = __abi_ref_address(high)
+        if end <= start { return }
+        let remainder: uint = start % width
+        var adjustment: uint = 0
+        if remainder != 0 { adjustment = width - remainder }
+        if end - start < adjustment { return }
+        let available: uint = end - start - adjustment
+        var offset: uint = 0
+        while available - offset >= width {
+            let address: Ref[byte] = __gc_byte_offset(low, adjustment + offset)
+            let word: Ref[uint] = unsafe_cast[Ref[uint]] address
+            marker.stack_words += 1
+            builtin.gc.mark.mark_ambiguous(marker, __volatile_load(word))
+            offset += width
+        }
+    } else { require false }
+}
+
+public func scan_stack(marker: Ref[builtin.gc.Marker], sp: Ref[byte],
+                       high: Ref[byte], interrupted: bool) {
+    var low: Ref[byte] = sp
+    if interrupted {
+        let red_zone: uint = builtin.os.stack_red_zone_bytes()
+        if red_zone != 0 and __abi_ref_address(sp) > red_zone {
+            low = __gc_byte_offset(sp, -cast[i128](red_zone))
+        }
+    }
+    if __abi_ref_address(high) > __abi_ref_address(low) {
+        scan_words(marker, low, high)
+    }
+}
+
+func scan_context_registers(marker: Ref[builtin.gc.Marker],
+                            snapshot: Ref[builtin.os.Thread_Context]) {
+    require snapshot.nregs <= builtin.os.context_registers
+    var index: uint = 0
+    while index < snapshot.nregs {
+        builtin.gc.mark.mark_ambiguous(marker,
+            snapshot.regs [cast[int](index)])
+        index += 1
+    }
+}
+
+func required_stack_high(mutator: Ref[builtin.gc.Mutator]) -> Ref[byte] {
+    let high: Ref[byte]? = mutator.stack_hi
+    if high != nil { return high.get() }
+    require false
+}
+
+public func mark_mutator_roots(marker: Ref[builtin.gc.Marker],
+                               mutator: Ref[builtin.gc.Mutator]) {
+    var index: uint = 0
+    while index < mutator.nroots {
+        builtin.gc.mark.mark_object(marker,
+            ref_read(builtin.gc.roots.slot_at(mutator, index)))
+        index += 1
+    }
+    if mutator.thread_id != builtin.os.thread_id() {
+        builtin.gc.mark.mark_object(marker, mutator.last_alloc)
+    }
+}
+
+public func mark_thread_roots(marker: Ref[builtin.gc.Marker],
+                              mutator: Ref[builtin.gc.Mutator],
+                              stopped: bool) {
+    mark_mutator_roots(marker, mutator)
+    if !marker.heap.cfg.scan_stacks { return }
+    let high: Ref[byte] = required_stack_high(mutator)
+
+    if mutator.thread_id == builtin.os.thread_id() {
+        builtin.os.thread_capture_self(ref mutator.captured)
+        scan_context_registers(marker, ref mutator.captured)
+        let self_sp: Ref[byte]? = mutator.captured.sp
+        if self_sp != nil {
+            scan_stack(marker, self_sp.get(), high, false)
+        } else { require false }
+    } elif __atomic_load(ref mutator.blocking) != 0 and !stopped {
+        scan_context_registers(marker, ref mutator.captured)
+        let blocked_sp: Ref[byte]? = mutator.blocked_sp
+        if blocked_sp != nil {
+            scan_stack(marker, blocked_sp.get(), high, false)
+        } else { require false }
+    } else {
+        require mutator.ctx_valid
+        scan_context_registers(marker, ref mutator.captured)
+        let stopped_sp: Ref[byte]? = mutator.captured.sp
+        if stopped_sp != nil {
+            scan_stack(marker, stopped_sp.get(), high, true)
+        } else { require false }
+    }
+}
+
+public func mark_global_roots(marker: Ref[builtin.gc.Marker]) {
+    var storage_index: u32 = 1
+    while storage_index < builtin.abi.storage_count() {
+        let address: Ref[byte]? = builtin.abi.storage_address(storage_index)
+        if address != nil {
+            let row: Ref[builtin.abi.Storage_Record]? = builtin.abi.storage_at(
+                storage_index)
+            if row != nil {
+                builtin.gc.mark.trace_root(marker, address.get(),
+                    row.get().type_index)
+            } else { require false }
+        }
+        storage_index += 1
+    }
+    var index: uint = 0
+    while index < marker.heap.nglobals {
+        builtin.gc.mark.mark_object(marker,
+            ref_read(builtin.gc.roots.global_slot_at(marker.heap, index)))
+        index += 1
+    }
+}
+
+public func mark_roots(marker: Ref[builtin.gc.Marker]) {
+    mark_global_roots(marker)
+    builtin.gc.finalize.mark_locked(marker)
+    var current: Ref[builtin.gc.Mutator]? = marker.heap.mutators
+    while current != nil {
+        let mutator: Ref[builtin.gc.Mutator] = current.get()
+        if mutator.thread_primary {
+            mark_thread_roots(marker, mutator, true)
+        } else {
+            mark_mutator_roots(marker, mutator)
+        }
+        current = mutator.next
+    }
+}
+
+public func reserve_bump(marker: Ref[builtin.gc.Marker],
+                         bump: Ref[builtin.gc.Bump], inflight: bool) {
+    let limit: Ref[byte]? = __volatile_load(ref bump.limit)
+    let cursor: Ref[byte]? = __volatile_load(ref bump.cursor)
+    if limit != nil {
+        let heap: Ref[builtin.gc.Heap] = marker.heap
+        let block: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_of_bytes(
+            __gc_byte_offset(limit.get(), -1))
+        let base: Ref[byte] = builtin.gc.block_base(block)
+        let base_address: uint = __abi_ref_address(base)
+        let payload_start: uint = base_address + builtin.gc.header_lines() * builtin.gc.line_bytes
+        let block_end: uint = base_address + builtin.gc.block_bytes
+        let limit_address: uint = __abi_ref_address(limit.get())
+        var low: uint = payload_start
+        var cursor_address: uint = 0
+        if cursor != nil { cursor_address = __abi_ref_address(cursor.get()) }
+        let cursor_in_block: bool = cursor_address > payload_start and cursor_address <= block_end
+        if cursor_in_block and cursor_address - payload_start > builtin.gc.los.los_threshold {
+            low = cursor_address - builtin.gc.los.los_threshold
+        }
+        if low >= limit_address { return }
+
+        let first: uint = (low - base_address) / builtin.gc.line_bytes
+        let last: uint = (limit_address - 1 - base_address) / builtin.gc.line_bytes
+        builtin.gc.mark_lines(base, first * builtin.gc.line_bytes,
+            (last - first + 1) * builtin.gc.line_bytes, heap.mark_epoch)
+
+        if inflight and cursor_in_block {
+            let header: Ref[builtin.gc.Object_Header]? = builtin.gc.registry.find_object(heap, cursor_address - 1)
+            if header != nil {
+                builtin.gc.mark.mark_object(marker,
+                    builtin.gc.payload_of(header.get()))
+            }
+        }
+    }
+}
+
+public func reserve_bumps(marker: Ref[builtin.gc.Marker]) {
+    let heap: Ref[builtin.gc.Heap] = marker.heap
+    let self_thread: uint = builtin.os.thread_id()
+    var current: Ref[builtin.gc.Mutator]? = heap.mutators
+    while current != nil {
+        let mutator: Ref[builtin.gc.Mutator] = current.get()
+        let inflight: bool = mutator.thread_id != self_thread
+        reserve_bump(marker, ref mutator.small, inflight)
+        reserve_bump(marker, ref mutator.overflow, inflight)
+        current = mutator.next
+    }
+}
+
+public func drain_barrier_buffers(marker: Ref[builtin.gc.Marker]) {
+    let heap: Ref[builtin.gc.Heap] = marker.heap
+    var current: Ref[builtin.gc.Mutator]? = heap.mutators
+    while current != nil {
+        let mutator: Ref[builtin.gc.Mutator] = current.get()
+        if mutator.write_buffer_epoch == heap.mark_epoch {
+            var index: uint = 0
+            while index < mutator.write_buffer_count {
+                let slot: Ref[Ref[byte]?] = ref mutator.write_buffer[cast[int](index)]
+                builtin.gc.mark.mark_object(marker,
+                    ref_read(slot))
+                index += 1
+            }
+        }
+        mutator.write_buffer_count = 0
+        current = mutator.next
+    }
+    builtin.gc.mark.barrier_queue_drain(marker)
+}
+
+func mark_black_lines(block: Ref[builtin.gc.Block_Metadata], epoch: u32) {
+    let base: Ref[byte] = builtin.gc.block_base(block)
+    let first_granule: uint = builtin.gc.header_lines() * builtin.gc.line_bytes / builtin.gc.granule_bytes
+    let first_word: uint = first_granule / builtin.gc.word_bits
+    let word_count: uint = builtin.gc.block_bytes / builtin.gc.granule_bytes / builtin.gc.word_bits
+    var word: uint = first_word
+    while word < word_count {
+        var bits: u64 = __atomic_load(builtin.gc.mark_word_at(base, word))
+        while bits != 0 {
+            let bit: uint = cast[uint](__count_trailing_zeros(cast[uint](bits)))
+            let granule: uint = word * builtin.gc.word_bits + bit
+            let offset: uint = granule * builtin.gc.granule_bytes
+            let header: Ref[builtin.gc.Object_Header] = builtin.gc.block_object_header_at(base, offset)
+            let bytes: uint = builtin.gc.object_bytes(header)
+            let granule_bytes: uint = builtin.gc.granule_bytes
+            let rounded: uint = (bytes + granule_bytes - 1) / granule_bytes * granule_bytes
+            builtin.gc.mark_lines(base, offset, rounded, epoch)
+            bits = bits & (bits - 1)
+        }
+        word += 1
+    }
+}
+
+public func sweep_block(heap: Ref[builtin.gc.Heap], block: Ref[builtin.gc.Block_Metadata],
+                        epoch: u32) {
+    let base: Ref[byte] = builtin.gc.block_base(block)
+    let have_marks: bool = __atomic_load(ref block.mark_epoch) == epoch
+    if have_marks and __atomic_load(ref block.black_epoch) == epoch {
+        mark_black_lines(block, epoch)
+    }
+
+    let first_granule: uint = builtin.gc.header_lines() * builtin.gc.line_bytes / builtin.gc.granule_bytes
+    let first_word: uint = first_granule / builtin.gc.word_bits
+    let word_count: uint = builtin.gc.block_bytes / builtin.gc.granule_bytes / builtin.gc.word_bits
+    var word: uint = first_word
+    while word < word_count {
+        let starts: u64 = __atomic_load(builtin.gc.start_word_at(base, word))
+        var marks: u64 = 0
+        if have_marks { marks = __atomic_load(builtin.gc.mark_word_at(base, word)) }
+        var dead: u64 = starts & ~marks
+        while dead != 0 {
+            let bit: uint = cast[uint](__count_trailing_zeros(cast[uint](dead)))
+            let offset: uint = (word * builtin.gc.word_bits + bit) * builtin.gc.granule_bytes
+            let header: Ref[builtin.gc.Object_Header] = builtin.gc.block_object_header_at(base, offset)
+            assert (header.meta & builtin.gc.obj_final) == 0
+            dead = dead & (dead - 1)
+        }
+        if starts != (starts & marks) {
+            __atomic_store(builtin.gc.start_word_at(base, word), starts & marks)
+        }
+        word += 1
+    }
+
+    var free_lines: uint = 0
+    var previous: bool = false
+    var line: uint = builtin.gc.header_lines()
+    let line_count: uint = builtin.gc.block_bytes / builtin.gc.line_bytes
+    while line < line_count {
+        let marked: bool = builtin.gc.line_marked_in(base, line, epoch)
+        if marked or previous {
+            previous = marked
+        } else {
+            free_lines += 1
+            if heap.cfg.poison_free {
+                let line_base: Ref[byte] = __gc_byte_offset(base,
+                    line * builtin.gc.line_bytes)
+                __gc_memset(line_base, cast[byte](0xdb), builtin.gc.line_bytes)
+            }
+        }
+        line += 1
+    }
+
+    assert epoch == heap.epoch
+    if block.sweep_epoch != epoch { __atomic_fetch_sub(ref heap.nunswept, 1) }
+    block.free_lines = cast[u16](free_lines)
+    block.sweep_epoch = epoch
+}
+
+public func prune_owned(heap: Ref[builtin.gc.Heap], sweep: bool) {
+    var slot: Ref[Ref[builtin.gc.Block_Metadata]?] = ref heap.owned
+    var current: Ref[builtin.gc.Block_Metadata]? = ref_read(slot)
+    while current != nil {
+        let block: Ref[builtin.gc.Block_Metadata] = current.get()
+        if block.state == cast[u8](builtin.gc.Block_State.owned) {
+            if sweep { sweep_block(heap, block, heap.epoch) }
+            slot = ref block.own_next
+        } else {
+            ref_write(slot, block.own_next)
+            block.own_next = nil
+            block.on_owned = false
+        }
+        current = ref_read(slot)
+    }
+}
+
+public func sweep_some(heap: Ref[builtin.gc.Heap], count: uint) -> bool {
+    let sweeping: u32 = cast[u32](builtin.gc.Phase.sweeping)
+    if __atomic_load(ref heap.phase) != sweeping or !heap.sweep_ready {
+        return false
+    }
+
+    let epoch: u32 = heap.epoch
+    var remaining: uint = count
+    var did_work: bool = false
+    var candidate: Ref[builtin.gc.Block_Metadata]? = heap.sweep_cursor
+    while candidate != nil {
+        if remaining == 0 { break }
+        let block: Ref[builtin.gc.Block_Metadata] = candidate.get()
+        heap.sweep_cursor = block.all_next
+        if block.state != cast[u8](builtin.gc.Block_State.owned) and
+            block.sweep_epoch != epoch {
+            sweep_block(heap, block, epoch)
+            builtin.gc.alloc.list_block(heap, block)
+            remaining -= 1
+            did_work = true
+        }
+        candidate = heap.sweep_cursor
+    }
+
+    var cursor: Ref[Ref[builtin.gc.Los_Obj]?] = heap.los_cursor
+    var large: Ref[builtin.gc.Los_Obj]? = ref_read(cursor)
+    while large != nil {
+        if remaining == 0 { break }
+        let object: Ref[builtin.gc.Los_Obj] = large.get()
+        if __atomic_load(ref object.marked) == epoch {
+            cursor = ref object.next
+        } else {
+            ref_write(cursor, object.next)
+            builtin.gc.los.release(heap, object)
+        }
+        remaining -= 1
+        did_work = true
+        large = ref_read(cursor)
+    }
+    heap.los_cursor = cursor
+    if heap.sweep_cursor == nil and ref_read(cursor) == nil {
+        __atomic_store(ref heap.phase, cast[u32](builtin.gc.Phase.idle))
+    }
+    return did_work
+}
+
+public func sweep_all(heap: Ref[builtin.gc.Heap]) {
+    let sweeping: u32 = cast[u32](builtin.gc.Phase.sweeping)
+    while __atomic_load(ref heap.phase) == sweeping and heap.sweep_ready {
+        sweep_some(heap, ~cast[uint](0))
+    }
+}
+
+public func update_pacing(heap: Ref[builtin.gc.Heap]) {
+    let live: uint = heap.last_marked_bytes
+    let scaled: f64 = cast[f64] live * heap.cfg.growth_factor
+    var target: uint = heap.cfg.initial_heap_bytes
+    if scaled > cast[f64] target {
+        let maximum: uint = ~cast[uint](0)
+        if scaled >= cast[f64] maximum {
+            target = maximum
+        } else {
+            target = cast[uint] scaled
+        }
+    }
+    if heap.cfg.max_heap_bytes != 0 and target > heap.cfg.max_heap_bytes {
+        target = heap.cfg.max_heap_bytes
+    }
+
+    var budget: uint = 0
+    if target > live { budget = target - live }
+    if budget < min_budget { budget = min_budget }
+
+    heap.live_bytes = live
+    heap.target_bytes = target
+    heap.alloc_budget = budget
+    heap.alloc_since_gc = 0
+
+    let maximum: uint = ~cast[uint](0)
+    var keep: uint = maximum
+    if budget <= maximum - target { keep = target + budget }
+    if heap.cfg.max_heap_bytes != 0 and keep > heap.cfg.max_heap_bytes {
+        keep = heap.cfg.max_heap_bytes
+    }
+    heap.keep_bytes = keep
+}
+
+public func reset_counters(heap: Ref[builtin.gc.Heap]) {
+    __atomic_store(ref heap.cnt_objects, 0)
+    __atomic_store(ref heap.cnt_bytes, 0)
+    __atomic_store(ref heap.cnt_worker_objects, 0)
+    __atomic_store(ref heap.cnt_stack_words, 0)
+    __atomic_store(ref heap.cnt_frame_slots, 0)
+    __atomic_store(ref heap.cnt_hits, 0)
+}
+
+public func begin_epoch_locked(heap: Ref[builtin.gc.Heap]) {
+    sweep_all(heap)
+    var block: Ref[builtin.gc.Block_Metadata]? = heap.all_blocks
+    while block != nil {
+        assert block.get().sweep_epoch == heap.epoch
+        block = block.get().all_next
+    }
+    assert __atomic_load(ref heap.nunswept) == 0
+
+    heap.mark_epoch = heap.epoch + 1
+    reset_counters(heap)
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(
+        typeof(heap.cycle))
+    if row != nil {
+        __gc_memset(ref heap.cycle, 0,
+            builtin.abi.size_bytes(row.get()))
+    } else { require false }
+    heap.cycle.epoch = cast[u64](heap.mark_epoch)
+    heap.cycle.rounds = cast[u32](heap.hs_rounds)
+    heap.cycle.stragglers = cast[u32](heap.hs_stragglers)
+    heap.cycle_start = builtin.os.now_ns()
+}
+
+public func end_epoch_locked(heap: Ref[builtin.gc.Heap]) {
+    assert heap.pool_full == nil and heap.pool_active == 0
+    __atomic_store(ref heap.marking, false)
+    heap.black_alloc = false
+    heap.epoch = heap.mark_epoch
+    __atomic_store(ref heap.nunswept, heap.nblocks)
+
+    heap.free_blocks = nil
+    heap.nfree = 0
+    heap.recyclable_blocks = nil
+    heap.nrecyclable = 0
+    heap.nfull = 0
+    heap.sweep_cursor = heap.all_blocks
+    heap.los_cursor = ref heap.los
+
+    heap.last_marked_objects = __atomic_load(ref heap.cnt_objects)
+    heap.last_marked_bytes = __atomic_load(ref heap.cnt_bytes)
+    heap.last_worker_objects = __atomic_load(ref heap.cnt_worker_objects)
+    heap.last_stack_words = __atomic_load(ref heap.cnt_stack_words)
+    heap.last_frame_slots = __atomic_load(ref heap.cnt_frame_slots)
+    heap.last_conservative_hits = __atomic_load(ref heap.cnt_hits)
+    heap.collections += 1
+
+    heap.cycle.marked_objects = heap.last_marked_objects
+    heap.cycle.marked_bytes = heap.last_marked_bytes
+    heap.cycle.allocated_bytes = heap.alloc_since_gc
+    update_pacing(heap)
+    __atomic_store(ref heap.phase, cast[u32](builtin.gc.Phase.sweeping))
+}
+
+func reclaim_cache(heap: Ref[builtin.gc.Heap], bump: Ref[builtin.gc.Bump]) {
+    let empty: Ref[builtin.gc.Block_Metadata]? = nil
+    var current: Ref[builtin.gc.Block_Metadata]? = __atomic_exchange(
+        ref bump.cache, empty)
+    while current != nil {
+        let block: Ref[builtin.gc.Block_Metadata] = current.get()
+        current = block.next
+        builtin.gc.set_block_state(heap, block, builtin.gc.Block_State.retired)
+    }
+}
+
+public func reclaim_caches(heap: Ref[builtin.gc.Heap]) {
+    var current: Ref[builtin.gc.Mutator]? = heap.mutators
+    while current != nil {
+        let mutator: Ref[builtin.gc.Mutator] = current.get()
+        reclaim_cache(heap, ref mutator.small)
+        reclaim_cache(heap, ref mutator.overflow)
+        current = mutator.next
+    }
+}
+
+public func release_los(heap: Ref[builtin.gc.Heap]) {
+    var current: Ref[builtin.gc.Los_Obj]? = heap.release_los
+    while current != nil {
+        let object: Ref[builtin.gc.Los_Obj] = current.get()
+        heap.release_los = object.next
+        builtin.gc.registry.los_unregister(heap, object)
+        builtin.os.unmap(object.mapping, object.mapped_bytes)
+        current = heap.release_los
+    }
+}
+
+public func finish_cycle(heap: Ref[builtin.gc.Heap], fresh: bool) {
+    if fresh { begin_epoch_locked(heap) }
+    stop_world(heap)
+
+    var marker: builtin.gc.Marker
+    builtin.gc.mark.marker_init(ref marker, heap, false)
+    reclaim_caches(heap)
+    drain_barrier_buffers(ref marker)
+    reserve_bumps(ref marker)
+    mark_roots(ref marker)
+    builtin.gc.mark.drain_to_termination(ref marker)
+    builtin.gc.finalize.find_dead_locked(ref marker)
+    builtin.gc.mark.drain_to_termination(ref marker)
+    builtin.gc.mark.marker_stats(ref marker)
+
+    end_epoch_locked(heap)
+    prune_owned(heap, true)
+    var current: Ref[builtin.gc.Mutator]? = heap.mutators
+    while current != nil {
+        let mutator: Ref[builtin.gc.Mutator] = current.get()
+        mutator.black = false
+        mutator.write_buffer_count = 0
+        __atomic_store(ref mutator.hs_state,
+            cast[u32](builtin.gc.Handshake_State.idle))
+        current = mutator.next
+    }
+    heap.sweep_ready = true
+
+    start_world(heap)
+    release_los(heap)
+    heap.cycle.duration_ns = builtin.os.now_ns() - heap.cycle_start
+    heap.cycle.rounds = cast[u32](heap.hs_rounds) - heap.cycle.rounds
+    heap.cycle.stragglers = cast[u32](heap.hs_stragglers) - heap.cycle.stragglers
+}
+
+public func remark_locked(heap: Ref[builtin.gc.Heap]) {
+    if __atomic_load(ref heap.phase) == cast[u32](builtin.gc.Phase.marking) {
+        finish_cycle(heap, false)
+    }
+}
+
+func start_marking_locked(heap: Ref[builtin.gc.Heap]) {
+    begin_epoch_locked(heap)
+    stop_world(heap)
+
+    var marker: builtin.gc.Marker
+    builtin.gc.mark.marker_init(ref marker, heap, false)
+    mark_roots(ref marker)
+    builtin.gc.mark.marker_flush(ref marker)
+    builtin.gc.mark.marker_stats(ref marker)
+
+    __atomic_store(ref heap.marking, true)
+    __atomic_store(ref heap.phase, cast[u32](builtin.gc.Phase.marking))
+    start_world(heap)
+}
+
+public func request_cycle(heap: Ref[builtin.gc.Heap]) {
+    __atomic_store(ref heap.cycle_requested, true)
+    builtin.gc.sync.event_signal(ref heap.work_progress)
+}
+
+public func cycle_done(heap: Ref[builtin.gc.Heap]) {
+    __atomic_store(ref heap.cycle_active, false)
+    builtin.gc.sync.event_signal(ref heap.cycle_ended)
+}
+
+func claim_cycle(heap: Ref[builtin.gc.Heap]) {
+    while true {
+        if __atomic_compare_exchange(ref heap.cycle_active, false, true) {
+            return
+        }
+        builtin.gc.handshake.wait_for_cycle(heap)
+    }
+}
+
+public func collect_full_locked(heap: Ref[builtin.gc.Heap]) {
+    remark_locked(heap)
+    finish_cycle(heap, true)
+}
+
+public func collect(heap: Ref[builtin.gc.Heap]) {
+    claim_cycle(heap)
+    builtin.gc.sync.ticket_lock(ref heap.lock)
+    collect_full_locked(heap)
+    sweep_all(heap)
+    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    cycle_done(heap)
+}
+
+public func collect_start(heap: Ref[builtin.gc.Heap]) {
+    if __atomic_load(ref heap.nworkers) != 0 {
+        request_cycle(heap)
+        return
+    }
+    builtin.gc.sync.ticket_lock(ref heap.lock)
+    if __atomic_load(ref heap.phase) != cast[u32](builtin.gc.Phase.marking) {
+        start_marking_locked(heap)
+    }
+    builtin.gc.sync.ticket_unlock(ref heap.lock)
+}
+
+public func collect_step(heap: Ref[builtin.gc.Heap], max_objects: uint) -> bool {
+    builtin.gc.sync.ticket_lock(ref heap.lock)
+    if __atomic_load(ref heap.phase) != cast[u32](builtin.gc.Phase.marking) {
+        builtin.gc.sync.ticket_unlock(ref heap.lock)
+        return false
+    }
+    var marker: builtin.gc.Marker
+    builtin.gc.mark.marker_init(ref marker, heap, false)
+    builtin.gc.mark.barrier_queue_drain(ref marker)
+    builtin.gc.mark.marker_drain(ref marker, max_objects)
+    builtin.gc.mark.marker_flush(ref marker)
+    builtin.gc.mark.marker_stats(ref marker)
+    let more: bool = !builtin.gc.mark.mark_quiescent(heap) or
+        heap.barrier_queue_count != 0
+    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    return more
+}
+
+public func collect_finish(heap: Ref[builtin.gc.Heap]) {
+    if __atomic_load(ref heap.nworkers) != 0 {
+        builtin.gc.handshake.wait_for_cycle(heap)
+        return
+    }
+    builtin.gc.sync.ticket_lock(ref heap.lock)
+    remark_locked(heap)
+    builtin.gc.sync.ticket_unlock(ref heap.lock)
+}
+
+public func maybe_collect(heap: Ref[builtin.gc.Heap], request: uint) -> bool {
+    let maximum: uint = ~cast[uint](0)
+    var used: uint = maximum
+    if request <= maximum - heap.alloc_since_gc {
+        used = heap.alloc_since_gc + request
+    }
+    let phase: u32 = __atomic_load(ref heap.phase)
+    if __atomic_load(ref heap.nworkers) != 0 {
+        if __atomic_load(ref heap.cycle_active) {
+            return phase == cast[u32](builtin.gc.Phase.marking) and
+                used > heap.alloc_budget / 100 * concurrent_force_pct
+        }
+        if phase != cast[u32](builtin.gc.Phase.marking) and
+            used > heap.alloc_budget / 100 * concurrent_start_pct {
+            request_cycle(heap)
+        }
+        return false
+    }
+    if used > heap.alloc_budget {
+        finish_cycle(heap, phase != cast[u32](builtin.gc.Phase.marking))
+    }
+    return false
+}
+
+public func worker(heap: Ref[builtin.gc.Heap]) {
+    var marker: builtin.gc.Marker
+    builtin.gc.mark.marker_init(ref marker, heap, true)
+    __atomic_fetch_add(ref heap.nworkers, 1)
+
+    while !__atomic_load(ref heap.shutdown) {
+        var did: uint = builtin.gc.mark.marker_drain(ref marker, 0)
+        let phase: u32 = __atomic_load(ref heap.phase)
+        let stopped: bool = __atomic_load(ref heap.stw)
+        builtin.gc.mark.marker_stats(ref marker)
+
+        if !stopped and __atomic_load(ref heap.cycle_requested) and
+            __atomic_compare_exchange(ref heap.cycle_active, false, true) {
+            __atomic_store(ref heap.cycle_requested, false)
+            builtin.gc.handshake.run_handshake_cycle(heap)
+            cycle_done(heap)
+            did += 1
+        } elif !stopped and phase == cast[u32](builtin.gc.Phase.sweeping) and
+            builtin.gc.sync.ticket_trylock(ref heap.lock) {
+            if sweep_some(heap, sweep_batch) { did += 1 }
+            builtin.gc.sync.ticket_unlock(ref heap.lock)
+        }
+
+        if did == 0 { builtin.os.thread_yield() }
+    }
+
+    builtin.gc.mark.marker_flush(ref marker)
+    __atomic_fetch_sub(ref heap.nworkers, 1)
+}

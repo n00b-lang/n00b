@@ -1,0 +1,15 @@
+import builtin.io.raw
+
+public func raw_repr(self: int, fd: i32) -> i32 {
+    return __fd_write(fd, "item")
+}
+
+func emit(value: builtin.io.raw.Raw_Repr) -> i32 {
+    return value.raw_repr(2)
+}
+
+comptime {
+} else {
+    emit(array[int][1, 2])
+    __fd_write(2, "\n")
+}

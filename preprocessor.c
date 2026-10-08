@@ -1,5 +1,3 @@
-#define _GNU_SOURCE
-
 #include "preprocessor.h"
 
 #include <errno.h>
@@ -2331,7 +2329,8 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     ctx->cycle_warning_emitted = false;
     if (ctx->options && ctx->options->load_implicit_import
         && !ctx->options->load_implicit_import(
-            ctx->options->import_context, ctx->grammar, unit)) {
+            ctx->options->import_context, ctx->grammar, unit,
+            CORE_STRING_STATIC("builtin.io.debug"))) {
         if (!core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
             pp_error(ctx, tree, "cannot load an implicit import");
         ctx->failed = true;

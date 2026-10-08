@@ -1,0 +1,8 @@
+import builtin.abi
+
+type Layout_Probe layout(c) {
+    value: u64
+}
+
+let value: u64 = 0
+let descriptor: typespec = typeof(value)

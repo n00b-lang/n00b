@@ -1,0 +1,107 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.alloc
+import builtin.gc.handshake
+import builtin.gc.heap
+import builtin.gc.registry
+import builtin.os
+
+comptime {} else {
+    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[builtin.gc.Heap] = created.get()
+        let first_map: Ref[byte]? = builtin.os.map_zeroed(
+            builtin.gc.block_bytes, builtin.gc.block_bytes)
+        let cached_map: Ref[byte]? = builtin.os.map_zeroed(
+            builtin.gc.block_bytes, builtin.gc.block_bytes)
+        let probe: Ref[builtin.gc.Mutator]? = nil
+        let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(
+            typeof(probe))
+        if first_map != nil and cached_map != nil and row != nil {
+            let first_base: Ref[byte] = first_map.get()
+            let cached_base: Ref[byte] = cached_map.get()
+            let first_end: Ref[byte] = __gc_byte_offset(first_base,
+                builtin.gc.block_bytes)
+            let cached_end: Ref[byte] = __gc_byte_offset(cached_base,
+                builtin.gc.block_bytes)
+            let first_added: bool = builtin.gc.registry.region_add(
+                heap, first_base, first_end)
+            let cached_added: bool = builtin.gc.registry.region_add(
+                heap, cached_base, cached_end)
+            assert first_added and cached_added
+            let first: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(
+                first_base)
+            let cached: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(
+                cached_base)
+            builtin.gc.block_init(heap, first)
+            builtin.gc.block_init(heap, cached)
+            let mutator_map: Ref[byte]? = builtin.os.map_zeroed(
+                builtin.abi.size_bytes(row.get()),
+                builtin.abi.alignment_bytes(row.get()))
+            if mutator_map != nil {
+                let mutator: Ref[builtin.gc.Mutator] = unsafe_cast[Ref[builtin.gc.Mutator]] mutator_map.get()
+                mutator.heap = heap
+                builtin.gc.set_block_state(heap, first, builtin.gc.Block_State.owned)
+                builtin.gc.set_block_state(heap, cached, builtin.gc.Block_State.owned)
+                first.owner = mutator
+                cached.owner = mutator
+                mutator.small.blk = first
+                let hole_start: uint = builtin.gc.header_lines() * builtin.gc.line_bytes
+                mutator.small.cursor = __gc_byte_offset(first_base, hole_start)
+                mutator.small.limit = __gc_byte_offset(first_base,
+                    hole_start + builtin.gc.line_bytes)
+                __atomic_store(ref mutator.small.cache, cached)
+                heap.epoch += 1
+                __atomic_store(ref heap.nunswept, 2)
+                builtin.gc.handshake.sweep_own_blocks(heap, mutator, heap.epoch)
+                assert first.sweep_epoch == heap.epoch
+                assert cached.sweep_epoch == heap.epoch
+                assert __atomic_load(ref heap.nunswept) == 0
+                assert builtin.gc.line_marked_in(first_base,
+                    builtin.gc.header_lines(), heap.epoch)
+                let usable: uint = builtin.gc.block_bytes / builtin.gc.line_bytes - builtin.gc.header_lines()
+                assert cast[uint](first.free_lines) == usable - 2
+                assert cast[uint](cached.free_lines) == usable
+                builtin.gc.handshake.sweep_own_blocks(heap, mutator, heap.epoch)
+                assert __atomic_load(ref heap.nunswept) == 0
+
+                heap.mark_epoch = heap.epoch + 1
+                __atomic_store(ref heap.hs_kind,
+                    cast[u32](builtin.gc.Handshake_Kind.on))
+                __atomic_store(ref mutator.hs_state,
+                    cast[u32](builtin.gc.Handshake_State.requested))
+                __atomic_store(ref heap.hs_pending, 1)
+                builtin.gc.handshake.safepoint(mutator)
+                assert mutator.black
+                assert __atomic_load(ref first.black_epoch) == heap.mark_epoch
+                assert __atomic_load(ref mutator.hs_state) == cast[u32](builtin.gc.Handshake_State.done)
+                assert __atomic_load(ref heap.hs_pending) == 0
+
+                __atomic_store(ref heap.hs_kind,
+                    cast[u32](builtin.gc.Handshake_Kind.scan))
+                __atomic_store(ref mutator.hs_state,
+                    cast[u32](builtin.gc.Handshake_State.requested))
+                __atomic_store(ref heap.hs_pending, 1)
+                builtin.gc.handshake.safepoint(mutator)
+                assert __atomic_load(ref mutator.hs_state) == cast[u32](builtin.gc.Handshake_State.done)
+                assert __atomic_load(ref heap.hs_pending) == 0
+
+                __atomic_store(ref heap.hs_kind,
+                    cast[u32](builtin.gc.Handshake_Kind.sweep))
+                __atomic_store(ref mutator.hs_state,
+                    cast[u32](builtin.gc.Handshake_State.requested))
+                __atomic_store(ref heap.hs_pending, 1)
+                builtin.gc.handshake.safepoint(mutator)
+                assert !mutator.black
+                assert __atomic_load(ref mutator.hs_state) == cast[u32](builtin.gc.Handshake_State.done)
+                assert __atomic_load(ref heap.hs_pending) == 0
+                assert __atomic_load(ref heap.hs_answered.seq) == 3
+                builtin.gc.alloc.block_release(heap, first)
+                builtin.gc.alloc.block_release(heap, cached)
+                builtin.os.unmap(mutator, builtin.abi.size_bytes(row.get()))
+                builtin.gc.heap.destroy(heap)
+                __fd_write(2, "ok")
+            } else { require false }
+        } else { require false }
+    } else { require false }
+}

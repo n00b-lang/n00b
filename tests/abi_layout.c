@@ -96,6 +96,39 @@ check_structural_record(ir_module_t *module,
 }
 
 static int
+check_nested_value_stride(ir_module_t *module,
+                          const core_target_desc_t *target, th_ctx *types)
+{
+    th_type *word = th_bitint(types, 64, false);
+    th_type *child = th_name(types, "StrideChild");
+    th_type *parent = th_name(types, "StrideParent");
+    bool handled = false;
+    n00bb_abi_record_member_t child_members[] = {
+        {.name = "word", .type = word, .ordinal = 0},
+        {.name = "half", .type = th_name(types, "u32"), .ordinal = 1},
+    };
+    n00bb_abi_record_member_t parent_members[] = {
+        {.name = "child", .type = child, .ordinal = 0},
+        {.name = "flag", .type = th_name(types, "bool"),
+         .ordinal = 1, .packed = true},
+    };
+    if (!n00bb_abi_publish_direct_layout(module, word, target, &handled)
+        || !handled
+        || !n00bb_abi_publish_record_layout(module, child, target,
+            N00BB_RECORD_DEFAULT, false, child_members, 2)
+        || !n00bb_abi_publish_record_layout(module, parent, target,
+            N00BB_RECORD_DEFAULT, false, parent_members, 2)) return 0;
+    const ir_final_layout_t *child_layout = ir_layout_final(module, child,
+                                                            target->triple);
+    const ir_final_layout_t *parent_layout = ir_layout_final(module, parent,
+                                                             target->triple);
+    return child_layout && parent_layout
+        && child_layout->intrinsic_bits == 96
+        && parent_layout->members[0].bit_offset == 0
+        && parent_layout->members[1].bit_offset == 128;
+}
+
+static int
 check_variant(const core_target_desc_t *target)
 {
     ir_ctx_t *context = ir_ctx_new();
@@ -392,6 +425,7 @@ int main(void)
         };
         handled = false;
         ok = ok && check_scalar(module, &target, u32, 32, 32, 4)
+            && check_nested_value_stride(module, &target, types)
             && n00bb_abi_publish_c_record_layout(module, c_record, &target,
                 c_members, sizeof(c_members) / sizeof(c_members[0]));
         const ir_final_layout_t *c_layout = ir_layout_final(
@@ -415,6 +449,58 @@ int main(void)
             && ir_layout_compute(module, c_record, nullptr)
             && c_descriptor->size.value == 8
             && c_descriptor->align.value == 4;
+        th_type *byte = th_name(types, "byte");
+        th_type *byte_array = th_array(types, byte);
+        n00bb_abi_record_member_t inline_members[] = {
+            {.name = "count", .type = u32, .ordinal = 0,
+             .c_compatible = true},
+            {.name = "bytes", .type = byte_array, .ordinal = 1,
+             .c_compatible = true, .inline_element_type = byte,
+             .inline_element_count = 4},
+        };
+        ok = ok && check_scalar(module, &target, byte, 8, 8, 1);
+        for (int policy = N00BB_RECORD_DEFAULT;
+             ok && policy <= N00BB_RECORD_C; policy++) {
+            char type_name[48];
+            snprintf(type_name, sizeof(type_name), "InlineBytes%d", policy);
+            th_type *array_record = th_name(types, type_name);
+            ok = n00bb_abi_publish_record_layout(module, array_record,
+                &target, (n00bb_record_policy_t)policy, false,
+                inline_members, 2);
+            const ir_final_layout_t *array_layout = ok
+                ? ir_layout_final(module, array_record, target.triple)
+                : nullptr;
+            ok = ok && array_layout && array_layout->intrinsic_bits == 64
+                && array_layout->members[1].type == byte_array
+                && array_layout->members[1].inline_element_type == byte
+                && array_layout->members[1].inline_element_count == 4
+                && array_layout->members[1].inline_element_stride_bits == 8
+                && array_layout->members[1].bit_offset == 32
+                && array_layout->members[1].n_occupied == 1
+                && array_layout->members[1].occupied[0].offset == 32
+                && array_layout->members[1].occupied[0].width == 32;
+        }
+        n00bb_abi_record_member_t bool_array_member = {
+            .name = "flags", .type = th_array(types, bool_type),
+            .inline_element_type = bool_type, .inline_element_count = 9,
+            .c_compatible = true,
+        };
+        th_type *packed_array = th_name(types, "PackedBoolArray");
+        th_type *c_bool_array = th_name(types, "CBoolArray");
+        ok = ok && n00bb_abi_publish_record_layout(module, packed_array,
+            &target, N00BB_RECORD_DEFAULT, false, &bool_array_member, 1)
+            && n00bb_abi_publish_c_record_layout(module, c_bool_array,
+                &target, &bool_array_member, 1);
+        const ir_final_layout_t *packed_array_layout = ir_layout_final(
+            module, packed_array, target.triple);
+        const ir_final_layout_t *c_bool_array_layout = ir_layout_final(
+            module, c_bool_array, target.triple);
+        ok = ok && packed_array_layout
+            && packed_array_layout->intrinsic_bits == 9
+            && packed_array_layout->members[0].inline_element_stride_bits == 1
+            && c_bool_array_layout
+            && c_bool_array_layout->intrinsic_bits == 72
+            && c_bool_array_layout->members[0].inline_element_stride_bits == 8;
         th_type *nested_record = th_name(types, "NestedCRecord");
         n00bb_abi_record_member_t nested_members[] = {
             {.name = "tag", .type = bool_type, .ordinal = 0,

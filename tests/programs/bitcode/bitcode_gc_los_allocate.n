@@ -1,0 +1,84 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.heap
+import builtin.gc.los
+import builtin.gc.registry
+import builtin.os
+
+comptime {
+} else {
+    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[builtin.gc.Heap] = created.get()
+        let mutator_probe: Ref[builtin.gc.Mutator]? = nil
+        let mutator_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(
+            typeof(mutator_probe))
+        if mutator_row != nil {
+            let mutator_bytes: uint = builtin.abi.size_bytes(mutator_row.get())
+            let mapped: Ref[byte]? = builtin.os.map_zeroed(mutator_bytes,
+                builtin.abi.alignment_bytes(mutator_row.get()))
+            if mapped != nil {
+                let mutator: Ref[builtin.gc.Mutator] = unsafe_cast[Ref[builtin.gc.Mutator]] mapped.get()
+                mutator.heap = heap
+                let sample: byte = 0
+                let type_index: u32 = cast[u32](typeof(sample))
+                assert builtin.abi.type_at(type_index) != nil
+                let bytes: uint = 16 * 1024
+
+                let first: Ref[byte]? = builtin.gc.los.allocate_locked(
+                    heap, mutator, type_index, bytes, builtin.gc.granule_bytes, false)
+                if first != nil {
+                    let payload: Ref[byte] = first.get()
+                    let object: Ref[builtin.gc.Los_Obj] = builtin.gc.los_of(
+                        builtin.gc.header_of(payload))
+                    assert object.hdr.type_index == type_index
+                    assert object.mapping == unsafe_cast[Ref[byte]] object
+                    assert object.bytes == object.mapped_bytes
+                    assert builtin.gc.meta_payload_bytes(object.hdr.meta) == cast[u64](bytes)
+                    let last: Ref[byte]? = mutator.last_alloc
+                    if last != nil { assert last.get() == payload } else { require false }
+                    assert heap.los_count == 1
+                    builtin.gc.registry.registry_read_lock(heap)
+                    assert builtin.gc.registry.find_object(heap,
+                        __abi_ref_address(payload) + bytes - 1) != nil
+                    builtin.gc.registry.registry_read_unlock(heap)
+
+                    let aligned: Ref[byte]? = builtin.gc.los.allocate_locked(
+                        heap, mutator, type_index, bytes, 128, false)
+                    if aligned != nil {
+                        let aligned_payload: Ref[byte] = aligned.get()
+                        let second: Ref[builtin.gc.Los_Obj] = builtin.gc.los_of(
+                            builtin.gc.header_of(aligned_payload))
+                        assert __abi_ref_address(aligned_payload) % 128 == 0
+                        assert second.mapping != unsafe_cast[Ref[byte]] second
+                        assert second.mapped_bytes > second.bytes
+                        assert heap.los_count == 2
+                        assert heap.los_bytes == object.mapped_bytes + second.mapped_bytes
+                        heap.los = nil
+                        builtin.gc.los.release(heap, second)
+                        assert heap.los_count == 1
+                        assert heap.los_cache_bytes == 0
+                    } else { require false }
+
+                    builtin.gc.los.release(heap, object)
+                    assert heap.los_count == 0
+                    assert heap.los_bytes == 0
+                    assert heap.los_cache_bytes == object.mapped_bytes
+                    let reused: Ref[byte]? = builtin.gc.los.allocate_locked(
+                        heap, mutator, type_index, bytes, builtin.gc.granule_bytes, false)
+                    if reused != nil {
+                        assert reused.get() == payload
+                        assert heap.los_count == 1
+                        assert heap.los_cache_bytes == 0
+                        heap.los = nil
+                        builtin.gc.los.release(heap, object)
+                    } else { require false }
+                    builtin.gc.los.cache_drain(heap)
+                } else { require false }
+                builtin.os.unmap(mutator, mutator_bytes)
+            } else { require false }
+        } else { require false }
+        builtin.gc.heap.destroy(heap)
+        __fd_write(2, "ok")
+    } else { require false }
+}

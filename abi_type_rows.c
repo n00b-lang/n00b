@@ -299,11 +299,16 @@ n00bb_abi_type_identity_rows_build(
         }
         if (!th_is_closed(types, type))
             row->flags |= N00B_ABI_TYPE_FLAG_NON_CONCRETE;
-        const ir_final_layout_t *final = ir_layout_final(
-            runtime, type, ir_module_target(runtime));
-        const ir_final_layout_t *compile_layout = comptime
-            ? ir_layout_final(comptime, type, ir_module_target(runtime))
-            : nullptr;
+        ir_module_t *definition_owner = ir_type_definition_owner(runtime,
+            type);
+        bool external = !owner && definition_owner
+            && definition_owner != runtime && definition_owner != comptime
+            && row->kind != N00B_ABI_TYPE_ATOMIC;
+        const ir_final_layout_t *final = external ? nullptr
+            : ir_layout_final(runtime, type, ir_module_target(runtime));
+        const ir_final_layout_t *compile_layout = external || !comptime
+            ? nullptr
+            : ir_layout_final(comptime, type, ir_module_target(runtime));
         if (final && compile_layout
             && (final->intrinsic_bits != compile_layout->intrinsic_bits
                 || final->alignment_bytes != compile_layout->alignment_bytes)) {

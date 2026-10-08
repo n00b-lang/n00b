@@ -1,0 +1,81 @@
+import builtin.abi
+import builtin.gc
+import builtin.os
+
+func mapped_heap() -> Ref[builtin.gc.Heap] {
+    let probe: Ref[builtin.gc.Heap]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        let mapped: Ref[byte]? = builtin.os.map_zeroed(
+            builtin.abi.size_bytes(row.get()), builtin.abi.alignment_bytes(row.get()))
+        if mapped != nil { return unsafe_cast[Ref[builtin.gc.Heap]] mapped.get() }
+    }
+    require false
+}
+
+func unmap_heap(heap: Ref[builtin.gc.Heap]) {
+    let probe: Ref[builtin.gc.Heap]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        builtin.os.unmap(heap, builtin.abi.size_bytes(row.get()))
+        return
+    }
+    require false
+}
+
+comptime {
+} else {
+    let block_bytes: uint = 32768
+    let line_bytes: uint = 128
+    let mapped: Ref[byte]? = builtin.os.map_zeroed(block_bytes, block_bytes)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let heap: Ref[builtin.gc.Heap] = mapped_heap()
+        let metadata: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(base)
+        heap.epoch = 1
+        heap.mark_epoch = 1
+        heap.cfg.poison_free = false
+        heap.all_blocks = nil
+        heap.nblocks = 0
+        builtin.gc.block_init(heap, metadata)
+        var bump: builtin.gc.Bump
+        bump.cursor = nil
+        bump.limit = nil
+        bump.blk = metadata
+        bump.line = 7
+        bump.seen_epoch = 1
+        let empty_cache: Ref[builtin.gc.Block_Metadata]? = nil
+        __atomic_store(ref bump.cache, empty_cache)
+        let found: bool = builtin.gc.bump_next_hole(ref bump, 16)
+        assert found
+        let first_cursor: Ref[byte]? = bump.cursor
+        if first_cursor != nil {
+            let first: uint = cast[uint] __gc_byte_diff(first_cursor.get(), base)
+            let stale: Ref[byte] = __gc_byte_offset(first_cursor.get(),
+                                                     2 * line_bytes)
+            ref_write(stale, 42)
+            bump.cursor = bump.limit
+            assert builtin.gc.bump_room(ref bump) == 0
+            let exhausted: bool = builtin.gc.bump_next_hole(ref bump, 16)
+            assert !exhausted
+            metadata.sweep_epoch = 2
+            builtin.gc.mark_lines(base, first, 16, 2)
+            let reused_hole: bool = builtin.gc.bump_next_hole(ref bump, 16)
+            assert reused_hole
+            let reused: Ref[byte]? = bump.cursor
+            if reused != nil {
+                assert __gc_byte_diff(reused.get(), base) == cast[int](first + 2 * line_bytes)
+                assert ref_read(reused.get()) == 0
+            } else {
+                assert false
+            }
+        } else {
+            assert false
+        }
+        unmap_heap(heap)
+        builtin.os.unmap(base, block_bytes)
+        __fd_write(2, "ok")
+    } else {
+        assert false
+    }
+}

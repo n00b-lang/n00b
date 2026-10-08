@@ -1,0 +1,372 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.collect
+import builtin.gc.finalize
+import builtin.gc.handshake
+import builtin.gc.heap
+import builtin.gc.los
+import builtin.gc.mark
+import builtin.gc.mutator
+import builtin.gc.registry
+import builtin.gc.sync
+import builtin.os
+
+const grow_blocks: uint = 32
+const grow_batch_count: uint = 4
+const sweep_batch: uint = 16
+
+var runtime_heap: Atomic[Ref[builtin.gc.Heap]?]
+var runtime_heap_lock: Atomic[uint] = 0
+thread var runtime_mutator: Ref[builtin.gc.Mutator]? = nil
+thread var runtime_barrier_active: bool = false
+
+comptime {} else {
+    let empty: Ref[builtin.gc.Heap]? = nil
+    __atomic_store(ref runtime_heap, empty)
+}
+
+func active_mutator() -> Ref[builtin.gc.Mutator]? {
+    let prior_barrier: bool = runtime_barrier_active
+    runtime_barrier_active = true
+    let existing: Ref[builtin.gc.Mutator]? = runtime_mutator
+    if existing != nil {
+        runtime_barrier_active = prior_barrier
+        return existing
+    }
+    while !__atomic_compare_exchange(ref runtime_heap_lock, 0, 1) {
+        builtin.os.cpu_relax()
+    }
+    var heap: Ref[builtin.gc.Heap]? = __atomic_load(ref runtime_heap)
+    if heap == nil {
+        var config: builtin.gc.Config
+        builtin.gc.heap.config_default(ref config)
+        config.scan_stacks = true
+        heap = builtin.gc.heap.create(ref config)
+        __atomic_store(ref runtime_heap, heap)
+    }
+    __atomic_store(ref runtime_heap_lock, 0)
+    if heap != nil {
+        let created: Ref[builtin.gc.Mutator]? = builtin.gc.mutator.create(heap.get())
+        runtime_mutator = created
+        runtime_barrier_active = prior_barrier
+        return created
+    }
+    runtime_barrier_active = prior_barrier
+    return nil
+}
+
+public func barrier_runtime(address: Ref[byte], type_index: u32) {
+    if runtime_barrier_active { return }
+    runtime_barrier_active = true
+    let heap: Ref[builtin.gc.Heap]? = __atomic_load(ref runtime_heap)
+    if heap != nil {
+        let active: Ref[builtin.gc.Heap] = heap.get()
+        if __atomic_load(ref active.marking) {
+            let mutator: Ref[builtin.gc.Mutator]? = active_mutator()
+            if mutator != nil {
+                builtin.gc.mark.barrier_value(mutator.get(), address, type_index)
+                runtime_barrier_active = false
+                return
+            }
+            require false
+        }
+    }
+    runtime_barrier_active = false
+}
+
+public func block_release(heap: Ref[builtin.gc.Heap], blk: Ref[builtin.gc.Block_Metadata]) {
+    let previous: Ref[builtin.gc.Block_Metadata]? = blk.all_prev
+    if previous != nil {
+        previous.get().all_next = blk.all_next
+    } else {
+        heap.all_blocks = blk.all_next
+    }
+    let next: Ref[builtin.gc.Block_Metadata]? = blk.all_next
+    if next != nil { next.get().all_prev = blk.all_prev }
+    let cursor: Ref[builtin.gc.Block_Metadata]? = heap.sweep_cursor
+    if cursor != nil {
+        if cursor.get() == blk { heap.sweep_cursor = blk.all_next }
+    }
+    heap.nblocks -= 1
+    builtin.gc.set_block_state(heap, blk, builtin.gc.Block_State.retired)
+    if blk.sweep_epoch != heap.epoch {
+        __atomic_fetch_sub(ref heap.nunswept, 1)
+    }
+    builtin.gc.registry.region_release_block(heap, blk)
+    blk.magic = 0
+    builtin.os.unmap(blk, builtin.gc.block_bytes)
+}
+
+public func list_block(heap: Ref[builtin.gc.Heap], blk: Ref[builtin.gc.Block_Metadata]) {
+    let usable_lines: uint = builtin.gc.block_bytes / builtin.gc.line_bytes - builtin.gc.header_lines()
+    if cast[uint](blk.free_lines) == usable_lines {
+        if !blk.on_owned and !__atomic_load(ref blk.in_final) and
+            builtin.gc.committed_bytes(heap) > heap.keep_bytes {
+            block_release(heap, blk)
+            return
+        }
+        builtin.gc.push_free(heap, blk)
+    } elif blk.free_lines != 0 {
+        builtin.gc.set_block_state(heap, blk, builtin.gc.Block_State.recyclable)
+        blk.next = heap.recyclable_blocks
+        heap.recyclable_blocks = blk
+        heap.nrecyclable += 1
+    } else {
+        builtin.gc.set_block_state(heap, blk, builtin.gc.Block_State.full)
+        blk.next = nil
+        heap.nfull += 1
+    }
+}
+
+func return_to_lists(heap: Ref[builtin.gc.Heap], blk: Ref[builtin.gc.Block_Metadata]) {
+    let capacity: uint = builtin.gc.capacity(blk)
+    if blk.sweep_epoch != heap.epoch {
+        builtin.gc.collect.sweep_block(heap, blk, heap.epoch)
+    }
+    if heap.alloc_since_gc > capacity {
+        heap.alloc_since_gc -= capacity
+    } else {
+        heap.alloc_since_gc = 0
+    }
+    list_block(heap, blk)
+}
+
+public func bump_release(heap: Ref[builtin.gc.Heap], bump: Ref[builtin.gc.Bump]) {
+    let empty: Ref[builtin.gc.Block_Metadata]? = nil
+    var current: Ref[builtin.gc.Block_Metadata]? = __atomic_exchange(ref bump.cache, empty)
+    while current != nil {
+        let blk: Ref[builtin.gc.Block_Metadata] = current.get()
+        let next: Ref[builtin.gc.Block_Metadata]? = blk.next
+        return_to_lists(heap, blk)
+        current = next
+    }
+
+    let attached: Ref[builtin.gc.Block_Metadata]? = bump.blk
+    if attached != nil {
+        builtin.gc.set_block_state(heap, attached.get(), builtin.gc.Block_State.retired)
+    }
+    bump.cursor = nil
+    bump.limit = nil
+    bump.line = builtin.gc.header_lines()
+    bump.blk = nil
+}
+
+public func allocate_reserved(mutator: Ref[builtin.gc.Mutator],
+                              bump: Ref[builtin.gc.Bump], type_index: u32,
+                              payload_bytes: uint, alignment: uint,
+                              finalizable: bool) -> Ref[byte]? {
+    if alignment == 0 or alignment > builtin.gc.granule_bytes or
+        (alignment & (alignment - 1)) != 0 or
+        payload_bytes > (~cast[uint](0) >> builtin.gc.meta_flag_bits) or
+        builtin.abi.type_at(type_index) == nil { return nil }
+    let header_bytes: uint = builtin.gc.object_header_bytes()
+    let granule: uint = builtin.gc.granule_bytes
+    let maximum: uint = ~cast[uint](0)
+    if header_bytes > maximum - granule + 1 { return nil }
+    if payload_bytes > maximum - header_bytes - granule + 1 { return nil }
+    let unrounded: uint = header_bytes + payload_bytes
+    let bytes: uint = (unrounded + granule - 1) / granule * granule
+    if bytes > builtin.gc.los.los_threshold or
+        builtin.gc.bump_room(bump) < bytes { return nil }
+    let candidate: Ref[byte]? = bump.cursor
+    let owner: Ref[builtin.gc.Block_Metadata]? = bump.blk
+    if candidate != nil {
+        if owner != nil {
+            let memory: Ref[byte] = candidate.get()
+            let block: Ref[builtin.gc.Block_Metadata] = owner.get()
+            assert block.magic == builtin.gc.block_magic
+            assert block.state == cast[u8](builtin.gc.Block_State.owned)
+            let owner_ref: Ref[builtin.gc.Mutator]? = block.owner
+            if owner_ref != nil {
+                assert owner_ref.get() == mutator
+            } else { require false }
+            let address: uint = __abi_ref_address(memory)
+            let base: uint = __abi_ref_address(block)
+            assert address >= base
+            assert (address - base) % granule == 0
+            bump.cursor = __gc_byte_offset(memory, bytes)
+
+            let header: Ref[builtin.gc.Object_Header] = unsafe_cast[Ref[builtin.gc.Object_Header]] memory
+            header.type_index = type_index
+            var flags: u32 = 0
+            if finalizable { flags = cast[u32](builtin.gc.obj_final) }
+            header.meta = builtin.gc.meta_make(cast[u64](payload_bytes), flags)
+            let payload: Ref[byte] = builtin.gc.payload_of(header)
+            let granule_index: uint = (address - base) / granule
+            let word: uint = granule_index / builtin.gc.word_bits
+            let mask: u64 = cast[u64](1) << (granule_index % builtin.gc.word_bits)
+            if finalizable {
+                __atomic_fetch_add(ref block.nfinal, 1)
+                builtin.gc.finalize.note_block(mutator.heap, block)
+            }
+            __gc_signal_fence()
+            if mutator.black {
+                assert __atomic_load(ref block.mark_epoch) == mutator.heap.mark_epoch
+                __atomic_fetch_or(builtin.gc.block_mark_word(block, word), mask)
+            }
+            __atomic_fetch_or(builtin.gc.block_start_word(block, word), mask)
+            __gc_signal_fence()
+            mutator.last_alloc = payload
+            mutator.objects_allocated += 1
+            mutator.bytes_allocated += cast[u64](bytes)
+            return payload
+        }
+    }
+    return nil
+}
+
+public func grow_batch(heap: Ref[builtin.gc.Heap], mutator: Ref[builtin.gc.Mutator]) -> Ref[builtin.gc.Block_Metadata]? {
+    var count: uint = grow_blocks
+    if builtin.gc.over_max(heap, count * builtin.gc.block_bytes) {
+        builtin.gc.los.cache_drain(heap)
+    }
+    while count != 0 and builtin.gc.over_max(heap, count * builtin.gc.block_bytes) {
+        count -= 1
+    }
+    if count == 0 { return nil }
+
+    let bytes: uint = count * builtin.gc.block_bytes
+    let mapping: Ref[byte]? = builtin.os.map_zeroed(bytes, builtin.gc.block_bytes)
+    if mapping != nil {
+        let start: Ref[byte] = mapping.get()
+        let end: Ref[byte] = __gc_byte_offset(start, bytes)
+        if !builtin.gc.registry.region_add(heap, start, end) {
+            builtin.os.unmap(start, bytes)
+            return nil
+        }
+
+        var list: Ref[builtin.gc.Block_Metadata]? = nil
+        var index: uint = 0
+        while index < count {
+            let base: Ref[byte] = __gc_byte_offset(start, index * builtin.gc.block_bytes)
+            let blk: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(base)
+            builtin.gc.block_init(heap, blk)
+            if index < grow_batch_count {
+                builtin.gc.own(heap, mutator, blk, ref list)
+            } else {
+                builtin.gc.push_free(heap, blk)
+            }
+            index += 1
+        }
+        return list
+    }
+    return nil
+}
+
+func refill_locked(heap: Ref[builtin.gc.Heap],
+                   mutator: Ref[builtin.gc.Mutator],
+                   prefer_free: bool) -> Ref[builtin.gc.Block_Metadata]? {
+    let before: u64 = heap.collections
+    mutator.pace_wait = builtin.gc.collect.maybe_collect(heap, 0)
+    while __atomic_load(ref heap.phase) == cast[u32](builtin.gc.Phase.sweeping) and
+        heap.nfree + heap.nrecyclable < 2 * builtin.gc.cache_max * heap.nmutators {
+        if !builtin.gc.collect.sweep_some(heap, sweep_batch) { break }
+    }
+    var blocks: Ref[builtin.gc.Block_Metadata]? = builtin.gc.take_batch(
+        heap, mutator, prefer_free)
+    if blocks == nil { blocks = grow_batch(heap, mutator) }
+    if blocks == nil and heap.collections == before and
+        __atomic_load(ref heap.nworkers) == 0 {
+        builtin.gc.collect.collect_full_locked(heap)
+        builtin.gc.collect.sweep_all(heap)
+        blocks = builtin.gc.take_batch(heap, mutator, prefer_free)
+    }
+    return blocks
+}
+
+func refill(mutator: Ref[builtin.gc.Mutator], bump: Ref[builtin.gc.Bump],
+            prefer_free: bool) -> Ref[builtin.gc.Block_Metadata]? {
+    let cached: Ref[builtin.gc.Block_Metadata]? = builtin.gc.cache_pop(bump)
+    if cached != nil { return cached }
+    let heap: Ref[builtin.gc.Heap] = mutator.heap
+    builtin.gc.sync.ticket_lock(ref heap.lock)
+    let blocks: Ref[builtin.gc.Block_Metadata]? = refill_locked(
+        heap, mutator, prefer_free)
+    if blocks != nil {
+        __atomic_store(ref bump.cache, blocks.get().next)
+    }
+    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    mutator.locked_refills += 1
+    return blocks
+}
+
+func allocate_in_blocks(mutator: Ref[builtin.gc.Mutator],
+                        type_index: u32, payload_bytes: uint,
+                        alignment: uint, finalizable: bool,
+                        bytes: uint) -> Ref[byte]? {
+    let heap: Ref[builtin.gc.Heap] = mutator.heap
+    let small: bool = bytes <= builtin.gc.line_bytes
+    var retried: bool = false
+    while true {
+        var bump: Ref[builtin.gc.Bump] = ref mutator.overflow
+        if small { bump = ref mutator.small }
+        if builtin.gc.bump_room(bump) >= bytes {
+            return allocate_reserved(mutator, bump, type_index,
+                payload_bytes, alignment, finalizable)
+        }
+        builtin.gc.handshake.safepoint(mutator)
+        if builtin.gc.bump_next_hole(bump, bytes) { continue }
+        let previous: Ref[builtin.gc.Block_Metadata]? = bump.blk
+        if previous != nil {
+            builtin.gc.set_block_state(heap, previous.get(),
+                builtin.gc.Block_State.retired)
+            bump.blk = nil
+        }
+        let next: Ref[builtin.gc.Block_Metadata]? = refill(
+            mutator, bump, !small)
+        mutator.refills += 1
+        if next == nil and !retried and __atomic_load(ref heap.nworkers) != 0 {
+            retried = true
+            builtin.gc.collect.request_cycle(heap)
+            builtin.gc.handshake.wait_for_cycle(heap)
+            continue
+        }
+        if next != nil {
+            assert next.get().state == cast[u8](builtin.gc.Block_State.owned)
+        }
+        builtin.gc.bump_attach(mutator, bump, next)
+        if next == nil { return nil }
+        if mutator.pace_wait {
+            mutator.pace_wait = false
+            __atomic_fetch_add(ref heap.hs_alloc_waits, 1)
+            builtin.gc.handshake.wait_for_cycle(heap)
+        }
+    }
+    return nil
+}
+
+public func allocate_runtime(type_index: u32, byte_size: u64,
+                             alignment: u32,
+                             instance_descriptor: Ref[byte]?) -> Ref[byte]? {
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(type_index)
+    if row == nil or alignment == 0 or
+        (alignment & (alignment - 1)) != 0 { return nil }
+    let maximum: uint = ~cast[uint](0)
+    if byte_size > cast[u64](maximum) { return nil }
+    let payload_bytes: uint = cast[uint](byte_size)
+    let header_bytes: uint = builtin.gc.object_header_bytes()
+    let granule: uint = builtin.gc.granule_bytes
+    if header_bytes > maximum - granule + 1 or
+        payload_bytes > maximum - header_bytes - granule + 1 {
+        return nil
+    }
+    let bytes: uint = (header_bytes + payload_bytes + granule - 1) / granule * granule
+    let active: Ref[builtin.gc.Mutator]? = active_mutator()
+    if active != nil {
+        let mutator: Ref[builtin.gc.Mutator] = active.get()
+        let finalizable: bool = false
+        if bytes > builtin.gc.los.los_threshold or
+            cast[uint](alignment) > builtin.gc.granule_bytes {
+            let heap: Ref[builtin.gc.Heap] = mutator.heap
+            builtin.gc.sync.ticket_lock(ref heap.lock)
+            let result: Ref[byte]? = builtin.gc.los.allocate_locked(
+                heap, mutator, type_index, payload_bytes,
+                cast[uint](alignment), finalizable)
+            builtin.gc.sync.ticket_unlock(ref heap.lock)
+            return result
+        }
+        return allocate_in_blocks(mutator, type_index, payload_bytes,
+            cast[uint](alignment), finalizable, bytes)
+    }
+    return nil
+}

@@ -1,0 +1,61 @@
+import builtin.gc
+import builtin.gc.alloc
+import builtin.gc.collect
+import builtin.gc.heap
+import builtin.gc.mutator
+import builtin.gc.registry
+import builtin.gc.roots
+import builtin.os
+
+comptime {} else {
+    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[builtin.gc.Heap] = created.get()
+        let mapped: Ref[byte]? = builtin.os.map_zeroed(
+            builtin.gc.block_bytes, builtin.gc.block_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let end: Ref[byte] = __gc_byte_offset(base, builtin.gc.block_bytes)
+            require builtin.gc.registry.region_add(heap, base, end)
+            let block: Ref[builtin.gc.Block_Metadata] = builtin.gc.block_metadata_at(base)
+            builtin.gc.block_init(heap, block)
+            let attached: Ref[builtin.gc.Mutator]? = builtin.gc.mutator.create(heap)
+            if attached != nil {
+                let mutator: Ref[builtin.gc.Mutator] = attached.get()
+                var owned: Ref[builtin.gc.Block_Metadata]? = nil
+                builtin.gc.own(heap, mutator, block, ref owned)
+                let assigned: Ref[builtin.gc.Block_Metadata]? = block
+                builtin.gc.bump_attach(mutator, ref mutator.small, assigned)
+                require builtin.gc.bump_next_hole(ref mutator.small, 48)
+                let probe: byte = 0
+                let type_index: u32 = cast[u32](typeof(probe))
+                let first: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, type_index, 8,
+                    builtin.gc.granule_bytes, false)
+                let second: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, type_index, 8,
+                    builtin.gc.granule_bytes, false)
+                if first != nil and second != nil {
+                    var slot: Ref[byte]? = first
+                    require builtin.gc.roots.push(mutator, ref slot)
+                    let first_offset: uint = __abi_ref_address(
+                        builtin.gc.header_of(first.get())) - __abi_ref_address(base)
+                    let second_offset: uint = __abi_ref_address(
+                        builtin.gc.header_of(second.get())) - __abi_ref_address(base)
+                    builtin.gc.collect.collect(heap)
+                    assert heap.collections == 1
+                    assert builtin.gc.object_started(base, first_offset)
+                    assert !builtin.gc.object_started(base, second_offset)
+                    builtin.gc.roots.pop(mutator, 0)
+                    builtin.gc.collect.collect_start(heap)
+                    while builtin.gc.collect.collect_step(heap, 1) {}
+                    builtin.gc.collect.collect_finish(heap)
+                    assert heap.collections == 2
+                } else { require false }
+                builtin.gc.mutator.destroy(mutator)
+            } else { require false }
+            builtin.gc.heap.destroy(heap)
+        } else { require false }
+        __fd_write(2, "ok")
+    } else { require false }
+}

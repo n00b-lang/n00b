@@ -1,0 +1,66 @@
+import builtin.gc
+import builtin.gc.collect
+import builtin.gc.heap
+import builtin.gc.los
+import builtin.gc.registry
+import builtin.os
+
+comptime {
+} else {
+    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[builtin.gc.Heap] = created.get()
+        let bytes: uint = 16 * 1024
+        let mapped: Ref[byte]? = builtin.os.map_zeroed(bytes, builtin.gc.granule_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let object: Ref[builtin.gc.Los_Obj] = unsafe_cast[Ref[builtin.gc.Los_Obj]] base
+            object.bytes = bytes
+            object.mapping = base
+            object.mapped_bytes = bytes
+            object.hdr.type_index = 1
+            object.hdr.meta = builtin.gc.meta_make(cast[u64](bytes),
+                cast[u32](builtin.gc.obj_large))
+            assert builtin.gc.registry.los_register(heap, object)
+            let interior: Ref[byte] = __gc_byte_offset(base, bytes - 1)
+            let found: Ref[builtin.gc.Los_Obj]? = builtin.gc.registry.los_find(
+                heap, __abi_ref_address(interior))
+            if found != nil { assert found.get() == object } else { require false }
+            builtin.gc.registry.registry_read_lock(heap)
+            let header: Ref[builtin.gc.Object_Header]? = builtin.gc.registry.find_object(
+                heap, __abi_ref_address(interior))
+            if header != nil { assert header.get() == ref object.hdr } else { require false }
+            builtin.gc.registry.registry_read_unlock(heap)
+            heap.los = object
+            heap.los_count = 1
+            heap.los_bytes = bytes
+            __atomic_store(ref object.marked, heap.epoch)
+            __atomic_store(ref heap.phase, cast[u32](builtin.gc.Phase.sweeping))
+            assert builtin.gc.collect.sweep_some(heap, 1)
+            assert heap.los != nil
+            assert __atomic_load(ref heap.phase) == cast[u32](builtin.gc.Phase.idle)
+
+            heap.epoch += 1
+            heap.los_cursor = ref heap.los
+            __atomic_store(ref heap.phase, cast[u32](builtin.gc.Phase.sweeping))
+            assert builtin.gc.collect.sweep_some(heap, 1)
+            assert heap.los == nil
+            assert __atomic_load(ref heap.phase) == cast[u32](builtin.gc.Phase.idle)
+            assert heap.los_cache_bytes == bytes
+            assert builtin.gc.registry.los_find(heap,
+                __abi_ref_address(interior)) != nil
+            builtin.gc.registry.registry_read_lock(heap)
+            assert builtin.gc.registry.find_object(heap, __abi_ref_address(interior)) == nil
+            builtin.gc.registry.registry_read_unlock(heap)
+            let reused: Ref[builtin.gc.Los_Obj]? = builtin.gc.los.cache_take(heap, bytes)
+            if reused != nil { assert reused.get() == object } else { require false }
+            assert heap.los_cache_bytes == 0
+            heap.release_los = object
+            builtin.gc.collect.release_los(heap)
+            assert heap.release_los == nil
+            assert builtin.gc.registry.los_find(heap, __abi_ref_address(interior)) == nil
+        } else { require false }
+        builtin.gc.heap.destroy(heap)
+        __fd_write(2, "ok")
+    } else { require false }
+}

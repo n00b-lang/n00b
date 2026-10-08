@@ -30,6 +30,7 @@ install_data(
 n00bb_exe = executable(
     'n00bb',
     ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
+     'runtime_native_roots.c',
      'abi_layout.c', 'abi_record_layout.c', 'abi_directory.c',
      'abi_container.c', 'abi_index_patch.c', 'abi_emit.c', 'abi_link.c',
      'abi_link_finish.c', 'abi_link_strings.c', 'abi_semantics.c',
@@ -52,13 +53,33 @@ runtime_abi_headers = lantern.partial_dependency(
 
 runtime_abi_support = static_library(
     'n00b-abi-runtime',
-    ['runtime_abi.c', 'runtime_abi_io.c', 'abi_directory.c', 'abi_string.c'],
+    ['runtime_abi.c', 'runtime_allocate.c', 'runtime_abi_io.c',
+     'runtime_abi_storage.c', 'builtin_os.c',
+     'builtin_os_stw.c',
+     'builtin_abi.c', 'abi_directory.c', 'abi_string.c'],
     dependencies: runtime_abi_headers,
     override_options: ['optimization=1'],
     install: true,
 )
 
-install_headers('n00b-abi-v1.h')
+install_headers('n00b-abi-v1.h', 'builtin_os.h', 'builtin_abi.h')
+
+builtin_os_test = executable(
+    'builtin-os-test',
+    'tests/builtin_os.c',
+    link_with: runtime_abi_support,
+    dependencies: dependency('threads'),
+)
+
+test('builtin-os', builtin_os_test)
+
+builtin_abi_test = executable(
+    'builtin-abi-test',
+    'tests/builtin_abi.c',
+    link_with: runtime_abi_support,
+)
+
+test('builtin-abi', builtin_abi_test)
 
 runtime_abi_io_test = executable(
     'runtime-abi-io-test',
@@ -147,6 +168,13 @@ abi_layout_test = executable(
 )
 
 test('abi-layout', abi_layout_test)
+
+test(
+    'unsigned-literal-context',
+    n00bb_exe,
+    args: ['lower', meson.current_source_dir() / 'tests' / 'programs'
+        / 'unsigned_literal_context.n'],
+)
 
 abi_record_layout_test = executable(
     'abi-record-layout-test',
@@ -309,11 +337,528 @@ test('abi-type-index', abi_type_index_test)
 
 llvm_backend_test = executable(
     'llvm-backend-test',
-    ['tests/llvm_backend.c', 'llvm_backend.c'],
+    ['tests/llvm_backend.c', 'llvm_backend.c', 'runtime_native_roots.c'],
     dependencies: [lantern, llvm],
 )
 
 test('llvm-backend', llvm_backend_test)
+
+test(
+    'builtin-os-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_builtin_os.n'],
+)
+
+test(
+    'thread-global-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_thread_global.n'],
+)
+
+test(
+    'atomic-global-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_atomic_global.n'],
+)
+
+test(
+    'gc-byte-offset-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_byte_offset.n'],
+)
+
+test(
+    'gc-memcpy-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_memcpy.n'],
+)
+
+test(
+    'gc-block-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_block.n'],
+)
+
+test(
+    'gc-sweep-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_sweep.n'],
+)
+
+test(
+    'gc-handshake-sweep-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_handshake_sweep.n'],
+)
+
+test(
+    'gc-epoch-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_epoch.n'],
+)
+
+test(
+    'gc-los-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_los.n'],
+)
+
+test(
+    'gc-los-allocate-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_los_allocate.n'],
+)
+
+test(
+    'gc-small-allocate-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_small_allocate.n'],
+)
+
+test(
+    'gc-mutator-lifecycle-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_mutator_lifecycle.n'],
+)
+
+test(
+    'option-get-field-arith-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_option_get_field_arith.n'],
+)
+
+test(
+    'gc-mark-pool-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_mark_pool.n'],
+)
+
+test(
+    'gc-finalize-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_finalize.n'],
+)
+
+test(
+    'typeof-storage-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_typeof_storage.n'],
+)
+
+test(
+    'typeof-storage-facts',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'typeof_storage.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_typeof_storage.n'],
+)
+
+test(
+    'gc-heap-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_heap.n'],
+)
+
+test(
+    'gc-roots-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_roots.n'],
+)
+
+test(
+    'gc-global-mark-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_global_mark.n'],
+)
+
+test(
+    'gc-collect-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_collect.n'],
+)
+
+test(
+    'gc-allocate-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_allocate.n'],
+)
+
+test(
+    'gc-new-record-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_new_record.n'],
+)
+
+test(
+    'uninitialized-local-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_uninitialized_local.n',
+           'is read on a path that does not assign it'],
+)
+
+test(
+    'uninitialized-global-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_uninitialized_global.n',
+           'N00BB-L0044'],
+)
+
+test(
+    'gc-new-pruned-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_new_pruned.n'],
+)
+
+test(
+    'gc-handshake-stack-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_handshake_stack.n'],
+)
+
+test(
+    'gc-worker-shutdown-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_worker_shutdown.n'],
+)
+
+test(
+    'option-guard-flow-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_option_guard_flow.n'],
+)
+
+test(
+    'option-nil-global-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_option_nil_global.n'],
+)
+
+test(
+    'array-index-write-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_array_index_write.n'],
+)
+
+test(
+    'gc-los-registry-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_los_registry.n'],
+)
+
+test(
+    'gc-block-registry-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_block_registry.n'],
+)
+
+test(
+    'gc-grow-batch-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_grow_batch.n'],
+)
+
+test(
+    'gc-reclaim-caches-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_reclaim_caches.n'],
+)
+
+test(
+    'gc-pacing-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_pacing.n'],
+)
+
+test(
+    'reference-read-escape-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'reference_read_escape.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'reference_read_escape.n'],
+)
+
+test(
+    'integer-complement-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_integer_complement.n'],
+)
+
+test(
+    'numeric-casts-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'numeric_casts.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_numeric_casts.n',
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_numeric_cast_trap.n'],
+)
+
+test(
+    'bit-count-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_bit_count.n'],
+)
+
+test(
+    'wrapping-mul-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_wrapping_mul.n'],
+)
+
+test(
+    'gc-hash-lower',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'gc_hash_lower.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_hash.n'],
+)
+
+test(
+    'gc-registry-lower',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'gc_hash_lower.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_registry.n'],
+)
+
+test(
+    'gc-block-lower',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'gc_hash_lower.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_block.n'],
+)
+
+test(
+    'logical-continuation-lower',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'gc_hash_lower.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_logical_continuation.n'],
+)
+
+test(
+    'option-reference-field-lower',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'gc_hash_lower.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_option_get_field.n'],
+)
+
+test(
+    'plain-ref-cast-rejected',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'plain_ref_cast_rejected.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_plain_ref_cast_rejected.n'],
+)
+
+test(
+    'inline-array-layout-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'inline_array_layout.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'inline_array_record_layout.n'],
+)
+
+test(
+    'runtime-array-bound-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'runtime_array_bound.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'array_runtime_sized_declaration.n'],
+)
+
+test(
+    'gc-atomic-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_atomic.n'],
+)
+
+test(
+    'atomic-rmw-u32-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_atomic_rmw_u32.n'],
+)
+
+test(
+    'gc-recycle-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_recycle.n'],
+)
+
+test(
+    'copyout-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_copyout.n'],
+)
+
+test(
+    'os-mapped-write-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_os_mapped_write.n'],
+)
+
+test(
+    'os-mapped-wrapper-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_os_mapped_write_wrapper.n'],
+)
+
+test(
+    'builtin-abi-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_abi_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_builtin_abi.n'],
+)
 
 test(
     'builtin-debug',
@@ -322,6 +867,27 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_builtin_debug.n00b'],
+)
+
+test(
+    'raw-repr',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'raw_repr.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_raw_repr_dynamic.n00b',
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_raw_repr_out_of_range.n00b',
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_raw_repr_defaults.n00b',
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_raw_repr_array_override.n00b',
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_raw_repr_reference.n00b',
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_raw_repr_element_override.n00b',
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_raw_repr_nested_override.n00b'],
 )
 
 test(

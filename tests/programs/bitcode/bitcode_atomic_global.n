@@ -1,0 +1,10 @@
+var state: Atomic[uint] = 5
+var pointer_state: Atomic[Ref[byte]?] = nil
+
+comptime {} else {
+    require __atomic_load(ref pointer_state) == nil
+    let old: uint = __atomic_exchange(ref state, 6)
+    require old == 5
+    require __atomic_load(ref state) == 6
+    __fd_write(2, "ok")
+}

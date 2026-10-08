@@ -1,0 +1,31 @@
+import builtin.gc.hash
+import builtin.os
+
+comptime {
+} else {
+    var table: builtin.gc.hash.Hash_Tab
+    table.slots = nil
+    table.bits = 0
+    table.n = 0
+    let mapped: Ref[byte]? = builtin.os.map_zeroed(16, 0)
+    if mapped != nil {
+        let first: Ref[byte] = mapped.get()
+        let second: Ref[byte] = __gc_byte_offset(first, 1)
+        assert builtin.gc.hash.tab_reserve(ref table, 3)
+        builtin.gc.hash.tab_insert(ref table, 17, first)
+        builtin.gc.hash.tab_insert(ref table, 29, second)
+        builtin.gc.hash.tab_insert(ref table, 17, second)
+        assert table.n == 3
+        let found: Ref[byte]? = builtin.gc.hash.tab_lookup(ref table, 17)
+        if found != nil { assert found.get() == first } else { assert false }
+        builtin.gc.hash.tab_delete(ref table, 17, second)
+        assert table.n == 2
+        builtin.gc.hash.tab_delete(ref table, 17, first)
+        assert builtin.gc.hash.tab_lookup(ref table, 17) == nil
+        let remaining: Ref[byte]? = builtin.gc.hash.tab_lookup(ref table, 29)
+        if remaining != nil { assert remaining.get() == second } else { assert false }
+        builtin.gc.hash.tab_free(ref table)
+        builtin.os.unmap(first, 16)
+        __fd_write(2, "ok")
+    } else { assert false }
+}

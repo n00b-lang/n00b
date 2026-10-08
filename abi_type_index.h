@@ -25,8 +25,11 @@ bool n00bb_abi_type_index_collect_ir(n00bb_abi_type_index_t *index,
  * instead enter ABI metadata through their declaring symbols, if any. */
 bool n00bb_abi_type_index_collect_module_types(
     n00bb_abi_type_index_t *index, ir_module_t *module);
+typedef bool (*n00bb_abi_symbol_selector_fn)(
+    void *context, const parse_sym_entry_t *symbol, bool *include);
 bool n00bb_abi_type_index_collect_symbols(
-    n00bb_abi_type_index_t *index, const parse_symtab_t *symbols);
+    n00bb_abi_type_index_t *index, const parse_symtab_t *symbols,
+    n00bb_abi_symbol_selector_fn select, void *context);
 th_type *n00bb_abi_type_index_symbol_type(
     n00bb_abi_type_index_t *index, const parse_sym_entry_t *symbol);
 size_t n00bb_abi_type_index_count(const n00bb_abi_type_index_t *index);

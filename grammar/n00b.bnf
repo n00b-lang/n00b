@@ -431,10 +431,14 @@
 <or-expr> @branch($0, $2) @infer("bool") ::= <or-expr> %"or" <or-rhs>
 <or-expr> @emit("identity", $0) ::= <and-expr>
 <or-rhs> @emit("identity", $0) ::= <and-expr>
+<or-rhs> @emit("identity", $1) @infer("$1") ::= <operator-continuation> <and-expr>
 
 <and-expr> @branch($0, $2) @infer("bool") ::= <and-expr> %"and" <and-rhs>
 <and-expr> @emit("identity", $0) ::= <equality-expr>
 <and-rhs> @emit("identity", $0) ::= <equality-expr>
+<and-rhs> @emit("identity", $1) @infer("$1") ::= <operator-continuation> <equality-expr>
+
+<operator-continuation> ::= %NEWLINE+
 
 <equality-expr> @emit("binary", $0, $2) @infer("bool") ::=
     <compare-expr> <equality-op> <compare-expr>
@@ -469,14 +473,15 @@
 <mul-expr> @emit("identity", $0) ::= <unary-expr>
 
 <unary-expr> @emit("bool_not", $1) @infer("bool unify method_return($1, __not)") ::= %"!" <unary-expr>
-<unary-expr> @emit("flagset_complement", $1) @infer("$1") ::= %"~" <unary-expr>
+<unary-expr> @emit("complement", $1) @infer("$1") ::= %"~" <unary-expr>
 <unary-expr> @emit("negate", $1) @infer("method_return($1, __negate)") ::= %"-" <unary-expr>
 <unary-expr> @emit("identity", $1) @infer("$1") ::= %"+" <unary-expr>
 <unary-expr> @operator("ref") @infer("ref[$1]") ::= %"ref" <unary-expr>
 <unary-expr> @emit("cast", $4) @infer("$2") ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
+<unary-expr> @emit("unsafe_cast", $4) @infer("$2") ::= %"unsafe_cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> @emit("identity", $0) ::= <postfix-expr>
 
-<postfix-expr> @emit("module_member") @infer("field_return($0)") ::= <postfix-expr> %"." %IDENTIFIER
+<postfix-expr> @emit("module_member") @infer("field_return_auto_deref($0)") ::= <postfix-expr> %"." %IDENTIFIER
 <postfix-expr> @emit("call") @infer("element_of($0, __read, __write)") ::= <postfix-expr> %"[" <index-contents> %"]"
 <postfix-expr> @emit("call") @infer("slice_of($0, __slice)") ::= <postfix-expr> %"[" <slice-contents> %"]"
 <postfix-expr> @operator("unwrap_result") @infer("unwrap_result($0)") ::= <postfix-expr> %"!"

@@ -1,0 +1,155 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.heap
+import builtin.gc.hash
+import builtin.gc.sync
+import builtin.os
+
+public type Root_Entry layout(c) {
+    public slot: Ref[Ref[byte]?]
+}
+
+func root_entry_record() -> Ref[builtin.abi.Type_Record] {
+    let probe: Ref[Root_Entry]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+    if row != nil { return row.get() }
+    require false
+}
+
+func root_entry_at(base: Ref[byte], index: uint, stride: uint) -> Ref[Root_Entry] {
+    let address: Ref[byte] = __gc_byte_offset(base, index * stride)
+    return unsafe_cast[Ref[Root_Entry]] address
+}
+
+public func depth(mutator: Ref[builtin.gc.Mutator]) -> uint {
+    return mutator.nroots
+}
+
+public func push(mutator: Ref[builtin.gc.Mutator], slot: Ref[Ref[byte]?]) -> bool {
+    let row: Ref[builtin.abi.Type_Record] = root_entry_record()
+    let stride: uint = builtin.abi.size_bytes(row)
+    if !builtin.gc.heap.grow_array(ref mutator.roots, ref mutator.cap_roots,
+                                    stride, builtin.abi.alignment_bytes(row),
+                                    mutator.nroots, mutator.nroots + 1) {
+        return false
+    }
+    let storage: Ref[byte]? = mutator.roots
+    if storage != nil {
+        let entry: Ref[Root_Entry] = root_entry_at(storage.get(),
+                                                   mutator.nroots, stride)
+        entry.slot = slot
+        __gc_signal_fence()
+        mutator.nroots += 1
+        return true
+    }
+    require false
+}
+
+public func slot_at(mutator: Ref[builtin.gc.Mutator], index: uint) -> Ref[Ref[byte]?] {
+    require index < mutator.nroots
+    let storage: Ref[byte]? = mutator.roots
+    if storage != nil {
+        let stride: uint = builtin.abi.size_bytes(root_entry_record())
+        return root_entry_at(storage.get(), index, stride).slot
+    }
+    require false
+}
+
+public func pop(mutator: Ref[builtin.gc.Mutator], target_depth: uint) {
+    require target_depth <= mutator.nroots
+    __gc_signal_fence()
+    mutator.nroots = target_depth
+}
+
+public func free(mutator: Ref[builtin.gc.Mutator]) {
+    let storage: Ref[byte]? = mutator.roots
+    if storage != nil {
+        let stride: uint = builtin.abi.size_bytes(root_entry_record())
+        builtin.os.unmap(storage.get(), mutator.cap_roots * stride)
+    }
+    mutator.roots = nil
+    mutator.nroots = 0
+    mutator.cap_roots = 0
+}
+
+func global_entry_record() -> Ref[builtin.abi.Type_Record] {
+    let probe: Ref[builtin.gc.Global_Root_Entry]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+    if row != nil { return row.get() }
+    require false
+}
+
+func global_pointer_record() -> Ref[builtin.abi.Type_Record] {
+    let probe: Ref[builtin.gc.Global_Root_Entry]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(typeof(probe))
+    if row != nil { return row.get() }
+    require false
+}
+
+func global_pointer_at(heap: Ref[builtin.gc.Heap], index: uint) -> Ref[Ref[builtin.gc.Global_Root_Entry]] {
+    let storage: Ref[byte]? = heap.globals
+    if storage != nil {
+        let stride: uint = builtin.abi.size_bytes(global_pointer_record())
+        let address: Ref[byte] = __gc_byte_offset(storage.get(), index * stride)
+        return unsafe_cast[Ref[Ref[builtin.gc.Global_Root_Entry]]] address
+    }
+    require false
+}
+
+public func global_slot_at(heap: Ref[builtin.gc.Heap], index: uint) -> Ref[Ref[byte]?] {
+    require index < heap.nglobals
+    return ref_read(global_pointer_at(heap, index)).slot
+}
+
+public func add_global(heap: Ref[builtin.gc.Heap], slot: Ref[Ref[byte]?]) -> bool {
+    builtin.gc.sync.ticket_lock(ref heap.lock)
+    let key: uint = __abi_ref_address(slot)
+    if builtin.gc.hash.tab_lookup(ref heap.global_index, key) != nil {
+        builtin.gc.sync.ticket_unlock(ref heap.lock)
+        return true
+    }
+    let row: Ref[builtin.abi.Type_Record] = global_entry_record()
+    let bytes: uint = builtin.abi.size_bytes(row)
+    let mapping: Ref[byte]? = builtin.os.map_zeroed(bytes, builtin.abi.alignment_bytes(row))
+    var added: bool = false
+    if mapping != nil {
+        let pointer: Ref[builtin.abi.Type_Record] = global_pointer_record()
+        let grown: bool = builtin.gc.heap.grow_array(ref heap.globals,
+            ref heap.cap_globals, builtin.abi.size_bytes(pointer),
+            builtin.abi.alignment_bytes(pointer), heap.nglobals,
+            heap.nglobals + 1)
+        if grown and builtin.gc.hash.tab_reserve(ref heap.global_index, 1) {
+            let entry: Ref[builtin.gc.Global_Root_Entry] = unsafe_cast[Ref[builtin.gc.Global_Root_Entry]] mapping.get()
+            entry.slot = slot
+            entry.index = heap.nglobals
+            ref_write(global_pointer_at(heap, heap.nglobals), entry)
+            builtin.gc.hash.tab_insert(ref heap.global_index, key,
+                unsafe_cast[Ref[byte]] entry)
+            heap.nglobals += 1
+            added = true
+        }
+        if !added { builtin.os.unmap(mapping.get(), bytes) }
+    }
+    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    return added
+}
+
+public func remove_global(heap: Ref[builtin.gc.Heap], slot: Ref[Ref[byte]?]) {
+    builtin.gc.sync.ticket_lock(ref heap.lock)
+    let key: uint = __abi_ref_address(slot)
+    let indexed: Ref[byte]? = builtin.gc.hash.tab_lookup(ref heap.global_index, key)
+    if indexed != nil {
+        let entry: Ref[builtin.gc.Global_Root_Entry] = unsafe_cast[Ref[builtin.gc.Global_Root_Entry]] indexed.get()
+        let index: uint = entry.index
+        let last: uint = heap.nglobals - 1
+        builtin.gc.hash.tab_delete(ref heap.global_index, key, indexed.get())
+        if index != last {
+            let moved: Ref[builtin.gc.Global_Root_Entry] = ref_read(global_pointer_at(heap, last))
+            ref_write(global_pointer_at(heap, index), moved)
+            moved.index = index
+        }
+        heap.nglobals = last
+        builtin.os.unmap(entry, builtin.abi.size_bytes(global_entry_record()))
+    }
+    builtin.gc.sync.ticket_unlock(ref heap.lock)
+}

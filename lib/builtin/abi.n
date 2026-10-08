@@ -1,0 +1,214 @@
+public enum Type_Kind {
+    nil_type = 0, primitive_type = 1, record_type, variant_type, enum_type,
+    flagset_type, reference_type, option_type, array_type, view_type,
+    string_type, box_type, callback_type, function_type, trait_type,
+    wrapper_type, union_type, atomic_type, variable_type, named_type,
+    tuple_type
+}
+
+public enum Tag_Kind {
+    invalid = 0, direct_bits = 1, pointer_null = 2, bitptr_depth = 3
+}
+
+public type Range layout(c) {
+    public first: u32
+    public count: u32
+}
+
+public type Array_Descriptor_Header layout(c) {
+    public total_count: u64
+    public rank: u32
+    public flat_rank: u32
+    public flags: u32
+    public reserved_zero: u32
+}
+
+public type Array_Value layout(c) {
+    public data: Ref[byte]?
+    public descriptor: Ref[Array_Descriptor_Header]?
+}
+
+public type String_Bits layout(c) {
+    public low: u64
+    public high: u64
+}
+
+public type Type_Record layout(c) {
+    public typehash: u64
+    public size_bits: u64
+    public canonical_name: String_Bits
+    public kind: u32
+    public flags: u32
+    public alignment_bytes: u32
+    public layout_index: u32
+    public owner_module_index: u32
+    public tracing_index: u32
+    public components: Range
+    public fields_or_arms: Range
+    public constraints: Range
+    public semantic_width_bits: u32
+    public unpacked_storage_bits: u32
+    public call_signature_index: u32
+    public typevar_owner_scope_index: u32
+    public typevar_ordinal: u32
+    public specialization_start_ix: u32
+    public specialization_end_ix: u32
+    public typevar_import_requirement_index: u32
+    public named_constructor: String_Bits
+    public named_arguments: Range
+}
+
+public type Field_Record layout(c) {
+    public name: String_Bits
+    public parent_type_index: u32
+    public child_type_index: u32
+    public declaration_ordinal: u32
+    public visibility: u32
+    public symbol_index: u32
+    public reserved_zero: u32
+    public logical_bit_offset: u64
+    public packed_runs: Range
+    public physical_runs: Range
+    public inline_element_type_index: u32
+    public inline_reserved_zero: u32
+    public inline_element_count: u64
+    public inline_element_stride_bits: u64
+}
+
+public type Trace_Record layout(c) {
+    public type_index: u32
+    public reserved_zero: u32
+    public child_trace_index: u32
+    public tag_extractor_index: u32
+    public fixed_children: Range
+    public arms: Range
+    public option_bit_offset: u64
+}
+
+public type Trace_Child_Record layout(c) {
+    public byte_offset: u64
+    public child_type_index: u32
+    public reserved_zero: u32
+    public repeat_count: u64
+    public stride_bits: u64
+}
+
+public type Trace_Arm_Record layout(c) {
+    public tag_value: u32
+    public child_trace_index: u32
+    public children: Range
+}
+
+public type Tag_Extractor_Record layout(c) {
+    public unit_byte_offset: u64
+    public mask: u64
+    public unit_width_bits: u32
+    public lsb_position: u32
+    public tag_width_bits: u32
+    public kind: u32
+}
+
+public type Frame_Layout_Record layout(c) {
+    public function_index: u32
+    public shadow_frame_type_index: u32
+    public pointer_bitmap_bytes: Range
+    public frame_byte_extent: u64
+}
+
+public type Storage_Record layout(c) {
+    public module_index: u32
+    public symbol_index: u32
+    public type_index: u32
+    public segment_kind: u32
+    public segment_index: u32
+    public instance_shape_index: u32
+    public byte_offset: u64
+    public byte_length: u64
+    public tls_relocations: Range
+}
+
+public func type_at(index: u32) -> Ref[Type_Record]? {
+    return __abi_type(index)
+}
+
+public func type_for(descriptor: typespec) -> Ref[Type_Record]? {
+    return __abi_type_for(descriptor)
+}
+
+public func field_at(index: u32) -> Ref[Field_Record]? {
+    return __abi_field(index)
+}
+
+public func trace_at(index: u32) -> Ref[Trace_Record]? {
+    return __abi_trace(index)
+}
+
+public func trace_child_at(index: u32) -> Ref[Trace_Child_Record]? {
+    return __abi_trace_child(index)
+}
+
+public func trace_arm_at(index: u32) -> Ref[Trace_Arm_Record]? {
+    return __abi_trace_arm(index)
+}
+
+public func tag_extractor_at(index: u32) -> Ref[Tag_Extractor_Record]? {
+    return __abi_tag_extractor(index)
+}
+
+public func frame_layout_at(index: u32) -> Ref[Frame_Layout_Record]? {
+    return __abi_frame_layout(index)
+}
+
+public func storage_count() -> u32 {
+    return __abi_storage_count()
+}
+
+public func storage_at(index: u32) -> Ref[Storage_Record]? {
+    return __abi_storage(index)
+}
+
+public func storage_address(index: u32) -> Ref[byte]? {
+    return __abi_storage_address(index)
+}
+
+public func string_backing_at(address: Ref[byte]) -> Ref[byte]? {
+    return __abi_string_backing_at(address)
+}
+
+public func bytes(range: Range) -> Ref[byte]? {
+    return __abi_bytes(range.first, range.count)
+}
+
+public func range_index(range: Range, ordinal: u32) -> i64 {
+    return __abi_range_index(range.first, range.count, ordinal)
+}
+
+func first_component(row: Ref[Type_Record]) -> Ref[Type_Record]? {
+    let index: i64 = range_index(row.components, 0)
+    if index < 0 { return nil }
+    return type_at(cast[u32] index)
+}
+
+public func reference_target(descriptor: typespec) -> Ref[Type_Record]? {
+    let reference: Ref[Type_Record]? = type_for(descriptor)
+    if reference != nil { return first_component(reference.get()) }
+    return nil
+}
+
+public func optional_reference_target(descriptor: typespec) -> Ref[Type_Record]? {
+    let option: Ref[Type_Record]? = type_for(descriptor)
+    if option != nil {
+        let reference: Ref[Type_Record]? = first_component(option.get())
+        if reference != nil { return first_component(reference.get()) }
+    }
+    return nil
+}
+
+public func size_bytes(row: Ref[Type_Record]) -> uint {
+    require row.size_bits % 8 == 0
+    return cast[uint](row.size_bits / 8)
+}
+
+public func alignment_bytes(row: Ref[Type_Record]) -> uint {
+    return cast[uint](row.alignment_bytes)
+}
