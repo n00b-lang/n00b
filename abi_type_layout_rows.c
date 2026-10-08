@@ -363,7 +363,8 @@ n00bb_abi_type_layout_rows_build(
                 != (types->rows[i].kind == N00B_ABI_TYPE_VARIANT)
             || (final->n_members
                 && types->rows[i].kind != N00B_ABI_TYPE_RECORD
-                && types->rows[i].kind != N00B_ABI_TYPE_VARIANT)
+                && types->rows[i].kind != N00B_ABI_TYPE_VARIANT
+                && types->rows[i].kind != N00B_ABI_TYPE_TUPLE)
             || layouts.len >= UINT32_MAX
             || types->rows[i].size_bits != final->intrinsic_bits
             || types->rows[i].alignment_bytes != final->alignment_bytes) {
@@ -408,6 +409,8 @@ n00bb_abi_type_layout_rows_build(
             && append_members(index, declarations, names, owner, final,
                 (uint32_t)i, stream_base, &fields, &arms, &packed, &runs,
                 &indexes, &type_field_ranges[i]);
+        if (valid && types->rows[i].kind == N00B_ABI_TYPE_TUPLE)
+            row.policy = N00B_ABI_LAYOUT_ORDERED;
         if (!valid) break;
         type_layout_indexes[i] = (uint32_t)layouts.len;
         core_list_push(layouts, row);

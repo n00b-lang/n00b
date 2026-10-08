@@ -1,0 +1,10 @@
+public type Holder {
+    item: Tuple[string, bool]
+}
+
+public const pair: Tuple[string, bool] = ("a long ordered tuple string value", true)
+public const holder: Holder = (item = ("a long nested tuple string value", false))
+public const pairs: Array[Tuple[string, bool]] = [
+    ("a long first tuple array value", true),
+    ("a long second tuple array value", false),
+]

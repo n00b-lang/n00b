@@ -92,6 +92,8 @@ type_category(ir_module_t *module, th_type *type,
             row->kind = N00B_ABI_TYPE_PRIMITIVE;
             row->semantic_width_bits = 32;
         }
+        else if (name_is(name, name_len, TH_TUPLE))
+            row->kind = N00B_ABI_TYPE_TUPLE;
         else if (variant) row->kind = N00B_ABI_TYPE_VARIANT;
         else {
             th_type *definition = ir_type_definition(module, type);
@@ -349,6 +351,14 @@ append_type_components(n00bb_abi_type_index_t *index, ir_module_t *module,
         return true;
     }
     if (kind == N00B_ABI_TYPE_VARIANT && source_kind == TH_NAMED) {
+        for (size_t i = 0; i < th_named_nargs(type); i++) {
+            const th_arg *arg = th_named_arg(type, i);
+            if (!arg || arg->kind != TH_ARG_TYPE
+                || !append_component(index, arg->type, indexes)) return false;
+        }
+        return true;
+    }
+    if (kind == N00B_ABI_TYPE_TUPLE && source_kind == TH_NAMED) {
         for (size_t i = 0; i < th_named_nargs(type); i++) {
             const th_arg *arg = th_named_arg(type, i);
             if (!arg || arg->kind != TH_ARG_TYPE

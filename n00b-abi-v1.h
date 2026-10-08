@@ -176,6 +176,7 @@ typedef enum {
     N00B_ABI_TYPE_UNION,
     N00B_ABI_TYPE_ATOMIC,
     N00B_ABI_TYPE_VARIABLE,
+    N00B_ABI_TYPE_TUPLE,
 } n00b_abi_type_kind_v1;
 
 typedef enum {

@@ -1,6 +1,7 @@
 #include "abi_layout.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "lib/alloc.h"
@@ -9,6 +10,10 @@
 #include "ir/typelang.h"
 
 core_list_decl(ir_layout_bit_run_t);
+
+static bool publish_tuple_layout(ir_module_t *module, th_type *type,
+                                 const core_target_desc_t *target,
+                                 core_dict_t *seen, bool *handled);
 
 static bool
 same_final_layout(const ir_final_layout_t *layout, uint32_t storage_bits,
@@ -109,6 +114,9 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         const char *name = nullptr;
         size_t arguments = 0;
         th_named_info(type, &name, nullptr, nullptr, &arguments);
+        if (name && !strcmp(name, TH_TUPLE))
+            return publish_tuple_layout(module, type, target, seen,
+                                        handled);
         bool fixed_handle = name && (!strcmp(name, "string")
             || !strcmp(name, "any") || !strcmp(name, "array")
             || !strcmp(name, "view"));
@@ -396,6 +404,58 @@ n00bb_abi_publish_c_record_layout(
     if (!count) return false;
     return n00bb_abi_publish_record_layout(module, type, target,
         N00BB_RECORD_C, false, members, count);
+}
+
+static bool
+publish_tuple_layout(ir_module_t *module, th_type *type,
+                     const core_target_desc_t *target, core_dict_t *seen,
+                     bool *handled)
+{
+    size_t count = th_named_nargs(type);
+    if (count > UINT32_MAX) return false;
+    if (ir_layout_final(module, type, target->triple)) {
+        *handled = true;
+        return true;
+    }
+    n00bb_abi_record_member_t *members = count
+        ? core_alloc_array(n00bb_abi_record_member_t, count) : nullptr;
+    char **names = count ? core_alloc_array(char *, count) : nullptr;
+    bool valid = !count || (members && names);
+    bool ready = valid;
+    for (size_t i = 0; valid && i < count; i++) {
+        const th_arg *argument = th_named_arg(type, i);
+        th_type *child = argument && argument->kind == TH_ARG_TYPE
+            ? argument->type : nullptr;
+        bool direct = false;
+        if (!child || !publish_direct_or_alias(module, child, target,
+                                               seen, &direct)) {
+            valid = false;
+            break;
+        }
+        if (!ir_layout_final(module, child, target->triple)) {
+            ready = false;
+            break;
+        }
+        size_t capacity = 3 * sizeof(size_t) + 2;
+        names[i] = core_alloc_array(char, capacity);
+        int written = names[i] ? snprintf(names[i], capacity, "%zu", i) : -1;
+        if (written < 0 || (size_t)written >= capacity) {
+            valid = false;
+            break;
+        }
+        members[i] = (n00bb_abi_record_member_t){
+            .name = names[i], .type = child, .ordinal = (uint32_t)i,
+        };
+    }
+    if (valid && ready) {
+        valid = n00bb_abi_publish_record_layout(module, type, target,
+            N00BB_RECORD_ORDERED, false, members, count);
+        *handled = valid;
+    }
+    for (size_t i = 0; i < count; i++) core_free(names ? names[i] : nullptr);
+    core_free(names);
+    core_free(members);
+    return valid;
 }
 
 static void

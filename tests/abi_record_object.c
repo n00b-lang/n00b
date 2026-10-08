@@ -1206,7 +1206,8 @@ record_field_named(const core_object_section_t *metadata,
         N00B_ABI_TABLE_U32_STREAM);
     assert(types && fields && stream && type_index < types->record_count);
     const n00b_abi_type_v1 *type = row_at(metadata, types, type_index);
-    assert(type->kind == N00B_ABI_TYPE_RECORD
+    assert((type->kind == N00B_ABI_TYPE_RECORD
+            || type->kind == N00B_ABI_TYPE_TUPLE)
         && type->fields_or_arms.first <= stream->record_count
         && type->fields_or_arms.count
             <= stream->record_count - type->fields_or_arms.first);
@@ -1514,6 +1515,94 @@ check_variant_storage(const uint8_t *object, size_t length,
         data_offset + 2 * stride, "a long variant string value");
 }
 
+static void
+check_tuple_storage(const uint8_t *object, size_t length,
+    const core_object_section_t *metadata,
+    const n00bb_abi_directory_entry_t *entries, size_t count,
+    uint32_t target_id)
+{
+    core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
+        ? CORE_TARGET_OBJECT_MACH_O
+        : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
+            ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
+    const n00b_abi_storage_v1 *pair = storage_named(metadata, entries,
+        count, "pair");
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    assert(types && layouts && pair->type_index < types->record_count);
+    const n00b_abi_type_v1 *type = row_at(metadata, types, pair->type_index);
+    assert(type->kind == N00B_ABI_TYPE_TUPLE && type->size_bits == 136
+        && type->alignment_bytes == 8 && type->fields_or_arms.count == 2
+        && type->layout_index < layouts->record_count);
+    const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
+        type->layout_index);
+    assert(layout->policy == N00B_ABI_LAYOUT_ORDERED);
+    const n00b_abi_field_v1 *text = record_field_named(metadata, entries,
+        count, pair->type_index, "0");
+    const n00b_abi_field_v1 *flag = record_field_named(metadata, entries,
+        count, pair->type_index, "1");
+    assert(text->declaration_ordinal == 0 && text->logical_bit_offset == 0
+        && flag->declaration_ordinal == 1 && flag->logical_bit_offset == 128);
+    core_object_section_t section;
+    assert(pair->segment_kind == N00B_ABI_STORAGE_READ_ONLY
+        && pair->byte_length == 17
+        && core_object_section_at(object, length, format,
+            pair->segment_index, &section)
+        && pair->byte_offset <= section.size
+        && pair->byte_length <= section.size - pair->byte_offset);
+    assert(record_bits(section.bytes + pair->byte_offset,
+                       flag->logical_bit_offset, 1) == 1);
+    check_record_string_relocation(object, length, format, &section,
+        pair->byte_offset, "a long ordered tuple string value");
+
+    const n00b_abi_storage_v1 *holder = storage_named(metadata, entries,
+        count, "holder");
+    const n00b_abi_field_v1 *item = record_field_named(metadata, entries,
+        count, holder->type_index, "item");
+    core_object_section_t holder_section;
+    assert(item->child_type_index == pair->type_index
+        && item->logical_bit_offset % 8 == 0
+        && core_object_section_at(object, length, format,
+            holder->segment_index, &holder_section));
+    const uint8_t *nested = holder_section.bytes + holder->byte_offset
+        + item->logical_bit_offset / 8;
+    assert(record_bits(nested, flag->logical_bit_offset, 1) == 0);
+    check_record_string_relocation(object, length, format, &holder_section,
+        holder->byte_offset + item->logical_bit_offset / 8,
+        "a long nested tuple string value");
+
+    const n00b_abi_storage_v1 *pairs = storage_named(metadata, entries,
+        count, "pairs");
+    core_object_section_t source, backing;
+    assert(core_object_section_at(object, length, format,
+        pairs->segment_index, &source)
+        && core_object_section_find(object, length, format,
+            format == CORE_TARGET_OBJECT_MACH_O ? "__DATA_CONST" : nullptr,
+            format == CORE_TARGET_OBJECT_MACH_O ? "__n00b_aggregate"
+            : format == CORE_TARGET_OBJECT_COFF ? ".rdata$A"
+            : ".rodata.n00b_aggregate", &backing));
+    uint64_t data_offset = aggregate_pointer_addend(object, length,
+        format, &source, &backing, pairs->byte_offset);
+    uint64_t descriptor_offset = aggregate_pointer_addend(object, length,
+        format, &source, &backing, pairs->byte_offset + 8);
+    uint64_t stride = (pair->byte_length + type->alignment_bytes - 1)
+        & ~(uint64_t)(type->alignment_bytes - 1);
+    assert(stride == 24 && data_offset <= backing.size
+        && stride <= (backing.size - data_offset) / 2
+        && descriptor_offset <= backing.size - 32
+        && core_le_load_u64(backing.bytes + descriptor_offset) == 2);
+    assert(record_bits(backing.bytes + data_offset,
+        flag->logical_bit_offset, 1) == 1
+        && record_bits(backing.bytes + data_offset + stride,
+            flag->logical_bit_offset, 1) == 0);
+    check_record_string_relocation(object, length, format, &backing,
+        data_offset, "a long first tuple array value");
+    check_record_string_relocation(object, length, format, &backing,
+        data_offset + stride, "a long second tuple array value");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1537,6 +1626,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "record-bits-storage")
             || !strcmp(argv[2], "record-nested-storage")
             || !strcmp(argv[2], "variant-storage")
+            || !strcmp(argv[2], "tuple-storage")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -1681,6 +1771,13 @@ main(int argc, char **argv)
     if (argc == 3 && !strcmp(argv[2], "variant-storage")) {
         check_variant_storage(object, (size_t)length, &metadata,
             entries, header.directory_count, header.key.target_id);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "tuple-storage")) {
+        check_tuple_storage(object, (size_t)length, &metadata, entries,
+            header.directory_count, header.key.target_id);
         free(entries);
         free(object);
         return 0;

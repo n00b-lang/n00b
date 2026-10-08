@@ -609,6 +609,7 @@ key_append_type_variables(const n00bb_abi_object_view_t *view,
         }
     }
     uint32_t member_kind = type->kind == N00B_ABI_TYPE_RECORD
+        || type->kind == N00B_ABI_TYPE_TUPLE
         ? N00B_ABI_TABLE_FIELD
         : type->kind == N00B_ABI_TYPE_VARIANT ? N00B_ABI_TABLE_ARM
         : type->kind == N00B_ABI_TYPE_TRAIT ? N00B_ABI_TABLE_TRAIT_METHOD
@@ -783,6 +784,7 @@ compatible_type_members(const abi_link_key_t *first,
     if (!valid_index_range(first->view, a_range)
         || !valid_index_range(candidate->view, b_range)) return false;
     uint32_t member_kind = a->kind == N00B_ABI_TYPE_RECORD
+        || a->kind == N00B_ABI_TYPE_TUPLE
         ? N00B_ABI_TABLE_FIELD
         : a->kind == N00B_ABI_TYPE_VARIANT ? N00B_ABI_TABLE_ARM
         : a->kind == N00B_ABI_TYPE_ENUM
@@ -1301,6 +1303,7 @@ type_member_kind(const n00b_abi_type_v1 *type)
 {
     switch (type->kind) {
     case N00B_ABI_TYPE_RECORD: return N00B_ABI_TABLE_FIELD;
+    case N00B_ABI_TYPE_TUPLE: return N00B_ABI_TABLE_FIELD;
     case N00B_ABI_TYPE_VARIANT: return N00B_ABI_TABLE_ARM;
     case N00B_ABI_TYPE_ENUM:
     case N00B_ABI_TYPE_FLAGSET: return N00B_ABI_TABLE_ENUM_ITEM;

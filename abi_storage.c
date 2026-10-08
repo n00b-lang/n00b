@@ -254,7 +254,8 @@ encode_aggregate_member(array_writer_t *writer,
     size_t pool_offset = 0;
     bool valid;
     if (child_type->kind == N00B_ABI_TYPE_RECORD
-        || child_type->kind == N00B_ABI_TYPE_VARIANT)
+        || child_type->kind == N00B_ABI_TYPE_VARIANT
+        || child_type->kind == N00B_ABI_TYPE_TUPLE)
         valid = encode_aggregate(writer, member->type, item, source_kind,
             child_source, child, child_bytes, depth + 1);
     else if (child_type->kind == N00B_ABI_TYPE_ARRAY)
@@ -313,12 +314,17 @@ encode_aggregate(array_writer_t *writer, th_type *type,
     const ir_final_layout_t *layout = ir_layout_final(writer->runtime, type,
         ir_module_target(writer->runtime));
     if (!layout || !value || depth > 64 || byte_count > SIZE_MAX / 8
-        || layout->intrinsic_bits > byte_count * 8 || !layout->members)
+        || layout->intrinsic_bits > byte_count * 8
+        || (layout->n_members && !layout->members))
         return false;
     bool variant = layout->has_discriminant;
+    const char *name = nullptr;
+    bool tuple = th_named_info(type, &name, nullptr, nullptr, nullptr)
+        && name && !strcmp(name, TH_TUPLE);
     if (variant ? value->kind != IR_GLOBAL_INIT_VARIANT
                 || value->aggregate.count != 1 || !value->aggregate.items
-                : value->kind != IR_GLOBAL_INIT_RECORD
+                : value->kind != (tuple ? IR_GLOBAL_INIT_TUPLE
+                                        : IR_GLOBAL_INIT_RECORD)
                 || value->aggregate.count != layout->n_members
                 || (layout->n_members && !value->aggregate.items))
         return false;
@@ -326,12 +332,14 @@ encode_aggregate(array_writer_t *writer, th_type *type,
     bool valid = true;
     for (size_t i = 0; valid && i < value->aggregate.count; i++) {
         const ir_global_init_value_t *item = &value->aggregate.items[i];
-        size_t slot = 0;
-        while (slot < layout->n_members
+        size_t slot = tuple ? i : 0;
+        while (!tuple && slot < layout->n_members
             && (!item->member || !layout->members[slot].name
                 || strcmp(item->member, layout->members[slot].name)))
             slot++;
-        if (slot == layout->n_members || (!variant && seen[slot])) {
+        if (slot == layout->n_members || (!variant && seen[slot])
+            || (tuple && (item->member
+                || layout->members[slot].ordinal != i))) {
             valid = false;
             break;
         }
@@ -392,7 +400,8 @@ encode_array_items(array_writer_t *writer,
         const n00b_abi_type_v1 *row = &writer->types->rows[type_index];
         uint8_t inline_bytes[16] = {0};
         bool aggregate = row->kind == N00B_ABI_TYPE_RECORD
-            || row->kind == N00B_ABI_TYPE_VARIANT;
+            || row->kind == N00B_ABI_TYPE_VARIANT
+            || row->kind == N00B_ABI_TYPE_TUPLE;
         if (aggregate && at > UINT64_MAX / 8) return false;
         uint8_t *bytes = aggregate ? core_alloc_array(uint8_t, stride)
                                    : inline_bytes;
@@ -470,7 +479,8 @@ encode_array(array_writer_t *writer, th_type *type,
     size_t width = row->semantic_width_bits;
     if (!alignment || (alignment & (alignment - 1))
         || !stride || (row->kind != N00B_ABI_TYPE_RECORD
-            && row->kind != N00B_ABI_TYPE_VARIANT && stride > 16)
+            && row->kind != N00B_ABI_TYPE_VARIANT
+            && row->kind != N00B_ABI_TYPE_TUPLE && stride > 16)
         || (packed && (!width || width > 128
             || shape.total_count > (SIZE_MAX - 7) / width))
         || (!packed && shape.total_count > SIZE_MAX / stride)
@@ -620,6 +630,7 @@ n00bb_abi_storage_rows_build(
         bool is_array = type_row->kind == N00B_ABI_TYPE_ARRAY;
         bool is_record = type_row->kind == N00B_ABI_TYPE_RECORD;
         bool is_variant = type_row->kind == N00B_ABI_TYPE_VARIANT;
+        bool is_tuple = type_row->kind == N00B_ABI_TYPE_TUPLE;
         const ir_global_init_value_t *initializer =
             global->has_static_initializer ? global->static_initializer
                                            : nullptr;
@@ -629,7 +640,7 @@ n00bb_abi_storage_rows_build(
                 ? (bits != 128 || alignment != 8
                     || !encode_string(pool, initializer, bytes, &pool_offset))
                 : is_array ? (bits != 128 || alignment != 8)
-                    : (is_record || is_variant) ? (!bits || !initializer)
+                : (is_record || is_variant || is_tuple) ? !initializer
                     : !encode_scalar(runtime, global->type, initializer,
                                      bits, bytes))) {
             valid = false;
@@ -670,8 +681,9 @@ n00bb_abi_storage_rows_build(
             .index = index, .types = types, .runtime = runtime,
             .pool = pool, .built = &built, .relocations = &relocations,
         };
-        if (is_record || is_variant) {
-            uint8_t *record = core_alloc_array(uint8_t, byte_length);
+        if (is_record || is_variant || is_tuple) {
+            uint8_t *record = core_alloc_array(uint8_t,
+                                                byte_length ? byte_length : 1);
             memset(record, 0, byte_length);
             valid = row.byte_offset <= UINT64_MAX / 8
                 && encode_aggregate(&writer, global->type, initializer,

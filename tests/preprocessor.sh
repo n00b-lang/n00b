@@ -1446,6 +1446,12 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
 N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/abi_variant_storage_linked.o" abi_variant_storage_probe
 "$abi_record_object_test" "$tmp/abi_variant_storage_linked.o" variant-storage
+"$compiler" compile --output "$tmp/abi_tuple_storage_probe.o" \
+    "$program_dir/../abi/abi_tuple_storage_probe.n00b"
+"$abi_record_object_test" "$tmp/abi_tuple_storage_probe.o" tuple-storage
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/abi_tuple_storage_linked.o" abi_tuple_storage_probe
+"$abi_record_object_test" "$tmp/abi_tuple_storage_linked.o" tuple-storage
 if "$compiler" lower "$program_dir/../abi/abi_nil_standalone_invalid.n00b" \
     >"$tmp/abi_nil_standalone_invalid.out" 2>&1; then
     echo 'standalone nil global unexpectedly lowered' >&2
@@ -1755,7 +1761,7 @@ grep -q '= call @__write,' "$tmp/lower_compound_storage.ir"
     exit 1
 }
 test "$(grep -c '= aggregate' "$tmp/lower_tuple_assignment.ir")" -eq 2
-grep -q 'store .*ir.binding_initialization(true)' \
+grep -q 'copy .*ir.binding_initialization(true)' \
     "$tmp/lower_tuple_assignment.ir"
 
 if "$compiler" lower "$program_dir/lower_immutable_assignment.n00b" \
