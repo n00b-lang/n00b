@@ -284,6 +284,27 @@ test_cycle_selection(char **paths)
     assert(!n00bb_abi_index_plan_build(&selected));
     layout_probe->width_bits ^= 1;
     check_remapped_rows(&selected, plan);
+    n00b_abi_module_v1 *module = (void *)n00bb_abi_object_row(first,
+        N00B_ABI_TABLE_MODULE, 1);
+    n00b_abi_module_v1 remapped_module;
+    assert(module && module->package_index && module->runtime_config_index
+        && module->source_file_index && module->scc_index);
+    uint32_t *required[] = {&module->package_index,
+        &module->runtime_config_index, &module->source_file_index};
+    for (size_t i = 0; i < sizeof(required) / sizeof(*required); i++) {
+        uint32_t saved = *required[i];
+        *required[i] = 0;
+        assert(!n00bb_abi_remap_row(&selected, plan, 0,
+            N00B_ABI_TABLE_MODULE, 1, &remapped_module,
+            sizeof(remapped_module), nullptr));
+        *required[i] = saved;
+    }
+    uint32_t saved_scc = module->scc_index;
+    module->scc_index = 0;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_MODULE, 1, &remapped_module,
+        sizeof(remapped_module), nullptr));
+    module->scc_index = saved_scc;
     n00bb_abi_manifest_rows_t manifests = {0};
     assert(n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
         && manifests.package_count == 2 && manifests.scc_count == 2
@@ -1300,6 +1321,11 @@ test_specialization_remap(void)
     assert(n00bb_abi_remap_row(&selected, plan, 0,
         N00B_ABI_TABLE_SPECIALIZATION_LINK, 1, &link, sizeof(link),
         nullptr) && link == 0);
+    metadata.types[1].kind = N00B_ABI_TYPE_VARIABLE;
+    metadata.types[1].specialization_start_ix = 0;
+    metadata.types[1].specialization_end_ix = 0;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_TYPE,
+        1, &type, sizeof(type), nullptr));
     n00bb_abi_index_plan_free(plan);
 }
 

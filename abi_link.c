@@ -1145,89 +1145,94 @@ typedef struct {
     size_t offset;
     uint32_t target_kind;
     bool optional_type;
+    bool required;
 } abi_ref_column_t;
 
 #define ABI_REF(K, T, F, TARGET) \
     {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F), \
-     N00B_ABI_TABLE_##TARGET, false}
+     N00B_ABI_TABLE_##TARGET, false, false}
+#define ABI_REQUIRED_REF(K, T, F, TARGET) \
+    {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F), \
+     N00B_ABI_TABLE_##TARGET, false, true}
 #define ABI_OPTIONAL_TYPE(K, T, F) \
     {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F), \
-     N00B_ABI_TABLE_TYPE, true}
+     N00B_ABI_TABLE_TYPE, true, false}
 
 static const abi_ref_column_t abi_index_columns[] = {
     ABI_REF(PACKAGE, package, parent_package_index, PACKAGE),
-    ABI_REF(MODULE, module, package_index, PACKAGE),
+    ABI_REQUIRED_REF(MODULE, module, package_index, PACKAGE),
     ABI_REF(MODULE, module, scc_index, SCC),
     ABI_REF(MODULE, module, comptime_initializer, FUNCTION),
     ABI_REF(MODULE, module, runtime_initializer, FUNCTION),
-    ABI_REF(MODULE, module, runtime_config_index, RUNTIME_CONFIG),
-    ABI_REF(MODULE, module, source_file_index, SOURCE_FILE),
+    ABI_REQUIRED_REF(MODULE, module, runtime_config_index, RUNTIME_CONFIG),
+    ABI_REQUIRED_REF(MODULE, module, source_file_index, SOURCE_FILE),
     ABI_REF(TYPE, type, layout_index, LAYOUT),
     ABI_REF(TYPE, type, owner_module_index, MODULE),
     ABI_REF(TYPE, type, tracing_index, TRACE),
     ABI_REF(TYPE, type, call_signature_index, CALL_SIGNATURE),
     ABI_REF(TYPE, type, typevar_owner_scope_index, SCOPE),
-    ABI_REF(ENUM_ITEM, enum_item, parent_type_index, TYPE),
+    ABI_REQUIRED_REF(ENUM_ITEM, enum_item, parent_type_index, TYPE),
     ABI_REF(ENUM_ITEM, enum_item, symbol_index, SYMBOL),
     ABI_OPTIONAL_TYPE(CONSTRAINT, constraint, target_type_index),
     ABI_OPTIONAL_TYPE(CONSTRAINT, constraint, result_type_index),
     ABI_OPTIONAL_TYPE(CONSTRAINT, constraint, call_type_index),
     ABI_REF(LAYOUT, layout, type_index, TYPE),
     ABI_REF(LAYOUT, layout, tag_extractor_index, TAG_EXTRACTOR),
-    ABI_REF(FIELD, field, parent_type_index, TYPE),
+    ABI_REQUIRED_REF(FIELD, field, parent_type_index, TYPE),
     ABI_REF(FIELD, field, child_type_index, TYPE),
     ABI_REF(FIELD, field, symbol_index, SYMBOL),
-    ABI_REF(ARM, arm, field.parent_type_index, TYPE),
+    ABI_REQUIRED_REF(ARM, arm, field.parent_type_index, TYPE),
     ABI_REF(ARM, arm, field.child_type_index, TYPE),
     ABI_REF(ARM, arm, field.symbol_index, SYMBOL),
-    ABI_REF(TRACE, trace, type_index, TYPE),
+    ABI_REQUIRED_REF(TRACE, trace, type_index, TYPE),
     ABI_REF(TRACE, trace, child_trace_index, TRACE),
     ABI_REF(TRACE, trace, tag_extractor_index, TAG_EXTRACTOR),
-    ABI_REF(TRACE_CHILD, trace_child, child_type_index, TYPE),
+    ABI_REQUIRED_REF(TRACE_CHILD, trace_child, child_type_index, TYPE),
     ABI_REF(TRACE_ARM, trace_arm, child_trace_index, TRACE),
-    ABI_REF(FUNCTION, function, module_index, MODULE),
-    ABI_REF(FUNCTION, function, scope_index, SCOPE),
+    ABI_REQUIRED_REF(FUNCTION, function, module_index, MODULE),
+    ABI_REQUIRED_REF(FUNCTION, function, scope_index, SCOPE),
     ABI_REF(FUNCTION, function, symbol_index, SYMBOL),
     ABI_REF(FUNCTION, function, success_type_index, TYPE),
     ABI_REF(FUNCTION, function, failure_type_index, TYPE),
     ABI_OPTIONAL_TYPE(FUNCTION, function, variadic_type_index),
-    ABI_REF(CALL_SIGNATURE, call_signature, type_index, TYPE),
+    ABI_REQUIRED_REF(CALL_SIGNATURE, call_signature, type_index, TYPE),
     ABI_REF(CALL_SIGNATURE, call_signature, success_type_index, TYPE),
     ABI_REF(CALL_SIGNATURE, call_signature, failure_type_index, TYPE),
     ABI_REF(CALL_SIGNATURE, call_signature, rest_parameter_index, PARAMETER),
     ABI_REF(PARAMETER, parameter, type_index, TYPE),
-    ABI_REF(CODE_RANGE, code_range, function_index, FUNCTION),
-    ABI_REF(SCOPE, scope, module_index, MODULE),
+    ABI_REQUIRED_REF(CODE_RANGE, code_range, function_index, FUNCTION),
+    ABI_REQUIRED_REF(SCOPE, scope, module_index, MODULE),
     ABI_REF(SCOPE, scope, function_index, FUNCTION),
     ABI_REF(SCOPE, scope, parent_scope_index, SCOPE),
     ABI_REF(SCOPE, scope, source_location_index, SOURCE_LOCATION),
     ABI_REF(SYMBOL, symbol, type_index, TYPE),
-    ABI_REF(SYMBOL, symbol, module_index, MODULE),
-    ABI_REF(SYMBOL, symbol, scope_index, SCOPE),
+    ABI_REQUIRED_REF(SYMBOL, symbol, module_index, MODULE),
+    ABI_REQUIRED_REF(SYMBOL, symbol, scope_index, SCOPE),
     ABI_REF(SYMBOL, symbol, declaration_location_index, SOURCE_LOCATION),
     ABI_REF(SYMBOL, symbol, native_binding_index, NATIVE_BINDING),
-    ABI_REF(TRAIT_METHOD, trait_method, trait_type_index, TYPE),
-    ABI_REF(TRAIT_METHOD, trait_method, signature_type_index, TYPE),
+    ABI_REQUIRED_REF(TRAIT_METHOD, trait_method, trait_type_index, TYPE),
+    ABI_REQUIRED_REF(TRAIT_METHOD, trait_method, signature_type_index, TYPE),
     ABI_REF(TRAIT_METHOD, trait_method, symbol_index, SYMBOL),
-    ABI_REF(DISPATCH, dispatch, trait_type_index, TYPE),
+    ABI_REQUIRED_REF(DISPATCH, dispatch, trait_type_index, TYPE),
     ABI_REF(DISPATCH_ENTRY, dispatch_entry, receiver_type_index, TYPE),
-    ABI_REF(DISPATCH_ENTRY, dispatch_entry, function_index, FUNCTION),
-    ABI_REF(FRAME_LAYOUT, frame_layout, function_index, FUNCTION),
+    ABI_REQUIRED_REF(DISPATCH_ENTRY, dispatch_entry, function_index, FUNCTION),
+    ABI_REQUIRED_REF(FRAME_LAYOUT, frame_layout, function_index, FUNCTION),
     ABI_REF(FRAME_LAYOUT, frame_layout, shadow_frame_type_index, TYPE),
-    ABI_REF(SOURCE_LOCATION, source_location, file_index, SOURCE_FILE),
-    ABI_REF(STORAGE, storage, module_index, MODULE),
+    ABI_REQUIRED_REF(SOURCE_LOCATION, source_location, file_index, SOURCE_FILE),
+    ABI_REQUIRED_REF(STORAGE, storage, module_index, MODULE),
     ABI_REF(STORAGE, storage, symbol_index, SYMBOL),
     ABI_REF(STORAGE, storage, type_index, TYPE),
     ABI_REF(STORAGE, storage, instance_shape_index, SHAPE),
-    ABI_REF(TLS_RELOCATION, tls_relocation, template_storage_index, STORAGE),
-    ABI_REF(TLS_RELOCATION, tls_relocation, referenced_storage_index, STORAGE),
+    ABI_REQUIRED_REF(TLS_RELOCATION, tls_relocation, template_storage_index, STORAGE),
+    ABI_REQUIRED_REF(TLS_RELOCATION, tls_relocation, referenced_storage_index, STORAGE),
     ABI_REF(NAME_SLOT, name_slot, symbol_index, SYMBOL),
     ABI_OPTIONAL_TYPE(REQUIREMENT, requirement, contract_type_index),
     ABI_REF(REQUIREMENT, requirement, required_layout_index, LAYOUT),
-    ABI_REF(REQUIREMENT, requirement, requesting_module_index, MODULE),
+    ABI_REQUIRED_REF(REQUIREMENT, requirement, requesting_module_index, MODULE),
 };
 
 #undef ABI_REF
+#undef ABI_REQUIRED_REF
 #undef ABI_OPTIONAL_TYPE
 
 typedef struct {
@@ -1380,6 +1385,7 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
             || sizeof(uint32_t) > table->record_bytes - field->offset)
             return false;
         uint32_t local = core_le_load_u32(bytes + field->offset), mapped;
+        if (local_index && field->required && !local) return false;
         if (field->optional_type
             && local == N00B_ABI_V1_NO_TYPE_INDEX) mapped = local;
         else if (!remap_index(plan, input_index, field->target_kind,
@@ -1415,6 +1421,8 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
     }
     if (kind == N00B_ABI_TABLE_TYPE) {
         n00b_abi_type_v1 *type = out;
+        if (type->kind == N00B_ABI_TYPE_VARIABLE
+            && !type->typevar_owner_scope_index) return false;
         uint32_t start = type->specialization_start_ix;
         uint32_t end = type->specialization_end_ix;
         if (start || end) {
