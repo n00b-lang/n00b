@@ -485,7 +485,8 @@ encode_array(array_writer_t *writer, th_type *type,
             && row->kind != N00B_ABI_TYPE_TUPLE && stride > 16)
         || (packed && (!width || width > 128
             || shape.total_count > (SIZE_MAX - 7) / width))
-        || (!packed && shape.total_count > SIZE_MAX / stride)
+        || (!packed && (shape.total_count > SIZE_MAX
+            || (stride && shape.total_count > SIZE_MAX / stride)))
         || (shape_index && (writer->built->shape_count >= UINT32_MAX
             || shape.rank > UINT32_MAX - writer->built->extent_count))) {
         valid = false;
