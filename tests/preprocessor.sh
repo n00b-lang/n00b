@@ -1722,7 +1722,7 @@ for command in build library; do
     grep -q '^execution-graph:$' "$tmp/$command.dumps"
     grep -q '^pdg @add ' "$tmp/$command.dumps"
     if [ "$command" = build ]; then
-        grep -q 'LLVM backend cannot lower function' \
+        grep -q "LLVM backend cannot lower 'rem' yet" \
             "$tmp/$command.dumps"
     else
         grep -q "'$command' processing is not implemented yet" \
@@ -3427,6 +3427,62 @@ if "$compiler" lower --dump-ir \
 fi
 grep -q 'no literal handler is registered for this modifier and payload shape' \
     "$tmp/lower_unregistered_fence_modifier.out"
+
+"$compiler" preprocess "$script_dir/programs/litmod_registration.n00b" \
+    >"$tmp/litmod_registration.tree" \
+    2>"$tmp/litmod_registration.err" || {
+    cat "$tmp/litmod_registration.err"
+    exit 1
+}
+if grep -Fq 'declare_litmod' "$tmp/litmod_registration.tree"; then
+    echo 'literal modifier registration remained in the compiled tree' >&2
+    exit 1
+fi
+"$compiler" lower "$script_dir/programs/litmod_registration.n00b" \
+    >"$tmp/litmod_registration.ir" \
+    2>"$tmp/litmod_registration.err" || {
+    cat "$tmp/litmod_registration.err"
+    exit 1
+}
+if grep -Fq "function 'parse_json' is never used" \
+    "$tmp/litmod_registration.err"; then
+    echo 'registered literal handler was diagnosed as unused' >&2
+    exit 1
+fi
+if "$compiler" lower "$script_dir/programs/litmod_registration_invalid.n00b" \
+    >"$tmp/litmod_registration_invalid.out" 2>&1; then
+    echo 'invalid literal handler signature unexpectedly compiled' >&2
+    exit 1
+fi
+grep -Fq "literal modifier 'json' requires a same-module function" \
+    "$tmp/litmod_registration_invalid.out"
+
+"$compiler" lower --dump-ir --dump-control-flow \
+    "$script_dir/programs/litmod_prelude_order.n00b" \
+    >"$tmp/litmod_prelude_order.out" 2>&1 || {
+    cat "$tmp/litmod_prelude_order.out"
+    exit 1
+}
+grep -q 'call @__n00bb_comptime_parse_json' \
+    "$tmp/litmod_prelude_order.out"
+grep -q ' = phase.result ' "$tmp/litmod_prelude_order.out"
+grep -q '!ir.phase_result("default:litmod_prelude_order:litmod:' \
+    "$tmp/litmod_prelude_order.out"
+awk '
+    /function=litmod_prelude_order\$comptime.__n00bb_litmod_/ && /function-entry/ {
+        producer = $2
+    }
+    /function=litmod_prelude_order\$comptime.__n00bb_litmod_/ && /outcome=success/ {
+        success = $2
+    }
+    /function=litmod_prelude_order\$comptime.__n00bb_comptime_init/ && /function-entry/ {
+        initializer = $2
+    }
+    /^  edge sequence/ && $3 == success && $5 == initializer {
+        ordered = 1
+    }
+    END { exit !(producer && success && initializer && ordered) }
+' "$tmp/litmod_prelude_order.out"
 
 if "$compiler" lower --dump-ir \
     "$script_dir/programs/lower_unsupported_string_shape.n00b" \

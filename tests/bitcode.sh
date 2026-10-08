@@ -11,6 +11,9 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/comptime_ok" \
     "$program_dir/bitcode_comptime_ok.n00b"
 "$tmp/comptime_ok"
+"$compiler" build --output "$tmp/comptime_scalar_call" \
+    "$program_dir/bitcode_comptime_scalar_call.n00b"
+"$tmp/comptime_scalar_call"
 if "$compiler" build --output "$tmp/comptime_failed" \
     "$program_dir/bitcode_comptime_fail.n00b" \
     >"$tmp/comptime.out" 2>&1; then

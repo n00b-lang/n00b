@@ -31,6 +31,7 @@ typedef struct {
     LLVMModuleRef module;
     LLVMBuilderRef builder;
     ir_func_t *function;
+    LLVMValueRef target_function;
     LLVMBasicBlockRef *blocks;
     LLVMValueRef *locals;
     lowered_value_t *values;
@@ -77,6 +78,8 @@ scalar_type(ir_module_t *module, th_type *type, LLVMContextRef context)
     if ((machine.class == IR_CLASS_BOOL || machine.class == IR_CLASS_SINT
          || machine.class == IR_CLASS_UINT) && machine.width)
         return LLVMIntTypeInContext(context, machine.width);
+    if (machine.class == IR_CLASS_PTR)
+        return LLVMPointerTypeInContext(context, 0);
     return nullptr;
 }
 
@@ -84,6 +87,18 @@ static LLVMValueRef
 lowered_value(lower_state_t *state, const ir_value_t *value)
 {
     if (!value) return nullptr;
+    if (value->kind == IR_VAL_PARAM && value->owner == state->function
+        && value->index < LLVMCountParams(state->target_function))
+        return LLVMGetParam(state->target_function, value->index);
+    if (value->kind == IR_VAL_FUNC && value->owner) {
+        core_buffer_t symbol = {0};
+        core_buffer_printf(&symbol, "%s.%s",
+            ir_module_name(value->owner->owner), value->owner->name);
+        LLVMValueRef function = LLVMGetNamedFunction(state->module,
+            symbol.data);
+        core_buffer_release(&symbol);
+        return function;
+    }
     if (value->kind == IR_VAL_LOCAL && value->local) {
         for (uint32_t i = 0; i < state->function->n_locals; i++)
             if (state->function->locals[i] == value->local) {
@@ -238,6 +253,33 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         result = LLVMBuildICmp(state->builder, LLVMIntEQ, left, right, "equal");
         return save_result(state, instruction, result);
     }
+    case IR_OP_CALL: {
+        if (!count || operands[0].kind != IR_OPD_VALUE
+            || !operands[0].value || operands[0].value->kind != IR_VAL_FUNC)
+            break;
+        LLVMValueRef callee = lowered_value(state, operands[0].value);
+        if (!callee || LLVMGetTypeKind(LLVMGlobalGetValueType(callee))
+                           != LLVMFunctionTypeKind
+            || LLVMCountParamTypes(LLVMGlobalGetValueType(callee))
+                           != count - 1) break;
+        LLVMValueRef *arguments = count > 1
+            ? calloc(count - 1, sizeof(*arguments)) : nullptr;
+        if (count > 1 && !arguments) break;
+        bool valid = true;
+        for (uint32_t i = 1; valid && i < count; i++) {
+            valid = operands[i].kind == IR_OPD_VALUE
+                && (arguments[i - 1] = lowered_value(state,
+                                             operands[i].value)) != nullptr;
+        }
+        if (valid)
+            result = LLVMBuildCall2(state->builder,
+                LLVMGlobalGetValueType(callee), callee, arguments,
+                count - 1, instruction->dest ? "call" : "");
+        free(arguments);
+        if (!valid || !result) break;
+        return instruction->dest ? save_result(state, instruction, result)
+                                 : true;
+    }
     case IR_OP_BRANCH: {
         if (count != 3 || operands[0].kind != IR_OPD_VALUE
             || operands[1].kind != IR_OPD_BLOCK
@@ -254,6 +296,13 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMBuildRetVoid(state->builder);
             return true;
         }
+        if (count == 1 && operands[0].kind == IR_OPD_VALUE) {
+            result = lowered_value(state, operands[0].value);
+            if (!result || LLVMTypeOf(result) != LLVMGetReturnType(
+                    LLVMGlobalGetValueType(state->target_function))) break;
+            LLVMBuildRet(state->builder, result);
+            return true;
+        }
         break;
     case IR_OP_TRAP:
         if (count == 0) {
@@ -267,19 +316,55 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
     return unsupported(state, instruction);
 }
 
-static bool
-lower_function(LLVMModuleRef target, ir_func_t *function,
-               core_diagnostics_t *diagnostics)
+static LLVMTypeRef
+function_type(LLVMModuleRef target, ir_func_t *function)
 {
     LLVMContextRef context = LLVMGetModuleContext(target);
     LLVMTypeRef result = th_func_ret(function->type)
         ? scalar_type(function->owner, th_func_ret(function->type), context)
         : nullptr;
-    if (!result || LLVMGetTypeKind(result) != LLVMVoidTypeKind
-        || function->n_params || !function->n_blocks) {
+    th_type *error = th_func_error(function->type);
+    if (!result || (error && ir_machine_of(function->owner, error).class
+                         != IR_CLASS_VOID)
+        || th_func_nkw(function->type) || th_func_rest(function->type))
+        return nullptr;
+    size_t count = th_func_nparams(function->type);
+    if (count > UINT32_MAX) return nullptr;
+    LLVMTypeRef *parameters = count
+        ? calloc(count, sizeof(*parameters)) : nullptr;
+    if (count && !parameters) return nullptr;
+    for (size_t i = 0; i < count; i++) {
+        const th_param *parameter = th_func_param(function->type, i);
+        parameters[i] = parameter
+            ? scalar_type(function->owner, parameter->type, context)
+            : nullptr;
+        if (!parameters[i] || LLVMGetTypeKind(parameters[i])
+                                == LLVMVoidTypeKind) {
+            free(parameters);
+            return nullptr;
+        }
+    }
+    LLVMTypeRef signature = LLVMFunctionType(result, parameters,
+        (unsigned)count, false);
+    free(parameters);
+    return signature;
+}
+
+static bool
+lower_function(LLVMModuleRef target, ir_func_t *function,
+               core_diagnostics_t *diagnostics)
+{
+    LLVMContextRef context = LLVMGetModuleContext(target);
+    core_buffer_t symbol = {0};
+    core_buffer_printf(&symbol, "%s.%s", ir_module_name(function->owner),
+        function->name);
+    LLVMValueRef target_function = LLVMGetNamedFunction(target, symbol.data);
+    core_buffer_release(&symbol);
+    if (!target_function || !function->n_blocks
+        || function->n_params != LLVMCountParams(target_function)) {
         core_buffer_t message = {0};
         core_buffer_printf(&message,
-            "LLVM backend cannot lower function '%s': only parameterless nil returns are supported yet",
+            "LLVM backend cannot lower function '%s': its signature or body is unavailable",
             function->name);
         if (diagnostics)
             core_diagnostics_report_at(diagnostics, nullptr,
@@ -294,15 +379,8 @@ lower_function(LLVMModuleRef target, ir_func_t *function,
         core_buffer_release(&message);
         return false;
     }
-    LLVMTypeRef signature = LLVMFunctionType(result, nullptr, 0, false);
-    core_buffer_t symbol = {0};
-    core_buffer_printf(&symbol, "%s.%s", ir_module_name(function->owner),
-        function->name);
-    LLVMValueRef target_function = LLVMAddFunction(target, symbol.data,
-        signature);
-    core_buffer_release(&symbol);
     lower_state_t state = {.module = target, .function = function,
-        .diagnostics = diagnostics};
+        .target_function = target_function, .diagnostics = diagnostics};
     state.blocks = calloc(function->n_blocks, sizeof(*state.blocks));
     state.locals = calloc(function->n_locals ? function->n_locals : 1,
         sizeof(*state.locals));
@@ -351,9 +429,27 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     if (ir_global_count(source))
         return backend_error(diagnostics,
             "LLVM backend cannot lower module globals yet");
-    for (size_t i = 0; i < ir_func_count(source); i++)
-        if (!lower_function(target, ir_func_at((ir_module_t *)source, i),
-                            diagnostics)) return false;
+    for (size_t i = 0; i < ir_func_count(source); i++) {
+        ir_func_t *function = ir_func_at((ir_module_t *)source, i);
+        LLVMTypeRef signature = function_type(target, function);
+        if (!signature)
+            return backend_error(diagnostics,
+                "LLVM backend cannot lower this function signature yet");
+        core_buffer_t symbol = {0};
+        core_buffer_printf(&symbol, "%s.%s", ir_module_name(source),
+            function->name);
+        LLVMValueRef declared = LLVMAddFunction(target, symbol.data,
+            signature);
+        core_buffer_release(&symbol);
+        if (!declared)
+            return backend_error(diagnostics,
+                "LLVM backend could not declare function");
+    }
+    for (size_t i = 0; i < ir_func_count(source); i++) {
+        ir_func_t *function = ir_func_at((ir_module_t *)source, i);
+        if (function->n_blocks
+            && !lower_function(target, function, diagnostics)) return false;
+    }
     return true;
 }
 

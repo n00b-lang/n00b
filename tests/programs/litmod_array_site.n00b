@@ -1,0 +1,9 @@
+declare_litmod("json", "array", "parse_json")
+
+func parse_json(items: Array[int]) -> Array[int] fail: string {
+    return items
+}
+
+func value() -> Array[int] {
+    return json[1, 2]
+}

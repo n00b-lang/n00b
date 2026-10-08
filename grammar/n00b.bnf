@@ -534,8 +534,8 @@
 <block-value-expr> @scope("block") @infer("$1") ::= <block-start> <value-body-stmts> <block-end>
 
 # Literal modifiers are uniformly adjacent identifier-plus-literal syntax. A
-# modifier names a compile-time handler; it is not a runtime call or a value
-# binding. The ordinary identifier and literal tokens are paired by this
+# modifier selects a registered handler, not a value binding. The ordinary
+# identifier and literal tokens are paired by this
 # production, and @nospace requires them to be adjacent.
 # Resolution uses the selected handler's declared return type. User handlers
 # are registered by declare_litmod(modifier, kind, func_name).
@@ -551,12 +551,13 @@
 # literal shapes are selected by their registered handler.
 # There is no postfix literal-modifier syntax.
 #
-# The handler signature is (raw: string, syntax: litmod_syntax) -> `T,
-# fail: string, with a concrete result type; only fence handlers may
-# return nil.
-# Type checking uses the declared return type. Handler execution follows
-# type checking and precedes general-purpose comptime execution. A failure
-# is a compile-time diagnostic anchored in the literal.
+# String and fence handlers receive raw: string. Array and set handlers
+# receive an array of element values; dict handlers receive an array of
+# key/value two-tuples. Each handler has fail: string, and its result must
+# specialize to a concrete type at the literal site. Only fence handlers
+# may return nil. Type checking uses that specialized result type. Static
+# handlers execute before general-purpose comptime; a container handler
+# with dynamic elements instead executes when the literal does.
 <tagged-lit> @notrivia($1) @nospace($1) @adjacent("prefix") @infer("`t") @emit("tagged_literal") ::=
        <literal-prefix> (%"[" <tspec-list> %"]")? <literal-payload>
 

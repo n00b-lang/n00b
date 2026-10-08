@@ -53,7 +53,20 @@ main(void)
         && ir_instr_add_mod(sum, "trap")
         && ir_instr_operand_value(sum, left->dest)
         && ir_instr_operand_value(sum, right->dest));
+    ir_func_t *helper = ir_func_add(runtime, "helper",
+        ir_type_parse(runtime, "(uint) -> uint"), IR_LINK_INTERNAL);
+    assert(helper);
+    ir_instr_t *call = ir_instr_add(block, IR_OP_CALL);
+    assert(call && ir_instr_set_dest(call, "called", unsigned_type)
+        && ir_instr_operand_value(call, ir_func_address(runtime, helper))
+        && ir_instr_operand_value(call, right->dest)
+        && ir_instr_set_call_signature(call, helper->type));
     assert(ir_instr_add(block, IR_OP_RETURN));
+    ir_value_t *parameter = ir_param_add(helper, "value", unsigned_type);
+    ir_block_t *helper_entry = ir_block_add(helper, "entry");
+    ir_instr_t *helper_return = ir_instr_add(helper_entry, IR_OP_RETURN);
+    assert(parameter && helper_entry && helper_return
+        && ir_instr_operand_value(helper_return, parameter));
     core_diagnostics_t *diagnostics = core_diagnostics_new();
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
         comptime, runtime, true, diagnostics);
@@ -77,6 +90,13 @@ main(void)
         assert(strcmp(LLVMGetTarget(parsed), target) == 0);
         LLVMValueRef lowered = LLVMGetNamedFunction(parsed, "probe.entry");
         assert((!is_comptime && lowered) || (is_comptime && !lowered));
+        LLVMValueRef lowered_helper = LLVMGetNamedFunction(parsed,
+            "probe.helper");
+        assert((!is_comptime && lowered_helper)
+            || (is_comptime && !lowered_helper));
+        if (lowered_helper)
+            assert(LLVMCountParams(lowered_helper) == 1
+                && LLVMCountBasicBlocks(lowered_helper) == 1);
         if (lowered) {
             assert(LLVMCountBasicBlocks(lowered) == 3);
             LLVMValueRef terminator = LLVMGetBasicBlockTerminator(

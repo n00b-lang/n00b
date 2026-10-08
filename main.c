@@ -156,6 +156,21 @@ typedef struct {
     const char *canonical_name;
 } n00bb_literal_registration_t;
 
+typedef struct {
+    core_string_t modifier;
+    core_string_t kind;
+    core_string_t function_name;
+    parse_sym_entry_t *function;
+    core_diag_location_t location;
+} n00bb_user_litmod_t;
+core_list_decl(n00bb_user_litmod_t);
+
+typedef struct {
+    n00bb_user_litmod_t *registration;
+    th_type *payload_type;
+    th_type *signature;
+} n00bb_litmod_site_t;
+
 static const n00bb_literal_registration_t N00BB_LITERAL_HANDLERS[] = {
     {"array", N00BB_LITERAL_SEQUENCE_SHAPE, N00BB_LITERAL_ARRAY, "array"},
     {"a", N00BB_LITERAL_SEQUENCE_SHAPE, N00BB_LITERAL_ARRAY, "array"},
@@ -460,6 +475,7 @@ typedef struct {
     core_list_t(core_translation_unit_ptr_t) units;
     core_list_t(n00bb_trait_specialization_ptr_t) trait_specializations;
     core_list_t(parse_sym_entry_ptr_t) comptime_functions;
+    core_list_t(n00bb_ir_func_ptr_t) literal_producers;
     core_list_t(n00bb_ir_func_ptr_t) comptime_reachable_functions;
     core_list_t(n00bb_ir_func_ptr_t) runtime_reachable_functions;
     core_list_t(n00bb_array_bound_work_t) array_bound_work;
@@ -840,10 +856,13 @@ typedef struct {
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(parse_tree_ptr_t) selected_when_bodies;
+    core_list_t(n00bb_user_litmod_t) literal_modifiers;
     core_list_t(n00bb_package_declaration_t) package_declarations;
     core_list_t(n00bb_import_alias_t) import_aliases;
     core_list_t(n00bb_link_use_site_t) link_use_sites;
     core_dict_t ordered_child_nodes;
+    core_dict_t static_literal_nodes;
+    core_dict_t literal_sites;
     core_dict_t return_sources;
     core_dict_t alias_edges;
     core_dict_t escape_edges;
@@ -1205,6 +1224,19 @@ typedef struct {
 } n00bb_tuple_parts_t;
 core_list_decl(n00bb_tuple_parts_t);
 
+typedef struct {
+    parse_tree_t *node;
+    ir_module_t *module;
+    ir_func_t *function;
+    ir_block_t *block;
+    ir_func_t *producer;
+    int32_t file_id;
+    size_t with_count;
+    size_t try_count;
+    bool reachable;
+    bool comptime_phase;
+} n00bb_literal_frame_t;
+
 
 typedef struct {
     parse_grammar_t *grammar;
@@ -1227,6 +1259,8 @@ typedef struct {
     core_list_t(n00bb_default_param_t) default_params;
     n00bb_default_param_t *active_default_param;
     core_list_t(n00bb_tuple_parts_t) tuple_parts;
+    n00bb_literal_frame_t active_literal;
+    bool has_active_literal;
     uint64_t next_block_id;
     uint64_t next_control_order;
     bool comptime_phase;
@@ -1329,11 +1363,19 @@ free_tu_state(void *data)
         core_list_free(state->module_top_level_statements);
         core_list_free(state->array_type_nodes);
         core_list_free(state->selected_when_bodies);
+        for (size_t i = 0; i < state->literal_modifiers.len; i++) {
+            core_free(state->literal_modifiers.data[i].modifier.data);
+            core_free(state->literal_modifiers.data[i].kind.data);
+            core_free(state->literal_modifiers.data[i].function_name.data);
+        }
+        core_list_free(state->literal_modifiers);
         for (size_t i = 0; i < state->package_declarations.len; i++)
             core_list_free(state->package_declarations.data[i].exports);
         core_list_free(state->package_declarations);
         core_list_free(state->import_aliases);
         core_dict_free(&state->ordered_child_nodes);
+        core_dict_free(&state->static_literal_nodes);
+        core_dict_free(&state->literal_sites);
         core_dict_free(&state->return_sources);
         core_dict_free(&state->alias_edges);
         core_dict_free(&state->escape_edges);
@@ -1366,6 +1408,61 @@ static n00bb_tu_state_t *
 tu_state(core_translation_unit_t *unit)
 {
     return unit ? core_translation_unit_user_data(unit) : nullptr;
+}
+
+static n00bb_user_litmod_t *
+user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
+            core_string_t kind)
+{
+    if (!state) return nullptr;
+    for (size_t i = 0; i < state->literal_modifiers.len; i++) {
+        n00bb_user_litmod_t *registration =
+            &state->literal_modifiers.data[i];
+        if (core_string_eq(registration->modifier, modifier)
+            && core_string_eq(registration->kind, kind))
+            return registration;
+    }
+    return nullptr;
+}
+
+static bool
+register_user_litmod(void *context, core_translation_unit_t *unit,
+                     parse_tree_t *call, core_string_t modifier,
+                     core_string_t kind, core_string_t function_name)
+{
+    (void)context;
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state || !modifier.u8_bytes || !function_name.u8_bytes)
+        return false;
+    for (size_t i = 0; i < state->literal_modifiers.len; i++) {
+        n00bb_user_litmod_t *existing = &state->literal_modifiers.data[i];
+        if (core_string_eq(existing->modifier, modifier)
+            && core_string_eq(existing->kind, kind)) return false;
+    }
+    n00bb_user_litmod_t registration = {
+        .modifier = core_string_from_raw(modifier.data,
+                                         (int64_t)modifier.u8_bytes),
+        .kind = core_string_from_raw(kind.data, (int64_t)kind.u8_bytes),
+        .function_name = core_string_from_raw(function_name.data,
+                                              (int64_t)function_name.u8_bytes),
+    };
+    parse_token_info_t *token = parse_tree_find_first_terminal(call);
+    if (token) registration.location = (core_diag_location_t){
+        .line = token->line,
+        .column = token->column,
+        .end_line = token->endline,
+        .end_column = token->endcol,
+        .has_location = true,
+    };
+    if (!registration.modifier.data || !registration.kind.data
+        || !registration.function_name.data) {
+        core_free(registration.modifier.data);
+        core_free(registration.kind.data);
+        core_free(registration.function_name.data);
+        return false;
+    }
+    core_list_push(state->literal_modifiers, registration);
+    return true;
 }
 
 static ir_module_t *
@@ -12798,6 +12895,63 @@ n00bb_lower_brace_literal(ir_lower_context_t *context,
 }
 
 static ir_lower_result_t
+n00bb_lower_user_array_literal(ir_lower_context_t *context,
+                               parse_visit_t *visit,
+                               n00bb_litmod_site_t *site,
+                               th_type *result_type, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    if (lower && !lower->comptime_phase)
+        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+            "runtime literal handler failure semantics are not specified");
+    parse_sym_entry_t *symbol = site && site->registration
+        ? site->registration->function : nullptr;
+    n00bb_link_analysis_t *analysis = state ? state->link_analysis : nullptr;
+    ir_func_t *function = symbol && analysis
+        ? link_ir_function_for_phase(analysis, symbol,
+                                     lower->comptime_phase) : nullptr;
+    ir_module_t *module = state
+        ? module_for_phase(state, lower->comptime_phase) : nullptr;
+    ir_value_t *callee = function && module
+        ? ir_func_address(module, function) : nullptr;
+    if (!site || !site->payload_type || !site->signature || !callee
+        || !result_type || !ir_type_eq(context->module, result_type,
+                                      th_func_ret(site->signature)))
+        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                           "literal handler has no specialized callable binding");
+    ir_lower_result_t payload = n00bb_lower_sequence_literal(context,
+        visit, nullptr, 0, site->payload_type, span, nullptr);
+    if (payload.status != IR_LOWER_VALUE || !payload.value)
+        return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+    th_type *outcome_type = ir_call_outcome_type(context->module,
+                                                site->signature);
+    ir_instr_t *call = outcome_type
+        ? ir_instr_add(context->block, IR_OP_CALL) : nullptr;
+    char name[64];
+    snprintf(name, sizeof(name), "__n00bb_litmod_call_%llu",
+             (unsigned long long)context->next_value_id++);
+    if (!call || !ir_instr_set_dest(call, name, outcome_type)
+        || !ir_instr_operand_value(call, callee)
+        || !ir_instr_operand_value(call, payload.value)
+        || !ir_instr_set_call_signature(call, site->signature))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not emit the literal handler call");
+    call->span = span;
+    if (lower->comptime_phase && function && !function->n_blocks) {
+        bool queued = false;
+        for (size_t i = 0; i < analysis->comptime_functions.len; i++)
+            queued |= analysis->comptime_functions.data[i] == symbol;
+        if (!queued) core_list_push(analysis->comptime_functions, symbol);
+    }
+    ir_value_t *value = nullptr;
+    if (!n00bb_unwrap_call_outcome(context, visit, call->dest, span,
+                                   &value))
+        return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+    return (ir_lower_result_t){IR_LOWER_VALUE, value};
+}
+
+static ir_lower_result_t
 n00bb_lower_tagged_literal(ir_lower_context_t *context,
                            parse_visit_t *visit,
                            ir_value_t *const *operands,
@@ -12809,6 +12963,18 @@ n00bb_lower_tagged_literal(ir_lower_context_t *context,
     core_string_t name = first_token_text(prefix);
     parse_tree_t *payload = child_nt(visit->grammar, visit->node,
                                     "literal-payload");
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_litmod_site_t *user_site = tu
+        ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
+    if (user_site) {
+        if (core_string_eq(user_site->registration->kind,
+                           CORE_STRING_STATIC("array")))
+            return n00bb_lower_user_array_literal(context, visit,
+                user_site, result_type, span);
+        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+                           "this literal handler shape has no lowering yet");
+    }
     parse_tree_t *string = child_nt(visit->grammar, payload,
                                    "modified-simple-lit");
     parse_tree_t *sequence = child_nt(visit->grammar, payload,
@@ -12848,7 +13014,6 @@ n00bb_lower_tagged_literal(ir_lower_context_t *context,
             || !value->def)
             return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                                "tagged string literal has no matching lowered payload");
-        n00bb_lower_context_t *lower = context->user;
         if (!lower || !lower->ir_context
             || !ir_annot_set(lower->ir_context, &value->def->annots,
                 (ir_annot_t){
@@ -12863,6 +13028,135 @@ n00bb_lower_tagged_literal(ir_lower_context_t *context,
     }
     return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                        "registered literal handler has no lowering callback");
+}
+
+static void
+n00bb_restore_literal_context(ir_lower_context_t *context,
+                              n00bb_lower_context_t *lower)
+{
+    n00bb_literal_frame_t frame = lower->active_literal;
+    context->module = frame.module;
+    context->function = frame.function;
+    context->block = frame.block;
+    context->file_id = frame.file_id;
+    context->reachable = frame.reachable;
+    lower->comptime_phase = frame.comptime_phase;
+    lower->withs.len = frame.with_count;
+    lower->tries.len = frame.try_count;
+    lower->has_active_literal = false;
+}
+
+static bool
+n00bb_lower_static_litmod(ir_lower_context_t *context,
+                          parse_visit_t *visit, bool entering, void *opaque)
+{
+    (void)opaque;
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_litmod_site_t *site = tu
+        ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
+    if (!site || !core_string_eq(site->registration->kind,
+                                 CORE_STRING_STATIC("array"))) return true;
+    if (entering) {
+        if (lower->has_active_literal) return true;
+        if (!core_dict_contains(&tu->static_literal_nodes, visit->node))
+            return true;
+        if (lower->comptime_phase)
+            return lower_error(context, IR_DIAG_VERIFY_TYPED,
+                lower_span_for_tree(context, visit->node),
+                "static literal prelude inside comptime code is not lowered yet")
+                .status != IR_LOWER_FAILED;
+        th_type *result_type = core_tree_node_value(visit->node).type;
+        if (!result_type || !th_is_closed(tu->types, result_type))
+            return lower_error(context, IR_DIAG_TYPE_CLASS,
+                lower_span_for_tree(context, visit->node),
+                "literal handler result is not concrete at this site")
+                .status != IR_LOWER_FAILED;
+        parse_token_info_t *token =
+            parse_tree_find_first_terminal(visit->node);
+        char name[96];
+        snprintf(name, sizeof(name), "__n00bb_litmod_%llu",
+            (unsigned long long)(token ? token->start_byte : 0));
+        th_type *signature = th_func_with_error(tu->types, result_type,
+            th_name(tu->types, "string"), nullptr, 0, nullptr, nullptr, 0);
+        ir_module_t *module = tu->comptime_ir_module;
+        ir_func_t *producer = signature && module
+            ? ir_func_add(module, name, signature, IR_LINK_INTERNAL)
+            : nullptr;
+        ir_block_t *entry = producer ? ir_block_add(producer, "entry")
+                                     : nullptr;
+        if (!entry || !ir_func_set_execution_phase(lower->ir_context,
+                producer, IR_PHASE_COMPTIME))
+            return lower_error(context, IR_DIAG_INTERNAL,
+                lower_span_for_tree(context, visit->node),
+                "could not create the static literal producer")
+                .status != IR_LOWER_FAILED;
+        lower->active_literal = (n00bb_literal_frame_t){
+            .node = visit->node,
+            .module = context->module,
+            .function = context->function,
+            .block = context->block,
+            .producer = producer,
+            .file_id = context->file_id,
+            .with_count = lower->withs.len,
+            .try_count = lower->tries.len,
+            .reachable = context->reachable,
+            .comptime_phase = lower->comptime_phase,
+        };
+        lower->has_active_literal = true;
+        lower->withs.len = 0;
+        lower->tries.len = 0;
+        lower->comptime_phase = true;
+        context->module = module;
+        context->function = producer;
+        context->block = entry;
+        context->file_id = (int32_t)ir_file_count(module) - 1;
+        context->reachable = true;
+        return true;
+    }
+    if (!lower->has_active_literal
+        || lower->active_literal.node != visit->node) return true;
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    ir_lower_result_t result = n00bb_lower_tagged_literal(context, visit,
+        nullptr, 0, core_tree_node_value(visit->node).type, span, nullptr);
+    ir_instr_t *ret = result.status == IR_LOWER_VALUE && result.value
+        ? ir_lower_emit_terminator(context, IR_OP_RETURN, span) : nullptr;
+    bool emitted = ret && ir_instr_operand_value(ret, result.value);
+    n00bb_literal_frame_t frame = lower->active_literal;
+    n00bb_restore_literal_context(context, lower);
+    if (!emitted) return false;
+    ir_instr_t *cached = ir_lower_emit_instruction(context,
+        IR_OP_PHASE_RESULT, span);
+    char result_name[64];
+    snprintf(result_name, sizeof(result_name), "__n00bb_litmod_result_%llu",
+             (unsigned long long)context->next_value_id++);
+    parse_token_info_t *token = parse_tree_find_first_terminal(visit->node);
+    core_buffer_t identifier = {0};
+    core_string_t package = n00bb_package_id(lower->unit);
+    core_buffer_printf(&identifier, "%.*s:%.*s:litmod:%llu",
+        (int)package.u8_bytes, package.data,
+        (int)lower->unit->module.identifier.u8_bytes,
+        lower->unit->module.identifier.data,
+        (unsigned long long)(token ? token->start_byte : 0));
+    bool bound = cached && identifier.data
+        && ir_instr_set_dest(cached, result_name,
+                              core_tree_node_value(visit->node).type)
+        && ir_instr_set_phase_result(lower->ir_context, cached,
+                                     identifier.data)
+        && ir_lower_set_node_value(context, visit->node, cached->dest);
+    if (bound) {
+        n00bb_link_analysis_t *analysis = tu->link_analysis;
+        core_list_push(analysis->literal_producers, frame.producer);
+        core_list_push(analysis->phase_results,
+            ((n00bb_phase_result_binding_t){
+                .identifier = ir_instr_phase_result(cached),
+                .producer = frame.producer,
+                .consumer = frame.function,
+                .instruction = cached,
+            }));
+    }
+    core_buffer_release(&identifier);
+    return bound;
 }
 
 static void
@@ -21982,6 +22276,55 @@ lower_ordered_array_bound_expressions(
 }
 
 static bool
+cache_static_literal_node(parse_grammar_t *grammar,
+                          n00bb_tu_state_t *state, parse_tree_t *node)
+{
+    bool is_static = nt_is(grammar, node, "simple-lit")
+        || nt_is(grammar, node, "modified-simple-lit")
+        || nt_is(grammar, node, "embed-lit");
+    if (nt_is(grammar, node, "tagged-lit")) {
+        parse_tree_t *payload = child_nt(grammar, node, "literal-payload");
+        parse_tree_t *string = child_nt(grammar, payload,
+                                        "modified-simple-lit");
+        core_string_t prefix = first_token_text(
+            child_nt(grammar, node, "literal-prefix"));
+        bool known_static_string = core_string_eq(prefix,
+            CORE_STRING_STATIC("binary"))
+            || core_string_eq(prefix, CORE_STRING_STATIC("b"))
+            || core_string_eq(prefix, CORE_STRING_STATIC("u32"));
+        is_static = payload
+            && core_dict_contains(&state->static_literal_nodes, payload)
+            && (!string || known_static_string);
+    }
+    else if (!is_static && core_tree_num_children(node) == 1) {
+        parse_tree_t *child = core_tree_child(node, 0);
+        is_static = !core_tree_is_leaf(child)
+            && core_dict_contains(&state->static_literal_nodes, child);
+    }
+    else if (!is_static && (nt_is(grammar, node, "list-elems")
+             || nt_is(grammar, node, "tagged-list-lit")
+             || nt_is(grammar, node, "list-lit")
+             || nt_is(grammar, node, "dict-entry")
+             || nt_is(grammar, node, "dict-entries")
+             || nt_is(grammar, node, "set-entries")
+             || nt_is(grammar, node, "dict-or-set-lit")
+             || nt_is(grammar, node, "tuple-or-paren"))) {
+        is_static = true;
+        for (size_t i = 0; i < core_tree_num_children(node); i++) {
+            parse_tree_t *child = core_tree_child(node, i);
+            if (!core_tree_is_leaf(child)
+                && !core_dict_contains(&state->static_literal_nodes, child)) {
+                is_static = false;
+                break;
+            }
+        }
+    }
+    if (is_static)
+        core_dict_put(&state->static_literal_nodes, node, (void *)1);
+    return true;
+}
+
+static bool
 cache_ordered_literal_children(parse_grammar_t *grammar,
                                n00bb_tu_state_t *state, parse_tree_t *node)
 {
@@ -22883,6 +23226,7 @@ static bool
 build_initializer_phase_graph(
     ir_exec_graph_t *graph, uint32_t phase_id, uint32_t phase_entry,
     core_list_t(core_translation_unit_ptr_t) *order,
+    core_list_t(n00bb_ir_func_ptr_t) *prelude,
     const char *initializer_name, bool comptime, bool may_be_absent,
     core_list_t(size_t) *successful_exits,
     core_list_t(n00bb_exec_graph_function_t) *registered_functions)
@@ -22890,13 +23234,18 @@ build_initializer_phase_graph(
     bool has_functions = false;
     bool every_initializer_can_succeed = true;
     uint32_t previous_function = UINT32_MAX;
-    for (size_t i = 0; i < order->len; i++) {
-        n00bb_tu_state_t *state = tu_state(order->data[i]);
-        ir_module_t *module = module_for_phase(state, comptime);
-        if (!state || !module) return false;
-        ir_func_t *function = ir_func_find(module, initializer_name);
+    size_t prelude_count = prelude ? prelude->len : 0;
+    for (size_t i = 0; i < prelude_count + order->len; i++) {
+        ir_func_t *function = i < prelude_count ? prelude->data[i] : nullptr;
+        if (i >= prelude_count) {
+            n00bb_tu_state_t *state = tu_state(
+                order->data[i - prelude_count]);
+            ir_module_t *module = module_for_phase(state, comptime);
+            if (!state || !module) return false;
+            function = ir_func_find(module, initializer_name);
+        }
         if (!function) {
-            if (may_be_absent) continue;
+            if (may_be_absent && i >= prelude_count) continue;
             return false;
         }
         uint32_t function_id;
@@ -23659,10 +24008,12 @@ build_n00bb_execution_graph(
     core_list_t(n00bb_exec_graph_function_t) registered_functions =
         core_list_new(n00bb_exec_graph_function_t);
     bool ok = build_initializer_phase_graph(graph, comptime_phase,
-            comptime_entry, comptime_order, "__n00bb_comptime_init", true,
+            comptime_entry, comptime_order, &analysis->literal_producers,
+            "__n00bb_comptime_init", true,
             true, &comptime_exits, &registered_functions)
         && build_initializer_phase_graph(graph, runtime_phase, runtime_entry,
-            runtime_order, "__n00bb_runtime_init", false, false, nullptr,
+            runtime_order, nullptr, "__n00bb_runtime_init", false, false,
+            nullptr,
             &registered_functions);
 
     core_list_t(size_t) previous_exits = core_list_new(size_t);
@@ -23670,6 +24021,9 @@ build_n00bb_execution_graph(
         core_list_push(previous_exits, comptime_exits.data[i]);
     core_list_t(n00bb_ir_func_ptr_t) scheduled_producers =
         core_list_new(n00bb_ir_func_ptr_t);
+    for (size_t i = 0; i < analysis->literal_producers.len; i++)
+        core_list_push(scheduled_producers,
+                       analysis->literal_producers.data[i]);
     for (size_t i = 0; ok && i < analysis->array_bound_work.len; i++) {
         n00bb_array_bound_work_t *bound =
             &analysis->array_bound_work.data[i];
@@ -26406,6 +26760,14 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                     || !symbol->decl_node
                     || !nt_is(grammar, symbol->decl_node, "func-def")
                     || symbol->use_count) continue;
+                bool literal_handler = false;
+                for (size_t r = 0; r < state->literal_modifiers.len; r++)
+                    if (core_string_eq(symbol->name,
+                            state->literal_modifiers.data[r].function_name)) {
+                        literal_handler = true;
+                        break;
+                    }
+                if (literal_handler) continue;
                 core_buffer_t message = {0};
                 core_buffer_printf(&message, "function '%.*s' is never used",
                     (int)symbol->name.u8_bytes, symbol->name.data);
@@ -32333,6 +32695,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                                      n00bb_lower_try_scope, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "comptime-stmt", n00bb_lower_comptime_statement, nullptr);
+    ok = ok && ir_lowerer_register_nt_visit(lowerer,
+        "tagged-lit", n00bb_lower_static_litmod, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         "new-expr", n00bb_mark_constructor_lvalues, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
@@ -41101,6 +41465,84 @@ infer_tagged_string_literal_type(parse_grammar_t *grammar,
 }
 
 static bool
+infer_user_tagged_literal_type(parse_grammar_t *grammar,
+                               parse_tree_t *node,
+                               n00bb_tu_state_t *state)
+{
+    parse_tree_t *payload = child_nt(grammar, node, "literal-payload");
+    parse_tree_t *sequence = child_nt(grammar, payload, "tagged-list-lit");
+    parse_tree_t *string = child_nt(grammar, payload,
+                                    "modified-simple-lit");
+    parse_tree_t *fence = child_nt(grammar, payload, "embed-lit");
+    core_string_t kind = sequence ? CORE_STRING_STATIC("array")
+        : string ? CORE_STRING_STATIC("string")
+        : fence ? CORE_STRING_STATIC("fence") : (core_string_t){0};
+    if (!kind.data) return true;
+    core_string_t modifier = first_token_text(
+        child_nt(grammar, node, "literal-prefix"));
+    n00bb_user_litmod_t *registration = user_litmod(state, modifier, kind);
+    if (!registration) return true;
+    parse_scope_t *scope = module_scope(state);
+    parse_sym_entry_t *function = scope
+        ? parse_symtab_lookup_in(scope, registration->function_name)
+        : nullptr;
+    th_type *signature = function && function->type
+        ? th_resolve(function->type) : nullptr;
+    if (!signature || th_kind_of(signature) != TH_FUNCTION)
+        return false;
+    th_type *input_type = th_name(state->types, "string");
+    if (sequence) {
+        parse_tree_t *entries = child_nt(grammar, sequence, "list-elems");
+        core_list_t(parse_tree_ptr_t) expressions =
+            core_list_new(parse_tree_ptr_t);
+        core_list_t(th_type_ptr_t) element_types =
+            core_list_new(th_type_ptr_t);
+        bool ok = !entries || collect_static_expressions(state, entries,
+                                                          &expressions);
+        for (size_t i = 0; ok && i < expressions.len; i++) {
+            th_type *type = core_tree_node_value(expressions.data[i]).type;
+            if (!type) ok = false;
+            else core_list_push(element_types, type);
+        }
+        th_type *element = ok && element_types.len
+            ? th_sum(state->types, TH_UNION, element_types.data,
+                     element_types.len)
+            : ok ? th_var(state->types) : nullptr;
+        input_type = element ? th_array(state->types, element) : nullptr;
+        core_list_free(element_types);
+        core_list_free(expressions);
+    }
+    if (!input_type) return false;
+    th_param param = {.mode = TH_IN, .type = input_type};
+    th_type *expected = th_func_with_error(state->types,
+        th_var(state->types), th_name(state->types, "string"),
+        &param, 1, nullptr, nullptr, 0);
+    th_type *specialized = expected
+        ? th_unify(state->types, signature, expected) : nullptr;
+    th_type *result = specialized ? th_func_ret(specialized) : nullptr;
+    if (!result) return false;
+    parse_nt_node_t *parsed = &core_tree_node_value(node);
+    if (parsed->type) {
+        th_type *unified = th_unify_in_place(state->types, parsed->type,
+                                             result);
+        if (!unified) return false;
+        parsed->type = unified;
+    }
+    else parsed->type = result;
+    n00bb_litmod_site_t *site = core_arena_alloc(
+        &state->semantic_values, sizeof(*site));
+    const th_param *specialized_param = th_func_param(specialized, 0);
+    if (!site || !specialized_param) return false;
+    *site = (n00bb_litmod_site_t){
+        .registration = registration,
+        .payload_type = specialized_param->type,
+        .signature = specialized,
+    };
+    core_dict_put(&state->literal_sites, node, site);
+    return true;
+}
+
+static bool
 infer_new_expression_type(parse_grammar_t *grammar,
                           parse_tree_t *node, n00bb_tu_state_t *state)
 {
@@ -41752,6 +42194,15 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 link_source_location(node));
             return;
         }
+        if (!infer_user_tagged_literal_type(grammar, node, state)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0030"),
+                CORE_STRING_STATIC(
+                    "literal handler cannot specialize for this payload"),
+                link_source_location(node));
+            return;
+        }
     }
     if (!entering && nt_is(grammar, node, "new-expr")
         && !infer_new_expression_type(grammar, node, state)) {
@@ -41916,7 +42367,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         record_context_hook_signature(grammar, unit, node, state);
 
     if (!entering) {
-        if (!cache_ordered_literal_children(grammar, state, node)) {
+        if (!cache_ordered_literal_children(grammar, state, node)
+            || !cache_static_literal_node(grammar, state, node)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0007"),
@@ -43466,10 +43918,13 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                 core_list_new(parse_tree_ptr_t);
             state->array_type_nodes = core_list_new(parse_tree_ptr_t);
             state->selected_when_bodies = core_list_new(parse_tree_ptr_t);
+            state->literal_modifiers = core_list_new(n00bb_user_litmod_t);
             state->package_declarations =
                 core_list_new(n00bb_package_declaration_t);
             state->import_aliases = core_list_new(n00bb_import_alias_t);
             core_dict_init(&state->ordered_child_nodes, nullptr, nullptr);
+            core_dict_init(&state->static_literal_nodes, nullptr, nullptr);
+            core_dict_init(&state->literal_sites, nullptr, nullptr);
             core_dict_init(&state->return_sources, nullptr, nullptr);
             core_dict_init(&state->alias_edges, nullptr, nullptr);
             core_dict_init(&state->escape_edges, nullptr, nullptr);
@@ -44553,6 +45008,86 @@ n00bb_link_stage_symbols(core_link_unit_t *link, uint32_t stage_kind,
     return CORE_LINK_STAGE_RESULT_COMPLETE;
 }
 
+static bool
+validate_user_litmod_signatures(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state || !state->literal_modifiers.len) return true;
+    parse_scope_t *scope = module_scope(state);
+    bool valid = true;
+    for (size_t i = 0; i < state->literal_modifiers.len; i++) {
+        n00bb_user_litmod_t *registration =
+            &state->literal_modifiers.data[i];
+        parse_sym_entry_t *symbol = scope
+            ? parse_symtab_lookup_in(scope, registration->function_name)
+            : nullptr;
+        th_type *signature = symbol && symbol->type
+            ? th_resolve(symbol->type) : nullptr;
+        bool shape_valid = symbol && symbol->kind == PARSE_SYM_FUNCTION
+            && signature && th_kind_of(signature) == TH_FUNCTION
+            && th_func_nparams(signature) == 1
+            && !th_func_rest(signature) && !th_func_nkw(signature);
+        const th_param *param = shape_valid
+            ? th_func_param(signature, 0) : nullptr;
+        th_type *payload = param ? th_resolve(param->type) : nullptr;
+        shape_valid = shape_valid && param && param->mode == TH_IN
+            && payload && th_func_ret(signature)
+            && th_func_error(signature);
+        bool raw = core_string_eq(registration->kind,
+                                  CORE_STRING_STATIC("string"))
+            || core_string_eq(registration->kind,
+                              CORE_STRING_STATIC("fence"));
+        bool dictionary = core_string_eq(registration->kind,
+                                         CORE_STRING_STATIC("dict"));
+        if (shape_valid && raw) {
+            shape_valid = th_hash(state->types, payload)
+                == th_hash(state->types, th_name(state->types, "string"));
+        }
+        else if (shape_valid) {
+            shape_valid = th_kind_of(payload) == TH_SEQUENCE;
+            if (shape_valid && dictionary) {
+                th_type *element = th_resolve(th_seq_elem(payload));
+                const char *name = nullptr;
+                size_t length = 0;
+                size_t arity = 0;
+                shape_valid = element && th_named_info(element, &name,
+                    &length, nullptr, &arity)
+                    && length == strlen(TH_TUPLE)
+                    && !memcmp(name, TH_TUPLE, length) && arity == 2;
+            }
+        }
+        if (shape_valid) {
+            th_type *failure = th_resolve(th_func_error(signature));
+            th_type *result = th_resolve(th_func_ret(signature));
+            shape_valid = th_hash(state->types, failure)
+                == th_hash(state->types, th_name(state->types, "string"))
+                && (core_string_eq(registration->kind,
+                    CORE_STRING_STATIC("fence"))
+                    || th_hash(state->types, result)
+                        != th_hash(state->types,
+                            th_name(state->types, "nil")));
+        }
+        if (!shape_valid) {
+            core_buffer_t *message = core_buffer_empty();
+            core_buffer_printf(message,
+                "literal modifier '%.*s' requires a same-module function "
+                "with one shape-compatible input, a non-nil result "
+                "(except fences), and fail: string",
+                (int)registration->modifier.u8_bytes,
+                registration->modifier.data);
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0029"),
+                core_string_borrow(message->data, message->byte_len),
+                registration->location);
+            core_buffer_free(message);
+            valid = false;
+        }
+        else registration->function = symbol;
+    }
+    return valid;
+}
+
 static core_link_stage_result_t
 n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
                            void *opaque)
@@ -44583,6 +45118,9 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
             CORE_STRING_STATIC("link-unit modules do not share a type universe"));
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    for (size_t i = 0; i < units->len; i++)
+        if (!validate_user_litmod_signatures(units->data[i]))
+            return CORE_LINK_STAGE_RESULT_FAILED;
     for (size_t i = 0; i < units->len; i++)
         finalize_module_inference(units->data[i]);
     if (!finalize_named_declaration_types(analysis->grammar, units)) {
@@ -45873,6 +46411,8 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     active_options.prepare_import = prepare_import;
     active_options.selected_body = remember_selected_when_body;
     active_options.selected_body_context = nullptr;
+    active_options.register_litmod = register_user_litmod;
+    active_options.litmod_context = nullptr;
     n00bb_preprocessor_t *preprocessor =
         n00bb_preprocessor_new(&active_options);
     import_driver.preprocessor = preprocessor;
@@ -45998,6 +46538,8 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                     core_list_new(n00bb_trait_specialization_ptr_t),
                 .comptime_functions =
                     core_list_new(parse_sym_entry_ptr_t),
+                .literal_producers =
+                    core_list_new(n00bb_ir_func_ptr_t),
                 .comptime_reachable_functions =
                     core_list_new(n00bb_ir_func_ptr_t),
                 .runtime_reachable_functions =
@@ -46095,6 +46637,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                     core_free(analysis->trait_specializations.data[i]);
                 core_list_free(analysis->trait_specializations);
                 core_list_free(analysis->comptime_functions);
+                core_list_free(analysis->literal_producers);
                 for (size_t i = 0; i < analysis->array_bound_work.len; i++)
                     core_list_free(analysis->array_bound_work.data[i]
                         .initializer_extents);
@@ -47095,6 +47638,7 @@ main(int argc, char **argv)
             core_free(link_analysis->trait_specializations.data[i]);
         core_list_free(link_analysis->trait_specializations);
         core_list_free(link_analysis->comptime_functions);
+        core_list_free(link_analysis->literal_producers);
         core_list_free(link_analysis->comptime_reachable_functions);
         core_list_free(link_analysis->runtime_reachable_functions);
         for (size_t i = 0; i < link_analysis->array_bound_work.len; i++)

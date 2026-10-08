@@ -14,6 +14,9 @@ typedef bool (*n00bb_preprocessor_prepare_import_fn)(
     core_translation_unit_t *importer);
 typedef bool (*n00bb_preprocessor_selected_body_fn)(
     void *context, core_translation_unit_t *unit, parse_tree_t *body);
+typedef bool (*n00bb_preprocessor_litmod_fn)(
+    void *context, core_translation_unit_t *unit, parse_tree_t *call,
+    core_string_t modifier, core_string_t kind, core_string_t function_name);
 
 typedef enum {
     N00BB_PREPROCESSOR_VALUE_BOOL,
@@ -41,6 +44,8 @@ typedef struct {
     n00bb_preprocessor_prepare_import_fn prepare_import;
     n00bb_preprocessor_selected_body_fn selected_body;
     void *selected_body_context;
+    n00bb_preprocessor_litmod_fn register_litmod;
+    void *litmod_context;
 } n00bb_preprocessor_options_t;
 
 typedef struct n00bb_preprocessor_t n00bb_preprocessor_t;
