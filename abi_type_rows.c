@@ -13,6 +13,7 @@
 #include "signature_typevars.h"
 
 core_list_decl(uint32_t);
+core_list_decl(n00b_abi_type_argument_v1);
 
 static bool
 name_is(const char *name, size_t length, const char *expected)
@@ -110,6 +111,10 @@ type_category(ir_module_t *module, th_type *type,
                 row->kind = N00B_ABI_TYPE_RECORD;
                 return true;
             }
+            if (th_named_nargs(type)) {
+                row->kind = N00B_ABI_TYPE_NAMED;
+                return true;
+            }
             ir_machine_t machine = ir_machine_of(module, type);
             if (machine.class != IR_CLASS_BOOL
                 && machine.class != IR_CLASS_SINT
@@ -173,6 +178,8 @@ n00bb_abi_type_identity_rows_build(
     if (!count || count > (UINT32_MAX >> 1)) return false;
     n00b_abi_type_v1 *rows = core_alloc_array(n00b_abi_type_v1, count);
     parse_sym_entry_t **owners = core_alloc_array(parse_sym_entry_t *, count);
+    core_list_t(n00b_abi_type_argument_v1) arguments = {0};
+    core_list_push(arguments, ((n00b_abi_type_argument_v1){0}));
     for (parse_scope_t *scope = symbols ? symbols->all_scopes : nullptr;
          scope; scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -208,6 +215,65 @@ n00bb_abi_type_identity_rows_build(
                 &row->canonical_name);
         if (!valid) break;
         row->typehash = th_hash(types, type);
+        if (th_kind_of(type) == TH_NAMED) {
+            const char *constructor = nullptr;
+            size_t constructor_bytes = 0;
+            valid = th_named_info(type, &constructor, &constructor_bytes,
+                                  nullptr, nullptr)
+                && constructor && constructor_bytes
+                && n00bb_abi_name_pool_encode(names,
+                    core_string_borrow(constructor, constructor_bytes),
+                    N00B_ABI_TABLE_TYPE, (uint32_t)i,
+                    offsetof(n00b_abi_type_v1, named_constructor),
+                    &row->named_constructor);
+            if (!valid) break;
+            size_t n = th_named_nargs(type);
+            if (n && (arguments.len > UINT32_MAX
+                      || n > UINT32_MAX - arguments.len)) {
+                valid = false;
+                break;
+            }
+            if (n) row->named_arguments = (n00b_abi_range_v1){
+                .first = (uint32_t)arguments.len, .count = (uint32_t)n,
+            };
+            for (size_t ordinal = 0; valid && ordinal < n; ordinal++) {
+                const th_arg *arg = th_named_arg(type, ordinal);
+                n00b_abi_type_argument_v1 value = {
+                    .owner_type_index = (uint32_t)i,
+                    .ordinal = (uint32_t)ordinal,
+                };
+                if (!arg) { valid = false; break; }
+                switch (arg->kind) {
+                case TH_ARG_TYPE:
+                    value.kind = N00B_ABI_TYPE_ARG_TYPE;
+                    valid = arg->type && n00bb_abi_type_index_find(index,
+                        arg->type, &value.type_index);
+                    break;
+                case TH_ARG_UINT:
+                    value.kind = N00B_ABI_TYPE_ARG_UINT;
+                    value.scalar_bits = arg->u;
+                    break;
+                case TH_ARG_SINT:
+                    value.kind = N00B_ABI_TYPE_ARG_SINT;
+                    value.scalar_bits = (uint64_t)arg->s;
+                    break;
+                case TH_ARG_STR:
+                    value.kind = N00B_ABI_TYPE_ARG_STRING;
+                    valid = arg->str.p && n00bb_abi_name_pool_encode(names,
+                        core_string_borrow(arg->str.p, arg->str.n),
+                        N00B_ABI_TABLE_TYPE_ARGUMENT,
+                        (uint32_t)arguments.len,
+                        offsetof(n00b_abi_type_argument_v1, string_value),
+                        &value.string_value);
+                    break;
+                default:
+                    valid = false;
+                    break;
+                }
+                if (valid) core_list_push(arguments, value);
+            }
+            if (!valid) break;
+        }
         if (category_owner && row->kind == N00B_ABI_TYPE_ENUM) {
             const n00bb_enum_range_t *range = parse_sym_binding(category_owner,
                 CORE_STRING_STATIC("n00bb.enum-range"));
@@ -288,10 +354,12 @@ n00bb_abi_type_identity_rows_build(
     if (!valid || rows[0].kind != N00B_ABI_TYPE_NIL) {
         core_free(owners);
         core_free(rows);
+        core_list_free(arguments);
         return false;
     }
     *out = (n00bb_abi_type_identity_rows_t){
         .rows = rows, .owners = owners, .count = count,
+        .arguments = arguments.data, .argument_count = arguments.len,
     };
     return true;
 }
@@ -435,6 +503,7 @@ n00bb_abi_type_identity_rows_release(
     if (!rows) return;
     core_free(rows->rows);
     core_free(rows->owners);
+    core_free(rows->arguments);
     *rows = (n00bb_abi_type_identity_rows_t){0};
 }
 
@@ -482,6 +551,15 @@ append_type_components(n00bb_abi_type_index_t *index, ir_module_t *module,
         for (size_t i = 0; i < th_sum_len(type); i++)
             if (!append_component(index, th_sum_arm(type, i), indexes))
                 return false;
+        return true;
+    }
+    if (kind == N00B_ABI_TYPE_NAMED && source_kind == TH_NAMED) {
+        for (size_t i = 0; i < th_named_nargs(type); i++) {
+            const th_arg *arg = th_named_arg(type, i);
+            if (!arg || (arg->kind == TH_ARG_TYPE
+                && !append_component(index, arg->type, indexes)))
+                return false;
+        }
         return true;
     }
     if (kind == N00B_ABI_TYPE_VARIANT && source_kind == TH_NAMED) {

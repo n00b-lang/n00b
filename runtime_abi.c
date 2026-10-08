@@ -402,6 +402,78 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+metadata_named_arguments_valid(const n00b_abi_snapshot_v1 *snapshot,
+                               n00b_abi_error_v1 *error)
+{
+    uint32_t type_count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
+    uint32_t arg_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_TYPE_ARGUMENT);
+    n00b_abi_string_v1 empty = {0};
+    for (uint32_t i = 0; i < type_count; i++) {
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, i);
+        if (!type) return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+        if (type->kind == N00B_ABI_TYPE_NAMED
+            && !memcmp(&type->named_constructor, &empty, sizeof(empty)))
+            return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+        if (memcmp(&type->named_constructor, &empty, sizeof(empty))) {
+            const uint8_t *bytes;
+            uint64_t length;
+            if (n00b_abi_v1_string_bytes(snapshot, &type->named_constructor,
+                    &bytes, &length) != 1 || !length)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+        }
+        if (!type->named_arguments.count) {
+            if (type->named_arguments.first)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+            continue;
+        }
+        if (!type->named_arguments.first
+            || type->named_arguments.first >= arg_count
+            || type->named_arguments.count > arg_count
+                - type->named_arguments.first)
+            return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+        for (uint32_t j = 0; j < type->named_arguments.count; j++) {
+            const n00b_abi_type_argument_v1 *arg = n00b_abi_v1_record(
+                snapshot, N00B_ABI_TABLE_TYPE_ARGUMENT,
+                type->named_arguments.first + j, nullptr);
+            if (!arg || arg->owner_type_index != i || arg->ordinal != j)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+        }
+    }
+    for (uint32_t i = 1; i < arg_count; i++) {
+        const n00b_abi_type_argument_v1 *arg = n00b_abi_v1_record(
+            snapshot, N00B_ABI_TABLE_TYPE_ARGUMENT, i, nullptr);
+        const n00b_abi_type_v1 *type = arg
+            ? n00b_abi_v1_type(snapshot, arg->owner_type_index) : nullptr;
+        if (!type || arg->ordinal >= type->named_arguments.count
+            || type->named_arguments.first + arg->ordinal != i)
+            return invalid_record(error, N00B_ABI_TABLE_TYPE_ARGUMENT, i, 0);
+        if (arg->kind == N00B_ABI_TYPE_ARG_TYPE) {
+            if (arg->scalar_bits
+                || memcmp(&arg->string_value, &empty, sizeof(empty))
+                || !n00b_abi_v1_type(snapshot, arg->type_index))
+                return invalid_record(error, N00B_ABI_TABLE_TYPE_ARGUMENT,
+                                      i, 0);
+        }
+        else if (arg->kind == N00B_ABI_TYPE_ARG_STRING) {
+            const uint8_t *bytes;
+            uint64_t length;
+            if (arg->type_index || arg->scalar_bits
+                || n00b_abi_v1_string_bytes(snapshot, &arg->string_value,
+                    &bytes, &length) != 1)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE_ARGUMENT,
+                                      i, 0);
+        }
+        else if ((arg->kind != N00B_ABI_TYPE_ARG_UINT
+                  && arg->kind != N00B_ABI_TYPE_ARG_SINT)
+                 || arg->type_index
+                 || memcmp(&arg->string_value, &empty, sizeof(empty)))
+            return invalid_record(error, N00B_ABI_TABLE_TYPE_ARGUMENT, i, 0);
+    }
+    return true;
+}
+
+static bool
 metadata_scope_symbols_valid(const n00b_abi_snapshot_v1 *snapshot,
                              n00b_abi_error_v1 *error)
 {
@@ -2132,6 +2204,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
             && nil->typehash == UINT64_C(0x0ea862bddb8ce94c);
     }
     if (valid) valid = metadata_references_valid(candidate, error);
+    if (valid) valid = metadata_named_arguments_valid(candidate, error);
     if (valid) valid = metadata_scope_symbols_valid(candidate, error);
     if (valid) valid = metadata_packages_valid(candidate, error);
     if (valid) valid = metadata_sccs_valid(candidate, error);
@@ -2283,6 +2356,7 @@ n00b_abi_v1_string_bytes(const n00b_abi_snapshot_v1 *snapshot,
     }
 
 TYPED_GETTER(type, TYPE, type)
+TYPED_GETTER(type_argument, TYPE_ARGUMENT, type_argument)
 TYPED_GETTER(package, PACKAGE, package)
 TYPED_GETTER(module, MODULE, module)
 TYPED_GETTER(runtime_config, RUNTIME_CONFIG, runtime_config)

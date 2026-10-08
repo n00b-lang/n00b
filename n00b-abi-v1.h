@@ -154,6 +154,7 @@ typedef enum {
     N00B_ABI_TABLE_RUNTIME_CONFIG,
     N00B_ABI_TABLE_CALL_SIGNATURE,
     N00B_ABI_TABLE_SPECIALIZATION_LINK,
+    N00B_ABI_TABLE_TYPE_ARGUMENT,
     N00B_ABI_TABLE_CALL_SHAPE,
 } n00b_abi_table_kind_v1;
 
@@ -177,8 +178,16 @@ typedef enum {
     N00B_ABI_TYPE_UNION,
     N00B_ABI_TYPE_ATOMIC,
     N00B_ABI_TYPE_VARIABLE,
+    N00B_ABI_TYPE_NAMED,
     N00B_ABI_TYPE_TUPLE,
 } n00b_abi_type_kind_v1;
+
+typedef enum {
+    N00B_ABI_TYPE_ARG_TYPE = 1,
+    N00B_ABI_TYPE_ARG_UINT,
+    N00B_ABI_TYPE_ARG_SINT,
+    N00B_ABI_TYPE_ARG_STRING,
+} n00b_abi_type_arg_kind_v1;
 
 typedef enum {
     N00B_ABI_TYPE_FLAG_SIGNED = 1u << 0,
@@ -380,7 +389,18 @@ typedef struct {
     /* Link-only: identifies the imported function requirement that owns this
      * variable. Zero in a consolidated image and on locally owned types. */
     uint32_t typevar_import_requirement_index;
+    n00b_abi_string_v1 named_constructor;
+    n00b_abi_range_v1 named_arguments; /* Direct TYPE_ARGUMENT row span. */
 } n00b_abi_type_v1;
+
+typedef struct {
+    uint32_t owner_type_index;
+    uint32_t ordinal;
+    uint32_t kind; /* n00b_abi_type_arg_kind_v1 */
+    uint32_t type_index; /* Only for TYPE; nil is index zero. */
+    uint64_t scalar_bits; /* UINT or two's-complement SINT. */
+    n00b_abi_string_v1 string_value;
+} n00b_abi_type_argument_v1;
 
 /* Fixed-width table row; zero is the reserved row, never a parent type. */
 typedef uint32_t n00b_abi_specialization_link_v1;
@@ -770,6 +790,8 @@ int32_t n00b_abi_v1_raw_fd_write(int32_t fd, n00b_abi_string_v1 text);
 
 const n00b_abi_type_v1 *n00b_abi_v1_type(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t type_index);
+const n00b_abi_type_argument_v1 *n00b_abi_v1_type_argument(
+    const n00b_abi_snapshot_v1 *snapshot, uint32_t argument_index);
 /* Follows transitive specialization links. Returns 1, 0, or -1. */
 int32_t n00b_abi_v1_type_specializes(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t type_index,
@@ -867,7 +889,9 @@ _Static_assert(sizeof(n00b_abi_module_v1) == 64, "module width");
 _Static_assert(offsetof(n00b_abi_module_v1, source_file_index) == 60,
                "module source-file offset");
 _Static_assert(sizeof(n00b_abi_scc_v1) == 32, "SCC width");
-_Static_assert(sizeof(n00b_abi_type_v1) == 112, "type width");
+_Static_assert(sizeof(n00b_abi_type_v1) == 136, "type width");
+_Static_assert(sizeof(n00b_abi_type_argument_v1) == 40,
+               "type argument width");
 _Static_assert(sizeof(n00b_abi_specialization_link_v1) == 4,
                "specialization link width");
 _Static_assert(offsetof(n00b_abi_type_v1, call_signature_index) == 88,

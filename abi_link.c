@@ -454,6 +454,7 @@ typedef struct {
 static bool nonconcrete_key_init(abi_link_key_t *key);
 static bool link_key_from_owner_type(abi_link_key_t *key,
                                      uint32_t type_index, uint32_t kind);
+static bool link_key_from_type_argument(abi_link_key_t *key);
 
 static core_hash_value_t
 link_key_hash(void *value)
@@ -522,6 +523,8 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
         const n00b_abi_call_signature_v1 *signature = key->row;
         return link_key_from_owner_type(key, signature->type_index, kind);
     }
+    case N00B_ABI_TABLE_TYPE_ARGUMENT:
+        return link_key_from_type_argument(key);
     case N00B_ABI_TABLE_PACKAGE:
         return link_key_string(key,
             &((const n00b_abi_package_v1 *)key->row)->name);
@@ -584,6 +587,35 @@ link_key_from_owner_type(abi_link_key_t *key, uint32_t type_index,
     key->bytes = owner.bytes == (const uint8_t *)&owner.scalar
         ? (const uint8_t *)&key->scalar : owner.bytes;
     key->length = owner.length;
+    return true;
+}
+
+static bool
+link_key_from_type_argument(abi_link_key_t *key)
+{
+    const n00b_abi_type_argument_v1 *argument = key->row;
+    const n00b_abi_type_v1 *type = n00bb_abi_object_row(key->view,
+        N00B_ABI_TABLE_TYPE, argument->owner_type_index);
+    if (!type || argument->ordinal >= type->named_arguments.count
+        || type->named_arguments.first + argument->ordinal
+            != key->local_index) return false;
+    abi_link_key_t owner = *key;
+    owner.row = type;
+    owner.local_index = argument->owner_type_index;
+    owner.owned_bytes = nullptr;
+    owner.unique = false;
+    if (!link_key_init(&owner, N00B_ABI_TABLE_TYPE)) {
+        core_buffer_free(owner.owned_bytes);
+        return false;
+    }
+    key->owned_bytes = core_buffer_empty();
+    core_buffer_append(key->owned_bytes, (const char *)owner.bytes,
+                       owner.length);
+    core_buffer_append(key->owned_bytes, (const char *)&argument->ordinal,
+                       sizeof(argument->ordinal));
+    core_buffer_free(owner.owned_bytes);
+    key->bytes = (const uint8_t *)key->owned_bytes->data;
+    key->length = key->owned_bytes->byte_len;
     return true;
 }
 
@@ -1466,6 +1498,39 @@ compatible_type_identity(const abi_link_key_t *first,
         a_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
         b_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
     }
+    if (a->named_arguments.count != b->named_arguments.count
+        || !compatible_string_values(first->view, &a->named_constructor,
+            candidate->view, &b->named_constructor)) return false;
+    const n00bb_abi_directory_entry_t *a_args = n00bb_abi_object_table(
+        first->view, N00B_ABI_TABLE_TYPE_ARGUMENT);
+    const n00bb_abi_directory_entry_t *b_args = n00bb_abi_object_table(
+        candidate->view, N00B_ABI_TABLE_TYPE_ARGUMENT);
+    if (a->named_arguments.count && (!a_args || !b_args
+        || a->named_arguments.first >= a_args->record_count
+        || b->named_arguments.first >= b_args->record_count
+        || a->named_arguments.count > a_args->record_count
+            - a->named_arguments.first
+        || b->named_arguments.count > b_args->record_count
+            - b->named_arguments.first)) return false;
+    for (uint32_t i = 0; i < a->named_arguments.count; i++) {
+        const n00b_abi_type_argument_v1 *left = n00bb_abi_object_row(
+            first->view, N00B_ABI_TABLE_TYPE_ARGUMENT,
+            a->named_arguments.first + i);
+        const n00b_abi_type_argument_v1 *right = n00bb_abi_object_row(
+            candidate->view, N00B_ABI_TABLE_TYPE_ARGUMENT,
+            b->named_arguments.first + i);
+        if (!left || !right || left->owner_type_index != first->local_index
+            || right->owner_type_index != candidate->local_index
+            || left->ordinal != i || right->ordinal != i
+            || left->kind != right->kind
+            || left->scalar_bits != right->scalar_bits
+            || !compatible_string_values(first->view, &left->string_value,
+                candidate->view, &right->string_value)
+            || (left->kind == N00B_ABI_TYPE_ARG_TYPE
+                ? !compatible_child_type(first->view, left->type_index,
+                    candidate->view, right->type_index)
+                : left->type_index || right->type_index)) return false;
+    }
     return a->kind == b->kind
         && a->typehash == b->typehash && a_flags == b_flags
         && (!a->size_bits || !b->size_bits
@@ -1735,6 +1800,24 @@ static bool
 type_backlinks_valid(const n00bb_abi_object_view_t *view,
                      const n00b_abi_type_v1 *type, uint32_t type_index)
 {
+    const n00bb_abi_directory_entry_t *arguments = n00bb_abi_object_table(
+        view, N00B_ABI_TABLE_TYPE_ARGUMENT);
+    if (!type->named_arguments.count) {
+        if (type->named_arguments.first) return false;
+    }
+    else {
+        if (!arguments || !type->named_arguments.first
+            || type->named_arguments.first >= arguments->record_count
+            || type->named_arguments.count > arguments->record_count
+                - type->named_arguments.first) return false;
+        for (uint32_t i = 0; i < type->named_arguments.count; i++) {
+            const n00b_abi_type_argument_v1 *arg = n00bb_abi_object_row(
+                view, N00B_ABI_TABLE_TYPE_ARGUMENT,
+                type->named_arguments.first + i);
+            if (!arg || arg->owner_type_index != type_index
+                || arg->ordinal != i) return false;
+        }
+    }
     if (type->layout_index) {
         const n00b_abi_layout_v1 *layout = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_LAYOUT, type->layout_index);
@@ -1859,6 +1942,28 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
             N00B_ABI_TABLE_SCOPE, symbol->scope_index);
         return scope && scope->module_index == symbol->module_index
             && range_owns_row_once(view, scope->symbols, local_index);
+    }
+    if (kind == N00B_ABI_TABLE_TYPE_ARGUMENT) {
+        const n00b_abi_type_argument_v1 *argument = row;
+        const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_TYPE, argument->owner_type_index);
+        if (!type || argument->ordinal >= type->named_arguments.count
+            || type->named_arguments.first + argument->ordinal
+                != local_index) return false;
+        n00b_abi_string_v1 empty = {0};
+        if (argument->kind == N00B_ABI_TYPE_ARG_TYPE)
+            return !argument->scalar_bits
+                && !memcmp(&argument->string_value, &empty, sizeof(empty))
+                && n00bb_abi_object_row(view, N00B_ABI_TABLE_TYPE,
+                    argument->type_index);
+        if (argument->type_index) return false;
+        if (argument->kind == N00B_ABI_TYPE_ARG_STRING)
+            return !argument->scalar_bits
+                && n00bb_abi_object_string(view,
+                    &argument->string_value, &(n00bb_abi_string_view_t){0});
+        return (argument->kind == N00B_ABI_TYPE_ARG_UINT
+                || argument->kind == N00B_ABI_TYPE_ARG_SINT)
+            && !memcmp(&argument->string_value, &empty, sizeof(empty));
     }
     if (kind == N00B_ABI_TABLE_LAYOUT || kind == N00B_ABI_TABLE_TRACE
         || kind == N00B_ABI_TABLE_CALL_SIGNATURE) {
@@ -2280,6 +2385,8 @@ static const abi_string_column_t abi_string_columns[] = {
     ABI_STRING_FIELD(PACKAGE, package, name),
     ABI_STRING_FIELD(MODULE, module, full_path),
     ABI_STRING_FIELD(TYPE, type, canonical_name),
+    ABI_STRING_FIELD(TYPE, type, named_constructor),
+    ABI_STRING_FIELD(TYPE_ARGUMENT, type_argument, string_value),
     ABI_STRING_FIELD(ENUM_ITEM, enum_item, name),
     ABI_STRING_FIELD(CONSTRAINT, constraint, name),
     ABI_STRING_FIELD(CONSTRAINT, constraint, scope_module_name),

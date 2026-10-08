@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "abi_directory.h"
 #include "n00b-abi-v1.h"
 #include "lib/object_section.h"
 #include "lib/target.h"
@@ -37,7 +38,7 @@ read_object(const char *path, size_t *length_out)
 int
 main(int argc, char **argv)
 {
-    assert(argc == 3 || argc == 4);
+    assert(argc == 3 || argc == 4 || argc == 5);
     size_t object_bytes = 0;
     uint8_t *object = read_object(argv[1], &object_bytes);
     core_target_desc_t target;
@@ -115,6 +116,32 @@ main(int argc, char **argv)
         .metadata = (const n00b_abi_header_v1 *)loaded[metadata.native_index],
         .metadata_bytes = metadata.size,
     };
+    if (argc == 4 && !strcmp(argv[3], "--bad-named-argument")) {
+        const uint8_t *base = (const uint8_t *)image.metadata;
+        const n00b_abi_header_v1 *header = image.metadata;
+        bool changed = false;
+        for (uint32_t i = 0; i < header->directory_count; i++) {
+            n00bb_abi_directory_entry_t entry;
+            n00bb_abi_directory_decode_entry(base + header->directory_offset
+                + (size_t)i * N00BB_ABI_DIRECTORY_BYTES, &entry);
+            if (entry.kind != N00B_ABI_TABLE_TYPE_ARGUMENT) continue;
+            assert(entry.record_count > 1 && entry.record_bytes
+                == sizeof(n00b_abi_type_argument_v1));
+            n00b_abi_type_argument_v1 *arg = (void *)(loaded[metadata.native_index]
+                + entry.file_offset + entry.record_bytes);
+            arg->ordinal++;
+            changed = true;
+            break;
+        }
+        assert(changed);
+        n00b_abi_error_v1 bad_error = {0};
+        uint64_t bad_generation = 0;
+        assert(n00b_abi_v1_register_image(&image, &bad_generation,
+            &bad_error) == N00B_ABI_BAD_METADATA);
+        assert(!n00b_abi_v1_current_snapshot());
+        free(object);
+        return 0;
+    }
     n00b_abi_error_v1 error = {0};
     uint64_t generation = 0;
     uint32_t status = n00b_abi_v1_register_image(&image,
@@ -138,6 +165,33 @@ main(int argc, char **argv)
             && path && length
             && n00b_abi_v1_find_module(snapshot, module->full_path,
                 &found) == 1 && found == i);
+    }
+    if (argc == 5) {
+        uint32_t matches = 0;
+        uint32_t expected_args = (uint32_t)strtoul(argv[4], nullptr, 10);
+        uint32_t type_count = n00b_abi_v1_table_count(snapshot,
+            N00B_ABI_TABLE_TYPE);
+        for (uint32_t i = 0; i < type_count; i++) {
+            const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, i);
+            const uint8_t *name = nullptr;
+            uint64_t length = 0;
+            n00b_abi_string_v1 empty = {0};
+            if (!type || !memcmp(&type->named_constructor, &empty,
+                                 sizeof(empty))) continue;
+            assert(type && n00b_abi_v1_string_bytes(snapshot,
+                &type->named_constructor, &name, &length) == 1);
+            if (length != strlen(argv[3])
+                || memcmp(name, argv[3], (size_t)length)) continue;
+            assert(type->named_arguments.count == expected_args);
+            for (uint32_t j = 0; j < expected_args; j++) {
+                const n00b_abi_type_argument_v1 *arg =
+                    n00b_abi_v1_type_argument(snapshot,
+                        type->named_arguments.first + j);
+                assert(arg && arg->owner_type_index == i && arg->ordinal == j);
+            }
+            matches++;
+        }
+        assert(matches);
     }
     if (argc == 4) {
         uint32_t matches = 0;

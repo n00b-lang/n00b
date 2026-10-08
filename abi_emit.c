@@ -1470,6 +1470,8 @@ n00bb_abi_emit_unit(
         {N00B_ABI_TABLE_MODULE, modules, 2},
         {N00B_ABI_TABLE_SCC, sccs, recursive ? 2 : 1},
         {N00B_ABI_TABLE_TYPE, type_rows.rows, type_rows.count},
+        {N00B_ABI_TABLE_TYPE_ARGUMENT, type_rows.arguments,
+         type_rows.argument_count},
         {N00B_ABI_TABLE_LAYOUT, layout_rows.layouts,
          layout_rows.layout_count},
         {N00B_ABI_TABLE_PHYSICAL_RUN, layout_rows.runs,

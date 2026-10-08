@@ -75,10 +75,13 @@ main(void)
     size_t relocation_count = 0;
     assert(n00bb_abi_name_pool_relocations(names, &directory, 1,
         &relocations, &relocation_count));
-    assert(relocation_count == 1
+    assert(relocation_count == 2
         && relocations[0].section_offset == 64
             + (uint64_t)record_index * sizeof(n00b_abi_type_v1)
-            + offsetof(n00b_abi_type_v1, canonical_name));
+            + offsetof(n00b_abi_type_v1, canonical_name)
+        && relocations[1].section_offset == 64
+            + (uint64_t)record_index * sizeof(n00b_abi_type_v1)
+            + offsetof(n00b_abi_type_v1, named_constructor));
     core_free(relocations);
 
     n00bb_abi_type_index_t *handles = n00bb_abi_type_index_new(runtime);
@@ -114,6 +117,16 @@ main(void)
         && n00bb_abi_type_index_add(handles, structural_ref, &ref_index)
         && n00bb_abi_type_index_add(handles, fixed_array, &array_index)
         && n00bb_abi_type_index_add(handles, alternatives, &union_index));
+    th_arg named_args[] = {
+        {.kind = TH_ARG_TYPE, .type = string},
+        {.kind = TH_ARG_UINT, .u = 7},
+        {.kind = TH_ARG_SINT, .s = -3},
+        {.kind = TH_ARG_STR, .str = {.p = "fmt", .n = 3}},
+    };
+    th_type *named = th_apply(types, "example.Dict", named_args, 4);
+    uint32_t named_index = 0;
+    assert(named && n00bb_abi_type_index_add(handles, named,
+                                              &named_index));
     assert(ir_layout_publish_final(runtime, bits3, "x86_64-linux",
                                    &bits3_layout));
     n00bb_abi_type_identity_rows_t handle_rows = {0};
@@ -158,6 +171,25 @@ main(void)
     }
     assert(handle_rows.rows[0].components.count == 0
         && handle_rows.rows[bits3_index].components.count == 0);
+    const n00b_abi_type_v1 *named_row = &handle_rows.rows[named_index];
+    assert(named_row->kind == N00B_ABI_TYPE_NAMED
+        && !named_row->layout_index && named_row->named_arguments.count == 4
+        && named_row->components.count == 1
+        && components.indexes[named_row->components.first - 3]
+            == string_component_index);
+    const n00b_abi_type_argument_v1 *args = handle_rows.arguments
+        + named_row->named_arguments.first;
+    assert(args[0].owner_type_index == named_index
+        && args[0].kind == N00B_ABI_TYPE_ARG_TYPE
+        && args[0].type_index == string_component_index
+        && args[1].ordinal == 1
+        && args[1].kind == N00B_ABI_TYPE_ARG_UINT
+        && args[1].scalar_bits == 7
+        && args[2].ordinal == 2
+        && args[2].kind == N00B_ABI_TYPE_ARG_SINT
+        && (int64_t)args[2].scalar_bits == -3
+        && args[3].ordinal == 3
+        && args[3].kind == N00B_ABI_TYPE_ARG_STRING);
     n00bb_abi_type_components_release(&components);
     n00bb_abi_type_identity_rows_release(&handle_rows);
     n00bb_abi_name_pool_free(handle_names);

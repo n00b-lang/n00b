@@ -5993,6 +5993,17 @@ if N00B_PATH="$script_dir/programs/generic_trait_specialization" "$compiler" pre
 fi
 grep -q 'N00BB-T0003.*trait constraint.*method dispatch is ambiguous' "$tmp/generic_trait_specialization_ambiguous.out"
 
+N00B_PATH="$script_dir/programs/generic_trait_specialization" \
+    "$compiler" library --output "$tmp/generic_named_type.o" \
+    "$script_dir/programs/generic_trait_specialization/root.n00b" \
+    >"$tmp/generic_named_type.out" 2>"$tmp/generic_named_type.err" || {
+    cat "$tmp/generic_named_type.err" >&2
+    exit 1
+}
+"$abi_register_object_test" "$tmp/generic_named_type.o" 7 dict 2
+"$abi_register_object_test" "$tmp/generic_named_type.o" 7 \
+    --bad-named-argument
+
 N00B_PATH="$interface_programs" "$compiler" library \
     --emit-interface "$tmp/generic_trait_archive.n00bi" \
     generic_trait_archive_dep.facade \
