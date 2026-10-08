@@ -43,17 +43,36 @@ selected_type_declaration(void *context, parse_sym_entry_t *symbol)
     return context;
 }
 
+typedef struct {
+    const core_translation_unit_t *unit;
+    parse_token_stream_t *tokens;
+} descriptor_source_t;
+
+static bool
+descriptor_node_source(void *context, parse_tree_t *node,
+                       const core_translation_unit_t **unit,
+                       parse_token_stream_t **tokens)
+{
+    (void)node;
+    descriptor_source_t *source = context;
+    *unit = source->unit;
+    *tokens = source->tokens;
+    return true;
+}
+
 static void
 check_type_descriptor_storage(void)
 {
     core_module_spec_t spec = {0};
     core_source_file_t source = {0};
     core_translation_unit_t unit = {0};
+    static const char source_text[] = "selected_type";
     assert(core_module_spec_init(&spec, CORE_STRING_STATIC("example"))
         && core_source_file_init(&source, CORE_STRING_STATIC("example.n00b"),
-                                 "", 0)
+                                 source_text, sizeof(source_text) - 1)
         && core_translation_unit_init(&unit, &spec, &source));
     core_module_spec_release(&spec);
+    assert(core_translation_unit_finalize_imports(&unit));
     core_link_unit_t *link = core_link_unit_new();
     assert(link && core_link_unit_add_root(link, &unit)
         && core_link_unit_collect(link));
@@ -61,7 +80,9 @@ check_type_descriptor_storage(void)
     const ir_profile_t profile = {.name = "n00b"};
     ir_module_t *runtime = ir_module_new(context, "example", &profile,
                                         "x86_64-linux");
-    assert(runtime);
+    ir_module_t *comptime = ir_module_new(context, "example$comptime",
+                                         &profile, "x86_64-linux");
+    assert(runtime && comptime);
     th_ctx *types = ir_ctx_types(context);
     th_type *typespec = th_name(types, "typespec");
     th_type *referred = th_bitint(types, 32, true);
@@ -88,6 +109,16 @@ check_type_descriptor_storage(void)
     assert(module_scope);
     module_scope->scope_tag = CORE_STRING_STATIC("module");
     parse_tree_t node = {0};
+    core_tree_node_value(&node).end = 1;
+    parse_token_info_t *token = core_alloc(parse_token_info_t);
+    *token = (parse_token_info_t){
+        .origin = PARSE_TOKEN_SOURCE, .line = 1, .column = 1,
+        .endline = 1, .endcol = sizeof(source_text),
+        .start_byte = 0, .end_byte = sizeof(source_text) - 1,
+    };
+    parse_token_info_t *token_array[] = {token};
+    parse_token_stream_t *tokens = scan_token_stream_from_array(token_array, 1);
+    assert(tokens);
     parse_sym_entry_t *symbol = parse_symtab_add(symbols,
         CORE_STRING_STATIC("value"), CORE_STRING_STATIC("selected_type"),
         PARSE_SYM_VARIABLE, &node);
@@ -137,12 +168,51 @@ check_type_descriptor_storage(void)
     assert(buffer->byte_len >= patch->byte_offset + sizeof(uint32_t)
         && core_le_load_u32((const uint8_t *)buffer->data
             + patch->byte_offset) == referred_index);
+    descriptor_source_t source_owner = {.unit = &unit, .tokens = tokens};
+    n00bb_abi_packed_tables_t packed = {0};
+    uint8_t *object = nullptr;
+    size_t object_bytes = 0;
+    assert(n00bb_abi_emit_unit(link, &unit, CORE_STRING_STATIC("default"),
+        symbols, tokens, comptime, runtime, &target, N00B_ABI_CAP_DEBUG,
+        selected_type_declaration, declaration,
+        descriptor_node_source, &source_owner, nullptr, nullptr,
+        &packed, &object, &object_bytes));
+    core_object_section_t metadata;
+    assert(core_object_section_find(object, object_bytes,
+        target.object_format, nullptr, ".data.rel.ro.n00b_meta", &metadata));
+    n00bb_abi_image_key_t key = {
+        .target_id = N00BB_ABI_TARGET_X86_64_LINUX,
+        .abi_profile_id = N00BB_ABI_PROFILE_ID,
+        .data_layout_profile = N00BB_ABI_DATA_LAYOUT_PROFILE,
+    };
+    size_t schema_count = 0;
+    const n00bb_abi_table_schema_t *schemas =
+        n00bb_abi_v1_table_schemas(&schema_count);
+    n00bb_abi_directory_entry_t *entries = core_alloc_array(
+        n00bb_abi_directory_entry_t, schema_count);
+    n00bb_abi_image_header_t header;
+    assert(n00bb_abi_container_read(metadata.bytes, metadata.size, &key,
+        schemas, schema_count, false, &header, entries, schema_count));
+    const n00bb_abi_directory_entry_t *patch_entry = find_entry(entries,
+        header.directory_count, N00B_ABI_TABLE_INDEX_PATCH);
+    assert(patch_entry && patch_entry->record_count == 2);
+    const n00b_abi_index_patch_v1 *emitted = (const void *)(metadata.bytes
+        + patch_entry->file_offset + patch_entry->record_bytes);
+    assert(emitted->referenced_table_kind == N00B_ABI_TABLE_TYPE
+        && emitted->local_index == referred_index
+        && emitted->target_byte_offset == patch->byte_offset
+        && emitted->patch_kind == N00B_ABI_PATCH_INDEX
+        && emitted->target_section_index != 0);
+    core_free(entries);
+    n00bb_abi_packed_tables_release(&packed);
+    core_free(object);
     n00bb_abi_storage_rows_release(&rows);
     n00bb_abi_decl_index_free(declarations);
     n00bb_abi_type_identity_rows_release(&types_rows);
     n00bb_abi_name_pool_free(names);
     n00bb_abi_type_index_free(index);
     parse_symtab_free(symbols);
+    scan_token_stream_free(tokens);
     ir_ctx_free(context);
     core_link_unit_free(link);
     core_translation_unit_release(&unit);
