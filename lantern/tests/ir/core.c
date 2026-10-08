@@ -202,6 +202,11 @@ static void test_types(void)
               && outcome_error && outcome_error->kind == TH_ARG_TYPE
               && outcome_error->type == error1
               && th_free_vars(types, outcome1, nullptr) == 1);
+    th_type *outcome_definition = ir_type_definition(m, outcome1);
+    check("outcome definitions survive failure-channel refinement",
+          outcome_definition && th_unify_in_place(types, error1, a)
+              && ir_type_definition(m, outcome1) == outcome_definition
+              && ir_type_definition_owner(m, outcome1) == m);
 
     bool found_a = false;
     bool found_c = false;

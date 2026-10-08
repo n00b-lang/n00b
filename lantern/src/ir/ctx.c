@@ -745,6 +745,17 @@ th_type *ir_type_at(ir_module_t *m, size_t i)
     return m && i < m->n_types ? m->types[i].type : nullptr;
 }
 
+static ir_context_type_definition_t *
+type_definition_find(ir_module_t *m, th_type *named, uint64_t hash)
+{
+    for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
+        ir_context_type_definition_t *entry = &m->ctx->type_definitions[i];
+        if (entry->type == named || entry->hash == hash
+            || ir_type_id(m, entry->type) == hash) return entry;
+    }
+    return nullptr;
+}
+
 bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
 {
     if (!m || !named || !def || th_kind_of(named) != TH_NAMED) {
@@ -760,10 +771,9 @@ bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
     if (!slot) {
         return false;
     }
-    for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
-        ir_context_type_definition_t *entry =
-            &m->ctx->type_definitions[i];
-        if (entry->hash != hash) continue;
+    ir_context_type_definition_t *entry = type_definition_find(m, named,
+                                                                hash);
+    if (entry) {
         if (th_hash(m->ctx->types, entry->definition)
             != th_hash(m->ctx->types, def))
             return false;
@@ -796,11 +806,9 @@ th_type *ir_type_definition(ir_module_t *m, th_type *named)
     }
 
     uint64_t hash = ir_type_id(m, named);
-    for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
-        ir_context_type_definition_t *entry =
-            &m->ctx->type_definitions[i];
-        if (entry->hash == hash) return entry->definition;
-    }
+    ir_context_type_definition_t *entry = type_definition_find(m, named,
+                                                                hash);
+    if (entry) return entry->definition;
     ir_typeslot_t *slot = type_find(m, hash);
     return slot ? slot->def : nullptr;
 }
@@ -809,11 +817,9 @@ ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named)
 {
     if (!m || !named || th_kind_of(named) != TH_NAMED) return nullptr;
     uint64_t hash = ir_type_id(m, named);
-    for (size_t i = 0; i < m->ctx->type_definition_count; i++) {
-        ir_context_type_definition_t *entry =
-            &m->ctx->type_definitions[i];
-        if (entry->hash == hash) return entry->owner;
-    }
+    ir_context_type_definition_t *entry = type_definition_find(m, named,
+                                                                hash);
+    if (entry) return entry->owner;
     return nullptr;
 }
 
