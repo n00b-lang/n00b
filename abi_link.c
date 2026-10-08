@@ -1481,6 +1481,8 @@ remap_range(const n00bb_abi_object_view_t *view,
                 stream_kind, source.first + i);
             uint32_t local = core_le_load_u32(slot);
             uint32_t mapped = local;
+            if (!local && target_kind != N00B_ABI_TABLE_TYPE
+                && target_kind != UINT32_MAX) return false;
             if (target_kind != UINT32_MAX
                 && !remap_index(plan, input_index, target_kind,
                     local, &mapped)) return false;

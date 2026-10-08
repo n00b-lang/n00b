@@ -1515,6 +1515,55 @@ test_specialization_remap(void)
 }
 
 static void
+test_typed_range_rejects_zero(void)
+{
+    typedef struct {
+        n00b_abi_package_v1 packages[2];
+        n00b_abi_module_v1 modules[2];
+        uint32_t indexes[2];
+    } fixture_t;
+    fixture_t metadata = {0};
+    memcpy(metadata.packages[1].name.short_value.bytes, "p", 1);
+    metadata.packages[1].name.short_value.selector = 1;
+    metadata.packages[1].modules = (n00b_abi_range_v1){1, 1};
+    memcpy(metadata.modules[1].full_path.short_value.bytes, "p.m", 3);
+    metadata.modules[1].full_path.short_value.selector = 3;
+    n00bb_abi_directory_entry_t directory[] = {
+        {.kind = N00B_ABI_TABLE_PACKAGE,
+         .record_bytes = sizeof(metadata.packages[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, packages)},
+        {.kind = N00B_ABI_TABLE_MODULE,
+         .record_bytes = sizeof(metadata.modules[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, modules)},
+        {.kind = N00B_ABI_TABLE_U32_STREAM,
+         .record_bytes = sizeof(metadata.indexes[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, indexes)},
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {.bytes = (const uint8_t *)&metadata,
+                     .size = sizeof(metadata)},
+        .directory = directory,
+        .directory_count = sizeof(directory) / sizeof(*directory),
+    };
+    n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    uint32_t values[2] = {0}, kinds[2] = {0};
+    n00bb_abi_u32_stream_build_t stream = {
+        .values = values, .kinds = kinds, .count = 2,
+    };
+    n00b_abi_package_v1 package;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_PACKAGE, 1, &package, sizeof(package), &stream));
+    metadata.indexes[1] = 1;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_PACKAGE, 1, &package, sizeof(package), &stream)
+        && package.modules.first == 1 && package.modules.count == 1
+        && values[1] == 1 && kinds[1] == N00B_ABI_TABLE_MODULE);
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_function_range_ownership_remap(void)
 {
     typedef struct {
@@ -2473,6 +2522,7 @@ main(int argc, char **argv)
     test_link_index_patch();
     test_type_variable_shape();
     test_specialization_remap();
+    test_typed_range_rejects_zero();
     test_function_range_ownership_remap();
     test_type_backlinks_remap();
     test_metadata_string_uses_relocation_pool();
