@@ -1,7 +1,31 @@
 #include "abi_directory.h"
 #include "n00b-abi-v1.h"
 
-#include "lib/byteorder.h"
+static uint32_t
+abi_le_load_u32(const uint8_t *data)
+{
+    return (uint32_t)data[0] | (uint32_t)data[1] << 8
+        | (uint32_t)data[2] << 16 | (uint32_t)data[3] << 24;
+}
+
+static uint64_t
+abi_le_load_u64(const uint8_t *data)
+{
+    return (uint64_t)abi_le_load_u32(data)
+        | (uint64_t)abi_le_load_u32(data + 4) << 32;
+}
+
+static void
+abi_le_store_u32(uint8_t *data, uint32_t value)
+{
+    for (unsigned i = 0; i < 4; i++) data[i] = (uint8_t)(value >> (8 * i));
+}
+
+static void
+abi_le_store_u64(uint8_t *data, uint64_t value)
+{
+    for (unsigned i = 0; i < 8; i++) data[i] = (uint8_t)(value >> (8 * i));
+}
 
 #define SCHEMA(name, type) {N00B_ABI_TABLE_##name, \
     N00B_ABI_V1_TABLE_SCHEMA_VERSION, sizeof(type), _Alignof(type)}
@@ -62,12 +86,12 @@ void
 n00bb_abi_directory_encode_entry(uint8_t out[N00BB_ABI_DIRECTORY_BYTES],
                                  const n00bb_abi_directory_entry_t *entry)
 {
-    core_le_store_u32(out, entry->kind);
-    core_le_store_u32(out + 4, entry->schema_version);
-    core_le_store_u32(out + 8, entry->record_bytes);
-    core_le_store_u32(out + 12, entry->record_count);
-    core_le_store_u64(out + 16, entry->file_offset);
-    core_le_store_u64(out + 24, entry->byte_length);
+    abi_le_store_u32(out, entry->kind);
+    abi_le_store_u32(out + 4, entry->schema_version);
+    abi_le_store_u32(out + 8, entry->record_bytes);
+    abi_le_store_u32(out + 12, entry->record_count);
+    abi_le_store_u64(out + 16, entry->file_offset);
+    abi_le_store_u64(out + 24, entry->byte_length);
 }
 
 void
@@ -75,12 +99,12 @@ n00bb_abi_directory_decode_entry(const uint8_t in[N00BB_ABI_DIRECTORY_BYTES],
                                  n00bb_abi_directory_entry_t *entry)
 {
     *entry = (n00bb_abi_directory_entry_t){
-        .kind = core_le_load_u32(in),
-        .schema_version = core_le_load_u32(in + 4),
-        .record_bytes = core_le_load_u32(in + 8),
-        .record_count = core_le_load_u32(in + 12),
-        .file_offset = core_le_load_u64(in + 16),
-        .byte_length = core_le_load_u64(in + 24),
+        .kind = abi_le_load_u32(in),
+        .schema_version = abi_le_load_u32(in + 4),
+        .record_bytes = abi_le_load_u32(in + 8),
+        .record_count = abi_le_load_u32(in + 12),
+        .file_offset = abi_le_load_u64(in + 16),
+        .byte_length = abi_le_load_u64(in + 24),
     };
 }
 
