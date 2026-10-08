@@ -250,5 +250,11 @@ main(void)
         n00b_abi_v1_current_snapshot();
     assert(snapshot && n00b_abi_v1_type(snapshot, 1)->tracing_index == 1
         && n00b_abi_v1_trace(snapshot, 2)->type_index == 3);
+    assert(n00b_abi_v1_layout(snapshot, 1)->type_index == 1
+        && n00b_abi_v1_field(snapshot, 1)->parent_type_index == 1
+        && n00b_abi_v1_trace(snapshot, 1)->type_index == 1
+        && !n00b_abi_v1_layout(snapshot, 4)
+        && !n00b_abi_v1_field(snapshot, 2)
+        && !n00b_abi_v1_trace(snapshot, 3));
     return 0;
 }

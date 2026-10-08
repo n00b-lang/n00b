@@ -34,14 +34,15 @@
 
 typedef struct {
     n00b_abi_header_v1 header;
-    uint8_t directory[20 * N00BB_ABI_DIRECTORY_BYTES];
-    n00b_abi_type_v1 types[5];
+    uint8_t directory[22 * N00BB_ABI_DIRECTORY_BYTES];
+    n00b_abi_type_v1 types[6];
     uint32_t indexes[14];
     uint64_t values[1];
     uint8_t bytes[4];
     n00b_abi_specialization_link_v1 links[3];
     n00b_abi_trait_method_v1 methods[3];
     n00b_abi_function_v1 functions[4];
+    n00b_abi_call_signature_v1 signatures[2];
     n00b_abi_code_range_v1 code_ranges[3];
     n00b_abi_frame_layout_v1 frame_layouts[2];
     n00b_abi_dispatch_v1 dispatches[2];
@@ -52,6 +53,7 @@ typedef struct {
     n00b_abi_symbol_v1 symbols[2];
     n00b_abi_name_slot_v1 name_slots[4];
     n00b_abi_source_file_v1 source_files[2];
+    n00b_abi_source_location_v1 locations[2];
     n00b_abi_runtime_config_v1 configs[2];
     n00b_abi_storage_v1 storages[3];
     n00b_abi_tls_relocation_v1 tls_relocations[2];
@@ -85,7 +87,7 @@ main(void)
     image.header.abi_profile_id = N00B_ABI_V1_PROFILE_ID;
     image.header.data_layout_profile = N00B_ABI_DATA_LAYOUT_PROFILE_V1;
     image.header.required_alignment = 8;
-    image.header.directory_count = 20;
+    image.header.directory_count = 22;
     image.header.directory_offset = offsetof(image_t, directory);
     image.header.total_extent = sizeof(image);
     image.header.payload_checksum = UINT64_MAX;
@@ -102,6 +104,11 @@ main(void)
     image.types[4].typehash = 14;
     image.types[4].specialization_start_ix = 1;
     image.types[4].specialization_end_ix = 3;
+    image.types[5].kind = N00B_ABI_TYPE_FUNCTION;
+    image.types[5].typehash = 15;
+    image.types[5].call_signature_index = 1;
+    image.signatures[1].type_index = 5;
+    image.locations[1].file_index = 1;
     image.indexes[0] = 3;
     image.indexes[1] = 5;
     image.indexes[2] = 1;
@@ -176,6 +183,7 @@ main(void)
     image.symbols[1].module_index = 1;
     image.symbols[1].scope_index = 1;
     image.symbols[1].type_index = 2;
+    image.symbols[1].declaration_location_index = 1;
     memcpy(image.symbols[1].name.short_value.bytes, "foo", 3);
     image.symbols[1].name.short_value.selector = 3;
     uint64_t name_hash = XXH3_64bits("p.m.foo", 7);
@@ -191,7 +199,7 @@ main(void)
     image.entries[3].receiver_type_index = 4;
     image.entries[3].function_index = 3;
     directory_entry(&image, 0, N00B_ABI_TABLE_TYPE,
-        sizeof(image.types[0]), 5, offsetof(image_t, types));
+        sizeof(image.types[0]), 6, offsetof(image_t, types));
     directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
         sizeof(image.indexes[0]), 14, offsetof(image_t, indexes));
     directory_entry(&image, 2, N00B_ABI_TABLE_U64_STREAM,
@@ -231,6 +239,10 @@ main(void)
         sizeof(image.code_ranges[0]), 3, offsetof(image_t, code_ranges));
     directory_entry(&image, 19, N00B_ABI_TABLE_FRAME_LAYOUT,
         sizeof(image.frame_layouts[0]), 2, offsetof(image_t, frame_layouts));
+    directory_entry(&image, 20, N00B_ABI_TABLE_CALL_SIGNATURE,
+        sizeof(image.signatures[0]), 2, offsetof(image_t, signatures));
+    directory_entry(&image, 21, N00B_ABI_TABLE_SOURCE_LOCATION,
+        sizeof(image.locations[0]), 2, offsetof(image_t, locations));
 
     n00b_abi_image_descriptor_v1 descriptor = {
         .descriptor_version = 1,
@@ -512,16 +524,28 @@ main(void)
     const n00b_abi_snapshot_v1 *snapshot =
         n00b_abi_v1_current_snapshot();
     assert(snapshot && n00b_abi_v1_generation(snapshot) == 1
-        && n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE) == 5
+        && n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE) == 6
         && n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_MODULE) == 2);
     uint32_t width = 0;
     const n00b_abi_type_v1 *nil = n00b_abi_v1_record(snapshot,
         N00B_ABI_TABLE_TYPE, 0, &width);
     assert(nil == n00b_abi_v1_type(snapshot, 0)
         && width == sizeof(*nil) && nil->kind == N00B_ABI_TYPE_NIL
-        && !n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_TYPE, 5, &width)
+        && !n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_TYPE, 6, &width)
         && !width && n00b_abi_v1_module(snapshot, 1)
         && !n00b_abi_v1_module(snapshot, 2));
+    assert(n00b_abi_v1_package(snapshot, 1)
+        && n00b_abi_v1_runtime_config(snapshot, 1)
+        && n00b_abi_v1_function(snapshot, 1)->module_index == 1
+        && n00b_abi_v1_call_signature(snapshot, 1)->type_index == 5
+        && n00b_abi_v1_scope(snapshot, 1)->module_index == 1
+        && n00b_abi_v1_symbol(snapshot, 1)->type_index == 2
+        && n00b_abi_v1_source_location(snapshot, 1)->file_index == 1
+        && n00b_abi_v1_code_range(snapshot, 1)->function_index == 1
+        && n00b_abi_v1_frame_layout(snapshot, 1)->function_index == 1
+        && n00b_abi_v1_storage(snapshot, 1)->module_index == 1
+        && !n00b_abi_v1_call_signature(snapshot, 2)
+        && !n00b_abi_v1_source_location(snapshot, 2));
     uint32_t index = 0;
     uint64_t value = 0;
     const uint8_t *bytes = nullptr;
@@ -570,7 +594,7 @@ main(void)
     assert(n00b_abi_v1_type_specializes(snapshot, 4, 2) == 1);
     assert(n00b_abi_v1_type_specializes(snapshot, 4, 4) == 0);
     assert(n00b_abi_v1_type_specializes(snapshot, 2, 3) == 0);
-    assert(n00b_abi_v1_type_specializes(snapshot, 5, 2) == -1);
+    assert(n00b_abi_v1_type_specializes(snapshot, 6, 2) == -1);
     assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 0, 4,
         &result) == 1 && result == 3);
     assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 0, 2,
