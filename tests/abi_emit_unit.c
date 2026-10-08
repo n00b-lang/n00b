@@ -5,6 +5,7 @@
 #include "abi_container.h"
 #include "abi_emit.h"
 #include "abi_layout.h"
+#include "abi_link.h"
 #include "abi_storage.h"
 #include "abi_string.h"
 #include "n00b-abi-v1.h"
@@ -203,6 +204,81 @@ check_type_descriptor_storage(void)
         && emitted->target_byte_offset == patch->byte_offset
         && emitted->patch_kind == N00B_ABI_PATCH_INDEX
         && emitted->target_section_index != 0);
+
+    core_module_spec_t prior_spec = {0};
+    core_source_file_t prior_source = {0};
+    core_translation_unit_t prior_unit = {0};
+    assert(core_module_spec_init(&prior_spec, CORE_STRING_STATIC("prior"))
+        && core_source_file_init(&prior_source,
+            CORE_STRING_STATIC("prior.n00b"), "", 0)
+        && core_translation_unit_init(&prior_unit, &prior_spec,
+                                      &prior_source));
+    core_module_spec_release(&prior_spec);
+    assert(core_translation_unit_finalize_imports(&prior_unit));
+    ir_module_t *prior_runtime = ir_module_new(context, "prior", &profile,
+                                               target.triple);
+    ir_module_t *prior_comptime = ir_module_new(context, "prior$comptime",
+                                                &profile, target.triple);
+    assert(prior_runtime && prior_comptime
+        && ir_type_intern(prior_runtime, th_bitint(types, 16, true)));
+    parse_symtab_t *prior_symbols = parse_symtab_new();
+    parse_token_stream_t *prior_tokens = scan_token_stream_from_array(
+        nullptr, 0);
+    n00bb_abi_packed_tables_t prior_packed = {0};
+    uint8_t *prior_object = nullptr;
+    size_t prior_object_bytes = 0;
+    assert(prior_symbols && prior_tokens
+        && n00bb_abi_emit_unit(nullptr, &prior_unit,
+            CORE_STRING_STATIC("default"), prior_symbols, prior_tokens,
+            prior_comptime, prior_runtime, &target, N00B_ABI_CAP_DEBUG,
+            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+            &prior_packed, &prior_object, &prior_object_bytes));
+    core_link_unit_t *combined = core_link_unit_new();
+    assert(combined && core_link_unit_add_root(combined, &prior_unit)
+        && core_link_unit_add_root(combined, &unit)
+        && core_link_unit_finalize_graph(combined));
+    n00bb_abi_object_input_t inputs[] = {
+        {CORE_STRING_STATIC("prior"), prior_object, prior_object_bytes},
+        {CORE_STRING_STATIC("example"), object, object_bytes},
+    };
+    n00bb_abi_selected_objects_t selected = {0};
+    assert(n00bb_abi_select_objects(combined, &target, inputs, 2,
+                                    &selected)
+        && selected.count == 2);
+    size_t descriptor_input = selected.views[0].object == object ? 0 : 1;
+    assert(selected.views[descriptor_input].object == object);
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    uint32_t final_type_index = 0;
+    assert(plan && n00bb_abi_index_plan_map(plan, descriptor_input,
+        N00B_ABI_TABLE_TYPE, referred_index, &final_type_index)
+        && final_type_index != referred_index);
+    uint8_t *linked_object = nullptr;
+    size_t linked_bytes = 0;
+    assert(n00bb_abi_link_objects(combined, &target, inputs, 2,
+        &linked_object, &linked_bytes));
+    core_object_section_t linked_storage;
+    assert(core_object_section_find(linked_object, linked_bytes,
+        target.object_format, nullptr, ".data.n00b_static",
+        &linked_storage)
+        && linked_storage.size >= patch->byte_offset + sizeof(uint32_t)
+        && core_le_load_u32(linked_storage.bytes + patch->byte_offset)
+            == final_type_index);
+    n00bb_abi_object_view_t linked_view = {0};
+    assert(n00bb_abi_object_open(&target, linked_object, linked_bytes,
+        &linked_view)
+        && !n00bb_abi_object_table(&linked_view,
+            N00B_ABI_TABLE_INDEX_PATCH));
+    n00bb_abi_object_close(&linked_view);
+    core_free(linked_object);
+    n00bb_abi_index_plan_free(plan);
+    n00bb_abi_selected_objects_release(&selected);
+    core_link_unit_free(combined);
+    n00bb_abi_packed_tables_release(&prior_packed);
+    core_free(prior_object);
+    parse_symtab_free(prior_symbols);
+    scan_token_stream_free(prior_tokens);
+    core_translation_unit_release(&prior_unit);
+
     core_free(entries);
     n00bb_abi_packed_tables_release(&packed);
     core_free(object);
