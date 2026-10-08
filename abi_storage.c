@@ -656,10 +656,6 @@ n00bb_abi_storage_rows_build(
         bool long_string = is_string && global->has_static_initializer
             && global->static_initializer->string.length
                 > N00BB_ABI_STRING_SHORT_CAPACITY;
-        if (long_string && kind == N00B_ABI_STORAGE_TLS) {
-            valid = false;
-            break;
-        }
         core_buffer_t *buffer = kind == N00B_ABI_STORAGE_TLS
             ? &built.tls : kind == N00B_ABI_STORAGE_READ_ONLY
                 ? &built.read_only : &built.writable;

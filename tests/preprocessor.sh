@@ -1425,6 +1425,9 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
 [ -s "$tmp/string_storage_abi.o" ]
 "$abi_record_object_test" "$tmp/string_storage_abi.o" string-storage
 "$abi_link_input_test" --string-storage "$tmp/string_storage_abi.o"
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/string_storage_linked.o" string_storage
+"$abi_record_object_test" "$tmp/string_storage_linked.o" string-storage
 "$compiler" compile --output "$tmp/abi_record_storage_probe.o" \
     "$program_dir/../abi/abi_record_storage_probe.n00b"
 "$abi_record_object_test" "$tmp/abi_record_storage_probe.o" record-storage

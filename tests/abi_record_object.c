@@ -882,7 +882,7 @@ check_string_storage(const uint8_t *object, size_t length,
         N00B_ABI_TABLE_STORAGE);
     const n00bb_abi_directory_entry_t *symbols = entry_for(entries, count,
         N00B_ABI_TABLE_SYMBOL);
-    assert(storage && storage->record_count == 6 && symbols);
+    assert(storage && storage->record_count == 7 && symbols);
     core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
         ? CORE_TARGET_OBJECT_MACH_O
         : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
@@ -901,11 +901,12 @@ check_string_storage(const uint8_t *object, size_t length,
         backing_matches += !memcmp(pool.bytes + i, long_text, long_length);
     assert(backing_matches == 1);
 
-    uint64_t long_addends[2] = {0};
+    uint64_t long_addends[3] = {0};
     size_t long_count = 0;
-    bool seen[5] = {0};
+    bool seen[6] = {0};
     const char *names[] = {"short_label", "long_label", "repeated_label",
-                           "thread_label", "empty_label"};
+                           "thread_label", "empty_label",
+                           "tls_long_label"};
     for (uint32_t i = 1; i < storage->record_count; i++) {
         const n00b_abi_storage_v1 *row = row_at(metadata, storage, i);
         assert(row->module_index == 1 && row->symbol_index
@@ -914,11 +915,11 @@ check_string_storage(const uint8_t *object, size_t length,
         const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,
             row->symbol_index);
         size_t kind = 0;
-        while (kind < 5 && !short_name_is(&symbol->name, names[kind]))
+        while (kind < 6 && !short_name_is(&symbol->name, names[kind]))
             kind++;
-        assert(kind < 5 && !seen[kind] && symbol->type_index == row->type_index);
+        assert(kind < 6 && !seen[kind] && symbol->type_index == row->type_index);
         seen[kind] = true;
-        bool tls = kind == 3;
+        bool tls = kind == 3 || kind == 5;
         assert(row->segment_kind == (tls ? N00B_ABI_STORAGE_TLS
             : N00B_ABI_STORAGE_READ_ONLY));
         core_object_section_t section;
@@ -967,14 +968,15 @@ check_string_storage(const uint8_t *object, size_t length,
                     && !memcmp(target.bytes, "n00b_string_pool",
                                target.length));
             }
-            assert(long_count < 2);
+            assert(long_count < 3);
             long_addends[long_count++] = relocation.addend_bits;
             found_relocation = true;
         }
         assert(found_relocation);
     }
-    for (size_t i = 0; i < 5; i++) assert(seen[i]);
-    assert(long_count == 2 && long_addends[0] == long_addends[1]);
+    for (size_t i = 0; i < 6; i++) assert(seen[i]);
+    assert(long_count == 3 && long_addends[0] == long_addends[1]
+        && long_addends[1] == long_addends[2]);
 }
 
 static void
