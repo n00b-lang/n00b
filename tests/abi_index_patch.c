@@ -135,6 +135,56 @@ main(void)
         && core_le_load_u32(section_bytes + 0x20) == 1);
     second.local_index = 1;
 
+    core_index_remap_t *module_remap = core_index_remap_new(2, 1);
+    ok &= expect("assign module remap",
+        core_index_remap_set(module_remap, 0, 0)
+        && core_index_remap_set(module_remap, 1, 1));
+    const n00bb_abi_patch_table_t tables[] = {
+        table,
+        {.kind = N00B_ABI_TABLE_MODULE, .remap = module_remap,
+         .final_row_count = 2},
+    };
+    second.patch_kind = N00BB_ABI_PATCH_INDEX;
+    second.referenced_table_kind = N00B_ABI_TABLE_MODULE;
+    second.local_index = 0;
+    core_le_store_u32(section_bytes + 0x28, 0);
+    encode_pair(patches, first, second);
+    ok &= expect("non-type row zero rejected atomically",
+        n00bb_abi_index_patches_apply(patches, sizeof(patches),
+            &section, 1, tables, 2, &failed)
+                == N00BB_ABI_PATCH_INVALID_INDEX
+        && failed == 1 && core_le_load_u32(section_bytes + 0x20) == 1);
+    second.patch_kind = N00BB_ABI_PATCH_BOX_TYPE;
+    second.referenced_table_kind = N00B_ABI_TABLE_TYPE;
+    second.local_index = 1;
+    core_le_store_u32(section_bytes + 0x28, UINT32_C(0x80000001));
+    core_index_remap_t *nil_remap = core_index_remap_new(2, 3);
+    ok &= expect("assign invalid nil remap",
+        core_index_remap_set(nil_remap, 0, 0)
+        && core_index_remap_set(nil_remap, 1, 0));
+    const n00bb_abi_patch_table_t nil_table = {
+        .kind = N00B_ABI_TABLE_TYPE, .remap = nil_remap,
+        .final_row_count = 4,
+    };
+    encode_pair(patches, first, second);
+    ok &= expect("nonzero type cannot remap to nil",
+        n00bb_abi_index_patches_apply(patches, sizeof(patches),
+            &section, 1, &nil_table, 1, &failed)
+                == N00BB_ABI_PATCH_INVALID_INDEX
+        && failed == 0 && core_le_load_u32(section_bytes + 0x20) == 1);
+    core_index_remap_free(nil_remap);
+    core_index_remap_free(module_remap);
+
+    first.local_index = 0;
+    core_le_store_u32(section_bytes + 0x20, 0);
+    n00bb_abi_index_patch_encode(patches, &first);
+    ok &= expect("type row zero remains valid",
+        n00bb_abi_index_patches_apply(patches, N00BB_ABI_INDEX_PATCH_BYTES,
+            &section, 1, &table, 1, &failed) == N00BB_ABI_PATCH_OK
+        && core_le_load_u32(section_bytes + 0x20) == 0);
+    first.local_index = 1;
+    core_le_store_u32(section_bytes + 0x20, 1);
+
     second.target_section_index = 8;
     encode_pair(patches, first, second);
     ok &= expect("unknown native section rejected",

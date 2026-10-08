@@ -122,7 +122,9 @@ n00bb_abi_index_patches_apply(
         if (!core_index_remap_get(table->remap, patch.local_index,
                                   &final_index)
             || final_index >= table->final_row_count
-            || (patch.local_index == 0 && final_index != 0)
+            || ((patch.local_index == 0) != (final_index == 0))
+            || (patch.referenced_table_kind != N00B_ABI_TABLE_TYPE
+                && !patch.local_index)
             || (patch.patch_kind == N00BB_ABI_PATCH_BOX_TYPE
                 && (patch.local_index > INT32_MAX
                     || final_index > INT32_MAX))) {
