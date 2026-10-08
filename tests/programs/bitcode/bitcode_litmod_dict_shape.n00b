@@ -1,0 +1,24 @@
+declare_litmod("mirror", "dict", "build_dict")
+
+func build_dict(items: Array[Tuple[int, int]]) -> Array[Tuple[int, int]] fail: string {
+    return items
+}
+
+func static_dict() -> Array[Tuple[int, int]] {
+    return mirror{1: 2, 3: 4}
+}
+
+func dynamic_dict(x: int) -> Array[Tuple[int, int]] {
+    return mirror{x: 2, 3: 4}
+}
+
+func empty_dict() -> Array[Tuple[int, int]] {
+    return mirror{}
+}
+
+comptime {
+} else {
+    static_dict()
+    dynamic_dict(3)
+    empty_dict()
+}

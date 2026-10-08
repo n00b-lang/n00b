@@ -348,6 +348,11 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         *handled = true;
         if (target->pointer_bits != 64
             || target->pointer_alignment_bytes != 8) return false;
+        th_type *element = th_seq_elem(type);
+        bool element_handled = false;
+        if (!element || !publish_direct_or_alias(module, element, target,
+                                                  seen, &element_handled))
+            return false;
         storage_bits = semantic_bits = 128;
         alignment_bytes = 8;
     }

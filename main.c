@@ -12868,6 +12868,19 @@ n00bb_lower_brace_literal(ir_lower_context_t *context,
     (void)operands;
     (void)operand_count;
     (void)state;
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
+    parse_tree_t *payload = core_tree_node_value(visit->node).parent;
+    parse_tree_t *tagged = payload
+        ? core_tree_node_value(payload).parent : nullptr;
+    n00bb_litmod_site_t *site = tu && nt_is(visit->grammar, tagged,
+        "tagged-lit") ? core_dict_get(&tu->literal_sites, tagged, nullptr)
+                       : nullptr;
+    if (site && (core_string_eq(site->registration->kind,
+                       CORE_STRING_STATIC("dict"))
+                 || core_string_eq(site->registration->kind,
+                       CORE_STRING_STATIC("set"))))
+        return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
     const char *constructor = nullptr;
     size_t constructor_length = 0;
     size_t argument_count = 0;
@@ -12909,6 +12922,61 @@ n00bb_lower_brace_literal(ir_lower_context_t *context,
 }
 
 static ir_lower_result_t
+n00bb_lower_user_brace_payload(ir_lower_context_t *context,
+                               parse_visit_t *visit,
+                               n00bb_litmod_site_t *site, ir_span_t span)
+{
+    parse_tree_t *payload = child_nt(visit->grammar, visit->node,
+                                     "literal-payload");
+    parse_tree_t *braces = child_nt(visit->grammar, payload,
+                                    "dict-or-set-lit");
+    bool dictionary = core_string_eq(site->registration->kind,
+                                      CORE_STRING_STATIC("dict"));
+    core_list_t(n00bb_ir_value_ptr_t) values =
+        core_list_new(n00bb_ir_value_ptr_t);
+    bool ok = braces && collect_sequence_literal_values(context, visit,
+                                                          braces, &values)
+        && (!dictionary || !(values.len & 1u));
+    th_type *element_type = site->payload_type
+        ? th_seq_elem(th_resolve(site->payload_type)) : nullptr;
+    core_list_t(n00bb_ir_value_ptr_t) items =
+        core_list_new(n00bb_ir_value_ptr_t);
+    ok = ok && element_type;
+    for (size_t i = 0; ok && i < values.len; i += dictionary ? 2 : 1) {
+        ir_value_t *item = values.data[i];
+        if (dictionary) {
+            ir_instr_t *pair = ir_instr_add(context->block, IR_OP_AGGREGATE);
+            char pair_name[64];
+            snprintf(pair_name, sizeof(pair_name), "__n00bb_pair_%llu",
+                     (unsigned long long)context->next_value_id++);
+            ok = pair && ir_instr_set_dest(pair, pair_name, element_type)
+                && ir_instr_operand_value(pair, item)
+                && ir_instr_operand_value(pair, values.data[i + 1]);
+            if (!ok) break;
+            pair->span = span;
+            item = pair->dest;
+        }
+        core_list_push(items, item);
+    }
+    core_list_free(values);
+    ir_instr_t *array = ok
+        ? ir_instr_add(context->block, IR_OP_AGGREGATE) : nullptr;
+    char name[64];
+    snprintf(name, sizeof(name), "__n00bb_brace_payload_%llu",
+             (unsigned long long)context->next_value_id++);
+    ok = array && ir_instr_set_dest(array, name, site->payload_type)
+        && ir_instr_set_aggregate_form(array, IR_AGGREGATE_ELEMENTS);
+    for (size_t i = 0; ok && i < items.len; i++)
+        ok = ir_instr_operand_value(array, items.data[i]);
+    core_list_free(items);
+    if (!ok)
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not construct the brace handler payload");
+    array->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, array->dest};
+}
+
+static ir_lower_result_t
 n00bb_lower_user_literal(ir_lower_context_t *context,
                                parse_visit_t *visit,
                                n00bb_litmod_site_t *site,
@@ -12935,6 +13003,11 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
     if (core_string_eq(site->registration->kind, CORE_STRING_STATIC("array")))
         payload = n00bb_lower_sequence_literal(context, visit, nullptr, 0,
             site->payload_type, span, nullptr);
+    else if (core_string_eq(site->registration->kind,
+                            CORE_STRING_STATIC("dict"))
+        || core_string_eq(site->registration->kind,
+                            CORE_STRING_STATIC("set")))
+        payload = n00bb_lower_user_brace_payload(context, visit, site, span);
     else if (core_string_eq(site->registration->kind,
                             CORE_STRING_STATIC("string"))) {
         parse_tree_t *literal_payload = child_nt(visit->grammar, visit->node,
@@ -13031,6 +13104,10 @@ n00bb_lower_tagged_literal(ir_lower_context_t *context,
         if (core_string_eq(user_site->registration->kind,
                            CORE_STRING_STATIC("array"))
             || core_string_eq(user_site->registration->kind,
+                              CORE_STRING_STATIC("dict"))
+            || core_string_eq(user_site->registration->kind,
+                              CORE_STRING_STATIC("set"))
+            || core_string_eq(user_site->registration->kind,
                               CORE_STRING_STATIC("string"))
             || core_string_eq(user_site->registration->kind,
                               CORE_STRING_STATIC("fence")))
@@ -13121,6 +13198,10 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
         ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
     if (!site || (!core_string_eq(site->registration->kind,
                                   CORE_STRING_STATIC("array"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("dict"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("set"))
                   && !core_string_eq(site->registration->kind,
                                      CORE_STRING_STATIC("string"))
                   && !core_string_eq(site->registration->kind,
@@ -36682,6 +36763,72 @@ build_import_environment(parse_grammar_t *grammar,
                 unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0060"),
                 CORE_STRING_STATIC("could not register module declarations in the type environment"));
     }
+    core_list_t(th_type_ptr_t) bracket_results =
+        core_list_new(th_type_ptr_t);
+    core_list_t(th_type_ptr_t) brace_results =
+        core_list_new(th_type_ptr_t);
+    bool bracket_trait = false;
+    bool brace_trait = false;
+    for (size_t i = 0; ok && i < units->len; i++) {
+        n00bb_tu_state_t *state = tu_state(units->data[i]);
+        if (!state) continue;
+        for (size_t r = 0; ok && r < state->literal_modifiers.len; r++) {
+            n00bb_user_litmod_t *registration =
+                &state->literal_modifiers.data[r];
+            bool bracket = core_string_eq(registration->kind,
+                                           CORE_STRING_STATIC("array"));
+            bool brace = core_string_eq(registration->kind,
+                                         CORE_STRING_STATIC("dict"))
+                || core_string_eq(registration->kind,
+                                   CORE_STRING_STATIC("set"));
+            if (!bracket && !brace) continue;
+            const char *trait = bracket ? "Bracket_Literal"
+                                        : "Brace_Literal";
+            bool *declared = bracket ? &bracket_trait : &brace_trait;
+            core_list_t(th_type_ptr_t) *seen = bracket
+                ? &bracket_results : &brace_results;
+            if (!*declared) {
+                th_type *methods = th_record(root_state->types, nullptr, 0);
+                ok = methods && th_env_register_trait_contracts(
+                    source_environment, trait, "builtins", "default",
+                    TH_ENV_PUBLIC, methods);
+                if (!ok) break;
+                *declared = true;
+            }
+            th_type *result = registration->function
+                ? th_func_ret(registration->function->type) : nullptr;
+            result = result ? th_resolve(result) : nullptr;
+            if (result && th_kind_of(result) != TH_VAR) {
+                bool duplicate = false;
+                for (size_t n = 0; n < seen->len; n++)
+                    duplicate |= seen->data[n] == result;
+                if (!duplicate) {
+                    ok = th_env_register_intrinsic_type_pattern(
+                        source_environment, trait, result);
+                    if (ok) core_list_push(*seen, result);
+                }
+            }
+            core_dict_foreach(&state->literal_sites, entry) {
+                n00bb_litmod_site_t *site = entry->value;
+                if (!site || site->registration != registration)
+                    continue;
+                result = site->signature
+                    ? th_resolve(th_func_ret(site->signature)) : nullptr;
+                if (!result || th_kind_of(result) == TH_VAR) continue;
+                bool duplicate = false;
+                for (size_t n = 0; n < seen->len; n++)
+                    duplicate |= seen->data[n] == result;
+                if (!duplicate) {
+                    ok = th_env_register_intrinsic_type_pattern(
+                        source_environment, trait, result);
+                    if (!ok) break;
+                    core_list_push(*seen, result);
+                }
+            }
+        }
+    }
+    core_list_free(brace_results);
+    core_list_free(bracket_results);
     if (ok) ok = th_env_freeze(source_environment);
     if (!ok) {
         th_env_free(source_environment);
@@ -41652,12 +41799,26 @@ infer_user_tagged_literal_type(parse_grammar_t *grammar,
     parse_tree_t *string = child_nt(grammar, payload,
                                     "modified-simple-lit");
     parse_tree_t *fence = child_nt(grammar, payload, "embed-lit");
-    core_string_t kind = sequence ? CORE_STRING_STATIC("array")
-        : string ? CORE_STRING_STATIC("string")
-        : fence ? CORE_STRING_STATIC("fence") : (core_string_t){0};
-    if (!kind.data) return true;
+    parse_tree_t *braces = child_nt(grammar, payload, "dict-or-set-lit");
+    parse_tree_t *dict_entries = child_nt(grammar, braces, "dict-entries");
+    parse_tree_t *set_entries = child_nt(grammar, braces, "set-entries");
     core_string_t modifier = first_token_text(
         child_nt(grammar, node, "literal-prefix"));
+    core_string_t kind = sequence ? CORE_STRING_STATIC("array")
+        : string ? CORE_STRING_STATIC("string")
+        : fence ? CORE_STRING_STATIC("fence")
+        : dict_entries ? CORE_STRING_STATIC("dict")
+        : set_entries ? CORE_STRING_STATIC("set") : (core_string_t){0};
+    if (braces && !kind.data) {
+        bool has_dict = user_litmod(state, modifier,
+            CORE_STRING_STATIC("dict")) != nullptr;
+        bool has_set = user_litmod(state, modifier,
+            CORE_STRING_STATIC("set")) != nullptr;
+        if (has_dict && has_set) return false;
+        if (has_dict) kind = CORE_STRING_STATIC("dict");
+        else if (has_set) kind = CORE_STRING_STATIC("set");
+    }
+    if (!kind.data) return true;
     n00bb_user_litmod_t *registration = user_litmod(state, modifier, kind);
     if (!registration) return true;
     parse_scope_t *scope = module_scope(state);
@@ -41690,6 +41851,41 @@ infer_user_tagged_literal_type(parse_grammar_t *grammar,
         core_list_free(element_types);
         core_list_free(expressions);
     }
+    else if (braces) {
+        parse_tree_t *entries = dict_entries ? dict_entries : set_entries;
+        bool dictionary = core_string_eq(kind, CORE_STRING_STATIC("dict"));
+        core_list_t(parse_tree_ptr_t) expressions =
+            core_list_new(parse_tree_ptr_t);
+        core_list_t(th_type_ptr_t) first_types =
+            core_list_new(th_type_ptr_t);
+        core_list_t(th_type_ptr_t) second_types =
+            core_list_new(th_type_ptr_t);
+        bool ok = !entries || collect_static_expressions(state, entries,
+                                                          &expressions);
+        ok = ok && (!dictionary || !(expressions.len & 1u));
+        for (size_t i = 0; ok && i < expressions.len; i++) {
+            th_type *type = core_tree_node_value(expressions.data[i]).type;
+            if (!type) ok = false;
+            else if (dictionary && (i & 1u))
+                core_list_push(second_types, type);
+            else core_list_push(first_types, type);
+        }
+        th_type *first = ok && first_types.len
+            ? th_sum(state->types, TH_UNION, first_types.data,
+                     first_types.len)
+            : ok ? th_var(state->types) : nullptr;
+        th_type *second = dictionary && ok && second_types.len
+            ? th_sum(state->types, TH_UNION, second_types.data,
+                     second_types.len)
+            : dictionary && ok ? th_var(state->types) : nullptr;
+        th_type *members[] = {first, second};
+        th_type *element = dictionary && first && second
+            ? th_tuple(state->types, members, 2) : first;
+        input_type = element ? th_array(state->types, element) : nullptr;
+        core_list_free(second_types);
+        core_list_free(first_types);
+        core_list_free(expressions);
+    }
     if (!input_type) return false;
     if (string) {
         parse_nt_node_t *raw = &core_tree_node_value(string);
@@ -41706,6 +41902,16 @@ infer_user_tagged_literal_type(parse_grammar_t *grammar,
         ? th_unify(state->types, signature, expected) : nullptr;
     th_type *result = specialized ? th_func_ret(specialized) : nullptr;
     if (!result) return false;
+    const char *required_shape = sequence ? "Bracket_Literal"
+        : braces ? "Brace_Literal" : nullptr;
+    if (required_shape) {
+        th_type *shape_type = th_var(state->types);
+        if (!shape_type || !th_var_constrain(state->types, shape_type,
+                (th_constraint){.kind = TH_CON_IMPLEMENTS,
+                                .iface = required_shape})
+            || !th_unify_in_place(state->types, shape_type, result))
+            return false;
+    }
     parse_nt_node_t *parsed = &core_tree_node_value(node);
     if (parsed->type) {
         th_type *unified = th_unify_in_place(state->types, parsed->type,
@@ -46896,6 +47102,41 @@ n00bb_comptime_is_empty(const ir_module_t *module)
     return true;
 }
 
+static bool
+n00bb_literal_raw_element(ir_module_t *module, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    const ir_final_layout_t *layout = type
+        ? ir_layout_final(module, type, ir_module_target(module)) : nullptr;
+    if (!layout || !layout->alignment_bytes || !layout->intrinsic_bits
+        || layout->intrinsic_bits % 8) return false;
+    ir_machine_t machine = ir_machine_of(module, type);
+    if ((machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT)
+        && machine.width >= 8 && !(machine.width % 8))
+        return layout->intrinsic_bits == machine.width;
+
+    const char *name = nullptr;
+    size_t count = 0;
+    if (!th_named_info(type, &name, nullptr, nullptr, &count)
+        || !name || strcmp(name, TH_TUPLE)
+        || !count || layout->n_members != count) return false;
+    for (size_t i = 0; i < count; i++) {
+        const th_arg *argument = th_named_arg(type, i);
+        const ir_final_member_layout_t *member = &layout->members[i];
+        const ir_final_layout_t *child = argument
+            && argument->kind == TH_ARG_TYPE
+            ? ir_layout_final(module, argument->type,
+                ir_module_target(module)) : nullptr;
+        if (!child || member->bit_offset % 8
+            || member->bit_offset > layout->intrinsic_bits
+            || child->intrinsic_bits
+                > layout->intrinsic_bits - member->bit_offset
+            || !n00bb_literal_raw_element(module, argument->type))
+            return false;
+    }
+    return true;
+}
+
 typedef struct {
     n00bb_abi_packed_tables_t packed;
     uint8_t *object;
@@ -47107,24 +47348,19 @@ n00bb_execute_comptime(core_link_unit_t *link,
             && !memcmp(result_name, "string", 6) && !result_arity;
         th_type *element = result && th_kind_of(result) == TH_SEQUENCE
             ? th_seq_elem(result) : nullptr;
-        ir_machine_t machine = element
-            ? ir_machine_of(producer->owner, element) : (ir_machine_t){0};
         const ir_final_layout_t *layout = element
             ? ir_layout_final(producer->owner, element,
                               ir_module_target(producer->owner)) : nullptr;
-        uint64_t bytes = layout ? (layout->intrinsic_bits + 7) / 8 : 0;
-        uint64_t align = layout ? layout->alignment_bytes : 0;
-        uint64_t stride = align && bytes <= UINT64_MAX - align + 1
-            ? ((bytes + align - 1) / align) * align : 0;
+        uint64_t stride_bits = 0;
+        bool has_stride = ir_layout_final_stride_bits(layout, &stride_bits);
+        uint64_t stride = has_stride ? stride_bits / 8 : 0;
         if (!effect_only && !is_string
-            && (!element || !layout || !align || !stride
-            || stride > UINT32_MAX || layout->intrinsic_bits != machine.width
-            || machine.width < 8 || machine.width % 8
-            || (machine.class != IR_CLASS_SINT
-                && machine.class != IR_CLASS_UINT))) {
+            && (!element || !has_stride || !stride
+                || stride > UINT32_MAX
+                || !n00bb_literal_raw_element(producer->owner, element))) {
             core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-B0013"),
-                CORE_STRING_STATIC("native build currently materializes only strings and primitive one-dimensional array literal results"));
+                CORE_STRING_STATIC("native build cannot materialize this literal result without relocations"));
             ok = false;
             break;
         }

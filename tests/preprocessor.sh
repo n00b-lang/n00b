@@ -3499,6 +3499,29 @@ grep -q 'call @parse_json' "$tmp/litmod_array_runtime.out"
 grep -q 'jump __n00bb_try_handler_' "$tmp/litmod_array_runtime.out"
 grep -q 'trap !loc' "$tmp/litmod_array_runtime.out"
 
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/litmod_set_site.n00b" \
+    >"$tmp/litmod_set_site.out" 2>&1 || {
+    cat "$tmp/litmod_set_site.out"
+    exit 1
+}
+grep -Fq 'array[int] = aggregate' "$tmp/litmod_set_site.out"
+grep -q 'call @__n00bb_comptime_build_set' "$tmp/litmod_set_site.out"
+grep -q 'call @build_set' "$tmp/litmod_set_site.out"
+test "$(grep -c ' = phase.result ' "$tmp/litmod_set_site.out")" -eq 2
+
+"$compiler" lower --dump-ir \
+    "$script_dir/programs/litmod_dict_site.n00b" \
+    >"$tmp/litmod_dict_site.out" 2>&1 || {
+    cat "$tmp/litmod_dict_site.out"
+    exit 1
+}
+grep -Fq 't(int, int) = aggregate' "$tmp/litmod_dict_site.out"
+grep -Fq 'array[t(int, int)] = aggregate' "$tmp/litmod_dict_site.out"
+grep -q 'call @__n00bb_comptime_build_dict' "$tmp/litmod_dict_site.out"
+grep -q 'call @build_dict' "$tmp/litmod_dict_site.out"
+test "$(grep -c ' = phase.result ' "$tmp/litmod_dict_site.out")" -eq 2
+
 if "$compiler" lower --dump-ir \
     "$script_dir/programs/lower_unsupported_string_shape.n00b" \
     >"$tmp/lower_unsupported_string_shape.out" 2>&1; then

@@ -109,6 +109,24 @@ value_type(ir_module_t *module, th_type *type, LLVMContextRef context)
     size_t arguments = 0;
     if (!th_named_info(th_resolve(type), &name, nullptr, nullptr,
                        &arguments) || !name) return nullptr;
+    if (!strcmp(name, TH_TUPLE) && arguments <= UINT32_MAX) {
+        LLVMTypeRef *fields = arguments
+            ? calloc(arguments, sizeof(*fields)) : nullptr;
+        if (arguments && !fields) return nullptr;
+        bool valid = true;
+        for (size_t i = 0; valid && i < arguments; i++) {
+            const th_arg *argument = th_named_arg(th_resolve(type), i);
+            fields[i] = argument && argument->kind == TH_ARG_TYPE
+                ? value_type(module, argument->type, context) : nullptr;
+            valid = fields[i]
+                && LLVMGetTypeKind(fields[i]) != LLVMVoidTypeKind;
+        }
+        LLVMTypeRef tuple = valid
+            ? LLVMStructTypeInContext(context, fields, (unsigned)arguments,
+                                      false) : nullptr;
+        free(fields);
+        return tuple;
+    }
     if (!strcmp(name, "string") && !arguments) {
         LLVMTypeRef word = LLVMInt64TypeInContext(context);
         LLVMTypeRef fields[] = {word, word};
@@ -290,6 +308,86 @@ array_value_with_descriptor(lower_state_t *state, LLVMValueRef data,
     return LLVMConstStructInContext(context, array_fields, 2, false);
 }
 
+static bool
+literal_element_layout_matches(ir_module_t *module, th_type *type,
+                               LLVMTypeRef native, LLVMTargetDataRef target)
+{
+    const ir_final_layout_t *layout = ir_layout_final(module, type,
+        ir_module_target(module));
+    uint64_t stride_bits = 0;
+    if (!layout || !native || !target
+        || !ir_layout_final_stride_bits(layout, &stride_bits)
+        || stride_bits % 8
+        || LLVMABISizeOfType(target, native) != stride_bits / 8
+        || LLVMABIAlignmentOfType(target, native)
+            != layout->alignment_bytes) return false;
+    ir_machine_t machine = ir_machine_of(module, type);
+    if ((machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT)
+        && machine.width >= 8 && !(machine.width % 8))
+        return LLVMGetTypeKind(native) == LLVMIntegerTypeKind
+            && LLVMGetIntTypeWidth(native) == machine.width
+            && layout->intrinsic_bits == machine.width;
+
+    const char *name = nullptr;
+    size_t count = 0;
+    if (!th_named_info(th_resolve(type), &name, nullptr, nullptr, &count)
+        || !name || strcmp(name, TH_TUPLE)
+        || LLVMGetTypeKind(native) != LLVMStructTypeKind
+        || LLVMCountStructElementTypes(native) != count
+        || layout->n_members != count) return false;
+    for (size_t i = 0; i < count; i++) {
+        const th_arg *argument = th_named_arg(th_resolve(type), i);
+        uint64_t offset = LLVMOffsetOfElement(target, native, (unsigned)i);
+        if (!argument || argument->kind != TH_ARG_TYPE
+            || offset > UINT64_MAX / 8
+            || layout->members[i].bit_offset != offset * 8
+            || !literal_element_layout_matches(module, argument->type,
+                LLVMStructGetTypeAtIndex(native, (unsigned)i), target))
+            return false;
+    }
+    return true;
+}
+
+static LLVMValueRef
+tuple_aggregate(lower_state_t *state, ir_instr_t *instruction)
+{
+    th_type *type = instruction->dest
+        ? th_resolve(instruction->dest->type) : nullptr;
+    const char *name = nullptr;
+    size_t count = 0;
+    if (!type || !th_named_info(type, &name, nullptr, nullptr, &count)
+        || !name || strcmp(name, TH_TUPLE)
+        || count != instruction->n_operands) return nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef native = value_type(state->function->owner, type, context);
+    if (!literal_element_layout_matches(state->function->owner, type,
+            native, LLVMGetModuleDataLayout(state->module))) return nullptr;
+    LLVMValueRef *fields = count ? calloc(count, sizeof(*fields)) : nullptr;
+    if (count && !fields) return nullptr;
+    bool constant = true;
+    bool valid = true;
+    for (size_t i = 0; valid && i < count; i++) {
+        ir_operand_t *operand = &instruction->operands[i];
+        fields[i] = operand->kind == IR_OPD_VALUE
+            ? lowered_value(state, operand->value) : nullptr;
+        valid = fields[i] && LLVMTypeOf(fields[i])
+            == LLVMStructGetTypeAtIndex(native, (unsigned)i);
+        constant = constant && valid && LLVMIsConstant(fields[i]);
+    }
+    LLVMValueRef result = nullptr;
+    if (valid && constant)
+        result = LLVMConstStructInContext(context, fields, (unsigned)count,
+                                          false);
+    else if (valid) {
+        result = LLVMGetUndef(native);
+        for (size_t i = 0; i < count; i++)
+            result = LLVMBuildInsertValue(state->builder, result, fields[i],
+                (unsigned)i, "tuple.field");
+    }
+    free(fields);
+    return result;
+}
+
 static LLVMValueRef
 constant_array(lower_state_t *state, ir_instr_t *instruction)
 {
@@ -298,9 +396,6 @@ constant_array(lower_state_t *state, ir_instr_t *instruction)
         ? th_resolve(instruction->dest->type) : nullptr;
     th_type *element = type && th_kind_of(type) == TH_SEQUENCE
         ? th_seq_elem(type) : nullptr;
-    ir_machine_t machine = element
-        ? ir_machine_of(state->function->owner, element)
-        : (ir_machine_t){0};
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMTypeRef element_type = element
         ? value_type(state->function->owner, element, context) : nullptr;
@@ -310,11 +405,8 @@ constant_array(lower_state_t *state, ir_instr_t *instruction)
     if ((ir_instr_aggregate_form(instruction, &form)
             && form != IR_AGGREGATE_ELEMENTS)
         || !element_type || !array_type
-        || LLVMGetTypeKind(element_type) != LLVMIntegerTypeKind
-        || machine.width < 8 || machine.width % 8
-        || (machine.class != IR_CLASS_SINT
-            && machine.class != IR_CLASS_UINT)
-        || LLVMGetIntTypeWidth(element_type) != machine.width)
+        || !literal_element_layout_matches(state->function->owner, element,
+            element_type, LLVMGetModuleDataLayout(state->module)))
         return nullptr;
 
     LLVMValueRef *items = calloc(count ? count : 1, sizeof(*items));
@@ -356,18 +448,17 @@ materialized_array(lower_state_t *state, ir_instr_t *instruction)
     const ir_final_layout_t *layout = element
         ? ir_layout_final(state->function->owner, element,
             ir_module_target(state->function->owner)) : nullptr;
-    ir_machine_t machine = element
-        ? ir_machine_of(state->function->owner, element)
-        : (ir_machine_t){0};
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef element_type = element
+        ? value_type(state->function->owner, element, context) : nullptr;
+    uint64_t stride_bits = 0;
     if (!identifier || !element || !layout || !layout->alignment_bytes
-        || !layout->intrinsic_bits || layout->intrinsic_bits % 8
-        || layout->intrinsic_bits != machine.width
-        || (machine.class != IR_CLASS_SINT
-            && machine.class != IR_CLASS_UINT)) return nullptr;
-    uint64_t width = layout->intrinsic_bits / 8;
+        || !ir_layout_final_stride_bits(layout, &stride_bits)
+        || !literal_element_layout_matches(state->function->owner, element,
+            element_type, LLVMGetModuleDataLayout(state->module)))
+        return nullptr;
     uint64_t alignment = layout->alignment_bytes;
-    if (width > UINT64_MAX - alignment + 1) return nullptr;
-    uint64_t stride = ((width + alignment - 1) / alignment) * alignment;
+    uint64_t stride = stride_bits / 8;
     if (!stride || stride > UINT32_MAX) return nullptr;
     for (size_t i = 0; i < state->phase_array_count; i++) {
         const n00bb_llvm_phase_array_t *array = &state->phase_arrays[i];
@@ -377,7 +468,6 @@ materialized_array(lower_state_t *state, ir_instr_t *instruction)
             || array->count > UINT32_MAX / stride || !array->bytes)
             return nullptr;
         unsigned byte_count = (unsigned)(array->count * stride);
-        LLVMContextRef context = LLVMGetModuleContext(state->module);
         LLVMValueRef contents = LLVMConstStringInContext(context,
             byte_count ? (const char *)array->bytes : "\0",
             byte_count ? byte_count : 1, true);
@@ -403,22 +493,18 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
     if (!element || (ir_instr_aggregate_form(instruction, &form)
                      && form != IR_AGGREGATE_ELEMENTS)) return nullptr;
     ir_module_t *source = state->function->owner;
-    ir_machine_t machine = ir_machine_of(source, element);
     const ir_final_layout_t *layout = ir_layout_final(source, element,
         ir_module_target(source));
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMTypeRef element_type = value_type(source, element, context);
     LLVMTypeRef result_type = value_type(source, type, context);
+    uint64_t stride_bits = 0;
     if (!layout || !layout->alignment_bytes || !element_type || !result_type
-        || layout->intrinsic_bits != machine.width || machine.width < 8
-        || machine.width % 8
-        || (machine.class != IR_CLASS_SINT
-            && machine.class != IR_CLASS_UINT)) return nullptr;
-    uint64_t element_bytes = machine.width / 8;
+        || !ir_layout_final_stride_bits(layout, &stride_bits)
+        || !literal_element_layout_matches(source, element, element_type,
+            LLVMGetModuleDataLayout(state->module))) return nullptr;
     uint64_t element_align = layout->alignment_bytes;
-    if (element_bytes > UINT64_MAX - element_align + 1) return nullptr;
-    uint64_t stride = ((element_bytes + element_align - 1) / element_align)
-        * element_align;
+    uint64_t stride = stride_bits / 8;
     uint64_t alignment = element_align > 8 ? element_align : 8;
     uint64_t descriptor_bytes = sizeof(n00b_abi_array_descriptor_header_v1)
         + sizeof(uint64_t);
@@ -602,7 +688,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         result = lowered_value(state, operands[0].value);
         return result && save_result(state, instruction, result);
     case IR_OP_AGGREGATE:
-        result = constant_array(state, instruction);
+        result = tuple_aggregate(state, instruction);
+        if (!result) result = constant_array(state, instruction);
         if (!result) result = dynamic_array(state, instruction);
         return result ? save_result(state, instruction, result)
                       : unsupported(state, instruction);
@@ -980,6 +1067,32 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     return true;
 }
 
+static bool
+set_native_layout(LLVMModuleRef module)
+{
+    if (LLVMInitializeNativeTarget() || LLVMInitializeNativeAsmPrinter())
+        return false;
+    char *triple = LLVMGetDefaultTargetTriple();
+    LLVMTargetRef target = nullptr;
+    char *message = nullptr;
+    bool ok = triple && !LLVMGetTargetFromTriple(triple, &target, &message);
+    LLVMTargetMachineRef machine = ok ? LLVMCreateTargetMachine(target,
+        triple, "generic", "", LLVMCodeGenLevelDefault, LLVMRelocDefault,
+        LLVMCodeModelDefault) : nullptr;
+    LLVMTargetDataRef layout = machine
+        ? LLVMCreateTargetDataLayout(machine) : nullptr;
+    char *layout_text = layout ? LLVMCopyStringRepOfTargetData(layout)
+                               : nullptr;
+    ok = layout_text != nullptr;
+    if (ok) LLVMSetDataLayout(module, layout_text);
+    if (layout_text) LLVMDisposeMessage(layout_text);
+    if (layout) LLVMDisposeTargetData(layout);
+    if (machine) LLVMDisposeTargetMachine(machine);
+    if (message) LLVMDisposeMessage(message);
+    if (triple) LLVMDisposeMessage(triple);
+    return ok;
+}
+
 n00bb_llvm_backend_t *
 n00bb_llvm_backend_prepare(const ir_module_t *comptime_ir,
                            const ir_module_t *runtime_ir,
@@ -1009,6 +1122,8 @@ n00bb_llvm_backend_prepare(const ir_module_t *comptime_ir,
     if (!backend->comptime || !backend->runtime) goto fail;
     LLVMSetTarget(backend->comptime, ir_module_target(comptime_ir));
     LLVMSetTarget(backend->runtime, ir_module_target(runtime_ir));
+    if (!set_native_layout(backend->comptime)
+        || !set_native_layout(backend->runtime)) goto fail;
     return backend;
 
 fail:

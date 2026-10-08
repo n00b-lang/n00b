@@ -1,0 +1,24 @@
+declare_litmod("mirror", "set", "build_set")
+
+func build_set(items: Array[int]) -> Array[int] fail: string {
+    return items
+}
+
+func static_set() -> Array[int] {
+    return mirror{1, 2}
+}
+
+func dynamic_set(x: int) -> Array[int] {
+    return mirror{x, 2}
+}
+
+func empty_set() -> Array[int] {
+    return mirror{}
+}
+
+comptime {
+} else {
+    static_set()
+    dynamic_set(3)
+    empty_set()
+}

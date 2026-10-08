@@ -23,6 +23,15 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/litmod_runtime" \
     "$program_dir/bitcode_litmod_runtime.n00b"
 "$tmp/litmod_runtime"
+"$compiler" build --output "$tmp/litmod_set_shape" \
+    "$program_dir/bitcode_litmod_set_shape.n00b"
+"$tmp/litmod_set_shape"
+"$compiler" build --output "$tmp/litmod_generic_set" \
+    "$program_dir/bitcode_litmod_generic_set.n00b"
+"$tmp/litmod_generic_set"
+"$compiler" build --output "$tmp/litmod_dict_shape" \
+    "$program_dir/bitcode_litmod_dict_shape.n00b"
+"$tmp/litmod_dict_shape"
 "$compiler" build --output "$tmp/litmod_string" \
     "$program_dir/bitcode_litmod_string.n00b"
 "$tmp/litmod_string"
