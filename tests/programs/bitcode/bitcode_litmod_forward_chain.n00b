@@ -1,0 +1,20 @@
+declare_litmod("outer", "string", "make_outer")
+declare_litmod("inner", "string", "make_inner")
+
+func value() -> int {
+    return outer"ignored"
+}
+
+func make_outer(raw: string) fail: string {
+    return inner"ignored"
+}
+
+func make_inner(raw: string) -> int fail: string {
+    return 42
+}
+
+comptime {
+    require value() == 42
+} else {
+    require value() == 42
+}

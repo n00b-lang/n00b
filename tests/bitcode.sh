@@ -86,6 +86,9 @@ fi
 "$compiler" build --output "$tmp/litmod_forward_type" \
     "$program_dir/bitcode_litmod_forward_type.n00b"
 "$tmp/litmod_forward_type"
+"$compiler" build --output "$tmp/litmod_forward_chain" \
+    "$program_dir/bitcode_litmod_forward_chain.n00b"
+"$tmp/litmod_forward_chain"
 if "$compiler" build --output "$tmp/litmod_comptime_fail" \
     "$program_dir/bitcode_litmod_comptime_fail.n00b" \
     >"$tmp/litmod_comptime_fail.out" 2>&1; then
