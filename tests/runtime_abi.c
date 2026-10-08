@@ -36,7 +36,7 @@ typedef struct {
     n00b_abi_header_v1 header;
     uint8_t directory[22 * N00BB_ABI_DIRECTORY_BYTES];
     n00b_abi_type_v1 types[6];
-    uint32_t indexes[14];
+    uint32_t indexes[16];
     uint64_t values[1];
     uint8_t bytes[4];
     n00b_abi_specialization_link_v1 links[3];
@@ -123,6 +123,8 @@ main(void)
     image.indexes[11] = 1;
     image.indexes[12] = 2;
     image.indexes[13] = 1;
+    image.indexes[14] = 1;
+    image.indexes[15] = 1;
     image.values[0] = 123;
     memcpy(image.bytes, "abc", 3);
     image.bytes[3] = 1;
@@ -131,6 +133,7 @@ main(void)
     image.methods[1].trait_type_index = 1;
     image.methods[1].signature_type_index = 4;
     image.packages[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
+    image.packages[1].modules = (n00b_abi_range_v1){14, 1};
     image.functions[1].module_index = 1;
     image.functions[1].scope_index = 1;
     image.functions[1].code_ranges = (n00b_abi_range_v1){11, 1};
@@ -203,7 +206,7 @@ main(void)
     directory_entry(&image, 0, N00B_ABI_TABLE_TYPE,
         sizeof(image.types[0]), 6, offsetof(image_t, types));
     directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
-        sizeof(image.indexes[0]), 14, offsetof(image_t, indexes));
+        sizeof(image.indexes[0]), 16, offsetof(image_t, indexes));
     directory_entry(&image, 2, N00B_ABI_TABLE_U64_STREAM,
         sizeof(image.values[0]), 1, offsetof(image_t, values));
     directory_entry(&image, 3, N00B_ABI_TABLE_BYTE_STREAM,
@@ -568,6 +571,23 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_TYPE
         && error.record_index == 4 && !n00b_abi_v1_current_snapshot());
     image.types[4].typehash = 14;
+    image.packages[1].parent_package_index = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_PACKAGE
+        && !n00b_abi_v1_current_snapshot());
+    image.packages[1].parent_package_index = 0;
+    image.packages[1].modules = (n00b_abi_range_v1){0};
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_MODULE
+        && !n00b_abi_v1_current_snapshot());
+    image.packages[1].modules = (n00b_abi_range_v1){14, 2};
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_PACKAGE
+        && !n00b_abi_v1_current_snapshot());
+    image.packages[1].modules.count = 1;
     image.modules[1].runtime_initializer = 1;
     image.code_ranges[1].phase_mask = N00B_ABI_PHASE_COMPTIME;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)

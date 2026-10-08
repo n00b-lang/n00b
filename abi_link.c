@@ -2035,6 +2035,17 @@ n00bb_abi_rebuild_manifests(
     }
     for (uint32_t i = 1; valid && i < packages; i++)
         valid = package_written[i] == package_members[i];
+    for (uint32_t i = 1; valid && i < packages; i++) {
+        uint32_t parent = i;
+        for (uint32_t depth = 0; parent; depth++) {
+            if (depth >= packages || parent >= packages
+                || !package_seen[parent]) {
+                valid = false;
+                break;
+            }
+            parent = built.packages[parent].parent_package_index;
+        }
+    }
     for (uint32_t i = 1; valid && i < sccs; i++) {
         valid = scc_written[i] == scc_members[i];
         n00b_abi_range_v1 order = built.sccs[i].lexical_order;

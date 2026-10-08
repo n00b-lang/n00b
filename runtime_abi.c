@@ -495,6 +495,69 @@ metadata_module_initializers_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+metadata_packages_valid(const n00b_abi_snapshot_v1 *snapshot,
+                        n00b_abi_error_v1 *error)
+{
+    uint32_t package_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_PACKAGE);
+    uint32_t module_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_MODULE);
+    if (!package_count && !module_count) return true;
+    if (package_count < 2 || module_count < 2)
+        return invalid_record(error, N00B_ABI_TABLE_PACKAGE, 0, 0);
+    uint8_t *membership = snapshot_alloc(module_count);
+    if (!membership) return false;
+    bool valid = true;
+    uint32_t bad_kind = N00B_ABI_TABLE_PACKAGE, bad_index = 0;
+    for (uint32_t i = 1; valid && i < package_count; i++) {
+        const n00b_abi_package_v1 *package = n00b_abi_v1_package(snapshot, i);
+        if (!package) { valid = false; bad_index = i; break; }
+        uint32_t parent = i;
+        for (uint32_t depth = 0; parent; depth++) {
+            if (depth >= package_count) {
+                valid = false;
+                bad_index = i;
+                break;
+            }
+            const n00b_abi_package_v1 *ancestor = n00b_abi_v1_package(
+                snapshot, parent);
+            if (!ancestor) {
+                valid = false;
+                bad_index = i;
+                break;
+            }
+            parent = ancestor->parent_package_index;
+        }
+        for (uint32_t j = 0; valid && j < package->modules.count; j++) {
+            uint32_t module_index;
+            if (n00b_abi_v1_index_at(snapshot, package->modules, j,
+                                    &module_index) != 1
+                || !module_index || module_index >= module_count) {
+                valid = false;
+                bad_index = i;
+                break;
+            }
+            const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot,
+                                                                    module_index);
+            if (!module || module->package_index != i
+                || membership[module_index]++) {
+                valid = false;
+                bad_index = i;
+            }
+        }
+    }
+    for (uint32_t i = 1; valid && i < module_count; i++)
+        if (membership[i] != 1) {
+            valid = false;
+            bad_kind = N00B_ABI_TABLE_MODULE;
+            bad_index = i;
+        }
+    snapshot_free(membership, module_count);
+    if (!valid) return invalid_record(error, bad_kind, bad_index, 0);
+    return true;
+}
+
+static bool
 physical_run_bounds(const n00b_abi_snapshot_v1 *snapshot,
                     n00b_abi_range_v1 range, uint32_t ordinal,
                     uint64_t *start, uint64_t *end)
@@ -1638,6 +1701,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
             && nil->typehash == UINT64_C(0x0ea862bddb8ce94c);
     }
     if (valid) valid = metadata_references_valid(candidate, error);
+    if (valid) valid = metadata_packages_valid(candidate, error);
     if (valid) valid = metadata_traces_valid(candidate, error);
     if (valid) valid = metadata_code_ranges_valid(candidate, error);
     if (valid) valid = metadata_module_initializers_valid(candidate, error);

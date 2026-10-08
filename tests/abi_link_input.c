@@ -474,6 +474,19 @@ test_cycle_selection(char **paths)
     assert(!n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
         && !manifests.packages && !manifests.u32_stream);
     conflicting_package->visibility = saved_visibility;
+    for (size_t i = 0; i < selected.count; i++) {
+        n00b_abi_package_v1 *package = (void *)n00bb_abi_object_row(
+            &selected.views[i], N00B_ABI_TABLE_PACKAGE, 1);
+        assert(package && !package->parent_package_index);
+        package->parent_package_index = 1;
+    }
+    assert(!n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
+        && !manifests.packages && !manifests.u32_stream);
+    for (size_t i = 0; i < selected.count; i++) {
+        n00b_abi_package_v1 *package = (void *)n00bb_abi_object_row(
+            &selected.views[i], N00B_ABI_TABLE_PACKAGE, 1);
+        package->parent_package_index = 0;
+    }
     n00bb_abi_index_plan_free(plan);
     n00bb_abi_selected_objects_release(&selected);
     assert(!selected.views && !selected.count);
