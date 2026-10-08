@@ -410,6 +410,56 @@ metadata_code_ranges_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+metadata_frame_layouts_valid(const n00b_abi_snapshot_v1 *snapshot,
+                             n00b_abi_error_v1 *error)
+{
+    uint32_t frame_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_FRAME_LAYOUT);
+    if (frame_count <= 1) return true;
+    uint8_t *seen = snapshot_alloc(frame_count);
+    if (!seen) return false;
+    bool valid = true;
+    uint32_t function_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_FUNCTION);
+    for (uint32_t function_index = 1; valid
+         && function_index < function_count; function_index++) {
+        const n00b_abi_function_v1 *function = n00b_abi_v1_function(snapshot,
+            function_index);
+        for (uint32_t i = 0; valid && i < function->frame_layouts.count; i++) {
+            uint32_t frame_index = 0;
+            valid = n00b_abi_v1_index_at(snapshot, function->frame_layouts,
+                i, &frame_index) == 1 && frame_index
+                && frame_index < frame_count && !seen[frame_index];
+            const n00b_abi_frame_layout_v1 *frame = valid
+                ? n00b_abi_v1_frame_layout(snapshot, frame_index) : nullptr;
+            valid = valid && frame && frame->function_index == function_index
+                && frame->frame_byte_extent >= 8
+                && !(frame->frame_byte_extent % 8);
+            if (valid) {
+                uint64_t slots = (frame->frame_byte_extent - 8) / 8;
+                uint64_t bitmap_bytes = (slots + 7) / 8;
+                const uint8_t *bitmap = nullptr;
+                valid = bitmap_bytes == frame->pointer_bitmap_bytes.count
+                    && n00b_abi_v1_bytes(snapshot, frame->pointer_bitmap_bytes,
+                        &bitmap) >= 0;
+                if (valid && slots % 8) {
+                    uint8_t trailing = (uint8_t)~((1u << (slots % 8)) - 1);
+                    valid = !(bitmap[bitmap_bytes - 1] & trailing);
+                }
+            }
+            if (valid) seen[frame_index] = 1;
+            else invalid_record(error, N00B_ABI_TABLE_FRAME_LAYOUT,
+                                frame_index, 0);
+        }
+    }
+    for (uint32_t i = 1; valid && i < frame_count; i++)
+        if (!seen[i]) valid = invalid_record(error,
+            N00B_ABI_TABLE_FRAME_LAYOUT, i, 0);
+    snapshot_free(seen, frame_count);
+    return valid;
+}
+
+static bool
 metadata_storage_valid(const n00b_abi_snapshot_v1 *snapshot,
                        n00b_abi_error_v1 *error)
 {
@@ -825,6 +875,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     }
     if (valid) valid = metadata_references_valid(candidate, error);
     if (valid) valid = metadata_code_ranges_valid(candidate, error);
+    if (valid) valid = metadata_frame_layouts_valid(candidate, error);
     if (valid) valid = metadata_storage_valid(candidate, error);
     if (valid) valid = metadata_dispatch_valid(candidate, error);
     if (valid) valid = metadata_name_slots_valid(candidate, error);

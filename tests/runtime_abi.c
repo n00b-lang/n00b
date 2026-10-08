@@ -34,15 +34,16 @@
 
 typedef struct {
     n00b_abi_header_v1 header;
-    uint8_t directory[19 * N00BB_ABI_DIRECTORY_BYTES];
+    uint8_t directory[20 * N00BB_ABI_DIRECTORY_BYTES];
     n00b_abi_type_v1 types[5];
-    uint32_t indexes[13];
+    uint32_t indexes[14];
     uint64_t values[1];
-    uint8_t bytes[3];
+    uint8_t bytes[4];
     n00b_abi_specialization_link_v1 links[3];
     n00b_abi_trait_method_v1 methods[2];
     n00b_abi_function_v1 functions[4];
     n00b_abi_code_range_v1 code_ranges[3];
+    n00b_abi_frame_layout_v1 frame_layouts[2];
     n00b_abi_dispatch_v1 dispatches[2];
     n00b_abi_dispatch_entry_v1 entries[4];
     n00b_abi_package_v1 packages[2];
@@ -84,7 +85,7 @@ main(void)
     image.header.abi_profile_id = N00B_ABI_V1_PROFILE_ID;
     image.header.data_layout_profile = N00B_ABI_DATA_LAYOUT_PROFILE_V1;
     image.header.required_alignment = 8;
-    image.header.directory_count = 19;
+    image.header.directory_count = 20;
     image.header.directory_offset = offsetof(image_t, directory);
     image.header.total_extent = sizeof(image);
     image.header.payload_checksum = UINT64_MAX;
@@ -114,8 +115,10 @@ main(void)
     image.indexes[10] = 3;
     image.indexes[11] = 1;
     image.indexes[12] = 2;
+    image.indexes[13] = 1;
     image.values[0] = 123;
     memcpy(image.bytes, "abc", 3);
+    image.bytes[3] = 1;
     image.links[1] = 2;
     image.links[2] = 3;
     image.methods[1].trait_type_index = 1;
@@ -123,6 +126,7 @@ main(void)
     image.functions[1].module_index = 1;
     image.functions[1].scope_index = 1;
     image.functions[1].code_ranges = (n00b_abi_range_v1){11, 1};
+    image.functions[1].frame_layouts = (n00b_abi_range_v1){13, 1};
     image.functions[2].module_index = 1;
     image.functions[2].scope_index = 1;
     image.functions[2].code_ranges = (n00b_abi_range_v1){12, 1};
@@ -139,6 +143,11 @@ main(void)
         .phase_mask = N00B_ABI_PHASE_RUNTIME,
         .byte_length = 1,
         .start = (const void *)(uintptr_t)main,
+    };
+    image.frame_layouts[1] = (n00b_abi_frame_layout_v1){
+        .function_index = 1,
+        .pointer_bitmap_bytes = {3, 1},
+        .frame_byte_extent = 16,
     };
     image.modules[1].package_index = 1;
     memcpy(image.modules[1].full_path.short_value.bytes, "p.m", 3);
@@ -184,11 +193,11 @@ main(void)
     directory_entry(&image, 0, N00B_ABI_TABLE_TYPE,
         sizeof(image.types[0]), 5, offsetof(image_t, types));
     directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
-        sizeof(image.indexes[0]), 13, offsetof(image_t, indexes));
+        sizeof(image.indexes[0]), 14, offsetof(image_t, indexes));
     directory_entry(&image, 2, N00B_ABI_TABLE_U64_STREAM,
         sizeof(image.values[0]), 1, offsetof(image_t, values));
     directory_entry(&image, 3, N00B_ABI_TABLE_BYTE_STREAM,
-        sizeof(image.bytes[0]), 3, offsetof(image_t, bytes));
+        sizeof(image.bytes[0]), 4, offsetof(image_t, bytes));
     directory_entry(&image, 4, N00B_ABI_TABLE_SPECIALIZATION_LINK,
         sizeof(image.links[0]), 3, offsetof(image_t, links));
     directory_entry(&image, 5, N00B_ABI_TABLE_TRAIT_METHOD,
@@ -220,6 +229,8 @@ main(void)
         sizeof(image.name_slots[0]), 4, offsetof(image_t, name_slots));
     directory_entry(&image, 18, N00B_ABI_TABLE_CODE_RANGE,
         sizeof(image.code_ranges[0]), 3, offsetof(image_t, code_ranges));
+    directory_entry(&image, 19, N00B_ABI_TABLE_FRAME_LAYOUT,
+        sizeof(image.frame_layouts[0]), 2, offsetof(image_t, frame_layouts));
 
     n00b_abi_image_descriptor_v1 descriptor = {
         .descriptor_version = 1,
@@ -305,6 +316,41 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_CODE_RANGE
         && !n00b_abi_v1_current_snapshot());
     image.code_ranges[1].start = (const void *)(uintptr_t)main;
+    image.frame_layouts[1].frame_byte_extent = 15;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FRAME_LAYOUT
+        && !n00b_abi_v1_current_snapshot());
+    image.frame_layouts[1].frame_byte_extent = 80;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FRAME_LAYOUT
+        && !n00b_abi_v1_current_snapshot());
+    image.frame_layouts[1].frame_byte_extent = 16;
+    image.bytes[3] = 2;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FRAME_LAYOUT
+        && !n00b_abi_v1_current_snapshot());
+    image.bytes[3] = 1;
+    image.frame_layouts[1].function_index = 2;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FRAME_LAYOUT
+        && !n00b_abi_v1_current_snapshot());
+    image.frame_layouts[1].function_index = 1;
+    image.functions[2].frame_layouts = (n00b_abi_range_v1){13, 1};
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FRAME_LAYOUT
+        && !n00b_abi_v1_current_snapshot());
+    image.functions[2].frame_layouts = (n00b_abi_range_v1){0};
+    image.functions[1].frame_layouts = (n00b_abi_range_v1){0};
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FRAME_LAYOUT
+        && !n00b_abi_v1_current_snapshot());
+    image.functions[1].frame_layouts = (n00b_abi_range_v1){13, 1};
     image.types[1].fields_or_arms.first = 1;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
