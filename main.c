@@ -170,6 +170,7 @@ typedef struct {
     n00bb_user_litmod_t *registration;
     th_type *payload_type;
     th_type *signature;
+    th_type *type_arguments;
     bool deferred;
 } n00bb_litmod_site_t;
 
@@ -41698,6 +41699,18 @@ infer_tagged_sequence_literal_type(parse_grammar_t *grammar,
     core_list_free(expressions);
     if (!collected) return false;
     if (!element) element = th_var(state->types);
+    parse_tree_t *argument_node = child_nt(grammar, node, "tspec-list");
+    if (argument_node) {
+        core_list_t(th_arg) arguments = core_list_new(th_arg);
+        bool valid = append_type_argument_pack(
+            core_tree_node_value(argument_node).type, &arguments)
+            && arguments.len == 1
+            && arguments.data[0].kind == TH_ARG_TYPE;
+        element = valid ? th_unify_in_place(state->types, element,
+            arguments.data[0].type) : nullptr;
+        core_list_free(arguments);
+        if (!element) return false;
+    }
     th_arg element_arg = {.kind = TH_ARG_TYPE, .type = element};
     th_type *sequence_type = is_array ? th_array(state->types, element)
         : th_apply(state->types, "list", &element_arg, 1);
@@ -41758,6 +41771,22 @@ infer_tagged_brace_literal_type(parse_grammar_t *grammar,
     if (payload_type
         && !th_unify_in_place(state->types, payload_type, literal_type))
         return false;
+    parse_tree_t *argument_node = child_nt(grammar, node, "tspec-list");
+    if (argument_node) {
+        core_list_t(th_arg) arguments = core_list_new(th_arg);
+        bool valid = append_type_argument_pack(
+            core_tree_node_value(argument_node).type, &arguments)
+            && arguments.len == argument_count;
+        for (size_t i = 0; valid && i < arguments.len; i++) {
+            const th_arg *item = th_named_arg(th_resolve(literal_type), i);
+            valid = item && item->kind == TH_ARG_TYPE
+                && arguments.data[i].kind == TH_ARG_TYPE
+                && th_unify_in_place(state->types, item->type,
+                    arguments.data[i].type) != nullptr;
+        }
+        core_list_free(arguments);
+        if (!valid) return false;
+    }
 
     parse_nt_node_t *parsed = &core_tree_node_value(node);
     if (parsed->type) {
@@ -41782,7 +41811,7 @@ infer_tagged_string_literal_type(parse_grammar_t *grammar,
     if (!string) return true;
     const n00bb_literal_registration_t *handler = n00bb_literal_handler(
         prefix, N00BB_LITERAL_STRING_SHAPE);
-    if (!handler) return false;
+    if (!handler || child_nt(grammar, node, "tspec-list")) return false;
     bool u32 = handler->handler == N00BB_LITERAL_U32;
     th_type *literal_type = u32
         ? th_array(state->types, th_name(state->types, "char"))
@@ -41812,10 +41841,41 @@ infer_tagged_string_literal_type(parse_grammar_t *grammar,
 }
 
 static bool
+specialize_literal_handler(n00bb_tu_state_t *state, th_type *signature,
+                           th_type *expected, th_type *type_arguments,
+                           th_type **specialized)
+{
+    if (!state || !signature || !expected || !specialized) return false;
+    if (type_arguments) {
+        core_list_t(th_arg) arguments = core_list_new(th_arg);
+        bool valid = append_type_argument_pack(type_arguments, &arguments);
+        th_type *copy = valid
+            ? th_unify(state->types, signature, signature) : nullptr;
+        th_type **variables = nullptr;
+        size_t count = copy
+            ? th_free_vars(state->types, th_func_ret(copy), &variables) : 0;
+        valid = valid && copy && count == arguments.len;
+        for (size_t i = 0; valid && i < count; i++)
+            valid = arguments.data[i].kind == TH_ARG_TYPE
+                && th_unify_in_place(state->types, variables[i],
+                                     arguments.data[i].type) != nullptr;
+        core_list_free(arguments);
+        if (!valid) return false;
+        signature = copy;
+    }
+    *specialized = th_unify(state->types, signature, expected);
+    return *specialized != nullptr;
+}
+
+static bool
 infer_user_tagged_literal_type(parse_grammar_t *grammar,
                                parse_tree_t *node,
                                n00bb_tu_state_t *state)
 {
+    parse_tree_t *argument_node = child_nt(grammar, node, "tspec-list");
+    th_type *type_arguments = argument_node
+        ? core_tree_node_value(argument_node).type : nullptr;
+    if (argument_node && !type_arguments) return false;
     parse_tree_t *payload = child_nt(grammar, node, "literal-payload");
     parse_tree_t *sequence = child_nt(grammar, payload, "tagged-list-lit");
     parse_tree_t *string = child_nt(grammar, payload,
@@ -41920,8 +41980,9 @@ infer_user_tagged_literal_type(parse_grammar_t *grammar,
         ? th_resolve(function->type) : nullptr;
     bool deferred = !signature;
     if (signature && th_kind_of(signature) != TH_FUNCTION) return false;
-    th_type *specialized = expected && !deferred
-        ? th_unify(state->types, signature, expected) : expected;
+    th_type *specialized = expected;
+    if (!deferred && !specialize_literal_handler(state, signature, expected,
+            type_arguments, &specialized)) return false;
     th_type *result = specialized ? th_func_ret(specialized) : nullptr;
     if (!result) return false;
     const char *required_shape = sequence ? "Bracket_Literal"
@@ -41950,6 +42011,7 @@ infer_user_tagged_literal_type(parse_grammar_t *grammar,
         .registration = registration,
         .payload_type = specialized_param->type,
         .signature = specialized,
+        .type_arguments = type_arguments,
         .deferred = deferred,
     };
     core_dict_put(&state->literal_sites, node, site);
@@ -41971,9 +42033,10 @@ resolve_forward_literal_sites(core_translation_unit_t *unit,
                 site->registration->function_name) : nullptr;
         th_type *signature = function && function->type
             ? th_resolve(function->type) : nullptr;
-        th_type *specialized = signature
-            && th_kind_of(signature) == TH_FUNCTION
-            ? th_unify(state->types, signature, site->signature) : nullptr;
+        th_type *specialized = nullptr;
+        if (signature && th_kind_of(signature) == TH_FUNCTION)
+            specialize_literal_handler(state, signature, site->signature,
+                                       site->type_arguments, &specialized);
         th_type *result = specialized ? th_func_ret(specialized) : nullptr;
         th_type *unified = result && core_tree_node_value(node).type
             ? th_unify_in_place(state->types,

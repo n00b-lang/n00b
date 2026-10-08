@@ -1,0 +1,18 @@
+func empty_set() {
+    return set[int]{}
+}
+
+func numbers() {
+    return array[int][1, 2]
+}
+
+func mapping() {
+    return dict[string, int]{"one": 1}
+}
+
+comptime {
+} else {
+    empty_set()
+    numbers()
+    mapping()
+}

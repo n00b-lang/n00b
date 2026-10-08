@@ -1,0 +1,14 @@
+declare_litmod("wrap", "set", "identity")
+
+func values() {
+    return wrap[int]{}
+}
+
+func identity(items: Array[`T]) -> Array[`T] fail: string {
+    return items
+}
+
+comptime {
+} else {
+    values()
+}

@@ -89,6 +89,29 @@ fi
 "$compiler" build --output "$tmp/litmod_forward_chain" \
     "$program_dir/bitcode_litmod_forward_chain.n00b"
 "$tmp/litmod_forward_chain"
+"$compiler" build --output "$tmp/litmod_explicit_type" \
+    "$program_dir/bitcode_litmod_explicit_type.n00b"
+"$tmp/litmod_explicit_type"
+"$compiler" build --output "$tmp/litmod_explicit_forward" \
+    "$program_dir/bitcode_litmod_explicit_forward.n00b"
+"$tmp/litmod_explicit_forward"
+"$compiler" build --output "$tmp/litmod_explicit_dict" \
+    "$program_dir/bitcode_litmod_explicit_dict.n00b"
+"$tmp/litmod_explicit_dict"
+"$compiler" lower --dump-ir \
+    "$program_dir/bitcode_builtin_prefix_args.n00b" \
+    >"$tmp/builtin_prefix_args.ir"
+grep -Fq 'func @numbers() -> array[int]' "$tmp/builtin_prefix_args.ir"
+grep -Fq 'func @empty_set() -> set[int]' "$tmp/builtin_prefix_args.ir"
+grep -Fq 'func @mapping() -> dict[string, int]' "$tmp/builtin_prefix_args.ir"
+if "$compiler" build --output "$tmp/litmod_explicit_mismatch" \
+    "$program_dir/bitcode_litmod_explicit_mismatch.n00b" \
+    >"$tmp/litmod_explicit_mismatch.out" 2>&1; then
+    echo 'conflicting literal prefix type unexpectedly built' >&2
+    exit 1
+fi
+grep -q 'literal handler cannot specialize' \
+    "$tmp/litmod_explicit_mismatch.out"
 if "$compiler" build --output "$tmp/litmod_comptime_fail" \
     "$program_dir/bitcode_litmod_comptime_fail.n00b" \
     >"$tmp/litmod_comptime_fail.out" 2>&1; then

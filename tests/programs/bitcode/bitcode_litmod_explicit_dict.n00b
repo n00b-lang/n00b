@@ -1,0 +1,14 @@
+declare_litmod("wrap", "dict", "identity")
+
+func identity(items: Array[Tuple[`K, `V]]) -> Array[Tuple[`K, `V]] fail: string {
+    return items
+}
+
+func values() {
+    return wrap[int, string]{}
+}
+
+comptime {
+} else {
+    values()
+}
