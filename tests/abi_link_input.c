@@ -1330,6 +1330,81 @@ test_specialization_remap(void)
 }
 
 static void
+test_type_backlinks_remap(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[3];
+        n00b_abi_layout_v1 layouts[2];
+        n00b_abi_trace_v1 traces[2];
+        n00b_abi_field_v1 fields[2];
+        uint32_t members[1];
+    } backlink_fixture_t;
+    backlink_fixture_t metadata = {0};
+    metadata.types[0].kind = N00B_ABI_TYPE_NIL;
+    metadata.types[0].typehash = 1;
+    metadata.types[1].kind = N00B_ABI_TYPE_RECORD;
+    metadata.types[1].typehash = 2;
+    metadata.types[1].layout_index = 1;
+    metadata.types[1].tracing_index = 1;
+    metadata.types[1].fields_or_arms.count = 1;
+    metadata.types[2].kind = N00B_ABI_TYPE_PRIMITIVE;
+    metadata.types[2].typehash = 3;
+    metadata.layouts[1].type_index = 1;
+    metadata.traces[1].type_index = 1;
+    metadata.fields[1].parent_type_index = 1;
+    metadata.members[0] = 1;
+    n00bb_abi_directory_entry_t directory[] = {
+        {.kind = N00B_ABI_TABLE_TYPE,
+         .record_bytes = sizeof(n00b_abi_type_v1), .record_count = 3,
+         .file_offset = offsetof(backlink_fixture_t, types)},
+        {.kind = N00B_ABI_TABLE_LAYOUT,
+         .record_bytes = sizeof(n00b_abi_layout_v1), .record_count = 2,
+         .file_offset = offsetof(backlink_fixture_t, layouts)},
+        {.kind = N00B_ABI_TABLE_TRACE,
+         .record_bytes = sizeof(n00b_abi_trace_v1), .record_count = 2,
+         .file_offset = offsetof(backlink_fixture_t, traces)},
+        {.kind = N00B_ABI_TABLE_FIELD,
+         .record_bytes = sizeof(n00b_abi_field_v1), .record_count = 2,
+         .file_offset = offsetof(backlink_fixture_t, fields)},
+        {.kind = N00B_ABI_TABLE_U32_STREAM,
+         .record_bytes = sizeof(uint32_t), .record_count = 1,
+         .file_offset = offsetof(backlink_fixture_t, members)},
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {.bytes = (const uint8_t *)&metadata,
+                     .size = sizeof(metadata)},
+        .directory = directory,
+        .directory_count = sizeof(directory) / sizeof(*directory),
+    };
+    n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    uint32_t values[1] = {0}, kinds[1] = {0};
+    n00bb_abi_u32_stream_build_t stream = {
+        .values = values, .kinds = kinds, .count = 1,
+    };
+    n00b_abi_type_v1 type;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.layouts[1].type_index = 2;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.layouts[1].type_index = 1;
+    metadata.traces[1].type_index = 2;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.traces[1].type_index = 1;
+    metadata.fields[1].parent_type_index = 2;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.fields[1].parent_type_index = 1;
+    metadata.types[1].fields_or_arms = (n00b_abi_range_v1){.first = 1};
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_metadata_string_uses_relocation_pool(void)
 {
     const char *triples[] = {
@@ -1829,6 +1904,7 @@ main(int argc, char **argv)
     test_native_string_pool_consolidation();
     test_link_index_patch();
     test_specialization_remap();
+    test_type_backlinks_remap();
     test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();
     test_static_string_identity();

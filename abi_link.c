@@ -1318,6 +1318,39 @@ type_member_kind(const n00b_abi_type_v1 *type)
 }
 
 static bool
+type_backlinks_valid(const n00bb_abi_object_view_t *view,
+                     const n00b_abi_type_v1 *type, uint32_t type_index)
+{
+    if (type->layout_index) {
+        const n00b_abi_layout_v1 *layout = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_LAYOUT, type->layout_index);
+        if (!layout || layout->type_index != type_index) return false;
+    }
+    if (type->tracing_index) {
+        const n00b_abi_trace_v1 *trace = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_TRACE, type->tracing_index);
+        if (!trace || trace->type_index != type_index) return false;
+    }
+    uint32_t kind = type_member_kind(type);
+    if (!type->fields_or_arms.count) return !type->fields_or_arms.first;
+    if (!kind || !valid_index_range(view, type->fields_or_arms)) return false;
+    for (uint32_t i = 0; i < type->fields_or_arms.count; i++) {
+        const void *member = indexed_range_row(view, type->fields_or_arms,
+                                                i, kind);
+        if (!member) return false;
+        uint32_t parent = kind == N00B_ABI_TABLE_FIELD
+            ? ((const n00b_abi_field_v1 *)member)->parent_type_index
+            : kind == N00B_ABI_TABLE_ARM
+            ? ((const n00b_abi_arm_v1 *)member)->field.parent_type_index
+            : kind == N00B_ABI_TABLE_ENUM_ITEM
+            ? ((const n00b_abi_enum_item_v1 *)member)->parent_type_index
+            : ((const n00b_abi_trait_method_v1 *)member)->trait_type_index;
+        if (parent != type_index) return false;
+    }
+    return true;
+}
+
+static bool
 remap_range(const n00bb_abi_object_view_t *view,
             const n00bb_abi_index_plan_t *plan, size_t input_index,
             n00b_abi_range_v1 source, uint32_t stream_kind,
@@ -1326,7 +1359,7 @@ remap_range(const n00bb_abi_object_view_t *view,
 {
     if (!source.count) {
         *out_first = 0;
-        return true;
+        return !source.first;
     }
     const n00bb_abi_directory_entry_t *table =
         n00bb_abi_object_table(view, stream_kind);
@@ -1375,6 +1408,8 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
     const void *source = n00bb_abi_object_row(view, kind, local_index);
     if (!table || !source || out_bytes < table->record_bytes
         || link_kind_is_stream(kind)) return false;
+    if (kind == N00B_ABI_TABLE_TYPE
+        && !type_backlinks_valid(view, source, local_index)) return false;
     memmove(out, source, table->record_bytes);
     uint8_t *bytes = out;
     for (size_t i = 0; i < sizeof(abi_index_columns)
