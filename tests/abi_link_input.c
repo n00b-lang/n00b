@@ -1581,6 +1581,37 @@ test_type_backlinks_remap(void)
         .values = values, .kinds = kinds, .count = 2,
     };
     n00b_abi_type_v1 type;
+    n00b_abi_field_v1 field;
+    n00b_abi_layout_v1 layout;
+    n00b_abi_trace_v1 trace;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_FIELD, 1, &field, sizeof(field), &stream));
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_FIELD, 2, &field, sizeof(field), &stream));
+    metadata.types[1].fields_or_arms.count = 2;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_FIELD, 2, &field, sizeof(field), &stream));
+    metadata.members[1] = 1;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_FIELD, 1, &field, sizeof(field), &stream));
+    metadata.members[1] = 2;
+    metadata.types[1].fields_or_arms.count = 1;
+    metadata.fields[1].parent_type_index = 2;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_FIELD, 1, &field, sizeof(field), &stream));
+    metadata.fields[1].parent_type_index = 1;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_LAYOUT, 1, &layout, sizeof(layout), &stream));
+    metadata.types[1].layout_index = 0;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_LAYOUT, 1, &layout, sizeof(layout), &stream));
+    metadata.types[1].layout_index = 1;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TRACE, 1, &trace, sizeof(trace), &stream));
+    metadata.types[1].tracing_index = 0;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TRACE, 1, &trace, sizeof(trace), &stream));
+    metadata.types[1].tracing_index = 1;
     assert(n00bb_abi_remap_row(&selected, plan, 0,
         N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
     metadata.layouts[1].type_index = 2;

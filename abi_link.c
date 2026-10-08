@@ -1401,6 +1401,38 @@ type_backlinks_valid(const n00bb_abi_object_view_t *view,
 }
 
 static bool
+row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
+                uint32_t local_index, const void *row)
+{
+    if (!local_index) return true;
+    if (kind == N00B_ABI_TABLE_LAYOUT || kind == N00B_ABI_TABLE_TRACE) {
+        uint32_t parent = kind == N00B_ABI_TABLE_LAYOUT
+            ? ((const n00b_abi_layout_v1 *)row)->type_index
+            : ((const n00b_abi_trace_v1 *)row)->type_index;
+        const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_TYPE, parent);
+        return type && (kind == N00B_ABI_TABLE_LAYOUT
+            ? type->layout_index : type->tracing_index) == local_index;
+    }
+    if (kind != N00B_ABI_TABLE_FIELD && kind != N00B_ABI_TABLE_ARM
+        && kind != N00B_ABI_TABLE_ENUM_ITEM
+        && kind != N00B_ABI_TABLE_TRAIT_METHOD) return true;
+    uint32_t parent = n00bb_abi_member_facts(kind, row).parent;
+    const n00b_abi_type_v1 *type = parent
+        ? n00bb_abi_object_row(view, N00B_ABI_TABLE_TYPE, parent) : nullptr;
+    if (!type || type_member_kind(type) != kind
+        || !valid_index_range(view, type->fields_or_arms)) return false;
+    uint32_t matches = 0;
+    for (uint32_t i = 0; i < type->fields_or_arms.count; i++) {
+        const uint8_t *slot = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_U32_STREAM, type->fields_or_arms.first + i);
+        if (!slot) return false;
+        if (core_le_load_u32(slot) == local_index) matches++;
+    }
+    return matches == 1;
+}
+
+static bool
 remap_range(const n00bb_abi_object_view_t *view,
             const n00bb_abi_index_plan_t *plan, size_t input_index,
             n00b_abi_range_v1 source, uint32_t stream_kind,
@@ -1458,8 +1490,9 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
     const void *source = n00bb_abi_object_row(view, kind, local_index);
     if (!table || !source || out_bytes < table->record_bytes
         || link_kind_is_stream(kind)) return false;
-    if (kind == N00B_ABI_TABLE_TYPE
-        && !type_backlinks_valid(view, source, local_index)) return false;
+    if ((kind == N00B_ABI_TABLE_TYPE
+         && !type_backlinks_valid(view, source, local_index))
+        || !row_owner_valid(view, kind, local_index, source)) return false;
     memmove(out, source, table->record_bytes);
     uint8_t *bytes = out;
     for (size_t i = 0; i < sizeof(abi_index_columns)

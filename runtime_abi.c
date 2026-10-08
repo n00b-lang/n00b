@@ -383,6 +383,53 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+metadata_owned_rows_valid(const n00b_abi_snapshot_v1 *snapshot,
+                          n00b_abi_error_v1 *error)
+{
+    const uint32_t owned_kinds[] = {
+        N00B_ABI_TABLE_LAYOUT, N00B_ABI_TABLE_TRACE,
+        N00B_ABI_TABLE_FIELD, N00B_ABI_TABLE_ARM,
+        N00B_ABI_TABLE_ENUM_ITEM, N00B_ABI_TABLE_TRAIT_METHOD,
+    };
+    for (size_t k = 0; k < sizeof(owned_kinds) / sizeof(*owned_kinds); k++) {
+        uint32_t kind = owned_kinds[k];
+        const n00bb_abi_directory_entry_t *table = table_for(snapshot, kind);
+        if (!table) continue;
+        for (uint32_t row = 1; row < table->record_count; row++) {
+            const void *value = n00b_abi_v1_record(snapshot, kind, row,
+                                                   nullptr);
+            uint32_t parent = kind == N00B_ABI_TABLE_LAYOUT
+                ? ((const n00b_abi_layout_v1 *)value)->type_index
+                : kind == N00B_ABI_TABLE_TRACE
+                    ? ((const n00b_abi_trace_v1 *)value)->type_index
+                    : n00bb_abi_member_facts(kind, value).parent;
+            const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot,
+                                                              parent);
+            if (!type) return invalid_record(error, kind, row, 0);
+            if (kind == N00B_ABI_TABLE_LAYOUT
+                || kind == N00B_ABI_TABLE_TRACE) {
+                if ((kind == N00B_ABI_TABLE_LAYOUT
+                     ? type->layout_index : type->tracing_index) != row)
+                    return invalid_record(error, kind, row, 0);
+                continue;
+            }
+            if (!parent || member_table_kind(type->kind) != kind)
+                return invalid_record(error, kind, row, 0);
+            uint32_t matches = 0;
+            for (uint32_t i = 0; i < type->fields_or_arms.count; i++) {
+                uint32_t index = 0;
+                if (n00b_abi_v1_index_at(snapshot, type->fields_or_arms,
+                        i, &index) != 1)
+                    return invalid_record(error, kind, row, 0);
+                if (index == row) matches++;
+            }
+            if (matches != 1) return invalid_record(error, kind, row, 0);
+        }
+    }
+    return true;
+}
+
+static bool
 physical_run_bounds(const n00b_abi_snapshot_v1 *snapshot,
                     n00b_abi_range_v1 range, uint32_t ordinal,
                     uint64_t *start, uint64_t *end)
@@ -1438,6 +1485,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     if (valid) valid = metadata_name_slots_valid(candidate, error);
     if (valid) valid = specialization_graph_valid(candidate);
     if (valid) valid = metadata_dispatch_ambiguity_valid(candidate, error);
+    if (valid) valid = metadata_owned_rows_valid(candidate, error);
     if (!valid) {
         snapshot_free(candidate, sizeof(*candidate));
         if (error && error->status == N00B_ABI_BAD_METADATA)

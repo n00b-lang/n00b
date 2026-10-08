@@ -40,7 +40,7 @@ typedef struct {
     uint64_t values[1];
     uint8_t bytes[4];
     n00b_abi_specialization_link_v1 links[3];
-    n00b_abi_trait_method_v1 methods[2];
+    n00b_abi_trait_method_v1 methods[3];
     n00b_abi_function_v1 functions[4];
     n00b_abi_code_range_v1 code_ranges[3];
     n00b_abi_frame_layout_v1 frame_layouts[2];
@@ -260,6 +260,15 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_TYPE
         && !n00b_abi_v1_current_snapshot());
     image.methods[1].trait_type_index = 1;
+    image.methods[2] = image.methods[1];
+    directory_entry(&image, 5, N00B_ABI_TABLE_TRAIT_METHOD,
+        sizeof(image.methods[0]), 3, offsetof(image_t, methods));
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TRAIT_METHOD
+        && error.record_index == 2 && !n00b_abi_v1_current_snapshot());
+    directory_entry(&image, 5, N00B_ABI_TABLE_TRAIT_METHOD,
+        sizeof(image.methods[0]), 2, offsetof(image_t, methods));
     image.types[1].fields_or_arms.count = 2;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
