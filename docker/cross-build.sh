@@ -4,7 +4,12 @@
 # Usage:
 #   bash docker/cross-build.sh macos-arm64       # default on macOS
 #   bash docker/cross-build.sh macos-x86_64
-#   bash docker/cross-build.sh windows-x86_64
+#
+# For WINDOWS, use build.sh rather than this script -- see docs/windows.md:
+#   LLVM_MINGW=/path/to/llvm-mingw NCC_PATH=/path/to/ncc \
+#       N00B_CROSS=windows-x86_64 bash build.sh
+# (n00b#526; the former windows-x86_64 target here was an unmaintained
+# duplicate of that route and never worked. See the note below.)
 #
 # Environment:
 #   N00B_TEST=1       Run tests after build (only works when target matches host)
@@ -20,7 +25,7 @@
 # Associative arrays (bash 4+) are only used inside the container (Ubuntu).
 set -euo pipefail
 
-KNOWN_TARGETS="macos-arm64 macos-x86_64 windows-x86_64"
+KNOWN_TARGETS="macos-arm64 macos-x86_64"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 
@@ -31,7 +36,36 @@ if [[ -z "$TARGET" ]]; then
     echo "Available targets:"
     echo "  macos-arm64       macOS Apple Silicon (requires osxcross + SDK)"
     echo "  macos-x86_64      macOS Intel (requires osxcross + SDK)"
-    echo "  windows-x86_64    Windows x86_64 (mingw-w64)"
+    echo ""
+    echo "For Windows, use build.sh instead (see docs/windows.md):"
+    echo "  LLVM_MINGW=/path/to/llvm-mingw NCC_PATH=/path/to/ncc \\"
+    echo "      N00B_CROSS=windows-x86_64 bash build.sh"
+    exit 1
+fi
+
+# n00b#526: windows-x86_64 used to be listed here and could not work.
+# It is NOT that Windows is uncrossable -- build.sh crosses to
+# x86_64-w64-windows-gnu with llvm-mingw, that route is documented in
+# docs/windows.md, and its output (build_cross_windows-x86_64) is what
+# scripts/package_windows_smoke.sh and src/n00b/n00b_compile_link.c expect.
+# This script was a second, unmaintained implementation of the same idea that
+# had diverged into something unrunnable: it drove mingw-w64 GCC/clang rather
+# than llvm-mingw, and it built ncc from a `subprojects/ncc` source tree that
+# is not part of n00b. Point people at the route that is maintained rather
+# than repairing a duplicate of it.
+if [[ "$TARGET" == windows-* ]]; then
+    echo "ERROR: '$TARGET' is not built by this script (n00b#526)."
+    echo ""
+    echo "Cross-compile Windows with build.sh instead -- see docs/windows.md:"
+    echo "  export LLVM_MINGW=/path/to/llvm-mingw"
+    echo "  NCC_PATH=/path/to/ncc N00B_CROSS=windows-x86_64 bash build.sh"
+    echo ""
+    echo "That targets x86_64-w64-windows-gnu via llvm-mingw and writes"
+    echo "build_cross_windows-x86_64, which package_windows_smoke.sh consumes."
+    echo ""
+    echo "Note that the MSVC-ABI build CI runs (windows-component.yml,"
+    echo "x86_64-pc-windows-msvc, linking an MSVC-built git2.lib) is a native"
+    echo "Windows build and is not reproducible by any cross route."
     exit 1
 fi
 
@@ -52,13 +86,35 @@ IMAGE_NAME="n00b-linux"
 BUILD_TYPE="${N00B_BUILD_TYPE:-debug}"
 OUTPUT_DIR="${PROJECT_ROOT}/build_cross_${TARGET}"
 
-# Verify ncc subproject exists (host side only).
+# Make sure the ncc SOURCE tree exists, because the container builds ncc
+# natively from it (see "Step 1" below) before cross-compiling n00b with it.
+#
+# n00b#526: this used to just fail and say "run build.sh first (it will clone
+# ncc automatically)". build.sh cannot do that: its hard-fail guard exits when
+# ncc is absent from PATH, long before ensure_ncc/ensure_ncc_subproject is
+# reached. So the advice sent people in a circle, and since subprojects/ncc is
+# not tracked in n00b, a clean checkout hit this every time.
+#
+# Clone it here instead, at the same pinned revision build.sh uses. ncc and
+# n00b co-evolve, so the revision is not optional -- a mismatched ncc produces
+# a binary rather than an error.
 if [[ "${CROSS_INSIDE_CONTAINER:-0}" != "1" ]]; then
-    if [[ ! -f "${PROJECT_ROOT}/subprojects/ncc/meson.build" ]]; then
-        echo "ERROR: ncc subproject not found at subprojects/ncc/"
-        echo "Run 'bash build.sh' first (it will clone ncc automatically),"
-        echo "or manually: git clone https://github.com/crashappsec/ncc.git subprojects/ncc"
-        exit 1
+    NCC_SRC="${PROJECT_ROOT}/subprojects/ncc"
+    if [[ ! -f "${NCC_SRC}/meson.build" ]]; then
+        # Keep in step with build.sh's NCC_REV_DEFAULT (managed by pin-sync,
+        # .pin-sync.json). Read it from build.sh rather than duplicating the
+        # literal, so the pin cannot drift between the two scripts.
+        NCC_REV_FROM_BUILD_SH="$(sed -n 's/^NCC_REV_DEFAULT="\([0-9a-f]*\)".*/\1/p' \
+            "${PROJECT_ROOT}/build.sh" | head -1)"
+        : "${NCC_REV:=${NCC_REV_FROM_BUILD_SH}}"
+        if [[ -z "${NCC_REV}" ]]; then
+            echo "ERROR: could not read NCC_REV_DEFAULT from build.sh, and"
+            echo "       NCC_REV is unset. Refusing to clone an unpinned ncc."
+            exit 1
+        fi
+        echo "=== Cloning ncc into subprojects/ncc (rev ${NCC_REV}) ==="
+        git clone https://github.com/crashappsec/ncc.git "${NCC_SRC}"
+        git -C "${NCC_SRC}" checkout "${NCC_REV}"
     fi
 fi
 
@@ -85,25 +141,6 @@ if [[ "${CROSS_INSIDE_CONTAINER:-0}" == "1" ]]; then
     TARGET_STRIP[macos-x86_64]="x86_64-apple-darwin-strip"
     TARGET_EXTRA_BINARIES[macos-x86_64]=""
     TARGET_NEEDS_WRAPPER[macos-x86_64]="true"
-
-    TARGET_SYSTEM[windows-x86_64]="windows"
-    TARGET_CPU_FAMILY[windows-x86_64]="x86_64"
-    TARGET_CPU[windows-x86_64]="x86_64"
-    TARGET_CC[windows-x86_64]="mingw-clang-wrapper"
-    TARGET_AR[windows-x86_64]="x86_64-w64-mingw32-ar"
-    TARGET_STRIP[windows-x86_64]="x86_64-w64-mingw32-strip"
-    TARGET_EXTRA_BINARIES[windows-x86_64]="windres = '/usr/bin/x86_64-w64-mingw32-windres'"
-    TARGET_NEEDS_WRAPPER[windows-x86_64]="true"
-
-    # Create a clang wrapper for Windows cross-compilation so that
-    # clang (not GCC) is used with the correct --target flag.
-    if [[ "$TARGET" == windows-* ]]; then
-        cat > /usr/local/bin/mingw-clang-wrapper <<'WRAPEOF'
-#!/bin/sh
-exec clang --target=x86_64-w64-mingw32 -fuse-ld=lld "$@"
-WRAPEOF
-        chmod +x /usr/local/bin/mingw-clang-wrapper
-    fi
 
     # We're inside the Docker container.
     # /src is the read-only mount of the project, /output is the output volume.
@@ -195,11 +232,17 @@ CROSSEOF
 
     # NCC_COMPILER tells ncc which actual compiler to invoke
     export NCC_COMPILER="${CROSS_CC_PATH}"
+    # n00b#526: -Dskip_vcs_check=true was missing here while build.sh and
+    # build.ps1 both pass it. The source is a `cp -a` of a read-only mount
+    # into the container, so the VCS freshness guard is asking about a tree
+    # that cannot be fresh by its definition, and it stopped the build for a
+    # reason that has nothing to do with cross-compiling.
     CC=/build/bin/ncc \
     meson setup \
         --cross-file "$CROSS_FILE" \
         --buildtype="${BUILD_TYPE}" \
         -Dusing_build_script=true \
+        -Dskip_vcs_check=true \
         "$BUILD_DIR" .
 
     echo "--- Compiling ---"

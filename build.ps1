@@ -70,9 +70,38 @@ function Invoke-BuildNative {
     )
 
     Write-BuildMessage ("build.ps1: running {0} {1}" -f $Command, ($Arguments -join " "))
-    & $Command @Arguments 2>&1 | ForEach-Object {
-        Write-Host $_
-        Add-Content -Path $script:ResolvedLogPath -Value $_ -Encoding utf8
+
+    # n00b#525: a child tool writing to stderr -- even on SUCCESS -- must not
+    # fail the build.
+    #
+    # Windows PowerShell 5.1 turns native stderr under `2>&1` into ErrorRecord
+    # objects in the pipeline, and under $ErrorActionPreference = "Stop" an
+    # ErrorRecord entering the pipeline is TERMINATING. meson's subproject
+    # fetch makes git print "From <url>" to stderr on a successful fetch, and
+    # the configure died on it with NativeCommandError -- presenting as a
+    # meson failure, on a cold tree only, which is exactly the state a fresh
+    # build box is in. It also truncated the log: everything the child wrote
+    # after its first stderr line was lost with the pipeline.
+    #
+    # $LASTEXITCODE is already the verdict here -- this function returns it
+    # and every call site checks it -- so "Stop" was doing no work for native
+    # commands and only harm. Scope it down to "Continue" for the invocation
+    # and restore it afterwards, so the script-wide "Stop" still covers the
+    # cmdlet errors it was added for.
+    #
+    # This also neutralizes PowerShell 7.4+, where
+    # $PSNativeCommandUseErrorActionPreference defaults to $true and would
+    # otherwise make a nonzero exit code throw instead of returning, bypassing
+    # the call sites' own "exited with code N" reporting.
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command @Arguments 2>&1 | ForEach-Object {
+            Write-Host $_
+            Add-Content -Path $script:ResolvedLogPath -Value $_ -Encoding utf8
+        }
+    } finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
     }
 
     return $LASTEXITCODE
