@@ -438,12 +438,86 @@ rocs_index_norm_err(n00b_err_t err)
     }
 }
 
+// n00b#403: the index error enum is public and narrower than the map's, so a
+// map error has to be collapsed into it. What it must NOT do is lose which
+// one: nine distinct N00B_STORE_MAP_ERR_* codes arrive here and all but ARG
+// left as a bare ERR_STATE (-2), which is also what a legitimately non-SEALED
+// shard returns. That ambiguity cost #403 three debugging sessions and two
+// wrong hypotheses -- a -2 at a call site could mean I/O failure, bad magic,
+// a version or layout mismatch, a range or schema problem, a backing-store
+// error, a cache error, or simply "this shard is not sealed", and the caller
+// has no way to tell those apart.
+//
+// Keep the public mapping exactly as it was -- this is a diagnosis change,
+// not a behaviour change, and callers that switch on these values must not
+// move -- but record the underlying code so it can be recovered.
+//
+// n00b_store_index_last_map_err() returns the most recent map error this
+// thread collapsed. Thread-local because concurrent queries would otherwise
+// overwrite each other's, which on a 963-shard store is every query.
+static _Thread_local n00b_err_t rocs_index_tls_last_map_err = 0;
+static _Thread_local int        rocs_index_tls_last_state   = -1;
+
+n00b_err_t
+n00b_store_index_last_map_err(void)
+{
+    return rocs_index_tls_last_map_err;
+}
+
+void
+n00b_store_index_clear_last_map_err(void)
+{
+    rocs_index_tls_last_map_err  = 0;
+    rocs_index_tls_last_state    = -1;
+}
+
+// The OTHER source of a -2, and the one #403 actually hits: a shard whose
+// state is not SEALED. It does not pass through rocs_index_map_err at all, so
+// without this a -2 is still ambiguous between "some map error" and "not
+// sealed" -- which is half the ambiguity this change exists to remove.
+// -1 means "no non-sealed state recorded"; 0/1/2 are the n00b_shard_state_t
+// values (OPEN / SEALED / DROPPED).
+int
+n00b_store_index_last_unsealed_state(void)
+{
+    return rocs_index_tls_last_state;
+}
+
+static n00b_err_t
+rocs_index_not_sealed(n00b_shard_state_t state)
+{
+    rocs_index_tls_last_state = (int)state;
+    return N00B_STORE_INDEX_ERR_STATE;
+}
+
 static n00b_err_t
 rocs_index_map_err(n00b_err_t err)
 {
+    rocs_index_tls_last_map_err = err;
+
     switch (err) {
     case N00B_STORE_MAP_ERR_ARG: return N00B_STORE_INDEX_ERR_ARG;
     default:                    return N00B_STORE_INDEX_ERR_STATE;
+    }
+}
+
+// The name, for a log line or a breakpoint. Static storage, no allocation --
+// this has to be callable from a crash path and from lldb.
+const char *
+n00b_store_map_err_name(n00b_err_t err)
+{
+    switch (err) {
+    case N00B_STORE_MAP_ERR_ARG:         return "MAP_ERR_ARG";
+    case N00B_STORE_MAP_ERR_IO:          return "MAP_ERR_IO";
+    case N00B_STORE_MAP_ERR_BAD_MAGIC:   return "MAP_ERR_BAD_MAGIC";
+    case N00B_STORE_MAP_ERR_BAD_VERSION: return "MAP_ERR_BAD_VERSION";
+    case N00B_STORE_MAP_ERR_BAD_LAYOUT:  return "MAP_ERR_BAD_LAYOUT";
+    case N00B_STORE_MAP_ERR_RANGE:       return "MAP_ERR_RANGE";
+    case N00B_STORE_MAP_ERR_SCHEMA:      return "MAP_ERR_SCHEMA";
+    case N00B_STORE_MAP_ERR_BACKING:     return "MAP_ERR_BACKING";
+    case N00B_STORE_MAP_ERR_CACHE:       return "MAP_ERR_CACHE";
+    case 0:                              return "none";
+    default:                             return "MAP_ERR_<unknown>";
     }
 }
 
@@ -2338,7 +2412,7 @@ n00b_store_index_lookup_mapped(n00b_store_index_t     *index,
     }
     if (n00b_result_get(state_r) != N00B_SHARD_STATE_SEALED) {
         return n00b_result_err(n00b_store_postings_t *,
-                               N00B_STORE_INDEX_ERR_STATE);
+                               rocs_index_not_sealed(n00b_result_get(state_r)));
     }
 
     auto shard_id_r = n00b_store_map_shard_id(shard);
@@ -3015,7 +3089,7 @@ n00b_store_index_probe_mapped(n00b_store_index_t     *index,
     }
     if (n00b_result_get(state_r) != N00B_SHARD_STATE_SEALED) {
         return n00b_result_err(n00b_store_index_probe_t *,
-                               N00B_STORE_INDEX_ERR_STATE);
+                               rocs_index_not_sealed(n00b_result_get(state_r)));
     }
     if (index->catch_all) {
         return rocs_catch_all_probe_mapped(index, shard, value, allocator);
@@ -3450,7 +3524,7 @@ n00b_store_index_df_mapped(n00b_store_index_t     *index,
                                rocs_index_map_err(n00b_result_get_err(state_r)));
     }
     if (n00b_result_get(state_r) != N00B_SHARD_STATE_SEALED) {
-        return n00b_result_err(uint64_t, N00B_STORE_INDEX_ERR_STATE);
+        return n00b_result_err(uint64_t, rocs_index_not_sealed(n00b_result_get(state_r)));
     }
 
     // Summed over the covered fields, as n00b_store_index_df_hot does.

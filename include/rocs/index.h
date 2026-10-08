@@ -101,6 +101,51 @@ typedef enum : int32_t {
 } n00b_store_index_err_t;
 
 /**
+ * @brief The map-layer error most recently collapsed into an index error, on
+ *        this thread.
+ *
+ * n00b#403: the index error enum is public and narrower than the map's, so
+ * rocs_index_map_err() folds nine distinct @c N00B_STORE_MAP_ERR_* codes into
+ * @c N00B_STORE_INDEX_ERR_STATE. That makes a @c -2 ambiguous between an I/O
+ * failure, bad magic, a version or layout mismatch, a range, schema, backing
+ * or cache error -- and a shard that is simply not sealed.
+ *
+ * This reports which one, for a log line or a breakpoint. Thread-local: on a
+ * store with hundreds of shards, concurrent queries would otherwise overwrite
+ * each other's.
+ *
+ * @return The @c N00B_STORE_MAP_ERR_* code, or 0 if none has been recorded.
+ * @note Diagnostic only. The value returned by the failing call is unchanged;
+ *       do not branch on this.
+ */
+extern n00b_err_t n00b_store_index_last_map_err(void);
+
+/**
+ * @brief The shard state that most recently produced a not-sealed rejection,
+ *        on this thread.
+ *
+ * The other source of a @c -2, and the one n00b#403 hits: a shard whose state
+ * is not @c N00B_SHARD_STATE_SEALED. It does not pass through
+ * rocs_index_map_err(), so @c n00b_store_index_last_map_err() alone cannot
+ * distinguish it.
+ *
+ * @return 0 OPEN / 1 SEALED / 2 DROPPED, or -1 if none has been recorded.
+ * @note Diagnostic only.
+ */
+extern int n00b_store_index_last_unsealed_state(void);
+
+/** @brief Reset both diagnostics for this thread. */
+extern void n00b_store_index_clear_last_map_err(void);
+
+/**
+ * @brief Name of a @c N00B_STORE_MAP_ERR_* code.
+ *
+ * Static storage, no allocation, so it is safe from a crash path and callable
+ * from a debugger.
+ */
+extern const char *n00b_store_map_err_name(n00b_err_t err);
+
+/**
  * @brief One posting result.
  *
  * The record member is a shard-aware view handle. It is never a raw mapped JSON
