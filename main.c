@@ -27732,6 +27732,9 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                         link_source_location(symbol->decl_node));
                     return false;
                 }
+                if (nt_is(grammar, symbol->decl_node, "alias-stmt")
+                    && alias_declaration_is_transparent(symbol->decl_node))
+                    symbol->adt_kind = CORE_STRING_STATIC("alias");
                 if (!symbol->type) {
                     core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
@@ -46156,7 +46159,9 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             for (parse_sym_entry_t *symbol = scope->first_in_scope;
                  valid && symbol; symbol = symbol->next_in_scope) {
                 if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
-                    || !symbol->adt_kind.u8_bytes) continue;
+                    || !symbol->adt_kind.u8_bytes
+                    || core_string_eq(symbol->adt_kind,
+                        CORE_STRING_STATIC("alias"))) continue;
                 core_list_push(sources.type_owners,
                     ((n00bb_abi_type_owner_t){
                         .typehash = th_hash(types, th_resolve(symbol->type)),

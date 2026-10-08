@@ -344,7 +344,9 @@ n00bb_abi_declarations_build(
             parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(
                 declarations, (uint32_t)i);
             if (symbol->kind == PARSE_SYM_TYPEDEF
-                && (symbol->adt_kind.u8_bytes
+                && ((symbol->adt_kind.u8_bytes
+                     && !core_string_eq(symbol->adt_kind,
+                         CORE_STRING_STATIC("alias")))
                     || (symbol->member_scope
                         && (core_string_eq(
                                 symbol->member_scope->scope_tag,

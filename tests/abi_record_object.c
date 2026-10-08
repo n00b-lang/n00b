@@ -1766,6 +1766,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "variant-storage")
             || !strcmp(argv[2], "tuple-storage")
             || !strcmp(argv[2], "anonymous-record-storage")
+            || !strcmp(argv[2], "alias")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -1814,6 +1815,27 @@ main(int argc, char **argv)
         header.directory_count, N00B_ABI_TABLE_U32_STREAM);
     assert(types && fields && symbols && layouts && runs && locations_table
         && stream);
+
+    if (argc == 3 && !strcmp(argv[2], "alias")) {
+        const n00b_abi_symbol_v1 *alias = nullptr;
+        const n00b_abi_symbol_v1 *answer = nullptr;
+        for (uint32_t i = 1; i < symbols->record_count; i++) {
+            const n00b_abi_symbol_v1 *symbol = row_at(&metadata, symbols, i);
+            if (short_name_is(&symbol->name, "Number")) alias = symbol;
+            if (short_name_is(&symbol->name, "answer")) answer = symbol;
+        }
+        assert(alias && answer
+            && alias->kind == N00B_ABI_SYMBOL_TYPE
+            && alias->type_index == answer->type_index
+            && alias->type_index < types->record_count);
+        const n00b_abi_type_v1 *type = row_at(&metadata, types,
+                                               alias->type_index);
+        assert(short_name_is(&type->canonical_name, "int")
+            && !type->owner_module_index);
+        free(entries);
+        free(object);
+        return 0;
+    }
 
     if (cycle_mode) {
         size_t member_count = (size_t)argc - 2;

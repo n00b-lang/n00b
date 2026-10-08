@@ -1,0 +1,2 @@
+public alias Number = int
+public const answer: Number = 42

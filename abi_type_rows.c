@@ -169,7 +169,9 @@ n00bb_abi_type_identity_rows_build(
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
             if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
-                || !symbol->decl_node) continue;
+                || !symbol->decl_node
+                || core_string_eq(symbol->adt_kind,
+                    CORE_STRING_STATIC("alias"))) continue;
             uint32_t row = 0;
             if (!n00bb_abi_type_index_find(index, symbol->type, &row))
                 continue;

@@ -780,6 +780,9 @@ n00bb_abi_emit_unit(
         bool callback = symbol && symbol->kind == PARSE_SYM_TYPEDEF
             && core_string_eq(symbol->adt_kind,
                               CORE_STRING_STATIC("callback"));
+        bool alias = symbol && symbol->kind == PARSE_SYM_TYPEDEF
+            && core_string_eq(symbol->adt_kind,
+                              CORE_STRING_STATIC("alias"));
         bool variant = symbol && symbol->kind == PARSE_SYM_TYPEDEF
             && ((symbol->member_scope
                  && core_string_eq(symbol->member_scope->scope_tag,
@@ -807,7 +810,7 @@ n00bb_abi_emit_unit(
         bool local = symbol && symbol->kind == PARSE_SYM_VARIABLE
             && !symbol->is_field;
         if (!record && !field && !enumeration && !enum_item && !trait
-            && !callback
+            && !callback && !alias
             && !variant && !arm
             && !function && !parameter && !local) {
             core_buffer_t message = {0};
