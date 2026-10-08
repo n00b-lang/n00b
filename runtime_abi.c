@@ -402,6 +402,90 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+metadata_scope_symbols_valid(const n00b_abi_snapshot_v1 *snapshot,
+                             n00b_abi_error_v1 *error)
+{
+    uint32_t scope_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_SCOPE);
+    uint32_t symbol_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_SYMBOL);
+    if (!scope_count && !symbol_count) return true;
+    size_t scratch_bytes = (size_t)scope_count * 2 + symbol_count;
+    uint8_t *scratch = snapshot_alloc(scratch_bytes);
+    if (!scratch) return false;
+    uint8_t *child_seen = scratch;
+    uint8_t *scope_state = scratch + scope_count;
+    uint8_t *symbol_seen = scope_state + scope_count;
+    bool valid = true;
+    for (uint32_t i = 1; valid && i < scope_count; i++) {
+        const n00b_abi_scope_v1 *scope = n00b_abi_v1_scope(snapshot, i);
+        if (scope->parent_scope_index) {
+            const n00b_abi_scope_v1 *parent = n00b_abi_v1_scope(snapshot,
+                scope->parent_scope_index);
+            if (!parent || parent->module_index != scope->module_index) {
+                valid = invalid_record(error, N00B_ABI_TABLE_SCOPE, i, 0);
+                break;
+            }
+        }
+        for (uint32_t j = 0; valid && j < scope->children.count; j++) {
+            uint32_t child_index = 0;
+            const n00b_abi_scope_v1 *child =
+                n00b_abi_v1_index_at(snapshot, scope->children, j,
+                    &child_index) == 1
+                ? n00b_abi_v1_scope(snapshot, child_index) : nullptr;
+            if (!child_index || !child
+                || child->parent_scope_index != i
+                || child->module_index != scope->module_index
+                || child_seen[child_index]++)
+                valid = invalid_record(error, N00B_ABI_TABLE_SCOPE, i, 0);
+        }
+        for (uint32_t j = 0; valid && j < scope->symbols.count; j++) {
+            uint32_t symbol_index = 0;
+            const n00b_abi_symbol_v1 *symbol =
+                n00b_abi_v1_index_at(snapshot, scope->symbols, j,
+                    &symbol_index) == 1
+                ? n00b_abi_v1_symbol(snapshot, symbol_index) : nullptr;
+            if (!symbol_index || !symbol || symbol->scope_index != i
+                || symbol->module_index != scope->module_index
+                || symbol_seen[symbol_index]++)
+                valid = invalid_record(error, N00B_ABI_TABLE_SCOPE, i, 0);
+        }
+    }
+    for (uint32_t i = 1; valid && i < scope_count; i++) {
+        const n00b_abi_scope_v1 *scope = n00b_abi_v1_scope(snapshot, i);
+        if (child_seen[i] != (scope->parent_scope_index != 0)) {
+            valid = invalid_record(error, N00B_ABI_TABLE_SCOPE, i, 0);
+            break;
+        }
+        if (scope_state[i]) continue;
+        uint32_t current = i;
+        while (current && !scope_state[current]) {
+            scope_state[current] = 1;
+            current = n00b_abi_v1_scope(snapshot, current)->parent_scope_index;
+        }
+        if (current && scope_state[current] == 1) {
+            valid = invalid_record(error, N00B_ABI_TABLE_SCOPE, current, 0);
+            break;
+        }
+        current = i;
+        while (current && scope_state[current] == 1) {
+            scope_state[current] = 2;
+            current = n00b_abi_v1_scope(snapshot, current)->parent_scope_index;
+        }
+    }
+    for (uint32_t i = 1; valid && i < symbol_count; i++) {
+        const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(snapshot, i);
+        const n00b_abi_scope_v1 *scope = n00b_abi_v1_scope(snapshot,
+            symbol->scope_index);
+        if (!scope || symbol->module_index != scope->module_index
+            || symbol_seen[i] != 1)
+            valid = invalid_record(error, N00B_ABI_TABLE_SYMBOL, i, 0);
+    }
+    snapshot_free(scratch, scratch_bytes);
+    return valid;
+}
+
+static bool
 metadata_owned_rows_valid(const n00b_abi_snapshot_v1 *snapshot,
                           n00b_abi_error_v1 *error)
 {
@@ -2048,6 +2132,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
             && nil->typehash == UINT64_C(0x0ea862bddb8ce94c);
     }
     if (valid) valid = metadata_references_valid(candidate, error);
+    if (valid) valid = metadata_scope_symbols_valid(candidate, error);
     if (valid) valid = metadata_packages_valid(candidate, error);
     if (valid) valid = metadata_sccs_valid(candidate, error);
     if (valid) valid = metadata_traces_valid(candidate, error);

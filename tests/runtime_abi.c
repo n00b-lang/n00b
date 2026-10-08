@@ -36,7 +36,7 @@ typedef struct {
     n00b_abi_header_v1 header;
     uint8_t directory[25 * N00BB_ABI_DIRECTORY_BYTES];
     n00b_abi_type_v1 types[6];
-    uint32_t indexes[19];
+    uint32_t indexes[20];
     uint64_t values[1];
     uint8_t bytes[4];
     n00b_abi_specialization_link_v1 links[3];
@@ -136,6 +136,7 @@ main(int argc, char **argv)
     image.indexes[13] = 1;
     image.indexes[14] = 1;
     image.indexes[15] = 1;
+    image.indexes[19] = 1;
     image.values[0] = 123;
     memcpy(image.bytes, "abc", 3);
     image.bytes[3] = 1;
@@ -194,6 +195,7 @@ main(int argc, char **argv)
     image.tls_relocations[1].write_byte_offset = 8;
     image.tls_relocations[1].target_kind = N00B_ABI_STORAGE_READ_ONLY;
     image.scopes[1].module_index = 1;
+    image.scopes[1].symbols = (n00b_abi_range_v1){19, 1};
     image.symbols[1].kind = N00B_ABI_SYMBOL_VARIABLE;
     image.symbols[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     image.symbols[1].module_index = 1;
@@ -217,7 +219,7 @@ main(int argc, char **argv)
     directory_entry(&image, 0, N00B_ABI_TABLE_TYPE,
         sizeof(image.types[0]), 6, offsetof(image_t, types));
     directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
-        sizeof(image.indexes[0]), 16, offsetof(image_t, indexes));
+        sizeof(image.indexes[0]), 20, offsetof(image_t, indexes));
     directory_entry(&image, 2, N00B_ABI_TABLE_U64_STREAM,
         sizeof(image.values[0]), 1, offsetof(image_t, values));
     directory_entry(&image, 3, N00B_ABI_TABLE_BYTE_STREAM,
@@ -363,6 +365,30 @@ main(int argc, char **argv)
         && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
     image.symbols[1].kind = N00B_ABI_SYMBOL_VARIABLE;
     image.methods[1].symbol_index = 0;
+    image.scopes[1].symbols = (n00b_abi_range_v1){0};
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_SYMBOL
+        && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+    image.scopes[1].symbols = (n00b_abi_range_v1){19, 1};
+    image.scopes[1].symbols = (n00b_abi_range_v1){18, 2};
+    image.indexes[18] = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_SCOPE
+        && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+    image.scopes[1].symbols = (n00b_abi_range_v1){19, 1};
+    image.indexes[18] = 0;
+    image.scopes[1].parent_scope_index = 1;
+    image.scopes[1].children = (n00b_abi_range_v1){18, 1};
+    image.indexes[18] = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_SCOPE
+        && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+    image.scopes[1].parent_scope_index = 0;
+    image.scopes[1].children = (n00b_abi_range_v1){0};
+    image.indexes[18] = 0;
     image.functions[1].module_index = 99;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
@@ -642,7 +668,7 @@ main(int argc, char **argv)
     if (call_shape) {
         image.header.directory_count = 25;
         directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
-            sizeof(image.indexes[0]), 18, offsetof(image_t, indexes));
+            sizeof(image.indexes[0]), 20, offsetof(image_t, indexes));
         directory_entry(&image, 22, N00B_ABI_TABLE_CONSTRAINT,
             sizeof(image.constraints[0]), 2, offsetof(image_t, constraints));
         directory_entry(&image, 23, N00B_ABI_TABLE_CALL_SHAPE,
@@ -710,7 +736,7 @@ main(int argc, char **argv)
     if (function_parameters) {
         image.header.directory_count = 23;
         directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
-            sizeof(image.indexes[0]), 19, offsetof(image_t, indexes));
+            sizeof(image.indexes[0]), 20, offsetof(image_t, indexes));
         directory_entry(&image, 22, N00B_ABI_TABLE_PARAMETER,
             sizeof(image.parameters[0]), 4, offsetof(image_t, parameters));
         image.indexes[16] = 1;
