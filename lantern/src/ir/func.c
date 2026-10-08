@@ -1287,18 +1287,32 @@ bool ir_instr_set_const_bytes(ir_instr_t *instruction,
         || !instruction->block->owner->owner) return false;
     ir_ctx_t *ctx = instruction->block->owner->owner->ctx;
     char *hex = ir_alloc(ctx, byte_len * 2 + 1);
-    if (!hex) return false;
+    uint8_t *raw = ir_alloc(ctx, byte_len ? byte_len : 1);
+    if (!hex || !raw) return false;
+    if (byte_len) memcpy(raw, bytes, byte_len);
     static const char digits[] = "0123456789abcdef";
     for (size_t i = 0; i < byte_len; i++) {
         hex[i * 2] = digits[bytes[i] >> 4];
         hex[i * 2 + 1] = digits[bytes[i] & 0xf];
     }
     hex[byte_len * 2] = '\0';
-    return ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
+    if (!ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
         .key = "ir.const.bytes",
         .kind = IR_ANNOT_STR,
         .s = hex,
-    });
+    })) return false;
+    instruction->const_bytes = raw;
+    instruction->const_byte_len = byte_len;
+    return true;
+}
+
+const uint8_t *ir_instr_const_bytes(const ir_instr_t *instruction,
+                                   size_t *byte_len)
+{
+    if (!instruction || instruction->op != IR_OP_CONST
+        || !instruction->const_bytes) return nullptr;
+    if (byte_len) *byte_len = instruction->const_byte_len;
+    return instruction->const_bytes;
 }
 
 const char *ir_instr_const_bytes_hex(const ir_instr_t *instruction,

@@ -55,7 +55,8 @@ static void test_ops(void)
           ir_op_is_terminator(IR_OP_TRAP)
               && !ir_op_has_result(IR_OP_TRAP)
               && ir_op_accepts_operands(IR_OP_TRAP, 0)
-              && !ir_op_accepts_operands(IR_OP_TRAP, 1));
+              && ir_op_accepts_operands(IR_OP_TRAP, 1)
+              && !ir_op_accepts_operands(IR_OP_TRAP, 2));
     check("add is not a terminator", !ir_op_is_terminator(IR_OP_ADD));
 
     check("add takes two operands", ir_op_accepts_operands(IR_OP_ADD, 2));

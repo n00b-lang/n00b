@@ -508,7 +508,7 @@ static ir_rule_result_t rule_const(ir_module_t *m, ir_instr_t *in,
                                    ir_diags_t *d, th_type *t)
 {
     size_t byte_len = 0;
-    if (ir_instr_const_bytes_hex(in, &byte_len)) {
+    if (ir_instr_const_bytes(in, &byte_len)) {
         (void)byte_len;
         if (in->n_operands) {
             complain(m, d, IR_DIAG_TYPE_ARGS, in, "this byte constant",

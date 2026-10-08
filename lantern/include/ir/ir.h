@@ -337,6 +337,8 @@ struct ir_instr_t {
     ir_origin_t  *origin;
     ir_shape_t  *shape_constraint;
     ir_annots_t   annots;
+    const uint8_t *const_bytes;
+    size_t         const_byte_len;
     ir_block_t   *block;
     uint32_t      index;
 };
@@ -729,6 +731,8 @@ bool ir_instr_aggregate_form(const ir_instr_t *instruction,
                              ir_aggregate_form_t *form);
 bool ir_instr_set_const_bytes(ir_instr_t *instruction,
                               const uint8_t *bytes, size_t byte_len);
+const uint8_t *ir_instr_const_bytes(const ir_instr_t *instruction,
+                                   size_t *byte_len);
 const char *ir_instr_const_bytes_hex(const ir_instr_t *instruction,
                                      size_t *byte_len);
 /* Retain a generic call site's correlated, instantiated signature. A typed

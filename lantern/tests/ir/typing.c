@@ -1199,9 +1199,13 @@ static void test_aggregates_and_variants(void)
                                                    sizeof(byte_payload));
     size_t byte_length = 0;
     const char *byte_hex = ir_instr_const_bytes_hex(bytes, &byte_length);
+    size_t raw_length = 0;
+    const uint8_t *raw_bytes = ir_instr_const_bytes(bytes, &raw_length);
     check("byte constants preserve embedded zeroes in their IR payload",
           byte_form_set && byte_hex && !strcmp(byte_hex, "0078ff")
               && byte_length == sizeof(byte_payload)
+              && raw_bytes && raw_length == sizeof(byte_payload)
+              && !memcmp(raw_bytes, byte_payload, raw_length)
               && accepts_as(e, bytes, "string"));
 
     ir_instr_t *elements = op(e, IR_OP_AGGREGATE);
