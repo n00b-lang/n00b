@@ -26202,7 +26202,11 @@ record_scope_for_type(n00bb_link_analysis_t *analysis, th_type *type,
                         && !field_record_declaration(analysis->grammar,
                                                      symbol->decl_node)
                         && !nt_is(analysis->grammar, symbol->decl_node,
-                                  "variant-decl"))) continue;
+                                  "variant-decl")
+                        && !nt_is(analysis->grammar, symbol->decl_node,
+                                  "enum-stmt")
+                        && !nt_is(analysis->grammar, symbol->decl_node,
+                                  "flagset-stmt"))) continue;
                 th_type *candidate = th_resolve(symbol->type);
                 if (th_kind_of(candidate) != TH_NAMED
                     || th_hash(state->types, candidate)
@@ -26250,6 +26254,13 @@ field_access_is_visible(core_translation_unit_t *use_unit,
     bool same_package = n00bb_same_package(use_unit, owner_unit);
     if (core_string_eq(field->visibility, CORE_STRING_STATIC("private")))
         return use_unit == owner_unit;
+    if (field->kind == PARSE_SYM_ENUM_CONST) {
+        if (core_string_eq(owner_type->visibility,
+                           CORE_STRING_STATIC("private")))
+            return use_unit == owner_unit;
+        return same_package || core_string_eq(owner_type->visibility,
+                                              CORE_STRING_STATIC("public"));
+    }
     if (same_package) return true;
     return parse_sym_binding(owner_type,
         CORE_STRING_STATIC("n00bb.exposed-record")) != nullptr;
