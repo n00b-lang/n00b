@@ -657,6 +657,7 @@ static void test_recursive_global_initializers(void)
     ir_ctx_t *ctx = ir_ctx_new();
     const char *source =
         "module init_tree {\n  profile bce\n  target t\n\n"
+        "  type variant Choice = (number: i64, small: i8)\n\n"
         "  global @enabled: bool = true\n"
         "  global @answer: i64 = 42\n"
         "  global @ratio: f64 = 1.5\n"
@@ -674,6 +675,12 @@ static void test_recursive_global_initializers(void)
         "  global @lookup: dict[string, i64] = "
         "dict{\"one\" => 1, \"two\" => 2}\n"
         "  global @empty_lookup: dict[string, i64] = dict{}\n"
+        "  global @word: string = \"nil\"\n"
+        "  global @truth_word: string = \"true\"\n"
+        "  global @selected: variant Choice = "
+        "variant{number = 7}\n"
+        "  global @small: variant Choice = "
+        "variant{small = 3}\n"
         "}\n";
     ir_module_t *module = parse(ctx, source, nullptr);
     ir_global_t *numbers = module ? ir_global_find(module, "numbers") : nullptr;
@@ -694,6 +701,13 @@ static void test_recursive_global_initializers(void)
     ir_global_t *lookup = module ? ir_global_find(module, "lookup") : nullptr;
     ir_global_t *empty_lookup = module
         ? ir_global_find(module, "empty_lookup") : nullptr;
+    ir_global_t *word = module ? ir_global_find(module, "word") : nullptr;
+    ir_global_t *truth_word = module
+        ? ir_global_find(module, "truth_word") : nullptr;
+    ir_global_t *selected = module
+        ? ir_global_find(module, "selected") : nullptr;
+    ir_global_t *small = module
+        ? ir_global_find(module, "small") : nullptr;
     check("recursive aggregate global initializers parse", module != nullptr);
     check("scalar globals use the same typed initializer representation",
           enabled && answer && ratio
@@ -776,8 +790,35 @@ static void test_recursive_global_initializers(void)
               && empty_lookup->static_initializer->kind
                   == IR_GLOBAL_INIT_DICTIONARY
               && empty_lookup->static_initializer->aggregate.count == 0);
+    check("variant initializer text retains selected arms",
+          selected && small && selected->has_static_initializer
+              && small->has_static_initializer
+              && selected->static_initializer->kind
+                  == IR_GLOBAL_INIT_VARIANT
+              && selected->static_initializer->aggregate.items[0].kind
+                  == IR_GLOBAL_INIT_INT
+              && small->static_initializer->aggregate.items[0].kind
+                  == IR_GLOBAL_INIT_INT);
+    check("quoted nil remains a string initializer",
+          word && word->has_static_initializer
+              && word->static_initializer->kind == IR_GLOBAL_INIT_STRING
+              && word->static_initializer->string.length == 3
+              && !memcmp(word->static_initializer->string.bytes, "nil", 3));
+    check("quoted boolean spelling remains a string initializer",
+          truth_word && truth_word->has_static_initializer
+              && truth_word->static_initializer->kind
+                  == IR_GLOBAL_INIT_STRING
+              && truth_word->static_initializer->string.length == 4
+              && !memcmp(truth_word->static_initializer->string.bytes,
+                         "true", 4));
     check("recursive initializer text round-trips",
           round_trips(ctx, source, nullptr));
+    ir_ctx_t *invalid_ctx = ir_ctx_new();
+    check("bare identifiers are not static string initializers",
+          !parse(invalid_ctx,
+              "module invalid {\n  profile bce\n  target t\n\n"
+              "  global @value: string = unknown\n}\n", nullptr));
+    ir_ctx_free(invalid_ctx);
     ir_ctx_free(ctx);
 }
 

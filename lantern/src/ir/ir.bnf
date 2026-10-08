@@ -69,15 +69,16 @@
 
 <init> ::= %"=" <signed-number>
 <global-init> ::= %"=" <global-init-value>
-<global-init-value> ::= <signed-number> | %STRING_LIT | %"true" | %"false"
+<global-init-value> ::= <signed-number> | %STRING_LIT | %"true" | %"false" | %IDENTIFIER
                       | <global> | <global-init-sequence>
                       | <global-init-tuple> | <global-init-record>
                       | <global-init-set> | <global-init-dictionary>
-                      | <global-init-phase-result>
+                      | <global-init-phase-result> | <global-init-variant>
 <global-init-phase-result> @nospace($2) ::= %"$" %STRING_LIT
 <global-init-sequence> ::= %"[" <global-init-values>? %"]"
 <global-init-tuple> ::= %"(" <global-init-values>? %")"
 <global-init-record> ::= %"{" <global-init-fields>? %"}"
+<global-init-variant> ::= %"variant" %"{" <global-init-field> %"}"
 <global-init-set> ::= %"set" %"{" <global-init-values>? %"}"
 <global-init-dictionary> ::= %"dict" %"{" <global-init-pairs>? %"}"
 <global-init-values> ::= <global-init-value> (%"," <global-init-value>)*

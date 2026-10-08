@@ -960,14 +960,23 @@ static void *r_global_init_value(parse_reduce_t *r)
         n->text = raw->text;
         n->refkind = IR_VAL_GLOBAL;
     } else if (raw->kind == IB_NAME && raw->text) {
-        if (!strcmp(raw->text, "true") || !strcmp(raw->text, "false")) {
-            n->uval = IR_GLOBAL_INIT_BOOL;
-            n->neg = !strcmp(raw->text, "true");
-        } else {
+        parse_tree_t *source = core_tree_child(r->node, 0);
+        int32_t tid = core_tree_is_leaf(source)
+            ? parse_tree_leaf_tid(source) : -1;
+        if (tid == ir_grammar_tid("STRING_LIT")) {
             n->uval = IR_GLOBAL_INIT_STRING;
             n->is_string = true;
             n->text = raw->text;
             n->text_length = raw->text_length;
+        } else if (tid == ir_grammar_tid("IDENTIFIER")
+            && !strcmp(raw->text, "nil")) {
+            n->uval = IR_GLOBAL_INIT_NIL;
+        } else if (!strcmp(raw->text, "true") || !strcmp(raw->text, "false")) {
+            n->uval = IR_GLOBAL_INIT_BOOL;
+            n->neg = !strcmp(raw->text, "true");
+        } else {
+            bfail(b, cover(r), "bare identifier is not a global initializer");
+            return nullptr;
         }
     } else {
         return nullptr;
@@ -1053,6 +1062,16 @@ static void *r_global_init_record(parse_reduce_t *r)
 {
     return global_init_aggregate(r, IR_GLOBAL_INIT_RECORD,
         CORE_STRING_STATIC("global-init-fields"));
+}
+
+static void *r_global_init_variant(parse_reduce_t *r)
+{
+    ib_node *field = at(r, CORE_STRING_STATIC("global-init-field"));
+    if (!field || !field->member || !field->first) return nullptr;
+    ib_node *value = nd(r->thunk, IB_INIT, cover(r));
+    value->uval = IR_GLOBAL_INIT_VARIANT;
+    value->first = field;
+    return value;
 }
 
 static void *r_global_init_pair(parse_reduce_t *r)
@@ -1151,6 +1170,8 @@ static bool build_global_init_value(B *b, ib_node *source,
         value->string.bytes = source->text;
         value->string.length = source->text_length;
         return true;
+    case IR_GLOBAL_INIT_NIL:
+        return true;
     case IR_GLOBAL_INIT_PHASE_RESULT:
         if (!source->text || !source->text[0]) return false;
         value->phase_result.identifier = source->text;
@@ -1194,6 +1215,17 @@ static bool build_global_init_value(B *b, ib_node *source,
         }
         value->aggregate.items = items;
         value->aggregate.count = count;
+        return true;
+    }
+    case IR_GLOBAL_INIT_VARIANT: {
+        ib_node *field = source->first;
+        if (!field || !field->member || !field->first) return false;
+        ir_global_init_value_t *item = ir_alloc(b->ctx, sizeof(*item));
+        if (!item || !build_global_init_value(b, field->first, item,
+                                              depth + 1)) return false;
+        item->member = field->member;
+        value->aggregate.items = item;
+        value->aggregate.count = 1;
         return true;
     }
     case IR_GLOBAL_INIT_DICTIONARY: {
@@ -2581,6 +2613,7 @@ static bool resolve_static_initializer_symbols(B *b,
     case IR_GLOBAL_INIT_SEQUENCE:
     case IR_GLOBAL_INIT_TUPLE:
     case IR_GLOBAL_INIT_RECORD:
+    case IR_GLOBAL_INIT_VARIANT:
     case IR_GLOBAL_INIT_SET:
     case IR_GLOBAL_INIT_DICTIONARY:
         if (value->aggregate.count && !value->aggregate.items) return false;
@@ -2709,6 +2742,8 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
         r_global_init_fields);
     reg(&b, w, CORE_STRING_STATIC("global-init-record"),
         r_global_init_record);
+    reg(&b, w, CORE_STRING_STATIC("global-init-variant"),
+        r_global_init_variant);
     reg(&b, w, CORE_STRING_STATIC("global-init-pair"), r_global_init_pair);
     reg(&b, w, CORE_STRING_STATIC("global-init-pairs"),
         r_global_init_pairs);

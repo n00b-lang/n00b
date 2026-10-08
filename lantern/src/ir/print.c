@@ -321,6 +321,9 @@ static void put_global_init_value(core_buffer_t *b,
     case IR_GLOBAL_INIT_FLOAT:
         core_buffer_printf(b, "%.17g", value->floating);
         break;
+    case IR_GLOBAL_INIT_NIL:
+        core_buffer_puts(b, "nil");
+        break;
     case IR_GLOBAL_INIT_STRING:
         ir_quote_n(b, value->string.bytes, value->string.length);
         break;
@@ -360,6 +363,16 @@ static void put_global_init_value(core_buffer_t *b,
             put_global_init_value(b, item);
         }
         core_buffer_puts(b, value->aggregate.count ? " }" : "}");
+        break;
+    case IR_GLOBAL_INIT_VARIANT:
+        core_buffer_printf(b, "variant{%s = ",
+            value->aggregate.count == 1 && value->aggregate.items
+                && value->aggregate.items[0].member
+                ? value->aggregate.items[0].member : "?");
+        if (value->aggregate.count == 1 && value->aggregate.items)
+            put_global_init_value(b, value->aggregate.items);
+        else core_buffer_puts(b, "?");
+        core_buffer_puts(b, "}");
         break;
     case IR_GLOBAL_INIT_SET:
         core_buffer_puts(b, "set{");

@@ -299,6 +299,8 @@ static bool global_init_value_matches(ir_module_t *module,
     case IR_GLOBAL_INIT_PHASE_RESULT:
         return value->phase_result.identifier
             && value->phase_result.identifier[0];
+    case IR_GLOBAL_INIT_NIL:
+        return global_init_named_type(type, "nil", 0);
     case IR_GLOBAL_INIT_SEQUENCE: {
         const th_type *element = nullptr;
         uint64_t extent = 0;
@@ -351,6 +353,19 @@ static bool global_init_value_matches(ir_module_t *module,
                 return false;
         }
         return true;
+    }
+    case IR_GLOBAL_INIT_VARIANT: {
+        bool variant = false;
+        const th_type *shape = global_init_record_type(module, type);
+        if (!th_named_info(type, nullptr, nullptr, &variant, nullptr)
+            || !variant || !shape || th_kind_of(shape) != TH_RECORD
+            || value->aggregate.count != 1 || !value->aggregate.items)
+            return false;
+        const ir_global_init_value_t *item = value->aggregate.items;
+        const th_type *arm = item->member
+            ? th_record_lookup(shape, item->member) : nullptr;
+        return arm && global_init_value_matches(module, item, arm,
+                                                 depth + 1);
     }
     case IR_GLOBAL_INIT_SET: {
         const th_type *element = global_init_named_type(type, "set", 1)
@@ -420,6 +435,7 @@ static bool clone_global_init_value(ir_ctx_t *ctx,
     case IR_GLOBAL_INIT_SEQUENCE:
     case IR_GLOBAL_INIT_TUPLE:
     case IR_GLOBAL_INIT_RECORD:
+    case IR_GLOBAL_INIT_VARIANT:
     case IR_GLOBAL_INIT_SET:
     case IR_GLOBAL_INIT_DICTIONARY: {
         size_t count = source->aggregate.count;
@@ -436,6 +452,7 @@ static bool clone_global_init_value(ir_ctx_t *ctx,
     case IR_GLOBAL_INIT_BOOL:
     case IR_GLOBAL_INIT_INT:
     case IR_GLOBAL_INIT_FLOAT:
+    case IR_GLOBAL_INIT_NIL:
         return true;
     }
     return false;

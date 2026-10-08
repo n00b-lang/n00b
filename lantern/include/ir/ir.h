@@ -258,6 +258,8 @@ typedef enum : uint8_t {
     IR_GLOBAL_INIT_RECORD,
     IR_GLOBAL_INIT_SET,
     IR_GLOBAL_INIT_DICTIONARY,
+    IR_GLOBAL_INIT_NIL,
+    IR_GLOBAL_INIT_VARIANT,
 } ir_global_init_kind_t;
 
 typedef struct ir_global_init_value ir_global_init_value_t;
@@ -579,7 +581,7 @@ bool         ir_global_set_record_initializer(
     ir_module_t *m, ir_global_t *global,
     const ir_global_init_value_t *values, size_t count);
 /* Set a recursively typed static initializer. Aggregate child nodes are
- * copied into the IR context; record children name their corresponding field. */
+ * copied into the IR context; record and variant children name their member. */
 bool ir_global_set_static_initializer(
     ir_module_t *m, ir_global_t *global,
     const ir_global_init_value_t *value);

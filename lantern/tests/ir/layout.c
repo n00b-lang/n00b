@@ -1426,6 +1426,50 @@ static void test_recursive_global_static_initializer(void)
     check("global static initializer rejects recursively mismatched types",
           bad && !ir_global_set_static_initializer(module, bad,
                                                     &bad_initializer));
+    th_type *nil = th_name(types, "nil");
+    th_type *variant = th_variant(types, "Choice", (th_arg[]){
+        {.kind = TH_ARG_TYPE, .type = integer},
+        {.kind = TH_ARG_TYPE, .type = nil},
+    }, 2);
+    th_type *variant_shape = th_record(types, (th_member[]){
+        {.name = "number", .type = integer},
+        {.name = "empty", .type = nil},
+    }, 2);
+    ir_global_t *selected = ir_global_add(module, "selected", variant);
+    ir_global_t *empty = ir_global_add(module, "empty", variant);
+    ir_global_t *invalid = ir_global_add(module, "invalid", variant);
+    ir_global_init_value_t number = {
+        .member = "number", .kind = IR_GLOBAL_INIT_INT,
+        .integer = ir_lit_of(7),
+    };
+    ir_global_init_value_t empty_arm = {
+        .member = "empty", .kind = IR_GLOBAL_INIT_NIL,
+    };
+    bool variant_ready = ir_type_define(module, variant, variant_shape);
+    bool number_set = variant_ready && selected
+        && ir_global_set_static_initializer(module, selected,
+            &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_VARIANT,
+                .aggregate = {.items = &number, .count = 1}});
+    number.integer = ir_lit_of(99);
+    check("variant static initializer retains one selected arm", number_set
+        && selected->static_initializer->aggregate.items[0].integer.mag == 7);
+    check("variant static initializer accepts nil arm", variant_ready
+        && empty && ir_global_set_static_initializer(module, empty,
+            &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_VARIANT,
+                .aggregate = {.items = &empty_arm, .count = 1}}));
+    ir_global_init_value_t wrong_payload = {
+        .member = "number", .kind = IR_GLOBAL_INIT_NIL,
+    };
+    check("variant static initializer rejects mismatched arm payload",
+        variant_ready && invalid && !ir_global_set_static_initializer(
+            module, invalid,
+            &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_VARIANT,
+                .aggregate = {.items = &wrong_payload, .count = 1}}));
+    check("variant static initializer rejects multiple active arms",
+        invalid && !ir_global_set_static_initializer(module, invalid,
+            &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_VARIANT,
+                .aggregate = {.items = (ir_global_init_value_t[]){
+                    number, empty_arm}, .count = 2}}));
     ir_ctx_free(ctx);
 }
 
