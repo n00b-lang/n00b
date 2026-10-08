@@ -63,6 +63,24 @@ read_object(const char *path, size_t *object_bytes)
     return object;
 }
 
+static uint8_t *
+archive_object(const uint8_t *object, size_t object_bytes,
+               size_t *archive_bytes)
+{
+    *archive_bytes = 8 + 60 + object_bytes + (object_bytes & 1);
+    uint8_t *archive = malloc(*archive_bytes);
+    assert(archive);
+    memcpy(archive, "!<arch>\n", 8);
+    char header[61];
+    assert(snprintf(header, sizeof(header),
+        "%-16s%-12d%-6d%-6d%-8d%-10zu`\n",
+        "third.o/", 0, 0, 0, 0, object_bytes) == 60);
+    memcpy(archive + 8, header, 60);
+    memcpy(archive + 68, object, object_bytes);
+    if (object_bytes & 1) archive[68 + object_bytes] = '\n';
+    return archive;
+}
+
 static void
 test_static_string_identity(void)
 {
@@ -193,15 +211,29 @@ test_cycle_selection(char **paths)
     core_translation_unit_t units[3] = {0};
     n00bb_abi_object_input_t inputs[4] = {0};
     uint8_t *objects[3];
+    size_t object_sizes[3];
     for (size_t i = 0; i < 3; i++) {
         assert(init_unit(&units[i], names[i]));
-        size_t bytes;
-        objects[i] = read_object(paths[i], &bytes);
+        objects[i] = read_object(paths[i], &object_sizes[i]);
         inputs[2 - i] = (n00bb_abi_object_input_t){
-            .module = core_string_from_cstr(names[i]),
-            .object = objects[i], .object_bytes = bytes,
+            .module = i == 2 ? (core_string_t){0}
+                             : core_string_from_cstr(names[i]),
+            .object = objects[i], .object_bytes = object_sizes[i],
         };
     }
+    size_t archive_bytes = 0;
+    uint8_t *archive = archive_object(objects[2], object_sizes[2],
+                                      &archive_bytes);
+    n00bb_abi_archive_inputs_t archive_inputs = {0};
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    assert(!n00bb_abi_archive_inputs_open(&target, archive,
+        archive_bytes - 1, &archive_inputs) && !archive_inputs.objects);
+    assert(n00bb_abi_archive_inputs_open(&target, archive,
+        archive_bytes, &archive_inputs) && archive_inputs.count == 1
+        && core_string_eq(archive_inputs.objects[0].module,
+            CORE_STRING_STATIC("cycle_long_c")));
+    inputs[0] = archive_inputs.objects[0];
     inputs[3].module = CORE_STRING_STATIC("unrelated");
     assert(core_translation_unit_add_import(&units[0], &units[1])
         && core_translation_unit_add_import(&units[1], &units[2])
@@ -209,8 +241,6 @@ test_cycle_selection(char **paths)
     core_link_unit_t *link = core_link_unit_new();
     assert(link && core_link_unit_add_root(link, &units[0])
         && core_link_unit_finalize_graph(link));
-    core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
     n00bb_abi_selected_objects_t selected = {0};
     assert(n00bb_abi_select_objects(link, &target, inputs, 4, &selected)
         && selected.count == 3);
@@ -500,6 +530,8 @@ test_cycle_selection(char **paths)
     assert(!n00bb_abi_select_objects(link, &target, inputs, 4, &selected)
         && !selected.views);
     core_link_unit_free(link);
+    n00bb_abi_archive_inputs_release(&archive_inputs);
+    free(archive);
     for (size_t i = 0; i < 3; i++) {
         core_translation_unit_release(&units[i]);
         free(objects[i]);

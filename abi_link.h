@@ -6,6 +6,7 @@
 #include "lib/indexed_table.h"
 #include "lib/link_unit.h"
 #include "lib/object_emit.h"
+#include "lib/native_archive.h"
 #include "lib/object_section.h"
 
 typedef struct {
@@ -30,6 +31,11 @@ typedef struct {
 } n00bb_abi_object_input_t;
 
 typedef struct {
+    n00bb_abi_object_input_t *objects;
+    size_t count;
+} n00bb_abi_archive_inputs_t;
+
+typedef struct {
     n00bb_abi_object_view_t *views;
     size_t count;
 } n00bb_abi_selected_objects_t;
@@ -50,6 +56,13 @@ const void *n00bb_abi_object_row(const n00bb_abi_object_view_t *view,
 bool n00bb_abi_object_string(const n00bb_abi_object_view_t *view,
                              const n00b_abi_string_v1 *value,
                              n00bb_abi_string_view_t *out);
+
+/* Extracts ABI object members from a regular native archive. Module names and
+ * object bytes borrow the archive; release frees only the input array. */
+bool n00bb_abi_archive_inputs_open(const core_target_desc_t *target,
+                                    const void *archive, size_t archive_bytes,
+                                    n00bb_abi_archive_inputs_t *out);
+void n00bb_abi_archive_inputs_release(n00bb_abi_archive_inputs_t *inputs);
 
 /* Selects exactly one object for each TU in the finalized link graph.
  * Unrelated candidates are ignored; selected objects are checked against
