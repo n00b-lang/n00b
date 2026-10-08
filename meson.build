@@ -326,6 +326,7 @@ test(
 test(
     'preprocessor',
     find_program('sh'),
+    suite: 'regression',
     args: [meson.current_source_dir() / 'tests' / 'preprocessor.sh',
            n00bb_exe.full_path(), storage_interface_writer.full_path(),
            abi_record_object_test.full_path(),

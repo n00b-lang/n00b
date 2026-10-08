@@ -30,7 +30,8 @@ Usage: ./build.sh [command] [args]
   (no command)        configure if needed, compile only
   configure [opts]    reconfigure from scratch; opts go to meson setup
   compile [opts]      compile only; opts go to meson compile
-  test [opts]         compile, then run tests (requires N00BB_RUN_TESTS=1)
+  test [names/opts]   compile, then run short tests (or selected short tests)
+  test-full [opts]    compile, then run the full regression suite
   bench [opts]        compile, then run the benchmarks and gates
   tu <file.c>         recompile exactly one lantern source file
   clean               remove the build directory
@@ -40,7 +41,6 @@ meson or ninja by hand; reaching past it is how flags drift between what a
 check runs and what the build runs.
 
 BUILD_DIR overrides the build directory (default: build/).
-N00BB_RUN_TESTS=1 explicitly enables the test command.
 USAGE
 }
 
@@ -121,10 +121,12 @@ refuse_stale() {
 }
 
 do_test() {
-    if [ "${N00BB_RUN_TESTS:-}" != 1 ]; then
-        echo "n00bb: tests are disabled by default; set N00BB_RUN_TESTS=1 to run them" >&2
-        return 2
-    fi
+    do_compile || refuse_stale tests
+
+    meson test -C "$BUILD_DIR" --no-suite regression "$@"
+}
+
+do_test_full() {
     do_compile || refuse_stale tests
 
     meson test -C "$BUILD_DIR" "$@"
@@ -151,6 +153,10 @@ case "${1:-}" in
     test)
         shift
         do_test "$@"
+        ;;
+    test-full)
+        shift
+        do_test_full "$@"
         ;;
     bench)
         shift
