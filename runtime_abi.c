@@ -1340,6 +1340,67 @@ metadata_functions_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+metadata_call_shape_parameters_valid(const n00b_abi_snapshot_v1 *snapshot,
+                                     const n00b_abi_call_shape_v1 *shape,
+                                     uint32_t shape_index,
+                                     n00b_abi_error_v1 *error)
+{
+    for (uint32_t i = 0; i < shape->positional_parameters.count; i++) {
+        uint32_t parameter_index = 0;
+        if (n00b_abi_v1_index_at(snapshot, shape->positional_parameters,
+                i, &parameter_index) != 1)
+            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
+                                  shape_index, 0);
+        const n00b_abi_parameter_v1 *parameter = n00b_abi_v1_record(
+            snapshot, N00B_ABI_TABLE_PARAMETER, parameter_index, nullptr);
+        const uint8_t *name = nullptr;
+        uint64_t name_bytes = 0;
+        if (!parameter || parameter->flags
+            || parameter->declaration_ordinal != i
+            || parameter->keyword_block_bit_offset
+            || n00b_abi_v1_string_bytes(snapshot, &parameter->name,
+                &name, &name_bytes) != 1 || name_bytes)
+            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
+                                  shape_index, 0);
+    }
+    if (shape->rest_parameter_index) {
+        const n00b_abi_parameter_v1 *rest = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_PARAMETER, shape->rest_parameter_index, nullptr);
+        const uint8_t *name = nullptr;
+        uint64_t name_bytes = 0;
+        if (!rest || rest->flags != N00B_ABI_PARAMETER_FLAG_VARIADIC
+            || rest->declaration_ordinal != shape->positional_parameters.count
+            || rest->keyword_block_bit_offset
+            || n00b_abi_v1_string_bytes(snapshot, &rest->name,
+                &name, &name_bytes) != 1 || name_bytes)
+            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
+                                  shape_index, 0);
+    }
+    for (uint32_t i = 0; i < shape->keyword_parameters.count; i++) {
+        uint64_t ordinal = (uint64_t)shape->positional_parameters.count
+            + !!shape->rest_parameter_index + i;
+        uint32_t parameter_index = 0;
+        if (ordinal > UINT32_MAX
+            || n00b_abi_v1_index_at(snapshot, shape->keyword_parameters,
+                i, &parameter_index) != 1)
+            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
+                                  shape_index, 0);
+        const n00b_abi_parameter_v1 *parameter = n00b_abi_v1_record(
+            snapshot, N00B_ABI_TABLE_PARAMETER, parameter_index, nullptr);
+        const uint8_t *name = nullptr;
+        uint64_t name_bytes = 0;
+        if (!parameter || parameter->flags
+            || parameter->declaration_ordinal != ordinal
+            || parameter->keyword_block_bit_offset
+            || n00b_abi_v1_string_bytes(snapshot, &parameter->name,
+                &name, &name_bytes) != 1 || !name_bytes)
+            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
+                                  shape_index, 0);
+    }
+    return true;
+}
+
+static bool
 metadata_call_shapes_valid(const n00b_abi_snapshot_v1 *snapshot,
                            n00b_abi_error_v1 *error)
 {
@@ -1355,14 +1416,8 @@ metadata_call_shapes_valid(const n00b_abi_snapshot_v1 *snapshot,
             || shape->success_type_index == N00B_ABI_V1_NO_TYPE_INDEX)
             valid = invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE, i, 0);
         if (!valid) break;
-        if (shape->rest_parameter_index) {
-            const n00b_abi_parameter_v1 *rest = n00b_abi_v1_record(snapshot,
-                N00B_ABI_TABLE_PARAMETER, shape->rest_parameter_index,
-                nullptr);
-            if (!rest || !(rest->flags & N00B_ABI_PARAMETER_FLAG_VARIADIC))
-                valid = invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
-                                       i, 0);
-        }
+        valid = metadata_call_shape_parameters_valid(snapshot, shape,
+                                                     i, error);
     }
     uint32_t constraint_count = n00b_abi_v1_table_count(snapshot,
         N00B_ABI_TABLE_CONSTRAINT);

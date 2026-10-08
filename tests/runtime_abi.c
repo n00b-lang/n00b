@@ -34,7 +34,7 @@
 
 typedef struct {
     n00b_abi_header_v1 header;
-    uint8_t directory[24 * N00BB_ABI_DIRECTORY_BYTES];
+    uint8_t directory[25 * N00BB_ABI_DIRECTORY_BYTES];
     n00b_abi_type_v1 types[6];
     uint32_t indexes[19];
     uint64_t values[1];
@@ -640,17 +640,33 @@ main(int argc, char **argv)
     image.functions[3].valid_keyword_bits = 0;
     image.types[5].typehash = image.types[1].typehash + 16;
     if (call_shape) {
-        image.header.directory_count = 24;
+        image.header.directory_count = 25;
+        directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
+            sizeof(image.indexes[0]), 18, offsetof(image_t, indexes));
         directory_entry(&image, 22, N00B_ABI_TABLE_CONSTRAINT,
             sizeof(image.constraints[0]), 2, offsetof(image_t, constraints));
         directory_entry(&image, 23, N00B_ABI_TABLE_CALL_SHAPE,
             sizeof(image.call_shapes[0]), 2, offsetof(image_t, call_shapes));
+        directory_entry(&image, 24, N00B_ABI_TABLE_PARAMETER,
+            sizeof(image.parameters[0]), 4, offsetof(image_t, parameters));
         image.constraints[1].kind = N00B_ABI_CONSTRAINT_METHOD;
         image.constraints[1].result_type_index = 0;
         image.constraints[1].target_type_index = N00B_ABI_V1_NO_TYPE_INDEX;
         image.constraints[1].call_shape_index = 1;
         image.call_shapes[1].success_type_index = 0;
         image.call_shapes[1].failure_type_index = N00B_ABI_V1_NO_TYPE_INDEX;
+        image.call_shapes[1].positional_parameters =
+            (n00b_abi_range_v1){16, 1};
+        image.call_shapes[1].rest_parameter_index = 2;
+        image.call_shapes[1].keyword_parameters =
+            (n00b_abi_range_v1){17, 1};
+        image.indexes[16] = 1;
+        image.indexes[17] = 3;
+        image.parameters[2].flags = N00B_ABI_PARAMETER_FLAG_VARIADIC;
+        image.parameters[2].declaration_ordinal = 1;
+        image.parameters[3].declaration_ordinal = 2;
+        image.parameters[3].name.short_value.selector = 1;
+        image.parameters[3].name.short_value.bytes[0] = 'k';
         image.constraints[1].call_shape_index = 0;
         assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
             == N00B_ABI_BAD_METADATA
@@ -666,6 +682,30 @@ main(int argc, char **argv)
             && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
         directory_entry(&image, 22, N00B_ABI_TABLE_CONSTRAINT,
             sizeof(image.constraints[0]), 2, offsetof(image_t, constraints));
+        image.parameters[1].flags = N00B_ABI_PARAMETER_FLAG_VARIADIC;
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_CALL_SHAPE
+            && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+        image.parameters[1].flags = 0;
+        image.parameters[2].flags = 0;
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_CALL_SHAPE
+            && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+        image.parameters[2].flags = N00B_ABI_PARAMETER_FLAG_VARIADIC;
+        image.parameters[3].name.short_value.selector = 0;
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_CALL_SHAPE
+            && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+        image.parameters[3].name.short_value.selector = 1;
+        image.parameters[1].declaration_ordinal = 1;
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_CALL_SHAPE
+            && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+        image.parameters[1].declaration_ordinal = 0;
     }
     if (function_parameters) {
         image.header.directory_count = 23;
