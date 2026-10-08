@@ -1157,6 +1157,37 @@ test_imported_value_requirement(const char *root_path, const char *dep_path)
     core_free(linked);
     linked = nullptr;
     linked_bytes = 0;
+    n00b_abi_symbol_v1 *provider_symbol = (void *)symbol;
+    uint32_t saved_visibility = provider_symbol->visibility;
+    provider_symbol->visibility = N00B_ABI_VISIBILITY_PRIVATE;
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes) && !linked && !linked_bytes);
+    provider_symbol->visibility = N00B_ABI_VISIBILITY_PACKAGE;
+    assert(n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes));
+    core_free(linked);
+    linked = nullptr;
+    linked_bytes = 0;
+    n00b_abi_package_v1 *provider_package = (void *)n00bb_abi_object_row(
+        dep_view, N00B_ABI_TABLE_PACKAGE, 1);
+    n00bb_abi_string_view_t package_name;
+    assert(provider_package && n00bb_abi_object_string(dep_view,
+        &provider_package->name, &package_name)
+        && package_name.length > 0);
+    uint8_t *package_first = (void *)package_name.bytes;
+    uint8_t original_package_first = *package_first;
+    *package_first =
+        original_package_first == 'x' ? 'y' : 'x';
+    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes) && !linked && !linked_bytes);
+    provider_symbol->visibility = N00B_ABI_VISIBILITY_PUBLIC;
+    assert(n00bb_abi_link_selected_objects(&selected, &target,
+        &linked, &linked_bytes));
+    core_free(linked);
+    linked = nullptr;
+    linked_bytes = 0;
+    *package_first = original_package_first;
+    provider_symbol->visibility = saved_visibility;
     uint32_t saved_symbol = storage->symbol_index;
     storage->symbol_index = 0;
     assert(!n00bb_abi_link_selected_objects(&selected, &target,

@@ -197,6 +197,30 @@ main(void)
         && !memcmp(rows.source_files[2].path.short_value.bytes,
                    "consumer.n00b", 13));
     n00bb_abi_declarations_release(&rows);
+    type_symbol->visibility = (core_string_t){0};
+    assert(n00bb_abi_declarations_build(declarations, type_index,
+        &type_rows, &unit, tokens, names, source_of_node, &sources, 5, &rows)
+        && rows.symbols[type_symbol_index].visibility
+            == N00B_ABI_VISIBILITY_PACKAGE
+        && rows.symbols[field_symbol_index].visibility
+            == N00B_ABI_VISIBILITY_PACKAGE
+        && !(rows.symbols[type_symbol_index].flags
+            & N00B_ABI_SYMBOL_FLAG_EXPORTED));
+    n00bb_abi_declarations_release(&rows);
+    type_symbol->visibility = CORE_STRING_STATIC("private");
+    assert(n00bb_abi_declarations_build(declarations, type_index,
+        &type_rows, &unit, tokens, names, source_of_node, &sources, 5, &rows)
+        && rows.symbols[type_symbol_index].visibility
+            == N00B_ABI_VISIBILITY_PRIVATE
+        && rows.symbols[field_symbol_index].visibility
+            == N00B_ABI_VISIBILITY_PRIVATE);
+    n00bb_abi_declarations_release(&rows);
+    field_symbol->visibility = CORE_STRING_STATIC("protected");
+    assert(n00bb_abi_declarations_build(declarations, type_index,
+        &type_rows, &unit, tokens, names, source_of_node, &sources, 5, &rows)
+        && rows.symbols[field_symbol_index].visibility
+            == N00B_ABI_VISIBILITY_PACKAGE);
+    n00bb_abi_declarations_release(&rows);
     n00bb_abi_decl_index_free(declarations);
     n00bb_abi_type_identity_rows_release(&type_rows);
     n00bb_abi_name_pool_free(names);

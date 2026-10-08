@@ -238,6 +238,13 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
         const n00bb_abi_directory_entry_t *requirements =
             n00bb_abi_object_table(requester, N00B_ABI_TABLE_REQUIREMENT);
         if (!requirements) continue;
+        const n00b_abi_module_v1 *requesting_module =
+            n00bb_abi_object_row(requester, N00B_ABI_TABLE_MODULE, 1);
+        uint32_t requesting_package;
+        if (!requesting_module
+            || !n00bb_abi_index_plan_map(plan, input,
+                N00B_ABI_TABLE_PACKAGE, requesting_module->package_index,
+                &requesting_package)) return false;
         for (uint32_t i = 1; i < requirements->record_count; i++) {
             const n00b_abi_requirement_v1 *request =
                 n00bb_abi_object_row(requester,
@@ -277,6 +284,10 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                 n00bb_abi_string_view_t module_name;
                 if (!module || !n00bb_abi_object_string(provider,
                         &module->full_path, &module_name)) return false;
+                uint32_t provider_package;
+                if (!n00bb_abi_index_plan_map(plan, provider_input,
+                        N00B_ABI_TABLE_PACKAGE, module->package_index,
+                        &provider_package)) return false;
                 if (wanted.length <= module_name.length + 1
                     || memcmp(wanted.bytes, module_name.bytes,
                         module_name.length)
@@ -291,6 +302,15 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                             N00B_ABI_TABLE_SYMBOL, j);
                     if (!symbol || symbol->kind != request->symbol_kind
                         || symbol->module_index != 1) continue;
+                    const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(
+                        provider, N00B_ABI_TABLE_SCOPE, symbol->scope_index);
+                    if (!scope || scope->parent_scope_index
+                        || scope->module_index != 1) continue;
+                    if ((symbol->visibility == N00B_ABI_VISIBILITY_PRIVATE
+                         && provider_input != input)
+                        || (symbol->visibility == N00B_ABI_VISIBILITY_PACKAGE
+                            && provider_package != requesting_package))
+                        continue;
                     n00bb_abi_string_view_t name;
                     if (!n00bb_abi_object_string(provider, &symbol->name,
                             &name)) return false;

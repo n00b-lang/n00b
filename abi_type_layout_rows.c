@@ -474,6 +474,10 @@ build_member_row(n00bb_abi_type_index_t *index,
                                       : (core_string_t){0};
         if (core_string_eq(visibility, CORE_STRING_STATIC("public")))
             row->visibility = N00B_ABI_VISIBILITY_PUBLIC;
+        else if (owner && (!visibility.u8_bytes
+                 || core_string_eq(visibility, CORE_STRING_STATIC("protected"))
+                 || core_string_eq(visibility, CORE_STRING_STATIC("package"))))
+            row->visibility = N00B_ABI_VISIBILITY_PACKAGE;
         if (!member->type || !n00bb_abi_type_index_find(index, member->type,
                                                          &row->child_type_index)
             || (member->name && !n00bb_abi_name_pool_encode(names,

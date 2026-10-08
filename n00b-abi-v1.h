@@ -210,6 +210,7 @@ typedef enum {
 typedef enum {
     N00B_ABI_VISIBILITY_PRIVATE = 1,
     N00B_ABI_VISIBILITY_PUBLIC = 2,
+    N00B_ABI_VISIBILITY_PACKAGE = 3,
 } n00b_abi_visibility_v1;
 
 typedef enum {
