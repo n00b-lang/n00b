@@ -5712,6 +5712,9 @@ grep -Fq 'call_signature((int, int) -> int fail: nil)' \
     "$tmp/operator_compound_generic.ir"
 grep -Fq 'call_signature((string, string) -> string fail: nil)' \
     "$tmp/operator_compound_generic.ir"
+"$compiler" compile --output "$tmp/operator_compound_generic.o" \
+    "$script_dir/programs/operator_compound_generic.n00b"
+[ -s "$tmp/operator_compound_generic.o" ]
 "$compiler" lower --dump-ir \
     "$script_dir/programs/operator_compound_generic_failure.n00b" \
     >"$tmp/operator_compound_generic_failure.ir" 2>&1 || {
@@ -8214,6 +8217,9 @@ grep -q 'priority = ' "$tmp/callback_setup_defaults.out"
 grep -q 'callback.create @setup' "$tmp/callback_generic.out"
 grep -q 'ir.call_signature((string) -> bool fail: string)' \
     "$tmp/callback_generic.out"
+"$compiler" compile --output "$tmp/callback_generic.o" \
+    "$callback_programs/callback_generic_construction.n00b"
+[ -s "$tmp/callback_generic.o" ]
 
 N00B_PATH="$interface_programs" "$compiler" lower --dump-ir \
     "$interface_programs/callback_imported_setup_user.n00b" \

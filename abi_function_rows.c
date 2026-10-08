@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <string.h>
 
+#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 
@@ -127,8 +128,13 @@ n00bb_abi_function_rows_build(
             ? core_link_declaration_binding(declaration,
                 CORE_STRING_STATIC("n00bb.ir.comptime.function")) : nullptr;
         uint32_t type_index = 0, scope_index = 0;
+        uint64_t ir_signature_hash = function && function->type
+            ? th_hash(ir_module_types(runtime), function->type) : 0;
+        uint64_t source_signature_hash = symbol->type
+            ? th_hash(ir_module_types(runtime), symbol->type) : 0;
         if (!function || function->owner != runtime
-            || !ir_type_eq(runtime, function->type, symbol->type)
+            || !ir_signature_hash
+            || ir_signature_hash != source_signature_hash
             || (compile_function && compile_function->owner != comptime)
             || !n00bb_abi_type_index_find(index, symbol->type, &type_index)
             || type_index >= types->count

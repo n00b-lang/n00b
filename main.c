@@ -25679,6 +25679,7 @@ prepare_callback_call_symbols(core_translation_unit_t *unit)
         }
         symbol->type = signature;
         symbol->callable_contract = signature;
+        symbol->is_synthetic = true;
         if (callback_contract && callback_contract->call) {
             symbol->decl_node = callback_contract->call->decl_node;
             if (!parse_sym_set_binding(symbol,

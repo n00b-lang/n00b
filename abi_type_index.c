@@ -1,8 +1,6 @@
 #include "abi_type_index.h"
 
 #include <limits.h>
-#include <string.h>
-
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
@@ -401,57 +399,6 @@ declaration_type(n00bb_abi_type_index_t *index,
     return type;
 }
 
-static th_type *
-declaration_function_type(n00bb_abi_type_index_t *index,
-                          const parse_sym_entry_t *symbol, th_type *type)
-{
-    if (!type || symbol->kind != PARSE_SYM_FUNCTION || !symbol->type)
-        return type;
-    th_ctx *types = ir_module_types(index->module);
-    th_type **local_vars = nullptr;
-    size_t local_count = th_free_vars(types, type, &local_vars);
-    if (!local_count) return type;
-    th_type **decl_vars = nullptr;
-    size_t decl_count = th_free_vars(types, symbol->type, &decl_vars);
-    const th_type **from = core_alloc_array(const th_type *, local_count);
-    th_type **to = core_alloc_array(th_type *, local_count);
-    if (!from || !to) {
-        core_free(from);
-        core_free(to);
-        return nullptr;
-    }
-    bool changed = false;
-    bool valid = true;
-    for (size_t i = 0; i < local_count && valid; i++) {
-        th_type *variable = local_vars[i];
-        th_type *declared = nullptr;
-        const char *name = th_var_name(variable);
-        for (size_t j = 0; j < decl_count; j++) {
-            const char *decl_name = th_var_name(decl_vars[j]);
-            if (variable == decl_vars[j]
-                || (name && decl_name && !strcmp(name, decl_name))) {
-                if (declared && declared != decl_vars[j]) {
-                    valid = false;
-                    break;
-                }
-                declared = decl_vars[j];
-            }
-        }
-        if (!declared && !name && local_count == decl_count
-            && !th_var_name(decl_vars[i]))
-            declared = decl_vars[i];
-        if (!declared) valid = false;
-        from[i] = variable;
-        to[i] = declared;
-        changed |= variable != declared;
-    }
-    th_type *result = !valid ? nullptr : !changed ? type
-        : th_type_clone_replacing(types, type, from, to, local_count);
-    core_free(from);
-    core_free(to);
-    return result;
-}
-
 th_type *
 n00bb_abi_type_index_symbol_type(n00bb_abi_type_index_t *index,
                                   const parse_sym_entry_t *symbol)
@@ -475,16 +422,7 @@ n00bb_abi_type_index_collect_symbols(n00bb_abi_type_index_t *index,
                 continue;
             if (!symbol->decl_node && !symbol->definition_count) continue;
             th_type *type = declaration_type(index, symbol, symbol->type);
-            th_type *error = declaration_function_type(index, symbol,
-                declaration_type(index, symbol, symbol->error_type));
-            th_type *contract = declaration_function_type(index, symbol,
-                declaration_type(index, symbol, symbol->callable_contract));
-            if (!type || (symbol->error_type && !error)
-                || (symbol->callable_contract && !contract)
-                || !add_optional(index, type)
-                || !add_optional(index, error)
-                || !add_optional(index, contract))
-                return false;
+            if (!type || !add_type(index, type, nullptr)) return false;
             core_dict_put(&index->symbol_types, (void *)symbol, type);
         }
     }
