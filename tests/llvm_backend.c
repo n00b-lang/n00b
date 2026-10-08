@@ -5,6 +5,7 @@
 #include <llvm-c/Core.h>
 
 #include "ir/ir.h"
+#include "ir/layout.h"
 #include "lib/buffer.h"
 #include "lib/diagnostic.h"
 #include "llvm_backend.h"
@@ -32,6 +33,11 @@ main(void)
     assert(block);
     th_type *wide = ir_type_parse(runtime, "i128");
     th_type *unsigned_type = ir_type_parse(runtime, "uint");
+    const ir_final_layout_t unsigned_layout = {
+        .intrinsic_bits = 64, .alignment_bytes = 8,
+    };
+    assert(ir_layout_publish_final(runtime, unsigned_type, target,
+                                   &unsigned_layout));
     ir_local_t *wide_local = ir_local_add(function, "wide", wide);
     ir_instr_t *wide_constant = ir_instr_add(block, IR_OP_CONST);
     assert(wide_local && wide_constant
@@ -86,10 +92,28 @@ main(void)
         && ir_instr_operand_value(array, array_item->dest)
         && array_return && ir_instr_operand_value(array_return,
                                                   array->dest));
+    ir_func_t *cached_function = ir_func_add(runtime, "cached_array",
+        ir_type_parse(runtime, "() -> array[uint]"), IR_LINK_INTERNAL);
+    ir_block_t *cached_entry = cached_function
+        ? ir_block_add(cached_function, "entry") : nullptr;
+    ir_instr_t *cached_value = cached_entry
+        ? ir_instr_add(cached_entry, IR_OP_PHASE_RESULT) : nullptr;
+    ir_instr_t *cached_return = cached_entry
+        ? ir_instr_add(cached_entry, IR_OP_RETURN) : nullptr;
+    assert(cached_value && ir_instr_set_dest(cached_value, "cached", array_type)
+        && ir_instr_set_phase_result(context, cached_value, "sample:array")
+        && cached_return && ir_instr_operand_value(cached_return,
+                                                    cached_value->dest));
+    const uint8_t cached_bytes[16] = {[0] = 5, [8] = 6};
+    const n00bb_llvm_phase_array_t phase_array = {
+        .identifier = "sample:array", .bytes = cached_bytes,
+        .count = 2, .element_stride = 8,
+    };
     core_diagnostics_t *diagnostics = core_diagnostics_new();
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
         comptime, runtime, true, diagnostics);
     assert(backend);
+    assert(n00bb_llvm_backend_bind_phase_arrays(backend, &phase_array, 1));
     assert(core_diagnostics_count(diagnostics) == 0);
 
     for (int phase = 0; phase < 2; phase++) {
@@ -123,6 +147,17 @@ main(void)
         if (lowered_array)
             assert(LLVMGetNamedGlobal(parsed,
                 "n00bb.literal.array.descriptor"));
+        LLVMValueRef cached_global = LLVMGetNamedGlobal(parsed,
+            "n00bb.literal.array.cached");
+        assert((!is_comptime && cached_global)
+            || (is_comptime && !cached_global));
+        if (cached_global) {
+            size_t length = 0;
+            const char *bytes = LLVMGetAsString(
+                LLVMGetInitializer(cached_global), &length);
+            assert(bytes && length == sizeof(cached_bytes)
+                && (uint8_t)bytes[0] == 5 && (uint8_t)bytes[8] == 6);
+        }
         if (lowered) {
             assert(LLVMCountBasicBlocks(lowered) == 3);
             LLVMValueRef terminator = LLVMGetBasicBlockTerminator(

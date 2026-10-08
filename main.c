@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <spawn.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -387,6 +388,9 @@ typedef struct {
     ir_func_t *producer;
     ir_func_t *consumer;
     ir_instr_t *instruction;
+    uint8_t *materialized_bytes;
+    uint64_t materialized_count;
+    uint32_t materialized_stride;
 } n00bb_phase_result_binding_t;
 core_list_decl(n00bb_phase_result_binding_t);
 
@@ -46836,13 +46840,77 @@ n00bb_write_temporary_object(const void *bytes, size_t length)
     return result;
 }
 
+static char *
+n00bb_runtime_archive_path(const char *compiler_path)
+{
+    char *executable = n00bb_executable_path(compiler_path);
+    const char *slash = executable ? strrchr(executable, '/') : nullptr;
+    core_buffer_t archive = {0};
+    if (slash) {
+        core_buffer_printf(&archive, "%.*s/libn00b-abi-runtime.a",
+            (int)(slash - executable), executable);
+        if (access(archive.data, R_OK)) {
+            core_buffer_release(&archive);
+            core_buffer_printf(&archive, "%.*s/../lib/libn00b-abi-runtime.a",
+                (int)(slash - executable), executable);
+        }
+    }
+    char *path = archive.data && !access(archive.data, R_OK)
+        ? core_strdup(archive.data) : nullptr;
+    core_buffer_release(&archive);
+    core_free(executable);
+    return path;
+}
+
+static bool
+n00bb_read_exact(int fd, void *data, size_t length)
+{
+    size_t offset = 0;
+    while (offset < length) {
+        ssize_t size = read(fd, (uint8_t *)data + offset, length - offset);
+        if (size <= 0) return false;
+        offset += (size_t)size;
+    }
+    return true;
+}
+
+static bool
+n00bb_capture_array_results(int fd, n00bb_link_analysis_t *analysis,
+                            const n00bb_llvm_array_producer_t *producers)
+{
+    struct stat info;
+    if (lseek(fd, 0, SEEK_SET) < 0 || fstat(fd, &info)
+        || info.st_size < 0) return false;
+    for (size_t i = 0; i < analysis->phase_results.len; i++) {
+        n00bb_phase_result_binding_t *binding = &analysis->phase_results.data[i];
+        uint64_t count;
+        if (!n00bb_read_exact(fd, &count, sizeof(count))) return false;
+        off_t offset = lseek(fd, 0, SEEK_CUR);
+        uint32_t stride = producers[i].element_stride;
+        if (!stride || count > SIZE_MAX / stride || offset < 0
+            || offset > info.st_size
+            || count * stride > (uint64_t)(info.st_size - offset))
+            return false;
+        size_t length = (size_t)(count * stride);
+        uint8_t *bytes = core_alloc_size(1, length ? length : 1);
+        if (!bytes || !n00bb_read_exact(fd, bytes, length)) {
+            core_free(bytes);
+            return false;
+        }
+        binding->materialized_bytes = bytes;
+        binding->materialized_count = count;
+        binding->materialized_stride = stride;
+    }
+    return lseek(fd, 0, SEEK_CUR) == info.st_size;
+}
+
 static bool
 n00bb_execute_comptime(core_link_unit_t *link,
                         n00bb_link_analysis_t *analysis, bool debug_enabled,
+                        const char *compiler_path,
                         core_diagnostics_t *diagnostics)
 {
-    if (analysis->phase_results.len || analysis->global_results.len
-        || analysis->array_bound_work.len) {
+    if (analysis->global_results.len || analysis->array_bound_work.len) {
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-B0013"),
             CORE_STRING_STATIC("native build cannot materialize compile-time results yet"));
@@ -46859,7 +46927,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
         core_list_free(order);
         return false;
     }
-    bool has_work = false;
+    bool has_work = analysis->phase_results.len != 0;
     for (size_t i = 0; i < order.len; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
         if (!state || !state->comptime_ir_module || !state->ir_module) {
@@ -46876,15 +46944,56 @@ n00bb_execute_comptime(core_link_unit_t *link,
     size_t count = order.len;
     char **names = calloc(count, sizeof(*names));
     char **objects = calloc(count, sizeof(*objects));
-    ok = names && objects;
+    size_t producer_count = analysis->phase_results.len;
+    n00bb_llvm_array_producer_t *producers = producer_count
+        ? calloc(producer_count, sizeof(*producers)) : nullptr;
+    ok = names && objects && (!producer_count || producers);
+    size_t initializer_count = 0;
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
+        if (!ir_func_find(state->comptime_ir_module,
+                          "__n00bb_comptime_init")) continue;
         core_buffer_t name = {0};
         core_buffer_printf(&name, "%s.__n00bb_comptime_init",
             ir_module_name(state->comptime_ir_module));
-        names[i] = core_strndup(name.data, name.byte_len);
+        names[initializer_count] = core_strndup(name.data, name.byte_len);
         core_buffer_release(&name);
-        ok = names[i] != nullptr;
+        ok = names[initializer_count++] != nullptr;
+    }
+    for (size_t i = 0; ok && i < producer_count; i++) {
+        n00bb_phase_result_binding_t *binding = &analysis->phase_results.data[i];
+        ir_func_t *producer = binding->producer;
+        th_type *result = producer ? th_resolve(th_func_ret(producer->type))
+                                   : nullptr;
+        th_type *element = result && th_kind_of(result) == TH_SEQUENCE
+            ? th_seq_elem(result) : nullptr;
+        ir_machine_t machine = element
+            ? ir_machine_of(producer->owner, element) : (ir_machine_t){0};
+        const ir_final_layout_t *layout = element
+            ? ir_layout_final(producer->owner, element,
+                              ir_module_target(producer->owner)) : nullptr;
+        uint64_t bytes = layout ? (layout->intrinsic_bits + 7) / 8 : 0;
+        uint64_t align = layout ? layout->alignment_bytes : 0;
+        uint64_t stride = align && bytes <= UINT64_MAX - align + 1
+            ? ((bytes + align - 1) / align) * align : 0;
+        if (!element || !layout || !align || !stride
+            || stride > UINT32_MAX || layout->intrinsic_bits != machine.width
+            || machine.width < 8 || machine.width % 8
+            || (machine.class != IR_CLASS_SINT
+                && machine.class != IR_CLASS_UINT)) {
+            core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+                CORE_STRING_STATIC("N00BB-B0013"),
+                CORE_STRING_STATIC("native build currently materializes only primitive one-dimensional array literal results"));
+            ok = false;
+            break;
+        }
+        core_buffer_t symbol = {0};
+        core_buffer_printf(&symbol, "%s.%s",
+            ir_module_name(producer->owner), producer->name);
+        producers[i].symbol = core_strndup(symbol.data, symbol.byte_len);
+        producers[i].element_stride = (uint32_t)stride;
+        core_buffer_release(&symbol);
+        ok = producers[i].symbol != nullptr;
     }
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
@@ -46899,7 +47008,10 @@ n00bb_execute_comptime(core_link_unit_t *link,
         bool is_root = order.data[i] == core_link_unit_root(link, 0);
         ok = n00bb_llvm_backend_emit_object(backend, true,
             is_root ? (const char *const *)names : nullptr,
-            is_root ? count : 0, 0, &object, diagnostics);
+            is_root ? initializer_count : 0,
+            is_root ? producers : nullptr,
+            is_root ? producer_count : 0,
+            0, &object, diagnostics);
         n00bb_llvm_backend_free(backend);
         if (ok) objects[i] = n00bb_write_temporary_object(
             object.data, object.byte_len);
@@ -46923,14 +47035,19 @@ n00bb_execute_comptime(core_link_unit_t *link,
 #else
         const char *linker = "clang";
 #endif
-        char **arguments = calloc(count + 4, sizeof(*arguments));
-        ok = arguments != nullptr;
+        char *archive = producer_count
+            ? n00bb_runtime_archive_path(compiler_path) : nullptr;
+        char **arguments = calloc(count + 4 + (producer_count != 0),
+                                  sizeof(*arguments));
+        ok = arguments && (!producer_count || archive);
         if (ok) {
             arguments[0] = (char *)linker;
             for (size_t i = 0; i < count; i++)
                 arguments[i + 1] = objects[i];
-            arguments[count + 1] = "-o";
-            arguments[count + 2] = executable_path;
+            size_t next = count + 1;
+            if (archive) arguments[next++] = archive;
+            arguments[next++] = "-o";
+            arguments[next] = executable_path;
             pid_t child = 0;
             int launched = posix_spawnp(&child, linker, nullptr, nullptr,
                                         arguments, environ);
@@ -46939,20 +47056,44 @@ n00bb_execute_comptime(core_link_unit_t *link,
                 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
         }
         free(arguments);
+        core_free(archive);
+    }
+    int result_fd = -1;
+    if (ok && producer_count) {
+        char result_path[] = "/tmp/n00bb-comptime-results-XXXXXX";
+        result_fd = mkstemp(result_path);
+        if (result_fd >= 0) unlink(result_path);
+        ok = result_fd >= 0;
     }
     if (ok) {
         char *arguments[] = {executable_path, nullptr};
         pid_t child = 0;
-        int launched = posix_spawn(&child, executable_path, nullptr, nullptr,
-                                   arguments, environ);
+        posix_spawn_file_actions_t actions;
+        bool actions_ready = producer_count
+            && !posix_spawn_file_actions_init(&actions);
+        ok = !producer_count || (actions_ready
+            && !posix_spawn_file_actions_adddup2(&actions, result_fd,
+                                                 N00BB_COMPTIME_RESULT_FD));
+        int launched = ok ? posix_spawn(&child, executable_path,
+            actions_ready ? &actions : nullptr, nullptr, arguments, environ)
+            : -1;
+        if (actions_ready) posix_spawn_file_actions_destroy(&actions);
         int status = 0;
-        ok = !launched && waitpid(child, &status, 0) == child
+        ok = ok && !launched && waitpid(child, &status, 0) == child
             && WIFEXITED(status) && WEXITSTATUS(status) == 0;
         if (!ok)
             core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-B0014"),
                 CORE_STRING_STATIC("compile-time execution failed"));
     }
+    if (ok && producer_count
+        && !n00bb_capture_array_results(result_fd, analysis, producers)) {
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0013"),
+            CORE_STRING_STATIC("compile-time literal results are incomplete or invalid"));
+        ok = false;
+    }
+    if (result_fd >= 0) close(result_fd);
     if (path_created) unlink(executable_path);
     for (size_t i = 0; i < count; i++) {
         if (objects && objects[i]) {
@@ -46963,6 +47104,9 @@ n00bb_execute_comptime(core_link_unit_t *link,
     }
     free(objects);
     free(names);
+    for (size_t i = 0; i < producer_count; i++)
+        core_free((void *)producers[i].symbol);
+    free(producers);
     core_list_free(order);
     if (!ok && !core_diagnostics_failed(diagnostics))
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
@@ -46993,7 +47137,22 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     size_t count = order.len;
     char **names = calloc(count, sizeof(*names));
     char **objects = calloc(count + 1, sizeof(*objects));
-    ok = names && objects;
+    size_t phase_count = analysis->phase_results.len;
+    n00bb_llvm_phase_array_t *phase_arrays = phase_count
+        ? calloc(phase_count, sizeof(*phase_arrays)) : nullptr;
+    ok = names && objects && (!phase_count || phase_arrays);
+    for (size_t i = 0; ok && i < phase_count; i++) {
+        const n00bb_phase_result_binding_t *binding =
+            &analysis->phase_results.data[i];
+        phase_arrays[i] = (n00bb_llvm_phase_array_t){
+            .identifier = binding->identifier,
+            .bytes = binding->materialized_bytes,
+            .count = binding->materialized_count,
+            .element_stride = binding->materialized_stride,
+        };
+        ok = phase_arrays[i].identifier && phase_arrays[i].bytes
+            && phase_arrays[i].element_stride;
+    }
     uint8_t *linked_abi = nullptr;
     size_t linked_abi_bytes = 0;
     if (ok) ok = n00bb_link_abi_artifact(link, analysis, &analysis->target,
@@ -47037,11 +47196,18 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             ok = false;
             break;
         }
+        if (!n00bb_llvm_backend_bind_phase_arrays(backend, phase_arrays,
+                                                  phase_count)) {
+            n00bb_llvm_backend_free(backend);
+            ok = false;
+            break;
+        }
         core_buffer_t object = {0};
         bool is_root = order.data[i] == core_link_unit_root(link, 0);
         ok = n00bb_llvm_backend_emit_object(backend, false,
             is_root ? (const char *const *)names : nullptr,
-            is_root ? count : 0, is_root ? metadata.size : 0,
+            is_root ? count : 0, nullptr, 0,
+            is_root ? metadata.size : 0,
             &object, diagnostics);
         n00bb_llvm_backend_free(backend);
         if (ok) objects[i] = n00bb_write_temporary_object(
@@ -47065,19 +47231,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             unlink(staging);
         }
     } else ok = false;
-    char *executable = n00bb_executable_path(compiler_path);
-    const char *slash = executable ? strrchr(executable, '/') : nullptr;
-    core_buffer_t archive = {0};
-    if (slash) {
-        core_buffer_printf(&archive, "%.*s/libn00b-abi-runtime.a",
-            (int)(slash - executable), executable);
-        if (access(archive.data, R_OK)) {
-            core_buffer_release(&archive);
-            core_buffer_printf(&archive, "%.*s/../lib/libn00b-abi-runtime.a",
-                (int)(slash - executable), executable);
-        }
-    }
-    if (ok && archive.data && !access(archive.data, R_OK)) {
+    char *archive = n00bb_runtime_archive_path(compiler_path);
+    if (ok && archive) {
 #ifdef __APPLE__
         const char *linker = "/usr/bin/clang";
 #else
@@ -47089,7 +47244,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             arguments[0] = (char *)linker;
             for (size_t i = 0; i < count + 1; i++)
                 arguments[i + 1] = objects[i];
-            arguments[count + 2] = archive.data;
+            arguments[count + 2] = archive;
             arguments[count + 3] = "-o";
             arguments[count + 4] = staging;
             pid_t child = 0;
@@ -47107,8 +47262,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     } else ok = false;
     if (staging) unlink(staging);
     free(staging);
-    core_buffer_release(&archive);
-    core_free(executable);
+    core_free(archive);
     for (size_t i = 0; i < count + 1; i++) {
         if (objects && objects[i]) {
             unlink(objects[i]);
@@ -47119,6 +47273,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (names) core_free(names[i]);
     free(objects);
     free(names);
+    free(phase_arrays);
     core_list_free(order);
     if (!ok && !core_diagnostics_failed(diagnostics))
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
@@ -47661,7 +47816,7 @@ main(int argc, char **argv)
     bool abi_emitted = false;
     if (located && build_command) {
         located = n00bb_execute_comptime(link, link_analysis,
-            !preprocessor_options.release_mode, cli_diagnostics);
+            !preprocessor_options.release_mode, argv[0], cli_diagnostics);
     }
     if (located && build_command) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,
@@ -47731,6 +47886,8 @@ main(int argc, char **argv)
             core_list_free(link_analysis->array_bound_work.data[i]
                 .initializer_extents);
         core_list_free(link_analysis->array_bound_work);
+        for (size_t i = 0; i < link_analysis->phase_results.len; i++)
+            core_free(link_analysis->phase_results.data[i].materialized_bytes);
         core_list_free(link_analysis->phase_results);
         core_list_free(link_analysis->global_results);
         core_list_free(link_analysis->units);

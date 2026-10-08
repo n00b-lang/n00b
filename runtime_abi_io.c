@@ -1,6 +1,7 @@
 #include "n00b-abi-v1.h"
 
 #include <limits.h>
+#include <stdint.h>
 
 #include "abi_string.h"
 
@@ -137,4 +138,33 @@ int32_t n00b_abi_v1_raw_fd_write(int32_t fd, n00b_abi_string_v1 text)
     uint32_t count = header.length > INT32_MAX
                          ? INT32_MAX : (uint32_t)header.length;
     return write_bytes(fd, bytes, count);
+}
+
+static bool write_all(int32_t fd, const uint8_t *bytes, uint64_t count)
+{
+    while (count) {
+        uint32_t chunk = count > INT32_MAX ? INT32_MAX : (uint32_t)count;
+        int32_t written = write_bytes(fd, bytes, chunk);
+        if (written <= 0) return false;
+        bytes += written;
+        count -= (uint32_t)written;
+    }
+    return true;
+}
+
+int32_t n00bb_comptime_emit_array(
+    int32_t fd, const void *data,
+    const n00b_abi_array_descriptor_header_v1 *descriptor,
+    uint32_t stride)
+{
+    if (fd < 0 || !data || !descriptor || !stride
+        || descriptor->rank != 1 || descriptor->flat_rank != 1
+        || descriptor->flags || descriptor->reserved_zero
+        || descriptor->total_count != ((const uint64_t *)(descriptor + 1))[0]
+        || descriptor->total_count > UINT64_MAX / stride)
+        return -1;
+    uint64_t count = descriptor->total_count;
+    if (!write_all(fd, (const uint8_t *)&count, sizeof(count))
+        || !write_all(fd, data, count * stride)) return -1;
+    return 0;
 }
