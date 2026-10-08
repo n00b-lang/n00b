@@ -94,6 +94,8 @@ struct n00b_abi_snapshot_v1 {
     uint64_t generation;
     const uint8_t *metadata;
     uint64_t metadata_bytes;
+    uint32_t *typehash_slots;
+    size_t typehash_capacity;
     n00bb_abi_directory_entry_t tables[N00B_ABI_TABLE_SPECIALIZATION_LINK + 1];
 };
 
@@ -1430,6 +1432,50 @@ specialization_graph_valid(const n00b_abi_snapshot_v1 *snapshot)
 static bool metadata_dispatch_ambiguity_valid(
     const n00b_abi_snapshot_v1 *snapshot, n00b_abi_error_v1 *error);
 
+static void
+snapshot_candidate_free(n00b_abi_snapshot_v1 *candidate)
+{
+    if (candidate->typehash_slots)
+        snapshot_free(candidate->typehash_slots,
+            candidate->typehash_capacity * sizeof(*candidate->typehash_slots));
+    snapshot_free(candidate, sizeof(*candidate));
+}
+
+static bool
+typehash_cache_build(n00b_abi_snapshot_v1 *snapshot,
+                     n00b_abi_error_v1 *error)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
+    if (!count || count > INT32_MAX)
+        return invalid_record(error, N00B_ABI_TABLE_TYPE, count, 0);
+    size_t required = (size_t)count * 2;
+    size_t capacity = 1;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2) return false;
+        capacity *= 2;
+    }
+    if (capacity > SIZE_MAX / sizeof(uint32_t)) return false;
+    uint32_t *slots = snapshot_alloc(capacity * sizeof(*slots));
+    if (!slots) return false;
+    snapshot->typehash_slots = slots;
+    snapshot->typehash_capacity = capacity;
+    for (uint32_t i = 0; i < count; i++) {
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, i);
+        if (!type) return false;
+        if (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE) continue;
+        size_t slot = (size_t)type->typehash & (capacity - 1);
+        while (slots[slot]) {
+            const n00b_abi_type_v1 *prior = n00b_abi_v1_type(snapshot,
+                slots[slot] - 1);
+            if (prior->typehash == type->typehash)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+            slot = (slot + 1) & (capacity - 1);
+        }
+        slots[slot] = i + 1;
+    }
+    return true;
+}
+
 uint32_t
 n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
                            uint64_t *published_generation,
@@ -1499,8 +1545,9 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     if (valid) valid = specialization_graph_valid(candidate);
     if (valid) valid = metadata_dispatch_ambiguity_valid(candidate, error);
     if (valid) valid = metadata_owned_rows_valid(candidate, error);
+    if (valid) valid = typehash_cache_build(candidate, error);
     if (!valid) {
-        snapshot_free(candidate, sizeof(*candidate));
+        snapshot_candidate_free(candidate);
         if (error && error->status == N00B_ABI_BAD_METADATA)
             return N00B_ABI_BAD_METADATA;
         return registration_error(error, N00B_ABI_BAD_METADATA, 0, 0, 0);
@@ -1509,7 +1556,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
                                             memory_order_acquire)) {}
     if (atomic_load_explicit(&current_snapshot, memory_order_relaxed)) {
         atomic_flag_clear_explicit(&registration_lock, memory_order_release);
-        snapshot_free(candidate, sizeof(*candidate));
+        snapshot_candidate_free(candidate);
         return registration_error(error, N00B_ABI_UNRESOLVED, 0, 0, 0);
     }
     candidate->generation = 1;
@@ -1655,19 +1702,22 @@ int32_t
 n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,
                           uint64_t typehash, uint32_t *type_index)
 {
-    if (!snapshot || !type_index) return -1;
-    uint32_t found = UINT32_MAX;
-    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
-    for (uint32_t i = 0; i < count; i++) {
-        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, i);
-        if (!type || (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
-            || type->typehash != typehash) continue;
-        if (found != UINT32_MAX) return -1;
-        found = i;
+    if (!snapshot || !type_index || !snapshot->typehash_slots
+        || !snapshot->typehash_capacity) return -1;
+    size_t capacity = snapshot->typehash_capacity;
+    size_t slot = (size_t)typehash & (capacity - 1);
+    for (size_t probes = 0; probes < capacity; probes++) {
+        uint32_t entry = snapshot->typehash_slots[slot];
+        if (!entry) return 0;
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, entry - 1);
+        if (!type) return -1;
+        if (type->typehash == typehash) {
+            *type_index = entry - 1;
+            return 1;
+        }
+        slot = (slot + 1) & (capacity - 1);
     }
-    if (found == UINT32_MAX) return 0;
-    *type_index = found;
-    return 1;
+    return -1;
 }
 
 int32_t

@@ -531,6 +531,13 @@ main(void)
     image.name_slots[name_slot_index] = (n00b_abi_name_slot_v1){
         .name_hash = name_hash, .symbol_index = 1,
     };
+    image.types[4].typehash = image.types[3].typehash;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && error.record_index == 4 && !n00b_abi_v1_current_snapshot());
+    image.types[4].typehash = 14;
+    image.types[5].typehash = image.types[1].typehash + 16;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_OK && !error.status && generation == 1);
     const n00b_abi_snapshot_v1 *snapshot =
@@ -580,6 +587,8 @@ main(void)
     uint32_t result = 0;
     assert(n00b_abi_v1_find_typehash(snapshot, 13, &result) == 1
         && result == 3);
+    assert(n00b_abi_v1_find_typehash(snapshot,
+        image.types[5].typehash, &result) == 1 && result == 5);
     assert(n00b_abi_v1_find_typehash(snapshot, 99, &result) == 0);
     n00b_abi_string_v1 module_path = {0};
     memcpy(module_path.short_value.bytes, "p.m", 3);
