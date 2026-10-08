@@ -161,6 +161,51 @@ ir_shape_extent(const ir_shape_t *shape, uint32_t dimension,
 }
 
 bool
+ir_shape_fold_comptime_extent(ir_shape_t *shape, uint32_t dimension,
+                              uint64_t value)
+{
+    if (!shape || dimension >= shape->rank
+        || shape->extents[dimension].kind != IR_SHAPE_EXTENT_COMPTIME)
+        return false;
+
+    bool complete = shape->classification_known
+        && shape->flat_prefix_rank != 0;
+    uint64_t count = 1;
+    for (uint32_t i = 0; complete && i < shape->flat_prefix_rank; i++) {
+        ir_shape_extent_t extent = shape->extents[i];
+        if (i == dimension) {
+            if (!value || __builtin_mul_overflow(count, value, &count))
+                return false;
+        }
+        else if (extent.kind == IR_SHAPE_EXTENT_STATIC) {
+            if (!extent.static_value || __builtin_mul_overflow(
+                    count, extent.static_value, &count)) return false;
+        }
+        else complete = false;
+    }
+
+    shape->extents[dimension] = (ir_shape_extent_t){
+        .kind = IR_SHAPE_EXTENT_STATIC,
+        .static_value = value,
+    };
+    if (complete) {
+        shape->element_count = (ir_shape_measure_t){
+            .kind = IR_SHAPE_MEASURE_STATIC,
+            .static_value = count,
+        };
+        uint64_t stride = 1;
+        for (uint32_t i = shape->flat_prefix_rank; i-- > 0;) {
+            shape->strides[i] = (ir_shape_measure_t){
+                .kind = IR_SHAPE_MEASURE_STATIC,
+                .static_value = stride,
+            };
+            stride *= shape->extents[i].static_value;
+        }
+    }
+    return true;
+}
+
+bool
 ir_shape_set_storage(ir_shape_t *shape, uint32_t flat_prefix_rank,
                      bool classification_known)
 {

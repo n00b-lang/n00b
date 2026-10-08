@@ -290,6 +290,9 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
     if (!core_item) {
         return nullptr;
     }
+    sev = core_item->severity == CORE_DIAG_WARNING ? IR_SEV_WARNING
+        : core_item->severity == CORE_DIAG_NOTE ? IR_SEV_NOTE
+        : core_item->severity == CORE_DIAG_HELP ? IR_SEV_HELP : IR_SEV_ERROR;
     size_t destination_index = SIZE_MAX;
     if (d->destination && d->unit) {
         core_diag_location_t location = {0};
@@ -310,10 +313,6 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
             || core_diagnostics_count(d->destination) == destination_index)
             destination_index = SIZE_MAX;
     }
-    sev = core_item->severity == CORE_DIAG_WARNING ? IR_SEV_WARNING
-        : core_item->severity == CORE_DIAG_NOTE ? IR_SEV_NOTE
-        : core_item->severity == CORE_DIAG_HELP ? IR_SEV_HELP : IR_SEV_ERROR;
-
     size_t cap = d->cap;
 
     d->v = ir_grow(d->ctx, d->v, &cap, d->n + 1u, sizeof(ir_diag_t));

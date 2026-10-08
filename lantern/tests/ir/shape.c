@@ -169,6 +169,70 @@ test_shape_metadata(void)
     check("shape suffix is independent and rejects an empty projection",
           projection_independent);
 
+    ir_shape_t *deferred = ir_shape_new(ctx, i32, 2);
+    bool deferred_built = deferred
+        && ir_shape_set_extent(deferred, 0, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_STATIC, .static_value = 3})
+        && ir_shape_set_extent(deferred, 1, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_COMPTIME,
+            .expression = &source_expression})
+        && ir_shape_set_storage(deferred, 2, true)
+        && ir_shape_set_element_count(deferred, (ir_shape_measure_t){
+            .kind = IR_SHAPE_MEASURE_COMPTIME,
+            .producer = product_function});
+    bool folded = deferred_built
+        && ir_shape_fold_comptime_extent(deferred, 1, 4)
+        && ir_shape_extent(deferred, 1, &second)
+        && second.kind == IR_SHAPE_EXTENT_STATIC
+        && second.static_value == 4
+        && ir_shape_element_count(deferred, &count)
+        && count.kind == IR_SHAPE_MEASURE_STATIC
+        && count.static_value == 12
+        && ir_shape_stride(deferred, 0, &stride)
+        && stride.kind == IR_SHAPE_MEASURE_STATIC
+        && stride.static_value == 4
+        && ir_shape_stride(deferred, 1, &stride)
+        && stride.static_value == 1;
+    check("comptime extents fold into static rectangular shape measures",
+          folded);
+
+    ir_shape_t *two_deferred = ir_shape_new(ctx, i32, 2);
+    bool two_deferred_built = two_deferred
+        && ir_shape_set_extent(two_deferred, 0, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_COMPTIME,
+            .expression = &source_expression})
+        && ir_shape_set_extent(two_deferred, 1, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_COMPTIME,
+            .expression = &source_expression})
+        && ir_shape_set_storage(two_deferred, 2, true)
+        && ir_shape_set_element_count(two_deferred, (ir_shape_measure_t){
+            .kind = IR_SHAPE_MEASURE_COMPTIME,
+            .producer = product_function});
+    bool staged_fold = two_deferred_built
+        && ir_shape_fold_comptime_extent(two_deferred, 0, 3)
+        && ir_shape_element_count(two_deferred, &count)
+        && count.kind == IR_SHAPE_MEASURE_COMPTIME
+        && ir_shape_fold_comptime_extent(two_deferred, 1, 4)
+        && ir_shape_element_count(two_deferred, &count)
+        && count.kind == IR_SHAPE_MEASURE_STATIC
+        && count.static_value == 12;
+    check("shape count waits for every deferred rectangular dimension",
+          staged_fold);
+
+    ir_shape_t *overflow = ir_shape_new(ctx, i32, 2);
+    bool overflow_built = overflow
+        && ir_shape_set_extent(overflow, 0, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_STATIC, .static_value = 2})
+        && ir_shape_set_extent(overflow, 1, (ir_shape_extent_t){
+            .kind = IR_SHAPE_EXTENT_COMPTIME,
+            .expression = &source_expression})
+        && ir_shape_set_storage(overflow, 2, true);
+    check("overflowing folded dimensions leave shape unchanged",
+          overflow_built
+          && !ir_shape_fold_comptime_extent(overflow, 1, UINT64_MAX)
+          && ir_shape_extent(overflow, 1, &second)
+          && second.kind == IR_SHAPE_EXTENT_COMPTIME);
+
     ir_shape_t *ragged = ir_shape_new(ctx, i32, 2);
     bool ragged_built = ragged
         && ir_shape_set_extent(ragged, 0, (ir_shape_extent_t){

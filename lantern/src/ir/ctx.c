@@ -455,27 +455,45 @@ bool ir_value_can_initialize(const ir_value_t *value,
     return value_phase_allows(value, "ir.binding_initializer_phases", phase);
 }
 
-bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *parameter,
+bool ir_value_set_external_writable_storage(ir_ctx_t *ctx, ir_value_t *value)
+{
+    ir_annots_t *annots = value ? ir_value_annots(value) : nullptr;
+    return ctx && annots && ir_annot_set(ctx, annots, (ir_annot_t){
+        .key = "ir.external_writable_storage", .kind = IR_ANNOT_BOOL,
+        .b = true,
+    });
+}
+
+bool ir_value_has_external_writable_storage(const ir_value_t *value)
+{
+    ir_annots_t *annots = value ? ir_value_annots((ir_value_t *)value)
+                                : nullptr;
+    ir_annot_t *marker = annots
+        ? ir_annot_get(annots, "ir.external_writable_storage") : nullptr;
+    return marker && marker->kind == IR_ANNOT_BOOL && marker->b;
+}
+
+bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
                                   ir_indirect_access_t access)
 {
-    if (!ctx || !parameter || parameter->kind != IR_VAL_PARAM
-        || !parameter->type
-        || th_kind_of(parameter->type) != TH_INDIRECTION
+    if (!ctx || !value || !value->type
+        || th_kind_of(value->type) != TH_INDIRECTION
         || access < IR_INDIRECT_ACCESS_READ
         || access > IR_INDIRECT_ACCESS_READ_WRITE) return false;
-    return ir_annot_set(ctx, ir_value_annots(parameter), (ir_annot_t){
+    return ir_annot_set(ctx, ir_value_annots(value), (ir_annot_t){
         .key = "ir.indirect_access",
         .kind = IR_ANNOT_INT,
         .i = {.mag = access},
     });
 }
 
-ir_indirect_access_t ir_value_indirect_access(const ir_value_t *parameter)
+ir_indirect_access_t ir_value_indirect_access(const ir_value_t *value)
 {
-    if (!parameter || parameter->kind != IR_VAL_PARAM) return
+    if (!value || !value->type
+        || th_kind_of(value->type) != TH_INDIRECTION) return
         IR_INDIRECT_ACCESS_UNSPECIFIED;
     ir_annot_t *access = ir_annot_get(
-        ir_value_annots((ir_value_t *)parameter), "ir.indirect_access");
+        ir_value_annots((ir_value_t *)value), "ir.indirect_access");
     if (!access || access->kind != IR_ANNOT_INT || access->i.neg
         || access->i.mag < IR_INDIRECT_ACCESS_READ
         || access->i.mag > IR_INDIRECT_ACCESS_READ_WRITE)

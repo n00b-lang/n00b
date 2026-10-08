@@ -409,11 +409,14 @@ bool ir_value_can_read(const ir_value_t *value, ir_execution_phase_t phase);
 bool ir_value_can_write(const ir_value_t *value, ir_execution_phase_t phase);
 bool ir_value_can_initialize(const ir_value_t *value,
                              ir_execution_phase_t phase);
-/* Access through an indirect parameter is an effect contract, distinct from
- * the parameter's by-value IR type and from the caller's target identity. */
-bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *parameter,
+/* A foreign allocator result owns writable storage outside IR bindings. */
+bool ir_value_set_external_writable_storage(ir_ctx_t *ctx, ir_value_t *value);
+bool ir_value_has_external_writable_storage(const ir_value_t *value);
+/* Indirect access is an effect contract on a reference value, distinct from
+ * its by-value IR type and from the identity of storage it may target. */
+bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
                                   ir_indirect_access_t access);
-ir_indirect_access_t ir_value_indirect_access(const ir_value_t *parameter);
+ir_indirect_access_t ir_value_indirect_access(const ir_value_t *value);
 /* Marks a binding whose lexical lifetime is re-entered at a loop header. */
 bool ir_value_set_binding_reentry(ir_value_t *value,
                                   ir_block_t *loop_header);
@@ -593,6 +596,9 @@ bool ir_global_set_static_initializer(
  * compilation phase. Repeating the same identifier is idempotent. */
 bool ir_global_set_phase_result_initializer(
     ir_module_t *m, ir_global_t *global, const char *identifier);
+bool ir_global_materialize_phase_result(
+    ir_module_t *m, ir_global_t *global, const char *identifier,
+    const ir_global_init_value_t *value);
 bool ir_global_static_initializer_valid(
     ir_module_t *m, const ir_global_t *global);
 ir_global_t *ir_global_find(ir_module_t *m, const char *name);
@@ -645,6 +651,8 @@ bool ir_value_set_alias_targets(ir_ctx_t *ctx, ir_value_t *value,
  * the set partial until a later whole-analysis pass proves completeness. */
 bool ir_value_add_alias_target(ir_ctx_t *ctx, ir_value_t *value,
                                ir_alias_target_t target);
+/* Close an incrementally collected alias set once all origins are known. */
+bool ir_value_complete_alias_targets(ir_ctx_t *ctx, ir_value_t *value);
 /* Copy alias facts and reverse edges when a value-preserving projection
  * produces a new value, such as extracting a successful call result. */
 bool ir_value_copy_alias_targets(ir_ctx_t *ctx, ir_value_t *destination,

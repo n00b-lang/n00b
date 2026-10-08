@@ -108,7 +108,8 @@ static bool save_constraint(core_object_writer_t *writer,
            save_constraint_scope(writer, constraint);
   case TH_CON_HAS_FIELD:
     return core_object_writer_string(writer, constraint->field.name) &&
-           write_type_ref(writer, constraint->field.type);
+           write_type_ref(writer, constraint->field.type) &&
+           core_object_writer_u32(writer, constraint->field.auto_deref);
   case TH_CON_HAS_PARAM:
     return core_object_writer_u64(writer, constraint->param.index) &&
            write_type_ref(writer, constraint->param.type);
@@ -158,8 +159,14 @@ static bool read_constraint(core_object_reader_t *reader,
     return core_object_reader_string(reader, (char **)&constraint->iface) &&
            (version < 5 || read_constraint_scope(reader, constraint));
   case TH_CON_HAS_FIELD:
-    return core_object_reader_string(reader, (char **)&constraint->field.name) &&
-           read_type_ref(reader, &constraint->field.type);
+    if (!core_object_reader_string(reader, (char **)&constraint->field.name) ||
+        !read_type_ref(reader, &constraint->field.type)) return false;
+    if (version < 6) return true;
+    uint32_t auto_deref;
+    if (!core_object_reader_u32(reader, &auto_deref) || auto_deref > 1)
+      return false;
+    constraint->field.auto_deref = auto_deref;
+    return true;
   case TH_CON_HAS_PARAM:
     return core_object_reader_u64(reader, &constraint->param.index) &&
            read_type_ref(reader, &constraint->param.type);
@@ -288,7 +295,7 @@ static bool save_type(core_object_writer_t *writer, const void *object,
 static void *type_allocate(core_persist_arena_t *arena, uint32_t version,
                            core_object_reader_t *payload, void *user_data) {
   (void)payload;
-  if (version < 1 || version > 5)
+  if (version < 1 || version > 6)
     return nullptr;
   /* Carry the record schema into restore_type without changing th_type. */
   th_type *type = core_persist_arena_alloc_transient(
@@ -839,7 +846,7 @@ static bool register_environment_codecs(
   for (uint32_t kind = 0; kind <= TH_TRAIT; kind++)
     if (!core_object_archive_register(registry, (core_object_archive_type_t){
             .type_id = type_archive_id((th_kind)kind),
-            .current_version = 5,
+            .current_version = 6,
             .oldest_supported_version = 1,
             .allocate = type_allocate,
             .save = save_type,

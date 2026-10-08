@@ -1376,6 +1376,11 @@ infer_propagate(parse_visit_t *v)
 
     if (sole) {
         th_type *child_type = core_tree_node_value(sole).type;
+        th_type *parent_type = v->pn->type
+            ? th_resolve(v->pn->type) : nullptr;
+        if (v->pn->integer_literal_origin && parent_type
+            && th_kind_of(parent_type) == TH_VAR
+            && th_var_constraint_count(parent_type)) return true;
         if (child_type && v->pn->type) {
             th_type *unified = th_unify_in_place(a->types, v->pn->type,
                                                  child_type);

@@ -62,6 +62,9 @@ typedef struct {
     th_type *type;
     uint32_t ordinal;
     uint64_t bit_offset;
+    th_type *inline_element_type;
+    uint64_t inline_element_count;
+    uint64_t inline_element_stride_bits;
     const ir_layout_bit_run_t *occupied;
     size_t n_occupied;
     const ir_layout_access_t *accesses;

@@ -1389,6 +1389,28 @@ static void test_store_through_address_phase_access(void)
 
 static void test_store_through_forwarded_addresses(void)
 {
+    run_t *option = verify(MOD(
+        "  func @f(%maybe: option[ref[i32]], %input: i32) -> void {\n"
+        "    block entry:\n"
+        "      %address: ref[i32] = option.get %maybe\n"
+        "      store %address, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    ir_func_t *option_function = option->m
+        ? ir_func_find(option->m, "f") : nullptr;
+    ir_value_t *extracted = option_function
+        ? ir_value_find(option_function, "address") : nullptr;
+    bool option_configured = extracted
+        && ir_value_set_indirect_access(option->ctx, extracted,
+                                        IR_INDIRECT_ACCESS_READ_WRITE);
+    if (option_configured) {
+        ir_module_establish(option->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        option->held = ir_verify(option->m, option->d);
+    }
+    check("typed IR accepts a writable reference extracted from an option parameter",
+          option_configured && typed(option));
+    done(option);
+
     run_t *r = verify(MOD(
         "  func @f(%address: ptr[i32], %input: i32) -> void {\n"
         "    block entry:\n"
@@ -1408,6 +1430,26 @@ static void test_store_through_forwarded_addresses(void)
           configured && typed(r)
               && ir_value_indirect_access(parameter)
                      == IR_INDIRECT_ACCESS_WRITE);
+    done(r);
+
+    r = verify(MOD(
+        "  func @f(%address: ref[i32], %input: i32) -> void {\n"
+        "    block entry:\n"
+        "      store %address, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    parameter = function ? ir_value_find(function, "address") : nullptr;
+    configured = parameter
+        && ir_value_set_indirect_access(r->ctx, parameter,
+                                        IR_INDIRECT_ACCESS_READ_WRITE)
+        && set_empty_alias_analysis_complete(r->ctx, parameter);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("complete local aliases do not hide writable parameter storage",
+          configured && typed(r));
     done(r);
 
     r = verify(MOD(
@@ -1642,6 +1684,15 @@ static void test_store_target_visitor(void)
               && reverse_escape->b && alias_complete
               && alias_complete->kind == IR_ANNOT_BOOL
               && !alias_complete->b);
+    bool closed_alias = duplicate_alias
+        && ir_value_complete_alias_targets(r->ctx, view_value);
+    ir_annot_t *alias_unresolved = view_value
+        ? ir_annot_get(ir_value_annots(view_value),
+                       "ir.alias_unresolved") : nullptr;
+    check("incremental alias sets can be closed when all origins are known",
+          closed_alias && alias_complete && alias_complete->b
+              && alias_unresolved && alias_unresolved->kind == IR_ANNOT_BOOL
+              && !alias_unresolved->b);
     done(r);
 
     r = verify(MOD(
@@ -1770,6 +1821,7 @@ static void test_alias_store_target_phase_access(void)
     ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
     ir_value_t *target = function && local
         ? ir_local_value(function, local) : nullptr;
+    ir_value_t *pointer = nullptr;
     bool configured = target
         && ir_value_set_phase_access(r->ctx, target,
             IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
@@ -1810,12 +1862,61 @@ static void test_alias_store_target_phase_access(void)
 
     r = verify(MOD(
         "  func @f(%p: ref[i32], %input: i32) -> void {\n"
+        "    local $x: i32\n"
         "    block entry:\n"
         "      store %p, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
     function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    ir_value_t *pointer = function ? ir_value_find(function, "p") : nullptr;
+    local = function ? ir_local_find(function, "x") : nullptr;
+    target = function && local ? ir_local_value(function, local) : nullptr;
+    pointer = function ? ir_value_find(function, "p") : nullptr;
+    configured = pointer && target
+        && set_single_alias_target(r->ctx, pointer, target, false)
+        && ir_value_set_indirect_access(r->ctx, pointer,
+                                        IR_INDIRECT_ACCESS_READ_WRITE);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("writable references admit an unresolved external alias",
+          configured && typed(r));
+    done(r);
+
+    r = verify(MOD(
+        "  func @f(%p: ref[i32], %input: i32) -> void {\n"
+        "    local $x: i32\n"
+        "    block entry:\n"
+        "      store %p, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    local = function ? ir_local_find(function, "x") : nullptr;
+    target = function && local ? ir_local_value(function, local) : nullptr;
+    pointer = function ? ir_value_find(function, "p") : nullptr;
+    configured = pointer && target
+        && ir_value_set_phase_access(r->ctx, target,
+            IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
+            IR_PHASE_ACCESS_NONE)
+        && set_single_alias_target(r->ctx, pointer, target, false)
+        && ir_value_set_indirect_access(r->ctx, pointer,
+                                        IR_INDIRECT_ACCESS_READ_WRITE);
+    if (configured) {
+        ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
+        r->held = ir_verify(r->m, r->d);
+    }
+    check("writable references still reject known read-only aliases",
+          configured && !typed(r) && said(r, "phase.binding-write"));
+    done(r);
+
+    r = verify(MOD(
+        "  func @f(%p: ref[i32], %input: i32) -> void {\n"
+        "    block entry:\n"
+        "      store %p, %input\n"
+        "      return\n"
+        "  }\n"), IR_PROP_PARSED);
+    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    pointer = function ? ir_value_find(function, "p") : nullptr;
     configured = pointer && ir_annot_set(r->ctx,
         ir_value_annots(pointer), (ir_annot_t){
             .key = "ir.alias_count", .kind = IR_ANNOT_INT,

@@ -559,7 +559,8 @@ static void emit_constraint(pctx *c, core_buffer_t *b, const th_constraint *k)
         break;
 
     case TH_CON_HAS_FIELD:
-        core_buffer_printf(b, "has_field(%s: ", k->field.name);
+        core_buffer_printf(b, k->field.auto_deref
+            ? "has_field_auto_deref(%s: " : "has_field(%s: ", k->field.name);
         emit(c, b, k->field.type);
         core_buffer_puts(b, ")");
         break;

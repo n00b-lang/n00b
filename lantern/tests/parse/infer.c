@@ -35,6 +35,7 @@ static const char *const CORPUS[] = {
     "dict[$0, $1]",
     "element_of($0)",
     "element_of($0, read, write)",
+    "field_return_auto_deref($0)",
     "slice_of($0, slice)",
     "list[`e]",
     "list[$0]",

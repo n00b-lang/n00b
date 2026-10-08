@@ -67,6 +67,8 @@ bool ir_shape_set_extent(ir_shape_t *shape, uint32_t dimension,
                          ir_shape_extent_t extent);
 bool ir_shape_extent(const ir_shape_t *shape, uint32_t dimension,
                      ir_shape_extent_t *out);
+bool ir_shape_fold_comptime_extent(ir_shape_t *shape, uint32_t dimension,
+                                   uint64_t value);
 bool ir_shape_set_storage(ir_shape_t *shape, uint32_t flat_prefix_rank,
                           bool classification_known);
 bool ir_shape_storage(const ir_shape_t *shape, ir_shape_storage_t *out);

@@ -300,6 +300,17 @@ bool ir_layout_publish_final(ir_module_t *m, th_type *t, const char *target,
     for (size_t i = 0; i < layout->n_members; i++) {
         const ir_final_member_layout_t *member = &layout->members[i];
         if (!member->name || !member->type
+            || ((member->inline_element_count != 0)
+                != (member->inline_element_type != nullptr))
+            || ((member->inline_element_count != 0)
+                != (member->inline_element_stride_bits != 0))
+            || (member->inline_element_count
+                && (member->inline_element_count > UINT64_MAX
+                    / member->inline_element_stride_bits
+                    || member->bit_offset > layout->intrinsic_bits
+                    || member->inline_element_count
+                        * member->inline_element_stride_bits
+                        > layout->intrinsic_bits - member->bit_offset))
             || (member->bit_offset > layout->intrinsic_bits
                 && (member->n_occupied || member->n_accesses))
             || !valid_runs(member->occupied, member->n_occupied,
@@ -638,7 +649,9 @@ static bool settled_size(L *l, th_type *t, uint64_t *bytes, uint64_t *align)
     if (!ir_layout_is_settled(&d->size) || !ir_layout_is_settled(&d->align)) {
         return false;
     }
-    *bytes = d->size.value;
+    if (!d->align.value || d->size.value > UINT64_MAX - (d->align.value - 1))
+        return false;
+    *bytes = round_up(d->size.value, d->align.value);
     *align = d->align.value;
 
     return true;

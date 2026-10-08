@@ -1707,7 +1707,8 @@ size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,
     const th_env_function_t *function = candidates.data[i];
     if (out && count < max_methods) {
       th_type *signature = nullptr, *error_type = nullptr;
-      if (!th_env_signature_channels(ctx, function->contract, &signature,
+      if (!th_env_signature_channels(ctx,
+                                     function->contract, &signature,
                                      &error_type))
         continue;
       out[count] = (th_env_method_t){

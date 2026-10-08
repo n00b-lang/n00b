@@ -122,10 +122,11 @@ static bool
 lower_set_alias_annots(ir_lower_context_t *context, ir_annots_t *annots,
                        const ir_value_t *source, const char *prefix,
                        const parse_sym_alias_t *aliases, size_t count,
-                       bool *unresolved)
+                       bool *unresolved, size_t *resolved_count)
 {
     ir_ctx_t *ctx = context->module->ctx;
     char key[64];
+    *resolved_count = 0;
     for (size_t i = 0; i < count; i++) {
         ir_lower_symbol_binding_t *target_binding =
             lower_find_binding(context, aliases[i].other);
@@ -149,27 +150,28 @@ lower_set_alias_annots(ir_lower_context_t *context, ir_annots_t *annots,
             *unresolved = true;
             continue;
         }
-        snprintf(key, sizeof(key), "ir.%s%zu", prefix, i);
+        size_t index = (*resolved_count)++;
+        snprintf(key, sizeof(key), "ir.%s%zu", prefix, index);
         if (!ir_annot_set(ctx, annots, (ir_annot_t){
                 .key = key,
                 .kind = IR_ANNOT_VALUE,
                 .v = target,
             })) return false;
-        snprintf(key, sizeof(key), "ir.%s%zu_kind", prefix, i);
+        snprintf(key, sizeof(key), "ir.%s%zu_kind", prefix, index);
         if (!lower_set_int_annot(ctx, annots, key, aliases[i].kind))
             return false;
-        snprintf(key, sizeof(key), "ir.%s%zu_derived", prefix, i);
+        snprintf(key, sizeof(key), "ir.%s%zu_derived", prefix, index);
         if (!lower_set_int_annot(ctx, annots, key, aliases[i].derived_at))
             return false;
-        snprintf(key, sizeof(key), "ir.%s%zu_last_use", prefix, i);
+        snprintf(key, sizeof(key), "ir.%s%zu_last_use", prefix, index);
         if (aliases[i].has_last_use) {
             if (!lower_set_int_annot(ctx, annots, key, aliases[i].last_use))
                 return false;
         }
-        snprintf(key, sizeof(key), "ir.%s%zu_has_last_use", prefix, i);
+        snprintf(key, sizeof(key), "ir.%s%zu_has_last_use", prefix, index);
         if (!lower_set_bool_annot(ctx, annots, key,
                                   aliases[i].has_last_use)) return false;
-        snprintf(key, sizeof(key), "ir.%s%zu_escapes", prefix, i);
+        snprintf(key, sizeof(key), "ir.%s%zu_escapes", prefix, index);
         if (!lower_set_bool_annot(ctx, annots, key, aliases[i].escapes))
             return false;
     }
@@ -188,6 +190,13 @@ lower_project_symbol_facts(ir_lower_context_t *context,
 
     ir_ctx_t *ctx = context->module->ctx;
     bool unresolved = false;
+    ir_annot_t *assignment_source = ir_annot_get(annots,
+                                                "ir.alias_from_assignment");
+    bool preserve_assignment_aliases = assignment_source
+        && assignment_source->kind == IR_ANNOT_BOOL
+        && assignment_source->b;
+    size_t resolved_aliases = 0;
+    size_t resolved_reverse_aliases = 0;
     ir_phase_access_t available = IR_PHASE_ACCESS_NONE;
     ir_phase_access_t mutable_in = IR_PHASE_ACCESS_NONE;
     ir_phase_access_t initializable_in = IR_PHASE_ACCESS_NONE;
@@ -214,11 +223,7 @@ lower_project_symbol_facts(ir_lower_context_t *context,
         || !lower_set_bool_annot(ctx, annots, "ir.storage_required",
                                  symbol->storage_class_required)
         || !lower_set_int_annot(ctx, annots, "ir.storage_duration",
-                                symbol->storage_duration)
-        || !lower_set_int_annot(ctx, annots, "ir.alias_count",
-                                symbol->alias_count)
-        || !lower_set_int_annot(ctx, annots, "ir.aliased_by_count",
-                                symbol->aliased_by_count)) return false;
+                                symbol->storage_duration)) return false;
     if (symbol->lifetime.has_region
         && !lower_set_int_annot(ctx, annots, "ir.lifetime_region",
                                 symbol->lifetime.region)) return false;
@@ -233,20 +238,28 @@ lower_project_symbol_facts(ir_lower_context_t *context,
                                 symbol->lifetime.finalization_point))
         return false;
 
-    if (!lower_set_alias_annots(context, annots, value, "alias",
-                                symbol->aliases, symbol->alias_count,
-                                &unresolved)
+    if ((!preserve_assignment_aliases
+         && !lower_set_alias_annots(context, annots, value, "alias",
+                                    symbol->aliases, symbol->alias_count,
+                                    &unresolved, &resolved_aliases))
         || !lower_set_alias_annots(context, annots, value, "aliased_by",
-                                   symbol->aliased_by,
-                                   symbol->aliased_by_count, &unresolved)
+                                   symbol->aliased_by, symbol->aliased_by_count,
+                                   &unresolved, &resolved_reverse_aliases)
+        || (!preserve_assignment_aliases
+            && !lower_set_int_annot(ctx, annots, "ir.alias_count",
+                                    resolved_aliases))
+        || !lower_set_int_annot(ctx, annots, "ir.aliased_by_count",
+                                resolved_reverse_aliases)
         || !lower_set_bool_annot(ctx, annots, "ir.lifetime_escapes",
                                  symbol->lifetime.escapes || unresolved)
-        || !lower_set_bool_annot(ctx, annots,
-                                 "ir.alias_analysis_complete",
-                                 symbol->alias_analysis_complete
-                                     && !unresolved)
-        || !lower_set_bool_annot(ctx, annots, "ir.alias_unresolved",
-                                 unresolved)) return false;
+        || (!preserve_assignment_aliases
+            && (!lower_set_bool_annot(ctx, annots,
+                                      "ir.alias_analysis_complete",
+                                      symbol->alias_analysis_complete
+                                          && !unresolved)
+                || !lower_set_bool_annot(ctx, annots,
+                                         "ir.alias_unresolved",
+                                         unresolved)))) return false;
     return true;
 }
 
@@ -1177,6 +1190,22 @@ lower_tree_clear_lvalues(ir_lower_tree_state_t *state, parse_tree_t *owner)
     }
 }
 
+static bool
+lower_type_is_reference_carrier(th_type *type)
+{
+    if (!type) return false;
+    if (th_kind_of(type) == TH_INDIRECTION) return true;
+    const char *name = nullptr;
+    size_t count = 0;
+    bool variant = true;
+    if (!th_named_info(type, &name, nullptr, &variant, &count)
+        || variant || !name || strcmp(name, "option") || count != 1)
+        return false;
+    const th_arg *item = th_named_arg(type, 0);
+    return item && item->kind == TH_ARG_TYPE
+        && lower_type_is_reference_carrier(item->type);
+}
+
 static ir_lower_result_t
 lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
                       parse_annotation_t *annotation, ir_span_t span)
@@ -1253,6 +1282,49 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
             return lower_failure(state->context, IR_DIAG_INTERNAL, span,
                                  "could not emit a local assignment");
         instruction->span = span;
+        if (lower_type_is_reference_carrier(binding->local->type)) {
+            ir_value_t *destination = ir_local_value(
+                state->context->function, binding->local);
+            ir_annots_t *annots = destination
+                ? ir_value_annots(destination) : nullptr;
+            ir_annot_t *count = annots
+                ? ir_annot_get(annots, "ir.alias_count") : nullptr;
+            ir_annot_t *complete = annots
+                ? ir_annot_get(annots, "ir.alias_analysis_complete")
+                : nullptr;
+            ir_annot_t *unresolved = annots
+                ? ir_annot_get(annots, "ir.alias_unresolved") : nullptr;
+            bool can_complete = !unresolved
+                || (unresolved->kind == IR_ANNOT_BOOL && !unresolved->b);
+            ir_alias_target_t source = {.value = value};
+            ir_execution_phase_t phase = ir_func_execution_phase(
+                state->context->function);
+            bool immutable_initialization = initializes && destination
+                && !ir_value_can_write(destination, phase);
+            bool already_complete = immutable_initialization && count
+                && count->kind == IR_ANNOT_INT && !count->i.neg
+                && count->i.mag && complete
+                && complete->kind == IR_ANNOT_BOOL && complete->b;
+            bool first_initialization = immutable_initialization
+                && (!count || (count->kind == IR_ANNOT_INT
+                    && !count->i.neg && !count->i.mag));
+            bool attached = already_complete ? true : first_initialization
+                ? ir_value_set_alias_targets(state->context->module->ctx,
+                    destination, &source, 1, true)
+                : ir_value_add_alias_target(state->context->module->ctx,
+                                            destination, source);
+            if (attached && immutable_initialization && !already_complete
+                && !first_initialization && can_complete)
+                attached = ir_value_complete_alias_targets(
+                    state->context->module->ctx, destination);
+            if (attached)
+                attached = lower_set_bool_annot(
+                    state->context->module->ctx, annots,
+                    "ir.alias_from_assignment", true);
+            if (!attached)
+                return lower_failure(state->context, IR_DIAG_INTERNAL, span,
+                    "could not attach the local reference source");
+        }
     }
     else if (binding->value && binding->value->kind == IR_VAL_GLOBAL) {
         ir_instr_t *instruction = ir_instr_add(state->context->block,

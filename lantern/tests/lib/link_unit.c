@@ -862,6 +862,7 @@ test_link_unit_deferred_references(void)
               && core_link_unit_resolve_reference(
                   link, second_reference, CORE_STRING_STATIC("pkg.actual"),
                   CORE_STRING_STATIC("function.go"))
+              && core_link_reference_target(second_reference) == target
               && core_link_unit_register_stage(link, 80, nullptr, 0,
                   CORE_STRING_STATIC("frontend.deferred-name-resolution"),
                   true, resolve_deferred_reference_stage, &resolver)

@@ -1119,6 +1119,97 @@ static ir_rule_result_t rule_finalize(ir_module_t *m, ir_instr_t *in,
     return opd_type(in, 0) ? ACCEPT(nullptr) : DECLINE;
 }
 
+static ir_rule_result_t rule_atomic_rmw(ir_module_t *m, ir_instr_t *in,
+                                       ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *pointer = opd_type(in, 0);
+    th_type *value = opd_type(in, 2);
+    if (!pointer || !value) return DECLINE;
+    th_type *storage = th_ind_referent(pointer);
+    const char *name = nullptr;
+    size_t nargs = 0;
+    bool is_variant = true;
+    if (!storage || !th_named_info(storage, &name, nullptr, &is_variant,
+                                    &nargs)
+        || is_variant || nargs != 1 || !name || strcmp(name, "atomic")) {
+        complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
+                 "atomic.rmw needs a pointer to atomic storage");
+        return REJECT;
+    }
+    const th_arg *argument = th_named_arg(storage, 0);
+    th_type *element = argument && argument->kind == TH_ARG_TYPE
+        ? argument->type : nullptr;
+    if (!element || !same(m, ir_type_intern(m, element), value)) {
+        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
+                 "atomic.rmw needs a value matching its storage");
+        return REJECT;
+    }
+    const char *operation = in->operands[1].kind == IR_OPD_NAME
+        ? in->operands[1].name : nullptr;
+    bool integer = is_int(ir_machine_of(m, element).class);
+    if (!operation || (strcmp(operation, "xchg")
+        && (!integer || (strcmp(operation, "or")
+            && strcmp(operation, "and")
+            && strcmp(operation, "add")
+            && strcmp(operation, "sub"))))) {
+        complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this operation",
+                 "atomic.rmw supports exchange and integer or/and/add/sub");
+        return REJECT;
+    }
+    return ACCEPT(ir_type_intern(m, element));
+}
+
+static ir_rule_result_t rule_atomic_cas(ir_module_t *m, ir_instr_t *in,
+                                       ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *pointer = opd_type(in, 0);
+    th_type *expected = opd_type(in, 1);
+    th_type *desired = opd_type(in, 2);
+    if (!pointer || !expected || !desired) return DECLINE;
+    th_type *storage = th_ind_referent(pointer);
+    const char *name = nullptr;
+    size_t nargs = 0;
+    bool is_variant = true;
+    if (!storage || !th_named_info(storage, &name, nullptr, &is_variant,
+                                    &nargs)
+        || is_variant || nargs != 1 || !name || strcmp(name, "atomic")) {
+        complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
+                 "atomic.cas needs a pointer to atomic storage");
+        return REJECT;
+    }
+    const th_arg *argument = th_named_arg(storage, 0);
+    th_type *element = argument && argument->kind == TH_ARG_TYPE
+        ? argument->type : nullptr;
+    ir_class_t scalar = element ? ir_machine_of(m, element).class
+                                : IR_CLASS_OPAQUE;
+    bool supported = is_int(scalar) || scalar == IR_CLASS_BOOL
+        || scalar == IR_CLASS_PTR
+        || (element && th_kind_of(th_resolve(element)) == TH_INDIRECTION);
+    if (!supported && element) {
+        const char *option_name = nullptr;
+        size_t option_args = 0;
+        bool option_variant = true;
+        if (th_named_info(th_resolve(element), &option_name, nullptr,
+                          &option_variant, &option_args)
+            && !option_variant && option_name
+            && !strcmp(option_name, "option") && option_args == 1) {
+            const th_arg *payload = th_named_arg(th_resolve(element), 0);
+            supported = payload && payload->kind == TH_ARG_TYPE
+                && th_kind_of(th_resolve(payload->type)) == TH_INDIRECTION;
+        }
+    }
+    if (!element || !same(m, ir_type_intern(m, element), expected)
+        || !same(m, expected, desired)
+        || !supported) {
+        complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "these values",
+                 "atomic.cas needs scalar values matching its storage");
+        return REJECT;
+    }
+    return ACCEPT(ir_type_intern(m, th_name(m->ctx->types, "bool")));
+}
+
 static ir_rule_result_t rule_load(ir_module_t *m, ir_instr_t *in,
                                   ir_diags_t *d, void *state)
 {
@@ -2982,6 +3073,9 @@ static const entry DEFAULTS[] = {
     {IR_OP_DEALLOC, "ir.dealloc", rule_dealloc},
     {IR_OP_LOAD, "ir.load", rule_load},
     {IR_OP_STORE, "ir.store", rule_store},
+    {IR_OP_ATOMIC_RMW, "ir.atomic.rmw", rule_atomic_rmw},
+    {IR_OP_ATOMIC_CAS, "ir.atomic.cas", rule_atomic_cas},
+    {IR_OP_SIGNAL_FENCE, "ir.signal.fence", rule_none},
     {IR_OP_GLOBAL_STORE, "ir.global.store", rule_global_store},
     {IR_OP_FIELD, "ir.field", rule_field},
     {IR_OP_INDEX, "ir.index", rule_index},

@@ -175,6 +175,19 @@ static void test_diagnostics_attach_to_translation_units(void)
                   core_diagnostics_at(destination, 1)->message,
                   CORE_STRING_STATIC("operand types disagree")));
 
+    ir_policy_t *policy = ir_policy_new(ctx);
+    ir_policy_set(policy, "IR-W0027", IR_POLICY_DENY);
+    ir_diags_t *promoted = ir_diags_new_attached(ctx, policy,
+                                                 destination, &unit);
+    ir_diag_t *unset = ir_diag_begin(promoted, IR_DIAG_UNSET_LOCAL,
+                                     span, "unset local");
+    ir_diag_message(unset, promoted, "read before assignment");
+    const core_diagnostic_t *promoted_item =
+        core_diagnostics_at(destination, 2);
+    check("attached diagnostics preserve promoted severity",
+          promoted_item && promoted_item->severity == CORE_DIAG_ERROR
+              && ir_diags_failed(promoted));
+
     ir_ctx_free(ctx);
     core_translation_unit_release(&unit);
     core_module_spec_release(&module);

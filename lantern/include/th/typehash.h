@@ -169,6 +169,7 @@ typedef struct {
         struct {
             const char *name;
             th_type    *type;
+            bool        auto_deref;
         } field;
         struct {
             uint64_t index;

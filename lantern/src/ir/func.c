@@ -274,6 +274,13 @@ static bool global_init_value_matches(ir_module_t *module,
     if (!module || !value || !type || depth > 64) return false;
     type = th_resolve((th_type *)type);
     if (!type) return false;
+    if (global_init_named_type(type, "atomic", 1)
+        && value->kind != IR_GLOBAL_INIT_PHASE_RESULT) {
+        const th_arg *item = th_named_arg(type, 0);
+        return item && item->kind == TH_ARG_TYPE
+            && global_init_value_matches(module, value, item->type,
+                                         depth + 1);
+    }
     ir_machine_t machine = ir_machine_of(module, (th_type *)type);
 
     switch (value->kind) {
@@ -302,7 +309,8 @@ static bool global_init_value_matches(ir_module_t *module,
     case IR_GLOBAL_INIT_TYPE:
         return value->descriptor_type != nullptr;
     case IR_GLOBAL_INIT_NIL:
-        return global_init_named_type(type, "nil", 0);
+        return global_init_named_type(type, "nil", 0)
+            || global_init_named_type(type, "option", 1);
     case IR_GLOBAL_INIT_SEQUENCE: {
         const th_type *element = nullptr;
         uint64_t extent = 0;
@@ -510,6 +518,26 @@ bool ir_global_set_phase_result_initializer(ir_module_t *module,
         return false;
     global->static_initializer = copy;
     global->has_static_initializer = true;
+    return true;
+}
+
+bool ir_global_materialize_phase_result(
+    ir_module_t *module, ir_global_t *global, const char *identifier,
+    const ir_global_init_value_t *value)
+{
+    if (!module || !global || ir_global_find(module, global->name) != global
+        || !identifier || !value || !global->has_static_initializer
+        || !global->static_initializer
+        || global->static_initializer->kind != IR_GLOBAL_INIT_PHASE_RESULT
+        || !global->static_initializer->phase_result.identifier
+        || strcmp(global->static_initializer->phase_result.identifier,
+                  identifier)
+        || !global_init_value_matches(module, value, global->type, 0))
+        return false;
+    ir_global_init_value_t *copy = ir_alloc(module->ctx, sizeof(*copy));
+    if (!copy || !clone_global_init_value(module->ctx, copy, value, 0))
+        return false;
+    global->static_initializer = copy;
     return true;
 }
 
@@ -927,6 +955,30 @@ bool ir_value_add_alias_target(ir_ctx_t *ctx, ir_value_t *value,
         && ir_annot_set(ctx, annots, (ir_annot_t){
                .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
                .b = true,
+           });
+}
+
+bool ir_value_complete_alias_targets(ir_ctx_t *ctx, ir_value_t *value)
+{
+    ir_annots_t *annots = ir_value_annots(value);
+    uint32_t count = 0;
+    if (!ctx || !annots
+        || !alias_annotation_count(annots, "ir.alias_count", &count)
+        || !count) return false;
+    for (uint32_t i = 0; i < count; i++) {
+        char key[48];
+        snprintf(key, sizeof(key), "ir.alias%u", i);
+        ir_annot_t *target = ir_annot_get(annots, key);
+        if (!target || target->kind != IR_ANNOT_VALUE || !target->v)
+            return false;
+    }
+    return ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+               .b = true,
+           })
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+               .b = false,
            });
 }
 

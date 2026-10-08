@@ -1,6 +1,7 @@
 #include "lib/link_unit.h"
 
 #include "lib/alloc.h"
+#include "lib/buffer.h"
 
 typedef struct {
     core_string_t module;
@@ -1481,7 +1482,10 @@ core_link_unit_resolve_reference(core_link_unit_t *link,
     reference->deferral_reason = (core_string_t){0};
     reference->deferral_prerequisite = 0;
     reference->deferred = false;
-    reference->target = nullptr;
+    core_link_declaration_t *target = core_link_unit_find_declaration(
+        link, reference->target_module, reference->declaration_key);
+    reference->target = target && (!reference->has_expected_kind
+        || reference->expected_kind == target->kind) ? target : nullptr;
     link->validated = false;
     return true;
 }
@@ -2109,8 +2113,15 @@ core_link_unit_require_contribution(
         return false;
     }
     if (contribution.state != CORE_LINK_CONTRIBUTION_COMPLETE) {
-        link_report(link, nullptr, "LANTERN-L0016",
-            "required link-unit analysis contribution is not complete");
+        core_buffer_t message = {0};
+        const char *state = contribution.state == CORE_LINK_CONTRIBUTION_PENDING
+            ? "pending" : contribution.state == CORE_LINK_CONTRIBUTION_UNAVAILABLE
+            ? "unavailable" : "failed";
+        core_buffer_printf(&message,
+            "required link-unit analysis contribution '%.*s' is %s",
+            (int)domain.u8_bytes, domain.data, state);
+        link_report(link, nullptr, "LANTERN-L0016", message.data);
+        core_buffer_release(&message);
         return false;
     }
     if (contribution.producer_stage

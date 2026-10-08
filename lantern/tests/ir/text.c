@@ -740,6 +740,18 @@ static void test_recursive_global_initializers(void)
                    "default:init_tree:answer")
               && !ir_global_set_phase_result_initializer(module, answer,
                    "other:answer"));
+    ir_global_init_value_t folded_answer = {
+        .kind = IR_GLOBAL_INIT_INT,
+        .integer = {.mag = 43},
+    };
+    check("a matching phase result becomes a typed static initializer",
+          answer && !ir_global_materialize_phase_result(module, answer,
+              "other:answer", &folded_answer)
+              && ir_global_materialize_phase_result(module, answer,
+                  "default:init_tree:answer", &folded_answer)
+              && answer->static_initializer->kind == IR_GLOBAL_INIT_INT
+              && ir_lit_signed(answer->static_initializer->integer) == 43
+              && ir_global_static_initializer_valid(module, answer));
     check("sequence initializer is retained and type-valid",
           numbers && numbers->has_static_initializer
               && ir_global_static_initializer_valid(module, numbers)

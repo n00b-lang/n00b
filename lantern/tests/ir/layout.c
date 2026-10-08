@@ -704,6 +704,50 @@ static void test_final_layout_is_bit_precise_and_owned(void)
     close_env(e);
 }
 
+static void test_inline_member_layout(void)
+{
+    env *e = open_env("x86_64");
+    th_type *byte = ty(e, "u8");
+    th_type *record = ty(e, "InlineArrayRecord");
+    ir_layout_bit_run_t bits = {.offset = 0, .width = 32};
+    ir_final_member_layout_t member = {
+        .name = "items",
+        .type = th_array(ir_ctx_types(e->ctx), byte),
+        .ordinal = 0,
+        .inline_element_type = byte,
+        .inline_element_count = 4,
+        .inline_element_stride_bits = 8,
+        .occupied = &bits,
+        .n_occupied = 1,
+    };
+    ir_final_layout_t layout = {
+        .intrinsic_bits = 32,
+        .alignment_bytes = 1,
+        .occupied = &bits,
+        .n_occupied = 1,
+        .members = &member,
+        .n_members = 1,
+    };
+    check("inline array member fits its record",
+          ir_layout_publish_final(e->m, record, "x86_64", &layout));
+    const ir_final_layout_t *saved = ir_layout_final(e->m, record, "x86_64");
+    check("inline array storage is separate from semantic member type",
+          saved && saved->members[0].type == member.type
+          && saved->members[0].inline_element_type == byte
+          && saved->members[0].inline_element_count == 4
+          && saved->members[0].inline_element_stride_bits == 8);
+    member.inline_element_count = 5;
+    check("inline array member cannot exceed its record",
+          !ir_layout_publish_final(e->m, ty(e, "TooSmall"), "x86_64",
+                                   &layout));
+    member.inline_element_count = 4;
+    member.inline_element_type = nullptr;
+    check("inline array member requires its storage element type",
+          !ir_layout_publish_final(e->m, ty(e, "NoElement"), "x86_64",
+                                   &layout));
+    close_env(e);
+}
+
 static void test_final_layout_copy_preserves_representation(void)
 {
     env *e = open_env("x86_64");
@@ -1481,6 +1525,7 @@ int main(void)
     test_trait_value_abi_keeps_data_and_vtable_indirect();
     test_descriptors_are_keyed_and_scoped();
     test_final_layout_is_bit_precise_and_owned();
+    test_inline_member_layout();
     test_final_layout_copy_preserves_representation();
     test_zero_sized_member_keeps_logical_offset();
     test_the_pass_computes_around_pins();

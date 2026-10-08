@@ -955,6 +955,70 @@ static void test_aggregates_and_variants(void)
     check("atomic store accepts the underlying value type",
           apply(e, atomic_store) == IR_RULE_ACCEPT);
 
+    ir_instr_t *atomic_or = op(e, IR_OP_ATOMIC_RMW);
+    ir_instr_operand_value(atomic_or, val(e, "ref[atomic[i32]]"));
+    ir_instr_operand_name(atomic_or, "or");
+    ir_instr_operand_value(atomic_or, val(e, "i32"));
+    check("atomic fetch-or returns the previous underlying value",
+          accepts_as(e, atomic_or, "i32"));
+
+    ir_instr_t *atomic_and = op(e, IR_OP_ATOMIC_RMW);
+    ir_instr_operand_value(atomic_and, val(e, "ref[atomic[i32]]"));
+    ir_instr_operand_name(atomic_and, "and");
+    ir_instr_operand_value(atomic_and, val(e, "i32"));
+    check("atomic fetch-and returns the previous underlying value",
+          accepts_as(e, atomic_and, "i32"));
+
+    ir_instr_t *signal_fence = op(e, IR_OP_SIGNAL_FENCE);
+    check("signal fence has no result",
+          accepts_as(e, signal_fence, nullptr));
+
+    ir_instr_t *atomic_or_bad = op(e, IR_OP_ATOMIC_RMW);
+    ir_instr_operand_value(atomic_or_bad, val(e, "ref[atomic[i32]]"));
+    ir_instr_operand_name(atomic_or_bad, "or");
+    ir_instr_operand_value(atomic_or_bad, val(e, "u32"));
+    check("atomic fetch-or rejects a mismatched value",
+          apply(e, atomic_or_bad) == IR_RULE_REJECT);
+
+    ir_instr_t *atomic_cas = op(e, IR_OP_ATOMIC_CAS);
+    ir_instr_operand_value(atomic_cas, val(e, "ref[atomic[i32]]"));
+    ir_instr_operand_value(atomic_cas, val(e, "i32"));
+    ir_instr_operand_value(atomic_cas, val(e, "i32"));
+    check("atomic compare-exchange returns success",
+          accepts_as(e, atomic_cas, "bool"));
+
+    ir_instr_t *atomic_cas_bool = op(e, IR_OP_ATOMIC_CAS);
+    ir_instr_operand_value(atomic_cas_bool, val(e, "ref[atomic[bool]]"));
+    ir_instr_operand_value(atomic_cas_bool, val(e, "bool"));
+    ir_instr_operand_value(atomic_cas_bool, val(e, "bool"));
+    check("atomic compare-exchange accepts booleans",
+          accepts_as(e, atomic_cas_bool, "bool"));
+
+    ir_instr_t *atomic_cas_ref = op(e, IR_OP_ATOMIC_CAS);
+    ir_instr_operand_value(atomic_cas_ref,
+        val(e, "ref[atomic[option[ref[i32]]]]"));
+    ir_instr_operand_value(atomic_cas_ref, val(e, "option[ref[i32]]"));
+    ir_instr_operand_value(atomic_cas_ref, val(e, "option[ref[i32]]"));
+    check("atomic compare-exchange accepts nullable references",
+          accepts_as(e, atomic_cas_ref, "bool"));
+
+    ir_instr_t *atomic_cas_aggregate = op(e, IR_OP_ATOMIC_CAS);
+    ir_instr_operand_value(atomic_cas_aggregate,
+        val(e, "ref[atomic[(x: i32, y: i32)]]"));
+    ir_instr_operand_value(atomic_cas_aggregate,
+        val(e, "(x: i32, y: i32)"));
+    ir_instr_operand_value(atomic_cas_aggregate,
+        val(e, "(x: i32, y: i32)"));
+    check("atomic compare-exchange rejects aggregates",
+          apply(e, atomic_cas_aggregate) == IR_RULE_REJECT);
+
+    ir_instr_t *atomic_cas_bad = op(e, IR_OP_ATOMIC_CAS);
+    ir_instr_operand_value(atomic_cas_bad, val(e, "ref[atomic[i32]]"));
+    ir_instr_operand_value(atomic_cas_bad, val(e, "i32"));
+    ir_instr_operand_value(atomic_cas_bad, val(e, "u32"));
+    check("atomic compare-exchange rejects a mismatched replacement",
+          apply(e, atomic_cas_bad) == IR_RULE_REJECT);
+
     ir_instr_t *atomic_wrap = op(e, IR_OP_ATOMIC_WRAP);
     ir_instr_set_dest(atomic_wrap, "atomic_wrap",
                       ir_type_parse(e->m, "atomic[i32]"));

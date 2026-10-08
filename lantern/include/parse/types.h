@@ -145,6 +145,7 @@ typedef struct parse_nt_node_t {
     parse_node_resolution_t resolution;
     parse_sym_entry_t *reference_target;
     bool direct_symbol_reference;
+    bool index_address_access;
     bool integer_range_known;
     int64_t integer_range_minimum;
     int64_t integer_range_maximum;

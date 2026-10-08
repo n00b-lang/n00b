@@ -541,6 +541,12 @@ symbol_type(ictx *c, int32_t ix)
                                                       core_string_empty());
     parse_sym_entry_t *sym = parse_symtab_lookup_scoped(c->st, scope,
                                                     core_string_empty(), nm);
+    if (!sym && core_tree_num_children(c->v->node) == 1
+        && core_tree_child(c->v->node, 0) == k) {
+        parse_node_resolution_t resolution = parse_tree_resolution(c->v->node);
+        if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
+            sym = resolution.target.symbol;
+    }
 
     if (!sym) {
         return nullptr;
@@ -634,7 +640,8 @@ last_text(parse_tree_t *node)
 }
 
 static th_type *
-field_projection(ictx *c, th_type *receiver, core_string_t name)
+field_projection(ictx *c, th_type *receiver, core_string_t name,
+                 bool auto_deref)
 {
     if (!name.data) return fresh(c);
     char *field_name = core_alloc_array(char, name.u8_bytes + 1);
@@ -651,7 +658,8 @@ field_projection(ictx *c, th_type *receiver, core_string_t name)
         && th_var_constrain(c->tc, resolved,
             (th_constraint){
                 .kind = TH_CON_HAS_FIELD,
-                .field = {.name = field_name, .type = result}});
+                .field = {.name = field_name, .type = result,
+                          .auto_deref = auto_deref}});
     core_free(field_name);
     if (!constrained) c->failed = true;
     return result;
@@ -688,11 +696,8 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             : resolved && th_kind_of(resolved) == TH_FUNCTION
                 ? th_type_clone(c->tc, resolved) : nullptr;
         if (instance && th_kind_of(instance) == TH_FUNCTION) {
-            th_type *isolated_shape = shape
-                ? th_type_clone(c->tc, shape) : nullptr;
-            if (isolated_shape)
-                (void)unify_function_call_shape(c, instance,
-                                                isolated_shape);
+            if (shape)
+                (void)unify_function_call_shape(c, instance, shape);
             th_type *ret = th_func_ret(instance);
             return ret ? ret : result;
         }
@@ -715,6 +720,14 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
     case PARSE_INFER_ELEMENT_OF: {
         parse_tree_t *result_node = c->v->node;
         th_type *result = node_type(c, result_node);
+        if (core_tree_node_value(result_node).index_address_access) {
+            th_type *element = th_seq_elem(t);
+            if (!element) {
+                c->failed = true;
+                return result;
+            }
+            return element;
+        }
         if (index_is_assignment_target(c->v, result_node)) {
             th_type *call_shape = index_store_call_shape(c, result);
             if (call_shape && other_name.data)
@@ -899,12 +912,19 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
     }
 
     case PARSE_INFER_FIELD_RETURN:
+    case PARSE_INFER_FIELD_RETURN_AUTO_DEREF:
         if (method_call_parent(c))
             return project(c, PARSE_INFER_METHOD_RETURN, t,
                 explicit_name.data ? explicit_name : last_text(c->v->node),
                 (core_string_t){0});
+        if (op == PARSE_INFER_FIELD_RETURN_AUTO_DEREF) {
+            t = th_resolve(t);
+            while (t && th_kind_of(t) == TH_INDIRECTION)
+                t = th_resolve(th_ind_referent(t));
+        }
         return field_projection(c, t,
-            explicit_name.data ? explicit_name : last_text(c->v->node));
+            explicit_name.data ? explicit_name : last_text(c->v->node),
+            op == PARSE_INFER_FIELD_RETURN_AUTO_DEREF);
     }
 
     return fresh(c);

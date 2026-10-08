@@ -107,8 +107,9 @@ static th_constraint *con_same_slot(th_type *var, th_constraint c)
             continue;
         }
 
-        if (c.kind == TH_CON_HAS_FIELD && !strcmp(e->field.name,
-                                                  c.field.name)) {
+        if (c.kind == TH_CON_HAS_FIELD
+            && e->field.auto_deref == c.field.auto_deref
+            && !strcmp(e->field.name, c.field.name)) {
             return e;
         }
 
@@ -991,7 +992,11 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
         }
 
         case TH_CON_HAS_FIELD: {
-            th_type *m = th_record_lookup_in(ctx, bound_to,
+            th_type *field_owner = th_resolve(bound_to);
+            if (c->field.auto_deref)
+                while (field_owner && th_kind_of(field_owner) == TH_INDIRECTION)
+                    field_owner = th_resolve(th_ind_referent(field_owner));
+            th_type *m = th_record_lookup_in(ctx, field_owner,
                                             c->field.name);
 
             if (!m) {

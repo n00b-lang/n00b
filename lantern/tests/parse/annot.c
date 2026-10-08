@@ -2363,6 +2363,89 @@ test_symbol_lookup_instantiates_schemes(void)
 }
 
 static void
+test_generic_call_result_tracks_argument_type(void)
+{
+    static const char *const G =
+        "<top> @tokenizer(\"toy\") ::= <postfix-expr>\n"
+        "<postfix-expr> ::= <postfix-expr> %\"(\" <call-args> %\")\" | <name>\n"
+        "<call-args> ::= <positional-args>\n"
+        "<positional-args> ::= <expression>\n"
+        "<expression> ::= <name>\n"
+        "<name> ::= __LOWER\n";
+    parse_grammar_t *g = parse_grammar_new();
+    parse_grammar_set_error_recovery(g, false);
+    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    check("generic call inference grammar loads", loaded);
+    if (!loaded) {
+        parse_grammar_free(g);
+        return;
+    }
+
+    parse_pwz_parser_t *parser = nullptr;
+    parse_token_stream_t *tokens = nullptr;
+    parse_tree_t *tree = parse_toy(g, "top", "f(x)", &parser, &tokens);
+    check("generic call inference sample parses", tree != nullptr);
+    if (!tree) {
+        if (parser) parse_pwz_free(parser);
+        if (tokens) scan_token_stream_free(tokens);
+        parse_grammar_free(g);
+        return;
+    }
+
+    parse_tree_t *call = find_node(g, tree, "postfix-expr");
+    parse_tree_t *callee = call && core_tree_num_children(call) == 4
+        ? core_tree_child(call, 0) : nullptr;
+    parse_tree_t *argument = find_node(g, tree, "expression");
+    th_ctx *types = th_ctx_new();
+    th_type *item = th_var(types);
+    th_type *argument_type = th_var(types);
+    th_param parameter = {.mode = TH_IN, .type = item};
+    parse_symtab_t *symbols = parse_symtab_new();
+    parse_sym_entry_t *function = parse_symtab_add(symbols, S("external"),
+        S("f"), PARSE_SYM_FUNCTION, nullptr);
+    if (function)
+        function->type = th_func(types, item, &parameter, 1,
+                                 nullptr, nullptr, 0);
+    bool attached = callee && function && function->type
+        && parse_tree_set_resolution_symbol(callee, function);
+    parse_infer_expr_t *lookup = parse_infer_parse(S("lookup($0)"));
+    parse_visit_t callee_visit = {
+        .grammar = g,
+        .node = callee,
+        .pn = callee ? &core_tree_node_value(callee) : nullptr,
+    };
+    bool lookup_valid = false;
+    if (attached && lookup)
+        core_tree_node_value(callee).type = parse_infer_eval(lookup,
+            &callee_visit, types, symbols, &lookup_valid);
+    if (argument)
+        core_tree_node_value(argument).type = argument_type;
+    parse_infer_expr_t *inference = parse_infer_parse(S("return_of($0)"));
+    parse_visit_t visit = {
+        .grammar = g,
+        .node = call,
+        .pn = call ? &core_tree_node_value(call) : nullptr,
+    };
+    bool valid = false;
+    th_type *result = call && callee && argument && inference
+        ? parse_infer_eval(inference, &visit, types, nullptr, &valid)
+        : nullptr;
+    th_type *uint_type = th_name(types, "uint");
+    check("generic call binds its result to the argument node",
+          attached && lookup_valid && valid && result && uint_type
+              && th_unify_in_place(types, argument_type, uint_type)
+              && th_resolve(result) == th_resolve(uint_type));
+
+    parse_infer_free(lookup);
+    parse_infer_free(inference);
+    parse_symtab_free(symbols);
+    th_ctx_free(types);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+    parse_grammar_free(g);
+}
+
+static void
 test_error_propagation_preserves_return_type(void)
 {
     static const char *const G =
@@ -2751,6 +2834,7 @@ main(void)
     test_selected_type_annotations_per_node(g);
     test_frontend_type_node_resolver();
     test_inference_result_is_propagated();
+    test_generic_call_result_tracks_argument_type();
     test_symbol_lookup_instantiates_schemes();
     test_error_propagation_preserves_return_type();
     test_indirection_inference_constructors();

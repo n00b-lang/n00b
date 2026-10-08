@@ -121,6 +121,7 @@ typedef struct {
     bool     has_end;
     bool     has_finalization_point;
     bool     escapes;
+    bool     referent_value_escapes;
     parse_sym_lifetime_start_t *starts;
     size_t start_count;
     size_t start_capacity;

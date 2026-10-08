@@ -212,6 +212,24 @@ static void test_has_field(th_ctx *ctx)
     check("has_field rejects a non-record", !binds(ctx, c, i));
 }
 
+static void test_has_field_auto_deref(th_ctx *ctx)
+{
+    th_type *i = th_name(ctx, "int");
+    th_member value = {.name = "value", .type = i};
+    th_type *record = th_record(ctx, &value, 1);
+    th_type *ref = th_ind(ctx, 0, record);
+    th_constraint field = {.kind = TH_CON_HAS_FIELD,
+        .field = {.name = "value", .type = i, .auto_deref = true}};
+    th_constraint strict = {.kind = TH_CON_HAS_FIELD,
+        .field = {.name = "value", .type = i}};
+
+    check("auto-deref field accepts a value", binds(ctx, field, record));
+    check("auto-deref field accepts a reference", binds(ctx, field, ref));
+    check("strict field rejects a reference", !binds(ctx, strict, ref));
+    check("auto-deref field rejects a missing field",
+          !binds(ctx, field, th_ind(ctx, 0, i)));
+}
+
 static void test_has_param(th_ctx *ctx)
 {
     th_type *i = th_name(ctx, "int");
@@ -951,6 +969,7 @@ int main(void)
     test_kind(ctx);
     test_promotes(ctx);
     test_has_field(ctx);
+    test_has_field_auto_deref(ctx);
     test_has_param(ctx);
     test_constraints_move_between_vars(ctx);
     test_implements(ctx);

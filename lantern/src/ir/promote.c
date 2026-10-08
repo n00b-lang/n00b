@@ -241,13 +241,34 @@ static bool promote_func(P *p, ir_func_t *f)
         return false;
     }
 
+    bool *live_phi = ir_alloc(ctx, (np ? np : 1) * sizeof(bool));
+    uint32_t n_defs = ir_rd_tok_count(r) - np - 1;
+    for (uint32_t i = 0; i < n_use; i++)
+        if (use[i].tok != NO_TOK && use[i].tok > n_defs)
+            live_phi[use[i].tok - n_defs - 1] = true;
+    bool changed;
+    do {
+        changed = false;
+        for (uint32_t q = 0; q < np; q++) {
+            if (!live_phi[q]) continue;
+            for (uint32_t i = 0; i < ir_rd_arm_count(r, q); i++) {
+                uint32_t tok = ir_rd_arm_tok(r, q, i);
+                if (tok != NO_TOK && tok > n_defs
+                    && !live_phi[tok - n_defs - 1]) {
+                    live_phi[tok - n_defs - 1] = true;
+                    changed = true;
+                }
+            }
+        }
+    } while (changed);
+
     for (uint32_t q = 0; q < np; q++) {
         for (uint32_t i = 0; i < ir_rd_arm_count(r, q); i++) {
             uint32_t l = ir_rd_phi_local(r, q)->index;
 
             if (!ir_rd_arm_tok(r, q, i)) {
                 want[l] = true;
-                warn[l] = true;
+                warn[l] = warn[l] || live_phi[q];
             }
         }
         ir_block_t *join = ir_rd_phi_block(r, q);

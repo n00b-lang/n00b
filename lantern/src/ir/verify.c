@@ -508,6 +508,7 @@ typedef struct {
     size_t target_count;
     size_t target_capacity;
     bool external_writable;
+    bool writable_projection;
     bool complete;
 } store_target_set_t;
 
@@ -533,11 +534,26 @@ static bool store_target_enqueue(store_target_set_t *set, ir_value_t *value)
                                      &set->pending_capacity, value);
 }
 
+static bool store_target_carries_reference(th_type *type)
+{
+    if (!type) return false;
+    if (th_kind_of(type) == TH_INDIRECTION) return true;
+    const char *name = nullptr;
+    size_t count = 0;
+    bool variant = true;
+    if (!th_named_info(type, &name, nullptr, &variant, &count)
+        || variant || !name || strcmp(name, "option") || count != 1)
+        return false;
+    const th_arg *item = th_named_arg(type, 0);
+    return item && item->kind == TH_ARG_TYPE
+        && store_target_carries_reference(item->type);
+}
+
 static bool store_target_enqueue_indirect(store_target_set_t *set,
                                           ir_value_t *value)
 {
     return value && value->type
-        && th_kind_of(value->type) == TH_INDIRECTION
+        && store_target_carries_reference(value->type)
         && store_target_enqueue(set, value);
 }
 
@@ -546,6 +562,8 @@ static bool store_target_finish(store_target_set_t *set, ir_value_t *value)
     return value && store_target_add(&set->targets, &set->target_count,
                             &set->target_capacity, value);
 }
+
+static bool store_target_reference_is_writable(const ir_value_t *value);
 
 static bool store_target_annotation_edges(store_target_set_t *set,
                                           ir_value_t *value)
@@ -558,9 +576,13 @@ static bool store_target_annotation_edges(store_target_set_t *set,
     ir_annot_t *resolved = ir_annot_get(annots,
                                         "ir.alias_analysis_complete");
     ir_annot_t *unresolved = ir_annot_get(annots, "ir.alias_unresolved");
-    if (!resolved || resolved->kind != IR_ANNOT_BOOL || !resolved->b
+    if (!resolved || resolved->kind != IR_ANNOT_BOOL
         || !unresolved || unresolved->kind != IR_ANNOT_BOOL
-        || unresolved->b || !count->i.mag) return false;
+        || (resolved->b && unresolved->b)
+        || (!resolved->b && !unresolved->b)
+        || (!resolved->b
+            && !store_target_reference_is_writable(value)
+            && !set->writable_projection)) return false;
 
     for (uint64_t i = 0; i < count->i.mag; i++) {
         char key[48];
@@ -570,17 +592,18 @@ static bool store_target_annotation_edges(store_target_set_t *set,
         if (!edge || edge->kind != IR_ANNOT_VALUE || !edge->v
             || !store_target_enqueue(set, edge->v)) return false;
     }
+    if (!resolved->b) set->external_writable = true;
     return true;
 }
 
-static bool store_target_parameter_is_writable(const ir_value_t *value)
+static bool store_target_reference_is_writable(const ir_value_t *value)
 {
     ir_indirect_access_t access = ir_value_indirect_access(value);
     return access == IR_INDIRECT_ACCESS_WRITE
         || access == IR_INDIRECT_ACCESS_READ_WRITE;
 }
 
-static bool store_target_parameter_has_unknown_aliases(
+static bool store_target_parameter_has_no_known_aliases(
     const ir_value_t *value)
 {
     ir_annots_t *annots = ir_value_annots((ir_value_t *)value);
@@ -591,7 +614,7 @@ static bool store_target_parameter_has_unknown_aliases(
     return value && value->kind == IR_VAL_PARAM
         && count && count->kind == IR_ANNOT_INT && !count->i.neg
         && !count->i.mag
-        && complete && complete->kind == IR_ANNOT_BOOL && !complete->b;
+        && complete && complete->kind == IR_ANNOT_BOOL;
 }
 
 static bool store_target_collect(store_target_set_t *set,
@@ -603,20 +626,26 @@ static bool store_target_collect(store_target_set_t *set,
     for (size_t cursor = 0; set->complete && cursor < set->pending_count;
          cursor++) {
         ir_value_t *value = set->pending[cursor];
+        if (ir_value_has_external_writable_storage(value)) {
+            set->external_writable = true;
+            continue;
+        }
         if (value->kind != IR_VAL_INSTR || !value->def) {
-            if (value->type && th_kind_of(value->type) == TH_INDIRECTION) {
+            if (store_target_carries_reference(value->type)) {
                 if (preserve_parameters && value->kind == IR_VAL_PARAM) {
                     set->complete = store_target_finish(set, value);
                     continue;
                 }
                 ir_annot_t *aliases = ir_annot_get(ir_value_annots(value),
                                                     "ir.alias_count");
-                if (aliases && store_target_parameter_has_unknown_aliases(
-                        value) && store_target_parameter_is_writable(value))
+                if (aliases && store_target_parameter_has_no_known_aliases(
+                        value) && (store_target_reference_is_writable(value)
+                                  || set->writable_projection))
                     set->external_writable = true;
                 else if (aliases)
                     set->complete = store_target_annotation_edges(set, value);
-                else if (store_target_parameter_is_writable(value))
+                else if (store_target_reference_is_writable(value)
+                         || set->writable_projection)
                     set->external_writable = true;
                 else
                     set->complete = false;
@@ -645,9 +674,24 @@ static bool store_target_collect(store_target_set_t *set,
         case IR_OP_FIELD:
         case IR_OP_INDEX:
         case IR_OP_OFFSET:
+        case IR_OP_OPTION_SOME:
             set->complete = definition->n_operands > 0
                 && store_target_enqueue_indirect(set,
                     ir_operand_value(&definition->operands[0]));
+            break;
+        case IR_OP_OPTION_GET:
+            set->writable_projection |= store_target_reference_is_writable(value);
+            set->complete = definition->n_operands == 1
+                && store_target_enqueue(set,
+                    ir_operand_value(&definition->operands[0]));
+            break;
+        case IR_OP_OPTION_GET_OR_ELSE:
+            set->writable_projection |= store_target_reference_is_writable(value);
+            set->complete = definition->n_operands == 2
+                && store_target_enqueue(set,
+                    ir_operand_value(&definition->operands[0]))
+                && store_target_enqueue_indirect(set,
+                    ir_operand_value(&definition->operands[1]));
             break;
         case IR_OP_SELECT:
             set->complete = definition->n_operands == 3
@@ -664,13 +708,13 @@ static bool store_target_collect(store_target_set_t *set,
                     ir_operand_value(&definition->operands[i]));
             break;
         default:
-            if (value->type
-                && th_kind_of(value->type) == TH_INDIRECTION) {
+            if (store_target_carries_reference(value->type)) {
                 ir_annot_t *aliases = ir_annot_get(ir_value_annots(value),
                                                     "ir.alias_count");
                 if (aliases)
                     set->complete = store_target_annotation_edges(set, value);
-                else if (store_target_parameter_is_writable(value))
+                else if (store_target_reference_is_writable(value)
+                         || set->writable_projection)
                     set->external_writable = true;
                 else
                     set->complete = false;
