@@ -226,6 +226,32 @@ jobs:
           echo "/tmp/ncc-install" >> "$GITHUB_PATH"
           echo "NCC_PATH=/tmp/ncc-install/ncc" >> "$GITHUB_ENV"
 
+      # `mir` is the one subproject meson fetches over the network
+      # (subprojects/mir.wrap, wrap-git against github.com/vnmakarov/mir);
+      # picotls, picoquic and monocypher are all vendored in-tree. meson
+      # fetches it during `meson setup` inside build.sh, where a transient
+      # failure is fatal and unretried:
+      #
+      #   ERROR: Subproject mir is buildable: NO
+      #   meson.build:568:11: ERROR: Git command failed:
+      #     ['git', 'fetch', '--depth', '1', 'origin', '99c6507...']
+      #
+      # That killed a macOS run before a line was compiled, which is the same
+      # shape as the Unicode-host outage the cache above exists for. Pulling
+      # the download out of `meson setup` lets it retry: the command is
+      # idempotent (a second run reports "Already downloaded" and leaves the
+      # patch applied exactly once), so build.sh's own setup then finds it
+      # present and does no network I/O.
+      - name: Fetch the mir subproject (retried)
+        run: |
+          for i in 1 2 3 4 5; do
+            meson subprojects download mir && break
+            echo "mir subproject download failed (attempt $i); retrying"
+            rm -rf subprojects/mir
+            sleep 5
+          done
+          test -d subprojects/mir
+
       - name: Build libn00b and the test suite
         env:
           # A GitHub checkout is a plain git clone, not a jj workspace, so the
