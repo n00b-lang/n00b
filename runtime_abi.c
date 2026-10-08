@@ -361,6 +361,55 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+metadata_code_ranges_valid(const n00b_abi_snapshot_v1 *snapshot,
+                           n00b_abi_error_v1 *error)
+{
+    uint32_t code_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_CODE_RANGE);
+    if (code_count <= 1) return true;
+    uint8_t *seen = snapshot_alloc(code_count);
+    if (!seen) return false;
+    bool valid = true;
+    uint32_t function_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_FUNCTION);
+    for (uint32_t function_index = 1; valid
+         && function_index < function_count; function_index++) {
+        const n00b_abi_function_v1 *function = n00b_abi_v1_function(snapshot,
+            function_index);
+        const n00b_abi_symbol_v1 *symbol = function->symbol_index
+            ? n00b_abi_v1_symbol(snapshot, function->symbol_index) : nullptr;
+        for (uint32_t i = 0; valid && i < function->code_ranges.count; i++) {
+            uint32_t code_index = 0;
+            valid = n00b_abi_v1_index_at(snapshot, function->code_ranges,
+                i, &code_index) == 1 && code_index
+                && code_index < code_count
+                && !seen[code_index];
+            const n00b_abi_code_range_v1 *code = valid
+                ? n00b_abi_v1_code_range(snapshot, code_index) : nullptr;
+            valid = valid && code && code->function_index == function_index
+                && code->start && code->byte_length
+                && code->byte_length <= UINTPTR_MAX
+                && (uintptr_t)code->start <= UINTPTR_MAX - code->byte_length
+                && code->phase_mask
+                && !(code->phase_mask
+                    & ~(N00B_ABI_PHASE_COMPTIME | N00B_ABI_PHASE_RUNTIME))
+                && (!function->symbol_index
+                    || (symbol && symbol->kind == N00B_ABI_SYMBOL_FUNCTION
+                        && (code->phase_mask & symbol->phase_mask)
+                            == code->phase_mask));
+            if (valid) seen[code_index] = 1;
+            else invalid_record(error, N00B_ABI_TABLE_CODE_RANGE,
+                                code_index, 0);
+        }
+    }
+    for (uint32_t i = 1; valid && i < code_count; i++)
+        if (!seen[i]) valid = invalid_record(error,
+            N00B_ABI_TABLE_CODE_RANGE, i, 0);
+    snapshot_free(seen, code_count);
+    return valid;
+}
+
+static bool
 metadata_storage_valid(const n00b_abi_snapshot_v1 *snapshot,
                        n00b_abi_error_v1 *error)
 {
@@ -775,6 +824,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
             && nil->typehash == UINT64_C(0x0ea862bddb8ce94c);
     }
     if (valid) valid = metadata_references_valid(candidate, error);
+    if (valid) valid = metadata_code_ranges_valid(candidate, error);
     if (valid) valid = metadata_storage_valid(candidate, error);
     if (valid) valid = metadata_dispatch_valid(candidate, error);
     if (valid) valid = metadata_name_slots_valid(candidate, error);
