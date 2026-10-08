@@ -102,6 +102,7 @@ struct n00b_abi_snapshot_v1 {
     uint32_t *module_name_slots;
     size_t module_name_capacity;
     n00bb_abi_directory_entry_t tables[N00B_ABI_TABLE_CALL_SHAPE + 1];
+    const uint8_t *table_bytes[N00B_ABI_TABLE_CALL_SHAPE + 1];
 };
 
 static _Atomic(const n00b_abi_snapshot_v1 *) current_snapshot;
@@ -2174,6 +2175,44 @@ module_name_cache_build(n00b_abi_snapshot_v1 *snapshot,
     return true;
 }
 
+static bool
+snapshot_contents_valid(n00b_abi_snapshot_v1 *candidate,
+                        n00b_abi_error_v1 *error)
+{
+    const n00bb_abi_directory_entry_t *types = table_for(candidate,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *requirements = table_for(candidate,
+        N00B_ABI_TABLE_REQUIREMENT);
+    const n00bb_abi_directory_entry_t *patches = table_for(candidate,
+        N00B_ABI_TABLE_INDEX_PATCH);
+    if (!types || !types->record_count
+        || (requirements && requirements->record_count > 1)
+        || (patches && patches->record_count > 1)) return false;
+    const n00b_abi_type_v1 *nil = n00b_abi_v1_type(candidate, 0);
+    if (!nil || nil->kind != N00B_ABI_TYPE_NIL
+        || nil->typehash != UINT64_C(0x0ea862bddb8ce94c)) return false;
+
+    return metadata_references_valid(candidate, error)
+        && metadata_shapes_valid(candidate, error)
+        && metadata_named_arguments_valid(candidate, error)
+        && metadata_scope_symbols_valid(candidate, error)
+        && metadata_packages_valid(candidate, error)
+        && metadata_sccs_valid(candidate, error)
+        && metadata_traces_valid(candidate, error)
+        && metadata_code_ranges_valid(candidate, error)
+        && metadata_module_initializers_valid(candidate, error)
+        && metadata_functions_valid(candidate, error)
+        && metadata_call_shapes_valid(candidate, error)
+        && metadata_frame_layouts_valid(candidate, error)
+        && metadata_storage_valid(candidate, error)
+        && metadata_dispatch_valid(candidate, error)
+        && metadata_name_slots_valid(candidate, error)
+        && specialization_graph_valid(candidate)
+        && metadata_owned_rows_valid(candidate, error)
+        && typehash_cache_build(candidate, error)
+        && module_name_cache_build(candidate, error);
+}
+
 uint32_t
 n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
                            uint64_t *published_generation,
@@ -2216,42 +2255,11 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
             target->record_count = entry->record_count;
             target->file_offset = entry->file_offset;
             target->byte_length = entry->byte_length;
+            candidate->table_bytes[entry->kind] = candidate->metadata
+                + entry->file_offset;
         }
     }
-    const n00bb_abi_directory_entry_t *types = table_for(candidate,
-        N00B_ABI_TABLE_TYPE);
-    const n00bb_abi_directory_entry_t *requirements = table_for(candidate,
-        N00B_ABI_TABLE_REQUIREMENT);
-    const n00bb_abi_directory_entry_t *patches = table_for(candidate,
-        N00B_ABI_TABLE_INDEX_PATCH);
-    if (valid && (!types || !types->record_count
-        || (requirements && requirements->record_count > 1)
-        || (patches && patches->record_count > 1))) valid = false;
-    if (valid) {
-        const n00b_abi_type_v1 *nil = (const void *)(candidate->metadata
-            + types->file_offset);
-        valid = nil->kind == N00B_ABI_TYPE_NIL
-            && nil->typehash == UINT64_C(0x0ea862bddb8ce94c);
-    }
-    if (valid) valid = metadata_references_valid(candidate, error);
-    if (valid) valid = metadata_shapes_valid(candidate, error);
-    if (valid) valid = metadata_named_arguments_valid(candidate, error);
-    if (valid) valid = metadata_scope_symbols_valid(candidate, error);
-    if (valid) valid = metadata_packages_valid(candidate, error);
-    if (valid) valid = metadata_sccs_valid(candidate, error);
-    if (valid) valid = metadata_traces_valid(candidate, error);
-    if (valid) valid = metadata_code_ranges_valid(candidate, error);
-    if (valid) valid = metadata_module_initializers_valid(candidate, error);
-    if (valid) valid = metadata_functions_valid(candidate, error);
-    if (valid) valid = metadata_call_shapes_valid(candidate, error);
-    if (valid) valid = metadata_frame_layouts_valid(candidate, error);
-    if (valid) valid = metadata_storage_valid(candidate, error);
-    if (valid) valid = metadata_dispatch_valid(candidate, error);
-    if (valid) valid = metadata_name_slots_valid(candidate, error);
-    if (valid) valid = specialization_graph_valid(candidate);
-    if (valid) valid = metadata_owned_rows_valid(candidate, error);
-    if (valid) valid = typehash_cache_build(candidate, error);
-    if (valid) valid = module_name_cache_build(candidate, error);
+    if (valid) valid = snapshot_contents_valid(candidate, error);
     if (!valid) {
         snapshot_candidate_free(candidate);
         if (error && error->status == N00B_ABI_BAD_METADATA)
@@ -2302,7 +2310,7 @@ n00b_abi_v1_record(const n00b_abi_snapshot_v1 *snapshot, uint32_t kind,
         return nullptr;
     }
     if (record_bytes) *record_bytes = table->record_bytes;
-    return snapshot->metadata + table->file_offset
+    return snapshot->table_bytes[kind]
         + (uint64_t)index * table->record_bytes;
 }
 
@@ -2318,7 +2326,7 @@ range_data(const n00b_abi_snapshot_v1 *snapshot, uint32_t kind,
     const n00bb_abi_directory_entry_t *table = table_for(snapshot, kind);
     if (!table || range.first >= table->record_count
         || range.count > table->record_count - range.first) return -1;
-    *out = snapshot->metadata + table->file_offset
+    *out = snapshot->table_bytes[kind]
         + (uint64_t)range.first * table->record_bytes;
     return 1;
 }
