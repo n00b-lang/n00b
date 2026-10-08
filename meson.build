@@ -2108,6 +2108,38 @@ rocs_index_test = executable('test_rocs_index',
 )
 test('rocs_index', rocs_index_test, suite: 'unit')
 
+print_contention_test = executable('test_print_contention',
+    ['test/unit/test_print_contention.c'],
+    kwargs: test_common_kwargs,
+)
+# 'known-broken', not 'unit': this test PASSES every assertion it makes on
+# all three platforms, and then the process dies for reasons that are not
+# its own.
+#
+#   macOS / Linux: "All print contention tests passed", then SIGABRT in
+#     n00b_shutdown -> n00b_conduit_destroy -> topic_notify_all with
+#     conduit.h:170 "Lock ... was not initialized before use" -- n00b#409.
+#     This test reproduces that at ~40% (vs 0/15 for test_print), because
+#     threads that print and then exit are its trigger; it did not create
+#     the defect and cannot avoid it while asserting what it asserts.
+#   Windows: the drained arm never finishes, which is the n00b#496 hang
+#     this test was written to catch. That is a RESULT, not a flake, and
+#     quarantining it is not an admission it is wrong -- it is the finding
+#     parked where it does not red the gate for everyone else.
+#
+# 'known-broken' rather than should_fail, for the reason rocs_live_cursor
+# gives above: the POSIX outcome is a pass followed by an abort, so
+# should_fail would report UNEXPECTEDPASS on the assertions and leave the
+# gate red either way.
+#
+# Restore to 'unit' when n00b#409 is fixed (POSIX) and n00b#496 is fixed or
+# the Windows arm is scoped out. Run it on demand with:
+#     meson test --suite known-broken print_contention
+test('print_contention',
+     print_contention_test,
+     suite: 'known-broken',
+     timeout: 300)
+
 rocs_fulltext_index_test = executable('test_rocs_fulltext_index',
     ['test/unit/test_rocs_fulltext_index.c'],
     kwargs: test_common_kwargs,
