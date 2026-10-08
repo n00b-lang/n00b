@@ -40,7 +40,7 @@ static const abi_ref_column_t abi_index_columns[] = {
     ABI_REF(ENUM_ITEM, enum_item, symbol_index, SYMBOL),
     ABI_OPTIONAL_TYPE(CONSTRAINT, constraint, target_type_index),
     ABI_OPTIONAL_TYPE(CONSTRAINT, constraint, result_type_index),
-    ABI_OPTIONAL_TYPE(CONSTRAINT, constraint, call_type_index),
+    ABI_REF(CONSTRAINT, constraint, call_shape_index, CALL_SHAPE),
     ABI_REF(LAYOUT, layout, type_index, TYPE),
     ABI_REF(LAYOUT, layout, tag_extractor_index, TAG_EXTRACTOR),
     ABI_REQUIRED_REF(FIELD, field, parent_type_index, TYPE),
@@ -64,6 +64,9 @@ static const abi_ref_column_t abi_index_columns[] = {
     ABI_REF(CALL_SIGNATURE, call_signature, success_type_index, TYPE),
     ABI_REF(CALL_SIGNATURE, call_signature, failure_type_index, TYPE),
     ABI_REF(CALL_SIGNATURE, call_signature, rest_parameter_index, PARAMETER),
+    ABI_REF(CALL_SHAPE, call_shape, success_type_index, TYPE),
+    ABI_OPTIONAL_TYPE(CALL_SHAPE, call_shape, failure_type_index),
+    ABI_REF(CALL_SHAPE, call_shape, rest_parameter_index, PARAMETER),
     ABI_REF(PARAMETER, parameter, type_index, TYPE),
     ABI_REQUIRED_REF(CODE_RANGE, code_range, function_index, FUNCTION),
     ABI_REQUIRED_REF(SCOPE, scope, module_index, MODULE),
@@ -144,6 +147,10 @@ static const abi_range_column_t abi_range_columns[] = {
         U32_STREAM, PARAMETER),
     ABI_RANGE(CALL_SIGNATURE, call_signature, keyword_parameters,
         U32_STREAM, PARAMETER),
+    ABI_RANGE(CALL_SHAPE, call_shape, positional_parameters,
+        U32_STREAM, PARAMETER),
+    ABI_RANGE(CALL_SHAPE, call_shape, keyword_parameters,
+        U32_STREAM, PARAMETER),
     ABI_RANGE(SCOPE, scope, children, U32_STREAM, SCOPE),
     ABI_RANGE(SCOPE, scope, symbols, U32_STREAM, SYMBOL),
     ABI_RANGE(SYMBOL, symbol, definitions, U32_STREAM, SOURCE_LOCATION),
@@ -156,4 +163,3 @@ static const abi_range_column_t abi_range_columns[] = {
 
 #undef ABI_RANGE
 #undef ABI_RAW_RANGE
-

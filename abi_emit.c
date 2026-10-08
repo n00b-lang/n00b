@@ -1183,6 +1183,7 @@ n00bb_abi_emit_unit(
                     + (uint32_t)signature_rows.parameter_index_count
                     + (uint32_t)declaration_rows.stream_index_count
                     + (uint32_t)function_rows.stream_index_count,
+                (uint32_t)signature_rows.parameter_count,
                 &constraint_rows))
         && ABI_STAGE("static storage",
             n00bb_abi_storage_rows_build(type_index, declarations,
@@ -1443,6 +1444,27 @@ n00bb_abi_emit_unit(
             target, 1 + extra_sections.len, aggregate_input_index,
             &storage_rows.rows[tls_metadata.aggregate_storage_index]
                 .segment_index);
+    size_t parameter_count = signature_rows.parameter_count
+        + constraint_rows.call_parameter_count;
+    n00b_abi_parameter_v1 *parameters = nullptr;
+    valid = valid
+        && constraint_rows.call_parameter_count
+            <= SIZE_MAX - signature_rows.parameter_count
+        && parameter_count <= UINT32_MAX;
+    if (valid) {
+        parameters = core_alloc_array(n00b_abi_parameter_v1,
+                                      parameter_count);
+        valid = parameters != nullptr;
+    }
+    if (valid) {
+        memcpy(parameters, signature_rows.parameters,
+               signature_rows.parameter_count * sizeof(*parameters));
+        if (constraint_rows.call_parameter_count)
+            memcpy(parameters + signature_rows.parameter_count,
+                   constraint_rows.call_parameters,
+                   constraint_rows.call_parameter_count
+                       * sizeof(*parameters));
+    }
     n00bb_abi_table_rows_t rows[] = {
         {N00B_ABI_TABLE_PACKAGE, packages, 2},
         {N00B_ABI_TABLE_MODULE, modules, 2},
@@ -1476,8 +1498,9 @@ n00bb_abi_emit_unit(
          constraint_rows.count},
         {N00B_ABI_TABLE_CALL_SIGNATURE, signature_rows.signatures,
          signature_rows.signature_count},
-        {N00B_ABI_TABLE_PARAMETER, signature_rows.parameters,
-         signature_rows.parameter_count},
+        {N00B_ABI_TABLE_CALL_SHAPE, constraint_rows.call_shapes,
+         constraint_rows.call_shape_count},
+        {N00B_ABI_TABLE_PARAMETER, parameters, parameter_count},
         {N00B_ABI_TABLE_SCOPE, declaration_rows.scopes,
          declaration_rows.scope_count},
         {N00B_ABI_TABLE_SYMBOL, declaration_rows.symbols,
@@ -1503,6 +1526,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_packed_tables_t packed = {0};
     valid = valid && n00bb_abi_pack_tables(target, artifact_capabilities,
         rows, sizeof(rows) / sizeof(*rows), &packed);
+    core_free(parameters);
     core_free(stream);
     if (!valid) {
         core_list_free(extra_sections);

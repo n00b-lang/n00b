@@ -71,6 +71,7 @@ static const n00bb_abi_table_schema_t v1_schemas[] = {
     SCHEMA(RUNTIME_CONFIG, n00b_abi_runtime_config_v1),
     SCHEMA(CALL_SIGNATURE, n00b_abi_call_signature_v1),
     SCHEMA(SPECIALIZATION_LINK, n00b_abi_specialization_link_v1),
+    SCHEMA(CALL_SHAPE, n00b_abi_call_shape_v1),
 };
 
 const n00bb_abi_table_schema_t *

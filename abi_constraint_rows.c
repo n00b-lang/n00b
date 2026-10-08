@@ -8,6 +8,8 @@
 #include "signature_typevars.h"
 
 core_list_decl(n00b_abi_constraint_v1);
+core_list_decl(n00b_abi_call_shape_v1);
+core_list_decl(n00b_abi_parameter_v1);
 core_list_decl(uint32_t);
 
 static bool
@@ -27,10 +29,105 @@ type_index(n00bb_abi_type_index_t *index, th_type *type, uint32_t *out)
 }
 
 static bool
+shape_parameter(n00bb_abi_type_index_t *index,
+                n00bb_abi_name_pool_t *names,
+                core_list_t(n00b_abi_parameter_v1) *parameters,
+                uint32_t parameter_base, th_type *type, th_mode mode,
+                const char *name, uint32_t flags, uint32_t ordinal,
+                uint32_t *out)
+{
+    if (!type || !out || parameters->len >= UINT32_MAX - parameter_base)
+        return false;
+    n00b_abi_parameter_v1 row = {
+        .declaration_ordinal = ordinal,
+        .flags = flags,
+    };
+    if (!n00bb_abi_type_index_find(index, type, &row.type_index))
+        return false;
+    switch (mode) {
+    case TH_IN: row.passing_mode = N00B_ABI_PASS_IN; break;
+    case TH_OUT: row.passing_mode = N00B_ABI_PASS_OUT; break;
+    case TH_INOUT: row.passing_mode = N00B_ABI_PASS_MODIFY; break;
+    case TH_CONSUME: row.passing_mode = N00B_ABI_PASS_CONSUME; break;
+    default: return false;
+    }
+    uint32_t row_index = parameter_base + (uint32_t)parameters->len;
+    if (name && (!name[0] || !n00bb_abi_name_pool_encode(names,
+            core_string_borrow(name, strlen(name)),
+            N00B_ABI_TABLE_PARAMETER, row_index,
+            offsetof(n00b_abi_parameter_v1, name), &row.name))) return false;
+    core_list_push(*parameters, row);
+    *out = row_index;
+    return true;
+}
+
+static bool
+append_call_shape(n00bb_abi_type_index_t *index,
+                  n00bb_abi_name_pool_t *names, th_type *call,
+                  uint32_t stream_base, uint32_t parameter_base,
+                  core_list_t(n00b_abi_call_shape_v1) *shapes,
+                  core_list_t(n00b_abi_parameter_v1) *parameters,
+                  core_list_t(uint32_t) *stream, uint32_t *out)
+{
+    call = th_resolve(call);
+    if (!call || th_kind_of(call) != TH_FUNCTION
+        || !th_func_ret(call) || shapes->len >= UINT32_MAX
+        || stream->len > UINT32_MAX - stream_base) return false;
+    n00b_abi_call_shape_v1 row = {
+        .failure_type_index = N00B_ABI_V1_NO_TYPE_INDEX,
+    };
+    if (!n00bb_abi_type_index_find(index, th_func_ret(call),
+                                    &row.success_type_index)
+        || !type_index(index, th_func_error(call),
+                       &row.failure_type_index)) return false;
+    size_t positional = th_func_nparams(call), keywords = th_func_nkw(call);
+    const th_param *rest = th_func_rest(call);
+    if (positional > UINT32_MAX || keywords > UINT32_MAX - positional
+        || (rest && keywords == UINT32_MAX - positional)) return false;
+    size_t first = stream->len;
+    for (size_t i = 0; i < positional; i++) {
+        const th_param *param = th_func_param(call, i);
+        uint32_t parameter = 0;
+        if (!param || !shape_parameter(index, names, parameters,
+                parameter_base, param->type, param->mode, nullptr, 0,
+                (uint32_t)i, &parameter)
+            || stream->len >= UINT32_MAX - stream_base) return false;
+        core_list_push(*stream, parameter);
+    }
+    if (stream->len != first) row.positional_parameters =
+        (n00b_abi_range_v1){stream_base + (uint32_t)first,
+                            (uint32_t)(stream->len - first)};
+    first = stream->len;
+    for (size_t i = 0; i < keywords; i++) {
+        const th_kwparam *param = th_func_kw(call, i);
+        uint32_t parameter = 0;
+        if (!param || !param->name
+            || !shape_parameter(index, names, parameters, parameter_base,
+                param->type, param->mode, param->name, 0,
+                (uint32_t)(positional + (rest ? 1 : 0) + i), &parameter)
+            || stream->len >= UINT32_MAX - stream_base) return false;
+        core_list_push(*stream, parameter);
+    }
+    if (stream->len != first) row.keyword_parameters =
+        (n00b_abi_range_v1){stream_base + (uint32_t)first,
+                            (uint32_t)(stream->len - first)};
+    if (rest && !shape_parameter(index, names, parameters, parameter_base,
+            rest->type, rest->mode, nullptr,
+            N00B_ABI_PARAMETER_FLAG_VARIADIC, (uint32_t)positional,
+            &row.rest_parameter_index)) return false;
+    *out = (uint32_t)shapes->len;
+    core_list_push(*shapes, row);
+    return true;
+}
+
+static bool
 append_constraint(n00bb_abi_type_index_t *index,
                   n00bb_abi_name_pool_t *names, th_constraint source,
                   uint32_t ordinal, uint32_t stream_base,
+                  uint32_t parameter_base,
                   core_list_t(n00b_abi_constraint_v1) *rows,
+                  core_list_t(n00b_abi_call_shape_v1) *shapes,
+                  core_list_t(n00b_abi_parameter_v1) *parameters,
                   core_list_t(uint32_t) *stream, uint32_t *out_index)
 {
     if (rows->len >= UINT32_MAX) return false;
@@ -39,7 +136,7 @@ append_constraint(n00bb_abi_type_index_t *index,
         .variable_ordinal = ordinal,
         .target_type_index = N00B_ABI_V1_NO_TYPE_INDEX,
         .result_type_index = N00B_ABI_V1_NO_TYPE_INDEX,
-        .call_type_index = N00B_ABI_V1_NO_TYPE_INDEX,
+        .call_shape_index = 0,
     };
     if (source.has_scope) {
         row.flags = N00B_ABI_CONSTRAINT_FLAG_HAS_SCOPE;
@@ -114,8 +211,9 @@ append_constraint(n00bb_abi_type_index_t *index,
                 offsetof(n00b_abi_constraint_v1, name), &row.name)
             || !type_index(index, source.method.result,
                            &row.result_type_index)
-            || !type_index(index, source.method.call,
-                           &row.call_type_index)) return false;
+            || (source.method.call && !append_call_shape(index, names,
+                source.method.call, stream_base, parameter_base, shapes,
+                parameters, stream, &row.call_shape_index))) return false;
         break;
     case TH_CON_KIND:
         row.kind = N00B_ABI_CONSTRAINT_TYPE_FAMILY;
@@ -154,14 +252,18 @@ n00bb_abi_constraint_rows_build(
     const n00bb_abi_decl_index_t *declarations,
     n00bb_abi_function_rows_t *functions,
     n00bb_abi_name_pool_t *names, uint32_t stream_base,
+    uint32_t parameter_base,
     n00bb_abi_constraint_rows_t *out)
 {
     if (!index || !types || !types->rows || !declarations || !functions
         || !functions->functions || !names || !out
         || types->count != n00bb_abi_type_index_count(index)) return false;
     core_list_t(n00b_abi_constraint_v1) rows = {0};
+    core_list_t(n00b_abi_call_shape_v1) shapes = {0};
+    core_list_t(n00b_abi_parameter_v1) parameters = {0};
     core_list_t(uint32_t) stream = {0};
     core_list_push(rows, ((n00b_abi_constraint_v1){0}));
+    core_list_push(shapes, ((n00b_abi_call_shape_v1){0}));
     bool valid = true;
     for (size_t i = 1; valid && i < types->count; i++) {
         n00b_abi_type_v1 *type_row = &types->rows[i];
@@ -179,7 +281,8 @@ n00bb_abi_constraint_rows_build(
             uint32_t row_index = 0;
             valid = th_var_constraint_at(variable, j, &constraint)
                 && append_constraint(index, names, constraint,
-                    type_row->typevar_ordinal, stream_base, &rows,
+                    type_row->typevar_ordinal, stream_base,
+                    parameter_base, &rows, &shapes, &parameters,
                     &stream, &row_index);
             if (valid) core_list_push(members, row_index);
         }
@@ -222,8 +325,8 @@ n00bb_abi_constraint_rows_build(
             else { valid = false; break; }
             uint32_t row_index = 0;
             valid = append_constraint(index, names, constraint,
-                (uint32_t)ordinal, stream_base, &rows, &stream,
-                &row_index);
+                (uint32_t)ordinal, stream_base, parameter_base,
+                &rows, &shapes, &parameters, &stream, &row_index);
             if (valid) core_list_push(members, row_index);
         }
         if (valid) valid = append_membership(&stream, stream_base,
@@ -233,9 +336,14 @@ n00bb_abi_constraint_rows_build(
     if (valid) *out = (n00bb_abi_constraint_rows_t){
         .rows = rows.data, .count = rows.len,
         .stream_indexes = stream.data, .stream_index_count = stream.len,
+        .call_shapes = shapes.data, .call_shape_count = shapes.len,
+        .call_parameters = parameters.data,
+        .call_parameter_count = parameters.len,
     };
     else {
         core_list_free(rows);
+        core_list_free(shapes);
+        core_list_free(parameters);
         core_list_free(stream);
     }
     return valid;
@@ -246,6 +354,8 @@ n00bb_abi_constraint_rows_release(n00bb_abi_constraint_rows_t *rows)
 {
     if (!rows) return;
     core_free(rows->rows);
+    core_free(rows->call_shapes);
+    core_free(rows->call_parameters);
     core_free(rows->stream_indexes);
     *rows = (n00bb_abi_constraint_rows_t){0};
 }

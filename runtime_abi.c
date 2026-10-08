@@ -100,7 +100,7 @@ struct n00b_abi_snapshot_v1 {
     size_t typehash_capacity;
     uint32_t *module_name_slots;
     size_t module_name_capacity;
-    n00bb_abi_directory_entry_t tables[N00B_ABI_TABLE_SPECIALIZATION_LINK + 1];
+    n00bb_abi_directory_entry_t tables[N00B_ABI_TABLE_CALL_SHAPE + 1];
 };
 
 static _Atomic(const n00b_abi_snapshot_v1 *) current_snapshot;
@@ -191,14 +191,14 @@ header_valid(const n00b_abi_header_v1 *header, uint64_t bytes)
         && header->total_extent <= bytes
         && header->directory_offset >= sizeof(*header)
         && header->directory_offset <= header->total_extent
-        && header->directory_count <= N00B_ABI_TABLE_SPECIALIZATION_LINK;
+        && header->directory_count <= N00B_ABI_TABLE_CALL_SHAPE;
 }
 
 static const n00bb_abi_directory_entry_t *
 table_for(const n00b_abi_snapshot_v1 *snapshot, uint32_t kind)
 {
     if (!snapshot || kind < N00B_ABI_TABLE_PACKAGE
-        || kind > N00B_ABI_TABLE_SPECIALIZATION_LINK) return nullptr;
+        || kind > N00B_ABI_TABLE_CALL_SHAPE) return nullptr;
     const n00bb_abi_directory_entry_t *table = &snapshot->tables[kind];
     return table->kind ? table : nullptr;
 }
@@ -230,7 +230,7 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
                           n00b_abi_error_v1 *error)
 {
     for (uint32_t kind = N00B_ABI_TABLE_PACKAGE;
-         kind <= N00B_ABI_TABLE_SPECIALIZATION_LINK; kind++) {
+         kind <= N00B_ABI_TABLE_CALL_SHAPE; kind++) {
         const n00bb_abi_directory_entry_t *table = table_for(snapshot, kind);
         if (!table) continue;
         if (kind == N00B_ABI_TABLE_REQUIREMENT
@@ -1340,6 +1340,38 @@ metadata_functions_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+metadata_call_shapes_valid(const n00b_abi_snapshot_v1 *snapshot,
+                           n00b_abi_error_v1 *error)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_CALL_SHAPE);
+    for (uint32_t i = 1; i < count; i++) {
+        const n00b_abi_call_shape_v1 *shape = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_CALL_SHAPE, i, nullptr);
+        if (!shape || shape->reserved_zero
+            || shape->success_type_index == N00B_ABI_V1_NO_TYPE_INDEX)
+            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE, i, 0);
+        if (shape->rest_parameter_index) {
+            const n00b_abi_parameter_v1 *rest = n00b_abi_v1_record(snapshot,
+                N00B_ABI_TABLE_PARAMETER, shape->rest_parameter_index,
+                nullptr);
+            if (!rest || !(rest->flags & N00B_ABI_PARAMETER_FLAG_VARIADIC))
+                return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
+                                      i, 0);
+        }
+    }
+    count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_CONSTRAINT);
+    for (uint32_t i = 1; i < count; i++) {
+        const n00b_abi_constraint_v1 *constraint = n00b_abi_v1_record(
+            snapshot, N00B_ABI_TABLE_CONSTRAINT, i, nullptr);
+        if (!constraint || (constraint->kind != N00B_ABI_CONSTRAINT_METHOD
+            && constraint->call_shape_index))
+            return invalid_record(error, N00B_ABI_TABLE_CONSTRAINT, i, 0);
+    }
+    return true;
+}
+
+static bool
 metadata_code_ranges_valid(const n00b_abi_snapshot_v1 *snapshot,
                            n00b_abi_error_v1 *error)
 {
@@ -1910,14 +1942,14 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);
-    n00bb_abi_directory_entry_t directory[N00B_ABI_TABLE_SPECIALIZATION_LINK];
+    n00bb_abi_directory_entry_t directory[N00B_ABI_TABLE_CALL_SHAPE];
     bool valid = n00bb_abi_directory_validate(candidate->metadata,
         (size_t)candidate->metadata_bytes, sizeof(*header),
         header->directory_offset, header->directory_count,
         header->total_extent, schemas, schema_count, false, directory);
     for (uint32_t i = 0; valid && i < header->directory_count; i++) {
         const n00bb_abi_directory_entry_t *entry = &directory[i];
-        if (entry->kind > N00B_ABI_TABLE_SPECIALIZATION_LINK
+        if (entry->kind > N00B_ABI_TABLE_CALL_SHAPE
             || candidate->tables[entry->kind].kind) valid = false;
         else {
             n00bb_abi_directory_entry_t *target =
@@ -1952,6 +1984,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     if (valid) valid = metadata_code_ranges_valid(candidate, error);
     if (valid) valid = metadata_module_initializers_valid(candidate, error);
     if (valid) valid = metadata_functions_valid(candidate, error);
+    if (valid) valid = metadata_call_shapes_valid(candidate, error);
     if (valid) valid = metadata_frame_layouts_valid(candidate, error);
     if (valid) valid = metadata_storage_valid(candidate, error);
     if (valid) valid = metadata_dispatch_valid(candidate, error);
@@ -2102,6 +2135,7 @@ TYPED_GETTER(layout, LAYOUT, layout)
 TYPED_GETTER(field, FIELD, field)
 TYPED_GETTER(function, FUNCTION, function)
 TYPED_GETTER(call_signature, CALL_SIGNATURE, call_signature)
+TYPED_GETTER(call_shape, CALL_SHAPE, call_shape)
 TYPED_GETTER(symbol, SYMBOL, symbol)
 TYPED_GETTER(scope, SCOPE, scope)
 TYPED_GETTER(source_location, SOURCE_LOCATION, source_location)

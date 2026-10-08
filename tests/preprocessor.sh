@@ -1570,6 +1570,15 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
 [ -s "$tmp/trait_dispatch_abi.o" ]
 "$abi_record_object_test" "$tmp/trait_dispatch_abi.o" trait-dispatch
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/partial_method_root_tu.o" partial_method_root
+"$abi_record_object_test" "$tmp/partial_method_root_tu.o" \
+    partial-call-shape
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/partial_method_root_linked.o" partial_method_root
+"$abi_record_object_test" "$tmp/partial_method_root_linked.o" \
+    partial-call-shape
+"$abi_register_object_test" "$tmp/partial_method_root_linked.o" 4
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_abi.o" import_root
 [ -s "$tmp/import_abi.o" ]
 "$abi_record_object_test" "$tmp/import_abi.o" import

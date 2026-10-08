@@ -37,6 +37,7 @@ type_key_equal(const void *left, const void *right)
 
 static bool add_type(n00bb_abi_type_index_t *index, th_type *type,
                      uint32_t *out_index);
+static bool add_children(n00bb_abi_type_index_t *index, th_type *type);
 
 static bool
 add_optional(n00bb_abi_type_index_t *index, th_type *type)
@@ -77,7 +78,10 @@ add_constraint(n00bb_abi_type_index_t *index, th_constraint constraint)
         return add_optional(index, constraint.param.type);
     case TH_CON_METHOD:
         return add_optional(index, constraint.method.result)
-            && add_optional(index, constraint.method.call);
+            && (!constraint.method.call
+                || (th_kind_of(th_resolve(constraint.method.call))
+                        == TH_FUNCTION
+                    && add_children(index, th_resolve(constraint.method.call))));
     case TH_CON_IMPLEMENTS:
     case TH_CON_KIND:
         return true;
@@ -418,7 +422,8 @@ n00bb_abi_type_index_collect_symbols(n00bb_abi_type_index_t *index,
          scope; scope = scope->all_next) {
         for (const parse_sym_entry_t *symbol = scope->first_in_scope;
              symbol; symbol = symbol->next_in_scope) {
-            if (symbol->is_synthetic || symbol->kind == PARSE_SYM_MODULE)
+            if (symbol->is_synthetic || symbol->binding_origin
+                || symbol->kind == PARSE_SYM_MODULE)
                 continue;
             if (!symbol->decl_node && !symbol->definition_count) continue;
             th_type *type = declaration_type(index, symbol, symbol->type);

@@ -154,6 +154,7 @@ typedef enum {
     N00B_ABI_TABLE_RUNTIME_CONFIG,
     N00B_ABI_TABLE_CALL_SIGNATURE,
     N00B_ABI_TABLE_SPECIALIZATION_LINK,
+    N00B_ABI_TABLE_CALL_SHAPE,
 } n00b_abi_table_kind_v1;
 
 typedef enum {
@@ -405,7 +406,7 @@ typedef struct {
     uint32_t variable_ordinal;
     uint32_t target_type_index;
     uint32_t result_type_index;
-    uint32_t call_type_index;
+    uint32_t call_shape_index;
     uint32_t type_family;
     uint32_t reserved_zero;
     uint64_t parameter_index;
@@ -527,6 +528,17 @@ typedef struct {
     n00b_abi_range_v1 positional_parameters;
     n00b_abi_range_v1 keyword_parameters;
 } n00b_abi_call_signature_v1;
+
+/* A retained METHOD obligation's call pattern, not a callable TYPE.
+ * NO_TYPE_INDEX means its failure channel remains unconstrained. */
+typedef struct {
+    uint32_t success_type_index;
+    uint32_t failure_type_index;
+    uint32_t rest_parameter_index;
+    uint32_t reserved_zero;
+    n00b_abi_range_v1 positional_parameters;
+    n00b_abi_range_v1 keyword_parameters;
+} n00b_abi_call_shape_v1;
 
 typedef struct {
     n00b_abi_string_v1 name;
@@ -776,6 +788,8 @@ const n00b_abi_function_v1 *n00b_abi_v1_function(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t function_index);
 const n00b_abi_call_signature_v1 *n00b_abi_v1_call_signature(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t signature_index);
+const n00b_abi_call_shape_v1 *n00b_abi_v1_call_shape(
+    const n00b_abi_snapshot_v1 *snapshot, uint32_t shape_index);
 const n00b_abi_symbol_v1 *n00b_abi_v1_symbol(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t symbol_index);
 const n00b_abi_scope_v1 *n00b_abi_v1_scope(
@@ -869,6 +883,8 @@ _Static_assert(sizeof(n00b_abi_call_signature_v1) == 32,
 _Static_assert(offsetof(n00b_abi_call_signature_v1,
                         positional_parameters) == 16,
                "call signature parameter offset");
+_Static_assert(sizeof(n00b_abi_call_shape_v1) == 32,
+               "call shape width");
 _Static_assert(sizeof(n00b_abi_enum_item_v1) == 48, "enum item width");
 _Static_assert(sizeof(n00b_abi_constraint_v1) == 96, "constraint width");
 _Static_assert(sizeof(n00b_abi_shape_v1) == 24, "shape width");

@@ -1,0 +1,10 @@
+import partial_method_package
+
+func generic_render(item: `T) -> int where `T: partial_method_package.Render {
+    var measured = item.measure()
+    return item.render()
+}
+
+func render_int(item: int) -> int {
+    return generic_render(item)
+}

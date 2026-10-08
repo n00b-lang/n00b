@@ -845,6 +845,11 @@ compatible_string_values(const n00bb_abi_object_view_t *a_view,
                          const n00bb_abi_object_view_t *b_view,
                          const n00b_abi_string_v1 *b)
 {
+    if (!a || !b) return false;
+    n00b_abi_string_v1 empty = {0};
+    bool a_empty = !memcmp(a, &empty, sizeof(empty));
+    bool b_empty = !memcmp(b, &empty, sizeof(empty));
+    if (a_empty || b_empty) return a_empty == b_empty;
     n00bb_abi_string_view_t a_text, b_text;
     return n00bb_abi_object_string(a_view, a, &a_text)
         && n00bb_abi_object_string(b_view, b, &b_text)
@@ -1212,30 +1217,73 @@ compatible_constraint_types(const abi_link_key_t *first,
 }
 
 static bool
-compatible_constraint_rows(const abi_link_key_t *first,
-                           const n00b_abi_constraint_v1 *a,
-                           const abi_link_key_t *candidate,
-                           const n00b_abi_constraint_v1 *b)
+compatible_call_shape(const abi_link_key_t *first, uint32_t a_index,
+                      const abi_link_key_t *candidate, uint32_t b_index)
 {
-    return a && b && a->kind == b->kind && a->flags == b->flags
+    if (!a_index || !b_index) return a_index == b_index;
+    const n00b_abi_call_shape_v1 *a = n00bb_abi_object_row(first->view,
+        N00B_ABI_TABLE_CALL_SHAPE, a_index);
+    const n00b_abi_call_shape_v1 *b = n00bb_abi_object_row(candidate->view,
+        N00B_ABI_TABLE_CALL_SHAPE, b_index);
+    if (!a || !b || a->reserved_zero || b->reserved_zero
+        || !compatible_constraint_type(first, a->success_type_index,
+                                       candidate, b->success_type_index)
+        || !compatible_constraint_type(first, a->failure_type_index,
+                                       candidate, b->failure_type_index)
+        || !!a->rest_parameter_index != !!b->rest_parameter_index
+        || !compatible_parameter_range(first->view,
+            a->positional_parameters, candidate->view,
+            b->positional_parameters)
+        || !compatible_parameter_range(first->view,
+            a->keyword_parameters, candidate->view,
+            b->keyword_parameters)) return false;
+    if (!a->rest_parameter_index) return true;
+    const n00b_abi_parameter_v1 *a_rest = n00bb_abi_object_row(first->view,
+        N00B_ABI_TABLE_PARAMETER, a->rest_parameter_index);
+    const n00b_abi_parameter_v1 *b_rest = n00bb_abi_object_row(
+        candidate->view, N00B_ABI_TABLE_PARAMETER,
+        b->rest_parameter_index);
+    return compatible_parameter(first->view, a_rest,
+                                candidate->view, b_rest);
+}
+
+static bool
+compatible_constraint_rows_scope(const abi_link_key_t *first,
+                                 const n00b_abi_constraint_v1 *a,
+                                 const abi_link_key_t *candidate,
+                                 const n00b_abi_constraint_v1 *b,
+                                 bool compare_scope)
+{
+    return a && b && a->kind == b->kind
+        && (!compare_scope || a->flags == b->flags)
         && a->variable_ordinal == b->variable_ordinal
         && a->type_family == b->type_family
         && a->parameter_index == b->parameter_index
         && !a->reserved_zero && !b->reserved_zero
         && compatible_string_values(first->view, &a->name,
                                     candidate->view, &b->name)
-        && compatible_string_values(first->view, &a->scope_module_name,
-                                    candidate->view, &b->scope_module_name)
-        && compatible_string_values(first->view, &a->scope_package_name,
-                                    candidate->view, &b->scope_package_name)
+        && (!compare_scope || (compatible_string_values(first->view,
+            &a->scope_module_name, candidate->view, &b->scope_module_name)
+            && compatible_string_values(first->view,
+                &a->scope_package_name, candidate->view,
+                &b->scope_package_name)))
         && compatible_constraint_type(first, a->target_type_index,
                                       candidate, b->target_type_index)
         && compatible_constraint_type(first, a->result_type_index,
                                       candidate, b->result_type_index)
-        && compatible_constraint_type(first, a->call_type_index,
-                                      candidate, b->call_type_index)
+        && compatible_call_shape(first, a->call_shape_index,
+                                 candidate, b->call_shape_index)
         && compatible_constraint_types(first, a->arguments,
                                        candidate, b->arguments);
+}
+
+static bool
+compatible_constraint_rows(const abi_link_key_t *first,
+                           const n00b_abi_constraint_v1 *a,
+                           const abi_link_key_t *candidate,
+                           const n00b_abi_constraint_v1 *b)
+{
+    return compatible_constraint_rows_scope(first, a, candidate, b, true);
 }
 
 static bool
@@ -1256,6 +1304,19 @@ compatible_type_constraints(const abi_link_key_t *first,
             return false;
     }
     return true;
+}
+
+static bool
+declared_constraint_matches_inferred(const abi_link_key_t *context,
+                                     const n00b_abi_constraint_v1 *declared,
+                                     const n00b_abi_constraint_v1 *inferred)
+{
+    if (!declared || !inferred || declared->flags
+        || (inferred->flags & ~N00B_ABI_CONSTRAINT_FLAG_HAS_SCOPE)
+        || (declared->kind != N00B_ABI_CONSTRAINT_IMPLEMENTS
+            && declared->kind != N00B_ABI_CONSTRAINT_EXCLUDES)) return false;
+    return compatible_constraint_rows_scope(context, declared,
+                                            context, inferred, false);
 }
 
 static bool
@@ -1311,8 +1372,8 @@ declared_function_constraints_valid(
                         const n00b_abi_constraint_v1 *inferred =
                             indexed_range_row(view, type->constraints, n,
                                 N00B_ABI_TABLE_CONSTRAINT);
-                        if (compatible_constraint_rows(&context, declared,
-                                &context, inferred)) found = true;
+                        if (declared_constraint_matches_inferred(
+                                &context, declared, inferred)) found = true;
                     }
                 }
                 if (!found) return false;

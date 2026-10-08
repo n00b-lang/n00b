@@ -1,0 +1,6 @@
+import partial_method_package.contract
+import partial_method_package.int_impl
+
+package partial_method_package {
+    export partial_method_package.contract.Render
+}
