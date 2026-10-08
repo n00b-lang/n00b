@@ -275,13 +275,18 @@ static bool write_masked_segment(int32_t fd, const uint8_t *element,
     for (uint32_t cursor = start; cursor < end;) {
         uint32_t next = cursor + 1;
         while (next < end && mask[next] == mask[cursor]) next++;
-        if (mask[cursor]) {
+        if (mask[cursor] == UINT8_MAX) {
             if (!write_all(fd, element + cursor, next - cursor)) return false;
-        } else {
+        } else if (!mask[cursor]) {
             for (uint32_t left = next - cursor; left;) {
                 uint32_t chunk = left < sizeof(zero) ? left : sizeof(zero);
                 if (!write_all(fd, zero, chunk)) return false;
                 left -= chunk;
+            }
+        } else {
+            for (uint32_t at = cursor; at < next; at++) {
+                uint8_t masked = element[at] & mask[at];
+                if (!write_all(fd, &masked, sizeof(masked))) return false;
             }
         }
         cursor = next;

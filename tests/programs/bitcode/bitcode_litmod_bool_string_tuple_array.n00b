@@ -1,0 +1,16 @@
+declare_litmod("bundle", "array", "identity")
+
+func identity(items: Array[Tuple[bool, string]]) -> Array[Tuple[bool, string]] fail: string {
+    return items
+}
+
+func values() -> Array[Tuple[bool, string]] {
+    return bundle[(true, "a long first string"),
+                  (false, "a long second string")]
+}
+
+comptime {
+    values()
+} else {
+    values()
+}

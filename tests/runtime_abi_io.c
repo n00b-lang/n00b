@@ -138,9 +138,10 @@ int main(void)
     n00b_abi_string_v1 right = short_string((const uint8_t *)"right", 5);
     memcpy(element, &left, sizeof(left));
     memcpy(element + 32, &right, sizeof(right));
-    memset(mask, 1, sizeof(left));
-    memset(mask + 20, 1, 4);
-    memset(mask + 32, 1, sizeof(right));
+    memset(mask, UINT8_MAX, sizeof(left));
+    memset(mask + 20, UINT8_MAX, 4);
+    mask[20] = 0x0f;
+    memset(mask + 32, UINT8_MAX, sizeof(right));
     uint32_t offsets[] = {0, 32};
     assert(n00bb_comptime_emit_reloc_array(fds[1], element,
         &descriptor.header, sizeof(element), offsets, 2, mask) == 0);
@@ -151,7 +152,8 @@ int main(void)
     memcpy(&count, serialized, sizeof(count));
     assert(count == 1);
     for (size_t i = 0; i < sizeof(element); i++) {
-        uint8_t expected = i >= 20 && i < 24 ? 0xa5 : 0;
+        uint8_t expected = i == 20 ? 0x05
+            : i > 20 && i < 24 ? 0xa5 : 0;
         assert(serialized[8 + i] == expected);
     }
     size_t pos = 8 + sizeof(element);
@@ -182,7 +184,8 @@ int main(void)
     };
     uint64_t first[] = {11, UINT64_MAX, 12, UINT64_MAX};
     uint64_t second[] = {13, UINT64_MAX};
-    uint8_t inner_mask[16] = {1, 1, 1, 1, 1, 1, 1, 1};
+    uint8_t inner_mask[16] = {0};
+    memset(inner_mask, UINT8_MAX, 8);
     n00b_abi_array_value_v1 children[] = {
         {first, &shapes[0].header},
         {second, &shapes[1].header},

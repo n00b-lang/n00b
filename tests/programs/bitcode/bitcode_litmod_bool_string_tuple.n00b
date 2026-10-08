@@ -1,0 +1,15 @@
+declare_litmod("pair", "string", "make_pair")
+
+func make_pair(raw: string) -> Tuple[bool, string] fail: string {
+    return (true, raw)
+}
+
+func value() -> Tuple[bool, string] {
+    return pair"a long string that needs a relocation"
+}
+
+comptime {
+    value()
+} else {
+    value()
+}

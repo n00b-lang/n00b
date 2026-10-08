@@ -313,6 +313,25 @@ array_value_with_descriptor(lower_state_t *state, LLVMValueRef data,
 }
 
 static bool
+literal_boolean_field_matches(ir_module_t *module, th_type *type,
+                              LLVMTypeRef native, LLVMTargetDataRef target)
+{
+    const ir_final_layout_t *layout = ir_layout_final(module, type,
+        ir_module_target(module));
+    uint64_t stride_bits = 0;
+    return layout && native && target
+        && ir_machine_of(module, type).class == IR_CLASS_BOOL
+        && layout->intrinsic_bits == sizeof(uint8_t) * 8
+        && layout->alignment_bytes == 1
+        && ir_layout_final_stride_bits(layout, &stride_bits)
+        && stride_bits == layout->intrinsic_bits
+        && LLVMGetTypeKind(native) == LLVMIntegerTypeKind
+        && LLVMGetIntTypeWidth(native) == 1
+        && LLVMABISizeOfType(target, native) == sizeof(uint8_t)
+        && LLVMABIAlignmentOfType(target, native) == 1;
+}
+
+static bool
 literal_element_layout_matches(ir_module_t *module, th_type *type,
                                LLVMTypeRef native, LLVMTargetDataRef target)
 {
@@ -375,8 +394,10 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
         if (!argument || argument->kind != TH_ARG_TYPE
             || offset > UINT64_MAX / 8
             || layout->members[i].bit_offset != offset * 8
-            || !literal_element_layout_matches(module, argument->type,
-                LLVMStructGetTypeAtIndex(native, (unsigned)i), target))
+            || (!literal_boolean_field_matches(module, argument->type,
+                LLVMStructGetTypeAtIndex(native, (unsigned)i), target)
+                && !literal_element_layout_matches(module, argument->type,
+                    LLVMStructGetTypeAtIndex(native, (unsigned)i), target)))
             return false;
     }
     return true;

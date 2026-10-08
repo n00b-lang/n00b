@@ -47232,6 +47232,19 @@ n00bb_comptime_is_empty(const ir_module_t *module)
 }
 
 static bool
+n00bb_literal_boolean_field(ir_module_t *module, th_type *type)
+{
+    const ir_final_layout_t *layout = type
+        ? ir_layout_final(module, type, ir_module_target(module)) : nullptr;
+    uint64_t stride_bits = 0;
+    return layout && ir_machine_of(module, type).class == IR_CLASS_BOOL
+        && layout->intrinsic_bits == sizeof(uint8_t) * 8
+        && layout->alignment_bytes == 1
+        && ir_layout_final_stride_bits(layout, &stride_bits)
+        && stride_bits == layout->intrinsic_bits;
+}
+
+static bool
 n00bb_literal_raw_element(ir_module_t *module, th_type *type)
 {
     type = type ? th_resolve(type) : nullptr;
@@ -47265,7 +47278,8 @@ n00bb_literal_raw_element(ir_module_t *module, th_type *type)
             || member->bit_offset > layout->intrinsic_bits
             || child->intrinsic_bits
                 > layout->intrinsic_bits - member->bit_offset
-            || !n00bb_literal_raw_element(module, argument->type))
+            || (!n00bb_literal_raw_element(module, argument->type)
+                && !n00bb_literal_boolean_field(module, argument->type)))
             return false;
     }
     return true;
@@ -47273,7 +47287,8 @@ n00bb_literal_raw_element(ir_module_t *module, th_type *type)
 
 static bool
 n00bb_literal_string_offsets(ir_module_t *module, th_type *type,
-                             uint64_t base, core_list_t(uint32_t) *offsets)
+                             uint64_t base, core_list_t(uint32_t) *offsets,
+                             bool tuple_field)
 {
     type = type ? th_resolve(type) : nullptr;
     const ir_final_layout_t *layout = type
@@ -47281,6 +47296,7 @@ n00bb_literal_string_offsets(ir_module_t *module, th_type *type,
     if (!layout || !layout->alignment_bytes || !layout->intrinsic_bits)
         return false;
     if (n00bb_literal_raw_element(module, type)) return true;
+    if (tuple_field && n00bb_literal_boolean_field(module, type)) return true;
     const char *name = nullptr;
     size_t length = 0, count = 0;
     if (!th_named_info(type, &name, &length, nullptr, &count) || !name)
@@ -47309,7 +47325,7 @@ n00bb_literal_string_offsets(ir_module_t *module, th_type *type,
             || member->bit_offset / 8 > UINT32_MAX
             || base > UINT32_MAX - member->bit_offset / 8
             || !n00bb_literal_string_offsets(module, argument->type,
-                base + member->bit_offset / 8, offsets)) return false;
+                base + member->bit_offset / 8, offsets, true)) return false;
     }
     return true;
 }
@@ -47325,13 +47341,12 @@ n00bb_literal_byte_mask(const ir_final_layout_t *layout,
     for (size_t i = 0; i < layout->n_occupied; i++) {
         uint64_t first = layout->occupied[i].offset;
         uint64_t width = layout->occupied[i].width;
-        if (first % 8 || width % 8 || first > stride_bits
-            || width > stride_bits - first) {
+        if (first > stride_bits || width > stride_bits - first) {
             free(mask);
             return nullptr;
         }
-        for (uint64_t byte = first / 8; byte < (first + width) / 8; byte++)
-            mask[byte] = 1;
+        for (uint64_t bit = first; bit < first + width; bit++)
+            mask[bit / 8] |= (uint8_t)(1u << (bit % 8));
     }
     return mask;
 }
@@ -47712,7 +47727,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
         core_list_t(uint32_t) string_offsets = core_list_new(uint32_t);
         bool reloc_result = !is_string && raw_type
             && n00bb_literal_string_offsets(producer->owner, raw_type, 0,
-                                             &string_offsets)
+                                             &string_offsets, false)
             && string_offsets.len != 0;
         th_type *inner_element = element && th_kind_of(th_resolve(element))
             == TH_SEQUENCE ? th_seq_elem(element) : nullptr;
@@ -47723,7 +47738,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
             core_list_new(uint32_t);
         bool nested_reloc = inner_element
             && n00bb_literal_string_offsets(producer->owner,
-                inner_element, 0, &inner_string_offsets)
+                inner_element, 0, &inner_string_offsets, false)
             && inner_string_offsets.len != 0;
         uint64_t inner_stride_bits = 0;
         bool nested_array = inner_element

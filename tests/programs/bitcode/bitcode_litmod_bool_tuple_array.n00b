@@ -1,0 +1,20 @@
+declare_litmod("bundle", "array", "identity")
+
+func identity(items: Array[Tuple[bool, int]]) -> Array[Tuple[bool, int]] fail: string {
+    return items
+}
+
+func static_values() -> Array[Tuple[bool, int]] {
+    return bundle[(true, 7), (false, 8)]
+}
+
+func dynamic_values(value: int) -> Array[Tuple[bool, int]] {
+    return bundle[(true, value)]
+}
+
+comptime {
+    static_values()
+} else {
+    static_values()
+    dynamic_values(9)
+}

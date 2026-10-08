@@ -110,6 +110,18 @@ fi
 "$compiler" build --output "$tmp/litmod_binary_result" \
     "$program_dir/bitcode_litmod_binary_result.n00b"
 "$tmp/litmod_binary_result"
+"$compiler" build --output "$tmp/litmod_bool_tuple" \
+    "$program_dir/bitcode_litmod_bool_tuple.n00b"
+"$tmp/litmod_bool_tuple"
+"$compiler" build --output "$tmp/litmod_bool_string_tuple" \
+    "$program_dir/bitcode_litmod_bool_string_tuple.n00b"
+"$tmp/litmod_bool_string_tuple"
+"$compiler" build --output "$tmp/litmod_bool_tuple_array" \
+    "$program_dir/bitcode_litmod_bool_tuple_array.n00b"
+"$tmp/litmod_bool_tuple_array"
+"$compiler" build --output "$tmp/litmod_bool_string_tuple_array" \
+    "$program_dir/bitcode_litmod_bool_string_tuple_array.n00b"
+"$tmp/litmod_bool_string_tuple_array"
 "$compiler" lower --dump-ir \
     "$program_dir/bitcode_builtin_prefix_args.n00b" \
     >"$tmp/builtin_prefix_args.ir"
