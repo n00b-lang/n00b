@@ -412,7 +412,8 @@ metadata_named_arguments_valid(const n00b_abi_snapshot_v1 *snapshot,
     for (uint32_t i = 0; i < type_count; i++) {
         const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, i);
         if (!type) return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
-        if (type->kind == N00B_ABI_TYPE_NAMED
+        if ((type->kind == N00B_ABI_TYPE_NAMED
+             || type->named_arguments.count)
             && !memcmp(&type->named_constructor, &empty, sizeof(empty)))
             return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
         if (memcmp(&type->named_constructor, &empty, sizeof(empty))) {

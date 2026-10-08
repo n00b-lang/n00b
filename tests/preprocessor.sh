@@ -6003,6 +6003,8 @@ N00B_PATH="$script_dir/programs/generic_trait_specialization" \
 "$abi_register_object_test" "$tmp/generic_named_type.o" 7 dict 2
 "$abi_register_object_test" "$tmp/generic_named_type.o" 7 \
     --bad-named-argument
+"$abi_register_object_test" "$tmp/generic_named_type.o" 7 \
+    --missing-named-constructor
 
 N00B_PATH="$interface_programs" "$compiler" library \
     --emit-interface "$tmp/generic_trait_archive.n00bi" \

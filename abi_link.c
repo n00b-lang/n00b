@@ -1800,6 +1800,11 @@ static bool
 type_backlinks_valid(const n00bb_abi_object_view_t *view,
                      const n00b_abi_type_v1 *type, uint32_t type_index)
 {
+    n00b_abi_string_v1 empty_constructor = {0};
+    if ((type->kind == N00B_ABI_TYPE_NAMED
+         || type->named_arguments.count)
+        && !memcmp(&type->named_constructor, &empty_constructor,
+                   sizeof(empty_constructor))) return false;
     const n00bb_abi_directory_entry_t *arguments = n00bb_abi_object_table(
         view, N00B_ABI_TABLE_TYPE_ARGUMENT);
     if (!type->named_arguments.count) {

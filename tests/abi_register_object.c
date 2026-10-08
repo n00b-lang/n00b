@@ -116,7 +116,11 @@ main(int argc, char **argv)
         .metadata = (const n00b_abi_header_v1 *)loaded[metadata.native_index],
         .metadata_bytes = metadata.size,
     };
-    if (argc == 4 && !strcmp(argv[3], "--bad-named-argument")) {
+    bool bad_argument = argc == 4
+        && !strcmp(argv[3], "--bad-named-argument");
+    bool missing_constructor = argc == 4
+        && !strcmp(argv[3], "--missing-named-constructor");
+    if (bad_argument || missing_constructor) {
         const uint8_t *base = (const uint8_t *)image.metadata;
         const n00b_abi_header_v1 *header = image.metadata;
         bool changed = false;
@@ -124,14 +128,30 @@ main(int argc, char **argv)
             n00bb_abi_directory_entry_t entry;
             n00bb_abi_directory_decode_entry(base + header->directory_offset
                 + (size_t)i * N00BB_ABI_DIRECTORY_BYTES, &entry);
-            if (entry.kind != N00B_ABI_TABLE_TYPE_ARGUMENT) continue;
-            assert(entry.record_count > 1 && entry.record_bytes
-                == sizeof(n00b_abi_type_argument_v1));
-            n00b_abi_type_argument_v1 *arg = (void *)(loaded[metadata.native_index]
-                + entry.file_offset + entry.record_bytes);
-            arg->ordinal++;
-            changed = true;
-            break;
+            if (bad_argument && entry.kind == N00B_ABI_TABLE_TYPE_ARGUMENT) {
+                assert(entry.record_count > 1 && entry.record_bytes
+                    == sizeof(n00b_abi_type_argument_v1));
+                n00b_abi_type_argument_v1 *arg = (void *)(
+                    loaded[metadata.native_index] + entry.file_offset
+                    + entry.record_bytes);
+                arg->ordinal++;
+                changed = true;
+                break;
+            }
+            if (missing_constructor && entry.kind == N00B_ABI_TABLE_TYPE) {
+                assert(entry.record_bytes == sizeof(n00b_abi_type_v1));
+                for (uint32_t j = 0; j < entry.record_count; j++) {
+                    n00b_abi_type_v1 *type = (void *)(
+                        loaded[metadata.native_index] + entry.file_offset
+                        + (size_t)j * entry.record_bytes);
+                    if (!type->named_arguments.count) continue;
+                    memset(&type->named_constructor, 0,
+                           sizeof(type->named_constructor));
+                    changed = true;
+                    break;
+                }
+                break;
+            }
         }
         assert(changed);
         n00b_abi_error_v1 bad_error = {0};
