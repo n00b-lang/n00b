@@ -108,5 +108,29 @@ n00bb_abi_row_values_valid(uint32_t kind, const void *row,
             return false;
         }
     }
+    if (kind == N00B_ABI_TABLE_SOURCE_LOCATION) {
+        if (row_bytes < sizeof(n00b_abi_source_location_v1)) return false;
+        const n00b_abi_source_location_v1 *location = row;
+        size_t offset = 0;
+        if (!location->start_line) offset = offsetof(
+            n00b_abi_source_location_v1, start_line);
+        else if (!location->start_column) offset = offsetof(
+            n00b_abi_source_location_v1, start_column);
+        else if (!location->end_line
+                 || location->end_line < location->start_line)
+            offset = offsetof(n00b_abi_source_location_v1, end_line);
+        else if (!location->end_column
+                 || (location->end_line == location->start_line
+                     && location->end_column < location->start_column))
+            offset = offsetof(n00b_abi_source_location_v1, end_column);
+        else if (location->reserved_zero)
+            offset = offsetof(n00b_abi_source_location_v1, reserved_zero);
+        else if (location->end_byte_offset < location->start_byte_offset)
+            offset = offsetof(n00b_abi_source_location_v1, end_byte_offset);
+        if (offset) {
+            if (invalid_offset) *invalid_offset = offset;
+            return false;
+        }
+    }
     return true;
 }

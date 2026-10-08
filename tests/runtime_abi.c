@@ -119,7 +119,12 @@ main(int argc, char **argv)
     image.types[5].typehash = 15;
     image.types[5].call_signature_index = 1;
     image.signatures[1].type_index = 5;
-    image.locations[1].file_index = 1;
+    image.locations[1] = (n00b_abi_source_location_v1){
+        .file_index = 1,
+        .start_line = 1, .start_column = 1,
+        .end_line = 1, .end_column = 4,
+        .end_byte_offset = 3,
+    };
     image.indexes[0] = 3;
     image.indexes[1] = 5;
     image.indexes[2] = 1;
@@ -278,6 +283,18 @@ main(int argc, char **argv)
         == N00B_ABI_BAD_METADATA && error.status == N00B_ABI_BAD_METADATA
         && !n00b_abi_v1_current_snapshot());
     image.header.target_id = HOST_TARGET;
+    image.locations[1].end_column = 0;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_SOURCE_LOCATION
+        && !n00b_abi_v1_current_snapshot());
+    image.locations[1].end_column = 4;
+    image.locations[1].start_byte_offset = 4;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_SOURCE_LOCATION
+        && !n00b_abi_v1_current_snapshot());
+    image.locations[1].start_byte_offset = 0;
     image.packages[0].parent_package_index = 1;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
