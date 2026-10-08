@@ -1622,6 +1622,9 @@ N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
 [ -s "$tmp/record_dep_abi.o" ]
 "$abi_link_input_test" --records "$tmp/import_record_abi.o" \
     "$tmp/record_dep_abi.o"
+N00B_PATH="$script_dir/programs/link_records" "$compiler" library \
+    --output "$tmp/import_record_linked.o" record_root
+"$abi_register_object_test" "$tmp/import_record_linked.o" 2
 N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
     --output "$tmp/shared_link_first_abi.o" shared_link_first
 N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \

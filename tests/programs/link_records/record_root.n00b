@@ -3,4 +3,7 @@ type SharedRecord { local: float }
 func use_remote(item: record_dep.SharedRecord) -> record_dep.SharedRecord {
     return item
 }
+func read_remote(item: record_dep.SharedRecord) -> int {
+    return item.remote
+}
 func use_local(item: SharedRecord) -> SharedRecord { return item }

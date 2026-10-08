@@ -348,7 +348,12 @@ check_imported_record(const core_object_section_t *metadata,
         count, N00B_ABI_TABLE_TYPE);
     const n00bb_abi_directory_entry_t *requirements = entry_for(entries,
         count, N00B_ABI_TABLE_REQUIREMENT);
-    assert(types && requirements && requirements->record_count == 3);
+    const n00bb_abi_directory_entry_t *functions = entry_for(entries,
+        count, N00B_ABI_TABLE_FUNCTION);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries,
+        count, N00B_ABI_TABLE_SYMBOL);
+    assert(types && requirements && functions && symbols
+        && requirements->record_count == 3);
     const n00b_abi_requirement_v1 *import = row_at(metadata,
         requirements, 1);
     assert(short_name_is(&import->full_path, "record_dep")
@@ -384,6 +389,20 @@ check_imported_record(const core_object_section_t *metadata,
         && type_requirement->contract_type_index == imported_index
         && type_requirement->required_phase_mask
         && type_requirement->requesting_module_index == 1);
+    bool found_reader = false;
+    for (uint32_t i = 1; i < functions->record_count; i++) {
+        const n00b_abi_function_v1 *function = row_at(metadata, functions, i);
+        if (!short_name_is(&function->name, "read_remote")) continue;
+        assert(!found_reader && function->module_index == 1
+            && function->symbol_index
+            && function->symbol_index < symbols->record_count);
+        const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols,
+            function->symbol_index);
+        assert(symbol->kind == N00B_ABI_SYMBOL_FUNCTION
+            && short_name_is(&symbol->name, "read_remote"));
+        found_reader = true;
+    }
+    assert(found_reader);
     th_ctx_free(type_context);
 }
 
