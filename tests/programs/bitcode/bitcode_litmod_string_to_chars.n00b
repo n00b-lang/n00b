@@ -1,0 +1,15 @@
+declare_litmod("chars", "string", "make_chars")
+
+func make_chars(raw: string) -> Array[char] fail: string {
+    return u32"abc"
+}
+
+func values() -> Array[char] {
+    return chars"ignored"
+}
+
+comptime {
+    values()
+} else {
+    values()
+}

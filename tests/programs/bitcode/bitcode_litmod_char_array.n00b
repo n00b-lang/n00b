@@ -1,0 +1,20 @@
+declare_litmod("wrap", "array", "identity")
+
+func identity(items: Array[char]) -> Array[char] fail: string {
+    return items
+}
+
+func static_values() -> Array[char] {
+    return wrap['a', 'b']
+}
+
+func dynamic_values(value: char) -> Array[char] {
+    return wrap['a', value]
+}
+
+comptime {
+    static_values()
+} else {
+    static_values()
+    dynamic_values('b')
+}

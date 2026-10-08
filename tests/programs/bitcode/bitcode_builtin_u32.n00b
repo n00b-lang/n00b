@@ -1,0 +1,8 @@
+func letters() -> Array[char] {
+    return u32"abc"
+}
+
+comptime {
+} else {
+    letters()
+}

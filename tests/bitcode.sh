@@ -98,6 +98,15 @@ fi
 "$compiler" build --output "$tmp/litmod_explicit_dict" \
     "$program_dir/bitcode_litmod_explicit_dict.n00b"
 "$tmp/litmod_explicit_dict"
+"$compiler" build --output "$tmp/builtin_u32" \
+    "$program_dir/bitcode_builtin_u32.n00b"
+"$tmp/builtin_u32"
+"$compiler" build --output "$tmp/litmod_char_array" \
+    "$program_dir/bitcode_litmod_char_array.n00b"
+"$tmp/litmod_char_array"
+"$compiler" build --output "$tmp/litmod_string_to_chars" \
+    "$program_dir/bitcode_litmod_string_to_chars.n00b"
+"$tmp/litmod_string_to_chars"
 "$compiler" lower --dump-ir \
     "$program_dir/bitcode_builtin_prefix_args.n00b" \
     >"$tmp/builtin_prefix_args.ir"

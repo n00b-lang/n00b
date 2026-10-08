@@ -326,11 +326,18 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
         || LLVMABIAlignmentOfType(target, native)
             != layout->alignment_bytes) return false;
     ir_machine_t machine = ir_machine_of(module, type);
-    if ((machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT)
-        && machine.width >= 8 && !(machine.width % 8))
-        return LLVMGetTypeKind(native) == LLVMIntegerTypeKind
-            && LLVMGetIntTypeWidth(native) == machine.width
-            && layout->intrinsic_bits == machine.width;
+    if (machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT) {
+        const char *name = nullptr;
+        bool padded_char = machine.class == IR_CLASS_UINT
+            && th_named_info(th_resolve(type), &name, nullptr,
+                             nullptr, nullptr)
+            && name && !strcmp(name, "char")
+            && layout->intrinsic_bits >= machine.width;
+        if ((padded_char || (machine.width >= 8 && !(machine.width % 8)
+                && layout->intrinsic_bits == machine.width))
+            && LLVMGetTypeKind(native) == LLVMIntegerTypeKind
+            && LLVMGetIntTypeWidth(native) == machine.width) return true;
+    }
     if (machine.class == IR_CLASS_FLOAT && machine.width == 64)
         return LLVMGetTypeKind(native) == LLVMDoubleTypeKind
             && layout->intrinsic_bits == 64;

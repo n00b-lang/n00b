@@ -47240,9 +47240,12 @@ n00bb_literal_raw_element(ir_module_t *module, th_type *type)
     if (!layout || !layout->alignment_bytes || !layout->intrinsic_bits
         || layout->intrinsic_bits % 8) return false;
     ir_machine_t machine = ir_machine_of(module, type);
-    if ((machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT)
-        && machine.width >= 8 && !(machine.width % 8))
-        return layout->intrinsic_bits == machine.width;
+    if (machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT) {
+        if (machine.width >= 8 && !(machine.width % 8)
+            && layout->intrinsic_bits == machine.width) return true;
+        if (machine.class == IR_CLASS_UINT && named_type_is(type, "char")
+            && layout->intrinsic_bits >= machine.width) return true;
+    }
     if (machine.class == IR_CLASS_FLOAT && machine.width == 64)
         return layout->intrinsic_bits == 64;
 
