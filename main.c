@@ -391,12 +391,15 @@ typedef struct {
     ir_span_t span;
     uint8_t *materialized_bytes;
     size_t materialized_byte_len;
+    uint32_t *materialized_string_offsets;
+    size_t materialized_string_offset_count;
     uint64_t materialized_count;
     uint32_t materialized_stride;
     n00bb_llvm_literal_kind_t materialized_kind;
     uint8_t materialized_encoding;
 } n00bb_phase_result_binding_t;
 core_list_decl(n00bb_phase_result_binding_t);
+core_list_decl(uint32_t);
 
 typedef struct {
     uint32_t dimension;
@@ -47136,6 +47139,49 @@ n00bb_literal_raw_element(ir_module_t *module, th_type *type)
     return true;
 }
 
+static bool
+n00bb_literal_string_offsets(ir_module_t *module, th_type *type,
+                             uint64_t base, core_list_t(uint32_t) *offsets)
+{
+    type = type ? th_resolve(type) : nullptr;
+    const ir_final_layout_t *layout = type
+        ? ir_layout_final(module, type, ir_module_target(module)) : nullptr;
+    if (!layout || !layout->alignment_bytes || !layout->intrinsic_bits)
+        return false;
+    if (n00bb_literal_raw_element(module, type)) return true;
+    const char *name = nullptr;
+    size_t length = 0, count = 0;
+    if (!th_named_info(type, &name, &length, nullptr, &count) || !name)
+        return false;
+    if (length == 6 && !memcmp(name, "string", 6) && !count) {
+        if (layout->intrinsic_bits != sizeof(n00b_abi_string_v1) * 8
+            || base > UINT32_MAX) return false;
+        core_list_push(*offsets, (uint32_t)base);
+        size_t at = offsets->len - 1;
+        while (at && offsets->data[at - 1] > offsets->data[at]) {
+            uint32_t prior = offsets->data[at - 1];
+            offsets->data[at - 1] = offsets->data[at];
+            offsets->data[at] = prior;
+            at--;
+        }
+        return true;
+    }
+    if (length != strlen(TH_TUPLE) || memcmp(name, TH_TUPLE, length)
+        || !count || layout->n_members != count) return false;
+    for (size_t i = 0; i < count; i++) {
+        const th_arg *argument = th_named_arg(type, i);
+        const ir_final_member_layout_t *member = &layout->members[i];
+        if (!argument || argument->kind != TH_ARG_TYPE
+            || member->bit_offset % 8
+            || member->bit_offset > layout->intrinsic_bits
+            || member->bit_offset / 8 > UINT32_MAX
+            || base > UINT32_MAX - member->bit_offset / 8
+            || !n00bb_literal_string_offsets(module, argument->type,
+                base + member->bit_offset / 8, offsets)) return false;
+    }
+    return true;
+}
+
 typedef struct {
     n00bb_abi_packed_tables_t packed;
     uint8_t *object;
@@ -47210,6 +47256,31 @@ n00bb_read_exact(int fd, void *data, size_t length)
 }
 
 static bool
+n00bb_capture_string_payload(int fd, off_t file_size, core_buffer_t *packed)
+{
+    uint64_t length;
+    uint8_t encoding;
+    if (!packed || !n00bb_read_exact(fd, &length, sizeof(length))
+        || !n00bb_read_exact(fd, &encoding, sizeof(encoding))
+        || encoding > N00B_ABI_STRING_UTF8) return false;
+    off_t offset = lseek(fd, 0, SEEK_CUR);
+    if (offset < 0 || offset > file_size
+        || length > (uint64_t)(file_size - offset)
+        || packed->byte_len > SIZE_MAX
+            - sizeof(length) - sizeof(encoding) - 1
+        || length > SIZE_MAX - packed->byte_len
+            - sizeof(length) - sizeof(encoding) - 1) return false;
+    core_buffer_append(packed, (const char *)&length, sizeof(length));
+    core_buffer_putc(packed, (char)encoding);
+    core_buffer_ensure(packed, (size_t)length + 1);
+    if (!n00bb_read_exact(fd, packed->data + packed->byte_len,
+                          (size_t)length)) return false;
+    packed->byte_len += (size_t)length;
+    packed->data[packed->byte_len] = 0;
+    return true;
+}
+
+static bool
 n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
     const n00bb_llvm_array_producer_t *producers, size_t *completed,
     uint8_t **failure_bytes, size_t *failure_length)
@@ -47248,47 +47319,53 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
             *completed = i + 1;
             continue;
         }
-        if (producers[i].kind == N00BB_LLVM_LITERAL_STRING_ARRAY) {
+        if (producers[i].kind == N00BB_LLVM_LITERAL_RELOC_ARRAY) {
+            uint32_t stride = producers[i].element_stride;
+            size_t fields = producers[i].string_offset_count;
             off_t start = lseek(fd, 0, SEEK_CUR);
-            if (start < 0 || start > info.st_size
+            if (!stride || !fields || count > SIZE_MAX / stride
+                || start < 0 || start > info.st_size
+                || fields > (SIZE_MAX - stride)
+                    / (sizeof(uint64_t) + sizeof(uint8_t))
                 || count > (uint64_t)(info.st_size - start)
-                    / (sizeof(uint64_t) + sizeof(uint8_t))) return false;
+                    / (stride + fields
+                        * (sizeof(uint64_t) + sizeof(uint8_t))))
+                return false;
             core_buffer_t *packed = core_buffer_empty();
             bool valid = packed != nullptr;
             for (uint64_t j = 0; valid && j < count; j++) {
-                uint64_t length;
-                uint8_t encoding;
-                valid = n00bb_read_exact(fd, &length, sizeof(length))
-                    && n00bb_read_exact(fd, &encoding, sizeof(encoding))
-                    && encoding <= N00B_ABI_STRING_UTF8;
-                off_t offset = valid ? lseek(fd, 0, SEEK_CUR) : -1;
-                valid = valid && offset >= 0 && offset <= info.st_size
-                    && length <= (uint64_t)(info.st_size - offset)
-                    && packed->byte_len <= SIZE_MAX
-                        - sizeof(length) - sizeof(encoding) - 1
-                    && length <= SIZE_MAX - packed->byte_len
-                        - sizeof(length) - sizeof(encoding) - 1;
-                if (!valid) break;
-                core_buffer_append(packed, (const char *)&length,
-                                   sizeof(length));
-                core_buffer_putc(packed, (char)encoding);
-                core_buffer_ensure(packed, (size_t)length + 1);
-                valid = n00bb_read_exact(fd,
-                    (uint8_t *)packed->data + packed->byte_len,
-                    (size_t)length);
-                if (valid) {
-                    packed->byte_len += (size_t)length;
-                    packed->data[packed->byte_len] = 0;
+                if (packed->byte_len > SIZE_MAX - stride - 1) {
+                    valid = false;
+                    break;
                 }
+                core_buffer_ensure(packed, stride + 1);
+                valid = n00bb_read_exact(fd, packed->data
+                    + packed->byte_len, stride);
+                if (!valid) break;
+                packed->byte_len += stride;
+                packed->data[packed->byte_len] = 0;
+                for (size_t f = 0; valid && f < fields; f++)
+                    valid = n00bb_capture_string_payload(fd, info.st_size,
+                                                          packed);
             }
             if (!valid) {
                 core_buffer_free(packed);
                 return false;
             }
+            uint32_t *offsets = core_alloc_array(uint32_t, fields);
+            if (!offsets) {
+                core_buffer_free(packed);
+                return false;
+            }
+            memcpy(offsets, producers[i].string_offsets,
+                   fields * sizeof(*offsets));
             binding->materialized_byte_len = packed->byte_len;
             binding->materialized_bytes = (uint8_t *)core_buffer_take(packed);
             binding->materialized_count = count;
+            binding->materialized_stride = stride;
             binding->materialized_kind = producers[i].kind;
+            binding->materialized_string_offsets = offsets;
+            binding->materialized_string_offset_count = fields;
             *completed = i + 1;
             continue;
         }
@@ -47392,13 +47469,11 @@ n00bb_execute_comptime(core_link_unit_t *link,
             && !memcmp(result_name, "string", 6) && !result_arity;
         th_type *element = result && th_kind_of(result) == TH_SEQUENCE
             ? th_seq_elem(result) : nullptr;
-        const char *element_name = nullptr;
-        size_t element_name_length = 0;
-        size_t element_arity = 0;
-        bool string_array = element && th_named_info(element,
-            &element_name, &element_name_length, nullptr, &element_arity)
-            && element_name_length == 6
-            && !memcmp(element_name, "string", 6) && !element_arity;
+        core_list_t(uint32_t) string_offsets = core_list_new(uint32_t);
+        bool reloc_array = element
+            && n00bb_literal_string_offsets(producer->owner, element, 0,
+                                             &string_offsets)
+            && string_offsets.len != 0;
         th_type *raw_type = element ? element : result;
         bool bool_value = !element && !effect_only && !is_string
             && ir_machine_of(producer->owner, result).class == IR_CLASS_BOOL;
@@ -47409,11 +47484,15 @@ n00bb_execute_comptime(core_link_unit_t *link,
         bool has_stride = ir_layout_final_stride_bits(layout, &stride_bits);
         uint64_t stride = bool_value ? 1
             : has_stride ? stride_bits / 8 : 0;
-        if (!effect_only && !is_string && !string_array
+        if (!effect_only && !is_string
             && ((!has_stride && !bool_value) || !stride
+                || (has_stride && stride_bits % 8)
                 || stride > UINT32_MAX
-                || (!bool_value && !n00bb_literal_raw_element(
-                    producer->owner, raw_type)))) {
+                || string_offsets.len > UINT32_MAX
+                || (!bool_value && !reloc_array
+                    && !n00bb_literal_raw_element(
+                        producer->owner, raw_type)))) {
+            core_list_free(string_offsets);
             core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-B0013"),
                 CORE_STRING_STATIC("native build cannot materialize this literal result without relocations"));
@@ -47428,16 +47507,38 @@ n00bb_execute_comptime(core_link_unit_t *link,
         producers[i].function = producer;
         producers[i].kind = effect_only ? N00BB_LLVM_LITERAL_EFFECT
             : is_string ? N00BB_LLVM_LITERAL_STRING
-            : string_array ? N00BB_LLVM_LITERAL_STRING_ARRAY
+            : reloc_array ? N00BB_LLVM_LITERAL_RELOC_ARRAY
             : element ? N00BB_LLVM_LITERAL_ARRAY
                       : N00BB_LLVM_LITERAL_RAW_VALUE;
-        producers[i].element_stride = effect_only || is_string || string_array
+        producers[i].element_stride = effect_only || is_string
             ? 0 : (uint32_t)stride;
+        if (reloc_array) {
+            producers[i].string_offsets = string_offsets.data;
+            producers[i].string_offset_count = string_offsets.len;
+            uint8_t *mask = calloc((size_t)stride, 1);
+            if (!mask) ok = false;
+            for (size_t run = 0; ok && run < layout->n_occupied; run++) {
+                uint64_t first = layout->occupied[run].offset;
+                uint64_t width = layout->occupied[run].width;
+                if (first % 8 || width % 8 || first > stride_bits
+                    || width > stride_bits - first) {
+                    core_diagnostics_report(diagnostics, nullptr,
+                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0013"),
+                        CORE_STRING_STATIC("native build cannot materialize a bit-packed literal result"));
+                    ok = false;
+                    break;
+                }
+                for (uint64_t byte = first / 8;
+                     byte < (first + width) / 8; byte++) mask[byte] = 1;
+            }
+            producers[i].byte_mask = mask;
+        }
+        else core_list_free(string_offsets);
         producers[i].comptime_consumer = binding->consumer
             && ir_func_execution_phase(binding->consumer)
                 == IR_PHASE_COMPTIME;
         core_buffer_release(&symbol);
-        ok = producers[i].symbol != nullptr;
+        ok = ok && producers[i].symbol != nullptr;
     }
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
@@ -47579,8 +47680,11 @@ n00bb_execute_comptime(core_link_unit_t *link,
     }
     free(objects);
     free(names);
-    for (size_t i = 0; i < producer_count; i++)
+    for (size_t i = 0; i < producer_count; i++) {
         core_free((void *)producers[i].symbol);
+        core_free((void *)producers[i].string_offsets);
+        free((void *)producers[i].byte_mask);
+    }
     free(producers);
     core_list_free(order);
     if (!ok && !core_diagnostics_failed(diagnostics))
@@ -47629,12 +47733,14 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .kind = binding->materialized_kind,
             .string_encoding = binding->materialized_encoding,
             .element_stride = binding->materialized_stride,
+            .string_offsets = binding->materialized_string_offsets,
+            .string_offset_count = binding->materialized_string_offset_count,
         };
         ok = phase_arrays[phase_count].identifier
             && phase_arrays[phase_count].bytes
             && (phase_arrays[phase_count].kind == N00BB_LLVM_LITERAL_STRING
                 || phase_arrays[phase_count].kind
-                    == N00BB_LLVM_LITERAL_STRING_ARRAY
+                    == N00BB_LLVM_LITERAL_RELOC_ARRAY
                 || phase_arrays[phase_count].element_stride);
         phase_count++;
     }
@@ -48405,8 +48511,11 @@ main(int argc, char **argv)
             core_list_free(link_analysis->array_bound_work.data[i]
                 .initializer_extents);
         core_list_free(link_analysis->array_bound_work);
-        for (size_t i = 0; i < link_analysis->phase_results.len; i++)
+        for (size_t i = 0; i < link_analysis->phase_results.len; i++) {
             core_free(link_analysis->phase_results.data[i].materialized_bytes);
+            core_free(link_analysis->phase_results.data[i]
+                .materialized_string_offsets);
+        }
         core_list_free(link_analysis->phase_results);
         core_list_free(link_analysis->global_results);
         core_list_free(link_analysis->units);

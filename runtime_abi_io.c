@@ -197,21 +197,72 @@ int32_t n00bb_comptime_emit_string(int32_t fd, uint64_t low, uint64_t high)
     return 0;
 }
 
-int32_t n00bb_comptime_emit_string_array(
-    int32_t fd, const n00b_abi_string_v1 *data,
-    const n00b_abi_array_descriptor_header_v1 *descriptor)
+static bool write_masked_segment(int32_t fd, const uint8_t *element,
+                                 const uint8_t *mask, uint32_t start,
+                                 uint32_t end)
 {
-    if (fd < 0 || !data || !descriptor
-        || descriptor->rank != 1 || descriptor->flat_rank != 1
-        || descriptor->flags || descriptor->reserved_zero
+    const uint8_t zero[sizeof(n00b_abi_string_v1)] = {0};
+    for (uint32_t cursor = start; cursor < end;) {
+        uint32_t next = cursor + 1;
+        while (next < end && mask[next] == mask[cursor]) next++;
+        if (mask[cursor]) {
+            if (!write_all(fd, element + cursor, next - cursor)) return false;
+        } else {
+            for (uint32_t left = next - cursor; left;) {
+                uint32_t chunk = left < sizeof(zero) ? left : sizeof(zero);
+                if (!write_all(fd, zero, chunk)) return false;
+                left -= chunk;
+            }
+        }
+        cursor = next;
+    }
+    return true;
+}
+
+int32_t n00bb_comptime_emit_reloc_array(
+    int32_t fd, const void *data,
+    const n00b_abi_array_descriptor_header_v1 *descriptor,
+    uint32_t stride, const uint32_t *string_offsets, uint32_t offset_count,
+    const uint8_t *byte_mask)
+{
+    if (fd < 0 || !data || !descriptor || !stride || !string_offsets
+        || !offset_count || !byte_mask || descriptor->rank != 1
+        || descriptor->flat_rank != 1 || descriptor->flags
+        || descriptor->reserved_zero
         || descriptor->total_count != ((const uint64_t *)(descriptor + 1))[0]
-        || descriptor->total_count > SIZE_MAX / sizeof(*data))
+        || descriptor->total_count > SIZE_MAX / stride)
         return -1;
+    uint32_t end = 0;
+    for (uint32_t i = 0; i < offset_count; i++) {
+        uint32_t offset = string_offsets[i];
+        if (offset < end || offset > stride
+            || sizeof(n00b_abi_string_v1) > stride - offset) return -1;
+        end = offset + sizeof(n00b_abi_string_v1);
+    }
     uint64_t count = descriptor->total_count;
     if (!write_all(fd, (const uint8_t *)&count, sizeof(count))) return -1;
-    for (uint64_t i = 0; i < count; i++)
-        if (n00bb_comptime_emit_string(fd, data[i].words[0],
-                                       data[i].words[1])) return -1;
+    const uint8_t zero[sizeof(n00b_abi_string_v1)] = {0};
+    for (uint64_t i = 0; i < count; i++) {
+        const uint8_t *element = (const uint8_t *)data + i * stride;
+        uint32_t cursor = 0;
+        for (uint32_t j = 0; j < offset_count; j++) {
+            uint32_t offset = string_offsets[j];
+            if (!write_masked_segment(fd, element, byte_mask, cursor, offset)
+                || !write_all(fd, zero, sizeof(zero))) return -1;
+            cursor = offset + sizeof(zero);
+        }
+        if (!write_masked_segment(fd, element, byte_mask, cursor, stride))
+            return -1;
+        for (uint32_t j = 0; j < offset_count; j++) {
+            n00b_abi_string_v1 value;
+            const uint8_t *source = element + string_offsets[j];
+            uint8_t *destination = (uint8_t *)&value;
+            for (size_t b = 0; b < sizeof(value); b++)
+                destination[b] = source[b];
+            if (n00bb_comptime_emit_string(fd, value.words[0],
+                                           value.words[1])) return -1;
+        }
+    }
     return 0;
 }
 

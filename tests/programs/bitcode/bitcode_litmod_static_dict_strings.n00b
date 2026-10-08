@@ -1,0 +1,34 @@
+declare_litmod("mirror", "dict", "identity")
+declare_litmod("pairs", "array", "identity_pairs")
+
+func identity(items: Array[Tuple[string, int]]) -> Array[Tuple[string, int]] fail: string {
+    return items
+}
+
+func identity_pairs(items: Array[Tuple[string, string, int]]) -> Array[Tuple[string, string, int]] fail: string {
+    return items
+}
+
+func values() -> Array[Tuple[string, int]] {
+    return mirror{"first": 1, "a longer string key requiring relocation": 2}
+}
+
+func empty() -> Array[Tuple[string, int]] {
+    return mirror{}
+}
+
+func many() -> Array[Tuple[string, string, int]] {
+    return pairs[("left", "right", 3)]
+}
+
+func observe(items: Array[Tuple[string, int]]) {
+    require true
+}
+
+comptime {
+    observe(mirror{"compile-time": 4})
+} else {
+    values()
+    empty()
+    many()
+}
