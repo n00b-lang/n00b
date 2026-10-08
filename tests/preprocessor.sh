@@ -1378,6 +1378,10 @@ grep -q '^pdg @add ' "$tmp/lower_arithmetic.ir_and_pdg"
     "$program_dir/../abi/empty.n00b"
 [ -s "$tmp/empty_abi.o" ]
 LC_ALL=C grep -q 'N00BMETA' "$tmp/empty_abi.o"
+"$abi_record_object_test" "$tmp/empty_abi.o" runtime-initializer
+"$compiler" compile --output "$tmp/initializers_abi.o" \
+    "$program_dir/../abi/initializers.n00b"
+"$abi_record_object_test" "$tmp/initializers_abi.o" initializers
 "$compiler" library --output "$tmp/empty_linked_abi.o" \
     "$program_dir/../abi/empty.n00b"
 "$abi_register_object_test" "$tmp/empty_linked_abi.o" 1

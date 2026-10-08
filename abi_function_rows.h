@@ -13,6 +13,8 @@ typedef struct {
     size_t function_count;
     uint32_t *stream_indexes;
     size_t stream_index_count;
+    uint32_t comptime_initializer_index;
+    uint32_t runtime_initializer_index;
 } n00bb_abi_function_rows_t;
 
 bool n00bb_abi_function_rows_build(

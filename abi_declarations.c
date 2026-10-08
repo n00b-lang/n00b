@@ -292,11 +292,18 @@ n00bb_abi_declarations_build(
         core_string_t kind = scope->scope_tag.u8_bytes
             ? scope->scope_tag : scope->name.u8_bytes
                 ? scope->name : CORE_STRING_STATIC("scope");
+        parse_tree_t *location_node = scope->node;
+        if (core_string_eq(scope->scope_tag, CORE_STRING_STATIC("module"))
+            && location_node && !parse_node_is_token(location_node)) {
+            parse_nt_node_t span = core_tree_node_value(location_node);
+            if (span.start >= 0 && span.end == span.start)
+                location_node = nullptr;
+        }
         valid = n00bb_abi_name_pool_encode(names, kind,
             N00B_ABI_TABLE_SCOPE, (uint32_t)i,
             offsetof(n00b_abi_scope_v1, kind_name), &row->kind_name)
             && add_location(location_index, &locations, &sources,
-                            scope->node, &row->source_location_index);
+                            location_node, &row->source_location_index);
     }
     for (size_t i = 1; valid && i < symbol_count; i++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,

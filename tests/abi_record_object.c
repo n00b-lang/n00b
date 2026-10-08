@@ -216,6 +216,45 @@ check_flagset(const core_object_section_t *metadata,
 }
 
 static void
+check_initializers(const core_object_section_t *metadata,
+                   const n00bb_abi_directory_entry_t *entries, size_t count,
+                   bool has_comptime)
+{
+    const n00bb_abi_directory_entry_t *modules = entry_for(entries, count,
+        N00B_ABI_TABLE_MODULE);
+    const n00bb_abi_directory_entry_t *functions = entry_for(entries, count,
+        N00B_ABI_TABLE_FUNCTION);
+    const n00bb_abi_directory_entry_t *scopes = entry_for(entries, count,
+        N00B_ABI_TABLE_SCOPE);
+    assert(modules && modules->record_count == 2 && functions && scopes);
+    const n00b_abi_module_v1 *module = row_at(metadata, modules, 1);
+    assert(module->runtime_initializer
+        && module->runtime_initializer < functions->record_count
+        && !!module->comptime_initializer == has_comptime);
+    uint32_t initializers[] = {
+        module->comptime_initializer, module->runtime_initializer,
+    };
+    for (size_t i = 0; i < sizeof(initializers) / sizeof(*initializers); i++) {
+        uint32_t index = initializers[i];
+        if (!index) continue;
+        assert(index < functions->record_count);
+        const n00b_abi_function_v1 *function = row_at(metadata, functions,
+            index);
+        assert(function->module_index == 1 && function->scope_index
+            && function->scope_index < scopes->record_count
+            && !function->symbol_index && !function->success_type_index
+            && !function->failure_type_index && !function->parameters.count
+            && !function->keywords.count && !function->code_ranges.count
+            && function->variadic_type_index == N00B_ABI_V1_NO_TYPE_INDEX);
+        const n00b_abi_scope_v1 *scope = row_at(metadata, scopes,
+            function->scope_index);
+        assert(scope->module_index == 1);
+    }
+    assert(!has_comptime
+        || module->comptime_initializer != module->runtime_initializer);
+}
+
+static void
 check_function(const core_object_section_t *metadata,
                const n00bb_abi_directory_entry_t *entries, size_t count)
 {
@@ -233,7 +272,7 @@ check_function(const core_object_section_t *metadata,
         count, N00B_ABI_TABLE_SOURCE_LOCATION);
     const n00bb_abi_directory_entry_t *stream = entry_for(entries,
         count, N00B_ABI_TABLE_U32_STREAM);
-    assert(functions && functions->record_count == 2 && types
+    assert(functions && functions->record_count == 3 && types
         && signatures && parameters && symbols && locations && stream);
     const n00b_abi_function_v1 *function = row_at(metadata, functions, 1);
     assert(short_name_is(&function->name, "add"));
@@ -593,7 +632,7 @@ check_constraint(const core_object_section_t *metadata,
         count, N00B_ABI_TABLE_TYPE);
     const n00bb_abi_directory_entry_t *stream = entry_for(entries,
         count, N00B_ABI_TABLE_U32_STREAM);
-    assert(functions && functions->record_count == 2 && constraints
+    assert(functions && functions->record_count == 3 && constraints
         && constraints->record_count > 1 && types && stream);
     const n00b_abi_function_v1 *function = row_at(metadata, functions, 1);
     assert(short_name_is(&function->name, "keep")
@@ -646,7 +685,7 @@ check_trait_methods(const core_object_section_t *metadata,
     const n00bb_abi_directory_entry_t *functions = entry_for(entries,
         count, N00B_ABI_TABLE_FUNCTION);
     assert(types && methods && methods->record_count == 3 && symbols
-        && signatures && functions && functions->record_count == 1);
+        && signatures && functions && functions->record_count == 2);
     uint32_t trait_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
@@ -738,7 +777,7 @@ check_callbacks(const core_object_section_t *metadata,
     const n00bb_abi_directory_entry_t *functions = entry_for(entries, count,
         N00B_ABI_TABLE_FUNCTION);
     assert(types && symbols && stream && signatures && parameters
-        && functions && functions->record_count == 1);
+        && functions && functions->record_count == 2);
     const char *names[] = {"Event_Call", "State_Call", "Transform_Call"};
     const uint32_t role_counts[] = {2, 3, 2};
     const uint32_t arg_counts[][3] = {
@@ -2428,6 +2467,8 @@ main(int argc, char **argv)
     bool cycle_mode = argc >= 3 && !strcmp(argv[2], "cycle");
     assert(argc == 2 || cycle_mode || (argc == 3
         && (!strcmp(argv[2], "enum") || !strcmp(argv[2], "function")
+            || !strcmp(argv[2], "initializers")
+            || !strcmp(argv[2], "runtime-initializer")
             || !strcmp(argv[2], "import")
             || !strcmp(argv[2], "import-record")
             || !strcmp(argv[2], "import-enum")
@@ -2552,6 +2593,15 @@ main(int argc, char **argv)
         }
         for (size_t i = 0; i < member_count; i++) assert(seen[i]);
         free(seen);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && (!strcmp(argv[2], "initializers")
+                      || !strcmp(argv[2], "runtime-initializer"))) {
+        check_initializers(&metadata, entries, header.directory_count,
+            !strcmp(argv[2], "initializers"));
         free(entries);
         free(object);
         return 0;

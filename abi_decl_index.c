@@ -12,6 +12,7 @@ core_list_decl(abi_scope_ptr_t);
 struct n00bb_abi_decl_index_t {
     core_indexed_table_t *scopes;
     core_indexed_table_t *symbols;
+    uint32_t module_scope_index;
 };
 
 static core_hash_value_t
@@ -63,6 +64,21 @@ n00bb_abi_decl_index_new(const parse_symtab_t *symbols)
         n00bb_abi_decl_index_free(index);
         return nullptr;
     }
+    parse_scope_t *module = nullptr;
+    for (parse_scope_t *scope = symbols->all_scopes; scope;
+         scope = scope->all_next)
+        if (core_string_eq(scope->scope_tag, CORE_STRING_STATIC("module"))
+            && (!module || (scope->lexical_scope == scope
+                && module->lexical_scope != module))) module = scope;
+    if (module) {
+        const core_indexed_entry_t *module_entry =
+            core_indexed_table_intern(index->scopes, module, module, nullptr);
+        if (!module_entry) {
+            n00bb_abi_decl_index_free(index);
+            return nullptr;
+        }
+        index->module_scope_index = module_entry->index;
+    }
     for (parse_scope_t *scope = symbols->all_scopes; scope;
          scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -101,6 +117,12 @@ size_t
 n00bb_abi_decl_symbol_count(const n00bb_abi_decl_index_t *index)
 {
     return index ? core_indexed_table_len(index->symbols) : 0;
+}
+
+uint32_t
+n00bb_abi_decl_module_scope_index(const n00bb_abi_decl_index_t *index)
+{
+    return index ? index->module_scope_index : 0;
 }
 
 parse_scope_t *

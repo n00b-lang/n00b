@@ -1176,6 +1176,12 @@ n00bb_abi_emit_unit(
                 + (uint32_t)constraint_rows.stream_index_count,
             lookup, lookup_context, &storage_rows);
     if (valid) {
+        modules[1].comptime_initializer =
+            function_rows.comptime_initializer_index;
+        modules[1].runtime_initializer =
+            function_rows.runtime_initializer_index;
+    }
+    if (valid) {
         size_t method_stream_base = prefix_stream_count + components.count
             + layout_rows.stream_index_count + enum_rows.stream_index_count
             + signature_rows.parameter_index_count
