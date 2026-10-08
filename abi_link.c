@@ -1,5 +1,6 @@
 #include "abi_link.h"
 #include "abi_member_facts.h"
+#include "abi_type_variable.h"
 
 #include "abi_ref_schema.h"
 #include "abi_string.h"
@@ -423,9 +424,8 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
     switch (kind) {
     case N00B_ABI_TABLE_TYPE: {
         const n00b_abi_type_v1 *type = key->row;
+        if (!n00bb_abi_type_variable_fields_valid(type)) return false;
         if (type->kind == N00B_ABI_TYPE_VARIABLE) {
-            if (type->typehash || !type->typevar_owner_scope_index)
-                return false;
             return nonconcrete_key_init(key);
         }
         else {

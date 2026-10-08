@@ -8,6 +8,7 @@
 #include "abi_member_facts.h"
 #include "abi_ref_schema.h"
 #include "abi_string.h"
+#include "abi_type_variable.h"
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -327,6 +328,8 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
     uint32_t type_count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
     for (uint32_t i = 0; i < type_count; i++) {
         const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, i);
+        if (!n00bb_abi_type_variable_fields_valid(type))
+            return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
         if (type->layout_index) {
             const n00b_abi_layout_v1 *layout = n00b_abi_v1_layout(snapshot,
                 type->layout_index);

@@ -266,6 +266,24 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_TYPE
         && !n00b_abi_v1_current_snapshot());
     image.types[1].fields_or_arms.count = 1;
+    image.types[3].typevar_ordinal = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
+    image.types[3].typevar_ordinal = 0;
+    n00b_abi_type_v1 original_type = image.types[3];
+    image.types[3] = (n00b_abi_type_v1){
+        .kind = N00B_ABI_TYPE_VARIABLE,
+        .flags = N00B_ABI_TYPE_FLAG_NON_CONCRETE,
+        .typevar_owner_scope_index = 1,
+    };
+    image.types[3].semantic_width_bits = 8;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
+    image.types[3] = original_type;
     image.methods[1].symbol_index = 1;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA

@@ -2205,12 +2205,67 @@ test_generic_type_identity(const char *path)
     free(source);
 }
 
+static void
+test_type_variable_shape(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[2];
+        n00b_abi_scope_v1 scopes[2];
+    } shape_fixture_t;
+    shape_fixture_t image = {0};
+    image.types[0].kind = N00B_ABI_TYPE_NIL;
+    image.types[0].typehash = 1;
+    image.types[1] = (n00b_abi_type_v1){
+        .kind = N00B_ABI_TYPE_VARIABLE,
+        .flags = N00B_ABI_TYPE_FLAG_NON_CONCRETE,
+        .typevar_owner_scope_index = 1,
+    };
+    n00bb_abi_directory_entry_t directory[2] = {
+        {
+            .kind = N00B_ABI_TABLE_TYPE,
+            .record_bytes = sizeof(n00b_abi_type_v1),
+            .record_count = 2,
+            .file_offset = offsetof(shape_fixture_t, types),
+        },
+        {
+            .kind = N00B_ABI_TABLE_SCOPE,
+            .record_bytes = sizeof(n00b_abi_scope_v1),
+            .record_count = 2,
+            .file_offset = offsetof(shape_fixture_t, scopes),
+        },
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {
+            .bytes = (const uint8_t *)&image,
+            .size = sizeof(image),
+        },
+        .directory = directory,
+        .directory_count = 2,
+    };
+    n00bb_abi_selected_objects_t selected = {
+        .views = &view, .count = 1,
+    };
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    n00bb_abi_index_plan_free(plan);
+    image.types[1].size_bits = 8;
+    assert(!n00bb_abi_index_plan_build(&selected));
+    image.types[1].size_bits = 0;
+    image.types[1].flags |= N00B_ABI_TYPE_FLAG_SIGNED;
+    assert(!n00bb_abi_index_plan_build(&selected));
+    image.types[1].flags = 0;
+    image.types[1].kind = N00B_ABI_TYPE_PRIMITIVE;
+    image.types[1].typehash = 2;
+    assert(!n00bb_abi_index_plan_build(&selected));
+}
+
 int
 main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3 || argc == 4 || argc == 5);
     test_native_string_pool_consolidation();
     test_link_index_patch();
+    test_type_variable_shape();
     test_specialization_remap();
     test_type_backlinks_remap();
     test_metadata_string_uses_relocation_pool();
