@@ -2628,6 +2628,21 @@ rocs_store_catalog_buffer_new() _kargs
     return n00b_result_ok(n00b_buffer_t *, buf);
 }
 
+// n00b#517: one lock pair per CALL, not per byte.
+//
+// These used n00b_buffer_resize + n00b_buffer_set_index, and each of those
+// opens with `defer_on(); n00b_buffer_acquire_w(buffer);`. So a byte cost two
+// write-lock acquire/release pairs and two defer registrations, and a u64 cost
+// sixteen of each for eight bytes of payload. A catalog entry is ~8 u64s and
+// 3-4 strings, so ~500 lock pairs per entry, every time the catalog is
+// written -- and it is rewritten in full from ~12 sites, including rotation,
+// seal and retention eviction.
+//
+// n00b_buffer_append_bytes does the whole append under ONE lock and one defer
+// frame, with the same amortized pow2 growth, so the byte order and on-disk
+// layout here are unchanged. It returns void (it cannot fail: a failed
+// allocation aborts inside the allocator), but it no-ops on a null buffer or
+// a null/empty source, so the callers still check what is actually checkable.
 static n00b_result_t(bool)
 rocs_store_catalog_append_u8(n00b_buffer_t *buf, uint8_t byte)
 {
@@ -2635,16 +2650,11 @@ rocs_store_catalog_append_u8(n00b_buffer_t *buf, uint8_t byte)
         return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
     }
 
-    uint64_t pos = (uint64_t)n00b_buffer_len(buf);
-    if (pos >= (uint64_t)INT64_MAX) {
+    if ((uint64_t)n00b_buffer_len(buf) >= (uint64_t)INT64_MAX) {
         return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
     }
 
-    n00b_buffer_resize(buf, pos + 1);
-    auto set_r = n00b_buffer_set_index(buf, (int64_t)pos, byte);
-    if (n00b_result_is_err(set_r)) {
-        return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
-    }
+    n00b_buffer_append_bytes(buf, &byte, 1);
 
     return n00b_result_ok(bool, true);
 }
@@ -2652,14 +2662,22 @@ rocs_store_catalog_append_u8(n00b_buffer_t *buf, uint8_t byte)
 static n00b_result_t(bool)
 rocs_store_catalog_append_u64(n00b_buffer_t *buf, uint64_t value)
 {
-    for (uint8_t i = 0; i < 8; i++) {
-        auto append_r = rocs_store_catalog_append_u8(
-            buf,
-            (uint8_t)((value >> (i * 8)) & 0xff));
-        if (n00b_result_is_err(append_r)) {
-            return append_r;
-        }
+    if (buf == nullptr) {
+        return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
     }
+
+    if ((uint64_t)n00b_buffer_len(buf) + 8u > (uint64_t)INT64_MAX) {
+        return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
+    }
+
+    // Little-endian, byte for byte what the per-byte loop emitted, so an
+    // existing catalog still reads back identically.
+    uint8_t bytes[8];
+    for (uint8_t i = 0; i < 8; i++) {
+        bytes[i] = (uint8_t)((value >> (i * 8)) & 0xff);
+    }
+
+    n00b_buffer_append_bytes(buf, bytes, sizeof(bytes));
 
     return n00b_result_ok(bool, true);
 }
@@ -2685,15 +2703,12 @@ rocs_store_catalog_append_bytes(n00b_buffer_t *buf,
         return n00b_result_ok(bool, true);
     }
 
-    n00b_buffer_t *piece = n00b_buffer_from_bytes((char *)data,
-                                                  (int64_t)len,
-                                                  .allocator = allocator);
-    if (piece == nullptr) {
-        return n00b_result_err(bool, N00B_STORE_ERR_INTERNAL);
-    }
-    n00b_buffer_concat(buf, piece);
-    n00b_buffer_free(piece);
-    n00b_free(piece);
+    // n00b#517: was a temporary n00b_buffer_from_bytes + concat + free +
+    // free, i.e. an allocation and three more lock pairs per string field,
+    // purely to hand the bytes to concat. append_bytes takes them directly.
+    // `allocator` is now unused here; it only ever fed that temporary.
+    (void)allocator;
+    n00b_buffer_append_bytes(buf, data, len);
     return n00b_result_ok(bool, true);
 }
 
