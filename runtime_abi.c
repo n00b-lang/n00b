@@ -8,6 +8,21 @@
 #include "abi_ref_schema.h"
 #include "abi_string.h"
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#endif
+#define XXH_INLINE_ALL
+#include <xxhash.h>
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 _Static_assert(sizeof(size_t) >= 8, "runtime ABI targets need 64-bit sizes");
 
 #if defined(__linux__) && defined(__x86_64__)
@@ -82,6 +97,59 @@ struct n00b_abi_snapshot_v1 {
 
 static _Atomic(const n00b_abi_snapshot_v1 *) current_snapshot;
 static atomic_flag registration_lock = ATOMIC_FLAG_INIT;
+
+typedef struct {
+    const uint8_t *module;
+    uint64_t module_bytes;
+    const uint8_t *name;
+    uint64_t name_bytes;
+} symbol_path_t;
+
+static bool
+same_bytes(const uint8_t *left, const uint8_t *right, uint64_t count)
+{
+    for (uint64_t i = 0; i < count; i++)
+        if (left[i] != right[i]) return false;
+    return true;
+}
+
+static bool
+symbol_path(const n00b_abi_snapshot_v1 *snapshot, uint32_t symbol_index,
+            symbol_path_t *out)
+{
+    const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(snapshot,
+                                                            symbol_index);
+    if (!symbol || (symbol->kind != N00B_ABI_SYMBOL_TYPE
+                    && symbol->kind != N00B_ABI_SYMBOL_FUNCTION
+                    && symbol->kind != N00B_ABI_SYMBOL_VARIABLE))
+        return false;
+    const n00b_abi_scope_v1 *scope = n00b_abi_v1_scope(snapshot,
+                                                       symbol->scope_index);
+    const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot,
+                                                           symbol->module_index);
+    if (!scope || !module || scope->parent_scope_index
+        || scope->module_index != symbol->module_index) return false;
+    symbol_path_t path = {0};
+    if (n00b_abi_v1_string_bytes(snapshot, &module->full_path,
+            &path.module, &path.module_bytes) != 1
+        || n00b_abi_v1_string_bytes(snapshot, &symbol->name,
+            &path.name, &path.name_bytes) != 1
+        || !path.name_bytes || path.module_bytes > SIZE_MAX - 1
+        || path.name_bytes > SIZE_MAX - path.module_bytes - 1)
+        return false;
+    *out = path;
+    return true;
+}
+
+static bool
+path_matches(symbol_path_t path, const uint8_t *bytes, uint64_t count)
+{
+    return count == path.module_bytes + 1 + path.name_bytes
+        && same_bytes(bytes, path.module, path.module_bytes)
+        && bytes[path.module_bytes] == '.'
+        && same_bytes(bytes + path.module_bytes + 1, path.name,
+                      path.name_bytes);
+}
 
 static uint32_t
 registration_error(n00b_abi_error_v1 *error, uint32_t status,
@@ -466,6 +534,96 @@ metadata_dispatch_valid(const n00b_abi_snapshot_v1 *snapshot,
     return valid;
 }
 
+static bool
+metadata_name_slots_valid(const n00b_abi_snapshot_v1 *snapshot,
+                          n00b_abi_error_v1 *error)
+{
+    uint32_t symbol_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_SYMBOL);
+    uint32_t slot_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_NAME_SLOT);
+    if (slot_count == 1)
+        return invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, 0, 0);
+    size_t longest = 0;
+    bool has_empty = false;
+    for (uint32_t i = 1; i < slot_count; i++) {
+        const n00b_abi_name_slot_v1 *slot = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_NAME_SLOT, i, nullptr);
+        if (!slot || slot->reserved_zero
+            || (!slot->symbol_index && slot->name_hash))
+            return invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, i, 0);
+        if (!slot->symbol_index) { has_empty = true; continue; }
+        symbol_path_t path;
+        if (!symbol_path(snapshot, slot->symbol_index, &path))
+            return invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, i, 0);
+        size_t length = (size_t)(path.module_bytes + 1 + path.name_bytes);
+        if (length > longest) longest = length;
+    }
+    if (slot_count && !has_empty)
+        return invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, 0, 0);
+    if (longest > SIZE_MAX - symbol_count)
+        return invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, 0, 0);
+    size_t scratch_bytes = (size_t)symbol_count + longest;
+    if (!scratch_bytes) scratch_bytes = 1;
+    uint8_t *scratch = snapshot_alloc(scratch_bytes);
+    if (!scratch) return false;
+    uint8_t *seen = scratch;
+    uint8_t *full_path = scratch + symbol_count;
+    bool valid = true;
+    uint32_t capacity = slot_count ? slot_count - 1 : 0;
+    for (uint32_t i = 1; valid && i < slot_count; i++) {
+        const n00b_abi_name_slot_v1 *slot = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_NAME_SLOT, i, nullptr);
+        if (!slot->symbol_index) continue;
+        symbol_path_t path;
+        valid = !seen[slot->symbol_index]
+            && symbol_path(snapshot, slot->symbol_index, &path);
+        if (!valid) {
+            invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, i, 0);
+            break;
+        }
+        seen[slot->symbol_index] = 1;
+        size_t length = (size_t)(path.module_bytes + 1 + path.name_bytes);
+        for (size_t byte = 0; byte < path.module_bytes; byte++)
+            full_path[byte] = path.module[byte];
+        full_path[path.module_bytes] = '.';
+        for (size_t byte = 0; byte < path.name_bytes; byte++)
+            full_path[path.module_bytes + 1 + byte] = path.name[byte];
+        uint64_t hash = XXH3_64bits(full_path, length);
+        valid = hash == slot->name_hash;
+        uint32_t probe = 1 + (uint32_t)(hash % capacity);
+        while (valid && probe != i) {
+            const n00b_abi_name_slot_v1 *prior = n00b_abi_v1_record(
+                snapshot, N00B_ABI_TABLE_NAME_SLOT, probe, nullptr);
+            valid = prior && prior->symbol_index;
+            if (valid && prior->name_hash == hash) {
+                symbol_path_t prior_path;
+                valid = symbol_path(snapshot, prior->symbol_index,
+                                    &prior_path)
+                    && !path_matches(prior_path, full_path, length);
+            }
+            probe = probe == capacity ? 1 : probe + 1;
+        }
+        if (!valid)
+            invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, i, 0);
+    }
+    for (uint32_t i = 1; valid && i < symbol_count; i++) {
+        const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(snapshot, i);
+        if (!symbol || (symbol->kind != N00B_ABI_SYMBOL_TYPE
+                        && symbol->kind != N00B_ABI_SYMBOL_FUNCTION
+                        && symbol->kind != N00B_ABI_SYMBOL_VARIABLE))
+            continue;
+        const n00b_abi_scope_v1 *scope = n00b_abi_v1_scope(snapshot,
+                                                            symbol->scope_index);
+        if (scope && scope->parent_scope_index) continue;
+        symbol_path_t path;
+        if (!symbol_path(snapshot, i, &path) || !seen[i])
+            valid = invalid_record(error, N00B_ABI_TABLE_SYMBOL, i, 0);
+    }
+    snapshot_free(scratch, scratch_bytes);
+    return valid;
+}
+
 typedef struct {
     uint32_t type_index;
     uint32_t next_link;
@@ -616,6 +774,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     if (valid) valid = metadata_references_valid(candidate, error);
     if (valid) valid = metadata_storage_valid(candidate, error);
     if (valid) valid = metadata_dispatch_valid(candidate, error);
+    if (valid) valid = metadata_name_slots_valid(candidate, error);
     if (valid) valid = specialization_graph_valid(candidate);
     if (!valid) {
         snapshot_free(candidate, sizeof(*candidate));
@@ -807,20 +966,47 @@ n00b_abi_v1_find_module(const n00b_abi_snapshot_v1 *snapshot,
         if (!module || n00b_abi_v1_string_bytes(snapshot,
                 &module->full_path, &path, &path_bytes) != 1) return -1;
         if (path_bytes != wanted_bytes) continue;
-        bool equal = true;
-        for (uint64_t byte = 0; byte < path_bytes; byte++) {
-            if (path[byte] != wanted[byte]) {
-                equal = false;
-                break;
-            }
-        }
-        if (!equal) continue;
+        if (!same_bytes(path, wanted, path_bytes)) continue;
         if (found) return -1;
         found = i;
     }
     if (!found) return 0;
     *module_index = found;
     return 1;
+}
+
+int32_t
+n00b_abi_v1_find_symbol(const n00b_abi_snapshot_v1 *snapshot,
+                        n00b_abi_string_v1 full_path,
+                        uint32_t *symbol_index)
+{
+    if (!snapshot || !symbol_index) return -1;
+    const uint8_t *wanted;
+    uint64_t wanted_bytes;
+    if (n00b_abi_v1_string_bytes(snapshot, &full_path, &wanted,
+                                  &wanted_bytes) != 1) return -1;
+    uint32_t count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_NAME_SLOT);
+    if (count < 2) return 0;
+    uint32_t capacity = count - 1;
+    uint64_t hash = XXH3_64bits(wanted, (size_t)wanted_bytes);
+    uint32_t slot_index = 1 + (uint32_t)(hash % capacity);
+    for (uint32_t probes = 0; probes < capacity; probes++) {
+        const n00b_abi_name_slot_v1 *slot = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_NAME_SLOT, slot_index, nullptr);
+        if (!slot) return -1;
+        if (!slot->symbol_index) return 0;
+        if (slot->name_hash == hash) {
+            symbol_path_t path;
+            if (!symbol_path(snapshot, slot->symbol_index, &path)) return -1;
+            if (path_matches(path, wanted, wanted_bytes)) {
+                *symbol_index = slot->symbol_index;
+                return 1;
+            }
+        }
+        slot_index = slot_index == capacity ? 1 : slot_index + 1;
+    }
+    return -1;
 }
 
 int32_t

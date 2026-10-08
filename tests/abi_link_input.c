@@ -9,6 +9,7 @@
 #include "n00b-abi-v1.h"
 #include "lib/alloc.h"
 #include "lib/byteorder.h"
+#include "lib/hash.h"
 
 static const char *
 host_triple(void)
@@ -734,6 +735,28 @@ test_linked_library_object(const char *path)
         N00B_ABI_SYMBOL_VARIABLE);
     assert(reader && reader->module_index == root_index
         && value && value->module_index == dep_index);
+    const n00bb_abi_directory_entry_t *name_slots = n00bb_abi_object_table(
+        &view, N00B_ABI_TABLE_NAME_SLOT);
+    const n00b_abi_symbol_v1 *first_symbol = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_SYMBOL, 0);
+    assert(name_slots && name_slots->record_count > 2 && first_symbol);
+    uint32_t reader_index = (uint32_t)(reader - first_symbol);
+    uint32_t value_index = (uint32_t)(value - first_symbol);
+    bool found_reader = false, found_value = false, found_empty = false;
+    for (uint32_t i = 1; i < name_slots->record_count; i++) {
+        const n00b_abi_name_slot_v1 *slot = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_NAME_SLOT, i);
+        assert(slot && !slot->reserved_zero);
+        if (!slot->symbol_index) found_empty = true;
+        if (slot->symbol_index == reader_index)
+            found_reader = slot->name_hash == core_xxh3_64bits_raw(
+                "abi_value_root.read_value",
+                strlen("abi_value_root.read_value"));
+        if (slot->symbol_index == value_index)
+            found_value = slot->name_hash == core_xxh3_64bits_raw(
+                "abi_value_dep.value", strlen("abi_value_dep.value"));
+    }
+    assert(found_reader && found_value && found_empty);
     n00bb_abi_object_close(&view);
     free(object);
 }

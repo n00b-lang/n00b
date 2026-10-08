@@ -5,6 +5,8 @@
 #include "abi_emit.h"
 #include "abi_index_patch.h"
 #include "lib/alloc.h"
+#include "lib/hash.h"
+#include "lib/string.h"
 
 static bool
 same_key(const n00bb_abi_image_key_t *left,
@@ -197,6 +199,132 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
     return true;
 }
 
+typedef struct {
+    n00bb_abi_string_view_t module;
+    n00bb_abi_string_view_t symbol;
+    bool present;
+} name_candidate_t;
+
+static bool
+same_name(n00bb_abi_string_view_t left, n00bb_abi_string_view_t right)
+{
+    return left.length == right.length
+        && (!left.length || !memcmp(left.bytes, right.bytes, left.length));
+}
+
+static bool
+rebuild_name_slots(const n00bb_abi_selected_objects_t *selected,
+                   const n00bb_abi_index_plan_t *plan,
+                   n00bb_abi_merged_rows_t *merged)
+{
+    const n00bb_abi_merged_table_t *symbols = n00bb_abi_merged_table(
+        merged, N00B_ABI_TABLE_SYMBOL);
+    n00bb_abi_merged_table_t *names = nullptr;
+    for (size_t i = 0; i < merged->table_count; i++)
+        if (merged->tables[i].kind == N00B_ABI_TABLE_NAME_SLOT)
+            names = &merged->tables[i];
+    if (!symbols || !names || names->record_count > 1) return false;
+    name_candidate_t *candidates = core_alloc_array(name_candidate_t,
+                                                     symbols->record_count);
+    uint32_t linkable = 0;
+    bool valid = true;
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_MODULE, 1);
+        n00bb_abi_string_view_t module_path;
+        valid = module && n00bb_abi_object_string(view,
+            &module->full_path, &module_path);
+        const n00bb_abi_directory_entry_t *source_symbols =
+            n00bb_abi_object_table(view, N00B_ABI_TABLE_SYMBOL);
+        if (!valid || !source_symbols) continue;
+        for (uint32_t local = 1; valid
+             && local < source_symbols->record_count; local++) {
+            const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(
+                view, N00B_ABI_TABLE_SYMBOL, local);
+            valid = symbol != nullptr;
+            if (!valid) break;
+            if (symbol->kind != N00B_ABI_SYMBOL_TYPE
+                && symbol->kind != N00B_ABI_SYMBOL_FUNCTION
+                && symbol->kind != N00B_ABI_SYMBOL_VARIABLE) continue;
+            const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_SCOPE, symbol->scope_index);
+            valid = scope && scope->module_index == 1
+                && symbol->module_index == 1;
+            if (!valid || scope->parent_scope_index) continue;
+            uint32_t final;
+            n00bb_abi_string_view_t symbol_name;
+            valid = n00bb_abi_index_plan_map(plan, input,
+                    N00B_ABI_TABLE_SYMBOL, local, &final)
+                && final && final < symbols->record_count
+                && n00bb_abi_object_string(view, &symbol->name,
+                                            &symbol_name)
+                && symbol_name.length;
+            if (!valid) break;
+            name_candidate_t *candidate = &candidates[final];
+            if (candidate->present) {
+                valid = same_name(candidate->module, module_path)
+                    && same_name(candidate->symbol, symbol_name);
+                continue;
+            }
+            *candidate = (name_candidate_t){module_path, symbol_name, true};
+            linkable++;
+        }
+    }
+    uint32_t capacity = 0;
+    if (valid) valid = linkable <= (UINT32_MAX - 2) / 2;
+    if (valid) capacity = 2 * linkable + 1;
+    uint32_t row_count = capacity + 1;
+    n00b_abi_name_slot_v1 *slots = valid
+        ? core_alloc_array(n00b_abi_name_slot_v1, row_count) : nullptr;
+    core_string_t *paths = valid
+        ? core_alloc_array(core_string_t, row_count) : nullptr;
+    for (uint32_t symbol_index = 1; valid
+         && symbol_index < symbols->record_count; symbol_index++) {
+        const name_candidate_t *candidate = &candidates[symbol_index];
+        if (!candidate->present) continue;
+        size_t module_bytes = candidate->module.length;
+        size_t symbol_bytes = candidate->symbol.length;
+        valid = module_bytes <= SIZE_MAX - 1 - symbol_bytes;
+        if (!valid) break;
+        size_t length = module_bytes + 1 + symbol_bytes;
+        char *path = core_alloc_size(1, length);
+        memcpy(path, candidate->module.bytes, module_bytes);
+        path[module_bytes] = '.';
+        memcpy(path + module_bytes + 1, candidate->symbol.bytes,
+               symbol_bytes);
+        core_string_t full_path = core_string_borrow(path, length);
+        uint64_t hash = core_xxh3_64bits_raw(path, length);
+        uint32_t slot = 1 + (uint32_t)(hash % capacity);
+        while (slots[slot].symbol_index) {
+            if (core_string_eq(paths[slot], full_path)) {
+                valid = slots[slot].symbol_index == symbol_index;
+                break;
+            }
+            slot = slot == capacity ? 1 : slot + 1;
+        }
+        if (valid && !slots[slot].symbol_index) {
+            slots[slot] = (n00b_abi_name_slot_v1){
+                .name_hash = hash, .symbol_index = symbol_index,
+            };
+            paths[slot] = full_path;
+        }
+        else core_free(path);
+    }
+    if (valid) {
+        core_free(names->records);
+        names->records = (uint8_t *)slots;
+        names->record_count = row_count;
+        slots = nullptr;
+    }
+    for (uint32_t i = 1; paths && i < row_count; i++)
+        core_free(paths[i].data);
+    core_free(paths);
+    core_free(slots);
+    core_free(candidates);
+    return valid;
+}
+
 bool
 n00bb_abi_apply_link_patches(
     const n00bb_abi_selected_objects_t *selected,
@@ -298,6 +426,7 @@ n00bb_abi_link_selected_objects(
     bool valid = plan
         && typed_requirements_resolved(selected, plan)
         && n00bb_abi_merge_rows(selected, plan, &merged)
+        && rebuild_name_slots(selected, plan, &merged)
         && n00bb_abi_collect_native_sections(selected, target, &sections)
         && n00bb_abi_apply_link_patches(selected, plan, &merged, &sections)
         && n00bb_abi_collect_native_relocations(selected, &sections,

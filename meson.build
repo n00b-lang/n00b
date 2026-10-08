@@ -46,9 +46,15 @@ n00bb_exe = executable(
     install: true,
 )
 
+runtime_abi_headers = lantern.partial_dependency(
+    compile_args: true, includes: true,
+)
+
 runtime_abi_support = static_library(
     'n00b-abi-runtime',
     ['runtime_abi.c', 'runtime_abi_io.c', 'abi_directory.c', 'abi_string.c'],
+    dependencies: runtime_abi_headers,
+    override_options: ['optimization=1'],
     install: true,
 )
 
@@ -66,6 +72,7 @@ runtime_abi_test = executable(
     'runtime-abi-test',
     'tests/runtime_abi.c',
     link_with: runtime_abi_support,
+    dependencies: runtime_abi_headers,
 )
 
 test('runtime-abi', runtime_abi_test)

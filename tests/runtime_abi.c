@@ -6,6 +6,22 @@
 #include "abi_directory.h"
 #include "n00b-abi-v1.h"
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#endif
+#define XXH_INLINE_ALL
+#define XXH_FORCE_MEMORY_ACCESS 3
+#include <xxhash.h>
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 #if defined(__linux__) && defined(__x86_64__)
 #define HOST_TARGET N00B_ABI_TARGET_X86_64_LINUX
 #elif defined(__APPLE__) && defined(__aarch64__)
@@ -18,7 +34,7 @@
 
 typedef struct {
     n00b_abi_header_v1 header;
-    uint8_t directory[16 * N00BB_ABI_DIRECTORY_BYTES];
+    uint8_t directory[18 * N00BB_ABI_DIRECTORY_BYTES];
     n00b_abi_type_v1 types[5];
     uint32_t indexes[8];
     uint64_t values[1];
@@ -31,6 +47,8 @@ typedef struct {
     n00b_abi_package_v1 packages[2];
     n00b_abi_module_v1 modules[2];
     n00b_abi_scope_v1 scopes[2];
+    n00b_abi_symbol_v1 symbols[2];
+    n00b_abi_name_slot_v1 name_slots[4];
     n00b_abi_source_file_v1 source_files[2];
     n00b_abi_runtime_config_v1 configs[2];
     n00b_abi_storage_v1 storages[3];
@@ -65,7 +83,7 @@ main(void)
     image.header.abi_profile_id = N00B_ABI_V1_PROFILE_ID;
     image.header.data_layout_profile = N00B_ABI_DATA_LAYOUT_PROFILE_V1;
     image.header.required_alignment = 8;
-    image.header.directory_count = 16;
+    image.header.directory_count = 18;
     image.header.directory_offset = offsetof(image_t, directory);
     image.header.total_extent = sizeof(image);
     image.header.payload_checksum = UINT64_MAX;
@@ -125,6 +143,16 @@ main(void)
     image.tls_relocations[1].write_byte_offset = 8;
     image.tls_relocations[1].target_kind = N00B_ABI_STORAGE_READ_ONLY;
     image.scopes[1].module_index = 1;
+    image.symbols[1].kind = N00B_ABI_SYMBOL_VARIABLE;
+    image.symbols[1].module_index = 1;
+    image.symbols[1].scope_index = 1;
+    image.symbols[1].type_index = 2;
+    memcpy(image.symbols[1].name.short_value.bytes, "foo", 3);
+    image.symbols[1].name.short_value.selector = 3;
+    uint64_t name_hash = XXH3_64bits("p.m.foo", 7);
+    uint32_t name_slot_index = 1 + (uint32_t)(name_hash % 3);
+    image.name_slots[name_slot_index].name_hash = name_hash;
+    image.name_slots[name_slot_index].symbol_index = 1;
     image.dispatches[1].trait_type_index = 1;
     image.dispatches[1].entries = (n00b_abi_range_v1){3, 2};
     image.entries[1].receiver_type_index = 2;
@@ -164,6 +192,10 @@ main(void)
     directory_entry(&image, 15, N00B_ABI_TABLE_TLS_RELOCATION,
         sizeof(image.tls_relocations[0]), 2,
         offsetof(image_t, tls_relocations));
+    directory_entry(&image, 16, N00B_ABI_TABLE_SYMBOL,
+        sizeof(image.symbols[0]), 2, offsetof(image_t, symbols));
+    directory_entry(&image, 17, N00B_ABI_TABLE_NAME_SLOT,
+        sizeof(image.name_slots[0]), 4, offsetof(image_t, name_slots));
 
     n00b_abi_image_descriptor_v1 descriptor = {
         .descriptor_version = 1,
@@ -278,6 +310,29 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_DISPATCH_ENTRY
         && !n00b_abi_v1_current_snapshot());
     image.dispatches[1].entries.count = 2;
+    image.name_slots[name_slot_index].name_hash ^= 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_NAME_SLOT
+        && !n00b_abi_v1_current_snapshot());
+    image.name_slots[name_slot_index].name_hash = name_hash;
+    uint32_t displaced_slot = name_slot_index == 3 ? 1 : name_slot_index + 1;
+    image.name_slots[displaced_slot] = image.name_slots[name_slot_index];
+    image.name_slots[name_slot_index] = (n00b_abi_name_slot_v1){0};
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_NAME_SLOT
+        && !n00b_abi_v1_current_snapshot());
+    image.name_slots[name_slot_index] = image.name_slots[displaced_slot];
+    image.name_slots[displaced_slot] = (n00b_abi_name_slot_v1){0};
+    image.name_slots[name_slot_index] = (n00b_abi_name_slot_v1){0};
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_SYMBOL
+        && !n00b_abi_v1_current_snapshot());
+    image.name_slots[name_slot_index] = (n00b_abi_name_slot_v1){
+        .name_hash = name_hash, .symbol_index = 1,
+    };
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_OK && !error.status && generation == 1);
     const n00b_abi_snapshot_v1 *snapshot =
@@ -329,6 +384,15 @@ main(void)
     assert(n00b_abi_v1_find_module(snapshot, module_path, &result) == -1);
     assert(n00b_abi_v1_find_module(snapshot, (n00b_abi_string_v1){0},
         nullptr) == -1);
+    n00b_abi_string_v1 symbol_path = {0};
+    memcpy(symbol_path.short_value.bytes, "p.m.foo", 7);
+    symbol_path.short_value.selector = 7;
+    assert(n00b_abi_v1_find_symbol(snapshot, symbol_path, &result) == 1
+        && result == 1);
+    symbol_path.short_value.bytes[6] = 'x';
+    result = 42;
+    assert(n00b_abi_v1_find_symbol(snapshot, symbol_path, &result) == 0
+        && result == 42);
     assert(n00b_abi_v1_type_specializes(snapshot, 4, 2) == 1);
     assert(n00b_abi_v1_type_specializes(snapshot, 4, 4) == 0);
     assert(n00b_abi_v1_type_specializes(snapshot, 2, 3) == 0);
