@@ -34,7 +34,7 @@
 
 typedef struct {
     n00b_abi_header_v1 header;
-    uint8_t directory[23 * N00BB_ABI_DIRECTORY_BYTES];
+    uint8_t directory[24 * N00BB_ABI_DIRECTORY_BYTES];
     n00b_abi_type_v1 types[6];
     uint32_t indexes[19];
     uint64_t values[1];
@@ -43,6 +43,8 @@ typedef struct {
     n00b_abi_trait_method_v1 methods[3];
     n00b_abi_function_v1 functions[4];
     n00b_abi_call_signature_v1 signatures[2];
+    n00b_abi_call_shape_v1 call_shapes[2];
+    n00b_abi_constraint_v1 constraints[3];
     n00b_abi_parameter_v1 parameters[4];
     n00b_abi_code_range_v1 code_ranges[3];
     n00b_abi_frame_layout_v1 frame_layouts[2];
@@ -80,11 +82,13 @@ int
 main(int argc, char **argv)
 {
     assert(argc == 1 || (argc == 2 && (!strcmp(argv[1],
-        "--partial-dispatch") || !strcmp(argv[1], "--function-parameters"))));
+        "--partial-dispatch") || !strcmp(argv[1], "--function-parameters")
+        || !strcmp(argv[1], "--call-shape"))));
     bool partial_dispatch = argc == 2
         && !strcmp(argv[1], "--partial-dispatch");
     bool function_parameters = argc == 2
         && !strcmp(argv[1], "--function-parameters");
+    bool call_shape = argc == 2 && !strcmp(argv[1], "--call-shape");
     assert(!n00b_abi_v1_current_snapshot());
     _Alignas(16) image_t image = {0};
     memcpy(image.header.magic, N00B_ABI_V1_MAGIC, 8);
@@ -635,6 +639,34 @@ main(int argc, char **argv)
         && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
     image.functions[3].valid_keyword_bits = 0;
     image.types[5].typehash = image.types[1].typehash + 16;
+    if (call_shape) {
+        image.header.directory_count = 24;
+        directory_entry(&image, 22, N00B_ABI_TABLE_CONSTRAINT,
+            sizeof(image.constraints[0]), 2, offsetof(image_t, constraints));
+        directory_entry(&image, 23, N00B_ABI_TABLE_CALL_SHAPE,
+            sizeof(image.call_shapes[0]), 2, offsetof(image_t, call_shapes));
+        image.constraints[1].kind = N00B_ABI_CONSTRAINT_METHOD;
+        image.constraints[1].result_type_index = 0;
+        image.constraints[1].target_type_index = N00B_ABI_V1_NO_TYPE_INDEX;
+        image.constraints[1].call_shape_index = 1;
+        image.call_shapes[1].success_type_index = 0;
+        image.call_shapes[1].failure_type_index = N00B_ABI_V1_NO_TYPE_INDEX;
+        image.constraints[1].call_shape_index = 0;
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_CALL_SHAPE
+            && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+        image.constraints[1].call_shape_index = 1;
+        image.constraints[2] = image.constraints[1];
+        directory_entry(&image, 22, N00B_ABI_TABLE_CONSTRAINT,
+            sizeof(image.constraints[0]), 3, offsetof(image_t, constraints));
+        assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+            == N00B_ABI_BAD_METADATA
+            && error.table_kind == N00B_ABI_TABLE_CALL_SHAPE
+            && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+        directory_entry(&image, 22, N00B_ABI_TABLE_CONSTRAINT,
+            sizeof(image.constraints[0]), 2, offsetof(image_t, constraints));
+    }
     if (function_parameters) {
         image.header.directory_count = 23;
         directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
@@ -695,6 +727,9 @@ main(int argc, char **argv)
         && n00b_abi_v1_runtime_config(snapshot, 1)
         && n00b_abi_v1_function(snapshot, 1)->module_index == 1
         && n00b_abi_v1_call_signature(snapshot, 1)->type_index == 5
+        && (!call_shape || (n00b_abi_v1_call_shape(snapshot, 1)
+            ->failure_type_index == N00B_ABI_V1_NO_TYPE_INDEX
+            && !n00b_abi_v1_call_shape(snapshot, 2)))
         && n00b_abi_v1_scope(snapshot, 1)->module_index == 1
         && n00b_abi_v1_symbol(snapshot, 1)->type_index == 2
         && n00b_abi_v1_source_location(snapshot, 1)->file_index == 1

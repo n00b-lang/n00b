@@ -1481,11 +1481,46 @@ n00bb_abi_index_plan_remap(const n00bb_abi_index_plan_t *plan,
     return plan->maps[input_index * plan->kind_count + kind];
 }
 
+static bool
+selected_call_shapes_valid(const n00bb_abi_selected_objects_t *selected)
+{
+    for (size_t input = 0; input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00bb_abi_directory_entry_t *shapes = n00bb_abi_object_table(
+            view, N00B_ABI_TABLE_CALL_SHAPE);
+        const n00bb_abi_directory_entry_t *constraints =
+            n00bb_abi_object_table(view, N00B_ABI_TABLE_CONSTRAINT);
+        uint32_t shape_count = shapes ? shapes->record_count : 0;
+        uint8_t *seen = shape_count > 1
+            ? core_alloc_array(uint8_t, shape_count) : nullptr;
+        if (shape_count > 1 && !seen) return false;
+        bool valid = true;
+        for (uint32_t i = 1; valid && constraints
+             && i < constraints->record_count; i++) {
+            const n00b_abi_constraint_v1 *constraint =
+                n00bb_abi_object_row(view, N00B_ABI_TABLE_CONSTRAINT, i);
+            if (!constraint) { valid = false; break; }
+            uint32_t shape_index = constraint->call_shape_index;
+            if (!shape_index) continue;
+            if (constraint->kind != N00B_ABI_CONSTRAINT_METHOD
+                || shape_index >= shape_count || seen[shape_index])
+                valid = false;
+            else seen[shape_index] = 1;
+        }
+        for (uint32_t i = 1; valid && i < shape_count; i++)
+            if (!seen[i]) valid = false;
+        core_free(seen);
+        if (!valid) return false;
+    }
+    return true;
+}
+
 n00bb_abi_index_plan_t *
 n00bb_abi_index_plan_build(const n00bb_abi_selected_objects_t *selected)
 {
     if (!selected || !selected->views || !selected->count) return nullptr;
-    if (!declared_function_constraints_valid(selected)) return nullptr;
+    if (!declared_function_constraints_valid(selected)
+        || !selected_call_shapes_valid(selected)) return nullptr;
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);

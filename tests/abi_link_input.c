@@ -2991,6 +2991,54 @@ test_type_variable_shape(void)
     assert(!n00bb_abi_index_plan_build(&selected));
 }
 
+static void
+test_call_shape_ownership(void)
+{
+    typedef struct {
+        n00b_abi_constraint_v1 constraints[3];
+        n00b_abi_call_shape_v1 shapes[2];
+    } shape_rows_t;
+    shape_rows_t rows = {0};
+    n00bb_abi_directory_entry_t directory[] = {
+        {
+            .kind = N00B_ABI_TABLE_CONSTRAINT,
+            .record_bytes = sizeof(rows.constraints[0]),
+            .record_count = 2,
+            .file_offset = offsetof(shape_rows_t, constraints),
+            .byte_length = sizeof(rows.constraints[0]) * 2,
+        },
+        {
+            .kind = N00B_ABI_TABLE_CALL_SHAPE,
+            .record_bytes = sizeof(rows.shapes[0]),
+            .record_count = 2,
+            .file_offset = offsetof(shape_rows_t, shapes),
+            .byte_length = sizeof(rows.shapes),
+        },
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {.bytes = (const uint8_t *)&rows, .size = sizeof(rows)},
+        .directory = directory,
+        .directory_count = sizeof(directory) / sizeof(*directory),
+    };
+    n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    rows.constraints[1].kind = N00B_ABI_CONSTRAINT_METHOD;
+    rows.constraints[1].call_shape_index = 1;
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    n00bb_abi_index_plan_free(plan);
+    rows.constraints[1].call_shape_index = 0;
+    assert(!n00bb_abi_index_plan_build(&selected));
+    rows.constraints[1].call_shape_index = 1;
+    rows.constraints[2] = rows.constraints[1];
+    directory[0].record_count = 3;
+    directory[0].byte_length = sizeof(rows.constraints);
+    assert(!n00bb_abi_index_plan_build(&selected));
+    directory[0].record_count = 2;
+    directory[0].byte_length = sizeof(rows.constraints[0]) * 2;
+    rows.constraints[1].kind = N00B_ABI_CONSTRAINT_EXCLUDES;
+    assert(!n00bb_abi_index_plan_build(&selected));
+}
+
 int
 main(int argc, char **argv)
 {
@@ -3010,6 +3058,7 @@ main(int argc, char **argv)
     test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();
     test_static_string_identity();
+    test_call_shape_ownership();
     if (argc == 2 && !strcmp(argv[1], "--strings")) return 0;
     if (argc == 5 && !strcmp(argv[1], "--function-import")) {
         test_imported_function_requirement(argv[2], argv[3], argv[4]);

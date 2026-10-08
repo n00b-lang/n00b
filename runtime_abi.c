@@ -1343,32 +1343,47 @@ static bool
 metadata_call_shapes_valid(const n00b_abi_snapshot_v1 *snapshot,
                            n00b_abi_error_v1 *error)
 {
-    uint32_t count = n00b_abi_v1_table_count(snapshot,
+    uint32_t shape_count = n00b_abi_v1_table_count(snapshot,
         N00B_ABI_TABLE_CALL_SHAPE);
-    for (uint32_t i = 1; i < count; i++) {
+    uint8_t *seen = shape_count > 1 ? snapshot_alloc(shape_count) : nullptr;
+    if (shape_count > 1 && !seen) return false;
+    bool valid = true;
+    for (uint32_t i = 1; valid && i < shape_count; i++) {
         const n00b_abi_call_shape_v1 *shape = n00b_abi_v1_record(snapshot,
             N00B_ABI_TABLE_CALL_SHAPE, i, nullptr);
         if (!shape || shape->reserved_zero
             || shape->success_type_index == N00B_ABI_V1_NO_TYPE_INDEX)
-            return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE, i, 0);
+            valid = invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE, i, 0);
+        if (!valid) break;
         if (shape->rest_parameter_index) {
             const n00b_abi_parameter_v1 *rest = n00b_abi_v1_record(snapshot,
                 N00B_ABI_TABLE_PARAMETER, shape->rest_parameter_index,
                 nullptr);
             if (!rest || !(rest->flags & N00B_ABI_PARAMETER_FLAG_VARIADIC))
-                return invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
-                                      i, 0);
+                valid = invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
+                                       i, 0);
         }
     }
-    count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_CONSTRAINT);
-    for (uint32_t i = 1; i < count; i++) {
+    uint32_t constraint_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_CONSTRAINT);
+    for (uint32_t i = 1; valid && i < constraint_count; i++) {
         const n00b_abi_constraint_v1 *constraint = n00b_abi_v1_record(
             snapshot, N00B_ABI_TABLE_CONSTRAINT, i, nullptr);
         if (!constraint || (constraint->kind != N00B_ABI_CONSTRAINT_METHOD
             && constraint->call_shape_index))
-            return invalid_record(error, N00B_ABI_TABLE_CONSTRAINT, i, 0);
+            valid = invalid_record(error, N00B_ABI_TABLE_CONSTRAINT, i, 0);
+        if (!valid || !constraint->call_shape_index) continue;
+        uint32_t shape_index = constraint->call_shape_index;
+        if (shape_index >= shape_count || seen[shape_index])
+            valid = invalid_record(error, N00B_ABI_TABLE_CALL_SHAPE,
+                                   shape_index, 0);
+        else seen[shape_index] = 1;
     }
-    return true;
+    for (uint32_t i = 1; valid && i < shape_count; i++)
+        if (!seen[i]) valid = invalid_record(error,
+            N00B_ABI_TABLE_CALL_SHAPE, i, 0);
+    if (seen) snapshot_free(seen, shape_count);
+    return valid;
 }
 
 static bool
