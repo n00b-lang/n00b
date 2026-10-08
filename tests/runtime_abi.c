@@ -18,9 +18,9 @@
 
 typedef struct {
     n00b_abi_header_v1 header;
-    uint8_t directory[14 * N00BB_ABI_DIRECTORY_BYTES];
+    uint8_t directory[16 * N00BB_ABI_DIRECTORY_BYTES];
     n00b_abi_type_v1 types[5];
-    uint32_t indexes[5];
+    uint32_t indexes[8];
     uint64_t values[1];
     uint8_t bytes[3];
     n00b_abi_specialization_link_v1 links[3];
@@ -33,6 +33,8 @@ typedef struct {
     n00b_abi_scope_v1 scopes[2];
     n00b_abi_source_file_v1 source_files[2];
     n00b_abi_runtime_config_v1 configs[2];
+    n00b_abi_storage_v1 storages[3];
+    n00b_abi_tls_relocation_v1 tls_relocations[2];
 } image_t;
 
 static void
@@ -63,7 +65,7 @@ main(void)
     image.header.abi_profile_id = N00B_ABI_V1_PROFILE_ID;
     image.header.data_layout_profile = N00B_ABI_DATA_LAYOUT_PROFILE_V1;
     image.header.required_alignment = 8;
-    image.header.directory_count = 14;
+    image.header.directory_count = 16;
     image.header.directory_offset = offsetof(image_t, directory);
     image.header.total_extent = sizeof(image);
     image.header.payload_checksum = UINT64_MAX;
@@ -87,6 +89,9 @@ main(void)
     image.indexes[2] = 1;
     image.indexes[3] = 1;
     image.indexes[4] = 2;
+    image.indexes[5] = 1;
+    image.indexes[6] = 2;
+    image.indexes[7] = 1;
     image.values[0] = 123;
     memcpy(image.bytes, "abc", 3);
     image.links[1] = 2;
@@ -100,6 +105,23 @@ main(void)
     image.modules[1].package_index = 1;
     image.modules[1].runtime_config_index = 1;
     image.modules[1].source_file_index = 1;
+    image.modules[1].static_storage = (n00b_abi_range_v1){5, 1};
+    image.modules[1].tls_storage = (n00b_abi_range_v1){6, 1};
+    image.storages[1].module_index = 1;
+    image.storages[1].type_index = 2;
+    image.storages[1].segment_kind = N00B_ABI_STORAGE_READ_ONLY;
+    image.storages[1].segment_index = 1;
+    image.storages[1].byte_length = 16;
+    image.storages[2].module_index = 1;
+    image.storages[2].type_index = 2;
+    image.storages[2].segment_kind = N00B_ABI_STORAGE_TLS;
+    image.storages[2].segment_index = 2;
+    image.storages[2].byte_length = 16;
+    image.storages[2].tls_relocations = (n00b_abi_range_v1){7, 1};
+    image.tls_relocations[1].template_storage_index = 2;
+    image.tls_relocations[1].referenced_storage_index = 1;
+    image.tls_relocations[1].write_byte_offset = 8;
+    image.tls_relocations[1].target_kind = N00B_ABI_STORAGE_READ_ONLY;
     image.scopes[1].module_index = 1;
     image.dispatches[1].trait_type_index = 1;
     image.dispatches[1].entries = (n00b_abi_range_v1){3, 2};
@@ -110,7 +132,7 @@ main(void)
     directory_entry(&image, 0, N00B_ABI_TABLE_TYPE,
         sizeof(image.types[0]), 5, offsetof(image_t, types));
     directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
-        sizeof(image.indexes[0]), 5, offsetof(image_t, indexes));
+        sizeof(image.indexes[0]), 8, offsetof(image_t, indexes));
     directory_entry(&image, 2, N00B_ABI_TABLE_U64_STREAM,
         sizeof(image.values[0]), 1, offsetof(image_t, values));
     directory_entry(&image, 3, N00B_ABI_TABLE_BYTE_STREAM,
@@ -135,6 +157,11 @@ main(void)
         sizeof(image.source_files[0]), 2, offsetof(image_t, source_files));
     directory_entry(&image, 13, N00B_ABI_TABLE_RUNTIME_CONFIG,
         sizeof(image.configs[0]), 2, offsetof(image_t, configs));
+    directory_entry(&image, 14, N00B_ABI_TABLE_STORAGE,
+        sizeof(image.storages[0]), 3, offsetof(image_t, storages));
+    directory_entry(&image, 15, N00B_ABI_TABLE_TLS_RELOCATION,
+        sizeof(image.tls_relocations[0]), 2,
+        offsetof(image_t, tls_relocations));
 
     n00b_abi_image_descriptor_v1 descriptor = {
         .descriptor_version = 1,
@@ -195,6 +222,42 @@ main(void)
         == N00B_ABI_BAD_METADATA && !n00b_abi_v1_current_snapshot());
     image.types[4].specialization_start_ix = 2;
     image.types[4].specialization_end_ix = 3;
+    image.tls_relocations[1].target_kind = N00B_ABI_STORAGE_WRITABLE;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TLS_RELOCATION
+        && !n00b_abi_v1_current_snapshot());
+    image.tls_relocations[1].target_kind = N00B_ABI_STORAGE_READ_ONLY;
+    image.tls_relocations[1].template_storage_index = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TLS_RELOCATION
+        && !n00b_abi_v1_current_snapshot());
+    image.tls_relocations[1].template_storage_index = 2;
+    image.tls_relocations[1].write_byte_offset = 9;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TLS_RELOCATION
+        && !n00b_abi_v1_current_snapshot());
+    image.tls_relocations[1].write_byte_offset = 8;
+    image.modules[1].static_storage.first = 6;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_MODULE
+        && !n00b_abi_v1_current_snapshot());
+    image.modules[1].static_storage.first = 5;
+    image.modules[1].tls_storage = (n00b_abi_range_v1){0};
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_STORAGE
+        && !n00b_abi_v1_current_snapshot());
+    image.modules[1].tls_storage = (n00b_abi_range_v1){6, 1};
+    image.storages[1].byte_offset = UINT64_MAX;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_STORAGE
+        && !n00b_abi_v1_current_snapshot());
+    image.storages[1].byte_offset = 0;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_OK && !error.status && generation == 1);
     const n00b_abi_snapshot_v1 *snapshot =

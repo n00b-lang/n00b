@@ -292,6 +292,103 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
     return true;
 }
 
+static bool
+metadata_storage_valid(const n00b_abi_snapshot_v1 *snapshot,
+                       n00b_abi_error_v1 *error)
+{
+    uint32_t module_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_MODULE);
+    uint32_t storage_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_STORAGE);
+    uint32_t relocation_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_TLS_RELOCATION);
+    if (!storage_count && !relocation_count) return true;
+    size_t scratch_bytes = (size_t)storage_count + relocation_count;
+    uint8_t *seen = snapshot_alloc(scratch_bytes);
+    if (!seen) return false;
+    uint8_t *seen_relocations = seen + storage_count;
+    bool valid = true;
+
+    for (uint32_t module_index = 1; valid && module_index < module_count;
+         module_index++) {
+        const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot,
+            module_index);
+        n00b_abi_range_v1 ranges[] = {module->static_storage,
+                                       module->tls_storage};
+        for (size_t kind = 0; valid && kind < 2; kind++)
+            for (uint32_t i = 0; valid && i < ranges[kind].count; i++) {
+                uint32_t storage_index = 0;
+                const n00b_abi_storage_v1 *storage = nullptr;
+                valid = n00b_abi_v1_index_at(snapshot, ranges[kind], i,
+                    &storage_index) == 1 && storage_index
+                    && storage_index < storage_count && !seen[storage_index];
+                if (valid) {
+                    storage = n00b_abi_v1_storage(snapshot, storage_index);
+                    valid = storage && storage->module_index == module_index
+                        && (kind ? storage->segment_kind == N00B_ABI_STORAGE_TLS
+                                 : storage->segment_kind
+                                     == N00B_ABI_STORAGE_READ_ONLY
+                                   || storage->segment_kind
+                                     == N00B_ABI_STORAGE_WRITABLE);
+                }
+                if (!valid)
+                    invalid_record(error, N00B_ABI_TABLE_MODULE,
+                                   module_index, 0);
+                else seen[storage_index] = 1;
+            }
+    }
+    for (uint32_t index = 1; valid && index < storage_count; index++) {
+        const n00b_abi_storage_v1 *storage = n00b_abi_v1_storage(snapshot,
+                                                                  index);
+        valid = storage && seen[index] && storage->segment_index
+            && storage->segment_kind >= N00B_ABI_STORAGE_READ_ONLY
+            && storage->segment_kind <= N00B_ABI_STORAGE_TLS
+            && storage->byte_offset <= UINT64_MAX - storage->byte_length;
+        if (valid && storage->symbol_index) {
+            const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(snapshot,
+                storage->symbol_index);
+            valid = symbol && symbol->module_index == storage->module_index
+                && symbol->type_index == storage->type_index;
+        }
+        if (valid && storage->tls_relocations.count)
+            valid = storage->segment_kind == N00B_ABI_STORAGE_TLS;
+        if (!valid) {
+            invalid_record(error, N00B_ABI_TABLE_STORAGE, index, 0);
+            break;
+        }
+        for (uint32_t i = 0; valid && i < storage->tls_relocations.count;
+             i++) {
+            uint32_t relocation_index = 0;
+            valid = n00b_abi_v1_index_at(snapshot, storage->tls_relocations,
+                i, &relocation_index) == 1 && relocation_index
+                && relocation_index < relocation_count
+                && !seen_relocations[relocation_index];
+            const n00b_abi_tls_relocation_v1 *relocation = valid
+                ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_TLS_RELOCATION,
+                                     relocation_index, nullptr) : nullptr;
+            const n00b_abi_storage_v1 *target = relocation
+                ? n00b_abi_v1_storage(snapshot,
+                    relocation->referenced_storage_index) : nullptr;
+            valid = valid && relocation && target
+                && relocation->template_storage_index == index
+                && relocation->target_kind == target->segment_kind
+                && relocation->write_byte_offset <= storage->byte_length
+                && sizeof(void *) <= storage->byte_length
+                    - relocation->write_byte_offset;
+            if (!valid)
+                invalid_record(error, N00B_ABI_TABLE_TLS_RELOCATION,
+                               relocation_index, 0);
+            else seen_relocations[relocation_index] = 1;
+        }
+    }
+    for (uint32_t index = 1; valid && index < relocation_count; index++)
+        if (!seen_relocations[index])
+            valid = invalid_record(error, N00B_ABI_TABLE_TLS_RELOCATION,
+                                   index, 0);
+    snapshot_free(seen, scratch_bytes);
+    return valid;
+}
+
 typedef struct {
     uint32_t type_index;
     uint32_t next_link;
@@ -440,6 +537,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
             && nil->typehash == UINT64_C(0x0ea862bddb8ce94c);
     }
     if (valid) valid = metadata_references_valid(candidate, error);
+    if (valid) valid = metadata_storage_valid(candidate, error);
     if (valid) valid = specialization_graph_valid(candidate);
     if (!valid) {
         snapshot_free(candidate, sizeof(*candidate));
