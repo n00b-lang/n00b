@@ -140,6 +140,12 @@ int32_t n00b_abi_v1_raw_fd_write(int32_t fd, n00b_abi_string_v1 text)
     return write_bytes(fd, bytes, count);
 }
 
+int32_t n00bb_bootstrap_fd_write(int32_t fd, uint64_t low, uint64_t high)
+{
+    n00b_abi_string_v1 text = {.words = {low, high}};
+    return n00b_abi_v1_raw_fd_write(fd, text);
+}
+
 static bool write_all(int32_t fd, const uint8_t *bytes, uint64_t count)
 {
     while (count) {

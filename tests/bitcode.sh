@@ -8,6 +8,13 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 "$compiler" build --output "$tmp/ok" "$program_dir/bitcode_runtime_ok.n00b"
 "$tmp/ok"
+"$compiler" build --output "$tmp/bootstrap_io" \
+    "$program_dir/bitcode_bootstrap_io.n00b" \
+    >"$tmp/bootstrap_io_compile"
+test "$(cat "$tmp/bootstrap_io_compile")" = "compile"
+"$tmp/bootstrap_io" >"$tmp/bootstrap_io_runtime"
+test "$(cat "$tmp/bootstrap_io_runtime")" = \
+    "runtime0123456789abcdef0123456789abcdef"
 "$compiler" build --output "$tmp/comptime_ok" \
     "$program_dir/bitcode_comptime_ok.n00b"
 "$tmp/comptime_ok"

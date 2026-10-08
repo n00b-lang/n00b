@@ -703,6 +703,7 @@ static ir_global_t *link_ir_global_for_symbol(
 static core_link_declaration_t *link_declaration_for_symbol(
     n00bb_link_analysis_t *analysis, parse_sym_entry_t *symbol);
 static bool n00bb_builtin_function(parse_sym_entry_t *symbol);
+static bool n00bb_builtin_fd_write_function(parse_sym_entry_t *symbol);
 static bool n00bb_builtin_reference_function(parse_sym_entry_t *symbol);
 static bool n00bb_builtin_callback_function(parse_sym_entry_t *symbol);
 static bool n00bb_builtin_init_function(parse_sym_entry_t *symbol);
@@ -3398,6 +3399,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         ir_lit_t literal = {0};
         if (n00bb_parse_switch_integer(first_token_text(node), &literal)
             && literal.mag <= (ir_uint_t)INT64_MAX) {
+            parsed->integer_literal_origin = node;
             int64_t value = (int64_t)literal.mag;
             if (value >= type_minimum && value <= type_maximum)
                 result = core_csp_new_var(store,
@@ -3447,6 +3449,12 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
     else if (nt_is(grammar, node, "unary-expr") && child_count == 2
         && child_ranges.data[1] >= 0) {
         core_string_t op = parse_tree_leaf_text(core_tree_child(node, 0));
+        parse_tree_t *operand = core_tree_child(node, 1);
+        if (core_tree_node_value(operand).integer_literal_origin
+            && (core_string_eq(op, CORE_STRING_STATIC("-"))
+                || core_string_eq(op, CORE_STRING_STATIC("+"))))
+            parsed->integer_literal_origin =
+                core_tree_node_value(operand).integer_literal_origin;
         if (core_string_eq(op, CORE_STRING_STATIC("-"))) {
             result = n00bb_range_new_var(store, node, type_minimum,
                                          type_maximum);
@@ -3510,12 +3518,31 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
     else if (n00bb_integer_range_wrapper(grammar, node)) {
         int32_t child = -1;
         size_t ranged = 0;
+        parse_tree_t *literal_child = nullptr;
+        bool literal_shape = true;
         for (size_t i = 0; i < child_ranges.len; i++) {
+            parse_tree_t *member = core_tree_child(node, i);
+            if (core_tree_is_leaf(member)) {
+                core_string_t text = parse_tree_leaf_text(member);
+                if (!core_string_eq(text, CORE_STRING_STATIC("+"))
+                    && !core_string_eq(text, CORE_STRING_STATIC("-"))
+                    && !core_string_eq(text, CORE_STRING_STATIC("("))
+                    && !core_string_eq(text, CORE_STRING_STATIC(")")))
+                    literal_shape = false;
+            }
+            else if (core_tree_node_value(member).integer_literal_origin) {
+                if (literal_child) literal_shape = false;
+                literal_child = member;
+            }
+            else literal_shape = false;
             if (child_ranges.data[i] < 0) continue;
             child = child_ranges.data[i];
             ranged++;
         }
         if (ranged == 1) {
+            if (literal_shape && literal_child)
+                parsed->integer_literal_origin =
+                    core_tree_node_value(literal_child).integer_literal_origin;
             result = n00bb_range_new_var(store, node, type_minimum,
                                          type_maximum);
             if (result < 0 || !core_csp_post_eq(store, result, child))
@@ -5537,8 +5564,31 @@ unify_call_node_type(core_translation_unit_t *unit,
     th_type *unification_actual = unwrap_actual ? actual_element : actual;
     th_type *unification_expected = wrap_expected
         ? expected_element : expected;
-    th_type *unified = th_unify_in_place(state->types, unification_actual,
-                                         unification_expected);
+    th_type *unified = nullptr;
+    parse_tree_t *origin = typed_node && !wrap_expected && !unwrap_actual
+        ? core_tree_node_value(typed_node).integer_literal_origin : nullptr;
+    th_type *default_integer = origin ? th_name(state->types, "int") : nullptr;
+    int64_t value_minimum = 0, value_maximum = 0;
+    int64_t target_minimum = 0, target_maximum = 0;
+    if (origin && default_integer
+        && th_hash(state->types, actual)
+            == th_hash(state->types, default_integer)
+        && parse_tree_integer_range(typed_node, &value_minimum,
+                                    &value_maximum)
+        && n00bb_integer_interval_type(expected, &target_minimum,
+                                       &target_maximum)
+        && value_minimum >= target_minimum
+        && value_maximum <= target_maximum) {
+        for (parse_tree_t *node = origin; node;
+             node = core_tree_node_value(node).parent) {
+            core_tree_node_value(node).type = expected;
+            if (node == typed_node) break;
+        }
+        unified = expected;
+    }
+    if (!unified)
+        unified = th_unify_in_place(state->types, unification_actual,
+                                    unification_expected);
     if (!unified) {
         report_call_type_error(unit, diagnostic_node, state->types, actual,
                                expected);
@@ -7149,10 +7199,89 @@ populate_package_interfaces(n00bb_link_analysis_t *analysis)
 }
 
 static bool
+add_implicit_package_scope(parse_symtab_t *symtab,
+                           core_translation_unit_t *unit,
+                           parse_scope_t *parent, core_string_t name,
+                           parse_scope_t **out)
+{
+    parse_sym_entry_t *existing = parse_symtab_lookup_in(parent, name);
+    if (existing) {
+        if (existing->kind != PARSE_SYM_MODULE
+            || !parse_sym_binding(existing,
+                CORE_STRING_STATIC("n00bb.implicit-package"))) return false;
+        *out = existing->exposed_scope;
+        return *out != nullptr;
+    }
+    parse_symtab_enter_scope_all(symtab, parent);
+    parse_symtab_push_scope_all(symtab, name);
+    parse_scope_t *scope = parse_symtab_current_scope(
+        symtab, CORE_STRING_STATIC(""));
+    if (scope) {
+        scope->scope_tag = CORE_STRING_STATIC("implicit-package");
+        parse_symtab_pop_scope_all(symtab);
+    }
+    parse_symtab_leave_scope_all(symtab);
+    if (!scope) return false;
+    parse_symtab_enter_scope_all(symtab, parent);
+    parse_sym_entry_t *module = parse_symtab_add(symtab,
+        CORE_STRING_STATIC(""), name, PARSE_SYM_MODULE, nullptr);
+    parse_symtab_leave_scope_all(symtab);
+    if (!module || !parse_sym_set_binding(module,
+            CORE_STRING_STATIC("n00bb.implicit-package"), unit)
+        || !parse_sym_set_binding(module,
+            CORE_STRING_STATIC("n00bb.package-unit"), unit)) return false;
+    module->exposed_scope = scope;
+    module->visibility = CORE_STRING_STATIC("public");
+    *out = scope;
+    return true;
+}
+
+static bool
+install_implicit_builtin_package(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    parse_scope_t *parent = module_scope(state);
+    parse_namespace_t *builtin_ns = symtab
+        ? parse_symtab_ns(symtab, CORE_STRING_STATIC("builtin")) : nullptr;
+    parse_sym_entry_t *writer = builtin_ns
+        ? parse_symtab_lookup_in(builtin_ns->root,
+            CORE_STRING_STATIC("__fd_write")) : nullptr;
+    if (!symtab || !parent || !writer) return false;
+    parse_scope_t *builtin_scope = nullptr;
+    parse_scope_t *io_scope = nullptr;
+    parse_scope_t *types_scope = nullptr;
+    if (!add_implicit_package_scope(symtab, unit, parent,
+            CORE_STRING_STATIC("builtin"), &builtin_scope)
+        || !add_implicit_package_scope(symtab, unit, builtin_scope,
+            CORE_STRING_STATIC("io"), &io_scope)
+        || !add_implicit_package_scope(symtab, unit, builtin_scope,
+            CORE_STRING_STATIC("types"), &types_scope)) return false;
+    parse_sym_entry_t *function = parse_symtab_lookup_in(io_scope,
+        CORE_STRING_STATIC("__fd_write"));
+    if (!function) {
+        parse_symtab_enter_scope_all(symtab, io_scope);
+        function = parse_symtab_add(symtab, CORE_STRING_STATIC(""),
+            CORE_STRING_STATIC("__fd_write"), PARSE_SYM_FUNCTION, nullptr);
+        parse_symtab_leave_scope_all(symtab);
+    }
+    if (!function || !parse_sym_set_binding(function,
+            CORE_STRING_STATIC("n00bb.abi.fd_write"),
+            (void *)"n00bb_bootstrap_fd_write")) return false;
+    function->type = writer->type;
+    function->error_type = writer->error_type;
+    function->callable_contract = writer->callable_contract;
+    function->visibility = CORE_STRING_STATIC("public");
+    return true;
+}
+
+static bool
 bind_imported_module_scopes(core_list_t(core_translation_unit_ptr_t) *units)
 {
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
+        if (!install_implicit_builtin_package(unit)) return false;
         n00bb_tu_state_t *state = tu_state(unit);
         core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
         for (size_t s = 0; s < scopes.len; s++) {
@@ -15299,6 +15428,20 @@ function_parameter_info(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
                         parse_sym_entry_t **formal_out, const char **name,
                         size_t *name_size, uint8_t *flags, th_mode *mode)
 {
+    if (symbol && parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.abi.fd_write"))) {
+        th_type *signature = th_resolve(symbol->type);
+        const th_param *parameter = signature
+            && th_kind_of(signature) == TH_FUNCTION
+            ? th_func_param(signature, index) : nullptr;
+        if (!parameter) return false;
+        if (formal_out) *formal_out = nullptr;
+        if (name) *name = nullptr;
+        if (name_size) *name_size = 0;
+        if (flags) *flags = 0;
+        if (mode) *mode = parameter->mode;
+        return true;
+    }
     th_type *callback_public = n00bb_builtin_callback_function(symbol)
         ? parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.callback-public-signature")) : nullptr;
@@ -16630,6 +16773,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                         "call target did not resolve to a declared function");
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     }
+    bool fd_write_builtin = n00bb_builtin_fd_write_function(symbol);
     bool reference_builtin = n00bb_builtin_reference_function(symbol);
     bool option_builtin = n00bb_builtin_option_function(symbol);
     n00bb_link_analysis_t *analysis = caller_state
@@ -16650,7 +16794,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             CORE_STRING_STATIC("n00bb.option-set-element")))
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
             "option.get requires a value proven non-nil by the active branch");
-    bool no_function_body = reference_builtin || option_builtin
+    bool no_function_body = fd_write_builtin || reference_builtin || option_builtin
         || callback_call;
     core_translation_unit_t *callee_unit = !no_function_body && lower
         ? unit_for_symbol(visit->grammar, lower->units, symbol) : nullptr;
@@ -16722,6 +16866,27 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (!signature || !signature_return)
         return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                            "call result does not match the resolved function return type");
+    if (fd_write_builtin) {
+        const char *native_name = parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.abi.fd_write"));
+        ir_func_t *function = ir_func_find(context->module,
+            "__n00bb_bootstrap_fd_write");
+        if (!function)
+            function = ir_func_add(context->module,
+                "__n00bb_bootstrap_fd_write", signature, IR_LINK_EXTERN);
+        if (function && !ir_annot_set(lower->ir_context,
+                &function->annots, (ir_annot_t){
+                    .key = "n00bb.abi.fd_write",
+                    .kind = IR_ANNOT_STR,
+                    .s = native_name,
+                })) return lower_error(context, IR_DIAG_INTERNAL, span,
+                    "could not annotate the bootstrap fd writer");
+        callee_value = function
+            ? ir_func_address(context->module, function) : nullptr;
+        if (!callee_value)
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                "could not declare the bootstrap fd writer");
+    }
     core_tree_node_value(call_node).type = signature_return;
     parse_tree_t *args = call_label
         && call_label->kind == PARSE_CF_CALL ? call_label->then_body
@@ -26188,21 +26353,25 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
     }
 
     static const char *builtin_names[] = {
-        "has_type", "ref_read", "ref_write",
+        "has_type", "ref_read", "ref_write", "__fd_write",
     };
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
         n00bb_tu_state_t *state = tu_state(unit);
-        parse_namespace_t *values = state && state->annotations
-            ? parse_symtab_ns(state->annotations->symtab,
-                              CORE_STRING_STATIC("builtin")) : nullptr;
-        if (!values || !values->root) continue;
-        for (size_t b = 0; b < sizeof(builtin_names)
-                                      / sizeof(builtin_names[0]); b++) {
-            core_string_t name = core_string_from_cstr(builtin_names[b]);
-            parse_sym_entry_t *symbol = parse_symtab_lookup_in(values->root,
-                                                               name);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+             scope; scope = scope->all_next)
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
             if (!n00bb_builtin_function(symbol) || !symbol->uses) continue;
+            core_string_t name = symbol->name;
+            bool selected = n00bb_builtin_fd_write_function(symbol);
+            for (size_t b = 0; !selected
+                 && b < sizeof(builtin_names) / sizeof(builtin_names[0]); b++)
+                selected = core_string_eq(name,
+                    core_string_from_cstr(builtin_names[b]));
+            if (!selected) continue;
             core_link_declaration_t *declaration = nullptr;
             for (size_t d = 0; d < core_link_unit_declaration_count(link);
                  d++) {
@@ -26237,7 +26406,8 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
 static bool
 n00bb_builtin_function(parse_sym_entry_t *symbol)
 {
-    return symbol && symbol->kind == PARSE_SYM_FUNCTION
+    return n00bb_builtin_fd_write_function(symbol)
+        || (symbol && symbol->kind == PARSE_SYM_FUNCTION
         && !symbol->decl_node && symbol->scope && !symbol->scope->parent
         && symbol->scope->ns
         && core_string_eq(symbol->scope->ns->ns_name,
@@ -26249,7 +26419,16 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
             || n00bb_builtin_string_operator(symbol)
             || n00bb_builtin_reference_function(symbol)
             || n00bb_builtin_callback_function(symbol)
-            || n00bb_builtin_init_function(symbol));
+            || n00bb_builtin_init_function(symbol)));
+}
+
+static bool
+n00bb_builtin_fd_write_function(parse_sym_entry_t *symbol)
+{
+    return symbol && symbol->kind == PARSE_SYM_FUNCTION
+        && !symbol->decl_node
+        && parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.abi.fd_write"));
 }
 
 static bool
@@ -26426,6 +26605,8 @@ register_link_use_sites(core_link_unit_t *link,
                 continue;
             }
             if (n00bb_builtin_init_function(symbol)) continue;
+            if (symbol && parse_sym_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.implicit-package"))) continue;
             if (n00bb_builtin_function(symbol)) {
                 core_link_reference_t *reference = nullptr;
                 bool ok = core_link_unit_reference_at_scoped_kind(link, unit,
@@ -30545,7 +30726,8 @@ publish_link_initializer_uses(core_link_unit_t *link,
             if (is_type_reference_node(analysis->grammar, site->node))
                 continue;
             parse_sym_entry_t *symbol = canonical_symbol(site->symbol);
-            if (n00bb_builtin_reference_function(symbol)) continue;
+            if (n00bb_builtin_reference_function(symbol)
+                || n00bb_builtin_fd_write_function(symbol)) continue;
             if (symbol && (symbol->kind == PARSE_SYM_MODULE
                     || symbol->kind == PARSE_SYM_ENUM_CONST
                     || symbol->kind == PARSE_SYM_TYPEDEF
@@ -30598,7 +30780,12 @@ publish_link_initializer_uses(core_link_unit_t *link,
                 && call.kind != N00BB_LINK_DEPENDENCY_CONTEXT_CALL)
             || !call.source_unit || !call.source_site) continue;
         if (call.state == CORE_LINK_DEPENDENCY_EXTERNAL
-            && link_dependency_reference_builtin(&call, nullptr)) continue;
+            && (link_dependency_reference_builtin(&call, nullptr)
+                || (call.to
+                    && core_string_eq(core_link_declaration_module(call.to),
+                        CORE_STRING_STATIC("builtins"))
+                    && core_string_eq(core_link_declaration_key(call.to),
+                        CORE_STRING_STATIC("__fd_write"))))) continue;
         parse_tree_t *site = (parse_tree_t *)call.source_site;
         n00bb_tu_state_t *source_state = tu_state(call.source_unit);
         parse_sym_entry_t *owner_symbol = module_variable_initializer_owner(
@@ -37224,6 +37411,17 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         ? th_env_signature_contract(types, option_get_or_else_signature,
                                     nil_type) : nullptr;
     th_type *string_type = th_name(types, "string");
+    th_type *i32_type = th_name(types, "i32");
+    th_param fd_write_parameters[] = {
+        {.mode = TH_IN, .type = i32_type},
+        {.mode = TH_IN, .type = string_type},
+    };
+    th_type *fd_write_signature = i32_type && string_type
+        ? th_func_with_error(types, i32_type, nil_type,
+            fd_write_parameters, 2, nullptr, nullptr, 0) : nullptr;
+    th_type *fd_write_contract = fd_write_signature
+        ? th_env_signature_contract(types, fd_write_signature, nil_type)
+        : nullptr;
     th_param string_add_parameters[] = {
         {.mode = TH_IN, .type = string_type},
         {.mode = TH_IN, .type = string_type},
@@ -37248,7 +37446,8 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         || !write_signature || !write_contract || !option_is_nil_signature
         || !option_get_signature || !option_get_or_else_signature
         || !option_is_nil_contract || !option_get_contract
-        || !option_get_or_else_contract || !string_add_contract) return false;
+        || !option_get_or_else_contract || !string_add_contract
+        || !fd_write_contract) return false;
 
     parse_scope_t *saved = parse_symtab_current_scope(
         symtab, CORE_STRING_STATIC("builtin"));
@@ -37276,6 +37475,9 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     parse_sym_entry_t *string_add_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__string_add"),
         PARSE_SYM_FUNCTION, nullptr);
+    parse_sym_entry_t *fd_write_symbol = parse_symtab_add(symtab,
+        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__fd_write"),
+        PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *init_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("init"),
         PARSE_SYM_FUNCTION, nullptr);
@@ -37284,7 +37486,8 @@ register_builtin_symbols(parse_annot_result_t *annotations,
                                  saved);
     if (!symbol || !read_symbol || !write_symbol || !option_is_nil_symbol
         || !option_get_symbol || !option_get_or_else_symbol
-        || !string_add_symbol || !init_symbol || !init_contract) return false;
+        || !string_add_symbol || !fd_write_symbol
+        || !init_symbol || !init_contract) return false;
     symbol->type = signature;
     symbol->error_type = nil_type;
     symbol->callable_contract = contract;
@@ -37306,6 +37509,12 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     string_add_symbol->type = string_add_signature;
     string_add_symbol->error_type = nil_type;
     string_add_symbol->callable_contract = string_add_contract;
+    fd_write_symbol->type = fd_write_signature;
+    fd_write_symbol->error_type = nil_type;
+    fd_write_symbol->callable_contract = fd_write_contract;
+    if (!parse_sym_set_binding(fd_write_symbol,
+            CORE_STRING_STATIC("n00bb.abi.fd_write"),
+            (void *)"n00bb_bootstrap_fd_write")) return false;
     init_symbol->type = init_signature;
     init_symbol->error_type = nil_type;
     init_symbol->callable_contract = init_contract;
@@ -37318,6 +37527,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         && option_get_symbol->callable_contract
         && option_get_or_else_symbol->callable_contract
         && string_add_symbol->callable_contract
+        && fd_write_symbol->callable_contract
         && init_symbol->callable_contract;
 }
 
@@ -47963,11 +48173,10 @@ n00bb_execute_comptime(core_link_unit_t *link,
 #else
         const char *linker = "clang";
 #endif
-        char *archive = producer_count
-            ? n00bb_runtime_archive_path(compiler_path) : nullptr;
-        char **arguments = calloc(count + 4 + (producer_count != 0),
+        char *archive = n00bb_runtime_archive_path(compiler_path);
+        char **arguments = calloc(count + 5,
                                   sizeof(*arguments));
-        ok = arguments && (!producer_count || archive);
+        ok = arguments && archive;
         if (ok) {
             arguments[0] = (char *)linker;
             for (size_t i = 0; i < count; i++)

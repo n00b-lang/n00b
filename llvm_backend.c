@@ -1257,6 +1257,42 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (!count || operands[0].kind != IR_OPD_VALUE
             || !operands[0].value || operands[0].value->kind != IR_VAL_FUNC)
             break;
+        ir_func_t *target = operands[0].value->owner;
+        ir_annot_t *native = target
+            ? ir_annot_get(&target->annots, "n00bb.abi.fd_write") : nullptr;
+        if (native && native->kind == IR_ANNOT_STR && native->s) {
+            if (count != 3 || !instruction->dest
+                || operands[1].kind != IR_OPD_VALUE
+                || operands[2].kind != IR_OPD_VALUE) break;
+            LLVMValueRef fd = lowered_value(state, operands[1].value);
+            LLVMValueRef string = lowered_value(state, operands[2].value);
+            LLVMContextRef context = LLVMGetModuleContext(state->module);
+            LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+            LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+            if (!fd || !string || LLVMTypeOf(fd) != i32
+                || LLVMGetTypeKind(LLVMTypeOf(string)) != LLVMStructTypeKind
+                || LLVMCountStructElementTypes(LLVMTypeOf(string)) != 2)
+                break;
+            LLVMTypeRef parameters[] = {i32, i64, i64};
+            LLVMTypeRef signature = LLVMFunctionType(i32, parameters,
+                3, false);
+            LLVMValueRef writer = LLVMGetNamedFunction(state->module,
+                native->s);
+            if (!writer)
+                writer = LLVMAddFunction(state->module,
+                    native->s, signature);
+            if (!writer) break;
+            LLVMValueRef arguments[] = {
+                fd,
+                LLVMBuildExtractValue(state->builder, string, 0,
+                                      "fd_write.low"),
+                LLVMBuildExtractValue(state->builder, string, 1,
+                                      "fd_write.high"),
+            };
+            result = LLVMBuildCall2(state->builder, signature, writer,
+                arguments, 3, "fd_write");
+            return result && save_result(state, instruction, result);
+        }
         LLVMValueRef callee = lowered_value(state, operands[0].value);
         if (!callee || LLVMGetTypeKind(LLVMGlobalGetValueType(callee))
                            != LLVMFunctionTypeKind
