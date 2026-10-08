@@ -537,7 +537,8 @@
 # modifier names a compile-time handler; it is not a runtime call or a value
 # binding. The ordinary identifier and literal tokens are paired by this
 # production, and @nospace requires them to be adjacent.
-# Resolution uses compile-time literal-handler and type metadata.
+# Resolution uses the selected handler's declared return type. User handlers
+# are registered by declare_litmod(modifier, kind, func_name).
 # The prefix must be adjacent to its payload. Examples:
 #
 #     set{1, 2, 3}
@@ -550,12 +551,12 @@
 # literal shapes are selected by their registered handler.
 # There is no postfix literal-modifier syntax.
 #
-# The handler runs after lexical decoding and before type checking completes.
-# It receives the prefix arguments, decoded payload, raw host-source span, and the
-# payload form. It returns a typed compile-time value or syntax object. Failure
-# is a compile-time diagnostic anchored in the literal; there is no runtime
-# fallback. Cached results must include the handler and all declared external
-# inputs in their cache key.
+# The handler signature is (raw: string, syntax: litmod_syntax) -> `T,
+# fail: string, with a concrete result type; only fence handlers may
+# return nil.
+# Type checking uses the declared return type. Handler execution follows
+# type checking and precedes general-purpose comptime execution. A failure
+# is a compile-time diagnostic anchored in the literal.
 <tagged-lit> @notrivia($1) @nospace($1) @adjacent("prefix") @infer("`t") @emit("tagged_literal") ::=
        <literal-prefix> (%"[" <tspec-list> %"]")? <literal-payload>
 
