@@ -624,13 +624,16 @@ n00bb_abi_type_layout_rows_build(
             continue;
         }
         bool option = types->rows[i].kind == N00B_ABI_TYPE_OPTION;
+        bool wrapper = types->rows[i].kind == N00B_ABI_TYPE_WRAPPER;
+        bool own_tag = types->rows[i].kind == N00B_ABI_TYPE_VARIANT
+            || option;
         if (!final->alignment_bytes
-            || final->has_discriminant
-                != (types->rows[i].kind == N00B_ABI_TYPE_VARIANT || option)
+            || (!wrapper && final->has_discriminant != own_tag)
             || (final->n_members
                 && types->rows[i].kind != N00B_ABI_TYPE_RECORD
                 && types->rows[i].kind != N00B_ABI_TYPE_VARIANT
-                && types->rows[i].kind != N00B_ABI_TYPE_TUPLE)
+                && types->rows[i].kind != N00B_ABI_TYPE_TUPLE
+                && !wrapper)
             || layouts.len >= UINT32_MAX
             || types->rows[i].size_bits != final->intrinsic_bits
             || types->rows[i].alignment_bytes != final->alignment_bytes) {
@@ -643,7 +646,7 @@ n00bb_abi_type_layout_rows_build(
         };
         const parse_sym_entry_t *owner = types->owners
             ? types->owners[i] : nullptr;
-        if (final->has_discriminant) {
+        if (own_tag) {
             const ir_layout_access_t *access = &final->discriminant;
             if (access->unit_bit_offset % 8 || !access->unit_width_bits
                 || !access->value_width_bits
@@ -697,9 +700,9 @@ n00bb_abi_type_layout_rows_build(
             && append_runs(final->reserved, final->n_reserved,
                 final->intrinsic_bits, stream_base, &runs, &indexes,
                 &row.reserved_runs)
-            && append_members(index, declarations, names, owner, final,
-                (uint32_t)i, stream_base, &fields, &arms, &packed, &runs,
-                &indexes, &type_field_ranges[i]);
+            && (wrapper || append_members(index, declarations, names, owner,
+                final, (uint32_t)i, stream_base, &fields, &arms, &packed,
+                &runs, &indexes, &type_field_ranges[i]));
         if (valid && types->rows[i].kind == N00B_ABI_TYPE_TUPLE)
             row.policy = N00B_ABI_LAYOUT_ORDERED;
         if (!valid) break;

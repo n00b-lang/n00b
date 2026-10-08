@@ -2066,6 +2066,77 @@ check_option_layout(const core_object_section_t *metadata,
 }
 
 static void
+check_record_wrapper(const core_object_section_t *metadata,
+                     const n00bb_abi_directory_entry_t *entries,
+                     size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries, count,
+        N00B_ABI_TABLE_SYMBOL);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    const n00bb_abi_directory_entry_t *runs = entry_for(entries, count,
+        N00B_ABI_TABLE_PHYSICAL_RUN);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(types && symbols && layouts && runs && stream);
+    uint32_t base_index = 0, wrapper_index = 0, synonym_index = 0;
+    for (uint32_t i = 1; i < symbols->record_count; i++) {
+        const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
+        if (short_name_is(&symbol->name, "Base"))
+            base_index = symbol->type_index;
+        if (short_name_is(&symbol->name, "Distinct"))
+            wrapper_index = symbol->type_index;
+        if (short_name_is(&symbol->name, "Synonym"))
+            synonym_index = symbol->type_index;
+    }
+    assert(base_index && wrapper_index && synonym_index == base_index
+        && wrapper_index != base_index);
+    const n00b_abi_type_v1 *base = row_at(metadata, types, base_index);
+    const n00b_abi_type_v1 *wrapper = row_at(metadata, types, wrapper_index);
+    assert(base->kind == N00B_ABI_TYPE_RECORD
+        && base->fields_or_arms.count == 2
+        && wrapper->kind == N00B_ABI_TYPE_WRAPPER
+        && wrapper->typehash != base->typehash
+        && wrapper->components.count == 1
+        && core_le_load_u32(row_at(metadata, stream,
+            wrapper->components.first)) == base_index
+        && !wrapper->fields_or_arms.count
+        && wrapper->size_bits == base->size_bits
+        && wrapper->alignment_bytes == base->alignment_bytes
+        && wrapper->layout_index && base->layout_index);
+    const n00b_abi_layout_v1 *base_layout = row_at(metadata, layouts,
+        base->layout_index);
+    const n00b_abi_layout_v1 *wrapper_layout = row_at(metadata, layouts,
+        wrapper->layout_index);
+    assert(!wrapper_layout->tag_extractor_index
+        && wrapper_layout->occupied_runs.count
+            == base_layout->occupied_runs.count
+        && wrapper_layout->reserved_runs.count
+            == base_layout->reserved_runs.count);
+    const n00b_abi_range_v1 ranges[][2] = {
+        {base_layout->occupied_runs, wrapper_layout->occupied_runs},
+        {base_layout->reserved_runs, wrapper_layout->reserved_runs},
+    };
+    for (size_t kind = 0; kind < 2; kind++) {
+        for (uint32_t j = 0; j < ranges[kind][0].count; j++) {
+            uint32_t a_index = core_le_load_u32(row_at(metadata, stream,
+                ranges[kind][0].first + j));
+            uint32_t b_index = core_le_load_u32(row_at(metadata, stream,
+                ranges[kind][1].first + j));
+            const n00b_abi_physical_run_v1 *a = row_at(metadata, runs,
+                a_index);
+            const n00b_abi_physical_run_v1 *b = row_at(metadata, runs,
+                b_index);
+            assert(a->byte_offset == b->byte_offset
+                && a->bit_offset == b->bit_offset
+                && a->width_bits == b->width_bits);
+        }
+    }
+}
+
+static void
 check_unary_trace(const core_object_section_t *metadata,
                     const n00bb_abi_directory_entry_t *entries, size_t count)
 {
@@ -2379,6 +2450,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "tuple-storage")
             || !strcmp(argv[2], "anonymous-record-storage")
             || !strcmp(argv[2], "alias")
+            || !strcmp(argv[2], "record-wrapper")
             || !strcmp(argv[2], "flagset")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local")
@@ -2451,6 +2523,13 @@ main(int argc, char **argv)
                                                alias->type_index);
         assert(short_name_is(&type->canonical_name, "int")
             && !type->owner_module_index);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "record-wrapper")) {
+        check_record_wrapper(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

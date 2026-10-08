@@ -4567,6 +4567,12 @@ grep -Eq 'layout c_record_alias.Outer target=(x86_64-linux|arm64-macos|x86_64-wi
     "$tmp/c_record_alias.out"
 grep -q 'member synonym bit-offset=64 bit-width=64' \
     "$tmp/c_record_alias.out"
+"$compiler" compile --output "$tmp/c_record_alias_abi.o" \
+    "$program_dir/c_record_alias.n00b" >"$tmp/c_record_alias_abi.out" 2>&1 || {
+    cat "$tmp/c_record_alias_abi.out"
+    exit 1
+}
+"$abi_record_object_test" "$tmp/c_record_alias_abi.o" record-wrapper
 N00B_PATH="$program_dir" "$compiler" lower --dump-layout \
     c_record_alias_import >"$tmp/c_record_alias_import.out" 2>&1 || {
     cat "$tmp/c_record_alias_import.out"
