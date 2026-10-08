@@ -1,6 +1,7 @@
 #include "abi_layout.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static const ir_scalar_t SCALARS[] = {
     {"bool", IR_CLASS_BOOL, 1, IR_ROLE_NONE},
@@ -41,6 +42,35 @@ check_scalar(ir_module_t *module, const core_target_desc_t *target,
     if (semantic_bits && (final->occupied[0].offset != 0
                           || final->occupied[0].width != semantic_bits))
         return 0;
+    return 1;
+}
+
+static int
+check_structural_record(ir_module_t *module,
+                        const core_target_desc_t *target, th_ctx *types)
+{
+    th_member members[] = {
+        {.name = "left", .type = th_bitint(types, 64, true)},
+        {.name = "flag", .type = th_name(types, "bool")},
+        {.name = "right", .type = th_name(types, "string")},
+    };
+    th_type *record = th_record(types, members,
+                                sizeof members / sizeof(*members));
+    bool handled = false;
+    if (!record || !n00bb_abi_publish_direct_layout(module, record,
+            target, &handled) || !handled) return 0;
+    const ir_final_layout_t *final = ir_layout_final(module, record,
+                                                      target->triple);
+    if (!final || final->intrinsic_bits != 193
+        || final->alignment_bytes != 8 || final->n_members != 3)
+        return 0;
+    for (size_t i = 0; i < final->n_members; i++) {
+        const ir_final_member_layout_t *member = &final->members[i];
+        uint64_t expected = !strcmp(member->name, "right") ? 0
+            : !strcmp(member->name, "left") ? 128
+            : !strcmp(member->name, "flag") ? 192 : UINT64_MAX;
+        if (member->bit_offset != expected) return 0;
+    }
     return 1;
 }
 
@@ -185,6 +215,7 @@ int main(void)
         ok = ok && empty_record_layout
             && empty_record_layout->intrinsic_bits == 0
             && empty_record_layout->alignment_bytes == 1;
+        ok = ok && check_structural_record(module, &target, types);
         th_type *ir_only = th_bits(types, 73);
         th_type *failed_type = nullptr;
         ok = ok && ir_type_intern(module, ir_only)
