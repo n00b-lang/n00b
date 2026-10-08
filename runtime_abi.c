@@ -1715,9 +1715,6 @@ specialization_graph_valid(const n00b_abi_snapshot_v1 *snapshot)
     return valid;
 }
 
-static bool metadata_dispatch_ambiguity_valid(
-    const n00b_abi_snapshot_v1 *snapshot, n00b_abi_error_v1 *error);
-
 static void
 snapshot_candidate_free(n00b_abi_snapshot_v1 *candidate)
 {
@@ -1884,7 +1881,6 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     if (valid) valid = metadata_dispatch_valid(candidate, error);
     if (valid) valid = metadata_name_slots_valid(candidate, error);
     if (valid) valid = specialization_graph_valid(candidate);
-    if (valid) valid = metadata_dispatch_ambiguity_valid(candidate, error);
     if (valid) valid = metadata_owned_rows_valid(candidate, error);
     if (valid) valid = typehash_cache_build(candidate, error);
     if (valid) valid = module_name_cache_build(candidate, error);
@@ -2181,75 +2177,19 @@ dispatch_entry_at(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static int32_t
-select_dispatch_entry(const n00b_abi_snapshot_v1 *snapshot,
+lookup_dispatch_entry(const n00b_abi_snapshot_v1 *snapshot,
                       const n00b_abi_dispatch_v1 *dispatch,
                       uint32_t receiver_type_index, uint32_t *function_index)
 {
-    uint32_t selected_type = UINT32_MAX;
-    uint32_t selected_function = 0;
-    uint32_t selected_ordinal = UINT32_MAX;
     for (uint32_t i = 0; i < dispatch->entries.count; i++) {
         const n00b_abi_dispatch_entry_v1 *entry = dispatch_entry_at(snapshot,
             dispatch, i);
         if (!entry) return -1;
-        int32_t matches = receiver_type_index == entry->receiver_type_index
-            ? 1 : n00b_abi_v1_type_specializes(snapshot, receiver_type_index,
-                                                entry->receiver_type_index);
-        if (matches < 0) return -1;
-        if (!matches) continue;
-        if (selected_type != UINT32_MAX) {
-            int32_t more_specific = n00b_abi_v1_type_specializes(snapshot,
-                entry->receiver_type_index, selected_type);
-            if (more_specific < 0) return -1;
-            if (!more_specific) continue;
-        }
-        selected_type = entry->receiver_type_index;
-        selected_function = entry->function_index;
-        selected_ordinal = i;
+        if (entry->receiver_type_index != receiver_type_index) continue;
+        *function_index = entry->function_index;
+        return 1;
     }
-    if (selected_type == UINT32_MAX) return 0;
-    for (uint32_t i = 0; i < dispatch->entries.count; i++) {
-        if (i == selected_ordinal) continue;
-        const n00b_abi_dispatch_entry_v1 *entry = dispatch_entry_at(snapshot,
-            dispatch, i);
-        if (!entry) return -1;
-        int32_t matches = receiver_type_index == entry->receiver_type_index
-            ? 1 : n00b_abi_v1_type_specializes(snapshot, receiver_type_index,
-                                                entry->receiver_type_index);
-        if (matches < 0) return -1;
-        if (!matches) continue;
-        int32_t dominates = n00b_abi_v1_type_specializes(snapshot,
-            selected_type, entry->receiver_type_index);
-        if (dominates != 1) return -1;
-    }
-    *function_index = selected_function;
-    return 1;
-}
-
-static bool
-metadata_dispatch_ambiguity_valid(const n00b_abi_snapshot_v1 *snapshot,
-                                  n00b_abi_error_v1 *error)
-{
-    uint32_t dispatch_count = n00b_abi_v1_table_count(snapshot,
-        N00B_ABI_TABLE_DISPATCH);
-    uint32_t type_count = n00b_abi_v1_table_count(snapshot,
-        N00B_ABI_TABLE_TYPE);
-    for (uint32_t i = 1; i < dispatch_count; i++) {
-        const n00b_abi_dispatch_v1 *dispatch = n00b_abi_v1_record(snapshot,
-            N00B_ABI_TABLE_DISPATCH, i, nullptr);
-        if (dispatch->entries.count < 2) continue;
-        for (uint32_t type_index = 0; type_index < type_count; type_index++) {
-            const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot,
-                                                             type_index);
-            if (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE) continue;
-            uint32_t function_index;
-            if (select_dispatch_entry(snapshot, dispatch, type_index,
-                    &function_index) < 0)
-                return invalid_record(error, N00B_ABI_TABLE_DISPATCH,
-                                      i, 0);
-        }
-    }
-    return true;
+    return 0;
 }
 
 int32_t
@@ -2285,6 +2225,6 @@ n00b_abi_v1_resolve_trait_method(const n00b_abi_snapshot_v1 *snapshot,
         if (dispatch) return -1;
         dispatch = candidate;
     }
-    return dispatch ? select_dispatch_entry(snapshot, dispatch,
+    return dispatch ? lookup_dispatch_entry(snapshot, dispatch,
         receiver_type_index, function_index) : 0;
 }

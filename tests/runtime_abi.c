@@ -76,8 +76,10 @@ directory_entry(image_t *image, uint32_t ordinal, uint32_t kind,
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
+    assert(argc == 1 || (argc == 2 && !strcmp(argv[1], "--partial-dispatch")));
+    bool partial_dispatch = argc == 2;
     assert(!n00b_abi_v1_current_snapshot());
     _Alignas(16) image_t image = {0};
     memcpy(image.header.magic, N00B_ABI_V1_MAGIC, 8);
@@ -535,10 +537,6 @@ main(void)
     directory_entry(&image, 8, N00B_ABI_TABLE_DISPATCH_ENTRY,
         sizeof(image.entries[0]), 3, offsetof(image_t, entries));
     image.dispatches[1].entries.count = 2;
-    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
-        == N00B_ABI_BAD_METADATA
-        && error.table_kind == N00B_ABI_TABLE_DISPATCH
-        && !n00b_abi_v1_current_snapshot());
     directory_entry(&image, 8, N00B_ABI_TABLE_DISPATCH_ENTRY,
         sizeof(image.entries[0]), 4, offsetof(image_t, entries));
     image.dispatches[1].entries.count = 3;
@@ -608,6 +606,11 @@ main(void)
         && !n00b_abi_v1_current_snapshot());
     image.modules[1].comptime_initializer = 0;
     image.types[5].typehash = image.types[1].typehash + 16;
+    if (partial_dispatch) {
+        directory_entry(&image, 8, N00B_ABI_TABLE_DISPATCH_ENTRY,
+            sizeof(image.entries[0]), 3, offsetof(image_t, entries));
+        image.dispatches[1].entries.count = 2;
+    }
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_OK && !error.status && generation == 1);
     const n00b_abi_snapshot_v1 *snapshot =
@@ -686,7 +689,12 @@ main(void)
     assert(n00b_abi_v1_type_specializes(snapshot, 4, 4) == 0);
     assert(n00b_abi_v1_type_specializes(snapshot, 2, 3) == 0);
     assert(n00b_abi_v1_type_specializes(snapshot, 6, 2) == -1);
-    assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 0, 4,
+    if (partial_dispatch) {
+        result = 42;
+        assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 0, 4,
+            &result) == 0 && result == 42);
+    }
+    else assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 0, 4,
         &result) == 1 && result == 3);
     assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 0, 2,
         &result) == 1 && result == 1);
