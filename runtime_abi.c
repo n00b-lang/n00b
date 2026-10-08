@@ -557,6 +557,179 @@ metadata_packages_valid(const n00b_abi_snapshot_v1 *snapshot,
     return true;
 }
 
+typedef struct {
+    uint32_t visit, low, component, next_import;
+    uint32_t seen_import, seen_member, seen_order;
+    bool active, self_import;
+} module_graph_node_t;
+
+static bool
+metadata_sccs_valid(const n00b_abi_snapshot_v1 *snapshot,
+                    n00b_abi_error_v1 *error)
+{
+    uint32_t module_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_MODULE);
+    uint32_t scc_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_SCC);
+    if (!module_count && !scc_count) return true;
+    if (module_count < 2)
+        return invalid_record(error, N00B_ABI_TABLE_SCC, 0, 0);
+    size_t module_stride = sizeof(module_graph_node_t)
+        + 4 * sizeof(uint32_t);
+    if (module_count > SIZE_MAX / module_stride)
+        return invalid_record(error, N00B_ABI_TABLE_MODULE, 0, 0);
+    size_t bytes = (size_t)module_count * module_stride;
+    if (scc_count > (SIZE_MAX - bytes) / (2 * sizeof(uint32_t)))
+        return invalid_record(error, N00B_ABI_TABLE_SCC, 0, 0);
+    bytes += (size_t)scc_count * 2 * sizeof(uint32_t);
+    uint8_t *scratch = snapshot_alloc(bytes);
+    if (!scratch) return false;
+    module_graph_node_t *nodes = (void *)scratch;
+    uint32_t *dfs = (void *)(nodes + module_count);
+    uint32_t *stack = dfs + module_count;
+    uint32_t *component_size = stack + module_count;
+    uint32_t *component_group = component_size + module_count;
+    uint32_t *group_component = component_group + module_count;
+    uint32_t *group_size = group_component + scc_count;
+    bool valid = true;
+    uint32_t bad_kind = N00B_ABI_TABLE_MODULE, bad_index = 0;
+
+    for (uint32_t i = 1; valid && i < module_count; i++) {
+        const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot, i);
+        if (!module) { valid = false; bad_index = i; break; }
+        for (uint32_t j = 0; j < module->imports.count; j++) {
+            uint32_t target;
+            if (n00b_abi_v1_index_at(snapshot, module->imports, j,
+                                    &target) != 1
+                || !target || target >= module_count
+                || nodes[target].seen_import == i) {
+                valid = false;
+                bad_index = i;
+                break;
+            }
+            nodes[target].seen_import = i;
+            if (target == i) nodes[i].self_import = true;
+        }
+    }
+
+    uint32_t clock = 0, component_count = 0;
+    size_t dfs_len = 0, stack_len = 0;
+    for (uint32_t root = 1; valid && root < module_count; root++) {
+        if (nodes[root].visit) continue;
+        nodes[root].visit = nodes[root].low = ++clock;
+        nodes[root].active = true;
+        dfs[dfs_len++] = root;
+        stack[stack_len++] = root;
+        while (valid && dfs_len) {
+            uint32_t at = dfs[dfs_len - 1];
+            module_graph_node_t *node = &nodes[at];
+            const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot,
+                                                                    at);
+            if (!module) { valid = false; bad_index = at; break; }
+            if (node->next_import < module->imports.count) {
+                uint32_t target;
+                if (n00b_abi_v1_index_at(snapshot, module->imports,
+                        node->next_import++, &target) != 1
+                    || !target || target >= module_count) {
+                    valid = false;
+                    bad_index = at;
+                    break;
+                }
+                module_graph_node_t *next = &nodes[target];
+                if (!next->visit) {
+                    next->visit = next->low = ++clock;
+                    next->active = true;
+                    dfs[dfs_len++] = target;
+                    stack[stack_len++] = target;
+                }
+                else if (next->active && node->low > next->visit)
+                    node->low = next->visit;
+                continue;
+            }
+            if (node->low == node->visit) {
+                component_count++;
+                uint32_t member;
+                do {
+                    member = stack[--stack_len];
+                    nodes[member].active = false;
+                    nodes[member].component = component_count;
+                    component_size[component_count]++;
+                } while (member != at);
+            }
+            dfs_len--;
+            if (dfs_len) {
+                module_graph_node_t *parent = &nodes[dfs[dfs_len - 1]];
+                if (parent->low > node->low) parent->low = node->low;
+            }
+        }
+    }
+
+    for (uint32_t i = 1; valid && i < module_count; i++) {
+        const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot, i);
+        uint32_t component = nodes[i].component;
+        bool cyclic = component_size[component] > 1 || nodes[i].self_import;
+        uint32_t group = module->scc_index;
+        if (!cyclic) {
+            if (group) { valid = false; bad_index = i; }
+            continue;
+        }
+        if (!group || group >= scc_count
+            || (component_group[component]
+                && component_group[component] != group)
+            || (group_component[group]
+                && group_component[group] != component)) {
+            valid = false;
+            bad_index = i;
+            break;
+        }
+        component_group[component] = group;
+        group_component[group] = component;
+        group_size[group]++;
+    }
+
+    for (uint32_t group = 1; valid && group < scc_count; group++) {
+        const n00b_abi_scc_v1 *scc = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_SCC, group, nullptr);
+        if (!scc || !group_size[group]
+            || scc->members.count != group_size[group]
+            || scc->lexical_order.count != group_size[group]) {
+            valid = false;
+            bad_kind = N00B_ABI_TABLE_SCC;
+            bad_index = group;
+            break;
+        }
+        for (uint32_t i = 0; valid && i < group_size[group]; i++) {
+            uint32_t member;
+            if (n00b_abi_v1_index_at(snapshot, scc->members, i,
+                    &member) != 1 || !member || member >= module_count
+                || nodes[member].seen_member == group
+                || nodes[member].component != group_component[group]) {
+                valid = false;
+                break;
+            }
+            nodes[member].seen_member = group;
+        }
+        for (uint32_t i = 0; valid && i < group_size[group]; i++) {
+            uint32_t member;
+            if (n00b_abi_v1_index_at(snapshot, scc->lexical_order, i,
+                    &member) != 1 || !member || member >= module_count
+                || nodes[member].seen_member != group
+                || nodes[member].seen_order == group) {
+                valid = false;
+                break;
+            }
+            nodes[member].seen_order = group;
+        }
+        if (!valid) {
+            bad_kind = N00B_ABI_TABLE_SCC;
+            bad_index = group;
+        }
+    }
+    snapshot_free(scratch, bytes);
+    if (!valid) return invalid_record(error, bad_kind, bad_index, 0);
+    return true;
+}
+
 static bool
 physical_run_bounds(const n00b_abi_snapshot_v1 *snapshot,
                     n00b_abi_range_v1 range, uint32_t ordinal,
@@ -1702,6 +1875,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     }
     if (valid) valid = metadata_references_valid(candidate, error);
     if (valid) valid = metadata_packages_valid(candidate, error);
+    if (valid) valid = metadata_sccs_valid(candidate, error);
     if (valid) valid = metadata_traces_valid(candidate, error);
     if (valid) valid = metadata_code_ranges_valid(candidate, error);
     if (valid) valid = metadata_module_initializers_valid(candidate, error);

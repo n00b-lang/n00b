@@ -77,6 +77,16 @@ runtime_abi_test = executable(
 
 test('runtime-abi', runtime_abi_test)
 
+runtime_abi_scc_test = executable(
+    'runtime-abi-scc-test',
+    'tests/runtime_abi_scc.c',
+    link_with: runtime_abi_support,
+    dependencies: runtime_abi_headers,
+)
+
+test('runtime-abi-scc', runtime_abi_scc_test)
+test('runtime-abi-scc-acyclic', runtime_abi_scc_test, args: ['--acyclic'])
+
 runtime_abi_trace_test = executable(
     'runtime-abi-trace-test',
     'tests/runtime_abi_trace.c',
