@@ -60,6 +60,7 @@ IR_OP(OPTION_GET_OR_ELSE, "option.get_or_else", 2, 2, ANNOTATED, "vv", 0,       
 IR_OP(ATOMIC_WRAP,     "atomic.wrap",     1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
 IR_OP(TYPE_TEST,       "type.test",       2, 2,  BOOL,        "vt",  0,                              HASRESULT)
 IR_OP(TYPE_NARROW,     "type.narrow",     2, 2,  ANNOTATED,   "vt",  0,                              HASRESULT)
+IR_OP(TYPE_OF,         "type.of",         1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
 
 IR_OP(ADD,             "add",             2, 2,  OPERAND0,    "vv",  IR_MOD_OVERFLOW,                HASRESULT)
 IR_OP(SUB,             "sub",             2, 2,  OPERAND0,    "vv",  IR_MOD_OVERFLOW,                HASRESULT)

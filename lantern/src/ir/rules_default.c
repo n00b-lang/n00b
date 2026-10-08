@@ -3008,6 +3008,7 @@ static const entry DEFAULTS[] = {
     {IR_OP_ATOMIC_WRAP, "ir.atomic.wrap", rule_atomic_wrap},
     {IR_OP_TYPE_TEST, "ir.type.test", rule_type_test},
     {IR_OP_TYPE_NARROW, "ir.type.narrow", rule_type_narrow},
+    {IR_OP_TYPE_OF, "ir.type.of", rule_annotated},
     {IR_OP_ADD, "ir.add", rule_arith},
     {IR_OP_SUB, "ir.sub", rule_arith},
     {IR_OP_MUL, "ir.mul", rule_arith},

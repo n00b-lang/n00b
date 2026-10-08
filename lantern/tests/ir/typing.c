@@ -975,6 +975,13 @@ static void test_aggregates_and_variants(void)
     check("type.test accepts a member type of a union",
           accepts_as(e, tt, "bool"));
 
+    ir_instr_t *type_of = op(e, IR_OP_TYPE_OF);
+    ir_instr_set_dest(type_of, "descriptor", ir_type_parse(e->m,
+                                                            "descriptor"));
+    ir_instr_operand_value(type_of, val(e, "i32 | string"));
+    check("type.of preserves the frontend's descriptor result type",
+          accepts_as(e, type_of, "descriptor"));
+
     ir_instr_t *union_target_test = op(e, IR_OP_TYPE_TEST);
     ir_instr_operand_value(union_target_test, val(e, "i32"));
     ir_instr_operand_type(union_target_test,
