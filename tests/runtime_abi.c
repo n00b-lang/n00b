@@ -260,6 +260,24 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_TYPE
         && !n00b_abi_v1_current_snapshot());
     image.methods[1].trait_type_index = 1;
+    image.types[1].fields_or_arms.count = 2;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && !n00b_abi_v1_current_snapshot());
+    image.types[1].fields_or_arms.count = 1;
+    image.methods[1].symbol_index = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && !n00b_abi_v1_current_snapshot());
+    image.symbols[1].kind = N00B_ABI_SYMBOL_FUNCTION;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && !n00b_abi_v1_current_snapshot());
+    image.symbols[1].kind = N00B_ABI_SYMBOL_VARIABLE;
+    image.methods[1].symbol_index = 0;
     image.functions[1].module_index = 99;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA

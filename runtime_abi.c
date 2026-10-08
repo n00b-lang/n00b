@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "abi_directory.h"
+#include "abi_member_facts.h"
 #include "abi_ref_schema.h"
 #include "abi_string.h"
 
@@ -346,15 +347,33 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
                 return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
             const void *member = n00b_abi_v1_record(snapshot, member_kind,
                 member_index, nullptr);
-            uint32_t parent = member_kind == N00B_ABI_TABLE_FIELD
-                ? ((const n00b_abi_field_v1 *)member)->parent_type_index
-                : member_kind == N00B_ABI_TABLE_ARM
-                ? ((const n00b_abi_arm_v1 *)member)->field.parent_type_index
-                : member_kind == N00B_ABI_TABLE_ENUM_ITEM
-                ? ((const n00b_abi_enum_item_v1 *)member)->parent_type_index
-                : ((const n00b_abi_trait_method_v1 *)member)->trait_type_index;
-            if (parent != i)
+            if (!member)
                 return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+            n00bb_abi_member_facts_t facts = n00bb_abi_member_facts(
+                member_kind, member);
+            if (facts.parent != i)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+            if (facts.symbol) {
+                const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(
+                    snapshot, facts.symbol);
+                if (!symbol || symbol->kind != facts.symbol_kind
+                    || symbol->type_index != facts.type)
+                    return invalid_record(error, N00B_ABI_TABLE_TYPE,
+                                          i, 0);
+            }
+            for (uint32_t k = 0; k < j; k++) {
+                uint32_t previous_index;
+                if (n00b_abi_v1_index_at(snapshot, type->fields_or_arms,
+                        k, &previous_index) != 1)
+                    return invalid_record(error, N00B_ABI_TABLE_TYPE,
+                                          i, 0);
+                const void *previous = n00b_abi_v1_record(snapshot,
+                    member_kind, previous_index, nullptr);
+                if (!previous || n00bb_abi_member_facts(member_kind,
+                        previous).ordinal == facts.ordinal)
+                    return invalid_record(error, N00B_ABI_TABLE_TYPE,
+                                          i, 0);
+            }
         }
     }
     return true;
