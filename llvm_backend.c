@@ -655,6 +655,73 @@ materialized_string(lower_state_t *state, ir_instr_t *instruction)
 }
 
 static LLVMValueRef
+materialized_string_array(lower_state_t *state, ir_instr_t *instruction)
+{
+    const char *identifier = ir_instr_phase_result(instruction);
+    th_type *type = instruction->dest
+        ? th_resolve(instruction->dest->type) : nullptr;
+    th_type *element = type && th_kind_of(type) == TH_SEQUENCE
+        ? th_seq_elem(type) : nullptr;
+    if (!identifier || !is_string_type(element)) return nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef native = value_type(state->function->owner, element, context);
+    const ir_final_layout_t *layout = ir_layout_final(state->function->owner,
+        element, ir_module_target(state->function->owner));
+    if (!native || !layout || !layout->alignment_bytes
+        || !literal_element_layout_matches(state->function->owner,
+            element, native, LLVMGetModuleDataLayout(state->module)))
+        return nullptr;
+    for (size_t i = 0; i < state->phase_array_count; i++) {
+        const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
+        if (cached->kind != N00BB_LLVM_LITERAL_STRING_ARRAY
+            || !cached->identifier
+            || strcmp(identifier, cached->identifier)
+            || !cached->bytes || cached->count > UINT32_MAX) continue;
+        unsigned count = (unsigned)cached->count;
+        LLVMValueRef *items = calloc(count ? count : 1, sizeof(*items));
+        if (!items) return nullptr;
+        size_t offset = 0;
+        bool valid = true;
+        for (unsigned j = 0; valid && j < count; j++) {
+            uint64_t length;
+            if (cached->byte_len - offset
+                < sizeof(length) + sizeof(uint8_t)) {
+                valid = false;
+                break;
+            }
+            memcpy(&length, cached->bytes + offset, sizeof(length));
+            offset += sizeof(length);
+            uint8_t encoding = cached->bytes[offset++];
+            valid = encoding <= N00B_ABI_STRING_UTF8
+                && length <= cached->byte_len - offset;
+            if (!valid) break;
+            items[j] = string_value(state, cached->bytes + offset,
+                                    (size_t)length, encoding);
+            valid = items[j] && LLVMTypeOf(items[j]) == native
+                && LLVMIsConstant(items[j]);
+            offset += (size_t)length;
+        }
+        valid = valid && offset == cached->byte_len;
+        if (!valid) {
+            free(items);
+            return nullptr;
+        }
+        if (!count) items[0] = LLVMConstNull(native);
+        LLVMValueRef values = LLVMConstArray(native, items,
+                                             count ? count : 1);
+        free(items);
+        LLVMValueRef data = LLVMAddGlobal(state->module,
+            LLVMTypeOf(values), "n00bb.literal.string.array.cached");
+        LLVMSetInitializer(data, values);
+        LLVMSetAlignment(data, (unsigned)layout->alignment_bytes);
+        LLVMSetGlobalConstant(data, true);
+        LLVMSetLinkage(data, LLVMPrivateLinkage);
+        return array_value_with_descriptor(state, data, count);
+    }
+    return nullptr;
+}
+
+static LLVMValueRef
 materialized_raw_value(lower_state_t *state, ir_instr_t *instruction)
 {
     const char *identifier = ir_instr_phase_result(instruction);
@@ -783,6 +850,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         } else {
             result = materialized_array(state, instruction);
             if (!result) result = materialized_string(state, instruction);
+            if (!result) result = materialized_string_array(state, instruction);
             if (!result) result = materialized_raw_value(state, instruction);
         }
         return result ? save_result(state, instruction, result)
@@ -1386,6 +1454,14 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                 writer_parameters, 4, false);
             LLVMValueRef writer = LLVMAddFunction(module,
                 "n00bb_comptime_emit_array", writer_type);
+            LLVMTypeRef string_array_writer_parameters[] = {
+                result, pointer, pointer,
+            };
+            LLVMTypeRef string_array_writer_type = LLVMFunctionType(result,
+                string_array_writer_parameters, 3, false);
+            LLVMValueRef string_array_writer = LLVMAddFunction(module,
+                "n00bb_comptime_emit_string_array",
+                string_array_writer_type);
             LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
             LLVMTypeRef string_fields[] = {i64, i64};
             LLVMTypeRef string_type = LLVMStructTypeInContext(context,
@@ -1412,7 +1488,8 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                     ? LLVMVoidTypeInContext(context)
                     : spec->kind == N00BB_LLVM_LITERAL_STRING
                         ? string_type
-                    : spec->kind == N00BB_LLVM_LITERAL_ARRAY
+                    : (spec->kind == N00BB_LLVM_LITERAL_ARRAY
+                        || spec->kind == N00BB_LLVM_LITERAL_STRING_ARRAY)
                         ? array_type
                     : spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE
                         && spec->function
@@ -1484,6 +1561,18 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                     };
                     status = LLVMBuildCall2(builder, value_writer_type,
                         value_writer, arguments, 3, "literal.write");
+                } else if (spec->kind == N00BB_LLVM_LITERAL_STRING_ARRAY) {
+                    LLVMValueRef arguments[] = {
+                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
+                                     false),
+                        LLVMBuildExtractValue(builder, value, 0,
+                                              "array.data"),
+                        LLVMBuildExtractValue(builder, value, 1,
+                                              "array.descriptor"),
+                    };
+                    status = LLVMBuildCall2(builder,
+                        string_array_writer_type, string_array_writer,
+                        arguments, 3, "literal.write");
                 } else {
                     LLVMValueRef arguments[] = {
                         LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,

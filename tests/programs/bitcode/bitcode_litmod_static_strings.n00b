@@ -1,0 +1,24 @@
+declare_litmod("bundle", "array", "identity")
+
+func identity(items: Array[string]) -> Array[string] fail: string {
+    return items
+}
+
+func values() -> Array[string] {
+    return bundle["one", "a string longer than the inline capacity"]
+}
+
+func empty() -> Array[string] {
+    return bundle[]
+}
+
+func observe(items: Array[string]) {
+    require true
+}
+
+comptime {
+    observe(bundle["compile-time cached string"])
+} else {
+    values()
+    empty()
+}

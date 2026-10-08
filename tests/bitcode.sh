@@ -38,6 +38,9 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/litmod_string" \
     "$program_dir/bitcode_litmod_string.n00b"
 "$tmp/litmod_string"
+"$compiler" build --output "$tmp/litmod_static_strings" \
+    "$program_dir/bitcode_litmod_static_strings.n00b"
+"$tmp/litmod_static_strings"
 "$compiler" build --output "$tmp/litmod_scalar" \
     "$program_dir/bitcode_litmod_scalar.n00b"
 "$tmp/litmod_scalar"

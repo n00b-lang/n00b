@@ -14,6 +14,7 @@ enum { N00BB_COMPTIME_RESULT_FD = 3 };
 typedef enum {
     N00BB_LLVM_LITERAL_ARRAY,
     N00BB_LLVM_LITERAL_STRING,
+    N00BB_LLVM_LITERAL_STRING_ARRAY,
     N00BB_LLVM_LITERAL_RAW_VALUE,
     N00BB_LLVM_LITERAL_EFFECT,
 } n00bb_llvm_literal_kind_t;
@@ -30,6 +31,7 @@ typedef struct {
 typedef struct {
     const char *identifier;
     const uint8_t *bytes;
+    size_t byte_len;
     uint64_t count;
     n00bb_llvm_literal_kind_t kind;
     uint8_t string_encoding;

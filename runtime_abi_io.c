@@ -197,6 +197,24 @@ int32_t n00bb_comptime_emit_string(int32_t fd, uint64_t low, uint64_t high)
     return 0;
 }
 
+int32_t n00bb_comptime_emit_string_array(
+    int32_t fd, const n00b_abi_string_v1 *data,
+    const n00b_abi_array_descriptor_header_v1 *descriptor)
+{
+    if (fd < 0 || !data || !descriptor
+        || descriptor->rank != 1 || descriptor->flat_rank != 1
+        || descriptor->flags || descriptor->reserved_zero
+        || descriptor->total_count != ((const uint64_t *)(descriptor + 1))[0]
+        || descriptor->total_count > SIZE_MAX / sizeof(*data))
+        return -1;
+    uint64_t count = descriptor->total_count;
+    if (!write_all(fd, (const uint8_t *)&count, sizeof(count))) return -1;
+    for (uint64_t i = 0; i < count; i++)
+        if (n00bb_comptime_emit_string(fd, data[i].words[0],
+                                       data[i].words[1])) return -1;
+    return 0;
+}
+
 int32_t n00bb_comptime_emit_failure(int32_t fd, uint64_t low, uint64_t high)
 {
     const uint64_t marker = UINT64_MAX;

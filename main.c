@@ -390,6 +390,7 @@ typedef struct {
     ir_instr_t *instruction;
     ir_span_t span;
     uint8_t *materialized_bytes;
+    size_t materialized_byte_len;
     uint64_t materialized_count;
     uint32_t materialized_stride;
     n00bb_llvm_literal_kind_t materialized_kind;
@@ -47247,6 +47248,50 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
             *completed = i + 1;
             continue;
         }
+        if (producers[i].kind == N00BB_LLVM_LITERAL_STRING_ARRAY) {
+            off_t start = lseek(fd, 0, SEEK_CUR);
+            if (start < 0 || start > info.st_size
+                || count > (uint64_t)(info.st_size - start)
+                    / (sizeof(uint64_t) + sizeof(uint8_t))) return false;
+            core_buffer_t *packed = core_buffer_empty();
+            bool valid = packed != nullptr;
+            for (uint64_t j = 0; valid && j < count; j++) {
+                uint64_t length;
+                uint8_t encoding;
+                valid = n00bb_read_exact(fd, &length, sizeof(length))
+                    && n00bb_read_exact(fd, &encoding, sizeof(encoding))
+                    && encoding <= N00B_ABI_STRING_UTF8;
+                off_t offset = valid ? lseek(fd, 0, SEEK_CUR) : -1;
+                valid = valid && offset >= 0 && offset <= info.st_size
+                    && length <= (uint64_t)(info.st_size - offset)
+                    && packed->byte_len <= SIZE_MAX
+                        - sizeof(length) - sizeof(encoding) - 1
+                    && length <= SIZE_MAX - packed->byte_len
+                        - sizeof(length) - sizeof(encoding) - 1;
+                if (!valid) break;
+                core_buffer_append(packed, (const char *)&length,
+                                   sizeof(length));
+                core_buffer_putc(packed, (char)encoding);
+                core_buffer_ensure(packed, (size_t)length + 1);
+                valid = n00bb_read_exact(fd,
+                    (uint8_t *)packed->data + packed->byte_len,
+                    (size_t)length);
+                if (valid) {
+                    packed->byte_len += (size_t)length;
+                    packed->data[packed->byte_len] = 0;
+                }
+            }
+            if (!valid) {
+                core_buffer_free(packed);
+                return false;
+            }
+            binding->materialized_byte_len = packed->byte_len;
+            binding->materialized_bytes = (uint8_t *)core_buffer_take(packed);
+            binding->materialized_count = count;
+            binding->materialized_kind = producers[i].kind;
+            *completed = i + 1;
+            continue;
+        }
         uint8_t encoding = 0;
         if (producers[i].kind == N00BB_LLVM_LITERAL_STRING
             && (!n00bb_read_exact(fd, &encoding, sizeof(encoding))
@@ -47265,6 +47310,7 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
             return false;
         }
         binding->materialized_bytes = bytes;
+        binding->materialized_byte_len = length;
         binding->materialized_count = count;
         binding->materialized_kind = producers[i].kind;
         binding->materialized_encoding = encoding;
@@ -47346,6 +47392,13 @@ n00bb_execute_comptime(core_link_unit_t *link,
             && !memcmp(result_name, "string", 6) && !result_arity;
         th_type *element = result && th_kind_of(result) == TH_SEQUENCE
             ? th_seq_elem(result) : nullptr;
+        const char *element_name = nullptr;
+        size_t element_name_length = 0;
+        size_t element_arity = 0;
+        bool string_array = element && th_named_info(element,
+            &element_name, &element_name_length, nullptr, &element_arity)
+            && element_name_length == 6
+            && !memcmp(element_name, "string", 6) && !element_arity;
         th_type *raw_type = element ? element : result;
         bool bool_value = !element && !effect_only && !is_string
             && ir_machine_of(producer->owner, result).class == IR_CLASS_BOOL;
@@ -47356,7 +47409,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
         bool has_stride = ir_layout_final_stride_bits(layout, &stride_bits);
         uint64_t stride = bool_value ? 1
             : has_stride ? stride_bits / 8 : 0;
-        if (!effect_only && !is_string
+        if (!effect_only && !is_string && !string_array
             && ((!has_stride && !bool_value) || !stride
                 || stride > UINT32_MAX
                 || (!bool_value && !n00bb_literal_raw_element(
@@ -47375,9 +47428,10 @@ n00bb_execute_comptime(core_link_unit_t *link,
         producers[i].function = producer;
         producers[i].kind = effect_only ? N00BB_LLVM_LITERAL_EFFECT
             : is_string ? N00BB_LLVM_LITERAL_STRING
+            : string_array ? N00BB_LLVM_LITERAL_STRING_ARRAY
             : element ? N00BB_LLVM_LITERAL_ARRAY
                       : N00BB_LLVM_LITERAL_RAW_VALUE;
-        producers[i].element_stride = effect_only || is_string
+        producers[i].element_stride = effect_only || is_string || string_array
             ? 0 : (uint32_t)stride;
         producers[i].comptime_consumer = binding->consumer
             && ir_func_execution_phase(binding->consumer)
@@ -47570,6 +47624,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         phase_arrays[phase_count] = (n00bb_llvm_phase_array_t){
             .identifier = binding->identifier,
             .bytes = binding->materialized_bytes,
+            .byte_len = binding->materialized_byte_len,
             .count = binding->materialized_count,
             .kind = binding->materialized_kind,
             .string_encoding = binding->materialized_encoding,
@@ -47578,6 +47633,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         ok = phase_arrays[phase_count].identifier
             && phase_arrays[phase_count].bytes
             && (phase_arrays[phase_count].kind == N00BB_LLVM_LITERAL_STRING
+                || phase_arrays[phase_count].kind
+                    == N00BB_LLVM_LITERAL_STRING_ARRAY
                 || phase_arrays[phase_count].element_stride);
         phase_count++;
     }

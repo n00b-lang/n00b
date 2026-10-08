@@ -571,6 +571,7 @@
 # Tagged list payloads need a distinct node so their handler owns the literal
 # shape instead of also lowering it as an ordinary list literal.
 <tagged-list-lit> ::= %"[" <list-elems> %"]"
+<tagged-list-lit> ::= %"[" %"]"
 
 <modified-simple-lit> @emit("string_literal") ::= %STRING_LIT
 
