@@ -148,6 +148,7 @@ typedef struct parse_nt_node_t {
     bool integer_range_known;
     int64_t integer_range_minimum;
     int64_t integer_range_maximum;
+    void *integer_literal_origin;
 } parse_nt_node_t;
 
 typedef void *(*parse_walk_action_t)(parse_nt_node_t *node,
