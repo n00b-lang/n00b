@@ -107,6 +107,9 @@ fi
 "$compiler" build --output "$tmp/litmod_string_to_chars" \
     "$program_dir/bitcode_litmod_string_to_chars.n00b"
 "$tmp/litmod_string_to_chars"
+"$compiler" build --output "$tmp/litmod_binary_result" \
+    "$program_dir/bitcode_litmod_binary_result.n00b"
+"$tmp/litmod_binary_result"
 "$compiler" lower --dump-ir \
     "$program_dir/bitcode_builtin_prefix_args.n00b" \
     >"$tmp/builtin_prefix_args.ir"

@@ -674,8 +674,12 @@ constant_string(lower_state_t *state, ir_instr_t *instruction)
     bool ascii = true;
     for (size_t i = 0; i < length; i++)
         if (bytes[i] & 0x80) ascii = false;
-    uint64_t encoding = ascii ? N00B_ABI_STRING_ASCII
-                              : N00B_ABI_STRING_UTF8;
+    ir_annot_t *modifier = ir_annot_get(&instruction->annots,
+                                        "n00bb.literal.modifier");
+    uint64_t encoding = modifier && modifier->kind == IR_ANNOT_STR
+        && modifier->s && !strcmp(modifier->s, "binary")
+        ? N00B_ABI_STRING_BINARY
+        : ascii ? N00B_ABI_STRING_ASCII : N00B_ABI_STRING_UTF8;
     return string_value(state, bytes, length, encoding);
 }
 

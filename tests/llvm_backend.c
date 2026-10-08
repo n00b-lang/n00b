@@ -111,6 +111,24 @@ main(void)
         .count = 2, .element_stride = 8,
     };
     th_type *string_type = ir_type_parse(runtime, "string");
+    ir_func_t *binary_function = ir_func_add(runtime, "binary_literal",
+        ir_type_parse(runtime, "() -> string"), IR_LINK_INTERNAL);
+    ir_block_t *binary_entry = binary_function
+        ? ir_block_add(binary_function, "entry") : nullptr;
+    ir_instr_t *binary_value = binary_entry
+        ? ir_instr_add(binary_entry, IR_OP_CONST) : nullptr;
+    ir_instr_t *binary_return = binary_entry
+        ? ir_instr_add(binary_entry, IR_OP_RETURN) : nullptr;
+    assert(string_type && binary_value
+        && ir_instr_set_dest(binary_value, "binary", string_type)
+        && ir_instr_set_const_bytes(binary_value,
+            (const uint8_t *)"abc", 3)
+        && ir_annot_set(context, &binary_value->annots, (ir_annot_t){
+            .key = "n00bb.literal.modifier", .kind = IR_ANNOT_STR,
+            .s = "binary",
+        })
+        && binary_return
+        && ir_instr_operand_value(binary_return, binary_value->dest));
     ir_func_t *string_function = ir_func_add(runtime, "cached_string",
         ir_type_parse(runtime, "() -> string"), IR_LINK_INTERNAL);
     ir_block_t *string_entry = string_function
@@ -129,7 +147,7 @@ main(void)
         .identifier = "sample:string", .bytes = cached_string,
         .count = sizeof(cached_string) - 1,
         .kind = N00BB_LLVM_LITERAL_STRING,
-        .string_encoding = N00B_ABI_STRING_ASCII,
+        .string_encoding = N00B_ABI_STRING_BINARY,
     };
     const n00bb_llvm_phase_array_t phase_values[] = {
         phase_array, phase_string,
@@ -193,6 +211,43 @@ main(void)
                 LLVMGetInitializer(string_global), &length);
             assert(data && length == sizeof(cached_string) - 1
                 && !memcmp(data, cached_string, length));
+        }
+        LLVMValueRef cached_string_function = LLVMGetNamedFunction(parsed,
+            "probe.cached_string");
+        assert((!is_comptime && cached_string_function)
+            || (is_comptime && !cached_string_function));
+        if (cached_string_function) {
+            LLVMValueRef returned = LLVMGetBasicBlockTerminator(
+                LLVMGetFirstBasicBlock(cached_string_function));
+            LLVMValueRef value = returned ? LLVMGetOperand(returned, 0)
+                                          : nullptr;
+            uint64_t expected = sizeof(cached_string) - 1
+                | ((uint64_t)N00B_ABI_STRING_BINARY
+                    << N00B_ABI_STRING_ENCODING_SHIFT)
+                | ((uint64_t)N00B_ABI_STRING_LONG
+                    << N00B_ABI_STRING_TAG_SHIFT);
+            assert(value && LLVMGetNumOperands(value) == 2
+                && LLVMConstIntGetZExtValue(LLVMGetOperand(value, 1))
+                    == expected);
+        }
+        LLVMValueRef binary = LLVMGetNamedFunction(parsed,
+            "probe.binary_literal");
+        assert((!is_comptime && binary) || (is_comptime && !binary));
+        if (binary) {
+            LLVMValueRef returned = LLVMGetBasicBlockTerminator(
+                LLVMGetFirstBasicBlock(binary));
+            LLVMValueRef value = returned ? LLVMGetOperand(returned, 0)
+                                          : nullptr;
+            n00b_abi_string_v1 expected = {0};
+            memcpy(expected.short_value.bytes, "abc", 3);
+            expected.short_value.selector = 3
+                | (N00B_ABI_STRING_BINARY << 4)
+                | (N00B_ABI_STRING_SHORT << 6);
+            assert(value && LLVMGetNumOperands(value) == 2
+                && LLVMConstIntGetZExtValue(LLVMGetOperand(value, 0))
+                    == expected.words[0]
+                && LLVMConstIntGetZExtValue(LLVMGetOperand(value, 1))
+                    == expected.words[1]);
         }
         if (lowered) {
             assert(LLVMCountBasicBlocks(lowered) == 3);
