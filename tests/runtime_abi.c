@@ -258,6 +258,24 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_STORAGE
         && !n00b_abi_v1_current_snapshot());
     image.storages[1].byte_offset = 0;
+    image.dispatches[1].method_ordinal = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_DISPATCH
+        && !n00b_abi_v1_current_snapshot());
+    image.dispatches[1].method_ordinal = 0;
+    image.entries[2].receiver_type_index = 2;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_DISPATCH_ENTRY
+        && !n00b_abi_v1_current_snapshot());
+    image.entries[2].receiver_type_index = 3;
+    image.dispatches[1].entries.count = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_DISPATCH_ENTRY
+        && !n00b_abi_v1_current_snapshot());
+    image.dispatches[1].entries.count = 2;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_OK && !error.status && generation == 1);
     const n00b_abi_snapshot_v1 *snapshot =

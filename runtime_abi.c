@@ -389,6 +389,83 @@ metadata_storage_valid(const n00b_abi_snapshot_v1 *snapshot,
     return valid;
 }
 
+static bool
+metadata_dispatch_valid(const n00b_abi_snapshot_v1 *snapshot,
+                        n00b_abi_error_v1 *error)
+{
+    uint32_t type_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_TYPE);
+    uint32_t dispatch_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_DISPATCH);
+    uint32_t entry_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_DISPATCH_ENTRY);
+    size_t receiver_bytes = (size_t)type_count * sizeof(uint32_t);
+    size_t scratch_bytes = receiver_bytes + entry_count;
+    uint8_t *scratch = snapshot_alloc(scratch_bytes);
+    if (!scratch) return false;
+    uint32_t *seen_receivers = (void *)scratch;
+    uint8_t *seen_entries = scratch + receiver_bytes;
+    bool valid = true;
+    for (uint32_t index = 1; valid && index < dispatch_count; index++) {
+        const n00b_abi_dispatch_v1 *dispatch = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_DISPATCH, index, nullptr);
+        const n00b_abi_type_v1 *trait = n00b_abi_v1_type(snapshot,
+            dispatch->trait_type_index);
+        uint32_t method_index = 0;
+        valid = trait && trait->kind == N00B_ABI_TYPE_TRAIT
+            && dispatch->method_ordinal < trait->fields_or_arms.count
+            && n00b_abi_v1_index_at(snapshot, trait->fields_or_arms,
+                dispatch->method_ordinal, &method_index) == 1;
+        const n00b_abi_trait_method_v1 *method = valid
+            ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_TRAIT_METHOD,
+                                 method_index, nullptr) : nullptr;
+        valid = valid && method
+            && method->trait_type_index == dispatch->trait_type_index
+            && method->declaration_ordinal == dispatch->method_ordinal;
+        for (uint32_t prior_index = 1; valid && prior_index < index;
+             prior_index++) {
+            const n00b_abi_dispatch_v1 *prior = n00b_abi_v1_record(snapshot,
+                N00B_ABI_TABLE_DISPATCH, prior_index, nullptr);
+            if (prior->trait_type_index == dispatch->trait_type_index
+                && prior->method_ordinal == dispatch->method_ordinal
+                && prior->generation == dispatch->generation)
+                valid = false;
+        }
+        if (!valid) {
+            invalid_record(error, N00B_ABI_TABLE_DISPATCH, index, 0);
+            break;
+        }
+        for (uint32_t i = 0; valid && i < dispatch->entries.count; i++) {
+            uint32_t entry_index = 0;
+            valid = n00b_abi_v1_index_at(snapshot, dispatch->entries, i,
+                &entry_index) == 1 && entry_index
+                && entry_index < entry_count && !seen_entries[entry_index];
+            const n00b_abi_dispatch_entry_v1 *entry = valid
+                ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_DISPATCH_ENTRY,
+                                     entry_index, nullptr) : nullptr;
+            const n00b_abi_type_v1 *receiver = entry
+                ? n00b_abi_v1_type(snapshot, entry->receiver_type_index)
+                : nullptr;
+            valid = valid && receiver
+                && !(receiver->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+                && seen_receivers[entry->receiver_type_index] != index;
+            if (!valid)
+                invalid_record(error, N00B_ABI_TABLE_DISPATCH_ENTRY,
+                               entry_index, 0);
+            else {
+                seen_entries[entry_index] = 1;
+                seen_receivers[entry->receiver_type_index] = index;
+            }
+        }
+    }
+    for (uint32_t index = 1; valid && index < entry_count; index++)
+        if (!seen_entries[index])
+            valid = invalid_record(error, N00B_ABI_TABLE_DISPATCH_ENTRY,
+                                   index, 0);
+    snapshot_free(scratch, scratch_bytes);
+    return valid;
+}
+
 typedef struct {
     uint32_t type_index;
     uint32_t next_link;
@@ -538,6 +615,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     }
     if (valid) valid = metadata_references_valid(candidate, error);
     if (valid) valid = metadata_storage_valid(candidate, error);
+    if (valid) valid = metadata_dispatch_valid(candidate, error);
     if (valid) valid = specialization_graph_valid(candidate);
     if (!valid) {
         snapshot_free(candidate, sizeof(*candidate));
