@@ -36,14 +36,14 @@ typedef struct {
     n00b_abi_header_v1 header;
     uint8_t directory[18 * N00BB_ABI_DIRECTORY_BYTES];
     n00b_abi_type_v1 types[5];
-    uint32_t indexes[8];
+    uint32_t indexes[11];
     uint64_t values[1];
     uint8_t bytes[3];
     n00b_abi_specialization_link_v1 links[3];
     n00b_abi_trait_method_v1 methods[2];
-    n00b_abi_function_v1 functions[3];
+    n00b_abi_function_v1 functions[4];
     n00b_abi_dispatch_v1 dispatches[2];
-    n00b_abi_dispatch_entry_v1 entries[3];
+    n00b_abi_dispatch_entry_v1 entries[4];
     n00b_abi_package_v1 packages[2];
     n00b_abi_module_v1 modules[2];
     n00b_abi_scope_v1 scopes[2];
@@ -96,11 +96,9 @@ main(void)
     image.types[2].typehash = 12;
     image.types[3].kind = N00B_ABI_TYPE_RECORD;
     image.types[3].typehash = 13;
-    image.types[3].specialization_start_ix = 1;
-    image.types[3].specialization_end_ix = 2;
     image.types[4].kind = N00B_ABI_TYPE_RECORD;
     image.types[4].typehash = 14;
-    image.types[4].specialization_start_ix = 2;
+    image.types[4].specialization_start_ix = 1;
     image.types[4].specialization_end_ix = 3;
     image.indexes[0] = 3;
     image.indexes[1] = 5;
@@ -110,6 +108,9 @@ main(void)
     image.indexes[5] = 1;
     image.indexes[6] = 2;
     image.indexes[7] = 1;
+    image.indexes[8] = 1;
+    image.indexes[9] = 2;
+    image.indexes[10] = 3;
     image.values[0] = 123;
     memcpy(image.bytes, "abc", 3);
     image.links[1] = 2;
@@ -120,6 +121,8 @@ main(void)
     image.functions[1].scope_index = 1;
     image.functions[2].module_index = 1;
     image.functions[2].scope_index = 1;
+    image.functions[3].module_index = 1;
+    image.functions[3].scope_index = 1;
     image.modules[1].package_index = 1;
     memcpy(image.modules[1].full_path.short_value.bytes, "p.m", 3);
     image.modules[1].full_path.short_value.selector = 3;
@@ -154,15 +157,17 @@ main(void)
     image.name_slots[name_slot_index].name_hash = name_hash;
     image.name_slots[name_slot_index].symbol_index = 1;
     image.dispatches[1].trait_type_index = 1;
-    image.dispatches[1].entries = (n00b_abi_range_v1){3, 2};
+    image.dispatches[1].entries = (n00b_abi_range_v1){8, 3};
     image.entries[1].receiver_type_index = 2;
     image.entries[1].function_index = 1;
     image.entries[2].receiver_type_index = 3;
     image.entries[2].function_index = 2;
+    image.entries[3].receiver_type_index = 4;
+    image.entries[3].function_index = 3;
     directory_entry(&image, 0, N00B_ABI_TABLE_TYPE,
         sizeof(image.types[0]), 5, offsetof(image_t, types));
     directory_entry(&image, 1, N00B_ABI_TABLE_U32_STREAM,
-        sizeof(image.indexes[0]), 8, offsetof(image_t, indexes));
+        sizeof(image.indexes[0]), 11, offsetof(image_t, indexes));
     directory_entry(&image, 2, N00B_ABI_TABLE_U64_STREAM,
         sizeof(image.values[0]), 1, offsetof(image_t, values));
     directory_entry(&image, 3, N00B_ABI_TABLE_BYTE_STREAM,
@@ -172,11 +177,11 @@ main(void)
     directory_entry(&image, 5, N00B_ABI_TABLE_TRAIT_METHOD,
         sizeof(image.methods[0]), 2, offsetof(image_t, methods));
     directory_entry(&image, 6, N00B_ABI_TABLE_FUNCTION,
-        sizeof(image.functions[0]), 3, offsetof(image_t, functions));
+        sizeof(image.functions[0]), 4, offsetof(image_t, functions));
     directory_entry(&image, 7, N00B_ABI_TABLE_DISPATCH,
         sizeof(image.dispatches[0]), 2, offsetof(image_t, dispatches));
     directory_entry(&image, 8, N00B_ABI_TABLE_DISPATCH_ENTRY,
-        sizeof(image.entries[0]), 3, offsetof(image_t, entries));
+        sizeof(image.entries[0]), 4, offsetof(image_t, entries));
     directory_entry(&image, 9, N00B_ABI_TABLE_PACKAGE,
         sizeof(image.packages[0]), 2, offsetof(image_t, packages));
     directory_entry(&image, 10, N00B_ABI_TABLE_MODULE,
@@ -254,7 +259,7 @@ main(void)
     image.types[4].specialization_end_ix = 0;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA && !n00b_abi_v1_current_snapshot());
-    image.types[4].specialization_start_ix = 2;
+    image.types[4].specialization_start_ix = 1;
     image.types[4].specialization_end_ix = 3;
     image.tls_relocations[1].target_kind = N00B_ABI_STORAGE_WRITABLE;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
@@ -309,7 +314,16 @@ main(void)
         == N00B_ABI_BAD_METADATA
         && error.table_kind == N00B_ABI_TABLE_DISPATCH_ENTRY
         && !n00b_abi_v1_current_snapshot());
+    directory_entry(&image, 8, N00B_ABI_TABLE_DISPATCH_ENTRY,
+        sizeof(image.entries[0]), 3, offsetof(image_t, entries));
     image.dispatches[1].entries.count = 2;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_DISPATCH
+        && !n00b_abi_v1_current_snapshot());
+    directory_entry(&image, 8, N00B_ABI_TABLE_DISPATCH_ENTRY,
+        sizeof(image.entries[0]), 4, offsetof(image_t, entries));
+    image.dispatches[1].entries.count = 3;
     image.name_slots[name_slot_index].name_hash ^= 1;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
@@ -398,9 +412,11 @@ main(void)
     assert(n00b_abi_v1_type_specializes(snapshot, 2, 3) == 0);
     assert(n00b_abi_v1_type_specializes(snapshot, 5, 2) == -1);
     assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 0, 4,
-        &result) == 1 && result == 2);
+        &result) == 1 && result == 3);
     assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 0, 2,
         &result) == 1 && result == 1);
+    assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 0, 3,
+        &result) == 1 && result == 2);
     assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 0, 0,
         &result) == 0);
     assert(n00b_abi_v1_resolve_trait_method(snapshot, 1, 1, 4,
