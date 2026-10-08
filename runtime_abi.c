@@ -1814,8 +1814,17 @@ metadata_storage_valid(const n00b_abi_snapshot_v1 *snapshot,
         if (valid && storage->symbol_index) {
             const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(snapshot,
                 storage->symbol_index);
+            const n00b_abi_native_binding_v1 *binding = symbol
+                ? n00b_abi_v1_record(snapshot,
+                    N00B_ABI_TABLE_NATIVE_BINDING,
+                    symbol->native_binding_index, nullptr) : nullptr;
             valid = symbol && symbol->module_index == storage->module_index
-                && symbol->type_index == storage->type_index;
+                && symbol->type_index == storage->type_index
+                && symbol->native_binding_index && binding
+                && binding->kind == N00B_ABI_NATIVE_SECTION_OFFSET
+                && binding->section_index == storage->segment_index
+                && storage->byte_offset <= INT64_MAX
+                && binding->offset == (int64_t)storage->byte_offset;
         }
         if (valid && storage->tls_relocations.count)
             valid = storage->segment_kind == N00B_ABI_STORAGE_TLS;

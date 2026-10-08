@@ -2029,6 +2029,22 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
     }
     if (kind == N00B_ABI_TABLE_STORAGE) {
         const n00b_abi_storage_v1 *storage = row;
+        if (storage->symbol_index) {
+            const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_SYMBOL, storage->symbol_index);
+            const n00b_abi_native_binding_v1 *binding = symbol
+                ? n00bb_abi_object_row(view, N00B_ABI_TABLE_NATIVE_BINDING,
+                    symbol->native_binding_index) : nullptr;
+            if (!symbol || symbol->module_index != storage->module_index
+                || symbol->type_index != storage->type_index
+                || !symbol->native_binding_index || !binding
+                || binding->kind != N00B_ABI_NATIVE_SECTION_OFFSET
+                || !storage->segment_index
+                || binding->section_index != storage->segment_index
+                || storage->byte_offset > INT64_MAX
+                || binding->offset != (int64_t)storage->byte_offset)
+                return false;
+        }
         if (!storage->instance_shape_index) return true;
         const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_TYPE, storage->type_index);

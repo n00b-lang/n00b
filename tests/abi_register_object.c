@@ -128,19 +128,24 @@ main(int argc, char **argv)
         && !strcmp(argv[3], "--bad-field-visibility");
     bool bad_export_visibility = argc == 4
         && !strcmp(argv[3], "--bad-export-visibility");
+    bool bad_storage_binding = argc == 4
+        && !strcmp(argv[3], "--bad-storage-binding");
     if (bad_argument || missing_constructor || bad_shape
         || non_array_shape || bad_field_visibility
-        || bad_export_visibility) {
+        || bad_export_visibility || bad_storage_binding) {
         const uint8_t *base = (const uint8_t *)image.metadata;
         const n00b_abi_header_v1 *header = image.metadata;
         n00bb_abi_directory_entry_t symbols = {0};
-        if (non_array_shape)
+        n00bb_abi_directory_entry_t bindings = {0};
+        if (non_array_shape || bad_storage_binding)
             for (uint32_t i = 0; i < header->directory_count; i++) {
                 n00bb_abi_directory_entry_t entry;
                 n00bb_abi_directory_decode_entry(base
                     + header->directory_offset
                     + (size_t)i * N00BB_ABI_DIRECTORY_BYTES, &entry);
                 if (entry.kind == N00B_ABI_TABLE_SYMBOL) symbols = entry;
+                if (entry.kind == N00B_ABI_TABLE_NATIVE_BINDING)
+                    bindings = entry;
             }
         bool changed = false;
         for (uint32_t i = 0; i < header->directory_count; i++) {
@@ -232,6 +237,36 @@ main(int argc, char **argv)
                 }
                 break;
             }
+            if (bad_storage_binding
+                && entry.kind == N00B_ABI_TABLE_STORAGE) {
+                assert(entry.record_bytes == sizeof(n00b_abi_storage_v1)
+                    && symbols.record_bytes == sizeof(n00b_abi_symbol_v1)
+                    && bindings.record_bytes
+                        == sizeof(n00b_abi_native_binding_v1));
+                for (uint32_t j = 1; j < entry.record_count; j++) {
+                    n00b_abi_storage_v1 *storage = (void *)(
+                        loaded[metadata.native_index] + entry.file_offset
+                        + (size_t)j * entry.record_bytes);
+                    if (!storage->symbol_index) continue;
+                    assert(storage->symbol_index < symbols.record_count);
+                    const n00b_abi_symbol_v1 *symbol = (const void *)(
+                        loaded[metadata.native_index] + symbols.file_offset
+                        + (size_t)storage->symbol_index
+                            * symbols.record_bytes);
+                    if (!symbol->native_binding_index) continue;
+                    assert(symbol->native_binding_index
+                        < bindings.record_count);
+                    n00b_abi_native_binding_v1 *binding = (void *)(
+                        loaded[metadata.native_index] + bindings.file_offset
+                        + (size_t)symbol->native_binding_index
+                            * bindings.record_bytes);
+                    assert(binding->offset < INT64_MAX);
+                    binding->offset++;
+                    changed = true;
+                    break;
+                }
+                break;
+            }
         }
         assert(changed);
         n00b_abi_error_v1 bad_error = {0};
@@ -245,6 +280,8 @@ main(int argc, char **argv)
             assert(bad_error.table_kind == N00B_ABI_TABLE_TYPE);
         if (bad_export_visibility)
             assert(bad_error.table_kind == N00B_ABI_TABLE_SYMBOL);
+        if (bad_storage_binding)
+            assert(bad_error.table_kind == N00B_ABI_TABLE_STORAGE);
         assert(!n00b_abi_v1_current_snapshot());
         free(object);
         return 0;

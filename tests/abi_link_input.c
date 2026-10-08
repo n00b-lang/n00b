@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2760,6 +2761,13 @@ test_string_storage_link(const char *path)
         const n00b_abi_symbol_v1 *symbol = storage
             ? n00bb_abi_object_row(&view, N00B_ABI_TABLE_SYMBOL,
                 storage->symbol_index) : nullptr;
+        const n00b_abi_native_binding_v1 *binding = symbol
+            ? n00bb_abi_object_row(&view, N00B_ABI_TABLE_NATIVE_BINDING,
+                symbol->native_binding_index) : nullptr;
+        assert(binding && binding->kind == N00B_ABI_NATIVE_SECTION_OFFSET
+            && binding->section_index == storage->segment_index
+            && binding->offset >= 0
+            && (uint64_t)binding->offset == storage->byte_offset);
         n00bb_abi_string_view_t name;
         assert(symbol && n00bb_abi_object_string(&view,
             &symbol->name, &name));
@@ -2844,6 +2852,38 @@ test_string_storage_link(const char *path)
     const n00b_abi_storage_v1 *pooled_storage = n00bb_abi_object_row(&view,
         N00B_ABI_TABLE_STORAGE, pool_storage_indexes[0]);
     assert(pooled_storage && pooled_storage->byte_offset == offsets[0]);
+    const n00bb_abi_object_view_t *source_view = &selected.views[0];
+    const n00bb_abi_directory_entry_t *source_storage =
+        n00bb_abi_object_table(source_view, N00B_ABI_TABLE_STORAGE);
+    bool rejected_bad_binding = false;
+    for (uint32_t i = 1; source_storage && i < source_storage->record_count;
+         i++) {
+        const n00b_abi_storage_v1 *storage = n00bb_abi_object_row(source_view,
+            N00B_ABI_TABLE_STORAGE, i);
+        if (!storage || !storage->symbol_index) continue;
+        const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(source_view,
+            N00B_ABI_TABLE_SYMBOL, storage->symbol_index);
+        const n00b_abi_native_binding_v1 *binding = symbol
+            ? n00bb_abi_object_row(source_view,
+                N00B_ABI_TABLE_NATIVE_BINDING,
+                symbol->native_binding_index) : nullptr;
+        assert(binding && binding->offset < INT64_MAX);
+        size_t byte_offset = (const uint8_t *)binding - source;
+        assert(byte_offset <= source_bytes
+            && sizeof(*binding) <= source_bytes - byte_offset);
+        n00b_abi_native_binding_v1 original = *binding;
+        n00b_abi_native_binding_v1 changed = original;
+        changed.offset++;
+        memcpy(source + byte_offset, &changed, sizeof(changed));
+        uint8_t *bad_output = nullptr;
+        size_t bad_bytes = 0;
+        assert(!n00bb_abi_link_selected_objects(&selected, &target,
+            &bad_output, &bad_bytes) && !bad_output && !bad_bytes);
+        memcpy(source + byte_offset, &original, sizeof(original));
+        rejected_bad_binding = true;
+        break;
+    }
+    assert(rejected_bad_binding);
     n00bb_abi_object_close(&view);
     core_free(linked);
     n00bb_abi_selected_objects_release(&selected);

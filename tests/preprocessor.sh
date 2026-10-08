@@ -1520,6 +1520,8 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/string_storage_linked.o" string_storage
 "$abi_record_object_test" "$tmp/string_storage_linked.o" string-storage
 "$abi_register_object_test" "$tmp/string_storage_linked.o" 1
+"$abi_register_object_test" "$tmp/string_storage_linked.o" 1 \
+    --bad-storage-binding
 "$compiler" compile --output "$tmp/abi_record_storage_probe.o" \
     "$program_dir/../abi/abi_record_storage_probe.n00b"
 "$abi_record_object_test" "$tmp/abi_record_storage_probe.o" record-storage
