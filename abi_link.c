@@ -1401,6 +1401,21 @@ type_backlinks_valid(const n00bb_abi_object_view_t *view,
 }
 
 static bool
+range_owns_row_once(const n00bb_abi_object_view_t *view,
+                    n00b_abi_range_v1 range, uint32_t local_index)
+{
+    if (!valid_index_range(view, range)) return false;
+    uint32_t matches = 0;
+    for (uint32_t i = 0; i < range.count; i++) {
+        const uint8_t *slot = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_U32_STREAM, range.first + i);
+        if (!slot) return false;
+        if (core_le_load_u32(slot) == local_index) matches++;
+    }
+    return matches == 1;
+}
+
+static bool
 row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
                 uint32_t local_index, const void *row)
 {
@@ -1414,22 +1429,27 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
         return type && (kind == N00B_ABI_TABLE_LAYOUT
             ? type->layout_index : type->tracing_index) == local_index;
     }
+    if (kind == N00B_ABI_TABLE_CODE_RANGE
+        || kind == N00B_ABI_TABLE_FRAME_LAYOUT) {
+        uint32_t parent = kind == N00B_ABI_TABLE_CODE_RANGE
+            ? ((const n00b_abi_code_range_v1 *)row)->function_index
+            : ((const n00b_abi_frame_layout_v1 *)row)->function_index;
+        const n00b_abi_function_v1 *function = parent
+            ? n00bb_abi_object_row(view, N00B_ABI_TABLE_FUNCTION, parent)
+            : nullptr;
+        return function && range_owns_row_once(view,
+            kind == N00B_ABI_TABLE_CODE_RANGE
+                ? function->code_ranges : function->frame_layouts,
+            local_index);
+    }
     if (kind != N00B_ABI_TABLE_FIELD && kind != N00B_ABI_TABLE_ARM
         && kind != N00B_ABI_TABLE_ENUM_ITEM
         && kind != N00B_ABI_TABLE_TRAIT_METHOD) return true;
     uint32_t parent = n00bb_abi_member_facts(kind, row).parent;
     const n00b_abi_type_v1 *type = parent
         ? n00bb_abi_object_row(view, N00B_ABI_TABLE_TYPE, parent) : nullptr;
-    if (!type || type_member_kind(type) != kind
-        || !valid_index_range(view, type->fields_or_arms)) return false;
-    uint32_t matches = 0;
-    for (uint32_t i = 0; i < type->fields_or_arms.count; i++) {
-        const uint8_t *slot = n00bb_abi_object_row(view,
-            N00B_ABI_TABLE_U32_STREAM, type->fields_or_arms.first + i);
-        if (!slot) return false;
-        if (core_le_load_u32(slot) == local_index) matches++;
-    }
-    return matches == 1;
+    return type && type_member_kind(type) == kind
+        && range_owns_row_once(view, type->fields_or_arms, local_index);
 }
 
 static bool

@@ -1515,6 +1515,76 @@ test_specialization_remap(void)
 }
 
 static void
+test_function_range_ownership_remap(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[1];
+        n00b_abi_function_v1 functions[3];
+        n00b_abi_code_range_v1 code[2];
+        n00b_abi_frame_layout_v1 frames[2];
+        uint32_t indexes[3];
+    } fixture_t;
+    fixture_t metadata = {0};
+    metadata.types[0].kind = N00B_ABI_TYPE_NIL;
+    metadata.types[0].typehash = 1;
+    metadata.functions[1].code_ranges = (n00b_abi_range_v1){1, 1};
+    metadata.functions[1].frame_layouts = (n00b_abi_range_v1){2, 1};
+    metadata.code[1].function_index = 1;
+    metadata.frames[1].function_index = 1;
+    metadata.indexes[1] = 1;
+    metadata.indexes[2] = 1;
+    n00bb_abi_directory_entry_t directory[] = {
+        {.kind = N00B_ABI_TABLE_TYPE,
+         .record_bytes = sizeof(metadata.types[0]), .record_count = 1,
+         .file_offset = offsetof(fixture_t, types)},
+        {.kind = N00B_ABI_TABLE_FUNCTION,
+         .record_bytes = sizeof(metadata.functions[0]), .record_count = 3,
+         .file_offset = offsetof(fixture_t, functions)},
+        {.kind = N00B_ABI_TABLE_CODE_RANGE,
+         .record_bytes = sizeof(metadata.code[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, code)},
+        {.kind = N00B_ABI_TABLE_FRAME_LAYOUT,
+         .record_bytes = sizeof(metadata.frames[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, frames)},
+        {.kind = N00B_ABI_TABLE_U32_STREAM,
+         .record_bytes = sizeof(metadata.indexes[0]), .record_count = 3,
+         .file_offset = offsetof(fixture_t, indexes)},
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {.bytes = (const uint8_t *)&metadata,
+                     .size = sizeof(metadata)},
+        .directory = directory,
+        .directory_count = sizeof(directory) / sizeof(*directory),
+    };
+    n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    n00b_abi_code_range_v1 code;
+    n00b_abi_frame_layout_v1 frame;
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_CODE_RANGE, 1, &code, sizeof(code), nullptr));
+    assert(n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_FRAME_LAYOUT, 1, &frame, sizeof(frame), nullptr));
+    metadata.functions[1].code_ranges = (n00b_abi_range_v1){0};
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_CODE_RANGE, 1, &code, sizeof(code), nullptr));
+    metadata.functions[1].code_ranges = (n00b_abi_range_v1){1, 1};
+    metadata.code[1].function_index = 2;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_CODE_RANGE, 1, &code, sizeof(code), nullptr));
+    metadata.code[1].function_index = 1;
+    metadata.functions[1].code_ranges.count = 2;
+    metadata.indexes[2] = 1;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_CODE_RANGE, 1, &code, sizeof(code), nullptr));
+    metadata.functions[1].code_ranges.count = 1;
+    metadata.functions[1].frame_layouts = (n00b_abi_range_v1){0};
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_FRAME_LAYOUT, 1, &frame, sizeof(frame), nullptr));
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_type_backlinks_remap(void)
 {
     typedef struct {
@@ -2403,6 +2473,7 @@ main(int argc, char **argv)
     test_link_index_patch();
     test_type_variable_shape();
     test_specialization_remap();
+    test_function_range_ownership_remap();
     test_type_backlinks_remap();
     test_metadata_string_uses_relocation_pool();
     test_native_relocation_transfer();
