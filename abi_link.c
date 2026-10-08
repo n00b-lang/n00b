@@ -385,7 +385,7 @@ typedef struct {
 
 static bool nonconcrete_key_init(abi_link_key_t *key);
 static bool link_key_from_owner_type(abi_link_key_t *key,
-                                     uint32_t type_index);
+                                     uint32_t type_index, uint32_t kind);
 
 static core_hash_value_t
 link_key_hash(void *value)
@@ -444,7 +444,11 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
     }
     case N00B_ABI_TABLE_LAYOUT: {
         const n00b_abi_layout_v1 *layout = key->row;
-        return link_key_from_owner_type(key, layout->type_index);
+        return link_key_from_owner_type(key, layout->type_index, kind);
+    }
+    case N00B_ABI_TABLE_TRACE: {
+        const n00b_abi_trace_v1 *trace = key->row;
+        return link_key_from_owner_type(key, trace->type_index, kind);
     }
     case N00B_ABI_TABLE_PACKAGE:
         return link_key_string(key,
@@ -481,11 +485,14 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
 }
 
 static bool
-link_key_from_owner_type(abi_link_key_t *key, uint32_t type_index)
+link_key_from_owner_type(abi_link_key_t *key, uint32_t type_index,
+                         uint32_t kind)
 {
     const n00b_abi_type_v1 *type = n00bb_abi_object_row(key->view,
         N00B_ABI_TABLE_TYPE, type_index);
-    if (!type || type->layout_index != key->local_index) return false;
+    if (!type || (kind == N00B_ABI_TABLE_LAYOUT
+                  ? type->layout_index : type->tracing_index)
+                 != key->local_index) return false;
     abi_link_key_t owner = *key;
     owner.row = type;
     owner.local_index = type_index;
@@ -856,6 +863,102 @@ compatible_child_type(const n00bb_abi_object_view_t *a_view,
 }
 
 static bool
+compatible_trace_link(const n00bb_abi_object_view_t *a_view,
+                      uint32_t a_index,
+                      const n00bb_abi_object_view_t *b_view,
+                      uint32_t b_index)
+{
+    if (!a_index || !b_index) return a_index == b_index;
+    const n00b_abi_trace_v1 *a = n00bb_abi_object_row(a_view,
+        N00B_ABI_TABLE_TRACE, a_index);
+    const n00b_abi_trace_v1 *b = n00bb_abi_object_row(b_view,
+        N00B_ABI_TABLE_TRACE, b_index);
+    return a && b && compatible_child_type(a_view, a->type_index,
+                                           b_view, b->type_index);
+}
+
+static bool
+compatible_trace_children(const n00bb_abi_object_view_t *a_view,
+                          n00b_abi_range_v1 a_range,
+                          const n00bb_abi_object_view_t *b_view,
+                          n00b_abi_range_v1 b_range)
+{
+    if (a_range.count != b_range.count
+        || !valid_index_range(a_view, a_range)
+        || !valid_index_range(b_view, b_range)) return false;
+    for (uint32_t i = 0; i < a_range.count; i++) {
+        const n00b_abi_trace_child_v1 *a = indexed_range_row(a_view,
+            a_range, i, N00B_ABI_TABLE_TRACE_CHILD);
+        const n00b_abi_trace_child_v1 *b = indexed_range_row(b_view,
+            b_range, i, N00B_ABI_TABLE_TRACE_CHILD);
+        if (!a || !b || a->byte_offset != b->byte_offset
+            || a->reserved_zero || b->reserved_zero
+            || !compatible_child_type(a_view, a->child_type_index,
+                                      b_view, b->child_type_index)) return false;
+    }
+    return true;
+}
+
+static bool
+compatible_trace_arms(const n00bb_abi_object_view_t *a_view,
+                      n00b_abi_range_v1 a_range,
+                      const n00bb_abi_object_view_t *b_view,
+                      n00b_abi_range_v1 b_range)
+{
+    if (a_range.count != b_range.count
+        || !valid_index_range(a_view, a_range)
+        || !valid_index_range(b_view, b_range)) return false;
+    for (uint32_t i = 0; i < a_range.count; i++) {
+        const n00b_abi_trace_arm_v1 *a = indexed_range_row(a_view,
+            a_range, i, N00B_ABI_TABLE_TRACE_ARM);
+        const n00b_abi_trace_arm_v1 *b = indexed_range_row(b_view,
+            b_range, i, N00B_ABI_TABLE_TRACE_ARM);
+        if (!a || !b || a->tag_value != b->tag_value
+            || !compatible_trace_link(a_view, a->child_trace_index,
+                                      b_view, b->child_trace_index)
+            || !compatible_trace_children(a_view, a->children,
+                                          b_view, b->children)) return false;
+    }
+    return true;
+}
+
+static bool
+compatible_type_trace(const abi_link_key_t *first,
+                      const abi_link_key_t *candidate)
+{
+    const n00b_abi_type_v1 *a_type = first->row, *b_type = candidate->row;
+    if (!a_type->tracing_index || !b_type->tracing_index)
+        return a_type->tracing_index == b_type->tracing_index
+            || !a_type->layout_index || !b_type->layout_index;
+    const n00b_abi_trace_v1 *a = n00bb_abi_object_row(first->view,
+        N00B_ABI_TABLE_TRACE, a_type->tracing_index);
+    const n00b_abi_trace_v1 *b = n00bb_abi_object_row(candidate->view,
+        N00B_ABI_TABLE_TRACE, b_type->tracing_index);
+    if (!a || !b || a->type_index != first->local_index
+        || b->type_index != candidate->local_index
+        || a->reserved_zero || b->reserved_zero
+        || a->option_bit_offset != b->option_bit_offset
+        || !!a->tag_extractor_index != !!b->tag_extractor_index
+        || !compatible_trace_link(first->view, a->child_trace_index,
+                                  candidate->view, b->child_trace_index))
+        return false;
+    if (a->tag_extractor_index) {
+        const n00b_abi_tag_extractor_v1 *a_tag = n00bb_abi_object_row(
+            first->view, N00B_ABI_TABLE_TAG_EXTRACTOR,
+            a->tag_extractor_index);
+        const n00b_abi_tag_extractor_v1 *b_tag = n00bb_abi_object_row(
+            candidate->view, N00B_ABI_TABLE_TAG_EXTRACTOR,
+            b->tag_extractor_index);
+        if (!a_tag || !b_tag || memcmp(a_tag, b_tag, sizeof(*a_tag)))
+            return false;
+    }
+    return compatible_trace_children(first->view, a->fixed_children,
+            candidate->view, b->fixed_children)
+        && compatible_trace_arms(first->view, a->arms,
+                                 candidate->view, b->arms);
+}
+
+static bool
 type_is_import_reference(const n00b_abi_type_v1 *type)
 {
     return !type->owner_module_index && !type->layout_index
@@ -1180,6 +1283,7 @@ compatible_type_identity(const abi_link_key_t *first,
         && a_name.length == b_name.length
         && !memcmp(a_name.bytes, b_name.bytes, a_name.length)
         && compatible_type_layout(first, candidate)
+        && compatible_type_trace(first, candidate)
         && compatible_type_components(first, candidate)
         && compatible_type_members(first, candidate)
         && compatible_call_signature(first, candidate)

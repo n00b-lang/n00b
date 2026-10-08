@@ -1431,6 +1431,9 @@ N00B_PATH="$interface_programs" "$compiler" compile \
 "$compiler" compile --output "$tmp/option_layout_abi.o" \
     "$program_dir/option_layout.n00b"
 "$abi_record_object_test" "$tmp/option_layout_abi.o" option-layout
+N00B_PATH="$program_dir" "$compiler" library \
+    --output "$tmp/trace_link_user.o" trace_link_user
+"$abi_register_object_test" "$tmp/trace_link_user.o" 2
 "$compiler" compile --output "$tmp/wrapper_trace_abi.o" \
     "$program_dir/wrapper_trace.n00b"
 "$abi_record_object_test" "$tmp/wrapper_trace_abi.o" unary-trace
@@ -1481,12 +1484,14 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
 N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/string_storage_linked.o" string_storage
 "$abi_record_object_test" "$tmp/string_storage_linked.o" string-storage
+"$abi_register_object_test" "$tmp/string_storage_linked.o" 1
 "$compiler" compile --output "$tmp/abi_record_storage_probe.o" \
     "$program_dir/../abi/abi_record_storage_probe.n00b"
 "$abi_record_object_test" "$tmp/abi_record_storage_probe.o" record-storage
 N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/abi_record_storage_linked.o" abi_record_storage_probe
 "$abi_record_object_test" "$tmp/abi_record_storage_linked.o" record-storage
+"$abi_register_object_test" "$tmp/abi_record_storage_linked.o" 1
 "$compiler" compile --output "$tmp/abi_record_bits_probe.o" \
     "$program_dir/../abi/abi_record_bits_probe.n00b"
 "$abi_record_object_test" "$tmp/abi_record_bits_probe.o" record-bits-storage
@@ -1496,18 +1501,21 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
 N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/abi_record_nested_linked.o" abi_record_nested_probe
 "$abi_record_object_test" "$tmp/abi_record_nested_linked.o" record-nested-storage
+"$abi_register_object_test" "$tmp/abi_record_nested_linked.o" 1
 "$compiler" compile --output "$tmp/abi_variant_storage_probe.o" \
     "$program_dir/../abi/abi_variant_storage_probe.n00b"
 "$abi_record_object_test" "$tmp/abi_variant_storage_probe.o" variant-storage
 N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/abi_variant_storage_linked.o" abi_variant_storage_probe
 "$abi_record_object_test" "$tmp/abi_variant_storage_linked.o" variant-storage
+"$abi_register_object_test" "$tmp/abi_variant_storage_linked.o" 1
 "$compiler" compile --output "$tmp/abi_tuple_storage_probe.o" \
     "$program_dir/../abi/abi_tuple_storage_probe.n00b"
 "$abi_record_object_test" "$tmp/abi_tuple_storage_probe.o" tuple-storage
 N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/abi_tuple_storage_linked.o" abi_tuple_storage_probe
 "$abi_record_object_test" "$tmp/abi_tuple_storage_linked.o" tuple-storage
+"$abi_register_object_test" "$tmp/abi_tuple_storage_linked.o" 1
 "$compiler" compile --output "$tmp/abi_anonymous_record_probe.o" \
     "$program_dir/../abi/abi_anonymous_record_probe.n00b"
 "$abi_record_object_test" "$tmp/abi_anonymous_record_probe.o" \
