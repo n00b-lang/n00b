@@ -271,7 +271,8 @@ static void thread_local_section_test(void)
         {"arm64-macos", "__n00b_tls", "__DATA", CORE_TARGET_OBJECT_MACH_O},
         {"x86_64-windows", ".tls$N", NULL, CORE_TARGET_OBJECT_COFF},
     };
-    uint8_t bytes[8] = {1};
+    uint8_t bytes[16] = {1};
+    uint8_t backing[8] = {2};
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         core_target_desc_t target;
         assert(core_target_profile(cases[i].target, 0, &target));
@@ -280,14 +281,47 @@ static void thread_local_section_test(void)
             .bytes = bytes, .size = sizeof bytes, .alignment = 8,
             .writable = true, .is_thread_local = true,
         };
+        core_object_emit_section_t sections[] = {
+            input,
+            {.name = cases[i].format == CORE_TARGET_OBJECT_MACH_O
+                         ? "__const" : ".rodata.n00b",
+             .segment = cases[i].format == CORE_TARGET_OBJECT_MACH_O
+                            ? "__DATA_CONST" : NULL,
+             .bytes = backing, .size = sizeof backing, .alignment = 8},
+        };
+        core_object_emit_symbol_t symbol = {
+            .name = "tls_backing", .section_index = 2,
+        };
+        core_object_emit_absolute64_t relocation = {
+            .section_index = 1, .section_offset = 8, .symbol_index = 0,
+        };
         uint8_t *image = NULL;
         size_t size = 0;
-        assert(core_object_emit(&target, &input, 1, NULL, 0, NULL, 0,
-                                &image, &size));
+        assert(core_object_emit(&target, sections, 2, &symbol, 1,
+                                &relocation, 1, &image, &size));
         core_object_section_t section;
         assert(core_object_section_find(image, size, cases[i].format,
             cases[i].segment, cases[i].name, &section));
         assert(section.size == sizeof bytes && section.bytes[0] == 1);
+        assert(section.relocation_count == 1);
+        uint32_t backing_index;
+        assert(core_object_emit_native_section_index(&target, 2, 2,
+                                                     &backing_index));
+        core_object_absolute64_relocation_t decoded;
+        assert(core_object_absolute64_relocation_at(&section,
+            cases[i].format, 0, &decoded));
+        assert(decoded.section_offset == 8);
+        if (cases[i].format == CORE_TARGET_OBJECT_MACH_O) {
+            assert(decoded.target_is_section &&
+                   decoded.native_symbol_index == backing_index);
+        } else {
+            core_object_symbol_t resolved;
+            assert(!decoded.target_is_section &&
+                   core_object_symbol_at(image, size, cases[i].format,
+                                         &section, decoded.native_symbol_index,
+                                         &resolved) &&
+                   resolved.native_section_index == backing_index);
+        }
         if (cases[i].format == CORE_TARGET_OBJECT_ELF)
             assert((section.flags & 0x403) == 0x403);
         else if (cases[i].format == CORE_TARGET_OBJECT_MACH_O)
