@@ -1,5 +1,6 @@
 #include "abi_link.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "abi_emit.h"
@@ -17,6 +18,177 @@ same_key(const n00bb_abi_image_key_t *left,
         && left->feature_bits == right->feature_bits
         && left->cpu_profile == right->cpu_profile
         && left->data_layout_profile == right->data_layout_profile;
+}
+
+typedef struct {
+    uint32_t child;
+    uint32_t parent;
+    size_t input;
+} specialization_edge_t;
+
+static int
+compare_specialization_edges(const void *left, const void *right)
+{
+    const specialization_edge_t *a = left, *b = right;
+    if (a->child != b->child) return a->child < b->child ? -1 : 1;
+    if (a->parent != b->parent) return a->parent < b->parent ? -1 : 1;
+    if (a->input != b->input) return a->input < b->input ? -1 : 1;
+    return 0;
+}
+
+bool
+n00bb_abi_rebuild_specialization_links(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_index_plan_t *plan, n00bb_abi_merged_rows_t *merged)
+{
+    if (!selected || !selected->views || !plan || !merged
+        || !merged->tables) return false;
+    n00bb_abi_merged_table_t *types = nullptr, *links = nullptr;
+    for (size_t i = 0; i < merged->table_count; i++) {
+        n00bb_abi_merged_table_t *table = &merged->tables[i];
+        if (table->kind == N00B_ABI_TABLE_TYPE) types = table;
+        if (table->kind == N00B_ABI_TABLE_SPECIALIZATION_LINK) links = table;
+    }
+    if (!types || !types->records || !types->record_count
+        || types->record_bytes != sizeof(n00b_abi_type_v1)
+        || (links && links->record_bytes != sizeof(uint32_t))) return false;
+    size_t capacity = 0;
+    for (size_t input = 0; input < selected->count; input++) {
+        const n00bb_abi_directory_entry_t *source = n00bb_abi_object_table(
+            &selected->views[input], N00B_ABI_TABLE_SPECIALIZATION_LINK);
+        if (!source) continue;
+        if (!source->record_count || source->record_count - 1
+            > SIZE_MAX - capacity) return false;
+        capacity += source->record_count - 1;
+    }
+    if (capacity >= UINT32_MAX
+        || capacity > SIZE_MAX / sizeof(specialization_edge_t)) return false;
+    specialization_edge_t *edges = core_alloc_array(specialization_edge_t,
+                                                     capacity);
+    size_t edge_count = 0;
+    bool valid = true;
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00bb_abi_directory_entry_t *source_types =
+            n00bb_abi_object_table(view, N00B_ABI_TABLE_TYPE);
+        const n00bb_abi_directory_entry_t *source_links =
+            n00bb_abi_object_table(view,
+                N00B_ABI_TABLE_SPECIALIZATION_LINK);
+        if (!source_types) { valid = false; break; }
+        uint8_t *owned = source_links
+            ? core_alloc_array(uint8_t, source_links->record_count) : nullptr;
+        if (owned) memset(owned, 0, source_links->record_count);
+        for (uint32_t local = 0; valid
+             && local < source_types->record_count; local++) {
+            const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_TYPE, local);
+            uint32_t child;
+            if (!type || !n00bb_abi_index_plan_map(plan, input,
+                    N00B_ABI_TABLE_TYPE, local, &child)
+                || child >= types->record_count) {
+                valid = false;
+                break;
+            }
+            uint32_t start = type->specialization_start_ix;
+            uint32_t end = type->specialization_end_ix;
+            if ((!start && end) || (start && (!source_links || !owned
+                    || end <= start || end > source_links->record_count))) {
+                valid = false;
+                break;
+            }
+            for (uint32_t j = start; valid && j < end; j++) {
+                const uint32_t *source_parent = n00bb_abi_object_row(view,
+                    N00B_ABI_TABLE_SPECIALIZATION_LINK, j);
+                uint32_t parent;
+                if (owned[j] || !source_parent
+                    || !n00bb_abi_index_plan_map(plan, input,
+                        N00B_ABI_TABLE_TYPE, *source_parent, &parent)
+                    || parent >= types->record_count || child == parent
+                    || edge_count >= capacity) {
+                    valid = false;
+                    break;
+                }
+                owned[j] = 1;
+                edges[edge_count++] = (specialization_edge_t){
+                    .child = child, .parent = parent, .input = input,
+                };
+            }
+        }
+        if (source_links)
+            for (uint32_t i = 1; valid
+                 && i < source_links->record_count; i++)
+                if (!owned || !owned[i]) valid = false;
+        core_free(owned);
+    }
+    if (valid && edge_count) qsort(edges, edge_count, sizeof(*edges),
+                                   compare_specialization_edges);
+    size_t unique = 0;
+    for (size_t i = 0; valid && i < edge_count;) {
+        size_t end = i + 1;
+        while (end < edge_count && edges[end].child == edges[i].child
+            && edges[end].parent == edges[i].parent) {
+            if (edges[end].input == edges[end - 1].input) valid = false;
+            end++;
+        }
+        edges[unique++] = edges[i];
+        i = end;
+    }
+    uint32_t *rebuilt = valid
+        ? core_alloc_array(uint32_t, unique + 1) : nullptr;
+    n00b_abi_range_v1 *spans = valid
+        ? core_alloc_array(n00b_abi_range_v1, types->record_count) : nullptr;
+    uint32_t *incoming = valid
+        ? core_alloc_array(uint32_t, types->record_count) : nullptr;
+    uint32_t *queue = valid
+        ? core_alloc_array(uint32_t, types->record_count) : nullptr;
+    valid = valid && rebuilt && spans && incoming && queue
+        && (!unique || links);
+    if (valid) {
+        memset(spans, 0, (size_t)types->record_count * sizeof(*spans));
+        memset(incoming, 0, (size_t)types->record_count * sizeof(*incoming));
+        rebuilt[0] = 0;
+        for (size_t i = 0; i < unique; i++) {
+            specialization_edge_t edge = edges[i];
+            n00b_abi_range_v1 *span = &spans[edge.child];
+            if (!span->count) span->first = (uint32_t)i + 1;
+            span->count++;
+            rebuilt[i + 1] = edge.parent;
+            incoming[edge.parent]++;
+        }
+        size_t head = 0, tail = 0;
+        for (uint32_t i = 0; i < types->record_count; i++)
+            if (!incoming[i]) queue[tail++] = i;
+        while (head < tail) {
+            uint32_t child = queue[head++];
+            n00b_abi_range_v1 span = spans[child];
+            for (uint32_t j = 0; j < span.count; j++) {
+                uint32_t parent = rebuilt[span.first + j];
+                if (!--incoming[parent]) queue[tail++] = parent;
+            }
+        }
+        valid = tail == types->record_count;
+    }
+    if (valid) {
+        for (uint32_t i = 0; i < types->record_count; i++) {
+            n00b_abi_type_v1 *type = (void *)(types->records
+                + (size_t)i * types->record_bytes);
+            type->specialization_start_ix = spans[i].first;
+            type->specialization_end_ix = spans[i].count
+                ? spans[i].first + spans[i].count : 0;
+        }
+        if (links) {
+            core_free(links->records);
+            links->records = (uint8_t *)rebuilt;
+            links->record_count = (uint32_t)unique + 1;
+            rebuilt = nullptr;
+        }
+    }
+    core_free(rebuilt);
+    core_free(spans);
+    core_free(incoming);
+    core_free(queue);
+    core_free(edges);
+    return valid;
 }
 
 static bool
@@ -44,7 +216,6 @@ link_only_inputs_resolved(const n00bb_abi_selected_objects_t *selected,
             }
         }
         const uint32_t pending[] = {
-            N00B_ABI_TABLE_SPECIALIZATION_LINK,
             N00B_ABI_TABLE_DISPATCH,
             N00B_ABI_TABLE_DISPATCH_ENTRY,
             N00B_ABI_TABLE_NAME_SLOT,
@@ -325,6 +496,70 @@ rebuild_name_slots(const n00bb_abi_selected_objects_t *selected,
     return valid;
 }
 
+static core_index_remap_t *
+specialization_patch_remap(const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_index_plan_t *plan,
+    const n00bb_abi_merged_rows_t *merged, size_t input)
+{
+    const n00bb_abi_object_view_t *view = &selected->views[input];
+    const n00bb_abi_directory_entry_t *source_types =
+        n00bb_abi_object_table(view, N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *source_links =
+        n00bb_abi_object_table(view, N00B_ABI_TABLE_SPECIALIZATION_LINK);
+    const n00bb_abi_merged_table_t *final_links = n00bb_abi_merged_table(
+        merged, N00B_ABI_TABLE_SPECIALIZATION_LINK);
+    if (!source_types || !source_links || !source_links->record_count
+        || !final_links || !final_links->record_count) return nullptr;
+    core_index_remap_t *remap = core_index_remap_new(
+        source_links->record_count, final_links->record_count - 1);
+    bool valid = remap && core_index_remap_set(remap, 0, 0);
+    for (uint32_t local = 0; valid
+         && local < source_types->record_count; local++) {
+        const n00b_abi_type_v1 *source = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_TYPE, local);
+        uint32_t child;
+        if (!source || !n00bb_abi_index_plan_map(plan, input,
+                N00B_ABI_TABLE_TYPE, local, &child)) {
+            valid = false;
+            break;
+        }
+        const n00b_abi_type_v1 *target = n00bb_abi_merged_row(merged,
+            N00B_ABI_TABLE_TYPE, child);
+        if (!target) { valid = false; break; }
+        for (uint32_t j = source->specialization_start_ix;
+             valid && j < source->specialization_end_ix; j++) {
+            const uint32_t *source_parent = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_SPECIALIZATION_LINK, j);
+            uint32_t parent, found = 0;
+            if (!source_parent || !n00bb_abi_index_plan_map(plan, input,
+                    N00B_ABI_TABLE_TYPE, *source_parent, &parent)) {
+                valid = false;
+                break;
+            }
+            for (uint32_t k = target->specialization_start_ix;
+                 k < target->specialization_end_ix; k++) {
+                const uint32_t *candidate = n00bb_abi_merged_row(merged,
+                    N00B_ABI_TABLE_SPECIALIZATION_LINK, k);
+                if (candidate && *candidate == parent) {
+                    if (found) { valid = false; break; }
+                    found = k;
+                }
+            }
+            if (!valid || !found || !core_index_remap_set(remap, j, found))
+                valid = false;
+        }
+    }
+    for (uint32_t i = 1; valid && i < source_links->record_count; i++) {
+        uint32_t mapped;
+        valid = core_index_remap_get(remap, i, &mapped);
+    }
+    if (!valid) {
+        core_index_remap_free(remap);
+        return nullptr;
+    }
+    return remap;
+}
+
 bool
 n00bb_abi_apply_link_patches(
     const n00bb_abi_selected_objects_t *selected,
@@ -353,6 +588,18 @@ n00bb_abi_apply_link_patches(
             n00bb_abi_patch_section_t, sections->count);
         n00bb_abi_patch_table_t *patch_tables = core_alloc_array(
             n00bb_abi_patch_table_t, merged->table_count);
+        core_index_remap_t *specialization_remap =
+            n00bb_abi_object_table(view,
+                N00B_ABI_TABLE_SPECIALIZATION_LINK)
+            ? specialization_patch_remap(selected, plan, merged, input)
+            : nullptr;
+        if (n00bb_abi_object_table(view,
+                N00B_ABI_TABLE_SPECIALIZATION_LINK)
+            && !specialization_remap) {
+            core_free(patch_sections);
+            core_free(patch_tables);
+            return false;
+        }
         size_t patch_section_count = 0, patch_table_count = 0;
         for (size_t i = 0; i < sections->count; i++) {
             if (sections->maps[i].input != input) continue;
@@ -371,7 +618,9 @@ n00bb_abi_apply_link_patches(
                 || table->kind == N00B_ABI_TABLE_REQUIREMENT
                 || table->kind == N00B_ABI_TABLE_INDEX_PATCH) continue;
             const core_index_remap_t *remap =
-                n00bb_abi_index_plan_remap(plan, input, table->kind);
+                table->kind == N00B_ABI_TABLE_SPECIALIZATION_LINK
+                ? specialization_remap
+                : n00bb_abi_index_plan_remap(plan, input, table->kind);
             if (!remap) continue;
             patch_tables[patch_table_count++] =
                 (n00bb_abi_patch_table_t){
@@ -390,6 +639,7 @@ n00bb_abi_apply_link_patches(
                 N00BB_ABI_PATCH_OK;
         core_free(patch_sections);
         core_free(patch_tables);
+        core_index_remap_free(specialization_remap);
         if (!valid) return false;
     }
     return true;
@@ -426,6 +676,7 @@ n00bb_abi_link_selected_objects(
     bool valid = plan
         && typed_requirements_resolved(selected, plan)
         && n00bb_abi_merge_rows(selected, plan, &merged)
+        && n00bb_abi_rebuild_specialization_links(selected, plan, &merged)
         && rebuild_name_slots(selected, plan, &merged)
         && n00bb_abi_collect_native_sections(selected, target, &sections)
         && n00bb_abi_apply_link_patches(selected, plan, &merged, &sections)

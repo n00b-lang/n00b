@@ -146,6 +146,11 @@ typedef struct {
 bool n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                           const n00bb_abi_index_plan_t *plan,
                           n00bb_abi_merged_rows_t *out);
+/* Unions specialization edges from every selected definition after type
+ * indexes are final. Failure leaves the merged rows unchanged. */
+bool n00bb_abi_rebuild_specialization_links(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_index_plan_t *plan, n00bb_abi_merged_rows_t *merged);
 const n00bb_abi_merged_table_t *n00bb_abi_merged_table(
     const n00bb_abi_merged_rows_t *merged, uint32_t kind);
 const void *n00bb_abi_merged_row(const n00bb_abi_merged_rows_t *merged,

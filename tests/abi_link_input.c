@@ -1515,6 +1515,151 @@ test_specialization_remap(void)
 }
 
 static void
+test_specialization_rebuild(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[3];
+        n00b_abi_specialization_link_v1 links[3];
+        n00b_abi_index_patch_v1 patches[2];
+    } specialization_fixture_t;
+    specialization_fixture_t metadata[2] = {0};
+    n00bb_abi_directory_entry_t directories[2][3] = {0};
+    n00bb_abi_object_view_t views[2] = {0};
+    for (size_t input = 0; input < 2; input++) {
+        metadata[input].types[0].kind = N00B_ABI_TYPE_NIL;
+        metadata[input].types[0].typehash = 1;
+        metadata[input].types[1].kind = N00B_ABI_TYPE_PRIMITIVE;
+        metadata[input].types[1].typehash = 2;
+        metadata[input].types[1].specialization_start_ix = 1;
+        metadata[input].types[1].specialization_end_ix = 2;
+        metadata[input].types[2].kind = N00B_ABI_TYPE_PRIMITIVE;
+        metadata[input].types[2].typehash = 3 + input;
+        metadata[input].links[1] = 2;
+        directories[input][0] = (n00bb_abi_directory_entry_t){
+            .kind = N00B_ABI_TABLE_TYPE,
+            .record_bytes = sizeof(n00b_abi_type_v1), .record_count = 3,
+            .file_offset = offsetof(specialization_fixture_t, types),
+        };
+        directories[input][1] = (n00bb_abi_directory_entry_t){
+            .kind = N00B_ABI_TABLE_SPECIALIZATION_LINK,
+            .record_bytes = sizeof(n00b_abi_specialization_link_v1),
+            .record_count = 2,
+            .file_offset = offsetof(specialization_fixture_t, links),
+        };
+        if (input) {
+            metadata[input].patches[1] = (n00b_abi_index_patch_v1){
+                .target_section_index = 7,
+                .referenced_table_kind =
+                    N00B_ABI_TABLE_SPECIALIZATION_LINK,
+                .local_index = 1,
+                .patch_kind = N00BB_ABI_PATCH_INDEX,
+            };
+            directories[input][2] = (n00bb_abi_directory_entry_t){
+                .kind = N00B_ABI_TABLE_INDEX_PATCH,
+                .record_bytes = sizeof(n00b_abi_index_patch_v1),
+                .record_count = 2,
+                .file_offset = offsetof(specialization_fixture_t, patches),
+                .byte_length = 2 * sizeof(n00b_abi_index_patch_v1),
+            };
+        }
+        views[input] = (n00bb_abi_object_view_t){
+            .metadata = {.bytes = (const uint8_t *)&metadata[input],
+                         .size = sizeof(metadata[input])},
+            .directory = directories[input],
+            .directory_count = input ? 3 : 2,
+        };
+    }
+    n00bb_abi_selected_objects_t selected = {.views = views, .count = 2};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    uint32_t type_count = 0, link_count = 0, child = 0, parents[2] = {0};
+    assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_TYPE,
+        &type_count) && type_count == 4
+        && n00bb_abi_index_plan_count(plan,
+            N00B_ABI_TABLE_SPECIALIZATION_LINK, &link_count)
+        && link_count == 3);
+    n00bb_abi_merged_table_t tables[] = {
+        {.kind = N00B_ABI_TABLE_TYPE,
+         .record_bytes = sizeof(n00b_abi_type_v1),
+         .record_count = type_count,
+         .records = core_alloc_array(uint8_t,
+             (size_t)type_count * sizeof(n00b_abi_type_v1))},
+        {.kind = N00B_ABI_TABLE_SPECIALIZATION_LINK,
+         .record_bytes = sizeof(n00b_abi_specialization_link_v1),
+         .record_count = link_count,
+         .records = core_alloc_array(uint8_t,
+             (size_t)link_count * sizeof(n00b_abi_specialization_link_v1))},
+    };
+    n00bb_abi_merged_rows_t merged = {
+        .tables = tables, .table_count = 2,
+    };
+    assert(tables[0].records && tables[1].records);
+    for (size_t input = 0; input < 2; input++) {
+        uint32_t mapped;
+        assert(n00bb_abi_index_plan_map(plan, input,
+            N00B_ABI_TABLE_TYPE, 1, &mapped));
+        if (!input) child = mapped;
+        else assert(mapped == child);
+        assert(n00bb_abi_index_plan_map(plan, input,
+            N00B_ABI_TABLE_TYPE, 2, &parents[input]));
+        for (uint32_t local = 0; local < 3; local++) {
+            assert(n00bb_abi_index_plan_map(plan, input,
+                N00B_ABI_TABLE_TYPE, local, &mapped));
+            memcpy(tables[0].records
+                + (size_t)mapped * sizeof(n00b_abi_type_v1),
+                &metadata[input].types[local], sizeof(n00b_abi_type_v1));
+        }
+    }
+    assert(n00bb_abi_rebuild_specialization_links(&selected, plan, &merged));
+    const n00b_abi_type_v1 *final_types = (const void *)tables[0].records;
+    const uint32_t *final_links = (const void *)tables[1].records;
+    assert(tables[1].record_count == 3
+        && final_types[child].specialization_start_ix == 1
+        && final_types[child].specialization_end_ix == 3
+        && final_links[1] == parents[0] && final_links[2] == parents[1]);
+    uint8_t copied_bytes[4];
+    core_le_store_u32(copied_bytes, 1);
+    core_object_emit_section_t section = {
+        .name = ".data", .bytes = copied_bytes, .size = sizeof(copied_bytes),
+        .alignment = 4,
+    };
+    n00bb_abi_native_section_map_t map = {
+        .input = 1, .local_section_index = 7,
+    };
+    n00bb_abi_native_sections_t copied = {
+        .sections = &section, .maps = &map, .count = 1,
+    };
+    assert(n00bb_abi_apply_link_patches(&selected, plan, &merged, &copied)
+        && core_le_load_u32(copied_bytes) == 2);
+    core_le_store_u32(copied_bytes, 1);
+    metadata[1].patches[1].local_index = 2;
+    assert(!n00bb_abi_apply_link_patches(&selected, plan, &merged, &copied)
+        && core_le_load_u32(copied_bytes) == 1);
+    metadata[1].patches[1].local_index = 1;
+    metadata[1].links[1] = 1;
+    assert(!n00bb_abi_rebuild_specialization_links(&selected, plan, &merged)
+        && tables[1].record_count == 3
+        && final_types[child].specialization_end_ix == 3
+        && ((const uint32_t *)tables[1].records)[2] == parents[1]);
+    metadata[1].links[1] = 2;
+    metadata[0].types[2].specialization_start_ix = 2;
+    metadata[0].types[2].specialization_end_ix = 3;
+    metadata[0].links[2] = 1;
+    directories[0][1].record_count = 3;
+    n00bb_abi_index_plan_t *cyclic_plan =
+        n00bb_abi_index_plan_build(&selected);
+    assert(cyclic_plan
+        && !n00bb_abi_rebuild_specialization_links(
+            &selected, cyclic_plan, &merged)
+        && tables[1].record_count == 3
+        && final_types[child].specialization_end_ix == 3);
+    n00bb_abi_index_plan_free(cyclic_plan);
+    core_free(tables[0].records);
+    core_free(tables[1].records);
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_typed_range_rejects_zero(void)
 {
     typedef struct {
@@ -2724,6 +2869,7 @@ main(int argc, char **argv)
     test_link_index_patch();
     test_type_variable_shape();
     test_specialization_remap();
+    test_specialization_rebuild();
     test_typed_range_rejects_zero();
     test_function_range_ownership_remap();
     test_tls_relocation_ownership_remap();
