@@ -398,6 +398,7 @@ typedef struct {
     uint32_t materialized_inner_stride;
     n00bb_llvm_literal_kind_t materialized_kind;
     uint8_t materialized_encoding;
+    bool owns_materialized;
 } n00bb_phase_result_binding_t;
 core_list_decl(n00bb_phase_result_binding_t);
 core_list_decl(uint32_t);
@@ -13193,6 +13194,45 @@ n00bb_restore_literal_context(ir_lower_context_t *context,
 }
 
 static bool
+n00bb_bind_static_literal_result(ir_lower_context_t *context,
+                                 parse_visit_t *visit,
+                                 n00bb_lower_context_t *lower,
+                                 n00bb_tu_state_t *tu,
+                                 ir_func_t *producer)
+{
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    ir_instr_t *cached = ir_lower_emit_instruction(context,
+        IR_OP_PHASE_RESULT, span);
+    char result_name[64];
+    snprintf(result_name, sizeof(result_name), "__n00bb_litmod_result_%llu",
+             (unsigned long long)context->next_value_id++);
+    parse_token_info_t *token = parse_tree_find_first_terminal(visit->node);
+    core_buffer_t identifier = {0};
+    core_string_t package = n00bb_package_id(lower->unit);
+    core_buffer_printf(&identifier, "%.*s:%.*s:litmod:%llu",
+        (int)package.u8_bytes, package.data,
+        (int)lower->unit->module.identifier.u8_bytes,
+        lower->unit->module.identifier.data,
+        (unsigned long long)(token ? token->start_byte : 0));
+    bool bound = cached && identifier.data
+        && ir_instr_set_dest(cached, result_name,
+                              core_tree_node_value(visit->node).type)
+        && ir_instr_set_phase_result(lower->ir_context, cached,
+                                     identifier.data)
+        && ir_lower_set_node_value(context, visit->node, cached->dest);
+    if (bound)
+        core_list_push(tu->link_analysis->phase_results,
+            ((n00bb_phase_result_binding_t){
+                .identifier = ir_instr_phase_result(cached),
+                .producer = producer,
+                .consumer = context->function,
+                .instruction = cached,
+            }));
+    core_buffer_release(&identifier);
+    return bound;
+}
+
+static bool
 n00bb_lower_static_litmod(ir_lower_context_t *context,
                           parse_visit_t *visit, bool entering, void *opaque)
 {
@@ -13227,6 +13267,13 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
         snprintf(name, sizeof(name), "__n00bb_litmod_%llu",
             (unsigned long long)(token ? token->start_byte : 0));
         ir_module_t *module = tu->comptime_ir_module;
+        ir_func_t *existing = module ? ir_func_find(module, name) : nullptr;
+        if (existing) {
+            if (!ir_lower_prune_node(context, visit->node)) return false;
+            return ir_machine_of(module, result_type).class == IR_CLASS_VOID
+                || n00bb_bind_static_literal_result(context, visit, lower,
+                                                     tu, existing);
+        }
         th_type *signature = th_func_with_error(tu->types, result_type,
             n00bb_ir_builtin_type(module, "nil"), nullptr, 0, nullptr,
             nullptr, 0);
@@ -13290,38 +13337,9 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
             }));
         return true;
     }
-    ir_instr_t *cached = ir_lower_emit_instruction(context,
-        IR_OP_PHASE_RESULT, span);
-    char result_name[64];
-    snprintf(result_name, sizeof(result_name), "__n00bb_litmod_result_%llu",
-             (unsigned long long)context->next_value_id++);
-    parse_token_info_t *token = parse_tree_find_first_terminal(visit->node);
-    core_buffer_t identifier = {0};
-    core_string_t package = n00bb_package_id(lower->unit);
-    core_buffer_printf(&identifier, "%.*s:%.*s:litmod:%llu",
-        (int)package.u8_bytes, package.data,
-        (int)lower->unit->module.identifier.u8_bytes,
-        lower->unit->module.identifier.data,
-        (unsigned long long)(token ? token->start_byte : 0));
-    bool bound = cached && identifier.data
-        && ir_instr_set_dest(cached, result_name,
-                              core_tree_node_value(visit->node).type)
-        && ir_instr_set_phase_result(lower->ir_context, cached,
-                                     identifier.data)
-        && ir_lower_set_node_value(context, visit->node, cached->dest);
-    if (bound) {
-        n00bb_link_analysis_t *analysis = tu->link_analysis;
-        core_list_push(analysis->literal_producers, frame.producer);
-        core_list_push(analysis->phase_results,
-            ((n00bb_phase_result_binding_t){
-                .identifier = ir_instr_phase_result(cached),
-                .producer = frame.producer,
-                .consumer = frame.function,
-                .instruction = cached,
-            }));
-    }
-    core_buffer_release(&identifier);
-    return bound;
+    core_list_push(tu->link_analysis->literal_producers, frame.producer);
+    return n00bb_bind_static_literal_result(context, visit, lower, tu,
+                                            frame.producer);
 }
 
 static void
@@ -47307,7 +47325,9 @@ n00bb_capture_string_payload(int fd, off_t file_size, core_buffer_t *packed)
 
 static bool
 n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
-    const n00bb_llvm_array_producer_t *producers, size_t *completed,
+    const n00bb_llvm_array_producer_t *producers,
+    const size_t *producer_bindings, size_t producer_count,
+    size_t *completed,
     uint8_t **failure_bytes, size_t *failure_length)
 {
     *completed = 0;
@@ -47316,8 +47336,9 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
     struct stat info;
     if (lseek(fd, 0, SEEK_SET) < 0 || fstat(fd, &info)
         || info.st_size < 0) return false;
-    for (size_t i = 0; i < analysis->phase_results.len; i++) {
-        n00bb_phase_result_binding_t *binding = &analysis->phase_results.data[i];
+    for (size_t i = 0; i < producer_count; i++) {
+        n00bb_phase_result_binding_t *binding =
+            &analysis->phase_results.data[producer_bindings[i]];
         uint64_t count;
         if (!n00bb_read_exact(fd, &count, sizeof(count))) return false;
         if (count == UINT64_MAX) {
@@ -47341,6 +47362,7 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
         if (producers[i].kind == N00BB_LLVM_LITERAL_EFFECT) {
             if (count) return false;
             binding->materialized_kind = N00BB_LLVM_LITERAL_EFFECT;
+            binding->owns_materialized = true;
             *completed = i + 1;
             continue;
         }
@@ -47398,6 +47420,7 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
             binding->materialized_stride = producers[i].element_stride;
             binding->materialized_inner_stride = stride;
             binding->materialized_kind = producers[i].kind;
+            binding->owns_materialized = true;
             if (reloc) {
                 uint32_t *offsets = core_alloc_array(uint32_t, fields);
                 if (!offsets) return false;
@@ -47454,6 +47477,7 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
             binding->materialized_count = count;
             binding->materialized_stride = stride;
             binding->materialized_kind = producers[i].kind;
+            binding->owns_materialized = true;
             binding->materialized_string_offsets = offsets;
             binding->materialized_string_offset_count = fields;
             *completed = i + 1;
@@ -47480,6 +47504,7 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
         binding->materialized_byte_len = length;
         binding->materialized_count = count;
         binding->materialized_kind = producers[i].kind;
+        binding->owns_materialized = true;
         binding->materialized_encoding = encoding;
         binding->materialized_stride = producers[i].element_stride;
         *completed = i + 1;
@@ -47527,10 +47552,22 @@ n00bb_execute_comptime(core_link_unit_t *link,
     size_t count = order.len;
     char **names = calloc(count, sizeof(*names));
     char **objects = calloc(count, sizeof(*objects));
-    size_t producer_count = analysis->phase_results.len;
+    size_t binding_count = analysis->phase_results.len;
+    size_t *producer_bindings = binding_count
+        ? calloc(binding_count, sizeof(*producer_bindings)) : nullptr;
+    size_t producer_count = 0;
+    for (size_t i = 0; producer_bindings && i < binding_count; i++) {
+        ir_func_t *producer = analysis->phase_results.data[i].producer;
+        bool seen = false;
+        for (size_t j = 0; j < producer_count; j++)
+            seen |= analysis->phase_results.data[
+                producer_bindings[j]].producer == producer;
+        if (!seen) producer_bindings[producer_count++] = i;
+    }
     n00bb_llvm_array_producer_t *producers = producer_count
         ? calloc(producer_count, sizeof(*producers)) : nullptr;
-    ok = names && objects && (!producer_count || producers);
+    ok = names && objects && (!binding_count || producer_bindings)
+        && (!producer_count || producers);
     size_t initializer_count = 0;
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
@@ -47544,7 +47581,8 @@ n00bb_execute_comptime(core_link_unit_t *link,
         ok = names[initializer_count++] != nullptr;
     }
     for (size_t i = 0; ok && i < producer_count; i++) {
-        n00bb_phase_result_binding_t *binding = &analysis->phase_results.data[i];
+        n00bb_phase_result_binding_t *binding =
+            &analysis->phase_results.data[producer_bindings[i]];
         ir_func_t *producer = binding->producer;
         th_type *result = producer ? th_resolve(th_func_ret(producer->type))
                                    : nullptr;
@@ -47648,9 +47686,13 @@ n00bb_execute_comptime(core_link_unit_t *link,
             core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-B0013"),
                 CORE_STRING_STATIC("native build cannot materialize a bit-packed literal result"));
-        producers[i].comptime_consumer = binding->consumer
-            && ir_func_execution_phase(binding->consumer)
-                == IR_PHASE_COMPTIME;
+        for (size_t b = 0; b < binding_count; b++)
+            if (analysis->phase_results.data[b].producer == producer
+                && analysis->phase_results.data[b].consumer
+                && ir_func_execution_phase(
+                    analysis->phase_results.data[b].consumer)
+                    == IR_PHASE_COMPTIME)
+                producers[i].comptime_consumer = true;
         core_buffer_release(&symbol);
         ok = ok && producers[i].symbol != nullptr;
     }
@@ -47748,11 +47790,40 @@ n00bb_execute_comptime(core_link_unit_t *link,
     size_t failure_length = 0;
     bool captured = comptime_ran && producer_count
         && n00bb_capture_literal_results(result_fd, analysis, producers,
-            &completed, &failure_bytes, &failure_length);
+            producer_bindings, producer_count, &completed, &failure_bytes,
+            &failure_length);
+    if (captured) {
+        for (size_t i = 0; i < binding_count; i++) {
+            n00bb_phase_result_binding_t *binding =
+                &analysis->phase_results.data[i];
+            if (binding->owns_materialized) continue;
+            for (size_t j = 0; j < producer_count; j++) {
+                n00bb_phase_result_binding_t *source =
+                    &analysis->phase_results.data[producer_bindings[j]];
+                if (source->producer != binding->producer) continue;
+                binding->materialized_bytes = source->materialized_bytes;
+                binding->materialized_byte_len =
+                    source->materialized_byte_len;
+                binding->materialized_string_offsets =
+                    source->materialized_string_offsets;
+                binding->materialized_string_offset_count =
+                    source->materialized_string_offset_count;
+                binding->materialized_count = source->materialized_count;
+                binding->materialized_stride = source->materialized_stride;
+                binding->materialized_inner_stride =
+                    source->materialized_inner_stride;
+                binding->materialized_kind = source->materialized_kind;
+                binding->materialized_encoding =
+                    source->materialized_encoding;
+                break;
+            }
+        }
+    }
     if (comptime_ran && !ok) {
         n00bb_phase_result_binding_t *binding = failure_bytes
             && completed < producer_count
-            ? &analysis->phase_results.data[completed] : nullptr;
+            ? &analysis->phase_results.data[
+                producer_bindings[completed]] : nullptr;
         core_translation_unit_t *unit = nullptr;
         if (binding && binding->consumer)
             for (size_t i = 0; i < analysis->units.len; i++) {
@@ -47800,6 +47871,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
         free((void *)producers[i].byte_mask);
     }
     free(producers);
+    free(producer_bindings);
     core_list_free(order);
     if (!ok && !core_diagnostics_failed(diagnostics))
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
@@ -48627,9 +48699,12 @@ main(int argc, char **argv)
                 .initializer_extents);
         core_list_free(link_analysis->array_bound_work);
         for (size_t i = 0; i < link_analysis->phase_results.len; i++) {
-            core_free(link_analysis->phase_results.data[i].materialized_bytes);
-            core_free(link_analysis->phase_results.data[i]
-                .materialized_string_offsets);
+            n00bb_phase_result_binding_t *binding =
+                &link_analysis->phase_results.data[i];
+            if (binding->owns_materialized) {
+                core_free(binding->materialized_bytes);
+                core_free(binding->materialized_string_offsets);
+            }
         }
         core_list_free(link_analysis->phase_results);
         core_list_free(link_analysis->global_results);

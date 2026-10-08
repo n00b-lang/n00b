@@ -80,6 +80,9 @@ fi
 "$compiler" build --output "$tmp/litmod_comptime_value" \
     "$program_dir/bitcode_litmod_comptime_value.n00b"
 "$tmp/litmod_comptime_value"
+"$compiler" build --output "$tmp/litmod_handler_dependency" \
+    "$program_dir/bitcode_litmod_handler_dependency.n00b"
+"$tmp/litmod_handler_dependency"
 if "$compiler" build --output "$tmp/litmod_comptime_fail" \
     "$program_dir/bitcode_litmod_comptime_fail.n00b" \
     >"$tmp/litmod_comptime_fail.out" 2>&1; then

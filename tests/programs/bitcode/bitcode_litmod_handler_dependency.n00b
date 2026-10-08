@@ -1,0 +1,20 @@
+declare_litmod("outer", "string", "make_outer")
+declare_litmod("inner", "string", "identity")
+
+func identity(raw: string) -> string fail: string {
+    return raw
+}
+
+func make_outer(raw: string) -> string fail: string {
+    return inner"an inner long string payload"
+}
+
+func observe(value: string) {
+    require true
+}
+
+comptime {
+    observe(outer"ignored")
+} else {
+    observe(outer"ignored")
+}
