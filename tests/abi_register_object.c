@@ -132,9 +132,12 @@ main(int argc, char **argv)
         const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot, i);
         const uint8_t *path = nullptr;
         uint64_t length = 0;
+        uint32_t found = 0;
         assert(module && n00b_abi_v1_string_bytes(snapshot,
             &module->full_path, &path, &length) == 1
-            && path && length);
+            && path && length
+            && n00b_abi_v1_find_module(snapshot, module->full_path,
+                &found) == 1 && found == i);
     }
     if (argc == 4) {
         uint32_t matches = 0;

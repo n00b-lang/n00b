@@ -96,6 +96,8 @@ struct n00b_abi_snapshot_v1 {
     uint64_t metadata_bytes;
     uint32_t *typehash_slots;
     size_t typehash_capacity;
+    uint32_t *module_name_slots;
+    size_t module_name_capacity;
     n00bb_abi_directory_entry_t tables[N00B_ABI_TABLE_SPECIALIZATION_LINK + 1];
 };
 
@@ -1438,7 +1440,25 @@ snapshot_candidate_free(n00b_abi_snapshot_v1 *candidate)
     if (candidate->typehash_slots)
         snapshot_free(candidate->typehash_slots,
             candidate->typehash_capacity * sizeof(*candidate->typehash_slots));
+    if (candidate->module_name_slots)
+        snapshot_free(candidate->module_name_slots,
+            candidate->module_name_capacity
+                * sizeof(*candidate->module_name_slots));
     snapshot_free(candidate, sizeof(*candidate));
+}
+
+static bool
+hash_cache_capacity(uint32_t count, size_t *out)
+{
+    size_t required = (size_t)count * 2;
+    size_t capacity = 1;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2) return false;
+        capacity *= 2;
+    }
+    if (capacity > SIZE_MAX / sizeof(uint32_t)) return false;
+    *out = capacity;
+    return true;
 }
 
 static bool
@@ -1448,13 +1468,8 @@ typehash_cache_build(n00b_abi_snapshot_v1 *snapshot,
     uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
     if (!count || count > INT32_MAX)
         return invalid_record(error, N00B_ABI_TABLE_TYPE, count, 0);
-    size_t required = (size_t)count * 2;
-    size_t capacity = 1;
-    while (capacity < required) {
-        if (capacity > SIZE_MAX / 2) return false;
-        capacity *= 2;
-    }
-    if (capacity > SIZE_MAX / sizeof(uint32_t)) return false;
+    size_t capacity;
+    if (!hash_cache_capacity(count, &capacity)) return false;
     uint32_t *slots = snapshot_alloc(capacity * sizeof(*slots));
     if (!slots) return false;
     snapshot->typehash_slots = slots;
@@ -1472,6 +1487,45 @@ typehash_cache_build(n00b_abi_snapshot_v1 *snapshot,
             slot = (slot + 1) & (capacity - 1);
         }
         slots[slot] = i + 1;
+    }
+    return true;
+}
+
+static bool
+module_name_cache_build(n00b_abi_snapshot_v1 *snapshot,
+                        n00b_abi_error_v1 *error)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_MODULE);
+    size_t capacity;
+    if (!hash_cache_capacity(count, &capacity)) return false;
+    uint32_t *slots = snapshot_alloc(capacity * sizeof(*slots));
+    if (!slots) return false;
+    snapshot->module_name_slots = slots;
+    snapshot->module_name_capacity = capacity;
+    for (uint32_t i = 1; i < count; i++) {
+        const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot, i);
+        const uint8_t *path;
+        uint64_t path_bytes;
+        if (!module || n00b_abi_v1_string_bytes(snapshot,
+                &module->full_path, &path, &path_bytes) != 1
+            || !path_bytes || path_bytes > SIZE_MAX)
+            return invalid_record(error, N00B_ABI_TABLE_MODULE, i, 0);
+        size_t slot = (size_t)XXH3_64bits(path, (size_t)path_bytes)
+            & (capacity - 1);
+        while (slots[slot]) {
+            const n00b_abi_module_v1 *prior = n00b_abi_v1_module(snapshot,
+                slots[slot]);
+            const uint8_t *prior_path;
+            uint64_t prior_bytes;
+            if (!prior || n00b_abi_v1_string_bytes(snapshot,
+                    &prior->full_path, &prior_path, &prior_bytes) != 1)
+                return invalid_record(error, N00B_ABI_TABLE_MODULE, i, 0);
+            if (prior_bytes == path_bytes
+                && same_bytes(prior_path, path, path_bytes))
+                return invalid_record(error, N00B_ABI_TABLE_MODULE, i, 0);
+            slot = (slot + 1) & (capacity - 1);
+        }
+        slots[slot] = i;
     }
     return true;
 }
@@ -1546,6 +1600,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     if (valid) valid = metadata_dispatch_ambiguity_valid(candidate, error);
     if (valid) valid = metadata_owned_rows_valid(candidate, error);
     if (valid) valid = typehash_cache_build(candidate, error);
+    if (valid) valid = module_name_cache_build(candidate, error);
     if (!valid) {
         snapshot_candidate_free(candidate);
         if (error && error->status == N00B_ABI_BAD_METADATA)
@@ -1725,27 +1780,32 @@ n00b_abi_v1_find_module(const n00b_abi_snapshot_v1 *snapshot,
                         n00b_abi_string_v1 full_path,
                         uint32_t *module_index)
 {
-    if (!snapshot || !module_index) return -1;
+    if (!snapshot || !module_index || !snapshot->module_name_slots
+        || !snapshot->module_name_capacity) return -1;
     const uint8_t *wanted;
     uint64_t wanted_bytes;
     if (n00b_abi_v1_string_bytes(snapshot, &full_path, &wanted,
                                   &wanted_bytes) != 1) return -1;
-    uint32_t found = 0;
-    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_MODULE);
-    for (uint32_t i = 1; i < count; i++) {
-        const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot, i);
+    size_t capacity = snapshot->module_name_capacity;
+    size_t slot = (size_t)XXH3_64bits(wanted, (size_t)wanted_bytes)
+        & (capacity - 1);
+    for (size_t probes = 0; probes < capacity; probes++) {
+        uint32_t entry = snapshot->module_name_slots[slot];
+        if (!entry) return 0;
+        const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot,
+                                                                entry);
         const uint8_t *path;
         uint64_t path_bytes;
         if (!module || n00b_abi_v1_string_bytes(snapshot,
                 &module->full_path, &path, &path_bytes) != 1) return -1;
-        if (path_bytes != wanted_bytes) continue;
-        if (!same_bytes(path, wanted, path_bytes)) continue;
-        if (found) return -1;
-        found = i;
+        if (path_bytes == wanted_bytes
+            && same_bytes(path, wanted, path_bytes)) {
+            *module_index = entry;
+            return 1;
+        }
+        slot = (slot + 1) & (capacity - 1);
     }
-    if (!found) return 0;
-    *module_index = found;
-    return 1;
+    return -1;
 }
 
 int32_t
