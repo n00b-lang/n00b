@@ -1411,6 +1411,20 @@ N00B_PATH="$interface_programs" "$compiler" compile \
 [ -s "$tmp/constraint_abi.o" ]
 "$abi_record_object_test" "$tmp/constraint_abi.o" constraint
 "$abi_link_input_test" --constraint "$tmp/constraint_abi.o"
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/import_generic_user.o" import_generic_user
+N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
+    --output "$tmp/import_generic_provider.o" where_excludes
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/import_generic_library.o" import_generic_user
+"$abi_link_input_test" --generic-import "$tmp/import_generic_user.o" \
+    "$tmp/import_generic_provider.o" "$tmp/import_generic_library.o"
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/import_generic_library_reordered.o" \
+    where_excludes import_generic_user
+"$abi_link_input_test" --generic-import "$tmp/import_generic_user.o" \
+    "$tmp/import_generic_provider.o" \
+    "$tmp/import_generic_library_reordered.o"
 "$compiler" compile --output "$tmp/trait_methods_abi.o" \
     "$program_dir/../abi/trait_methods.n00b"
 [ -s "$tmp/trait_methods_abi.o" ]

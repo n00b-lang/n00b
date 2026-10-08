@@ -376,7 +376,9 @@ typedef struct {
     uint32_t typevar_ordinal;
     uint32_t specialization_start_ix;
     uint32_t specialization_end_ix;
-    uint32_t reserved_zero;
+    /* Link-only: identifies the imported function requirement that owns this
+     * variable. Zero in a consolidated image and on locally owned types. */
+    uint32_t typevar_import_requirement_index;
 } n00b_abi_type_v1;
 
 /* Fixed-width table row; zero is the reserved row, never a parent type. */

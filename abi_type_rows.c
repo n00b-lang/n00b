@@ -271,6 +271,59 @@ n00bb_abi_type_identity_rows_build(
 }
 
 bool
+n00bb_abi_type_variables_bind_import(n00bb_abi_type_index_t *index,
+    th_ctx *types, const parse_sym_entry_t *symbol, th_type *signature,
+    uint32_t requirement_index, n00bb_abi_type_identity_rows_t *rows)
+{
+    if (!index || !types || !symbol || !signature || !requirement_index
+        || !rows || !rows->rows
+        || rows->count != n00bb_abi_type_index_count(index)) return false;
+    n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
+        N00BB_SIGNATURE_TYPEVARS_KEY);
+    if (variables && (variables->len > UINT32_MAX
+        || (variables->len && !variables->data))) return false;
+    for (size_t ordinal = 0; variables && ordinal < variables->len;
+         ordinal++) {
+        th_type *variable = variables->data[ordinal].type;
+        if (!variable) return false;
+        variable = th_resolve(variable);
+        if (th_kind_of(variable) != TH_VAR) continue;
+        uint32_t type_index = 0;
+        if (!n00bb_abi_type_index_find(index, variable, &type_index))
+            continue;
+        n00b_abi_type_v1 *row = &rows->rows[type_index];
+        if (row->kind != N00B_ABI_TYPE_VARIABLE
+            || row->typevar_owner_scope_index
+            || (row->typevar_import_requirement_index
+                && (row->typevar_import_requirement_index
+                    != requirement_index || row->typevar_ordinal != ordinal)))
+            return false;
+        row->typevar_import_requirement_index = requirement_index;
+        row->typevar_ordinal = (uint32_t)ordinal;
+    }
+    th_type **free_vars = nullptr;
+    size_t free_count = th_free_vars(types, signature, &free_vars);
+    size_t next_ordinal = variables ? variables->len : 0;
+    for (size_t i = 0; i < free_count; i++) {
+        uint32_t type_index = 0;
+        if (!n00bb_abi_type_index_find(index, free_vars[i], &type_index))
+            return false;
+        n00b_abi_type_v1 *row = &rows->rows[type_index];
+        if (row->kind != N00B_ABI_TYPE_VARIABLE
+            || row->typevar_owner_scope_index) return false;
+        if (row->typevar_import_requirement_index) {
+            if (row->typevar_import_requirement_index != requirement_index)
+                return false;
+            continue;
+        }
+        if (next_ordinal > UINT32_MAX) return false;
+        row->typevar_import_requirement_index = requirement_index;
+        row->typevar_ordinal = (uint32_t)next_ordinal++;
+    }
+    return true;
+}
+
+bool
 n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
     const n00bb_abi_decl_index_t *declarations,
     n00bb_abi_type_identity_rows_t *rows)
@@ -300,6 +353,7 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                 continue;
             n00b_abi_type_v1 *row = &rows->rows[type_index];
             if (row->kind != N00B_ABI_TYPE_VARIABLE
+                || row->typevar_import_requirement_index
                 || (row->typevar_owner_scope_index
                     && (row->typevar_owner_scope_index != scope_index
                         || row->typevar_ordinal != ordinal))) return false;
@@ -328,7 +382,8 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                 return false;
             n00b_abi_type_v1 *row = &rows->rows[type_index];
             if (row->kind != N00B_ABI_TYPE_VARIABLE) return false;
-            if (row->typevar_owner_scope_index) continue;
+            if (row->typevar_owner_scope_index
+                || row->typevar_import_requirement_index) continue;
             if (!scope_index) {
                 parse_scope_t *scope = core_tree_node_value(
                     symbol->decl_node).scope;
@@ -342,7 +397,8 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
     }
     for (size_t i = 1; i < rows->count; i++)
         if (rows->rows[i].kind == N00B_ABI_TYPE_VARIABLE
-            && !rows->rows[i].typevar_owner_scope_index) return false;
+            && !rows->rows[i].typevar_owner_scope_index
+            && !rows->rows[i].typevar_import_requirement_index) return false;
     return true;
 }
 

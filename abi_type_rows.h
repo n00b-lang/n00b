@@ -43,6 +43,11 @@ bool n00bb_abi_type_variables_bind(
     const n00bb_abi_decl_index_t *declarations,
     n00bb_abi_type_identity_rows_t *rows);
 
+bool n00bb_abi_type_variables_bind_import(
+    n00bb_abi_type_index_t *index, th_ctx *types,
+    const parse_sym_entry_t *symbol, th_type *signature,
+    uint32_t requirement_index, n00bb_abi_type_identity_rows_t *rows);
+
 /* Adds TYPE component ranges to the shared U32 stream at stream_base. */
 bool n00bb_abi_type_components_build(
     n00bb_abi_type_index_t *index, ir_module_t *module,

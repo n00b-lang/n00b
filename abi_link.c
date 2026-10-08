@@ -370,6 +370,7 @@ struct n00bb_abi_index_plan_t {
 };
 
 typedef struct {
+    const n00bb_abi_selected_objects_t *selected;
     const n00bb_abi_object_view_t *view;
     const void *row;
     const uint8_t *bytes;
@@ -516,10 +517,88 @@ key_append_string(const n00bb_abi_object_view_t *view,
 }
 
 static bool
-key_append_variable(const n00bb_abi_object_view_t *view,
+find_imported_variable(const n00bb_abi_selected_objects_t *selected,
+                       const n00bb_abi_object_view_t *requester,
+                       const n00b_abi_type_v1 *foreign,
+                       const n00bb_abi_object_view_t **owner_view,
+                       size_t *owner_input,
+                       const n00b_abi_type_v1 **owner_type)
+{
+    const n00b_abi_requirement_v1 *requirement = n00bb_abi_object_row(
+        requester, N00B_ABI_TABLE_REQUIREMENT,
+        foreign->typevar_import_requirement_index);
+    n00bb_abi_string_view_t path;
+    if (!selected || !requirement
+        || requirement->symbol_kind != N00B_ABI_SYMBOL_FUNCTION
+        || !n00bb_abi_object_string(requester, &requirement->full_path,
+                                    &path)) return false;
+    size_t matches = 0;
+    for (size_t input = 0; input < selected->count; input++) {
+        const n00bb_abi_object_view_t *provider = &selected->views[input];
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(provider,
+            N00B_ABI_TABLE_MODULE, 1);
+        n00bb_abi_string_view_t module_name;
+        if (!module || !n00bb_abi_object_string(provider,
+                &module->full_path, &module_name)) return false;
+        if (path.length <= module_name.length + 1
+            || memcmp(path.bytes, module_name.bytes, module_name.length)
+            || path.bytes[module_name.length] != '.') continue;
+        const n00bb_abi_directory_entry_t *symbols = n00bb_abi_object_table(
+            provider, N00B_ABI_TABLE_SYMBOL);
+        const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
+            provider, N00B_ABI_TABLE_TYPE);
+        if (!symbols || !types) return false;
+        for (uint32_t i = 1; i < symbols->record_count; i++) {
+            const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(provider,
+                N00B_ABI_TABLE_SYMBOL, i);
+            if (!symbol || symbol->kind != N00B_ABI_SYMBOL_FUNCTION
+                || symbol->module_index != 1
+                || !symbol->declaration_location_index) continue;
+            n00bb_abi_string_view_t name;
+            if (!n00bb_abi_object_string(provider, &symbol->name, &name))
+                return false;
+            size_t suffix = module_name.length + 1;
+            if (name.length != path.length - suffix
+                || memcmp(name.bytes, path.bytes + suffix, name.length))
+                continue;
+            for (uint32_t j = 1; j < types->record_count; j++) {
+                const n00b_abi_type_v1 *candidate = n00bb_abi_object_row(
+                    provider, N00B_ABI_TABLE_TYPE, j);
+                if (!candidate || candidate->kind != N00B_ABI_TYPE_VARIABLE
+                    || candidate->typevar_import_requirement_index
+                    || candidate->typevar_ordinal != foreign->typevar_ordinal)
+                    continue;
+                const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(
+                    provider, N00B_ABI_TABLE_SCOPE,
+                    candidate->typevar_owner_scope_index);
+                if (!scope || scope->module_index != 1
+                    || scope->source_location_index
+                        != symbol->declaration_location_index) continue;
+                *owner_view = provider;
+                *owner_input = input;
+                *owner_type = candidate;
+                matches++;
+            }
+        }
+    }
+    return matches == 1;
+}
+
+static bool
+key_append_variable(const n00bb_abi_selected_objects_t *selected,
+                    const n00bb_abi_object_view_t *view,
                     size_t input_index, const n00b_abi_type_v1 *type,
                     core_buffer_t *out)
 {
+    if (type->typevar_import_requirement_index) {
+        const n00bb_abi_object_view_t *provider = nullptr;
+        const n00b_abi_type_v1 *owned = nullptr;
+        size_t provider_input = 0;
+        return find_imported_variable(selected, view, type, &provider,
+            &provider_input, &owned)
+            && key_append_variable(selected, provider, provider_input,
+                owned, out);
+    }
     const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(view,
         N00B_ABI_TABLE_SCOPE, type->typevar_owner_scope_index);
     if (!scope || !type->typevar_owner_scope_index) return false;
@@ -552,12 +631,14 @@ key_append_variable(const n00bb_abi_object_view_t *view,
 }
 
 static bool
-key_append_type_variables(const n00bb_abi_object_view_t *view,
+key_append_type_variables(const n00bb_abi_selected_objects_t *selected,
+                          const n00bb_abi_object_view_t *view,
                           size_t input_index, uint32_t type_index,
                           uint8_t *active, core_buffer_t *out);
 
 static bool
-key_append_parameters(const n00bb_abi_object_view_t *view,
+key_append_parameters(const n00bb_abi_selected_objects_t *selected,
+                      const n00bb_abi_object_view_t *view,
                       size_t input_index, n00b_abi_range_v1 range,
                       uint8_t *active, core_buffer_t *out)
 {
@@ -565,14 +646,15 @@ key_append_parameters(const n00bb_abi_object_view_t *view,
     for (uint32_t i = 0; i < range.count; i++) {
         const n00b_abi_parameter_v1 *parameter = indexed_range_row(view,
             range, i, N00B_ABI_TABLE_PARAMETER);
-        if (!parameter || !key_append_type_variables(view, input_index,
+        if (!parameter || !key_append_type_variables(selected, view, input_index,
                 parameter->type_index, active, out)) return false;
     }
     return true;
 }
 
 static bool
-key_append_type_variables(const n00bb_abi_object_view_t *view,
+key_append_type_variables(const n00bb_abi_selected_objects_t *selected,
+                          const n00bb_abi_object_view_t *view,
                           size_t input_index, uint32_t type_index,
                           uint8_t *active, core_buffer_t *out)
 {
@@ -580,7 +662,7 @@ key_append_type_variables(const n00bb_abi_object_view_t *view,
         N00B_ABI_TABLE_TYPE, type_index);
     if (!type) return false;
     if (type->kind == N00B_ABI_TYPE_VARIABLE)
-        return key_append_variable(view, input_index, type, out);
+        return key_append_variable(selected, view, input_index, type, out);
     if (!(type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)) return true;
     if (active[type_index]) return true;
     active[type_index] = 1;
@@ -589,25 +671,25 @@ key_append_type_variables(const n00bb_abi_object_view_t *view,
     for (uint32_t i = 0; valid && i < type->components.count; i++) {
         const uint8_t *slot = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_U32_STREAM, type->components.first + i);
-        valid = slot && key_append_type_variables(view, input_index,
+        valid = slot && key_append_type_variables(selected, view, input_index,
             core_le_load_u32(slot), active, out);
     }
     if (valid && type->call_signature_index) {
         const n00b_abi_call_signature_v1 *signature =
             n00bb_abi_object_row(view, N00B_ABI_TABLE_CALL_SIGNATURE,
                 type->call_signature_index);
-        valid = signature && key_append_type_variables(view, input_index,
+        valid = signature && key_append_type_variables(selected, view, input_index,
                 signature->success_type_index, active, out)
-            && key_append_type_variables(view, input_index,
+            && key_append_type_variables(selected, view, input_index,
                 signature->failure_type_index, active, out)
-            && key_append_parameters(view, input_index,
+            && key_append_parameters(selected, view, input_index,
                 signature->positional_parameters, active, out)
-            && key_append_parameters(view, input_index,
+            && key_append_parameters(selected, view, input_index,
                 signature->keyword_parameters, active, out);
         if (valid && signature->rest_parameter_index) {
             const n00b_abi_parameter_v1 *rest = n00bb_abi_object_row(view,
                 N00B_ABI_TABLE_PARAMETER, signature->rest_parameter_index);
-            valid = rest && key_append_type_variables(view, input_index,
+            valid = rest && key_append_type_variables(selected, view, input_index,
                 rest->type_index, active, out);
         }
     }
@@ -625,7 +707,7 @@ key_append_type_variables(const n00bb_abi_object_view_t *view,
         uint32_t child = member_kind == N00B_ABI_TABLE_TRAIT_METHOD
             ? ((const n00b_abi_trait_method_v1 *)member)->signature_type_index
             : ((const n00b_abi_field_v1 *)member)->child_type_index;
-        valid = key_append_type_variables(view, input_index, child,
+        valid = key_append_type_variables(selected, view, input_index, child,
             active, out);
     }
     active[type_index] = 0;
@@ -640,7 +722,7 @@ nonconcrete_key_init(abi_link_key_t *key)
     core_buffer_putc(key->owned_bytes,
         type->kind == N00B_ABI_TYPE_VARIABLE ? 'V' : 'N');
     if (type->kind == N00B_ABI_TYPE_VARIABLE) {
-        if (!key_append_variable(key->view, key->input_index, type,
+        if (!key_append_variable(key->selected, key->view, key->input_index, type,
                 key->owned_bytes)) return false;
     }
     else {
@@ -649,7 +731,8 @@ nonconcrete_key_init(abi_link_key_t *key)
         if (!types) return false;
         key_append_u64(key->owned_bytes, type->typehash);
         uint8_t *active = core_alloc_array(uint8_t, types->record_count);
-        bool valid = key_append_type_variables(key->view, key->input_index,
+        bool valid = key_append_type_variables(key->selected, key->view,
+            key->input_index,
             key->local_index, active, key->owned_bytes);
         core_free(active);
         if (!valid) return false;
@@ -1187,7 +1270,8 @@ n00bb_abi_index_plan_build(const n00bb_abi_selected_objects_t *selected)
                 valid = core_index_remap_set(remap, 0, 0);
                 if (kind == N00B_ABI_TABLE_TYPE) {
                     abi_link_key_t *nil = &keys[next_key++];
-                    *nil = (abi_link_key_t){.view = view, .row = row};
+                    *nil = (abi_link_key_t){
+                        .selected = selected, .view = view, .row = row};
                     const n00b_abi_type_v1 *type = row;
                     valid = valid && type->kind == N00B_ABI_TYPE_NIL
                         && type->typehash && (!first_nil
@@ -1208,7 +1292,7 @@ n00bb_abi_index_plan_build(const n00bb_abi_selected_objects_t *selected)
                     + (size_t)local * directory->record_bytes;
                 abi_link_key_t *key = &keys[next_key++];
                 *key = (abi_link_key_t){
-                    .view = view, .row = row,
+                    .selected = selected, .view = view, .row = row,
                     .input_index = input, .local_index = local,
                 };
                 bool inserted = false;
@@ -1413,7 +1497,8 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
     if (kind == N00B_ABI_TABLE_TYPE) {
         n00b_abi_type_v1 *type = out;
         if (type->kind == N00B_ABI_TYPE_VARIABLE
-            && !type->typevar_owner_scope_index) return false;
+            && !type->typevar_owner_scope_index
+            && !type->typevar_import_requirement_index) return false;
         uint32_t start = type->specialization_start_ix;
         uint32_t end = type->specialization_end_ix;
         if (start || end) {
@@ -2559,8 +2644,11 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                             valid = false;
                             break;
                         }
-                        replace = !old->owner_module_index
-                            && next->owner_module_index;
+                        replace = (!old->owner_module_index
+                            && next->owner_module_index)
+                            || (old->kind == N00B_ABI_TYPE_VARIABLE
+                                && old->typevar_import_requirement_index
+                                && next->typevar_owner_scope_index);
                     }
                     if (replace) memcpy(destination, scratch,
                                         table->record_bytes);
@@ -2607,6 +2695,15 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                       (size_t)manifests.u32_count * sizeof(uint32_t));
     if (valid) valid = resolve_module_imports(selected, plan, &built,
                                                manifests.u32_count);
+
+    const n00bb_abi_merged_table_t *final_types = n00bb_abi_merged_table(
+        &built, N00B_ABI_TABLE_TYPE);
+    for (uint32_t i = 0; valid && final_types
+         && i < final_types->record_count; i++) {
+        const n00b_abi_type_v1 *type = (const void *)(final_types->records
+            + (size_t)i * final_types->record_bytes);
+        valid = n00bb_abi_type_variable_final_valid(type);
+    }
 
     for (size_t ti = 0; valid && ti < schema_count; ti++) {
         n00bb_abi_merged_table_t *table = &built.tables[ti];

@@ -2206,6 +2206,111 @@ test_generic_type_identity(const char *path)
 }
 
 static void
+test_imported_generic_owner(const char *consumer_path,
+                            const char *provider_path,
+                            const char *linked_path)
+{
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    const char *paths[] = {consumer_path, provider_path, linked_path};
+    for (size_t file = 0; file < 3; file++) {
+        size_t bytes = 0;
+        uint8_t *object = read_object(paths[file], &bytes);
+        n00bb_abi_object_view_t view = {0};
+        assert(n00bb_abi_object_open(&target, object, bytes, &view));
+        const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
+            &view, N00B_ABI_TABLE_TYPE);
+        assert(types);
+        uint32_t requirement_index = 0;
+        if (!file) {
+            const n00bb_abi_directory_entry_t *requirements =
+                n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT);
+            assert(requirements);
+            for (uint32_t i = 1; i < requirements->record_count; i++) {
+                const n00b_abi_requirement_v1 *requirement =
+                    n00bb_abi_object_row(&view,
+                        N00B_ABI_TABLE_REQUIREMENT, i);
+                if (requirement->symbol_kind != N00B_ABI_SYMBOL_FUNCTION)
+                    continue;
+                n00bb_abi_string_view_t path;
+                assert(n00bb_abi_object_string(&view,
+                    &requirement->full_path, &path));
+                if (path.length == strlen("where_excludes.keep")
+                    && !memcmp(path.bytes, "where_excludes.keep",
+                        path.length)) requirement_index = i;
+            }
+            assert(requirement_index);
+        }
+        uint32_t variables = 0;
+        for (uint32_t i = 1; i < types->record_count; i++) {
+            const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
+                N00B_ABI_TABLE_TYPE, i);
+            if (type->kind != N00B_ABI_TYPE_VARIABLE) continue;
+            variables++;
+            assert(type->typevar_ordinal == 0 && type->constraints.count == 1);
+            if (!file) {
+                assert(!type->typevar_owner_scope_index
+                    && type->typevar_import_requirement_index
+                        == requirement_index);
+            }
+            else {
+                assert(type->typevar_owner_scope_index
+                    && !type->typevar_import_requirement_index);
+                const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(
+                    &view, N00B_ABI_TABLE_SCOPE,
+                    type->typevar_owner_scope_index);
+                assert(scope);
+                if (file == 2) {
+                    const n00b_abi_module_v1 *module = n00bb_abi_object_row(
+                        &view, N00B_ABI_TABLE_MODULE,
+                        scope->module_index);
+                    n00bb_abi_string_view_t name;
+                    assert(module && n00bb_abi_object_string(&view,
+                        &module->full_path, &name)
+                        && name.length == strlen("where_excludes")
+                        && !memcmp(name.bytes, "where_excludes",
+                            name.length));
+                }
+            }
+        }
+        assert(variables == 1);
+        n00bb_abi_object_close(&view);
+        free(object);
+    }
+    uint8_t *objects[2];
+    n00bb_abi_object_view_t views[2] = {0};
+    for (size_t i = 0; i < 2; i++) {
+        size_t bytes = 0;
+        objects[i] = read_object(paths[i], &bytes);
+        assert(n00bb_abi_object_open(&target, objects[i], bytes, &views[i]));
+    }
+    n00bb_abi_selected_objects_t selected = {.views = views, .count = 2};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    n00bb_abi_index_plan_free(plan);
+    selected.count = 1;
+    assert(!n00bb_abi_index_plan_build(&selected));
+    selected.count = 2;
+    const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
+        &views[0], N00B_ABI_TABLE_TYPE);
+    n00b_abi_type_v1 *foreign = nullptr;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        n00b_abi_type_v1 *type = (void *)n00bb_abi_object_row(&views[0],
+            N00B_ABI_TABLE_TYPE, i);
+        if (type->typevar_import_requirement_index) foreign = type;
+    }
+    assert(foreign && foreign->typevar_import_requirement_index != 1);
+    uint32_t saved = foreign->typevar_import_requirement_index;
+    foreign->typevar_import_requirement_index = 1;
+    assert(!n00bb_abi_index_plan_build(&selected));
+    foreign->typevar_import_requirement_index = saved;
+    for (size_t i = 0; i < 2; i++) {
+        n00bb_abi_object_close(&views[i]);
+        free(objects[i]);
+    }
+}
+
+static void
 test_type_variable_shape(void)
 {
     typedef struct {
@@ -2274,6 +2379,10 @@ main(int argc, char **argv)
     if (argc == 2 && !strcmp(argv[1], "--strings")) return 0;
     if (argc == 5 && !strcmp(argv[1], "--function-import")) {
         test_imported_function_requirement(argv[2], argv[3], argv[4]);
+        return 0;
+    }
+    if (argc == 5 && !strcmp(argv[1], "--generic-import")) {
+        test_imported_generic_owner(argv[2], argv[3], argv[4]);
         return 0;
     }
     if (argc == 4) {

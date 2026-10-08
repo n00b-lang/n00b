@@ -703,9 +703,9 @@ collect_imported_symbol_types(core_link_unit_t *link,
 static bool
 append_imported_symbol_requirements(core_link_unit_t *link,
     const core_translation_unit_t *unit, n00bb_abi_type_index_t *index,
-    const n00bb_abi_type_identity_rows_t *types,
+    th_ctx *type_context, n00bb_abi_type_identity_rows_t *types,
     n00bb_abi_name_pool_t *pool, n00b_abi_requirement_v1 *requirements,
-    size_t *count)
+    size_t *count, uint32_t selected_kind)
 {
     if (!link) return true;
     core_indexed_table_t *seen = core_indexed_table_new(0, UINT32_MAX,
@@ -722,7 +722,7 @@ append_imported_symbol_requirements(core_link_unit_t *link,
             valid = false;
             break;
         }
-        if (!symbol || kind == N00B_ABI_SYMBOL_TYPE) continue;
+        if (!symbol || kind != selected_kind) continue;
         core_link_declaration_t *target = core_link_reference_target(reference);
         bool inserted = false;
         if (!core_indexed_table_intern(seen, target, target, &inserted)) {
@@ -763,6 +763,9 @@ append_imported_symbol_requirements(core_link_unit_t *link,
             offsetof(n00b_abi_requirement_v1, full_path),
             &requirements[next].full_path);
         core_buffer_release(&path);
+        if (valid && kind == N00B_ABI_SYMBOL_FUNCTION)
+            valid = n00bb_abi_type_variables_bind_import(index,
+                type_context, symbol, type, (uint32_t)next, types);
     }
     core_indexed_table_free(seen);
     return valid;
@@ -1086,7 +1089,15 @@ n00bb_abi_emit_unit(
     n00bb_abi_storage_rows_t storage_rows = {0};
     abi_tls_metadata_t tls_metadata = {0};
     abi_native_bindings_t native_bindings = {0};
-    bool valid = pool && type_index
+    size_t reference_count = link ? core_link_unit_reference_count(link) : 0;
+    bool requirement_capacity_valid = requirements
+        && reference_count <= UINT32_MAX - import_count - 1
+        && reference_count <= (SIZE_MAX / sizeof(*requirements))
+            - import_count - 1;
+    if (requirement_capacity_valid)
+        requirements = core_realloc(requirements,
+            (import_count + reference_count + 1) * sizeof(*requirements));
+    bool valid = pool && type_index && requirement_capacity_valid
         && n00bb_abi_type_index_collect_module_types(type_index,
             (ir_module_t *)comptime_ir)
         && n00bb_abi_type_index_collect_module_types(type_index,
@@ -1098,6 +1109,9 @@ n00bb_abi_emit_unit(
         && n00bb_abi_type_identity_rows_build(type_index,
             (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
             symbols, type_owner, type_owner_context, pool, &type_rows)
+        && append_imported_symbol_requirements(link, unit, type_index,
+            ir_module_types((ir_module_t *)runtime_ir), &type_rows, pool,
+            requirements, &requirement_count, N00B_ABI_SYMBOL_FUNCTION)
         && n00bb_abi_type_variables_bind(type_index,
             ir_module_types((ir_module_t *)runtime_ir), declarations,
             &type_rows)
@@ -1171,24 +1185,24 @@ n00bb_abi_emit_unit(
                 &trait_method_rows, (uint32_t)method_stream_base);
     }
     if (valid) {
-        size_t references = link ? core_link_unit_reference_count(link) : 0;
         valid = type_rows.count <= UINT32_MAX - import_count - 1
-            && references <= UINT32_MAX - import_count - type_rows.count - 1
+            && reference_count <= UINT32_MAX - import_count - type_rows.count - 1
             && type_rows.count <= (SIZE_MAX / sizeof(*requirements))
                 - import_count - 1
-            && references <= (SIZE_MAX / sizeof(*requirements))
+            && reference_count <= (SIZE_MAX / sizeof(*requirements))
                 - import_count - type_rows.count - 1;
         if (valid) {
             requirements = core_realloc(requirements,
-                (import_count + type_rows.count + references + 1)
+                (import_count + type_rows.count + reference_count + 1)
                     * sizeof(*requirements));
             valid = append_imported_type_requirements(type_index,
                 &type_rows, unit, node_source, source_context,
                 type_owner, type_owner_context, pool, requirements,
                 &requirement_count)
                 && append_imported_symbol_requirements(link, unit,
-                    type_index, &type_rows, pool, requirements,
-                    &requirement_count);
+                    type_index, ir_module_types((ir_module_t *)runtime_ir),
+                    &type_rows, pool, requirements, &requirement_count,
+                    N00B_ABI_SYMBOL_VARIABLE);
         }
     }
     n00bb_abi_type_index_free(type_index);
