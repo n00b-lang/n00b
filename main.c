@@ -46208,6 +46208,141 @@ n00bb_write_temporary_object(const void *bytes, size_t length)
 }
 
 static bool
+n00bb_execute_comptime(core_link_unit_t *link,
+                        n00bb_link_analysis_t *analysis, bool debug_enabled,
+                        core_diagnostics_t *diagnostics)
+{
+    if (analysis->phase_results.len || analysis->global_results.len
+        || analysis->array_bound_work.len) {
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0013"),
+            CORE_STRING_STATIC("native build cannot materialize compile-time results yet"));
+        return false;
+    }
+    core_list_t(core_translation_unit_ptr_t) order =
+        core_list_new(core_translation_unit_ptr_t);
+    bool ok = collect_link_unit_initializer_order(link,
+        "n00bb.comptime-module-initializer-order", &order);
+    if (!ok) {
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0010"),
+            CORE_STRING_STATIC("compile-time initializer order is unavailable"));
+        core_list_free(order);
+        return false;
+    }
+    bool has_work = false;
+    for (size_t i = 0; i < order.len; i++) {
+        n00bb_tu_state_t *state = tu_state(order.data[i]);
+        if (!state || !state->comptime_ir_module || !state->ir_module) {
+            ok = false;
+            break;
+        }
+        if (!n00bb_comptime_is_empty(state->comptime_ir_module))
+            has_work = true;
+    }
+    if (!ok || !has_work) {
+        core_list_free(order);
+        return ok;
+    }
+    size_t count = order.len;
+    char **names = calloc(count, sizeof(*names));
+    char **objects = calloc(count, sizeof(*objects));
+    ok = names && objects;
+    for (size_t i = 0; ok && i < count; i++) {
+        n00bb_tu_state_t *state = tu_state(order.data[i]);
+        core_buffer_t name = {0};
+        core_buffer_printf(&name, "%s.__n00bb_comptime_init",
+            ir_module_name(state->comptime_ir_module));
+        names[i] = core_strndup(name.data, name.byte_len);
+        core_buffer_release(&name);
+        ok = names[i] != nullptr;
+    }
+    for (size_t i = 0; ok && i < count; i++) {
+        n00bb_tu_state_t *state = tu_state(order.data[i]);
+        n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
+            state->comptime_ir_module, state->ir_module,
+            debug_enabled, diagnostics);
+        if (!backend) {
+            ok = false;
+            break;
+        }
+        core_buffer_t object = {0};
+        bool is_root = order.data[i] == core_link_unit_root(link, 0);
+        ok = n00bb_llvm_backend_emit_object(backend, true,
+            is_root ? (const char *const *)names : nullptr,
+            is_root ? count : 0, 0, &object, diagnostics);
+        n00bb_llvm_backend_free(backend);
+        if (ok) objects[i] = n00bb_write_temporary_object(
+            object.data, object.byte_len);
+        core_buffer_release(&object);
+        ok = ok && objects[i];
+    }
+    char executable_path[] = "/tmp/n00bb-comptime-XXXXXX";
+    bool path_created = false;
+    if (ok) {
+        int fd = mkstemp(executable_path);
+        path_created = fd >= 0;
+        if (path_created) {
+            close(fd);
+            unlink(executable_path);
+        }
+        ok = path_created;
+    }
+    if (ok) {
+#ifdef __APPLE__
+        const char *linker = "/usr/bin/clang";
+#else
+        const char *linker = "clang";
+#endif
+        char **arguments = calloc(count + 4, sizeof(*arguments));
+        ok = arguments != nullptr;
+        if (ok) {
+            arguments[0] = (char *)linker;
+            for (size_t i = 0; i < count; i++)
+                arguments[i + 1] = objects[i];
+            arguments[count + 1] = "-o";
+            arguments[count + 2] = executable_path;
+            pid_t child = 0;
+            int launched = posix_spawnp(&child, linker, nullptr, nullptr,
+                                        arguments, environ);
+            int status = 0;
+            ok = !launched && waitpid(child, &status, 0) == child
+                && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        }
+        free(arguments);
+    }
+    if (ok) {
+        char *arguments[] = {executable_path, nullptr};
+        pid_t child = 0;
+        int launched = posix_spawn(&child, executable_path, nullptr, nullptr,
+                                   arguments, environ);
+        int status = 0;
+        ok = !launched && waitpid(child, &status, 0) == child
+            && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        if (!ok)
+            core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+                CORE_STRING_STATIC("N00BB-B0014"),
+                CORE_STRING_STATIC("compile-time execution failed"));
+    }
+    if (path_created) unlink(executable_path);
+    for (size_t i = 0; i < count; i++) {
+        if (objects && objects[i]) {
+            unlink(objects[i]);
+            core_free(objects[i]);
+        }
+        if (names && names[i]) core_free(names[i]);
+    }
+    free(objects);
+    free(names);
+    core_list_free(order);
+    if (!ok && !core_diagnostics_failed(diagnostics))
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0015"),
+            CORE_STRING_STATIC("could not build compile-time executable"));
+    return ok;
+}
+
+static bool
 n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                        parse_cmdr_result_t *args, bool debug_enabled,
                        const char *compiler_path,
@@ -46250,11 +46385,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     core_free(linked_abi);
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
-        if (!state || !state->comptime_ir_module || !state->ir_module
-            || !n00bb_comptime_is_empty(state->comptime_ir_module)) {
+        if (!state || !state->comptime_ir_module || !state->ir_module) {
             core_diagnostics_report(diagnostics, order.data[i],
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0012"),
-                CORE_STRING_STATIC("native build cannot execute comptime statements yet"));
+                CORE_STRING_STATIC("native build is missing a phase module"));
             ok = false;
             break;
         }
@@ -46276,7 +46410,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         }
         core_buffer_t object = {0};
         bool is_root = order.data[i] == core_link_unit_root(link, 0);
-        ok = n00bb_llvm_backend_emit_object(backend,
+        ok = n00bb_llvm_backend_emit_object(backend, false,
             is_root ? (const char *const *)names : nullptr,
             is_root ? count : 0, is_root ? metadata.size : 0,
             &object, diagnostics);
@@ -46446,7 +46580,7 @@ free_abi_artifact(void *payload)
 static bool
 n00bb_emit_abi_artifacts(core_link_unit_t *link,
                          n00bb_link_analysis_t *analysis,
-                         bool debug_enabled, bool runtime_code_present)
+                         bool debug_enabled, bool phase_code_present)
 {
     if (!link || !analysis || !core_link_unit_graph_is_finalized(link)
         || core_link_unit_stage_state(link,
@@ -46512,7 +46646,7 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             n00bb_package_id(unit),
             state->annotations->symtab, state->lex->tokens,
             state->comptime_ir_module, state->ir_module,
-            runtime_code_present, &analysis->target,
+            phase_code_present, &analysis->target,
             debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
             abi_declaration_for_symbol, analysis,
             abi_source_of_node, &sources, abi_type_owner, &sources,
@@ -46896,6 +47030,10 @@ main(int argc, char **argv)
         core_free(path);
     }
     bool abi_emitted = false;
+    if (located && build_command) {
+        located = n00bb_execute_comptime(link, link_analysis,
+            !preprocessor_options.release_mode, cli_diagnostics);
+    }
     if (located && build_command) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,
             !preprocessor_options.release_mode, true);

@@ -15,10 +15,10 @@ void n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend);
 
 /* Produces verified LLVM bitcode for a phase module. */
 bool n00bb_llvm_backend_write_bitcode(
-    const n00bb_llvm_backend_t *backend, bool comptime,
+    n00bb_llvm_backend_t *backend, bool comptime,
     core_buffer_t *out, core_diagnostics_t *diagnostics);
 bool n00bb_llvm_backend_emit_object(
-    n00bb_llvm_backend_t *backend,
+    n00bb_llvm_backend_t *backend, bool comptime,
     const char *const *entry_initializers, size_t initializer_count,
     size_t metadata_bytes,
     core_buffer_t *out, core_diagnostics_t *diagnostics);

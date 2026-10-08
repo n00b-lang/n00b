@@ -46,15 +46,14 @@ bool n00bb_abi_write_object(
     const core_object_emit_absolute64_t *relocations,
     size_t relocation_count, uint8_t **out_image, size_t *out_size);
 
-/* Emits one finalized TU. Runtime initializer bodies require a separately
- * emitted native code object; comptime initializer bodies remain unsupported.
- * The caller owns outputs. */
+/* Emits one finalized TU. Nontrivial initializer bodies require phase code;
+ * the comptime phase must have completed before emission. The caller owns outputs. */
 bool n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
     core_string_t package_id,
     const parse_symtab_t *symbols, parse_token_stream_t *tokens,
     const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
-    bool runtime_code_present,
+    bool phase_code_present,
     const core_target_desc_t *target, uint64_t artifact_capabilities,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_node_source_fn node_source, void *source_context,

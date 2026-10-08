@@ -1,0 +1,4 @@
+var static_value: int = 0
+comptime {
+    static_value = 9
+}

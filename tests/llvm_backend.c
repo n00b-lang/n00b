@@ -94,6 +94,20 @@ main(void)
 
     assert(core_diagnostics_count(diagnostics) == 0);
     n00bb_llvm_backend_free(backend);
+
+    assert(ir_global_add(runtime, "unsupported.runtime.global",
+        unsigned_type));
+    backend = n00bb_llvm_backend_prepare(comptime, runtime, true,
+        diagnostics);
+    assert(backend);
+    core_buffer_t comptime_bytes = {0};
+    assert(n00bb_llvm_backend_write_bitcode(backend, true,
+        &comptime_bytes, diagnostics));
+    assert(comptime_bytes.byte_len > 0);
+    assert(core_diagnostics_count(diagnostics) == 0);
+    core_buffer_release(&comptime_bytes);
+    n00bb_llvm_backend_free(backend);
+
     core_diagnostics_free(diagnostics);
     ir_ctx_free(context);
     return 0;

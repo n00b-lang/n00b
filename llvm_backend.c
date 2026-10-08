@@ -15,6 +15,10 @@ struct n00bb_llvm_backend_t {
     LLVMContextRef context;
     LLVMModuleRef comptime;
     LLVMModuleRef runtime;
+    const ir_module_t *comptime_source;
+    const ir_module_t *runtime_source;
+    bool comptime_lowered;
+    bool runtime_lowered;
     bool debug_enabled;
 };
 
@@ -371,6 +375,8 @@ n00bb_llvm_backend_prepare(const ir_module_t *comptime_ir,
         return nullptr;
     }
     backend->debug_enabled = debug_enabled;
+    backend->comptime_source = comptime_ir;
+    backend->runtime_source = runtime_ir;
     backend->context = LLVMContextCreate();
     if (!backend->context) goto fail;
     backend->comptime = LLVMModuleCreateWithNameInContext(
@@ -380,8 +386,6 @@ n00bb_llvm_backend_prepare(const ir_module_t *comptime_ir,
     if (!backend->comptime || !backend->runtime) goto fail;
     LLVMSetTarget(backend->comptime, ir_module_target(comptime_ir));
     LLVMSetTarget(backend->runtime, ir_module_target(runtime_ir));
-    if (!lower_module(backend->comptime, comptime_ir, diagnostics)
-        || !lower_module(backend->runtime, runtime_ir, diagnostics)) goto fail;
     return backend;
 
 fail:
@@ -401,13 +405,29 @@ n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend)
     core_free(backend);
 }
 
+static bool
+lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
+            core_diagnostics_t *diagnostics)
+{
+    bool *lowered = comptime ? &backend->comptime_lowered
+                             : &backend->runtime_lowered;
+    if (*lowered) return true;
+    if (!lower_module(comptime ? backend->comptime : backend->runtime,
+                      comptime ? backend->comptime_source
+                               : backend->runtime_source, diagnostics))
+        return false;
+    *lowered = true;
+    return true;
+}
+
 bool
-n00bb_llvm_backend_write_bitcode(const n00bb_llvm_backend_t *backend,
+n00bb_llvm_backend_write_bitcode(n00bb_llvm_backend_t *backend,
                                   bool comptime, core_buffer_t *out,
                                   core_diagnostics_t *diagnostics)
 {
     if (!backend || !out)
         return backend_error(diagnostics, "invalid LLVM bitcode probe arguments");
+    if (!lower_phase(backend, comptime, diagnostics)) return false;
     LLVMModuleRef module = comptime ? backend->comptime : backend->runtime;
     char *error = nullptr;
     if (LLVMVerifyModule(module, LLVMReturnStatusAction, &error)) {
@@ -426,16 +446,18 @@ n00bb_llvm_backend_write_bitcode(const n00bb_llvm_backend_t *backend,
 
 bool
 n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
+                               bool comptime,
                                const char *const *entry_initializers,
                                size_t initializer_count,
                                size_t metadata_bytes,
                                core_buffer_t *out,
                                core_diagnostics_t *diagnostics)
 {
-    if (!backend || !out || (initializer_count
-        && (!entry_initializers || !metadata_bytes)))
+    if (!backend || !out || (initializer_count && !entry_initializers)
+        || (!comptime && initializer_count && !metadata_bytes))
         return backend_error(diagnostics, "invalid LLVM object arguments");
-    LLVMModuleRef module = backend->runtime;
+    if (!lower_phase(backend, comptime, diagnostics)) return false;
+    LLVMModuleRef module = comptime ? backend->comptime : backend->runtime;
     LLVMContextRef context = backend->context;
     if (initializer_count) {
         LLVMTypeRef result = LLVMInt32TypeInContext(context);
@@ -447,49 +469,51 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
             "entry");
         LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
         LLVMPositionBuilderAtEnd(builder, block);
-        LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
-        LLVMTypeRef fields[] = {
-            result, result, pointer, LLVMInt64TypeInContext(context)
-        };
-        LLVMTypeRef descriptor_type = LLVMStructTypeInContext(context,
-            fields, 4, false);
-        LLVMValueRef metadata = LLVMAddGlobal(module,
-            LLVMInt8TypeInContext(context), "n00b_abi_metadata");
-        LLVMValueRef descriptor = LLVMAddGlobal(module, descriptor_type,
-            "__n00bb_image_descriptor");
-        LLVMValueRef values[] = {
-            LLVMConstInt(result, 1, false), LLVMConstInt(result, 0, false),
-            LLVMConstBitCast(metadata, pointer),
-            LLVMConstInt(fields[3], metadata_bytes, false)
-        };
-        LLVMSetInitializer(descriptor,
-            LLVMConstNamedStruct(descriptor_type, values, 4));
-        LLVMSetLinkage(descriptor, LLVMInternalLinkage);
-        LLVMSetGlobalConstant(descriptor, true);
-        LLVMTypeRef register_params[] = {pointer, pointer, pointer};
-        LLVMTypeRef register_type = LLVMFunctionType(result,
-            register_params, 3, false);
-        LLVMValueRef register_image = LLVMAddFunction(module,
-            "n00b_abi_v1_register_image", register_type);
-        LLVMValueRef register_args[] = {descriptor,
-            LLVMConstPointerNull(pointer), LLVMConstPointerNull(pointer)};
-        LLVMValueRef status = LLVMBuildCall2(builder, register_type,
-            register_image, register_args, 3, "registration");
-        LLVMValueRef failed = LLVMBuildICmp(builder, LLVMIntNE, status,
-            LLVMConstInt(result, 0, false), "registration.failed");
-        LLVMBasicBlockRef rejected = LLVMAppendBasicBlockInContext(context,
-            entry, "metadata.invalid");
-        LLVMBasicBlockRef ready = LLVMAppendBasicBlockInContext(context,
-            entry, "run.initializers");
-        LLVMBuildCondBr(builder, failed, rejected, ready);
-        LLVMPositionBuilderAtEnd(builder, rejected);
-        LLVMValueRef trap = LLVMGetIntrinsicDeclaration(module,
-            LLVMLookupIntrinsicID("llvm.trap", sizeof("llvm.trap") - 1),
-            nullptr, 0);
-        LLVMBuildCall2(builder, LLVMGlobalGetValueType(trap), trap,
-            nullptr, 0, "");
-        LLVMBuildUnreachable(builder);
-        LLVMPositionBuilderAtEnd(builder, ready);
+        if (!comptime) {
+            LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+            LLVMTypeRef fields[] = {
+                result, result, pointer, LLVMInt64TypeInContext(context)
+            };
+            LLVMTypeRef descriptor_type = LLVMStructTypeInContext(context,
+                fields, 4, false);
+            LLVMValueRef metadata = LLVMAddGlobal(module,
+                LLVMInt8TypeInContext(context), "n00b_abi_metadata");
+            LLVMValueRef descriptor = LLVMAddGlobal(module, descriptor_type,
+                "__n00bb_image_descriptor");
+            LLVMValueRef values[] = {
+                LLVMConstInt(result, 1, false), LLVMConstInt(result, 0, false),
+                LLVMConstBitCast(metadata, pointer),
+                LLVMConstInt(fields[3], metadata_bytes, false)
+            };
+            LLVMSetInitializer(descriptor,
+                LLVMConstNamedStruct(descriptor_type, values, 4));
+            LLVMSetLinkage(descriptor, LLVMInternalLinkage);
+            LLVMSetGlobalConstant(descriptor, true);
+            LLVMTypeRef register_params[] = {pointer, pointer, pointer};
+            LLVMTypeRef register_type = LLVMFunctionType(result,
+                register_params, 3, false);
+            LLVMValueRef register_image = LLVMAddFunction(module,
+                "n00b_abi_v1_register_image", register_type);
+            LLVMValueRef register_args[] = {descriptor,
+                LLVMConstPointerNull(pointer), LLVMConstPointerNull(pointer)};
+            LLVMValueRef status = LLVMBuildCall2(builder, register_type,
+                register_image, register_args, 3, "registration");
+            LLVMValueRef failed = LLVMBuildICmp(builder, LLVMIntNE, status,
+                LLVMConstInt(result, 0, false), "registration.failed");
+            LLVMBasicBlockRef rejected = LLVMAppendBasicBlockInContext(context,
+                entry, "metadata.invalid");
+            LLVMBasicBlockRef ready = LLVMAppendBasicBlockInContext(context,
+                entry, "run.initializers");
+            LLVMBuildCondBr(builder, failed, rejected, ready);
+            LLVMPositionBuilderAtEnd(builder, rejected);
+            LLVMValueRef trap = LLVMGetIntrinsicDeclaration(module,
+                LLVMLookupIntrinsicID("llvm.trap", sizeof("llvm.trap") - 1),
+                nullptr, 0);
+            LLVMBuildCall2(builder, LLVMGlobalGetValueType(trap), trap,
+                nullptr, 0, "");
+            LLVMBuildUnreachable(builder);
+            LLVMPositionBuilderAtEnd(builder, ready);
+        }
         for (size_t i = 0; i < initializer_count; i++) {
             LLVMValueRef initializer = LLVMGetNamedFunction(module,
                 entry_initializers[i]);
@@ -501,7 +525,7 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                     != LLVMVoidTypeInContext(context)) {
                 LLVMDisposeBuilder(builder);
                 return backend_error(diagnostics,
-                    "runtime initializer signature is invalid");
+                    "phase initializer signature is invalid");
             }
             LLVMBuildCall2(builder, LLVMGlobalGetValueType(initializer),
                 initializer, nullptr, 0, "");
