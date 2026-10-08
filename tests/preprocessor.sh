@@ -3465,6 +3465,10 @@ grep -Fq "literal modifier 'json' requires a same-module function" \
 }
 grep -q 'call @__n00bb_comptime_parse_json' \
     "$tmp/litmod_prelude_order.out"
+grep -q 'layout variant __lantern_call_outcome_' \
+    "$tmp/litmod_prelude_order.out"
+grep -q 'variant tag @ bits 128..130' \
+    "$tmp/litmod_prelude_order.out"
 grep -q ' = phase.result ' "$tmp/litmod_prelude_order.out"
 grep -q '!ir.phase_result("default:litmod_prelude_order:litmod:' \
     "$tmp/litmod_prelude_order.out"

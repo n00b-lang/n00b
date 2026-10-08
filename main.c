@@ -959,6 +959,8 @@ static bool function_lifetime_effects_for_symbol(
     n00bb_link_analysis_t *analysis, parse_sym_entry_t *function,
     n00bb_function_lifetime_effects_t *out);
 static bool type_may_contain_reference_alias(th_type *type);
+static bool publish_interned_variant_layouts(
+    n00bb_link_analysis_t *analysis);
 
 typedef struct {
     parse_tree_t *condition;
@@ -32803,6 +32805,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         ok = unit && lower_function_body(lowerer, grammar, unit, symbol,
             true, ir_context, &units);
     }
+    if (ok) ok = publish_interned_variant_layouts(analysis);
     if (ok) ok = build_phase_reachable_functions(
         analysis, &comptime_init_order, true);
     if (ok && !interface_closure_only)
@@ -38156,6 +38159,67 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
     }
     core_list_free(records);
     return valid;
+}
+
+static bool
+publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
+{
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        ir_module_t *modules[] = {state->comptime_ir_module,
+                                  state->ir_module};
+        for (size_t m = 0; m < sizeof(modules) / sizeof(*modules); m++) {
+            ir_module_t *module = modules[m];
+            bool progress;
+            do {
+                progress = false;
+                for (size_t i = 0; i < ir_type_count(module); i++) {
+                    th_type *type = ir_type_at(module, i);
+                    bool variant = false;
+                    if (!th_named_info(type, nullptr, nullptr, &variant,
+                                       nullptr) || !variant
+                        || ir_layout_final(module, type,
+                                           analysis->target.triple)) continue;
+                    th_type *definition = ir_type_definition(module, type);
+                    if (!definition || th_kind_of(definition) != TH_RECORD)
+                        continue;
+                    size_t count = th_record_len(definition);
+                    if (!count || count >= UINT32_MAX) continue;
+                    n00bb_abi_variant_arm_t *arms = core_alloc_array(
+                        n00bb_abi_variant_arm_t, count);
+                    if (!arms) return false;
+                    bool ready = true;
+                    for (size_t j = 0; ready && j < count; j++) {
+                        const th_member *member = th_record_member(
+                            definition, j);
+                        th_type *child = member && member->type
+                            ? th_apply_subst(ir_module_types(module),
+                                             member->type) : nullptr;
+                        bool handled = false;
+                        ready = member && member->name && child
+                            && n00bb_abi_publish_direct_layout(module,
+                                child, &analysis->target, &handled)
+                            && ir_layout_final(module, child,
+                                               analysis->target.triple);
+                        if (ready) arms[j] = (n00bb_abi_variant_arm_t){
+                            .name = member->name,
+                            .type = child,
+                            .ordinal = (uint32_t)j,
+                        };
+                    }
+                    if (ready) {
+                        bool published = n00bb_abi_publish_variant_layout(
+                            module, type, &analysis->target, arms, count);
+                        core_free(arms);
+                        if (!published) return false;
+                        progress = true;
+                    }
+                    else core_free(arms);
+                }
+            } while (progress);
+        }
+    }
+    return true;
 }
 
 static bool
