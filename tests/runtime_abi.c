@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -25,7 +26,16 @@
 #if defined(__linux__) && defined(__x86_64__)
 #define HOST_TARGET N00B_ABI_TARGET_X86_64_LINUX
 #elif defined(__APPLE__) && defined(__aarch64__)
+#include <sys/sysctl.h>
 #define HOST_TARGET N00B_ABI_TARGET_ARM64_MACOS
+
+static bool host_feature(const char *name)
+{
+    int present = 0;
+    size_t bytes = sizeof(present);
+    return sysctlbyname(name, &present, &bytes, nullptr, 0) == 0
+        && bytes == sizeof(present) && present != 0;
+}
 #elif defined(_WIN32) && defined(_M_X64)
 #define HOST_TARGET N00B_ABI_TARGET_X86_64_WINDOWS
 #else
@@ -795,6 +805,11 @@ main(int argc, char **argv)
             sizeof(image.entries[0]), 3, offsetof(image_t, entries));
         image.dispatches[1].entries.count = 2;
     }
+#if defined(__APPLE__) && defined(__aarch64__)
+    if (host_feature("hw.optional.arm.FEAT_LSE2")
+        && host_feature("hw.optional.armv8_1_atomics"))
+        image.header.cpu_profile = N00B_ABI_CPU_NATIVE_ATOMIC128;
+#endif
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_OK && !error.status && generation == 1);
     const n00b_abi_snapshot_v1 *snapshot =

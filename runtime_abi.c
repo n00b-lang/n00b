@@ -83,7 +83,7 @@ static bool host_feature(const char *name)
 static bool host_native_atomic128(void)
 {
     return host_feature("hw.optional.arm.FEAT_LSE2")
-        && host_feature("hw.optional.arm.FEAT_LSE128");
+        && host_feature("hw.optional.armv8_1_atomics");
 }
 
 static void *snapshot_alloc(size_t bytes)
