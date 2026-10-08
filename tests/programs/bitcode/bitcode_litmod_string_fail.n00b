@@ -1,0 +1,9 @@
+declare_litmod("reject", "string", "reject_text")
+
+func reject_text(raw: string) -> string fail: string {
+    fail "bad literal"
+}
+
+func value() -> string {
+    return reject"hello"
+}

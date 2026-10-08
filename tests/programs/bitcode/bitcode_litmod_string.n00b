@@ -1,0 +1,14 @@
+declare_litmod("echo", "string", "parse_echo")
+
+func parse_echo(raw: string) -> string fail: string {
+    return raw
+}
+
+func value() -> string {
+    return echo"hello"
+}
+
+comptime {
+} else {
+    value()
+}

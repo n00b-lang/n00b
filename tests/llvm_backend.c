@@ -9,6 +9,7 @@
 #include "lib/buffer.h"
 #include "lib/diagnostic.h"
 #include "llvm_backend.h"
+#include "n00b-abi-v1.h"
 
 int
 main(void)
@@ -109,11 +110,35 @@ main(void)
         .identifier = "sample:array", .bytes = cached_bytes,
         .count = 2, .element_stride = 8,
     };
+    th_type *string_type = ir_type_parse(runtime, "string");
+    ir_func_t *string_function = ir_func_add(runtime, "cached_string",
+        ir_type_parse(runtime, "() -> string"), IR_LINK_INTERNAL);
+    ir_block_t *string_entry = string_function
+        ? ir_block_add(string_function, "entry") : nullptr;
+    ir_instr_t *string_value = string_entry
+        ? ir_instr_add(string_entry, IR_OP_PHASE_RESULT) : nullptr;
+    ir_instr_t *string_return = string_entry
+        ? ir_instr_add(string_entry, IR_OP_RETURN) : nullptr;
+    assert(string_type && string_value
+        && ir_instr_set_dest(string_value, "cached.string", string_type)
+        && ir_instr_set_phase_result(context, string_value, "sample:string")
+        && string_return
+        && ir_instr_operand_value(string_return, string_value->dest));
+    static const uint8_t cached_string[] = "a longer static string";
+    const n00bb_llvm_phase_array_t phase_string = {
+        .identifier = "sample:string", .bytes = cached_string,
+        .count = sizeof(cached_string) - 1,
+        .kind = N00BB_LLVM_LITERAL_STRING,
+        .string_encoding = N00B_ABI_STRING_ASCII,
+    };
+    const n00bb_llvm_phase_array_t phase_values[] = {
+        phase_array, phase_string,
+    };
     core_diagnostics_t *diagnostics = core_diagnostics_new();
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
         comptime, runtime, true, diagnostics);
     assert(backend);
-    assert(n00bb_llvm_backend_bind_phase_arrays(backend, &phase_array, 1));
+    assert(n00bb_llvm_backend_bind_phase_arrays(backend, phase_values, 2));
     assert(core_diagnostics_count(diagnostics) == 0);
 
     for (int phase = 0; phase < 2; phase++) {
@@ -157,6 +182,17 @@ main(void)
                 LLVMGetInitializer(cached_global), &length);
             assert(bytes && length == sizeof(cached_bytes)
                 && (uint8_t)bytes[0] == 5 && (uint8_t)bytes[8] == 6);
+        }
+        LLVMValueRef string_global = LLVMGetNamedGlobal(parsed,
+            "n00bb.literal.string.data");
+        assert((!is_comptime && string_global)
+            || (is_comptime && !string_global));
+        if (string_global) {
+            size_t length = 0;
+            const char *data = LLVMGetAsString(
+                LLVMGetInitializer(string_global), &length);
+            assert(data && length == sizeof(cached_string) - 1
+                && !memcmp(data, cached_string, length));
         }
         if (lowered) {
             assert(LLVMCountBasicBlocks(lowered) == 3);

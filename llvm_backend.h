@@ -11,8 +11,14 @@ typedef struct n00bb_llvm_backend_t n00bb_llvm_backend_t;
 
 enum { N00BB_COMPTIME_RESULT_FD = 3 };
 
+typedef enum {
+    N00BB_LLVM_LITERAL_ARRAY,
+    N00BB_LLVM_LITERAL_STRING,
+} n00bb_llvm_literal_kind_t;
+
 typedef struct {
     const char *symbol;
+    n00bb_llvm_literal_kind_t kind;
     uint32_t element_stride;
 } n00bb_llvm_array_producer_t;
 
@@ -20,6 +26,8 @@ typedef struct {
     const char *identifier;
     const uint8_t *bytes;
     uint64_t count;
+    n00bb_llvm_literal_kind_t kind;
+    uint8_t string_encoding;
     uint32_t element_stride;
 } n00bb_llvm_phase_array_t;
 

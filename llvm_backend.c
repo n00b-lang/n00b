@@ -2,6 +2,7 @@
 
 #include "ir/layout.h"
 #include "ir/typelang.h"
+#include "abi_string.h"
 #include "n00b-abi-v1.h"
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitWriter.h>
@@ -480,6 +481,81 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
                                 "array.with.descriptor");
 }
 
+static LLVMValueRef
+string_value(lower_state_t *state, const uint8_t *bytes, size_t length,
+             uint64_t encoding)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    if (!bytes || length > UINT32_MAX || encoding > N00B_ABI_STRING_UTF8)
+        return nullptr;
+    LLVMValueRef fields[2];
+    if (length <= N00BB_ABI_STRING_SHORT_CAPACITY) {
+        n00b_abi_string_v1 value = {0};
+        if (length) memcpy(value.short_value.bytes, bytes, length);
+        value.short_value.selector = (uint8_t)(length
+            | (encoding << 4) | (N00B_ABI_STRING_SHORT << 6));
+        fields[0] = LLVMConstInt(i64, value.words[0], false);
+        fields[1] = LLVMConstInt(i64, value.words[1], false);
+    } else {
+        LLVMValueRef contents = LLVMConstStringInContext(context,
+            (const char *)bytes, (unsigned)length, true);
+        LLVMValueRef data = LLVMAddGlobal(state->module,
+            LLVMTypeOf(contents), "n00bb.literal.string.data");
+        LLVMSetInitializer(data, contents);
+        LLVMSetGlobalConstant(data, true);
+        LLVMSetLinkage(data, LLVMPrivateLinkage);
+        fields[0] = LLVMConstPtrToInt(data, i64);
+        fields[1] = LLVMConstInt(i64, length
+            | (encoding << N00B_ABI_STRING_ENCODING_SHIFT)
+            | ((uint64_t)N00B_ABI_STRING_LONG
+                << N00B_ABI_STRING_TAG_SHIFT), false);
+    }
+    return LLVMConstStructInContext(context, fields, 2, false);
+}
+
+static bool
+is_string_type(th_type *type)
+{
+    const char *name = nullptr;
+    size_t length = 0, arguments = 0;
+    return type && th_named_info(th_resolve(type), &name, &length,
+                                 nullptr, &arguments)
+        && length == 6 && !memcmp(name, "string", 6) && !arguments;
+}
+
+static LLVMValueRef
+constant_string(lower_state_t *state, ir_instr_t *instruction)
+{
+    size_t length = 0;
+    const uint8_t *bytes = ir_instr_const_bytes(instruction, &length);
+    if (!instruction->dest || !is_string_type(instruction->dest->type)
+        || ir_annot_get(&instruction->annots, "n00bb.rich.metadata"))
+        return nullptr;
+    bool ascii = true;
+    for (size_t i = 0; i < length; i++)
+        if (bytes[i] & 0x80) ascii = false;
+    uint64_t encoding = ascii ? N00B_ABI_STRING_ASCII
+                              : N00B_ABI_STRING_UTF8;
+    return string_value(state, bytes, length, encoding);
+}
+
+static LLVMValueRef
+materialized_string(lower_state_t *state, ir_instr_t *instruction)
+{
+    const char *identifier = ir_instr_phase_result(instruction);
+    if (!identifier || !instruction->dest
+        || !is_string_type(instruction->dest->type)) return nullptr;
+    for (size_t i = 0; i < state->phase_array_count; i++) {
+        const n00bb_llvm_phase_array_t *value = &state->phase_arrays[i];
+        if (value->kind == N00BB_LLVM_LITERAL_STRING
+            && value->identifier && !strcmp(identifier, value->identifier))
+            return string_value(state, value->bytes, value->count,
+                                value->string_encoding);
+    }
+    return nullptr;
+}
+
 static bool
 lower_instruction(lower_state_t *state, ir_instr_t *instruction)
 {
@@ -488,6 +564,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
     uint32_t count = instruction->n_operands;
     switch (instruction->op) {
     case IR_OP_CONST: {
+        if (ir_instr_const_bytes(instruction, nullptr)) {
+            result = constant_string(state, instruction);
+            return result ? save_result(state, instruction, result)
+                          : unsupported(state, instruction);
+        }
         if (count != 1 || operands[0].kind != IR_OPD_CONST
             || operands[0].lit.is_float || !instruction->dest) break;
         ir_machine_t machine = ir_machine_of(state->function->owner,
@@ -527,6 +608,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                       : unsupported(state, instruction);
     case IR_OP_PHASE_RESULT:
         result = materialized_array(state, instruction);
+        if (!result) result = materialized_string(state, instruction);
         return result ? save_result(state, instruction, result)
                       : unsupported(state, instruction);
     case IR_OP_ADD: {
@@ -710,11 +792,34 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         result = lowered_value(state, operands[0].value);
         return result && emit_outcome_return(state, result, true);
     case IR_OP_TRAP:
-        if (count == 0) {
-            emit_trap(state);
-            return true;
-        }
-        break;
+        if (count == 1 && operands[0].kind == IR_OPD_VALUE
+            && operands[0].value
+            && is_string_type(operands[0].value->type)) {
+            LLVMValueRef message = lowered_value(state, operands[0].value);
+            if (!message) break;
+            LLVMContextRef context = LLVMGetModuleContext(state->module);
+            LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+            LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+            LLVMTypeRef parameters[] = {i32, i64, i64};
+            LLVMTypeRef writer_type = LLVMFunctionType(i32, parameters,
+                3, false);
+            LLVMValueRef writer = LLVMGetNamedFunction(state->module,
+                "n00bb_comptime_emit_failure");
+            if (!writer)
+                writer = LLVMAddFunction(state->module,
+                    "n00bb_comptime_emit_failure", writer_type);
+            LLVMValueRef arguments[] = {
+                LLVMConstInt(i32, N00BB_COMPTIME_RESULT_FD, false),
+                LLVMBuildExtractValue(state->builder, message, 0,
+                                      "failure.low"),
+                LLVMBuildExtractValue(state->builder, message, 1,
+                                      "failure.high"),
+            };
+            LLVMBuildCall2(state->builder, writer_type, writer, arguments,
+                3, "failure.write");
+        } else if (count != 0) break;
+        emit_trap(state);
+        return true;
     default:
         break;
     }
@@ -1069,41 +1174,67 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
             LLVMTypeRef array_fields[] = {pointer, pointer};
             LLVMTypeRef array_type = LLVMStructTypeInContext(context,
                 array_fields, 2, false);
-            LLVMTypeRef producer_type = LLVMFunctionType(array_type,
-                nullptr, 0, false);
             LLVMTypeRef writer_parameters[] = {result, pointer, pointer,
                                                 result};
             LLVMTypeRef writer_type = LLVMFunctionType(result,
                 writer_parameters, 4, false);
             LLVMValueRef writer = LLVMAddFunction(module,
                 "n00bb_comptime_emit_array", writer_type);
+            LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+            LLVMTypeRef string_fields[] = {i64, i64};
+            LLVMTypeRef string_type = LLVMStructTypeInContext(context,
+                string_fields, 2, false);
+            LLVMTypeRef string_writer_parameters[] = {result, i64, i64};
+            LLVMTypeRef string_writer_type = LLVMFunctionType(result,
+                string_writer_parameters, 3, false);
+            LLVMValueRef string_writer = LLVMAddFunction(module,
+                "n00bb_comptime_emit_string", string_writer_type);
             for (size_t i = 0; i < array_producer_count; i++) {
                 const n00bb_llvm_array_producer_t *spec = &array_producers[i];
+                LLVMTypeRef expected = spec->kind == N00BB_LLVM_LITERAL_STRING
+                    ? string_type : array_type;
                 LLVMValueRef producer = spec->symbol
                     ? LLVMGetNamedFunction(module, spec->symbol) : nullptr;
                 if (!producer && spec->symbol)
                     producer = LLVMAddFunction(module, spec->symbol,
-                        producer_type);
-                if (!producer || !spec->element_stride
+                        LLVMFunctionType(expected, nullptr, 0, false));
+                if (!producer || (spec->kind == N00BB_LLVM_LITERAL_ARRAY
+                        && !spec->element_stride)
                     || LLVMCountParams(producer)
                     || LLVMGetReturnType(LLVMGlobalGetValueType(producer))
-                        != array_type) {
+                        != expected) {
                     LLVMDisposeBuilder(builder);
                     return backend_error(diagnostics,
-                        "compile-time array producer signature is invalid");
+                        "compile-time literal producer signature is invalid");
                 }
                 LLVMValueRef value = LLVMBuildCall2(builder,
                     LLVMGlobalGetValueType(producer), producer,
                     nullptr, 0, "literal.result");
-                LLVMValueRef arguments[] = {
-                    LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD, false),
-                    LLVMBuildExtractValue(builder, value, 0, "array.data"),
-                    LLVMBuildExtractValue(builder, value, 1,
-                                          "array.descriptor"),
-                    LLVMConstInt(result, spec->element_stride, false),
-                };
-                LLVMValueRef status = LLVMBuildCall2(builder, writer_type,
-                    writer, arguments, 4, "literal.write");
+                LLVMValueRef status = nullptr;
+                if (spec->kind == N00BB_LLVM_LITERAL_STRING) {
+                    LLVMValueRef arguments[] = {
+                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
+                                     false),
+                        LLVMBuildExtractValue(builder, value, 0,
+                                              "string.low"),
+                        LLVMBuildExtractValue(builder, value, 1,
+                                              "string.high"),
+                    };
+                    status = LLVMBuildCall2(builder, string_writer_type,
+                        string_writer, arguments, 3, "literal.write");
+                } else {
+                    LLVMValueRef arguments[] = {
+                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
+                                     false),
+                        LLVMBuildExtractValue(builder, value, 0,
+                                              "array.data"),
+                        LLVMBuildExtractValue(builder, value, 1,
+                                              "array.descriptor"),
+                        LLVMConstInt(result, spec->element_stride, false),
+                    };
+                    status = LLVMBuildCall2(builder, writer_type,
+                        writer, arguments, 4, "literal.write");
+                }
                 LLVMValueRef failed = LLVMBuildICmp(builder, LLVMIntNE,
                     status, LLVMConstNull(result), "literal.write.failed");
                 LLVMBasicBlockRef failure = LLVMAppendBasicBlockInContext(

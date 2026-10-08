@@ -168,3 +168,29 @@ int32_t n00bb_comptime_emit_array(
         || !write_all(fd, data, count * stride)) return -1;
     return 0;
 }
+
+int32_t n00bb_comptime_emit_string(int32_t fd, uint64_t low, uint64_t high)
+{
+    n00b_abi_string_v1 value = {.words = {low, high}};
+    n00bb_abi_string_header_t header;
+    if (fd < 0 || !n00bb_abi_string_decode((const uint8_t *)&value,
+            sizeof(value), &header) || header.tag == N00BB_ABI_STRING_RICH)
+        return -1;
+    const uint8_t *bytes = header.tag == N00BB_ABI_STRING_SHORT
+        ? value.short_value.bytes : value.long_value.data;
+    uint8_t encoding = (uint8_t)header.encoding;
+    if (header.length && !bytes) return -1;
+    if (!write_all(fd, (const uint8_t *)&header.length,
+            sizeof(header.length))
+        || !write_all(fd, &encoding, sizeof(encoding))
+        || !write_all(fd, bytes, header.length)) return -1;
+    return 0;
+}
+
+int32_t n00bb_comptime_emit_failure(int32_t fd, uint64_t low, uint64_t high)
+{
+    const uint64_t marker = UINT64_MAX;
+    if (fd < 0 || !write_all(fd, (const uint8_t *)&marker,
+                            sizeof(marker))) return -1;
+    return n00bb_comptime_emit_string(fd, low, high);
+}

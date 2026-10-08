@@ -391,6 +391,8 @@ typedef struct {
     uint8_t *materialized_bytes;
     uint64_t materialized_count;
     uint32_t materialized_stride;
+    n00bb_llvm_literal_kind_t materialized_kind;
+    uint8_t materialized_encoding;
 } n00bb_phase_result_binding_t;
 core_list_decl(n00bb_phase_result_binding_t);
 
@@ -12626,10 +12628,14 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
         ? n00bb_literal_handler(first_token_text(child_nt(visit->grammar,
                 parent, "literal-prefix")), N00BB_LITERAL_STRING_SHAPE)
         : nullptr;
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_litmod_site_t *user_site = parent && tu
+        ? core_dict_get(&tu->literal_sites, parent, nullptr) : nullptr;
     bool rich = registration
         && registration->handler == N00BB_LITERAL_RICH;
     if (parent && nt_is(visit->grammar, parent, "tagged-lit")
-        && !registration)
+        && !registration && !user_site)
         return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
             n00bb_literal_prefix_registered(first_token_text(
                 child_nt(visit->grammar, parent, "literal-prefix")))
@@ -12902,7 +12908,7 @@ n00bb_lower_brace_literal(ir_lower_context_t *context,
 }
 
 static ir_lower_result_t
-n00bb_lower_user_array_literal(ir_lower_context_t *context,
+n00bb_lower_user_literal(ir_lower_context_t *context,
                                parse_visit_t *visit,
                                n00bb_litmod_site_t *site,
                                th_type *result_type, ir_span_t span)
@@ -12924,8 +12930,22 @@ n00bb_lower_user_array_literal(ir_lower_context_t *context,
                                       th_func_ret(site->signature)))
         return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                            "literal handler has no specialized callable binding");
-    ir_lower_result_t payload = n00bb_lower_sequence_literal(context,
-        visit, nullptr, 0, site->payload_type, span, nullptr);
+    ir_lower_result_t payload = {IR_LOWER_FAILED, nullptr};
+    if (core_string_eq(site->registration->kind, CORE_STRING_STATIC("array")))
+        payload = n00bb_lower_sequence_literal(context, visit, nullptr, 0,
+            site->payload_type, span, nullptr);
+    else if (core_string_eq(site->registration->kind,
+                            CORE_STRING_STATIC("string"))) {
+        parse_tree_t *literal_payload = child_nt(visit->grammar, visit->node,
+                                               "literal-payload");
+        parse_tree_t *string = child_nt(visit->grammar, literal_payload,
+                                       "modified-simple-lit");
+        ir_value_t *raw = string ? ir_lower_node_value(context, string)
+                                 : nullptr;
+        if (raw && ir_type_eq(context->module, raw->type,
+                              site->payload_type))
+            payload = (ir_lower_result_t){IR_LOWER_VALUE, raw};
+    }
     if (payload.status != IR_LOWER_VALUE || !payload.value)
         return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
     th_type *outcome_type = ir_call_outcome_type(context->module,
@@ -12973,9 +12993,11 @@ n00bb_lower_tagged_literal(ir_lower_context_t *context,
         ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
     if (user_site) {
         if (core_string_eq(user_site->registration->kind,
-                           CORE_STRING_STATIC("array")))
-            return n00bb_lower_user_array_literal(context, visit,
-                user_site, result_type, span);
+                           CORE_STRING_STATIC("array"))
+            || core_string_eq(user_site->registration->kind,
+                              CORE_STRING_STATIC("string")))
+            return n00bb_lower_user_literal(context, visit, user_site,
+                                            result_type, span);
         return lower_error(context, IR_DIAG_TYPE_CLASS, span,
                            "this literal handler shape has no lowering yet");
     }
@@ -13059,8 +13081,10 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_litmod_site_t *site = tu
         ? core_dict_get(&tu->literal_sites, visit->node, nullptr) : nullptr;
-    if (!site || !core_string_eq(site->registration->kind,
-                                 CORE_STRING_STATIC("array"))) return true;
+    if (!site || (!core_string_eq(site->registration->kind,
+                                  CORE_STRING_STATIC("array"))
+                  && !core_string_eq(site->registration->kind,
+                                     CORE_STRING_STATIC("string")))) return true;
     if (entering) {
         if (lower->has_active_literal) return true;
         if (!core_dict_contains(&tu->static_literal_nodes, visit->node))
@@ -17875,7 +17899,10 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                 == IR_PHASE_COMPTIME;
         if (trap_unhandled || comptime_initializer) {
             ir_instr_t *trap = ir_instr_add(context->block, IR_OP_TRAP);
-            if (!trap)
+            n00bb_lower_context_t *lower = context->user;
+            if (!trap || (lower && lower->has_active_literal
+                && lower->comptime_phase
+                && !ir_instr_operand_value(trap, error)))
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
                     "could not lower an unhandled call failure");
             trap->span = span;
@@ -22310,7 +22337,9 @@ cache_static_literal_node(parse_grammar_t *grammar,
         bool known_static_string = core_string_eq(prefix,
             CORE_STRING_STATIC("binary"))
             || core_string_eq(prefix, CORE_STRING_STATIC("b"))
-            || core_string_eq(prefix, CORE_STRING_STATIC("u32"));
+            || core_string_eq(prefix, CORE_STRING_STATIC("u32"))
+            || user_litmod(state, prefix,
+                           CORE_STRING_STATIC("string")) != nullptr;
         is_static = payload
             && core_dict_contains(&state->static_literal_nodes, payload)
             && (!string || known_static_string);
@@ -41603,6 +41632,13 @@ infer_user_tagged_literal_type(parse_grammar_t *grammar,
         core_list_free(expressions);
     }
     if (!input_type) return false;
+    if (string) {
+        parse_nt_node_t *raw = &core_tree_node_value(string);
+        raw->type = raw->type
+            ? th_unify_in_place(state->types, raw->type, input_type)
+            : input_type;
+        if (!raw->type) return false;
+    }
     th_param param = {.mode = TH_IN, .type = input_type};
     th_type *expected = th_func_with_error(state->types,
         th_var(state->types), th_name(state->types, "string"),
@@ -46875,9 +46911,13 @@ n00bb_read_exact(int fd, void *data, size_t length)
 }
 
 static bool
-n00bb_capture_array_results(int fd, n00bb_link_analysis_t *analysis,
-                            const n00bb_llvm_array_producer_t *producers)
+n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
+    const n00bb_llvm_array_producer_t *producers, size_t *completed,
+    uint8_t **failure_bytes, size_t *failure_length)
 {
+    *completed = 0;
+    *failure_bytes = nullptr;
+    *failure_length = 0;
     struct stat info;
     if (lseek(fd, 0, SEEK_SET) < 0 || fstat(fd, &info)
         || info.st_size < 0) return false;
@@ -46885,8 +46925,31 @@ n00bb_capture_array_results(int fd, n00bb_link_analysis_t *analysis,
         n00bb_phase_result_binding_t *binding = &analysis->phase_results.data[i];
         uint64_t count;
         if (!n00bb_read_exact(fd, &count, sizeof(count))) return false;
+        if (count == UINT64_MAX) {
+            uint64_t length;
+            uint8_t encoding;
+            if (!n00bb_read_exact(fd, &length, sizeof(length))
+                || !n00bb_read_exact(fd, &encoding, sizeof(encoding))
+                || encoding > N00B_ABI_STRING_UTF8
+                || length > SIZE_MAX - 1) return false;
+            uint8_t *message = core_alloc_size(1, (size_t)length + 1);
+            if (!message || !n00bb_read_exact(fd, message,
+                                                (size_t)length)) {
+                core_free(message);
+                return false;
+            }
+            message[length] = 0;
+            *failure_bytes = message;
+            *failure_length = (size_t)length;
+            return false;
+        }
+        uint8_t encoding = 0;
+        if (producers[i].kind == N00BB_LLVM_LITERAL_STRING
+            && (!n00bb_read_exact(fd, &encoding, sizeof(encoding))
+                || encoding > N00B_ABI_STRING_UTF8)) return false;
         off_t offset = lseek(fd, 0, SEEK_CUR);
         uint32_t stride = producers[i].element_stride;
+        if (producers[i].kind == N00BB_LLVM_LITERAL_STRING) stride = 1;
         if (!stride || count > SIZE_MAX / stride || offset < 0
             || offset > info.st_size
             || count * stride > (uint64_t)(info.st_size - offset))
@@ -46899,7 +46962,10 @@ n00bb_capture_array_results(int fd, n00bb_link_analysis_t *analysis,
         }
         binding->materialized_bytes = bytes;
         binding->materialized_count = count;
-        binding->materialized_stride = stride;
+        binding->materialized_kind = producers[i].kind;
+        binding->materialized_encoding = encoding;
+        binding->materialized_stride = producers[i].element_stride;
+        *completed = i + 1;
     }
     return lseek(fd, 0, SEEK_CUR) == info.st_size;
 }
@@ -46965,6 +47031,13 @@ n00bb_execute_comptime(core_link_unit_t *link,
         ir_func_t *producer = binding->producer;
         th_type *result = producer ? th_resolve(th_func_ret(producer->type))
                                    : nullptr;
+        const char *result_name = nullptr;
+        size_t result_name_length = 0;
+        size_t result_arity = 0;
+        bool is_string = result && th_named_info(result, &result_name,
+            &result_name_length, nullptr, &result_arity)
+            && result_name_length == 6
+            && !memcmp(result_name, "string", 6) && !result_arity;
         th_type *element = result && th_kind_of(result) == TH_SEQUENCE
             ? th_seq_elem(result) : nullptr;
         ir_machine_t machine = element
@@ -46976,14 +47049,14 @@ n00bb_execute_comptime(core_link_unit_t *link,
         uint64_t align = layout ? layout->alignment_bytes : 0;
         uint64_t stride = align && bytes <= UINT64_MAX - align + 1
             ? ((bytes + align - 1) / align) * align : 0;
-        if (!element || !layout || !align || !stride
+        if (!is_string && (!element || !layout || !align || !stride
             || stride > UINT32_MAX || layout->intrinsic_bits != machine.width
             || machine.width < 8 || machine.width % 8
             || (machine.class != IR_CLASS_SINT
-                && machine.class != IR_CLASS_UINT)) {
+                && machine.class != IR_CLASS_UINT))) {
             core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-B0013"),
-                CORE_STRING_STATIC("native build currently materializes only primitive one-dimensional array literal results"));
+                CORE_STRING_STATIC("native build currently materializes only strings and primitive one-dimensional array literal results"));
             ok = false;
             break;
         }
@@ -46991,7 +47064,9 @@ n00bb_execute_comptime(core_link_unit_t *link,
         core_buffer_printf(&symbol, "%s.%s",
             ir_module_name(producer->owner), producer->name);
         producers[i].symbol = core_strndup(symbol.data, symbol.byte_len);
-        producers[i].element_stride = (uint32_t)stride;
+        producers[i].kind = is_string ? N00BB_LLVM_LITERAL_STRING
+                                      : N00BB_LLVM_LITERAL_ARRAY;
+        producers[i].element_stride = is_string ? 0 : (uint32_t)stride;
         core_buffer_release(&symbol);
         ok = producers[i].symbol != nullptr;
     }
@@ -47065,6 +47140,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
         if (result_fd >= 0) unlink(result_path);
         ok = result_fd >= 0;
     }
+    bool comptime_ran = false;
     if (ok) {
         char *arguments[] = {executable_path, nullptr};
         pid_t child = 0;
@@ -47079,20 +47155,50 @@ n00bb_execute_comptime(core_link_unit_t *link,
             : -1;
         if (actions_ready) posix_spawn_file_actions_destroy(&actions);
         int status = 0;
-        ok = ok && !launched && waitpid(child, &status, 0) == child
+        comptime_ran = ok && !launched;
+        ok = comptime_ran && waitpid(child, &status, 0) == child
             && WIFEXITED(status) && WEXITSTATUS(status) == 0;
-        if (!ok)
-            core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-                CORE_STRING_STATIC("N00BB-B0014"),
-                CORE_STRING_STATIC("compile-time execution failed"));
     }
-    if (ok && producer_count
-        && !n00bb_capture_array_results(result_fd, analysis, producers)) {
+    size_t completed = 0;
+    uint8_t *failure_bytes = nullptr;
+    size_t failure_length = 0;
+    bool captured = comptime_ran && producer_count
+        && n00bb_capture_literal_results(result_fd, analysis, producers,
+            &completed, &failure_bytes, &failure_length);
+    if (comptime_ran && !ok) {
+        n00bb_phase_result_binding_t *binding = failure_bytes
+            && completed < producer_count
+            ? &analysis->phase_results.data[completed] : nullptr;
+        core_translation_unit_t *unit = nullptr;
+        if (binding && binding->consumer)
+            for (size_t i = 0; i < analysis->units.len; i++) {
+                core_translation_unit_t *candidate = analysis->units.data[i];
+                n00bb_tu_state_t *state = tu_state(candidate);
+                if (state && state->ir_module == binding->consumer->owner) {
+                    unit = candidate;
+                    break;
+                }
+            }
+        ir_span_t span = binding && binding->instruction
+            ? binding->instruction->span : (ir_span_t){0};
+        core_diagnostics_report_at(diagnostics, unit, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0014"),
+            binding && failure_length
+                ? core_string_borrow((char *)failure_bytes, failure_length)
+                : CORE_STRING_STATIC("compile-time execution failed"),
+            (core_diag_location_t){
+                .line = span.start_line, .column = span.start_col,
+                .end_line = span.end_line, .end_column = span.end_col,
+                .has_location = span.start_line != 0,
+            });
+    }
+    if (ok && producer_count && !captured) {
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-B0013"),
             CORE_STRING_STATIC("compile-time literal results are incomplete or invalid"));
         ok = false;
     }
+    core_free(failure_bytes);
     if (result_fd >= 0) close(result_fd);
     if (path_created) unlink(executable_path);
     for (size_t i = 0; i < count; i++) {
@@ -47148,10 +47254,13 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .identifier = binding->identifier,
             .bytes = binding->materialized_bytes,
             .count = binding->materialized_count,
+            .kind = binding->materialized_kind,
+            .string_encoding = binding->materialized_encoding,
             .element_stride = binding->materialized_stride,
         };
         ok = phase_arrays[i].identifier && phase_arrays[i].bytes
-            && phase_arrays[i].element_stride;
+            && (phase_arrays[i].kind == N00BB_LLVM_LITERAL_STRING
+                || phase_arrays[i].element_stride);
     }
     uint8_t *linked_abi = nullptr;
     size_t linked_abi_bytes = 0;

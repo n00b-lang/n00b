@@ -23,6 +23,20 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/litmod_runtime" \
     "$program_dir/bitcode_litmod_runtime.n00b"
 "$tmp/litmod_runtime"
+"$compiler" build --output "$tmp/litmod_string" \
+    "$program_dir/bitcode_litmod_string.n00b"
+"$tmp/litmod_string"
+if "$compiler" build --output "$tmp/litmod_string_fail" \
+    "$program_dir/bitcode_litmod_string_fail.n00b" \
+    >"$tmp/litmod_string_fail.out" 2>&1; then
+    echo 'failing static literal handler unexpectedly built' >&2
+    exit 1
+fi
+grep -q 'fatal\[N00BB-B0014\]: bad literal' \
+    "$tmp/litmod_string_fail.out"
+grep -q 'bitcode_litmod_string_fail.n00b:8:12' \
+    "$tmp/litmod_string_fail.out"
+test ! -e "$tmp/litmod_string_fail"
 "$compiler" build --output "$tmp/value_handles" \
     "$program_dir/bitcode_value_handles.n00b"
 "$tmp/value_handles"
