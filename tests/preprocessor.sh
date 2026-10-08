@@ -1497,6 +1497,12 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     "$program_dir/../abi/generic_collision.n00b"
 [ -s "$tmp/generic_collision_abi.o" ]
 "$abi_link_input_test" --generic-collision "$tmp/generic_collision_abi.o"
+"$compiler" compile --output "$tmp/generic_operator_abi.o" \
+    "$script_dir/programs/operator_generic_builtin.n00b"
+[ -s "$tmp/generic_operator_abi.o" ]
+"$compiler" library --output "$tmp/generic_operator_linked.o" \
+    "$script_dir/programs/operator_generic_builtin.n00b"
+"$abi_register_object_test" "$tmp/generic_operator_linked.o" 1
 "$compiler" compile --output "$tmp/callback_abi.o" \
     "$program_dir/../abi/callback.n00b"
 [ -s "$tmp/callback_abi.o" ]
