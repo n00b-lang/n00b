@@ -48,7 +48,7 @@ typedef struct {
     n00b_abi_dispatch_v1 dispatches[2];
     n00b_abi_dispatch_entry_v1 entries[4];
     n00b_abi_package_v1 packages[2];
-    n00b_abi_module_v1 modules[2];
+    n00b_abi_module_v1 modules[3];
     n00b_abi_scope_v1 scopes[2];
     n00b_abi_symbol_v1 symbols[2];
     n00b_abi_name_slot_v1 name_slots[4];
@@ -432,6 +432,17 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_MODULE
         && !n00b_abi_v1_current_snapshot());
     image.modules[1].imports.first = 0;
+    image.modules[2] = image.modules[1];
+    image.modules[2].static_storage = (n00b_abi_range_v1){0};
+    image.modules[2].tls_storage = (n00b_abi_range_v1){0};
+    directory_entry(&image, 10, N00B_ABI_TABLE_MODULE,
+        sizeof(image.modules[0]), 3, offsetof(image_t, modules));
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_MODULE
+        && error.record_index == 2 && !n00b_abi_v1_current_snapshot());
+    directory_entry(&image, 10, N00B_ABI_TABLE_MODULE,
+        sizeof(image.modules[0]), 2, offsetof(image_t, modules));
     image.links[1] = 3;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA && !n00b_abi_v1_current_snapshot());
