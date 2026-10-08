@@ -1997,6 +1997,36 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
         }
         return true;
     }
+    if (kind == N00B_ABI_TABLE_FUNCTION) {
+        const n00b_abi_function_v1 *function = row;
+        const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_SCOPE, function->scope_index);
+        const n00b_abi_symbol_v1 *symbol = function->symbol_index
+            ? n00bb_abi_object_row(view, N00B_ABI_TABLE_SYMBOL,
+                function->symbol_index) : nullptr;
+        if (!function->module_index || !scope
+            || scope->module_index != function->module_index
+            || (function->symbol_index
+                && (!symbol || symbol->kind != N00B_ABI_SYMBOL_FUNCTION
+                    || symbol->module_index != function->module_index
+                    || symbol->scope_index != function->scope_index)))
+            return false;
+        if (symbol) {
+            const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_TYPE, symbol->type_index);
+            const n00b_abi_call_signature_v1 *signature = type
+                ? n00bb_abi_object_row(view, N00B_ABI_TABLE_CALL_SIGNATURE,
+                    type->call_signature_index) : nullptr;
+            if (!type || type->kind != N00B_ABI_TYPE_FUNCTION
+                || !signature || signature->type_index != symbol->type_index
+                || signature->success_type_index
+                    != function->success_type_index
+                || signature->failure_type_index
+                    != function->failure_type_index) return false;
+        }
+        n00bb_abi_parameter_reader_t reader = object_parameter_reader(view);
+        return n00bb_abi_function_parameters_valid(&reader, function);
+    }
     if (kind == N00B_ABI_TABLE_SCOPE) {
         const n00b_abi_scope_v1 *scope = row;
         const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(

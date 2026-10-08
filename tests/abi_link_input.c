@@ -1360,6 +1360,60 @@ test_duplicate_signature(const char *path)
     n00bb_abi_selected_objects_t duplicated = {.views = views, .count = 2};
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&duplicated);
     assert(plan);
+    const n00bb_abi_directory_entry_t *function_table =
+        n00bb_abi_object_table(&views[1], N00B_ABI_TABLE_FUNCTION);
+    uint32_t function_index = 0;
+    const n00b_abi_function_v1 *function = nullptr;
+    for (uint32_t i = 1; function_table && i < function_table->record_count;
+         i++) {
+        const n00b_abi_function_v1 *candidate = n00bb_abi_object_row(
+            &views[1], N00B_ABI_TABLE_FUNCTION, i);
+        if (candidate && candidate->symbol_index
+            && candidate->parameters.count >= 2) {
+            function = candidate;
+            function_index = i;
+            break;
+        }
+    }
+    assert(function && !function->keywords.count
+        && !function->valid_keyword_bits);
+    uint32_t stream_count = 0;
+    assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_U32_STREAM,
+        &stream_count) && stream_count);
+    uint32_t *values = core_alloc_array(uint32_t, stream_count);
+    uint32_t *kinds = core_alloc_array(uint32_t, stream_count);
+    assert(values && kinds);
+    n00bb_abi_u32_stream_build_t stream = {
+        .values = values, .kinds = kinds, .count = stream_count,
+    };
+    n00b_abi_function_v1 remapped_function;
+    assert(n00bb_abi_remap_row(&duplicated, plan, 1,
+        N00B_ABI_TABLE_FUNCTION, function_index, &remapped_function,
+        sizeof(remapped_function), &stream));
+    n00b_abi_function_v1 *changed_function = (void *)function;
+    changed_function->valid_keyword_bits = 1;
+    assert(!n00bb_abi_remap_row(&duplicated, plan, 1,
+        N00B_ABI_TABLE_FUNCTION, function_index, &remapped_function,
+        sizeof(remapped_function), &stream));
+    changed_function->valid_keyword_bits = 0;
+    const uint8_t *first_slot = n00bb_abi_object_row(&views[1],
+        N00B_ABI_TABLE_U32_STREAM, function->parameters.first);
+    const uint8_t *second_slot = n00bb_abi_object_row(&views[1],
+        N00B_ABI_TABLE_U32_STREAM, function->parameters.first + 1);
+    assert(first_slot && second_slot);
+    const n00b_abi_parameter_v1 *first = n00bb_abi_object_row(&views[1],
+        N00B_ABI_TABLE_PARAMETER, core_le_load_u32(first_slot));
+    n00b_abi_parameter_v1 *second = (void *)n00bb_abi_object_row(&views[1],
+        N00B_ABI_TABLE_PARAMETER, core_le_load_u32(second_slot));
+    assert(first && second && first != second);
+    uint32_t saved_ordinal = second->declaration_ordinal;
+    second->declaration_ordinal = first->declaration_ordinal;
+    assert(!n00bb_abi_remap_row(&duplicated, plan, 1,
+        N00B_ABI_TABLE_FUNCTION, function_index, &remapped_function,
+        sizeof(remapped_function), &stream));
+    second->declaration_ordinal = saved_ordinal;
+    core_free(values);
+    core_free(kinds);
     n00bb_abi_index_plan_free(plan);
     const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
         &views[1], N00B_ABI_TABLE_TYPE);

@@ -2,6 +2,7 @@
 #define N00BB_ABI_PARAMETER_CONTRACT_H
 
 #include <stdbool.h>
+#include <limits.h>
 #include <stdint.h>
 
 #include "n00b-abi-v1.h"
@@ -60,6 +61,43 @@ n00bb_abi_parameter_contract_valid(
                 && parameter->keyword_block_bit_offset)
             || !reader->name_length(reader->context, &parameter->name,
                                     &length) || !length) return false;
+    }
+    return true;
+}
+
+static inline bool
+n00bb_abi_function_parameters_valid(
+    const n00bb_abi_parameter_reader_t *reader,
+    const n00b_abi_function_v1 *function)
+{
+    if (!reader || !reader->index_at || !reader->parameter_at || !function
+        || function->keywords.count > sizeof(uint64_t) * CHAR_BIT)
+        return false;
+    uint64_t keyword_bits = function->keywords.count
+        == sizeof(uint64_t) * CHAR_BIT
+            ? UINT64_MAX : (UINT64_C(1) << function->keywords.count) - 1;
+    if (function->valid_keyword_bits != keyword_bits) return false;
+    uint32_t previous_ordinal = 0;
+    for (uint32_t i = 0; i < function->parameters.count; i++) {
+        uint32_t index = 0;
+        if (!reader->index_at(reader->context, function->parameters,
+                i, &index) || !index) return false;
+        const n00b_abi_parameter_v1 *parameter =
+            reader->parameter_at(reader->context, index);
+        if (!parameter || (i && parameter->declaration_ordinal
+            <= previous_ordinal)) return false;
+        previous_ordinal = parameter->declaration_ordinal;
+    }
+    uint32_t next = 0;
+    for (uint32_t i = 0; i < function->keywords.count; i++) {
+        uint32_t keyword = 0, parameter = 0;
+        if (!reader->index_at(reader->context, function->keywords,
+                i, &keyword) || !keyword) return false;
+        do {
+            if (next == function->parameters.count
+                || !reader->index_at(reader->context,
+                    function->parameters, next++, &parameter)) return false;
+        } while (parameter != keyword);
     }
     return true;
 }
