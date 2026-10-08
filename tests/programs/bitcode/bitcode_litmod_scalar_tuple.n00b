@@ -1,0 +1,35 @@
+declare_litmod("bundle", "string", "identity")
+declare_litmod("dynamic", "array", "from_items")
+
+func identity(raw: string) -> Tuple[string, int] fail: string {
+    return (raw, 7)
+}
+
+func from_items(items: Array[int]) -> Tuple[string, int] fail: string {
+    return ("runtime", 9)
+}
+
+func value() -> Tuple[string, int] {
+    return bundle"static result with relocation"
+}
+
+func runtime_value(x: int) -> Tuple[string, int] {
+    return dynamic[1, x]
+}
+
+func static_container() -> Tuple[string, int] {
+    return dynamic[1, 2]
+}
+
+func observe(item: Tuple[string, int]) {
+    require true
+}
+
+comptime {
+    observe(bundle"comptime result")
+    observe(dynamic[3, 4])
+} else {
+    value()
+    static_container()
+    runtime_value(2)
+}

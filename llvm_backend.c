@@ -684,6 +684,64 @@ materialized_string(lower_state_t *state, ir_instr_t *instruction)
 }
 
 static LLVMValueRef
+cached_reloc_element(lower_state_t *state,
+                     const n00bb_llvm_phase_array_t *cached,
+                     size_t *position)
+{
+    if (!cached || !position || *position > cached->byte_len
+        || cached->element_stride > cached->byte_len - *position
+        || !cached->string_offsets || !cached->string_offset_count
+        || cached->string_offset_count > (UINT32_MAX - 1) / 2)
+        return nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    const uint8_t *raw = cached->bytes + *position;
+    *position += cached->element_stride;
+    LLVMValueRef *fields = calloc(2 * cached->string_offset_count + 1,
+                                   sizeof(*fields));
+    if (!fields) return nullptr;
+    unsigned n_fields = 0;
+    uint32_t cursor = 0;
+    bool valid = true;
+    for (size_t f = 0; valid && f < cached->string_offset_count; f++) {
+        uint32_t at = cached->string_offsets[f];
+        if (at < cursor || at > cached->element_stride
+            || sizeof(n00b_abi_string_v1)
+                > cached->element_stride - at
+            || cached->byte_len - *position
+                < sizeof(uint64_t) + sizeof(uint8_t)) {
+            valid = false;
+            break;
+        }
+        if (at > cursor)
+            fields[n_fields++] = LLVMConstStringInContext(context,
+                (const char *)raw + cursor, at - cursor, true);
+        uint64_t length;
+        memcpy(&length, cached->bytes + *position, sizeof(length));
+        *position += sizeof(length);
+        uint8_t encoding = cached->bytes[(*position)++];
+        valid = encoding <= N00B_ABI_STRING_UTF8
+            && length <= cached->byte_len - *position;
+        if (!valid) break;
+        fields[n_fields] = string_value(state, cached->bytes + *position,
+                                        (size_t)length, encoding);
+        valid = fields[n_fields] != nullptr;
+        n_fields++;
+        *position += (size_t)length;
+        cursor = at + sizeof(n00b_abi_string_v1);
+    }
+    if (valid && cursor < cached->element_stride)
+        fields[n_fields++] = LLVMConstStringInContext(context,
+            (const char *)raw + cursor, cached->element_stride - cursor,
+            true);
+    LLVMValueRef value = valid
+        ? LLVMConstStructInContext(context, fields, n_fields, true) : nullptr;
+    free(fields);
+    return value && LLVMABISizeOfType(
+        LLVMGetModuleDataLayout(state->module), LLVMTypeOf(value))
+        == cached->element_stride ? value : nullptr;
+}
+
+static LLVMValueRef
 materialized_reloc_array(lower_state_t *state, ir_instr_t *instruction)
 {
     const char *identifier = ir_instr_phase_result(instruction);
@@ -703,12 +761,12 @@ materialized_reloc_array(lower_state_t *state, ir_instr_t *instruction)
             element, native, target)) return nullptr;
     for (size_t i = 0; i < state->phase_array_count; i++) {
         const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
-        if (cached->kind != N00BB_LLVM_LITERAL_RELOC_ARRAY
+        if (cached->kind != N00BB_LLVM_LITERAL_RELOC
             || !cached->identifier
             || strcmp(identifier, cached->identifier)
             || !cached->bytes || !cached->element_stride
             || !cached->string_offsets || !cached->string_offset_count
-            || cached->string_offset_count > (SIZE_MAX - 1) / 2
+            || cached->string_offset_count > (UINT32_MAX - 1) / 2
             || cached->count > UINT32_MAX
             || LLVMABISizeOfType(target, native)
                 != cached->element_stride) continue;
@@ -717,62 +775,9 @@ materialized_reloc_array(lower_state_t *state, ir_instr_t *instruction)
         if (!items) return nullptr;
         size_t position = 0;
         bool valid = true;
-        for (unsigned j = 0; valid && j < count; j++) {
-            if (position > cached->byte_len
-                || cached->element_stride > cached->byte_len - position) {
-                valid = false;
-                break;
-            }
-            const uint8_t *raw = cached->bytes + position;
-            position += cached->element_stride;
-            LLVMValueRef *fields = calloc(2 * cached->string_offset_count + 1,
-                                           sizeof(*fields));
-            if (!fields) {
-                valid = false;
-                break;
-            }
-            unsigned n_fields = 0;
-            uint32_t cursor = 0;
-            for (size_t f = 0; valid && f < cached->string_offset_count; f++) {
-                uint32_t at = cached->string_offsets[f];
-                if (at < cursor || at > cached->element_stride
-                    || sizeof(n00b_abi_string_v1)
-                        > cached->element_stride - at
-                    || position > cached->byte_len
-                    || cached->byte_len - position
-                        < sizeof(uint64_t) + sizeof(uint8_t)) {
-                    valid = false;
-                    break;
-                }
-                if (at > cursor)
-                    fields[n_fields++] = LLVMConstStringInContext(context,
-                        (const char *)raw + cursor, at - cursor, true);
-                uint64_t length;
-                memcpy(&length, cached->bytes + position, sizeof(length));
-                position += sizeof(length);
-                uint8_t encoding = cached->bytes[position++];
-                valid = encoding <= N00B_ABI_STRING_UTF8
-                    && length <= cached->byte_len - position;
-                if (!valid) break;
-                fields[n_fields] = string_value(state,
-                    cached->bytes + position, (size_t)length, encoding);
-                valid = fields[n_fields] != nullptr;
-                n_fields++;
-                position += (size_t)length;
-                cursor = at + sizeof(n00b_abi_string_v1);
-            }
-            if (valid && cursor < cached->element_stride)
-                fields[n_fields++] = LLVMConstStringInContext(context,
-                    (const char *)raw + cursor,
-                    cached->element_stride - cursor, true);
-            if (valid)
-                items[j] = LLVMConstStructInContext(context, fields,
-                                                    n_fields, true);
-            valid = valid && items[j]
-                && LLVMABISizeOfType(target, LLVMTypeOf(items[j]))
-                    == cached->element_stride;
-            free(fields);
-        }
+        for (unsigned j = 0; valid && j < count; j++)
+            valid = (items[j] = cached_reloc_element(state, cached,
+                                                     &position)) != nullptr;
         valid = valid && position == cached->byte_len;
         if (!valid) {
             free(items);
@@ -790,6 +795,45 @@ materialized_reloc_array(lower_state_t *state, ir_instr_t *instruction)
         LLVMSetGlobalConstant(data, true);
         LLVMSetLinkage(data, LLVMPrivateLinkage);
         return array_value_with_descriptor(state, data, count);
+    }
+    return nullptr;
+}
+
+static LLVMValueRef
+materialized_reloc_value(lower_state_t *state, ir_instr_t *instruction)
+{
+    const char *identifier = ir_instr_phase_result(instruction);
+    th_type *type = instruction->dest
+        ? th_resolve(instruction->dest->type) : nullptr;
+    if (!identifier || !type || th_kind_of(type) == TH_SEQUENCE)
+        return nullptr;
+    ir_module_t *source = state->function->owner;
+    const ir_final_layout_t *layout = ir_layout_final(source, type,
+        ir_module_target(source));
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef native = value_type(source, type, context);
+    LLVMTargetDataRef target = LLVMGetModuleDataLayout(state->module);
+    if (!layout || !layout->alignment_bytes || !native
+        || !literal_element_layout_matches(source, type, native, target))
+        return nullptr;
+    for (size_t i = 0; i < state->phase_array_count; i++) {
+        const n00bb_llvm_phase_array_t *cached = &state->phase_arrays[i];
+        if (cached->kind != N00BB_LLVM_LITERAL_RELOC
+            || !cached->identifier || strcmp(identifier, cached->identifier)
+            || !cached->bytes || cached->count != 1
+            || cached->element_stride != LLVMABISizeOfType(target, native))
+            continue;
+        size_t position = 0;
+        LLVMValueRef value = cached_reloc_element(state, cached, &position);
+        if (!value || position != cached->byte_len) return nullptr;
+        LLVMValueRef storage = LLVMAddGlobal(state->module,
+            LLVMTypeOf(value), "n00bb.literal.reloc.value.cached");
+        LLVMSetInitializer(storage, value);
+        LLVMSetAlignment(storage, layout->alignment_bytes);
+        LLVMSetGlobalConstant(storage, true);
+        LLVMSetLinkage(storage, LLVMPrivateLinkage);
+        return LLVMBuildLoad2(state->builder, native, storage,
+                              "literal.cached");
     }
     return nullptr;
 }
@@ -1017,6 +1061,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             result = materialized_array(state, instruction);
             if (!result) result = materialized_string(state, instruction);
             if (!result) result = materialized_reloc_array(state, instruction);
+            if (!result) result = materialized_reloc_value(state, instruction);
             if (!result) result = materialized_nested_array(state, instruction);
             if (!result) result = materialized_raw_value(state, instruction);
         }
@@ -1635,6 +1680,13 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                 reloc_writer_parameters, 7, false);
             LLVMValueRef reloc_writer = LLVMAddFunction(module,
                 "n00bb_comptime_emit_reloc_array", reloc_writer_type);
+            LLVMTypeRef reloc_value_parameters[] = {
+                result, pointer, result, pointer, result, pointer,
+            };
+            LLVMTypeRef reloc_value_type = LLVMFunctionType(result,
+                reloc_value_parameters, 6, false);
+            LLVMValueRef reloc_value_writer = LLVMAddFunction(module,
+                "n00bb_comptime_emit_reloc_value", reloc_value_type);
             LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
             LLVMTypeRef string_fields[] = {i64, i64};
             LLVMTypeRef string_type = LLVMStructTypeInContext(context,
@@ -1657,18 +1709,24 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                 "n00bb_comptime_emit_value", value_writer_type);
             for (size_t i = 0; i < array_producer_count; i++) {
                 const n00bb_llvm_array_producer_t *spec = &array_producers[i];
+                th_type *producer_result = spec->function
+                    ? th_func_ret(spec->function->type) : nullptr;
+                bool reloc_array = spec->kind == N00BB_LLVM_LITERAL_RELOC
+                    && producer_result
+                    && th_kind_of(th_resolve(producer_result)) == TH_SEQUENCE;
                 LLVMTypeRef expected = spec->kind == N00BB_LLVM_LITERAL_EFFECT
                     ? LLVMVoidTypeInContext(context)
                     : spec->kind == N00BB_LLVM_LITERAL_STRING
                         ? string_type
                     : (spec->kind == N00BB_LLVM_LITERAL_ARRAY
-                        || spec->kind == N00BB_LLVM_LITERAL_RELOC_ARRAY
+                        || reloc_array
                         || spec->kind == N00BB_LLVM_LITERAL_NESTED_ARRAY)
                         ? array_type
-                    : spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE
+                    : (spec->kind == N00BB_LLVM_LITERAL_RAW_VALUE
+                        || spec->kind == N00BB_LLVM_LITERAL_RELOC)
                         && spec->function
                         ? value_type(spec->function->owner,
-                            th_func_ret(spec->function->type), context)
+                            producer_result, context)
                         : nullptr;
                 LLVMValueRef producer = spec->symbol
                     ? LLVMGetNamedFunction(module, spec->symbol) : nullptr;
@@ -1677,11 +1735,15 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                         LLVMFunctionType(expected, nullptr, 0, false));
                 if (!producer || (spec->kind == N00BB_LLVM_LITERAL_ARRAY
                         && !spec->element_stride)
-                    || (spec->kind == N00BB_LLVM_LITERAL_RELOC_ARRAY
+                    || (spec->kind == N00BB_LLVM_LITERAL_RELOC
                         && (!spec->element_stride || !spec->string_offsets
                             || !spec->byte_mask
                             || !spec->string_offset_count
-                            || spec->string_offset_count > UINT32_MAX))
+                            || spec->string_offset_count > UINT32_MAX
+                            || (!reloc_array && (!expected
+                                || LLVMABISizeOfType(
+                                    LLVMGetModuleDataLayout(module), expected)
+                                    != spec->element_stride))))
                     || (spec->kind == N00BB_LLVM_LITERAL_NESTED_ARRAY
                         && (spec->element_stride
                             != sizeof(n00b_abi_array_value_v1)
@@ -1744,7 +1806,7 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                     };
                     status = LLVMBuildCall2(builder, value_writer_type,
                         value_writer, arguments, 3, "literal.write");
-                } else if (spec->kind == N00BB_LLVM_LITERAL_RELOC_ARRAY) {
+                } else if (spec->kind == N00BB_LLVM_LITERAL_RELOC) {
                     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
                     LLVMValueRef *offsets = calloc(spec->string_offset_count,
                                                     sizeof(*offsets));
@@ -1773,21 +1835,42 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
                     LLVMSetInitializer(mask_data, mask_values);
                     LLVMSetGlobalConstant(mask_data, true);
                     LLVMSetLinkage(mask_data, LLVMPrivateLinkage);
-                    LLVMValueRef arguments[] = {
-                        LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
-                                     false),
-                        LLVMBuildExtractValue(builder, value, 0,
-                                              "array.data"),
-                        LLVMBuildExtractValue(builder, value, 1,
-                                              "array.descriptor"),
-                        LLVMConstInt(result, spec->element_stride, false),
-                        offset_data,
-                        LLVMConstInt(result, spec->string_offset_count,
-                                     false),
-                        mask_data,
-                    };
-                    status = LLVMBuildCall2(builder, reloc_writer_type,
-                        reloc_writer, arguments, 7, "literal.write");
+                    if (reloc_array) {
+                        LLVMValueRef arguments[] = {
+                            LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
+                                         false),
+                            LLVMBuildExtractValue(builder, value, 0,
+                                                  "array.data"),
+                            LLVMBuildExtractValue(builder, value, 1,
+                                                  "array.descriptor"),
+                            LLVMConstInt(result, spec->element_stride,
+                                         false),
+                            offset_data,
+                            LLVMConstInt(result, spec->string_offset_count,
+                                         false),
+                            mask_data,
+                        };
+                        status = LLVMBuildCall2(builder, reloc_writer_type,
+                            reloc_writer, arguments, 7, "literal.write");
+                    } else {
+                        LLVMValueRef storage = LLVMBuildAlloca(builder,
+                            expected, "literal.reloc.storage");
+                        LLVMBuildStore(builder, value, storage);
+                        LLVMValueRef arguments[] = {
+                            LLVMConstInt(result, N00BB_COMPTIME_RESULT_FD,
+                                         false),
+                            storage,
+                            LLVMConstInt(result, spec->element_stride,
+                                         false),
+                            offset_data,
+                            LLVMConstInt(result, spec->string_offset_count,
+                                         false),
+                            mask_data,
+                        };
+                        status = LLVMBuildCall2(builder, reloc_value_type,
+                            reloc_value_writer, arguments, 6,
+                            "literal.write");
+                    }
                 } else if (spec->kind == N00BB_LLVM_LITERAL_NESTED_ARRAY) {
                     LLVMValueRef mask_values = LLVMConstStringInContext(
                         context, (const char *)spec->byte_mask,

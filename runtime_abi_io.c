@@ -255,50 +255,84 @@ static bool write_masked_segment(int32_t fd, const uint8_t *element,
     return true;
 }
 
+static bool reloc_offsets_valid(uint32_t stride,
+                                const uint32_t *string_offsets,
+                                uint32_t offset_count,
+                                const uint8_t *byte_mask)
+{
+    if (!stride || !string_offsets || !offset_count || !byte_mask)
+        return false;
+    uint32_t end = 0;
+    for (uint32_t i = 0; i < offset_count; i++) {
+        uint32_t offset = string_offsets[i];
+        if (offset < end || offset > stride
+            || sizeof(n00b_abi_string_v1) > stride - offset) return false;
+        end = offset + sizeof(n00b_abi_string_v1);
+    }
+    return true;
+}
+
+static bool write_reloc_element(int32_t fd, const uint8_t *element,
+                                uint32_t stride,
+                                const uint32_t *string_offsets,
+                                uint32_t offset_count,
+                                const uint8_t *byte_mask)
+{
+    const uint8_t zero[sizeof(n00b_abi_string_v1)] = {0};
+    uint32_t cursor = 0;
+    for (uint32_t j = 0; j < offset_count; j++) {
+        uint32_t offset = string_offsets[j];
+        if (!write_masked_segment(fd, element, byte_mask, cursor, offset)
+            || !write_all(fd, zero, sizeof(zero))) return false;
+        cursor = offset + sizeof(zero);
+    }
+    if (!write_masked_segment(fd, element, byte_mask, cursor, stride))
+        return false;
+    for (uint32_t j = 0; j < offset_count; j++) {
+        n00b_abi_string_v1 value;
+        const uint8_t *source = element + string_offsets[j];
+        uint8_t *destination = (uint8_t *)&value;
+        for (size_t b = 0; b < sizeof(value); b++)
+            destination[b] = source[b];
+        if (n00bb_comptime_emit_string(fd, value.words[0],
+                                       value.words[1])) return false;
+    }
+    return true;
+}
+
+int32_t n00bb_comptime_emit_reloc_value(
+    int32_t fd, const void *data, uint32_t stride,
+    const uint32_t *string_offsets, uint32_t offset_count,
+    const uint8_t *byte_mask)
+{
+    const uint64_t count = 1;
+    if (fd < 0 || !data || !reloc_offsets_valid(stride, string_offsets,
+                                                offset_count, byte_mask)
+        || !write_all(fd, (const uint8_t *)&count, sizeof(count))
+        || !write_reloc_element(fd, data, stride, string_offsets,
+                                offset_count, byte_mask)) return -1;
+    return 0;
+}
+
 int32_t n00bb_comptime_emit_reloc_array(
     int32_t fd, const void *data,
     const n00b_abi_array_descriptor_header_v1 *descriptor,
     uint32_t stride, const uint32_t *string_offsets, uint32_t offset_count,
     const uint8_t *byte_mask)
 {
-    if (fd < 0 || !data || !descriptor || !stride || !string_offsets
-        || !offset_count || !byte_mask || descriptor->rank != 1
+    if (fd < 0 || !data || !descriptor
+        || !reloc_offsets_valid(stride, string_offsets, offset_count,
+                                byte_mask) || descriptor->rank != 1
         || descriptor->flat_rank != 1 || descriptor->flags
         || descriptor->reserved_zero
         || descriptor->total_count != ((const uint64_t *)(descriptor + 1))[0]
         || descriptor->total_count > SIZE_MAX / stride)
         return -1;
-    uint32_t end = 0;
-    for (uint32_t i = 0; i < offset_count; i++) {
-        uint32_t offset = string_offsets[i];
-        if (offset < end || offset > stride
-            || sizeof(n00b_abi_string_v1) > stride - offset) return -1;
-        end = offset + sizeof(n00b_abi_string_v1);
-    }
     uint64_t count = descriptor->total_count;
     if (!write_all(fd, (const uint8_t *)&count, sizeof(count))) return -1;
-    const uint8_t zero[sizeof(n00b_abi_string_v1)] = {0};
-    for (uint64_t i = 0; i < count; i++) {
-        const uint8_t *element = (const uint8_t *)data + i * stride;
-        uint32_t cursor = 0;
-        for (uint32_t j = 0; j < offset_count; j++) {
-            uint32_t offset = string_offsets[j];
-            if (!write_masked_segment(fd, element, byte_mask, cursor, offset)
-                || !write_all(fd, zero, sizeof(zero))) return -1;
-            cursor = offset + sizeof(zero);
-        }
-        if (!write_masked_segment(fd, element, byte_mask, cursor, stride))
-            return -1;
-        for (uint32_t j = 0; j < offset_count; j++) {
-            n00b_abi_string_v1 value;
-            const uint8_t *source = element + string_offsets[j];
-            uint8_t *destination = (uint8_t *)&value;
-            for (size_t b = 0; b < sizeof(value); b++)
-                destination[b] = source[b];
-            if (n00bb_comptime_emit_string(fd, value.words[0],
-                                           value.words[1])) return -1;
-        }
-    }
+    for (uint64_t i = 0; i < count; i++)
+        if (!write_reloc_element(fd, (const uint8_t *)data + i * stride,
+                stride, string_offsets, offset_count, byte_mask)) return -1;
     return 0;
 }
 

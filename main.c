@@ -47387,7 +47387,7 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
             *completed = i + 1;
             continue;
         }
-        if (producers[i].kind == N00BB_LLVM_LITERAL_RELOC_ARRAY) {
+        if (producers[i].kind == N00BB_LLVM_LITERAL_RELOC) {
             uint32_t stride = producers[i].element_stride;
             size_t fields = producers[i].string_offset_count;
             off_t start = lseek(fd, 0, SEEK_CUR);
@@ -47537,9 +47537,10 @@ n00bb_execute_comptime(core_link_unit_t *link,
             && !memcmp(result_name, "string", 6) && !result_arity;
         th_type *element = result && th_kind_of(result) == TH_SEQUENCE
             ? th_seq_elem(result) : nullptr;
+        th_type *raw_type = element ? element : result;
         core_list_t(uint32_t) string_offsets = core_list_new(uint32_t);
-        bool reloc_array = element
-            && n00bb_literal_string_offsets(producer->owner, element, 0,
+        bool reloc_result = !is_string && raw_type
+            && n00bb_literal_string_offsets(producer->owner, raw_type, 0,
                                              &string_offsets)
             && string_offsets.len != 0;
         th_type *inner_element = element && th_kind_of(th_resolve(element))
@@ -47553,7 +47554,6 @@ n00bb_execute_comptime(core_link_unit_t *link,
             && ir_layout_final_stride_bits(inner_layout,
                                            &inner_stride_bits)
             && !(inner_stride_bits % 8) && inner_stride_bits / 8 <= UINT32_MAX;
-        th_type *raw_type = element ? element : result;
         bool bool_value = !element && !effect_only && !is_string
             && ir_machine_of(producer->owner, result).class == IR_CLASS_BOOL;
         const ir_final_layout_t *layout = raw_type
@@ -47568,7 +47568,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
                 || (has_stride && stride_bits % 8)
                 || stride > UINT32_MAX
                 || string_offsets.len > UINT32_MAX
-                || (!bool_value && !reloc_array && !nested_array
+                || (!bool_value && !reloc_result && !nested_array
                     && !n00bb_literal_raw_element(
                         producer->owner, raw_type)))) {
             core_list_free(string_offsets);
@@ -47586,7 +47586,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
         producers[i].function = producer;
         producers[i].kind = effect_only ? N00BB_LLVM_LITERAL_EFFECT
             : is_string ? N00BB_LLVM_LITERAL_STRING
-            : reloc_array ? N00BB_LLVM_LITERAL_RELOC_ARRAY
+            : reloc_result ? N00BB_LLVM_LITERAL_RELOC
             : nested_array ? N00BB_LLVM_LITERAL_NESTED_ARRAY
             : element ? N00BB_LLVM_LITERAL_ARRAY
                       : N00BB_LLVM_LITERAL_RAW_VALUE;
@@ -47594,7 +47594,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
             ? 0 : (uint32_t)stride;
         if (nested_array)
             producers[i].inner_stride = (uint32_t)(inner_stride_bits / 8);
-        if (reloc_array) {
+        if (reloc_result) {
             producers[i].string_offsets = string_offsets.data;
             producers[i].string_offset_count = string_offsets.len;
             producers[i].byte_mask = n00bb_literal_byte_mask(layout,
@@ -47607,7 +47607,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
                                                        inner_stride_bits);
             ok = ok && producers[i].byte_mask != nullptr;
         }
-        if ((reloc_array || nested_array) && !producers[i].byte_mask)
+        if ((reloc_result || nested_array) && !producers[i].byte_mask)
             core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-B0013"),
                 CORE_STRING_STATIC("native build cannot materialize a bit-packed literal result"));
@@ -47818,7 +47818,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             && phase_arrays[phase_count].bytes
             && (phase_arrays[phase_count].kind == N00BB_LLVM_LITERAL_STRING
                 || phase_arrays[phase_count].kind
-                    == N00BB_LLVM_LITERAL_RELOC_ARRAY
+                    == N00BB_LLVM_LITERAL_RELOC
                 || phase_arrays[phase_count].element_stride);
         phase_count++;
     }

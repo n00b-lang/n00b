@@ -9,6 +9,11 @@ int32_t n00bb_comptime_emit_reloc_array(
     uint32_t stride, const uint32_t *string_offsets, uint32_t offset_count,
     const uint8_t *byte_mask);
 
+int32_t n00bb_comptime_emit_reloc_value(
+    int32_t fd, const void *data, uint32_t stride,
+    const uint32_t *string_offsets, uint32_t offset_count,
+    const uint8_t *byte_mask);
+
 int32_t n00bb_comptime_emit_nested_array(
     int32_t fd, const n00b_abi_array_value_v1 *data,
     const n00b_abi_array_descriptor_header_v1 *descriptor,
@@ -160,6 +165,13 @@ int main(void)
     assert(length == 5);
     pos += sizeof(length) + 1;
     assert(memcmp(serialized + pos, "right", 5) == 0);
+    assert(n00bb_comptime_emit_reloc_value(fds[1], element,
+        sizeof(element), offsets, 2, mask) == 0);
+    uint8_t serialized_value[sizeof(serialized)];
+    assert(read(fds[0], serialized_value, sizeof(serialized_value))
+        == sizeof(serialized_value));
+    assert(memcmp(serialized_value, serialized,
+                  sizeof(serialized)) == 0);
     struct {
         n00b_abi_array_descriptor_header_v1 header;
         uint64_t extent;

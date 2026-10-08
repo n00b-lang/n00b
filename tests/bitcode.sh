@@ -41,6 +41,9 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/litmod_nested_arrays" \
     "$program_dir/bitcode_litmod_nested_arrays.n00b"
 "$tmp/litmod_nested_arrays"
+"$compiler" build --output "$tmp/litmod_scalar_tuple" \
+    "$program_dir/bitcode_litmod_scalar_tuple.n00b"
+"$tmp/litmod_scalar_tuple"
 "$compiler" build --output "$tmp/litmod_string" \
     "$program_dir/bitcode_litmod_string.n00b"
 "$tmp/litmod_string"
