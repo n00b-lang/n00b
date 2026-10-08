@@ -46059,7 +46059,7 @@ abi_type_owner(void *context, th_type *type)
     uint64_t typehash = th_hash(sources->types, th_resolve(type));
     for (size_t i = 0; i < sources->type_owners.len; i++)
         if (sources->type_owners.data[i].typehash == typehash)
-            return sources->type_owners.data[i].symbol;
+            return canonical_symbol(sources->type_owners.data[i].symbol);
     return nullptr;
 }
 
@@ -46149,9 +46149,16 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             for (parse_sym_entry_t *symbol = scope->first_in_scope;
                  valid && symbol; symbol = symbol->next_in_scope) {
                 if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
-                    || !symbol->adt_kind.u8_bytes
                     || core_string_eq(symbol->adt_kind,
                         CORE_STRING_STATIC("alias"))) continue;
+                bool shaped = symbol->member_scope
+                    && (core_string_eq(symbol->member_scope->scope_tag,
+                                       CORE_STRING_STATIC("flagset"))
+                        || core_string_eq(symbol->member_scope->scope_tag,
+                                          CORE_STRING_STATIC("variant"))
+                        || core_string_eq(symbol->member_scope->scope_tag,
+                                          CORE_STRING_STATIC("trait")));
+                if (!symbol->adt_kind.u8_bytes && !shaped) continue;
                 core_list_push(sources.type_owners,
                     ((n00bb_abi_type_owner_t){
                         .typehash = th_hash(types, th_resolve(symbol->type)),

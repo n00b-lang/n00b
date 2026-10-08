@@ -402,6 +402,48 @@ check_imported_enum(const core_object_section_t *metadata,
 }
 
 static void
+check_imported_flagset(const core_object_section_t *metadata,
+                       const n00bb_abi_directory_entry_t *entries,
+                       size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *requirements = entry_for(entries,
+        count, N00B_ABI_TABLE_REQUIREMENT);
+    const n00bb_abi_directory_entry_t *items = entry_for(entries, count,
+        N00B_ABI_TABLE_ENUM_ITEM);
+    assert(types && requirements && items && items->record_count == 1);
+    th_ctx *type_context = th_ctx_new();
+    assert(type_context);
+    uint64_t hash = th_hash(type_context,
+        th_name(type_context, "flagset_archive_dep.impl.FilePerms"));
+    uint32_t type_index = 0;
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *type = row_at(metadata, types, i);
+        if (type->typehash != hash) continue;
+        assert(!type_index);
+        assert(type->kind == N00B_ABI_TYPE_FLAGSET
+            && !type->owner_module_index && !type->layout_index
+            && !type->fields_or_arms.count
+            && type->semantic_width_bits == 2);
+        type_index = i;
+    }
+    assert(type_index);
+    bool found = false;
+    for (uint32_t i = 1; i < requirements->record_count; i++) {
+        const n00b_abi_requirement_v1 *requirement = row_at(metadata,
+            requirements, i);
+        if (requirement->symbol_kind != N00B_ABI_SYMBOL_TYPE
+            || requirement->contract_type_index != type_index) continue;
+        assert(!found && requirement->required_phase_mask
+            && requirement->requesting_module_index == 1);
+        found = true;
+    }
+    assert(found);
+    th_ctx_free(type_context);
+}
+
+static void
 check_variant(const core_object_section_t *metadata,
               const n00bb_abi_directory_entry_t *entries, size_t count)
 {
@@ -1798,6 +1840,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "import")
             || !strcmp(argv[2], "import-record")
             || !strcmp(argv[2], "import-enum")
+            || !strcmp(argv[2], "import-flagset")
             || !strcmp(argv[2], "variant")
             || !strcmp(argv[2], "constraint")
             || !strcmp(argv[2], "trait-methods")
@@ -2024,6 +2067,12 @@ main(int argc, char **argv)
 
     if (argc == 3 && !strcmp(argv[2], "import-enum")) {
         check_imported_enum(&metadata, entries, header.directory_count);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "import-flagset")) {
+        check_imported_flagset(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

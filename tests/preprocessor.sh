@@ -1541,6 +1541,14 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/import_enum_abi.o" foreign_enum_user
 [ -s "$tmp/import_enum_abi.o" ]
 "$abi_record_object_test" "$tmp/import_enum_abi.o" import-enum
+N00B_PATH="$interface_programs" "$compiler" compile \
+    --output "$tmp/import_flagset_abi.o" \
+    "$script_dir/programs/abi/foreign_flagset_user.n00b"
+"$abi_record_object_test" "$tmp/import_flagset_abi.o" import-flagset
+N00B_PATH="$interface_programs" "$compiler" library \
+    --output "$tmp/linked_flagset_abi.o" \
+    "$script_dir/programs/abi/foreign_flagset_user.n00b"
+"$abi_link_input_test" --linked-flagset "$tmp/linked_flagset_abi.o"
 "$compiler" compile --output "$tmp/generic_abi.o" \
     "$program_dir/generic_modify_parameter.n00b"
 [ -s "$tmp/generic_abi.o" ]

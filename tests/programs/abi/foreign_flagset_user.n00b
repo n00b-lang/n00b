@@ -1,0 +1,5 @@
+import flagset_archive_dep
+
+public func keep(value: flagset_archive_dep.FilePerms) -> flagset_archive_dep.FilePerms {
+    return value
+}

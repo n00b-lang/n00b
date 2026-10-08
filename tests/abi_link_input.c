@@ -739,6 +739,65 @@ test_linked_library_object(const char *path)
 }
 
 static void
+test_linked_flagset(const char *path)
+{
+    size_t object_bytes;
+    uint8_t *object = read_object(path, &object_bytes);
+    core_target_desc_t target;
+    assert(core_target_profile(host_triple(), 0, &target));
+    n00bb_abi_object_view_t view = {0};
+    assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
+    const n00bb_abi_directory_entry_t *modules = n00bb_abi_object_table(
+        &view, N00B_ABI_TABLE_MODULE);
+    const n00bb_abi_directory_entry_t *items = n00bb_abi_object_table(
+        &view, N00B_ABI_TABLE_ENUM_ITEM);
+    assert(modules && modules->record_count == 4
+        && items && items->record_count == 5
+        && !n00bb_abi_object_table(&view, N00B_ABI_TABLE_REQUIREMENT)
+        && !n00bb_abi_object_table(&view, N00B_ABI_TABLE_INDEX_PATCH));
+    uint32_t provider_index = 0;
+    for (uint32_t i = 1; i < modules->record_count; i++) {
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_MODULE, i);
+        n00bb_abi_string_view_t name;
+        assert(module && n00bb_abi_object_string(&view,
+            &module->full_path, &name));
+        if (name.length == strlen("flagset_archive_dep.impl")
+            && !memcmp(name.bytes, "flagset_archive_dep.impl", name.length))
+            provider_index = i;
+    }
+    assert(provider_index);
+    const n00b_abi_symbol_v1 *symbol = find_symbol(&view, "FilePerms",
+        N00B_ABI_SYMBOL_TYPE);
+    assert(symbol && symbol->module_index == provider_index);
+    const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
+        N00B_ABI_TABLE_TYPE, symbol->type_index);
+    assert(type && type->kind == N00B_ABI_TYPE_FLAGSET
+        && type->owner_module_index == provider_index
+        && type->semantic_width_bits == 2
+        && type->fields_or_arms.count == 4);
+    const char *names[] = {"read", "write", "read_write", "none"};
+    const uint64_t masks[] = {1, 2, 3, 0};
+    for (uint32_t i = 0; i < 4; i++) {
+        const uint8_t *slot = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_U32_STREAM, type->fields_or_arms.first + i);
+        assert(slot);
+        const n00b_abi_enum_item_v1 *item = n00bb_abi_object_row(&view,
+            N00B_ABI_TABLE_ENUM_ITEM, core_le_load_u32(slot));
+        n00bb_abi_string_view_t name;
+        assert(item && n00bb_abi_object_string(&view, &item->name, &name)
+            && name.length == strlen(names[i])
+            && !memcmp(name.bytes, names[i], name.length));
+        assert(item->parent_type_index == symbol->type_index
+            && item->declaration_ordinal == i
+            && item->value_low == masks[i] && !item->value_high
+            && item->flags == (i < 2 ? N00B_ABI_ENUM_ITEM_FLAG_PRIMITIVE : 0));
+    }
+    n00bb_abi_object_close(&view);
+    free(object);
+}
+
+static void
 test_imported_function_requirement(const char *root_path,
     const char *facade_path, const char *impl_path)
 {
@@ -1930,6 +1989,8 @@ main(int argc, char **argv)
             test_self_import_selection(argv[2]);
         else if (!strcmp(argv[1], "--linked-library"))
             test_linked_library_object(argv[2]);
+        else if (!strcmp(argv[1], "--linked-flagset"))
+            test_linked_flagset(argv[2]);
         else if (!strcmp(argv[1], "--string-storage"))
             test_string_storage_link(argv[2]);
         else if (!strcmp(argv[1], "--constraint"))
