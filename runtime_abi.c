@@ -380,7 +380,9 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
                 const n00b_abi_symbol_v1 *symbol = n00b_abi_v1_symbol(
                     snapshot, facts.symbol);
                 if (!symbol || symbol->kind != facts.symbol_kind
-                    || symbol->type_index != facts.type)
+                    || symbol->type_index != facts.type
+                    || (facts.visibility
+                        && symbol->visibility != facts.visibility))
                     return invalid_record(error, N00B_ABI_TABLE_TYPE,
                                           i, 0);
             }

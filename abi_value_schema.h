@@ -132,5 +132,15 @@ n00bb_abi_row_values_valid(uint32_t kind, const void *row,
             return false;
         }
     }
+    if (kind == N00B_ABI_TABLE_SYMBOL) {
+        if (row_bytes < sizeof(n00b_abi_symbol_v1)) return false;
+        const n00b_abi_symbol_v1 *symbol = row;
+        if ((symbol->flags & N00B_ABI_SYMBOL_FLAG_EXPORTED)
+            && symbol->visibility != N00B_ABI_VISIBILITY_PUBLIC) {
+            if (invalid_offset) *invalid_offset = offsetof(
+                n00b_abi_symbol_v1, visibility);
+            return false;
+        }
+    }
     return true;
 }

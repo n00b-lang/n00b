@@ -1848,7 +1848,9 @@ type_backlinks_valid(const n00bb_abi_object_view_t *view,
             const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
                 N00B_ABI_TABLE_SYMBOL, facts.symbol);
             if (!symbol || symbol->kind != facts.symbol_kind
-                || symbol->type_index != facts.type) return false;
+                || symbol->type_index != facts.type
+                || (facts.visibility
+                    && symbol->visibility != facts.visibility)) return false;
         }
         for (uint32_t j = 0; j < i; j++) {
             const void *previous = indexed_range_row(view,

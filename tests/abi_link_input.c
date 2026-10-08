@@ -1159,6 +1159,8 @@ test_imported_value_requirement(const char *root_path, const char *dep_path)
     linked_bytes = 0;
     n00b_abi_symbol_v1 *provider_symbol = (void *)symbol;
     uint32_t saved_visibility = provider_symbol->visibility;
+    uint32_t saved_flags = provider_symbol->flags;
+    provider_symbol->flags &= ~N00B_ABI_SYMBOL_FLAG_EXPORTED;
     provider_symbol->visibility = N00B_ABI_VISIBILITY_PRIVATE;
     assert(!n00bb_abi_link_selected_objects(&selected, &target,
         &linked, &linked_bytes) && !linked && !linked_bytes);
@@ -1181,6 +1183,7 @@ test_imported_value_requirement(const char *root_path, const char *dep_path)
     assert(!n00bb_abi_link_selected_objects(&selected, &target,
         &linked, &linked_bytes) && !linked && !linked_bytes);
     provider_symbol->visibility = N00B_ABI_VISIBILITY_PUBLIC;
+    provider_symbol->flags = saved_flags;
     assert(n00bb_abi_link_selected_objects(&selected, &target,
         &linked, &linked_bytes));
     core_free(linked);
@@ -2268,6 +2271,14 @@ test_type_backlinks_remap(void)
     metadata.types[1].tracing_index = 1;
     assert(n00bb_abi_remap_row(&selected, plan, 0,
         N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.fields[1].visibility = N00B_ABI_VISIBILITY_PUBLIC;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.fields[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
+    metadata.symbols[1].visibility = N00B_ABI_VISIBILITY_PACKAGE;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));
+    metadata.symbols[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     metadata.layouts[1].type_index = 2;
     assert(!n00bb_abi_remap_row(&selected, plan, 0,
         N00B_ABI_TABLE_TYPE, 1, &type, sizeof(type), &stream));

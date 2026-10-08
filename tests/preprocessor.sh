@@ -1537,6 +1537,10 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/abi_record_nested_linked.o" abi_record_nested_probe
 "$abi_record_object_test" "$tmp/abi_record_nested_linked.o" record-nested-storage
 "$abi_register_object_test" "$tmp/abi_record_nested_linked.o" 1
+"$abi_register_object_test" "$tmp/abi_record_nested_linked.o" 1 \
+    --bad-field-visibility
+"$abi_register_object_test" "$tmp/abi_record_nested_linked.o" 1 \
+    --bad-export-visibility
 "$compiler" compile --output "$tmp/abi_variant_storage_probe.o" \
     "$program_dir/../abi/abi_variant_storage_probe.n00b"
 "$abi_record_object_test" "$tmp/abi_variant_storage_probe.o" variant-storage

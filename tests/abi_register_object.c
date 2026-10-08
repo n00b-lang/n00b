@@ -124,8 +124,13 @@ main(int argc, char **argv)
         && !strcmp(argv[3], "--bad-shape-total");
     bool non_array_shape = argc == 4
         && !strcmp(argv[3], "--shape-on-non-array");
+    bool bad_field_visibility = argc == 4
+        && !strcmp(argv[3], "--bad-field-visibility");
+    bool bad_export_visibility = argc == 4
+        && !strcmp(argv[3], "--bad-export-visibility");
     if (bad_argument || missing_constructor || bad_shape
-        || non_array_shape) {
+        || non_array_shape || bad_field_visibility
+        || bad_export_visibility) {
         const uint8_t *base = (const uint8_t *)image.metadata;
         const n00b_abi_header_v1 *header = image.metadata;
         n00bb_abi_directory_entry_t symbols = {0};
@@ -176,6 +181,36 @@ main(int argc, char **argv)
                 changed = true;
                 break;
             }
+            if (bad_field_visibility && entry.kind == N00B_ABI_TABLE_FIELD) {
+                assert(entry.record_bytes == sizeof(n00b_abi_field_v1));
+                for (uint32_t j = 1; j < entry.record_count; j++) {
+                    n00b_abi_field_v1 *field = (void *)(
+                        loaded[metadata.native_index] + entry.file_offset
+                        + (size_t)j * entry.record_bytes);
+                    if (!field->symbol_index) continue;
+                    field->visibility = field->visibility
+                        == N00B_ABI_VISIBILITY_PUBLIC
+                            ? N00B_ABI_VISIBILITY_PRIVATE
+                            : N00B_ABI_VISIBILITY_PUBLIC;
+                    changed = true;
+                    break;
+                }
+                break;
+            }
+            if (bad_export_visibility && entry.kind == N00B_ABI_TABLE_SYMBOL) {
+                assert(entry.record_bytes == sizeof(n00b_abi_symbol_v1));
+                for (uint32_t j = 1; j < entry.record_count; j++) {
+                    n00b_abi_symbol_v1 *symbol = (void *)(
+                        loaded[metadata.native_index] + entry.file_offset
+                        + (size_t)j * entry.record_bytes);
+                    if (!(symbol->flags & N00B_ABI_SYMBOL_FLAG_EXPORTED))
+                        continue;
+                    symbol->visibility = N00B_ABI_VISIBILITY_PRIVATE;
+                    changed = true;
+                    break;
+                }
+                break;
+            }
             if (non_array_shape && entry.kind == N00B_ABI_TABLE_STORAGE) {
                 assert(entry.record_bytes == sizeof(n00b_abi_storage_v1)
                     && symbols.record_bytes == sizeof(n00b_abi_symbol_v1));
@@ -206,6 +241,10 @@ main(int argc, char **argv)
         if (bad_shape) assert(bad_error.table_kind == N00B_ABI_TABLE_SHAPE);
         if (non_array_shape)
             assert(bad_error.table_kind == N00B_ABI_TABLE_STORAGE);
+        if (bad_field_visibility)
+            assert(bad_error.table_kind == N00B_ABI_TABLE_TYPE);
+        if (bad_export_visibility)
+            assert(bad_error.table_kind == N00B_ABI_TABLE_SYMBOL);
         assert(!n00b_abi_v1_current_snapshot());
         free(object);
         return 0;
