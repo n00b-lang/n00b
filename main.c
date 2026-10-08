@@ -47344,10 +47344,15 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
             *completed = i + 1;
             continue;
         }
-        if (producers[i].kind == N00BB_LLVM_LITERAL_NESTED_ARRAY) {
+        if (producers[i].kind == N00BB_LLVM_LITERAL_NESTED_ARRAY
+            || producers[i].kind == N00BB_LLVM_LITERAL_NESTED_RELOC) {
+            bool reloc = producers[i].kind
+                == N00BB_LLVM_LITERAL_NESTED_RELOC;
             uint32_t stride = producers[i].inner_stride;
+            size_t fields = producers[i].string_offset_count;
             off_t start = lseek(fd, 0, SEEK_CUR);
             if (!stride || start < 0 || start > info.st_size
+                || (reloc && (!fields || !producers[i].string_offsets))
                 || count > (uint64_t)(info.st_size - start) / sizeof(uint64_t))
                 return false;
             core_buffer_t *packed = core_buffer_empty();
@@ -47365,15 +47370,22 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
                     && child_count <= (SIZE_MAX - sizeof(child_count)
                         - packed->byte_len - 1) / stride;
                 if (!valid) break;
-                size_t bytes = (size_t)child_count * stride;
                 core_buffer_append(packed, (const char *)&child_count,
                                    sizeof(child_count));
-                core_buffer_ensure(packed, bytes + 1);
-                valid = n00bb_read_exact(fd, packed->data + packed->byte_len,
-                                         bytes);
-                if (valid) {
-                    packed->byte_len += bytes;
+                for (uint64_t k = 0; valid && k < child_count; k++) {
+                    if (packed->byte_len > SIZE_MAX - stride - 1) {
+                        valid = false;
+                        break;
+                    }
+                    core_buffer_ensure(packed, stride + 1);
+                    valid = n00bb_read_exact(fd,
+                        packed->data + packed->byte_len, stride);
+                    if (!valid) break;
+                    packed->byte_len += stride;
                     packed->data[packed->byte_len] = 0;
+                    for (size_t f = 0; valid && reloc && f < fields; f++)
+                        valid = n00bb_capture_string_payload(fd,
+                            info.st_size, packed);
                 }
             }
             if (!valid) {
@@ -47386,6 +47398,14 @@ n00bb_capture_literal_results(int fd, n00bb_link_analysis_t *analysis,
             binding->materialized_stride = producers[i].element_stride;
             binding->materialized_inner_stride = stride;
             binding->materialized_kind = producers[i].kind;
+            if (reloc) {
+                uint32_t *offsets = core_alloc_array(uint32_t, fields);
+                if (!offsets) return false;
+                memcpy(offsets, producers[i].string_offsets,
+                       fields * sizeof(*offsets));
+                binding->materialized_string_offsets = offsets;
+                binding->materialized_string_offset_count = fields;
+            }
             *completed = i + 1;
             continue;
         }
@@ -47550,9 +47570,16 @@ n00bb_execute_comptime(core_link_unit_t *link,
         const ir_final_layout_t *inner_layout = inner_element
             ? ir_layout_final(producer->owner, inner_element,
                               ir_module_target(producer->owner)) : nullptr;
+        core_list_t(uint32_t) inner_string_offsets =
+            core_list_new(uint32_t);
+        bool nested_reloc = inner_element
+            && n00bb_literal_string_offsets(producer->owner,
+                inner_element, 0, &inner_string_offsets)
+            && inner_string_offsets.len != 0;
         uint64_t inner_stride_bits = 0;
         bool nested_array = inner_element
-            && n00bb_literal_raw_element(producer->owner, inner_element)
+            && (n00bb_literal_raw_element(producer->owner, inner_element)
+                || nested_reloc)
             && ir_layout_final_stride_bits(inner_layout,
                                            &inner_stride_bits)
             && !(inner_stride_bits % 8) && inner_stride_bits / 8 <= UINT32_MAX;
@@ -47574,6 +47601,7 @@ n00bb_execute_comptime(core_link_unit_t *link,
                     && !n00bb_literal_raw_element(
                         producer->owner, raw_type)))) {
             core_list_free(string_offsets);
+            core_list_free(inner_string_offsets);
             core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
                 CORE_STRING_STATIC("N00BB-B0013"),
                 CORE_STRING_STATIC("native build cannot materialize this literal result without relocations"));
@@ -47589,6 +47617,8 @@ n00bb_execute_comptime(core_link_unit_t *link,
         producers[i].kind = effect_only ? N00BB_LLVM_LITERAL_EFFECT
             : is_string ? N00BB_LLVM_LITERAL_STRING
             : reloc_result ? N00BB_LLVM_LITERAL_RELOC
+            : nested_array && nested_reloc
+                ? N00BB_LLVM_LITERAL_NESTED_RELOC
             : nested_array ? N00BB_LLVM_LITERAL_NESTED_ARRAY
             : element ? N00BB_LLVM_LITERAL_ARRAY
                       : N00BB_LLVM_LITERAL_RAW_VALUE;
@@ -47604,6 +47634,11 @@ n00bb_execute_comptime(core_link_unit_t *link,
             ok = ok && producers[i].byte_mask != nullptr;
         }
         else core_list_free(string_offsets);
+        if (nested_array && nested_reloc) {
+            producers[i].string_offsets = inner_string_offsets.data;
+            producers[i].string_offset_count = inner_string_offsets.len;
+        }
+        else core_list_free(inner_string_offsets);
         if (nested_array) {
             producers[i].byte_mask = n00bb_literal_byte_mask(inner_layout,
                                                        inner_stride_bits);

@@ -172,13 +172,25 @@ int32_t n00bb_comptime_emit_array(
 static bool write_masked_segment(int32_t fd, const uint8_t *element,
                                  const uint8_t *mask, uint32_t start,
                                  uint32_t end);
+static bool reloc_offsets_valid(uint32_t stride,
+                                const uint32_t *string_offsets,
+                                uint32_t offset_count,
+                                const uint8_t *byte_mask);
+static bool write_reloc_element(int32_t fd, const uint8_t *element,
+                                uint32_t stride,
+                                const uint32_t *string_offsets,
+                                uint32_t offset_count,
+                                const uint8_t *byte_mask);
 
-int32_t n00bb_comptime_emit_nested_array(
+static int32_t write_nested_array(
     int32_t fd, const n00b_abi_array_value_v1 *data,
     const n00b_abi_array_descriptor_header_v1 *descriptor,
-    uint32_t inner_stride, const uint8_t *byte_mask)
+    uint32_t inner_stride, const uint32_t *string_offsets,
+    uint32_t offset_count, const uint8_t *byte_mask)
 {
     if (fd < 0 || !data || !descriptor || !inner_stride || !byte_mask
+        || (string_offsets && !reloc_offsets_valid(inner_stride,
+            string_offsets, offset_count, byte_mask))
         || descriptor->rank != 1 || descriptor->flat_rank != 1
         || descriptor->flags || descriptor->reserved_zero
         || descriptor->total_count != ((const uint64_t *)(descriptor + 1))[0]
@@ -198,11 +210,33 @@ int32_t n00bb_comptime_emit_nested_array(
         for (uint64_t j = 0; j < child_count; j++) {
             const uint8_t *element = (const uint8_t *)data[i].data
                 + j * inner_stride;
-            if (!write_masked_segment(fd, element, byte_mask, 0,
-                                      inner_stride)) return -1;
+            if (string_offsets
+                ? !write_reloc_element(fd, element, inner_stride,
+                    string_offsets, offset_count, byte_mask)
+                : !write_masked_segment(fd, element, byte_mask, 0,
+                                        inner_stride)) return -1;
         }
     }
     return 0;
+}
+
+int32_t n00bb_comptime_emit_nested_array(
+    int32_t fd, const n00b_abi_array_value_v1 *data,
+    const n00b_abi_array_descriptor_header_v1 *descriptor,
+    uint32_t inner_stride, const uint8_t *byte_mask)
+{
+    return write_nested_array(fd, data, descriptor, inner_stride,
+                              nullptr, 0, byte_mask);
+}
+
+int32_t n00bb_comptime_emit_nested_reloc_array(
+    int32_t fd, const n00b_abi_array_value_v1 *data,
+    const n00b_abi_array_descriptor_header_v1 *descriptor,
+    uint32_t inner_stride, const uint32_t *string_offsets,
+    uint32_t offset_count, const uint8_t *byte_mask)
+{
+    return write_nested_array(fd, data, descriptor, inner_stride,
+                              string_offsets, offset_count, byte_mask);
 }
 
 int32_t n00bb_comptime_emit_value(int32_t fd, const void *data,
