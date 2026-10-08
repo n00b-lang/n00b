@@ -14,6 +14,11 @@ core_list_decl(ir_layout_bit_run_t);
 static bool publish_tuple_layout(ir_module_t *module, th_type *type,
                                  const core_target_desc_t *target,
                                  core_dict_t *seen, bool *handled);
+static bool publish_structural_record_layout(ir_module_t *module,
+                                             th_type *type,
+                                             const core_target_desc_t *target,
+                                             core_dict_t *seen,
+                                             bool *handled);
 
 static bool
 same_final_layout(const ir_final_layout_t *layout, uint32_t storage_bits,
@@ -110,6 +115,9 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         storage_bits = semantic_bits = 128;
         alignment_bytes = 8;
     }
+    else if (th_kind_of(type) == TH_RECORD)
+        return publish_structural_record_layout(module, type, target,
+                                                seen, handled);
     else if (th_kind_of(type) == TH_NAMED) {
         const char *name = nullptr;
         size_t arguments = 0;
@@ -150,6 +158,7 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         bool atomic = name && !strcmp(name, "atomic");
         th_type *definition = ir_type_definition(module, type);
         if (!definition) return true;
+        if (th_kind_of(definition) == TH_RECORD) return true;
         bool found = false;
         core_dict_get(seen, type, &found);
         if (found) return false;
@@ -454,6 +463,56 @@ publish_tuple_layout(ir_module_t *module, th_type *type,
     }
     for (size_t i = 0; i < count; i++) core_free(names ? names[i] : nullptr);
     core_free(names);
+    core_free(members);
+    return valid;
+}
+
+static bool
+publish_structural_record_layout(ir_module_t *module, th_type *type,
+                                 const core_target_desc_t *target,
+                                 core_dict_t *seen, bool *handled)
+{
+    if (ir_layout_final(module, type, target->triple)) {
+        *handled = true;
+        return true;
+    }
+    size_t count = th_record_len(type);
+    if (count > UINT32_MAX) return false;
+    n00bb_abi_record_member_t *members = count
+        ? core_alloc_array(n00bb_abi_record_member_t, count) : nullptr;
+    bool ready = true;
+    bool valid = true;
+    for (size_t i = 0; valid && i < count; i++) {
+        const th_member *member = th_record_member(type, i);
+        bool direct = false;
+        if (!member || !member->name || !member->type
+            || !publish_direct_or_alias(module, member->type, target,
+                                        seen, &direct)) {
+            valid = false;
+            break;
+        }
+        const ir_final_layout_t *child = ir_layout_final(
+            module, member->type, target->triple);
+        if (!child) {
+            ready = false;
+            break;
+        }
+        bool packable = child->n_occupied == 1
+            && child->occupied[0].offset == 0
+            && child->occupied[0].width < child->intrinsic_bits
+            && !child->n_reserved;
+        members[i] = (n00bb_abi_record_member_t){
+            .name = member->name,
+            .type = member->type,
+            .ordinal = (uint32_t)i,
+            .packed = packable,
+        };
+    }
+    if (valid && ready) {
+        valid = n00bb_abi_publish_record_layout(module, type, target,
+            N00BB_RECORD_DEFAULT, true, members, count);
+        *handled = valid;
+    }
     core_free(members);
     return valid;
 }

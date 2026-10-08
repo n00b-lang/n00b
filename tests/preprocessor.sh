@@ -1452,6 +1452,14 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
 N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/abi_tuple_storage_linked.o" abi_tuple_storage_probe
 "$abi_record_object_test" "$tmp/abi_tuple_storage_linked.o" tuple-storage
+"$compiler" compile --output "$tmp/abi_anonymous_record_probe.o" \
+    "$program_dir/../abi/abi_anonymous_record_probe.n00b"
+"$abi_record_object_test" "$tmp/abi_anonymous_record_probe.o" \
+    anonymous-record-storage
+N00B_PATH="$script_dir/programs/abi" "$compiler" library \
+    --output "$tmp/abi_anonymous_record_linked.o" abi_anonymous_record_probe
+"$abi_record_object_test" "$tmp/abi_anonymous_record_linked.o" \
+    anonymous-record-storage
 if "$compiler" lower "$program_dir/../abi/abi_nil_standalone_invalid.n00b" \
     >"$tmp/abi_nil_standalone_invalid.out" 2>&1; then
     echo 'standalone nil global unexpectedly lowered' >&2

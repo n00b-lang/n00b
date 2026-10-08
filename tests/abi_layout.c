@@ -179,7 +179,12 @@ int main(void)
         th_type *record = th_record(types, nullptr, 0);
         ok = ok && n00bb_abi_publish_direct_layout(module, record, &target,
                                                     &handled)
-            && !handled;
+            && handled;
+        const ir_final_layout_t *empty_record_layout = ir_layout_final(
+            module, record, target.triple);
+        ok = ok && empty_record_layout
+            && empty_record_layout->intrinsic_bits == 0
+            && empty_record_layout->alignment_bytes == 1;
         th_type *ir_only = th_bits(types, 73);
         th_type *failed_type = nullptr;
         ok = ok && ir_type_intern(module, ir_only)

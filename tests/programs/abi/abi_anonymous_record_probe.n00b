@@ -1,0 +1,3 @@
+public const first = (left = 8, right = "a long anonymous record string", flag = true)
+public const second = (flag = false, right = "another anonymous record string", left = 9)
+public const nested = (item = (left = 10, flag = true, right = "a nested anonymous record string"), tag = 3)

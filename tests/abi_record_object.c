@@ -1603,6 +1603,78 @@ check_tuple_storage(const uint8_t *object, size_t length,
         data_offset + stride, "a long second tuple array value");
 }
 
+static void
+check_anonymous_record_storage(const uint8_t *object, size_t length,
+    const core_object_section_t *metadata,
+    const n00bb_abi_directory_entry_t *entries, size_t count,
+    uint32_t target_id)
+{
+    core_target_object_format_t format = target_id == N00BB_ABI_TARGET_ARM64_MACOS
+        ? CORE_TARGET_OBJECT_MACH_O
+        : target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
+            ? CORE_TARGET_OBJECT_COFF : CORE_TARGET_OBJECT_ELF;
+    const n00b_abi_storage_v1 *first = storage_named(metadata, entries,
+        count, "first");
+    const n00b_abi_storage_v1 *second = storage_named(metadata, entries,
+        count, "second");
+    const n00b_abi_storage_v1 *nested = storage_named(metadata, entries,
+        count, "nested");
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *layouts = entry_for(entries, count,
+        N00B_ABI_TABLE_LAYOUT);
+    assert(types && layouts && first->type_index == second->type_index
+        && first->type_index < types->record_count);
+    const n00b_abi_type_v1 *type = row_at(metadata, types,
+        first->type_index);
+    assert(type->kind == N00B_ABI_TYPE_RECORD && !type->owner_module_index
+        && type->fields_or_arms.count == 3
+        && type->layout_index < layouts->record_count);
+    const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
+        type->layout_index);
+    assert(layout->policy == N00B_ABI_LAYOUT_DEFAULT);
+    const n00b_abi_field_v1 *left = record_field_named(metadata, entries,
+        count, first->type_index, "left");
+    const n00b_abi_field_v1 *right = record_field_named(metadata, entries,
+        count, first->type_index, "right");
+    const n00b_abi_field_v1 *flag = record_field_named(metadata, entries,
+        count, first->type_index, "flag");
+    assert(right->logical_bit_offset % 8 == 0);
+    const n00b_abi_storage_v1 *values[] = {first, second};
+    const char *texts[] = {"a long anonymous record string",
+                            "another anonymous record string"};
+    for (size_t i = 0; i < 2; i++) {
+        core_object_section_t section;
+        const n00b_abi_storage_v1 *value = values[i];
+        assert(value->segment_kind == N00B_ABI_STORAGE_READ_ONLY
+            && value->byte_length == (type->size_bits + 7) / 8
+            && core_object_section_at(object, length, format,
+                value->segment_index, &section)
+            && value->byte_offset <= section.size
+            && value->byte_length <= section.size - value->byte_offset);
+        const uint8_t *bytes = section.bytes + value->byte_offset;
+        assert(record_bits(bytes, left->logical_bit_offset, 64) == 8 + i
+            && record_bits(bytes, flag->logical_bit_offset, 1) == 1 - i);
+        check_record_string_relocation(object, length, format, &section,
+            value->byte_offset + right->logical_bit_offset / 8, texts[i]);
+    }
+    const n00b_abi_field_v1 *item = record_field_named(metadata, entries,
+        count, nested->type_index, "item");
+    assert(item->child_type_index == first->type_index
+        && item->logical_bit_offset % 8 == 0);
+    core_object_section_t section;
+    assert(core_object_section_at(object, length, format,
+        nested->segment_index, &section));
+    const uint8_t *bytes = section.bytes + nested->byte_offset
+        + item->logical_bit_offset / 8;
+    assert(record_bits(bytes, left->logical_bit_offset, 64) == 10
+        && record_bits(bytes, flag->logical_bit_offset, 1) == 1);
+    check_record_string_relocation(object, length, format, &section,
+        nested->byte_offset + item->logical_bit_offset / 8
+            + right->logical_bit_offset / 8,
+        "a nested anonymous record string");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1627,6 +1699,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "record-nested-storage")
             || !strcmp(argv[2], "variant-storage")
             || !strcmp(argv[2], "tuple-storage")
+            || !strcmp(argv[2], "anonymous-record-storage")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -1778,6 +1851,13 @@ main(int argc, char **argv)
     if (argc == 3 && !strcmp(argv[2], "tuple-storage")) {
         check_tuple_storage(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "anonymous-record-storage")) {
+        check_anonymous_record_storage(object, (size_t)length, &metadata,
+            entries, header.directory_count, header.key.target_id);
         free(entries);
         free(object);
         return 0;
