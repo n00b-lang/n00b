@@ -199,6 +199,28 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
                 && stream.values[group.members.first] == module_index);
         }
     }
+    const n00bb_abi_object_view_t *first = &selected->views[0];
+    n00b_abi_symbol_v1 *symbol = (void *)n00bb_abi_object_row(first,
+        N00B_ABI_TABLE_SYMBOL, 1);
+    n00b_abi_scope_v1 *scope = symbol
+        ? (void *)n00bb_abi_object_row(first, N00B_ABI_TABLE_SCOPE,
+                                      symbol->scope_index) : nullptr;
+    assert(scope && scope->symbols.count);
+    n00b_abi_range_v1 owned_symbols = scope->symbols;
+    scope->symbols = (n00b_abi_range_v1){0};
+    n00b_abi_symbol_v1 remapped_symbol;
+    assert(!n00bb_abi_remap_row(selected, plan, 0,
+        N00B_ABI_TABLE_SYMBOL, 1, &remapped_symbol,
+        sizeof(remapped_symbol), &stream));
+    scope->symbols = owned_symbols;
+    uint32_t scope_index = symbol->scope_index;
+    uint32_t parent = scope->parent_scope_index;
+    scope->parent_scope_index = scope_index;
+    n00b_abi_scope_v1 remapped_scope;
+    assert(!n00bb_abi_remap_row(selected, plan, 0,
+        N00B_ABI_TABLE_SCOPE, scope_index, &remapped_scope,
+        sizeof(remapped_scope), &stream));
+    scope->parent_scope_index = parent;
     n00bb_abi_name_pool_free(pool);
     free(kinds);
     free(values);

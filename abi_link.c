@@ -1822,6 +1822,44 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
             && module_initializer_valid(view, local_index,
                 module->runtime_initializer, N00B_ABI_PHASE_RUNTIME);
     }
+    if (kind == N00B_ABI_TABLE_SCOPE) {
+        const n00b_abi_scope_v1 *scope = row;
+        const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(
+            view, N00B_ABI_TABLE_SCOPE);
+        if (!table || !valid_index_range(view, scope->children)
+            || !valid_index_range(view, scope->symbols)) return false;
+        uint32_t parent_index = scope->parent_scope_index;
+        for (uint32_t steps = 0; parent_index; steps++) {
+            const n00b_abi_scope_v1 *parent = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_SCOPE, parent_index);
+            if (!parent || parent->module_index != scope->module_index
+                || parent_index == local_index
+                || steps >= table->record_count) return false;
+            if (!steps && !range_owns_row_once(view, parent->children,
+                                               local_index)) return false;
+            parent_index = parent->parent_scope_index;
+        }
+        for (uint32_t i = 0; i < scope->children.count; i++) {
+            const n00b_abi_scope_v1 *child = indexed_range_row(view,
+                scope->children, i, N00B_ABI_TABLE_SCOPE);
+            if (!child || child->parent_scope_index != local_index
+                || child->module_index != scope->module_index) return false;
+        }
+        for (uint32_t i = 0; i < scope->symbols.count; i++) {
+            const n00b_abi_symbol_v1 *symbol = indexed_range_row(view,
+                scope->symbols, i, N00B_ABI_TABLE_SYMBOL);
+            if (!symbol || symbol->scope_index != local_index
+                || symbol->module_index != scope->module_index) return false;
+        }
+        return true;
+    }
+    if (kind == N00B_ABI_TABLE_SYMBOL) {
+        const n00b_abi_symbol_v1 *symbol = row;
+        const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_SCOPE, symbol->scope_index);
+        return scope && scope->module_index == symbol->module_index
+            && range_owns_row_once(view, scope->symbols, local_index);
+    }
     if (kind == N00B_ABI_TABLE_LAYOUT || kind == N00B_ABI_TABLE_TRACE
         || kind == N00B_ABI_TABLE_CALL_SIGNATURE) {
         uint32_t parent = kind == N00B_ABI_TABLE_LAYOUT
