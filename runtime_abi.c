@@ -454,6 +454,47 @@ metadata_owned_rows_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+module_initializer_valid(const n00b_abi_snapshot_v1 *snapshot,
+                         uint32_t module_index, uint32_t function_index,
+                         uint32_t phase)
+{
+    if (!function_index) return true;
+    const n00b_abi_function_v1 *function = n00b_abi_v1_function(snapshot,
+                                                                  function_index);
+    if (!function || function->module_index != module_index
+        || function->failure_type_index) return false;
+    for (uint32_t i = 0; i < function->code_ranges.count; i++) {
+        uint32_t range_index;
+        if (n00b_abi_v1_index_at(snapshot, function->code_ranges, i,
+                                &range_index) != 1) return false;
+        const n00b_abi_code_range_v1 *range = n00b_abi_v1_code_range(snapshot,
+                                                                      range_index);
+        if (!range || range->function_index != function_index
+            || range->phase_mask != phase) return false;
+    }
+    return true;
+}
+
+static bool
+metadata_module_initializers_valid(const n00b_abi_snapshot_v1 *snapshot,
+                                   n00b_abi_error_v1 *error)
+{
+    uint32_t count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_MODULE);
+    for (uint32_t i = 1; i < count; i++) {
+        const n00b_abi_module_v1 *module = n00b_abi_v1_module(snapshot, i);
+        if (!module || (module->comptime_initializer
+                        && module->comptime_initializer
+                           == module->runtime_initializer)
+            || !module_initializer_valid(snapshot, i,
+                module->comptime_initializer, N00B_ABI_PHASE_COMPTIME)
+            || !module_initializer_valid(snapshot, i,
+                module->runtime_initializer, N00B_ABI_PHASE_RUNTIME))
+            return invalid_record(error, N00B_ABI_TABLE_MODULE, i, 0);
+    }
+    return true;
+}
+
+static bool
 physical_run_bounds(const n00b_abi_snapshot_v1 *snapshot,
                     n00b_abi_range_v1 range, uint32_t ordinal,
                     uint64_t *start, uint64_t *end)
@@ -1599,6 +1640,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     if (valid) valid = metadata_references_valid(candidate, error);
     if (valid) valid = metadata_traces_valid(candidate, error);
     if (valid) valid = metadata_code_ranges_valid(candidate, error);
+    if (valid) valid = metadata_module_initializers_valid(candidate, error);
     if (valid) valid = metadata_frame_layouts_valid(candidate, error);
     if (valid) valid = metadata_storage_valid(candidate, error);
     if (valid) valid = metadata_dispatch_valid(candidate, error);

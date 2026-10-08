@@ -1624,10 +1624,41 @@ range_owns_row_once(const n00bb_abi_object_view_t *view,
 }
 
 static bool
+module_initializer_valid(const n00bb_abi_object_view_t *view,
+                         uint32_t module_index, uint32_t function_index,
+                         uint32_t phase)
+{
+    if (!function_index) return true;
+    const n00b_abi_function_v1 *function = n00bb_abi_object_row(view,
+        N00B_ABI_TABLE_FUNCTION, function_index);
+    if (!function || function->module_index != module_index
+        || function->failure_type_index
+        || (function->code_ranges.count
+            && !valid_index_range(view, function->code_ranges))) return false;
+    for (uint32_t i = 0; i < function->code_ranges.count; i++) {
+        const n00b_abi_code_range_v1 *range = indexed_range_row(view,
+            function->code_ranges, i, N00B_ABI_TABLE_CODE_RANGE);
+        if (!range || range->function_index != function_index
+            || range->phase_mask != phase) return false;
+    }
+    return true;
+}
+
+static bool
 row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
                 uint32_t local_index, const void *row)
 {
     if (!local_index) return true;
+    if (kind == N00B_ABI_TABLE_MODULE) {
+        const n00b_abi_module_v1 *module = row;
+        return !(module->comptime_initializer
+                 && module->comptime_initializer
+                    == module->runtime_initializer)
+            && module_initializer_valid(view, local_index,
+                module->comptime_initializer, N00B_ABI_PHASE_COMPTIME)
+            && module_initializer_valid(view, local_index,
+                module->runtime_initializer, N00B_ABI_PHASE_RUNTIME);
+    }
     if (kind == N00B_ABI_TABLE_LAYOUT || kind == N00B_ABI_TABLE_TRACE
         || kind == N00B_ABI_TABLE_CALL_SIGNATURE) {
         uint32_t parent = kind == N00B_ABI_TABLE_LAYOUT

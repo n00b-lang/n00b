@@ -1384,7 +1384,12 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/empty_abi.o"
 "$abi_record_object_test" "$tmp/initializers_abi.o" initializers
 "$compiler" library --output "$tmp/empty_linked_abi.o" \
     "$program_dir/../abi/empty.n00b"
+"$abi_record_object_test" "$tmp/empty_linked_abi.o" runtime-initializer
 "$abi_register_object_test" "$tmp/empty_linked_abi.o" 1
+"$compiler" library --output "$tmp/initializers_linked_abi.o" \
+    "$program_dir/../abi/initializers.n00b"
+"$abi_record_object_test" "$tmp/initializers_linked_abi.o" initializers
+"$abi_register_object_test" "$tmp/initializers_linked_abi.o" 1
 "$compiler" compile --output "$tmp/record_abi.o" \
     "$program_dir/../abi/record.n00b"
 [ -s "$tmp/record_abi.o" ]

@@ -1802,6 +1802,95 @@ test_function_range_ownership_remap(void)
 }
 
 static void
+test_module_initializer_remap(void)
+{
+    typedef struct {
+        n00b_abi_type_v1 types[1];
+        n00b_abi_package_v1 packages[2];
+        n00b_abi_module_v1 modules[3];
+        n00b_abi_function_v1 functions[2];
+        n00b_abi_runtime_config_v1 configs[2];
+        n00b_abi_source_file_v1 files[2];
+        n00b_abi_code_range_v1 code[2];
+        uint32_t indexes[2];
+    } fixture_t;
+    fixture_t metadata = {0};
+    metadata.types[0].kind = N00B_ABI_TYPE_NIL;
+    metadata.types[0].typehash = 1;
+    memcpy(metadata.packages[1].name.short_value.bytes, "p", 1);
+    metadata.packages[1].name.short_value.selector = 1;
+    memcpy(metadata.modules[1].full_path.short_value.bytes, "p.m", 3);
+    metadata.modules[1].full_path.short_value.selector = 3;
+    memcpy(metadata.modules[2].full_path.short_value.bytes, "p.n", 3);
+    metadata.modules[2].full_path.short_value.selector = 3;
+    for (size_t i = 1; i < 3; i++) {
+        metadata.modules[i].package_index = 1;
+        metadata.modules[i].runtime_config_index = 1;
+        metadata.modules[i].source_file_index = 1;
+    }
+    metadata.modules[1].runtime_initializer = 1;
+    metadata.functions[1].module_index = 1;
+    metadata.functions[1].code_ranges = (n00b_abi_range_v1){1, 1};
+    metadata.code[1].function_index = 1;
+    metadata.code[1].phase_mask = N00B_ABI_PHASE_RUNTIME;
+    metadata.indexes[1] = 1;
+    n00bb_abi_directory_entry_t directory[] = {
+        {.kind = N00B_ABI_TABLE_TYPE,
+         .record_bytes = sizeof(metadata.types[0]), .record_count = 1,
+         .file_offset = offsetof(fixture_t, types)},
+        {.kind = N00B_ABI_TABLE_PACKAGE,
+         .record_bytes = sizeof(metadata.packages[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, packages)},
+        {.kind = N00B_ABI_TABLE_MODULE,
+         .record_bytes = sizeof(metadata.modules[0]), .record_count = 3,
+         .file_offset = offsetof(fixture_t, modules)},
+        {.kind = N00B_ABI_TABLE_FUNCTION,
+         .record_bytes = sizeof(metadata.functions[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, functions)},
+        {.kind = N00B_ABI_TABLE_RUNTIME_CONFIG,
+         .record_bytes = sizeof(metadata.configs[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, configs)},
+        {.kind = N00B_ABI_TABLE_SOURCE_FILE,
+         .record_bytes = sizeof(metadata.files[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, files)},
+        {.kind = N00B_ABI_TABLE_CODE_RANGE,
+         .record_bytes = sizeof(metadata.code[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, code)},
+        {.kind = N00B_ABI_TABLE_U32_STREAM,
+         .record_bytes = sizeof(metadata.indexes[0]), .record_count = 2,
+         .file_offset = offsetof(fixture_t, indexes)},
+    };
+    n00bb_abi_object_view_t view = {
+        .metadata = {.bytes = (const uint8_t *)&metadata,
+                     .size = sizeof(metadata)},
+        .directory = directory,
+        .directory_count = sizeof(directory) / sizeof(*directory),
+    };
+    n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(plan);
+    n00b_abi_module_v1 module;
+    assert(n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_MODULE,
+        1, &module, sizeof(module), nullptr));
+    metadata.functions[1].module_index = 2;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_MODULE,
+        1, &module, sizeof(module), nullptr));
+    metadata.functions[1].module_index = 1;
+    metadata.code[1].phase_mask = N00B_ABI_PHASE_COMPTIME;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_MODULE,
+        1, &module, sizeof(module), nullptr));
+    metadata.code[1].phase_mask = N00B_ABI_PHASE_RUNTIME;
+    metadata.functions[1].failure_type_index = 1;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_MODULE,
+        1, &module, sizeof(module), nullptr));
+    metadata.functions[1].failure_type_index = 0;
+    metadata.modules[1].comptime_initializer = 1;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_MODULE,
+        1, &module, sizeof(module), nullptr));
+    n00bb_abi_index_plan_free(plan);
+}
+
+static void
 test_tls_relocation_ownership_remap(void)
 {
     typedef struct {
@@ -2900,6 +2989,7 @@ main(int argc, char **argv)
     test_specialization_rebuild();
     test_typed_range_rejects_zero();
     test_function_range_ownership_remap();
+    test_module_initializer_remap();
     test_tls_relocation_ownership_remap();
     test_shared_trace_identity();
     test_shared_call_signature_identity();

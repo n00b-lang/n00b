@@ -568,6 +568,25 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_TYPE
         && error.record_index == 4 && !n00b_abi_v1_current_snapshot());
     image.types[4].typehash = 14;
+    image.modules[1].runtime_initializer = 1;
+    image.code_ranges[1].phase_mask = N00B_ABI_PHASE_COMPTIME;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_MODULE
+        && !n00b_abi_v1_current_snapshot());
+    image.code_ranges[1].phase_mask = N00B_ABI_PHASE_RUNTIME;
+    image.functions[1].failure_type_index = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_MODULE
+        && !n00b_abi_v1_current_snapshot());
+    image.functions[1].failure_type_index = 0;
+    image.modules[1].comptime_initializer = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_MODULE
+        && !n00b_abi_v1_current_snapshot());
+    image.modules[1].comptime_initializer = 0;
     image.types[5].typehash = image.types[1].typehash + 16;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_OK && !error.status && generation == 1);
