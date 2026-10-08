@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "abi_directory.h"
+#include "abi_ref_schema.h"
 #include "abi_string.h"
 
 _Static_assert(sizeof(size_t) >= 8, "runtime ABI targets need 64-bit sizes");
@@ -126,6 +127,171 @@ table_for(const n00b_abi_snapshot_v1 *snapshot, uint32_t kind)
     return table->kind ? table : nullptr;
 }
 
+static bool
+invalid_record(n00b_abi_error_v1 *error, uint32_t kind,
+               uint32_t index, uint64_t offset)
+{
+    registration_error(error, N00B_ABI_BAD_METADATA, kind, index, offset);
+    return false;
+}
+
+static uint32_t
+member_table_kind(uint32_t type_kind)
+{
+    switch (type_kind) {
+    case N00B_ABI_TYPE_RECORD:
+    case N00B_ABI_TYPE_TUPLE: return N00B_ABI_TABLE_FIELD;
+    case N00B_ABI_TYPE_VARIANT: return N00B_ABI_TABLE_ARM;
+    case N00B_ABI_TYPE_ENUM:
+    case N00B_ABI_TYPE_FLAGSET: return N00B_ABI_TABLE_ENUM_ITEM;
+    case N00B_ABI_TYPE_TRAIT: return N00B_ABI_TABLE_TRAIT_METHOD;
+    default: return 0;
+    }
+}
+
+static bool
+metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
+                          n00b_abi_error_v1 *error)
+{
+    for (uint32_t kind = N00B_ABI_TABLE_PACKAGE;
+         kind <= N00B_ABI_TABLE_SPECIALIZATION_LINK; kind++) {
+        const n00bb_abi_directory_entry_t *table = table_for(snapshot, kind);
+        if (!table) continue;
+        if (kind == N00B_ABI_TABLE_REQUIREMENT
+            || kind == N00B_ABI_TABLE_INDEX_PATCH)
+            return invalid_record(error, kind, 0, table->file_offset);
+        if (kind == N00B_ABI_TABLE_U32_STREAM
+            || kind == N00B_ABI_TABLE_U64_STREAM
+            || kind == N00B_ABI_TABLE_BYTE_STREAM) continue;
+        if (!table->record_count)
+            return invalid_record(error, kind, 0, table->file_offset);
+        if (kind != N00B_ABI_TABLE_TYPE) {
+            const uint8_t *reserved = n00b_abi_v1_record(snapshot, kind,
+                                                          0, nullptr);
+            for (uint32_t byte = 0; byte < table->record_bytes; byte++)
+                if (reserved[byte])
+                    return invalid_record(error, kind, 0,
+                                          table->file_offset + byte);
+        }
+        uint32_t first = kind == N00B_ABI_TABLE_TYPE ? 0 : 1;
+        for (uint32_t row = first; row < table->record_count; row++) {
+            const uint8_t *bytes = n00b_abi_v1_record(snapshot, kind,
+                                                       row, nullptr);
+            for (size_t i = 0; i < sizeof(abi_index_columns)
+                 / sizeof(abi_index_columns[0]); i++) {
+                const abi_ref_column_t *field = &abi_index_columns[i];
+                if (field->row_kind != kind) continue;
+                if (field->offset > table->record_bytes
+                    || sizeof(uint32_t) > table->record_bytes - field->offset)
+                    return invalid_record(error, kind, row,
+                        table->file_offset + (uint64_t)row
+                            * table->record_bytes + field->offset);
+                uint32_t value = *(const uint32_t *)(bytes + field->offset);
+                if (field->optional_type
+                    && value == N00B_ABI_V1_NO_TYPE_INDEX) continue;
+                if (!value && field->required)
+                    return invalid_record(error, kind, row,
+                        table->file_offset + (uint64_t)row
+                            * table->record_bytes + field->offset);
+                if (!value && field->target_kind != N00B_ABI_TABLE_TYPE)
+                    continue;
+                const n00bb_abi_directory_entry_t *target =
+                    table_for(snapshot, field->target_kind);
+                if (!target || value >= target->record_count)
+                    return invalid_record(error, kind, row,
+                        table->file_offset + (uint64_t)row
+                            * table->record_bytes + field->offset);
+            }
+            for (size_t i = 0; i < sizeof(abi_range_columns)
+                 / sizeof(abi_range_columns[0]); i++) {
+                const abi_range_column_t *field = &abi_range_columns[i];
+                if (field->row_kind != kind) continue;
+                if (field->offset > table->record_bytes
+                    || sizeof(n00b_abi_range_v1)
+                        > table->record_bytes - field->offset)
+                    return invalid_record(error, kind, row,
+                        table->file_offset + (uint64_t)row
+                            * table->record_bytes + field->offset);
+                const n00b_abi_range_v1 *range =
+                    (const void *)(bytes + field->offset);
+                uint64_t offset = table->file_offset + (uint64_t)row
+                    * table->record_bytes + field->offset;
+                if (!range->count) {
+                    if (range->first)
+                        return invalid_record(error, kind, row, offset);
+                    continue;
+                }
+                const n00bb_abi_directory_entry_t *stream =
+                    table_for(snapshot, field->stream_kind);
+                if (!stream || range->first >= stream->record_count
+                    || range->count > stream->record_count - range->first)
+                    return invalid_record(error, kind, row, offset);
+                if (field->stream_kind != N00B_ABI_TABLE_U32_STREAM)
+                    continue;
+                uint32_t target_kind = field->target_kind;
+                if (kind == N00B_ABI_TABLE_TYPE
+                    && field->offset == offsetof(n00b_abi_type_v1,
+                                                 fields_or_arms))
+                    target_kind = member_table_kind(
+                        ((const n00b_abi_type_v1 *)bytes)->kind);
+                if (kind == N00B_ABI_TABLE_SCC
+                    && field->offset == offsetof(n00b_abi_scc_v1,
+                                                 lexical_order))
+                    target_kind = UINT32_MAX;
+                if (!target_kind) return invalid_record(error, kind, row,
+                                                        offset);
+                if (target_kind == UINT32_MAX) continue;
+                const n00bb_abi_directory_entry_t *target =
+                    table_for(snapshot, target_kind);
+                if (!target) return invalid_record(error, kind, row, offset);
+                for (uint32_t j = 0; j < range->count; j++) {
+                    const uint32_t *value = n00b_abi_v1_record(snapshot,
+                        N00B_ABI_TABLE_U32_STREAM, range->first + j,
+                        nullptr);
+                    if (!value || *value >= target->record_count
+                        || (!*value && target_kind != N00B_ABI_TABLE_TYPE))
+                        return invalid_record(error, kind, row, offset);
+                }
+            }
+        }
+    }
+    uint32_t type_count = n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE);
+    for (uint32_t i = 0; i < type_count; i++) {
+        const n00b_abi_type_v1 *type = n00b_abi_v1_type(snapshot, i);
+        if (type->layout_index) {
+            const n00b_abi_layout_v1 *layout = n00b_abi_v1_layout(snapshot,
+                type->layout_index);
+            if (!layout || layout->type_index != i)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+        }
+        if (type->tracing_index) {
+            const n00b_abi_trace_v1 *trace = n00b_abi_v1_trace(snapshot,
+                type->tracing_index);
+            if (!trace || trace->type_index != i)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+        }
+        uint32_t member_kind = member_table_kind(type->kind);
+        for (uint32_t j = 0; j < type->fields_or_arms.count; j++) {
+            uint32_t member_index;
+            if (!member_kind || n00b_abi_v1_index_at(snapshot,
+                    type->fields_or_arms, j, &member_index) != 1)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+            const void *member = n00b_abi_v1_record(snapshot, member_kind,
+                member_index, nullptr);
+            uint32_t parent = member_kind == N00B_ABI_TABLE_FIELD
+                ? ((const n00b_abi_field_v1 *)member)->parent_type_index
+                : member_kind == N00B_ABI_TABLE_ARM
+                ? ((const n00b_abi_arm_v1 *)member)->field.parent_type_index
+                : member_kind == N00B_ABI_TABLE_ENUM_ITEM
+                ? ((const n00b_abi_enum_item_v1 *)member)->parent_type_index
+                : ((const n00b_abi_trait_method_v1 *)member)->trait_type_index;
+            if (parent != i)
+                return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
+        }
+    }
+    return true;
+}
+
 typedef struct {
     uint32_t type_index;
     uint32_t next_link;
@@ -219,6 +385,7 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
                            uint64_t *published_generation,
                            n00b_abi_error_v1 *error)
 {
+    if (error) *error = (n00b_abi_error_v1){0};
     if (!image || image->descriptor_version != 1 || image->reserved_zero
         || !image->metadata
         || (uintptr_t)image->metadata % _Alignof(n00b_abi_header_v1)
@@ -272,9 +439,12 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
         valid = nil->kind == N00B_ABI_TYPE_NIL
             && nil->typehash == UINT64_C(0x0ea862bddb8ce94c);
     }
+    if (valid) valid = metadata_references_valid(candidate, error);
     if (valid) valid = specialization_graph_valid(candidate);
     if (!valid) {
         snapshot_free(candidate, sizeof(*candidate));
+        if (error && error->status == N00B_ABI_BAD_METADATA)
+            return N00B_ABI_BAD_METADATA;
         return registration_error(error, N00B_ABI_BAD_METADATA, 0, 0, 0);
     }
     while (atomic_flag_test_and_set_explicit(&registration_lock,

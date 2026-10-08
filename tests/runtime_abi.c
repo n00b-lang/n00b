@@ -18,7 +18,7 @@
 
 typedef struct {
     n00b_abi_header_v1 header;
-    uint8_t directory[9 * N00BB_ABI_DIRECTORY_BYTES];
+    uint8_t directory[14 * N00BB_ABI_DIRECTORY_BYTES];
     n00b_abi_type_v1 types[5];
     uint32_t indexes[5];
     uint64_t values[1];
@@ -28,6 +28,11 @@ typedef struct {
     n00b_abi_function_v1 functions[3];
     n00b_abi_dispatch_v1 dispatches[2];
     n00b_abi_dispatch_entry_v1 entries[3];
+    n00b_abi_package_v1 packages[2];
+    n00b_abi_module_v1 modules[2];
+    n00b_abi_scope_v1 scopes[2];
+    n00b_abi_source_file_v1 source_files[2];
+    n00b_abi_runtime_config_v1 configs[2];
 } image_t;
 
 static void
@@ -58,7 +63,7 @@ main(void)
     image.header.abi_profile_id = N00B_ABI_V1_PROFILE_ID;
     image.header.data_layout_profile = N00B_ABI_DATA_LAYOUT_PROFILE_V1;
     image.header.required_alignment = 8;
-    image.header.directory_count = 9;
+    image.header.directory_count = 14;
     image.header.directory_offset = offsetof(image_t, directory);
     image.header.total_extent = sizeof(image);
     image.header.payload_checksum = UINT64_MAX;
@@ -87,6 +92,15 @@ main(void)
     image.links[1] = 2;
     image.links[2] = 3;
     image.methods[1].trait_type_index = 1;
+    image.methods[1].signature_type_index = 4;
+    image.functions[1].module_index = 1;
+    image.functions[1].scope_index = 1;
+    image.functions[2].module_index = 1;
+    image.functions[2].scope_index = 1;
+    image.modules[1].package_index = 1;
+    image.modules[1].runtime_config_index = 1;
+    image.modules[1].source_file_index = 1;
+    image.scopes[1].module_index = 1;
     image.dispatches[1].trait_type_index = 1;
     image.dispatches[1].entries = (n00b_abi_range_v1){3, 2};
     image.entries[1].receiver_type_index = 2;
@@ -111,6 +125,16 @@ main(void)
         sizeof(image.dispatches[0]), 2, offsetof(image_t, dispatches));
     directory_entry(&image, 8, N00B_ABI_TABLE_DISPATCH_ENTRY,
         sizeof(image.entries[0]), 3, offsetof(image_t, entries));
+    directory_entry(&image, 9, N00B_ABI_TABLE_PACKAGE,
+        sizeof(image.packages[0]), 2, offsetof(image_t, packages));
+    directory_entry(&image, 10, N00B_ABI_TABLE_MODULE,
+        sizeof(image.modules[0]), 2, offsetof(image_t, modules));
+    directory_entry(&image, 11, N00B_ABI_TABLE_SCOPE,
+        sizeof(image.scopes[0]), 2, offsetof(image_t, scopes));
+    directory_entry(&image, 12, N00B_ABI_TABLE_SOURCE_FILE,
+        sizeof(image.source_files[0]), 2, offsetof(image_t, source_files));
+    directory_entry(&image, 13, N00B_ABI_TABLE_RUNTIME_CONFIG,
+        sizeof(image.configs[0]), 2, offsetof(image_t, configs));
 
     n00b_abi_image_descriptor_v1 descriptor = {
         .descriptor_version = 1,
@@ -128,6 +152,36 @@ main(void)
         == N00B_ABI_BAD_METADATA && error.status == N00B_ABI_BAD_METADATA
         && !n00b_abi_v1_current_snapshot());
     image.header.target_id = HOST_TARGET;
+    image.packages[0].parent_package_index = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_PACKAGE
+        && !n00b_abi_v1_current_snapshot());
+    image.packages[0].parent_package_index = 0;
+    image.methods[1].trait_type_index = 2;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && !n00b_abi_v1_current_snapshot());
+    image.methods[1].trait_type_index = 1;
+    image.functions[1].module_index = 99;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FUNCTION
+        && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
+    image.functions[1].module_index = 1;
+    image.types[1].fields_or_arms.first = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && !n00b_abi_v1_current_snapshot());
+    image.types[1].fields_or_arms.first = 2;
+    image.modules[1].imports.first = 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_MODULE
+        && !n00b_abi_v1_current_snapshot());
+    image.modules[1].imports.first = 0;
     image.links[1] = 3;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA && !n00b_abi_v1_current_snapshot());
@@ -147,14 +201,15 @@ main(void)
         n00b_abi_v1_current_snapshot();
     assert(snapshot && n00b_abi_v1_generation(snapshot) == 1
         && n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE) == 5
-        && n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_MODULE) == 0);
+        && n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_MODULE) == 2);
     uint32_t width = 0;
     const n00b_abi_type_v1 *nil = n00b_abi_v1_record(snapshot,
         N00B_ABI_TABLE_TYPE, 0, &width);
     assert(nil == n00b_abi_v1_type(snapshot, 0)
         && width == sizeof(*nil) && nil->kind == N00B_ABI_TYPE_NIL
         && !n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_TYPE, 5, &width)
-        && !width && !n00b_abi_v1_module(snapshot, 1));
+        && !width && n00b_abi_v1_module(snapshot, 1)
+        && !n00b_abi_v1_module(snapshot, 2));
     uint32_t index = 0;
     uint64_t value = 0;
     const uint8_t *bytes = nullptr;
