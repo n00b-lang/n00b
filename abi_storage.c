@@ -35,6 +35,15 @@ encode_scalar(ir_module_t *module, th_type *type,
               const ir_global_init_value_t *value,
               uint64_t size_bits, uint8_t bytes[16])
 {
+    const char *name = nullptr;
+    size_t name_length = 0, argument_count = 0;
+    if (th_kind_of(type) == TH_NAMED
+        && th_named_info(type, &name, &name_length, nullptr,
+                         &argument_count)
+        && name_length == sizeof("typespec") - 1
+        && !memcmp(name, "typespec", name_length)
+        && !argument_count)
+        return size_bits == 32 && !value;
     ir_machine_t machine = ir_machine_of(module, type);
     if (!size_bits || size_bits > 128 || size_bits % 8
         || !machine.width || machine.width > size_bits

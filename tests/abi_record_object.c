@@ -1402,6 +1402,25 @@ storage_named(const core_object_section_t *metadata,
     return nullptr;
 }
 
+static void
+check_typespec_storage(const core_object_section_t *metadata,
+                       const n00bb_abi_directory_entry_t *entries,
+                       size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00b_abi_storage_v1 *storage = storage_named(metadata, entries,
+        count, "selected_type");
+    assert(types && storage->type_index < types->record_count);
+    const n00b_abi_type_v1 *type = row_at(metadata, types,
+        storage->type_index);
+    assert(type->kind == N00B_ABI_TYPE_PRIMITIVE
+        && type->semantic_width_bits == 32
+        && type->size_bits == 32 && type->alignment_bytes == 4
+        && storage->segment_kind == N00B_ABI_STORAGE_WRITABLE
+        && storage->byte_length == 4 && !storage->instance_shape_index);
+}
+
 static const n00b_abi_field_v1 *
 record_field_named(const core_object_section_t *metadata,
                    const n00bb_abi_directory_entry_t *entries, size_t count,
@@ -2506,6 +2525,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "partial-call-shape")
             || !strcmp(argv[2], "callback")
             || !strcmp(argv[2], "storage")
+            || !strcmp(argv[2], "typespec-storage")
             || !strcmp(argv[2], "string-storage")
             || !strcmp(argv[2], "array-storage")
             || !strcmp(argv[2], "zero-element-array-storage")
@@ -2675,6 +2695,12 @@ main(int argc, char **argv)
     if (argc == 3 && !strcmp(argv[2], "storage")) {
         check_storage(object, (size_t)length, &metadata, entries,
             header.directory_count, header.key.target_id);
+        free(entries);
+        free(object);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[2], "typespec-storage")) {
+        check_typespec_storage(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

@@ -203,6 +203,8 @@ int main(void)
                             128, 128, 8)
             && check_scalar(module, &target, th_name(types, "Allocator"),
                             32, 32, 4)
+            && check_scalar(module, &target, th_name(types, "typespec"),
+                            32, 32, 4)
             && check_scalar(module, &target, th_name(types, "any"),
                             128, 128, 8)
             && ir_type_define(module, wide, th_bitint(types, 65, true))

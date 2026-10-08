@@ -367,8 +367,9 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         bool fixed_handle = name && (!strcmp(name, "string")
             || !strcmp(name, "any") || !strcmp(name, "array")
             || !strcmp(name, "view"));
-        bool allocator = name && !strcmp(name, "Allocator");
-        if (fixed_handle || allocator) {
+        bool index_handle = name && (!strcmp(name, "Allocator")
+            || !strcmp(name, "typespec"));
+        if (fixed_handle || index_handle) {
             *handled = true;
             bool generic_handle = !strcmp(name, "array")
                 || !strcmp(name, "view");
@@ -378,7 +379,7 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
                 || (generic_handle
                     && (!argument || argument->kind != TH_ARG_TYPE)))
                 return false;
-            if (allocator) {
+            if (index_handle) {
                 const core_target_scalar_t *storage =
                     core_target_integer_for_bits(target, 32);
                 if (!storage || storage->width_bits != 32) return false;

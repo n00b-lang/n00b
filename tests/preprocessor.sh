@@ -1489,6 +1489,11 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     "$program_dir/../abi/storage.n00b"
 [ -s "$tmp/storage_abi.o" ]
 "$abi_record_object_test" "$tmp/storage_abi.o" storage
+"$compiler" compile --output "$tmp/typespec_storage_abi.o" \
+    "$program_dir/../abi/typespec_storage.n00b"
+[ -s "$tmp/typespec_storage_abi.o" ]
+"$abi_record_object_test" "$tmp/typespec_storage_abi.o" \
+    typespec-storage
 "$compiler" compile --output "$tmp/string_storage_abi.o" \
     "$program_dir/../abi/string_storage.n00b"
 [ -s "$tmp/string_storage_abi.o" ]

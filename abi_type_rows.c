@@ -98,7 +98,8 @@ type_category(ir_module_t *module, th_type *type,
         else if (name_is(name, name_len, "atomic")
                  || name_is(name, name_len, "Atomic"))
             row->kind = N00B_ABI_TYPE_ATOMIC;
-        else if (name_is(name, name_len, "Allocator")) {
+        else if (name_is(name, name_len, "Allocator")
+                 || name_is(name, name_len, "typespec")) {
             row->kind = N00B_ABI_TYPE_PRIMITIVE;
             row->semantic_width_bits = 32;
         }
