@@ -384,6 +384,8 @@ typedef struct {
 } abi_link_key_t;
 
 static bool nonconcrete_key_init(abi_link_key_t *key);
+static bool link_key_from_owner_type(abi_link_key_t *key,
+                                     uint32_t type_index);
 
 static core_hash_value_t
 link_key_hash(void *value)
@@ -440,6 +442,10 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
         key->length = sizeof(key->scalar);
         return true;
     }
+    case N00B_ABI_TABLE_LAYOUT: {
+        const n00b_abi_layout_v1 *layout = key->row;
+        return link_key_from_owner_type(key, layout->type_index);
+    }
     case N00B_ABI_TABLE_PACKAGE:
         return link_key_string(key,
             &((const n00b_abi_package_v1 *)key->row)->name);
@@ -472,6 +478,32 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
         key->unique = true;
         return true;
     }
+}
+
+static bool
+link_key_from_owner_type(abi_link_key_t *key, uint32_t type_index)
+{
+    const n00b_abi_type_v1 *type = n00bb_abi_object_row(key->view,
+        N00B_ABI_TABLE_TYPE, type_index);
+    if (!type || type->layout_index != key->local_index) return false;
+    abi_link_key_t owner = *key;
+    owner.row = type;
+    owner.local_index = type_index;
+    owner.bytes = nullptr;
+    owner.owned_bytes = nullptr;
+    owner.unique = false;
+    if (!link_key_init(&owner, N00B_ABI_TABLE_TYPE)) {
+        core_buffer_free(owner.owned_bytes);
+        return false;
+    }
+    key->scalar = owner.scalar;
+    key->auxiliary = owner.auxiliary;
+    key->owned_bytes = owner.owned_bytes;
+    key->unique = owner.unique;
+    key->bytes = owner.bytes == (const uint8_t *)&owner.scalar
+        ? (const uint8_t *)&key->scalar : owner.bytes;
+    key->length = owner.length;
+    return true;
 }
 
 static bool

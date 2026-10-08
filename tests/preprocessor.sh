@@ -5,6 +5,7 @@ compiler="$compiler_dir/$(basename -- "$1")"
 storage_interface_writer="$2"
 abi_record_object_test="$3"
 abi_link_input_test="$4"
+abi_register_object_test="$5"
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 program_dir="$script_dir/programs/preprocessor"
 tmp="$(mktemp -d)"
@@ -1377,6 +1378,9 @@ grep -q '^pdg @add ' "$tmp/lower_arithmetic.ir_and_pdg"
     "$program_dir/../abi/empty.n00b"
 [ -s "$tmp/empty_abi.o" ]
 LC_ALL=C grep -q 'N00BMETA' "$tmp/empty_abi.o"
+"$compiler" library --output "$tmp/empty_linked_abi.o" \
+    "$program_dir/../abi/empty.n00b"
+"$abi_register_object_test" "$tmp/empty_linked_abi.o" 1
 "$compiler" compile --output "$tmp/record_abi.o" \
     "$program_dir/../abi/record.n00b"
 [ -s "$tmp/record_abi.o" ]
@@ -1388,6 +1392,7 @@ LC_ALL=C grep -q 'N00BMETA' "$tmp/record_abi.o"
 N00B_PATH="$program_dir/../abi" "$compiler" library \
     --output "$tmp/alias_import_abi.o" alias_import
 "$abi_record_object_test" "$tmp/alias_import_abi.o" alias
+"$abi_register_object_test" "$tmp/alias_import_abi.o" 2
 "$compiler" compile --output "$tmp/enum_abi.o" \
     "$program_dir/../abi/enum.n00b"
 [ -s "$tmp/enum_abi.o" ]

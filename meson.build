@@ -219,6 +219,13 @@ abi_link_input_test = executable(
     dependencies: lantern,
 )
 
+abi_register_object_test = executable(
+    'abi-register-object-test',
+    'tests/abi_register_object.c',
+    link_with: runtime_abi_support,
+    dependencies: lantern,
+)
+
 abi_emit_strings_test = executable(
     'abi-emit-strings-test',
     ['tests/abi_emit_strings.c', 'abi_emit_strings.c', 'abi_string.c'],
@@ -296,7 +303,8 @@ test(
     args: [meson.current_source_dir() / 'tests' / 'preprocessor.sh',
            n00bb_exe.full_path(), storage_interface_writer.full_path(),
            abi_record_object_test.full_path(),
-           abi_link_input_test.full_path()],
+           abi_link_input_test.full_path(),
+           abi_register_object_test.full_path()],
     env: ['N00BB_STACK_OBJECT_LIMIT_BYTES='
         + get_option('stack_object_limit_bytes').to_string()],
     timeout: 120,

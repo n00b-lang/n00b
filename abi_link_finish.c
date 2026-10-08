@@ -462,7 +462,8 @@ n00bb_abi_link_selected_objects(
                                 merged.table_count);
         for (size_t i = 0; i < merged.table_count; i++) {
             const n00bb_abi_merged_table_t *table = &merged.tables[i];
-            if (table->kind == N00B_ABI_TABLE_REQUIREMENT
+            if (!table->record_count
+                || table->kind == N00B_ABI_TABLE_REQUIREMENT
                 || table->kind == N00B_ABI_TABLE_INDEX_PATCH) continue;
             rows[row_count++] = (n00bb_abi_table_rows_t){
                 .kind = table->kind,
