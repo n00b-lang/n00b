@@ -47117,6 +47117,8 @@ n00bb_literal_raw_element(ir_module_t *module, th_type *type)
     if ((machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT)
         && machine.width >= 8 && !(machine.width % 8))
         return layout->intrinsic_bits == machine.width;
+    if (machine.class == IR_CLASS_FLOAT && machine.width == 64)
+        return layout->intrinsic_bits == 64;
 
     const char *name = nullptr;
     size_t count = 0;

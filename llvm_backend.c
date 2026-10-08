@@ -92,6 +92,8 @@ scalar_type(ir_module_t *module, th_type *type, LLVMContextRef context)
     if ((machine.class == IR_CLASS_BOOL || machine.class == IR_CLASS_SINT
          || machine.class == IR_CLASS_UINT) && machine.width)
         return LLVMIntTypeInContext(context, machine.width);
+    if (machine.class == IR_CLASS_FLOAT && machine.width == 64)
+        return LLVMDoubleTypeInContext(context);
     if (machine.class == IR_CLASS_PTR)
         return LLVMPointerTypeInContext(context, 0);
     return nullptr;
@@ -329,6 +331,9 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
         return LLVMGetTypeKind(native) == LLVMIntegerTypeKind
             && LLVMGetIntTypeWidth(native) == machine.width
             && layout->intrinsic_bits == machine.width;
+    if (machine.class == IR_CLASS_FLOAT && machine.width == 64)
+        return LLVMGetTypeKind(native) == LLVMDoubleTypeKind
+            && layout->intrinsic_bits == 64;
 
     if (th_kind_of(th_resolve(type)) == TH_SEQUENCE)
         return layout->intrinsic_bits == sizeof(n00b_abi_array_value_v1) * 8
@@ -1009,9 +1014,16 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                           : unsupported(state, instruction);
         }
         if (count != 1 || operands[0].kind != IR_OPD_CONST
-            || operands[0].lit.is_float || !instruction->dest) break;
+            || !instruction->dest) break;
         ir_machine_t machine = ir_machine_of(state->function->owner,
             instruction->dest->type);
+        if (operands[0].lit.is_float) {
+            if (machine.class != IR_CLASS_FLOAT || machine.width != 64)
+                break;
+            result = LLVMConstReal(LLVMDoubleTypeInContext(
+                LLVMGetModuleContext(state->module)), operands[0].lit.f);
+            return save_result(state, instruction, result);
+        }
         if (!machine.width || machine.width > 128
             || (machine.class != IR_CLASS_BOOL
                 && machine.class != IR_CLASS_SINT
@@ -1076,6 +1088,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (instruction->n_mods > 1
             || (instruction->n_mods
                 && !ir_instr_has_mod(instruction, "trap"))) break;
+        if (LLVMGetTypeKind(LLVMTypeOf(left)) == LLVMDoubleTypeKind) {
+            if (instruction->n_mods) break;
+            result = LLVMBuildFAdd(state->builder, left, right, "sum");
+            return save_result(state, instruction, result);
+        }
         if (ir_instr_has_mod(instruction, "trap")) {
             ir_machine_t machine = ir_machine_of(state->function->owner,
                 operands[0].value->type);
@@ -1117,7 +1134,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef left = lowered_value(state, operands[0].value);
         LLVMValueRef right = lowered_value(state, operands[1].value);
         if (!left || !right || LLVMTypeOf(left) != LLVMTypeOf(right)) break;
-        result = LLVMBuildICmp(state->builder, LLVMIntEQ, left, right, "equal");
+        if (LLVMGetTypeKind(LLVMTypeOf(left)) == LLVMDoubleTypeKind)
+            result = LLVMBuildFCmp(state->builder, LLVMRealOEQ, left,
+                                   right, "equal");
+        else if (LLVMGetTypeKind(LLVMTypeOf(left)) == LLVMIntegerTypeKind
+            || LLVMGetTypeKind(LLVMTypeOf(left)) == LLVMPointerTypeKind)
+            result = LLVMBuildICmp(state->builder, LLVMIntEQ, left,
+                                   right, "equal");
+        else break;
         return save_result(state, instruction, result);
     }
     case IR_OP_VARIANT_TAG: {

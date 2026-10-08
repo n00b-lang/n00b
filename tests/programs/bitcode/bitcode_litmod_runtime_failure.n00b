@@ -1,0 +1,19 @@
+declare_litmod("fault", "array", "always_fail")
+
+func always_fail(items: Array[int]) -> Array[int] fail: string {
+    fail "runtime literal failure"
+}
+
+func caught(x: int) -> int {
+    try {
+        values = fault[1, x]
+        return 0
+    } else err {
+        return 1
+    }
+}
+
+comptime {
+} else {
+    require caught(2) == 1
+}

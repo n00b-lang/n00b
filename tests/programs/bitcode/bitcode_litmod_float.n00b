@@ -1,0 +1,35 @@
+declare_litmod("as_float", "string", "make_float")
+declare_litmod("floats", "array", "identity")
+
+func make_float(raw: string) -> float fail: string {
+    return 1.5 + 2.0
+}
+
+func identity(items: Array[float]) -> Array[float] fail: string {
+    return items
+}
+
+func scalar() -> float {
+    return as_float"one"
+}
+
+func array_values() -> Array[float] {
+    return floats[1.5, 2.5]
+}
+
+func dynamic(x: float) -> Array[float] {
+    return floats[1.5, x]
+}
+
+func observe(value: float) {
+    require true
+}
+
+comptime {
+    observe(as_float"compile-time")
+    require as_float"checked at comptime" == 3.5
+} else {
+    require scalar() == 3.5
+    array_values()
+    dynamic(3.5)
+}

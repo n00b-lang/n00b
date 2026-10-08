@@ -23,6 +23,15 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/litmod_runtime" \
     "$program_dir/bitcode_litmod_runtime.n00b"
 "$tmp/litmod_runtime"
+"$compiler" build --output "$tmp/litmod_runtime_failure" \
+    "$program_dir/bitcode_litmod_runtime_failure.n00b"
+"$tmp/litmod_runtime_failure"
+"$compiler" build --output "$tmp/litmod_runtime_trap" \
+    "$program_dir/bitcode_litmod_runtime_trap.n00b"
+if (ulimit -c 0; "$tmp/litmod_runtime_trap") >/dev/null 2>&1; then
+    echo 'uncaught runtime literal failure unexpectedly returned' >&2
+    exit 1
+fi
 "$compiler" build --output "$tmp/litmod_nested" \
     "$program_dir/bitcode_litmod_nested.n00b"
 "$tmp/litmod_nested"
@@ -44,6 +53,9 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/litmod_scalar_tuple" \
     "$program_dir/bitcode_litmod_scalar_tuple.n00b"
 "$tmp/litmod_scalar_tuple"
+"$compiler" build --output "$tmp/litmod_float" \
+    "$program_dir/bitcode_litmod_float.n00b"
+"$tmp/litmod_float"
 "$compiler" build --output "$tmp/litmod_string" \
     "$program_dir/bitcode_litmod_string.n00b"
 "$tmp/litmod_string"

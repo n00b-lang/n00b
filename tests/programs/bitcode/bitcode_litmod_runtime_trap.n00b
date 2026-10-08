@@ -1,0 +1,14 @@
+declare_litmod("fault", "array", "always_fail")
+
+func always_fail(items: Array[int]) -> Array[int] fail: string {
+    fail "runtime literal failure"
+}
+
+func uncaught(x: int) -> Array[int] {
+    return fault[1, x]
+}
+
+comptime {
+} else {
+    uncaught(2)
+}
