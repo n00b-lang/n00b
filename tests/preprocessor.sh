@@ -1393,6 +1393,9 @@ N00B_PATH="$program_dir/../abi" "$compiler" library \
 [ -s "$tmp/enum_abi.o" ]
 "$abi_record_object_test" "$tmp/enum_abi.o" enum
 "$abi_link_input_test" --enum "$tmp/enum_abi.o"
+N00B_PATH="$interface_programs" "$compiler" compile \
+    --output "$tmp/flagset_abi.o" flagset_archive_dep.impl
+"$abi_record_object_test" "$tmp/flagset_abi.o" flagset
 "$compiler" compile --output "$tmp/variant_abi.o" \
     "$program_dir/../abi/variant.n00b"
 [ -s "$tmp/variant_abi.o" ]

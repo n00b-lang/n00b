@@ -8,6 +8,7 @@
 #include "lib/alloc.h"
 #include "lib/list.h"
 #include "enum_value.h"
+#include "flagset_value.h"
 #include "signature_typevars.h"
 
 core_list_decl(uint32_t);
@@ -21,7 +22,14 @@ name_is(const char *name, size_t length, const char *expected)
 static bool
 kind_from_owner(const parse_sym_entry_t *owner, uint32_t *kind)
 {
-    if (!owner || !owner->adt_kind.u8_bytes) return false;
+    if (!owner) return false;
+    if (owner->member_scope
+        && core_string_eq(owner->member_scope->scope_tag,
+                          CORE_STRING_STATIC("flagset"))) {
+        *kind = N00B_ABI_TYPE_FLAGSET;
+        return true;
+    }
+    if (!owner->adt_kind.u8_bytes) return false;
     core_string_t adt = owner->adt_kind;
     if (core_string_eq(adt, CORE_STRING_STATIC("record"))
         || core_string_eq(adt, CORE_STRING_STATIC("context")))
@@ -211,6 +219,15 @@ n00bb_abi_type_identity_rows_build(
             row->semantic_width_bits = width ? (uint32_t)width : 1;
             if (range->is_signed)
                 row->flags |= N00B_ABI_TYPE_FLAG_SIGNED;
+        }
+        if (category_owner && row->kind == N00B_ABI_TYPE_FLAGSET) {
+            const n00bb_flagset_info_t *info = parse_sym_binding(
+                category_owner, CORE_STRING_STATIC("n00bb.flagset-info"));
+            if (!info || !info->atomic_count || info->atomic_count > 128) {
+                valid = false;
+                break;
+            }
+            row->semantic_width_bits = info->atomic_count;
         }
         if (!th_is_closed(types, type))
             row->flags |= N00B_ABI_TYPE_FLAG_NON_CONCRETE;

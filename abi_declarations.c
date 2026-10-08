@@ -353,6 +353,9 @@ n00bb_abi_declarations_build(
                                 CORE_STRING_STATIC("variant"))
                             || core_string_eq(
                                 symbol->member_scope->scope_tag,
+                                CORE_STRING_STATIC("flagset"))
+                            || core_string_eq(
+                                symbol->member_scope->scope_tag,
                                 CORE_STRING_STATIC("trait"))))))
                 type_rows->rows[symbols[i].type_index].owner_module_index = 1;
         }

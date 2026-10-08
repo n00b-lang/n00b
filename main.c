@@ -10,6 +10,7 @@
 #include "abi_record_layout.h"
 #include "record_layout_request.h"
 #include "enum_value.h"
+#include "flagset_value.h"
 #include "global_metadata.h"
 #include "llvm_backend.h"
 #include "n00b-abi-v1.h"
@@ -721,17 +722,6 @@ typedef struct {
     parse_token_stream_t *tokens;
     parse_pwz_parser_t *parser;
 } n00bb_lex_result_t;
-
-typedef struct {
-    ir_uint_t mask;
-    uint32_t declaration_order;
-    bool atomic;
-} n00bb_flagset_value_t;
-
-typedef struct {
-    ir_uint_t all_mask;
-    uint32_t atomic_count;
-} n00bb_flagset_info_t;
 
 typedef struct {
     ir_uint_t mask;

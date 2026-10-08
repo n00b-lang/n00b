@@ -167,6 +167,55 @@ check_enum_item(const core_object_section_t *metadata,
 }
 
 static void
+check_flagset(const core_object_section_t *metadata,
+              const n00bb_abi_directory_entry_t *entries, size_t count)
+{
+    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
+        N00B_ABI_TABLE_TYPE);
+    const n00bb_abi_directory_entry_t *items = entry_for(entries, count,
+        N00B_ABI_TABLE_ENUM_ITEM);
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    const n00bb_abi_directory_entry_t *symbols = entry_for(entries, count,
+        N00B_ABI_TABLE_SYMBOL);
+    const n00bb_abi_directory_entry_t *locations = entry_for(entries, count,
+        N00B_ABI_TABLE_SOURCE_LOCATION);
+    assert(types && items && stream && symbols && locations);
+    assert(items->record_count == 5);
+
+    uint32_t type_index = 0;
+    for (uint32_t i = 1; i < symbols->record_count; i++) {
+        const n00b_abi_symbol_v1 *symbol = row_at(metadata, symbols, i);
+        if (symbol->kind == N00B_ABI_SYMBOL_TYPE
+            && short_name_is(&symbol->name, "FilePerms")) {
+            assert(!type_index);
+            type_index = symbol->type_index;
+        }
+    }
+    assert(type_index && type_index < types->record_count);
+    const n00b_abi_type_v1 *type = row_at(metadata, types, type_index);
+    assert(type->kind == N00B_ABI_TYPE_FLAGSET);
+    assert(type->owner_module_index == 1);
+    assert(type->semantic_width_bits == 2);
+    assert(type->unpacked_storage_bits == 8);
+    assert(type->fields_or_arms.count == 4);
+    assert(!(type->flags & N00B_ABI_TYPE_FLAG_SIGNED));
+
+    const char *names[] = {"read", "write", "read_write", "none"};
+    const uint64_t masks[] = {1, 2, 3, 0};
+    for (uint32_t i = 0; i < 4; i++) {
+        check_enum_item(metadata, stream, items, symbols, locations,
+            type, type_index, i, names[i], masks[i], 0);
+        uint32_t position = type->fields_or_arms.first + i;
+        uint32_t item_index = *(const uint32_t *)row_at(metadata, stream,
+                                                         position);
+        const n00b_abi_enum_item_v1 *item = row_at(metadata, items,
+                                                   item_index);
+        assert(item->flags == (i < 2 ? N00B_ABI_ENUM_ITEM_FLAG_PRIMITIVE : 0));
+    }
+}
+
+static void
 check_function(const core_object_section_t *metadata,
                const n00bb_abi_directory_entry_t *entries, size_t count)
 {
@@ -1767,6 +1816,7 @@ main(int argc, char **argv)
             || !strcmp(argv[2], "tuple-storage")
             || !strcmp(argv[2], "anonymous-record-storage")
             || !strcmp(argv[2], "alias")
+            || !strcmp(argv[2], "flagset")
             || !strcmp(argv[2], "generic")
             || !strcmp(argv[2], "generic-local"))));
     FILE *file = fopen(argv[1], "rb");
@@ -1995,6 +2045,13 @@ main(int argc, char **argv)
     if (argc == 3 && !strcmp(argv[2], "generic-local")) {
         check_generic(&metadata, entries, header.directory_count,
             "hold_same", "item", "saved", N00B_ABI_PASS_IN);
+        free(entries);
+        free(object);
+        return 0;
+    }
+
+    if (argc == 3 && !strcmp(argv[2], "flagset")) {
+        check_flagset(&metadata, entries, header.directory_count);
         free(entries);
         free(object);
         return 0;

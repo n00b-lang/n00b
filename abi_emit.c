@@ -771,6 +771,12 @@ n00bb_abi_emit_unit(
         bool enumeration = symbol && symbol->kind == PARSE_SYM_TYPEDEF
             && core_string_eq(symbol->adt_kind,
                               CORE_STRING_STATIC("enum"));
+        bool flagset = symbol && symbol->kind == PARSE_SYM_TYPEDEF
+            && (core_string_eq(symbol->adt_kind,
+                               CORE_STRING_STATIC("flagset"))
+                || (symbol->member_scope
+                    && core_string_eq(symbol->member_scope->scope_tag,
+                                      CORE_STRING_STATIC("flagset"))));
         bool trait = symbol && symbol->kind == PARSE_SYM_TYPEDEF
             && (core_string_eq(symbol->adt_kind,
                                CORE_STRING_STATIC("trait"))
@@ -803,13 +809,19 @@ n00bb_abi_emit_unit(
                               CORE_STRING_STATIC("record"));
         bool enum_item = symbol && symbol->kind == PARSE_SYM_ENUM_CONST
             && symbol->owner_type
-            && core_string_eq(symbol->owner_type->adt_kind,
-                              CORE_STRING_STATIC("enum"));
+            && (core_string_eq(symbol->owner_type->adt_kind,
+                               CORE_STRING_STATIC("enum"))
+                || core_string_eq(symbol->owner_type->adt_kind,
+                                  CORE_STRING_STATIC("flagset"))
+                || (symbol->owner_type->member_scope
+                    && core_string_eq(
+                        symbol->owner_type->member_scope->scope_tag,
+                        CORE_STRING_STATIC("flagset"))));
         bool function = symbol && symbol->kind == PARSE_SYM_FUNCTION;
         bool parameter = symbol && symbol->kind == PARSE_SYM_PARAM;
         bool local = symbol && symbol->kind == PARSE_SYM_VARIABLE
             && !symbol->is_field;
-        if (!record && !field && !enumeration && !enum_item && !trait
+        if (!record && !field && !enumeration && !flagset && !enum_item && !trait
             && !callback && !alias
             && !variant && !arm
             && !function && !parameter && !local) {

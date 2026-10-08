@@ -3,6 +3,7 @@
 #include <limits.h>
 
 #include "enum_value.h"
+#include "flagset_value.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 
@@ -27,7 +28,8 @@ n00bb_abi_enum_rows_build(n00bb_abi_type_index_t *index,
     core_list_push(rows, ((n00b_abi_enum_item_v1){0}));
     bool valid = true;
     for (size_t i = 1; valid && i < types->count; i++) {
-        if (types->rows[i].kind != N00B_ABI_TYPE_ENUM) continue;
+        bool flagset = types->rows[i].kind == N00B_ABI_TYPE_FLAGSET;
+        if (types->rows[i].kind != N00B_ABI_TYPE_ENUM && !flagset) continue;
         parse_sym_entry_t *owner = types->owners[i];
         if (!owner) continue;
         if (!owner->member_scope || !owner->decl_node) {
@@ -69,15 +71,26 @@ n00bb_abi_enum_rows_build(n00bb_abi_type_index_t *index,
                 valid = false;
                 break;
             }
-            const n00bb_enum_value_t *value = item->comptime_value;
-            ir_uint_t pattern = value->negative
-                ? (ir_uint_t)0 - value->magnitude : value->magnitude;
+            ir_uint_t pattern;
+            uint32_t flags = 0;
+            if (flagset) {
+                const n00bb_flagset_value_t *value = item->comptime_value;
+                pattern = value->mask;
+                if (value->atomic)
+                    flags = N00B_ABI_ENUM_ITEM_FLAG_PRIMITIVE;
+            }
+            else {
+                const n00bb_enum_value_t *value = item->comptime_value;
+                pattern = value->negative
+                    ? (ir_uint_t)0 - value->magnitude : value->magnitude;
+            }
             n00b_abi_enum_item_v1 row = {
                 .parent_type_index = (uint32_t)i,
                 .declaration_ordinal = (uint32_t)j,
                 .value_low = (uint64_t)pattern,
                 .value_high = (uint64_t)(pattern >> 64),
                 .symbol_index = symbol_index,
+                .flags = flags,
             };
             valid = n00bb_abi_name_pool_encode(names, item->name,
                 N00B_ABI_TABLE_ENUM_ITEM, (uint32_t)rows.len,
@@ -91,7 +104,8 @@ n00bb_abi_enum_rows_build(n00bb_abi_type_index_t *index,
     }
     if (valid) {
         for (size_t i = 1; i < types->count; i++)
-            if (types->rows[i].kind == N00B_ABI_TYPE_ENUM
+            if ((types->rows[i].kind == N00B_ABI_TYPE_ENUM
+                 || types->rows[i].kind == N00B_ABI_TYPE_FLAGSET)
                 && types->owners[i])
                 types->rows[i].fields_or_arms = ranges[i];
         *out = (n00bb_abi_enum_rows_t){
