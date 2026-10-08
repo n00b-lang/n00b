@@ -123,6 +123,25 @@ static void snapshot_free(void *address, size_t bytes)
 #error "runtime ABI snapshot allocation needs a supported target"
 #endif
 
+void *n00b_allocate(uint32_t allocator, uint32_t type_index,
+                    uint64_t byte_size, uint32_t alignment,
+                    const void *instance_descriptor)
+{
+    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
+    (void)instance_descriptor;
+    if (allocator || !type_index || !snapshot
+        || !n00b_abi_v1_type(snapshot, type_index)
+        || !alignment || (alignment & (alignment - 1))
+        || byte_size > SIZE_MAX - (size_t)alignment)
+        __builtin_trap();
+    size_t bytes = (size_t)(byte_size ? byte_size : 1);
+    void *base = snapshot_alloc(bytes + alignment - 1);
+    if (!base) __builtin_trap();
+    uintptr_t address = ((uintptr_t)base + alignment - 1)
+        & ~(uintptr_t)(alignment - 1);
+    return (void *)address;
+}
+
 struct n00b_abi_snapshot_v1 {
     uint64_t generation;
     const uint8_t *metadata;

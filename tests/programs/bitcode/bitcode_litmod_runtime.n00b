@@ -1,0 +1,23 @@
+declare_litmod("json", "array", "parse_json")
+
+func parse_json(items: Array[int]) -> Array[int] fail: string {
+    return items
+}
+
+func value(x: int) -> Array[int] {
+    return json[1, x]
+}
+
+func caught(x: int) -> int {
+    try {
+        data = json[1, x]
+        return 1
+    } else err {
+        return 0
+    }
+}
+
+comptime {
+} else {
+    require caught(2) == 1
+}

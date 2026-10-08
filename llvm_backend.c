@@ -1,6 +1,8 @@
 #include "llvm_backend.h"
 
 #include "ir/layout.h"
+#include "ir/typelang.h"
+#include "n00b-abi-v1.h"
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitWriter.h>
 #include <llvm-c/Core.h>
@@ -23,6 +25,8 @@ struct n00bb_llvm_backend_t {
     bool debug_enabled;
     const n00bb_llvm_phase_array_t *phase_arrays;
     size_t phase_array_count;
+    const n00bb_llvm_type_index_t *type_indices;
+    size_t type_index_count;
 };
 
 typedef struct {
@@ -43,6 +47,8 @@ typedef struct {
     core_diagnostics_t *diagnostics;
     const n00bb_llvm_phase_array_t *phase_arrays;
     size_t phase_array_count;
+    const n00bb_llvm_type_index_t *type_indices;
+    size_t type_index_count;
 } lower_state_t;
 
 static bool
@@ -251,8 +257,7 @@ emit_outcome_return(lower_state_t *state, LLVMValueRef value,
 }
 
 static LLVMValueRef
-array_value_with_descriptor(lower_state_t *state, LLVMValueRef data,
-                            uint64_t count)
+array_descriptor(lower_state_t *state, uint64_t count)
 {
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
@@ -271,6 +276,15 @@ array_value_with_descriptor(lower_state_t *state, LLVMValueRef data,
         LLVMConstStructInContext(context, descriptor_fields_value, 6, false));
     LLVMSetGlobalConstant(descriptor, true);
     LLVMSetLinkage(descriptor, LLVMPrivateLinkage);
+    return descriptor;
+}
+
+static LLVMValueRef
+array_value_with_descriptor(lower_state_t *state, LLVMValueRef data,
+                            uint64_t count)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMValueRef descriptor = array_descriptor(state, count);
     LLVMValueRef array_fields[] = {data, descriptor};
     return LLVMConstStructInContext(context, array_fields, 2, false);
 }
@@ -377,6 +391,95 @@ materialized_array(lower_state_t *state, ir_instr_t *instruction)
     return nullptr;
 }
 
+static LLVMValueRef
+dynamic_array(lower_state_t *state, ir_instr_t *instruction)
+{
+    ir_aggregate_form_t form;
+    th_type *type = instruction->dest
+        ? th_resolve(instruction->dest->type) : nullptr;
+    th_type *element = type && th_kind_of(type) == TH_SEQUENCE
+        ? th_seq_elem(type) : nullptr;
+    if (!element || (ir_instr_aggregate_form(instruction, &form)
+                     && form != IR_AGGREGATE_ELEMENTS)) return nullptr;
+    ir_module_t *source = state->function->owner;
+    ir_machine_t machine = ir_machine_of(source, element);
+    const ir_final_layout_t *layout = ir_layout_final(source, element,
+        ir_module_target(source));
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef element_type = value_type(source, element, context);
+    LLVMTypeRef result_type = value_type(source, type, context);
+    if (!layout || !layout->alignment_bytes || !element_type || !result_type
+        || layout->intrinsic_bits != machine.width || machine.width < 8
+        || machine.width % 8
+        || (machine.class != IR_CLASS_SINT
+            && machine.class != IR_CLASS_UINT)) return nullptr;
+    uint64_t element_bytes = machine.width / 8;
+    uint64_t element_align = layout->alignment_bytes;
+    if (element_bytes > UINT64_MAX - element_align + 1) return nullptr;
+    uint64_t stride = ((element_bytes + element_align - 1) / element_align)
+        * element_align;
+    uint64_t alignment = element_align > 8 ? element_align : 8;
+    uint64_t descriptor_bytes = sizeof(n00b_abi_array_descriptor_header_v1)
+        + sizeof(uint64_t);
+    uint64_t data_offset = ((descriptor_bytes + alignment - 1) / alignment)
+        * alignment;
+    uint64_t count = instruction->n_operands;
+    if (!stride || alignment > UINT32_MAX
+        || count > (UINT64_MAX - data_offset) / stride) return nullptr;
+    uint64_t byte_size = data_offset + (count ? count * stride : 1);
+    uint64_t typehash = th_hash(ir_module_types(source), type);
+    uint32_t type_index = 0;
+    for (size_t i = 0; i < state->type_index_count; i++)
+        if (state->type_indices[i].typehash == typehash) {
+            type_index = state->type_indices[i].index;
+            break;
+        }
+    if (!type_index) return nullptr;
+
+    LLVMValueRef descriptor = array_descriptor(state, count);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef allocator_params[] = {i32, i32, i64, i32, pointer};
+    LLVMTypeRef allocator_type = LLVMFunctionType(pointer,
+        allocator_params, 5, false);
+    LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
+        "n00b_allocate");
+    if (!allocator)
+        allocator = LLVMAddFunction(state->module, "n00b_allocate",
+                                    allocator_type);
+    LLVMValueRef allocator_args[] = {
+        LLVMConstNull(i32), LLVMConstInt(i32, type_index, false),
+        LLVMConstInt(i64, byte_size, false),
+        LLVMConstInt(i32, alignment, false), descriptor,
+    };
+    LLVMValueRef storage = LLVMBuildCall2(state->builder, allocator_type,
+        allocator, allocator_args, 5, "array.storage");
+    LLVMTypeRef descriptor_type = LLVMGlobalGetValueType(descriptor);
+    LLVMValueRef descriptor_value = LLVMBuildLoad2(state->builder,
+        descriptor_type, descriptor, "array.shape");
+    LLVMBuildStore(state->builder, descriptor_value, storage);
+    LLVMValueRef offset = LLVMConstInt(i64, data_offset, false);
+    LLVMValueRef data = LLVMBuildGEP2(state->builder,
+        LLVMInt8TypeInContext(context), storage, &offset, 1, "array.data");
+    for (uint32_t i = 0; i < instruction->n_operands; i++) {
+        ir_operand_t *operand = &instruction->operands[i];
+        LLVMValueRef item = operand->kind == IR_OPD_VALUE
+            ? lowered_value(state, operand->value) : nullptr;
+        if (!item || LLVMTypeOf(item) != element_type) return nullptr;
+        LLVMValueRef position = LLVMConstInt(i64, (uint64_t)i * stride, false);
+        LLVMValueRef slot = LLVMBuildGEP2(state->builder,
+            LLVMInt8TypeInContext(context), data, &position, 1,
+            "array.element");
+        LLVMBuildStore(state->builder, item, slot);
+    }
+    LLVMValueRef array = LLVMGetUndef(result_type);
+    array = LLVMBuildInsertValue(state->builder, array, data, 0,
+                                 "array.with.data");
+    return LLVMBuildInsertValue(state->builder, array, storage, 1,
+                                "array.with.descriptor");
+}
+
 static bool
 lower_instruction(lower_state_t *state, ir_instr_t *instruction)
 {
@@ -419,6 +522,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         return result && save_result(state, instruction, result);
     case IR_OP_AGGREGATE:
         result = constant_array(state, instruction);
+        if (!result) result = dynamic_array(state, instruction);
         return result ? save_result(state, instruction, result)
                       : unsupported(state, instruction);
     case IR_OP_PHASE_RESULT:
@@ -561,6 +665,19 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMBuildCondBr(state->builder, condition, yes, no);
         return true;
     }
+    case IR_OP_JUMP: {
+        if (count != 1 || operands[0].kind != IR_OPD_BLOCK) break;
+        LLVMBasicBlockRef target = lowered_block(state, operands[0].block);
+        if (!target) break;
+        LLVMBuildBr(state->builder, target);
+        return true;
+    }
+    case IR_OP_UNREACHABLE:
+        if (count == 0) {
+            LLVMBuildUnreachable(state->builder);
+            return true;
+        }
+        break;
     case IR_OP_RETURN:
         if (th_func_error(state->function->type)
             && ir_machine_of(state->function->owner,
@@ -639,6 +756,8 @@ static bool
 lower_function(LLVMModuleRef target, ir_func_t *function,
                const n00bb_llvm_phase_array_t *phase_arrays,
                size_t phase_array_count,
+               const n00bb_llvm_type_index_t *type_indices,
+               size_t type_index_count,
                core_diagnostics_t *diagnostics)
 {
     LLVMContextRef context = LLVMGetModuleContext(target);
@@ -669,7 +788,9 @@ lower_function(LLVMModuleRef target, ir_func_t *function,
     lower_state_t state = {.module = target, .function = function,
         .target_function = target_function, .diagnostics = diagnostics,
         .phase_arrays = phase_arrays,
-        .phase_array_count = phase_array_count};
+        .phase_array_count = phase_array_count,
+        .type_indices = type_indices,
+        .type_index_count = type_index_count};
     state.blocks = calloc(function->n_blocks, sizeof(*state.blocks));
     state.locals = calloc(function->n_locals ? function->n_locals : 1,
         sizeof(*state.locals));
@@ -715,6 +836,8 @@ static bool
 lower_module(LLVMModuleRef target, const ir_module_t *source,
              const n00bb_llvm_phase_array_t *phase_arrays,
              size_t phase_array_count,
+             const n00bb_llvm_type_index_t *type_indices,
+             size_t type_index_count,
              core_diagnostics_t *diagnostics)
 {
     if (ir_global_count(source))
@@ -746,7 +869,8 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         ir_func_t *function = ir_func_at((ir_module_t *)source, i);
         if (function->n_blocks
             && !lower_function(target, function, phase_arrays,
-                               phase_array_count, diagnostics)) return false;
+                               phase_array_count, type_indices,
+                               type_index_count, diagnostics)) return false;
     }
     return true;
 }
@@ -811,6 +935,18 @@ n00bb_llvm_backend_bind_phase_arrays(
     return true;
 }
 
+bool
+n00bb_llvm_backend_bind_type_indices(
+    n00bb_llvm_backend_t *backend, const n00bb_llvm_type_index_t *types,
+    size_t count)
+{
+    if (!backend || backend->runtime_lowered || (count && !types))
+        return false;
+    backend->type_indices = types;
+    backend->type_index_count = count;
+    return true;
+}
+
 static bool
 lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
             core_diagnostics_t *diagnostics)
@@ -823,6 +959,8 @@ lower_phase(n00bb_llvm_backend_t *backend, bool comptime,
                                : backend->runtime_source,
                       comptime ? nullptr : backend->phase_arrays,
                       comptime ? 0 : backend->phase_array_count,
+                      comptime ? nullptr : backend->type_indices,
+                      comptime ? 0 : backend->type_index_count,
                       diagnostics))
         return false;
     *lowered = true;

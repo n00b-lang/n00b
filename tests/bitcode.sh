@@ -20,6 +20,9 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/litmod_static" \
     "$program_dir/../litmod_array_site.n00b"
 "$tmp/litmod_static"
+"$compiler" build --output "$tmp/litmod_runtime" \
+    "$program_dir/bitcode_litmod_runtime.n00b"
+"$tmp/litmod_runtime"
 "$compiler" build --output "$tmp/value_handles" \
     "$program_dir/bitcode_value_handles.n00b"
 "$tmp/value_handles"

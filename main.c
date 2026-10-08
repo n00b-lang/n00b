@@ -47155,8 +47155,39 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     }
     uint8_t *linked_abi = nullptr;
     size_t linked_abi_bytes = 0;
+    n00bb_llvm_type_index_t *type_indices = nullptr;
+    size_t type_index_count = 0;
     if (ok) ok = n00bb_link_abi_artifact(link, analysis, &analysis->target,
         &linked_abi, &linked_abi_bytes, diagnostics);
+    if (ok) {
+        n00bb_abi_object_view_t view = {0};
+        ok = n00bb_abi_object_open(&analysis->target, linked_abi,
+            linked_abi_bytes, &view);
+        if (ok) {
+            const n00bb_abi_directory_entry_t *table =
+                n00bb_abi_object_table(&view, N00B_ABI_TABLE_TYPE);
+            ok = table != nullptr;
+            if (ok) {
+                type_index_count = table->record_count;
+                type_indices = calloc(type_index_count ? type_index_count : 1,
+                    sizeof(*type_indices));
+                ok = type_indices != nullptr;
+            }
+            for (uint32_t i = 0; ok && i < type_index_count; i++) {
+                const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
+                    N00B_ABI_TABLE_TYPE, i);
+                ok = type != nullptr;
+                if (ok) type_indices[i] = (n00bb_llvm_type_index_t){
+                    .typehash = type->typehash, .index = i,
+                };
+            }
+            n00bb_abi_object_close(&view);
+        }
+        if (!ok)
+            core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
+                CORE_STRING_STATIC("N00BB-B0010"),
+                CORE_STRING_STATIC("could not read linked ABI type table"));
+    }
     core_object_section_t metadata = {0};
     if (ok) ok = core_object_section_find(linked_abi, linked_abi_bytes,
         analysis->target.object_format,
@@ -47197,7 +47228,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             break;
         }
         if (!n00bb_llvm_backend_bind_phase_arrays(backend, phase_arrays,
-                                                  phase_count)) {
+                                                  phase_count)
+            || !n00bb_llvm_backend_bind_type_indices(backend, type_indices,
+                                                      type_index_count)) {
             n00bb_llvm_backend_free(backend);
             ok = false;
             break;
@@ -47274,6 +47307,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     free(objects);
     free(names);
     free(phase_arrays);
+    free(type_indices);
     core_list_free(order);
     if (!ok && !core_diagnostics_failed(diagnostics))
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,

@@ -789,6 +789,10 @@ int32_t n00b_abi_v1_string_bytes(const n00b_abi_snapshot_v1 *snapshot,
  * including a possible short write, or -1 on failure. No libc is required. */
 int32_t n00b_abi_v1_raw_fd_write(int32_t fd, n00b_abi_string_v1 text);
 
+void *n00b_allocate(uint32_t allocator, uint32_t type_index,
+                    uint64_t byte_size, uint32_t alignment,
+                    const void *instance_descriptor);
+
 #if defined(_WIN32)
 /* Register a live Windows handle as a nonstandard n00b descriptor. The
  * caller retains ownership and must unregister before closing the handle. */
