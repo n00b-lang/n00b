@@ -1110,6 +1110,19 @@ static void *r_global_init_phase_result(parse_reduce_t *r)
     return value;
 }
 
+static void *r_global_init_type(parse_reduce_t *r)
+{
+    B *b = r->thunk;
+    th_type *type = type_of(b,
+        raw_at(r, CORE_STRING_STATIC("typelang-type")), cover(r));
+    if (!type) return nullptr;
+    ib_node *value = nd(b, IB_INIT, cover(r));
+    value->present = true;
+    value->uval = IR_GLOBAL_INIT_TYPE;
+    value->type = type;
+    return value;
+}
+
 static void apply_init(B *b, ib_node *init, bool *has, ir_lit_t *lit, double *f,
                        const char **text, bool *is_float)
 {
@@ -1176,6 +1189,9 @@ static bool build_global_init_value(B *b, ib_node *source,
         if (!source->text || !source->text[0]) return false;
         value->phase_result.identifier = source->text;
         return true;
+    case IR_GLOBAL_INIT_TYPE:
+        value->descriptor_type = source->type;
+        return value->descriptor_type != nullptr;
     case IR_GLOBAL_INIT_SYMBOL: {
         if (!source->text) return false;
         ir_value_t *symbol = ir_alloc(b->ctx, sizeof(*symbol));
@@ -2751,6 +2767,7 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, const char *text, int32_t file,
         r_global_init_dictionary);
     reg(&b, w, CORE_STRING_STATIC("global-init-phase-result"),
         r_global_init_phase_result);
+    reg(&b, w, CORE_STRING_STATIC("global-init-type"), r_global_init_type);
     reg(&b, w, CORE_STRING_STATIC("signed-number"), r_signed_number);
     reg(&b, w, CORE_STRING_STATIC("symbolic-expr"), r_symbolic);
     reg(&b, w, CORE_STRING_STATIC("layout-val"), r_layout_val);

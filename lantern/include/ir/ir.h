@@ -260,6 +260,7 @@ typedef enum : uint8_t {
     IR_GLOBAL_INIT_DICTIONARY,
     IR_GLOBAL_INIT_NIL,
     IR_GLOBAL_INIT_VARIANT,
+    IR_GLOBAL_INIT_TYPE,
 } ir_global_init_kind_t;
 
 typedef struct ir_global_init_value ir_global_init_value_t;
@@ -276,6 +277,7 @@ struct ir_global_init_value {
             size_t length;
         } string;
         ir_value_t *symbol;
+        th_type *descriptor_type;
         struct {
             const char *identifier;
         } phase_result;

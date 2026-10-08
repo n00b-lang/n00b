@@ -304,7 +304,7 @@ static void put_init(core_buffer_t *b, bool has, bool is_float,
     ir_lit_into(b, lit);
 }
 
-static void put_global_init_value(core_buffer_t *b,
+static void put_global_init_value(core_buffer_t *b, ir_module_t *m,
                                   const ir_global_init_value_t *value)
 {
     if (!value) {
@@ -337,11 +337,16 @@ static void put_global_init_value(core_buffer_t *b,
             value->phase_result.identifier
                 ? strlen(value->phase_result.identifier) : 0);
         break;
+    case IR_GLOBAL_INIT_TYPE:
+        core_buffer_puts(b, "type(");
+        put_type(b, m, value->descriptor_type);
+        core_buffer_puts(b, ")");
+        break;
     case IR_GLOBAL_INIT_SEQUENCE:
         core_buffer_puts(b, "[");
         for (size_t i = 0; i < value->aggregate.count; i++) {
             if (i) core_buffer_puts(b, ", ");
-            put_global_init_value(b, &value->aggregate.items[i]);
+            put_global_init_value(b, m, &value->aggregate.items[i]);
         }
         core_buffer_puts(b, "]");
         break;
@@ -349,7 +354,7 @@ static void put_global_init_value(core_buffer_t *b,
         core_buffer_puts(b, "(");
         for (size_t i = 0; i < value->aggregate.count; i++) {
             if (i) core_buffer_puts(b, ", ");
-            put_global_init_value(b, &value->aggregate.items[i]);
+            put_global_init_value(b, m, &value->aggregate.items[i]);
         }
         if (value->aggregate.count == 1) core_buffer_puts(b, ",");
         core_buffer_puts(b, ")");
@@ -360,7 +365,7 @@ static void put_global_init_value(core_buffer_t *b,
             const ir_global_init_value_t *item = &value->aggregate.items[i];
             core_buffer_printf(b, "%s%s = ", i ? ", " : " ",
                 item->member ? item->member : "?");
-            put_global_init_value(b, item);
+            put_global_init_value(b, m, item);
         }
         core_buffer_puts(b, value->aggregate.count ? " }" : "}");
         break;
@@ -370,7 +375,7 @@ static void put_global_init_value(core_buffer_t *b,
                 && value->aggregate.items[0].member
                 ? value->aggregate.items[0].member : "?");
         if (value->aggregate.count == 1 && value->aggregate.items)
-            put_global_init_value(b, value->aggregate.items);
+            put_global_init_value(b, m, value->aggregate.items);
         else core_buffer_puts(b, "?");
         core_buffer_puts(b, "}");
         break;
@@ -378,7 +383,7 @@ static void put_global_init_value(core_buffer_t *b,
         core_buffer_puts(b, "set{");
         for (size_t i = 0; i < value->aggregate.count; i++) {
             if (i) core_buffer_puts(b, ", ");
-            put_global_init_value(b, &value->aggregate.items[i]);
+            put_global_init_value(b, m, &value->aggregate.items[i]);
         }
         core_buffer_puts(b, "}");
         break;
@@ -386,9 +391,9 @@ static void put_global_init_value(core_buffer_t *b,
         core_buffer_puts(b, "dict{");
         for (size_t i = 0; i + 1 < value->aggregate.count; i += 2) {
             if (i) core_buffer_puts(b, ", ");
-            put_global_init_value(b, &value->aggregate.items[i]);
+            put_global_init_value(b, m, &value->aggregate.items[i]);
             core_buffer_puts(b, " => ");
-            put_global_init_value(b, &value->aggregate.items[i + 1]);
+            put_global_init_value(b, m, &value->aggregate.items[i + 1]);
         }
         core_buffer_puts(b, "}");
         break;
@@ -611,7 +616,7 @@ static bool on_global(ir_visit_t *v)
     put_type(b, m, g->type);
     if (g->has_static_initializer) {
         core_buffer_puts(b, " = ");
-        put_global_init_value(b, g->static_initializer);
+        put_global_init_value(b, m, g->static_initializer);
     }
     put_span(b, m, g->span);
     put_origin(b, g->origin);

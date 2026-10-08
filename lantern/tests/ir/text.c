@@ -677,6 +677,7 @@ static void test_recursive_global_initializers(void)
         "  global @empty_lookup: dict[string, i64] = dict{}\n"
         "  global @word: string = \"nil\"\n"
         "  global @truth_word: string = \"true\"\n"
+        "  global @chosen_type: typespec = type(i64)\n"
         "  global @selected: variant Choice = "
         "variant{number = 7}\n"
         "  global @small: variant Choice = "
@@ -704,6 +705,8 @@ static void test_recursive_global_initializers(void)
     ir_global_t *word = module ? ir_global_find(module, "word") : nullptr;
     ir_global_t *truth_word = module
         ? ir_global_find(module, "truth_word") : nullptr;
+    ir_global_t *chosen_type = module
+        ? ir_global_find(module, "chosen_type") : nullptr;
     ir_global_t *selected = module
         ? ir_global_find(module, "selected") : nullptr;
     ir_global_t *small = module
@@ -811,6 +814,12 @@ static void test_recursive_global_initializers(void)
               && truth_word->static_initializer->string.length == 4
               && !memcmp(truth_word->static_initializer->string.bytes,
                          "true", 4));
+    check("type descriptors retain their structured referent",
+          chosen_type && chosen_type->has_static_initializer
+              && chosen_type->static_initializer->kind == IR_GLOBAL_INIT_TYPE
+              && ir_type_eq(module,
+                  chosen_type->static_initializer->descriptor_type,
+                  th_name(ir_ctx_types(ctx), "i64")));
     check("recursive initializer text round-trips",
           round_trips(ctx, source, nullptr));
     ir_ctx_t *invalid_ctx = ir_ctx_new();

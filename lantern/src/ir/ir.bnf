@@ -74,7 +74,9 @@
                       | <global-init-tuple> | <global-init-record>
                       | <global-init-set> | <global-init-dictionary>
                       | <global-init-phase-result> | <global-init-variant>
+                      | <global-init-type>
 <global-init-phase-result> @nospace($2) ::= %"$" %STRING_LIT
+<global-init-type> ::= %"type" %"(" <typelang-type> %")"
 <global-init-sequence> ::= %"[" <global-init-values>? %"]"
 <global-init-tuple> ::= %"(" <global-init-values>? %")"
 <global-init-record> ::= %"{" <global-init-fields>? %"}"

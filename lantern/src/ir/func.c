@@ -299,6 +299,8 @@ static bool global_init_value_matches(ir_module_t *module,
     case IR_GLOBAL_INIT_PHASE_RESULT:
         return value->phase_result.identifier
             && value->phase_result.identifier[0];
+    case IR_GLOBAL_INIT_TYPE:
+        return value->descriptor_type != nullptr;
     case IR_GLOBAL_INIT_NIL:
         return global_init_named_type(type, "nil", 0);
     case IR_GLOBAL_INIT_SEQUENCE: {
@@ -453,6 +455,7 @@ static bool clone_global_init_value(ir_ctx_t *ctx,
     case IR_GLOBAL_INIT_INT:
     case IR_GLOBAL_INIT_FLOAT:
     case IR_GLOBAL_INIT_NIL:
+    case IR_GLOBAL_INIT_TYPE:
         return true;
     }
     return false;
