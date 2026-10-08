@@ -332,7 +332,18 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
     const char *name = nullptr;
     size_t count = 0;
     if (!th_named_info(th_resolve(type), &name, nullptr, nullptr, &count)
-        || !name || strcmp(name, TH_TUPLE)
+        || !name) return false;
+    if (!strcmp(name, "string") && !count)
+        return layout->intrinsic_bits == 128
+            && LLVMGetTypeKind(native) == LLVMStructTypeKind
+            && LLVMCountStructElementTypes(native) == 2
+            && LLVMGetTypeKind(LLVMStructGetTypeAtIndex(native, 0))
+                == LLVMIntegerTypeKind
+            && LLVMGetIntTypeWidth(LLVMStructGetTypeAtIndex(native, 0)) == 64
+            && LLVMGetTypeKind(LLVMStructGetTypeAtIndex(native, 1))
+                == LLVMIntegerTypeKind
+            && LLVMGetIntTypeWidth(LLVMStructGetTypeAtIndex(native, 1)) == 64;
+    if (strcmp(name, TH_TUPLE)
         || LLVMGetTypeKind(native) != LLVMStructTypeKind
         || LLVMCountStructElementTypes(native) != count
         || layout->n_members != count) return false;

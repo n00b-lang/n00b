@@ -23,6 +23,9 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$compiler" build --output "$tmp/litmod_runtime" \
     "$program_dir/bitcode_litmod_runtime.n00b"
 "$tmp/litmod_runtime"
+"$compiler" build --output "$tmp/litmod_nested" \
+    "$program_dir/bitcode_litmod_nested.n00b"
+"$tmp/litmod_nested"
 "$compiler" build --output "$tmp/litmod_set_shape" \
     "$program_dir/bitcode_litmod_set_shape.n00b"
 "$tmp/litmod_set_shape"

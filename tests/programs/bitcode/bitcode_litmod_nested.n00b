@@ -1,0 +1,19 @@
+declare_litmod("raw", "string", "identity_string")
+declare_litmod("bundle", "array", "identity_array")
+
+func identity_string(raw: string) -> string fail: string {
+    return raw
+}
+
+func identity_array(items: Array[string]) -> Array[string] fail: string {
+    return items
+}
+
+func value(x: string) -> Array[string] {
+    return bundle[raw"static", x]
+}
+
+comptime {
+} else {
+    value("dynamic")
+}
