@@ -109,9 +109,9 @@ bool ir_exec_graph_add_edge(ir_exec_graph_t *graph, uint32_t from,
                             uint32_t to,
                             ir_exec_graph_edge_kind_t kind);
 /* REQUIRES edges point from a dependent node to its successful prerequisite. */
-/* A phase.result instruction is a typed runtime input supplied by a
- * compile-time function result. The graph retains this cross-phase binding;
- * it is not a runtime call or a value evaluated by Lantern. */
+/* A phase.result instruction is a typed input supplied by a compile-time
+ * function result. A same-phase consumer requires the producer's successful
+ * exits; it is not a call or a value evaluated by Lantern. */
 bool ir_exec_graph_add_phase_result(ir_exec_graph_t *graph,
                                     const char *identifier,
                                     uint32_t producer_function,

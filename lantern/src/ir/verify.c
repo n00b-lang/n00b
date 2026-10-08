@@ -1010,10 +1010,11 @@ static bool typed_instr(ir_visit_t *vi)
     V *v = vi->user;
 
     if (vi->instr->op == IR_OP_PHASE_RESULT
-        && ir_func_execution_phase(vi->func) != IR_PHASE_RUNTIME) {
+        && ir_func_execution_phase(vi->func) != IR_PHASE_RUNTIME
+        && ir_func_execution_phase(vi->func) != IR_PHASE_COMPTIME) {
         broke(v, IR_DIAG_VERIFY_PHASE, vi->instr, vi->block,
-              "phase.result-runtime-only",
-              "phase.result values may only be consumed by runtime functions");
+              "phase.result-consumer-phase",
+              "phase.result values require a compile-time or runtime consumer");
     }
 
     if (ir_module_op_info(v->m, vi->instr->op)) {

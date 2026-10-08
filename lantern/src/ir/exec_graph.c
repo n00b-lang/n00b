@@ -370,9 +370,15 @@ ir_exec_graph_add_phase_result(ir_exec_graph_t *graph,
     if (!producer_func || !consumer_func
         || producer_func->owner->ctx != graph->ctx
         || consumer->block->owner != consumer_func
-        || producer->phase == consumer_region->phase
+        || producer->phase > consumer_region->phase
+        || producer_func == consumer_func
         || ir_func_execution_phase(producer_func) != IR_PHASE_COMPTIME
-        || ir_func_execution_phase(consumer_func) != IR_PHASE_RUNTIME)
+        || (ir_func_execution_phase(consumer_func) != IR_PHASE_RUNTIME
+            && ir_func_execution_phase(consumer_func)
+                != IR_PHASE_COMPTIME)
+        || (producer->phase == consumer_region->phase
+            && ir_func_execution_phase(consumer_func)
+                != IR_PHASE_COMPTIME))
         return false;
 
     bool instruction_present = false;
@@ -614,20 +620,40 @@ ir_exec_graph_validate(const ir_exec_graph_t *graph)
         for (uint32_t i = 0; i < result->consumer->block->n_instrs; i++)
             consumer_present |=
                 result->consumer->block->instrs[i] == result->consumer;
-        if (producer->phase == consumer->phase
+        if (producer->phase > consumer->phase
             || !producer_func || !consumer_func || !consumer_present
             || !producer_result
             || producer_func->owner->ctx != graph->ctx
             || consumer_func->owner->ctx != graph->ctx
             || ir_func_execution_phase(producer_func)
                 != IR_PHASE_COMPTIME
-            || ir_func_execution_phase(consumer_func)
-                != IR_PHASE_RUNTIME
+            || (ir_func_execution_phase(consumer_func)
+                    != IR_PHASE_RUNTIME
+                && ir_func_execution_phase(consumer_func)
+                    != IR_PHASE_COMPTIME)
+            || (producer->phase == consumer->phase
+                && ir_func_execution_phase(consumer_func)
+                    != IR_PHASE_COMPTIME)
             || th_hash(ir_ctx_types(graph->ctx), producer_result)
                 != th_hash(ir_ctx_types(graph->ctx), result->type)
             || th_hash(ir_ctx_types(graph->ctx), result->type)
                 != th_hash(ir_ctx_types(graph->ctx),
                            result->consumer->dest->type)) return false;
+        if (producer->phase == consumer->phase) {
+            for (size_t p = 0; p < producer->exits.len; p++) {
+                uint32_t exit_node = producer->exits.data[p];
+                if (graph->nodes.data[exit_node].outcome
+                    != IR_EXEC_GRAPH_OUTCOME_SUCCESS) continue;
+                bool required = false;
+                for (size_t e = 0; e < graph->edges.len; e++) {
+                    const exec_edge_t *edge = &graph->edges.data[e];
+                    required |= edge->kind == IR_EXEC_GRAPH_EDGE_REQUIRES
+                        && edge->from == consumer->entry_node
+                        && edge->to == exit_node;
+                }
+                if (!required) return false;
+            }
+        }
         for (size_t j = i + 1; j < graph->phase_results.len; j++) {
             const exec_phase_result_t *other =
                 &graph->phase_results.data[j];

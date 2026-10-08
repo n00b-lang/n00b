@@ -282,6 +282,49 @@ test_phase_result_binding(void)
                   "phase-result \"module.value.1\" producer=@phase_values.produce consumer=@phase_values.consume.entry#0"));
     core_free(printed);
 
+    ir_func_t *comptime_consumer = function_type
+        ? ir_func_add(module, "consume_in_comptime", function_type,
+                      IR_LINK_INTERNAL) : nullptr;
+    ir_block_t *comptime_entry = comptime_consumer
+        ? ir_block_add(comptime_consumer, "entry") : nullptr;
+    ir_instr_t *cached = comptime_entry
+        ? ir_instr_add(comptime_entry, IR_OP_PHASE_RESULT) : nullptr;
+    ir_instr_t *comptime_return = comptime_entry
+        ? ir_instr_add(comptime_entry, IR_OP_RETURN) : nullptr;
+    bool same_phase = comptime_consumer && comptime_entry && cached
+        && comptime_return
+        && ir_func_set_execution_phase(ctx, comptime_consumer,
+                                       IR_PHASE_COMPTIME)
+        && ir_instr_set_dest(cached, "cached_value", integer)
+        && ir_instr_set_phase_result(ctx, cached, "module.value.2")
+        && ir_instr_operand_value(comptime_return, cached->dest)
+        && (ir_verify(module, diagnostics) & IR_PROP_TYPED);
+    ir_exec_graph_t *prelude_graph = ir_exec_graph_new(ctx);
+    uint32_t prelude_phase, prelude_producer, prelude_consumer;
+    same_phase = same_phase && prelude_graph
+        && ir_exec_graph_add_phase(prelude_graph, "comptime",
+                                   &prelude_phase, nullptr)
+        && ir_exec_graph_add_function(prelude_graph, prelude_phase,
+            producer, nullptr, nullptr, &prelude_producer)
+        && ir_exec_graph_add_function(prelude_graph, prelude_phase,
+            comptime_consumer, nullptr, nullptr, &prelude_consumer)
+        && ir_exec_graph_add_phase_result(prelude_graph, "module.value.2",
+            prelude_producer, prelude_consumer, cached);
+    check("same-phase cached results require producer success",
+          same_phase && !ir_exec_graph_validate(prelude_graph));
+    ir_exec_graph_function_view_t consumer_region;
+    uint32_t producer_exit;
+    ir_exec_graph_outcome_t producer_outcome;
+    same_phase = same_phase
+        && ir_exec_graph_function_at(prelude_graph, prelude_consumer,
+                                     &consumer_region)
+        && ir_exec_graph_function_exit_at(prelude_graph,
+            prelude_producer, 0, &producer_exit, &producer_outcome)
+        && producer_outcome == IR_EXEC_GRAPH_OUTCOME_SUCCESS
+        && ir_exec_graph_add_edge(prelude_graph, consumer_region.entry_node,
+            producer_exit, IR_EXEC_GRAPH_EDGE_REQUIRES);
+    check("same-phase cached results bind after producer success",
+          same_phase && ir_exec_graph_validate(prelude_graph));
     ir_func_t *wrong_producer = function_type
         ? ir_func_add(module, "runtime_producer", function_type,
                       IR_LINK_INTERNAL) : nullptr;
