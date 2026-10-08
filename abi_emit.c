@@ -1100,81 +1100,102 @@ n00bb_abi_emit_unit(
     if (requirement_capacity_valid)
         requirements = core_realloc(requirements,
             (import_count + reference_count + 1) * sizeof(*requirements));
+    const char *failed_stage = "setup";
+#define ABI_STAGE(name, call) ((call) || ((failed_stage = name), false))
     bool valid = pool && type_index && requirement_capacity_valid
-        && n00bb_abi_type_index_collect_module_types(type_index,
-            (ir_module_t *)comptime_ir)
-        && n00bb_abi_type_index_collect_module_types(type_index,
-            (ir_module_t *)runtime_ir)
-        && n00bb_abi_type_index_collect_symbols(type_index, symbols)
-        && collect_imported_symbol_types(link, unit, type_index)
-        && publish_catalog_direct_layouts(type_index,
-            (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir, target)
-        && n00bb_abi_type_identity_rows_build(type_index,
-            (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-            symbols, type_owner, type_owner_context, pool, &type_rows)
-        && append_imported_symbol_requirements(link, unit, type_index,
-            ir_module_types((ir_module_t *)runtime_ir), &type_rows, pool,
-            requirements, &requirement_count, N00B_ABI_SYMBOL_FUNCTION)
-        && n00bb_abi_type_variables_bind(type_index,
-            ir_module_types((ir_module_t *)runtime_ir), declarations,
-            &type_rows)
-        && n00bb_abi_type_components_build(type_index,
-            (ir_module_t *)runtime_ir, prefix_stream_count,
-            &type_rows, &components)
-        && n00bb_abi_type_layout_rows_build(type_index,
-            (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-            prefix_stream_count + (uint32_t)components.count,
-            declarations, pool,
-            &type_rows, &layout_rows)
-        && n00bb_abi_enum_rows_build(type_index, declarations, pool,
-            prefix_stream_count + (uint32_t)components.count
-                + (uint32_t)layout_rows.stream_index_count,
-            &type_rows, &enum_rows)
-        && n00bb_abi_type_signatures_build(type_index, &type_rows, pool,
-            prefix_stream_count + (uint32_t)components.count
-                + (uint32_t)layout_rows.stream_index_count
-                + (uint32_t)enum_rows.stream_index_count,
-            &signature_rows)
-        && n00bb_abi_declarations_build(declarations, type_index,
-            &type_rows, unit, tokens, pool, node_source, source_context,
-            prefix_stream_count + (uint32_t)components.count
-                + (uint32_t)layout_rows.stream_index_count
-                + (uint32_t)enum_rows.stream_index_count
-                + (uint32_t)signature_rows.parameter_index_count,
-            &declaration_rows)
-        && n00bb_abi_function_rows_build(type_index, declarations,
-            &type_rows, &signature_rows,
-            prefix_stream_count + (uint32_t)components.count
-                + (uint32_t)layout_rows.stream_index_count
-                + (uint32_t)enum_rows.stream_index_count,
-            prefix_stream_count + (uint32_t)components.count
-                + (uint32_t)layout_rows.stream_index_count
-                + (uint32_t)enum_rows.stream_index_count
-                + (uint32_t)signature_rows.parameter_index_count
-                + (uint32_t)declaration_rows.stream_index_count,
-            (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
-            pool, lookup, lookup_context, &function_rows)
-        && n00bb_abi_trait_method_rows_build(type_index, &type_rows,
-            declarations, &trait_method_rows)
-        && n00bb_abi_constraint_rows_build(type_index, &type_rows,
-            declarations, &function_rows, pool,
-            prefix_stream_count + (uint32_t)components.count
-                + (uint32_t)layout_rows.stream_index_count
-                + (uint32_t)enum_rows.stream_index_count
-                + (uint32_t)signature_rows.parameter_index_count
-                + (uint32_t)declaration_rows.stream_index_count
-                + (uint32_t)function_rows.stream_index_count,
-            &constraint_rows)
-        && n00bb_abi_storage_rows_build(type_index, declarations,
-            &type_rows, (ir_module_t *)runtime_ir, pool,
-            prefix_stream_count + (uint32_t)components.count
-                + (uint32_t)layout_rows.stream_index_count
-                + (uint32_t)enum_rows.stream_index_count
-                + (uint32_t)signature_rows.parameter_index_count
-                + (uint32_t)declaration_rows.stream_index_count
-                + (uint32_t)function_rows.stream_index_count
-                + (uint32_t)constraint_rows.stream_index_count,
-            lookup, lookup_context, &storage_rows);
+        && ABI_STAGE("comptime type collection",
+            n00bb_abi_type_index_collect_module_types(type_index,
+                (ir_module_t *)comptime_ir))
+        && ABI_STAGE("runtime type collection",
+            n00bb_abi_type_index_collect_module_types(type_index,
+                (ir_module_t *)runtime_ir))
+        && ABI_STAGE("symbol type collection",
+            n00bb_abi_type_index_collect_symbols(type_index, symbols))
+        && ABI_STAGE("imported type collection",
+            collect_imported_symbol_types(link, unit, type_index))
+        && ABI_STAGE("direct type layouts",
+            publish_catalog_direct_layouts(type_index,
+                (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
+                target))
+        && ABI_STAGE("type identity rows",
+            n00bb_abi_type_identity_rows_build(type_index,
+                (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
+                symbols, type_owner, type_owner_context, pool,
+                &type_rows))
+        && ABI_STAGE("imported function requirements",
+            append_imported_symbol_requirements(link, unit, type_index,
+                ir_module_types((ir_module_t *)runtime_ir), &type_rows, pool,
+                requirements, &requirement_count, N00B_ABI_SYMBOL_FUNCTION))
+        && ABI_STAGE("type variable binding",
+            n00bb_abi_type_variables_bind(type_index,
+                ir_module_types((ir_module_t *)runtime_ir), declarations,
+                &type_rows))
+        && ABI_STAGE("type components",
+            n00bb_abi_type_components_build(type_index,
+                (ir_module_t *)runtime_ir, prefix_stream_count,
+                &type_rows, &components))
+        && ABI_STAGE("type layouts",
+            n00bb_abi_type_layout_rows_build(type_index,
+                (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
+                prefix_stream_count + (uint32_t)components.count,
+                declarations, pool, &type_rows, &layout_rows))
+        && ABI_STAGE("enum items",
+            n00bb_abi_enum_rows_build(type_index, declarations, pool,
+                prefix_stream_count + (uint32_t)components.count
+                    + (uint32_t)layout_rows.stream_index_count,
+                &type_rows, &enum_rows))
+        && ABI_STAGE("callable signatures",
+            n00bb_abi_type_signatures_build(type_index, &type_rows, pool,
+                prefix_stream_count + (uint32_t)components.count
+                    + (uint32_t)layout_rows.stream_index_count
+                    + (uint32_t)enum_rows.stream_index_count,
+                &signature_rows))
+        && ABI_STAGE("declarations",
+            n00bb_abi_declarations_build(declarations, type_index,
+                &type_rows, unit, tokens, pool, node_source, source_context,
+                prefix_stream_count + (uint32_t)components.count
+                    + (uint32_t)layout_rows.stream_index_count
+                    + (uint32_t)enum_rows.stream_index_count
+                    + (uint32_t)signature_rows.parameter_index_count,
+                &declaration_rows))
+        && ABI_STAGE("function rows",
+            n00bb_abi_function_rows_build(type_index, declarations,
+                &type_rows, &signature_rows,
+                prefix_stream_count + (uint32_t)components.count
+                    + (uint32_t)layout_rows.stream_index_count
+                    + (uint32_t)enum_rows.stream_index_count,
+                prefix_stream_count + (uint32_t)components.count
+                    + (uint32_t)layout_rows.stream_index_count
+                    + (uint32_t)enum_rows.stream_index_count
+                    + (uint32_t)signature_rows.parameter_index_count
+                    + (uint32_t)declaration_rows.stream_index_count,
+                (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
+                pool, lookup, lookup_context, &function_rows))
+        && ABI_STAGE("trait methods",
+            n00bb_abi_trait_method_rows_build(type_index, &type_rows,
+                declarations, &trait_method_rows))
+        && ABI_STAGE("type constraints",
+            n00bb_abi_constraint_rows_build(type_index, &type_rows,
+                declarations, &function_rows, pool,
+                prefix_stream_count + (uint32_t)components.count
+                    + (uint32_t)layout_rows.stream_index_count
+                    + (uint32_t)enum_rows.stream_index_count
+                    + (uint32_t)signature_rows.parameter_index_count
+                    + (uint32_t)declaration_rows.stream_index_count
+                    + (uint32_t)function_rows.stream_index_count,
+                &constraint_rows))
+        && ABI_STAGE("static storage",
+            n00bb_abi_storage_rows_build(type_index, declarations,
+                &type_rows, (ir_module_t *)runtime_ir, pool,
+                prefix_stream_count + (uint32_t)components.count
+                    + (uint32_t)layout_rows.stream_index_count
+                    + (uint32_t)enum_rows.stream_index_count
+                    + (uint32_t)signature_rows.parameter_index_count
+                    + (uint32_t)declaration_rows.stream_index_count
+                    + (uint32_t)function_rows.stream_index_count
+                    + (uint32_t)constraint_rows.stream_index_count,
+                lookup, lookup_context, &storage_rows));
+#undef ABI_STAGE
     if (valid) {
         modules[1].comptime_initializer =
             function_rows.comptime_initializer_index;
@@ -1182,6 +1203,7 @@ n00bb_abi_emit_unit(
             function_rows.runtime_initializer_index;
     }
     if (valid) {
+        failed_stage = "trait method membership";
         size_t method_stream_base = prefix_stream_count + components.count
             + layout_rows.stream_index_count + enum_rows.stream_index_count
             + signature_rows.parameter_index_count
@@ -1194,6 +1216,7 @@ n00bb_abi_emit_unit(
                 &trait_method_rows, (uint32_t)method_stream_base);
     }
     if (valid) {
+        failed_stage = "imported type and variable requirements";
         valid = type_rows.count <= UINT32_MAX - import_count - 1
             && reference_count <= UINT32_MAX - import_count - type_rows.count - 1
             && type_rows.count <= (SIZE_MAX / sizeof(*requirements))
@@ -1219,6 +1242,7 @@ n00bb_abi_emit_unit(
         modules[1].static_storage = storage_rows.static_range;
         modules[1].tls_storage = storage_rows.tls_range;
     }
+    if (valid) failed_stage = "package and module names";
     valid = valid && n00bb_abi_name_pool_encode(pool, package_id,
         N00B_ABI_TABLE_PACKAGE, 1, offsetof(n00b_abi_package_v1, name),
         &packages[1].name)
@@ -1226,6 +1250,7 @@ n00bb_abi_emit_unit(
             N00B_ABI_TABLE_MODULE, 1,
             offsetof(n00b_abi_module_v1, full_path), &modules[1].full_path);
     for (size_t i = 0; valid && i < import_count; i++) {
+        failed_stage = "import names";
         core_translation_unit_t *imported = core_translation_unit_import(
             unit, i);
         valid = imported && imported->module.identifier.data
@@ -1235,11 +1260,14 @@ n00bb_abi_emit_unit(
                 offsetof(n00b_abi_requirement_v1, full_path),
                 &requirements[i + 1].full_path);
     }
-    if (valid)
+    if (valid) {
+        failed_stage = "native bindings";
         valid = build_native_bindings(&storage_rows, declarations,
             &declaration_rows, pool, package_id, unit->module.identifier,
             target->object_format, &native_bindings);
+    }
     if (valid) {
+        failed_stage = "TLS metadata";
         size_t base = prefix_stream_count + components.count
             + layout_rows.stream_index_count + enum_rows.stream_index_count
             + signature_rows.parameter_index_count
@@ -1267,8 +1295,11 @@ n00bb_abi_emit_unit(
         n00bb_abi_type_identity_rows_release(&type_rows);
         n00bb_abi_name_pool_free(pool);
         n00bb_abi_decl_index_free(declarations);
-        return abi_unit_error(unit,
-            "could not build ABI type, declaration, or storage rows");
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, "could not build ABI %s", failed_stage);
+        bool result = abi_unit_error(unit, message.data);
+        core_buffer_release(&message);
+        return result;
     }
 
     size_t stream_count = prefix_stream_count + components.count
