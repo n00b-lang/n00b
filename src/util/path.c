@@ -603,10 +603,24 @@ path_user_dir(n00b_string_t *user, n00b_allocator_t *allocator)
             result = home;
         }
         else {
-            pw = getpwent();
-            result = pw == nullptr
-                ? path_slash(allocator)
-                : n00b_string_from_cstr(pw->pw_dir, .allocator = allocator);
+            // Same defect and same fix as n00b_get_user_dir below (n00b#506):
+            // getpwent() walks a process-global cursor rather than looking
+            // the caller up. This twin reaches users through `~` expansion
+            // (path_tilde_expand_alloc) rather than the XDG resolvers, so a
+            // bare `~` in a daemon with no $HOME expanded to whatever account
+            // the cursor happened to be on.
+            struct passwd  pwbuf;
+            struct passwd *pwres = nullptr;
+            char           buf[16384];
+
+            result = path_slash(allocator);
+            if (getpwuid_r(geteuid(), &pwbuf, buf, sizeof(buf), &pwres) == 0
+                && pwres != nullptr
+                && pwres->pw_dir != nullptr
+                && pwres->pw_dir[0] != '\0') {
+                result = n00b_string_from_cstr(pwres->pw_dir,
+                                               .allocator = allocator);
+            }
         }
     }
     else {
@@ -1523,10 +1537,28 @@ n00b_get_user_dir(n00b_string_t *user)
             result = n00b_string_from_cstr(home);
         }
         else {
-            pw = getpwent();
-            result = (pw == nullptr)
-                ? r"/"
-                : n00b_string_from_cstr(pw->pw_dir);
+            // getpwuid_r(geteuid()), NOT getpwent(). getpwent() returns the
+            // NEXT entry of a process-global iterator -- it takes no input,
+            // so it can only coincidentally be the caller's account, and
+            // which entry it lands on depends on where some other thread's
+            // enumeration left the shared cursor. Measured in the field as
+            // /dev/.local/state/crayon on two Linux hosts: /dev is the `sys`
+            // account's home, the fourth row of Ubuntu's passwd (n00b#506).
+            //
+            // The _r form because the cursor and the returned struct are both
+            // process-global; a daemon resolving this on a worker while
+            // another thread enumerates passwd is exactly the reported case.
+            struct passwd  pwbuf;
+            struct passwd *pwres = nullptr;
+            char           buf[16384];
+
+            result = r"/";
+            if (getpwuid_r(geteuid(), &pwbuf, buf, sizeof(buf), &pwres) == 0
+                && pwres != nullptr
+                && pwres->pw_dir != nullptr
+                && pwres->pw_dir[0] != '\0') {
+                result = n00b_string_from_cstr(pwres->pw_dir);
+            }
         }
     }
     else {
