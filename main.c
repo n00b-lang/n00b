@@ -11881,6 +11881,28 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
 }
 
 static ir_lower_result_t
+n00bb_lower_typeof(ir_lower_context_t *context, parse_visit_t *visit,
+                   ir_value_t *const *operands, size_t operand_count,
+                   th_type *result_type, ir_span_t span, void *state)
+{
+    (void)visit;
+    (void)state;
+    if (operand_count != 1 || !operands || !operands[0] || !result_type)
+        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                           "typeof operand or descriptor type is incomplete");
+    ir_instr_t *instruction = ir_instr_add(context->block, IR_OP_TYPE_OF);
+    char name[48];
+    snprintf(name, sizeof(name), "__n00bb_%llu",
+             (unsigned long long)context->next_value_id++);
+    if (!instruction || !ir_instr_set_dest(instruction, name, result_type)
+        || !ir_instr_operand_value(instruction, operands[0]))
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not emit typeof expression");
+    instruction->span = span;
+    return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
+}
+
+static ir_lower_result_t
 n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                  ir_value_t *const *operands, size_t operand_count,
                  th_type *result_type, ir_span_t span, void *state)
@@ -32237,6 +32259,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register(lowerer, "nil_literal",
                                n00bb_lower_nil_literal, nullptr)
         && ir_lowerer_register(lowerer, "cast", n00bb_lower_cast, nullptr)
+        && ir_lowerer_register(lowerer, "typeof", n00bb_lower_typeof,
+                               nullptr)
         && ir_lowerer_register(lowerer, "bool_not", n00bb_lower_bool_not,
                                nullptr)
         && ir_lowerer_register(lowerer, "flagset_complement",

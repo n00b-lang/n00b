@@ -1374,6 +1374,10 @@ grep -q 'call @archive_add' "$tmp/float_alias_archive_user.out"
     "$program_dir/lower_arithmetic.n00b" >"$tmp/lower_arithmetic.ir_and_pdg"
 grep -q '^module lower_arithmetic' "$tmp/lower_arithmetic.ir_and_pdg"
 grep -q '^pdg @add ' "$tmp/lower_arithmetic.ir_and_pdg"
+"$compiler" lower --dump-ir \
+    "$program_dir/typeof_expression.n00b" >"$tmp/typeof_expression.ir"
+grep -q 'func @type_of_value' "$tmp/typeof_expression.ir"
+grep -q '= type.of ' "$tmp/typeof_expression.ir"
 "$compiler" compile --output "$tmp/empty_abi.o" \
     "$program_dir/../abi/empty.n00b"
 [ -s "$tmp/empty_abi.o" ]

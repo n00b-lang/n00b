@@ -525,7 +525,7 @@
 
 <primary> @varref($0) @emit("reference") @infer("lookup($0)") ::= %IDENTIFIER
 
-<typeof-expr> @infer("typespec") ::= %"typeof" %"(" <expression> %")"
+<typeof-expr> @infer("typespec") @emit("typeof", $2) ::= %"typeof" %"(" <expression> %")"
 
 <new-expr> @infer("`t") @emit("array_new") ::= %"new" (%"[" <type-spec> %"]")? %"(" <call-args>? %")"
 
