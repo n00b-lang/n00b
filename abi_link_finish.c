@@ -489,7 +489,8 @@ rebuild_name_slots(const n00bb_abi_selected_objects_t *selected,
         uint32_t slot = 1 + (uint32_t)(hash % capacity);
         while (slots[slot].symbol_index) {
             if (core_string_eq(paths[slot], full_path)) {
-                valid = slots[slot].symbol_index == symbol_index;
+                if (slots[slot].symbol_index != symbol_index)
+                    slots[slot].ambiguous = 1;
                 break;
             }
             slot = slot == capacity ? 1 : slot + 1;
@@ -665,10 +666,11 @@ n00bb_abi_apply_link_patches(
     return true;
 }
 
-bool
-n00bb_abi_link_selected_objects(
+static bool
+link_selected_objects(
     const n00bb_abi_selected_objects_t *selected,
     const core_target_desc_t *target,
+    n00bb_abi_link_semantics_fn semantics, void *context,
     uint8_t **out_object, size_t *out_object_bytes)
 {
     n00bb_abi_image_key_t key;
@@ -721,6 +723,8 @@ n00bb_abi_link_selected_objects(
             sections.count, has_pool ? &string_storage : nullptr)
         && n00bb_abi_add_native_bindings(selected, &merged, &sections,
                                          &native);
+    if (valid && semantics)
+        valid = semantics(selected, plan, &merged, context);
     if (valid)
         for (size_t i = 0; i < native.relocation_count; i++)
             if (native.relocations[i].symbol_index == pending_pool_symbol)
@@ -835,17 +839,38 @@ n00bb_abi_link_selected_objects(
 }
 
 bool
-n00bb_abi_link_objects(
+n00bb_abi_link_selected_objects(
+    const n00bb_abi_selected_objects_t *selected,
+    const core_target_desc_t *target,
+    uint8_t **out_object, size_t *out_object_bytes)
+{
+    return link_selected_objects(selected, target, nullptr, nullptr,
+                                 out_object, out_object_bytes);
+}
+
+bool
+n00bb_abi_link_objects_with_semantics(
     core_link_unit_t *link, const core_target_desc_t *target,
     const n00bb_abi_object_input_t *candidates, size_t candidate_count,
+    n00bb_abi_link_semantics_fn semantics, void *context,
     uint8_t **out_object, size_t *out_object_bytes)
 {
     if (!out_object || !out_object_bytes) return false;
     n00bb_abi_selected_objects_t selected = {0};
     if (!n00bb_abi_select_objects(link, target, candidates,
                                   candidate_count, &selected)) return false;
-    bool valid = n00bb_abi_link_selected_objects(&selected, target,
-                                                 out_object, out_object_bytes);
+    bool valid = link_selected_objects(&selected, target, semantics, context,
+                                       out_object, out_object_bytes);
     n00bb_abi_selected_objects_release(&selected);
     return valid;
+}
+
+bool
+n00bb_abi_link_objects(
+    core_link_unit_t *link, const core_target_desc_t *target,
+    const n00bb_abi_object_input_t *candidates, size_t candidate_count,
+    uint8_t **out_object, size_t *out_object_bytes)
+{
+    return n00bb_abi_link_objects_with_semantics(link, target, candidates,
+        candidate_count, nullptr, nullptr, out_object, out_object_bytes);
 }

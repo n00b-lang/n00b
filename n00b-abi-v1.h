@@ -696,7 +696,7 @@ typedef struct {
 typedef struct {
     uint64_t name_hash;
     uint32_t symbol_index;
-    uint32_t reserved_zero;
+    uint32_t ambiguous; /* One when the path names multiple functions. */
 } n00b_abi_name_slot_v1;
 
 /* Link-only. Neither record appears in a fully resolved final image. */
@@ -789,6 +789,14 @@ int32_t n00b_abi_v1_string_bytes(const n00b_abi_snapshot_v1 *snapshot,
  * including a possible short write, or -1 on failure. No libc is required. */
 int32_t n00b_abi_v1_raw_fd_write(int32_t fd, n00b_abi_string_v1 text);
 
+#if defined(_WIN32)
+/* Register a live Windows handle as a nonstandard n00b descriptor. The
+ * caller retains ownership and must unregister before closing the handle. */
+int32_t n00b_abi_v1_fd_register_handle(void *handle);
+/* Returns 1 if removed, 0 if absent, -1 for a standard/invalid descriptor. */
+int32_t n00b_abi_v1_fd_unregister_handle(int32_t fd);
+#endif
+
 const n00b_abi_type_v1 *n00b_abi_v1_type(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t type_index);
 const n00b_abi_type_argument_v1 *n00b_abi_v1_type_argument(
@@ -834,6 +842,7 @@ int32_t n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,
 int32_t n00b_abi_v1_find_module(const n00b_abi_snapshot_v1 *snapshot,
                                 n00b_abi_string_v1 full_path,
                                 uint32_t *module_index);
+/* Returns -1 for an ambiguous name or invalid input, 0 for no match. */
 int32_t n00b_abi_v1_find_symbol(const n00b_abi_snapshot_v1 *snapshot,
                                 n00b_abi_string_v1 full_path,
                                 uint32_t *symbol_index);

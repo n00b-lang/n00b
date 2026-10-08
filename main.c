@@ -7,6 +7,7 @@
 #include "abi_layout.h"
 #include "abi_emit.h"
 #include "abi_link.h"
+#include "abi_semantics.h"
 #include "abi_record_layout.h"
 #include "record_layout_request.h"
 #include "enum_value.h"
@@ -46394,6 +46395,7 @@ n00bb_write_compile_abi_artifact(core_link_unit_t *link,
 
 static bool
 n00bb_write_library_abi_artifact(core_link_unit_t *link,
+                                 n00bb_link_analysis_t *analysis,
                                  const core_target_desc_t *target,
                                  parse_cmdr_result_t *args,
                                  core_diagnostics_t *diagnostics)
@@ -46434,8 +46436,29 @@ n00bb_write_library_abi_artifact(core_link_unit_t *link,
     }
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
-    if (valid) valid = n00bb_abi_link_objects(link, target, inputs,
-        count, &object, &object_bytes);
+    const ir_module_t **modules = core_alloc_array(const ir_module_t *,
+                                                    count * 2);
+    if (valid && !modules) valid = false;
+    for (size_t i = 0; valid && i < count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+        if (!state || !state->comptime_ir_module || !state->ir_module) {
+            valid = false;
+            break;
+        }
+        modules[2 * i] = state->comptime_ir_module;
+        modules[2 * i + 1] = state->ir_module;
+    }
+    n00bb_abi_semantics_t semantics = {
+        .environment = analysis->environment,
+        .modules = modules,
+        .module_count = 2 * count,
+    };
+    if (valid) valid = n00bb_abi_link_objects_with_semantics(link, target,
+        inputs, count, n00bb_abi_link_semantic_rows, &semantics,
+        &object, &object_bytes);
+    core_free(modules);
     core_free(inputs);
     if (!valid) {
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
@@ -46677,7 +46700,7 @@ main(int argc, char **argv)
             !preprocessor_options.release_mode);
         if (located)
             abi_emitted = located = n00bb_write_library_abi_artifact(link,
-                &link_analysis->target, args, cli_diagnostics);
+                link_analysis, &link_analysis->target, args, cli_diagnostics);
     }
     if (located && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--dump-link-unit")))

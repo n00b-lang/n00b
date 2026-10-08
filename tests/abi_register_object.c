@@ -310,6 +310,27 @@ main(int argc, char **argv)
             && n00b_abi_v1_find_module(snapshot, module->full_path,
                 &found) == 1 && found == i);
     }
+    uint32_t dispatch_count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_DISPATCH);
+    for (uint32_t d = 1; d < dispatch_count; d++) {
+        const n00b_abi_dispatch_v1 *dispatch = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_DISPATCH, d, nullptr);
+        assert(dispatch && dispatch->entries.count);
+        for (uint32_t i = 0; i < dispatch->entries.count; i++) {
+            uint32_t entry_index = 0, function_index = 0;
+            assert(n00b_abi_v1_index_at(snapshot, dispatch->entries, i,
+                &entry_index) == 1);
+            const n00b_abi_dispatch_entry_v1 *entry = n00b_abi_v1_record(
+                snapshot, N00B_ABI_TABLE_DISPATCH_ENTRY,
+                entry_index, nullptr);
+            assert(entry && n00b_abi_v1_type_specializes(snapshot,
+                entry->receiver_type_index, dispatch->trait_type_index) == 1);
+            assert(n00b_abi_v1_resolve_trait_method(snapshot,
+                dispatch->trait_type_index, dispatch->method_ordinal,
+                entry->receiver_type_index, &function_index) == 1
+                && function_index == entry->function_index);
+        }
+    }
     if (argc == 5) {
         uint32_t matches = 0;
         uint32_t expected_args = (uint32_t)strtoul(argv[4], nullptr, 10);

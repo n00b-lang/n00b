@@ -262,6 +262,20 @@ bool n00bb_abi_link_selected_objects(
     const core_target_desc_t *target,
     uint8_t **out_object, size_t *out_object_bytes);
 
+/* The frontend may add final-indexed semantic rows after remapping and
+ * before the static image is packed. The callback must leave merged rows
+ * valid on success; failure discards the entire link result. */
+typedef bool (*n00bb_abi_link_semantics_fn)(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_index_plan_t *plan,
+    n00bb_abi_merged_rows_t *merged, void *context);
+
+bool n00bb_abi_link_objects_with_semantics(
+    core_link_unit_t *link, const core_target_desc_t *target,
+    const n00bb_abi_object_input_t *candidates, size_t candidate_count,
+    n00bb_abi_link_semantics_fn semantics, void *context,
+    uint8_t **out_object, size_t *out_object_bytes);
+
 /* Selects objects for the finalized link unit, then consolidates them.
  * Candidate bytes are borrowed; the completed object is caller-owned. */
 bool n00bb_abi_link_objects(

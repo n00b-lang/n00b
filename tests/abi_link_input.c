@@ -228,7 +228,7 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
 }
 
 static void
-test_cycle_selection(char **paths)
+test_cycle_selection(char **paths, const char *linked_path)
 {
     const char *names[] = {"cycle_long_a", "cycle_long_b", "cycle_long_c"};
     core_translation_unit_t units[3] = {0};
@@ -504,6 +504,11 @@ test_cycle_selection(char **paths)
         n00bb_abi_object_table(&wrapped_view, N00B_ABI_TABLE_MODULE);
     assert(wrapped_modules && wrapped_modules->record_count == 4);
     n00bb_abi_object_close(&wrapped_view);
+    if (linked_path) {
+        FILE *file = fopen(linked_path, "wb");
+        assert(file && fwrite(wrapped, 1, wrapped_bytes, file) == wrapped_bytes
+            && !fclose(file));
+    }
     core_free(wrapped);
     core_free(linked);
     n00b_abi_requirement_v1 *bad_import = (void *)n00bb_abi_object_row(
@@ -939,7 +944,7 @@ test_linked_library_object(const char *path)
     for (uint32_t i = 1; i < name_slots->record_count; i++) {
         const n00b_abi_name_slot_v1 *slot = n00bb_abi_object_row(&view,
             N00B_ABI_TABLE_NAME_SLOT, i);
-        assert(slot && !slot->reserved_zero);
+        assert(slot && !slot->ambiguous);
         if (!slot->symbol_index) found_empty = true;
         if (slot->symbol_index == reader_index)
             found_reader = slot->name_hash == core_xxh3_64bits_raw(
@@ -3557,6 +3562,10 @@ main(int argc, char **argv)
         test_imported_generic_owner(argv[2], argv[3], argv[4]);
         return 0;
     }
+    if (argc == 5) {
+        test_cycle_selection(argv + 1, argv[4]);
+        return 0;
+    }
     if (argc == 4) {
         if (!strcmp(argv[1], "--value-import")) {
             test_imported_value_requirement(argv[2], argv[3]);
@@ -3566,7 +3575,7 @@ main(int argc, char **argv)
             test_imported_record_selection(argv[2], argv[3]);
             return 0;
         }
-        test_cycle_selection(argv + 1);
+        test_cycle_selection(argv + 1, nullptr);
         return 0;
     }
     if (argc == 3) {

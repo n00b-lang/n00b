@@ -369,6 +369,9 @@ grep -Eq 'layout render_contract.impl.ArchivedPoint target=(x86_64-linux|arm64-m
     "$tmp/render_plugin.ir"
 grep -q 'member x bit-offset=0 bit-width=64' "$tmp/render_plugin.ir"
 grep -q 'call @external_value' "$tmp/render_plugin.ir"
+N00B_PATH="$interface_programs" "$compiler" library \
+    --output "$tmp/render_plugin_linked.o" render_plugin
+"$abi_register_object_test" "$tmp/render_plugin_linked.o" 3
 if "$compiler" preprocess --link-interface "$tmp/render.interface" \
     "$interface_programs/render_private_field.n00b" \
     >"$tmp/render_private_field.out" 2>&1; then
@@ -1608,6 +1611,9 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     "$program_dir/../generic_trait_dispatch.n00b"
 [ -s "$tmp/trait_dispatch_abi.o" ]
 "$abi_record_object_test" "$tmp/trait_dispatch_abi.o" trait-dispatch
+"$compiler" library --output "$tmp/trait_dispatch_linked.o" \
+    "$script_dir/programs/trait_dispatch_multiple.n00b"
+"$abi_register_object_test" "$tmp/trait_dispatch_linked.o" 1
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/partial_method_root_tu.o" partial_method_root
 "$abi_record_object_test" "$tmp/partial_method_root_tu.o" \
@@ -1692,7 +1698,9 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
 "$abi_record_object_test" "$tmp/cycle_long_a.o" cycle \
     "$tmp/cycle_long_b.o" "$tmp/cycle_long_c.o"
 "$abi_link_input_test" "$tmp/cycle_long_a.o" \
-    "$tmp/cycle_long_b.o" "$tmp/cycle_long_c.o"
+    "$tmp/cycle_long_b.o" "$tmp/cycle_long_c.o" \
+    "$tmp/cycle_long_archive_linked.o"
+"$abi_register_object_test" "$tmp/cycle_long_archive_linked.o" 3
 N00B_PATH="$script_dir/programs/abi" "$compiler" library \
     --output "$tmp/cycle_long_linked.o" cycle_long_a
 "$abi_register_object_test" "$tmp/cycle_long_linked.o" 3

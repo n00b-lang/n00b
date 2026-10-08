@@ -3,7 +3,10 @@
 #include <assert.h>
 #include <string.h>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
 #include <unistd.h>
 #endif
 
@@ -38,7 +41,30 @@ int main(void)
     uint8_t long_bytes[] = "a longer\0binary string";
     n00b_abi_string_v1 rich = long_string(long_bytes, 0, N00B_ABI_STRING_RICH);
     assert(n00b_abi_v1_raw_fd_write(1, rich) == -1);
-#if !defined(_WIN32)
+#if defined(_WIN32)
+    HANDLE read_handle;
+    HANDLE write_handle;
+    assert(CreatePipe(&read_handle, &write_handle, NULL, 0));
+    int32_t fd = n00b_abi_v1_fd_register_handle(write_handle);
+    assert(fd >= 3);
+    const uint8_t short_bytes[] = {'a', 0, 'b'};
+    n00b_abi_string_v1 short_value = short_string(short_bytes, 3);
+    assert(n00b_abi_v1_raw_fd_write(fd, short_value) == 3);
+    uint8_t actual[sizeof short_bytes];
+    DWORD read_count = 0;
+    assert(ReadFile(read_handle, actual, sizeof actual, &read_count, NULL));
+    assert(read_count == sizeof actual);
+    assert(memcmp(actual, short_bytes, sizeof actual) == 0);
+    assert(n00b_abi_v1_fd_unregister_handle(fd) == 1);
+    assert(n00b_abi_v1_raw_fd_write(fd, short_value) == -1);
+    assert(n00b_abi_v1_fd_unregister_handle(fd) == 0);
+    assert(n00b_abi_v1_fd_unregister_handle(1) == -1);
+    assert(n00b_abi_v1_fd_register_handle(INVALID_HANDLE_VALUE) == -1);
+    assert(n00b_abi_v1_fd_register_handle(write_handle) == fd);
+    assert(n00b_abi_v1_fd_unregister_handle(fd) == 1);
+    assert(CloseHandle(write_handle));
+    assert(CloseHandle(read_handle));
+#else
     int fds[2];
     assert(pipe(fds) == 0);
     const uint8_t short_bytes[] = {'a', 0, 'b'};

@@ -40,20 +40,84 @@ static int32_t write_bytes(int32_t fd, const uint8_t *bytes, uint32_t count)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+enum { FIRST_DYNAMIC_FD = 3 };
+
+static SRWLOCK fd_map_lock = SRWLOCK_INIT;
+static HANDLE *fd_handles;
+static size_t fd_handle_count;
+static size_t fd_handle_capacity;
+
+int32_t n00b_abi_v1_fd_register_handle(void *native_handle)
+{
+    HANDLE handle = native_handle;
+    if (!handle || handle == INVALID_HANDLE_VALUE) return -1;
+    AcquireSRWLockExclusive(&fd_map_lock);
+    size_t slot = 0;
+    while (slot < fd_handle_count && fd_handles[slot]) slot++;
+    if (slot == fd_handle_count) {
+        size_t limit = (size_t)INT32_MAX - FIRST_DYNAMIC_FD + 1;
+        if (slot == limit) {
+            ReleaseSRWLockExclusive(&fd_map_lock);
+            return -1;
+        }
+        if (slot == fd_handle_capacity) {
+            size_t next = fd_handle_capacity ? fd_handle_capacity * 2 : 1;
+            if (next > limit || next < fd_handle_capacity) next = limit;
+            HANDLE *grown = fd_handle_capacity
+                ? HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, fd_handles,
+                              next * sizeof(*fd_handles))
+                : HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                            next * sizeof(*fd_handles));
+            if (!grown) {
+                ReleaseSRWLockExclusive(&fd_map_lock);
+                return -1;
+            }
+            fd_handles = grown;
+            fd_handle_capacity = next;
+        }
+        fd_handle_count++;
+    }
+    fd_handles[slot] = handle;
+    ReleaseSRWLockExclusive(&fd_map_lock);
+    return (int32_t)(slot + FIRST_DYNAMIC_FD);
+}
+
+int32_t n00b_abi_v1_fd_unregister_handle(int32_t fd)
+{
+    if (fd < FIRST_DYNAMIC_FD) return -1;
+    size_t slot = (size_t)(fd - FIRST_DYNAMIC_FD);
+    AcquireSRWLockExclusive(&fd_map_lock);
+    int32_t result = slot < fd_handle_count && fd_handles[slot] ? 1 : 0;
+    if (result) fd_handles[slot] = NULL;
+    ReleaseSRWLockExclusive(&fd_map_lock);
+    return result;
+}
+
 static int32_t write_bytes(int32_t fd, const uint8_t *bytes, uint32_t count)
 {
-    DWORD standard;
-    switch (fd) {
-    case 0: standard = STD_INPUT_HANDLE; break;
-    case 1: standard = STD_OUTPUT_HANDLE; break;
-    case 2: standard = STD_ERROR_HANDLE; break;
-    default: return -1;
+    HANDLE handle;
+    bool mapped = fd >= FIRST_DYNAMIC_FD;
+    if (mapped) {
+        size_t slot = (size_t)(fd - FIRST_DYNAMIC_FD);
+        AcquireSRWLockShared(&fd_map_lock);
+        handle = slot < fd_handle_count ? fd_handles[slot] : NULL;
     }
-    HANDLE handle = GetStdHandle(standard);
-    if (!handle || handle == INVALID_HANDLE_VALUE) return -1;
+    else {
+        DWORD standard;
+        switch (fd) {
+        case 0: standard = STD_INPUT_HANDLE; break;
+        case 1: standard = STD_OUTPUT_HANDLE; break;
+        case 2: standard = STD_ERROR_HANDLE; break;
+        default: return -1;
+        }
+        handle = GetStdHandle(standard);
+    }
     DWORD written = 0;
-    return WriteFile(handle, bytes, count, &written, NULL)
-               ? (int32_t)written : -1;
+    int32_t result = handle && handle != INVALID_HANDLE_VALUE
+        && WriteFile(handle, bytes, count, &written, NULL)
+            ? (int32_t)written : -1;
+    if (mapped) ReleaseSRWLockShared(&fd_map_lock);
+    return result;
 }
 #else
 #error "raw_fd_write needs an implementation for this target"

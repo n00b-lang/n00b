@@ -1937,8 +1937,9 @@ metadata_name_slots_valid(const n00b_abi_snapshot_v1 *snapshot,
     for (uint32_t i = 1; i < slot_count; i++) {
         const n00b_abi_name_slot_v1 *slot = n00b_abi_v1_record(snapshot,
             N00B_ABI_TABLE_NAME_SLOT, i, nullptr);
-        if (!slot || slot->reserved_zero
-            || (!slot->symbol_index && slot->name_hash))
+        if (!slot || slot->ambiguous > 1
+            || (!slot->symbol_index
+                && (slot->name_hash || slot->ambiguous)))
             return invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, i, 0);
         if (!slot->symbol_index) { has_empty = true; continue; }
         symbol_path_t path;
@@ -1949,14 +1950,16 @@ metadata_name_slots_valid(const n00b_abi_snapshot_v1 *snapshot,
     }
     if (slot_count && !has_empty)
         return invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, 0, 0);
-    if (longest > SIZE_MAX - symbol_count)
+    if (slot_count > SIZE_MAX - symbol_count
+        || longest > SIZE_MAX - symbol_count - slot_count)
         return invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, 0, 0);
-    size_t scratch_bytes = (size_t)symbol_count + longest;
+    size_t scratch_bytes = (size_t)symbol_count + slot_count + longest;
     if (!scratch_bytes) scratch_bytes = 1;
     uint8_t *scratch = snapshot_alloc(scratch_bytes);
     if (!scratch) return false;
     uint8_t *seen = scratch;
-    uint8_t *full_path = scratch + symbol_count;
+    uint8_t *verified_ambiguity = seen + symbol_count;
+    uint8_t *full_path = verified_ambiguity + slot_count;
     bool valid = true;
     uint32_t capacity = slot_count ? slot_count - 1 : 0;
     for (uint32_t i = 1; valid && i < slot_count; i++) {
@@ -2005,8 +2008,51 @@ metadata_name_slots_valid(const n00b_abi_snapshot_v1 *snapshot,
                                                             symbol->scope_index);
         if (scope && scope->parent_scope_index) continue;
         symbol_path_t path;
-        if (!symbol_path(snapshot, i, &path) || !seen[i])
+        if (!symbol_path(snapshot, i, &path))
             valid = invalid_record(error, N00B_ABI_TABLE_SYMBOL, i, 0);
+        if (!valid || seen[i]) continue;
+        size_t length = (size_t)(path.module_bytes + 1 + path.name_bytes);
+        if (length > longest) {
+            valid = invalid_record(error, N00B_ABI_TABLE_SYMBOL, i, 0);
+            break;
+        }
+        for (size_t byte = 0; byte < path.module_bytes; byte++)
+            full_path[byte] = path.module[byte];
+        full_path[path.module_bytes] = '.';
+        for (size_t byte = 0; byte < path.name_bytes; byte++)
+            full_path[path.module_bytes + 1 + byte] = path.name[byte];
+        uint64_t hash = XXH3_64bits(full_path, length);
+        uint32_t probe = capacity ? 1 + (uint32_t)(hash % capacity) : 0;
+        bool matched = false;
+        for (uint32_t step = 0; step < capacity; step++) {
+            const n00b_abi_name_slot_v1 *slot = n00b_abi_v1_record(
+                snapshot, N00B_ABI_TABLE_NAME_SLOT, probe, nullptr);
+            if (!slot || !slot->symbol_index) break;
+            if (slot->name_hash == hash) {
+                symbol_path_t representative;
+                const n00b_abi_symbol_v1 *other = n00b_abi_v1_symbol(
+                    snapshot, slot->symbol_index);
+                if (other && other->kind == N00B_ABI_SYMBOL_FUNCTION
+                    && symbol->kind == N00B_ABI_SYMBOL_FUNCTION
+                    && slot->ambiguous
+                    && symbol_path(snapshot, slot->symbol_index,
+                                   &representative)
+                    && path_matches(representative, full_path, length)) {
+                    verified_ambiguity[probe] = 1;
+                    matched = true;
+                    break;
+                }
+            }
+            probe = probe == capacity ? 1 : probe + 1;
+        }
+        if (!matched)
+            valid = invalid_record(error, N00B_ABI_TABLE_SYMBOL, i, 0);
+    }
+    for (uint32_t i = 1; valid && i < slot_count; i++) {
+        const n00b_abi_name_slot_v1 *slot = n00b_abi_v1_record(snapshot,
+            N00B_ABI_TABLE_NAME_SLOT, i, nullptr);
+        if (slot->ambiguous && !verified_ambiguity[i])
+            valid = invalid_record(error, N00B_ABI_TABLE_NAME_SLOT, i, 0);
     }
     snapshot_free(scratch, scratch_bytes);
     return valid;
@@ -2516,6 +2562,7 @@ n00b_abi_v1_find_symbol(const n00b_abi_snapshot_v1 *snapshot,
             symbol_path_t path;
             if (!symbol_path(snapshot, slot->symbol_index, &path)) return -1;
             if (path_matches(path, wanted, wanted_bytes)) {
+                if (slot->ambiguous) return -1;
                 *symbol_index = slot->symbol_index;
                 return 1;
             }
