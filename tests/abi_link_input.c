@@ -281,6 +281,28 @@ test_cycle_selection(char **paths)
         }
     }
     assert(shared_primitive && layout_probe);
+    n00b_abi_type_v1 *type_probe = nullptr;
+    uint32_t type_probe_index = 0;
+    for (uint32_t i = 1; i < first_types->record_count; i++) {
+        n00b_abi_type_v1 *candidate = (void *)n00bb_abi_object_row(first,
+            N00B_ABI_TABLE_TYPE, i);
+        if (candidate && candidate->kind == N00B_ABI_TYPE_PRIMITIVE) {
+            type_probe = candidate;
+            type_probe_index = i;
+            break;
+        }
+    }
+    assert(type_probe);
+    n00b_abi_type_v1 remapped_type;
+    type_probe->kind = N00B_ABI_TYPE_TUPLE + 1;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_TYPE,
+        type_probe_index, &remapped_type, sizeof(remapped_type), nullptr));
+    type_probe->kind = N00B_ABI_TYPE_PRIMITIVE;
+    uint32_t saved_type_flags = type_probe->flags;
+    type_probe->flags = UINT32_MAX;
+    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_TYPE,
+        type_probe_index, &remapped_type, sizeof(remapped_type), nullptr));
+    type_probe->flags = saved_type_flags;
     layout_probe->width_bits ^= 1;
     assert(!n00bb_abi_index_plan_build(&selected));
     layout_probe->width_bits ^= 1;
@@ -1670,6 +1692,7 @@ test_typed_range_rejects_zero(void)
     fixture_t metadata = {0};
     memcpy(metadata.packages[1].name.short_value.bytes, "p", 1);
     metadata.packages[1].name.short_value.selector = 1;
+    metadata.packages[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     metadata.packages[1].modules = (n00b_abi_range_v1){1, 1};
     memcpy(metadata.modules[1].full_path.short_value.bytes, "p.m", 3);
     metadata.modules[1].full_path.short_value.selector = 3;
@@ -1792,8 +1815,10 @@ test_tls_relocation_ownership_remap(void)
     metadata.types[0].typehash = 1;
     metadata.storage[1].segment_kind = N00B_ABI_STORAGE_TLS;
     metadata.storage[1].tls_relocations = (n00b_abi_range_v1){1, 1};
+    metadata.storage[2].segment_kind = N00B_ABI_STORAGE_READ_ONLY;
     metadata.relocations[1].template_storage_index = 1;
     metadata.relocations[1].referenced_storage_index = 2;
+    metadata.relocations[1].target_kind = N00B_ABI_STORAGE_READ_ONLY;
     metadata.indexes[1] = 1;
     n00bb_abi_directory_entry_t directory[] = {
         {.kind = N00B_ABI_TABLE_TYPE,
@@ -1979,11 +2004,14 @@ test_type_backlinks_remap(void)
     metadata.fields[1].parent_type_index = 1;
     metadata.fields[1].child_type_index = 2;
     metadata.fields[1].symbol_index = 1;
+    metadata.fields[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     metadata.fields[2].parent_type_index = 1;
     metadata.fields[2].child_type_index = 2;
     metadata.fields[2].declaration_ordinal = 1;
+    metadata.fields[2].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     metadata.symbols[1].kind = N00B_ABI_SYMBOL_FIELD;
     metadata.symbols[1].type_index = 2;
+    metadata.symbols[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     metadata.members[0] = 1;
     metadata.members[1] = 2;
     n00bb_abi_directory_entry_t directory[] = {

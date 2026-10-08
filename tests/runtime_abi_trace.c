@@ -92,10 +92,12 @@ initialize(image_t *image)
     };
     image->fields[1] = (n00b_abi_field_v1){
         .parent_type_index = 1, .child_type_index = 2,
+        .visibility = N00B_ABI_VISIBILITY_PRIVATE,
     };
     image->arms[1] = (n00b_abi_arm_v1){
         .field = {
             .parent_type_index = 3, .child_type_index = 2,
+            .visibility = N00B_ABI_VISIBILITY_PRIVATE,
             .physical_runs = {7, 1},
         },
         .tag_value = 1,

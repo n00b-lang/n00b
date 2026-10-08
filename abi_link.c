@@ -1,5 +1,6 @@
 #include "abi_link.h"
 #include "abi_member_facts.h"
+#include "abi_value_schema.h"
 #include "abi_type_variable.h"
 
 #include "abi_ref_schema.h"
@@ -1735,6 +1736,9 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
     const void *source = n00bb_abi_object_row(view, kind, local_index);
     if (!table || !source || out_bytes < table->record_bytes
         || link_kind_is_stream(kind)) return false;
+    if ((local_index || kind == N00B_ABI_TABLE_TYPE)
+        && !n00bb_abi_row_values_valid(kind, source,
+            table->record_bytes, nullptr)) return false;
     if ((kind == N00B_ABI_TABLE_TYPE
          && !type_backlinks_valid(view, source, local_index))
         || !row_owner_valid(view, kind, local_index, source)) return false;

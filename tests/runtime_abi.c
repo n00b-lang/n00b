@@ -130,6 +130,7 @@ main(void)
     image.links[2] = 3;
     image.methods[1].trait_type_index = 1;
     image.methods[1].signature_type_index = 4;
+    image.packages[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     image.functions[1].module_index = 1;
     image.functions[1].scope_index = 1;
     image.functions[1].code_ranges = (n00b_abi_range_v1){11, 1};
@@ -180,6 +181,7 @@ main(void)
     image.tls_relocations[1].target_kind = N00B_ABI_STORAGE_READ_ONLY;
     image.scopes[1].module_index = 1;
     image.symbols[1].kind = N00B_ABI_SYMBOL_VARIABLE;
+    image.symbols[1].visibility = N00B_ABI_VISIBILITY_PRIVATE;
     image.symbols[1].module_index = 1;
     image.symbols[1].scope_index = 1;
     image.symbols[1].type_index = 2;
@@ -293,6 +295,18 @@ main(void)
         && error.table_kind == N00B_ABI_TABLE_TYPE
         && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
     image.types[3].typevar_ordinal = 0;
+    image.types[3].kind = N00B_ABI_TYPE_TUPLE + 1;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
+    image.types[3].kind = N00B_ABI_TYPE_RECORD;
+    image.types[3].flags = UINT32_MAX;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_TYPE
+        && error.record_index == 3 && !n00b_abi_v1_current_snapshot());
+    image.types[3].flags = 0;
     n00b_abi_type_v1 original_type = image.types[3];
     image.types[3] = (n00b_abi_type_v1){
         .kind = N00B_ABI_TYPE_VARIABLE,
@@ -327,6 +341,12 @@ main(void)
         == N00B_ABI_BAD_METADATA
         && error.table_kind == N00B_ABI_TABLE_TYPE
         && !n00b_abi_v1_current_snapshot());
+    image.symbols[1].kind = N00B_ABI_SYMBOL_VARIABLE;
+    image.symbols[1].kind = UINT32_MAX;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_SYMBOL
+        && error.record_index == 1 && !n00b_abi_v1_current_snapshot());
     image.symbols[1].kind = N00B_ABI_SYMBOL_VARIABLE;
     image.methods[1].symbol_index = 0;
     image.functions[1].module_index = 99;

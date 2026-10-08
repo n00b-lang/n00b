@@ -9,6 +9,7 @@
 #include "abi_ref_schema.h"
 #include "abi_string.h"
 #include "abi_type_variable.h"
+#include "abi_value_schema.h"
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -251,6 +252,12 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
         for (uint32_t row = first; row < table->record_count; row++) {
             const uint8_t *bytes = n00b_abi_v1_record(snapshot, kind,
                                                        row, nullptr);
+            size_t invalid_offset = 0;
+            if (!n00bb_abi_row_values_valid(kind, bytes,
+                    table->record_bytes, &invalid_offset))
+                return invalid_record(error, kind, row,
+                    table->file_offset + (uint64_t)row
+                        * table->record_bytes + invalid_offset);
             for (size_t i = 0; i < sizeof(abi_index_columns)
                  / sizeof(abi_index_columns[0]); i++) {
                 const abi_ref_column_t *field = &abi_index_columns[i];
