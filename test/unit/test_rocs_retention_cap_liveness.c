@@ -351,11 +351,13 @@ main(int argc, char **argv)
     if (n00b_atomic_load(&seals) == 0) {
         printf("  [FAIL] no seals during the measured window -- retention\n"
                "         never ran, so this measured nothing\n");
+        n00b_shutdown();
         return 1;
     }
     if (n00b_atomic_load(&queries_run) == 0) {
         printf("  [FAIL] no queries completed -- nothing was pinned, so the\n"
                "         pinned retention path was never exercised\n");
+        n00b_shutdown();
         return 1;
     }
     if (over != 0) {
@@ -363,6 +365,7 @@ main(int argc, char **argv)
                "         ran at the cap -- this is the wax#1229 symptom\n",
                (unsigned long long)over,
                (unsigned long long)max_stall_ms);
+        n00b_shutdown();
         return 1;
     }
 
@@ -373,5 +376,10 @@ main(int argc, char **argv)
            (unsigned long long)nsamples);
 
     CHECK(n00b_result_is_ok(n00b_store_close(store)));
+
+    // n00b#527: quiesce the runtime before returning. n00b_init starts the
+    // default conduit's IO service, and exiting with those threads live
+    // raced as a teardown crash on the macOS runner.
+    n00b_shutdown();
     return 0;
 }
