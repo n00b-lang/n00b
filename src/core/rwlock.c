@@ -253,36 +253,23 @@ _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
     // record, so treat that window like null-self too.
     bool have_tcb = (thread != nullptr && thread->record != nullptr);
 
-    // n00b#521: this used to be
+    // n00b#521: a TCB-less reader is permitted on ANY lock, not just the STW
+    // gate. A thread n00b did not create -- Windows' KERNELBASE!CtrlRoutine,
+    // say -- has no TCB for its whole life, so the old
+    // assert(lock == &rt->critical_execution) aborted a daemon on Ctrl-C.
+    // Every TCB-deref below is gated on have_tcb, and the futex reader count
+    // a draining writer waits on is taken unconditionally, so such a reader
+    // already rode a correct path.
     //
-    //     if (!have_tcb) { assert(lock == &rt->critical_execution); }
-    //
-    // which encodes "the only TCB-less reader is a thread inside its own init
-    // or destroy". That is true of threads n00b CREATES, and false of a thread
-    // it does not: a foreign thread has no TCB at any point in its life and
-    // can take any lock at all.
-    //
-    // Windows is where this bites. The console-control handler runs on a thread
-    // the OS spawns (KERNELBASE!CtrlRoutine), so a daemon that registers one
-    // with SetConsoleCtrlHandler and calls into n00b from it aborts on Ctrl-C,
-    // console close, logoff or system shutdown -- an abort() where the program
-    // intended an orderly stop. Measured from a waxd crash dump: the assertion
-    // text is recoverable verbatim from the wassert arguments.
-    //
-    // Nothing below this point needed the assertion to hold. Every TCB-deref
-    // is already gated on have_tcb -- find_read_lock_record, register_read,
-    // n00b_lock_acquire_accounting, n00b_register_lock_wait, n00b_wait_done --
-    // and the futex reader count, which is what a draining writer actually
-    // waits on, is taken unconditionally. So a TCB-less reader on any lock
-    // already rides a correct path; the assertion was the only thing turning
-    // it into a crash.
-    //
-    // What is genuinely lost for such a reader is the per-thread read log, so
-    // it gets no reentrancy tracking and no lock accounting. A foreign thread
-    // that recursively read-locks therefore takes a second futex unit rather
-    // than nesting, which is correct but less efficient; both units are
-    // released by the matching unlocks. See the unlock side for how the
-    // "unbalanced unlock" check keeps its teeth without this assertion.
+    // CONSTRAINT: a foreign thread must not RE-ENTER a read lock it already
+    // holds. With no read log it cannot be recognized as the holder, so
+    // re-entry is a fresh acquire, and a fresh acquire parks on W_LOCK. If a
+    // writer is draining at that moment the thread parks holding the very
+    // unit the writer waits for -- deadlock. MEASURED, not theorized: with
+    // the re-entry forced under a queued writer, both threads stall and the
+    // watchdog in test_rwlock.c fires. Single acquire/release is safe and is
+    // what a console handler does; test_foreign_reader_with_writer_queued
+    // pins that boundary.
 
     n00b_core_lock_info_t   info    = n00b_atomic_load(&lock->data);
     n00b_thread_read_log_t *record  = have_tcb ? find_read_lock_record(lock, thread)
@@ -445,19 +432,13 @@ _n00b_rw_unlock(n00b_rwlock_t *lock, char *loc)
         // 2. A thread WITH a TCB is unlocking something it never locked, or
         //    unlocking twice. That is a real bug and must still abort.
         //
-        // The old form asked `lock == &rt->critical_execution` instead, which
-        // conflated "TCB-less reader" with "the STW gate" -- correct only
-        // because the gate was believed to be the only lock a TCB-less thread
-        // could hold. Asking about the THREAD rather than the LOCK keeps the
-        // unbalanced-unlock check exactly as sharp for every TCB-bearing
-        // caller, which is the case that check was written for, while no
-        // longer crashing a foreign thread for existing.
+        // So the question is about the THREAD, not the LOCK: that keeps the
+        // unbalanced-unlock abort exactly as sharp for every TCB-bearing
+        // caller while no longer killing a foreign thread for existing.
         //
-        // Note the condition deliberately re-reads the TCB rather than
-        // trusting a flag: a thread can acquire with a TCB and release during
-        // its own teardown after `record` is gone. That direction is also a
-        // record-less drop, not a bug, and it was already reachable for the
-        // gate before this change.
+        // It re-reads the TCB rather than trusting a flag because a thread
+        // can acquire WITH one and release during its own teardown after
+        // `record` is gone -- also a record-less drop, not a bug.
         bool releaser_has_tcb = (thread != nullptr && thread->record != nullptr);
 
         if (!releaser_has_tcb) {
