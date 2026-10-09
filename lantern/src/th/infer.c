@@ -1094,6 +1094,7 @@ static bool con_check(th_ctx *ctx, const th_type *var, th_type *bound_to,
                 signature = status == TH_ENV_METHOD_FOUND
                     ? method.signature : nullptr;
             }
+            if (signature) signature = th_type_clone(ctx, signature);
             const th_param *receiver =
                 signature ? th_func_param(signature, 0) : nullptr;
             th_type *method_result = signature ? th_func_ret(signature)

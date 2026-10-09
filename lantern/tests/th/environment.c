@@ -623,8 +623,69 @@ static void test_consume_ref_method(void) {
   th_ctx_free(types);
 }
 
+static void test_array_option_method(void) {
+  th_ctx *types = th_ctx_new();
+  th_env *environment = th_env_new();
+  th_type *required_receiver = th_var(types);
+  th_type *required_index = th_var(types);
+  th_type *required_result = th_var(types);
+  th_param required[] = {
+      {.mode = TH_IN, .type = required_receiver},
+      {.mode = TH_IN, .type = required_index},
+  };
+  th_type *requirement = th_func_with_error(types, required_result,
+      th_name(types, "nil"), required, 2, nullptr, nullptr, 0);
+  th_type *element = th_var(types);
+  th_param provided[] = {
+      {.mode = TH_IN, .type = th_array(types, element)},
+      {.mode = TH_IN, .type = th_name(types, "int")},
+  };
+  th_type *implementation = th_func_with_error(types, element,
+      th_name(types, "nil"), provided, 2, nullptr, nullptr, 0);
+  check("register generic array read method",
+      requirement && implementation &&
+      th_env_register_trait_contracts(environment, "Index_Read", "builtins",
+          "base", TH_ENV_PUBLIC, method_record(types, "__read", requirement)) &&
+      th_env_register_function_contract(environment, "builtins.__array_read",
+          "__read", "builtins", "base", TH_ENV_PUBLIC,
+          th_env_signature_contract(types, implementation,
+              th_name(types, "nil"))) &&
+      th_env_freeze(environment));
+  th_ctx *use = th_ctx_new();
+  th_type *reference = th_ind(use, 0, th_name(use, "byte"));
+  th_arg item = {.kind = TH_ARG_TYPE, .type = reference};
+  th_type *optional = th_apply(use, "option", &item, 1);
+  th_type *array = th_array(use, optional);
+  check("generic read resolves for array of optional references",
+      th_ctx_set_environment(use, environment, "client", "base") &&
+      th_env_method_resolve_by_name(use, array, "__read", nullptr,
+                                    nullptr) == TH_ENV_METHOD_FOUND);
+  th_ctx *late = th_ctx_new();
+  th_ctx_set_scope(late, "client", "base");
+  th_type *late_receiver = th_var(late);
+  th_type *late_result = th_var(late);
+  th_type *late_reference = th_ind(late, 0, th_name(late, "byte"));
+  th_arg late_item = {.kind = TH_ARG_TYPE, .type = late_reference};
+  th_type *late_optional = th_apply(late, "option", &late_item, 1);
+  th_param index = {.mode = TH_IN, .type = th_name(late, "int")};
+  th_type *call = th_func_with_error(late, late_result,
+      th_name(late, "nil"), &index, 1, nullptr, nullptr, 0);
+  bool obligation_added = th_require_method(late, late_receiver, "__read",
+                                            late_result, call);
+  bool bound = obligation_added && th_unify_in_place(late, late_receiver,
+      th_array(late, late_optional)) != nullptr;
+  check("deferred array read resolves optional reference result",
+      bound && th_ctx_set_environment(late, environment, "client", "base") &&
+      th_unify(late, late_result, late_optional));
+  th_ctx_free(late);
+  th_ctx_free(use);
+  th_env_free(environment);
+  th_ctx_free(types);
+}
+
 int main(void) {
   test_consume_ref_method();
+  test_array_option_method();
   test_kind_constraint_archive();
   test_trait_type_identity();
   th_env *env = th_env_new();
