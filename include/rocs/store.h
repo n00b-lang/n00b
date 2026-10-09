@@ -494,6 +494,8 @@ typedef struct {
     uint64_t                 ordinal;
     uint64_t                 record_count;
     uint64_t                 seal_ts;
+    // Reserved for source compatibility. Commit notifications are wakeups;
+    // query the store for durable partition metadata. Always nullptr.
     n00b_string_t           *partition_key;
 } n00b_store_commit_t;
 

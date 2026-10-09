@@ -5432,6 +5432,16 @@ rocs_store_emit_commit(n00b_store_t             *store,
         return false;
     }
 
+    // Commit events only wake live-tail readers, which rescan the store for
+    // durable position and partition metadata. Avoid constructing a message
+    // when no reader is listening. A new subscriber rescans on attachment, so
+    // a race with this best-effort check cannot lose durable records.
+    if (n00b_list_len(store->commit_topic->subscriptions) == 0) {
+        return false;
+    }
+
+    (void)partition_key;
+
     n00b_conduit_topic_base_t *base =
         (n00b_conduit_topic_base_t *)store->commit_topic;
     n00b_result_t(n00b_conduit_publisher_t *) pub_r =
@@ -5463,14 +5473,12 @@ rocs_store_emit_commit(n00b_store_t             *store,
     msg->payload.ordinal       = ordinal;
     msg->payload.record_count  = record_count;
     msg->payload.seal_ts       = seal_ts;
-    msg->payload.partition_key =
-        rocs_store_string_copy(partition_key == nullptr ? r"default"
-                                                        : partition_key,
-                               base->conduit->allocator);
-    if (msg->payload.partition_key == nullptr) {
-        n00b_conduit_publish_yield(pub);
-        return false;
-    }
+    // A conduit may shallow-copy this message for multiple subscribers, and
+    // neither the topic nor the inbox owns a destructor for a nested string.
+    // The in-repo live-tail reader uses the event as a wakeup and never reads
+    // the partition key. Keep the reserved field null rather than leaking a
+    // deep copy for every commit.
+    msg->payload.partition_key = nullptr;
 
     n00b_conduit_topic_deliver_msg(n00b_store_commit_t,
                                    store->commit_topic,

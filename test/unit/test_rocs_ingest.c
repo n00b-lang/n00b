@@ -6,6 +6,7 @@
 
 #include "n00b.h"
 #include "conduit/conduit.h"
+#include "core/pool.h"
 #include "core/runtime.h"
 #include "text/strings/string_ops.h"
 #include "util/assert.h"
@@ -406,11 +407,53 @@ test_commit_topic_is_bounded_fire_and_forget(void)
     CHECK(second != nullptr);
     CHECK(first->payload.kind == N00B_STORE_COMMIT_RECORD);
     CHECK(first->payload.ordinal == 0);
+    CHECK(first->payload.partition_key == nullptr);
     CHECK(second->payload.kind == N00B_STORE_COMMIT_RECORD);
     CHECK(second->payload.ordinal == 1);
+    CHECK(second->payload.partition_key == nullptr);
     CHECK(!n00b_store_commit_inbox_has_messages(inbox));
 
     n00b_conduit_sub_cancel(n00b_result_get(sub_r));
+    n00b_conduit_destroy(conduit);
+}
+
+static void
+test_commit_without_subscribers_keeps_conduit_live_bytes_bounded(void)
+{
+    auto conduit_r = n00b_conduit_new();
+    CHECK(n00b_result_is_ok(conduit_r));
+    n00b_conduit_t *conduit = n00b_result_get(conduit_r);
+
+    auto topic_r = n00b_store_commit_topic_get(
+        conduit,
+        N00B_CONDUIT_URI_USER_EVENT(9003));
+    CHECK(n00b_result_is_ok(topic_r));
+
+    auto seal_r = n00b_store_seal_policy_new(.max_records = 10000);
+    CHECK(n00b_result_is_ok(seal_r));
+    n00b_store_t *store = open_store(
+        schema_with_level(false, N00B_STORE_INDEX_NONE),
+        .seal_policy = n00b_result_get(seal_r),
+        .commit_topic = n00b_result_get(topic_r));
+
+    uint64_t before = n00b_conduit_pool_audit_stats().live_bytes;
+    uint64_t mapped_before =
+        n00b_pool_mapped_bytes(&n00b_get_runtime()->conduit_pool);
+    for (int i = 0; i < 1024; i++) {
+        CHECK(n00b_result_is_ok(n00b_store_ingest(store, record_with_level(r"a"))));
+    }
+    uint64_t mapped_after =
+        n00b_pool_mapped_bytes(&n00b_get_runtime()->conduit_pool);
+    // A no-subscriber commit must not add a string to the conduit pool for
+    // every record. This check runs in normal builds without the site audit.
+    CHECK(mapped_after <= mapped_before + 65536);
+    if (n00b_conduit_pool_audit_enabled()) {
+        uint64_t after = n00b_conduit_pool_audit_stats().live_bytes;
+        // The old path left two partition-key allocations per record in the
+        // conduit pool even though the topic had no subscribers (~256 KiB here).
+        CHECK(after <= before + 32768);
+    }
+
     n00b_conduit_destroy(conduit);
 }
 
@@ -473,6 +516,7 @@ main(int argc, char *argv[])
     test_index_error_does_not_append();
     test_partition_route_catalog_keys();
     test_commit_topic_is_bounded_fire_and_forget();
+    test_commit_without_subscribers_keeps_conduit_live_bytes_bounded();
     test_auto_seal_commit_event_uses_sentinel_ordinal();
 
     return 0;
