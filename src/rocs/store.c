@@ -1237,6 +1237,17 @@ rocs_store_zone_value_retain(const rocs_store_zone_value_t *value,
     return out;
 }
 
+static void
+rocs_store_zone_value_release(const rocs_store_zone_value_t *value,
+                              n00b_allocator_t              *allocator)
+{
+    if (value->kind != ROCS_STORE_ZONE_STRING || value->s == nullptr) {
+        return;
+    }
+    n00b_free(value->s->data, .allocator = allocator);
+    n00b_free(value->s, .allocator = allocator);
+}
+
 static rocs_store_zone_map_t *
 rocs_store_zone_map_new(n00b_allocator_t *allocator)
 {
@@ -1381,7 +1392,13 @@ rocs_store_zone_observe(n00b_store_t *store, n00b_json_node_t *record)
             continue;
         }
         if (cmp < 0) {
+            rocs_store_zone_value_t old_min = zone->min;
             zone->min = rocs_store_zone_value_retain(&seen, store->allocator);
+            // The first observed string is shared by both bounds.
+            if (old_min.kind != ROCS_STORE_ZONE_STRING
+                || old_min.s != zone->max.s) {
+                rocs_store_zone_value_release(&old_min, store->allocator);
+            }
             continue;
         }
 
@@ -1390,7 +1407,12 @@ rocs_store_zone_observe(n00b_store_t *store, n00b_json_node_t *record)
             continue;
         }
         if (cmp > 0) {
+            rocs_store_zone_value_t old_max = zone->max;
             zone->max = rocs_store_zone_value_retain(&seen, store->allocator);
+            if (old_max.kind != ROCS_STORE_ZONE_STRING
+                || old_max.s != zone->min.s) {
+                rocs_store_zone_value_release(&old_max, store->allocator);
+            }
         }
     }
 }
