@@ -2299,6 +2299,53 @@ bench_rocs_prims = executable('bench_rocs_prims',
     kwargs: test_common_kwargs,
 )
 
+rocs_retention_cap_liveness_test = executable('test_rocs_retention_cap_liveness',
+    ['test/unit/test_rocs_retention_cap_liveness.c'],
+    kwargs: test_common_kwargs,
+)
+
+# The crashappsec/wax#1229 acceptance test: at the retention cap, with queries
+# pinning shards, a status read must still answer. Registered small and short;
+# raise ROCS_LIVENESS_* to run it as a soak.
+test('rocs_retention_cap_liveness',
+    rocs_retention_cap_liveness_test,
+    suite: 'unit',
+    timeout: 120,
+    env: {'ROCS_LIVENESS_SECONDS': '3',
+          'ROCS_LIVENESS_CAP': '24',
+          'ROCS_LIVENESS_QUERIERS': '2',
+          'ROCS_LIVENESS_RECORDS': '40',
+          'ROCS_LIVENESS_MAX_STALL_MS': '2000'},
+)
+
+bench_rocs_retention_pinned = executable('bench_rocs_retention_pinned',
+    ['test/unit/bench_rocs_retention_pinned.c'],
+    kwargs: test_common_kwargs,
+)
+
+# Registered small so a fully-pinned pass keeps dropping nothing and keeps
+# reporting PINNED; run the binary directly for the N sweep.
+test('rocs_retention_pinned_bench',
+    bench_rocs_retention_pinned,
+    suite: 'unit',
+    env: {'ROCS_BENCH_SIZES': '8,16', 'ROCS_BENCH_RECORDS': '2'},
+)
+
+bench_rocs_catalog_rewrite = executable('bench_rocs_catalog_rewrite',
+    ['test/unit/bench_rocs_catalog_rewrite.c'],
+    kwargs: test_common_kwargs,
+)
+
+# Registered small so the drops keep happening and the catalog stays
+# readable; run the binary directly for the timings.
+test('rocs_catalog_rewrite_bench',
+    bench_rocs_catalog_rewrite,
+    suite: 'unit',
+    env: {'ROCS_BENCH_SHARDS': '6',
+          'ROCS_BENCH_RECORDS': '50',
+          'ROCS_BENCH_DROPS': '2'},
+)
+
 bench_rocs_query_ab = executable('bench_rocs_query_ab',
     ['test/unit/bench_rocs_query_ab.c'],
     kwargs: test_common_kwargs,

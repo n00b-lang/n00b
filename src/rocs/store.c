@@ -12942,21 +12942,6 @@ rocs_store_emit_lifecycle_drop(n00b_store_t               *store,
  * `blocked` list in retention, which holds one id per shard that refused to
  * drop this round. Anything sized by the catalog goes through the sorted form
  * below (n00b#400). */
-static bool
-rocs_store_shard_id_list_contains(n00b_store_shard_id_list_t *ids,
-                                  uint64_t                    shard_id)
-{
-    if (ids == nullptr || shard_id == 0) {
-        return false;
-    }
-    size_t len = n00b_list_len(*ids);
-    for (size_t i = 0; i < len; i++) {
-        if (n00b_list_get(*ids, i) == shard_id) {
-            return true;
-        }
-    }
-    return false;
-}
 
 static int
 rocs_store_u64_compare(const void *left, const void *right)
@@ -13109,10 +13094,24 @@ rocs_store_drop_entry_blocked_locked(n00b_store_t               *store,
                                                         entry->shard_id);
 }
 
+// Take a sealed shard out of the in-memory catalog, without writing the
+// catalog and without touching its image on disk.
+//
+// Split out of rocs_store_drop_sealed_shard_locked so a retention pass can
+// detach every victim it is going to drop and then write the catalog ONCE
+// (n00b#517). The caller owns both halves of the commit: it must write the
+// catalog before calling rocs_store_record_dropped_shard_locked (the catalog
+// has to be durable before any image is deleted, or a crash in between leaves
+// the catalog pointing at a shard that is gone), and it must reattach on a
+// failed write.
+//
+// `index_out` receives the position the entry came from, which is what
+// rocs_store_reattach_sealed_shard_locked needs to undo the removal.
 static n00b_result_t(bool)
-rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
-                                    uint64_t       shard_id,
-                                    n00b_string_t *drop_reason)
+rocs_store_detach_sealed_shard_locked(n00b_store_t                *store,
+                                      uint64_t                     shard_id,
+                                      n00b_store_catalog_entry_t **entry_out,
+                                      uint64_t                    *index_out)
 {
     if (store == nullptr || store->catalog == nullptr || shard_id == 0) {
         return n00b_result_err(bool, N00B_STORE_ERR_ARG);
@@ -13137,9 +13136,6 @@ rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
         return n00b_result_err(bool, N00B_STORE_ERR_PINNED);
     }
 
-    n00b_store_pos_t old_oldest = store->oldest_available;
-    bool             old_has_oldest = store->has_oldest_available;
-
     if (entry->resident_map != nullptr) {
         auto unload_r = rocs_store_resident_unload_entry(store, entry);
         if (n00b_result_is_err(unload_r)) {
@@ -13151,27 +13147,35 @@ rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
     rocs_store_catalog_publish(store);
     rocs_store_refresh_oldest_available(store);
 
-    auto catalog_r = rocs_store_catalog_write(store);
-    if (n00b_result_is_err(catalog_r)) {
-        n00b_list_insert(*store->catalog, (size_t)index, entry);
-        rocs_store_catalog_publish(store);
-        store->oldest_available     = old_oldest;
-        store->has_oldest_available = old_has_oldest;
-        return n00b_result_err(bool, n00b_result_get_err(catalog_r));
+    if (entry_out != nullptr) {
+        *entry_out = entry;
     }
-
-    auto delete_r = n00b_vfs_delete(store->vfs, entry->object_path);
-    if (n00b_result_is_err(delete_r)
-        && n00b_result_get_err(delete_r) != N00B_VFS_ERR_NOT_FOUND) {
-        n00b_list_insert(*store->catalog, (size_t)index, entry);
-        rocs_store_catalog_publish(store);
-        store->oldest_available     = old_oldest;
-        store->has_oldest_available = old_has_oldest;
-        auto rollback_r = rocs_store_catalog_write(store);
-        (void)rollback_r;
-        return n00b_result_err(bool, N00B_STORE_ERR_VFS);
+    if (index_out != nullptr) {
+        *index_out = index;
     }
+    return n00b_result_ok(bool, true);
+}
 
+// Undo a detach. Entries detached in sequence must be reattached in REVERSE
+// order: each recorded index was correct at the moment of its own removal, so
+// replaying the removals backwards puts every entry back where it came from.
+// The resident map is not restored -- the single-shard path did not restore
+// it either, and the entry simply faults back in on next access.
+static void
+rocs_store_reattach_sealed_shard_locked(n00b_store_t               *store,
+                                        n00b_store_catalog_entry_t *entry,
+                                        uint64_t                    index)
+{
+    n00b_list_insert(*store->catalog, (size_t)index, entry);
+}
+
+// Bookkeeping for a shard whose removal is now durable and whose image is
+// gone: advance the dropped-position watermark and tell subscribers.
+static void
+rocs_store_record_dropped_shard_locked(n00b_store_t               *store,
+                                       n00b_store_catalog_entry_t *entry,
+                                       n00b_string_t              *drop_reason)
+{
     if (entry->record_count != 0) {
         n00b_store_pos_t dropped_pos = {
             .generation = entry->generation,
@@ -13188,57 +13192,52 @@ rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
     }
 
     rocs_store_emit_lifecycle_drop(store, entry, drop_reason);
+}
+
+static n00b_result_t(bool)
+rocs_store_drop_sealed_shard_locked(n00b_store_t  *store,
+                                    uint64_t       shard_id,
+                                    n00b_string_t *drop_reason)
+{
+    n00b_store_pos_t old_oldest     = store->oldest_available;
+    bool             old_has_oldest = store->has_oldest_available;
+
+    n00b_store_catalog_entry_t *entry = nullptr;
+    uint64_t                    index = 0;
+
+    auto detach_r = rocs_store_detach_sealed_shard_locked(store,
+                                                          shard_id,
+                                                          &entry,
+                                                          &index);
+    if (n00b_result_is_err(detach_r)) {
+        return detach_r;
+    }
+
+    auto catalog_r = rocs_store_catalog_write(store);
+    if (n00b_result_is_err(catalog_r)) {
+        rocs_store_reattach_sealed_shard_locked(store, entry, index);
+        rocs_store_catalog_publish(store);
+        store->oldest_available     = old_oldest;
+        store->has_oldest_available = old_has_oldest;
+        return n00b_result_err(bool, n00b_result_get_err(catalog_r));
+    }
+
+    auto delete_r = n00b_vfs_delete(store->vfs, entry->object_path);
+    if (n00b_result_is_err(delete_r)
+        && n00b_result_get_err(delete_r) != N00B_VFS_ERR_NOT_FOUND) {
+        rocs_store_reattach_sealed_shard_locked(store, entry, index);
+        rocs_store_catalog_publish(store);
+        store->oldest_available     = old_oldest;
+        store->has_oldest_available = old_has_oldest;
+        auto rollback_r = rocs_store_catalog_write(store);
+        (void)rollback_r;
+        return n00b_result_err(bool, N00B_STORE_ERR_VFS);
+    }
+
+    rocs_store_record_dropped_shard_locked(store, entry, drop_reason);
     return n00b_result_ok(bool, true);
 }
 
-static n00b_store_catalog_entry_t *
-rocs_store_oldest_retention_candidate(n00b_store_t                        *store,
-                                      n00b_store_shard_retention_policy_t *policy,
-                                      n00b_store_shard_id_list_t          *blocked)
-{
-    if (store == nullptr || policy == nullptr || store->catalog == nullptr) {
-        return nullptr;
-    }
-    // Total on-disk bytes rule: when the summed sealed byte_len exceeds the
-    // budget, the oldest shard is droppable; apply() loops + recomputes, so it
-    // drops oldest-first until the total fits.
-    uint64_t total_bytes = 0;
-    uint64_t count       = 0;
-    size_t   len         = n00b_list_len(*store->catalog);
-    for (size_t i = 0; i < len; i++) {
-        n00b_store_catalog_entry_t *entry = n00b_list_get(*store->catalog, i);
-        if (rocs_store_catalog_entry_visible_sealed(entry)) {
-            count++;
-            total_bytes += entry->byte_len;
-        }
-    }
-    bool over_count = policy->max_sealed_shards != 0
-                   && count > policy->max_sealed_shards;
-    bool over_bytes = policy->max_total_sealed_bytes != 0
-                   && total_bytes > policy->max_total_sealed_bytes;
-
-    n00b_store_catalog_entry_t *candidate = nullptr;
-    for (size_t i = 0; i < len; i++) {
-        n00b_store_catalog_entry_t *entry = n00b_list_get(*store->catalog, i);
-        if (!rocs_store_catalog_entry_visible_sealed(entry)) {
-            continue;
-        }
-        if (rocs_store_shard_id_list_contains(blocked, entry->shard_id)) {
-            continue;
-        }
-        bool old_by_time = policy->drop_before_seal_ts != 0
-                        && entry->seal_ts >= policy->min_seal_ts
-                        && entry->seal_ts < policy->drop_before_seal_ts;
-        if (!over_count && !over_bytes && !old_by_time) {
-            continue;
-        }
-        if (rocs_store_entry_pos_less(entry, candidate)) {
-            candidate = entry;
-        }
-    }
-
-    return candidate;
-}
 
 n00b_result_t(uint64_t)
 n00b_store_apply_shard_retention(
@@ -13257,38 +13256,195 @@ n00b_store_apply_shard_retention(
         return n00b_result_err(uint64_t, N00B_STORE_ERR_STATE);
     }
 
-    uint64_t dropped = 0;
+    uint64_t dropped              = 0;
     bool     saw_pinned_candidate = false;
-    n00b_store_shard_id_list_t *blocked =
+    // n00b#517: detach every victim first and write the catalog ONCE, rather
+    // than writing the whole catalog per dropped shard. A rewrite is a full
+    // serialize plus a whole-image write plus two fsyncs (the file and its
+    // parent), and none of that gets cheaper for being repeated -- measured
+    // at ~12 ms a time on a 188 KB catalog, so a 12-shard eviction was paying
+    // ~140 ms of it with commit_lock and residency_lock held throughout.
+    // Ingest and every reader are stalled behind those locks for the whole
+    // pass, which is what makes a store at its retention cap stop answering.
+    //
+    // The commit order is unchanged and still crash-safe: the catalog is
+    // durable before any image is deleted. Batching only makes the pass
+    // atomic -- a failed write now drops nothing instead of leaving the first
+    // few drops committed.
+    rocs_store_catalog_list_t *detached = rocs_store_catalog_list_new(
+        .allocator = store->allocator);
+    n00b_store_shard_id_list_t *detached_at =
         rocs_store_shard_id_list_new(.allocator = store->allocator);
-    if (blocked == nullptr) {
+    if (detached == nullptr || detached_at == nullptr) {
         n00b_mutex_unlock(store->residency_lock);
         n00b_mutex_unlock(store->commit_lock);
         return n00b_result_err(uint64_t, N00B_STORE_ERR_INTERNAL);
     }
-    while (true) {
-        n00b_store_catalog_entry_t *candidate =
-            rocs_store_oldest_retention_candidate(store, policy, blocked);
-        if (candidate == nullptr) {
-            break;
+
+    n00b_store_pos_t old_oldest     = store->oldest_available;
+    bool             old_has_oldest = store->has_oldest_available;
+    n00b_err_t       detach_err     = N00B_STORE_OK;
+
+    // n00b#517: order the candidates ONCE instead of rescanning the catalog
+    // for the oldest on every iteration.
+    //
+    // This loop used to call rocs_store_oldest_retention_candidate per
+    // victim, and that helper walks the whole catalog twice -- once to sum
+    // sealed bytes, once to pick the oldest -- doing a LINEAR scan of the
+    // `blocked` list for every entry it considers. A pinned candidate drops
+    // nothing and just joins `blocked`, so the loop goes round again over a
+    // list that is one longer. Iteration k costs O(N x k), and P pinned
+    // candidates cost O(N x P^2) -- with every shard pinned, O(N^3).
+    //
+    // That is not hypothetical: wax#1229's gateway is at its retention cap
+    // with queries in flight, so candidates ARE pinned. Measured with every
+    // shard pinned (bench_rocs_retention_pinned), one pass that drops
+    // nothing: 0.4 ms at N=50, 3.1 ms at N=100, 20.3 ms at N=200, 159.9 ms
+    // at N=400 -- growth exponents 2.81, 2.70, 2.98. All of it spent holding
+    // commit_lock and residency_lock, which is what stalls ingest and every
+    // reader, and all of it achieving nothing.
+    //
+    // Sorting the visible sealed entries by position once is O(N log N), and
+    // then one forward walk is exactly "oldest first". The running totals are
+    // maintained incrementally rather than recomputed: nothing else can
+    // mutate the catalog while both locks are held, so a detach's effect on
+    // the totals is known without another pass.
+    size_t                       catalog_len = n00b_list_len(*store->catalog);
+    n00b_store_catalog_entry_t **ordered     = n00b_alloc_array_with_opts(
+        n00b_store_catalog_entry_t *,
+        catalog_len == 0 ? 1 : catalog_len,
+        &(n00b_alloc_opts_t){.allocator = store->allocator,
+                             .scan_kind = N00B_GC_SCAN_KIND_ALL});
+
+    uint64_t total_bytes = 0;
+    uint64_t count       = 0;
+    size_t   nordered    = 0;
+    for (size_t i = 0; i < catalog_len; i++) {
+        n00b_store_catalog_entry_t *entry = n00b_list_get(*store->catalog, i);
+        if (!rocs_store_catalog_entry_visible_sealed(entry)) {
+            continue;
+        }
+        count++;
+        total_bytes += entry->byte_len;
+        ordered[nordered++] = entry;
+    }
+    qsort(ordered,
+          nordered,
+          sizeof(n00b_store_catalog_entry_t *),
+          rocs_store_catalog_view_pos_cmp);
+
+    for (size_t i = 0; i < nordered; i++) {
+        n00b_store_catalog_entry_t *candidate = ordered[i];
+
+        // Recomputed from the running totals, exactly as the old helper
+        // recomputed them from a fresh scan. They only ever fall, because
+        // the only mutation here is a detach.
+        bool over_count = policy->max_sealed_shards != 0
+                       && count > policy->max_sealed_shards;
+        bool over_bytes = policy->max_total_sealed_bytes != 0
+                       && total_bytes > policy->max_total_sealed_bytes;
+        bool old_by_time = policy->drop_before_seal_ts != 0
+                        && candidate->seal_ts >= policy->min_seal_ts
+                        && candidate->seal_ts < policy->drop_before_seal_ts;
+
+        if (!over_count && !over_bytes && !old_by_time) {
+            // Under budget: only an explicitly aged-out entry still
+            // qualifies, and that is a per-entry test, so keep walking
+            // rather than stopping.
+            continue;
         }
 
         if (rocs_store_drop_entry_blocked_locked(store, candidate)) {
-            n00b_list_push(*blocked, candidate->shard_id);
             saw_pinned_candidate = true;
             continue;
         }
 
-        uint64_t shard_id = candidate->shard_id;
-        auto drop_r = rocs_store_drop_sealed_shard_locked(store,
-                                                          shard_id,
-                                                          policy->drop_reason);
-        if (n00b_result_is_err(drop_r)) {
+        n00b_store_catalog_entry_t *entry = nullptr;
+        uint64_t                    index = 0;
+        auto detach_r = rocs_store_detach_sealed_shard_locked(store,
+                                                              candidate->shard_id,
+                                                              &entry,
+                                                              &index);
+        if (n00b_result_is_err(detach_r)) {
+            detach_err = n00b_result_get_err(detach_r);
+            break;
+        }
+        n00b_list_push(*detached, entry);
+        n00b_list_push(*detached_at, index);
+        count--;
+        total_bytes -= entry->byte_len;
+    }
+
+    size_t ndetached = (size_t)n00b_list_len(*detached);
+
+    // Put everything back if a detach failed partway, so the pass stays
+    // all-or-nothing. Reverse order: each index was correct when its own
+    // removal happened.
+    if (detach_err != N00B_STORE_OK) {
+        for (size_t i = ndetached; i-- > 0;) {
+            rocs_store_reattach_sealed_shard_locked(
+                store,
+                n00b_list_get(*detached, i),
+                n00b_list_get(*detached_at, i));
+        }
+        rocs_store_catalog_publish(store);
+        store->oldest_available     = old_oldest;
+        store->has_oldest_available = old_has_oldest;
+        n00b_mutex_unlock(store->residency_lock);
+        n00b_mutex_unlock(store->commit_lock);
+        return n00b_result_err(uint64_t, detach_err);
+    }
+
+    if (ndetached > 0) {
+        auto catalog_r = rocs_store_catalog_write(store);
+        if (n00b_result_is_err(catalog_r)) {
+            for (size_t i = ndetached; i-- > 0;) {
+                rocs_store_reattach_sealed_shard_locked(
+                    store,
+                    n00b_list_get(*detached, i),
+                    n00b_list_get(*detached_at, i));
+            }
+            rocs_store_catalog_publish(store);
+            store->oldest_available     = old_oldest;
+            store->has_oldest_available = old_has_oldest;
             n00b_mutex_unlock(store->residency_lock);
             n00b_mutex_unlock(store->commit_lock);
-            return n00b_result_err(uint64_t, n00b_result_get_err(drop_r));
+            return n00b_result_err(uint64_t, n00b_result_get_err(catalog_r));
         }
-        dropped++;
+
+        // The catalog no longer references any of these, so the images can
+        // go. A shard whose image will not delete goes BACK in the catalog,
+        // as it did on the single-shard path: dropping the entry but keeping
+        // the file would orphan bytes that nothing will ever reclaim, and
+        // reclaiming bytes is the entire point of retention. A reinstated
+        // shard is simply retried by the next pass.
+        bool reinstated_any = false;
+        for (size_t i = 0; i < ndetached; i++) {
+            n00b_store_catalog_entry_t *entry = n00b_list_get(*detached, i);
+            auto delete_r = n00b_vfs_delete(store->vfs, entry->object_path);
+            if (n00b_result_is_err(delete_r)
+                && n00b_result_get_err(delete_r) != N00B_VFS_ERR_NOT_FOUND) {
+                rocs_store_catalog_insert_sorted(store, entry);
+                reinstated_any = true;
+                continue;
+            }
+            rocs_store_record_dropped_shard_locked(store,
+                                                   entry,
+                                                   policy->drop_reason);
+            dropped++;
+        }
+
+        // Re-commit a catalog that describes the reinstated shards again.
+        // Best-effort, as the single-shard path's rollback write was: the
+        // in-memory catalog is already correct, and the next successful
+        // write reconciles the image.
+        if (reinstated_any) {
+            rocs_store_refresh_oldest_available(store);
+            (void)rocs_store_catalog_write(store);
+            n00b_mutex_unlock(store->residency_lock);
+            n00b_mutex_unlock(store->commit_lock);
+            return n00b_result_err(uint64_t, N00B_STORE_ERR_VFS);
+        }
     }
 
     n00b_mutex_unlock(store->residency_lock);
