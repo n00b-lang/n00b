@@ -252,9 +252,24 @@ _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
     // already torn down); find_read_lock_record / register_read deref the
     // record, so treat that window like null-self too.
     bool have_tcb = (thread != nullptr && thread->record != nullptr);
-    if (!have_tcb) {
-        assert(lock == &rt->critical_execution);
-    }
+
+    // n00b#521: a TCB-less reader is permitted on ANY lock, not just the STW
+    // gate. A thread n00b did not create -- Windows' KERNELBASE!CtrlRoutine,
+    // say -- has no TCB for its whole life, so the old
+    // assert(lock == &rt->critical_execution) aborted a daemon on Ctrl-C.
+    // Every TCB-deref below is gated on have_tcb, and the futex reader count
+    // a draining writer waits on is taken unconditionally, so such a reader
+    // already rode a correct path.
+    //
+    // CONSTRAINT: a foreign thread must not RE-ENTER a read lock it already
+    // holds. With no read log it cannot be recognized as the holder, so
+    // re-entry is a fresh acquire, and a fresh acquire parks on W_LOCK. If a
+    // writer is draining at that moment the thread parks holding the very
+    // unit the writer waits for -- deadlock. MEASURED, not theorized: with
+    // the re-entry forced under a queued writer, both threads stall and the
+    // watchdog in test_rwlock.c fires. Single acquire/release is safe and is
+    // what a console handler does; test_foreign_reader_with_writer_queued
+    // pins that boundary.
 
     n00b_core_lock_info_t   info    = n00b_atomic_load(&lock->data);
     n00b_thread_read_log_t *record  = have_tcb ? find_read_lock_record(lock, thread)
@@ -406,18 +421,35 @@ _n00b_rw_unlock(n00b_rwlock_t *lock, char *loc)
                                        : nullptr;
 
     if (!log) {
-        // No read record.  For the STW gate this is the record-less reader a
-        // thread took with no TCB (whole init / destroy): drop the raw futex
-        // count it holds.  For any OTHER lock a missing record is an unbalanced
-        // unlock — a bug — so abort.
-        if (lock == &rt->critical_execution) {
+        // No read record. Two very different situations reach here, and
+        // n00b#521 is about telling them apart by the right question.
+        //
+        // 1. The reader had NO TCB when it acquired -- a thread inside its own
+        //    init/destroy, or a foreign thread n00b never created (the Windows
+        //    console-control thread). It holds a raw futex unit and no log,
+        //    by design. Drop the unit.
+        //
+        // 2. A thread WITH a TCB is unlocking something it never locked, or
+        //    unlocking twice. That is a real bug and must still abort.
+        //
+        // So the question is about the THREAD, not the LOCK: that keeps the
+        // unbalanced-unlock abort exactly as sharp for every TCB-bearing
+        // caller while no longer killing a foreign thread for existing.
+        //
+        // It re-reads the TCB rather than trusting a flag because a thread
+        // can acquire WITH one and release during its own teardown after
+        // `record` is gone -- also a record-less drop, not a bug.
+        bool releaser_has_tcb = (thread != nullptr && thread->record != nullptr);
+
+        if (!releaser_has_tcb) {
             // Drop the raw futex unit this record-less reader holds. The helper
             // guards against underflow (a double-drop would otherwise wrap the
-            // count and latch W_LOCK, wedging the gate) and wakes a draining
+            // count and latch W_LOCK, wedging the lock) and wakes a draining
             // writer once the count reaches zero.
             _n00b_rw_drop_reader_unit(lock);
             return true;
         }
+
         abort();
     }
 
