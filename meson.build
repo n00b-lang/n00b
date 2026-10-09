@@ -626,6 +626,16 @@ test(
 )
 
 test(
+    'finalize-nullable-rejected-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_finalize_nullable_rejected.n',
+           'N00BB-T0031'],
+)
+
+test(
     'private-consume-trait-method-n00b',
     n00bb_exe,
     args: ['lower', meson.current_source_dir() / 'tests' / 'programs'

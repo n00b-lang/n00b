@@ -1,0 +1,6 @@
+type Sample {
+    value: int
+}
+
+func __finalize(consume self: Ref[Sample]?) {
+}

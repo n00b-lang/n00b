@@ -5281,6 +5281,7 @@ record_function_signature(parse_grammar_t *grammar,
         size_t receiver_index = 0;
         parse_sym_entry_t *receiver = formal_symbol_at(
             grammar, params_node, 0, &receiver_index);
+        uint8_t receiver_attrs = 0;
         bool has_receiver = finalizer_type
             && th_kind_of(finalizer_type) == TH_FUNCTION
             && th_func_nparams(finalizer_type) == 1
@@ -5290,7 +5291,8 @@ record_function_signature(parse_grammar_t *grammar,
             && core_string_eq(receiver->direction,
                 CORE_STRING_STATIC("consume"))
             && receiver->type
-            && th_kind_of(th_resolve(receiver->type)) == TH_INDIRECTION;
+            && th_ind_attrs(th_resolve(receiver->type), &receiver_attrs)
+            && !(receiver_attrs & TH_NULLABLE);
         if (!has_receiver) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
