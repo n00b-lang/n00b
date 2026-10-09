@@ -34,6 +34,7 @@ static const abi_ref_column_t abi_index_columns[] = {
     ABI_REF(TYPE, type, layout_index, LAYOUT),
     ABI_REF(TYPE, type, owner_module_index, MODULE),
     ABI_REF(TYPE, type, tracing_index, TRACE),
+    ABI_REF(TYPE, type, finalizer_function_index, FUNCTION),
     ABI_REF(TYPE, type, call_signature_index, CALL_SIGNATURE),
     ABI_REF(TYPE, type, typevar_owner_scope_index, SCOPE),
     ABI_REQUIRED_REF(TYPE_ARGUMENT, type_argument, owner_type_index, TYPE),

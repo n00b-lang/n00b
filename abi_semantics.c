@@ -108,6 +108,42 @@ function_index_for_method(th_ctx *ctx,
     return found != 0;
 }
 
+static bool
+scope_for_type_owner(th_ctx *ctx,
+                     const n00bb_abi_selected_objects_t *selected,
+                     const n00bb_abi_index_plan_t *plan,
+                     uint32_t owner_index)
+{
+    for (size_t input = 0; input < selected->count; input++) {
+        uint32_t mapped = 0;
+        if (!n00bb_abi_index_plan_map(plan, input, N00B_ABI_TABLE_MODULE,
+                                      1, &mapped)) return false;
+        if (mapped != owner_index) continue;
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_MODULE, 1);
+        const n00b_abi_package_v1 *package = module
+            ? n00bb_abi_object_row(view, N00B_ABI_TABLE_PACKAGE,
+                                   module->package_index) : nullptr;
+        n00bb_abi_string_view_t module_name = {0}, package_name = {0};
+        if (!package
+            || !n00bb_abi_object_string(view, &module->full_path,
+                                         &module_name)
+            || !n00bb_abi_object_string(view, &package->name,
+                                         &package_name)) return false;
+        char *module_text = core_strndup((const char *)module_name.bytes,
+                                         module_name.length);
+        char *package_text = core_strndup((const char *)package_name.bytes,
+                                          package_name.length);
+        bool result = module_text && package_text
+            && th_ctx_set_environment_scope(ctx, module_text, package_text);
+        core_free(module_text);
+        core_free(package_text);
+        return result;
+    }
+    return false;
+}
+
 static int
 compare_specializations(const void *left, const void *right)
 {
@@ -356,6 +392,26 @@ n00bb_abi_link_semantic_rows(
                 core_list_push(dispatch, row);
             }
         }
+    }
+    for (size_t i = 0; valid && i < receivers.len; i++) {
+        receiver_t receiver = receivers.data[i];
+        n00b_abi_type_v1 *row = (void *)(types->records
+            + (size_t)receiver.index * types->record_bytes);
+        th_type *reference = th_ind(ctx, 0, receiver.type);
+        if (!reference || !scope_for_type_owner(ctx, selected, plan,
+                                                 row->owner_module_index)) {
+            valid = false;
+            break;
+        }
+        th_env_method_t method = {0};
+        th_env_method_status_t status = th_env_method_resolve(ctx, reference,
+            "Finalize", "__finalize", &method);
+        if (status == TH_ENV_METHOD_NOT_FOUND) continue;
+        uint32_t function_index = 0;
+        valid = status == TH_ENV_METHOD_FOUND
+            && function_index_for_method(ctx, selected, plan, &method,
+                                         &function_index);
+        if (valid) row->finalizer_function_index = function_index;
     }
     if (valid) valid = add_specializations(merged, &specializations)
         && add_dispatch(merged, &dispatch, &entries);

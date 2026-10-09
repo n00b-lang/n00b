@@ -56,6 +56,7 @@ public type Type_Record layout(c) {
     public typevar_import_requirement_index: u32
     public named_constructor: String_Bits
     public named_arguments: Range
+    public finalizer_function_index: u32
 }
 
 public type Field_Record layout(c) {

@@ -39283,6 +39283,23 @@ register_builtin_traits(th_env *environment, th_ctx *types)
         || !th_env_register_intrinsic_type_pattern(environment, "Callback",
                                                     callback_reference))
         return false;
+    th_type *finalizer_receiver = th_var(types);
+    th_param finalizer_parameter = {
+        .mode = TH_CONSUME, .type = finalizer_receiver,
+    };
+    th_type *finalizer_signature = finalizer_receiver
+        ? th_func_with_error(types, th_name(types, "nil"),
+            th_name(types, "nil"), &finalizer_parameter, 1,
+            nullptr, nullptr, 0) : nullptr;
+    th_member finalizer_method = {
+        .name = "__finalize", .type = finalizer_signature,
+    };
+    th_type *finalizer_contract = finalizer_signature
+        ? th_record(types, &finalizer_method, 1) : nullptr;
+    if (!finalizer_contract
+        || !th_env_register_trait_contracts(environment, "Finalize",
+            "builtins", "default", TH_ENV_PUBLIC, finalizer_contract))
+        return false;
     if (!register_builtin_binary_operators(environment, types)) return false;
     if (!register_builtin_unary_operators(environment, types)) return false;
     if (!register_builtin_comparison_operators(environment, types)) return false;

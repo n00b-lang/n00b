@@ -392,6 +392,7 @@ typedef struct {
     uint32_t typevar_import_requirement_index;
     n00b_abi_string_v1 named_constructor;
     n00b_abi_range_v1 named_arguments; /* Direct TYPE_ARGUMENT row span. */
+    uint32_t finalizer_function_index;
 } n00b_abi_type_v1;
 
 typedef struct {
@@ -915,7 +916,7 @@ _Static_assert(sizeof(n00b_abi_module_v1) == 64, "module width");
 _Static_assert(offsetof(n00b_abi_module_v1, source_file_index) == 60,
                "module source-file offset");
 _Static_assert(sizeof(n00b_abi_scc_v1) == 32, "SCC width");
-_Static_assert(sizeof(n00b_abi_type_v1) == 136, "type width");
+_Static_assert(sizeof(n00b_abi_type_v1) == 144, "type width");
 _Static_assert(sizeof(n00b_abi_type_argument_v1) == 40,
                "type argument width");
 _Static_assert(sizeof(n00b_abi_specialization_link_v1) == 4,

@@ -1,6 +1,39 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.alloc
+
 type Sample {
     value: int
 }
 
-public func __finalize(consume self: Ref[Sample]) {
+type Plain {
+    value: int
+}
+
+func __finalize(consume self: Ref[Sample]) {
+}
+
+comptime {} else {
+    let probe: Ref[Sample]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
+    require row != nil
+    require row.get().finalizer_function_index != 0
+    let plain_probe: Ref[Plain]? = nil
+    let plain_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(plain_probe))
+    require plain_row != nil
+    require plain_row.get().finalizer_function_index == 0
+    let option_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(typeof(probe))
+    require option_row != nil
+    let reference_index: i64 = builtin.abi.range_index(option_row.get().components, 0)
+    require reference_index > 0
+    let reference_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(cast[u32] reference_index)
+    require reference_row != nil
+    let sample_index: i64 = builtin.abi.range_index(reference_row.get().components, 0)
+    require sample_index > 0
+    let storage: Ref[byte]? = builtin.gc.alloc.allocate_runtime(
+        cast[u32] sample_index, cast[u64](builtin.abi.size_bytes(row.get())),
+        cast[u32](builtin.abi.alignment_bytes(row.get())), nil)
+    require storage != nil
+    require (builtin.gc.header_of(storage.get()).meta & builtin.gc.obj_final) != 0
+    __fd_write(2, "ok")
 }

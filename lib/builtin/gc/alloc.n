@@ -393,7 +393,7 @@ public func allocate_runtime(type_index: u32, byte_size: u64,
     let active: Ref[builtin.gc.Mutator]? = active_mutator()
     if active != nil {
         let mutator: Ref[builtin.gc.Mutator] = active.get()
-        let finalizable: bool = false
+        let finalizable: bool = row.get().finalizer_function_index != 0
         if bytes > builtin.gc.los.los_threshold or
             cast[uint](alignment) > builtin.gc.granule_bytes {
             return allocate_large(mutator, type_index, payload_bytes,
