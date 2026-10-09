@@ -431,6 +431,21 @@ analyze_openings(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
             }
         }
         if (shadow >= 0) {
+            bool conditional_sigil = false;
+            if (items[i].kind == SCAN_LEX_DECL_SIGIL
+                && items[shadow].kind == SCAN_LEX_DECL_STRING) {
+                for (const scan_lex_sigil_t *sigil = spec->sigils;
+                     sigil && sigil->prefix.data; sigil++) {
+                    if (sigil->before_string && sigil->unless_closed
+                        && core_string_eq(sigil->prefix, items[i].spelling)
+                        && core_string_eq(sigil->prefix,
+                                          items[shadow].spelling)) {
+                        conditional_sigil = true;
+                        break;
+                    }
+                }
+            }
+            if (conditional_sigil) goto keep_opening;
             if (items[i].kind == SCAN_LEX_DECL_NONE) {
                 *issues = core_realloc(
                     *issues, (*issue_count + 1) * sizeof(**issues));
@@ -532,7 +547,7 @@ scan_lex_register_output_terminals(const scan_lex_spec_t *spec,
     }
     for (const scan_lex_sigil_t *item = spec->sigils;
          item && item->prefix.data; item++) {
-        register_output(grammar, item->tok);
+        if (!item->attach_previous) register_output(grammar, item->tok);
     }
     for (const scan_lex_regex_t *item = spec->regexes;
          item && item->opener.data; item++) {
@@ -669,7 +684,7 @@ analyze_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     }
     for (const scan_lex_sigil_t *item = spec->sigils;
          item && item->prefix.data; item++) {
-        REQUIRE(item->tok, "@lex-sigil");
+        if (!item->attach_previous) REQUIRE(item->tok, "@lex-sigil");
     }
     for (const scan_lex_regex_t *item = spec->regexes;
          item && item->opener.data; item++) {
@@ -866,8 +881,9 @@ collect_unused_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     }
     for (const scan_lex_sigil_t *item = spec->sigils;
          item && item->prefix.data; item++) {
-        add_output(&outputs, &count, &capacity, item->tok,
-                   RECIPE_ORIGIN(SCAN_LEX_DECL_SIGIL, item->prefix));
+        if (!item->attach_previous)
+            add_output(&outputs, &count, &capacity, item->tok,
+                       RECIPE_ORIGIN(SCAN_LEX_DECL_SIGIL, item->prefix));
     }
     for (const scan_lex_regex_t *item = spec->regexes;
          item && item->opener.data; item++) {

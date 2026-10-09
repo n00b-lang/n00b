@@ -82,6 +82,7 @@ struct parse_scanner_t {
     uint8_t           trivia_attach;
     bool              at_eof;
     bool              source_final;
+    bool              token_suffix_lookahead;
     bool              append_closed;
     scan_status_t     status;
     core_string_t     status_message;

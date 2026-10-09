@@ -142,7 +142,8 @@ bool core_object_emit_macho(const core_target_desc_t *target,
             core_le_store_u32(header + 60, rel_counts[i]);
         }
         core_le_store_u32(header + 64,
-                          section->is_thread_local ? 0x11
+                          section->is_thread_local_descriptor ? 0x13
+                          : section->is_thread_local ? 0x11
                           : section->executable ? 0x800000 : 0);
         if (section->size)
             memcpy(image + section_file_offsets[i], section->bytes,
@@ -197,7 +198,8 @@ bool core_object_emit_macho(const core_target_desc_t *target,
         uint8_t *entry = image + rel_offsets[source] +
                          (size_t)rel_written[source]++ * MACH_RELOCATION_BYTES;
         core_le_store_u32(entry, (uint32_t)rel->section_offset);
-        bool external = symbol->exported || !symbol->section_index;
+        bool external = symbol->exported || !symbol->section_index
+            || rel->symbol_relocation;
         uint32_t target_index = external ? symbol_map[rel->symbol_index]
                                          : symbol->section_index;
         core_le_store_u32(entry + 4, target_index | (3u << 25) |

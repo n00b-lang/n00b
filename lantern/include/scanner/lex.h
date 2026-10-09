@@ -142,6 +142,9 @@ typedef struct {
     core_string_t prefix;
     core_string_t tok;
     bool         digits_only;
+    bool         before_string;
+    bool         unless_closed;
+    bool         attach_previous;
 } scan_lex_sigil_t;
 
 typedef struct {
@@ -325,6 +328,7 @@ typedef struct {
 
     uint8_t      layout;
     core_string_t tok_newline;
+    bool          newline_each_line;
     core_string_t tok_terminator;
     core_string_t terminator_after;
     core_string_t tok_indent;

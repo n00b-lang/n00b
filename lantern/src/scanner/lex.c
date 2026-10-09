@@ -848,6 +848,7 @@ struct scan_lex_session_t {
   bool heredoc_queue_ready;
   bool heredoc_queue_scanning;
   bool pending_identifier;
+  const scan_lex_sigil_t *pending_attached_sigil;
   int32_t pending_identifier_tid;
   bool pending_identifier_digits;
   bool pending_terminal;
@@ -1673,6 +1674,11 @@ clone_pending_recovery_token(const parse_token_info_t *source) {
     copy->literal_type = core_option_set(
         core_string_t, core_string_dup(core_option_get(source->literal_type)));
   }
+  if (source->owns_postfix_modifier
+      && core_option_is_set(source->postfix_modifier)) {
+    copy->postfix_modifier = core_option_set(core_string_t,
+        core_string_dup(core_option_get(source->postfix_modifier)));
+  }
   return copy;
 }
 
@@ -1977,6 +1983,10 @@ static void free_pending_recovery_token(parse_token_info_t *token) {
   if (token->owns_literal_type && core_option_is_set(token->literal_type)) {
     core_free(core_option_get(token->literal_type).data);
   }
+  if (token->owns_postfix_modifier
+      && core_option_is_set(token->postfix_modifier)) {
+    core_free(core_option_get(token->postfix_modifier).data);
+  }
   core_free(token);
 }
 
@@ -2142,6 +2152,14 @@ void scan_lex_reset_state(parse_scanner_t *s) {
   lex->child = nullptr;
   s->user_state = lex;
   s->lexer_context = lex->program->spec->name;
+  s->token_suffix_lookahead = false;
+  for (const scan_lex_sigil_t *sigil = lex->program->spec->sigils;
+       sigil && sigil->prefix.data; sigil++) {
+    if (sigil->attach_previous) {
+      s->token_suffix_lookahead = true;
+      break;
+    }
+  }
 
   lex->modes.len = 0;
   lex->indents.len = 0;
@@ -2198,6 +2216,7 @@ void scan_lex_reset_state(parse_scanner_t *s) {
   lex->heredoc_queue_ready = false;
   lex->heredoc_queue_scanning = false;
   lex->pending_identifier = false;
+  lex->pending_attached_sigil = nullptr;
   lex->pending_terminal = false;
   lex->pending_number_phase = NUMBER_NONE;
   lex->pending_opener = false;
@@ -4512,7 +4531,7 @@ static bool try_number(parse_scanner_t *s) {
   return continue_number(s);
 }
 
-static bool try_sigil(parse_scanner_t *s) {
+static bool try_sigil(parse_scanner_t *s, bool before_string) {
   const scan_lex_t *lex = ((scan_lex_session_t *)s->user_state)->program;
   lex_bucket_t bucket = lex->sigil_buckets[scan_peek_byte(s, 0)];
 
@@ -4521,8 +4540,16 @@ static bool try_sigil(parse_scanner_t *s) {
 
   for (uint32_t i = bucket.start; i < bucket.start + bucket.count; i++) {
     const scan_lex_sigil_t *g = lex->sigil_dispatch[i];
-    if (!at_str(s, g->prefix)) {
+    if (g->before_string != before_string || !at_str(s, g->prefix)) {
       continue;
+    }
+    if (g->attach_previous) {
+      parse_token_info_t *previous = scan_prev_token(s);
+      if (!previous
+          || previous->end_byte != s->source_base + s->cursor
+          || (g->prefix.u8_bytes == 1
+              && previous->tid == (uint8_t)g->prefix.data[0]))
+        continue;
     }
 
     if (!s->source_final && s->cursor + g->prefix.u8_bytes == s->input_len) {
@@ -4536,6 +4563,25 @@ static bool try_sigil(parse_scanner_t *s) {
 
     if (!ok) {
       continue;
+    }
+
+    if (g->unless_closed) {
+      size_t at = s->cursor + g->prefix.u8_bytes;
+      while (at < s->input_len) {
+        uint32_t next = (uint32_t)at;
+        int32_t cp = unicode_utf8_decode(s->input,
+            (uint32_t)s->input_len, &next);
+        if (cp < 0 || !unicode_is_id_continue(cp)) break;
+        at = next;
+      }
+      if (at == s->input_len && !s->source_final) {
+        scan_set_incomplete(s, CORE_STRING_STATIC("sigil may continue"),
+                            s->cursor);
+        return false;
+      }
+      if (at + g->prefix.u8_bytes <= s->input_len
+          && !memcmp(s->input + at, g->prefix.data, g->prefix.u8_bytes))
+        continue;
     }
 
     if (!best || g->prefix.u8_bytes > best->prefix.u8_bytes) {
@@ -4567,12 +4613,34 @@ static bool try_sigil(parse_scanner_t *s) {
   if (scan_at_eof(s) && !s->source_final) {
     scan_lex_session_t *run = s->user_state;
 
+    if (best->attach_previous) {
+      run->pending_attached_sigil = best;
+      scan_set_incomplete(s, CORE_STRING_STATIC("sigil may continue"),
+                          s->mark);
+      return false;
+    }
+
     run->pending_identifier = true;
     run->pending_identifier_tid = tid_for(lex->g, best->tok, lex->tid_ident);
     run->pending_identifier_digits = best->digits_only;
     scan_set_incomplete(s, CORE_STRING_STATIC("sigil may continue"), s->mark);
 
     return false;
+  }
+
+  if (best->attach_previous) {
+    parse_token_info_t *previous = scan_prev_token(s);
+    if (!previous || core_option_is_set(previous->postfix_modifier)) {
+      scan_set_invalid(s, CORE_STRING_STATIC("invalid postfix modifier"),
+                       s->mark);
+      return false;
+    }
+    core_string_t name = core_string_from_raw(
+        s->input + s->mark + best->prefix.u8_bytes,
+        (int64_t)(s->cursor - s->mark - best->prefix.u8_bytes));
+    previous->postfix_modifier = core_option_set(core_string_t, name);
+    previous->owns_postfix_modifier = true;
+    return scan_lex_scan(s);
   }
 
   emit_named(s, best->tok, lex->tid_ident);
@@ -5863,6 +5931,30 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     return resume_identifier(s);
   }
 
+  if (run->pending_attached_sigil) {
+    const scan_lex_sigil_t *sigil = run->pending_attached_sigil;
+    while (!scan_at_eof(s) && unicode_is_id_continue(scan_peek(s, 0)))
+      scan_advance(s);
+    if (scan_at_eof(s) && !s->source_final) {
+      scan_set_incomplete(s, CORE_STRING_STATIC("sigil may continue"),
+                          s->mark);
+      return false;
+    }
+    run->pending_attached_sigil = nullptr;
+    parse_token_info_t *previous = scan_prev_token(s);
+    if (!previous || core_option_is_set(previous->postfix_modifier)) {
+      scan_set_invalid(s, CORE_STRING_STATIC("invalid postfix modifier"),
+                       s->mark);
+      return false;
+    }
+    core_string_t name = core_string_from_raw(
+        s->input + s->mark + sigil->prefix.u8_bytes,
+        (int64_t)(s->cursor - s->mark - sigil->prefix.u8_bytes));
+    previous->postfix_modifier = core_option_set(core_string_t, name);
+    previous->owns_postfix_modifier = true;
+    return scan_lex_scan(s);
+  }
+
   if (run->pending_string) {
     return resume_pending_string(s);
   }
@@ -5943,7 +6035,10 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     if (is_line_terminator(c)) {
       bool significant = (lex->spec->layout &
                           (SCAN_LEX_LAYOUT_NEWLINE | SCAN_LEX_LAYOUT_INDENT)) &&
-                         run->bracket_depth == 0 && run->line_has_token;
+                         run->bracket_depth == 0 &&
+                         (run->line_has_token ||
+                          ((lex->spec->layout & SCAN_LEX_LAYOUT_NEWLINE) &&
+                           lex->spec->newline_each_line));
 
       if (run->in_directive) {
         core_string_t eol = run->in_directive->tok_eol;
@@ -6216,6 +6311,14 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     return false;
   }
 
+  if (try_sigil(s, true)) {
+    return true;
+  }
+
+  if (s->status == SCAN_STATUS_INCOMPLETE) {
+    return false;
+  }
+
   if (try_string(s)) {
     return true;
   }
@@ -6232,7 +6335,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     return false;
   }
 
-  if (try_sigil(s)) {
+  if (try_sigil(s, false)) {
     return true;
   }
 

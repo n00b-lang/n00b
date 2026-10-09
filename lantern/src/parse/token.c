@@ -117,10 +117,16 @@ parse_token_clone_for_tree(const parse_token_info_t *token)
                                    core_string_dup(
                                        core_option_get(token->literal_type)))
                              : core_option_none(core_string_t);
+    copy->postfix_modifier = core_option_is_set(token->postfix_modifier)
+                                 ? core_option_set(core_string_t,
+                                     core_string_dup(core_option_get(
+                                         token->postfix_modifier)))
+                                 : core_option_none(core_string_t);
     copy->leading_trivia  = clone_trivia(token->leading_trivia);
     copy->trailing_trivia = clone_trivia(token->trailing_trivia);
     copy->owns_value      = core_option_is_set(copy->value);
     copy->owns_literal_type = core_option_is_set(copy->literal_type);
+    copy->owns_postfix_modifier = core_option_is_set(copy->postfix_modifier);
     copy->owns_file       = core_option_is_set(copy->file);
     copy->tree_owned      = true;
 
@@ -145,6 +151,10 @@ parse_token_free_from_tree(parse_token_info_t *token)
     if (token->owns_literal_type
         && core_option_is_set(token->literal_type)) {
         core_free(core_option_get(token->literal_type).data);
+    }
+    if (token->owns_postfix_modifier
+        && core_option_is_set(token->postfix_modifier)) {
+        core_free(core_option_get(token->postfix_modifier).data);
     }
 
     parse_trivia_free(token->leading_trivia);

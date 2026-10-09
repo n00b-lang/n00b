@@ -326,6 +326,23 @@ ir_lower_handle_assignment(ir_lower_context_t *context,
 }
 
 bool
+ir_lower_finish_assignment(ir_lower_context_t *context,
+                           parse_tree_t *assignment,
+                           parse_tree_t *completed_node)
+{
+    if (!context || !context->tree_state || !assignment || !completed_node)
+        return false;
+    ir_lower_tree_state_t *state = context->tree_state;
+    for (parse_tree_t *node = completed_node; node;
+         node = core_tree_node_value(node).parent) {
+        if (node != assignment) continue;
+        core_dict_put(&state->handled_assignments, assignment, (void *)1);
+        return true;
+    }
+    return false;
+}
+
+bool
 ir_lower_evaluate_assignment_target(ir_lower_context_t *context,
                                     parse_tree_t *assignment)
 {

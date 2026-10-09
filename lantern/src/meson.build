@@ -139,6 +139,7 @@ ir_sources = files(
     'ir/rules_default.c',
     'ir/shape.c',
     'ir/span.c',
+    'ir/storage_origin.c',
     'ir/structure.c',
     'ir/symcheck.c',
     'ir/trait.c',

@@ -166,18 +166,18 @@ ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
             if (!ir_block_reachable(doms, block)) continue;
             for (size_t n = 0; n < block->n_instrs; n++) {
                 ir_instr_t *instruction = block->instrs[n];
-                if (!instruction || instruction->op != IR_OP_CALL
-                    || !instruction->n_operands
-                    || instruction->operands[0].kind != IR_OPD_VALUE)
-                    continue;
-                ir_value_t *callee = instruction->operands[0].value;
-                ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
-                    ? callee->owner : nullptr;
-                if (!target) continue;
-                bool seen = false;
-                for (size_t j = 0; j < functions.len; j++)
-                    seen |= functions.data[j] == target;
-                if (!seen) core_list_push(functions, target);
+                if (!instruction) continue;
+                for (uint32_t o = 0; o < instruction->n_operands; o++) {
+                    ir_value_t *value = ir_operand_value(
+                        &instruction->operands[o]);
+                    ir_func_t *target = value && value->kind == IR_VAL_FUNC
+                        ? value->owner : nullptr;
+                    if (!target) continue;
+                    bool seen = false;
+                    for (size_t j = 0; j < functions.len; j++)
+                        seen |= functions.data[j] == target;
+                    if (!seen) core_list_push(functions, target);
+                }
             }
         }
     }

@@ -618,6 +618,12 @@ static void test_memory(void)
           ir_func_is_initializer(e->f)
               && ir_func_set_initializer(e->ctx, e->f, false)
               && !ir_func_is_initializer(e->f));
+    check("an always-inline marker is queryable and clearable",
+          !ir_func_is_always_inline(e->f)
+              && ir_func_set_always_inline(e->ctx, e->f, true)
+              && ir_func_is_always_inline(e->f)
+              && ir_func_set_always_inline(e->ctx, e->f, false)
+              && !ir_func_is_always_inline(e->f));
     check("a marked compile-time assignment can initialize a global",
           phase_contract
               && ir_instr_set_binding_initialization(phase_store, true)
@@ -948,6 +954,13 @@ static void test_aggregates_and_variants(void)
     check("atomic load unwraps the atomic storage type",
           accepts_as(e, atomic_load, "i32"));
 
+    ir_instr_t *atomic_load_acquire = op(e, IR_OP_LOAD);
+    ir_instr_operand_value(atomic_load_acquire, val(e, "ref[atomic[i32]]"));
+    ir_instr_add_mod(atomic_load_acquire, "atomic");
+    ir_instr_add_mod(atomic_load_acquire, "acquire");
+    check("atomic acquire load is accepted",
+          accepts_as(e, atomic_load_acquire, "i32"));
+
     ir_instr_t *atomic_store = op(e, IR_OP_STORE);
     ir_instr_operand_value(atomic_store, val(e, "ref[atomic[i32]]"));
     ir_instr_operand_value(atomic_store, val(e, "i32"));
@@ -955,12 +968,30 @@ static void test_aggregates_and_variants(void)
     check("atomic store accepts the underlying value type",
           apply(e, atomic_store) == IR_RULE_ACCEPT);
 
+    ir_instr_t *atomic_store_release = op(e, IR_OP_STORE);
+    ir_instr_operand_value(atomic_store_release,
+                          val(e, "ref[atomic[i32]]"));
+    ir_instr_operand_value(atomic_store_release, val(e, "i32"));
+    ir_instr_add_mod(atomic_store_release, "atomic");
+    ir_instr_add_mod(atomic_store_release, "release");
+    check("atomic release store is accepted",
+          apply(e, atomic_store_release) == IR_RULE_ACCEPT);
+
     ir_instr_t *atomic_or = op(e, IR_OP_ATOMIC_RMW);
     ir_instr_operand_value(atomic_or, val(e, "ref[atomic[i32]]"));
     ir_instr_operand_name(atomic_or, "or");
     ir_instr_operand_value(atomic_or, val(e, "i32"));
     check("atomic fetch-or returns the previous underlying value",
           accepts_as(e, atomic_or, "i32"));
+
+    ir_instr_t *atomic_exchange_acquire = op(e, IR_OP_ATOMIC_RMW);
+    ir_instr_operand_value(atomic_exchange_acquire,
+                           val(e, "ref[atomic[i32]]"));
+    ir_instr_operand_name(atomic_exchange_acquire, "xchg");
+    ir_instr_operand_value(atomic_exchange_acquire, val(e, "i32"));
+    ir_instr_add_mod(atomic_exchange_acquire, "acquire");
+    check("atomic acquire exchange returns the previous value",
+          accepts_as(e, atomic_exchange_acquire, "i32"));
 
     ir_instr_t *atomic_and = op(e, IR_OP_ATOMIC_RMW);
     ir_instr_operand_value(atomic_and, val(e, "ref[atomic[i32]]"));
@@ -972,6 +1003,16 @@ static void test_aggregates_and_variants(void)
     ir_instr_t *signal_fence = op(e, IR_OP_SIGNAL_FENCE);
     check("signal fence has no result",
           accepts_as(e, signal_fence, nullptr));
+
+    ir_instr_t *prefetch = op(e, IR_OP_PREFETCH);
+    ir_instr_operand_value(prefetch, val(e, "ref[i32]"));
+    check("prefetch accepts a reference without a result",
+          accepts_as(e, prefetch, nullptr));
+
+    ir_instr_t *prefetch_bad = op(e, IR_OP_PREFETCH);
+    ir_instr_operand_value(prefetch_bad, val(e, "i32"));
+    check("prefetch rejects a scalar address",
+          apply(e, prefetch_bad) == IR_RULE_REJECT);
 
     ir_instr_t *atomic_or_bad = op(e, IR_OP_ATOMIC_RMW);
     ir_instr_operand_value(atomic_or_bad, val(e, "ref[atomic[i32]]"));
@@ -3472,6 +3513,9 @@ static void test_callback_semantics(void)
     check("callback invocation is checked by its call-site signature",
           ir_instr_set_call_signature(invocation, signature)
               && accepts_as(e, invocation, "i32"));
+    check("callback invocation retains its handler signature",
+          ir_instr_set_callback_invoke_handler(invocation, signature)
+              && ir_instr_callback_invoke_handler(invocation) == signature);
 
     close_env(e);
 }

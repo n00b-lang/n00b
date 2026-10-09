@@ -387,6 +387,26 @@ bool ir_func_is_initializer(const ir_func_t *function)
         && initializer->b;
 }
 
+bool ir_func_set_always_inline(ir_ctx_t *ctx, ir_func_t *function,
+                               bool enabled)
+{
+    if (!ctx || !function) return false;
+    return ir_annot_set(ctx, &function->annots, (ir_annot_t){
+        .key = "ir.always_inline",
+        .kind = IR_ANNOT_BOOL,
+        .b = enabled,
+    });
+}
+
+bool ir_func_is_always_inline(const ir_func_t *function)
+{
+    if (!function) return false;
+    ir_annot_t *inline_attr = ir_annot_get(
+        (ir_annots_t *)&function->annots, "ir.always_inline");
+    return inline_attr && inline_attr->kind == IR_ANNOT_BOOL
+        && inline_attr->b;
+}
+
 static bool valid_phase_access(ir_phase_access_t access);
 
 bool ir_value_set_phase_access(ir_ctx_t *ctx, ir_value_t *value,

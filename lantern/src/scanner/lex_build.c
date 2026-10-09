@@ -1511,6 +1511,13 @@ build_layout(lex_build_t *b, const parse_annotation_t *a)
             if (core_list_len(o->args)) {
                 b->spec.tok_newline = arg(o, 0);
             }
+            if (core_list_len(o->args) > 1) {
+                if (core_list_len(o->args) != 2 ||
+                    !string_is(arg(o, 1), "each")) {
+                    oops(b, "layout newline mode", arg(o, 1));
+                }
+                else b->spec.newline_each_line = true;
+            }
         }
         else if (named(o, "eof")) {
             b->spec.tok_eof = arg(o, 0);
@@ -1572,6 +1579,15 @@ build_sigil(lex_build_t *b, const parse_annotation_t *a)
         }
         else if (named(o, "digits")) {
             g->digits_only = true;
+        }
+        else if (named(o, "before_string")) {
+            g->before_string = true;
+        }
+        else if (named(o, "unless_closed")) {
+            g->unless_closed = true;
+        }
+        else if (named(o, "attach_previous")) {
+            g->attach_previous = true;
         }
         else {
             oops(b, "sigil", o->name);

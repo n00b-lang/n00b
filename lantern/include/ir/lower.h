@@ -57,6 +57,9 @@ bool ir_lower_suppress_emit(ir_lower_context_t *context, parse_tree_t *node);
  * the assignment operation before the node exits. */
 bool ir_lower_handle_assignment(ir_lower_context_t *context,
                                 parse_tree_t *assignment);
+bool ir_lower_finish_assignment(ir_lower_context_t *context,
+                                parse_tree_t *assignment,
+                                parse_tree_t *completed_node);
 /* Keep an assignment target in value context while leaving the assignment's
  * annotation-driven emit operation active. Useful for read-modify-write. */
 bool ir_lower_evaluate_assignment_target(ir_lower_context_t *context,

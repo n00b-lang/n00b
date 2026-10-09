@@ -16,6 +16,7 @@ typedef struct {
     bool writable;
     bool executable;
     bool is_thread_local;
+    bool is_thread_local_descriptor;
 } core_object_emit_section_t;
 
 typedef struct {
@@ -30,6 +31,7 @@ typedef struct {
     uint64_t section_offset;
     uint32_t symbol_index;
     uint64_t addend_bits;
+    bool symbol_relocation;
 } core_object_emit_absolute64_t;
 
 /* Section indexes are one-based; zero denotes an undefined symbol. Symbol

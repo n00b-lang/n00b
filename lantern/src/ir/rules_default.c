@@ -1123,6 +1123,14 @@ static ir_rule_result_t rule_atomic_rmw(ir_module_t *m, ir_instr_t *in,
                                        ir_diags_t *d, void *state)
 {
     (void)state;
+    if (in->n_mods > 1
+        || (in->n_mods && !ir_instr_has_mod(in, "release")
+            && !ir_instr_has_mod(in, "relaxed")
+            && !ir_instr_has_mod(in, "acquire"))) {
+        complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this order",
+                 "atomic.rmw supports acquire, release, or relaxed ordering");
+        return REJECT;
+    }
     th_type *pointer = opd_type(in, 0);
     th_type *value = opd_type(in, 2);
     if (!pointer || !value) return DECLINE;
@@ -1215,6 +1223,15 @@ static ir_rule_result_t rule_load(ir_module_t *m, ir_instr_t *in,
 {
     (void)state;
 
+    if (((ir_instr_has_mod(in, "relaxed")
+          || ir_instr_has_mod(in, "acquire"))
+         && !ir_instr_has_mod(in, "atomic"))
+        || ir_instr_has_mod(in, "release")) {
+        complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this order",
+                 "load supports relaxed or acquire ordering only when atomic");
+        return REJECT;
+    }
+
     th_type *p = opd_type(in, 0);
 
     if (!p) {
@@ -1250,6 +1267,15 @@ static ir_rule_result_t rule_store(ir_module_t *m, ir_instr_t *in,
                                    ir_diags_t *d, void *state)
 {
     (void)state;
+
+    if (((ir_instr_has_mod(in, "relaxed")
+          || ir_instr_has_mod(in, "release"))
+         && !ir_instr_has_mod(in, "atomic"))
+        || ir_instr_has_mod(in, "acquire")) {
+        complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this order",
+                 "store supports relaxed or release ordering only when atomic");
+        return REJECT;
+    }
 
     th_type *p = opd_type(in, 0);
     th_type *v = opd_type(in, 1);
@@ -3032,6 +3058,20 @@ static ir_rule_result_t rule_none(ir_module_t *m, ir_instr_t *in,
     return ACCEPT(nullptr);
 }
 
+static ir_rule_result_t rule_prefetch(ir_module_t *m, ir_instr_t *in,
+                                     ir_diags_t *d, void *state)
+{
+    (void)state;
+    th_type *pointer = opd_type(in, 0);
+    if (!pointer) return DECLINE;
+    if (ir_machine_of(m, pointer).class != IR_CLASS_PTR) {
+        complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
+                 "prefetch needs a pointer");
+        return REJECT;
+    }
+    return ACCEPT(nullptr);
+}
+
 
 typedef struct {
     ir_op_t         op;
@@ -3076,6 +3116,7 @@ static const entry DEFAULTS[] = {
     {IR_OP_ATOMIC_RMW, "ir.atomic.rmw", rule_atomic_rmw},
     {IR_OP_ATOMIC_CAS, "ir.atomic.cas", rule_atomic_cas},
     {IR_OP_SIGNAL_FENCE, "ir.signal.fence", rule_none},
+    {IR_OP_PREFETCH, "ir.prefetch", rule_prefetch},
     {IR_OP_GLOBAL_STORE, "ir.global.store", rule_global_store},
     {IR_OP_FIELD, "ir.field", rule_field},
     {IR_OP_INDEX, "ir.index", rule_index},

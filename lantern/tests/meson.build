@@ -12,6 +12,7 @@ suites = [
     ['ir-core',             'ir/core.c',             {}],
     ['ir-lower',            'ir/lower.c',            {}],
     ['ir-lifetime',         'ir/lifetime.c',         {}],
+    ['ir-storage-origin',   'ir/storage_origin.c',   {}],
     ['ir-exec-graph',       'ir/exec_graph.c',       {}],
     ['ir-shape',            'ir/shape.c',            {}],
     ['ir-spans',            'ir/span.c',             {}],

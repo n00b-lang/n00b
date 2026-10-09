@@ -1453,6 +1453,35 @@ ir_instr_callback_contract(const ir_instr_t *construction,
     return true;
 }
 
+bool
+ir_instr_set_callback_invoke_handler(ir_instr_t *invocation,
+                                     th_type *handler_signature)
+{
+    if (!invocation || invocation->op != IR_OP_CALLBACK_INVOKE
+        || !handler_signature
+        || th_kind_of(th_resolve(handler_signature)) != TH_FUNCTION)
+        return false;
+    ir_ctx_t *ctx = invocation->block && invocation->block->owner
+        && invocation->block->owner->owner
+        ? invocation->block->owner->owner->ctx : nullptr;
+    return ctx && ir_annot_set(ctx, &invocation->annots, (ir_annot_t){
+        .key = "ir.callback.handler",
+        .kind = IR_ANNOT_TYPE,
+        .t = handler_signature,
+    });
+}
+
+th_type *
+ir_instr_callback_invoke_handler(const ir_instr_t *invocation)
+{
+    ir_annot_t *annotation = invocation
+        && invocation->op == IR_OP_CALLBACK_INVOKE
+        ? ir_annot_get((ir_annots_t *)&invocation->annots,
+                       "ir.callback.handler") : nullptr;
+    return annotation && annotation->kind == IR_ANNOT_TYPE
+        ? annotation->t : nullptr;
+}
+
 th_type *ir_instr_call_signature(const ir_instr_t *call)
 {
     ir_annot_t *annotation = call

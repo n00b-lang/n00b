@@ -184,7 +184,10 @@ bool core_object_emit_elf(const core_target_desc_t *target,
         symbol_map[i] = index;
         uint8_t *entry = image + symtab_offset + (size_t)index * ELF_SYMBOL_BYTES;
         core_le_store_u32(entry, symbol_names[i]);
-        entry[4] = symbols[i].exported ? 0x10 : 0;
+        entry[4] = (symbols[i].exported ? 0x10 : 0)
+            | (symbols[i].section_index
+                && sections[symbols[i].section_index - 1].is_thread_local
+                    ? 6 : 0);
         core_le_store_u16(entry + 6,
                           symbols[i].section_index
                               ? (uint16_t)(ELF_USER_SECTION_BASE +

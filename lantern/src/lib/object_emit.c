@@ -47,6 +47,12 @@ static bool valid_inputs(const core_target_desc_t *target,
                               "__DATA"))
                 || (target->object_format == CORE_TARGET_OBJECT_COFF
                     && strncmp(section->name, ".tls$", 5)))) return false;
+        if (section->is_thread_local_descriptor
+            && (target->object_format != CORE_TARGET_OBJECT_MACH_O
+                || section->is_thread_local || !section->writable
+                || section->executable
+                || strcmp(section->segment ? section->segment : "", "__DATA")))
+            return false;
         if (target->object_format == CORE_TARGET_OBJECT_MACH_O &&
             (!section->segment || !section->segment[0])) return false;
     }
@@ -64,7 +70,10 @@ static bool valid_inputs(const core_target_desc_t *target,
         const core_object_emit_absolute64_t *relocation = &relocations[i];
         if (!relocation->section_index ||
             relocation->section_index > section_count ||
-            relocation->symbol_index >= symbol_count) return false;
+            relocation->symbol_index >= symbol_count ||
+            (relocation->symbol_relocation
+                && target->object_format != CORE_TARGET_OBJECT_MACH_O))
+            return false;
         size_t size = sections[relocation->section_index - 1].size;
         if (relocation->section_offset > size ||
             size - relocation->section_offset < 8) return false;

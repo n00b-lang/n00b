@@ -806,7 +806,11 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
         memcpy(method_name, name.data, name.u8_bytes);
         method_name[name.u8_bytes] = 0;
 
-        th_type *call_result = fresh(c);
+        th_type *option_item = named_is(t, "option")
+            ? named_arg_first(t) : nullptr;
+        th_type *call_result = option_item
+            && (text_is(name, "get") || text_is(name, "get_or_else"))
+                ? option_item : fresh(c);
         th_type *call = method_call_shape(c, call_result);
         th_type *signature = th_method_lookup(c->tc, t, method_name);
         if (signature && th_kind_of(th_resolve(signature)) == TH_FUNCTION) {

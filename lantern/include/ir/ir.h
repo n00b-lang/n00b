@@ -17,6 +17,7 @@ typedef enum : uint8_t {
     IR_MOD_ACCESS   = 0x10,
     IR_MOD_FIT      = 0x20,
     IR_MOD_ROUND    = 0x40,
+    IR_MOD_ATOMIC_ORDER = 0x80,
 } ir_modgroup_t;
 
 typedef enum : uint8_t {
@@ -399,6 +400,9 @@ ir_execution_phase_t ir_func_execution_phase(const ir_func_t *function);
 bool ir_func_set_initializer(ir_ctx_t *ctx, ir_func_t *function,
                              bool is_initializer);
 bool ir_func_is_initializer(const ir_func_t *function);
+bool ir_func_set_always_inline(ir_ctx_t *ctx, ir_func_t *function,
+                               bool enabled);
+bool ir_func_is_always_inline(const ir_func_t *function);
 /* Per-binding phase facts are ordinary metadata and survive IR text round
  * trips. Missing metadata preserves legacy unrestricted access. */
 bool ir_value_set_phase_access(ir_ctx_t *ctx, ir_value_t *value,
@@ -724,6 +728,8 @@ bool        ir_instr_set_storage_class(ir_instr_t *allocation,
                                        bool required);
 const char *ir_instr_storage_class(const ir_instr_t *allocation,
                                    bool *required);
+bool ir_allocation_has_only_local_uses(const ir_func_t *function,
+                                       const ir_instr_t *allocation);
 bool ir_instr_set_binding_initialization(ir_instr_t *instruction,
                                          bool initializes);
 bool ir_instr_is_binding_initialization(const ir_instr_t *instruction);
@@ -756,6 +762,9 @@ bool ir_instr_callback_contract(const ir_instr_t *construction,
                                 th_type **call_signature,
                                 th_type **handler_signature,
                                 th_type **setup_signature);
+bool ir_instr_set_callback_invoke_handler(ir_instr_t *invocation,
+                                          th_type *handler_signature);
+th_type *ir_instr_callback_invoke_handler(const ir_instr_t *invocation);
 bool ir_instr_set_phase_result(ir_ctx_t *ctx, ir_instr_t *instruction,
                                const char *identifier);
 const char *ir_instr_phase_result(const ir_instr_t *instruction);

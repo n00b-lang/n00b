@@ -197,6 +197,8 @@ same_shifted_token(const parse_token_info_t *fresh,
         && fresh->origin == old->origin
         && option_string_eq(fresh->value, old->value)
         && option_string_eq(fresh->literal_type, old->literal_type)
+        && option_string_eq(fresh->postfix_modifier,
+                            old->postfix_modifier)
         && trivia_eq(fresh->leading_trivia, old->leading_trivia)
         && trivia_eq(fresh->trailing_trivia, old->trailing_trivia)
         && shifted_span_eq(fresh->start_byte, old->start_byte, delta)
@@ -227,6 +229,10 @@ free_token_contents(parse_token_info_t *tok)
     }
     if (tok->owns_literal_type && core_option_is_set(tok->literal_type)) {
         core_free(core_option_get(tok->literal_type).data);
+    }
+    if (tok->owns_postfix_modifier
+        && core_option_is_set(tok->postfix_modifier)) {
+        core_free(core_option_get(tok->postfix_modifier).data);
     }
 }
 
@@ -486,14 +492,16 @@ finalize_metadata(parse_token_stream_t *ts)
 static bool
 ensure_filled(parse_token_stream_t *ts, int32_t target)
 {
-    while (ts->token_count <= target) {
+    int32_t required = target + (ts->scanner->token_suffix_lookahead ? 1 : 0);
+    while (ts->token_count <= required) {
         if (try_converge(ts)) {
             finalize_metadata(ts);
             return ts->token_count > target;
         }
         if (ts->scanner->at_eof) {
             finalize_metadata(ts);
-            return false;
+            return ts->token_count > target
+                && ts->scanner->status != SCAN_STATUS_INCOMPLETE;
         }
 
         maybe_checkpoint(ts);
@@ -515,11 +523,12 @@ ensure_filled(parse_token_stream_t *ts, int32_t target)
                 reconcile_stale_suffix(ts);
             }
             finalize_metadata(ts);
-            return ts->token_count > target;
+            return ts->token_count > target
+                && ts->scanner->status != SCAN_STATUS_INCOMPLETE;
         }
     }
 
-    return true;
+    return ts->token_count > target;
 }
 
 parse_token_stream_t *
@@ -572,6 +581,11 @@ scan_token_stream_free(parse_token_stream_t *ts)
             if (ts->tokens[i]->owns_literal_type
                 && core_option_is_set(ts->tokens[i]->literal_type)) {
                 core_free(core_option_get(ts->tokens[i]->literal_type).data);
+            }
+            if (ts->tokens[i]->owns_postfix_modifier
+                && core_option_is_set(ts->tokens[i]->postfix_modifier)) {
+                core_free(core_option_get(
+                    ts->tokens[i]->postfix_modifier).data);
             }
             core_free(ts->tokens[i]);
         }
@@ -803,6 +817,11 @@ scan_stream_reset(parse_token_stream_t *ts)
             if (ts->tokens[i]->owns_literal_type
                 && core_option_is_set(ts->tokens[i]->literal_type)) {
                 core_free(core_option_get(ts->tokens[i]->literal_type).data);
+            }
+            if (ts->tokens[i]->owns_postfix_modifier
+                && core_option_is_set(ts->tokens[i]->postfix_modifier)) {
+                core_free(core_option_get(
+                    ts->tokens[i]->postfix_modifier).data);
             }
             core_free(ts->tokens[i]);
             ts->tokens[i] = nullptr;
@@ -1044,6 +1063,10 @@ scan_stream_discard_consumed(parse_token_stream_t *ts)
         if (tok->owns_literal_type && core_option_is_set(tok->literal_type)) {
             core_free(core_option_get(tok->literal_type).data);
         }
+        if (tok->owns_postfix_modifier
+            && core_option_is_set(tok->postfix_modifier)) {
+            core_free(core_option_get(tok->postfix_modifier).data);
+        }
         core_free(tok);
     }
 
@@ -1131,6 +1154,7 @@ array_scan_cb(parse_scanner_t *s)
     copy->trailing_trivia = nullptr;
     copy->owns_value = false;
     copy->owns_literal_type = false;
+    copy->owns_postfix_modifier = false;
     copy->owns_file  = false;
     copy->tree_owned = false;
     copy->index = ts->next_index++;

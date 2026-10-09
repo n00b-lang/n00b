@@ -77,8 +77,8 @@ static void mach_test(const char *output_path)
     assert(core_target_profile("arm64-macos", 0, &target));
     uint8_t data[16] = {0}, mutable_data[8] = {0};
     core_object_emit_section_t sections[] = {
-        {"__n00b_meta", "__DATA_CONST", data, sizeof data, 8, false, false, false},
-        {"__data", "__DATA", mutable_data, sizeof mutable_data, 16, true, false, false},
+        {"__n00b_meta", "__DATA_CONST", data, sizeof data, 8, false, false, false, false},
+        {"__data", "__DATA", mutable_data, sizeof mutable_data, 16, true, false, false, false},
     };
     core_object_emit_symbol_t symbols[] = {
         {"_external_symbol", 0, 0, true},
@@ -86,8 +86,8 @@ static void mach_test(const char *output_path)
         {"_defined_symbol", 2, 0, true},
     };
     core_object_emit_absolute64_t relocations[] = {
-        {1, 8, 0, 5},
-        {2, 0, 1, 0},
+        {1, 8, 0, 5, false},
+        {2, 0, 1, 0, false},
     };
     uint8_t *image = NULL;
     size_t size = 0;
@@ -134,6 +134,22 @@ static void mach_test(const char *output_path)
     assert(relocation.target_is_section &&
            relocation.native_symbol_index == 2 &&
            relocation.addend_bits == 16);
+    relocations[1].symbol_relocation = true;
+    uint8_t *symbol_image = NULL;
+    size_t symbol_size = 0;
+    assert(core_object_emit(&target, sections, 2, symbols, 3, relocations, 2,
+                            &symbol_image, &symbol_size));
+    assert(core_object_section_find(symbol_image, symbol_size,
+        CORE_TARGET_OBJECT_MACH_O, "__DATA", "__data", &section));
+    assert(core_object_absolute64_relocation_at(&section,
+        CORE_TARGET_OBJECT_MACH_O, 0, &relocation));
+    assert(!relocation.target_is_section && relocation.addend_bits == 0);
+    assert(core_object_symbol_name_at(symbol_image, symbol_size,
+        CORE_TARGET_OBJECT_MACH_O, &section,
+        relocation.native_symbol_index, &name));
+    assert(name.length == strlen("_local_target")
+        && !memcmp(name.bytes, "_local_target", name.length));
+    core_free(symbol_image);
     if (output_path) save_object(output_path, image, size);
     core_free(image);
 }
@@ -144,8 +160,8 @@ static void coff_test(const char *output_path)
     assert(core_target_profile("x86_64-windows", 0, &target));
     uint8_t data[16] = {0}, code[8] = {0};
     core_object_emit_section_t sections[] = {
-        {".n00b$M", NULL, data, sizeof data, 8, false, false, false},
-        {".long_section_name", NULL, code, sizeof code, 16, false, true, false},
+        {".n00b$M", NULL, data, sizeof data, 8, false, false, false, false},
+        {".long_section_name", NULL, code, sizeof code, 16, false, true, false, false},
     };
     core_object_emit_symbol_t symbols[] = {
         {"external_symbol", 0, 0, true},
@@ -153,8 +169,8 @@ static void coff_test(const char *output_path)
         {"start", 2, 0, true},
     };
     core_object_emit_absolute64_t relocations[] = {
-        {1, 8, 0, 5},
-        {2, 0, 1, 0},
+        {1, 8, 0, 5, false},
+        {2, 0, 1, 0, false},
     };
     uint8_t *image = NULL;
     size_t size = 0;
@@ -232,7 +248,7 @@ static void coff_relocation_overflow_test(const char *output_path)
         };
     }
     core_object_emit_section_t section_input = {
-        ".n00b$M", NULL, data, count * 8, 8, false, false, false,
+        ".n00b$M", NULL, data, count * 8, 8, false, false, false, false,
     };
     core_object_emit_symbol_t symbol = {"external_symbol", 0, 0, true};
     uint8_t *image = NULL;
@@ -289,15 +305,17 @@ static void thread_local_section_test(void)
                             ? "__DATA_CONST" : NULL,
              .bytes = backing, .size = sizeof backing, .alignment = 8},
         };
-        core_object_emit_symbol_t symbol = {
-            .name = "tls_backing", .section_index = 2,
+        core_object_emit_symbol_t symbols[] = {
+            {.name = "tls_backing", .section_index = 2},
+            {.name = "tls_variable", .section_index = 1,
+             .exported = true},
         };
         core_object_emit_absolute64_t relocation = {
             .section_index = 1, .section_offset = 8, .symbol_index = 0,
         };
         uint8_t *image = NULL;
         size_t size = 0;
-        assert(core_object_emit(&target, sections, 2, &symbol, 1,
+        assert(core_object_emit(&target, sections, 2, symbols, 2,
                                 &relocation, 1, &image, &size));
         core_object_section_t section;
         assert(core_object_section_find(image, size, cases[i].format,
@@ -322,8 +340,13 @@ static void thread_local_section_test(void)
                                          &resolved) &&
                    resolved.native_section_index == backing_index);
         }
-        if (cases[i].format == CORE_TARGET_OBJECT_ELF)
+        if (cases[i].format == CORE_TARGET_OBJECT_ELF) {
             assert((section.flags & 0x403) == 0x403);
+            size_t header = (size_t)core_le_load_u64(image + 40);
+            size_t symtab = (size_t)core_le_load_u64(image + header
+                + 3 * 64 + 24);
+            assert((image[symtab + 2 * 24 + 4] & 0x0f) == 6);
+        }
         else if (cases[i].format == CORE_TARGET_OBJECT_MACH_O)
             assert((section.flags & 0xff) == 0x11);
         else assert((section.flags & 0xc0000040u) == 0xc0000040u);
@@ -342,6 +365,34 @@ static void thread_local_section_test(void)
                                      &image, &size));
         }
     }
+}
+
+static void thread_local_descriptor_section_test(void)
+{
+    core_target_desc_t target;
+    assert(core_target_profile("arm64-macos", 0, &target));
+    uint8_t descriptor[24] = {0};
+    core_object_emit_section_t section = {
+        .name = "__thread_vars", .segment = "__DATA",
+        .bytes = descriptor, .size = sizeof descriptor, .alignment = 8,
+        .writable = true, .is_thread_local_descriptor = true,
+    };
+    uint8_t *image = NULL;
+    size_t size = 0;
+    assert(core_object_emit(&target, &section, 1, NULL, 0, NULL, 0,
+                            &image, &size));
+    core_object_section_t emitted;
+    assert(core_object_section_find(image, size, CORE_TARGET_OBJECT_MACH_O,
+        "__DATA", "__thread_vars", &emitted));
+    assert((emitted.flags & 0xff) == 0x13);
+    core_free(image);
+    section.is_thread_local = true;
+    assert(!core_object_emit(&target, &section, 1, NULL, 0, NULL, 0,
+                             &image, &size));
+    section.is_thread_local = false;
+    assert(core_target_profile("x86_64-linux", 0, &target));
+    assert(!core_object_emit(&target, &section, 1, NULL, 0, NULL, 0,
+                             &image, &size));
 }
 
 static void duplicate_section_names_test(void)
@@ -409,8 +460,8 @@ int main(int argc, char **argv)
     uint8_t metadata[16] = {0};
     uint8_t code[8] = {0};
     core_object_emit_section_t sections[] = {
-        {".n00b.meta", NULL, metadata, sizeof metadata, 8, false, false, false},
-        {".text", NULL, code, sizeof code, 16, false, true, false},
+        {".n00b.meta", NULL, metadata, sizeof metadata, 8, false, false, false, false},
+        {".text", NULL, code, sizeof code, 16, false, true, false, false},
     };
     core_object_emit_symbol_t symbols[] = {
         {"external_symbol", 0, 0, true},
@@ -418,8 +469,8 @@ int main(int argc, char **argv)
         {"start", 2, 0, true},
     };
     core_object_emit_absolute64_t relocations[] = {
-        {1, 8, 0, 5},
-        {2, 0, 1, 0},
+        {1, 8, 0, 5, false},
+        {2, 0, 1, 0, false},
     };
     uint8_t *image = NULL;
     size_t size = 0;
@@ -500,6 +551,7 @@ int main(int argc, char **argv)
     core_free(image);
     duplicate_section_names_test();
     thread_local_section_test();
+    thread_local_descriptor_section_test();
     mach_test(argc >= 3 ? argv[2] : NULL);
     coff_test(argc >= 4 ? argv[3] : NULL);
     coff_relocation_overflow_test(argc >= 5 ? argv[4] : NULL);

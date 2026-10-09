@@ -174,7 +174,9 @@ static const struct {
     {IR_MOD_FIT, "trap"},          {IR_MOD_FIT, "sat"},
     {IR_MOD_FIT, "undef"},         {IR_MOD_ROUND, "to_zero"},
     {IR_MOD_ROUND, "nearest"},     {IR_MOD_ROUND, "floor"},
-    {IR_MOD_ROUND, "ceil"},
+    {IR_MOD_ROUND, "ceil"},        {IR_MOD_ATOMIC_ORDER, "release"},
+    {IR_MOD_ATOMIC_ORDER, "relaxed"},
+    {IR_MOD_ATOMIC_ORDER, "acquire"},
 };
 
 static uintptr_t mod_groups(const char *name)

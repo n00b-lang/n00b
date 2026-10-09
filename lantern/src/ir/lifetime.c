@@ -894,3 +894,148 @@ bool ir_value_can_finalize_at(const ir_value_t *value, uint64_t point)
     free(work.items);
     return safe;
 }
+
+typedef struct local_use_probe_t {
+    const ir_func_t *function;
+    const ir_value_t *address;
+    const struct local_use_probe_t *previous;
+} local_use_probe_t;
+
+static bool address_has_only_local_uses(const ir_func_t *function,
+                                        const ir_value_t *address,
+                                        const local_use_probe_t *previous);
+
+static bool
+call_argument_is_noescape(const ir_instr_t *call, uint32_t operand_index,
+                          const local_use_probe_t *previous)
+{
+    if (call->op != IR_OP_CALL || !operand_index
+        || operand_index >= call->n_operands
+        || call->operands[0].kind != IR_OPD_VALUE
+        || !call->operands[0].value
+        || call->operands[0].value->kind != IR_VAL_FUNC)
+        return false;
+    ir_func_t *callee = call->operands[0].value->owner;
+    if (!callee || operand_index > callee->n_params)
+        return false;
+    for (uint32_t i = 1; i <= operand_index; i++)
+        if (call->operands[i].kind != IR_OPD_VALUE)
+            return false;
+    ir_value_t *parameter = callee->params[operand_index - 1];
+    ir_annot_t *escapes = parameter
+        ? ir_annot_get(&parameter->annots, "ir.lifetime_escapes") : nullptr;
+    ir_annot_t *resolved = parameter
+        ? ir_annot_get(&parameter->annots, "ir.alias_unresolved") : nullptr;
+    ir_annot_t *complete = parameter
+        ? ir_annot_get(&parameter->annots, "ir.alias_analysis_complete") : nullptr;
+    ir_annot_t *aliases = parameter
+        ? ir_annot_get(&parameter->annots, "ir.alias_count") : nullptr;
+    ir_annot_t *aliased_by = parameter
+        ? ir_annot_get(&parameter->annots, "ir.aliased_by_count") : nullptr;
+    bool no_aliases = aliases && aliases->kind == IR_ANNOT_INT
+        && !aliases->i.neg && !aliases->i.mag && aliased_by
+        && aliased_by->kind == IR_ANNOT_INT && !aliased_by->i.neg
+        && !aliased_by->i.mag;
+    bool summarized = escapes && escapes->kind == IR_ANNOT_BOOL && !escapes->b
+        && resolved && resolved->kind == IR_ANNOT_BOOL && !resolved->b
+        && ((complete && complete->kind == IR_ANNOT_BOOL && complete->b)
+            || no_aliases);
+    return summarized || (callee->n_blocks
+        && address_has_only_local_uses(callee, parameter, previous));
+}
+
+static bool
+address_has_only_local_uses(const ir_func_t *function,
+                            const ir_value_t *address,
+                            const local_use_probe_t *previous)
+{
+    if (!function || !address) return false;
+    for (const local_use_probe_t *at = previous; at; at = at->previous)
+        if (at->function == function && at->address == address)
+            return false;
+    const local_use_probe_t probe = {
+        .function = function, .address = address, .previous = previous,
+    };
+    size_t count = 1;
+    size_t capacity = 4;
+    const ir_value_t **addresses = malloc(capacity * sizeof(*addresses));
+    if (!addresses) return false;
+    addresses[0] = address;
+    bool local = true;
+    for (size_t cursor = 0; local && cursor < count; cursor++) {
+        for (uint32_t i = 0; local && i < function->n_blocks; i++) {
+            const ir_block_t *block = function->blocks[i];
+            for (uint32_t j = 0; local && j < block->n_instrs; j++) {
+                const ir_instr_t *use = block->instrs[j];
+                for (uint32_t k = 0; local && k < use->n_operands; k++) {
+                    const ir_operand_t *operand = &use->operands[k];
+                    const ir_value_t *referenced = nullptr;
+                    switch (operand->kind) {
+                    case IR_OPD_VALUE:
+                    case IR_OPD_SPREAD:
+                    case IR_OPD_ARG:
+                    case IR_OPD_OUT:
+                    case IR_OPD_FRESH:
+                        referenced = operand->value;
+                        break;
+                    case IR_OPD_PHI_ARM:
+                        referenced = operand->phi.value;
+                        break;
+                    case IR_OPD_NAMED_ARG:
+                        referenced = operand->named.value;
+                        break;
+                    default:
+                        break;
+                    }
+                    if (referenced != addresses[cursor]) continue;
+                    if (operand->kind == IR_OPD_VALUE
+                        && call_argument_is_noescape(use, k, &probe))
+                        continue;
+                    if (k != 0 || operand->kind != IR_OPD_VALUE) {
+                        local = false;
+                        break;
+                    }
+                    if (use->op == IR_OP_LOAD || use->op == IR_OP_STORE)
+                        continue;
+                    bool projection = use->op == IR_OP_FIELD
+                        || use->op == IR_OP_INDEX
+                        || use->op == IR_OP_OFFSET
+                        || use->op == IR_OP_BITCAST
+                        || (use->op == IR_OP_COPY && !use->dest_local);
+                    if (!projection
+                        || !use->dest || !use->dest->type
+                        || th_kind_of(use->dest->type) != TH_INDIRECTION) {
+                        local = false;
+                        break;
+                    }
+                    bool seen = false;
+                    for (size_t n = 0; n < count; n++)
+                        if (addresses[n] == use->dest) seen = true;
+                    if (seen) continue;
+                    if (count == capacity) {
+                        size_t next = capacity * 2;
+                        const ir_value_t **grown = realloc(addresses,
+                            next * sizeof(*addresses));
+                        if (!grown) { local = false; break; }
+                        addresses = grown;
+                        capacity = next;
+                    }
+                    addresses[count++] = use->dest;
+                }
+            }
+        }
+    }
+    free(addresses);
+    return local;
+}
+
+bool
+ir_allocation_has_only_local_uses(const ir_func_t *function,
+                                   const ir_instr_t *allocation)
+{
+    bool required = false;
+    if (!allocation || allocation->op != IR_OP_ALLOC || !allocation->dest
+        || ir_instr_storage_class(allocation, &required) || required)
+        return false;
+    return address_has_only_local_uses(function, allocation->dest, nullptr);
+}

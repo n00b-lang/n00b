@@ -621,6 +621,21 @@ static void test_indentation_becomes_tokens(void) {
   parse_grammar_free(layout);
 }
 
+static void test_newline_each_line(void) {
+  scan_lex_spec_t spec = PYTHON;
+  spec.newline_each_line = true;
+  parse_grammar_t *g = mk(&spec, PY_TERMS);
+
+  kinds(g, "blank and comment-only lines retain their newlines",
+        "if x:\n\n  a\n# note\n\n  b\n",
+        "if IDENTIFIER : NEWLINE NEWLINE INDENT IDENTIFIER NEWLINE "
+        "NEWLINE NEWLINE IDENTIFIER NEWLINE DEDENT ENDMARKER");
+  kinds(g, "bracketed newlines remain suppressed", "a = (1,\n\n  2)\n",
+        "IDENTIFIER = ( INTEGER , INTEGER ) NEWLINE ENDMARKER");
+
+  parse_grammar_free(g);
+}
+
 static void test_indentation_policies(void) {
   parse_grammar_t *width = indent_policy_grammar(
       "tab_width(\"4\"), tabs(\"allow\"), mixed_indent(\"allow\"), "
@@ -1196,6 +1211,62 @@ static void test_sigils_and_heredocs(void) {
   kinds(g, "a heredoc body is one token and the line continues",
         "x = <<~EOS\n  body\nEOS\ny\n", "IDENTIFIER = HEREDOC IDENTIFIER");
 
+  parse_grammar_free(g);
+}
+
+static void test_attached_postfix_sigil(void) {
+  static const scan_lex_string_t strings[] = {
+      {.opener = S("'"), .closer = S("'"), .tok = S("CHAR")},
+      {.opener = S("\""), .closer = S("\""), .tok = S("STRING")},
+      {},
+  };
+  static const scan_lex_sigil_t sigils[] = {
+      {.prefix = S("'"), .before_string = true, .unless_closed = true,
+       .attach_previous = true},
+      {},
+  };
+  static const scan_lex_spec_t spec = {
+      .name = S("postfix-sigil-test"),
+      .strings = strings,
+      .sigils = sigils,
+      .tok_ident = S("IDENTIFIER"),
+      .number = {.tok_int = S("INTEGER")},
+  };
+  static const char *const terms[] = {
+      "[", "]", "INTEGER", "CHAR", "STRING", "IDENTIFIER", nullptr,
+  };
+  parse_grammar_t *g = mk(&spec, terms);
+  const char *source = "[1]'array \"x\"'rich 'A' value[0]";
+  parse_scanner_t *scanner = nullptr;
+  parse_token_stream_t *stream = scan_tokenize(g, source, strlen(source),
+                                               nullptr, &scanner);
+  parse_token_info_t *tokens[16] = {0};
+  size_t count = 0;
+  tokens[count++] = scan_stream_next(stream);
+  tokens[count++] = scan_stream_next(stream);
+  tokens[count++] = scan_stream_next(stream);
+  check("closing token is finalized before delivery",
+        tokens[2] && core_option_is_set(tokens[2]->postfix_modifier)
+        && core_string_eq(core_option_get(tokens[2]->postfix_modifier),
+                          S("array")));
+  for (parse_token_info_t *token; count < 16
+       && (token = scan_stream_next(stream));)
+    tokens[count++] = token;
+  check("postfix sigils attach without emitting tokens", count == 9);
+  check("closing delimiter carries its modifier",
+        count > 2 && core_option_is_set(tokens[2]->postfix_modifier)
+        && core_string_eq(core_option_get(tokens[2]->postfix_modifier),
+                          S("array")));
+  check("string carries its modifier",
+        count > 3 && core_option_is_set(tokens[3]->postfix_modifier)
+        && core_string_eq(core_option_get(tokens[3]->postfix_modifier),
+                          S("rich")));
+  check("closed character literal stays a character token",
+        count > 4 && tokens[4]->tid == parse_terminal_id(g, S("CHAR")));
+  check("ordinary indexing does not acquire a modifier",
+        count > 8 && !core_option_is_set(tokens[8]->postfix_modifier));
+  scan_token_stream_free(stream);
+  scan_scanner_free(scanner);
   parse_grammar_free(g);
 }
 
@@ -4926,6 +4997,7 @@ static void test_spec_driven_conformance_cases(void) {
 
 int main(void) {
   test_indentation_becomes_tokens();
+  test_newline_each_line();
   test_layout_tokens_ignore_only_when_unmatched();
   test_indentation_policies();
   test_incremental_indentation_waits_for_content();
@@ -4933,6 +5005,7 @@ int main(void) {
   test_interpolation_pushes_a_mode();
   test_templates_and_regex();
   test_sigils_and_heredocs();
+  test_attached_postfix_sigil();
   test_heredoc_families();
   test_literal_postprocessing_hooks();
   test_a_spec_is_reusable_across_runs();

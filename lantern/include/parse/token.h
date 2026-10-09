@@ -71,6 +71,7 @@ typedef struct parse_token_info_t {
     void                          *user_info;
     core_option_t(core_string_t)   value;
     core_option_t(core_string_t)   literal_type;
+    core_option_t(core_string_t)   postfix_modifier;
     core_option_t(core_string_t)   file;
     parse_trivia_t                 *leading_trivia;
     parse_trivia_t                 *trailing_trivia;
@@ -93,6 +94,7 @@ typedef struct parse_token_info_t {
     bool                           no_trivia;
     bool                           owns_value;
     bool                           owns_literal_type;
+    bool                           owns_postfix_modifier;
     bool                           owns_file;
     bool                           tree_owned;
     bool                           has_content_span;
