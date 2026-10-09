@@ -580,7 +580,51 @@ static void test_trait_type_identity(void) {
   th_ctx_free(types);
 }
 
+static void test_consume_ref_method(void) {
+  th_ctx *types = th_ctx_new();
+  th_env *environment = th_env_new();
+  th_type *nil = th_name(types, "nil");
+  th_type *variable = th_var(types);
+  th_param required = {.mode = TH_CONSUME, .type = variable};
+  th_type *trait_method = th_func_with_error(types, nil, nil, &required, 1,
+                                             nullptr, nullptr, 0);
+  th_type *sample = th_name(types, "example.Sample");
+  th_type *reference = th_ind(types, 0, sample);
+  th_param provided = {.mode = TH_CONSUME, .type = reference};
+  th_type *implementation = th_func_with_error(types, nil, nil, &provided,
+                                                1, nullptr, nullptr, 0);
+  check("register consume reference trait method",
+        trait_method && implementation &&
+        th_env_register_type(environment, "example.Sample", "example", "base",
+                             TH_ENV_PUBLIC) &&
+        th_env_register_trait_contracts(environment, "example.Probe", "example",
+            "base", TH_ENV_PRIVATE,
+            method_record(types, "apply", trait_method)) &&
+        th_env_register_function_contract(environment, "example.apply",
+            "apply", "example", "base", TH_ENV_PRIVATE,
+            th_env_signature_contract(types, implementation, nil)) &&
+        th_env_freeze(environment) &&
+        th_ctx_set_environment(types, environment, "example", "base"));
+  th_env_method_t method = {0};
+  check("consume reference trait method resolves",
+        th_env_method_resolve(types, reference, "example.Probe", "apply",
+                              &method) == TH_ENV_METHOD_FOUND &&
+        !strcmp(method.qualified_name, "example.apply"));
+  const char *trait_name = nullptr;
+  check("consume reference trait method resolves by name",
+        th_env_method_resolve_by_name(types, reference, "apply", &method,
+                                      &trait_name) == TH_ENV_METHOD_FOUND &&
+        trait_name && !strcmp(trait_name, "example.Probe"));
+  check("private consume reference method hidden outside its module",
+        th_ctx_set_environment_scope(types, "other", "base") &&
+        th_env_method_resolve_by_name(types, reference, "apply", &method,
+                                      &trait_name) == TH_ENV_METHOD_NOT_FOUND);
+  th_env_free(environment);
+  th_ctx_free(types);
+}
+
 int main(void) {
+  test_consume_ref_method();
   test_kind_constraint_archive();
   test_trait_type_identity();
   th_env *env = th_env_new();
