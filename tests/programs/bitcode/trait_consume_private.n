@@ -1,0 +1,14 @@
+trait Probe {
+    func apply(consume self: `T)
+}
+
+type Sample {
+    value: int
+}
+
+func apply(consume self: Ref[Sample]) {
+}
+
+public func invoke(consume value: Ref[Sample]) {
+    value.apply()
+}

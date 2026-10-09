@@ -5288,13 +5288,15 @@ record_function_signature(parse_grammar_t *grammar,
             && !th_func_rest(finalizer_type)
             && receiver
             && core_string_eq(receiver->direction,
-                CORE_STRING_STATIC("consume"));
+                CORE_STRING_STATIC("consume"))
+            && receiver->type
+            && th_kind_of(th_resolve(receiver->type)) == TH_INDIRECTION;
         if (!has_receiver) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0031"),
                 CORE_STRING_STATIC(
-                    "__finalize must take one consume receiver and no other parameters"),
+                    "__finalize must take one consume Ref[T] receiver and no other parameters"),
                 link_source_location(func));
         }
         if (!n00bb_nil_type(state->types, symbol->error_type)) {
@@ -8230,6 +8232,15 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->annotations || !state->types) return;
+    if (resolve_member_calls
+        && !th_ctx_set_environment_scope(state->types,
+            unit->module.identifier.data,
+            n00bb_package_id(unit).data)) {
+        core_diagnostics_report(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
+            CORE_STRING_STATIC("could not set call-site type-environment scope"));
+        return;
+    }
 
     core_dict_foreach(state->annotations->cf_labels, item) {
         parse_cf_label_t *label = item->value;
@@ -8391,11 +8402,18 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 }
                 else if (receiver_type &&
                          th_kind_of(th_resolve(receiver_type)) != TH_VAR) {
-                    core_diagnostics_report(
+                    core_buffer_t message = {0};
+                    core_buffer_printf(&message,
+                        "no matching trait method '%.*s' for receiver type %s",
+                        (int)method_text.u8_bytes,
+                        method_text.data ? method_text.data : "",
+                        n00bb_print_type(state->types, receiver_type));
+                    core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
                         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0003"),
-                        core_string_from_cstr(
-                            "no matching trait method for this receiver type"));
+                        core_string_borrow(message.data, message.byte_len),
+                        link_source_location(member));
+                    core_buffer_release(&message);
                 }
                 core_free(method_name);
             }
