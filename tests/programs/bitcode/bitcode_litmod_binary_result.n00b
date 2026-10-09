@@ -1,11 +1,11 @@
 declare_litmod("binary_result", "string", "make_binary")
 
 func make_binary(raw: string) -> string fail: string {
-    return binary"abc"
+    return "abc"'binary
 }
 
 func values() -> string {
-    return binary_result"ignored"
+    return "ignored"'binary_result
 }
 
 comptime {

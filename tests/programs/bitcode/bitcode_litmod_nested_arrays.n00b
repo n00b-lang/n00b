@@ -5,11 +5,11 @@ func identity(items: Array[Array[int]]) -> Array[Array[int]] fail: string {
 }
 
 func values() -> Array[Array[int]] {
-    return bundle[array[1, 2], array[3]]
+    return [[1, 2]'array, [3]'array]'bundle
 }
 
 func dynamic(x: int) -> Array[Array[int]] {
-    return bundle[array[1, x], array[3]]
+    return [[1, x]'array, [3]'array]'bundle
 }
 
 func observe(items: Array[Array[int]]) {
@@ -17,7 +17,7 @@ func observe(items: Array[Array[int]]) {
 }
 
 comptime {
-    observe(bundle[array[4, 5], array[6]])
+    observe([[4, 5]'array, [6]'array]'bundle)
 } else {
     values()
     dynamic(6)

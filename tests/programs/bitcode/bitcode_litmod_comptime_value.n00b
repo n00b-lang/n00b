@@ -9,6 +9,6 @@ func observe(value: string) {
 }
 
 comptime {
-    observe(raw"hello")
+    observe("hello"'raw)
 } else {
 }

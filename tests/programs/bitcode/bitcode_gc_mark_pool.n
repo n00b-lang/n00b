@@ -42,6 +42,7 @@ comptime {
     assert builtin.gc.mark.mark_quiescent(heap)
     let marker: Ref[builtin.gc.Marker] = mapped_marker()
     let header: Ref[builtin.gc.Object_Header] = mapped_header()
+    __gc_prefetch(header)
     builtin.gc.mark.marker_init(marker, heap, false)
     builtin.gc.mark.drain_to_termination(marker)
     assert builtin.gc.mark.mark_quiescent(heap)

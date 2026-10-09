@@ -9,6 +9,8 @@
 
 core_list_decl(n00b_abi_function_v1);
 core_list_decl(uint32_t);
+typedef ir_func_t *ir_func_ptr_t;
+core_list_decl(ir_func_ptr_t);
 
 static bool
 append_module_initializer(n00bb_abi_type_index_t *index,
@@ -16,6 +18,7 @@ append_module_initializer(n00bb_abi_type_index_t *index,
                           const n00bb_abi_decl_index_t *declarations,
                           ir_module_t *module, n00bb_abi_name_pool_t *names,
                           core_list_t(n00b_abi_function_v1) *rows,
+                          core_list_t(ir_func_ptr_t) *bindings,
                           uint32_t *initializer_index)
 {
     uint32_t scope_index = n00bb_abi_decl_module_scope_index(declarations);
@@ -52,6 +55,7 @@ append_module_initializer(n00bb_abi_type_index_t *index,
                 offsetof(n00b_abi_function_v1, name), &row.name))
             return false;
         core_list_push(*rows, row);
+        core_list_push(*bindings, function);
         *initializer_index = next;
     }
     return true;
@@ -101,8 +105,10 @@ n00bb_abi_function_rows_build(
         || !signatures->signatures || !signatures->parameters
         || !comptime || !runtime || !names || !out) return false;
     core_list_t(n00b_abi_function_v1) rows = {0};
+    core_list_t(ir_func_ptr_t) bindings = {0};
     core_list_t(uint32_t) stream = {0};
     core_list_push(rows, ((n00b_abi_function_v1){0}));
+    core_list_push(bindings, nullptr);
     bool valid = true;
     uint32_t comptime_initializer_index = 0;
     uint32_t runtime_initializer_index = 0;
@@ -195,20 +201,25 @@ n00bb_abi_function_rows_build(
         if (valid && row.keywords.count) row.valid_keyword_bits =
             row.keywords.count == sizeof(uint64_t) * CHAR_BIT
                 ? UINT64_MAX : (UINT64_C(1) << row.keywords.count) - 1;
-        if (valid) core_list_push(rows, row);
+        if (valid) {
+            core_list_push(rows, row);
+            core_list_push(bindings, function);
+        }
     }
     if (valid) valid = append_module_initializer(index, types, declarations,
-        comptime, names, &rows, &comptime_initializer_index)
+        comptime, names, &rows, &bindings, &comptime_initializer_index)
         && append_module_initializer(index, types, declarations, runtime,
-            names, &rows, &runtime_initializer_index);
+            names, &rows, &bindings, &runtime_initializer_index);
     if (valid) *out = (n00bb_abi_function_rows_t){
-        .functions = rows.data, .function_count = rows.len,
+        .functions = rows.data, .ir_functions = bindings.data,
+        .function_count = rows.len,
         .stream_indexes = stream.data, .stream_index_count = stream.len,
         .comptime_initializer_index = comptime_initializer_index,
         .runtime_initializer_index = runtime_initializer_index,
     };
     else {
         core_list_free(rows);
+        core_list_free(bindings);
         core_list_free(stream);
     }
     return valid;
@@ -219,6 +230,7 @@ n00bb_abi_function_rows_release(n00bb_abi_function_rows_t *rows)
 {
     if (!rows) return;
     core_free(rows->functions);
+    core_free(rows->ir_functions);
     core_free(rows->stream_indexes);
     *rows = (n00bb_abi_function_rows_t){0};
 }

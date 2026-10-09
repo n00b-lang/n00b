@@ -1,0 +1,11 @@
+inline func first(value: uint) -> uint {
+    return second(value)
+}
+
+func second(value: uint) -> uint {
+    return first(value)
+}
+
+comptime {} else {
+    require first(1) == 1
+}

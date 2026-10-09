@@ -1,1 +1,1 @@
-var rank_mismatch: int[2][2] = a[1, 2]
+var rank_mismatch: int[2][2] = [1, 2]'a

@@ -14,11 +14,11 @@ func value() -> Tuple[string, int] {
 }
 
 func runtime_value(x: int) -> Tuple[string, int] {
-    return dynamic[1, x]
+    return [1, x]'dynamic
 }
 
 func static_container() -> Tuple[string, int] {
-    return dynamic[1, 2]
+    return [1, 2]'dynamic
 }
 
 func observe(item: Tuple[string, int]) {
@@ -27,7 +27,7 @@ func observe(item: Tuple[string, int]) {
 
 comptime {
     observe(bundle"comptime result")
-    observe(dynamic[3, 4])
+    observe([3, 4]'dynamic)
 } else {
     value()
     static_container()

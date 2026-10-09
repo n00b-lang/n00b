@@ -5,11 +5,11 @@ func identity(items: Array[Tuple[bool, int]]) -> Array[Tuple[bool, int]] fail: s
 }
 
 func static_values() -> Array[Tuple[bool, int]] {
-    return bundle[(true, 7), (false, 8)]
+    return [(true, 7), (false, 8)]'bundle
 }
 
 func dynamic_values(value: int) -> Array[Tuple[bool, int]] {
-    return bundle[(true, value)]
+    return [(true, value)]'bundle
 }
 
 comptime {

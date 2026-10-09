@@ -1,0 +1,45 @@
+type State {
+    count: int
+}
+
+callback Counter {
+    call(value: int) -> int
+    handler(modify state: State, value: int) -> int
+    setup(handler: Ref[(modify state: State, value: int) -> int],
+          state: Ref[State], should_fail: bool) -> nil fail: int
+}
+
+func handle(modify state: State, value: int) -> int {
+    state.count += value
+    return state.count
+}
+
+func setup(handler: Ref[(modify state: State, value: int) -> int],
+           state: Ref[State], should_fail: bool) -> nil fail: int {
+    if should_fail {
+        fail 7
+    }
+}
+
+func make(input: State, should_fail: bool) -> Counter fail: int {
+    var state = input
+    return callback[Counter](ref handle, ref state, should_fail)!
+}
+
+comptime {} else {
+    var initial: State
+    initial.count = 0
+    try {
+        let counter = make(initial, false)!
+        require counter.call(2) == 2
+    } else err {
+        require false
+    }
+    try {
+        let unused = make(initial, true)!
+        require false
+    } else err {
+        require true
+    }
+    __fd_write(2, "ok")
+}

@@ -736,10 +736,6 @@ grep -Eq 'IR-E0011].*storing array\[int\].*array\[array\[int\]\]' \
     exit 1
 }
 [ "$(grep -c '<new-expr>' "$tmp/array_new_rectangular.tree")" -eq 2 ]
-if grep -A2 '<new-expr>' "$tmp/array_new_rectangular.tree" | grep -q '<tagged-lit>'; then
-    echo 'new[T](...) was parsed as a literal modifier' >&2
-    exit 1
-fi
 
 "$compiler" lower --dump-ir --dump-link-unit \
     "$script_dir/programs/array_new_sized.n00b" \
@@ -3416,7 +3412,7 @@ if "$compiler" lower --dump-ir \
     echo 'unregistered string modifier unexpectedly compiled' >&2
     exit 1
 fi
-grep -q 'no literal handler is registered for this string payload shape' \
+grep -q 'literal handler cannot specialize for this payload' \
     "$tmp/lower_unregistered_string_modifier.out"
 
 if "$compiler" lower --dump-ir \
@@ -3425,7 +3421,7 @@ if "$compiler" lower --dump-ir \
     echo 'unregistered fence modifier unexpectedly compiled' >&2
     exit 1
 fi
-grep -q 'no literal handler is registered for this modifier and payload shape' \
+grep -q 'literal handler cannot specialize for this payload' \
     "$tmp/lower_unregistered_fence_modifier.out"
 
 "$compiler" preprocess "$script_dir/programs/litmod_registration.n00b" \
@@ -3528,7 +3524,7 @@ if "$compiler" lower --dump-ir \
     echo 'string modifier on a non-string literal shape unexpectedly compiled' >&2
     exit 1
 fi
-grep -q 'literal modifier is not supported for this payload shape' \
+grep -q 'literal handler cannot specialize for this payload' \
     "$tmp/lower_unsupported_string_shape.out"
 
 "$compiler" lower --dump-ir "$program_dir/lower_module_initializers.n00b" \
@@ -4268,10 +4264,11 @@ grep -q '= call @imported, %item' "$tmp/lower_import_call.ir"
 
 "$compiler" parse "$program_dir/spaced_index.n00b" >"$tmp/spaced_index.tree"
 grep -q 'postfix-expr' "$tmp/spaced_index.tree"
-! grep -q '<tagged-lit>' "$tmp/spaced_index.tree"
 
 "$compiler" parse "$program_dir/adjacent_prefix.n00b" >"$tmp/adjacent_prefix.tree"
-grep -q '<tagged-lit>' "$tmp/adjacent_prefix.tree"
+grep -q '<simple-lit>' "$tmp/adjacent_prefix.tree"
+"$compiler" lex "$program_dir/adjacent_prefix.n00b" >"$tmp/adjacent_prefix.tokens"
+grep -q "modifier='r" "$tmp/adjacent_prefix.tokens"
 
 "$compiler" preprocess --dump-symbols "$program_dir/literal_shapes.n00b" \
     >"$tmp/literal_shapes.out"

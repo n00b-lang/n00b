@@ -2,6 +2,7 @@ import builtin.gc
 import builtin.gc.collect
 import builtin.gc.finalize
 import builtin.gc.hash
+import builtin.gc.heap
 import builtin.gc.mark
 import builtin.gc.registry
 import builtin.gc.sync
@@ -181,7 +182,7 @@ public func wait_for_cycle(heap: Ref[builtin.gc.Heap]) {
     builtin.gc.sync.ticket_lock(ref heap.lock)
     let found: Ref[byte]? = builtin.gc.hash.tab_lookup(
         ref heap.threads, builtin.os.thread_id())
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
 
     var mine: Ref[builtin.gc.Mutator]? = nil
     if found != nil {
@@ -260,7 +261,7 @@ public func handshake(heap: Ref[builtin.gc.Heap], kind: builtin.gc.Handshake_Kin
         }
         current = mutator.next
     }
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
 
     let limit: u64 = cast[u64](heap.cfg.handshake_timeout_us) * 1000
     while true {
@@ -322,7 +323,7 @@ public func handshake(heap: Ref[builtin.gc.Heap], kind: builtin.gc.Handshake_Kin
         current = mutator.next
     }
     heap.hs_active = false
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
 }
 
 func help_until_quiescent(heap: Ref[builtin.gc.Heap]) {
@@ -335,7 +336,7 @@ func help_until_quiescent(heap: Ref[builtin.gc.Heap]) {
 public func run_handshake_cycle(heap: Ref[builtin.gc.Heap]) {
     builtin.gc.sync.ticket_lock(ref heap.lock)
     if __atomic_load(ref heap.phase) == cast[u32](builtin.gc.Phase.marking) {
-        builtin.gc.sync.ticket_unlock(ref heap.lock)
+        builtin.gc.heap.unlock(heap)
         return
     }
     builtin.gc.collect.begin_epoch_locked(heap)
@@ -351,7 +352,7 @@ public func run_handshake_cycle(heap: Ref[builtin.gc.Heap]) {
     heap.black_alloc = true
     __atomic_store(ref heap.marking, true)
     __atomic_store(ref heap.phase, cast[u32](builtin.gc.Phase.marking))
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
 
     handshake(heap, builtin.gc.Handshake_Kind.on)
     var marker: builtin.gc.Marker
@@ -359,7 +360,7 @@ public func run_handshake_cycle(heap: Ref[builtin.gc.Heap]) {
     builtin.gc.sync.ticket_lock(ref heap.lock)
     builtin.gc.collect.mark_global_roots(ref marker)
     builtin.gc.finalize.mark_locked(ref marker)
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
     builtin.gc.mark.marker_flush(ref marker)
     builtin.gc.mark.marker_stats(ref marker)
 
@@ -371,7 +372,7 @@ public func run_handshake_cycle(heap: Ref[builtin.gc.Heap]) {
             heap.cycle.kind = 2
             builtin.gc.collect.finish_cycle(heap, false)
             heap.hs_fallbacks += 1
-            builtin.gc.sync.ticket_unlock(ref heap.lock)
+            builtin.gc.heap.unlock(heap)
             heap.hs_cycles += 1
             return
         }
@@ -383,7 +384,7 @@ public func run_handshake_cycle(heap: Ref[builtin.gc.Heap]) {
         builtin.gc.collect.mark_global_roots(ref marker)
         builtin.gc.mark.barrier_queue_drain(ref marker)
         builtin.gc.finalize.mark_locked(ref marker)
-        builtin.gc.sync.ticket_unlock(ref heap.lock)
+        builtin.gc.heap.unlock(heap)
         builtin.gc.mark.marker_flush(ref marker)
         if marker.marked != 0 {
             __atomic_store(ref heap.round_dirty, true)
@@ -398,7 +399,7 @@ public func run_handshake_cycle(heap: Ref[builtin.gc.Heap]) {
     builtin.gc.mark.marker_init(ref marker, heap, false)
     builtin.gc.sync.ticket_lock(ref heap.lock)
     builtin.gc.finalize.find_dead_locked(ref marker)
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
     builtin.gc.mark.marker_flush(ref marker)
     builtin.gc.mark.marker_stats(ref marker)
     help_until_quiescent(heap)
@@ -406,18 +407,15 @@ public func run_handshake_cycle(heap: Ref[builtin.gc.Heap]) {
     builtin.gc.sync.ticket_lock(ref heap.lock)
     heap.sweep_ready = false
     builtin.gc.collect.end_epoch_locked(heap)
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
 
     handshake(heap, builtin.gc.Handshake_Kind.sweep)
 
     builtin.gc.sync.ticket_lock(ref heap.lock)
     builtin.gc.collect.prune_owned(heap, false)
     heap.sweep_ready = true
-    heap.cycle.kind = 1
-    heap.cycle.duration_ns = builtin.os.now_ns() - heap.cycle_start
-    heap.cycle.rounds = cast[u32](heap.hs_rounds) - heap.cycle.rounds
-    heap.cycle.stragglers = cast[u32](heap.hs_stragglers) - heap.cycle.stragglers
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.collect.emit_cycle(heap, 1)
+    builtin.gc.heap.unlock(heap)
 
     heap.hs_cycles += 1
     builtin.gc.sync.event_signal(ref heap.work_progress)

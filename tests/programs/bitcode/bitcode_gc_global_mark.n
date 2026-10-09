@@ -11,10 +11,27 @@ import builtin.gc.roots
 import builtin.os
 import gc_root_support
 
+variant Root_Variant {
+    payload: Ref[byte]
+    empty: nil
+}
+
+type Nested_Arm {
+    child: Ref[byte]?
+}
+
+variant Nested_Root {
+    data: Nested_Arm
+    empty: nil
+}
+
 var static_root: Ref[byte]? = nil
 var rooted_text: string = "this is a long static string root"
+var variant_root: Root_Variant
+var nested_root: Nested_Root
 
 comptime {} else {
+    variant_root = new[Root_Variant]()
     let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(nil)
     if created != nil {
         let heap: Ref[builtin.gc.Heap] = created.get()
@@ -74,7 +91,9 @@ comptime {} else {
                             builtin.gc.roots.pop(mutator, 0)
                             assert !builtin.gc.mark.is_marked(heap, third.get())
                             __atomic_store(ref heap.marking, true)
-                            builtin.gc.mark.write_barrier(mutator, third)
+                            builtin.gc.mark.barrier_pointer(mutator, slot_map.get())
+                            assert mutator.write_buffer_count == 0
+                            builtin.gc.mark.barrier_pointer(mutator, third)
                             assert mutator.write_buffer_count == 1
                             __atomic_store(ref heap.hs_kind,
                                 cast[u32](builtin.gc.Handshake_Kind.scan))
@@ -134,6 +153,37 @@ comptime {} else {
                                 builtin.gc.collect.mark_global_roots(marker)
                                 assert builtin.gc.mark.is_marked(heap, imported.get())
                                 gc_root_support.imported_root = nil
+                            } else { require false }
+                            let variant_value: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, type_index, 8,
+                                builtin.gc.granule_bytes, false)
+                            if variant_value != nil {
+                                assert !builtin.gc.mark.is_marked(heap, variant_value.get())
+                                variant_root.payload = variant_value.get()
+                                switch variant_root {
+                                    case payload {
+                                        assert variant_root.payload == variant_value.get()
+                                    }
+                                    case empty { require false }
+                                }
+                                builtin.gc.collect.mark_global_roots(marker)
+                                assert builtin.gc.mark.is_marked(heap, variant_value.get())
+                                variant_root.empty = nil
+                                switch variant_root {
+                                    case payload { require false }
+                                    case empty {}
+                                }
+                                variant_root = new[Root_Variant]()
+                            } else { require false }
+                            let nested_value: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, type_index, 8,
+                                builtin.gc.granule_bytes, false)
+                            if nested_value != nil {
+                                assert !builtin.gc.mark.is_marked(heap, nested_value.get())
+                                nested_root.data = (child = nested_value)
+                                builtin.gc.collect.mark_global_roots(marker)
+                                assert builtin.gc.mark.is_marked(heap, nested_value.get())
+                                nested_root.empty = nil
                             } else { require false }
                             let words_before: uint = marker.stack_words
                             heap.cfg.scan_stacks = true

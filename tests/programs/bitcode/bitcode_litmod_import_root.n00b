@@ -7,7 +7,7 @@ func make_forwarded(raw: string) -> int fail: string {
 }
 
 func forwarded_value() -> int {
-    return forwarded"root"
+    return "root"'forwarded
 }
 
 comptime {

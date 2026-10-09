@@ -5,5 +5,5 @@ func reject_text(raw: string) -> string fail: string {
 }
 
 func value() -> string {
-    return reject"hello"
+    return "hello"'reject
 }

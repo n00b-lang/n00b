@@ -10,9 +10,9 @@ func is_no(raw: string) -> bool fail: string {
 }
 
 comptime {
-    require yes"yes"
-    require no"no" == false
+    require "yes"'yes
+    require "no"'no == false
 } else {
-    require yes"yes"
-    require no"no" == false
+    require "yes"'yes
+    require "no"'no == false
 }

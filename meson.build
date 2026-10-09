@@ -27,6 +27,21 @@ install_data(
     install_dir: get_option('datadir') / 'n00bb',
 )
 
+runtime_abi_headers = lantern.partial_dependency(
+    compile_args: true, includes: true,
+)
+
+runtime_abi_support = static_library(
+    'n00b-abi-runtime',
+    ['runtime_abi.c', 'runtime_allocate.c', 'runtime_abi_io.c',
+     'runtime_abi_storage.c', 'native_frame_runtime.c', 'builtin_os.c',
+     'builtin_os_stw.c',
+     'builtin_abi.c', 'abi_directory.c', 'abi_string.c'],
+    dependencies: runtime_abi_headers,
+    override_options: ['optimization=1'],
+    install: true,
+)
+
 n00bb_exe = executable(
     'n00bb',
     ['main.c', 'driver.c', 'preprocessor.c', 'rich_string.c', 'abi_string.c',
@@ -40,25 +55,11 @@ n00bb_exe = executable(
      'abi_function_rows.c', 'abi_constraint_rows.c', 'abi_storage.c',
      'abi_trait_method_rows.c',
      'abi_type_signatures.c', 'abi_decl_index.c', 'abi_declarations.c',
-     'llvm_backend.c',
+     'llvm_backend.c', 'llvm_stack_maps.c', 'native_frame_maps.c',
      'global_metadata.c',
      'storage_selection.c'],
     dependencies: [lantern, llvm],
-    install: true,
-)
-
-runtime_abi_headers = lantern.partial_dependency(
-    compile_args: true, includes: true,
-)
-
-runtime_abi_support = static_library(
-    'n00b-abi-runtime',
-    ['runtime_abi.c', 'runtime_allocate.c', 'runtime_abi_io.c',
-     'runtime_abi_storage.c', 'builtin_os.c',
-     'builtin_os_stw.c',
-     'builtin_abi.c', 'abi_directory.c', 'abi_string.c'],
-    dependencies: runtime_abi_headers,
-    override_options: ['optimization=1'],
+    link_with: runtime_abi_support,
     install: true,
 )
 
@@ -174,6 +175,13 @@ test(
     n00bb_exe,
     args: ['lower', meson.current_source_dir() / 'tests' / 'programs'
         / 'unsigned_literal_context.n'],
+)
+
+test(
+    'unsafe-ref-cast',
+    n00bb_exe,
+    args: ['lower', meson.current_source_dir() / 'tests' / 'programs'
+        / 'unsafe_ref_cast.n'],
 )
 
 abi_record_layout_test = executable(
@@ -343,6 +351,22 @@ llvm_backend_test = executable(
 
 test('llvm-backend', llvm_backend_test)
 
+llvm_stack_maps_test = executable(
+    'llvm-stack-maps-test',
+    ['tests/llvm_stack_maps.c', 'llvm_stack_maps.c',
+     'native_frame_maps.c'],
+    dependencies: [lantern, llvm],
+)
+test('llvm-stack-maps', llvm_stack_maps_test)
+
+llvm_frame_roots_test = executable(
+    'llvm-frame-roots-test',
+    ['tests/llvm_frame_roots.c', 'llvm_backend.c',
+     'llvm_stack_maps.c', 'native_frame_maps.c', 'runtime_native_roots.c'],
+    dependencies: [lantern, llvm],
+)
+test('llvm-frame-roots', llvm_frame_roots_test)
+
 test(
     'builtin-os-n00b',
     find_program('sh'),
@@ -362,12 +386,30 @@ test(
 )
 
 test(
+    'thread-global-pair-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_thread_global_pair.n'],
+)
+
+test(
     'atomic-global-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_atomic_global.n'],
+)
+
+test(
+    'comptime-c-record-deferred-array-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_comptime_c_record_deferred_array.n'],
 )
 
 test(
@@ -497,6 +539,53 @@ test(
 )
 
 test(
+    'gc-array-backing-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_array_backing.n'],
+)
+
+test(
+    'gc-finalizer-cycle-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_finalizer_cycle.n'],
+)
+
+test(
+    'operator-newline-parse',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'operator_newline.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'operator_newline_continuation.n',
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'operator_double_newline_rejected.n'],
+)
+
+test(
+    'operator-newline-bitcode',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_operator_newlines.n'],
+)
+
+test(
+    'gc-empty-array-backing-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_empty_array_backing.n'],
+)
+
+test(
     'typeof-storage-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
@@ -571,12 +660,33 @@ test(
 )
 
 test(
+    'gc-known-finalizer-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_known_finalizer.n'],
+)
+
+test(
     'gc-escaped-record-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_escaped_record.n'],
+)
+
+test(
+    'storage-analysis-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'storage_analysis_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_nominal_scalar_storage.n',
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_escaped_record.n'],
+    env: ['N00B_PATH=' + meson.current_source_dir() / 'lib'],
 )
 
 test(
@@ -655,6 +765,14 @@ test(
 )
 
 test(
+    'indirect-global-init-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'indirect_global_init.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'],
+)
+
+test(
     'gc-new-pruned-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
@@ -681,6 +799,27 @@ test(
                / 'bitcode_gc_worker_shutdown.n'],
 )
 
+if host_machine.system() == 'darwin'
+    gc_worker_thread_object = custom_target(
+        'gc-worker-thread-object',
+        input: 'tests/gc_worker_thread.c',
+        output: 'gc-worker-thread.o',
+        command: [find_program('cc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
+                  '-c', '@INPUT@', '-o', '@OUTPUT@'],
+        build_by_default: true,
+    )
+    test(
+        'gc-worker-live-n00b',
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+                   / 'bitcode_gc_worker_live.n',
+               gc_worker_thread_object.full_path(),
+               'builtin.gc.collect.worker'],
+    )
+endif
+
 test(
     'option-guard-flow-n00b',
     find_program('sh'),
@@ -706,6 +845,23 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_array_index_write.n'],
+)
+
+test(
+    'array-value-index-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_array_value_index.n'],
+)
+
+test(
+    'shift-count-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'shift_count_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'],
 )
 
 test(
@@ -780,6 +936,15 @@ test(
                / 'bitcode_numeric_casts.n',
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_numeric_cast_trap.n'],
+)
+
+test(
+    'nominal-casts-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_nominal_cast.n'],
 )
 
 test(
@@ -974,6 +1139,15 @@ test(
 )
 
 test(
+    'inline-n00b',
+    find_program('sh'),
+    suite: 'regression',
+    args: [meson.current_source_dir() / 'tests' / 'inline_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'inline'],
+)
+
+test(
     'preprocessor',
     find_program('sh'),
     suite: 'regression',
@@ -986,3 +1160,24 @@ test(
         + get_option('stack_object_limit_bytes').to_string()],
     timeout: 120,
 )
+
+foreach fixture : [
+    'bitcode_any_box.n',
+    'bitcode_callback.n',
+    'bitcode_callback_state.n',
+    'bitcode_callback_state_ref.n',
+    'bitcode_callback_setup.n',
+    'bitcode_callback_failure.n',
+    'bitcode_callback_setup_failure.n',
+    'bitcode_callback_handler_ref.n',
+]
+    test(
+        fixture,
+        find_program('sh'),
+        suite: 'regression',
+        args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+                   / fixture],
+    )
+endforeach

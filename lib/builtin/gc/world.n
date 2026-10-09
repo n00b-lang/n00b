@@ -22,15 +22,18 @@ public func stop(heap: Ref[builtin.gc.Heap]) {
         }
         current = mutator.next
     }
+    builtin.os.thread_fence()
 }
 
 public func start(heap: Ref[builtin.gc.Heap]) {
     let owner: uint = builtin.os.thread_id()
     require __atomic_load(ref world_owner) == owner
+    builtin.os.thread_fence()
     var current: Ref[builtin.gc.Mutator]? = heap.mutators
     while current != nil {
         let mutator: Ref[builtin.gc.Mutator] = current.get()
-        if mutator.ctx_valid {
+        if mutator.thread_primary and mutator.thread_id != owner {
+            require mutator.ctx_valid
             require builtin.os.thread_resume(mutator.thread_control,
                                              ref mutator.captured) == 0
         }

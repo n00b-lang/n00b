@@ -214,7 +214,7 @@ func find_block_object(base: Ref[byte], address: uint) -> Ref[builtin.gc.Object_
 
     let granule: uint = offset / builtin.gc.granule_bytes
     var word: uint = granule / builtin.gc.word_bits
-    var bits: u64 = __atomic_load(builtin.gc.start_word_at(base, word))
+    var bits: u64 = __atomic_load_relaxed(builtin.gc.start_word_at(base, word))
     let bit: uint = granule % builtin.gc.word_bits
     if bit != builtin.gc.word_bits - 1 {
         bits = bits & ((cast[u64](1) << (bit + 1)) - 1)
@@ -222,7 +222,7 @@ func find_block_object(base: Ref[byte], address: uint) -> Ref[builtin.gc.Object_
     while bits == 0 {
         if word == header_granules / builtin.gc.word_bits { return nil }
         word -= 1
-        bits = __atomic_load(builtin.gc.start_word_at(base, word))
+        bits = __atomic_load_relaxed(builtin.gc.start_word_at(base, word))
     }
 
     let start: uint = word * builtin.gc.word_bits + cast[uint](highest_bit(cast[uint](bits)))

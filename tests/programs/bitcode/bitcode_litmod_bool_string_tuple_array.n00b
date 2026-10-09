@@ -5,8 +5,8 @@ func identity(items: Array[Tuple[bool, string]]) -> Array[Tuple[bool, string]] f
 }
 
 func values() -> Array[Tuple[bool, string]] {
-    return bundle[(true, "a long first string"),
-                  (false, "a long second string")]
+    return [(true, "a long first string"),
+                  (false, "a long second string")]'bundle
 }
 
 comptime {

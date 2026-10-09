@@ -5,7 +5,7 @@ func parse_echo(raw: string) -> string fail: string {
 }
 
 func value() -> string {
-    return echo"hello"
+    return "hello"'echo
 }
 
 comptime {

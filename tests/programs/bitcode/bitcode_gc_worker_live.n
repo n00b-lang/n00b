@@ -1,0 +1,85 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.alloc
+import builtin.gc.collect
+import builtin.gc.handshake
+import builtin.gc.heap
+import builtin.gc.los
+import builtin.gc.mark
+import builtin.gc.mutator
+import builtin.gc.roots
+import builtin.gc.sync
+import builtin.os
+
+var worker_heap: Atomic[Ref[builtin.gc.Heap]?] = nil
+thread var tls_root: Ref[byte]? = nil
+
+comptime {} else {
+    var config: builtin.gc.Config
+    builtin.gc.heap.config_default(ref config)
+    config.scan_stacks = false
+    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(ref config)
+    if created != nil {
+        let heap: Ref[builtin.gc.Heap] = created.get()
+        let attached: Ref[builtin.gc.Mutator]? = builtin.gc.mutator.create(heap)
+        if attached != nil {
+            let mutator: Ref[builtin.gc.Mutator] = attached.get()
+            let probe: byte = 0
+            let object: Ref[byte]? = builtin.gc.alloc.allocate_large(mutator,
+                cast[u32](typeof(probe)), builtin.gc.los.los_threshold + 1,
+                builtin.gc.granule_bytes, false)
+            require object != nil
+            tls_root = object
+            var saw_tls_root: bool = false
+            var tls_index: uint = 0
+            while tls_index < mutator.ntls_roots {
+                let entry: Ref[builtin.gc.roots.TLS_Root_Entry] = builtin.gc.roots.tls_root_at(mutator, tls_index)
+                if __abi_ref_address(entry.address) == __abi_ref_address(ref tls_root) {
+                    let root_type: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(entry.type_index)
+                    require root_type != nil
+                    require root_type.get().tracing_index != 0
+                    saw_tls_root = true
+                }
+                tls_index += 1
+            }
+            require saw_tls_root
+
+            __atomic_store(ref worker_heap, heap)
+            let deadline: u64 = builtin.os.now_ns() + 5000000000
+            while __atomic_load(ref heap.nworkers) == 0 {
+                require builtin.os.now_ns() < deadline
+                builtin.os.thread_yield()
+            }
+
+            builtin.gc.collect.request_cycle(heap)
+            var complete: bool = false
+            while !complete {
+                builtin.gc.handshake.safepoint(mutator)
+                builtin.gc.sync.ticket_lock(ref heap.lock)
+                complete = heap.collections != 0
+                builtin.gc.heap.unlock(heap)
+                require complete or builtin.os.now_ns() < deadline
+                builtin.os.thread_yield()
+            }
+            if tls_root != nil {
+                require builtin.gc.mark.is_marked(heap, tls_root.get())
+            } else { require false }
+
+            builtin.gc.collect.collect(heap)
+            require heap.collections >= 2
+            if tls_root != nil {
+                require builtin.gc.mark.is_marked(heap, tls_root.get())
+            } else { require false }
+
+            __atomic_store(ref heap.shutdown, true)
+            while __atomic_load(ref heap.nworkers) != 0 {
+                require builtin.os.now_ns() < deadline
+                builtin.os.thread_yield()
+            }
+            tls_root = nil
+            builtin.gc.mutator.destroy(mutator)
+            builtin.gc.heap.destroy(heap)
+            __fd_write(2, "ok")
+        } else { require false }
+    } else { require false }
+}

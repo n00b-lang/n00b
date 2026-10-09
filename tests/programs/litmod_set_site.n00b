@@ -1,17 +1,17 @@
 declare_litmod("mirror", "set", "build_set")
 
 func build_set(items: Array[int]) -> Set[int] fail: string {
-    return s{1, 2}
+    return {1, 2}'s
 }
 
 func static_set() -> Set[int] {
-    return mirror{1, 2}
+    return {1, 2}'mirror
 }
 
 func dynamic_set(x: int) -> Set[int] {
-    return mirror{x, 2}
+    return {x, 2}'mirror
 }
 
 func empty_set() -> Set[int] {
-    return mirror{}
+    return {}'mirror
 }

@@ -13,6 +13,7 @@ public const block_magic: u32 = 0x6d616e69
 public const cache_max: uint = 8
 public const los_classes: uint = 256
 public const obj_large: u64 = 1 << 0
+public const obj_array_backing: u64 = 1 << 1
 public const obj_final: u64 = 1 << 3
 const empty_word: u64 = 0
 const mark_clearing: u32 = 0x80000000
@@ -25,13 +26,91 @@ public type Object_Header layout(c) {
     public meta: u64
 }
 
-public func meta_make(payload_bytes: u64, flags: u32) -> u64 {
+public inline func meta_make(payload_bytes: u64, flags: u32) -> u64 {
     require payload_bytes <= (~cast[u64](0) >> meta_flag_bits)
     return (payload_bytes << meta_flag_bits) | (cast[u64](flags) & meta_flag_mask)
 }
 
 public func meta_payload_bytes(meta: u64) -> u64 {
     return meta >> meta_flag_bits
+}
+
+public func array_descriptor_at(address: Ref[byte]) -> Ref[builtin.abi.Array_Descriptor_Header] {
+    return unsafe_cast[Ref[builtin.abi.Array_Descriptor_Header]] address
+}
+
+public func array_flat_element_index(type_index: u32, flat_rank: u32) -> u32 {
+    var current: u32 = type_index
+    var level: u32 = 0
+    while level < flat_rank {
+        let array: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(current)
+        if array != nil {
+            if array.get().kind != cast[u32](builtin.abi.Type_Kind.array_type) {
+                return 0
+            }
+            let component: i64 = builtin.abi.range_index(array.get().components, 0)
+            if component <= 0 { return 0 }
+            current = cast[u32] component
+        } else {
+            return 0
+        }
+        level += 1
+    }
+    return current
+}
+
+public func array_flat_element(type_index: u32, flat_rank: u32) -> Ref[builtin.abi.Type_Record]? {
+    let index: u32 = array_flat_element_index(type_index, flat_rank)
+    if index == 0 { return nil }
+    return builtin.abi.type_at(index)
+}
+
+public func array_backing_offset(type_index: u32,
+                                 shape: Ref[builtin.abi.Array_Descriptor_Header]) -> uint {
+    if shape.rank == 0 or shape.flat_rank == 0 or
+        shape.flat_rank > shape.rank { return 0 }
+    let element: Ref[builtin.abi.Type_Record]? = array_flat_element(
+        type_index, shape.flat_rank)
+    if element == nil { return 0 }
+    let alignment: uint = builtin.abi.alignment_bytes(element.get())
+    if alignment == 0 or (alignment & (alignment - 1)) != 0 { return 0 }
+    let shape_row: Ref[builtin.abi.Type_Record]? = builtin.abi.reference_target(
+        typeof(shape))
+    if shape_row == nil { return 0 }
+    let maximum: uint = ~cast[uint](0)
+    let header_bytes: uint = builtin.abi.size_bytes(shape_row.get())
+    if cast[uint](shape.rank) > (maximum - header_bytes) / 8 { return 0 }
+    let descriptor_bytes: uint = header_bytes + cast[uint](shape.rank) * 8
+    var data_alignment: uint = alignment
+    if data_alignment < 8 { data_alignment = 8 }
+    if descriptor_bytes > maximum - data_alignment + 1 { return 0 }
+    return (descriptor_bytes + data_alignment - 1) / data_alignment * data_alignment
+}
+
+public func initialize_array_backing(payload: Ref[byte], payload_bytes: uint,
+                                     type_index: u32, descriptor: Ref[byte]) -> bool {
+    let shape: Ref[builtin.abi.Array_Descriptor_Header] = array_descriptor_at(descriptor)
+    let offset: uint = array_backing_offset(type_index, shape)
+    if offset == 0 or offset > payload_bytes { return false }
+    let element: Ref[builtin.abi.Type_Record]? = array_flat_element(
+        type_index, shape.flat_rank)
+    if element == nil { return false }
+    let alignment: uint = builtin.abi.alignment_bytes(element.get())
+    let element_bytes: uint = builtin.abi.size_bytes(element.get())
+    if alignment == 0 or element_bytes > ~cast[uint](0) - alignment + 1 {
+        return false
+    }
+    let stride: uint = (element_bytes + alignment - 1) / alignment * alignment
+    if stride == 0 or shape.total_count > cast[u64]((payload_bytes - offset) / stride) {
+        return false
+    }
+    let shape_row: Ref[builtin.abi.Type_Record]? = builtin.abi.reference_target(
+        typeof(shape))
+    if shape_row == nil { return false }
+    let descriptor_bytes: uint = builtin.abi.size_bytes(shape_row.get()) + cast[uint](shape.rank) * 8
+    __gc_memset(payload, 0, payload_bytes)
+    __gc_memcpy(payload, descriptor, descriptor_bytes)
+    return true
 }
 
 public enum Block_State { owned, retired, free, recyclable, full }
@@ -79,35 +158,47 @@ public type Los_Obj layout(c) {
     public hdr: Object_Header
 }
 
-public func object_header_bytes() -> uint {
+func resolve_object_header_bytes() -> uint {
     let probe: Ref[Object_Header]? = nil
     let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
     if row != nil { return builtin.abi.size_bytes(row.get()) }
     require false
 }
 
-public func object_bytes(header: Ref[Object_Header]) -> uint {
+var object_header_size: uint = 0
+var block_header_line_count: uint = 0
+
+comptime {} else {
+    object_header_size = resolve_object_header_bytes()
+    block_header_line_count = resolve_header_lines()
+}
+
+public inline func object_header_bytes() -> uint {
+    return object_header_size
+}
+
+public inline func object_bytes(header: Ref[Object_Header]) -> uint {
     return object_header_bytes() + cast[uint](meta_payload_bytes(header.meta))
 }
 
-public func payload_of(header: Ref[Object_Header]) -> Ref[byte] {
+public inline func payload_of(header: Ref[Object_Header]) -> Ref[byte] {
     return __gc_byte_offset(unsafe_cast[Ref[byte]] header, object_header_bytes())
 }
 
-public func header_of(payload: Ref[byte]) -> Ref[Object_Header] {
+public inline func header_of(payload: Ref[byte]) -> Ref[Object_Header] {
     let distance: i128 = cast[i128](object_header_bytes())
     let base: Ref[byte] = __gc_byte_offset(payload, -distance)
     return unsafe_cast[Ref[Object_Header]] base
 }
 
-public func block_of_bytes(address_in_block: Ref[byte]) -> Ref[Block_Metadata] {
+public inline func block_of_bytes(address_in_block: Ref[byte]) -> Ref[Block_Metadata] {
     let address: uint = __abi_ref_address(address_in_block)
     let distance: i128 = cast[i128](address % block_bytes)
     let base: Ref[byte] = __gc_byte_offset(address_in_block, -distance)
     return block_metadata_at(base)
 }
 
-public func block_of(header: Ref[Object_Header]) -> Ref[Block_Metadata] {
+public inline func block_of(header: Ref[Object_Header]) -> Ref[Block_Metadata] {
     return block_of_bytes(unsafe_cast[Ref[byte]] header)
 }
 
@@ -146,16 +237,6 @@ public func los_of(header: Ref[Object_Header]) -> Ref[Los_Obj] {
     return unsafe_cast[Ref[Los_Obj]] base
 }
 
-public type Config layout(c) {
-    public initial_heap_bytes: uint
-    public growth_factor: f64
-    public max_heap_bytes: uint
-    public poison_free: bool
-    public handshake_timeout_us: u32
-    public scan_stacks: bool
-    public world_timeout_ms: u32
-}
-
 public type Cycle_Info layout(c) {
     public epoch: u64
     public kind: i32
@@ -169,6 +250,63 @@ public type Cycle_Info layout(c) {
     public allocated_bytes: uint
 }
 
+public type Config layout(c) {
+    public initial_heap_bytes: uint
+    public growth_factor: f64
+    public max_heap_bytes: uint
+    public poison_free: bool
+    public handshake_timeout_us: u32
+    public scan_stacks: bool
+    public world_timeout_ms: u32
+    public finalizer_backlog_limit: uint
+    public finalizer_assist: bool
+    public on_pause: Ref[(u64, Ref[byte]?) -> nil]?
+    public on_cycle: Ref[(Cycle_Info, Ref[byte]?) -> nil]?
+    public finalizers_ready: Ref[(Ref[byte]?) -> nil]?
+    public telemetry_user: Ref[byte]?
+}
+
+public type Stats layout(c) {
+    public collections: u64
+    public objects_allocated: u64
+    public bytes_allocated: u64
+    public blocks_total: uint
+    public blocks_free: uint
+    public blocks_recyclable: uint
+    public blocks_full: uint
+    public blocks_owned: uint
+    public los_objects: uint
+    public los_bytes: uint
+    public last_marked_objects: uint
+    public last_marked_bytes: uint
+    public committed_bytes: uint
+    public live_bytes: uint
+    public target_bytes: uint
+    public alloc_budget: uint
+    public alloc_since_gc: uint
+    public refills: u64
+    public locked_refills: u64
+    public last_stack_words: uint
+    public last_frame_slots: uint
+    public last_conservative_hits: uint
+    public last_worker_objects: uint
+    public blocks_unswept: uint
+    public workers: u32
+    public phase: i32
+    public pauses: u64
+    public last_pause_ns: u64
+    public max_pause_ns: u64
+    public total_pause_ns: u64
+    public hs_cycles: u64
+    public hs_rounds: u64
+    public hs_stragglers: u64
+    public hs_blocking: u64
+    public hs_fallbacks: u64
+    public hs_alloc_waits: u64
+    public finalizers_pending: uint
+    public finalizers_run: u64
+}
+
 public type Final_Entry layout(c) {
     public payload: Ref[byte]
 }
@@ -178,11 +316,6 @@ public type Final_Batch layout(c) {
     public n: uint
     public next: Ref[Final_Batch]?
     public prev: Ref[Final_Batch]?
-}
-
-public type Global_Root_Entry layout(c) {
-    public slot: Ref[Ref[byte]?]
-    public index: uint
 }
 
 public type Event layout(c) {
@@ -325,7 +458,7 @@ public type Heap layout(c) {
     public globals: Ref[byte]?
     public nglobals: uint
     public cap_globals: uint
-    public global_index: builtin.gc.hash.Hash_Tab
+    public global_index: builtin.gc.hash.Index_Tab
     public epoch: u32
     public mark_epoch: u32
     public black_alloc: bool
@@ -346,6 +479,8 @@ public type Heap layout(c) {
     public pause_start: u64
     public pauses: u64
     public last_pause_ns: u64
+    public max_pause_ns: u64
+    public total_pause_ns: u64
 }
 
 public type Mutator layout(c) {
@@ -363,6 +498,8 @@ public type Mutator layout(c) {
     public roots: Ref[byte]?
     public nroots: uint
     public cap_roots: uint
+    public tls_roots: Ref[byte]?
+    public ntls_roots: uint
     public write_buffer: (Ref[byte]?)[write_buffer_cap]
     public write_buffer_count: uint
     public write_buffer_epoch: u32
@@ -394,13 +531,13 @@ public func over_max(heap: Ref[Heap], request: uint) -> bool {
         request > heap.cfg.max_heap_bytes - used
 }
 
-public func bump_room(b: Ref[Bump]) -> uint {
+public inline func bump_room(b: Ref[Bump]) -> uint {
     let cursor: Ref[byte]? = b.cursor
     let limit: Ref[byte]? = b.limit
     if cursor != nil {
         if limit != nil {
             let distance: int = __gc_byte_diff(limit.get(), cursor.get())
-            require distance >= 0
+            assert distance >= 0
             return cast[uint](distance)
         }
         require false
@@ -418,13 +555,13 @@ public func cache_pop(b: Ref[Bump]) -> Ref[Block_Metadata]? {
     return list
 }
 
-public func block_metadata_at(base: Ref[byte]) -> Ref[Block_Metadata] {
-    require __abi_ref_address(base) % block_bytes == 0
+public inline func block_metadata_at(base: Ref[byte]) -> Ref[Block_Metadata] {
+    assert __abi_ref_address(base) % block_bytes == 0
     return unsafe_cast[Ref[Block_Metadata]] base
 }
 
-public func block_base(block: Ref[Block_Metadata]) -> Ref[byte] {
-    require __abi_ref_address(block) % block_bytes == 0
+public inline func block_base(block: Ref[Block_Metadata]) -> Ref[byte] {
+    assert __abi_ref_address(block) % block_bytes == 0
     return unsafe_cast[Ref[byte]] block
 }
 
@@ -539,7 +676,7 @@ public func take_batch(heap: Ref[Heap], mutator: Ref[Mutator],
     return list
 }
 
-public func header_lines() -> uint {
+func resolve_header_lines() -> uint {
     let probe: Ref[Block_Metadata]? = nil
     let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
     if row != nil {
@@ -547,6 +684,10 @@ public func header_lines() -> uint {
         return (metadata_bytes + line_bytes - 1) / line_bytes
     }
     require false
+}
+
+public inline func header_lines() -> uint {
+    return block_header_line_count
 }
 
 public func bump_attach(mutator: Ref[Mutator], bump: Ref[Bump],
@@ -592,27 +733,25 @@ public func block_init(heap: Ref[Heap], blk: Ref[Block_Metadata]) {
     heap.nblocks += 1
 }
 
-public func block_mark_word(block: Ref[Block_Metadata], index: uint) -> Ref[Atomic[u64]] {
-    require index < bitmap_words
+public inline func block_mark_word(block: Ref[Block_Metadata], index: uint) -> Ref[Atomic[u64]] {
     return ref block.mark_bits [index]
 }
 
-public func block_start_word(block: Ref[Block_Metadata], index: uint) -> Ref[Atomic[u64]] {
-    require index < bitmap_words
+public inline func block_start_word(block: Ref[Block_Metadata], index: uint) -> Ref[Atomic[u64]] {
     return ref block.start_bits [index]
 }
 
-public func mark_word_at(base: Ref[byte], index: uint) -> Ref[Atomic[u64]] {
+public inline func mark_word_at(base: Ref[byte], index: uint) -> Ref[Atomic[u64]] {
     return block_mark_word(block_metadata_at(base), index)
 }
 
-public func start_word_at(base: Ref[byte], index: uint) -> Ref[Atomic[u64]] {
+public inline func start_word_at(base: Ref[byte], index: uint) -> Ref[Atomic[u64]] {
     return block_start_word(block_metadata_at(base), index)
 }
 
 func bitmap_contains(word: Ref[Atomic[u64]], bit: uint) -> bool {
     let mask: u64 = cast[u64](1) << bit
-    let bits: u64 = __atomic_load(word)
+    let bits: u64 = __atomic_load_relaxed(word)
     return (bits & mask) != empty_word
 }
 
@@ -623,14 +762,14 @@ public func object_started(base: Ref[byte], offset: uint) -> bool {
 }
 
 public func clear_mark_word(base: Ref[byte], index: uint) {
-    __atomic_store(mark_word_at(base, index), empty_word)
+    __atomic_store_relaxed(mark_word_at(base, index), empty_word)
 }
 
 public func ensure_mark_epoch(base: Ref[byte], epoch: u32) {
     require (epoch & mark_clearing) == 0
     let metadata: Ref[Block_Metadata] = block_metadata_at(base)
     let word: Ref[Atomic[u32]] = ref metadata.mark_epoch
-    var seen: u32 = __atomic_load(word)
+    var seen: u32 = __atomic_load_acquire(word)
     while seen != epoch {
         if (seen & mark_clearing) == 0 {
             if __atomic_compare_exchange(word, seen,
@@ -641,11 +780,11 @@ public func ensure_mark_epoch(base: Ref[byte], epoch: u32) {
                     clear_mark_word(base, index)
                     index += 1
                 }
-                __atomic_store(word, epoch)
+                __atomic_store_release(word, epoch)
                 return
             }
         }
-        seen = __atomic_load(word)
+        seen = __atomic_load_acquire(word)
     }
 }
 
@@ -658,19 +797,20 @@ public func raise_black(metadata: Ref[Block_Metadata], epoch: u32) {
     }
 }
 
-func line_mark_at(base: Ref[byte], line: uint) -> Ref[Atomic[u8]] {
+inline func line_mark_at(base: Ref[byte], line: uint) -> Ref[Atomic[u8]] {
     require line < block_bytes / line_bytes
     let metadata: Ref[Block_Metadata] = block_metadata_at(base)
     return ref metadata.line_marks [line]
 }
 
-public func line_marked_in(base: Ref[byte], line: uint, epoch: u32) -> bool {
-    let mark: u8 = __atomic_load(line_mark_at(base, line))
+public inline func line_marked_in(base: Ref[byte], line: uint, epoch: u32) -> bool {
+    let mark: u8 = __atomic_load_relaxed(line_mark_at(base, line))
     return mark == cast[u8](cast[uint](epoch) % 256)
 }
 
-public func mark_lines(base: Ref[byte], offset: uint, bytes: uint,
+public inline func mark_lines(base: Ref[byte], offset: uint, bytes: uint,
                        epoch: u32) {
+    let mark: u8 = cast[u8](cast[uint](epoch) % 256)
     let first: uint = offset / line_bytes
     var last: uint = first
     if bytes > line_bytes {
@@ -678,20 +818,20 @@ public func mark_lines(base: Ref[byte], offset: uint, bytes: uint,
     }
     var line: uint = first
     while line <= last {
-        __atomic_store(line_mark_at(base, line), cast[u8](epoch))
+        __atomic_store_relaxed(line_mark_at(base, line), mark)
         line += 1
     }
 }
 
-func line_live(base: Ref[byte], line: uint) -> bool {
+inline func line_live(base: Ref[byte], line: uint) -> bool {
     let metadata: Ref[Block_Metadata] = block_metadata_at(base)
-    let mark: u8 = __atomic_load(line_mark_at(base, line))
-    let sweep: u8 = cast[u8](metadata.sweep_epoch)
+    let mark: u8 = __atomic_load_relaxed(line_mark_at(base, line))
+    let sweep: u8 = cast[u8](cast[uint](metadata.sweep_epoch) % 256)
     return mark == sweep or mark == cast[u8](
         (cast[uint](sweep) + 1) % 256)
 }
 
-func line_used(base: Ref[byte], line: uint) -> bool {
+inline func line_used(base: Ref[byte], line: uint) -> bool {
     if line_live(base, line) { return true }
     if line > header_lines() {
         return line_live(base, line - 1)

@@ -684,6 +684,7 @@ link_selected_objects(
     const n00bb_abi_selected_objects_t *selected,
     const core_target_desc_t *target,
     n00bb_abi_link_semantics_fn semantics, void *context,
+    n00bb_abi_link_validation_fn validate, void *validation_context,
     uint8_t **out_object, size_t *out_object_bytes,
     const char **failure_stage,
     n00bb_abi_index_plan_failure_t *plan_failure,
@@ -826,12 +827,45 @@ link_selected_objects(
         valid = n00bb_abi_name_pool_relocations(merged.strings, entries,
             row_count, &pool_relocations, &pool_relocation_count);
 
+    if (valid && validate) {
+        stage = "final metadata validation";
+        uint8_t *resolved = core_alloc_size(1, packed.byte_count);
+        if (resolved) memcpy(resolved, packed.bytes, packed.byte_count);
+        const uint8_t *pool = n00bb_abi_name_pool_bytes(merged.strings);
+        for (size_t i = 0; resolved && valid
+             && i < pool_relocation_count; i++) {
+            const core_object_emit_absolute64_t *relocation =
+                &pool_relocations[i];
+            valid = pool
+                && relocation->section_index == 1
+                && relocation->section_offset <= packed.byte_count
+                && packed.byte_count - relocation->section_offset
+                    >= sizeof(uintptr_t)
+                && relocation->addend_bits <
+                    n00bb_abi_name_pool_size(merged.strings);
+            if (valid) {
+                uintptr_t address = (uintptr_t)(pool
+                    + relocation->addend_bits);
+                memcpy(resolved + relocation->section_offset,
+                       &address, sizeof(address));
+            }
+        }
+        if (valid && resolved)
+            valid = validate(resolved, packed.byte_count,
+                             validation_context);
+        else valid = false;
+        core_free(resolved);
+    }
+
     size_t pool_size = n00bb_abi_name_pool_size(merged.strings);
     uint32_t section_base_count = 0;
+    size_t addressable_section_count = 0;
     for (size_t i = 0; valid && i < sections.count; i++) {
         uint32_t index = sections.maps[i].final_section_index;
         if (index == UINT32_MAX) valid = false;
         else if (section_base_count <= index) section_base_count = index + 1;
+        if (!sections.sections[i].is_thread_local)
+            addressable_section_count++;
     }
     size_t section_base_bytes = sizeof(uint64_t)
         + (size_t)section_base_count * sizeof(uint64_t);
@@ -840,17 +874,17 @@ link_selected_objects(
         valid = (has_pool || !pool_relocation_count)
             && sections.count < UINT32_MAX - 3
             && native.symbol_count < UINT32_MAX - (size_t)has_pool
-                - sections.count - 2
+                - addressable_section_count - 2
             && native.relocation_count <= SIZE_MAX - pool_relocation_count
             && native.relocation_count + pool_relocation_count
-                <= SIZE_MAX - sections.count;
+                <= SIZE_MAX - addressable_section_count;
     }
     if (valid) {
         size_t extra_count = sections.count + (size_t)has_pool + 1;
         size_t symbol_count = native.symbol_count + (size_t)has_pool
-            + sections.count + 2;
+            + addressable_section_count + 2;
         size_t relocation_count = native.relocation_count
-            + pool_relocation_count + sections.count;
+            + pool_relocation_count + addressable_section_count;
         extra_sections = core_alloc_array(core_object_emit_section_t,
                                           extra_count);
         symbols = core_alloc_array(core_object_emit_symbol_t,
@@ -900,21 +934,25 @@ link_selected_objects(
             .alignment = 8,
         };
         size_t base_symbols = native.symbol_count + (size_t)has_pool;
+        size_t base_ordinal = 0;
         for (size_t i = 0; i < sections.count; i++) {
+            if (sections.sections[i].is_thread_local) continue;
             char name[64];
             snprintf(name, sizeof(name), "__n00bb_gc_section_%zu", i);
-            symbols[base_symbols + i] = (core_object_emit_symbol_t){
+            symbols[base_symbols + base_ordinal] = (core_object_emit_symbol_t){
                 .name = core_strdup(name),
                 .section_index = (uint32_t)(i + 2),
             };
-            relocations[native.relocation_count + pool_relocation_count + i] =
+            relocations[native.relocation_count + pool_relocation_count
+                        + base_ordinal] =
                 (core_object_emit_absolute64_t){
                     .section_index = (uint32_t)(map_section + 2),
                     .section_offset = sizeof(uint64_t)
                         + (uint64_t)sections.maps[i].final_section_index
                             * sizeof(uint64_t),
-                    .symbol_index = (uint32_t)(base_symbols + i),
+                    .symbol_index = (uint32_t)(base_symbols + base_ordinal),
                 };
+            base_ordinal++;
         }
         symbols[symbol_count - 2] = (core_object_emit_symbol_t){
             .name = target->object_format == CORE_TARGET_OBJECT_MACH_O
@@ -936,7 +974,7 @@ link_selected_objects(
         valid = n00bb_abi_write_object(target, &packed,
             extra_sections, extra_count, symbols, symbol_count,
             relocations, relocation_count, &object, &object_bytes);
-        for (size_t i = 0; i < sections.count; i++)
+        for (size_t i = 0; i < addressable_section_count; i++)
             core_free((void *)symbols[base_symbols + i].name);
     }
 
@@ -968,7 +1006,8 @@ n00bb_abi_link_selected_objects(
     uint8_t **out_object, size_t *out_object_bytes)
 {
     return link_selected_objects(selected, target, nullptr, nullptr,
-                                 out_object, out_object_bytes, nullptr,
+                                 nullptr, nullptr, out_object,
+                                 out_object_bytes, nullptr,
                                  nullptr, nullptr);
 }
 
@@ -977,6 +1016,7 @@ n00bb_abi_link_objects_with_semantics(
     core_link_unit_t *link, const core_target_desc_t *target,
     const n00bb_abi_object_input_t *candidates, size_t candidate_count,
     n00bb_abi_link_semantics_fn semantics, void *context,
+    n00bb_abi_link_validation_fn validate, void *validation_context,
     uint8_t **out_object, size_t *out_object_bytes,
     const char **failure_stage,
     n00bb_abi_index_plan_failure_t *plan_failure,
@@ -988,6 +1028,7 @@ n00bb_abi_link_objects_with_semantics(
     if (!n00bb_abi_select_objects(link, target, candidates,
                                   candidate_count, &selected)) return false;
     bool valid = link_selected_objects(&selected, target, semantics, context,
+                                       validate, validation_context,
                                        out_object, out_object_bytes,
                                        failure_stage, plan_failure,
                                        rebase_failure);
@@ -1002,6 +1043,7 @@ n00bb_abi_link_objects(
     uint8_t **out_object, size_t *out_object_bytes)
 {
     return n00bb_abi_link_objects_with_semantics(link, target, candidates,
-        candidate_count, nullptr, nullptr, out_object, out_object_bytes,
+        candidate_count, nullptr, nullptr, nullptr, nullptr,
+        out_object, out_object_bytes,
         nullptr, nullptr, nullptr);
 }

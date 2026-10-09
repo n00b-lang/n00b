@@ -8,13 +8,17 @@ typedef struct {
 } section_bases_t;
 
 extern const section_bases_t n00b_abi_section_bases;
+extern const uint8_t *n00bb_abi_tls_address_current_thread(uint32_t index);
 
 const uint8_t *
 n00b_builtin_abi_storage_address(uint32_t index)
 {
     const n00b_abi_storage_v1 *storage = n00b_builtin_abi_storage(index);
-    if (!storage || !storage->symbol_index
-        || storage->segment_kind == N00B_ABI_STORAGE_TLS
+    if (!storage || !storage->symbol_index)
+        return NULL;
+    if (storage->segment_kind == N00B_ABI_STORAGE_TLS)
+        return n00bb_abi_tls_address_current_thread(index);
+    if (storage->segment_kind > N00B_ABI_STORAGE_TLS
         || storage->segment_index >= n00b_abi_section_bases.count)
         return NULL;
     const uint8_t *base = n00b_abi_section_bases.bases[storage->segment_index];

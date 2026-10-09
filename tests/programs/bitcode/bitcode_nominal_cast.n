@@ -1,0 +1,17 @@
+type Word = u64
+type Text = string
+
+func round_trip(value: u64) -> u64 {
+    let tagged: Word = cast[Word] value
+    return cast[u64] tagged
+}
+
+func text_round_trip(value: string) -> string {
+    let tagged: Text = cast[Text] value
+    return cast[string] tagged
+}
+
+comptime {} else {
+    require round_trip(42) == 42
+    __fd_write(2, text_round_trip("ok"))
+}

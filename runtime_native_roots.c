@@ -1,8 +1,16 @@
 #include "runtime_native_roots.h"
 
+static const uint32_t allocator_unmanaged_parameters[] = {0};
+
 const n00bb_runtime_native_root_t n00bb_runtime_native_roots[] = {
-    {"builtin.gc.alloc.allocate_runtime", "n00b_gc_allocate"},
-    {"builtin.gc.alloc.barrier_runtime", "n00b_gc_barrier_value"},
+    {"builtin.gc.alloc.allocate_runtime", "n00b_gc_allocate", nullptr, 0},
+    {"builtin.gc.alloc.allocate_runtime_known_on_mutator", nullptr,
+        allocator_unmanaged_parameters,
+        sizeof(allocator_unmanaged_parameters)
+            / sizeof(allocator_unmanaged_parameters[0])},
+    {"builtin.gc.alloc.mutator_for_native", "n00b_gc_mutator", nullptr, 0},
+    {"builtin.gc.alloc.barrier_runtime", "n00b_gc_barrier_value", nullptr, 0},
+    {"builtin.gc.alloc.barrier_pointer_runtime", nullptr, nullptr, 0},
 };
 
 const size_t n00bb_runtime_native_root_count =

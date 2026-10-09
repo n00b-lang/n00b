@@ -1,0 +1,4 @@
+func shifted() -> u64 {
+    let one: u64 = 1
+    return one << 64
+}

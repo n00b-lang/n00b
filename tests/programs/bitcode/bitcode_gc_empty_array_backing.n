@@ -1,0 +1,38 @@
+import builtin.abi
+import builtin.gc
+import builtin.gc.alloc
+import builtin.os
+
+comptime {} else {
+    let empty: Array[byte] = []'array
+    let type_index: u32 = cast[u32](typeof(empty))
+    let probe: Ref[builtin.abi.Array_Descriptor_Header]? = nil
+    let row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(
+        typeof(probe))
+    if row != nil {
+        let header_bytes: uint = builtin.abi.size_bytes(row.get())
+        let descriptor_bytes: uint = header_bytes + 8
+        let mapped: Ref[byte]? = builtin.os.map_zeroed(descriptor_bytes,
+            builtin.abi.alignment_bytes(row.get()))
+        if mapped != nil {
+            let descriptor: Ref[builtin.abi.Array_Descriptor_Header] = unsafe_cast[Ref[builtin.abi.Array_Descriptor_Header]] mapped.get()
+            descriptor.total_count = 0
+            descriptor.rank = 1
+            descriptor.flat_rank = 1
+            let payload_bytes: uint = builtin.gc.array_backing_offset(
+                type_index, descriptor)
+            require payload_bytes == descriptor_bytes
+            let backing: Ref[byte]? = builtin.gc.alloc.allocate_runtime(
+                type_index, cast[u64](payload_bytes),
+                cast[u32](builtin.gc.granule_bytes), mapped.get())
+            if backing != nil {
+                let header: Ref[builtin.gc.Object_Header] = builtin.gc.header_of(
+                    backing.get())
+                assert builtin.gc.meta_payload_bytes(header.meta) == payload_bytes
+                assert (header.meta & builtin.gc.obj_array_backing) != 0
+                builtin.os.unmap(mapped.get(), descriptor_bytes)
+                __fd_write(2, "ok")
+            } else { require false }
+        } else { require false }
+    } else { require false }
+}

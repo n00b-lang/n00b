@@ -5,11 +5,11 @@ func identity(items: Array[`T]) -> Array[`T] fail: string {
 }
 
 func static_values() -> Array[int] {
-    return wrap{1, 2}
+    return {1, 2}'wrap
 }
 
 func dynamic_values(x: int) -> Array[int] {
-    return wrap{x, 2}
+    return {x, 2}'wrap
 }
 
 comptime {

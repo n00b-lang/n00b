@@ -4,11 +4,11 @@ func lower_set_values() -> Set[int] {
 }
 
 func lower_tagged_set_values() -> Set[int] {
-    var values: Set[int] = set{30, 40}
+    var values: Set[int] = {30, 40}'set
     return values
 }
 
 func lower_empty_tagged_set() -> Set[int] {
-    var values: Set[int] = s{}
+    var values: Set[int] = {}'s
     return values
 }

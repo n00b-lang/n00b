@@ -2,11 +2,11 @@ declare_litmod("outer", "string", "make_outer")
 declare_litmod("inner", "string", "make_inner")
 
 func value() -> int {
-    return outer"ignored"
+    return "ignored"'outer
 }
 
 func make_outer(raw: string) fail: string {
-    return inner"ignored"
+    return "ignored"'inner
 }
 
 func make_inner(raw: string) -> int fail: string {

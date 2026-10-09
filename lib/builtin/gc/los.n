@@ -113,7 +113,10 @@ public func release(heap: Ref[builtin.gc.Heap], object: Ref[builtin.gc.Los_Obj])
 public func allocate_locked(heap: Ref[builtin.gc.Heap],
                             mutator: Ref[builtin.gc.Mutator],
                             type_index: u32, payload_bytes: uint,
-                            alignment: uint, finalizable: bool) -> Ref[byte]? {
+                            alignment: uint, finalizable: bool,
+                            instance_descriptor: Ref[byte]? = nil,
+                            slot: Ref[Ref[byte]?]? = nil) -> Ref[byte]? {
+    if type_index == 0 { return nil }
     let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(type_index)
     if row == nil { return nil }
     let mapped_bytes: uint = mapping_bytes(payload_bytes, alignment)
@@ -133,9 +136,13 @@ public func allocate_locked(heap: Ref[builtin.gc.Heap],
     let pad: uint = mapped_bytes - total
     var flags: u32 = cast[u32](builtin.gc.obj_large)
     if finalizable { flags = flags | cast[u32](builtin.gc.obj_final) }
+    if instance_descriptor != nil {
+        flags = flags | cast[u32](builtin.gc.obj_array_backing)
+    }
     var epoch: u32 = heap.epoch
-    if __atomic_load(ref heap.phase) == cast[u32](builtin.gc.Phase.marking) or
-        mutator.black { epoch = heap.mark_epoch }
+    if __atomic_load(ref heap.marking) or mutator.black {
+        epoch = heap.mark_epoch
+    }
     var object: Ref[builtin.gc.Los_Obj]? = nil
     if alignment <= builtin.gc.granule_bytes and pad == 0 {
         object = cache_take(heap, total)
@@ -144,6 +151,11 @@ public func allocate_locked(heap: Ref[builtin.gc.Heap],
         let reused: Ref[builtin.gc.Los_Obj] = object.get()
         let header: Ref[builtin.gc.Object_Header] = ref reused.hdr
         __gc_memset(header, 0, object_bytes)
+        if instance_descriptor != nil {
+            require builtin.gc.initialize_array_backing(
+                builtin.gc.payload_of(header), payload_bytes, type_index,
+                instance_descriptor.get())
+        }
         header.meta = builtin.gc.meta_make(cast[u64](payload_bytes), flags)
         __atomic_store(ref reused.marked, epoch)
         builtin.gc.registry.region_set_type(heap, header, type_index)
@@ -157,6 +169,11 @@ public func allocate_locked(heap: Ref[builtin.gc.Heap],
             fresh.mapped_bytes = mapped_bytes
             fresh.bytes = total
             fresh.hdr.type_index = type_index
+            if instance_descriptor != nil {
+                require builtin.gc.initialize_array_backing(
+                    builtin.gc.payload_of(ref fresh.hdr), payload_bytes,
+                    type_index, instance_descriptor.get())
+            }
             fresh.hdr.meta = builtin.gc.meta_make(cast[u64](payload_bytes),
                 flags)
             __atomic_store(ref fresh.marked, epoch)
@@ -179,7 +196,13 @@ public func allocate_locked(heap: Ref[builtin.gc.Heap],
         heap.los_bytes += allocated.mapped_bytes
         heap.alloc_since_gc += allocated.mapped_bytes
         let payload: Ref[byte] = builtin.gc.payload_of(ref allocated.hdr)
-        mutator.last_alloc = payload
+        if slot != nil {
+            let published: Ref[byte]? = payload
+            ref_write(slot.get(), published)
+            mutator.last_alloc = nil
+        } else {
+            mutator.last_alloc = payload
+        }
         mutator.objects_allocated += 1
         mutator.bytes_allocated += cast[u64](object_bytes)
         return payload

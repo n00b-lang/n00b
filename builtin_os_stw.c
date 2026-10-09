@@ -5,6 +5,7 @@ _Static_assert(offsetof(n00b_os_thread_context, sp) == 0, "context sp offset");
 _Static_assert(offsetof(n00b_os_thread_context, fp) == 8, "context fp offset");
 _Static_assert(offsetof(n00b_os_thread_context, nregs) == 16, "context register count offset");
 _Static_assert(offsetof(n00b_os_thread_context, regs) == 24, "context register offset");
+_Static_assert(offsetof(n00b_os_thread_context, pc) == 432, "context pc offset");
 
 #if defined(__aarch64__)
 __attribute__((naked)) void n00b_os_thread_capture_self(n00b_os_thread_context *context)
@@ -29,6 +30,7 @@ __attribute__((naked)) void n00b_os_thread_capture_self(n00b_os_thread_context *
         "mov x9, sp\n\t"
         "str x9, [x0]\n\t"
         "str x29, [x0, #8]\n\t"
+        "str x30, [x0, #432]\n\t"
         "mov x9, #31\n\t"
         "str x9, [x0, #16]\n\t"
         "ret");
@@ -57,6 +59,8 @@ __attribute__((naked)) void n00b_os_thread_capture_self(n00b_os_thread_context *
         "mov %r13, 128(%rcx)\n\t"
         "mov %r14, 136(%rcx)\n\t"
         "mov %r15, 144(%rcx)\n\t"
+        "mov (%rsp), %rax\n\t"
+        "mov %rax, 432(%rcx)\n\t"
         "ret");
 #else
     __asm__ volatile(
@@ -79,6 +83,8 @@ __attribute__((naked)) void n00b_os_thread_capture_self(n00b_os_thread_context *
         "mov %r13, 128(%rdi)\n\t"
         "mov %r14, 136(%rdi)\n\t"
         "mov %r15, 144(%rdi)\n\t"
+        "mov (%rsp), %rax\n\t"
+        "mov %rax, 432(%rdi)\n\t"
         "ret");
 #endif
 }
@@ -116,6 +122,7 @@ int32_t n00b_os_thread_suspend(uint64_t control,
     }
     context->sp = (void *)(uintptr_t)arm_thread_state64_get_sp(state);
     context->fp = (void *)(uintptr_t)arm_thread_state64_get_fp(state);
+    context->pc = (void *)(uintptr_t)arm_thread_state64_get_pc(state);
     context->nregs = 31;
     for (size_t i = 0; i < 29; i++) context->regs[i] = state.__x[i];
     context->regs[29] = (uintptr_t)arm_thread_state64_get_fp(state);
@@ -130,6 +137,7 @@ int32_t n00b_os_thread_suspend(uint64_t control,
     }
     context->sp = (void *)(uintptr_t)state.__rsp;
     context->fp = (void *)(uintptr_t)state.__rbp;
+    context->pc = (void *)(uintptr_t)state.__rip;
     const uint64_t regs[] = {
         state.__rax, state.__rbx, state.__rcx, state.__rdx,
         state.__rdi, state.__rsi, state.__rbp, state.__r8,
@@ -193,6 +201,7 @@ int32_t n00b_os_thread_suspend(uint64_t control,
 #if defined(_M_X64) || defined(__x86_64__)
     context->sp = (void *)(uintptr_t)state.Rsp;
     context->fp = (void *)(uintptr_t)state.Rbp;
+    context->pc = (void *)(uintptr_t)state.Rip;
     const uint64_t regs[] = {
         state.Rax, state.Rbx, state.Rcx, state.Rdx,
         state.Rsi, state.Rdi, state.Rbp, state.R8,
@@ -204,6 +213,7 @@ int32_t n00b_os_thread_suspend(uint64_t control,
 #elif defined(_M_ARM64) || defined(__aarch64__)
     context->sp = (void *)(uintptr_t)state.Sp;
     context->fp = (void *)(uintptr_t)state.Fp;
+    context->pc = (void *)(uintptr_t)state.Pc;
     context->nregs = 31;
     for (size_t i = 0; i < 29; i++) context->regs[i] = state.X[i];
     context->regs[29] = state.Fp;
@@ -278,6 +288,7 @@ static void stw_suspend_handler(int signal, void *info, void *raw_context)
     const struct sigcontext *saved = &state->uc_mcontext;
     context->sp = (void *)(uintptr_t)saved->rsp;
     context->fp = (void *)(uintptr_t)saved->rbp;
+    context->pc = (void *)(uintptr_t)saved->rip;
     const uintptr_t regs[] = {
         saved->r8, saved->r9, saved->r10, saved->r11,
         saved->r12, saved->r13, saved->r14, saved->r15,
@@ -290,6 +301,7 @@ static void stw_suspend_handler(int signal, void *info, void *raw_context)
 #else
     context->sp = (void *)(uintptr_t)state->uc_mcontext.sp;
     context->fp = (void *)(uintptr_t)state->uc_mcontext.regs[29];
+    context->pc = (void *)(uintptr_t)state->uc_mcontext.pc;
     context->nregs = 31;
     for (size_t i = 0; i < 31; i++)
         context->regs[i] = (uintptr_t)state->uc_mcontext.regs[i];

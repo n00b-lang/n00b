@@ -70,6 +70,73 @@ public func config_default(config: Ref[builtin.gc.Config]) {
     config.handshake_timeout_us = default_handshake_timeout_us
     config.scan_stacks = false
     config.world_timeout_ms = default_world_timeout_ms
+    config.finalizer_backlog_limit = 0
+    config.finalizer_assist = false
+    config.on_pause = nil
+    config.on_cycle = nil
+    config.finalizers_ready = nil
+    config.telemetry_user = nil
+}
+
+public func unlock(heap: Ref[builtin.gc.Heap]) {
+    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.finalize.notify(heap)
+}
+
+public func get_stats(heap: Ref[builtin.gc.Heap]) -> builtin.gc.Stats {
+    var stats: builtin.gc.Stats
+    builtin.gc.sync.ticket_lock(ref heap.lock)
+    stats.collections = heap.collections
+    stats.objects_allocated = heap.retired_objects
+    stats.bytes_allocated = heap.retired_bytes
+    stats.refills = heap.retired_refills
+    stats.locked_refills = heap.retired_locked_refills
+    var current: Ref[builtin.gc.Mutator]? = heap.mutators
+    while current != nil {
+        let mutator: Ref[builtin.gc.Mutator] = current.get()
+        stats.objects_allocated += mutator.objects_allocated
+        stats.bytes_allocated += mutator.bytes_allocated
+        stats.refills += mutator.refills
+        stats.locked_refills += mutator.locked_refills
+        current = mutator.next
+    }
+    stats.blocks_owned = __atomic_load(ref heap.nowned)
+    stats.blocks_unswept = __atomic_load(ref heap.nunswept)
+    stats.blocks_total = heap.nblocks
+    stats.blocks_free = heap.nfree
+    stats.blocks_recyclable = heap.nrecyclable
+    stats.blocks_full = heap.nfull
+    stats.los_objects = heap.los_count
+    stats.los_bytes = heap.los_bytes
+    stats.last_marked_objects = heap.last_marked_objects
+    stats.last_marked_bytes = heap.last_marked_bytes
+    stats.committed_bytes = builtin.gc.committed_bytes(heap)
+    stats.live_bytes = heap.live_bytes
+    stats.target_bytes = heap.target_bytes
+    stats.alloc_budget = heap.alloc_budget
+    stats.alloc_since_gc = heap.alloc_since_gc
+    stats.last_stack_words = heap.last_stack_words
+    stats.last_frame_slots = heap.last_frame_slots
+    stats.last_conservative_hits = heap.last_conservative_hits
+    stats.last_worker_objects = heap.last_worker_objects
+    stats.workers = __atomic_load(ref heap.nworkers)
+    stats.pauses = heap.pauses
+    stats.last_pause_ns = heap.last_pause_ns
+    stats.max_pause_ns = heap.max_pause_ns
+    stats.total_pause_ns = heap.total_pause_ns
+    stats.hs_cycles = heap.hs_cycles
+    stats.hs_rounds = heap.hs_rounds
+    stats.hs_stragglers = heap.hs_stragglers
+    stats.hs_blocking = heap.hs_blocking
+    stats.hs_fallbacks = heap.hs_fallbacks
+    stats.hs_alloc_waits = __atomic_load(ref heap.hs_alloc_waits)
+    builtin.gc.sync.ticket_lock(ref heap.fin)
+    stats.finalizers_pending = heap.finq_n + heap.running_n
+    stats.finalizers_run = heap.finalizers_run
+    builtin.gc.sync.ticket_unlock(ref heap.fin)
+    stats.phase = cast[i32](__atomic_load(ref heap.phase))
+    unlock(heap)
+    return stats
 }
 
 public func create(config: Ref[builtin.gc.Config]?) -> Ref[builtin.gc.Heap]? {
@@ -127,6 +194,7 @@ public func destroy(heap: Ref[builtin.gc.Heap]) {
             let mutator: Ref[builtin.gc.Mutator] = attached.get()
             attached = mutator.next
             builtin.gc.roots.free(mutator)
+            builtin.gc.roots.free_tls(mutator)
             builtin.os.unmap(mutator, builtin.abi.size_bytes(mutator_row.get()))
         }
         heap.mutators = nil
@@ -162,21 +230,13 @@ public func destroy(heap: Ref[builtin.gc.Heap]) {
     builtin.gc.hash.tab_free(ref heap.threads)
     let global_storage: Ref[byte]? = heap.globals
     if global_storage != nil {
-        let probe: Ref[builtin.gc.Global_Root_Entry]? = nil
+        let probe: Ref[Ref[byte]?]? = nil
         let pointer_row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(typeof(probe))
-        let entry_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(typeof(probe))
-        if pointer_row != nil and entry_row != nil {
+        if pointer_row != nil {
             let stride: uint = builtin.abi.size_bytes(pointer_row.get())
-            var index: uint = 0
-            while index < heap.nglobals {
-                let address: Ref[byte] = __gc_byte_offset(global_storage.get(), index * stride)
-                let cell: Ref[Ref[builtin.gc.Global_Root_Entry]] = unsafe_cast[Ref[Ref[builtin.gc.Global_Root_Entry]]] address
-                builtin.os.unmap(ref_read(cell), builtin.abi.size_bytes(entry_row.get()))
-                index += 1
-            }
             builtin.os.unmap(global_storage.get(), heap.cap_globals * stride)
         } else { require false }
     }
-    builtin.gc.hash.tab_free(ref heap.global_index)
+    builtin.gc.hash.index_tab_free(ref heap.global_index)
     builtin.os.unmap(heap, builtin.abi.size_bytes(heap_record()))
 }

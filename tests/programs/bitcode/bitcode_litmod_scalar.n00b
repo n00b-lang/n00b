@@ -5,7 +5,7 @@ func read_number(raw: string) -> int fail: string {
 }
 
 comptime {
-    require number"seven" == 7
+    require "seven"'number == 7
 } else {
-    require number"seven" == 7
+    require "seven"'number == 7
 }

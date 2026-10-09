@@ -10,6 +10,7 @@ typedef core_link_declaration_t *(*n00bb_abi_declaration_lookup_fn)(
 
 typedef struct {
     n00b_abi_function_v1 *functions;
+    ir_func_t **ir_functions;
     size_t function_count;
     uint32_t *stream_indexes;
     size_t stream_index_count;

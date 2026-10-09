@@ -4,11 +4,11 @@ func lower_list_values() -> List[int] {
 }
 
 func lower_tagged_list_values() -> List[int] {
-    var values: List[int] = list[30, 40]
+    var values: List[int] = [30, 40]'list
     return values
 }
 
 func lower_short_tagged_list_values() -> List[int] {
-    var values: List[int] = l[50, 60]
+    var values: List[int] = [50, 60]'l
     return values
 }

@@ -1,0 +1,19 @@
+type Word = u64
+alias Count = uint
+enum Status { ready = 1, done = 2 }
+
+func copy_word(value: Word) -> Word {
+    return value
+}
+
+func copy_count(value: Count) -> Count {
+    return value
+}
+
+func copy_status(value: Status) -> Status {
+    return value
+}
+
+func copy_slice(value: i:7) -> i:7 {
+    return value
+}

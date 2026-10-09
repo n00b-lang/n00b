@@ -5,12 +5,12 @@ func identity(items: Array[Array[string]]) -> Array[Array[string]] fail: string 
 }
 
 func values() -> Array[Array[string]] {
-    return bundle[array["the first long string payload", "two"],
-                  array["another long string payload"]]
+    return [["the first long string payload", "two"]'array,
+                  ["another long string payload"]'array]'bundle
 }
 
 func dynamic(text: string) -> Array[Array[string]] {
-    return bundle[array["one", text], array["three"]]
+    return [["one", text]'array, ["three"]'array]'bundle
 }
 
 func observe(items: Array[Array[string]]) {
@@ -18,8 +18,8 @@ func observe(items: Array[Array[string]]) {
 }
 
 comptime {
-    observe(bundle[array["a comptime long string payload", "five"],
-                   array["six"]])
+    observe([["a comptime long string payload", "five"]'array,
+                   ["six"]'array]'bundle)
 } else {
     observe(values())
     observe(dynamic("a runtime long string payload"))

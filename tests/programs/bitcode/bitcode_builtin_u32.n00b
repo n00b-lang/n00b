@@ -1,5 +1,5 @@
 func letters() -> Array[char] {
-    return u32"abc"
+    return "abc"'u32
 }
 
 comptime {

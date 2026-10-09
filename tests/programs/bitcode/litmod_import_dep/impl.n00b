@@ -5,7 +5,7 @@ func make_stamp(raw: string) -> int fail: string {
 }
 
 public func value() -> int {
-    return stamp"dependency"
+    return "dependency"'stamp
 }
 
 comptime {

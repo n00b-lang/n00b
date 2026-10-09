@@ -5,12 +5,12 @@ func parse_json(items: Array[int]) -> Array[int] fail: string {
 }
 
 func value(x: int) -> Array[int] {
-    return json[1, x]
+    return [1, x]'json
 }
 
 func caught(x: int) -> int {
     try {
-        data = json[1, x]
+        data = [1, x]'json
         return 1
     } else err {
         return 0

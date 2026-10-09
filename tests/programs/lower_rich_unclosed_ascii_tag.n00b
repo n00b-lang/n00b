@@ -1,3 +1,3 @@
 func invalid_rich_tag() -> string {
-    return rich"[|bold text"
+    return "[|bold text"'rich
 }

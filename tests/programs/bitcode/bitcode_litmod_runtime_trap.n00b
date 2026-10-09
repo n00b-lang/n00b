@@ -5,7 +5,7 @@ func always_fail(items: Array[int]) -> Array[int] fail: string {
 }
 
 func uncaught(x: int) -> Array[int] {
-    return fault[1, x]
+    return [1, x]'fault
 }
 
 comptime {

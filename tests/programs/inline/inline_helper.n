@@ -1,0 +1,3 @@
+public inline func square(value: uint) -> uint {
+    return value * value
+}

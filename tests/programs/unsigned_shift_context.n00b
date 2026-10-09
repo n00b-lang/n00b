@@ -1,0 +1,7 @@
+const writer: u32 = 1 << 31
+const large: u64 = 1 << 0
+const bytes: uint = 4 * 1024 * 1024
+
+func shift(value: u32, count: u:5) -> u32 {
+    return value << count
+}

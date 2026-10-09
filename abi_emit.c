@@ -18,6 +18,7 @@
 #include "abi_type_rows.h"
 #include "abi_type_signatures.h"
 #include "abi_trait_method_rows.h"
+#include "frame_roots.h"
 #include "n00b-abi-v1.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
@@ -31,6 +32,234 @@
 #include "parse/tree_util.h"
 
 core_list_decl(core_object_emit_section_t);
+
+static bool abi_unit_error(core_translation_unit_t *unit,
+                           const char *message);
+
+typedef struct {
+    n00b_abi_frame_layout_v1 *rows;
+    uint32_t *function_frames;
+    uint8_t *bitmap;
+    size_t row_count;
+    size_t bitmap_count;
+    size_t active_count;
+} abi_frame_rows_t;
+
+typedef struct {
+    size_t roots;
+    size_t pointer_roots;
+    size_t slots;
+    size_t bitmap_bytes;
+    uint32_t shadow_type_index;
+    const ir_final_layout_t *layout;
+} abi_frame_info_t;
+
+static bool
+collect_frame_payload_types(core_translation_unit_t *unit,
+                            n00bb_abi_type_index_t *index,
+                            ir_module_t *runtime,
+                            const core_target_desc_t *target)
+{
+    for (size_t i = 0; i < ir_func_count(runtime); i++) {
+        ir_func_t *function = ir_func_at(runtime, i);
+        if (!function || !function->n_blocks) continue;
+        size_t pointers = 0, roots = 0;
+        if (!n00bb_frame_pointer_roots(function, nullptr, nullptr, &pointers)
+            || !n00bb_frame_roots(function, nullptr, nullptr, &roots))
+            return false;
+        if (roots == pointers) continue;
+        th_type *payload = n00bb_frame_payload_type(function, &roots);
+        n00bb_abi_record_member_t *members = payload
+            ? core_alloc_array(n00bb_abi_record_member_t, roots) : nullptr;
+        bool valid = payload && members;
+        for (size_t j = 0; valid && j < roots; j++) {
+            const th_member *member = th_record_member(payload, j);
+            bool handled = false;
+            valid = member && n00bb_abi_publish_direct_layout(runtime,
+                member->type, target, &handled)
+                && ir_layout_final(runtime, member->type, target->triple);
+            if (valid) members[j] = (n00bb_abi_record_member_t){
+                .name = member->name,
+                .type = member->type,
+                .ordinal = (uint32_t)j,
+            };
+        }
+        if (valid && !ir_layout_final(runtime, payload, target->triple))
+            valid = n00bb_abi_publish_record_layout(runtime, payload,
+                target, N00BB_RECORD_ORDERED, true, members, roots);
+        if (valid) valid = n00bb_abi_type_index_add(index, payload, nullptr);
+        core_free(members);
+        if (!valid) {
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "could not lay out frame payload for %s: %s",
+                function->name,
+                payload ? th_print(ir_module_types(runtime), payload)
+                        : "<missing type>");
+            bool result = abi_unit_error(unit, message.data);
+            core_buffer_release(&message);
+            return result;
+        }
+    }
+    return true;
+}
+
+static bool
+frame_info(n00bb_abi_type_index_t *index,
+           const n00bb_abi_type_identity_rows_t *types,
+           ir_func_t *function, abi_frame_info_t *out)
+{
+    size_t pointers = 0, roots = 0;
+    if (!n00bb_frame_pointer_roots(function, nullptr, nullptr, &pointers)
+        || !n00bb_frame_roots(function, nullptr, nullptr, &roots))
+        return false;
+    abi_frame_info_t info = {
+        .roots = pointers,
+        .pointer_roots = pointers,
+        .slots = pointers,
+    };
+    if (roots != pointers) {
+        th_type *payload = n00bb_frame_payload_type(function, &roots);
+        uint32_t payload_index = 0;
+        if (!payload || !n00bb_abi_type_index_find(index, payload,
+                                                    &payload_index)
+            || payload_index >= types->count) return false;
+        const ir_final_layout_t *layout = ir_layout_final(function->owner,
+            payload, ir_module_target(function->owner));
+        uint64_t stride = 0;
+        if (!layout || layout->alignment_bytes > 16
+            || layout->n_members != roots
+            || !ir_layout_final_stride_bits(layout, &stride)
+            || stride % 64 || stride / 64 > SIZE_MAX) return false;
+        info.roots = roots;
+        info.slots = (size_t)(stride / 64);
+        info.shadow_type_index = payload_index;
+        info.layout = layout;
+    }
+    if (info.slots > (UINT64_MAX - N00B_ABI_FRAME_ROOT_OFFSET) / 8)
+        return false;
+    info.bitmap_bytes = info.slots / 8 + (info.slots % 8 != 0);
+    *out = info;
+    return true;
+}
+
+typedef struct {
+    ir_func_t *function;
+    const ir_final_layout_t *layout;
+    uint8_t *bitmap;
+    size_t slots;
+} abi_frame_bitmap_t;
+
+static bool
+frame_bitmap_root(void *opaque, n00bb_frame_root_kind_t kind, size_t index,
+                  ir_value_t *value, ir_local_t *local,
+                  ir_instr_t *instruction)
+{
+    (void)kind;
+    (void)instruction;
+    abi_frame_bitmap_t *bitmap = opaque;
+    th_type *type = n00bb_frame_root_type(kind, value, local, instruction);
+    if (!type || index >= bitmap->layout->n_members) return false;
+    if (!n00bb_frame_native_pointer(bitmap->function->owner, type))
+        return true;
+    uint64_t bits = bitmap->layout->members[index].bit_offset;
+    if (bits % 64 || bits / 64 >= bitmap->slots) return false;
+    size_t slot = (size_t)(bits / 64);
+    bitmap->bitmap[slot / 8] |= (uint8_t)(1u << (slot % 8));
+    return true;
+}
+
+static void
+frame_rows_release(abi_frame_rows_t *frames)
+{
+    core_free(frames->rows);
+    core_free(frames->function_frames);
+    core_free(frames->bitmap);
+    *frames = (abi_frame_rows_t){0};
+}
+
+static bool
+build_frame_rows(n00bb_abi_function_rows_t *functions,
+                 n00bb_abi_type_index_t *index,
+                 const n00bb_abi_type_identity_rows_t *types,
+                 ir_module_t *runtime, abi_frame_rows_t *out)
+{
+    if (!functions || !functions->functions || !functions->ir_functions
+        || !index || !types || !runtime || !out
+        || functions->function_count > UINT32_MAX)
+        return false;
+    size_t bytes = 0;
+    size_t active = 0;
+    for (size_t i = 1; i < functions->function_count; i++) {
+        ir_func_t *function = functions->ir_functions[i];
+        if (!function || function->owner != runtime || !function->n_blocks)
+            continue;
+        abi_frame_info_t info;
+        if (!frame_info(index, types, function, &info)) return false;
+        if (info.bitmap_bytes > UINT32_MAX
+            || bytes > UINT32_MAX - info.bitmap_bytes)
+            return false;
+        bytes += info.bitmap_bytes;
+        active++;
+    }
+    abi_frame_rows_t frames = {
+        .rows = core_alloc_array(n00b_abi_frame_layout_v1, active + 1),
+        .function_frames = core_alloc_array(uint32_t,
+            functions->function_count),
+        .bitmap = bytes ? core_alloc_array(uint8_t, bytes) : nullptr,
+        .row_count = 1,
+    };
+    if (!frames.rows || !frames.function_frames
+        || (bytes && !frames.bitmap)) {
+        frame_rows_release(&frames);
+        return false;
+    }
+    for (size_t i = 1; i < functions->function_count; i++) {
+        ir_func_t *function = functions->ir_functions[i];
+        if (!function || function->owner != runtime || !function->n_blocks)
+            continue;
+        abi_frame_info_t info;
+        if (!frame_info(index, types, function, &info)) {
+            frame_rows_release(&frames);
+            return false;
+        }
+        size_t width = info.bitmap_bytes;
+        if (info.layout) {
+            abi_frame_bitmap_t bitmap = {
+                .function = function,
+                .layout = info.layout,
+                .bitmap = frames.bitmap + frames.bitmap_count,
+                .slots = info.slots,
+            };
+            size_t filled = 0;
+            if (!n00bb_frame_roots(function, frame_bitmap_root, &bitmap,
+                                   &filled) || filled != info.roots) {
+                frame_rows_release(&frames);
+                return false;
+            }
+        } else if (width) {
+            memset(frames.bitmap + frames.bitmap_count, 0xff, width);
+            if (info.pointer_roots % 8)
+                frames.bitmap[frames.bitmap_count + width - 1] =
+                    (uint8_t)((1u << (info.pointer_roots % 8)) - 1);
+        }
+        frames.function_frames[i] = (uint32_t)frames.row_count;
+        frames.rows[frames.row_count++] = (n00b_abi_frame_layout_v1){
+            .function_index = (uint32_t)i,
+            .shadow_frame_type_index = info.shadow_type_index,
+            .pointer_bitmap_bytes = {
+                .first = width ? (uint32_t)frames.bitmap_count : 0,
+                .count = (uint32_t)width,
+            },
+            .frame_byte_extent = N00B_ABI_FRAME_ROOT_OFFSET
+                + 8 * (uint64_t)info.slots,
+        };
+        frames.bitmap_count += width;
+        frames.active_count++;
+    }
+    *out = frames;
+    return true;
+}
 
 typedef struct {
     n00b_abi_tls_relocation_v1 *rows;
@@ -559,7 +788,8 @@ phase_has_only_trivial_initializer(const ir_module_t *module)
 }
 
 static bool
-publish_catalog_direct_layouts(n00bb_abi_type_index_t *index,
+publish_catalog_direct_layouts(core_translation_unit_t *unit,
+                               n00bb_abi_type_index_t *index,
                                ir_module_t *comptime, ir_module_t *runtime,
                                const core_target_desc_t *target)
 {
@@ -569,7 +799,17 @@ publish_catalog_direct_layouts(n00bb_abi_type_index_t *index,
             th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
             bool handled = false;
             if (!type || !n00bb_abi_publish_direct_layout(modules[m], type,
-                    target, &handled)) return false;
+                    target, &handled)) {
+                core_buffer_t message = {0};
+                core_buffer_printf(&message,
+                    "could not publish ABI layout for %s in %s",
+                    type ? th_print(ir_module_types(modules[m]), type)
+                         : "<missing type>",
+                    m ? "runtime" : "comptime");
+                bool result = abi_unit_error(unit, message.data);
+                core_buffer_release(&message);
+                return result;
+            }
         }
     return true;
 }
@@ -653,6 +893,9 @@ imported_module_symbol(const core_link_reference_t *reference,
     if (!reference || core_link_reference_referrer(reference) != unit
         || !target || core_link_declaration_owner(target) == unit)
         return true;
+    if (core_string_eq(core_link_declaration_module(target),
+            CORE_STRING_STATIC("builtins")))
+        return true;
     uint32_t kind = core_link_declaration_kind(target);
     if (kind != PARSE_SYM_FUNCTION && kind != PARSE_SYM_VARIABLE
         && kind != PARSE_SYM_TYPEDEF)
@@ -661,8 +904,25 @@ imported_module_symbol(const core_link_reference_t *reference,
         core_link_reference_use_site(reference));
     if (resolution.kind != PARSE_NODE_RESOLUTION_SYMBOL
         || !resolution.target.symbol
-        || resolution.target.symbol->kind != kind)
+        || resolution.target.symbol->kind != kind) {
+        core_string_t module = core_link_reference_module(reference);
+        core_string_t key = core_link_reference_key(reference);
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "ABI import '%.*s:%.*s' targets symbol kind %u, but its use node resolves to kind %u",
+            (int)module.u8_bytes, module.data,
+            (int)key.u8_bytes, key.data, kind,
+            resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+                && resolution.target.symbol
+                ? (unsigned)resolution.target.symbol->kind : 0);
+        core_translation_unit_t *referrer =
+            core_link_reference_referrer(reference);
+        core_diagnostics_report(core_translation_unit_diagnostics(referrer),
+            referrer, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0016"),
+            core_string_borrow(message.data, message.byte_len));
+        core_buffer_release(&message);
         return false;
+    }
     parse_sym_entry_t *symbol = resolution.target.symbol;
     if (!symbol->scope || !core_string_eq(symbol->scope->scope_tag,
             CORE_STRING_STATIC("module"))) return true;
@@ -1115,6 +1375,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_type_signatures_t signature_rows = {0};
     n00bb_abi_declarations_t declaration_rows = {0};
     n00bb_abi_function_rows_t function_rows = {0};
+    abi_frame_rows_t frame_rows = {0};
     n00bb_abi_trait_method_rows_t trait_method_rows = {0};
     n00bb_abi_constraint_rows_t constraint_rows = {0};
     n00bb_abi_storage_rows_t storage_rows = {0};
@@ -1146,9 +1407,12 @@ n00bb_abi_emit_unit(
         && ABI_STAGE("imported type collection",
             collect_imported_symbol_types(link, unit, type_index))
         && ABI_STAGE("direct type layouts",
-            publish_catalog_direct_layouts(type_index,
+            publish_catalog_direct_layouts(unit, type_index,
                 (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
                 target))
+        && ABI_STAGE("frame payload type collection",
+            collect_frame_payload_types(unit, type_index,
+                (ir_module_t *)runtime_ir, target))
         && ABI_STAGE("type identity rows",
             n00bb_abi_type_identity_rows_build(type_index,
                 (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
@@ -1203,6 +1467,9 @@ n00bb_abi_emit_unit(
                     + (uint32_t)declaration_rows.stream_index_count,
                 (ir_module_t *)comptime_ir, (ir_module_t *)runtime_ir,
                 pool, lookup, lookup_context, &function_rows))
+        && ABI_STAGE("frame layouts",
+            build_frame_rows(&function_rows, type_index, &type_rows,
+                             (ir_module_t *)runtime_ir, &frame_rows))
         && ABI_STAGE("trait methods",
             n00bb_abi_trait_method_rows_build(type_index, &type_rows,
                 declarations, &trait_method_rows))
@@ -1319,6 +1586,7 @@ n00bb_abi_emit_unit(
         n00bb_abi_storage_rows_release(&storage_rows);
         n00bb_abi_trait_method_rows_release(&trait_method_rows);
         n00bb_abi_constraint_rows_release(&constraint_rows);
+        frame_rows_release(&frame_rows);
         n00bb_abi_function_rows_release(&function_rows);
         n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
@@ -1345,6 +1613,8 @@ n00bb_abi_emit_unit(
         + storage_rows.stream_count
         + trait_method_rows.stream_index_count
         + tls_metadata.stream_count;
+    size_t frame_stream_base = stream_count;
+    stream_count += frame_rows.active_count;
     uint32_t *stream = core_alloc_array(uint32_t, stream_count);
     stream[0] = package_modules[0];
     if (recursive) {
@@ -1394,23 +1664,36 @@ n00bb_abi_emit_unit(
                constraint_rows.stream_indexes,
                constraint_rows.stream_index_count * sizeof(*stream));
     if (storage_rows.stream_count)
-        memcpy(stream + stream_count - tls_metadata.stream_count
+        memcpy(stream + frame_stream_base - tls_metadata.stream_count
                    - storage_rows.stream_count
                    - trait_method_rows.stream_index_count,
                storage_rows.stream_indexes,
                storage_rows.stream_count * sizeof(*stream));
     if (trait_method_rows.stream_index_count)
-        memcpy(stream + stream_count - tls_metadata.stream_count
+        memcpy(stream + frame_stream_base - tls_metadata.stream_count
                    - trait_method_rows.stream_index_count,
                trait_method_rows.stream_indexes,
                trait_method_rows.stream_index_count * sizeof(*stream));
     if (tls_metadata.stream_count)
-        memcpy(stream + stream_count - tls_metadata.stream_count,
+        memcpy(stream + frame_stream_base - tls_metadata.stream_count,
                tls_metadata.stream_indexes,
                tls_metadata.stream_count * sizeof(*stream));
+    size_t frame_ordinal = 0;
+    for (size_t i = 1; i < function_rows.function_count; i++) {
+        uint32_t frame_index = frame_rows.function_frames[i];
+        if (!frame_index) continue;
+        size_t position = frame_stream_base + frame_ordinal++;
+        function_rows.functions[i].frame_layouts = (n00b_abi_range_v1){
+            .first = (uint32_t)position, .count = 1,
+        };
+        stream[position] = frame_index;
+    }
     core_list_t(core_object_emit_section_t) extra_sections = {0};
     uint32_t storage_input_indexes[4] = {0};
     uint32_t aggregate_input_index = 0;
+    uint32_t tls_descriptor_input_index = 0;
+    uint8_t *tls_descriptors = nullptr;
+    size_t tls_descriptor_count = 0;
     n00b_abi_index_patch_v1 *index_patches = nullptr;
     core_object_emit_symbol_t string_symbol = {0};
     core_object_emit_symbol_t aggregate_symbol = {0};
@@ -1459,13 +1742,44 @@ n00bb_abi_emit_unit(
         && append_storage_section(target, N00B_ABI_STORAGE_TLS,
             &storage_rows.tls, storage_rows.tls_alignment,
             &extra_sections, storage_input_indexes);
+    if (valid && target->object_format == CORE_TARGET_OBJECT_MACH_O) {
+        for (size_t i = 1; i < native_bindings.count; i++)
+            tls_descriptor_count += storage_rows.rows[i].segment_kind
+                == N00B_ABI_STORAGE_TLS;
+        valid = tls_descriptor_count <= SIZE_MAX / 24
+            && tls_descriptor_count <= INT64_MAX / 24
+            && (!tls_descriptor_count || extra_sections.len < UINT32_MAX - 2);
+        if (valid && tls_descriptor_count) {
+            tls_descriptors = core_alloc_array(uint8_t,
+                tls_descriptor_count * 24);
+            memset(tls_descriptors, 0, tls_descriptor_count * 24);
+            tls_descriptor_input_index = (uint32_t)(2 + extra_sections.len);
+            core_list_push(extra_sections, ((core_object_emit_section_t){
+                .name = "__n00b_tlv", .segment = "__DATA",
+                .bytes = tls_descriptors, .size = tls_descriptor_count * 24,
+                .alignment = 8, .writable = true,
+                .is_thread_local_descriptor = true,
+            }));
+        }
+    }
+    size_t tls_descriptor_ordinal = 0;
     for (size_t i = 1; valid && i < native_bindings.count; i++) {
         n00b_abi_storage_v1 *row = &storage_rows.rows[i];
         uint32_t input = row->segment_kind <= N00B_ABI_STORAGE_TLS
             ? storage_input_indexes[row->segment_kind] : 0;
         valid = input && core_object_emit_native_section_index(target,
             1 + extra_sections.len, input, &row->segment_index);
-        if (valid) native_bindings.rows[i].section_index = row->segment_index;
+        if (!valid) break;
+        if (row->segment_kind == N00B_ABI_STORAGE_TLS
+            && tls_descriptor_input_index) {
+            native_bindings.rows[i].offset =
+                (int64_t)(tls_descriptor_ordinal++ * 24);
+            valid = core_object_emit_native_section_index(target,
+                1 + extra_sections.len, tls_descriptor_input_index,
+                &native_bindings.rows[i].section_index);
+        } else {
+            native_bindings.rows[i].section_index = row->segment_index;
+        }
     }
     for (uint32_t i = 0; valid && i < tls_metadata.string_storage_count; i++)
         valid = has_pool && core_object_emit_native_section_index(target,
@@ -1549,6 +1863,8 @@ n00bb_abi_emit_unit(
          enum_rows.item_count},
         {N00B_ABI_TABLE_FUNCTION, function_rows.functions,
          function_rows.function_count},
+        {N00B_ABI_TABLE_FRAME_LAYOUT, frame_rows.rows,
+         frame_rows.row_count},
         {N00B_ABI_TABLE_TRAIT_METHOD, trait_method_rows.rows,
          trait_method_rows.count},
         {N00B_ABI_TABLE_CONSTRAINT, constraint_rows.rows,
@@ -1579,6 +1895,8 @@ n00bb_abi_emit_unit(
         {N00B_ABI_TABLE_NATIVE_BINDING, native_bindings.rows,
          native_bindings.count},
         {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
+        {N00B_ABI_TABLE_BYTE_STREAM, frame_rows.bitmap,
+         frame_rows.bitmap_count},
         {N00B_ABI_TABLE_INDEX_PATCH, index_patches,
          index_patches ? storage_rows.index_patch_count + 1 : 0},
     };
@@ -1590,12 +1908,14 @@ n00bb_abi_emit_unit(
     core_free(stream);
     if (!valid) {
         core_list_free(extra_sections);
+        core_free(tls_descriptors);
         core_free(requirements);
         native_bindings_release(&native_bindings);
         tls_metadata_release(&tls_metadata);
         n00bb_abi_storage_rows_release(&storage_rows);
         n00bb_abi_trait_method_rows_release(&trait_method_rows);
         n00bb_abi_constraint_rows_release(&constraint_rows);
+        frame_rows_release(&frame_rows);
         n00bb_abi_function_rows_release(&function_rows);
         n00bb_abi_declarations_release(&declaration_rows);
         n00bb_abi_type_signatures_release(&signature_rows);
@@ -1624,11 +1944,16 @@ n00bb_abi_emit_unit(
         valid = n00bb_abi_name_pool_relocations(pool, entries,
             sizeof(entries) / sizeof(*entries), &relocations,
             &relocation_count);
-    if (valid && storage_rows.relocation_count) {
-        if (storage_rows.relocation_count > SIZE_MAX - relocation_count)
+    size_t descriptor_relocation_count = tls_descriptor_count * 2;
+    if (valid && (storage_rows.relocation_count
+                  || descriptor_relocation_count)) {
+        if (storage_rows.relocation_count > SIZE_MAX - relocation_count
+            || descriptor_relocation_count > SIZE_MAX - relocation_count
+                - storage_rows.relocation_count)
             valid = false;
         else {
-            size_t total = relocation_count + storage_rows.relocation_count;
+            size_t total = relocation_count + storage_rows.relocation_count
+                + descriptor_relocation_count;
             core_object_emit_absolute64_t *combined = core_alloc_array(
                 core_object_emit_absolute64_t, total);
             if (relocation_count)
@@ -1664,6 +1989,29 @@ n00bb_abi_emit_unit(
                         .addend_bits = source->target_offset,
                     };
             }
+            size_t ordinal = 0;
+            size_t template_symbols = (has_pool ? 1 : 0)
+                + (has_aggregates ? 1 : 0) + native_bindings.count - 1;
+            size_t bootstrap_symbol = template_symbols
+                + tls_descriptor_count;
+            for (size_t i = 1; valid && i < native_bindings.count; i++) {
+                const n00b_abi_storage_v1 *row = &storage_rows.rows[i];
+                if (row->segment_kind != N00B_ABI_STORAGE_TLS) continue;
+                size_t at = relocation_count + storage_rows.relocation_count
+                    + ordinal * 2;
+                combined[at] = (core_object_emit_absolute64_t){
+                    .section_index = tls_descriptor_input_index,
+                    .section_offset = ordinal * 24,
+                    .symbol_index = (uint32_t)bootstrap_symbol,
+                };
+                combined[at + 1] = (core_object_emit_absolute64_t){
+                    .section_index = tls_descriptor_input_index,
+                    .section_offset = ordinal * 24 + 16,
+                    .symbol_index = (uint32_t)(template_symbols + ordinal),
+                    .symbol_relocation = true,
+                };
+                ordinal++;
+            }
             core_free(relocations);
             relocations = combined;
             relocation_count = total;
@@ -1673,10 +2021,13 @@ n00bb_abi_emit_unit(
     size_t object_bytes = 0;
     size_t symbol_count = (has_pool ? 1 : 0)
         + (has_aggregates ? 1 : 0)
-        + native_bindings.count - 1;
+        + native_bindings.count - 1
+        + (tls_descriptor_count ? tls_descriptor_count + 1 : 0);
     core_object_emit_symbol_t *object_symbols = symbol_count
         ? core_alloc_array(core_object_emit_symbol_t, symbol_count)
         : nullptr;
+    char **tls_template_names = tls_descriptor_count
+        ? core_alloc_array(char *, tls_descriptor_count) : nullptr;
     if (has_pool) object_symbols[0] = string_symbol;
     if (has_aggregates) object_symbols[has_pool ? 1 : 0]
         = aggregate_symbol;
@@ -1685,10 +2036,37 @@ n00bb_abi_emit_unit(
         object_symbols[(has_pool ? 1 : 0) + (has_aggregates ? 1 : 0) + i - 1] =
             (core_object_emit_symbol_t){
                 .name = native_bindings.names[i],
-                .section_index = storage_input_indexes[row->segment_kind],
-                .section_offset = row->byte_offset,
+                .section_index = row->segment_kind == N00B_ABI_STORAGE_TLS
+                    && tls_descriptor_input_index
+                    ? tls_descriptor_input_index
+                    : storage_input_indexes[row->segment_kind],
+                .section_offset = (uint64_t)native_bindings.rows[i].offset,
                 .exported = true,
             };
+    }
+    if (tls_descriptor_count) {
+        size_t ordinal = 0;
+        for (size_t i = 1; i < native_bindings.count; i++) {
+            const n00b_abi_storage_v1 *row = &storage_rows.rows[i];
+            if (row->segment_kind != N00B_ABI_STORAGE_TLS) continue;
+            const char *native_name = native_bindings.names[i];
+            size_t length = strlen(native_name);
+            tls_template_names[ordinal] = core_alloc_array(char,
+                length + sizeof("$tlv$init"));
+            memcpy(tls_template_names[ordinal], native_name, length);
+            memcpy(tls_template_names[ordinal] + length, "$tlv$init",
+                sizeof("$tlv$init"));
+            object_symbols[symbol_count - tls_descriptor_count - 1
+                           + ordinal] = (core_object_emit_symbol_t){
+                .name = tls_template_names[ordinal],
+                .section_index = storage_input_indexes[N00B_ABI_STORAGE_TLS],
+                .section_offset = row->byte_offset,
+            };
+            ordinal++;
+        }
+        object_symbols[symbol_count - 1] = (core_object_emit_symbol_t){
+            .name = "__tlv_bootstrap", .exported = true,
+        };
     }
     if (valid)
         valid = n00bb_abi_write_object(target, &packed,
@@ -1697,6 +2075,10 @@ n00bb_abi_emit_unit(
             relocations, relocation_count,
             &object, &object_bytes);
     core_list_free(extra_sections);
+    core_free(tls_descriptors);
+    for (size_t i = 0; i < tls_descriptor_count; i++)
+        core_free(tls_template_names[i]);
+    core_free(tls_template_names);
     core_free(object_symbols);
     core_free(relocations);
     core_free(requirements);
@@ -1705,6 +2087,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_storage_rows_release(&storage_rows);
     n00bb_abi_trait_method_rows_release(&trait_method_rows);
     n00bb_abi_constraint_rows_release(&constraint_rows);
+    frame_rows_release(&frame_rows);
     n00bb_abi_function_rows_release(&function_rows);
     n00bb_abi_declarations_release(&declaration_rows);
     n00bb_abi_type_signatures_release(&signature_rows);

@@ -3,6 +3,16 @@ import builtin.gc
 import builtin.gc.heap
 import builtin.gc.mark
 import builtin.gc.sync
+import builtin.gc.handshake
+
+public func notify(heap: Ref[builtin.gc.Heap]) {
+    if !__atomic_exchange(ref heap.fin_notify, false) { return }
+    let ready: Ref[(Ref[byte]?) -> nil]? = heap.cfg.finalizers_ready
+    if ready != nil {
+        let handler: Ref[(Ref[byte]?) -> nil] = ready.get()
+        handler.call(heap.cfg.telemetry_user)
+    }
+}
 
 func list_push(heap: Ref[builtin.gc.Heap], block: Ref[builtin.gc.Block_Metadata]) {
     var head: Ref[builtin.gc.Block_Metadata]? = __atomic_load(ref heap.final_blocks)
@@ -52,7 +62,9 @@ func enqueue(heap: Ref[builtin.gc.Heap], payload: Ref[byte]) {
     if storage != nil {
         final_entry_at(storage.get(), heap.finq_n).payload = payload
         heap.finq_n += 1
-        if heap.finq_n == 1 { __atomic_store(ref heap.fin_notify, true) }
+        if heap.finq_n == 1 and heap.cfg.finalizers_ready != nil {
+            __atomic_store(ref heap.fin_notify, true)
+        }
         return
     }
     require false
@@ -69,10 +81,10 @@ func dead_in_block(marker: Ref[builtin.gc.Marker],
     var index: uint = first
     while index < words {
         let starts: Ref[Atomic[u64]] = builtin.gc.start_word_at(base, index)
-        var dead: u64 = __atomic_load(starts)
+        var dead: u64 = __atomic_load_acquire(starts)
         if have_marks {
             let marks: Ref[Atomic[u64]] = builtin.gc.mark_word_at(base, index)
-            dead = dead & ~__atomic_load(marks)
+            dead = dead & ~__atomic_load_relaxed(marks)
         }
         while dead != 0 {
             let bit: uint = cast[uint](__count_trailing_zeros(cast[uint](dead)))
@@ -224,4 +236,58 @@ public func run(heap: Ref[builtin.gc.Heap], maximum: uint) -> uint {
         done += count
     }
     return done
+}
+
+func pending(heap: Ref[builtin.gc.Heap]) -> uint {
+    builtin.gc.sync.ticket_lock(ref heap.fin)
+    let count: uint = heap.finq_n
+    builtin.gc.sync.ticket_unlock(ref heap.fin)
+    return count
+}
+
+public func backpressure(mutator: Ref[builtin.gc.Mutator]) {
+    let heap: Ref[builtin.gc.Heap] = mutator.heap
+    let limit: uint = heap.cfg.finalizer_backlog_limit
+    if limit == 0 or mutator.in_finalizers or pending(heap) <= limit { return }
+
+    let assist: bool = heap.cfg.finalizer_assist
+    let maximum: uint = ~cast[uint](0)
+    var target: uint = limit / 2
+    if assist {
+        target = maximum
+        if limit <= maximum / 2 { target = 2 * limit }
+    }
+
+    if !assist {
+        let ready: Ref[(Ref[byte]?) -> nil]? = heap.cfg.finalizers_ready
+        if ready != nil {
+            let handler: Ref[(Ref[byte]?) -> nil] = ready.get()
+            handler.call(heap.cfg.telemetry_user)
+        }
+    }
+
+    while true {
+        if assist and !__atomic_exchange(ref heap.fin_assisting, true) {
+            mutator.in_finalizers = true
+            while pending(heap) > limit / 2 and run(heap, builtin.gc.final_batch) != 0 {}
+            mutator.in_finalizers = false
+            __atomic_store(ref heap.fin_assisting, false)
+            builtin.gc.sync.event_signal(ref heap.fin_progress)
+            return
+        }
+        if pending(heap) <= target { return }
+
+        builtin.gc.handshake.enter_blocking(mutator)
+        while true {
+            let seq: u32 = builtin.gc.sync.event_enter(ref heap.fin_progress)
+            if pending(heap) <= target or
+                (assist and !__atomic_load(ref heap.fin_assisting)) {
+                builtin.gc.sync.event_leave(ref heap.fin_progress)
+                break
+            }
+            builtin.gc.sync.event_sleep(ref heap.fin_progress, seq)
+            builtin.gc.sync.event_leave(ref heap.fin_progress)
+        }
+        builtin.gc.handshake.leave_blocking(mutator)
+    }
 }

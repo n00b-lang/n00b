@@ -5,11 +5,11 @@ func identity(items: Array[string]) -> Array[string] fail: string {
 }
 
 func values() -> Array[string] {
-    return bundle["one", "a string longer than the inline capacity"]
+    return ["one", "a string longer than the inline capacity"]'bundle
 }
 
 func empty() -> Array[string] {
-    return bundle[]
+    return []'bundle
 }
 
 func observe(items: Array[string]) {
@@ -17,7 +17,7 @@ func observe(items: Array[string]) {
 }
 
 comptime {
-    observe(bundle["compile-time cached string"])
+    observe(["compile-time cached string"]'bundle)
 } else {
     values()
     empty()

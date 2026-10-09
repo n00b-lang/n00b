@@ -35,6 +35,8 @@ comptime {
     if mapped != nil {
         let address: Ref[byte] = mapped.get()
         let word: Ref[u64] = unsafe_cast[Ref[u64]] address
+        let direct: Ref[u32] = unsafe_cast[Ref[u32]] word
+        assert __abi_ref_address(direct) == __abi_ref_address(word)
         let roundtrip: Ref[byte] = unsafe_cast[Ref[byte]] word
         assert roundtrip == address
         builtin.os.protect(address, page, builtin.os.PROT_READ)

@@ -6,9 +6,16 @@ program_dir=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-"$compiler" build --output "$tmp/ok" "$program_dir/bitcode_runtime_ok.n00b"
+if "$compiler" build --native --generic --output "$tmp/conflict" \
+    "$program_dir/bitcode_runtime_ok.n00b" >"$tmp/conflict.out" 2>&1; then
+    echo 'conflicting CPU options unexpectedly accepted' >&2
+    exit 1
+fi
+grep -q -- '--native and --generic are mutually exclusive' "$tmp/conflict.out"
+"$compiler" build --generic --output "$tmp/ok" \
+    "$program_dir/bitcode_runtime_ok.n00b"
 "$tmp/ok"
-"$compiler" build --output "$tmp/bootstrap_io" \
+"$compiler" build --native --output "$tmp/bootstrap_io" \
     "$program_dir/bitcode_bootstrap_io.n00b" \
     >"$tmp/bootstrap_io_compile"
 test "$(cat "$tmp/bootstrap_io_compile")" = "compile"
@@ -99,15 +106,6 @@ N00B_PATH="$program_dir" "$compiler" build --output "$tmp/litmod_import" \
 "$compiler" build --output "$tmp/litmod_forward_chain" \
     "$program_dir/bitcode_litmod_forward_chain.n00b"
 "$tmp/litmod_forward_chain"
-"$compiler" build --output "$tmp/litmod_explicit_type" \
-    "$program_dir/bitcode_litmod_explicit_type.n00b"
-"$tmp/litmod_explicit_type"
-"$compiler" build --output "$tmp/litmod_explicit_forward" \
-    "$program_dir/bitcode_litmod_explicit_forward.n00b"
-"$tmp/litmod_explicit_forward"
-"$compiler" build --output "$tmp/litmod_explicit_dict" \
-    "$program_dir/bitcode_litmod_explicit_dict.n00b"
-"$tmp/litmod_explicit_dict"
 "$compiler" build --output "$tmp/builtin_u32" \
     "$program_dir/bitcode_builtin_u32.n00b"
 "$tmp/builtin_u32"
@@ -132,20 +130,6 @@ N00B_PATH="$program_dir" "$compiler" build --output "$tmp/litmod_import" \
 "$compiler" build --output "$tmp/litmod_bool_string_tuple_array" \
     "$program_dir/bitcode_litmod_bool_string_tuple_array.n00b"
 "$tmp/litmod_bool_string_tuple_array"
-"$compiler" lower --dump-ir \
-    "$program_dir/bitcode_builtin_prefix_args.n00b" \
-    >"$tmp/builtin_prefix_args.ir"
-grep -Fq 'func @numbers() -> array[int]' "$tmp/builtin_prefix_args.ir"
-grep -Fq 'func @empty_set() -> set[int]' "$tmp/builtin_prefix_args.ir"
-grep -Fq 'func @mapping() -> dict[string, int]' "$tmp/builtin_prefix_args.ir"
-if "$compiler" build --output "$tmp/litmod_explicit_mismatch" \
-    "$program_dir/bitcode_litmod_explicit_mismatch.n00b" \
-    >"$tmp/litmod_explicit_mismatch.out" 2>&1; then
-    echo 'conflicting literal prefix type unexpectedly built' >&2
-    exit 1
-fi
-grep -q 'literal handler cannot specialize' \
-    "$tmp/litmod_explicit_mismatch.out"
 if "$compiler" build --output "$tmp/litmod_comptime_fail" \
     "$program_dir/bitcode_litmod_comptime_fail.n00b" \
     >"$tmp/litmod_comptime_fail.out" 2>&1; then

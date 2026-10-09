@@ -675,6 +675,7 @@ n00bb_abi_type_layout_rows_build(
                 && types->rows[i].kind != N00B_ABI_TYPE_RECORD
                 && types->rows[i].kind != N00B_ABI_TYPE_VARIANT
                 && types->rows[i].kind != N00B_ABI_TYPE_TUPLE
+                && types->rows[i].kind != N00B_ABI_TYPE_CALLBACK
                 && !wrapper)
             || layouts.len >= UINT32_MAX
             || types->rows[i].size_bits != final->intrinsic_bits
@@ -742,7 +743,8 @@ n00bb_abi_type_layout_rows_build(
             && append_runs(final->reserved, final->n_reserved,
                 final->intrinsic_bits, stream_base, &runs, &indexes,
                 &row.reserved_runs)
-            && (wrapper || append_members(index, declarations, names, owner,
+            && (wrapper || types->rows[i].kind == N00B_ABI_TYPE_CALLBACK
+                || append_members(index, declarations, names, owner,
                 final, (uint32_t)i, stream_base, &fields, &arms, &packed,
                 &runs, &indexes, &type_field_ranges[i]));
         if (valid && types->rows[i].kind == N00B_ABI_TYPE_TUPLE)

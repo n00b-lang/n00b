@@ -54,7 +54,7 @@ static void test_thread_suspend(void)
     uint64_t control = atomic_load(&worker_control);
     n00b_os_thread_context context = {0};
     assert(n00b_os_thread_suspend(control, &context, TEST_TIMEOUT_NS) == 0);
-    assert(context.sp != 0 && context.nregs != 0);
+    assert(context.sp != 0 && context.pc != 0 && context.nregs != 0);
     uint64_t stopped_ticks = atomic_load(&worker_ticks);
     uint64_t pause_start = n00b_os_now_ns();
     while (n00b_os_now_ns() - pause_start < 1000000)
@@ -91,7 +91,7 @@ int main(void)
     assert(n00b_os_thread_id() == n00b_os_thread_id());
     n00b_os_thread_context self = {0};
     n00b_os_thread_capture_self(&self);
-    assert(self.sp && self.fp && self.nregs != 0);
+    assert(self.sp && self.fp && self.pc && self.nregs != 0);
     assert(self.nregs <= N00B_OS_CONTEXT_REGS);
     uint64_t before = n00b_os_now_ns();
     uint64_t after = n00b_os_now_ns();

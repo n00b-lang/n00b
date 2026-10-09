@@ -8,11 +8,11 @@ func lower_empty_array() -> Array[int] {
 }
 
 func lower_tagged_array() -> Array[int] {
-    var values: Array[int] = array[10, 20]
+    var values: Array[int] = [10, 20]'array
     return values
 }
 
 func lower_short_tagged_array() -> Array[int] {
-    var values: Array[int] = a[30, 40]
+    var values: Array[int] = [30, 40]'a
     return values
 }

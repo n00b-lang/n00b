@@ -1,5 +1,5 @@
-func compound_assignment() -> int {
-    var total = 1
+func compound_assignment() -> uint {
+    var total: uint = 1
     total += 2
     total -= 1
     total *= 2

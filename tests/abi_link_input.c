@@ -2903,9 +2903,12 @@ test_string_storage_link(const char *path)
             ? n00bb_abi_object_row(&view, N00B_ABI_TABLE_NATIVE_BINDING,
                 symbol->native_binding_index) : nullptr;
         assert(binding && binding->kind == N00B_ABI_NATIVE_SECTION_OFFSET
-            && binding->section_index == storage->segment_index
             && binding->offset >= 0
-            && (uint64_t)binding->offset == storage->byte_offset);
+            && (mach && storage->segment_kind == N00B_ABI_STORAGE_TLS
+                ? binding->section_index != storage->segment_index
+                    && binding->offset % 24 == 0
+                : binding->section_index == storage->segment_index
+                    && (uint64_t)binding->offset == storage->byte_offset));
         n00bb_abi_string_view_t name;
         assert(symbol && n00bb_abi_object_string(&view,
             &symbol->name, &name));

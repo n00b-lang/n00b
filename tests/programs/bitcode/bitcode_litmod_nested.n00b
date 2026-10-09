@@ -10,7 +10,7 @@ func identity_array(items: Array[string]) -> Array[string] fail: string {
 }
 
 func value(x: string) -> Array[string] {
-    return bundle[raw"static", x]
+    return ["static"'raw, x]'bundle
 }
 
 comptime {

@@ -648,11 +648,13 @@ typedef struct {
     uint32_t function_index;
 } n00b_abi_dispatch_entry_v1;
 
+enum { N00B_ABI_FRAME_ROOT_OFFSET = 8 };
+
 typedef struct {
     uint32_t function_index;
-    uint32_t shadow_frame_type_index;
+    uint32_t shadow_frame_type_index; /* Traceable type of payload at FRAME_ROOT_OFFSET; 0 if absent. */
     n00b_abi_range_v1 pointer_bitmap_bytes;
-    uint64_t frame_byte_extent; /* FP-relative managed region below FP. */
+    uint64_t frame_byte_extent; /* Stack record: link, word, bounds, then root slots. */
 } n00b_abi_frame_layout_v1;
 
 typedef struct {
@@ -769,6 +771,14 @@ uint32_t n00b_abi_v1_register_image(
     const n00b_abi_image_descriptor_v1 *image,
     uint64_t *published_generation, n00b_abi_error_v1 *error);
 
+/* The linker validates its complete image before native code emission.
+ * Only compiler-generated entry points may use the trusted registration path. */
+uint32_t n00b_abi_v1_validate_image(
+    const n00b_abi_image_descriptor_v1 *image, n00b_abi_error_v1 *error);
+uint32_t n00b_abi_v1_register_linked_image(
+    const n00b_abi_image_descriptor_v1 *image,
+    uint64_t *published_generation, n00b_abi_error_v1 *error);
+
 const n00b_abi_snapshot_v1 *n00b_abi_v1_current_snapshot(void);
 uint64_t n00b_abi_v1_generation(const n00b_abi_snapshot_v1 *snapshot);
 uint32_t n00b_abi_v1_table_count(const n00b_abi_snapshot_v1 *snapshot,
@@ -834,6 +844,10 @@ const n00b_abi_field_v1 *n00b_abi_v1_field(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t field_index);
 const n00b_abi_function_v1 *n00b_abi_v1_function(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t function_index);
+int32_t n00b_abi_v1_bind_runtime_function_addresses(
+    const void *const *addresses, uint32_t count);
+const void *n00b_abi_v1_runtime_function_address(uint32_t function_index);
+uint32_t n00b_abi_v1_runtime_function_index(const void *address);
 const n00b_abi_call_signature_v1 *n00b_abi_v1_call_signature(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t signature_index);
 const n00b_abi_call_shape_v1 *n00b_abi_v1_call_shape(

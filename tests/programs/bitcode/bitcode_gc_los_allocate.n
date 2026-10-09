@@ -29,6 +29,8 @@ comptime {
                     heap, mutator, type_index, bytes, builtin.gc.granule_bytes, false)
                 if first != nil {
                     let payload: Ref[byte] = first.get()
+                    assert ref_read(payload) == cast[byte](0)
+                    ref_write(payload, cast[byte](0xa5))
                     let object: Ref[builtin.gc.Los_Obj] = builtin.gc.los_of(
                         builtin.gc.header_of(payload))
                     assert object.hdr.type_index == type_index
@@ -43,10 +45,16 @@ comptime {
                         __abi_ref_address(payload) + bytes - 1) != nil
                     builtin.gc.registry.registry_read_unlock(heap)
 
+                    var published: Ref[byte]? = nil
                     let aligned: Ref[byte]? = builtin.gc.los.allocate_locked(
-                        heap, mutator, type_index, bytes, 128, false)
+                        heap, mutator, type_index, bytes, 128, false, nil,
+                        ref published)
                     if aligned != nil {
                         let aligned_payload: Ref[byte] = aligned.get()
+                        if published != nil {
+                            assert published.get() == aligned_payload
+                        } else { require false }
+                        assert mutator.last_alloc == nil
                         let second: Ref[builtin.gc.Los_Obj] = builtin.gc.los_of(
                             builtin.gc.header_of(aligned_payload))
                         assert __abi_ref_address(aligned_payload) % 128 == 0
@@ -68,6 +76,7 @@ comptime {
                         heap, mutator, type_index, bytes, builtin.gc.granule_bytes, false)
                     if reused != nil {
                         assert reused.get() == payload
+                        assert ref_read(reused.get()) == cast[byte](0)
                         assert heap.los_count == 1
                         assert heap.los_cache_bytes == 0
                         heap.los = nil

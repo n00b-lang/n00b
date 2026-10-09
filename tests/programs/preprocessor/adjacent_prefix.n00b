@@ -1,1 +1,1 @@
-const tagged = r"rich text"
+const tagged = "rich text"'r

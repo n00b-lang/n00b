@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -186,7 +187,7 @@ main(int argc, char **argv)
     image.frame_layouts[1] = (n00b_abi_frame_layout_v1){
         .function_index = 1,
         .pointer_bitmap_bytes = {3, 1},
-        .frame_byte_extent = 16,
+        .frame_byte_extent = N00B_ABI_FRAME_ROOT_OFFSET + 8,
     };
     image.modules[1].package_index = 1;
     memcpy(image.modules[1].full_path.short_value.bytes, "p.m", 3);
@@ -299,6 +300,10 @@ main(int argc, char **argv)
         == N00B_ABI_BAD_METADATA && !n00b_abi_v1_current_snapshot());
     image.header.cpu_profile = 0;
     image.locations[1].end_column = 0;
+    assert(n00b_abi_v1_validate_image(&descriptor, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_SOURCE_LOCATION
+        && !n00b_abi_v1_current_snapshot());
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
         && error.table_kind == N00B_ABI_TABLE_SOURCE_LOCATION
@@ -482,12 +487,26 @@ main(int argc, char **argv)
         == N00B_ABI_BAD_METADATA
         && error.table_kind == N00B_ABI_TABLE_FRAME_LAYOUT
         && !n00b_abi_v1_current_snapshot());
-    image.frame_layouts[1].frame_byte_extent = 80;
+    image.frame_layouts[1].frame_byte_extent =
+        N00B_ABI_FRAME_ROOT_OFFSET + (CHAR_BIT + 1) * 8;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
         && error.table_kind == N00B_ABI_TABLE_FRAME_LAYOUT
         && !n00b_abi_v1_current_snapshot());
-    image.frame_layouts[1].frame_byte_extent = 16;
+    image.frame_layouts[1].frame_byte_extent = N00B_ABI_FRAME_ROOT_OFFSET + 8;
+    image.frame_layouts[1].shadow_frame_type_index = 2;
+    image.types[2].size_bits = 72;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FRAME_LAYOUT
+        && !n00b_abi_v1_current_snapshot());
+    image.types[2].size_bits = 64;
+    assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
+        == N00B_ABI_BAD_METADATA
+        && error.table_kind == N00B_ABI_TABLE_FRAME_LAYOUT
+        && !n00b_abi_v1_current_snapshot());
+    image.types[2].size_bits = 0;
+    image.frame_layouts[1].shadow_frame_type_index = 0;
     image.bytes[3] = 2;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_BAD_METADATA
@@ -828,6 +847,9 @@ main(int argc, char **argv)
         && host_feature("hw.optional.armv8_1_atomics"))
         image.header.cpu_profile = N00B_ABI_CPU_NATIVE_ATOMIC128;
 #endif
+    assert(n00b_abi_v1_validate_image(&descriptor, &error)
+        == N00B_ABI_OK && !error.status
+        && !n00b_abi_v1_current_snapshot());
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_OK && !error.status && generation == 1);
     const n00b_abi_snapshot_v1 *snapshot =
@@ -838,7 +860,7 @@ main(int argc, char **argv)
     const n00b_abi_frame_layout_v1 *frame =
         n00b_builtin_abi_frame_layout(1);
     const uint8_t *bitmap = n00b_builtin_abi_bytes(3, 1);
-    assert(frame && frame->frame_byte_extent == 16
+    assert(frame && frame->frame_byte_extent == N00B_ABI_FRAME_ROOT_OFFSET + 8
         && frame->pointer_bitmap_bytes.first == 3
         && frame->pointer_bitmap_bytes.count == 1
         && bitmap && bitmap[0] == 1);

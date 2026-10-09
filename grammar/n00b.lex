@@ -15,6 +15,7 @@
 		    escape_digits("U", "0123456789abcdefABCDEF", "8"))
 @lex-string('"', '"', escape('\\'), use_escapes("n00b"), as("STRING_LIT"))
 @lex-string("'", "'", escape('\\'), use_escapes("n00b"), scalar, as("CHAR_LIT"))
+@lex-sigil("'", before_string, unless_closed, attach_previous)
 @lex-number(digits("0123456789"),
 	    point("leading"),
 	    exp("eE"),
@@ -34,7 +35,7 @@
 	   pad("required"),
 	   label,
 	   as("EMBED"))
-@lex-layout(indent("INDENT", "DEDENT"), newline("NEWLINE"),
+@lex-layout(indent("INDENT", "DEDENT"), newline("NEWLINE", "each"),
 	    tabs("reject"), mixed_indent("reject"), brackets("()[]"))
 @lex-fallback("reject")
 @lex-operators(add(".."))

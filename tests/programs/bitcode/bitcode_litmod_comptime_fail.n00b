@@ -5,7 +5,7 @@ func fail_fence(contents: string) -> nil fail: string {
 }
 
 comptime {
-    noop[- body -]
+    [- body -]'noop
     require false
 } else {
 }

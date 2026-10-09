@@ -1726,10 +1726,23 @@ metadata_frame_layouts_valid(const n00b_abi_snapshot_v1 *snapshot,
             const n00b_abi_frame_layout_v1 *frame = valid
                 ? n00b_abi_v1_frame_layout(snapshot, frame_index) : nullptr;
             valid = valid && frame && frame->function_index == function_index
-                && frame->frame_byte_extent >= 8
+                && frame->frame_byte_extent >= N00B_ABI_FRAME_ROOT_OFFSET
                 && !(frame->frame_byte_extent % 8);
+            if (valid && frame->shadow_frame_type_index) {
+                const n00b_abi_type_v1 *payload = n00b_abi_v1_type(snapshot,
+                    frame->shadow_frame_type_index);
+                uint64_t payload_bytes = frame->frame_byte_extent
+                    - N00B_ABI_FRAME_ROOT_OFFSET;
+                valid = payload && payload->size_bits
+                    && payload->layout_index
+                    && (payload->size_bits / 8 < payload_bytes
+                        || (payload->size_bits / 8 == payload_bytes
+                            && !(payload->size_bits % 8)))
+                    && !(payload->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE);
+            }
             if (valid) {
-                uint64_t slots = (frame->frame_byte_extent - 8) / 8;
+                uint64_t slots = (frame->frame_byte_extent
+                    - N00B_ABI_FRAME_ROOT_OFFSET) / 8;
                 uint64_t bitmap_bytes = (slots + 7) / 8;
                 const uint8_t *bitmap = nullptr;
                 valid = bitmap_bytes == frame->pointer_bitmap_bytes.count
@@ -1816,13 +1829,21 @@ metadata_storage_valid(const n00b_abi_snapshot_v1 *snapshot,
                 ? n00b_abi_v1_record(snapshot,
                     N00B_ABI_TABLE_NATIVE_BINDING,
                     symbol->native_binding_index, nullptr) : nullptr;
+            bool mach_tlv = ((const n00b_abi_header_v1 *)
+                snapshot->metadata)->target_id == N00B_ABI_TARGET_ARM64_MACOS
+                && storage->segment_kind == N00B_ABI_STORAGE_TLS;
             valid = symbol && symbol->module_index == storage->module_index
                 && symbol->type_index == storage->type_index
                 && symbol->native_binding_index && binding
                 && binding->kind == N00B_ABI_NATIVE_SECTION_OFFSET
-                && binding->section_index == storage->segment_index
-                && storage->byte_offset <= INT64_MAX
-                && binding->offset == (int64_t)storage->byte_offset;
+                && (mach_tlv
+                    ? binding->section_index
+                        && binding->section_index != storage->segment_index
+                        && binding->offset >= 0
+                        && binding->offset % 24 == 0
+                    : binding->section_index == storage->segment_index
+                        && storage->byte_offset <= INT64_MAX
+                        && binding->offset == (int64_t)storage->byte_offset);
         }
         if (valid && storage->tls_relocations.count)
             valid = storage->segment_kind == N00B_ABI_STORAGE_TLS;
@@ -2299,10 +2320,10 @@ snapshot_contents_valid(n00b_abi_snapshot_v1 *candidate,
         && module_name_cache_build(candidate, error);
 }
 
-uint32_t
-n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
-                           uint64_t *published_generation,
-                           n00b_abi_error_v1 *error)
+static uint32_t
+prepare_image(const n00b_abi_image_descriptor_v1 *image,
+              bool validate_contents, n00b_abi_snapshot_v1 **out,
+              n00b_abi_error_v1 *error)
 {
     if (error) *error = (n00b_abi_error_v1){0};
     if (!image || image->descriptor_version != 1 || image->reserved_zero
@@ -2345,13 +2366,39 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
                 + entry->file_offset;
         }
     }
-    if (valid) valid = snapshot_contents_valid(candidate, error);
+    if (valid) valid = validate_contents
+        ? snapshot_contents_valid(candidate, error)
+        : typehash_cache_build(candidate, error)
+            && module_name_cache_build(candidate, error);
     if (!valid) {
         snapshot_candidate_free(candidate);
         if (error && error->status == N00B_ABI_BAD_METADATA)
             return N00B_ABI_BAD_METADATA;
         return registration_error(error, N00B_ABI_BAD_METADATA, 0, 0, 0);
     }
+    *out = candidate;
+    return N00B_ABI_OK;
+}
+
+uint32_t
+n00b_abi_v1_validate_image(const n00b_abi_image_descriptor_v1 *image,
+                           n00b_abi_error_v1 *error)
+{
+    n00b_abi_snapshot_v1 *candidate = nullptr;
+    uint32_t status = prepare_image(image, true, &candidate, error);
+    if (candidate) snapshot_candidate_free(candidate);
+    return status;
+}
+
+static uint32_t
+register_image(const n00b_abi_image_descriptor_v1 *image,
+               bool validate_contents, uint64_t *published_generation,
+               n00b_abi_error_v1 *error)
+{
+    n00b_abi_snapshot_v1 *candidate = nullptr;
+    uint32_t status = prepare_image(image, validate_contents, &candidate,
+                                    error);
+    if (status != N00B_ABI_OK) return status;
     while (atomic_flag_test_and_set_explicit(&registration_lock,
                                             memory_order_acquire)) {}
     if (atomic_load_explicit(&current_snapshot, memory_order_relaxed)) {
@@ -2365,6 +2412,22 @@ n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
     if (published_generation) *published_generation = 1;
     if (error) *error = (n00b_abi_error_v1){0};
     return N00B_ABI_OK;
+}
+
+uint32_t
+n00b_abi_v1_register_image(const n00b_abi_image_descriptor_v1 *image,
+                           uint64_t *published_generation,
+                           n00b_abi_error_v1 *error)
+{
+    return register_image(image, true, published_generation, error);
+}
+
+uint32_t
+n00b_abi_v1_register_linked_image(const n00b_abi_image_descriptor_v1 *image,
+                                  uint64_t *published_generation,
+                                  n00b_abi_error_v1 *error)
+{
+    return register_image(image, false, published_generation, error);
 }
 
 const n00b_abi_snapshot_v1 *
@@ -2499,6 +2562,60 @@ TYPED_GETTER(trace, TRACE, trace)
 TYPED_GETTER(storage, STORAGE, storage)
 
 #undef TYPED_GETTER
+
+static _Atomic(const void *const *) runtime_function_addresses;
+static _Atomic(uint32_t) runtime_function_address_count;
+
+int32_t
+n00b_abi_v1_bind_runtime_function_addresses(const void *const *addresses,
+                                            uint32_t count)
+{
+    if (!addresses || !count || !n00b_abi_v1_current_snapshot()) return -1;
+    if (atomic_load_explicit(&runtime_function_addresses,
+                             memory_order_acquire)) return -1;
+    atomic_store_explicit(&runtime_function_address_count, count,
+                          memory_order_relaxed);
+    atomic_store_explicit(&runtime_function_addresses, addresses,
+                          memory_order_release);
+    return 0;
+}
+
+const void *
+n00b_abi_v1_runtime_function_address(uint32_t function_index)
+{
+    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
+    const n00b_abi_function_v1 *function = snapshot
+        ? n00b_abi_v1_function(snapshot, function_index) : nullptr;
+    if (!function) return nullptr;
+    for (uint32_t i = 0; i < function->code_ranges.count; i++) {
+        uint32_t range_index = 0;
+        if (n00b_abi_v1_index_at(snapshot, function->code_ranges, i,
+                                &range_index) != 1) return nullptr;
+        const n00b_abi_code_range_v1 *range = n00b_abi_v1_code_range(
+            snapshot, range_index);
+        if (range && (range->phase_mask & N00B_ABI_PHASE_RUNTIME)
+            && range->start) return range->start;
+    }
+    const void *const *addresses = atomic_load_explicit(
+        &runtime_function_addresses, memory_order_acquire);
+    uint32_t count = atomic_load_explicit(&runtime_function_address_count,
+                                          memory_order_relaxed);
+    return addresses && function_index < count
+        ? addresses[function_index] : nullptr;
+}
+
+uint32_t
+n00b_abi_v1_runtime_function_index(const void *address)
+{
+    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
+    if (!snapshot || !address) return 0;
+    uint32_t count = n00b_abi_v1_table_count(snapshot,
+        N00B_ABI_TABLE_FUNCTION);
+    for (uint32_t i = 1; i < count; i++)
+        if (n00b_abi_v1_runtime_function_address(i) == address)
+            return i;
+    return 0;
+}
 
 int32_t
 n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,

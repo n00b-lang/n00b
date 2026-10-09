@@ -1,17 +1,17 @@
 declare_litmod("mirror", "dict", "build_dict")
 
 func build_dict(items: Array[Tuple[int, int]]) -> Dict[int, int] fail: string {
-    return d{1: 2}
+    return {1: 2}'d
 }
 
 func static_dict() -> Dict[int, int] {
-    return mirror{1: 2, 3: 4}
+    return {1: 2, 3: 4}'mirror
 }
 
 func dynamic_dict(x: int) -> Dict[int, int] {
-    return mirror{x: 2, 3: 4}
+    return {x: 2, 3: 4}'mirror
 }
 
 func empty_dict() -> Dict[int, int] {
-    return mirror{}
+    return {}'mirror
 }

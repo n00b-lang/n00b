@@ -6,7 +6,7 @@ func always_fail(items: Array[int]) -> Array[int] fail: string {
 
 func caught(x: int) -> int {
     try {
-        values = fault[1, x]
+        values = [1, x]'fault
         return 0
     } else err {
         return 1

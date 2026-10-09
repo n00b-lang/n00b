@@ -1,0 +1,11 @@
+var value: int
+
+func read_value() -> int {
+    return value
+}
+
+comptime {} else {
+    let reader: Ref[() -> int] = ref read_value
+    reader.call()
+    value = 7
+}

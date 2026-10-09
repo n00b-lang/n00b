@@ -16,7 +16,7 @@ func strings(left: string, right: string) -> string {
     return value
 }
 
-func shifts(left: u:37, count: int) -> u:37 {
+func shifts(left: u:37, count: u:6) -> u:37 {
     var value = left
     value <<= count
     value >>= count

@@ -2241,14 +2241,31 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
             const n00b_abi_native_binding_v1 *binding = symbol
                 ? n00bb_abi_object_row(view, N00B_ABI_TABLE_NATIVE_BINDING,
                     symbol->native_binding_index) : nullptr;
+            bool mach_tlv = view->format == CORE_TARGET_OBJECT_MACH_O
+                && storage->segment_kind == N00B_ABI_STORAGE_TLS;
+            bool binding_valid = false;
+            if (binding && mach_tlv) {
+                core_object_section_t descriptor;
+                binding_valid = binding->offset >= 0
+                    && core_object_section_at(view->object,
+                        view->object_bytes, view->format,
+                        binding->section_index, &descriptor)
+                    && (descriptor.flags & 0xff) == 0x13
+                    && (uint64_t)binding->offset <= descriptor.size
+                    && descriptor.size - (uint64_t)binding->offset >= 24
+                    && (binding->offset % 24) == 0;
+            } else if (binding) {
+                binding_valid = binding->section_index
+                    == storage->segment_index
+                    && storage->byte_offset <= INT64_MAX
+                    && binding->offset == (int64_t)storage->byte_offset;
+            }
             if (!symbol || symbol->module_index != storage->module_index
                 || symbol->type_index != storage->type_index
                 || !symbol->native_binding_index || !binding
                 || binding->kind != N00B_ABI_NATIVE_SECTION_OFFSET
                 || !storage->segment_index
-                || binding->section_index != storage->segment_index
-                || storage->byte_offset > INT64_MAX
-                || binding->offset != (int64_t)storage->byte_offset)
+                || !binding_valid)
                 return false;
         }
         if (!storage->instance_shape_index) return true;
@@ -3218,6 +3235,8 @@ n00bb_abi_collect_native_sections(
                 .alignment = (uint32_t)source.alignment,
                 .writable = writable, .executable = executable,
                 .is_thread_local = tls,
+                .is_thread_local_descriptor = mach
+                    && (source.flags & 0xff) == 0x13,
             };
             built.maps[built.count] = (n00bb_abi_native_section_map_t){
                 .input = input, .local_section_index = native,
@@ -3425,6 +3444,9 @@ n00bb_abi_collect_native_relocations(
                     .section_offset = relocation.section_offset,
                     .symbol_index = symbol_index,
                     .addend_bits = relocation.addend_bits,
+                    .symbol_relocation = view->format
+                        == CORE_TARGET_OBJECT_MACH_O
+                        && !relocation.target_is_section,
                 };
         }
     }

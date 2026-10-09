@@ -1,0 +1,3 @@
+func reinterpret_word(word: Ref[u64]) -> Ref[u32] {
+    return unsafe_cast[Ref[u32]] word
+}

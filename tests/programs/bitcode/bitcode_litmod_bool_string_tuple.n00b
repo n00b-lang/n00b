@@ -5,7 +5,7 @@ func make_pair(raw: string) -> Tuple[bool, string] fail: string {
 }
 
 func value() -> Tuple[bool, string] {
-    return pair"a long string that needs a relocation"
+    return "a long string that needs a relocation"'pair
 }
 
 comptime {

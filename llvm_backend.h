@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "ir/ir.h"
+#include "ir/storage_origin.h"
 #include "lib/buffer.h"
 #include "lib/diagnostic.h"
 
@@ -51,11 +52,13 @@ typedef struct {
 typedef struct {
     uint64_t typehash;
     uint32_t index;
+    bool finalizable;
 } n00bb_llvm_type_index_t;
 
 typedef struct {
     const ir_global_t *global;
     const char *native_name;
+    uint32_t storage_index;
 } n00bb_llvm_global_binding_t;
 
 typedef struct {
@@ -63,9 +66,14 @@ typedef struct {
     ir_func_t *function;
 } n00bb_llvm_finalizer_binding_t;
 
+typedef struct {
+    ir_func_t *function;
+    uint32_t index;
+} n00bb_llvm_function_binding_t;
+
 n00bb_llvm_backend_t *n00bb_llvm_backend_prepare(
     const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
-    bool debug_enabled, core_diagnostics_t *diagnostics);
+    bool debug_enabled, bool native_cpu, core_diagnostics_t *diagnostics);
 void n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend);
 bool n00bb_llvm_backend_bind_phase_arrays(
     n00bb_llvm_backend_t *backend, const n00bb_llvm_phase_array_t *arrays,
@@ -79,9 +87,15 @@ bool n00bb_llvm_backend_bind_globals(
 bool n00bb_llvm_backend_bind_finalizers(
     n00bb_llvm_backend_t *backend,
     const n00bb_llvm_finalizer_binding_t *finalizers, size_t count);
+bool n00bb_llvm_backend_bind_function_indices(
+    n00bb_llvm_backend_t *backend,
+    const n00bb_llvm_function_binding_t *functions, size_t count);
 bool n00bb_llvm_backend_bind_reachable_functions(
     n00bb_llvm_backend_t *backend, bool comptime,
     ir_func_t *const *functions, size_t count);
+bool n00bb_llvm_backend_bind_storage_origin(
+    n00bb_llvm_backend_t *backend, ir_storage_origin_t *origin);
+bool n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend);
 
 /* Produces verified LLVM bitcode for a phase module. */
 bool n00bb_llvm_backend_write_bitcode(

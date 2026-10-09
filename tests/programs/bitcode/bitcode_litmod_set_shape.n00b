@@ -5,15 +5,15 @@ func build_set(items: Array[int]) -> Array[int] fail: string {
 }
 
 func static_set() -> Array[int] {
-    return mirror{1, 2}
+    return {1, 2}'mirror
 }
 
 func dynamic_set(x: int) -> Array[int] {
-    return mirror{x, 2}
+    return {x, 2}'mirror
 }
 
 func empty_set() -> Array[int] {
-    return mirror{}
+    return {}'mirror
 }
 
 comptime {

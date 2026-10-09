@@ -2,7 +2,7 @@ declare_litmod("outer", "string", "make_outer")
 declare_litmod("inner", "string", "identity")
 
 func make_outer(raw: string) -> string fail: string {
-    return inner"an inner long string payload"
+    return "an inner long string payload"'inner
 }
 
 func identity(raw: string) -> string fail: string {
@@ -14,7 +14,7 @@ func observe(value: string) {
 }
 
 comptime {
-    observe(outer"ignored")
+    observe("ignored"'outer)
 } else {
-    observe(outer"ignored")
+    observe("ignored"'outer)
 }

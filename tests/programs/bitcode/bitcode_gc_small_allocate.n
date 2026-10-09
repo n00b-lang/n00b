@@ -352,7 +352,17 @@ comptime {
                     if black != nil {
                         assert builtin.gc.mark.is_marked(heap, black.get())
                     } else { require false }
-                    assert mutator.objects_allocated == 11
+                    var published: Ref[byte]? = nil
+                    let into: Ref[byte]? = builtin.gc.alloc.allocate_reserved(
+                        mutator, ref mutator.small, type_index, 8,
+                        builtin.gc.granule_bytes, false, nil, ref published)
+                    if into != nil {
+                        if published != nil {
+                            assert published.get() == into.get()
+                        } else { require false }
+                    } else { require false }
+                    assert mutator.last_alloc == nil
+                    assert mutator.objects_allocated == 12
                     builtin.os.unmap(mutator, mutator_bytes)
                 } else { require false }
             } else { require false }

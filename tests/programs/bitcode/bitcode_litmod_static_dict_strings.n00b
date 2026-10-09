@@ -10,15 +10,15 @@ func identity_pairs(items: Array[Tuple[string, string, int]]) -> Array[Tuple[str
 }
 
 func values() -> Array[Tuple[string, int]] {
-    return mirror{"first": 1, "a longer string key requiring relocation": 2}
+    return {"first": 1, "a longer string key requiring relocation": 2}'mirror
 }
 
 func empty() -> Array[Tuple[string, int]] {
-    return mirror{}
+    return {}'mirror
 }
 
 func many() -> Array[Tuple[string, string, int]] {
-    return pairs[("left", "right", 3)]
+    return [("left", "right", 3)]'pairs
 }
 
 func observe(items: Array[Tuple[string, int]]) {
@@ -26,7 +26,7 @@ func observe(items: Array[Tuple[string, int]]) {
 }
 
 comptime {
-    observe(mirror{"compile-time": 4})
+    observe({"compile-time": 4}'mirror)
 } else {
     values()
     empty()

@@ -297,6 +297,11 @@ void n00b_os_thread_yield(void)
     os_thread_yield();
 }
 
+void n00b_os_thread_fence(void)
+{
+    atomic_thread_fence(memory_order_seq_cst);
+}
+
 uint64_t n00b_os_thread_id(void)
 {
     return os_thread_id();

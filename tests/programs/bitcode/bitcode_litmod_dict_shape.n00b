@@ -5,15 +5,15 @@ func build_dict(items: Array[Tuple[int, int]]) -> Array[Tuple[int, int]] fail: s
 }
 
 func static_dict() -> Array[Tuple[int, int]] {
-    return mirror{1: 2, 3: 4}
+    return {1: 2, 3: 4}'mirror
 }
 
 func dynamic_dict(x: int) -> Array[Tuple[int, int]] {
-    return mirror{x: 2, 3: 4}
+    return {x: 2, 3: 4}'mirror
 }
 
 func empty_dict() -> Array[Tuple[int, int]] {
-    return mirror{}
+    return {}'mirror
 }
 
 comptime {

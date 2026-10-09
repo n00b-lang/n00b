@@ -54,16 +54,60 @@ comptime {
                         require builtin.gc.roots.add_global(heap, slot_address)
                         require builtin.gc.roots.add_global(heap, second_slot)
                         require builtin.gc.roots.add_global(heap, slot_address)
+                        assert heap.nglobals == 3
+                        assert builtin.gc.roots.global_slot_at(heap, 0) == slot_address
+                        assert builtin.gc.roots.global_slot_at(heap, 1) == second_slot
+                        assert builtin.gc.roots.global_slot_at(heap, 2) == slot_address
+                        builtin.gc.roots.remove_global(heap, slot_address)
                         assert heap.nglobals == 2
                         assert builtin.gc.roots.global_slot_at(heap, 0) == slot_address
                         assert builtin.gc.roots.global_slot_at(heap, 1) == second_slot
-                        builtin.gc.roots.remove_global(heap, slot_address)
-                        assert heap.nglobals == 1
-                        assert builtin.gc.roots.global_slot_at(heap, 0) == second_slot
                         builtin.gc.roots.remove_global(heap, second_slot)
+                        assert heap.nglobals == 1
+                        assert builtin.gc.roots.global_slot_at(heap, 0) == slot_address
                         builtin.gc.roots.remove_global(heap, slot_address)
                         assert heap.nglobals == 0
                         builtin.os.unmap(second_mapping.get(), slot_bytes)
+                        let many: uint = 1000
+                        let many_mapping: Ref[byte]? = builtin.os.map_zeroed(
+                            many * slot_bytes, builtin.abi.alignment_bytes(slot_row.get()))
+                        if many_mapping != nil {
+                            let slots: Ref[Ref[byte]?] = unsafe_cast[Ref[Ref[byte]?]] many_mapping.get()
+                            var item: uint = 0
+                            while item < many {
+                                let entry: Ref[Ref[byte]?] = __gc_byte_offset(slots, item * slot_bytes)
+                                require builtin.gc.roots.add_global(heap, entry)
+                                if item % 7 == 0 {
+                                    require builtin.gc.roots.add_global(heap, entry)
+                                }
+                                item += 1
+                            }
+                            var registered: uint = heap.nglobals
+                            item = 0
+                            while item < many {
+                                let index: uint = item * 7919 % many
+                                if index % 3 != 0 {
+                                    builtin.gc.roots.remove_global(heap,
+                                        __gc_byte_offset(slots, index * slot_bytes))
+                                    registered -= 1
+                                }
+                                item += 1
+                            }
+                            assert heap.nglobals == registered
+                            item = 0
+                            while item < many {
+                                let entry: Ref[Ref[byte]?] = __gc_byte_offset(slots, item * slot_bytes)
+                                if item % 3 == 0 {
+                                    builtin.gc.roots.remove_global(heap, entry)
+                                }
+                                if item % 7 == 0 {
+                                    builtin.gc.roots.remove_global(heap, entry)
+                                }
+                                item += 1
+                            }
+                            assert heap.nglobals == 0
+                            builtin.os.unmap(many_mapping.get(), many * slot_bytes)
+                        } else { require false }
                     } else { require false }
                     builtin.os.unmap(slot_mapping.get(), slot_bytes)
                 } else { require false }

@@ -3,6 +3,7 @@ import builtin.gc
 import builtin.gc.alloc
 import builtin.gc.finalize
 import builtin.gc.handshake
+import builtin.gc.heap
 import builtin.gc.los
 import builtin.gc.mark
 import builtin.gc.registry
@@ -38,36 +39,71 @@ public func start_world(heap: Ref[builtin.gc.Heap]) {
     builtin.gc.sync.ticket_unlock(ref heap.fin)
     heap.last_pause_ns = builtin.os.now_ns() - heap.pause_start
     heap.pauses += 1
+    heap.total_pause_ns += heap.last_pause_ns
+    if heap.last_pause_ns > heap.max_pause_ns {
+        heap.max_pause_ns = heap.last_pause_ns
+    }
+    heap.cycle.pause_ns += heap.last_pause_ns
+    heap.cycle.pauses += 1
+    let ready: Ref[(u64, Ref[byte]?) -> nil]? = heap.cfg.on_pause
+    if ready != nil {
+        let handler: Ref[(u64, Ref[byte]?) -> nil] = ready.get()
+        handler.call(heap.last_pause_ns, heap.cfg.telemetry_user)
+    }
+    builtin.gc.sync.event_signal(ref heap.work_progress)
 }
 
-public func scan_words(marker: Ref[builtin.gc.Marker], low: Ref[byte],
-                       high: Ref[byte]) {
+public func emit_cycle(heap: Ref[builtin.gc.Heap], kind: i32) {
+    var info: builtin.gc.Cycle_Info = heap.cycle
+    info.kind = kind
+    info.duration_ns = builtin.os.now_ns() - heap.cycle_start
+    info.rounds = cast[u32](heap.hs_rounds) - info.rounds
+    info.stragglers = cast[u32](heap.hs_stragglers) - info.stragglers
+    let ready: Ref[(builtin.gc.Cycle_Info, Ref[byte]?) -> nil]? = heap.cfg.on_cycle
+    if ready != nil {
+        let handler: Ref[(builtin.gc.Cycle_Info, Ref[byte]?) -> nil] = ready.get()
+        handler.call(info, heap.cfg.telemetry_user)
+    }
+}
+
+func stack_word_at(address: Ref[byte]) -> uint {
+    let word: Ref[uint] = unsafe_cast[Ref[uint]] address
+    return __volatile_load(word)
+}
+
+func stack_word_width() -> uint {
     let probe: uint = 0
     let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_for(typeof(probe))
     if row != nil {
         let width: uint = builtin.abi.size_bytes(row.get())
         require width != 0
-        let start: uint = __abi_ref_address(low)
-        let end: uint = __abi_ref_address(high)
-        if end <= start { return }
-        let remainder: uint = start % width
-        var adjustment: uint = 0
-        if remainder != 0 { adjustment = width - remainder }
-        if end - start < adjustment { return }
-        let available: uint = end - start - adjustment
-        var offset: uint = 0
-        while available - offset >= width {
-            let address: Ref[byte] = __gc_byte_offset(low, adjustment + offset)
-            let word: Ref[uint] = unsafe_cast[Ref[uint]] address
-            marker.stack_words += 1
-            builtin.gc.mark.mark_ambiguous(marker, __volatile_load(word))
-            offset += width
-        }
-    } else { require false }
+        return width
+    }
+    require false
+}
+
+public func scan_words(marker: Ref[builtin.gc.Marker], low: Ref[byte],
+                       high: Ref[byte]) {
+    let width: uint = stack_word_width()
+    let start: uint = __abi_ref_address(low)
+    let end: uint = __abi_ref_address(high)
+    if end <= start { return }
+    let remainder: uint = start % width
+    var adjustment: uint = 0
+    if remainder != 0 { adjustment = width - remainder }
+    if end - start < adjustment { return }
+    let available: uint = end - start - adjustment
+    var offset: uint = 0
+    while available - offset >= width {
+        let address: Ref[byte] = __gc_byte_offset(low, adjustment + offset)
+        marker.stack_words += 1
+        builtin.gc.mark.mark_ambiguous(marker, stack_word_at(address))
+        offset += width
+    }
 }
 
 public func scan_stack(marker: Ref[builtin.gc.Marker], sp: Ref[byte],
-                       high: Ref[byte], interrupted: bool) {
+                       fp: Ref[byte]?, high: Ref[byte], interrupted: bool) {
     var low: Ref[byte] = sp
     if interrupted {
         let red_zone: uint = builtin.os.stack_red_zone_bytes()
@@ -75,9 +111,61 @@ public func scan_stack(marker: Ref[builtin.gc.Marker], sp: Ref[byte],
             low = __gc_byte_offset(sp, -cast[i128](red_zone))
         }
     }
-    if __abi_ref_address(high) > __abi_ref_address(low) {
-        scan_words(marker, low, high)
+    let limit: uint = __abi_ref_address(high)
+    let width: uint = stack_word_width()
+    var start: Ref[byte] = low
+    var frame: Ref[byte]? = fp
+    # The captured top frame may include a frameless native callee.
+    var first: bool = true
+    while frame != nil {
+        let address: uint = __abi_ref_address(frame.get())
+        if address < __abi_ref_address(start) or address >= limit or
+            address % width != 0 or limit - address < width {
+            break
+        }
+        var mapped: bool = false
+        if !first {
+            let frame_info: Ref[builtin.abi.Native_Frame_Record]? =
+                builtin.abi.native_frame_at(frame.get(), start, high)
+            if frame_info != nil {
+                mapped = scan_native_frame(marker, start, frame.get(),
+                                           frame_info.get())
+            }
+        }
+        if !mapped { scan_words(marker, start, frame.get()) }
+        first = false
+        start = frame.get()
+        let caller: uint = stack_word_at(frame.get())
+        if caller <= address or caller >= limit { break }
+        frame = __gc_byte_offset(frame.get(), cast[i128](caller - address))
     }
+    if limit > __abi_ref_address(start) {
+        scan_words(marker, start, high)
+    }
+}
+
+func scan_native_frame(marker: Ref[builtin.gc.Marker], low: Ref[byte],
+                       fp: Ref[byte],
+                       frame_info: Ref[builtin.abi.Native_Frame_Record]) -> bool {
+    let span: uint = __abi_ref_address(fp) - __abi_ref_address(low)
+    let width: uint = stack_word_width()
+    var index: u32 = 0
+    while index < frame_info.root_count {
+        let offset: i32 = builtin.abi.native_frame_root_offset(frame_info, index)
+        if offset >= 0 { return false }
+        let distance: uint = cast[uint](-cast[i128](offset))
+        if distance < width or distance > span { return false }
+        index += 1
+    }
+    index = 0
+    while index < frame_info.root_count {
+        let offset: i32 = builtin.abi.native_frame_root_offset(frame_info, index)
+        let slot: Ref[byte] = __gc_byte_offset(fp, cast[i128](offset))
+        builtin.gc.mark.mark_ambiguous(marker, stack_word_at(slot))
+        marker.frame_slots += 1
+        index += 1
+    }
+    return true
 }
 
 func scan_context_registers(marker: Ref[builtin.gc.Marker],
@@ -105,6 +193,12 @@ public func mark_mutator_roots(marker: Ref[builtin.gc.Marker],
             ref_read(builtin.gc.roots.slot_at(mutator, index)))
         index += 1
     }
+    index = 0
+    while index < mutator.ntls_roots {
+        let entry: Ref[builtin.gc.roots.TLS_Root_Entry] = builtin.gc.roots.tls_root_at(mutator, index)
+        builtin.gc.mark.trace_root(marker, entry.address, entry.type_index)
+        index += 1
+    }
     if mutator.thread_id != builtin.os.thread_id() {
         builtin.gc.mark.mark_object(marker, mutator.last_alloc)
     }
@@ -116,26 +210,28 @@ public func mark_thread_roots(marker: Ref[builtin.gc.Marker],
     mark_mutator_roots(marker, mutator)
     if !marker.heap.cfg.scan_stacks { return }
     let high: Ref[byte] = required_stack_high(mutator)
-
     if mutator.thread_id == builtin.os.thread_id() {
         builtin.os.thread_capture_self(ref mutator.captured)
         scan_context_registers(marker, ref mutator.captured)
         let self_sp: Ref[byte]? = mutator.captured.sp
         if self_sp != nil {
-            scan_stack(marker, self_sp.get(), high, false)
+            scan_stack(marker, self_sp.get(), mutator.captured.fp,
+                high, false)
         } else { require false }
     } elif __atomic_load(ref mutator.blocking) != 0 and !stopped {
         scan_context_registers(marker, ref mutator.captured)
         let blocked_sp: Ref[byte]? = mutator.blocked_sp
         if blocked_sp != nil {
-            scan_stack(marker, blocked_sp.get(), high, false)
+            scan_stack(marker, blocked_sp.get(), mutator.captured.fp,
+                high, false)
         } else { require false }
     } else {
         require mutator.ctx_valid
         scan_context_registers(marker, ref mutator.captured)
         let stopped_sp: Ref[byte]? = mutator.captured.sp
         if stopped_sp != nil {
-            scan_stack(marker, stopped_sp.get(), high, true)
+            scan_stack(marker, stopped_sp.get(), mutator.captured.fp,
+                high, true)
         } else { require false }
     }
 }
@@ -143,14 +239,19 @@ public func mark_thread_roots(marker: Ref[builtin.gc.Marker],
 public func mark_global_roots(marker: Ref[builtin.gc.Marker]) {
     var storage_index: u32 = 1
     while storage_index < builtin.abi.storage_count() {
+        let row: Ref[builtin.abi.Storage_Record]? = builtin.abi.storage_at(
+            storage_index)
+        if row == nil { require false }
         let address: Ref[byte]? = builtin.abi.storage_address(storage_index)
-        if address != nil {
-            let row: Ref[builtin.abi.Storage_Record]? = builtin.abi.storage_at(
-                storage_index)
-            if row != nil {
+        if row != nil {
+            if row.get().segment_kind == cast[u32](builtin.abi.Storage_Kind.tls) and
+                row.get().symbol_index != 0 and address == nil {
+                require false
+            }
+            if address != nil {
                 builtin.gc.mark.trace_root(marker, address.get(),
                     row.get().type_index)
-            } else { require false }
+            }
         }
         storage_index += 1
     }
@@ -254,7 +355,7 @@ func mark_black_lines(block: Ref[builtin.gc.Block_Metadata], epoch: u32) {
     let word_count: uint = builtin.gc.block_bytes / builtin.gc.granule_bytes / builtin.gc.word_bits
     var word: uint = first_word
     while word < word_count {
-        var bits: u64 = __atomic_load(builtin.gc.mark_word_at(base, word))
+        var bits: u64 = __atomic_load_relaxed(builtin.gc.mark_word_at(base, word))
         while bits != 0 {
             let bit: uint = cast[uint](__count_trailing_zeros(cast[uint](bits)))
             let granule: uint = word * builtin.gc.word_bits + bit
@@ -273,7 +374,7 @@ func mark_black_lines(block: Ref[builtin.gc.Block_Metadata], epoch: u32) {
 public func sweep_block(heap: Ref[builtin.gc.Heap], block: Ref[builtin.gc.Block_Metadata],
                         epoch: u32) {
     let base: Ref[byte] = builtin.gc.block_base(block)
-    let have_marks: bool = __atomic_load(ref block.mark_epoch) == epoch
+    let have_marks: bool = __atomic_load_acquire(ref block.mark_epoch) == epoch
     if have_marks and __atomic_load(ref block.black_epoch) == epoch {
         mark_black_lines(block, epoch)
     }
@@ -283,19 +384,21 @@ public func sweep_block(heap: Ref[builtin.gc.Heap], block: Ref[builtin.gc.Block_
     let word_count: uint = builtin.gc.block_bytes / builtin.gc.granule_bytes / builtin.gc.word_bits
     var word: uint = first_word
     while word < word_count {
-        let starts: u64 = __atomic_load(builtin.gc.start_word_at(base, word))
+        let starts: u64 = __atomic_load_relaxed(builtin.gc.start_word_at(base, word))
         var marks: u64 = 0
-        if have_marks { marks = __atomic_load(builtin.gc.mark_word_at(base, word)) }
-        var dead: u64 = starts & ~marks
-        while dead != 0 {
-            let bit: uint = cast[uint](__count_trailing_zeros(cast[uint](dead)))
-            let offset: uint = (word * builtin.gc.word_bits + bit) * builtin.gc.granule_bytes
-            let header: Ref[builtin.gc.Object_Header] = builtin.gc.block_object_header_at(base, offset)
-            assert (header.meta & builtin.gc.obj_final) == 0
-            dead = dead & (dead - 1)
+        if have_marks { marks = __atomic_load_relaxed(builtin.gc.mark_word_at(base, word)) }
+        when debug_enabled() {
+            var dead: u64 = starts & ~marks
+            while dead != 0 {
+                let bit: uint = cast[uint](__count_trailing_zeros(cast[uint](dead)))
+                let offset: uint = (word * builtin.gc.word_bits + bit) * builtin.gc.granule_bytes
+                let header: Ref[builtin.gc.Object_Header] = builtin.gc.block_object_header_at(base, offset)
+                assert (header.meta & builtin.gc.obj_final) == 0
+                dead = dead & (dead - 1)
+            }
         }
         if starts != (starts & marks) {
-            __atomic_store(builtin.gc.start_word_at(base, word), starts & marks)
+            __atomic_store_relaxed(builtin.gc.start_word_at(base, word), starts & marks)
         }
         word += 1
     }
@@ -371,7 +474,7 @@ public func sweep_some(heap: Ref[builtin.gc.Heap], count: uint) -> bool {
     while large != nil {
         if remaining == 0 { break }
         let object: Ref[builtin.gc.Los_Obj] = large.get()
-        if __atomic_load(ref object.marked) == epoch {
+        if __atomic_load_relaxed(ref object.marked) == epoch {
             cursor = ref object.next
         } else {
             ref_write(cursor, object.next)
@@ -553,9 +656,7 @@ public func finish_cycle(heap: Ref[builtin.gc.Heap], fresh: bool) {
 
     start_world(heap)
     release_los(heap)
-    heap.cycle.duration_ns = builtin.os.now_ns() - heap.cycle_start
-    heap.cycle.rounds = cast[u32](heap.hs_rounds) - heap.cycle.rounds
-    heap.cycle.stragglers = cast[u32](heap.hs_stragglers) - heap.cycle.stragglers
+    emit_cycle(heap, heap.cycle.kind)
 }
 
 public func remark_locked(heap: Ref[builtin.gc.Heap]) {
@@ -608,7 +709,7 @@ public func collect(heap: Ref[builtin.gc.Heap]) {
     builtin.gc.sync.ticket_lock(ref heap.lock)
     collect_full_locked(heap)
     sweep_all(heap)
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
     cycle_done(heap)
 }
 
@@ -621,13 +722,13 @@ public func collect_start(heap: Ref[builtin.gc.Heap]) {
     if __atomic_load(ref heap.phase) != cast[u32](builtin.gc.Phase.marking) {
         start_marking_locked(heap)
     }
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
 }
 
 public func collect_step(heap: Ref[builtin.gc.Heap], max_objects: uint) -> bool {
     builtin.gc.sync.ticket_lock(ref heap.lock)
     if __atomic_load(ref heap.phase) != cast[u32](builtin.gc.Phase.marking) {
-        builtin.gc.sync.ticket_unlock(ref heap.lock)
+        builtin.gc.heap.unlock(heap)
         return false
     }
     var marker: builtin.gc.Marker
@@ -638,7 +739,7 @@ public func collect_step(heap: Ref[builtin.gc.Heap], max_objects: uint) -> bool 
     builtin.gc.mark.marker_stats(ref marker)
     let more: bool = !builtin.gc.mark.mark_quiescent(heap) or
         heap.barrier_queue_count != 0
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
     return more
 }
 
@@ -649,7 +750,7 @@ public func collect_finish(heap: Ref[builtin.gc.Heap]) {
     }
     builtin.gc.sync.ticket_lock(ref heap.lock)
     remark_locked(heap)
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
 }
 
 public func maybe_collect(heap: Ref[builtin.gc.Heap], request: uint) -> bool {
@@ -696,7 +797,7 @@ public func worker(heap: Ref[builtin.gc.Heap]) {
         } elif !stopped and phase == cast[u32](builtin.gc.Phase.sweeping) and
             builtin.gc.sync.ticket_trylock(ref heap.lock) {
             if sweep_some(heap, sweep_batch) { did += 1 }
-            builtin.gc.sync.ticket_unlock(ref heap.lock)
+            builtin.gc.heap.unlock(heap)
         }
 
         if did == 0 { builtin.os.thread_yield() }

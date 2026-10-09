@@ -11,6 +11,7 @@ public type Thread_Context layout(c) {
     public parked: Atomic[u32]
     public handle: uint
     public thread_id: u64
+    public pc: Ref[byte]?
 }
 
 public func page_size() -> uint {
@@ -19,6 +20,10 @@ public func page_size() -> uint {
 
 public func thread_yield() {
     __os_thread_yield()
+}
+
+public func thread_fence() {
+    __os_thread_fence()
 }
 
 public func thread_id() -> uint {

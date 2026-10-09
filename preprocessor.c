@@ -653,15 +653,6 @@ static size_t
 builtin_argument_count(pp_context_t *ctx, parse_tree_t *call)
 {
     parse_tree_t *args = child_named(ctx->grammar, call, "call-args");
-    if (!args && is_name(ctx->grammar, call, "tagged-lit")) {
-        parse_tree_t *payload = child_named(ctx->grammar, call,
-                                             "literal-payload");
-        parse_tree_t *tuple = payload
-            ? child_named(ctx->grammar, payload, "tuple-or-paren") : nullptr;
-        if (!tuple) return SIZE_MAX;
-        if (core_tree_node_value(tuple).rule_index == 1) return 1;
-        return SIZE_MAX;
-    }
     if (!args) return 0;
     if (child_named(ctx->grammar, args, "keyword-args")) return SIZE_MAX;
     return count_expressions(ctx->grammar,
@@ -776,6 +767,11 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
         parse_tree_t *leaf = first_node(node);
         parse_token_info_t *token = leaf ? parse_node_token(leaf) : nullptr;
         if (!token) return false;
+        if (core_option_is_set(token->postfix_modifier)) {
+            pp_error(ctx, node,
+                     "literal modifiers are not allowed in a preprocessor condition");
+            return false;
+        }
         core_string_t terminal = parse_terminal_name(ctx->grammar, token->tid);
         core_string_t text = leaf_text(ctx, leaf);
         if (core_string_eq(terminal, CORE_STRING_STATIC("INT_LIT"))
@@ -1012,7 +1008,8 @@ const_literal_kind(pp_context_t *ctx, parse_tree_t *node)
     if (is_name(ctx->grammar, node, "simple-lit")) {
         parse_tree_t *leaf = first_node(node);
         parse_token_info_t *token = parse_node_token(leaf);
-        if (!token) return PP_INVALID;
+        if (!token || core_option_is_set(token->postfix_modifier))
+            return PP_INVALID;
         core_string_t terminal = parse_terminal_name(ctx->grammar, token->tid);
         if (core_string_eq(terminal, CORE_STRING_STATIC("INT_LIT"))
             || core_string_eq(terminal, CORE_STRING_STATIC("HEX_LIT")))
@@ -1065,14 +1062,10 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
 {
     while (call && !core_tree_is_leaf(call)
            && core_tree_num_children(call) == 1
-           && !is_name(ctx->grammar, call, "tagged-lit")
            && !is_name(ctx->grammar, call, "postfix-expr"))
         call = core_tree_child(call, 0);
-    bool tagged_call = is_name(ctx->grammar, call, "tagged-lit");
     parse_tree_t *callee = core_tree_num_children(call)
         ? core_tree_child(call, 0) : nullptr;
-    if (tagged_call) callee = child_named(ctx->grammar, call,
-                                           "literal-prefix");
     while (callee && !core_tree_is_leaf(callee)
            && core_tree_num_children(callee) == 1)
         callee = core_tree_child(callee, 0);
@@ -1095,20 +1088,10 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
     }
     parse_tree_t *arg = nullptr;
     parse_tree_t *args = child_named(ctx->grammar, call, "call-args");
-    if (tagged_call) {
-        parse_tree_t *payload = child_named(ctx->grammar, call,
-                                             "literal-payload");
-        parse_tree_t *tuple = payload
-            ? child_named(ctx->grammar, payload, "tuple-or-paren") : nullptr;
-        arg = tuple && core_tree_node_value(tuple).rule_index == 1
-            ? child_named(ctx->grammar, tuple, "expression") : nullptr;
-    }
-    else {
-        parse_tree_t *positional = args
-            ? child_named(ctx->grammar, args, "positional-args") : nullptr;
-        if (positional && core_tree_num_children(positional))
-            arg = core_tree_child(positional, 0);
-    }
+    parse_tree_t *positional = args
+        ? child_named(ctx->grammar, args, "positional-args") : nullptr;
+    if (positional && core_tree_num_children(positional))
+        arg = core_tree_child(positional, 0);
     core_string_t argument = {0};
     if (arg) {
         pp_value_t arg_value;
@@ -1335,9 +1318,6 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
     if (core_tree_is_leaf(node)) return eval_leaf_identifier(ctx, node, out);
 
     core_string_t name = node_name(ctx->grammar, node);
-    if (is_name(ctx->grammar, node, "tagged-lit")
-        && n00bb_preprocessor_builtin_name(builtin_name(ctx, node)))
-        return eval_builtin(ctx, node, out);
     if (is_literal_node(ctx->grammar, node)) {
         if (parse_literal(ctx, node, out)) return true;
         pp_error(ctx, node, "only simple primitive literals are allowed in preprocessor expressions");
@@ -1709,7 +1689,6 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
         "compare-expr", "bitor-expr", "bitxor-expr", "bitand-expr",
         "shift-expr", "add-expr", "mul-expr", "unary-expr",
         "postfix-expr", "primary", "literal-expr", "tuple-or-paren",
-        "tagged-lit", "literal-prefix", "literal-payload",
         "simple-lit", "bool-lit", "int-lit", "float-lit", "string-lit",
         "call-args",
         "positional-args", "equality-op", "compare-op", "shift-op",
@@ -1787,19 +1766,6 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
             return false;
         }
     }
-    if (is_name(ctx->grammar, node, "tagged-lit")) {
-        core_string_t builtin = builtin_name(ctx, node);
-        parse_tree_t *payload = child_named(ctx->grammar, node,
-                                             "literal-payload");
-        parse_tree_t *tuple = payload
-            ? child_named(ctx->grammar, payload, "tuple-or-paren") : nullptr;
-        if (!n00bb_preprocessor_builtin_name(builtin) || !tuple
-            || core_tree_node_value(tuple).rule_index != 1) {
-            pp_error(ctx, node,
-                     "literal modifiers are not allowed in a preprocessor condition");
-            return false;
-        }
-    }
     if (is_name(ctx->grammar, node, "unary-expr")) {
         size_t count = core_tree_num_children(node);
         bool allowed = count == 1;
@@ -1825,14 +1791,6 @@ static core_string_t
 builtin_name(pp_context_t *ctx, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return (core_string_t){0};
-    if (is_name(ctx->grammar, node, "tagged-lit")) {
-        parse_tree_t *prefix = child_named(ctx->grammar, node,
-                                            "literal-prefix");
-        while (prefix && !core_tree_is_leaf(prefix)
-               && core_tree_num_children(prefix) == 1)
-            prefix = core_tree_child(prefix, 0);
-        return prefix ? leaf_text(ctx, prefix) : (core_string_t){0};
-    }
     if (is_name(ctx->grammar, node, "postfix-expr")) {
         if (core_tree_num_children(node) < 3
             || !parse_tree_leaf_is(core_tree_child(node, 1),
@@ -2215,9 +2173,8 @@ process_node(pp_context_t *ctx, parse_tree_t **slot, parse_tree_t *parent,
         }
         return;
     }
-    bool invocation = is_name(ctx->grammar, node, "tagged-lit")
-        || (is_name(ctx->grammar, node, "postfix-expr")
-            && postfix_has_token(node, "("));
+    bool invocation = is_name(ctx->grammar, node, "postfix-expr")
+        && postfix_has_token(node, "(");
     core_string_t processor_name = invocation ? builtin_name(ctx, node)
                                                : (core_string_t){0};
     if (core_string_eq(processor_name, CORE_STRING_STATIC("compile_warning"))

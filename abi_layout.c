@@ -329,9 +329,12 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
         if (!child) {
             th_type *resolved = th_resolve(referent);
             th_kind kind = th_kind_of(resolved);
+            const char *referent_name = nullptr;
+            th_named_info(resolved, &referent_name, nullptr, nullptr, nullptr);
             th_type *definition = kind == TH_NAMED
                 ? ir_type_definition(module, resolved) : nullptr;
             if (kind != TH_RECORD && kind != TH_FUNCTION
+                && (!referent_name || strcmp(referent_name, "atomic"))
                 && (!definition || th_kind_of(definition) != TH_RECORD))
                 return true;
         }
@@ -429,8 +432,35 @@ publish_direct_or_alias(ir_module_t *module, th_type *type,
             *handled = true;
             return publish_atomic_layout(module, type, target, base);
         }
-        if (base->n_occupied > 1 || base->n_reserved > 1
-            || (base->n_occupied && base->occupied[0].offset)) return false;
+        if (base->n_occupied > 1 || base->n_reserved > 1) {
+            *handled = true;
+            const ir_final_layout_t *existing = ir_layout_final(
+                module, type, target->triple);
+            if (existing) {
+                if (existing->intrinsic_bits != base->intrinsic_bits
+                    || existing->alignment_bytes != base->alignment_bytes
+                    || existing->n_occupied != base->n_occupied
+                    || existing->n_reserved != base->n_reserved
+                    || existing->n_members != base->n_members)
+                    return false;
+                for (size_t i = 0; i < base->n_occupied; i++)
+                    if (existing->occupied[i].offset != base->occupied[i].offset
+                        || existing->occupied[i].width != base->occupied[i].width)
+                        return false;
+                for (size_t i = 0; i < base->n_reserved; i++)
+                    if (existing->reserved[i].offset != base->reserved[i].offset
+                        || existing->reserved[i].width != base->reserved[i].width)
+                        return false;
+                for (size_t i = 0; i < base->n_members; i++)
+                    if (existing->members[i].bit_offset
+                            != base->members[i].bit_offset)
+                        return false;
+                return true;
+            }
+            return ir_layout_copy_final(module, type, definition,
+                                        target->triple);
+        }
+        if (base->n_occupied && base->occupied[0].offset) return false;
         semantic_bits = base->n_occupied
             ? (uint32_t)base->occupied[0].width : 0;
         if (base->n_reserved

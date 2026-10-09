@@ -1,11 +1,11 @@
 declare_litmod("chars", "string", "make_chars")
 
 func make_chars(raw: string) -> Array[char] fail: string {
-    return u32"abc"
+    return "abc"'u32
 }
 
 func values() -> Array[char] {
-    return chars"ignored"
+    return "ignored"'chars
 }
 
 comptime {

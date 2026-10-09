@@ -1,7 +1,7 @@
 declare_litmod("number", "string", "make_number")
 
 func value() -> int {
-    return number"ignored"
+    return "ignored"'number
 }
 
 func make_number(raw: string) -> int fail: string {

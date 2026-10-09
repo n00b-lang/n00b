@@ -21,6 +21,7 @@ comptime {} else {
             builtin.gc.handshake.safepoint(mutator)
             require __atomic_load(ref heap.hs_pending) == 0
             require __atomic_load(ref heap.cnt_stack_words) != 0
+            require __atomic_load(ref heap.cnt_frame_slots) != 0
             builtin.gc.handshake.enter_blocking(mutator)
             require __atomic_load(ref mutator.blocking) == 1
             require mutator.blocked_sp != nil

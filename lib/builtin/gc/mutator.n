@@ -3,6 +3,7 @@ import builtin.gc
 import builtin.gc.alloc
 import builtin.gc.hash
 import builtin.gc.handshake
+import builtin.gc.heap
 import builtin.gc.mark
 import builtin.gc.roots
 import builtin.gc.sync
@@ -31,6 +32,10 @@ public func create(heap: Ref[builtin.gc.Heap]) -> Ref[builtin.gc.Mutator]? {
         mutator.thread_id = thread_id
         mutator.thread_control = thread_control
         mutator.stack_hi = stack_hi
+        if !builtin.gc.roots.capture_tls(mutator) {
+            builtin.os.unmap(mutator, builtin.abi.size_bytes(row))
+            return nil
+        }
         builtin.gc.sync.ticket_lock(ref heap.lock)
         let found: Ref[byte]? = builtin.gc.hash.tab_lookup(ref heap.threads, thread_id)
         if found != nil {
@@ -44,7 +49,8 @@ public func create(heap: Ref[builtin.gc.Heap]) -> Ref[builtin.gc.Mutator]? {
             } else { require false }
         } else {
             if !builtin.gc.hash.tab_reserve(ref heap.threads, 1) {
-                builtin.gc.sync.ticket_unlock(ref heap.lock)
+                builtin.gc.heap.unlock(heap)
+                builtin.gc.roots.free_tls(mutator)
                 builtin.os.unmap(mutator, builtin.abi.size_bytes(row))
                 return nil
             }
@@ -68,7 +74,7 @@ public func create(heap: Ref[builtin.gc.Heap]) -> Ref[builtin.gc.Mutator]? {
         if old != nil { old.get().prev = mutator }
         heap.mutators = mutator
         heap.nmutators += 1
-        builtin.gc.sync.ticket_unlock(ref heap.lock)
+        builtin.gc.heap.unlock(heap)
         return mutator
     }
     return nil
@@ -86,7 +92,7 @@ func lock_answered(mutator: Ref[builtin.gc.Mutator]) {
         if __atomic_load(ref mutator.hs_state) != cast[u32](builtin.gc.Handshake_State.requested) {
             return
         }
-        builtin.gc.sync.ticket_unlock(ref heap.lock)
+        builtin.gc.heap.unlock(heap)
     }
 }
 
@@ -96,7 +102,7 @@ public func park(mutator: Ref[builtin.gc.Mutator]) {
     builtin.gc.alloc.bump_release(heap, ref mutator.small)
     builtin.gc.alloc.bump_release(heap, ref mutator.overflow)
     mutator.last_alloc = nil
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
 }
 
 public func destroy(mutator: Ref[builtin.gc.Mutator]) {
@@ -139,8 +145,9 @@ public func destroy(mutator: Ref[builtin.gc.Mutator]) {
     heap.retired_bytes += mutator.bytes_allocated
     heap.retired_refills += mutator.refills
     heap.retired_locked_refills += mutator.locked_refills
-    builtin.gc.sync.ticket_unlock(ref heap.lock)
+    builtin.gc.heap.unlock(heap)
 
     builtin.gc.roots.free(mutator)
+    builtin.gc.roots.free_tls(mutator)
     builtin.os.unmap(mutator, builtin.abi.size_bytes(mutator_record()))
 }

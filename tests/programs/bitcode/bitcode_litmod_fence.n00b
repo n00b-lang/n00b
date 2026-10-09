@@ -5,7 +5,7 @@ func parse_raw(contents: string) -> string fail: string {
 }
 
 func value() -> string {
-    return raw[- body -]
+    return [- body -]'raw
 }
 
 comptime {

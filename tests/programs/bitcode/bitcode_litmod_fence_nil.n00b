@@ -6,5 +6,5 @@ func do_nothing(contents: string) -> nil fail: string {
 
 comptime {
 } else {
-    noop[- body -]
+    [- body -]'noop
 }
