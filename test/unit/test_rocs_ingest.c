@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include <math.h>
 
 #include "n00b.h"
@@ -54,6 +55,7 @@ open_store(n00b_store_schema_t *schema) _kargs
     n00b_store_retain_policy_t    *retain_policy    = nullptr;
     n00b_store_seal_policy_t      *seal_policy      = nullptr;
     n00b_store_commit_topic_t     *commit_topic     = nullptr;
+    n00b_allocator_t              *allocator        = nullptr;
 }
 {
     n00b_vfs_t *vfs = new_memory_vfs();
@@ -63,7 +65,8 @@ open_store(n00b_store_schema_t *schema) _kargs
                                        .partition_policy = partition_policy,
                                        .retain_policy    = retain_policy,
                                        .seal_policy      = seal_policy,
-                                       .commit_topic     = commit_topic);
+                                       .commit_topic     = commit_topic,
+                                       .allocator        = allocator);
     CHECK(n00b_result_is_ok(store_r));
     return n00b_result_get(store_r);
 }
@@ -458,6 +461,47 @@ test_commit_without_subscribers_keeps_conduit_live_bytes_bounded(void)
 }
 
 static void
+test_zone_string_bound_replacements_keep_user_pool_bounded(void)
+{
+    bool previous_zone_maps = n00b_store_zone_maps_enabled();
+    n00b_store_zone_maps_set_enabled(true);
+    auto seal_r = n00b_store_seal_policy_new(.max_records = 10000);
+    CHECK(n00b_result_is_ok(seal_r));
+    n00b_store_seal_policy_t *seal_policy = n00b_result_get(seal_r);
+    n00b_pool_t *user_pool = &n00b_get_runtime()->user_pool;
+
+    uint64_t before_constant = n00b_pool_mapped_bytes(user_pool);
+    n00b_store_t *constant = open_store(
+        schema_with_level(false, N00B_STORE_INDEX_NONE),
+        .seal_policy = seal_policy,
+        .allocator = (n00b_allocator_t *)user_pool);
+    for (int i = 0; i < 2048; i++) {
+        CHECK(n00b_result_is_ok(n00b_store_ingest(constant,
+                                                   record_with_level(r"same"))));
+    }
+    uint64_t after_constant = n00b_pool_mapped_bytes(user_pool);
+
+    n00b_store_t *ascending = open_store(
+        schema_with_level(false, N00B_STORE_INDEX_NONE),
+        .seal_policy = seal_policy,
+        .allocator = (n00b_allocator_t *)user_pool);
+    for (int i = 0; i < 2048; i++) {
+        char value[16];
+        snprintf(value, sizeof(value), "%08d", i);
+        n00b_string_t *level = n00b_string_from_raw(value, 8);
+        CHECK(n00b_result_is_ok(n00b_store_ingest(ascending,
+                                                   record_with_level(level))));
+    }
+    uint64_t after_ascending = n00b_pool_mapped_bytes(user_pool);
+    // Constant and ascending runs retain the same record count in separate
+    // hot shards. Ascending strings replace the maximum on every ingest; the
+    // older copies must return to the pool instead of mapping pages per event.
+    CHECK(after_ascending - after_constant
+          <= after_constant - before_constant + 131072);
+    n00b_store_zone_maps_set_enabled(previous_zone_maps);
+}
+
+static void
 test_auto_seal_commit_event_uses_sentinel_ordinal(void)
 {
     auto conduit_r = n00b_conduit_new();
@@ -517,6 +561,7 @@ main(int argc, char *argv[])
     test_partition_route_catalog_keys();
     test_commit_topic_is_bounded_fire_and_forget();
     test_commit_without_subscribers_keeps_conduit_live_bytes_bounded();
+    test_zone_string_bound_replacements_keep_user_pool_bounded();
     test_auto_seal_commit_event_uses_sentinel_ordinal();
 
     return 0;

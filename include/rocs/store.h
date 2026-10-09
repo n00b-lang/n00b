@@ -682,6 +682,28 @@ typedef struct {
     uint64_t resident_cache_misses;
     uint64_t resident_unloads;
     uint64_t resident_unload_bytes;
+
+    // Process-wide mmap registry accounting, lifted from
+    // n00b_mmap_registry_stats(). These are NOT rocs numbers -- they describe
+    // every mapping libn00b holds -- but rocs' status endpoint is the only
+    // thing a running daemon exposes, and without them n00b#407 cannot be
+    // diagnosed in the field: a Windows daemon whose private commit grows
+    // while its working set stays flat is either failing to unmap or never
+    // trying to, and those want opposite fixes. See the comment on
+    // rocs_service_append_memory_field's mmap_* block.
+    uint64_t mmap_total_bytes;          // sum of registered mappings
+    // Last census snapshot, NOT live: n00b_arena_audit_total_bytes reads the
+    // heartbeat census rather than walking arenas (walking needs STW), so it
+    // reports 0 until the first census runs. Measured as 0 on a freshly
+    // started service that has not collected. Read it as "0 means no census
+    // yet", not "no arenas".
+    uint64_t mmap_arena_bytes;
+    uint64_t mmap_registry_pool_bytes;  // the interval tree's own backing
+    uint64_t mmap_unmap_registry_count; // registered mappings released
+    uint64_t mmap_unmap_registry_bytes;
+    uint64_t mmap_unmap_raw_count;      // raw (unregistered) releases
+    uint64_t mmap_unmap_raw_bytes;
+    uint64_t mmap_unmap_fail_count;     // releases that FAILED
 } n00b_store_memory_stats_t;
 
 #ifdef __cplusplus

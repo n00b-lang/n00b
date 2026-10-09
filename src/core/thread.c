@@ -43,6 +43,7 @@ static void n00b_glibc_learn_pthread_layout(void);
 #include "n00b.h"
 #include "core/runtime.h"
 #include "core/thread.h"
+#include "core/arena.h"
 #include "adt/option.h"
 #include "core/atomic.h"
 #include "core/futex.h"
@@ -471,12 +472,16 @@ n00b_thread_retire_in_fork_child(n00b_runtime_t *rt, uint32_t slot)
     if (n00b_thread_slot_is_vacant(t)) {
         return;
     }
+    // Its allocations stay in the child's heap, so the ones its buffer has not
+    // yet added to the arena's count are added now.
+    n00b_arena_tlab_thread_exit(t);
     t->stack_map    = nullptr;
     t->stack_top    = nullptr;
     t->gc_stack_top = nullptr;
     for (int i = 0; i < 31; i++) {
         t->gc_captured_regs[i] = 0;
     }
+    t->gc_captured_vreg_words = 0;
     n00b_atomic_store(&t->gc_preempt_suspended, false);
 }
 
@@ -648,11 +653,12 @@ n00b_thread_init() _kargs
     //   - stack_top: captured now;
     //   - control handle: macOS uses the Mach port the worker captured before
     //     initialization; Linux/Windows read the running thread's own tid here.
-    // The rec->stack_lo/hi pair (used ONLY by n00b_thread_self() resolution, not
-    // by the GC scan) is still published by n00b_capture_stack_base after the
-    // slot is known, before the first alloc.  The MAIN thread needs none of this
-    // ordering: it initialises while live_threads == 0 (single-threaded), so no
-    // concurrent STW can observe it mid-init.
+    // The rec->stack_lo/hi pair (used by n00b_thread_self() resolution and by
+    // the Windows GC scan when StackLimit grows) is still published by
+    // n00b_capture_stack_base after the slot is known, before the first alloc.
+    // The MAIN thread needs none of this ordering: it initialises while
+    // live_threads == 0 (single-threaded), so concurrent STW cannot observe
+    // it mid-init.
     if (callstack != nullptr) {
         n00b_callstack_t *cs = (n00b_callstack_t *)callstack;
         init_self.stack_map  = cs->stack_map;
@@ -959,6 +965,8 @@ n00b_thread_destroy(void)
     // unregister below re-acquires the gate reentrantly — intended.
     n00b_runtime_t *destroy_gate_rt = n00b_get_runtime();
     n00b_rw_read_lock(&destroy_gate_rt->critical_execution);
+
+    n00b_arena_tlab_thread_exit(self);
 
     n00b_thread_record_t *rec = self->record;
 
@@ -2464,6 +2472,7 @@ n00b_thread_quarantine_dead_foreign_for_stw(n00b_thread_record_t *rec,
     for (int i = 0; i < 31; i++) {
         t->gc_captured_regs[i] = 0;
     }
+    t->gc_captured_vreg_words = 0;
     n00b_atomic_store(&t->gc_preempt_suspended, false);
     return true;
 #else
@@ -3228,8 +3237,12 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg) _kargs
     }
     n00b_callstack_t *callstack = n00b_result_get(cs_r);
 
-    // WP-3b (D-039): draw a SECOND pool region for the worker's crash-handler
-    // alternate signal stack.  It must be allocated HERE (the spawner), where
+    // WP-3b (D-039): POSIX workers draw a SECOND pool region for the
+    // crash-handler alternate signal stack. Windows VEH uses the faulting
+    // stack, and n00b_crash_install_altstack does not install or retain an
+    // alternate stack there. Allocating one on Windows would leave an owned
+    // 8 MiB region unreachable by the reaper after every spawn.
+    // It must be allocated HERE (the spawner), where
     // the calling thread's default allocator is live — a worker cannot allocate
     // its own at launch (its launch-time default allocator returns guard-band
     // memory) and per-slot-forever allocation explodes to N00B_THREADS_MAX * S
@@ -3239,12 +3252,14 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg) _kargs
     // (the handler then runs on the faulting stack — fine except on a true
     // overflow), rather than failing the spawn.
     n00b_callstack_t *altstack = nullptr;
+#ifndef _WIN32
     {
         n00b_result_t(n00b_callstack_t *) as_r = n00b_callstack_pool_get();
         if (n00b_result_is_ok(as_r)) {
             altstack = n00b_result_get(as_r);
         }
     }
+#endif
 
     // Pre-acquire a thread slot so the launcher can register into it
     // directly (the placeholder is replaced by the worker's init struct).
