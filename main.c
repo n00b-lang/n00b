@@ -5275,6 +5275,46 @@ record_function_signature(parse_grammar_t *grammar,
                 link_source_location(func));
         }
     }
+    if (core_string_eq(symbol->name, CORE_STRING_STATIC("__finalize"))) {
+        th_type *finalizer_type = symbol->type
+            ? th_resolve(symbol->type) : nullptr;
+        size_t receiver_index = 0;
+        parse_sym_entry_t *receiver = formal_symbol_at(
+            grammar, params_node, 0, &receiver_index);
+        bool has_receiver = finalizer_type
+            && th_kind_of(finalizer_type) == TH_FUNCTION
+            && th_func_nparams(finalizer_type) == 1
+            && th_func_nkw(finalizer_type) == 0
+            && !th_func_rest(finalizer_type)
+            && receiver
+            && core_string_eq(receiver->direction,
+                CORE_STRING_STATIC("consume"));
+        if (!has_receiver) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0031"),
+                CORE_STRING_STATIC(
+                    "__finalize must take one consume receiver and no other parameters"),
+                link_source_location(func));
+        }
+        if (!n00bb_nil_type(state->types, symbol->error_type)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0032"),
+                CORE_STRING_STATIC("__finalize cannot fail"),
+                link_source_location(func));
+        }
+        th_type *result = finalizer_type
+            && th_kind_of(finalizer_type) == TH_FUNCTION
+                ? th_func_ret(finalizer_type) : nullptr;
+        if (!n00bb_nil_type(state->types, result)) {
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0033"),
+                CORE_STRING_STATIC("__finalize must return no value"),
+                link_source_location(func));
+        }
+    }
     (void)unit;
 }
 

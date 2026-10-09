@@ -599,6 +599,16 @@ test(
 )
 
 test(
+    'finalize-signature-rejected-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_finalize_signature_rejected.n',
+           'N00BB-T0031', 'N00BB-T0032', 'N00BB-T0033'],
+)
+
+test(
     'uninitialized-global-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
