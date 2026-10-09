@@ -70,6 +70,7 @@ main(int argc, char **argv)
 
     if (rw == MAP_FAILED || none == MAP_FAILED || gone == MAP_FAILED) {
         printf("  [SKIP] could not map scratch pages\n");
+        n00b_shutdown();
         return 0;
     }
     munmap(gone, pg);
@@ -129,8 +130,17 @@ main(int argc, char **argv)
 
     if (failures) {
         printf("\n%d check(s) failed.\n", failures);
+        n00b_shutdown();
         return 1;
     }
     printf("\nn00b#399: EFAULT is the only failure the probe reads as a verdict.\n");
+
+    /* n00b#527, second confirmed instance. This test returned from main with
+     * the runtime still up and SIGSEGV'd during libc exit teardown on the
+     * macOS CI runner -- after every assertion and its own closing line had
+     * printed, with no crash-handler output. Identical fingerprint to
+     * test_alloc_interior_large, and the same cause: n00b_init starts the
+     * default conduit's IO service, so exit runs against live threads. */
+    n00b_shutdown();
     return 0;
 }

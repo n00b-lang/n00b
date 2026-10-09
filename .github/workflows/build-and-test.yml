@@ -129,6 +129,25 @@ jobs:
           python3 scripts/check_windows_arm64.py --self-test
           python3 scripts/check_windows_arm64.py
 
+      # n00b#527: a test that starts the runtime and returns from main without
+      # n00b_shutdown enters libc exit teardown with the runtime's threads
+      # still live. That raced as an intermittent SIGBUS on the macOS runner,
+      # after every assertion had printed PASS and with no crash-handler
+      # output, reddening unrelated PRs.
+      #
+      # Static, so it holds on every machine -- the race itself is one a
+      # 16-core box does not lose (360 runs at 12-way parallelism reproduced
+      # nothing, while a 3-core runner hits it). Sub-second, Linux-only
+      # because it only reads source. --self-test first, same reasoning as
+      # the guard above.
+      - name: Test-shutdown guard (Linux only)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_test_shutdown.py --self-test
+          python3 scripts/check_test_shutdown.py
+
       # Assert the toolchain up front. Without this, an insufficient clang
       # surfaces as an inscrutable #embed error ~1500 targets into the build,
       # which is expensive to diagnose and easy to misread as a source problem.

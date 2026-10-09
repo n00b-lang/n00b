@@ -140,5 +140,19 @@ main(int argc, char **argv)
     }
 
     printf("\nn00b#321: interior resolution is independent of allocation size.\n");
+
+    /* n00b#527. Without this the process returns from main with the runtime
+     * still up -- MEASURED here as 5 live threads, because n00b_init starts
+     * the default conduit's IO service -- and libc then tears the process
+     * down underneath them. That raced as an intermittent SIGBUS on the macOS
+     * CI runner, AFTER every assertion above had printed PASS and with no
+     * crash-handler output, which is what a fault during exit teardown looks
+     * like.
+     *
+     * n00b_shutdown stops the conduit service, drains to a single thread
+     * (measured: 5 -> 1) and clears the runtime, so exit runs against a
+     * quiesced process. Every other test in this subsystem already did this;
+     * this one was the omission. */
+    n00b_shutdown();
     return 0;
 }
