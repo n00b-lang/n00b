@@ -23,6 +23,20 @@
 #pragma once
 
 #include "conduit/conduit.h"
+
+// n00b#496: ceilings for the synchronous-write completion wait below.
+//
+// DONE_POLL_MS is a re-check interval, not a timeout: the loop still waits on
+// the inbox CV, it just wakes periodically to re-test its own predicates
+// instead of trusting that a notify can only ever arrive while it is asleep.
+//
+// DONE_WAIT_MS is the overall ceiling. It has to outlast a real write to a
+// slow sink (a full pipe whose reader is descheduled), so it is seconds rather
+// than milliseconds; it exists to convert a permanent hang into a late return,
+// not to bound normal operation. A completion on a healthy topic arrives in
+// microseconds, so neither constant is reached in the ordinary case.
+#define N00B_CONDUIT_DONE_POLL_MS 50
+#define N00B_CONDUIT_DONE_WAIT_MS 10000
 #include "conduit/io.h"
 #include "conduit/fd_managed.h"
 #include "conduit/service.h"
@@ -408,16 +422,50 @@
         n00b_conduit_publish_yield(pub);                                                           \
                                                                                                    \
         /* Wait for the done topic to signal completion. */                                        \
+        /*                                                                         */              \
+        /* n00b#496: this wait used to have no exit but a message, and a waiter     */              \
+        /* can be left with no sender. Done topics are shared per upstream topic    */              \
+        /* and the subscription here is ONE-SHOT, so a single completion delivery   */              \
+        /* satisfies and then cancels EVERY subscriber on that topic -- delivery is */              \
+        /* OP_ALL, and _N00B_SUB_FN(deliver) marks a one-shot REMOVED, which the    */              \
+        /* deliver loop then cancels and compacts out of the list. With several     */              \
+        /* threads printing to one fd, a waiter can end up holding a valid handle   */              \
+        /* for a subscription that is no longer in the topic's subscriber set.      */              \
+        /* Measured on arm64 Linux: done_inbox->count == 0 with head and tail null, */              \
+        /* done_tp->subscriptions.len == 0, and done_handle still 11 -- nothing can  */             \
+        /* ever signal it, so futex_wait_forever never returns.                     */              \
+        /*                                                                         */              \
+        /* So also stop when the subscription is gone. Checked INSIDE the cv lock   */              \
+        /* as well as outside: a sender can cancel between the outer test and the   */              \
+        /* sleep, and that window is the whole bug.                                 */              \
+        /*                                                                         */              \
+        /* Returning Ok on that path is deliberate. The payload was published and   */              \
+        /* delivered to the sink BEFORE this wait, so the bytes are in flight and   */              \
+        /* will be written; we have only lost the ability to observe completion.    */              \
+        /* An Err here would be worse than the hang it replaces -- print.c treats   */              \
+        /* Err as "never delivered" and writes the line again through its fallback  */              \
+        /* (src/conduit/print.c), so the line would be DUPLICATED, which is the     */              \
+        /* failure #491 and #493 went to some trouble to avoid.                     */              \
         if (done_inbox) {                                                                          \
+            int64_t _done_deadline_ms =                                                            \
+                (int64_t)(n00b_ns_timestamp() / N00B_NS_PER_MS)                                    \
+                + (int64_t)N00B_CONDUIT_DONE_WAIT_MS;                                              \
             while (!n00b_conduit_inbox_has_msg(                                                    \
                         n00b_conduit_topic_base_t *, done_inbox)) {                                \
                 if (n00b_conduit_inbox_has_sys(done_inbox))                                        \
                     break;                                                                         \
+                if (!n00b_conduit_sub_is_active(done_handle))                                      \
+                    break;                                                                         \
+                if ((int64_t)(n00b_ns_timestamp() / N00B_NS_PER_MS) >= _done_deadline_ms)          \
+                    break;                                                                         \
                 n00b_condition_lock(&done_inbox->cv);                                              \
                 if (!n00b_conduit_inbox_has_msg(                                                    \
                         n00b_conduit_topic_base_t *, done_inbox) &&                                \
-                    !n00b_conduit_inbox_has_sys(done_inbox)) {                                     \
-                    n00b_condition_wait(&done_inbox->cv, .auto_unlock = true);                     \
+                    !n00b_conduit_inbox_has_sys(done_inbox) &&                                     \
+                    n00b_conduit_sub_is_active(done_handle)) {                                     \
+                    n00b_condition_wait(&done_inbox->cv,                                            \
+                                        .timeout_ms  = N00B_CONDUIT_DONE_POLL_MS,                  \
+                                        .auto_unlock = true);                                      \
                 }                                                                                  \
                 else {                                                                             \
                     n00b_condition_unlock(&done_inbox->cv);                                        \

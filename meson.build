@@ -2108,6 +2108,21 @@ rocs_index_test = executable('test_rocs_index',
 )
 test('rocs_index', rocs_index_test, suite: 'unit')
 
+# n00b#496: the hang only appears when the emitter is a real SUBPROCESS whose
+# pipe n00b's own conduit drains -- the in-process test_print_contention never
+# reproduces it. Registered in 'known-broken' for the same reason that test is:
+# it passes every assertion it makes, and then the process dies in teardown on
+# n00b#409 (subscription.c:139 / conduit.h:170, "lock not initialized"), which
+# is not this test's defect. Run it on demand with:
+#     meson test --suite known-broken print_sync_subproc
+print_sync_subproc_test = executable('test_print_sync_subproc',
+    ['test/unit/test_print_sync_subproc.c'],
+    kwargs: test_common_kwargs,
+)
+test('print_sync_subproc', print_sync_subproc_test,
+     suite: 'known-broken', is_parallel: false, timeout: 300)
+
+
 print_contention_test = executable('test_print_contention',
     ['test/unit/test_print_contention.c'],
     kwargs: test_common_kwargs,
