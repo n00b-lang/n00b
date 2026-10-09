@@ -155,6 +155,7 @@ typedef DWORD(WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
 #define PAGE_EXECUTE_READ       0x20UL
 #define PAGE_EXECUTE_READWRITE  0x40UL
 #define PAGE_EXECUTE_WRITECOPY  0x80UL
+#define PAGE_GUARD              0x100UL
 
 typedef union _LARGE_INTEGER {
     struct {

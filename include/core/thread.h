@@ -106,13 +106,12 @@ struct n00b_thread_record_t {
      * other threads; reset at slot claim. */
     uint32_t                          pool_gate_depth;
     n00b_string_t  *regex_last_detail; ///< Last regex compile error detail (per-thread).
-    /* Main-thread kernel-stack bounds for the O(1) n00b_thread_self() range check.
-     * Populated only for the main thread's record
-     * (N00B_MAIN_THREAD_SLOT); zero on worker records, which resolve via
-     * the masking helper instead.  `stack_lo` is the lowest in-stack
-     * address, `stack_hi` is one past the highest.  Published by the owning
-     * thread (stack_hi first, stack_lo last so a non-null stack_lo implies
-     * stack_hi is set); read by n00b_thread_self()'s range check on any
+    /* Native-stack bounds for n00b_thread_self() range checks.
+     * The main thread uses an O(1) check; attached foreign threads use the
+     * live-slot scan. Workers resolve via the masking helper. `stack_lo` is the
+     * lowest in-stack address, `stack_hi` is one past the highest. Published
+     * by the owning thread (stack_hi first, stack_lo last, so a non-null
+     * stack_lo implies stack_hi is set); read by n00b_thread_self() on any
      * thread.  On Windows, stack_lo can move downward as the kernel commits
      * additional stack pages. */
     _Atomic(void *) stack_lo;
@@ -120,7 +119,7 @@ struct n00b_thread_record_t {
 };
 
 #ifdef _WIN32
-#define N00B_REFRESH_MAIN_STACK_BOUNDS(_main, _sp, _lo, _hi)                                 \
+#define N00B_REFRESH_WINDOWS_STACK_BOUNDS(_record, _sp, _lo, _hi)                            \
     do {                                                                                     \
         if ((_lo) != nullptr && (_hi) != nullptr                                             \
             && (uintptr_t)(_sp) < (uintptr_t)(_lo)) {                                        \
@@ -130,15 +129,15 @@ struct n00b_thread_record_t {
             if (_n00b_win_lo != nullptr && _n00b_win_hi == (_hi)                             \
                 && (uintptr_t)(_sp) >= (uintptr_t)_n00b_win_lo                               \
                 && (uintptr_t)(_sp) < (uintptr_t)_n00b_win_hi) {                             \
-                n00b_atomic_store(&(_main)->stack_hi, _n00b_win_hi);                         \
-                n00b_atomic_store(&(_main)->stack_lo, _n00b_win_lo);                         \
+                n00b_atomic_store(&(_record)->stack_hi, _n00b_win_hi);                       \
+                n00b_atomic_store(&(_record)->stack_lo, _n00b_win_lo);                       \
                 (_lo) = _n00b_win_lo;                                                        \
                 (_hi) = _n00b_win_hi;                                                        \
             }                                                                                \
         }                                                                                    \
     } while (0)
 #else
-#define N00B_REFRESH_MAIN_STACK_BOUNDS(_main, _sp, _lo, _hi) \
+#define N00B_REFRESH_WINDOWS_STACK_BOUNDS(_record, _sp, _lo, _hi) \
     do {                                                     \
     } while (0)
 #endif
@@ -607,7 +606,7 @@ n00b_thread_slot_is_vacant(const volatile n00b_thread_t *t)
                      * large frame can legitimately commit more pages below it.  When the         \
                      * current OS stack is still the main stack, refresh the low bound before     \
                      * deciding this is a foreign/null self. */                                  \
-                    N00B_REFRESH_MAIN_STACK_BOUNDS(_bl_main, _bl_sp, _bl_lo, _bl_hi);            \
+                    N00B_REFRESH_WINDOWS_STACK_BOUNDS(_bl_main, _bl_sp, _bl_lo, _bl_hi);         \
                 }                                                                               \
                 if (_bl_result == nullptr                                                       \
                     && _bl_lo != nullptr && _bl_sp >= _bl_lo && _bl_sp < _bl_hi) {               \
@@ -680,6 +679,8 @@ n00b_thread_slot_is_vacant(const volatile n00b_thread_t *t)
                                     continue;                                                   \
                                 }                                                               \
                                 void *_bl_rhi = n00b_atomic_load(&_bl_r->stack_hi);             \
+                                N00B_REFRESH_WINDOWS_STACK_BOUNDS(                             \
+                                    _bl_r, _bl_sp, _bl_rlo, _bl_rhi);                            \
                                 if (_bl_sp >= _bl_rlo && _bl_sp < _bl_rhi) {                    \
                                     _bl_result = n00b_atomic_load(&_bl_r->thread);              \
                                     break;                                                      \

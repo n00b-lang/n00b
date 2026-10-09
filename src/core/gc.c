@@ -2466,22 +2466,23 @@ n00b_thread_stack_scan_bounds(volatile n00b_thread_t *t,
 {
     uint64_t sp = (uint64_t)t->stack_top;
 
-    // Main stack: SP at/below its high end. The registered start can be the
-    // Windows StackLimit at thread initialization, which moves downward as
-    // the stack commits more pages. Use the refreshed published bound when
-    // it still describes this same stack, or the clamp would omit live roots
-    // in newly committed frames.
+    // Main stack: SP at/below its high end. On Windows the registered start
+    // can be an old StackLimit, so validate an SP below it against the same
+    // stack allocation before scanning newly committed pages.
     n00b_mmap_info_t *m = t->stack_map;
     if (m != nullptr && sp < m->end) {
         uint64_t low = m->start;
 #ifdef _WIN32
-        n00b_thread_record_t *rec = t->record;
-        if (rec != nullptr) {
-            uint64_t published_low = (uint64_t)n00b_atomic_load(&rec->stack_lo);
-            uint64_t published_hi  = (uint64_t)n00b_atomic_load(&rec->stack_hi);
-            if (published_hi == m->end && published_low != 0
-                && published_low <= sp && published_low < low) {
-                low = published_low;
+        if (sp < low) {
+            MEMORY_BASIC_INFORMATION current, registered;
+            if (VirtualQuery((void *)sp, &current, sizeof(current))
+                    == sizeof(current)
+                && VirtualQuery((void *)(m->end - 1), &registered, sizeof(registered))
+                       == sizeof(registered)
+                && current.AllocationBase == registered.AllocationBase
+                && current.State == MEM_COMMIT
+                && !(current.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+                low = sp;
             }
         }
 #endif
