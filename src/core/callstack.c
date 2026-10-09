@@ -94,6 +94,7 @@ _n00b_callstack_alloc_aligned_region(uint64_t size)
                                     MEM_RESERVE | MEM_COMMIT,
                                     PAGE_READWRITE);
         if (region == (void *)base) {
+            n00b_probe_count_stack((unsigned long long)size);
             return n00b_result_ok(void *, region);
         }
         if (region != nullptr) {
