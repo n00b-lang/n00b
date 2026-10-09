@@ -5,6 +5,8 @@
 #include "n00b.h"
 #include "core/runtime.h"
 #include "core/callstack.h"
+#include "core/thread.h"
+#include "core/futex.h"
 #include "core/mmaps.h"
 #include "core/align.h"
 
@@ -220,6 +222,44 @@ test_callstack_err_codes(void)
     printf("  [PASS] callstack_err_codes\n");
 }
 
+#ifdef _WIN32
+static void *
+parked_windows_worker(void *raw)
+{
+    n00b_futex_t *release = (n00b_futex_t *)raw;
+    while (!n00b_atomic_load(release)) {
+        n00b_futex_wait(release, 0, 100000000);
+    }
+    return nullptr;
+}
+
+static void
+test_windows_worker_uses_one_callstack_region(void)
+{
+    n00b_futex_t release;
+    n00b_atomic_store(&release, 0);
+    n00b_futex_init(&release);
+
+    n00b_mmap_registry_stats_t before = n00b_mmap_registry_stats();
+    auto spawned = n00b_thread_spawn(parked_windows_worker, &release);
+    assert(n00b_result_is_ok(spawned));
+    n00b_thread_t *worker = n00b_result_get(spawned);
+    n00b_mmap_registry_stats_t live = n00b_mmap_registry_stats();
+
+    // This executable has not spawned a worker before this check, so the
+    // callstack pool is empty. Each region has two registry records, for its
+    // guard and usable pages. Windows needs one region, not a second region
+    // for a POSIX signal handler it never installs.
+    assert(live.stack_count == before.stack_count + 2);
+    assert(n00b_atomic_load(&worker->altstack) == nullptr);
+
+    n00b_atomic_store(&release, 1);
+    n00b_futex_wake(&release, true);
+    (void)n00b_thread_join(worker);
+    printf("  [PASS] windows_worker_uses_one_callstack_region\n");
+}
+#endif
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -238,6 +278,9 @@ main(int argc, char **argv)
     test_callstack_recovery_stable();
     test_callstack_free_deregisters();
     test_callstack_err_codes();
+#ifdef _WIN32
+    test_windows_worker_uses_one_callstack_region();
+#endif
 
     printf("All thread_callstack tests passed.\n");
     n00b_shutdown();
