@@ -2466,11 +2466,26 @@ n00b_thread_stack_scan_bounds(volatile n00b_thread_t *t,
 {
     uint64_t sp = (uint64_t)t->stack_top;
 
-    // Main stack: SP at/below its high end. Clamp SP up into the usable region
-    // if it sits just below `start` (in the guard band).
+    // Main stack: SP at/below its high end. The registered start can be the
+    // Windows StackLimit at thread initialization, which moves downward as
+    // the stack commits more pages. Use the refreshed published bound when
+    // it still describes this same stack, or the clamp would omit live roots
+    // in newly committed frames.
     n00b_mmap_info_t *m = t->stack_map;
     if (m != nullptr && sp < m->end) {
-        *top_out  = (uint64_t *)(sp < m->start ? m->start : sp);
+        uint64_t low = m->start;
+#ifdef _WIN32
+        n00b_thread_record_t *rec = t->record;
+        if (rec != nullptr) {
+            uint64_t published_low = (uint64_t)n00b_atomic_load(&rec->stack_lo);
+            uint64_t published_hi  = (uint64_t)n00b_atomic_load(&rec->stack_hi);
+            if (published_hi == m->end && published_low != 0
+                && published_low <= sp && published_low < low) {
+                low = published_low;
+            }
+        }
+#endif
+        *top_out  = (uint64_t *)(sp < low ? low : sp);
         *base_out = (uint64_t *)m->end;
         return true;
     }

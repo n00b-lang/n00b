@@ -272,6 +272,37 @@ test_exact_with_fallback_active_frame(void)
     printf("  [PASS] exact_with_fallback_active_frame\n");
 }
 
+#ifdef _WIN32
+static __attribute__((noinline)) void
+test_main_stack_grows_below_registered_start(void)
+{
+    n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
+    exact_target_t *live = n00b_alloc_with_opts(exact_target_t, ARENA_OPTS(arena));
+    live->value = 0xABCD0006ULL;
+
+    // Simulate a Windows stack registration made before deeper frames caused
+    // StackLimit to move down. Only this local slot roots the arena object.
+    volatile uintptr_t root_slot = (uintptr_t)live;
+    live = nullptr;
+    n00b_thread_t *self = n00b_thread_self();
+    n00b_mmap_info_t *original = self->stack_map;
+    n00b_mmap_info_t stale = *original;
+    stale.start = (uint64_t)&root_slot + sizeof(root_slot);
+    assert(stale.start < stale.end);
+    assert((uint64_t)n00b_atomic_load(&self->record->stack_lo)
+           <= (uint64_t)&root_slot);
+
+    n00b_stop_the_world();
+    self->stack_map = &stale;
+    n00b_collect(arena);
+    self->stack_map = original;
+    n00b_restart_the_world();
+
+    assert(((exact_target_t *)(uintptr_t)root_slot)->value == 0xABCD0006ULL);
+    printf("  [PASS] main_stack_grows_below_registered_start\n");
+}
+#endif
+
 int
 main(int argc, char **argv)
 {
@@ -283,6 +314,9 @@ main(int argc, char **argv)
     test_exact_only_nested_frames();
     test_exact_with_fallback_no_frame();
     test_exact_with_fallback_active_frame();
+#ifdef _WIN32
+    test_main_stack_grows_below_registered_start();
+#endif
     printf("All GC stack tests passed.\n");
 
     n00b_shutdown();

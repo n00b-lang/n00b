@@ -648,11 +648,12 @@ n00b_thread_init() _kargs
     //   - stack_top: captured now;
     //   - control handle: macOS uses the Mach port the worker captured before
     //     initialization; Linux/Windows read the running thread's own tid here.
-    // The rec->stack_lo/hi pair (used ONLY by n00b_thread_self() resolution, not
-    // by the GC scan) is still published by n00b_capture_stack_base after the
-    // slot is known, before the first alloc.  The MAIN thread needs none of this
-    // ordering: it initialises while live_threads == 0 (single-threaded), so no
-    // concurrent STW can observe it mid-init.
+    // The rec->stack_lo/hi pair (used by n00b_thread_self() resolution and by
+    // the Windows GC scan when StackLimit grows) is still published by
+    // n00b_capture_stack_base after the slot is known, before the first alloc.
+    // The MAIN thread needs none of this ordering: it initialises while
+    // live_threads == 0 (single-threaded), so concurrent STW cannot observe
+    // it mid-init.
     if (callstack != nullptr) {
         n00b_callstack_t *cs = (n00b_callstack_t *)callstack;
         init_self.stack_map  = cs->stack_map;
