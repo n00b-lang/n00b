@@ -7,6 +7,30 @@ public const los_threshold: uint = 8 * 1024
 const los_cache_object: uint = 256 * 1024
 const los_cache_min: uint = 8 * 1024 * 1024
 
+public func mapping_bytes(payload_bytes: uint, alignment: uint) -> uint {
+    if alignment == 0 or (alignment & (alignment - 1)) != 0 or
+        payload_bytes > (~cast[uint](0) >> builtin.gc.meta_flag_bits) {
+        return 0
+    }
+    let prefix: uint = builtin.gc.los_header_offset()
+    let header_bytes: uint = builtin.gc.object_header_bytes()
+    let granule: uint = builtin.gc.granule_bytes
+    let maximum: uint = ~cast[uint](0)
+    if header_bytes > maximum - granule + 1 or
+        payload_bytes > maximum - header_bytes - granule + 1 {
+        return 0
+    }
+    let object_bytes: uint = (header_bytes + payload_bytes + granule - 1) / granule * granule
+    if object_bytes > maximum - prefix { return 0 }
+    let total: uint = prefix + object_bytes
+    var map_alignment: uint = alignment
+    if map_alignment < granule { map_alignment = granule }
+    let payload_offset: uint = prefix + header_bytes
+    let pad: uint = (map_alignment - payload_offset % map_alignment) % map_alignment
+    if pad > maximum - total { return 0 }
+    return total + pad
+}
+
 func size_class(bytes: uint) -> uint {
     require bytes > los_threshold
     let highest: uint = builtin.gc.word_bits - 1 - cast[uint](__count_leading_zeros(bytes))
@@ -91,21 +115,14 @@ public func allocate_locked(heap: Ref[builtin.gc.Heap],
                             type_index: u32, payload_bytes: uint,
                             alignment: uint, finalizable: bool) -> Ref[byte]? {
     let row: Ref[builtin.abi.Type_Record]? = builtin.abi.type_at(type_index)
-    if row == nil or alignment == 0 or
-        (alignment & (alignment - 1)) != 0 or
-        payload_bytes > (~cast[uint](0) >> builtin.gc.meta_flag_bits) {
-        return nil
-    }
+    if row == nil { return nil }
+    let mapped_bytes: uint = mapping_bytes(payload_bytes, alignment)
+    if mapped_bytes == 0 { return nil }
     let prefix: uint = builtin.gc.los_header_offset()
     let header_bytes: uint = builtin.gc.object_header_bytes()
-    let maximum: uint = ~cast[uint](0)
     let granule: uint = builtin.gc.granule_bytes
-    if header_bytes > maximum - granule + 1 { return nil }
-    let available: uint = maximum - header_bytes - granule + 1
-    if payload_bytes > available { return nil }
     let unrounded: uint = header_bytes + payload_bytes
     let object_bytes: uint = (unrounded + granule - 1) / granule * granule
-    if object_bytes > maximum - prefix { return nil }
     let total: uint = prefix + object_bytes
     require object_bytes > los_threshold or alignment > granule
 
@@ -113,10 +130,7 @@ public func allocate_locked(heap: Ref[builtin.gc.Heap],
     if map_alignment < builtin.gc.granule_bytes {
         map_alignment = builtin.gc.granule_bytes
     }
-    let payload_offset: uint = prefix + header_bytes
-    let pad: uint = (map_alignment - payload_offset % map_alignment) % map_alignment
-    if pad > maximum - total { return nil }
-    let mapped_bytes: uint = total + pad
+    let pad: uint = mapped_bytes - total
     var flags: u32 = cast[u32](builtin.gc.obj_large)
     if finalizable { flags = flags | cast[u32](builtin.gc.obj_final) }
     var epoch: u32 = heap.epoch

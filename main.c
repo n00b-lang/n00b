@@ -22439,6 +22439,7 @@ initialize_static_global(parse_grammar_t *grammar,
 static bool
 register_module_globals(parse_grammar_t *grammar,
                         core_translation_unit_t *source,
+                        core_translation_unit_t *destination_unit,
                         ir_module_t *destination, bool comptime_shadow,
                         ir_ctx_t *ir_context,
                         n00bb_link_analysis_t *analysis,
@@ -22463,6 +22464,21 @@ register_module_globals(parse_grammar_t *grammar,
                 || (!symbol_binding_node(symbol)
                     && !source_state->interface_module)
                 || !symbol->type) continue;
+            if (source != destination_unit) {
+                core_link_declaration_t *declaration =
+                    link_declaration_for_symbol(analysis, symbol);
+                bool referenced = false;
+                for (size_t r = 0; declaration && !referenced
+                     && r < core_link_unit_reference_count(link); r++) {
+                    core_link_reference_t *reference =
+                        core_link_unit_reference_at_index(link, r);
+                    referenced = core_link_reference_referrer(reference)
+                            == destination_unit
+                        && core_link_reference_target(reference)
+                            == declaration;
+                }
+                if (!referenced) continue;
+            }
             core_buffer_t name = {0};
             append_module_symbol_name(source, symbol, &name);
             th_type *global_type = static_global_type(grammar, source,
@@ -22628,8 +22644,9 @@ bind_module_global_identities(ir_ctx_t *ir_context,
                          && m < sizeof(modules) / sizeof(modules[0]); m++) {
                         ir_global_t *view = modules[m]
                             ? ir_global_find(modules[m], name.data) : nullptr;
-                        ok = view && ir_global_set_identity(ir_context, view,
-                                                            canonical);
+                        if (view)
+                            ok = ir_global_set_identity(ir_context, view,
+                                                        canonical);
                     }
                 }
                 core_buffer_release(&name);
@@ -23004,6 +23021,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                                  / sizeof(destinations[0]); m++)
             for (size_t j = 0; j < units->len; j++)
                 if (!register_module_globals(grammar, units->data[j],
+                        units->data[i],
                         destinations[m], m == 0, ir_context, analysis, link,
                         producer_stage))
                     return ir_initialization_error(units->data[i],
@@ -23826,6 +23844,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                     state->link_analysis, global_symbol);
                 ir_global_t *phase_global = global
                     ? ir_global_find(module, global->name) : nullptr;
+                if (!phase_global && global_state != state) continue;
                 ir_value_t *value = phase_global
                     ? ir_global_address(module, phase_global) : nullptr;
                 if (!value || !ir_lower_bind_value(&context, global_symbol,
@@ -52655,15 +52674,26 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
                 ": input %zu table %u row %u (%s)",
                 plan_failure.input, plan_failure.table_kind,
                 plan_failure.row_index, plan_failure.reason);
+        if (plan_failure.reason && plan_failure.input < count) {
+            core_translation_unit_t *requester =
+                core_link_unit_translation_unit(link, plan_failure.input);
+            if (requester && requester->module.identifier.data)
+                core_buffer_printf(&message, "; requesting module %.*s",
+                    (int)requester->module.identifier.u8_bytes,
+                    requester->module.identifier.data);
+        }
+        if (plan_failure.name.bytes) {
+            const char *label = plan_failure.table_kind
+                    == N00B_ABI_TABLE_REQUIREMENT
+                ? "; required symbol " : "; current type ";
+            core_buffer_append(&message, label, strlen(label));
+            core_buffer_append(&message,
+                (const char *)plan_failure.name.bytes,
+                plan_failure.name.length);
+        }
         if (plan_failure.prior_row_index) {
             core_buffer_printf(&message, "; prior input %zu row %u",
                 plan_failure.prior_input, plan_failure.prior_row_index);
-            if (plan_failure.name.bytes) {
-                core_buffer_append(&message, "; current type ", 15);
-                core_buffer_append(&message,
-                    (const char *)plan_failure.name.bytes,
-                    plan_failure.name.length);
-            }
             if (plan_failure.prior_name.bytes) {
                 core_buffer_append(&message, "; prior type ", 13);
                 core_buffer_append(&message,

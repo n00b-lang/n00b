@@ -443,6 +443,15 @@ test(
 )
 
 test(
+    'gc-los-pacing-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_los_pacing.n'],
+)
+
+test(
     'gc-small-allocate-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
@@ -530,6 +539,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_global_mark.n'],
+    env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
+        / 'programs' / 'bitcode')],
 )
 
 test(
@@ -557,6 +568,24 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_new_record.n'],
+)
+
+test(
+    'gc-escaped-record-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_escaped_record.n'],
+)
+
+test(
+    'gc-trace-record-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_gc_trace_record.n'],
 )
 
 test(

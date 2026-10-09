@@ -15,15 +15,10 @@ const grow_blocks: uint = 32
 const grow_batch_count: uint = 4
 const sweep_batch: uint = 16
 
-var runtime_heap: Atomic[Ref[builtin.gc.Heap]?]
+var runtime_heap: Atomic[Ref[builtin.gc.Heap]?] = nil
 var runtime_heap_lock: Atomic[uint] = 0
 thread var runtime_mutator: Ref[builtin.gc.Mutator]? = nil
 thread var runtime_barrier_active: bool = false
-
-comptime {} else {
-    let empty: Ref[builtin.gc.Heap]? = nil
-    __atomic_store(ref runtime_heap, empty)
-}
 
 func active_mutator() -> Ref[builtin.gc.Mutator]? {
     let prior_barrier: bool = runtime_barrier_active
@@ -335,6 +330,50 @@ func allocate_in_blocks(mutator: Ref[builtin.gc.Mutator],
     return nil
 }
 
+public func allocate_large(mutator: Ref[builtin.gc.Mutator],
+                           type_index: u32, payload_bytes: uint,
+                           alignment: uint, finalizable: bool) -> Ref[byte]? {
+    let heap: Ref[builtin.gc.Heap] = mutator.heap
+    let request: uint = builtin.gc.los.mapping_bytes(payload_bytes, alignment)
+    if request == 0 { return nil }
+    var retried: bool = false
+    var paced: bool = false
+    while true {
+        builtin.gc.handshake.safepoint(mutator)
+        builtin.gc.sync.ticket_lock(ref heap.lock)
+        let before: u64 = heap.collections
+        if builtin.gc.over_max(heap, request) {
+            builtin.gc.los.cache_drain(heap)
+        }
+        if builtin.gc.collect.maybe_collect(heap, request) and !paced {
+            paced = true
+            builtin.gc.sync.ticket_unlock(ref heap.lock)
+            __atomic_fetch_add(ref heap.hs_alloc_waits, 1)
+            builtin.gc.handshake.wait_for_cycle(heap)
+            continue
+        }
+        if builtin.gc.over_max(heap, request) and heap.collections == before {
+            if __atomic_load(ref heap.nworkers) != 0 {
+                if !retried {
+                    retried = true
+                    builtin.gc.sync.ticket_unlock(ref heap.lock)
+                    builtin.gc.collect.request_cycle(heap)
+                    builtin.gc.handshake.wait_for_cycle(heap)
+                    continue
+                }
+            } else {
+                builtin.gc.collect.collect_full_locked(heap)
+                builtin.gc.collect.sweep_all(heap)
+            }
+        }
+        let result: Ref[byte]? = builtin.gc.los.allocate_locked(
+            heap, mutator, type_index, payload_bytes, alignment, finalizable)
+        builtin.gc.sync.ticket_unlock(ref heap.lock)
+        return result
+    }
+    return nil
+}
+
 public func allocate_runtime(type_index: u32, byte_size: u64,
                              alignment: u32,
                              instance_descriptor: Ref[byte]?) -> Ref[byte]? {
@@ -357,13 +396,8 @@ public func allocate_runtime(type_index: u32, byte_size: u64,
         let finalizable: bool = false
         if bytes > builtin.gc.los.los_threshold or
             cast[uint](alignment) > builtin.gc.granule_bytes {
-            let heap: Ref[builtin.gc.Heap] = mutator.heap
-            builtin.gc.sync.ticket_lock(ref heap.lock)
-            let result: Ref[byte]? = builtin.gc.los.allocate_locked(
-                heap, mutator, type_index, payload_bytes,
+            return allocate_large(mutator, type_index, payload_bytes,
                 cast[uint](alignment), finalizable)
-            builtin.gc.sync.ticket_unlock(ref heap.lock)
-            return result
         }
         return allocate_in_blocks(mutator, type_index, payload_bytes,
             cast[uint](alignment), finalizable, bytes)

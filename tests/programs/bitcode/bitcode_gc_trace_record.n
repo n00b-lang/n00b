@@ -1,0 +1,54 @@
+import builtin.gc
+import builtin.gc.alloc
+import builtin.gc.heap
+import builtin.gc.los
+
+type Stress_Node {
+    value: int
+    next: Ref[Stress_Node]?
+}
+
+var head: Ref[Stress_Node]? = nil
+
+func __init(modify self: Stress_Node, value: int, next: Ref[Stress_Node]?) {
+    self.value = value
+    self.next = next
+}
+
+func prepend(value: int, next: Ref[Stress_Node]?) -> Ref[Stress_Node] {
+    var node: Stress_Node = new[Stress_Node](value, next)
+    return ref node
+}
+
+comptime {} else {
+    var index: int = 0
+    while index < 128 {
+        head = prepend(index, head)
+        index = index + 1
+    }
+
+    var config: builtin.gc.Config
+    builtin.gc.heap.config_default(ref config)
+    let sample: byte = 0
+    let type_index: u32 = cast[u32](typeof(sample))
+    let bytes: uint = 2 * builtin.gc.los.los_threshold
+    var churned: uint = 0
+    while churned < 2 * config.initial_heap_bytes {
+        let allocated: Ref[byte]? = builtin.gc.alloc.allocate_runtime(
+            type_index, cast[u64](bytes), cast[u32](builtin.gc.granule_bytes),
+            nil)
+        require allocated != nil
+        churned += bytes
+    }
+
+    var current: Ref[Stress_Node]? = head
+    var expected: int = 127
+    while current != nil {
+        let node: Ref[Stress_Node] = current.get()
+        require node.value == expected
+        expected = expected - 1
+        current = node.next
+    }
+    require expected == -1
+    __fd_write(2, "ok")
+}

@@ -233,7 +233,8 @@ link_only_inputs_resolved(const n00bb_abi_selected_objects_t *selected,
 
 static bool
 typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
-                            const n00bb_abi_index_plan_t *plan)
+                            const n00bb_abi_index_plan_t *plan,
+                            n00bb_abi_index_plan_failure_t *failure)
 {
     for (size_t input = 0; input < selected->count; input++) {
         const n00bb_abi_object_view_t *requester = &selected->views[input];
@@ -386,7 +387,17 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                     matches++;
                 }
             }
-            if (matches != 1) return false;
+            if (matches != 1) {
+                if (failure) *failure = (n00bb_abi_index_plan_failure_t){
+                    .input = input,
+                    .table_kind = N00B_ABI_TABLE_REQUIREMENT,
+                    .row_index = i,
+                    .name = wanted,
+                    .reason = matches ? "ambiguous typed requirement"
+                                      : "unresolved typed requirement",
+                };
+                return false;
+            }
         }
     }
     return true;
@@ -706,7 +717,7 @@ link_selected_objects(
     bool valid = plan != nullptr;
     if (valid) {
         stage = "typed requirements";
-        valid = typed_requirements_resolved(selected, plan);
+        valid = typed_requirements_resolved(selected, plan, plan_failure);
     }
     if (valid) {
         stage = "table merge";

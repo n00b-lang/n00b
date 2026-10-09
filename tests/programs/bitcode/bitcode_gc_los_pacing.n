@@ -1,0 +1,44 @@
+import builtin.gc
+import builtin.gc.alloc
+import builtin.gc.heap
+import builtin.gc.los
+import builtin.gc.mutator
+import builtin.gc.roots
+
+comptime {} else {
+    var config: builtin.gc.Config
+    builtin.gc.heap.config_default(ref config)
+    config.initial_heap_bytes = 4 * builtin.gc.block_bytes
+    let created: Ref[builtin.gc.Heap]? = builtin.gc.heap.create(ref config)
+    if created != nil {
+        let heap: Ref[builtin.gc.Heap] = created.get()
+        let attached: Ref[builtin.gc.Mutator]? = builtin.gc.mutator.create(heap)
+        if attached != nil {
+            let mutator: Ref[builtin.gc.Mutator] = attached.get()
+            let sample: byte = 0
+            let type_index: u32 = cast[u32](typeof(sample))
+            let bytes: uint = 2 * builtin.gc.los.los_threshold
+            let first: Ref[byte]? = builtin.gc.alloc.allocate_large(
+                mutator, type_index, bytes, builtin.gc.granule_bytes, false)
+            if first != nil {
+                ref_write(first.get(), cast[byte](0x5a))
+                var root: Ref[byte]? = first
+                require builtin.gc.roots.push(mutator, ref root)
+                var index: uint = 0
+                while index < config.initial_heap_bytes / bytes * 3 {
+                    let allocated: Ref[byte]? = builtin.gc.alloc.allocate_large(
+                        mutator, type_index, bytes, builtin.gc.granule_bytes,
+                        false)
+                    require allocated != nil
+                    index += 1
+                }
+                require heap.collections != 0
+                require ref_read(first.get()) == cast[byte](0x5a)
+                builtin.gc.roots.pop(mutator, 0)
+            } else { require false }
+            builtin.gc.mutator.destroy(mutator)
+        } else { require false }
+        builtin.gc.heap.destroy(heap)
+        __fd_write(2, "ok")
+    } else { require false }
+}
