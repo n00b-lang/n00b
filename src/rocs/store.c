@@ -15370,6 +15370,21 @@ n00b_store_memory_stats(n00b_store_t *store)
     stats.resident_cache_misses = store->resident_cache_misses;
     stats.resident_unloads     = store->resident_unloads;
     stats.resident_unload_bytes = store->resident_unload_bytes;
+
+    // n00b#407: process-wide mapping accounting. Cheap -- the registry walk
+    // this does is the same one the stats call already performs for its own
+    // totals -- and it is the only way to read these from a running daemon.
+    {
+        n00b_mmap_registry_stats_t m = n00b_mmap_registry_stats();
+        stats.mmap_total_bytes          = m.total_bytes;
+        stats.mmap_arena_bytes          = m.all_arena_bytes;
+        stats.mmap_registry_pool_bytes  = m.registry_pool_bytes;
+        stats.mmap_unmap_registry_count = m.safe_munmap_registry_count;
+        stats.mmap_unmap_registry_bytes = m.safe_munmap_registry_bytes;
+        stats.mmap_unmap_raw_count      = m.safe_munmap_raw_count;
+        stats.mmap_unmap_raw_bytes      = m.safe_munmap_raw_bytes;
+        stats.mmap_unmap_fail_count     = m.safe_munmap_fail_count;
+    }
     n00b_store_catalog_entry_t *resident = store->resident_head;
     for (; resident != nullptr; resident = resident->resident_next) {
         ROCS_STORE_CATALOG_VISIT(1);
