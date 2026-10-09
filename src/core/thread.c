@@ -3237,8 +3237,12 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg) _kargs
     }
     n00b_callstack_t *callstack = n00b_result_get(cs_r);
 
-    // WP-3b (D-039): draw a SECOND pool region for the worker's crash-handler
-    // alternate signal stack.  It must be allocated HERE (the spawner), where
+    // WP-3b (D-039): POSIX workers draw a SECOND pool region for the
+    // crash-handler alternate signal stack. Windows VEH uses the faulting
+    // stack, and n00b_crash_install_altstack does not install or retain an
+    // alternate stack there. Allocating one on Windows would leave an owned
+    // 8 MiB region unreachable by the reaper after every spawn.
+    // It must be allocated HERE (the spawner), where
     // the calling thread's default allocator is live — a worker cannot allocate
     // its own at launch (its launch-time default allocator returns guard-band
     // memory) and per-slot-forever allocation explodes to N00B_THREADS_MAX * S
@@ -3248,12 +3252,14 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg) _kargs
     // (the handler then runs on the faulting stack — fine except on a true
     // overflow), rather than failing the spawn.
     n00b_callstack_t *altstack = nullptr;
+#ifndef _WIN32
     {
         n00b_result_t(n00b_callstack_t *) as_r = n00b_callstack_pool_get();
         if (n00b_result_is_ok(as_r)) {
             altstack = n00b_result_get(as_r);
         }
     }
+#endif
 
     // Pre-acquire a thread slot so the launcher can register into it
     // directly (the placeholder is replaced by the worker's init struct).
