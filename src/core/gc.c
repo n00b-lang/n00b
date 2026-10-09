@@ -2483,11 +2483,27 @@ n00b_thread_stack_scan_bounds(volatile n00b_thread_t *t,
         low = sp - N00B_STACK_RED_ZONE;
     }
 
-    // Main stack: SP at/below its high end. Clamp SP up into the usable region
-    // if it sits just below `start` (in the guard band).
+    // Main stack: SP at/below its high end. On Windows the registered start
+    // can be an old StackLimit, so validate an SP below it against the same
+    // stack allocation before scanning newly committed pages.
     n00b_mmap_info_t *m = t->stack_map;
     if (m != nullptr && sp < m->end) {
-        *top_out  = (uint64_t *)(low < m->start ? m->start : low);
+        uint64_t stack_low = m->start;
+#ifdef _WIN32
+        if (sp < stack_low) {
+            MEMORY_BASIC_INFORMATION current, registered;
+            if (VirtualQuery((void *)sp, &current, sizeof(current))
+                    == sizeof(current)
+                && VirtualQuery((void *)(m->end - 1), &registered, sizeof(registered))
+                       == sizeof(registered)
+                && current.AllocationBase == registered.AllocationBase
+                && current.State == MEM_COMMIT
+                && !(current.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+                stack_low = sp;
+            }
+        }
+#endif
+        *top_out  = (uint64_t *)(low < stack_low ? stack_low : low);
         *base_out = (uint64_t *)m->end;
         return true;
     }

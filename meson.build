@@ -3739,6 +3739,9 @@ gc_stack_test = executable('test_gc_stack',
     },
 )
 test('gc_stack', gc_stack_test, suite: 'unit')
+if host_machine.system() == 'windows'
+    test('gc_stack_copy', gc_stack_test, suite: 'unit', env: ['N00B_GC_PIN_ALL=0'])
+endif
 
 gc_stack_nonlocal_test = executable('test_gc_stack_nonlocal',
     ['test/unit/test_gc_stack_nonlocal.c'],
