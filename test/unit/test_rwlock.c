@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <assert.h>
+#include <string.h>
 #if defined(__APPLE__) || defined(__linux__)
 #include <fcntl.h>
 #include <pthread.h>
@@ -11,6 +12,25 @@
 // The late gate probe needs a raw pthread, and the parked check reads
 // scheduler state through Mach on macOS and /proc on Linux.
 #define HAVE_PARK_PROBE 1
+#endif
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX 1
+#endif
+#include <windows.h>
+#endif
+
+// A raw OS thread -- one n00b did not create, so it has no thread record.
+// Separate from HAVE_PARK_PROBE, which additionally needs the Mach/proc
+// scheduler probe: spawning a foreign thread needs no such thing, and Windows
+// is the platform n00b#521 was reported on, so gating the foreign-thread test
+// behind the park probe would have excluded exactly the platform of interest.
+#if defined(HAVE_PARK_PROBE) || defined(_WIN32)
+#define HAVE_FOREIGN_THREAD 1
 #endif
 
 // test_lock_chain and the parked reader read thread records via
@@ -51,6 +71,230 @@ test_basic_rw(void)
 
     printf("  [PASS] basic rw lock/unlock\n");
 }
+
+// ============================================================================
+// n00b#521: a thread n00b never created may read-lock ANY lock
+// ============================================================================
+//
+// _n00b_rw_read_lock used to assert a TCB-less caller could only be taking
+// rt->critical_execution, which is false for a thread n00b never created --
+// it has no TCB for its whole life. On Windows that thread is
+// KERNELBASE!CtrlRoutine, so a daemon with a console handler aborted on
+// Ctrl-C. A raw CreateThread/pthread is the same shape (no
+// n00b_thread_launcher, so no thread record), so this runs on Windows, where
+// the defect was reported, as well as on POSIX.
+#if defined(HAVE_FOREIGN_THREAD)
+
+// Spawn-and-join a raw OS thread, borrowing the portable shape
+// test_thread_self_foreign.c already uses for the same purpose.
+#if defined(_WIN32)
+#define FOREIGN_THREAD_RET  DWORD WINAPI
+#define FOREIGN_THREAD_DONE return 0
+#else
+#define FOREIGN_THREAD_RET  void *
+#define FOREIGN_THREAD_DONE return nullptr
+#endif
+
+static void
+run_foreign_thread(FOREIGN_THREAD_RET (*fn)(void *))
+{
+#if defined(_WIN32)
+    HANDLE t = CreateThread(nullptr, 0, fn, nullptr, 0, nullptr);
+    assert(t != nullptr);
+    assert(WaitForSingleObject(t, INFINITE) == WAIT_OBJECT_0);
+    CloseHandle(t);
+#else
+    pthread_t t;
+    assert(pthread_create(&t, nullptr, fn, nullptr) == 0);
+    assert(pthread_join(t, nullptr) == 0);
+#endif
+}
+
+static n00b_rwlock_t foreign_lock;
+static _Atomic(int)  foreign_done;
+
+static FOREIGN_THREAD_RET
+foreign_thread_fn(void *unused)
+{
+    (void)unused;
+
+    // Deliberately NOT a lock a TCB-less thread was ever expected to take.
+    // Before the fix this aborted the process here.
+    n00b_rw_read_lock(&foreign_lock);
+    n00b_rw_unlock(&foreign_lock);
+
+    // Twice, because the second acquire is what a recursive caller does and
+    // a foreign thread gets no read-log nesting: each take is its own futex
+    // unit, and each unlock must drop exactly one. A mismatch here latches
+    // W_LOCK or underflows the count, which the next assertion catches.
+    n00b_rw_read_lock(&foreign_lock);
+    n00b_rw_read_lock(&foreign_lock);
+    n00b_rw_unlock(&foreign_lock);
+    n00b_rw_unlock(&foreign_lock);
+
+    atomic_store(&foreign_done, 1);
+    FOREIGN_THREAD_DONE;
+}
+
+static void
+test_foreign_thread_read_lock(void)
+{
+    memset(&foreign_lock, 0, sizeof(foreign_lock));
+    n00b_rw_init(&foreign_lock);
+    atomic_store(&foreign_done, 0);
+
+    run_foreign_thread(foreign_thread_fn);
+    assert(atomic_load(&foreign_done) == 1);
+
+    // The reader count must be back to zero and W_LOCK clear, or the foreign
+    // thread leaked (or over-dropped) a futex unit. Checked by taking the
+    // write lock from this thread: it can only succeed on a fully drained
+    // lock, and it would hang rather than fail if a unit were outstanding --
+    // so a regression shows up as a test timeout, not a silent pass.
+    n00b_rw_write_lock(&foreign_lock);
+    n00b_rw_unlock(&foreign_lock);
+
+    // And the lock still works normally afterwards.
+    n00b_rw_read_lock(&foreign_lock);
+    n00b_rw_unlock(&foreign_lock);
+
+    printf("  [PASS] foreign thread read-locks a non-STW lock\n");
+}
+
+// ============================================================================
+// A foreign thread must not RE-ENTER a read lock while a writer is waiting
+// ============================================================================
+//
+// Raised in review of n00b#521, and it is real. A TCB-bearing thread re-enters
+// through its read log and touches no futex, so a waiting writer cannot block
+// it. A foreign thread has no read log, so re-entry is a FRESH acquire -- and
+// _n00b_rw_read_lock parks any fresh acquire that sees W_LOCK. Holding one
+// unit while parking for the writer that is draining that very unit is a
+// deadlock, and no amount of care inside the lock can fix it: the information
+// needed (that this thread already holds the lock) is exactly what a foreign
+// thread does not have.
+//
+// So this is a CONSTRAINT, not a bug to fix here, and this test pins it down
+// rather than papering over it. What it asserts is the boundary:
+//
+//   - re-entry with NO writer waiting is fine (the test above), and
+//   - a foreign thread that takes the lock ONCE still makes progress with a
+//     writer queued behind it, which is the shape CtrlRoutine actually has.
+//
+// The deadlock case itself is deliberately NOT exercised -- a test that hangs
+// on purpose is a CI timeout, not a signal. It is documented at the call site
+// in rwlock.c instead.
+//
+// A watchdog turns the thing we DO assert into a verdict rather than a hang:
+// if the single-acquire foreign reader fails to finish while a writer waits,
+// the test says so and fails, instead of burning the job's wall clock.
+
+static n00b_rwlock_t   interleave_lock;
+static _Atomic(int)    foreign_holds;     // foreign thread is inside the lock
+static _Atomic(int)    writer_may_start;  // main released the foreign thread
+static _Atomic(int)    foreign_finished;
+static _Atomic(int)    writer_finished;
+
+static FOREIGN_THREAD_RET
+interleave_foreign_fn(void *unused)
+{
+    (void)unused;
+
+    // One acquire only. See the comment above for why re-entry under a
+    // waiting writer is excluded by construction rather than tested.
+    n00b_rw_read_lock(&interleave_lock);
+    atomic_store(&foreign_holds, 1);
+
+    // Hold until main has had time to queue a writer behind us, so the
+    // release below is what actually lets that writer in.
+    while (!atomic_load(&writer_may_start)) {
+        base_nanosleep_ns(1000000ull);
+    }
+    base_nanosleep_ns(20000000ull);
+
+    n00b_rw_unlock(&interleave_lock);
+    atomic_store(&foreign_finished, 1);
+    FOREIGN_THREAD_DONE;
+}
+
+static void *
+interleave_writer_fn(void *unused)
+{
+    (void)unused;
+    n00b_rw_write_lock(&interleave_lock);
+    n00b_rw_unlock(&interleave_lock);
+    atomic_store(&writer_finished, 1);
+    return nullptr;
+}
+
+static void
+test_foreign_reader_with_writer_queued(void)
+{
+    memset(&interleave_lock, 0, sizeof(interleave_lock));
+    n00b_rw_init(&interleave_lock);
+    atomic_store(&foreign_holds, 0);
+    atomic_store(&writer_may_start, 0);
+    atomic_store(&foreign_finished, 0);
+    atomic_store(&writer_finished, 0);
+
+#if defined(_WIN32)
+    HANDLE ft = CreateThread(nullptr, 0, interleave_foreign_fn, nullptr, 0, nullptr);
+    assert(ft != nullptr);
+#else
+    pthread_t ft;
+    assert(pthread_create(&ft, nullptr, interleave_foreign_fn, nullptr) == 0);
+#endif
+
+    // Wait for the foreign thread to be holding the lock, bounded.
+    uint64_t waited = 0;
+    while (!atomic_load(&foreign_holds) && waited < WAIT_DEADLINE_NS) {
+        base_nanosleep_ns(1000000ull);
+        waited += 1000000ull;
+    }
+    assert(atomic_load(&foreign_holds));
+
+    // Queue a writer behind it. It sets W_LOCK and drains, which is precisely
+    // the state that would trap a re-entering foreign reader.
+    n00b_result_t(n00b_thread_t *) wr = n00b_thread_spawn(interleave_writer_fn,
+                                                          nullptr);
+    assert(n00b_result_is_ok(wr));
+    base_nanosleep_ns(50000000ull); // let the writer reach its drain wait
+
+    atomic_store(&writer_may_start, 1);
+
+    // Both must complete. A regression that parks the foreign reader shows up
+    // here as a failed assertion after the deadline, not as a hung job.
+    waited = 0;
+    while ((!atomic_load(&foreign_finished) || !atomic_load(&writer_finished))
+           && waited < WAIT_DEADLINE_NS) {
+        base_nanosleep_ns(1000000ull);
+        waited += 1000000ull;
+    }
+
+    if (!atomic_load(&foreign_finished) || !atomic_load(&writer_finished)) {
+        printf("  [FAIL] foreign reader / queued writer did not drain "
+               "(foreign=%d writer=%d)\n",
+               atomic_load(&foreign_finished),
+               atomic_load(&writer_finished));
+        assert(false);
+    }
+
+#if defined(_WIN32)
+    assert(WaitForSingleObject(ft, INFINITE) == WAIT_OBJECT_0);
+    CloseHandle(ft);
+#else
+    assert(pthread_join(ft, nullptr) == 0);
+#endif
+    n00b_thread_join(n00b_result_get(wr));
+
+    // Fully drained afterwards.
+    n00b_rw_write_lock(&interleave_lock);
+    n00b_rw_unlock(&interleave_lock);
+
+    printf("  [PASS] foreign reader drains with a writer queued behind it\n");
+}
+
+#endif // HAVE_FOREIGN_THREAD
 
 static void
 test_expired_futex_wait(void)
@@ -512,6 +756,10 @@ main(int argc, char *argv[])
     test_expired_futex_wait();
 #if defined(HAVE_PARK_PROBE)
     test_late_gate_reader(n00b_get_runtime());
+#endif
+#if defined(HAVE_FOREIGN_THREAD)
+    test_foreign_thread_read_lock();
+    test_foreign_reader_with_writer_queued();
 #endif
     test_reader_parks_behind_writer();
     test_basic_rw();

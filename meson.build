@@ -2108,6 +2108,21 @@ rocs_index_test = executable('test_rocs_index',
 )
 test('rocs_index', rocs_index_test, suite: 'unit')
 
+# n00b#496: the hang only appears when the emitter is a real SUBPROCESS whose
+# pipe n00b's own conduit drains -- the in-process test_print_contention never
+# reproduces it. Registered in 'known-broken' for the same reason that test is:
+# it passes every assertion it makes, and then the process dies in teardown on
+# n00b#409 (subscription.c:139 / conduit.h:170, "lock not initialized"), which
+# is not this test's defect. Run it on demand with:
+#     meson test --suite known-broken print_sync_subproc
+print_sync_subproc_test = executable('test_print_sync_subproc',
+    ['test/unit/test_print_sync_subproc.c'],
+    kwargs: test_common_kwargs,
+)
+test('print_sync_subproc', print_sync_subproc_test,
+     suite: 'known-broken', is_parallel: false, timeout: 300)
+
+
 print_contention_test = executable('test_print_contention',
     ['test/unit/test_print_contention.c'],
     kwargs: test_common_kwargs,
@@ -2282,6 +2297,53 @@ test('rocs_zone_map_bench',
 bench_rocs_prims = executable('bench_rocs_prims',
     ['test/unit/bench_rocs_prims.c'],
     kwargs: test_common_kwargs,
+)
+
+rocs_retention_cap_liveness_test = executable('test_rocs_retention_cap_liveness',
+    ['test/unit/test_rocs_retention_cap_liveness.c'],
+    kwargs: test_common_kwargs,
+)
+
+# The crashappsec/wax#1229 acceptance test: at the retention cap, with queries
+# pinning shards, a status read must still answer. Registered small and short;
+# raise ROCS_LIVENESS_* to run it as a soak.
+test('rocs_retention_cap_liveness',
+    rocs_retention_cap_liveness_test,
+    suite: 'unit',
+    timeout: 120,
+    env: {'ROCS_LIVENESS_SECONDS': '3',
+          'ROCS_LIVENESS_CAP': '24',
+          'ROCS_LIVENESS_QUERIERS': '2',
+          'ROCS_LIVENESS_RECORDS': '40',
+          'ROCS_LIVENESS_MAX_STALL_MS': '2000'},
+)
+
+bench_rocs_retention_pinned = executable('bench_rocs_retention_pinned',
+    ['test/unit/bench_rocs_retention_pinned.c'],
+    kwargs: test_common_kwargs,
+)
+
+# Registered small so a fully-pinned pass keeps dropping nothing and keeps
+# reporting PINNED; run the binary directly for the N sweep.
+test('rocs_retention_pinned_bench',
+    bench_rocs_retention_pinned,
+    suite: 'unit',
+    env: {'ROCS_BENCH_SIZES': '8,16', 'ROCS_BENCH_RECORDS': '2'},
+)
+
+bench_rocs_catalog_rewrite = executable('bench_rocs_catalog_rewrite',
+    ['test/unit/bench_rocs_catalog_rewrite.c'],
+    kwargs: test_common_kwargs,
+)
+
+# Registered small so the drops keep happening and the catalog stays
+# readable; run the binary directly for the timings.
+test('rocs_catalog_rewrite_bench',
+    bench_rocs_catalog_rewrite,
+    suite: 'unit',
+    env: {'ROCS_BENCH_SHARDS': '6',
+          'ROCS_BENCH_RECORDS': '50',
+          'ROCS_BENCH_DROPS': '2'},
 )
 
 bench_rocs_query_ab = executable('bench_rocs_query_ab',
@@ -3797,6 +3859,41 @@ finalizer_test = executable('test_finalizer',
     kwargs: test_common_kwargs,
 )
 test('finalizer', finalizer_test, suite: 'unit')
+
+gc_vreg_pin_test = executable('test_gc_vreg_pin',
+    ['test/unit/test_gc_vreg_pin.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_vreg_pin', gc_vreg_pin_test, suite: 'unit')
+
+gc_register_sweep_test = executable('test_gc_register_sweep',
+    ['test/unit/test_gc_register_sweep.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_register_sweep', gc_register_sweep_test, suite: 'unit')
+
+gc_address_keyed_tables_test = executable('test_gc_address_keyed_tables',
+    ['test/unit/test_gc_address_keyed_tables.c'],
+    kwargs: test_common_kwargs + {
+        # slay/codegen.h, for the field-lock table, includes mir.h.
+        'dependencies': test_common_kwargs['dependencies'] + [mir_dep],
+    },
+)
+test('gc_address_keyed_tables', gc_address_keyed_tables_test, suite: 'unit')
+
+gc_pin_all_segments_test = executable('test_gc_pin_all_segments',
+    ['test/unit/test_gc_pin_all_segments.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_pin_all_segments', gc_pin_all_segments_test, suite: 'unit')
+
+arena_tlab_test = executable('test_arena_tlab',
+    ['test/unit/test_arena_tlab.c'],
+    kwargs: test_common_kwargs,
+)
+test('arena_tlab', arena_tlab_test, suite: 'unit')
+test('arena_tlab_pin_all', arena_tlab_test, suite: 'unit',
+     env: ['N00B_GC_PIN_ALL=1'])
 
 current_allocator_test = executable('test_current_allocator',
     ['test/unit/test_current_allocator.c'],

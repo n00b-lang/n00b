@@ -447,6 +447,56 @@ rocs_service_append_memory_body(n00b_buffer_t              *buf,
                                      r"resident_unload_bytes",
                                      stats.resident_unload_bytes,
                                      true);
+
+    // n00b#407. Process-wide mapping accounting rather than rocs', but this
+    // endpoint is the only thing a running daemon exposes, and the issue
+    // stalled for a month on exactly these numbers being unreadable in the
+    // field.
+    //
+    // What they answer: a daemon whose private commit grows while its working
+    // set stays flat is either releasing mappings and failing, or never
+    // releasing them at all. Those want opposite fixes, and nothing else
+    // distinguishes them:
+    //
+    //   mmap_unmap_fail_count climbing   -> release is attempted and FAILS
+    //   fail flat, unmap counts flat,
+    //     mmap_total_bytes climbing      -> release is never ATTEMPTED (leak)
+    //   fail flat, unmap counts climbing,
+    //     total flat, commit still grows -> mappings cycle fine; the growth is
+    //                                       eager MEM_COMMIT on Windows, which
+    //                                       is n00b#407's stated mechanism
+    rocs_service_append_memory_field(buf,
+                                     r"mmap_total_bytes",
+                                     stats.mmap_total_bytes,
+                                     true);
+    rocs_service_append_memory_field(buf,
+                                     r"mmap_arena_bytes",
+                                     stats.mmap_arena_bytes,
+                                     true);
+    rocs_service_append_memory_field(buf,
+                                     r"mmap_registry_pool_bytes",
+                                     stats.mmap_registry_pool_bytes,
+                                     true);
+    rocs_service_append_memory_field(buf,
+                                     r"mmap_unmap_registry_count",
+                                     stats.mmap_unmap_registry_count,
+                                     true);
+    rocs_service_append_memory_field(buf,
+                                     r"mmap_unmap_registry_bytes",
+                                     stats.mmap_unmap_registry_bytes,
+                                     true);
+    rocs_service_append_memory_field(buf,
+                                     r"mmap_unmap_raw_count",
+                                     stats.mmap_unmap_raw_count,
+                                     true);
+    rocs_service_append_memory_field(buf,
+                                     r"mmap_unmap_raw_bytes",
+                                     stats.mmap_unmap_raw_bytes,
+                                     true);
+    rocs_service_append_memory_field(buf,
+                                     r"mmap_unmap_fail_count",
+                                     stats.mmap_unmap_fail_count,
+                                     true);
     rocs_service_append(buf, r"}");
 }
 
