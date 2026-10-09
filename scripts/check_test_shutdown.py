@@ -96,7 +96,6 @@ ALLOWLIST = {
     "test_gf256.c",
     "test_grammar_baked_equiv.c",
     "test_marshal_scratch_bound.c",
-    "test_memperm_probe.c",
     "test_mmap_probe_cache_bound.c",
     "test_n00b_eval.c",
     "test_naudit_baseline.c",
