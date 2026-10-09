@@ -2284,6 +2284,25 @@ bench_rocs_prims = executable('bench_rocs_prims',
     kwargs: test_common_kwargs,
 )
 
+rocs_retention_cap_liveness_test = executable('test_rocs_retention_cap_liveness',
+    ['test/unit/test_rocs_retention_cap_liveness.c'],
+    kwargs: test_common_kwargs,
+)
+
+# The crashappsec/wax#1229 acceptance test: at the retention cap, with queries
+# pinning shards, a status read must still answer. Registered small and short;
+# raise ROCS_LIVENESS_* to run it as a soak.
+test('rocs_retention_cap_liveness',
+    rocs_retention_cap_liveness_test,
+    suite: 'unit',
+    timeout: 120,
+    env: {'ROCS_LIVENESS_SECONDS': '3',
+          'ROCS_LIVENESS_CAP': '24',
+          'ROCS_LIVENESS_QUERIERS': '2',
+          'ROCS_LIVENESS_RECORDS': '40',
+          'ROCS_LIVENESS_MAX_STALL_MS': '2000'},
+)
+
 bench_rocs_retention_pinned = executable('bench_rocs_retention_pinned',
     ['test/unit/bench_rocs_retention_pinned.c'],
     kwargs: test_common_kwargs,
