@@ -1,5 +1,6 @@
 import builtin.abi
 import builtin.gc
+import builtin.gc.finalize
 import builtin.gc.hash
 import builtin.gc.los
 import builtin.gc.mark
@@ -116,6 +117,7 @@ public func destroy(heap: Ref[builtin.gc.Heap]) {
         builtin.gc.sync.event_signal(ref heap.work_progress)
         builtin.os.thread_yield()
     }
+    builtin.gc.finalize.run(heap, 0)
     let mutator_probe: Ref[builtin.gc.Mutator]? = nil
     let mutator_row: Ref[builtin.abi.Type_Record]? = builtin.abi.optional_reference_target(
         typeof(mutator_probe))

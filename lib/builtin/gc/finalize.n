@@ -153,12 +153,75 @@ public func mark_locked(marker: Ref[builtin.gc.Marker]) {
         let batch: Ref[builtin.gc.Final_Batch] = running.get()
         var index: uint = 0
         while index < batch.n {
-            builtin.gc.mark.mark_object(marker,
-                final_entry_at(batch.objects, index).payload)
+            let payload: Ref[byte]? = batch.objects[cast[int] index]
+            if payload != nil {
+                builtin.gc.mark.mark_object(marker, payload.get())
+            } else { require false }
             index += 1
         }
         running = batch.next
     }
     if locked { builtin.gc.sync.ticket_unlock(ref heap.fin) }
     marker.bytes = before
+}
+
+public func run(heap: Ref[builtin.gc.Heap], maximum: uint) -> uint {
+    var batch: builtin.gc.Final_Batch
+    var done: uint = 0
+    while maximum == 0 or done < maximum {
+        var count: uint = builtin.gc.final_batch
+        if maximum != 0 and maximum - done < count {
+            count = maximum - done
+        }
+        builtin.gc.sync.ticket_lock(ref heap.fin)
+        if count > heap.finq_n { count = heap.finq_n }
+        var index: uint = 0
+        while index < count {
+            let storage: Ref[byte]? = heap.finq
+            if storage != nil {
+                heap.finq_n -= 1
+                let payload: Ref[byte]? = final_entry_at(storage.get(), heap.finq_n).payload
+                batch.objects[cast[int] index] = payload
+            } else { require false }
+            index += 1
+        }
+        if count != 0 {
+            batch.n = count
+            batch.prev = nil
+            let previous: Ref[builtin.gc.Final_Batch]? = heap.running
+            batch.next = previous
+            if previous != nil { previous.get().prev = ref batch }
+            heap.running = ref batch
+            heap.running_n += count
+        }
+        builtin.gc.sync.ticket_unlock(ref heap.fin)
+        if count == 0 { break }
+
+        builtin.gc.sync.event_signal(ref heap.fin_progress)
+        index = 0
+        while index < count {
+            let payload: Ref[byte]? = batch.objects[cast[int] index]
+            if payload != nil {
+                let address: Ref[byte] = payload.get()
+                __gc_invoke_finalizer(builtin.gc.header_of(address).type_index,
+                                      address)
+            } else { require false }
+            index += 1
+        }
+
+        builtin.gc.sync.ticket_lock(ref heap.fin)
+        let previous: Ref[builtin.gc.Final_Batch]? = batch.prev
+        let following: Ref[builtin.gc.Final_Batch]? = batch.next
+        if previous != nil {
+            previous.get().next = following
+        } else {
+            heap.running = following
+        }
+        if following != nil { following.get().prev = previous }
+        heap.running_n -= count
+        heap.finalizers_run += cast[u64] count
+        builtin.gc.sync.ticket_unlock(ref heap.fin)
+        done += count
+    }
+    return done
 }

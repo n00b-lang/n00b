@@ -34,6 +34,8 @@ struct n00bb_llvm_backend_t {
     size_t type_index_count;
     const n00bb_llvm_global_binding_t *global_bindings;
     size_t global_binding_count;
+    const n00bb_llvm_finalizer_binding_t *finalizers;
+    size_t finalizer_count;
     ir_func_t *const *comptime_reachable;
     size_t comptime_reachable_count;
     bool comptime_reachable_bound;
@@ -3800,6 +3802,18 @@ n00bb_llvm_backend_bind_globals(
 }
 
 bool
+n00bb_llvm_backend_bind_finalizers(
+    n00bb_llvm_backend_t *backend,
+    const n00bb_llvm_finalizer_binding_t *finalizers, size_t count)
+{
+    if (!backend || (count && !finalizers) || backend->runtime_lowered)
+        return false;
+    backend->finalizers = finalizers;
+    backend->finalizer_count = count;
+    return true;
+}
+
+bool
 n00bb_llvm_backend_bind_reachable_functions(
     n00bb_llvm_backend_t *backend, bool comptime,
     ir_func_t *const *functions, size_t count)
@@ -3872,6 +3886,82 @@ n00bb_llvm_backend_write_bitcode(n00bb_llvm_backend_t *backend,
 }
 
 static bool
+emit_finalizer_bridge(n00bb_llvm_backend_t *backend,
+                      core_diagnostics_t *diagnostics)
+{
+    LLVMModuleRef module = backend->runtime;
+    LLVMContextRef context = backend->context;
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef arguments[] = {i32, pointer};
+    LLVMTypeRef signature = LLVMFunctionType(
+        LLVMVoidTypeInContext(context), arguments, 2, false);
+    LLVMValueRef bridge = LLVMGetNamedFunction(module, "n00b_gc_finalize");
+    if (!bridge) bridge = LLVMAddFunction(module, "n00b_gc_finalize",
+                                          signature);
+    if (!bridge || LLVMCountBasicBlocks(bridge))
+        return backend_error(diagnostics,
+            "could not define the native finalizer bridge");
+    LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(context, bridge,
+                                                             "entry");
+    LLVMBasicBlockRef missing = LLVMAppendBasicBlockInContext(context,
+                                                               bridge,
+                                                               "unbound");
+    LLVMPositionBuilderAtEnd(builder, entry);
+    LLVMValueRef branch = LLVMBuildSwitch(builder, LLVMGetParam(bridge, 0),
+        missing, (unsigned)backend->finalizer_count);
+    bool valid = true;
+    for (size_t i = 0; valid && i < backend->finalizer_count; i++) {
+        const n00bb_llvm_finalizer_binding_t *binding =
+            &backend->finalizers[i];
+        ir_func_t *function = binding->function;
+        LLVMTypeRef target_signature = function
+            ? function_type(module, function) : nullptr;
+        if (!target_signature
+            || LLVMGetTypeKind(LLVMGetReturnType(target_signature))
+                != LLVMVoidTypeKind
+            || LLVMCountParamTypes(target_signature) != 1) {
+            valid = false;
+            break;
+        }
+        LLVMTypeRef target_parameter = nullptr;
+        LLVMGetParamTypes(target_signature, &target_parameter);
+        if (LLVMGetTypeKind(target_parameter) != LLVMPointerTypeKind) {
+            valid = false;
+            break;
+        }
+        core_buffer_t name = {0};
+        core_buffer_printf(&name, "%s.%s",
+            ir_module_name(function->owner), function->name);
+        LLVMValueRef target = LLVMGetNamedFunction(module, name.data);
+        if (!target) target = LLVMAddFunction(module, name.data,
+                                              target_signature);
+        core_buffer_release(&name);
+        if (!target) { valid = false; break; }
+        LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(context,
+            bridge, "finalize");
+        LLVMAddCase(branch, LLVMConstInt(i32, binding->type_index, false),
+                    body);
+        LLVMPositionBuilderAtEnd(builder, body);
+        LLVMValueRef payload = LLVMGetParam(bridge, 1);
+        LLVMBuildCall2(builder, target_signature, target, &payload, 1, "");
+        LLVMBuildRetVoid(builder);
+    }
+    LLVMPositionBuilderAtEnd(builder, missing);
+    unsigned trap_id = LLVMLookupIntrinsicID("llvm.trap",
+                                              sizeof("llvm.trap") - 1);
+    LLVMValueRef trap = LLVMGetIntrinsicDeclaration(module, trap_id,
+                                                     nullptr, 0);
+    LLVMBuildCall2(builder, LLVMGlobalGetValueType(trap), trap, nullptr, 0,
+                   "");
+    LLVMBuildUnreachable(builder);
+    LLVMDisposeBuilder(builder);
+    return valid || backend_error(diagnostics,
+        "finalizer bridge target has an invalid native signature");
+}
+
+static bool
 emit_entry_initializers(LLVMModuleRef module, LLVMContextRef context,
                         LLVMValueRef entry, LLVMBuilderRef builder,
                         LLVMTypeRef result, bool comptime,
@@ -3935,6 +4025,8 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
     if (!lower_phase(backend, comptime, diagnostics)) return false;
     LLVMModuleRef module = comptime ? backend->comptime : backend->runtime;
     LLVMContextRef context = backend->context;
+    if (!comptime && initializer_count
+        && !emit_finalizer_bridge(backend, diagnostics)) return false;
     if (initializer_count || array_producer_count) {
         LLVMTypeRef result = LLVMInt32TypeInContext(context);
         LLVMTypeRef signature = LLVMFunctionType(result, nullptr, 0, false);

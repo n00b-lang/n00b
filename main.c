@@ -8368,7 +8368,8 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     th_env_method_resolve_by_name(state->types,
                         receiver_type, method_name, &method, &trait_name);
                 if (method_status == TH_ENV_METHOD_FOUND) {
-                    signature = method.signature;
+                    signature = th_type_clone(state->types, method.signature);
+                    signature_instantiated = signature != nullptr;
                     n00bb_link_use_site_t *site = link_use_site_for_node(
                         state, member);
                     if (site) site->resolved_trait_name = trait_name;
@@ -13103,6 +13104,35 @@ n00bb_lower_negate(ir_lower_context_t *context, parse_visit_t *visit,
                            "could not emit unary negation");
     instruction->span = span;
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
+}
+
+static bool
+n00bb_mark_builtin_index_receiver(ir_lower_context_t *context,
+                                  parse_visit_t *visit, bool entering,
+                                  void *state)
+{
+    (void)state;
+    if (!entering || !visit->node || !visit->annot
+        || !core_string_eq(visit->annot->emit_action,
+                           CORE_STRING_STATIC("call"))) return true;
+    core_string_t trait = {0}, method = {0};
+    if (!index_dispatch_for_node(visit->grammar, visit->node,
+                                 &trait, &method)) return true;
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_use_site_t *site = tu
+        ? link_use_site_for_dispatch(tu, visit->node, trait) : nullptr;
+    if (!site || !n00bb_builtin_array_read_function(site->symbol))
+        return true;
+    parse_tree_t *receiver = core_tree_num_children(visit->node)
+        ? core_tree_child(visit->node, 0) : nullptr;
+    parse_tree_t *member = member_access_node(visit->grammar, receiver);
+    while (member) {
+        if (!ir_lower_suppress_emit(context, member)) return false;
+        receiver = core_tree_child(member, 0);
+        member = member_access_node(visit->grammar, receiver);
+    }
+    return true;
 }
 
 static bool
@@ -23107,6 +23137,8 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                                                        symbol->decl_node);
                 ir_linkage_t linkage = !definition ? IR_LINK_EXTERN
                     : symbol_visibility(symbol) == TH_ENV_PRIVATE
+                        && !core_string_eq(symbol->name,
+                                           CORE_STRING_STATIC("__finalize"))
                         ? IR_LINK_INTERNAL : IR_LINK_EXTERNAL;
                 th_type *semantic_type = state->interface_module
                     ? symbol->user_data
@@ -25514,6 +25546,13 @@ build_phase_reachable_functions(
             ir_module_t *module = module_for_phase(state, false);
             const char *module_name = module ? ir_module_name(module) : nullptr;
             if (!module_name) continue;
+            for (size_t j = 0; j < ir_func_count(module); j++) {
+                ir_func_t *function = ir_func_at(module, j);
+                if (!function || !function->n_blocks) continue;
+                if (!strcmp(function->name, "__finalize")
+                    || !strncmp(function->name, "__finalize#", 11))
+                    core_list_push(roots, function);
+            }
             size_t prefix = strlen(module_name);
             for (size_t j = 0; j < n00bb_runtime_native_root_count; j++) {
                 const char *name = n00bb_runtime_native_roots[j].qualified_name;
@@ -28248,6 +28287,7 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
         "wrapping_mul",
         "__count_leading_zeros", "__count_trailing_zeros",
         "__gc_memset", "__gc_memcpy",
+        "__gc_invoke_finalizer",
         "__volatile_load",
         "__gc_signal_fence",
         "__atomic_fetch_or", "__atomic_fetch_and", "__atomic_exchange",
@@ -29327,6 +29367,8 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                     || !symbol->decl_node
                     || !nt_is(grammar, symbol->decl_node, "func-def")
                     || symbol->use_count) continue;
+                if (core_string_eq(symbol->name,
+                                   CORE_STRING_STATIC("__finalize"))) continue;
                 if (core_string_eq(unit->module.identifier,
                         CORE_STRING_STATIC("builtin.io.raw"))
                     && core_string_eq(symbol->name,
@@ -35402,6 +35444,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_CALL,
                                      n00bb_mark_call_lvalues, nullptr)
         && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_EMIT,
+                                     n00bb_mark_builtin_index_receiver,
+                                     nullptr)
+        && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_EMIT,
                                      n00bb_skip_i128_min_magnitude, nullptr)
         && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_DECLARES,
                                      n00bb_lower_declare_local, nullptr)
@@ -40251,6 +40296,27 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     fence->type = fence_signature;
     fence->error_type = nil_type;
     fence->callable_contract = fence_contract;
+    th_type *payload_type = th_ind(types, 0, byte);
+    th_param invoke_parameters[] = {
+        {.mode = TH_IN, .type = th_name(types, "u32")},
+        {.mode = TH_IN, .type = payload_type},
+    };
+    th_type *invoke_signature = payload_type
+        ? th_func_with_error(types, nil_type, nil_type,
+            invoke_parameters, 2, nullptr, nullptr, 0) : nullptr;
+    th_type *invoke_contract = invoke_signature
+        ? th_env_signature_contract(types, invoke_signature, nil_type)
+        : nullptr;
+    parse_sym_entry_t *invoke = invoke_contract ? parse_symtab_add(symtab,
+        CORE_STRING_STATIC("builtin"),
+        CORE_STRING_STATIC("__gc_invoke_finalizer"),
+        PARSE_SYM_FUNCTION, nullptr) : nullptr;
+    if (!invoke || !parse_sym_set_binding(invoke,
+            CORE_STRING_STATIC("n00bb.abi.native"),
+            "n00b_gc_finalize")) return false;
+    invoke->type = invoke_signature;
+    invoke->error_type = nil_type;
+    invoke->callable_contract = invoke_contract;
     return true;
 }
 
@@ -52226,6 +52292,78 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
 }
 
 static bool
+n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
+                        core_translation_unit_t *const *units,
+                        size_t unit_count,
+                        n00bb_llvm_finalizer_binding_t **out,
+                        size_t *out_count)
+{
+    const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(view,
+        N00B_ABI_TABLE_TYPE);
+    if (!table || !out || !out_count) return false;
+    n00bb_llvm_finalizer_binding_t *bindings = calloc(
+        table->record_count ? table->record_count : 1, sizeof(*bindings));
+    if (!bindings) return false;
+    size_t count = 0;
+    bool valid = true;
+    for (uint32_t i = 1; valid && i < table->record_count; i++) {
+        const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_TYPE, i);
+        if (!type) { valid = false; break; }
+        if (!type->finalizer_function_index) continue;
+        const n00b_abi_function_v1 *function = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_FUNCTION, type->finalizer_function_index);
+        const n00b_abi_symbol_v1 *symbol = function
+            ? n00bb_abi_object_row(view, N00B_ABI_TABLE_SYMBOL,
+                                   function->symbol_index) : nullptr;
+        const n00b_abi_module_v1 *module = function
+            ? n00bb_abi_object_row(view, N00B_ABI_TABLE_MODULE,
+                                   function->module_index) : nullptr;
+        const n00b_abi_type_v1 *signature = symbol
+            ? n00bb_abi_object_row(view, N00B_ABI_TABLE_TYPE,
+                                   symbol->type_index) : nullptr;
+        n00bb_abi_string_view_t module_name = {0}, function_name = {0};
+        valid = signature && module
+            && n00bb_abi_object_string(view, &module->full_path,
+                                         &module_name)
+            && n00bb_abi_object_string(view, &function->name,
+                                         &function_name);
+        ir_func_t *matched = nullptr;
+        for (size_t u = 0; valid && u < unit_count; u++) {
+            n00bb_tu_state_t *state = tu_state(units[u]);
+            ir_module_t *runtime = state ? state->ir_module : nullptr;
+            const char *name = runtime ? ir_module_name(runtime) : nullptr;
+            if (!name || strlen(name) != module_name.length
+                || memcmp(name, module_name.bytes, module_name.length))
+                continue;
+            for (size_t f = 0; f < ir_func_count(runtime); f++) {
+                ir_func_t *candidate = ir_func_at(runtime, f);
+                size_t length = strlen(candidate->name);
+                if (!candidate->n_blocks
+                    || length < function_name.length
+                    || memcmp(candidate->name, function_name.bytes,
+                              function_name.length)
+                    || (length != function_name.length
+                        && candidate->name[function_name.length] != '#')
+                    || th_hash(ir_module_types(runtime), candidate->type)
+                        != signature->typehash) continue;
+                if (matched) { valid = false; break; }
+                matched = candidate;
+            }
+        }
+        valid = valid && matched;
+        if (valid) bindings[count++] = (n00bb_llvm_finalizer_binding_t){
+            .type_index = i, .function = matched,
+        };
+    }
+    if (valid) {
+        *out = bindings;
+        *out_count = count;
+    } else free(bindings);
+    return valid;
+}
+
+static bool
 n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                        parse_cmdr_result_t *args, bool debug_enabled,
                        const char *compiler_path,
@@ -52282,6 +52420,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     size_t type_index_count = 0;
     n00bb_llvm_global_binding_t *global_bindings = nullptr;
     size_t global_binding_count = 0;
+    n00bb_llvm_finalizer_binding_t *finalizers = nullptr;
+    size_t finalizer_count = 0;
     if (ok) ok = n00bb_link_abi_artifact(link, analysis, &analysis->target,
         &linked_abi, &linked_abi_bytes, diagnostics);
     if (ok) {
@@ -52309,6 +52449,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             if (ok) ok = n00bb_linked_global_bindings(&view, order.data,
                 count, &global_bindings, &global_binding_count,
                 diagnostics);
+            if (ok) ok = n00bb_linked_finalizers(&view, order.data, count,
+                                                 &finalizers,
+                                                 &finalizer_count);
             n00bb_abi_object_close(&view);
         }
         if (!ok)
@@ -52363,7 +52506,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             || !n00bb_llvm_backend_bind_type_indices(backend, type_indices,
                                                       type_index_count)
             || !n00bb_llvm_backend_bind_globals(backend, global_bindings,
-                                                global_binding_count))) {
+                                                global_binding_count)
+            || (order.data[i] == core_link_unit_root(link, 0)
+                && !n00bb_llvm_backend_bind_finalizers(backend,
+                    finalizers, finalizer_count)))) {
             n00bb_llvm_backend_free(backend);
             ok = false;
             break;
@@ -52444,6 +52590,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     for (size_t i = 0; i < global_binding_count; i++)
         core_free((void *)global_bindings[i].native_name);
     free(global_bindings);
+    free(finalizers);
     core_list_free(order);
     if (!ok && !core_diagnostics_failed(diagnostics))
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,

@@ -58,6 +58,11 @@ typedef struct {
     const char *native_name;
 } n00bb_llvm_global_binding_t;
 
+typedef struct {
+    uint32_t type_index;
+    ir_func_t *function;
+} n00bb_llvm_finalizer_binding_t;
+
 n00bb_llvm_backend_t *n00bb_llvm_backend_prepare(
     const ir_module_t *comptime_ir, const ir_module_t *runtime_ir,
     bool debug_enabled, core_diagnostics_t *diagnostics);
@@ -71,6 +76,9 @@ bool n00bb_llvm_backend_bind_type_indices(
 bool n00bb_llvm_backend_bind_globals(
     n00bb_llvm_backend_t *backend,
     const n00bb_llvm_global_binding_t *globals, size_t count);
+bool n00bb_llvm_backend_bind_finalizers(
+    n00bb_llvm_backend_t *backend,
+    const n00bb_llvm_finalizer_binding_t *finalizers, size_t count);
 bool n00bb_llvm_backend_bind_reachable_functions(
     n00bb_llvm_backend_t *backend, bool comptime,
     ir_func_t *const *functions, size_t count);

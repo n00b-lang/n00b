@@ -174,7 +174,7 @@ public type Final_Entry layout(c) {
 }
 
 public type Final_Batch layout(c) {
-    public objects: Ref[byte]
+    public objects: (Ref[byte]?)[final_batch]
     public n: uint
     public next: Ref[Final_Batch]?
     public prev: Ref[Final_Batch]?
@@ -191,6 +191,7 @@ public type Event layout(c) {
 }
 
 public const packet_cap: uint = 500
+public const final_batch: uint = 256
 public const packet_chunk: uint = 64
 public const write_buffer_cap: uint = 128
 
