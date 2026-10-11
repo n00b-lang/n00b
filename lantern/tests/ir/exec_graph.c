@@ -404,6 +404,18 @@ test_phase_global_result_binding(void)
     check("a later global initializer records an earlier phase's typed state",
           bound && ir_exec_graph_validate(graph));
 
+    ir_func_t *helper = ir_func_add(source_module, "helper",
+        ir_type_parse(source_module, "() -> nil"), IR_LINK_INTERNAL);
+    ir_block_t *helper_entry = helper
+        ? ir_block_add(helper, "entry") : nullptr;
+    uint32_t helper_id = UINT32_MAX;
+    bool helper_added = helper_entry
+        && ir_instr_add(helper_entry, IR_OP_RETURN)
+        && ir_exec_graph_add_function(graph, compile_phase, helper,
+            nullptr, nullptr, &helper_id);
+    check("unscheduled helper exits are not phase completion exits",
+          helper_added && ir_exec_graph_validate(graph));
+
     ir_exec_graph_global_result_view_t result;
     char *printed = ir_exec_graph_print(graph);
     check("global result bindings expose both symbols and their shared type",

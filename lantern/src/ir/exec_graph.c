@@ -456,12 +456,51 @@ phase_successes_gate_target(const ir_exec_graph_t *graph,
     if (!graph || source_phase >= graph->phases.len
         || target_phase >= graph->phases.len) return false;
     uint32_t target_entry = graph->phases.data[target_phase].entry_node;
+    bool *scheduled = core_alloc_array(bool, graph->nodes.len);
+    uint32_t *queue = core_alloc_array(uint32_t, graph->nodes.len);
+    if (!scheduled || !queue) {
+        core_free(scheduled);
+        core_free(queue);
+        return false;
+    }
+    memset(scheduled, 0, graph->nodes.len * sizeof(*scheduled));
+    size_t head = 0, tail = 0;
+    uint32_t source_entry = graph->phases.data[source_phase].entry_node;
+    scheduled[source_entry] = true;
+    queue[tail++] = source_entry;
+    while (head < tail) {
+        uint32_t id = queue[head++];
+        const exec_node_t *node = &graph->nodes.data[id];
+        if (node->kind == IR_EXEC_GRAPH_NODE_FUNCTION_ENTRY)
+            for (size_t f = 0; f < graph->functions.len; f++) {
+                const exec_function_t *function = &graph->functions.data[f];
+                if (function->entry_node != id) continue;
+                for (size_t x = 0; x < function->exits.len; x++) {
+                    uint32_t exit = function->exits.data[x];
+                    if (graph->nodes.data[exit].outcome
+                            != IR_EXEC_GRAPH_OUTCOME_SUCCESS
+                        || scheduled[exit]) continue;
+                    scheduled[exit] = true;
+                    queue[tail++] = exit;
+                }
+            }
+        for (size_t e = 0; e < graph->edges.len; e++) {
+            const exec_edge_t *edge = &graph->edges.data[e];
+            if (edge->kind != IR_EXEC_GRAPH_EDGE_SEQUENCE
+                || edge->from != id || scheduled[edge->to]) continue;
+            scheduled[edge->to] = true;
+            queue[tail++] = edge->to;
+        }
+    }
+    bool valid = true;
     for (size_t i = 0; i < graph->nodes.len; i++) {
         const exec_node_t *node = &graph->nodes.data[i];
         if (node->phase != source_phase
             || (node->kind != IR_EXEC_GRAPH_NODE_FUNCTION_EXIT
                 && node->kind != IR_EXEC_GRAPH_NODE_PHASE_EXIT)
-            || node->outcome != IR_EXEC_GRAPH_OUTCOME_SUCCESS) continue;
+            || node->outcome != IR_EXEC_GRAPH_OUTCOME_SUCCESS
+            || (node->kind == IR_EXEC_GRAPH_NODE_FUNCTION_EXIT
+                && !scheduled[i])) continue;
         bool continues = false;
         for (size_t e = 0; e < graph->edges.len; e++) {
             const exec_edge_t *edge = &graph->edges.data[e];
@@ -481,9 +520,14 @@ phase_successes_gate_target(const ir_exec_graph_t *graph,
                 break;
             }
         }
-        if (!gated) return false;
+        if (!gated) {
+            valid = false;
+            break;
+        }
     }
-    return true;
+    core_free(scheduled);
+    core_free(queue);
+    return valid;
 }
 
 bool
